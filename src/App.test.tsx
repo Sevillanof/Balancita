@@ -6,6 +6,7 @@ import {
   WATCHLIST_INSTRUMENTS,
   makeCandle,
 } from './test/fake-market-data-provider'
+import { LocalStoragePortfolioRepository } from './portfolio/local-storage-portfolio-repository'
 import App from './App'
 
 const mocks = vi.hoisted(() => ({
@@ -99,6 +100,71 @@ describe('App', () => {
       expect(mocks.series.setData).toHaveBeenLastCalledWith(
         expect.arrayContaining([expect.any(Object)]),
       ),
+    )
+  })
+})
+
+describe('App workspace tabs', () => {
+  function renderApp() {
+    const historyByInstrument = Object.fromEntries(
+      WATCHLIST_INSTRUMENTS.map((instrument) => [
+        instrument.id,
+        [makeCandle({ time: '2024-01-01T00:00:00.000Z' })],
+      ]),
+    )
+    const provider = new FakeMarketDataProvider(WATCHLIST_INSTRUMENTS, {
+      historyByInstrument,
+    })
+    const portfolioRepository = new LocalStoragePortfolioRepository()
+    return {
+      provider,
+      ...render(
+        <App provider={provider} portfolioRepository={portfolioRepository} />,
+      ),
+    }
+  }
+
+  it('renders Watchlist and Portfolio tabs and starts on Watchlist', async () => {
+    renderApp()
+
+    await waitFor(() =>
+      expect(screen.getByRole('row', { name: /BTC-EUR/ })).toBeInTheDocument(),
+    )
+
+    const watchlistTab = screen.getByRole('tab', { name: /watchlist/i })
+    const portfolioTab = screen.getByRole('tab', { name: /portfolio/i })
+    expect(watchlistTab).toHaveAttribute('aria-selected', 'true')
+    expect(portfolioTab).toHaveAttribute('aria-selected', 'false')
+    expect(
+      screen.getByRole('table', { name: /realtime prices/i }),
+    ).toBeInTheDocument()
+  })
+
+  it('switches to the Portfolio tab and back with the keyboard', async () => {
+    const user = userEvent.setup()
+    renderApp()
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole('tab', { name: /portfolio/i }),
+      ).toBeInTheDocument(),
+    )
+
+    await user.click(screen.getByRole('tab', { name: /portfolio/i }))
+
+    expect(
+      screen.getByRole('heading', { name: 'Portfolio' }),
+    ).toBeInTheDocument()
+    expect(screen.getByText('No positions yet.')).toBeInTheDocument()
+    expect(
+      screen.queryByRole('table', { name: /realtime prices/i }),
+    ).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('tab', { name: /watchlist/i }))
+    await waitFor(() =>
+      expect(
+        screen.getByRole('table', { name: /realtime prices/i }),
+      ).toBeInTheDocument(),
     )
   })
 })
