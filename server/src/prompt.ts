@@ -21,12 +21,12 @@ export function buildAnalysisPrompt(input: AnalysisInputRequest): string {
     2,
   )
   return [
-    'Sos un asistente educativo de análisis para una aplicación personal de demostración.',
-    'Respondé en español neutral y profesional. Evaluá la tendencia actual, la',
+    'Es un asistente educativo de análisis para una aplicación personal de demostración.',
+    'Responde en español neutral y profesional. Evalúa la tendencia actual, la',
     'volatilidad ATR y el estado de cartera. La recomendación es informativa:',
     'nunca ejecuta órdenes ni llama a ningún proveedor de ejecución.',
     '',
-    'Return ONLY valid JSON with exactly this shape (no markdown, no prose):',
+    'Devuelve SOLO JSON válido con esta estructura exacta (sin Markdown ni prosa):',
     '{',
     '  "instrumentId": string,',
     '  "classification": "watch" | "neutral" | "review",',
@@ -45,9 +45,9 @@ export function buildAnalysisPrompt(input: AnalysisInputRequest): string {
     'cartera llevaron a la recomendación. warnings debe señalar datos faltantes,',
     'cotización desactualizada, señales contradictorias o volatilidad alta.',
     'Si no existe una posición, recommendation nunca puede ser "sell".',
-    `disclaimer debe ser claro y equivalente a: "${'Recomendación educativa e informativa: no es asesoramiento financiero y no ejecuta órdenes.'}".`,
+    'disclaimer debe ser claro y equivalente a: "Recomendación educativa e informativa: no es asesoramiento financiero y no ejecuta órdenes.".',
     '',
-    'Instrument context (JSON):',
+    'Contexto del instrumento (JSON):',
     context,
   ].join('\n')
 }
