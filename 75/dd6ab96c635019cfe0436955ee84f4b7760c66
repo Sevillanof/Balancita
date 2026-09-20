@@ -1,0 +1,28 @@
+src/App.css
+  h_2f68313623be98 23-74
+src/App.test.tsx
+  h_2f68313623be98 256-379
+src/App.tsx
+  h_2f68313623be98 16,18-19,29-30,38,53-59,65,70-73,77-83,154-158
+src/app/AnalysisModeToggle.test.tsx
+  h_2f68313623be98 1-44
+src/app/AnalysisModeToggle.tsx
+  h_2f68313623be98 1-47
+src/app/detail/AnalysisPanel.test.tsx
+  h_2f68313623be98 168-233
+src/app/detail/AnalysisPanel.tsx
+  h_2f68313623be98 4-5,8,10-11,18-24,26,28,34,36,44,51-53,73-77,83-85
+src/app/detail/InstrumentDetail.tsx
+  h_2f68313623be98 10,23-24,35-36,75,77
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "75dd6ab96c635019cfe0436955ee84f4b7760c66",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
