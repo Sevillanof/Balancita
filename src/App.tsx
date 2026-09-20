@@ -1,6 +1,10 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import WatchlistScreen from './app/watchlist/WatchlistScreen'
-import type { MarketDataProvider } from './domain/market-data'
+import InstrumentDetail from './app/detail/InstrumentDetail'
+import type {
+  Instrument,
+  MarketDataProvider,
+} from './domain/market-data'
 import { DeterministicMockMarketDataProvider } from './providers/deterministic-mock-market-data'
 import './App.css'
 
@@ -14,6 +18,8 @@ function App({ provider }: AppProps) {
     [],
   )
   const activeProvider = provider ?? defaultProvider
+  const [selectedInstrument, setSelectedInstrument] =
+    useState<Instrument | null>(null)
 
   return (
     <main className="app">
@@ -21,7 +27,18 @@ function App({ provider }: AppProps) {
       <p className="tagline">
         A local-first, mock-only personal trading workspace.
       </p>
-      <WatchlistScreen provider={activeProvider} />
+      <WatchlistScreen
+        provider={activeProvider}
+        selectedInstrumentId={selectedInstrument?.id}
+        onSelectInstrument={setSelectedInstrument}
+      />
+      {selectedInstrument && (
+        <InstrumentDetail
+          key={selectedInstrument.id}
+          provider={activeProvider}
+          instrument={selectedInstrument}
+        />
+      )}
     </main>
   )
 }
