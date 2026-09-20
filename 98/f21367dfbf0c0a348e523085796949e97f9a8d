@@ -1,0 +1,16 @@
+src/app/detail/useCandleHistory.ts
+  h_2f68313623be98 10-12,16,18-20,29,32,42-46,50,59-65
+src/app/detail/useLatestQuote.ts
+  h_2f68313623be98 8-12,17,23-30,43-44
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "98f21367dfbf0c0a348e523085796949e97f9a8d",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
