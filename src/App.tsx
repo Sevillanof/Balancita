@@ -12,7 +12,7 @@ import type { PortfolioRepository } from './domain/portfolio'
 import type { AlertRepository } from './domain/alerts'
 import { LocalStoragePortfolioRepository } from './portfolio/local-storage-portfolio-repository'
 import { LocalStorageAlertRepository } from './alerts/local-storage-alert-repository'
-import { DeterministicMockMarketDataProvider } from './providers/deterministic-mock-market-data'
+import { createMarketDataProvider } from './providers/market-data-provider'
 import { GeminiAnalysisProvider } from './providers/gemini-analysis-provider'
 import { MockAnalysisProvider } from './providers/mock-analysis-provider'
 import { AnalysisModeToggle } from './app/AnalysisModeToggle'
@@ -37,10 +37,7 @@ function App({
   analysis,
   geminiAnalysis,
 }: AppProps) {
-  const defaultProvider = useMemo(
-    () => new DeterministicMockMarketDataProvider(1),
-    [],
-  )
+  const defaultProvider = useMemo(() => createMarketDataProvider(), [])
   const defaultPortfolioRepository = useMemo(
     () => new LocalStoragePortfolioRepository(),
     [],
@@ -76,9 +73,7 @@ function App({
     <main className="app">
       <header className="app__header">
         <h1>Balancita</h1>
-        <p className="tagline">
-          A local-first, mock-only personal trading workspace.
-        </p>
+        <p className="tagline">A local-first personal trading workspace.</p>
         <AnalysisModeToggle mode={analysisMode} onChange={setAnalysisMode} />
       </header>
 
