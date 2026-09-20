@@ -1,0 +1,35 @@
+README.md
+  s_1f08bfef309727::t_64a0b6ce5cf732 32-42,65
+src/App.test.tsx
+  s_1f08bfef309727::t_2d8b4d831cccf9 89
+src/App.tsx
+  s_1f08bfef309727::t_03102e41a3bb98 4
+src/app/detail/InstrumentDetail.test.tsx
+  s_1f08bfef309727::t_7e4129d65666f4 157-159,186-190,222-226,243-245,253
+src/app/detail/InstrumentDetail.tsx
+  s_1f08bfef309727::t_cee1abd06d2267 28-29,34,58,83-85,114
+src/app/detail/detail.css
+  s_1f08bfef309727::t_18857a69b7ca2b 101
+src/app/detail/useCandleHistory.ts
+  s_1f08bfef309727::t_3fc816854a3537 65
+src/app/detail/useLatestQuote.ts
+  s_1f08bfef309727::t_61ea3a8132de3c 23-27,41
+src/app/watchlist/WatchlistScreen.test.tsx
+  s_1f08bfef309727::t_83b10b69485ade 209,269
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b43504323fb3b6f64f2316ffc68d34ab2434216b",
+  "prompts": {},
+  "sessions": {
+    "s_1f08bfef309727": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f41415805ffewgLy0fi83KFd95",
+        "model": "big-pickle"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
