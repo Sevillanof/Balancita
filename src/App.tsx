@@ -6,12 +6,14 @@ import InstrumentDetail from './app/detail/InstrumentDetail'
 import AlertsScreen from './app/alerts/AlertsScreen'
 import AlertNotificationCenter from './app/alerts/AlertNotificationCenter'
 import { useAlerts } from './app/alerts/useAlerts'
+import type { AnalysisProvider } from './domain/analysis'
 import type { Instrument, MarketDataProvider } from './domain/market-data'
 import type { PortfolioRepository } from './domain/portfolio'
 import type { AlertRepository } from './domain/alerts'
 import { LocalStoragePortfolioRepository } from './portfolio/local-storage-portfolio-repository'
 import { LocalStorageAlertRepository } from './alerts/local-storage-alert-repository'
 import { DeterministicMockMarketDataProvider } from './providers/deterministic-mock-market-data'
+import { MockAnalysisProvider } from './providers/mock-analysis-provider'
 import './App.css'
 
 type AppView = 'watchlist' | 'portfolio' | 'trade' | 'alerts'
@@ -20,9 +22,15 @@ type AppProps = {
   provider?: MarketDataProvider
   portfolioRepository?: PortfolioRepository
   alertRepository?: AlertRepository
+  analysis?: AnalysisProvider
 }
 
-function App({ provider, portfolioRepository, alertRepository }: AppProps) {
+function App({
+  provider,
+  portfolioRepository,
+  alertRepository,
+  analysis,
+}: AppProps) {
   const defaultProvider = useMemo(
     () => new DeterministicMockMarketDataProvider(1),
     [],
@@ -35,10 +43,12 @@ function App({ provider, portfolioRepository, alertRepository }: AppProps) {
     () => new LocalStorageAlertRepository(),
     [],
   )
+  const defaultAnalysis = useMemo(() => new MockAnalysisProvider(), [])
   const activeProvider = provider ?? defaultProvider
   const activePortfolioRepository =
     portfolioRepository ?? defaultPortfolioRepository
   const activeAlertRepository = alertRepository ?? defaultAlertRepository
+  const activeAnalysis = analysis ?? defaultAnalysis
   const alerts = useAlerts(activeProvider, activeAlertRepository)
   const [view, setView] = useState<AppView>('watchlist')
   const [selectedInstrument, setSelectedInstrument] =
@@ -120,6 +130,8 @@ function App({ provider, portfolioRepository, alertRepository }: AppProps) {
               key={selectedInstrument.id}
               provider={activeProvider}
               instrument={selectedInstrument}
+              analysis={activeAnalysis}
+              portfolioRepository={activePortfolioRepository}
             />
           )}
         </section>
