@@ -25,7 +25,7 @@
 | 8     | Optional budgeted Gemini         | ✅ done                   | 322 + 61 server | 3b4006f…dddb7a8 (9)       |
 | 9     | Read-only real data              | ✅ done                   | 338             | 0df96b2, d38bdd6, c20547e |
 | 9.1   | Recomendación educativa + UI ES  | ✅ done                   | 347 + 64 server | pending in this work unit |
-| 9.2   | Tokenized CSS foundation         | ✅ done                   | 348 + 64 server  | pending in this work unit |
+| 9.2   | Tokenized CSS foundation         | ✅ done                   | 348 + 64 server | pending in this work unit |
 | 10    | Broker paper trading             | ⏸ pending                 | —               | —                         |
 | 11    | Real trading evaluation          | ⏸ pending                 | —               | —                         |
 | 12    | Jev spike                        | ⏸ pending                 | —               | —                         |
