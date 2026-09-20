@@ -1,0 +1,21 @@
+src/portfolio/local-storage-portfolio-repository.test.ts
+  s_f1e57129473b05::t_2f626675e56e77 1-189
+src/portfolio/local-storage-portfolio-repository.ts
+  s_f1e57129473b05::t_8718fc3a069cba 1-135
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "58bd768056317835493e927b1c2ef38ed65ac911",
+  "prompts": {},
+  "sessions": {
+    "s_f1e57129473b05": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f412853f2ffeFp0XNFjFL66L5k",
+        "model": "big-pickle"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
