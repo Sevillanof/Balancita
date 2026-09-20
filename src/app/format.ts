@@ -1,4 +1,4 @@
-import type { Quote } from '../../domain/market-data'
+import type { Quote } from '../domain/market-data'
 
 export type InstrumentCurrency = 'EUR' | 'USD'
 
