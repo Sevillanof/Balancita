@@ -1,0 +1,25 @@
+src/app/watchlist/useWatchlist.test.tsx
+  s_364a0941e20a58::t_35eb90df35ddf4 1-133
+src/app/watchlist/useWatchlist.ts
+  s_364a0941e20a58::t_e55088f6c07d7b 1-82
+src/test/fake-market-data-provider.ts
+  s_364a0941e20a58::t_30f009df893ec5 1-112
+src/test/setup.ts
+  s_364a0941e20a58::t_8d2c6fbcd72840 2-8
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "80bced66bbdee3562bb5551e0a8aaf24c713a0d1",
+  "prompts": {},
+  "sessions": {
+    "s_364a0941e20a58": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f414d2960ffel7bYpQSFdaY72u",
+        "model": "big-pickle"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
