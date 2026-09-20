@@ -1,0 +1,23 @@
+server/src/cache.test.ts
+  s_cd71a6a91fdd2d::t_ce8a6fe3b8dcfa 1-88
+server/src/cache.ts
+  s_cd71a6a91fdd2d::t_499e94cfbacb63 1-65
+server/src/limits.ts
+  s_cd71a6a91fdd2d::t_d454d9fa09b5c8 1-50
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a766d6300625bdce54b960842cdc70e9f85edc0a",
+  "prompts": {},
+  "sessions": {
+    "s_cd71a6a91fdd2d": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f408aa3b1ffeJGPbYnLOyebt9c",
+        "model": "big-pickle"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
