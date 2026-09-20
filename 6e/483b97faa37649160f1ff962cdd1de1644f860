@@ -1,0 +1,14 @@
+server/pnpm-workspace.yaml
+  h_2f68313623be98 2-3
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6e483b97faa37649160f1ff962cdd1de1644f860",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
