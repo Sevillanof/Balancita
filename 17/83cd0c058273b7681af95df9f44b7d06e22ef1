@@ -1,0 +1,18 @@
+src/domain/orders.ts
+  h_2f68313623be98 56,123-129,132-139
+src/orders/local-paper-trading-provider.test.ts
+  h_2f68313623be98 1-394
+src/orders/local-paper-trading-provider.ts
+  h_2f68313623be98 1-517
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1783cd0c058273b7681af95df9f44b7d06e22ef1",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
