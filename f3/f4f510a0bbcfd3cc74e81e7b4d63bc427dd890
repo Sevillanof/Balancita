@@ -1,0 +1,23 @@
+src/app/AnalysisModeToggle.test.tsx
+  s_b783230df0c00a::t_f0572a7f69e48a 44
+src/app/AnalysisModeToggle.tsx
+  s_b783230df0c00a::t_8cdac608852ddb 42,45
+src/app/detail/useAnalysis.ts
+  s_b783230df0c00a::t_08c0af99dcf928 141
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f3f4f510a0bbcfd3cc74e81e7b4d63bc427dd890",
+  "prompts": {},
+  "sessions": {
+    "s_b783230df0c00a": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f402266b3ffeNcKvjfT5TbDAkP",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
