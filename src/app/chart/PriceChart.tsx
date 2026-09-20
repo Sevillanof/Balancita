@@ -23,22 +23,22 @@ type Palette = {
   down: string
 }
 
-const LIGHT_PALETTE: Palette = {
-  background: '#fafbfc',
-  text: '#1f2430',
-  muted: '#5b6472',
-  grid: 'rgba(31, 36, 48, 0.08)',
-  up: '#04724d',
-  down: '#b3261e',
+const LIGHT_FALLBACK: Palette = {
+  background: '#ffffff',
+  text: '#172033',
+  muted: '#5a6576',
+  grid: 'rgba(23, 32, 51, 0.09)',
+  up: '#13795b',
+  down: '#b42318',
 }
 
-const DARK_PALETTE: Palette = {
-  background: '#10141c',
-  text: '#e7eaf0',
-  muted: '#98a1b0',
-  grid: 'rgba(231, 234, 240, 0.1)',
-  up: '#5dd6a3',
-  down: '#f28b82',
+const DARK_FALLBACK: Palette = {
+  background: '#171e2a',
+  text: '#edf2f7',
+  muted: '#aab6c5',
+  grid: 'rgba(237, 242, 247, 0.11)',
+  up: '#69d3a6',
+  down: '#ff9b91',
 }
 
 function prefersDarkMode(): boolean {
@@ -49,6 +49,27 @@ function prefersDarkMode(): boolean {
     return false
   }
   return window.matchMedia('(prefers-color-scheme: dark)').matches
+}
+
+function cssVariable(name: string, fallback: string): string {
+  if (typeof document === 'undefined') return fallback
+  const value = window
+    .getComputedStyle(document.documentElement)
+    .getPropertyValue(name)
+    .trim()
+  return value || fallback
+}
+
+function currentPalette(): Palette {
+  const fallback = prefersDarkMode() ? DARK_FALLBACK : LIGHT_FALLBACK
+  return {
+    background: cssVariable('--color-surface', fallback.background),
+    text: cssVariable('--color-text', fallback.text),
+    muted: cssVariable('--color-muted', fallback.muted),
+    grid: cssVariable('--color-chart-grid', fallback.grid),
+    up: cssVariable('--color-success', fallback.up),
+    down: cssVariable('--color-danger', fallback.down),
+  }
 }
 
 function chartOptions(palette: Palette): DeepPartial<ChartOptions> {
@@ -79,7 +100,7 @@ export default function PriceChart({ data }: PriceChartProps) {
     const container = containerRef.current
     if (!container) return undefined
 
-    const palette = prefersDarkMode() ? DARK_PALETTE : LIGHT_PALETTE
+    const palette = currentPalette()
     const chart = createChart(container, chartOptions(palette))
     const series = chart.addSeries(CandlestickSeries, {
       upColor: palette.up,

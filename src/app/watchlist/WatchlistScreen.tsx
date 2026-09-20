@@ -30,72 +30,89 @@ export default function WatchlistScreen({
   return (
     <section className="watchlist" aria-label="Lista de seguimiento">
       <h2 className="watchlist__title">Lista de seguimiento</h2>
-      <table className="watchlist__table" aria-busy={status === 'loading'}>
-        <caption className="watchlist__caption">
-          Precios en tiempo real de tu lista de seguimiento
-        </caption>
-        <thead>
-          <tr>
-            <th scope="col">Símbolo</th>
-            <th scope="col">Nombre</th>
-            <th scope="col" className="watchlist__num">
-              Precio
-            </th>
-            <th scope="col">Moneda</th>
-            <th scope="col" className="watchlist__num">
-              Variación
-            </th>
-            <th scope="col">Estado</th>
-            <th scope="col" className="watchlist__num">
-              Última actualización
-            </th>
-          </tr>
-        </thead>
-        <tbody>
-          {status === 'loading' && (
+      <div className="table-scroll">
+        <table
+          className="data-table watchlist__table"
+          aria-busy={status === 'loading'}
+        >
+          <caption className="watchlist__caption">
+            Precios en tiempo real de tu lista de seguimiento
+          </caption>
+          <thead>
             <tr>
-              <td colSpan={7} role="status" className="watchlist__placeholder">
-                Cargando lista de seguimiento…
-              </td>
+              <th scope="col">Símbolo</th>
+              <th scope="col">Nombre</th>
+              <th scope="col" className="watchlist__num">
+                Precio
+              </th>
+              <th scope="col">Moneda</th>
+              <th scope="col" className="watchlist__num">
+                Variación
+              </th>
+              <th scope="col">Estado</th>
+              <th scope="col" className="watchlist__num">
+                Última actualización
+              </th>
             </tr>
-          )}
-          {status === 'empty' && (
-            <tr>
-              <td colSpan={7} role="status" className="watchlist__placeholder">
-                No hay instrumentos disponibles.
-              </td>
-            </tr>
-          )}
-          {status === 'error' && (
-            <tr>
-              <td colSpan={7} role="status" className="watchlist__placeholder">
-                No se pudieron cargar los datos de mercado.
-                <button
-                  type="button"
-                  className="watchlist__retry"
-                  onClick={retry}
+          </thead>
+          <tbody>
+            {status === 'loading' && (
+              <tr>
+                <td
+                  colSpan={7}
+                  role="status"
+                  className="watchlist__placeholder"
                 >
-                  Reintentar
-                </button>
-              </td>
-            </tr>
-          )}
-          {status === 'ready' &&
-            instruments.map((instrument) => (
-              <WatchlistRow
-                key={instrument.id}
-                instrument={instrument}
-                quote={quotes.get(instrument.id)}
-                isSelected={instrument.id === selectedInstrumentId}
-                onSelect={
-                  onSelectInstrument
-                    ? () => onSelectInstrument(instrument)
-                    : undefined
-                }
-              />
-            ))}
-        </tbody>
-      </table>
+                  Cargando lista de seguimiento…
+                </td>
+              </tr>
+            )}
+            {status === 'empty' && (
+              <tr>
+                <td
+                  colSpan={7}
+                  role="status"
+                  className="watchlist__placeholder"
+                >
+                  No hay instrumentos disponibles.
+                </td>
+              </tr>
+            )}
+            {status === 'error' && (
+              <tr>
+                <td
+                  colSpan={7}
+                  role="status"
+                  className="watchlist__placeholder"
+                >
+                  No se pudieron cargar los datos de mercado.
+                  <button
+                    type="button"
+                    className="watchlist__retry"
+                    onClick={retry}
+                  >
+                    Reintentar
+                  </button>
+                </td>
+              </tr>
+            )}
+            {status === 'ready' &&
+              instruments.map((instrument) => (
+                <WatchlistRow
+                  key={instrument.id}
+                  instrument={instrument}
+                  quote={quotes.get(instrument.id)}
+                  isSelected={instrument.id === selectedInstrumentId}
+                  onSelect={
+                    onSelectInstrument
+                      ? () => onSelectInstrument(instrument)
+                      : undefined
+                  }
+                />
+              ))}
+          </tbody>
+        </table>
+      </div>
     </section>
   )
 }

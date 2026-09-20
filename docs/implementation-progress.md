@@ -25,6 +25,7 @@
 | 8     | Optional budgeted Gemini         | ✅ done                   | 322 + 61 server | 3b4006f…dddb7a8 (9)       |
 | 9     | Read-only real data              | ✅ done                   | 338             | 0df96b2, d38bdd6, c20547e |
 | 9.1   | Recomendación educativa + UI ES  | ✅ done                   | 347 + 64 server | pending in this work unit |
+| 9.2   | Tokenized CSS foundation         | ✅ done                   | 348 + 64 server  | pending in this work unit |
 | 10    | Broker paper trading             | ⏸ pending                 | —               | —                         |
 | 11    | Real trading evaluation          | ⏸ pending                 | —               | —                         |
 | 12    | Jev spike                        | ⏸ pending                 | —               | —                         |
@@ -283,6 +284,31 @@ null`), `AnalysisResult` (instrumentId, `classification: 'watch' | 'neutral' |
   clicking `Analizar` and rendering `Comprar` does not call execution methods.
 - `doc/personal-trading-app.md` and `doc/guia-personal-trading-app.md` remain
   immutable; no file under `doc/` was edited.
+
+## Approved scope update — tokenized CSS foundation
+
+- Decision recorded on 2026-09-20: build the visual foundation in CSS without
+  adding a UI library or new dependency. Balancita is a data-reading tool, so a
+  small local token layer keeps the bundle and mental model small while allowing
+  the watchlist, detail, portfolio, alerts and trading surfaces to stay coherent.
+- `src/styles/ui.css` is the shared foundation. It defines light/dark theme
+  tokens for surfaces, text, borders, accent, focus, success, danger and warning;
+  spacing, content width, typography, radii, shadows and control heights; plus
+  reusable button, surface/card, section header, field/form grid, badge/status,
+  table-scroll/data-table and state primitives.
+- Feature styles now consume the shared tokens instead of maintaining separate
+  colors, control metrics, borders and focus treatments. Data tables use a
+  semantic `.table-scroll` wrapper with a deliberate minimum width, preserving
+  every critical column on small screens through horizontal scrolling.
+- The dashboard shell no longer centers the whole application vertically. It uses
+  fluid gutters, a bounded content width, consistent surfaces and an overflowing
+  mobile tab strip. Forms, cards, feedback states, visible focus and reduced
+  motion are covered by the foundation without changing domain or provider
+  contracts.
+- `PriceChart` reads the CSS theme variables at chart creation time and retains a
+  jsdom-safe fallback. The existing Lightweight Charts setup and
+  `layout.attributionLogo` remain unchanged, so TradingView attribution continues
+  to work without a new dependency.
 
 ## 5. Architecture map (current)
 

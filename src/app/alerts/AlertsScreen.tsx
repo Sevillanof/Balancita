@@ -83,53 +83,58 @@ export default function AlertsScreen({ alerts }: AlertsScreenProps) {
         />
       )}
 
-      <table className="alerts__table" aria-busy={status === 'loading'}>
-        <caption className="alerts__caption">
-          Alertas de precio evaluadas con la fuente simulada en vivo
-        </caption>
-        <thead>
-          <tr>
-            <th scope="col">Alerta</th>
-            <th scope="col">Dirección</th>
-            <th scope="col" className="alerts__num">
-              Umbral
-            </th>
-            <th scope="col">Estado</th>
-            <th scope="col">Creada</th>
-            <th scope="col">Acciones</th>
-          </tr>
-        </thead>
-        <tbody>
-          {status === 'loading' && (
+      <div className="table-scroll">
+        <table
+          className="data-table alerts__table"
+          aria-busy={status === 'loading'}
+        >
+          <caption className="alerts__caption">
+            Alertas de precio evaluadas con la fuente simulada en vivo
+          </caption>
+          <thead>
             <tr>
-              <td colSpan={6} role="status" className="alerts__placeholder">
-                Cargando alertas…
-              </td>
+              <th scope="col">Alerta</th>
+              <th scope="col">Dirección</th>
+              <th scope="col" className="alerts__num">
+                Umbral
+              </th>
+              <th scope="col">Estado</th>
+              <th scope="col">Creada</th>
+              <th scope="col">Acciones</th>
             </tr>
-          )}
-          {status === 'empty' && (
-            <tr>
-              <td colSpan={6} role="status" className="alerts__placeholder">
-                Todavía no hay alertas.
-              </td>
-            </tr>
-          )}
-          {status === 'ready' &&
-            alerts.alerts.map((alert) => {
-              const instrument = alerts.instruments.get(alert.instrumentId)
-              if (!instrument) return null
-              return (
-                <AlertRow
-                  key={alert.id}
-                  alert={alert}
-                  instrument={instrument}
-                  onAcknowledge={() => void handleAcknowledge(alert.id)}
-                  onDelete={() => void handleDelete(alert.id)}
-                />
-              )
-            })}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {status === 'loading' && (
+              <tr>
+                <td colSpan={6} role="status" className="alerts__placeholder">
+                  Cargando alertas…
+                </td>
+              </tr>
+            )}
+            {status === 'empty' && (
+              <tr>
+                <td colSpan={6} role="status" className="alerts__placeholder">
+                  Todavía no hay alertas.
+                </td>
+              </tr>
+            )}
+            {status === 'ready' &&
+              alerts.alerts.map((alert) => {
+                const instrument = alerts.instruments.get(alert.instrumentId)
+                if (!instrument) return null
+                return (
+                  <AlertRow
+                    key={alert.id}
+                    alert={alert}
+                    instrument={instrument}
+                    onAcknowledge={() => void handleAcknowledge(alert.id)}
+                    onDelete={() => void handleDelete(alert.id)}
+                  />
+                )
+              })}
+          </tbody>
+        </table>
+      </div>
     </section>
   )
 }
@@ -239,7 +244,7 @@ function AlertForm({
 
   return (
     <form
-      className="alerts__form"
+      className="alerts__form form-grid"
       aria-label="Agregar alerta"
       noValidate
       onSubmit={(event) => void handleSubmit(event)}

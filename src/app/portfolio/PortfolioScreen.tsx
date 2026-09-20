@@ -125,70 +125,87 @@ export default function PortfolioScreen({
         />
       )}
 
-      <table className="portfolio__table" aria-busy={status === 'loading'}>
-        <caption className="portfolio__caption">
-          Posiciones manuales valuadas con la fuente simulada en vivo
-        </caption>
-        <thead>
-          <tr>
-            <th scope="col">Posición</th>
-            <th scope="col" className="portfolio__num">
-              Cantidad
-            </th>
-            <th scope="col" className="portfolio__num">
-              Costo promedio
-            </th>
-            <th scope="col" className="portfolio__num">
-              Precio actual
-            </th>
-            <th scope="col" className="portfolio__num">
-              Costo total
-            </th>
-            <th scope="col" className="portfolio__num">
-              Valor actual
-            </th>
-            <th scope="col" className="portfolio__num">
-              Resultado
-            </th>
-            <th scope="col">Moneda</th>
-            <th scope="col">Acciones</th>
-          </tr>
-        </thead>
-        <tbody>
-          {status === 'loading' && (
+      <div className="table-scroll">
+        <table
+          className="data-table portfolio__table"
+          aria-busy={status === 'loading'}
+        >
+          <caption className="portfolio__caption">
+            Posiciones manuales valuadas con la fuente simulada en vivo
+          </caption>
+          <thead>
             <tr>
-              <td colSpan={9} role="status" className="portfolio__placeholder">
-                Cargando cartera…
-              </td>
+              <th scope="col">Posición</th>
+              <th scope="col" className="portfolio__num">
+                Cantidad
+              </th>
+              <th scope="col" className="portfolio__num">
+                Costo promedio
+              </th>
+              <th scope="col" className="portfolio__num">
+                Precio actual
+              </th>
+              <th scope="col" className="portfolio__num">
+                Costo total
+              </th>
+              <th scope="col" className="portfolio__num">
+                Valor actual
+              </th>
+              <th scope="col" className="portfolio__num">
+                Resultado
+              </th>
+              <th scope="col">Moneda</th>
+              <th scope="col">Acciones</th>
             </tr>
-          )}
-          {status === 'empty' && (
-            <tr>
-              <td colSpan={9} role="status" className="portfolio__placeholder">
-                Todavía no hay posiciones.
-              </td>
-            </tr>
-          )}
-          {status === 'ready' &&
-            portfolio.holdings.map((holding) => {
-              const instrument = portfolio.instruments.get(holding.instrumentId)
-              if (!instrument) return null
-              return (
-                <PositionRow
-                  key={holding.instrumentId}
-                  holding={holding}
-                  instrument={instrument}
-                  quote={portfolio.quotes.get(holding.instrumentId)}
-                  pendingDelete={pendingDelete}
-                  onEdit={() => setEditing({ mode: 'edit', holding })}
-                  onRequestDelete={() => setPendingDelete(holding.instrumentId)}
-                  onConfirmDelete={() => void handleConfirmDelete()}
-                  onCancelDelete={() => setPendingDelete(null)}
-                />
-              )
-            })}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {status === 'loading' && (
+              <tr>
+                <td
+                  colSpan={9}
+                  role="status"
+                  className="portfolio__placeholder"
+                >
+                  Cargando cartera…
+                </td>
+              </tr>
+            )}
+            {status === 'empty' && (
+              <tr>
+                <td
+                  colSpan={9}
+                  role="status"
+                  className="portfolio__placeholder"
+                >
+                  Todavía no hay posiciones.
+                </td>
+              </tr>
+            )}
+            {status === 'ready' &&
+              portfolio.holdings.map((holding) => {
+                const instrument = portfolio.instruments.get(
+                  holding.instrumentId,
+                )
+                if (!instrument) return null
+                return (
+                  <PositionRow
+                    key={holding.instrumentId}
+                    holding={holding}
+                    instrument={instrument}
+                    quote={portfolio.quotes.get(holding.instrumentId)}
+                    pendingDelete={pendingDelete}
+                    onEdit={() => setEditing({ mode: 'edit', holding })}
+                    onRequestDelete={() =>
+                      setPendingDelete(holding.instrumentId)
+                    }
+                    onConfirmDelete={() => void handleConfirmDelete()}
+                    onCancelDelete={() => setPendingDelete(null)}
+                  />
+                )
+              })}
+          </tbody>
+        </table>
+      </div>
     </section>
   )
 }
@@ -390,7 +407,7 @@ function HoldingForm({
 
   return (
     <form
-      className="portfolio__form"
+      className="portfolio__form form-grid"
       aria-label={label}
       noValidate
       onSubmit={(event) => void handleSubmit(event)}

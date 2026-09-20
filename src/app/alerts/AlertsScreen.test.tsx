@@ -45,6 +45,7 @@ describe('AlertsScreen', () => {
       ).toBeInTheDocument(),
     )
     expect(screen.getByText('Todavía no hay alertas.')).toBeInTheDocument()
+    expect(screen.getByRole('table').parentElement).toHaveClass('table-scroll')
     expect(
       screen.getByRole('button', { name: /agregar alerta/i }),
     ).toBeInTheDocument()

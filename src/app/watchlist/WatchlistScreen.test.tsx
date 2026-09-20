@@ -25,9 +25,9 @@ describe('WatchlistScreen', () => {
     const provider = new FakeMarketDataProvider(WATCHLIST_INSTRUMENTS)
     render(<WatchlistScreen provider={provider} />)
 
-    expect(
-      screen.getByRole('table', { name: /precios en tiempo real/i }),
-    ).toBeInTheDocument()
+    const table = screen.getByRole('table', { name: /precios en tiempo real/i })
+    expect(table).toBeInTheDocument()
+    expect(table.parentElement).toHaveClass('table-scroll')
 
     for (const header of HEADERS) {
       const column = screen.getByRole('columnheader', { name: header })
