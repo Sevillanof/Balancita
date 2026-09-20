@@ -1,0 +1,25 @@
+src/app/portfolio/usePortfolio.ts
+  s_d49bb852c30422::t_c8a17f885f6d7c 137
+src/domain/market-data.ts
+  s_d49bb852c30422::t_2ceb07bc479a20 38
+src/providers/deterministic-mock-market-data.test.ts
+  s_d49bb852c30422::t_ac64aefc2c9e44 2-6,21-22,41-42,53-54,107-112,126-128,134-136,162-164,194-196,207-209,254
+src/providers/deterministic-mock-market-data.ts
+  s_d49bb852c30422::t_252fd086fc17cb 224
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "95989904f487d2c0ca53818b4da7ba29e8a161a7",
+  "prompts": {},
+  "sessions": {
+    "s_d49bb852c30422": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f416043b0ffe018dRDpb5OGIqx",
+        "model": "big-pickle"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
