@@ -1,0 +1,21 @@
+server/pnpm-lock.yaml
+  s_cd71a6a91fdd2d::t_8466997b597aec 1-1345
+server/pnpm-workspace.yaml
+  s_cd71a6a91fdd2d::t_a8974a168175a1 1-3
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "0dea188596e6f097a334e63fc266c12cbf649e6b",
+  "prompts": {},
+  "sessions": {
+    "s_cd71a6a91fdd2d": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f408aa3b1ffeJGPbYnLOyebt9c",
+        "model": "big-pickle"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
