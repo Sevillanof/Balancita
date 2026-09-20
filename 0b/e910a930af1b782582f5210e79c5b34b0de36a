@@ -1,0 +1,25 @@
+docs/implementation-progress.md
+  s_98a041e4d3bc3f::t_aa4fc8b39e8184 27,61-63,183-184,253-286,354-360
+src/App.test.tsx
+  s_98a041e4d3bc3f::t_048b87f57af773 133,140-143,147,151,156,160,162-163,165,176,179,181-182,184,187,190,208,216,242,247,252,265,273,317-319,326-328,339-341,356,359,361,364,379,382,384,387-390
+src/App.tsx
+  s_98a041e4d3bc3f::t_08a6fd9585373d 85-87,91-95,105,116,127,138
+src/app/detail/AnalysisPanel.test.tsx
+  s_98a041e4d3bc3f::t_84152b643e4bc2 26,36,73,85,94,96,100,103-105,122,125,130,140,144,147,170-193,213,216,218,220,241,244-247,263
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "0be910a930af1b782582f5210e79c5b34b0de36a",
+  "prompts": {},
+  "sessions": {
+    "s_98a041e4d3bc3f": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f3ff960aeffeBfLhF9kQ8tqofy",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
