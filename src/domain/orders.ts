@@ -53,6 +53,7 @@ export interface OrderPreview {
   quantity: Money
   marketPrice: Money
   slippageApplied: Money
+  slippedPrice: Money
   commission: Money
   subtotal: Money
   estimatedTotal: Money
@@ -119,9 +120,23 @@ export class PreviewOutdatedError extends Error {
 }
 
 export class SimulatorCorruptStateError extends Error {
+  constructor(message: string, cause?: unknown) {
+    super(message, cause === undefined ? undefined : { cause })
+    this.name = 'SimulatorCorruptStateError'
+  }
+}
+
+export class UnknownInstrumentError extends Error {
   constructor(message: string) {
     super(message)
-    this.name = 'SimulatorCorruptStateError'
+    this.name = 'UnknownInstrumentError'
+  }
+}
+
+export class UnavailablePriceError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'UnavailablePriceError'
   }
 }
 
