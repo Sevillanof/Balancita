@@ -1,0 +1,21 @@
+src/app/alerts/useAlerts.test.tsx
+  s_0e8c4ea8d45756::t_8f3f942b48f728 1-295
+src/app/alerts/useAlerts.ts
+  s_0e8c4ea8d45756::t_e20f43cd0bbcd1 1-317
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "de4a4bee20bb9aa4127b0b803e9f74c3a8c5c6bd",
+  "prompts": {},
+  "sessions": {
+    "s_0e8c4ea8d45756": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f40f92c77ffeNwtJJlfxhQFBMv",
+        "model": "big-pickle"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
