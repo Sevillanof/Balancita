@@ -63,6 +63,27 @@
   color: var(--text-muted);
 }
 
+.watchlist__symbol {
+  padding: 0;
+  font: inherit;
+  font-weight: 700;
+  color: inherit;
+  background: none;
+  border: none;
+  border-bottom: 1px dashed color-mix(in srgb, var(--text) 40%, transparent);
+  cursor: pointer;
+}
+
+.watchlist__symbol:hover,
+.watchlist__symbol:focus-visible {
+  border-bottom-style: solid;
+  outline: none;
+}
+
+tr[aria-current='true'] > * {
+  background-color: color-mix(in srgb, var(--text) 8%, transparent);
+}
+
 .watchlist__retry {
   margin-left: 0.75rem;
   padding: 0.375rem 0.875rem;

@@ -9,11 +9,17 @@ import './watchlist.css'
 
 type WatchlistScreenProps = {
   provider: MarketDataProvider
+  selectedInstrumentId?: Instrument['id']
+  onSelectInstrument?: (instrument: Instrument) => void
 }
 
 const PLACEHOLDER = '—'
 
-export default function WatchlistScreen({ provider }: WatchlistScreenProps) {
+export default function WatchlistScreen({
+  provider,
+  selectedInstrumentId,
+  onSelectInstrument,
+}: WatchlistScreenProps) {
   const { status, instruments, quotes, retry } = useWatchlist(provider)
 
   return (
@@ -75,6 +81,12 @@ export default function WatchlistScreen({ provider }: WatchlistScreenProps) {
                 key={instrument.id}
                 instrument={instrument}
                 quote={quotes.get(instrument.id)}
+                isSelected={instrument.id === selectedInstrumentId}
+                onSelect={
+                  onSelectInstrument
+                    ? () => onSelectInstrument(instrument)
+                    : undefined
+                }
               />
             ))}
         </tbody>
@@ -86,16 +98,34 @@ export default function WatchlistScreen({ provider }: WatchlistScreenProps) {
 function WatchlistRow({
   instrument,
   quote,
+  isSelected,
+  onSelect,
 }: {
   instrument: Instrument
   quote: Quote | undefined
+  isSelected: boolean
+  onSelect?: () => void
 }) {
   const hasQuote = quote !== undefined
   const change = hasQuote ? formatChange(quote) : undefined
+  const selectable = onSelect !== undefined
 
   return (
-    <tr>
-      <th scope="row">{instrument.symbol}</th>
+    <tr aria-current={isSelected ? 'true' : undefined}>
+      <th scope="row">
+        {selectable ? (
+          <button
+            type="button"
+            className="watchlist__symbol"
+            aria-pressed={isSelected || undefined}
+            onClick={onSelect}
+          >
+            {instrument.symbol}
+          </button>
+        ) : (
+          instrument.symbol
+        )}
+      </th>
       <td>{instrument.displayName}</td>
       <td className="watchlist__num watchlist__price">
         {hasQuote ? formatPrice(quote.price, instrument.currency) : PLACEHOLDER}

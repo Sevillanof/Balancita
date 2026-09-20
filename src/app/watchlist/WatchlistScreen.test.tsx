@@ -1,6 +1,6 @@
 import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   FakeMarketDataProvider,
   WATCHLIST_INSTRUMENTS,
@@ -199,5 +199,110 @@ describe('WatchlistScreen', () => {
     expect(screen.getAllByRole('row')).toHaveLength(4)
     expect(btcRow.cells).toHaveLength(7)
     expect(screen.getAllByRole('cell')).toHaveLength(18)
+  })
+})
+
+describe('WatchlistScreen selection', () => {
+  it('renders symbol select buttons when onSelectInstrument is provided', async () => {
+    const provider = new FakeMarketDataProvider(WATCHLIST_INSTRUMENTS)
+    render(
+      <WatchlistScreen
+        provider={provider}
+        onSelectInstrument={() => {}}
+      />,
+    )
+
+    await waitFor(() =>
+      expect(screen.getByRole('row', { name: /BTC-EUR/ })).toBeInTheDocument(),
+    )
+
+    const btcRow = screen.getByRole('row', { name: /BTC-EUR/ })
+    expect(
+      within(btcRow).getByRole('button', { name: /BTC-EUR/ }),
+    ).toBeInTheDocument()
+    expect(within(btcRow).getByRole('rowheader')).toBeInTheDocument()
+  })
+
+  it('keeps the symbol as plain text without an onSelect handler', () => {
+    const provider = new FakeMarketDataProvider(WATCHLIST_INSTRUMENTS)
+    render(<WatchlistScreen provider={provider} />)
+
+    const buttons = screen.queryAllByRole('button')
+    expect(buttons).toHaveLength(0)
+  })
+
+  it('selects an instrument on click', async () => {
+    const user = userEvent.setup()
+    const provider = new FakeMarketDataProvider(WATCHLIST_INSTRUMENTS)
+    const onSelectInstrument = vi.fn()
+    render(
+      <WatchlistScreen
+        provider={provider}
+        onSelectInstrument={onSelectInstrument}
+      />,
+    )
+
+    await waitFor(() =>
+      expect(screen.getByRole('row', { name: /TTWO/ })).toBeInTheDocument(),
+    )
+
+    await user.click(screen.getByRole('button', { name: /TTWO/ }))
+
+    const selected = WATCHLIST_INSTRUMENTS.find((i) => i.symbol === 'TTWO')
+    expect(onSelectInstrument).toHaveBeenCalledTimes(1)
+    expect(onSelectInstrument).toHaveBeenCalledWith(selected)
+  })
+
+  it('selects an instrument with the keyboard', async () => {
+    const user = userEvent.setup()
+    const provider = new FakeMarketDataProvider(WATCHLIST_INSTRUMENTS)
+    const onSelectInstrument = vi.fn()
+    render(
+      <WatchlistScreen
+        provider={provider}
+        onSelectInstrument={onSelectInstrument}
+      />,
+    )
+
+    await waitFor(() =>
+      expect(screen.getByRole('row', { name: /BTC-EUR/ })).toBeInTheDocument(),
+    )
+
+    await user.tab()
+    expect(
+      screen.getByRole('button', { name: /BTC-EUR/ }),
+    ).toHaveFocus()
+    await user.keyboard('{Enter}')
+    expect(onSelectInstrument).toHaveBeenCalledTimes(1)
+
+    await user.keyboard('{Enter}')
+    expect(onSelectInstrument).toHaveBeenCalledTimes(2)
+  })
+
+  it('marks the selected instrument on the row and its button', async () => {
+    const provider = new FakeMarketDataProvider(WATCHLIST_INSTRUMENTS)
+    const selected = WATCHLIST_INSTRUMENTS.find((i) => i.symbol === 'BTC-EUR')
+    render(
+      <WatchlistScreen
+        provider={provider}
+        selectedInstrumentId={selected?.id}
+        onSelectInstrument={() => {}}
+      />,
+    )
+
+    await waitFor(() =>
+      expect(screen.getByRole('row', { name: /BTC-EUR/ })).toBeInTheDocument(),
+    )
+
+    const btcRow = screen.getByRole('row', { name: /BTC-EUR/ })
+    const ttwoRow = screen.getByRole('row', { name: /TTWO/ })
+    expect(btcRow).toHaveAttribute('aria-current', 'true')
+    expect(ttwoRow).not.toHaveAttribute('aria-current')
+    expect(
+      within(btcRow).getByRole('button', { name: /BTC-EUR/ }),
+    ).toHaveAttribute('aria-pressed', 'true')
+    expect(
+      within(ttwoRow).getByRole('button', { name: /TTWO/ }),
+    ).not.toHaveAttribute('aria-pressed')
   })
 })
