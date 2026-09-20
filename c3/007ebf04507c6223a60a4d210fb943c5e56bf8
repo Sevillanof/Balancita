@@ -1,0 +1,18 @@
+src/App.css
+  h_2f68313623be98 5-6,11-14,18-21,25-26,29-34,40-46,50-51,55-63,67-69,73-74,78-79,81-87,91-94,97-99,103-104,108-109,112-130
+src/index.css
+  h_2f68313623be98 1
+src/styles/ui.css
+  h_2f68313623be98 1-354
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c3007ebf04507c6223a60a4d210fb943c5e56bf8",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
