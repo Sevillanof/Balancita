@@ -1,0 +1,23 @@
+src/app/detail/AnalysisPanel.test.tsx
+  s_e7c020cdbee484::t_c0f5294de12ba8 1-180
+src/app/detail/AnalysisPanel.tsx
+  s_e7c020cdbee484::t_52b269da6508d5 1-95
+src/app/detail/InstrumentDetail.test.tsx
+  s_e7c020cdbee484::t_6c2fc8ed3310ed 4-8,10,260-333
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b446a3b0cab17cdc20c99841f8f2c2119cd3d67b",
+  "prompts": {},
+  "sessions": {
+    "s_e7c020cdbee484": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f40b6aa71ffeXcgxXKOJVUMe8M",
+        "model": "big-pickle"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
