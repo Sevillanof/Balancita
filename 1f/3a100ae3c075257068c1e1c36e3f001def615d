@@ -1,0 +1,25 @@
+server/src/gemini-client.test.ts
+  s_cd71a6a91fdd2d::t_599711f94c8ff6 1-61
+server/src/gemini-client.ts
+  s_cd71a6a91fdd2d::t_ef4077d41a88cb 1-60
+server/src/service.test.ts
+  s_cd71a6a91fdd2d::t_8c9529c1889b17 1-185
+server/src/service.ts
+  s_cd71a6a91fdd2d::t_b6a6cf14385679 1-163
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1f3a100ae3c075257068c1e1c36e3f001def615d",
+  "prompts": {},
+  "sessions": {
+    "s_cd71a6a91fdd2d": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f408aa3b1ffeJGPbYnLOyebt9c",
+        "model": "big-pickle"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
