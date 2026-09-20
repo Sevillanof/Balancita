@@ -1,0 +1,41 @@
+server/package.json
+  s_cd71a6a91fdd2d::t_14fc3a3e7ce0df 27
+server/pnpm-workspace.yaml
+  s_cd71a6a91fdd2d::t_73263446b4ff4e 3
+server/src/analysis-errors.test.ts
+  s_cd71a6a91fdd2d::t_a50ca72a32cfdd 1-80
+server/src/analysis-errors.ts
+  s_cd71a6a91fdd2d::t_f19912676c211a 1-77
+server/src/config.test.ts
+  s_cd71a6a91fdd2d::t_c1c0351ac677af 1-58
+server/src/config.ts
+  s_cd71a6a91fdd2d::t_5d0b0ae3f8f632 1-84
+server/src/prompt.test.ts
+  s_cd71a6a91fdd2d::t_a9d858b6a7028c 1-87
+server/src/prompt.ts
+  s_cd71a6a91fdd2d::t_25a111b40495ce 1-49
+server/src/wire.test.ts
+  s_cd71a6a91fdd2d::t_f651682e8de47d 1-132
+server/src/wire.ts
+  s_cd71a6a91fdd2d::t_fea13015c0a2c1 1-204
+server/tsconfig.json
+  s_cd71a6a91fdd2d::t_4ae874816c4e3e 22
+server/vitest.config.ts
+  s_cd71a6a91fdd2d::t_afbac243825c67 7
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3b4006fff5c435d8b7fc9c48bee0e725a5ef303b",
+  "prompts": {},
+  "sessions": {
+    "s_cd71a6a91fdd2d": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f408aa3b1ffeJGPbYnLOyebt9c",
+        "model": "big-pickle"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
