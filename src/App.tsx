@@ -2,30 +2,43 @@ import { useMemo, useState } from 'react'
 import PortfolioScreen from './app/portfolio/PortfolioScreen'
 import WatchlistScreen from './app/watchlist/WatchlistScreen'
 import InstrumentDetail from './app/detail/InstrumentDetail'
+import AlertsScreen from './app/alerts/AlertsScreen'
+import AlertNotificationCenter from './app/alerts/AlertNotificationCenter'
+import { useAlerts } from './app/alerts/useAlerts'
 import type { Instrument, MarketDataProvider } from './domain/market-data'
 import type { PortfolioRepository } from './domain/portfolio'
+import type { AlertRepository } from './domain/alerts'
 import { LocalStoragePortfolioRepository } from './portfolio/local-storage-portfolio-repository'
+import { LocalStorageAlertRepository } from './alerts/local-storage-alert-repository'
 import { DeterministicMockMarketDataProvider } from './providers/deterministic-mock-market-data'
 import './App.css'
 
-type AppView = 'watchlist' | 'portfolio'
+type AppView = 'watchlist' | 'portfolio' | 'alerts'
 
 type AppProps = {
   provider?: MarketDataProvider
   portfolioRepository?: PortfolioRepository
+  alertRepository?: AlertRepository
 }
 
-function App({ provider, portfolioRepository }: AppProps) {
+function App({ provider, portfolioRepository, alertRepository }: AppProps) {
   const defaultProvider = useMemo(
     () => new DeterministicMockMarketDataProvider(1),
     [],
   )
-  const defaultRepository = useMemo(
+  const defaultPortfolioRepository = useMemo(
     () => new LocalStoragePortfolioRepository(),
     [],
   )
+  const defaultAlertRepository = useMemo(
+    () => new LocalStorageAlertRepository(),
+    [],
+  )
   const activeProvider = provider ?? defaultProvider
-  const activeRepository = portfolioRepository ?? defaultRepository
+  const activePortfolioRepository =
+    portfolioRepository ?? defaultPortfolioRepository
+  const activeAlertRepository = alertRepository ?? defaultAlertRepository
+  const alerts = useAlerts(activeProvider, activeAlertRepository)
   const [view, setView] = useState<AppView>('watchlist')
   const [selectedInstrument, setSelectedInstrument] =
     useState<Instrument | null>(null)
@@ -60,7 +73,23 @@ function App({ provider, portfolioRepository }: AppProps) {
         >
           Portfolio
         </button>
+        <button
+          type="button"
+          role="tab"
+          id="tab-alerts"
+          aria-selected={view === 'alerts'}
+          aria-controls="panel-alerts"
+          className="app__tab"
+          onClick={() => setView('alerts')}
+        >
+          Alerts
+        </button>
       </div>
+
+      <AlertNotificationCenter
+        triggered={alerts.triggered}
+        onAcknowledge={(id) => void alerts.acknowledge(id)}
+      />
 
       {view === 'watchlist' ? (
         <section
@@ -82,6 +111,15 @@ function App({ provider, portfolioRepository }: AppProps) {
             />
           )}
         </section>
+      ) : view === 'alerts' ? (
+        <section
+          role="tabpanel"
+          id="panel-alerts"
+          aria-labelledby="tab-alerts"
+          className="app__panel"
+        >
+          <AlertsScreen alerts={alerts} />
+        </section>
       ) : (
         <section
           role="tabpanel"
@@ -91,7 +129,7 @@ function App({ provider, portfolioRepository }: AppProps) {
         >
           <PortfolioScreen
             provider={activeProvider}
-            repository={activeRepository}
+            repository={activePortfolioRepository}
           />
         </section>
       )}
