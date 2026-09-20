@@ -1,0 +1,18 @@
+src/app/detail/InstrumentDetail.test.tsx
+  h_2f68313623be98 1-243
+src/app/detail/InstrumentDetail.tsx
+  h_2f68313623be98 1-116
+src/app/detail/detail.css
+  h_2f68313623be98 1-101
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5bad38505b8b9da7ca59e354f5f31c5df6ed2cba",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
