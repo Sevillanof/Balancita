@@ -23,7 +23,7 @@
 | 6     | Paper trading simulator          | ✅ done                   | 249             | 54ce740…8cd3a05 (6)       |
 | 7     | Local deterministic analysis     | ✅ done                   | 291             | 38b3ffd…ee0c648 (6)       |
 | 8     | Optional budgeted Gemini         | ✅ done                   | 322 + 61 server | 3b4006f…dddb7a8 (9)       |
-| 9     | Read-only real data              | ⏸ pending                 | —               | —                         |
+| 9     | Read-only real data              | ✅ done                   | 338             | 0df96b2, d38bdd6, c20547e |
 | 10    | Broker paper trading             | ⏸ pending                 | —               | —                         |
 | 11    | Real trading evaluation          | ⏸ pending                 | —               | —                         |
 | 12    | Jev spike                        | ⏸ pending                 | —               | —                         |
@@ -253,7 +253,8 @@ null`), `AnalysisResult` (instrumentId, `classification: 'watch' | 'neutral' |
 ```
 src/
   domain/            analysis.ts, money.ts, market-data.ts, portfolio.ts, alerts.ts, orders.ts
-  providers/         deterministic-mock-market-data.ts, mock-analysis-provider.ts
+  providers/         deterministic-mock-market-data.ts, coinbase-market-data.ts,
+                     market-data-provider.ts, mock-analysis-provider.ts,
                      gemini-analysis-provider.ts
   portfolio/         local-storage-portfolio-repository.ts (+ valuation.ts)
   alerts/            alert-evaluator.ts, local-storage-alert-repository.ts
@@ -311,7 +312,7 @@ never quotes or derived totals.
   never feed back into arithmetic.
 - Commits are work-unit-sized per phase; keep them that way in future phases.
 
-## 8. Phase 8 (done) and Phase 9 scope (next)
+## 8. Phase 8 and Phase 9 (done)
 
 Phase 7 (Prompt 7) is **implemented and verified**: contract,
 `MockAnalysisProvider` with explicit deterministic rules, manual "Analyze"
@@ -324,9 +325,72 @@ The gateway, official SDK adapter, structured response validation, timeout,
 output cap, temporary input-hash cache, conservative internal quotas, manual
 provider selection, closed Mock fallback and required tests are complete.
 
-Phase 9 is pending and must investigate real read-only market data independently.
-It must not reuse Gemini as a market-data provider or alter paper-trading
-authority.
+### Phase 9 - Coinbase Exchange read-only market data (approved scope)
+
+- Implemented `CoinbaseMarketDataProvider` behind `MarketDataProvider` for the
+  exact public product `BTC-EUR` only. It uses the unauthenticated Exchange REST
+  product and candles endpoints plus the public Exchange WebSocket ticker feed.
+  It never sends credentials and has no order endpoint or
+  `OrderExecutionProvider` surface.
+- REST mapping preserves EUR, Coinbase product identity, `providerSymbols`, and
+  the raw product fields in `providerMetadata`. Candles map from Coinbase's
+  `[timestamp, low, high, open, close, volume]` tuples to ascending ISO
+  `Candle` values. History is explicitly one `granularity=86400` request and is
+  capped at Coinbase's documented maximum of 300 candles; an oversized response
+  is rejected instead of being silently truncated or paginated without a time
+  range.
+- WebSocket mapping uses the public `ticker` subscription for `BTC-EUR` and
+  calculates `change` and `changePercent` from `open_24h`. Sequence numbers must
+  be strictly contiguous per connection. Gaps and out-of-order/duplicate
+  sequences suppress the unsafe tick, emit the last quote as `stale` when one
+  exists, close the socket, and reconnect. The contract has no error callback,
+  so this is the explicit recovery behavior; `live` resumes only after a valid
+  tick on the new subscription.
+- Quotes become `stale` after the configurable `staleAfterMs` threshold (15s by
+  default). WebSocket errors, closes, invalid JSON, and incomplete ticker
+  messages use bounded exponential reconnect backoff (1s to 30s by default).
+  Unsubscribe clears stale/reconnect timers, detaches handlers, and closes the
+  socket; no timer or socket is left behind.
+- `VITE_MARKET_DATA_PROVIDER` is validated as `mock` or `coinbase`; absent or
+  empty remains `mock` for development and tests. Coinbase mode filters the
+  catalog to `BTC-EUR`. The application deliberately gives Trade a separate
+  deterministic mock provider, so Coinbase prices never become paper-trading
+  execution input. The local paper simulator remains the authority for orders,
+  positions, and receipts.
+- `TTWO` and `SPCX` remain in the deterministic mock catalog only. No exact,
+  free, credential-free, real-time, and legally redistributable provider was
+  verified for either equity. The current identity of `SPCX` was verified as
+  Space Exploration Technologies Corp. Class A, but historical data under the
+  prior use of the ticker must not be joined automatically.
+
+#### Phase 9 evidence and restrictions
+
+Research and source consultation date: **2026-09-20**.
+
+Official Coinbase Exchange sources consulted:
+
+- Product: https://docs.cdp.coinbase.com/exchange/reference/exchangerestapi_getproduct
+- Candles: https://docs.cdp.coinbase.com/exchange/reference/exchangerestapi_getproductcandles
+- WebSocket channels and ticker schema:
+  https://docs.cdp.coinbase.com/exchange/websocket-feed/channels
+- WebSocket overview and sequence guidance:
+  https://docs.cdp.coinbase.com/exchange/websocket-feed/overview
+- REST limits: https://docs.cdp.coinbase.com/exchange/rest-api/rate-limits
+- Market Data Terms of Use: https://www.coinbase.com/legal/market_data
+
+Coinbase Exchange market data is publicly accessible for this use without an
+API key or credentials. The documented public limits are 10 REST requests per
+second per IP with a burst of 15, and 8 WebSocket messages per second per IP
+with a burst of 20. Candles support the documented 1-minute through 1-day
+granularities and a maximum of 300 candles per request. These limits are not a
+license to redistribute the feed.
+
+Coinbase's Market Data Terms restrict redistribution, display, or dissemination
+of Market Data and derived works to third parties outside the organization
+without prior written consent. This implementation is therefore intended for
+local/internal use only; the restriction must be reviewed before exposing the
+Coinbase mode to external users or publishing its prices, charts, or derived
+analytics.
 
 ## 9. How to resume
 

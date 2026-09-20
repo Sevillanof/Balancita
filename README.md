@@ -1,8 +1,8 @@
 # Balancita
 
-A local-first, mock-only personal trading workspace. It renders a realtime mock
-watchlist and an instrument detail view with a candlestick chart. No backend, no
-API keys and no real market data are involved.
+A local-first personal trading workspace. It renders a realtime watchlist and an
+instrument detail view with a candlestick chart. Mock market data remains the
+default; Coinbase Exchange read-only mode is available for BTC-EUR only.
 
 ## Requirements
 
@@ -27,6 +27,23 @@ pnpm dev
 Open the printed local URL (default: <http://localhost:5173>). Vite automatically
 picks the next free port when 5173 is already in use.
 
+### Market data mode
+
+The default mode is deterministic mock data for BTC-EUR, TTWO, and SPCX. To use
+the approved Coinbase Exchange read-only feed locally, start Vite with:
+
+```bash
+VITE_MARKET_DATA_PROVIDER=coinbase pnpm dev
+```
+
+Coinbase mode uses public, unauthenticated REST and WebSocket market-data
+endpoints and exposes only BTC-EUR. TTWO and SPCX remain mock-only. Coinbase's
+Market Data Terms restrict redistribution or display outside the organization
+without prior written consent, so this mode is for local/internal use only.
+Paper trading always uses the deterministic mock feed and its existing local
+simulator authority; Coinbase prices are never used to execute or simulate
+orders.
+
 ## Scripts
 
 | Command             | Description                             |
@@ -46,18 +63,20 @@ picks the next free port when 5173 is already in use.
 Tests run on jsdom with Testing Library and user-event. Test files live next to the
 code they verify (e.g. `src/App.test.tsx`).
 
-## Product scope (Phase 4)
+## Product scope (Phases 4 and 9)
 
-The watchlist shows deterministic mock instruments with realtime mock quotes, and
-selecting an instrument opens a detail view with its price summary and a mock
-candlestick chart. A workspace tab list switches between Watchlist and
-Portfolio. The portfolio keeps manual positions (quantity and average cost) in
-localStorage behind a versioned `PortfolioRepository`, subscribes to live mock
-quotes for every held instrument and derives per-position cost, current value
-and profit/loss (absolute and percentage) on render — quotes and totals are never
-persisted. Corrupt stored data surfaces an explicit reset instead of being
-silently trusted. The screen identifies the product ("Balancita") and never
-requests credentials. There is no backend, no authentication and no global state.
+The default watchlist shows deterministic mock instruments with realtime mock
+quotes, and selecting an instrument opens a detail view with its price summary
+and a mock candlestick chart. In Coinbase mode the catalog is filtered to the
+public BTC-EUR product and the same UI consumes read-only live/history data. A
+workspace tab list switches between Watchlist and Portfolio. The portfolio keeps
+manual positions (quantity and average cost) in localStorage behind a versioned
+`PortfolioRepository`, subscribes to the selected market source for eligible
+holdings and derives per-position cost, current value and profit/loss (absolute
+and percentage) on render; quotes and totals are never persisted. Corrupt stored
+data surfaces an explicit reset instead of being silently trusted. The screen
+identifies the product ("Balancita") and never requests credentials. There is no
+backend, no authentication and no global state.
 The roadmap lives in `doc/personal-trading-app.md`, which is the single source of
 truth and must not be edited by tooling.
 
