@@ -7,17 +7,17 @@ import type {
 
 export type CandleHistoryStatus = 'loading' | 'ready' | 'empty' | 'error'
 
-export type CandleHistoryState = {
-  status: CandleHistoryStatus
+type HistoryResult = {
+  instrumentId: InstrumentId
+  status: Exclude<CandleHistoryStatus, 'loading'>
   candles: readonly Candle[]
 }
 
-const INITIAL_STATE: CandleHistoryState = {
-  status: 'loading',
-  candles: [],
-}
+const EMPTY: readonly Candle[] = []
 
-export type UseCandleHistoryResult = CandleHistoryState & {
+export type UseCandleHistoryResult = {
+  status: CandleHistoryStatus
+  candles: readonly Candle[]
   retry: () => void
 }
 
@@ -26,29 +26,28 @@ export function useCandleHistory(
   instrumentId: InstrumentId,
 ): UseCandleHistoryResult {
   const [reloadKey, setReloadKey] = useState(0)
-  const [state, setState] = useState<CandleHistoryState>(INITIAL_STATE)
+  const [result, setResult] = useState<HistoryResult | null>(null)
 
   const retry = useCallback(() => {
-    setState(INITIAL_STATE)
+    setResult(null)
     setReloadKey((key) => key + 1)
   }, [])
 
   useEffect(() => {
     let active = true
-    setState(INITIAL_STATE)
 
     provider.getHistory(instrumentId).then(
       (candles) => {
         if (!active) return
-        if (candles.length === 0) {
-          setState({ status: 'empty', candles: [] })
-          return
-        }
-        setState({ status: 'ready', candles })
+        setResult({
+          instrumentId,
+          status: candles.length === 0 ? 'empty' : 'ready',
+          candles,
+        })
       },
       () => {
         if (!active) return
-        setState({ status: 'error', candles: [] })
+        setResult({ instrumentId, status: 'error', candles: [] })
       },
     )
 
@@ -57,5 +56,10 @@ export function useCandleHistory(
     }
   }, [provider, instrumentId, reloadKey])
 
-  return { ...state, retry }
+  const fresh = result?.instrumentId === instrumentId
+  return {
+    status: fresh ? result.status : 'loading',
+    candles: fresh ? result.candles : EMPTY,
+    retry,
+  }
 }

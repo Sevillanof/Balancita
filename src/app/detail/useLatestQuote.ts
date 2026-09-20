@@ -5,22 +5,29 @@ import type {
   Quote,
 } from '../../domain/market-data'
 
+type LatestQuote = {
+  instrumentId: InstrumentId
+  quote: Quote
+}
+
 export function useLatestQuote(
   provider: MarketDataProvider,
   instrumentId: InstrumentId,
 ): Quote | undefined {
-  const [quote, setQuote] = useState<Quote | undefined>(undefined)
+  const [latest, setLatest] = useState<LatestQuote | null>(null)
 
   useEffect(() => {
     let active = true
-    setQuote(undefined)
 
     try {
-      const release = provider.subscribe([instrumentId], (incoming: Quote) => {
-        if (!active) return
-        if (incoming.instrumentId !== instrumentId) return
-        setQuote(incoming)
-      })
+      const release = provider.subscribe(
+        [instrumentId],
+        (incoming: Quote) => {
+          if (!active) return
+          if (incoming.instrumentId !== instrumentId) return
+          setLatest({ instrumentId, quote: incoming })
+        },
+      )
 
       return () => {
         active = false
@@ -33,5 +40,5 @@ export function useLatestQuote(
     }
   }, [provider, instrumentId])
 
-  return quote
+  return latest?.instrumentId === instrumentId ? latest.quote : undefined
 }
