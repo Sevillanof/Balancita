@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { buildAnalysisPrompt } from './prompt.ts'
 
 describe('buildAnalysisPrompt', () => {
-  it('always steers the model to a surveillance verdict, never trading advice', () => {
+  it('requests Spanish educational guidance without order execution', () => {
     const prompt = buildAnalysisPrompt({
       instrumentId: 'BTC-EUR',
       symbol: 'BTC-EUR',
@@ -21,9 +21,10 @@ describe('buildAnalysisPrompt', () => {
     expect(prompt).toMatch(/watch/)
     expect(prompt).toMatch(/neutral/)
     expect(prompt).toMatch(/review/)
-    expect(prompt.toLowerCase()).toMatch(/never/)
-    expect(prompt.toLowerCase()).toMatch(/buying, selling/)
-    expect(prompt).not.toMatch(/"buy"|"sell"/)
+    expect(prompt).toMatch(/recommendation.*buy.*sell.*hold/s)
+    expect(prompt.toLowerCase()).toMatch(/órdenes/)
+    expect(prompt).toMatch(/español neutral/)
+    expect(prompt).toMatch(/"buy"|"sell"/)
   })
 
   it('is deterministic for the same input', () => {

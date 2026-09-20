@@ -8,9 +8,12 @@ import { buildApp } from './app.ts'
 const resultText = JSON.stringify({
   instrumentId: 'BTC-EUR',
   classification: 'watch',
+  recommendation: 'hold',
   reasons: ['Latest quote moved up 0.50%; noteworthy move.'],
   warnings: [],
   volatility: { lookbackCandles: 1, averageTrueRangePercent: 2, level: 'low' },
+  disclaimer:
+    'Recomendación educativa e informativa: no es asesoramiento financiero y no ejecuta órdenes.',
 })
 
 function validBody() {
@@ -112,6 +115,7 @@ describe('analysis gateway API', () => {
     expect(body.error).toBeUndefined()
     expect(body.cached).toBe(false)
     expect(body.result.classification).toBe('watch')
+    expect(body.result.recommendation).toBe('hold')
     expect(body.result.volatility.level).toBe('low')
     expect(client.calls).toHaveLength(1)
   })

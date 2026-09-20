@@ -58,9 +58,11 @@ export class AnalysisCache {
     return {
       instrumentId: stored.result.instrumentId,
       classification: stored.result.classification,
+      recommendation: stored.result.recommendation,
       reasons: [...stored.result.reasons],
       warnings: [...stored.result.warnings],
       volatility: { ...stored.result.volatility },
+      disclaimer: stored.result.disclaimer,
     }
   }
 

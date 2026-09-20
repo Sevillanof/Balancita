@@ -28,9 +28,12 @@ function makeInput(): AnalysisInput {
 const VALID_RESULT = {
   instrumentId: 'BTC-EUR',
   classification: 'watch',
+  recommendation: 'hold',
   reasons: ['Latest quote moved up 0.50%; noteworthy move.'],
   warnings: [],
   volatility: { lookbackCandles: 1, averageTrueRangePercent: 2, level: 'low' },
+  disclaimer:
+    'Recomendación educativa e informativa: no es asesoramiento financiero y no ejecuta órdenes.',
 }
 
 type FetchLike = (
@@ -193,6 +196,21 @@ describe('GeminiAnalysisProvider', () => {
     }
     const { fetchMock } = fakeFetch(200, {
       result: unknownClassification,
+      cached: false,
+    })
+    const provider = new GeminiAnalysisProvider(
+      'http://localhost:8787',
+      fetchMock,
+    )
+
+    await expect(provider.analyze(makeInput())).rejects.toBeInstanceOf(
+      AnalysisInvalidResponseError,
+    )
+  })
+
+  it('rejects a recommendation outside the educational enum', async () => {
+    const { fetchMock } = fakeFetch(200, {
+      result: { ...VALID_RESULT, recommendation: 'review' },
       cached: false,
     })
     const provider = new GeminiAnalysisProvider(

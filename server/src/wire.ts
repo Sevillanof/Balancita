@@ -38,10 +38,12 @@ export interface AnalysisInputRequest {
 }
 
 export type AnalysisClassification = 'watch' | 'neutral' | 'review'
+export type EducationalRecommendation = 'buy' | 'sell' | 'hold'
 
 export interface AnalysisResultJson {
   instrumentId: string
   classification: AnalysisClassification
+  recommendation: EducationalRecommendation
   reasons: readonly string[]
   warnings: readonly string[]
   volatility: {
@@ -49,10 +51,12 @@ export interface AnalysisResultJson {
     averageTrueRangePercent: number
     level: 'low' | 'moderate' | 'high'
   }
+  disclaimer: string
 }
 
 const DECIMAL_STRING_RE = /^\d+(?:\.\d{1,8})?$/
 const CLASSIFICATIONS = new Set(['watch', 'neutral', 'review'])
+const RECOMMENDATIONS = new Set(['buy', 'sell', 'hold'])
 const VOLATILITY_LEVELS = new Set(['low', 'moderate', 'high'])
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -168,11 +172,25 @@ export function isAnalysisResultJson(
   value: unknown,
 ): value is AnalysisResultJson {
   if (!isRecord(value)) return false
-  const { instrumentId, classification, reasons, warnings, volatility } = value
+  const {
+    instrumentId,
+    classification,
+    recommendation,
+    reasons,
+    warnings,
+    volatility,
+    disclaimer,
+  } = value
   if (!isNonEmptyString(instrumentId)) return false
   if (
     typeof classification !== 'string' ||
     !CLASSIFICATIONS.has(classification)
+  ) {
+    return false
+  }
+  if (
+    typeof recommendation !== 'string' ||
+    !RECOMMENDATIONS.has(recommendation)
   ) {
     return false
   }
@@ -200,5 +218,6 @@ export function isAnalysisResultJson(
   if (typeof level !== 'string' || !VOLATILITY_LEVELS.has(level)) {
     return false
   }
+  if (!isNonEmptyString(disclaimer)) return false
   return true
 }

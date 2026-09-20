@@ -30,6 +30,7 @@ const validRequest = {
 const validResult = {
   instrumentId: 'BTC-EUR',
   classification: 'watch',
+  recommendation: 'hold',
   reasons: ['Latest quote moved up 0.50%; noteworthy move.'],
   warnings: [
     'No position held; this assessment covers instrument surveillance only.',
@@ -39,6 +40,8 @@ const validResult = {
     averageTrueRangePercent: 2.5,
     level: 'low',
   },
+  disclaimer:
+    'Recomendación educativa e informativa: no es asesoramiento financiero y no ejecuta órdenes.',
 }
 
 describe('parseAnalysisInputRequest', () => {
@@ -109,6 +112,10 @@ describe('isAnalysisResultJson', () => {
       'classification outside the enum',
       { ...validResult, classification: 'buy' },
     ],
+    [
+      'recommendation outside the enum',
+      { ...validResult, recommendation: 'review' },
+    ],
     ['reasons not a string array', { ...validResult, reasons: 'nope' }],
     ['missing volatility', { ...validResult, volatility: undefined }],
     [
@@ -126,6 +133,7 @@ describe('isAnalysisResultJson', () => {
       },
     ],
     ['missing instrument id', { ...validResult, instrumentId: '' }],
+    ['missing disclaimer', { ...validResult, disclaimer: '' }],
   ])('rejects %s', (_label, value) => {
     expect(isAnalysisResultJson(value)).toBe(false)
   })

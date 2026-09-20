@@ -71,10 +71,11 @@ describe('analysis domain contract', () => {
     ] satisfies AnalysisClassification[])
   })
 
-  it('expresses AnalysisResult with classification, reasons, warnings and volatility', () => {
+  it('expresses AnalysisResult with surveillance and educational fields', () => {
     const result: AnalysisResult = {
       instrumentId: 'BTC-EUR',
       classification: 'watch',
+      recommendation: 'hold',
       reasons: ['reason'],
       warnings: [],
       volatility: {
@@ -82,8 +83,10 @@ describe('analysis domain contract', () => {
         averageTrueRangePercent: 2.5,
         level: 'moderate',
       },
+      disclaimer: 'Recomendación educativa: no ejecuta órdenes.',
     }
     expect(result.classification).toBe('watch')
+    expect(result.recommendation).toBe('hold')
     expect(result.reasons.length).toBeGreaterThan(0)
     expect(Array.isArray(result.warnings)).toBe(true)
     expect(result.volatility.averageTrueRangePercent).toBeGreaterThan(0)
@@ -188,5 +191,7 @@ function stubAnalyze(input: AnalysisInput): Promise<AnalysisResult> {
       averageTrueRangePercent: 0,
       level: 'low',
     },
+    recommendation: 'hold',
+    disclaimer: 'Recomendación educativa: no ejecuta órdenes.',
   })
 }

@@ -38,9 +38,12 @@ const input: AnalysisInputRequest = {
 const resultText = JSON.stringify({
   instrumentId: 'BTC-EUR',
   classification: 'watch',
+  recommendation: 'hold',
   reasons: ['Latest quote moved up 0.50%; noteworthy move.'],
   warnings: [],
   volatility: { lookbackCandles: 1, averageTrueRangePercent: 2, level: 'low' },
+  disclaimer:
+    'Recomendación educativa e informativa: no es asesoramiento financiero y no ejecuta órdenes.',
 })
 
 class FakeGeminiClient implements GeminiClient {
@@ -95,6 +98,9 @@ describe('AnalyzeService', () => {
         properties: expect.objectContaining({
           classification: expect.objectContaining({
             enum: ['watch', 'neutral', 'review'],
+          }),
+          recommendation: expect.objectContaining({
+            enum: ['buy', 'sell', 'hold'],
           }),
         }),
       }),
@@ -176,6 +182,17 @@ describe('AnalyzeService', () => {
     const { client, service } = makeService()
     client.generateStructuredText.mockResolvedValue(
       JSON.stringify({ ...JSON.parse(resultText), classification: 'buy' }),
+    )
+
+    await expect(service.analyze(input)).rejects.toThrow(
+      AnalysisInvalidResponseError,
+    )
+  })
+
+  it('rejects a model recommendation outside buy, sell or hold', async () => {
+    const { client, service } = makeService()
+    client.generateStructuredText.mockResolvedValue(
+      JSON.stringify({ ...JSON.parse(resultText), recommendation: 'review' }),
     )
 
     await expect(service.analyze(input)).rejects.toThrow(

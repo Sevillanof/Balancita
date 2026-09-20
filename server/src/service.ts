@@ -24,6 +24,7 @@ export const ANALYSIS_RESULT_JSON_SCHEMA = {
   properties: {
     instrumentId: { type: 'string' },
     classification: { enum: ['watch', 'neutral', 'review'] },
+    recommendation: { enum: ['buy', 'sell', 'hold'] },
     reasons: { type: 'array', items: { type: 'string' } },
     warnings: { type: 'array', items: { type: 'string' } },
     volatility: {
@@ -39,9 +40,11 @@ export const ANALYSIS_RESULT_JSON_SCHEMA = {
   required: [
     'instrumentId',
     'classification',
+    'recommendation',
     'reasons',
     'warnings',
     'volatility',
+    'disclaimer',
   ],
   additionalProperties: true,
 } as const

@@ -30,9 +30,12 @@ const input: AnalysisInputRequest = {
 const result: AnalysisResultJson = {
   instrumentId: 'BTC-EUR',
   classification: 'watch',
+  recommendation: 'hold',
   reasons: ['Latest quote moved up 0.50%; noteworthy move.'],
   warnings: [],
   volatility: { lookbackCandles: 1, averageTrueRangePercent: 2, level: 'low' },
+  disclaimer:
+    'Recomendación educativa e informativa: no es asesoramiento financiero y no ejecuta órdenes.',
 }
 
 describe('hashAnalysisInput', () => {

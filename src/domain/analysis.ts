@@ -11,6 +11,11 @@ export const ANALYSIS_CLASSIFICATIONS = ['watch', 'neutral', 'review'] as const
 
 export type AnalysisClassification = (typeof ANALYSIS_CLASSIFICATIONS)[number]
 
+export type EducationalRecommendation = 'buy' | 'sell' | 'hold'
+
+export const EDUCATIONAL_RECOMMENDATION_DISCLAIMER =
+  'Recomendación educativa e informativa: no es asesoramiento financiero y no ejecuta órdenes.'
+
 /**
  * Volatility measure derived deterministically from candles. Based on a simple
  * average true range (ATR) expressed as a percentage of the latest close, so a
@@ -52,9 +57,11 @@ export interface AnalysisInput {
 export interface AnalysisResult {
   instrumentId: string
   classification: AnalysisClassification
+  recommendation: EducationalRecommendation
   reasons: readonly string[]
   warnings: readonly string[]
   volatility: AnalysisVolatility
+  disclaimer: string
 }
 
 /**

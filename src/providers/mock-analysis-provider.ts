@@ -5,6 +5,10 @@ import type {
   AnalysisResult,
   AnalysisVolatility,
 } from '../domain/analysis'
+import {
+  EDUCATIONAL_RECOMMENDATION_DISCLAIMER,
+  type EducationalRecommendation,
+} from '../domain/analysis'
 import type { Candle } from '../domain/market-data'
 import {
   moneyAbs,
@@ -20,8 +24,9 @@ import { profitLossPercentOf } from '../portfolio/valuation'
  * Deterministic local analysis. Same inputs always produce the same
  * classification, reasons and warnings — no PRNG, no wall clock, no network.
  *
- * The output is a SURVEILLANCE judgment (how much attention the instrument
- * warrants), never a trading recommendation: only watch | neutral | review.
+ * The output keeps surveillance (`watch | neutral | review`) separate from an
+ * educational recommendation. The recommendation is informational only and
+ * never reaches the order simulator.
  *
  * Rules (explicit thresholds, all inclusive at the crossing):
  * - Variation, from the latest quote's `changePercent` v:
@@ -33,8 +38,10 @@ import { profitLossPercentOf } from '../portfolio/valuation'
  *   severity 0 |P/L%| < 10 | severity 1 |P/L%| >= 10 | severity 2 |P/L%| >= 30.
  * Aggregation: review if any signal reaches severity 2 OR the three signals
  * sum to at least 3 (three watch-level signals); watch if the sum is at least
- * 1; otherwise neutral. Reasons list every contributing signal; warnings flag
- * data-quality and context caveats.
+ * 1; otherwise neutral. Recommendation rules: contradictory trend signals or
+ * high volatility always produce hold; a positive trend produces buy; a
+ * negative trend produces sell only when a position exists; weak signals hold.
+ * Reasons explain trend, volatility and portfolio context in Spanish.
  */
 export class MockAnalysisProvider implements AnalysisProvider {
   async analyze(input: AnalysisInput): Promise<AnalysisResult> {
@@ -42,6 +49,7 @@ export class MockAnalysisProvider implements AnalysisProvider {
     const volatility = volatilityFromCandles(input.candles)
     const volatilitySeverity = severityFromVolatility(volatility)
     const position = positionSignal(input.holding, input.quote.price)
+    const trend = trendSignal(input.quote.changePercent, input.candles)
 
     const score = variation.severity + volatilitySeverity + position.severity
     const classification: AnalysisClassification =
@@ -54,23 +62,32 @@ export class MockAnalysisProvider implements AnalysisProvider {
           ? 'watch'
           : 'neutral'
 
+    const recommendation = recommendationFor(trend, volatility, input.holding)
     const reasons = buildReasons(
-      variation,
+      trend,
       volatility,
       volatilitySeverity,
       position,
     )
-    const warnings = buildWarnings(input, variation, volatility)
+    const warnings = buildWarnings(
+      input,
+      variation,
+      volatility,
+      trend,
+      recommendation,
+    )
 
     return {
       instrumentId: input.instrumentId,
       classification,
+      recommendation,
       reasons,
       warnings,
       volatility: {
         ...volatility,
         level: volatilityLevel(volatility.averageTrueRangePercent),
       },
+      disclaimer: EDUCATIONAL_RECOMMENDATION_DISCLAIMER,
     }
   }
 }
@@ -88,6 +105,60 @@ type VariationSignal = {
   severity: SignalSeverity
   direction: 'up' | 'down'
   absPercent: number
+}
+
+type TrendSignal = {
+  direction: 'up' | 'down' | 'flat'
+  quotePercent: number
+  candlePercent: number | null
+  contradictory: boolean
+}
+
+function trendSignal(
+  quotePercent: number,
+  candles: readonly Candle[],
+): TrendSignal {
+  const first = candles[0]
+  const last = candles[candles.length - 1]
+  const candlePercent =
+    first === undefined || last === undefined || first.open === 0
+      ? null
+      : ((last.close - first.open) / first.open) * 100
+  const quoteDirection = directionAtThreshold(quotePercent)
+  const candleDirection =
+    candlePercent === null ? null : directionAtThreshold(candlePercent)
+  const contradictory =
+    quoteDirection !== 'flat' &&
+    candleDirection !== null &&
+    candleDirection !== 'flat' &&
+    quoteDirection !== candleDirection
+  return {
+    direction: contradictory
+      ? 'flat'
+      : quoteDirection !== 'flat'
+        ? quoteDirection
+        : (candleDirection ?? 'flat'),
+    quotePercent,
+    candlePercent,
+    contradictory,
+  }
+}
+
+function directionAtThreshold(percent: number): 'up' | 'down' | 'flat' {
+  if (percent >= VARIATION_WATCH_PERCENT) return 'up'
+  if (percent <= -VARIATION_WATCH_PERCENT) return 'down'
+  return 'flat'
+}
+
+function recommendationFor(
+  trend: TrendSignal,
+  volatility: AnalysisVolatility,
+  holding: AnalysisInput['holding'],
+): EducationalRecommendation {
+  if (trend.contradictory || volatility.level === 'high') return 'hold'
+  if (trend.direction === 'up') return 'buy'
+  if (trend.direction === 'down' && holding !== null) return 'sell'
+  return 'hold'
 }
 
 function variationSignal(changePercent: number): VariationSignal {
@@ -186,42 +257,57 @@ function severityFromVolatility(
 }
 
 function buildReasons(
-  variation: VariationSignal,
+  trend: TrendSignal,
   volatility: AnalysisVolatility,
   volatilitySeverity: SignalSeverity,
   position: PositionSignal,
 ): readonly string[] {
   const reasons: string[] = []
-  if (variation.severity === 1) {
+  if (trend.contradictory) {
     reasons.push(
-      `Latest quote moved ${variation.direction} ${variation.absPercent.toFixed(2)}%; noteworthy move.`,
+      `La tendencia muestra señales contradictorias: la cotización varió ${trend.quotePercent.toFixed(2)}% y las velas ${trend.candlePercent?.toFixed(2)}%.`,
     )
-  } else if (variation.severity === 2) {
+  } else if (trend.direction === 'up') {
     reasons.push(
-      `Large single-quote move ${variation.direction} ${variation.absPercent.toFixed(2)}%; warrants review.`,
+      `La tendencia positiva se apoya en una variación de cotización de ${trend.quotePercent.toFixed(2)}%${trend.candlePercent === null ? '' : ` y una variación de velas de ${trend.candlePercent.toFixed(2)}%`}.`,
+    )
+  } else if (trend.direction === 'down') {
+    reasons.push(
+      `La tendencia negativa se apoya en una variación de cotización de ${trend.quotePercent.toFixed(2)}%${trend.candlePercent === null ? '' : ` y una variación de velas de ${trend.candlePercent.toFixed(2)}%`}.`,
+    )
+  } else {
+    reasons.push(
+      'La tendencia actual es débil y no confirma una dirección clara.',
     )
   }
   if (volatilitySeverity === 1) {
     reasons.push(
-      `Elevated volatility: average true range ${volatility.averageTrueRangePercent.toFixed(2)}% of price.`,
+      `La volatilidad es moderada: el rango verdadero promedio representa ${volatility.averageTrueRangePercent.toFixed(2)}% del precio.`,
     )
   } else if (volatilitySeverity === 2) {
     reasons.push(
-      `High volatility: average true range ${volatility.averageTrueRangePercent.toFixed(2)}% of price.`,
+      `La volatilidad es alta: el rango verdadero promedio representa ${volatility.averageTrueRangePercent.toFixed(2)}% del precio.`,
+    )
+  } else {
+    reasons.push(
+      `La volatilidad es baja: el rango verdadero promedio representa ${volatility.averageTrueRangePercent.toFixed(2)}% del precio.`,
     )
   }
-  if (position.severity === 1 && position.absPercent !== null) {
+  if (position.absPercent === null) {
     reasons.push(
-      `Position is ${position.direction} ${moneyToDecimalString(position.absPercent)}% on average cost (unrealized).`,
+      'La cartera no tiene una posición en este instrumento; no hay exposición que proteger.',
     )
-  } else if (position.severity === 2 && position.absPercent !== null) {
+  } else if (position.severity === 1) {
     reasons.push(
-      `Unrealized position is ${position.direction} ${moneyToDecimalString(position.absPercent)}%; review position risk.`,
+      `La posición registra una variación ${position.direction === 'up' ? 'positiva' : 'negativa'} de ${moneyToDecimalString(position.absPercent)}% sobre el costo promedio (no realizada).`,
     )
-  }
-  if (reasons.length === 0) {
+  } else if (position.severity === 2) {
     reasons.push(
-      'No significant variation, volatility or position risk detected.',
+      `La posición registra una variación ${position.direction === 'up' ? 'positiva' : 'negativa'} de ${moneyToDecimalString(position.absPercent)}%; revise el riesgo de la cartera.`,
+    )
+  } else if (position.absPercent !== null) {
+    reasons.push(
+      `La posición tiene una variación ${position.direction === 'up' ? 'positiva' : 'negativa'} de ${moneyToDecimalString(position.absPercent)}% sobre el costo promedio.`,
     )
   }
   return reasons
@@ -231,35 +317,49 @@ function buildWarnings(
   input: AnalysisInput,
   variation: VariationSignal,
   volatility: AnalysisVolatility,
+  trend: TrendSignal,
+  recommendation: EducationalRecommendation,
 ): readonly string[] {
   const warnings: string[] = []
   if (volatility.level === 'high') {
     warnings.push(
-      'High volatility can produce wide swings; monitor quotes closely.',
+      'La volatilidad alta puede producir oscilaciones amplias; por prudencia, la recomendación educativa es Mantener.',
     )
   }
   if (variation.severity === 2) {
     warnings.push(
-      'A single quote move may not persist; verify on the next quotes.',
+      'Una variación puntual de la cotización puede no sostenerse; verifique las próximas cotizaciones.',
     )
   }
   if (volatility.lookbackCandles === 0) {
-    warnings.push(
-      'No candle history available; volatility could not be measured.',
-    )
+    warnings.push('No hay historial de velas; no se pudo medir la volatilidad.')
   }
   if (input.assetClass === 'unknown') {
-    warnings.push('Instrument identity is unconfirmed (unknown asset class).')
+    warnings.push(
+      'La identidad del instrumento no está confirmada (clase desconocida).',
+    )
   }
   if (input.quote.status === 'stale') {
-    warnings.push('Quote is marked stale; the assessment may be outdated.')
+    warnings.push(
+      'La cotización está marcada como desactualizada; el análisis puede haber perdido vigencia.',
+    )
   }
   if (
     input.holding === null &&
     (variation.severity > 0 || volatility.level !== 'low')
   ) {
     warnings.push(
-      'No position held; this assessment covers instrument surveillance only.',
+      'No hay una posición; el análisis describe vigilancia del instrumento y no exposición de cartera.',
+    )
+  }
+  if (trend.contradictory) {
+    warnings.push(
+      'Hay señales contradictorias entre la cotización y las velas; por eso se recomienda Mantener.',
+    )
+  }
+  if (recommendation === 'sell' && input.holding === null) {
+    warnings.push(
+      'No existe una posición; nunca se genera una recomendación de Vender.',
     )
   }
   return warnings

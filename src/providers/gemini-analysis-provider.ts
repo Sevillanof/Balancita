@@ -41,9 +41,11 @@ function isAnalysisResult(value: unknown): value is AnalysisResult {
   const candidate = value as {
     instrumentId?: unknown
     classification?: unknown
+    recommendation?: unknown
     reasons?: unknown
     warnings?: unknown
     volatility?: unknown
+    disclaimer?: unknown
   }
   if (typeof candidate.instrumentId !== 'string') return false
   if (
@@ -51,6 +53,13 @@ function isAnalysisResult(value: unknown): value is AnalysisResult {
     !ANALYSIS_CLASSIFICATIONS.includes(
       candidate.classification as (typeof ANALYSIS_CLASSIFICATIONS)[number],
     )
+  ) {
+    return false
+  }
+  if (
+    candidate.recommendation !== 'buy' &&
+    candidate.recommendation !== 'sell' &&
+    candidate.recommendation !== 'hold'
   ) {
     return false
   }
@@ -67,6 +76,12 @@ function isAnalysisResult(value: unknown): value is AnalysisResult {
     return false
   }
   if (!isVolatility(candidate.volatility)) return false
+  if (
+    typeof candidate.disclaimer !== 'string' ||
+    candidate.disclaimer.length === 0
+  ) {
+    return false
+  }
   return true
 }
 

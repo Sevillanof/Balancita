@@ -75,10 +75,15 @@ describe('MockAnalysisProvider', () => {
   it('classifies as neutral when nothing is noteworthy', async () => {
     const result = await provider.analyze(input())
     expect(result.classification).toBe('neutral')
+    expect(result.recommendation).toBe('hold')
     expect(result.reasons).toContain(
-      'No significant variation, volatility or position risk detected.',
+      'La tendencia actual es débil y no confirma una dirección clara.',
+    )
+    expect(result.reasons).toContain(
+      'La cartera no tiene una posición en este instrumento; no hay exposición que proteger.',
     )
     expect(result.volatility.lookbackCandles).toBe(2)
+    expect(result.disclaimer).toMatch(/recomendación educativa/i)
   })
 
   it('treats variant quotes at the 2% and 5% boundaries inclusively', async () => {
@@ -152,7 +157,9 @@ describe('MockAnalysisProvider', () => {
       input({ candles: [], quote: makeQuote({ changePercent: 5 }) }),
     )
     expect(result.classification).toBe('review')
-    expect(result.warnings.some((w) => /candle history/i.test(w))).toBe(true)
+    expect(result.warnings.some((w) => /historial de velas/i.test(w))).toBe(
+      true,
+    )
   })
 
   it('uses decimal portfolio math at the 10% and 30% P/L boundaries', async () => {
@@ -191,7 +198,9 @@ describe('MockAnalysisProvider', () => {
       input({ quote: makeQuote({ changePercent: 2.5 }) }),
     )
     expect(result.classification).toBe('watch')
-    expect(result.warnings.some((w) => /no position held/i.test(w))).toBe(true)
+    expect(result.warnings.some((w) => /no hay una posición/i.test(w))).toBe(
+      true,
+    )
   })
 
   it('warns on an unconfirmed instrument identity', async () => {
@@ -203,17 +212,19 @@ describe('MockAnalysisProvider', () => {
         quote: makeQuote({ instrumentId: 'SPCX' }),
       }),
     )
-    expect(result.warnings.some((w) => /unconfirmed/i.test(w))).toBe(true)
+    expect(result.warnings.some((w) => /no está confirmada/i.test(w))).toBe(
+      true,
+    )
   })
 
   it('warns on a stale quote', async () => {
     const result = await provider.analyze(
       input({ quote: makeQuote({ status: 'stale', changePercent: 0 }) }),
     )
-    expect(result.warnings.some((w) => /stale/i.test(w))).toBe(true)
+    expect(result.warnings.some((w) => /desactualizada/i.test(w))).toBe(true)
   })
 
-  it('never emits buy, sell or investment instructions', async () => {
+  it('recommends buy, sell or hold without creating a trading instruction', async () => {
     const seeds: Array<Partial<AnalysisInput>> = [
       {},
       { quote: makeQuote({ changePercent: 9 }) },
@@ -229,11 +240,60 @@ describe('MockAnalysisProvider', () => {
     ]
     for (const seed of seeds) {
       const result: AnalysisResult = await provider.analyze(input(seed))
-      const text = [...result.reasons, ...result.warnings]
-        .join(' ')
-        .toLowerCase()
-      expect(text).not.toMatch(/\b(buy|sell|purchase|recommend|invest)\b/)
+      expect(['buy', 'sell', 'hold']).toContain(result.recommendation)
+      expect(result.disclaimer).toMatch(/no.*ejecuta órdenes/i)
     }
+  })
+
+  it('recommends buy for a clear positive trend without a position', async () => {
+    const result = await provider.analyze(
+      input({ quote: makeQuote({ changePercent: 3 }) }),
+    )
+    expect(result.recommendation).toBe('buy')
+    expect(result.reasons.join(' ')).toMatch(/tendencia positiva/i)
+    expect(result.reasons.join(' ')).toMatch(/cartera no tiene/i)
+  })
+
+  it('recommends sell for a clear negative trend when a position exists', async () => {
+    const result = await provider.analyze(
+      input({
+        quote: makeQuote({ changePercent: -3, price: 90 }),
+        holding: holdingAtCost('100'),
+      }),
+    )
+    expect(result.recommendation).toBe('sell')
+    expect(result.reasons.join(' ')).toMatch(/tendencia negativa/i)
+    expect(result.reasons.join(' ')).toMatch(/posición/i)
+  })
+
+  it('never recommends sell without a position', async () => {
+    const result = await provider.analyze(
+      input({ quote: makeQuote({ changePercent: -8 }) }),
+    )
+    expect(result.recommendation).not.toBe('sell')
+    expect(result.recommendation).toBe('hold')
+  })
+
+  it('degrades a positive recommendation to hold when volatility is high', async () => {
+    const result = await provider.analyze(
+      input({
+        quote: makeQuote({ changePercent: 4 }),
+        candles: [makeCandle({ open: 100, high: 120, low: 80, close: 100 })],
+      }),
+    )
+    expect(result.recommendation).toBe('hold')
+    expect(result.warnings.join(' ')).toMatch(/volatilidad alta.*mantener/i)
+  })
+
+  it('holds when quote and candle trends contradict each other', async () => {
+    const result = await provider.analyze(
+      input({
+        quote: makeQuote({ changePercent: 3 }),
+        candles: [makeCandle({ open: 100, high: 101, low: 96, close: 97 })],
+      }),
+    )
+    expect(result.recommendation).toBe('hold')
+    expect(result.warnings.join(' ')).toMatch(/señales contradictorias/i)
   })
 
   it('formats reasons with the measured numbers', async () => {
