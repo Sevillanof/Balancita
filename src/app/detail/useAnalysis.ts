@@ -6,15 +6,22 @@ import type { PortfolioRepository } from '../../domain/portfolio'
 
 export type AnalysisStatus = 'idle' | 'loading' | 'ready' | 'error'
 
+/** Which provider produced the current result, or null when none. */
+export type AnalysisSource = 'preferred' | 'fallback' | null
+
 export type UseAnalysisResult = {
   status: AnalysisStatus
   result: AnalysisResult | null
   error: string | null
+  source: AnalysisSource
+  warning: string | null
   analyze: () => Promise<void>
 }
 
 type UseAnalysisParams = {
   analysis: AnalysisProvider
+  /** Local engine used when the primary remote provider fails. */
+  fallback?: AnalysisProvider
   portfolioRepository: PortfolioRepository
   instrument: Instrument
   quote: Quote | undefined
@@ -24,11 +31,16 @@ type UseAnalysisParams = {
 /**
  * Manual, human-driven analysis for one instrument. Nothing runs on mount and
  * nothing reacts to arriving quotes or candles: `analyze()`, wired to a button,
- * is the only entry point. Portfolio context is read fresh from the repository
- * at request time so the assessment reflects the current position.
+ * is the only entry point.
+ *
+ * When a `fallback` provider is given, a primary failure is transparently
+ * retried against it; the `source` field tells the UI which one answered and
+ * `warning` explains why the fallback kicked in. Portfolio context is read
+ * fresh from the repository at request time.
  */
 export function useAnalysis({
   analysis,
+  fallback,
   portfolioRepository,
   instrument,
   quote,
@@ -37,6 +49,8 @@ export function useAnalysis({
   const [status, setStatus] = useState<AnalysisStatus>('idle')
   const [result, setResult] = useState<AnalysisResult | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [source, setSource] = useState<AnalysisSource>(null)
+  const [warning, setWarning] = useState<string | null>(null)
 
   const requestIdRef = useRef(0)
   const instrumentIdRef = useRef(instrument.id)
@@ -51,6 +65,8 @@ export function useAnalysis({
     setStatus('loading')
     setError(null)
     setResult(null)
+    setSource(null)
+    setWarning(null)
     try {
       const holdings = await portfolioRepository.list()
       if (
@@ -68,20 +84,54 @@ export function useAnalysis({
         return
       }
       setResult(analysisResult)
+      setSource('preferred')
       setStatus('ready')
     } catch (cause) {
-      if (
-        requestIdRef.current !== requestId ||
-        instrumentIdRef.current !== targetInstrumentId
-      ) {
+      if (fallback === undefined) {
+        if (
+          requestIdRef.current !== requestId ||
+          instrumentIdRef.current !== targetInstrumentId
+        ) {
+          return
+        }
+        setError(errorMessage(cause))
+        setStatus('error')
         return
       }
-      setError(errorMessage(cause))
-      setStatus('error')
+      try {
+        const input = analysisInputFrom({
+          instrument,
+          quote,
+          candles,
+          holdings: await portfolioRepository.list(),
+        })
+        const fallbackResult = await fallback.analyze(input)
+        if (
+          requestIdRef.current !== requestId ||
+          instrumentIdRef.current !== targetInstrumentId
+        ) {
+          return
+        }
+        setResult(fallbackResult)
+        setSource('fallback')
+        setWarning(
+          `Preferred analysis unavailable (${errorMessage(cause)}); local assessment shown instead.`,
+        )
+        setStatus('ready')
+      } catch (fallbackCause) {
+        if (
+          requestIdRef.current !== requestId ||
+          instrumentIdRef.current !== targetInstrumentId
+        ) {
+          return
+        }
+        setError(errorMessage(fallbackCause))
+        setStatus('error')
+      }
     }
-  }, [analysis, portfolioRepository, instrument, quote, candles])
+  }, [analysis, fallback, portfolioRepository, instrument, quote, candles])
 
-  return { status, result, error, analyze }
+  return { status, result, error, source, warning, analyze }
 }
 
 function errorMessage(cause: unknown): string {

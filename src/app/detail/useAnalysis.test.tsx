@@ -217,3 +217,84 @@ describe('useAnalysis', () => {
     expect(result.current.status).toBe('ready')
   })
 })
+
+describe('useAnalysis fallback', () => {
+  let analysis: FakeAnalysisProvider
+  let fallback: FakeAnalysisProvider
+  let repository: PortfolioRepository
+
+  beforeEach(() => {
+    analysis = new FakeAnalysisProvider()
+    fallback = new FakeAnalysisProvider()
+    repository = {
+      list: vi.fn().mockResolvedValue([]),
+      add: vi.fn(),
+      remove: vi.fn(),
+      clear: vi.fn(),
+    }
+  })
+
+  function render() {
+    return renderHook(() =>
+      useAnalysis({
+        analysis,
+        fallback,
+        portfolioRepository: repository,
+        instrument: BTC_EUR,
+        quote: makeQuote({ instrumentId: 'BTC-EUR', price: 60_000 }),
+        candles: CANDLES,
+      }),
+    )
+  }
+
+  it('reports a preferred source when the primary provider succeeds', async () => {
+    analysis.analyzeCall.mockResolvedValue(resultFor())
+    const { result } = render()
+
+    await act(async () => {
+      await result.current.analyze()
+    })
+
+    expect(result.current.status).toBe('ready')
+    expect(result.current.source).toBe('preferred')
+    expect(result.current.warning).toBeNull()
+    expect(fallback.analyzeCall).not.toHaveBeenCalled()
+  })
+
+  it('falls back to the local provider when the primary rejects', async () => {
+    analysis.analyzeCall.mockRejectedValue(new Error('gemini rate limited'))
+    fallback.analyzeCall.mockResolvedValue(resultFor())
+    const { result } = render()
+
+    await act(async () => {
+      await result.current.analyze()
+    })
+
+    expect(result.current.status).toBe('ready')
+    expect(result.current.source).toBe('fallback')
+    expect(result.current.warning).toContain('gemini rate limited')
+    expect(result.current.result).toEqual(resultFor())
+  })
+
+  it('reports the fallback error when both providers fail', async () => {
+    analysis.analyzeCall.mockRejectedValue(new Error('gemini down'))
+    fallback.analyzeCall.mockRejectedValue(new Error('local engine broken'))
+    const { result } = render()
+
+    await act(async () => {
+      await result.current.analyze()
+    })
+
+    expect(result.current.status).toBe('error')
+    expect(result.current.source).toBeNull()
+    expect(result.current.warning).toBeNull()
+    expect(result.current.error).toBe('local engine broken')
+  })
+
+  it('stays idle with a null source before the user asks', () => {
+    const { result } = render()
+    expect(result.current.status).toBe('idle')
+    expect(result.current.source).toBeNull()
+    expect(result.current.warning).toBeNull()
+  })
+})
