@@ -1,0 +1,25 @@
+package.json
+  s_1f08bfef309727::t_8c2639d9e532d0 21
+pnpm-lock.yaml
+  s_1f08bfef309727::t_ce0451f983f17a 11-13,789-791,999-1001,2066-2067,2237-2240
+src/app/chart/candlestick-data.test.ts
+  s_1f08bfef309727::t_5744aee8a1167a 1-74
+src/app/chart/candlestick-data.ts
+  s_1f08bfef309727::t_d75f7e96bd1b15 1-23
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "0291cc23526214e61950f9dfa71682747aad563e",
+  "prompts": {},
+  "sessions": {
+    "s_1f08bfef309727": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f41415805ffewgLy0fi83KFd95",
+        "model": "big-pickle"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
