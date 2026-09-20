@@ -43,17 +43,23 @@ export const WATCHLIST_INSTRUMENTS: readonly Instrument[] = [
 
 type FakeProviderOptions = {
   getInstrumentsError?: Error
+  historyByInstrument?: Readonly<Record<InstrumentId, readonly Candle[]>>
+  getHistoryError?: Error
 }
 
 export class FakeMarketDataProvider implements MarketDataProvider {
   instruments: readonly Instrument[]
   getInstrumentsError?: Error
+  getHistoryError?: Error
   getInstrumentsCalls = 0
   subscribeCalls: InstrumentId[][] = []
   unsubscribeCalls = 0
   getHistoryCalls: InstrumentId[] = []
 
   private readonly listeners = new Set<(quote: Quote) => void>()
+  private readonly historyByInstrument: Readonly<
+    Record<InstrumentId, readonly Candle[]>
+  >
 
   constructor(
     instruments: readonly Instrument[],
@@ -61,6 +67,8 @@ export class FakeMarketDataProvider implements MarketDataProvider {
   ) {
     this.instruments = instruments
     this.getInstrumentsError = options.getInstrumentsError
+    this.getHistoryError = options.getHistoryError
+    this.historyByInstrument = options.historyByInstrument ?? {}
   }
 
   async getInstruments(): Promise<Instrument[]> {
@@ -73,7 +81,11 @@ export class FakeMarketDataProvider implements MarketDataProvider {
 
   async getHistory(instrumentId: InstrumentId): Promise<Candle[]> {
     this.getHistoryCalls.push(instrumentId)
-    return []
+    if (this.getHistoryError) {
+      throw this.getHistoryError
+    }
+    const candles = this.historyByInstrument[instrumentId] ?? []
+    return candles.map((candle) => ({ ...candle }))
   }
 
   subscribe(
@@ -108,5 +120,16 @@ export function makeQuote(overrides: Partial<Quote> = {}): Quote {
     changePercent: overrides.changePercent ?? 0,
     timestamp: overrides.timestamp ?? '2026-09-20T12:00:00.000Z',
     status: overrides.status ?? 'mock',
+  }
+}
+
+export function makeCandle(overrides: Partial<Candle> = {}): Candle {
+  return {
+    time: overrides.time ?? '2024-01-01T00:00:00.000Z',
+    open: overrides.open ?? 100,
+    high: overrides.high ?? 105,
+    low: overrides.low ?? 99,
+    close: overrides.close ?? 104,
+    volume: overrides.volume ?? 1000,
   }
 }
