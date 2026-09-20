@@ -1,0 +1,21 @@
+src/domain/fees.test.ts
+  s_900f8954ed6bf2::t_14d52a9ae77251 1-41
+src/orders/cash-ledger.test.ts
+  s_900f8954ed6bf2::t_0b5ac31c10824e 1-176
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "77c8db07127f2f7b244df6356d9e717564907b1d",
+  "prompts": {},
+  "sessions": {
+    "s_900f8954ed6bf2": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f3fc63e49ffeMfhAFqEihJID3X",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
