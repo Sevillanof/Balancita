@@ -44,3 +44,22 @@ export function formatLocalTime(timestamp: string): string {
     hour12: false,
   })
 }
+
+export function formatQuantity(quantity: number): string {
+  return quantity.toLocaleString('en-US', { maximumFractionDigits: 6 })
+}
+
+export function formatSignedAmount(
+  value: number,
+  currency: InstrumentCurrency,
+): string {
+  if (value === 0) return formatPrice(0, currency)
+  const sign = value > 0 ? '+' : '-'
+  return `${sign}${formatPrice(Math.abs(value), currency)}`
+}
+
+export function formatSignedPercent(value: number): string {
+  if (value === 0) return '0.00%'
+  const sign = value > 0 ? '+' : '-'
+  return `${sign}${formatDecimal(Math.abs(value))}%`
+}
