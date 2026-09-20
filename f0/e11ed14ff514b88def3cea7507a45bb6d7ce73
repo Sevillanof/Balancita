@@ -1,0 +1,29 @@
+src/App.test.tsx
+  s_364a0941e20a58::t_bc4489790080d9 3-6,9-13,16,24
+src/App.tsx
+  s_364a0941e20a58::t_a362e7af835628 1-4,7-17,24
+src/app/watchlist/WatchlistScreen.test.tsx
+  s_364a0941e20a58::t_9ec6e9162c37d3 1-203
+src/app/watchlist/WatchlistScreen.tsx
+  s_364a0941e20a58::t_0d518eb722bf65 1-122
+src/app/watchlist/format.ts
+  s_364a0941e20a58::t_398131f65c2f09 1-46
+src/app/watchlist/watchlist.css
+  s_364a0941e20a58::t_f04c373f67e1f6 1-94
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f0e11ed14ff514b88def3cea7507a45bb6d7ce73",
+  "prompts": {},
+  "sessions": {
+    "s_364a0941e20a58": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f414d2960ffel7bYpQSFdaY72u",
+        "model": "big-pickle"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
