@@ -25,6 +25,26 @@ function sourceLabel(
   return null
 }
 
+function classificationLabel(classification: string): string {
+  return classification === 'watch'
+    ? 'Vigilar'
+    : classification === 'review'
+      ? 'Revisar'
+      : 'Neutral'
+}
+
+function recommendationLabel(recommendation: string): string {
+  return recommendation === 'buy'
+    ? 'Comprar'
+    : recommendation === 'sell'
+      ? 'Vender'
+      : 'Mantener'
+}
+
+function volatilityLabel(level: string): string {
+  return level === 'high' ? 'Alta' : level === 'moderate' ? 'Moderada' : 'Baja'
+}
+
 export default function AnalysisPanel({
   mode = 'local',
   analysis,
@@ -34,7 +54,7 @@ export default function AnalysisPanel({
   quote,
   candles,
 }: AnalysisPanelProps) {
-  const { status, result, error, source, warning, analyze } = useAnalysis({
+  const { status, result, source, warning, analyze } = useAnalysis({
     analysis,
     fallback,
     portfolioRepository,
@@ -49,28 +69,28 @@ export default function AnalysisPanel({
   return (
     <section
       className="detail__analysis"
-      aria-label={`${instrument.symbol} analysis`}
+      aria-label={`Análisis de ${instrument.symbol}`}
     >
       <h3 className="detail__analysis-title">
-        {mode === 'ai' ? 'AI analysis' : 'Local analysis'}
+        {mode === 'ai' ? 'Análisis con IA' : 'Análisis local'}
       </h3>
       <button
         type="button"
         className="detail__analyze"
         onClick={() => void analyze()}
         disabled={waitingForQuote || busy}
-        title={waitingForQuote ? 'Waiting for a price quote.' : undefined}
+        title={waitingForQuote ? 'Esperando una cotización.' : undefined}
       >
-        Analyze
+        Analizar
       </button>
       {busy && (
         <p role="status" aria-busy="true" className="analysis__note">
-          Analyzing current quote…
+          Analizando la cotización actual…
         </p>
       )}
       {status === 'error' && (
         <p role="alert" className="analysis__note">
-          Unable to analyze: {error}. Click Analyze to retry.
+          No se pudo completar el análisis. Intentá nuevamente.
         </p>
       )}
       {warning !== null && (
@@ -84,24 +104,28 @@ export default function AnalysisPanel({
           data-classification={result.classification}
         >
           {label !== null && (
-            <p className="analysis__source">Source: {label}</p>
+            <p className="analysis__source">Fuente: {label}</p>
           )}
           <p className="analysis__verdict">
-            Verdict:{' '}
+            Clasificación:{' '}
             <span
               className={`analysis__badge analysis__badge--${result.classification}`}
             >
-              {result.classification}
+              {classificationLabel(result.classification)}
             </span>
           </p>
-          <p className="analysis__metric">
-            Volatility (ATR):{' '}
-            {result.volatility.averageTrueRangePercent.toFixed(2)}% over{' '}
-            {result.volatility.lookbackCandles} candle
-            {result.volatility.lookbackCandles === 1 ? '' : 's'} (
-            {result.volatility.level}).
+          <p className="analysis__recommendation">
+            Recomendación educativa:{' '}
+            <strong>{recommendationLabel(result.recommendation)}</strong>
           </p>
-          <ul className="analysis__list" aria-label="Analysis reasons">
+          <p className="analysis__metric">
+            Volatilidad (ATR):{' '}
+            {result.volatility.averageTrueRangePercent.toFixed(2)}% en{' '}
+            {result.volatility.lookbackCandles}{' '}
+            {result.volatility.lookbackCandles === 1 ? 'vela' : 'velas'} (
+            {volatilityLabel(result.volatility.level)}).
+          </p>
+          <ul className="analysis__list" aria-label="Razones del análisis">
             {result.reasons.map((reason) => (
               <li key={reason}>{reason}</li>
             ))}
@@ -109,13 +133,14 @@ export default function AnalysisPanel({
           {result.warnings.length > 0 && (
             <ul
               className="analysis__list analysis__list--warnings"
-              aria-label="Analysis warnings"
+              aria-label="Advertencias del análisis"
             >
               {result.warnings.map((warning) => (
                 <li key={warning}>{warning}</li>
               ))}
             </ul>
           )}
+          <p className="analysis__disclaimer">{result.disclaimer}</p>
         </div>
       )}
     </section>

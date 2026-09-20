@@ -82,11 +82,17 @@ function App({
     <main className="app">
       <header className="app__header">
         <h1>Balancita</h1>
-        <p className="tagline">A local-first personal trading workspace.</p>
+        <p className="tagline">
+          Un espacio personal de inversión local y educativo.
+        </p>
         <AnalysisModeToggle mode={analysisMode} onChange={setAnalysisMode} />
       </header>
 
-      <div role="tablist" aria-label="Workspace views" className="app__tabs">
+      <div
+        role="tablist"
+        aria-label="Vistas del espacio de trabajo"
+        className="app__tabs"
+      >
         <button
           type="button"
           role="tab"
@@ -96,7 +102,7 @@ function App({
           className="app__tab"
           onClick={() => setView('watchlist')}
         >
-          Watchlist
+          Lista de seguimiento
         </button>
         <button
           type="button"
@@ -107,7 +113,7 @@ function App({
           className="app__tab"
           onClick={() => setView('portfolio')}
         >
-          Portfolio
+          Cartera
         </button>
         <button
           type="button"
@@ -118,7 +124,7 @@ function App({
           className="app__tab"
           onClick={() => setView('trade')}
         >
-          Trade
+          Operar
         </button>
         <button
           type="button"
@@ -129,7 +135,7 @@ function App({
           className="app__tab"
           onClick={() => setView('alerts')}
         >
-          Alerts
+          Alertas
         </button>
       </div>
 

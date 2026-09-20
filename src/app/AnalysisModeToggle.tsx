@@ -21,7 +21,7 @@ export function AnalysisModeToggle({
   return (
     <div className="app__ai-toggle">
       <span id={labelId} className="app__ai-toggle-label">
-        AI analysis
+        Análisis con IA
       </span>
       <button
         type="button"
@@ -32,14 +32,14 @@ export function AnalysisModeToggle({
         disabled={disabled}
         title={
           disabled
-            ? 'AI analysis is unavailable because no gateway is wired.'
+            ? 'El análisis con IA no está disponible porque no hay una puerta de enlace configurada.'
             : undefined
         }
         onClick={() => onChange(aiEnabled ? 'local' : 'ai')}
       >
-        {aiEnabled ? 'On' : 'Off'}
+        {aiEnabled ? 'Activado' : 'Desactivado'}
       </button>
-      {disabled && <span className="app__ai-toggle-hint">Unavailable</span>}
+      {disabled && <span className="app__ai-toggle-hint">No disponible</span>}
     </div>
   )
 }

@@ -9,9 +9,9 @@ describe('AnalysisModeToggle', () => {
     const onChange = vi.fn()
     render(<AnalysisModeToggle mode="local" onChange={onChange} />)
 
-    const toggle = screen.getByRole('switch', { name: /ai analysis/i })
+    const toggle = screen.getByRole('switch', { name: /análisis con ia/i })
     expect(toggle).toHaveAttribute('aria-checked', 'false')
-    expect(screen.getByText('Off')).toBeInTheDocument()
+    expect(screen.getByText('Desactivado')).toBeInTheDocument()
 
     await user.click(toggle)
     expect(onChange).toHaveBeenCalledWith('ai')
@@ -22,9 +22,9 @@ describe('AnalysisModeToggle', () => {
     const onChange = vi.fn()
     render(<AnalysisModeToggle mode="ai" onChange={onChange} />)
 
-    const toggle = screen.getByRole('switch', { name: /ai analysis/i })
+    const toggle = screen.getByRole('switch', { name: /análisis con ia/i })
     expect(toggle).toHaveAttribute('aria-checked', 'true')
-    expect(screen.getByText('On')).toBeInTheDocument()
+    expect(screen.getByText('Activado')).toBeInTheDocument()
 
     await user.click(toggle)
     expect(onChange).toHaveBeenCalledWith('local')
@@ -35,7 +35,7 @@ describe('AnalysisModeToggle', () => {
     const onChange = vi.fn()
     render(<AnalysisModeToggle mode="local" disabled onChange={onChange} />)
 
-    const toggle = screen.getByRole('switch', { name: /ai analysis/i })
+    const toggle = screen.getByRole('switch', { name: /análisis con ia/i })
     expect(toggle).toBeDisabled()
 
     await user.click(toggle)

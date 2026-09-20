@@ -23,6 +23,7 @@ function resultFor(overrides: Partial<AnalysisResult> = {}): AnalysisResult {
   return {
     instrumentId: 'BTC-EUR',
     classification: 'watch',
+    recommendation: 'hold',
     reasons: ['Latest quote moved up 2.50%; noteworthy move.'],
     warnings: [
       'No position held; this assessment covers instrument surveillance only.',
@@ -32,6 +33,7 @@ function resultFor(overrides: Partial<AnalysisResult> = {}): AnalysisResult {
       averageTrueRangePercent: 2,
       level: 'low',
     },
+    disclaimer: 'Recomendación educativa: no ejecuta órdenes.',
     ...overrides,
   }
 }
@@ -68,7 +70,7 @@ describe('AnalysisPanel', () => {
   it('shows a disabled Analyze button until a quote exists', async () => {
     const analysis = new FakeAnalysisProvider()
     const { rerender } = await renderPanel({ analysis })
-    const button = screen.getByRole('button', { name: /analyze/i })
+    const button = screen.getByRole('button', { name: /analizar/i })
     expect(button).toBeDisabled()
 
     rerender(
@@ -80,7 +82,7 @@ describe('AnalysisPanel', () => {
         candles={CANDLES}
       />,
     )
-    expect(screen.getByRole('button', { name: /analyze/i })).toBeEnabled()
+    expect(screen.getByRole('button', { name: /analizar/i })).toBeEnabled()
   })
 
   it('runs analysis only on the click and renders verdict, reasons and warnings', async () => {
@@ -89,16 +91,18 @@ describe('AnalysisPanel', () => {
     analysis.analyzeCall.mockResolvedValue(resultFor())
     renderPanel({ analysis, quote: makeQuote({ instrumentId: 'BTC-EUR' }) })
 
-    await user.click(screen.getByRole('button', { name: /analyze/i }))
+    await user.click(screen.getByRole('button', { name: /analizar/i }))
     await waitFor(() =>
-      expect(screen.getByText('watch', { exact: true })).toBeInTheDocument(),
+      expect(screen.getByText('Vigilar', { exact: true })).toBeInTheDocument(),
     )
 
     expect(analysis.analyzeCall).toHaveBeenCalledTimes(1)
-    expect(screen.getByLabelText('Analysis reasons')).toHaveTextContent(
+    expect(screen.getByLabelText('Razones del análisis')).toHaveTextContent(
       'Latest quote moved up 2.50%; noteworthy move.',
     )
-    expect(screen.getByLabelText('Analysis warnings')).toHaveTextContent(
+    expect(
+      screen.getByLabelText('Advertencias del análisis'),
+    ).toHaveTextContent(
       'No position held; this assessment covers instrument surveillance only.',
     )
   })
@@ -115,15 +119,15 @@ describe('AnalysisPanel', () => {
     )
     renderPanel({ analysis, quote: makeQuote({ instrumentId: 'BTC-EUR' }) })
 
-    await user.click(screen.getByRole('button', { name: /analyze/i }))
+    await user.click(screen.getByRole('button', { name: /analizar/i }))
 
     const status = screen.getByRole('status')
-    expect(status).toHaveTextContent(/analyzing/i)
+    expect(status).toHaveTextContent(/analizando/i)
     expect(status).toHaveAttribute('aria-busy', 'true')
 
     await act(async () => resolveCall(resultFor()))
     await waitFor(() =>
-      expect(screen.getByText('watch', { exact: true })).toBeInTheDocument(),
+      expect(screen.getByText('Vigilar', { exact: true })).toBeInTheDocument(),
     )
   })
 
@@ -133,14 +137,14 @@ describe('AnalysisPanel', () => {
     analysis.analyzeCall.mockRejectedValue(new Error('analysis backend down'))
     renderPanel({ analysis, quote: makeQuote({ instrumentId: 'BTC-EUR' }) })
 
-    await user.click(screen.getByRole('button', { name: /analyze/i }))
+    await user.click(screen.getByRole('button', { name: /analizar/i }))
 
     await waitFor(() =>
       expect(screen.getByRole('alert')).toHaveTextContent(
-        'analysis backend down',
+        'No se pudo completar el análisis',
       ),
     )
-    expect(screen.getByRole('button', { name: /analyze/i })).toBeEnabled()
+    expect(screen.getByRole('button', { name: /analizar/i })).toBeEnabled()
   })
 
   it('never runs automatically on render or when the quote object changes', async () => {
@@ -163,6 +167,30 @@ describe('AnalysisPanel', () => {
     )
     expect(analysis.analyzeCall).not.toHaveBeenCalled()
   })
+
+  it('does not call order execution when analyzing or showing a recommendation', async () => {
+    const user = userEvent.setup()
+    const analysis = new FakeAnalysisProvider()
+    const preview = vi.fn()
+    const submit = vi.fn()
+    analysis.analyzeCall.mockResolvedValue(resultFor({ recommendation: 'buy' }))
+    const analysisWithOrderSurface = Object.assign(analysis, {
+      preview,
+      submit,
+    })
+    renderPanel({
+      analysis: analysisWithOrderSurface,
+      quote: makeQuote({ instrumentId: 'BTC-EUR' }),
+    })
+
+    await user.click(screen.getByRole('button', { name: /analizar/i }))
+    await waitFor(() =>
+      expect(screen.getByText('Comprar', { exact: true })).toBeInTheDocument(),
+    )
+
+    expect(preview).not.toHaveBeenCalled()
+    expect(submit).not.toHaveBeenCalled()
+  })
 })
 
 describe('AnalysisPanel AI mode', () => {
@@ -182,14 +210,14 @@ describe('AnalysisPanel AI mode', () => {
     )
 
     expect(
-      screen.getByRole('heading', { name: /AI analysis/i }),
+      screen.getByRole('heading', { name: /análisis con ia/i }),
     ).toBeInTheDocument()
 
-    await user.click(screen.getByRole('button', { name: /analyze/i }))
+    await user.click(screen.getByRole('button', { name: /analizar/i }))
     await waitFor(() =>
-      expect(screen.getByText('watch', { exact: true })).toBeInTheDocument(),
+      expect(screen.getByText('Vigilar', { exact: true })).toBeInTheDocument(),
     )
-    expect(screen.getByText(/source: gemini/i)).toBeInTheDocument()
+    expect(screen.getByText(/fuente: gemini/i)).toBeInTheDocument()
   })
 
   it('labels a fallback result as local and surfaces a warning', async () => {
@@ -210,12 +238,14 @@ describe('AnalysisPanel AI mode', () => {
       />,
     )
 
-    await user.click(screen.getByRole('button', { name: /analyze/i }))
+    await user.click(screen.getByRole('button', { name: /analizar/i }))
 
     await waitFor(() =>
-      expect(screen.getByText(/source: mock/i)).toBeInTheDocument(),
+      expect(screen.getByText(/fuente: mock/i)).toBeInTheDocument(),
     )
-    expect(screen.getByRole('alert')).toHaveTextContent(/gemini rate limited/)
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      /análisis preferido no está disponible/,
+    )
     expect(fallback.analyzeCall).toHaveBeenCalledTimes(1)
   })
 
@@ -230,7 +260,7 @@ describe('AnalysisPanel AI mode', () => {
       />,
     )
     expect(
-      screen.getByRole('heading', { name: /local analysis/i }),
+      screen.getByRole('heading', { name: /análisis local/i }),
     ).toBeInTheDocument()
   })
 })

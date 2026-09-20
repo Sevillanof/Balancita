@@ -24,6 +24,7 @@ function resultFor(overrides: Partial<AnalysisResult> = {}): AnalysisResult {
   return {
     instrumentId: 'BTC-EUR',
     classification: 'watch',
+    recommendation: 'hold',
     reasons: ['Latest quote moved up 2.50%; noteworthy move.'],
     warnings: [
       'No position held; this assessment covers instrument surveillance only.',
@@ -33,6 +34,7 @@ function resultFor(overrides: Partial<AnalysisResult> = {}): AnalysisResult {
       averageTrueRangePercent: 2,
       level: 'low',
     },
+    disclaimer: 'Recomendación educativa: no ejecuta órdenes.',
     ...overrides,
   }
 }
@@ -135,7 +137,9 @@ describe('useAnalysis', () => {
     })
 
     expect(result.current.status).toBe('error')
-    expect(result.current.error).toBe('analysis backend down')
+    expect(result.current.error).toBe(
+      'No se pudo completar el análisis. Intente nuevamente.',
+    )
     expect(result.current.result).toBeNull()
   })
 
@@ -148,7 +152,9 @@ describe('useAnalysis', () => {
     })
 
     expect(result.current.status).toBe('error')
-    expect(result.current.error).toBe('portfolio corrupt')
+    expect(result.current.error).toBe(
+      'No se pudo completar el análisis. Intente nuevamente.',
+    )
     expect(analysis.analyzeCall).not.toHaveBeenCalled()
   })
 
@@ -272,7 +278,9 @@ describe('useAnalysis fallback', () => {
 
     expect(result.current.status).toBe('ready')
     expect(result.current.source).toBe('fallback')
-    expect(result.current.warning).toContain('gemini rate limited')
+    expect(result.current.warning).toContain(
+      'El análisis preferido no está disponible',
+    )
     expect(result.current.result).toEqual(resultFor())
   })
 
@@ -288,7 +296,9 @@ describe('useAnalysis fallback', () => {
     expect(result.current.status).toBe('error')
     expect(result.current.source).toBeNull()
     expect(result.current.warning).toBeNull()
-    expect(result.current.error).toBe('local engine broken')
+    expect(result.current.error).toBe(
+      'No se pudo completar el análisis. Intente nuevamente.',
+    )
   })
 
   it('stays idle with a null source before the user asks', () => {

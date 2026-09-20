@@ -24,6 +24,7 @@
 | 7     | Local deterministic analysis     | ✅ done                   | 291             | 38b3ffd…ee0c648 (6)       |
 | 8     | Optional budgeted Gemini         | ✅ done                   | 322 + 61 server | 3b4006f…dddb7a8 (9)       |
 | 9     | Read-only real data              | ✅ done                   | 338             | 0df96b2, d38bdd6, c20547e |
+| 9.1   | Recomendación educativa + UI ES  | ✅ done                   | 347 + 64 server | pending in this work unit |
 | 10    | Broker paper trading             | ⏸ pending                 | —               | —                         |
 | 11    | Real trading evaluation          | ⏸ pending                 | —               | —                         |
 | 12    | Jev spike                        | ⏸ pending                 | —               | —                         |
@@ -57,9 +58,9 @@ Working tree clean after excluding the local `.atl/` tooling directory.
    attribution, no push/PR unless explicitly requested.
 4. Close each phase with all gates green: `test`, `typecheck`, `lint`,
    `build`, `format:check`.
-5. User conversation language is Rioplatense Spanish; generated technical
-   artifacts (code, comments, UI copy, docs, commits) default to neutral
-   English.
+5. User conversation language is Rioplatense Spanish; all visible UI copy and
+   explanatory analysis results use neutral, professional Spanish. Code,
+   identifiers and technical comments may remain in English.
 6. Product visible name: **Balancita**. Mock-only, local-first, USD 0 cost
    during development.
 7. No brokers / Gemini / auto-execution before their roadmap phases.
@@ -179,7 +180,8 @@ AnalysisInput): Promise<AnalysisResult>`), `AnalysisInput` (instrument id,
 null`), `AnalysisResult` (instrumentId, `classification: 'watch' | 'neutral' |
 'review'`, `reasons`, `warnings`, `volatility`), and `analysisInputFrom`
   builder that attaches the matching portfolio holding (decimal `Money`)
-  without float conversion. Classifications may never be buy/sell.
+  without float conversion. Classification remains surveillance-only; the
+  later approved recommendation field is separate and educational.
 - `src/providers/mock-analysis-provider.ts`: stateless, deterministic — same
   input always yields the same output, no PRNG, no clock, no network.
   Explicit rules (all thresholds inclusive): variation severity from
@@ -248,6 +250,40 @@ null`), `AnalysisResult` (instrumentId, `classification: 'watch' | 'neutral' |
   endpoint envelopes, structured response validation, quotas, timeout, invalid
   JSON, missing key, fallback, toggle behavior and quote non-automation.
 
+## Approved scope update — educational recommendation and Spanish UI
+
+- Decision recorded on 2026-09-20: the complete visible application UI must be
+  in neutral, professional Spanish. This includes navigation, labels, buttons,
+  loading/empty/error states, validation, notifications, analysis output and
+  paper-trading receipts. Instrument symbols, exchange names and proper names
+  remain unchanged.
+- `src/domain/analysis.ts` now exposes
+  `EducationalRecommendation = 'buy' | 'sell' | 'hold'` as a field separate from
+  `classification`. The existing surveillance classification remains exactly
+  `watch | neutral | review`; it was not repurposed as a trading decision.
+- The visible recommendation labels are `Comprar`, `Vender` and `Mantener`.
+  They are educational and informational only. The result carries a visible
+  disclaimer stating that it is not financial advice and never executes orders.
+- `MockAnalysisProvider` remains stateless, deterministic and offline. It uses
+  quote variation and candle variation for trend, ATR for volatility, and the
+  decimal portfolio holding/P&L for context. Rules are: contradictory trend
+  signals hold; high ATR volatility always degrades to hold with a warning;
+  positive trend may recommend buy; negative trend recommends sell only when a
+  holding exists; weak signals hold. Every result explains trend, volatility and
+  portfolio context in Spanish. No `Date.now`, randomness, network or orders
+  are used.
+- The Gemini wire result and JSON Schema now require `recommendation` restricted
+  to `buy | sell | hold` and a non-empty `disclaimer`. The prompt requests
+  structured JSON and explanatory Spanish text, including the no-position rule.
+  Browser validation remains closed-by-default; an invalid Gemini result fails
+  and the existing frontend fallback displays the local Mock assessment.
+- Analysis remains isolated from `OrderExecutionProvider`. Neither the Mock nor
+  the Gemini path can preview, submit or execute orders. Paper simulator
+  authority and contracts were not changed. Tests explicitly verify that
+  clicking `Analizar` and rendering `Comprar` does not call execution methods.
+- `doc/personal-trading-app.md` and `doc/guia-personal-trading-app.md` remain
+  immutable; no file under `doc/` was edited.
+
 ## 5. Architecture map (current)
 
 ```
@@ -315,10 +351,13 @@ never quotes or derived totals.
 ## 8. Phase 8 and Phase 9 (done)
 
 Phase 7 (Prompt 7) is **implemented and verified**: contract,
-`MockAnalysisProvider` with explicit deterministic rules, manual "Analyze"
-button in the instrument detail (never triggered by arriving quotes), loading/
-error/result states, and analysis/orders separation. Full rule tables, reasons,
-warnings and test breakdown are in §4 Phase 7. Gates green at 291 tests.
+`MockAnalysisProvider` with explicit deterministic surveillance rules, manual
+"Analyze" button in the instrument detail (never triggered by arriving quotes),
+loading/error/result states, and analysis/orders separation. The approved 9.1
+scope adds a separate educational recommendation without changing the
+classification. Full rule tables, reasons, warnings and test breakdown are in
+§4 Phase 7 and the approved scope update above. Gates green at 347 frontend
+tests and 64 server tests.
 
 Phase 8 (Prompt 8) — optional budgeted Gemini — is implemented and verified.
 The gateway, official SDK adapter, structured response validation, timeout,

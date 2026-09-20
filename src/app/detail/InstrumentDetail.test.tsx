@@ -107,7 +107,7 @@ describe('InstrumentDetail', () => {
       screen.getByText(formatPrice(quote.price, BTC_EUR.currency)),
     ).toBeInTheDocument()
     expect(screen.getByText(formatChange(quote).text)).toBeInTheDocument()
-    expect(screen.getByText('mock')).toBeInTheDocument()
+    expect(screen.getByText('Simulada')).toBeInTheDocument()
     expect(
       screen.getByText(formatLocalTime(quote.timestamp)),
     ).toBeInTheDocument()
@@ -127,7 +127,7 @@ describe('InstrumentDetail', () => {
     render(<InstrumentDetail provider={provider} instrument={BTC_EUR} />)
 
     const status = screen.getByRole('status')
-    expect(status).toHaveTextContent('Loading price history…')
+    expect(status).toHaveTextContent('Cargando historial de precios…')
     expect(status).toHaveAttribute('aria-busy', 'true')
     expect(mocks.createChart).not.toHaveBeenCalled()
 
@@ -142,11 +142,11 @@ describe('InstrumentDetail', () => {
 
     await waitFor(() =>
       expect(
-        screen.getByText('No historical candles available.'),
+        screen.getByText('No hay velas históricas disponibles.'),
       ).toBeInTheDocument(),
     )
     expect(screen.getByRole('status')).toHaveTextContent(
-      'No historical candles available.',
+      'No hay velas históricas disponibles.',
     )
     expect(mocks.createChart).not.toHaveBeenCalled()
   })
@@ -161,13 +161,13 @@ describe('InstrumentDetail', () => {
 
     await waitFor(() =>
       expect(screen.getByRole('alert')).toHaveTextContent(
-        'Unable to load price history.',
+        'No se pudo cargar el historial de precios.',
       ),
     )
     expect(mocks.createChart).not.toHaveBeenCalled()
 
     provider.getHistoryError = undefined
-    await user.click(screen.getByRole('button', { name: /retry/i }))
+    await user.click(screen.getByRole('button', { name: /reintentar/i }))
 
     await waitFor(() => expect(mocks.createChart).toHaveBeenCalled())
   })
@@ -267,6 +267,7 @@ function analysisResult(): AnalysisResult {
   return {
     instrumentId: 'BTC-EUR',
     classification: 'neutral',
+    recommendation: 'hold',
     reasons: [
       'No significant variation, volatility or position risk detected.',
     ],
@@ -276,6 +277,7 @@ function analysisResult(): AnalysisResult {
       averageTrueRangePercent: 2,
       level: 'low',
     },
+    disclaimer: 'Recomendación educativa: no ejecuta órdenes.',
   }
 }
 
@@ -286,7 +288,7 @@ describe('InstrumentDetail analysis integration', () => {
     })
     render(<InstrumentDetail provider={provider} instrument={BTC_EUR} />)
     expect(
-      screen.queryByRole('button', { name: /analyze/i }),
+      screen.queryByRole('button', { name: /analizar/i }),
     ).not.toBeInTheDocument()
   })
 
@@ -318,10 +320,10 @@ describe('InstrumentDetail analysis integration', () => {
         makeQuote({ instrumentId: 'BTC-EUR', price: 60_000, status: 'mock' }),
       ),
     )
-    await user.click(screen.getByRole('button', { name: /analyze/i }))
+    await user.click(screen.getByRole('button', { name: /analizar/i }))
 
     await waitFor(() =>
-      expect(screen.getByText('neutral', { exact: true })).toBeInTheDocument(),
+      expect(screen.getByText('Neutral', { exact: true })).toBeInTheDocument(),
     )
     expect(analysis.analyzeCall).toHaveBeenCalledTimes(1)
     const input = analysis.analyzeCall.mock.calls[0]![0]

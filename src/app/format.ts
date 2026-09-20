@@ -54,6 +54,19 @@ export function formatLocalTime(timestamp: string): string {
   })
 }
 
+export function formatQuoteStatus(status: Quote['status']): string {
+  switch (status) {
+    case 'live':
+      return 'En vivo'
+    case 'stale':
+      return 'Desactualizada'
+    case 'mock':
+      return 'Simulada'
+    default:
+      return status
+  }
+}
+
 export function formatQuantity(quantity: Money): string {
   return moneyToNumber(quantity).toLocaleString('en-US', {
     maximumFractionDigits: 6,

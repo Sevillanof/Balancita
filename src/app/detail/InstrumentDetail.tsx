@@ -10,7 +10,12 @@ import type { PortfolioRepository } from '../../domain/portfolio'
 import type { AnalysisMode } from '../AnalysisModeToggle'
 import { toCandlestickDataset } from '../chart/candlestick-data'
 import PriceChart from '../chart/PriceChart'
-import { formatChange, formatLocalTime, formatPrice } from '../format'
+import {
+  formatChange,
+  formatLocalTime,
+  formatPrice,
+  formatQuoteStatus,
+} from '../format'
 import AnalysisPanel from './AnalysisPanel'
 import { useCandleHistory } from './useCandleHistory'
 import { useLatestQuote } from './useLatestQuote'
@@ -49,23 +54,23 @@ export default function InstrumentDetail({
       <PriceSummary instrument={instrument} quote={quote} />
       {history.status === 'loading' && (
         <p role="status" aria-busy="true" className="detail__history-note">
-          Loading price history…
+          Cargando historial de precios…
         </p>
       )}
       {history.status === 'empty' && (
         <p role="status" className="detail__history-note">
-          No historical candles available.
+          No hay velas históricas disponibles.
         </p>
       )}
       {history.status === 'error' && (
         <div role="alert" className="detail__history-note">
-          Unable to load price history.
+          No se pudo cargar el historial de precios.
           <button
             type="button"
             className="detail__retry"
             onClick={history.retry}
           >
-            Retry
+            Reintentar
           </button>
         </div>
       )}
@@ -103,7 +108,7 @@ function PriceSummary({
       </div>
       <dl className="detail__quote">
         <div className="detail__cell">
-          <dt>Price</dt>
+          <dt>Precio</dt>
           <dd className="detail__price">
             {hasQuote
               ? formatPrice(quote.price, instrument.currency)
@@ -111,7 +116,7 @@ function PriceSummary({
           </dd>
         </div>
         <div className="detail__cell">
-          <dt>Change</dt>
+          <dt>Variación</dt>
           <dd>
             {change ? (
               <span
@@ -126,11 +131,11 @@ function PriceSummary({
           </dd>
         </div>
         <div className="detail__cell">
-          <dt>Status</dt>
-          <dd>{quote?.status ?? PLACEHOLDER}</dd>
+          <dt>Estado</dt>
+          <dd>{quote ? formatQuoteStatus(quote.status) : PLACEHOLDER}</dd>
         </div>
         <div className="detail__cell">
-          <dt>Last update</dt>
+          <dt>Última actualización</dt>
           <dd>{hasQuote ? formatLocalTime(quote.timestamp) : PLACEHOLDER}</dd>
         </div>
       </dl>

@@ -115,7 +115,7 @@ export function useAnalysis({
         setResult(fallbackResult)
         setSource('fallback')
         setWarning(
-          `Preferred analysis unavailable (${errorMessage(cause)}); local assessment shown instead.`,
+          'El análisis preferido no está disponible; se muestra la evaluación local.',
         )
         setStatus('ready')
       } catch (fallbackCause) {
@@ -136,6 +136,6 @@ export function useAnalysis({
 
 function errorMessage(cause: unknown): string {
   return cause instanceof Error
-    ? cause.message
-    : 'Something unexpected happened.'
+    ? 'No se pudo completar el análisis. Intente nuevamente.'
+    : 'Ocurrió un problema inesperado durante el análisis.'
 }
