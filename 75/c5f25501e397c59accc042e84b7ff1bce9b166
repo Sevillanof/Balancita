@@ -1,0 +1,14 @@
+src/App.tsx
+  h_2f68313623be98 5-7,10,12,16,21,24,29,33-36,38-41,76-86,89-93,114-122,132
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "75c5f25501e397c59accc042e84b7ff1bce9b166",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
