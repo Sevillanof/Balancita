@@ -1,0 +1,15 @@
+.chart__container {
+  width: 100%;
+  height: 24rem;
+  min-width: 0;
+}
+
+.chart__empty {
+  display: grid;
+  place-items: center;
+  height: 12rem;
+  margin: 0;
+  border: 1px dashed color-mix(in srgb, var(--text) 30%, transparent);
+  border-radius: 8px;
+  color: var(--text-muted);
+}
