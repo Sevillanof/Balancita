@@ -1,0 +1,21 @@
+src/App.tsx
+  s_b2eeafc129b5d6::t_5c4613348701d2 15,40,76
+src/providers/market-data-provider.test.ts
+  s_b2eeafc129b5d6::t_cf8247207b773b 1-71
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d38bdd664d44976e6903602b7f19de292b9554e0",
+  "prompts": {},
+  "sessions": {
+    "s_b2eeafc129b5d6": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f4015ee40ffeaf3LjaZ20oCmjB",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
