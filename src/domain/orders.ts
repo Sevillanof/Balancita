@@ -7,9 +7,12 @@ import {
   moneyIsZero,
   moneyLte,
   moneyMul,
+  moneyGte,
+  moneyIsNegative,
   moneySub,
   type Money,
 } from './money'
+import type { InstrumentCurrency } from './market-data'
 
 export const BUY = 'buy' as const
 export const SELL = 'sell' as const
@@ -30,6 +33,27 @@ export interface ConfirmedOrder {
 }
 
 export type OrderOutcome = 'executed' | 'rejected'
+
+/**
+ * Configurable paper-trading fee scenario. `percentage` is a decimal rate:
+ * 0.001 means 0.1%. It is Money so fee arithmetic never uses floats.
+ */
+export type FeePolicy = {
+  id: string
+  label: string
+  percentage: Money
+  minimum: Money
+  currency: InstrumentCurrency
+}
+
+/** Development default: no fee. This is not a real broker or exchange tariff. */
+export const ZERO_FEE_POLICY: FeePolicy = {
+  id: 'development-zero',
+  label: 'Desarrollo: comisión cero (no real)',
+  percentage: moneyFromNumber(0),
+  minimum: moneyFromNumber(0),
+  currency: 'EUR',
+}
 
 export interface OrderReceipt {
   id: string
@@ -58,6 +82,7 @@ export interface OrderPreview {
   subtotal: Money
   estimatedTotal: Money
   currency: string
+  feePolicy?: FeePolicy
 }
 
 export interface OrderExecutionProvider {
@@ -70,6 +95,7 @@ export interface OrderSimulatorConfig {
   commission: number
   previewTolerance: number
   initialCash: Record<string, number>
+  feePolicy?: FeePolicy
 }
 
 export const DEFAULT_ORDER_SIMULATOR_CONFIG: OrderSimulatorConfig = {
@@ -160,6 +186,23 @@ export function estimatePreview(
   return { slippedPrice, slippageApplied, commission, subtotal, estimatedTotal }
 }
 
+export function calculateCommission(
+  subtotal: Money,
+  policy: FeePolicy,
+  currency: string,
+): Money {
+  if (policy.currency !== currency) {
+    throw new Error('Fee policy currency does not match the order currency')
+  }
+  if (moneyIsNegative(policy.percentage) || moneyIsNegative(policy.minimum)) {
+    throw new Error('Fee policy values cannot be negative')
+  }
+  const percentageFee = moneyMul(subtotal, policy.percentage)
+  return moneyGte(percentageFee, policy.minimum)
+    ? percentageFee
+    : policy.minimum
+}
+
 export function averageCostAfterBuy(
   current: { quantity: Money; averageCost: Money } | null,
   buyQuantity: Money,
@@ -193,7 +236,7 @@ export function driftWithinTolerance(
 export function orderSimulatorConfigFrom(
   partial?: Partial<OrderSimulatorConfig>,
 ): OrderSimulatorConfig {
-  return {
+  const config: OrderSimulatorConfig = {
     slippage: partial?.slippage ?? DEFAULT_ORDER_SIMULATOR_CONFIG.slippage,
     commission:
       partial?.commission ?? DEFAULT_ORDER_SIMULATOR_CONFIG.commission,
@@ -207,4 +250,6 @@ export function orderSimulatorConfigFrom(
         }
       : DEFAULT_ORDER_SIMULATOR_CONFIG.initialCash,
   }
+  if (partial?.feePolicy !== undefined) config.feePolicy = partial.feePolicy
+  return config
 }

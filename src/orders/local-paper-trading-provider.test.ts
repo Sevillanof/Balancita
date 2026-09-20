@@ -245,6 +245,24 @@ describe('LocalPaperTradingProvider', () => {
     expect(account.cash['EUR']).toEqual(moneyFromString('69969.5'))
   })
 
+  it('uses an interchangeable percentage fee policy in the preview', async () => {
+    const provider = new LocalPaperTradingProvider(market, portfolio, {
+      feePolicy: {
+        id: 'test-fee',
+        label: 'Prueba: 0,1% con mínimo de 2 EUR',
+        percentage: moneyFromString('0.001'),
+        minimum: moneyFromString('2'),
+        currency: 'EUR',
+      },
+      initialCash: { EUR: 100_000, USD: 100_000 },
+    })
+
+    const preview = await provider.preview(aBuy('0.5', 'fee-policy-buy'))
+    expect(preview.commission).toEqual(moneyFromString('30'))
+    expect(preview.feePolicy?.id).toBe('test-fee')
+    expect(preview.estimatedTotal).toEqual(moneyFromString('30030'))
+  })
+
   it('is idempotent for the same key and preview reference', async () => {
     const provider = freshProvider(market, portfolio)
     const preview = await provider.preview(aBuy('0.5', 'buy-1'))

@@ -3,6 +3,7 @@ import {
   moneyAdd,
   moneyFromNumber,
   moneyFromString,
+  moneyIsPositive,
   moneyIsZero,
   moneyLt,
   moneySub,
@@ -21,20 +22,23 @@ import {
   SimulatorCorruptStateError,
   SELL,
   averageCostAfterBuy,
+  calculateCommission,
   driftWithinTolerance,
   estimatePreview,
   orderSimulatorConfigFrom,
   type ConfirmedOrder,
+  type FeePolicy,
   type OrderExecutionProvider,
   type OrderIntent,
   type OrderPreview,
   type OrderReceipt,
   type OrderSide,
   type OrderSimulatorConfig,
+  ZERO_FEE_POLICY,
 } from '../domain/orders'
 
 const SIMULATOR_STORAGE_KEY = 'balancita:simulator'
-const SIMULATOR_SCHEMA_VERSION = 1
+const SIMULATOR_SCHEMA_VERSION = 2
 
 /**
  * Live market surface the simulator reads on demand. Quoted prices stay
@@ -48,6 +52,47 @@ export interface PaperTradingMarketSource {
 export interface PaperTradingAccount {
   cash: Record<string, Money>
   history: OrderReceipt[]
+  movements?: CashMovement[]
+}
+
+export type CashMovementType = 'deposit' | 'withdrawal'
+
+export type CashMovement = {
+  id: string
+  type: CashMovementType
+  currency: string
+  amount: Money
+  timestamp: number
+  note?: string
+  balance: Money
+  idempotencyKey?: string
+}
+
+export type CashMovementOptions = {
+  note?: string
+  idempotencyKey?: string
+  timestamp?: number
+}
+
+export class InvalidVirtualCashMovementError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'InvalidVirtualCashMovementError'
+  }
+}
+
+export class InsufficientVirtualCashError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'InsufficientVirtualCashError'
+  }
+}
+
+export class CashMovementIdempotencyConflictError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'CashMovementIdempotencyConflictError'
+  }
 }
 
 type StoredReceipt = {
@@ -73,6 +118,30 @@ type SimulatorStateV1 = {
   usedKeys: Record<string, { previewReference: string; receiptId?: string }>
   consumedPreviews: string[]
   history: StoredReceipt[]
+}
+
+type StoredMovement = {
+  id: string
+  type: CashMovementType
+  currency: string
+  amount: string
+  timestamp: number
+  note?: string
+  balance: string
+  idempotencyKey?: string
+}
+
+type SimulatorStateV2 = {
+  version: 2
+  cash: Record<string, string>
+  nextPreviewNumber: number
+  nextReceiptNumber: number
+  nextMovementNumber: number
+  usedKeys: Record<string, { previewReference: string; receiptId?: string }>
+  consumedPreviews: string[]
+  history: StoredReceipt[]
+  movements: StoredMovement[]
+  movementKeys: Record<string, string>
 }
 
 function isDecimalString(value: unknown): value is string {
@@ -107,6 +176,44 @@ function isStoredReceipt(value: unknown): value is StoredReceipt {
     (receipt.reason === undefined || typeof receipt.reason === 'string') &&
     typeof receipt.executedAt === 'number' &&
     typeof receipt.idempotencyKey === 'string'
+  )
+}
+
+function isCashMovementType(value: unknown): value is CashMovementType {
+  return value === 'deposit' || value === 'withdrawal'
+}
+
+function isStoredMovement(value: unknown): value is StoredMovement {
+  if (typeof value !== 'object' || value === null) return false
+  const movement = value as Record<string, unknown>
+  return (
+    typeof movement.id === 'string' &&
+    isCashMovementType(movement.type) &&
+    typeof movement.currency === 'string' &&
+    isDecimalString(movement.amount) &&
+    moneyIsPositive(moneyFromString(movement.amount)) &&
+    typeof movement.timestamp === 'number' &&
+    Number.isFinite(movement.timestamp) &&
+    (movement.note === undefined || typeof movement.note === 'string') &&
+    isDecimalString(movement.balance) &&
+    (movement.idempotencyKey === undefined ||
+      typeof movement.idempotencyKey === 'string')
+  )
+}
+
+function isUsedKeys(value: unknown): value is SimulatorStateV1['usedKeys'] {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    Object.values(value).every(
+      (binding) =>
+        typeof binding === 'object' &&
+        binding !== null &&
+        typeof (binding as Record<string, unknown>).previewReference ===
+          'string' &&
+        ((binding as Record<string, unknown>).receiptId === undefined ||
+          typeof (binding as Record<string, unknown>).receiptId === 'string'),
+    )
   )
 }
 
@@ -162,6 +269,40 @@ function isSimulatorStateV1(value: unknown): value is SimulatorStateV1 {
   return true
 }
 
+function isSimulatorStateV2(value: unknown): value is SimulatorStateV2 {
+  if (typeof value !== 'object' || value === null) return false
+  const state = value as Record<string, unknown>
+  return (
+    state.version === 2 &&
+    typeof state.nextPreviewNumber === 'number' &&
+    Number.isInteger(state.nextPreviewNumber) &&
+    state.nextPreviewNumber >= 0 &&
+    typeof state.nextReceiptNumber === 'number' &&
+    Number.isInteger(state.nextReceiptNumber) &&
+    state.nextReceiptNumber >= 0 &&
+    typeof state.nextMovementNumber === 'number' &&
+    Number.isInteger(state.nextMovementNumber) &&
+    state.nextMovementNumber >= 1 &&
+    typeof state.cash === 'object' &&
+    state.cash !== null &&
+    Object.values(state.cash).every(isDecimalString) &&
+    isUsedKeys(state.usedKeys) &&
+    Array.isArray(state.consumedPreviews) &&
+    state.consumedPreviews.every(
+      (reference) => typeof reference === 'string',
+    ) &&
+    Array.isArray(state.history) &&
+    state.history.every(isStoredReceipt) &&
+    Array.isArray(state.movements) &&
+    state.movements.every(isStoredMovement) &&
+    typeof state.movementKeys === 'object' &&
+    state.movementKeys !== null &&
+    Object.values(state.movementKeys).every(
+      (movementId) => typeof movementId === 'string',
+    )
+  )
+}
+
 function storedReceiptToReceipt(stored: StoredReceipt): OrderReceipt {
   const receipt: OrderReceipt = {
     id: stored.id,
@@ -206,6 +347,38 @@ function receiptToStored(receipt: OrderReceipt): StoredReceipt {
   return stored
 }
 
+function storedMovementToMovement(stored: StoredMovement): CashMovement {
+  const movement: CashMovement = {
+    id: stored.id,
+    type: stored.type,
+    currency: stored.currency,
+    amount: moneyFromString(stored.amount),
+    timestamp: stored.timestamp,
+    balance: moneyFromString(stored.balance),
+  }
+  if (stored.note !== undefined) movement.note = stored.note
+  if (stored.idempotencyKey !== undefined) {
+    movement.idempotencyKey = stored.idempotencyKey
+  }
+  return movement
+}
+
+function movementToStored(movement: CashMovement): StoredMovement {
+  const stored: StoredMovement = {
+    id: movement.id,
+    type: movement.type,
+    currency: movement.currency,
+    amount: moneyToDecimalString(movement.amount),
+    timestamp: movement.timestamp,
+    balance: moneyToDecimalString(movement.balance),
+  }
+  if (movement.note !== undefined) stored.note = movement.note
+  if (movement.idempotencyKey !== undefined) {
+    stored.idempotencyKey = movement.idempotencyKey
+  }
+  return stored
+}
+
 /**
  * Local paper-trading engine implementing OrderExecutionProvider. It prices
  * against the injected market source, keeps its account in `balancita:simulator`
@@ -216,16 +389,22 @@ export class LocalPaperTradingProvider implements OrderExecutionProvider {
   private readonly marketSource: PaperTradingMarketSource
   private readonly portfolio: PortfolioRepository
   private readonly config: OrderSimulatorConfig
+  private readonly feePolicy: FeePolicy | undefined
   private readonly previews = new Map<string, OrderPreview>()
+  private readonly now: () => number
 
   constructor(
     marketSource: PaperTradingMarketSource,
     portfolio: PortfolioRepository = new LocalStoragePortfolioRepository(),
-    options: Partial<OrderSimulatorConfig> = {},
+    options: Partial<OrderSimulatorConfig> & { now?: () => number } = {},
   ) {
     this.marketSource = marketSource
     this.portfolio = portfolio
     this.config = orderSimulatorConfigFrom(options)
+    this.feePolicy =
+      this.config.feePolicy ??
+      (this.config.commission === 0 ? ZERO_FEE_POLICY : undefined)
+    this.now = options.now ?? Date.now
   }
 
   async preview(order: OrderIntent): Promise<OrderPreview> {
@@ -243,12 +422,11 @@ export class LocalPaperTradingProvider implements OrderExecutionProvider {
     }
 
     const marketPrice = moneyFromNumber(quote.price)
-    const projection = estimatePreview(
+    const projection = this.project(
       order.side,
       order.quantity,
       marketPrice,
-      moneyFromNumber(this.config.slippage),
-      moneyFromNumber(this.config.commission),
+      instrument.currency,
     )
 
     const state = await this.readState()
@@ -268,6 +446,7 @@ export class LocalPaperTradingProvider implements OrderExecutionProvider {
       subtotal: projection.subtotal,
       estimatedTotal: projection.estimatedTotal,
       currency: instrument.currency,
+      ...(this.feePolicy === undefined ? {} : { feePolicy: this.feePolicy }),
     }
     this.previews.set(reference, preview)
     return preview
@@ -334,12 +513,11 @@ export class LocalPaperTradingProvider implements OrderExecutionProvider {
       )
     }
 
-    const projection = estimatePreview(
+    const projection = this.project(
       preview.side,
       preview.quantity,
       freshPrice,
-      moneyFromNumber(this.config.slippage),
-      moneyFromNumber(this.config.commission),
+      instrument.currency,
     )
     const currency = instrument.currency
     const cash = this.parseCash(state, currency)
@@ -419,7 +597,7 @@ export class LocalPaperTradingProvider implements OrderExecutionProvider {
       commission: projection.commission,
       total: projection.estimatedTotal,
       status: outcome,
-      executedAt: Date.now(),
+      executedAt: this.now(),
       idempotencyKey: order.idempotencyKey,
     }
     if (reason !== undefined) receipt.reason = reason
@@ -447,7 +625,122 @@ export class LocalPaperTradingProvider implements OrderExecutionProvider {
         ]),
       ),
       history: state.history.map(storedReceiptToReceipt),
+      movements: state.movements.map(storedMovementToMovement),
     }
+  }
+
+  async deposit(
+    currency: string,
+    amount: Money,
+    options: CashMovementOptions = {},
+  ): Promise<CashMovement> {
+    return this.recordCashMovement('deposit', currency, amount, options)
+  }
+
+  async withdraw(
+    currency: string,
+    amount: Money,
+    options: CashMovementOptions = {},
+  ): Promise<CashMovement> {
+    return this.recordCashMovement('withdrawal', currency, amount, options)
+  }
+
+  private project(
+    side: OrderSide,
+    quantity: Money,
+    marketPrice: Money,
+    currency: string,
+  ) {
+    const slippage = moneyFromNumber(this.config.slippage)
+    const provisional = estimatePreview(
+      side,
+      quantity,
+      marketPrice,
+      slippage,
+      moneyFromNumber(0),
+    )
+    const commission =
+      this.feePolicy === undefined
+        ? moneyFromNumber(this.config.commission)
+        : calculateCommission(provisional.subtotal, this.feePolicy, currency)
+    return estimatePreview(side, quantity, marketPrice, slippage, commission)
+  }
+
+  private async recordCashMovement(
+    type: CashMovementType,
+    currency: string,
+    amount: Money,
+    options: CashMovementOptions,
+  ): Promise<CashMovement> {
+    if (!moneyIsPositive(amount)) {
+      throw new InvalidVirtualCashMovementError(
+        'Virtual cash movement amount must be positive.',
+      )
+    }
+    const state = await this.readState()
+    if (state.cash[currency] === undefined) {
+      throw new InvalidVirtualCashMovementError(
+        `Currency "${currency}" is not supported by the virtual account.`,
+      )
+    }
+
+    if (options.idempotencyKey !== undefined) {
+      const existingId = state.movementKeys[options.idempotencyKey]
+      if (existingId !== undefined) {
+        const existing = state.movements.find(
+          (movement) => movement.id === existingId,
+        )
+        if (existing === undefined) {
+          this.reset()
+          throw new SimulatorCorruptStateError(
+            `Movement "${existingId}" referenced by an idempotency key is missing.`,
+          )
+        }
+        if (
+          existing.type !== type ||
+          existing.currency !== currency ||
+          moneyFromString(existing.amount).units !== amount.units ||
+          existing.note !== options.note
+        ) {
+          throw new CashMovementIdempotencyConflictError(
+            `Cash movement key "${options.idempotencyKey}" was already used with another payload.`,
+          )
+        }
+        return storedMovementToMovement(existing)
+      }
+    }
+
+    const current = this.parseCash(state, currency)
+    const balance =
+      type === 'deposit' ? moneyAdd(current, amount) : moneySub(current, amount)
+    if (type === 'withdrawal' && moneyLt(current, amount)) {
+      throw new InsufficientVirtualCashError(
+        `Insufficient virtual cash in ${currency}.`,
+      )
+    }
+    const movement: CashMovement = {
+      id: `M${state.nextMovementNumber}`,
+      type,
+      currency,
+      amount,
+      timestamp: options.timestamp ?? this.now(),
+      balance,
+    }
+    if (!Number.isFinite(movement.timestamp)) {
+      throw new InvalidVirtualCashMovementError(
+        'Virtual cash movement timestamp must be finite.',
+      )
+    }
+    if (options.note !== undefined) movement.note = options.note
+    if (options.idempotencyKey !== undefined) {
+      movement.idempotencyKey = options.idempotencyKey
+      state.movementKeys[options.idempotencyKey] = movement.id
+    }
+    state.cash[currency] = moneyToDecimalString(balance)
+    state.nextMovementNumber += 1
+    state.movements.push(movementToStored(movement))
+    await this.writeState(state)
+    return movement
   }
 
   private initialCash(): Record<string, string> {
@@ -459,24 +752,38 @@ export class LocalPaperTradingProvider implements OrderExecutionProvider {
     )
   }
 
-  private initialState(): SimulatorStateV1 {
+  private initialState(): SimulatorStateV2 {
     return {
       version: SIMULATOR_SCHEMA_VERSION,
       cash: this.initialCash(),
       nextPreviewNumber: 1,
       nextReceiptNumber: 1,
+      nextMovementNumber: 1,
       usedKeys: {},
       consumedPreviews: [],
       history: [],
+      movements: [],
+      movementKeys: {},
     }
   }
 
-  private async readState(): Promise<SimulatorStateV1> {
+  private async readState(): Promise<SimulatorStateV2> {
     const raw = this.storage().getItem(SIMULATOR_STORAGE_KEY)
     if (raw === null) return this.initialState()
     try {
       const parsed: unknown = JSON.parse(raw)
-      if (isSimulatorStateV1(parsed)) return parsed
+      if (isSimulatorStateV2(parsed)) return parsed
+      if (isSimulatorStateV1(parsed)) {
+        const migrated: SimulatorStateV2 = {
+          ...parsed,
+          version: 2,
+          nextMovementNumber: 1,
+          movements: [],
+          movementKeys: {},
+        }
+        await this.writeState(migrated)
+        return migrated
+      }
     } catch {
       // fall through to corruption handling
     }
@@ -484,7 +791,7 @@ export class LocalPaperTradingProvider implements OrderExecutionProvider {
     return this.initialState()
   }
 
-  private async writeState(state: SimulatorStateV1): Promise<void> {
+  private async writeState(state: SimulatorStateV2): Promise<void> {
     this.storage().setItem(SIMULATOR_STORAGE_KEY, JSON.stringify(state))
   }
 
@@ -496,7 +803,7 @@ export class LocalPaperTradingProvider implements OrderExecutionProvider {
     return window.localStorage
   }
 
-  private parseCash(state: SimulatorStateV1, currency: string): Money {
+  private parseCash(state: SimulatorStateV2, currency: string): Money {
     const raw = state.cash[currency]
     if (raw === undefined) {
       this.reset()
