@@ -1,0 +1,19 @@
+src/app/trade/TradeScreen.tsx
+  s_900f8954ed6bf2::t_35661b7dce046b 96,560-574
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7a5f04aa893e4ca9328ab75bab007411f714122a",
+  "prompts": {},
+  "sessions": {
+    "s_900f8954ed6bf2": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f3fc63e49ffeMfhAFqEihJID3X",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
