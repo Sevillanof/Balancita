@@ -3,7 +3,7 @@ import type {
   MarketDataProvider,
   Quote,
 } from '../../domain/market-data'
-import { formatChange, formatLocalTime, formatPrice } from './format'
+import { formatChange, formatLocalTime, formatPrice } from '../format'
 import { useWatchlist } from './useWatchlist'
 import './watchlist.css'
 

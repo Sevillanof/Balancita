@@ -7,7 +7,7 @@ import {
   makeQuote,
 } from '../../test/fake-market-data-provider'
 import type { Instrument } from '../../domain/market-data'
-import { formatChange, formatLocalTime, formatPrice } from './format'
+import { formatChange, formatLocalTime, formatPrice } from '../format'
 import WatchlistScreen from './WatchlistScreen'
 
 const HEADERS = [
