@@ -1,0 +1,25 @@
+src/app/detail/useCandleHistory.test.tsx
+  s_1f08bfef309727::t_1fc21130d1feef 1-135
+src/app/detail/useCandleHistory.ts
+  s_1f08bfef309727::t_2fb96c4014d481 1-61
+src/app/detail/useLatestQuote.test.tsx
+  s_1f08bfef309727::t_5d0c3172c46e45 1-92
+src/app/detail/useLatestQuote.ts
+  s_1f08bfef309727::t_9f1e139e988e8e 1-37
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5aa505475441588ce9cb17c0295e8338e3fd2078",
+  "prompts": {},
+  "sessions": {
+    "s_1f08bfef309727": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f41415805ffewgLy0fi83KFd95",
+        "model": "big-pickle"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
