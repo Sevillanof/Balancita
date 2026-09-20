@@ -93,11 +93,7 @@ export default function TradeScreen({
         onAccountChanged?.()
       }
     } catch (error) {
-      setCashError(
-        error instanceof Error
-          ? error.message
-          : 'No se pudo registrar el movimiento virtual.',
-      )
+      setCashError(formatCashMovementError(error))
     }
   }
 
@@ -559,6 +555,21 @@ function formatOrderReason(reason: string): string {
 function formatTradingMessage(message: string | null): string {
   if (message === null) return ''
   return formatOrderReason(message)
+}
+
+function formatCashMovementError(error: unknown): string {
+  if (!(error instanceof Error))
+    return 'No se pudo registrar el movimiento virtual.'
+  if (error.message.includes('Insufficient virtual cash')) {
+    return 'El saldo virtual no alcanza para retirar ese importe.'
+  }
+  if (error.message.includes('not supported')) {
+    return 'La moneda no está soportada por esta cuenta virtual.'
+  }
+  if (error.message.includes('must be positive')) {
+    return 'El importe virtual debe ser positivo.'
+  }
+  return 'No se pudo registrar el movimiento virtual.'
 }
 
 function formatLocalTime(timestamp: number): string {
