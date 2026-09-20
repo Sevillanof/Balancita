@@ -1,0 +1,19 @@
+docs/implementation-progress.md
+  s_e7c020cdbee484::t_0c8e6d16027c2a 1-291
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "87dd8ca20a6db9b35ed188526fd17753f88eff25",
+  "prompts": {},
+  "sessions": {
+    "s_e7c020cdbee484": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f40b6aa71ffeXcgxXKOJVUMe8M",
+        "model": "big-pickle"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
