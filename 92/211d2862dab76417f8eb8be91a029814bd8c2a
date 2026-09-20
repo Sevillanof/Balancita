@@ -1,0 +1,23 @@
+src/app/portfolio/PortfolioScreen.test.tsx
+  s_f1e57129473b05::t_2bd6ee1087c6f7 1-409
+src/app/portfolio/PortfolioScreen.tsx
+  s_f1e57129473b05::t_f8e2b63499009d 1-476
+src/app/portfolio/portfolio.css
+  s_f1e57129473b05::t_80b5b827f534d3 1-215
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "92211d2862dab76417f8eb8be91a029814bd8c2a",
+  "prompts": {},
+  "sessions": {
+    "s_f1e57129473b05": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f412853f2ffeFp0XNFjFL66L5k",
+        "model": "big-pickle"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
