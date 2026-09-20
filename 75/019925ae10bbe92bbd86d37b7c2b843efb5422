@@ -1,0 +1,25 @@
+src/domain/analysis-errors.test.ts
+  s_cd71a6a91fdd2d::t_57d838ad046152 1-50
+src/domain/analysis-errors.ts
+  s_cd71a6a91fdd2d::t_58e25b85285612 1-77
+src/providers/gemini-analysis-provider.test.ts
+  s_cd71a6a91fdd2d::t_5b087dd66f5dfe 1-207
+src/providers/gemini-analysis-provider.ts
+  s_cd71a6a91fdd2d::t_8f6cbe013e8ae3 1-184
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "75019925ae10bbe92bbd86d37b7c2b843efb5422",
+  "prompts": {},
+  "sessions": {
+    "s_cd71a6a91fdd2d": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f408aa3b1ffeJGPbYnLOyebt9c",
+        "model": "big-pickle"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
