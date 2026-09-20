@@ -1,0 +1,24 @@
+:root {
+  color-scheme: light dark;
+  --text: #1f2430;
+  --text-muted: #5b6472;
+  --bg: #fafbfc;
+
+  font-family: system-ui, 'Segoe UI', Roboto, sans-serif;
+  color: var(--text);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --text: #e7eaf0;
+    --text-muted: #98a1b0;
+    --bg: #10141c;
+  }
+}
+
+body {
+  margin: 0;
+}
