@@ -338,7 +338,9 @@ describe('App AI analysis toggle', () => {
     const user = userEvent.setup()
     const gemini = new FakeAnalysisProvider()
     gemini.analyzeCall.mockResolvedValue(localResult())
-    const { analysis, provider } = renderAppWithGemini({ geminiAnalysis: gemini })
+    const { analysis, provider } = renderAppWithGemini({
+      geminiAnalysis: gemini,
+    })
     await openDetail(provider)
 
     const toggle = screen.getByRole('switch', { name: /ai analysis/i })
@@ -359,7 +361,9 @@ describe('App AI analysis toggle', () => {
     const user = userEvent.setup()
     const gemini = new FakeAnalysisProvider()
     gemini.analyzeCall.mockRejectedValue(new Error('gemini rate limited'))
-    const { analysis, provider } = renderAppWithGemini({ geminiAnalysis: gemini })
+    const { analysis, provider } = renderAppWithGemini({
+      geminiAnalysis: gemini,
+    })
     await openDetail(provider)
 
     const toggle = screen.getByRole('switch', { name: /ai analysis/i })
@@ -370,7 +374,7 @@ describe('App AI analysis toggle', () => {
     await user.click(screen.getByRole('button', { name: /analyze/i }))
 
     await waitFor(() =>
-      expect(screen.getByText(/source: local/i)).toBeInTheDocument(),
+      expect(screen.getByText(/source: mock/i)).toBeInTheDocument(),
     )
     expect(screen.getByRole('alert')).toHaveTextContent(/gemini rate limited/)
     expect(gemini.analyzeCall).toHaveBeenCalledTimes(1)

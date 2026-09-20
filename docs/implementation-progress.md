@@ -12,24 +12,25 @@
 
 ## 1. Project status
 
-| Phase | Result                           | Status                    | Tests | Commits                   |
-| ----- | -------------------------------- | ------------------------- | ----- | ------------------------- |
-| 0     | Repo + quality gates             | ✅ done                   | —     | de42f10, 964b9b3, 2eed4d9 |
-| 1     | Domain + deterministic mock feed | ✅ done                   | 20    | 1355606                   |
-| 2     | Realtime watchlist               | ✅ done                   | 36    | 80bced6, f0e11ed          |
-| 3     | Detail + mock history chart      | ✅ done (first milestone) | 74    | 0291cc2…b435043 (11)      |
-| 4     | Local portfolio + valuation      | ✅ done                   | 122   | 9f5622f…9598990 (7)       |
-| 5     | Local alerts                     | ✅ done                   | 185   | 8234229…75c5f25 (5)       |
-| 6     | Paper trading simulator          | ✅ done                   | 249   | 54ce740…8cd3a05 (6)       |
-| 7     | Local deterministic analysis     | ✅ done                   | 291   | 38b3ffd…ee0c648 (6)       |
-| 8     | Optional budgeted Gemini         | ⏭️ **next**               | —     | —                         |
-| 9     | Read-only real data              | ⏸ pending                 | —     | —                         |
-| 10    | Broker paper trading             | ⏸ pending                 | —     | —                         |
-| 11    | Real trading evaluation          | ⏸ pending                 | —     | —                         |
-| 12    | Jev spike                        | ⏸ pending                 | —     | —                         |
+| Phase | Result                           | Status                    | Tests           | Commits                   |
+| ----- | -------------------------------- | ------------------------- | --------------- | ------------------------- |
+| 0     | Repo + quality gates             | ✅ done                   | —               | de42f10, 964b9b3, 2eed4d9 |
+| 1     | Domain + deterministic mock feed | ✅ done                   | 20              | 1355606                   |
+| 2     | Realtime watchlist               | ✅ done                   | 36              | 80bced6, f0e11ed          |
+| 3     | Detail + mock history chart      | ✅ done (first milestone) | 74              | 0291cc2…b435043 (11)      |
+| 4     | Local portfolio + valuation      | ✅ done                   | 122             | 9f5622f…9598990 (7)       |
+| 5     | Local alerts                     | ✅ done                   | 185             | 8234229…75c5f25 (5)       |
+| 6     | Paper trading simulator          | ✅ done                   | 249             | 54ce740…8cd3a05 (6)       |
+| 7     | Local deterministic analysis     | ✅ done                   | 291             | 38b3ffd…ee0c648 (6)       |
+| 8     | Optional budgeted Gemini         | ✅ done                   | 322 + 61 server | 3b4006f…dddb7a8 (9)       |
+| 9     | Read-only real data              | ⏸ pending                 | —               | —                         |
+| 10    | Broker paper trading             | ⏸ pending                 | —               | —                         |
+| 11    | Real trading evaluation          | ⏸ pending                 | —               | —                         |
+| 12    | Jev spike                        | ⏸ pending                 | —               | —                         |
 
-All quality gates green at Phase 7 close: `pnpm test` (291), `typecheck`,
-`lint`, `build`, `format:check`. Working tree clean.
+All quality gates green at Phase 8 close: `pnpm test` (322), `pnpm test:server`
+(61), `typecheck`, `lint`, `build`, `format:check`, and server typecheck.
+Working tree clean after excluding the local `.atl/` tooling directory.
 
 ## 2. Stack and tooling
 
@@ -42,6 +43,9 @@ All quality gates green at Phase 7 close: `pnpm test` (291), `typecheck`,
 - Vitest 5 + jsdom 30 + Testing Library + user-event + jest-dom;
   setup `src/test/setup.ts`.
 - Runtime dep: `lightweight-charts@^5.2.1` only.
+- Server package: Fastify 5.12.5, `@fastify/cors` 11.3.0, and official
+  `@google/genai` 2.23.0; Node 22 runs the TypeScript gateway with native type
+  stripping.
 - No global state library — React primitives only (hooks + props).
 
 ## 3. Non-negotiable conventions
@@ -209,12 +213,48 @@ null`), `AnalysisResult` (instrumentId, `classification: 'watch' | 'neutral' |
 - New tests: 42 (domain contract 8, provider rules 17, hook 8, panel 6, detail
   integration 2, app integration 1 …); total 291.
 
+### Phase 8 — Optional budgeted Gemini
+
+- Verified on 2026-09-20 against the official Google Gen AI JavaScript SDK and
+  npm: `@google/genai` 2.23.0. The server uses `new GoogleGenAI({apiKey})`,
+  `ai.models.generateContent({model, contents, config})`,
+  `responseMimeType: 'application/json'`, `responseJsonSchema`,
+  `maxOutputTokens`, and `abortSignal`. The legacy
+  `@google/generative-ai` package is not used.
+- Free-tier decision confirmed by the user: `gemini-3.5-flash-lite`, no linked
+  billing, with observed limits of 15 RPM, 250K TPM and 500 RPD on 2026-09-20.
+  Internal defaults are deliberately lower at 10 RPM and 300 RPD; both remain
+  configurable through server environment variables.
+- `server/` exposes `POST /api/analyze` and `/health`. `GEMINI_API_KEY` is read
+  only by the server process and is never logged, sent to the browser, or used
+  as a test value. `GEMINI_MODEL` defaults to `gemini-3.5-flash-lite`.
+- `GeminiAnalysisProvider` serializes `Money` with
+  `moneyToDecimalString`; the wire format contains decimal strings and never
+  serializes the `bigint` wrapper. It validates the response again in the
+  browser before returning an `AnalysisResult`.
+- The gateway enforces structured JSON, a maximum output size, an abort timeout,
+  a SHA-256 input cache with a five-minute TTL, bounded candle history and
+  sliding internal minute/day quotas. It enables no tools, grounding, files,
+  audio, images, agents or order execution.
+- The UI has a visible AI switch that is session-only and OFF by default.
+  Toggling it never analyzes; only the existing manual `Analyze` action can
+  call the selected provider. `MockAnalysisProvider` remains the local default
+  and closed fallback. The panel labels Mock or Gemini and shows the
+  gateway warning when quota, timeout, invalid JSON, missing key, network or
+  server failures fall back. The source indicator is explicitly `Mock` or
+  `Gemini`.
+- Server tests use injected fake Gemini clients and Fastify `inject`; no real
+  network or API key is required. Phase 8 added coverage for SDK request shape,
+  endpoint envelopes, structured response validation, quotas, timeout, invalid
+  JSON, missing key, fallback, toggle behavior and quote non-automation.
+
 ## 5. Architecture map (current)
 
 ```
 src/
   domain/            analysis.ts, money.ts, market-data.ts, portfolio.ts, alerts.ts, orders.ts
   providers/         deterministic-mock-market-data.ts, mock-analysis-provider.ts
+                     gemini-analysis-provider.ts
   portfolio/         local-storage-portfolio-repository.ts (+ valuation.ts)
   alerts/            alert-evaluator.ts, local-storage-alert-repository.ts
   orders/            local-paper-trading-provider.ts
@@ -233,6 +273,10 @@ UI depends on provider contracts (`MarketDataProvider`, `PortfolioRepository`,
 `AlertRepository`, `OrderExecutionProvider`, `AnalysisProvider`), never on
 concrete providers directly. React primitives only; no global state.
 
+The optional Gemini path is `UI -> GeminiAnalysisProvider -> POST /api/analyze
+-> AnalyzeService -> GoogleGenaiClient -> Gemini API`. The UI has no Gemini API
+key and the analysis path never imports or invokes `OrderExecutionProvider`.
+
 ## 6. Persistence keys & schemas
 
 | Key                   | Scheme                       | Shape                                                                    | Notes                                                                         |
@@ -240,6 +284,10 @@ concrete providers directly. React primitives only; no global state.
 | `balancita:portfolio` | v2 (legacy v1 auto-migrated) | `{version, holdings[]}`; holdings use decimal strings                    | v1 read → convert → rewrite v2; unsupported version → `PortfolioCorruptError` |
 | `balancita:alerts`    | versioned                    | `{version, alerts[]}`                                                    | strict validation on read                                                     |
 | `balancita:simulator` | v1                           | cash per currency, receipt history, usedKeys, consumedPreviews, counters | append-only history; corrupt state → typed reset                              |
+
+The Gemini response cache is server-memory-only, keyed by SHA-256 of the
+canonical input, bounded by entry count and expired after five minutes. It is
+not user persistence and is discarded on server restart.
 
 Phase 7 adds **no** persistence key: analysis is stateless and deterministic
 (decision documented in §4).
@@ -263,7 +311,7 @@ never quotes or derived totals.
   never feed back into arithmetic.
 - Commits are work-unit-sized per phase; keep them that way in future phases.
 
-## 8. Phase 7 (done) and Phase 8 scope (next)
+## 8. Phase 8 (done) and Phase 9 scope (next)
 
 Phase 7 (Prompt 7) is **implemented and verified**: contract,
 `MockAnalysisProvider` with explicit deterministic rules, manual "Analyze"
@@ -271,14 +319,14 @@ button in the instrument detail (never triggered by arriving quotes), loading/
 error/result states, and analysis/orders separation. Full rule tables, reasons,
 warnings and test breakdown are in §4 Phase 7. Gates green at 291 tests.
 
-Phase 8 (Prompt 8) — optional budgeted Gemini — is next, but only after explicit
-user authorization and a fresh decision about the free tier. Requirements from
-the source-of-truth doc: Fastify server (key never reaches the browser),
-`GeminiAnalysisProvider` behind `AnalysisProvider` keeping `MockAnalysisProvider`
-as default/fallback, runtime-validated JSON output, timeout, length cap, hash
-cache and internal per-minute/per-day limits. Human-only invocation; never call
-`OrderExecutionProvider`. Verify the free-tier model and limits in Google AI
-Studio before implementing.
+Phase 8 (Prompt 8) — optional budgeted Gemini — is implemented and verified.
+The gateway, official SDK adapter, structured response validation, timeout,
+output cap, temporary input-hash cache, conservative internal quotas, manual
+provider selection, closed Mock fallback and required tests are complete.
+
+Phase 9 is pending and must investigate real read-only market data independently.
+It must not reuse Gemini as a market-data provider or alter paper-trading
+authority.
 
 ## 9. How to resume
 
@@ -286,6 +334,7 @@ Studio before implementing.
    current phase.
 2. Read this file for context, then Engram (`engine: mem_search "balancita"`)
    for worker reports.
-3. Run `pnpm test` to confirm the baseline (291 expected).
-4. Execute the phase with TDD work units; commit; verify gates;
-   update this file's status table.
+3. Run `pnpm test` and `pnpm test:server` to confirm the current baseline
+   (322 frontend, 61 server tests expected).
+4. Execute the next phase with TDD work units; commit; verify gates; update this
+   file's status table.

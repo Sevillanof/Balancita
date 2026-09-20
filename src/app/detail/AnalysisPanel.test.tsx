@@ -181,7 +181,9 @@ describe('AnalysisPanel AI mode', () => {
       />,
     )
 
-    expect(screen.getByRole('heading', { name: /AI analysis/i })).toBeInTheDocument()
+    expect(
+      screen.getByRole('heading', { name: /AI analysis/i }),
+    ).toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: /analyze/i }))
     await waitFor(() =>
@@ -211,7 +213,7 @@ describe('AnalysisPanel AI mode', () => {
     await user.click(screen.getByRole('button', { name: /analyze/i }))
 
     await waitFor(() =>
-      expect(screen.getByText(/source: local/i)).toBeInTheDocument(),
+      expect(screen.getByText(/source: mock/i)).toBeInTheDocument(),
     )
     expect(screen.getByRole('alert')).toHaveTextContent(/gemini rate limited/)
     expect(fallback.analyzeCall).toHaveBeenCalledTimes(1)
@@ -227,7 +229,9 @@ describe('AnalysisPanel AI mode', () => {
         candles={CANDLES}
       />,
     )
-    expect(screen.getByRole('heading', { name: /local analysis/i })).toBeInTheDocument()
+    expect(
+      screen.getByRole('heading', { name: /local analysis/i }),
+    ).toBeInTheDocument()
   })
 })
 

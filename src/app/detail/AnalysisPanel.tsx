@@ -15,10 +15,13 @@ type AnalysisPanelProps = {
   candles: readonly Candle[]
 }
 
-function sourceLabel(mode: AnalysisMode, source: AnalysisSource): string | null {
-  if (mode === 'local') return 'Local'
+function sourceLabel(
+  mode: AnalysisMode,
+  source: AnalysisSource,
+): string | null {
+  if (mode === 'local') return 'Mock'
   if (source === 'preferred') return 'Gemini'
-  if (source === 'fallback') return 'Local'
+  if (source === 'fallback') return 'Mock'
   return null
 }
 

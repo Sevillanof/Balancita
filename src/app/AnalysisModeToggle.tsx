@@ -39,9 +39,7 @@ export function AnalysisModeToggle({
       >
         {aiEnabled ? 'On' : 'Off'}
       </button>
-      {disabled && (
-        <span className="app__ai-toggle-hint">Unavailable</span>
-      )}
+      {disabled && <span className="app__ai-toggle-hint">Unavailable</span>}
     </div>
   )
 }
