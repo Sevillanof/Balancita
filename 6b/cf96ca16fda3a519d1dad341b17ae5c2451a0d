@@ -1,0 +1,21 @@
+src/app/trade/useTrading.test.tsx
+  s_c3e016bc5e0487::t_07a8838b4e5ec5 1-261
+src/app/trade/useTrading.ts
+  s_c3e016bc5e0487::t_c041eddb0aa9f2 1-236
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6bcf96ca16fda3a519d1dad341b17ae5c2451a0d",
+  "prompts": {},
+  "sessions": {
+    "s_c3e016bc5e0487": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f40ddf334ffeIhn7DpVpPzht2Z",
+        "model": "big-pickle"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
