@@ -46,11 +46,17 @@ picks the next free port when 5173 is already in use.
 Tests run on jsdom with Testing Library and user-event. Test files live next to the
 code they verify (e.g. `src/App.test.tsx`).
 
-## Product scope (Phase 3)
+## Product scope (Phase 4)
 
 The watchlist shows deterministic mock instruments with realtime mock quotes, and
 selecting an instrument opens a detail view with its price summary and a mock
-candlestick chart. The screen identifies the product ("Balancita") and never
+candlestick chart. A workspace tab list switches between Watchlist and
+Portfolio. The portfolio keeps manual positions (quantity and average cost) in
+localStorage behind a versioned `PortfolioRepository`, subscribes to live mock
+quotes for every held instrument and derives per-position cost, current value
+and profit/loss (absolute and percentage) on render — quotes and totals are never
+persisted. Corrupt stored data surfaces an explicit reset instead of being
+silently trusted. The screen identifies the product ("Balancita") and never
 requests credentials. There is no backend, no authentication and no global state.
 The roadmap lives in `doc/personal-trading-app.md`, which is the single source of
 truth and must not be edited by tooling.
