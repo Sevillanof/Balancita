@@ -1,0 +1,21 @@
+src/providers/mock-analysis-provider.test.ts
+  s_e7c020cdbee484::t_32e586f29ffebc 1-273
+src/providers/mock-analysis-provider.ts
+  s_e7c020cdbee484::t_5738da5c9da71a 1-266
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "38f5c9883c4801d7c777877efeca30c369234ee5",
+  "prompts": {},
+  "sessions": {
+    "s_e7c020cdbee484": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f40b6aa71ffeXcgxXKOJVUMe8M",
+        "model": "big-pickle"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
