@@ -1,0 +1,25 @@
+src/app/alerts/AlertsScreen.tsx
+  s_f34e7197545b82::t_5631851358e663 86-94,96-103,105-137,247
+src/app/chart/PriceChart.tsx
+  s_f34e7197545b82::t_9d40fbc72794bf 26-32,35-41,54-74,103
+src/app/portfolio/PortfolioScreen.tsx
+  s_f34e7197545b82::t_b309af17e3c610 128-136,138-158,160-208,410
+src/app/watchlist/WatchlistScreen.tsx
+  s_f34e7197545b82::t_c537f768c4ded3 33-41,43-55,57-64,66-115
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "0313d98e804063c77e20db5117b08b75ca03d0fd",
+  "prompts": {},
+  "sessions": {
+    "s_f34e7197545b82": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f3fe162c8ffeSMXmDUvnbMsInz",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
