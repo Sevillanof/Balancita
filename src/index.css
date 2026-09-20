@@ -3,6 +3,8 @@
   --text: #1f2430;
   --text-muted: #5b6472;
   --bg: #fafbfc;
+  --positive: #04724d;
+  --negative: #b3261e;
 
   font-family: system-ui, 'Segoe UI', Roboto, sans-serif;
   color: var(--text);
@@ -16,6 +18,8 @@
     --text: #e7eaf0;
     --text-muted: #98a1b0;
     --bg: #10141c;
+    --positive: #5dd6a3;
+    --negative: #f28b82;
   }
 }
 

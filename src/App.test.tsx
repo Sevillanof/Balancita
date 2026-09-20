@@ -1,10 +1,19 @@
 import { render, screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
+import {
+  FakeMarketDataProvider,
+  WATCHLIST_INSTRUMENTS,
+} from './test/fake-market-data-provider'
 import App from './App'
+
+function renderApp() {
+  const provider = new FakeMarketDataProvider(WATCHLIST_INSTRUMENTS)
+  return { provider, ...render(<App provider={provider} />) }
+}
 
 describe('App', () => {
   it('renders the Balancita product identity', () => {
-    render(<App />)
+    renderApp()
 
     expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(
       'Balancita',
@@ -12,7 +21,7 @@ describe('App', () => {
   })
 
   it('does not ask for credentials, keys or secrets', () => {
-    render(<App />)
+    renderApp()
 
     expect(
       screen.queryByLabelText(/api key|secret|token|password|credential/i),

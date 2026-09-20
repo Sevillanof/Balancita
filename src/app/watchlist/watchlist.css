@@ -1,0 +1,94 @@
+.watchlist {
+  align-self: stretch;
+  max-width: 56rem;
+  margin-inline: auto;
+  margin-top: 1.5rem;
+  text-align: left;
+}
+
+.watchlist__title {
+  margin: 0 0 0.75rem;
+  font-size: 1.5rem;
+  letter-spacing: -0.01em;
+}
+
+.watchlist__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+
+.watchlist__caption {
+  padding-bottom: 0.5rem;
+  text-align: left;
+  color: var(--text-muted);
+}
+
+.watchlist__table th,
+.watchlist__table td {
+  height: 3rem;
+  padding: 0.625rem 0.75rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--text) 15%, transparent);
+  text-align: left;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.watchlist__table thead th {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.watchlist__num {
+  text-align: right;
+}
+
+.watchlist__price {
+  min-width: 7.5rem;
+}
+
+.watchlist__change {
+  min-width: 10rem;
+}
+
+.watchlist__updated {
+  min-width: 8rem;
+}
+
+.watchlist__placeholder {
+  height: 4rem;
+  color: var(--text-muted);
+}
+
+.watchlist__retry {
+  margin-left: 0.75rem;
+  padding: 0.375rem 0.875rem;
+  font: inherit;
+  color: var(--text);
+  background: transparent;
+  border: 1px solid var(--text-muted);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.watchlist__retry:hover,
+.watchlist__retry:focus-visible {
+  border-color: var(--text);
+  outline: 2px solid color-mix(in srgb, var(--text) 40%, transparent);
+  outline-offset: 2px;
+}
+
+.watchlist__change--down {
+  color: var(--negative);
+}
+
+.watchlist__change--flat {
+  color: var(--text-muted);
+}
+
+.watchlist__change--up {
+  color: var(--positive);
+}
