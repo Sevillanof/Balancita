@@ -1,0 +1,16 @@
+src/app/detail/useAnalysis.test.tsx
+  h_2f68313623be98 220-300
+src/app/detail/useAnalysis.ts
+  h_2f68313623be98 9-11,16-17,23-24,34-39,43,52-53,68-69,87,90-98,101-130,132,134,141
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f629372fcd611ab1f722a6d6b291ae0641e88a3c",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
