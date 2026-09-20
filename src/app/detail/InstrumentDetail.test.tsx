@@ -1,7 +1,13 @@
 import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import type {
+  AnalysisInput,
+  AnalysisProvider,
+  AnalysisResult,
+} from '../../domain/analysis'
 import type { Candle } from '../../domain/market-data'
+import type { PortfolioRepository } from '../../domain/portfolio'
 import {
   BTC_EUR,
   FakeMarketDataProvider,
@@ -249,5 +255,79 @@ describe('InstrumentDetail', () => {
     expect(mocks.series.setData).toHaveBeenLastCalledWith(
       toCandlestickDataset(TTWO_HISTORY),
     )
+  })
+})
+
+class FakeAnalysisProvider implements AnalysisProvider {
+  analyzeCall = vi.fn<(input: AnalysisInput) => Promise<AnalysisResult>>()
+  analyze = this.analyzeCall
+}
+
+function analysisResult(): AnalysisResult {
+  return {
+    instrumentId: 'BTC-EUR',
+    classification: 'neutral',
+    reasons: [
+      'No significant variation, volatility or position risk detected.',
+    ],
+    warnings: [],
+    volatility: {
+      lookbackCandles: 2,
+      averageTrueRangePercent: 2,
+      level: 'low',
+    },
+  }
+}
+
+describe('InstrumentDetail analysis integration', () => {
+  it('renders no Analyze button when analysis is not wired', () => {
+    const provider = new FakeMarketDataProvider(WATCHLIST_INSTRUMENTS, {
+      historyByInstrument: { 'BTC-EUR': BTC_HISTORY },
+    })
+    render(<InstrumentDetail provider={provider} instrument={BTC_EUR} />)
+    expect(
+      screen.queryByRole('button', { name: /analyze/i }),
+    ).not.toBeInTheDocument()
+  })
+
+  it('runs analysis on demand with the loaded candles and portfolio context', async () => {
+    const user = userEvent.setup()
+    const market = new FakeMarketDataProvider(WATCHLIST_INSTRUMENTS, {
+      historyByInstrument: { 'BTC-EUR': BTC_HISTORY },
+    })
+    const analysis = new FakeAnalysisProvider()
+    analysis.analyzeCall.mockResolvedValue(analysisResult())
+    const repository: PortfolioRepository = {
+      list: vi.fn().mockResolvedValue([]),
+      add: vi.fn(),
+      remove: vi.fn(),
+      clear: vi.fn(),
+    }
+    render(
+      <InstrumentDetail
+        provider={market}
+        instrument={BTC_EUR}
+        analysis={analysis}
+        portfolioRepository={repository}
+      />,
+    )
+
+    await waitFor(() => expect(mocks.createChart).toHaveBeenCalled())
+    act(() =>
+      market.emit(
+        makeQuote({ instrumentId: 'BTC-EUR', price: 60_000, status: 'mock' }),
+      ),
+    )
+    await user.click(screen.getByRole('button', { name: /analyze/i }))
+
+    await waitFor(() =>
+      expect(screen.getByText('neutral', { exact: true })).toBeInTheDocument(),
+    )
+    expect(analysis.analyzeCall).toHaveBeenCalledTimes(1)
+    const input = analysis.analyzeCall.mock.calls[0]![0]
+    expect(input.instrumentId).toBe('BTC-EUR')
+    expect(input.candles).toEqual(BTC_HISTORY)
+    expect(input.holding).toBeNull()
+    expect(repository.list).toHaveBeenCalledTimes(1)
   })
 })

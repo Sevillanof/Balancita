@@ -1,12 +1,16 @@
 import { useMemo } from 'react'
 import type {
+  Candle,
   Instrument,
   MarketDataProvider,
   Quote,
 } from '../../domain/market-data'
+import type { AnalysisProvider } from '../../domain/analysis'
+import type { PortfolioRepository } from '../../domain/portfolio'
 import { toCandlestickDataset } from '../chart/candlestick-data'
 import PriceChart from '../chart/PriceChart'
 import { formatChange, formatLocalTime, formatPrice } from '../format'
+import AnalysisPanel from './AnalysisPanel'
 import { useCandleHistory } from './useCandleHistory'
 import { useLatestQuote } from './useLatestQuote'
 import './detail.css'
@@ -14,13 +18,18 @@ import './detail.css'
 type InstrumentDetailProps = {
   provider: MarketDataProvider
   instrument: Instrument
+  analysis?: AnalysisProvider
+  portfolioRepository?: PortfolioRepository
 }
 
 const PLACEHOLDER = '—'
+const EMPTY_CANDLES: readonly Candle[] = []
 
 export default function InstrumentDetail({
   provider,
   instrument,
+  analysis,
+  portfolioRepository,
 }: InstrumentDetailProps) {
   const quote = useLatestQuote(provider, instrument.id)
   const history = useCandleHistory(provider, instrument.id)
@@ -56,6 +65,15 @@ export default function InstrumentDetail({
         </div>
       )}
       {history.status === 'ready' && <PriceChart data={chartData} />}
+      {analysis && portfolioRepository && (
+        <AnalysisPanel
+          analysis={analysis}
+          portfolioRepository={portfolioRepository}
+          instrument={instrument}
+          quote={quote}
+          candles={history.status === 'ready' ? history.candles : EMPTY_CANDLES}
+        />
+      )}
     </section>
   )
 }
