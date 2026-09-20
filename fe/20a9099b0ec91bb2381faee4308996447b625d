@@ -1,0 +1,35 @@
+src/app/alerts/AlertNotificationCenter.test.tsx
+  s_98a041e4d3bc3f::t_95b69f7a691e10 36,40,49-51,53,57,61,65,79-82,84
+src/app/alerts/AlertNotificationCenter.tsx
+  s_98a041e4d3bc3f::t_6db1f406ea5217 22-25,27-28,39-41,47
+src/app/alerts/AlertsScreen.test.tsx
+  s_98a041e4d3bc3f::t_b3e19cb5798f5b 44,47,49,63,75-77,81,91,94,96-105,112,131,134,136-144,147,168,171,175,196,220,230,246,249-259,271
+src/app/alerts/AlertsScreen.tsx
+  s_98a041e4d3bc3f::t_788cf2c5db59be 37,39,46,54-55,63,71,88,92-93,95,97-99,106,113,154,160,171,179,186-198,243,248,256,267,275-276,281,300,307,313,316
+src/app/portfolio/PortfolioScreen.test.tsx
+  s_98a041e4d3bc3f::t_fd185fd7119ee2 38-46,59,63,78,86-88,90,92-94,107-109,114,117-119,139-141,145,155,158,160-166,168,184,187,189-195,197,201,204,236,239-240,242,247,277,279-282,311,314-316,318-320,352,358,414,417,419-425,427
+src/app/portfolio/PortfolioScreen.tsx
+  s_98a041e4d3bc3f::t_36a501f088c2fc 76,78,85,93-94,102,110,130,134,136,139,142,145,148,151,153-154,161,168,282-284,292,299,310,318,361-362,400,408,424,443,449,468,475,481,484
+src/app/trade/TradeScreen.test.tsx
+  s_98a041e4d3bc3f::t_251f1c0bb39b7b 22,24,30-31,38,43,57,62-65,67-69,73,76-77,82,84,86,94,99,101-107,110-112,127,132-139,141,144,146-148,162,167,169
+src/app/trade/TradeScreen.tsx
+  s_98a041e4d3bc3f::t_09145d401e10f3 67-68,70,77,79,82,90,98,112,123-128,135,143,149,166,172,185,191,202-204,227,233,247-248,257,259,274-276,316-317,319-321,323,325,327,330,333,336,341,352,369,371,374-376,379,381-383,385,389,395,399,405-426
+src/app/watchlist/WatchlistScreen.test.tsx
+  s_98a041e4d3bc3f::t_b1d5630269ea84 14-20,29,66-68,84-86,89,102,106,109,148
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "fe20a9099b0ec91bb2381faee4308996447b625d",
+  "prompts": {},
+  "sessions": {
+    "s_98a041e4d3bc3f": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f3ff960aeffeBfLhF9kQ8tqofy",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
