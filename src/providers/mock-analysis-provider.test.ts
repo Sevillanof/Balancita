@@ -5,12 +5,7 @@ import {
   type AnalysisResult,
 } from '../domain/analysis'
 import { moneyFromString } from '../domain/money'
-import {
-  BTC_EUR,
-  SPCX,
-  makeCandle,
-  makeQuote,
-} from '../test/fake-market-data-provider'
+import { makeCandle, makeQuote } from '../test/fake-market-data-provider'
 import { MockAnalysisProvider } from './mock-analysis-provider'
 
 const provider = new MockAnalysisProvider()
