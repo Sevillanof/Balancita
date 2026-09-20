@@ -1,7 +1,8 @@
 # Balancita
 
-A local-first, mock-only personal trading workspace. Phase 0 provides the minimal
-project shell: no market data, no backend and no API keys are involved.
+A local-first, mock-only personal trading workspace. It renders a realtime mock
+watchlist and an instrument detail view with a candlestick chart. No backend, no
+API keys and no real market data are involved.
 
 ## Requirements
 
@@ -45,10 +46,20 @@ picks the next free port when 5173 is already in use.
 Tests run on jsdom with Testing Library and user-event. Test files live next to the
 code they verify (e.g. `src/App.test.tsx`).
 
-## Product scope (Phase 0)
+## Product scope (Phase 3)
 
-The screen identifies the product ("Balancita") and never requests credentials. There
-is no backend, no market data, no authentication and no global state in this phase.
-Future phases add deterministic mock market data, a watchlist and charts, as defined
-in `doc/personal-trading-app.md`, which is the single source of truth and must not be
-edited by tooling.
+The watchlist shows deterministic mock instruments with realtime mock quotes, and
+selecting an instrument opens a detail view with its price summary and a mock
+candlestick chart. The screen identifies the product ("Balancita") and never
+requests credentials. There is no backend, no authentication and no global state.
+The roadmap lives in `doc/personal-trading-app.md`, which is the single source of
+truth and must not be edited by tooling.
+
+## Chart attribution
+
+The candlestick chart is rendered with [Lightweight Charts] by TradingView, which is
+licensed under the Apache License 2.0 and requires attribution. The chart shows the
+TradingView attribution logo in the corner by default
+(`layout.attributionLogo`).
+
+[Lightweight Charts]: https://www.tradingview.com/lightweight-charts/
