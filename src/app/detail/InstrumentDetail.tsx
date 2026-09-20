@@ -25,15 +25,13 @@ export default function InstrumentDetail({
   const quote = useLatestQuote(provider, instrument.id)
   const history = useCandleHistory(provider, instrument.id)
   const chartData = useMemo(
-    () => (history.status === 'ready' ? toCandlestickDataset(history.candles) : []),
+    () =>
+      history.status === 'ready' ? toCandlestickDataset(history.candles) : [],
     [history.status, history.candles],
   )
 
   return (
-    <section
-      className="detail"
-      aria-label={`${instrument.symbol} details`}
-    >
+    <section className="detail" aria-label={`${instrument.symbol} details`}>
       <PriceSummary instrument={instrument} quote={quote} />
       {history.status === 'loading' && (
         <p role="status" aria-busy="true" className="detail__history-note">
@@ -57,9 +55,7 @@ export default function InstrumentDetail({
           </button>
         </div>
       )}
-      {history.status === 'ready' && (
-        <PriceChart data={chartData} />
-      )}
+      {history.status === 'ready' && <PriceChart data={chartData} />}
     </section>
   )
 }
@@ -84,7 +80,9 @@ function PriceSummary({
         <div className="detail__cell">
           <dt>Price</dt>
           <dd className="detail__price">
-            {hasQuote ? formatPrice(quote.price, instrument.currency) : PLACEHOLDER}
+            {hasQuote
+              ? formatPrice(quote.price, instrument.currency)
+              : PLACEHOLDER}
           </dd>
         </div>
         <div className="detail__cell">

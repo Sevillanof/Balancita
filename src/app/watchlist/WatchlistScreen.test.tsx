@@ -206,10 +206,7 @@ describe('WatchlistScreen selection', () => {
   it('renders symbol select buttons when onSelectInstrument is provided', async () => {
     const provider = new FakeMarketDataProvider(WATCHLIST_INSTRUMENTS)
     render(
-      <WatchlistScreen
-        provider={provider}
-        onSelectInstrument={() => {}}
-      />,
+      <WatchlistScreen provider={provider} onSelectInstrument={() => {}} />,
     )
 
     await waitFor(() =>
@@ -269,9 +266,7 @@ describe('WatchlistScreen selection', () => {
     )
 
     await user.tab()
-    expect(
-      screen.getByRole('button', { name: /BTC-EUR/ }),
-    ).toHaveFocus()
+    expect(screen.getByRole('button', { name: /BTC-EUR/ })).toHaveFocus()
     await user.keyboard('{Enter}')
     expect(onSelectInstrument).toHaveBeenCalledTimes(1)
 

@@ -86,9 +86,7 @@ describe('App', () => {
     expect(
       screen.getByRole('region', { name: /BTC-EUR details/i }),
     ).toBeInTheDocument()
-    await waitFor(() =>
-      expect(mocks.createChart).toHaveBeenCalledTimes(1),
-    )
+    await waitFor(() => expect(mocks.createChart).toHaveBeenCalledTimes(1))
 
     await user.click(screen.getByRole('button', { name: /TTWO/ }))
 

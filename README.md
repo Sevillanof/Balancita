@@ -29,17 +29,17 @@ picks the next free port when 5173 is already in use.
 
 ## Scripts
 
-| Command              | Description                         |
-| -------------------- | ----------------------------------- |
-| `pnpm dev`           | Start the Vite dev server with HMR  |
-| `pnpm test`          | Run the test suite once (Vitest)    |
-| `pnpm test:watch`    | Run tests in watch mode             |
-| `pnpm typecheck`     | Type-check the whole project (`tsc -b`) |
-| `pnpm lint`          | Lint with ESLint                    |
-| `pnpm format`        | Format all sources with Prettier    |
-| `pnpm format:check`  | Check formatting without writing    |
-| `pnpm build`         | Build the production bundle         |
-| `pnpm preview`       | Serve the production build locally  |
+| Command             | Description                             |
+| ------------------- | --------------------------------------- |
+| `pnpm dev`          | Start the Vite dev server with HMR      |
+| `pnpm test`         | Run the test suite once (Vitest)        |
+| `pnpm test:watch`   | Run tests in watch mode                 |
+| `pnpm typecheck`    | Type-check the whole project (`tsc -b`) |
+| `pnpm lint`         | Lint with ESLint                        |
+| `pnpm format`       | Format all sources with Prettier        |
+| `pnpm format:check` | Check formatting without writing        |
+| `pnpm build`        | Build the production bundle             |
+| `pnpm preview`      | Serve the production build locally      |
 
 ## Tests
 

@@ -20,14 +20,11 @@ export function useLatestQuote(
     let active = true
 
     try {
-      const release = provider.subscribe(
-        [instrumentId],
-        (incoming: Quote) => {
-          if (!active) return
-          if (incoming.instrumentId !== instrumentId) return
-          setLatest({ instrumentId, quote: incoming })
-        },
-      )
+      const release = provider.subscribe([instrumentId], (incoming: Quote) => {
+        if (!active) return
+        if (incoming.instrumentId !== instrumentId) return
+        setLatest({ instrumentId, quote: incoming })
+      })
 
       return () => {
         active = false

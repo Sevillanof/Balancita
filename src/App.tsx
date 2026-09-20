@@ -1,10 +1,7 @@
 import { useMemo, useState } from 'react'
 import WatchlistScreen from './app/watchlist/WatchlistScreen'
 import InstrumentDetail from './app/detail/InstrumentDetail'
-import type {
-  Instrument,
-  MarketDataProvider,
-} from './domain/market-data'
+import type { Instrument, MarketDataProvider } from './domain/market-data'
 import { DeterministicMockMarketDataProvider } from './providers/deterministic-mock-market-data'
 import './App.css'
 

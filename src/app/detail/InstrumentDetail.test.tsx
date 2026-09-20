@@ -154,9 +154,9 @@ describe('InstrumentDetail', () => {
     render(<InstrumentDetail provider={provider} instrument={BTC_EUR} />)
 
     await waitFor(() =>
-      expect(
-        screen.getByRole('alert'),
-      ).toHaveTextContent('Unable to load price history.'),
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        'Unable to load price history.',
+      ),
     )
     expect(mocks.createChart).not.toHaveBeenCalled()
 
@@ -183,7 +183,11 @@ describe('InstrumentDetail', () => {
       historyByInstrument: { 'BTC-EUR': BTC_HISTORY, TTWO: TTWO_HISTORY },
     })
     const { rerender } = render(
-      <InstrumentDetail key={BTC_EUR.id} provider={provider} instrument={BTC_EUR} />,
+      <InstrumentDetail
+        key={BTC_EUR.id}
+        provider={provider}
+        instrument={BTC_EUR}
+      />,
     )
 
     await waitFor(() => expect(mocks.createChart).toHaveBeenCalledTimes(1))
@@ -215,7 +219,11 @@ describe('InstrumentDetail', () => {
     provider.getHistory = getHistory as FakeMarketDataProvider['getHistory']
 
     const { rerender } = render(
-      <InstrumentDetail key={BTC_EUR.id} provider={provider} instrument={BTC_EUR} />,
+      <InstrumentDetail
+        key={BTC_EUR.id}
+        provider={provider}
+        instrument={BTC_EUR}
+      />,
     )
 
     rerender(
@@ -232,7 +240,9 @@ describe('InstrumentDetail', () => {
     )
 
     await act(async () => {
-      resolveByCall[0]?.([makeCandle({ time: '2020-01-01T00:00:00.000Z', close: 1 })])
+      resolveByCall[0]?.([
+        makeCandle({ time: '2020-01-01T00:00:00.000Z', close: 1 }),
+      ])
     })
 
     expect(screen.getByRole('heading', { name: 'TTWO' })).toBeInTheDocument()
