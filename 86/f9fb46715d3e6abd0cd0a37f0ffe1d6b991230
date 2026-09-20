@@ -1,0 +1,16 @@
+README.md
+  h_2f68313623be98 3-5,30-46,66-79
+docs/implementation-progress.md
+  h_2f68313623be98 26,256-257,315,328-393
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "86f9fb46715d3e6abd0cd0a37f0ffe1d6b991230",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
