@@ -1,25 +1,39 @@
 import type { Candle, Instrument, Quote } from '../../domain/market-data'
 import type { AnalysisProvider } from '../../domain/analysis'
 import type { PortfolioRepository } from '../../domain/portfolio'
-import { useAnalysis } from './useAnalysis'
+import type { AnalysisMode } from '../AnalysisModeToggle'
+import { useAnalysis, type AnalysisSource } from './useAnalysis'
 
 type AnalysisPanelProps = {
+  mode?: AnalysisMode
   analysis: AnalysisProvider
+  /** Local engine used when the primary provider fails. */
+  fallback?: AnalysisProvider
   portfolioRepository: PortfolioRepository
   instrument: Instrument
   quote: Quote | undefined
   candles: readonly Candle[]
 }
 
+function sourceLabel(mode: AnalysisMode, source: AnalysisSource): string | null {
+  if (mode === 'local') return 'Local'
+  if (source === 'preferred') return 'Gemini'
+  if (source === 'fallback') return 'Local'
+  return null
+}
+
 export default function AnalysisPanel({
+  mode = 'local',
   analysis,
+  fallback,
   portfolioRepository,
   instrument,
   quote,
   candles,
 }: AnalysisPanelProps) {
-  const { status, result, error, analyze } = useAnalysis({
+  const { status, result, error, source, warning, analyze } = useAnalysis({
     analysis,
+    fallback,
     portfolioRepository,
     instrument,
     quote,
@@ -27,13 +41,16 @@ export default function AnalysisPanel({
   })
   const waitingForQuote = quote === undefined
   const busy = status === 'loading'
+  const label = sourceLabel(mode, source)
 
   return (
     <section
       className="detail__analysis"
       aria-label={`${instrument.symbol} analysis`}
     >
-      <h3 className="detail__analysis-title">Local analysis</h3>
+      <h3 className="detail__analysis-title">
+        {mode === 'ai' ? 'AI analysis' : 'Local analysis'}
+      </h3>
       <button
         type="button"
         className="detail__analyze"
@@ -53,11 +70,19 @@ export default function AnalysisPanel({
           Unable to analyze: {error}. Click Analyze to retry.
         </p>
       )}
+      {warning !== null && (
+        <p role="alert" className="analysis__note analysis__note--warning">
+          {warning}
+        </p>
+      )}
       {status === 'ready' && result !== null && (
         <div
           className="analysis__result"
           data-classification={result.classification}
         >
+          {label !== null && (
+            <p className="analysis__source">Source: {label}</p>
+          )}
           <p className="analysis__verdict">
             Verdict:{' '}
             <span

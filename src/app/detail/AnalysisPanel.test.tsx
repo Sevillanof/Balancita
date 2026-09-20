@@ -165,6 +165,72 @@ describe('AnalysisPanel', () => {
   })
 })
 
+describe('AnalysisPanel AI mode', () => {
+  it('changes its title and source label in AI mode', async () => {
+    const user = userEvent.setup()
+    const analysis = new FakeAnalysisProvider()
+    analysis.analyzeCall.mockResolvedValue(resultFor())
+    render(
+      <AnalysisPanel
+        mode="ai"
+        analysis={analysis}
+        portfolioRepository={repositoryWithHoldings()}
+        instrument={BTC_EUR}
+        quote={makeQuote({ instrumentId: 'BTC-EUR' })}
+        candles={CANDLES}
+      />,
+    )
+
+    expect(screen.getByRole('heading', { name: /AI analysis/i })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /analyze/i }))
+    await waitFor(() =>
+      expect(screen.getByText('watch', { exact: true })).toBeInTheDocument(),
+    )
+    expect(screen.getByText(/source: gemini/i)).toBeInTheDocument()
+  })
+
+  it('labels a fallback result as local and surfaces a warning', async () => {
+    const user = userEvent.setup()
+    const analysis = new FakeAnalysisProvider()
+    analysis.analyzeCall.mockRejectedValue(new Error('gemini rate limited'))
+    const fallback = new FakeAnalysisProvider()
+    fallback.analyzeCall.mockResolvedValue(resultFor())
+    render(
+      <AnalysisPanel
+        mode="ai"
+        analysis={analysis}
+        fallback={fallback}
+        portfolioRepository={repositoryWithHoldings()}
+        instrument={BTC_EUR}
+        quote={makeQuote({ instrumentId: 'BTC-EUR' })}
+        candles={CANDLES}
+      />,
+    )
+
+    await user.click(screen.getByRole('button', { name: /analyze/i }))
+
+    await waitFor(() =>
+      expect(screen.getByText(/source: local/i)).toBeInTheDocument(),
+    )
+    expect(screen.getByRole('alert')).toHaveTextContent(/gemini rate limited/)
+    expect(fallback.analyzeCall).toHaveBeenCalledTimes(1)
+  })
+
+  it('stays titled Local analysis by default', () => {
+    render(
+      <AnalysisPanel
+        analysis={new FakeAnalysisProvider()}
+        portfolioRepository={repositoryWithHoldings()}
+        instrument={BTC_EUR}
+        quote={makeQuote({ instrumentId: 'BTC-EUR' })}
+        candles={CANDLES}
+      />,
+    )
+    expect(screen.getByRole('heading', { name: /local analysis/i })).toBeInTheDocument()
+  })
+})
+
 describe('AnalysisPanel / orders separation (source)', () => {
   it('never imports or references the order execution domain', async () => {
     const rawModules = import.meta.glob('./AnalysisPanel.tsx', {

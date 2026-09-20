@@ -20,6 +20,58 @@
   font-size: 1.125rem;
 }
 
+.app__header {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.app__ai-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.625rem;
+  margin-top: 0.5rem;
+  padding: 0.375rem 0.625rem;
+  border: 1px solid color-mix(in srgb, var(--text) 20%, transparent);
+  border-radius: 999px;
+}
+
+.app__ai-toggle-label {
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.app__ai-toggle-switch {
+  min-width: 3.25rem;
+  padding: 0.25rem 0.625rem;
+  font: inherit;
+  font-size: 0.8125rem;
+  font-weight: 700;
+  color: var(--text);
+  background: transparent;
+  border: 1px solid var(--text-muted);
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.app__ai-toggle-switch[aria-checked='true'] {
+  color: var(--bg);
+  background: var(--text);
+  border-color: var(--text);
+}
+
+.app__ai-toggle-switch:hover,
+.app__ai-toggle-switch:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--text) 40%, transparent);
+  outline-offset: 2px;
+}
+
+.app__ai-toggle-hint {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+}
+
 .app__tabs {
   display: flex;
   gap: 0.375rem;

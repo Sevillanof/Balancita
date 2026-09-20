@@ -7,6 +7,7 @@ import type {
 } from '../../domain/market-data'
 import type { AnalysisProvider } from '../../domain/analysis'
 import type { PortfolioRepository } from '../../domain/portfolio'
+import type { AnalysisMode } from '../AnalysisModeToggle'
 import { toCandlestickDataset } from '../chart/candlestick-data'
 import PriceChart from '../chart/PriceChart'
 import { formatChange, formatLocalTime, formatPrice } from '../format'
@@ -19,6 +20,8 @@ type InstrumentDetailProps = {
   provider: MarketDataProvider
   instrument: Instrument
   analysis?: AnalysisProvider
+  analysisMode?: AnalysisMode
+  analysisFallback?: AnalysisProvider
   portfolioRepository?: PortfolioRepository
 }
 
@@ -29,6 +32,8 @@ export default function InstrumentDetail({
   provider,
   instrument,
   analysis,
+  analysisMode = 'local',
+  analysisFallback,
   portfolioRepository,
 }: InstrumentDetailProps) {
   const quote = useLatestQuote(provider, instrument.id)
@@ -67,7 +72,9 @@ export default function InstrumentDetail({
       {history.status === 'ready' && <PriceChart data={chartData} />}
       {analysis && portfolioRepository && (
         <AnalysisPanel
+          mode={analysisMode}
           analysis={analysis}
+          fallback={analysisFallback}
           portfolioRepository={portfolioRepository}
           instrument={instrument}
           quote={quote}

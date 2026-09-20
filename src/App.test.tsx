@@ -253,3 +253,127 @@ describe('App analysis integration', () => {
     )
   })
 })
+
+describe('App AI analysis toggle', () => {
+  const localResult = (
+    overrides: Partial<AnalysisResult> = {},
+  ): AnalysisResult => ({
+    instrumentId: 'BTC-EUR',
+    classification: 'watch',
+    reasons: ['Latest quote moved up 2.50%; noteworthy move.'],
+    warnings: [],
+    volatility: {
+      lookbackCandles: 1,
+      averageTrueRangePercent: 2,
+      level: 'low',
+    },
+    ...overrides,
+  })
+
+  function renderAppWithGemini(
+    options: { geminiAnalysis?: AnalysisProvider } = {},
+  ) {
+    const historyByInstrument = Object.fromEntries(
+      WATCHLIST_INSTRUMENTS.map((instrument) => [
+        instrument.id,
+        [makeCandle({ time: '2024-01-01T00:00:00.000Z' })],
+      ]),
+    )
+    const provider = new FakeMarketDataProvider(WATCHLIST_INSTRUMENTS, {
+      historyByInstrument,
+    })
+    const analysis = new FakeAnalysisProvider()
+    analysis.analyzeCall.mockResolvedValue(localResult())
+    return {
+      provider,
+      analysis,
+      ...render(
+        <App
+          provider={provider}
+          analysis={analysis}
+          geminiAnalysis={options.geminiAnalysis}
+        />,
+      ),
+    }
+  }
+
+  async function openDetail(provider: FakeMarketDataProvider) {
+    const user = userEvent.setup()
+    await waitFor(() =>
+      expect(screen.getByRole('row', { name: /BTC-EUR/ })).toBeInTheDocument(),
+    )
+    await user.click(screen.getByRole('button', { name: /BTC-EUR/ }))
+    await waitFor(() => expect(mocks.createChart).toHaveBeenCalledTimes(1))
+    act(() => provider.emit(makeQuote({ instrumentId: 'BTC-EUR' })))
+  }
+
+  it('renders an AI switch that starts off', async () => {
+    renderAppWithGemini({ geminiAnalysis: new FakeAnalysisProvider() })
+
+    const toggle = await screen.findByRole('switch', { name: /ai analysis/i })
+    expect(toggle).toHaveAttribute('aria-checked', 'false')
+  })
+
+  it('keeps the AI switch available without exposing a browser key', async () => {
+    renderAppWithGemini()
+
+    const toggle = await screen.findByRole('switch', { name: /ai analysis/i })
+    expect(toggle).toBeEnabled()
+    expect(toggle).toHaveAttribute('aria-checked', 'false')
+  })
+
+  it('does not trigger any analysis by merely enabling AI mode', async () => {
+    const user = userEvent.setup()
+    const gemini = new FakeAnalysisProvider()
+    gemini.analyzeCall.mockResolvedValue(localResult())
+    const { analysis } = renderAppWithGemini({ geminiAnalysis: gemini })
+
+    const toggle = await screen.findByRole('switch', { name: /ai analysis/i })
+    await user.click(toggle)
+    expect(analysis.analyzeCall).not.toHaveBeenCalled()
+    expect(gemini.analyzeCall).not.toHaveBeenCalled()
+  })
+
+  it('runs the Gemini provider when AI is on and labels the source', async () => {
+    const user = userEvent.setup()
+    const gemini = new FakeAnalysisProvider()
+    gemini.analyzeCall.mockResolvedValue(localResult())
+    const { analysis, provider } = renderAppWithGemini({ geminiAnalysis: gemini })
+    await openDetail(provider)
+
+    const toggle = screen.getByRole('switch', { name: /ai analysis/i })
+    await user.click(toggle)
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /analyze/i })).toBeEnabled(),
+    )
+    await user.click(screen.getByRole('button', { name: /analyze/i }))
+
+    await waitFor(() =>
+      expect(screen.getByText(/source: gemini/i)).toBeInTheDocument(),
+    )
+    expect(gemini.analyzeCall).toHaveBeenCalledTimes(1)
+    expect(analysis.analyzeCall).not.toHaveBeenCalled()
+  })
+
+  it('falls back to the local provider when Gemini fails', async () => {
+    const user = userEvent.setup()
+    const gemini = new FakeAnalysisProvider()
+    gemini.analyzeCall.mockRejectedValue(new Error('gemini rate limited'))
+    const { analysis, provider } = renderAppWithGemini({ geminiAnalysis: gemini })
+    await openDetail(provider)
+
+    const toggle = screen.getByRole('switch', { name: /ai analysis/i })
+    await user.click(toggle)
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /analyze/i })).toBeEnabled(),
+    )
+    await user.click(screen.getByRole('button', { name: /analyze/i }))
+
+    await waitFor(() =>
+      expect(screen.getByText(/source: local/i)).toBeInTheDocument(),
+    )
+    expect(screen.getByRole('alert')).toHaveTextContent(/gemini rate limited/)
+    expect(gemini.analyzeCall).toHaveBeenCalledTimes(1)
+    expect(analysis.analyzeCall).toHaveBeenCalledTimes(1)
+  })
+})

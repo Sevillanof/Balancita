@@ -13,7 +13,10 @@ import type { AlertRepository } from './domain/alerts'
 import { LocalStoragePortfolioRepository } from './portfolio/local-storage-portfolio-repository'
 import { LocalStorageAlertRepository } from './alerts/local-storage-alert-repository'
 import { DeterministicMockMarketDataProvider } from './providers/deterministic-mock-market-data'
+import { GeminiAnalysisProvider } from './providers/gemini-analysis-provider'
 import { MockAnalysisProvider } from './providers/mock-analysis-provider'
+import { AnalysisModeToggle } from './app/AnalysisModeToggle'
+import type { AnalysisMode } from './app/AnalysisModeToggle'
 import './App.css'
 
 type AppView = 'watchlist' | 'portfolio' | 'trade' | 'alerts'
@@ -23,6 +26,8 @@ type AppProps = {
   portfolioRepository?: PortfolioRepository
   alertRepository?: AlertRepository
   analysis?: AnalysisProvider
+  /** Optional remote Gemini provider. When provided, the AI toggle is enabled. */
+  geminiAnalysis?: AnalysisProvider
 }
 
 function App({
@@ -30,6 +35,7 @@ function App({
   portfolioRepository,
   alertRepository,
   analysis,
+  geminiAnalysis,
 }: AppProps) {
   const defaultProvider = useMemo(
     () => new DeterministicMockMarketDataProvider(1),
@@ -44,22 +50,37 @@ function App({
     [],
   )
   const defaultAnalysis = useMemo(() => new MockAnalysisProvider(), [])
+  const defaultGeminiAnalysis = useMemo(
+    () =>
+      new GeminiAnalysisProvider(
+        import.meta.env.VITE_GEMINI_SERVER_URL ?? 'http://127.0.0.1:8787',
+      ),
+    [],
+  )
   const activeProvider = provider ?? defaultProvider
   const activePortfolioRepository =
     portfolioRepository ?? defaultPortfolioRepository
   const activeAlertRepository = alertRepository ?? defaultAlertRepository
   const activeAnalysis = analysis ?? defaultAnalysis
+  const activeGeminiAnalysis = geminiAnalysis ?? defaultGeminiAnalysis
   const alerts = useAlerts(activeProvider, activeAlertRepository)
   const [view, setView] = useState<AppView>('watchlist')
   const [selectedInstrument, setSelectedInstrument] =
     useState<Instrument | null>(null)
+  const [analysisMode, setAnalysisMode] = useState<AnalysisMode>('local')
+
+  const currentAnalysis =
+    analysisMode === 'ai' ? activeGeminiAnalysis : activeAnalysis
 
   return (
     <main className="app">
-      <h1>Balancita</h1>
-      <p className="tagline">
-        A local-first, mock-only personal trading workspace.
-      </p>
+      <header className="app__header">
+        <h1>Balancita</h1>
+        <p className="tagline">
+          A local-first, mock-only personal trading workspace.
+        </p>
+        <AnalysisModeToggle mode={analysisMode} onChange={setAnalysisMode} />
+      </header>
 
       <div role="tablist" aria-label="Workspace views" className="app__tabs">
         <button
@@ -130,7 +151,11 @@ function App({
               key={selectedInstrument.id}
               provider={activeProvider}
               instrument={selectedInstrument}
-              analysis={activeAnalysis}
+              analysis={currentAnalysis}
+              analysisMode={analysisMode}
+              analysisFallback={
+                analysisMode === 'ai' ? activeAnalysis : undefined
+              }
               portfolioRepository={activePortfolioRepository}
             />
           )}
