@@ -1,0 +1,42 @@
+.gitignore
+  h_2f68313623be98 1-24
+.prettierignore
+  h_2f68313623be98 1-5
+.prettierrc.json
+  h_2f68313623be98 1-5
+doc/guia-personal-trading-app.md
+  h_2f68313623be98 1-182
+doc/personal-trading-app.md
+  h_2f68313623be98 1-454
+eslint.config.js
+  h_2f68313623be98 1-22
+package.json
+  h_2f68313623be98 1-48
+pnpm-lock.yaml
+  h_2f68313623be98 1-2514
+src/main.tsx
+  h_2f68313623be98 1-10
+src/test/setup.ts
+  h_2f68313623be98 1
+tsconfig.app.json
+  h_2f68313623be98 1-26
+tsconfig.json
+  h_2f68313623be98 1-7
+tsconfig.node.json
+  h_2f68313623be98 1-23
+vite.config.ts
+  h_2f68313623be98 1-8
+vitest.config.ts
+  h_2f68313623be98 1-8
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "de42f106b0160f7abbee01d3e67b80c3a927d6f9",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
