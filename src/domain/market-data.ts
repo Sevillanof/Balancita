@@ -1,11 +1,13 @@
 export type InstrumentId = string
 
+export type InstrumentCurrency = 'EUR' | 'USD'
+
 export type Instrument = {
   id: InstrumentId
   symbol: string
   displayName: string
   assetClass: 'crypto' | 'equity' | 'etf' | 'unknown'
-  currency: 'EUR' | 'USD'
+  currency: InstrumentCurrency
   exchange?: string
   providerSymbols: Record<string, string>
 }

@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import PortfolioScreen from './app/portfolio/PortfolioScreen'
+import TradeScreen from './app/trade/TradeScreen'
 import WatchlistScreen from './app/watchlist/WatchlistScreen'
 import InstrumentDetail from './app/detail/InstrumentDetail'
 import AlertsScreen from './app/alerts/AlertsScreen'
@@ -13,7 +14,7 @@ import { LocalStorageAlertRepository } from './alerts/local-storage-alert-reposi
 import { DeterministicMockMarketDataProvider } from './providers/deterministic-mock-market-data'
 import './App.css'
 
-type AppView = 'watchlist' | 'portfolio' | 'alerts'
+type AppView = 'watchlist' | 'portfolio' | 'trade' | 'alerts'
 
 type AppProps = {
   provider?: MarketDataProvider
@@ -76,6 +77,17 @@ function App({ provider, portfolioRepository, alertRepository }: AppProps) {
         <button
           type="button"
           role="tab"
+          id="tab-trade"
+          aria-selected={view === 'trade'}
+          aria-controls="panel-trade"
+          className="app__tab"
+          onClick={() => setView('trade')}
+        >
+          Trade
+        </button>
+        <button
+          type="button"
+          role="tab"
           id="tab-alerts"
           aria-selected={view === 'alerts'}
           aria-controls="panel-alerts"
@@ -119,6 +131,15 @@ function App({ provider, portfolioRepository, alertRepository }: AppProps) {
           className="app__panel"
         >
           <AlertsScreen alerts={alerts} />
+        </section>
+      ) : view === 'trade' ? (
+        <section
+          role="tabpanel"
+          id="panel-trade"
+          aria-labelledby="tab-trade"
+          className="app__panel"
+        >
+          <TradeScreen provider={activeProvider} />
         </section>
       ) : (
         <section
