@@ -10,6 +10,7 @@ export type Instrument = {
   currency: InstrumentCurrency
   exchange?: string
   providerSymbols: Record<string, string>
+  providerMetadata?: Record<string, unknown>
 }
 
 export type Quote = {
