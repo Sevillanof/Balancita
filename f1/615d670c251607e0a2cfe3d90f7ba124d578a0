@@ -1,0 +1,33 @@
+server/src/app.test.ts
+  s_98a041e4d3bc3f::t_93c625b943feb0 11,15-16,118
+server/src/cache.test.ts
+  s_98a041e4d3bc3f::t_5c7abbdf17db4f 33,37-38
+server/src/service.test.ts
+  s_98a041e4d3bc3f::t_a9b6bea7359422 41,45-46,102-104,191-201
+server/src/wire.test.ts
+  s_98a041e4d3bc3f::t_afe8da55413a86 33,43-44,115-118,136
+server/src/wire.ts
+  s_98a041e4d3bc3f::t_f24773cc9f0354 41,46,54,59,175-183,191-196,221
+src/providers/gemini-analysis-provider.test.ts
+  s_98a041e4d3bc3f::t_772f144df15550 31,35-36,210-224
+src/providers/mock-analysis-provider.test.ts
+  s_98a041e4d3bc3f::t_9d85621082376b 78,80-83,86,160-162,201-203,215-217,224,227,243-244,248-298
+src/providers/mock-analysis-provider.ts
+  s_98a041e4d3bc3f::t_4b2cfa67ed87ae 8-11,27-29,41-44,52,65,67,72-78,83,90,110-163,260,266-274,276,278,280,285,289-293,296,298,300,302,304-308,310,320-321,326,331,335,338-340,343-345,352-362
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f1615d670c251607e0a2cfe3d90f7ba124d578a0",
+  "prompts": {},
+  "sessions": {
+    "s_98a041e4d3bc3f": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f3ff960aeffeBfLhF9kQ8tqofy",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
