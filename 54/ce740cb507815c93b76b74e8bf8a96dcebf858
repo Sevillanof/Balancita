@@ -1,0 +1,21 @@
+src/domain/money.test.ts
+  s_c3e016bc5e0487::t_7793a5f718e8a5 1-148
+src/domain/money.ts
+  s_c3e016bc5e0487::t_1c667400685428 1-232
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "54ce740cb507815c93b76b74e8bf8a96dcebf858",
+  "prompts": {},
+  "sessions": {
+    "s_c3e016bc5e0487": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f40ddf334ffeIhn7DpVpPzht2Z",
+        "model": "big-pickle"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
