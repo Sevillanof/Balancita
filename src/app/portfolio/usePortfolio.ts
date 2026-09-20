@@ -134,9 +134,7 @@ export function usePortfolio(
 
     return () => {
       release?.()
-      const held = new Set(
-        holdings.map((holding) => holding.instrumentId),
-      )
+      const held = new Set(holdings.map((holding) => holding.instrumentId))
       setQuotes((previous) => pruneQuotes(previous, held))
     }
   }, [provider, status, holdings, instruments])

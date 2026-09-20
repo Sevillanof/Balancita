@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { Instrument, MarketDataProvider, Quote } from '../domain/market-data'
+import type {
+  Instrument,
+  MarketDataProvider,
+  Quote,
+} from '../domain/market-data'
 import { DeterministicMockMarketDataProvider } from './deterministic-mock-market-data'
 
 const INSTRUMENT_IDS = ['BTC-EUR', 'TTWO', 'SPCX'] as const
@@ -14,9 +18,8 @@ describe('catalog', () => {
   })
 
   it('identifies BTC-EUR and TTWO with verified asset class, currency and exchange', async () => {
-    const instruments: Instrument[] = await new DeterministicMockMarketDataProvider(
-      1,
-    ).getInstruments()
+    const instruments: Instrument[] =
+      await new DeterministicMockMarketDataProvider(1).getInstruments()
     const byId = new Map(instruments.map((i) => [i.id, i]))
 
     expect(byId.get('BTC-EUR')).toMatchObject({
@@ -35,9 +38,8 @@ describe('catalog', () => {
   })
 
   it('keeps SPCX unconfirmed: unknown asset class, no exchange, no invented name', async () => {
-    const instruments: Instrument[] = await new DeterministicMockMarketDataProvider(
-      1,
-    ).getInstruments()
+    const instruments: Instrument[] =
+      await new DeterministicMockMarketDataProvider(1).getInstruments()
     const spcx = instruments.find((i) => i.id === 'SPCX')
 
     expect(spcx).toBeDefined()
@@ -48,7 +50,8 @@ describe('catalog', () => {
   })
 
   it('satisfies the MarketDataProvider contract', () => {
-    const provider: MarketDataProvider = new DeterministicMockMarketDataProvider(1)
+    const provider: MarketDataProvider =
+      new DeterministicMockMarketDataProvider(1)
     expect(typeof provider.getInstruments).toBe('function')
     expect(typeof provider.getHistory).toBe('function')
     expect(typeof provider.subscribe).toBe('function')
@@ -101,8 +104,12 @@ describe('history', () => {
       const history = await provider.getHistory(id)
 
       for (const candle of history) {
-        expect(candle.high).toBeGreaterThanOrEqual(Math.max(candle.open, candle.close))
-        expect(candle.low).toBeLessThanOrEqual(Math.min(candle.open, candle.close))
+        expect(candle.high).toBeGreaterThanOrEqual(
+          Math.max(candle.open, candle.close),
+        )
+        expect(candle.low).toBeLessThanOrEqual(
+          Math.min(candle.open, candle.close),
+        )
         expect(candle.high).toBeGreaterThanOrEqual(candle.low)
       }
     }
@@ -116,13 +123,17 @@ describe('history', () => {
       expect(time).toBe(new Date(time).toISOString())
 
       if (i > 0) {
-        expect(Date.parse(time)).toBeGreaterThan(Date.parse(history[i - 1].time))
+        expect(Date.parse(time)).toBeGreaterThan(
+          Date.parse(history[i - 1].time),
+        )
       }
     }
   })
 
   it('rejects unknown instruments explicitly', async () => {
-    await expect(provider.getHistory('NOPE')).rejects.toThrow(/unknown instrument/i)
+    await expect(provider.getHistory('NOPE')).rejects.toThrow(
+      /unknown instrument/i,
+    )
   })
 })
 
@@ -148,7 +159,9 @@ describe('subscribe', () => {
   it('stops emitting after cleanup', () => {
     const quotes: Quote[] = []
     const provider = new DeterministicMockMarketDataProvider(7)
-    const unsubscribe = provider.subscribe(['BTC-EUR'], (quote) => quotes.push(quote))
+    const unsubscribe = provider.subscribe(['BTC-EUR'], (quote) =>
+      quotes.push(quote),
+    )
 
     vi.advanceTimersByTime(1_000)
     expect(quotes).toHaveLength(1)
@@ -178,7 +191,9 @@ describe('subscribe', () => {
     const fixed = new Date('2026-01-05T12:34:56.789Z')
     const provider = new DeterministicMockMarketDataProvider(7, () => fixed)
     const quotes: Quote[] = []
-    const unsubscribe = provider.subscribe(['BTC-EUR'], (quote) => quotes.push(quote))
+    const unsubscribe = provider.subscribe(['BTC-EUR'], (quote) =>
+      quotes.push(quote),
+    )
 
     vi.advanceTimersByTime(1_000)
     unsubscribe()
@@ -189,7 +204,9 @@ describe('subscribe', () => {
   it('keeps change and changePercent consistent with the emitted price sequence', () => {
     const quotes: Quote[] = []
     const provider = new DeterministicMockMarketDataProvider(7)
-    const unsubscribe = provider.subscribe(['BTC-EUR'], (quote) => quotes.push(quote))
+    const unsubscribe = provider.subscribe(['BTC-EUR'], (quote) =>
+      quotes.push(quote),
+    )
 
     vi.advanceTimersByTime(3_000)
     unsubscribe()
