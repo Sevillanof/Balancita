@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Candle, Instrument, Quote } from '../../domain/market-data'
 import type { AnalysisProvider, AnalysisResult } from '../../domain/analysis'
 import { analysisInputFrom } from '../../domain/analysis'
@@ -40,7 +40,9 @@ export function useAnalysis({
 
   const requestIdRef = useRef(0)
   const instrumentIdRef = useRef(instrument.id)
-  instrumentIdRef.current = instrument.id
+  useEffect(() => {
+    instrumentIdRef.current = instrument.id
+  }, [instrument.id])
 
   const analyze = useCallback(async (): Promise<void> => {
     if (quote === undefined) return
