@@ -58,7 +58,7 @@ describe('PriceChart', () => {
     renderChart([])
 
     expect(screen.getByRole('status')).toHaveTextContent(
-      'No chart data available.',
+      'No hay datos de gráfico disponibles.',
     )
     expect(mocks.createChart).not.toHaveBeenCalled()
   })
@@ -108,7 +108,7 @@ describe('PriceChart', () => {
 
     expect(mocks.chart.remove).toHaveBeenCalledTimes(1)
     expect(screen.getByRole('status')).toHaveTextContent(
-      'No chart data available.',
+      'No hay datos de gráfico disponibles.',
     )
   })
 

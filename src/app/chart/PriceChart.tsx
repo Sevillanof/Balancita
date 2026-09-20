@@ -12,7 +12,7 @@ type PriceChartProps = {
   data: readonly CandlestickData[]
 }
 
-const EMPTY_MESSAGE = 'No chart data available.'
+const EMPTY_MESSAGE = 'No hay datos de gráfico disponibles.'
 
 type Palette = {
   background: string
@@ -135,7 +135,7 @@ export default function PriceChart({ data }: PriceChartProps) {
       data-testid="price-chart"
       className="chart__container"
       role="img"
-      aria-label="Price chart"
+      aria-label="Gráfico de precio"
     />
   )
 }

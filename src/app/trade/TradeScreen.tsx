@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type {
   InstrumentCurrency,
+  InstrumentId,
   MarketDataProvider,
 } from '../../domain/market-data'
 import {
@@ -15,6 +16,8 @@ import {
   type OrderReceipt,
   type OrderSide,
 } from '../../domain/orders'
+import type { PortfolioRepository } from '../../domain/portfolio'
+import type { OrderSimulatorConfig } from '../../domain/orders'
 import {
   formatPrice,
   formatPriceMoney,
@@ -26,15 +29,31 @@ import './trade.css'
 
 type TradeScreenProps = {
   provider: MarketDataProvider
+  portfolioRepository?: PortfolioRepository
+  initialInstrumentId?: InstrumentId
+  onAccountChanged?: () => void
+  simulatorOptions?: Partial<OrderSimulatorConfig> & { now?: () => number }
 }
 
 function asCurrency(value: string): InstrumentCurrency {
   return value === 'USD' ? 'USD' : 'EUR'
 }
 
-export default function TradeScreen({ provider }: TradeScreenProps) {
-  const trading = useTrading(provider)
+export default function TradeScreen({
+  provider,
+  portfolioRepository,
+  initialInstrumentId,
+  onAccountChanged,
+  simulatorOptions,
+}: TradeScreenProps) {
+  const trading = useTrading(provider, {
+    portfolioRepository,
+    initialInstrumentId,
+    simulatorOptions,
+  })
   const [quantity, setQuantity] = useState('')
+  const [cashAmount, setCashAmount] = useState('')
+  const [cashError, setCashError] = useState<string | null>(null)
   const quantityOk = isPositiveMoneyInput(quantity)
   const selectedCurrency = trading.selectedInstrument?.currency
   const cash =
@@ -54,7 +73,32 @@ export default function TradeScreen({ provider }: TradeScreenProps) {
   }
 
   const handleConfirm = async () => {
-    await trading.confirmOrder()
+    const confirmed = await trading.confirmOrder()
+    if (confirmed) onAccountChanged?.()
+  }
+
+  const handleCashMovement = async (type: 'deposit' | 'withdrawal') => {
+    if (!selectedCurrency || !isPositiveMoneyInput(cashAmount)) return
+    setCashError(null)
+    try {
+      const movement =
+        type === 'deposit'
+          ? await trading.deposit(selectedCurrency, moneyFromString(cashAmount))
+          : await trading.withdraw(
+              selectedCurrency,
+              moneyFromString(cashAmount),
+            )
+      if (movement !== null) {
+        setCashAmount('')
+        onAccountChanged?.()
+      }
+    } catch (error) {
+      setCashError(
+        error instanceof Error
+          ? error.message
+          : 'No se pudo registrar el movimiento virtual.',
+      )
+    }
   }
 
   const handleNewOrder = () => {
@@ -96,18 +140,25 @@ export default function TradeScreen({ provider }: TradeScreenProps) {
       >
         <div className="trade__field">
           <label htmlFor="trade-instrument">Instrumento</label>
-          <select
-            id="trade-instrument"
-            value={trading.selectedInstrumentId}
-            onChange={(event) => trading.selectInstrument(event.target.value)}
-          >
-            {trading.instruments.map((instrument) => (
-              <option key={instrument.id} value={instrument.id}>
-                {instrument.symbol} — {instrument.displayName} (
-                {instrument.currency})
-              </option>
-            ))}
-          </select>
+          {initialInstrumentId !== undefined ? (
+            <p id="trade-instrument" className="trade__instrument-fixed">
+              {trading.selectedInstrument?.symbol ?? initialInstrumentId} ·
+              Operación simulada
+            </p>
+          ) : (
+            <select
+              id="trade-instrument"
+              value={trading.selectedInstrumentId}
+              onChange={(event) => trading.selectInstrument(event.target.value)}
+            >
+              {trading.instruments.map((instrument) => (
+                <option key={instrument.id} value={instrument.id}>
+                  {instrument.symbol} — {instrument.displayName} (
+                  {instrument.currency})
+                </option>
+              ))}
+            </select>
+          )}
           <p className="trade__price">
             Precio en vivo:{' '}
             {price === null
@@ -144,6 +195,11 @@ export default function TradeScreen({ provider }: TradeScreenProps) {
             </button>
           </div>
         </div>
+
+        <p className="trade__fee-note">
+          Comisión: escenario de desarrollo configurable, actualmente sin
+          comisión real.
+        </p>
 
         <div className="trade__field">
           <label htmlFor="trade-quantity">Cantidad</label>
@@ -206,6 +262,79 @@ export default function TradeScreen({ provider }: TradeScreenProps) {
         </div>
       </form>
 
+      <section className="trade__cash-movements" aria-label="Saldo virtual">
+        <h3 className="trade__history-title">Saldo virtual</h3>
+        <p>
+          Los depósitos y retiros son simulados y sólo modifican el ledger
+          local.
+        </p>
+        <label htmlFor="virtual-cash-amount">
+          Importe virtual ({selectedCurrency ?? 'EUR'})
+        </label>
+        <input
+          id="virtual-cash-amount"
+          type="number"
+          min="0.01"
+          step="any"
+          value={cashAmount}
+          onChange={(event) => setCashAmount(event.target.value)}
+        />
+        <div className="trade__actions">
+          <button
+            type="button"
+            className="trade__secondary"
+            disabled={!isPositiveMoneyInput(cashAmount)}
+            onClick={() => void handleCashMovement('deposit')}
+          >
+            Depositar virtualmente
+          </button>
+          <button
+            type="button"
+            className="trade__secondary"
+            disabled={!isPositiveMoneyInput(cashAmount)}
+            onClick={() => void handleCashMovement('withdrawal')}
+          >
+            Retirar virtualmente
+          </button>
+        </div>
+        {cashError && (
+          <p role="alert" className="trade__field-error">
+            {formatTradingMessage(cashError)}
+          </p>
+        )}
+        {trading.account && (trading.account.movements ?? []).length > 0 && (
+          <ul
+            className="trade__movement-list"
+            aria-label="Movimientos virtuales recientes"
+          >
+            {[...(trading.account.movements ?? [])]
+              .reverse()
+              .slice(0, 5)
+              .map((movement) => (
+                <li key={movement.id}>
+                  <span>
+                    {movement.type === 'deposit' ? 'Depósito' : 'Retiro'}{' '}
+                    {movement.id}
+                  </span>
+                  <span>
+                    {formatPriceMoney(
+                      movement.amount,
+                      asCurrency(movement.currency),
+                    )}
+                  </span>
+                  <span>
+                    Saldo:{' '}
+                    {formatPriceMoney(
+                      movement.balance,
+                      asCurrency(movement.currency),
+                    )}
+                  </span>
+                </li>
+              ))}
+          </ul>
+        )}
+      </section>
+
       {trading.preview && (
         <OrderSummary
           side={trading.preview.side}
@@ -217,6 +346,7 @@ export default function TradeScreen({ provider }: TradeScreenProps) {
           commission={trading.preview.commission}
           subtotal={trading.preview.subtotal}
           total={trading.preview.estimatedTotal}
+          feePolicyLabel={trading.preview.feePolicy?.label}
           confirming={trading.confirming}
           onConfirm={() => void handleConfirm()}
         />
@@ -297,6 +427,7 @@ function OrderSummary({
   commission,
   subtotal,
   total,
+  feePolicyLabel,
   confirming,
   onConfirm,
 }: {
@@ -309,6 +440,7 @@ function OrderSummary({
   commission: Money
   subtotal: Money
   total: Money
+  feePolicyLabel?: string
   confirming: boolean
   onConfirm: () => void
 }) {
@@ -335,6 +467,11 @@ function OrderSummary({
           {isMoneyZero(commission)
             ? 'ninguna'
             : formatPriceMoney(commission, currency)}
+        </dd>
+        <dt>Cómo se calculó</dt>
+        <dd>
+          {feePolicyLabel ??
+            'Escenario de desarrollo: comisión fija configurada localmente'}
         </dd>
         <dt>Subtotal</dt>
         <dd>{formatPriceMoney(subtotal, currency)}</dd>

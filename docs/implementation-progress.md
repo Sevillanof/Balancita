@@ -460,6 +460,58 @@ local/internal use only; the restriction must be reviewed before exposing the
 Coinbase mode to external users or publishing its prices, charts, or derived
 analytics.
 
+## Iteración recomendada — pantalla única BTC-EUR con paper trading realista
+
+Implementada el 2026-09-20 sin avanzar a broker, dinero real, Revolut, Wise,
+Trade Republic ni las fases 10, 11 o 12.
+
+- **Dashboard único BTC-EUR**: `src/app/BtcEurDashboard.tsx` reemplaza la
+  navegación principal por una composición vertical accesible. Al abrir, BTC-EUR
+  ya está seleccionado y quedan visibles cotización, gráfico, análisis, ticket,
+  situación de cartera, movimientos y alertas secundarias. TTWO y SPCX sólo
+  aparecen en el laboratorio mock colapsable.
+- **Provider de referencia compartido**: `App` entrega la misma instancia de
+  `MarketDataProvider` al detalle y al ticket. `useTrading` ingiere la cotización
+  desde esa suscripción antes de enviarla a `LocalPaperTradingProvider`; Coinbase
+  sigue siendo lectura pública y nunca implementa `OrderExecutionProvider` ni
+  endpoints de órdenes.
+- **`FeePolicy`**: `src/domain/orders.ts` expresa porcentaje como `Money`
+  fraccional (`0.001` = 0,1%), mínimo y moneda. El default documentado es
+  `ZERO_FEE_POLICY` (`Desarrollo: comisión cero (no real)`); puede reemplazarse
+  mediante `simulatorOptions.feePolicy`. Se conserva el escenario legacy de
+  comisión fija para dobles existentes. El preview muestra precio, cantidad,
+  subtotal, deslizamiento, comisión, total y política aplicada; la cantidad de
+  BTC es el flujo implementado y el importe en EUR queda como extensión futura.
+- **Ledger virtual**: `balancita:simulator` migra de v1 a v2 y agrega
+  movimientos append-only `{id, type, currency, amount, timestamp, note, balance}`
+  con reloj inyectable, depósitos/retiros positivos, moneda soportada, saldo
+  suficiente, validación estricta de payload e idempotencia opcional. Las órdenes
+  siguen aisladas en `history`, con preview, confirmación e idempotencia propios.
+- **Análisis local continuo**: `useAnalysis` admite debounce configurable,
+  deduplicación por entrada efectiva, cleanup, metadata de cotización/velas,
+  antigüedad y estado stale. Sólo el provider local se actualiza automáticamente;
+  Gemini sigue manual, opcional y apagado por defecto. Ningún resultado puede
+  ejecutar órdenes.
+- **UI y límites**: la interfaz permanece en español neutral, conserva estados
+  loading/error/empty/stale y foco visible, y muestra persistentemente `Datos
+reales`, `Datos simulados` y `Operación simulada`. No se agregó una librería
+  visual ni una integración financiera.
+
+### Criterios de esta iteración
+
+- ✅ BTC-EUR aparece seleccionado y todas las superficies principales son
+  accesibles sin pestañas.
+- ✅ Detalle y preview consumen el mismo provider de referencia activo.
+- ✅ Preview, confirmación humana, idempotencia, auditoría y aislamiento de
+  ejecución permanecen activos.
+- ✅ FeePolicy, ledger virtual, persistencia versionada y análisis local continuo
+  tienen pruebas de dominio, integración y cleanup.
+- ✅ La suite frontend, typecheck, lint, build y formato se mantienen como gates
+  obligatorios; el servidor no fue modificado.
+- ⏸ El importe en EUR para órdenes por valor queda preparado pero no implementado.
+- ⏸ Revisión visual manual responsive y con Coinbase real sigue pendiente; no se
+  considera cubierta por jsdom.
+
 ## 9. How to resume
 
 1. Read `doc/personal-trading-app.md` (read-only) for the exact prompt of the

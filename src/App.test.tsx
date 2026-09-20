@@ -32,9 +32,10 @@ vi.mock('lightweight-charts', () => ({
 
 beforeEach(() => {
   vi.clearAllMocks()
+  window.localStorage.clear()
 })
 
-function renderApp() {
+function renderApp(options: { analysis?: AnalysisProvider } = {}) {
   const historyByInstrument = Object.fromEntries(
     WATCHLIST_INSTRUMENTS.map((instrument) => [
       instrument.id,
@@ -44,226 +45,24 @@ function renderApp() {
   const provider = new FakeMarketDataProvider(WATCHLIST_INSTRUMENTS, {
     historyByInstrument,
   })
-  return { provider, ...render(<App provider={provider} />) }
-}
-
-describe('App', () => {
-  it('renders the Balancita product identity', () => {
-    renderApp()
-
-    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(
-      'Balancita',
-    )
-  })
-
-  it('does not ask for credentials, keys or secrets', () => {
-    renderApp()
-
-    expect(
-      screen.queryByLabelText(/api key|secret|token|password|credential/i),
-    ).not.toBeInTheDocument()
-    expect(
-      screen.queryByPlaceholderText(/api key|secret|token|password|key/i),
-    ).not.toBeInTheDocument()
-    expect(screen.queryByRole('textbox')).not.toBeInTheDocument()
-  })
-
-  it('shows no detail until an instrument is selected', async () => {
-    renderApp()
-
-    await waitFor(() =>
-      expect(screen.getByRole('row', { name: /BTC-EUR/ })).toBeInTheDocument(),
-    )
-    expect(
-      screen.queryByRole('region', { name: /details$/i }),
-    ).not.toBeInTheDocument()
-    expect(mocks.createChart).not.toHaveBeenCalled()
-  })
-
-  it('renders the detail for the selected instrument and swaps it', async () => {
-    const user = userEvent.setup()
-    renderApp()
-
-    await waitFor(() =>
-      expect(screen.getByRole('row', { name: /BTC-EUR/ })).toBeInTheDocument(),
-    )
-
-    await user.click(screen.getByRole('button', { name: /BTC-EUR/ }))
-
-    expect(
-      screen.getByRole('region', { name: /BTC-EUR details/i }),
-    ).toBeInTheDocument()
-    await waitFor(() => expect(mocks.createChart).toHaveBeenCalledTimes(1))
-
-    await user.click(screen.getByRole('button', { name: /TTWO/ }))
-
-    expect(
-      screen.getByRole('region', { name: /TTWO details/i }),
-    ).toBeInTheDocument()
-    await waitFor(() => expect(mocks.chart.remove).toHaveBeenCalledTimes(1))
-    await waitFor(() => expect(mocks.createChart).toHaveBeenCalledTimes(2))
-    await waitFor(() =>
-      expect(mocks.series.setData).toHaveBeenLastCalledWith(
-        expect.arrayContaining([expect.any(Object)]),
-      ),
-    )
-  })
-})
-
-describe('App workspace tabs', () => {
-  function renderApp() {
-    const historyByInstrument = Object.fromEntries(
-      WATCHLIST_INSTRUMENTS.map((instrument) => [
-        instrument.id,
-        [makeCandle({ time: '2024-01-01T00:00:00.000Z' })],
-      ]),
-    )
-    const provider = new FakeMarketDataProvider(WATCHLIST_INSTRUMENTS, {
-      historyByInstrument,
-    })
-    const portfolioRepository = new LocalStoragePortfolioRepository()
-    return {
-      provider,
-      ...render(
-        <App provider={provider} portfolioRepository={portfolioRepository} />,
-      ),
-    }
+  return {
+    provider,
+    ...render(
+      <App
+        provider={provider}
+        portfolioRepository={new LocalStoragePortfolioRepository()}
+        analysis={options.analysis}
+      />,
+    ),
   }
-
-  it('renders Lista de seguimiento and Cartera tabs and starts on Lista de seguimiento', async () => {
-    renderApp()
-
-    await waitFor(() =>
-      expect(screen.getByRole('row', { name: /BTC-EUR/ })).toBeInTheDocument(),
-    )
-
-    const watchlistTab = screen.getByRole('tab', {
-      name: /lista de seguimiento/i,
-    })
-    const portfolioTab = screen.getByRole('tab', { name: /cartera/i })
-    expect(watchlistTab).toHaveAttribute('aria-selected', 'true')
-    expect(portfolioTab).toHaveAttribute('aria-selected', 'false')
-    expect(
-      screen.getByRole('table', { name: /precios en tiempo real/i }),
-    ).toBeInTheDocument()
-  })
-
-  it('switches to the Operar tab and shows the paper trading workspace', async () => {
-    const user = userEvent.setup()
-    const { provider } = renderApp()
-
-    await waitFor(() =>
-      expect(screen.getByRole('tab', { name: /operar/i })).toBeInTheDocument(),
-    )
-    await waitFor(() => expect(provider.getInstrumentsCalls).toBe(2))
-
-    await user.click(screen.getByRole('tab', { name: /operar/i }))
-
-    expect(screen.getByRole('heading', { name: 'Operar' })).toBeInTheDocument()
-    expect(screen.getByLabelText('Orden del simulador')).toBeInTheDocument()
-    expect(provider.getInstrumentsCalls).toBe(2)
-    expect(screen.getByRole('tab', { name: /operar/i })).toHaveAttribute(
-      'aria-selected',
-      'true',
-    )
-  })
-
-  it('switches to the Portfolio tab and back with the keyboard', async () => {
-    const user = userEvent.setup()
-    renderApp()
-
-    await waitFor(() =>
-      expect(screen.getByRole('tab', { name: /cartera/i })).toBeInTheDocument(),
-    )
-
-    await user.click(screen.getByRole('tab', { name: /cartera/i }))
-
-    expect(screen.getByRole('heading', { name: 'Cartera' })).toBeInTheDocument()
-    expect(screen.getByText('Todavía no hay posiciones.')).toBeInTheDocument()
-    expect(
-      screen.queryByRole('table', { name: /precios en tiempo real/i }),
-    ).not.toBeInTheDocument()
-
-    await user.click(screen.getByRole('tab', { name: /lista de seguimiento/i }))
-    await waitFor(() =>
-      expect(
-        screen.getByRole('table', { name: /precios en tiempo real/i }),
-      ).toBeInTheDocument(),
-    )
-  })
-})
-
-class FakeAnalysisProvider implements AnalysisProvider {
-  analyzeCall = vi.fn<(input: AnalysisInput) => Promise<AnalysisResult>>()
-  analyze = this.analyzeCall
 }
 
-describe('App analysis integration', () => {
-  it('runs analysis only on the user click, never on arriving quotes', async () => {
-    const user = userEvent.setup()
-    const analysis = new FakeAnalysisProvider()
-    analysis.analyzeCall.mockResolvedValue({
-      instrumentId: 'BTC-EUR',
-      classification: 'watch',
-      recommendation: 'hold',
-      reasons: ['Latest quote moved up 2.50%; noteworthy move.'],
-      warnings: [],
-      volatility: {
-        lookbackCandles: 1,
-        averageTrueRangePercent: 2,
-        level: 'low',
-      },
-      disclaimer: 'Recomendación educativa: no ejecuta órdenes.',
-    })
-    const historyByInstrument = Object.fromEntries(
-      WATCHLIST_INSTRUMENTS.map((instrument) => [
-        instrument.id,
-        [makeCandle({ time: '2024-01-01T00:00:00.000Z' })],
-      ]),
-    )
-    const provider = new FakeMarketDataProvider(WATCHLIST_INSTRUMENTS, {
-      historyByInstrument,
-    })
-    render(<App provider={provider} analysis={analysis} />)
-
-    await waitFor(() =>
-      expect(screen.getByRole('row', { name: /BTC-EUR/ })).toBeInTheDocument(),
-    )
-    await user.click(screen.getByRole('button', { name: /BTC-EUR/ }))
-    await waitFor(() => expect(mocks.createChart).toHaveBeenCalledTimes(1))
-
-    expect(analysis.analyzeCall).not.toHaveBeenCalled()
-
-    act(() =>
-      provider.emit(makeQuote({ instrumentId: 'BTC-EUR', price: 60_000 })),
-    )
-    expect(analysis.analyzeCall).not.toHaveBeenCalled()
-
-    const analyzeButton = screen.getByRole('button', { name: /analizar/i })
-    expect(analyzeButton).toBeEnabled()
-    await user.click(analyzeButton)
-
-    await waitFor(() =>
-      expect(screen.getByText('Vigilar', { exact: true })).toBeInTheDocument(),
-    )
-    expect(analysis.analyzeCall).toHaveBeenCalledTimes(1)
-    const input = analysis.analyzeCall.mock.calls[0]![0]
-    expect(input.instrumentId).toBe('BTC-EUR')
-    expect(screen.getByRole('tab', { name: /operar/i })).toHaveAttribute(
-      'aria-selected',
-      'false',
-    )
-  })
-})
-
-describe('App AI analysis toggle', () => {
-  const localResult = (
-    overrides: Partial<AnalysisResult> = {},
-  ): AnalysisResult => ({
+function localResult(overrides: Partial<AnalysisResult> = {}): AnalysisResult {
+  return {
     instrumentId: 'BTC-EUR',
     classification: 'watch',
     recommendation: 'hold',
-    reasons: ['Latest quote moved up 2.50%; noteworthy move.'],
+    reasons: ['La cotización requiere observación.'],
     warnings: [],
     volatility: {
       lookbackCandles: 1,
@@ -272,124 +71,139 @@ describe('App AI analysis toggle', () => {
     },
     disclaimer: 'Recomendación educativa: no ejecuta órdenes.',
     ...overrides,
+  }
+}
+
+class FakeAnalysisProvider implements AnalysisProvider {
+  analyzeCall = vi.fn<(input: AnalysisInput) => Promise<AnalysisResult>>()
+  analyze = this.analyzeCall
+}
+
+describe('dashboard BTC-EUR', () => {
+  it('starts with one accessible BTC-EUR dashboard and no tab navigation', async () => {
+    renderApp()
+
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(
+      'Balancita',
+    )
+    expect(
+      await screen.findAllByRole('heading', { name: 'BTC-EUR' }),
+    ).toHaveLength(2)
+    expect(screen.queryByRole('tablist')).not.toBeInTheDocument()
+    expect(screen.getByText('Datos simulados')).toBeInTheDocument()
+    expect(screen.getByText('Operación simulada.')).toBeInTheDocument()
+    expect(
+      await screen.findByRole('form', { name: 'Orden del simulador' }),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole('heading', { name: 'Efectivo y posición' }),
+    ).toBeInTheDocument()
+    expect(screen.getByText('Alertas BTC-EUR')).toBeInTheDocument()
   })
 
-  function renderAppWithGemini(
-    options: { geminiAnalysis?: AnalysisProvider } = {},
-  ) {
+  it('uses the active market provider price for the dashboard and paper preview', async () => {
+    const user = userEvent.setup()
+    const { provider } = renderApp()
+
+    await screen.findAllByRole('heading', { name: 'BTC-EUR' })
+    await waitFor(() =>
+      expect(provider.subscribeCalls.length).toBeGreaterThanOrEqual(3),
+    )
+    act(() =>
+      provider.emit(makeQuote({ instrumentId: 'BTC-EUR', price: 60_000 })),
+    )
+
+    await waitFor(() =>
+      expect(
+        screen.getByText(
+          (_, element) => element?.textContent === 'Precio en vivo: €60,000.00',
+        ),
+      ).toBeInTheDocument(),
+    )
+    await user.type(screen.getByLabelText('Cantidad'), '0.1')
+    await user.click(
+      screen.getByRole('button', { name: 'Vista previa de la orden' }),
+    )
+
+    const preview = await screen.findByRole('region', {
+      name: 'Vista previa de la orden',
+    })
+    expect(preview).toHaveTextContent('€60,000.00')
+    expect(preview).toHaveTextContent('€6,000.00')
+  })
+
+  it('updates local analysis automatically but never changes the order flow', async () => {
+    const analysis = new FakeAnalysisProvider()
+    analysis.analyzeCall.mockResolvedValue(localResult())
+    const { provider } = renderApp({ analysis })
+
+    await screen.findAllByRole('heading', { name: 'BTC-EUR' })
+    await waitFor(() =>
+      expect(provider.subscribeCalls.length).toBeGreaterThanOrEqual(3),
+    )
+    act(() =>
+      provider.emit(makeQuote({ instrumentId: 'BTC-EUR', price: 60_000 })),
+    )
+
+    await waitFor(() => expect(analysis.analyzeCall).toHaveBeenCalledTimes(1))
+    expect(
+      screen.queryByRole('button', { name: 'Confirmar orden' }),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.getByRole('form', { name: 'Orden del simulador' }),
+    ).toBeInTheDocument()
+  })
+
+  it('does not expose credentials or secrets', () => {
+    renderApp()
+    expect(
+      screen.queryByLabelText(/api key|secret|token|password|credential/i),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByPlaceholderText(/api key|secret|token|password|key/i),
+    ).not.toBeInTheDocument()
+  })
+})
+
+describe('dashboard Gemini boundary', () => {
+  it('keeps Gemini off and manual even when the local dashboard is automatic', async () => {
+    const user = userEvent.setup()
+    const local = new FakeAnalysisProvider()
+    const gemini = new FakeAnalysisProvider()
+    local.analyzeCall.mockResolvedValue(localResult())
+    gemini.analyzeCall.mockResolvedValue(localResult())
     const historyByInstrument = Object.fromEntries(
       WATCHLIST_INSTRUMENTS.map((instrument) => [
         instrument.id,
-        [makeCandle({ time: '2024-01-01T00:00:00.000Z' })],
+        [makeCandle()],
       ]),
     )
     const provider = new FakeMarketDataProvider(WATCHLIST_INSTRUMENTS, {
       historyByInstrument,
     })
-    const analysis = new FakeAnalysisProvider()
-    analysis.analyzeCall.mockResolvedValue(localResult())
-    return {
-      provider,
-      analysis,
-      ...render(
-        <App
-          provider={provider}
-          analysis={analysis}
-          geminiAnalysis={options.geminiAnalysis}
-        />,
-      ),
-    }
-  }
-
-  async function openDetail(provider: FakeMarketDataProvider) {
-    const user = userEvent.setup()
-    await waitFor(() =>
-      expect(screen.getByRole('row', { name: /BTC-EUR/ })).toBeInTheDocument(),
+    render(
+      <App
+        provider={provider}
+        analysis={local}
+        geminiAnalysis={gemini}
+        portfolioRepository={new LocalStoragePortfolioRepository()}
+      />,
     )
-    await user.click(screen.getByRole('button', { name: /BTC-EUR/ }))
-    await waitFor(() => expect(mocks.createChart).toHaveBeenCalledTimes(1))
+
+    const toggle = await screen.findByRole('switch', {
+      name: /análisis con ia/i,
+    })
+    expect(toggle).toHaveAttribute('aria-checked', 'false')
+    await screen.findByRole('form', { name: 'Orden del simulador' })
+    await waitFor(() =>
+      expect(provider.subscribeCalls.length).toBeGreaterThanOrEqual(3),
+    )
     act(() => provider.emit(makeQuote({ instrumentId: 'BTC-EUR' })))
-  }
-
-  it('renders an AI switch that starts off', async () => {
-    renderAppWithGemini({ geminiAnalysis: new FakeAnalysisProvider() })
-
-    const toggle = await screen.findByRole('switch', {
-      name: /análisis con ia/i,
-    })
-    expect(toggle).toHaveAttribute('aria-checked', 'false')
-  })
-
-  it('keeps the AI switch available without exposing a browser key', async () => {
-    renderAppWithGemini()
-
-    const toggle = await screen.findByRole('switch', {
-      name: /análisis con ia/i,
-    })
-    expect(toggle).toBeEnabled()
-    expect(toggle).toHaveAttribute('aria-checked', 'false')
-  })
-
-  it('does not trigger any analysis by merely enabling AI mode', async () => {
-    const user = userEvent.setup()
-    const gemini = new FakeAnalysisProvider()
-    gemini.analyzeCall.mockResolvedValue(localResult())
-    const { analysis } = renderAppWithGemini({ geminiAnalysis: gemini })
-
-    const toggle = await screen.findByRole('switch', {
-      name: /análisis con ia/i,
-    })
-    await user.click(toggle)
-    expect(analysis.analyzeCall).not.toHaveBeenCalled()
+    await waitFor(() => expect(local.analyzeCall).toHaveBeenCalledTimes(1))
     expect(gemini.analyzeCall).not.toHaveBeenCalled()
-  })
 
-  it('runs the Gemini provider when AI is on and labels the source', async () => {
-    const user = userEvent.setup()
-    const gemini = new FakeAnalysisProvider()
-    gemini.analyzeCall.mockResolvedValue(localResult())
-    const { analysis, provider } = renderAppWithGemini({
-      geminiAnalysis: gemini,
-    })
-    await openDetail(provider)
-
-    const toggle = screen.getByRole('switch', { name: /análisis con ia/i })
     await user.click(toggle)
-    await waitFor(() =>
-      expect(screen.getByRole('button', { name: /analizar/i })).toBeEnabled(),
-    )
-    await user.click(screen.getByRole('button', { name: /analizar/i }))
-
-    await waitFor(() =>
-      expect(screen.getByText(/fuente: gemini/i)).toBeInTheDocument(),
-    )
-    expect(gemini.analyzeCall).toHaveBeenCalledTimes(1)
-    expect(analysis.analyzeCall).not.toHaveBeenCalled()
-  })
-
-  it('falls back to the local provider when Gemini fails', async () => {
-    const user = userEvent.setup()
-    const gemini = new FakeAnalysisProvider()
-    gemini.analyzeCall.mockRejectedValue(new Error('gemini rate limited'))
-    const { analysis, provider } = renderAppWithGemini({
-      geminiAnalysis: gemini,
-    })
-    await openDetail(provider)
-
-    const toggle = screen.getByRole('switch', { name: /análisis con ia/i })
-    await user.click(toggle)
-    await waitFor(() =>
-      expect(screen.getByRole('button', { name: /analizar/i })).toBeEnabled(),
-    )
-    await user.click(screen.getByRole('button', { name: /analizar/i }))
-
-    await waitFor(() =>
-      expect(screen.getByText(/fuente: mock/i)).toBeInTheDocument(),
-    )
-    expect(screen.getByRole('alert')).toHaveTextContent(
-      /análisis preferido no está disponible/,
-    )
-    expect(gemini.analyzeCall).toHaveBeenCalledTimes(1)
-    expect(analysis.analyzeCall).toHaveBeenCalledTimes(1)
+    await user.click(screen.getByRole('button', { name: 'Analizar' }))
+    await waitFor(() => expect(gemini.analyzeCall).toHaveBeenCalledTimes(1))
   })
 })

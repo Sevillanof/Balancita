@@ -131,7 +131,7 @@ export default function PortfolioScreen({
           aria-busy={status === 'loading'}
         >
           <caption className="portfolio__caption">
-            Posiciones manuales valuadas con la fuente simulada en vivo
+            Posiciones valuadas con la fuente de mercado activa
           </caption>
           <thead>
             <tr>

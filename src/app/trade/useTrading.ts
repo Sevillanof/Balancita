@@ -13,8 +13,12 @@ import {
   type OrderPreview,
   type OrderReceipt,
   type OrderSide,
+  type OrderSimulatorConfig,
 } from '../../domain/orders'
+import type { PortfolioRepository } from '../../domain/portfolio'
 import {
+  type CashMovement,
+  type CashMovementOptions,
   LocalPaperTradingProvider,
   type PaperTradingAccount,
   type PaperTradingMarketSource,
@@ -23,6 +27,9 @@ import {
 export type UseTradingOptions = {
   provider?: OrderExecutionProvider
   makeIdempotencyKey?: () => string
+  portfolioRepository?: PortfolioRepository
+  initialInstrumentId?: InstrumentId
+  simulatorOptions?: Partial<OrderSimulatorConfig> & { now?: () => number }
 }
 
 function defaultIdempotencyKey(): string {
@@ -36,6 +43,7 @@ function defaultIdempotencyKey(): string {
 class LiveTradeMarketSource implements PaperTradingMarketSource {
   private readonly instruments = new Map<string, Instrument>()
   private readonly prices = new Map<string, number>()
+  private readonly quotes = new Map<string, Quote>()
 
   ingestInstruments(loaded: readonly Instrument[]): void {
     for (const instrument of loaded) {
@@ -45,6 +53,7 @@ class LiveTradeMarketSource implements PaperTradingMarketSource {
 
   ingestQuote(quote: Quote): void {
     this.prices.set(quote.instrumentId, quote.price)
+    this.quotes.set(quote.instrumentId, quote)
   }
 
   async getInstrument(instrumentId: string): Promise<Instrument | null> {
@@ -52,16 +61,7 @@ class LiveTradeMarketSource implements PaperTradingMarketSource {
   }
 
   async getPrice(instrumentId: string): Promise<Quote | null> {
-    const price = this.prices.get(instrumentId)
-    if (price === undefined) return null
-    return {
-      instrumentId,
-      price,
-      change: 0,
-      changePercent: 0,
-      timestamp: new Date().toISOString(),
-      status: 'live',
-    }
+    return this.quotes.get(instrumentId) ?? null
   }
 }
 
@@ -89,8 +89,19 @@ export function useTrading(
 
   const source = useMemo(() => new LiveTradeMarketSource(), [])
   const provider = useMemo<OrderExecutionProvider>(
-    () => options.provider ?? new LocalPaperTradingProvider(source),
-    [options.provider, source],
+    () =>
+      options.provider ??
+      new LocalPaperTradingProvider(
+        source,
+        options.portfolioRepository,
+        options.simulatorOptions,
+      ),
+    [
+      options.provider,
+      options.portfolioRepository,
+      options.simulatorOptions,
+      source,
+    ],
   )
 
   const refreshAccount = useCallback(async (): Promise<void> => {
@@ -103,6 +114,7 @@ export function useTrading(
 
   useEffect(() => {
     let active = true
+    let release: (() => void) | undefined
     void marketData
       .getInstruments()
       .then(async (loaded) => {
@@ -111,34 +123,35 @@ export function useTrading(
         setInstruments(loaded)
         if (loaded.length > 0) {
           setSelectedInstrumentId((current) =>
-            current === null ? loaded[0]!.id : current,
+            current === null
+              ? (loaded.find(
+                  (instrument) => instrument.id === options.initialInstrumentId,
+                )?.id ?? loaded[0]!.id)
+              : current,
           )
         }
+        release = marketData.subscribe(
+          loaded.map((instrument) => instrument.id),
+          (quote) => {
+            if (!active) return
+            source.ingestQuote(quote)
+            setPrices((current) => {
+              const next = new Map(current)
+              next.set(quote.instrumentId, quote.price)
+              return next
+            })
+          },
+        )
         await refreshAccount()
       })
       .catch(() => {
-        if (!active) setInstruments([])
+        if (active) setInstruments([])
       })
     return () => {
       active = false
+      release?.()
     }
-  }, [marketData, source, refreshAccount])
-
-  useEffect(() => {
-    if (instruments.length === 0) return
-    const unsubscribe = marketData.subscribe(
-      instruments.map((instrument) => instrument.id),
-      (quote) => {
-        source.ingestQuote(quote)
-        setPrices((current) => {
-          const next = new Map(current)
-          next.set(quote.instrumentId, quote.price)
-          return next
-        })
-      },
-    )
-    return unsubscribe
-  }, [marketData, instruments, source])
+  }, [marketData, source, refreshAccount, options.initialInstrumentId])
 
   const priceOf = useCallback(
     (instrumentId: InstrumentId): number | null => {
@@ -175,8 +188,8 @@ export function useTrading(
     [selectedInstrumentId, side, provider, makeIdempotencyKey],
   )
 
-  const confirmOrder = useCallback(async (): Promise<void> => {
-    if (preview === null || pendingKeyRef.current === null) return
+  const confirmOrder = useCallback(async (): Promise<boolean> => {
+    if (preview === null || pendingKeyRef.current === null) return false
     setConfirming(true)
     setSubmitError(null)
     try {
@@ -188,8 +201,10 @@ export function useTrading(
       )
       pendingKeyRef.current = null
       await refreshAccount()
+      return true
     } catch (error) {
       setSubmitError(errorMessage(error))
+      return false
     } finally {
       setConfirming(false)
     }
@@ -202,6 +217,43 @@ export function useTrading(
     setReceipt(null)
     setSubmitError(null)
   }, [])
+
+  const refreshCash = useCallback(async (): Promise<void> => {
+    await refreshAccount()
+  }, [refreshAccount])
+
+  const cashMovement = useCallback(
+    async (
+      type: 'deposit' | 'withdrawal',
+      currency: string,
+      amount: Money,
+      movementOptions?: CashMovementOptions,
+    ): Promise<CashMovement | null> => {
+      const ledger = provider as unknown as {
+        deposit?: (
+          currency: string,
+          amount: Money,
+          options?: CashMovementOptions,
+        ) => Promise<CashMovement>
+        withdraw?: (
+          currency: string,
+          amount: Money,
+          options?: CashMovementOptions,
+        ) => Promise<CashMovement>
+      }
+      const operation = type === 'deposit' ? ledger.deposit : ledger.withdraw
+      if (operation === undefined) return null
+      const movement = await operation.call(
+        ledger,
+        currency,
+        amount,
+        movementOptions,
+      )
+      await refreshAccount()
+      return movement
+    },
+    [provider, refreshAccount],
+  )
 
   const selectedInstrument =
     selectedInstrumentId === null
@@ -227,10 +279,18 @@ export function useTrading(
     submitError,
     receipt,
     resetTrade,
+    refreshAccount: refreshCash,
+    deposit: (currency: string, amount: Money, options?: CashMovementOptions) =>
+      cashMovement('deposit', currency, amount, options),
+    withdraw: (
+      currency: string,
+      amount: Money,
+      options?: CashMovementOptions,
+    ) => cashMovement('withdrawal', currency, amount, options),
   }
 }
 
 function errorMessage(error: unknown): string {
   if (error instanceof Error) return error.message
-  return 'Something unexpected happened.'
+  return 'Ocurrió un problema inesperado.'
 }

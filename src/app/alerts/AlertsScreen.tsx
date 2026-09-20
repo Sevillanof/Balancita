@@ -7,9 +7,13 @@ import './alerts.css'
 
 type AlertsScreenProps = {
   alerts: UseAlertsResult
+  instrumentIds?: readonly InstrumentId[]
 }
 
-export default function AlertsScreen({ alerts }: AlertsScreenProps) {
+export default function AlertsScreen({
+  alerts,
+  instrumentIds,
+}: AlertsScreenProps) {
   const [creating, setCreating] = useState(false)
 
   const handleCreate = async (input: {
@@ -30,7 +34,14 @@ export default function AlertsScreen({ alerts }: AlertsScreenProps) {
     await alerts.remove(id)
   }
 
-  const catalog = [...alerts.instruments.values()]
+  const catalog = [...alerts.instruments.values()].filter(
+    (instrument) =>
+      instrumentIds === undefined || instrumentIds.includes(instrument.id),
+  )
+  const visibleAlerts = alerts.alerts.filter(
+    (alert) =>
+      instrumentIds === undefined || instrumentIds.includes(alert.instrumentId),
+  )
   const { status, loadError } = alerts
 
   return (
@@ -89,7 +100,7 @@ export default function AlertsScreen({ alerts }: AlertsScreenProps) {
           aria-busy={status === 'loading'}
         >
           <caption className="alerts__caption">
-            Alertas de precio evaluadas con la fuente simulada en vivo
+            Alertas de precio evaluadas con la fuente de mercado activa
           </caption>
           <thead>
             <tr>
@@ -118,8 +129,15 @@ export default function AlertsScreen({ alerts }: AlertsScreenProps) {
                 </td>
               </tr>
             )}
+            {status === 'ready' && visibleAlerts.length === 0 && (
+              <tr>
+                <td colSpan={6} role="status" className="alerts__placeholder">
+                  Todavía no hay alertas para BTC-EUR.
+                </td>
+              </tr>
+            )}
             {status === 'ready' &&
-              alerts.alerts.map((alert) => {
+              visibleAlerts.map((alert) => {
                 const instrument = alerts.instruments.get(alert.instrumentId)
                 if (!instrument) return null
                 return (

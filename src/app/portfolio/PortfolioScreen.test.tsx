@@ -60,7 +60,7 @@ describe('PortfolioScreen', () => {
       ).toBeInTheDocument(),
     )
 
-    const table = screen.getByRole('table', { name: /posiciones manuales/i })
+    const table = screen.getByRole('table', { name: /posiciones valuadas/i })
     expect(table.parentElement).toHaveClass('table-scroll')
     for (const header of HEADERS) {
       const column = within(table).getByRole('columnheader', {
