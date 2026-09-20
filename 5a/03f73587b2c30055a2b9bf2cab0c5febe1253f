@@ -1,0 +1,14 @@
+README.md
+  h_2f68313623be98 3-5,49,51-65
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5a03f73587b2c30055a2b9bf2cab0c5febe1253f",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
