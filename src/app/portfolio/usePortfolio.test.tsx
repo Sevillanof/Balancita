@@ -1,5 +1,6 @@
 import { act, renderHook, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { moneyFromString } from '../../domain/money'
 import type { Holding } from '../../domain/portfolio'
 import { PortfolioCorruptError } from '../../domain/portfolio'
 import { LocalStoragePortfolioRepository } from '../../portfolio/local-storage-portfolio-repository'
@@ -12,14 +13,14 @@ import { usePortfolio } from './usePortfolio'
 
 const BTC: Holding = {
   instrumentId: 'BTC-EUR',
-  quantity: 0.5,
-  averageCost: 50_000,
+  quantity: moneyFromString('0.5'),
+  averageCost: moneyFromString('50000'),
 }
 
 const TTWO: Holding = {
   instrumentId: 'TTWO',
-  quantity: 10,
-  averageCost: 140,
+  quantity: moneyFromString('10'),
+  averageCost: moneyFromString('140'),
 }
 
 function makeProvider() {
@@ -138,7 +139,11 @@ describe('usePortfolio', () => {
     const { result } = renderHook(() => usePortfolio(provider, repo))
     await waitFor(() => expect(result.current.status).toBe('ready'))
 
-    const edited: Holding = { ...BTC, quantity: 1, averageCost: 55_000 }
+    const edited: Holding = {
+      ...BTC,
+      quantity: moneyFromString('1'),
+      averageCost: moneyFromString('55000'),
+    }
     let ok = false
     await act(async () => {
       ok = await result.current.add(edited)

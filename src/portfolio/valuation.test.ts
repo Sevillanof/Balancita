@@ -1,37 +1,56 @@
 import { describe, expect, it } from 'vitest'
+import { MONEY_ZERO, moneyFromString, moneyToNumber } from '../domain/money'
 import type { Holding } from '../domain/portfolio'
 import { costOf, profitLossOf, profitLossPercentOf, valueOf } from './valuation'
 
 const holding: Holding = {
   instrumentId: 'BTC-EUR',
-  quantity: 2,
-  averageCost: 51_000,
+  quantity: moneyFromString('2'),
+  averageCost: moneyFromString('51000'),
 }
 
 describe('portfolio valuation', () => {
   it('computes the cost basis as quantity times average cost', () => {
-    expect(costOf(holding)).toBe(102_000)
+    expect(costOf(holding)).toEqual(moneyFromString('102000'))
   })
 
   it('computes the current value as quantity times price', () => {
-    expect(valueOf(holding, 54_250)).toBe(108_500)
+    expect(valueOf(holding, moneyFromString('54250'))).toEqual(
+      moneyFromString('108500'),
+    )
   })
 
   it('computes profit and loss as value minus cost', () => {
-    expect(profitLossOf(holding, 54_250)).toBe(6_500)
-    expect(profitLossOf(holding, 49_000)).toBe(-4_000)
+    expect(profitLossOf(holding, moneyFromString('54250'))).toEqual(
+      moneyFromString('6500'),
+    )
+    expect(profitLossOf(holding, moneyFromString('49000'))).toEqual(
+      moneyFromString('-4000'),
+    )
   })
 
   it('computes percentage profit and loss relative to cost', () => {
-    const gain = (profitLossOf(holding, 54_250) / costOf(holding)) * 100
-    expect(profitLossPercentOf(holding, 54_250)).toBeCloseTo(gain, 10)
-    const loss = (profitLossOf(holding, 49_000) / costOf(holding)) * 100
-    expect(profitLossPercentOf(holding, 49_000)).toBeCloseTo(loss, 10)
+    const gain =
+      (moneyToNumber(profitLossOf(holding, moneyFromString('54250'))) /
+        moneyToNumber(costOf(holding))) *
+      100
+    expect(
+      moneyToNumber(profitLossPercentOf(holding, moneyFromString('54250'))),
+    ).toBeCloseTo(gain, 6)
+    const loss =
+      (moneyToNumber(profitLossOf(holding, moneyFromString('49000'))) /
+        moneyToNumber(costOf(holding))) *
+      100
+    expect(
+      moneyToNumber(profitLossPercentOf(holding, moneyFromString('49000'))),
+    ).toBeCloseTo(loss, 6)
   })
 
   it('returns zero percentage when the position has no cost', () => {
-    const freeHolding: Holding = { ...holding, averageCost: 0 }
-    expect(profitLossPercentOf(freeHolding, 10)).toBe(0)
-    expect(costOf(freeHolding)).toBe(0)
+    const freeHolding: Holding = { ...holding, averageCost: MONEY_ZERO }
+    expect(profitLossPercentOf(freeHolding, moneyFromString('10'))).toEqual(
+      MONEY_ZERO,
+    )
+    expect(costOf(freeHolding)).toEqual(MONEY_ZERO)
   })
 })

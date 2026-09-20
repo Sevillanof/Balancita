@@ -1,9 +1,10 @@
 import type { InstrumentId } from './market-data'
+import { isMoney, moneyIsPositive, type Money } from './money'
 
 export type Holding = {
   instrumentId: InstrumentId
-  quantity: number
-  averageCost: number
+  quantity: Money
+  averageCost: Money
 }
 
 /**
@@ -37,18 +38,16 @@ export class PortfolioCorruptError extends Error {
   }
 }
 
-/** Loose shape guard for a holding read from untrusted storage. */
+/** Loose shape guard for an in-memory holding. */
 export function isHolding(value: unknown): value is Holding {
   if (typeof value !== 'object' || value === null) return false
   const candidate = value as Record<string, unknown>
   return (
     typeof candidate.instrumentId === 'string' &&
     candidate.instrumentId.length > 0 &&
-    typeof candidate.quantity === 'number' &&
-    Number.isFinite(candidate.quantity) &&
-    candidate.quantity > 0 &&
-    typeof candidate.averageCost === 'number' &&
-    Number.isFinite(candidate.averageCost) &&
-    candidate.averageCost > 0
+    isMoney(candidate.quantity) &&
+    moneyIsPositive(candidate.quantity) &&
+    isMoney(candidate.averageCost) &&
+    moneyIsPositive(candidate.averageCost)
   )
 }

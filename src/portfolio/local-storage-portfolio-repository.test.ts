@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest'
+import { MONEY_ZERO, moneyFromString } from '../domain/money'
 import { PortfolioCorruptError, type Holding } from '../domain/portfolio'
 import { LocalStoragePortfolioRepository } from './local-storage-portfolio-repository'
 
@@ -6,14 +7,14 @@ const STORAGE_KEY = 'balancita:portfolio'
 
 const BTC: Holding = {
   instrumentId: 'BTC-EUR',
-  quantity: 0.5,
-  averageCost: 50_000,
+  quantity: moneyFromString('0.5'),
+  averageCost: moneyFromString('50000'),
 }
 
 const TTWO: Holding = {
   instrumentId: 'TTWO',
-  quantity: 10,
-  averageCost: 140,
+  quantity: moneyFromString('10'),
+  averageCost: moneyFromString('140'),
 }
 
 function repository(): LocalStoragePortfolioRepository {
@@ -44,9 +45,17 @@ describe('LocalStoragePortfolioRepository', () => {
   it('replaces the holding for the same instrument on add', async () => {
     const repo = repository()
     await repo.add(BTC)
-    await repo.add({ ...BTC, quantity: 1, averageCost: 55_000 })
+    await repo.add({
+      instrumentId: 'BTC-EUR',
+      quantity: moneyFromString('1'),
+      averageCost: moneyFromString('55000'),
+    })
     await expect(repo.list()).resolves.toEqual([
-      { instrumentId: 'BTC-EUR', quantity: 1, averageCost: 55_000 },
+      {
+        instrumentId: 'BTC-EUR',
+        quantity: moneyFromString('1'),
+        averageCost: moneyFromString('55000'),
+      },
     ])
   })
 
@@ -73,7 +82,7 @@ describe('LocalStoragePortfolioRepository', () => {
     await expect(repo.list()).resolves.toEqual([])
   })
 
-  it('stores only the schema version and the holdings', async () => {
+  it('stores only the schema version and decimal-string holdings', async () => {
     const repo = repository()
     await repo.add(BTC)
     await repo.add(TTWO)
@@ -86,8 +95,11 @@ describe('LocalStoragePortfolioRepository', () => {
       totals?: unknown
     }
     expect(parsed).toEqual({
-      version: 1,
-      holdings: [BTC, TTWO],
+      version: 2,
+      holdings: [
+        { instrumentId: 'BTC-EUR', quantity: '0.5', averageCost: '50000' },
+        { instrumentId: 'TTWO', quantity: '10', averageCost: '140' },
+      ],
     })
     expect(parsed.quotes).toBeUndefined()
     expect(parsed.totals).toBeUndefined()
@@ -111,15 +123,22 @@ describe('LocalStoragePortfolioRepository', () => {
     it('rejects when the schema version is unsupported', async () => {
       localStorage.setItem(
         STORAGE_KEY,
-        JSON.stringify({ version: 2, holdings: [BTC] }),
+        JSON.stringify({ version: 3, holdings: [] }),
       )
       await expect(repository().list()).rejects.toBeInstanceOf(
         PortfolioCorruptError,
       )
     })
 
+    it('rejects when the schema version is missing', async () => {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ holdings: [] }))
+      await expect(repository().list()).rejects.toBeInstanceOf(
+        PortfolioCorruptError,
+      )
+    })
+
     it('rejects when holdings is missing', async () => {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({ version: 1 }))
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ version: 2 }))
       await expect(repository().list()).rejects.toBeInstanceOf(
         PortfolioCorruptError,
       )
@@ -128,19 +147,21 @@ describe('LocalStoragePortfolioRepository', () => {
     it('rejects when holdings is not a list', async () => {
       localStorage.setItem(
         STORAGE_KEY,
-        JSON.stringify({ version: 1, holdings: BTC }),
+        JSON.stringify({ version: 2, holdings: {} }),
       )
       await expect(repository().list()).rejects.toBeInstanceOf(
         PortfolioCorruptError,
       )
     })
 
-    it('rejects when a holding lacks a valid instrumentId', async () => {
+    it('rejects a v2 holding without a valid instrumentId', async () => {
       localStorage.setItem(
         STORAGE_KEY,
         JSON.stringify({
-          version: 1,
-          holdings: [{ ...BTC, instrumentId: '' }],
+          version: 2,
+          holdings: [
+            { instrumentId: '', quantity: '0.5', averageCost: '50000' },
+          ],
         }),
       )
       await expect(repository().list()).rejects.toBeInstanceOf(
@@ -148,14 +169,16 @@ describe('LocalStoragePortfolioRepository', () => {
       )
     })
 
-    it('rejects when a holding has a non-positive quantity', async () => {
-      const seeds = [0, -4, NaN]
+    it('rejects a v2 holding with a non-positive quantity string', async () => {
+      const seeds = ['0', '-4', 'abc', '1.000000001']
       for (const quantity of seeds) {
         localStorage.setItem(
           STORAGE_KEY,
           JSON.stringify({
-            version: 1,
-            holdings: [{ ...BTC, quantity }],
+            version: 2,
+            holdings: [
+              { instrumentId: 'BTC-EUR', quantity, averageCost: '50000' },
+            ],
           }),
         )
         await expect(repository().list()).rejects.toBeInstanceOf(
@@ -164,14 +187,16 @@ describe('LocalStoragePortfolioRepository', () => {
       }
     })
 
-    it('rejects when a holding has a non-positive average cost', async () => {
-      const seeds = [0, -50_000, NaN]
+    it('rejects a v2 holding with a non-positive average cost string', async () => {
+      const seeds = ['0', '-50000', 'abc']
       for (const averageCost of seeds) {
         localStorage.setItem(
           STORAGE_KEY,
           JSON.stringify({
-            version: 1,
-            holdings: [{ ...BTC, averageCost }],
+            version: 2,
+            holdings: [
+              { instrumentId: 'BTC-EUR', quantity: '0.5', averageCost },
+            ],
           }),
         )
         await expect(repository().list()).rejects.toBeInstanceOf(
@@ -182,8 +207,60 @@ describe('LocalStoragePortfolioRepository', () => {
 
     it('rejects a write when the holding itself is invalid', async () => {
       await expect(
-        repository().add({ ...BTC, quantity: 0 }),
+        repository().add({ ...BTC, quantity: MONEY_ZERO }),
       ).rejects.toBeInstanceOf(PortfolioCorruptError)
+    })
+  })
+
+  describe('migration from schema v1 (number holdings)', () => {
+    it('migrates a v1 payload to decimal holdings and rewrites storage as v2', async () => {
+      localStorage.setItem(
+        STORAGE_KEY,
+        JSON.stringify({
+          version: 1,
+          holdings: [
+            { instrumentId: 'BTC-EUR', quantity: 0.5, averageCost: 50_000 },
+          ],
+        }),
+      )
+
+      await expect(repository().list()).resolves.toEqual([BTC])
+
+      const stored = JSON.parse(
+        localStorage.getItem(STORAGE_KEY) as string,
+      ) as { version: unknown; holdings: unknown }
+      expect(stored).toEqual({
+        version: 2,
+        holdings: [
+          { instrumentId: 'BTC-EUR', quantity: '0.5', averageCost: '50000' },
+        ],
+      })
+    })
+
+    it('migrates an empty v1 payload to an empty v2 portfolio', async () => {
+      localStorage.setItem(
+        STORAGE_KEY,
+        JSON.stringify({ version: 1, holdings: [] }),
+      )
+
+      await expect(repository().list()).resolves.toEqual([])
+      const stored = JSON.parse(
+        localStorage.getItem(STORAGE_KEY) as string,
+      ) as { version: unknown }
+      expect(stored.version).toBe(2)
+    })
+
+    it('rejects a v1 payload with an invalid holding', async () => {
+      localStorage.setItem(
+        STORAGE_KEY,
+        JSON.stringify({
+          version: 1,
+          holdings: [{ instrumentId: 'BTC-EUR', quantity: 0, averageCost: 1 }],
+        }),
+      )
+      await expect(repository().list()).rejects.toBeInstanceOf(
+        PortfolioCorruptError,
+      )
     })
   })
 })

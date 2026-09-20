@@ -5,6 +5,14 @@ import type {
   MarketDataProvider,
   Quote,
 } from '../../domain/market-data'
+import {
+  moneyFromNumber,
+  moneyFromString,
+  moneyIsNegative,
+  moneyIsPositive,
+  moneyToDecimalString,
+  type Money,
+} from '../../domain/money'
 import type { Holding, PortfolioRepository } from '../../domain/portfolio'
 import {
   costOf,
@@ -14,6 +22,7 @@ import {
 } from '../../portfolio/valuation'
 import {
   formatPrice,
+  formatPriceMoney,
   formatQuantity,
   formatSignedAmount,
   formatSignedPercent,
@@ -221,15 +230,19 @@ function PositionRow({
   const hasQuote = quote !== undefined
   const currency = instrument.currency
   const cost = costOf(holding)
-  const value = hasQuote ? valueOf(holding, quote.price) : null
-  const profitLoss = hasQuote ? profitLossOf(holding, quote.price) : null
-  const percent = hasQuote ? profitLossPercentOf(holding, quote.price) : null
+  const value = hasQuote ? valueOf(holding, moneyFromNumber(quote.price)) : null
+  const profitLoss = hasQuote
+    ? profitLossOf(holding, moneyFromNumber(quote.price))
+    : null
+  const percent = hasQuote
+    ? profitLossPercentOf(holding, moneyFromNumber(quote.price))
+    : null
   const direction =
     profitLoss === null
       ? 'flat'
-      : profitLoss > 0
+      : moneyIsPositive(profitLoss)
         ? 'up'
-        : profitLoss < 0
+        : moneyIsNegative(profitLoss)
           ? 'down'
           : 'flat'
 
@@ -241,14 +254,14 @@ function PositionRow({
       </th>
       <td className="portfolio__num">{formatQuantity(holding.quantity)}</td>
       <td className="portfolio__num">
-        {formatPrice(holding.averageCost, currency)}
+        {formatPriceMoney(holding.averageCost, currency)}
       </td>
       <td className="portfolio__num">
         {hasQuote ? formatPrice(quote.price, currency) : PLACEHOLDER}
       </td>
-      <td className="portfolio__num">{formatPrice(cost, currency)}</td>
+      <td className="portfolio__num">{formatPriceMoney(cost, currency)}</td>
       <td className="portfolio__num">
-        {value === null ? PLACEHOLDER : formatPrice(value, currency)}
+        {value === null ? PLACEHOLDER : formatPriceMoney(value, currency)}
       </td>
       <td className="portfolio__num portfolio__pl">
         {profitLoss === null ? (
@@ -258,7 +271,7 @@ function PositionRow({
             data-direction={direction}
             className={`portfolio__pl--${direction}`}
           >
-            {`${formatSignedAmount(profitLoss, currency)} (${formatSignedPercent(percent as number)})`}
+            {`${formatSignedAmount(profitLoss, currency)} (${formatSignedPercent(percent as Money)})`}
           </span>
         )}
       </td>
@@ -330,10 +343,10 @@ function HoldingForm({
     initial?.instrumentId ?? '',
   )
   const [quantity, setQuantity] = useState(
-    initial ? String(initial.quantity) : '',
+    initial ? moneyToDecimalString(initial.quantity) : '',
   )
   const [averageCost, setAverageCost] = useState(
-    initial ? String(initial.averageCost) : '',
+    initial ? moneyToDecimalString(initial.averageCost) : '',
   )
   const [quantityError, setQuantityError] = useState(false)
   const [costError, setCostError] = useState(false)
@@ -346,20 +359,18 @@ function HoldingForm({
     ? `Edit ${initial.instrumentId} position`
     : 'Add position'
 
-  const isQuantityValid = (value: string) => {
-    const parsed = Number(value)
-    return value.trim() !== '' && Number.isFinite(parsed) && parsed > 0
-  }
-
-  const isCostValid = (value: string) => {
-    const parsed = Number(value)
-    return value.trim() !== '' && Number.isFinite(parsed) && parsed > 0
+  const isPositiveMoney = (value: string): boolean => {
+    try {
+      return moneyIsPositive(moneyFromString(value))
+    } catch {
+      return false
+    }
   }
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault()
-    const quantityOk = isQuantityValid(quantity)
-    const costOk = isCostValid(averageCost)
+    const quantityOk = isPositiveMoney(quantity)
+    const costOk = isPositiveMoney(averageCost)
     setQuantityError(!quantityOk)
     setCostError(!costOk)
     if (!quantityOk || !costOk) return
@@ -369,8 +380,8 @@ function HoldingForm({
 
     const ok = await onSubmit({
       instrumentId: targetId,
-      quantity: Number(quantity),
-      averageCost: Number(averageCost),
+      quantity: moneyFromString(quantity),
+      averageCost: moneyFromString(averageCost),
     })
     if (!ok) return
   }

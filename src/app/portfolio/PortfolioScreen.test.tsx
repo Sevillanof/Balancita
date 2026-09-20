@@ -1,6 +1,7 @@
 import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { moneyFromString } from '../../domain/money'
 import type { Holding } from '../../domain/portfolio'
 import { LocalStoragePortfolioRepository } from '../../portfolio/local-storage-portfolio-repository'
 import {
@@ -13,14 +14,14 @@ import PortfolioScreen from './PortfolioScreen'
 
 const BTC: Holding = {
   instrumentId: 'BTC-EUR',
-  quantity: 0.5,
-  averageCost: 50_000,
+  quantity: moneyFromString('0.5'),
+  averageCost: moneyFromString('50000'),
 }
 
 const TTWO: Holding = {
   instrumentId: 'TTWO',
-  quantity: 10,
-  averageCost: 140,
+  quantity: moneyFromString('10'),
+  averageCost: moneyFromString('140'),
 }
 
 function renderScreen() {
@@ -116,7 +117,12 @@ describe('PortfolioScreen', () => {
     const repository = new LocalStoragePortfolioRepository()
     localStorage.setItem(
       'balancita:portfolio',
-      JSON.stringify({ version: 2, holdings: [BTC] }),
+      JSON.stringify({
+        version: 2,
+        holdings: [
+          { instrumentId: 'BTC-EUR', quantity: 'abc', averageCost: '50000' },
+        ],
+      }),
     )
     render(<PortfolioScreen provider={provider} repository={repository} />)
 
@@ -228,7 +234,11 @@ describe('PortfolioScreen', () => {
     const edited = await new LocalStoragePortfolioRepository().list()
     expect(edited).toEqual([
       BTC,
-      { instrumentId: 'TTWO', quantity: 12, averageCost: 140 },
+      {
+        instrumentId: 'TTWO',
+        quantity: moneyFromString('12'),
+        averageCost: moneyFromString('140'),
+      },
     ])
   })
 
@@ -360,7 +370,7 @@ describe('PortfolioScreen', () => {
     ).toBeInTheDocument()
     expect(
       within(btcRow).getByText(
-        `${formatSignedAmount(2_125, 'EUR')} (${formatSignedPercent(8.5)})`,
+        `${formatSignedAmount(moneyFromString('2125'), 'EUR')} (${formatSignedPercent(moneyFromString('8.5'))})`,
       ),
     ).toBeInTheDocument()
 

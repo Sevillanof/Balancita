@@ -1,3 +1,4 @@
+import { moneyToNumber, type Money } from '../domain/money'
 import type { Quote } from '../domain/market-data'
 
 export type InstrumentCurrency = 'EUR' | 'USD'
@@ -19,6 +20,14 @@ export function formatPrice(
   currency: InstrumentCurrency,
 ): string {
   return `${CURRENCY_SYMBOLS[currency]}${formatDecimal(price)}`
+}
+
+/** Formats a fixed-point Money for display; never feeds money math back. */
+export function formatPriceMoney(
+  amount: Money,
+  currency: InstrumentCurrency,
+): string {
+  return formatPrice(moneyToNumber(amount), currency)
 }
 
 export type ChangeDirection = 'up' | 'down' | 'flat'
@@ -45,21 +54,25 @@ export function formatLocalTime(timestamp: string): string {
   })
 }
 
-export function formatQuantity(quantity: number): string {
-  return quantity.toLocaleString('en-US', { maximumFractionDigits: 6 })
+export function formatQuantity(quantity: Money): string {
+  return moneyToNumber(quantity).toLocaleString('en-US', {
+    maximumFractionDigits: 6,
+  })
 }
 
 export function formatSignedAmount(
-  value: number,
+  value: Money,
   currency: InstrumentCurrency,
 ): string {
-  if (value === 0) return formatPrice(0, currency)
-  const sign = value > 0 ? '+' : '-'
-  return `${sign}${formatPrice(Math.abs(value), currency)}`
+  const numberValue = moneyToNumber(value)
+  if (numberValue === 0) return formatPrice(0, currency)
+  const sign = numberValue > 0 ? '+' : '-'
+  return `${sign}${formatPrice(Math.abs(numberValue), currency)}`
 }
 
-export function formatSignedPercent(value: number): string {
-  if (value === 0) return '0.00%'
-  const sign = value > 0 ? '+' : '-'
-  return `${sign}${formatDecimal(Math.abs(value))}%`
+export function formatSignedPercent(value: Money): string {
+  const numberValue = moneyToNumber(value)
+  if (numberValue === 0) return '0.00%'
+  const sign = numberValue > 0 ? '+' : '-'
+  return `${sign}${formatDecimal(Math.abs(numberValue))}%`
 }
