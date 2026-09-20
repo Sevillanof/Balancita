@@ -13,6 +13,7 @@ import type { AlertRepository } from './domain/alerts'
 import { LocalStoragePortfolioRepository } from './portfolio/local-storage-portfolio-repository'
 import { LocalStorageAlertRepository } from './alerts/local-storage-alert-repository'
 import { createMarketDataProvider } from './providers/market-data-provider'
+import { DeterministicMockMarketDataProvider } from './providers/deterministic-mock-market-data'
 import { GeminiAnalysisProvider } from './providers/gemini-analysis-provider'
 import { MockAnalysisProvider } from './providers/mock-analysis-provider'
 import { AnalysisModeToggle } from './app/AnalysisModeToggle'
@@ -23,6 +24,7 @@ type AppView = 'watchlist' | 'portfolio' | 'trade' | 'alerts'
 
 type AppProps = {
   provider?: MarketDataProvider
+  paperTradingProvider?: MarketDataProvider
   portfolioRepository?: PortfolioRepository
   alertRepository?: AlertRepository
   analysis?: AnalysisProvider
@@ -32,12 +34,17 @@ type AppProps = {
 
 function App({
   provider,
+  paperTradingProvider,
   portfolioRepository,
   alertRepository,
   analysis,
   geminiAnalysis,
 }: AppProps) {
   const defaultProvider = useMemo(() => createMarketDataProvider(), [])
+  const defaultPaperTradingProvider = useMemo(
+    () => new DeterministicMockMarketDataProvider(1),
+    [],
+  )
   const defaultPortfolioRepository = useMemo(
     () => new LocalStoragePortfolioRepository(),
     [],
@@ -55,6 +62,8 @@ function App({
     [],
   )
   const activeProvider = provider ?? defaultProvider
+  const activePaperTradingProvider =
+    paperTradingProvider ?? defaultPaperTradingProvider
   const activePortfolioRepository =
     portfolioRepository ?? defaultPortfolioRepository
   const activeAlertRepository = alertRepository ?? defaultAlertRepository
@@ -171,7 +180,7 @@ function App({
           aria-labelledby="tab-trade"
           className="app__panel"
         >
-          <TradeScreen provider={activeProvider} />
+          <TradeScreen provider={activePaperTradingProvider} />
         </section>
       ) : (
         <section

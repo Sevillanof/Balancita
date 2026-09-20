@@ -148,16 +148,18 @@ describe('App workspace tabs', () => {
 
   it('switches to the Trade tab and shows the paper trading workspace', async () => {
     const user = userEvent.setup()
-    renderApp()
+    const { provider } = renderApp()
 
     await waitFor(() =>
       expect(screen.getByRole('tab', { name: /trade/i })).toBeInTheDocument(),
     )
+    await waitFor(() => expect(provider.getInstrumentsCalls).toBe(2))
 
     await user.click(screen.getByRole('tab', { name: /trade/i }))
 
     expect(screen.getByRole('heading', { name: 'Trade' })).toBeInTheDocument()
     expect(screen.getByLabelText('Paper trading order')).toBeInTheDocument()
+    expect(provider.getInstrumentsCalls).toBe(2)
     expect(screen.getByRole('tab', { name: /trade/i })).toHaveAttribute(
       'aria-selected',
       'true',
