@@ -1,0 +1,18 @@
+docs/implementation-progress.md
+  h_2f68313623be98 338-342,345-351
+src/providers/coinbase-market-data.test.ts
+  h_2f68313623be98 67-70,139,186,195-201,203-205,207-211,279,286,288-290,294-295,298-302,304-306,308-321,323-347,349-352,397,402-405,407,410
+src/providers/coinbase-market-data.ts
+  h_2f68313623be98 112-114,235-236
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3a0b5fe19484e42159dbe8225ac0e69303d0a6c3",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
