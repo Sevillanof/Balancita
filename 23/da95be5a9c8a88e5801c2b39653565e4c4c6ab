@@ -1,0 +1,16 @@
+src/app/watchlist/WatchlistScreen.test.tsx
+  h_2f68313623be98 10
+src/app/watchlist/WatchlistScreen.tsx
+  h_2f68313623be98 6
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "23da95be5a9c8a88e5801c2b39653565e4c4c6ab",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
