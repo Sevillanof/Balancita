@@ -64,6 +64,10 @@ class FakeWebSocket implements CoinbaseWebSocket {
   serverClose(): void {
     this.onclose?.()
   }
+
+  serverError(): void {
+    this.onerror?.()
+  }
 }
 
 function makeResponse(body: unknown, ok = true, status = 200): Response {
@@ -132,7 +136,7 @@ describe('CoinbaseMarketDataProvider REST contract', () => {
     ])
   })
 
-  it('maps candles to ascending ISO Candle values and caps history at 300 items', async () => {
+  it('maps candles to ascending ISO Candle values and caps oversized history at 300 items', async () => {
     const candles = [
       [1_757_765_000, 60_000, 62_000, 61_000, 61_500, 12.5],
       [1_757_678_600, 59_000, 61_000, 60_500, 60_000, 10],
@@ -179,7 +183,7 @@ describe('CoinbaseMarketDataProvider REST contract', () => {
     )
   })
 
-  it('surfaces HTTP failures and rejects a response above Coinbase maximum', async () => {
+  it('surfaces HTTP failures and caps the first 300 candles from an oversized response', async () => {
     const failed = makeFetch([
       makeResponse({ message: 'rate limited' }, false, 429),
     ])
@@ -188,24 +192,23 @@ describe('CoinbaseMarketDataProvider REST contract', () => {
     })
     await expect(failedProvider.getInstruments()).rejects.toThrow(/HTTP 429/)
 
-    const tooMany = makeFetch([
-      makeResponse(
-        Array.from({ length: 301 }, (_, index) => [
-          index + 1,
-          1,
-          2,
-          1.5,
-          1.75,
-          1,
-        ]),
-      ),
+    const oversizedResponse = Array.from({ length: 350 }, (_, index) => [
+      350 - index,
+      1,
+      3,
+      2,
+      2.5,
+      1,
     ])
-    const tooManyProvider = new CoinbaseMarketDataProvider({
-      fetch: tooMany.fetch,
+    const oversized = makeFetch([makeResponse(oversizedResponse)])
+    const oversizedProvider = new CoinbaseMarketDataProvider({
+      fetch: oversized.fetch,
     })
-    await expect(tooManyProvider.getHistory('BTC-EUR')).rejects.toThrow(
-      /maximum of 300 candles/i,
-    )
+    const history = await oversizedProvider.getHistory('BTC-EUR')
+
+    expect(history).toHaveLength(300)
+    expect(history[0]?.time).toBe(new Date(51 * 1000).toISOString())
+    expect(history.at(-1)?.time).toBe(new Date(350 * 1000).toISOString())
   })
 
   it('does not request or invent unsupported instruments', async () => {
@@ -273,49 +276,80 @@ describe('CoinbaseMarketDataProvider WebSocket contract', () => {
     ])
   })
 
-  it('accepts strictly monotonic sequence numbers and suppresses out-of-order data', () => {
+  it('accepts sequence gaps and keeps the ticker socket open', () => {
     const { provider, sockets } = makeProvider({ reconnectBaseMs: 100 })
     const quotes: Quote[] = []
     provider.subscribe(['BTC-EUR'], (quote) => quotes.push(quote))
     const socket = sockets[0]!
     socket.open()
     socket.message(TICKER)
-    socket.message({
-      ...TICKER,
-      sequence: 9,
-      price: '99999',
-      time: '2026-09-20T12:00:01.000Z',
-    })
+    socket.message({ ...TICKER, sequence: 12, price: '63000' })
 
-    expect(quotes.map((quote) => quote.status)).toEqual(['live', 'stale'])
-    expect(quotes.at(-1)?.price).toBe(Number(TICKER.price))
-    expect(socket.close).toHaveBeenCalled()
+    expect(quotes.map((quote) => quote.status)).toEqual(['live', 'live'])
+    expect(quotes.at(-1)?.price).toBe(63000)
+    expect(socket.close).not.toHaveBeenCalled()
     expect(sockets).toHaveLength(1)
   })
 
-  it('marks a sequence gap stale, reconnects with bounded backoff, and resubscribes cleanly', () => {
-    const { provider, sockets } = makeProvider({
-      reconnectBaseMs: 100,
-      reconnectMaxMs: 250,
-    })
+  it('ignores duplicate and out-of-order sequences without closing the socket', () => {
+    const { provider, sockets } = makeProvider()
     const quotes: Quote[] = []
     provider.subscribe(['BTC-EUR'], (quote) => quotes.push(quote))
-    const first = sockets[0]!
-    first.open()
-    first.message(TICKER)
-    first.message({ ...TICKER, sequence: 12, price: '63000' })
+    const socket = sockets[0]!
+    socket.open()
+    socket.message(TICKER)
+    socket.message({ ...TICKER, sequence: 10, price: '63000' })
+    socket.message({ ...TICKER, sequence: 9, price: '61000' })
 
-    expect(quotes.at(-1)?.status).toBe('stale')
-    vi.advanceTimersByTime(99)
+    expect(quotes).toHaveLength(1)
+    expect(quotes[0]?.price).toBe(Number(TICKER.price))
+    expect(socket.close).not.toHaveBeenCalled()
     expect(sockets).toHaveLength(1)
-    vi.advanceTimersByTime(1)
-    expect(sockets).toHaveLength(2)
+  })
 
-    const second = sockets[1]!
-    second.open()
-    expect(second.send).toHaveBeenCalledTimes(1)
-    second.message({ ...TICKER, sequence: 1, price: '62500' })
-    expect(quotes.at(-1)).toMatchObject({ price: 62500, status: 'live' })
+  it('marks the last quote stale and reconnects after a real socket close', () => {
+    const { provider, sockets } = makeProvider({ reconnectBaseMs: 100 })
+    const quotes: Quote[] = []
+    provider.subscribe(['BTC-EUR'], (quote) => quotes.push(quote))
+    const socket = sockets[0]!
+    socket.open()
+    socket.message(TICKER)
+    socket.serverClose()
+
+    expect(quotes.at(-1)).toMatchObject({ price: 62000.5, status: 'stale' })
+    expect(socket.close).toHaveBeenCalled()
+    vi.advanceTimersByTime(100)
+    expect(sockets).toHaveLength(2)
+  })
+
+  it('marks the last quote stale and reconnects after a socket error', () => {
+    const { provider, sockets } = makeProvider({ reconnectBaseMs: 100 })
+    const quotes: Quote[] = []
+    provider.subscribe(['BTC-EUR'], (quote) => quotes.push(quote))
+    const socket = sockets[0]!
+    socket.open()
+    socket.message(TICKER)
+    socket.serverError()
+
+    expect(quotes.at(-1)).toMatchObject({ price: 62000.5, status: 'stale' })
+    expect(socket.close).toHaveBeenCalled()
+    vi.advanceTimersByTime(100)
+    expect(sockets).toHaveLength(2)
+  })
+
+  it('marks the last quote stale and reconnects after invalid ticker data', () => {
+    const { provider, sockets } = makeProvider({ reconnectBaseMs: 100 })
+    const quotes: Quote[] = []
+    provider.subscribe(['BTC-EUR'], (quote) => quotes.push(quote))
+    const socket = sockets[0]!
+    socket.open()
+    socket.message(TICKER)
+    socket.message({ ...TICKER, price: 'not-a-number' })
+
+    expect(quotes.at(-1)).toMatchObject({ price: 62000.5, status: 'stale' })
+    expect(socket.close).toHaveBeenCalled()
+    vi.advanceTimersByTime(100)
+    expect(sockets).toHaveLength(2)
   })
 
   it('marks the last quote stale after the configurable freshness threshold', () => {
@@ -360,15 +394,20 @@ describe('CoinbaseMarketDataProvider WebSocket contract', () => {
     expect(sockets).toHaveLength(4)
   })
 
-  it('recovers from invalid JSON and cleans every socket and timer on unsubscribe', () => {
+  it('marks the last quote stale after invalid JSON and cleans every socket and timer on unsubscribe', () => {
     const { provider, sockets } = makeProvider({
       staleAfterMs: 100,
       reconnectBaseMs: 100,
     })
-    const unsubscribe = provider.subscribe(['BTC-EUR'], () => {})
+    const quotes: Quote[] = []
+    const unsubscribe = provider.subscribe(['BTC-EUR'], (quote) =>
+      quotes.push(quote),
+    )
     sockets[0]!.open()
+    sockets[0]!.message(TICKER)
     sockets[0]!.invalidMessage()
     expect(sockets[0]!.close).toHaveBeenCalled()
+    expect(quotes.at(-1)).toMatchObject({ price: 62000.5, status: 'stale' })
 
     unsubscribe()
     vi.runAllTimers()

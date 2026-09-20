@@ -335,17 +335,20 @@ provider selection, closed Mock fallback and required tests are complete.
 - REST mapping preserves EUR, Coinbase product identity, `providerSymbols`, and
   the raw product fields in `providerMetadata`. Candles map from Coinbase's
   `[timestamp, low, high, open, close, volume]` tuples to ascending ISO
-  `Candle` values. History is explicitly one `granularity=86400` request and is
-  capped at Coinbase's documented maximum of 300 candles; an oversized response
-  is rejected instead of being silently truncated or paginated without a time
-  range.
+  `Candle` values. History is explicitly one `granularity=86400` request. The
+  provider validates the response rows, then applies a client-side cap by
+  retaining the first 300 entries from Coinbase's newest-first response before
+  sorting them ascending; an oversized response is not rejected or paginated
+  without a time range.
 - WebSocket mapping uses the public `ticker` subscription for `BTC-EUR` and
   calculates `change` and `changePercent` from `open_24h`. Sequence numbers must
-  be strictly contiguous per connection. Gaps and out-of-order/duplicate
-  sequences suppress the unsafe tick, emit the last quote as `stale` when one
-  exists, close the socket, and reconnect. The contract has no error callback,
-  so this is the explicit recovery behavior; `live` resumes only after a valid
-  tick on the new subscription.
+  be strictly increasing per connection. Gaps are accepted because the public
+  ticker feed can legitimately skip sequence values; duplicate and out-of-order
+  sequences are ignored without publishing a quote or closing the socket.
+  Socket errors, closes, invalid JSON, and invalid ticker messages emit the last
+  quote as `stale` when one exists and reconnect with bounded backoff. The
+  contract has no error callback, so this is the explicit recovery behavior;
+  `live` resumes after a valid tick on the active subscription.
 - Quotes become `stale` after the configurable `staleAfterMs` threshold (15s by
   default). WebSocket errors, closes, invalid JSON, and incomplete ticker
   messages use bounded exponential reconnect backoff (1s to 30s by default).

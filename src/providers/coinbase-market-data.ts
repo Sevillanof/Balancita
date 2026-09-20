@@ -109,13 +109,9 @@ export class CoinbaseMarketDataProvider implements MarketDataProvider {
     if (!Array.isArray(response)) {
       throw new Error('Invalid candles response from Coinbase')
     }
-    if (response.length > MAX_CANDLES_PER_REQUEST) {
-      throw new Error(
-        `Coinbase returned more than the maximum of ${MAX_CANDLES_PER_REQUEST} candles`,
-      )
-    }
-
-    const candles = response.map(mapCandle)
+    // Coinbase returns newest-first; validate every row, then retain the newest
+    // 300 rows locally before sorting the result into chart order.
+    const candles = response.map(mapCandle).slice(0, MAX_CANDLES_PER_REQUEST)
     return candles.sort(
       (left, right) => Date.parse(left.time) - Date.parse(right.time),
     )
@@ -236,11 +232,8 @@ export class CoinbaseMarketDataProvider implements MarketDataProvider {
     }
 
     if (state.sequence !== null && sequence <= state.sequence) {
-      this.handleSocketFailure(state, socket, onQuote)
-      return
-    }
-    if (state.sequence !== null && sequence > state.sequence + 1) {
-      this.handleSocketFailure(state, socket, onQuote)
+      // Duplicate and delayed ticker messages are harmless; do not publish them
+      // or treat a feed gap as a socket failure.
       return
     }
 
