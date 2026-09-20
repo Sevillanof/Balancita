@@ -1,0 +1,23 @@
+src/app/chart/PriceChart.test.tsx
+  s_1f08bfef309727::t_cdc37b15fdbe22 1-122
+src/app/chart/PriceChart.tsx
+  s_1f08bfef309727::t_a325fb416bfa33 1-120
+src/app/chart/chart.css
+  s_1f08bfef309727::t_9a70c326dd00e5 1-15
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d82721f386ec7748ddc4c86ef96f1dc9c8ad9305",
+  "prompts": {},
+  "sessions": {
+    "s_1f08bfef309727": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f41415805ffewgLy0fi83KFd95",
+        "model": "big-pickle"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
