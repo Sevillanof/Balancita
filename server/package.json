@@ -1,0 +1,27 @@
+{
+  "name": "balancita-gemini-server",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Minimal Fastify gateway that keeps the Gemini API key out of the browser.",
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
+  },
+  "scripts": {
+    "dev": "node --env-file-if-exists=.env --experimental-strip-types --watch src/index.ts",
+    "start": "node --env-file-if-exists=.env --experimental-strip-types src/index.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@fastify/cors": "^11.3.0",
+    "@google/genai": "^2.23.0",
+    "fastify": "^5.12.5"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.3",
+    "typescript": "~6.0.2",
+    "vitest": "^5.0.1"
+  }
+}

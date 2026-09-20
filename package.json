@@ -12,7 +12,11 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "build": "tsc -b && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "dev:server": "pnpm --dir server dev",
+    "start:server": "pnpm --dir server start",
+    "test:server": "pnpm --dir server test",
+    "typecheck:server": "pnpm --dir server typecheck"
   },
   "engines": {
     "node": "^20.19.0 || >=22.12.0"
