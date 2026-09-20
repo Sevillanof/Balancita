@@ -1,0 +1,29 @@
+docs/implementation-progress.md
+  s_900f8954ed6bf2::t_f5b8b47f5657f8 463-514
+src/App.test.tsx
+  s_900f8954ed6bf2::t_c914b7bf5a2854 35,38,48-57,60-75,77-80,82-83,86-87,90-94,96,99,101,104,108,110,112-113,118-120,123-126,128-133,135,137-138,140,142,148-154,157-164,166,168-174,178,184-190,197,199,201-203,206-207
+src/App.tsx
+  s_900f8954ed6bf2::t_3b47dd3ce75305 2,6,38,59,86-100
+src/app/BtcEurDashboard.tsx
+  s_900f8954ed6bf2::t_5ee55baeac0648 1-176
+src/app/dashboard.css
+  s_900f8954ed6bf2::t_4bc1eab9c3f99f 1-139
+src/app/trade/TradeScreen.tsx
+  s_900f8954ed6bf2::t_473691ca73e627 4,19-20,32-35,42-53,55-56,76-101,143-161,199-203,265-337,349,430,443,471-475
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d127509405e7162aeb698049b5f3266da65fc450",
+  "prompts": {},
+  "sessions": {
+    "s_900f8954ed6bf2": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f3fc63e49ffeMfhAFqEihJID3X",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
