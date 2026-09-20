@@ -16,6 +16,17 @@ export type UseAnalysisResult = {
   source: AnalysisSource
   warning: string | null
   analyze: () => Promise<void>
+  metadata: AnalysisMetadata | null
+  stale: boolean
+  ageMs: number | null
+}
+
+export type AnalysisMetadata = {
+  evaluatedAt: number
+  quotePrice: number
+  quoteTimestamp: string
+  quoteStatus: Quote['status']
+  candleCount: number
 }
 
 type UseAnalysisParams = {
@@ -26,6 +37,10 @@ type UseAnalysisParams = {
   instrument: Instrument
   quote: Quote | undefined
   candles: readonly Candle[]
+  /** Enables bounded automatic execution only for the local provider. */
+  automatic?: boolean
+  debounceMs?: number
+  now?: () => number
 }
 
 /**
@@ -45,15 +60,21 @@ export function useAnalysis({
   instrument,
   quote,
   candles,
+  automatic = false,
+  debounceMs = 400,
+  now = Date.now,
 }: UseAnalysisParams): UseAnalysisResult {
   const [status, setStatus] = useState<AnalysisStatus>('idle')
   const [result, setResult] = useState<AnalysisResult | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [source, setSource] = useState<AnalysisSource>(null)
   const [warning, setWarning] = useState<string | null>(null)
+  const [metadata, setMetadata] = useState<AnalysisMetadata | null>(null)
+  const [clock, setClock] = useState(() => now())
 
   const requestIdRef = useRef(0)
   const instrumentIdRef = useRef(instrument.id)
+  const lastAutomaticInputRef = useRef<string | null>(null)
   useEffect(() => {
     instrumentIdRef.current = instrument.id
   }, [instrument.id])
@@ -84,6 +105,13 @@ export function useAnalysis({
         return
       }
       setResult(analysisResult)
+      setMetadata({
+        evaluatedAt: now(),
+        quotePrice: quote.price,
+        quoteTimestamp: quote.timestamp,
+        quoteStatus: quote.status,
+        candleCount: candles.length,
+      })
       setSource('preferred')
       setStatus('ready')
     } catch (cause) {
@@ -113,6 +141,13 @@ export function useAnalysis({
           return
         }
         setResult(fallbackResult)
+        setMetadata({
+          evaluatedAt: now(),
+          quotePrice: quote.price,
+          quoteTimestamp: quote.timestamp,
+          quoteStatus: quote.status,
+          candleCount: candles.length,
+        })
         setSource('fallback')
         setWarning(
           'El análisis preferido no está disponible; se muestra la evaluación local.',
@@ -129,9 +164,58 @@ export function useAnalysis({
         setStatus('error')
       }
     }
-  }, [analysis, fallback, portfolioRepository, instrument, quote, candles])
+  }, [analysis, fallback, portfolioRepository, instrument, quote, candles, now])
 
-  return { status, result, error, source, warning, analyze }
+  const automaticInput =
+    quote === undefined
+      ? null
+      : JSON.stringify({
+          instrumentId: instrument.id,
+          quote,
+          candles,
+        })
+
+  useEffect(() => {
+    if (!automatic) {
+      lastAutomaticInputRef.current = null
+      return undefined
+    }
+    if (automaticInput === null) return undefined
+    if (lastAutomaticInputRef.current === automaticInput) return undefined
+    lastAutomaticInputRef.current = automaticInput
+    const timer = window.setTimeout(() => {
+      void analyze()
+    }, debounceMs)
+    return () => window.clearTimeout(timer)
+  }, [automatic, automaticInput, analyze, debounceMs])
+
+  useEffect(() => {
+    if (metadata === null) return undefined
+    const timer = window.setInterval(() => setClock(now()), 1000)
+    return () => window.clearInterval(timer)
+  }, [metadata, now])
+
+  const stale =
+    metadata !== null &&
+    (quote === undefined ||
+      metadata.quotePrice !== quote.price ||
+      metadata.quoteTimestamp !== quote.timestamp ||
+      metadata.quoteStatus !== quote.status ||
+      metadata.candleCount !== candles.length)
+  const ageMs =
+    metadata === null ? null : Math.max(0, clock - metadata.evaluatedAt)
+
+  return {
+    status,
+    result,
+    error,
+    source,
+    warning,
+    analyze,
+    metadata,
+    stale,
+    ageMs,
+  }
 }
 
 function errorMessage(cause: unknown): string {

@@ -28,6 +28,7 @@ type InstrumentDetailProps = {
   analysisMode?: AnalysisMode
   analysisFallback?: AnalysisProvider
   portfolioRepository?: PortfolioRepository
+  automaticAnalysis?: boolean
 }
 
 const PLACEHOLDER = '—'
@@ -40,6 +41,7 @@ export default function InstrumentDetail({
   analysisMode = 'local',
   analysisFallback,
   portfolioRepository,
+  automaticAnalysis = false,
 }: InstrumentDetailProps) {
   const quote = useLatestQuote(provider, instrument.id)
   const history = useCandleHistory(provider, instrument.id)
@@ -50,7 +52,7 @@ export default function InstrumentDetail({
   )
 
   return (
-    <section className="detail" aria-label={`${instrument.symbol} details`}>
+    <section className="detail" aria-label={`${instrument.symbol} detalle`}>
       <PriceSummary instrument={instrument} quote={quote} />
       {history.status === 'loading' && (
         <p role="status" aria-busy="true" className="detail__history-note">
@@ -74,7 +76,18 @@ export default function InstrumentDetail({
           </button>
         </div>
       )}
-      {history.status === 'ready' && <PriceChart data={chartData} />}
+      {history.status === 'ready' && (
+        <section className="detail__chart" aria-label="Evolución del precio">
+          <div className="detail__chart-header">
+            <h3>Gráfico BTC-EUR</h3>
+            <span>Periodo visible: histórico diario</span>
+          </div>
+          <PriceChart data={chartData} />
+          <p className="detail__chart-state">
+            Estado de datos: {quoteState(quote)}
+          </p>
+        </section>
+      )}
       {analysis && portfolioRepository && (
         <AnalysisPanel
           mode={analysisMode}
@@ -84,10 +97,18 @@ export default function InstrumentDetail({
           instrument={instrument}
           quote={quote}
           candles={history.status === 'ready' ? history.candles : EMPTY_CANDLES}
+          automatic={automaticAnalysis && analysisMode === 'local'}
         />
       )}
     </section>
   )
+}
+
+function quoteState(quote: Quote | undefined): string {
+  if (quote === undefined) return 'esperando cotización'
+  if (quote.status === 'mock') return 'Datos simulados'
+  if (quote.status === 'stale') return 'Datos desactualizados'
+  return 'Datos reales'
 }
 
 function PriceSummary({

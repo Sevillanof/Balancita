@@ -79,7 +79,7 @@ describe('InstrumentDetail', () => {
     render(<InstrumentDetail provider={provider} instrument={BTC_EUR} />)
 
     expect(
-      screen.getByRole('region', { name: /BTC-EUR details/i }),
+      screen.getByRole('region', { name: /BTC-EUR detalle/i }),
     ).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'BTC-EUR' })).toBeInTheDocument()
     expect(screen.getByText('Bitcoin / Euro')).toBeInTheDocument()

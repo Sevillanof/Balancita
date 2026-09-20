@@ -1,5 +1,5 @@
 import { act, renderHook, waitFor } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type {
   AnalysisInput,
   AnalysisProvider,
@@ -306,5 +306,105 @@ describe('useAnalysis fallback', () => {
     expect(result.current.status).toBe('idle')
     expect(result.current.source).toBeNull()
     expect(result.current.warning).toBeNull()
+  })
+})
+
+describe('useAnalysis automatic local mode', () => {
+  let analysis: FakeAnalysisProvider
+  let repository: PortfolioRepository
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    analysis = new FakeAnalysisProvider()
+    analysis.analyzeCall.mockResolvedValue(resultFor())
+    repository = {
+      list: vi.fn().mockResolvedValue([]),
+      add: vi.fn(),
+      remove: vi.fn(),
+      clear: vi.fn(),
+    }
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('debounces, deduplicates unchanged inputs and reacts to a relevant quote change', async () => {
+    const quote = makeQuote({ instrumentId: 'BTC-EUR', price: 60_000 })
+    const { result, rerender } = renderHook(
+      ({ currentQuote }) =>
+        useAnalysis({
+          analysis,
+          portfolioRepository: repository,
+          instrument: BTC_EUR,
+          quote: currentQuote,
+          candles: CANDLES,
+          automatic: true,
+          debounceMs: 200,
+          now: () => 1_700_000_000_000,
+        }),
+      { initialProps: { currentQuote: quote } },
+    )
+
+    expect(analysis.analyzeCall).not.toHaveBeenCalled()
+    await act(async () => {
+      vi.advanceTimersByTime(199)
+    })
+    expect(analysis.analyzeCall).not.toHaveBeenCalled()
+    await act(async () => {
+      vi.advanceTimersByTime(1)
+      await Promise.resolve()
+    })
+    expect(analysis.analyzeCall).toHaveBeenCalledTimes(1)
+
+    await act(async () => {
+      vi.advanceTimersByTime(1000)
+      await Promise.resolve()
+    })
+    expect(analysis.analyzeCall).toHaveBeenCalledTimes(1)
+
+    rerender({
+      currentQuote: makeQuote({ instrumentId: 'BTC-EUR', price: 61_000 }),
+    })
+    await act(async () => {
+      vi.advanceTimersByTime(200)
+      await Promise.resolve()
+    })
+    expect(analysis.analyzeCall).toHaveBeenCalledTimes(2)
+    expect(result.current.metadata?.quotePrice).toBe(61_000)
+  })
+
+  it('cleans up a pending automatic request and marks a result stale', async () => {
+    const quote = makeQuote({ instrumentId: 'BTC-EUR', price: 60_000 })
+    const { result, rerender, unmount } = renderHook(
+      ({ currentQuote, automatic }) =>
+        useAnalysis({
+          analysis,
+          portfolioRepository: repository,
+          instrument: BTC_EUR,
+          quote: currentQuote,
+          candles: CANDLES,
+          automatic,
+          debounceMs: 200,
+          now: () => 1_700_000_000_000,
+        }),
+      { initialProps: { currentQuote: quote, automatic: false } },
+    )
+
+    await act(async () => {
+      await result.current.analyze()
+    })
+    rerender({
+      currentQuote: makeQuote({ instrumentId: 'BTC-EUR', price: 60_100 }),
+      automatic: false,
+    })
+    expect(result.current.stale).toBe(true)
+
+    rerender({ currentQuote: quote, automatic: true })
+    unmount()
+    await act(async () => {
+      vi.advanceTimersByTime(500)
+    })
+    expect(analysis.analyzeCall).toHaveBeenCalledTimes(1)
   })
 })

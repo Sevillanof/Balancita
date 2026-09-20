@@ -13,6 +13,7 @@ type AnalysisPanelProps = {
   instrument: Instrument
   quote: Quote | undefined
   candles: readonly Candle[]
+  automatic?: boolean
 }
 
 function sourceLabel(
@@ -45,6 +46,13 @@ function volatilityLabel(level: string): string {
   return level === 'high' ? 'Alta' : level === 'moderate' ? 'Moderada' : 'Baja'
 }
 
+function formatAge(ageMs: number): string {
+  if (ageMs < 1000) return 'menos de un segundo'
+  const seconds = Math.floor(ageMs / 1000)
+  if (seconds < 60) return `${seconds} s`
+  return `${Math.floor(seconds / 60)} min`
+}
+
 export default function AnalysisPanel({
   mode = 'local',
   analysis,
@@ -53,15 +61,18 @@ export default function AnalysisPanel({
   instrument,
   quote,
   candles,
+  automatic = false,
 }: AnalysisPanelProps) {
-  const { status, result, source, warning, analyze } = useAnalysis({
-    analysis,
-    fallback,
-    portfolioRepository,
-    instrument,
-    quote,
-    candles,
-  })
+  const { status, result, source, warning, analyze, metadata, stale, ageMs } =
+    useAnalysis({
+      analysis,
+      fallback,
+      portfolioRepository,
+      instrument,
+      quote,
+      candles,
+      automatic,
+    })
   const waitingForQuote = quote === undefined
   const busy = status === 'loading'
   const label = sourceLabel(mode, source)
@@ -90,7 +101,7 @@ export default function AnalysisPanel({
       )}
       {status === 'error' && (
         <p role="alert" className="analysis__note">
-          No se pudo completar el análisis. Intentá nuevamente.
+          No se pudo completar el análisis. Intente nuevamente.
         </p>
       )}
       {warning !== null && (
@@ -118,6 +129,20 @@ export default function AnalysisPanel({
             Recomendación educativa:{' '}
             <strong>{recommendationLabel(result.recommendation)}</strong>
           </p>
+          {metadata !== null && (
+            <p className="analysis__metadata">
+              Precio usado: {metadata.quotePrice.toLocaleString('en-US')} ·{' '}
+              {metadata.candleCount}{' '}
+              {metadata.candleCount === 1 ? 'vela' : 'velas'} · Datos{' '}
+              {metadata.quoteStatus === 'mock'
+                ? 'simulados'
+                : metadata.quoteStatus === 'stale'
+                  ? 'desactualizados'
+                  : 'reales'}
+              {' · '}Antigüedad: {formatAge(ageMs ?? 0)}
+              {stale ? ' · Resultado desactualizado' : ''}
+            </p>
+          )}
           <p className="analysis__metric">
             Volatilidad (ATR):{' '}
             {result.volatility.averageTrueRangePercent.toFixed(2)}% en{' '}
