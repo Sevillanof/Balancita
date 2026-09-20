@@ -1,0 +1,25 @@
+src/App.test.tsx
+  s_c3e016bc5e0487::t_1b0fe00053304b 143-160
+src/app/trade/TradeScreen.test.tsx
+  s_c3e016bc5e0487::t_3688bcd3d3e90a 1-158
+src/app/trade/TradeScreen.tsx
+  s_c3e016bc5e0487::t_9380afc5675659 1-406
+src/app/trade/trade.css
+  s_c3e016bc5e0487::t_fc0eb23fa3ec26 1-209
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8cd3a0512d06f6ef8f5988baef4d09b132b294d3",
+  "prompts": {},
+  "sessions": {
+    "s_c3e016bc5e0487": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f40ddf334ffeIhn7DpVpPzht2Z",
+        "model": "big-pickle"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
