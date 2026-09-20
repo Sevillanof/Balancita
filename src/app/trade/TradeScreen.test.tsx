@@ -19,28 +19,28 @@ describe('TradeScreen', () => {
     const market = new FakeMarketDataProvider(WATCHLIST_INSTRUMENTS)
     render(<TradeScreen provider={market} />)
 
-    const instrumentSelect = await screen.findByLabelText('Instrument')
+    const instrumentSelect = await screen.findByLabelText('Instrumento')
     expect(instrumentSelect).toHaveValue('BTC-EUR')
-    expect(screen.getByText('Live price: —')).toBeInTheDocument()
+    expect(screen.getByText('Precio en vivo: —')).toBeInTheDocument()
 
     act(() => {
       market.emit(makeQuote({ instrumentId: 'BTC-EUR', price: 60_000 }))
     })
 
-    expect(screen.getByText('Live price: €60,000.00')).toBeInTheDocument()
-    expect(screen.getByText('Cash (EUR): €10,000.00')).toBeInTheDocument()
+    expect(screen.getByText('Precio en vivo: €60,000.00')).toBeInTheDocument()
+    expect(screen.getByText('Efectivo (EUR): €10,000.00')).toBeInTheDocument()
   })
 
   it('keeps the preview disabled until quantity and a live price exist', async () => {
     const market = new FakeMarketDataProvider(WATCHLIST_INSTRUMENTS)
     render(<TradeScreen provider={market} />)
     const previewButton = await screen.findByRole('button', {
-      name: 'Preview order',
+      name: 'Vista previa de la orden',
     })
 
     expect(previewButton).toBeDisabled()
 
-    await userEvent.type(screen.getByLabelText('Quantity'), '0.1')
+    await userEvent.type(screen.getByLabelText('Cantidad'), '0.1')
     expect(previewButton).toBeDisabled()
 
     act(() => {
@@ -54,32 +54,36 @@ describe('TradeScreen', () => {
     const user = userEvent.setup()
     render(<TradeScreen provider={market} />)
 
-    await screen.findByLabelText('Instrument')
+    await screen.findByLabelText('Instrumento')
     act(() => {
       market.emit(makeQuote({ instrumentId: 'BTC-EUR', price: 60_000 }))
     })
 
-    await user.type(screen.getByLabelText('Quantity'), '0.1')
-    await user.click(screen.getByRole('button', { name: 'Preview order' }))
+    await user.type(screen.getByLabelText('Cantidad'), '0.1')
+    await user.click(
+      screen.getByRole('button', { name: 'Vista previa de la orden' }),
+    )
 
-    const summary = screen.getByRole('region', { name: 'Order preview' })
+    const summary = screen.getByRole('region', {
+      name: 'Vista previa de la orden',
+    })
     expect(within(summary).getAllByText('€6,000.00').length).toBeGreaterThan(0)
 
     await user.click(
-      within(summary).getByRole('button', { name: 'Confirm order' }),
+      within(summary).getByRole('button', { name: 'Confirmar orden' }),
     )
 
-    await screen.findByText('Order executed')
-    const result = screen.getByRole('region', { name: 'Order result' })
+    await screen.findByText('Orden ejecutada')
+    const result = screen.getByRole('region', { name: 'Resultado de la orden' })
     expect(within(result).getByText('R1')).toBeInTheDocument()
     expect(within(result).getAllByText('€6,000.00').length).toBeGreaterThan(0)
 
     await waitFor(() =>
-      expect(screen.getByText('Cash (EUR): €4,000.00')).toBeInTheDocument(),
+      expect(screen.getByText('Efectivo (EUR): €4,000.00')).toBeInTheDocument(),
     )
-    const history = screen.getByRole('region', { name: 'Order history' })
+    const history = screen.getByRole('region', { name: 'Historial de órdenes' })
     expect(within(history).getByText('R1')).toBeInTheDocument()
-    expect(within(history).getByText('executed')).toBeInTheDocument()
+    expect(within(history).getByText('Ejecutada')).toBeInTheDocument()
   })
 
   it('rejects a buy that exceeds available cash and shows the reason', async () => {
@@ -87,21 +91,25 @@ describe('TradeScreen', () => {
     const user = userEvent.setup()
     render(<TradeScreen provider={market} />)
 
-    await screen.findByLabelText('Instrument')
+    await screen.findByLabelText('Instrumento')
     act(() => {
       market.emit(makeQuote({ instrumentId: 'BTC-EUR', price: 60_000 }))
     })
 
-    await user.type(screen.getByLabelText('Quantity'), '0.2')
-    await user.click(screen.getByRole('button', { name: 'Preview order' }))
-    const summary = screen.getByRole('region', { name: 'Order preview' })
+    await user.type(screen.getByLabelText('Cantidad'), '0.2')
     await user.click(
-      within(summary).getByRole('button', { name: 'Confirm order' }),
+      screen.getByRole('button', { name: 'Vista previa de la orden' }),
+    )
+    const summary = screen.getByRole('region', {
+      name: 'Vista previa de la orden',
+    })
+    await user.click(
+      within(summary).getByRole('button', { name: 'Confirmar orden' }),
     )
 
-    await screen.findByText('Order rejected')
-    expect(screen.getByText('Reason: insufficient-cash')).toBeInTheDocument()
-    expect(screen.getByText('Cash (EUR): €10,000.00')).toBeInTheDocument()
+    await screen.findByText('Orden rechazada')
+    expect(screen.getByText('Motivo: Fondos insuficientes')).toBeInTheDocument()
+    expect(screen.getByText('Efectivo (EUR): €10,000.00')).toBeInTheDocument()
   })
 
   it('credits cash when selling from a seeded position', async () => {
@@ -116,22 +124,28 @@ describe('TradeScreen', () => {
 
     render(<TradeScreen provider={market} />)
 
-    await screen.findByLabelText('Instrument')
+    await screen.findByLabelText('Instrumento')
     act(() => {
       market.emit(makeQuote({ instrumentId: 'BTC-EUR', price: 60_000 }))
     })
 
-    await user.click(screen.getByRole('button', { name: 'Sell' }))
-    await user.type(screen.getByLabelText('Quantity'), '0.1')
-    await user.click(screen.getByRole('button', { name: 'Preview order' }))
-    const summary = screen.getByRole('region', { name: 'Order preview' })
+    await user.click(screen.getByRole('button', { name: 'Vender' }))
+    await user.type(screen.getByLabelText('Cantidad'), '0.1')
     await user.click(
-      within(summary).getByRole('button', { name: 'Confirm order' }),
+      screen.getByRole('button', { name: 'Vista previa de la orden' }),
+    )
+    const summary = screen.getByRole('region', {
+      name: 'Vista previa de la orden',
+    })
+    await user.click(
+      within(summary).getByRole('button', { name: 'Confirmar orden' }),
     )
 
-    await screen.findByText('Order executed')
+    await screen.findByText('Orden ejecutada')
     await waitFor(() =>
-      expect(screen.getByText('Cash (EUR): €16,000.00')).toBeInTheDocument(),
+      expect(
+        screen.getByText('Efectivo (EUR): €16,000.00'),
+      ).toBeInTheDocument(),
     )
 
     const holdings = await new LocalStoragePortfolioRepository().list()
@@ -145,14 +159,14 @@ describe('TradeScreen', () => {
     const user = userEvent.setup()
     render(<TradeScreen provider={market} />)
 
-    await screen.findByLabelText('Instrument')
+    await screen.findByLabelText('Instrumento')
     act(() => {
       market.emit(makeQuote({ instrumentId: 'BTC-EUR', price: 60_000 }))
     })
 
-    await user.type(screen.getByLabelText('Quantity'), '0')
+    await user.type(screen.getByLabelText('Cantidad'), '0')
     expect(
-      screen.getByText(/Quantity must be a positive decimal number/),
+      screen.getByText(/La cantidad debe ser un número decimal positivo/),
     ).toBeInTheDocument()
   })
 })

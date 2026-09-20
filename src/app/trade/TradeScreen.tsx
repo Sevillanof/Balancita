@@ -64,22 +64,22 @@ export default function TradeScreen({ provider }: TradeScreenProps) {
 
   if (trading.selectedInstrumentId === null) {
     return (
-      <section className="trade" aria-label="Trade">
-        <h2 className="trade__title">Trade</h2>
+      <section className="trade" aria-label="Operar">
+        <h2 className="trade__title">Operar</h2>
         <p role="status" className="trade__empty">
-          No instruments available for paper trading.
+          No hay instrumentos disponibles para operar en el simulador.
         </p>
       </section>
     )
   }
 
   return (
-    <section className="trade" aria-label="Trade">
+    <section className="trade" aria-label="Operar">
       <div className="trade__header">
-        <h2 className="trade__title">Trade</h2>
+        <h2 className="trade__title">Operar</h2>
         {cash && selectedCurrency && (
           <p className="trade__cash-inline">
-            Cash ({selectedCurrency}):{' '}
+            Efectivo ({selectedCurrency}):{' '}
             {formatPriceMoney(cash, asCurrency(selectedCurrency))}
           </p>
         )}
@@ -87,7 +87,7 @@ export default function TradeScreen({ provider }: TradeScreenProps) {
 
       <form
         className="trade__form"
-        aria-label="Paper trading order"
+        aria-label="Orden del simulador"
         noValidate
         onSubmit={(event) => {
           event.preventDefault()
@@ -95,7 +95,7 @@ export default function TradeScreen({ provider }: TradeScreenProps) {
         }}
       >
         <div className="trade__field">
-          <label htmlFor="trade-instrument">Instrument</label>
+          <label htmlFor="trade-instrument">Instrumento</label>
           <select
             id="trade-instrument"
             value={trading.selectedInstrumentId}
@@ -109,7 +109,7 @@ export default function TradeScreen({ provider }: TradeScreenProps) {
             ))}
           </select>
           <p className="trade__price">
-            Live price:{' '}
+            Precio en vivo:{' '}
             {price === null
               ? '—'
               : formatPrice(
@@ -120,15 +120,19 @@ export default function TradeScreen({ provider }: TradeScreenProps) {
         </div>
 
         <div className="trade__field">
-          <span className="trade__label">Side</span>
-          <div role="group" aria-label="Order side" className="trade__side">
+          <span className="trade__label">Tipo de operación</span>
+          <div
+            role="group"
+            aria-label="Tipo de operación"
+            className="trade__side"
+          >
             <button
               type="button"
               aria-pressed={trading.side === BUY}
               className={`trade__side-btn ${trading.side === BUY ? 'trade__side-btn--active' : ''}`}
               onClick={() => trading.setSide(BUY)}
             >
-              Buy
+              Comprar
             </button>
             <button
               type="button"
@@ -136,13 +140,13 @@ export default function TradeScreen({ provider }: TradeScreenProps) {
               className={`trade__side-btn ${trading.side === SELL ? 'trade__side-btn--active' : ''}`}
               onClick={() => trading.setSide(SELL)}
             >
-              Sell
+              Vender
             </button>
           </div>
         </div>
 
         <div className="trade__field">
-          <label htmlFor="trade-quantity">Quantity</label>
+          <label htmlFor="trade-quantity">Cantidad</label>
           <input
             id="trade-quantity"
             type="number"
@@ -159,13 +163,13 @@ export default function TradeScreen({ provider }: TradeScreenProps) {
               role="alert"
               className="trade__field-error"
             >
-              Quantity must be a positive decimal number.
+              La cantidad debe ser un número decimal positivo.
             </p>
           )}
         </div>
 
         <div className="trade__field">
-          <label htmlFor="trade-cash">Available cash</label>
+          <label htmlFor="trade-cash">Efectivo disponible</label>
           <p id="trade-cash" className="trade__cash">
             {cash === undefined
               ? '—'
@@ -178,13 +182,13 @@ export default function TradeScreen({ provider }: TradeScreenProps) {
 
         {trading.previewError && (
           <p role="alert" className="trade__field-error">
-            <span>{trading.previewError}</span>{' '}
+            <span>{formatTradingMessage(trading.previewError)}</span>{' '}
             <button
               type="button"
               className="trade__retry"
               onClick={trading.resetTrade}
             >
-              New preview
+              Nueva vista previa
             </button>
           </p>
         )}
@@ -195,7 +199,9 @@ export default function TradeScreen({ provider }: TradeScreenProps) {
             className="trade__primary"
             disabled={!canPreview || trading.previewing}
           >
-            {trading.previewing ? 'Requesting preview…' : 'Preview order'}
+            {trading.previewing
+              ? 'Solicitando vista previa…'
+              : 'Vista previa de la orden'}
           </button>
         </div>
       </form>
@@ -218,13 +224,13 @@ export default function TradeScreen({ provider }: TradeScreenProps) {
 
       {trading.submitError && (
         <p role="alert" className="trade__field-error">
-          <span>{trading.submitError}</span>{' '}
+          <span>{formatTradingMessage(trading.submitError)}</span>{' '}
           <button
             type="button"
             className="trade__retry"
             onClick={handleNewOrder}
           >
-            New order
+            Nueva orden
           </button>
         </p>
       )}
@@ -238,8 +244,8 @@ export default function TradeScreen({ provider }: TradeScreenProps) {
       )}
 
       {trading.account && trading.account.history.length > 0 && (
-        <section className="trade__history" aria-label="Order history">
-          <h3 className="trade__history-title">Order history</h3>
+        <section className="trade__history" aria-label="Historial de órdenes">
+          <h3 className="trade__history-title">Historial de órdenes</h3>
           <ul className="trade__history-list">
             {[...trading.account.history]
               .reverse()
@@ -248,9 +254,9 @@ export default function TradeScreen({ provider }: TradeScreenProps) {
                 <li key={receipt.id} className="trade__history-item">
                   <span className="trade__history-id">{receipt.id}</span>
                   <span className={`trade__history-status--${receipt.status}`}>
-                    {receipt.status}
+                    {formatOrderStatus(receipt.status)}
                   </span>
-                  <span>{receipt.side}</span>
+                  <span>{formatOrderSide(receipt.side)}</span>
                   <span>{receipt.instrumentId}</span>
                   <span>
                     {formatQuantity(receipt.quantity)} @{' '}
@@ -265,7 +271,9 @@ export default function TradeScreen({ provider }: TradeScreenProps) {
                       asCurrency(trading.selectedInstrument?.currency ?? 'EUR'),
                     )}
                   </span>
-                  {receipt.reason && <em>({receipt.reason})</em>}
+                  {receipt.reason && (
+                    <em>({formatOrderReason(receipt.reason)})</em>
+                  )}
                 </li>
               ))}
           </ul>
@@ -305,32 +313,32 @@ function OrderSummary({
   onConfirm: () => void
 }) {
   return (
-    <section className="trade__summary" aria-label="Order preview">
-      <h3 className="trade__summary-title">Preview</h3>
+    <section className="trade__summary" aria-label="Vista previa de la orden">
+      <h3 className="trade__summary-title">Vista previa</h3>
       <dl className="trade__summary-grid">
-        <dt>Side</dt>
-        <dd>{side}</dd>
-        <dt>Quantity</dt>
+        <dt>Tipo de operación</dt>
+        <dd>{formatOrderSide(side)}</dd>
+        <dt>Cantidad</dt>
         <dd>{formatQuantity(quantity)}</dd>
-        <dt>Market price</dt>
+        <dt>Precio de mercado</dt>
         <dd>{formatPriceMoney(price, currency)}</dd>
-        <dt>Estimated fill</dt>
+        <dt>Ejecución estimada</dt>
         <dd>{formatPriceMoney(slippedPrice, currency)}</dd>
-        <dt>Slippage</dt>
+        <dt>Deslizamiento</dt>
         <dd>
           {isMoneyZero(slippageApplied)
-            ? 'none'
+            ? 'ninguno'
             : formatSignedPercent(slippageApplied)}
         </dd>
-        <dt>Commission</dt>
+        <dt>Comisión</dt>
         <dd>
           {isMoneyZero(commission)
-            ? 'none'
+            ? 'ninguna'
             : formatPriceMoney(commission, currency)}
         </dd>
         <dt>Subtotal</dt>
         <dd>{formatPriceMoney(subtotal, currency)}</dd>
-        <dt className="trade__summary-total">Estimated total</dt>
+        <dt className="trade__summary-total">Total estimado</dt>
         <dd className="trade__summary-total">
           {formatPriceMoney(total, currency)}
         </dd>
@@ -341,7 +349,7 @@ function OrderSummary({
         disabled={confirming}
         onClick={onConfirm}
       >
-        {confirming ? 'Confirming…' : 'Confirm order'}
+        {confirming ? 'Confirmando…' : 'Confirmar orden'}
       </button>
     </section>
   )
@@ -358,38 +366,62 @@ function Receipt({
 }) {
   const executed = receipt.status === 'executed'
   return (
-    <section className="trade__receipt" aria-label="Order result">
+    <section className="trade__receipt" aria-label="Resultado de la orden">
       <h3 className="trade__receipt-title">
-        {executed ? 'Order executed' : 'Order rejected'}
+        {executed ? 'Orden ejecutada' : 'Orden rechazada'}
       </h3>
       {receipt.reason && (
-        <p className="trade__receipt-reason">Reason: {receipt.reason}</p>
+        <p className="trade__receipt-reason">
+          Motivo: {formatOrderReason(receipt.reason)}
+        </p>
       )}
       <dl className="trade__summary-grid">
-        <dt>Receipt</dt>
+        <dt>Comprobante</dt>
         <dd>{receipt.id}</dd>
-        <dt>Side</dt>
-        <dd>{receipt.side}</dd>
-        <dt>Quantity</dt>
+        <dt>Tipo de operación</dt>
+        <dd>{formatOrderSide(receipt.side)}</dd>
+        <dt>Cantidad</dt>
         <dd>{formatQuantity(receipt.quantity)}</dd>
-        <dt>Executed price</dt>
+        <dt>Precio ejecutado</dt>
         <dd>{formatPriceMoney(receipt.executedPrice, currency)}</dd>
         {receipt.slippedPrice !== undefined && (
           <>
-            <dt>Effective fill</dt>
+            <dt>Ejecución efectiva</dt>
             <dd>{formatPriceMoney(receipt.slippedPrice, currency)}</dd>
           </>
         )}
         <dt>Total</dt>
         <dd>{formatPriceMoney(receipt.total, currency)}</dd>
-        <dt>Time</dt>
+        <dt>Hora</dt>
         <dd>{formatLocalTime(receipt.executedAt)}</dd>
       </dl>
       <button type="button" className="trade__secondary" onClick={onNewOrder}>
-        Trade again
+        Operar nuevamente
       </button>
     </section>
   )
+}
+
+function formatOrderSide(side: OrderSide): string {
+  return side === BUY ? 'Comprar' : 'Vender'
+}
+
+function formatOrderStatus(status: OrderReceipt['status']): string {
+  return status === 'executed' ? 'Ejecutada' : 'Rechazada'
+}
+
+function formatOrderReason(reason: string): string {
+  const labels: Record<string, string> = {
+    'insufficient-cash': 'Fondos insuficientes',
+    'insufficient-position': 'Posición insuficiente',
+    'preview-outdated': 'La cotización cambió; solicite una nueva vista previa',
+  }
+  return labels[reason] ?? 'La operación no pudo completarse.'
+}
+
+function formatTradingMessage(message: string | null): string {
+  if (message === null) return ''
+  return formatOrderReason(message)
 }
 
 function formatLocalTime(timestamp: number): string {

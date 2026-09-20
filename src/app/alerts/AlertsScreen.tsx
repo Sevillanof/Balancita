@@ -34,16 +34,16 @@ export default function AlertsScreen({ alerts }: AlertsScreenProps) {
   const { status, loadError } = alerts
 
   return (
-    <section className="alerts" aria-label="Alerts">
+    <section className="alerts" aria-label="Alertas">
       <div className="alerts__header">
-        <h2 className="alerts__title">Alerts</h2>
+        <h2 className="alerts__title">Alertas</h2>
         {status !== 'loading' && status !== 'error' && (
           <button
             type="button"
             className="alerts__add"
             onClick={() => setCreating(true)}
           >
-            Add alert
+            Agregar alerta
           </button>
         )}
       </div>
@@ -51,8 +51,8 @@ export default function AlertsScreen({ alerts }: AlertsScreenProps) {
       {status === 'error' && (
         <div role="alert" className="alerts__error">
           {loadError === 'corrupt'
-            ? 'Stored alert data could not be read.'
-            : 'Unable to load alerts.'}
+            ? 'No se pudieron leer los datos guardados de las alertas.'
+            : 'No se pudieron cargar las alertas.'}
           <div className="alerts__error-actions">
             {loadError === 'corrupt' && (
               <button
@@ -60,7 +60,7 @@ export default function AlertsScreen({ alerts }: AlertsScreenProps) {
                 className="alerts__retry"
                 onClick={() => void alerts.reset()}
               >
-                Reset alerts
+                Restablecer alertas
               </button>
             )}
             <button
@@ -68,7 +68,7 @@ export default function AlertsScreen({ alerts }: AlertsScreenProps) {
               className="alerts__retry"
               onClick={alerts.retry}
             >
-              Retry
+              Reintentar
             </button>
           </div>
         </div>
@@ -85,32 +85,32 @@ export default function AlertsScreen({ alerts }: AlertsScreenProps) {
 
       <table className="alerts__table" aria-busy={status === 'loading'}>
         <caption className="alerts__caption">
-          Price alerts evaluated against the live mock feed
+          Alertas de precio evaluadas con la fuente simulada en vivo
         </caption>
         <thead>
           <tr>
-            <th scope="col">Alert</th>
-            <th scope="col">Direction</th>
+            <th scope="col">Alerta</th>
+            <th scope="col">Dirección</th>
             <th scope="col" className="alerts__num">
-              Threshold
+              Umbral
             </th>
-            <th scope="col">Status</th>
-            <th scope="col">Created</th>
-            <th scope="col">Actions</th>
+            <th scope="col">Estado</th>
+            <th scope="col">Creada</th>
+            <th scope="col">Acciones</th>
           </tr>
         </thead>
         <tbody>
           {status === 'loading' && (
             <tr>
               <td colSpan={6} role="status" className="alerts__placeholder">
-                Loading alerts…
+                Cargando alertas…
               </td>
             </tr>
           )}
           {status === 'empty' && (
             <tr>
               <td colSpan={6} role="status" className="alerts__placeholder">
-                No alerts yet.
+                Todavía no hay alertas.
               </td>
             </tr>
           )}
@@ -151,13 +151,13 @@ function AlertRow({
         <span className="alerts__symbol">{instrument.symbol}</span>
         <span className="alerts__name">{instrument.displayName}</span>
       </th>
-      <td>{alert.direction}</td>
+      <td>{alert.direction === 'above' ? 'Por encima' : 'Por debajo'}</td>
       <td className="alerts__num">
         {formatPrice(alert.thresholdPrice, instrument.currency)}
       </td>
       <td>
         <span className="alerts__badge" data-status={alert.status}>
-          {alert.status}
+          {formatAlertStatus(alert.status)}
         </span>
       </td>
       <td>{formatLocalTime(alert.createdAt)}</td>
@@ -168,7 +168,7 @@ function AlertRow({
             className="alerts__action"
             onClick={onAcknowledge}
           >
-            Acknowledge {instrument.symbol} alert
+            Reconocer alerta de {instrument.symbol}
           </button>
         )}
         <button
@@ -176,11 +176,24 @@ function AlertRow({
           className="alerts__action alerts__action--danger"
           onClick={onDelete}
         >
-          Delete {instrument.symbol} alert
+          Eliminar alerta de {instrument.symbol}
         </button>
       </td>
     </tr>
   )
+}
+
+function formatAlertStatus(
+  status: UseAlertsResult['alerts'][number]['status'],
+): string {
+  switch (status) {
+    case 'active':
+      return 'Activa'
+    case 'triggered':
+      return 'Activada'
+    case 'acknowledged':
+      return 'Reconocida'
+  }
 }
 
 type AlertFormProps = {
@@ -227,12 +240,12 @@ function AlertForm({
   return (
     <form
       className="alerts__form"
-      aria-label="Add alert"
+      aria-label="Agregar alerta"
       noValidate
       onSubmit={(event) => void handleSubmit(event)}
     >
       <div className="alerts__field">
-        <label htmlFor="alert-instrument">Instrument</label>
+        <label htmlFor="alert-instrument">Instrumento</label>
         <select
           id="alert-instrument"
           value={instrumentId}
@@ -240,7 +253,7 @@ function AlertForm({
           required
         >
           <option value="" disabled>
-            Select an instrument
+            Seleccionar un instrumento
           </option>
           {instruments.map((instrument) => (
             <option key={instrument.id} value={instrument.id}>
@@ -251,7 +264,7 @@ function AlertForm({
       </div>
 
       <div className="alerts__field">
-        <label htmlFor="alert-direction">Direction</label>
+        <label htmlFor="alert-direction">Dirección</label>
         <select
           id="alert-direction"
           value={direction}
@@ -259,13 +272,13 @@ function AlertForm({
             setDirection(event.target.value as AlertDirection)
           }
         >
-          <option value="above">above</option>
-          <option value="below">below</option>
+          <option value="above">Por encima</option>
+          <option value="below">Por debajo</option>
         </select>
       </div>
 
       <div className="alerts__field">
-        <label htmlFor="alert-threshold">Threshold price</label>
+        <label htmlFor="alert-threshold">Precio umbral</label>
         <input
           id="alert-threshold"
           type="number"
@@ -284,23 +297,23 @@ function AlertForm({
             role="alert"
             className="alerts__field-error"
           >
-            Threshold must be greater than zero.
+            El umbral debe ser mayor que cero.
           </p>
         )}
       </div>
 
       {operationError && (
         <p role="alert" className="alerts__field-error">
-          {operationError}
+          No se pudo completar la operación de alertas.
         </p>
       )}
 
       <div className="alerts__form-actions">
         <button type="submit" className="alerts__save">
-          Save alert
+          Guardar alerta
         </button>
         <button type="button" className="alerts__cancel" onClick={onCancel}>
-          Cancel
+          Cancelar
         </button>
       </div>
     </form>

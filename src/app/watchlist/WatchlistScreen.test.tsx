@@ -11,13 +11,13 @@ import { formatChange, formatLocalTime, formatPrice } from '../format'
 import WatchlistScreen from './WatchlistScreen'
 
 const HEADERS = [
-  'Symbol',
-  'Name',
-  'Price',
-  'Currency',
-  'Change',
-  'Status',
-  'Last update',
+  'Símbolo',
+  'Nombre',
+  'Precio',
+  'Moneda',
+  'Variación',
+  'Estado',
+  'Última actualización',
 ]
 
 describe('WatchlistScreen', () => {
@@ -26,7 +26,7 @@ describe('WatchlistScreen', () => {
     render(<WatchlistScreen provider={provider} />)
 
     expect(
-      screen.getByRole('table', { name: /realtime prices/i }),
+      screen.getByRole('table', { name: /precios en tiempo real/i }),
     ).toBeInTheDocument()
 
     for (const header of HEADERS) {
@@ -63,7 +63,9 @@ describe('WatchlistScreen', () => {
 
     render(<WatchlistScreen provider={provider} />)
 
-    expect(screen.getByText('Loading watchlist…')).toBeInTheDocument()
+    expect(
+      screen.getByText('Cargando lista de seguimiento…'),
+    ).toBeInTheDocument()
     expect(screen.getByRole('table')).toHaveAttribute('aria-busy', 'true')
 
     await act(async () => resolveGetInstruments([...WATCHLIST_INSTRUMENTS]))
@@ -79,10 +81,12 @@ describe('WatchlistScreen', () => {
     render(<WatchlistScreen provider={provider} />)
 
     await waitFor(() =>
-      expect(screen.getByText('No instruments available.')).toBeInTheDocument(),
+      expect(
+        screen.getByText('No hay instrumentos disponibles.'),
+      ).toBeInTheDocument(),
     )
     expect(screen.getByRole('status')).toHaveTextContent(
-      'No instruments available.',
+      'No hay instrumentos disponibles.',
     )
   })
 
@@ -95,14 +99,14 @@ describe('WatchlistScreen', () => {
 
     await waitFor(() =>
       expect(
-        screen.getByText('Unable to load market data.'),
+        screen.getByText('No se pudieron cargar los datos de mercado.'),
       ).toBeInTheDocument(),
     )
     expect(screen.getByRole('status')).toHaveTextContent(
-      'Unable to load market data.',
+      'No se pudieron cargar los datos de mercado.',
     )
 
-    const retry = screen.getByRole('button', { name: /retry/i })
+    const retry = screen.getByRole('button', { name: /reintentar/i })
     expect(retry).toBeInTheDocument()
 
     provider.getInstrumentsError = undefined
@@ -141,7 +145,7 @@ describe('WatchlistScreen', () => {
     expect(
       within(row).getByText(formatLocalTime(quote.timestamp)),
     ).toBeInTheDocument()
-    expect(within(row).getByText('mock')).toBeInTheDocument()
+    expect(within(row).getByText('Simulada')).toBeInTheDocument()
     expect(within(row).getByText(formatChange(quote).text)).toHaveClass(
       'watchlist__change--up',
     )

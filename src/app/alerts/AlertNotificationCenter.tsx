@@ -19,9 +19,13 @@ export default function AlertNotificationCenter({
   if (triggered.length === 0) return null
 
   return (
-    <section className="alerts__notifications" aria-label="Alert notifications">
+    <section
+      className="alerts__notifications"
+      aria-label="Notificaciones de alertas"
+    >
       {triggered.map(({ alert, instrument }) => {
-        const message = `${instrument.symbol} ${alert.direction} ${formatPrice(
+        const direction = alert.direction === 'above' ? 'superó' : 'bajó de'
+        const message = `${instrument.symbol} ${direction} ${formatPrice(
           alert.thresholdPrice,
           instrument.currency,
         )}`
@@ -32,13 +36,15 @@ export default function AlertNotificationCenter({
             aria-label={message}
             className="alerts__notification"
           >
-            <span className="alerts__notification-message">{message}</span>
+            <span className="alerts__notification-message">
+              Alerta: {message}
+            </span>
             <button
               type="button"
               className="alerts__notification-action"
               onClick={() => onAcknowledge(alert.id)}
             >
-              Acknowledge {instrument.symbol}
+              Reconocer {instrument.symbol}
             </button>
           </div>
         )

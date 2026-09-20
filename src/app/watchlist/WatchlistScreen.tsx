@@ -3,7 +3,12 @@ import type {
   MarketDataProvider,
   Quote,
 } from '../../domain/market-data'
-import { formatChange, formatLocalTime, formatPrice } from '../format'
+import {
+  formatChange,
+  formatLocalTime,
+  formatPrice,
+  formatQuoteStatus,
+} from '../format'
 import { useWatchlist } from './useWatchlist'
 import './watchlist.css'
 
@@ -23,26 +28,26 @@ export default function WatchlistScreen({
   const { status, instruments, quotes, retry } = useWatchlist(provider)
 
   return (
-    <section className="watchlist" aria-label="Watchlist">
-      <h2 className="watchlist__title">Watchlist</h2>
+    <section className="watchlist" aria-label="Lista de seguimiento">
+      <h2 className="watchlist__title">Lista de seguimiento</h2>
       <table className="watchlist__table" aria-busy={status === 'loading'}>
         <caption className="watchlist__caption">
-          Realtime prices for your watchlist
+          Precios en tiempo real de tu lista de seguimiento
         </caption>
         <thead>
           <tr>
-            <th scope="col">Symbol</th>
-            <th scope="col">Name</th>
+            <th scope="col">Símbolo</th>
+            <th scope="col">Nombre</th>
             <th scope="col" className="watchlist__num">
-              Price
+              Precio
             </th>
-            <th scope="col">Currency</th>
+            <th scope="col">Moneda</th>
             <th scope="col" className="watchlist__num">
-              Change
+              Variación
             </th>
-            <th scope="col">Status</th>
+            <th scope="col">Estado</th>
             <th scope="col" className="watchlist__num">
-              Last update
+              Última actualización
             </th>
           </tr>
         </thead>
@@ -50,27 +55,27 @@ export default function WatchlistScreen({
           {status === 'loading' && (
             <tr>
               <td colSpan={7} role="status" className="watchlist__placeholder">
-                Loading watchlist…
+                Cargando lista de seguimiento…
               </td>
             </tr>
           )}
           {status === 'empty' && (
             <tr>
               <td colSpan={7} role="status" className="watchlist__placeholder">
-                No instruments available.
+                No hay instrumentos disponibles.
               </td>
             </tr>
           )}
           {status === 'error' && (
             <tr>
               <td colSpan={7} role="status" className="watchlist__placeholder">
-                Unable to load market data.
+                No se pudieron cargar los datos de mercado.
                 <button
                   type="button"
                   className="watchlist__retry"
                   onClick={retry}
                 >
-                  Retry
+                  Reintentar
                 </button>
               </td>
             </tr>
@@ -143,7 +148,7 @@ function WatchlistRow({
           PLACEHOLDER
         )}
       </td>
-      <td>{quote?.status ?? PLACEHOLDER}</td>
+      <td>{quote ? formatQuoteStatus(quote.status) : PLACEHOLDER}</td>
       <td className="watchlist__num watchlist__updated">
         {hasQuote ? formatLocalTime(quote.timestamp) : PLACEHOLDER}
       </td>

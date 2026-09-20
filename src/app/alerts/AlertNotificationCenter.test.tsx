@@ -33,11 +33,11 @@ describe('AlertNotificationCenter', () => {
   it('renders nothing when no alert is triggered', () => {
     render(<AlertNotificationCenter triggered={[]} onAcknowledge={vi.fn()} />)
     expect(
-      screen.queryByRole('region', { name: /alert notifications/i }),
+      screen.queryByRole('region', { name: /notificaciones de alertas/i }),
     ).not.toBeInTheDocument()
   })
 
-  it('shows a clear message and an Acknowledge action for each trigger', () => {
+  it('shows a clear message and a Reconocer action for each trigger', () => {
     const onAcknowledge = vi.fn()
     render(
       <AlertNotificationCenter
@@ -46,21 +46,23 @@ describe('AlertNotificationCenter', () => {
       />,
     )
 
-    const region = screen.getByRole('region', { name: /alert notifications/i })
+    const region = screen.getByRole('region', {
+      name: /notificaciones de alertas/i,
+    })
     const btc = within(region).getByRole('alert', {
-      name: /BTC-EUR above/i,
+      name: /BTC-EUR superó/i,
     })
     expect(
       within(btc).getByText(
-        `BTC-EUR above ${formatPrice(60_000, BTC_EUR.currency)}`,
+        `Alerta: BTC-EUR superó ${formatPrice(60_000, BTC_EUR.currency)}`,
       ),
     ).toBeInTheDocument()
     const ttwo = within(region).getByRole('alert', {
-      name: /TTWO below/i,
+      name: /TTWO bajó de/i,
     })
     expect(ttwo).toBeInTheDocument()
     expect(
-      within(region).getAllByRole('button', { name: /acknowledge/i }),
+      within(region).getAllByRole('button', { name: /reconocer/i }),
     ).toHaveLength(2)
   })
 
@@ -74,10 +76,12 @@ describe('AlertNotificationCenter', () => {
       />,
     )
 
-    const region = screen.getByRole('region', { name: /alert notifications/i })
-    const btc = within(region).getByRole('alert', { name: /BTC-EUR above/i })
+    const region = screen.getByRole('region', {
+      name: /notificaciones de alertas/i,
+    })
+    const btc = within(region).getByRole('alert', { name: /BTC-EUR superó/i })
     await user.click(
-      within(btc).getByRole('button', { name: /acknowledge BTC-EUR/i }),
+      within(btc).getByRole('button', { name: /reconocer BTC-EUR/i }),
     )
 
     expect(onAcknowledge).toHaveBeenCalledWith('a1')

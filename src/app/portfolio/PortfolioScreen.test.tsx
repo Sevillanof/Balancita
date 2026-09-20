@@ -35,15 +35,15 @@ function renderScreen() {
 }
 
 const HEADERS = [
-  'Position',
-  'Quantity',
-  'Avg cost',
-  'Current price',
-  'Total cost',
-  'Current value',
-  'P/L',
-  'Currency',
-  'Actions',
+  'Posición',
+  'Cantidad',
+  'Costo promedio',
+  'Precio actual',
+  'Costo total',
+  'Valor actual',
+  'Resultado',
+  'Moneda',
+  'Acciones',
 ]
 
 beforeEach(() => {
@@ -56,11 +56,11 @@ describe('PortfolioScreen', () => {
 
     await waitFor(() =>
       expect(
-        screen.getByRole('heading', { name: 'Portfolio' }),
+        screen.getByRole('heading', { name: 'Cartera' }),
       ).toBeInTheDocument(),
     )
 
-    const table = screen.getByRole('table', { name: /positions/i })
+    const table = screen.getByRole('table', { name: /posiciones manuales/i })
     for (const header of HEADERS) {
       const column = within(table).getByRole('columnheader', {
         name: header,
@@ -75,7 +75,7 @@ describe('PortfolioScreen', () => {
     vi.spyOn(repository, 'list').mockReturnValue(new Promise(() => {}))
     render(<PortfolioScreen provider={provider} repository={repository} />)
 
-    expect(screen.getByText('Loading portfolio…')).toBeInTheDocument()
+    expect(screen.getByText('Cargando cartera…')).toBeInTheDocument()
     expect(screen.getByRole('table')).toHaveAttribute('aria-busy', 'true')
   })
 
@@ -83,11 +83,15 @@ describe('PortfolioScreen', () => {
     renderScreen()
 
     await waitFor(() =>
-      expect(screen.getByText('No positions yet.')).toBeInTheDocument(),
+      expect(
+        screen.getByText('Todavía no hay posiciones.'),
+      ).toBeInTheDocument(),
     )
-    const add = screen.getByRole('button', { name: /add position/i })
+    const add = screen.getByRole('button', { name: /agregar posición/i })
     expect(add).toBeInTheDocument()
-    expect(screen.getByRole('status')).toHaveTextContent('No positions yet.')
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Todavía no hay posiciones.',
+    )
   })
 
   it('shows an error state and recovers on retry', async () => {
@@ -100,15 +104,19 @@ describe('PortfolioScreen', () => {
     render(<PortfolioScreen provider={provider} repository={repository} />)
 
     await waitFor(() =>
-      expect(screen.getByText('Unable to load portfolio.')).toBeInTheDocument(),
+      expect(
+        screen.getByText('No se pudo cargar la cartera.'),
+      ).toBeInTheDocument(),
     )
     expect(screen.getByRole('alert')).toBeInTheDocument()
 
     spy.mockResolvedValue([])
-    await user.click(screen.getByRole('button', { name: /retry/i }))
+    await user.click(screen.getByRole('button', { name: /reintentar/i }))
 
     await waitFor(() =>
-      expect(screen.getByText('No positions yet.')).toBeInTheDocument(),
+      expect(
+        screen.getByText('Todavía no hay posiciones.'),
+      ).toBeInTheDocument(),
     )
   })
 
@@ -128,11 +136,13 @@ describe('PortfolioScreen', () => {
 
     await waitFor(() =>
       expect(
-        screen.getByText('Stored portfolio data could not be read.'),
+        screen.getByText(
+          'No se pudieron leer los datos guardados de la cartera.',
+        ),
       ).toBeInTheDocument(),
     )
 
-    const reset = screen.getByRole('button', { name: /reset portfolio/i })
+    const reset = screen.getByRole('button', { name: /restablecer cartera/i })
     await waitFor(() => expect(reset).toBeInTheDocument())
   })
 
@@ -142,17 +152,20 @@ describe('PortfolioScreen', () => {
 
     await waitFor(() =>
       expect(
-        screen.getByRole('button', { name: /add position/i }),
+        screen.getByRole('button', { name: /agregar posición/i }),
       ).toBeInTheDocument(),
     )
-    await user.click(screen.getByRole('button', { name: /add position/i }))
+    await user.click(screen.getByRole('button', { name: /agregar posición/i }))
 
-    const form = screen.getByRole('form', { name: /add position/i })
-    await user.selectOptions(within(form).getByLabelText(/instrument/i), 'TTWO')
-    await user.type(within(form).getByLabelText(/quantity/i), '10')
-    await user.type(within(form).getByLabelText(/average cost/i), '140')
+    const form = screen.getByRole('form', { name: /agregar posición/i })
+    await user.selectOptions(
+      within(form).getByLabelText(/instrumento/i),
+      'TTWO',
+    )
+    await user.type(within(form).getByLabelText(/cantidad/i), '10')
+    await user.type(within(form).getByLabelText(/costo promedio/i), '140')
     await user.click(
-      within(form).getByRole('button', { name: /save position/i }),
+      within(form).getByRole('button', { name: /guardar posición/i }),
     )
 
     const row = screen.getByRole('row', { name: /Take-Two/i })
@@ -168,24 +181,27 @@ describe('PortfolioScreen', () => {
 
     await waitFor(() =>
       expect(
-        screen.getByRole('button', { name: /add position/i }),
+        screen.getByRole('button', { name: /agregar posición/i }),
       ).toBeInTheDocument(),
     )
-    await user.click(screen.getByRole('button', { name: /add position/i }))
+    await user.click(screen.getByRole('button', { name: /agregar posición/i }))
 
-    const form = screen.getByRole('form', { name: /add position/i })
-    await user.selectOptions(within(form).getByLabelText(/instrument/i), 'TTWO')
-    await user.type(within(form).getByLabelText(/quantity/i), '0')
-    await user.type(within(form).getByLabelText(/average cost/i), '-5')
+    const form = screen.getByRole('form', { name: /agregar posición/i })
+    await user.selectOptions(
+      within(form).getByLabelText(/instrumento/i),
+      'TTWO',
+    )
+    await user.type(within(form).getByLabelText(/cantidad/i), '0')
+    await user.type(within(form).getByLabelText(/costo promedio/i), '-5')
     await user.click(
-      within(form).getByRole('button', { name: /save position/i }),
+      within(form).getByRole('button', { name: /guardar posición/i }),
     )
 
     expect(
-      within(form).getByText('Quantity must be greater than zero.'),
+      within(form).getByText('La cantidad debe ser mayor que cero.'),
     ).toBeInTheDocument()
     expect(
-      within(form).getByText('Average cost must be greater than zero.'),
+      within(form).getByText('El costo promedio debe ser mayor que cero.'),
     ).toBeInTheDocument()
 
     await waitFor(() =>
@@ -217,18 +233,18 @@ describe('PortfolioScreen', () => {
     )
 
     await user.click(
-      screen.getByRole('button', { name: /edit TTWO position/i }),
+      screen.getByRole('button', { name: /editar posición de TTWO/i }),
     )
 
-    const form = screen.getByRole('form', { name: /edit TTWO position/i })
-    const quantity = within(form).getByLabelText(/quantity/i)
+    const form = screen.getByRole('form', { name: /editar posición de TTWO/i })
+    const quantity = within(form).getByLabelText(/cantidad/i)
     expect(quantity).toHaveValue(10)
-    expect(within(form).getByLabelText(/average cost/i)).toHaveValue(140)
+    expect(within(form).getByLabelText(/costo promedio/i)).toHaveValue(140)
 
     await user.clear(quantity)
     await user.type(quantity, '12')
     await user.click(
-      within(form).getByRole('button', { name: /save position/i }),
+      within(form).getByRole('button', { name: /guardar posición/i }),
     )
 
     const edited = await new LocalStoragePortfolioRepository().list()
@@ -258,10 +274,12 @@ describe('PortfolioScreen', () => {
     )
 
     await user.click(
-      screen.getByRole('button', { name: /edit BTC-EUR position/i }),
+      screen.getByRole('button', { name: /editar posición de BTC-EUR/i }),
     )
-    const form = screen.getByRole('form', { name: /edit BTC-EUR position/i })
-    const quantity = within(form).getByLabelText(/quantity/i)
+    const form = screen.getByRole('form', {
+      name: /editar posición de BTC-EUR/i,
+    })
+    const quantity = within(form).getByLabelText(/cantidad/i)
     await user.clear(quantity)
     await user.type(quantity, '9')
     await user.click(within(form).getByRole('button', { name: /cancel/i }))
@@ -290,12 +308,16 @@ describe('PortfolioScreen', () => {
     )
 
     await user.click(
-      screen.getByRole('button', { name: /delete BTC-EUR position/i }),
+      screen.getByRole('button', { name: /eliminar posición de BTC-EUR/i }),
     )
 
-    expect(screen.getByText('Remove BTC-EUR position?')).toBeInTheDocument()
+    expect(
+      screen.getByText('¿Quitar la posición de BTC-EUR?'),
+    ).toBeInTheDocument()
 
-    await user.click(screen.getByRole('button', { name: /confirm delete/i }))
+    await user.click(
+      screen.getByRole('button', { name: /confirmar eliminación/i }),
+    )
 
     await waitFor(() =>
       expect(
@@ -327,13 +349,13 @@ describe('PortfolioScreen', () => {
     )
 
     await user.click(
-      screen.getByRole('button', { name: /delete BTC-EUR position/i }),
+      screen.getByRole('button', { name: /eliminar posición de BTC-EUR/i }),
     )
     await user.click(screen.getByRole('button', { name: /cancel/i }))
 
     await waitFor(() =>
       expect(
-        screen.queryByText('Remove BTC-EUR position?'),
+        screen.queryByText('¿Quitar la posición de BTC-EUR?'),
       ).not.toBeInTheDocument(),
     )
     expect(screen.getByRole('row', { name: /Bitcoin/i })).toBeInTheDocument()
@@ -389,17 +411,20 @@ describe('PortfolioScreen', () => {
     )
     await waitFor(() =>
       expect(
-        first.getByRole('button', { name: /add position/i }),
+        first.getByRole('button', { name: /agregar posición/i }),
       ).toBeInTheDocument(),
     )
-    await user.click(first.getByRole('button', { name: /add position/i }))
+    await user.click(first.getByRole('button', { name: /agregar posición/i }))
 
-    const form = first.getByRole('form', { name: /add position/i })
-    await user.selectOptions(within(form).getByLabelText(/instrument/i), 'TTWO')
-    await user.type(within(form).getByLabelText(/quantity/i), '10')
-    await user.type(within(form).getByLabelText(/average cost/i), '140')
+    const form = first.getByRole('form', { name: /agregar posición/i })
+    await user.selectOptions(
+      within(form).getByLabelText(/instrumento/i),
+      'TTWO',
+    )
+    await user.type(within(form).getByLabelText(/cantidad/i), '10')
+    await user.type(within(form).getByLabelText(/costo promedio/i), '140')
     await user.click(
-      within(form).getByRole('button', { name: /save position/i }),
+      within(form).getByRole('button', { name: /guardar posición/i }),
     )
     await waitFor(() =>
       expect(first.getByRole('row', { name: /Take-Two/i })).toBeInTheDocument(),

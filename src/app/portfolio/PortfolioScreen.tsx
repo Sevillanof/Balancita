@@ -73,16 +73,16 @@ export default function PortfolioScreen({
   const { status, loadError } = portfolio
 
   return (
-    <section className="portfolio" aria-label="Portfolio">
+    <section className="portfolio" aria-label="Cartera">
       <div className="portfolio__header">
-        <h2 className="portfolio__title">Portfolio</h2>
+        <h2 className="portfolio__title">Cartera</h2>
         {status !== 'loading' && status !== 'error' && (
           <button
             type="button"
             className="portfolio__add"
             onClick={() => setEditing({ mode: 'add' })}
           >
-            Add position
+            Agregar posición
           </button>
         )}
       </div>
@@ -90,8 +90,8 @@ export default function PortfolioScreen({
       {status === 'error' && (
         <div role="alert" className="portfolio__error">
           {loadError === 'corrupt'
-            ? 'Stored portfolio data could not be read.'
-            : 'Unable to load portfolio.'}
+            ? 'No se pudieron leer los datos guardados de la cartera.'
+            : 'No se pudo cargar la cartera.'}
           <div className="portfolio__error-actions">
             {loadError === 'corrupt' && (
               <button
@@ -99,7 +99,7 @@ export default function PortfolioScreen({
                 className="portfolio__retry"
                 onClick={() => void portfolio.reset()}
               >
-                Reset portfolio
+                Restablecer cartera
               </button>
             )}
             <button
@@ -107,7 +107,7 @@ export default function PortfolioScreen({
               className="portfolio__retry"
               onClick={portfolio.retry}
             >
-              Retry
+              Reintentar
             </button>
           </div>
         </div>
@@ -127,45 +127,45 @@ export default function PortfolioScreen({
 
       <table className="portfolio__table" aria-busy={status === 'loading'}>
         <caption className="portfolio__caption">
-          Your manual positions valued against the live mock feed
+          Posiciones manuales valuadas con la fuente simulada en vivo
         </caption>
         <thead>
           <tr>
-            <th scope="col">Position</th>
+            <th scope="col">Posición</th>
             <th scope="col" className="portfolio__num">
-              Quantity
+              Cantidad
             </th>
             <th scope="col" className="portfolio__num">
-              Avg cost
+              Costo promedio
             </th>
             <th scope="col" className="portfolio__num">
-              Current price
+              Precio actual
             </th>
             <th scope="col" className="portfolio__num">
-              Total cost
+              Costo total
             </th>
             <th scope="col" className="portfolio__num">
-              Current value
+              Valor actual
             </th>
             <th scope="col" className="portfolio__num">
-              P/L
+              Resultado
             </th>
-            <th scope="col">Currency</th>
-            <th scope="col">Actions</th>
+            <th scope="col">Moneda</th>
+            <th scope="col">Acciones</th>
           </tr>
         </thead>
         <tbody>
           {status === 'loading' && (
             <tr>
               <td colSpan={9} role="status" className="portfolio__placeholder">
-                Loading portfolio…
+                Cargando cartera…
               </td>
             </tr>
           )}
           {status === 'empty' && (
             <tr>
               <td colSpan={9} role="status" className="portfolio__placeholder">
-                No positions yet.
+                Todavía no hay posiciones.
               </td>
             </tr>
           )}
@@ -279,7 +279,9 @@ function PositionRow({
       <td className="portfolio__actions">
         {isPending ? (
           <>
-            <span role="alert">Remove {instrument.symbol} position?</span>
+            <span role="alert">
+              ¿Quitar la posición de {instrument.symbol}?
+            </span>
             <div className="portfolio__confirm">
               <button
                 ref={confirmRef}
@@ -287,14 +289,14 @@ function PositionRow({
                 className="portfolio__delete"
                 onClick={onConfirmDelete}
               >
-                Confirm delete
+                Confirmar eliminación
               </button>
               <button
                 type="button"
                 className="portfolio__cancel"
                 onClick={onCancelDelete}
               >
-                Cancel
+                Cancelar
               </button>
             </div>
           </>
@@ -305,7 +307,7 @@ function PositionRow({
               className="portfolio__action"
               onClick={onEdit}
             >
-              Edit {instrument.symbol} position
+              Editar posición de {instrument.symbol}
             </button>
             <button
               ref={deleteRef}
@@ -313,7 +315,7 @@ function PositionRow({
               className="portfolio__action portfolio__action--danger"
               onClick={onRequestDelete}
             >
-              Delete {instrument.symbol} position
+              Eliminar posición de {instrument.symbol}
             </button>
           </>
         )}
@@ -356,8 +358,8 @@ function HoldingForm({
     : instruments.filter((instrument) => !heldInstrumentIds.has(instrument.id))
 
   const label = initial
-    ? `Edit ${initial.instrumentId} position`
-    : 'Add position'
+    ? `Editar posición de ${initial.instrumentId}`
+    : 'Agregar posición'
 
   const isPositiveMoney = (value: string): boolean => {
     try {
@@ -395,7 +397,7 @@ function HoldingForm({
     >
       {!initial ? (
         <div className="portfolio__field">
-          <label htmlFor="portfolio-instrument">Instrument</label>
+          <label htmlFor="portfolio-instrument">Instrumento</label>
           <select
             id="portfolio-instrument"
             value={instrumentId}
@@ -403,7 +405,7 @@ function HoldingForm({
             required
           >
             <option value="" disabled>
-              Select an instrument
+              Seleccionar un instrumento
             </option>
             {available.map((instrument) => (
               <option key={instrument.id} value={instrument.id}>
@@ -419,7 +421,7 @@ function HoldingForm({
       )}
 
       <div className="portfolio__field">
-        <label htmlFor="portfolio-quantity">Quantity</label>
+        <label htmlFor="portfolio-quantity">Cantidad</label>
         <input
           id="portfolio-quantity"
           type="number"
@@ -438,13 +440,13 @@ function HoldingForm({
             role="alert"
             className="portfolio__field-error"
           >
-            Quantity must be greater than zero.
+            La cantidad debe ser mayor que cero.
           </p>
         )}
       </div>
 
       <div className="portfolio__field">
-        <label htmlFor="portfolio-average-cost">Average cost</label>
+        <label htmlFor="portfolio-average-cost">Costo promedio</label>
         <input
           id="portfolio-average-cost"
           type="number"
@@ -463,23 +465,23 @@ function HoldingForm({
             role="alert"
             className="portfolio__field-error"
           >
-            Average cost must be greater than zero.
+            El costo promedio debe ser mayor que cero.
           </p>
         )}
       </div>
 
       {operationError && (
         <p role="alert" className="portfolio__field-error">
-          {operationError}
+          No se pudo completar la operación de cartera.
         </p>
       )}
 
       <div className="portfolio__form-actions">
         <button type="submit" className="portfolio__save">
-          Save position
+          Guardar posición
         </button>
         <button type="button" className="portfolio__cancel" onClick={onCancel}>
-          Cancel
+          Cancelar
         </button>
       </div>
     </form>

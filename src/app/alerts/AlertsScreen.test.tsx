@@ -41,12 +41,12 @@ describe('AlertsScreen', () => {
 
     await waitFor(() =>
       expect(
-        screen.getByRole('heading', { name: 'Alerts' }),
+        screen.getByRole('heading', { name: 'Alertas' }),
       ).toBeInTheDocument(),
     )
-    expect(screen.getByText('No alerts yet.')).toBeInTheDocument()
+    expect(screen.getByText('Todavía no hay alertas.')).toBeInTheDocument()
     expect(
-      screen.getByRole('button', { name: /add alert/i }),
+      screen.getByRole('button', { name: /agregar alerta/i }),
     ).toBeInTheDocument()
   })
 
@@ -60,7 +60,7 @@ describe('AlertsScreen', () => {
     }
     render(<Harness />)
 
-    expect(screen.getByText('Loading alerts…')).toBeInTheDocument()
+    expect(screen.getByText('Cargando alertas…')).toBeInTheDocument()
   })
 
   it('offers a reset when stored alert data is corrupt', async () => {
@@ -72,11 +72,13 @@ describe('AlertsScreen', () => {
 
     await waitFor(() =>
       expect(
-        screen.getByText('Stored alert data could not be read.'),
+        screen.getByText(
+          'No se pudieron leer los datos guardados de las alertas.',
+        ),
       ).toBeInTheDocument(),
     )
     expect(
-      screen.getByRole('button', { name: /reset alerts/i }),
+      screen.getByRole('button', { name: /restablecer alertas/i }),
     ).toBeInTheDocument()
   })
 
@@ -86,23 +88,28 @@ describe('AlertsScreen', () => {
 
     await waitFor(() =>
       expect(
-        screen.getByRole('button', { name: /add alert/i }),
+        screen.getByRole('button', { name: /agregar alerta/i }),
       ).toBeInTheDocument(),
     )
-    await user.click(screen.getByRole('button', { name: /add alert/i }))
+    await user.click(screen.getByRole('button', { name: /agregar alerta/i }))
 
-    const form = screen.getByRole('form', { name: /add alert/i })
-    await user.selectOptions(within(form).getByLabelText(/instrument/i), 'TTWO')
-    await user.selectOptions(within(form).getByLabelText(/direction/i), 'below')
-    await user.type(within(form).getByLabelText(/threshold price/i), '140')
-    await user.click(within(form).getByRole('button', { name: /save alert/i }))
+    const form = screen.getByRole('form', { name: /agregar alerta/i })
+    await user.selectOptions(
+      within(form).getByLabelText(/instrumento/i),
+      'TTWO',
+    )
+    await user.selectOptions(within(form).getByLabelText(/dirección/i), 'below')
+    await user.type(within(form).getByLabelText(/precio umbral/i), '140')
+    await user.click(
+      within(form).getByRole('button', { name: /guardar alerta/i }),
+    )
 
     await waitFor(() =>
       expect(
         screen.getByRole('row', { name: /Take-Two/i }),
       ).toBeInTheDocument(),
     )
-    expect(screen.getByText('below')).toBeInTheDocument()
+    expect(screen.getByText('Por debajo')).toBeInTheDocument()
     expect(screen.getByText(formatPrice(140, 'USD'))).toBeInTheDocument()
 
     const stored = await repository.list()
@@ -121,18 +128,23 @@ describe('AlertsScreen', () => {
 
     await waitFor(() =>
       expect(
-        screen.getByRole('button', { name: /add alert/i }),
+        screen.getByRole('button', { name: /agregar alerta/i }),
       ).toBeInTheDocument(),
     )
-    await user.click(screen.getByRole('button', { name: /add alert/i }))
+    await user.click(screen.getByRole('button', { name: /agregar alerta/i }))
 
-    const form = screen.getByRole('form', { name: /add alert/i })
-    await user.selectOptions(within(form).getByLabelText(/instrument/i), 'TTWO')
-    await user.type(within(form).getByLabelText(/threshold price/i), '0')
-    await user.click(within(form).getByRole('button', { name: /save alert/i }))
+    const form = screen.getByRole('form', { name: /agregar alerta/i })
+    await user.selectOptions(
+      within(form).getByLabelText(/instrumento/i),
+      'TTWO',
+    )
+    await user.type(within(form).getByLabelText(/precio umbral/i), '0')
+    await user.click(
+      within(form).getByRole('button', { name: /guardar alerta/i }),
+    )
 
     expect(
-      within(form).getByText('Threshold must be greater than zero.'),
+      within(form).getByText('El umbral debe ser mayor que cero.'),
     ).toBeInTheDocument()
     expect(await repository.list()).toEqual([])
   })
@@ -153,14 +165,14 @@ describe('AlertsScreen', () => {
     await waitFor(() =>
       expect(screen.getByRole('row', { name: /Bitcoin/i })).toBeInTheDocument(),
     )
-    expect(screen.getByText('triggered')).toBeInTheDocument()
+    expect(screen.getByText('Activada')).toBeInTheDocument()
 
     await user.click(
-      screen.getByRole('button', { name: /acknowledge BTC-EUR alert/i }),
+      screen.getByRole('button', { name: /reconocer alerta de BTC-EUR/i }),
     )
 
     await waitFor(() =>
-      expect(screen.getByText('acknowledged')).toBeInTheDocument(),
+      expect(screen.getByText('Reconocida')).toBeInTheDocument(),
     )
     const stored = await repository.list()
     expect(stored[0]?.status).toBe('acknowledged')
@@ -181,7 +193,7 @@ describe('AlertsScreen', () => {
       expect(screen.getByRole('row', { name: /Bitcoin/i })).toBeInTheDocument(),
     )
     await user.click(
-      screen.getByRole('button', { name: /delete BTC-EUR alert/i }),
+      screen.getByRole('button', { name: /eliminar alerta de BTC-EUR/i }),
     )
 
     await waitFor(() =>
@@ -205,7 +217,7 @@ describe('AlertsScreen', () => {
     await waitFor(() =>
       expect(screen.getByRole('row', { name: /Bitcoin/i })).toBeInTheDocument(),
     )
-    expect(screen.getByText('active')).toBeInTheDocument()
+    expect(screen.getByText('Activa')).toBeInTheDocument()
 
     act(() =>
       provider.emit(makeQuote({ instrumentId: 'BTC-EUR', price: 59_000 })),
@@ -215,7 +227,7 @@ describe('AlertsScreen', () => {
     )
 
     await waitFor(() =>
-      expect(screen.getByText('triggered')).toBeInTheDocument(),
+      expect(screen.getByText('Activada')).toBeInTheDocument(),
     )
   })
 
@@ -231,15 +243,20 @@ describe('AlertsScreen', () => {
     const first = render(<Harness />)
     await waitFor(() =>
       expect(
-        first.getByRole('button', { name: /add alert/i }),
+        first.getByRole('button', { name: /agregar alerta/i }),
       ).toBeInTheDocument(),
     )
-    await user.click(first.getByRole('button', { name: /add alert/i }))
-    const form = first.getByRole('form', { name: /add alert/i })
-    await user.selectOptions(within(form).getByLabelText(/instrument/i), 'TTWO')
-    await user.selectOptions(within(form).getByLabelText(/direction/i), 'above')
-    await user.type(within(form).getByLabelText(/threshold price/i), '150')
-    await user.click(within(form).getByRole('button', { name: /save alert/i }))
+    await user.click(first.getByRole('button', { name: /agregar alerta/i }))
+    const form = first.getByRole('form', { name: /agregar alerta/i })
+    await user.selectOptions(
+      within(form).getByLabelText(/instrumento/i),
+      'TTWO',
+    )
+    await user.selectOptions(within(form).getByLabelText(/dirección/i), 'above')
+    await user.type(within(form).getByLabelText(/precio umbral/i), '150')
+    await user.click(
+      within(form).getByRole('button', { name: /guardar alerta/i }),
+    )
     await waitFor(() =>
       expect(first.getByRole('row', { name: /Take-Two/i })).toBeInTheDocument(),
     )
@@ -251,6 +268,6 @@ describe('AlertsScreen', () => {
         second.getByRole('row', { name: /Take-Two/i }),
       ).toBeInTheDocument(),
     )
-    expect(second.getByText('active')).toBeInTheDocument()
+    expect(second.getByText('Activa')).toBeInTheDocument()
   })
 })
