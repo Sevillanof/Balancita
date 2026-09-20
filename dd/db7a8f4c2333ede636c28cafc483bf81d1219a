@@ -1,0 +1,24 @@
+server/src/analysis-errors.ts
+  h_2f68313623be98 19-20,28-29
+server/src/app.ts
+  h_2f68313623be98 49-50
+server/src/cache.test.ts
+  h_2f68313623be98 88-101
+server/src/cache.ts
+  h_2f68313623be98 28-33,35,39-41,43-44,54-57,59-63,71
+server/src/config.test.ts
+  h_2f68313623be98 12-13,15,21,30,34,42,55
+server/src/config.ts
+  h_2f68313623be98 21,44,46,48
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "dddb7a8f4c2333ede636c28cafc483bf81d1219a",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
