@@ -16,8 +16,8 @@ export type AnalysisGatewayErrorCode =
 export class AnalysisQuotaExceededError extends Error {
   readonly code = 'quota_exceeded' as const
 
-  constructor(message: string) {
-    super(message)
+  constructor(message: string, cause?: unknown) {
+    super(message, cause === undefined ? undefined : { cause })
     this.name = 'AnalysisQuotaExceededError'
   }
 }
@@ -25,8 +25,8 @@ export class AnalysisQuotaExceededError extends Error {
 export class AnalysisTimeoutError extends Error {
   readonly code = 'timeout' as const
 
-  constructor(message: string) {
-    super(message)
+  constructor(message: string, cause?: unknown) {
+    super(message, cause === undefined ? undefined : { cause })
     this.name = 'AnalysisTimeoutError'
   }
 }

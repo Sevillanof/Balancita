@@ -46,7 +46,8 @@ export async function buildApp(options: {
       maxPerDay: config.maxRequestsPerDay,
     })
   const cache =
-    options.overrides?.cache ?? new AnalysisCache(config.cacheMaxEntries)
+    options.overrides?.cache ??
+    new AnalysisCache(config.cacheMaxEntries, config.cacheTtlMs)
   const client =
     options.overrides?.client ??
     (config.apiKey === '' ? undefined : createGeminiClient(config.apiKey))

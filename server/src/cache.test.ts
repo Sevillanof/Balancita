@@ -85,4 +85,18 @@ describe('AnalysisCache', () => {
   it('rejects an invalid capacity', () => {
     expect(() => new AnalysisCache(0)).toThrow(RangeError)
   })
+
+  it('expires entries after the temporary TTL', () => {
+    let now = 1_000
+    const cache = new AnalysisCache(10, 100, () => now)
+    cache.set('a', result)
+    expect(cache.get('a')).toEqual(result)
+
+    now += 100
+    expect(cache.get('a')).toBeUndefined()
+  })
+
+  it('rejects an invalid TTL', () => {
+    expect(() => new AnalysisCache(10, 0)).toThrow(RangeError)
+  })
 })

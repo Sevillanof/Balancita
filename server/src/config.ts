@@ -18,6 +18,7 @@ export interface ServerConfig {
   maxRequestsPerMinute: number
   maxRequestsPerDay: number
   cacheMaxEntries: number
+  cacheTtlMs: number
   maxCandles: number
   corsOrigin: string
 }
@@ -40,10 +41,11 @@ export function serverConfigFrom(
     maxRequestsPerMinute: positiveInt(
       env,
       'GEMINI_MAX_REQUESTS_PER_MINUTE',
-      15,
+      10,
     ),
-    maxRequestsPerDay: positiveInt(env, 'GEMINI_MAX_REQUESTS_PER_DAY', 500),
+    maxRequestsPerDay: positiveInt(env, 'GEMINI_MAX_REQUESTS_PER_DAY', 300),
     cacheMaxEntries: positiveInt(env, 'GEMINI_CACHE_MAX_ENTRIES', 100),
+    cacheTtlMs: positiveInt(env, 'GEMINI_CACHE_TTL_MS', 300_000),
     maxCandles: positiveInt(env, 'GEMINI_MAX_CANDLES', 500),
     corsOrigin: stringValue(
       env,

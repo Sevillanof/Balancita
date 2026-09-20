@@ -25,13 +25,23 @@ export function hashAnalysisInput(input: AnalysisInputRequest): string {
  */
 export class AnalysisCache {
   private readonly maxEntries: number
-  private readonly store = new Map<string, AnalysisResultJson>()
+  private readonly ttlMs: number
+  private readonly now: () => number
+  private readonly store = new Map<
+    string,
+    { result: AnalysisResultJson; expiresAt: number }
+  >()
 
-  constructor(maxEntries: number) {
+  constructor(maxEntries: number, ttlMs = 300_000, now = () => Date.now()) {
     if (!Number.isInteger(maxEntries) || maxEntries <= 0) {
       throw new RangeError('Cache capacity must be a positive integer.')
     }
+    if (!Number.isInteger(ttlMs) || ttlMs <= 0) {
+      throw new RangeError('Cache TTL must be a positive integer.')
+    }
     this.maxEntries = maxEntries
+    this.ttlMs = ttlMs
+    this.now = now
   }
 
   get size(): number {
@@ -41,12 +51,16 @@ export class AnalysisCache {
   get(key: string): AnalysisResultJson | undefined {
     const stored = this.store.get(key)
     if (stored === undefined) return undefined
+    if (stored.expiresAt <= this.now()) {
+      this.store.delete(key)
+      return undefined
+    }
     return {
-      instrumentId: stored.instrumentId,
-      classification: stored.classification,
-      reasons: [...stored.reasons],
-      warnings: [...stored.warnings],
-      volatility: { ...stored.volatility },
+      instrumentId: stored.result.instrumentId,
+      classification: stored.result.classification,
+      reasons: [...stored.result.reasons],
+      warnings: [...stored.result.warnings],
+      volatility: { ...stored.result.volatility },
     }
   }
 
@@ -54,7 +68,7 @@ export class AnalysisCache {
     if (this.store.has(key)) {
       this.store.delete(key)
     }
-    this.store.set(key, result)
+    this.store.set(key, { result, expiresAt: this.now() + this.ttlMs })
     if (this.store.size > this.maxEntries) {
       const oldest = this.store.keys().next().value
       if (oldest !== undefined) {

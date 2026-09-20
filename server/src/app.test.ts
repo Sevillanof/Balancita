@@ -62,7 +62,6 @@ async function makeApp(options: {
   maxCandles?: number
 }) {
   const config = serverConfigFrom({
-    GEMINI_API_KEY: 'test-key',
     GEMINI_MAX_CANDLES: String(options.maxCandles ?? 500),
     ...options.env,
   })
