@@ -1,0 +1,14 @@
+src/providers/mock-analysis-provider.test.ts
+  h_2f68313623be98 8
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "68d56d9d068ac749f0430d7e5d5121b806103f63",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
