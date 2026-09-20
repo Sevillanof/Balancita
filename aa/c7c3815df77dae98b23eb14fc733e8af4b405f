@@ -1,0 +1,21 @@
+src/alerts/local-storage-alert-repository.test.ts
+  s_0e8c4ea8d45756::t_b1c0a3dcb9b2e6 1-237
+src/alerts/local-storage-alert-repository.ts
+  s_0e8c4ea8d45756::t_1b549f4ff97605 1-126
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "aac7c3815df77dae98b23eb14fc733e8af4b405f",
+  "prompts": {},
+  "sessions": {
+    "s_0e8c4ea8d45756": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f40f92c77ffeNwtJJlfxhQFBMv",
+        "model": "big-pickle"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
