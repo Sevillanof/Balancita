@@ -1,6 +1,6 @@
 ---
 name: bitcoin-market-intelligence
-description: 'Trigger: Bitcoin/BTC-EUR quotes, low-latency market data, realtime or trustworthy news, technical analysis/trends, probabilistic forecasts, forecast history/backtesting/evaluation. Govern BTC-EUR intelligence work with evidence, freshness, and no-order rules.'
+description: 'Trigger: Bitcoin, BTC-EUR, realtime quotes or news, technical analysis, forecasts, backtesting. Govern market intelligence with evidence and no-order rules.'
 license: Apache-2.0
 metadata:
   author: franco-sevillano

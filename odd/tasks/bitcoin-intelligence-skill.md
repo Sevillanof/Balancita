@@ -24,13 +24,14 @@ The application has real read-only BTC-EUR quotes, a single-screen paper dashboa
 - Forecasts must be immutable before outcomes and evaluated without look-ahead bias.
 - Existing user changes in `docs/implementation-progress.md` and `src/domain/analysis.ts` must remain intact.
 - Strict TDD source: repository/global instructions. For documentation and skill contracts, RED is the observed absence of the required files; checks are structural validation and Prettier.
-- Delivery strategy: `ask-on-risk`; forecast below 400 authored changed lines.
+- Delivery strategy: `ask-on-risk`; `stacked-to-main` selected on 2026-09-21
+  after the running scope reached 430 authored additions.
 
 ## Tasks
 
 - [x] **BI-1 — Define repository skill**: create the concise runtime contract and register project discovery.
 - [x] **BI-2 — Document runtime roadmap**: explain the staged architecture, technical-analysis foundations, news trust model, forecast ledger, evaluation metrics, risks, and acceptance gates.
-- [ ] **BI-3 — Validate and index**: run structural/frontmatter/link checks, Prettier, refresh `.atl/skill-registry.md`, and verify unrelated changes remain untouched.
+- [x] **BI-3 — Validate and index**: run structural/frontmatter/link checks, Prettier, refresh `.atl/skill-registry.md`, and verify unrelated changes remain untouched.
 
 ## Acceptance criteria
 
@@ -66,7 +67,20 @@ docs/bitcoin-market-intelligence-roadmap.md odd/tasks/bitcoin-intelligence-skill
   failed on Markdown table column alignment only).
 - RDD mode: enabled globally; candidate assessment runs after the BI-2
   work-unit commit.
+- Work-unit commits: BI-1 `4cc0627`; BI-2 `3bb4878`.
+- RDD: risk assessment was unavailable because the provider binary/fallback was
+  missing; native preflight then stopped on an undocumented
+  `intended_untracked_selection` request caused by the pre-existing untracked
+  analysis document. No approval or receipt is claimed.
+- BI-3: refreshed `.atl/skill-registry.md` with 14 skills; the project skill is
+  indexed with its corrected 156-character description. Frontmatter parses,
+  the skill name matches its folder, metadata and license are present, required
+  sections are ordered, all relative links resolve, Prettier and diff checks
+  pass, and VS Code reports no diagnostics.
+- Delivery: 430 authored additions across the committed feature scope exceed
+  the approximate 400-line review budget. The user selected `stacked-to-main`;
+  no pull request or push is authorized by that choice.
 
 ## Next step
 
-Implement BI-3 (validation, registry index refresh, and scoped-diff check).
+Commit the BI-3 metadata update and report the final verified state.
