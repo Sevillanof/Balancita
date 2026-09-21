@@ -8,6 +8,8 @@ import type {
   MarketStore,
   StoredMarketObservation,
 } from './market/market-store.ts'
+import { KRAKEN_MARKET_SOURCE } from './market/market-sources.ts'
+import type { NormalizedMarketPayload } from './market/market-payload.ts'
 
 export const INTELLIGENCE_STREAM_VERSION = 'intelligence-stream.v1'
 export const INTELLIGENCE_SNAPSHOT_VERSION = 'intelligence-snapshot.v1'
@@ -139,9 +141,9 @@ export function createIntelligenceSnapshot(
   const observations = (options.marketStore?.listObservations() ?? []).slice(
     -(options.windowSize ?? 200),
   )
-  const cursor = options.marketStore?.getCursor('coinbase_exchange', 'BTC-EUR')
+  const cursor = options.marketStore?.getCursor(KRAKEN_MARKET_SOURCE, 'BTC-EUR')
   const latest = [...observations]
-    .filter((observation) => observation.payload.type === 'ticker')
+    .filter((observation) => observation.payload.type !== 'heartbeat')
     .sort((left, right) => left.displayTime - right.displayTime)
     .at(-1)
   const gapCount = options.marketStore?.listGaps().length ?? 0
@@ -253,8 +255,9 @@ function marketSnapshot(
     | undefined,
   staleAfterMs: number,
 ): IntelligenceMarketSnapshot {
-  if (observation.payload.type !== 'ticker') {
-    throw new Error('Market snapshot requires a ticker observation.')
+  const price = marketPayloadPrice(observation.payload)
+  if (price === null) {
+    throw new Error('Market snapshot requires a trade-bearing observation.')
   }
   const isStale =
     cursor?.status === 'stale' ||
@@ -264,7 +267,7 @@ function marketSnapshot(
     source: observation.source,
     instrumentId: observation.instrumentId,
     status: isStale ? 'stale' : (cursor?.status ?? observation.status),
-    price: observation.payload.price,
+    price,
     eventTime: observation.eventTime,
     receivedTime: observation.receivedTime,
     displayTime: observation.displayTime,
@@ -277,6 +280,12 @@ function marketSnapshot(
       ? {}
       : { sequence: observation.sequence }),
   }
+}
+
+function marketPayloadPrice(payload: NormalizedMarketPayload): number | null {
+  return payload.type === 'ticker' || payload.type === 'trade'
+    ? payload.price
+    : null
 }
 
 function pipelineSnapshot(input: {

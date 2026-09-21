@@ -24,6 +24,8 @@ export interface ServerConfig {
   marketCollectorEnabled: boolean
   marketDbPath: string
   coinbaseWsUrl: string
+  krakenWsUrl: string
+  krakenRestUrl: string
   marketStaleAfterMs: number
   marketReconnectMinMs: number
   marketReconnectMaxMs: number
@@ -87,6 +89,12 @@ export function serverConfigFrom(
       env,
       'COINBASE_WS_URL',
       'wss://ws-feed.exchange.coinbase.com',
+    ),
+    krakenWsUrl: stringValue(env, 'KRAKEN_WS_URL', 'wss://ws.kraken.com/v2'),
+    krakenRestUrl: stringValue(
+      env,
+      'KRAKEN_REST_URL',
+      'https://api.kraken.com/0',
     ),
     marketStaleAfterMs: positiveInt(env, 'MARKET_STALE_AFTER_MS', 15_000),
     marketReconnectMinMs,

@@ -16,7 +16,7 @@ import type {
   SupportedInstrumentId,
   TimestampMs,
 } from './intelligence/contracts.ts'
-import { CoinbaseMarketCollector } from './intelligence/market/coinbase-market-collector.ts'
+import { KrakenMarketCollector } from './intelligence/market/kraken-market-collector.ts'
 import { MarketStore } from './intelligence/market/market-store.ts'
 import {
   ShadowRunNotFoundError,
@@ -117,9 +117,10 @@ export async function buildApp(options: {
     marketStore === undefined
       ? undefined
       : (options.overrides?.marketCollector ??
-        new CoinbaseMarketCollector({
+        new KrakenMarketCollector({
           store: marketStore,
-          wsUrl: config.coinbaseWsUrl,
+          wsUrl: config.krakenWsUrl,
+          restBaseUrl: config.krakenRestUrl,
           staleAfterMs: config.marketStaleAfterMs,
           reconnectMinMs: config.marketReconnectMinMs,
           reconnectMaxMs: config.marketReconnectMaxMs,

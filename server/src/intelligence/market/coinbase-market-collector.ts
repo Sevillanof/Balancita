@@ -247,7 +247,7 @@ export class CoinbaseMarketCollector {
     }
     if (parsed.value.payload.type === 'ticker') {
       this.handleTicker(parsed.value.payload, parsed.value.eventTime)
-    } else {
+    } else if (parsed.value.payload.type === 'heartbeat') {
       this.handleHeartbeat(parsed.value.payload, parsed.value.eventTime)
     }
   }

@@ -25,8 +25,21 @@ export interface NormalizedHeartbeatPayload {
   readonly lastTradeId: number
 }
 
+export type TradeSide = 'buy' | 'sell'
+
+export interface NormalizedTradePayload {
+  readonly type: 'trade'
+  readonly productId: 'BTC-EUR'
+  readonly tradeId: number
+  readonly sequence: number
+  readonly price: number
+  readonly qty: number
+  readonly side: TradeSide
+  readonly orderType?: 'limit' | 'market'
+}
+
 export type NormalizedMarketPayload =
-  NormalizedTickerPayload | NormalizedHeartbeatPayload
+  NormalizedTickerPayload | NormalizedHeartbeatPayload | NormalizedTradePayload
 
 export function validateNormalizedMarketPayload(
   input: unknown,
@@ -51,7 +64,11 @@ export function validateNormalizedMarketPayload(
       ),
     )
   }
-  if (input.type !== 'ticker' && input.type !== 'heartbeat') {
+  if (
+    input.type !== 'ticker' &&
+    input.type !== 'heartbeat' &&
+    input.type !== 'trade'
+  ) {
     issues.push(
       issue(
         'invalid_payload_type',
@@ -108,6 +125,56 @@ export function validateNormalizedMarketPayload(
         'Heartbeat last trade id must be a non-negative safe integer.',
       ),
     )
+  } else if (input.type === 'trade') {
+    if (!safeInteger(input.tradeId)) {
+      issues.push(
+        issue(
+          'invalid_trade_id',
+          'payload.tradeId',
+          'Trade id must be a non-negative safe integer.',
+        ),
+      )
+    }
+    if (!positiveFinite(input.price)) {
+      issues.push(
+        issue(
+          'invalid_price',
+          'payload.price',
+          'Trade price must be finite and positive.',
+        ),
+      )
+    }
+    if (!positiveFinite(input.qty)) {
+      issues.push(
+        issue(
+          'invalid_qty',
+          'payload.qty',
+          'Trade quantity must be finite and positive.',
+        ),
+      )
+    }
+    if (!isSide(input.side)) {
+      issues.push(
+        issue(
+          'invalid_side',
+          'payload.side',
+          'Trade side must be buy or sell.',
+        ),
+      )
+    }
+    if (
+      input.orderType !== undefined &&
+      input.orderType !== 'limit' &&
+      input.orderType !== 'market'
+    ) {
+      issues.push(
+        issue(
+          'invalid_order_type',
+          'payload.orderType',
+          'Trade order type must be limit or market when present.',
+        ),
+      )
+    }
   }
 
   if (issues.length > 0) return invalid(issues)
@@ -130,12 +197,30 @@ export function validateNormalizedMarketPayload(
         : { open24h: input.open24h as number }),
     })
   }
+  if (input.type === 'trade') {
+    return valid({
+      type: 'trade',
+      productId: 'BTC-EUR',
+      tradeId: input.tradeId as number,
+      sequence: input.sequence as number,
+      price: input.price as number,
+      qty: input.qty as number,
+      side: input.side as TradeSide,
+      ...(input.orderType === undefined
+        ? {}
+        : { orderType: input.orderType as 'limit' | 'market' }),
+    })
+  }
   return valid({
     type: 'heartbeat',
     productId: 'BTC-EUR',
     sequence: input.sequence as number,
     lastTradeId: input.lastTradeId as number,
   })
+}
+
+function isSide(value: unknown): value is TradeSide {
+  return value === 'buy' || value === 'sell'
 }
 
 function safeInteger(value: unknown): value is number {

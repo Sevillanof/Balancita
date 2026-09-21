@@ -19,6 +19,8 @@ describe('serverConfigFrom', () => {
     expect(config.marketCollectorEnabled).toBe(false)
     expect(config.marketDbPath).toBe('./data/market.sqlite')
     expect(config.coinbaseWsUrl).toBe('wss://ws-feed.exchange.coinbase.com')
+    expect(config.krakenWsUrl).toBe('wss://ws.kraken.com/v2')
+    expect(config.krakenRestUrl).toBe('https://api.kraken.com/0')
     expect(config.marketStaleAfterMs).toBe(15_000)
     expect(config.marketReconnectMinMs).toBe(1_000)
     expect(config.marketReconnectMaxMs).toBe(30_000)
@@ -42,6 +44,8 @@ describe('serverConfigFrom', () => {
       MARKET_COLLECTOR_ENABLED: 'true',
       MARKET_DB_PATH: '/tmp/balancita-market.sqlite',
       COINBASE_WS_URL: 'wss://example.invalid',
+      KRAKEN_WS_URL: 'wss://kraken.example.invalid/v2',
+      KRAKEN_REST_URL: 'https://kraken.example.invalid/0',
       MARKET_STALE_AFTER_MS: '5000',
       MARKET_RECONNECT_MIN_MS: '250',
       MARKET_RECONNECT_MAX_MS: '10000',
@@ -63,6 +67,8 @@ describe('serverConfigFrom', () => {
     expect(config.marketCollectorEnabled).toBe(true)
     expect(config.marketDbPath).toBe('/tmp/balancita-market.sqlite')
     expect(config.coinbaseWsUrl).toBe('wss://example.invalid')
+    expect(config.krakenWsUrl).toBe('wss://kraken.example.invalid/v2')
+    expect(config.krakenRestUrl).toBe('https://kraken.example.invalid/0')
     expect(config.marketStaleAfterMs).toBe(5000)
     expect(config.marketReconnectMinMs).toBe(250)
     expect(config.marketReconnectMaxMs).toBe(10_000)

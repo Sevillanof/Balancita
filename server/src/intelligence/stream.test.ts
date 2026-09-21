@@ -37,6 +37,39 @@ function envelope(eventTime: number, receivedTime: number, sequence: number) {
   }
 }
 
+function tradeEnvelope(
+  eventTime: number,
+  receivedTime: number,
+  tradeId: number,
+) {
+  const freshness = deriveDataFreshness({
+    eventTime: eventTime as never,
+    displayTime: receivedTime as never,
+    staleAfterMs: 15_000,
+  })
+  if (!freshness.valid) throw new Error('fixture freshness is invalid')
+  return {
+    source: 'kraken',
+    symbol: 'BTC-EUR',
+    instrumentId: 'BTC-EUR',
+    eventTime,
+    receivedTime,
+    displayTime: receivedTime,
+    sequence: tradeId,
+    status: freshness.value.isStale ? 'stale' : 'live',
+    freshness: freshness.value,
+    payload: {
+      type: 'trade',
+      productId: 'BTC-EUR',
+      tradeId,
+      sequence: tradeId,
+      price: 61_000 + tradeId,
+      qty: 0.25,
+      side: 'buy',
+    },
+  }
+}
+
 function parseEvent(chunk: string) {
   const data = chunk
     .split('\n')
@@ -88,6 +121,31 @@ describe('intelligence SSE contract', () => {
     expect(snapshot.observability).toMatchObject({
       latencyMs: { count: 2, p50: 500, p95: 2_600 },
       stale: { totalCount: 2, staleCount: 0, rate: 0 },
+    })
+    store.close()
+  })
+
+  it('derives the latest market snapshot from Kraken trade-native payloads', () => {
+    const store = new MarketStore({
+      path: ':memory:',
+      clock: () => now as never,
+    })
+    store.insertObservation(tradeEnvelope(now - 1_000, now - 500, 42) as never)
+
+    const snapshot = createIntelligenceSnapshot({
+      collectorEnabled: true,
+      marketStore: store,
+      staleAfterMs: 15_000,
+      clock: () => now,
+    })
+
+    expect(snapshot.market).toMatchObject({
+      source: 'kraken',
+      instrumentId: 'BTC-EUR',
+      price: 61_042,
+      sequence: 42,
+      eventTime: now - 1_000,
+      receivedTime: now - 500,
     })
     store.close()
   })
