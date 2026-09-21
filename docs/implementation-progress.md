@@ -28,7 +28,7 @@
 | 9.2   | Tokenized CSS foundation            | ✅ done                   | 348 + 64 server | c3007eb…8b0fcd2 (3)       |
 | 9.3   | Dashboard BTC-EUR + paper real      | ✅ done                   | 352 + 64 server | 77c8db0…7a5f04a (4)       |
 | B     | Durable BTC-EUR market ingestion    | ✅ done                   | 104 server      | 806abc6, 4641803, 9b3b994 |
-| C     | Intraday candles + technical engine | ✅ done                  | 118 server      | 7ea7107                    |
+| C     | Intraday candles + technical engine | ✅ done                   | 118 server      | 7ea7107                   |
 | 10    | Broker paper trading                | ⏸ pending                 | —               | —                         |
 | 11    | Real trading evaluation             | ⏸ pending                 | —               | —                         |
 | 12    | Jev spike                           | ⏸ pending                 | —               | —                         |
