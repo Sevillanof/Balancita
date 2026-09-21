@@ -29,7 +29,7 @@
 | 9.3   | Dashboard BTC-EUR + paper real        | ✅ done                   | 352 + 64 server | 77c8db0…7a5f04a (4)       |
 | B     | Durable BTC-EUR market ingestion      | ✅ done                   | 104 server      | 806abc6, 4641803, 9b3b994 |
 | C     | Intraday candles + technical engine   | ✅ done                   | 118 server      | 7ea7107                   |
-| D     | Immutable forecasts + deferred scorer | ✅ done                   | 133 server      | pending                   |
+| D     | Immutable forecasts + deferred scorer | ✅ done                   | 133 server      | fd6a764…565f8d6 (4)       |
 | 10    | Broker paper trading                  | ⏸ pending                 | —               | —                         |
 | 11    | Real trading evaluation               | ⏸ pending                 | —               | —                         |
 | 12    | Jev spike                             | ⏸ pending                 | —               | —                         |
