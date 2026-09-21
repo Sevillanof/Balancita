@@ -30,7 +30,8 @@
 | B     | Durable BTC-EUR market ingestion      | ✅ done                   | 104 server      | 806abc6, 4641803, 9b3b994 |
 | C     | Intraday candles + technical engine   | ✅ done                   | 118 server      | 7ea7107                   |
 | D     | Immutable forecasts + deferred scorer | ✅ done                   | 133 server      | fd6a764…565f8d6 (4)       |
-| E     | Reliable official RSS news evidence   | ✅ done                   | 146 server      | working tree              |
+| E     | Reliable official RSS news evidence   | ✅ done                   | 146 server      | 33365cc                   |
+| F     | Deterministic news analysis + Gemini  | ✅ done                   | 162 server      | working tree              |
 | 10    | Broker paper trading                  | ⏸ pending                 | —               | —                         |
 | 11    | Real trading evaluation               | ⏸ pending                 | —               | —                         |
 | 12    | Jev spike                             | ⏸ pending                 | —               | —                         |
@@ -806,6 +807,56 @@ with technical signals, or touch the paper-trading authority.
 2. Read this file for context, then Engram (`engine: mem_search "balancita"`)
    for worker reports.
 3. Run `pnpm test` and `pnpm test:server` to confirm the current baseline
-   (352 frontend, 146 server tests expected).
+   (352 frontend, 162 server tests expected).
 4. Execute the next phase with TDD work units; commit; verify gates; update this
    file's status table.
+
+## Fase F — Deterministic news analysis, then optional Gemini
+
+Phase F is implemented as a pure server-side analysis layer over versioned
+`NewsEvidenceRecord` values from Phase E. It does not combine news with
+technical features, create forecasts, expose an endpoint, touch the UI, persist
+analysis snapshots, call an order provider, or start an automatic pipeline.
+
+- **Deterministic baseline**: `server/src/intelligence/news/news-analysis.ts`
+  emits `news-analysis.v1` snapshots with the separate `news-impact.v1` rule
+  version, explicit cutoff/as-of timestamps, requested horizon, summary,
+  snapshot content hash, item freshness and exact evidence id/version/content
+  hash references. The snapshot is pure output; SQLite evidence and
+  `ForecastRecord` are never overwritten.
+- **Accepted evidence boundary**: every candidate is rechecked against the
+  Phase E source policy and its canonical content hash. Only official or
+  licensed accepted evidence, metadata and permitted excerpts/summaries are
+  read. Social, unknown/permission-required licence, retracted, future,
+  duplicate and superseded evidence is excluded with an auditable reason.
+  Exact duplicate hashes never raise confidence. Publication and ingestion
+  after `eventCutoff` are rejected; freshness is `asOfTimestamp - publishedAt`
+  and becomes stale only when `ageMs > staleAfterMs`.
+- **Rules and abstention**: BTC/EUR relevance and the Phase E taxonomy are
+  recomputed from permitted text and must match their versioned stored values.
+  Sentiment is separate from impact. Direction and impact require explicit
+  lexical cues; taxonomy alone never implies a market direction. Insufficient,
+  stale, non-relevant or uncertain evidence returns `abstain` with confidence
+  zero and explicit reasons. No fact or causal claim is inferred from a title.
+- **Gemini boundary**: `GeminiNewsAnalysisAdapter` is an isolated server
+  adapter over the existing server-only `GeminiClient`. It has no automatic
+  caller: `manual: true` is required. Its strict prompt contains only the
+  accepted provenance and permitted content. Runtime validation requires the
+  exact evidence ids/versions/hashes, the deterministic relevance/taxonomy,
+  supported impact/direction/horizon values and a disclaimer. Invalid JSON,
+  invalid references, timeout, quota or upstream errors return the deterministic
+  snapshot. The API key remains in the existing server gateway and never enters
+  the prompt, browser, persistence or tests. The existing technical `/api/analyze`
+  contract is intentionally not widened in F; a future integration must keep
+  this news adapter manual and separate.
+- **Tests and gates**: 16 new server tests run first RED against the missing
+  module and then GREEN. They use Phase E SEC RSS fixtures plus local records
+  and fake Gemini clients for relevance boundaries, taxonomy/impact/direction/
+  horizon, stale/future cutoff, duplicate/retracted/licence rejection, exact
+  provenance/hash references, valid structured Gemini output, missing/invalid
+  references, JSON errors, timeout, quota and manual-only behavior. No network,
+  secrets, UI, orders or forecast combination are used.
+- **Limitations and next step**: lexical impact rules are intentionally
+  conservative and have not been calibrated against outcomes. Fase G must
+  compare technical and news scores as separate signals before any combination;
+  this phase does not produce a combined score or modify the forecast engine.
