@@ -1,0 +1,25 @@
+server/src/intelligence/comparison-metrics.test.ts
+  s_fed2316730f127::t_7ee4edcdf3bc1e 1-148
+server/src/intelligence/comparison-metrics.ts
+  s_fed2316730f127::t_304a07b369f9e0 1-465
+server/src/intelligence/comparison.test.ts
+  s_fed2316730f127::t_7355a334693cd0 1-334
+server/src/intelligence/comparison.ts
+  s_fed2316730f127::t_f00d96fa0d58c8 1-671
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "acf8fc00a3165c98f70febe418e47cce4452bc68",
+  "prompts": {},
+  "sessions": {
+    "s_fed2316730f127": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f3bc6996fffeYeT7bz1KOOh5d2",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
