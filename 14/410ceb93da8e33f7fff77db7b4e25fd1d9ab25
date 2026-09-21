@@ -1,0 +1,43 @@
+server/src/intelligence/replay/backfill-importer.test.ts
+  s_8772f562ce5a96::t_34abd9bdf2fdfb 1-381
+server/src/intelligence/replay/backfill-importer.ts
+  s_8772f562ce5a96::t_a189a4b932dab3 1-325
+server/src/intelligence/replay/forecast-source-mode.test.ts
+  s_8772f562ce5a96::t_3d1018287187a6 1-264
+server/src/intelligence/replay/kraken-archive.ts
+  s_8772f562ce5a96::t_7cac6fb98f3b50 1-141
+server/src/intelligence/replay/replay-contracts.ts
+  s_8772f562ce5a96::t_9bde11366799da 1-159
+server/src/intelligence/replay/replay-dataset-store.ts
+  s_8772f562ce5a96::t_a77237401043cd 1-113
+server/src/intelligence/replay/replay-run.test.ts
+  s_2c308fefeb1487::t_84b9e03941e206 1-147
+server/src/intelligence/replay/replay-run.ts
+  s_2c308fefeb1487::t_60074b88d194ef 1-129
+server/src/intelligence/shadow/shadow-store.test.ts
+  s_8772f562ce5a96::t_363ee8e9de7adc 90
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "14410ceb93da8e33f7fff77db7b4e25fd1d9ab25",
+  "prompts": {},
+  "sessions": {
+    "s_2c308fefeb1487": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f3aca3073ffe7N44SiobD5efK4",
+        "model": "deepseek-v4.1-flash"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    },
+    "s_8772f562ce5a96": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f3ad59ffeffezNilavS4Vsvw5W",
+        "model": "deepseek-v4.1-flash"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
