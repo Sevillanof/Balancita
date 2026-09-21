@@ -1,0 +1,16 @@
+docs/kraken-market-data-implementation-plan.md
+  h_2f68313623be98 1-293
+odd/tasks/kraken-market-data.md
+  h_2f68313623be98 1-109
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d9e53457c7e07432a22cf9eccb9eb06b5a43d15f",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
