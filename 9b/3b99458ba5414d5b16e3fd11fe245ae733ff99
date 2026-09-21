@@ -1,0 +1,19 @@
+server/src/app.ts
+  s_76eded268b9b3f::t_33d4cd44f75409 15-16,27-35,49,77-92,101-110
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9b3b99458ba5414d5b16e3fd11fe245ae733ff99",
+  "prompts": {},
+  "sessions": {
+    "s_76eded268b9b3f": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f3c09ee57ffeCbPexh0j88Z2CZ",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
