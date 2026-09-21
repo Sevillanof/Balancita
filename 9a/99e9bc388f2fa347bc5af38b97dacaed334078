@@ -1,0 +1,21 @@
+server/src/intelligence/market/coinbase-market-collector.test.ts
+  s_b5839ed180143a::t_6e455bc1d383c1 132-156
+server/src/intelligence/stream.test.ts
+  s_b5839ed180143a::t_6be36ba5e2ac84 1-166
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9a99e9bc388f2fa347bc5af38b97dacaed334078",
+  "prompts": {},
+  "sessions": {
+    "s_b5839ed180143a": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f3bbe8b00ffefYCOlrJYreUtf3",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
