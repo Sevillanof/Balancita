@@ -1,0 +1,25 @@
+server/src/intelligence/forecast-validation.test.ts
+  s_dcc51446419ee4::t_8363badcd142e0 1-159
+server/src/intelligence/forecast-validation.ts
+  s_dcc51446419ee4::t_5330258e428520 1-469
+server/src/intelligence/source-policy.test.ts
+  s_dcc51446419ee4::t_66f20813a2f589 1-91
+server/src/intelligence/source-policy.ts
+  s_dcc51446419ee4::t_4214b5558f020e 1-311
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "dab73ea0655164154cda5ceb9b200cfce8de3d64",
+  "prompts": {},
+  "sessions": {
+    "s_dcc51446419ee4": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f3c15868effeimK5m6W3VNrUEI",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
