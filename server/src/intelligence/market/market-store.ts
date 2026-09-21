@@ -8,6 +8,7 @@ import {
   type ForecastOutcome,
   type ForecastHorizon,
   type ForecastRecord,
+  type ForecastSourceMode,
   type NewsEvidenceRecord,
   type NewsRelevance,
   type SupportedInstrumentId,
@@ -35,7 +36,7 @@ import type { ShadowRunStatusKind } from '../shadow/shadow-contracts.ts'
 import type { NormalizedMarketPayload } from './market-payload.ts'
 import { validateNormalizedMarketPayload } from './market-payload.ts'
 
-const SCHEMA_VERSION = 4
+const SCHEMA_VERSION = 5
 
 export interface MarketStoreOptions {
   readonly path: string
@@ -119,6 +120,7 @@ export interface ForecastQuery {
   readonly horizon?: ForecastHorizon
   readonly createdAtFrom?: TimestampMs
   readonly createdAtTo?: TimestampMs
+  readonly sourceMode?: ForecastSourceMode
 }
 
 export interface OutcomeInsertResult {
@@ -354,8 +356,8 @@ export class MarketStore {
       .prepare(
         `INSERT INTO forecast_records
           (id, version, instrument_id, created_at, as_of_timestamp, event_cutoff,
-           horizon, content_hash, record_json)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           horizon, source_mode, replay_run_id, content_hash, record_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         record.id,
@@ -365,6 +367,8 @@ export class MarketStore {
         record.asOfTimestamp,
         record.eventCutoff,
         record.horizon,
+        record.sourceMode,
+        record.replayRunId,
         record.contentHash,
         canonicalJson(record),
       )
@@ -379,12 +383,11 @@ export class MarketStore {
   getForecast(id: string, version = '1'): ForecastRecord | null {
     const row = this.database
       .prepare(
-        'SELECT record_json FROM forecast_records WHERE id = ? AND version = ?',
+        `SELECT record_json, source_mode, replay_run_id FROM forecast_records
+         WHERE id = ? AND version = ?`,
       )
       .get(id, version) as SqlRow | undefined
-    return row === undefined
-      ? null
-      : (JSON.parse(String(row.record_json)) as ForecastRecord)
+    return row === undefined ? null : hydrateForecast(row)
   }
 
   listForecasts(query: ForecastQuery = {}): readonly ForecastRecord[] {
@@ -406,15 +409,17 @@ export class MarketStore {
       clauses.push('created_at <= ?')
       parameters.push(query.createdAtTo)
     }
+    if (query.sourceMode !== undefined) {
+      clauses.push('source_mode = ?')
+      parameters.push(query.sourceMode)
+    }
     const where = clauses.length === 0 ? '' : ` WHERE ${clauses.join(' AND ')}`
     const rows = this.database
       .prepare(
-        `SELECT record_json FROM forecast_records${where} ORDER BY created_at, rowid`,
+        `SELECT record_json, source_mode, replay_run_id FROM forecast_records${where} ORDER BY created_at, rowid`,
       )
       .all(...parameters) as SqlRow[]
-    return rows.map(
-      (row) => JSON.parse(String(row.record_json)) as ForecastRecord,
-    )
+    return rows.map(hydrateForecast)
   }
 
   forecastCount(): number {
@@ -1491,11 +1496,49 @@ export class MarketStore {
         )
         .run(4, this.clock())
     }
+    if (currentVersion < 5) {
+      this.database.exec(`
+        ALTER TABLE forecast_records
+          ADD COLUMN source_mode TEXT NOT NULL DEFAULT 'shadow_live'
+          CHECK (source_mode IN ('shadow_live', 'historical_replay'));
+
+        ALTER TABLE forecast_records
+          ADD COLUMN replay_run_id TEXT;
+
+        CREATE INDEX IF NOT EXISTS idx_forecast_records_source_mode
+          ON forecast_records (source_mode, created_at);
+      `)
+      this.database
+        .prepare(
+          'INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)',
+        )
+        .run(5, this.clock())
+    }
   }
 }
 
 function streamKey(source: string, instrumentId: string): string {
   return `${source}:${instrumentId}`
+}
+
+function hydrateForecast(row: SqlRow): ForecastRecord {
+  const raw = JSON.parse(String(row.record_json)) as Record<string, unknown>
+  const record = raw as unknown as ForecastRecord
+  const sourceMode: ForecastSourceMode =
+    typeof raw.sourceMode === 'string'
+      ? (raw.sourceMode as ForecastSourceMode)
+      : typeof row.source_mode === 'string'
+        ? (row.source_mode as ForecastSourceMode)
+        : 'shadow_live'
+  const replayRunId: string | null =
+    raw.replayRunId === null
+      ? null
+      : typeof raw.replayRunId === 'string'
+        ? raw.replayRunId
+        : row.replay_run_id === null || row.replay_run_id === undefined
+          ? null
+          : String(row.replay_run_id)
+  return { ...record, sourceMode, replayRunId }
 }
 
 function maxOptional(

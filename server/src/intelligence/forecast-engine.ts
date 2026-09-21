@@ -2,6 +2,7 @@ import {
   type DataFreshness,
   type ForecastRecord,
   type ForecastHorizon,
+  type ForecastSourceMode,
   type GapMetrics,
   type NewsEvidenceReference,
   type TechnicalFeatureSnapshot,
@@ -41,6 +42,8 @@ export interface ForecastEngineInput {
   readonly dataFreshness: DataFreshness
   readonly dataGaps: GapMetrics
   readonly newsEvidenceReferences: readonly NewsEvidenceReference[]
+  readonly sourceMode?: ForecastSourceMode
+  readonly replayRunId?: string | null
 }
 
 export function generateForecast(input: ForecastEngineInput): ForecastRecord {
@@ -54,6 +57,9 @@ export function generateForecast(input: ForecastEngineInput): ForecastRecord {
       candle.bucketEnd <= input.eventCutoff &&
       candle.eventTimeEnd <= input.eventCutoff,
   )
+  const sourceMode: ForecastSourceMode = input.sourceMode ?? 'shadow_live'
+  const replayRunId =
+    sourceMode === 'historical_replay' ? (input.replayRunId ?? null) : null
 
   const abstentionReason = futureNews
     ? 'future_news_evidence'
@@ -83,6 +89,8 @@ export function generateForecast(input: ForecastEngineInput): ForecastRecord {
     dataGaps: input.dataGaps,
     modelVersion: FORECAST_MODEL_VERSION,
     ruleVersion: FORECAST_RULE_VERSION,
+    sourceMode,
+    replayRunId,
     abstained,
     ...(abstentionReason === undefined ? {} : { abstentionReason }),
   }

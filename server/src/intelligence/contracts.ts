@@ -168,6 +168,8 @@ export interface NewsNormalizer<TRaw> {
 
 export type ForecastHorizon = '15m' | '1h' | '4h' | '24h'
 
+export type ForecastSourceMode = 'shadow_live' | 'historical_replay'
+
 export interface ExpectedRange {
   readonly lower: number
   readonly upper: number
@@ -221,6 +223,8 @@ export interface ForecastRecord {
   readonly dataGaps: GapMetrics
   readonly modelVersion: string
   readonly ruleVersion: string
+  readonly sourceMode: ForecastSourceMode
+  readonly replayRunId: string | null
   readonly abstained: boolean
   readonly abstentionReason?: string
   readonly contentHash: string

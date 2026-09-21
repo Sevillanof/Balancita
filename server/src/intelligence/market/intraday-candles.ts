@@ -8,7 +8,7 @@ import type { NormalizedTickerPayload } from './market-payload.ts'
 
 export type CandleInterval = '1m' | '5m' | '15m' | '1h'
 
-const INTERVAL_MS: Readonly<Record<CandleInterval, number>> = {
+export const INTERVAL_MS: Readonly<Record<CandleInterval, number>> = {
   '1m': 60_000,
   '5m': 300_000,
   '15m': 900_000,

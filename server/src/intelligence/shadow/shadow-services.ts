@@ -218,7 +218,10 @@ export class ShadowRunService {
     const run = this.store.getShadowRun(this.runId)
     if (run === undefined) throw new ShadowRunNotFoundError(this.runId)
     return this.store
-      .listForecasts({ instrumentId: this.instrumentId })
+      .listForecasts({
+        instrumentId: this.instrumentId,
+        sourceMode: 'shadow_live',
+      })
       .filter(
         (forecast) =>
           forecast.asOfTimestamp >= run.startedAt &&

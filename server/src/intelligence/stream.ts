@@ -195,6 +195,7 @@ export function createIntelligenceSnapshot(
 
   const forecasts = options.marketStore?.listForecasts({
     instrumentId: 'BTC-EUR',
+    sourceMode: 'shadow_live',
   })
   const latestForecast = forecasts?.at(-1)
   const news = options.marketStore?.listNewsEvidence({ usableOnly: true }) ?? []

@@ -87,7 +87,7 @@ describe('MarketStore shadow migrations', () => {
       store.close()
     }
     const store = openStore(dbPath)
-    expect(store.schemaVersion()).toBe(4)
+    expect(store.schemaVersion()).toBe(5)
     const names = store.listShadowTables()
     expect(names).toEqual(
       expect.arrayContaining([

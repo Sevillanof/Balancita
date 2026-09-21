@@ -2,6 +2,7 @@ import type {
   ForecastHorizon,
   ForecastOutcome,
   ForecastRecord,
+  ForecastSourceMode,
   NewsEvidence,
   NewsEvidenceReference,
   TimestampMs,
@@ -28,6 +29,8 @@ export interface ForecastFixtureOverrides {
   readonly gapCount?: number
   readonly newsEvidenceReferences?: readonly NewsEvidenceReference[]
   readonly atrRatio?: number
+  readonly sourceMode?: ForecastSourceMode
+  readonly replayRunId?: string | null
 }
 
 const ts = (value: number): TimestampMs => value as TimestampMs
@@ -39,6 +42,9 @@ export function makeForecast(
   const asOfTimestamp = ts(overrides.asOfTimestamp ?? 1_000_000)
   const createdAt = ts(overrides.createdAt ?? asOfTimestamp)
   const abstained = overrides.abstained ?? false
+  const sourceMode: ForecastSourceMode = overrides.sourceMode ?? 'shadow_live'
+  const replayRunId =
+    sourceMode === 'historical_replay' ? (overrides.replayRunId ?? null) : null
   const referencePrice = 100
   const values: Record<string, number> = {
     sma: 99,
@@ -92,6 +98,8 @@ export function makeForecast(
     },
     modelVersion: 'deterministic-baseline.v1',
     ruleVersion: 'technical-direction.v1',
+    sourceMode,
+    replayRunId,
     abstained,
     ...(abstained
       ? { abstentionReason: overrides.abstentionReason ?? 'warmup_incomplete' }

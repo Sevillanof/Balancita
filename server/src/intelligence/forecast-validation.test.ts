@@ -51,6 +51,8 @@ const validRecord: ForecastRecord = {
   },
   modelVersion: 'baseline-v1',
   ruleVersion: 'rules-v1',
+  sourceMode: 'shadow_live',
+  replayRunId: null,
   abstained: false,
   contentHash: 'sha256:forecast',
 }

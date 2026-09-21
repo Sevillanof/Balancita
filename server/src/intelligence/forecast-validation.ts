@@ -3,6 +3,7 @@ import {
   type ForecastOutcome,
   type ForecastRecord,
   type ForecastHorizon,
+  type ForecastSourceMode,
 } from './contracts.ts'
 import {
   invalid,
@@ -93,6 +94,37 @@ export function validateForecastRecord(
     issues.push(
       issue('invalid_horizon', 'horizon', 'Forecast horizon is not supported.'),
     )
+
+  const sourceModes: readonly ForecastSourceMode[] = [
+    'shadow_live',
+    'historical_replay',
+  ]
+  if (!sourceModes.includes(input.sourceMode as ForecastSourceMode)) {
+    issues.push(
+      issue(
+        'invalid_source_mode',
+        'sourceMode',
+        'Forecast source mode is not supported.',
+      ),
+    )
+  } else if (input.sourceMode === 'historical_replay') {
+    if (!nonEmptyString(input.replayRunId))
+      issues.push(
+        issue(
+          'replay_run_required',
+          'replayRunId',
+          'Historical replay forecasts require a replay run id.',
+        ),
+      )
+  } else if (input.replayRunId !== null) {
+    issues.push(
+      issue(
+        'replay_run_forbidden',
+        'replayRunId',
+        'Shadow-live forecasts cannot carry a replay run id.',
+      ),
+    )
+  }
 
   const createdAt = timestamp(input, 'createdAt', issues)
   const asOfTimestamp = timestamp(input, 'asOfTimestamp', issues)
