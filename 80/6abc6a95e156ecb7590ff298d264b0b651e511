@@ -1,0 +1,19 @@
+server/src/intelligence/market/market-payload.ts
+  s_76eded268b9b3f::t_8b58a6c2d00926 1-147
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "806abc6a95e156ecb7590ff298d264b0b651e511",
+  "prompts": {},
+  "sessions": {
+    "s_76eded268b9b3f": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f3c09ee57ffeCbPexh0j88Z2CZ",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
