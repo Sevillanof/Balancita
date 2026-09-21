@@ -63,7 +63,7 @@ La watchlist puede conservar otros instrumentos, pero la primera canalización d
 
 - Dinero real, depósitos, retiros o custodia.
 - Ejecución automática de órdenes.
-- Recomendaciones personalizadas de compra o venta.
+- Asesoramiento financiero personalizado o instrucciones accionables de inversión; la orientación educativa no accionable sí forma parte del análisis.
 - Usuarios múltiples, autenticación o permisos.
 - Aplicación móvil nativa.
 - Despliegue permanente en la nube.
@@ -78,7 +78,7 @@ La watchlist puede conservar otros instrumentos, pero la primera canalización d
 4. **Una fase por vez:** no adelantar trabajo de fases futuras.
 5. **TDD estricto:** observar RED, implementar lo mínimo para GREEN y refactorizar sin alterar el comportamiento.
 6. **Datos deterministas:** los tests no dependen del reloj real, aleatoriedad no controlada ni Internet.
-7. **IA consultiva:** Gemini, un modelo local o Jev pueden explicar y clasificar; nunca autorizan ni envían órdenes.
+7. **Análisis consultivo:** un proveedor local o asistido por IA puede explicar y clasificar, y puede emitir una orientación educativa `buy | sell | hold` con razones y disclaimer. Esa orientación permanece separada de la clasificación técnica y nunca previsualiza, autoriza ni envía órdenes.
 8. **Secretos sólo en servidor:** ninguna clave se incluye en frontend, logs, fixtures, commits o prompts.
 9. **Degradación segura:** si una integración falla o agota su cuota, la aplicación continúa con mocks o informa el estado sin romperse.
 10. **Sin automatización financiera implícita:** cada paso hacia trading real requiere una decisión y una fase independiente.
@@ -353,7 +353,7 @@ No conectes brokers ni Gemini y no implementes ejecución automática. Ejecuta v
 ```text
 Lee personal-trading-app.md. Ejecuta únicamente la fase 7.
 
-Define AnalysisProvider, AnalysisInput y AnalysisResult. Implementa MockAnalysisProvider sin modelo externo: debe generar respuestas deterministas a partir de reglas explícitas sobre variación, volatilidad mock y estado de cartera. Sus resultados sólo pueden clasificar como watch, neutral o review, con razones y advertencias; nunca buy, sell ni instrucciones de inversión.
+Define AnalysisProvider, AnalysisInput y AnalysisResult. Implementa MockAnalysisProvider sin modelo externo: debe generar respuestas deterministas a partir de reglas explícitas sobre variación, volatilidad mock y estado de cartera. Conserva `classification` como `watch | neutral | review` y añade una `EducationalRecommendation` `buy | sell | hold` separada de la clasificación. Cada orientación debe incluir razones, advertencias y un disclaimer visible que indique que es educativa, no constituye asesoramiento financiero y no ejecuta órdenes.
 
 Añade una acción manual "Analyze" en el detalle. No llames al proveedor automáticamente cuando llegan cotizaciones. Prueba contrato, reglas, estados loading/error y la separación entre análisis y órdenes.
 
