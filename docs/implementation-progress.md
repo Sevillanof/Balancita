@@ -32,6 +32,7 @@
 | D     | Immutable forecasts + deferred scorer | ✅ done                   | 133 server      | fd6a764…565f8d6 (4)       |
 | E     | Reliable official RSS news evidence   | ✅ done                   | 146 server      | 33365cc                   |
 | F     | Deterministic news analysis + Gemini  | ✅ done                   | 162 server      | 55fedd3                   |
+| G     | Technical vs. news comparison         | ✅ done                   | 177 server      | acf8fc0                   |
 | 10    | Broker paper trading                  | ⏸ pending                 | —               | —                         |
 | 11    | Real trading evaluation               | ⏸ pending                 | —               | —                         |
 | 12    | Jev spike                             | ⏸ pending                 | —               | —                         |
@@ -860,3 +861,49 @@ analysis snapshots, call an order provider, or start an automatic pipeline.
   conservative and have not been calibrated against outcomes. Fase G must
   compare technical and news scores as separate signals before any combination;
   this phase does not produce a combined score or modify the forecast engine.
+
+## Fase G — Comparación técnica vs. noticias
+
+Phase G is implemented as pure, server-only comparison and evaluation. It keeps
+technical and news evidence independent and deliberately does not combine the
+signals, generate orders, call Gemini, persist comparison records, or mutate
+`ForecastRecord`, `ForecastOutcome`, `TechnicalFeatureSnapshot`,
+`NewsAnalysisSnapshot`, or stored evidence.
+
+- **Versioned source scores**: `server/src/intelligence/comparison.ts` emits a
+  separate `technical-score.v1` snapshot from four explicit technical votes and
+  a separate `news-score.v1` snapshot from analyzed news items matching the
+  requested horizon. Each result carries its own rule version, cutoff, horizon,
+  content hash, source references, and auditable reasons.
+- **Provenance and quality**: technical snapshots reference the exact feature
+  version and hash, freshness and market gaps. News snapshots reference the
+  exact analysis version/rule/hash plus every evidence id/version/hash,
+  exclusions, freshness summary, and an explicit `gaps: null` because the news
+  contract has no sequence-gap metric. Missing, stale, retracted, future,
+  uncertain, invalid, horizon-mismatched, and cutoff-mismatched evidence remain
+  distinct abstention reasons; no missing value is fabricated.
+- **Pure comparator**: `compareTechnicalAndNews` emits only `agreement`,
+  `disagreement`, or `abstain` for one horizon and cutoff. It returns exact
+  source references and a `combination.enabled: false` marker with
+  `no-combination.v1`; it has no combined direction, probability, weight, or
+  recommendation field.
+- **Comparative metrics**: `comparison-metrics.v1` calculates per-source
+  coverage/abstention, directional accuracy, Brier score, guarded log-loss,
+  calibration bands, and return/range MAE when the source supplied the relevant
+  estimate. Agreement/disagreement/abstention and all source metrics segment by
+  horizon and regime. A neutral `(1/3, 1/3, 1/3)` baseline is included with
+  descriptive deltas only.
+- **Evaluation boundary**: metrics accept outcomes already evaluated and never
+  evaluate future data, run a random backtest, claim profitability, or infer
+  causality. Empty aggregates return `null` where undefined and invalid scored
+  probabilities fail closed.
+- **Tests and limits**: 15 offline tests were added after a RED run and GREEN
+  implementation. Fixtures cover technical-only/news-only, missing, uncertain,
+  stale, retracted, exact agreement/disagreement/abstention, versions/hashes/
+  cutoffs/freshness/gaps, known metric values, empty/invalid input, horizon and
+  regime segments, immutable input records, and source-level absence of
+  `OrderExecutionProvider`, automatic Gemini, and network calls. No SQLite
+  migration or optional persistence was necessary.
+- **Next step**: combination remains explicitly pending. Any future combination
+  must be separately authorized and preceded by evidence of incremental value;
+  Fase H is the next roadmap phase and is not started here.
