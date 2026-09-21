@@ -1,0 +1,47 @@
+server/src/intelligence/market/market-store.ts
+  s_c13311c68a13bb::t_215dd79a5ea7b0 24-36,38,179-191,865-1279,1418-1493,1529-1542
+server/src/intelligence/news/news-store.test.ts
+  s_c13311c68a13bb::t_ca1471f78ef885 60
+server/src/intelligence/shadow/shadow-aggregation.test.ts
+  s_c13311c68a13bb::t_e8ff8e8b91bf73 1-257
+server/src/intelligence/shadow/shadow-aggregation.ts
+  s_c13311c68a13bb::t_78bb55f350e6c4 1-461
+server/src/intelligence/shadow/shadow-contracts.ts
+  s_c13311c68a13bb::t_2b2fffb269b908 1-30
+server/src/intelligence/shadow/shadow-decision.test.ts
+  s_c13311c68a13bb::t_1294a6a0829282 1-126
+server/src/intelligence/shadow/shadow-decision.ts
+  s_c13311c68a13bb::t_e7ebb22dd88703 1-82
+server/src/intelligence/shadow/shadow-fixtures.ts
+  s_c13311c68a13bb::t_c9da95ca114e5e 1-179
+server/src/intelligence/shadow/shadow-report.test.ts
+  s_c13311c68a13bb::t_b010680b980119 1-158
+server/src/intelligence/shadow/shadow-report.ts
+  s_c13311c68a13bb::t_87455ed1d1bec4 1-133
+server/src/intelligence/shadow/shadow-run.test.ts
+  s_c13311c68a13bb::t_3b5fbf3fd4a195 1-55
+server/src/intelligence/shadow/shadow-run.ts
+  s_c13311c68a13bb::t_f23ae2ac7f0fbb 1-139
+server/src/intelligence/shadow/shadow-services.test.ts
+  s_c13311c68a13bb::t_e41405b783f388 1-205
+server/src/intelligence/shadow/shadow-services.ts
+  s_c13311c68a13bb::t_9bbbad4d003508 1-228
+server/src/intelligence/shadow/shadow-store.test.ts
+  s_c13311c68a13bb::t_4962d1e6be78a0 1-393
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "392865a81790f98df4c3654dcacc15216c91663c",
+  "prompts": {},
+  "sessions": {
+    "s_c13311c68a13bb": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f3baaf7f6ffeUYGgLXCduMx8eA",
+        "model": "big-pickle"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
