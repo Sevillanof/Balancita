@@ -1,0 +1,23 @@
+src/providers/kraken-pairs.test.ts
+  s_d08fcec1c1f1b4::t_2783f8aa23153a 1-55
+src/providers/kraken-pairs.ts
+  s_d08fcec1c1f1b4::t_671e033fc09ecf 1-35
+src/providers/market-data-provider.test.ts
+  s_d08fcec1c1f1b4::t_3f50545ec17be7 2,8,10-22,29,56-57,59-60,63-64,73,76-79
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "35cc6f00bdcd84b873197df4532336410bd85bdc",
+  "prompts": {},
+  "sessions": {
+    "s_d08fcec1c1f1b4": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f3ae5e637ffeoGYSreghl2ldrY",
+        "model": "deepseek-v4.1-flash"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
