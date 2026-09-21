@@ -1,0 +1,19 @@
+odd/tasks/kraken-market-data.md
+  s_e5575bf1cd2d2c::t_f0abaa6056ba77 56-57,100-106
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "15fd08c62660679c22d49842cfd910098a1c8972",
+  "prompts": {},
+  "sessions": {
+    "s_e5575bf1cd2d2c": {
+      "agent_id": {
+        "tool": "github-copilot",
+        "id": "50e38a77-7972-4269-a3e5-6df3046a4696",
+        "model": "copilot/gpt-5.6-sol"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
