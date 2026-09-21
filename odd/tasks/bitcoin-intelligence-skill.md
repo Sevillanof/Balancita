@@ -65,13 +65,13 @@ The application has real read-only BTC-EUR quotes, a single-screen paper dashboa
 docs/bitcoin-market-intelligence-roadmap.md odd/tasks/bitcoin-intelligence-skill.md`
   passed after one write-format pass on the roadmap file (initial check
   failed on Markdown table column alignment only).
-- RDD mode: enabled globally; candidate assessment runs after the BI-2
-  work-unit commit.
-- Work-unit commits: BI-1 `4cc0627`; BI-2 `3bb4878`.
+- RDD mode: enabled globally.
+- Work-unit commits: BI-1 `4cc0627`; BI-2 `3bb4878`; BI-3 `3005764`; delivery
+  evidence `fee07d0`.
 - RDD: risk assessment was unavailable because the provider binary/fallback was
-  missing; native preflight then stopped on an undocumented
-  `intended_untracked_selection` request caused by the pre-existing untracked
-  analysis document. No approval or receipt is claimed.
+  missing. Native preflight confirmed that the pre-existing untracked analysis
+  document was excluded from the candidate; the bounded assessment still could
+  not run without its provider. No approval or receipt is claimed.
 - BI-3: refreshed `.atl/skill-registry.md` with 14 skills; the project skill is
   indexed with its corrected 156-character description. Frontmatter parses,
   the skill name matches its folder, metadata and license are present, required
@@ -83,4 +83,5 @@ docs/bitcoin-market-intelligence-roadmap.md odd/tasks/bitcoin-intelligence-skill
 
 ## Next step
 
-Commit the BI-3 metadata update and report the final verified state.
+After explicit implementation authorization, begin roadmap phases A and B with
+strict TDD.
