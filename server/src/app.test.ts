@@ -1,10 +1,16 @@
-import { describe, expect, it } from 'vitest'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, describe, expect, it } from 'vitest'
 import { AnalysisCache } from './cache.ts'
 import { serverConfigFrom } from './config.ts'
 import type { GeminiClient, GeminiGenerateParams } from './gemini-client.ts'
 import { AnalysisRateLimiter } from './limits.ts'
 import { buildApp } from './app.ts'
 import type { MarketCollectorLifecycle } from './app.ts'
+import type { SupportedInstrumentId } from './intelligence/contracts.ts'
+import { MarketStore } from './intelligence/market/market-store.ts'
+import { createShadowRunStart } from './intelligence/shadow/shadow-run.ts'
 
 const resultText = JSON.stringify({
   instrumentId: 'BTC-EUR',
@@ -322,9 +328,10 @@ describe('market collector lifecycle', () => {
 
   it('starts and stops an enabled collector through Fastify lifecycle hooks', async () => {
     const collector = new FakeMarketCollector()
+    const store = new MarketStore({ path: ':memory:' })
     const app = await buildApp({
       config: serverConfigFrom({ MARKET_COLLECTOR_ENABLED: 'true' }),
-      overrides: { marketCollector: collector },
+      overrides: { marketCollector: collector, marketStore: store },
     })
 
     await app.ready()
@@ -332,5 +339,173 @@ describe('market collector lifecycle', () => {
     await app.close()
 
     expect(collector.stopCount).toBe(1)
+  })
+})
+
+describe('shadow run lifecycle and status endpoint', () => {
+  const shadowDirectory = mkdtempSync(join(tmpdir(), 'balancita-app-shadow-'))
+
+  afterEach(() => {
+    rmSync(shadowDirectory, { recursive: true, force: true })
+  })
+
+  function storePath(): string {
+    return join(
+      shadowDirectory,
+      `shadow-${Math.random().toString(36).slice(2)}.db`,
+    )
+  }
+
+  async function makeAppWithStore(options: {
+    enabled: boolean
+    store: MarketStore
+  }) {
+    const app = await buildApp({
+      config: serverConfigFrom(
+        options.enabled ? { MARKET_COLLECTOR_ENABLED: 'true' } : {},
+      ),
+      overrides: {
+        marketCollector: new FakeMarketCollector(),
+        marketStore: options.store,
+      },
+    })
+    return app
+  }
+
+  it('creates the canonical shadow run idempotently across onReady boots', async () => {
+    const path = storePath()
+    const firstCollector = new FakeMarketCollector()
+    const firstStore = new MarketStore({ path })
+    const firstApp = await buildApp({
+      config: serverConfigFrom({ MARKET_COLLECTOR_ENABLED: 'true' }),
+      overrides: {
+        marketCollector: firstCollector,
+        marketStore: firstStore,
+      },
+    })
+
+    await firstApp.ready()
+    expect(firstCollector.starts).toEqual(['BTC-EUR'])
+    expect(firstStore.shadowRunCount()).toBe(1)
+    const run = firstStore.getShadowRun('shadow:BTC-EUR')
+    expect(run?.id).toBe('shadow:BTC-EUR')
+    expect(run?.status).toBe('collecting')
+    expect(run?.plannedEndAt).toBe(run!.startedAt + 30 * 24 * 3_600_000)
+    await firstApp.close()
+
+    const againCollector = new FakeMarketCollector()
+    const secondStore = new MarketStore({ path })
+    const secondApp = await buildApp({
+      config: serverConfigFrom({ MARKET_COLLECTOR_ENABLED: 'true' }),
+      overrides: {
+        marketCollector: againCollector,
+        marketStore: secondStore,
+      },
+    })
+
+    await secondApp.ready()
+    expect(againCollector.starts).toEqual(['BTC-EUR'])
+    expect(secondStore.shadowRunCount()).toBe(1)
+    expect(secondStore.getShadowRun('shadow:BTC-EUR')?.startedAt).toBe(
+      run?.startedAt,
+    )
+    await secondApp.close()
+  })
+
+  it('does not create a shadow run when the collector is disabled', async () => {
+    const store = new MarketStore({ path: storePath() })
+    const app = await makeAppWithStore({ enabled: false, store })
+
+    await app.ready()
+    expect(store.shadowRunCount()).toBe(0)
+    expect(store.getShadowRun('shadow:BTC-EUR')).toBeUndefined()
+    await app.close()
+  })
+
+  it('reports active collecting status before the 30-day window completes', async () => {
+    const store = new MarketStore({ path: storePath() })
+    const app = await makeAppWithStore({ enabled: true, store })
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/intelligence/shadow/status?instrumentId=BTC-EUR',
+    })
+
+    expect(response.statusCode).toBe(200)
+    const body = response.json()
+    expect(body.error).toBeUndefined()
+    expect(body.instrumentId).toBe('BTC-EUR')
+    expect(body.state.kind).toBe('active')
+    expect(body.state.view.computedStatus).toBe('collecting')
+    expect(body.state.view.status).toBe('collecting')
+    expect(body.state.view.run.id).toBe('shadow:BTC-EUR')
+    expect(body.state.view.evaluatedOutcomeCount).toBe(0)
+    expect(body.state.view.minimumEvidence).toBe(10)
+    expect(typeof body.state.view.now).toBe('number')
+    await app.close()
+  })
+
+  it('reports disabled when the collector is off and never invents run data', async () => {
+    const store = new MarketStore({ path: storePath() })
+    const app = await makeAppWithStore({ enabled: false, store })
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/intelligence/shadow/status?instrumentId=BTC-EUR',
+    })
+
+    expect(response.statusCode).toBe(200)
+    const body = response.json()
+    expect(body.state.kind).toBe('disabled')
+    expect(body.state.reason).toBe('collector_disabled')
+    expect(body.state.view).toBeUndefined()
+    await app.close()
+  })
+
+  it('rejects a non-BTC-EUR instrument with 400', async () => {
+    const store = new MarketStore({ path: storePath() })
+    const app = await makeAppWithStore({ enabled: true, store })
+
+    const other = await app.inject({
+      method: 'GET',
+      url: '/api/intelligence/shadow/status?instrumentId=ETH-EUR',
+    })
+    expect(other.statusCode).toBe(400)
+    expect(other.json()).toMatchObject({
+      error: { code: 'unsupported_instrument' },
+    })
+
+    const missing = await app.inject({
+      method: 'GET',
+      url: '/api/intelligence/shadow/status',
+    })
+    expect(missing.statusCode).toBe(400)
+    await app.close()
+  })
+
+  it('reuses an existing run without mutating its start, end or policy', async () => {
+    const path = storePath()
+    const startedAt = 1_500_000_000_000
+    const seededStore = new MarketStore({ path })
+    const run = createShadowRunStart(
+      startedAt,
+      'BTC-EUR' as SupportedInstrumentId,
+    )
+    seededStore.createShadowRun(run, startedAt)
+    expect(seededStore.shadowRunCount()).toBe(1)
+    seededStore.close()
+
+    const store = new MarketStore({ path })
+    const app = await makeAppWithStore({ enabled: true, store })
+
+    await app.ready()
+    expect(store.shadowRunCount()).toBe(1)
+    const existing = store.getShadowRun('shadow:BTC-EUR')
+    expect(existing?.startedAt).toBe(startedAt)
+    expect(existing?.plannedEndAt).toBe(startedAt + 30 * 24 * 3_600_000)
+    expect(existing?.status).toBe('collecting')
+    expect(existing?.versions.policyVersion).toBe('shadow-policy.v1')
+    expect(store.listShadowStatuses('shadow:BTC-EUR')).toHaveLength(1)
+    await app.close()
   })
 })

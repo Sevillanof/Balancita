@@ -12,8 +12,17 @@ import {
 import { AnalysisCache } from './cache.ts'
 import type { ServerConfig } from './config.ts'
 import { createGeminiClient, type GeminiClient } from './gemini-client.ts'
+import type {
+  SupportedInstrumentId,
+  TimestampMs,
+} from './intelligence/contracts.ts'
 import { CoinbaseMarketCollector } from './intelligence/market/coinbase-market-collector.ts'
 import { MarketStore } from './intelligence/market/market-store.ts'
+import {
+  ShadowRunNotFoundError,
+  ShadowRunService,
+  type ShadowStatusView,
+} from './intelligence/shadow/shadow-services.ts'
 import {
   createIntelligenceSnapshot,
   IntelligenceStreamHub,
@@ -36,11 +45,27 @@ export interface MarketCollectorLifecycle extends IntelligenceCollectorObserver 
 
 export interface MarketDependencies {
   marketCollector: MarketCollectorLifecycle
+  marketStore?: MarketStore
 }
 
 type ErrorEnvelope = {
   error: { code: AnalysisGatewayErrorCode | 'internal_error'; message: string }
 }
+
+export type ShadowStatusState =
+  | { readonly kind: 'active'; readonly view: ShadowStatusView }
+  | { readonly kind: 'disabled'; readonly reason: 'collector_disabled' }
+  | {
+      readonly kind: 'unavailable'
+      readonly reason: 'market_store_unavailable' | 'shadow_run_not_found'
+    }
+
+export interface ShadowStatusResponse {
+  readonly instrumentId: SupportedInstrumentId
+  readonly state: ShadowStatusState
+}
+
+const CANONICAL_SHADOW_RUN_ID = 'shadow:BTC-EUR'
 
 function envelope(error: {
   code: AnalysisGatewayErrorCode | 'internal_error'
@@ -80,20 +105,41 @@ export async function buildApp(options: {
         })
 
   let marketStore: MarketStore | undefined
-  const marketCollector = config.marketCollectorEnabled
-    ? (options.overrides?.marketCollector ??
-      (() => {
-        marketStore = new MarketStore({ path: config.marketDbPath })
-        return new CoinbaseMarketCollector({
+  if (
+    config.marketCollectorEnabled ||
+    options.overrides?.marketStore !== undefined
+  ) {
+    marketStore =
+      options.overrides?.marketStore ??
+      new MarketStore({ path: config.marketDbPath })
+  }
+  const marketCollector =
+    marketStore === undefined
+      ? undefined
+      : (options.overrides?.marketCollector ??
+        new CoinbaseMarketCollector({
           store: marketStore,
           wsUrl: config.coinbaseWsUrl,
           staleAfterMs: config.marketStaleAfterMs,
           reconnectMinMs: config.marketReconnectMinMs,
           reconnectMaxMs: config.marketReconnectMaxMs,
           clock: () => Date.now(),
+        }))
+  const shadowService =
+    marketStore === undefined
+      ? undefined
+      : new ShadowRunService({
+          store: marketStore,
+          instrumentId: 'BTC-EUR',
+          runId: CANONICAL_SHADOW_RUN_ID,
+          clock: () => Date.now() as TimestampMs,
         })
-      })())
-    : undefined
+
+  const ensureShadowRunExists = (): void => {
+    if (shadowService === undefined || marketStore === undefined) return
+    if (marketStore.getShadowRun(CANONICAL_SHADOW_RUN_ID) !== undefined) return
+    shadowService.start()
+  }
 
   const streamHub = new IntelligenceStreamHub({
     snapshot: () =>
@@ -164,19 +210,60 @@ export async function buildApp(options: {
     reply.raw.on('close', cleanup)
   })
 
-  if (marketCollector !== undefined) {
+  app.get('/api/intelligence/shadow/status', (request, reply) => {
+    const query = request.query as { instrumentId?: unknown }
+    if (query.instrumentId !== 'BTC-EUR') {
+      return reply.code(400).send({
+        error: {
+          code: 'unsupported_instrument',
+          message: 'Only BTC-EUR shadow run status is supported.',
+        },
+      })
+    }
+    if (!config.marketCollectorEnabled) {
+      return reply.send({
+        instrumentId: 'BTC-EUR',
+        state: { kind: 'disabled', reason: 'collector_disabled' },
+      } satisfies ShadowStatusResponse)
+    }
+    if (shadowService === undefined) {
+      return reply.send({
+        instrumentId: 'BTC-EUR',
+        state: { kind: 'unavailable', reason: 'market_store_unavailable' },
+      } satisfies ShadowStatusResponse)
+    }
+    try {
+      const view = shadowService.status()
+      return reply.send({
+        instrumentId: 'BTC-EUR',
+        state: { kind: 'active', view },
+      } satisfies ShadowStatusResponse)
+    } catch (error) {
+      if (error instanceof ShadowRunNotFoundError) {
+        return reply.send({
+          instrumentId: 'BTC-EUR',
+          state: { kind: 'unavailable', reason: 'shadow_run_not_found' },
+        } satisfies ShadowStatusResponse)
+      }
+      throw error
+    }
+  })
+
+  if (config.marketCollectorEnabled) {
     app.addHook('onReady', async () => {
-      await marketCollector.start('BTC-EUR')
+      ensureShadowRunExists()
+      await marketCollector?.start('BTC-EUR')
     })
     app.addHook('onClose', async () => {
       streamHub.close()
       unsubscribeCollector?.()
-      await marketCollector.stop()
+      await marketCollector?.stop()
       marketStore?.close()
     })
   } else {
     app.addHook('onClose', async () => {
       streamHub.close()
+      marketStore?.close()
     })
   }
 

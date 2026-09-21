@@ -1008,3 +1008,38 @@ decision backed by a reviewable report after the planned end of the run.
   `insufficient_evidence`. The next step is starting the local run and letting
   the shadow period elapse with the collector enabled, then producing the
   reviewable report for a manual decision.
+
+## Fase I — Lanzamiento del shadow run (wiring)
+
+Phase I wiring integra el run shadow durable en el server Fastify para que el
+periodo de 30 días pueda correr localmente sin pasos manuales sobre SQLite.
+
+- **Auto-arranque idempotente**: `buildApp` crea el `MarketStore` cuando
+  `MARKET_COLLECTOR_ENABLED=true` (o cuando los tests lo inyectan vía
+  `overrides.marketStore`) y construye un `ShadowRunService` con clock
+  `() => Date.now()`, `instrumentId: 'BTC-EUR'` e id canónico `shadow:BTC-EUR`.
+  El hook `onReady` **asegura** la existencia del run antes de
+  `marketCollector.start('BTC-EUR')`: si `shadow:BTC-EUR` ya está persistido, no
+  lo recrea ni toca su start/end/policy (inmutabilidad); si falta, lo inserta con
+  `startedAt = now` y `plannedEndAt = now + 30 días`. En reinicios el run
+  existente se reutiliza tal cual (`shadowRunCount` no crece).
+- **Endpoint de estado PLC read-only**: `GET /api/intelligence/shadow/status?instrumentId=BTC-EUR`
+  devuelve JSON tipado con la vista del `ShadowRunService`: `run`,
+  `computedStatus`, estado persistido, `evaluatedOutcomeCount`, `minimumEvidence`
+  (10), `now` y `decision` si existe. Acepta sólo `BTC-EUR`; otro instrumento o
+  ausencia → 400 `unsupported_instrument`. Con el colector deshabilitado responde
+  `state.kind = disabled` (razón `collector_disabled`) sin inventar run ni counts;
+  con el colector habilitado pero sin store o sin run responde
+  `state.kind = unavailable`. Errores no previstos usan el envelope
+  `{ error: { code, message } }` del server.
+- **Cómo iniciar el run localmente**: `MARKET_COLLECTOR_ENABLED=true
+pnpm --dir server dev` (equivalente a `pnpm dev:server` con la env). El primer
+  `onReady` persiste `shadow:BTC-EUR` en `server/data/market.sqlite` (o
+  `MARKET_DB_PATH`) y la consulta al endpoint reporta `collecting`. El run **no**
+  se marca go/no-go automáticamente: requiere el reporte revisable tras los 30
+  días y una decisión manual.
+- **Tests**: 6 nuevos en `server/src/app.test.ts` (suite server: 246) con
+  `MarketStore` en SQLite temporal: creación idempotente en `onReady`,
+  no-creación con collector deshabilitado, status `collecting` antes de 30 días,
+  status `disabled` con collector off, instrumento inválido → 400, y reutilización
+  sin mutación de un run existente. El run nunca se crea si el collector está off.
