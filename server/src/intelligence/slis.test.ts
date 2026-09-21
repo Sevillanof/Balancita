@@ -5,6 +5,7 @@ import {
   calculateReceiveLatency,
   calculateStaleRate,
   deriveDataFreshness,
+  summarizeGapTransitions,
   summarizePercentiles,
   validateMetricWindow,
 } from './slis.ts'
@@ -128,6 +129,24 @@ describe('intelligence SLIs', () => {
     expect(
       calculateGapRate({ sequences: [10, 9], expectedOpportunities: 2 }),
     ).toMatchObject({ valid: false })
+  })
+
+  it('summarizes persisted collector gaps without treating ticker sequence jumps as gaps', () => {
+    expect(
+      summarizeGapTransitions({
+        gapCount: 2,
+        observedMessages: 8,
+        sequenceAvailable: true,
+      }),
+    ).toEqual({
+      valid: true,
+      value: {
+        gapCount: 2,
+        expectedOpportunities: 10,
+        rate: 0.2,
+        sequenceAvailable: true,
+      },
+    })
   })
 
   it('validates finite non-negative metric windows and exact boundaries', () => {

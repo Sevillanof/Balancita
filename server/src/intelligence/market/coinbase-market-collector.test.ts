@@ -129,6 +129,31 @@ afterEach(() => {
 })
 
 describe('CoinbaseMarketCollector', () => {
+  it('exposes lifecycle status changes to the intelligence stream observer', () => {
+    const socket = new FakeSocket()
+    const { collector, store } = makeCollector({
+      sockets: [socket],
+      now: () => Date.parse('2026-09-21T10:00:02.000Z'),
+    })
+    const statuses: string[] = []
+    const unsubscribe = collector.subscribe(() =>
+      statuses.push(collector.getStatus()),
+    )
+
+    collector.start('BTC-EUR')
+    socket.open()
+    socket.message(ticker({ sequence: 10, tradeId: 20 }))
+    socket.error()
+    collector.stop()
+    unsubscribe()
+
+    expect(statuses).toContain('connecting')
+    expect(statuses).toContain('connected')
+    expect(statuses).toContain('reconnecting')
+    expect(statuses.at(-1)).toBe('stopped')
+    store.close()
+  })
+
   it('rejects another instrument before opening a socket', () => {
     const sockets: FakeSocket[] = []
     const { collector, store } = makeCollector({ sockets, now: () => 1_000 })

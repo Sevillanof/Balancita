@@ -27,6 +27,9 @@ export interface ServerConfig {
   marketStaleAfterMs: number
   marketReconnectMinMs: number
   marketReconnectMaxMs: number
+  intelligenceStreamMaxClients: number
+  intelligenceStreamKeepAliveMs: number
+  intelligenceStreamWindowSize: number
 }
 
 const DEFAULT_MODEL = 'gemini-3.5-flash-lite'
@@ -88,6 +91,21 @@ export function serverConfigFrom(
     marketStaleAfterMs: positiveInt(env, 'MARKET_STALE_AFTER_MS', 15_000),
     marketReconnectMinMs,
     marketReconnectMaxMs,
+    intelligenceStreamMaxClients: positiveInt(
+      env,
+      'INTELLIGENCE_SSE_MAX_CLIENTS',
+      20,
+    ),
+    intelligenceStreamKeepAliveMs: positiveInt(
+      env,
+      'INTELLIGENCE_SSE_KEEPALIVE_MS',
+      15_000,
+    ),
+    intelligenceStreamWindowSize: positiveInt(
+      env,
+      'INTELLIGENCE_SSE_WINDOW_SIZE',
+      200,
+    ),
   }
 }
 

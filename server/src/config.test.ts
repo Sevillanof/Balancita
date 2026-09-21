@@ -22,6 +22,9 @@ describe('serverConfigFrom', () => {
     expect(config.marketStaleAfterMs).toBe(15_000)
     expect(config.marketReconnectMinMs).toBe(1_000)
     expect(config.marketReconnectMaxMs).toBe(30_000)
+    expect(config.intelligenceStreamMaxClients).toBe(20)
+    expect(config.intelligenceStreamKeepAliveMs).toBe(15_000)
+    expect(config.intelligenceStreamWindowSize).toBe(200)
   })
 
   it('parses numeric environment values without requiring a key in tests', () => {
@@ -42,6 +45,9 @@ describe('serverConfigFrom', () => {
       MARKET_STALE_AFTER_MS: '5000',
       MARKET_RECONNECT_MIN_MS: '250',
       MARKET_RECONNECT_MAX_MS: '10000',
+      INTELLIGENCE_SSE_MAX_CLIENTS: '4',
+      INTELLIGENCE_SSE_KEEPALIVE_MS: '2000',
+      INTELLIGENCE_SSE_WINDOW_SIZE: '50',
     })
     expect(config.apiKey).toBe('')
     expect(config.model).toBe('gemini-3.8-flash')
@@ -60,6 +66,9 @@ describe('serverConfigFrom', () => {
     expect(config.marketStaleAfterMs).toBe(5000)
     expect(config.marketReconnectMinMs).toBe(250)
     expect(config.marketReconnectMaxMs).toBe(10_000)
+    expect(config.intelligenceStreamMaxClients).toBe(4)
+    expect(config.intelligenceStreamKeepAliveMs).toBe(2_000)
+    expect(config.intelligenceStreamWindowSize).toBe(50)
   })
 
   it('rejects non-numeric or out-of-range numeric values', () => {
@@ -77,6 +86,9 @@ describe('serverConfigFrom', () => {
       { MARKET_RECONNECT_MIN_MS: '0' },
       { MARKET_RECONNECT_MAX_MS: '-1' },
       { MARKET_RECONNECT_MIN_MS: '5000', MARKET_RECONNECT_MAX_MS: '1000' },
+      { INTELLIGENCE_SSE_MAX_CLIENTS: '0' },
+      { INTELLIGENCE_SSE_KEEPALIVE_MS: '-1' },
+      { INTELLIGENCE_SSE_WINDOW_SIZE: '1.5' },
     ]) {
       expect(() => serverConfigFrom(env)).toThrow(ServerConfigError)
     }

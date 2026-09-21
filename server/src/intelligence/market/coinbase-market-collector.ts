@@ -33,6 +33,9 @@ export interface CoinbaseRejection {
   readonly issues?: readonly ValidationIssue[]
 }
 
+export type CoinbaseCollectorStatus =
+  'connecting' | 'connected' | 'reconnecting' | 'stale' | 'stopped'
+
 export interface CoinbaseMarketCollectorOptions {
   readonly store: MarketStore
   readonly wsUrl: string
@@ -66,6 +69,7 @@ export class CoinbaseMarketCollector {
   private readonly jitterRatio: number
   private readonly onRejected?: (rejection: CoinbaseRejection) => void
   private readonly onPersisted?: (result: ObservationInsertResult) => void
+  private readonly listeners = new Set<() => void>()
   private socket: CoinbaseSocket | null = null
   private reconnectTimer: TimerId | null = null
   private staleTimer: TimerId | null = null
@@ -75,6 +79,7 @@ export class CoinbaseMarketCollector {
   private tickerSequence: number | undefined
   private heartbeatSequence: number | undefined
   private connectionRevision = 0
+  private status: CoinbaseCollectorStatus = 'stopped'
 
   constructor(options: CoinbaseMarketCollectorOptions) {
     this.store = options.store
@@ -105,6 +110,8 @@ export class CoinbaseMarketCollector {
     }
     if (this.started) return
     this.started = true
+    this.status = 'connecting'
+    this.notify()
     this.reconnectAttempt = 0
     this.failureHandled = false
     this.openSocket()
@@ -112,6 +119,8 @@ export class CoinbaseMarketCollector {
 
   stop(): void {
     this.started = false
+    this.status = 'stopped'
+    this.notify()
     this.clearReconnectTimer()
     this.clearStaleTimer()
     const socket = this.socket
@@ -121,6 +130,15 @@ export class CoinbaseMarketCollector {
     socket.close()
   }
 
+  getStatus(): CoinbaseCollectorStatus {
+    return this.status
+  }
+
+  subscribe(listener: () => void): () => void {
+    this.listeners.add(listener)
+    return () => this.listeners.delete(listener)
+  }
+
   refreshStale(): void {
     this.store.markStale(
       SOURCE,
@@ -128,6 +146,11 @@ export class CoinbaseMarketCollector {
       this.clock() as TimestampMs,
       this.staleAfterMs,
     )
+    this.status =
+      this.store.getCursor(SOURCE, INSTRUMENT)?.status === 'stale'
+        ? 'stale'
+        : 'connected'
+    this.notify()
   }
 
   private openSocket(): void {
@@ -141,6 +164,8 @@ export class CoinbaseMarketCollector {
       INSTRUMENT,
       this.clock() as TimestampMs,
     )
+    this.status = 'connecting'
+    this.notify()
     try {
       const socket = this.websocketFactory(this.wsUrl)
       this.socket = socket
@@ -161,6 +186,8 @@ export class CoinbaseMarketCollector {
   private handleOpen(socket: CoinbaseSocket): void {
     if (!this.started || this.socket !== socket) return
     this.reconnectAttempt = 0
+    this.status = 'connected'
+    this.notify()
     try {
       socket.send(
         JSON.stringify({
@@ -359,6 +386,8 @@ export class CoinbaseMarketCollector {
         envelope.receivedTime,
       )
       this.onPersisted?.(result)
+      this.status = envelope.status === 'stale' ? 'stale' : 'connected'
+      this.notify()
       return result
     } catch (error) {
       this.reject(
@@ -414,6 +443,8 @@ export class CoinbaseMarketCollector {
       current.close()
     }
     this.store.markStreamStale(SOURCE, INSTRUMENT, this.clock() as TimestampMs)
+    this.status = 'reconnecting'
+    this.notify()
     if (this.reconnectTimer !== null) return
     const baseDelay = Math.min(
       this.reconnectMaxMs,
@@ -461,6 +492,10 @@ export class CoinbaseMarketCollector {
 
   private report(rejection: CoinbaseRejection): void {
     this.onRejected?.(rejection)
+  }
+
+  private notify(): void {
+    for (const listener of this.listeners) listener()
   }
 }
 

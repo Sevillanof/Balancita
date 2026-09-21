@@ -287,6 +287,25 @@ describe('analysis gateway API', () => {
 })
 
 describe('market collector lifecycle', () => {
+  it('rejects non-BTC-EUR intelligence streams before opening a connection', async () => {
+    const app = await makeApp({})
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/intelligence/stream?instrumentId=ETH-EUR',
+    })
+
+    expect(response.statusCode).toBe(400)
+    expect(response.json()).toMatchObject({
+      error: { code: 'unsupported_instrument' },
+    })
+
+    const missingInstrument = await app.inject({
+      method: 'GET',
+      url: '/api/intelligence/stream',
+    })
+    expect(missingInstrument.statusCode).toBe(400)
+  })
+
   it('does not start a collector when market ingestion is disabled by default', async () => {
     const collector = new FakeMarketCollector()
     const app = await buildApp({

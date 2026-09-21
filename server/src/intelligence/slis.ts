@@ -154,6 +154,42 @@ export interface GapRateSummary {
   readonly sequenceAvailable: boolean
 }
 
+export interface PersistedGapRateInput {
+  readonly gapCount: number
+  readonly observedMessages: number
+  readonly sequenceAvailable: boolean
+}
+
+/** Summarizes gaps already detected by the collector without reinterpreting sequence jumps. */
+export function summarizeGapTransitions(
+  input: PersistedGapRateInput,
+): ValidationResult<GapRateSummary> {
+  if (
+    !Number.isSafeInteger(input.gapCount) ||
+    input.gapCount < 0 ||
+    !Number.isSafeInteger(input.observedMessages) ||
+    input.observedMessages < 0
+  ) {
+    return invalid([
+      issue(
+        'invalid_gap_counts',
+        'gaps',
+        'Gap and observed message counts must be non-negative integers.',
+      ),
+    ])
+  }
+  const expectedOpportunities = input.observedMessages + input.gapCount
+  return valid({
+    gapCount: input.gapCount,
+    expectedOpportunities,
+    rate:
+      expectedOpportunities === 0
+        ? null
+        : input.gapCount / expectedOpportunities,
+    sequenceAvailable: input.sequenceAvailable,
+  })
+}
+
 export function calculateGapRate(
   input: GapRateInput,
 ): ValidationResult<GapRateSummary> {

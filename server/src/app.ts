@@ -14,6 +14,11 @@ import type { ServerConfig } from './config.ts'
 import { createGeminiClient, type GeminiClient } from './gemini-client.ts'
 import { CoinbaseMarketCollector } from './intelligence/market/coinbase-market-collector.ts'
 import { MarketStore } from './intelligence/market/market-store.ts'
+import {
+  createIntelligenceSnapshot,
+  IntelligenceStreamHub,
+  type IntelligenceCollectorObserver,
+} from './intelligence/stream.ts'
 import { AnalysisRateLimiter } from './limits.ts'
 import { AnalyzeService } from './service.ts'
 import { parseAnalysisInputRequest } from './wire.ts'
@@ -24,7 +29,7 @@ export interface AnalysisDependencies {
   cache: AnalysisCache
 }
 
-export interface MarketCollectorLifecycle {
+export interface MarketCollectorLifecycle extends IntelligenceCollectorObserver {
   start(instrumentId: string): void | Promise<void>
   stop(): void | Promise<void>
 }
@@ -90,6 +95,24 @@ export async function buildApp(options: {
       })())
     : undefined
 
+  const streamHub = new IntelligenceStreamHub({
+    snapshot: () =>
+      createIntelligenceSnapshot({
+        collectorEnabled: config.marketCollectorEnabled,
+        marketStore,
+        collector: marketCollector,
+        staleAfterMs: config.marketStaleAfterMs,
+        clock: () => Date.now(),
+        windowSize: config.intelligenceStreamWindowSize,
+      }),
+    maxClients: config.intelligenceStreamMaxClients,
+    keepAliveMs: config.intelligenceStreamKeepAliveMs,
+    clock: () => Date.now(),
+  })
+  const unsubscribeCollector = marketCollector?.subscribe?.(() =>
+    streamHub.publish(),
+  )
+
   const app = Fastify({ logger: false })
 
   if (config.corsOrigin !== '') {
@@ -98,13 +121,62 @@ export async function buildApp(options: {
 
   app.get('/health', async () => ({ status: 'ok' }))
 
+  app.get('/api/intelligence/stream', (request, reply) => {
+    const query = request.query as { instrumentId?: unknown }
+    if (query.instrumentId !== 'BTC-EUR') {
+      return reply.code(400).send({
+        error: {
+          code: 'unsupported_instrument',
+          message: 'Only BTC-EUR intelligence streams are supported.',
+        },
+      })
+    }
+    if (streamHub.clientCount() >= config.intelligenceStreamMaxClients) {
+      return reply
+        .code(429)
+        .header('retry-after', '5')
+        .send({
+          error: {
+            code: 'stream_limit_reached',
+            message: 'The intelligence stream client limit has been reached.',
+          },
+        })
+    }
+
+    reply.hijack()
+    reply.raw.statusCode = 200
+    reply.raw.setHeader('content-type', 'text/event-stream; charset=utf-8')
+    reply.raw.setHeader('cache-control', 'no-cache, no-transform')
+    reply.raw.setHeader('connection', 'keep-alive')
+    reply.raw.setHeader('x-accel-buffering', 'no')
+    reply.raw.flushHeaders()
+    const lastEventId = request.headers['last-event-id']
+    const requestedEventId = Array.isArray(lastEventId)
+      ? lastEventId[0]
+      : lastEventId
+    const cleanup = streamHub.connect(
+      {
+        write: (chunk) => reply.raw.write(chunk),
+        close: () => reply.raw.end(),
+      },
+      requestedEventId,
+    )
+    reply.raw.on('close', cleanup)
+  })
+
   if (marketCollector !== undefined) {
     app.addHook('onReady', async () => {
       await marketCollector.start('BTC-EUR')
     })
     app.addHook('onClose', async () => {
+      streamHub.close()
+      unsubscribeCollector?.()
       await marketCollector.stop()
       marketStore?.close()
+    })
+  } else {
+    app.addHook('onClose', async () => {
+      streamHub.close()
     })
   }
 
