@@ -25,7 +25,7 @@ The application has real read-only BTC-EUR quotes, a single-screen paper dashboa
 - Existing user changes in `docs/implementation-progress.md` and `src/domain/analysis.ts` must remain intact.
 - Strict TDD source: repository/global instructions. For documentation and skill contracts, RED is the observed absence of the required files; checks are structural validation and Prettier.
 - Delivery strategy: `ask-on-risk`; `stacked-to-main` selected on 2026-09-21
-  after the running scope reached 430 authored additions.
+  after the completed scope reached 448 authored changed lines.
 
 ## Tasks
 
@@ -77,7 +77,7 @@ docs/bitcoin-market-intelligence-roadmap.md odd/tasks/bitcoin-intelligence-skill
   the skill name matches its folder, metadata and license are present, required
   sections are ordered, all relative links resolve, Prettier and diff checks
   pass, and VS Code reports no diagnostics.
-- Delivery: 430 authored additions across the committed feature scope exceed
+- Delivery: 448 authored changed lines across the completed feature scope exceed
   the approximate 400-line review budget. The user selected `stacked-to-main`;
   no pull request or push is authorized by that choice.
 
