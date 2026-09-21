@@ -33,6 +33,7 @@
 | E     | Reliable official RSS news evidence   | ✅ done                   | 146 server      | 33365cc                   |
 | F     | Deterministic news analysis + Gemini  | ✅ done                   | 162 server      | 55fedd3                   |
 | G     | Technical vs. news comparison         | ✅ done                   | 177 server      | acf8fc0                   |
+| H     | UI + SSE observability                | ✅ done                   | see below       | see below                 |
 | 10    | Broker paper trading                  | ⏸ pending                 | —               | —                         |
 | 11    | Real trading evaluation               | ⏸ pending                 | —               | —                         |
 | 12    | Jev spike                             | ⏸ pending                 | —               | —                         |
@@ -907,3 +908,55 @@ signals, generate orders, call Gemini, persist comparison records, or mutate
 - **Next step**: combination remains explicitly pending. Any future combination
   must be separately authorized and preceded by evidence of incremental value;
   Fase H is the next roadmap phase and is not started here.
+
+## Fase H — UI de una pantalla y observabilidad SSE
+
+Phase H exposes the existing server intelligence authority through a bounded,
+local SSE stream and adds its observability panel to the existing single-screen
+BTC-EUR dashboard. It does not start Phase I, shadow validation, go/no-go work,
+combine signals, authorize orders, or invoke Gemini.
+
+- **SSE endpoint**: `GET /api/intelligence/stream?instrumentId=BTC-EUR` accepts
+  only `BTC-EUR`, uses `text/event-stream`, no-cache/no-transform and
+  keep-alives, and cleans up the raw response on disconnect and server close.
+  Existing Fastify CORS configuration applies unchanged, so the default remains
+  the local Vite origin rather than an open browser policy.
+- **Versioned events**: the `intelligence-stream.v1` envelope emits
+  `intelligence.snapshot` events containing an `intelligence-snapshot.v1`
+  snapshot. Market fields retain server-side event, received and display times,
+  source/status, price, freshness age and stale state. The same payload exposes
+  server-calculated latency p50/p95, stale rate, persisted collector gap rate,
+  pipeline connection/status, and metadata-only forecast/news summaries. No
+  article body, secret, order, or execution capability crosses the stream.
+- **Authority and disabled behavior**: snapshots read `MarketStore` and the
+  collector lifecycle; the collector now offers a small observer surface without
+  becoming a second data authority. When `MARKET_COLLECTOR_ENABLED` is absent or
+  false, the stream explicitly reports `disabled` and leaves market/SLI values
+  null. Enabled-but-empty or missing store states report `unavailable` instead of
+  fabricating values.
+- **SLI semantics**: the server reuses the Phase A `deriveDataFreshness`,
+  `summarizePercentiles` and `calculateStaleRate` semantics. Persisted collector
+  gaps use a separate SLI helper that counts only gaps already proven by trade
+  continuity; Coinbase ticker sequence jumps are not reinterpreted as gaps.
+  The UI formats the received age/rates and never recomputes freshness or
+  latency. Client display time is not substituted for the server timestamps.
+- **Limits and recovery**: defaults are 20 concurrent clients, 15-second
+  keep-alives and a 200-observation SLI window, configurable through
+  `INTELLIGENCE_SSE_MAX_CLIENTS`, `INTELLIGENCE_SSE_KEEPALIVE_MS` and
+  `INTELLIGENCE_SSE_WINDOW_SIZE`. There is no unbounded per-client queue:
+  backpressured or throwing sinks are removed. Event ids are monotonic; the
+  explicit `Last-Event-ID` policy is fresh-snapshot-on-reconnect with no replay,
+  because snapshots are replaceable state rather than append-only commands.
+- **UI**: `useIntelligenceStream` uses runtime validation, cleanup,
+  reconnection with bounded exponential backoff, and loading/ready/stale/error/
+  disabled states. `IntelligenceStatusPanel` is integrated into
+  `BtcEurDashboard` in Spanish and presents data mode, connection/pipeline
+  status, warnings, server timestamps, freshness age, p50/p95, stale/gap rates,
+  and explicit unavailable analysis/forecast/news summaries. It does not add a
+  tablist or replace paper trading.
+- **Tests and boundaries**: offline fixtures cover malformed wire events,
+  disabled/unavailable snapshots, SLI derivation, SSE initial event/keep-alive,
+  client limits, backpressure cleanup, collector observer lifecycle, Fastify
+  instrument validation, UI runtime validation, accessibility-visible metrics,
+  cleanup and reconnect/backoff. No test calls Coinbase, Gemini, or any real
+  network.

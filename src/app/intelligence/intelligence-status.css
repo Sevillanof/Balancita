@@ -1,0 +1,78 @@
+.intelligence-status {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.intelligence-status__badges {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+.intelligence-status__message,
+.intelligence-status__warnings,
+.intelligence-status__details,
+.intelligence-status__metrics,
+.intelligence-status__summaries {
+  margin: 0;
+}
+
+.intelligence-status__message {
+  color: var(--color-muted);
+}
+
+.intelligence-status__warnings {
+  padding: var(--space-3) var(--space-4) var(--space-3) var(--space-8);
+  color: var(--color-warning-contrast);
+  background: color-mix(
+    in srgb,
+    var(--color-warning) 16%,
+    var(--color-surface)
+  );
+  border: 1px solid var(--color-warning);
+  border-radius: var(--radius-md);
+}
+
+.intelligence-status__details,
+.intelligence-status__metrics,
+.intelligence-status__summaries {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+  gap: var(--space-3);
+}
+
+.intelligence-status__details > div,
+.intelligence-status__metrics > div,
+.intelligence-status__summaries > div {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+  padding: var(--space-3);
+  background: var(--color-surface-muted);
+  border-radius: var(--radius-md);
+}
+
+.intelligence-status__details dt,
+.intelligence-status__metrics span,
+.intelligence-status__summaries span {
+  color: var(--color-muted);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+}
+
+.intelligence-status__details dd,
+.intelligence-status__metrics strong,
+.intelligence-status__summaries strong {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 48rem) {
+  .intelligence-status__badges {
+    justify-content: flex-start;
+  }
+}

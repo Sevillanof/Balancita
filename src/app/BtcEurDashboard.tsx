@@ -10,6 +10,8 @@ import PortfolioScreen from './portfolio/PortfolioScreen'
 import TradeScreen from './trade/TradeScreen'
 import WatchlistScreen from './watchlist/WatchlistScreen'
 import { useWatchlist } from './watchlist/useWatchlist'
+import IntelligenceStatusPanel from './intelligence/IntelligenceStatusPanel'
+import { useIntelligenceStream } from './intelligence/useIntelligenceStream'
 import { formatLocalTime, formatQuoteStatus } from './format'
 import './dashboard.css'
 
@@ -35,6 +37,7 @@ export default function BtcEurDashboard({
   dataMode,
 }: BtcEurDashboardProps) {
   const market = useWatchlist(provider)
+  const intelligence = useIntelligenceStream()
   const [portfolioRefresh, setPortfolioRefresh] = useState(0)
   const instrument = market.instruments.find(({ id }) => id === 'BTC-EUR')
   const quote =
@@ -105,6 +108,8 @@ export default function BtcEurDashboard({
         de mercado, pero este simulador local es la única autoridad de órdenes,
         posiciones y ledger.
       </div>
+
+      <IntelligenceStatusPanel dataMode={dataMode} stream={intelligence} />
 
       <InstrumentDetail
         key={instrument.id}
