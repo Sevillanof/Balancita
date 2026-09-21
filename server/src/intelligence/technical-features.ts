@@ -182,6 +182,8 @@ export function toTechnicalFeatureSnapshot(
     version: result.technicalFeatureVersion,
     asOfTimestamp: result.asOfTimestamp,
     isClosed: true,
+    ready: true,
+    warmUp: result.warmUp,
     values: result.values,
   }
 }

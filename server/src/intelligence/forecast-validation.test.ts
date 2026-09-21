@@ -29,6 +29,8 @@ const validRecord: ForecastRecord = {
     version: 'technical-v1',
     asOfTimestamp: time(900),
     isClosed: true,
+    ready: true,
+    warmUp: { requiredCandles: 20, availableCandles: 20, missingCandles: 0 },
     values: { rsi: 55 },
   },
   newsEvidenceReferences: [
@@ -141,9 +143,14 @@ describe('forecast contracts', () => {
       forecastId: validRecord.id,
       forecastVersion: validRecord.version,
       evaluatedAt: time(5_600),
+      observedEventTime: time(5_600),
+      observedDataHash: 'sha256:observed',
+      observedDataIsClosed: true,
       observedPrice: 60_500,
       label: 'up',
       realizedReturn: 0.0083,
+      neutralBand: 0.0015,
+      brierScore: 0.24,
       contentHash: 'sha256:outcome',
     }
     expect(validateForecastOutcome(outcome, validRecord)).toMatchObject({

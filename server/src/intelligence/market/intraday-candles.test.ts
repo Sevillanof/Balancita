@@ -302,6 +302,8 @@ describe('computeTechnicalFeatures', () => {
       version: 'technical-features.v1',
       asOfTimestamp: (baseTime + 6 * 60_000) as TimestampMs,
       isClosed: true,
+      ready: true,
+      warmUp: result.warmUp,
       values: result.values,
     })
   })

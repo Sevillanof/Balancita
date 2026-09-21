@@ -147,6 +147,12 @@ export interface TechnicalFeatureSnapshot {
   readonly version: string
   readonly asOfTimestamp: TimestampMs
   readonly isClosed: boolean
+  readonly ready: boolean
+  readonly warmUp: {
+    readonly requiredCandles: number
+    readonly availableCandles: number
+    readonly missingCandles: number
+  }
   readonly values: Readonly<Record<string, number>>
 }
 
@@ -198,10 +204,25 @@ export interface ForecastOutcome {
   readonly forecastId: string
   readonly forecastVersion: string
   readonly evaluatedAt: TimestampMs
+  readonly observedEventTime: TimestampMs
+  readonly observedDataHash: string
+  readonly observedDataIsClosed: boolean
   readonly observedPrice: number
   readonly label: ForecastOutcomeLabel
   readonly realizedReturn: number
+  readonly neutralBand: number
+  readonly costs?: ForecastCostParameters
+  readonly brierScore: number
+  readonly logLoss?: number
+  readonly returnAbsoluteError?: number
+  readonly rangeAbsoluteError?: number
   readonly contentHash: string
+}
+
+export interface ForecastCostParameters {
+  readonly version: string
+  readonly commissionRate: number
+  readonly slippageRate: number
 }
 
 export function validateMarketDataEnvelope(

@@ -237,6 +237,42 @@ export function validateForecastRecord(
           'Open candle evidence cannot feed a forecast.',
         ),
       )
+    if (typeof feature.ready !== 'boolean')
+      issues.push(
+        issue(
+          'feature_readiness_required',
+          'technicalFeatureSnapshot.ready',
+          'Feature readiness is required.',
+        ),
+      )
+    if (!isRecord(feature.warmUp)) {
+      issues.push(
+        issue(
+          'feature_warmup_required',
+          'technicalFeatureSnapshot.warmUp',
+          'Feature warm-up metrics are required.',
+        ),
+      )
+    } else {
+      for (const key of [
+        'requiredCandles',
+        'availableCandles',
+        'missingCandles',
+      ]) {
+        if (
+          typeof feature.warmUp[key] !== 'number' ||
+          !Number.isSafeInteger(feature.warmUp[key]) ||
+          feature.warmUp[key] < 0
+        )
+          issues.push(
+            issue(
+              'invalid_feature_warmup',
+              `technicalFeatureSnapshot.warmUp.${key}`,
+              'Feature warm-up counts must be non-negative safe integers.',
+            ),
+          )
+      }
+    }
     if (!isRecord(feature.values)) {
       issues.push(
         issue(
@@ -440,6 +476,7 @@ export function validateForecastOutcome(
       ),
     )
   const evaluatedAt = timestamp(input, 'evaluatedAt', issues)
+  const observedEventTime = timestamp(input, 'observedEventTime', issues)
   if (
     forecast !== undefined &&
     evaluatedAt.valid &&
@@ -454,6 +491,80 @@ export function validateForecastOutcome(
     )
   finiteNumber(input, 'observedPrice', issues, true)
   finiteNumber(input, 'realizedReturn', issues)
+  if (!nonEmptyString(input.observedDataHash))
+    issues.push(
+      issue(
+        'observed_data_hash_required',
+        'observedDataHash',
+        'Observed data hash is required.',
+      ),
+    )
+  if (input.observedDataIsClosed !== true)
+    issues.push(
+      issue(
+        'open_observed_data',
+        'observedDataIsClosed',
+        'Open observed data cannot evaluate a forecast.',
+      ),
+    )
+  finiteNumber(input, 'neutralBand', issues)
+  if (typeof input.neutralBand === 'number' && input.neutralBand < 0)
+    issues.push(
+      issue(
+        'invalid_neutral_band',
+        'neutralBand',
+        'Neutral band must be non-negative.',
+      ),
+    )
+  finiteNumber(input, 'brierScore', issues)
+  if (input.logLoss !== undefined) finiteNumber(input, 'logLoss', issues)
+  if (input.returnAbsoluteError !== undefined)
+    finiteNumber(input, 'returnAbsoluteError', issues)
+  if (input.rangeAbsoluteError !== undefined)
+    finiteNumber(input, 'rangeAbsoluteError', issues)
+  if (
+    forecast !== undefined &&
+    observedEventTime.valid &&
+    observedEventTime.value < forecast.eventCutoff
+  )
+    issues.push(
+      issue(
+        'observed_before_cutoff',
+        'observedEventTime',
+        'Observed event time cannot precede the forecast cutoff.',
+      ),
+    )
+  if (input.costs !== undefined) {
+    const costs = input.costs
+    if (!isRecord(costs) || !nonEmptyString(costs.version))
+      issues.push(
+        issue(
+          'invalid_cost_parameters',
+          'costs',
+          'Cost parameters require a version.',
+        ),
+      )
+    else {
+      finiteNumber(costs, 'commissionRate', issues)
+      finiteNumber(costs, 'slippageRate', issues)
+      if (typeof costs.commissionRate === 'number' && costs.commissionRate < 0)
+        issues.push(
+          issue(
+            'invalid_cost_parameters',
+            'costs.commissionRate',
+            'Commission rate must be non-negative.',
+          ),
+        )
+      if (typeof costs.slippageRate === 'number' && costs.slippageRate < 0)
+        issues.push(
+          issue(
+            'invalid_cost_parameters',
+            'costs.slippageRate',
+            'Slippage rate must be non-negative.',
+          ),
+        )
+    }
+  }
   if (input.label !== 'up' && input.label !== 'down' && input.label !== 'flat')
     issues.push(
       issue(
