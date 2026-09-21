@@ -1,0 +1,19 @@
+server/src/intelligence/technical-features.ts
+  s_fdb096e73e47c6::t_c9120b435cb6f1 1-389
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7ea7107ddbebdf41acba4c85d72a722380e2f9dd",
+  "prompts": {},
+  "sessions": {
+    "s_fdb096e73e47c6": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f3bf5a3a4ffeXsQTKzOWuYxRot",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
