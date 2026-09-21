@@ -29,7 +29,10 @@ describe('intelligence contracts', () => {
     const collector: MarketDataCollector<string> = {
       domain: 'market',
       source: 'fixture',
-      collect: async (_instrumentId: SupportedInstrumentId) => ['raw'],
+      collect: async (_instrumentId: SupportedInstrumentId) => {
+        void _instrumentId
+        return ['raw']
+      },
     }
     const normalizer: MarketDataNormalizer<string, { price: number }> = {
       domain: 'market',
