@@ -12,23 +12,26 @@
 
 ## 1. Project status
 
-| Phase | Result                           | Status                    | Tests           | Commits                   |
-| ----- | -------------------------------- | ------------------------- | --------------- | ------------------------- |
-| 0     | Repo + quality gates             | ✅ done                   | —               | de42f10, 964b9b3, 2eed4d9 |
-| 1     | Domain + deterministic mock feed | ✅ done                   | 20              | 1355606                   |
-| 2     | Realtime watchlist               | ✅ done                   | 36              | 80bced6, f0e11ed          |
-| 3     | Detail + mock history chart      | ✅ done (first milestone) | 74              | 0291cc2…b435043 (11)      |
-| 4     | Local portfolio + valuation      | ✅ done                   | 122             | 9f5622f…9598990 (7)       |
-| 5     | Local alerts                     | ✅ done                   | 185             | 8234229…75c5f25 (5)       |
-| 6     | Paper trading simulator          | ✅ done                   | 249             | 54ce740…8cd3a05 (6)       |
-| 7     | Local deterministic analysis     | ✅ done                   | 291             | 38b3ffd…ee0c648 (6)       |
-| 8     | Optional budgeted Gemini         | ✅ done                   | 322 + 61 server | 3b4006f…dddb7a8 (9)       |
-| 9     | Read-only real data              | ✅ done                   | 338             | 0df96b2, d38bdd6, c20547e |
-| 9.1   | Recomendación educativa + UI ES  | ✅ done                   | 347 + 64 server | pending in this work unit |
-| 9.2   | Tokenized CSS foundation         | ✅ done                   | 348 + 64 server | pending in this work unit |
-| 10    | Broker paper trading             | ⏸ pending                 | —               | —                         |
-| 11    | Real trading evaluation          | ⏸ pending                 | —               | —                         |
-| 12    | Jev spike                        | ⏸ pending                 | —               | —                         |
+| Phase | Result                              | Status                    | Tests           | Commits                   |
+| ----- | ----------------------------------- | ------------------------- | --------------- | ------------------------- |
+| 0     | Repo + quality gates                | ✅ done                   | —               | de42f10, 964b9b3, 2eed4d9 |
+| 1     | Domain + deterministic mock feed    | ✅ done                   | 20              | 1355606                   |
+| 2     | Realtime watchlist                  | ✅ done                   | 36              | 80bced6, f0e11ed          |
+| 3     | Detail + mock history chart         | ✅ done (first milestone) | 74              | 0291cc2…b435043 (11)      |
+| 4     | Local portfolio + valuation         | ✅ done                   | 122             | 9f5622f…9598990 (7)       |
+| 5     | Local alerts                        | ✅ done                   | 185             | 8234229…75c5f25 (5)       |
+| 6     | Paper trading simulator             | ✅ done                   | 249             | 54ce740…8cd3a05 (6)       |
+| 7     | Local deterministic analysis        | ✅ done                   | 291             | 38b3ffd…ee0c648 (6)       |
+| 8     | Optional budgeted Gemini            | ✅ done                   | 322 + 61 server | 3b4006f…dddb7a8 (9)       |
+| 9     | Read-only real data                 | ✅ done                   | 341             | 0df96b2…3a0b5fe (5)       |
+| 9.1   | Recomendación educativa + UI ES     | ✅ done                   | 348 + 64 server | f1615d6…58f517d (4)       |
+| 9.2   | Tokenized CSS foundation            | ✅ done                   | 348 + 64 server | c3007eb…8b0fcd2 (3)       |
+| 9.3   | Dashboard BTC-EUR + paper real      | ✅ done                   | 352 + 64 server | 77c8db0…7a5f04a (4)       |
+| B     | Durable BTC-EUR market ingestion    | ✅ done                   | 104 server      | 806abc6, 4641803, 9b3b994 |
+| C     | Intraday candles + technical engine | ✅ done                  | 118 server      | 7ea7107                    |
+| 10    | Broker paper trading                | ⏸ pending                 | —               | —                         |
+| 11    | Real trading evaluation             | ⏸ pending                 | —               | —                         |
+| 12    | Jev spike                           | ⏸ pending                 | —               | —                         |
 
 All quality gates green at Phase 8 close: `pnpm test` (322), `pnpm test:server`
 (61), `typecheck`, `lint`, `build`, `format:check`, and server typecheck.
@@ -47,7 +50,8 @@ Working tree clean after excluding the local `.atl/` tooling directory.
 - Runtime dep: `lightweight-charts@^5.2.1` only.
 - Server package: Fastify 5.12.5, `@fastify/cors` 11.3.0, and official
   `@google/genai` 2.23.0; Node 22 runs the TypeScript gateway with native type
-  stripping.
+  stripping. Node 22.22.2 exposes the built-in experimental `node:sqlite`; no
+  SQLite dependency was added.
 - No global state library — React primitives only (hooks + props).
 
 ## 3. Non-negotiable conventions
@@ -330,6 +334,9 @@ src/
     trade/           useTrading, TradeScreen
     alerts/          useAlerts, AlertsScreen, AlertNotificationCenter
   test/              setup.ts, fake-market-data-provider.ts
+server/src/intelligence/market/
+                     SQLite store, Coinbase WebSocket collector, normalized
+                     payloads and market fixtures
 ```
 
 UI depends on provider contracts (`MarketDataProvider`, `PortfolioRepository`,
@@ -342,11 +349,12 @@ key and the analysis path never imports or invokes `OrderExecutionProvider`.
 
 ## 6. Persistence keys & schemas
 
-| Key                   | Scheme                       | Shape                                                                    | Notes                                                                         |
-| --------------------- | ---------------------------- | ------------------------------------------------------------------------ | ----------------------------------------------------------------------------- |
-| `balancita:portfolio` | v2 (legacy v1 auto-migrated) | `{version, holdings[]}`; holdings use decimal strings                    | v1 read → convert → rewrite v2; unsupported version → `PortfolioCorruptError` |
-| `balancita:alerts`    | versioned                    | `{version, alerts[]}`                                                    | strict validation on read                                                     |
-| `balancita:simulator` | v1                           | cash per currency, receipt history, usedKeys, consumedPreviews, counters | append-only history; corrupt state → typed reset                              |
+| Key                         | Scheme                       | Shape                                                                       | Notes                                                                         |
+| --------------------------- | ---------------------------- | --------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `balancita:portfolio`       | v2 (legacy v1 auto-migrated) | `{version, holdings[]}`; holdings use decimal strings                       | v1 read → convert → rewrite v2; unsupported version → `PortfolioCorruptError` |
+| `balancita:alerts`          | versioned                    | `{version, alerts[]}`                                                       | strict validation on read                                                     |
+| `balancita:simulator`       | v1                           | cash per currency, receipt history, usedKeys, consumedPreviews, counters    | append-only history; corrupt state → typed reset                              |
+| `server/data/market.sqlite` | SQLite v1                    | `market_observations`, `market_cursors`, `market_gaps`, `schema_migrations` | append-only observations; path overridden by `MARKET_DB_PATH`                 |
 
 The Gemini response cache is server-memory-only, keyed by SHA-256 of the
 canonical input, bounded by entry count and expired after five minutes. It is
@@ -382,7 +390,7 @@ Phase 7 (Prompt 7) is **implemented and verified**: contract,
 loading/error/result states, and analysis/orders separation. The approved 9.1
 scope adds a separate educational recommendation without changing the
 classification. Full rule tables, reasons, warnings and test breakdown are in
-§4 Phase 7 and the approved scope update above. Gates green at 347 frontend
+§4 Phase 7 and the approved scope update above. Gates green at 348 frontend
 tests and 64 server tests.
 
 Phase 8 (Prompt 8) — optional budgeted Gemini — is implemented and verified.
@@ -557,6 +565,117 @@ The 21 new server tests are included in the 85-test server gate.
   Gemini/news calls, forecast persistence, backtesting, broker integration, or
   orders. The UI and immutable files under `doc/**` were not modified.
 
+## Fase B — Durable Coinbase market ingestion
+
+Phase B is implemented and verified as a server-only, read-only market stream.
+The collector is disabled by default and does not affect the Gemini gateway or
+the frontend.
+
+- **SQLite schema and path**: Node 22.22.2's built-in `node:sqlite`
+  (`DatabaseSync`) is used without a new dependency. Migration v1 creates
+  `schema_migrations`, append-only `market_observations`, current
+  `market_cursors`, and evidence-bearing `market_gaps`. The default path is
+  `./data/market.sqlite`; `MARKET_DB_PATH` overrides it and local database files
+  are ignored by Git.
+- **Coinbase source and channels**: the unauthenticated public Exchange WebSocket
+  at `COINBASE_WS_URL` subscribes only to `BTC-EUR` with `ticker` and
+  `heartbeat`. The official Coinbase Exchange channel, sequence, rate-limit and
+  Market Data Terms evidence recorded in the Phase 9 section remains the source
+  policy. Use is local/internal; no credentials, order API, or execution provider
+  is involved.
+- **Sequence and gap policy**: ticker `sequence` is required to be strictly
+  increasing within one connection, but a numeric jump is accepted and is never
+  called a gap. Duplicate or out-of-order ticker/heartbeat sequences are
+  rejected and observable through structured rejection callbacks. A gap is stored
+  only when monotonic `trade_id` or `heartbeat.last_trade_id` jumps by more than
+  one; `prevSequence`, `currentSequence`, channel, connection revision and
+  detection time are retained. This avoids treating the ticker feed's non-
+  contiguous message sequence as lost data.
+- **SLIs and timestamps**: Coinbase's event timestamp becomes `eventTime`; the
+  injected server clock supplies `receivedTime` and `displayTime`. Freshness is
+  `displayTime - eventTime`, with strict `ageMs > staleAfterMs` semantics.
+  `status` and freshness are persisted per observation and stream state can
+  transition to stale and back to live after a valid fresh message.
+- **Idempotency and restart**: the deterministic SHA-256 identity covers source,
+  instrument, event time, sequence and normalized payload, excluding derived
+  receipt/freshness state. Exact and delayed replays return explicit
+  `inserted | duplicate` outcomes. Historical observations are never updated;
+  cursor revisions, last sequence/trade id, and schema version survive a store
+  restart.
+- **Recovery and shutdown**: socket errors, closes, invalid JSON and invalid
+  supported payloads trigger bounded exponential reconnect with injectable timer
+  and jitter behavior. Every new connection resubscribes. Stale/reconnect timers
+  and socket handlers are cleared by `stop`; Fastify `onReady`/`onClose` owns the
+  enabled collector lifecycle.
+- **Tests and boundaries**: 104 server tests cover migration, validation,
+  idempotency, append-only history, cursor/gap persistence, sequence policy,
+  heartbeat continuity, stale recovery, reconnect/backoff, malformed input,
+  cleanup and disabled-by-default lifecycle. Tests use temporary SQLite files,
+  fake clocks, fake sockets and recorded fixtures; no real network, secrets,
+  previews, submits or order calls are used.
+- **Limits**: Phase B does not add intraday candles or indicators (C), forecast
+  persistence/evaluation (D), news/RSS (E), Gemini forecasts (F), comparison or
+  SSE/UI observability (G/H), broker integration, money movement or automated
+  orders. The next authorized implementation step is Phase C.
+
+## Fase C — Intraday candles and deterministic technical features
+
+Phase C is server-only and pure. It consumes persisted `StoredMarketObservation`
+values from Fase B or equivalent deterministic fixtures; it does not write
+`ForecastRecord`, change the collector, expose an endpoint, or touch paper
+trading.
+
+- **Candle intervals and cutoff**: supported intervals are `1m`, `5m`, `15m`,
+  and `1h`. Buckets use UTC epoch milliseconds and the half-open rule
+  `[bucketStart, bucketEnd)`: an exact boundary belongs to the next bucket. The
+  caller supplies `asOfTimestamp`; no module reads the global clock. A bucket is
+  closed when `bucketEnd <= asOfTimestamp`; the current bucket is returned
+  separately as `provisional` and never enters technical evidence.
+- **Observation policy**: ticker payloads are sorted by `eventTime`, then
+  sequence, trade id, and stable identity. Exact identities are deduplicated;
+  out-of-order inputs are accepted and counted. Invalid observations, including
+  invalid event/received/display timestamps, are rejected with a structured
+  reason. Observations after the cutoff are excluded as future evidence. A
+  provisional candle is recomputed from the complete tick set on each call, so
+  later ticks replace it rather than append a duplicate.
+- **Candle provenance**: OHLCV plus event, received, and display start/end
+  timestamps are retained. Freshness retains maximum age, stale state, and
+  clock-inversion state. Candle status uses the conservative precedence
+  `invalid > gap > stale > live`. Existing Fase B `GapMetrics` are passed through
+  unchanged; the builder does not infer gaps from Coinbase ticker sequence
+  jumps, because Fase B explicitly treats those jumps as non-evidence of loss.
+- **Technical formulas**: SMA is the arithmetic mean of the latest `N` closes.
+  EMA seeds with the first `N`-close SMA and then uses
+  `EMA = alpha * close + (1 - alpha) * previous`, with `alpha = 2/(N+1)`.
+  RSI uses Wilder-smoothed gains/losses; flat series return `50`, all-gain
+  series `100`, and all-loss series `0`. MACD is fast EMA minus slow EMA, with
+  a signal EMA over MACD values and histogram `line - signal`. ATR uses true
+  range `max(high-low, abs(high-previousClose), abs(low-previousClose))`, a
+  Wilder average, and requires a previous close. Structural slope is the
+  least-squares slope of the latest close window; trend is `up`, `down`, or
+  `flat` by the explicit threshold.
+- **Warm-up and versioning**: no indicator value is fabricated before its
+  required history. The result exposes per-indicator readiness, required and
+  available candle counts, `technicalFeatureVersion = technical-features.v1`,
+  and `paramSetVersion = technical-defaults.v1` by default. The
+  `toTechnicalFeatureSnapshot` adapter refuses incomplete features and emits a
+  closed, finite snapshot ready for Fase D. Indicators remain descriptive and
+  are not summed into a hidden composite signal.
+- **Dependency decision**: no `trading-signals` dependency was added. The
+  formulas are small, auditable TypeScript implementations with deterministic
+  fixtures, no network, and no global clock. This avoids introducing a streaming
+  state model before the application needs it; adoption can be revisited only
+  with a separate evidence and license review.
+- **Tests and gates**: the new candle/feature fixtures cover exact bucket
+  boundaries, rollover, provisional replacement, duplicates, out-of-order
+  ticks, invalid/future timestamps, gap propagation, status/freshness, warm-up,
+  no-look-ahead, known indicator values, flat-series division-by-zero behavior,
+  finite outputs, versioning, and the closed snapshot adapter. The RED run
+  failed on the missing modules; the GREEN run passed with 118 server tests.
+- **Limits**: Fase C does not persist forecasts, evaluate outcomes, ingest news,
+  call Gemini, combine technical/news evidence, add SSE/UI observability, or
+  modify orders and paper-trading authority. Fase D remains pending.
+
 ## 9. How to resume
 
 1. Read `doc/personal-trading-app.md` (read-only) for the exact prompt of the
@@ -564,6 +683,6 @@ The 21 new server tests are included in the 85-test server gate.
 2. Read this file for context, then Engram (`engine: mem_search "balancita"`)
    for worker reports.
 3. Run `pnpm test` and `pnpm test:server` to confirm the current baseline
-   (322 frontend, 61 server tests expected).
+   (352 frontend, 104 server tests expected).
 4. Execute the next phase with TDD work units; commit; verify gates; update this
    file's status table.
