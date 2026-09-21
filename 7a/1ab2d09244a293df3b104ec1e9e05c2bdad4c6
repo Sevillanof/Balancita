@@ -1,0 +1,32 @@
+README.md
+  h_2f68313623be98 5,33,36,39-44,69-70
+server/src/intelligence/market/market-store.test.ts
+  h_2f68313623be98 26,185,187,196,206
+server/src/intelligence/stream.test.ts
+  h_2f68313623be98 21
+src/App.tsx
+  h_2f68313623be98 96
+src/app/intelligence/IntelligenceStatusPanel.test.tsx
+  h_2f68313623be98 17
+src/app/intelligence/useIntelligenceStream.test.ts
+  h_2f68313623be98 22
+src/domain/analysis.test.ts
+  h_2f68313623be98 19
+src/providers/deterministic-mock-market-data.test.ts
+  h_2f68313623be98 30
+src/providers/deterministic-mock-market-data.ts
+  h_2f68313623be98 56
+src/test/fake-market-data-provider.ts
+  h_2f68313623be98 15
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7a1ab2d09244a293df3b104ec1e9e05c2bdad4c6",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
