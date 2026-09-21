@@ -1,0 +1,14 @@
+doc/personal-trading-app.md
+  h_2f68313623be98 66,81,356
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "bfe6dd3fb9108c1828982633b61074ecead6711c",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
