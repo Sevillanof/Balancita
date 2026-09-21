@@ -53,7 +53,7 @@ describe('MarketStore', () => {
   it('initializes the versioned schema at the injected path', () => {
     const store = new MarketStore({ path: makePath() })
 
-    expect(store.schemaVersion()).toBe(1)
+    expect(store.schemaVersion()).toBe(2)
     expect(store.observationCount()).toBe(0)
 
     store.close()
@@ -69,8 +69,30 @@ describe('MarketStore', () => {
     database.close()
 
     const store = new MarketStore({ path })
-    expect(store.schemaVersion()).toBe(1)
+    expect(store.schemaVersion()).toBe(2)
     expect(store.observationCount()).toBe(0)
+    store.close()
+  })
+
+  it('migrates an existing market schema v1 to the forecast ledger schema v2', () => {
+    const path = makePath()
+    const database = new DatabaseSync(path)
+    database.exec(
+      'CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL)',
+    )
+    database.prepare('INSERT INTO schema_migrations VALUES (?, ?)').run(1, 1)
+    database.close()
+
+    const store = new MarketStore({ path })
+    const migratedDatabase = new DatabaseSync(path)
+    const ledgerTable = migratedDatabase
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'forecast_records'",
+      )
+      .get()
+    migratedDatabase.close()
+    expect(store.schemaVersion()).toBe(2)
+    expect(ledgerTable).toEqual({ name: 'forecast_records' })
     store.close()
   })
 
@@ -186,7 +208,7 @@ describe('MarketStore', () => {
       lastSequence: 11,
       lastTradeId: 21,
       connectionRevision: 1,
-      schemaVersion: 1,
+      schemaVersion: 2,
     })
     expect(second.listGaps()).toEqual([
       expect.objectContaining({

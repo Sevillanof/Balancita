@@ -5,16 +5,24 @@ import { DatabaseSync } from 'node:sqlite'
 import {
   validateMarketDataEnvelope,
   type MarketDataStatus,
+  type ForecastOutcome,
+  type ForecastHorizon,
+  type ForecastRecord,
   type SupportedInstrumentId,
   type TimestampMs,
 } from '../contracts.ts'
+import {
+  validateForecastOutcome,
+  validateForecastRecord,
+} from '../forecast-validation.ts'
+import { contentHashFor } from '../forecast-hashing.ts'
 import { invalid, issue, type ValidationIssue } from '../validation.ts'
 import {
   validateNormalizedMarketPayload,
   type NormalizedMarketPayload,
 } from './market-payload.ts'
 
-const SCHEMA_VERSION = 1
+const SCHEMA_VERSION = 2
 
 export interface MarketStoreOptions {
   readonly path: string
@@ -86,6 +94,27 @@ export interface GapInput {
   readonly evidence: Readonly<Record<string, unknown>>
 }
 
+export interface ForecastInsertResult {
+  readonly outcome: 'inserted' | 'duplicate'
+  readonly id: string
+  readonly version: string
+  readonly contentHash: string
+}
+
+export interface ForecastQuery {
+  readonly instrumentId?: SupportedInstrumentId
+  readonly horizon?: ForecastHorizon
+  readonly createdAtFrom?: TimestampMs
+  readonly createdAtTo?: TimestampMs
+}
+
+export interface OutcomeInsertResult {
+  readonly outcome: 'inserted' | 'duplicate'
+  readonly id: string
+  readonly version: string
+  readonly contentHash: string
+}
+
 export class MarketStoreValidationError extends Error {
   readonly code = 'invalid_market_observation' as const
   readonly issues: readonly ValidationIssue[]
@@ -93,6 +122,17 @@ export class MarketStoreValidationError extends Error {
   constructor(issues: readonly ValidationIssue[]) {
     super('Market observation failed validation.')
     this.name = 'MarketStoreValidationError'
+    this.issues = issues
+  }
+}
+
+export class ForecastStoreValidationError extends Error {
+  readonly code = 'invalid_forecast_record' as const
+  readonly issues: readonly ValidationIssue[]
+
+  constructor(issues: readonly ValidationIssue[]) {
+    super('Forecast ledger operation failed validation.')
+    this.name = 'ForecastStoreValidationError'
     this.issues = issues
   }
 }
@@ -212,6 +252,253 @@ export class MarketStore {
       contentHash: String(row.content_hash),
       createdAt: Number(row.created_at) as TimestampMs,
     }))
+  }
+
+  insertForecast(input: unknown): ForecastInsertResult {
+    const validation = validateForecastRecord(input)
+    if (!validation.valid)
+      throw new ForecastStoreValidationError(validation.issues)
+    const record = validation.value
+    const hashIssues = hashIssuesFor(record)
+    if (hashIssues.length > 0)
+      throw new ForecastStoreValidationError(hashIssues)
+
+    const existing = this.database
+      .prepare(
+        'SELECT id, version, content_hash FROM forecast_records WHERE id = ? AND version = ?',
+      )
+      .get(record.id, record.version) as SqlRow | undefined
+    if (existing !== undefined) {
+      if (String(existing.content_hash) !== record.contentHash)
+        throw new ForecastStoreValidationError([
+          issue(
+            'forecast_conflict',
+            'contentHash',
+            'A forecast id/version already exists with a different hash.',
+          ),
+        ])
+      return {
+        outcome: 'duplicate',
+        id: String(existing.id),
+        version: String(existing.version),
+        contentHash: String(existing.content_hash),
+      }
+    }
+    const hashOwner = this.database
+      .prepare(
+        'SELECT id, version FROM forecast_records WHERE content_hash = ?',
+      )
+      .get(record.contentHash) as SqlRow | undefined
+    if (hashOwner !== undefined)
+      throw new ForecastStoreValidationError([
+        issue(
+          'forecast_hash_conflict',
+          'contentHash',
+          'A different forecast already uses this content hash.',
+        ),
+      ])
+
+    this.database
+      .prepare(
+        `INSERT INTO forecast_records
+          (id, version, instrument_id, created_at, as_of_timestamp, event_cutoff,
+           horizon, content_hash, record_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        record.id,
+        record.version,
+        record.instrumentId,
+        record.createdAt,
+        record.asOfTimestamp,
+        record.eventCutoff,
+        record.horizon,
+        record.contentHash,
+        canonicalJson(record),
+      )
+    return {
+      outcome: 'inserted',
+      id: record.id,
+      version: record.version,
+      contentHash: record.contentHash,
+    }
+  }
+
+  getForecast(id: string, version = '1'): ForecastRecord | null {
+    const row = this.database
+      .prepare(
+        'SELECT record_json FROM forecast_records WHERE id = ? AND version = ?',
+      )
+      .get(id, version) as SqlRow | undefined
+    return row === undefined
+      ? null
+      : (JSON.parse(String(row.record_json)) as ForecastRecord)
+  }
+
+  listForecasts(query: ForecastQuery = {}): readonly ForecastRecord[] {
+    const clauses: string[] = []
+    const parameters: (string | number)[] = []
+    if (query.instrumentId !== undefined) {
+      clauses.push('instrument_id = ?')
+      parameters.push(query.instrumentId)
+    }
+    if (query.horizon !== undefined) {
+      clauses.push('horizon = ?')
+      parameters.push(query.horizon)
+    }
+    if (query.createdAtFrom !== undefined) {
+      clauses.push('created_at >= ?')
+      parameters.push(query.createdAtFrom)
+    }
+    if (query.createdAtTo !== undefined) {
+      clauses.push('created_at <= ?')
+      parameters.push(query.createdAtTo)
+    }
+    const where = clauses.length === 0 ? '' : ` WHERE ${clauses.join(' AND ')}`
+    const rows = this.database
+      .prepare(
+        `SELECT record_json FROM forecast_records${where} ORDER BY created_at, rowid`,
+      )
+      .all(...parameters) as SqlRow[]
+    return rows.map(
+      (row) => JSON.parse(String(row.record_json)) as ForecastRecord,
+    )
+  }
+
+  forecastCount(): number {
+    const row = this.database
+      .prepare('SELECT COUNT(*) AS count FROM forecast_records')
+      .get() as SqlRow
+    return Number(row.count)
+  }
+
+  insertOutcome(input: unknown): OutcomeInsertResult {
+    const validation = validateForecastOutcome(input)
+    if (!validation.valid)
+      throw new ForecastStoreValidationError(validation.issues)
+    const outcome = validation.value
+    const forecast = this.getForecast(
+      outcome.forecastId,
+      outcome.forecastVersion,
+    )
+    const referenceIssues =
+      forecast === null
+        ? [
+            issue(
+              'forecast_not_found',
+              'forecastId',
+              'Outcome must reference an existing forecast.',
+            ),
+          ]
+        : []
+    const checked =
+      forecast === null
+        ? validation
+        : validateForecastOutcome(outcome, forecast)
+    const horizonEnd =
+      forecast === null
+        ? null
+        : forecast.asOfTimestamp +
+          (
+            {
+              '15m': 15 * 60_000,
+              '1h': 60 * 60_000,
+              '4h': 4 * 60 * 60_000,
+              '24h': 24 * 60 * 60_000,
+            } as const
+          )[forecast.horizon]
+    const timingIssues =
+      forecast !== null &&
+      horizonEnd !== null &&
+      (outcome.evaluatedAt < horizonEnd ||
+        outcome.observedEventTime < horizonEnd)
+        ? [
+            issue(
+              'outcome_before_horizon',
+              'observedEventTime',
+              'Outcome evidence must be at or after the forecast horizon.',
+            ),
+          ]
+        : []
+    if (!checked.valid || referenceIssues.length > 0 || timingIssues.length > 0)
+      throw new ForecastStoreValidationError([
+        ...referenceIssues,
+        ...timingIssues,
+        ...(checked.valid ? [] : checked.issues),
+      ])
+    const hashIssues = hashIssuesFor(outcome)
+    if (hashIssues.length > 0)
+      throw new ForecastStoreValidationError(hashIssues)
+
+    const existing = this.database
+      .prepare(
+        'SELECT id, version, content_hash FROM forecast_outcomes WHERE id = ? AND version = ?',
+      )
+      .get(outcome.id, outcome.version) as SqlRow | undefined
+    if (existing !== undefined) {
+      if (String(existing.content_hash) !== outcome.contentHash)
+        throw new ForecastStoreValidationError([
+          issue(
+            'outcome_conflict',
+            'contentHash',
+            'An outcome id/version already exists with a different hash.',
+          ),
+        ])
+      return {
+        outcome: 'duplicate',
+        id: String(existing.id),
+        version: String(existing.version),
+        contentHash: String(existing.content_hash),
+      }
+    }
+    this.database
+      .prepare(
+        `INSERT INTO forecast_outcomes
+          (id, version, forecast_id, forecast_version, evaluated_at,
+           observed_event_time, observed_data_hash, observed_data_is_closed,
+           observed_price, label, realized_return, neutral_band, brier_score,
+           log_loss, return_absolute_error, range_absolute_error, cost_json,
+           content_hash, outcome_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        outcome.id,
+        outcome.version,
+        outcome.forecastId,
+        outcome.forecastVersion,
+        outcome.evaluatedAt,
+        outcome.observedEventTime,
+        outcome.observedDataHash,
+        outcome.observedDataIsClosed ? 1 : 0,
+        outcome.observedPrice,
+        outcome.label,
+        outcome.realizedReturn,
+        outcome.neutralBand,
+        outcome.brierScore,
+        outcome.logLoss ?? null,
+        outcome.returnAbsoluteError ?? null,
+        outcome.rangeAbsoluteError ?? null,
+        outcome.costs === undefined ? null : canonicalJson(outcome.costs),
+        outcome.contentHash,
+        canonicalJson(outcome),
+      )
+    return {
+      outcome: 'inserted',
+      id: outcome.id,
+      version: outcome.version,
+      contentHash: outcome.contentHash,
+    }
+  }
+
+  listOutcomes(): readonly ForecastOutcome[] {
+    const rows = this.database
+      .prepare(
+        'SELECT outcome_json FROM forecast_outcomes ORDER BY evaluated_at, rowid',
+      )
+      .all() as SqlRow[]
+    return rows.map(
+      (row) => JSON.parse(String(row.outcome_json)) as ForecastOutcome,
+    )
   }
 
   beginConnection(
@@ -412,8 +699,9 @@ export class MarketStore {
         applied_at INTEGER NOT NULL
       ) STRICT;
     `)
-    if (this.schemaVersion() >= SCHEMA_VERSION) return
-    this.database.exec(`
+    let currentVersion = this.schemaVersion()
+    if (currentVersion < 1) {
+      this.database.exec(`
       CREATE TABLE IF NOT EXISTS market_observations (
         id TEXT PRIMARY KEY,
         source TEXT NOT NULL,
@@ -455,11 +743,59 @@ export class MarketStore {
         UNIQUE (source, instrument_id, prev_sequence, current_sequence)
       ) STRICT;
     `)
-    this.database
-      .prepare(
-        'INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)',
-      )
-      .run(SCHEMA_VERSION, this.clock())
+      this.database
+        .prepare(
+          'INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)',
+        )
+        .run(1, this.clock())
+      currentVersion = 1
+    }
+    if (currentVersion < 2) {
+      this.database.exec(`
+        CREATE TABLE IF NOT EXISTS forecast_records (
+          id TEXT NOT NULL,
+          version TEXT NOT NULL,
+          instrument_id TEXT NOT NULL CHECK (instrument_id = 'BTC-EUR'),
+          created_at INTEGER NOT NULL,
+          as_of_timestamp INTEGER NOT NULL,
+          event_cutoff INTEGER NOT NULL,
+          horizon TEXT NOT NULL CHECK (horizon IN ('15m', '1h', '4h', '24h')),
+          content_hash TEXT NOT NULL UNIQUE,
+          record_json TEXT NOT NULL,
+          PRIMARY KEY (id, version)
+        ) STRICT;
+
+        CREATE TABLE IF NOT EXISTS forecast_outcomes (
+          id TEXT NOT NULL,
+          version TEXT NOT NULL,
+          forecast_id TEXT NOT NULL,
+          forecast_version TEXT NOT NULL,
+          evaluated_at INTEGER NOT NULL,
+          observed_event_time INTEGER NOT NULL,
+          observed_data_hash TEXT NOT NULL,
+          observed_data_is_closed INTEGER NOT NULL CHECK (observed_data_is_closed = 1),
+          observed_price REAL NOT NULL,
+          label TEXT NOT NULL CHECK (label IN ('up', 'down', 'flat')),
+          realized_return REAL NOT NULL,
+          neutral_band REAL NOT NULL,
+          brier_score REAL NOT NULL,
+          log_loss REAL,
+          return_absolute_error REAL,
+          range_absolute_error REAL,
+          cost_json TEXT,
+          content_hash TEXT NOT NULL UNIQUE,
+          outcome_json TEXT NOT NULL,
+          PRIMARY KEY (id, version),
+          FOREIGN KEY (forecast_id, forecast_version)
+            REFERENCES forecast_records (id, version)
+        ) STRICT;
+      `)
+      this.database
+        .prepare(
+          'INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)',
+        )
+        .run(2, this.clock())
+    }
   }
 }
 
@@ -478,6 +814,21 @@ function maxOptional(
 
 function canonicalJson(value: unknown): string {
   return JSON.stringify(canonicalize(value))
+}
+
+function hashIssuesFor(
+  value: ForecastRecord | ForecastOutcome,
+): readonly ValidationIssue[] {
+  const { contentHash, ...withoutHash } = value
+  return contentHashFor(withoutHash) === contentHash
+    ? []
+    : [
+        issue(
+          'content_hash_mismatch',
+          'contentHash',
+          'Content hash does not match the canonical record.',
+        ),
+      ]
 }
 
 function canonicalize(value: unknown): unknown {

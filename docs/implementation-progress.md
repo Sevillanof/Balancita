@@ -12,26 +12,27 @@
 
 ## 1. Project status
 
-| Phase | Result                              | Status                    | Tests           | Commits                   |
-| ----- | ----------------------------------- | ------------------------- | --------------- | ------------------------- |
-| 0     | Repo + quality gates                | ✅ done                   | —               | de42f10, 964b9b3, 2eed4d9 |
-| 1     | Domain + deterministic mock feed    | ✅ done                   | 20              | 1355606                   |
-| 2     | Realtime watchlist                  | ✅ done                   | 36              | 80bced6, f0e11ed          |
-| 3     | Detail + mock history chart         | ✅ done (first milestone) | 74              | 0291cc2…b435043 (11)      |
-| 4     | Local portfolio + valuation         | ✅ done                   | 122             | 9f5622f…9598990 (7)       |
-| 5     | Local alerts                        | ✅ done                   | 185             | 8234229…75c5f25 (5)       |
-| 6     | Paper trading simulator             | ✅ done                   | 249             | 54ce740…8cd3a05 (6)       |
-| 7     | Local deterministic analysis        | ✅ done                   | 291             | 38b3ffd…ee0c648 (6)       |
-| 8     | Optional budgeted Gemini            | ✅ done                   | 322 + 61 server | 3b4006f…dddb7a8 (9)       |
-| 9     | Read-only real data                 | ✅ done                   | 341             | 0df96b2…3a0b5fe (5)       |
-| 9.1   | Recomendación educativa + UI ES     | ✅ done                   | 348 + 64 server | f1615d6…58f517d (4)       |
-| 9.2   | Tokenized CSS foundation            | ✅ done                   | 348 + 64 server | c3007eb…8b0fcd2 (3)       |
-| 9.3   | Dashboard BTC-EUR + paper real      | ✅ done                   | 352 + 64 server | 77c8db0…7a5f04a (4)       |
-| B     | Durable BTC-EUR market ingestion    | ✅ done                   | 104 server      | 806abc6, 4641803, 9b3b994 |
-| C     | Intraday candles + technical engine | ✅ done                   | 118 server      | 7ea7107                   |
-| 10    | Broker paper trading                | ⏸ pending                 | —               | —                         |
-| 11    | Real trading evaluation             | ⏸ pending                 | —               | —                         |
-| 12    | Jev spike                           | ⏸ pending                 | —               | —                         |
+| Phase | Result                                | Status                    | Tests           | Commits                   |
+| ----- | ------------------------------------- | ------------------------- | --------------- | ------------------------- |
+| 0     | Repo + quality gates                  | ✅ done                   | —               | de42f10, 964b9b3, 2eed4d9 |
+| 1     | Domain + deterministic mock feed      | ✅ done                   | 20              | 1355606                   |
+| 2     | Realtime watchlist                    | ✅ done                   | 36              | 80bced6, f0e11ed          |
+| 3     | Detail + mock history chart           | ✅ done (first milestone) | 74              | 0291cc2…b435043 (11)      |
+| 4     | Local portfolio + valuation           | ✅ done                   | 122             | 9f5622f…9598990 (7)       |
+| 5     | Local alerts                          | ✅ done                   | 185             | 8234229…75c5f25 (5)       |
+| 6     | Paper trading simulator               | ✅ done                   | 249             | 54ce740…8cd3a05 (6)       |
+| 7     | Local deterministic analysis          | ✅ done                   | 291             | 38b3ffd…ee0c648 (6)       |
+| 8     | Optional budgeted Gemini              | ✅ done                   | 322 + 61 server | 3b4006f…dddb7a8 (9)       |
+| 9     | Read-only real data                   | ✅ done                   | 341             | 0df96b2…3a0b5fe (5)       |
+| 9.1   | Recomendación educativa + UI ES       | ✅ done                   | 348 + 64 server | f1615d6…58f517d (4)       |
+| 9.2   | Tokenized CSS foundation              | ✅ done                   | 348 + 64 server | c3007eb…8b0fcd2 (3)       |
+| 9.3   | Dashboard BTC-EUR + paper real        | ✅ done                   | 352 + 64 server | 77c8db0…7a5f04a (4)       |
+| B     | Durable BTC-EUR market ingestion      | ✅ done                   | 104 server      | 806abc6, 4641803, 9b3b994 |
+| C     | Intraday candles + technical engine   | ✅ done                   | 118 server      | 7ea7107                   |
+| D     | Immutable forecasts + deferred scorer | ✅ done                   | 133 server      | pending                   |
+| 10    | Broker paper trading                  | ⏸ pending                 | —               | —                         |
+| 11    | Real trading evaluation               | ⏸ pending                 | —               | —                         |
+| 12    | Jev spike                             | ⏸ pending                 | —               | —                         |
 
 All quality gates green at Phase 8 close: `pnpm test` (322), `pnpm test:server`
 (61), `typecheck`, `lint`, `build`, `format:check`, and server typecheck.
@@ -349,12 +350,12 @@ key and the analysis path never imports or invokes `OrderExecutionProvider`.
 
 ## 6. Persistence keys & schemas
 
-| Key                         | Scheme                       | Shape                                                                       | Notes                                                                         |
-| --------------------------- | ---------------------------- | --------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| `balancita:portfolio`       | v2 (legacy v1 auto-migrated) | `{version, holdings[]}`; holdings use decimal strings                       | v1 read → convert → rewrite v2; unsupported version → `PortfolioCorruptError` |
-| `balancita:alerts`          | versioned                    | `{version, alerts[]}`                                                       | strict validation on read                                                     |
-| `balancita:simulator`       | v1                           | cash per currency, receipt history, usedKeys, consumedPreviews, counters    | append-only history; corrupt state → typed reset                              |
-| `server/data/market.sqlite` | SQLite v1                    | `market_observations`, `market_cursors`, `market_gaps`, `schema_migrations` | append-only observations; path overridden by `MARKET_DB_PATH`                 |
+| Key                         | Scheme                       | Shape                                                                                                                | Notes                                                                            |
+| --------------------------- | ---------------------------- | -------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `balancita:portfolio`       | v2 (legacy v1 auto-migrated) | `{version, holdings[]}`; holdings use decimal strings                                                                | v1 read → convert → rewrite v2; unsupported version → `PortfolioCorruptError`    |
+| `balancita:alerts`          | versioned                    | `{version, alerts[]}`                                                                                                | strict validation on read                                                        |
+| `balancita:simulator`       | v1                           | cash per currency, receipt history, usedKeys, consumedPreviews, counters                                             | append-only history; corrupt state → typed reset                                 |
+| `server/data/market.sqlite` | SQLite v2                    | `market_observations`, `market_cursors`, `market_gaps`, `forecast_records`, `forecast_outcomes`, `schema_migrations` | append-only market/forecast/outcome records; path overridden by `MARKET_DB_PATH` |
 
 The Gemini response cache is server-memory-only, keyed by SHA-256 of the
 canonical input, bounded by entry count and expired after five minutes. It is
@@ -676,6 +677,61 @@ trading.
   call Gemini, combine technical/news evidence, add SSE/UI observability, or
   modify orders and paper-trading authority. Fase D remains pending.
 
+## Fase D — Immutable forecasts and deferred scorer
+
+Phase D is server-only and keeps forecast generation, evaluation, persistence, and
+metrics separate from the existing UI, Gemini gateway, and paper-trading
+authority. It does not ingest news; forecast news references are accepted only
+when already versioned and ingested no later than the evidence cutoff.
+
+- **Deterministic engine**: `generateForecast` uses only the explicit cutoff,
+  closed candles, a versioned `TechnicalFeatureSnapshot`, freshness, gap metrics,
+  and safe news references. It never reads a global clock, uses open/future
+  candles, random values, Gemini, or order providers. The fixed versions are
+  `deterministic-baseline.v1` and `technical-direction.v1`.
+- **Feature quality gate**: the engine abstains with a mandatory reason for
+  incomplete warm-up, stale/inverted freshness, any measured gap, unavailable
+  sequence gap metrics, unreliable candle status, invalid reference price, or
+  incomplete/non-finite required features. Abstention uses the explicit neutral
+  probability policy `(1/3, 1/3, 1/3)` and remains distinct from UI educational
+  recommendations.
+- **Probability rule**: reliable evidence scores four independent directional
+  checks (`referencePrice` vs `sma`, `rsi` outside 45/55, MACD histogram sign,
+  and structural slope sign). A zero score emits `(0.3, 0.3, 0.4)`; a directional
+  score maps linearly from winner/loser/flat `(0.45, 0.25, 0.30)` to
+  `(0.55, 0.20, 0.25)`. Every output is finite, bounded, and sums to one.
+- **Ledger migration**: SQLite schema v2 adds strict `forecast_records` and
+  `forecast_outcomes` tables. Forecasts and outcomes are append-only, validated
+  before insertion, and content-hashed from canonical JSON. Replaying the same
+  id/version/hash returns `duplicate`; a conflicting hash is rejected. Public
+  store methods expose insertion and read-only forecast queries by instrument,
+  horizon, and creation-time bounds; no update/delete method exists.
+- **No-look-ahead scorer**: `evaluateForecast` accepts only when injected `now`
+  is at or after `asOfTimestamp + horizon`, and observed evidence has an event
+  time at or after that exact boundary, a non-empty versioned data hash, and a
+  closed-data flag. The outcome is a separate append-only record. Its id is tied
+  to the forecast and observed snapshot, so replaying the same snapshot is
+  idempotent.
+- **Outcome semantics**: gross return is
+  `observedPrice / referencePrice - 1`. If versioned cost parameters exist,
+  estimated net return subtracts `commissionRate + slippageRate`; no real fees
+  are inferred. The default neutral band is `±0.0015` (±0.15%), with exact
+  boundaries classified as `flat` after decimal comparison normalization.
+  Labels are `up` above the band and `down` below it.
+- **Metrics**: pure functions prepare coverage/abstention, secondary
+  directional accuracy, Brier score, guarded log loss, calibration bands,
+  return/range MAE, and segmentation by horizon/regime. Empty aggregates return
+  `null` where a rate is undefined, and invalid probabilities are rejected.
+  These metrics are descriptive only; no performance, profitability, or
+  superiority claim is made.
+- **Tests and limits**: fixtures are offline and deterministic. Tests cover RED
+  first/GREEN after implementation, probability invariants, deterministic replay,
+  abstention gates, cutoff filtering, schema migration, immutable insert/conflict,
+  deferred evaluation boundaries, open/future evidence rejection, exact labels,
+  versioned costs, outcome replay, metric formulas, invalid probabilities, and
+  empty inputs. No UI, news ingestion, Gemini call, order call, backtest, or
+  random forecast was added. Phase E remains the next authorized step.
+
 ## 9. How to resume
 
 1. Read `doc/personal-trading-app.md` (read-only) for the exact prompt of the
@@ -683,6 +739,6 @@ trading.
 2. Read this file for context, then Engram (`engine: mem_search "balancita"`)
    for worker reports.
 3. Run `pnpm test` and `pnpm test:server` to confirm the current baseline
-   (352 frontend, 104 server tests expected).
+   (352 frontend, 133 server tests expected).
 4. Execute the next phase with TDD work units; commit; verify gates; update this
    file's status table.
