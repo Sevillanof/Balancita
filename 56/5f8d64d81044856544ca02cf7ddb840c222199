@@ -1,0 +1,19 @@
+server/src/intelligence/market/market-store.ts
+  s_93848f0f6de095::t_319ac768b6eb35 8-10,14-18,25,97-117,129-139,257-503,702-704,746-798,819-833
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "565f8d64d81044856544ca02cf7ddb840c222199",
+  "prompts": {},
+  "sessions": {
+    "s_93848f0f6de095": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f3becdadefferMQtofaIjHDDKd",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
