@@ -1,0 +1,19 @@
+server/src/intelligence/market/kraken-market-collector.test.ts
+  s_d49bb852c30422::t_0ffce951ed6daa 263-317
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "617e7fdbf585932d62a17376bdb4abfb2d02720a",
+  "prompts": {},
+  "sessions": {
+    "s_d49bb852c30422": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f416043b0ffe018dRDpb5OGIqx",
+        "model": "big-pickle"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
