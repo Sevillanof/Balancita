@@ -1,0 +1,23 @@
+server/src/intelligence/market/kraken-market-collector.ts
+  s_e9f48c3f61d832::t_8753131d15be2e 1-952
+server/src/intelligence/market/market-payload.ts
+  s_e9f48c3f61d832::t_5ce185bbd95f6c 28-40,42,67-71,128-177,200-213,222-225
+server/src/intelligence/stream.test.ts
+  s_e9f48c3f61d832::t_6962b8996ef344 40-72,128-152
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1bcd2dedd11e97278e189e3ce6906b368112dfa2",
+  "prompts": {},
+  "sessions": {
+    "s_e9f48c3f61d832": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f3ae0e618ffeMJt0O7kmr2i3pN",
+        "model": "deepseek-v4.1-flash"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
