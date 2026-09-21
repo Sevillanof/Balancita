@@ -512,6 +512,51 @@ reales`, `Datos simulados` y `Operación simulada`. No se agregó una librería
 - ⏸ Revisión visual manual responsive y con Coinbase real sigue pendiente; no se
   considera cubierta por jsdom.
 
+## Fase A — contratos, SLIs y política de fuentes
+
+Implemented as pure, network-free server modules under `server/src/intelligence/`.
+The 21 new server tests are included in the 85-test server gate.
+
+- **Contracts**: `TimestampMs` is a branded epoch-milliseconds value. External
+  inputs are accepted only through runtime validation; ISO strings and epoch
+  numbers are not mixed. Market and news collector/normalizer contracts are
+  generic and scoped to the first supported instrument, `BTC-EUR`.
+- **Event/received/display semantics**: `eventTime` is the source-assigned
+  instant, `receivedTime` is the local collector receipt instant, and
+  `displayTime` is the UI snapshot instant. `DataFreshness.ageMs` is exactly
+  `displayTime - eventTime`; a strict `ageMs > staleAfterMs` comparison marks a
+  sample stale. Inverted clocks are rejected by default or explicitly clamped
+  to zero when `clockSkewPolicy: clamp_to_zero` is selected.
+- **Latency and percentiles**: receive latency is
+  `receivedTime - eventTime`. `p50` and `p95` use deterministic nearest-rank
+  percentiles: sort ascending and select the 1-indexed rank
+  `ceil(percentile * n)`. Empty samples return `null` percentiles; one sample
+  returns that sample for both percentiles. Samples must be finite and
+  non-negative.
+- **Stale and gap denominators**: stale rate is
+  `stale snapshots / total snapshots`; no snapshots returns `null`. Gap rate is
+  `gap transitions / expected messages in the window`, where one transition is
+  a strictly increasing sequence jump larger than one. Without a sequence, the
+  rate is `null` and the expected denominator must be zero.
+- **Source policy**: only `official_primary` and `licensed_reporting` can enter
+  the initial pipeline. Licensed reporting requires `licenseStatus: licensed`;
+  official primary sources require `official_public`. `unverified_social` is
+  excluded. Every accepted item requires an absolute HTTPS URL, non-empty
+  source/hash, valid ordered timestamps, explicit license and correction states,
+  and metadata-only, summary, or permitted excerpt content. Other instruments
+  are rejected with structured reason codes.
+- **Forecast validation**: `ForecastRecord` is readonly, versioned and
+  content-hashed; probabilities must be finite, within `[0, 1]`, and sum to one
+  within tolerance `1e-9`. Valid horizons are `15m`, `1h`, `4h`, and `24h`.
+  Feature snapshots must be versioned and closed, and news evidence must have
+  `ingestedAt <= eventCutoff`. Abstentions require a reason. `ForecastOutcome`
+  validates its forecast id/version and appends a separate result without an
+  update API for the original record.
+- **Scope boundary**: this phase adds no SQLite, migrations, Coinbase or RSS
+  collectors, SSE, runtime timers, intraday candles, technical indicators,
+  Gemini/news calls, forecast persistence, backtesting, broker integration, or
+  orders. The UI and immutable files under `doc/**` were not modified.
+
 ## 9. How to resume
 
 1. Read `doc/personal-trading-app.md` (read-only) for the exact prompt of the
