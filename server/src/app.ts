@@ -12,6 +12,8 @@ import {
 import { AnalysisCache } from './cache.ts'
 import type { ServerConfig } from './config.ts'
 import { createGeminiClient, type GeminiClient } from './gemini-client.ts'
+import { CoinbaseMarketCollector } from './intelligence/market/coinbase-market-collector.ts'
+import { MarketStore } from './intelligence/market/market-store.ts'
 import { AnalysisRateLimiter } from './limits.ts'
 import { AnalyzeService } from './service.ts'
 import { parseAnalysisInputRequest } from './wire.ts'
@@ -20,6 +22,15 @@ export interface AnalysisDependencies {
   client: GeminiClient
   limiter: AnalysisRateLimiter
   cache: AnalysisCache
+}
+
+export interface MarketCollectorLifecycle {
+  start(instrumentId: string): void | Promise<void>
+  stop(): void | Promise<void>
+}
+
+export interface MarketDependencies {
+  marketCollector: MarketCollectorLifecycle
 }
 
 type ErrorEnvelope = {
@@ -35,7 +46,7 @@ function envelope(error: {
 
 export async function buildApp(options: {
   config: ServerConfig
-  overrides?: Partial<AnalysisDependencies>
+  overrides?: Partial<AnalysisDependencies & MarketDependencies>
 }): Promise<FastifyInstance> {
   const { config } = options
 
@@ -63,6 +74,22 @@ export async function buildApp(options: {
           timeoutMs: config.timeoutMs,
         })
 
+  let marketStore: MarketStore | undefined
+  const marketCollector = config.marketCollectorEnabled
+    ? (options.overrides?.marketCollector ??
+      (() => {
+        marketStore = new MarketStore({ path: config.marketDbPath })
+        return new CoinbaseMarketCollector({
+          store: marketStore,
+          wsUrl: config.coinbaseWsUrl,
+          staleAfterMs: config.marketStaleAfterMs,
+          reconnectMinMs: config.marketReconnectMinMs,
+          reconnectMaxMs: config.marketReconnectMaxMs,
+          clock: () => Date.now(),
+        })
+      })())
+    : undefined
+
   const app = Fastify({ logger: false })
 
   if (config.corsOrigin !== '') {
@@ -70,6 +97,16 @@ export async function buildApp(options: {
   }
 
   app.get('/health', async () => ({ status: 'ok' }))
+
+  if (marketCollector !== undefined) {
+    app.addHook('onReady', async () => {
+      await marketCollector.start('BTC-EUR')
+    })
+    app.addHook('onClose', async () => {
+      await marketCollector.stop()
+      marketStore?.close()
+    })
+  }
 
   app.post('/api/analyze', async (request, reply) => {
     let input

@@ -11,6 +11,10 @@ node_modules
 dist
 dist-ssr
 *.local
+server/data/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
 .atl/
 
 # Local environment files (never commit keys)

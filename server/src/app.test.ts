@@ -4,6 +4,7 @@ import { serverConfigFrom } from './config.ts'
 import type { GeminiClient, GeminiGenerateParams } from './gemini-client.ts'
 import { AnalysisRateLimiter } from './limits.ts'
 import { buildApp } from './app.ts'
+import type { MarketCollectorLifecycle } from './app.ts'
 
 const resultText = JSON.stringify({
   instrumentId: 'BTC-EUR',
@@ -90,6 +91,19 @@ async function makeApp(options: {
   }
   const app = await buildApp({ config, overrides })
   return app
+}
+
+class FakeMarketCollector implements MarketCollectorLifecycle {
+  readonly starts: string[] = []
+  stopCount = 0
+
+  start(instrumentId: string): void {
+    this.starts.push(instrumentId)
+  }
+
+  stop(): void {
+    this.stopCount += 1
+  }
 }
 
 describe('analysis gateway API', () => {
@@ -269,5 +283,35 @@ describe('analysis gateway API', () => {
     expect(prompt).toContain('2024-01-03T')
     expect(prompt).toContain('2024-01-04T')
     expect(prompt).not.toContain('2024-01-01T')
+  })
+})
+
+describe('market collector lifecycle', () => {
+  it('does not start a collector when market ingestion is disabled by default', async () => {
+    const collector = new FakeMarketCollector()
+    const app = await buildApp({
+      config: serverConfigFrom({}),
+      overrides: { marketCollector: collector },
+    })
+
+    await app.ready()
+    await app.close()
+
+    expect(collector.starts).toEqual([])
+    expect(collector.stopCount).toBe(0)
+  })
+
+  it('starts and stops an enabled collector through Fastify lifecycle hooks', async () => {
+    const collector = new FakeMarketCollector()
+    const app = await buildApp({
+      config: serverConfigFrom({ MARKET_COLLECTOR_ENABLED: 'true' }),
+      overrides: { marketCollector: collector },
+    })
+
+    await app.ready()
+    expect(collector.starts).toEqual(['BTC-EUR'])
+    await app.close()
+
+    expect(collector.stopCount).toBe(1)
   })
 })

@@ -21,6 +21,12 @@ export interface ServerConfig {
   cacheTtlMs: number
   maxCandles: number
   corsOrigin: string
+  marketCollectorEnabled: boolean
+  marketDbPath: string
+  coinbaseWsUrl: string
+  marketStaleAfterMs: number
+  marketReconnectMinMs: number
+  marketReconnectMaxMs: number
 }
 
 const DEFAULT_MODEL = 'gemini-3.5-flash-lite'
@@ -28,6 +34,22 @@ const DEFAULT_MODEL = 'gemini-3.5-flash-lite'
 export function serverConfigFrom(
   env: Readonly<Record<string, string | undefined>>,
 ): ServerConfig {
+  const marketReconnectMinMs = positiveInt(
+    env,
+    'MARKET_RECONNECT_MIN_MS',
+    1_000,
+  )
+  const marketReconnectMaxMs = positiveInt(
+    env,
+    'MARKET_RECONNECT_MAX_MS',
+    30_000,
+  )
+  if (marketReconnectMaxMs < marketReconnectMinMs) {
+    throw new ServerConfigError(
+      'MARKET_RECONNECT_MAX_MS must be greater than or equal to MARKET_RECONNECT_MIN_MS.',
+    )
+  }
+
   return {
     host: stringValue(env, 'HOST', '127.0.0.1'),
     port: positiveInt(env, 'PORT', 8787),
@@ -52,6 +74,20 @@ export function serverConfigFrom(
       'GEMINI_SERVER_CORS_ORIGIN',
       'http://localhost:5173',
     ),
+    marketCollectorEnabled: booleanValue(
+      env,
+      'MARKET_COLLECTOR_ENABLED',
+      false,
+    ),
+    marketDbPath: stringValue(env, 'MARKET_DB_PATH', './data/market.sqlite'),
+    coinbaseWsUrl: stringValue(
+      env,
+      'COINBASE_WS_URL',
+      'wss://ws-feed.exchange.coinbase.com',
+    ),
+    marketStaleAfterMs: positiveInt(env, 'MARKET_STALE_AFTER_MS', 15_000),
+    marketReconnectMinMs,
+    marketReconnectMaxMs,
   }
 }
 
@@ -83,4 +119,18 @@ function positiveInt(
     )
   }
   return value
+}
+
+function booleanValue(
+  env: Readonly<Record<string, string | undefined>>,
+  name: string,
+  fallback: boolean,
+): boolean {
+  const raw = env[name]
+  if (raw === undefined || raw === '') return fallback
+  if (raw === 'true' || raw === '1') return true
+  if (raw === 'false' || raw === '0') return false
+  throw new ServerConfigError(
+    `${name} must be true, false, 1, or 0, got ${JSON.stringify(raw)}.`,
+  )
 }
