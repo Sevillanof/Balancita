@@ -1,23 +1,23 @@
 import type { MarketDataProvider } from '../domain/market-data'
-import { CoinbaseMarketDataProvider } from './coinbase-market-data'
-import type { CoinbaseMarketDataProviderOptions } from './coinbase-market-data'
+import { KrakenMarketDataProvider } from './kraken-market-data'
+import type { KrakenMarketDataProviderOptions } from './kraken-market-data'
 import { DeterministicMockMarketDataProvider } from './deterministic-mock-market-data'
 
-export type MarketDataProviderMode = 'mock' | 'coinbase'
+export type MarketDataProviderMode = 'mock' | 'kraken'
 
 export type CreateMarketDataProviderOptions = {
   mode?: unknown
   mockSeed?: number
-  coinbaseOptions?: CoinbaseMarketDataProviderOptions
+  krakenOptions?: KrakenMarketDataProviderOptions
 }
 
 export function resolveMarketDataProviderMode(
   value: unknown = import.meta.env.VITE_MARKET_DATA_PROVIDER,
 ): MarketDataProviderMode {
   if (value === undefined || value === '') return 'mock'
-  if (value === 'mock' || value === 'coinbase') return value
+  if (value === 'mock' || value === 'kraken') return value
   throw new Error(
-    'VITE_MARKET_DATA_PROVIDER must be mock or coinbase when provided',
+    'VITE_MARKET_DATA_PROVIDER must be mock or kraken when provided',
   )
 }
 
@@ -28,5 +28,5 @@ export function createMarketDataProvider(
   if (mode === 'mock') {
     return new DeterministicMockMarketDataProvider(options.mockSeed ?? 1)
   }
-  return new CoinbaseMarketDataProvider(options.coinbaseOptions)
+  return new KrakenMarketDataProvider(options.krakenOptions)
 }

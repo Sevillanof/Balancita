@@ -1,24 +1,32 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { CoinbaseWebSocket } from './coinbase-market-data'
+import type { KrakenWebSocket } from './kraken-market-data'
 import {
   createMarketDataProvider,
   resolveMarketDataProviderMode,
 } from './market-data-provider'
 import { DeterministicMockMarketDataProvider } from './deterministic-mock-market-data'
-import { CoinbaseMarketDataProvider } from './coinbase-market-data'
+import { KrakenMarketDataProvider } from './kraken-market-data'
 
-const product = {
-  id: 'BTC-EUR',
-  base_currency: 'BTC',
-  quote_currency: 'EUR',
-  display_name: 'BTC-EUR',
+const assetPairs = {
+  error: [],
+  result: {
+    XBTEUR: {
+      altname: 'XBTEUR',
+      wsname: 'BTC/EUR',
+      aclass_base: 'currency',
+      base: 'XXBT',
+      aclass_quote: 'currency',
+      quote: 'ZEUR',
+      status: 'online',
+    },
+  },
 }
 
 function response(body: unknown): Response {
   return { ok: true, status: 200, json: async () => body } as Response
 }
 
-function webSocketFactory(): CoinbaseWebSocket {
+function webSocketFactory(): KrakenWebSocket {
   return {
     onopen: null,
     onmessage: null,
@@ -45,15 +53,15 @@ describe('market data provider selection', () => {
     expect('fetcher' in provider).toBe(false)
   })
 
-  it('creates Coinbase mode only when explicitly selected and keeps its catalog BTC-EUR only', async () => {
-    const fetch = vi.fn(async () => response(product))
+  it('creates Kraken mode only when explicitly selected and keeps its catalog BTC-EUR only', async () => {
+    const fetch = vi.fn(async () => response(assetPairs))
     const provider = createMarketDataProvider({
-      mode: 'coinbase',
-      coinbaseOptions: { fetch, webSocketFactory },
+      mode: 'kraken',
+      krakenOptions: { fetch, webSocketFactory },
     })
 
-    expect(resolveMarketDataProviderMode('coinbase')).toBe('coinbase')
-    expect(provider).toBeInstanceOf(CoinbaseMarketDataProvider)
+    expect(resolveMarketDataProviderMode('kraken')).toBe('kraken')
+    expect(provider).toBeInstanceOf(KrakenMarketDataProvider)
     await expect(provider.getInstruments()).resolves.toEqual([
       expect.objectContaining({ id: 'BTC-EUR', currency: 'EUR' }),
     ])
@@ -62,10 +70,13 @@ describe('market data provider selection', () => {
 
   it('rejects unsupported configuration instead of silently falling back', () => {
     expect(() => resolveMarketDataProviderMode('live')).toThrow(
-      /VITE_MARKET_DATA_PROVIDER must be mock or coinbase/i,
+      /VITE_MARKET_DATA_PROVIDER must be mock or kraken/i,
     )
     expect(() => createMarketDataProvider({ mode: 'real' })).toThrow(
-      /VITE_MARKET_DATA_PROVIDER must be mock or coinbase/i,
+      /VITE_MARKET_DATA_PROVIDER must be mock or kraken/i,
+    )
+    expect(() => createMarketDataProvider({ mode: 'coinbase' })).toThrow(
+      /VITE_MARKET_DATA_PROVIDER must be mock or kraken/i,
     )
   })
 })
