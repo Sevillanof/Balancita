@@ -29,7 +29,7 @@ The application has real read-only BTC-EUR quotes, a single-screen paper dashboa
 ## Tasks
 
 - [x] **BI-1 — Define repository skill**: create the concise runtime contract and register project discovery.
-- [ ] **BI-2 — Document runtime roadmap**: explain the staged architecture, technical-analysis foundations, news trust model, forecast ledger, evaluation metrics, risks, and acceptance gates.
+- [x] **BI-2 — Document runtime roadmap**: explain the staged architecture, technical-analysis foundations, news trust model, forecast ledger, evaluation metrics, risks, and acceptance gates.
 - [ ] **BI-3 — Validate and index**: run structural/frontmatter/link checks, Prettier, refresh `.atl/skill-registry.md`, and verify unrelated changes remain untouched.
 
 ## Acceptance criteria
@@ -53,8 +53,20 @@ The application has real read-only BTC-EUR quotes, a single-screen paper dashboa
 ## Evidence
 
 - BI-1: created `.github/skills/bitcoin-market-intelligence/SKILL.md` and root `AGENTS.md`; frontmatter, required section order, trigger coverage, and Prettier check passed. The roadmap link remains a forward reference until BI-2.
-- RDD mode: enabled globally; candidate assessment runs after the BI-1 work-unit commit.
+- BI-2: created `docs/bitcoin-market-intelligence-roadmap.md` (server-side
+  target architecture, freshness/latency definitions, technical-analysis
+  foundation, `ForecastRecord` schema, evaluation methodology, news trust
+  model, phased plan A–I, testing strategy, risks, decisions pending, and a
+  dated verified-sources section). No file under `doc/**`,
+  `docs/implementation-progress.md`,
+  `docs/analisis-general-y-proximos-pasos.md`, `src/**`, `server/**`,
+  `AGENTS.md`, or the skill was touched. `pnpm exec prettier --check
+docs/bitcoin-market-intelligence-roadmap.md odd/tasks/bitcoin-intelligence-skill.md`
+  passed after one write-format pass on the roadmap file (initial check
+  failed on Markdown table column alignment only).
+- RDD mode: enabled globally; candidate assessment runs after the BI-2
+  work-unit commit.
 
 ## Next step
 
-Implement BI-2.
+Implement BI-3 (validation, registry index refresh, and scoped-diff check).
