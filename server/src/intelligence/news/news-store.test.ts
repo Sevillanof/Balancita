@@ -57,7 +57,7 @@ describe('MarketStore news evidence schema v3', () => {
   it('migrates v2, inserts idempotently, and survives restart', () => {
     const path = makePath()
     const first = new MarketStore({ path })
-    expect(first.schemaVersion()).toBe(3)
+    expect(first.schemaVersion()).toBe(4)
     const item = evidence()
     const inserted = first.insertNewsEvidence(item)
     const duplicate = first.insertNewsEvidence(item)

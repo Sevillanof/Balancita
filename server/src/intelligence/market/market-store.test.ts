@@ -53,7 +53,7 @@ describe('MarketStore', () => {
   it('initializes the versioned schema at the injected path', () => {
     const store = new MarketStore({ path: makePath() })
 
-    expect(store.schemaVersion()).toBe(3)
+    expect(store.schemaVersion()).toBe(4)
     expect(store.observationCount()).toBe(0)
 
     store.close()
@@ -69,7 +69,7 @@ describe('MarketStore', () => {
     database.close()
 
     const store = new MarketStore({ path })
-    expect(store.schemaVersion()).toBe(3)
+    expect(store.schemaVersion()).toBe(4)
     expect(store.observationCount()).toBe(0)
     store.close()
   })
@@ -91,7 +91,7 @@ describe('MarketStore', () => {
       )
       .get()
     migratedDatabase.close()
-    expect(store.schemaVersion()).toBe(3)
+    expect(store.schemaVersion()).toBe(4)
     expect(ledgerTable).toEqual({ name: 'forecast_records' })
     store.close()
   })
@@ -208,7 +208,7 @@ describe('MarketStore', () => {
       lastSequence: 11,
       lastTradeId: 21,
       connectionRevision: 1,
-      schemaVersion: 3,
+      schemaVersion: 4,
     })
     expect(second.listGaps()).toEqual([
       expect.objectContaining({

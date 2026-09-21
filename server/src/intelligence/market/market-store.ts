@@ -21,12 +21,21 @@ import { contentHashFor } from '../forecast-hashing.ts'
 import { invalid, issue, type ValidationIssue } from '../validation.ts'
 import { validateNewsEvidence } from '../source-policy.ts'
 import { contentHashForNewsEvidence } from '../news/rss-normalizer.ts'
-import {
-  validateNormalizedMarketPayload,
-  type NormalizedMarketPayload,
-} from './market-payload.ts'
+import type { ShadowDecisionRecord } from '../shadow/shadow-decision.ts'
+import { restoreShadowDecision } from '../shadow/shadow-decision.ts'
+import type { ShadowReport } from '../shadow/shadow-report.ts'
+import type {
+  ShadowRunReference,
+  ShadowRunStart,
+  ShadowRunStatus,
+} from '../shadow/shadow-run.ts'
+import { createShadowStatusRecord } from '../shadow/shadow-run.ts'
+import type { ShadowInsertResult } from '../shadow/shadow-run.ts'
+import type { ShadowRunStatusKind } from '../shadow/shadow-contracts.ts'
+import type { NormalizedMarketPayload } from './market-payload.ts'
+import { validateNormalizedMarketPayload } from './market-payload.ts'
 
-const SCHEMA_VERSION = 3
+const SCHEMA_VERSION = 4
 
 export interface MarketStoreOptions {
   readonly path: string
@@ -163,6 +172,19 @@ export class NewsStoreValidationError extends Error {
   constructor(issues: readonly ValidationIssue[]) {
     super('News evidence operation failed validation.')
     this.name = 'NewsStoreValidationError'
+    this.issues = issues
+  }
+}
+
+export class ShadowStoreValidationError extends Error {
+  readonly code = 'invalid_shadow_record' as const
+  readonly issues: readonly ValidationIssue[]
+
+  constructor(issues: readonly ValidationIssue[]) {
+    super(
+      `Shadow validation operation failed validation. [${issues[0]?.code ?? ''}] ${issues[0]?.message ?? ''}`,
+    )
+    this.name = 'ShadowStoreValidationError'
     this.issues = issues
   }
 }
@@ -840,6 +862,421 @@ export class MarketStore {
     this.database.close()
   }
 
+  createShadowRun(
+    start: ShadowRunStart,
+    createdAt: number = this.clock(),
+  ): ShadowInsertResult {
+    const existing = this.getShadowRunRow(start.id)
+    if (existing !== undefined) {
+      if (String(existing.content_hash) === start.contentHash)
+        return {
+          outcome: 'duplicate',
+          id: start.id,
+          contentHash: start.contentHash,
+        }
+      throw new ShadowStoreValidationError([
+        issue(
+          'shadow_run_conflict',
+          'contentHash',
+          'A shadow run id already exists with a different hash.',
+        ),
+      ])
+    }
+    const hashIssue = shadowHashIssue(start, 'contentHash')
+    if (hashIssue !== null) throw new ShadowStoreValidationError([hashIssue])
+
+    this.database
+      .prepare(
+        `INSERT INTO shadow_runs
+          (id, run_version, instrument_id, started_at, planned_end_at,
+           versions_json, source_constraints_json, content_hash, record_json,
+           created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        start.id,
+        start.version,
+        start.instrumentId,
+        start.startedAt,
+        start.plannedEndAt,
+        canonicalJson(start.versions),
+        canonicalJson(start.sourceConstraints),
+        start.contentHash,
+        canonicalJson(start),
+        createdAt,
+      )
+    this.recordShadowStatus(
+      createShadowStatusRecord(start.id, 'collecting', createdAt),
+      createdAt,
+    )
+    return { outcome: 'inserted', id: start.id, contentHash: start.contentHash }
+  }
+
+  getShadowRun(runId: string): ShadowRunReference | undefined {
+    const row = this.getShadowRunRow(runId)
+    if (row === undefined) return undefined
+    const run = JSON.parse(String(row.record_json)) as ShadowRunReference
+    return { ...run, status: this.currentShadowStatus(runId) }
+  }
+
+  listShadowRuns(): readonly ShadowRunReference[] {
+    const rows = this.database
+      .prepare('SELECT * FROM shadow_runs ORDER BY created_at, rowid')
+      .all() as SqlRow[]
+    return rows.map((row) => {
+      const run = JSON.parse(String(row.record_json)) as ShadowRunReference
+      return {
+        ...run,
+        status: this.currentShadowStatus(run.id),
+      }
+    })
+  }
+
+  shadowRunCount(): number {
+    const row = this.database
+      .prepare('SELECT COUNT(*) AS count FROM shadow_runs')
+      .get() as SqlRow
+    return Number(row.count)
+  }
+
+  recordShadowStatus(
+    status: ShadowRunStatus,
+    createdAt: number = this.clock(),
+  ): ShadowInsertResult {
+    if (this.getShadowRunRow(status.runId) === undefined)
+      throw new ShadowStoreValidationError([
+        issue(
+          'shadow_run_not_found',
+          'runId',
+          'Status can only be recorded for an existing shadow run.',
+        ),
+      ])
+    const hashIssue = shadowHashIssue(status, 'contentHash')
+    if (hashIssue !== null) throw new ShadowStoreValidationError([hashIssue])
+
+    const existing = this.database
+      .prepare('SELECT id, content_hash FROM shadow_run_status WHERE id = ?')
+      .get(status.id) as SqlRow | undefined
+    if (existing !== undefined)
+      return {
+        outcome: 'duplicate',
+        id: status.id,
+        contentHash: String(existing.content_hash),
+      }
+    this.database
+      .prepare(
+        `INSERT INTO shadow_run_status
+          (id, run_id, status, recorded_at, report_hash, reason, content_hash,
+           record_json, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        status.id,
+        status.runId,
+        status.status,
+        status.recordedAt,
+        status.reportHash ?? null,
+        status.reason,
+        status.contentHash,
+        canonicalJson(status),
+        createdAt,
+      )
+    return {
+      outcome: 'inserted',
+      id: status.id,
+      contentHash: status.contentHash,
+    }
+  }
+
+  getShadowStatus(runId: string): ShadowRunStatus | undefined {
+    const row = this.database
+      .prepare(
+        `SELECT record_json FROM shadow_run_status
+         WHERE run_id = ? ORDER BY rowid DESC LIMIT 1`,
+      )
+      .get(runId) as SqlRow | undefined
+    return row === undefined
+      ? undefined
+      : (JSON.parse(String(row.record_json)) as ShadowRunStatus)
+  }
+
+  listShadowStatuses(runId: string): readonly ShadowRunStatus[] {
+    const rows = this.database
+      .prepare(
+        `SELECT record_json FROM shadow_run_status
+         WHERE run_id = ? ORDER BY rowid`,
+      )
+      .all(runId) as SqlRow[]
+    return rows.map(
+      (row) => JSON.parse(String(row.record_json)) as ShadowRunStatus,
+    )
+  }
+
+  saveShadowReport(
+    report: ShadowReport,
+    createdAt: number = this.clock(),
+  ): ShadowInsertResult {
+    if (this.getShadowRunRow(report.runId) === undefined)
+      throw new ShadowStoreValidationError([
+        issue(
+          'shadow_run_not_found',
+          'runId',
+          'A report can only be saved for an existing shadow run.',
+        ),
+      ])
+    const existing = this.database
+      .prepare('SELECT id, content_hash FROM shadow_reports WHERE id = ?')
+      .get(report.id) as SqlRow | undefined
+    if (existing !== undefined) {
+      if (String(existing.content_hash) === report.contentHash)
+        return {
+          outcome: 'duplicate',
+          id: report.id,
+          contentHash: report.contentHash,
+        }
+      throw new ShadowStoreValidationError([
+        issue(
+          'shadow_report_conflict',
+          'contentHash',
+          'A shadow report id already exists with a different hash.',
+        ),
+      ])
+    }
+    const hashIssue = shadowHashIssue(report, 'contentHash')
+    if (hashIssue !== null) throw new ShadowStoreValidationError([hashIssue])
+
+    this.database
+      .prepare(
+        `INSERT INTO shadow_reports
+          (id, run_id, snapshot_timestamp_ms, status, content_hash, record_json,
+           created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        report.id,
+        report.runId,
+        report.snapshotTimestampMs,
+        report.status,
+        report.contentHash,
+        canonicalJson(report),
+        createdAt,
+      )
+    this.recordShadowStatus(
+      createShadowStatusRecord(
+        report.runId,
+        report.status,
+        report.snapshotTimestampMs,
+        {
+          reportHash: report.contentHash,
+          reason: 'shadow_report_generated',
+        },
+      ),
+      createdAt,
+    )
+    return {
+      outcome: 'inserted',
+      id: report.id,
+      contentHash: report.contentHash,
+    }
+  }
+
+  getShadowReport(runId: string): ShadowReport | undefined {
+    const row = this.database
+      .prepare(
+        `SELECT record_json FROM shadow_reports
+         WHERE run_id = ? ORDER BY snapshot_timestamp_ms DESC, rowid DESC LIMIT 1`,
+      )
+      .get(runId) as SqlRow | undefined
+    return row === undefined
+      ? undefined
+      : (JSON.parse(String(row.record_json)) as ShadowReport)
+  }
+
+  getShadowReportById(id: string): ShadowReport | undefined {
+    const row = this.database
+      .prepare('SELECT record_json FROM shadow_reports WHERE id = ?')
+      .get(id) as SqlRow | undefined
+    return row === undefined
+      ? undefined
+      : (JSON.parse(String(row.record_json)) as ShadowReport)
+  }
+
+  listShadowReports(): readonly ShadowReport[] {
+    const rows = this.database
+      .prepare(
+        'SELECT record_json FROM shadow_reports ORDER BY snapshot_timestamp_ms, rowid',
+      )
+      .all() as SqlRow[]
+    return rows.map(
+      (row) => JSON.parse(String(row.record_json)) as ShadowReport,
+    )
+  }
+
+  recordShadowDecision(
+    decision: ShadowDecisionRecord,
+    createdAt: number = this.clock(),
+  ): ShadowInsertResult {
+    const hashIssue = shadowHashIssue(decision, 'contentHash')
+    if (hashIssue !== null) throw new ShadowStoreValidationError([hashIssue])
+    if (this.getShadowRunRow(decision.runId) === undefined)
+      throw new ShadowStoreValidationError([
+        issue(
+          'shadow_run_not_found',
+          'runId',
+          'A decision requires an existing shadow run.',
+        ),
+      ])
+    const report = this.getShadowReportById(decision.reportId)
+    if (report === undefined)
+      throw new ShadowStoreValidationError([
+        issue(
+          'shadow_report_not_found',
+          'reportId',
+          'A decision must reference a saved shadow report.',
+        ),
+      ])
+    if (report.runId !== decision.runId)
+      throw new ShadowStoreValidationError([
+        issue(
+          'shadow_report_run_mismatch',
+          'reportId',
+          'A decision report must belong to the same shadow run.',
+        ),
+      ])
+    if (report.contentHash !== decision.reportHash)
+      throw new ShadowStoreValidationError([
+        issue(
+          'shadow_report_hash_mismatch',
+          'reportHash',
+          'A decision report hash must match the saved shadow report.',
+        ),
+      ])
+
+    const duplicate = this.database
+      .prepare(
+        'SELECT id, content_hash FROM shadow_decisions WHERE run_id = ? AND content_hash = ?',
+      )
+      .get(decision.runId, decision.contentHash) as SqlRow | undefined
+    if (duplicate !== undefined)
+      return {
+        outcome: 'duplicate',
+        id: String(duplicate.id),
+        contentHash: String(duplicate.content_hash),
+      }
+
+    const alreadyDecided = this.database
+      .prepare('SELECT id FROM shadow_decisions WHERE run_id = ? LIMIT 1')
+      .get(decision.runId) as SqlRow | undefined
+    if (alreadyDecided !== undefined)
+      throw new ShadowStoreValidationError([
+        issue(
+          'shadow_run_already_decided',
+          'runId',
+          'A shadow run can hold at most one kept decision.',
+        ),
+      ])
+
+    const latestStatus = this.getShadowStatus(decision.runId)
+    const reviewable =
+      latestStatus?.status === 'ready_for_review' ||
+      latestStatus?.status === 'insufficient_evidence'
+    if (!reviewable)
+      throw new ShadowStoreValidationError([
+        issue(
+          'shadow_run_not_reviewable',
+          'status',
+          'A decision requires the shadow run to be in a reviewable state.',
+        ),
+      ])
+
+    this.database
+      .prepare(
+        `INSERT INTO shadow_decisions
+          (id, version, run_id, decision, report_id, report_hash, actor, reason,
+           decided_at, content_hash, record_json, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        decision.id,
+        decision.version,
+        decision.runId,
+        decision.decision,
+        decision.reportId,
+        decision.reportHash,
+        decision.actor,
+        decision.reason,
+        decision.decidedAt,
+        decision.contentHash,
+        canonicalJson(decision),
+        createdAt,
+      )
+    this.recordShadowStatus(
+      createShadowStatusRecord(
+        decision.runId,
+        decision.decision,
+        decision.decidedAt,
+        {
+          reportHash: decision.reportHash,
+          reason: decision.reason,
+        },
+      ),
+      createdAt,
+    )
+    return {
+      outcome: 'inserted',
+      id: decision.id,
+      contentHash: decision.contentHash,
+    }
+  }
+
+  getShadowDecision(runId: string): ShadowDecisionRecord | undefined {
+    const row = this.database
+      .prepare(
+        `SELECT * FROM shadow_decisions
+         WHERE run_id = ? ORDER BY decided_at DESC, rowid DESC LIMIT 1`,
+      )
+      .get(runId) as SqlRow | undefined
+    if (row === undefined) return undefined
+    const restored = restoreShadowDecision(
+      JSON.parse(String(row.record_json)) as ShadowDecisionRecord,
+    )
+    return restored
+  }
+
+  listShadowDecisions(runId: string): readonly ShadowDecisionRecord[] {
+    const rows = this.database
+      .prepare(
+        `SELECT record_json FROM shadow_decisions
+         WHERE run_id = ? ORDER BY decided_at, rowid`,
+      )
+      .all(runId) as SqlRow[]
+    return rows.map((row) =>
+      restoreShadowDecision(
+        JSON.parse(String(row.record_json)) as ShadowDecisionRecord,
+      ),
+    )
+  }
+
+  listShadowTables(): string[] {
+    const rows = this.database
+      .prepare(
+        `SELECT name FROM sqlite_master
+         WHERE type = 'table' AND name LIKE 'shadow_%' ORDER BY name`,
+      )
+      .all() as SqlRow[]
+    return rows.map((row) => String(row.name))
+  }
+
+  private getShadowRunRow(runId: string): SqlRow | undefined {
+    return this.database
+      .prepare('SELECT * FROM shadow_runs WHERE id = ?')
+      .get(runId) as SqlRow | undefined
+  }
+
+  private currentShadowStatus(runId: string): ShadowRunStatusKind {
+    return this.getShadowStatus(runId)?.status ?? 'collecting'
+  }
+
   private migrate(): void {
     this.database.exec(`
       CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -978,6 +1415,82 @@ export class MarketStore {
         )
         .run(3, this.clock())
     }
+    if (currentVersion < 4) {
+      this.database.exec(`
+        CREATE TABLE IF NOT EXISTS shadow_runs (
+          id TEXT PRIMARY KEY,
+          run_version TEXT NOT NULL,
+          instrument_id TEXT NOT NULL CHECK (instrument_id = 'BTC-EUR'),
+          started_at INTEGER NOT NULL,
+          planned_end_at INTEGER NOT NULL,
+          versions_json TEXT NOT NULL,
+          source_constraints_json TEXT NOT NULL,
+          content_hash TEXT NOT NULL UNIQUE,
+          record_json TEXT NOT NULL,
+          created_at INTEGER NOT NULL
+        ) STRICT;
+
+        CREATE TABLE IF NOT EXISTS shadow_run_status (
+          id TEXT PRIMARY KEY,
+          run_id TEXT NOT NULL,
+          status TEXT NOT NULL CHECK (
+            status IN ('collecting', 'ready_for_review',
+                       'insufficient_evidence', 'go', 'no_go')
+          ),
+          recorded_at INTEGER NOT NULL,
+          report_hash TEXT,
+          reason TEXT NOT NULL,
+          content_hash TEXT NOT NULL UNIQUE,
+          record_json TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          FOREIGN KEY (run_id) REFERENCES shadow_runs (id)
+        ) STRICT;
+
+        CREATE INDEX IF NOT EXISTS idx_shadow_run_status_run
+          ON shadow_run_status (run_id);
+
+        CREATE TABLE IF NOT EXISTS shadow_reports (
+          id TEXT PRIMARY KEY,
+          run_id TEXT NOT NULL,
+          snapshot_timestamp_ms INTEGER NOT NULL,
+          status TEXT NOT NULL CHECK (
+            status IN ('collecting', 'ready_for_review', 'insufficient_evidence')
+          ),
+          content_hash TEXT NOT NULL UNIQUE,
+          record_json TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          FOREIGN KEY (run_id) REFERENCES shadow_runs (id)
+        ) STRICT;
+
+        CREATE INDEX IF NOT EXISTS idx_shadow_reports_run
+          ON shadow_reports (run_id, snapshot_timestamp_ms);
+
+        CREATE TABLE IF NOT EXISTS shadow_decisions (
+          id TEXT PRIMARY KEY,
+          version TEXT NOT NULL,
+          run_id TEXT NOT NULL,
+          decision TEXT NOT NULL CHECK (decision IN ('go', 'no_go')),
+          report_id TEXT NOT NULL,
+          report_hash TEXT NOT NULL,
+          actor TEXT NOT NULL,
+          reason TEXT NOT NULL,
+          decided_at INTEGER NOT NULL,
+          content_hash TEXT NOT NULL UNIQUE,
+          record_json TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          FOREIGN KEY (run_id) REFERENCES shadow_runs (id),
+          FOREIGN KEY (report_id) REFERENCES shadow_reports (id)
+        ) STRICT;
+
+        CREATE INDEX IF NOT EXISTS idx_shadow_decisions_run
+          ON shadow_decisions (run_id, decided_at);
+      `)
+      this.database
+        .prepare(
+          'INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)',
+        )
+        .run(4, this.clock())
+    }
   }
 }
 
@@ -1011,6 +1524,20 @@ function hashIssuesFor(
           'Content hash does not match the canonical record.',
         ),
       ]
+}
+
+function shadowHashIssue(
+  value: { readonly contentHash: string },
+  path: string,
+): ValidationIssue | null {
+  const { contentHash, ...withoutHash } = value
+  return contentHashFor(withoutHash) === contentHash
+    ? null
+    : issue(
+        'content_hash_mismatch',
+        path,
+        'Content hash does not match the canonical record.',
+      )
 }
 
 function canonicalize(value: unknown): unknown {

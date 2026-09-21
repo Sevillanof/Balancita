@@ -960,3 +960,51 @@ combine signals, authorize orders, or invoke Gemini.
   instrument validation, UI runtime validation, accessibility-visible metrics,
   cleanup and reconnect/backoff. No test calls Coinbase, Gemini, or any real
   network.
+
+## Fase I — Validación shadow de 30 días (infraestructura)
+
+Phase I implements the durable shadow-validation infrastructure authorized by the
+user (30-day period) and the manual go/no-go decision contract. It does not yet
+declare go or no-go for any instrument; those outcomes require an explicit manual
+decision backed by a reviewable report after the planned end of the run.
+
+- **Shadow run start**: `server/src/intelligence/shadow/shadow-run.ts` defines
+  `SHADOW_DURATION_MS = 30 days`, the canonical run id `shadow:BTC-EUR`, and a
+  versioned start record (`shadow-run.v1`) with `startedAt`, `plannedEndAt`,
+  status `collecting`, pinned policy/rule/model versions and source constraints
+  (`realtimeOnly`, `technicalFreshnessToleranceMs = 60s`,
+  `newsScoresNotPersisted`). Started runs are append-only: their start/end/policy
+  cannot be changed, and a new run receives a new id. The clock is injectable so
+  tests do not depend on wall time.
+- **Persistence**: `market-store.ts` moves `SCHEMA_VERSION` 3 → 4 and creates
+  four new append-only tables — `shadow_runs`, `shadow_run_status`,
+  `shadow_reports` and `shadow_decisions` — with content-hash idempotency and
+  foreign keys on `run_id`. Existing market and news store tests were adjusted to
+  the new schema version.
+- **Aggregation**: `shadow-aggregation.ts` produces read-only summaries from
+  already-evaluated `ForecastOutcome` records, keeping technical and news scores
+  separate (`shadow-aggregation.v1`): coverage/abstention, sample counts, Brier,
+  calibration, log-loss, MAE, secondary directional accuracy, baseline neutral,
+  stale/gap/freshness summaries, segmented by horizon and regime
+  (`high_volatility` / `low_volatility`). It never mixes sources, never claims
+  profitability or causality, and excludes invalid or look-ahead outcomes.
+- **Report and decision**: `shadow-report.ts` emits `shadow-report.v1` with
+  status `collecting` before `plannedEndAt`, `ready_for_review` after the period
+  with at least `MIN_SHADOW_EVALUATED_OUTCOMES = 10` evaluated outcomes, or
+  `insufficient_evidence` when the period passed without enough evidence. There
+  is no automatic `go`. `shadow-decision.ts` records a manual
+  `shadow-decision.v1` `go | no_go` append-only; a decision requires an exact
+  `reportHash`, rejects mismatched or non-reviewable reports, and never
+  overwrites a prior decision or report. Rejecting a wrong report hash or a
+  duplicate decision is tested explicitly.
+- **Tests and boundaries**: 55 new server tests use injected clocks and
+  temporary SQLite databases offline; they cover exact 30-day boundary,
+  immutability/restarts/idempotency, invalid/look-ahead outcome exclusion,
+  per-horizon/regime metrics, deterministic report hashes, manual append-only
+  decisions, and absence of `OrderExecutionProvider`, automatic Gemini and
+  network calls. Server suite: 240 tests; frontend: 357 tests.
+- **Go/no-go status**: pending by design — no real 30-day observations and
+  evaluated outcomes exist yet, so the report can only report `collecting` or
+  `insufficient_evidence`. The next step is starting the local run and letting
+  the shadow period elapse with the collector enabled, then producing the
+  reviewable report for a manual decision.
