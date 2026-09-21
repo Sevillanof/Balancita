@@ -1,0 +1,19 @@
+server/src/intelligence/forecast-evaluator.ts
+  s_93848f0f6de095::t_9b53ca89d1bb60 1-152
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "508c3ff3e5492585810a23b8327ade2cd2dc36c7",
+  "prompts": {},
+  "sessions": {
+    "s_93848f0f6de095": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f3becdadefferMQtofaIjHDDKd",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
