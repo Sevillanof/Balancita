@@ -65,8 +65,6 @@ export interface ShadowStatusResponse {
   readonly state: ShadowStatusState
 }
 
-const CANONICAL_SHADOW_RUN_ID = 'shadow:BTC-EUR'
-
 function envelope(error: {
   code: AnalysisGatewayErrorCode | 'internal_error'
   message: string
@@ -132,13 +130,13 @@ export async function buildApp(options: {
       : new ShadowRunService({
           store: marketStore,
           instrumentId: 'BTC-EUR',
-          runId: CANONICAL_SHADOW_RUN_ID,
+          runId: config.shadowRunId,
           clock: () => Date.now() as TimestampMs,
         })
 
   const ensureShadowRunExists = (): void => {
     if (shadowService === undefined || marketStore === undefined) return
-    if (marketStore.getShadowRun(CANONICAL_SHADOW_RUN_ID) !== undefined) return
+    if (marketStore.getShadowRun(config.shadowRunId) !== undefined) return
     shadowService.start()
   }
 

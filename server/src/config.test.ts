@@ -26,6 +26,7 @@ describe('serverConfigFrom', () => {
     expect(config.intelligenceStreamMaxClients).toBe(20)
     expect(config.intelligenceStreamKeepAliveMs).toBe(15_000)
     expect(config.intelligenceStreamWindowSize).toBe(200)
+    expect(config.shadowRunId).toBe('shadow:BTC-EUR')
   })
 
   it('parses numeric environment values without requiring a key in tests', () => {
@@ -50,6 +51,7 @@ describe('serverConfigFrom', () => {
       INTELLIGENCE_SSE_MAX_CLIENTS: '4',
       INTELLIGENCE_SSE_KEEPALIVE_MS: '2000',
       INTELLIGENCE_SSE_WINDOW_SIZE: '50',
+      SHADOW_RUN_ID: 'shadow:BTC-EUR:kraken-1',
     })
     expect(config.apiKey).toBe('')
     expect(config.model).toBe('gemini-3.8-flash')
@@ -72,6 +74,7 @@ describe('serverConfigFrom', () => {
     expect(config.intelligenceStreamMaxClients).toBe(4)
     expect(config.intelligenceStreamKeepAliveMs).toBe(2_000)
     expect(config.intelligenceStreamWindowSize).toBe(50)
+    expect(config.shadowRunId).toBe('shadow:BTC-EUR:kraken-1')
   })
 
   it('rejects non-numeric or out-of-range numeric values', () => {

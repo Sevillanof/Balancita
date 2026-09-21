@@ -23,6 +23,7 @@ export interface ServerConfig {
   corsOrigin: string
   marketCollectorEnabled: boolean
   marketDbPath: string
+  shadowRunId: string
   krakenWsUrl: string
   krakenRestUrl: string
   marketStaleAfterMs: number
@@ -84,6 +85,7 @@ export function serverConfigFrom(
       false,
     ),
     marketDbPath: stringValue(env, 'MARKET_DB_PATH', './data/market.sqlite'),
+    shadowRunId: stringValue(env, 'SHADOW_RUN_ID', 'shadow:BTC-EUR'),
     krakenWsUrl: stringValue(env, 'KRAKEN_WS_URL', 'wss://ws.kraken.com/v2'),
     krakenRestUrl: stringValue(
       env,

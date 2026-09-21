@@ -359,11 +359,13 @@ describe('shadow run lifecycle and status endpoint', () => {
   async function makeAppWithStore(options: {
     enabled: boolean
     store: MarketStore
+    env?: Record<string, string | undefined>
   }) {
     const app = await buildApp({
-      config: serverConfigFrom(
-        options.enabled ? { MARKET_COLLECTOR_ENABLED: 'true' } : {},
-      ),
+      config: serverConfigFrom({
+        ...(options.enabled ? { MARKET_COLLECTOR_ENABLED: 'true' } : {}),
+        ...options.env,
+      }),
       overrides: {
         marketCollector: new FakeMarketCollector(),
         marketStore: options.store,
@@ -410,6 +412,23 @@ describe('shadow run lifecycle and status endpoint', () => {
       run?.startedAt,
     )
     await secondApp.close()
+  })
+
+  it('creates the shadow run id configured through SHADOW_RUN_ID', async () => {
+    const store = new MarketStore({ path: storePath() })
+    const app = await makeAppWithStore({
+      enabled: true,
+      store,
+      env: { SHADOW_RUN_ID: 'shadow:BTC-EUR:kraken-1' },
+    })
+
+    await app.ready()
+    expect(store.shadowRunCount()).toBe(1)
+    const run = store.getShadowRun('shadow:BTC-EUR:kraken-1')
+    expect(run?.id).toBe('shadow:BTC-EUR:kraken-1')
+    expect(run?.status).toBe('collecting')
+    expect(store.getShadowRun('shadow:BTC-EUR')).toBeUndefined()
+    await app.close()
   })
 
   it('does not create a shadow run when the collector is disabled', async () => {
