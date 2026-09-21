@@ -1,0 +1,27 @@
+docs/implementation-progress.md
+  s_b5839ed180143a::t_3712a43fb66436 36,911-962
+src/app/intelligence/IntelligenceStatusPanel.test.tsx
+  s_b5839ed180143a::t_5ed5a385f70028 1-111
+src/app/intelligence/intelligence-status.css
+  s_b5839ed180143a::t_1e21b186318ec3 1-78
+src/app/intelligence/useIntelligenceStream.test.ts
+  s_b5839ed180143a::t_4af7368bfd4150 1-141
+src/app/intelligence/useIntelligenceStream.ts
+  s_b5839ed180143a::t_542b6bb86f4174 1-416
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "81a55bc0e9ab3e648cd127b8c782246d5b4a4d24",
+  "prompts": {},
+  "sessions": {
+    "s_b5839ed180143a": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f3bbe8b00ffefYCOlrJYreUtf3",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
