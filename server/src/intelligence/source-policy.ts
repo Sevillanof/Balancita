@@ -3,6 +3,8 @@ import {
   type CorrectionStatus,
   type LicenseStatus,
   type NewsEvidence,
+  type NewsEventTaxonomy,
+  type NewsRelevance,
   type NewsSourceLevel,
 } from './contracts.ts'
 import {
@@ -32,6 +34,13 @@ export type SourcePolicyReasonCode =
   | 'empty_content_hash'
   | 'content_required'
   | 'invalid_content'
+  | 'empty_source_item_id'
+  | 'invalid_relevance'
+  | 'invalid_taxonomy'
+  | 'invalid_rule_version'
+  | 'invalid_metadata'
+  | 'correction_reference_required'
+  | 'content_too_long'
 
 export interface SourcePolicyReason extends ValidationIssue {
   readonly code: SourcePolicyReasonCode
@@ -77,6 +86,24 @@ function correctionStatus(value: unknown): value is CorrectionStatus {
   )
 }
 
+function relevance(value: unknown): value is NewsRelevance {
+  return (
+    value === 'relevant' || value === 'not_relevant' || value === 'uncertain'
+  )
+}
+
+function taxonomy(value: unknown): value is NewsEventTaxonomy {
+  return (
+    value === 'macro' ||
+    value === 'regulation' ||
+    value === 'market_structure' ||
+    value === 'technology' ||
+    value === 'exchange' ||
+    value === 'security' ||
+    value === 'other'
+  )
+}
+
 function validateContent(input: unknown): boolean {
   if (!isRecord(input) || typeof input.kind !== 'string') return false
   if (input.kind === 'metadata_only') return true
@@ -84,6 +111,18 @@ function validateContent(input: unknown): boolean {
     (input.kind === 'excerpt' || input.kind === 'summary') &&
     nonEmptyString(input.text)
   )
+}
+
+function validateMetadata(input: unknown): boolean {
+  if (!isRecord(input) || !nonEmptyString(input.title)) return false
+  if (input.title.length > 512) return false
+  if (input.author !== undefined && typeof input.author !== 'string')
+    return false
+  if (input.category !== undefined && typeof input.category !== 'string')
+    return false
+  if (input.feedUrl !== undefined && typeof input.feedUrl !== 'string')
+    return false
+  return true
 }
 
 export function validateNewsEvidence(
@@ -121,6 +160,15 @@ export function evaluateNewsSource(input: unknown): SourcePolicyDecision {
   }
   if (!nonEmptyString(input.source)) {
     reasons.push(reason('empty_source', 'source', 'Source is required.'))
+  }
+  if (!nonEmptyString(input.sourceItemId)) {
+    reasons.push(
+      reason(
+        'empty_source_item_id',
+        'sourceItemId',
+        'Source item identity is required for replay and correction tracking.',
+      ),
+    )
   }
 
   let parsedUrl: URL | undefined
@@ -245,12 +293,15 @@ export function evaluateNewsSource(input: unknown): SourcePolicyDecision {
         'Unknown correction status is not accepted.',
       ),
     )
-  } else if (input.correctionStatus === 'retracted') {
+  } else if (
+    input.correctionStatus !== 'original' &&
+    !nonEmptyString(input.correctionOfSourceItemId)
+  ) {
     reasons.push(
       reason(
-        'correction_retracted',
-        'correctionStatus',
-        'Retracted evidence cannot enter the pipeline.',
+        'correction_reference_required',
+        'correctionOfSourceItemId',
+        'Corrected and retracted evidence must reference prior source identity.',
       ),
     )
   }
@@ -276,6 +327,57 @@ export function evaluateNewsSource(input: unknown): SourcePolicyDecision {
         'Content must be metadata-only, a non-empty excerpt, or a non-empty summary.',
       ),
     )
+  } else if (
+    isRecord(input.content) &&
+    input.content.kind !== 'metadata_only' &&
+    typeof input.content.text === 'string' &&
+    input.content.text.length > 500
+  ) {
+    reasons.push(
+      reason(
+        'content_too_long',
+        'content.text',
+        'Stored content must be a short permitted fragment, never a full article.',
+      ),
+    )
+  }
+
+  if (!relevance(input.relevance)) {
+    reasons.push(
+      reason('invalid_relevance', 'relevance', 'Relevance is not supported.'),
+    )
+  }
+  if (!taxonomy(input.taxonomy)) {
+    reasons.push(
+      reason('invalid_taxonomy', 'taxonomy', 'News taxonomy is not supported.'),
+    )
+  }
+  if (!nonEmptyString(input.relevanceRuleVersion)) {
+    reasons.push(
+      reason(
+        'invalid_rule_version',
+        'relevanceRuleVersion',
+        'Relevance rule version is required.',
+      ),
+    )
+  }
+  if (!nonEmptyString(input.taxonomyRuleVersion)) {
+    reasons.push(
+      reason(
+        'invalid_rule_version',
+        'taxonomyRuleVersion',
+        'Taxonomy rule version is required.',
+      ),
+    )
+  }
+  if (!validateMetadata(input.metadata)) {
+    reasons.push(
+      reason(
+        'invalid_metadata',
+        'metadata',
+        'News metadata must contain a bounded non-empty title.',
+      ),
+    )
   }
 
   if (
@@ -284,9 +386,12 @@ export function evaluateNewsSource(input: unknown): SourcePolicyDecision {
     !sourceLevel(input.sourceLevel) ||
     !licenseStatus(input.licenseStatus) ||
     !correctionStatus(input.correctionStatus) ||
+    !relevance(input.relevance) ||
+    !taxonomy(input.taxonomy) ||
     !publishedAt.valid ||
     !ingestedAt.valid ||
-    !retrievedAt.valid
+    !retrievedAt.valid ||
+    !validateMetadata(input.metadata)
   ) {
     return { accepted: false, reasons }
   }
@@ -297,6 +402,7 @@ export function evaluateNewsSource(input: unknown): SourcePolicyDecision {
       instrumentId: 'BTC-EUR',
       source: input.source as string,
       sourceLevel: input.sourceLevel,
+      sourceItemId: input.sourceItemId as string,
       url: parsedUrl.href,
       publishedAt: publishedAt.value,
       ingestedAt: ingestedAt.value,
@@ -304,6 +410,16 @@ export function evaluateNewsSource(input: unknown): SourcePolicyDecision {
       contentHash: input.contentHash as string,
       licenseStatus: input.licenseStatus,
       correctionStatus: input.correctionStatus,
+      ...(input.correctionOfSourceItemId === undefined
+        ? {}
+        : {
+            correctionOfSourceItemId: input.correctionOfSourceItemId as string,
+          }),
+      relevance: input.relevance as NewsRelevance,
+      relevanceRuleVersion: input.relevanceRuleVersion as string,
+      taxonomy: input.taxonomy as NewsEventTaxonomy,
+      taxonomyRuleVersion: input.taxonomyRuleVersion as string,
+      metadata: input.metadata as NewsEvidence['metadata'],
       content: input.content as NewsEvidence['content'],
     },
     reasons: [],

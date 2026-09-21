@@ -17,6 +17,7 @@
   "dependencies": {
     "@fastify/cors": "^11.3.0",
     "@google/genai": "^2.23.0",
+    "fast-xml-parser": "^5.11.1",
     "fastify": "^5.12.5"
   },
   "devDependencies": {

@@ -12,6 +12,7 @@ const validEvidence: NewsEvidence = {
   instrumentId: 'BTC-EUR',
   source: 'European Central Bank',
   sourceLevel: 'official_primary',
+  sourceItemId: 'ecb-1',
   url: 'https://www.ecb.europa.eu/press/pr/date/html/index.en.html',
   publishedAt: time(1_000),
   ingestedAt: time(1_100),
@@ -19,6 +20,11 @@ const validEvidence: NewsEvidence = {
   contentHash: 'sha256:abc123',
   licenseStatus: 'official_public',
   correctionStatus: 'original',
+  relevance: 'relevant',
+  relevanceRuleVersion: 'news-relevance.v1',
+  taxonomy: 'macro',
+  taxonomyRuleVersion: 'news-taxonomy.v1',
+  metadata: { title: 'Bitcoin and EUR policy' },
   content: { kind: 'excerpt', text: 'Permitted fragment.' },
 }
 
@@ -79,6 +85,17 @@ describe('news source policy', () => {
         'invalid_correction_status',
       ]),
     )
+  })
+
+  it('accepts a referenced retraction for append-only historical storage', () => {
+    const retracted = evaluateNewsSource({
+      ...validEvidence,
+      correctionStatus: 'retracted',
+      correctionOfSourceItemId: validEvidence.sourceItemId,
+    })
+
+    expect(retracted.accepted).toBe(true)
+    expect(retracted.evidence?.correctionStatus).toBe('retracted')
   })
 
   it('rejects malformed external input with structured reasons instead of throwing', () => {

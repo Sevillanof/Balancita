@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <title>ECB Press</title>
+  <entry>
+    <id>https://www.ecb.europa.eu/press/pr/bitcoin-euro</id>
+    <title>ECB publishes Bitcoin and Euro payment technology review</title>
+    <link rel="alternate" href="/press/pr/bitcoin-euro" />
+    <updated>2026-09-21T14:00:00+02:00</updated>
+    <summary>Short feed summary is read for classification but is not persisted.</summary>
+    <category term="technology" />
+    <dc:creator>ECB</dc:creator>
+  </entry>
+</feed>

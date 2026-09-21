@@ -8,6 +8,8 @@ import {
   type ForecastOutcome,
   type ForecastHorizon,
   type ForecastRecord,
+  type NewsEvidenceRecord,
+  type NewsRelevance,
   type SupportedInstrumentId,
   type TimestampMs,
 } from '../contracts.ts'
@@ -17,12 +19,14 @@ import {
 } from '../forecast-validation.ts'
 import { contentHashFor } from '../forecast-hashing.ts'
 import { invalid, issue, type ValidationIssue } from '../validation.ts'
+import { validateNewsEvidence } from '../source-policy.ts'
+import { contentHashForNewsEvidence } from '../news/rss-normalizer.ts'
 import {
   validateNormalizedMarketPayload,
   type NormalizedMarketPayload,
 } from './market-payload.ts'
 
-const SCHEMA_VERSION = 2
+const SCHEMA_VERSION = 3
 
 export interface MarketStoreOptions {
   readonly path: string
@@ -115,6 +119,21 @@ export interface OutcomeInsertResult {
   readonly contentHash: string
 }
 
+export interface NewsEvidenceInsertResult {
+  readonly outcome: 'inserted' | 'duplicate'
+  readonly id: string
+  readonly version: string
+  readonly contentHash: string
+}
+
+export interface NewsEvidenceQuery {
+  readonly source?: string
+  readonly publishedAtFrom?: TimestampMs
+  readonly publishedAtTo?: TimestampMs
+  readonly relevance?: NewsRelevance
+  readonly usableOnly?: boolean
+}
+
 export class MarketStoreValidationError extends Error {
   readonly code = 'invalid_market_observation' as const
   readonly issues: readonly ValidationIssue[]
@@ -133,6 +152,17 @@ export class ForecastStoreValidationError extends Error {
   constructor(issues: readonly ValidationIssue[]) {
     super('Forecast ledger operation failed validation.')
     this.name = 'ForecastStoreValidationError'
+    this.issues = issues
+  }
+}
+
+export class NewsStoreValidationError extends Error {
+  readonly code = 'invalid_news_evidence' as const
+  readonly issues: readonly ValidationIssue[]
+
+  constructor(issues: readonly ValidationIssue[]) {
+    super('News evidence operation failed validation.')
+    this.name = 'NewsStoreValidationError'
     this.issues = issues
   }
 }
@@ -368,6 +398,124 @@ export class MarketStore {
   forecastCount(): number {
     const row = this.database
       .prepare('SELECT COUNT(*) AS count FROM forecast_records')
+      .get() as SqlRow
+    return Number(row.count)
+  }
+
+  insertNewsEvidence(input: unknown): NewsEvidenceInsertResult {
+    const validation = validateNewsEvidence(input)
+    if (!validation.valid) throw new NewsStoreValidationError(validation.issues)
+    const evidence = validation.value
+    if (contentHashForNewsEvidence(evidence) !== evidence.contentHash)
+      throw new NewsStoreValidationError([
+        issue(
+          'content_hash_mismatch',
+          'contentHash',
+          'News content hash does not match canonical metadata and provenance.',
+        ),
+      ])
+
+    const existing = this.database
+      .prepare(
+        `SELECT id, version, content_hash FROM news_evidence
+         WHERE source = ? AND source_item_id = ? AND content_hash = ?`,
+      )
+      .get(evidence.source, evidence.sourceItemId, evidence.contentHash) as
+      SqlRow | undefined
+    if (existing !== undefined)
+      return {
+        outcome: 'duplicate',
+        id: String(existing.id),
+        version: String(existing.version),
+        contentHash: String(existing.content_hash),
+      }
+
+    const id = `news:${evidence.source}:${createHash('sha256')
+      .update(evidence.sourceItemId)
+      .digest('hex')}`
+    const versionRow = this.database
+      .prepare(
+        'SELECT MAX(CAST(version AS INTEGER)) AS version FROM news_evidence WHERE id = ?',
+      )
+      .get(id) as SqlRow | undefined
+    const version = String(Number(versionRow?.version ?? 0) + 1)
+    const record: NewsEvidenceRecord = { ...evidence, id, version }
+    this.database
+      .prepare(
+        `INSERT INTO news_evidence
+          (id, version, source, source_level, source_item_id, canonical_url,
+           published_at, ingested_at, retrieved_at, content_hash, license_status,
+           correction_status, correction_of_source_item_id, relevance,
+           relevance_rule_version, taxonomy, taxonomy_rule_version, metadata_json,
+           content_json, record_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        record.id,
+        record.version,
+        record.source,
+        record.sourceLevel,
+        record.sourceItemId,
+        record.url,
+        record.publishedAt,
+        record.ingestedAt,
+        record.retrievedAt,
+        record.contentHash,
+        record.licenseStatus,
+        record.correctionStatus,
+        record.correctionOfSourceItemId ?? null,
+        record.relevance,
+        record.relevanceRuleVersion,
+        record.taxonomy,
+        record.taxonomyRuleVersion,
+        canonicalJson(record.metadata),
+        canonicalJson(record.content),
+        canonicalJson(record),
+      )
+    return { outcome: 'inserted', id, version, contentHash: record.contentHash }
+  }
+
+  listNewsEvidence(
+    query: NewsEvidenceQuery = {},
+  ): readonly NewsEvidenceRecord[] {
+    const clauses: string[] = []
+    const parameters: (string | number)[] = []
+    if (query.source !== undefined) {
+      clauses.push('source = ?')
+      parameters.push(query.source)
+    }
+    if (query.publishedAtFrom !== undefined) {
+      clauses.push('published_at >= ?')
+      parameters.push(query.publishedAtFrom)
+    }
+    if (query.publishedAtTo !== undefined) {
+      clauses.push('published_at <= ?')
+      parameters.push(query.publishedAtTo)
+    }
+    if (query.relevance !== undefined) {
+      clauses.push('relevance = ?')
+      parameters.push(query.relevance)
+    }
+    if (query.usableOnly === true) {
+      clauses.push(
+        `correction_status <> 'retracted' AND rowid IN
+         (SELECT MAX(rowid) FROM news_evidence GROUP BY id)`,
+      )
+    }
+    const where = clauses.length === 0 ? '' : ` WHERE ${clauses.join(' AND ')}`
+    const rows = this.database
+      .prepare(
+        `SELECT record_json FROM news_evidence${where} ORDER BY published_at, rowid`,
+      )
+      .all(...parameters) as SqlRow[]
+    return rows.map(
+      (row) => JSON.parse(String(row.record_json)) as NewsEvidenceRecord,
+    )
+  }
+
+  newsEvidenceCount(): number {
+    const row = this.database
+      .prepare('SELECT COUNT(*) AS count FROM news_evidence')
       .get() as SqlRow
     return Number(row.count)
   }
@@ -795,6 +943,40 @@ export class MarketStore {
           'INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)',
         )
         .run(2, this.clock())
+    }
+    if (currentVersion < 3) {
+      this.database.exec(`
+        CREATE TABLE IF NOT EXISTS news_evidence (
+          id TEXT NOT NULL,
+          version TEXT NOT NULL,
+          source TEXT NOT NULL,
+          source_level TEXT NOT NULL CHECK (source_level IN ('official_primary', 'licensed_reporting')),
+          source_item_id TEXT NOT NULL,
+          canonical_url TEXT NOT NULL,
+          published_at INTEGER NOT NULL,
+          ingested_at INTEGER NOT NULL,
+          retrieved_at INTEGER NOT NULL,
+          content_hash TEXT NOT NULL,
+          license_status TEXT NOT NULL CHECK (license_status IN ('official_public', 'licensed')),
+          correction_status TEXT NOT NULL CHECK (correction_status IN ('original', 'corrected', 'retracted')),
+          correction_of_source_item_id TEXT,
+          relevance TEXT NOT NULL CHECK (relevance IN ('relevant', 'not_relevant', 'uncertain')),
+          relevance_rule_version TEXT NOT NULL,
+          taxonomy TEXT NOT NULL CHECK (taxonomy IN ('macro', 'regulation', 'market_structure', 'technology', 'exchange', 'security', 'other')),
+          taxonomy_rule_version TEXT NOT NULL,
+          metadata_json TEXT NOT NULL,
+          content_json TEXT NOT NULL,
+          record_json TEXT NOT NULL,
+          PRIMARY KEY (id, version),
+          UNIQUE (source, canonical_url, content_hash),
+          UNIQUE (source, source_item_id, content_hash)
+        ) STRICT;
+      `)
+      this.database
+        .prepare(
+          'INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)',
+        )
+        .run(3, this.clock())
     }
   }
 }

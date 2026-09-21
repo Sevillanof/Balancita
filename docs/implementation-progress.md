@@ -30,6 +30,7 @@
 | B     | Durable BTC-EUR market ingestion      | ✅ done                   | 104 server      | 806abc6, 4641803, 9b3b994 |
 | C     | Intraday candles + technical engine   | ✅ done                   | 118 server      | 7ea7107                   |
 | D     | Immutable forecasts + deferred scorer | ✅ done                   | 133 server      | fd6a764…565f8d6 (4)       |
+| E     | Reliable official RSS news evidence   | ✅ done                   | 146 server      | working tree              |
 | 10    | Broker paper trading                  | ⏸ pending                 | —               | —                         |
 | 11    | Real trading evaluation               | ⏸ pending                 | —               | —                         |
 | 12    | Jev spike                             | ⏸ pending                 | —               | —                         |
@@ -732,6 +733,72 @@ when already versioned and ingested no later than the evidence cutoff.
   empty inputs. No UI, news ingestion, Gemini call, order call, backtest, or
   random forecast was added. Phase E remains the next authorized step.
 
+## Fase E — Reliable official RSS news evidence
+
+Phase E is implemented as a server-only, read-only RSS/Atom ingestion pipeline.
+It does not start periodic timers, expose an endpoint, call Gemini, combine news
+with technical signals, or touch the paper-trading authority.
+
+- **Official sources verified on 2026-09-21**: SEC RSS documentation and press
+  releases feed (`https://www.sec.gov/about/rss-feeds`,
+  `https://www.sec.gov/news/pressreleases.rss`), ECB press RSS
+  (`https://www.ecb.europa.eu/rss/press.html` and the official RSS directory),
+  and Federal Reserve all-press RSS
+  (`https://www.federalreserve.gov/feeds/press_all.xml` and the official feed
+  directory). CFTC remains pending because it was not verifiable in the prior
+  consultation; it is not implemented and this does not claim that it is absent.
+- **Terms, licence, robots, and quota evidence**: SEC Developer Resources
+  documents declared user agents, efficient fetching, and a maximum of 10
+  requests/second; the SEC RSS page identifies press releases as an official
+  RSS source. Direct SEC requests returned HTTP 403 from this environment, so
+  tests use fixtures and the adapter does not claim successful live retrieval.
+  ECB's copyright page permits accurate free reproduction with source citation;
+  its `robots.txt` specifies a 5-second crawl delay and does not disallow the
+  press RSS path. The Federal Reserve RSS page documents the feed and its
+  disclaimer states that Board website information is public domain unless
+  otherwise indicated, with citation required; no Federal Reserve quota or
+  robots directive was found in the official pages consulted. The implementation
+  stores only metadata and links, not a redistribution of article bodies.
+- **Dependency**: `fast-xml-parser@5.11.1` (MIT) is the only new dependency. It
+  validates XML, removes namespace prefixes, handles attributes/text nodes, and
+  is configured with bounded entity processing; regex is not used as the XML
+  parser.
+- **Collector/normalizer**: `server/src/intelligence/news/` exposes the
+  `RssNewsCollector`/`NewsCollector` contract, source ids, injected HTTP fetcher,
+  user-agent, clock, timeout and abort signal. RSS 2.0 and Atom entries support
+  namespaces, missing fields, relative links, duplicate identities and malformed
+  XML. `RssNewsNormalizer` emits HTTPS canonical URLs, publication/ingestion/
+  retrieval timestamps, deterministic SHA-256 content hashes, explicit source
+  item identity, metadata-only content, licence and correction status.
+- **Source policy**: only official primary sources with `official_public`
+  licence status are active. Social sources, unknown/permission-required
+  licences, unsupported instruments and incomplete provenance are rejected.
+  Corrections and retractions are accepted as historical evidence only when
+  they reference the source item; they append a new version and never overwrite
+  prior evidence. Retracted latest versions are excluded from usable evidence.
+- **Relevance and taxonomy**: `news-relevance.v1` requires a BTC/Bitcoin token
+  plus an EUR/Euro token for `relevant`; BTC without EUR is `uncertain`, and
+  text without BTC is `not_relevant`. `news-taxonomy.v1` applies deterministic
+  precedence for `security`, `market_structure`, `regulation`, `exchange`,
+  `technology`, and `macro`; unmatched text uses `other` with an uncertain
+  classification. Uncertain and non-relevant items are retained for audit but
+  excluded from future signal queries.
+- **SQLite v3**: `MarketStore` migration v3 adds append-only `news_evidence`
+  with source/item/url/hash uniqueness, versioned correction references,
+  provenance, relevance/taxonomy versions, bounded metadata/content JSON and
+  full normalized record JSON. It exposes idempotent insertion plus read-only
+  queries by source, publication window, relevance and latest usable version.
+  Article descriptions are used transiently for classification and are never
+  persisted; tests assert that full article text cannot enter stored evidence.
+- **Tests and limits**: 13 new server tests use local SEC/ECB/Fed RSS/Atom
+  fixtures and fake HTTP. They cover namespaces, missing fields, invalid XML/
+  dates/URLs, relative and duplicate links, correction/retraction append-only
+  behavior, policy rejection, relevance boundaries, taxonomy abstention,
+  provenance/hash determinism, SQLite replay/restart/query, timeout/abort and
+  no full-article persistence. No real network, secrets,
+  `OrderExecutionProvider`, Gemini, UI, periodic scheduling, F/G/H/I work, or
+  complete article storage was added.
+
 ## 9. How to resume
 
 1. Read `doc/personal-trading-app.md` (read-only) for the exact prompt of the
@@ -739,6 +806,6 @@ when already versioned and ingested no later than the evidence cutoff.
 2. Read this file for context, then Engram (`engine: mem_search "balancita"`)
    for worker reports.
 3. Run `pnpm test` and `pnpm test:server` to confirm the current baseline
-   (352 frontend, 133 server tests expected).
+   (352 frontend, 146 server tests expected).
 4. Execute the next phase with TDD work units; commit; verify gates; update this
    file's status table.

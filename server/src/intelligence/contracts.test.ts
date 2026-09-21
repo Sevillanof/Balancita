@@ -98,6 +98,12 @@ describe('intelligence contracts', () => {
           status: 'live',
           evidence: {
             ...evidence,
+            sourceItemId: 'fixture-1',
+            relevance: 'relevant',
+            relevanceRuleVersion: 'news-relevance.v1',
+            taxonomy: 'other',
+            taxonomyRuleVersion: 'news-taxonomy.v1',
+            metadata: { title: raw.title },
             content: { kind: 'excerpt', text: raw.title },
           },
         },

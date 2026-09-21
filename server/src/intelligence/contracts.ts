@@ -95,10 +95,29 @@ export type PermittedNewsContent =
   | { readonly kind: 'metadata_only' }
   | { readonly kind: 'excerpt' | 'summary'; readonly text: string }
 
+export type NewsRelevance = 'relevant' | 'not_relevant' | 'uncertain'
+
+export type NewsEventTaxonomy =
+  | 'macro'
+  | 'regulation'
+  | 'market_structure'
+  | 'technology'
+  | 'exchange'
+  | 'security'
+  | 'other'
+
+export interface NewsMetadata {
+  readonly title: string
+  readonly author?: string
+  readonly category?: string
+  readonly feedUrl?: string
+}
+
 export interface NewsEvidence {
   readonly instrumentId: SupportedInstrumentId
   readonly source: string
   readonly sourceLevel: NewsSourceLevel
+  readonly sourceItemId: string
   readonly url: string
   readonly publishedAt: TimestampMs
   readonly ingestedAt: TimestampMs
@@ -106,7 +125,18 @@ export interface NewsEvidence {
   readonly contentHash: string
   readonly licenseStatus: LicenseStatus
   readonly correctionStatus: CorrectionStatus
+  readonly correctionOfSourceItemId?: string
+  readonly relevance: NewsRelevance
+  readonly relevanceRuleVersion: string
+  readonly taxonomy: NewsEventTaxonomy
+  readonly taxonomyRuleVersion: string
+  readonly metadata: NewsMetadata
   readonly content: PermittedNewsContent
+}
+
+export interface NewsEvidenceRecord extends NewsEvidence {
+  readonly id: string
+  readonly version: string
 }
 
 export type NewsStatus = 'live' | 'stale' | 'invalid'
