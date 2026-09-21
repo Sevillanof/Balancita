@@ -1,0 +1,27 @@
+server/package.json
+  s_96dfbbc1ae2b7b::t_aa72ef5de07859 20
+server/pnpm-lock.yaml
+  s_96dfbbc1ae2b7b::t_07baa1d7d43734 17-19,76-78,258-260,344-350,410-412,540-543,651-653,787-790,841-842,955-956,1021-1034,1119-1120,1224-1225,1339-1342,1402-1403
+server/src/intelligence/market/market-store.ts
+  s_96dfbbc1ae2b7b::t_061fe2a19e0509 11-12,22-23,29,122-136,159-169,405-522,947-980
+server/src/intelligence/news/news-store.test.ts
+  s_96dfbbc1ae2b7b::t_9337d105306f23 1-130
+server/src/intelligence/source-policy.ts
+  s_96dfbbc1ae2b7b::t_c3b7d36c38bbac 6-7,37-43,89-106,116-127,164-172,296-299,302-304,330-380,389-390,393-394,405,413-422
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "33365cc49e59a6324f28c965ad9bfc2412e4d1ad",
+  "prompts": {},
+  "sessions": {
+    "s_96dfbbc1ae2b7b": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f3bdfd258ffeu0lRRddoZInrso",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
