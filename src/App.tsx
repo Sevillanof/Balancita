@@ -93,7 +93,7 @@ function App({
         analysisFallback={analysisMode === 'ai' ? activeAnalysis : undefined}
         dataMode={
           provider === undefined &&
-          import.meta.env.VITE_MARKET_DATA_PROVIDER === 'coinbase'
+          import.meta.env.VITE_MARKET_DATA_PROVIDER === 'kraken'
             ? 'real'
             : 'simulated'
         }

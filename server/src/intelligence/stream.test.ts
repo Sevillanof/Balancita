@@ -18,7 +18,7 @@ function envelope(eventTime: number, receivedTime: number, sequence: number) {
   })
   if (!freshness.valid) throw new Error('fixture freshness is invalid')
   return {
-    source: 'coinbase_exchange',
+    source: 'kraken',
     symbol: 'BTC-EUR',
     instrumentId: 'BTC-EUR',
     eventTime,

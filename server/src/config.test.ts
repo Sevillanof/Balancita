@@ -18,7 +18,6 @@ describe('serverConfigFrom', () => {
     expect(config.apiKey).toBe('')
     expect(config.marketCollectorEnabled).toBe(false)
     expect(config.marketDbPath).toBe('./data/market.sqlite')
-    expect(config.coinbaseWsUrl).toBe('wss://ws-feed.exchange.coinbase.com')
     expect(config.krakenWsUrl).toBe('wss://ws.kraken.com/v2')
     expect(config.krakenRestUrl).toBe('https://api.kraken.com/0')
     expect(config.marketStaleAfterMs).toBe(15_000)
@@ -43,7 +42,6 @@ describe('serverConfigFrom', () => {
       GEMINI_SERVER_CORS_ORIGIN: 'http://localhost:4000',
       MARKET_COLLECTOR_ENABLED: 'true',
       MARKET_DB_PATH: '/tmp/balancita-market.sqlite',
-      COINBASE_WS_URL: 'wss://example.invalid',
       KRAKEN_WS_URL: 'wss://kraken.example.invalid/v2',
       KRAKEN_REST_URL: 'https://kraken.example.invalid/0',
       MARKET_STALE_AFTER_MS: '5000',
@@ -66,7 +64,6 @@ describe('serverConfigFrom', () => {
     expect(config.corsOrigin).toBe('http://localhost:4000')
     expect(config.marketCollectorEnabled).toBe(true)
     expect(config.marketDbPath).toBe('/tmp/balancita-market.sqlite')
-    expect(config.coinbaseWsUrl).toBe('wss://example.invalid')
     expect(config.krakenWsUrl).toBe('wss://kraken.example.invalid/v2')
     expect(config.krakenRestUrl).toBe('https://kraken.example.invalid/0')
     expect(config.marketStaleAfterMs).toBe(5000)

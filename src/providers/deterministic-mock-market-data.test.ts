@@ -27,7 +27,7 @@ describe('catalog', () => {
       displayName: 'Bitcoin / Euro',
       assetClass: 'crypto',
       currency: 'EUR',
-      exchange: 'Coinbase',
+      exchange: 'Mock',
     })
     expect(byId.get('TTWO')).toMatchObject({
       symbol: 'TTWO',

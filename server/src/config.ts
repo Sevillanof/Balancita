@@ -23,7 +23,6 @@ export interface ServerConfig {
   corsOrigin: string
   marketCollectorEnabled: boolean
   marketDbPath: string
-  coinbaseWsUrl: string
   krakenWsUrl: string
   krakenRestUrl: string
   marketStaleAfterMs: number
@@ -85,11 +84,6 @@ export function serverConfigFrom(
       false,
     ),
     marketDbPath: stringValue(env, 'MARKET_DB_PATH', './data/market.sqlite'),
-    coinbaseWsUrl: stringValue(
-      env,
-      'COINBASE_WS_URL',
-      'wss://ws-feed.exchange.coinbase.com',
-    ),
     krakenWsUrl: stringValue(env, 'KRAKEN_WS_URL', 'wss://ws.kraken.com/v2'),
     krakenRestUrl: stringValue(
       env,

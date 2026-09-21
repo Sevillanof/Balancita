@@ -14,7 +14,7 @@ const baseSnapshot = {
     message: 'Market intelligence pipeline is ready.',
   },
   market: {
-    source: 'coinbase_exchange',
+    source: 'kraken',
     instrumentId: 'BTC-EUR' as const,
     status: 'live' as const,
     price: 60_000,

@@ -12,7 +12,7 @@ export const BTC_EUR: Instrument = {
   displayName: 'Bitcoin / Euro',
   assetClass: 'crypto',
   currency: 'EUR',
-  exchange: 'Coinbase',
+  exchange: 'Mock',
   providerSymbols: { mock: 'BTC-EUR' },
 }
 

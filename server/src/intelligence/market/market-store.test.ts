@@ -23,7 +23,7 @@ function envelope(
   overrides: Partial<MarketDataEnvelope<NormalizedMarketPayload>> = {},
 ): MarketDataEnvelope<NormalizedMarketPayload> {
   return {
-    source: 'coinbase_exchange',
+    source: 'kraken',
     symbol: 'BTC-EUR',
     instrumentId: 'BTC-EUR',
     eventTime: 1_000 as TimestampMs,
@@ -182,9 +182,9 @@ describe('MarketStore', () => {
   it('persists cursor and evidence-backed gaps across a store restart', () => {
     const path = makePath()
     const first = new MarketStore({ path })
-    first.beginConnection('coinbase_exchange', 'BTC-EUR')
+    first.beginConnection('kraken', 'BTC-EUR')
     first.updateCursor({
-      source: 'coinbase_exchange',
+      source: 'kraken',
       instrumentId: 'BTC-EUR',
       lastSequence: 11,
       lastTradeId: 21,
@@ -193,7 +193,7 @@ describe('MarketStore', () => {
       freshnessAgeMs: 100,
     })
     first.recordGap({
-      source: 'coinbase_exchange',
+      source: 'kraken',
       instrumentId: 'BTC-EUR',
       prevSequence: 21,
       currentSequence: 23,
@@ -203,7 +203,7 @@ describe('MarketStore', () => {
     first.close()
 
     const second = new MarketStore({ path })
-    const cursor = second.getCursor('coinbase_exchange', 'BTC-EUR')
+    const cursor = second.getCursor('kraken', 'BTC-EUR')
     expect(cursor).toMatchObject({
       lastSequence: 11,
       lastTradeId: 21,

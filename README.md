@@ -2,7 +2,7 @@
 
 A local-first personal trading workspace. It renders a realtime watchlist and an
 instrument detail view with a candlestick chart. Mock market data remains the
-default; Coinbase Exchange read-only mode is available for BTC-EUR only.
+default; Kraken read-only mode is available for BTC-EUR only.
 
 ## Requirements
 
@@ -30,19 +30,18 @@ picks the next free port when 5173 is already in use.
 ### Market data mode
 
 The default mode is deterministic mock data for BTC-EUR, TTWO, and SPCX. To use
-the approved Coinbase Exchange read-only feed locally, start Vite with:
+the Kraken read-only feed locally, start Vite with:
 
 ```bash
-VITE_MARKET_DATA_PROVIDER=coinbase pnpm dev
+VITE_MARKET_DATA_PROVIDER=kraken pnpm dev
 ```
 
-Coinbase mode uses public, unauthenticated REST and WebSocket market-data
-endpoints and exposes only BTC-EUR. TTWO and SPCX remain mock-only. Coinbase's
-Market Data Terms restrict redistribution or display outside the organization
-without prior written consent, so this mode is for local/internal use only.
-Paper trading always uses the deterministic mock feed and its existing local
-simulator authority; Coinbase prices are never used to execute or simulate
-orders.
+Kraken mode uses public, unauthenticated REST and WebSocket market-data
+endpoints and exposes only BTC-EUR. TTWO and SPCX remain mock-only. This mode is
+for local/internal personal use only, and Kraken market data is not redistributed
+to third parties. Kraken's terms of use were last reviewed on 2026-09-21. Paper
+trading always uses the deterministic mock feed and its existing local simulator
+authority; Kraken prices are never used to execute or simulate orders.
 
 ## Scripts
 
@@ -67,8 +66,8 @@ code they verify (e.g. `src/App.test.tsx`).
 
 The default watchlist shows deterministic mock instruments with realtime mock
 quotes, and selecting an instrument opens a detail view with its price summary
-and a mock candlestick chart. In Coinbase mode the catalog is filtered to the
-public BTC-EUR product and the same UI consumes read-only live/history data. A
+and a mock candlestick chart. In Kraken mode the catalog is filtered to the
+public BTC-EUR pair and the same UI consumes read-only live/history data. A
 workspace tab list switches between Watchlist and Portfolio. The portfolio keeps
 manual positions (quantity and average cost) in localStorage behind a versioned
 `PortfolioRepository`, subscribes to the selected market source for eligible
