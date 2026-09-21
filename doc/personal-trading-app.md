@@ -6,33 +6,34 @@ tags:
   - frontend/typescript
   - ai/gemini
 created: 2026-09-19
-updated: 2026-09-19
-status: idea
+updated: 2026-09-21
+status: active
 ---
 
 # Personal Trading App: fuente de verdad y prompts
 
 > [!abstract] Decisión actual
-> Construir una aplicación de trading de uso personal, local-first y con costo fijo inicial de **USD 0**. La primera versión usa datos mock deterministas y no se conecta a brokers, mercados ni Gemini. Cada integración externa se incorpora después, detrás de una interfaz y con una prueba explícita de valor.
+> Consolidar una aplicación de trading de uso personal, local-first y con costo fijo inicial de **USD 0**. La experiencia principal se concentra en `BTC-EUR`, combina cotizaciones observadas con paper trading y análisis local determinista, y evoluciona hacia inteligencia de mercado basada en evidencia temporal y noticias trazables. Sus estimaciones son probabilísticas, se evalúan con el paso del tiempo y nunca autorizan ni ejecutan órdenes.
 
 Este documento define el producto, sus límites, la arquitectura evolutiva y los prompts que guían cada incremento. Si el código, una conversación o una propuesta contradicen este archivo, se debe detener el trabajo y actualizar primero la decisión correspondiente.
 
 ## Estado rápido
 
 | Tema | Estado |
-|------|--------|
-| Repositorio de implementación | Pendiente; este repositorio no es el destino de la aplicación |
-| Producto | Definido a nivel conceptual |
-| Datos | Mock, locales y deterministas |
-| Trading | Fuera del MVP inicial |
-| Gemini | Opcional y desactivado por defecto |
+| --- | --- |
+| Repositorio de implementación | Activo en este repositorio |
+| Producto | Workspace personal de una sola pantalla centrado en `BTC-EUR` |
+| Datos | Cotización observada de Coinbase; mocks deterministas para pruebas y degradación segura |
+| Trading | Paper trading local con comisiones; sin dinero ni órdenes reales |
+| Análisis | Local y determinista por defecto |
+| Gemini | Manual, opcional y desactivado por defecto |
 | Jev | Diferido hasta validar el producto |
 | Costo fijo objetivo | USD 0 durante el desarrollo local |
-| Fase activa | Fase 0: preparar el proyecto |
+| Próximo incremento | Base de inteligencia de mercado `BTC-EUR`: contratos, semántica temporal y evidencia durable |
 
 ## Visión
 
-Una herramienta personal para observar instrumentos, entender la evolución de una cartera y ensayar decisiones sin mover dinero real. Debe comenzar como una aplicación local con datos simulados y evolucionar, mediante límites claros, hacia datos de mercado, paper trading y eventualmente órdenes reales.
+Una herramienta personal para observar instrumentos, entender la evolución de una cartera y ensayar decisiones sin mover dinero real. Debe permitir estudiar `BTC-EUR` mediante análisis técnico y noticias confiables, producir estimaciones probabilísticas trazables y medir honestamente su calidad con evidencia posterior. Cualquier evolución hacia órdenes reales permanece separada y requiere una decisión explícita.
 
 ### Instrumentos iniciales
 
@@ -44,15 +45,19 @@ Una herramienta personal para observar instrumentos, entender la evolución de u
 
 Un ticker no es una identidad suficiente. Antes de consumir datos reales, cada instrumento debe tener `symbol`, nombre, clase, moneda, bolsa/MIC y símbolo específico del proveedor.
 
+La watchlist puede conservar otros instrumentos, pero la primera canalización de inteligencia de mercado y pronósticos cubre únicamente `BTC-EUR`. Ampliar esa cobertura requiere evidencia de calidad equivalente y una decisión posterior.
+
 ## Objetivos
 
-1. Visualizar una watchlist y precios simulados que cambien en tiempo real.
+1. Visualizar una watchlist y cotizaciones cuyo origen, estado y frescura sean visibles.
 2. Consultar detalle, velas y variación de cada instrumento.
 3. Registrar una cartera personal y calcular su valoración con datos mock.
 4. Crear alertas locales.
 5. Simular órdenes y posiciones sin conectarse a un broker.
 6. Incorporar análisis asistido por IA sin permitir que la IA ejecute órdenes.
 7. Reemplazar proveedores mock por adaptadores reales de forma gradual.
+8. Combinar análisis técnico y noticias confiables para generar estimaciones probabilísticas de `BTC-EUR`.
+9. Conservar el historial de cada estimación y evaluar su calibración y precisión sin información futura.
 
 ## Fuera de alcance inicial
 
@@ -63,7 +68,7 @@ Un ticker no es una identidad suficiente. Antes de consumir datos reales, cada i
 - Aplicación móvil nativa.
 - Despliegue permanente en la nube.
 - Microservicios, colas, Redis, Kubernetes o infraestructura distribuida.
-- Backtesting cuantitativo avanzado.
+- Backtesting cuantitativo avanzado de estrategias; la evaluación prospectiva de pronósticos sí forma parte del producto.
 
 ## Principios no negociables
 
@@ -77,6 +82,11 @@ Un ticker no es una identidad suficiente. Antes de consumir datos reales, cada i
 8. **Secretos sólo en servidor:** ninguna clave se incluye en frontend, logs, fixtures, commits o prompts.
 9. **Degradación segura:** si una integración falla o agota su cuota, la aplicación continúa con mocks o informa el estado sin romperse.
 10. **Sin automatización financiera implícita:** cada paso hacia trading real requiere una decisión y una fase independiente.
+11. **Frescura medible:** ningún dato se presenta como “tiempo real” sin registrar su tiempo de evento, recepción y visualización, además de su antigüedad observable.
+12. **Noticias trazables:** cada noticia usada como evidencia conserva fuente, URL, fecha de publicación, fecha de ingestión y estado de licencia; una fuente social o no verificada no participa inicialmente en las señales.
+13. **Base determinista antes que IA:** cualquier pronóstico asistido por IA se compara primero con un análisis determinista reproducible.
+14. **Pronósticos inmutables:** una estimación registrada no se reescribe; su resultado se incorpora después mediante un registro separado y append-only.
+15. **Evaluación temporal honesta:** los pronósticos se evalúan de forma prospectiva o walk-forward, sin velas abiertas ni noticias conocidas después del corte de evidencia.
 
 ## Arquitectura evolutiva
 
