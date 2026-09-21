@@ -1,0 +1,19 @@
+docs/implementation-progress.md
+  s_dcc51446419ee4::t_c92072cb4da75e 515-559
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2b1cc7c42dc574c9f05e59ada07cdb66c8435c23",
+  "prompts": {},
+  "sessions": {
+    "s_dcc51446419ee4": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f3c15868effeimK5m6W3VNrUEI",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
