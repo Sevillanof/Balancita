@@ -31,7 +31,7 @@
 | C     | Intraday candles + technical engine   | ✅ done                   | 118 server      | 7ea7107                   |
 | D     | Immutable forecasts + deferred scorer | ✅ done                   | 133 server      | fd6a764…565f8d6 (4)       |
 | E     | Reliable official RSS news evidence   | ✅ done                   | 146 server      | 33365cc                   |
-| F     | Deterministic news analysis + Gemini  | ✅ done                   | 162 server      | working tree              |
+| F     | Deterministic news analysis + Gemini  | ✅ done                   | 162 server      | 55fedd3                   |
 | 10    | Broker paper trading                  | ⏸ pending                 | —               | —                         |
 | 11    | Real trading evaluation               | ⏸ pending                 | —               | —                         |
 | 12    | Jev spike                             | ⏸ pending                 | —               | —                         |
