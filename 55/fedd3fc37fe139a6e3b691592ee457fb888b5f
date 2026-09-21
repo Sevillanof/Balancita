@@ -1,0 +1,18 @@
+docs/implementation-progress.md
+  h_2f68313623be98 33-34,810,813-862
+server/src/intelligence/news/news-analysis.test.ts
+  h_2f68313623be98 1-479
+server/src/intelligence/news/news-analysis.ts
+  h_2f68313623be98 1-807
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "55fedd3fc37fe139a6e3b691592ee457fb888b5f",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
