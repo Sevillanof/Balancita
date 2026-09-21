@@ -24,6 +24,10 @@ const INSTRUMENT = 'BTC-EUR' as const
 const DEFAULT_REST_BASE_URL = 'https://api.kraken.com/0'
 const DEFAULT_CATCH_UP_MAX_ATTEMPTS = 3
 const DEFAULT_CATCH_UP_BACKOFF_MS = 250
+// Kraken stamps trades with the exchange clock, which can lead the local clock
+// by a few milliseconds. That small lead is clamped; a larger lead means the
+// local clock is genuinely wrong and the trade is rejected instead.
+const MAX_EVENT_TIME_LEAD_MS = 5_000
 
 type TimerId = number | ReturnType<typeof setTimeout>
 
@@ -450,13 +454,26 @@ export class KrakenMarketCollector {
     payload: NormalizedMarketPayload,
     eventTime: TimestampMs,
   ): MarketDataEnvelope<NormalizedMarketPayload> | null {
-    const receivedTime = this.clock() as TimestampMs
+    const receivedAt = this.clock() as TimestampMs
+    if (eventTime - receivedAt > MAX_EVENT_TIME_LEAD_MS) {
+      this.reject(
+        'invalid_time',
+        'Kraken event time is implausibly ahead of the local clock.',
+      )
+      return null
+    }
+    // A live trade can arrive a few milliseconds "ahead" of the local clock.
+    // Keep the exchange event time verbatim, but never record a receive
+    // instant that precedes it: clamp the local instant up to the event time.
+    const receivedTime = (
+      receivedAt < eventTime ? eventTime : receivedAt
+    ) as TimestampMs
     const displayTime = receivedTime
     const freshness = deriveDataFreshness({
       eventTime,
       displayTime,
       staleAfterMs: this.staleAfterMs,
-      clockSkewPolicy: 'reject',
+      clockSkewPolicy: 'clamp_to_zero',
     })
     if (!freshness.valid) {
       this.reject(

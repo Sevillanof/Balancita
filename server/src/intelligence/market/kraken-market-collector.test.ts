@@ -260,6 +260,61 @@ describe('KrakenMarketCollector', () => {
     store.close()
   })
 
+  it('accepts live trades timestamped slightly ahead of the local clock', () => {
+    const socket = new FakeSocket()
+    const rejections: { code: string }[] = []
+    const { collector, store } = makeCollector({
+      sockets: [socket],
+      now: () => WALL_CLOCK,
+      onRejected: (rejection) => rejections.push(rejection),
+    })
+
+    collector.start('BTC-EUR')
+    socket.open()
+    // Kraken timestamps trades with the exchange clock. A sub-second lead over
+    // the local clock is normal and must not be rejected as invalid, otherwise
+    // every live trade would be dropped and the venue would look stale.
+    socket.message(trade({ tradeId: 100, time: '2026-09-21T10:00:02.045000Z' }))
+
+    expect(store.observationCount()).toBe(1)
+    expect(rejections).toEqual([])
+    const [observation] = store.listObservations()
+    // The exchange event time is preserved verbatim, and the local receive
+    // instant is clamped up so it never precedes the event.
+    expect(observation?.eventTime).toBe(Date.parse('2026-09-21T10:00:02.045Z'))
+    expect(observation?.receivedTime).toBe(
+      Date.parse('2026-09-21T10:00:02.045Z'),
+    )
+    expect(observation?.displayTime).toBe(
+      Date.parse('2026-09-21T10:00:02.045Z'),
+    )
+
+    collector.stop()
+    store.close()
+  })
+
+  it('rejects trades timestamped implausibly far ahead of the local clock', () => {
+    const socket = new FakeSocket()
+    const rejections: { code: string }[] = []
+    const { collector, store } = makeCollector({
+      sockets: [socket],
+      now: () => WALL_CLOCK,
+      onRejected: (rejection) => rejections.push(rejection),
+    })
+
+    collector.start('BTC-EUR')
+    socket.open()
+    socket.message(trade({ tradeId: 100, time: '2026-09-21T10:00:30.000000Z' }))
+
+    expect(store.observationCount()).toBe(0)
+    expect(rejections.map((rejection) => rejection.code)).toEqual([
+      'invalid_time',
+    ])
+
+    collector.stop()
+    store.close()
+  })
+
   it('drops duplicate and out-of-order trade ids without persisting twice', () => {
     const socket = new FakeSocket()
     const rejections: { code: string }[] = []
