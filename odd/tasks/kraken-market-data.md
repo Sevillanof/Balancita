@@ -53,6 +53,8 @@ comparable while preserving their separate evidence modes.
   separate user authorization.
 - TDD mode: enabled by the repository's strict TDD instruction.
 - Runners: `pnpm test` and `pnpm test:server`, plus focused Vitest commands.
+- RDD mode: disabled for this clone by explicit user decision after the native
+  provider failed before review authority mutation.
 
 ## Tasks
 
@@ -95,13 +97,13 @@ comparable while preserving their separate evidence modes.
 
 ## Progress and evidence
 
-| Task  | Status   | Evidence                                                                  | Commit  | Review status      |
-| ----- | -------- | ------------------------------------------------------------------------- | ------- | ------------------ |
-| KRA-1 | Complete | Prettier passed; reference audit found only a preserved historical record | Pending | Pending assessment |
-| KRA-2 | Pending  | —                                                                         | —       | Not assessed       |
-| KRA-3 | Pending  | —                                                                         | —       | Not assessed       |
-| KRA-4 | Pending  | —                                                                         | —       | Not assessed       |
-| KRA-5 | Pending  | —                                                                         | —       | Not assessed       |
+| Task  | Status   | Evidence                                                                  | Commit    | Review status      |
+| ----- | -------- | ------------------------------------------------------------------------- | --------- | ------------------ |
+| KRA-1 | Complete | Prettier passed; reference audit found only a preserved historical record | `e4a35ef` | disabled/unmanaged |
+| KRA-2 | Pending  | —                                                                         | —         | disabled/unmanaged |
+| KRA-3 | Pending  | —                                                                         | —         | disabled/unmanaged |
+| KRA-4 | Pending  | —                                                                         | —         | disabled/unmanaged |
+| KRA-5 | Pending  | —                                                                         | —         | disabled/unmanaged |
 
 ## Next step
 
