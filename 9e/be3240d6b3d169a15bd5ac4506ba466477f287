@@ -1,0 +1,31 @@
+server/src/intelligence/replay/kraken-observation-import.test.ts
+  s_0c74f32d4bde79::t_99c7594fe95851 1-279
+server/src/intelligence/replay/kraken-observation-import.ts
+  s_0c74f32d4bde79::t_c5a98a5f1e63ba 1-272
+server/src/intelligence/replay/replay-cli.ts
+  s_0c74f32d4bde79::t_39ecb2fbbdd8f0 1-121
+server/src/intelligence/replay/replay-metrics-summary.test.ts
+  s_0c74f32d4bde79::t_8d2e79980fe044 1-166
+server/src/intelligence/replay/replay-metrics-summary.ts
+  s_0c74f32d4bde79::t_9ea344eb4d28b0 1-105
+server/src/intelligence/replay/replay-runner.test.ts
+  s_0c74f32d4bde79::t_fc5a8b1061687a 1-165
+server/src/intelligence/replay/replay-runner.ts
+  s_0c74f32d4bde79::t_bb7fb50178f3c2 1-150
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9ebe3240d6b3d169a15bd5ac4506ba466477f287",
+  "prompts": {},
+  "sessions": {
+    "s_0c74f32d4bde79": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f35242461ffe1REX9GaK80cH1e",
+        "model": "muse-spark-1.3-contributor-free"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
