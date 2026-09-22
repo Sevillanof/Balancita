@@ -97,8 +97,8 @@ describe('dashboard BTC-EUR', () => {
       await screen.findByRole('group', { name: 'Acciones de trading' }),
     ).toBeInTheDocument()
     expect(
-      screen.getByRole('button', { name: 'Simulación' }),
-    ).toBeInTheDocument()
+      screen.queryByRole('button', { name: 'Simulación' }),
+    ).not.toBeInTheDocument()
     expect(
       screen.getByRole('heading', {
         name: 'Información general del instrumento en este caso (BTC-EUR)',

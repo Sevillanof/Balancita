@@ -34,7 +34,7 @@ describe('ChartPanel', () => {
     mocks.reset()
   })
 
-  it('renders the dominant BTC-EUR chart when candles are ready', () => {
+  it('renders the BTC-EUR chart without redundant headings', () => {
     render(
       <ChartPanel
         status="ready"
@@ -46,7 +46,11 @@ describe('ChartPanel', () => {
     expect(
       screen.getByRole('region', { name: 'Gráfico BTC-EUR' }),
     ).toBeInTheDocument()
-    expect(screen.getByRole('heading', { name: 'BTC-EUR' })).toBeInTheDocument()
+    expect(
+      screen.queryByRole('heading', { name: 'BTC-EUR' }),
+    ).not.toBeInTheDocument()
+    expect(screen.queryByText('Gráfico dominante')).not.toBeInTheDocument()
+    expect(screen.queryByText('Velas BTC-EUR (mock)')).not.toBeInTheDocument()
     expect(screen.getByTestId('price-chart')).toBeInTheDocument()
   })
 

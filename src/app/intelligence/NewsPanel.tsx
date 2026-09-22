@@ -25,12 +25,7 @@ export default function NewsPanel({
   return (
     <section className="news" aria-label="Noticias BTC-EUR">
       <div className="section-header news__header">
-        <div>
-          <h2 id="dashboard-news-title">NOTICIAS EN TIEMPO REAL</h2>
-        </div>
-        {status === 'stale' && (
-          <span className="badge news__stale">Desactualizadas</span>
-        )}
+        <h2 id="dashboard-news-title">NOTICIAS EN TIEMPO REAL</h2>
       </div>
 
       {status === 'loading' && (
@@ -78,10 +73,6 @@ export default function NewsPanel({
           ))}
         </ul>
       )}
-
-      <p className="news__caption">
-        Noticias simuladas de fixtures locales; no provienen de una fuente real.
-      </p>
     </section>
   )
 }

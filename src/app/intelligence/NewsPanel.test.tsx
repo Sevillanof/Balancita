@@ -51,7 +51,11 @@ describe('NewsPanel', () => {
   it('marks stale news without hiding the items', () => {
     render(<NewsPanel status="stale" items={NEWS_FIXTURES} />)
 
-    expect(screen.getByText('Desactualizadas')).toBeInTheDocument()
+    expect(
+      screen.getByRole('heading', { name: 'NOTICIAS EN TIEMPO REAL' }),
+    ).toBeInTheDocument()
+    expect(screen.queryByText('Desactualizadas')).not.toBeInTheDocument()
+    expect(screen.queryByText(/fixtures locales/i)).not.toBeInTheDocument()
     expect(screen.getAllByRole('listitem')).toHaveLength(NEWS_FIXTURES.length)
   })
 

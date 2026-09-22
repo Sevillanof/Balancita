@@ -66,9 +66,6 @@ export default function BtcEurDashboard({
         <header className="dashboard__brand">
           <span className="dashboard__brand-mark" aria-hidden="true" />
           <h1 className="dashboard__brand-title">Balancita (BTC/EUR)</h1>
-          <button type="button" className="dashboard__simulation">
-            Simulación
-          </button>
         </header>
 
         <section
@@ -98,30 +95,28 @@ export default function BtcEurDashboard({
               onRetry={history.retry}
             />
             <NewsPanel status="ready" items={NEWS_FIXTURES} />
-            <div className="dashboard__bottom">
-              <div
-                className="dashboard__actions"
-                role="group"
-                aria-label="Acciones de trading"
+            <div
+              className="dashboard__actions"
+              role="group"
+              aria-label="Acciones de trading"
+            >
+              <button
+                type="button"
+                className="button button--primary"
+                onClick={() => setOrderFlowSide(BUY)}
               >
-                <button
-                  type="button"
-                  className="button button--primary"
-                  onClick={() => setOrderFlowSide(BUY)}
-                >
-                  Comprar
-                </button>
-                <button
-                  type="button"
-                  className="button button--secondary"
-                  onClick={() => setOrderFlowSide(SELL)}
-                >
-                  Vender
-                </button>
-                <AutoTradingControl />
-              </div>
-              <BtcEurSummary quote={quote} candles={history.candles} />
+                Comprar
+              </button>
+              <button
+                type="button"
+                className="button button--secondary"
+                onClick={() => setOrderFlowSide(SELL)}
+              >
+                Vender
+              </button>
+              <AutoTradingControl />
             </div>
+            <BtcEurSummary quote={quote} candles={history.candles} />
           </>
         )}
       </div>

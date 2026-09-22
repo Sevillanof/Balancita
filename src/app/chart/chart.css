@@ -23,25 +23,22 @@
 
 .chart-panel {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  gap: var(--space-3);
+  grid-template-rows: minmax(0, 1fr);
+  height: 100%;
   min-width: 0;
   min-height: 0;
 }
 
 .chart-panel .chart__container {
   height: 100%;
-  min-height: 12rem;
+  min-height: 0;
   margin-top: 0;
-}
-
-.chart-panel__header {
-  align-items: flex-start;
 }
 
 .chart-panel__state {
   display: grid;
-  min-height: 12rem;
+  height: 100%;
+  min-height: 0;
   place-items: center;
   margin: 0;
   padding: var(--space-4);

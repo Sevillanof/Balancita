@@ -4,6 +4,19 @@ import { makeCandle, makeQuote } from '../../test/fake-market-data-provider'
 import BtcEurSummary from './BtcEurSummary'
 
 describe('BtcEurSummary', () => {
+  it('keeps only the wireframe information heading', () => {
+    render(<BtcEurSummary quote={undefined} candles={[]} />)
+
+    expect(
+      screen.getByRole('heading', {
+        name: 'Información general del instrumento en este caso (BTC-EUR)',
+      }),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByText(/no representa 24 h reales/i),
+    ).not.toBeInTheDocument()
+  })
+
   it('shows honest placeholders when the mock has no value', () => {
     render(<BtcEurSummary quote={undefined} candles={[]} />)
 
@@ -28,11 +41,5 @@ describe('BtcEurSummary', () => {
     expect(within(region).getByText('€58,000.00')).toBeInTheDocument()
     expect(within(region).getByText('1,500')).toBeInTheDocument()
     expect(within(region).getByText('+120.00 (+0.20%)')).toBeInTheDocument()
-  })
-
-  it('does not claim a real 24h window over the mock history', () => {
-    render(<BtcEurSummary quote={makeQuote()} candles={[makeCandle()]} />)
-
-    expect(screen.getByText(/no representa 24 h reales/i)).toBeInTheDocument()
   })
 })

@@ -27,14 +27,6 @@ export default function ChartPanel({
 
   return (
     <section className="chart-panel" aria-label="Gráfico BTC-EUR">
-      <div className="section-header chart-panel__header">
-        <div>
-          <p className="dashboard__eyebrow">Gráfico dominante</p>
-          <h2 id="dashboard-chart-title">BTC-EUR</h2>
-        </div>
-        <span className="dashboard__caption">Velas BTC-EUR (mock)</span>
-      </div>
-
       {status === 'loading' && (
         <p role="status" aria-busy="true" className="chart-panel__state">
           Cargando velas BTC-EUR…

@@ -112,21 +112,26 @@ describe('BtcEurDashboard main screen (Phase 1)', () => {
     renderDashboard(readyProvider())
     await waitForReady()
 
-    // A. Brand/title plus the presentation-only simulation control.
+    // A. Brand/title only.
     expect(
       screen.getByRole('heading', { name: 'Balancita (BTC/EUR)' }),
     ).toBeInTheDocument()
     expect(
-      screen.getByRole('button', { name: 'Simulación' }),
-    ).toBeInTheDocument()
+      screen.queryByRole('button', { name: 'Simulación' }),
+    ).not.toBeInTheDocument()
     // B. Available money from the local paper ledger.
     expect(
       screen.getByRole('region', { name: 'Dinero disponible' }),
     ).toBeInTheDocument()
-    // C. Dominant chart.
+    // C. Chart without redundant visual titles.
     expect(
       screen.getByRole('region', { name: 'Gráfico BTC-EUR' }),
     ).toBeInTheDocument()
+    expect(
+      screen.queryByRole('heading', { name: 'BTC-EUR' }),
+    ).not.toBeInTheDocument()
+    expect(screen.queryByText('Gráfico dominante')).not.toBeInTheDocument()
+    expect(screen.queryByText('Velas BTC-EUR (mock)')).not.toBeInTheDocument()
     // D. Real-time news, headed with the wireframe text.
     expect(
       screen.getByRole('region', { name: 'Noticias BTC-EUR' }),
@@ -149,7 +154,7 @@ describe('BtcEurDashboard main screen (Phase 1)', () => {
     ).toBeInTheDocument()
   })
 
-  it('renders exactly three action buttons plus the simulation control', async () => {
+  it('renders exactly the three action buttons', async () => {
     renderDashboard(readyProvider())
     await waitForReady()
 
@@ -167,8 +172,8 @@ describe('BtcEurDashboard main screen (Phase 1)', () => {
       within(actions).getByRole('button', { name: 'Auto Trade' }),
     ).toBeDisabled()
     expect(
-      screen.getByRole('button', { name: 'Simulación' }),
-    ).toBeInTheDocument()
+      screen.queryByRole('button', { name: 'Simulación' }),
+    ).not.toBeInTheDocument()
   })
 
   it('does not render any surface that is outside the wireframe', async () => {
