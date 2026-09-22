@@ -1,0 +1,21 @@
+src/app/BtcEurDashboard.test.tsx
+  s_5e75a261409a27::t_81b0526db0b129 135,140-144,252-256
+src/app/intelligence/NewsPanel.test.tsx
+  s_5e75a261409a27::t_4c794db16bd3f1 15-22,95
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ba37c3e4ae3695845cc4e38047cd66ecfde2d5f3",
+  "prompts": {},
+  "sessions": {
+    "s_5e75a261409a27": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f36c12f7affe0zTBgdzj29q75d",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
