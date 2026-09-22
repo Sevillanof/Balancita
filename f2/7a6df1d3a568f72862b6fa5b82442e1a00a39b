@@ -1,0 +1,28 @@
+src/App.test.tsx
+  h_2f68313623be98 21-25
+src/app/BtcEurDashboard.test.tsx
+  h_2f68313623be98 23-27
+src/app/chart/ChartPanel.test.tsx
+  h_2f68313623be98 11-15
+src/app/chart/PriceChart.test.tsx
+  h_2f68313623be98 12-14,17,27,32-33,83-87,104-105,116
+src/app/chart/PriceChart.tsx
+  h_2f68313623be98 6,90-94,100,118,122,129-133
+src/app/detail/InstrumentDetail.test.tsx
+  h_2f68313623be98 31
+src/providers/kraken-market-data.test.ts
+  h_2f68313623be98 61-76,514-520,577-693,794-817
+src/providers/kraken-market-data.ts
+  h_2f68313623be98 59-60,70-74,147-148,206-217,245-250,265-268,273-299,301-304,309,313-323,537-570
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f27a6df1d3a568f72862b6fa5b82442e1a00a39b",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
