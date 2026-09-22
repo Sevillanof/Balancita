@@ -74,9 +74,9 @@ real market or news integration.
 | BAP-1 | Complete | Rewrite plan created with sourced estimates  | 8789c84 |
 | BAP-2 | Complete | Incremental plan created and cross-checked   | 8789c84 |
 | BAP-3 | Complete | Prettier, links, and `git diff --check` pass | 8789c84 |
-| BAP-4 | Complete | Canonical three-phase roadmap created        | Pending |
-| BAP-5 | Complete | Previous plans marked as superseded          | Pending |
-| BAP-6 | Complete | Scope, Prettier, and diff checks pass        | Pending |
+| BAP-4 | Complete | Canonical three-phase roadmap created        | 23fab1b |
+| BAP-5 | Complete | Previous plans marked as superseded          | 23fab1b |
+| BAP-6 | Complete | Scope, Prettier, and diff checks pass        | 23fab1b |
 
 ## Next step
 
