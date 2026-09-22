@@ -51,6 +51,13 @@ describe('news source policy', () => {
     expect(social.reasons.map((reason) => reason.code)).toContain(
       'source_level_excluded',
     )
+
+    const unverifiedLicense = evaluateNewsSource({
+      ...validEvidence,
+      sourceLevel: 'licensed_reporting',
+      licenseStatus: 'unknown',
+    })
+    expect(unverifiedLicense.accepted).toBe(true)
   })
 
   it('rejects non-HTTPS URLs, unsupported pairs, empty hashes, and impossible ordering', () => {

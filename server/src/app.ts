@@ -21,6 +21,11 @@ import { KrakenMarketCollector } from './intelligence/market/kraken-market-colle
 import { MarketStore } from './intelligence/market/market-store.ts'
 import { NewsPollingService } from './intelligence/news/news-poller.ts'
 import type { NewsHttpFetcher } from './intelligence/news/rss-collector.ts'
+import { OFFICIAL_RSS_SOURCES } from './intelligence/news/rss-collector.ts'
+import {
+  TREE_NEWS_SOURCE,
+  TreeNewsService,
+} from './intelligence/news/tree-news.ts'
 import {
   ShadowRunNotFoundError,
   ShadowRunService,
@@ -44,6 +49,11 @@ export interface AnalysisDependencies {
 export interface MarketCollectorLifecycle extends IntelligenceCollectorObserver {
   start(instrumentId: string): void | Promise<void>
   stop(): void | Promise<void>
+}
+
+export interface TreeNewsLifecycle {
+  start(): void
+  stop(): void
 }
 
 export interface LiveForecastRunner {
@@ -80,6 +90,7 @@ export interface MarketDependencies {
   newsPollingService?: NewsPollingService
   newsScheduler?: ForecastLoopScheduler
   newsClock?: () => TimestampMs
+  treeNewsService?: TreeNewsLifecycle
 }
 
 type ErrorEnvelope = {
@@ -143,6 +154,8 @@ export async function buildApp(options: {
   if (
     config.marketCollectorEnabled ||
     config.newsPollingEnabled ||
+    config.treeNewsEnabled ||
+    config.extraNewsRssSources.length > 0 ||
     options.overrides?.marketStore !== undefined
   ) {
     marketStore =
@@ -188,11 +201,18 @@ export async function buildApp(options: {
   let publishNewsUpdate = (): void => undefined
   const newsScheduler =
     options.overrides?.newsScheduler ?? defaultForecastScheduler
+  const newsSources = [
+    ...Object.values(OFFICIAL_RSS_SOURCES),
+    ...config.extraNewsRssSources,
+  ]
   const newsPollingService =
     options.overrides?.newsPollingService ??
-    (config.newsPollingEnabled && marketStore !== undefined
+    (marketStore !== undefined &&
+    (config.newsPollingEnabled || config.treeNewsEnabled)
       ? new NewsPollingService({
           store: marketStore,
+          sources: newsSources,
+          normalizerSources: [...newsSources, TREE_NEWS_SOURCE],
           userAgent: config.newsUserAgent,
           fetcher: options.overrides?.newsFetch,
           clock:
@@ -206,6 +226,22 @@ export async function buildApp(options: {
         })
       : undefined)
   let newsLoopHandle: unknown
+  const treeNewsService =
+    options.overrides?.treeNewsService ??
+    (config.treeNewsEnabled && newsPollingService !== undefined
+      ? new TreeNewsService({
+          enabled: true,
+          url: config.treeNewsUrl,
+          reconnectMinMs: config.treeNewsReconnectMinMs,
+          reconnectMaxMs: config.treeNewsReconnectMaxMs,
+          onItem: async (item) => {
+            await newsPollingService.ingestExternal(
+              [item],
+              TREE_NEWS_SOURCE.sourceId,
+            )
+          },
+        })
+      : undefined)
 
   const startForecastLoop = (): void => {
     if (
@@ -230,22 +266,20 @@ export async function buildApp(options: {
   }
 
   const startNewsLoop = (): void => {
-    if (
-      !config.newsPollingEnabled ||
-      newsPollingService === undefined ||
-      newsLoopHandle !== undefined
-    )
-      return
-    void newsPollingService.pollOnce()
-    newsLoopHandle = newsScheduler.setInterval(() => {
-      void newsPollingService.pollOnce().catch(() => undefined)
-    }, config.newsPollIntervalMs)
+    if (newsPollingService === undefined) return
+    if (config.newsPollingEnabled && newsLoopHandle === undefined) {
+      void newsPollingService.pollOnce()
+      newsLoopHandle = newsScheduler.setInterval(() => {
+        void newsPollingService.pollOnce().catch(() => undefined)
+      }, config.newsPollIntervalMs)
+    }
   }
 
   const stopNewsLoop = (): void => {
-    if (newsLoopHandle === undefined) return
-    newsScheduler.clearInterval(newsLoopHandle)
-    newsLoopHandle = undefined
+    if (newsLoopHandle !== undefined) {
+      newsScheduler.clearInterval(newsLoopHandle)
+      newsLoopHandle = undefined
+    }
   }
 
   const ensureShadowRunExists = (): void => {
@@ -411,10 +445,12 @@ export async function buildApp(options: {
       startForecastLoop()
     }
     startNewsLoop()
+    treeNewsService?.start()
   })
   app.addHook('onClose', async () => {
     stopForecastLoop()
     stopNewsLoop()
+    treeNewsService?.stop()
     streamHub.close()
     unsubscribeCollector?.()
     await marketCollector?.stop()

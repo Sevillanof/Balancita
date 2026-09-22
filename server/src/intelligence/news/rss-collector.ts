@@ -8,8 +8,8 @@ export interface RssSourceConfig {
   readonly feedUrl: string
   readonly documentationUrl: string
   readonly licenseUrl: string
-  readonly sourceLevel: 'official_primary'
-  readonly licenseStatus: 'official_public'
+  readonly sourceLevel: 'official_primary' | 'licensed_reporting'
+  readonly licenseStatus: 'official_public' | 'licensed' | 'unknown'
 }
 
 export const OFFICIAL_RSS_SOURCES = {
@@ -54,6 +54,9 @@ export interface RssNewsItem {
   readonly description?: string
   readonly author?: string
   readonly category?: string
+  readonly sourceSummary?: string
+  readonly important?: boolean
+  readonly tradeIntent?: 'buy' | 'sell' | 'neutral'
   readonly retrievedAt?: TimestampMs
 }
 

@@ -38,6 +38,11 @@ export interface NewsTaxonomyClassification {
 
 export class RssNewsNormalizer implements NewsNormalizer<RssNewsItem> {
   readonly domain = 'news' as const
+  private readonly sources: readonly RssSourceConfig[]
+
+  constructor(options: { readonly sources?: readonly RssSourceConfig[] } = {}) {
+    this.sources = options.sources ?? Object.values(OFFICIAL_RSS_SOURCES)
+  }
 
   normalize(
     input: NewsNormalizerInput<RssNewsItem>,
@@ -52,7 +57,7 @@ export class RssNewsNormalizer implements NewsNormalizer<RssNewsItem> {
     raw: RssNewsItem,
     times: NewsNormalizationTimes,
   ): ValidationResult<NewsEnvelope> {
-    const source = sourceFor(raw.sourceId)
+    const source = sourceFor(raw.sourceId, this.sources)
     const issues: ValidationIssue[] = []
     const title = raw.title.trim()
     if (title === '')
@@ -109,7 +114,10 @@ export class RssNewsNormalizer implements NewsNormalizer<RssNewsItem> {
     const correctionStatus = correctionStatusFor(searchableText)
     const evidenceWithoutHash: NewsEvidence = {
       instrumentId: 'BTC-EUR',
-      source: source.sourceId,
+      source:
+        source.sourceLevel === 'official_primary'
+          ? source.sourceId
+          : source.source,
       sourceLevel: source.sourceLevel,
       sourceItemId,
       url,
@@ -131,6 +139,13 @@ export class RssNewsNormalizer implements NewsNormalizer<RssNewsItem> {
         ...(raw.author === undefined ? {} : { author: raw.author }),
         ...(raw.category === undefined ? {} : { category: raw.category }),
         feedUrl: raw.feedUrl,
+        ...(raw.sourceSummary === undefined
+          ? {}
+          : { sourceSummary: raw.sourceSummary.slice(0, 500) }),
+        ...(raw.important === undefined ? {} : { important: raw.important }),
+        ...(raw.tradeIntent === undefined
+          ? {}
+          : { tradeIntent: raw.tradeIntent }),
       },
       content: { kind: 'metadata_only' },
     }
@@ -196,10 +211,11 @@ export function contentHashForNewsEvidence(evidence: NewsEvidence): string {
   return createHash('sha256').update(canonicalJson(withoutHash)).digest('hex')
 }
 
-function sourceFor(sourceId: string): RssSourceConfig | undefined {
-  return Object.values(OFFICIAL_RSS_SOURCES).find(
-    (source) => source.sourceId === sourceId,
-  )
+function sourceFor(
+  sourceId: string,
+  sources: readonly RssSourceConfig[],
+): RssSourceConfig | undefined {
+  return sources.find((source) => source.sourceId === sourceId)
 }
 
 function parseNewsDate(value: string | undefined): TimestampMs | undefined {

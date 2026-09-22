@@ -23,6 +23,11 @@ describe('serverConfigFrom', () => {
     expect(config.newsPollIntervalMs).toBe(300_000)
     expect(config.newsStaleAfterMs).toBe(900_000)
     expect(config.newsUserAgent).toBe('Balancita/1.0')
+    expect(config.treeNewsEnabled).toBe(false)
+    expect(config.treeNewsUrl).toBe('wss://news.treeofalpha.com/ws')
+    expect(config.treeNewsReconnectMinMs).toBe(1_000)
+    expect(config.treeNewsReconnectMaxMs).toBe(30_000)
+    expect(config.extraNewsRssSources).toEqual([])
     expect(config.marketDbPath).toBe('./data/market.sqlite')
     expect(config.krakenWsUrl).toBe('wss://ws.kraken.com/v2')
     expect(config.krakenRestUrl).toBe('https://api.kraken.com/0')
@@ -54,6 +59,12 @@ describe('serverConfigFrom', () => {
       NEWS_POLL_INTERVAL_MS: '45000',
       NEWS_STALE_AFTER_MS: '180000',
       NEWS_USER_AGENT: 'Balancita/test',
+      TREE_NEWS_ENABLED: 'true',
+      TREE_NEWS_URL: 'wss://tree.example.test/ws',
+      TREE_NEWS_RECONNECT_MIN_MS: '250',
+      TREE_NEWS_RECONNECT_MAX_MS: '10000',
+      NEWS_EXTRA_RSS_FEEDS:
+        'theblock|The Block|https://feeds.example.test/theblock.xml,coinness|CoinNess|https://feeds.example.test/coinness.xml|licensed',
       MARKET_DB_PATH: '/tmp/balancita-market.sqlite',
       KRAKEN_WS_URL: 'wss://kraken.example.invalid/v2',
       KRAKEN_REST_URL: 'https://kraken.example.invalid/0',
@@ -83,6 +94,22 @@ describe('serverConfigFrom', () => {
     expect(config.newsPollIntervalMs).toBe(45_000)
     expect(config.newsStaleAfterMs).toBe(180_000)
     expect(config.newsUserAgent).toBe('Balancita/test')
+    expect(config.treeNewsEnabled).toBe(true)
+    expect(config.treeNewsUrl).toBe('wss://tree.example.test/ws')
+    expect(config.treeNewsReconnectMinMs).toBe(250)
+    expect(config.treeNewsReconnectMaxMs).toBe(10_000)
+    expect(config.extraNewsRssSources).toMatchObject([
+      {
+        sourceId: 'theblock',
+        source: 'The Block',
+        licenseStatus: 'unknown',
+      },
+      {
+        sourceId: 'coinness',
+        source: 'CoinNess',
+        licenseStatus: 'licensed',
+      },
+    ])
     expect(config.marketDbPath).toBe('/tmp/balancita-market.sqlite')
     expect(config.krakenWsUrl).toBe('wss://kraken.example.invalid/v2')
     expect(config.krakenRestUrl).toBe('https://kraken.example.invalid/0')
@@ -111,6 +138,7 @@ describe('serverConfigFrom', () => {
       { NEWS_POLL_INTERVAL_MS: '0' },
       { NEWS_STALE_AFTER_MS: '-1' },
       { NEWS_POLLING_ENABLED: 'maybe' },
+      { NEWS_EXTRA_RSS_FEEDS: 'The Block|https://feeds.example.test/a.xml' },
       { MARKET_STALE_AFTER_MS: '0' },
       { MARKET_RECONNECT_MIN_MS: '0' },
       { MARKET_RECONNECT_MAX_MS: '-1' },

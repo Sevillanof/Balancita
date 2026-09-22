@@ -153,6 +153,53 @@ describe('intelligence SSE contract', () => {
     expect(snapshot.summaries.forecast.status).toBe('unavailable')
   })
 
+  it('preserves optional source labels and unknown license status on the SSE wire', () => {
+    const store = new MarketStore({ path: ':memory:' })
+    const evidence: NewsEvidence = {
+      instrumentId: 'BTC-EUR',
+      source: 'The Block',
+      sourceLevel: 'licensed_reporting',
+      sourceItemId: 'theblock-sse-1',
+      url: 'https://www.theblock.co/post/sse-1',
+      publishedAt: (now - 1_000) as TimestampMs,
+      ingestedAt: (now - 500) as TimestampMs,
+      retrievedAt: (now - 400) as TimestampMs,
+      contentHash: '',
+      licenseStatus: 'unknown',
+      correctionStatus: 'original',
+      relevance: 'relevant',
+      relevanceRuleVersion: 'news-relevance.v1',
+      taxonomy: 'market_structure',
+      taxonomyRuleVersion: 'news-taxonomy.v1',
+      metadata: { title: 'The Block Bitcoin and EUR update' },
+      content: { kind: 'metadata_only' },
+    }
+    store.insertNewsEvidence({
+      ...evidence,
+      contentHash: contentHashForNewsEvidence(evidence),
+    })
+    const snapshot = createIntelligenceSnapshot({
+      collectorEnabled: false,
+      marketStore: store,
+      staleAfterMs: 15_000,
+      clock: () => now,
+    })
+    const event = parseIntelligenceStreamEvent({
+      version: 'intelligence-stream.v1',
+      type: 'snapshot',
+      id: 'optional-source',
+      serverTime: now,
+      snapshot,
+    })
+
+    expect(event.snapshot.news?.items[0]).toMatchObject({
+      source: 'The Block',
+      licenseStatus: 'unknown',
+      url: evidence.url,
+    })
+    store.close()
+  })
+
   it('derives latest market timestamps and SLIs from the store', () => {
     const store = new MarketStore({
       path: ':memory:',

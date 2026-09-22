@@ -111,6 +111,9 @@ export interface NewsMetadata {
   readonly author?: string
   readonly category?: string
   readonly feedUrl?: string
+  readonly sourceSummary?: string
+  readonly important?: boolean
+  readonly tradeIntent?: 'buy' | 'sell' | 'neutral'
 }
 
 export interface NewsEvidence {

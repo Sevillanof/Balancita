@@ -138,6 +138,42 @@ describe('official RSS news collection', () => {
 })
 
 describe('news normalization and deterministic rules', () => {
+  it('constructs configured extra feeds without claiming their license', () => {
+    const source = {
+      sourceId: 'theblock',
+      source: 'The Block',
+      feedUrl: 'https://feeds.example.test/theblock.xml',
+      documentationUrl: '',
+      licenseUrl: '',
+      sourceLevel: 'licensed_reporting' as const,
+      licenseStatus: 'unknown' as const,
+    }
+    const result = new RssNewsNormalizer({ sources: [source] }).normalizeItem(
+      {
+        sourceId: source.sourceId,
+        source: source.source,
+        feedUrl: source.feedUrl,
+        sourceItemId: 'theblock-1',
+        title: 'Bitcoin and EUR market update',
+        link: 'https://www.theblock.co/post/1',
+        publishedAt: '2026-09-21T16:00:00.000Z',
+      },
+      {
+        ingestedAt: time(Date.parse('2026-09-21T16:00:01.000Z')),
+        retrievedAt: time(Date.parse('2026-09-21T16:00:01.000Z')),
+      },
+    )
+
+    expect(result.valid).toBe(true)
+    if (result.valid) {
+      expect(result.value.evidence).toMatchObject({
+        source: 'The Block',
+        licenseStatus: 'unknown',
+        url: 'https://www.theblock.co/post/1',
+      })
+    }
+  })
+
   it('normalizes complete provenance without persisting article descriptions', async () => {
     const collector = new RssNewsCollector({
       source: OFFICIAL_RSS_SOURCES.sec,

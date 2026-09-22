@@ -122,6 +122,19 @@ function validateMetadata(input: unknown): boolean {
     return false
   if (input.feedUrl !== undefined && typeof input.feedUrl !== 'string')
     return false
+  if (
+    input.sourceSummary !== undefined &&
+    (typeof input.sourceSummary !== 'string' ||
+      input.sourceSummary.length > 500)
+  )
+    return false
+  if (input.important !== undefined && typeof input.important !== 'boolean')
+    return false
+  if (
+    input.tradeIntent !== undefined &&
+    !['buy', 'sell', 'neutral'].includes(input.tradeIntent as string)
+  )
+    return false
   return true
 }
 
@@ -261,12 +274,12 @@ export function evaluateNewsSource(input: unknown): SourcePolicyDecision {
       ),
     )
   } else if (
-    input.licenseStatus === 'unknown' ||
     input.licenseStatus === 'permission_required' ||
     (input.sourceLevel === 'official_primary' &&
       input.licenseStatus !== 'official_public') ||
     (input.sourceLevel === 'licensed_reporting' &&
-      input.licenseStatus !== 'licensed')
+      input.licenseStatus !== 'licensed' &&
+      input.licenseStatus !== 'unknown')
   ) {
     reasons.push(
       reason(

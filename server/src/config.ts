@@ -1,4 +1,5 @@
 import { ServerConfigError } from './analysis-errors.ts'
+import type { RssSourceConfig } from './intelligence/news/rss-collector.ts'
 
 export { ServerConfigError } from './analysis-errors.ts'
 
@@ -28,6 +29,11 @@ export interface ServerConfig {
   newsPollIntervalMs: number
   newsStaleAfterMs: number
   newsUserAgent: string
+  treeNewsEnabled: boolean
+  treeNewsUrl: string
+  treeNewsReconnectMinMs: number
+  treeNewsReconnectMaxMs: number
+  extraNewsRssSources: readonly RssSourceConfig[]
   marketDbPath: string
   shadowRunId: string
   krakenWsUrl: string
@@ -58,6 +64,22 @@ export function serverConfigFrom(
   if (marketReconnectMaxMs < marketReconnectMinMs) {
     throw new ServerConfigError(
       'MARKET_RECONNECT_MAX_MS must be greater than or equal to MARKET_RECONNECT_MIN_MS.',
+    )
+  }
+
+  const treeNewsReconnectMinMs = positiveInt(
+    env,
+    'TREE_NEWS_RECONNECT_MIN_MS',
+    1_000,
+  )
+  const treeNewsReconnectMaxMs = positiveInt(
+    env,
+    'TREE_NEWS_RECONNECT_MAX_MS',
+    30_000,
+  )
+  if (treeNewsReconnectMaxMs < treeNewsReconnectMinMs) {
+    throw new ServerConfigError(
+      'TREE_NEWS_RECONNECT_MAX_MS must be greater than or equal to TREE_NEWS_RECONNECT_MIN_MS.',
     )
   }
 
@@ -100,6 +122,15 @@ export function serverConfigFrom(
     newsPollIntervalMs: positiveInt(env, 'NEWS_POLL_INTERVAL_MS', 300_000),
     newsStaleAfterMs: positiveInt(env, 'NEWS_STALE_AFTER_MS', 900_000),
     newsUserAgent: stringValue(env, 'NEWS_USER_AGENT', 'Balancita/1.0'),
+    treeNewsEnabled: booleanValue(env, 'TREE_NEWS_ENABLED', false),
+    treeNewsUrl: stringValue(
+      env,
+      'TREE_NEWS_URL',
+      'wss://news.treeofalpha.com/ws',
+    ),
+    treeNewsReconnectMinMs,
+    treeNewsReconnectMaxMs,
+    extraNewsRssSources: parseExtraRssSources(env.NEWS_EXTRA_RSS_FEEDS),
     marketDbPath: stringValue(env, 'MARKET_DB_PATH', './data/market.sqlite'),
     shadowRunId: stringValue(env, 'SHADOW_RUN_ID', 'shadow:BTC-EUR'),
     krakenWsUrl: stringValue(env, 'KRAKEN_WS_URL', 'wss://ws.kraken.com/v2'),
@@ -157,6 +188,51 @@ function positiveInt(
     )
   }
   return value
+}
+
+export function parseExtraRssSources(
+  raw: string | undefined,
+): readonly RssSourceConfig[] {
+  if (raw === undefined || raw.trim() === '') return []
+  const ids = new Set<string>()
+  return raw.split(',').map((entry, index) => {
+    const [sourceId, source, feedUrl, licenseStatus = 'unknown'] = entry
+      .split('|')
+      .map((value) => value.trim())
+    if (
+      sourceId === undefined ||
+      !/^[a-z0-9][a-z0-9_-]*$/.test(sourceId) ||
+      ids.has(sourceId) ||
+      source === undefined ||
+      source === '' ||
+      feedUrl === undefined ||
+      feedUrl === '' ||
+      !isHttpsUrl(feedUrl) ||
+      (licenseStatus !== 'unknown' && licenseStatus !== 'licensed')
+    ) {
+      throw new ServerConfigError(
+        `NEWS_EXTRA_RSS_FEEDS entry ${index + 1} must be sourceId|source|httpsUrl[|unknown|licensed].`,
+      )
+    }
+    ids.add(sourceId)
+    return {
+      sourceId,
+      source,
+      feedUrl,
+      documentationUrl: '',
+      licenseUrl: '',
+      sourceLevel: 'licensed_reporting',
+      licenseStatus,
+    } satisfies RssSourceConfig
+  })
+}
+
+function isHttpsUrl(value: string): boolean {
+  try {
+    return new URL(value).protocol === 'https:'
+  } catch {
+    return false
+  }
 }
 
 function booleanValue(

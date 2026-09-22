@@ -108,16 +108,17 @@ export function deterministicPresentation(
 ): NewsPresentation {
   const sourceText =
     evidence.content.kind === 'metadata_only'
-      ? evidence.metadata.title
+      ? [evidence.metadata.title, evidence.metadata.sourceSummary ?? ''].join(
+          ' ',
+        )
       : evidence.content.text
   const summary = limitSummary(cleanSummary(sourceText)) || FALLBACK_SUMMARY
   return {
     summary,
-    tradeIntent: deterministicTradeIntent(
-      evidence.relevance,
-      evidence.taxonomy,
-    ),
-    important: evidence.relevance === 'relevant',
+    tradeIntent:
+      evidence.metadata.tradeIntent ??
+      deterministicTradeIntent(evidence.relevance, evidence.taxonomy),
+    important: evidence.metadata.important ?? evidence.relevance === 'relevant',
   }
 }
 
@@ -141,7 +142,9 @@ function buildPresentationPrompt(
   now: TimestampMs,
 ): string {
   const permittedText =
-    evidence.content.kind === 'metadata_only' ? '' : evidence.content.text
+    evidence.content.kind === 'metadata_only'
+      ? (evidence.metadata.sourceSummary ?? '')
+      : evidence.content.text
   return [
     'Resume esta noticia oficial para la interfaz de Balancita.',
     'Devuelve exclusivamente JSON válido con {"summary","tradeIntent","important"}.',
