@@ -1,0 +1,21 @@
+docs/balancita-main-screen-roadmap.md
+  s_e5575bf1cd2d2c::t_6a15f1a367aae1 1-228
+odd/tasks/balancita-architecture-paths.md
+  s_e5575bf1cd2d2c::t_ab9095b6db090f 5-7,11-13,17,22-30,56-61,77-79,83-84
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "23fab1b17f03af5c2b3ee0c64e79a4c169201706",
+  "prompts": {},
+  "sessions": {
+    "s_e5575bf1cd2d2c": {
+      "agent_id": {
+        "tool": "github-copilot",
+        "id": "50e38a77-7972-4269-a3e5-6df3046a4696",
+        "model": "copilot/gpt-5.6-sol"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
