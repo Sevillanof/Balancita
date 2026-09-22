@@ -56,9 +56,9 @@ The user needs separate, executable plans with realistic cost and risk.
 
 | Task  | Status   | Evidence                                     | Commit  |
 | ----- | -------- | -------------------------------------------- | ------- |
-| BAP-1 | Complete | Rewrite plan created with sourced estimates  | Pending |
-| BAP-2 | Complete | Incremental plan created and cross-checked   | Pending |
-| BAP-3 | Complete | Prettier, links, and `git diff --check` pass | Pending |
+| BAP-1 | Complete | Rewrite plan created with sourced estimates  | 8789c84 |
+| BAP-2 | Complete | Incremental plan created and cross-checked   | 8789c84 |
+| BAP-3 | Complete | Prettier, links, and `git diff --check` pass | 8789c84 |
 
 ## Next step
 
