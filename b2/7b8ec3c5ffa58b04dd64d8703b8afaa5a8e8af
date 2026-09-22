@@ -1,0 +1,37 @@
+server/src/intelligence/news/news-poller.test.ts
+  s_6996b47f9e7ab2::t_d94d65a9024eb0 6,13,30-42,110-140
+server/src/intelligence/news/news-poller.ts
+  s_6996b47f9e7ab2::t_4cda652efa5020 11-12,22-25,42,55-61,130-134,170,174-183
+server/src/intelligence/news/news-presentation.test.ts
+  s_6996b47f9e7ab2::t_9ecfd5fbb476c3 1-149
+server/src/intelligence/news/news-presentation.ts
+  s_6996b47f9e7ab2::t_10be9ac19c19d0 1-201
+server/src/intelligence/stream.ts
+  s_6996b47f9e7ab2::t_302e8fc085d40e 17-21,122-123,321,323-324,326-329,337-338,349-351,370-374,678-682,697-705
+src/app/intelligence/NewsPanel.test.tsx
+  s_6996b47f9e7ab2::t_392df712f79daa 37,43,112,121-127,133-134,136-154
+src/app/intelligence/news-fixtures.ts
+  s_6996b47f9e7ab2::t_cd5cc82172b3df 14-15,18-19,29-31,35-36,44-46,50-51,59-61,65-66,74-76,80-81
+src/app/intelligence/news.css
+  s_6996b47f9e7ab2::t_fcac6f940945fb 51,124-125,127,131-155
+src/app/intelligence/useIntelligenceStream.ts
+  s_6996b47f9e7ab2::t_ba1e162961374d 71-72,360-364,380-388
+src/app/intelligence/useNewsStream.test.ts
+  s_6996b47f9e7ab2::t_7283c7857aad38 13,36-38,41-42,106-107,109-110
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b27b8ec3c5ffa58b04dd64d8703b8afaa5a8e8af",
+  "prompts": {},
+  "sessions": {
+    "s_6996b47f9e7ab2": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f365211e5ffeMCoXZwi3ngCMST",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
