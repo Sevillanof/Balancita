@@ -1,0 +1,21 @@
+src/app/BtcEurDashboard.test.tsx
+  s_a286647a4042fa::t_1cc90b44dac203 2,96-99,113,115,119-121,140,152-173,176,219,230,249-250,252,255-262,264-298,345,370
+src/app/BtcEurDashboard.tsx
+  s_a286647a4042fa::t_d2a595f7d99a50 1,5,39-42,56,69-71,101-105,107-120,122,128-139,144-198
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "84983f78113978043664bdc7691a2e93d3d51a6e",
+  "prompts": {},
+  "sessions": {
+    "s_a286647a4042fa": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f36e90b29ffe0IbDtUOV9CjRZY",
+        "model": "deepseek-v4.1-flash"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
