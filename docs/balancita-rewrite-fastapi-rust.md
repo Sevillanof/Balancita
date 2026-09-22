@@ -1,5 +1,10 @@
 # Balancita — reescritura desde cero (FastAPI + Rust/WASM)
 
+> **Estado: superseded.** Este documento fue reemplazado por
+> [`docs/balancita-main-screen-roadmap.md`](balancita-main-screen-roadmap.md).
+> Se conserva únicamente como análisis histórico y no debe guiar la
+> implementación.
+
 ## 1. Veredicto
 
 No recomendado como primer camino. Es técnicamente viable y produce una base

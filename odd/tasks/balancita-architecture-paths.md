@@ -2,22 +2,31 @@
 
 ## Objective
 
-Document two implementation paths for the Balancita dashboard: a greenfield
-rewrite with FastAPI and a Rust/WASM frontend, and an incremental evolution of
-the current React, Fastify, SQLite, and Kraken application.
+Define one product-led implementation path for Balancita: reproduce the main
+screen first, connect the chart to real market data second, and add real-time
+news third.
 
 ## Problem
 
-The target experience is clear, but `doc/idea-balancita.md` combines that
-product vision with technical choices that conflict with the current system.
-The user needs separate, executable plans with realistic cost and risk.
+The architecture-first alternatives diluted the immediate product goal. The
+user needs a phased path that validates the visible main screen before any
+real market or news integration.
 
 ## Authorized scope
 
-- Create two new planning documents under `docs/`.
+- Preserve the two previous planning documents as historical analysis.
 - Use the wireframe and user-visible behavior from `doc/idea-balancita.md`.
 - Preserve Kraken, BTC-EUR, local-first operation, and paper trading safety.
 - Do not modify application code or any file under `doc/`.
+
+### Accepted scope correction
+
+- The two architecture-first alternatives are no longer candidate plans.
+- Create one canonical three-phase roadmap under `docs/`.
+- Phase 1 is exclusively the main-screen experience using deterministic data.
+- Phase 2 connects the chart to measurable real BTC-EUR market data.
+- Phase 3 connects the news panel to traceable real-time sources.
+- Add a supersession notice to both previous alternatives; do not delete them.
 
 ## Constraints
 
@@ -44,6 +53,12 @@ The user needs separate, executable plans with realistic cost and risk.
   - Current-state changes, order, cost, tests, and acceptance gates.
 - [x] **BAP-3 — Validate both handoffs**
   - Run formatting, path, and whitespace checks.
+- [x] **BAP-4 — Define the main-screen-first roadmap**
+  - Specify the three phases, boundaries, deliverables, and exit gates.
+- [x] **BAP-5 — Retire the architecture-first alternatives**
+  - Point both previous plans to the canonical roadmap.
+- [x] **BAP-6 — Validate the corrected handoff**
+  - Run formatting, path, scope, and whitespace checks.
 
 ## Acceptance criteria
 
@@ -59,9 +74,11 @@ The user needs separate, executable plans with realistic cost and risk.
 | BAP-1 | Complete | Rewrite plan created with sourced estimates  | 8789c84 |
 | BAP-2 | Complete | Incremental plan created and cross-checked   | 8789c84 |
 | BAP-3 | Complete | Prettier, links, and `git diff --check` pass | 8789c84 |
+| BAP-4 | Complete | Canonical three-phase roadmap created        | Pending |
+| BAP-5 | Complete | Previous plans marked as superseded          | Pending |
+| BAP-6 | Complete | Scope, Prettier, and diff checks pass        | Pending |
 
 ## Next step
 
-Choose one path before authorizing implementation. The recommended default is
-the incremental evolution in `docs/balancita-current-stack-evolution.md`.
-Recommended path: incremental evolution.
+Request separate authorization before implementing phase 1. Phases 2 and 3
+remain blocked until their preceding exit gates pass.

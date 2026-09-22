@@ -1,5 +1,10 @@
 # Balancita — evolución del stack actual (React/Fastify/Kraken)
 
+> **Estado: superseded.** Este documento fue reemplazado por
+> [`docs/balancita-main-screen-roadmap.md`](balancita-main-screen-roadmap.md).
+> Se conserva únicamente como análisis histórico y no debe guiar la
+> implementación.
+
 ## 1. Recomendación
 
 Camino de menor costo. Modificar el stack actual (React 19 + TypeScript +
