@@ -1,0 +1,21 @@
+src/app/intelligence/NewsPanel.test.tsx
+  s_5aa711f6b4f5f6::t_582d73b3d207fa 5,24-56
+src/app/intelligence/NewsPanel.tsx
+  s_5aa711f6b4f5f6::t_b2879dfd3f4ef0 24,55,57-92,106-119
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ee03e9a91e37c0ec915634ea6bda1db0d0ac472f",
+  "prompts": {},
+  "sessions": {
+    "s_5aa711f6b4f5f6": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f36c8ed55ffefdIdTVgKVSV72J",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
