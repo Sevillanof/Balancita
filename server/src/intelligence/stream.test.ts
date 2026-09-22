@@ -3,6 +3,7 @@ import type { NewsEvidence, TimestampMs } from './contracts.ts'
 import { deriveDataFreshness } from './slis.ts'
 import {
   createIntelligenceSnapshot,
+  createNewsSnapshot,
   IntelligenceStreamHub,
   parseIntelligenceStreamEvent,
   type IntelligenceStreamSnapshot,
@@ -82,6 +83,60 @@ function parseEvent(chunk: string) {
 }
 
 describe('intelligence SSE contract', () => {
+  it('shows only the current UTC day, newest first, with presentation fields', () => {
+    const base: NewsEvidence = {
+      instrumentId: 'BTC-EUR',
+      source: 'sec',
+      sourceLevel: 'official_primary',
+      sourceItemId: 'today',
+      url: 'https://www.sec.gov/news/today',
+      publishedAt: (now - 1_000) as TimestampMs,
+      ingestedAt: (now - 500) as TimestampMs,
+      retrievedAt: (now - 400) as TimestampMs,
+      contentHash: '',
+      licenseStatus: 'official_public',
+      correctionStatus: 'original',
+      relevance: 'relevant',
+      relevanceRuleVersion: 'news-relevance.v1',
+      taxonomy: 'market_structure',
+      taxonomyRuleVersion: 'news-taxonomy.v1',
+      metadata: { title: 'Today market structure' },
+      content: { kind: 'metadata_only' },
+    }
+    const today = {
+      ...base,
+      contentHash: contentHashForNewsEvidence(base),
+      id: 'news:today',
+      version: '1',
+    }
+    const yesterdayBase = {
+      ...base,
+      sourceItemId: 'yesterday',
+      publishedAt: (now - 86_400_001) as TimestampMs,
+      metadata: { title: 'Yesterday market structure' },
+    }
+    const yesterday = {
+      ...yesterdayBase,
+      contentHash: contentHashForNewsEvidence(yesterdayBase),
+      id: 'news:yesterday',
+      version: '1',
+    }
+
+    const snapshot = createNewsSnapshot({
+      evidence: [yesterday, today],
+      displayedAt: now as TimestampMs,
+      status: 'ready',
+    })
+
+    expect(snapshot.items).toHaveLength(1)
+    expect(snapshot.items[0]).toMatchObject({
+      id: 'news:today',
+      summary: 'Today market structure',
+      tradeIntent: 'buy',
+      important: true,
+    })
+  })
+
   it('reports disabled without inventing market or SLI data', () => {
     const snapshot = createIntelligenceSnapshot({
       collectorEnabled: false,
@@ -166,6 +221,8 @@ describe('intelligence SSE contract', () => {
           licenseStatus: 'official_public',
           title: 'Bitcoin and EUR market structure update',
           important: true,
+          summary: 'Bitcoin and EUR market structure update',
+          tradeIntent: 'buy',
         },
       ],
     })
@@ -281,6 +338,43 @@ describe('intelligence SSE contract', () => {
         },
       }),
     ).not.toThrow()
+  })
+
+  it('rejects news items missing presentation metadata', () => {
+    const snapshot = createIntelligenceSnapshot({
+      collectorEnabled: false,
+      staleAfterMs: 15_000,
+      clock: () => now,
+    })
+    expect(() =>
+      parseIntelligenceStreamEvent({
+        version: 'intelligence-stream.v1',
+        type: 'snapshot',
+        id: 'missing-presentation',
+        serverTime: now,
+        snapshot: {
+          ...snapshot,
+          news: {
+            status: 'ready',
+            items: [
+              {
+                id: 'news:one',
+                version: '1',
+                source: 'sec',
+                title: 'Title',
+                url: 'https://www.sec.gov/news/one',
+                publishedAt: now,
+                ingestedAt: now,
+                displayedAt: now,
+                licenseStatus: 'official_public',
+                important: true,
+                freshness: { ageMs: 0, isStale: false },
+              },
+            ],
+          },
+        },
+      }),
+    ).toThrow('Invalid intelligence stream event')
   })
 })
 

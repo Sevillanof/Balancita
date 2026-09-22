@@ -5,6 +5,7 @@ type NewsPanelProps = {
   readonly status?: NewsStatus
   readonly items?: readonly NewsItem[]
   readonly onRetry?: () => void
+  readonly now?: () => number
 }
 
 const DEFAULT_ITEMS: readonly NewsItem[] = []
@@ -14,10 +15,14 @@ export default function NewsPanel({
   status = 'ready',
   items = DEFAULT_ITEMS,
   onRetry,
+  now = Date.now,
 }: NewsPanelProps) {
   const showItems = status === 'ready' || status === 'stale'
-  const showEmpty = status === 'empty' || (showItems && items.length === 0)
-  const sortedItems = [...items].sort(compareNewsItems)
+  const todayItems = items.filter(
+    (item) => isToday(item.publishedAt, now()) && isValidSummary(item.summary),
+  )
+  const showEmpty = status === 'empty' || (showItems && todayItems.length === 0)
+  const sortedItems = [...todayItems].sort(compareNewsItems)
 
   return (
     <section className="news" aria-label="Noticias BTC-EUR">
@@ -85,34 +90,12 @@ export default function NewsPanel({
                 >
                   {item.title}
                 </a>
-                <div className="news__provenance" aria-label="Proveniencia">
-                  <span>
-                    URL: <span className="news__url">{item.url}</span>
-                  </span>
-                  <span>
-                    Publicado:{' '}
-                    <time dateTime={item.publishedAt}>
-                      {formatNewsDateTime(item.publishedAt)}
-                    </time>
-                  </span>
-                  <span>
-                    Ingestado:{' '}
-                    <time dateTime={item.ingestedAt}>
-                      {formatNewsDateTime(item.ingestedAt)}
-                    </time>
-                  </span>
-                  <span>
-                    Mostrado:{' '}
-                    <time dateTime={item.displayedAt}>
-                      {formatNewsDateTime(item.displayedAt)}
-                    </time>
-                  </span>
-                  <span>
-                    Frescura: {formatFreshness(item.freshness.ageMs)}
-                    {item.freshness.isStale ? ' · stale' : ''}
-                  </span>
-                  <span>Licencia: {item.licenseStatus}</span>
-                </div>
+                <p className="news__summary">{item.summary}</p>
+                <span
+                  className={`news__trade-intent news__trade-intent--${item.tradeIntent}`}
+                >
+                  {tradeIntentLabel(item.tradeIntent)}
+                </span>
               </li>
             )
           })}
@@ -130,16 +113,6 @@ function formatNewsTime(publishedAt: string): string {
   return `${hours}:${minutes}`
 }
 
-function formatNewsDateTime(value: string): string {
-  const date = new Date(value)
-  return Number.isNaN(date.getTime()) ? 'fecha inválida' : date.toISOString()
-}
-
-function formatFreshness(ageMs: number): string {
-  if (ageMs < 1_000) return `${ageMs} ms`
-  return `${Math.round(ageMs / 1_000)} s`
-}
-
 function compareNewsItems(left: NewsItem, right: NewsItem): number {
   const leftTime = Date.parse(left.publishedAt)
   const rightTime = Date.parse(right.publishedAt)
@@ -152,4 +125,28 @@ function compareNewsItems(left: NewsItem, right: NewsItem): number {
   }
 
   return rightTime - leftTime
+}
+
+function isToday(value: string, reference: number): boolean {
+  const publishedAt = Date.parse(value)
+  if (Number.isNaN(publishedAt)) return false
+  const date = new Date(reference)
+  const start = Date.UTC(
+    date.getUTCFullYear(),
+    date.getUTCMonth(),
+    date.getUTCDate(),
+  )
+  return publishedAt >= start && publishedAt < start + 86_400_000
+}
+
+function isValidSummary(value: string): boolean {
+  const normalized = value.trim()
+  return (
+    normalized !== '' &&
+    normalized.split(/(?<=[.!?])\s+/u).filter(Boolean).length <= 5
+  )
+}
+
+function tradeIntentLabel(intent: NewsItem['tradeIntent']): string {
+  return intent === 'buy' ? 'Compra' : intent === 'sell' ? 'Venta' : 'Neutral'
 }

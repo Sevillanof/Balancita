@@ -3,13 +3,14 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
+import type { GeminiClient, GeminiGenerateParams } from '../../gemini-client.ts'
 import type { TimestampMs } from '../contracts.ts'
 import { MarketStore } from '../market/market-store.ts'
 import { OFFICIAL_RSS_SOURCES, type NewsHttpFetcher } from './rss-collector.ts'
 import { NewsPollingService } from './news-poller.ts'
 
 const directories: string[] = []
-const now = Date.parse('2026-09-22T00:00:00.000Z') as TimestampMs
+const now = Date.parse('2026-09-21T17:00:00.000Z') as TimestampMs
 const fixture = readFileSync(
   new URL('./__fixtures__/sec.rss', import.meta.url),
   'utf8',
@@ -24,6 +25,19 @@ function makeStore(): MarketStore {
   const directory = mkdtempSync(join(tmpdir(), 'balancita-news-poller-'))
   directories.push(directory)
   return new MarketStore({ path: join(directory, 'market.sqlite') })
+}
+
+class FakeGemini implements GeminiClient {
+  readonly calls: GeminiGenerateParams[] = []
+
+  async generateStructuredText(params: GeminiGenerateParams): Promise<string> {
+    this.calls.push(params)
+    return JSON.stringify({
+      summary: 'Resumen generado para la noticia.',
+      tradeIntent: 'neutral',
+      important: true,
+    })
+  }
 }
 
 describe('NewsPollingService', () => {
@@ -91,6 +105,37 @@ describe('NewsPollingService', () => {
           'SEC announces Bitcoin and EUR corrected market structure roundtable',
       },
     ])
+    store.close()
+  })
+
+  it('projects Gemini presentation metadata without changing stored evidence', async () => {
+    const store = makeStore()
+    const client = new FakeGemini()
+    const service = new NewsPollingService({
+      store,
+      sources: [OFFICIAL_RSS_SOURCES.sec],
+      fetcher: async () => ({ status: 200, body: fixture }),
+      userAgent: 'Balancita/test',
+      clock: () => now,
+      staleAfterMs: 60_000,
+      geminiClient: client,
+      model: 'test-model',
+      maxOutputTokens: 100,
+      presentationTimeoutMs: 100,
+    })
+
+    await service.pollOnce()
+    const first = service.getSnapshot(now)
+    const second = service.getSnapshot(now)
+
+    expect(first.items[0]).toMatchObject({
+      summary: 'Resumen generado para la noticia.',
+      tradeIntent: 'neutral',
+      important: true,
+    })
+    expect(second.items).toEqual(first.items)
+    expect(client.calls).toHaveLength(1)
+    expect(store.listNewsEvidence()[0]?.content.kind).toBe('metadata_only')
     store.close()
   })
 })

@@ -8,6 +8,8 @@ import {
 } from './rss-collector.ts'
 import { RssNewsNormalizer } from './rss-normalizer.ts'
 import { createNewsSnapshot, type IntelligenceNewsSnapshot } from '../stream.ts'
+import type { GeminiClient } from '../../gemini-client.ts'
+import { NewsPresentationService } from './news-presentation.ts'
 
 export interface NewsPollingServiceOptions {
   readonly store: MarketStore
@@ -17,6 +19,10 @@ export interface NewsPollingServiceOptions {
   readonly timeoutMs?: number
   readonly clock?: () => TimestampMs
   readonly staleAfterMs: number
+  readonly geminiClient?: GeminiClient
+  readonly model?: string
+  readonly maxOutputTokens?: number
+  readonly presentationTimeoutMs?: number
   readonly onChange?: () => void
 }
 
@@ -33,6 +39,7 @@ export class NewsPollingService {
   private readonly clock: () => TimestampMs
   private readonly staleAfterMs: number
   private readonly onChange: () => void
+  private readonly presentation: NewsPresentationService
   private running = false
   private lastSuccessfulAt: TimestampMs | null = null
   private failedSources: readonly string[] = []
@@ -45,6 +52,13 @@ export class NewsPollingService {
     this.clock = options.clock ?? (() => Date.now() as TimestampMs)
     this.staleAfterMs = options.staleAfterMs
     this.onChange = options.onChange ?? (() => undefined)
+    this.presentation = new NewsPresentationService({
+      client: options.geminiClient,
+      model: options.model ?? 'gemini-3.5-flash-lite',
+      maxOutputTokens: options.maxOutputTokens ?? 256,
+      timeoutMs: options.presentationTimeoutMs ?? 15_000,
+      clock: this.clock,
+    })
     this.collectors = (
       options.sources ?? Object.values(OFFICIAL_RSS_SOURCES)
     ).map(
@@ -113,6 +127,11 @@ export class NewsPollingService {
               .map((outcome) => `${outcome.source}: ${outcome.error}`)
               .join('; ')
       if (successful > 0) this.lastSuccessfulAt = ingestedAt
+      await this.presentation.prepare(
+        this.store
+          .listNewsEvidence({ usableOnly: true })
+          .filter((item) => isUtcToday(item.publishedAt, ingestedAt)),
+      )
       this.onChange()
       return {
         insertedCount: outcomes.reduce(
@@ -148,6 +167,17 @@ export class NewsPollingService {
       lastSuccessfulAt: this.lastSuccessfulAt ?? undefined,
       error: this.lastError,
       staleAfterMs: this.staleAfterMs,
+      presentation: (item) => this.presentation.get(item),
     })
   }
+}
+
+function isUtcToday(publishedAt: TimestampMs, reference: TimestampMs): boolean {
+  const date = new Date(reference)
+  const start = Date.UTC(
+    date.getUTCFullYear(),
+    date.getUTCMonth(),
+    date.getUTCDate(),
+  )
+  return publishedAt >= start && publishedAt < start + 86_400_000
 }

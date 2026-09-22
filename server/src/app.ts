@@ -198,6 +198,10 @@ export async function buildApp(options: {
           clock:
             options.overrides?.newsClock ?? (() => Date.now() as TimestampMs),
           staleAfterMs: config.newsStaleAfterMs,
+          geminiClient: client,
+          model: config.model,
+          maxOutputTokens: config.maxOutputTokens,
+          presentationTimeoutMs: config.timeoutMs,
           onChange: () => publishNewsUpdate(),
         })
       : undefined)

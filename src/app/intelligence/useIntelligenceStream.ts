@@ -68,6 +68,8 @@ export interface IntelligenceStreamSnapshot {
       readonly displayedAt: number
       readonly licenseStatus: string
       readonly important: boolean
+      readonly summary: string
+      readonly tradeIntent: 'buy' | 'sell' | 'neutral'
       readonly freshness: {
         readonly ageMs: number
         readonly isStale: boolean
@@ -355,6 +357,11 @@ function isNewsSnapshot(input: unknown): boolean {
         'unknown',
       ].includes(item.licenseStatus as string) &&
       typeof item.important === 'boolean' &&
+      typeof item.summary === 'string' &&
+      item.summary.trim() !== '' &&
+      sentenceCount(item.summary) <= 5 &&
+      typeof item.tradeIntent === 'string' &&
+      ['buy', 'sell', 'neutral'].includes(item.tradeIntent) &&
       isRecord(item.freshness) &&
       isNonNegative(item.freshness.ageMs) &&
       typeof item.freshness.isStale === 'boolean'
@@ -368,6 +375,15 @@ function isHttpsUrl(input: string): boolean {
   } catch {
     return false
   }
+}
+
+function sentenceCount(input: string): number {
+  return input.trim() === ''
+    ? 0
+    : input
+        .trim()
+        .split(/(?<=[.!?])\s+/u)
+        .filter(Boolean).length
 }
 
 function isMarket(input: unknown): boolean {

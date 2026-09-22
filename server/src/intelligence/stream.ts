@@ -14,6 +14,11 @@ import type {
 } from './market/market-store.ts'
 import { KRAKEN_MARKET_SOURCE } from './market/market-sources.ts'
 import type { NormalizedMarketPayload } from './market/market-payload.ts'
+import {
+  deterministicPresentation,
+  type NewsPresentation,
+  type NewsTradeIntent,
+} from './news/news-presentation.ts'
 
 export const INTELLIGENCE_STREAM_VERSION = 'intelligence-stream.v1'
 export const INTELLIGENCE_SNAPSHOT_VERSION = 'intelligence-snapshot.v1'
@@ -114,6 +119,8 @@ export interface IntelligenceNewsItem {
   readonly displayedAt: TimestampMs
   readonly licenseStatus: string
   readonly important: boolean
+  readonly summary: string
+  readonly tradeIntent: NewsTradeIntent
   readonly freshness: {
     readonly ageMs: number
     readonly isStale: boolean
@@ -311,8 +318,15 @@ export function createNewsSnapshot(input: {
   readonly lastSuccessfulAt?: TimestampMs
   readonly error?: string
   readonly staleAfterMs?: number
+  readonly presentation?: (evidence: NewsEvidenceRecord) => NewsPresentation
 }): IntelligenceNewsSnapshot {
+  const todayStart = utcDayStart(input.displayedAt)
+  const tomorrowStart = todayStart + 86_400_000
   const items = [...input.evidence]
+    .filter(
+      (item) =>
+        item.publishedAt >= todayStart && item.publishedAt < tomorrowStart,
+    )
     .sort(
       (left, right) =>
         right.publishedAt - left.publishedAt ||
@@ -320,6 +334,8 @@ export function createNewsSnapshot(input: {
     )
     .map((item) => {
       const ageMs = Math.max(0, input.displayedAt - item.ingestedAt)
+      const presentation =
+        input.presentation?.(item) ?? deterministicPresentation(item)
       return {
         id: item.id,
         version: item.version,
@@ -330,7 +346,9 @@ export function createNewsSnapshot(input: {
         ingestedAt: item.ingestedAt,
         displayedAt: input.displayedAt,
         licenseStatus: item.licenseStatus,
-        important: item.relevance === 'relevant',
+        important: presentation.important,
+        summary: presentation.summary,
+        tradeIntent: presentation.tradeIntent,
         freshness: {
           ageMs,
           isStale:
@@ -347,6 +365,11 @@ export function createNewsSnapshot(input: {
       : { lastSuccessfulAt: input.lastSuccessfulAt }),
     ...(input.error === undefined ? {} : { error: input.error }),
   }
+}
+
+function utcDayStart(timestamp: TimestampMs): number {
+  const date = new Date(timestamp)
+  return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate())
 }
 
 function marketSnapshot(
@@ -652,6 +675,11 @@ function isNewsItem(input: unknown): input is IntelligenceNewsItem {
       input.licenseStatus as string,
     ) &&
     typeof input.important === 'boolean' &&
+    typeof input.summary === 'string' &&
+    input.summary.trim() !== '' &&
+    sentenceCount(input.summary) <= 5 &&
+    typeof input.tradeIntent === 'string' &&
+    ['buy', 'sell', 'neutral'].includes(input.tradeIntent) &&
     isRecord(input.freshness) &&
     isNonNegativeNumber(input.freshness.ageMs) &&
     typeof input.freshness.isStale === 'boolean'
@@ -664,6 +692,15 @@ function isHttpsUrl(input: string): boolean {
   } catch {
     return false
   }
+}
+
+function sentenceCount(input: string): number {
+  return input.trim() === ''
+    ? 0
+    : input
+        .trim()
+        .split(/(?<=[.!?])\s+/u)
+        .filter(Boolean).length
 }
 
 function isPipeline(input: unknown): boolean {

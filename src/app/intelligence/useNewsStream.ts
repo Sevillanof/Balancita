@@ -19,6 +19,8 @@ type NewsWireItem = {
   readonly displayedAt: number
   readonly licenseStatus: string
   readonly important: boolean
+  readonly summary: string
+  readonly tradeIntent: 'buy' | 'sell' | 'neutral'
   readonly freshness: { readonly ageMs: number; readonly isStale: boolean }
 }
 
@@ -37,13 +39,13 @@ export function useNewsStream(
   if (stream.status === 'error')
     return {
       status: 'error',
-      items: news === undefined ? [] : news.items.map(toNewsItem),
+      items: itemsForToday(news?.items.map(toNewsItem) ?? [], stream.snapshot),
       error: stream.error,
     }
   if (stream.status === 'stale')
     return {
       status: 'stale',
-      items: news === undefined ? [] : news.items.map(toNewsItem),
+      items: itemsForToday(news?.items.map(toNewsItem) ?? [], stream.snapshot),
       error: null,
     }
   if (news === undefined || news.status === 'disabled')
@@ -53,15 +55,19 @@ export function useNewsStream(
   if (news.status === 'error')
     return {
       status: 'error',
-      items: news.items.map(toNewsItem),
+      items: itemsForToday(news.items.map(toNewsItem), stream.snapshot),
       error:
         news.error === undefined
           ? new Error('News polling failed.')
           : new Error(news.error),
     }
   if (news.status === 'stale')
-    return { status: 'stale', items: news.items.map(toNewsItem), error: null }
-  const items = news.items.map(toNewsItem)
+    return {
+      status: 'stale',
+      items: itemsForToday(news.items.map(toNewsItem), stream.snapshot),
+      error: null,
+    }
+  const items = itemsForToday(news.items.map(toNewsItem), stream.snapshot)
   return { status: items.length === 0 ? 'empty' : 'ready', items, error: null }
 }
 
@@ -77,6 +83,26 @@ function toNewsItem(item: NewsWireItem): NewsItem {
     displayedAt: new Date(item.displayedAt).toISOString(),
     licenseStatus: item.licenseStatus as NewsItem['licenseStatus'],
     important: item.important,
+    summary: item.summary,
+    tradeIntent: item.tradeIntent,
     freshness: item.freshness,
   }
+}
+
+function itemsForToday(
+  items: readonly NewsItem[],
+  snapshot: { readonly generatedAt: number } | null,
+): readonly NewsItem[] {
+  const reference = snapshot?.generatedAt ?? Date.now()
+  const referenceDate = new Date(reference)
+  const start = Date.UTC(
+    referenceDate.getUTCFullYear(),
+    referenceDate.getUTCMonth(),
+    referenceDate.getUTCDate(),
+  )
+  const end = start + 86_400_000
+  return items.filter((item) => {
+    const publishedAt = Date.parse(item.publishedAt)
+    return publishedAt >= start && publishedAt < end
+  })
 }

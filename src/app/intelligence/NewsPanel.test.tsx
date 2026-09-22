@@ -34,13 +34,13 @@ describe('NewsPanel', () => {
       {
         ...NEWS_FIXTURES[0]!,
         id: 'older',
-        publishedAt: '2026-09-20T10:00:00.000Z',
+        publishedAt: '2026-09-22T10:00:00.000Z',
         important: false,
       },
       {
         ...NEWS_FIXTURES[0]!,
         id: 'newer',
-        publishedAt: '2026-09-20T12:00:00.000Z',
+        publishedAt: '2026-09-22T12:00:00.000Z',
         important: true,
       },
     ]
@@ -109,7 +109,7 @@ describe('NewsPanel', () => {
     fetchSpy.mockRestore()
   })
 
-  it('renders the complete provenance contract compactly for each item', () => {
+  it('renders only the compact presentation fields for each item', () => {
     const item = {
       ...NEWS_FIXTURES[0]!,
       ingestedAt: '2026-09-20T11:33:00.000Z',
@@ -118,18 +118,39 @@ describe('NewsPanel', () => {
       freshness: { ageMs: 60_000, isStale: false },
     }
 
-    render(<NewsPanel status="ready" items={[item]} />)
+    render(
+      <NewsPanel
+        status="ready"
+        items={[item]}
+        now={() => Date.parse('2026-09-22T18:00:00.000Z')}
+      />,
+    )
 
     const region = screen.getByRole('region', { name: 'Noticias BTC-EUR' })
     const row = within(region).getByRole('listitem')
     expect(within(row).getByText(item.source)).toBeInTheDocument()
     expect(within(row).getByRole('link')).toHaveAttribute('href', item.url)
-    expect(within(row).getByText(/Publicado/)).toBeInTheDocument()
-    expect(within(row).getByText(/Ingestado/)).toBeInTheDocument()
-    expect(within(row).getByText(/Mostrado/)).toBeInTheDocument()
-    expect(within(row).getByText(/Frescura/)).toBeInTheDocument()
+    expect(within(row).getByText(item.summary)).toBeInTheDocument()
+    expect(within(row).getByText('Neutral')).toBeInTheDocument()
     expect(
-      within(row).getByText(/Licencia: official_public/),
-    ).toBeInTheDocument()
+      within(row).queryByText(/Publicado|Ingestado|Mostrado|Licencia/),
+    ).not.toBeInTheDocument()
+  })
+
+  it('excludes yesterday and keeps the UTC day boundaries', () => {
+    const item = NEWS_FIXTURES[0]!
+    render(
+      <NewsPanel
+        status="ready"
+        items={[
+          item,
+          { ...item, id: 'yesterday', publishedAt: '2026-09-21T23:59:59.999Z' },
+          { ...item, id: 'boundary', publishedAt: '2026-09-23T00:00:00.000Z' },
+        ]}
+        now={() => Date.parse('2026-09-22T12:00:00.000Z')}
+      />,
+    )
+
+    expect(screen.getAllByRole('listitem')).toHaveLength(1)
   })
 })

@@ -10,7 +10,7 @@ import type {
 const snapshot: IntelligenceStreamSnapshot = {
   version: 'intelligence-snapshot.v1',
   instrumentId: 'BTC-EUR',
-  generatedAt: 1_700_000_000_000,
+  generatedAt: Date.parse('2026-09-22T17:30:00.000Z'),
   pipeline: {
     status: 'ready',
     collectorEnabled: true,
@@ -33,11 +33,13 @@ const snapshot: IntelligenceStreamSnapshot = {
         source: 'sec',
         title: 'Bitcoin and EUR market structure',
         url: 'https://www.sec.gov/news/item',
-        publishedAt: 1_699_999_999_000,
-        ingestedAt: 1_699_999_999_500,
-        displayedAt: 1_700_000_000_000,
+        publishedAt: Date.parse('2026-09-22T17:29:59.000Z'),
+        ingestedAt: Date.parse('2026-09-22T17:29:59.500Z'),
+        displayedAt: Date.parse('2026-09-22T17:30:00.000Z'),
         licenseStatus: 'official_public',
         important: true,
+        summary: 'Resumen de la estructura de mercado de Bitcoin y EUR.',
+        tradeIntent: 'neutral',
         freshness: { ageMs: 500, isStale: false },
       },
     ],
@@ -101,9 +103,11 @@ describe('useNewsStream', () => {
     expect(result.current.status).toBe('ready')
     expect(result.current.items[0]).toMatchObject({
       source: 'sec',
-      ingestedAt: '2023-11-14T22:13:19.500Z',
-      displayedAt: '2023-11-14T22:13:20.000Z',
+      ingestedAt: '2026-09-22T17:29:59.500Z',
+      displayedAt: '2026-09-22T17:30:00.000Z',
       licenseStatus: 'official_public',
+      summary: 'Resumen de la estructura de mercado de Bitcoin y EUR.',
+      tradeIntent: 'neutral',
     })
 
     unmount()
