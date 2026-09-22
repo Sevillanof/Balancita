@@ -19,10 +19,10 @@ import type { UseAlertsResult } from './alerts/useAlerts'
 import { NEWS_FIXTURES } from './intelligence/news-fixtures'
 
 const mocks = vi.hoisted(() => {
-  const series = { setData: vi.fn() }
+  const series = { setData: vi.fn(), update: vi.fn() }
   const chart = {
     addSeries: vi.fn(() => series),
-    timeScale: vi.fn(() => ({ scrollToRealTime: vi.fn() })),
+    timeScale: vi.fn(() => ({ fitContent: vi.fn() })),
     remove: vi.fn(),
   }
   const createChart = vi.fn()
@@ -294,8 +294,8 @@ describe('BtcEurDashboard main screen (Phase 1)', () => {
       ),
     )
 
-    expect(mocks.series.setData).toHaveBeenLastCalledWith(
-      expect.arrayContaining([expect.objectContaining({ close: 60_123 })]),
+    expect(mocks.series.update).toHaveBeenLastCalledWith(
+      expect.objectContaining({ close: 60_123 }),
     )
   })
 

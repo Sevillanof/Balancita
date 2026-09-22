@@ -99,6 +99,7 @@ export default function PriceChart({ data }: PriceChartProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
   const seriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null)
+  const previousDataRef = useRef<readonly CandlestickData[] | null>(null)
   const hasData = data.length > 0
 
   useEffect(() => {
@@ -117,10 +118,12 @@ export default function PriceChart({ data }: PriceChartProps) {
     })
     chartRef.current = chart
     seriesRef.current = series
+    previousDataRef.current = null
 
     return () => {
       chartRef.current = null
       seriesRef.current = null
+      previousDataRef.current = null
       chart.remove()
     }
   }, [hasData])
@@ -129,8 +132,39 @@ export default function PriceChart({ data }: PriceChartProps) {
     const series = seriesRef.current
     const chart = chartRef.current
     if (!series || !chart) return
-    series.setData([...data])
-    chart.timeScale().scrollToRealTime()
+
+    const previousData = previousDataRef.current
+    if (previousData === null) {
+      series.setData([...data])
+      chart.timeScale().fitContent()
+      previousDataRef.current = [...data]
+      return
+    }
+
+    if (sameDataset(previousData, data)) return
+
+    const previousLast = previousData.at(-1)
+    const nextLast = data.at(-1)
+    const sameHistory = previousData.every((candle, index) =>
+      sameCandle(candle, data[index]),
+    )
+    const sameHistoryExceptLast = previousData
+      .slice(0, -1)
+      .every((candle, index) => sameCandle(candle, data[index]))
+    const canUpdateCurrent =
+      data.length === previousData.length &&
+      previousLast !== undefined &&
+      nextLast !== undefined &&
+      previousLast.time === nextLast.time &&
+      sameHistoryExceptLast
+    const canAppend = data.length === previousData.length + 1 && sameHistory
+
+    if (canUpdateCurrent || canAppend) {
+      series.update(nextLast!)
+    } else {
+      series.setData([...data])
+    }
+    previousDataRef.current = [...data]
   }, [data])
 
   if (!hasData) {
@@ -149,5 +183,29 @@ export default function PriceChart({ data }: PriceChartProps) {
       role="img"
       aria-label="Gráfico de precio"
     />
+  )
+}
+
+function sameDataset(
+  left: readonly CandlestickData[],
+  right: readonly CandlestickData[],
+): boolean {
+  return (
+    left.length === right.length &&
+    left.every((candle, index) => sameCandle(candle, right[index]))
+  )
+}
+
+function sameCandle(
+  left: CandlestickData,
+  right: CandlestickData | undefined,
+): boolean {
+  return (
+    right !== undefined &&
+    left.time === right.time &&
+    left.open === right.open &&
+    left.high === right.high &&
+    left.low === right.low &&
+    left.close === right.close
   )
 }

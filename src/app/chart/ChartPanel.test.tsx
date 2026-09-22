@@ -7,10 +7,10 @@ import { toCandlestickDataset } from './candlestick-data'
 import ChartPanel from './ChartPanel'
 
 const mocks = vi.hoisted(() => {
-  const series = { setData: vi.fn() }
+  const series = { setData: vi.fn(), update: vi.fn() }
   const chart = {
     addSeries: vi.fn(() => series),
-    timeScale: vi.fn(() => ({ scrollToRealTime: vi.fn() })),
+    timeScale: vi.fn(() => ({ fitContent: vi.fn() })),
     remove: vi.fn(),
   }
   const createChart = vi.fn()
@@ -23,6 +23,7 @@ const mocks = vi.hoisted(() => {
       chart.addSeries.mockClear()
       chart.remove.mockClear()
       series.setData.mockClear()
+      series.update.mockClear()
     },
   }
 })

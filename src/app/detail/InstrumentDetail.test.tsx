@@ -23,12 +23,13 @@ import InstrumentDetail from './InstrumentDetail'
 const mocks = vi.hoisted(() => {
   const series = {
     setData: vi.fn(),
+    update: vi.fn(),
     remove: vi.fn(),
     applyOptions: vi.fn(),
   }
   const chart = {
     addSeries: vi.fn(() => series),
-    timeScale: vi.fn(() => ({ scrollToRealTime: vi.fn() })),
+    timeScale: vi.fn(() => ({ fitContent: vi.fn() })),
     remove: vi.fn(),
     applyOptions: vi.fn(),
   }
@@ -42,6 +43,7 @@ const mocks = vi.hoisted(() => {
       createChart.mockClear()
       chart.addSeries.mockClear()
       series.setData.mockClear()
+      series.update.mockClear()
       chart.remove.mockClear()
     },
   }

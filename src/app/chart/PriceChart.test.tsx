@@ -6,10 +6,12 @@ import PriceChart from './PriceChart'
 const mocks = vi.hoisted(() => {
   const series = {
     setData: vi.fn(),
+    update: vi.fn(),
     remove: vi.fn(),
     applyOptions: vi.fn(),
   }
   const timeScale = {
+    fitContent: vi.fn(),
     scrollToRealTime: vi.fn(),
   }
   const chart = {
@@ -29,7 +31,9 @@ const mocks = vi.hoisted(() => {
       createChart.mockClear()
       chart.addSeries.mockClear()
       series.setData.mockClear()
+      series.update.mockClear()
       chart.timeScale.mockClear()
+      timeScale.fitContent.mockClear()
       timeScale.scrollToRealTime.mockClear()
       chart.remove.mockClear()
     },
@@ -101,19 +105,50 @@ describe('PriceChart', () => {
       }),
     )
     expect(mocks.series.setData).toHaveBeenCalledWith(data)
-    expect(mocks.chart.timeScale).toHaveBeenCalled()
-    expect(mocks.timeScale.scrollToRealTime).toHaveBeenCalledTimes(1)
+    expect(mocks.timeScale.fitContent).toHaveBeenCalledTimes(1)
+    expect(mocks.timeScale.scrollToRealTime).not.toHaveBeenCalled()
   })
 
-  it('updates the existing series when data changes', () => {
+  it('updates the current candle without recentering the viewport', () => {
     const { rerender } = renderChart([candlestick(1704067200, 100)])
 
-    const next = [candlestick(1704067200, 100), candlestick(1704067201, 99)]
+    const next = [candlestick(1704067200, 99)]
     rerender(<PriceChart data={next} />)
 
     expect(mocks.createChart).toHaveBeenCalledTimes(1)
+    expect(mocks.series.setData).toHaveBeenCalledTimes(1)
+    expect(mocks.series.update).toHaveBeenCalledWith(next[0])
+    expect(mocks.timeScale.fitContent).toHaveBeenCalledTimes(1)
+    expect(mocks.timeScale.scrollToRealTime).not.toHaveBeenCalled()
+  })
+
+  it('updates an appended candle without resetting the visible range', () => {
+    const initial = [candlestick(1704067200, 100)]
+    const { rerender } = renderChart(initial)
+    const next = [...initial, candlestick(1704067260, 99)]
+
+    rerender(<PriceChart data={next} />)
+
+    expect(mocks.series.setData).toHaveBeenCalledTimes(1)
+    expect(mocks.series.update).toHaveBeenCalledWith(next[1])
+    expect(mocks.timeScale.fitContent).toHaveBeenCalledTimes(1)
+    expect(mocks.timeScale.scrollToRealTime).not.toHaveBeenCalled()
+  })
+
+  it('replaces the series when historical data changes', () => {
+    const { rerender } = renderChart([
+      candlestick(1704067200, 100),
+      candlestick(1704067260, 101),
+    ])
+    const next = [candlestick(1704067200, 98), candlestick(1704067260, 101)]
+
+    rerender(<PriceChart data={next} />)
+
     expect(mocks.series.setData).toHaveBeenLastCalledWith(next)
-    expect(mocks.timeScale.scrollToRealTime).toHaveBeenCalledTimes(2)
+    expect(mocks.series.setData).toHaveBeenCalledTimes(2)
+    expect(mocks.series.update).not.toHaveBeenCalled()
+    expect(mocks.timeScale.fitContent).toHaveBeenCalledTimes(1)
+    expect(mocks.timeScale.scrollToRealTime).not.toHaveBeenCalled()
   })
 
   it('removes the chart when data becomes empty', () => {

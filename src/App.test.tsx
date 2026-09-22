@@ -17,10 +17,10 @@ import App from './App'
 
 const mocks = vi.hoisted(() => ({
   createChart: vi.fn(),
-  series: { setData: vi.fn() },
+  series: { setData: vi.fn(), update: vi.fn() },
   chart: {
     addSeries: vi.fn(),
-    timeScale: vi.fn(() => ({ scrollToRealTime: vi.fn() })),
+    timeScale: vi.fn(() => ({ fitContent: vi.fn() })),
     remove: vi.fn(),
   },
 }))
