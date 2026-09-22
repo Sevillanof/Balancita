@@ -1,0 +1,22 @@
+src/App.css
+  h_2f68313623be98 6,118
+src/app/BtcEurDashboard.test.tsx
+  h_2f68313623be98 115-116,118,120-125
+src/app/BtcEurDashboard.tsx
+  h_2f68313623be98 69-71
+src/app/dashboard.css
+  h_2f68313623be98 14,84
+src/app/summary/summary.css
+  h_2f68313623be98 6,13,19,24
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e2ef5a0f585c0e1c431d01bfa439483af6759bc9",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
