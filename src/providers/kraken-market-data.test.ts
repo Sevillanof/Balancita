@@ -229,7 +229,56 @@ describe('KrakenMarketDataProvider REST contract', () => {
     ])
     expect(history[0]?.time < history[1]!.time).toBe(true)
     expect(calls).toEqual([
-      'https://api.kraken.com/0/public/OHLC?pair=XBTEUR&interval=1440',
+      'https://api.kraken.com/0/public/OHLC?pair=XBTEUR&interval=1',
+    ])
+  })
+
+  it('returns an empty history during warm-up without inventing candles', async () => {
+    const { fetch } = makeFetch([
+      makeResponse({ error: [], result: { XBTEUR: [], last: 1_700_000_000 } }),
+    ])
+    const provider = new KrakenMarketDataProvider({ fetch })
+
+    await expect(provider.getHistory('BTC-EUR')).resolves.toEqual([])
+  })
+
+  it('preserves real gaps between valid ascending 1m candles', async () => {
+    const { fetch } = makeFetch([
+      makeResponse({
+        error: [],
+        result: {
+          XBTEUR: [
+            [
+              1_699_900_000,
+              '60000',
+              '62000',
+              '59500',
+              '61500',
+              '61000',
+              '12.5',
+            ],
+            [1_699_900_120, '61500', '63000', '61000', '62500', '62000', '13'],
+            [
+              1_699_900_180,
+              '62500',
+              '63200',
+              '62100',
+              '63100',
+              '63000',
+              '14.1',
+            ],
+          ],
+          last: 1_699_900_180,
+        },
+      }),
+    ])
+    const provider = new KrakenMarketDataProvider({ fetch })
+
+    const history = await provider.getHistory('BTC-EUR')
+
+    expect(history.map(({ time }) => time)).toEqual([
+      new Date(1_699_900_000 * 1000).toISOString(),
+      new Date(1_699_900_120 * 1000).toISOString(),
     ])
   })
 
@@ -404,7 +453,9 @@ describe('KrakenMarketDataProvider WebSocket v2 ticker contract', () => {
   })
 
   it('subscribes to the public BTC/EUR ticker channel and maps a snapshot quote', () => {
-    const { provider, sockets } = makeProvider()
+    const { provider, sockets } = makeProvider({
+      now: () => Date.parse('2026-09-20T12:00:01.250Z'),
+    })
     const quotes: Quote[] = []
     const unsubscribe = provider.subscribe(['BTC-EUR'], (quote) =>
       quotes.push(quote),
@@ -430,6 +481,11 @@ describe('KrakenMarketDataProvider WebSocket v2 ticker contract', () => {
         changePercent: 1.63,
         timestamp: '2026-09-20T12:00:00.000Z',
         status: 'live',
+        eventTime: '2026-09-20T12:00:00.000Z',
+        receivedTime: '2026-09-20T12:00:01.250Z',
+        displayTime: '2026-09-20T12:00:01.250Z',
+        freshnessAgeMs: 1250,
+        freshnessIsStale: false,
       },
     ])
   })
@@ -544,7 +600,11 @@ describe('KrakenMarketDataProvider WebSocket v2 ticker contract', () => {
     socket.message(TICKER_BASE)
     socket.serverClose()
 
-    expect(quotes.at(-1)).toMatchObject({ price: 62_000.5, status: 'stale' })
+    expect(quotes.at(-1)).toMatchObject({
+      price: 62_000.5,
+      status: 'stale',
+      freshnessIsStale: true,
+    })
     expect(socket.close).toHaveBeenCalled()
     vi.advanceTimersByTime(100)
     expect(sockets).toHaveLength(2)

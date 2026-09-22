@@ -20,6 +20,11 @@ export type Quote = {
   changePercent: number
   timestamp: string
   status: 'live' | 'delayed' | 'mock' | 'stale'
+  eventTime?: string
+  receivedTime?: string
+  displayTime?: string
+  freshnessAgeMs?: number
+  freshnessIsStale?: boolean
 }
 
 export type Candle = {

@@ -95,6 +95,7 @@ export default function BtcEurDashboard({
             <ChartPanel
               status={history.status}
               candles={history.candles}
+              quote={quote}
               onRetry={history.retry}
             />
             <NewsPanel status="ready" items={NEWS_FIXTURES} />

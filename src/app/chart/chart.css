@@ -22,11 +22,27 @@
 }
 
 .chart-panel {
+  position: relative;
   display: grid;
   grid-template-rows: minmax(0, 1fr);
   height: 100%;
   min-width: 0;
   min-height: 0;
+}
+
+.chart-panel__freshness {
+  position: absolute;
+  z-index: 1;
+  top: var(--space-2);
+  right: var(--space-2);
+  margin: 0;
+  padding: var(--space-1) var(--space-2);
+  color: var(--color-muted);
+  background: color-mix(in srgb, var(--color-surface) 88%, transparent);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xs);
+  line-height: 1.2;
 }
 
 .chart-panel .chart__container {

@@ -1,6 +1,7 @@
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import type { Quote } from '../../domain/market-data'
 import { makeCandle } from '../../test/fake-market-data-provider'
 import ChartPanel from './ChartPanel'
 
@@ -77,5 +78,56 @@ describe('ChartPanel', () => {
     )
     await userEvent.click(screen.getByRole('button', { name: 'Reintentar' }))
     expect(onRetry).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps live freshness visible inside the chart area', () => {
+    const quote: Quote = {
+      instrumentId: 'BTC-EUR',
+      price: 62_000,
+      change: 100,
+      changePercent: 0.16,
+      timestamp: '2026-09-20T12:00:00.000Z',
+      status: 'live',
+      eventTime: '2026-09-20T12:00:00.000Z',
+      receivedTime: '2026-09-20T12:00:01.000Z',
+      displayTime: '2026-09-20T12:00:01.000Z',
+      freshnessAgeMs: 1000,
+      freshnessIsStale: false,
+    }
+
+    render(
+      <ChartPanel
+        status="ready"
+        candles={[makeCandle()]}
+        quote={quote}
+        onRetry={() => {}}
+      />,
+    )
+
+    expect(screen.getByRole('status')).toHaveTextContent('Mercado en vivo')
+    expect(screen.getByRole('status')).toHaveTextContent('1 s')
+  })
+
+  it('shows stale degradation without changing the chart state', () => {
+    render(
+      <ChartPanel
+        status="ready"
+        candles={[makeCandle()]}
+        quote={{
+          instrumentId: 'BTC-EUR',
+          price: 62_000,
+          change: 0,
+          changePercent: 0,
+          timestamp: '2026-09-20T12:00:00.000Z',
+          status: 'stale',
+          freshnessIsStale: true,
+          freshnessAgeMs: 16_000,
+        }}
+        onRetry={() => {}}
+      />,
+    )
+
+    expect(screen.getByRole('status')).toHaveTextContent('Mercado stale')
+    expect(screen.getByTestId('price-chart')).toBeInTheDocument()
   })
 })

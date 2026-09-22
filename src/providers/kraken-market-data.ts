@@ -14,7 +14,7 @@ import {
 
 const REST_BASE_URL = 'https://api.kraken.com/0'
 const WS_URL = 'wss://ws.kraken.com/v2'
-const OHLC_INTERVAL_MINUTES = 1440
+const OHLC_INTERVAL_MINUTES = 1
 const DEFAULT_STALE_AFTER_MS = 15_000
 const DEFAULT_RECONNECT_BASE_MS = 1_000
 const DEFAULT_RECONNECT_MAX_MS = 30_000
@@ -240,6 +240,7 @@ export class KrakenMarketDataProvider implements MarketDataProvider {
         this.handleSocketFailure(state, socket, onQuote)
         return
       }
+      const timedQuote = withQuoteTiming(quote, this.now())
       const timestampMs = Date.parse(quote.timestamp)
       const lastAt = state.lastTickerAt.get(instrumentId)
       if (lastAt !== undefined && timestampMs <= lastAt) {
@@ -248,7 +249,7 @@ export class KrakenMarketDataProvider implements MarketDataProvider {
         continue
       }
       state.lastTickerAt.set(instrumentId, timestampMs)
-      quotes.push(quote)
+      quotes.push(timedQuote)
     }
 
     for (const quote of quotes) {
@@ -311,7 +312,17 @@ export class KrakenMarketDataProvider implements MarketDataProvider {
     onQuote: (quote: Quote) => void,
   ): void {
     if (state.lastQuote === null || state.lastQuote.status === 'stale') return
-    const staleQuote: Quote = { ...state.lastQuote, status: 'stale' }
+    const eventTime = Date.parse(
+      state.lastQuote.eventTime ?? state.lastQuote.timestamp,
+    )
+    const staleQuote: Quote = {
+      ...state.lastQuote,
+      status: 'stale',
+      freshnessAgeMs: Number.isFinite(eventTime)
+        ? Math.max(0, this.now() - eventTime)
+        : state.lastQuote.freshnessAgeMs,
+      freshnessIsStale: true,
+    }
     state.lastQuote = staleQuote
     onQuote(staleQuote)
   }
@@ -373,9 +384,10 @@ function resolveAssetPair(result: RecordValue): RecordValue | null {
 
 function mapOhlcCandles(result: RecordValue, restPair: string): Candle[] {
   const rows = resolveOhlcRows(result, restPair)
-  if (!Array.isArray(rows) || rows.length === 0) {
+  if (!Array.isArray(rows)) {
     throw new Error('Invalid Kraken OHLC response')
   }
+  if (rows.length === 0) return []
   const candles = rows.map(mapOhlcCandle)
   let previousTime = -Infinity
   for (const candle of candles) {
@@ -461,6 +473,20 @@ function mapTicker(
     changePercent,
     timestamp,
     status: 'live',
+  }
+}
+
+function withQuoteTiming(quote: Quote, receivedAtMs: number): Quote {
+  const eventTimeMs = Date.parse(quote.timestamp)
+  const displayTimeMs = Math.max(receivedAtMs, eventTimeMs)
+  const displayTime = new Date(displayTimeMs).toISOString()
+  return {
+    ...quote,
+    eventTime: new Date(eventTimeMs).toISOString(),
+    receivedTime: displayTime,
+    displayTime,
+    freshnessAgeMs: displayTimeMs - eventTimeMs,
+    freshnessIsStale: false,
   }
 }
 
