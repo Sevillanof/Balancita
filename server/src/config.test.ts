@@ -17,6 +17,8 @@ describe('serverConfigFrom', () => {
     expect(config.corsOrigin).toBe('http://localhost:5173')
     expect(config.apiKey).toBe('')
     expect(config.marketCollectorEnabled).toBe(false)
+    expect(config.forecastLoopEnabled).toBe(false)
+    expect(config.forecastLoopIntervalMs).toBe(60_000)
     expect(config.marketDbPath).toBe('./data/market.sqlite')
     expect(config.krakenWsUrl).toBe('wss://ws.kraken.com/v2')
     expect(config.krakenRestUrl).toBe('https://api.kraken.com/0')
@@ -42,6 +44,8 @@ describe('serverConfigFrom', () => {
       GEMINI_MAX_CANDLES: '120',
       GEMINI_SERVER_CORS_ORIGIN: 'http://localhost:4000',
       MARKET_COLLECTOR_ENABLED: 'true',
+      FORECAST_LOOP_ENABLED: 'true',
+      FORECAST_LOOP_INTERVAL_MS: '15000',
       MARKET_DB_PATH: '/tmp/balancita-market.sqlite',
       KRAKEN_WS_URL: 'wss://kraken.example.invalid/v2',
       KRAKEN_REST_URL: 'https://kraken.example.invalid/0',
@@ -65,6 +69,8 @@ describe('serverConfigFrom', () => {
     expect(config.maxCandles).toBe(120)
     expect(config.corsOrigin).toBe('http://localhost:4000')
     expect(config.marketCollectorEnabled).toBe(true)
+    expect(config.forecastLoopEnabled).toBe(true)
+    expect(config.forecastLoopIntervalMs).toBe(15_000)
     expect(config.marketDbPath).toBe('/tmp/balancita-market.sqlite')
     expect(config.krakenWsUrl).toBe('wss://kraken.example.invalid/v2')
     expect(config.krakenRestUrl).toBe('https://kraken.example.invalid/0')
@@ -88,6 +94,8 @@ describe('serverConfigFrom', () => {
       { GEMINI_CACHE_TTL_MS: '0' },
       { GEMINI_MAX_CANDLES: '1.5' },
       { MARKET_COLLECTOR_ENABLED: 'maybe' },
+      { FORECAST_LOOP_ENABLED: 'maybe' },
+      { FORECAST_LOOP_INTERVAL_MS: '0' },
       { MARKET_STALE_AFTER_MS: '0' },
       { MARKET_RECONNECT_MIN_MS: '0' },
       { MARKET_RECONNECT_MAX_MS: '-1' },

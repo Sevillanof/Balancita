@@ -16,6 +16,7 @@ import type {
   SupportedInstrumentId,
   TimestampMs,
 } from './intelligence/contracts.ts'
+import { LiveForecastService } from './intelligence/live-forecast.ts'
 import { KrakenMarketCollector } from './intelligence/market/kraken-market-collector.ts'
 import { MarketStore } from './intelligence/market/market-store.ts'
 import {
@@ -43,9 +44,30 @@ export interface MarketCollectorLifecycle extends IntelligenceCollectorObserver 
   stop(): void | Promise<void>
 }
 
+export interface LiveForecastRunner {
+  runOnce(now?: TimestampMs): unknown
+}
+
+/**
+ * Injectable interval scheduler so the forecast loop can be exercised without
+ * leaving real timers running in tests.
+ */
+export interface ForecastLoopScheduler {
+  setInterval(callback: () => void, intervalMs: number): unknown
+  clearInterval(handle: unknown): void
+}
+
+const defaultForecastScheduler: ForecastLoopScheduler = {
+  setInterval: (callback, intervalMs) => setInterval(callback, intervalMs),
+  clearInterval: (handle) =>
+    clearInterval(handle as ReturnType<typeof setInterval>),
+}
+
 export interface MarketDependencies {
   marketCollector: MarketCollectorLifecycle
   marketStore?: MarketStore
+  liveForecastService?: LiveForecastRunner
+  forecastScheduler?: ForecastLoopScheduler
 }
 
 type ErrorEnvelope = {
@@ -133,6 +155,42 @@ export async function buildApp(options: {
           runId: config.shadowRunId,
           clock: () => Date.now() as TimestampMs,
         })
+  const liveForecastService =
+    marketStore === undefined
+      ? undefined
+      : (options.overrides?.liveForecastService ??
+        new LiveForecastService({
+          store: marketStore,
+          instrumentId: 'BTC-EUR',
+          interval: '15m',
+          horizon: '15m',
+          clock: () => Date.now() as TimestampMs,
+        }))
+  const forecastScheduler =
+    options.overrides?.forecastScheduler ?? defaultForecastScheduler
+  let forecastLoopHandle: unknown
+
+  const startForecastLoop = (): void => {
+    if (
+      !config.forecastLoopEnabled ||
+      liveForecastService === undefined ||
+      forecastLoopHandle !== undefined
+    )
+      return
+    forecastLoopHandle = forecastScheduler.setInterval(() => {
+      try {
+        liveForecastService.runOnce()
+      } catch {
+        // A single failed tick must never crash the server loop.
+      }
+    }, config.forecastLoopIntervalMs)
+  }
+
+  const stopForecastLoop = (): void => {
+    if (forecastLoopHandle === undefined) return
+    forecastScheduler.clearInterval(forecastLoopHandle)
+    forecastLoopHandle = undefined
+  }
 
   const ensureShadowRunExists = (): void => {
     if (shadowService === undefined || marketStore === undefined) return
@@ -252,8 +310,10 @@ export async function buildApp(options: {
     app.addHook('onReady', async () => {
       ensureShadowRunExists()
       await marketCollector?.start('BTC-EUR')
+      startForecastLoop()
     })
     app.addHook('onClose', async () => {
+      stopForecastLoop()
       streamHub.close()
       unsubscribeCollector?.()
       await marketCollector?.stop()
@@ -261,6 +321,7 @@ export async function buildApp(options: {
     })
   } else {
     app.addHook('onClose', async () => {
+      stopForecastLoop()
       streamHub.close()
       marketStore?.close()
     })

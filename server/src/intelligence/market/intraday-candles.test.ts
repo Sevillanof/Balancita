@@ -47,6 +47,44 @@ function observation(
   }
 }
 
+function tradeObservation(
+  offsetMs: number,
+  price: number,
+  qty: number,
+  options: {
+    sequence?: number
+    tradeId?: number
+    side?: 'buy' | 'sell'
+    status?: StoredMarketObservation['status']
+  } = {},
+): StoredMarketObservation {
+  const eventTime = (baseTime + offsetMs) as TimestampMs
+  const payload = {
+    type: 'trade' as const,
+    productId: 'BTC-EUR' as const,
+    tradeId: options.tradeId ?? Math.max(1, offsetMs + 1),
+    sequence: options.sequence ?? Math.max(1, offsetMs + 1),
+    price,
+    qty,
+    side: options.side ?? ('buy' as const),
+  }
+  return {
+    id: `trade-${offsetMs}-${price}`,
+    source: 'fixture',
+    instrumentId: 'BTC-EUR',
+    eventTime,
+    receivedTime: (eventTime + 10) as TimestampMs,
+    displayTime: (eventTime + 20) as TimestampMs,
+    sequence: payload.sequence,
+    status: options.status ?? 'live',
+    payload,
+    freshnessAgeMs: 20,
+    freshnessIsStale: false,
+    contentHash: `trade-hash-${offsetMs}-${price}`,
+    createdAt: (eventTime + 30) as TimestampMs,
+  }
+}
+
 function candle(
   index: number,
   close: number,
@@ -213,6 +251,76 @@ describe('buildIntradayCandles', () => {
       freshnessAgeMs: 40,
       freshnessIsStale: true,
     })
+  })
+
+  it('aggregates trade payloads into candles using qty as volume', () => {
+    const result = buildIntradayCandles({
+      interval: '1m',
+      asOfTimestamp: (baseTime + 60_000) as TimestampMs,
+      observations: [
+        tradeObservation(0, 100, 2, { sequence: 1, tradeId: 1 }),
+        tradeObservation(30_000, 110, 3, { sequence: 2, tradeId: 2 }),
+      ],
+    })
+
+    expect(result.rejected).toEqual([])
+    expect(result.closed[0]).toMatchObject({
+      open: 100,
+      high: 110,
+      low: 100,
+      close: 110,
+      volume: 5,
+      observationCount: 2,
+      status: 'live',
+    })
+  })
+
+  it('rejects invalid trade payloads and still rejects heartbeats', () => {
+    const invalidQty = {
+      ...tradeObservation(1_000, 100, 1),
+      payload: {
+        type: 'trade' as const,
+        productId: 'BTC-EUR' as const,
+        tradeId: 1,
+        sequence: 1,
+        price: 100,
+        qty: 0,
+        side: 'buy' as const,
+      },
+    }
+    const invalidPrice = {
+      ...tradeObservation(2_000, 100, 1),
+      payload: {
+        type: 'trade' as const,
+        productId: 'BTC-EUR' as const,
+        tradeId: 2,
+        sequence: 2,
+        price: -1,
+        qty: 1,
+        side: 'buy' as const,
+      },
+    }
+    const heartbeat = {
+      ...observation(3_000, 100),
+      payload: {
+        type: 'heartbeat' as const,
+        productId: 'BTC-EUR' as const,
+        sequence: 3,
+        lastTradeId: 3,
+      },
+    }
+    const result = buildIntradayCandles({
+      interval: '1m',
+      asOfTimestamp: (baseTime + 60_000) as TimestampMs,
+      observations: [invalidQty, invalidPrice, heartbeat],
+    })
+
+    expect(result.closed).toHaveLength(0)
+    expect(result.rejected.map((item) => item.code)).toEqual([
+      'unsupported_payload',
+      'unsupported_payload',
+      'unsupported_payload',
+    ])
   })
 })
 

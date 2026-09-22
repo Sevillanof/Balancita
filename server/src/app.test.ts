@@ -7,7 +7,7 @@ import { serverConfigFrom } from './config.ts'
 import type { GeminiClient, GeminiGenerateParams } from './gemini-client.ts'
 import { AnalysisRateLimiter } from './limits.ts'
 import { buildApp } from './app.ts'
-import type { MarketCollectorLifecycle } from './app.ts'
+import type { ForecastLoopScheduler, MarketCollectorLifecycle } from './app.ts'
 import type { SupportedInstrumentId } from './intelligence/contracts.ts'
 import { MarketStore } from './intelligence/market/market-store.ts'
 import { createShadowRunStart } from './intelligence/shadow/shadow-run.ts'
@@ -525,6 +525,98 @@ describe('shadow run lifecycle and status endpoint', () => {
     expect(existing?.status).toBe('collecting')
     expect(existing?.versions.policyVersion).toBe('shadow-policy.v1')
     expect(store.listShadowStatuses('shadow:BTC-EUR')).toHaveLength(1)
+    await app.close()
+  })
+})
+
+describe('forecast loop lifecycle', () => {
+  class FakeForecastScheduler implements ForecastLoopScheduler {
+    readonly callbacks: Array<() => void> = []
+    readonly intervals: number[] = []
+    readonly cleared: unknown[] = []
+
+    setInterval(callback: () => void, intervalMs: number): unknown {
+      this.callbacks.push(callback)
+      this.intervals.push(intervalMs)
+      return this.callbacks.length
+    }
+
+    clearInterval(handle: unknown): void {
+      this.cleared.push(handle)
+    }
+  }
+
+  async function makeLoopApp(options: {
+    enabled: boolean
+    scheduler: FakeForecastScheduler
+    runs: string[]
+    failFirst?: boolean
+  }) {
+    const app = await buildApp({
+      config: serverConfigFrom({
+        MARKET_COLLECTOR_ENABLED: 'true',
+        ...(options.enabled
+          ? { FORECAST_LOOP_ENABLED: 'true', FORECAST_LOOP_INTERVAL_MS: '2500' }
+          : {}),
+      }),
+      overrides: {
+        marketCollector: new FakeMarketCollector(),
+        marketStore: new MarketStore({ path: ':memory:' }),
+        forecastScheduler: options.scheduler,
+        liveForecastService: {
+          runOnce: () => {
+            options.runs.push('tick')
+            if (options.failFirst === true && options.runs.length === 1)
+              throw new Error('tick failed')
+            return null
+          },
+        },
+      },
+    })
+    return app
+  }
+
+  it('starts the loop on ready and clears it on close when enabled', async () => {
+    const scheduler = new FakeForecastScheduler()
+    const runs: string[] = []
+    const app = await makeLoopApp({ enabled: true, scheduler, runs })
+
+    await app.ready()
+    expect(scheduler.intervals).toEqual([2500])
+    expect(scheduler.callbacks).toHaveLength(1)
+
+    scheduler.callbacks[0]!()
+    expect(runs).toEqual(['tick'])
+
+    await app.close()
+    expect(scheduler.cleared).toEqual([1])
+  })
+
+  it('does not start a loop when the flag is off', async () => {
+    const scheduler = new FakeForecastScheduler()
+    const runs: string[] = []
+    const app = await makeLoopApp({ enabled: false, scheduler, runs })
+
+    await app.ready()
+    expect(scheduler.intervals).toEqual([])
+
+    await app.close()
+    expect(scheduler.cleared).toEqual([])
+  })
+
+  it('never lets a failing tick crash the server', async () => {
+    const scheduler = new FakeForecastScheduler()
+    const runs: string[] = []
+    const app = await makeLoopApp({
+      enabled: true,
+      scheduler,
+      runs,
+      failFirst: true,
+    })
+
+    await app.ready()
+    expect(() => scheduler.callbacks[0]!()).not.toThrow()
+    expect(runs).toEqual(['tick'])
     await app.close()
   })
 })

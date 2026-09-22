@@ -4,7 +4,6 @@ import type {
   SupportedInstrumentId,
   TimestampMs,
 } from '../contracts.ts'
-import type { NormalizedTickerPayload } from './market-payload.ts'
 
 export type CandleInterval = '1m' | '5m' | '15m' | '1h'
 
@@ -69,6 +68,15 @@ export interface IntradayCandleBuildResult {
   readonly gapMetrics: GapMetrics
 }
 
+interface CandlePayload {
+  readonly type: 'ticker' | 'trade'
+  readonly productId: 'BTC-EUR'
+  readonly tradeId: number
+  readonly sequence: number
+  readonly price: number
+  readonly size?: number
+}
+
 interface ValidObservation {
   readonly source: string
   readonly instrumentId: SupportedInstrumentId
@@ -77,7 +85,7 @@ interface ValidObservation {
   readonly displayTime: TimestampMs
   readonly sequence?: number
   readonly status: MarketDataStatus
-  readonly payload: NormalizedTickerPayload
+  readonly payload: CandlePayload
   readonly freshnessAgeMs: number
   readonly freshnessIsStale: boolean
   readonly freshnessClockInverted: boolean
@@ -92,7 +100,7 @@ interface ObservationRecord {
   readonly displayTime: TimestampMs
   readonly sequence?: number
   readonly status: MarketDataStatus
-  readonly payload: NormalizedTickerPayload
+  readonly payload: CandlePayload
   readonly freshnessAgeMs: number
   readonly freshnessIsStale: boolean
   readonly freshnessClockInverted: boolean
@@ -288,33 +296,55 @@ function parseObservation(candidate: unknown):
     typeof candidate.freshnessIsStale !== 'boolean'
   )
     return rejection('invalid_observation', 'Observation metadata is invalid.')
-  if (!isRecord(candidate.payload) || candidate.payload.type !== 'ticker')
+  if (!isRecord(candidate.payload))
     return rejection(
       'unsupported_payload',
-      'Only ticker payloads contribute to intraday candles.',
+      'Only ticker and trade payloads contribute to intraday candles.',
+    )
+  const payloadType = candidate.payload.type
+  if (payloadType !== 'ticker' && payloadType !== 'trade')
+    return rejection(
+      'unsupported_payload',
+      'Only ticker and trade payloads contribute to intraday candles.',
     )
   if (
     candidate.payload.productId !== 'BTC-EUR' ||
     !safeInteger(candidate.payload.tradeId) ||
     !safeInteger(candidate.payload.sequence) ||
-    !positiveFinite(candidate.payload.price) ||
-    (candidate.payload.size !== undefined &&
-      !positiveFinite(candidate.payload.size))
+    !positiveFinite(candidate.payload.price)
   )
-    return rejection(
-      'unsupported_payload',
-      'Ticker payload values are invalid.',
-    )
+    return rejection('unsupported_payload', 'Payload values are invalid.')
 
-  const payload: NormalizedTickerPayload = {
-    type: 'ticker',
+  let size: number | undefined
+  if (payloadType === 'ticker') {
+    if (
+      candidate.payload.size !== undefined &&
+      !positiveFinite(candidate.payload.size)
+    )
+      return rejection(
+        'unsupported_payload',
+        'Ticker payload values are invalid.',
+      )
+    if (candidate.payload.size !== undefined) size = candidate.payload.size
+  } else {
+    if (
+      !positiveFinite(candidate.payload.qty) ||
+      !validTradeSide(candidate.payload.side)
+    )
+      return rejection(
+        'unsupported_payload',
+        'Trade payload values are invalid.',
+      )
+    size = candidate.payload.qty
+  }
+
+  const payload: CandlePayload = {
+    type: payloadType,
     productId: 'BTC-EUR',
     tradeId: candidate.payload.tradeId,
     sequence: candidate.payload.sequence,
     price: candidate.payload.price,
-    ...(candidate.payload.size === undefined
-      ? {}
-      : { size: candidate.payload.size }),
+    ...(size === undefined ? {} : { size }),
   }
   const record: ObservationRecord = {
     source: candidate.source,
@@ -417,4 +447,8 @@ function validStatus(value: unknown): value is MarketDataStatus {
     value === 'invalid' ||
     value === 'gap'
   )
+}
+
+function validTradeSide(value: unknown): boolean {
+  return value === 'buy' || value === 'sell'
 }

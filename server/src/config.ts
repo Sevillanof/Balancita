@@ -22,6 +22,8 @@ export interface ServerConfig {
   maxCandles: number
   corsOrigin: string
   marketCollectorEnabled: boolean
+  forecastLoopEnabled: boolean
+  forecastLoopIntervalMs: number
   marketDbPath: string
   shadowRunId: string
   krakenWsUrl: string
@@ -83,6 +85,12 @@ export function serverConfigFrom(
       env,
       'MARKET_COLLECTOR_ENABLED',
       false,
+    ),
+    forecastLoopEnabled: booleanValue(env, 'FORECAST_LOOP_ENABLED', false),
+    forecastLoopIntervalMs: positiveInt(
+      env,
+      'FORECAST_LOOP_INTERVAL_MS',
+      60_000,
     ),
     marketDbPath: stringValue(env, 'MARKET_DB_PATH', './data/market.sqlite'),
     shadowRunId: stringValue(env, 'SHADOW_RUN_ID', 'shadow:BTC-EUR'),
