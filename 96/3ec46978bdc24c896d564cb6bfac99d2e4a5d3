@@ -1,0 +1,14 @@
+server/.env.example
+  h_2f68313623be98 68,70-75
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "963ec46978bdc24c896d564cb6bfac99d2e4a5d3",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
