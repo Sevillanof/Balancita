@@ -150,6 +150,51 @@ describe('intelligence SSE contract', () => {
     store.close()
   })
 
+  it('scopes gap detection to the current source and observation window', () => {
+    const store = new MarketStore({
+      path: ':memory:',
+      clock: () => now as never,
+    })
+    store.insertObservation(envelope(now - 1_000, now - 500, 1) as never)
+    store.insertObservation(envelope(now - 3_000, now - 400, 2) as never)
+    const collector = { getStatus: () => 'connected' as const }
+    const snapshot = () =>
+      createIntelligenceSnapshot({
+        collectorEnabled: true,
+        collector,
+        marketStore: store,
+        staleAfterMs: 15_000,
+        clock: () => now,
+      })
+
+    // A legacy venue's gap must not leak into the Kraken-era pipeline status.
+    store.recordGap({
+      source: 'coinbase_exchange',
+      instrumentId: 'BTC-EUR',
+      prevSequence: 1,
+      currentSequence: 5,
+      detectedAt: (now - 1_000) as never,
+      evidence: { kind: 'trade_id' },
+    })
+    const withLegacyGap = snapshot()
+    expect(withLegacyGap.pipeline.status).toBe('ready')
+    expect(withLegacyGap.observability?.gaps.gapCount).toBe(0)
+
+    // A Kraken gap inside the observation window still surfaces as a gap.
+    store.recordGap({
+      source: 'kraken',
+      instrumentId: 'BTC-EUR',
+      prevSequence: 2,
+      currentSequence: 6,
+      detectedAt: (now - 500) as never,
+      evidence: { kind: 'trade_id' },
+    })
+    const withCurrentGap = snapshot()
+    expect(withCurrentGap.pipeline.status).toBe('gap')
+    expect(withCurrentGap.observability?.gaps.gapCount).toBe(1)
+    store.close()
+  })
+
   it('rejects malformed wire events before the UI can consume them', () => {
     expect(() => parseIntelligenceStreamEvent({ nope: true })).toThrow(
       'Invalid intelligence stream event',

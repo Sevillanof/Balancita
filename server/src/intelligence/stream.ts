@@ -146,7 +146,22 @@ export function createIntelligenceSnapshot(
     .filter((observation) => observation.payload.type !== 'heartbeat')
     .sort((left, right) => left.displayTime - right.displayTime)
     .at(-1)
-  const gapCount = options.marketStore?.listGaps().length ?? 0
+  // Gaps are scoped to the same source and the same observation window as the
+  // SLIs above. Counting every gap ever recorded would let a legacy venue's gap
+  // history pin the pipeline to `gap` forever.
+  const windowStart =
+    observations.length === 0
+      ? undefined
+      : Math.min(...observations.map((observation) => observation.displayTime))
+  const gapCount =
+    options.marketStore
+      ?.listGaps()
+      .filter(
+        (gap) =>
+          gap.source === KRAKEN_MARKET_SOURCE &&
+          gap.instrumentId === 'BTC-EUR' &&
+          (windowStart === undefined || gap.detectedAt >= windowStart),
+      ).length ?? 0
   const latency = summarizePercentiles(
     observations.map((observation) =>
       Math.max(0, observation.receivedTime - observation.eventTime),
