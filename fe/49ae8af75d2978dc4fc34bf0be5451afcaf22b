@@ -1,0 +1,37 @@
+server/src/app.ts
+  s_6e5655531f1e3b::t_9dd68a2b8d1c3e 24-28,54-58,93,157-158,204-207,210-211,214-215,229-244,269-275,279-282,448,453
+server/src/intelligence/market/market-store.test.ts
+  s_d1d981efcc8250::t_742db967cc38f8 56,72,94,211
+server/src/intelligence/news/news-presentation.ts
+  s_d1d981efcc8250::t_557b6126a545bf 111-113,118-121,145-147
+server/src/intelligence/news/tree-news.test.ts
+  s_d1d981efcc8250::t_caa136d7db4ab2 1-154
+server/src/intelligence/news/tree-news.ts
+  s_d1d981efcc8250::t_cdd60c060d5261 1-285
+server/src/intelligence/source-policy.ts
+  s_d1d981efcc8250::t_df9919fec61ec1 125-137,281-282
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "fe49ae8af75d2978dc4fc34bf0be5451afcaf22b",
+  "prompts": {},
+  "sessions": {
+    "s_6e5655531f1e3b": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f3631e3f8ffeTr8fQbii1wFYks",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    },
+    "s_d1d981efcc8250": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f364129e8ffe9r6nPrdNUUWGPU",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
