@@ -1,4 +1,8 @@
-import type { MarketDataStatus, TimestampMs } from './contracts.ts'
+import type {
+  MarketDataStatus,
+  NewsEvidenceRecord,
+  TimestampMs,
+} from './contracts.ts'
 import {
   calculateStaleRate,
   summarizeGapTransitions,
@@ -96,6 +100,37 @@ export interface IntelligenceNewsSummary {
   readonly latestPublishedAt: TimestampMs
 }
 
+export type IntelligenceNewsStatus =
+  'disabled' | 'loading' | 'ready' | 'stale' | 'error'
+
+export interface IntelligenceNewsItem {
+  readonly id: string
+  readonly version: string
+  readonly source: string
+  readonly title: string
+  readonly url: string
+  readonly publishedAt: TimestampMs
+  readonly ingestedAt: TimestampMs
+  readonly displayedAt: TimestampMs
+  readonly licenseStatus: string
+  readonly important: boolean
+  readonly freshness: {
+    readonly ageMs: number
+    readonly isStale: boolean
+  }
+}
+
+export interface IntelligenceNewsSnapshot {
+  readonly status: IntelligenceNewsStatus
+  readonly items: readonly IntelligenceNewsItem[]
+  readonly lastSuccessfulAt?: TimestampMs
+  readonly error?: string
+}
+
+export interface IntelligenceNewsObserver {
+  getSnapshot(displayedAt: TimestampMs): IntelligenceNewsSnapshot
+}
+
 export interface IntelligenceStreamSnapshot {
   readonly version: typeof INTELLIGENCE_SNAPSHOT_VERSION
   readonly instrumentId: 'BTC-EUR'
@@ -108,6 +143,7 @@ export interface IntelligenceStreamSnapshot {
   }
   readonly market: IntelligenceMarketSnapshot | null
   readonly observability: IntelligenceObservability | null
+  readonly news?: IntelligenceNewsSnapshot
   readonly summaries: {
     readonly analysis: IntelligenceAnalysisSummary
     readonly forecast:
@@ -128,6 +164,7 @@ export interface IntelligenceSnapshotOptions {
   readonly collectorEnabled: boolean
   readonly marketStore?: MarketStore
   readonly collector?: IntelligenceCollectorObserver
+  readonly news?: IntelligenceNewsObserver
   readonly staleAfterMs: number
   readonly clock: () => number
   readonly windowSize?: number
@@ -229,6 +266,13 @@ export function createIntelligenceSnapshot(
     pipeline,
     market,
     observability,
+    news:
+      options.news?.getSnapshot(generatedAt) ??
+      createNewsSnapshot({
+        evidence: news,
+        displayedAt: generatedAt,
+        status: options.marketStore === undefined ? 'disabled' : 'ready',
+      }),
     summaries: {
       analysis: { status: 'unavailable', reason: 'not_persisted' },
       forecast:
@@ -257,6 +301,51 @@ export function createIntelligenceSnapshot(
               latestPublishedAt: latestPublishedAt as TimestampMs,
             },
     },
+  }
+}
+
+export function createNewsSnapshot(input: {
+  readonly evidence: readonly NewsEvidenceRecord[]
+  readonly displayedAt: TimestampMs
+  readonly status: IntelligenceNewsStatus
+  readonly lastSuccessfulAt?: TimestampMs
+  readonly error?: string
+  readonly staleAfterMs?: number
+}): IntelligenceNewsSnapshot {
+  const items = [...input.evidence]
+    .sort(
+      (left, right) =>
+        right.publishedAt - left.publishedAt ||
+        right.version.localeCompare(left.version),
+    )
+    .map((item) => {
+      const ageMs = Math.max(0, input.displayedAt - item.ingestedAt)
+      return {
+        id: item.id,
+        version: item.version,
+        source: item.source,
+        title: item.metadata.title,
+        url: item.url,
+        publishedAt: item.publishedAt,
+        ingestedAt: item.ingestedAt,
+        displayedAt: input.displayedAt,
+        licenseStatus: item.licenseStatus,
+        important: item.relevance === 'relevant',
+        freshness: {
+          ageMs,
+          isStale:
+            input.status === 'stale' ||
+            (input.staleAfterMs !== undefined && ageMs > input.staleAfterMs),
+        },
+      }
+    })
+  return {
+    status: input.status,
+    items,
+    ...(input.lastSuccessfulAt === undefined
+      ? {}
+      : { lastSuccessfulAt: input.lastSuccessfulAt }),
+    ...(input.error === undefined ? {} : { error: input.error }),
   }
 }
 
@@ -524,8 +613,57 @@ function isSnapshot(input: unknown): input is IntelligenceStreamSnapshot {
     isAnalysisSummary(input.summaries.analysis) &&
     isForecastSummary(input.summaries.forecast) &&
     isNewsSummary(input.summaries.news) &&
+    (input.news === undefined || isNewsSnapshot(input.news)) &&
     (input.market === null || isMarket(input.market))
   )
+}
+
+function isNewsSnapshot(input: unknown): input is IntelligenceNewsSnapshot {
+  if (!isRecord(input)) return false
+  if (
+    !['disabled', 'loading', 'ready', 'stale', 'error'].includes(
+      input.status as string,
+    ) ||
+    !Array.isArray(input.items)
+  )
+    return false
+  if (
+    input.lastSuccessfulAt !== undefined &&
+    !isTimestamp(input.lastSuccessfulAt)
+  )
+    return false
+  if (input.error !== undefined && typeof input.error !== 'string') return false
+  return input.items.every(isNewsItem)
+}
+
+function isNewsItem(input: unknown): input is IntelligenceNewsItem {
+  if (!isRecord(input)) return false
+  return (
+    typeof input.id === 'string' &&
+    typeof input.version === 'string' &&
+    typeof input.source === 'string' &&
+    typeof input.title === 'string' &&
+    typeof input.url === 'string' &&
+    isHttpsUrl(input.url) &&
+    isTimestamp(input.publishedAt) &&
+    isTimestamp(input.ingestedAt) &&
+    isTimestamp(input.displayedAt) &&
+    ['official_public', 'licensed', 'permission_required', 'unknown'].includes(
+      input.licenseStatus as string,
+    ) &&
+    typeof input.important === 'boolean' &&
+    isRecord(input.freshness) &&
+    isNonNegativeNumber(input.freshness.ageMs) &&
+    typeof input.freshness.isStale === 'boolean'
+  )
+}
+
+function isHttpsUrl(input: string): boolean {
+  try {
+    return new URL(input).protocol === 'https:'
+  } catch {
+    return false
+  }
 }
 
 function isPipeline(input: unknown): boolean {

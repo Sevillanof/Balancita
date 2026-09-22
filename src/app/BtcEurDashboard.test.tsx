@@ -25,11 +25,15 @@ const mocks = vi.hoisted(() => {
   return { createChart, chart, series }
 })
 
+const newsStreamMock = vi.hoisted(() => ({ useNewsStream: vi.fn() }))
+
 vi.mock('lightweight-charts', () => ({
   ColorType: { Solid: 'solid' },
   CandlestickSeries: {},
   createChart: (...args: unknown[]) => mocks.createChart(...args),
 }))
+
+vi.mock('./intelligence/useNewsStream', () => newsStreamMock)
 
 mocks.createChart.mockReturnValue(mocks.chart)
 
@@ -101,6 +105,11 @@ describe('BtcEurDashboard main screen (Phase 1)', () => {
   beforeEach(() => {
     window.localStorage.clear()
     vi.clearAllMocks()
+    newsStreamMock.useNewsStream.mockReturnValue({
+      status: 'ready',
+      items: NEWS_FIXTURES,
+      error: null,
+    })
   })
 
   afterEach(() => {
@@ -379,17 +388,15 @@ describe('BtcEurDashboard main screen (Phase 1)', () => {
     ).toBeInTheDocument()
   })
 
-  it('never opens a network connection or SSE stream while rendering', async () => {
+  it('uses the server news stream without opening a browser fetch', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(() => {
       throw new Error('network is disabled in tests')
     })
-    const eventSourceSpy = vi.fn()
-    vi.stubGlobal('EventSource', eventSourceSpy)
 
     renderDashboard(readyProvider())
     await waitForReady()
 
     expect(fetchSpy).not.toHaveBeenCalled()
-    expect(eventSourceSpy).not.toHaveBeenCalled()
+    expect(newsStreamMock.useNewsStream).toHaveBeenCalled()
   })
 })

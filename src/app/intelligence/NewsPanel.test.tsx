@@ -93,7 +93,7 @@ describe('NewsPanel', () => {
     render(<NewsPanel status="stale" items={NEWS_FIXTURES} />)
 
     expect(screen.queryByRole('heading')).not.toBeInTheDocument()
-    expect(screen.queryByText('Desactualizadas')).not.toBeInTheDocument()
+    expect(screen.getByText(/Noticias desactualizadas/)).toBeInTheDocument()
     expect(screen.queryByText(/fixtures locales/i)).not.toBeInTheDocument()
     expect(screen.getAllByRole('listitem')).toHaveLength(NEWS_FIXTURES.length)
   })
@@ -107,5 +107,29 @@ describe('NewsPanel', () => {
 
     expect(fetchSpy).not.toHaveBeenCalled()
     fetchSpy.mockRestore()
+  })
+
+  it('renders the complete provenance contract compactly for each item', () => {
+    const item = {
+      ...NEWS_FIXTURES[0]!,
+      ingestedAt: '2026-09-20T11:33:00.000Z',
+      displayedAt: '2026-09-20T11:34:00.000Z',
+      licenseStatus: 'official_public' as const,
+      freshness: { ageMs: 60_000, isStale: false },
+    }
+
+    render(<NewsPanel status="ready" items={[item]} />)
+
+    const region = screen.getByRole('region', { name: 'Noticias BTC-EUR' })
+    const row = within(region).getByRole('listitem')
+    expect(within(row).getByText(item.source)).toBeInTheDocument()
+    expect(within(row).getByRole('link')).toHaveAttribute('href', item.url)
+    expect(within(row).getByText(/Publicado/)).toBeInTheDocument()
+    expect(within(row).getByText(/Ingestado/)).toBeInTheDocument()
+    expect(within(row).getByText(/Mostrado/)).toBeInTheDocument()
+    expect(within(row).getByText(/Frescura/)).toBeInTheDocument()
+    expect(
+      within(row).getByText(/Licencia: official_public/),
+    ).toBeInTheDocument()
   })
 })

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
+import type { NewsEvidence, TimestampMs } from './contracts.ts'
 import { deriveDataFreshness } from './slis.ts'
 import {
   createIntelligenceSnapshot,
@@ -7,6 +8,7 @@ import {
   type IntelligenceStreamSnapshot,
 } from './stream.ts'
 import { MarketStore } from './market/market-store.ts'
+import { contentHashForNewsEvidence } from './news/rss-normalizer.ts'
 
 const now = 1_700_000_000_000
 
@@ -122,6 +124,51 @@ describe('intelligence SSE contract', () => {
       latencyMs: { count: 2, p50: 500, p95: 2_600 },
       stale: { totalCount: 2, staleCount: 0, rate: 0 },
     })
+
+    const evidence: NewsEvidence = {
+      instrumentId: 'BTC-EUR',
+      source: 'sec',
+      sourceLevel: 'official_primary',
+      sourceItemId: 'sec-stream-1',
+      url: 'https://www.sec.gov/newsroom/press-releases/stream-1',
+      publishedAt: (now - 2_000) as TimestampMs,
+      ingestedAt: (now - 1_000) as TimestampMs,
+      retrievedAt: (now - 900) as TimestampMs,
+      contentHash: '',
+      licenseStatus: 'official_public',
+      correctionStatus: 'original',
+      relevance: 'relevant',
+      relevanceRuleVersion: 'news-relevance.v1',
+      taxonomy: 'market_structure',
+      taxonomyRuleVersion: 'news-taxonomy.v1',
+      metadata: { title: 'Bitcoin and EUR market structure update' },
+      content: { kind: 'metadata_only' },
+    }
+    store.insertNewsEvidence({
+      ...evidence,
+      contentHash: contentHashForNewsEvidence(evidence),
+    })
+    const withNews = createIntelligenceSnapshot({
+      collectorEnabled: true,
+      marketStore: store,
+      staleAfterMs: 15_000,
+      clock: () => now,
+    })
+    expect(withNews.news).toMatchObject({
+      status: 'ready',
+      items: [
+        {
+          source: 'sec',
+          url: evidence.url,
+          publishedAt: evidence.publishedAt,
+          ingestedAt: evidence.ingestedAt,
+          displayedAt: now,
+          licenseStatus: 'official_public',
+          title: 'Bitcoin and EUR market structure update',
+          important: true,
+        },
+      ],
+    })
     store.close()
   })
 
@@ -199,6 +246,41 @@ describe('intelligence SSE contract', () => {
     expect(() => parseIntelligenceStreamEvent({ nope: true })).toThrow(
       'Invalid intelligence stream event',
     )
+  })
+
+  it('rejects malformed news items while accepting legacy snapshots without news', () => {
+    expect(() =>
+      parseIntelligenceStreamEvent({
+        version: 'intelligence-stream.v1',
+        type: 'snapshot',
+        id: '1',
+        serverTime: now,
+        snapshot: {
+          ...createIntelligenceSnapshot({
+            collectorEnabled: false,
+            staleAfterMs: 15_000,
+            clock: () => now,
+          }),
+          news: { status: 'ready', items: [{ invalid: true }] },
+        },
+      }),
+    ).toThrow('Invalid intelligence stream event')
+
+    expect(() =>
+      parseIntelligenceStreamEvent({
+        version: 'intelligence-stream.v1',
+        type: 'snapshot',
+        id: 'legacy',
+        serverTime: now,
+        snapshot: {
+          ...createIntelligenceSnapshot({
+            collectorEnabled: false,
+            staleAfterMs: 15_000,
+            clock: () => now,
+          }),
+        },
+      }),
+    ).not.toThrow()
   })
 })
 

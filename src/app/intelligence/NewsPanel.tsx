@@ -9,11 +9,7 @@ type NewsPanelProps = {
 
 const DEFAULT_ITEMS: readonly NewsItem[] = []
 
-/**
- * Phase 1 news surface. Renders only local fixtures; it never fetches. The
- * loading/empty/error/stale branches exist so the state contract is testable
- * now and reusable when the server pipeline arrives in Phase 3.
- */
+/** Renders server-provided news state; transport and reconnection stay in the hook. */
 export default function NewsPanel({
   status = 'ready',
   items = DEFAULT_ITEMS,
@@ -40,6 +36,12 @@ export default function NewsPanel({
             </button>
           )}
         </div>
+      )}
+
+      {status === 'stale' && (
+        <p role="status" className="news__state news__state--stale">
+          Noticias desactualizadas; mostrando la última evidencia disponible.
+        </p>
       )}
 
       {showEmpty && (
@@ -83,6 +85,34 @@ export default function NewsPanel({
                 >
                   {item.title}
                 </a>
+                <div className="news__provenance" aria-label="Proveniencia">
+                  <span>
+                    URL: <span className="news__url">{item.url}</span>
+                  </span>
+                  <span>
+                    Publicado:{' '}
+                    <time dateTime={item.publishedAt}>
+                      {formatNewsDateTime(item.publishedAt)}
+                    </time>
+                  </span>
+                  <span>
+                    Ingestado:{' '}
+                    <time dateTime={item.ingestedAt}>
+                      {formatNewsDateTime(item.ingestedAt)}
+                    </time>
+                  </span>
+                  <span>
+                    Mostrado:{' '}
+                    <time dateTime={item.displayedAt}>
+                      {formatNewsDateTime(item.displayedAt)}
+                    </time>
+                  </span>
+                  <span>
+                    Frescura: {formatFreshness(item.freshness.ageMs)}
+                    {item.freshness.isStale ? ' · stale' : ''}
+                  </span>
+                  <span>Licencia: {item.licenseStatus}</span>
+                </div>
               </li>
             )
           })}
@@ -98,6 +128,16 @@ function formatNewsTime(publishedAt: string): string {
   const hours = String(date.getUTCHours()).padStart(2, '0')
   const minutes = String(date.getUTCMinutes()).padStart(2, '0')
   return `${hours}:${minutes}`
+}
+
+function formatNewsDateTime(value: string): string {
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? 'fecha inválida' : date.toISOString()
+}
+
+function formatFreshness(ageMs: number): string {
+  if (ageMs < 1_000) return `${ageMs} ms`
+  return `${Math.round(ageMs / 1_000)} s`
 }
 
 function compareNewsItems(left: NewsItem, right: NewsItem): number {

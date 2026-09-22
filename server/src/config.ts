@@ -24,6 +24,10 @@ export interface ServerConfig {
   marketCollectorEnabled: boolean
   forecastLoopEnabled: boolean
   forecastLoopIntervalMs: number
+  newsPollingEnabled: boolean
+  newsPollIntervalMs: number
+  newsStaleAfterMs: number
+  newsUserAgent: string
   marketDbPath: string
   shadowRunId: string
   krakenWsUrl: string
@@ -92,6 +96,10 @@ export function serverConfigFrom(
       'FORECAST_LOOP_INTERVAL_MS',
       60_000,
     ),
+    newsPollingEnabled: booleanValue(env, 'NEWS_POLLING_ENABLED', false),
+    newsPollIntervalMs: positiveInt(env, 'NEWS_POLL_INTERVAL_MS', 300_000),
+    newsStaleAfterMs: positiveInt(env, 'NEWS_STALE_AFTER_MS', 900_000),
+    newsUserAgent: stringValue(env, 'NEWS_USER_AGENT', 'Balancita/1.0'),
     marketDbPath: stringValue(env, 'MARKET_DB_PATH', './data/market.sqlite'),
     shadowRunId: stringValue(env, 'SHADOW_RUN_ID', 'shadow:BTC-EUR'),
     krakenWsUrl: stringValue(env, 'KRAKEN_WS_URL', 'wss://ws.kraken.com/v2'),

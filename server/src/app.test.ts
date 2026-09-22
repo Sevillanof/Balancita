@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -13,6 +13,7 @@ import type {
   MarketRestFetch,
 } from './app.ts'
 import type { SupportedInstrumentId } from './intelligence/contracts.ts'
+import type { NewsHttpFetcher } from './intelligence/news/rss-collector.ts'
 import { MarketStore } from './intelligence/market/market-store.ts'
 import { createShadowRunStart } from './intelligence/shadow/shadow-run.ts'
 
@@ -727,5 +728,59 @@ describe('forecast loop lifecycle', () => {
     expect(() => scheduler.callbacks[0]!()).not.toThrow()
     expect(runs).toEqual(['tick'])
     await app.close()
+  })
+})
+
+describe('news polling lifecycle', () => {
+  class FakeNewsScheduler implements ForecastLoopScheduler {
+    readonly callbacks: Array<() => void> = []
+    readonly intervals: number[] = []
+    readonly cleared: unknown[] = []
+
+    setInterval(callback: () => void, intervalMs: number): unknown {
+      this.callbacks.push(callback)
+      this.intervals.push(intervalMs)
+      return this.callbacks.length
+    }
+
+    clearInterval(handle: unknown): void {
+      this.cleared.push(handle)
+    }
+  }
+
+  it('starts opt-in polling at the configured interval with injected feed I/O', async () => {
+    const scheduler = new FakeNewsScheduler()
+    const store = new MarketStore({ path: ':memory:' })
+    const body = readFileSync(
+      new URL('./intelligence/news/__fixtures__/sec.rss', import.meta.url),
+      'utf8',
+    )
+    const calls: string[] = []
+    const newsFetch: NewsHttpFetcher = async (url) => {
+      calls.push(url)
+      return { status: 200, body }
+    }
+    const app = await buildApp({
+      config: serverConfigFrom({
+        NEWS_POLLING_ENABLED: 'true',
+        NEWS_POLL_INTERVAL_MS: '2500',
+        NEWS_STALE_AFTER_MS: '5000',
+      }),
+      overrides: {
+        marketStore: store,
+        newsFetch,
+        newsScheduler: scheduler,
+        newsClock: () => Date.parse('2026-09-22T00:00:00.000Z') as never,
+      },
+    })
+
+    await app.ready()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(scheduler.intervals).toEqual([2500])
+    expect(calls).toContain('https://www.sec.gov/news/pressreleases.rss')
+    expect(store.newsEvidenceCount()).toBe(3)
+
+    await app.close()
+    expect(scheduler.cleared).toEqual([1])
   })
 })

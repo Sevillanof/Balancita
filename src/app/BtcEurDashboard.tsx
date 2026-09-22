@@ -7,7 +7,7 @@ import type { AnalysisMode } from './AnalysisModeToggle'
 import ChartPanel from './chart/ChartPanel'
 import { useCandleHistory } from './detail/useCandleHistory'
 import NewsPanel from './intelligence/NewsPanel'
-import { NEWS_FIXTURES } from './intelligence/news-fixtures'
+import { useNewsStream } from './intelligence/useNewsStream'
 import BtcEurSummary from './summary/BtcEurSummary'
 import AutoTradingControl from './trade/AutoTradingControl'
 import TradeScreen from './trade/TradeScreen'
@@ -29,10 +29,8 @@ type BtcEurDashboardProps = {
 }
 
 /**
- * Phase 1 main screen: a desktop-first CSS grid that renders ONLY the six
- * wireframe areas A–F backed by deterministic mock data and the local paper
- * ledger. No network is used here; the chart and news come from mock candles
- * and local fixtures respectively. Secondary surfaces (instrument detail,
+ * Main screen: a desktop-first CSS grid that renders ONLY the six wireframe
+ * areas A–F while preserving the local paper ledger. Secondary surfaces (instrument detail,
  * portfolio, alerts, mock lab, intelligence status) are intentionally not part
  * of the Phase 1 screen and live in their own modules and tests.
  *
@@ -41,7 +39,7 @@ type BtcEurDashboardProps = {
  * stays exactly three buttons and the existing TradeScreen logic is untouched.
  *
  * The `labProvider`, `alerts`, `analysis*` and `dataMode` props remain wired by
- * the app shell but are unused here; a later phase reattaches those surfaces.
+ * the app shell but are unused here; later phases reattach those surfaces.
  */
 export default function BtcEurDashboard({
   provider,
@@ -53,6 +51,7 @@ export default function BtcEurDashboard({
     portfolioRepository,
     initialInstrumentId: 'BTC-EUR',
   })
+  const news = useNewsStream()
   const [orderFlowSide, setOrderFlowSide] = useState<OrderSide | null>(null)
   const instrument = market.instruments.find(({ id }) => id === 'BTC-EUR')
   const quote =
@@ -98,7 +97,7 @@ export default function BtcEurDashboard({
               quote={quote}
               onRetry={history.retry}
             />
-            <NewsPanel status="ready" items={NEWS_FIXTURES} />
+            <NewsPanel status={news.status} items={news.items} />
             <div
               className="dashboard__actions"
               role="group"

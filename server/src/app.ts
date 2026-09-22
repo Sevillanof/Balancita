@@ -19,6 +19,8 @@ import type {
 import { LiveForecastService } from './intelligence/live-forecast.ts'
 import { KrakenMarketCollector } from './intelligence/market/kraken-market-collector.ts'
 import { MarketStore } from './intelligence/market/market-store.ts'
+import { NewsPollingService } from './intelligence/news/news-poller.ts'
+import type { NewsHttpFetcher } from './intelligence/news/rss-collector.ts'
 import {
   ShadowRunNotFoundError,
   ShadowRunService,
@@ -74,6 +76,10 @@ export interface MarketDependencies {
   marketStore?: MarketStore
   liveForecastService?: LiveForecastRunner
   forecastScheduler?: ForecastLoopScheduler
+  newsFetch?: NewsHttpFetcher
+  newsPollingService?: NewsPollingService
+  newsScheduler?: ForecastLoopScheduler
+  newsClock?: () => TimestampMs
 }
 
 type ErrorEnvelope = {
@@ -136,6 +142,7 @@ export async function buildApp(options: {
   let marketStore: MarketStore | undefined
   if (
     config.marketCollectorEnabled ||
+    config.newsPollingEnabled ||
     options.overrides?.marketStore !== undefined
   ) {
     marketStore =
@@ -178,6 +185,23 @@ export async function buildApp(options: {
   const forecastScheduler =
     options.overrides?.forecastScheduler ?? defaultForecastScheduler
   let forecastLoopHandle: unknown
+  let publishNewsUpdate = (): void => undefined
+  const newsScheduler =
+    options.overrides?.newsScheduler ?? defaultForecastScheduler
+  const newsPollingService =
+    options.overrides?.newsPollingService ??
+    (config.newsPollingEnabled && marketStore !== undefined
+      ? new NewsPollingService({
+          store: marketStore,
+          userAgent: config.newsUserAgent,
+          fetcher: options.overrides?.newsFetch,
+          clock:
+            options.overrides?.newsClock ?? (() => Date.now() as TimestampMs),
+          staleAfterMs: config.newsStaleAfterMs,
+          onChange: () => publishNewsUpdate(),
+        })
+      : undefined)
+  let newsLoopHandle: unknown
 
   const startForecastLoop = (): void => {
     if (
@@ -201,6 +225,25 @@ export async function buildApp(options: {
     forecastLoopHandle = undefined
   }
 
+  const startNewsLoop = (): void => {
+    if (
+      !config.newsPollingEnabled ||
+      newsPollingService === undefined ||
+      newsLoopHandle !== undefined
+    )
+      return
+    void newsPollingService.pollOnce()
+    newsLoopHandle = newsScheduler.setInterval(() => {
+      void newsPollingService.pollOnce().catch(() => undefined)
+    }, config.newsPollIntervalMs)
+  }
+
+  const stopNewsLoop = (): void => {
+    if (newsLoopHandle === undefined) return
+    newsScheduler.clearInterval(newsLoopHandle)
+    newsLoopHandle = undefined
+  }
+
   const ensureShadowRunExists = (): void => {
     if (shadowService === undefined || marketStore === undefined) return
     if (marketStore.getShadowRun(config.shadowRunId) !== undefined) return
@@ -213,6 +256,10 @@ export async function buildApp(options: {
         collectorEnabled: config.marketCollectorEnabled,
         marketStore,
         collector: marketCollector,
+        news:
+          config.newsPollingEnabled && newsPollingService !== undefined
+            ? newsPollingService
+            : undefined,
         staleAfterMs: config.marketStaleAfterMs,
         clock: () => Date.now(),
         windowSize: config.intelligenceStreamWindowSize,
@@ -221,6 +268,7 @@ export async function buildApp(options: {
     keepAliveMs: config.intelligenceStreamKeepAliveMs,
     clock: () => Date.now(),
   })
+  publishNewsUpdate = () => streamHub.publish()
   const unsubscribeCollector = marketCollector?.subscribe?.(() =>
     streamHub.publish(),
   )
@@ -352,26 +400,22 @@ export async function buildApp(options: {
     }
   })
 
-  if (config.marketCollectorEnabled) {
-    app.addHook('onReady', async () => {
+  app.addHook('onReady', async () => {
+    if (config.marketCollectorEnabled) {
       ensureShadowRunExists()
       await marketCollector?.start('BTC-EUR')
       startForecastLoop()
-    })
-    app.addHook('onClose', async () => {
-      stopForecastLoop()
-      streamHub.close()
-      unsubscribeCollector?.()
-      await marketCollector?.stop()
-      marketStore?.close()
-    })
-  } else {
-    app.addHook('onClose', async () => {
-      stopForecastLoop()
-      streamHub.close()
-      marketStore?.close()
-    })
-  }
+    }
+    startNewsLoop()
+  })
+  app.addHook('onClose', async () => {
+    stopForecastLoop()
+    stopNewsLoop()
+    streamHub.close()
+    unsubscribeCollector?.()
+    await marketCollector?.stop()
+    marketStore?.close()
+  })
 
   app.post('/api/analyze', async (request, reply) => {
     let input

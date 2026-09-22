@@ -55,6 +55,27 @@ export interface IntelligenceStreamSnapshot {
       readonly sequenceAvailable: boolean
     }
   } | null
+  readonly news?: {
+    readonly status: 'disabled' | 'loading' | 'ready' | 'stale' | 'error'
+    readonly items: readonly {
+      readonly id: string
+      readonly version: string
+      readonly source: string
+      readonly title: string
+      readonly url: string
+      readonly publishedAt: number
+      readonly ingestedAt: number
+      readonly displayedAt: number
+      readonly licenseStatus: string
+      readonly important: boolean
+      readonly freshness: {
+        readonly ageMs: number
+        readonly isStale: boolean
+      }
+    }[]
+    readonly lastSuccessfulAt?: number
+    readonly error?: string
+  }
   readonly summaries: {
     readonly analysis: {
       readonly status: 'unavailable'
@@ -296,8 +317,57 @@ function isSnapshot(input: unknown): input is IntelligenceStreamSnapshot {
     return false
   return (
     (input.market === null || isMarket(input.market)) &&
-    isObservability(input.observability)
+    isObservability(input.observability) &&
+    (input.news === undefined || isNewsSnapshot(input.news))
   )
+}
+
+function isNewsSnapshot(input: unknown): boolean {
+  if (!isRecord(input) || !Array.isArray(input.items)) return false
+  if (
+    !['disabled', 'loading', 'ready', 'stale', 'error'].includes(
+      input.status as string,
+    )
+  )
+    return false
+  if (
+    input.lastSuccessfulAt !== undefined &&
+    !isTimestamp(input.lastSuccessfulAt)
+  )
+    return false
+  if (input.error !== undefined && typeof input.error !== 'string') return false
+  return input.items.every((item) => {
+    if (!isRecord(item)) return false
+    return (
+      typeof item.id === 'string' &&
+      typeof item.version === 'string' &&
+      typeof item.source === 'string' &&
+      typeof item.title === 'string' &&
+      typeof item.url === 'string' &&
+      isHttpsUrl(item.url) &&
+      isTimestamp(item.publishedAt) &&
+      isTimestamp(item.ingestedAt) &&
+      isTimestamp(item.displayedAt) &&
+      [
+        'official_public',
+        'licensed',
+        'permission_required',
+        'unknown',
+      ].includes(item.licenseStatus as string) &&
+      typeof item.important === 'boolean' &&
+      isRecord(item.freshness) &&
+      isNonNegative(item.freshness.ageMs) &&
+      typeof item.freshness.isStale === 'boolean'
+    )
+  })
+}
+
+function isHttpsUrl(input: string): boolean {
+  try {
+    return new URL(input).protocol === 'https:'
+  } catch {
+    return false
+  }
 }
 
 function isMarket(input: unknown): boolean {
