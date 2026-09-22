@@ -1,0 +1,21 @@
+src/app/chart/ChartPanel.tsx
+  s_5b8df9899a5853::t_63938ec433987b 4,26-34
+src/app/chart/candlestick-data.ts
+  s_5b8df9899a5853::t_812b352edaab62 3-55,76-79
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5fd99dd07e0c6704426bfd908b2e4b1c4fca0b6a",
+  "prompts": {},
+  "sessions": {
+    "s_5b8df9899a5853": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f36773173ffeQ3qCZCsOp1zxLR",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
