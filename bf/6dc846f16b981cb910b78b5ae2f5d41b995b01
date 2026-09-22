@@ -1,0 +1,19 @@
+server/src/intelligence/stream.ts
+  s_d49bb852c30422::t_9c9cdd4dd441e8 149-164
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "bf6dc846f16b981cb910b78b5ae2f5d41b995b01",
+  "prompts": {},
+  "sessions": {
+    "s_d49bb852c30422": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f416043b0ffe018dRDpb5OGIqx",
+        "model": "big-pickle"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
