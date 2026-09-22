@@ -1,5 +1,5 @@
 import cors from '@fastify/cors'
-import Fastify, { type FastifyInstance } from 'fastify'
+import Fastify, { type FastifyInstance, type FastifyReply } from 'fastify'
 import {
   AnalysisInvalidRequestError,
   AnalysisInvalidResponseError,
@@ -57,6 +57,11 @@ export interface ForecastLoopScheduler {
   clearInterval(handle: unknown): void
 }
 
+export type MarketRestFetch = (
+  input: string,
+  init?: RequestInit,
+) => Promise<Response>
+
 const defaultForecastScheduler: ForecastLoopScheduler = {
   setInterval: (callback, intervalMs) => setInterval(callback, intervalMs),
   clearInterval: (handle) =>
@@ -65,6 +70,7 @@ const defaultForecastScheduler: ForecastLoopScheduler = {
 
 export interface MarketDependencies {
   marketCollector: MarketCollectorLifecycle
+  marketFetch?: MarketRestFetch
   marketStore?: MarketStore
   liveForecastService?: LiveForecastRunner
   forecastScheduler?: ForecastLoopScheduler
@@ -99,6 +105,9 @@ export async function buildApp(options: {
   overrides?: Partial<AnalysisDependencies & MarketDependencies>
 }): Promise<FastifyInstance> {
   const { config } = options
+  const marketFetch: MarketRestFetch =
+    options.overrides?.marketFetch ??
+    ((input, init) => globalThis.fetch(input, init))
 
   const limiter =
     options.overrides?.limiter ??
@@ -218,11 +227,48 @@ export async function buildApp(options: {
 
   const app = Fastify({ logger: false })
 
+  const proxyMarketRequest = async (
+    reply: FastifyReply,
+    path: string,
+  ): Promise<FastifyReply> => {
+    try {
+      const upstream = await marketFetch(
+        `${config.krakenRestUrl.replace(/\/+$/, '')}${path}`,
+        { headers: { Accept: 'application/json' } },
+      )
+      return reply.code(upstream.status).send(await upstream.json())
+    } catch {
+      return reply.code(502).send({
+        error: {
+          code: 'upstream_error',
+          message: 'The Kraken market data service could not be reached.',
+        },
+      })
+    }
+  }
+
   if (config.corsOrigin !== '') {
     await app.register(cors, { origin: config.corsOrigin })
   }
 
   app.get('/health', async () => ({ status: 'ok' }))
+
+  app.get('/api/market/instruments', (_request, reply) =>
+    proxyMarketRequest(reply, '/public/AssetPairs?pair=XBTEUR'),
+  )
+
+  app.get('/api/market/history', (request, reply) => {
+    const query = request.query as { instrumentId?: unknown }
+    if (query.instrumentId !== 'BTC-EUR') {
+      return reply.code(400).send({
+        error: {
+          code: 'unsupported_instrument',
+          message: 'Only BTC-EUR market history is supported.',
+        },
+      })
+    }
+    return proxyMarketRequest(reply, '/public/OHLC?pair=XBTEUR&interval=1')
+  })
 
   app.get('/api/intelligence/stream', (request, reply) => {
     const query = request.query as { instrumentId?: unknown }

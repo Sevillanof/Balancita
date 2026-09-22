@@ -7,7 +7,11 @@ import { serverConfigFrom } from './config.ts'
 import type { GeminiClient, GeminiGenerateParams } from './gemini-client.ts'
 import { AnalysisRateLimiter } from './limits.ts'
 import { buildApp } from './app.ts'
-import type { ForecastLoopScheduler, MarketCollectorLifecycle } from './app.ts'
+import type {
+  ForecastLoopScheduler,
+  MarketCollectorLifecycle,
+  MarketRestFetch,
+} from './app.ts'
 import type { SupportedInstrumentId } from './intelligence/contracts.ts'
 import { MarketStore } from './intelligence/market/market-store.ts'
 import { createShadowRunStart } from './intelligence/shadow/shadow-run.ts'
@@ -70,6 +74,7 @@ async function makeApp(options: {
   limiter?: AnalysisRateLimiter
   saturateLimiter?: boolean
   maxCandles?: number
+  marketFetch?: MarketRestFetch
 }) {
   const config = serverConfigFrom({
     GEMINI_MAX_CANDLES: String(options.maxCandles ?? 500),
@@ -79,6 +84,7 @@ async function makeApp(options: {
     client?: GeminiClient
     limiter?: AnalysisRateLimiter
     cache?: AnalysisCache
+    marketFetch?: MarketRestFetch
   } = {}
   if (options.client !== undefined) {
     overrides.client = options.client
@@ -94,6 +100,9 @@ async function makeApp(options: {
     })
     limiter.tryConsume()
     overrides.limiter = limiter
+  }
+  if (options.marketFetch !== undefined) {
+    overrides.marketFetch = options.marketFetch
   }
   const app = await buildApp({ config, overrides })
   return app
@@ -339,6 +348,106 @@ describe('market collector lifecycle', () => {
     await app.close()
 
     expect(collector.stopCount).toBe(1)
+  })
+})
+
+describe('browser market REST proxy', () => {
+  const assetPairs = {
+    error: [],
+    result: { XBTEUR: { altname: 'XBTEUR', wsname: 'BTC/EUR' } },
+  }
+  const ohlc = {
+    error: [],
+    result: { XBTEUR: [[1_700_000_000, '1', '2', '0.5', '1.5', '1', '2']] },
+  }
+
+  function response(body: unknown, ok = true, status = 200): Response {
+    return { ok, status, json: async () => body } as Response
+  }
+
+  it('forwards AssetPairs and OHLC to the configured public Kraken REST base', async () => {
+    const calls: string[] = []
+    const bodies = [assetPairs, ohlc]
+    const marketFetch: MarketRestFetch = async (input) => {
+      calls.push(input)
+      return response(bodies[calls.length - 1])
+    }
+    const app = await makeApp({
+      env: { KRAKEN_REST_URL: 'https://kraken.test/0/' },
+      marketFetch,
+    })
+
+    const instruments = await app.inject({
+      method: 'GET',
+      url: '/api/market/instruments',
+    })
+    const history = await app.inject({
+      method: 'GET',
+      url: '/api/market/history?instrumentId=BTC-EUR',
+    })
+
+    expect(instruments.statusCode).toBe(200)
+    expect(instruments.json()).toEqual(assetPairs)
+    expect(history.statusCode).toBe(200)
+    expect(history.json()).toEqual(ohlc)
+    expect(calls).toEqual([
+      'https://kraken.test/0/public/AssetPairs?pair=XBTEUR',
+      'https://kraken.test/0/public/OHLC?pair=XBTEUR&interval=1',
+    ])
+  })
+
+  it('rejects unsupported market history instruments with the existing 400 envelope', async () => {
+    const marketFetch = async () => response({ error: [], result: {} })
+    const app = await makeApp({ marketFetch })
+
+    const responseForUnsupported = await app.inject({
+      method: 'GET',
+      url: '/api/market/history?instrumentId=ETH-EUR',
+    })
+
+    expect(responseForUnsupported.statusCode).toBe(400)
+    expect(responseForUnsupported.json()).toEqual({
+      error: {
+        code: 'unsupported_instrument',
+        message: 'Only BTC-EUR market history is supported.',
+      },
+    })
+  })
+
+  it('preserves an upstream HTTP status and JSON error body', async () => {
+    const upstream = { error: ['EAPI:Rate limit exceeded'], result: {} }
+    const app = await makeApp({
+      marketFetch: async () => response(upstream, false, 429),
+    })
+
+    const result = await app.inject({
+      method: 'GET',
+      url: '/api/market/instruments',
+    })
+
+    expect(result.statusCode).toBe(429)
+    expect(result.json()).toEqual(upstream)
+  })
+
+  it('maps a network failure from Kraken to a 502 upstream error', async () => {
+    const app = await makeApp({
+      marketFetch: async () => {
+        throw new Error('network unavailable')
+      },
+    })
+
+    const result = await app.inject({
+      method: 'GET',
+      url: '/api/market/instruments',
+    })
+
+    expect(result.statusCode).toBe(502)
+    expect(result.json()).toEqual({
+      error: {
+        code: 'upstream_error',
+        message: 'The Kraken market data service could not be reached.',
+      },
+    })
   })
 })
 

@@ -12,7 +12,7 @@ import {
   krakenWebSocketSymbolToDomain,
 } from './kraken-pairs'
 
-const REST_BASE_URL = 'https://api.kraken.com/0'
+const REST_BASE_URL = '/api/market'
 const WS_URL = 'wss://ws.kraken.com/v2'
 const OHLC_INTERVAL_MINUTES = 1
 const DEFAULT_STALE_AFTER_MS = 15_000
@@ -69,6 +69,7 @@ export class KrakenMarketDataProvider implements MarketDataProvider {
   private readonly fetcher: KrakenFetch
   private readonly webSocketFactory: KrakenWebSocketFactory
   private readonly restBaseUrl: string
+  private readonly useMarketProxy: boolean
   private readonly webSocketUrl: string
   private readonly now: () => number
   private readonly staleAfterMs: number
@@ -81,6 +82,7 @@ export class KrakenMarketDataProvider implements MarketDataProvider {
     this.fetcher =
       options.fetch ?? ((input, init) => globalThis.fetch(input, init))
     this.webSocketFactory = options.webSocketFactory ?? defaultWebSocketFactory
+    this.useMarketProxy = options.restBaseUrl === undefined
     this.restBaseUrl = options.restBaseUrl ?? REST_BASE_URL
     this.webSocketUrl = options.webSocketUrl ?? WS_URL
     this.now = options.now ?? (() => Date.now())
@@ -96,19 +98,26 @@ export class KrakenMarketDataProvider implements MarketDataProvider {
       this.reconnectBaseMs,
       positiveOrDefault(options.reconnectMaxMs, DEFAULT_RECONNECT_MAX_MS),
     )
-    this.setTimer = options.setTimeout ?? globalThis.setTimeout
-    this.clearTimer = options.clearTimeout ?? globalThis.clearTimeout
+    this.setTimer =
+      options.setTimeout ??
+      ((handler, timeout) => globalThis.setTimeout(handler, timeout))
+    this.clearTimer =
+      options.clearTimeout ?? ((handle) => globalThis.clearTimeout(handle))
   }
 
   async getInstruments(): Promise<Instrument[]> {
-    const path = `/public/AssetPairs?pair=${KRAKEN_PAIR.restPair}`
+    const path = this.useMarketProxy
+      ? '/instruments'
+      : `/public/AssetPairs?pair=${KRAKEN_PAIR.restPair}`
     const body = await this.requestJson(path)
     return [mapAssetPair(body)]
   }
 
   async getHistory(instrumentId: InstrumentId): Promise<Candle[]> {
     const restPair = domainToKrakenRestPair(instrumentId)
-    const path = `/public/OHLC?pair=${restPair}&interval=${OHLC_INTERVAL_MINUTES}`
+    const path = this.useMarketProxy
+      ? `/history?instrumentId=${encodeURIComponent(instrumentId)}`
+      : `/public/OHLC?pair=${restPair}&interval=${OHLC_INTERVAL_MINUTES}`
     const body = await this.requestJson(path)
     const result = unwrapKrakenResult(body, 'OHLC')
     return mapOhlcCandles(result, restPair)
@@ -151,16 +160,17 @@ export class KrakenMarketDataProvider implements MarketDataProvider {
   }
 
   private async requestJson(path: string): Promise<unknown> {
-    const response = await this.fetcher(`${this.restBaseUrl}${path}`, {
+    const url = `${this.restBaseUrl}${path}`
+    const response = await this.fetcher(url, {
       headers: { Accept: 'application/json' },
     })
     if (!response.ok) {
-      throw new Error(`Kraken HTTP ${response.status} for ${path}`)
+      throw new Error(`Kraken HTTP ${response.status} for ${url}`)
     }
     try {
       return await response.json()
     } catch (error) {
-      throw new Error(`Invalid Kraken JSON response for ${path}`, {
+      throw new Error(`Invalid Kraken JSON response for ${url}`, {
         cause: error,
       })
     }
@@ -388,7 +398,10 @@ function mapOhlcCandles(result: RecordValue, restPair: string): Candle[] {
     throw new Error('Invalid Kraken OHLC response')
   }
   if (rows.length === 0) return []
-  const candles = rows.map(mapOhlcCandle)
+  const candles = rows.map((row, index) => ({
+    ...mapOhlcCandle(row),
+    isClosed: index < rows.length - 1,
+  }))
   let previousTime = -Infinity
   for (const candle of candles) {
     const time = Date.parse(candle.time)
@@ -397,13 +410,7 @@ function mapOhlcCandles(result: RecordValue, restPair: string): Candle[] {
     }
     previousTime = time
   }
-  // The last entry is always the current, still-forming candle. A browser
-  // chart must never surface an unconfirmed candle as closed data.
-  const closedCandles = candles.slice(0, -1)
-  if (closedCandles.length === 0) {
-    throw new Error('Invalid Kraken OHLC response')
-  }
-  return closedCandles
+  return candles
 }
 
 function resolveOhlcRows(result: RecordValue, restPair: string): unknown {

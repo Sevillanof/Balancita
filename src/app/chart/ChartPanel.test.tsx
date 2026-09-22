@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Quote } from '../../domain/market-data'
 import { makeCandle } from '../../test/fake-market-data-provider'
+import { toCandlestickDataset } from './candlestick-data'
 import ChartPanel from './ChartPanel'
 
 const mocks = vi.hoisted(() => {
@@ -106,6 +107,35 @@ describe('ChartPanel', () => {
 
     expect(screen.getByRole('status')).toHaveTextContent('Mercado en vivo')
     expect(screen.getByRole('status')).toHaveTextContent('1 s')
+  })
+
+  it('passes the latest provisional candle to the chart edge', () => {
+    const closed = makeCandle({
+      time: '2024-01-01T00:00:00.000Z',
+      isClosed: true,
+    })
+    const provisional = makeCandle({
+      time: '2024-01-01T00:01:00.000Z',
+      close: 106,
+      isClosed: false,
+    })
+
+    render(
+      <ChartPanel
+        status="ready"
+        candles={[closed, provisional]}
+        onRetry={() => {}}
+      />,
+    )
+
+    expect(mocks.series.setData).toHaveBeenCalledWith(
+      toCandlestickDataset([closed, provisional]),
+    )
+    expect(mocks.series.setData).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({ time: 1704067260, close: 106 }),
+      ]),
+    )
   })
 
   it('shows stale degradation without changing the chart state', () => {

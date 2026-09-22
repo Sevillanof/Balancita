@@ -148,6 +148,18 @@ describe('KrakenMarketDataProvider REST contract', () => {
         providerMetadata: ASSET_PAIR,
       }),
     ])
+    expect(calls).toEqual(['/api/market/instruments'])
+  })
+
+  it('keeps direct Kraken REST paths when an explicit REST base is provided', async () => {
+    const { fetch, calls } = makeFetch([makeResponse(ASSET_PAIRS)])
+    const provider = new KrakenMarketDataProvider({
+      fetch,
+      restBaseUrl: 'https://api.kraken.com/0',
+    })
+
+    await provider.getInstruments()
+
     expect(calls).toEqual([
       'https://api.kraken.com/0/public/AssetPairs?pair=XBTEUR',
     ])
@@ -165,7 +177,7 @@ describe('KrakenMarketDataProvider REST contract', () => {
     expect(instruments[0]?.providerSymbols).toEqual({ kraken: 'XBTEUR' })
   })
 
-  it('maps OHLC history in ascending order and discards the still-open last candle', async () => {
+  it('maps closed OHLC rows and includes the still-open last candle', async () => {
     const ohlc = {
       error: [],
       result: {
@@ -217,6 +229,7 @@ describe('KrakenMarketDataProvider REST contract', () => {
         low: 59_500,
         close: 61_500,
         volume: 12.5,
+        isClosed: true,
       },
       {
         time: new Date(1_700_000_000 * 1000).toISOString(),
@@ -225,12 +238,23 @@ describe('KrakenMarketDataProvider REST contract', () => {
         low: 61_000,
         close: 62_500,
         volume: 13,
+        isClosed: true,
+      },
+      {
+        time: new Date(1_700_100_000 * 1000).toISOString(),
+        open: 62_500,
+        high: 63_200,
+        low: 62_100,
+        close: 63_100,
+        volume: 14.1,
+        isClosed: false,
       },
     ])
+    expect(history.at(-1)?.isClosed).toBe(false)
+    expect(history.slice(0, -1).every((candle) => candle.isClosed)).toBe(true)
     expect(history[0]?.time < history[1]!.time).toBe(true)
-    expect(calls).toEqual([
-      'https://api.kraken.com/0/public/OHLC?pair=XBTEUR&interval=1',
-    ])
+    expect(history[1]?.time < history[2]!.time).toBe(true)
+    expect(calls).toEqual(['/api/market/history?instrumentId=BTC-EUR'])
   })
 
   it('returns an empty history during warm-up without inventing candles', async () => {
@@ -279,7 +303,9 @@ describe('KrakenMarketDataProvider REST contract', () => {
     expect(history.map(({ time }) => time)).toEqual([
       new Date(1_699_900_000 * 1000).toISOString(),
       new Date(1_699_900_120 * 1000).toISOString(),
+      new Date(1_699_900_180 * 1000).toISOString(),
     ])
+    expect(history.at(-1)?.isClosed).toBe(false)
   })
 
   it('surfaces Kraken REST errors and malformed OHLC rows', async () => {
@@ -380,7 +406,7 @@ describe('KrakenMarketDataProvider REST contract', () => {
     await expect(provider.getHistory('BTC-EUR')).rejects.toThrow(/ascending/i)
   })
 
-  it('never accepts an OHLC response made only of the open candle', async () => {
+  it('returns a provisional candle when the open candle is the only row', async () => {
     const onlyOpen = makeFetch([
       makeResponse({
         error: [],
@@ -403,9 +429,9 @@ describe('KrakenMarketDataProvider REST contract', () => {
     ])
     const provider = new KrakenMarketDataProvider({ fetch: onlyOpen.fetch })
 
-    await expect(provider.getHistory('BTC-EUR')).rejects.toThrow(
-      /invalid kraken ohlc response/i,
-    )
+    await expect(provider.getHistory('BTC-EUR')).resolves.toMatchObject([
+      { isClosed: false, close: 62_500 },
+    ])
   })
 
   it('surfaces HTTP failures with the Kraken path', async () => {
@@ -415,7 +441,7 @@ describe('KrakenMarketDataProvider REST contract', () => {
     const provider = new KrakenMarketDataProvider({ fetch: failed.fetch })
 
     await expect(provider.getInstruments()).rejects.toThrow(
-      /Kraken HTTP 429 for \/public\/AssetPairs/i,
+      /Kraken HTTP 429 for \/api\/market\/instruments/i,
     )
   })
 
@@ -658,6 +684,42 @@ describe('KrakenMarketDataProvider WebSocket v2 ticker contract', () => {
 
     expect(quotes).toHaveLength(2)
     expect(quotes.at(-1)).toMatchObject({ price: 62_000.5, status: 'stale' })
+  })
+
+  it('invokes default browser timers with globalThis as their receiver', () => {
+    vi.useRealTimers()
+    const setTimeout = vi.fn(function (
+      this: typeof globalThis,
+      _handler: () => void,
+      _timeout: number,
+    ) {
+      expect(this).toBe(globalThis)
+      expect(_handler).toBeDefined()
+      expect(_timeout).toBeDefined()
+      return 1 as ReturnType<typeof globalThis.setTimeout>
+    })
+    const clearTimeout = vi.fn(function (
+      this: typeof globalThis,
+      _handle: ReturnType<typeof globalThis.setTimeout>,
+    ) {
+      expect(this).toBe(globalThis)
+      expect(_handle).toBeDefined()
+    })
+    vi.stubGlobal('setTimeout', setTimeout)
+    vi.stubGlobal('clearTimeout', clearTimeout)
+
+    try {
+      const { provider, sockets } = makeProvider()
+      const unsubscribe = provider.subscribe(['BTC-EUR'], () => {})
+      sockets[0]!.open()
+      sockets[0]!.message(TICKER_BASE)
+      unsubscribe()
+
+      expect(setTimeout).toHaveBeenCalled()
+      expect(clearTimeout).toHaveBeenCalled()
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 
   it('uses exponential reconnect backoff capped at the configured maximum', () => {
