@@ -1,0 +1,16 @@
+server/src/intelligence/market/kraken-market-collector.test.ts
+  h_2f68313623be98 130-154,764-898
+server/src/intelligence/market/kraken-market-collector.ts
+  h_2f68313623be98 346-354,456-458
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8f69d4fe3520af1cd2e7431faae7890fa882233d",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
