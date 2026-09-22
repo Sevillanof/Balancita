@@ -21,6 +21,7 @@ export default function NewsPanel({
 }: NewsPanelProps) {
   const showItems = status === 'ready' || status === 'stale'
   const showEmpty = status === 'empty' || (showItems && items.length === 0)
+  const sortedItems = [...items].sort(compareNewsItems)
 
   return (
     <section className="news" aria-label="Noticias BTC-EUR">
@@ -51,26 +52,44 @@ export default function NewsPanel({
         </p>
       )}
 
-      {showItems && items.length > 0 && (
+      {showItems && sortedItems.length > 0 && (
         <ul className="news__list" aria-label="Lista de noticias">
-          {items.map((item) => (
-            <li key={item.id} className="news__item">
-              <div className="news__meta">
-                <span className="news__source">{item.source}</span>
-                <time className="news__time" dateTime={item.publishedAt}>
-                  {formatNewsTime(item.publishedAt)}
-                </time>
-              </div>
-              <a
-                className="news__title"
-                href={item.url}
-                target="_blank"
-                rel="noreferrer noopener"
-              >
-                {item.title}
-              </a>
-            </li>
-          ))}
+          {sortedItems.map((item) => {
+            const importanceLabel = item.important
+              ? 'Importante'
+              : 'No importante'
+
+            return (
+              <li key={item.id} className="news__item">
+                <div className="news__meta">
+                  <span className="news__source">{item.source}</span>
+                  <span className="news__time-group">
+                    <span
+                      className={`news__importance news__importance--${item.important ? 'important' : 'normal'}`}
+                      aria-label={importanceLabel}
+                      title={importanceLabel}
+                    >
+                      <span aria-hidden="true">
+                        {item.important ? '!' : '·'}
+                      </span>{' '}
+                      {importanceLabel}
+                    </span>
+                    <time className="news__time" dateTime={item.publishedAt}>
+                      {formatNewsTime(item.publishedAt)}
+                    </time>
+                  </span>
+                </div>
+                <a
+                  className="news__title"
+                  href={item.url}
+                  target="_blank"
+                  rel="noreferrer noopener"
+                >
+                  {item.title}
+                </a>
+              </li>
+            )
+          })}
         </ul>
       )}
     </section>
@@ -83,4 +102,18 @@ function formatNewsTime(publishedAt: string): string {
   const hours = String(date.getUTCHours()).padStart(2, '0')
   const minutes = String(date.getUTCMinutes()).padStart(2, '0')
   return `${hours}:${minutes}`
+}
+
+function compareNewsItems(left: NewsItem, right: NewsItem): number {
+  const leftTime = Date.parse(left.publishedAt)
+  const rightTime = Date.parse(right.publishedAt)
+  const leftInvalid = Number.isNaN(leftTime)
+  const rightInvalid = Number.isNaN(rightTime)
+
+  if (leftInvalid || rightInvalid) {
+    if (leftInvalid && rightInvalid) return 0
+    return leftInvalid ? 1 : -1
+  }
+
+  return rightTime - leftTime
 }

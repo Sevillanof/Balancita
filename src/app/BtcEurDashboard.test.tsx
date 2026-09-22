@@ -148,10 +148,10 @@ describe('BtcEurDashboard main screen (Phase 1)', () => {
       screen.getByRole('region', { name: 'Resumen BTC-EUR' }),
     ).toBeInTheDocument()
     expect(
-      screen.getByRole('heading', {
+      screen.queryByRole('heading', {
         name: 'Información general del instrumento en este caso (BTC-EUR)',
       }),
-    ).toBeInTheDocument()
+    ).not.toBeInTheDocument()
   })
 
   it('renders exactly the three action buttons', async () => {

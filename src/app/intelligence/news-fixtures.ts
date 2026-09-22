@@ -13,6 +13,7 @@ export type NewsItem = {
   readonly title: string
   readonly url: string
   readonly publishedAt: string
+  readonly important: boolean
 }
 
 export const NEWS_FIXTURES: readonly NewsItem[] = [
@@ -22,6 +23,7 @@ export const NEWS_FIXTURES: readonly NewsItem[] = [
     title: 'Bitcoin se mantiene sobre el soporte clave en euros',
     url: 'https://example.test/news/bitcoin-soporte',
     publishedAt: '2026-09-20T11:32:00.000Z',
+    important: true,
   },
   {
     id: 'fixture-ecb-digital-assets',
@@ -29,6 +31,7 @@ export const NEWS_FIXTURES: readonly NewsItem[] = [
     title: 'El BCE publica un informe sobre activos digitales',
     url: 'https://example.test/news/bce-activos-digitales',
     publishedAt: '2026-09-20T11:20:00.000Z',
+    important: true,
   },
   {
     id: 'fixture-miners-hashrate',
@@ -36,6 +39,7 @@ export const NEWS_FIXTURES: readonly NewsItem[] = [
     title: 'El hashrate de la red alcanza un nuevo máximo',
     url: 'https://example.test/news/hashrate-maximo',
     publishedAt: '2026-09-20T10:58:00.000Z',
+    important: false,
   },
   {
     id: 'fixture-etf-flows',
@@ -43,5 +47,6 @@ export const NEWS_FIXTURES: readonly NewsItem[] = [
     title: 'Flujos institucionales mixtos en los ETF spot',
     url: 'https://example.test/news/etf-flujos',
     publishedAt: '2026-09-20T10:41:00.000Z',
+    important: false,
   },
 ]

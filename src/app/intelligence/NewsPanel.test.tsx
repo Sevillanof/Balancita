@@ -2,7 +2,7 @@ import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import NewsPanel from './NewsPanel'
-import { NEWS_FIXTURES } from './news-fixtures'
+import { NEWS_FIXTURES, type NewsItem } from './news-fixtures'
 
 describe('NewsPanel', () => {
   it('renders every fixture with its source, time and link', () => {
@@ -19,6 +19,39 @@ describe('NewsPanel', () => {
       within(region).getByRole('link', { name: first.title }),
     ).toHaveAttribute('href', first.url)
     expect(within(region).getByText('11:32')).toBeInTheDocument()
+  })
+
+  it('sorts newest first and exposes importance before each time', () => {
+    const items: readonly NewsItem[] = [
+      {
+        ...NEWS_FIXTURES[0]!,
+        id: 'older',
+        publishedAt: '2026-09-20T10:00:00.000Z',
+        important: false,
+      },
+      {
+        ...NEWS_FIXTURES[0]!,
+        id: 'newer',
+        publishedAt: '2026-09-20T12:00:00.000Z',
+        important: true,
+      },
+    ]
+
+    render(<NewsPanel status="ready" items={items} />)
+
+    const listItems = screen.getAllByRole('listitem')
+    expect(within(listItems[0]!).getByRole('link')).toHaveAttribute(
+      'href',
+      items[1]!.url,
+    )
+    expect(
+      within(listItems[0]!).getByLabelText('Importante'),
+    ).toBeInTheDocument()
+    expect(within(listItems[0]!).getByText('12:00')).toBeInTheDocument()
+    expect(
+      within(listItems[1]!).getByLabelText('No importante'),
+    ).toBeInTheDocument()
+    expect(within(listItems[1]!).getByText('10:00')).toBeInTheDocument()
   })
 
   it('exposes an accessible loading state without layout surprises', () => {

@@ -4,14 +4,14 @@ import { makeCandle, makeQuote } from '../../test/fake-market-data-provider'
 import BtcEurSummary from './BtcEurSummary'
 
 describe('BtcEurSummary', () => {
-  it('keeps only the wireframe information heading', () => {
+  it('keeps the wireframe summary values without a redundant heading', () => {
     render(<BtcEurSummary quote={undefined} candles={[]} />)
 
     expect(
-      screen.getByRole('heading', {
+      screen.queryByRole('heading', {
         name: 'Información general del instrumento en este caso (BTC-EUR)',
       }),
-    ).toBeInTheDocument()
+    ).not.toBeInTheDocument()
     expect(
       screen.queryByText(/no representa 24 h reales/i),
     ).not.toBeInTheDocument()

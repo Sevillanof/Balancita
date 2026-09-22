@@ -100,10 +100,10 @@ describe('dashboard BTC-EUR', () => {
       screen.queryByRole('button', { name: 'Simulación' }),
     ).not.toBeInTheDocument()
     expect(
-      screen.getByRole('heading', {
+      screen.queryByRole('heading', {
         name: 'Información general del instrumento en este caso (BTC-EUR)',
       }),
-    ).toBeInTheDocument()
+    ).not.toBeInTheDocument()
   })
 
   it('uses the active market provider price for the dashboard and paper preview', async () => {

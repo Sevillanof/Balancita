@@ -7,14 +7,15 @@
 .dashboard__grid {
   display: grid;
   grid-template-columns: minmax(0, 2.7fr) minmax(18rem, 1fr);
-  grid-template-rows: 4.5rem 34rem 12rem;
+  grid-template-rows: 4.5rem 38rem 6rem;
   grid-template-areas:
     'brand available'
     'chart news'
     'actions summary';
   width: 100%;
   min-width: 64rem;
-  gap: var(--space-5);
+  column-gap: var(--space-5);
+  row-gap: var(--space-3);
 }
 
 .dashboard__grid > * {
@@ -37,7 +38,7 @@
 .dashboard__grid > .news {
   grid-area: news;
   min-height: 0;
-  overflow: auto;
+  overflow: hidden;
 }
 
 .dashboard__grid > .dashboard__actions {
@@ -90,18 +91,24 @@
 }
 
 .dashboard__available {
+  box-sizing: border-box;
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
+  min-width: 0;
+  padding: var(--space-2) var(--space-3);
   text-align: right;
 }
 
 .dashboard__available-amount {
+  min-width: 0;
   margin: 0;
-  font-size: var(--text-2xl);
+  overflow: hidden;
   font-variant-numeric: tabular-nums;
+  font-size: var(--text-xl);
   font-weight: var(--weight-bold);
   line-height: var(--leading-tight);
+  white-space: nowrap;
 }
 
 .dashboard__market-status {

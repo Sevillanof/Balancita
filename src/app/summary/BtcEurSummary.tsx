@@ -27,10 +27,6 @@ export default function BtcEurSummary({ quote, candles }: BtcEurSummaryProps) {
 
   return (
     <section className="summary" aria-label="Resumen BTC-EUR">
-      <h2 id="dashboard-summary-title" className="summary__title">
-        Información general del instrumento en este caso (BTC-EUR)
-      </h2>
-
       <dl className="summary__grid">
         <div className="summary__cell">
           <dt>Último precio</dt>

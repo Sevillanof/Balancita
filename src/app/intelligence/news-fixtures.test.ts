@@ -8,11 +8,12 @@ describe('news fixtures', () => {
     expect(new Set(ids).size).toBe(ids.length)
   })
 
-  it('gives every item a source, title, url and ISO publishedAt', () => {
+  it('gives every item a source, title, url, importance flag and ISO publishedAt', () => {
     for (const item of NEWS_FIXTURES) {
       expect(item.source.trim()).not.toBe('')
       expect(item.title.trim()).not.toBe('')
       expect(item.url).toMatch(/^https:\/\//)
+      expect(typeof item.important).toBe('boolean')
       expect(Number.isNaN(Date.parse(item.publishedAt))).toBe(false)
     }
   })
