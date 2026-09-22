@@ -1,0 +1,21 @@
+src/app/chart/PriceChart.test.tsx
+  s_256219e800943b::t_58905be9713c9e 9,14,34,36,108-109,112,115,119-146,148-151
+src/app/chart/PriceChart.tsx
+  s_256219e800943b::t_4724f9c53d1a05 102,121,126,135-167,188-211
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3f732d37094795cca2ad7f5b1b11303d0289345b",
+  "prompts": {},
+  "sessions": {
+    "s_256219e800943b": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f36605446ffeBTsulojvV7eE3l",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
