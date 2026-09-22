@@ -159,5 +159,8 @@ describe('ChartPanel', () => {
 
     expect(screen.getByRole('status')).toHaveTextContent('Mercado stale')
     expect(screen.getByTestId('price-chart')).toBeInTheDocument()
+    expect(mocks.series.setData).toHaveBeenLastCalledWith(
+      expect.arrayContaining([expect.objectContaining({ close: 62_000 })]),
+    )
   })
 })

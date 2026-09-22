@@ -1,7 +1,7 @@
 import { useMemo } from 'react'
 import type { Candle, Quote } from '../../domain/market-data'
 import type { CandleHistoryStatus } from '../detail/useCandleHistory'
-import { toCandlestickDataset } from './candlestick-data'
+import { mergeQuoteIntoCandles, toCandlestickDataset } from './candlestick-data'
 import PriceChart from './PriceChart'
 import './chart.css'
 
@@ -23,8 +23,15 @@ export default function ChartPanel({
   onRetry,
 }: ChartPanelProps) {
   const data = useMemo(
-    () => (status === 'ready' ? toCandlestickDataset(candles) : []),
-    [status, candles],
+    () =>
+      status === 'ready'
+        ? toCandlestickDataset(
+            quote === undefined
+              ? candles
+              : mergeQuoteIntoCandles(candles, quote),
+          )
+        : [],
+    [status, candles, quote],
   )
 
   return (

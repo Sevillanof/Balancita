@@ -275,6 +275,26 @@ describe('BtcEurDashboard main screen (Phase 1)', () => {
     )
   })
 
+  it('updates the chart latest close from the subscribed BTC-EUR quote', async () => {
+    const provider = readyProvider()
+    renderDashboard(provider)
+    await waitForReady()
+
+    act(() =>
+      provider.emit(
+        makeQuote({
+          instrumentId: 'BTC-EUR',
+          price: 60_123,
+          timestamp: '2024-01-01T00:00:30.000Z',
+        }),
+      ),
+    )
+
+    expect(mocks.series.setData).toHaveBeenLastCalledWith(
+      expect.arrayContaining([expect.objectContaining({ close: 60_123 })]),
+    )
+  })
+
   it('keeps the order flow reachable behind the disabled auto control', async () => {
     const user = userEvent.setup()
     renderDashboard(readyProvider())
@@ -386,6 +406,9 @@ describe('BtcEurDashboard main screen (Phase 1)', () => {
     expect(
       screen.getByRole('region', { name: 'Resumen BTC-EUR' }),
     ).toBeInTheDocument()
+    expect(screen.getByTestId('chart-freshness')).toHaveTextContent(
+      'Mercado stale',
+    )
   })
 
   it('uses the server news stream without opening a browser fetch', async () => {
