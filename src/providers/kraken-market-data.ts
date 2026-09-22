@@ -56,6 +56,8 @@ type SubscriptionState = {
   active: boolean
   socket: KrakenWebSocket | null
   lastTickerAt: Map<InstrumentId, number>
+  lastTradeId: Map<InstrumentId, number>
+  tickerChanges: Map<InstrumentId, TickerChange>
   lastQuote: Quote | null
   lastQuoteAt: number | null
   staleTimer: TimerHandle | null
@@ -64,6 +66,11 @@ type SubscriptionState = {
 }
 
 type RecordValue = Record<string, unknown>
+
+type TickerChange = {
+  change: number
+  changePercent: number
+}
 
 export class KrakenMarketDataProvider implements MarketDataProvider {
   private readonly fetcher: KrakenFetch
@@ -137,6 +144,8 @@ export class KrakenMarketDataProvider implements MarketDataProvider {
       active: true,
       socket: null,
       lastTickerAt: new Map(),
+      lastTradeId: new Map(),
+      tickerChanges: new Map(),
       lastQuote: null,
       lastQuoteAt: null,
       staleTimer: null,
@@ -194,15 +203,18 @@ export class KrakenMarketDataProvider implements MarketDataProvider {
     socket.onopen = () => {
       if (!state.active || state.socket !== socket) return
       state.reconnectAttempt = 0
-      socket.send(
-        JSON.stringify({
-          method: 'subscribe',
-          params: {
-            channel: 'ticker',
-            symbol: [KRAKEN_PAIR.webSocketSymbol],
-          },
-        }),
-      )
+      for (const channel of ['ticker', 'trade'] as const) {
+        socket.send(
+          JSON.stringify({
+            method: 'subscribe',
+            params: {
+              channel,
+              symbol: [KRAKEN_PAIR.webSocketSymbol],
+              ...(channel === 'trade' ? { snapshot: true } : {}),
+            },
+          }),
+        )
+      }
     }
     socket.onmessage = (event) => {
       if (!state.active || state.socket !== socket) return
@@ -230,7 +242,12 @@ export class KrakenMarketDataProvider implements MarketDataProvider {
       return
     }
 
-    if (!isRecord(payload) || payload.channel !== 'ticker') return
+    if (!isRecord(payload)) return
+    if (payload.method === 'subscribe' && payload.success === false) {
+      this.handleSocketFailure(state, socket, onQuote)
+      return
+    }
+    if (payload.channel !== 'ticker' && payload.channel !== 'trade') return
     if (payload.type !== 'snapshot' && payload.type !== 'update') return
     if (!Array.isArray(payload.data)) {
       this.handleSocketFailure(state, socket, onQuote)
@@ -245,29 +262,63 @@ export class KrakenMarketDataProvider implements MarketDataProvider {
       }
       if (item.symbol !== KRAKEN_PAIR.webSocketSymbol) continue
       const instrumentId = krakenWebSocketSymbolToDomain(item.symbol)
-      const quote = mapTicker(instrumentId, item)
+      const quote =
+        payload.channel === 'ticker'
+          ? mapTicker(instrumentId, item)
+          : mapTrade(instrumentId, item, state.tickerChanges.get(instrumentId))
       if (quote === null) {
         this.handleSocketFailure(state, socket, onQuote)
         return
       }
-      const timedQuote = withQuoteTiming(quote, this.now())
-      const timestampMs = Date.parse(quote.timestamp)
-      const lastAt = state.lastTickerAt.get(instrumentId)
-      if (lastAt !== undefined && timestampMs <= lastAt) {
-        // Duplicate and delayed ticker messages are harmless; do not publish
-        // them or treat an out-of-order ticker as a socket failure.
-        continue
+      if (payload.channel === 'ticker') {
+        const timestampMs = Date.parse(quote.timestamp)
+        const lastAt = state.lastTickerAt.get(instrumentId)
+        if (lastAt !== undefined && timestampMs <= lastAt) {
+          // Duplicate and delayed ticker messages are harmless; do not publish
+          // them or treat an out-of-order ticker as a socket failure.
+          continue
+        }
+        state.lastTickerAt.set(instrumentId, timestampMs)
+        state.tickerChanges.set(instrumentId, {
+          change: quote.change,
+          changePercent: quote.changePercent,
+        })
+      } else {
+        const tradeId = tradeIdValue(item.trade_id)
+        if (tradeId === null) {
+          this.handleSocketFailure(state, socket, onQuote)
+          return
+        }
+        const lastTradeId = state.lastTradeId.get(instrumentId)
+        if (lastTradeId !== undefined && tradeId <= lastTradeId) {
+          // Kraken can repeat snapshot/update trades during reconnects. The
+          // trade id is the monotonic cursor for the live candle stream.
+          continue
+        }
+        state.lastTradeId.set(instrumentId, tradeId)
       }
-      state.lastTickerAt.set(instrumentId, timestampMs)
-      quotes.push(timedQuote)
+      const timedQuote = withQuoteTiming(quote, this.now())
+      if (payload.channel === 'trade') {
+        this.publishQuote(state, timedQuote, onQuote)
+      } else {
+        quotes.push(timedQuote)
+      }
     }
 
     for (const quote of quotes) {
-      state.lastQuote = quote
-      state.lastQuoteAt = this.now()
-      onQuote(quote)
-      this.scheduleStale(state, onQuote)
+      this.publishQuote(state, quote, onQuote)
     }
+  }
+
+  private publishQuote(
+    state: SubscriptionState,
+    quote: Quote,
+    onQuote: (quote: Quote) => void,
+  ): void {
+    state.lastQuote = quote
+    state.lastQuoteAt = this.now()
+    onQuote(quote)
+    this.scheduleStale(state, onQuote)
   }
 
   private handleSocketFailure(
@@ -481,6 +532,40 @@ function mapTicker(
     timestamp,
     status: 'live',
   }
+}
+
+function mapTrade(
+  instrumentId: InstrumentId,
+  value: RecordValue,
+  tickerChange: TickerChange | undefined,
+): Quote | null {
+  const price = numberValue(value.price)
+  const timestamp = stringValue(value.timestamp)
+  const tradeId = tradeIdValue(value.trade_id)
+  if (
+    price === null ||
+    price <= 0 ||
+    timestamp === null ||
+    Number.isNaN(Date.parse(timestamp)) ||
+    tradeId === null
+  ) {
+    return null
+  }
+  return {
+    instrumentId,
+    price,
+    change: tickerChange?.change ?? 0,
+    changePercent: tickerChange?.changePercent ?? 0,
+    timestamp,
+    status: 'live',
+  }
+}
+
+function tradeIdValue(value: unknown): number | null {
+  const tradeId = numberValue(value)
+  return tradeId !== null && Number.isSafeInteger(tradeId) && tradeId > 0
+    ? tradeId
+    : null
 }
 
 function withQuoteTiming(quote: Quote, receivedAtMs: number): Quote {

@@ -18,7 +18,11 @@ import App from './App'
 const mocks = vi.hoisted(() => ({
   createChart: vi.fn(),
   series: { setData: vi.fn() },
-  chart: { addSeries: vi.fn(), remove: vi.fn() },
+  chart: {
+    addSeries: vi.fn(),
+    timeScale: vi.fn(() => ({ scrollToRealTime: vi.fn() })),
+    remove: vi.fn(),
+  },
 }))
 
 mocks.createChart.mockReturnValue(mocks.chart)

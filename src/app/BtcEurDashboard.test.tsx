@@ -20,7 +20,11 @@ import { NEWS_FIXTURES } from './intelligence/news-fixtures'
 
 const mocks = vi.hoisted(() => {
   const series = { setData: vi.fn() }
-  const chart = { addSeries: vi.fn(() => series), remove: vi.fn() }
+  const chart = {
+    addSeries: vi.fn(() => series),
+    timeScale: vi.fn(() => ({ scrollToRealTime: vi.fn() })),
+    remove: vi.fn(),
+  }
   const createChart = vi.fn()
   return { createChart, chart, series }
 })

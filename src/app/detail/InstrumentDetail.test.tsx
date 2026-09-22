@@ -28,6 +28,7 @@ const mocks = vi.hoisted(() => {
   }
   const chart = {
     addSeries: vi.fn(() => series),
+    timeScale: vi.fn(() => ({ scrollToRealTime: vi.fn() })),
     remove: vi.fn(),
     applyOptions: vi.fn(),
   }

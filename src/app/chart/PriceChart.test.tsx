@@ -9,8 +9,12 @@ const mocks = vi.hoisted(() => {
     remove: vi.fn(),
     applyOptions: vi.fn(),
   }
+  const timeScale = {
+    scrollToRealTime: vi.fn(),
+  }
   const chart = {
     addSeries: vi.fn(() => series),
+    timeScale: vi.fn(() => timeScale),
     remove: vi.fn(),
     applyOptions: vi.fn(),
   }
@@ -20,10 +24,13 @@ const mocks = vi.hoisted(() => {
     createChart,
     chart,
     series,
+    timeScale,
     reset() {
       createChart.mockClear()
       chart.addSeries.mockClear()
       series.setData.mockClear()
+      chart.timeScale.mockClear()
+      timeScale.scrollToRealTime.mockClear()
       chart.remove.mockClear()
     },
   }
@@ -73,6 +80,11 @@ describe('PriceChart', () => {
       expect.objectContaining({
         autoSize: true,
         layout: expect.objectContaining({ attributionLogo: true }),
+        timeScale: {
+          borderColor: expect.any(String),
+          timeVisible: true,
+          secondsVisible: false,
+        },
       }),
     )
   })
@@ -89,6 +101,8 @@ describe('PriceChart', () => {
       }),
     )
     expect(mocks.series.setData).toHaveBeenCalledWith(data)
+    expect(mocks.chart.timeScale).toHaveBeenCalled()
+    expect(mocks.timeScale.scrollToRealTime).toHaveBeenCalledTimes(1)
   })
 
   it('updates the existing series when data changes', () => {
@@ -99,6 +113,7 @@ describe('PriceChart', () => {
 
     expect(mocks.createChart).toHaveBeenCalledTimes(1)
     expect(mocks.series.setData).toHaveBeenLastCalledWith(next)
+    expect(mocks.timeScale.scrollToRealTime).toHaveBeenCalledTimes(2)
   })
 
   it('removes the chart when data becomes empty', () => {

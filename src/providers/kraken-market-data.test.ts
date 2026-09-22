@@ -58,6 +58,22 @@ const TICKER_BASE = {
   ],
 }
 
+const TRADE_BASE = {
+  channel: 'trade',
+  type: 'snapshot',
+  data: [
+    {
+      symbol: 'BTC/EUR',
+      side: 'buy',
+      price: 62_001.5,
+      qty: 0.01,
+      ord_type: 'market',
+      trade_id: 1001,
+      timestamp: '2026-09-20T12:00:00.500Z',
+    },
+  ],
+}
+
 class FakeWebSocket implements KrakenWebSocket {
   readonly send = vi.fn<(data: string) => void>()
   readonly close = vi.fn<(code?: number, reason?: string) => void>()
@@ -495,6 +511,13 @@ describe('KrakenMarketDataProvider WebSocket v2 ticker contract', () => {
         params: { channel: 'ticker', symbol: ['BTC/EUR'] },
       }),
     )
+    expect(socket.send).toHaveBeenNthCalledWith(
+      2,
+      JSON.stringify({
+        method: 'subscribe',
+        params: { channel: 'trade', symbol: ['BTC/EUR'], snapshot: true },
+      }),
+    )
 
     socket.message(TICKER_BASE)
     unsubscribe()
@@ -548,6 +571,123 @@ describe('KrakenMarketDataProvider WebSocket v2 ticker contract', () => {
     expect(quotes.map((quote) => quote.price)).toEqual([62_000.5, 63_000])
     expect(quotes[1]).toMatchObject({ change: 2000.5, changePercent: 3.28 })
     expect(sockets).toHaveLength(1)
+    expect(socket.close).not.toHaveBeenCalled()
+  })
+
+  it('maps trade snapshots and updates immediately with ticker change metadata', () => {
+    const { provider, sockets } = makeProvider({
+      now: () => Date.parse('2026-09-20T12:00:01.250Z'),
+    })
+    const quotes: Quote[] = []
+    provider.subscribe(['BTC-EUR'], (quote) => quotes.push(quote))
+    const socket = sockets[0]!
+    socket.open()
+    socket.message(TICKER_BASE)
+    socket.message(TRADE_BASE)
+    socket.message({
+      channel: 'trade',
+      type: 'update',
+      data: [
+        {
+          ...TRADE_BASE.data[0]!,
+          price: 62_002.25,
+          trade_id: 1002,
+          timestamp: '2026-09-20T12:00:00.750Z',
+        },
+      ],
+    })
+
+    expect(quotes.slice(1)).toEqual([
+      {
+        instrumentId: 'BTC-EUR',
+        price: 62_001.5,
+        change: 1000.5,
+        changePercent: 1.63,
+        timestamp: '2026-09-20T12:00:00.500Z',
+        status: 'live',
+        eventTime: '2026-09-20T12:00:00.500Z',
+        receivedTime: '2026-09-20T12:00:01.250Z',
+        displayTime: '2026-09-20T12:00:01.250Z',
+        freshnessAgeMs: 750,
+        freshnessIsStale: false,
+      },
+      {
+        instrumentId: 'BTC-EUR',
+        price: 62_002.25,
+        change: 1000.5,
+        changePercent: 1.63,
+        timestamp: '2026-09-20T12:00:00.750Z',
+        status: 'live',
+        eventTime: '2026-09-20T12:00:00.750Z',
+        receivedTime: '2026-09-20T12:00:01.250Z',
+        displayTime: '2026-09-20T12:00:01.250Z',
+        freshnessAgeMs: 500,
+        freshnessIsStale: false,
+      },
+    ])
+  })
+
+  it('uses deterministic zero change fallback when trade data precedes ticker data', () => {
+    const { provider, sockets } = makeProvider()
+    const quotes: Quote[] = []
+    provider.subscribe(['BTC-EUR'], (quote) => quotes.push(quote))
+    const socket = sockets[0]!
+    socket.open()
+    socket.message(TRADE_BASE)
+
+    expect(quotes[0]).toMatchObject({
+      price: 62_001.5,
+      change: 0,
+      changePercent: 0,
+      status: 'live',
+    })
+  })
+
+  it('skips duplicate and out-of-order trade ids without failing the socket', () => {
+    const { provider, sockets } = makeProvider()
+    const quotes: Quote[] = []
+    provider.subscribe(['BTC-EUR'], (quote) => quotes.push(quote))
+    const socket = sockets[0]!
+    socket.open()
+    socket.message(TRADE_BASE)
+    socket.message({
+      channel: 'trade',
+      type: 'update',
+      data: [
+        {
+          ...TRADE_BASE.data[0]!,
+          price: 61_000,
+          trade_id: 1001,
+          timestamp: '2026-09-20T12:00:00.600Z',
+        },
+      ],
+    })
+    socket.message({
+      channel: 'trade',
+      type: 'update',
+      data: [
+        {
+          ...TRADE_BASE.data[0]!,
+          price: 60_000,
+          trade_id: 1000,
+          timestamp: '2026-09-20T12:00:00.400Z',
+        },
+      ],
+    })
+    socket.message({
+      channel: 'trade',
+      type: 'update',
+      data: [
+        {
+          ...TRADE_BASE.data[0]!,
+          price: 62_003,
+          trade_id: 1002,
+          timestamp: '2026-09-20T12:00:00.700Z',
+        },
+      ],
+    })
+
+    expect(quotes.map((quote) => quote.price)).toEqual([62_001.5, 62_003])
     expect(socket.close).not.toHaveBeenCalled()
   })
 
@@ -646,6 +786,30 @@ describe('KrakenMarketDataProvider WebSocket v2 ticker contract', () => {
     socket.serverError()
 
     expect(quotes.at(-1)).toMatchObject({ price: 62_000.5, status: 'stale' })
+    expect(socket.close).toHaveBeenCalled()
+    vi.advanceTimersByTime(100)
+    expect(sockets).toHaveLength(2)
+  })
+
+  it('marks the latest trade stale and reconnects when a subscription fails', () => {
+    const { provider, sockets } = makeProvider({ reconnectBaseMs: 100 })
+    const quotes: Quote[] = []
+    provider.subscribe(['BTC-EUR'], (quote) => quotes.push(quote))
+    const socket = sockets[0]!
+    socket.open()
+    socket.message(TICKER_BASE)
+    socket.message(TRADE_BASE)
+    socket.message({
+      method: 'subscribe',
+      success: false,
+      error: 'EGeneral:Subscription failed',
+    })
+
+    expect(quotes.at(-1)).toMatchObject({
+      price: 62_001.5,
+      status: 'stale',
+      freshnessIsStale: true,
+    })
     expect(socket.close).toHaveBeenCalled()
     vi.advanceTimersByTime(100)
     expect(sockets).toHaveLength(2)

@@ -3,6 +3,7 @@ import type {
   ChartOptions,
   DeepPartial,
   CandlestickData,
+  IChartApi,
   ISeriesApi,
 } from 'lightweight-charts'
 import { useEffect, useRef } from 'react'
@@ -86,12 +87,17 @@ function chartOptions(palette: Palette): DeepPartial<ChartOptions> {
       horzLines: { color: palette.grid },
     },
     rightPriceScale: { borderColor: palette.muted },
-    timeScale: { borderColor: palette.muted },
+    timeScale: {
+      borderColor: palette.muted,
+      timeVisible: true,
+      secondsVisible: false,
+    },
   }
 }
 
 export default function PriceChart({ data }: PriceChartProps) {
   const containerRef = useRef<HTMLDivElement>(null)
+  const chartRef = useRef<IChartApi | null>(null)
   const seriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null)
   const hasData = data.length > 0
 
@@ -109,16 +115,22 @@ export default function PriceChart({ data }: PriceChartProps) {
       wickDownColor: palette.down,
       borderVisible: false,
     })
+    chartRef.current = chart
     seriesRef.current = series
 
     return () => {
+      chartRef.current = null
       seriesRef.current = null
       chart.remove()
     }
   }, [hasData])
 
   useEffect(() => {
-    seriesRef.current?.setData([...data])
+    const series = seriesRef.current
+    const chart = chartRef.current
+    if (!series || !chart) return
+    series.setData([...data])
+    chart.timeScale().scrollToRealTime()
   }, [data])
 
   if (!hasData) {
