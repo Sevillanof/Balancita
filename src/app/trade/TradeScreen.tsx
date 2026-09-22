@@ -31,6 +31,7 @@ type TradeScreenProps = {
   provider: MarketDataProvider
   portfolioRepository?: PortfolioRepository
   initialInstrumentId?: InstrumentId
+  initialSide?: OrderSide
   onAccountChanged?: () => void
   simulatorOptions?: Partial<OrderSimulatorConfig> & { now?: () => number }
 }
@@ -43,12 +44,14 @@ export default function TradeScreen({
   provider,
   portfolioRepository,
   initialInstrumentId,
+  initialSide,
   onAccountChanged,
   simulatorOptions,
 }: TradeScreenProps) {
   const trading = useTrading(provider, {
     portfolioRepository,
     initialInstrumentId,
+    initialSide,
     simulatorOptions,
   })
   const [quantity, setQuantity] = useState('')

@@ -1,4 +1,5 @@
 import { act, render, screen, waitFor, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AnalysisProvider } from '../domain/analysis'
 import type {
@@ -92,6 +93,10 @@ function renderDashboard(provider: MarketDataProvider) {
   )
 }
 
+async function waitForReady(): Promise<void> {
+  await screen.findByRole('region', { name: 'Gráfico BTC-EUR' })
+}
+
 describe('BtcEurDashboard main screen (Phase 1)', () => {
   beforeEach(() => {
     window.localStorage.clear()
@@ -105,11 +110,14 @@ describe('BtcEurDashboard main screen (Phase 1)', () => {
 
   it('renders ONLY the six wireframe areas A–F', async () => {
     renderDashboard(readyProvider())
-    await screen.findByRole('form', { name: 'Orden del simulador' })
+    await waitForReady()
 
-    // A. Brand/title, with no badges, mode label or timestamps.
+    // A. Brand/title plus the presentation-only simulation control.
     expect(
       screen.getByRole('heading', { name: 'Balancita (BTC/EUR)' }),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: 'Simulación' }),
     ).toBeInTheDocument()
     // B. Available money from the local paper ledger.
     expect(
@@ -129,7 +137,7 @@ describe('BtcEurDashboard main screen (Phase 1)', () => {
     // E. Buy / sell / auto control.
     expect(screen.getByRole('button', { name: 'Comprar' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Vender' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /Auto Trading/ })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Auto Trade' })).toBeDisabled()
     // F. BTC-EUR instrument summary.
     expect(
       screen.getByRole('region', { name: 'Resumen BTC-EUR' }),
@@ -141,9 +149,31 @@ describe('BtcEurDashboard main screen (Phase 1)', () => {
     ).toBeInTheDocument()
   })
 
+  it('renders exactly three action buttons plus the simulation control', async () => {
+    renderDashboard(readyProvider())
+    await waitForReady()
+
+    const actions = screen.getByRole('group', {
+      name: 'Acciones de trading',
+    })
+    expect(within(actions).getAllByRole('button')).toHaveLength(3)
+    expect(
+      within(actions).getByRole('button', { name: 'Comprar' }),
+    ).toBeEnabled()
+    expect(
+      within(actions).getByRole('button', { name: 'Vender' }),
+    ).toBeEnabled()
+    expect(
+      within(actions).getByRole('button', { name: 'Auto Trade' }),
+    ).toBeDisabled()
+    expect(
+      screen.getByRole('button', { name: 'Simulación' }),
+    ).toBeInTheDocument()
+  })
+
   it('does not render any surface that is outside the wireframe', async () => {
     renderDashboard(readyProvider())
-    await screen.findByRole('form', { name: 'Orden del simulador' })
+    await waitForReady()
 
     // No instrument detail.
     expect(
@@ -186,7 +216,7 @@ describe('BtcEurDashboard main screen (Phase 1)', () => {
 
   it('renders the local news fixtures in area D', async () => {
     renderDashboard(readyProvider())
-    await screen.findByRole('form', { name: 'Orden del simulador' })
+    await waitForReady()
 
     const news = screen.getByRole('region', { name: 'Noticias BTC-EUR' })
     expect(within(news).getAllByRole('listitem')).toHaveLength(
@@ -197,7 +227,7 @@ describe('BtcEurDashboard main screen (Phase 1)', () => {
   it('derives the BTC-EUR summary in area F from the mock quote', async () => {
     const provider = readyProvider()
     renderDashboard(provider)
-    await screen.findByRole('form', { name: 'Orden del simulador' })
+    await waitForReady()
 
     act(() =>
       provider.emit(
@@ -216,14 +246,56 @@ describe('BtcEurDashboard main screen (Phase 1)', () => {
     )
   })
 
-  it('keeps the paper trading flow with a disabled auto control in area E', async () => {
+  it('keeps the order flow reachable behind the disabled auto control', async () => {
+    const user = userEvent.setup()
     renderDashboard(readyProvider())
-    await screen.findByRole('form', { name: 'Orden del simulador' })
+    await waitForReady()
 
     expect(
-      screen.getByRole('button', { name: 'Vista previa de la orden' }),
+      screen.queryByRole('button', { name: 'Vista previa de la orden' }),
+    ).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Auto Trade' })).toBeDisabled()
+
+    await user.click(screen.getByRole('button', { name: 'Comprar' }))
+
+    expect(
+      await screen.findByRole('button', { name: 'Vista previa de la orden' }),
     ).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /Auto Trading/ })).toBeDisabled()
+  })
+
+  it('opens the paper trading flow from Comprar and Vender, preselecting the side', async () => {
+    const user = userEvent.setup()
+    renderDashboard(readyProvider())
+    await waitForReady()
+
+    await user.click(screen.getByRole('button', { name: 'Comprar' }))
+    const buyForm = await screen.findByRole('form', {
+      name: 'Orden del simulador',
+    })
+    expect(
+      within(buyForm).getByRole('button', { name: 'Comprar' }),
+    ).toHaveAttribute('aria-pressed', 'true')
+    expect(
+      within(buyForm).getByRole('button', { name: 'Vender' }),
+    ).toHaveAttribute('aria-pressed', 'false')
+
+    await user.click(screen.getByRole('button', { name: 'Cerrar' }))
+    await waitFor(() =>
+      expect(
+        screen.queryByRole('form', { name: 'Orden del simulador' }),
+      ).not.toBeInTheDocument(),
+    )
+
+    await user.click(screen.getByRole('button', { name: 'Vender' }))
+    const sellForm = await screen.findByRole('form', {
+      name: 'Orden del simulador',
+    })
+    expect(
+      within(sellForm).getByRole('button', { name: 'Vender' }),
+    ).toHaveAttribute('aria-pressed', 'true')
+    expect(
+      within(sellForm).getByRole('button', { name: 'Comprar' }),
+    ).toHaveAttribute('aria-pressed', 'false')
   })
 
   it('shows a loading state while keeping the brand shell (no layout jump)', () => {
@@ -270,7 +342,7 @@ describe('BtcEurDashboard main screen (Phase 1)', () => {
   it('keeps every area visible when the quote turns stale', async () => {
     const provider = readyProvider()
     renderDashboard(provider)
-    await screen.findByRole('form', { name: 'Orden del simulador' })
+    await waitForReady()
 
     act(() =>
       provider.emit(makeQuote({ instrumentId: 'BTC-EUR', status: 'stale' })),
@@ -295,7 +367,7 @@ describe('BtcEurDashboard main screen (Phase 1)', () => {
     vi.stubGlobal('EventSource', eventSourceSpy)
 
     renderDashboard(readyProvider())
-    await screen.findByRole('form', { name: 'Orden del simulador' })
+    await waitForReady()
 
     expect(fetchSpy).not.toHaveBeenCalled()
     expect(eventSourceSpy).not.toHaveBeenCalled()

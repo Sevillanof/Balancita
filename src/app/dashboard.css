@@ -6,14 +6,14 @@
 
 .dashboard__grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.7fr) minmax(19rem, 1fr);
-  grid-template-rows: auto minmax(0, 1.15fr) minmax(0, 0.85fr);
+  grid-template-columns: minmax(0, 2.7fr) minmax(18rem, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) auto;
   grid-template-areas:
     'brand available'
     'chart news'
-    'controls controls';
+    'actions summary';
   gap: var(--space-5);
-  height: clamp(34rem, calc(100svh - 19rem), 60rem);
+  height: clamp(34rem, calc(100svh - 4.5rem), 64rem);
   min-width: 0;
 }
 
@@ -40,8 +40,18 @@
   overflow: auto;
 }
 
-.dashboard__grid > .dashboard__controls-scroll {
-  grid-area: controls;
+.dashboard__bottom {
+  display: contents;
+}
+
+.dashboard__bottom > .dashboard__actions {
+  grid-area: actions;
+  min-width: 0;
+}
+
+.dashboard__bottom > .summary {
+  grid-area: summary;
+  min-height: 0;
 }
 
 .dashboard__grid > .dashboard__state {
@@ -79,6 +89,20 @@
   line-height: var(--leading-tight);
 }
 
+.dashboard__simulation {
+  min-height: var(--control-height-compact);
+  margin-left: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+  color: var(--color-accent);
+  background: var(--color-accent-soft);
+  border: 1px solid var(--color-accent);
+  border-radius: var(--radius-pill);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-bold);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
 .dashboard__available {
   display: flex;
   flex-direction: column;
@@ -107,26 +131,50 @@
   color: var(--color-accent);
 }
 
-.dashboard__controls-scroll {
-  display: grid;
-  grid-template-columns: minmax(0, 1.7fr) minmax(19rem, 1fr);
-  gap: var(--space-5);
-  align-items: start;
+.dashboard__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
   min-width: 0;
 }
 
-.dashboard__trade-area {
-  display: flex;
-  min-width: 0;
-  min-height: 0;
-  flex-direction: column;
-  gap: var(--space-3);
+.dashboard__order-dialog {
+  width: min(48rem, calc(100vw - 2rem));
+  max-width: 100%;
+  max-height: min(88svh, 48rem);
+  padding: 0;
   overflow: auto;
-  padding: var(--space-5);
+  color: var(--color-text);
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-sm);
+  box-shadow: var(--shadow-md);
+}
+
+.dashboard__order-dialog::backdrop {
+  background: rgba(23, 32, 51, 0.5);
+}
+
+.dashboard__order-dialog-bar {
+  display: flex;
+  justify-content: flex-end;
+  padding: var(--space-4) var(--space-5) 0;
+}
+
+.dashboard__order-close {
+  min-height: var(--control-height-compact);
+  padding: var(--space-1) var(--space-3);
+  color: var(--color-text);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  font-weight: var(--weight-semibold);
+}
+
+.dashboard__order-dialog .trade {
+  margin-top: 0;
+  padding: 0 var(--space-5) var(--space-5);
 }
 
 .dashboard__surface,
@@ -210,7 +258,7 @@
       'available'
       'chart'
       'news'
-      'controls';
+      'bottom';
     height: auto;
   }
 
@@ -228,7 +276,8 @@
     text-align: left;
   }
 
-  .dashboard__controls-scroll {
+  .dashboard__bottom {
+    grid-area: bottom;
     display: flex;
     gap: var(--space-4);
     overflow-x: auto;
@@ -236,14 +285,10 @@
     padding-bottom: var(--space-2);
   }
 
-  .dashboard__controls-scroll > * {
+  .dashboard__bottom > * {
     flex: 0 0 auto;
     width: min(24rem, 85vw);
     min-width: min(24rem, 85vw);
-  }
-
-  .dashboard__trade-area {
-    overflow: visible;
   }
 }
 
@@ -253,8 +298,7 @@
   }
 
   .dashboard__brand,
-  .dashboard__available,
-  .dashboard__trade-area {
+  .dashboard__available {
     padding: var(--space-4);
   }
 

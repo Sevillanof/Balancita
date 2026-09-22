@@ -29,6 +29,7 @@ export type UseTradingOptions = {
   makeIdempotencyKey?: () => string
   portfolioRepository?: PortfolioRepository
   initialInstrumentId?: InstrumentId
+  initialSide?: OrderSide
   simulatorOptions?: Partial<OrderSimulatorConfig> & { now?: () => number }
 }
 
@@ -72,7 +73,7 @@ export function useTrading(
   const [instruments, setInstruments] = useState<Instrument[]>([])
   const [selectedInstrumentId, setSelectedInstrumentId] =
     useState<InstrumentId | null>(null)
-  const [side, setSide] = useState<OrderSide>(BUY)
+  const [side, setSide] = useState<OrderSide>(options.initialSide ?? BUY)
   const [preview, setPreview] = useState<OrderPreview | null>(null)
   const [previewError, setPreviewError] = useState<string | null>(null)
   const [previewing, setPreviewing] = useState(false)

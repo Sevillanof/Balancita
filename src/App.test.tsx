@@ -94,7 +94,10 @@ describe('dashboard BTC-EUR', () => {
     ).not.toBeInTheDocument()
     expect(screen.queryByRole('tablist')).not.toBeInTheDocument()
     expect(
-      await screen.findByRole('form', { name: 'Orden del simulador' }),
+      await screen.findByRole('group', { name: 'Acciones de trading' }),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: 'Simulación' }),
     ).toBeInTheDocument()
     expect(
       screen.getByRole('heading', {
@@ -107,7 +110,9 @@ describe('dashboard BTC-EUR', () => {
     const user = userEvent.setup()
     const { provider } = renderApp()
 
-    await screen.findByRole('heading', { name: 'BTC-EUR' })
+    await screen.findByRole('group', { name: 'Acciones de trading' })
+    await user.click(screen.getByRole('button', { name: 'Comprar' }))
+    await screen.findByRole('form', { name: 'Orden del simulador' })
     await waitFor(() =>
       expect(provider.subscribeCalls.length).toBeGreaterThanOrEqual(3),
     )
@@ -135,10 +140,13 @@ describe('dashboard BTC-EUR', () => {
   })
 
   it('keeps the order flow while running no analysis on the Phase 1 main screen', async () => {
+    const user = userEvent.setup()
     const analysis = new FakeAnalysisProvider()
     analysis.analyzeCall.mockResolvedValue(localResult())
     const { provider } = renderApp({ analysis })
 
+    await screen.findByRole('group', { name: 'Acciones de trading' })
+    await user.click(screen.getByRole('button', { name: 'Vender' }))
     await screen.findByRole('form', { name: 'Orden del simulador' })
     await waitFor(() =>
       expect(provider.subscribeCalls.length).toBeGreaterThanOrEqual(3),
@@ -176,6 +184,7 @@ describe('dashboard BTC-EUR', () => {
 
 describe('dashboard Gemini boundary', () => {
   it('keeps analysis providers idle on the main screen', async () => {
+    const user = userEvent.setup()
     const local = new FakeAnalysisProvider()
     const gemini = new FakeAnalysisProvider()
     local.analyzeCall.mockResolvedValue(localResult())
@@ -198,7 +207,8 @@ describe('dashboard Gemini boundary', () => {
       />,
     )
 
-    await screen.findByRole('form', { name: 'Orden del simulador' })
+    await screen.findByRole('group', { name: 'Acciones de trading' })
+    await user.click(screen.getByRole('button', { name: 'Comprar' }))
     await waitFor(() =>
       expect(provider.subscribeCalls.length).toBeGreaterThanOrEqual(3),
     )

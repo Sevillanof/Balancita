@@ -6,15 +6,17 @@ describe('AutoTradingControl', () => {
   it('is presentation only: disabled with no active handler', () => {
     render(<AutoTradingControl />)
 
-    const button = screen.getByRole('button', { name: /Auto/ })
+    const button = screen.getByRole('button', { name: /Auto Trade/ })
     expect(button).toBeDisabled()
     expect(button).toHaveAttribute('aria-disabled', 'true')
     expect(button).not.toHaveAttribute('aria-pressed', 'true')
   })
 
-  it('states that it executes no action in this phase', () => {
+  it('renders the wireframe auto trade label', () => {
     render(<AutoTradingControl />)
 
-    expect(screen.getByText(/No ejecuta ninguna acción/i)).toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: 'Auto Trade' }),
+    ).toBeInTheDocument()
   })
 })

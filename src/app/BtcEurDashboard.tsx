@@ -1,6 +1,8 @@
+import { useEffect, useRef, useState } from 'react'
 import type { AnalysisProvider } from '../domain/analysis'
 import type { MarketDataProvider } from '../domain/market-data'
 import type { PortfolioRepository } from '../domain/portfolio'
+import { BUY, SELL, type OrderSide } from '../domain/orders'
 import type { AnalysisMode } from './AnalysisModeToggle'
 import ChartPanel from './chart/ChartPanel'
 import { useCandleHistory } from './detail/useCandleHistory'
@@ -34,6 +36,10 @@ type BtcEurDashboardProps = {
  * portfolio, alerts, mock lab, intelligence status) are intentionally not part
  * of the Phase 1 screen and live in their own modules and tests.
  *
+ * Area E is a flat three-button bar (Comprar / Vender / Auto Trade). The full
+ * paper-trading flow lives in a dialog opened by Comprar or Vender, so the bar
+ * stays exactly three buttons and the existing TradeScreen logic is untouched.
+ *
  * The `labProvider`, `alerts`, `analysis*` and `dataMode` props remain wired by
  * the app shell but are unused here; a later phase reattaches those surfaces.
  */
@@ -47,6 +53,7 @@ export default function BtcEurDashboard({
     portfolioRepository,
     initialInstrumentId: 'BTC-EUR',
   })
+  const [orderFlowSide, setOrderFlowSide] = useState<OrderSide | null>(null)
   const instrument = market.instruments.find(({ id }) => id === 'BTC-EUR')
   const quote =
     instrument === undefined ? undefined : market.quotes.get(instrument.id)
@@ -59,6 +66,9 @@ export default function BtcEurDashboard({
         <header className="dashboard__brand">
           <span className="dashboard__brand-mark" aria-hidden="true" />
           <h1 className="dashboard__brand-title">Balancita (BTC/EUR)</h1>
+          <button type="button" className="dashboard__simulation">
+            Simulación
+          </button>
         </header>
 
         <section
@@ -88,27 +98,101 @@ export default function BtcEurDashboard({
               onRetry={history.retry}
             />
             <NewsPanel status="ready" items={NEWS_FIXTURES} />
-            <div className="dashboard__controls-scroll">
-              <section
-                className="dashboard__trade-area"
-                aria-label="Operar BTC-EUR"
+            <div className="dashboard__bottom">
+              <div
+                className="dashboard__actions"
+                role="group"
+                aria-label="Acciones de trading"
               >
-                <TradeScreen
-                  provider={provider}
-                  portfolioRepository={portfolioRepository}
-                  initialInstrumentId="BTC-EUR"
-                  onAccountChanged={() => {
-                    void ledger.refreshAccount()
-                  }}
-                />
+                <button
+                  type="button"
+                  className="button button--primary"
+                  onClick={() => setOrderFlowSide(BUY)}
+                >
+                  Comprar
+                </button>
+                <button
+                  type="button"
+                  className="button button--secondary"
+                  onClick={() => setOrderFlowSide(SELL)}
+                >
+                  Vender
+                </button>
                 <AutoTradingControl />
-              </section>
+              </div>
               <BtcEurSummary quote={quote} candles={history.candles} />
             </div>
           </>
         )}
       </div>
+
+      {ready && instrument !== undefined && orderFlowSide !== null && (
+        <OrderFlowDialog
+          side={orderFlowSide}
+          provider={provider}
+          portfolioRepository={portfolioRepository}
+          onClose={() => setOrderFlowSide(null)}
+          onAccountChanged={() => {
+            void ledger.refreshAccount()
+          }}
+        />
+      )}
     </div>
+  )
+}
+
+function OrderFlowDialog({
+  side,
+  provider,
+  portfolioRepository,
+  onClose,
+  onAccountChanged,
+}: {
+  side: OrderSide
+  provider: MarketDataProvider
+  portfolioRepository: PortfolioRepository
+  onClose: () => void
+  onAccountChanged: () => void
+}) {
+  const dialogRef = useRef<HTMLDialogElement>(null)
+
+  useEffect(() => {
+    const dialog = dialogRef.current
+    if (dialog === null || dialog.open) return
+    if (typeof dialog.showModal === 'function') {
+      dialog.showModal()
+    } else {
+      // jsdom and older engines lack showModal; the `open` attribute still
+      // exposes the flow while keeping the bar clean.
+      dialog.setAttribute('open', '')
+    }
+  }, [])
+
+  return (
+    <dialog
+      ref={dialogRef}
+      className="dashboard__order-dialog"
+      aria-label="Operar BTC-EUR"
+      onClose={onClose}
+      onCancel={onClose}
+    >
+      <div className="dashboard__order-dialog-bar">
+        <button
+          type="button"
+          className="dashboard__order-close"
+          onClick={onClose}
+        >
+          Cerrar
+        </button>
+      </div>
+      <TradeScreen
+        provider={provider}
+        portfolioRepository={portfolioRepository}
+        initialInstrumentId="BTC-EUR"
+        initialSide={side}
+        onAccountChanged={onAccountChanged}
+      />
+    </dialog>
   )
 }
 
