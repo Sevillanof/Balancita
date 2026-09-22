@@ -343,6 +343,15 @@ export class KrakenMarketCollector {
     }
     const envelope = this.envelope(payload, eventTime)
     if (envelope === null) return
+    // Kraken replays a large snapshot backlog of old trades on subscribe. Those
+    // trades are already stale relative to the local clock and belong to the
+    // historical backfill path, not the live shadow stream. Advance the cursor
+    // to the latest observed trade so the skipped range cannot masquerade as a
+    // gap or trigger catch-up, but never persist it.
+    if (envelope.status === 'stale') {
+      this.updateCursor(envelope, payload.tradeId, payload.tradeId)
+      return
+    }
     const result = this.persist(envelope)
     if (result === null) return
     if (
@@ -444,6 +453,9 @@ export class KrakenMarketCollector {
       if (!payload.valid) continue
       const envelope = this.envelope(payload.value, trade.eventTime)
       if (envelope === null) continue
+      // A gap that can only be filled with stale data stays recorded as
+      // unresolved evidence; never fabricate it from the historical backlog.
+      if (envelope.status === 'stale') continue
       if (this.persist(envelope) === null) continue
       filled.push(trade.tradeId)
     }

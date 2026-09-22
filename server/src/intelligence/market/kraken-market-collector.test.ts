@@ -127,6 +127,31 @@ function trade(input: {
   })
 }
 
+function tradeBatch(input: {
+  type?: string
+  trades: ReadonlyArray<{
+    tradeId: number
+    time: string
+    price?: number
+    qty?: number
+    side?: string
+  }>
+}): string {
+  return JSON.stringify({
+    channel: 'trade',
+    type: input.type ?? 'update',
+    data: input.trades.map((entry) => ({
+      symbol: 'BTC/EUR',
+      side: entry.side ?? 'buy',
+      price: entry.price ?? 60_000,
+      qty: entry.qty ?? 0.5,
+      ord_type: 'limit',
+      trade_id: entry.tradeId,
+      timestamp: entry.time,
+    })),
+  })
+}
+
 function makeCollector(options: {
   sockets: FakeSocket[]
   now?: () => number
@@ -734,6 +759,141 @@ describe('KrakenMarketCollector', () => {
         toTradeId: 2,
       }),
     ).rejects.toThrow('Kraken')
+  })
+
+  it('skips a stale snapshot backlog without persisting, gapping, or catching up', async () => {
+    const socket = new FakeSocket()
+    const scheduler = new FakeScheduler()
+    const catchUp = new FakeCatchUpClient()
+    const { collector, store } = makeCollector({
+      sockets: [socket],
+      scheduler,
+      catchUpClient: catchUp,
+      now: () => WALL_CLOCK,
+    })
+
+    collector.start('BTC-EUR')
+    socket.open()
+    // Kraken replays up to ~104 minutes of old trades in the subscription
+    // snapshot. The live stream is the real-time shadow source; the backlog
+    // belongs to the historical backfill path and must not be persisted.
+    const staleBase = WALL_CLOCK - 200_000
+    socket.message(
+      tradeBatch({
+        type: 'snapshot',
+        trades: [
+          { tradeId: 100, time: new Date(staleBase).toISOString() },
+          { tradeId: 101, time: new Date(staleBase + 1_000).toISOString() },
+          { tradeId: 105, time: new Date(staleBase + 2_000).toISOString() },
+        ],
+      }),
+    )
+    await flush()
+
+    expect(store.observationCount()).toBe(0)
+    const cursor = store.getCursor('kraken', 'BTC-EUR')
+    expect(cursor?.lastTradeId).toBe(105)
+    expect(cursor?.lastEventTime).toBe(staleBase + 2_000)
+    expect(cursor?.status).toBe('stale')
+    expect(store.listGaps()).toHaveLength(0)
+    expect(catchUp.requests).toHaveLength(0)
+
+    collector.stop()
+    store.close()
+  })
+
+  it('persists a fresh trade after a skipped stale backlog without reporting a gap', async () => {
+    const socket = new FakeSocket()
+    const catchUp = new FakeCatchUpClient()
+    const { collector, store } = makeCollector({
+      sockets: [socket],
+      catchUpClient: catchUp,
+      now: () => WALL_CLOCK,
+    })
+
+    collector.start('BTC-EUR')
+    socket.open()
+    const staleBase = WALL_CLOCK - 200_000
+    socket.message(
+      tradeBatch({
+        type: 'snapshot',
+        trades: [
+          { tradeId: 100, time: new Date(staleBase).toISOString() },
+          { tradeId: 101, time: new Date(staleBase + 1_000).toISOString() },
+        ],
+      }),
+    )
+    socket.message(trade({ tradeId: 102, time: '2026-09-21T10:00:02.000000Z' }))
+    await flush()
+
+    expect(store.observationCount()).toBe(1)
+    const [observation] = store.listObservations()
+    expect(observation?.payload).toMatchObject({ type: 'trade', tradeId: 102 })
+    expect(store.listGaps()).toHaveLength(0)
+    expect(catchUp.requests).toHaveLength(0)
+    expect(store.getCursor('kraken', 'BTC-EUR')?.lastTradeId).toBe(102)
+
+    collector.stop()
+    store.close()
+  })
+
+  it('skips a stale catch-up trade while persisting a fresh one', async () => {
+    const socket = new FakeSocket()
+    const catchUp = new FakeCatchUpClient()
+    const rejections: { code: string }[] = []
+    const staleBase = WALL_CLOCK - 200_000
+    catchUp.responses.push({
+      trades: [
+        {
+          tradeId: 101,
+          price: 60_001,
+          qty: 0.25,
+          side: 'sell',
+          eventTime: (staleBase + 1_000) as never,
+        },
+        {
+          tradeId: 102,
+          price: 60_002,
+          qty: 0.5,
+          side: 'buy',
+          eventTime: (WALL_CLOCK - 1_000) as never,
+        },
+      ],
+    })
+    const { collector, store } = makeCollector({
+      sockets: [socket],
+      catchUpClient: catchUp,
+      now: () => WALL_CLOCK,
+      onRejected: (rejection) => rejections.push(rejection),
+    })
+
+    collector.start('BTC-EUR')
+    socket.open()
+    socket.message(
+      tradeBatch({
+        type: 'snapshot',
+        trades: [{ tradeId: 100, time: new Date(staleBase).toISOString() }],
+      }),
+    )
+    socket.message(trade({ tradeId: 103, time: '2026-09-21T10:00:02.000000Z' }))
+    await flush()
+
+    expect(catchUp.requests).toHaveLength(1)
+    const tradeIds = store
+      .listObservations()
+      .flatMap((observation) =>
+        observation.payload.type === 'trade'
+          ? [observation.payload.tradeId]
+          : [],
+      )
+    // Trade 101 is stale and must not be fabricated; trade 102 is fresh.
+    expect(tradeIds).toEqual([103, 102])
+    expect(rejections.map((rejection) => rejection.code)).toContain(
+      'catch_up_unresolved',
+    )
+
+    collector.stop()
+    store.close()
   })
 
   it('rejects invalid JSON as a reconnectable input failure', () => {
