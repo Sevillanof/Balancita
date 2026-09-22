@@ -1,0 +1,25 @@
+server/src/app.test.ts
+  s_afa37ae13c6155::t_fa4e42c2b65c0c 10,531-622
+server/src/intelligence/live-forecast.test.ts
+  s_afa37ae13c6155::t_924d977f4885e3 1-225
+server/src/intelligence/live-forecast.ts
+  s_afa37ae13c6155::t_e07436ed8d889e 1-308
+server/src/intelligence/market/intraday-candles.ts
+  s_afa37ae13c6155::t_5dfe4070300e0b 71-79,88,103,299-305,308,314,316-322,324-339,341-342,347,451-454
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "414de9d870c41aad7669e51aec72855168422940",
+  "prompts": {},
+  "sessions": {
+    "s_afa37ae13c6155": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f37add659ffeWEZ298aR1j2J5F",
+        "model": "deepseek-v4.1-flash"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
