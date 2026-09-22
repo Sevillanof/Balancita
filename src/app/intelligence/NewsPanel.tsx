@@ -25,10 +25,6 @@ export default function NewsPanel({
 
   return (
     <section className="news" aria-label="Noticias BTC-EUR">
-      <div className="section-header news__header">
-        <h2 id="dashboard-news-title">NOTICIAS EN TIEMPO REAL</h2>
-      </div>
-
       {status === 'loading' && (
         <p role="status" aria-busy="true" className="news__state">
           Cargando noticias…

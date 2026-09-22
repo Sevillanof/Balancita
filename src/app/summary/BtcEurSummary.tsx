@@ -10,8 +10,6 @@ type BtcEurSummaryProps = {
 
 type CandleStats = {
   high: number
-  low: number
-  volume: number
 }
 
 const PLACEHOLDER = '—'
@@ -29,7 +27,7 @@ export default function BtcEurSummary({ quote, candles }: BtcEurSummaryProps) {
     <section className="summary" aria-label="Resumen BTC-EUR">
       <dl className="summary__grid">
         <div className="summary__cell">
-          <dt>Último precio</dt>
+          <dt>Última cotización</dt>
           <dd>{quote ? formatPrice(quote.price, 'EUR') : PLACEHOLDER}</dd>
         </div>
         <div className="summary__cell">
@@ -48,14 +46,6 @@ export default function BtcEurSummary({ quote, candles }: BtcEurSummaryProps) {
           <dt>Máximo</dt>
           <dd>{stats ? formatPrice(stats.high, 'EUR') : PLACEHOLDER}</dd>
         </div>
-        <div className="summary__cell">
-          <dt>Mínimo</dt>
-          <dd>{stats ? formatPrice(stats.low, 'EUR') : PLACEHOLDER}</dd>
-        </div>
-        <div className="summary__cell">
-          <dt>Volumen</dt>
-          <dd>{stats ? formatVolume(stats.volume) : PLACEHOLDER}</dd>
-        </div>
       </dl>
     </section>
   )
@@ -64,16 +54,8 @@ export default function BtcEurSummary({ quote, candles }: BtcEurSummaryProps) {
 function candleStats(candles: readonly Candle[]): CandleStats | null {
   if (candles.length === 0) return null
   let high = candles[0]!.high
-  let low = candles[0]!.low
-  let volume = 0
   for (const candle of candles) {
     high = Math.max(high, candle.high)
-    low = Math.min(low, candle.low)
-    volume += candle.volume
   }
-  return { high, low, volume }
-}
-
-function formatVolume(volume: number): string {
-  return Math.round(volume).toLocaleString('en-US')
+  return { high }
 }

@@ -8,10 +8,6 @@
   overflow: hidden;
 }
 
-.news__header h2 {
-  margin: 0;
-}
-
 .news__state {
   margin: 0;
   padding: var(--space-4);

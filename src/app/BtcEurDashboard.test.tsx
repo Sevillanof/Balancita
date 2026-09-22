@@ -132,13 +132,16 @@ describe('BtcEurDashboard main screen (Phase 1)', () => {
     ).not.toBeInTheDocument()
     expect(screen.queryByText('Gráfico dominante')).not.toBeInTheDocument()
     expect(screen.queryByText('Velas BTC-EUR (mock)')).not.toBeInTheDocument()
-    // D. Real-time news, headed with the wireframe text.
+    // D. Real-time news without a redundant heading.
     expect(
       screen.getByRole('region', { name: 'Noticias BTC-EUR' }),
     ).toBeInTheDocument()
     expect(
-      screen.getByRole('heading', { name: 'NOTICIAS EN TIEMPO REAL' }),
-    ).toBeInTheDocument()
+      screen.queryByRole('heading', { name: 'NOTICIAS EN TIEMPO REAL' }),
+    ).not.toBeInTheDocument()
+    expect(
+      document.querySelector('#dashboard-news-title'),
+    ).not.toBeInTheDocument()
     // E. Buy / sell / auto control.
     expect(screen.getByRole('button', { name: 'Comprar' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Vender' })).toBeInTheDocument()
@@ -246,6 +249,11 @@ describe('BtcEurDashboard main screen (Phase 1)', () => {
     )
 
     const summary = screen.getByRole('region', { name: 'Resumen BTC-EUR' })
+    expect(
+      [...summary.querySelectorAll('dt')].map((label) => label.textContent),
+    ).toEqual(['Última cotización', 'Variación', 'Máximo'])
+    expect(within(summary).queryByText('Mínimo')).not.toBeInTheDocument()
+    expect(within(summary).queryByText('Volumen')).not.toBeInTheDocument()
     await waitFor(() =>
       expect(within(summary).getByText('€60,000.00')).toBeInTheDocument(),
     )

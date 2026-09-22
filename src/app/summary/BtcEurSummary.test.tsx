@@ -21,10 +21,10 @@ describe('BtcEurSummary', () => {
     render(<BtcEurSummary quote={undefined} candles={[]} />)
 
     const region = screen.getByRole('region', { name: 'Resumen BTC-EUR' })
-    expect(within(region).getAllByText('—').length).toBeGreaterThanOrEqual(5)
+    expect(within(region).getAllByText('—')).toHaveLength(3)
   })
 
-  it('derives last price, variation, high, low and volume from mock data', () => {
+  it('renders exactly the requested three summary values', () => {
     render(
       <BtcEurSummary
         quote={makeQuote({ price: 60_000, change: 120, changePercent: 0.2 })}
@@ -36,10 +36,13 @@ describe('BtcEurSummary', () => {
     )
 
     const region = screen.getByRole('region', { name: 'Resumen BTC-EUR' })
+    expect(
+      [...region.querySelectorAll('dt')].map((label) => label.textContent),
+    ).toEqual(['Última cotización', 'Variación', 'Máximo'])
+    expect(within(region).queryByText('Mínimo')).not.toBeInTheDocument()
+    expect(within(region).queryByText('Volumen')).not.toBeInTheDocument()
     expect(within(region).getByText('€60,000.00')).toBeInTheDocument()
     expect(within(region).getByText('€62,000.00')).toBeInTheDocument()
-    expect(within(region).getByText('€58,000.00')).toBeInTheDocument()
-    expect(within(region).getByText('1,500')).toBeInTheDocument()
     expect(within(region).getByText('+120.00 (+0.20%)')).toBeInTheDocument()
   })
 })
