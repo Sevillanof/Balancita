@@ -29,8 +29,9 @@ export default function BtcEurSummary({ quote, candles }: BtcEurSummaryProps) {
     <section className="summary" aria-label="Resumen BTC-EUR">
       <div className="section-header">
         <div>
-          <p className="dashboard__eyebrow">Resumen</p>
-          <h2 id="dashboard-summary-title">Resumen BTC-EUR</h2>
+          <h2 id="dashboard-summary-title">
+            Información general del instrumento en este caso (BTC-EUR)
+          </h2>
         </div>
       </div>
 

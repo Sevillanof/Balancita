@@ -15,7 +15,7 @@ export default function AutoTradingControl() {
           disabled
           aria-disabled="true"
         >
-          Auto: desactivado
+          Auto Trading
         </button>
       </div>
       <p className="auto-trading__note">

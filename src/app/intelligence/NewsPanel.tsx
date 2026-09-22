@@ -26,8 +26,7 @@ export default function NewsPanel({
     <section className="news" aria-label="Noticias BTC-EUR">
       <div className="section-header news__header">
         <div>
-          <p className="dashboard__eyebrow">Noticias</p>
-          <h2 id="dashboard-news-title">Noticias BTC-EUR</h2>
+          <h2 id="dashboard-news-title">NOTICIAS EN TIEMPO REAL</h2>
         </div>
         {status === 'stale' && (
           <span className="badge news__stale">Desactualizadas</span>

@@ -1,6 +1,5 @@
 import { useMemo, useState } from 'react'
 import BtcEurDashboard from './app/BtcEurDashboard'
-import AlertNotificationCenter from './app/alerts/AlertNotificationCenter'
 import { useAlerts } from './app/alerts/useAlerts'
 import type { AnalysisProvider } from './domain/analysis'
 import type { MarketDataProvider } from './domain/market-data'
@@ -12,7 +11,6 @@ import { createMarketDataProvider } from './providers/market-data-provider'
 import { DeterministicMockMarketDataProvider } from './providers/deterministic-mock-market-data'
 import { GeminiAnalysisProvider } from './providers/gemini-analysis-provider'
 import { MockAnalysisProvider } from './providers/mock-analysis-provider'
-import { AnalysisModeToggle } from './app/AnalysisModeToggle'
 import type { AnalysisMode } from './app/AnalysisModeToggle'
 import './App.css'
 
@@ -63,26 +61,13 @@ function App({
   const activeAnalysis = analysis ?? defaultAnalysis
   const activeGeminiAnalysis = geminiAnalysis ?? defaultGeminiAnalysis
   const alerts = useAlerts(activeProvider, activeAlertRepository)
-  const [analysisMode, setAnalysisMode] = useState<AnalysisMode>('local')
+  const [analysisMode] = useState<AnalysisMode>('local')
 
   const currentAnalysis =
     analysisMode === 'ai' ? activeGeminiAnalysis : activeAnalysis
 
   return (
     <main className="app">
-      <header className="app__header">
-        <h1>Balancita</h1>
-        <p className="tagline">
-          Un espacio personal de inversión local y educativo.
-        </p>
-        <AnalysisModeToggle mode={analysisMode} onChange={setAnalysisMode} />
-      </header>
-
-      <AlertNotificationCenter
-        triggered={alerts.triggered}
-        onAcknowledge={(id) => void alerts.acknowledge(id)}
-      />
-
       <BtcEurDashboard
         provider={activeProvider}
         labProvider={activeLabProvider}

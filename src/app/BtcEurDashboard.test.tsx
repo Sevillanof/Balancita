@@ -1,5 +1,5 @@
 import { act, render, screen, waitFor, within } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AnalysisProvider } from '../domain/analysis'
 import type {
   Candle,
@@ -98,32 +98,79 @@ describe('BtcEurDashboard main screen (Phase 1)', () => {
     vi.clearAllMocks()
   })
 
-  it('renders the six areas A–F in the one-screen grid', async () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+  })
+
+  it('renders ONLY the six wireframe areas A–F', async () => {
     renderDashboard(readyProvider())
     await screen.findByRole('form', { name: 'Orden del simulador' })
 
-    // A. Brand/title
+    // A. Brand/title, with no badges, mode label or timestamps.
     expect(
       screen.getByRole('heading', { name: 'Balancita (BTC/EUR)' }),
     ).toBeInTheDocument()
-    // B. Available money
+    // B. Available money from the local paper ledger.
     expect(
       screen.getByRole('region', { name: 'Dinero disponible' }),
     ).toBeInTheDocument()
-    // C. Dominant chart
+    // C. Dominant chart.
     expect(
       screen.getByRole('region', { name: 'Gráfico BTC-EUR' }),
     ).toBeInTheDocument()
-    // D. News
+    // D. Real-time news, headed with the wireframe text.
     expect(
       screen.getByRole('region', { name: 'Noticias BTC-EUR' }),
     ).toBeInTheDocument()
-    // E. Buy / sell / auto control
-    expect(screen.getByRole('button', { name: /Auto/ })).toBeInTheDocument()
-    // F. BTC-EUR summary
+    expect(
+      screen.getByRole('heading', { name: 'NOTICIAS EN TIEMPO REAL' }),
+    ).toBeInTheDocument()
+    // E. Buy / sell / auto control.
+    expect(screen.getByRole('button', { name: 'Comprar' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Vender' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Auto Trading/ })).toBeDisabled()
+    // F. BTC-EUR instrument summary.
     expect(
       screen.getByRole('region', { name: 'Resumen BTC-EUR' }),
     ).toBeInTheDocument()
+    expect(
+      screen.getByRole('heading', {
+        name: 'Información general del instrumento en este caso (BTC-EUR)',
+      }),
+    ).toBeInTheDocument()
+  })
+
+  it('does not render any surface that is outside the wireframe', async () => {
+    renderDashboard(readyProvider())
+    await screen.findByRole('form', { name: 'Orden del simulador' })
+
+    // No instrument detail.
+    expect(
+      screen.queryByRole('region', { name: /BTC-EUR detalle/i }),
+    ).not.toBeInTheDocument()
+    // No portfolio section.
+    expect(
+      screen.queryByRole('region', { name: 'Cartera' }),
+    ).not.toBeInTheDocument()
+    expect(screen.queryByText('Efectivo y posición')).not.toBeInTheDocument()
+    // No alerts surface.
+    expect(
+      screen.queryByRole('region', { name: 'Alertas' }),
+    ).not.toBeInTheDocument()
+    expect(screen.queryByText('Alertas BTC-EUR')).not.toBeInTheDocument()
+    // No mock watchlist lab.
+    expect(
+      screen.queryByRole('region', { name: 'Lista de seguimiento' }),
+    ).not.toBeInTheDocument()
+    expect(screen.queryByText(/Laboratorio mock/i)).not.toBeInTheDocument()
+    // No intelligence status panel.
+    expect(
+      screen.queryByRole('heading', { name: /Estado de inteligencia/i }),
+    ).not.toBeInTheDocument()
+    // No disclaimer note.
+    expect(screen.queryByRole('note')).not.toBeInTheDocument()
+    expect(screen.queryByText(/Operación simulada\./)).not.toBeInTheDocument()
   })
 
   it('shows the local paper ledger available EUR in area B', async () => {
@@ -176,7 +223,7 @@ describe('BtcEurDashboard main screen (Phase 1)', () => {
     expect(
       screen.getByRole('button', { name: 'Vista previa de la orden' }),
     ).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /Auto/ })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /Auto Trading/ })).toBeDisabled()
   })
 
   it('shows a loading state while keeping the brand shell (no layout jump)', () => {
@@ -220,7 +267,7 @@ describe('BtcEurDashboard main screen (Phase 1)', () => {
     )
   })
 
-  it('surfaces a stale quote without hiding the areas', async () => {
+  it('keeps every area visible when the quote turns stale', async () => {
     const provider = readyProvider()
     renderDashboard(provider)
     await screen.findByRole('form', { name: 'Orden del simulador' })
@@ -229,24 +276,28 @@ describe('BtcEurDashboard main screen (Phase 1)', () => {
       provider.emit(makeQuote({ instrumentId: 'BTC-EUR', status: 'stale' })),
     )
 
-    await waitFor(() =>
-      expect(
-        screen.getByText('Desactualizada', {
-          selector: '.dashboard__quote-status',
-        }),
-      ).toBeInTheDocument(),
-    )
+    expect(
+      screen.getByRole('region', { name: 'Gráfico BTC-EUR' }),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole('region', { name: 'Noticias BTC-EUR' }),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole('region', { name: 'Resumen BTC-EUR' }),
+    ).toBeInTheDocument()
   })
 
-  it('never performs a network request while rendering', async () => {
+  it('never opens a network connection or SSE stream while rendering', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(() => {
       throw new Error('network is disabled in tests')
     })
+    const eventSourceSpy = vi.fn()
+    vi.stubGlobal('EventSource', eventSourceSpy)
 
     renderDashboard(readyProvider())
     await screen.findByRole('form', { name: 'Orden del simulador' })
 
     expect(fetchSpy).not.toHaveBeenCalled()
-    fetchSpy.mockRestore()
+    expect(eventSourceSpy).not.toHaveBeenCalled()
   })
 })

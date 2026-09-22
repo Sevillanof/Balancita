@@ -83,29 +83,31 @@ describe('dashboard BTC-EUR', () => {
   it('starts with one accessible BTC-EUR dashboard and no tab navigation', async () => {
     renderApp()
 
-    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(
-      'Balancita',
-    )
     expect(
-      await screen.findAllByRole('heading', { name: 'BTC-EUR' }),
-    ).toHaveLength(2)
+      await screen.findByRole('heading', {
+        level: 1,
+        name: 'Balancita (BTC/EUR)',
+      }),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByText('Un espacio personal de inversión local y educativo.'),
+    ).not.toBeInTheDocument()
     expect(screen.queryByRole('tablist')).not.toBeInTheDocument()
-    expect(screen.getByText('Datos simulados')).toBeInTheDocument()
-    expect(screen.getByText('Operación simulada.')).toBeInTheDocument()
     expect(
       await screen.findByRole('form', { name: 'Orden del simulador' }),
     ).toBeInTheDocument()
     expect(
-      screen.getByRole('heading', { name: 'Efectivo y posición' }),
+      screen.getByRole('heading', {
+        name: 'Información general del instrumento en este caso (BTC-EUR)',
+      }),
     ).toBeInTheDocument()
-    expect(screen.getByText('Alertas BTC-EUR')).toBeInTheDocument()
   })
 
   it('uses the active market provider price for the dashboard and paper preview', async () => {
     const user = userEvent.setup()
     const { provider } = renderApp()
 
-    await screen.findAllByRole('heading', { name: 'BTC-EUR' })
+    await screen.findByRole('heading', { name: 'BTC-EUR' })
     await waitFor(() =>
       expect(provider.subscribeCalls.length).toBeGreaterThanOrEqual(3),
     )
@@ -132,12 +134,12 @@ describe('dashboard BTC-EUR', () => {
     expect(preview).toHaveTextContent('€6,000.00')
   })
 
-  it('updates local analysis automatically but never changes the order flow', async () => {
+  it('keeps the order flow while running no analysis on the Phase 1 main screen', async () => {
     const analysis = new FakeAnalysisProvider()
     analysis.analyzeCall.mockResolvedValue(localResult())
     const { provider } = renderApp({ analysis })
 
-    await screen.findAllByRole('heading', { name: 'BTC-EUR' })
+    await screen.findByRole('form', { name: 'Orden del simulador' })
     await waitFor(() =>
       expect(provider.subscribeCalls.length).toBeGreaterThanOrEqual(3),
     )
@@ -145,7 +147,14 @@ describe('dashboard BTC-EUR', () => {
       provider.emit(makeQuote({ instrumentId: 'BTC-EUR', price: 60_000 })),
     )
 
-    await waitFor(() => expect(analysis.analyzeCall).toHaveBeenCalledTimes(1))
+    await waitFor(() =>
+      expect(
+        screen.getByText(
+          (_, element) => element?.textContent === 'Precio en vivo: €60,000.00',
+        ),
+      ).toBeInTheDocument(),
+    )
+    expect(analysis.analyzeCall).not.toHaveBeenCalled()
     expect(
       screen.queryByRole('button', { name: 'Confirmar orden' }),
     ).not.toBeInTheDocument()
@@ -166,8 +175,7 @@ describe('dashboard BTC-EUR', () => {
 })
 
 describe('dashboard Gemini boundary', () => {
-  it('keeps Gemini off and manual even when the local dashboard is automatic', async () => {
-    const user = userEvent.setup()
+  it('keeps analysis providers idle on the main screen', async () => {
     const local = new FakeAnalysisProvider()
     const gemini = new FakeAnalysisProvider()
     local.analyzeCall.mockResolvedValue(localResult())
@@ -190,20 +198,21 @@ describe('dashboard Gemini boundary', () => {
       />,
     )
 
-    const toggle = await screen.findByRole('switch', {
-      name: /análisis con ia/i,
-    })
-    expect(toggle).toHaveAttribute('aria-checked', 'false')
     await screen.findByRole('form', { name: 'Orden del simulador' })
     await waitFor(() =>
       expect(provider.subscribeCalls.length).toBeGreaterThanOrEqual(3),
     )
     act(() => provider.emit(makeQuote({ instrumentId: 'BTC-EUR' })))
-    await waitFor(() => expect(local.analyzeCall).toHaveBeenCalledTimes(1))
-    expect(gemini.analyzeCall).not.toHaveBeenCalled()
 
-    await user.click(toggle)
-    await user.click(screen.getByRole('button', { name: 'Analizar' }))
-    await waitFor(() => expect(gemini.analyzeCall).toHaveBeenCalledTimes(1))
+    await waitFor(() =>
+      expect(screen.getByLabelText('Cantidad')).toBeInTheDocument(),
+    )
+    // Phase 1 renders only the six wireframe areas: there is no analysis
+    // surface and no IA toggle, so neither provider may ever be invoked.
+    expect(
+      screen.queryByRole('switch', { name: /análisis con ia/i }),
+    ).not.toBeInTheDocument()
+    expect(local.analyzeCall).not.toHaveBeenCalled()
+    expect(gemini.analyzeCall).not.toHaveBeenCalled()
   })
 })

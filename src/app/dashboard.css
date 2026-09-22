@@ -61,8 +61,17 @@
 
 .dashboard__brand {
   display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
+  flex-direction: row;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.dashboard__brand-mark {
+  flex: 0 0 auto;
+  width: 1.75rem;
+  height: 1.75rem;
+  background: var(--color-accent);
+  border-radius: 50%;
 }
 
 .dashboard__brand-title {
