@@ -66,6 +66,9 @@ export default function BtcEurDashboard({
         <header className="dashboard__brand">
           <span className="dashboard__brand-mark" aria-hidden="true" />
           <h1 className="dashboard__brand-title">Balancita (BTC/EUR)</h1>
+          {ready && instrument !== undefined && (
+            <BtcEurSummary quote={quote} candles={history.candles} />
+          )}
         </header>
 
         <section
@@ -116,7 +119,6 @@ export default function BtcEurDashboard({
               </button>
               <AutoTradingControl />
             </div>
-            <BtcEurSummary quote={quote} candles={history.candles} />
           </>
         )}
       </div>

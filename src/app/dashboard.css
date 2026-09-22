@@ -11,7 +11,7 @@
   grid-template-areas:
     'brand available'
     'chart news'
-    'actions summary';
+    'actions actions';
   width: 100%;
   min-width: 64rem;
   column-gap: var(--space-5);
@@ -50,11 +50,6 @@
   min-width: 0;
 }
 
-.dashboard__grid > .summary {
-  grid-area: summary;
-  min-height: 0;
-}
-
 .dashboard__grid > .dashboard__state {
   grid-area: state;
   grid-column: 1 / -1;
@@ -86,6 +81,7 @@
 }
 
 .dashboard__brand-title {
+  min-width: 0;
   margin: 0;
   line-height: var(--leading-tight);
 }

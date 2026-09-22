@@ -112,10 +112,17 @@ describe('BtcEurDashboard main screen (Phase 1)', () => {
     renderDashboard(readyProvider())
     await waitForReady()
 
-    // A. Brand/title only.
+    // A. Brand/title with the nested BTC-EUR summary.
+    const brand = screen.getByRole('banner')
     expect(
-      screen.getByRole('heading', { name: 'Balancita (BTC/EUR)' }),
+      within(brand).getByRole('heading', { name: 'Balancita (BTC/EUR)' }),
     ).toBeInTheDocument()
+    expect(
+      within(brand).getByRole('region', { name: 'Resumen BTC-EUR' }),
+    ).toBeInTheDocument()
+    expect(
+      document.querySelector('.dashboard__grid > .summary'),
+    ).not.toBeInTheDocument()
     expect(
       screen.queryByRole('button', { name: 'Simulación' }),
     ).not.toBeInTheDocument()
