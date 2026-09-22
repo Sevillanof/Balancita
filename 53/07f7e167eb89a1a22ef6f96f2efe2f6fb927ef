@@ -1,0 +1,31 @@
+src/app/BtcEurDashboard.test.tsx
+  s_a25f5a73650739::t_5583181d6a0d55 1-252
+src/app/BtcEurDashboard.tsx
+  s_a25f5a73650739::t_a9fe39622c294a 8,10-14,16-17,19,22,36-40,53-57,64-65,69-90,92-139,149-152,154-157,159,162-173,175-180,182-185,187-196,200-238
+src/app/chart/ChartPanel.tsx
+  s_a25f5a73650739::t_27a28d031dea4f 1-69
+src/app/intelligence/NewsPanel.test.tsx
+  s_a25f5a73650739::t_fcc0b54c1a681d 1-68
+src/app/intelligence/NewsPanel.tsx
+  s_a25f5a73650739::t_910cbd6fd100de 1-96
+src/app/summary/BtcEurSummary.test.tsx
+  s_a25f5a73650739::t_ec1d9e35c328d0 1-38
+src/app/summary/BtcEurSummary.tsx
+  s_a25f5a73650739::t_d8a5603eada3ed 1-90
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5307f7e167eb89a1a22ef6f96f2efe2f6fb927ef",
+  "prompts": {},
+  "sessions": {
+    "s_a25f5a73650739": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f3711c896ffeep8jVoFnNtivxd",
+        "model": "deepseek-v4.1-flash"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
