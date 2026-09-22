@@ -1,0 +1,19 @@
+src/providers/kraken-market-data.test.ts
+  s_e1626bc23d87e3::t_3a5a2b34999f84 232-281,456-458,484-488,603-607
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "598951196ee20747024b2c070c15dcfb28155594",
+  "prompts": {},
+  "sessions": {
+    "s_e1626bc23d87e3": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f36b73784ffepoxZYbxpICMYm3",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
