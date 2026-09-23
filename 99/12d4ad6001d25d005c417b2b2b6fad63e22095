@@ -1,0 +1,27 @@
+server/src/intelligence/simulations/comparison-report.ts
+  s_99345f11bca07c::t_697fd1cbf5e5a6 27-39,44-101,167-168,187,228-234,288-293,295,312-459
+server/src/intelligence/simulations/profitability-report.test.ts
+  s_99345f11bca07c::t_e94cb3c41e61e2 1-242
+server/src/intelligence/simulations/simulations-cli.ts
+  s_99345f11bca07c::t_294c9851bb030e 13,53-75,142-155
+server/src/intelligence/simulations/simulations-profitability.test.ts
+  s_99345f11bca07c::t_fa07b10de842ca 1-202
+server/src/intelligence/simulations/simulations-runner.ts
+  s_99345f11bca07c::t_7c5eae0e57a53e 21,24-33,57-62,124-142,174,189-196,243-251,288-332
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9912d4ad6001d25d005c417b2b2b6fad63e22095",
+  "prompts": {},
+  "sessions": {
+    "s_99345f11bca07c": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f32ef3c6fffeehdP6EpTOJre5M",
+        "model": "muse-spark-1.3-contributor-free"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
