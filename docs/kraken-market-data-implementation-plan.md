@@ -9,6 +9,9 @@ histórico más replay determinista sobre datos Kraken. No repite fases ya
 implementadas de Balancita (ver `docs/implementation-progress.md`) ni el
 roadmap de inteligencia (ver `docs/bitcoin-market-intelligence-roadmap.md`).
 
+**Estado:** documentación lista; Kraken todavía no está implementado. Este
+archivo define el trabajo que deberá ejecutar otra IA.
+
 ## Decisión y alcance
 
 - **Kraken es la única plaza BTC-EUR** en toda la app (frontend y servidor).
@@ -79,12 +82,12 @@ Reglas de la tubería:
   WebSocket.
 - El stream en vivo es WebSocket v2, canal `trade`, único origen de
   observaciones `shadow_live` en tiempo real.
-- Las velas se agregan localmente a partir de trades individuales (event
-  time, received time, trade ID de Kraken); nunca se usa el endpoint REST
-  `OHLC` como fuente canónica de replay ni de velas cerradas: `OHLC` devuelve
-  como máximo 720 velas y su último elemento puede ser la vela aún en
-  formación (no cerrada). Puede usarse únicamente como verificación cruzada
-  opcional, nunca como fuente primaria de features técnicos ni de replay.
+- Las velas de inteligencia se agregan localmente a partir de trades
+  individuales (event time, received time, trade ID de Kraken). El frontend
+  puede usar REST `OHLC` para el historial visual, descartando siempre la vela
+  abierta. `OHLC` nunca es la fuente canónica del replay ni de los features
+  técnicos: devuelve como máximo 720 entradas y siempre incluye la vela actual
+  aún no confirmada.
 
 ## Nomenclatura y mapeo de pares
 
@@ -110,9 +113,10 @@ RED:
 
 - Tests con fixtures para el mapeo de pares (`BTC-EUR` ↔ `XBTEUR` ↔
   `BTC/EUR`).
-- Tests para parseo de trades y agregación a velas cerradas a partir de
-  fixtures de WebSocket v2 `trade` y de `/0/public/Trades`.
-- Tests que rechacen construir una vela con datos incompletos o abiertos.
+- Tests para `AssetPairs`, historial REST `OHLC` en orden ascendente y descarte
+  de la vela abierta.
+- Tests para snapshots/updates del canal WebSocket v2 `ticker`, stale y
+  reconexión.
 
 GREEN:
 

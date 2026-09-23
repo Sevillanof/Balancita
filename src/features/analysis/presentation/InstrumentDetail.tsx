@@ -1,0 +1,165 @@
+import { useMemo } from 'react'
+import type {
+  Candle,
+  Instrument,
+  MarketDataProvider,
+  Quote,
+} from '../../market-data/domain/market-data.ts'
+import type { AnalysisProvider } from '../../../domain/analysis.ts'
+import type { PortfolioRepository } from '../../portfolio/domain/portfolio.ts'
+import type { AnalysisMode } from './AnalysisModeToggle.tsx'
+import { toCandlestickDataset } from '../../price-chart/presentation/candlestick-data'
+import PriceChart from '../../price-chart/presentation/PriceChart'
+import {
+  formatChange,
+  formatLocalTime,
+  formatPrice,
+  formatQuoteStatus,
+} from '../../../shared/finance/format.ts'
+import AnalysisPanel from './AnalysisPanel.tsx'
+import { useCandleHistory } from './useCandleHistory.ts'
+import { useLatestQuote } from './useLatestQuote.ts'
+import './detail.css'
+
+type InstrumentDetailProps = {
+  provider: MarketDataProvider
+  instrument: Instrument
+  analysis?: AnalysisProvider
+  analysisMode?: AnalysisMode
+  analysisFallback?: AnalysisProvider
+  portfolioRepository?: PortfolioRepository
+  automaticAnalysis?: boolean
+}
+
+const PLACEHOLDER = '—'
+const EMPTY_CANDLES: readonly Candle[] = []
+
+export default function InstrumentDetail({
+  provider,
+  instrument,
+  analysis,
+  analysisMode = 'local',
+  analysisFallback,
+  portfolioRepository,
+  automaticAnalysis = false,
+}: InstrumentDetailProps) {
+  const quote = useLatestQuote(provider, instrument.id)
+  const history = useCandleHistory(provider, instrument.id)
+  const chartData = useMemo(
+    () =>
+      history.status === 'ready' ? toCandlestickDataset(history.candles) : [],
+    [history.status, history.candles],
+  )
+
+  return (
+    <section className="detail" aria-label={`${instrument.symbol} detalle`}>
+      <PriceSummary instrument={instrument} quote={quote} />
+      {history.status === 'loading' && (
+        <p role="status" aria-busy="true" className="detail__history-note">
+          Cargando historial de precios…
+        </p>
+      )}
+      {history.status === 'empty' && (
+        <p role="status" className="detail__history-note">
+          No hay velas históricas disponibles.
+        </p>
+      )}
+      {history.status === 'error' && (
+        <div role="alert" className="detail__history-note">
+          No se pudo cargar el historial de precios.
+          <button
+            type="button"
+            className="detail__retry"
+            onClick={history.retry}
+          >
+            Reintentar
+          </button>
+        </div>
+      )}
+      {history.status === 'ready' && (
+        <section className="detail__chart" aria-label="Evolución del precio">
+          <div className="detail__chart-header">
+            <h3>Gráfico BTC-EUR</h3>
+            <span>Periodo visible: histórico diario</span>
+          </div>
+          <PriceChart data={chartData} />
+          <p className="detail__chart-state">
+            Estado de datos: {quoteState(quote)}
+          </p>
+        </section>
+      )}
+      {analysis && portfolioRepository && (
+        <AnalysisPanel
+          mode={analysisMode}
+          analysis={analysis}
+          fallback={analysisFallback}
+          portfolioRepository={portfolioRepository}
+          instrument={instrument}
+          quote={quote}
+          candles={history.status === 'ready' ? history.candles : EMPTY_CANDLES}
+          automatic={automaticAnalysis && analysisMode === 'local'}
+        />
+      )}
+    </section>
+  )
+}
+
+function quoteState(quote: Quote | undefined): string {
+  if (quote === undefined) return 'esperando cotización'
+  if (quote.status === 'mock') return 'Datos simulados'
+  if (quote.status === 'stale') return 'Datos desactualizados'
+  return 'Datos reales'
+}
+
+function PriceSummary({
+  instrument,
+  quote,
+}: {
+  instrument: Instrument
+  quote: Quote | undefined
+}) {
+  const hasQuote = quote !== undefined
+  const change = hasQuote ? formatChange(quote) : undefined
+
+  return (
+    <div className="detail__summary">
+      <div>
+        <h2 className="detail__symbol">{instrument.symbol}</h2>
+        <span className="detail__name">{instrument.displayName}</span>
+      </div>
+      <dl className="detail__quote">
+        <div className="detail__cell">
+          <dt>Precio</dt>
+          <dd className="detail__price">
+            {hasQuote
+              ? formatPrice(quote.price, instrument.currency)
+              : PLACEHOLDER}
+          </dd>
+        </div>
+        <div className="detail__cell">
+          <dt>Variación</dt>
+          <dd>
+            {change ? (
+              <span
+                className={`detail__change--${change.direction}`}
+                data-direction={change.direction}
+              >
+                {change.text}
+              </span>
+            ) : (
+              PLACEHOLDER
+            )}
+          </dd>
+        </div>
+        <div className="detail__cell">
+          <dt>Estado</dt>
+          <dd>{quote ? formatQuoteStatus(quote.status) : PLACEHOLDER}</dd>
+        </div>
+        <div className="detail__cell">
+          <dt>Última actualización</dt>
+          <dd>{hasQuote ? formatLocalTime(quote.timestamp) : PLACEHOLDER}</dd>
+        </div>
+      </dl>
+    </div>
+  )
+}

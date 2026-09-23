@@ -1,14 +1,18 @@
 import { describe, expect, it } from 'vitest'
-import type { Candle, Instrument, Quote } from './market-data'
-import { money, moneyFromString } from './money'
-import type { Holding } from './portfolio'
-import { ANALYSIS_CLASSIFICATIONS, analysisInputFrom } from './analysis'
+import type {
+  Candle,
+  Instrument,
+  Quote,
+} from '../features/market-data/domain/market-data.ts'
+import { money, moneyFromString } from '../shared/finance/money.ts'
+import type { Holding } from '../features/portfolio/domain/portfolio.ts'
+import { ANALYSIS_CLASSIFICATIONS, analysisInputFrom } from './analysis.ts'
 import type {
   AnalysisClassification,
   AnalysisInput,
   AnalysisProvider,
   AnalysisResult,
-} from './analysis'
+} from './analysis.ts'
 
 const BTC: Instrument = {
   id: 'BTC-EUR',

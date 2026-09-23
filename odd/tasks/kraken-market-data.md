@@ -19,7 +19,10 @@ REST catch-up, and WebSocket live events. Using the same venue and trade schema
 for past and future observations makes replay and prospective shadow evidence
 comparable while preserving their separate evidence modes.
 
-## Authorized scope
+## Implementation scope for handoff
+
+This session is documentation-only. KRA-2 through KRA-5 are pending for a
+different implementing AI.
 
 - Replace Coinbase with Kraken for BTC-EUR in the browser and server.
 - Use public Kraken endpoints only; no API key or private endpoint.
@@ -107,5 +110,6 @@ comparable while preserving their separate evidence modes.
 
 ## Next step
 
-Commit KRA-1 documentation, then start KRA-2 by observing failing Kraken
-provider tests against fixtures.
+Hand `docs/kraken-market-data-implementation-plan.md` to the implementing AI.
+Kraken is not implemented yet; that AI must start KRA-2 by observing failing
+browser-provider tests against fixtures before adding implementation.

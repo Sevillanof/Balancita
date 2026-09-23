@@ -52,7 +52,8 @@ export interface AnalysisInput {
 
 /**
  * Result of a surveillance/review pass. The classification expresses how much
- * attention the instrument warrants, NEVER a buy or sell recommendation.
+ * attention the instrument warrants. The separate recommendation is educational
+ * only and never authorizes or executes an order.
  */
 export interface AnalysisResult {
   instrumentId: string

@@ -1,0 +1,54 @@
+import type { AlertId } from '../domain/alerts.ts'
+import { formatPrice } from '../../../shared/finance/format.ts'
+import type { TriggeredAlert } from './useAlerts.ts'
+
+type AlertNotificationCenterProps = {
+  triggered: readonly TriggeredAlert[]
+  onAcknowledge: (id: AlertId) => void
+}
+
+/**
+ * In-app notification surface for triggered alerts. Rendered at the app level
+ * so a trigger is visible from any tab, without OS permissions, email, SMS or
+ * push. Renders nothing when no alert is currently triggered.
+ */
+export default function AlertNotificationCenter({
+  triggered,
+  onAcknowledge,
+}: AlertNotificationCenterProps) {
+  if (triggered.length === 0) return null
+
+  return (
+    <section
+      className="alerts__notifications"
+      aria-label="Notificaciones de alertas"
+    >
+      {triggered.map(({ alert, instrument }) => {
+        const direction = alert.direction === 'above' ? 'superó' : 'bajó de'
+        const message = `${instrument.symbol} ${direction} ${formatPrice(
+          alert.thresholdPrice,
+          instrument.currency,
+        )}`
+        return (
+          <div
+            key={alert.id}
+            role="alert"
+            aria-label={message}
+            className="alerts__notification"
+          >
+            <span className="alerts__notification-message">
+              Alerta: {message}
+            </span>
+            <button
+              type="button"
+              className="alerts__notification-action"
+              onClick={() => onAcknowledge(alert.id)}
+            >
+              Reconocer {instrument.symbol}
+            </button>
+          </div>
+        )
+      })}
+    </section>
+  )
+}

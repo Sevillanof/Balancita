@@ -1,22 +1,22 @@
 import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { AnalysisProvider } from '../domain/analysis'
+import type { AnalysisProvider } from '../domain/analysis.ts'
 import type {
   Candle,
   Instrument,
   MarketDataProvider,
-} from '../domain/market-data'
-import { LocalStoragePortfolioRepository } from '../portfolio/local-storage-portfolio-repository'
+} from '../features/market-data/domain/market-data.ts'
+import { LocalStoragePortfolioRepository } from '../features/portfolio/infrastructure/local-storage-portfolio-repository.ts'
 import {
   FakeMarketDataProvider,
   WATCHLIST_INSTRUMENTS,
   makeCandle,
   makeQuote,
-} from '../test/fake-market-data-provider'
-import BtcEurDashboard from './BtcEurDashboard'
-import type { UseAlertsResult } from './alerts/useAlerts'
-import { NEWS_FIXTURES } from './intelligence/news-fixtures'
+} from '../shared/testing/fake-market-data-provider.ts'
+import BtcEurDashboard from './BtcEurDashboard.tsx'
+import type { UseAlertsResult } from '../features/alerts/presentation/useAlerts.ts'
+import { NEWS_FIXTURES } from '../features/news/presentation/news-fixtures.ts'
 
 const mocks = vi.hoisted(() => {
   const series = { setData: vi.fn(), update: vi.fn() }
@@ -37,7 +37,7 @@ vi.mock('lightweight-charts', () => ({
   createChart: (...args: unknown[]) => mocks.createChart(...args),
 }))
 
-vi.mock('./intelligence/useNewsStream', () => newsStreamMock)
+vi.mock('../features/news/presentation/useNewsStream.ts', () => newsStreamMock)
 
 mocks.createChart.mockReturnValue(mocks.chart)
 
