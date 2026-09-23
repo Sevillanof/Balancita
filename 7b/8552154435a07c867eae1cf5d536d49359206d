@@ -1,0 +1,405 @@
+doc/idea-balancita.md
+  s_99345f11bca07c::t_9025acea8c0607 1-184
+docs/kraken-market-data-implementation-plan.md
+  s_99345f11bca07c::t_954c7d82c16574 12-14,85-90,116-119
+odd/tasks/kraken-market-data.md
+  s_99345f11bca07c::t_45f5e3894edb02 22-25,113-115
+server/src/app/app.test.ts
+  s_d99ffef5420d44::t_d36c109d806de7 5-11,18-21,82,113-118,143-185,808
+server/src/app/app.ts
+  s_203f34d06f7e63::t_6861deab525221 4,13-27,31,36,41-44,103,167,170-172,374-398,498-536,614-626
+server/src/app/index.ts
+  s_d99ffef5420d44::t_dc561a12aefb06 2
+server/src/domain/contracts.ts
+  s_d99ffef5420d44::t_f4a06b8487f475 9
+server/src/domain/source-policy.ts
+  s_d99ffef5420d44::t_028d2744a7a55e 17
+server/src/features/analysis/service.test.ts
+  s_d99ffef5420d44::t_4844e32bc5202f 6-12
+server/src/features/analysis/service.ts
+  s_d99ffef5420d44::t_cdcaddb38eeb71 6-10
+server/src/features/analysis/wire.test.ts
+  s_d99ffef5420d44::t_5532b495471a6d 2
+server/src/features/analysis/wire.ts
+  s_d99ffef5420d44::t_27014eda8cf683 1
+server/src/features/forecasts/forecast-engine.test.ts
+  s_d99ffef5420d44::t_c8767b89bee0dc 2
+server/src/features/forecasts/forecast-engine.ts
+  s_d99ffef5420d44::t_10447860145062 10,12,16
+server/src/features/forecasts/forecast-evaluator.test.ts
+  s_d99ffef5420d44::t_b957749eece0dd 2
+server/src/features/forecasts/forecast-evaluator.ts
+  s_d99ffef5420d44::t_46c0c75784792c 6
+server/src/features/forecasts/forecast-metrics.ts
+  s_d99ffef5420d44::t_e7c0e555d16cf8 1
+server/src/features/forecasts/forecast-validation.test.ts
+  s_d99ffef5420d44::t_307fd75a9b1af0 2-5
+server/src/features/forecasts/forecast-validation.ts
+  s_d99ffef5420d44::t_aa2de43ce818b5 7,16
+server/src/features/forecasts/live-forecast.test.ts
+  s_d99ffef5420d44::t_29982917dc0bdd 2,7-9
+server/src/features/forecasts/live-forecast.ts
+  s_d99ffef5420d44::t_ef7c10a7698ea6 9,22-23,27-28
+server/src/features/market-data/forecast-ledger.test.ts
+  s_d99ffef5420d44::t_8b2603f76b0afb 5-11
+server/src/features/market-data/intraday-candles.test.ts
+  s_d99ffef5420d44::t_3fdf706090c779 2,9
+server/src/features/market-data/intraday-candles.ts
+  s_d99ffef5420d44::t_2ac0097fc26300 6
+server/src/features/market-data/kraken-market-collector.ts
+  s_d99ffef5420d44::t_22e8bd54855f94 1-5,12
+server/src/features/market-data/market-payload.ts
+  s_d99ffef5420d44::t_2eefb36780b708 7
+server/src/features/market-data/market-store.test.ts
+  s_d99ffef5420d44::t_5c7a1634e9d97b 6-9
+server/src/features/market-data/market-store.ts
+  s_d99ffef5420d44::t_d5b9584094d89e 16,20-27,29-31,36-39
+server/src/features/news/news-analysis.test.ts
+  s_d99ffef5420d44::t_aa37d6a3de5320 8,27-30
+server/src/features/news/news-analysis.ts
+  s_d99ffef5420d44::t_932f41b82dfc83 8-10
+server/src/features/news/news-poller.test.ts
+  s_d99ffef5420d44::t_17d36043a567a0 6-11
+server/src/features/news/news-poller.ts
+  s_d99ffef5420d44::t_4f572dbba9821d 1-2,11-15
+server/src/features/news/news-presentation.test.ts
+  s_203f34d06f7e63::t_6c4a292eb90058 2-6
+server/src/features/news/news-presentation.ts
+  s_d99ffef5420d44::t_b3bb7fadf7b74b 1,7
+server/src/features/news/news-store.test.ts
+  s_d99ffef5420d44::t_15365e8e8b3199 5,10
+server/src/features/news/rss-collector.ts
+  s_d99ffef5420d44::t_8e6af6946d74f3 2-6
+server/src/features/news/rss-news.test.ts
+  s_d99ffef5420d44::t_5e8c3dc9c25b38 3
+server/src/features/news/rss-normalizer.ts
+  s_d99ffef5420d44::t_716e1e73749232 11,18-19
+server/src/features/news/tree-news.test.ts
+  s_d99ffef5420d44::t_9740c0ba6e701f 2
+server/src/features/news/tree-news.ts
+  s_d99ffef5420d44::t_858583730907da 1
+server/src/features/observability/comparison-metrics.ts
+  s_d99ffef5420d44::t_1959a1829653bf 1-2
+server/src/features/observability/comparison.test.ts
+  s_d99ffef5420d44::t_dae06c31c4d536 9,13,18
+server/src/features/observability/comparison.ts
+  s_d99ffef5420d44::t_53c843cc9449f7 7-8,13
+server/src/features/observability/slis.test.ts
+  s_d99ffef5420d44::t_2a6142c6853d83 2
+server/src/features/observability/slis.ts
+  s_d99ffef5420d44::t_26141a04d7d1ee 5,12
+server/src/features/observability/stream.test.ts
+  s_d99ffef5420d44::t_82bb325b29a4e5 2,11-12
+server/src/features/observability/stream.ts
+  s_d99ffef5420d44::t_4174c6c371abb7 5,14-16,21
+server/src/features/replay/__fixtures__/replay-scenario.ts
+  s_d99ffef5420d44::t_d2930ac8a02699 1-3
+server/src/features/replay/backfill-importer.test.ts
+  s_d99ffef5420d44::t_c6d9c4518d2e69 2-3
+server/src/features/replay/backfill-importer.ts
+  s_d99ffef5420d44::t_e09fa32091e62a 1
+server/src/features/replay/forecast-source-mode.test.ts
+  s_d99ffef5420d44::t_b54d312639e805 6,10-12
+server/src/features/replay/kraken-archive.ts
+  s_d99ffef5420d44::t_4fd5a4e1cfcd9a 1
+server/src/features/replay/kraken-observation-import.test.ts
+  s_d99ffef5420d44::t_c0064b5b66e658 6-8
+server/src/features/replay/kraken-observation-import.ts
+  s_d99ffef5420d44::t_1ce229107b0596 2-3
+server/src/features/replay/kraken-trades-source.ts
+  s_d99ffef5420d44::t_d3635f824f96dc 1-3
+server/src/features/replay/replay-cli.ts
+  s_d99ffef5420d44::t_067c665d105d00 9,17
+server/src/features/replay/replay-contracts.ts
+  s_d99ffef5420d44::t_840ee85defa025 1-3
+server/src/features/replay/replay-dataset-store.ts
+  s_d99ffef5420d44::t_601138e84280e5 4-5
+server/src/features/replay/replay-dataset.test.ts
+  s_d99ffef5420d44::t_a0a22186ee4967 5
+server/src/features/replay/replay-dataset.ts
+  s_d99ffef5420d44::t_b9a131b77cd841 1-6
+server/src/features/replay/replay-isolation.test.ts
+  s_d99ffef5420d44::t_af9b24de71438b 2-6
+server/src/features/replay/replay-metrics-summary.test.ts
+  s_d99ffef5420d44::t_0c64048b7b492d 6
+server/src/features/replay/replay-metrics-summary.ts
+  s_203f34d06f7e63::t_49303a12a39bfb 1,10
+server/src/features/replay/replay-report.ts
+  s_d99ffef5420d44::t_3632b517473d15 6-8
+server/src/features/replay/replay-reproducibility.test.ts
+  s_d99ffef5420d44::t_e68e63397f9075 2-3
+server/src/features/replay/replay-run-store.ts
+  s_d99ffef5420d44::t_db2518cf886901 4-5
+server/src/features/replay/replay-run.ts
+  s_d99ffef5420d44::t_5161fc8e951290 1-3
+server/src/features/replay/replay-runner.test.ts
+  s_d99ffef5420d44::t_f13773283b0d17 5-6,112
+server/src/features/replay/replay-runner.ts
+  s_d99ffef5420d44::t_99082210c989e6 2-3
+server/src/features/replay/replay-service.test.ts
+  s_d99ffef5420d44::t_d50f1ef8b59b68 2-3
+server/src/features/replay/replay-service.ts
+  s_d99ffef5420d44::t_e9d04b621e5d6d 7-8,13-18,22
+server/src/features/replay/replay-virtual-clock.ts
+  s_d99ffef5420d44::t_54a1a17b2ce1e2 1
+server/src/features/shadow-runs/shadow-aggregation.test.ts
+  s_203f34d06f7e63::t_e5b7e3e41824f3 2,8,13
+server/src/features/shadow-runs/shadow-aggregation.ts
+  s_d99ffef5420d44::t_4dcbbe8068205d 5-7,12-13
+server/src/features/shadow-runs/shadow-decision.test.ts
+  s_d99ffef5420d44::t_f476cd93f5015b 5-6
+server/src/features/shadow-runs/shadow-decision.ts
+  s_d99ffef5420d44::t_68ee0bc9f58819 1-2
+server/src/features/shadow-runs/shadow-fixtures.ts
+  s_d99ffef5420d44::t_0e19172755b58d 9-10,12
+server/src/features/shadow-runs/shadow-report.test.ts
+  s_d99ffef5420d44::t_80c39290aa06b9 2-6
+server/src/features/shadow-runs/shadow-report.ts
+  s_d99ffef5420d44::t_5e999514e2d6c7 1-2
+server/src/features/shadow-runs/shadow-run.test.ts
+  s_d99ffef5420d44::t_dc0ba63a313549 2,7
+server/src/features/shadow-runs/shadow-run.ts
+  s_d99ffef5420d44::t_d9983b5202ea79 1-5
+server/src/features/shadow-runs/shadow-services.test.ts
+  s_d99ffef5420d44::t_217c4c7eb74a99 5-11,192
+server/src/features/shadow-runs/shadow-services.ts
+  s_d99ffef5420d44::t_e922a33c62d61c 1-5
+server/src/features/shadow-runs/shadow-store.test.ts
+  s_d99ffef5420d44::t_8a3a38953f1aab 5-11,16
+server/src/features/simulations/backtest-readiness.test.ts
+  s_d99ffef5420d44::t_1bbd8a403aca89 1-38
+server/src/features/simulations/backtest-readiness.ts
+  s_d99ffef5420d44::t_04ffdd33f021ce 1-36
+server/src/features/simulations/baselines.ts
+  s_d99ffef5420d44::t_b8e4b20f1edd5b 1
+server/src/features/simulations/candidate-manifest.test.ts
+  s_d99ffef5420d44::t_3f7edbad39ed9b 7,12-14,26-106,124-190
+server/src/features/simulations/candidate-manifest.ts
+  s_d99ffef5420d44::t_b9948ff1b9e900 1,6,15,36-41,66-69,79-81,98-101,116-117,125-128,193-274
+server/src/features/simulations/comparison-report.test.ts
+  s_d99ffef5420d44::t_dd691699667f15 2,124-126
+server/src/features/simulations/comparison-report.ts
+  s_d99ffef5420d44::t_faf027b3866898 5-11,21,44,48,60,67-68,103-106,241-245,282,330-357,376-377,380-386,389-394,399,402-407,416,423,433,440,450,460,494-505,508-515,518-525
+server/src/features/simulations/engine-dispatch.test.ts
+  s_d99ffef5420d44::t_10b762b5c0faa2 2,7-8
+server/src/features/simulations/profitability-report.test.ts
+  s_d99ffef5420d44::t_dce98f1129b93c 2-3,133
+server/src/features/simulations/refresh-simulations.ts
+  s_d99ffef5420d44::t_01a3e9b17d9429 1-37
+server/src/features/simulations/rule-registry.test.ts
+  s_d99ffef5420d44::t_31efc955af7300 2-6,161-295
+server/src/features/simulations/rule-registry.ts
+  s_d99ffef5420d44::t_16379c3b950ffe 1,49-59,78-84,86-90,92,94,97,102
+server/src/features/simulations/simulations-cli.ts
+  s_d99ffef5420d44::t_8671aa5e139df1 22,141
+server/src/features/simulations/simulations-profitability.test.ts
+  s_d99ffef5420d44::t_9fecb361a41b10 5-6,97,116,173
+server/src/features/simulations/simulations-runner.test.ts
+  s_d99ffef5420d44::t_b7f3a71d890da1 5-6,92,94,111-177,223
+server/src/features/simulations/simulations-runner.ts
+  s_d99ffef5420d44::t_4e51f7fde781de 1,3-6,11,27,34-35,44,61-62,95-96,100-115,172,176-178,183-212,308,322-326,330-351,368-451,468,485-487,493-505
+server/src/features/simulations/time-split.test.ts
+  s_d99ffef5420d44::t_1d189fe53dcd05 2
+server/src/features/simulations/time-split.ts
+  s_d99ffef5420d44::t_96f3e41888264c 1
+server/src/features/simulations/trade-simulation.test.ts
+  s_d99ffef5420d44::t_e35614bf166101 2,47,49,76-78,82,113
+server/src/features/simulations/trade-simulation.ts
+  s_d99ffef5420d44::t_0a5b2f184d9e12 1-5,22,79-80,205-206,211-217,224,232,235,237-243,255-259,267,344
+server/src/features/technical-analysis/technical-features.ts
+  s_d99ffef5420d44::t_80d2b83e3800a7 1-4,8
+server/src/platform/cache.test.ts
+  s_d99ffef5420d44::t_4f96753f23ec4e 3-6
+server/src/platform/cache.ts
+  s_d99ffef5420d44::t_c5f2409880a3e7 2-5
+server/src/platform/config.ts
+  s_d99ffef5420d44::t_8777791588423c 2
+server/src/platform/gemini/gemini-client.test.ts
+  s_d99ffef5420d44::t_005b32fa91a759 2
+server/src/platform/gemini/gemini-client.ts
+  s_d99ffef5420d44::t_5d61cb2a9942d7 2
+server/src/platform/gemini/gemini-gate.test.ts
+  s_d99ffef5420d44::t_959cbd9b5bb63d 1-53
+server/src/platform/gemini/gemini-gate.ts
+  s_d99ffef5420d44::t_aec5e6f1e1a3f2 1-23
+server/src/platform/gemini/prompt.ts
+  s_d99ffef5420d44::t_6727345f20c8b3 1
+server/src/simulations-api.test.ts
+  s_d99ffef5420d44::t_0bb27e7c837dbf 2-3,63-135
+src/app/App.test.tsx
+  s_fab4421bdc1211::t_fecf206fdf2916 8,14-16
+src/app/BtcEurDashboard.tsx
+  s_fab4421bdc1211::t_23ec501517ea7a 2-22
+src/domain/analysis.test.ts
+  s_203f34d06f7e63::t_b46cd7c8eaad8c 2-9,15
+src/features/alerts/domain/alert-evaluator.test.ts
+  s_fab4421bdc1211::t_60b97db00824b0 2,7
+src/features/alerts/domain/alert-evaluator.ts
+  s_fab4421bdc1211::t_acab64f4f7fcd5 1
+src/features/alerts/domain/alerts.ts
+  s_fab4421bdc1211::t_1e55a2fb108907 1
+src/features/alerts/presentation/AlertNotificationCenter.test.tsx
+  s_fab4421bdc1211::t_1a254b00ae3bd9 4-11
+src/features/alerts/presentation/AlertNotificationCenter.tsx
+  s_fab4421bdc1211::t_97c37e20066b1a 1-3
+src/features/alerts/presentation/AlertsScreen.tsx
+  s_fab4421bdc1211::t_488b3e4cd5ce7b 2-8
+src/features/alerts/presentation/useAlerts.ts
+  s_fab4421bdc1211::t_43b6816e47844f 5-7,13-14
+src/features/analysis/domain/analysis-errors.test.ts
+  s_fab4421bdc1211::t_bb3aef62a63aaa 7
+src/features/analysis/presentation/AnalysisModeToggle.test.tsx
+  s_fab4421bdc1211::t_c4e311d265ba79 4
+src/features/analysis/presentation/AnalysisPanel.test.tsx
+  s_fab4421bdc1211::t_a558a580508527 8-9,14-15
+src/features/analysis/presentation/AnalysisPanel.tsx
+  s_fab4421bdc1211::t_c926d94d7a1761 1-9
+src/features/analysis/presentation/GeminiControl.test.tsx
+  s_fab4421bdc1211::t_a46b9aa8da2ca8 1-34
+src/features/analysis/presentation/GeminiControl.tsx
+  s_fab4421bdc1211::t_9152bd3ce9ee1c 1-72
+src/features/analysis/presentation/InstrumentDetail.test.tsx
+  s_fab4421bdc1211::t_482e049e536356 8-10,18-25
+src/features/analysis/presentation/InstrumentDetail.tsx
+  s_fab4421bdc1211::t_057fedd7a4f442 7-12,18-21
+src/features/analysis/presentation/summary/BtcEurSummary.test.tsx
+  s_fab4421bdc1211::t_84beb7e127f891 3-7
+src/features/analysis/presentation/summary/BtcEurSummary.tsx
+  s_fab4421bdc1211::t_55c21635a9a48a 2-3
+src/features/analysis/presentation/useAnalysis.ts
+  s_fab4421bdc1211::t_e125e177c5074c 2-12
+src/features/analysis/presentation/useCandleHistory.test.tsx
+  s_fab4421bdc1211::t_bc50a395289c43 7-9
+src/features/analysis/presentation/useCandleHistory.ts
+  s_fab4421bdc1211::t_af382db79e9e5c 6
+src/features/analysis/presentation/useLatestQuote.test.tsx
+  s_fab4421bdc1211::t_4998e00f755adf 7-8
+src/features/analysis/presentation/useLatestQuote.ts
+  s_fab4421bdc1211::t_e4bfc61a1cb22c 6
+src/features/market-data/domain/market-data.ts
+  s_fab4421bdc1211::t_f95593378cb810 1-47
+src/features/market-data/infrastructure/deterministic-mock-market-data.test.ts
+  s_fab4421bdc1211::t_eb505142e76f5c 6-7
+src/features/market-data/infrastructure/deterministic-mock-market-data.ts
+  s_fab4421bdc1211::t_0848940c8a00f7 7
+src/features/market-data/infrastructure/kraken-market-data.test.ts
+  s_fab4421bdc1211::t_6ea90aa3274f8b 6-7,12
+src/features/market-data/infrastructure/kraken-market-data.ts
+  s_fab4421bdc1211::t_6f9d9f57480191 7,13
+src/features/market-data/infrastructure/kraken-pairs.test.ts
+  s_fab4421bdc1211::t_aad54f8015e851 8
+src/features/market-data/infrastructure/kraken-pairs.ts
+  s_fab4421bdc1211::t_2115030945d588 1
+src/features/market-data/infrastructure/market-data-provider.test.ts
+  s_fab4421bdc1211::t_66f5660659b080 2,6-8
+src/features/market-data/infrastructure/market-data-provider.ts
+  s_fab4421bdc1211::t_87d72a5f8652e2 1-4
+src/features/market-data/presentation/WatchlistScreen.test.tsx
+  s_fab4421bdc1211::t_2f41360badea6e 8-15
+src/features/market-data/presentation/WatchlistScreen.tsx
+  s_fab4421bdc1211::t_08e9026e03a5aa 5,11-12
+src/features/market-data/presentation/useWatchlist.test.tsx
+  s_fab4421bdc1211::t_9331a099be739a 7-8
+src/features/market-data/presentation/useWatchlist.ts
+  s_fab4421bdc1211::t_0a70a20a0f0787 7
+src/features/news/presentation/IntelligenceStatusPanel.test.tsx
+  s_fab4421bdc1211::t_a9beef496b0dbf 3-4
+src/features/news/presentation/IntelligenceStatusPanel.tsx
+  s_fab4421bdc1211::t_80c6a261aa5407 4
+src/features/news/presentation/NewsPanel.test.tsx
+  s_fab4421bdc1211::t_63b41f3ca025ad 4,9
+src/features/news/presentation/NewsPanel.tsx
+  s_fab4421bdc1211::t_8e620ea0f13a51 1
+src/features/news/presentation/news-fixtures.test.ts
+  s_fab4421bdc1211::t_7c6a57edcf4607 2
+src/features/news/presentation/useIntelligenceStream.test.ts
+  s_fab4421bdc1211::t_a0056db2b21f3a 9
+src/features/news/presentation/useNewsStream.test.ts
+  s_fab4421bdc1211::t_763a8ede61e668 3,8
+src/features/news/presentation/useNewsStream.ts
+  s_fab4421bdc1211::t_ef7a3065abff55 1-3
+src/features/paper-trading/infrastructure/local-paper-trading-provider.test.ts
+  s_203f34d06f7e63::t_2ec862dd4bc336 2-10,18-22,26
+src/features/paper-trading/presentation/AutoTradingControl.test.tsx
+  s_fab4421bdc1211::t_dc4d54fda13b09 3
+src/features/portfolio/infrastructure/local-storage-portfolio-repository.test.ts
+  s_203f34d06f7e63::t_9df172eaf070ca 2-4
+src/features/portfolio/presentation/usePortfolio.ts
+  s_fab4421bdc1211::t_818da4c29e2cfa 7,12
+src/features/price-chart/presentation/ChartPanel.test.tsx
+  s_fab4421bdc1211::t_1a4bfd0c46336d 4-7
+src/features/price-chart/presentation/ChartPanel.tsx
+  s_fab4421bdc1211::t_eec2d78bbcf65e 2-8
+src/features/price-chart/presentation/PriceChart.test.tsx
+  s_fab4421bdc1211::t_115ac3584d14c7 4
+src/features/price-chart/presentation/candlestick-data.test.ts
+  s_fab4421bdc1211::t_68c95ac55202dd 3,8
+src/features/price-chart/presentation/candlestick-data.ts
+  s_fab4421bdc1211::t_46eed1f925c3c3 3
+src/features/simulations/presentation/EquityCurveChart.test.tsx
+  s_fab4421bdc1211::t_0f90f97828ae09 3
+src/features/simulations/presentation/EquityCurveChart.tsx
+  s_fab4421bdc1211::t_46d04557c1b72f 4
+src/features/simulations/presentation/SimulationsNavigation.test.tsx
+  s_fab4421bdc1211::t_2ae9f1b2f8089f 4-5,10-12
+src/features/simulations/presentation/SimulationsPanel.test.tsx
+  s_fab4421bdc1211::t_3eb8924073591a 4-5,138,228,295-337
+src/features/simulations/presentation/SimulationsPanel.tsx
+  s_fab4421bdc1211::t_83e9d99cab7023 1-2,12,22-24,32-34,36-41,44-57,91-111,113-146,148-149,151-156,159-186,188-192,194-220,334-341,370-373
+src/features/simulations/presentation/SimulationsSection.tsx
+  s_fab4421bdc1211::t_cde854903389ce 1-2,9-10,19-23
+src/features/simulations/presentation/simulations-types.ts
+  s_fab4421bdc1211::t_e278132636c262 43,51-55,62-63,128
+src/features/simulations/presentation/simulations.css
+  s_fab4421bdc1211::t_234fa75e475b5c 176-182
+src/features/simulations/presentation/useSimulationsReport.test.ts
+  s_fab4421bdc1211::t_096e9d7230db6f 3-4,57-89
+src/features/simulations/presentation/useSimulationsReport.ts
+  s_fab4421bdc1211::t_744a30221595db 1,5,12-14,17,19-20,53-55,72-105,107-113,115-121,123-130
+src/main.tsx
+  s_fab4421bdc1211::t_07a2ae00ac420b 4
+src/shared/finance/format.ts
+  s_203f34d06f7e63::t_9f1b1fd0248906 1-2
+src/shared/testing/fake-market-data-provider.ts
+  s_fab4421bdc1211::t_17fd700e3ae68d 7
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7b8552154435a07c867eae1cf5d536d49359206d",
+  "prompts": {},
+  "sessions": {
+    "s_203f34d06f7e63": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f31fe5208ffesm86oEWMI9n2kG",
+        "model": "gpt-6-luna-fast"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    },
+    "s_99345f11bca07c": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f32ef3c6fffeehdP6EpTOJre5M",
+        "model": "muse-spark-1.3-contributor-free"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    },
+    "s_d99ffef5420d44": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f3205b08fffes1PpUlEM10hynX",
+        "model": "gpt-6-luna-fast"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    },
+    "s_fab4421bdc1211": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f3213e5d7ffeQvBaOrIAm4AIzf",
+        "model": "gpt-6-luna-fast"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
