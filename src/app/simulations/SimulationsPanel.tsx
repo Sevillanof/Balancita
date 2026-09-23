@@ -1,5 +1,11 @@
+import EquityCurveChart from './EquityCurveChart'
 import type {
+  SimulationsBaselineMetrics,
   SimulationsCandidateRow,
+  SimulationsComparisonReport,
+  SimulationsEquityPoint,
+  SimulationsProfitabilityEntry,
+  SimulationsProfitabilityMetrics,
   SimulationsReportFile,
   SimulationsStatus,
 } from './simulations-types'
@@ -73,57 +79,67 @@ export default function SimulationsPanel({
                   {report.winner.validationCount} pronósticos.
                 </p>
               )}
-              <div className="table-scroll">
-                <table className="simulations__table">
-                  <caption>
-                    Comparación de estrategias ordenada por Brier ascendente; la
-                    métrica principal es Brier, la precisión es secundaria.
-                  </caption>
-                  <thead>
-                    <tr>
-                      <th scope="col">Candidata</th>
-                      <th scope="col">Regla</th>
-                      <th scope="col">Parámetros</th>
-                      <th scope="col">Cobertura</th>
-                      <th scope="col">Brier</th>
-                      <th scope="col">Calibración</th>
-                      <th scope="col">Selección vs. validación</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {report.rows.map((row) => (
-                      <RowCells key={row.runId} row={row} />
-                    ))}
-                    <tr className="simulations__baseline">
-                      <th scope="row">Uniforme (base)</th>
-                      <td>—</td>
-                      <td>—</td>
-                      <td>—</td>
-                      <td>{formatMetric(report.baselines.uniform.brier)}</td>
-                      <td>—</td>
-                      <td>—</td>
-                    </tr>
-                    <tr className="simulations__baseline">
-                      <th scope="row">Sin cambio (base)</th>
-                      <td>—</td>
-                      <td>—</td>
-                      <td>—</td>
-                      <td>{formatMetric(report.baselines.noChange.brier)}</td>
-                      <td>—</td>
-                      <td>—</td>
-                    </tr>
-                    <tr className="simulations__baseline">
-                      <th scope="row">Momentum (base)</th>
-                      <td>—</td>
-                      <td>—</td>
-                      <td>—</td>
-                      <td>{formatMetric(report.baselines.momentum.brier)}</td>
-                      <td>—</td>
-                      <td>—</td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
+              {report.profitability === null && (
+                <p className="simulations__state" role="status">
+                  Sin bloque de rentabilidad: regenerá el informe con{' '}
+                  <code>{SIMULATIONS_GENERATE_COMMAND}</code> para ver la
+                  simulación de operaciones.
+                </p>
+              )}
+              <ul
+                className="simulations__grid"
+                aria-label={`Candidatas en horizonte ${report.horizon}`}
+              >
+                {report.rows.map((row) => (
+                  <li key={row.runId}>
+                    <article
+                      className="simulations__card"
+                      aria-label={row.candidateId}
+                    >
+                      <CandidateCard row={row} report={report} />
+                    </article>
+                  </li>
+                ))}
+                <li>
+                  <article
+                    className="simulations__card simulations__card--baseline"
+                    aria-label="Uniforme (base)"
+                  >
+                    <BaselineCard
+                      title="Uniforme (base)"
+                      metrics={report.baselines.uniform}
+                      entry={report.profitability?.baselines.uniform ?? null}
+                      report={report}
+                    />
+                  </article>
+                </li>
+                <li>
+                  <article
+                    className="simulations__card simulations__card--baseline"
+                    aria-label="Sin cambio, comprar y mantener (base)"
+                  >
+                    <BaselineCard
+                      title="Sin cambio · comprar y mantener (base)"
+                      metrics={report.baselines.noChange}
+                      entry={report.profitability?.baselines.noChange ?? null}
+                      report={report}
+                    />
+                  </article>
+                </li>
+                <li>
+                  <article
+                    className="simulations__card simulations__card--baseline"
+                    aria-label="Momentum (base)"
+                  >
+                    <BaselineCard
+                      title="Momentum (base)"
+                      metrics={report.baselines.momentum}
+                      entry={report.profitability?.baselines.momentum ?? null}
+                      report={report}
+                    />
+                  </article>
+                </li>
+              </ul>
               <footer className="simulations__provenance">
                 <p>
                   Procedencia: conjunto {shortHash(report.datasetHash)} ·
@@ -132,6 +148,18 @@ export default function SimulationsPanel({
                   {report.selectionCount} selección / {report.validationCount}{' '}
                   validación).
                 </p>
+                {report.profitability !== null && (
+                  <p>
+                    Regla {report.profitability.ruleVersion} · costos{' '}
+                    {report.profitability.costsVersion} (comisión{' '}
+                    {formatRate(report.profitability.costs.commissionRate)} ·
+                    deslizamiento{' '}
+                    {formatRate(report.profitability.costs.slippageRate)}) ·
+                    capital {formatCash(report.profitability.startingCash)} ·
+                    entrada {formatRate(report.profitability.entryThreshold)} /
+                    salida {formatRate(report.profitability.exitUpThreshold)}.
+                  </p>
+                )}
                 <ul aria-label="Identificadores de ejecución">
                   {report.rows.map((row) => (
                     <li key={row.runId}>{row.runId}</li>
@@ -147,8 +175,8 @@ export default function SimulationsPanel({
               ))}
             </ul>
             <p className="simulations__disclaimer">
-              Contenido educativo e informativo: no es asesoramiento financiero
-              y no ejecuta órdenes.
+              Contenido educativo e informativo: es una simulación, no es
+              asesoramiento financiero y no ejecuta órdenes.
             </p>
           </aside>
         </>
@@ -157,19 +185,139 @@ export default function SimulationsPanel({
   )
 }
 
-function RowCells({ row }: { readonly row: SimulationsCandidateRow }) {
+function CandidateCard({
+  row,
+  report,
+}: {
+  readonly row: SimulationsCandidateRow
+  readonly report: SimulationsComparisonReport
+}) {
+  const entry =
+    report.profitability?.candidates.find(
+      (candidate) => candidate.candidateId === row.candidateId,
+    ) ?? null
   return (
-    <tr>
-      <th scope="row">{row.candidateId}</th>
-      <td>{row.ruleVersion}</td>
-      <td>{row.paramSetVersion}</td>
-      <td>{formatPercent(row.coverage)}</td>
-      <td>{formatMetric(row.brier)}</td>
-      <td>{formatCalibration(row)}</td>
-      <td>
-        {formatMetric(row.brier)} vs. {formatMetric(row.validationBrier)}
-      </td>
-    </tr>
+    <>
+      <h4 className="simulations__card-title">{row.candidateId}</h4>
+      <p className="simulations__card-rule">
+        {row.ruleVersion} · {row.paramSetVersion}
+      </p>
+      <dl className="simulations__metrics">
+        <div>
+          <dt>Cobertura</dt>
+          <dd>{formatPercent(row.coverage)}</dd>
+        </div>
+        <div>
+          <dt>Brier</dt>
+          <dd>
+            {formatMetric(row.brier)} / validación{' '}
+            {formatMetric(row.validationBrier)}
+          </dd>
+        </div>
+      </dl>
+      {entry !== null && (
+        <ProfitabilityDetails
+          entry={entry}
+          baselineValidation={
+            report.profitability?.buyAndHoldEquity.validation ?? []
+          }
+        />
+      )}
+    </>
+  )
+}
+
+function BaselineCard({
+  title,
+  metrics,
+  entry,
+  report,
+}: {
+  readonly title: string
+  readonly metrics: SimulationsBaselineMetrics
+  readonly entry: SimulationsProfitabilityEntry | null
+  readonly report: SimulationsComparisonReport
+}) {
+  return (
+    <>
+      <h4 className="simulations__card-title">{title}</h4>
+      <dl className="simulations__metrics">
+        <div>
+          <dt>Brier</dt>
+          <dd>{formatMetric(metrics.brier)}</dd>
+        </div>
+      </dl>
+      {entry !== null && (
+        <ProfitabilityDetails
+          entry={entry}
+          baselineValidation={
+            report.profitability?.buyAndHoldEquity.validation ?? []
+          }
+        />
+      )}
+    </>
+  )
+}
+
+function ProfitabilityDetails({
+  entry,
+  baselineValidation,
+}: {
+  readonly entry: SimulationsProfitabilityEntry
+  readonly baselineValidation: readonly SimulationsEquityPoint[]
+}) {
+  return (
+    <>
+      <EquityCurveChart
+        candidate={entry.validation.equityCurve}
+        baseline={baselineValidation}
+        label="Validación"
+      />
+      <div className="simulations__slices">
+        <section aria-label="Selección">
+          <h5 className="simulations__slice-title">Selección</h5>
+          <ProfitabilityMetrics metrics={entry.selection.metrics} />
+        </section>
+        <section aria-label="Validación" className="simulations__slice--main">
+          <h5 className="simulations__slice-title">Validación</h5>
+          <ProfitabilityMetrics metrics={entry.validation.metrics} />
+        </section>
+      </div>
+      <p className="simulations__chart-legend">
+        Curva: candidata frente a comprar y mantener en validación.
+      </p>
+    </>
+  )
+}
+
+function ProfitabilityMetrics({
+  metrics,
+}: {
+  readonly metrics: SimulationsProfitabilityMetrics
+}) {
+  return (
+    <dl className="simulations__metrics">
+      <div>
+        <dt>Rentabilidad neta</dt>
+        <dd>{formatSignedPercent(metrics.netReturnPct)}</dd>
+      </div>
+      <div>
+        <dt>Operaciones</dt>
+        <dd>{metrics.tradeCount}</dd>
+      </div>
+      <div>
+        <dt>Aciertos</dt>
+        <dd>{formatPercent(metrics.winRate)}</dd>
+      </div>
+      <div>
+        <dt>Retroceso máximo</dt>
+        <dd>{formatSignedPercent(metrics.maxDrawdownPct)}</dd>
+      </div>
+      <div>
+        <dt>Exposición</dt>
+        <dd>{formatPercent(metrics.exposurePct)}</dd>
+      </div>
+    </dl>
   )
 }
 
@@ -183,22 +331,18 @@ function formatPercent(value: number | null): string {
   return `${(value * 100).toFixed(1)}%`
 }
 
-function formatCalibration(row: SimulationsCandidateRow): string {
-  const bands = row.calibration.filter(
-    (band) =>
-      band.count > 0 &&
-      band.meanPredictedProbability !== null &&
-      band.observedFrequency !== null,
-  )
-  if (bands.length === 0) return '—'
-  const gap =
-    bands.reduce(
-      (sum, band) =>
-        sum +
-        Math.abs(band.meanPredictedProbability! - band.observedFrequency!),
-      0,
-    ) / bands.length
-  return `desvío ${gap.toFixed(3)} (${bands.length} bandas)`
+function formatSignedPercent(value: number | null): string {
+  if (value === null || !Number.isFinite(value)) return '—'
+  const sign = value > 0 ? '+' : ''
+  return `${sign}${value.toFixed(1)}%`
+}
+
+function formatRate(value: number): string {
+  return `${(value * 100).toFixed(2)}%`
+}
+
+function formatCash(value: number): string {
+  return `${value.toLocaleString('es-ES')} EUR`
 }
 
 function shortHash(hash: string): string {

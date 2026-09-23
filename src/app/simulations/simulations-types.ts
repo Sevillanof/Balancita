@@ -31,6 +31,56 @@ export interface SimulationsBaselineMetrics {
   readonly accuracy: number | null
 }
 
+export interface SimulationsEquityPoint {
+  readonly time: number
+  readonly equity: number
+}
+
+export interface SimulationsProfitabilityMetrics {
+  readonly netReturnPct: number
+  readonly tradeCount: number
+  readonly winRate: number | null
+  readonly maxDrawdownPct: number
+  readonly exposurePct: number | null
+  readonly finalEquity: number
+}
+
+export interface SimulationsProfitabilitySlice {
+  readonly metrics: SimulationsProfitabilityMetrics
+  readonly equityCurve: readonly SimulationsEquityPoint[]
+  readonly ledgerHash: string
+}
+
+export interface SimulationsProfitabilityEntry {
+  readonly candidateId: string
+  readonly selection: SimulationsProfitabilitySlice
+  readonly validation: SimulationsProfitabilitySlice
+}
+
+export interface SimulationsProfitabilityBlock {
+  readonly ruleVersion: string
+  readonly costsVersion: string
+  readonly costs: {
+    readonly commissionRate: number
+    readonly slippageRate: number
+  }
+  readonly startingCash: number
+  readonly entryThreshold: number
+  readonly exitUpThreshold: number
+  readonly exitDownThreshold: number
+  readonly equityPointsDownsampledTo: number
+  readonly candidates: readonly SimulationsProfitabilityEntry[]
+  readonly baselines: {
+    readonly uniform: SimulationsProfitabilityEntry
+    readonly noChange: SimulationsProfitabilityEntry
+    readonly momentum: SimulationsProfitabilityEntry
+  }
+  readonly buyAndHoldEquity: {
+    readonly selection: readonly SimulationsEquityPoint[]
+    readonly validation: readonly SimulationsEquityPoint[]
+  }
+}
+
 export interface SimulationsComparisonReport {
   readonly version: string
   readonly instrumentId: string
@@ -56,6 +106,7 @@ export interface SimulationsComparisonReport {
   } | null
   readonly limitations: readonly string[]
   readonly contentHash: string
+  readonly profitability: SimulationsProfitabilityBlock | null
 }
 
 export interface SimulationsReportFile {

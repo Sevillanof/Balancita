@@ -4,6 +4,23 @@ import { describe, expect, it, vi } from 'vitest'
 import SimulationsPanel from './SimulationsPanel'
 import type { SimulationsReportFile } from './simulations-types'
 
+const chartMocks = vi.hoisted(() => {
+  const series = { setData: vi.fn(), update: vi.fn() }
+  const chart = {
+    addSeries: vi.fn(() => series),
+    timeScale: vi.fn(() => ({ fitContent: vi.fn() })),
+    remove: vi.fn(),
+  }
+  return { createChart: vi.fn(() => chart) }
+})
+
+vi.mock('lightweight-charts', () => ({
+  ColorType: { Solid: 'solid' },
+  CandlestickSeries: {},
+  LineSeries: {},
+  createChart: chartMocks.createChart,
+}))
+
 function reportFile(): SimulationsReportFile {
   return {
     version: 'simulations-report-file.v1',
@@ -70,8 +87,71 @@ function reportFile(): SimulationsReportFile {
         },
         limitations: ['Solo comparación descriptiva.'],
         contentHash: 'c'.repeat(64),
+        profitability: {
+          ruleVersion: 'strategy-rule.v1',
+          costsVersion: 'costs.v1',
+          costs: { commissionRate: 0.001, slippageRate: 0.0005 },
+          startingCash: 10_000,
+          entryThreshold: 0.55,
+          exitUpThreshold: 0.45,
+          exitDownThreshold: 0.55,
+          equityPointsDownsampledTo: 60,
+          candidates: [
+            {
+              candidateId: 'technical-default',
+              selection: profitabilitySlice(2.5, 3),
+              validation: profitabilitySlice(-1.2, 1),
+            },
+            {
+              candidateId: 'strict-quorum',
+              selection: profitabilitySlice(0.5, 0),
+              validation: profitabilitySlice(0.0, 0),
+            },
+          ],
+          baselines: {
+            uniform: baselineEntry('uniform'),
+            noChange: baselineEntry('noChange'),
+            momentum: baselineEntry('momentum'),
+          },
+          buyAndHoldEquity: {
+            selection: [
+              { time: 1_000, equity: 10_000 },
+              { time: 2_000, equity: 10_100 },
+            ],
+            validation: [
+              { time: 3_000, equity: 10_100 },
+              { time: 4_000, equity: 10_050 },
+            ],
+          },
+        },
       },
     ],
+  }
+}
+
+function profitabilitySlice(netReturnPct: number, tradeCount: number) {
+  return {
+    metrics: {
+      netReturnPct,
+      tradeCount,
+      winRate: tradeCount === 0 ? null : 0.5,
+      maxDrawdownPct: 1.5,
+      exposurePct: 40,
+      finalEquity: 10_000 * (1 + netReturnPct / 100),
+    },
+    equityCurve: [
+      { time: 1_000, equity: 10_000 },
+      { time: 2_000, equity: 10_000 * (1 + netReturnPct / 100) },
+    ],
+    ledgerHash: 'd'.repeat(64),
+  }
+}
+
+function baselineEntry(candidateId: string) {
+  return {
+    candidateId,
+    selection: profitabilitySlice(1.0, 1),
+    validation: profitabilitySlice(0.5, 1),
   }
 }
 
@@ -125,7 +205,7 @@ describe('SimulationsPanel', () => {
     expect(onRetry).toHaveBeenCalledTimes(1)
   })
 
-  it('renders every candidate row sorted by Brier with baselines and provenance', () => {
+  it('renders candidate cards with selection and validation profitability', () => {
     render(
       <SimulationsPanel
         status="ready"
@@ -134,19 +214,50 @@ describe('SimulationsPanel', () => {
         onRetry={() => {}}
       />,
     )
-    const table = screen.getByRole('table', {
-      name: /comparación de estrategias/i,
+    const card = screen.getByRole('article', {
+      name: /technical-default/i,
     })
-    const rows = within(table).getAllByRole('row')
-    // Header + 2 candidates + 3 baselines.
-    expect(rows).toHaveLength(6)
-    const firstCells = within(rows[1]!).getAllByRole('rowheader')
-    expect(firstCells[0]).toHaveTextContent('technical-default')
-    expect(screen.getByText(/uniforme/i)).toBeInTheDocument()
-    expect(screen.getByText(/sin cambio/i)).toBeInTheDocument()
-    expect(screen.getByText(/momentum/i)).toBeInTheDocument()
-    // Provenance footer.
+    expect(card).toHaveTextContent(/rentabilidad neta/i)
+    expect(card).toHaveTextContent(/operaciones/i)
+    expect(card).toHaveTextContent(/aciertos/i)
+    expect(card).toHaveTextContent(/retroceso máximo/i)
+    expect(card).toHaveTextContent(/exposición/i)
+    expect(card).toHaveTextContent(/cobertura/i)
+    expect(card).toHaveTextContent(/brier/i)
+    // Validation values are emphasized in their own section.
+    expect(
+      within(card).getByRole('region', { name: 'Validación' }),
+    ).toBeInTheDocument()
+    // Equity chart: candidate vs buy-and-hold on the validation window.
+    expect(
+      within(card).getByRole('img', {
+        name: /curva de rentabilidad.*validación/i,
+      }),
+    ).toBeInTheDocument()
+  })
+
+  it('renders baseline cards including buy-and-hold with provenance and disclaimer', () => {
+    render(
+      <SimulationsPanel
+        status="ready"
+        file={reportFile()}
+        error={null}
+        onRetry={() => {}}
+      />,
+    )
+    expect(
+      screen.getByRole('article', { name: /comprar y mantener/i }),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole('article', { name: /uniforme/i }),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole('article', { name: /momentum/i }),
+    ).toBeInTheDocument()
+    // Provenance footer with rule + costs versions.
     expect(screen.getByText(/procedencia/i)).toBeInTheDocument()
+    expect(screen.getByText(/strategy-rule\.v1/)).toBeInTheDocument()
+    expect(screen.getByText(/costs\.v1/)).toBeInTheDocument()
     expect(screen.getByText(/sim:x:15m:technical-default/)).toBeInTheDocument()
     // Limitations and educational disclaimer.
     expect(
@@ -155,5 +266,28 @@ describe('SimulationsPanel', () => {
     expect(
       screen.getByText(/no es asesoramiento financiero/i),
     ).toBeInTheDocument()
+  })
+
+  it('renders forecast-only cards when the report has no profitability block', () => {
+    const file = reportFile()
+    const withoutProfitability: SimulationsReportFile = {
+      ...file,
+      reports: file.reports.map((report) => ({
+        ...report,
+        profitability: null,
+      })),
+    }
+    render(
+      <SimulationsPanel
+        status="ready"
+        file={withoutProfitability}
+        error={null}
+        onRetry={() => {}}
+      />,
+    )
+    expect(
+      screen.getByRole('article', { name: /technical-default/i }),
+    ).toHaveTextContent(/brier/i)
+    expect(screen.getByText(/sin bloque de rentabilidad/i)).toBeInTheDocument()
   })
 })
