@@ -24,9 +24,80 @@ import {
   uniformBaseline,
   type BaselineProbabilities,
 } from './baselines.ts'
+import {
+  STRATEGY_RULE_VERSION,
+  TRADE_COSTS_VERSION,
+  momentumSignalsFor,
+  simulateBuyAndHold,
+  simulateLongFlat,
+  uniformSignalsFor,
+  type TradeSimBar,
+  type TradeSimCosts,
+  type TradeSimEquityPoint,
+  type TradeSimMetrics,
+  type TradeSimSignal,
+} from './trade-simulation.ts'
 
 export const SIMULATION_COMPARISON_VERSION =
   'simulations-comparison.v1' as const
+
+/**
+ * Maximum equity-curve points stored per candidate per slice. Longer
+ * windows are stride-downsampled (first and last points always kept), so
+ * the report stays small while the UI can still draw candidate vs.
+ * buy-and-hold curves on the same window.
+ */
+export const MAX_PROFITABILITY_EQUITY_POINTS = 60 as const
+
+export interface SimulationProfitabilitySlice {
+  readonly metrics: TradeSimMetrics
+  readonly equityCurve: readonly TradeSimEquityPoint[]
+  readonly ledgerHash: string
+}
+
+export interface SimulationProfitabilityEntry {
+  readonly candidateId: string
+  readonly selection: SimulationProfitabilitySlice
+  readonly validation: SimulationProfitabilitySlice
+}
+
+export interface SimulationProfitabilityBaselines {
+  readonly uniform: SimulationProfitabilityEntry
+  readonly noChange: SimulationProfitabilityEntry
+  readonly momentum: SimulationProfitabilityEntry
+}
+
+export interface SimulationProfitabilityBlock {
+  readonly ruleVersion: typeof STRATEGY_RULE_VERSION
+  readonly costsVersion: typeof TRADE_COSTS_VERSION
+  readonly costs: TradeSimCosts
+  readonly startingCash: number
+  readonly entryThreshold: number
+  readonly exitUpThreshold: number
+  readonly exitDownThreshold: number
+  readonly equityPointsDownsampledTo: typeof MAX_PROFITABILITY_EQUITY_POINTS
+  readonly candidates: readonly SimulationProfitabilityEntry[]
+  readonly baselines: SimulationProfitabilityBaselines
+  /** Alias of the no-change (buy-and-hold) curves for the visual comparison. */
+  readonly buyAndHoldEquity: {
+    readonly selection: readonly TradeSimEquityPoint[]
+    readonly validation: readonly TradeSimEquityPoint[]
+  }
+}
+
+export interface SimulationProfitabilityInput {
+  readonly selectionBars: readonly TradeSimBar[]
+  readonly validationBars: readonly TradeSimBar[]
+  readonly signalsByCandidate: Readonly<
+    Record<string, readonly TradeSimSignal[]>
+  >
+  readonly outcomeLabelsByTime: Readonly<Record<number, ForecastOutcomeLabel>>
+  readonly startingCash: number
+  readonly entryThreshold: number
+  readonly exitUpThreshold: number
+  readonly exitDownThreshold: number
+  readonly costs: TradeSimCosts
+}
 
 const CALIBRATION_BANDS: readonly CalibrationBandDefinition[] = [
   { lowerInclusive: 0, upperExclusive: 0.5 },
@@ -93,6 +164,8 @@ export interface SimulationComparisonReport {
   } | null
   readonly limitations: readonly string[]
   readonly contentHash: string
+  /** Null for callers that only score forecasts without trade simulation. */
+  readonly profitability: SimulationProfitabilityBlock | null
 }
 
 export interface SimulationReportCandidate {
@@ -111,6 +184,7 @@ export function buildComparisonReport(args: {
   readonly selection: readonly SimulationScoredEntry[]
   readonly validation: readonly SimulationScoredEntry[]
   readonly candidates: readonly SimulationReportCandidate[]
+  readonly profitability?: SimulationProfitabilityInput
 }): SimulationComparisonReport {
   const byCandidate = new Map<string, SimulationScoredEntry[]>()
   for (const scored of args.selection) {
@@ -151,6 +225,13 @@ export function buildComparisonReport(args: {
   const orderedSelection = [...args.selection].sort(
     (left, right) => left.asOfTimestamp - right.asOfTimestamp,
   )
+  const profitability =
+    args.profitability === undefined
+      ? null
+      : buildProfitabilityBlock(
+          args.profitability,
+          args.candidates.map((candidate) => candidate.candidateId),
+        )
   const reportWithoutHash = {
     version: SIMULATION_COMPARISON_VERSION,
     instrumentId: 'BTC-EUR' as const,
@@ -204,7 +285,14 @@ export function buildComparisonReport(args: {
       'No random backtest or random train/test split is performed; the split is strictly by time.',
       'Metrics are meaningful only for outcomes evaluated after their valid horizon.',
       'Results depend on thin historical data and must not drive trading decisions.',
+      ...(profitability === null
+        ? []
+        : [
+            'Simulated profitability is descriptive only: fills are hypothetical next-open executions with estimated costs, and no order is previewed or submitted.',
+            'Simulated returns are not predictive and are regime-dependent: past slices do not imply future performance.',
+          ]),
     ],
+    profitability,
   }
   return {
     ...reportWithoutHash,
@@ -219,6 +307,154 @@ function toMetricEntries(
     forecast: entry.forecast,
     outcome: entry.outcome,
   }))
+}
+
+/**
+ * Simulate every candidate plus the baseline trio on both slices with the
+ * same strategy rule, thresholds, cash, and versioned costs. Uniform stays
+ * flat (0 trades); no-change is buy-and-hold; momentum repeats the last
+ * observed outcome label with certainty (first bar has no past label and
+ * falls back to uniform).
+ */
+export function buildProfitabilityBlock(
+  input: SimulationProfitabilityInput,
+  candidateIds: readonly string[],
+): SimulationProfitabilityBlock {
+  const shared = {
+    startingCash: input.startingCash,
+    entryThreshold: input.entryThreshold,
+    exitUpThreshold: input.exitUpThreshold,
+    exitDownThreshold: input.exitDownThreshold,
+    costs: input.costs,
+  }
+  const candidates = candidateIds.map((candidateId) => ({
+    candidateId,
+    selection: toProfitabilitySlice(
+      simulateLongFlat({
+        ...shared,
+        bars: input.selectionBars,
+        signals: input.signalsByCandidate[candidateId] ?? [],
+      }),
+    ),
+    validation: toProfitabilitySlice(
+      simulateLongFlat({
+        ...shared,
+        bars: input.validationBars,
+        signals: input.signalsByCandidate[candidateId] ?? [],
+      }),
+    ),
+  }))
+  const baselines: SimulationProfitabilityBaselines = {
+    uniform: {
+      candidateId: 'uniform',
+      selection: toProfitabilitySlice(
+        simulateLongFlat({
+          ...shared,
+          bars: input.selectionBars,
+          signals: uniformSignalsFor(input.selectionBars),
+        }),
+      ),
+      validation: toProfitabilitySlice(
+        simulateLongFlat({
+          ...shared,
+          bars: input.validationBars,
+          signals: uniformSignalsFor(input.validationBars),
+        }),
+      ),
+    },
+    noChange: {
+      candidateId: 'noChange',
+      selection: toProfitabilitySlice(
+        simulateBuyAndHold({
+          bars: input.selectionBars,
+          startingCash: input.startingCash,
+          costs: input.costs,
+        }),
+      ),
+      validation: toProfitabilitySlice(
+        simulateBuyAndHold({
+          bars: input.validationBars,
+          startingCash: input.startingCash,
+          costs: input.costs,
+        }),
+      ),
+    },
+    momentum: {
+      candidateId: 'momentum',
+      selection: toProfitabilitySlice(
+        simulateLongFlat({
+          ...shared,
+          bars: input.selectionBars,
+          signals: momentumSignalsFor(
+            input.selectionBars,
+            labelsFor(input.selectionBars, input.outcomeLabelsByTime),
+          ),
+        }),
+      ),
+      validation: toProfitabilitySlice(
+        simulateLongFlat({
+          ...shared,
+          bars: input.validationBars,
+          signals: momentumSignalsFor(
+            input.validationBars,
+            labelsFor(input.validationBars, input.outcomeLabelsByTime),
+          ),
+        }),
+      ),
+    },
+  }
+  return {
+    ruleVersion: STRATEGY_RULE_VERSION,
+    costsVersion: TRADE_COSTS_VERSION,
+    costs: input.costs,
+    startingCash: input.startingCash,
+    entryThreshold: input.entryThreshold,
+    exitUpThreshold: input.exitUpThreshold,
+    exitDownThreshold: input.exitDownThreshold,
+    equityPointsDownsampledTo: MAX_PROFITABILITY_EQUITY_POINTS,
+    candidates,
+    baselines,
+    buyAndHoldEquity: {
+      selection: baselines.noChange.selection.equityCurve,
+      validation: baselines.noChange.validation.equityCurve,
+    },
+  }
+}
+
+function labelsFor(
+  bars: readonly TradeSimBar[],
+  labelsByTime: Readonly<Record<number, ForecastOutcomeLabel>>,
+): readonly (ForecastOutcomeLabel | null)[] {
+  return bars.map((bar) => labelsByTime[bar.time] ?? null)
+}
+
+function toProfitabilitySlice(result: {
+  readonly equityCurve: readonly TradeSimEquityPoint[]
+  readonly metrics: TradeSimMetrics
+  readonly ledgerHash: string
+}): SimulationProfitabilitySlice {
+  return {
+    metrics: result.metrics,
+    equityCurve: downsampleEquityCurve(
+      result.equityCurve,
+      MAX_PROFITABILITY_EQUITY_POINTS,
+    ),
+    ledgerHash: result.ledgerHash,
+  }
+}
+
+function downsampleEquityCurve(
+  points: readonly TradeSimEquityPoint[],
+  maxPoints: number,
+): readonly TradeSimEquityPoint[] {
+  if (points.length <= maxPoints) return points
+  const stride = (points.length - 1) / (maxPoints - 1)
+  const sampled: TradeSimEquityPoint[] = []
+  for (let index = 0; index < maxPoints - 1; index += 1) {
+    sampled.push(points[Math.floor(index * stride)]!)
+  }
+  sampled.push(points.at(-1)!)
+  return sampled
 }
 
 function buildRow(

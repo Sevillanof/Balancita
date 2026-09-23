@@ -1043,3 +1043,28 @@ pnpm --dir server dev` (equivalente a `pnpm dev:server` con la env). El primer
   no-creación con collector deshabilitado, status `collecting` antes de 30 días,
   status `disabled` con collector off, instrumento inválido → 400, y reutilización
   sin mutación de un run existente. El run nunca se crea si el collector está off.
+
+## Simulations harness — deterministic trade simulation
+
+- **Scope exception (user-authorized)**: simulated profitability per candidate
+  (signals → simulated fills with commissions + slippage → equity/drawdown)
+  was explicitly authorized as a descriptive-only exception to the
+  out-of-scope profitability item. Core prohibitions intact: no real money,
+  no orders, no auto-execution; the simulation never leaves the report.
+- **Engine**: `server/src/intelligence/simulations/trade-simulation.ts`,
+  `strategy-rule.v1`, LONG/FLAT only (spot BTC, no shorts). Per closed 1m
+  candle: enter long when probabilityUp ≥ 0.55, exit to flat when
+  probabilityUp < 0.45, probabilityDown ≥ 0.55, or abstained; fills at the
+  next candle open (no look-ahead); full-position flips from 10_000 EUR
+  default; `costs.v1` {commission 0.001, slippage 0.0005} identical for
+  candidates and baselines. Baselines: uniform → always flat, no-change →
+  buy-and-hold, momentum → repeat-last-label position.
+- **Wiring**: `simulations-runner` simulates each candidate on the selection
+  and validation slices and extends the comparison report additively with a
+  profitability block (metrics + downsampled equity curves + buy-and-hold
+  equity, max 60 points per slice); Brier table, hashes, and limitations
+  kept, limitations extended for simulation. CLI keeps its interface plus
+  optional `--cash/--entry/--exit`. UI: `SimulationsPanel` is a 3-column
+  card grid (candidate + baseline cards, validation equity chart vs.
+  buy-and-hold, selection + validation metrics) with provenance footer,
+  extended limitations, and the educational disclaimer.

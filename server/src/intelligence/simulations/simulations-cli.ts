@@ -10,6 +10,7 @@
  * Usage (from server/):
  *   pnpm simulations:run \
  *     [--horizon 15m] [--selection-pct 0.7] [--since <epochMs>] [--until <epochMs>] \
+ *     [--cash 10000] [--entry 0.55] [--exit 0.45] \
  *     [--market-db data/market.sqlite] \
  *     [--dataset-db data/simulations-datasets.sqlite] \
  *     [--runs-db data/simulations-runs.sqlite] \
@@ -47,6 +48,29 @@ function parseHorizons(raw: string | undefined): ForecastHorizon[] {
   if (horizons.length === 0)
     throw new Error('At least one horizon is required.')
   return [...new Set(horizons)]
+}
+
+function parseCash(raw: string | undefined): number {
+  if (raw === undefined) return 10_000
+  const value = Number(raw)
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new Error('--cash must be a finite positive amount in EUR.')
+  }
+  return value
+}
+
+function parseThreshold(
+  raw: string | undefined,
+  name: string,
+): number | undefined {
+  if (raw === undefined) return undefined
+  const value = Number(raw)
+  if (!Number.isFinite(value) || value <= 0 || value >= 1) {
+    throw new Error(
+      `${name} must be a finite fraction strictly between 0 and 1.`,
+    )
+  }
+  return value
 }
 
 function parseSelectionPct(raw: string | undefined): number {
@@ -115,6 +139,20 @@ export function runSimulationsCli(
     ),
     horizons,
     selectionPct: parseSelectionPct(flagValue(argv, '--selection-pct')),
+    startingCash: parseCash(flagValue(argv, '--cash')),
+    ...(parseThreshold(flagValue(argv, '--entry'), '--entry') === undefined
+      ? {}
+      : {
+          entryThreshold: parseThreshold(
+            flagValue(argv, '--entry'),
+            '--entry',
+          )!,
+        }),
+    ...(parseThreshold(flagValue(argv, '--exit'), '--exit') === undefined
+      ? {}
+      : {
+          exitThreshold: parseThreshold(flagValue(argv, '--exit'), '--exit')!,
+        }),
     ...(parseTimestamp(flagValue(argv, '--since'), '--since') === undefined
       ? {}
       : { since: parseTimestamp(flagValue(argv, '--since'), '--since')! }),

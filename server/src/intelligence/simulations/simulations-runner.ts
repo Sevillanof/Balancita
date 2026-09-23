@@ -18,8 +18,19 @@ import {
 import {
   buildComparisonReport,
   type SimulationComparisonReport,
+  type SimulationProfitabilityInput,
   type SimulationScoredEntry,
 } from './comparison-report.ts'
+import type { ForecastOutcomeLabel } from '../contracts.ts'
+import {
+  DEFAULT_ENTRY_THRESHOLD,
+  DEFAULT_EXIT_DOWN_THRESHOLD,
+  DEFAULT_EXIT_UP_THRESHOLD,
+  DEFAULT_STARTING_CASH,
+  DEFAULT_TRADE_COSTS,
+  type TradeSimBar,
+  type TradeSimSignal,
+} from './trade-simulation.ts'
 import { splitByTime } from './time-split.ts'
 
 export const SIMULATIONS_DEFAULT_HORIZON: ForecastHorizon = '15m'
@@ -43,6 +54,12 @@ export interface SimulationsRunnerOptions {
   readonly since?: TimestampMs
   readonly until?: TimestampMs
   readonly clock?: () => TimestampMs
+  /** Hypothetical starting cash in EUR for the LONG/FLAT trade simulation. */
+  readonly startingCash?: number
+  /** Enter-long threshold on probabilityUp (default 0.55). */
+  readonly entryThreshold?: number
+  /** Exit-to-flat threshold on probabilityUp (default 0.45). */
+  readonly exitThreshold?: number
 }
 
 export interface HorizonSimulationResult {
@@ -104,6 +121,25 @@ export function runSimulationsFromLiveDb(
     }
   }
   const clock = options.clock ?? (() => Date.now() as TimestampMs)
+  const startingCash = options.startingCash ?? DEFAULT_STARTING_CASH
+  if (!Number.isFinite(startingCash) || startingCash <= 0) {
+    throw new Error('Starting cash must be a finite positive amount.')
+  }
+  const entryThreshold = options.entryThreshold ?? DEFAULT_ENTRY_THRESHOLD
+  const exitThreshold = options.exitThreshold ?? DEFAULT_EXIT_UP_THRESHOLD
+  for (const [name, value] of [
+    ['entry', entryThreshold],
+    ['exit', exitThreshold],
+  ] as const) {
+    if (!Number.isFinite(value) || value <= 0 || value >= 1) {
+      throw new Error(
+        `Trade ${name} threshold must be a finite fraction strictly between 0 and 1.`,
+      )
+    }
+  }
+  if (!(exitThreshold < entryThreshold)) {
+    throw new Error('Trade exit threshold must be below the entry threshold.')
+  }
 
   const live = openLiveMarketDbReadOnly(options.marketDbPath)
   let observations
@@ -135,6 +171,7 @@ export function runSimulationsFromLiveDb(
     const horizons: HorizonSimulationResult[] = []
     for (const horizon of options.horizons) {
       const scored: SimulationScoredEntry[] = []
+      const signalsByCandidate: Record<string, TradeSimSignal[]> = {}
       const candidates = SIMULATION_CANDIDATES.map((candidate) => {
         const runId = [
           'sim',
@@ -149,6 +186,14 @@ export function runSimulationsFromLiveDb(
           runId,
           candidateId: candidate.candidateId,
         })
+        signalsByCandidate[candidate.candidateId] = result.forecasts.map(
+          (forecast) => ({
+            time: forecast.asOfTimestamp,
+            probabilityUp: forecast.probabilityUp,
+            probabilityDown: forecast.probabilityDown,
+            abstained: forecast.abstained,
+          }),
+        )
         const byId = new Map(
           result.forecasts.map((forecast) => [forecast.id, forecast]),
         )
@@ -195,6 +240,15 @@ export function runSimulationsFromLiveDb(
         selection,
         validation,
         candidates,
+        profitability: profitabilityInputFor({
+          candles: dataset.candles,
+          cutTimestamp,
+          scored: ordered,
+          signalsByCandidate,
+          startingCash,
+          entryThreshold,
+          exitThreshold,
+        }),
       })
       horizons.push({ horizon, report })
     }
@@ -231,3 +285,48 @@ export function runSimulationsFromLiveDb(
 }
 
 export type { FrozenReplayDataset }
+
+/**
+ * Build the trade-simulation input for one horizon: closed 1m bars split
+ * at the same time cut as the scored selection/validation slices, one
+ * signal stream per candidate, and the shared outcome-label stream the
+ * momentum baseline repeats.
+ */
+function profitabilityInputFor(args: {
+  readonly candles: FrozenReplayDataset['candles']
+  readonly cutTimestamp: TimestampMs
+  readonly scored: readonly SimulationScoredEntry[]
+  readonly signalsByCandidate: Readonly<Record<string, TradeSimSignal[]>>
+  readonly startingCash: number
+  readonly entryThreshold: number
+  readonly exitThreshold: number
+}): SimulationProfitabilityInput {
+  const toBar = (
+    candle: FrozenReplayDataset['candles'][number],
+  ): TradeSimBar => ({
+    time: candle.bucketEnd,
+    open: candle.open,
+    close: candle.close,
+  })
+  const selectionBars = args.candles
+    .filter((candle) => candle.bucketEnd < args.cutTimestamp)
+    .map(toBar)
+  const validationBars = args.candles
+    .filter((candle) => candle.bucketEnd >= args.cutTimestamp)
+    .map(toBar)
+  const outcomeLabelsByTime: Record<number, ForecastOutcomeLabel> = {}
+  for (const entry of args.scored) {
+    outcomeLabelsByTime[entry.asOfTimestamp] ??= entry.outcome.label
+  }
+  return {
+    selectionBars,
+    validationBars,
+    signalsByCandidate: args.signalsByCandidate,
+    outcomeLabelsByTime,
+    startingCash: args.startingCash,
+    entryThreshold: args.entryThreshold,
+    exitUpThreshold: args.exitThreshold,
+    exitDownThreshold: DEFAULT_EXIT_DOWN_THRESHOLD,
+    costs: { ...DEFAULT_TRADE_COSTS },
+  }
+}
