@@ -19,6 +19,20 @@ export type NewsItem = {
   readonly tradeIntent: 'buy' | 'sell' | 'neutral'
 }
 
+/**
+ * UTC calendar day the fixtures belong to, derived from the real clock at
+ * module load. Fixtures must always fall on "today" because NewsPanel filters
+ * to the current UTC day; fixed calendar dates rot as soon as the day rolls
+ * over and turn every consumer test red.
+ */
+export const NEWS_FIXTURE_DAY_UTC: string = new Date()
+  .toISOString()
+  .slice(0, 10)
+
+function atTime(time: string): string {
+  return `${NEWS_FIXTURE_DAY_UTC}T${time}.000Z`
+}
+
 export const NEWS_FIXTURES: readonly NewsItem[] = [
   {
     id: 'fixture-btc-support',
@@ -26,9 +40,9 @@ export const NEWS_FIXTURES: readonly NewsItem[] = [
     source: 'Fixture Wire',
     title: 'Bitcoin se mantiene sobre el soporte clave en euros',
     url: 'https://example.test/news/bitcoin-soporte',
-    publishedAt: '2026-09-22T11:32:00.000Z',
-    ingestedAt: '2026-09-22T11:33:00.000Z',
-    displayedAt: '2026-09-22T11:34:00.000Z',
+    publishedAt: atTime('11:32:00'),
+    ingestedAt: atTime('11:33:00'),
+    displayedAt: atTime('11:34:00'),
     licenseStatus: 'official_public',
     freshness: { ageMs: 60_000, isStale: false },
     important: true,
@@ -41,9 +55,9 @@ export const NEWS_FIXTURES: readonly NewsItem[] = [
     source: 'Fixture Ledger',
     title: 'El BCE publica un informe sobre activos digitales',
     url: 'https://example.test/news/bce-activos-digitales',
-    publishedAt: '2026-09-22T11:20:00.000Z',
-    ingestedAt: '2026-09-22T11:21:00.000Z',
-    displayedAt: '2026-09-22T11:22:00.000Z',
+    publishedAt: atTime('11:20:00'),
+    ingestedAt: atTime('11:21:00'),
+    displayedAt: atTime('11:22:00'),
     licenseStatus: 'official_public',
     freshness: { ageMs: 60_000, isStale: false },
     important: true,
@@ -56,9 +70,9 @@ export const NEWS_FIXTURES: readonly NewsItem[] = [
     source: 'Fixture Markets',
     title: 'El hashrate de la red alcanza un nuevo máximo',
     url: 'https://example.test/news/hashrate-maximo',
-    publishedAt: '2026-09-22T10:58:00.000Z',
-    ingestedAt: '2026-09-22T10:59:00.000Z',
-    displayedAt: '2026-09-22T11:00:00.000Z',
+    publishedAt: atTime('10:58:00'),
+    ingestedAt: atTime('10:59:00'),
+    displayedAt: atTime('11:00:00'),
     licenseStatus: 'official_public',
     freshness: { ageMs: 60_000, isStale: false },
     important: false,
@@ -71,9 +85,9 @@ export const NEWS_FIXTURES: readonly NewsItem[] = [
     source: 'Fixture Desk',
     title: 'Flujos institucionales mixtos en los ETF spot',
     url: 'https://example.test/news/etf-flujos',
-    publishedAt: '2026-09-22T10:41:00.000Z',
-    ingestedAt: '2026-09-22T10:42:00.000Z',
-    displayedAt: '2026-09-22T10:43:00.000Z',
+    publishedAt: atTime('10:41:00'),
+    ingestedAt: atTime('10:42:00'),
+    displayedAt: atTime('10:43:00'),
     licenseStatus: 'official_public',
     freshness: { ageMs: 60_000, isStale: false },
     important: false,

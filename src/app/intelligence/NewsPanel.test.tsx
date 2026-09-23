@@ -2,7 +2,11 @@ import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import NewsPanel from './NewsPanel'
-import { NEWS_FIXTURES, type NewsItem } from './news-fixtures'
+import {
+  NEWS_FIXTURES,
+  NEWS_FIXTURE_DAY_UTC,
+  type NewsItem,
+} from './news-fixtures'
 
 describe('NewsPanel', () => {
   it('renders every fixture with its source, time and link', () => {
@@ -34,13 +38,13 @@ describe('NewsPanel', () => {
       {
         ...NEWS_FIXTURES[0]!,
         id: 'older',
-        publishedAt: '2026-09-22T10:00:00.000Z',
+        publishedAt: `${NEWS_FIXTURE_DAY_UTC}T10:00:00.000Z`,
         important: false,
       },
       {
         ...NEWS_FIXTURES[0]!,
         id: 'newer',
-        publishedAt: '2026-09-22T12:00:00.000Z',
+        publishedAt: `${NEWS_FIXTURE_DAY_UTC}T12:00:00.000Z`,
         important: true,
       },
     ]
@@ -122,7 +126,7 @@ describe('NewsPanel', () => {
       <NewsPanel
         status="ready"
         items={[item]}
-        now={() => Date.parse('2026-09-22T18:00:00.000Z')}
+        now={() => Date.parse(`${NEWS_FIXTURE_DAY_UTC}T18:00:00.000Z`)}
       />,
     )
 
@@ -138,7 +142,10 @@ describe('NewsPanel', () => {
   })
 
   it('excludes yesterday and keeps the UTC day boundaries', () => {
-    const item = NEWS_FIXTURES[0]!
+    const item = {
+      ...NEWS_FIXTURES[0]!,
+      publishedAt: '2026-09-22T11:32:00.000Z',
+    }
     render(
       <NewsPanel
         status="ready"
