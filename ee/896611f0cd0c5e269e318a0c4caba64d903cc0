@@ -1,0 +1,21 @@
+server/src/intelligence/simulations/trade-simulation.test.ts
+  s_99345f11bca07c::t_8a507fe28478c8 1-245
+server/src/intelligence/simulations/trade-simulation.ts
+  s_99345f11bca07c::t_8ce398cf6df3fc 1-396
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ee896611f0cd0c5e269e318a0c4caba64d903cc0",
+  "prompts": {},
+  "sessions": {
+    "s_99345f11bca07c": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f32ef3c6fffeehdP6EpTOJre5M",
+        "model": "muse-spark-1.3-contributor-free"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
