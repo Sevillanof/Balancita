@@ -1,0 +1,16 @@
+src/app/intelligence/NewsPanel.test.tsx
+  h_2f68313623be98 5-9,41,47,129,145-148
+src/app/intelligence/news-fixtures.ts
+  h_2f68313623be98 22-35,43-45,58-60,73-75,88-90
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7872cbdda1eba548edfb38cd17e1ba3770e32890",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
