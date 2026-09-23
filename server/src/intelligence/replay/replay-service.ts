@@ -30,6 +30,10 @@ import {
   type ReplayRunReference,
 } from './replay-run.ts'
 import type { ReplayRunStore } from './replay-run-store.ts'
+import {
+  candidateForId,
+  type SimulationCandidate,
+} from '../simulations/candidate-manifest.ts'
 import { virtualClockFromDataset } from './replay-virtual-clock.ts'
 
 const DEFAULT_REPLAY_HORIZON: ForecastHorizon = '15m'
@@ -59,6 +63,13 @@ export interface ReplayRunInput {
   readonly dataset: FrozenReplayDataset
   readonly horizon?: ForecastHorizon
   readonly runId?: string
+  /**
+   * Additive simulation wiring. Absent means the production default
+   * candidate: params, rule version and forecast output stay exactly as
+   * before. A manifest candidate id switches features and rule dispatch to
+   * that candidate and is encoded in the default run id.
+   */
+  readonly candidateId?: string
 }
 
 export interface ReplayRunResult {
@@ -94,7 +105,12 @@ export class ReplayRunService {
    */
   run(input: ReplayRunInput): ReplayRunResult {
     const horizon = input.horizon ?? DEFAULT_REPLAY_HORIZON
-    const runId = input.runId ?? defaultReplayRunId(input.dataset)
+    const candidate: SimulationCandidate | undefined =
+      input.candidateId === undefined
+        ? undefined
+        : candidateForId(input.candidateId)
+    const runId =
+      input.runId ?? defaultReplayRunId(input.dataset, candidate?.candidateId)
     const start = createReplayRunStart({
       id: runId,
       dataset: input.dataset,
@@ -133,6 +149,7 @@ export class ReplayRunService {
         candle,
         candlesUpTo: candles.slice(0, index + 1),
         dataset: input.dataset,
+        candidate,
       })
       this.store.insertForecast(forecast)
       forecasts.push(forecast)
@@ -199,10 +216,16 @@ export class ReplayRunService {
     readonly candle: ReplayDatasetCandle
     readonly candlesUpTo: readonly ReplayDatasetCandle[]
     readonly dataset: FrozenReplayDataset
+    readonly candidate?: SimulationCandidate
   }): ForecastRecord {
     const features = computeTechnicalFeatures({
       candles: args.candlesUpTo.map(toTechnicalCandle),
       asOfTimestamp: args.candle.bucketEnd,
+      // Additive lineage: the default path passes no params (exactly as
+      // before); a manifest candidate injects its pre-registered periods.
+      ...(args.candidate === undefined
+        ? {}
+        : { params: args.candidate.params }),
     })
     const snapshot: TechnicalFeatureSnapshot = {
       version: features.technicalFeatureVersion,
@@ -211,6 +234,11 @@ export class ReplayRunService {
       ready: features.ready,
       warmUp: features.warmUp,
       values: features.values,
+      // Additive lineage only: absent on the default path so existing
+      // records and tests are untouched.
+      ...(args.candidate === undefined
+        ? {}
+        : { paramSetVersion: args.candidate.paramSetVersion }),
     }
     const engineInput: ForecastEngineInput = {
       id: `${args.runId}:${args.candle.bucketEnd}`,
@@ -231,13 +259,24 @@ export class ReplayRunService {
       newsEvidenceReferences: [],
       sourceMode: 'historical_replay',
       replayRunId: args.runId,
+      // Additive dispatch: absent on the default path.
+      ...(args.candidate === undefined
+        ? {}
+        : {
+            ruleVersion: args.candidate.ruleVersion,
+            ruleConfig: args.candidate.rule,
+          }),
     }
     return generateForecast(engineInput)
   }
 }
 
-function defaultReplayRunId(dataset: FrozenReplayDataset): string {
-  return `replay:${dataset.importVersion}:${dataset.datasetHash.slice(0, 16)}`
+function defaultReplayRunId(
+  dataset: FrozenReplayDataset,
+  candidateId?: string,
+): string {
+  const base = `replay:${dataset.importVersion}:${dataset.datasetHash.slice(0, 16)}`
+  return candidateId === undefined ? base : `${base}:${candidateId}`
 }
 
 function toForecastCandle(candle: ReplayDatasetCandle): ForecastCandleEvidence {

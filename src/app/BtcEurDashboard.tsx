@@ -8,6 +8,7 @@ import ChartPanel from './chart/ChartPanel'
 import { useCandleHistory } from './detail/useCandleHistory'
 import NewsPanel from './intelligence/NewsPanel'
 import { useNewsStream } from './intelligence/useNewsStream'
+import SimulationsSection from './simulations/SimulationsSection'
 import BtcEurSummary from './summary/BtcEurSummary'
 import AutoTradingControl from './trade/AutoTradingControl'
 import TradeScreen from './trade/TradeScreen'
@@ -53,6 +54,7 @@ export default function BtcEurDashboard({
   })
   const news = useNewsStream()
   const [orderFlowSide, setOrderFlowSide] = useState<OrderSide | null>(null)
+  const [showSimulations, setShowSimulations] = useState(false)
   const instrument = market.instruments.find(({ id }) => id === 'BTC-EUR')
   const quote =
     instrument === undefined ? undefined : market.quotes.get(instrument.id)
@@ -118,10 +120,25 @@ export default function BtcEurDashboard({
                 Vender
               </button>
               <AutoTradingControl />
+              <button
+                type="button"
+                className="button button--secondary"
+                aria-expanded={showSimulations}
+                aria-controls="simulaciones"
+                onClick={() => setShowSimulations((visible) => !visible)}
+              >
+                Simulaciones
+              </button>
             </div>
           </>
         )}
       </div>
+
+      {ready && instrument !== undefined && showSimulations && (
+        <div id="simulaciones">
+          <SimulationsSection />
+        </div>
+      )}
 
       {ready && instrument !== undefined && orderFlowSide !== null && (
         <OrderFlowDialog

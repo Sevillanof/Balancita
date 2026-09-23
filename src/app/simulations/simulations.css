@@ -1,0 +1,68 @@
+.simulations {
+  display: grid;
+  gap: var(--space-3, 0.75rem);
+  padding: var(--space-4, 1rem);
+  background: var(--color-surface, #ffffff);
+  border: 1px solid var(--color-border, #d5dde8);
+  border-radius: var(--radius-md, 8px);
+}
+
+.simulations__eyebrow {
+  margin: 0;
+  color: var(--color-muted, #5a6576);
+  font-size: 0.85rem;
+}
+
+.simulations__state {
+  margin: 0;
+}
+
+.simulations__state--error {
+  color: var(--color-danger, #b42318);
+}
+
+.simulations__horizon {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.simulations__winner {
+  margin: 0;
+}
+
+.simulations__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.simulations__table th,
+.simulations__table td {
+  padding: 0.4rem 0.6rem;
+  border-bottom: 1px solid var(--color-border, #d5dde8);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.simulations__baseline th,
+.simulations__baseline td {
+  color: var(--color-muted, #5a6576);
+}
+
+.simulations__provenance {
+  font-size: 0.8rem;
+  color: var(--color-muted, #5a6576);
+}
+
+.simulations__provenance ul {
+  margin: 0.25rem 0 0;
+  padding-left: 1.25rem;
+}
+
+.simulations__limits {
+  font-size: 0.85rem;
+}
+
+.simulations__disclaimer {
+  font-weight: 600;
+}

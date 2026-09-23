@@ -1,5 +1,6 @@
 import cors from '@fastify/cors'
 import Fastify, { type FastifyInstance, type FastifyReply } from 'fastify'
+import { readFileSync } from 'node:fs'
 import {
   AnalysisInvalidRequestError,
   AnalysisInvalidResponseError,
@@ -91,6 +92,12 @@ export interface MarketDependencies {
   newsScheduler?: ForecastLoopScheduler
   newsClock?: () => TimestampMs
   treeNewsService?: TreeNewsLifecycle
+  /**
+   * Read-only source for the latest persisted simulations report. The
+   * default reads the JSON file written by `pnpm simulations:run`; the GET
+   * route never triggers a computation.
+   */
+  simulationsReportReader?: () => string | undefined
 }
 
 type ErrorEnvelope = {
@@ -115,6 +122,25 @@ function envelope(error: {
   message: string
 }): ErrorEnvelope {
   return { error: { code: error.code, message: error.message } }
+}
+
+function defaultSimulationsReportReader(
+  reportPath: string,
+): () => string | undefined {
+  return () => {
+    try {
+      return readFileSync(reportPath, 'utf8')
+    } catch (error) {
+      if (
+        typeof error === 'object' &&
+        error !== null &&
+        'code' in error &&
+        (error as { code: unknown }).code === 'ENOENT'
+      )
+        return undefined
+      throw error
+    }
+  }
 }
 
 export async function buildApp(options: {
@@ -435,6 +461,53 @@ export async function buildApp(options: {
         } satisfies ShadowStatusResponse)
       }
       throw error
+    }
+  })
+
+  app.get('/api/intelligence/simulations', (request, reply) => {
+    const query = request.query as { instrumentId?: unknown }
+    if (query.instrumentId !== undefined && query.instrumentId !== 'BTC-EUR') {
+      return reply.code(400).send({
+        error: {
+          code: 'unsupported_instrument',
+          message: 'Only BTC-EUR simulations are supported.',
+        },
+      })
+    }
+    const readReport =
+      options.overrides?.simulationsReportReader ??
+      defaultSimulationsReportReader(config.simulationsReportPath)
+    let raw: string | undefined
+    try {
+      raw = readReport()
+    } catch {
+      return reply.code(500).send(
+        envelope({
+          code: 'internal_error',
+          message: 'The simulations report could not be read.',
+        }),
+      )
+    }
+    if (raw === undefined) {
+      return reply.code(404).send({
+        error: {
+          code: 'simulations_report_missing',
+          message:
+            'No simulations report has been generated yet. Run the comparison harness to create one.',
+        },
+        instrumentId: 'BTC-EUR',
+        generateCommand: 'pnpm --dir server simulations:run',
+      })
+    }
+    try {
+      return reply.send(JSON.parse(raw))
+    } catch {
+      return reply.code(500).send(
+        envelope({
+          code: 'internal_error',
+          message: 'The stored simulations report is not valid JSON.',
+        }),
+      )
     }
   })
 

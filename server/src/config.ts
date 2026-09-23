@@ -36,6 +36,7 @@ export interface ServerConfig {
   extraNewsRssSources: readonly RssSourceConfig[]
   marketDbPath: string
   shadowRunId: string
+  simulationsReportPath: string
   krakenWsUrl: string
   krakenRestUrl: string
   marketStaleAfterMs: number
@@ -133,6 +134,11 @@ export function serverConfigFrom(
     extraNewsRssSources: parseExtraRssSources(env.NEWS_EXTRA_RSS_FEEDS),
     marketDbPath: stringValue(env, 'MARKET_DB_PATH', './data/market.sqlite'),
     shadowRunId: stringValue(env, 'SHADOW_RUN_ID', 'shadow:BTC-EUR'),
+    simulationsReportPath: stringValue(
+      env,
+      'SIMULATIONS_REPORT_PATH',
+      './data/simulations-report.json',
+    ),
     krakenWsUrl: stringValue(env, 'KRAKEN_WS_URL', 'wss://ws.kraken.com/v2'),
     krakenRestUrl: stringValue(
       env,

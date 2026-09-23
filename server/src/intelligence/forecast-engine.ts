@@ -9,6 +9,11 @@ import {
   type TimestampMs,
 } from './contracts.ts'
 import { contentHashFor } from './forecast-hashing.ts'
+import { assertKnownSimulationRule } from './simulations/candidate-manifest.ts'
+import {
+  simulationRule,
+  type SimulationRuleConfig,
+} from './simulations/rule-registry.ts'
 
 export const FORECAST_MODEL_VERSION = 'deterministic-baseline.v1'
 export const FORECAST_RULE_VERSION = 'technical-direction.v1'
@@ -44,6 +49,14 @@ export interface ForecastEngineInput {
   readonly newsEvidenceReferences: readonly NewsEvidenceReference[]
   readonly sourceMode?: ForecastSourceMode
   readonly replayRunId?: string | null
+  /**
+   * Additive simulation dispatch. Absent on the production path, which keeps
+   * the hard-coded rule version and probability mapping exactly as before.
+   * When present, both fields are required and the version must be
+   * pre-registered in the simulations manifest.
+   */
+  readonly ruleVersion?: string
+  readonly ruleConfig?: SimulationRuleConfig
 }
 
 export function generateForecast(input: ForecastEngineInput): ForecastRecord {
@@ -60,17 +73,53 @@ export function generateForecast(input: ForecastEngineInput): ForecastRecord {
   const sourceMode: ForecastSourceMode = input.sourceMode ?? 'shadow_live'
   const replayRunId =
     sourceMode === 'historical_replay' ? (input.replayRunId ?? null) : null
+  const dispatchRule =
+    input.ruleVersion !== undefined || input.ruleConfig !== undefined
+  if (
+    dispatchRule &&
+    (input.ruleVersion === undefined || input.ruleConfig === undefined)
+  )
+    throw new Error(
+      'Simulation rule dispatch requires both ruleVersion and ruleConfig.',
+    )
+  if (input.ruleVersion !== undefined)
+    assertKnownSimulationRule(input.ruleVersion)
+  const ruleVersion = input.ruleVersion ?? FORECAST_RULE_VERSION
 
-  const abstentionReason = futureNews
+  const engineAbstention = futureNews
     ? 'future_news_evidence'
     : determineAbstentionReason(input, eligibleCandles)
+  let abstentionReason = engineAbstention
+  let probabilities: {
+    readonly up: number
+    readonly down: number
+    readonly flat: number
+  }
+  if (abstentionReason !== undefined) {
+    probabilities = neutralProbabilities()
+  } else if (input.ruleConfig === undefined) {
+    probabilities = probabilitiesForFeatures(
+      input.referencePrice,
+      input.technicalFeatureSnapshot,
+    )
+  } else {
+    const ruleOutput = simulationRule(
+      input.referencePrice,
+      input.technicalFeatureSnapshot,
+      input.ruleConfig,
+    )
+    if (ruleOutput.abstentionReason !== undefined) {
+      abstentionReason = ruleOutput.abstentionReason
+      probabilities = neutralProbabilities()
+    } else {
+      probabilities = {
+        up: ruleOutput.up,
+        down: ruleOutput.down,
+        flat: ruleOutput.flat,
+      }
+    }
+  }
   const abstained = abstentionReason !== undefined
-  const probabilities = abstained
-    ? neutralProbabilities()
-    : probabilitiesForFeatures(
-        input.referencePrice,
-        input.technicalFeatureSnapshot,
-      )
   const withoutHash: Omit<ForecastRecord, 'contentHash'> = {
     id: input.id,
     version: input.version,
@@ -88,7 +137,7 @@ export function generateForecast(input: ForecastEngineInput): ForecastRecord {
     dataFreshness: input.dataFreshness,
     dataGaps: input.dataGaps,
     modelVersion: FORECAST_MODEL_VERSION,
-    ruleVersion: FORECAST_RULE_VERSION,
+    ruleVersion,
     sourceMode,
     replayRunId,
     abstained,

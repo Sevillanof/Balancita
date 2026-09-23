@@ -189,6 +189,12 @@ export interface TechnicalFeatureSnapshot {
     readonly missingCandles: number
   }
   readonly values: Readonly<Record<string, number>>
+  /**
+   * Additive lineage only: which parameter set produced the feature values.
+   * Absent on records written before the simulations harness existed; never
+   * required by validation so existing schemas keep working unchanged.
+   */
+  readonly paramSetVersion?: string
 }
 
 export interface NewsEvidenceReference {

@@ -184,7 +184,9 @@ describe('BtcEurDashboard main screen (Phase 1)', () => {
     const actions = screen.getByRole('group', {
       name: 'Acciones de trading',
     })
-    expect(within(actions).getAllByRole('button')).toHaveLength(3)
+    // Comprar / Vender / Auto Trade stay untouched; Simulaciones is the
+    // additive fourth control opening the strategy visualization.
+    expect(within(actions).getAllByRole('button')).toHaveLength(4)
     expect(
       within(actions).getByRole('button', { name: 'Comprar' }),
     ).toBeEnabled()
@@ -194,6 +196,9 @@ describe('BtcEurDashboard main screen (Phase 1)', () => {
     expect(
       within(actions).getByRole('button', { name: 'Auto Trade' }),
     ).toBeDisabled()
+    expect(
+      within(actions).getByRole('button', { name: 'Simulaciones' }),
+    ).toBeEnabled()
     expect(
       screen.queryByRole('button', { name: 'Simulación' }),
     ).not.toBeInTheDocument()
