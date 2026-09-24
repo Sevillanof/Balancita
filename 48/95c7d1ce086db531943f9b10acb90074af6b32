@@ -1,0 +1,29 @@
+server/src/app/app.ts
+  s_c6a9ddb90248e9::t_690398a30e2dcb 536-570
+server/src/features/market-data/market-store.ts
+  s_c6a9ddb90248e9::t_02918043388307 480-503
+src/app/FastReplaySection.test.tsx
+  s_c6a9ddb90248e9::t_7b76aa0ec5c50d 77-78,135
+src/app/FastReplaySection.tsx
+  s_c6a9ddb90248e9::t_900844a97140dc 28-30,67-69,300,319-353,355,358
+src/app/dashboard.css
+  s_c6a9ddb90248e9::t_896798389c6a75 382-413
+src/features/price-chart/presentation/PriceChart.tsx
+  s_c6a9ddb90248e9::t_0033e939fb2470 18,114,138-139,198-202
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4895c7d1ce086db531943f9b10acb90074af6b32",
+  "prompts": {},
+  "sessions": {
+    "s_c6a9ddb90248e9": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f2b919b30ffe6eDBKIwEBB4t6d",
+        "model": "gpt-6-luna-fast"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
