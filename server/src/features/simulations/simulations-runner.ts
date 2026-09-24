@@ -37,11 +37,14 @@ import {
   type TradeSimSignal,
 } from './trade-simulation.ts'
 import { splitByTime } from './time-split.ts'
+import { confirmationCohort, selectSeededTimeWindow } from './sample-window.ts'
+import { candidateForId } from './candidate-manifest.ts'
+import { writeSimulationReportArchive } from './simulations-history.ts'
 
 export const SIMULATIONS_DEFAULT_HORIZON: ForecastHorizon = '15m'
 export const SIMULATIONS_DEFAULT_SELECTION_PCT = 0.7
 export const SIMULATIONS_REPORT_FILE_VERSION =
-  'simulations-report-file.v2' as const
+  'simulations-report-file.v3' as const
 
 export interface SimulationsRunnerOptions {
   /** Live market database. Opened strictly read-only, never written. */
@@ -67,6 +70,8 @@ export interface SimulationsRunnerOptions {
   readonly entryThreshold?: number
   /** Exit-to-flat threshold on probabilityUp (default 0.45). */
   readonly exitThreshold?: number
+  readonly stage?: 'smoke' | 'confirm'
+  readonly seed?: number
 }
 
 export interface HorizonSimulationResult {
@@ -94,6 +99,15 @@ export interface SimulationsReportFile {
   readonly selectionPct: number
   readonly window: { readonly since: TimestampMs; readonly until: TimestampMs }
   readonly request: SimulationRequestIdentity
+  readonly sample?: {
+    readonly stage: 'smoke' | 'confirm'
+    readonly seed: number
+    readonly since: TimestampMs
+    readonly until: TimestampMs
+    readonly candidateIds: readonly string[]
+    readonly horizons: readonly ForecastHorizon[]
+    readonly smokeReportHash?: string
+  }
   readonly reports: readonly SimulationComparisonReport[]
 }
 
@@ -111,6 +125,9 @@ export interface SimulationRequestIdentity {
   readonly tradeCostsVersion: string
   readonly commissionRate: number
   readonly slippageRate: number
+  readonly stage?: 'smoke' | 'confirm'
+  readonly seed?: number
+  readonly candidateIds?: readonly string[]
 }
 
 /**
@@ -127,6 +144,13 @@ export function runSimulationsFromLiveDb(
   if (options.horizons.length === 0) {
     throw new Error('At least one forecast horizon is required.')
   }
+  if (
+    (options.stage === 'smoke' &&
+      JSON.stringify(options.horizons) !== '["15m"]') ||
+    (options.stage === 'confirm' &&
+      JSON.stringify(options.horizons) !== '["15m","1h"]')
+  )
+    throw new Error('Sample stage requires its prescribed horizon set.')
   const selectionPct = options.selectionPct ?? SIMULATIONS_DEFAULT_SELECTION_PCT
   if (!Number.isFinite(selectionPct) || selectionPct <= 0 || selectionPct >= 1)
     throw new Error(
@@ -170,14 +194,70 @@ export function runSimulationsFromLiveDb(
   let observations
   try {
     const rows = readKrakenObservationRows(live, {
-      ...(options.since === undefined ? {} : { since: options.since }),
-      ...(options.until === undefined ? {} : { until: options.until }),
+      ...(options.stage === undefined && options.since !== undefined
+        ? { since: options.since }
+        : {}),
+      ...(options.stage === undefined && options.until !== undefined
+        ? { until: options.until }
+        : {}),
     })
     observations = options.latestContiguous
       ? latestCleanObservations(rows)
       : rows
   } finally {
     live.close()
+  }
+  let sample: SimulationsReportFile['sample']
+  if (options.stage !== undefined) {
+    if (!Number.isSafeInteger(options.seed) || options.seed! < 0)
+      throw new Error(
+        'Sample stages require a non-negative safe integer --seed.',
+      )
+    const seed = options.seed!
+    const minute = 60_000
+    let candidateIds = SIMULATION_CANDIDATES.map(
+      (candidate) => candidate.candidateId,
+    )
+    let smokeReportHash: string | undefined
+    let constraints: { after?: number; maxGapMs: number } = {
+      maxGapMs: 120_000,
+    }
+    const duration =
+      options.stage === 'smoke' ? 60 * minute : 3 * 24 * 60 * minute
+    if (options.stage === 'confirm') {
+      const prior = readCachedReport(options.reportPath)
+      const cohort = confirmationCohort(
+        prior,
+        simulationManifestHash(),
+        new Set(
+          SIMULATION_CANDIDATES.map((candidate) => candidate.candidateId),
+        ),
+      )
+      candidateIds = [...cohort.candidateIds]
+      candidateIds.forEach(candidateForId)
+      constraints = {
+        after: cohort.embargoedUntil,
+        maxGapMs: 120_000,
+      }
+      smokeReportHash = cohort.smokeReportHash
+    }
+    const chosen = selectSeededTimeWindow(
+      observations,
+      duration,
+      seed,
+      (row) => row.eventTime,
+      constraints,
+    )
+    observations = [...chosen.values]
+    sample = {
+      stage: options.stage,
+      seed,
+      since: chosen.since as TimestampMs,
+      until: chosen.until as TimestampMs,
+      candidateIds,
+      horizons: [...options.horizons],
+      ...(smokeReportHash === undefined ? {} : { smokeReportHash }),
+    }
   }
   const dataset = freezeDatasetFromObservations(observations)
   const manifestHash = simulationManifestHash()
@@ -188,6 +268,16 @@ export function runSimulationsFromLiveDb(
     entryThreshold,
     exitThreshold,
   })
+  const stageRequest: SimulationRequestIdentity = {
+    ...request,
+    ...(sample === undefined
+      ? {}
+      : {
+          stage: sample.stage,
+          seed: sample.seed,
+          candidateIds: sample.candidateIds,
+        }),
+  }
 
   const cached = readCachedReport(options.reportPath)
   if (
@@ -195,7 +285,7 @@ export function runSimulationsFromLiveDb(
     cached.datasetHash === dataset.datasetHash &&
     cached.importVersion === dataset.importVersion &&
     cached.manifestHash === manifestHash &&
-    sameSimulationRequest(cached.request, request)
+    sameSimulationRequest(cached.request, stageRequest)
   ) {
     return {
       importVersion: cached.importVersion,
@@ -229,7 +319,12 @@ export function runSimulationsFromLiveDb(
     for (const horizon of options.horizons) {
       const scored: SimulationScoredEntry[] = []
       const signalsByCandidate: Record<string, TradeSimSignal[]> = {}
-      const candidates = SIMULATION_CANDIDATES.map((candidate) => {
+      const microReadiness: Record<string, { priorReadyCount: number; forecastOrigins: number }> = {}
+      const candidateSet =
+        sample === undefined
+          ? SIMULATION_CANDIDATES
+          : sample.candidateIds.map(candidateForId)
+      const candidates = candidateSet.map((candidate) => {
         const runId = [
           'sim',
           dataset.importVersion,
@@ -243,13 +338,27 @@ export function runSimulationsFromLiveDb(
           runId,
           candidateId: candidate.candidateId,
         })
+        const targetsByTime = new Map(result.microTargets.map((entry) => [entry.time, entry]))
         signalsByCandidate[candidate.candidateId] = result.forecasts.map(
           (forecast) => ({
             time: forecast.asOfTimestamp,
             probabilityUp: forecast.probabilityUp,
             probabilityDown: forecast.probabilityDown,
             abstained: forecast.abstained,
+            ...(candidate.microStrategy === undefined
+              ? {}
+              : { directTarget: targetsByTime.get(forecast.asOfTimestamp)?.target ?? 'flat' }),
           }),
+        )
+        if (candidate.microStrategy !== undefined) {
+          const postWarmup = result.microTargets.slice(50)
+          microReadiness[candidate.candidateId] = {
+            priorReadyCount: postWarmup.filter((entry) => entry.priorReady).length,
+            forecastOrigins: postWarmup.length,
+          }
+        }
+        const eligibleMicroTimes = new Set(
+          result.microTargets.filter((entry) => entry.forecastEligible).map((entry) => entry.time),
         )
         const byId = new Map(
           result.forecasts.map((forecast) => [forecast.id, forecast]),
@@ -257,6 +366,7 @@ export function runSimulationsFromLiveDb(
         for (const outcome of result.outcomes) {
           const forecast = byId.get(outcome.forecastId)
           if (forecast === undefined) continue
+          if (candidate.microStrategy !== undefined && !eligibleMicroTimes.has(forecast.asOfTimestamp)) continue
           scored.push({
             candidateId: candidate.candidateId,
             asOfTimestamp: forecast.asOfTimestamp,
@@ -283,11 +393,19 @@ export function runSimulationsFromLiveDb(
       const ordered = [...scored].sort(
         (left, right) => left.asOfTimestamp - right.asOfTimestamp,
       )
-      const { selection, validation, cutTimestamp } = splitByTime(
-        ordered,
+      const legacyIds = new Set(
+        candidates.filter((candidate) => candidateForId(candidate.candidateId).microStrategy === undefined)
+          .map((candidate) => candidate.candidateId),
+      )
+      const legacyOrdered = ordered.filter((entry) => legacyIds.has(entry.candidateId))
+      const { selection: legacySelection, validation: legacyValidation, cutTimestamp } = splitByTime(
+        legacyOrdered,
         selectionPct,
         (entry) => entry.asOfTimestamp,
       )
+      const microEntries = ordered.filter((entry) => !legacyIds.has(entry.candidateId))
+      const selection = [...legacySelection, ...microEntries.filter((entry) => entry.asOfTimestamp < cutTimestamp)]
+      const validation = [...legacyValidation, ...microEntries.filter((entry) => entry.asOfTimestamp >= cutTimestamp)]
       const report = buildComparisonReport({
         horizon,
         datasetHash: dataset.datasetHash,
@@ -297,6 +415,7 @@ export function runSimulationsFromLiveDb(
         selection,
         validation,
         candidates,
+        microReadiness,
         profitability: profitabilityInputFor({
           candles: dataset.candles,
           cutTimestamp,
@@ -319,7 +438,8 @@ export function runSimulationsFromLiveDb(
       datasetHash: dataset.datasetHash,
       manifestHash,
       selectionPct,
-      request,
+      request: stageRequest,
+      ...(sample === undefined ? {} : { sample }),
       window: {
         since: dataset.candles[0]!.bucketStart,
         until: dataset.candles.at(-1)!.bucketEnd,
@@ -327,21 +447,17 @@ export function runSimulationsFromLiveDb(
       reports: horizons.map((entry) => entry.report),
     }
     mkdirSync(dirname(resolve(options.reportPath)), { recursive: true })
+    writeSimulationReportArchive(resolve(options.reportPath), file)
     // Retain the earlier manifest/dataset report before replacing the latest
     // pointer. Never erase poor performers or rewrite a frozen comparison.
     try {
       const oldRaw = readFileSync(resolve(options.reportPath), 'utf8')
-      const old = JSON.parse(oldRaw) as {
-        manifestHash?: string
-        datasetHash?: string
-      }
-      if (old.manifestHash !== undefined && old.datasetHash !== undefined) {
-        const archive = `${resolve(options.reportPath)}.${old.manifestHash.slice(0, 16)}.${old.datasetHash.slice(0, 16)}.json`
-        try {
-          writeFileSync(archive, oldRaw, { flag: 'wx' })
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
-        }
+      const old = JSON.parse(oldRaw) as Record<string, unknown>
+      if (
+        typeof old.manifestHash === 'string' &&
+        typeof old.datasetHash === 'string'
+      ) {
+        writeSimulationReportArchive(resolve(options.reportPath), old)
       }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error

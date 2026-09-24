@@ -18,6 +18,38 @@
   row-gap: var(--space-3);
 }
 
+.dashboard__service-status {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+}
+
+.dashboard__service-status > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.dashboard__service-status strong {
+  font-size: var(--text-sm);
+}
+
+.dashboard__service-status span,
+.dashboard__service-status small {
+  color: var(--color-muted);
+  overflow-wrap: anywhere;
+}
+
+.dashboard__service-status small {
+  font-size: var(--text-xs);
+}
+
 .dashboard__grid > * {
   min-width: 0;
 }
@@ -30,9 +62,66 @@
   grid-area: available;
 }
 
-.dashboard__grid > .chart-panel {
+.dashboard__grid > .dashboard__chart-surface {
   grid-area: chart;
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  gap: var(--space-2);
   overflow: hidden;
+}
+
+.dashboard__chart-mode,
+.fast-replay__controls,
+.fast-replay__playback {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.dashboard__chart-mode button[aria-pressed='true'],
+.fast-replay__playback button[aria-pressed='true'] {
+  color: var(--color-accent);
+  font-weight: var(--weight-bold);
+}
+
+.dashboard__chart-surface > .chart-panel,
+.dashboard__chart-surface > .fast-replay {
+  min-height: 0;
+  flex: 1;
+}
+
+.fast-replay {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  overflow: auto;
+}
+
+.fast-replay__controls label {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.fast-replay__results,
+.fast-replay [aria-label='Historial de Fast Replay'] {
+  color: var(--color-muted);
+  font-size: var(--text-sm);
+}
+
+.fast-replay [aria-label='Historial de Fast Replay'] h3 {
+  margin: var(--space-2) 0;
+  color: var(--color-text);
+}
+
+.fast-replay [aria-label='Historial de Fast Replay'] ul {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
 }
 
 .dashboard__grid > .news {
@@ -58,6 +147,7 @@
 
 .dashboard__brand,
 .dashboard__available {
+  position: relative;
   padding: var(--space-5);
   background: var(--color-surface);
   border: 1px solid var(--color-border);
@@ -97,6 +187,8 @@
 }
 
 .dashboard__available-amount {
+  display: block;
+  width: 100%;
   min-width: 0;
   margin: 0;
   overflow: hidden;
@@ -105,6 +197,58 @@
   font-weight: var(--weight-bold);
   line-height: var(--leading-tight);
   white-space: nowrap;
+  padding: 0;
+  color: inherit;
+  text-align: inherit;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+
+.dashboard__available-amount:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 3px;
+}
+
+.dashboard__order-history {
+  position: absolute;
+  z-index: 10;
+  top: calc(100% + var(--space-2));
+  right: 0;
+  width: min(24rem, calc(100vw - 2rem));
+  max-height: min(60vh, 28rem);
+  overflow: auto;
+  padding: var(--space-4);
+  text-align: left;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+}
+
+.dashboard__order-history h2 {
+  margin: 0 0 var(--space-3);
+  font-size: var(--text-md);
+}
+
+.dashboard__order-history ul {
+  display: grid;
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.dashboard__order-history li {
+  display: grid;
+  gap: var(--space-1);
+  padding-bottom: var(--space-3);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.dashboard__order-history time {
+  color: var(--color-muted);
+  font-size: var(--text-sm);
 }
 
 .dashboard__market-status {
@@ -228,4 +372,10 @@
 
 .dashboard__state h2 {
   margin-top: 0;
+}
+
+@media (max-width: 48rem) {
+  .dashboard__service-status {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }

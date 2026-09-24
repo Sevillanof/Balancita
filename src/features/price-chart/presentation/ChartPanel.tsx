@@ -1,8 +1,9 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import type { Candle, Quote } from '../../market-data/domain/market-data.ts'
 import type { CandleHistoryStatus } from '../../analysis/presentation/useCandleHistory'
 import {
   mergeQuoteIntoCandles,
+  reconcileLiveCandles,
   toCandlestickDataset,
 } from './candlestick-data.ts'
 import PriceChart from './PriceChart.tsx'
@@ -25,16 +26,35 @@ export default function ChartPanel({
   quote,
   onRetry,
 }: ChartPanelProps) {
+  const [liveState, setLiveState] = useState(() => ({
+    restCandles: candles,
+    quote,
+    candles:
+      quote === undefined
+        ? [...candles]
+        : mergeQuoteIntoCandles(candles, quote),
+  }))
+  if (
+    status === 'ready' &&
+    (liveState.restCandles !== candles || liveState.quote !== quote)
+  ) {
+    const reconciled = reconcileLiveCandles(candles, liveState.candles)
+    setLiveState({
+      restCandles: candles,
+      quote,
+      candles:
+        quote === undefined
+          ? reconciled
+          : mergeQuoteIntoCandles(reconciled, quote),
+    })
+  }
+
   const data = useMemo(
     () =>
       status === 'ready'
-        ? toCandlestickDataset(
-            quote === undefined
-              ? candles
-              : mergeQuoteIntoCandles(candles, quote),
-          )
+        ? toCandlestickDataset(reconcileLiveCandles(candles, liveState.candles))
         : [],
-    [status, candles, quote],
+    [status, candles, liveState.candles],
   )
 
   return (

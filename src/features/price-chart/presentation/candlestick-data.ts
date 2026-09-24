@@ -41,7 +41,9 @@ export function mergeQuoteIntoCandles(
   }
 
   return [
-    ...candles,
+    ...candles.map((candle) =>
+      candle.isClosed === false ? { ...candle, isClosed: true } : candle,
+    ),
     {
       time: new Date(quoteBucket).toISOString(),
       open: quote.price,
@@ -52,6 +54,36 @@ export function mergeQuoteIntoCandles(
       isClosed: false,
     },
   ]
+}
+
+/** REST candles win on overlapping timestamps; unmatched live candles are retained. */
+export function reconcileLiveCandles(
+  candlesFromRest: readonly Candle[],
+  liveCandles: readonly Candle[],
+): Candle[] {
+  const restTimes = new Set(candlesFromRest.map((candle) => candle.time))
+  const liveByTime = new Map(liveCandles.map((candle) => [candle.time, candle]))
+  const latestRestTime = candlesFromRest.at(-1)?.time
+  const laterLiveCandles = liveCandles.filter(
+    (candle) =>
+      !restTimes.has(candle.time) &&
+      (latestRestTime === undefined || candle.time > latestRestTime),
+  )
+  const reconciledRest = candlesFromRest.map((restCandle) => {
+    const liveCandle = liveByTime.get(restCandle.time)
+    if (liveCandle === undefined || restCandle.isClosed === true)
+      return restCandle
+    return {
+      ...restCandle,
+      high: liveCandle.high,
+      low: liveCandle.low,
+      close: liveCandle.close,
+      isClosed: liveCandle.isClosed ?? restCandle.isClosed,
+    }
+  })
+  return [...reconciledRest, ...laterLiveCandles].sort(
+    (left, right) => Date.parse(left.time) - Date.parse(right.time),
+  )
 }
 
 export function toCandlestickData(candle: Candle): CandlestickData {

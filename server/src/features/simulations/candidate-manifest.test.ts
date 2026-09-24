@@ -9,9 +9,37 @@ import {
 } from './candidate-manifest.ts'
 
 describe('simulation candidate manifest', () => {
-  it('is versioned as v2 with the additive candidate set', () => {
-    expect(SIMULATION_MANIFEST_VERSION).toBe('simulations-manifest.v2')
-    expect(SIMULATION_CANDIDATES.length).toBe(21)
+  it('pre-registers three distinct composite hypotheses from existing features', () => {
+    const composites = SIMULATION_CANDIDATES.filter(
+      (candidate) => candidate.family === 'composite',
+    )
+    expect(composites.map((candidate) => candidate.candidateId)).toEqual([
+      'composite-trend-confirmation',
+      'composite-rsi-atr-reversion',
+      'composite-session-trend',
+    ])
+    expect(composites[0]?.rule).toMatchObject({
+      useEmaForTrend: true,
+      macdSource: 'histogram',
+      slopeEpsilon: 0.25,
+    })
+    expect(composites[1]?.rule).toMatchObject({
+      rsiContrarian: true,
+      atrGateRatio: 0.025,
+    })
+    expect(composites[2]?.rule).toMatchObject({
+      useEmaForTrend: true,
+      sessionGateUtc: [7, 17],
+      quorum: 2,
+    })
+    expect(composites.every((candidate) => candidate.theory.length > 20)).toBe(
+      true,
+    )
+  })
+
+  it('is versioned as v3 with the original 24 plus four experimental candidates', () => {
+    expect(SIMULATION_MANIFEST_VERSION).toBe('simulations-manifest.v3')
+    expect(SIMULATION_CANDIDATES.length).toBe(28)
   })
 
   it('has unique candidate ids and rule versions', () => {
@@ -121,8 +149,8 @@ describe('simulation candidate manifest', () => {
     )
   })
 
-  it('appends ten theory-motivated v2 candidates from new families only', () => {
-    const v2 = SIMULATION_CANDIDATES.slice(11).map((candidate) => ({
+  it('preserves the thirteen theory-motivated v2 candidates from new families', () => {
+    const v2 = SIMULATION_CANDIDATES.slice(11, 24).map((candidate) => ({
       candidateId: candidate.candidateId,
       family: candidate.family,
       ruleVersion: candidate.ruleVersion,
@@ -178,7 +206,33 @@ describe('simulation candidate manifest', () => {
         family: 'session-gate',
         ruleVersion: 'simulation-session-gate.v1',
       },
+      {
+        candidateId: 'composite-trend-confirmation',
+        family: 'composite',
+        ruleVersion: 'simulation-composite-trend.v1',
+      },
+      {
+        candidateId: 'composite-rsi-atr-reversion',
+        family: 'composite',
+        ruleVersion: 'simulation-composite-reversion.v1',
+      },
+      {
+        candidateId: 'composite-session-trend',
+        family: 'composite',
+        ruleVersion: 'simulation-composite-session.v1',
+      },
     ])
+  })
+
+  it('appends the four separately versioned micro strategies', () => {
+    expect(SIMULATION_CANDIDATES.slice(24).map(({ candidateId, ruleVersion, microStrategy }) => ({ candidateId, ruleVersion, microStrategy }))).toEqual([
+      { candidateId: 'micro-trend-pullback', ruleVersion: 'simulation-micro-trend-pullback.v1', microStrategy: 'trend-pullback' },
+      { candidateId: 'micro-bollinger-reversion', ruleVersion: 'simulation-micro-bollinger-reversion.v1', microStrategy: 'bollinger-reversion' },
+      { candidateId: 'micro-donchian-breakout', ruleVersion: 'simulation-micro-donchian-breakout.v1', microStrategy: 'donchian-breakout' },
+      { candidateId: 'micro-regime-adapter', ruleVersion: 'simulation-micro-regime-adapter.v1', microStrategy: 'regime-adapter' },
+    ])
+    expect(SIMULATION_CANDIDATES.slice(24).every((candidate) => candidate.probabilityMapVersion === 'fixed-proportional-shift-v1')).toBe(true)
+    expect(SIMULATION_CANDIDATES[24]?.params).toMatchObject({ smaPeriod: 50, emaPeriod: 21, rsiPeriod: 14, atrPeriod: 14 })
   })
 
   it('records a one-line theory justification for every candidate', () => {

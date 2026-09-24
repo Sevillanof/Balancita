@@ -3,6 +3,7 @@ import type { UTCTimestamp } from 'lightweight-charts'
 import type { Candle, Quote } from '../../market-data/domain/market-data.ts'
 import {
   mergeQuoteIntoCandles,
+  reconcileLiveCandles,
   toCandlestickData,
   toCandlestickDataset,
 } from './candlestick-data.ts'
@@ -92,6 +93,45 @@ describe('mergeQuoteIntoCandles', () => {
     ])
   })
 
+  it('accumulates updates within a minute and closes the previous live candle on rollover', () => {
+    const first = mergeQuoteIntoCandles(
+      [],
+      makeQuote({
+        price: 100,
+        eventTime: '2024-01-01T00:00:05.000Z',
+      }),
+    )
+    const sameMinute = mergeQuoteIntoCandles(
+      first,
+      makeQuote({
+        price: 105,
+        eventTime: '2024-01-01T00:00:40.000Z',
+      }),
+    )
+    const nextMinute = mergeQuoteIntoCandles(
+      sameMinute,
+      makeQuote({
+        price: 103,
+        eventTime: '2024-01-01T00:01:10.000Z',
+      }),
+    )
+
+    expect(sameMinute).toHaveLength(1)
+    expect(sameMinute[0]).toMatchObject({
+      open: 100,
+      high: 105,
+      low: 100,
+      close: 105,
+    })
+    expect(nextMinute).toHaveLength(2)
+    expect(nextMinute[0]).toMatchObject({ close: 105, isClosed: true })
+    expect(nextMinute[1]).toMatchObject({
+      open: 103,
+      close: 103,
+      isClosed: false,
+    })
+  })
+
   it('does not mutate a closed candle', () => {
     const candles = [
       makeCandle({
@@ -127,6 +167,85 @@ describe('mergeQuoteIntoCandles', () => {
 
     expect(merged.at(-1)?.close).toBe(111)
     expect(merged.at(-1)?.time).toBe('2024-01-01T00:01:00.000Z')
+  })
+})
+
+describe('reconcileLiveCandles', () => {
+  it('merges a live update into provisional REST OHLC without replacing REST open or volume', () => {
+    const rest = makeCandle({
+      time: '2024-01-01T00:00:00.000Z',
+      open: 100,
+      high: 105,
+      low: 99,
+      close: 104,
+      volume: 42,
+      isClosed: false,
+    })
+    const live = makeCandle({
+      ...rest,
+      open: 98,
+      high: 110,
+      low: 97,
+      close: 108,
+      volume: 0,
+      isClosed: true,
+    })
+
+    expect(reconcileLiveCandles([rest], [live])).toEqual([
+      {
+        ...rest,
+        high: 110,
+        low: 97,
+        close: 108,
+        isClosed: true,
+      },
+    ])
+  })
+
+  it('keeps closed REST candles authoritative over a live candle at the same time', () => {
+    const rest = makeCandle({
+      time: '2024-01-01T00:00:00.000Z',
+      open: 100,
+      high: 105,
+      low: 99,
+      close: 104,
+      volume: 42,
+      isClosed: true,
+    })
+    const live = makeCandle({
+      ...rest,
+      high: 110,
+      low: 97,
+      close: 108,
+      volume: 0,
+      isClosed: false,
+    })
+
+    expect(reconcileLiveCandles([rest], [live])).toEqual([rest])
+  })
+
+  it('prefers refreshed REST candles on overlap and retains later live bars', () => {
+    const rest = [
+      makeCandle({
+        time: '2024-01-01T00:00:00.000Z',
+        close: 110,
+        isClosed: true,
+      }),
+    ]
+    const live = [
+      makeCandle({
+        time: '2024-01-01T00:00:00.000Z',
+        close: 105,
+        isClosed: false,
+      }),
+      makeCandle({
+        time: '2024-01-01T00:01:00.000Z',
+        close: 106,
+        isClosed: false,
+      }),
+    ]
+
+    expect(reconcileLiveCandles(rest, live)).toEqual([rest[0], live[1]])
   })
 })
 

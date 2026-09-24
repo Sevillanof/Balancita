@@ -26,6 +26,7 @@ describe('useWatchlist', () => {
     const { result } = renderHook(() => useWatchlist(provider))
 
     await waitFor(() => expect(result.current.status).toBe('empty'))
+    expect(result.current.connectionStatus).toBe('unavailable')
     expect(result.current.instruments).toEqual([])
     expect(provider.subscribeCalls).toHaveLength(0)
   })
@@ -37,6 +38,7 @@ describe('useWatchlist', () => {
     const { result } = renderHook(() => useWatchlist(provider))
 
     await waitFor(() => expect(result.current.status).toBe('error'))
+    expect(result.current.connectionStatus).toBe('error')
     expect(result.current.instruments).toEqual([])
     expect(provider.subscribeCalls).toHaveLength(0)
 
@@ -58,6 +60,7 @@ describe('useWatchlist', () => {
 
     await waitFor(() => expect(result.current.status).toBe('error'))
     expect(result.current.instruments).toEqual([])
+    expect(result.current.connectionStatus).toBe('error')
   })
 
   it('applies an incoming quote only to its matching instrument', async () => {
@@ -89,11 +92,13 @@ describe('useWatchlist', () => {
 
     await waitFor(() => expect(result.current.status).toBe('ready'))
     expect(provider.listenerCount).toBe(1)
+    expect(result.current.connectionStatus).toBe('mock')
 
-    unmount()
+    act(() => unmount())
 
     expect(provider.unsubscribeCalls).toBe(1)
     expect(provider.listenerCount).toBe(0)
+    expect(result.current.connectionStatus).toBe('mock')
   })
 
   it('does not react to quotes emitted after unmount', async () => {

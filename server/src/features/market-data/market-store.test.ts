@@ -53,13 +53,64 @@ afterEach(() => {
 })
 
 describe('MarketStore', () => {
+  it('uses WAL and a 5000ms busy timeout for persistent databases', () => {
+    const path = makePath()
+    const store = new MarketStore({ path })
+    expect(store.sqliteSettings()).toEqual({
+      journalMode: 'wal',
+      busyTimeout: 5000,
+    })
+    store.close()
+  })
+
+  it('keeps in-memory stores usable with a 5000ms busy timeout', () => {
+    const store = new MarketStore({ path: ':memory:' })
+    expect(store.schemaVersion()).toBe(8)
+    expect(store.sqliteSettings()).toEqual({
+      journalMode: 'memory',
+      busyTimeout: 5000,
+    })
+    store.close()
+  })
   it('initializes the versioned schema at the injected path', () => {
     const store = new MarketStore({ path: makePath() })
 
-    expect(store.schemaVersion()).toBe(6)
+    expect(store.schemaVersion()).toBe(8)
     expect(store.observationCount()).toBe(0)
 
     store.close()
+  })
+
+  it('inserts closed OHLC batches atomically and ignores repeated timestamps', () => {
+    const store = new MarketStore({ path: makePath() })
+    const candles = [60, 120].map((timestamp) => ({
+      timestamp,
+      open: 10,
+      high: 11,
+      low: 9,
+      close: 10,
+      volume: 1,
+    }))
+
+    expect(store.insertOhlcCandles(candles)).toBe(2)
+    expect(store.insertOhlcCandles(candles)).toBe(0)
+    expect(store.ohlcCandleCount()).toBe(2)
+
+    store.close()
+  })
+
+  it('keeps the OHLC polling cursor and successful-sync time across store reopen', () => {
+    const path = makePath()
+    const first = new MarketStore({ path })
+    first.saveOhlcCollectorState(123, 456_000)
+    first.close()
+
+    const reopened = new MarketStore({ path })
+    expect(reopened.getOhlcCollectorState()).toEqual({
+      cursor: 123,
+      lastSuccessfulSync: 456_000,
+    })
+    reopened.close()
   })
 
   it('applies the current migration to an existing version-zero database', () => {
@@ -72,7 +123,7 @@ describe('MarketStore', () => {
     database.close()
 
     const store = new MarketStore({ path })
-    expect(store.schemaVersion()).toBe(6)
+    expect(store.schemaVersion()).toBe(8)
     expect(store.observationCount()).toBe(0)
     store.close()
   })
@@ -94,7 +145,7 @@ describe('MarketStore', () => {
       )
       .get()
     migratedDatabase.close()
-    expect(store.schemaVersion()).toBe(6)
+    expect(store.schemaVersion()).toBe(8)
     expect(ledgerTable).toEqual({ name: 'forecast_records' })
     store.close()
   })
@@ -211,7 +262,7 @@ describe('MarketStore', () => {
       lastSequence: 11,
       lastTradeId: 21,
       connectionRevision: 1,
-      schemaVersion: 6,
+      schemaVersion: 8,
     })
     expect(second.listGaps()).toEqual([
       expect.objectContaining({

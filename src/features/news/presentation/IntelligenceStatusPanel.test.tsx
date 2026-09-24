@@ -56,6 +56,8 @@ function stream(
     snapshot: baseSnapshot,
     error: null,
     reconnectAttempt: 0,
+    clientReceivedAtMs: null,
+    transportStatus: 'connected',
     ...overrides,
   }
 }

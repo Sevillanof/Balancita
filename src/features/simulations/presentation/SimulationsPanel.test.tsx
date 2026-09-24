@@ -166,9 +166,7 @@ describe('SimulationsPanel', () => {
         onRetry={() => {}}
       />,
     )
-    expect(screen.getByRole('status')).toHaveTextContent(
-      /cargando simulaciones/i,
-    )
+    expect(screen.getByText(/cargando simulaciones/i)).toBeInTheDocument()
   })
 
   it('shows the empty state with the generation command', () => {
@@ -180,9 +178,9 @@ describe('SimulationsPanel', () => {
         onRetry={() => {}}
       />,
     )
-    expect(screen.getByRole('status')).toHaveTextContent(
-      /aún no hay informe de simulaciones/i,
-    )
+    expect(
+      screen.getByText(/aún no hay informe de simulaciones/i),
+    ).toBeInTheDocument()
     expect(
       screen.getByText(/pnpm --dir server simulations:run/),
     ).toBeInTheDocument()
@@ -334,5 +332,104 @@ describe('SimulationsPanel', () => {
     expect(
       screen.queryByRole('article', { name: 'Comparación en horizonte 15m' }),
     ).not.toBeInTheDocument()
+  })
+
+  it('exposes independent smoke and confirmation actions with a visible seed', async () => {
+    const onSample = vi.fn()
+    render(
+      <SimulationsPanel
+        status="empty"
+        file={null}
+        error={null}
+        onRetry={() => {}}
+        onSample={onSample}
+      />,
+    )
+    await userEvent.clear(screen.getByLabelText(/semilla/i))
+    await userEvent.type(screen.getByLabelText(/semilla/i), '42')
+    await userEvent.click(
+      screen.getByRole('button', { name: /prueba rápida/i }),
+    )
+    expect(onSample).toHaveBeenLastCalledWith('smoke', 42)
+    await userEvent.click(screen.getByRole('button', { name: /confirmación/i }))
+    expect(onSample).toHaveBeenLastCalledWith('confirm', 42)
+  })
+
+  it('exposes accessible history loading, errors, empty state, and report selection', async () => {
+    const onSelectHistory = vi.fn()
+    const history = [
+      {
+        id: 'a'.repeat(64),
+        generatedAt: 1_000,
+        datasetHash: 'a'.repeat(64),
+        manifestHash: 'b'.repeat(64),
+        sample: { stage: 'smoke', seed: 7 },
+      },
+    ]
+    const { rerender } = render(
+      <SimulationsPanel
+        status="loading"
+        file={null}
+        error={null}
+        onRetry={() => {}}
+        historyStatus="loading"
+      />,
+    )
+    expect(screen.getByText(/cargando historial/i)).toBeInTheDocument()
+    rerender(
+      <SimulationsPanel
+        status="empty"
+        file={null}
+        error={null}
+        onRetry={() => {}}
+        historyStatus="error"
+        historyError="No se pudo cargar."
+      />,
+    )
+    expect(screen.getByRole('alert')).toHaveTextContent(/no se pudo cargar/i)
+    rerender(
+      <SimulationsPanel
+        status="empty"
+        file={null}
+        error={null}
+        onRetry={() => {}}
+        historyStatus="empty"
+      />,
+    )
+    expect(screen.getByText(/no hay informes guardados/i)).toBeInTheDocument()
+    rerender(
+      <SimulationsPanel
+        status="ready"
+        file={reportFile()}
+        error={null}
+        onRetry={() => {}}
+        history={history}
+        historyStatus="ready"
+        onSelectHistory={onSelectHistory}
+      />,
+    )
+    await userEvent.selectOptions(
+      screen.getByRole('combobox', { name: /historial/i }),
+      history[0]!.id,
+    )
+    expect(onSelectHistory).toHaveBeenCalledWith(history[0]!.id)
+    expect(
+      screen.getByRole('option', { name: /smoke.*semilla 7/i }),
+    ).toBeInTheDocument()
+  })
+
+  it('renders actionable refresh diagnostics to assist continuous-data recovery', () => {
+    render(
+      <SimulationsPanel
+        status="empty"
+        file={null}
+        error={null}
+        onRetry={() => {}}
+        refreshError="La ventana continua todavía no reúne 2 horas y 120 operaciones consecutivas."
+      />,
+    )
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      /2 horas y 120 operaciones/i,
+    )
   })
 })

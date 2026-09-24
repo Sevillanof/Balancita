@@ -4,6 +4,7 @@ import {
   DEFAULT_TECHNICAL_PARAMS,
   type TechnicalFeatureParams,
 } from '../technical-analysis/technical-features.ts'
+import { FIXED_PROBABILITY_MAP_VERSION } from './fixed-proportional-shift.ts'
 
 /**
  * Production rule version. Kept as a literal here (instead of importing it
@@ -12,7 +13,7 @@ import {
  */
 export const PRODUCTION_RULE_VERSION = 'technical-direction.v1'
 
-export const SIMULATION_MANIFEST_VERSION = 'simulations-manifest.v2' as const
+export const SIMULATION_MANIFEST_VERSION = 'simulations-manifest.v3' as const
 
 /**
  * Frozen outcome band for the whole comparison. Varying it per variant would
@@ -39,6 +40,14 @@ export type SimulationVariantFamily =
   | 'drop-leg'
   | 'strategy-ladder'
   | 'session-gate'
+  | 'composite'
+  | 'micro-strategy'
+
+export type MicroStrategy =
+  | 'trend-pullback'
+  | 'bollinger-reversion'
+  | 'donchian-breakout'
+  | 'regime-adapter'
 
 export type SimulationMacdSource = 'histogram' | 'line'
 
@@ -67,6 +76,7 @@ export interface SimulationRuleConfig {
   readonly atrDeadbandMultiplier: number
   readonly rsiContrarian: boolean
   readonly sessionGateUtc: readonly [number, number] | null
+  readonly requireTrendConfirmation: boolean
 }
 
 export interface SimulationCandidate {
@@ -79,6 +89,8 @@ export interface SimulationCandidate {
   readonly theory: string
   readonly entryThreshold?: number
   readonly exitThreshold?: number
+  readonly microStrategy?: MicroStrategy
+  readonly probabilityMapVersion?: typeof FIXED_PROBABILITY_MAP_VERSION
 }
 
 const BASE_RULE: SimulationRuleConfig = {
@@ -99,6 +111,7 @@ const BASE_RULE: SimulationRuleConfig = {
   atrDeadbandMultiplier: 0,
   rsiContrarian: false,
   sessionGateUtc: null,
+  requireTrendConfirmation: false,
 }
 
 function defaultParams(): TechnicalFeatureParams {
@@ -115,6 +128,7 @@ function candidate(
   params: TechnicalFeatureParams = defaultParams(),
   theory = 'Versioned hypothesis, measured against the unchanged production baseline.',
   thresholds?: { readonly entry: number; readonly exit: number },
+  microStrategy?: MicroStrategy,
 ): SimulationCandidate {
   return {
     candidateId,
@@ -123,6 +137,10 @@ function candidate(
     paramSetVersion: params.paramSetVersion ?? DEFAULT_PARAM_SET_VERSION,
     params,
     theory,
+    ...(microStrategy === undefined ? {} : { microStrategy }),
+    ...(microStrategy === undefined
+      ? {}
+      : { probabilityMapVersion: FIXED_PROBABILITY_MAP_VERSION }),
     ...(thresholds === undefined
       ? {}
       : { entryThreshold: thresholds.entry, exitThreshold: thresholds.exit }),
@@ -271,6 +289,63 @@ export const SIMULATION_CANDIDATES: readonly SimulationCandidate[] = [
     { sessionGateUtc: [7, 17] },
     defaultParams(),
     'UTC European session gate tests time-of-day exposure.',
+  ),
+  candidate(
+    'composite-trend-confirmation',
+    'composite',
+    'simulation-composite-trend.v1',
+    {
+      useEmaForTrend: true,
+      macdSource: 'histogram',
+      slopeEpsilon: 0.25,
+      requireTrendConfirmation: true,
+    },
+    defaultParams(),
+    'EMA trend direction is accepted only with confirming MACD histogram and structural slope votes.',
+  ),
+  candidate(
+    'composite-rsi-atr-reversion',
+    'composite',
+    'simulation-composite-reversion.v1',
+    { rsiContrarian: true, atrGateRatio: 0.025 },
+    defaultParams(),
+    'Contrarian RSI votes are evaluated only when ATR remains below the configured volatility ceiling.',
+  ),
+  candidate(
+    'composite-session-trend',
+    'composite',
+    'simulation-composite-session.v1',
+    { useEmaForTrend: true, sessionGateUtc: [7, 17], quorum: 2 },
+    defaultParams(),
+    'A UTC session gate requires at least two existing directional feature votes for a trend forecast.',
+  ),
+  candidate(
+    'micro-trend-pullback', 'micro-strategy', 'simulation-micro-trend-pullback.v1', {},
+    { ...defaultParams(), smaPeriod: 50, emaPeriod: 21, rsiPeriod: 14, atrPeriod: 14, paramSetVersion: 'micro-trend-pullback.v1' },
+    'Long while EMA9 exceeds EMA21, close exceeds SMA50 and RSI14 is below 42; exit below EMA21 or above RSI68.',
+    undefined,
+    'trend-pullback',
+  ),
+  candidate(
+    'micro-bollinger-reversion', 'micro-strategy', 'simulation-micro-bollinger-reversion.v1', {},
+    { ...defaultParams(), smaPeriod: 20, rsiPeriod: 14, atrPeriod: 14, paramSetVersion: 'micro-bollinger-reversion.v1' },
+    'Long below BB20 lower at RSI below 32 in a low ATR regime; exit at BB20 mid or RSI above 55.',
+    undefined,
+    'bollinger-reversion',
+  ),
+  candidate(
+    'micro-donchian-breakout', 'micro-strategy', 'simulation-micro-donchian-breakout.v1', {},
+    { ...defaultParams(), rsiPeriod: 14, atrPeriod: 14, paramSetVersion: 'micro-donchian-breakout.v1' },
+    'Long on a previous-20-bar Donchian breakout confirmed by prior-volume mean; exit below channel mid.',
+    undefined,
+    'donchian-breakout',
+  ),
+  candidate(
+    'micro-regime-adapter', 'micro-strategy', 'simulation-micro-regime-adapter.v1', {},
+    { ...defaultParams(), smaPeriod: 50, emaPeriod: 21, rsiPeriod: 14, atrPeriod: 14, paramSetVersion: 'micro-regime-adapter.v1' },
+    'Selects trend rules above ATR percentile 60 and range rules below 40, retaining the prior regime in between.',
+    undefined,
+    'regime-adapter',
   ),
 ]
 

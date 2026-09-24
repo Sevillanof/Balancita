@@ -91,12 +91,15 @@ export class FakeMarketDataProvider implements MarketDataProvider {
   subscribe(
     instrumentIds: InstrumentId[],
     onQuote: (quote: Quote) => void,
+    onStatus?: (status: 'mock' | 'stopped') => void,
   ): () => void {
     this.subscribeCalls.push([...instrumentIds])
     this.listeners.add(onQuote)
+    onStatus?.('mock')
     return () => {
       if (this.listeners.delete(onQuote)) {
         this.unsubscribeCalls += 1
+        onStatus?.('stopped')
       }
     }
   }
@@ -120,6 +123,12 @@ export function makeQuote(overrides: Partial<Quote> = {}): Quote {
     changePercent: overrides.changePercent ?? 0,
     timestamp: overrides.timestamp ?? '2026-09-20T12:00:00.000Z',
     status: overrides.status ?? 'mock',
+    ...(overrides.eventTime === undefined
+      ? {}
+      : { eventTime: overrides.eventTime }),
+    ...(overrides.tradeQuantity === undefined
+      ? {}
+      : { tradeQuantity: overrides.tradeQuantity }),
   }
 }
 

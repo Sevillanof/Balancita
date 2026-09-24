@@ -7,10 +7,10 @@ export interface TimeSplit<T> {
 }
 
 /**
- * Walk-forward split of time-ordered entries. The first `selectionShare`
- * fraction is the selection slice; the rest is the locked validation slice.
- * Index-based on caller-ordered input (callers pass time-ascending data), so
- * no random partition of the time series is ever performed.
+ * Walk-forward split of time-ordered entries, keeping every entry with the
+ * same timestamp together. The first `selectionShare` fraction of unique
+ * chronological timestamps is selection; the rest is locked validation.
+ * Caller-ordered input remains chronological, and no random partition occurs.
  */
 export function splitByTime<T>(
   entries: readonly T[],
@@ -27,12 +27,19 @@ export function splitByTime<T>(
       'Selection share must be a finite fraction strictly between 0 and 1.',
     )
   if (entries.length === 0) throw new Error('Cannot split an empty entry list.')
-  const cutIndex = Math.floor(entries.length * selectionShare)
-  if (cutIndex === 0 || cutIndex >= entries.length)
+  const timestamps = [...new Set(entries.map(timestampOf))]
+  const selectionTimestampCount = Math.floor(timestamps.length * selectionShare)
+  if (
+    selectionTimestampCount === 0 ||
+    selectionTimestampCount >= timestamps.length
+  )
     throw new Error(
       'Selection share leaves an empty selection or validation slice.',
     )
-  const selection = entries.slice(0, cutIndex)
-  const validation = entries.slice(cutIndex)
-  return { selection, validation, cutTimestamp: timestampOf(validation[0]!) }
+  const cutTimestamp = timestamps[selectionTimestampCount]!
+  const selection = entries.filter((entry) => timestampOf(entry) < cutTimestamp)
+  const validation = entries.filter(
+    (entry) => timestampOf(entry) >= cutTimestamp,
+  )
+  return { selection, validation, cutTimestamp }
 }

@@ -196,8 +196,9 @@ export default function TradeScreen({
         </div>
 
         <p className="trade__fee-note">
-          Comisión: escenario de desarrollo configurable, actualmente sin
-          comisión real.
+          {simulatorOptions?.feePolicy
+            ? `${simulatorOptions.feePolicy.label}. Es una estimación simulada, no una tarifa verificada de Kraken.`
+            : 'Comisión: escenario de desarrollo configurable; no representa una tarifa real.'}
         </p>
 
         <div className="trade__field">
@@ -372,42 +373,6 @@ export default function TradeScreen({
         />
       )}
 
-      {trading.account && trading.account.history.length > 0 && (
-        <section className="trade__history" aria-label="Historial de órdenes">
-          <h3 className="trade__history-title">Historial de órdenes</h3>
-          <ul className="trade__history-list">
-            {[...trading.account.history]
-              .reverse()
-              .slice(0, 10)
-              .map((receipt) => (
-                <li key={receipt.id} className="trade__history-item">
-                  <span className="trade__history-id">{receipt.id}</span>
-                  <span className={`trade__history-status--${receipt.status}`}>
-                    {formatOrderStatus(receipt.status)}
-                  </span>
-                  <span>{formatOrderSide(receipt.side)}</span>
-                  <span>{receipt.instrumentId}</span>
-                  <span>
-                    {formatQuantity(receipt.quantity)} @{' '}
-                    {formatPriceMoney(
-                      receipt.executedPrice,
-                      asCurrency(trading.selectedInstrument?.currency ?? 'EUR'),
-                    )}
-                  </span>
-                  <span>
-                    {formatPriceMoney(
-                      receipt.total,
-                      asCurrency(trading.selectedInstrument?.currency ?? 'EUR'),
-                    )}
-                  </span>
-                  {receipt.reason && (
-                    <em>({formatOrderReason(receipt.reason)})</em>
-                  )}
-                </li>
-              ))}
-          </ul>
-        </section>
-      )}
     </section>
   )
 }
@@ -540,10 +505,6 @@ function Receipt({
 
 function formatOrderSide(side: OrderSide): string {
   return side === BUY ? 'Comprar' : 'Vender'
-}
-
-function formatOrderStatus(status: OrderReceipt['status']): string {
-  return status === 'executed' ? 'Ejecutada' : 'Rechazada'
 }
 
 function formatOrderReason(reason: string): string {

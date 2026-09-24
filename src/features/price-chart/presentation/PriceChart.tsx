@@ -1,19 +1,29 @@
-import { CandlestickSeries, ColorType, createChart } from 'lightweight-charts'
+import {
+  CandlestickSeries,
+  ColorType,
+  createChart,
+  createSeriesMarkers,
+} from 'lightweight-charts'
 import type {
   ChartOptions,
   DeepPartial,
   CandlestickData,
   IChartApi,
   ISeriesApi,
+  UTCTimestamp,
+  SeriesMarker,
+  Time,
 } from 'lightweight-charts'
 import { useEffect, useRef } from 'react'
 import './chart.css'
 
 type PriceChartProps = {
   data: readonly CandlestickData[]
+  markers?: readonly SeriesMarker<Time>[]
 }
 
 const EMPTY_MESSAGE = 'No hay datos de gráfico disponibles.'
+const INITIAL_VISIBLE_RANGE_SECONDS = 15 * 60
 
 type Palette = {
   background: string
@@ -95,7 +105,7 @@ function chartOptions(palette: Palette): DeepPartial<ChartOptions> {
   }
 }
 
-export default function PriceChart({ data }: PriceChartProps) {
+export default function PriceChart({ data, markers = [] }: PriceChartProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
   const seriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null)
@@ -136,7 +146,19 @@ export default function PriceChart({ data }: PriceChartProps) {
     const previousData = previousDataRef.current
     if (previousData === null) {
       series.setData([...data])
-      chart.timeScale().fitContent()
+      const latestTime = data.at(-1)?.time
+      const timeScale = chart.timeScale()
+      if (
+        typeof latestTime === 'number' &&
+        typeof timeScale.setVisibleRange === 'function'
+      ) {
+        timeScale.setVisibleRange({
+          from: (latestTime - INITIAL_VISIBLE_RANGE_SECONDS) as UTCTimestamp,
+          to: latestTime as UTCTimestamp,
+        })
+      } else {
+        chart.timeScale().fitContent()
+      }
       previousDataRef.current = [...data]
       return
     }
@@ -166,6 +188,18 @@ export default function PriceChart({ data }: PriceChartProps) {
     }
     previousDataRef.current = [...data]
   }, [data])
+
+  useEffect(() => {
+    const series = seriesRef.current
+    if (
+      !series ||
+      markers.length === 0 ||
+      typeof createSeriesMarkers !== 'function'
+    )
+      return undefined
+    const markerPlugin = createSeriesMarkers(series, [...markers])
+    return () => markerPlugin.detach()
+  }, [markers])
 
   if (!hasData) {
     return (

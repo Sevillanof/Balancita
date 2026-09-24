@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type {
   SimulationsReportFile,
+  SimulationsHistoryEntry,
   SimulationsStatus,
 } from './simulations-types.ts'
 
@@ -9,9 +10,17 @@ export type UseSimulationsReportResult = {
   readonly file: SimulationsReportFile | null
   readonly error: Error | null
   readonly retry: () => Promise<void>
-  readonly refresh: () => Promise<void>
+  readonly refresh: (sample?: {
+    readonly stage: 'smoke' | 'confirm'
+    readonly seed: number
+  }) => Promise<void>
   readonly refreshing: boolean
   readonly refreshError: string | null
+  readonly history: readonly SimulationsHistoryEntry[]
+  readonly historyStatus: 'loading' | 'ready' | 'empty' | 'error'
+  readonly historyError: string | null
+  readonly selectedHistoryId: string | null
+  readonly selectHistory: (id: string) => Promise<void>
 }
 
 type FetchFn = (input: string, init?: RequestInit) => Promise<Response>
@@ -52,56 +61,135 @@ export function useSimulationsReport(
   const [result, setResult] = useState<LoadResult | null>(null)
   const [refreshing, setRefreshing] = useState(false)
   const [refreshError, setRefreshError] = useState<string | null>(null)
+  const [history, setHistory] = useState<readonly SimulationsHistoryEntry[]>([])
+  const [historyStatus, setHistoryStatus] = useState<
+    'loading' | 'ready' | 'empty' | 'error'
+  >('loading')
+  const [historyError, setHistoryError] = useState<string | null>(null)
+  const [selectedHistoryId, setSelectedHistoryId] = useState<string | null>(
+    null,
+  )
   const refreshInFlight = useRef(false)
 
   useEffect(() => {
     let active = true
-    void loadReport(url, fetchFn).then((outcome) => {
+    const reportUrl =
+      selectedHistoryId === null ? url : `${url}/history/${selectedHistoryId}`
+    void loadReport(reportUrl, fetchFn).then((outcome) => {
       if (active) setResult(outcome)
     })
     return () => {
       active = false
     }
+  }, [url, fetchFn, reloadKey, selectedHistoryId])
+
+  useEffect(() => {
+    let active = true
+    void fetchFn(`${url}/history?limit=50`)
+      .then(async (response) => {
+        if (!response.ok) throw new Error('No se pudo cargar el historial.')
+        const payload: unknown = await response.json()
+        const entries =
+          payload &&
+          typeof payload === 'object' &&
+          'reports' in payload &&
+          Array.isArray(payload.reports)
+            ? (payload.reports as SimulationsHistoryEntry[])
+            : []
+        if (active) {
+          setHistory(entries)
+          setHistoryStatus(entries.length === 0 ? 'empty' : 'ready')
+          setHistoryError(null)
+        }
+      })
+      .catch((error: unknown) => {
+        if (active) {
+          setHistoryStatus('error')
+          setHistoryError(
+            error instanceof Error
+              ? error.message
+              : 'No se pudo cargar el historial.',
+          )
+        }
+      })
+    return () => {
+      active = false
+    }
   }, [url, fetchFn, reloadKey])
+
+  const selectHistory = useCallback(async (id: string) => {
+    if (id === '') {
+      setSelectedHistoryId(null)
+      setResult(null)
+      return
+    }
+    if (!/^[0-9a-f]{64}$/.test(id)) return
+    setSelectedHistoryId(id)
+    setResult(null)
+  }, [])
 
   const retry = useCallback(async () => {
     setResult(null)
     setReloadKey((key) => key + 1)
   }, [])
 
-  const refresh = useCallback(async () => {
-    if (refreshInFlight.current) return
-    refreshInFlight.current = true
-    setRefreshing(true)
-    setRefreshError(null)
-    try {
-      const response = await fetchFn(`${url}/refresh`, { method: 'POST' })
-      if (!response.ok) {
-        const payload: unknown = await response.json().catch(() => null)
-        const message =
-          payload &&
-          typeof payload === 'object' &&
-          'error' in payload &&
-          typeof payload.error === 'object' &&
-          payload.error !== null &&
-          'message' in payload.error &&
-          typeof payload.error.message === 'string'
-            ? payload.error.message
-            : `No se pudo actualizar (${response.status}).`
-        throw new Error(message)
+  const refresh = useCallback(
+    async (sample?: {
+      readonly stage: 'smoke' | 'confirm'
+      readonly seed: number
+    }) => {
+      if (refreshInFlight.current) return
+      refreshInFlight.current = true
+      setRefreshing(true)
+      setRefreshError(null)
+      try {
+        const response = await fetchFn(`${url}/refresh`, {
+          method: 'POST',
+          ...(sample === undefined
+            ? {}
+            : {
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify(sample),
+              }),
+        })
+        if (!response.ok) {
+          const payload: unknown = await response.json().catch(() => null)
+          const message =
+            payload &&
+            typeof payload === 'object' &&
+            'error' in payload &&
+            typeof payload.error === 'object' &&
+            payload.error !== null &&
+            'message' in payload.error &&
+            typeof payload.error.message === 'string'
+              ? payload.error.message
+              : `No se pudo actualizar (${response.status}).`
+          throw new Error(message)
+        }
+        setReloadKey((key) => key + 1)
+        setSelectedHistoryId(null)
+      } catch (error) {
+        setRefreshError(
+          error instanceof Error ? error.message : 'No se pudo actualizar.',
+        )
+      } finally {
+        refreshInFlight.current = false
+        setRefreshing(false)
       }
-      setReloadKey((key) => key + 1)
-    } catch (error) {
-      setRefreshError(
-        error instanceof Error ? error.message : 'No se pudo actualizar.',
-      )
-    } finally {
-      refreshInFlight.current = false
-      setRefreshing(false)
-    }
-  }, [fetchFn, url])
+    },
+    [fetchFn, url],
+  )
 
-  const refreshState = { refresh, refreshing, refreshError }
+  const refreshState = {
+    refresh,
+    refreshing,
+    refreshError,
+    history,
+    historyStatus,
+    historyError,
+    selectedHistoryId,
+    selectHistory,
+  }
 
   if (result === null)
     return {

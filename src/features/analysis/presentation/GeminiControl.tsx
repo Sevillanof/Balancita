@@ -57,7 +57,12 @@ export default function GeminiControl({
         className="app__ai-toggle-switch"
         onClick={() => void toggle()}
       >
-        {status.enabled ? 'Activadas' : 'Desactivadas'}
+        <span className="app__ai-toggle-track" aria-hidden="true">
+          <span className="app__ai-toggle-thumb" />
+        </span>
+        <span className="app__ai-toggle-state">
+          {status.enabled ? 'Activadas' : 'Desactivadas'}
+        </span>
       </button>
       <span role="status" className="app__ai-toggle-hint">
         {!ready

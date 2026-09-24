@@ -113,6 +113,14 @@ describe('BtcEurDashboard main screen (Phase 1)', () => {
       status: 'ready',
       items: NEWS_FIXTURES,
       error: null,
+      stream: {
+        status: 'ready',
+        snapshot: null,
+        error: null,
+        reconnectAttempt: 0,
+        clientReceivedAtMs: 1_800_000_000_000,
+        transportStatus: 'reconnecting',
+      },
     })
   })
 
@@ -165,7 +173,9 @@ describe('BtcEurDashboard main screen (Phase 1)', () => {
     // E. Buy / sell / auto control.
     expect(screen.getByRole('button', { name: 'Comprar' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Vender' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Auto Trade' })).toBeDisabled()
+    expect(
+      screen.getByRole('switch', { name: 'Trading automático simulado' }),
+    ).toBeDisabled()
     // F. BTC-EUR instrument summary.
     expect(
       screen.getByRole('region', { name: 'Resumen BTC-EUR' }),
@@ -177,6 +187,23 @@ describe('BtcEurDashboard main screen (Phase 1)', () => {
     ).not.toBeInTheDocument()
   })
 
+  it('shows distinct browser market, REST, SSE, and server collector states', async () => {
+    const provider = readyProvider()
+    renderDashboard(provider)
+    await waitForReady()
+
+    const status = screen.getByRole('region', { name: 'Estado de servicios' })
+    expect(status).toHaveTextContent('Gráfico · Simulado')
+    expect(status).toHaveTextContent('Feed simulado activo')
+    expect(status).toHaveTextContent('Historial REST')
+    expect(status).toHaveTextContent('Última carga correcta:')
+    expect(status).toHaveTextContent('Transporte SSE navegador')
+    expect(status).toHaveTextContent('Reconectando')
+    expect(status).toHaveTextContent('Último evento recibido en navegador:')
+    expect(status).toHaveTextContent('Colector del servidor')
+    expect(status).toHaveTextContent('Sin snapshot de mercado')
+  })
+
   it('renders exactly the three action buttons', async () => {
     renderDashboard(readyProvider())
     await waitForReady()
@@ -186,7 +213,7 @@ describe('BtcEurDashboard main screen (Phase 1)', () => {
     })
     // Comprar / Vender / Auto Trade stay untouched; Simulaciones is the
     // additive fourth control opening the strategy visualization.
-    expect(within(actions).getAllByRole('button')).toHaveLength(4)
+    expect(within(actions).getAllByRole('button')).toHaveLength(3)
     expect(
       within(actions).getByRole('button', { name: 'Comprar' }),
     ).toBeEnabled()
@@ -194,7 +221,9 @@ describe('BtcEurDashboard main screen (Phase 1)', () => {
       within(actions).getByRole('button', { name: 'Vender' }),
     ).toBeEnabled()
     expect(
-      within(actions).getByRole('button', { name: 'Auto Trade' }),
+      within(actions).getByRole('switch', {
+        name: 'Trading automático simulado',
+      }),
     ).toBeDisabled()
     expect(
       within(actions).getByRole('button', { name: 'Simulaciones' }),
@@ -247,6 +276,57 @@ describe('BtcEurDashboard main screen (Phase 1)', () => {
     )
   })
 
+  it('opens an accessible empty order-history popover and dismisses it with Escape', async () => {
+    const user = userEvent.setup()
+    renderDashboard(readyProvider())
+    await waitForReady()
+
+    const balance = await screen.findByRole('button', { name: '€10,000.00' })
+    expect(balance).toHaveAttribute('aria-expanded', 'false')
+    expect(balance).toHaveAttribute('aria-controls', 'dashboard-order-history')
+    await user.click(balance)
+
+    expect(balance).toHaveAttribute('aria-expanded', 'true')
+    expect(
+      screen.getByText('Aún no hay órdenes de compra o venta.'),
+    ).toBeInTheDocument()
+    await user.keyboard('{Escape}')
+    expect(balance).toHaveAttribute('aria-expanded', 'false')
+    expect(balance).toHaveFocus()
+  })
+
+  it('shows dashboard order history newest first', async () => {
+    const user = userEvent.setup()
+    const provider = readyProvider()
+    renderDashboard(provider)
+    await waitForReady()
+    act(() => provider.emit(makeQuote({ instrumentId: 'BTC-EUR', price: 60_000 })))
+
+    for (const quantity of ['0.01', '0.02']) {
+      await user.click(screen.getByRole('button', { name: 'Comprar' }))
+      await screen.findByRole('form', { name: 'Orden del simulador' })
+      act(() => provider.emit(makeQuote({ instrumentId: 'BTC-EUR', price: 60_000 })))
+      await user.type(screen.getByLabelText('Cantidad'), quantity)
+      await user.click(screen.getByRole('button', { name: 'Vista previa de la orden' }))
+      await user.click(screen.getByRole('button', { name: 'Confirmar orden' }))
+      await screen.findByRole('region', { name: 'Resultado de la orden' })
+      await user.click(screen.getByRole('button', { name: 'Cerrar' }))
+      await waitFor(() =>
+        expect(screen.queryByRole('form', { name: 'Orden del simulador' })).not.toBeInTheDocument(),
+      )
+    }
+
+    const balance = within(
+      screen.getByRole('region', { name: 'Dinero disponible' }),
+    ).getByRole('button')
+    await user.click(balance)
+    const history = screen.getByRole('region', { name: 'Historial de órdenes' })
+    const items = within(history).getAllByRole('listitem')
+    expect(items).toHaveLength(2)
+    expect(items[0]).toHaveTextContent('0.02')
+    expect(items[1]).toHaveTextContent('0.01')
+  })
+
   it('renders the local news fixtures in area D', async () => {
     renderDashboard(readyProvider())
     await waitForReady()
@@ -288,6 +368,7 @@ describe('BtcEurDashboard main screen (Phase 1)', () => {
     const provider = readyProvider()
     renderDashboard(provider)
     await waitForReady()
+    await waitFor(() => expect(mocks.series.setData).toHaveBeenCalled())
 
     act(() =>
       provider.emit(
@@ -312,7 +393,9 @@ describe('BtcEurDashboard main screen (Phase 1)', () => {
     expect(
       screen.queryByRole('button', { name: 'Vista previa de la orden' }),
     ).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Auto Trade' })).toBeDisabled()
+    expect(
+      screen.getByRole('switch', { name: 'Trading automático simulado' }),
+    ).toBeDisabled()
 
     await user.click(screen.getByRole('button', { name: 'Comprar' }))
 

@@ -97,7 +97,7 @@ describe('Simulaciones navigation', () => {
     vi.restoreAllMocks()
   })
 
-  it('shows an enabled Simulaciones button next to the disabled Auto Trade control', async () => {
+  it('shows an enabled Simulaciones button and the disabled automation switch during warmup', async () => {
     renderDashboard()
     await screen.findByRole('region', { name: 'Gráfico BTC-EUR' })
 
@@ -108,11 +108,12 @@ describe('Simulaciones navigation', () => {
     expect(buttons.map((button) => button.textContent)).toEqual([
       'Comprar',
       'Vender',
-      'Auto Trade',
       'Simulaciones',
     ])
     expect(
-      within(actions).getByRole('button', { name: 'Auto Trade' }),
+      within(actions).getByRole('switch', {
+        name: 'Trading automático simulado',
+      }),
     ).toBeDisabled()
     expect(
       within(actions).getByRole('button', { name: 'Simulaciones' }),
@@ -160,9 +161,9 @@ describe('Simulaciones navigation', () => {
 
     await user.click(screen.getByRole('button', { name: 'Simulaciones' }))
     await waitFor(() =>
-      expect(screen.getByRole('alert')).toHaveTextContent(
-        /no se pudieron cargar las simulaciones/i,
-      ),
+      expect(
+        screen.getByText('No se pudieron cargar las simulaciones.'),
+      ).toBeInTheDocument(),
     )
     expect(
       screen.getByRole('button', { name: /reintentar/i }),

@@ -88,19 +88,23 @@ function event(snapshotValue: IntelligenceStreamSnapshot = snapshot) {
   } satisfies IntelligenceStreamEvent
 }
 
+const makeSource = (url: string) => new FakeEventSource(url)
+
 describe('useNewsStream', () => {
   it('maps validated SSE news to ready and cleans up one connection', () => {
     FakeEventSource.instances = []
     const { result, unmount } = renderHook(() =>
       useNewsStream({
         url: 'http://127.0.0.1:8787',
-        eventSourceFactory: (url) => new FakeEventSource(url),
+        eventSourceFactory: makeSource,
       }),
     )
 
     const source = FakeEventSource.instances[0]!
+    act(() => source.onopen?.())
     act(() => source.emit(event()))
     expect(result.current.status).toBe('ready')
+    expect(result.current.stream.transportStatus).toBe('connected')
     expect(result.current.items[0]).toMatchObject({
       source: 'sec',
       ingestedAt: '2026-09-22T17:29:59.500Z',
@@ -120,7 +124,7 @@ describe('useNewsStream', () => {
     const { result } = renderHook(() =>
       useNewsStream({
         url: 'http://127.0.0.1:8787',
-        eventSourceFactory: (url) => new FakeEventSource(url),
+        eventSourceFactory: makeSource,
         reconnectMinMs: 100,
         reconnectMaxMs: 200,
       }),
@@ -134,7 +138,9 @@ describe('useNewsStream', () => {
         } as unknown as IntelligenceStreamSnapshot),
       ),
     )
-    expect(result.current.status).toBe('error')
+    expect(result.current.status).toBe('loading')
+    expect(result.current.stream.transportStatus).toBe('reconnecting')
+    expect(result.current.error).toBeInstanceOf(Error)
     act(() => vi.advanceTimersByTime(100))
     expect(FakeEventSource.instances).toHaveLength(2)
     vi.useRealTimers()

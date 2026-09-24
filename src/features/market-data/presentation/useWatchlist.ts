@@ -2,11 +2,14 @@ import { useCallback, useEffect, useState } from 'react'
 import type {
   Instrument,
   InstrumentId,
+  MarketSubscriptionStatus,
   MarketDataProvider,
   Quote,
 } from '../domain/market-data.ts'
 
 export type WatchlistStatus = 'loading' | 'ready' | 'empty' | 'error'
+export type WatchlistConnectionStatus =
+  MarketSubscriptionStatus | 'error' | 'unavailable'
 
 export type WatchlistState = {
   status: WatchlistStatus
@@ -22,11 +25,14 @@ const INITIAL_STATE: WatchlistState = {
 
 export type UseWatchlistResult = WatchlistState & {
   retry: () => void
+  connectionStatus: WatchlistConnectionStatus
 }
 
 export function useWatchlist(provider: MarketDataProvider): UseWatchlistResult {
   const [reloadKey, setReloadKey] = useState(0)
   const [state, setState] = useState<WatchlistState>(INITIAL_STATE)
+  const [connectionStatus, setConnectionStatus] =
+    useState<WatchlistConnectionStatus>('connecting')
 
   const retry = useCallback(() => {
     setState(INITIAL_STATE)
@@ -36,12 +42,15 @@ export function useWatchlist(provider: MarketDataProvider): UseWatchlistResult {
   useEffect(() => {
     let active = true
     let release: (() => void) | undefined
-
+    const reportConnectionStatus = (status: MarketSubscriptionStatus) => {
+      if (active) setConnectionStatus(status)
+    }
     provider.getInstruments().then(
       (instruments) => {
         if (!active) return
 
         if (instruments.length === 0) {
+          setConnectionStatus('unavailable')
           setState({ status: 'empty', instruments: [], quotes: new Map() })
           return
         }
@@ -59,15 +68,18 @@ export function useWatchlist(provider: MarketDataProvider): UseWatchlistResult {
                 return { ...previous, quotes }
               })
             },
+            reportConnectionStatus,
           )
         } catch {
           if (active) {
+            setConnectionStatus('error')
             setState({ status: 'error', instruments: [], quotes: new Map() })
           }
         }
       },
       () => {
         if (!active) return
+        setConnectionStatus('error')
         setState({ status: 'error', instruments: [], quotes: new Map() })
       },
     )
@@ -78,5 +90,10 @@ export function useWatchlist(provider: MarketDataProvider): UseWatchlistResult {
     }
   }, [provider, reloadKey])
 
-  return { ...state, retry }
+  return {
+    ...state,
+    retry,
+    connectionStatus:
+      state.status === 'loading' ? 'connecting' : connectionStatus,
+  }
 }

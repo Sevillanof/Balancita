@@ -10,7 +10,7 @@ const mocks = vi.hoisted(() => {
   const series = { setData: vi.fn(), update: vi.fn() }
   const chart = {
     addSeries: vi.fn(() => series),
-    timeScale: vi.fn(() => ({ fitContent: vi.fn() })),
+    timeScale: vi.fn(() => ({ fitContent: vi.fn(), setVisibleRange: vi.fn() })),
     remove: vi.fn(),
   }
   const createChart = vi.fn()
@@ -140,6 +140,50 @@ describe('ChartPanel', () => {
       expect.arrayContaining([
         expect.objectContaining({ time: 1704067260, close: 106 }),
       ]),
+    )
+  })
+
+  it('keeps successive live minute candles when quotes arrive from the same REST snapshot', () => {
+    const rest = [
+      makeCandle({ time: '2024-01-01T00:00:00.000Z', isClosed: true }),
+    ]
+    const quote = (timestamp: string, price: number): Quote => ({
+      instrumentId: 'BTC-EUR',
+      price,
+      change: 0,
+      changePercent: 0,
+      timestamp,
+      eventTime: timestamp,
+      status: 'live',
+    })
+    const { rerender } = render(
+      <ChartPanel
+        status="ready"
+        candles={rest}
+        quote={quote('2024-01-01T00:01:10.000Z', 101)}
+        onRetry={() => {}}
+      />,
+    )
+
+    rerender(
+      <ChartPanel
+        status="ready"
+        candles={rest}
+        quote={quote('2024-01-01T00:01:50.000Z', 105)}
+        onRetry={() => {}}
+      />,
+    )
+    rerender(
+      <ChartPanel
+        status="ready"
+        candles={rest}
+        quote={quote('2024-01-01T00:02:05.000Z', 103)}
+        onRetry={() => {}}
+      />,
+    )
+
+    expect(mocks.series.update).toHaveBeenLastCalledWith(
+      expect.objectContaining({ time: 1704067320, close: 103 }),
     )
   })
 

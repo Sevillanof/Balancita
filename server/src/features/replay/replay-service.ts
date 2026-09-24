@@ -18,7 +18,9 @@ import {
 import type { MarketStore } from '../market-data/market-store.ts'
 import {
   computeTechnicalFeatures,
+  MICRO_TECHNICAL_FEATURE_VERSION,
   type TechnicalCandle,
+  type TechnicalFeatureResult,
 } from '../technical-analysis/technical-features.ts'
 import type {
   FrozenReplayDataset,
@@ -38,6 +40,16 @@ import {
   type SimulationCandidate,
 } from '../simulations/candidate-manifest.ts'
 import { virtualClockFromDataset } from './replay-virtual-clock.ts'
+import {
+  empiricalPriorBefore,
+  probabilitiesForShift,
+} from '../simulations/fixed-proportional-shift.ts'
+import {
+  evaluateMicroTarget,
+  initialMicroState,
+  type MicroStrategyFeatures,
+  type MicroStrategyState,
+} from '../simulations/micro-strategy.ts'
 
 const DEFAULT_REPLAY_HORIZON: ForecastHorizon = '15m'
 const FORECAST_VERSION = '1'
@@ -81,6 +93,14 @@ export interface ReplayRunResult {
   readonly forecasts: readonly ForecastRecord[]
   readonly outcomes: readonly ForecastOutcome[]
   readonly report: ReplayReport
+  readonly microTargets: readonly ReplayMicroTarget[]
+}
+
+export interface ReplayMicroTarget {
+  readonly time: TimestampMs
+  readonly target: 'flat' | 'long'
+  readonly forecastEligible: boolean
+  readonly priorReady: boolean
 }
 
 interface PendingForecast {
@@ -126,6 +146,9 @@ export class ReplayRunService {
     const outcomes: ForecastOutcome[] = []
     const checkpoints: ReplayCheckpoint[] = []
     const pending: PendingForecast[] = []
+    const forecastsById = new Map<string, ForecastRecord>()
+    const microTargets: ReplayMicroTarget[] = []
+    let microState: MicroStrategyState = initialMicroState()
 
     const candles = input.dataset.candles
     for (const [index, candle] of candles.entries()) {
@@ -145,6 +168,55 @@ export class ReplayRunService {
         entry.evaluated = true
       }
 
+      const features = computeTechnicalFeatures({
+        candles: candles.slice(0, index + 1).map(toTechnicalCandle),
+        asOfTimestamp: candle.bucketEnd,
+        includeMicroFeatures: candidate?.microStrategy !== undefined,
+        ...(candidate === undefined ? {} : { params: candidate.params }),
+      })
+      let microOverride: ForecastEngineInput['microProbabilityOverride']
+      let target: 'flat' | 'long' = 'flat'
+      let priorReady = false
+      let microForecastEligible = false
+      if (candidate?.microStrategy !== undefined) {
+        const microFeatures = microFeaturesFor(candle, features, index + 1)
+        const decision = evaluateMicroTarget(
+          candidate.microStrategy,
+          microFeatures,
+          microState,
+        )
+        microState = decision.state
+        target = decision.target
+        const matured = outcomes.flatMap((outcome) => {
+          const forecast = forecastsById.get(outcome.forecastId)
+          return forecast === undefined
+            ? []
+            : [
+                {
+                  maturedAt: forecast.asOfTimestamp + HORIZON_MS[horizon],
+                  label: outcome.label,
+                },
+              ]
+        })
+        const prior = empiricalPriorBefore(matured, now)
+        priorReady = prior !== null
+        const featureReady = microFeatures.ready && index + 1 > 50
+        const eligible = featureReady && priorReady
+        microForecastEligible = eligible
+        microOverride = {
+          probabilities:
+            eligible && prior !== null
+              ? probabilitiesForShift(prior, target === 'long' ? 1 : 0)
+              : null,
+          ...(!featureReady
+            ? { notReadyReason: 'micro_features_not_ready' }
+            : !priorReady
+              ? { notReadyReason: 'empirical_prior_not_ready' }
+              : decision.abstained
+                ? { notReadyReason: 'micro_regime_not_ready' }
+                : {}),
+        }
+      }
       const forecast = this.generateAt({
         runId,
         horizon,
@@ -153,9 +225,20 @@ export class ReplayRunService {
         candlesUpTo: candles.slice(0, index + 1),
         dataset: input.dataset,
         candidate,
+        features,
+        ...(microOverride === undefined ? {} : { microOverride }),
       })
       this.store.insertForecast(forecast)
       forecasts.push(forecast)
+      forecastsById.set(forecast.id, forecast)
+      if (candidate?.microStrategy !== undefined) {
+        microTargets.push({
+          time: candle.bucketEnd,
+          target,
+          priorReady,
+          forecastEligible: microForecastEligible,
+        })
+      }
       pending.push({
         forecast,
         dueAt: (now + HORIZON_MS[horizon]) as TimestampMs,
@@ -182,7 +265,7 @@ export class ReplayRunService {
     })
     const run = this.requireRun(runId)
     const report = buildReplayReport({ run, forecasts, outcomes })
-    return { run, checkpoints, forecasts, outcomes, report }
+    return { run, checkpoints, forecasts, outcomes, report, microTargets }
   }
 
   buildReport(runId: string): ReplayReport {
@@ -220,23 +303,74 @@ export class ReplayRunService {
     readonly candlesUpTo: readonly ReplayDatasetCandle[]
     readonly dataset: FrozenReplayDataset
     readonly candidate?: SimulationCandidate
+    readonly features: TechnicalFeatureResult
+    readonly microOverride?: ForecastEngineInput['microProbabilityOverride']
   }): ForecastRecord {
-    const features = computeTechnicalFeatures({
-      candles: args.candlesUpTo.map(toTechnicalCandle),
-      asOfTimestamp: args.candle.bucketEnd,
-      // Additive lineage: the default path passes no params (exactly as
-      // before); a manifest candidate injects its pre-registered periods.
-      ...(args.candidate === undefined
-        ? {}
-        : { params: args.candidate.params }),
-    })
+    const features = args.features
     const snapshot: TechnicalFeatureSnapshot = {
-      version: features.technicalFeatureVersion,
+      version:
+        args.candidate?.microStrategy === undefined
+          ? features.technicalFeatureVersion
+          : MICRO_TECHNICAL_FEATURE_VERSION,
       asOfTimestamp: features.asOfTimestamp,
       isClosed: true,
-      ready: features.ready,
-      warmUp: features.warmUp,
-      values: features.values,
+      ready:
+        args.candidate?.microStrategy === undefined
+          ? features.ready
+          : features.micro.ready && args.candlesUpTo.length > 50,
+      warmUp:
+        args.candidate?.microStrategy === undefined
+          ? features.warmUp
+          : {
+              requiredCandles: 50,
+              availableCandles: args.candlesUpTo.length,
+              missingCandles: Math.max(0, 50 - args.candlesUpTo.length),
+            },
+      values:
+        args.candidate?.microStrategy === undefined
+          ? features.values
+          : {
+              ...features.values,
+              ...(features.rolling.bollingerMid === null
+                ? {}
+                : { bollingerMid: features.rolling.bollingerMid }),
+              ...(features.rolling.bollingerUpper === null
+                ? {}
+                : { bollingerUpper: features.rolling.bollingerUpper }),
+              ...(features.rolling.bollingerLower === null
+                ? {}
+                : { bollingerLower: features.rolling.bollingerLower }),
+              ...(features.rolling.donchianHigh === null
+                ? {}
+                : { donchianHigh: features.rolling.donchianHigh }),
+              ...(features.rolling.donchianLow === null
+                ? {}
+                : { donchianLow: features.rolling.donchianLow }),
+              ...(features.rolling.donchianMid === null
+                ? {}
+                : { donchianMid: features.rolling.donchianMid }),
+              ...(features.rolling.volumeSma === null
+                ? {}
+                : { volumeSma: features.rolling.volumeSma }),
+              ...(features.rolling.atrPercentile === null
+                ? {}
+                : { atrPercentile: features.rolling.atrPercentile }),
+              ...(features.rolling.priorAtrSma20 === null
+                ? {}
+                : { priorAtrSma20: features.rolling.priorAtrSma20 }),
+              ...(features.micro.ema9 === null
+                ? {}
+                : { ema9: features.micro.ema9 }),
+              ...(features.micro.ema21 === null
+                ? {}
+                : { ema21: features.micro.ema21 }),
+              ...(features.micro.sma50 === null
+                ? {}
+                : { sma50: features.micro.sma50 }),
+              ...(features.micro.rsi14 === null
+                ? {}
+                : { rsi14: features.micro.rsi14 }),
+            },
       // Additive lineage only: absent on the default path so existing
       // records and tests are untouched.
       ...(args.candidate === undefined
@@ -267,8 +401,13 @@ export class ReplayRunService {
         ? {}
         : {
             ruleVersion: args.candidate.ruleVersion,
-            ruleConfig: args.candidate.rule,
+            ...(args.candidate.microStrategy === undefined
+              ? { ruleConfig: args.candidate.rule }
+              : {}),
           }),
+      ...(args.microOverride === undefined
+        ? {}
+        : { microProbabilityOverride: args.microOverride }),
     }
     return generateForecast(engineInput)
   }
@@ -289,6 +428,32 @@ function toForecastCandle(candle: ReplayDatasetCandle): ForecastCandleEvidence {
     close: candle.close,
     isClosed: candle.isClosed,
     status: 'live',
+  }
+}
+
+function microFeaturesFor(
+  candle: ReplayDatasetCandle,
+  features: TechnicalFeatureResult,
+  availableCandles: number,
+): MicroStrategyFeatures {
+  const { rolling, micro, indicators } = features
+  const ready = availableCandles > 50 && micro.ready
+  return {
+    ema9: micro.ema9,
+    ema21: micro.ema21,
+    sma50: micro.sma50,
+    rsi14: micro.rsi14,
+    close: candle.close,
+    bollingerLower: rolling.bollingerLower,
+    bollingerMid: rolling.bollingerMid,
+    atr14: indicators.atr,
+    priorAtrSma20: rolling.priorAtrSma20,
+    donchianHigh20: rolling.donchianHigh,
+    donchianMid20: rolling.donchianMid,
+    volume: candle.volume,
+    priorVolumeSma20: rolling.volumeSma,
+    atrPercentile50: rolling.atrPercentile,
+    ready,
   }
 }
 

@@ -2,6 +2,7 @@ import type {
   Candle,
   Instrument,
   InstrumentId,
+  MarketSubscriptionStatus,
   MarketDataProvider,
   Quote,
 } from '../domain/market-data.ts'
@@ -54,6 +55,8 @@ export type KrakenMarketDataProviderOptions = {
 
 type SubscriptionState = {
   active: boolean
+  onStatus?: (status: MarketSubscriptionStatus) => void
+  status?: MarketSubscriptionStatus
   socket: KrakenWebSocket | null
   lastTickerAt: Map<InstrumentId, number>
   lastTradeId: Map<InstrumentId, number>
@@ -133,6 +136,7 @@ export class KrakenMarketDataProvider implements MarketDataProvider {
   subscribe(
     instrumentIds: InstrumentId[],
     onQuote: (quote: Quote) => void,
+    onStatus?: (status: MarketSubscriptionStatus) => void,
   ): () => void {
     const uniqueInstrumentIds = [...new Set(instrumentIds)]
     for (const instrumentId of uniqueInstrumentIds) {
@@ -142,6 +146,7 @@ export class KrakenMarketDataProvider implements MarketDataProvider {
 
     const state: SubscriptionState = {
       active: true,
+      onStatus,
       socket: null,
       lastTickerAt: new Map(),
       lastTradeId: new Map(),
@@ -154,6 +159,7 @@ export class KrakenMarketDataProvider implements MarketDataProvider {
     }
 
     const connect = () => this.connect(state, onQuote)
+    notifySubscriptionStatus(state, 'connecting')
     connect()
 
     return () => {
@@ -165,6 +171,7 @@ export class KrakenMarketDataProvider implements MarketDataProvider {
         this.disposeSocket(state.socket)
         state.socket = null
       }
+      onStatus?.('stopped')
     }
   }
 
@@ -190,6 +197,7 @@ export class KrakenMarketDataProvider implements MarketDataProvider {
     onQuote: (quote: Quote) => void,
   ): void {
     if (!state.active) return
+    notifySubscriptionStatus(state, 'connecting')
 
     let socket: KrakenWebSocket
     try {
@@ -203,6 +211,7 @@ export class KrakenMarketDataProvider implements MarketDataProvider {
     socket.onopen = () => {
       if (!state.active || state.socket !== socket) return
       state.reconnectAttempt = 0
+      notifySubscriptionStatus(state, 'connected')
       for (const channel of ['ticker', 'trade'] as const) {
         socket.send(
           JSON.stringify({
@@ -318,6 +327,7 @@ export class KrakenMarketDataProvider implements MarketDataProvider {
     state.lastQuote = quote
     state.lastQuoteAt = this.now()
     onQuote(quote)
+    notifySubscriptionStatus(state, 'connected')
     this.scheduleStale(state, onQuote)
   }
 
@@ -331,6 +341,7 @@ export class KrakenMarketDataProvider implements MarketDataProvider {
     state.lastTickerAt.clear()
     this.clearStaleTimer(state)
     this.markStale(state, onQuote)
+    notifySubscriptionStatus(state, 'reconnecting')
     this.disposeSocket(socket)
     this.scheduleReconnect(state, onQuote)
   }
@@ -364,6 +375,7 @@ export class KrakenMarketDataProvider implements MarketDataProvider {
         this.now() - state.lastQuoteAt >= this.staleAfterMs
       ) {
         this.markStale(state, onQuote)
+        notifySubscriptionStatus(state, 'stale')
       }
     }, this.staleAfterMs)
   }
@@ -411,6 +423,15 @@ export class KrakenMarketDataProvider implements MarketDataProvider {
       // Cleanup must remain best effort when a browser socket is already closed.
     }
   }
+}
+
+function notifySubscriptionStatus(
+  state: SubscriptionState,
+  status: MarketSubscriptionStatus,
+): void {
+  if (state.status === status) return
+  state.status = status
+  state.onStatus?.(status)
 }
 
 function mapAssetPair(body: unknown): Instrument {
@@ -542,12 +563,15 @@ function mapTrade(
   const price = numberValue(value.price)
   const timestamp = stringValue(value.timestamp)
   const tradeId = tradeIdValue(value.trade_id)
+  const tradeQuantity = numberValue(value.qty)
   if (
     price === null ||
     price <= 0 ||
     timestamp === null ||
     Number.isNaN(Date.parse(timestamp)) ||
-    tradeId === null
+    tradeId === null ||
+    tradeQuantity === null ||
+    tradeQuantity <= 0
   ) {
     return null
   }
@@ -558,6 +582,7 @@ function mapTrade(
     changePercent: tickerChange?.changePercent ?? 0,
     timestamp,
     status: 'live',
+    tradeQuantity,
   }
 }
 

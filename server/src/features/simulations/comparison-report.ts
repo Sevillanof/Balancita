@@ -45,7 +45,7 @@ import {
 } from './trade-simulation.ts'
 
 export const SIMULATION_COMPARISON_VERSION =
-  'simulations-comparison.v2' as const
+  'simulations-comparison.v3' as const
 
 /**
  * Maximum equity-curve points stored per candidate per slice. Longer
@@ -179,6 +179,39 @@ export interface SimulationComparisonReport {
   readonly contentHash: string
   /** Null for callers that only score forecasts without trade simulation. */
   readonly profitability: SimulationProfitabilityBlock | null
+  readonly microCandidateDiagnostics: MicroCandidateDiagnostics | null
+}
+
+export interface MicroCandidateDiagnostics {
+  readonly version: 'micro-candidate-diagnostics.v1'
+  readonly holdoutConsumed: true
+  readonly holdoutNotice: string
+  readonly candidates: readonly {
+    readonly candidateId: string
+    readonly selectionBrier: number | null
+    readonly selectionMaturedCount: number
+    readonly validationBrier: number | null
+    readonly validationMaturedCount: number
+    readonly priorReadyCount: number
+    readonly forecastOrigins: number
+    readonly forecastCoverage: number | null
+    readonly selectionFillCount: number
+    readonly selectionRoundTripCount: number
+    readonly selectionNetReturnPct: number
+    readonly selectionDrawdownPct: number
+    readonly validationFillCount: number
+    readonly validationRoundTripCount: number
+    readonly validationNetReturnPct: number
+    readonly validationDrawdownPct: number
+  }[]
+  readonly selectionBaselines: MicroDiagnosticBaselines
+  readonly validationBaselines: MicroDiagnosticBaselines
+}
+
+export interface MicroDiagnosticBaselines {
+  readonly uniform: { readonly brier: number | null; readonly count: number }
+  readonly noChange: { readonly brier: number | null; readonly count: number }
+  readonly momentum: { readonly brier: number | null; readonly count: number }
 }
 
 export interface SimulationReportCandidate {
@@ -198,14 +231,33 @@ export function buildComparisonReport(args: {
   readonly validation: readonly SimulationScoredEntry[]
   readonly candidates: readonly SimulationReportCandidate[]
   readonly profitability?: SimulationProfitabilityInput
+  readonly microReadiness?: Readonly<
+    Record<
+      string,
+      { readonly priorReadyCount: number; readonly forecastOrigins: number }
+    >
+  >
 }): SimulationComparisonReport {
+  const isMicro = (candidateId: string) =>
+    MICRO_CANDIDATE_IDS.includes(
+      candidateId as (typeof MICRO_CANDIDATE_IDS)[number],
+    )
+  const legacySelection = args.selection.filter(
+    (entry) => !isMicro(entry.candidateId),
+  )
+  const legacyValidation = args.validation.filter(
+    (entry) => !isMicro(entry.candidateId),
+  )
+  const legacyCandidates = args.candidates.filter(
+    (candidate) => !isMicro(candidate.candidateId),
+  )
   const byCandidate = new Map<string, SimulationScoredEntry[]>()
-  for (const scored of args.selection) {
+  for (const scored of legacySelection) {
     const current = byCandidate.get(scored.candidateId) ?? []
     current.push(scored)
     byCandidate.set(scored.candidateId, current)
   }
-  const rows = args.candidates.map((candidate) =>
+  const rows = legacyCandidates.map((candidate) =>
     buildRow(candidate, byCandidate.get(candidate.candidateId) ?? [], []),
   )
   rows.sort((left, right) => {
@@ -219,11 +271,18 @@ export function buildComparisonReport(args: {
     )
   })
 
-  const winnerRow = rows.find((row) => row.brier !== null) ?? null
+  const winnerRow =
+    rows.find(
+      (row) =>
+        row.brier !== null &&
+        !MICRO_CANDIDATE_IDS.includes(
+          row.candidateId as (typeof MICRO_CANDIDATE_IDS)[number],
+        ),
+    ) ?? null
   const winnerValidation =
     winnerRow === null
       ? []
-      : args.validation.filter(
+      : legacyValidation.filter(
           (scored) => scored.candidateId === winnerRow.candidateId,
         )
   const validatedRows =
@@ -235,7 +294,7 @@ export function buildComparisonReport(args: {
             : row,
         )
 
-  const orderedSelection = [...args.selection].sort(
+  const orderedSelection = [...legacySelection].sort(
     (left, right) => left.asOfTimestamp - right.asOfTimestamp,
   )
   const maturedSelectionLabels = maturedLabelsForTimes(
@@ -250,6 +309,14 @@ export function buildComparisonReport(args: {
           args.profitability,
           args.candidates.map((candidate) => candidate.candidateId),
         )
+  const microCandidateDiagnostics = buildMicroDiagnostics({
+    selection: args.selection,
+    validation: args.validation,
+    candidates: args.candidates,
+    microReadiness: args.microReadiness ?? {},
+    profitability,
+    horizon: args.horizon,
+  })
   const reportWithoutHash = {
     version: SIMULATION_COMPARISON_VERSION,
     instrumentId: 'BTC-EUR' as const,
@@ -259,8 +326,8 @@ export function buildComparisonReport(args: {
     neutralBand: SIMULATION_NEUTRAL_BAND,
     selectionPct: args.selectionPct,
     selectionCutTimestamp: args.selectionCutTimestamp,
-    selectionCount: args.selection.length,
-    validationCount: args.validation.length,
+    selectionCount: legacySelection.length,
+    validationCount: legacyValidation.length,
     rows: validatedRows,
     baselines: {
       uniform: baselineMetrics(
@@ -303,6 +370,9 @@ export function buildComparisonReport(args: {
       'No random backtest or random train/test split is performed; the split is strictly by time.',
       'Metrics are meaningful only for outcomes evaluated after their valid horizon.',
       'Results depend on thin historical data and must not drive trading decisions.',
+      ...(microCandidateDiagnostics === null
+        ? []
+        : [microCandidateDiagnostics.holdoutNotice]),
       ...(profitability === null
         ? []
         : [
@@ -311,10 +381,141 @@ export function buildComparisonReport(args: {
           ]),
     ],
     profitability,
+    microCandidateDiagnostics,
   }
   return {
     ...reportWithoutHash,
     contentHash: contentHashFor(reportWithoutHash),
+  }
+}
+
+const MICRO_CANDIDATE_IDS = [
+  'micro-trend-pullback',
+  'micro-bollinger-reversion',
+  'micro-donchian-breakout',
+  'micro-regime-adapter',
+] as const
+
+function buildMicroDiagnostics(args: {
+  readonly selection: readonly SimulationScoredEntry[]
+  readonly validation: readonly SimulationScoredEntry[]
+  readonly candidates: readonly SimulationReportCandidate[]
+  readonly microReadiness: Readonly<
+    Record<
+      string,
+      { readonly priorReadyCount: number; readonly forecastOrigins: number }
+    >
+  >
+  readonly profitability: SimulationProfitabilityBlock | null
+  readonly horizon: ForecastHorizon
+}): MicroCandidateDiagnostics | null {
+  const present = new Set(args.candidates.map(({ candidateId }) => candidateId))
+  if (!MICRO_CANDIDATE_IDS.some((id) => present.has(id))) return null
+  const microSelection = args.selection.filter(
+    (entry) =>
+      present.has(entry.candidateId) &&
+      MICRO_CANDIDATE_IDS.includes(
+        entry.candidateId as (typeof MICRO_CANDIDATE_IDS)[number],
+      ),
+  )
+  const microValidation = args.validation.filter(
+    (entry) =>
+      present.has(entry.candidateId) &&
+      MICRO_CANDIDATE_IDS.includes(
+        entry.candidateId as (typeof MICRO_CANDIDATE_IDS)[number],
+      ),
+  )
+  const uniqueByTime = (entries: readonly SimulationScoredEntry[]) =>
+    [
+      ...new Map(entries.map((entry) => [entry.asOfTimestamp, entry])).values(),
+    ].sort((a, b) => a.asOfTimestamp - b.asOfTimestamp)
+  const selectionMatched = uniqueByTime(microSelection)
+  const validationMatched = uniqueByTime(microValidation)
+  const baselineSet = (
+    entries: readonly SimulationScoredEntry[],
+    history: readonly SimulationScoredEntry[],
+  ): MicroDiagnosticBaselines => {
+    const times = entries.map(({ asOfTimestamp }) => asOfTimestamp)
+    const matured = maturedLabelsForTimes(history, times, args.horizon)
+    const scored = entries.map((entry) => ({
+      scored: entry,
+      probabilities: uniformBaseline(),
+    }))
+    const calculate = (mode: 'uniform' | 'noChange' | 'momentum') => {
+      const mapped = scored.map(({ scored }, index) => ({
+        scored,
+        probabilities:
+          mode === 'uniform'
+            ? uniformBaseline()
+            : mode === 'noChange'
+              ? noChangeBaseline()
+              : momentumBaseline(matured[index] ?? null),
+      }))
+      return { brier: baselineMetrics(mapped).brier, count: mapped.length }
+    }
+    return {
+      uniform: calculate('uniform'),
+      noChange: calculate('noChange'),
+      momentum: calculate('momentum'),
+    }
+  }
+  const selectionBaselines = baselineSet(selectionMatched, [...args.selection])
+  const validationBaselines = baselineSet(validationMatched, [
+    ...args.selection,
+    ...args.validation,
+  ])
+  const diagnostics = MICRO_CANDIDATE_IDS.filter((id) => present.has(id)).map(
+    (candidateId) => {
+      const selection = args.selection.filter(
+        (entry) => entry.candidateId === candidateId,
+      )
+      const validation = args.validation.filter(
+        (entry) => entry.candidateId === candidateId,
+      )
+      const profit = args.profitability?.candidates.find(
+        (entry) => entry.candidateId === candidateId,
+      )
+      const readiness = args.microReadiness[candidateId] ?? {
+        priorReadyCount: 0,
+        forecastOrigins: 0,
+      }
+      const sliceDefaults = {
+        fillCount: 0,
+        tradeCount: 0,
+        netReturnPct: 0,
+        maxDrawdownPct: 0,
+      }
+      const selectionTrade = profit?.selection.metrics ?? sliceDefaults
+      const validationTrade = profit?.validation.metrics ?? sliceDefaults
+      return {
+        candidateId,
+        selectionBrier: calculateBrierScore(toMetricEntries(selection)),
+        selectionMaturedCount: selection.length,
+        validationBrier: calculateBrierScore(toMetricEntries(validation)),
+        validationMaturedCount: validation.length,
+        priorReadyCount: readiness.priorReadyCount,
+        forecastOrigins: readiness.forecastOrigins,
+        forecastCoverage: calculateCoverage(toMetricEntries(validation))
+          .coverage,
+        selectionFillCount: selectionTrade.fillCount,
+        selectionRoundTripCount: selectionTrade.tradeCount,
+        selectionNetReturnPct: selectionTrade.netReturnPct,
+        selectionDrawdownPct: selectionTrade.maxDrawdownPct,
+        validationFillCount: validationTrade.fillCount,
+        validationRoundTripCount: validationTrade.tradeCount,
+        validationNetReturnPct: validationTrade.netReturnPct,
+        validationDrawdownPct: validationTrade.maxDrawdownPct,
+      }
+    },
+  )
+  return {
+    version: 'micro-candidate-diagnostics.v1',
+    holdoutConsumed: true,
+    holdoutNotice:
+      'Testing all four pre-registered micro candidates consumes this holdout; do not reuse it for further parameter selection.',
+    candidates: diagnostics,
+    selectionBaselines,
+    validationBaselines,
   }
 }
 

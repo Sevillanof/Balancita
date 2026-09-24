@@ -54,6 +54,8 @@ export interface TradeSimSignal {
   readonly probabilityUp: number
   readonly probabilityDown: number
   readonly abstained: boolean
+  /** Micro candidates supply their explicit target; legacy signals omit it. */
+  readonly directTarget?: Position
 }
 
 export interface TradeSimFill {
@@ -74,6 +76,8 @@ export interface TradeSimMetrics {
   readonly netReturnPct: number
   /** Closed LONG/FLAT round-trips. */
   readonly tradeCount: number
+  /** Buy and sell order fills; an open terminal position contributes one fill. */
+  readonly fillCount: number
   /** Profitable round-trips / closed round-trips; null without closes. */
   readonly winRate: number | null
   /** Gross net gains / absolute gross net losses on closed round-trips. Null when there are no losses. */
@@ -164,6 +168,7 @@ function decideTarget(
     readonly exitDownThreshold: number
   },
 ): Position {
+  if (signal?.directTarget !== undefined) return signal.directTarget
   if (signal === undefined) return current
   if (
     signal.abstained ||
@@ -263,6 +268,7 @@ export function simulateLongFlat(options: TradeSimOptions): TradeSimResult {
   const metrics: TradeSimMetrics = {
     netReturnPct: ((finalEquity - startingCash) / startingCash) * 100,
     tradeCount: closedCount,
+    fillCount: fills.length,
     winRate: closedCount === 0 ? null : profitableCloses / closedCount,
     profitFactor: grossLosses === 0 ? null : grossGains / grossLosses,
     maxDrawdownPct: maxDrawdown * 100,
@@ -340,6 +346,7 @@ export function simulateBuyAndHold(options: {
   const metrics: TradeSimMetrics = {
     netReturnPct: ((proceeds - startingCash) / startingCash) * 100,
     tradeCount: 1,
+    fillCount: fills.length,
     winRate: proceeds > startingCash ? 1 : 0,
     profitFactor: proceeds < startingCash ? 0 : null,
     maxDrawdownPct: maxDrawdownOf(

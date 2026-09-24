@@ -100,4 +100,42 @@ describe('replay run orchestration', () => {
     expect(counts).toEqual([...counts].sort((left, right) => left - right))
     expect(counts.at(-1)).toBe(result.outcomes.length)
   })
+
+  it('returns isolated chronological micro targets and excludes forecasts without a matured prior', () => {
+    const { service } = makeService()
+    const dataset = makeScenarioDataset({ candles: 90 })
+    const result = service.run({
+      dataset,
+      horizon: '15m',
+      runId: 'micro-run',
+      candidateId: 'micro-regime-adapter',
+    })
+    expect(result.microTargets).toHaveLength(90)
+    expect(
+      result.microTargets
+        .slice(0, 50)
+        .every((entry) => entry.target === 'flat' && !entry.forecastEligible),
+    ).toBe(true)
+    expect(result.microTargets.slice(50)).toHaveLength(40)
+    expect(result.forecasts[50]?.technicalFeatureSnapshot.version).toBe(
+      'technical-features.micro.v1',
+    )
+    expect(
+      result.forecasts[50]?.technicalFeatureSnapshot.values,
+    ).toHaveProperty('bollingerMid')
+    expect(result.forecasts[50]?.ruleVersion).toBe(
+      'simulation-micro-regime-adapter.v1',
+    )
+    expect(result.microTargets.some((entry) => entry.priorReady)).toBe(true)
+    expect(
+      result.microTargets.every((entry) => entry.time <= dataset.asOfTimestamp),
+    ).toBe(true)
+    const replayAgain = service.run({
+      dataset,
+      horizon: '15m',
+      runId: 'micro-run-again',
+      candidateId: 'micro-regime-adapter',
+    })
+    expect(replayAgain.microTargets).toEqual(result.microTargets)
+  })
 })

@@ -57,6 +57,15 @@ export interface ForecastEngineInput {
    */
   readonly ruleVersion?: string
   readonly ruleConfig?: SimulationRuleConfig
+  /** Micro-candidate-only output; legacy rule dispatch remains untouched. */
+  readonly microProbabilityOverride?: {
+    readonly probabilities: {
+      readonly up: number
+      readonly down: number
+      readonly flat: number
+    } | null
+    readonly notReadyReason?: string
+  }
 }
 
 export function generateForecast(input: ForecastEngineInput): ForecastRecord {
@@ -77,7 +86,9 @@ export function generateForecast(input: ForecastEngineInput): ForecastRecord {
     input.ruleVersion !== undefined || input.ruleConfig !== undefined
   if (
     dispatchRule &&
-    (input.ruleVersion === undefined || input.ruleConfig === undefined)
+    (input.ruleVersion === undefined ||
+      (input.ruleConfig === undefined &&
+        input.microProbabilityOverride === undefined))
   )
     throw new Error(
       'Simulation rule dispatch requires both ruleVersion and ruleConfig.',
@@ -95,8 +106,22 @@ export function generateForecast(input: ForecastEngineInput): ForecastRecord {
     readonly down: number
     readonly flat: number
   }
-  if (abstentionReason !== undefined) {
+  if (engineAbstention !== undefined) {
     probabilities = neutralProbabilities()
+  } else if (input.microProbabilityOverride !== undefined) {
+    const microOverride = input.microProbabilityOverride
+    if (
+      microOverride.probabilities === null ||
+      (microOverride.notReadyReason !== undefined &&
+        microOverride.notReadyReason !== 'micro_regime_not_ready')
+    ) {
+      abstentionReason =
+        microOverride.notReadyReason ?? 'micro_probability_not_ready'
+      probabilities = neutralProbabilities()
+    } else {
+      abstentionReason = microOverride.notReadyReason
+      probabilities = microOverride.probabilities
+    }
   } else if (input.ruleConfig === undefined) {
     probabilities = probabilitiesForFeatures(
       input.referencePrice,

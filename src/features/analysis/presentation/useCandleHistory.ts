@@ -19,14 +19,19 @@ export type UseCandleHistoryResult = {
   status: CandleHistoryStatus
   candles: readonly Candle[]
   retry: () => void
+  historyReceivedAtMs: number | null
 }
 
 export function useCandleHistory(
   provider: MarketDataProvider,
   instrumentId: InstrumentId,
+  options: { readonly now?: () => number } = {},
 ): UseCandleHistoryResult {
   const [reloadKey, setReloadKey] = useState(0)
   const [result, setResult] = useState<HistoryResult | null>(null)
+  const [lastSuccessfulAt, setLastSuccessfulAt] = useState<
+    ReadonlyMap<InstrumentId, number>
+  >(() => new Map())
 
   const retry = useCallback(() => {
     setResult(null)
@@ -39,6 +44,10 @@ export function useCandleHistory(
     provider.getHistory(instrumentId).then(
       (candles) => {
         if (!active) return
+        const receivedAtMs = (options.now ?? Date.now)()
+        setLastSuccessfulAt((previous) =>
+          new Map(previous).set(instrumentId, receivedAtMs),
+        )
         setResult({
           instrumentId,
           status: candles.length === 0 ? 'empty' : 'ready',
@@ -47,19 +56,24 @@ export function useCandleHistory(
       },
       () => {
         if (!active) return
-        setResult({ instrumentId, status: 'error', candles: [] })
+        setResult({
+          instrumentId,
+          status: 'error',
+          candles: [],
+        })
       },
     )
 
     return () => {
       active = false
     }
-  }, [provider, instrumentId, reloadKey])
+  }, [provider, instrumentId, reloadKey, options.now])
 
   const fresh = result?.instrumentId === instrumentId
   return {
     status: fresh ? result.status : 'loading',
     candles: fresh ? result.candles : EMPTY,
     retry,
+    historyReceivedAtMs: lastSuccessfulAt.get(instrumentId) ?? null,
   }
 }

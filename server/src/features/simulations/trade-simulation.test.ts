@@ -45,6 +45,31 @@ const LONG = (index: number): TradeSimSignal => signal(index, 0.8, 0.1)
 const FLAT = (index: number): TradeSimSignal => signal(index, 0.2, 0.2)
 
 describe('trade simulation strategy-rule.v2', () => {
+  it('executes explicit micro target states independently of forecast probabilities', () => {
+    const bars = [bar(0, 100, 100), bar(1, 101, 101), bar(2, 99, 99)]
+    const result = simulateLongFlat({
+      bars,
+      signals: [
+        { ...signal(0, 0.1, 0.8), directTarget: 'long' },
+        { ...signal(1, 0.9, 0.05), directTarget: 'flat' },
+      ],
+      costs: { commissionRate: 0, slippageRate: 0 },
+    })
+    expect(result.fills.map(({ side }) => side)).toEqual(['buy', 'sell'])
+    expect(result.metrics.fillCount).toBe(2)
+    expect(result.metrics.tradeCount).toBe(1)
+  })
+
+  it('counts a terminal open micro position as one fill and no closed round-trip', () => {
+    const result = simulateLongFlat({
+      bars: [bar(0, 100, 100), bar(1, 100, 105)],
+      signals: [{ ...signal(0, 0.1, 0.8), directTarget: 'long' }],
+      costs: { commissionRate: 0, slippageRate: 0 },
+    })
+    expect(result.metrics.fillCount).toBe(1)
+    expect(result.metrics.tradeCount).toBe(0)
+  })
+
   it('exposes versioned defaults', () => {
     expect(STRATEGY_RULE_VERSION).toBe('strategy-rule.v2')
     expect(TRADE_COSTS_VERSION).toBe('costs.v1')

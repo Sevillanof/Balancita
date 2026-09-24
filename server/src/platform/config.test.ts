@@ -2,6 +2,17 @@ import { describe, expect, it } from 'vitest'
 import { ServerConfigError, serverConfigFrom } from './config.ts'
 
 describe('serverConfigFrom', () => {
+  it('defaults and validates the market collector interval', () => {
+    expect(serverConfigFrom({}).marketCollectorIntervalMs).toBe(600_000)
+    expect(
+      serverConfigFrom({ MARKET_COLLECTOR_INTERVAL_MS: '1234' })
+        .marketCollectorIntervalMs,
+    ).toBe(1234)
+    for (const value of ['0', '-1', '1.5', 'invalid'])
+      expect(() =>
+        serverConfigFrom({ MARKET_COLLECTOR_INTERVAL_MS: value }),
+      ).toThrow('MARKET_COLLECTOR_INTERVAL_MS must be a positive integer')
+  })
   it('applies the free-tier defaults when nothing is provided', () => {
     const config = serverConfigFrom({})
     expect(config.model).toBe('gemini-3.5-flash-lite')
@@ -17,6 +28,8 @@ describe('serverConfigFrom', () => {
     expect(config.corsOrigin).toBe('http://localhost:5173')
     expect(config.apiKey).toBe('')
     expect(config.marketCollectorEnabled).toBe(false)
+    expect(config.krakenWsCollectorEnabled).toBe(false)
+    expect(config.krakenRestOhlcWorkerEnabled).toBe(true)
     expect(config.forecastLoopEnabled).toBe(false)
     expect(config.forecastLoopIntervalMs).toBe(60_000)
     expect(config.newsPollingEnabled).toBe(false)
@@ -38,6 +51,37 @@ describe('serverConfigFrom', () => {
     expect(config.intelligenceStreamKeepAliveMs).toBe(15_000)
     expect(config.intelligenceStreamWindowSize).toBe(200)
     expect(config.shadowRunId).toBe('shadow:BTC-EUR')
+  })
+
+  it('uses independent collector defaults, legacy fallbacks, and explicit overrides', () => {
+    expect(
+      serverConfigFrom({ BALANCITA_ROOT_DEV_SERVER: 'true' }),
+    ).toMatchObject({
+      krakenWsCollectorEnabled: false,
+      krakenRestOhlcWorkerEnabled: true,
+    })
+    expect(
+      serverConfigFrom({ MARKET_COLLECTOR_ENABLED: 'false' }),
+    ).toMatchObject({
+      krakenWsCollectorEnabled: false,
+      krakenRestOhlcWorkerEnabled: false,
+    })
+    expect(
+      serverConfigFrom({ MARKET_COLLECTOR_ENABLED: 'true' }),
+    ).toMatchObject({
+      krakenWsCollectorEnabled: true,
+      krakenRestOhlcWorkerEnabled: true,
+    })
+    expect(
+      serverConfigFrom({
+        MARKET_COLLECTOR_ENABLED: 'false',
+        KRAKEN_WS_COLLECTOR_ENABLED: 'true',
+        KRAKEN_REST_OHLC_WORKER_ENABLED: 'true',
+      }),
+    ).toMatchObject({
+      krakenWsCollectorEnabled: true,
+      krakenRestOhlcWorkerEnabled: true,
+    })
   })
 
   it('parses numeric environment values without requiring a key in tests', () => {
@@ -133,6 +177,8 @@ describe('serverConfigFrom', () => {
       { GEMINI_CACHE_TTL_MS: '0' },
       { GEMINI_MAX_CANDLES: '1.5' },
       { MARKET_COLLECTOR_ENABLED: 'maybe' },
+      { KRAKEN_WS_COLLECTOR_ENABLED: 'maybe' },
+      { KRAKEN_REST_OHLC_WORKER_ENABLED: 'maybe' },
       { FORECAST_LOOP_ENABLED: 'maybe' },
       { FORECAST_LOOP_INTERVAL_MS: '0' },
       { NEWS_POLL_INTERVAL_MS: '0' },

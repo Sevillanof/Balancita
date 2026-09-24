@@ -23,6 +23,9 @@ export interface ServerConfig {
   maxCandles: number
   corsOrigin: string
   marketCollectorEnabled: boolean
+  krakenWsCollectorEnabled: boolean
+  krakenRestOhlcWorkerEnabled: boolean
+  marketCollectorIntervalMs: number
   forecastLoopEnabled: boolean
   forecastLoopIntervalMs: number
   newsPollingEnabled: boolean
@@ -108,10 +111,25 @@ export function serverConfigFrom(
       'GEMINI_SERVER_CORS_ORIGIN',
       'http://localhost:5173',
     ),
-    marketCollectorEnabled: booleanValue(
+    marketCollectorEnabled: collectorFlag(
       env,
-      'MARKET_COLLECTOR_ENABLED',
+      'KRAKEN_WS_COLLECTOR_ENABLED',
       false,
+    ),
+    krakenWsCollectorEnabled: collectorFlag(
+      env,
+      'KRAKEN_WS_COLLECTOR_ENABLED',
+      false,
+    ),
+    krakenRestOhlcWorkerEnabled: collectorFlag(
+      env,
+      'KRAKEN_REST_OHLC_WORKER_ENABLED',
+      true,
+    ),
+    marketCollectorIntervalMs: positiveInt(
+      env,
+      'MARKET_COLLECTOR_INTERVAL_MS',
+      600_000,
     ),
     forecastLoopEnabled: booleanValue(env, 'FORECAST_LOOP_ENABLED', false),
     forecastLoopIntervalMs: positiveInt(
@@ -164,6 +182,20 @@ export function serverConfigFrom(
       200,
     ),
   }
+}
+
+function collectorFlag(
+  env: Readonly<Record<string, string | undefined>>,
+  name: string,
+  fallback: boolean,
+): boolean {
+  return booleanValue(
+    env,
+    name,
+    env.MARKET_COLLECTOR_ENABLED === undefined
+      ? fallback
+      : booleanValue(env, 'MARKET_COLLECTOR_ENABLED', fallback),
+  )
 }
 
 function stringValue(

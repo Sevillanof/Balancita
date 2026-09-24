@@ -49,7 +49,7 @@ describe('TradeScreen', () => {
     expect(previewButton).toBeEnabled()
   })
 
-  it('executes a buy and reflects cash and history', async () => {
+  it('executes a buy and reflects cash without rendering order history in the trade flow', async () => {
     const market = new FakeMarketDataProvider(WATCHLIST_INSTRUMENTS)
     const user = userEvent.setup()
     render(<TradeScreen provider={market} />)
@@ -81,9 +81,9 @@ describe('TradeScreen', () => {
     await waitFor(() =>
       expect(screen.getByText('Efectivo (EUR): €4,000.00')).toBeInTheDocument(),
     )
-    const history = screen.getByRole('region', { name: 'Historial de órdenes' })
-    expect(within(history).getByText('R1')).toBeInTheDocument()
-    expect(within(history).getByText('Ejecutada')).toBeInTheDocument()
+    expect(
+      screen.queryByRole('region', { name: 'Historial de órdenes' }),
+    ).not.toBeInTheDocument()
   })
 
   it('rejects a buy that exceeds available cash and shows the reason', async () => {

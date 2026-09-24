@@ -62,6 +62,82 @@ const baseInput = (): ForecastEngineInput => ({
 })
 
 describe('forecast engine', () => {
+  it('preserves a valid empirical prior for a neutral micro regime while marking it abstained', () => {
+    const forecast = generateForecast({
+      ...baseInput(),
+      ruleVersion: 'simulation-micro-regime-adapter.v1',
+      microProbabilityOverride: {
+        probabilities: { up: 0.2, down: 0.3, flat: 0.5 },
+        notReadyReason: 'micro_regime_not_ready',
+      },
+    })
+
+    expect(forecast.abstained).toBe(true)
+    expect(forecast.abstentionReason).toBe('micro_regime_not_ready')
+    expect(forecast.probabilityUp).toBe(0.2)
+    expect(forecast.probabilityDown).toBe(0.3)
+    expect(forecast.probabilityFlat).toBe(0.5)
+  })
+
+  it('keeps engine invalidity and unavailable priors on the neutral fallback', () => {
+    const input = {
+      ...baseInput(),
+      ruleVersion: 'simulation-micro-regime-adapter.v1',
+      microProbabilityOverride: {
+        probabilities: { up: 0.2, down: 0.3, flat: 0.5 },
+        notReadyReason: 'micro_regime_not_ready',
+      },
+    } satisfies ForecastEngineInput
+    const invalid = generateForecast({
+      ...input,
+      technicalFeatureSnapshot: {
+        ...input.technicalFeatureSnapshot,
+        ready: false,
+        warmUp: { requiredCandles: 50, availableCandles: 20, missingCandles: 30 },
+      },
+    })
+    const futureNews = generateForecast({
+      ...input,
+      newsEvidenceReferences: [
+        {
+          id: 'future-news',
+          version: '1',
+          publishedAt: time(1_001),
+          ingestedAt: time(1_001),
+          contentHash: 'future-hash',
+        },
+      ],
+    })
+    const stale = generateForecast({
+      ...input,
+      dataFreshness: { ageMs: 10_000, isStale: true, clockInverted: false },
+    })
+    const withGap = generateForecast({
+      ...input,
+      dataGaps: { ...input.dataGaps, gapCount: 1, rate: 0.1 },
+    })
+    const noPrior = generateForecast({
+      ...baseInput(),
+      ruleVersion: 'simulation-micro-regime-adapter.v1',
+      microProbabilityOverride: {
+        probabilities: null,
+        notReadyReason: 'empirical_prior_not_ready',
+      },
+    })
+
+    for (const forecast of [invalid, futureNews, stale, withGap, noPrior]) {
+      expect(forecast.abstained).toBe(true)
+      expect(forecast.probabilityUp).toBe(1 / 3)
+      expect(forecast.probabilityDown).toBe(1 / 3)
+      expect(forecast.probabilityFlat).toBe(1 / 3)
+    }
+    expect(invalid.abstentionReason).toBe('warmup_incomplete')
+    expect(futureNews.abstentionReason).toBe('future_news_evidence')
+    expect(stale.abstentionReason).toBe('stale_or_inverted_freshness')
+    expect(withGap.abstentionReason).toBe('market_gaps')
+    expect(noPrior.abstentionReason).toBe('empirical_prior_not_ready')
+  })
+
   it('emits finite probabilities that sum to one and repeats exactly', () => {
     const input = baseInput()
     const first = generateForecast(input)

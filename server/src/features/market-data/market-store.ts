@@ -39,8 +39,22 @@ import type { ShadowInsertResult } from '../shadow-runs/shadow-run.ts'
 import type { ShadowRunStatusKind } from '../shadow-runs/shadow-contracts.ts'
 import type { NormalizedMarketPayload } from './market-payload.ts'
 import { validateNormalizedMarketPayload } from './market-payload.ts'
+import type { FastReplayCandle } from '../simulations/fast-replay-engine.ts'
 
-const SCHEMA_VERSION = 6
+const SCHEMA_VERSION = 8
+
+export interface OhlcCollectorState {
+  readonly cursor: number | null
+  readonly lastSuccessfulSync: number
+}
+
+export interface OhlcHistoryMetrics {
+  readonly candleCount: number
+  readonly minTimestamp: number | null
+  readonly maxTimestamp: number | null
+  readonly coverageHours: number
+  readonly gapCount: number
+}
 
 export interface MarketStoreOptions {
   readonly path: string
@@ -207,6 +221,9 @@ export class MarketStore {
     this.database = new DatabaseSync(options.path)
     this.clock = options.clock ?? (() => Date.now() as TimestampMs)
     this.database.exec('PRAGMA foreign_keys = ON;')
+    this.database.exec('PRAGMA busy_timeout = 5000;')
+    if (options.path !== ':memory:')
+      this.database.exec('PRAGMA journal_mode = WAL;')
     this.migrate()
   }
 
@@ -215,6 +232,19 @@ export class MarketStore {
       .prepare('SELECT MAX(version) AS version FROM schema_migrations')
       .get() as SqlRow | undefined
     return typeof row?.version === 'number' ? row.version : 0
+  }
+
+  sqliteSettings(): {
+    readonly journalMode: string
+    readonly busyTimeout: number
+  } {
+    const journal = this.database.prepare('PRAGMA journal_mode').get() as {
+      journal_mode: string
+    }
+    const timeout = this.database.prepare('PRAGMA busy_timeout').get() as {
+      timeout: number
+    }
+    return { journalMode: journal.journal_mode, busyTimeout: timeout.timeout }
   }
 
   insertObservation(
@@ -289,6 +319,182 @@ export class MarketStore {
       .prepare('SELECT COUNT(*) AS count FROM market_observations')
       .get() as SqlRow
     return Number(row.count)
+  }
+
+  upsertOhlcCandles(
+    candles: readonly (FastReplayCandle & { readonly source?: string })[],
+  ): number {
+    const insert = this.database
+      .prepare(`INSERT OR REPLACE INTO candles_1m_kraken
+      (timestamp, open, high, low, close, volume, source) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+    for (const candle of candles)
+      insert.run(
+        candle.timestamp,
+        candle.open,
+        candle.high,
+        candle.low,
+        candle.close,
+        candle.volume,
+        candle.source ?? 'kraken_rest_ohlc',
+      )
+    return candles.length
+  }
+
+  listOhlcCandles(startMs: number, endMs: number): readonly FastReplayCandle[] {
+    const rows = this.database
+      .prepare(
+        `SELECT timestamp, open, high, low, close, volume
+      FROM candles_1m_kraken WHERE timestamp * 1000 BETWEEN ? AND ? ORDER BY timestamp`,
+      )
+      .all(startMs, endMs) as SqlRow[]
+    return rows.map((row) => ({
+      timestamp: Number(row.timestamp),
+      open: Number(row.open),
+      high: Number(row.high),
+      low: Number(row.low),
+      close: Number(row.close),
+      volume: Number(row.volume),
+    }))
+  }
+
+  insertOhlcCandles(
+    candles: readonly (FastReplayCandle & { readonly source?: string })[],
+  ): number {
+    const insert = this.database.prepare(
+      `INSERT OR IGNORE INTO candles_1m_kraken (timestamp, open, high, low, close, volume, source) VALUES (?, ?, ?, ?, ?, ?, 'kraken_rest_ohlc')`,
+    )
+    this.database.exec('BEGIN IMMEDIATE')
+    try {
+      let inserted = 0
+      for (const candle of candles) {
+        const result = insert.run(
+          candle.timestamp,
+          candle.open,
+          candle.high,
+          candle.low,
+          candle.close,
+          candle.volume,
+        )
+        inserted += Number(result.changes)
+      }
+      this.database.exec('COMMIT')
+      return inserted
+    } catch (error) {
+      this.database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  ohlcCandleCount(): number {
+    const row = this.database
+      .prepare('SELECT COUNT(*) AS count FROM candles_1m_kraken')
+      .get() as SqlRow
+    return Number(row.count)
+  }
+
+  latestOhlcTimestamp(): number | null {
+    const row = this.database
+      .prepare('SELECT MAX(timestamp) AS timestamp FROM candles_1m_kraken')
+      .get() as SqlRow
+    return row.timestamp === null ? null : Number(row.timestamp)
+  }
+
+  ohlcHistoryMetrics(): OhlcHistoryMetrics {
+    const row = this.database
+      .prepare(
+        'SELECT COUNT(*) AS count, MIN(timestamp) AS min_timestamp, MAX(timestamp) AS max_timestamp FROM candles_1m_kraken',
+      )
+      .get() as SqlRow
+    const timestamps = this.database
+      .prepare('SELECT timestamp FROM candles_1m_kraken ORDER BY timestamp')
+      .all() as SqlRow[]
+    let gapCount = 0
+    for (let index = 1; index < timestamps.length; index += 1)
+      if (
+        Number(timestamps[index]!.timestamp) -
+          Number(timestamps[index - 1]!.timestamp) >
+        60
+      )
+        gapCount += 1
+    const minTimestamp =
+      row.min_timestamp === null ? null : Number(row.min_timestamp)
+    const maxTimestamp =
+      row.max_timestamp === null ? null : Number(row.max_timestamp)
+    return {
+      candleCount: Number(row.count),
+      minTimestamp,
+      maxTimestamp,
+      coverageHours:
+        minTimestamp === null || maxTimestamp === null
+          ? 0
+          : (maxTimestamp - minTimestamp) / 3600,
+      gapCount,
+    }
+  }
+
+  getOhlcCollectorState(): OhlcCollectorState {
+    const row = this.database
+      .prepare(
+        'SELECT cursor, last_successful_sync FROM ohlc_collector_state WHERE id = 1',
+      )
+      .get() as SqlRow | undefined
+    return {
+      cursor:
+        row?.cursor === null || row === undefined ? null : Number(row.cursor),
+      lastSuccessfulSync:
+        row === undefined ? 0 : Number(row.last_successful_sync),
+    }
+  }
+
+  saveOhlcCollectorState(cursor: number, lastSuccessfulSync: number): void {
+    this.database
+      .prepare(
+        `INSERT INTO ohlc_collector_state (id, cursor, last_successful_sync) VALUES (1, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET cursor = excluded.cursor, last_successful_sync = excluded.last_successful_sync`,
+      )
+      .run(cursor, lastSuccessfulSync)
+  }
+
+  saveFastReplayRun(
+    id: string,
+    request: unknown,
+    result: unknown,
+    datasetHash: string,
+    contentHash: string,
+    createdAt = this.clock(),
+  ): void {
+    const record = { id, request, result, datasetHash, contentHash, createdAt }
+    this.database
+      .prepare(
+        `INSERT INTO fast_replay_runs
+      (id, request_json, result_json, dataset_hash, content_hash, created_at, record_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        id,
+        canonicalJson(request),
+        canonicalJson(result),
+        datasetHash,
+        contentHash,
+        createdAt,
+        canonicalJson(record),
+      )
+  }
+
+  listFastReplayRuns(limit = 50): readonly unknown[] {
+    const rows = this.database
+      .prepare(
+        `SELECT record_json FROM fast_replay_runs
+      ORDER BY created_at DESC, rowid DESC LIMIT ?`,
+      )
+      .all(limit) as SqlRow[]
+    return rows.flatMap(({ record_json }) => {
+      try {
+        return [JSON.parse(String(record_json)) as unknown]
+      } catch {
+        return []
+      }
+    })
   }
 
   listObservations(): readonly StoredMarketObservation[] {
@@ -1574,6 +1780,55 @@ export class MarketStore {
           'INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)',
         )
         .run(6, this.clock())
+    }
+    if (currentVersion < 7) {
+      this.database.exec(`
+        CREATE TABLE IF NOT EXISTS candles_1m_kraken (
+          timestamp INTEGER PRIMARY KEY,
+          open REAL NOT NULL,
+          high REAL NOT NULL,
+          low REAL NOT NULL,
+          close REAL NOT NULL,
+          volume REAL NOT NULL,
+          source TEXT NOT NULL DEFAULT 'kraken_rest_ohlc'
+        ) STRICT;
+        CREATE TABLE IF NOT EXISTS fast_replay_runs (
+          id TEXT PRIMARY KEY,
+          request_json TEXT NOT NULL,
+          result_json TEXT NOT NULL,
+          dataset_hash TEXT NOT NULL,
+          content_hash TEXT NOT NULL UNIQUE,
+          created_at INTEGER NOT NULL,
+          record_json TEXT NOT NULL
+        ) STRICT;
+        CREATE TRIGGER IF NOT EXISTS fast_replay_runs_no_update
+          BEFORE UPDATE ON fast_replay_runs BEGIN
+            SELECT RAISE(ABORT, 'fast_replay_runs is append-only');
+          END;
+        CREATE TRIGGER IF NOT EXISTS fast_replay_runs_no_delete
+          BEFORE DELETE ON fast_replay_runs BEGIN
+            SELECT RAISE(ABORT, 'fast_replay_runs is append-only');
+          END;
+      `)
+      this.database
+        .prepare(
+          'INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)',
+        )
+        .run(7, this.clock())
+    }
+    if (currentVersion < 8) {
+      this.database.exec(`
+        CREATE TABLE IF NOT EXISTS ohlc_collector_state (
+          id INTEGER PRIMARY KEY CHECK (id = 1),
+          cursor INTEGER,
+          last_successful_sync INTEGER NOT NULL
+        ) STRICT;
+      `)
+      this.database
+        .prepare(
+          'INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)',
+        )
+        .run(8, this.clock())
     }
   }
 }

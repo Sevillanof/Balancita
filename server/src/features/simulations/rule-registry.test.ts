@@ -74,9 +74,13 @@ function engineProbabilitiesFor(snapshot: TechnicalFeatureSnapshot): {
 }
 
 describe('simulation rule registry', () => {
-  it('resolves every manifest rule version', () => {
+  it('resolves legacy rules and refuses to dispatch micro rules without replay state', () => {
     for (const candidate of SIMULATION_CANDIDATES) {
-      expect(() => resolveSimulationRule(candidate.ruleVersion)).not.toThrow()
+      if (candidate.microStrategy === undefined) {
+        expect(() => resolveSimulationRule(candidate.ruleVersion)).not.toThrow()
+      } else {
+        expect(() => resolveSimulationRule(candidate.ruleVersion)).toThrow(/chronological micro replay/i)
+      }
     }
   })
 
@@ -99,8 +103,8 @@ describe('simulation rule registry', () => {
     expect(actual.flat).toBe(expected.flat)
   })
 
-  it('emits finite probabilities that sum to one for every candidate', () => {
-    for (const candidate of SIMULATION_CANDIDATES) {
+  it('emits finite probabilities that sum to one for every legacy candidate', () => {
+    for (const candidate of SIMULATION_CANDIDATES.filter(({ microStrategy }) => microStrategy === undefined)) {
       const output = runSimulationRule(candidate, 100, BULLISH)
       for (const value of [output.up, output.down, output.flat]) {
         expect(Number.isFinite(value)).toBe(true)
@@ -271,6 +275,27 @@ describe('simulation rule registry v2 families', () => {
     )
     expect(inSession.abstentionReason).toBeUndefined()
     expect(inSession.up).toBeGreaterThan(inSession.flat)
+  })
+
+  it('requires EMA trend, MACD histogram, and slope to agree for composite confirmation', () => {
+    const candidate = candidateForRuleVersion('simulation-composite-trend.v1')
+    const confirmed = runSimulationRule(candidate, 100, BULLISH)
+    const conflicting = runSimulationRule(
+      candidate,
+      100,
+      snapshotWith({ ...BULLISH.values, structuralSlope: -0.8 }),
+    )
+    expect(confirmed.up).toBeGreaterThan(confirmed.flat)
+    expect(conflicting).toEqual({ up: 0.3, down: 0.3, flat: 0.4 })
+  })
+
+  it('applies the configured ATR ceiling to the composite RSI reversion hypothesis', () => {
+    const gated = runSimulationRule(
+      candidateForRuleVersion('simulation-composite-reversion.v1'),
+      100,
+      snapshotWith({ rsi: 70, atr: 3 }),
+    )
+    expect(gated.abstentionReason).toBe('atr_gate')
   })
 
   it.each([

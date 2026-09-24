@@ -8,6 +8,7 @@ import type {
 } from '../market-data/intraday-candles.ts'
 
 export const TECHNICAL_FEATURE_VERSION = 'technical-features.v1'
+export const MICRO_TECHNICAL_FEATURE_VERSION = 'technical-features.micro.v1'
 export const DEFAULT_PARAM_SET_VERSION = 'technical-defaults.v1'
 
 export type StructuralTrend = 'up' | 'down' | 'flat'
@@ -70,14 +71,40 @@ export interface TechnicalFeatureResult {
   }
   readonly readiness: Readonly<Record<keyof TechnicalIndicatorValues, boolean>>
   readonly indicators: TechnicalIndicatorValues
+  readonly rolling: RollingMarketFeatures
+  readonly micro: MicroTechnicalFeatures
   readonly values: Readonly<Record<string, number>>
   readonly signalPolicy: 'descriptive_indicators_not_combined'
+}
+
+export interface RollingMarketFeatures {
+  readonly bollingerMid: number | null
+  readonly bollingerUpper: number | null
+  readonly bollingerLower: number | null
+  /** Donchian window excludes the current closed bar. */
+  readonly donchianHigh: number | null
+  readonly donchianLow: number | null
+  readonly donchianMid: number | null
+  /** Volume mean excludes the current closed bar. */
+  readonly volumeSma: number | null
+  readonly atrPercentile: number | null
+  readonly priorAtrSma20: number | null
+}
+
+export interface MicroTechnicalFeatures {
+  readonly ema9: number | null
+  readonly ema21: number | null
+  readonly sma50: number | null
+  readonly rsi14: number | null
+  readonly ready: boolean
 }
 
 export interface TechnicalFeatureInput {
   readonly candles: readonly TechnicalCandle[]
   readonly asOfTimestamp: TimestampMs
   readonly params?: TechnicalFeatureParams
+  /** Opt-in so the frozen legacy feature/snapshot path stays byte-identical. */
+  readonly includeMicroFeatures?: boolean
 }
 
 export class TechnicalFeatureValidationError extends Error {
@@ -136,6 +163,30 @@ export function computeTechnicalFeatures(
     structuralSlope,
     structuralTrend,
   }
+  const rolling = input.includeMicroFeatures
+    ? rollingMarketFeatures(closed, params.atrPeriod)
+    : EMPTY_ROLLING_FEATURES
+  const micro: MicroTechnicalFeatures = {
+    ema9: input.includeMicroFeatures ? ema(closes, 9) : null,
+    ema21: input.includeMicroFeatures ? ema(closes, 21) : null,
+    sma50: input.includeMicroFeatures ? sma(closes, 50) : null,
+    rsi14: input.includeMicroFeatures ? rsi(closes, 14) : null,
+    ready: false,
+  }
+  const microReady =
+    micro.ema9 !== null &&
+    micro.ema21 !== null &&
+    micro.sma50 !== null &&
+    micro.rsi14 !== null &&
+    rolling.bollingerLower !== null &&
+    rolling.bollingerMid !== null &&
+    rolling.donchianHigh !== null &&
+    rolling.donchianMid !== null &&
+    rolling.volumeSma !== null &&
+    rolling.atrPercentile !== null &&
+    rolling.priorAtrSma20 !== null &&
+    indicators.atr !== null
+  const readyMicro: MicroTechnicalFeatures = { ...micro, ready: microReady }
 
   const readiness = {
     sma: indicators.sma !== null,
@@ -169,9 +220,124 @@ export function computeTechnicalFeatures(
     },
     readiness,
     indicators,
+    rolling,
+    micro: readyMicro,
     values,
     signalPolicy: 'descriptive_indicators_not_combined',
   }
+}
+
+function rollingMarketFeatures(
+  candles: readonly TechnicalCandle[],
+  atrPeriod: number,
+): RollingMarketFeatures {
+  const closes = candles.map(({ close }) => close)
+  const bollingerValues = closes.slice(-20)
+  const bollingerReady = bollingerValues.length === 20
+  const bollingerMid = bollingerReady
+    ? bollingerValues.reduce((sum, value) => sum + value, 0) / 20
+    : null
+  const variance =
+    bollingerValues.reduce(
+      (sum, value) => sum + (value - (bollingerMid ?? 0)) ** 2,
+      0,
+    ) / (bollingerReady ? 20 : 1)
+  const deviation = Math.sqrt(variance)
+  const previous = candles.slice(-21, -1)
+  const highs = previous.map(({ high }) => high)
+  const lows = previous.map(({ low }) => low)
+  const volumes = candles.slice(-21, -1).map(({ volume }) => volume)
+  const atrSeries = averageTrueRangeSeries(candles, atrPeriod)
+  const atrStart = Math.max(0, candles.length - 50)
+  const atrValues = atrSeries
+    .slice(atrStart)
+    .filter((value): value is number => value !== null)
+  const currentAtr = atrSeries.at(-1) ?? null
+  const atrPercentile =
+    currentAtr === null
+      ? null
+      : (100 * atrValues.filter((value) => value <= currentAtr).length) /
+        atrValues.length
+  const priorAtrWindow = atrSeries
+    .slice(0, -1)
+    .filter((value): value is number => value !== null)
+    .slice(-20)
+  return {
+    bollingerMid:
+      bollingerMid === null ? null : finite(bollingerMid, 'bollingerMid'),
+    bollingerUpper:
+      bollingerMid === null
+        ? null
+        : finite(bollingerMid + 2 * deviation, 'bollingerUpper'),
+    bollingerLower:
+      bollingerMid === null
+        ? null
+        : finite(bollingerMid - 2 * deviation, 'bollingerLower'),
+    donchianHigh:
+      highs.length < 20 ? null : finite(Math.max(...highs), 'donchianHigh'),
+    donchianLow:
+      lows.length < 20 ? null : finite(Math.min(...lows), 'donchianLow'),
+    donchianMid:
+      highs.length < 20 || lows.length < 20
+        ? null
+        : finite((Math.max(...highs) + Math.min(...lows)) / 2, 'donchianMid'),
+    volumeSma:
+      volumes.length < 20
+        ? null
+        : finite(
+            volumes.reduce((sum, value) => sum + value, 0) / 20,
+            'volumeSma',
+          ),
+    atrPercentile:
+      atrPercentile === null ? null : finite(atrPercentile, 'atrPercentile'),
+    priorAtrSma20:
+      priorAtrWindow.length < 20
+        ? null
+        : finite(
+            priorAtrWindow.reduce((sum, value) => sum + value, 0) / 20,
+            'priorAtrSma20',
+          ),
+  }
+}
+
+const EMPTY_ROLLING_FEATURES: RollingMarketFeatures = {
+  bollingerMid: null,
+  bollingerUpper: null,
+  bollingerLower: null,
+  donchianHigh: null,
+  donchianLow: null,
+  donchianMid: null,
+  volumeSma: null,
+  atrPercentile: null,
+  priorAtrSma20: null,
+}
+
+function averageTrueRangeSeries(
+  candles: readonly TechnicalCandle[],
+  period: number,
+): readonly (number | null)[] {
+  const result: (number | null)[] = Array(candles.length).fill(null)
+  if (candles.length < period + 1) return result
+  const trueRanges: number[] = []
+  for (let index = 1; index < candles.length; index += 1) {
+    const current = candles[index]!
+    const previous = candles[index - 1]!
+    trueRanges.push(
+      Math.max(
+        current.high - current.low,
+        Math.abs(current.high - previous.close),
+        Math.abs(current.low - previous.close),
+      ),
+    )
+  }
+  let current =
+    trueRanges.slice(0, period).reduce((sum, value) => sum + value, 0) / period
+  result[period] = finite(current, 'atr')
+  for (let index = period; index < trueRanges.length; index += 1) {
+    current = (current * (period - 1) + trueRanges[index]!) / period
+    result[index + 1] = finite(current, 'atr')
+  }
+  return result
 }
 
 export function toTechnicalFeatureSnapshot(

@@ -6,8 +6,20 @@ import { useSimulationsReport } from './useSimulationsReport.ts'
  * dashboard never requests simulations unprompted.
  */
 export default function SimulationsSection() {
-  const { status, file, error, retry, refresh, refreshing, refreshError } =
-    useSimulationsReport()
+  const {
+    status,
+    file,
+    error,
+    retry,
+    refresh,
+    refreshing,
+    refreshError,
+    history,
+    historyStatus,
+    historyError,
+    selectedHistoryId,
+    selectHistory,
+  } = useSimulationsReport()
   return (
     <SimulationsPanel
       status={status}
@@ -19,8 +31,18 @@ export default function SimulationsSection() {
       onRefresh={() => {
         void refresh()
       }}
+      onSample={(stage, seed) => {
+        void refresh({ stage, seed })
+      }}
       refreshing={refreshing}
       refreshError={refreshError}
+      history={history}
+      historyStatus={historyStatus}
+      historyError={historyError}
+      selectedHistoryId={selectedHistoryId}
+      onSelectHistory={(id) => {
+        void selectHistory(id)
+      }}
     />
   )
 }

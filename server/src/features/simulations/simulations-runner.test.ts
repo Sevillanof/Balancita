@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { TimestampMs } from '../../domain/contracts.ts'
 import { MarketStore } from '../market-data/market-store.ts'
-import { SIMULATION_CANDIDATES } from './candidate-manifest.ts'
+import { listSimulationReportHistory, simulationReportId } from './simulations-history.ts'
 import { runSimulationsFromLiveDb } from './simulations-runner.ts'
 
 const tempDirectories: string[] = []
@@ -77,7 +77,9 @@ describe('simulations runner', () => {
     expect(result.horizons).toHaveLength(1)
     const horizon = result.horizons[0]!
     expect(horizon.horizon).toBe('15m')
-    expect(horizon.report.rows).toHaveLength(SIMULATION_CANDIDATES.length)
+    expect(horizon.report.rows).toHaveLength(24)
+    expect(horizon.report.microCandidateDiagnostics?.candidates).toHaveLength(4)
+    expect(horizon.report.microCandidateDiagnostics?.holdoutConsumed).toBe(true)
     const briers = horizon.report.rows.map((row) => row.brier)
     expect(briers).toEqual([...briers].sort((a, b) => (a ?? 2) - (b ?? 2)))
     for (const row of horizon.report.rows) {
@@ -131,6 +133,36 @@ describe('simulations runner', () => {
     expect(JSON.parse(readFileSync(paths.reportPath, 'utf8')).generatedAt).toBe(
       2,
     )
+  }, 45_000)
+
+  it('keeps every newly generated report in distinct history while cache hits add nothing', () => {
+    const paths = makePaths()
+    seedContiguousMarket(paths.marketDbPath)
+    runSimulationsFromLiveDb({
+      ...paths,
+      horizons: ['15m'],
+      clock: () => 1 as TimestampMs,
+    })
+    const firstReport = JSON.parse(readFileSync(paths.reportPath, 'utf8'))
+    runSimulationsFromLiveDb({
+      ...paths,
+      horizons: ['15m'],
+      clock: () => 1 as TimestampMs,
+    })
+    runSimulationsFromLiveDb({
+      ...paths,
+      horizons: ['15m'],
+      selectionPct: 0.6,
+      stage: 'smoke',
+      seed: 19,
+      clock: () => 2 as TimestampMs,
+    })
+    const history = listSimulationReportHistory(paths.reportPath)
+    expect(history).toHaveLength(2)
+    expect(history[0]!.id).not.toBe(history[1]!.id)
+    expect(history.map((entry) => entry.generatedAt)).toEqual([2, 1])
+    expect(JSON.parse(readFileSync(paths.reportPath, 'utf8')).generatedAt).toBe(2)
+    expect(history.find((entry) => entry.id === simulationReportId(firstReport))?.generatedAt).toBe(1)
   }, 45_000)
 
   it('invalidates the cache when the live dataset changes', () => {

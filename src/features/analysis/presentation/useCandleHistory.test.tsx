@@ -27,6 +27,35 @@ describe('useCandleHistory', () => {
     expect(provider.getHistoryCalls).toEqual(['BTC-EUR'])
   })
 
+  it('records the successful history receipt time separately from candle time', async () => {
+    const provider = new FakeMarketDataProvider(WATCHLIST_INSTRUMENTS, {
+      historyByInstrument: { 'BTC-EUR': HISTORY },
+    })
+    const { result } = renderHook(() =>
+      useCandleHistory(provider, 'BTC-EUR', { now: () => 1_800_000_000_000 }),
+    )
+
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    expect(result.current.historyReceivedAtMs).toBe(1_800_000_000_000)
+    expect(result.current.candles.at(-1)?.time).toBe(HISTORY.at(-1)?.time)
+  })
+
+  it('retains the last successful REST time when a later retry fails', async () => {
+    const provider = new FakeMarketDataProvider(WATCHLIST_INSTRUMENTS, {
+      historyByInstrument: { 'BTC-EUR': HISTORY },
+    })
+    const { result } = renderHook(() =>
+      useCandleHistory(provider, 'BTC-EUR', { now: () => 1_800_000_000_000 }),
+    )
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    provider.getHistoryError = new Error('REST unavailable')
+
+    act(() => result.current.retry())
+
+    await waitFor(() => expect(result.current.status).toBe('error'))
+    expect(result.current.historyReceivedAtMs).toBe(1_800_000_000_000)
+  })
+
   it('reaches empty when the provider returns no candles', async () => {
     const provider = new FakeMarketDataProvider(WATCHLIST_INSTRUMENTS)
     const { result } = renderHook(() => useCandleHistory(provider, 'TTWO'))

@@ -239,4 +239,68 @@ describe('simulation comparison profitability block', () => {
     expect(candidate.selection.metrics.finalEquity).toBe(10_000)
     expect(candidate.selection.equityCurve).toHaveLength(0)
   })
+
+  it('reports all micro candidates on the same holdout without selecting a micro winner', () => {
+    const microIds = [
+      'micro-trend-pullback',
+      'micro-bollinger-reversion',
+      'micro-donchian-breakout',
+      'micro-regime-adapter',
+    ]
+    const microEntry = (candidateId: string, asOfTimestamp: number) => ({
+      ...entry(candidateId, asOfTimestamp),
+      forecast: {
+        ...entry(candidateId, asOfTimestamp).forecast,
+        probabilityUp: 0.4,
+        probabilityDown: 0.3,
+        probabilityFlat: 0.3,
+      },
+    })
+    const report = buildComparisonReport({
+      ...baseArgs(),
+      candidates: [
+        ...baseArgs().candidates,
+        ...microIds.map((candidateId) => ({
+          candidateId,
+          ruleVersion: `${candidateId}.v1`,
+          paramSetVersion: `${candidateId}.v1`,
+          runId: candidateId,
+        })),
+      ],
+      selection: [
+        ...baseArgs().selection,
+        ...microIds.flatMap((id) => [microEntry(id, 1), microEntry(id, 2)]),
+      ],
+      validation: [
+        ...baseArgs().validation,
+        ...microIds.map((id) => microEntry(id, 3)),
+      ],
+      microReadiness: Object.fromEntries(
+        microIds.map((id) => [id, { priorReadyCount: 3, forecastOrigins: 4 }]),
+      ),
+    })
+    expect(report.microCandidateDiagnostics?.candidates).toHaveLength(4)
+    expect(report.microCandidateDiagnostics?.candidates[0]).toMatchObject({
+      selectionMaturedCount: 2,
+      validationMaturedCount: 1,
+      priorReadyCount: 3,
+      forecastOrigins: 4,
+      forecastCoverage: 1,
+    })
+    expect(
+      report.microCandidateDiagnostics?.validationBaselines.uniform.count,
+    ).toBe(1)
+    expect(
+      report.microCandidateDiagnostics?.validationBaselines.uniform.brier,
+    ).toBeCloseTo(2 / 3, 12)
+    expect(report.winner?.candidateId).toBe('technical-default')
+    expect(report.microCandidateDiagnostics?.holdoutConsumed).toBe(true)
+    const legacy = buildComparisonReport(baseArgs())
+    expect(report.rows.map(({ candidateId }) => candidateId)).toEqual([
+      'technical-default',
+    ])
+    expect(report.baselines).toEqual(legacy.baselines)
+    expect(report.selectionCount).toBe(legacy.selectionCount)
+    expect(report.validationCount).toBe(legacy.validationCount)
+  })
 })

@@ -20,12 +20,17 @@ export type Quote = {
   changePercent: number
   timestamp: string
   status: 'live' | 'delayed' | 'mock' | 'stale'
+  /** Present only for individual trade messages; never inferred from ticker updates. */
+  tradeQuantity?: number
   eventTime?: string
   receivedTime?: string
   displayTime?: string
   freshnessAgeMs?: number
   freshnessIsStale?: boolean
 }
+
+export type MarketSubscriptionStatus =
+  'mock' | 'connecting' | 'connected' | 'reconnecting' | 'stale' | 'stopped'
 
 export type Candle = {
   time: string
@@ -43,5 +48,6 @@ export interface MarketDataProvider {
   subscribe(
     instrumentIds: InstrumentId[],
     onQuote: (quote: Quote) => void,
+    onStatus?: (status: MarketSubscriptionStatus) => void,
   ): () => void
 }

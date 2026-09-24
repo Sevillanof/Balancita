@@ -164,6 +164,7 @@ export class DeterministicMockMarketDataProvider implements MarketDataProvider {
   subscribe(
     instrumentIds: InstrumentId[],
     onQuote: (quote: Quote) => void,
+    onStatus?: (status: 'mock' | 'stopped') => void,
   ): () => void {
     const missing = instrumentIds.filter((id) => !this.configs.has(id))
     if (missing.length > 0) {
@@ -202,8 +203,12 @@ export class DeterministicMockMarketDataProvider implements MarketDataProvider {
       }
     }
 
+    onStatus?.('mock')
     const interval = setInterval(emit, this.intervalMs)
-    return () => clearInterval(interval)
+    return () => {
+      clearInterval(interval)
+      onStatus?.('stopped')
+    }
   }
 
   private rngFor(instrumentId: InstrumentId): () => number {

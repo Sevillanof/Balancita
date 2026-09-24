@@ -1,4 +1,7 @@
-import type { SseEventSource } from './useIntelligenceStream.ts'
+import type {
+  SseEventSource,
+  UseIntelligenceStreamResult,
+} from './useIntelligenceStream.ts'
 import { useIntelligenceStream } from './useIntelligenceStream.ts'
 import type { NewsItem, NewsStatus } from './news-fixtures.ts'
 
@@ -6,6 +9,7 @@ export type UseNewsStreamResult = {
   readonly status: NewsStatus
   readonly items: readonly NewsItem[]
   readonly error: Error | null
+  readonly stream: UseIntelligenceStreamResult
 }
 
 type NewsWireItem = {
@@ -35,23 +39,25 @@ export function useNewsStream(
   const stream = useIntelligenceStream(options)
   const news = stream.snapshot?.news
   if (stream.status === 'loading')
-    return { status: 'loading', items: [], error: stream.error }
+    return { status: 'loading', items: [], error: stream.error, stream }
   if (stream.status === 'error')
     return {
       status: 'error',
       items: itemsForToday(news?.items.map(toNewsItem) ?? [], stream.snapshot),
       error: stream.error,
+      stream,
     }
   if (stream.status === 'stale')
     return {
       status: 'stale',
       items: itemsForToday(news?.items.map(toNewsItem) ?? [], stream.snapshot),
       error: null,
+      stream,
     }
   if (news === undefined || news.status === 'disabled')
-    return { status: 'empty', items: [], error: null }
+    return { status: 'empty', items: [], error: null, stream }
   if (news.status === 'loading')
-    return { status: 'loading', items: [], error: null }
+    return { status: 'loading', items: [], error: null, stream }
   if (news.status === 'error')
     return {
       status: 'error',
@@ -60,15 +66,22 @@ export function useNewsStream(
         news.error === undefined
           ? new Error('News polling failed.')
           : new Error(news.error),
+      stream,
     }
   if (news.status === 'stale')
     return {
       status: 'stale',
       items: itemsForToday(news.items.map(toNewsItem), stream.snapshot),
       error: null,
+      stream,
     }
   const items = itemsForToday(news.items.map(toNewsItem), stream.snapshot)
-  return { status: items.length === 0 ? 'empty' : 'ready', items, error: null }
+  return {
+    status: items.length === 0 ? 'empty' : 'ready',
+    items,
+    error: null,
+    stream,
+  }
 }
 
 function toNewsItem(item: NewsWireItem): NewsItem {

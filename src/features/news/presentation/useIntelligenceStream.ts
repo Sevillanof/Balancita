@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react'
 
 export type IntelligenceStreamStatus =
   'loading' | 'ready' | 'stale' | 'error' | 'disabled'
+export type IntelligenceStreamTransportStatus =
+  'connecting' | 'connected' | 'reconnecting' | 'disabled'
 
 export interface IntelligenceStreamSnapshot {
   readonly version: 'intelligence-snapshot.v1'
@@ -134,6 +136,8 @@ export interface UseIntelligenceStreamResult {
   readonly snapshot: IntelligenceStreamSnapshot | null
   readonly error: Error | null
   readonly reconnectAttempt: number
+  readonly clientReceivedAtMs: number | null
+  readonly transportStatus: IntelligenceStreamTransportStatus
 }
 
 export function useIntelligenceStream(
@@ -152,6 +156,8 @@ export function useIntelligenceStream(
     snapshot: null,
     error: null,
     reconnectAttempt: 0,
+    clientReceivedAtMs: null,
+    transportStatus: browserSupportsSse ? 'connecting' : 'disabled',
   })
 
   useEffect(() => {
@@ -199,7 +205,11 @@ export function useIntelligenceStream(
     const fail = (error: Error) => {
       if (disposed) return
       closeSource()
-      setState((current) => ({ ...current, status: 'error', error }))
+      setState((current) => ({
+        ...current,
+        error,
+        transportStatus: 'reconnecting',
+      }))
       scheduleReconnect()
     }
 
@@ -207,12 +217,14 @@ export function useIntelligenceStream(
       try {
         const event = parseIntelligenceStreamEvent(JSON.parse(message.data))
         const status = statusFor(event.snapshot)
-        setState({
+        setState((current) => ({
+          ...current,
           status,
           snapshot: event.snapshot,
           error: null,
           reconnectAttempt: attempt,
-        })
+          clientReceivedAtMs: Date.now(),
+        }))
       } catch (error) {
         fail(
           error instanceof Error
@@ -224,11 +236,16 @@ export function useIntelligenceStream(
 
     const connect = () => {
       if (disposed) return
+      setState((current) => ({ ...current, transportStatus: 'connecting' }))
       try {
         source = factory(streamUrl)
         source.onopen = () => {
           attempt = 0
-          setState((current) => ({ ...current, error: null }))
+          setState((current) => ({
+            ...current,
+            error: null,
+            transportStatus: 'connected',
+          }))
         }
         source.onerror = () =>
           fail(new Error('La conexión SSE de inteligencia se interrumpió.'))

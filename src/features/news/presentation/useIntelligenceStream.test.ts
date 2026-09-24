@@ -113,10 +113,24 @@ describe('useIntelligenceStream', () => {
     expect(source.close).toHaveBeenCalledTimes(1)
   })
 
+  it('records browser receipt time independently from server snapshot time', () => {
+    FakeEventSource.instances = []
+    vi.spyOn(Date, 'now').mockReturnValue(1_800_000_000_000)
+    const { result } = renderHook(() =>
+      useIntelligenceStream({ eventSourceFactory: makeSource }),
+    )
+
+    act(() => FakeEventSource.instances[0]!.emit(event()))
+
+    expect(result.current.clientReceivedAtMs).toBe(1_800_000_000_000)
+    expect(result.current.snapshot?.generatedAt).toBe(1_700_000_000_000)
+    vi.restoreAllMocks()
+  })
+
   it('moves to error and reconnects with bounded backoff', () => {
     vi.useFakeTimers()
     FakeEventSource.instances = []
-    const { result } = renderHook(() =>
+    const { result, unmount } = renderHook(() =>
       useIntelligenceStream({
         url: 'http://127.0.0.1:8787',
         eventSourceFactory: makeSource,
@@ -125,12 +139,49 @@ describe('useIntelligenceStream', () => {
       }),
     )
     const first = FakeEventSource.instances[0]!
+    expect(result.current.transportStatus).toBe('connecting')
+    act(() => first.onopen?.())
+    expect(result.current.transportStatus).toBe('connected')
     act(() => first.onerror?.())
-    expect(result.current.status).toBe('error')
+    expect(result.current.status).toBe('loading')
+    expect(result.current.transportStatus).toBe('reconnecting')
     act(() => vi.advanceTimersByTime(100))
     expect(FakeEventSource.instances).toHaveLength(2)
     expect(result.current.reconnectAttempt).toBe(1)
+    expect(result.current.transportStatus).toBe('connecting')
+    act(() => FakeEventSource.instances[1]!.onopen?.())
+    expect(result.current.transportStatus).toBe('connected')
+    unmount()
     vi.useRealTimers()
+  })
+
+  it('keeps browser transport independent from collector connection status', () => {
+    FakeEventSource.instances = []
+    const { result, unmount } = renderHook(() =>
+      useIntelligenceStream({ eventSourceFactory: makeSource }),
+    )
+    const source = FakeEventSource.instances[0]!
+
+    act(() => source.onopen?.())
+    act(() =>
+      source.emit(
+        event({
+          snapshot: {
+            ...snapshot,
+            pipeline: { ...snapshot.pipeline, connection: 'reconnecting' },
+          },
+        }),
+      ),
+    )
+    expect(result.current.transportStatus).toBe('connected')
+    expect(result.current.status).toBe('ready')
+    expect(result.current.snapshot?.pipeline.connection).toBe('reconnecting')
+
+    act(() => source.onerror?.())
+    expect(result.current.transportStatus).toBe('reconnecting')
+    expect(result.current.status).toBe('ready')
+    expect(result.current.snapshot?.pipeline.connection).toBe('reconnecting')
+    unmount()
   })
 
   it('rejects malformed event payloads at the runtime boundary', () => {

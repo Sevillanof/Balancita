@@ -13,6 +13,7 @@ import { GeminiAnalysisProvider } from '../features/analysis/infrastructure/gemi
 import { MockAnalysisProvider } from '../features/analysis/infrastructure/mock-analysis-provider.ts'
 import type { AnalysisMode } from '../features/analysis/presentation/AnalysisModeToggle.tsx'
 import GeminiControl from '../features/analysis/presentation/GeminiControl.tsx'
+import { resolveMarketDataProviderMode } from '../features/market-data/infrastructure/market-data-provider.ts'
 import './App.css'
 
 type AppProps = {
@@ -82,8 +83,7 @@ function App({
         analysisMode={analysisMode}
         analysisFallback={analysisMode === 'ai' ? activeAnalysis : undefined}
         dataMode={
-          provider === undefined &&
-          import.meta.env.VITE_MARKET_DATA_PROVIDER === 'kraken'
+          provider === undefined && resolveMarketDataProviderMode() === 'kraken'
             ? 'real'
             : 'simulated'
         }

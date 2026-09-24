@@ -112,6 +112,11 @@ export const simulationRule: SimulationRuleFn = (
     (value) => value > config.slopeEpsilon,
     (value) => value < -config.slopeEpsilon,
   )
+  if (
+    config.requireTrendConfirmation &&
+    (smaVote === 0 || macdVote !== smaVote || slopeVote !== smaVote)
+  )
+    return { up: 0.3, down: 0.3, flat: 0.4 }
   const score =
     config.weights.sma * smaVote +
     config.weights.rsi * rsiVote +
@@ -131,6 +136,12 @@ export const simulationRule: SimulationRuleFn = (
 
 export function resolveSimulationRule(ruleVersion: string): SimulationRuleFn {
   assertKnownSimulationRule(ruleVersion)
+  const candidate = candidateForRuleVersion(ruleVersion)
+  if (candidate.microStrategy !== undefined) {
+    throw new Error(
+      'Micro strategies require chronological micro replay and cannot use the legacy simulation rule.',
+    )
+  }
   return simulationRule
 }
 

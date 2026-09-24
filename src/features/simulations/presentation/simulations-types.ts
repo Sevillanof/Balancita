@@ -39,6 +39,7 @@ export interface SimulationsEquityPoint {
 export interface SimulationsProfitabilityMetrics {
   readonly netReturnPct: number
   readonly tradeCount: number
+  readonly fillCount?: number
   readonly winRate: number | null
   readonly profitFactor?: number | null
   readonly maxDrawdownPct: number
@@ -115,6 +116,37 @@ export interface SimulationsComparisonReport {
   readonly limitations: readonly string[]
   readonly contentHash: string
   readonly profitability: SimulationsProfitabilityBlock | null
+  readonly microCandidateDiagnostics?: {
+    readonly version: 'micro-candidate-diagnostics.v1'
+    readonly holdoutConsumed: true
+    readonly holdoutNotice: string
+    readonly candidates: readonly {
+      readonly candidateId: string
+      readonly selectionBrier: number | null
+      readonly selectionMaturedCount: number
+      readonly validationBrier: number | null
+      readonly validationMaturedCount: number
+      readonly priorReadyCount: number
+      readonly forecastOrigins: number
+      readonly forecastCoverage: number | null
+      readonly selectionFillCount: number
+      readonly selectionRoundTripCount: number
+      readonly selectionNetReturnPct: number
+      readonly selectionDrawdownPct: number
+      readonly validationFillCount: number
+      readonly validationRoundTripCount: number
+      readonly validationNetReturnPct: number
+      readonly validationDrawdownPct: number
+    }[]
+    readonly selectionBaselines: SimulationsMicroDiagnosticBaselines
+    readonly validationBaselines: SimulationsMicroDiagnosticBaselines
+  } | null
+}
+
+export interface SimulationsMicroDiagnosticBaselines {
+  readonly uniform: { readonly brier: number | null; readonly count: number }
+  readonly noChange: { readonly brier: number | null; readonly count: number }
+  readonly momentum: { readonly brier: number | null; readonly count: number }
 }
 
 export interface SimulationsReportFile {
@@ -126,5 +158,23 @@ export interface SimulationsReportFile {
   readonly manifestHash: string
   readonly selectionPct: number
   readonly window?: { readonly since: number; readonly until: number }
+  readonly sample?: {
+    readonly stage: 'smoke' | 'confirm'
+    readonly seed: number
+    readonly since: number
+    readonly until: number
+    readonly candidateIds: readonly string[]
+    readonly horizons: readonly string[]
+    readonly smokeReportHash?: string
+  }
   readonly reports: readonly SimulationsComparisonReport[]
+}
+
+export interface SimulationsHistoryEntry {
+  readonly id: string
+  readonly generatedAt: number
+  readonly datasetHash: string
+  readonly manifestHash: string
+  readonly sample?: { readonly stage: string; readonly seed: number }
+  readonly window?: { readonly since: number; readonly until: number }
 }

@@ -24,6 +24,7 @@ import {
   runSimulationsFromLiveDb,
   SIMULATIONS_DEFAULT_HORIZON,
   SIMULATIONS_DEFAULT_SELECTION_PCT,
+  type SimulationsRunnerResult,
 } from './simulations-runner.ts'
 
 const ALL_HORIZONS: readonly ForecastHorizon[] = ['15m', '1h', '4h', '24h']
@@ -110,7 +111,21 @@ export function runSimulationsCli(
   argv: readonly string[],
   cwd: string,
 ): string {
-  const horizons = parseHorizons(flagValue(argv, '--horizon'))
+  const stage = flagValue(argv, '--stage')
+  if (stage !== undefined && stage !== 'smoke' && stage !== 'confirm')
+    throw new Error('--stage must be smoke or confirm.')
+  const seedRaw = flagValue(argv, '--seed')
+  const seed = seedRaw === undefined ? undefined : Number(seedRaw)
+  if (seed !== undefined && (!Number.isSafeInteger(seed) || seed < 0))
+    throw new Error('--seed must be a non-negative safe integer.')
+  if (stage !== undefined && seed === undefined)
+    throw new Error('--seed is required when --stage is specified.')
+  const horizons =
+    stage === 'smoke'
+      ? ['15m' as const]
+      : stage === 'confirm'
+        ? ['15m' as const, '1h' as const]
+        : parseHorizons(flagValue(argv, '--horizon'))
   const result = runSimulationsFromLiveDb({
     marketDbPath: resolveFrom(
       cwd,
@@ -138,6 +153,8 @@ export function runSimulationsCli(
       'data/simulations-report.json',
     ),
     horizons,
+    ...(stage === undefined ? {} : { stage }),
+    ...(seed === undefined ? {} : { seed }),
     latestContiguous: argv.includes('--latest-contiguous'),
     selectionPct: parseSelectionPct(flagValue(argv, '--selection-pct')),
     startingCash: parseCash(flagValue(argv, '--cash')),
@@ -172,6 +189,54 @@ export function runSimulationsCli(
   return output
 }
 
+export function formatMicroCandidateTable(
+  result: Pick<SimulationsRunnerResult, 'candleCount' | 'horizons'>,
+): string {
+  const diagnosticHorizons = result.horizons.filter(
+    ({ report }) => report.microCandidateDiagnostics !== null,
+  )
+  if (diagnosticHorizons.length === 0) return ''
+  const sampleLabels = diagnosticHorizons.map(
+    ({ horizon, report }) =>
+      `N_${horizon}=${report.microCandidateDiagnostics!.validationBaselines.uniform.count}`,
+  )
+  const lines = [
+    `[PRELIMINAR - BUFFER ${result.candleCount}m - ${sampleLabels.join(' / ')}]`,
+    'Micro candidate diagnostic validation (consumed holdout)',
+    'horizon | candidate | matured | Brier | fills | closed round trips',
+  ]
+  for (const { horizon, report } of diagnosticHorizons) {
+    const diagnostics = report.microCandidateDiagnostics!
+    for (const candidate of diagnostics.candidates) {
+      lines.push([
+        horizon,
+        candidate.candidateId,
+        candidate.validationMaturedCount,
+        formatNumber(candidate.validationBrier),
+        candidate.validationFillCount,
+        candidate.validationRoundTripCount,
+      ].join(' | '))
+    }
+    for (const name of ['uniform', 'noChange', 'momentum'] as const) {
+      const metric = diagnostics.validationBaselines[name]
+      const profitability = report.profitability?.baselines[name].validation.metrics
+      lines.push([
+        horizon,
+        name,
+        metric.count,
+        formatNumber(metric.brier),
+        profitability?.fillCount ?? 0,
+        profitability?.tradeCount ?? 0,
+      ].join(' | '))
+    }
+  }
+  return lines.join('\n')
+}
+
+function formatNumber(value: number | null): string {
+  return value === null ? 'n/a' : value.toFixed(4)
+}
+
 const invokedDirectly =
   process.argv[1] !== undefined &&
   process.argv[1].endsWith('simulations-cli.ts')
@@ -181,6 +246,14 @@ if (invokedDirectly) {
     const output = runSimulationsCli(process.argv.slice(2), process.cwd())
     if (!process.argv.includes('--out')) process.stdout.write(output)
     else process.stdout.write(`Simulations complete. Summary written.\n`)
+    // The JSON remains the machine-readable result; this compact table makes
+    // the consumed micro holdout diagnostic immediately readable in a terminal.
+    const parsed = JSON.parse(output) as Pick<
+      SimulationsRunnerResult,
+      'candleCount' | 'horizons'
+    >
+    const table = formatMicroCandidateTable(parsed)
+    if (table !== '') process.stdout.write(`${table}\n`)
   } catch (error) {
     process.stderr.write(
       `simulations:run failed: ${error instanceof Error ? error.message : String(error)}\n`,

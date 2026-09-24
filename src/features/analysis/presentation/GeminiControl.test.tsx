@@ -21,6 +21,8 @@ describe('GeminiControl', () => {
     const toggle = await screen.findByRole('switch', {
       name: /llamadas a gemini/i,
     })
+    expect(toggle).toHaveClass('app__ai-toggle-switch')
+    expect(toggle.querySelector('[aria-hidden="true"]')).not.toBeNull()
     expect(toggle).toHaveAttribute('aria-checked', 'false')
     expect(screen.getByText(/clave configurada/i)).toBeInTheDocument()
     await userEvent.setup().click(toggle)
@@ -30,5 +32,6 @@ describe('GeminiControl', () => {
       expect.objectContaining({ method: 'PUT' }),
     )
     expect(JSON.stringify(fetchMock.mock.calls)).not.toContain('apiKey')
+    expect(fetchMock).toHaveBeenCalledTimes(2)
   })
 })

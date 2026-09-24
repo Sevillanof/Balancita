@@ -499,8 +499,11 @@ describe('KrakenMarketDataProvider WebSocket v2 ticker contract', () => {
       now: () => Date.parse('2026-09-20T12:00:01.250Z'),
     })
     const quotes: Quote[] = []
-    const unsubscribe = provider.subscribe(['BTC-EUR'], (quote) =>
-      quotes.push(quote),
+    const statuses: string[] = []
+    const unsubscribe = provider.subscribe(
+      ['BTC-EUR'],
+      (quote) => quotes.push(quote),
+      (status) => statuses.push(status),
     )
     const socket = sockets[0]!
 
@@ -521,6 +524,8 @@ describe('KrakenMarketDataProvider WebSocket v2 ticker contract', () => {
 
     socket.message(TICKER_BASE)
     unsubscribe()
+
+    expect(statuses).toEqual(['connecting', 'connected', 'stopped'])
 
     expect(quotes).toEqual([
       {
@@ -601,6 +606,7 @@ describe('KrakenMarketDataProvider WebSocket v2 ticker contract', () => {
       {
         instrumentId: 'BTC-EUR',
         price: 62_001.5,
+        tradeQuantity: 0.01,
         change: 1000.5,
         changePercent: 1.63,
         timestamp: '2026-09-20T12:00:00.500Z',
@@ -614,6 +620,7 @@ describe('KrakenMarketDataProvider WebSocket v2 ticker contract', () => {
       {
         instrumentId: 'BTC-EUR',
         price: 62_002.25,
+        tradeQuantity: 0.01,
         change: 1000.5,
         changePercent: 1.63,
         timestamp: '2026-09-20T12:00:00.750Z',

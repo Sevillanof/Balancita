@@ -1,6 +1,11 @@
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
+import {
+  devEnvironment,
+  serverEnvironment,
+  serverNodeArgs,
+} from './dev-provider-env.mjs'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const children = [
@@ -12,17 +17,21 @@ const children = [
   {
     name: 'server',
     cwd: resolve(root, 'server'),
-    args: [
+    args: serverNodeArgs([
       '--env-file-if-exists=.env',
       '--experimental-strip-types',
       '--watch',
       'src/app/index.ts',
-    ],
+    ]),
   },
 ].map(({ name, cwd, args }) => {
   const child = spawn(process.execPath, args, {
     cwd,
     stdio: ['inherit', 'pipe', 'pipe'],
+    env:
+      name === 'vite'
+        ? devEnvironment(process.env)
+        : serverEnvironment(process.env),
   })
   for (const stream of ['stdout', 'stderr']) {
     child[stream].on('data', (chunk) => {

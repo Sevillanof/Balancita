@@ -1,19 +1,35 @@
 import './trade.css'
 
-/**
- * Presentation-only auto-trading control for Phase 1. It renders a single
- * disabled button with no handler: it never places, modifies or authorizes
- * orders.
- */
-export default function AutoTradingControl() {
+export default function AutoTradingControl({
+  enabled,
+  available,
+  ready,
+  onChange,
+}: {
+  enabled: boolean
+  available: boolean
+  ready: boolean
+  onChange: (enabled: boolean) => void
+}) {
   return (
-    <button
-      type="button"
-      className="button button--secondary"
-      disabled
-      aria-disabled="true"
-    >
-      Auto Trade
-    </button>
+    <label className="button button--secondary">
+      <input
+        type="checkbox"
+        role="switch"
+        aria-label="Trading automático simulado"
+        checked={enabled}
+        disabled={!available}
+        onChange={(event) => {
+          if (available) onChange(event.currentTarget.checked)
+        }}
+      />
+      Trading automático simulado
+      {!available && (
+        <span>
+          {' '}
+          · {ready ? 'Esperando Kraken en vivo' : 'Indicadores en preparación'}
+        </span>
+      )}
+    </label>
   )
 }

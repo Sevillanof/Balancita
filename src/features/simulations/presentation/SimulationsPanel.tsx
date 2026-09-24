@@ -8,6 +8,7 @@ import type {
   SimulationsProfitabilityEntry,
   SimulationsProfitabilityMetrics,
   SimulationsReportFile,
+  SimulationsHistoryEntry,
   SimulationsStatus,
 } from './simulations-types.ts'
 import './simulations.css'
@@ -20,8 +21,14 @@ type SimulationsPanelProps = {
   readonly error: Error | null
   readonly onRetry: () => void
   readonly onRefresh?: () => void
+  readonly onSample?: (stage: 'smoke' | 'confirm', seed: number) => void
   readonly refreshing?: boolean
   readonly refreshError?: string | null
+  readonly history?: readonly SimulationsHistoryEntry[]
+  readonly historyStatus?: 'loading' | 'ready' | 'empty' | 'error'
+  readonly historyError?: string | null
+  readonly selectedHistoryId?: string | null
+  readonly onSelectHistory?: (id: string) => void
 }
 
 /** Renders the persisted strategy-comparison report; read-only, BTC-EUR only. */
@@ -30,10 +37,17 @@ export default function SimulationsPanel({
   file,
   onRetry,
   onRefresh,
+  onSample,
   refreshing = false,
   refreshError = null,
+  history = [],
+  historyStatus = 'empty',
+  historyError = null,
+  selectedHistoryId = null,
+  onSelectHistory,
 }: SimulationsPanelProps) {
   const [selectedHorizon, setSelectedHorizon] = useState<string | null>(null)
+  const [seed, setSeed] = useState('1')
   const activeHorizon = file?.reports.some(
     (report) => report.horizon === selectedHorizon,
   )
@@ -53,8 +67,86 @@ export default function SimulationsPanel({
         >
           {refreshing ? 'Actualizando…' : 'Actualizar simulaciones'}
         </button>
+        <label>
+          Semilla visible
+          <input
+            type="number"
+            min="0"
+            step="1"
+            aria-label="Semilla"
+            inputMode="numeric"
+            value={seed}
+            onChange={(event) => setSeed(event.target.value)}
+          />
+        </label>
+        <button
+          type="button"
+          className="button button--secondary"
+          disabled={
+            refreshing ||
+            onSample === undefined ||
+            !Number.isSafeInteger(Number(seed)) ||
+            Number(seed) < 0 ||
+            seed.trim() === ''
+          }
+          onClick={() => onSample?.('smoke', Number(seed))}
+        >
+          Prueba rápida (15m)
+        </button>
+        <button
+          type="button"
+          className="button button--secondary"
+          disabled={
+            refreshing ||
+            onSample === undefined ||
+            !Number.isSafeInteger(Number(seed)) ||
+            Number(seed) < 0 ||
+            seed.trim() === ''
+          }
+          onClick={() => onSample?.('confirm', Number(seed))}
+        >
+          Confirmación (15m y 1h)
+        </button>
       </div>
       {refreshError !== null && <p role="alert">{refreshError}</p>}
+      <div className="simulations__history">
+        <label htmlFor="simulations-history">Historial de simulaciones</label>
+        {historyStatus === 'loading' && (
+          <p role="status">Cargando historial…</p>
+        )}
+        {historyStatus === 'error' && (
+          <p role="alert">
+            {historyError ?? 'No se pudo cargar el historial.'}
+          </p>
+        )}
+        {historyStatus === 'empty' && (
+          <p role="status">Todavía no hay informes guardados.</p>
+        )}
+        {historyStatus === 'ready' && (
+          <select
+            id="simulations-history"
+            aria-label="Historial de simulaciones"
+            value={selectedHistoryId ?? ''}
+            onChange={(event) => onSelectHistory?.(event.target.value)}
+          >
+            <option value="">Informe más reciente</option>
+            {history.map((entry) => (
+              <option key={entry.id} value={entry.id}>
+                {new Date(entry.generatedAt).toLocaleString('es-ES', {
+                  timeZone: 'UTC',
+                })}{' '}
+                UTC ·{' '}
+                {entry.sample === undefined
+                  ? 'Ejecución completa'
+                  : `${entry.sample.stage} · semilla ${entry.sample.seed}`}{' '}
+                · datos {shortHash(entry.datasetHash)}
+                {entry.window !== undefined &&
+                  ` · ventana ${new Date(entry.window.since).toISOString().slice(0, 16)}–${new Date(entry.window.until).toISOString().slice(0, 16)} UTC`}
+              </option>
+            ))}
+          </select>
+        )}
+      </div>
 
       {status === 'loading' && (
         <p role="status" aria-busy="true" className="simulations__state">
@@ -88,6 +180,23 @@ export default function SimulationsPanel({
 
       {status === 'ready' && file !== null && (
         <>
+          <p role="status">
+            Informe generado:{' '}
+            {new Date(file.generatedAt).toLocaleString('es-ES', {
+              timeZone: 'UTC',
+            })}{' '}
+            UTC · datos {shortHash(file.datasetHash)} · manifiesto{' '}
+            {shortHash(file.manifestHash)}.
+          </p>
+          {file.sample !== undefined && (
+            <p role="status">
+              Etapa {file.sample.stage} · semilla {file.sample.seed} ·{' '}
+              {new Date(file.sample.since).toISOString()} –{' '}
+              {new Date(file.sample.until).toISOString()} · candidatas{' '}
+              {file.sample.candidateIds.join(', ')} · horizontes{' '}
+              {file.sample.horizons.join(', ')}.
+            </p>
+          )}
           {file.reports.length > 1 && (
             <div role="tablist" aria-label="Horizonte de simulación">
               {file.reports.map((report) => (
@@ -183,6 +292,43 @@ export default function SimulationsPanel({
                     </article>
                   </li>
                 </ul>
+                {report.microCandidateDiagnostics !== null && report.microCandidateDiagnostics !== undefined && (
+                  <section aria-label="Validación experimental de estrategias micro">
+                    <h4>Validación experimental · candidatas micro</h4>
+                    <p>{report.microCandidateDiagnostics.holdoutNotice}</p>
+                    <div className="table-scroll">
+                      <table className="data-table">
+                        <caption>Resultados del mismo tramo de validación; no usar para ajustar reglas</caption>
+                        <thead><tr><th>Candidata/base</th><th>Muestras</th><th>Brier</th><th>Órdenes / ciclos cerrados</th><th>Retorno neto</th><th>Drawdown</th></tr></thead>
+                        <tbody>
+                          {report.microCandidateDiagnostics.candidates.map((item) => (
+                            <tr key={item.candidateId}>
+                              <th scope="row">{item.candidateId}</th>
+                              <td>{item.validationMaturedCount} · previo {item.priorReadyCount}/{item.forecastOrigins}</td>
+                              <td>{formatMetric(item.validationBrier)} (selección {formatMetric(item.selectionBrier)})</td>
+                              <td>{item.validationFillCount} / {item.validationRoundTripCount}</td>
+                              <td>{formatPercent(item.validationNetReturnPct / 100)}</td>
+                              <td>{formatPercent(item.validationDrawdownPct / 100)}</td>
+                            </tr>
+                          ))}
+                          {(['uniform', 'noChange', 'momentum'] as const).map((key) => (
+                            (() => {
+                              const tradeMetrics = report.profitability?.baselines[key].validation.metrics
+                              return <tr key={key}>
+                                <th scope="row">{key === 'uniform' ? 'Uniforme' : key === 'noChange' ? 'Sin cambio' : 'Momentum'}</th>
+                                <td>{report.microCandidateDiagnostics!.validationBaselines[key].count}</td>
+                                <td>{formatMetric(report.microCandidateDiagnostics!.selectionBaselines[key].brier)} / {formatMetric(report.microCandidateDiagnostics!.validationBaselines[key].brier)}</td>
+                                <td>{tradeMetrics?.fillCount ?? 0} / {tradeMetrics?.tradeCount ?? 0}</td>
+                                <td>{tradeMetrics === undefined ? '—' : formatPercent(tradeMetrics.netReturnPct / 100)}</td>
+                                <td>{tradeMetrics === undefined ? '—' : formatPercent(tradeMetrics.maxDrawdownPct / 100)}</td>
+                              </tr>
+                            })()
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </section>
+                )}
                 <footer className="simulations__provenance">
                   <p>
                     Procedencia: conjunto {shortHash(report.datasetHash)} ·

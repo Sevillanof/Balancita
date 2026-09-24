@@ -13,6 +13,7 @@ import { buildApp } from './app.ts'
 import type {
   ForecastLoopScheduler,
   MarketCollectorLifecycle,
+  OhlcCollectorLifecycle,
   MarketRestFetch,
 } from './app.ts'
 import type { SupportedInstrumentId } from '../domain/contracts.ts'
@@ -80,9 +81,19 @@ async function makeApp(options: {
   maxCandles?: number
   marketFetch?: MarketRestFetch
   enabled?: boolean
+  ohlcCollector?: OhlcCollectorLifecycle
+  marketCollector?: MarketCollectorLifecycle
 }) {
   const config = serverConfigFrom({
     GEMINI_MAX_CANDLES: String(options.maxCandles ?? 500),
+    KRAKEN_WS_COLLECTOR_ENABLED:
+      options.env?.KRAKEN_WS_COLLECTOR_ENABLED ??
+      options.env?.MARKET_COLLECTOR_ENABLED ??
+      'false',
+    KRAKEN_REST_OHLC_WORKER_ENABLED:
+      options.env?.KRAKEN_REST_OHLC_WORKER_ENABLED ??
+      options.env?.MARKET_COLLECTOR_ENABLED ??
+      'false',
     ...options.env,
   })
   const overrides: {
@@ -90,6 +101,9 @@ async function makeApp(options: {
     limiter?: AnalysisRateLimiter
     cache?: AnalysisCache
     marketFetch?: MarketRestFetch
+    ohlcCollector?: OhlcCollectorLifecycle
+    marketCollector?: MarketCollectorLifecycle
+    marketStore?: MarketStore
   } = {}
   if (options.client !== undefined) {
     overrides.client = options.client
@@ -109,6 +123,12 @@ async function makeApp(options: {
   if (options.marketFetch !== undefined) {
     overrides.marketFetch = options.marketFetch
   }
+  if (options.ohlcCollector !== undefined)
+    overrides.ohlcCollector = options.ohlcCollector
+  if (options.marketCollector !== undefined)
+    overrides.marketCollector = options.marketCollector
+  if (options.env?.MARKET_COLLECTOR_ENABLED === 'true')
+    overrides.marketStore = new MarketStore({ path: ':memory:' })
   const app = await buildApp({ config, overrides })
   if (options.enabled !== false && overrides.client !== undefined)
     await app.inject({
@@ -132,7 +152,81 @@ class FakeMarketCollector implements MarketCollectorLifecycle {
   }
 }
 
+class FakeOhlcCollector implements OhlcCollectorLifecycle {
+  starts = 0
+  stops = 0
+  start(): void {
+    this.starts += 1
+  }
+  stop(): void {
+    this.stops += 1
+  }
+  getStatus() {
+    return {
+      running: this.starts > this.stops,
+      lastSuccessfulSync: 123_000,
+      candleCount: 2,
+      minTimestamp: '1970-01-01T00:01:00.000Z',
+      maxTimestamp: '1970-01-01T00:02:00.000Z',
+      coverageHours: 1 / 60,
+      gapCount: 0,
+    }
+  }
+}
+
 describe('analysis gateway API', () => {
+  it('starts and reports the REST OHLC worker independently of WebSocket collection', async () => {
+    const collector = new FakeOhlcCollector()
+    const app = await makeApp({
+      env: {
+        KRAKEN_WS_COLLECTOR_ENABLED: 'false',
+        KRAKEN_REST_OHLC_WORKER_ENABLED: 'true',
+      },
+      ohlcCollector: collector,
+      marketCollector: new FakeMarketCollector(),
+    })
+    await app.ready()
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/market/collector/status',
+    })
+    expect(collector.starts).toBe(1)
+    expect(response.json()).toEqual({
+      enabled: true,
+      running: true,
+      total_candles: 2,
+      oldest_candle_iso: '1970-01-01T00:01:00.000Z',
+      newest_candle_iso: '1970-01-01T00:02:00.000Z',
+      coverage_hours: 1 / 60,
+      gaps_detected: 0,
+      last_sync_timestamp: 123_000,
+    })
+    await app.close()
+    expect(collector.stops).toBe(1)
+  })
+
+  it('reports empty metrics and does not start OHLC collection while disabled', async () => {
+    const collector = new FakeOhlcCollector()
+    const app = await makeApp({ ohlcCollector: collector })
+    await app.ready()
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/market/collector/status',
+    })
+    expect(response.json()).toEqual({
+      enabled: false,
+      running: false,
+      total_candles: 0,
+      oldest_candle_iso: null,
+      newest_candle_iso: null,
+      coverage_hours: 0,
+      gaps_detected: 0,
+      last_sync_timestamp: 0,
+    })
+    await app.close()
+    expect(collector.starts).toBe(0)
+    expect(collector.stops).toBe(0)
+  })
   it('reports health', async () => {
     const app = await makeApp({})
     const response = await app.inject({ method: 'GET', url: '/health' })
@@ -378,7 +472,10 @@ describe('market collector lifecycle', () => {
   it('does not start a collector when market ingestion is disabled by default', async () => {
     const collector = new FakeMarketCollector()
     const app = await buildApp({
-      config: serverConfigFrom({}),
+      config: serverConfigFrom({
+        KRAKEN_WS_COLLECTOR_ENABLED: 'false',
+        KRAKEN_REST_OHLC_WORKER_ENABLED: 'false',
+      }),
       overrides: { marketCollector: collector },
     })
 
@@ -393,7 +490,10 @@ describe('market collector lifecycle', () => {
     const collector = new FakeMarketCollector()
     const store = new MarketStore({ path: ':memory:' })
     const app = await buildApp({
-      config: serverConfigFrom({ MARKET_COLLECTOR_ENABLED: 'true' }),
+      config: serverConfigFrom({
+        KRAKEN_WS_COLLECTOR_ENABLED: 'true',
+        KRAKEN_REST_OHLC_WORKER_ENABLED: 'false',
+      }),
       overrides: { marketCollector: collector, marketStore: store },
     })
 
