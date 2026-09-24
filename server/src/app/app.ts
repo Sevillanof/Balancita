@@ -28,6 +28,8 @@ import { LiveForecastService } from '../features/forecasts/live-forecast.ts'
 import { KrakenMarketCollector } from '../features/market-data/kraken-market-collector.ts'
 import { MarketStore } from '../features/market-data/market-store.ts'
 import { KrakenOhlcCollector } from '../features/market-data/kraken-ohlc-collector.ts'
+import { KrakenPaperOhlcCollector } from '../features/market-data/kraken-paper-ohlc-collector.ts'
+import { PaperForwardService } from '../features/simulations/paper-forward.ts'
 import {
   collectKrakenOhlc,
   KRAKEN_OHLC_MAX_CANDLES,
@@ -285,6 +287,7 @@ export async function buildApp(options: {
   let marketStore: MarketStore | undefined
   if (
     config.krakenWsCollectorEnabled ||
+    config.krakenPaperTradingEnabled ||
     config.krakenRestOhlcWorkerEnabled ||
     config.newsPollingEnabled ||
     config.treeNewsEnabled ||
@@ -322,6 +325,26 @@ export async function buildApp(options: {
             warn: (fields, message) => console.warn(message, fields),
           },
         }))
+  const paperForward =
+    config.krakenPaperTradingEnabled && marketStore !== undefined
+      ? new PaperForwardService({ store: marketStore })
+      : undefined
+  const paperOhlcCollector =
+    paperForward === undefined
+      ? undefined
+      : new KrakenPaperOhlcCollector({
+          service: paperForward,
+          url: config.krakenWsUrl,
+          restBaseUrl: config.krakenRestUrl,
+          marketFetch: async (url, init) =>
+            marketFetch(url, {
+              ...init,
+              headers: { Accept: 'application/json', ...init?.headers },
+            }),
+          logger: {
+            error: (fields, message) => console.error(message, fields),
+          },
+        })
   const shadowService =
     marketStore === undefined
       ? undefined
@@ -485,6 +508,31 @@ export async function buildApp(options: {
   }
 
   app.get('/health', async () => ({ status: 'ok' }))
+  app.get(
+    '/api/paper-trading/status',
+    () =>
+      paperForward?.status(true) ?? {
+        enabled: false,
+        running: false,
+        stream_state: 'disabled',
+        last_received_event_time: null,
+        last_received_at: null,
+        last_processed_event_time: null,
+        candles_ready: false,
+        account: {
+          balance_eur: 10_000,
+          btc_balance: 0,
+          total_equity_eur: 10_000,
+        },
+        active_positions: [],
+        execution_summary: {
+          total_signals: 0,
+          gate_rejections: 0,
+          executed_trades: 0,
+          closed_pnl_eur: 0,
+        },
+      },
+  )
 
   const geminiStatus = () =>
     geminiGate?.status(
@@ -1077,6 +1125,7 @@ export async function buildApp(options: {
   )
 
   app.addHook('onReady', async () => {
+    paperOhlcCollector?.start()
     if (config.krakenWsCollectorEnabled) {
       ensureShadowRunExists()
       await marketCollector?.start('BTC-EUR')
@@ -1087,6 +1136,7 @@ export async function buildApp(options: {
     treeNewsService?.start()
   })
   app.addHook('onClose', async () => {
+    paperOhlcCollector?.stop()
     stopForecastLoop()
     stopNewsLoop()
     treeNewsService?.stop()

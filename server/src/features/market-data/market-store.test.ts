@@ -65,7 +65,7 @@ describe('MarketStore', () => {
 
   it('keeps in-memory stores usable with a 5000ms busy timeout', () => {
     const store = new MarketStore({ path: ':memory:' })
-    expect(store.schemaVersion()).toBe(8)
+    expect(store.schemaVersion()).toBe(9)
     expect(store.sqliteSettings()).toEqual({
       journalMode: 'memory',
       busyTimeout: 5000,
@@ -75,9 +75,56 @@ describe('MarketStore', () => {
   it('initializes the versioned schema at the injected path', () => {
     const store = new MarketStore({ path: makePath() })
 
-    expect(store.schemaVersion()).toBe(8)
+    expect(store.schemaVersion()).toBe(9)
     expect(store.observationCount()).toBe(0)
 
+    store.close()
+  })
+
+  it('creates the paper ledger with strategy_id and no persisted BTC quantity', () => {
+    const path = makePath()
+    const store = new MarketStore({ path })
+    const database = new DatabaseSync(path)
+    const columns = database
+      .prepare('PRAGMA table_info(paper_orders)')
+      .all() as {
+      name: string
+      notnull: number
+    }[]
+    expect(columns.map(({ name }) => name)).toEqual([
+      'id',
+      'strategy_id',
+      'signal_timestamp',
+      'action',
+      'gate_passed',
+      'price',
+      'execution_timestamp',
+      'amount_eur',
+      'fee_eur',
+      'pnl_eur',
+      'target_pct',
+    ])
+    expect(columns.find(({ name }) => name === 'price')?.notnull).toBe(1)
+    const order = {
+      strategyId: 'micro-trend-pullback',
+      signalTimestamp: 100,
+      action: 'BUY' as const,
+      gatePassed: false,
+      price: 20_000,
+      executionTimestamp: null,
+      amountEur: 30,
+      feeEur: 0,
+      pnlEur: null,
+      targetPct: 0.005,
+    }
+    expect(store.insertPaperOrder(order)).toBe(true)
+    expect(store.insertPaperOrder(order)).toBe(false)
+    expect(store.listPaperOrders()[0]).toMatchObject({
+      strategyId: order.strategyId,
+      price: 20_000,
+      executionTimestamp: null,
+    })
+    database.close()
     store.close()
   })
 
@@ -96,6 +143,24 @@ describe('MarketStore', () => {
     expect(store.insertOhlcCandles(candles)).toBe(0)
     expect(store.ohlcCandleCount()).toBe(2)
 
+    store.close()
+  })
+
+  it('returns only the latest contiguous candles at or before the epoch-ms cutoff', () => {
+    const store = new MarketStore({ path: ':memory:' })
+    const candles = [60, 120, 180, 300, 360, 420].map((timestamp) => ({
+      timestamp,
+      open: timestamp,
+      high: timestamp + 1,
+      low: timestamp - 1,
+      close: timestamp,
+      volume: 1,
+    }))
+    store.insertOhlcCandles(candles)
+
+    expect(store.latestContinuousOhlcCandles(3, 360_000)).toEqual(
+      candles.slice(3, 5),
+    )
     store.close()
   })
 
@@ -123,7 +188,7 @@ describe('MarketStore', () => {
     database.close()
 
     const store = new MarketStore({ path })
-    expect(store.schemaVersion()).toBe(8)
+    expect(store.schemaVersion()).toBe(9)
     expect(store.observationCount()).toBe(0)
     store.close()
   })
@@ -145,7 +210,7 @@ describe('MarketStore', () => {
       )
       .get()
     migratedDatabase.close()
-    expect(store.schemaVersion()).toBe(8)
+    expect(store.schemaVersion()).toBe(9)
     expect(ledgerTable).toEqual({ name: 'forecast_records' })
     store.close()
   })
@@ -262,7 +327,7 @@ describe('MarketStore', () => {
       lastSequence: 11,
       lastTradeId: 21,
       connectionRevision: 1,
-      schemaVersion: 8,
+      schemaVersion: 9,
     })
     expect(second.listGaps()).toEqual([
       expect.objectContaining({

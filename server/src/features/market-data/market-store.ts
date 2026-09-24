@@ -41,7 +41,21 @@ import type { NormalizedMarketPayload } from './market-payload.ts'
 import { validateNormalizedMarketPayload } from './market-payload.ts'
 import type { FastReplayCandle } from '../simulations/fast-replay-engine.ts'
 
-const SCHEMA_VERSION = 8
+const SCHEMA_VERSION = 9
+
+export interface PaperOrder {
+  readonly id: number
+  readonly strategyId: string
+  readonly signalTimestamp: number
+  readonly action: 'BUY' | 'SELL'
+  readonly gatePassed: boolean
+  readonly price: number
+  readonly executionTimestamp: number | null
+  readonly amountEur: number
+  readonly feeEur: number
+  readonly pnlEur: number | null
+  readonly targetPct: number
+}
 
 export interface OhlcCollectorState {
   readonly cursor: number | null
@@ -357,6 +371,39 @@ export class MarketStore {
     }))
   }
 
+  latestContinuousOhlcCandles(
+    limit: number,
+    cutoffEpochMs: number,
+  ): readonly FastReplayCandle[] {
+    if (!Number.isSafeInteger(limit) || limit < 1)
+      throw new Error('Candle limit must be a positive safe integer.')
+    if (!Number.isSafeInteger(cutoffEpochMs) || cutoffEpochMs < 0)
+      throw new Error('Candle cutoff must be a non-negative epoch millisecond.')
+    const rows = this.database
+      .prepare(
+        `SELECT timestamp, open, high, low, close, volume
+         FROM candles_1m_kraken WHERE timestamp * 1000 <= ?
+         ORDER BY timestamp DESC LIMIT ?`,
+      )
+      .all(cutoffEpochMs, limit) as SqlRow[]
+    const descending: FastReplayCandle[] = []
+    for (const row of rows) {
+      const candle = {
+        timestamp: Number(row.timestamp),
+        open: Number(row.open),
+        high: Number(row.high),
+        low: Number(row.low),
+        close: Number(row.close),
+        volume: Number(row.volume),
+      }
+      const latest = descending.at(-1)
+      if (latest !== undefined && latest.timestamp - candle.timestamp > 60)
+        break
+      descending.push(candle)
+    }
+    return descending.reverse()
+  }
+
   insertOhlcCandles(
     candles: readonly (FastReplayCandle & { readonly source?: string })[],
   ): number {
@@ -383,6 +430,51 @@ export class MarketStore {
       this.database.exec('ROLLBACK')
       throw error
     }
+  }
+
+  insertPaperOrder(order: Omit<PaperOrder, 'id'>): boolean {
+    const result = this.database
+      .prepare(
+        `INSERT OR IGNORE INTO paper_orders
+      (strategy_id, signal_timestamp, action, gate_passed, price, execution_timestamp,
+       amount_eur, fee_eur, pnl_eur, target_pct)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        order.strategyId,
+        order.signalTimestamp,
+        order.action,
+        order.gatePassed ? 1 : 0,
+        order.price,
+        order.executionTimestamp,
+        order.amountEur,
+        order.feeEur,
+        order.pnlEur,
+        order.targetPct,
+      )
+    return Number(result.changes) > 0
+  }
+
+  listPaperOrders(): readonly PaperOrder[] {
+    const rows = this.database
+      .prepare('SELECT * FROM paper_orders ORDER BY signal_timestamp, id')
+      .all() as SqlRow[]
+    return rows.map((row) => ({
+      id: Number(row.id),
+      strategyId: String(row.strategy_id),
+      signalTimestamp: Number(row.signal_timestamp),
+      action: row.action as 'BUY' | 'SELL',
+      gatePassed: Number(row.gate_passed) === 1,
+      price: Number(row.price),
+      executionTimestamp:
+        row.execution_timestamp === null
+          ? null
+          : Number(row.execution_timestamp),
+      amountEur: Number(row.amount_eur),
+      feeEur: Number(row.fee_eur),
+      pnlEur: row.pnl_eur === null ? null : Number(row.pnl_eur),
+      targetPct: Number(row.target_pct),
+    }))
   }
 
   ohlcCandleCount(): number {
@@ -1829,6 +1921,30 @@ export class MarketStore {
           'INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)',
         )
         .run(8, this.clock())
+      currentVersion = 8
+    }
+    if (currentVersion < 9) {
+      this.database.exec(`
+        CREATE TABLE IF NOT EXISTS paper_orders (
+          id INTEGER PRIMARY KEY,
+          strategy_id TEXT NOT NULL,
+          signal_timestamp INTEGER NOT NULL,
+          action TEXT NOT NULL CHECK (action IN ('BUY', 'SELL')),
+          gate_passed INTEGER NOT NULL CHECK (gate_passed IN (0, 1)),
+          price REAL NOT NULL,
+          execution_timestamp INTEGER,
+          amount_eur REAL NOT NULL,
+          fee_eur REAL NOT NULL,
+          pnl_eur REAL,
+          target_pct REAL NOT NULL,
+          UNIQUE (strategy_id, signal_timestamp, action)
+        ) STRICT;
+      `)
+      this.database
+        .prepare(
+          'INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)',
+        )
+        .run(9, this.clock())
     }
   }
 }

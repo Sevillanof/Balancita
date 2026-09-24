@@ -48,9 +48,28 @@ export interface FastReplayResult {
   readonly executionTimeMs: number
 }
 const HORIZON = 15
-const FEE = 0.001
-const SLIPPAGE = 0.0005
-const COST_GATE = 0.006
+export const FAST_REPLAY_FEE = 0.001
+export const FAST_REPLAY_SLIPPAGE = 0.0005
+export const FAST_REPLAY_COST_GATE = 0.006
+const FEE = FAST_REPLAY_FEE
+const SLIPPAGE = FAST_REPLAY_SLIPPAGE
+const COST_GATE = FAST_REPLAY_COST_GATE
+
+export function fastReplayStrategyFor(
+  id: FastReplayStrategyId,
+):
+  | 'trend-pullback'
+  | 'bollinger-reversion'
+  | 'donchian-breakout'
+  | 'regime-adapter' {
+  return id === 'micro-trend-pullback'
+    ? 'trend-pullback'
+    : id === 'micro-bollinger-reversion'
+      ? 'bollinger-reversion'
+      : id === 'micro-donchian-breakout'
+        ? 'donchian-breakout'
+        : 'regime-adapter'
+}
 
 export function runFastReplay(input: {
   readonly strategyId: string
@@ -99,14 +118,14 @@ export function runFastReplay(input: {
   for (let index = 50; index < candles.length; index += 1) {
     const candle = candles[index]!
     const history = candles.slice(0, index + 1)
-    const features = featuresAt(history)
-    const strategy = strategyFor(strategyId as FastReplayStrategyId)
+    const features = fastReplayFeaturesAt(history)
+    const strategy = fastReplayStrategyFor(strategyId as FastReplayStrategyId)
     const decision = evaluateMicroTarget(strategy, features, state)
     let effectiveTarget = decision.target
     if (state.exposure === 'flat' && decision.target === 'long') {
       rawSignalsCount += 1
       if (
-        canEnter(
+        fastReplayCanEnter(
           strategyId as FastReplayStrategyId,
           features,
           decision.state.regime,
@@ -272,22 +291,7 @@ export function fastReplayHash(value: unknown): string {
   return createHash('sha256').update(JSON.stringify(value)).digest('hex')
 }
 
-function strategyFor(
-  id: FastReplayStrategyId,
-):
-  | 'trend-pullback'
-  | 'bollinger-reversion'
-  | 'donchian-breakout'
-  | 'regime-adapter' {
-  return id === 'micro-trend-pullback'
-    ? 'trend-pullback'
-    : id === 'micro-bollinger-reversion'
-      ? 'bollinger-reversion'
-      : id === 'micro-donchian-breakout'
-        ? 'donchian-breakout'
-        : 'regime-adapter'
-}
-function canEnter(
+export function fastReplayCanEnter(
   id: FastReplayStrategyId,
   features: MicroStrategyFeatures,
   activeRegime: 'trend' | 'range' | null,
@@ -313,7 +317,7 @@ function canEnter(
               : 0
   return distance >= COST_GATE
 }
-function featuresAt(
+export function fastReplayFeaturesAt(
   history: readonly FastReplayCandle[],
 ): MicroStrategyFeatures {
   const close = history.at(-1)!.close

@@ -25,6 +25,7 @@ export interface ServerConfig {
   marketCollectorEnabled: boolean
   krakenWsCollectorEnabled: boolean
   krakenRestOhlcWorkerEnabled: boolean
+  krakenPaperTradingEnabled: boolean
   marketCollectorIntervalMs: number
   forecastLoopEnabled: boolean
   forecastLoopIntervalMs: number
@@ -125,6 +126,11 @@ export function serverConfigFrom(
       env,
       'KRAKEN_REST_OHLC_WORKER_ENABLED',
       true,
+    ),
+    krakenPaperTradingEnabled: booleanValue(
+      env,
+      'KRAKEN_PAPER_TRADING_ENABLED',
+      false,
     ),
     marketCollectorIntervalMs: positiveInt(
       env,
