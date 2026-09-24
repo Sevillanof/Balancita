@@ -1,0 +1,33 @@
+server/src/features/market-data/kraken-paper-ohlc-collector.test.ts
+  s_b1c2e7ea51e390::t_8848f170435ca9 1-527
+server/src/features/replay/forecast-source-mode.test.ts
+  s_c020f38a918021::t_8131705a5f65cb 214,249,253,260-262
+server/src/features/simulations/fast-replay-engine.ts
+  s_c020f38a918021::t_16672d682db52f 51-72,121-122,128,294,320
+server/src/platform/config.ts
+  s_c020f38a918021::t_02cc5379e13098 28,130-134
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d4f9aa21175d402940eba615d2d2d7673e0d40a1",
+  "prompts": {},
+  "sessions": {
+    "s_b1c2e7ea51e390": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f2bcac413ffed760ceZ6d4fIIC",
+        "model": "gpt-6-luna-fast"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    },
+    "s_c020f38a918021": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f2c1d112bffe2LmXXF73mLJDmq",
+        "model": "gpt-6-luna-fast"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
