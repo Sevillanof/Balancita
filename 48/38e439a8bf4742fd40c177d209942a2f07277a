@@ -1,0 +1,167 @@
+server/src/app/app.test.ts
+  s_24c3935ad96aa8::t_4564fbf10431d3 16,84-85,89-96,104-106,126-131,155-176,178-229,475-478,493-496
+server/src/app/app.ts
+  s_6ae87050bcbf61::t_9d359a7d0933b9 3,6-9,30-40,73-86,118,134-137,144-209,287-288,311-324,441,518-560,574-855,909,940-956,978-979,981-986,990-992,1047-1078,1080,1085,1096
+server/src/features/market-data/kraken-ohlc-collector.ts
+  s_12f444001db638::t_9796556a95377f 1-180
+server/src/features/market-data/kraken-ohlc.ts
+  s_38686296b0dfad::t_f44418d53c002c 1-91
+server/src/features/market-data/market-store.test.ts
+  s_6ae87050bcbf61::t_048da20c29d89e 56-74,78,84-115,126,148,265
+server/src/features/market-data/market-store.ts
+  s_6ae87050bcbf61::t_2198ae173e55b3 42,44-57,224-226,237-249,324-499,1784-1832
+server/src/features/replay/replay-service.test.ts
+  s_163973d5276a40::t_7ec4ddd4de89ab 103-140
+server/src/features/replay/replay-service.ts
+  s_163973d5276a40::t_ade39f7402a6b0 21,23,43-52,96-103,149-151,171-219,228-229,233-241,268,306-307,309,311-314,317-373,404-406,408-410,434-459
+server/src/features/simulations/comparison-report.ts
+  s_163973d5276a40::t_9ff3e5cf4ac1cb 48,182-214,234-239,241-253,255,260,274-281,285,297,312-319,329-330,373-375,384,392-521
+server/src/features/simulations/experimental-candidates.test.ts
+  s_163973d5276a40::t_c39c8da0c9cbef 1-100
+server/src/features/simulations/micro-strategy.test.ts
+  s_163973d5276a40::t_26f2c0113551f4 1-94
+server/src/features/simulations/profitability-report.test.ts
+  s_163973d5276a40::t_20a11e0688ae18 242-305
+server/src/features/simulations/refresh-simulations.ts
+  s_cb0ff2c6f52b0a::t_bdf82fe4d24ec4 7-10,19,22-24,30,32-36,40
+server/src/features/simulations/sample-window.test.ts
+  s_558226c8f5349d::t_20973d6b844dfe 1-135
+server/src/features/simulations/sample-window.ts
+  s_558226c8f5349d::t_3531d2527f60c3 1-200
+server/src/features/simulations/time-split.test.ts
+  s_f8946a48658000::t_0f45ce95c295e2 37-126
+server/src/features/simulations/time-split.ts
+  s_f8946a48658000::t_ffc327f737016d 10-13,30-35,39-44
+server/src/features/technical-analysis/technical-features.ts
+  s_163973d5276a40::t_f399a3f4a10989 11,74-75,80-101,106-107,166-189,223-224,230-342
+server/src/platform/config.test.ts
+  s_24c3935ad96aa8::t_cd4dd6f4f4e4b0 5-15,31-32,56-86,180-181
+server/src/platform/config.ts
+  s_6ae87050bcbf61::t_c5149a8dad735f 26-28,114,116,119-133,187-200
+server/src/simulations-api.test.ts
+  s_cb0ff2c6f52b0a::t_2fb1b9f7aee64d 2-4,7,12-57,115-140,211-231
+src/app/BtcEurDashboard.tsx
+  s_3e794a44a6aca4::t_b41b5d4dcb2b0d 12,23-28,31-34,62,66,70-71,75-76,78,83,88-96,111-118,120-129,143-173,194-202,228,239-425,430,437-439,480
+src/app/FastReplaySection.test.tsx
+  s_38686296b0dfad::t_7776bec8c4b023 1-136
+src/features/market-data/infrastructure/kraken-market-data.ts
+  s_f71ea81a5df17e::t_e48e75c5d5844c 5,58-59,139,149,162,174,200,214,330,344,378,428-436,566,572-574,585
+src/features/market-data/presentation/useWatchlist.ts
+  s_00abf22787a2fb::t_c210a8ca69192a 5,11-12,28,34-35,45-47,53,71,75,82,93-98
+src/features/news/presentation/useNewsStream.ts
+  s_00abf22787a2fb::t_0772453d18a08f 1-4,12,42,48,55,58,60,69,76,79-84
+src/features/paper-trading/domain/ema-macd-momentum.test.ts
+  s_f71ea81a5df17e::t_5a9a86d4120511 1-151
+src/features/paper-trading/domain/ema-macd-momentum.ts
+  s_f71ea81a5df17e::t_5f184a004dcaa5 1-207
+src/features/paper-trading/presentation/AutoTradingControl.test.tsx
+  s_f71ea81a5df17e::t_699f0d9484e285 1-2,6-15,17-24,27-40
+src/features/paper-trading/presentation/AutoTradingControl.tsx
+  s_f71ea81a5df17e::t_5e9a539e47818c 3-13,15-33
+src/features/price-chart/presentation/PriceChart.test.tsx
+  s_3e794a44a6aca4::t_8fcee1d918cc2f 13-17,20,33,36,40,46,49-50,57,121-125,129-158,168,172-183,193,209
+src/features/price-chart/presentation/PriceChart.tsx
+  s_3e794a44a6aca4::t_42e592c8ad8be2 1-6,13-15,22,26,108,149-161,192-203
+src/features/simulations/presentation/SimulationsPanel.test.tsx
+  s_cb0ff2c6f52b0a::t_622b9c91f0a591 169,181-183,336-434
+src/features/simulations/presentation/SimulationsSection.tsx
+  s_cb0ff2c6f52b0a::t_a553bbfcc84c1e 9-22,34-36,39-45
+src/shared/testing/fake-market-data-provider.ts
+  s_f71ea81a5df17e::t_0615a53d970df1 94,98,102,126-131
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4838e439a8bf4742fd40c177d209942a2f07277a",
+  "prompts": {},
+  "sessions": {
+    "s_00abf22787a2fb": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f31bb60cbffeAI8DljVKCWb0BL",
+        "model": "gpt-6-luna-fast"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    },
+    "s_12f444001db638": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f2c5dcd4bffeXH6WUv9KVUyIxz",
+        "model": "gpt-6-luna-fast"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    },
+    "s_163973d5276a40": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f2fde36cfffeZxBT9IKDFG3KF8",
+        "model": "gpt-6-luna-fast"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    },
+    "s_24c3935ad96aa8": {
+      "agent_id": {
+        "tool": "github-copilot",
+        "id": "9c0a27f1-9c6a-4f2f-8c58-e2a5ceb5d737",
+        "model": "copilot/gpt-5.6-sol"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    },
+    "s_38686296b0dfad": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f2c8e978fffePeQe03L5EMvYah",
+        "model": "gpt-6-luna-fast"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    },
+    "s_3e794a44a6aca4": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f2cdb3bd7ffeW0sQyDN1WP5zen",
+        "model": "gpt-6-luna-fast"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    },
+    "s_558226c8f5349d": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f312695e1ffedoIHEHTOx7q4LQ",
+        "model": "gpt-6-luna-fast"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    },
+    "s_6ae87050bcbf61": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f2c4524c0ffeD61ZcqBCKb6AKh",
+        "model": "gpt-6-luna-fast"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    },
+    "s_cb0ff2c6f52b0a": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f304b6c56ffezUcIf56pk88Gba",
+        "model": "gpt-6-luna-fast"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    },
+    "s_f71ea81a5df17e": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f30f6af5dffe6fbpVEs2Pv3tLQ",
+        "model": "gpt-6-luna-fast"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    },
+    "s_f8946a48658000": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f3128e77dffeF0MVBbEqg1RIDU",
+        "model": "gpt-6-luna-fast"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
