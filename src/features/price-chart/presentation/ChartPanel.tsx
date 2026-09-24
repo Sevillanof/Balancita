@@ -8,13 +8,16 @@ import {
 } from './candlestick-data.ts'
 import PriceChart from './PriceChart.tsx'
 import './chart.css'
+import type { SeriesMarker, Time } from 'lightweight-charts'
 
 type ChartPanelProps = {
   readonly status: CandleHistoryStatus
   readonly candles: readonly Candle[]
   readonly quote?: Quote
   readonly onRetry: () => void
+  readonly markers?: readonly SeriesMarker<Time>[]
 }
+const EMPTY_MARKERS: readonly SeriesMarker<Time>[] = []
 
 /**
  * Area C of the main screen: the dominant BTC-EUR candlestick chart. It owns
@@ -25,6 +28,7 @@ export default function ChartPanel({
   candles,
   quote,
   onRetry,
+  markers = EMPTY_MARKERS,
 }: ChartPanelProps) {
   const [liveState, setLiveState] = useState(() => ({
     restCandles: candles,
@@ -97,7 +101,7 @@ export default function ChartPanel({
         </div>
       )}
 
-      {status === 'ready' && <PriceChart data={data} />}
+      {status === 'ready' && <PriceChart data={data} markers={markers} />}
     </section>
   )
 }

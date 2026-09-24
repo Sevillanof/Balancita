@@ -15,6 +15,7 @@ import type {
   Time,
 } from 'lightweight-charts'
 import { useEffect, useRef } from 'react'
+import type { ISeriesMarkersPluginApi } from 'lightweight-charts'
 import './chart.css'
 
 type PriceChartProps = {
@@ -110,6 +111,7 @@ export default function PriceChart({ data, markers = [] }: PriceChartProps) {
   const chartRef = useRef<IChartApi | null>(null)
   const seriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null)
   const previousDataRef = useRef<readonly CandlestickData[] | null>(null)
+  const markerPluginRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null)
   const hasData = data.length > 0
 
   useEffect(() => {
@@ -133,6 +135,8 @@ export default function PriceChart({ data, markers = [] }: PriceChartProps) {
     return () => {
       chartRef.current = null
       seriesRef.current = null
+      markerPluginRef.current?.detach()
+      markerPluginRef.current = null
       previousDataRef.current = null
       chart.remove()
     }
@@ -191,14 +195,11 @@ export default function PriceChart({ data, markers = [] }: PriceChartProps) {
 
   useEffect(() => {
     const series = seriesRef.current
-    if (
-      !series ||
-      markers.length === 0 ||
-      typeof createSeriesMarkers !== 'function'
-    )
-      return undefined
-    const markerPlugin = createSeriesMarkers(series, [...markers])
-    return () => markerPlugin.detach()
+    if (!series || (markerPluginRef.current === null && markers.length === 0))
+      return
+    if (markerPluginRef.current === null)
+      markerPluginRef.current = createSeriesMarkers(series, [...markers])
+    else markerPluginRef.current.setMarkers([...markers])
   }, [markers])
 
   if (!hasData) {

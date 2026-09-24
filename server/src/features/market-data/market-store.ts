@@ -477,6 +477,30 @@ export class MarketStore {
     }))
   }
 
+  listRecentPaperOrders(limit = 500): readonly PaperOrder[] {
+    const rows = this.database
+      .prepare(
+        'SELECT * FROM (SELECT * FROM paper_orders ORDER BY signal_timestamp DESC, id DESC LIMIT ?) ORDER BY signal_timestamp, id',
+      )
+      .all(limit) as SqlRow[]
+    return rows.map((row) => ({
+      id: Number(row.id),
+      strategyId: String(row.strategy_id),
+      signalTimestamp: Number(row.signal_timestamp),
+      action: row.action as 'BUY' | 'SELL',
+      gatePassed: Number(row.gate_passed) === 1,
+      price: Number(row.price),
+      executionTimestamp:
+        row.execution_timestamp === null
+          ? null
+          : Number(row.execution_timestamp),
+      amountEur: Number(row.amount_eur),
+      feeEur: Number(row.fee_eur),
+      pnlEur: row.pnl_eur === null ? null : Number(row.pnl_eur),
+      targetPct: Number(row.target_pct),
+    }))
+  }
+
   ohlcCandleCount(): number {
     const row = this.database
       .prepare('SELECT COUNT(*) AS count FROM candles_1m_kraken')

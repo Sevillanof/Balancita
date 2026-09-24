@@ -156,6 +156,25 @@ describe('PriceChart', () => {
     expect(mocks.markerPlugin.setMarkers).not.toHaveBeenCalled()
   })
 
+  it('updates markers on the same plugin without resetting chart data', () => {
+    const marker = {
+      time: 1704067200 as CandlestickData['time'],
+      position: 'belowBar' as const,
+      color: '#26a69a',
+      shape: 'arrowUp' as const,
+      text: 'BUY 30€',
+    }
+    const data = [candlestick(1704067200, 100)]
+    const { rerender } = render(<PriceChart data={data} markers={[marker]} />)
+    rerender(<PriceChart data={data} markers={[]} />)
+
+    expect(mocks.createSeriesMarkers).toHaveBeenCalledTimes(1)
+    expect(mocks.markerPlugin.setMarkers).toHaveBeenCalledWith([])
+    expect(mocks.markerPlugin.detach).not.toHaveBeenCalled()
+    expect(mocks.series.setData).toHaveBeenCalledTimes(1)
+    expect(mocks.chart.remove).not.toHaveBeenCalled()
+  })
+
   it('updates the current candle without recentering the viewport', () => {
     const { rerender } = renderChart([candlestick(1704067200, 100)])
 

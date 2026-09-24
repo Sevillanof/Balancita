@@ -379,3 +379,35 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+.paper-telemetry {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2, 0.5rem) var(--space-4, 1rem);
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--color-border, #d8dee8);
+  border-radius: var(--radius-md, 0.5rem);
+  background: var(--color-surface, #fff);
+  font-size: 0.875rem;
+}
+.paper-telemetry__status {
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  font-weight: 650;
+}
+.paper-telemetry__status--connected {
+  color: #176b45;
+  background: #e5f5eb;
+}
+.paper-telemetry__status--polling {
+  color: #815600;
+  background: #fff3d6;
+}
+.paper-telemetry__status--failed {
+  color: #a32f2f;
+  background: #fde8e8;
+}
+.paper-telemetry__status--neutral {
+  color: var(--color-muted, #5a6576);
+  background: #edf0f4;
+}

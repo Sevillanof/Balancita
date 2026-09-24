@@ -20,13 +20,20 @@ import TradeScreen from '../features/paper-trading/presentation/TradeScreen.tsx'
 import { useTrading } from '../features/paper-trading/presentation/useTrading.ts'
 import { useWatchlist } from '../features/market-data/presentation/useWatchlist.ts'
 import type { UseAlertsResult } from '../features/alerts/presentation/useAlerts.ts'
-import { formatPriceMoney, formatQuantity } from '../shared/finance/format.ts'
+import {
+  formatPrice,
+  formatPriceMoney,
+  formatQuantity,
+} from '../shared/finance/format.ts'
 import type { OrderReceipt } from '../features/paper-trading/domain/orders.ts'
 import {
   aggregateClosed15mCandles,
   SIMULATED_BTC_EUR_FEE_POLICY,
 } from '../features/paper-trading/domain/ema-macd-momentum.ts'
 import './dashboard.css'
+import { useMemo } from 'react'
+import { usePaperTelemetry } from './usePaperTelemetry.ts'
+import { paperOrderMarkers } from './paper-order-markers.ts'
 
 const MOMENTUM_SIMULATOR_OPTIONS = {
   feePolicy: SIMULATED_BTC_EUR_FEE_POLICY,
@@ -76,6 +83,18 @@ export default function BtcEurDashboard({
   const balanceButtonRef = useRef<HTMLButtonElement>(null)
   const [showSimulations, setShowSimulations] = useState(false)
   const [chartMode, setChartMode] = useState<'realtime' | 'fast'>('realtime')
+  const paper = usePaperTelemetry()
+  const loadedTimes = useMemo(
+    () =>
+      new Set(
+        history.candles.map(({ time }) => Math.floor(Date.parse(time) / 1000)),
+      ),
+    [history.candles],
+  )
+  const paperMarkers = useMemo(
+    () => paperOrderMarkers(paper.orders, loadedTimes),
+    [paper.orders, loadedTimes],
+  )
   const instrument = market.instruments.find(({ id }) => id === 'BTC-EUR')
   const quote =
     instrument === undefined ? undefined : market.quotes.get(instrument.id)
@@ -102,6 +121,37 @@ export default function BtcEurDashboard({
             <BtcEurSummary quote={quote} candles={history.candles} />
           )}
         </header>
+        <section
+          className="paper-telemetry"
+          aria-label="Estado de paper trading"
+        >
+          <span
+            className={`paper-telemetry__status paper-telemetry__status--${paper.status?.stream_state === 'connected' ? 'connected' : paper.status?.stream_state === 'rest_polling_1m' ? 'polling' : paper.status?.stream_state === 'failed' ? 'failed' : 'neutral'}`}
+          >
+            {paper.status?.stream_state ?? 'Sin datos'}
+          </span>
+          <span>
+            Saldo{' '}
+            {paper.status
+              ? formatPrice(paper.status.account.balance_eur, 'EUR')
+              : '—'}
+          </span>
+          <span>
+            Patrimonio{' '}
+            {paper.status
+              ? formatPrice(paper.status.account.total_equity_eur, 'EUR')
+              : '—'}
+          </span>
+          <span>
+            Rechazos {paper.status?.execution_summary.gate_rejections ?? '—'}
+          </span>
+          <span>
+            Ejecuciones {paper.status?.execution_summary.executed_trades ?? '—'}
+          </span>
+          {paper.error !== null && (
+            <span role="status">Estado temporalmente desactualizado</span>
+          )}
+        </section>
 
         <section
           className="dashboard__available"
@@ -142,6 +192,7 @@ export default function BtcEurDashboard({
           <>
             <section className="dashboard__chart-surface">
               <div
+                role="group"
                 aria-label="Modo de gráfico"
                 className="dashboard__chart-mode"
               >
@@ -157,7 +208,7 @@ export default function BtcEurDashboard({
                   aria-pressed={chartMode === 'fast'}
                   onClick={() => setChartMode('fast')}
                 >
-                  Fast Replay
+                  Fast Replay Histórico
                 </button>
               </div>
               {chartMode === 'realtime' ? (
@@ -166,6 +217,7 @@ export default function BtcEurDashboard({
                   candles={history.candles}
                   quote={quote}
                   onRetry={history.retry}
+                  markers={paperMarkers}
                 />
               ) : (
                 <FastReplaySection />

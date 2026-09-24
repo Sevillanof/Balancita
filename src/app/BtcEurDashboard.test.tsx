@@ -133,6 +133,13 @@ describe('BtcEurDashboard main screen (Phase 1)', () => {
     renderDashboard(readyProvider())
     await waitForReady()
 
+    const chartMode = screen.getByRole('group', { name: 'Modo de gráfico' })
+    expect(
+      within(chartMode).getByRole('button', {
+        name: 'Fast Replay Histórico',
+      }),
+    ).toBeInTheDocument()
+
     // A. Brand/title with the nested BTC-EUR summary.
     const brand = screen.getByRole('banner')
     expect(
@@ -300,19 +307,27 @@ describe('BtcEurDashboard main screen (Phase 1)', () => {
     const provider = readyProvider()
     renderDashboard(provider)
     await waitForReady()
-    act(() => provider.emit(makeQuote({ instrumentId: 'BTC-EUR', price: 60_000 })))
+    act(() =>
+      provider.emit(makeQuote({ instrumentId: 'BTC-EUR', price: 60_000 })),
+    )
 
     for (const quantity of ['0.01', '0.02']) {
       await user.click(screen.getByRole('button', { name: 'Comprar' }))
       await screen.findByRole('form', { name: 'Orden del simulador' })
-      act(() => provider.emit(makeQuote({ instrumentId: 'BTC-EUR', price: 60_000 })))
+      act(() =>
+        provider.emit(makeQuote({ instrumentId: 'BTC-EUR', price: 60_000 })),
+      )
       await user.type(screen.getByLabelText('Cantidad'), quantity)
-      await user.click(screen.getByRole('button', { name: 'Vista previa de la orden' }))
+      await user.click(
+        screen.getByRole('button', { name: 'Vista previa de la orden' }),
+      )
       await user.click(screen.getByRole('button', { name: 'Confirmar orden' }))
       await screen.findByRole('region', { name: 'Resultado de la orden' })
       await user.click(screen.getByRole('button', { name: 'Cerrar' }))
       await waitFor(() =>
-        expect(screen.queryByRole('form', { name: 'Orden del simulador' })).not.toBeInTheDocument(),
+        expect(
+          screen.queryByRole('form', { name: 'Orden del simulador' }),
+        ).not.toBeInTheDocument(),
       )
     }
 
@@ -503,15 +518,24 @@ describe('BtcEurDashboard main screen (Phase 1)', () => {
     )
   })
 
-  it('uses the server news stream without opening a browser fetch', async () => {
-    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(() => {
-      throw new Error('network is disabled in tests')
-    })
+  it('uses the server news stream and reads paper telemetry from its endpoints', async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockImplementation(
+        async () => ({ ok: true, json: async () => ({}) }) as Response,
+      )
 
     renderDashboard(readyProvider())
     await waitForReady()
 
-    expect(fetchSpy).not.toHaveBeenCalled()
+    expect(fetchSpy).toHaveBeenCalledWith(
+      '/api/paper-trading/status',
+      expect.any(Object),
+    )
+    expect(fetchSpy).toHaveBeenCalledWith(
+      '/api/paper-trading/orders?limit=500',
+      expect.any(Object),
+    )
     expect(newsStreamMock.useNewsStream).toHaveBeenCalled()
   })
 })

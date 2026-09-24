@@ -25,6 +25,9 @@ type FastRun = {
   }[]
   netPnlEur: number
   candlesEvaluated: number
+  rawSignalsCount: number
+  gateRejectionsCount: number
+  sampleCount: number
   brierScoreMulticlass: number | null
   winRatePct: number
   profitFactor: number | null
@@ -61,6 +64,9 @@ function isFastRun(value: unknown): value is FastRun {
     STRATEGIES.some(([id]) => id === value.strategyId) &&
     isFiniteNumber(value.netPnlEur) &&
     isSafeInteger(value.candlesEvaluated) &&
+    isSafeInteger(value.rawSignalsCount ?? value.raw_signals_count) &&
+    isSafeInteger(value.gateRejectionsCount ?? value.gate_rejections_count) &&
+    isSafeInteger(value.sampleCount ?? value.sample_count) &&
     (value.brierScoreMulticlass === null ||
       isFiniteNumber(value.brierScoreMulticlass)) &&
     isFiniteNumber(value.winRatePct) &&
@@ -291,7 +297,7 @@ export default function FastReplaySection() {
           disabled={busy}
           onClick={() => void execute()}
         >
-          {busy ? 'Procesando…' : 'Ejecutar replay'}
+          {busy ? 'Procesando…' : 'Ejecutar Replay Local'}
         </button>
       </div>
       <p>
@@ -310,14 +316,46 @@ export default function FastReplaySection() {
       {error !== null && <p role="alert">{error}</p>}
       {run !== null && (
         <div className="fast-replay__results" aria-live="polite">
+          <table aria-label="Métricas de Fast Replay">
+            <caption>Resultado de la corrida seleccionada · {run.id}</caption>
+            <tbody>
+              <tr>
+                <th scope="row">Velas evaluadas</th>
+                <td>{run.candlesEvaluated}</td>
+              </tr>
+              <tr>
+                <th scope="row">Señales brutas</th>
+                <td>{run.rawSignalsCount}</td>
+              </tr>
+              <tr>
+                <th scope="row">Rechazos del filtro</th>
+                <td>{run.gateRejectionsCount}</td>
+              </tr>
+              <tr>
+                <th scope="row">Ejecuciones</th>
+                <td>{run.trades.length}</td>
+              </tr>
+              <tr>
+                <th scope="row">P&amp;L neto después de costos.v1</th>
+                <td>{run.netPnlEur.toFixed(2)} €</td>
+              </tr>
+              <tr>
+                <th scope="row">Brier multiclase</th>
+                <td>
+                  {run.brierScoreMulticlass?.toFixed(4) ?? 'Sin muestras'}
+                </td>
+              </tr>
+              <tr>
+                <th scope="row">Baseline uniforme</th>
+                <td>0.6667</td>
+              </tr>
+            </tbody>
+          </table>
           <p>
-            Resultado guardado: {run.id} · {run.candlesEvaluated} velas ·
-            P&amp;L neto {run.netPnlEur.toFixed(2)} € · aciertos{' '}
-            {run.winRatePct.toFixed(1)} % · factor de beneficio{' '}
+            Factor de beneficio:{' '}
             {run.profitFactor !== null && Number.isFinite(run.profitFactor)
               ? run.profitFactor.toFixed(2)
-              : '∞'}{' '}
-            · Brier {run.brierScoreMulticlass?.toFixed(4) ?? 'sin muestra'}
+              : 'No disponible'}
           </p>
         </div>
       )}

@@ -19,6 +19,56 @@ function temporaryStore() {
 }
 
 describe('Fast Replay API', () => {
+  it('serves bounded chronological paper audit events and validates the requested limit', async () => {
+    const store = temporaryStore()
+    store.insertPaperOrder({
+      strategyId: 'micro-test',
+      signalTimestamp: 120,
+      action: 'BUY',
+      gatePassed: false,
+      price: 10,
+      executionTimestamp: null,
+      amountEur: 30,
+      feeEur: 0,
+      pnlEur: null,
+      targetPct: 0,
+    })
+    const app = await buildApp({
+      config: serverConfigFrom({
+        MARKET_COLLECTOR_ENABLED: 'false',
+        GEMINI_SERVER_CORS_ORIGIN: '',
+      }),
+      overrides: { marketStore: store },
+    })
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/paper-trading/orders?limit=1',
+    })
+    expect(response.statusCode).toBe(200)
+    expect(response.json()).toEqual({
+      orders: [
+        {
+          id: 1,
+          strategyId: 'micro-test',
+          signalTimestamp: 120,
+          action: 'BUY',
+          gatePassed: false,
+          executionTimestamp: null,
+          amountEur: 30,
+        },
+      ],
+    })
+    expect(
+      (
+        await app.inject({
+          method: 'GET',
+          url: '/api/paper-trading/orders?limit=1.5',
+        })
+      ).statusCode,
+    ).toBe(400)
+    await app.close()
+  })
+
   it('syncs closed fixture candles, serves bounded persisted OHLC, canonicalizes legacy strategy ids, and appends run history', async () => {
     const store = temporaryStore()
     const now = Math.floor(Date.now() / 1000)

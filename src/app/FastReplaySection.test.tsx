@@ -74,6 +74,8 @@ describe('FastReplaySection', () => {
       candlesEvaluated: 2,
       sampleCount: 0,
       tradesCount: 0,
+      rawSignalsCount: 0,
+      gateRejectionsCount: 0,
       winRatePct: 0,
       profitFactor: 0,
       netPnlEur: 0,
@@ -130,7 +132,7 @@ describe('FastReplaySection', () => {
       '1',
     )
     expect(
-      screen.getByText(/Resultado guardado: fast-history-1/),
+      screen.getByRole('table', { name: 'Métricas de Fast Replay' }),
     ).toBeInTheDocument()
   })
 })

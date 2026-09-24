@@ -533,6 +533,41 @@ export async function buildApp(options: {
         },
       },
   )
+  app.get('/api/paper-trading/orders', (request, reply) => {
+    const rawLimit = (request.query as { limit?: unknown } | undefined)?.limit
+    const limit = rawLimit === undefined ? 500 : Number(rawLimit)
+    if (!Number.isSafeInteger(limit) || limit < 1)
+      return reply.code(400).send({
+        error: {
+          code: 'invalid_request',
+          message: 'limit must be a positive integer.',
+        },
+      })
+    return {
+      orders:
+        marketStore
+          ?.listRecentPaperOrders(Math.min(limit, 1000))
+          .map(
+            ({
+              id,
+              strategyId,
+              signalTimestamp,
+              action,
+              gatePassed,
+              executionTimestamp,
+              amountEur,
+            }) => ({
+              id,
+              strategyId,
+              signalTimestamp,
+              action,
+              gatePassed,
+              executionTimestamp,
+              amountEur,
+            }),
+          ) ?? [],
+    }
+  })
 
   const geminiStatus = () =>
     geminiGate?.status(
