@@ -16,6 +16,15 @@ import {
 } from './micro-strategy.ts'
 
 describe('PaperForwardService', () => {
+  it('exposes current strategy regime without exposing mutable strategy state', () => {
+    const store = new MarketStore({ path: ':memory:' })
+    const service = new PaperForwardService({ store })
+    expect(service.getCurrentRegime('micro-regime-adapter')).toBeNull()
+    expect(service.getCurrentRegime('micro-trend-pullback')).toBeNull()
+    expect(service.getCurrentRegime('micro-regime-adapter')).toBeNull()
+    store.close()
+  })
+
   it('evaluates completed 15m buckets once and fills a pending entry at the next bucket open', () => {
     const store = new MarketStore({ path: ':memory:' })
     const service = new PaperForwardService({ store })

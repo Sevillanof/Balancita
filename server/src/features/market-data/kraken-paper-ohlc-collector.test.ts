@@ -123,7 +123,9 @@ describe('KrakenPaperOhlcCollector', () => {
       [1_700_000_160, '20015', '20030', '20010', '20025', '4', 12],
     ]
     let poll: (() => void) | undefined
-    const fetch = vi.fn(async (_input: string, _init?: RequestInit) =>
+    const fetch = vi.fn<
+      (input: string, init?: RequestInit) => Promise<Response>
+    >(async () =>
       Response.json({
         error: [],
         result: { XXBTZEUR: rows, last: 'ignored' },
@@ -259,7 +261,7 @@ describe('KrakenPaperOhlcCollector', () => {
         '1',
         '1',
       ])
-    const fetch = vi.fn(async (_input: string) =>
+    const fetch = vi.fn<(input: string) => Promise<Response>>(async () =>
       Response.json({ error: [], result: { XBTEUR: rows } }),
     )
     const socket = new Socket()

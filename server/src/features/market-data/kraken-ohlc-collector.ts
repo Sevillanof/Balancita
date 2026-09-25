@@ -314,15 +314,23 @@ function safeCauseCode(error: unknown): string | undefined {
 
 function safeErrorMessage(error: unknown): string | undefined {
   if (!(error instanceof Error)) return undefined
-  return error.message
-    .replace(/https?:\/\/[^\s"'<>]+/gi, '[url]')
-    .replace(/(?:^|\s)(?:\/|[A-Za-z]:\\)[^\s]*/g, ' [path]')
-    .replace(
-      /(?:password|token|authorization|api[-_ ]?key)\s*[:=]\s*[^\s,;]+/gi,
-      '[redacted]',
-    )
-    .replace(/[\r\n\t\x00-\x1f\x7f]/g, ' ')
+  return replaceControlCharacters(
+    error.message
+      .replace(/https?:\/\/[^\s"'<>]+/gi, '[url]')
+      .replace(/(?:^|\s)(?:\/|[A-Za-z]:\\)[^\s]*/g, ' [path]')
+      .replace(
+        /(?:password|token|authorization|api[-_ ]?key)\s*[:=]\s*[^\s,;]+/gi,
+        '[redacted]',
+      ),
+  )
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, 160)
+}
+
+function replaceControlCharacters(value: string): string {
+  return Array.from(value, (character) => {
+    const code = character.codePointAt(0)!
+    return code <= 0x1f || code === 0x7f ? ' ' : character
+  }).join('')
 }

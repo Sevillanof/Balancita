@@ -16,6 +16,7 @@ import {
   evaluateMicroTarget,
   initialMicroState,
   macroContextWhenReady,
+  type MicroRegime,
   type MicroStrategyState,
 } from './micro-strategy.ts'
 import type { MarketStore, PaperOrder } from '../market-data/market-store.ts'
@@ -97,6 +98,10 @@ export class PaperForwardService {
 
   storeLatestOhlcTimestamp(): number | null {
     return this.options.store.latestOhlcTimestamp()
+  }
+
+  getCurrentRegime(id: FastReplayStrategyId): MicroRegime {
+    return this.states.get(id)?.regime ?? null
   }
 
   processClosedCandle(candle: FastReplayCandle, nextOpen?: number): void {
@@ -264,7 +269,12 @@ export class PaperForwardService {
         total_equity_eur: balance + btcBalance * latest,
       },
       active_positions: positions.map(
-        ({ quantityBtc: _quantity, ...item }) => item,
+        ({ strategy_id, entry_price, amount_eur, open_time }) => ({
+          strategy_id,
+          entry_price,
+          amount_eur,
+          open_time,
+        }),
       ),
       execution_summary: {
         total_signals: orders.length,

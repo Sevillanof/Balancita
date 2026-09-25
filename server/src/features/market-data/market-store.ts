@@ -57,6 +57,17 @@ export interface PaperOrder {
   readonly targetPct: number
 }
 
+export interface PaperOrderSignalAggregate {
+  readonly strategy_id: string
+  readonly total_signals: number
+  readonly gate_rejections: number
+  readonly executed_buys: number
+  readonly executed_sells: number
+  readonly total_fees_eur: number
+  readonly net_pnl_eur: number
+  readonly avg_target_pct: number
+}
+
 export interface OhlcCollectorState {
   readonly cursor: number | null
   readonly lastSuccessfulSync: number
@@ -498,6 +509,32 @@ export class MarketStore {
       feeEur: Number(row.fee_eur),
       pnlEur: row.pnl_eur === null ? null : Number(row.pnl_eur),
       targetPct: Number(row.target_pct),
+    }))
+  }
+
+  paperOrderSignalAggregates(): readonly PaperOrderSignalAggregate[] {
+    const rows = this.database
+      .prepare(
+        `SELECT strategy_id,
+          COUNT(*) FILTER (WHERE action = 'BUY') AS total_signals,
+          COUNT(*) FILTER (WHERE action = 'BUY' AND gate_passed = 0) AS gate_rejections,
+          COUNT(*) FILTER (WHERE action = 'BUY' AND gate_passed = 1 AND execution_timestamp IS NOT NULL) AS executed_buys,
+          COUNT(*) FILTER (WHERE action = 'SELL' AND execution_timestamp IS NOT NULL) AS executed_sells,
+          COALESCE(SUM(fee_eur) FILTER (WHERE execution_timestamp IS NOT NULL), 0) AS total_fees_eur,
+          COALESCE(SUM(pnl_eur) FILTER (WHERE action = 'SELL' AND execution_timestamp IS NOT NULL), 0) AS net_pnl_eur,
+          COALESCE(AVG(target_pct) FILTER (WHERE action = 'BUY'), 0) AS avg_target_pct
+        FROM paper_orders GROUP BY strategy_id`,
+      )
+      .all() as SqlRow[]
+    return rows.map((row) => ({
+      strategy_id: String(row.strategy_id),
+      total_signals: Number(row.total_signals),
+      gate_rejections: Number(row.gate_rejections),
+      executed_buys: Number(row.executed_buys),
+      executed_sells: Number(row.executed_sells),
+      total_fees_eur: Number(row.total_fees_eur),
+      net_pnl_eur: Number(row.net_pnl_eur),
+      avg_target_pct: Number(row.avg_target_pct),
     }))
   }
 

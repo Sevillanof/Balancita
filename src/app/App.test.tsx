@@ -84,7 +84,8 @@ class FakeAnalysisProvider implements AnalysisProvider {
 }
 
 describe('dashboard BTC-EUR', () => {
-  it('starts with one accessible BTC-EUR dashboard and no tab navigation', async () => {
+  it('mounts the strategy panel only after opening its collapsed audit disclosure', async () => {
+    const user = userEvent.setup()
     renderApp()
 
     expect(
@@ -96,7 +97,33 @@ describe('dashboard BTC-EUR', () => {
     expect(
       screen.queryByText('Un espacio personal de inversión local y educativo.'),
     ).not.toBeInTheDocument()
-    expect(screen.queryByRole('tablist')).not.toBeInTheDocument()
+    expect(screen.queryAllByRole('tablist', { hidden: true })).toHaveLength(0)
+    const auditSummary = screen.getByText(
+      'Auditoría por Estrategia y Ledger de Posiciones',
+      { selector: 'summary' },
+    )
+    const auditDetails = auditSummary.closest('details')
+    expect(auditDetails).not.toHaveAttribute('open')
+    expect(
+      screen.queryByRole('tablist', {
+        name: 'Estado de posiciones',
+        hidden: true,
+      }),
+    ).not.toBeInTheDocument()
+    expect(screen.queryByRole('navigation')).not.toBeInTheDocument()
+
+    await user.click(auditSummary)
+    expect(
+      await screen.findByRole('tablist', { name: 'Estado de posiciones' }),
+    ).toBeInTheDocument()
+    expect(screen.getAllByRole('tablist')).toHaveLength(1)
+    expect(auditDetails).toHaveAttribute('open')
+    expect(
+      screen.getByRole('tablist', {
+        name: 'Estado de posiciones',
+        hidden: true,
+      }),
+    ).toBeInTheDocument()
     expect(
       await screen.findByRole('group', { name: 'Acciones de trading' }),
     ).toBeInTheDocument()
@@ -108,6 +135,13 @@ describe('dashboard BTC-EUR', () => {
         name: 'Información general del instrumento en este caso (BTC-EUR)',
       }),
     ).not.toBeInTheDocument()
+    await user.click(auditSummary)
+    await waitFor(() => expect(auditDetails).not.toHaveAttribute('open'))
+    expect(screen.queryAllByRole('tablist', { hidden: true })).toHaveLength(0)
+    await user.click(auditSummary)
+    expect(
+      await screen.findByRole('tablist', { name: 'Estado de posiciones' }),
+    ).toBeInTheDocument()
   })
 
   it('uses the active market provider price for the dashboard and paper preview', async () => {

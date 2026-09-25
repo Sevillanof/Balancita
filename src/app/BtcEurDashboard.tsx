@@ -35,6 +35,7 @@ import { useMemo } from 'react'
 import { usePaperTelemetry } from './usePaperTelemetry.ts'
 import { useOhlcCollectorTelemetry } from './useOhlcCollectorTelemetry.ts'
 import { paperOrderMarkers } from './paper-order-markers.ts'
+import StrategyAnalyticsDisclosure from '../features/strategy-analytics/StrategyAnalyticsDisclosure.tsx'
 
 const MOMENTUM_SIMULATOR_OPTIONS = {
   feePolicy: SIMULATED_BTC_EUR_FEE_POLICY,
@@ -276,6 +277,8 @@ export default function BtcEurDashboard({
           <SimulationsSection />
         </div>
       )}
+
+      {ready && instrument !== undefined && <StrategyAnalyticsDisclosure />}
 
       {ready && instrument !== undefined && orderFlowSide !== null && (
         <OrderFlowDialog

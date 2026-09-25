@@ -139,6 +139,18 @@ describe('MarketStore', () => {
       price: 20_000,
       executionTimestamp: null,
     })
+    expect(store.paperOrderSignalAggregates()).toEqual([
+      {
+        strategy_id: order.strategyId,
+        total_signals: 1,
+        gate_rejections: 1,
+        executed_buys: 0,
+        executed_sells: 0,
+        total_fees_eur: 0,
+        net_pnl_eur: 0,
+        avg_target_pct: 0.005,
+      },
+    ])
     expect(
       database.prepare('SELECT gate_passed FROM paper_orders').get(),
     ).toEqual({ gate_passed: 0 })

@@ -19,6 +19,138 @@ function temporaryStore() {
 }
 
 describe('Fast Replay API', () => {
+  it('marks open holds and C27 time-stop distance through the latest closed 15m bucket end', async () => {
+    const store = temporaryStore()
+    const bucketEnd = Math.floor(Date.now() / 900_000) * 900
+    const firstTimestamp = bucketEnd - 51 * 900
+    store.insertOhlcCandles(
+      Array.from({ length: 51 * 15 }, (_, index) => ({
+        timestamp: firstTimestamp + index * 60,
+        open: 100,
+        high: 105,
+        low: 85,
+        close: 100,
+        volume: 10,
+      })),
+    )
+    store.insertPaperOrder({
+      strategyId: 'micro-donchian-breakout',
+      signalTimestamp: bucketEnd - 8 * 900,
+      action: 'BUY',
+      gatePassed: true,
+      price: 100,
+      executionTimestamp: bucketEnd - 8 * 900,
+      amountEur: 30,
+      feeEur: 0.03,
+      pnlEur: null,
+      targetPct: 0,
+    })
+    const app = await buildApp({
+      config: serverConfigFrom({
+        MARKET_COLLECTOR_ENABLED: 'false',
+        GEMINI_SERVER_CORS_ORIGIN: '',
+      }),
+      overrides: { marketStore: store },
+    })
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/paper-trading/positions?status=open',
+    })
+    expect(response.statusCode).toBe(200)
+    expect(response.json()[0]).toMatchObject({
+      status: 'OPEN',
+      holding_bars_15m: 8,
+      exit_distance_label: 'Distancia al nivel de salida',
+    })
+    expect(response.json()[0].exit_distance_pct).toBeCloseTo(0.5)
+    await app.close()
+  })
+
+  it('exposes all live strategy metrics and causal positions separately from Fast Replay', async () => {
+    const store = temporaryStore()
+    store.insertPaperOrder({
+      strategyId: 'micro-trend-pullback',
+      signalTimestamp: 900,
+      action: 'BUY',
+      gatePassed: true,
+      price: 100,
+      executionTimestamp: 900,
+      amountEur: 30,
+      feeEur: 0.03,
+      pnlEur: null,
+      targetPct: 0,
+    })
+    store.insertPaperOrder({
+      strategyId: 'micro-trend-pullback',
+      signalTimestamp: 1800,
+      action: 'SELL',
+      gatePassed: true,
+      price: 110,
+      executionTimestamp: 1800,
+      amountEur: 30,
+      feeEur: 0.033,
+      pnlEur: 2.9,
+      targetPct: 0,
+    })
+    const app = await buildApp({
+      config: serverConfigFrom({
+        MARKET_COLLECTOR_ENABLED: 'false',
+        GEMINI_SERVER_CORS_ORIGIN: '',
+      }),
+      overrides: { marketStore: store },
+    })
+    const summary = await app.inject({
+      method: 'GET',
+      url: '/api/paper-trading/strategies-summary',
+    })
+    expect(summary.statusCode).toBe(200)
+    expect(summary.json()).toHaveLength(4)
+    expect(summary.json()[0]).toMatchObject({
+      strategy_id: 'micro-trend-pullback',
+      name: 'C25: Trend Pullback',
+      total_signals: 1,
+      approval_rate_pct: 100,
+      executed_buys: 1,
+      executed_sells: 1,
+      open_positions_count: 0,
+      closed_trades: 1,
+      net_pnl_eur: 2.9,
+      brier_score: null,
+      avg_target_pct: 0,
+    })
+    const positions = await app.inject({
+      method: 'GET',
+      url: '/api/paper-trading/positions?status=closed&limit=50',
+    })
+    expect(positions.json()).toMatchObject([
+      {
+        id: 1,
+        status: 'CLOSED',
+        entry_time: new Date(900_000).toISOString(),
+        exit_time: new Date(1_800_000).toISOString(),
+        holding_bars_15m: 1,
+        net_pnl_eur: 2.9,
+      },
+    ])
+    expect(
+      (
+        await app.inject({
+          method: 'GET',
+          url: '/api/paper-trading/positions?status=pending',
+        })
+      ).statusCode,
+    ).toBe(400)
+    expect(
+      (
+        await app.inject({
+          method: 'GET',
+          url: '/api/paper-trading/positions?limit=201',
+        })
+      ).statusCode,
+    ).toBe(400)
+    await app.close()
+  })
+
   it('lists active strategy candidates only and rejects archived candidate ids', async () => {
     const store = temporaryStore()
     const app = await buildApp({

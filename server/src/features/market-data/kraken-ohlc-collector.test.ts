@@ -24,7 +24,7 @@ describe('KrakenOhlcCollector', () => {
 
   it('ignores duplicates and excludes the open bar', async () => {
     store = new MarketStore({ path: ':memory:' })
-    const fetch = vi.fn(async (_url: string) =>
+    const fetch = vi.fn<(url: string) => Promise<Response>>(async () =>
       response([candle(60), candle(120), candle(180)], 240),
     )
     const collector = new KrakenOhlcCollector({
@@ -144,7 +144,7 @@ describe('KrakenOhlcCollector', () => {
       })),
     )
     const warn = vi.fn()
-    const fetch = vi.fn(async (_url: string) =>
+    const fetch = vi.fn<(url: string) => Promise<Response>>(async () =>
       response([candle(240), candle(360)], 420),
     )
     const collector = new KrakenOhlcCollector({
@@ -169,8 +169,8 @@ describe('KrakenOhlcCollector', () => {
   it('skips overlapping sync and clears polling timer on stop', async () => {
     store = new MarketStore({ path: ':memory:' })
     let resolve!: (value: Response) => void
-    const fetch = vi.fn(
-      (_url: string) =>
+    const fetch = vi.fn<(url: string) => Promise<Response>>(
+      () =>
         new Promise<Response>((done) => {
           resolve = done
         }),
@@ -246,7 +246,7 @@ describe('KrakenOhlcCollector', () => {
     async (code) => {
       store = new MarketStore({ path: ':memory:' })
       const warn = vi.fn()
-      const secretMessage = `Request to https://user:password@private.example/path?token=secret failed at /Users/franco/private.pem ${'x'.repeat(300)}`
+      const secretMessage = `Request to https://user:password@private.example/path?token=secret failed\u0000\u001b at /Users/franco/private.pem ${'x'.repeat(300)}`
       const failure = Object.assign(new TypeError(secretMessage), {
         cause: { code },
       })
@@ -269,6 +269,12 @@ describe('KrakenOhlcCollector', () => {
       expect(fields.errorMessage).not.toContain('password')
       expect(fields.errorMessage).not.toContain('/Users/franco')
       expect(fields.errorMessage).not.toContain('secret')
+      expect(
+        Array.from(fields.errorMessage as string).every((character) => {
+          const code = character.codePointAt(0)!
+          return code > 0x1f && code !== 0x7f
+        }),
+      ).toBe(true)
     },
   )
 })

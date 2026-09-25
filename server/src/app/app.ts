@@ -31,6 +31,14 @@ import { MarketStore } from '../features/market-data/market-store.ts'
 import { KrakenOhlcCollector } from '../features/market-data/kraken-ohlc-collector.ts'
 import { PaperForwardService } from '../features/simulations/paper-forward.ts'
 import {
+  fastReplayFeaturesAt,
+  resample1mTo15m,
+} from '../features/simulations/fast-replay-engine.ts'
+import {
+  buildStrategyPositions,
+  getStrategiesAnalyticsSummary,
+} from '../features/paper-trading/strategies-analytics.ts'
+import {
   collectKrakenOhlc,
   KRAKEN_OHLC_MAX_CANDLES,
   KRAKEN_OHLC_MAX_HOURS,
@@ -596,6 +604,57 @@ export async function buildApp(options: {
             }),
           ) ?? [],
     }
+  })
+  app.get('/api/paper-trading/strategies-summary', () => {
+    return getStrategiesAnalyticsSummary({
+      paperOrderSignalAggregates: () =>
+        marketStore?.paperOrderSignalAggregates() ?? [],
+      listPaperOrders: () => marketStore?.listPaperOrders() ?? [],
+    })
+  })
+  app.get('/api/paper-trading/positions', (request, reply) => {
+    const query = request.query as { status?: unknown; limit?: unknown }
+    const status = query.status ?? 'all'
+    const limit = query.limit === undefined ? 50 : Number(query.limit)
+    if (
+      (status !== 'all' && status !== 'open' && status !== 'closed') ||
+      !Number.isSafeInteger(limit) ||
+      limit < 1 ||
+      limit > 200
+    )
+      return reply.code(400).send({
+        error: {
+          code: 'invalid_request',
+          message:
+            'status must be all, open, or closed and limit must be 1–200.',
+        },
+      })
+    const candles =
+      marketStore?.latestContinuousOhlcCandles(
+        1_200,
+        Math.floor(Date.now() / 60_000) * 60_000,
+      ) ?? []
+    const complete = resample1mTo15m(
+      candles,
+      Math.floor(Date.now() / 900_000) * 900,
+    )
+    const features =
+      complete.length === 0 ? null : fastReplayFeaturesAt(complete)
+    const price = complete.at(-1)?.close ?? null
+    const positions = buildStrategyPositions(
+      marketStore?.listPaperOrders() ?? [],
+      price,
+      features,
+      complete.at(-1) === undefined ? null : complete.at(-1)!.timestamp + 900,
+      paperForward?.getCurrentRegime('micro-regime-adapter') ?? null,
+    )
+      .filter(
+        (position) =>
+          status === 'all' ||
+          position.status === (status === 'open' ? 'OPEN' : 'CLOSED'),
+      )
+      .slice(0, limit)
+    return reply.send(positions)
   })
 
   const geminiStatus = () =>

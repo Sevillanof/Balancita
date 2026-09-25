@@ -443,7 +443,12 @@ export function manifestHashFor(
   candidates: readonly SimulationCandidate[],
 ): string {
   const ordered = [...candidates]
-    .map(({ status: _status, ...candidate }) => candidate)
+    .map((candidate) => {
+      const manifestCandidate = Object.fromEntries(
+        Object.entries(candidate).filter(([key]) => key !== 'status'),
+      ) as Omit<SimulationCandidate, 'status'>
+      return manifestCandidate
+    })
     .sort((left, right) =>
       left.candidateId < right.candidateId
         ? -1
