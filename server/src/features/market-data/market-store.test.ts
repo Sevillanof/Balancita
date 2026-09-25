@@ -65,7 +65,7 @@ describe('MarketStore', () => {
 
   it('keeps in-memory stores usable with a 5000ms busy timeout', () => {
     const store = new MarketStore({ path: ':memory:' })
-    expect(store.schemaVersion()).toBe(9)
+    expect(store.schemaVersion()).toBe(10)
     expect(store.sqliteSettings()).toEqual({
       journalMode: 'memory',
       busyTimeout: 5000,
@@ -75,14 +75,28 @@ describe('MarketStore', () => {
   it('initializes the versioned schema at the injected path', () => {
     const store = new MarketStore({ path: makePath() })
 
-    expect(store.schemaVersion()).toBe(9)
+    expect(store.schemaVersion()).toBe(10)
     expect(store.observationCount()).toBe(0)
 
     store.close()
   })
 
-  it('creates the paper ledger with strategy_id and no persisted BTC quantity', () => {
+  it('migrates the v9 paper ledger and preserves strategy idempotency', () => {
     const path = makePath()
+    const legacyDatabase = new DatabaseSync(path)
+    legacyDatabase.exec(`
+      CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL);
+      INSERT INTO schema_migrations VALUES (9, 1);
+      CREATE TABLE paper_orders (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        candidate_id TEXT NOT NULL,
+        signal_timestamp INTEGER NOT NULL,
+        action TEXT NOT NULL CHECK (action IN ('BUY', 'SELL')),
+        price REAL NOT NULL,
+        quantity_btc REAL NOT NULL
+      );
+    `)
+    legacyDatabase.close()
     const store = new MarketStore({ path })
     const database = new DatabaseSync(path)
     const columns = database
@@ -95,18 +109,19 @@ describe('MarketStore', () => {
       'id',
       'strategy_id',
       'signal_timestamp',
-      'action',
-      'gate_passed',
-      'price',
       'execution_timestamp',
+      'action',
+      'price',
       'amount_eur',
       'fee_eur',
       'pnl_eur',
+      'gate_passed',
       'target_pct',
+      'created_at',
     ])
     expect(columns.find(({ name }) => name === 'price')?.notnull).toBe(1)
     const order = {
-      strategyId: 'micro-trend-pullback',
+      strategyId: 'micro-donchian-breakout',
       signalTimestamp: 100,
       action: 'BUY' as const,
       gatePassed: false,
@@ -124,8 +139,83 @@ describe('MarketStore', () => {
       price: 20_000,
       executionTimestamp: null,
     })
+    expect(
+      database.prepare('SELECT gate_passed FROM paper_orders').get(),
+    ).toEqual({ gate_passed: 0 })
+    expect(
+      database.prepare('SELECT created_at FROM paper_orders').get(),
+    ).toMatchObject({ created_at: expect.any(String) })
+    expect(
+      database
+        .prepare(
+          "SELECT name FROM sqlite_master WHERE type = 'index' AND name IN ('idx_paper_orders_strategy', 'idx_paper_orders_gate') ORDER BY name",
+        )
+        .all(),
+    ).toEqual([
+      { name: 'idx_paper_orders_gate' },
+      { name: 'idx_paper_orders_strategy' },
+    ])
+    expect(
+      database
+        .prepare(
+          'SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 10',
+        )
+        .get(),
+    ).toEqual({ count: 1 })
     database.close()
     store.close()
+
+    const reopened = new MarketStore({ path })
+    expect(reopened.schemaVersion()).toBe(10)
+    expect(reopened.listPaperOrders()).toHaveLength(1)
+    reopened.close()
+  })
+
+  it('refuses to migrate a populated legacy v9 paper ledger without changing it', () => {
+    const path = makePath()
+    const database = new DatabaseSync(path)
+    database.exec(`
+      CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL);
+      INSERT INTO schema_migrations VALUES (9, 1);
+      CREATE TABLE paper_orders (
+        id INTEGER PRIMARY KEY, candidate_id TEXT NOT NULL, signal_timestamp INTEGER NOT NULL,
+        action TEXT NOT NULL, price REAL NOT NULL, quantity_btc REAL NOT NULL
+      );
+      INSERT INTO paper_orders VALUES (1, 'legacy', 100, 'BUY', 20000, 0.001);
+    `)
+    database.close()
+
+    expect(() => new MarketStore({ path })).toThrow(/paper_orders.*rows/i)
+
+    const unchanged = new DatabaseSync(path)
+    expect(
+      unchanged
+        .prepare('SELECT MAX(version) AS version FROM schema_migrations')
+        .get(),
+    ).toEqual({ version: 9 })
+    expect(
+      (
+        unchanged.prepare('PRAGMA table_info(paper_orders)').all() as {
+          name: string
+        }[]
+      ).map(({ name }) => name),
+    ).toEqual([
+      'id',
+      'candidate_id',
+      'signal_timestamp',
+      'action',
+      'price',
+      'quantity_btc',
+    ])
+    expect(unchanged.prepare('SELECT * FROM paper_orders').get()).toEqual({
+      id: 1,
+      candidate_id: 'legacy',
+      signal_timestamp: 100,
+      action: 'BUY',
+      price: 20000,
+      quantity_btc: 0.001,
+    })
+    unchanged.close()
   })
 
   it('inserts closed OHLC batches atomically and ignores repeated timestamps', () => {
@@ -188,7 +278,7 @@ describe('MarketStore', () => {
     database.close()
 
     const store = new MarketStore({ path })
-    expect(store.schemaVersion()).toBe(9)
+    expect(store.schemaVersion()).toBe(10)
     expect(store.observationCount()).toBe(0)
     store.close()
   })
@@ -210,7 +300,7 @@ describe('MarketStore', () => {
       )
       .get()
     migratedDatabase.close()
-    expect(store.schemaVersion()).toBe(9)
+    expect(store.schemaVersion()).toBe(10)
     expect(ledgerTable).toEqual({ name: 'forecast_records' })
     store.close()
   })
@@ -327,7 +417,7 @@ describe('MarketStore', () => {
       lastSequence: 11,
       lastTradeId: 21,
       connectionRevision: 1,
-      schemaVersion: 9,
+      schemaVersion: 10,
     })
     expect(second.listGaps()).toEqual([
       expect.objectContaining({

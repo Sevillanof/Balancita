@@ -41,7 +41,7 @@ import type { NormalizedMarketPayload } from './market-payload.ts'
 import { validateNormalizedMarketPayload } from './market-payload.ts'
 import type { FastReplayCandle } from '../simulations/fast-replay-engine.ts'
 
-const SCHEMA_VERSION = 9
+const SCHEMA_VERSION = 10
 
 export interface PaperOrder {
   readonly id: number
@@ -1969,6 +1969,78 @@ export class MarketStore {
           'INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)',
         )
         .run(9, this.clock())
+      currentVersion = 9
+    }
+    if (currentVersion < 10) {
+      this.database.exec('BEGIN IMMEDIATE')
+      try {
+        const existingTable = this.database
+          .prepare(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'paper_orders'",
+          )
+          .get() as SqlRow | undefined
+        if (existingTable !== undefined) {
+          const columns = this.database
+            .prepare('PRAGMA table_info(paper_orders)')
+            .all() as { name: string }[]
+          const columnNames = columns.map(({ name }) => name)
+          const targetColumns = [
+            'id',
+            'strategy_id',
+            'signal_timestamp',
+            'execution_timestamp',
+            'action',
+            'price',
+            'amount_eur',
+            'fee_eur',
+            'pnl_eur',
+            'gate_passed',
+            'target_pct',
+            'created_at',
+          ]
+          const isTargetLayout = targetColumns.every((name) =>
+            columnNames.includes(name),
+          )
+          if (!isTargetLayout) {
+            const row = this.database
+              .prepare('SELECT COUNT(*) AS count FROM paper_orders')
+              .get() as SqlRow
+            if (Number(row.count) > 0)
+              throw new Error(
+                'Cannot migrate paper_orders: legacy table contains rows; refusing to destroy data.',
+              )
+            this.database.exec('DROP TABLE paper_orders')
+          }
+        }
+        this.database.exec(`
+          CREATE TABLE IF NOT EXISTS paper_orders (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            strategy_id TEXT NOT NULL,
+            signal_timestamp INTEGER NOT NULL,
+            execution_timestamp INTEGER,
+            action TEXT NOT NULL CHECK (action IN ('BUY','SELL')),
+            price REAL NOT NULL,
+            amount_eur REAL NOT NULL,
+            fee_eur REAL NOT NULL,
+            pnl_eur REAL,
+            gate_passed INTEGER NOT NULL CHECK (gate_passed IN (0,1)),
+            target_pct REAL NOT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(strategy_id, signal_timestamp, action)
+          );
+          CREATE INDEX IF NOT EXISTS idx_paper_orders_strategy ON paper_orders(strategy_id);
+          CREATE INDEX IF NOT EXISTS idx_paper_orders_gate ON paper_orders(gate_passed);
+        `)
+        this.database
+          .prepare(
+            'INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)',
+          )
+          .run(10, this.clock())
+        this.database.exec('COMMIT')
+      } catch (error) {
+        this.database.exec('ROLLBACK')
+        throw error
+      }
     }
   }
 }
