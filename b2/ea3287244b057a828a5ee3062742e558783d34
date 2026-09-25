@@ -1,0 +1,29 @@
+server/src/app/app.ts
+  s_7d3b5498000beb::t_1438a9f0bc9d4c 729,735,820
+server/src/features/forecasts/forecast-engine.test.ts
+  s_7d3b5498000beb::t_700c8cfabb2249 68,85,96-100,125
+server/src/features/simulations/micro-strategy.test.ts
+  s_7d3b5498000beb::t_66f0d256e6efe8 13,17,32,34,36-38,41-42,45-46
+server/src/features/simulations/micro-strategy.ts
+  s_7d3b5498000beb::t_e83eef9fb37d9e 14-15,61,63,67-68,162,165-166
+server/src/features/simulations/paper-forward.test.ts
+  s_7d3b5498000beb::t_6bae6fcfa814dc 3,19-80,102,111-112,115,126-127,129,134,136-137,156-159,166,176,180,184,187-191,200,204,366,408,438,494,498,501,505,575,580,602-603,606,608-609
+server/src/features/simulations/paper-forward.ts
+  s_7d3b5498000beb::t_d130554dfa4827 26-33,66,72,112-124,131,136-147,161,163,191,205,207,209,211,213,215,217,221,257-259,302,306-310,338-380,420,422
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b2ea3287244b057a828a5ee3062742e558783d34",
+  "prompts": {},
+  "sessions": {
+    "s_7d3b5498000beb": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f277bdecfffeJeTPt6NQGXFAu5",
+        "model": "gpt-6-luna-fast"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
