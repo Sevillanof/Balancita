@@ -1,0 +1,23 @@
+server/src/features/simulations/fast-replay-engine.test.ts
+  s_158a40fe8efcff::t_62a69fb245b1b9 84,103-104,109,124-125,128,143-144,162-208,210-213
+server/src/features/simulations/micro-strategy.test.ts
+  s_158a40fe8efcff::t_59cb7afa7a8827 4,59-81,122,130,138,188-221
+server/src/features/simulations/paper-forward.test.ts
+  s_158a40fe8efcff::t_5bde6dd64843f4 10,12-16,139-229,364-422,463,494
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "770669c28d3aa3e9fda4f5fa7fa84010c70c8ab5",
+  "prompts": {},
+  "sessions": {
+    "s_158a40fe8efcff": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f27d0f239ffeRpGkIyh1ZSNBQO",
+        "model": "gpt-6-luna-fast"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
