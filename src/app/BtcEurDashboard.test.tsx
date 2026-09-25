@@ -194,21 +194,16 @@ describe('BtcEurDashboard main screen (Phase 1)', () => {
     ).not.toBeInTheDocument()
   })
 
-  it('shows distinct browser market, REST, SSE, and server collector states', async () => {
+  it('shows OHLC ingestion independently from the optional intelligence WebSocket', async () => {
     const provider = readyProvider()
     renderDashboard(provider)
     await waitForReady()
 
     const status = screen.getByRole('region', { name: 'Estado de servicios' })
-    expect(status).toHaveTextContent('Gráfico · Simulado')
-    expect(status).toHaveTextContent('Feed simulado activo')
-    expect(status).toHaveTextContent('Historial REST')
-    expect(status).toHaveTextContent('Última carga correcta:')
-    expect(status).toHaveTextContent('Transporte SSE navegador')
-    expect(status).toHaveTextContent('Reconectando')
-    expect(status).toHaveTextContent('Último evento recibido en navegador:')
-    expect(status).toHaveTextContent('Colector del servidor')
-    expect(status).toHaveTextContent('Sin snapshot de mercado')
+    expect(status).toHaveTextContent('Ingesta de velas OHLC · Kraken')
+    expect(status).toHaveTextContent('Pausada')
+    expect(status).toHaveTextContent('WebSocket de inteligencia de mercado')
+    expect(status).toHaveTextContent('Inactivo (Opcional)')
   })
 
   it('renders exactly the three action buttons', async () => {
@@ -537,5 +532,38 @@ describe('BtcEurDashboard main screen (Phase 1)', () => {
       expect.any(Object),
     )
     expect(newsStreamMock.useNewsStream).toHaveBeenCalled()
+  })
+
+  it('shows paper trading OFF when enabled but its engine is not running', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input)
+      const body = url.includes('/paper-trading/status')
+        ? {
+            enabled: true,
+            running: false,
+            stream_state: 'waiting_for_ohlc',
+            account: { balance_eur: 10_000, total_equity_eur: 10_000 },
+            execution_summary: { gate_rejections: 0, executed_trades: 0 },
+          }
+        : url.includes('/paper-trading/orders')
+          ? { orders: [] }
+          : {
+              running: true,
+              total_candles: 10,
+              oldest_candle_iso: null,
+              newest_candle_iso: null,
+              coverage_hours: 0,
+              gaps_detected: 0,
+            }
+      return { ok: true, json: async () => body } as Response
+    })
+
+    renderDashboard(readyProvider())
+    await waitForReady()
+    const status = screen.getByRole('region', {
+      name: 'Estado de paper trading',
+    })
+    expect(status).toHaveTextContent('OFF')
+    expect(status).not.toHaveTextContent('ON')
   })
 })

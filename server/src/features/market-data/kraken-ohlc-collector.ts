@@ -20,6 +20,11 @@ export interface KrakenOhlcCollectorStatus {
   readonly gapCount: number
 }
 
+export interface NewlyClosedOhlcCandle {
+  readonly candle: FastReplayCandle
+  readonly nextOpen?: number
+}
+
 const defaultTimer: KrakenOhlcCollectorTimer = {
   setInterval: (callback, intervalMs) => setInterval(callback, intervalMs),
   clearInterval: (handle) =>
@@ -34,6 +39,10 @@ export class KrakenOhlcCollector {
   private readonly intervalMs: number
   private readonly timer: KrakenOhlcCollectorTimer
   private readonly logger: KrakenOhlcCollectorLogger
+  private readonly onClosedCandles:
+    ((candles: readonly NewlyClosedOhlcCandle[]) => void) | undefined
+  private primed = false
+  private pendingLiveCandles: NewlyClosedOhlcCandle[] = []
   private timerHandle: unknown
   private running = false
   private inFlight: Promise<void> | undefined
@@ -46,6 +55,9 @@ export class KrakenOhlcCollector {
     readonly intervalMs?: number
     readonly timer?: KrakenOhlcCollectorTimer
     readonly logger: KrakenOhlcCollectorLogger
+    readonly onClosedCandles?: (
+      candles: readonly NewlyClosedOhlcCandle[],
+    ) => void
   }) {
     this.store = input.store
     this.baseUrl = input.baseUrl
@@ -54,6 +66,7 @@ export class KrakenOhlcCollector {
     this.intervalMs = input.intervalMs ?? 600_000
     this.timer = input.timer ?? defaultTimer
     this.logger = input.logger
+    this.onClosedCandles = input.onClosedCandles
   }
 
   start(): void {
@@ -165,6 +178,29 @@ export class KrakenOhlcCollector {
         .map(({ timestamp }) => timestamp),
     )
     this.store.insertOhlcCandles(candles)
+    const newlyClosed = candles
+      .filter(({ timestamp }) => !existingTimestamps.has(timestamp))
+      .sort((left, right) => left.timestamp - right.timestamp)
+    if (this.primed) {
+      const unfinished = rows.at(-1)
+      const unfinishedTimestamp = Array.isArray(unfinished)
+        ? Number(unfinished[0])
+        : undefined
+      this.pendingLiveCandles.push(
+        ...newlyClosed.map((candle) => {
+          const following = candles.find(
+            (candidate) => candidate.timestamp === candle.timestamp + 60,
+          )
+          const nextOpen =
+            following?.open ??
+            (unfinishedTimestamp === candle.timestamp + 60 &&
+            Array.isArray(unfinished)
+              ? Number(unfinished[1])
+              : undefined)
+          return nextOpen === undefined ? { candle } : { candle, nextOpen }
+        }),
+      )
+    }
     const allCandles = this.store.listOhlcCandles(0, Number.MAX_SAFE_INTEGER)
     for (let index = 1; index < allCandles.length; index += 1) {
       const previous = allCandles[index - 1]!.timestamp
@@ -176,5 +212,14 @@ export class KrakenOhlcCollector {
         )
     }
     this.store.saveOhlcCollectorState(result.last, this.clock())
+    this.primed = true
+    if (
+      this.pendingLiveCandles.length > 0 &&
+      this.onClosedCandles !== undefined
+    ) {
+      const pending = this.pendingLiveCandles
+      this.onClosedCandles(pending)
+      this.pendingLiveCandles = []
+    }
   }
 }

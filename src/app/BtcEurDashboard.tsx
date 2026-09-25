@@ -33,6 +33,7 @@ import {
 import './dashboard.css'
 import { useMemo } from 'react'
 import { usePaperTelemetry } from './usePaperTelemetry.ts'
+import { useOhlcCollectorTelemetry } from './useOhlcCollectorTelemetry.ts'
 import { paperOrderMarkers } from './paper-order-markers.ts'
 
 const MOMENTUM_SIMULATOR_OPTIONS = {
@@ -84,6 +85,7 @@ export default function BtcEurDashboard({
   const [showSimulations, setShowSimulations] = useState(false)
   const [chartMode, setChartMode] = useState<'realtime' | 'fast'>('realtime')
   const paper = usePaperTelemetry()
+  const ohlcTelemetry = useOhlcCollectorTelemetry()
   const loadedTimes = useMemo(
     () =>
       new Set(
@@ -105,13 +107,10 @@ export default function BtcEurDashboard({
   return (
     <div className="dashboard">
       <DashboardServiceStatus
-        dataMode={dataMode}
-        connectionStatus={market.connectionStatus}
-        quote={quote}
-        historyStatus={history.status}
-        historyReceivedAtMs={history.historyReceivedAtMs}
-        lastCandleTime={history.candles.at(-1)?.time ?? null}
+        ohlc={ohlcTelemetry.status}
+        ohlcError={ohlcTelemetry.error}
         stream={news.stream}
+        dataMode={dataMode}
       />
       <div className="dashboard__grid">
         <header className="dashboard__brand">
@@ -126,12 +125,17 @@ export default function BtcEurDashboard({
           aria-label="Estado de paper trading"
         >
           <span
-            className={`paper-telemetry__status paper-telemetry__status--${paper.status?.stream_state === 'connected' ? 'connected' : paper.status?.stream_state === 'rest_polling_1m' ? 'polling' : paper.status?.stream_state === 'failed' ? 'failed' : 'neutral'}`}
+            className={`paper-telemetry__status paper-telemetry__status--${paper.status?.enabled && paper.status.running ? 'connected' : 'neutral'}`}
           >
-            {paper.status?.stream_state ?? 'Sin datos'}
+            {paper.status === null
+              ? '—'
+              : paper.status.enabled && paper.status.running
+                ? 'ON'
+                : 'OFF'}
           </span>
+          <span>Operación simulada</span>
           <span>
-            Saldo{' '}
+            Saldo disponible{' '}
             {paper.status
               ? formatPrice(paper.status.account.balance_eur, 'EUR')
               : '—'}
@@ -143,10 +147,11 @@ export default function BtcEurDashboard({
               : '—'}
           </span>
           <span>
-            Rechazos {paper.status?.execution_summary.gate_rejections ?? '—'}
+            Ejecuciones {paper.status?.execution_summary.executed_trades ?? '—'}
           </span>
           <span>
-            Ejecuciones {paper.status?.execution_summary.executed_trades ?? '—'}
+            Rechazos de gate{' '}
+            {paper.status?.execution_summary.gate_rejections ?? '—'}
           </span>
           {paper.error !== null && (
             <span role="status">Estado temporalmente desactualizado</span>
@@ -340,118 +345,55 @@ function OrderHistoryPopover({
 }
 
 function DashboardServiceStatus({
+  ohlc,
+  ohlcError,
   dataMode,
-  connectionStatus,
-  quote,
-  historyStatus,
-  historyReceivedAtMs,
-  lastCandleTime,
   stream,
 }: {
+  ohlc: import('./useOhlcCollectorTelemetry.ts').OhlcCollectorStatus | null
+  ohlcError: string | null
   dataMode: 'real' | 'simulated'
-  connectionStatus: string
-  quote:
-    import('../features/market-data/domain/market-data.ts').Quote | undefined
-  historyStatus: string
-  historyReceivedAtMs: number | null
-  lastCandleTime: string | null
   stream: import('../features/news/presentation/useIntelligenceStream.ts').UseIntelligenceStreamResult
 }) {
-  const snapshot = stream.snapshot
-  const collector = snapshot?.market ?? null
+  const marketStatus: string =
+    stream.snapshot?.pipeline.connection ?? 'unavailable'
+  const websocketActive =
+    marketStatus !== 'disabled' &&
+    marketStatus !== 'unavailable' &&
+    marketStatus !== 'stopped' &&
+    marketStatus !== 'disconnected' &&
+    marketStatus !== 'failed'
   return (
     <section
       className="dashboard__service-status"
       aria-label="Estado de servicios"
     >
-      <div>
-        <strong>Gráfico · {dataMode === 'real' ? 'Kraken' : 'Simulado'}</strong>
-        <span>{marketConnectionLabel(connectionStatus)}</span>
+      <article>
+        <strong>Ingesta de velas OHLC · Kraken</strong>
+        <span>{ohlc?.running ? 'Activa' : 'Pausada'}</span>
         <small>
-          {quote === undefined
-            ? 'Esperando la primera cotización'
-            : quote.eventTime
-              ? `Evento: ${formatServiceTime(quote.eventTime)} · recepción navegador: ${formatServiceTime(quote.receivedTime ?? quote.displayTime ?? quote.timestamp)}`
-              : `Marca simulada: ${formatServiceTime(quote.timestamp)}`}
+          {ohlc === null
+            ? (ohlcError ?? 'Esperando el estado del colector')
+            : `${ohlc.candleCount.toLocaleString('es-ES')} velas · ${ohlc.coverageHours.toFixed(2)} h de cobertura · ${ohlc.gapCount} huecos · última vela: ${ohlc.maxTimestamp === null ? '—' : formatServiceTime(ohlc.maxTimestamp)}`}
         </small>
-      </div>
-      <div>
-        <strong>Historial REST</strong>
-        <span>{historyStatusLabel(historyStatus)}</span>
-        <small>
-          {historyReceivedAtMs === null
-            ? 'Última carga correcta: —'
-            : `Última carga correcta: ${formatServiceTime(historyReceivedAtMs)}`}
-          {lastCandleTime === null
-            ? ' · Última vela: —'
-            : ` · Marca de mercado: ${formatServiceTime(lastCandleTime)}`}
-        </small>
-      </div>
-      <div>
-        <strong>Transporte SSE navegador</strong>
-        <span>
-          {streamStatusLabel(stream.transportStatus, stream.error?.message)}
+      </article>
+      <article>
+        <strong>WebSocket de inteligencia de mercado</strong>
+        <span
+          className={websocketActive ? undefined : 'service-status__inactive'}
+        >
+          {websocketActive
+            ? collectorLabel(marketStatus)
+            : 'Inactivo (Opcional)'}
         </span>
         <small>
-          {stream.clientReceivedAtMs === null
-            ? 'Último evento recibido: —'
-            : `Último evento recibido en navegador: ${formatServiceTime(stream.clientReceivedAtMs)}`}
+          {dataMode === 'real'
+            ? 'Canal de mercado independiente del gráfico y de la ingesta OHLC.'
+            : 'Disponible únicamente cuando se habilita el colector de inteligencia.'}
         </small>
-      </div>
-      <div>
-        <strong>Colector del servidor</strong>
-        <span>
-          {collectorLabel(snapshot?.pipeline.connection ?? 'unavailable')}
-        </span>
-        <small>
-          {collector === null
-            ? 'Sin snapshot de mercado'
-            : `Evento: ${formatServiceTime(collector.eventTime)} · recepción servidor: ${formatServiceTime(collector.receivedTime)} · snapshot: ${formatServiceTime(collector.displayTime)}`}
-        </small>
-      </div>
+      </article>
     </section>
   )
-}
-
-function marketConnectionLabel(status: string): string {
-  return (
-    (
-      {
-        mock: 'Feed simulado activo',
-        connecting: 'Conectando WebSocket',
-        connected: 'WebSocket conectado',
-        reconnecting: 'WebSocket reconectando',
-        stale: 'Última cotización obsoleta',
-        stopped: 'WebSocket detenido',
-      } satisfies Record<string, string>
-    )[status] ?? status
-  )
-}
-
-function historyStatusLabel(status: string): string {
-  return (
-    (
-      {
-        loading: 'Cargando',
-        ready: 'Disponible',
-        empty: 'Sin velas',
-        error: 'Error de carga',
-      } satisfies Record<string, string>
-    )[status] ?? status
-  )
-}
-
-function streamStatusLabel(status: string, error?: string): string {
-  const label =
-    (
-      {
-        connecting: 'Conectando',
-        connected: 'Conectado',
-        reconnecting: 'Reconectando',
-        disabled: 'Deshabilitado',
-      } satisfies Record<string, string>
-    )[status] ?? status
-  return error === undefined ? label : `${label} · ${error}`
 }
 
 function collectorLabel(status: string): string {

@@ -129,13 +129,13 @@ export function serverConfigFrom(
     ),
     krakenPaperTradingEnabled: booleanValue(
       env,
-      'KRAKEN_PAPER_TRADING_ENABLED',
-      false,
+      'PAPER_TRADING_ENABLED',
+      booleanValue(env, 'KRAKEN_PAPER_TRADING_ENABLED', true),
     ),
     marketCollectorIntervalMs: positiveInt(
       env,
       'MARKET_COLLECTOR_INTERVAL_MS',
-      600_000,
+      60_000,
     ),
     forecastLoopEnabled: booleanValue(env, 'FORECAST_LOOP_ENABLED', false),
     forecastLoopIntervalMs: positiveInt(

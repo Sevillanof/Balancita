@@ -2,8 +2,27 @@ import { describe, expect, it } from 'vitest'
 import { ServerConfigError, serverConfigFrom } from './config.ts'
 
 describe('serverConfigFrom', () => {
+  it('enables paper trading by default and gives the canonical setting precedence', () => {
+    expect(serverConfigFrom({}).krakenPaperTradingEnabled).toBe(true)
+    expect(
+      serverConfigFrom({ KRAKEN_PAPER_TRADING_ENABLED: 'false' })
+        .krakenPaperTradingEnabled,
+    ).toBe(false)
+    expect(
+      serverConfigFrom({
+        KRAKEN_PAPER_TRADING_ENABLED: 'false',
+        PAPER_TRADING_ENABLED: 'true',
+      }).krakenPaperTradingEnabled,
+    ).toBe(true)
+    expect(
+      serverConfigFrom({
+        KRAKEN_PAPER_TRADING_ENABLED: 'true',
+        PAPER_TRADING_ENABLED: 'false',
+      }).krakenPaperTradingEnabled,
+    ).toBe(false)
+  })
   it('defaults and validates the market collector interval', () => {
-    expect(serverConfigFrom({}).marketCollectorIntervalMs).toBe(600_000)
+    expect(serverConfigFrom({}).marketCollectorIntervalMs).toBe(60_000)
     expect(
       serverConfigFrom({ MARKET_COLLECTOR_INTERVAL_MS: '1234' })
         .marketCollectorIntervalMs,

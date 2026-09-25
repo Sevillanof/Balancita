@@ -102,7 +102,7 @@ export class PaperForwardService {
         candle.timestamp * 1000,
       ),
     ]
-    if (this.candles.length < MAX_CANDLES || nextOpen === undefined) return
+    if (this.candles.length < MAX_CANDLES) return
     const features = fastReplayFeaturesAt(this.candles)
     for (const id of FAST_REPLAY_STRATEGIES) {
       const prior = this.states.get(id) ?? initialMicroState()
@@ -136,6 +136,10 @@ export class PaperForwardService {
             this.states.set(id, { ...decision.state, exposure: 'flat' })
           continue
         }
+        if (nextOpen === undefined) {
+          this.states.set(id, { ...decision.state, exposure: 'flat' })
+          continue
+        }
         const price = nextOpen * (1 + FAST_REPLAY_SLIPPAGE)
         const inserted = this.options.store.insertPaperOrder({
           strategyId: id,
@@ -152,6 +156,10 @@ export class PaperForwardService {
         if (inserted)
           this.states.set(id, { ...decision.state, exposure: 'long' })
       } else if (position !== null && decision.target === 'flat') {
+        if (nextOpen === undefined) {
+          this.states.set(id, { ...decision.state, exposure: 'long' })
+          continue
+        }
         const price = nextOpen * (1 - FAST_REPLAY_SLIPPAGE)
         const gross = position.quantityBtc * price
         const fee = gross * FAST_REPLAY_FEE

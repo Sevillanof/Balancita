@@ -3,6 +3,8 @@ import { act, renderHook } from '@testing-library/react'
 import { usePaperTelemetry } from './usePaperTelemetry.ts'
 
 const status = {
+  enabled: true,
+  running: true,
   stream_state: 'connected',
   account: { balance_eur: 100, total_equity_eur: 120 },
   execution_summary: { gate_rejections: 2, executed_trades: 1 },

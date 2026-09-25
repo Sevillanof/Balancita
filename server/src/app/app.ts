@@ -28,7 +28,6 @@ import { LiveForecastService } from '../features/forecasts/live-forecast.ts'
 import { KrakenMarketCollector } from '../features/market-data/kraken-market-collector.ts'
 import { MarketStore } from '../features/market-data/market-store.ts'
 import { KrakenOhlcCollector } from '../features/market-data/kraken-ohlc-collector.ts'
-import { KrakenPaperOhlcCollector } from '../features/market-data/kraken-paper-ohlc-collector.ts'
 import { PaperForwardService } from '../features/simulations/paper-forward.ts'
 import {
   collectKrakenOhlc,
@@ -311,6 +310,10 @@ export async function buildApp(options: {
           reconnectMaxMs: config.marketReconnectMaxMs,
           clock: () => Date.now(),
         }))
+  const paperForward =
+    config.krakenPaperTradingEnabled && marketStore !== undefined
+      ? new PaperForwardService({ store: marketStore })
+      : undefined
   const ohlcCollector =
     marketStore === undefined || !config.krakenRestOhlcWorkerEnabled
       ? undefined
@@ -320,31 +323,26 @@ export async function buildApp(options: {
           baseUrl: config.krakenRestUrl,
           fetch: async (url) =>
             marketFetch(url, { headers: { Accept: 'application/json' } }),
-          intervalMs: config.marketCollectorIntervalMs,
+          intervalMs: paperForward ? 60_000 : config.marketCollectorIntervalMs,
+          onClosedCandles: (candles) => {
+            if (paperForward === undefined) return
+            const orderedCandles = [...candles].sort(
+              (left, right) => left.candle.timestamp - right.candle.timestamp,
+            )
+            for (const { candle, nextOpen } of orderedCandles) {
+              paperForward.recordReceivedEvent(
+                candle.timestamp * 1000,
+                Date.now(),
+              )
+              paperForward.processClosedCandle(candle, nextOpen)
+            }
+            paperForward.setRunning(true)
+            paperForward.setStreamState('connected')
+          },
           logger: {
             warn: (fields, message) => console.warn(message, fields),
           },
         }))
-  const paperForward =
-    config.krakenPaperTradingEnabled && marketStore !== undefined
-      ? new PaperForwardService({ store: marketStore })
-      : undefined
-  const paperOhlcCollector =
-    paperForward === undefined
-      ? undefined
-      : new KrakenPaperOhlcCollector({
-          service: paperForward,
-          url: config.krakenWsUrl,
-          restBaseUrl: config.krakenRestUrl,
-          marketFetch: async (url, init) =>
-            marketFetch(url, {
-              ...init,
-              headers: { Accept: 'application/json', ...init?.headers },
-            }),
-          logger: {
-            error: (fields, message) => console.error(message, fields),
-          },
-        })
   const shadowService =
     marketStore === undefined
       ? undefined
@@ -1160,7 +1158,12 @@ export async function buildApp(options: {
   )
 
   app.addHook('onReady', async () => {
-    paperOhlcCollector?.start()
+    if (paperForward !== undefined) {
+      paperForward.setStreamState(
+        ohlcCollector === undefined ? 'disabled' : 'waiting_for_ohlc',
+      )
+      paperForward.setRunning(ohlcCollector !== undefined)
+    }
     if (config.krakenWsCollectorEnabled) {
       ensureShadowRunExists()
       await marketCollector?.start('BTC-EUR')
@@ -1171,7 +1174,6 @@ export async function buildApp(options: {
     treeNewsService?.start()
   })
   app.addHook('onClose', async () => {
-    paperOhlcCollector?.stop()
     stopForecastLoop()
     stopNewsLoop()
     treeNewsService?.stop()
@@ -1179,6 +1181,7 @@ export async function buildApp(options: {
     unsubscribeCollector?.()
     await marketCollector?.stop()
     await ohlcCollector?.stop()
+    paperForward?.setRunning(false)
     marketStore?.close()
   })
 

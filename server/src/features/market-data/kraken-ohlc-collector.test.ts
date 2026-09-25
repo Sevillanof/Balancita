@@ -2,9 +2,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { MarketStore } from './market-store.ts'
 import { KrakenOhlcCollector } from './kraken-ohlc-collector.ts'
 
-const candle = (timestamp: number) => [
+const candle = (timestamp: number, open = '10') => [
   timestamp,
-  '10',
+  open,
   '11',
   '9',
   '10',
@@ -42,6 +42,85 @@ describe('KrakenOhlcCollector', () => {
       fetch.mock.calls.map(([url]) => new URL(url).searchParams.get('since')),
     ).toEqual([null, '240'])
     expect(collector.getStatus().lastSuccessfulSync).toBe(180_000)
+  })
+
+  it('pairs new live closes with only their contiguous next-minute opens, without replaying bootstrap candles', async () => {
+    store = new MarketStore({ path: ':memory:' })
+    let rows = [candle(60), candle(120), candle(180)]
+    let now = 360_000
+    const onClosedCandles = vi.fn()
+    const collector = new KrakenOhlcCollector({
+      store,
+      baseUrl: 'https://fixture.invalid/0',
+      fetch: async () => response(rows, 180),
+      clock: () => now,
+      logger: { warn: vi.fn() },
+      onClosedCandles,
+    })
+    collector.start()
+    await vi.waitFor(() =>
+      expect(collector.getStatus().lastSuccessfulSync).toBe(360_000),
+    )
+    expect(store?.latestOhlcTimestamp()).toBe(120)
+    expect(onClosedCandles).not.toHaveBeenCalled()
+    rows = [
+      candle(120),
+      candle(180, '10.2'),
+      candle(240, '10.3'),
+      candle(300, '10.4'),
+    ]
+    await collector.syncOnce()
+    expect(onClosedCandles).toHaveBeenCalledWith([
+      {
+        candle: {
+          timestamp: 180,
+          open: 10.2,
+          high: 11,
+          low: 9,
+          close: 10,
+          volume: 1,
+        },
+        nextOpen: 10.3,
+      },
+      {
+        candle: {
+          timestamp: 240,
+          open: 10.3,
+          high: 11,
+          low: 9,
+          close: 10,
+          volume: 1,
+        },
+        nextOpen: 10.4,
+      },
+    ])
+    now = 480_000
+    rows = [candle(240), candle(300), candle(420, '10.5'), candle(480)]
+    await collector.syncOnce()
+    expect(onClosedCandles).toHaveBeenLastCalledWith([
+      {
+        candle: {
+          timestamp: 300,
+          open: 10,
+          high: 11,
+          low: 9,
+          close: 10,
+          volume: 1,
+        },
+      },
+      {
+        candle: {
+          timestamp: 420,
+          open: 10.5,
+          high: 11,
+          low: 9,
+          close: 10,
+          volume: 1,
+        },
+        nextOpen: 10,
+      },
+    ])
+    await collector.stop()
   })
 
   it('resumes from the latest closed stored timestamp and warns about gaps', async () => {

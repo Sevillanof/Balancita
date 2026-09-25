@@ -206,6 +206,48 @@ describe('PaperForwardService', () => {
     store.close()
   })
 
+  it('evaluates each new closed candle without an execution open and never uses a closed bar open to trade', () => {
+    const store = new MarketStore({ path: ':memory:' })
+    const service = new PaperForwardService({ store })
+    for (let index = 0; index < 54; index += 1) {
+      const candle = makeCandle(index)
+      service.processClosedCandle({
+        ...candle,
+        open: 20_000,
+        high: 20_010,
+        low: 19_990,
+        close: 20_000,
+        volume: 10,
+      })
+    }
+    const signal = makeCandle(54)
+    service.processClosedCandle({
+      ...signal,
+      open: 20_000,
+      high: 20_012,
+      low: 19_999,
+      close: 20_011,
+      volume: 100,
+    })
+    expect(
+      store
+        .listPaperOrders()
+        .filter(
+          (order) =>
+            order.strategyId === 'micro-donchian-breakout' &&
+            order.signalTimestamp === signal.timestamp + 60,
+        ),
+    ).toMatchObject([
+      {
+        action: 'BUY',
+        gatePassed: false,
+        price: 20_011,
+        executionTimestamp: null,
+      },
+    ])
+    store.close()
+  })
+
   it('does not claim stored historical OHLC was processed by a fresh paper service', () => {
     const store = new MarketStore({ path: ':memory:' })
     for (let index = 0; index < 55; index += 1)

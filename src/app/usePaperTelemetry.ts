@@ -9,6 +9,8 @@ export type PaperOrderEvent = {
   amountEur: number
 }
 export type PaperStatus = {
+  enabled: boolean
+  running: boolean
   stream_state: string
   account: { balance_eur: number; total_equity_eur: number }
   execution_summary: { gate_rejections: number; executed_trades: number }
@@ -31,6 +33,8 @@ function validStatus(value: unknown): value is PaperStatus {
     return false
   return (
     typeof value.stream_state === 'string' &&
+    typeof value.enabled === 'boolean' &&
+    typeof value.running === 'boolean' &&
     Number.isFinite(value.account.balance_eur) &&
     Number.isFinite(value.account.total_equity_eur) &&
     Number.isSafeInteger(value.execution_summary.gate_rejections) &&

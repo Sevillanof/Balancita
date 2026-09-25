@@ -73,6 +73,46 @@ class FakeGeminiClient implements GeminiClient {
   }
 }
 
+describe('app test configuration', () => {
+  it('opts out of live paper and REST workers by default while preserving explicit environment overrides', () => {
+    expect(testConfigFrom({})).toMatchObject({
+      krakenPaperTradingEnabled: false,
+      krakenRestOhlcWorkerEnabled: false,
+    })
+    expect(
+      testConfigFrom({
+        KRAKEN_PAPER_TRADING_ENABLED: 'true',
+        KRAKEN_REST_OHLC_WORKER_ENABLED: 'true',
+      }),
+    ).toMatchObject({
+      krakenPaperTradingEnabled: true,
+      krakenRestOhlcWorkerEnabled: true,
+    })
+    expect(
+      testConfigFrom({
+        KRAKEN_PAPER_TRADING_ENABLED: 'true',
+        PAPER_TRADING_ENABLED: 'false',
+      }).krakenPaperTradingEnabled,
+    ).toBe(false)
+  })
+})
+
+function testConfigFrom(env: Record<string, string | undefined> = {}) {
+  return serverConfigFrom({
+    KRAKEN_WS_COLLECTOR_ENABLED:
+      env.KRAKEN_WS_COLLECTOR_ENABLED ??
+      env.MARKET_COLLECTOR_ENABLED ??
+      'false',
+    KRAKEN_REST_OHLC_WORKER_ENABLED:
+      env.KRAKEN_REST_OHLC_WORKER_ENABLED ??
+      env.MARKET_COLLECTOR_ENABLED ??
+      'false',
+    PAPER_TRADING_ENABLED:
+      env.PAPER_TRADING_ENABLED ?? env.KRAKEN_PAPER_TRADING_ENABLED ?? 'false',
+    ...env,
+  })
+}
+
 async function makeApp(options: {
   env?: Record<string, string | undefined>
   client?: FakeGeminiClient
@@ -80,11 +120,12 @@ async function makeApp(options: {
   saturateLimiter?: boolean
   maxCandles?: number
   marketFetch?: MarketRestFetch
+  marketStore?: MarketStore
   enabled?: boolean
   ohlcCollector?: OhlcCollectorLifecycle
   marketCollector?: MarketCollectorLifecycle
 }) {
-  const config = serverConfigFrom({
+  const config = testConfigFrom({
     GEMINI_MAX_CANDLES: String(options.maxCandles ?? 500),
     KRAKEN_WS_COLLECTOR_ENABLED:
       options.env?.KRAKEN_WS_COLLECTOR_ENABLED ??
@@ -96,6 +137,18 @@ async function makeApp(options: {
       'false',
     ...options.env,
   })
+  if (config.krakenWsCollectorEnabled && options.marketCollector === undefined)
+    throw new Error(
+      'Enabled market collector tests must inject a fake collector.',
+    )
+  if (
+    config.krakenRestOhlcWorkerEnabled &&
+    options.ohlcCollector === undefined &&
+    options.marketFetch === undefined
+  )
+    throw new Error(
+      'Enabled OHLC worker tests must inject a fake or fixture fetch.',
+    )
   const overrides: {
     client?: GeminiClient
     limiter?: AnalysisRateLimiter
@@ -127,8 +180,15 @@ async function makeApp(options: {
     overrides.ohlcCollector = options.ohlcCollector
   if (options.marketCollector !== undefined)
     overrides.marketCollector = options.marketCollector
-  if (options.env?.MARKET_COLLECTOR_ENABLED === 'true')
+  if (options.marketStore !== undefined) {
+    overrides.marketStore = options.marketStore
+  } else if (
+    config.krakenWsCollectorEnabled ||
+    config.krakenRestOhlcWorkerEnabled ||
+    config.krakenPaperTradingEnabled
+  ) {
     overrides.marketStore = new MarketStore({ path: ':memory:' })
+  }
   const app = await buildApp({ config, overrides })
   if (options.enabled !== false && overrides.client !== undefined)
     await app.inject({
@@ -213,6 +273,10 @@ describe('analysis gateway API', () => {
       method: 'GET',
       url: '/api/market/collector/status',
     })
+    const paperStatus = await app.inject({
+      method: 'GET',
+      url: '/api/paper-trading/status',
+    })
     expect(response.json()).toEqual({
       enabled: false,
       running: false,
@@ -226,6 +290,10 @@ describe('analysis gateway API', () => {
     await app.close()
     expect(collector.starts).toBe(0)
     expect(collector.stops).toBe(0)
+    expect(paperStatus.json()).toMatchObject({
+      enabled: false,
+      running: false,
+    })
   })
   it('reports health', async () => {
     const app = await makeApp({})
@@ -472,9 +540,10 @@ describe('market collector lifecycle', () => {
   it('does not start a collector when market ingestion is disabled by default', async () => {
     const collector = new FakeMarketCollector()
     const app = await buildApp({
-      config: serverConfigFrom({
+      config: testConfigFrom({
         KRAKEN_WS_COLLECTOR_ENABLED: 'false',
         KRAKEN_REST_OHLC_WORKER_ENABLED: 'false',
+        PAPER_TRADING_ENABLED: 'false',
       }),
       overrides: { marketCollector: collector },
     })
@@ -490,9 +559,10 @@ describe('market collector lifecycle', () => {
     const collector = new FakeMarketCollector()
     const store = new MarketStore({ path: ':memory:' })
     const app = await buildApp({
-      config: serverConfigFrom({
+      config: testConfigFrom({
         KRAKEN_WS_COLLECTOR_ENABLED: 'true',
         KRAKEN_REST_OHLC_WORKER_ENABLED: 'false',
+        PAPER_TRADING_ENABLED: 'false',
       }),
       overrides: { marketCollector: collector, marketStore: store },
     })
@@ -623,15 +693,34 @@ describe('shadow run lifecycle and status endpoint', () => {
     enabled: boolean
     store: MarketStore
     env?: Record<string, string | undefined>
+    marketFetch?: MarketRestFetch
+    ohlcCollector?: OhlcCollectorLifecycle
   }) {
+    const config = testConfigFrom({
+      KRAKEN_REST_OHLC_WORKER_ENABLED: 'false',
+      PAPER_TRADING_ENABLED: 'false',
+      ...(options.enabled ? { MARKET_COLLECTOR_ENABLED: 'true' } : {}),
+      ...options.env,
+    })
+    if (
+      config.krakenRestOhlcWorkerEnabled &&
+      options.ohlcCollector === undefined &&
+      options.marketFetch === undefined
+    )
+      throw new Error(
+        'Enabled OHLC worker tests must inject a fake or fixture fetch.',
+      )
     const app = await buildApp({
-      config: serverConfigFrom({
-        ...(options.enabled ? { MARKET_COLLECTOR_ENABLED: 'true' } : {}),
-        ...options.env,
-      }),
+      config,
       overrides: {
         marketCollector: new FakeMarketCollector(),
         marketStore: options.store,
+        ...(options.marketFetch === undefined
+          ? {}
+          : { marketFetch: options.marketFetch }),
+        ...(options.ohlcCollector === undefined
+          ? {}
+          : { ohlcCollector: options.ohlcCollector }),
       },
     })
     return app
@@ -642,7 +731,10 @@ describe('shadow run lifecycle and status endpoint', () => {
     const firstCollector = new FakeMarketCollector()
     const firstStore = new MarketStore({ path })
     const firstApp = await buildApp({
-      config: serverConfigFrom({ MARKET_COLLECTOR_ENABLED: 'true' }),
+      config: testConfigFrom({
+        MARKET_COLLECTOR_ENABLED: 'true',
+        KRAKEN_REST_OHLC_WORKER_ENABLED: 'false',
+      }),
       overrides: {
         marketCollector: firstCollector,
         marketStore: firstStore,
@@ -661,7 +753,10 @@ describe('shadow run lifecycle and status endpoint', () => {
     const againCollector = new FakeMarketCollector()
     const secondStore = new MarketStore({ path })
     const secondApp = await buildApp({
-      config: serverConfigFrom({ MARKET_COLLECTOR_ENABLED: 'true' }),
+      config: testConfigFrom({
+        MARKET_COLLECTOR_ENABLED: 'true',
+        KRAKEN_REST_OHLC_WORKER_ENABLED: 'false',
+      }),
       overrides: {
         marketCollector: againCollector,
         marketStore: secondStore,
@@ -701,6 +796,18 @@ describe('shadow run lifecycle and status endpoint', () => {
     await app.ready()
     expect(store.shadowRunCount()).toBe(0)
     expect(store.getShadowRun('shadow:BTC-EUR')).toBeUndefined()
+    const [paperStatus, ohlcStatus] = await Promise.all([
+      app.inject({ method: 'GET', url: '/api/paper-trading/status' }),
+      app.inject({ method: 'GET', url: '/api/market/collector/status' }),
+    ])
+    expect(paperStatus.json()).toMatchObject({
+      enabled: false,
+      running: false,
+    })
+    expect(ohlcStatus.json()).toMatchObject({
+      enabled: false,
+      running: false,
+    })
     await app.close()
   })
 
@@ -816,8 +923,9 @@ describe('forecast loop lifecycle', () => {
     failFirst?: boolean
   }) {
     const app = await buildApp({
-      config: serverConfigFrom({
+      config: testConfigFrom({
         MARKET_COLLECTOR_ENABLED: 'true',
+        KRAKEN_REST_OHLC_WORKER_ENABLED: 'false',
         ...(options.enabled
           ? { FORECAST_LOOP_ENABLED: 'true', FORECAST_LOOP_INTERVAL_MS: '2500' }
           : {}),
@@ -914,7 +1022,9 @@ describe('news polling lifecycle', () => {
       return { status: 200, body }
     }
     const app = await buildApp({
-      config: serverConfigFrom({
+      config: testConfigFrom({
+        KRAKEN_REST_OHLC_WORKER_ENABLED: 'false',
+        PAPER_TRADING_ENABLED: 'false',
         NEWS_POLLING_ENABLED: 'true',
         NEWS_POLL_INTERVAL_MS: '2500',
         NEWS_STALE_AFTER_MS: '5000',
