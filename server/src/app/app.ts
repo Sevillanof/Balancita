@@ -322,25 +322,55 @@ export async function buildApp(options: {
         new KrakenOhlcCollector({
           store: marketStore,
           baseUrl: config.krakenRestUrl,
-          fetch: async (url) =>
-            marketFetch(url, { headers: { Accept: 'application/json' } }),
+          fetch: async (url, init) => {
+            const headers = new Headers(init?.headers)
+            headers.set('Accept', 'application/json')
+            return marketFetch(url, { ...init, headers })
+          },
           intervalMs: paperForward ? 60_000 : config.marketCollectorIntervalMs,
           onClosedCandles: (candles) => {
             if (paperForward === undefined) return
             const orderedCandles = [...candles].sort(
               (left, right) => left.candle.timestamp - right.candle.timestamp,
             )
+            console.info('PaperForward received closed Kraken OHLC candles.', {
+              count: orderedCandles.length,
+              firstEventTime: new Date(
+                orderedCandles[0]!.candle.timestamp * 1000,
+              ).toISOString(),
+              lastEventTime: new Date(
+                orderedCandles.at(-1)!.candle.timestamp * 1000,
+              ).toISOString(),
+            })
             for (const { candle, nextOpen } of orderedCandles) {
               paperForward.recordReceivedEvent(
                 candle.timestamp * 1000,
                 Date.now(),
               )
               paperForward.processClosedCandle(candle, nextOpen)
+              console.debug(
+                'PaperForward processed closed candle for 15m evaluation.',
+                {
+                  eventTime: new Date(candle.timestamp * 1000).toISOString(),
+                  lastProcessedEventTime: new Date(
+                    (paperForward.lastProcessedCandleTimestamp() ?? 0) * 1000,
+                  ).toISOString(),
+                },
+              )
+              if ((candle.timestamp + 60) % 900 === 0)
+                console.info('PaperForward evaluated completed 15m bucket.', {
+                  bucketEnd: new Date(
+                    (candle.timestamp + 60) * 1000,
+                  ).toISOString(),
+                  eventTime: new Date(candle.timestamp * 1000).toISOString(),
+                })
             }
             paperForward.setRunning(true)
             paperForward.setStreamState('connected')
           },
           logger: {
+            info: (fields, message) => console.info(message, fields),
+            debug: (fields, message) => console.debug(message, fields),
             warn: (fields, message) => console.warn(message, fields),
           },
         }))

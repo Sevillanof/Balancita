@@ -518,6 +518,30 @@ describe('analysis gateway API', () => {
 })
 
 describe('market collector lifecycle', () => {
+  it('forwards the OHLC collector AbortSignal through the injected market fetch', async () => {
+    let request: { input: string; init?: RequestInit } | undefined
+    const app = await makeApp({
+      env: { KRAKEN_REST_OHLC_WORKER_ENABLED: 'true' },
+      marketFetch: async (input, init) => {
+        request = { input, init }
+        return new Response(
+          JSON.stringify({ error: [], result: { XBTEUR: [], last: 0 } }),
+        )
+      },
+    })
+
+    await app.ready()
+
+    expect(request?.input).toBe(
+      'https://api.kraken.com/0/public/OHLC?pair=XBTEUR&interval=1',
+    )
+    expect(request?.init?.signal).toBeInstanceOf(AbortSignal)
+    expect(new Headers(request?.init?.headers).get('accept')).toBe(
+      'application/json',
+    )
+    await app.close()
+  })
+
   it('rejects non-BTC-EUR intelligence streams before opening a connection', async () => {
     const app = await makeApp({})
     const response = await app.inject({

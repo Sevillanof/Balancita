@@ -17,7 +17,10 @@ const response = (rows: unknown[], last: number) =>
 describe('KrakenOhlcCollector', () => {
   let store: MarketStore | undefined
 
-  afterEach(() => store?.close())
+  afterEach(() => {
+    vi.useRealTimers()
+    store?.close()
+  })
 
   it('ignores duplicates and excludes the open bar', async () => {
     store = new MarketStore({ path: ':memory:' })
@@ -29,7 +32,7 @@ describe('KrakenOhlcCollector', () => {
       baseUrl: 'https://fixture.invalid/0',
       fetch,
       clock: () => 180_000,
-      logger: { warn: vi.fn() },
+      logger: { info: vi.fn(), debug: vi.fn(), warn: vi.fn() },
     })
 
     await collector.syncOnce()
@@ -49,12 +52,13 @@ describe('KrakenOhlcCollector', () => {
     let rows = [candle(60), candle(120), candle(180)]
     let now = 360_000
     const onClosedCandles = vi.fn()
+    const info = vi.fn()
     const collector = new KrakenOhlcCollector({
       store,
       baseUrl: 'https://fixture.invalid/0',
       fetch: async () => response(rows, 180),
       clock: () => now,
-      logger: { warn: vi.fn() },
+      logger: { info, debug: vi.fn(), warn: vi.fn() },
       onClosedCandles,
     })
     collector.start()
@@ -94,6 +98,10 @@ describe('KrakenOhlcCollector', () => {
         nextOpen: 10.4,
       },
     ])
+    expect(info).toHaveBeenCalledWith(
+      expect.objectContaining({ count: 2 }),
+      expect.stringContaining('Handing newly closed'),
+    )
     now = 480_000
     rows = [candle(240), candle(300), candle(420, '10.5'), candle(480)]
     await collector.syncOnce()
@@ -144,7 +152,7 @@ describe('KrakenOhlcCollector', () => {
       baseUrl: 'https://fixture.invalid/0',
       fetch,
       clock: () => 500_000,
-      logger: { warn },
+      logger: { info: vi.fn(), debug: vi.fn(), warn },
     })
 
     await collector.syncOnce()
@@ -180,7 +188,7 @@ describe('KrakenOhlcCollector', () => {
         },
         clearInterval: clear,
       },
-      logger: { warn: vi.fn() },
+      logger: { info: vi.fn(), debug: vi.fn(), warn: vi.fn() },
     })
 
     collector.start()
@@ -192,4 +200,75 @@ describe('KrakenOhlcCollector', () => {
     expect(clear).toHaveBeenCalledOnce()
     expect(collector.getStatus().running).toBe(false)
   })
+
+  it('aborts a timed-out request and allows the next scheduled sync to run', async () => {
+    vi.useFakeTimers()
+    store = new MarketStore({ path: ':memory:' })
+    let tick: (() => void) | undefined
+    const warn = vi.fn()
+    const fetch = vi.fn((_url: string, init?: RequestInit) => {
+      if (fetch.mock.calls.length > 1) return Promise.resolve(response([], 0))
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () =>
+          reject(init.signal?.reason),
+        )
+      })
+    })
+    const collector = new KrakenOhlcCollector({
+      store,
+      baseUrl: 'https://fixture.invalid/0',
+      fetch,
+      timeoutMs: 15_000,
+      timer: {
+        setInterval: (callback) => {
+          tick = callback
+          return 1
+        },
+        clearInterval: vi.fn(),
+      },
+      logger: { info: vi.fn(), debug: vi.fn(), warn },
+    })
+
+    collector.start()
+    await vi.advanceTimersByTimeAsync(15_000)
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(warn).toHaveBeenCalledOnce()
+    tick?.()
+
+    expect(fetch).toHaveBeenCalledTimes(2)
+    await collector.stop()
+    vi.useRealTimers()
+  })
+
+  it.each(['ENOTFOUND', 'ECONNRESET', 'SELF_SIGNED_CERT_IN_CHAIN'])(
+    'logs safe cause code %s and a bounded sanitized error message',
+    async (code) => {
+      store = new MarketStore({ path: ':memory:' })
+      const warn = vi.fn()
+      const secretMessage = `Request to https://user:password@private.example/path?token=secret failed at /Users/franco/private.pem ${'x'.repeat(300)}`
+      const failure = Object.assign(new TypeError(secretMessage), {
+        cause: { code },
+      })
+      const collector = new KrakenOhlcCollector({
+        store,
+        baseUrl: 'https://fixture.invalid/0',
+        fetch: async () => {
+          throw failure
+        },
+        logger: { info: vi.fn(), debug: vi.fn(), warn },
+      })
+
+      await collector.syncOnce()
+
+      const fields = warn.mock.calls[0]![0] as Record<string, unknown>
+      expect(fields).toMatchObject({ causeCode: code, errorName: 'TypeError' })
+      expect(fields.errorMessage).toEqual(expect.any(String))
+      expect((fields.errorMessage as string).length).toBeLessThanOrEqual(160)
+      expect(fields.errorMessage).not.toContain('private.example')
+      expect(fields.errorMessage).not.toContain('password')
+      expect(fields.errorMessage).not.toContain('/Users/franco')
+      expect(fields.errorMessage).not.toContain('secret')
+    },
+  )
 })

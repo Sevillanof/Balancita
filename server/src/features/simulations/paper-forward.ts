@@ -253,7 +253,8 @@ export class PaperForwardService {
       stream_state: this.streamState,
       last_received_event_time: this.lastReceived,
       last_received_at: this.lastReceivedAt,
-      last_processed_event_time: this.lastProcessed,
+      last_processed_event_time:
+        this.lastProcessed === null ? null : this.lastProcessed + 60_000,
       candles_ready:
         resample1mTo15m(this.candles, Number.MAX_SAFE_INTEGER).length >=
         REQUIRED_NATIVE_CANDLES,

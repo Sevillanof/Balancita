@@ -2,6 +2,8 @@ import type { FastReplayCandle } from '../simulations/fast-replay-engine.ts'
 import type { MarketStore } from './market-store.ts'
 
 export interface KrakenOhlcCollectorLogger {
+  info(fields: Record<string, unknown>, message: string): void
+  debug(fields: Record<string, unknown>, message: string): void
   warn(fields: Record<string, unknown>, message: string): void
 }
 
@@ -34,7 +36,11 @@ const defaultTimer: KrakenOhlcCollectorTimer = {
 export class KrakenOhlcCollector {
   private readonly store: MarketStore
   private readonly baseUrl: string
-  private readonly fetcher: (url: string) => Promise<Response>
+  private readonly fetcher: (
+    url: string,
+    init?: RequestInit,
+  ) => Promise<Response>
+  private readonly timeoutMs: number
   private readonly clock: () => number
   private readonly intervalMs: number
   private readonly timer: KrakenOhlcCollectorTimer
@@ -50,7 +56,8 @@ export class KrakenOhlcCollector {
   constructor(input: {
     readonly store: MarketStore
     readonly baseUrl: string
-    readonly fetch?: (url: string) => Promise<Response>
+    readonly fetch?: (url: string, init?: RequestInit) => Promise<Response>
+    readonly timeoutMs?: number
     readonly clock?: () => number
     readonly intervalMs?: number
     readonly timer?: KrakenOhlcCollectorTimer
@@ -61,7 +68,8 @@ export class KrakenOhlcCollector {
   }) {
     this.store = input.store
     this.baseUrl = input.baseUrl
-    this.fetcher = input.fetch ?? ((url) => fetch(url))
+    this.fetcher = input.fetch ?? ((url, init) => fetch(url, init))
+    this.timeoutMs = input.timeoutMs ?? 15_000
     this.clock = input.clock ?? (() => Date.now())
     this.intervalMs = input.intervalMs ?? 600_000
     this.timer = input.timer ?? defaultTimer
@@ -108,10 +116,21 @@ export class KrakenOhlcCollector {
   }
 
   private runSync(): Promise<void> {
+    const startedAt = this.clock()
+    this.logger.debug(
+      { startedAt: new Date(startedAt).toISOString() },
+      'Kraken OHLC poll started.',
+    )
     const task = this.sync()
       .catch((error: unknown) => {
         this.logger.warn(
-          { error: error instanceof Error ? error.message : String(error) },
+          {
+            errorName: error instanceof Error ? error.name : 'UnknownError',
+            errorMessage: safeErrorMessage(error),
+            causeCode: safeCauseCode(error),
+            timedOut: error instanceof Error && error.name === 'TimeoutError',
+            durationMs: Math.max(0, this.clock() - startedAt),
+          },
           'Kraken OHLC synchronization failed.',
         )
       })
@@ -129,12 +148,28 @@ export class KrakenOhlcCollector {
     url.searchParams.set('pair', 'XBTEUR')
     url.searchParams.set('interval', '1')
     if (cursor !== null) url.searchParams.set('since', String(cursor))
-    const response = await this.fetcher(url.toString())
-    if (!response.ok)
-      throw new Error(`Kraken OHLC returned HTTP ${response.status}.`)
-    const body = (await response.json()) as {
-      error?: unknown
-      result?: Record<string, unknown>
+    const controller = new AbortController()
+    const timeout = setTimeout(
+      () =>
+        controller.abort(
+          new DOMException('Request timed out.', 'TimeoutError'),
+        ),
+      this.timeoutMs,
+    )
+    const requestStartedAt = this.clock()
+    let body: { error?: unknown; result?: Record<string, unknown> }
+    try {
+      const response = await this.fetcher(url.toString(), {
+        signal: controller.signal,
+      })
+      if (!response.ok)
+        throw new Error(`Kraken OHLC returned HTTP ${response.status}.`)
+      body = (await response.json()) as {
+        error?: unknown
+        result?: Record<string, unknown>
+      }
+    } finally {
+      clearTimeout(timeout)
     }
     if (!Array.isArray(body.error) || body.error.length > 0)
       throw new Error('Kraken OHLC response contains an upstream error.')
@@ -213,13 +248,81 @@ export class KrakenOhlcCollector {
     }
     this.store.saveOhlcCollectorState(result.last, this.clock())
     this.primed = true
+    const latestTimestamp = candles.at(-1)?.timestamp ?? null
+    this.logger.info(
+      {
+        durationMs: Math.max(0, this.clock() - requestStartedAt),
+        receivedCandles: rows.length,
+        closedCandles: candles.length,
+        newlyClosedCandles: newlyClosed.length,
+        latestClosedCandle:
+          latestTimestamp === null
+            ? null
+            : new Date(latestTimestamp * 1000).toISOString(),
+      },
+      'Kraken OHLC poll succeeded.',
+    )
     if (
       this.pendingLiveCandles.length > 0 &&
       this.onClosedCandles !== undefined
     ) {
       const pending = this.pendingLiveCandles
+      this.logger.info(
+        {
+          count: pending.length,
+          firstEventTime: new Date(
+            pending[0]!.candle.timestamp * 1000,
+          ).toISOString(),
+          lastEventTime: new Date(
+            pending.at(-1)!.candle.timestamp * 1000,
+          ).toISOString(),
+        },
+        'Handing newly closed Kraken OHLC candles to PaperForward.',
+      )
       this.onClosedCandles(pending)
       this.pendingLiveCandles = []
     }
   }
+}
+
+const SAFE_CAUSE_CODES = new Set([
+  'ENOTFOUND',
+  'ECONNRESET',
+  'ECONNREFUSED',
+  'ETIMEDOUT',
+  'EAI_AGAIN',
+  'EAI_NONAME',
+  'EHOSTUNREACH',
+  'ENETUNREACH',
+  'ECONNABORTED',
+  'EPIPE',
+  'SELF_SIGNED_CERT_IN_CHAIN',
+])
+
+function safeCauseCode(error: unknown): string | undefined {
+  if (
+    !(error instanceof Error) ||
+    typeof error.cause !== 'object' ||
+    error.cause === null
+  )
+    return undefined
+  const code = (error.cause as { code?: unknown }).code
+  return typeof code === 'string' && SAFE_CAUSE_CODES.has(code)
+    ? code
+    : undefined
+}
+
+function safeErrorMessage(error: unknown): string | undefined {
+  if (!(error instanceof Error)) return undefined
+  return error.message
+    .replace(/https?:\/\/[^\s"'<>]+/gi, '[url]')
+    .replace(/(?:^|\s)(?:\/|[A-Za-z]:\\)[^\s]*/g, ' [path]')
+    .replace(
+      /(?:password|token|authorization|api[-_ ]?key)\s*[:=]\s*[^\s,;]+/gi,
+      '[redacted]',
+    )
+    .replace(/[\r\n\t\x00-\x1f\x7f]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 160)
 }

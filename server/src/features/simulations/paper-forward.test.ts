@@ -580,8 +580,9 @@ describe('PaperForwardService', () => {
     const next = makeCandle(750)
     service.processClosedCandle(next)
     expect(service.status().last_processed_event_time).toBe(
-      next.timestamp * 1000,
+      (next.timestamp + 60) * 1000,
     )
+    expect(service.lastProcessedCandleTimestamp()).toBe(next.timestamp)
     store.close()
   })
 
@@ -620,7 +621,10 @@ describe('PaperForwardService', () => {
     const repeated = makeCandle(54)
     service.processClosedCandle(repeated, 20_000)
     expect(service.status().last_processed_event_time).toBe(
-      makeCandle(54).timestamp * 1000,
+      (makeCandle(54).timestamp + 60) * 1000,
+    )
+    expect(service.lastProcessedCandleTimestamp()).toBe(
+      makeCandle(54).timestamp,
     )
     expect(store.listPaperOrders()).toHaveLength(0)
     store.close()

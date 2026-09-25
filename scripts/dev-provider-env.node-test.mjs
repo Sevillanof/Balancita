@@ -5,6 +5,7 @@ import {
   serverEnvironment,
   serverNodeArgs,
 } from './dev-provider-env.mjs'
+import { serverLauncherArgs } from './server.mjs'
 
 describe('devEnvironment', () => {
   it('defaults only the root development environment to Kraken', () => {
@@ -36,6 +37,35 @@ describe('serverNodeArgs', () => {
 
   it('does not pass the system CA flag when Node does not support it', () => {
     assert.deepEqual(serverNodeArgs(serverArgs, new Set()), serverArgs)
+  })
+})
+
+describe('serverLauncherArgs', () => {
+  it('adds system CA support and watch only for dev', () => {
+    assert.deepEqual(serverLauncherArgs('dev', new Set(['--use-system-ca'])), [
+      '--use-system-ca',
+      '--env-file-if-exists=.env',
+      '--experimental-strip-types',
+      '--watch',
+      'src/app/index.ts',
+    ])
+    assert.deepEqual(
+      serverLauncherArgs('start', new Set(['--use-system-ca'])),
+      [
+        '--use-system-ca',
+        '--env-file-if-exists=.env',
+        '--experimental-strip-types',
+        'src/app/index.ts',
+      ],
+    )
+  })
+
+  it('omits the optional CA flag on unsupported Node versions', () => {
+    assert.deepEqual(serverLauncherArgs('start', new Set()), [
+      '--env-file-if-exists=.env',
+      '--experimental-strip-types',
+      'src/app/index.ts',
+    ])
   })
 })
 
