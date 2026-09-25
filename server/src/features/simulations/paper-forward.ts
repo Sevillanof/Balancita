@@ -12,9 +12,10 @@ import {
   resample1mTo15m,
 } from './fast-replay-engine.ts'
 import {
-  evaluateC27Exit,
+  evaluateC27ExitWithMacroContext,
   evaluateMicroTarget,
   initialMicroState,
+  macroContextWhenReady,
   type MicroStrategyState,
 } from './micro-strategy.ts'
 import type { MarketStore, PaperOrder } from '../market-data/market-store.ts'
@@ -120,15 +121,15 @@ export class PaperForwardService {
         fastReplayStrategyFor(id),
         features,
         prior,
-        macroFeatures?.atrPercentile50 ?? null,
+        macroContextWhenReady(macroFeatures),
       )
       const position = this.position(id)
       const target =
         id === 'micro-donchian-breakout' && position !== null
-          ? evaluateC27Exit({
+          ? evaluateC27ExitWithMacroContext({
               entryPrice: position.entryPrice,
               close: candle.close,
-              donchianMid: features.donchianMid20,
+              macroContext: macroContextWhenReady(macroFeatures),
               barsHeld:
                 Math.floor((candle.timestamp - position.openTime) / 60) + 1,
             }) === 'hold'

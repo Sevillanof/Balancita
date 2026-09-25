@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   evaluateC27Exit,
+  evaluateC27ExitWithMacroContext,
   evaluateMicroTarget,
   initialMicroState,
 } from './micro-strategy.ts'
@@ -55,6 +56,29 @@ describe('micro strategy target state', () => {
     )
   })
 
+  it('uses the macro Donchian mid for C27 stop-loss rather than a differing 1m mid', () => {
+    const base = {
+      entryPrice: 100,
+      close: 99.5,
+      barsHeld: 1,
+      macroContext: {
+        atrPercentile50: 50,
+        donchianHigh20: 101,
+        donchianMid20: 100,
+      },
+    }
+    expect(evaluateC27ExitWithMacroContext(base)).toBe('stop-loss')
+    expect(
+      evaluateC27ExitWithMacroContext({
+        ...base,
+        macroContext: { ...base.macroContext, donchianMid20: 99 },
+      }),
+    ).toBe('hold')
+    expect(
+      evaluateC27ExitWithMacroContext({ ...base, macroContext: null }),
+    ).toBe('hold')
+  })
+
   it('enters/exits candidate 25 by its explicit EMA, price and RSI rules', () => {
     const flat = initialMicroState()
     const long = evaluateMicroTarget('trend-pullback', readyFeatures, flat)
@@ -95,7 +119,7 @@ describe('micro strategy target state', () => {
         'regime-adapter',
         readyFeatures,
         initialMicroState(),
-        70,
+        { atrPercentile50: 70, donchianHigh20: null, donchianMid20: null },
       ).state.regime,
     ).toBe('trend')
     expect(
@@ -103,7 +127,7 @@ describe('micro strategy target state', () => {
         'regime-adapter',
         readyFeatures,
         initialMicroState(),
-        30,
+        { atrPercentile50: 30, donchianHigh20: null, donchianMid20: null },
       ).state.regime,
     ).toBe('range')
     expect(
@@ -111,7 +135,7 @@ describe('micro strategy target state', () => {
         'regime-adapter',
         readyFeatures,
         { exposure: 'flat', regime: 'trend' },
-        50,
+        { atrPercentile50: 50, donchianHigh20: null, donchianMid20: null },
       ).state.regime,
     ).toBe('trend')
     expect(
@@ -158,6 +182,40 @@ describe('micro strategy target state', () => {
         'donchian-breakout',
         { ...readyFeatures, volume: 2.5 },
         initialMicroState(),
+      ).target,
+    ).toBe('flat')
+  })
+
+  it('uses macro Donchian high for C27 while preserving 1m close and volume confirmation', () => {
+    const belowMacroHigh = evaluateMicroTarget(
+      'donchian-breakout',
+      readyFeatures,
+      initialMicroState(),
+      { atrPercentile50: 70, donchianHigh20: 13, donchianMid20: 12 },
+    )
+    expect(belowMacroHigh.target).toBe('flat')
+
+    const aboveMacroHigh = evaluateMicroTarget(
+      'donchian-breakout',
+      readyFeatures,
+      initialMicroState(),
+      { atrPercentile50: 70, donchianHigh20: 11, donchianMid20: 10 },
+    )
+    expect(aboveMacroHigh.target).toBe('long')
+
+    expect(
+      evaluateMicroTarget(
+        'donchian-breakout',
+        readyFeatures,
+        initialMicroState(),
+      ).target,
+    ).toBe('long')
+    expect(
+      evaluateMicroTarget(
+        'donchian-breakout',
+        readyFeatures,
+        initialMicroState(),
+        null,
       ).target,
     ).toBe('flat')
   })

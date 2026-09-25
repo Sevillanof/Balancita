@@ -81,7 +81,7 @@ describe('runFastReplay', () => {
     expect(result.sampleCount).toBe(19)
   })
 
-  it('uses the flat probability shift when a Long entry is rejected by the expectancy gate', () => {
+  it('does not emit a raw C27 breakout before macro Donchian warm-up', () => {
     const candles = Array.from({ length: 82 }, (_, index) => {
       const blockedBreakout = index === 66
       const postBreakout = index > 66
@@ -100,13 +100,13 @@ describe('runFastReplay', () => {
       ticketEur: 30,
     })
     expect(result.trades).toEqual([])
-    expect(result.rawSignalsCount).toBe(1)
-    expect(result.gateRejectionsCount).toBe(1)
+    expect(result.rawSignalsCount).toBe(0)
+    expect(result.gateRejectionsCount).toBe(0)
     expect(result.sampleCount).toBe(1)
     expect(result.brierScoreMulticlass).toBeCloseTo(0, 12)
   })
 
-  it('fails closed when no completed 15m macro history is ready', () => {
+  it('does not emit a C27 raw breakout when the 15m Donchian channel is unavailable', () => {
     const candles = Array.from({ length: 52 }, (_, index) => ({
       timestamp: 1_700_000_000 + index * 60,
       open: index === 51 ? 212 : index === 50 ? 210 : 100,
@@ -121,11 +121,11 @@ describe('runFastReplay', () => {
       ticketEur: 30,
     })
     expect(result.trades).toEqual([])
-    expect(result.rawSignalsCount).toBe(1)
-    expect(result.gateRejectionsCount).toBe(1)
+    expect(result.rawSignalsCount).toBe(0)
+    expect(result.gateRejectionsCount).toBe(0)
   })
 
-  it('records a terminal signal as rejected when macro features are unavailable', () => {
+  it('does not fabricate a terminal C27 breakout without 15m features', () => {
     const candles = Array.from({ length: 51 }, (_, index) => ({
       timestamp: 1_700_000_000 + index * 60,
       open: index === 50 ? 210 : 100,
@@ -140,8 +140,8 @@ describe('runFastReplay', () => {
       ticketEur: 30,
     })
     expect(result.trades).toEqual([])
-    expect(result.rawSignalsCount).toBe(1)
-    expect(result.gateRejectionsCount).toBe(1)
+    expect(result.rawSignalsCount).toBe(0)
+    expect(result.gateRejectionsCount).toBe(0)
   })
 
   it('does not open C27 before completed macro features are available', () => {
@@ -159,8 +159,58 @@ describe('runFastReplay', () => {
       ticketEur: 30,
     })
     expect(result.trades).toEqual([])
+    expect(result.rawSignalsCount).toBe(0)
+    expect(result.gateRejectionsCount).toBe(0)
+  })
+
+  it('uses 15m Donchian mid for Fast Replay C27 exit despite a different 1m mid', () => {
+    const start = Math.floor(1_700_000_000 / 900) * 900
+    const candles = Array.from({ length: 1_103 }, (_, index) => {
+      const breakout = index === 1_100
+      const firstAfterBreakout = index === 1_101
+      const final = index === 1_102
+      return {
+        timestamp: start + index * 60,
+        open: breakout
+          ? 101
+          : firstAfterBreakout
+            ? 100.9
+            : final
+              ? 100.8
+              : 100.65,
+        high: breakout
+          ? 101.2
+          : firstAfterBreakout
+            ? 101.1
+            : final
+              ? 101
+              : index >= 1_080
+                ? 100.7
+                : 101,
+        low: breakout
+          ? 101
+          : firstAfterBreakout
+            ? 100.5
+            : final
+              ? 100.4
+              : index >= 1_080
+                ? 100.6
+                : 100,
+        close: breakout ? 101.1 : firstAfterBreakout || final ? 100.53 : 100.65,
+        volume: breakout ? 20 : 10,
+      }
+    })
+    const result = runFastReplay({
+      strategyId: 'micro-donchian-breakout',
+      candles,
+      ticketEur: 30,
+    })
+
     expect(result.rawSignalsCount).toBe(1)
-    expect(result.gateRejectionsCount).toBe(1)
+    expect(result.gateRejectionsCount).toBe(0)
+    expect(result.trades.map(({ side }) => side)).toEqual(['buy', 'sell'])
+    expect(result.trades[1]?.timestamp).toBe(candles[1_102]?.timestamp)
+    expect(result.trades[1]?.price).toBeCloseTo(100.53 * 0.9995)
   })
 
   it('runs the complete 720-candle path and exposes measured execution time', () => {

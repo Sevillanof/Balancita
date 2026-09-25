@@ -3,8 +3,9 @@ import { performance } from 'node:perf_hooks'
 import { probabilitiesForShift } from './fixed-proportional-shift.ts'
 import {
   evaluateMicroTarget,
-  evaluateC27Exit,
+  evaluateC27ExitWithMacroContext,
   initialMicroState,
+  macroContextWhenReady,
   type MicroStrategyFeatures,
 } from './micro-strategy.ts'
 
@@ -139,7 +140,7 @@ export function runFastReplay(input: {
       strategy,
       features,
       state,
-      macro?.ready === true ? macro.atrPercentile50 : null,
+      macroContextWhenReady(macro),
     )
     let effectiveTarget = decision.target
     if (state.exposure === 'flat' && decision.target === 'long') {
@@ -184,10 +185,10 @@ export function runFastReplay(input: {
     } else if (
       position !== null &&
       (strategyId === 'micro-donchian-breakout'
-        ? evaluateC27Exit({
+        ? evaluateC27ExitWithMacroContext({
             entryPrice: position.entryPrice,
             close: candle.close,
-            donchianMid: features.donchianMid20,
+            macroContext: macroContextWhenReady(macro),
             barsHeld: index - position.entryIndex + 1,
           }) !== 'hold'
         : decision.target === 'flat') &&

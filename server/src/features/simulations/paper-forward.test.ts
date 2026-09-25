@@ -7,8 +7,13 @@ import {
   fastReplayCanEnter,
   fastReplayFeaturesAt,
   fastReplayStrategyFor,
+  resample1mTo15m,
 } from './fast-replay-engine.ts'
-import { evaluateMicroTarget, initialMicroState } from './micro-strategy.ts'
+import {
+  evaluateMicroTarget,
+  initialMicroState,
+  macroContextWhenReady,
+} from './micro-strategy.ts'
 
 describe('PaperForwardService', () => {
   it('starts with the shared ten-thousand-euro account and empty ledger', () => {
@@ -129,6 +134,97 @@ describe('PaperForwardService', () => {
         ).target,
         id,
       ).toBe('long')
+  })
+
+  it('does not let an unready macro percentile select C28 or emit an entry', () => {
+    const currentFeatures = {
+      ema9: 12,
+      ema21: 11,
+      sma50: 10,
+      rsi14: 30,
+      close: 12,
+      bollingerLower: 13,
+      bollingerMid: 14,
+      atr14: 1,
+      priorAtrSma20: 2,
+      donchianHigh20: 11,
+      donchianLow20: 9,
+      donchianMid20: 10,
+      volume: 3,
+      priorVolumeSma20: 2,
+      atrPercentile50: 10,
+      ready: true,
+    }
+    const macroFeatures = {
+      ...currentFeatures,
+      atrPercentile50: 90,
+      ready: false,
+    }
+    const decision = evaluateMicroTarget(
+      'regime-adapter',
+      currentFeatures,
+      initialMicroState(),
+      macroContextWhenReady(macroFeatures),
+    )
+
+    expect(decision).toMatchObject({
+      target: 'flat',
+      abstained: true,
+      state: { regime: null },
+    })
+  })
+
+  it('requires C27 close to break the 15m high and applies the macro Gate', () => {
+    const oneMinuteFeatures = {
+      ema9: 12,
+      ema21: 11,
+      sma50: 10,
+      rsi14: 30,
+      close: 1_000,
+      bollingerLower: 990,
+      bollingerMid: 1_000,
+      atr14: 1,
+      priorAtrSma20: 2,
+      donchianHigh20: 999,
+      donchianLow20: 990,
+      donchianMid20: 994.5,
+      volume: 10,
+      priorVolumeSma20: 2,
+      atrPercentile50: 50,
+      ready: true,
+    }
+    const macro = {
+      ...oneMinuteFeatures,
+      donchianHigh20: 1_001,
+      donchianLow20: 990,
+    }
+    expect(
+      evaluateMicroTarget(
+        'donchian-breakout',
+        oneMinuteFeatures,
+        initialMicroState(),
+        macroContextWhenReady(macro),
+      ).target,
+    ).toBe('flat')
+
+    macro.donchianHigh20 = 999
+    const context = macroContextWhenReady(macro)
+    expect(
+      evaluateMicroTarget(
+        'donchian-breakout',
+        oneMinuteFeatures,
+        initialMicroState(),
+        context,
+      ).target,
+    ).toBe('long')
+    expect(
+      fastReplayCanEnter(
+        'micro-donchian-breakout',
+        oneMinuteFeatures,
+        null,
+        macro,
+      ),
+    ).toBe(true)
   })
 
   it('derives shared-account balance, open position quantity, fees and closed P&L from ledger rows', () => {
@@ -265,6 +361,65 @@ describe('PaperForwardService', () => {
     store.close()
   })
 
+  it('uses the completed 15m Donchian mid for PaperForward C27 stops', () => {
+    const store = new MarketStore({ path: ':memory:' })
+    const start = Math.floor(1_700_000_000 / 900) * 900
+    const history = Array.from({ length: 1_200 }, (_, index) => {
+      const candle = makeCandle(index)
+      const recent = index >= 1_180
+      return {
+        ...candle,
+        timestamp: start + index * 60,
+        open: 100,
+        high: recent ? 100.4 : 103,
+        low: recent ? 99.6 : 99,
+        close: 100,
+        volume: 10,
+      }
+    })
+    store.insertOhlcCandles(history)
+    const exitCandle = {
+      ...makeCandle(1_200),
+      timestamp: start + 1_200 * 60,
+      open: 100.4,
+      high: 100.6,
+      low: 100.3,
+      close: 100.5,
+      volume: 10,
+    }
+    const oneMinute = fastReplayFeaturesAt([...history.slice(-20), exitCandle])
+    const macroCandles = resample1mTo15m(
+      [...history, exitCandle],
+      exitCandle.timestamp + 60,
+    )
+    expect(macroCandles.length).toBeGreaterThan(20)
+    const macro = fastReplayFeaturesAt(macroCandles)
+    expect(oneMinute.donchianMid20).toBe(100)
+    expect(macro.donchianMid20).toBe(101)
+
+    const positionTime = history[1_199]!.timestamp + 60
+    store.insertPaperOrder({
+      strategyId: 'micro-donchian-breakout',
+      signalTimestamp: positionTime,
+      action: 'BUY',
+      gatePassed: true,
+      price: 100,
+      executionTimestamp: positionTime,
+      amountEur: 30,
+      feeEur: 0.03,
+      pnlEur: null,
+      targetPct: 0.01,
+    })
+    const service = new PaperForwardService({ store })
+    service.processClosedCandle(exitCandle, 100.4)
+    const sell = store.listPaperOrders().find((row) => row.action === 'SELL')
+    expect(sell).toMatchObject({
+      price: 100.4 * 0.9995,
+      executionTimestamp: exitCandle.timestamp + 60,
+    })
+    store.close()
+  })
+
   it('waits for 55 continuous closed candles and persists no row from snapshots', () => {
     const store = new MarketStore({ path: ':memory:' })
     const service = new PaperForwardService({ store })
@@ -305,7 +460,7 @@ describe('PaperForwardService', () => {
     store.close()
   })
 
-  it('evaluates each new closed candle without an execution open and never uses a closed bar open to trade', () => {
+  it('does not emit a C27 breakout without warmed-up 15m Donchian features', () => {
     const store = new MarketStore({ path: ':memory:' })
     const service = new PaperForwardService({ store })
     for (let index = 0; index < 54; index += 1) {
@@ -336,14 +491,7 @@ describe('PaperForwardService', () => {
             order.strategyId === 'micro-donchian-breakout' &&
             order.signalTimestamp === signal.timestamp + 60,
         ),
-    ).toMatchObject([
-      {
-        action: 'BUY',
-        gatePassed: false,
-        price: 20_011,
-        executionTimestamp: null,
-      },
-    ])
+    ).toHaveLength(0)
     store.close()
   })
 

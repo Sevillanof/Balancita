@@ -27,6 +27,23 @@ export interface MicroStrategyState {
   readonly regime: MicroRegime
 }
 
+export interface MicroStrategyMacroContext {
+  readonly atrPercentile50: number | null
+  readonly donchianHigh20: number | null
+  readonly donchianMid20: number | null
+}
+
+export function macroContextWhenReady(
+  features: MicroStrategyFeatures | null,
+): MicroStrategyMacroContext | null {
+  if (features?.ready !== true) return null
+  return {
+    atrPercentile50: features.atrPercentile50,
+    donchianHigh20: features.donchianHigh20,
+    donchianMid20: features.donchianMid20,
+  }
+}
+
 export function initialMicroState(): MicroStrategyState {
   return { exposure: 'flat', regime: null }
 }
@@ -50,11 +67,25 @@ export function evaluateC27Exit(input: {
   return 'hold'
 }
 
+export function evaluateC27ExitWithMacroContext(input: {
+  readonly entryPrice: number
+  readonly close: number
+  readonly macroContext: MicroStrategyMacroContext | null
+  readonly barsHeld: number
+}): C27ExitReason {
+  return evaluateC27Exit({
+    entryPrice: input.entryPrice,
+    close: input.close,
+    donchianMid: input.macroContext?.donchianMid20 ?? null,
+    barsHeld: input.barsHeld,
+  })
+}
+
 export function evaluateMicroTarget(
   strategy: MicroStrategy,
   features: MicroStrategyFeatures,
   prior: MicroStrategyState,
-  macroAtrPercentile50: number | null = features.atrPercentile50,
+  macroContext?: MicroStrategyMacroContext | null,
 ): {
   readonly target: MicroExposure
   readonly state: MicroStrategyState
@@ -67,8 +98,15 @@ export function evaluateMicroTarget(
       abstained: true,
     }
   }
+  const donchianHigh20 =
+    macroContext === undefined
+      ? features.donchianHigh20
+      : (macroContext?.donchianHigh20 ?? null)
   if (strategy === 'regime-adapter') {
-    const percentile = macroAtrPercentile50
+    const percentile =
+      macroContext === undefined
+        ? features.atrPercentile50
+        : (macroContext?.atrPercentile50 ?? null)
     const regime =
       percentile !== null && percentile > 60
         ? 'trend'
@@ -84,14 +122,24 @@ export function evaluateMicroTarget(
     }
     const selected =
       regime === 'trend' ? 'trend-pullback' : 'bollinger-reversion'
-    const result = evaluateDirect(selected, features, prior.exposure)
+    const result = evaluateDirect(
+      selected,
+      features,
+      prior.exposure,
+      donchianHigh20,
+    )
     return {
       ...result,
       state: { exposure: result.target, regime },
       abstained: false,
     }
   }
-  const result = evaluateDirect(strategy, features, prior.exposure)
+  const result = evaluateDirect(
+    strategy,
+    features,
+    prior.exposure,
+    donchianHigh20,
+  )
   return {
     ...result,
     state: { exposure: result.target, regime: prior.regime },
@@ -103,6 +151,7 @@ function evaluateDirect(
   strategy: Exclude<MicroStrategy, 'regime-adapter'>,
   features: MicroStrategyFeatures,
   exposure: MicroExposure,
+  macroDonchianHigh20: number | null,
 ): { readonly target: MicroExposure } {
   const enter =
     strategy === 'trend-pullback'
@@ -113,7 +162,8 @@ function evaluateDirect(
         ? features.close < features.bollingerLower! &&
           features.rsi14! < 32 &&
           features.atr14! < features.priorAtrSma20!
-        : features.close > features.donchianHigh20! &&
+        : macroDonchianHigh20 !== null &&
+          features.close > macroDonchianHigh20 &&
           features.volume > 1.25 * features.priorVolumeSma20!
   const exit =
     strategy === 'trend-pullback'
