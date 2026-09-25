@@ -194,6 +194,43 @@ describe('PaperForwardService', () => {
     store.close()
   })
 
+  it('applies the C27 stop from the executed fill and sells at the next open', () => {
+    const store = new MarketStore({ path: ':memory:' })
+    const history = Array.from({ length: 55 }, (_, index) => {
+      const base = makeCandle(index)
+      return { ...base, open: 100, high: 101, low: 99, close: 100 }
+    })
+    store.insertOhlcCandles(history)
+    const fillPrice = 100 * 1.0005
+    store.insertPaperOrder({
+      strategyId: 'micro-donchian-breakout',
+      signalTimestamp: history[54]!.timestamp + 60,
+      action: 'BUY',
+      gatePassed: true,
+      price: fillPrice,
+      executionTimestamp: history[54]!.timestamp + 60,
+      amountEur: 30,
+      feeEur: 0.03,
+      pnlEur: null,
+      targetPct: 0.01,
+    })
+    const service = new PaperForwardService({ store })
+    const exitCandle = {
+      ...makeCandle(55),
+      open: 90,
+      high: 99,
+      low: 98,
+      close: 99,
+    }
+    service.processClosedCandle(exitCandle, 88)
+    const sell = store.listPaperOrders().find((row) => row.action === 'SELL')
+    expect(sell).toMatchObject({
+      price: 88 * 0.9995,
+      executionTimestamp: exitCandle.timestamp + 60,
+    })
+    store.close()
+  })
+
   it('waits for 55 continuous closed candles and persists no row from snapshots', () => {
     const store = new MarketStore({ path: ':memory:' })
     const service = new PaperForwardService({ store })

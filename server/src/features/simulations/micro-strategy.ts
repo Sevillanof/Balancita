@@ -31,6 +31,25 @@ export function initialMicroState(): MicroStrategyState {
   return { exposure: 'flat', regime: null }
 }
 
+export type C27ExitReason = 'take-profit' | 'time-stop' | 'stop-loss' | 'hold'
+
+export function evaluateC27Exit(input: {
+  readonly entryPrice: number
+  readonly close: number
+  readonly donchianMid: number | null
+  readonly barsHeld: number
+}): C27ExitReason {
+  if (input.close >= input.entryPrice * 1.008) return 'take-profit'
+  if (input.barsHeld >= 10 && input.close < input.entryPrice * 1.003)
+    return 'time-stop'
+  if (
+    input.close <= input.entryPrice * 0.994 ||
+    (input.donchianMid !== null && input.close < input.donchianMid)
+  )
+    return 'stop-loss'
+  return 'hold'
+}
+
 export function evaluateMicroTarget(
   strategy: MicroStrategy,
   features: MicroStrategyFeatures,

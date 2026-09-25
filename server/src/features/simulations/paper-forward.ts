@@ -11,6 +11,7 @@ import {
   fastReplayStrategyFor,
 } from './fast-replay-engine.ts'
 import {
+  evaluateC27Exit,
   evaluateMicroTarget,
   initialMicroState,
   type MicroStrategyState,
@@ -112,6 +113,18 @@ export class PaperForwardService {
         prior,
       )
       const position = this.position(id)
+      const target =
+        id === 'micro-donchian-breakout' && position !== null
+          ? evaluateC27Exit({
+              entryPrice: position.entryPrice,
+              close: candle.close,
+              donchianMid: features.donchianMid20,
+              barsHeld:
+                Math.floor((candle.timestamp - position.openTime) / 60) + 1,
+            }) === 'hold'
+            ? 'long'
+            : 'flat'
+          : decision.target
       if (position !== null && decision.abstained) {
         this.states.set(id, { ...prior, exposure: 'long' })
         continue
@@ -155,7 +168,7 @@ export class PaperForwardService {
         })
         if (inserted)
           this.states.set(id, { ...decision.state, exposure: 'long' })
-      } else if (position !== null && decision.target === 'flat') {
+      } else if (position !== null && target === 'flat') {
         if (nextOpen === undefined) {
           this.states.set(id, { ...decision.state, exposure: 'long' })
           continue

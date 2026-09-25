@@ -114,6 +114,25 @@ describe('runFastReplay', () => {
     expect(result.gateRejectionsCount).toBe(0)
   })
 
+  it('uses the C27 close stop and fills the resulting sell at the next open', () => {
+    const candles = Array.from({ length: 53 }, (_, index) => ({
+      timestamp: 1_700_000_000 + index * 60,
+      open: index === 51 ? 100 : index === 52 ? 90 : 100,
+      high: index === 50 ? 211 : 200,
+      low: index === 51 ? 98 : 1,
+      close: index === 50 ? 210 : index === 51 ? 99 : 90,
+      volume: index === 50 ? 10 : 1,
+    }))
+    const result = runFastReplay({
+      strategyId: 'micro-donchian-breakout',
+      candles,
+      ticketEur: 30,
+    })
+    expect(result.trades.map(({ side }) => side)).toEqual(['buy', 'sell'])
+    expect(result.trades[1]?.timestamp).toBe(candles[52]?.timestamp)
+    expect(result.trades[1]?.price).toBeCloseTo(90 * 0.9995)
+  })
+
   it('runs the complete 720-candle path and exposes measured execution time', () => {
     const candles = Array.from({ length: 720 }, (_, index) => ({
       timestamp: 1_700_000_000 + index * 60,

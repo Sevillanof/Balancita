@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { evaluateMicroTarget, initialMicroState } from './micro-strategy.ts'
+import {
+  evaluateC27Exit,
+  evaluateMicroTarget,
+  initialMicroState,
+} from './micro-strategy.ts'
 
 const readyFeatures = {
   ema9: 12,
@@ -20,6 +24,37 @@ const readyFeatures = {
 } as const
 
 describe('micro strategy target state', () => {
+  it('applies C27 close-only exit thresholds in priority order with causal hold bars', () => {
+    const input = {
+      entryPrice: 100,
+      close: 100.8,
+      donchianMid: 99,
+      barsHeld: 10,
+    }
+    expect(evaluateC27Exit(input)).toBe('take-profit')
+    expect(evaluateC27Exit({ ...input, close: 100.3 })).toBe('hold')
+    expect(evaluateC27Exit({ ...input, close: 100.299, barsHeld: 9 })).toBe(
+      'hold',
+    )
+    expect(evaluateC27Exit({ ...input, close: 100.299, barsHeld: 10 })).toBe(
+      'time-stop',
+    )
+    expect(evaluateC27Exit({ ...input, close: 99.4, barsHeld: 1 })).toBe(
+      'stop-loss',
+    )
+    expect(
+      evaluateC27Exit({
+        ...input,
+        close: 100,
+        donchianMid: 100.01,
+        barsHeld: 1,
+      }),
+    ).toBe('stop-loss')
+    expect(evaluateC27Exit({ ...input, close: 99.4, barsHeld: 10 })).toBe(
+      'time-stop',
+    )
+  })
+
   it('enters/exits candidate 25 by its explicit EMA, price and RSI rules', () => {
     const flat = initialMicroState()
     const long = evaluateMicroTarget('trend-pullback', readyFeatures, flat)
