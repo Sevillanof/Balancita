@@ -1,0 +1,31 @@
+scripts/dev-provider-env.node-test.mjs
+  s_0197658a7f7ebd::t_8afc5edf92e6ee 8,43-71
+scripts/server.mjs
+  s_0197658a7f7ebd::t_7f3edd445aa13b 1-53
+server/src/app/app.test.ts
+  s_9681e109b83570::t_a64b81cef46408 521-544
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e66bbcae4a9c4bdbe8a08f025f2a8a37a53eb5fd",
+  "prompts": {},
+  "sessions": {
+    "s_0197658a7f7ebd": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f272f9d93ffenZi6VEVTmbu5Bl",
+        "model": "gpt-6-luna-fast"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    },
+    "s_9681e109b83570": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f274f35e4ffeL0xwI5Zb2yFOJ1",
+        "model": "gpt-6-luna-fast"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
