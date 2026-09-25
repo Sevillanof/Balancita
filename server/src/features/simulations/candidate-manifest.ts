@@ -80,6 +80,7 @@ export interface SimulationRuleConfig {
 }
 
 export interface SimulationCandidate {
+  readonly status: 'archived' | 'active'
   readonly candidateId: string
   readonly family: SimulationVariantFamily
   readonly ruleVersion: string
@@ -131,6 +132,7 @@ function candidate(
   microStrategy?: MicroStrategy,
 ): SimulationCandidate {
   return {
+    status: microStrategy === undefined ? 'archived' : 'active',
     candidateId,
     family,
     ruleVersion,
@@ -320,34 +322,81 @@ export const SIMULATION_CANDIDATES: readonly SimulationCandidate[] = [
     'A UTC session gate requires at least two existing directional feature votes for a trend forecast.',
   ),
   candidate(
-    'micro-trend-pullback', 'micro-strategy', 'simulation-micro-trend-pullback.v1', {},
-    { ...defaultParams(), smaPeriod: 50, emaPeriod: 21, rsiPeriod: 14, atrPeriod: 14, paramSetVersion: 'micro-trend-pullback.v1' },
+    'micro-trend-pullback',
+    'micro-strategy',
+    'simulation-micro-trend-pullback.v1',
+    {},
+    {
+      ...defaultParams(),
+      smaPeriod: 50,
+      emaPeriod: 21,
+      rsiPeriod: 14,
+      atrPeriod: 14,
+      paramSetVersion: 'micro-trend-pullback.v1',
+    },
     'Long while EMA9 exceeds EMA21, close exceeds SMA50 and RSI14 is below 42; exit below EMA21 or above RSI68.',
     undefined,
     'trend-pullback',
   ),
   candidate(
-    'micro-bollinger-reversion', 'micro-strategy', 'simulation-micro-bollinger-reversion.v1', {},
-    { ...defaultParams(), smaPeriod: 20, rsiPeriod: 14, atrPeriod: 14, paramSetVersion: 'micro-bollinger-reversion.v1' },
+    'micro-bollinger-reversion',
+    'micro-strategy',
+    'simulation-micro-bollinger-reversion.v1',
+    {},
+    {
+      ...defaultParams(),
+      smaPeriod: 20,
+      rsiPeriod: 14,
+      atrPeriod: 14,
+      paramSetVersion: 'micro-bollinger-reversion.v1',
+    },
     'Long below BB20 lower at RSI below 32 in a low ATR regime; exit at BB20 mid or RSI above 55.',
     undefined,
     'bollinger-reversion',
   ),
   candidate(
-    'micro-donchian-breakout', 'micro-strategy', 'simulation-micro-donchian-breakout.v1', {},
-    { ...defaultParams(), rsiPeriod: 14, atrPeriod: 14, paramSetVersion: 'micro-donchian-breakout.v1' },
+    'micro-donchian-breakout',
+    'micro-strategy',
+    'simulation-micro-donchian-breakout.v1',
+    {},
+    {
+      ...defaultParams(),
+      rsiPeriod: 14,
+      atrPeriod: 14,
+      paramSetVersion: 'micro-donchian-breakout.v1',
+    },
     'Long on a previous-20-bar Donchian breakout confirmed by prior-volume mean; exit below channel mid.',
     undefined,
     'donchian-breakout',
   ),
   candidate(
-    'micro-regime-adapter', 'micro-strategy', 'simulation-micro-regime-adapter.v1', {},
-    { ...defaultParams(), smaPeriod: 50, emaPeriod: 21, rsiPeriod: 14, atrPeriod: 14, paramSetVersion: 'micro-regime-adapter.v1' },
+    'micro-regime-adapter',
+    'micro-strategy',
+    'simulation-micro-regime-adapter.v1',
+    {},
+    {
+      ...defaultParams(),
+      smaPeriod: 50,
+      emaPeriod: 21,
+      rsiPeriod: 14,
+      atrPeriod: 14,
+      paramSetVersion: 'micro-regime-adapter.v1',
+    },
     'Selects trend rules above ATR percentile 60 and range rules below 40, retaining the prior regime in between.',
     undefined,
     'regime-adapter',
   ),
 ]
+
+export function getAllCandidates(): readonly SimulationCandidate[] {
+  return SIMULATION_CANDIDATES
+}
+
+export function getActiveCandidates(): readonly SimulationCandidate[] {
+  return SIMULATION_CANDIDATES.filter(
+    (candidate) => candidate.status === 'active',
+  )
+}
 
 export class UnknownSimulationRuleError extends Error {
   constructor(ruleVersion: string) {
@@ -393,13 +442,15 @@ export function candidateForId(candidateId: string): SimulationCandidate {
 export function manifestHashFor(
   candidates: readonly SimulationCandidate[],
 ): string {
-  const ordered = [...candidates].sort((left, right) =>
-    left.candidateId < right.candidateId
-      ? -1
-      : left.candidateId > right.candidateId
-        ? 1
-        : 0,
-  )
+  const ordered = [...candidates]
+    .map(({ status: _status, ...candidate }) => candidate)
+    .sort((left, right) =>
+      left.candidateId < right.candidateId
+        ? -1
+        : left.candidateId > right.candidateId
+          ? 1
+          : 0,
+    )
   return contentHashFor({
     version: SIMULATION_MANIFEST_VERSION,
     neutralBand: SIMULATION_NEUTRAL_BAND,

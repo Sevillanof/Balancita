@@ -2,11 +2,14 @@ import { describe, expect, it } from 'vitest'
 import {
   SIMULATION_MANIFEST_VERSION,
   SIMULATION_NEUTRAL_BAND,
-  SIMULATION_CANDIDATES,
+  getActiveCandidates,
+  getAllCandidates,
   assertKnownSimulationRule,
   candidateForId,
   manifestHashFor,
 } from './candidate-manifest.ts'
+
+const SIMULATION_CANDIDATES = getAllCandidates()
 
 describe('simulation candidate manifest', () => {
   it('pre-registers three distinct composite hypotheses from existing features', () => {
@@ -40,6 +43,27 @@ describe('simulation candidate manifest', () => {
   it('is versioned as v3 with the original 24 plus four experimental candidates', () => {
     expect(SIMULATION_MANIFEST_VERSION).toBe('simulations-manifest.v3')
     expect(SIMULATION_CANDIDATES.length).toBe(28)
+  })
+
+  it('archives the original 24 while keeping the four micro candidates active', () => {
+    expect(getAllCandidates()).toHaveLength(28)
+    expect(
+      getActiveCandidates().map(({ candidateId, status }) => [
+        candidateId,
+        status,
+      ]),
+    ).toEqual([
+      ['micro-trend-pullback', 'active'],
+      ['micro-bollinger-reversion', 'active'],
+      ['micro-donchian-breakout', 'active'],
+      ['micro-regime-adapter', 'active'],
+    ])
+    expect(
+      getAllCandidates()
+        .slice(0, 24)
+        .every(({ status }) => status === 'archived'),
+    ).toBe(true)
+    expect(candidateForId('technical-default').status).toBe('archived')
   })
 
   it('has unique candidate ids and rule versions', () => {
@@ -225,14 +249,48 @@ describe('simulation candidate manifest', () => {
   })
 
   it('appends the four separately versioned micro strategies', () => {
-    expect(SIMULATION_CANDIDATES.slice(24).map(({ candidateId, ruleVersion, microStrategy }) => ({ candidateId, ruleVersion, microStrategy }))).toEqual([
-      { candidateId: 'micro-trend-pullback', ruleVersion: 'simulation-micro-trend-pullback.v1', microStrategy: 'trend-pullback' },
-      { candidateId: 'micro-bollinger-reversion', ruleVersion: 'simulation-micro-bollinger-reversion.v1', microStrategy: 'bollinger-reversion' },
-      { candidateId: 'micro-donchian-breakout', ruleVersion: 'simulation-micro-donchian-breakout.v1', microStrategy: 'donchian-breakout' },
-      { candidateId: 'micro-regime-adapter', ruleVersion: 'simulation-micro-regime-adapter.v1', microStrategy: 'regime-adapter' },
+    expect(
+      SIMULATION_CANDIDATES.slice(24).map(
+        ({ candidateId, ruleVersion, microStrategy }) => ({
+          candidateId,
+          ruleVersion,
+          microStrategy,
+        }),
+      ),
+    ).toEqual([
+      {
+        candidateId: 'micro-trend-pullback',
+        ruleVersion: 'simulation-micro-trend-pullback.v1',
+        microStrategy: 'trend-pullback',
+      },
+      {
+        candidateId: 'micro-bollinger-reversion',
+        ruleVersion: 'simulation-micro-bollinger-reversion.v1',
+        microStrategy: 'bollinger-reversion',
+      },
+      {
+        candidateId: 'micro-donchian-breakout',
+        ruleVersion: 'simulation-micro-donchian-breakout.v1',
+        microStrategy: 'donchian-breakout',
+      },
+      {
+        candidateId: 'micro-regime-adapter',
+        ruleVersion: 'simulation-micro-regime-adapter.v1',
+        microStrategy: 'regime-adapter',
+      },
     ])
-    expect(SIMULATION_CANDIDATES.slice(24).every((candidate) => candidate.probabilityMapVersion === 'fixed-proportional-shift-v1')).toBe(true)
-    expect(SIMULATION_CANDIDATES[24]?.params).toMatchObject({ smaPeriod: 50, emaPeriod: 21, rsiPeriod: 14, atrPeriod: 14 })
+    expect(
+      SIMULATION_CANDIDATES.slice(24).every(
+        (candidate) =>
+          candidate.probabilityMapVersion === 'fixed-proportional-shift-v1',
+      ),
+    ).toBe(true)
+    expect(SIMULATION_CANDIDATES[24]?.params).toMatchObject({
+      smaPeriod: 50,
+      emaPeriod: 21,
+      rsiPeriod: 14,
+      atrPeriod: 14,
+    })
   })
 
   it('records a one-line theory justification for every candidate', () => {
@@ -259,6 +317,19 @@ describe('simulation candidate manifest', () => {
     const second = manifestHashFor([...SIMULATION_CANDIDATES].reverse())
     expect(first).toMatch(/^[0-9a-f]{64}$/)
     expect(second).toBe(first)
+  })
+
+  it('does not change manifest identity when only operational status changes', () => {
+    const reclassified = SIMULATION_CANDIDATES.map((candidate) => ({
+      ...candidate,
+      status:
+        candidate.status === 'active'
+          ? ('archived' as const)
+          : ('active' as const),
+    }))
+    expect(manifestHashFor(reclassified)).toBe(
+      manifestHashFor(SIMULATION_CANDIDATES),
+    )
   })
 
   it('refuses rule versions outside the manifest', () => {

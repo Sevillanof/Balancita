@@ -15,7 +15,7 @@ import { ReplayRunStore } from '../replay/replay-run-store.ts'
 import { ReplayRunService } from '../replay/replay-service.ts'
 import type { FrozenReplayDataset } from '../replay/replay-contracts.ts'
 import {
-  SIMULATION_CANDIDATES,
+  getActiveCandidates,
   simulationManifestHash,
 } from './candidate-manifest.ts'
 import {
@@ -215,7 +215,7 @@ export function runSimulationsFromLiveDb(
       )
     const seed = options.seed!
     const minute = 60_000
-    let candidateIds = SIMULATION_CANDIDATES.map(
+    let candidateIds = getActiveCandidates().map(
       (candidate) => candidate.candidateId,
     )
     let smokeReportHash: string | undefined
@@ -230,7 +230,7 @@ export function runSimulationsFromLiveDb(
         prior,
         simulationManifestHash(),
         new Set(
-          SIMULATION_CANDIDATES.map((candidate) => candidate.candidateId),
+          getActiveCandidates().map((candidate) => candidate.candidateId),
         ),
       )
       candidateIds = [...cohort.candidateIds]
@@ -270,6 +270,9 @@ export function runSimulationsFromLiveDb(
   })
   const stageRequest: SimulationRequestIdentity = {
     ...request,
+    candidateIds:
+      sample?.candidateIds ??
+      getActiveCandidates().map((candidate) => candidate.candidateId),
     ...(sample === undefined
       ? {}
       : {
@@ -319,10 +322,13 @@ export function runSimulationsFromLiveDb(
     for (const horizon of options.horizons) {
       const scored: SimulationScoredEntry[] = []
       const signalsByCandidate: Record<string, TradeSimSignal[]> = {}
-      const microReadiness: Record<string, { priorReadyCount: number; forecastOrigins: number }> = {}
+      const microReadiness: Record<
+        string,
+        { priorReadyCount: number; forecastOrigins: number }
+      > = {}
       const candidateSet =
         sample === undefined
-          ? SIMULATION_CANDIDATES
+          ? getActiveCandidates()
           : sample.candidateIds.map(candidateForId)
       const candidates = candidateSet.map((candidate) => {
         const runId = [
@@ -338,7 +344,9 @@ export function runSimulationsFromLiveDb(
           runId,
           candidateId: candidate.candidateId,
         })
-        const targetsByTime = new Map(result.microTargets.map((entry) => [entry.time, entry]))
+        const targetsByTime = new Map(
+          result.microTargets.map((entry) => [entry.time, entry]),
+        )
         signalsByCandidate[candidate.candidateId] = result.forecasts.map(
           (forecast) => ({
             time: forecast.asOfTimestamp,
@@ -347,18 +355,24 @@ export function runSimulationsFromLiveDb(
             abstained: forecast.abstained,
             ...(candidate.microStrategy === undefined
               ? {}
-              : { directTarget: targetsByTime.get(forecast.asOfTimestamp)?.target ?? 'flat' }),
+              : {
+                  directTarget:
+                    targetsByTime.get(forecast.asOfTimestamp)?.target ?? 'flat',
+                }),
           }),
         )
         if (candidate.microStrategy !== undefined) {
           const postWarmup = result.microTargets.slice(50)
           microReadiness[candidate.candidateId] = {
-            priorReadyCount: postWarmup.filter((entry) => entry.priorReady).length,
+            priorReadyCount: postWarmup.filter((entry) => entry.priorReady)
+              .length,
             forecastOrigins: postWarmup.length,
           }
         }
         const eligibleMicroTimes = new Set(
-          result.microTargets.filter((entry) => entry.forecastEligible).map((entry) => entry.time),
+          result.microTargets
+            .filter((entry) => entry.forecastEligible)
+            .map((entry) => entry.time),
         )
         const byId = new Map(
           result.forecasts.map((forecast) => [forecast.id, forecast]),
@@ -366,7 +380,11 @@ export function runSimulationsFromLiveDb(
         for (const outcome of result.outcomes) {
           const forecast = byId.get(outcome.forecastId)
           if (forecast === undefined) continue
-          if (candidate.microStrategy !== undefined && !eligibleMicroTimes.has(forecast.asOfTimestamp)) continue
+          if (
+            candidate.microStrategy !== undefined &&
+            !eligibleMicroTimes.has(forecast.asOfTimestamp)
+          )
+            continue
           scored.push({
             candidateId: candidate.candidateId,
             asOfTimestamp: forecast.asOfTimestamp,
@@ -394,18 +412,50 @@ export function runSimulationsFromLiveDb(
         (left, right) => left.asOfTimestamp - right.asOfTimestamp,
       )
       const legacyIds = new Set(
-        candidates.filter((candidate) => candidateForId(candidate.candidateId).microStrategy === undefined)
+        candidates
+          .filter(
+            (candidate) =>
+              candidateForId(candidate.candidateId).microStrategy === undefined,
+          )
           .map((candidate) => candidate.candidateId),
       )
-      const legacyOrdered = ordered.filter((entry) => legacyIds.has(entry.candidateId))
-      const { selection: legacySelection, validation: legacyValidation, cutTimestamp } = splitByTime(
-        legacyOrdered,
-        selectionPct,
-        (entry) => entry.asOfTimestamp,
+      const legacyOrdered = ordered.filter((entry) =>
+        legacyIds.has(entry.candidateId),
       )
-      const microEntries = ordered.filter((entry) => !legacyIds.has(entry.candidateId))
-      const selection = [...legacySelection, ...microEntries.filter((entry) => entry.asOfTimestamp < cutTimestamp)]
-      const validation = [...legacyValidation, ...microEntries.filter((entry) => entry.asOfTimestamp >= cutTimestamp)]
+      const legacySplit =
+        legacyOrdered.length === 0
+          ? {
+              selection: [],
+              validation: [],
+              cutTimestamp:
+                dataset.candles[
+                  Math.min(
+                    dataset.candles.length - 1,
+                    Math.floor(dataset.candles.length * selectionPct),
+                  )
+                ]!.bucketEnd,
+            }
+          : splitByTime(
+              legacyOrdered,
+              selectionPct,
+              (entry) => entry.asOfTimestamp,
+            )
+      const {
+        selection: legacySelection,
+        validation: legacyValidation,
+        cutTimestamp,
+      } = legacySplit
+      const microEntries = ordered.filter(
+        (entry) => !legacyIds.has(entry.candidateId),
+      )
+      const selection = [
+        ...legacySelection,
+        ...microEntries.filter((entry) => entry.asOfTimestamp < cutTimestamp),
+      ]
+      const validation = [
+        ...legacyValidation,
+        ...microEntries.filter((entry) => entry.asOfTimestamp >= cutTimestamp),
+      ]
       const report = buildComparisonReport({
         horizon,
         datasetHash: dataset.datasetHash,
@@ -607,17 +657,19 @@ function profitabilityInputFor(args: {
     validationBars,
     signalsByCandidate: args.signalsByCandidate,
     candidateThresholds: Object.fromEntries(
-      SIMULATION_CANDIDATES.filter(
-        (candidate) =>
-          candidate.entryThreshold !== undefined &&
-          candidate.exitThreshold !== undefined,
-      ).map((candidate) => [
-        candidate.candidateId,
-        {
-          entry: candidate.entryThreshold!,
-          exit: candidate.exitThreshold!,
-        },
-      ]),
+      getActiveCandidates()
+        .filter(
+          (candidate) =>
+            candidate.entryThreshold !== undefined &&
+            candidate.exitThreshold !== undefined,
+        )
+        .map((candidate) => [
+          candidate.candidateId,
+          {
+            entry: candidate.entryThreshold!,
+            exit: candidate.exitThreshold!,
+          },
+        ]),
     ),
     outcomeLabelsByTime,
     startingCash: args.startingCash,

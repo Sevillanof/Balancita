@@ -33,12 +33,13 @@ type FastRun = {
   profitFactor: number | null
   window: { start_time: number; end_time: number }
 }
-const STRATEGIES = [
-  ['micro-trend-pullback', 'Tendencia: retroceso'],
-  ['micro-bollinger-reversion', 'Reversión: Bollinger'],
-  ['micro-donchian-breakout', 'Ruptura: Donchian'],
-  ['micro-regime-adapter', 'Adaptador de régimen'],
-] as const
+type Strategy = { id: string; status: 'active'; name: string; label: string }
+const STRATEGY_LABELS: Readonly<Record<string, string>> = {
+  'micro-trend-pullback': 'Tendencia: retroceso',
+  'micro-bollinger-reversion': 'Reversión: Bollinger',
+  'micro-donchian-breakout': 'Ruptura: Donchian',
+  'micro-regime-adapter': 'Adaptador de régimen',
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -52,7 +53,10 @@ function isSafeInteger(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value)
 }
 
-function isFastRun(value: unknown): value is FastRun {
+function isFastRun(
+  value: unknown,
+  strategies: readonly Strategy[],
+): value is FastRun {
   if (
     !isRecord(value) ||
     !isRecord(value.window) ||
@@ -61,7 +65,7 @@ function isFastRun(value: unknown): value is FastRun {
     return false
   return (
     typeof value.id === 'string' &&
-    STRATEGIES.some(([id]) => id === value.strategyId) &&
+    strategies.some(({ id }) => id === value.strategyId) &&
     isFiniteNumber(value.netPnlEur) &&
     isSafeInteger(value.candlesEvaluated) &&
     isSafeInteger(value.rawSignalsCount ?? value.raw_signals_count) &&
@@ -87,14 +91,18 @@ function isFastRun(value: unknown): value is FastRun {
   )
 }
 
-function fastRunsFromPayload(payload: unknown): FastRun[] {
+function fastRunsFromPayload(
+  payload: unknown,
+  strategies: readonly Strategy[],
+): FastRun[] {
   return isRecord(payload) && Array.isArray(payload.runs)
-    ? payload.runs.filter(isFastRun)
+    ? payload.runs.filter((run) => isFastRun(run, strategies))
     : []
 }
 
 export default function FastReplaySection() {
-  const [strategy, setStrategy] = useState<string>(STRATEGIES[0][0])
+  const [strategies, setStrategies] = useState<readonly Strategy[]>([])
+  const [strategy, setStrategy] = useState('')
   const [candles, setCandles] = useState<readonly Ohlc[]>([])
   const [run, setRun] = useState<FastRun | null>(null)
   const [history, setHistory] = useState<readonly FastRun[]>([])
@@ -110,13 +118,52 @@ export default function FastReplaySection() {
   } | null>(null)
 
   useEffect(() => {
+    void fetch('/api/strategies')
+      .then(async (response) => {
+        if (!response.ok)
+          throw new Error('No se pudieron cargar las estrategias activas.')
+        const payload: unknown = await response.json()
+        if (!isRecord(payload) || !Array.isArray(payload.strategies))
+          throw new Error('La lista de estrategias activas no es válida.')
+        const active = payload.strategies.flatMap((value): Strategy[] =>
+          isRecord(value) &&
+          typeof value.id === 'string' &&
+          value.status === 'active' &&
+          typeof value.name === 'string'
+            ? [
+                {
+                  id: value.id,
+                  status: 'active',
+                  name: value.name,
+                  label: STRATEGY_LABELS[value.id] ?? value.name,
+                },
+              ]
+            : [],
+        )
+        setStrategies(active)
+        setStrategy(active[0]?.id ?? '')
+      })
+      .catch((cause: unknown) => {
+        setStrategies([])
+        setStrategy('')
+        setError(
+          cause instanceof Error
+            ? cause.message
+            : 'No se pudieron cargar las estrategias activas.',
+        )
+      })
+  }, [])
+
+  useEffect(() => {
     void fetch('/api/replay/fast-run/history?limit=50')
       .then(async (response) =>
-        response.ok ? fastRunsFromPayload(await response.json()) : [],
+        response.ok
+          ? fastRunsFromPayload(await response.json(), strategies)
+          : [],
       )
       .then(setHistory)
       .catch(() => setHistory([]))
-  }, [])
+  }, [strategies])
 
   useEffect(() => {
     if (!playing || cursor >= candles.length - 1) return undefined
@@ -195,6 +242,10 @@ export default function FastReplaySection() {
   }
 
   async function execute() {
+    if (!strategies.some(({ id }) => id === strategy)) {
+      setError('No hay una estrategia activa disponible para ejecutar.')
+      return
+    }
     setBusy(true)
     setError(null)
     setPlaying(false)
@@ -205,7 +256,7 @@ export default function FastReplaySection() {
         body: JSON.stringify({ strategy_id: strategy }),
       })
       const payload: unknown = await response.json()
-      if (!response.ok || !isFastRun(payload))
+      if (!response.ok || !isFastRun(payload, strategies))
         throw new Error(
           isRecord(payload) &&
             isRecord(payload.error) &&
@@ -235,7 +286,7 @@ export default function FastReplaySection() {
   async function loadHistory() {
     const response = await fetch('/api/replay/fast-run/history?limit=50')
     if (response.ok) {
-      setHistory(fastRunsFromPayload(await response.json()))
+      setHistory(fastRunsFromPayload(await response.json(), strategies))
     }
   }
   async function loadCandles(start: number, end: number) {
@@ -276,7 +327,10 @@ export default function FastReplaySection() {
             value={strategy}
             onChange={(event) => setStrategy(event.target.value)}
           >
-            {STRATEGIES.map(([id, label]) => (
+            {strategies.length === 0 && (
+              <option value="">Sin estrategias activas</option>
+            )}
+            {strategies.map(({ id, label }) => (
               <option key={id} value={id}>
                 {label}
               </option>
@@ -294,7 +348,7 @@ export default function FastReplaySection() {
         <button
           type="button"
           className="button button--primary"
-          disabled={busy}
+          disabled={busy || !strategies.some(({ id }) => id === strategy)}
           onClick={() => void execute()}
         >
           {busy ? 'Procesando…' : 'Ejecutar Replay Local'}

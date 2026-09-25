@@ -5,9 +5,10 @@ import type {
 } from '../../domain/contracts.ts'
 import { generateForecast } from '../forecasts/forecast-engine.ts'
 import {
-  SIMULATION_CANDIDATES,
+  getAllCandidates,
   candidateForRuleVersion,
 } from './candidate-manifest.ts'
+const SIMULATION_CANDIDATES = getAllCandidates()
 import { resolveSimulationRule, runSimulationRule } from './rule-registry.ts'
 
 function snapshotWith(
@@ -79,7 +80,9 @@ describe('simulation rule registry', () => {
       if (candidate.microStrategy === undefined) {
         expect(() => resolveSimulationRule(candidate.ruleVersion)).not.toThrow()
       } else {
-        expect(() => resolveSimulationRule(candidate.ruleVersion)).toThrow(/chronological micro replay/i)
+        expect(() => resolveSimulationRule(candidate.ruleVersion)).toThrow(
+          /chronological micro replay/i,
+        )
       }
     }
   })
@@ -104,7 +107,9 @@ describe('simulation rule registry', () => {
   })
 
   it('emits finite probabilities that sum to one for every legacy candidate', () => {
-    for (const candidate of SIMULATION_CANDIDATES.filter(({ microStrategy }) => microStrategy === undefined)) {
+    for (const candidate of SIMULATION_CANDIDATES.filter(
+      ({ microStrategy }) => microStrategy === undefined,
+    )) {
       const output = runSimulationRule(candidate, 100, BULLISH)
       for (const value of [output.up, output.down, output.flat]) {
         expect(Number.isFinite(value)).toBe(true)

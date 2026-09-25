@@ -132,4 +132,32 @@ describe('selectSeededWindow', () => {
       smokeReportHash: 'selection-hash',
     })
   })
+
+  it('ranks active micro candidates from diagnostics when the smoke has no legacy rows', () => {
+    const cohort = confirmationCohort(
+      {
+        manifestHash: 'current',
+        sample: { stage: 'smoke', until: 90_000, horizons: ['15m'] },
+        request: { horizons: ['15m'] },
+        reports: [
+          {
+            horizon: '15m',
+            contentHash: 'micro-selection-hash',
+            rows: [],
+            microCandidateDiagnostics: {
+              candidates: [
+                { candidateId: 'micro-a', selectionBrier: 0.3 },
+                { candidateId: 'micro-b', selectionBrier: 0.1 },
+                { candidateId: 'micro-c', selectionBrier: 0.2 },
+                { candidateId: 'micro-d', selectionBrier: 0.4 },
+              ],
+            },
+          },
+        ],
+      },
+      'current',
+      new Set(['micro-a', 'micro-b', 'micro-c', 'micro-d']),
+    )
+    expect(cohort.candidateIds).toEqual(['micro-b', 'micro-c', 'micro-a'])
+  })
 })

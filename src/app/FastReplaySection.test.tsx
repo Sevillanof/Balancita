@@ -14,8 +14,72 @@ function jsonResponse(payload: unknown): Response {
   return { ok: true, json: async () => payload } as Response
 }
 
+const strategiesResponse = () =>
+  jsonResponse({
+    strategies: [
+      {
+        id: 'micro-trend-pullback',
+        status: 'active',
+        name: 'micro-trend-pullback',
+      },
+      {
+        id: 'micro-bollinger-reversion',
+        status: 'active',
+        name: 'micro-bollinger-reversion',
+      },
+      {
+        id: 'micro-donchian-breakout',
+        status: 'active',
+        name: 'micro-donchian-breakout',
+      },
+      {
+        id: 'micro-regime-adapter',
+        status: 'active',
+        name: 'micro-regime-adapter',
+      },
+    ],
+  })
+
 describe('FastReplaySection', () => {
+  it('loads active strategy options from the API and disables running when unavailable', async () => {
+    const fetch = vi.fn(async (input: string) =>
+      input === '/api/strategies'
+        ? jsonResponse({
+            strategies: [
+              {
+                id: 'micro-trend-pullback',
+                status: 'active',
+                name: 'Trend Pullback',
+              },
+            ],
+          })
+        : jsonResponse({ runs: [] }),
+    )
+    vi.stubGlobal('fetch', fetch)
+    const firstRender = render(<FastReplaySection />)
+    expect(
+      await screen.findByRole('option', { name: 'Tendencia: retroceso' }),
+    ).toHaveValue('micro-trend-pullback')
+    expect(screen.getAllByRole('option')).toHaveLength(1)
+
+    firstRender.unmount()
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: false, json: async () => ({}) }) as Response),
+    )
+    render(<FastReplaySection />)
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', { name: /ejecutar replay/i }),
+      ).toBeDisabled(),
+    )
+  })
+
   it('offers fixture-backed synchronization, candidate selection, and playback controls', () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => strategiesResponse()),
+    )
     render(<FastReplaySection />)
     expect(
       screen.getByRole('button', { name: /sincronizar kraken ohlc.*12h/i }),
@@ -35,18 +99,20 @@ describe('FastReplaySection', () => {
   })
 
   it('shows the actual candle coverage returned by Kraken synchronization', async () => {
-    const fetch = vi.fn(async () =>
-      jsonResponse({
-        inserted: 2,
-        gaps_detected: 0,
-        requested_hours: 12,
-        maximum_candles: 720,
-        coverage: {
-          candle_count: 2,
-          first_candle_time: 1_700_000_000_000,
-          last_candle_time: 1_700_000_060_000,
-        },
-      }),
+    const fetch = vi.fn(async (input: string) =>
+      input === '/api/strategies'
+        ? strategiesResponse()
+        : jsonResponse({
+            inserted: 2,
+            gaps_detected: 0,
+            requested_hours: 12,
+            maximum_candles: 720,
+            coverage: {
+              candle_count: 2,
+              first_candle_time: 1_700_000_000_000,
+              last_candle_time: 1_700_000_060_000,
+            },
+          }),
     )
     vi.stubGlobal('fetch', fetch)
 
@@ -90,30 +156,32 @@ describe('FastReplaySection', () => {
       createdAt: 1_700_000_100_000,
     }
     const fetch = vi.fn(async (input: string) =>
-      input.startsWith('/api/replay/fast-run/history')
-        ? jsonResponse({ runs: [savedRun] })
-        : input.startsWith('/api/market/ohlc')
-          ? jsonResponse({
-              candles: [
-                {
-                  timestamp: 1_700_000_000_000,
-                  open: 100,
-                  high: 101,
-                  low: 99,
-                  close: 100,
-                  volume: 1,
-                },
-                {
-                  timestamp: 1_700_000_060_000,
-                  open: 100,
-                  high: 102,
-                  low: 99,
-                  close: 101,
-                  volume: 2,
-                },
-              ],
-            })
-          : jsonResponse({}),
+      input === '/api/strategies'
+        ? strategiesResponse()
+        : input.startsWith('/api/replay/fast-run/history')
+          ? jsonResponse({ runs: [savedRun] })
+          : input.startsWith('/api/market/ohlc')
+            ? jsonResponse({
+                candles: [
+                  {
+                    timestamp: 1_700_000_000_000,
+                    open: 100,
+                    high: 101,
+                    low: 99,
+                    close: 100,
+                    volume: 1,
+                  },
+                  {
+                    timestamp: 1_700_000_060_000,
+                    open: 100,
+                    high: 102,
+                    low: 99,
+                    close: 101,
+                    volume: 2,
+                  },
+                ],
+              })
+            : jsonResponse({}),
     )
     vi.stubGlobal('fetch', fetch)
 

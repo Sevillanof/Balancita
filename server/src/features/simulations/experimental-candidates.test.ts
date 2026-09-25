@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
-  SIMULATION_CANDIDATES,
+  getAllCandidates,
   SIMULATION_MANIFEST_VERSION,
 } from './candidate-manifest.ts'
+const SIMULATION_CANDIDATES = getAllCandidates()
 import {
   empiricalPriorBefore,
   probabilitiesForShift,

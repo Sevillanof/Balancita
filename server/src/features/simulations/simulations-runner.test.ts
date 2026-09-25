@@ -4,7 +4,11 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { TimestampMs } from '../../domain/contracts.ts'
 import { MarketStore } from '../market-data/market-store.ts'
-import { listSimulationReportHistory, simulationReportId } from './simulations-history.ts'
+import {
+  listSimulationReportHistory,
+  simulationReportId,
+} from './simulations-history.ts'
+import { getActiveCandidates } from './candidate-manifest.ts'
 import { runSimulationsFromLiveDb } from './simulations-runner.ts'
 
 const tempDirectories: string[] = []
@@ -61,7 +65,7 @@ function seedContiguousMarket(path: string): void {
 }
 
 describe('simulations runner', () => {
-  it('runs every manifest candidate and writes a full report-all table', () => {
+  it('runs active candidates only while retaining the full manifest identity', () => {
     const paths = makePaths()
     seedContiguousMarket(paths.marketDbPath)
 
@@ -77,7 +81,15 @@ describe('simulations runner', () => {
     expect(result.horizons).toHaveLength(1)
     const horizon = result.horizons[0]!
     expect(horizon.horizon).toBe('15m')
-    expect(horizon.report.rows).toHaveLength(24)
+    expect(horizon.report.rows).toHaveLength(0)
+    expect(
+      horizon.report.rows.map(({ candidateId }) => candidateId),
+    ).not.toContain('technical-default')
+    expect(
+      horizon.report.microCandidateDiagnostics?.candidates.map(
+        ({ candidateId }) => candidateId,
+      ),
+    ).toEqual(getActiveCandidates().map(({ candidateId }) => candidateId))
     expect(horizon.report.microCandidateDiagnostics?.candidates).toHaveLength(4)
     expect(horizon.report.microCandidateDiagnostics?.holdoutConsumed).toBe(true)
     const briers = horizon.report.rows.map((row) => row.brier)
@@ -85,9 +97,9 @@ describe('simulations runner', () => {
     for (const row of horizon.report.rows) {
       expect(row.runId).toContain(row.candidateId)
     }
-    expect(horizon.report.winner).not.toBeNull()
-    expect(horizon.report.selectionCount).toBeGreaterThan(0)
-    expect(horizon.report.validationCount).toBeGreaterThan(0)
+    expect(horizon.report.winner).toBeNull()
+    expect(horizon.report.selectionCount).toBe(0)
+    expect(horizon.report.validationCount).toBe(0)
 
     const persisted = JSON.parse(readFileSync(paths.reportPath, 'utf8'))
     expect(persisted.reports[0].contentHash).toBe(horizon.report.contentHash)
@@ -161,8 +173,13 @@ describe('simulations runner', () => {
     expect(history).toHaveLength(2)
     expect(history[0]!.id).not.toBe(history[1]!.id)
     expect(history.map((entry) => entry.generatedAt)).toEqual([2, 1])
-    expect(JSON.parse(readFileSync(paths.reportPath, 'utf8')).generatedAt).toBe(2)
-    expect(history.find((entry) => entry.id === simulationReportId(firstReport))?.generatedAt).toBe(1)
+    expect(JSON.parse(readFileSync(paths.reportPath, 'utf8')).generatedAt).toBe(
+      2,
+    )
+    expect(
+      history.find((entry) => entry.id === simulationReportId(firstReport))
+        ?.generatedAt,
+    ).toBe(1)
   }, 45_000)
 
   it('invalidates the cache when the live dataset changes', () => {
@@ -243,14 +260,13 @@ describe('simulations runner', () => {
       until: (T0 + 150 * MINUTE_MS) as TimestampMs,
       clock: () => 1 as TimestampMs,
     })
-    expect(windowed.horizons[0]!.report.selectionCount).toBeGreaterThan(0)
     expect(windowed.datasetHash).not.toBe(full.datasetHash)
     expect(
-      windowed.horizons[0]!.report.selectionCount +
-        windowed.horizons[0]!.report.validationCount,
+      windowed.horizons[0]!.report.microCandidateDiagnostics!.candidates[0]!
+        .forecastOrigins,
     ).toBeLessThan(
-      full.horizons[0]!.report.selectionCount +
-        full.horizons[0]!.report.validationCount,
+      full.horizons[0]!.report.microCandidateDiagnostics!.candidates[0]!
+        .forecastOrigins,
     )
   }, 45_000)
 

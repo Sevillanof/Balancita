@@ -11,8 +11,9 @@ import { ReplayRunStore } from '../replay/replay-run-store.ts'
 import { ReplayRunService } from '../replay/replay-service.ts'
 import {
   candidateForRuleVersion,
-  SIMULATION_CANDIDATES,
+  getAllCandidates,
 } from './candidate-manifest.ts'
+const SIMULATION_CANDIDATES = getAllCandidates()
 import { runSimulationRule } from './rule-registry.ts'
 
 function baseInput(): ForecastEngineInput {

@@ -31,6 +31,12 @@ export interface SmokeSelectionReport {
       readonly candidateId: string
       readonly brier: number | null
     }[]
+    readonly microCandidateDiagnostics?: {
+      readonly candidates: readonly {
+        readonly candidateId: string
+        readonly selectionBrier: number | null
+      }[]
+    } | null
   }[]
 }
 
@@ -55,11 +61,27 @@ export function confirmationCohort(
   const selection = report.reports.find((entry) => entry.horizon === '15m')
   if (selection === undefined)
     throw new Error('Smoke report has no 15m selection results.')
-  const candidateIds = [...selection.rows]
+  const rankedLegacy = [...selection.rows]
     .filter((row) => row.brier !== null && Number.isFinite(row.brier))
     .sort((left, right) => left.brier! - right.brier!)
     .slice(0, 3)
     .map((row) => row.candidateId)
+  const candidateIds =
+    rankedLegacy.length === 3
+      ? rankedLegacy
+      : [...(selection.microCandidateDiagnostics?.candidates ?? [])]
+          .filter(
+            (candidate) =>
+              candidate.selectionBrier !== null &&
+              Number.isFinite(candidate.selectionBrier),
+          )
+          .sort(
+            (left, right) =>
+              left.selectionBrier! - right.selectionBrier! ||
+              left.candidateId.localeCompare(right.candidateId),
+          )
+          .slice(0, 3)
+          .map((candidate) => candidate.candidateId)
   if (
     candidateIds.length !== 3 ||
     candidateIds.some((id) => !knownCandidateIds.has(id))

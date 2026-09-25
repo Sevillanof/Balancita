@@ -3,6 +3,7 @@ import Fastify, { type FastifyInstance, type FastifyReply } from 'fastify'
 import { randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { refreshSimulations } from '../features/simulations/refresh-simulations.ts'
+import { getActiveCandidates } from '../features/simulations/candidate-manifest.ts'
 import {
   listSimulationReportHistory,
   readSimulationReportHistoryDetail,
@@ -748,6 +749,16 @@ export async function buildApp(options: {
         .map((candle) => ({ ...candle, timestamp: candle.timestamp * 1000 })),
     })
   })
+
+  app.get('/api/strategies', (_request, reply) =>
+    reply.send({
+      strategies: getActiveCandidates().map((candidate) => ({
+        id: candidate.candidateId,
+        status: candidate.status,
+        name: candidate.candidateId,
+      })),
+    }),
+  )
 
   app.post('/api/replay/fast-run', (request, reply) => {
     const body = (request.body ?? {}) as {

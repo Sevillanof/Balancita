@@ -19,6 +19,48 @@ function temporaryStore() {
 }
 
 describe('Fast Replay API', () => {
+  it('lists active strategy candidates only and rejects archived candidate ids', async () => {
+    const store = temporaryStore()
+    const app = await buildApp({
+      config: serverConfigFrom({
+        MARKET_COLLECTOR_ENABLED: 'false',
+        GEMINI_SERVER_CORS_ORIGIN: '',
+      }),
+      overrides: { marketStore: store },
+    })
+    const response = await app.inject({ method: 'GET', url: '/api/strategies' })
+    expect(response.statusCode).toBe(200)
+    expect(response.json().strategies).toEqual([
+      {
+        id: 'micro-trend-pullback',
+        status: 'active',
+        name: 'micro-trend-pullback',
+      },
+      {
+        id: 'micro-bollinger-reversion',
+        status: 'active',
+        name: 'micro-bollinger-reversion',
+      },
+      {
+        id: 'micro-donchian-breakout',
+        status: 'active',
+        name: 'micro-donchian-breakout',
+      },
+      {
+        id: 'micro-regime-adapter',
+        status: 'active',
+        name: 'micro-regime-adapter',
+      },
+    ])
+    const archived = await app.inject({
+      method: 'POST',
+      url: '/api/replay/fast-run',
+      payload: { strategy_id: 'technical-default' },
+    })
+    expect(archived.statusCode).toBe(400)
+    await app.close()
+  })
+
   it('serves bounded chronological paper audit events and validates the requested limit', async () => {
     const store = temporaryStore()
     store.insertPaperOrder({

@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { TimestampMs } from '../../domain/contracts.ts'
 import { MarketStore } from '../market-data/market-store.ts'
-import { SIMULATION_CANDIDATES } from './candidate-manifest.ts'
+import { getActiveCandidates } from './candidate-manifest.ts'
 import { runSimulationsCli } from './simulations-cli.ts'
 import { runSimulationsFromLiveDb } from './simulations-runner.ts'
 import {
@@ -84,7 +84,7 @@ describe('simulations runner profitability wiring', () => {
     expect(block!.entryThreshold).toBe(0.55)
     expect(block!.exitUpThreshold).toBe(0.45)
     expect(block!.exitDownThreshold).toBe(0.55)
-    expect(block!.candidates).toHaveLength(SIMULATION_CANDIDATES.length)
+    expect(block!.candidates).toHaveLength(getActiveCandidates().length)
     for (const entry of block!.candidates) {
       expect(entry.selection.ledgerHash).toMatch(/^[0-9a-f]{64}$/)
       expect(entry.validation.ledgerHash).toMatch(/^[0-9a-f]{64}$/)
