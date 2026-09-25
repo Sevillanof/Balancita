@@ -1,0 +1,33 @@
+server/src/app/app.ts
+  s_4349410c7a7571::t_2788a3e46b3591 33-40,608-658
+server/src/features/market-data/kraken-ohlc-collector.ts
+  s_4349410c7a7571::t_03bf31a4743050 317-325,330-336
+server/src/features/paper-trading/strategies-analytics.test.ts
+  s_4349410c7a7571::t_d964766b7acbcd 1-274
+server/src/features/paper-trading/strategies-analytics.ts
+  s_4349410c7a7571::t_c9f2143cda166a 1-325
+src/app/BtcEurDashboard.tsx
+  s_4349410c7a7571::t_fd9bfe4e311d93 38,281-282
+src/features/strategy-analytics/StrategyAnalyticsPanel.test.tsx
+  s_4349410c7a7571::t_22907613650f32 1-179
+src/features/strategy-analytics/strategy-analytics.css
+  s_4349410c7a7571::t_b1722c36e90b55 1-34
+src/features/strategy-analytics/useStrategyAnalytics.ts
+  s_4349410c7a7571::t_bec96c922fc673 1-121
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4358a00ea338cd5a40171addc9ca5f483ddc8d58",
+  "prompts": {},
+  "sessions": {
+    "s_4349410c7a7571": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f2600ced0ffezzMy9z6N7FI7H2",
+        "model": "gpt-6-luna-fast"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
