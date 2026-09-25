@@ -1,0 +1,27 @@
+server/src/features/simulations/fast-replay-engine.test.ts
+  s_158a40fe8efcff::t_266295caea5ba9 2,5-42,109,123,125,128,144,147,161-163
+server/src/features/simulations/fast-replay-engine.ts
+  s_158a40fe8efcff::t_1fde1381ad734e 121-125,130-136,138-143,152,328,330,333,335,337,339,341-342,344,347-349,353-382
+server/src/features/simulations/micro-strategy.test.ts
+  s_158a40fe8efcff::t_cf52813f4724e0 92-126
+server/src/features/simulations/paper-forward.test.ts
+  s_158a40fe8efcff::t_d906b0dbc7d282 1,43-44,46-47,54-68,75,78-95,280-307
+server/src/features/simulations/paper-forward.ts
+  s_158a40fe8efcff::t_3d8f1a2ddceb6a 12,25,102,104,108,111-116,123,143-157,361,365,367,369,371,373,375,377
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5bca5ab70e24c1c15ba9d7a4d81d58fa5be5cfd3",
+  "prompts": {},
+  "sessions": {
+    "s_158a40fe8efcff": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f27d0f239ffeRpGkIyh1ZSNBQO",
+        "model": "gpt-6-luna-fast"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
