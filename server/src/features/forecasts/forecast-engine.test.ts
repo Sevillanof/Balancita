@@ -65,7 +65,7 @@ describe('forecast engine', () => {
   it('preserves a valid empirical prior for a neutral micro regime while marking it abstained', () => {
     const forecast = generateForecast({
       ...baseInput(),
-      ruleVersion: 'simulation-micro-regime-adapter.v1',
+      ruleVersion: 'simulation-micro-regime-adapter-15m.v1',
       microProbabilityOverride: {
         probabilities: { up: 0.2, down: 0.3, flat: 0.5 },
         notReadyReason: 'micro_regime_not_ready',
@@ -82,7 +82,7 @@ describe('forecast engine', () => {
   it('keeps engine invalidity and unavailable priors on the neutral fallback', () => {
     const input = {
       ...baseInput(),
-      ruleVersion: 'simulation-micro-regime-adapter.v1',
+      ruleVersion: 'simulation-micro-regime-adapter-15m.v1',
       microProbabilityOverride: {
         probabilities: { up: 0.2, down: 0.3, flat: 0.5 },
         notReadyReason: 'micro_regime_not_ready',
@@ -93,7 +93,11 @@ describe('forecast engine', () => {
       technicalFeatureSnapshot: {
         ...input.technicalFeatureSnapshot,
         ready: false,
-        warmUp: { requiredCandles: 50, availableCandles: 20, missingCandles: 30 },
+        warmUp: {
+          requiredCandles: 50,
+          availableCandles: 20,
+          missingCandles: 30,
+        },
       },
     })
     const futureNews = generateForecast({
@@ -118,7 +122,7 @@ describe('forecast engine', () => {
     })
     const noPrior = generateForecast({
       ...baseInput(),
-      ruleVersion: 'simulation-micro-regime-adapter.v1',
+      ruleVersion: 'simulation-micro-regime-adapter-15m.v1',
       microProbabilityOverride: {
         probabilities: null,
         notReadyReason: 'empirical_prior_not_ready',

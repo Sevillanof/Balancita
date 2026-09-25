@@ -10,10 +10,11 @@ const readyFeatures = {
   ema9: 12,
   ema21: 11,
   sma50: 10,
-  rsi14: 30,
+  rsi14: 29,
   close: 12,
   bollingerLower: 13,
   bollingerMid: 14,
+  bollingerWidth: 2,
   atr14: 1,
   priorAtrSma20: 2,
   donchianHigh20: 11,
@@ -28,49 +29,22 @@ describe('micro strategy target state', () => {
   it('applies C27 close-only exit thresholds in priority order with causal hold bars', () => {
     const input = {
       entryPrice: 100,
-      close: 100.8,
+      close: 100.5,
       donchianMid: 99,
-      barsHeld: 29,
+      barsHeld: 7,
     }
-    expect(evaluateC27Exit(input)).toBe('take-profit')
-    expect(evaluateC27Exit({ ...input, close: 100.3 })).toBe('hold')
-    expect(evaluateC27Exit({ ...input, close: 100.299, barsHeld: 9 })).toBe(
-      'hold',
-    )
-    expect(evaluateC27Exit({ ...input, close: 100.299, barsHeld: 29 })).toBe(
-      'hold',
-    )
-    expect(evaluateC27Exit({ ...input, close: 100.299, barsHeld: 30 })).toBe(
+    expect(evaluateC27Exit({ ...input, close: 101.8 })).toBe('take-profit')
+    expect(evaluateC27Exit({ ...input, close: 100.5 })).toBe('hold')
+    expect(evaluateC27Exit({ ...input, close: 100.49, barsHeld: 8 })).toBe(
       'time-stop',
     )
-    expect(evaluateC27Exit({ ...input, close: 99.4, barsHeld: 1 })).toBe(
+    expect(evaluateC27Exit({ ...input, close: 99.1 })).toBe('stop-loss')
+    expect(evaluateC27Exit({ ...input, close: 100, donchianMid: 100.01 })).toBe(
       'stop-loss',
     )
-    expect(
-      evaluateC27Exit({
-        ...input,
-        close: 100,
-        donchianMid: 100.01,
-        barsHeld: 1,
-      }),
-    ).toBe('stop-loss')
-    expect(evaluateC27Exit({ ...input, close: 99.4, barsHeld: 30 })).toBe(
-      'time-stop',
+    expect(evaluateC27Exit({ ...input, close: 99.1, barsHeld: 8 })).toBe(
+      'stop-loss',
     )
-    expect(evaluateC27Exit({ ...input, close: 100.3, barsHeld: 30 })).toBe(
-      'hold',
-    )
-    expect(evaluateC27Exit({ ...input, close: 100.8, barsHeld: 30 })).toBe(
-      'take-profit',
-    )
-    expect(
-      evaluateC27Exit({
-        ...input,
-        close: 100,
-        donchianMid: 100.01,
-        barsHeld: 30,
-      }),
-    ).toBe('time-stop')
   })
 
   it('uses the macro Donchian mid for C27 stop-loss rather than a differing 1m mid', () => {

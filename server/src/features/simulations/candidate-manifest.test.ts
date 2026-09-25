@@ -40,8 +40,8 @@ describe('simulation candidate manifest', () => {
     )
   })
 
-  it('is versioned as v3 with the original 24 plus four experimental candidates', () => {
-    expect(SIMULATION_MANIFEST_VERSION).toBe('simulations-manifest.v3')
+  it('is versioned as v4 with the original 24 plus four native 15m candidates', () => {
+    expect(SIMULATION_MANIFEST_VERSION).toBe('simulations-manifest.v4')
     expect(SIMULATION_CANDIDATES.length).toBe(28)
   })
 
@@ -260,22 +260,22 @@ describe('simulation candidate manifest', () => {
     ).toEqual([
       {
         candidateId: 'micro-trend-pullback',
-        ruleVersion: 'simulation-micro-trend-pullback.v1',
+        ruleVersion: 'simulation-micro-trend-pullback-15m.v1',
         microStrategy: 'trend-pullback',
       },
       {
         candidateId: 'micro-bollinger-reversion',
-        ruleVersion: 'simulation-micro-bollinger-reversion.v1',
+        ruleVersion: 'simulation-micro-bollinger-reversion-15m.v1',
         microStrategy: 'bollinger-reversion',
       },
       {
         candidateId: 'micro-donchian-breakout',
-        ruleVersion: 'simulation-micro-donchian-breakout.v1',
+        ruleVersion: 'simulation-micro-donchian-breakout-15m.v1',
         microStrategy: 'donchian-breakout',
       },
       {
         candidateId: 'micro-regime-adapter',
-        ruleVersion: 'simulation-micro-regime-adapter.v1',
+        ruleVersion: 'simulation-micro-regime-adapter-15m.v1',
         microStrategy: 'regime-adapter',
       },
     ])

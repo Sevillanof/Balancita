@@ -22,8 +22,15 @@ import type { MarketStore, PaperOrder } from '../market-data/market-store.ts'
 
 const INITIAL_CASH_EUR = 10_000
 const TICKET_EUR = 30
-const MAX_CANDLES = 55
 const MACRO_HISTORY_CANDLES = 1_200
+const REQUIRED_NATIVE_CANDLES = 50
+
+interface PendingExecution {
+  readonly action: 'BUY' | 'SELL'
+  readonly signalTimestamp: number
+  readonly targetPct: number
+  readonly state: MicroStrategyState
+}
 
 export interface PaperForwardStatus {
   enabled: boolean
@@ -56,11 +63,13 @@ export class PaperForwardService {
   private readonly options: { store: MarketStore; clock?: () => number }
   private candles: FastReplayCandle[] = []
   private states = new Map<FastReplayStrategyId, MicroStrategyState>()
+  private pending = new Map<FastReplayStrategyId, PendingExecution>()
   private lastProcessed: number | null = null
   private lastReceived: number | null = null
   private lastReceivedAt: number | null = null
   private running = false
   private streamState = 'disabled'
+  private lastEvaluatedBucketEnd: number | null = null
 
   constructor(options: { store: MarketStore; clock?: () => number }) {
     this.options = options
@@ -100,21 +109,42 @@ export class PaperForwardService {
     this.options.store.insertOhlcCandles([
       { ...candle, source: 'kraken_ws_ohlc' },
     ])
+    const bucketStart = Math.floor(candle.timestamp / 900) * 900
+    for (const id of FAST_REPLAY_STRATEGIES) {
+      const pending = this.pending.get(id)
+      if (pending !== undefined && candle.timestamp > pending.signalTimestamp)
+        this.pending.delete(id)
+      else if (
+        candle.timestamp === bucketStart &&
+        pending?.signalTimestamp === candle.timestamp
+      ) {
+        this.executePending(id, pending, candle.open)
+        this.pending.delete(id)
+      }
+    }
     const persistedHistory = [
       ...this.options.store.latestContinuousOhlcCandles(
         MACRO_HISTORY_CANDLES,
         candle.timestamp * 1000,
       ),
     ]
-    this.candles = persistedHistory.slice(-MAX_CANDLES)
-    if (this.candles.length < MAX_CANDLES) return
-    const features = fastReplayFeaturesAt(this.candles)
+    this.candles = persistedHistory
     const macroCandles = resample1mTo15m(
       persistedHistory,
       candle.timestamp + 60,
     )
-    const macroFeatures =
-      macroCandles.length === 0 ? null : fastReplayFeaturesAt(macroCandles)
+    const completed = macroCandles.at(-1)
+    const bucketEnd = bucketStart + 900
+    if (
+      completed === undefined ||
+      completed.timestamp + 900 !== bucketEnd ||
+      this.lastEvaluatedBucketEnd === bucketEnd
+    )
+      return
+    this.lastEvaluatedBucketEnd = bucketEnd
+    if (macroCandles.length < REQUIRED_NATIVE_CANDLES) return
+    const features = fastReplayFeaturesAt(macroCandles)
+    const macroFeatures = features
     for (const id of FAST_REPLAY_STRATEGIES) {
       const prior = this.states.get(id) ?? initialMicroState()
       const decision = evaluateMicroTarget(
@@ -128,10 +158,9 @@ export class PaperForwardService {
         id === 'micro-donchian-breakout' && position !== null
           ? evaluateC27ExitWithMacroContext({
               entryPrice: position.entryPrice,
-              close: candle.close,
+              close: completed.close,
               macroContext: macroContextWhenReady(macroFeatures),
-              barsHeld:
-                Math.floor((candle.timestamp - position.openTime) / 60) + 1,
+              barsHeld: Math.floor((bucketEnd - position.openTime) / 900),
             }) === 'hold'
             ? 'long'
             : 'flat'
@@ -159,7 +188,7 @@ export class PaperForwardService {
         if (!passed) {
           const inserted = this.options.store.insertPaperOrder({
             strategyId: id,
-            signalTimestamp: candle.timestamp + 60,
+            signalTimestamp: bucketEnd,
             action: 'BUY',
             gatePassed: false,
             price: candle.close,
@@ -173,50 +202,23 @@ export class PaperForwardService {
             this.states.set(id, { ...decision.state, exposure: 'flat' })
           continue
         }
-        if (nextOpen === undefined) {
-          this.states.set(id, { ...decision.state, exposure: 'flat' })
-          continue
-        }
-        const price = nextOpen * (1 + FAST_REPLAY_SLIPPAGE)
-        const inserted = this.options.store.insertPaperOrder({
-          strategyId: id,
-          signalTimestamp: candle.timestamp + 60,
+        this.pending.set(id, {
           action: 'BUY',
-          gatePassed: true,
-          price,
-          executionTimestamp: candle.timestamp + 60,
-          amountEur: TICKET_EUR,
-          feeEur: TICKET_EUR * FAST_REPLAY_FEE,
-          pnlEur: null,
+          signalTimestamp: bucketEnd,
           targetPct: distance,
+          state: decision.state,
         })
-        if (inserted)
-          this.states.set(id, { ...decision.state, exposure: 'long' })
+        this.states.set(id, { ...decision.state, exposure: 'flat' })
       } else if (position !== null && target === 'flat') {
-        if (nextOpen === undefined) {
-          this.states.set(id, { ...decision.state, exposure: 'long' })
-          continue
-        }
-        const price = nextOpen * (1 - FAST_REPLAY_SLIPPAGE)
-        const gross = position.quantityBtc * price
-        const fee = gross * FAST_REPLAY_FEE
-        const pnl = gross - fee - position.entryCost
-        const inserted = this.options.store.insertPaperOrder({
-          strategyId: id,
-          signalTimestamp: candle.timestamp + 60,
+        this.pending.set(id, {
           action: 'SELL',
-          gatePassed: true,
-          price,
-          executionTimestamp: candle.timestamp + 60,
-          amountEur: TICKET_EUR,
-          feeEur: fee,
-          pnlEur: pnl,
+          signalTimestamp: bucketEnd,
           targetPct: 0,
+          state: decision.state,
         })
-        if (inserted)
-          this.states.set(id, { ...decision.state, exposure: 'flat' })
       } else this.states.set(id, decision.state)
     }
+    void nextOpen
   }
 
   status(enabled = true): PaperForwardStatus {
@@ -252,7 +254,9 @@ export class PaperForwardService {
       last_received_event_time: this.lastReceived,
       last_received_at: this.lastReceivedAt,
       last_processed_event_time: this.lastProcessed,
-      candles_ready: this.candles.length >= MAX_CANDLES,
+      candles_ready:
+        resample1mTo15m(this.candles, Number.MAX_SAFE_INTEGER).length >=
+        REQUIRED_NATIVE_CANDLES,
       account: {
         balance_eur: balance,
         btc_balance: btcBalance,
@@ -295,10 +299,15 @@ export class PaperForwardService {
         ? []
         : [
             ...this.options.store.latestContinuousOhlcCandles(
-              MAX_CANDLES,
+              MACRO_HISTORY_CANDLES,
               latestTimestamp * 1000,
             ),
           ]
+    const completed = resample1mTo15m(this.candles, Number.MAX_SAFE_INTEGER).at(
+      -1,
+    )
+    this.lastEvaluatedBucketEnd =
+      completed === undefined ? null : completed.timestamp + 900
   }
 
   private position(id: string): {
@@ -325,6 +334,49 @@ export class PaperForwardService {
       else current = null
     }
     return current
+  }
+
+  private executePending(
+    id: FastReplayStrategyId,
+    pending: PendingExecution,
+    barOpen: number,
+  ): void {
+    const position = this.position(id)
+    if (pending.action === 'BUY') {
+      if (position !== null) return
+      const price = barOpen * (1 + FAST_REPLAY_SLIPPAGE)
+      const inserted = this.options.store.insertPaperOrder({
+        strategyId: id,
+        signalTimestamp: pending.signalTimestamp,
+        action: 'BUY',
+        gatePassed: true,
+        price,
+        executionTimestamp: pending.signalTimestamp,
+        amountEur: TICKET_EUR,
+        feeEur: TICKET_EUR * FAST_REPLAY_FEE,
+        pnlEur: null,
+        targetPct: pending.targetPct,
+      })
+      if (inserted) this.states.set(id, { ...pending.state, exposure: 'long' })
+      return
+    }
+    if (position === null) return
+    const price = barOpen * (1 - FAST_REPLAY_SLIPPAGE)
+    const gross = position.quantityBtc * price
+    const fee = gross * FAST_REPLAY_FEE
+    const inserted = this.options.store.insertPaperOrder({
+      strategyId: id,
+      signalTimestamp: pending.signalTimestamp,
+      action: 'SELL',
+      gatePassed: true,
+      price,
+      executionTimestamp: pending.signalTimestamp,
+      amountEur: TICKET_EUR,
+      feeEur: fee,
+      pnlEur: gross - fee - position.entryCost,
+      targetPct: 0,
+    })
+    if (inserted) this.states.set(id, { ...pending.state, exposure: 'flat' })
   }
 }
 
@@ -365,9 +417,9 @@ export function candidateTargetPct(
     id === 'micro-trend-pullback'
       ? ((macro.atr14 ?? 0) * 2) / features.close
       : id === 'micro-bollinger-reversion'
-        ? macro.bollingerMid === null || macro.bollingerLower === null
+        ? macro.bollingerWidth == null
           ? 0
-          : (2 * (macro.bollingerMid - macro.bollingerLower)) / features.close
+          : macro.bollingerWidth / features.close
         : id === 'micro-donchian-breakout'
           ? macro.donchianHigh20 === null || macro.donchianLow20 == null
             ? 0

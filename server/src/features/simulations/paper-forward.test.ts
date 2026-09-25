@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { makeCandle } from './paper-forward-test-helpers.ts'
-import { candidateTargetPct, PaperForwardService } from './paper-forward.ts'
+import { PaperForwardService } from './paper-forward.ts'
 import { MarketStore } from '../market-data/market-store.ts'
 import {
   FAST_REPLAY_STRATEGIES,
@@ -16,6 +16,68 @@ import {
 } from './micro-strategy.ts'
 
 describe('PaperForwardService', () => {
+  it('evaluates completed 15m buckets once and fills a pending entry at the next bucket open', () => {
+    const store = new MarketStore({ path: ':memory:' })
+    const service = new PaperForwardService({ store })
+    const start = Math.floor(1_700_000_100 / 900) * 900
+    const history = Array.from({ length: 765 }, (_, index) => ({
+      timestamp: start + index * 60,
+      open: 100,
+      high: 101,
+      low: 99,
+      close: 100,
+      volume: 10,
+    }))
+    for (const candle of history.slice(0, 750))
+      service.processClosedCandle(candle)
+    const breakout = history.slice(750).map((candle, index) =>
+      index === 14
+        ? {
+            ...candle,
+            open: 101,
+            high: 103,
+            low: 100,
+            close: 102,
+            volume: 1_000,
+          }
+        : {
+            ...candle,
+            open: 100,
+            high: 103,
+            low: 100,
+            close: 102,
+            volume: 10,
+          },
+    )
+    for (const candle of breakout) service.processClosedCandle(candle)
+    const signalTimestamp = start + 51 * 900
+    expect(
+      store
+        .listPaperOrders()
+        .filter((order) => order.strategyId === 'micro-donchian-breakout'),
+    ).toHaveLength(0)
+    const next = {
+      timestamp: signalTimestamp,
+      open: 105,
+      high: 106,
+      low: 104,
+      close: 105,
+      volume: 10,
+    }
+    service.processClosedCandle(next)
+    service.processClosedCandle(next)
+    const buy = store
+      .listPaperOrders()
+      .find((order) => order.strategyId === 'micro-donchian-breakout')
+    expect(buy).toMatchObject({
+      action: 'BUY',
+      price: 105 * 1.0005,
+      executionTimestamp: signalTimestamp,
+      feeEur: 0.03,
+    })
+    store.close()
+  })
+
   it('starts with the shared ten-thousand-euro account and empty ledger', () => {
     const store = new MarketStore({ path: ':memory:' })
     const status = new PaperForwardService({ store }).status(false)
@@ -37,7 +99,7 @@ describe('PaperForwardService', () => {
     store.close()
   })
 
-  it('uses the identical 0.006 projected-target gate for all four candidates', () => {
+  it('uses strategy-specific native volatility gates', () => {
     const features = {
       ema9: null,
       ema21: null,
@@ -46,10 +108,11 @@ describe('PaperForwardService', () => {
       close: 1_000,
       bollingerLower: null,
       bollingerMid: 1_000,
-      atr14: 0.1,
+      bollingerWidth: 12,
+      atr14: 3.1,
       priorAtrSma20: null,
       donchianHigh20: 1_000.1,
-      donchianLow20: 999.9,
+      donchianLow20: 990,
       donchianMid20: null,
       volume: 10,
       priorVolumeSma20: null,
@@ -60,16 +123,18 @@ describe('PaperForwardService', () => {
       ...features,
       atr14: 3.1,
       bollingerMid: 1_006.1,
-      bollingerLower: 1_000,
+      bollingerLower: 994,
+      bollingerWidth: 12.2,
       donchianHigh20: 1_006.1,
-      donchianLow20: 1_000,
+      donchianLow20: 990,
       ready: true,
     }
     const weakMacro = {
       ...macro,
-      atr14: 0.1,
+      atr14: 3.1,
       bollingerMid: 1_000,
-      bollingerLower: 1_000,
+      bollingerLower: 999,
+      bollingerWidth: 1,
       donchianHigh20: 1_000.1,
       donchianLow20: 999.9,
     }
@@ -88,17 +153,17 @@ describe('PaperForwardService', () => {
           id,
           {
             ...features,
-            atr14: 10,
-            bollingerMid: 2_000,
-            donchianHigh20: 2_000,
-            donchianLow20: 1,
+            atr14: 1,
+            bollingerWidth: 1,
+            donchianHigh20: 1_000.1,
+            donchianLow20: 999.9,
           },
           id === 'micro-regime-adapter' ? 'range' : null,
           weakMacro,
         ),
       ).toBe(false)
     expect(fastReplayCanEnter('micro-trend-pullback', features, null)).toBe(
-      false,
+      true,
     )
     expect(FAST_REPLAY_STRATEGIES.map(fastReplayStrategyFor)).toEqual([
       'trend-pullback',
@@ -108,34 +173,23 @@ describe('PaperForwardService', () => {
     ])
   })
 
-  it('gates C26 on full 15m Bollinger width at the inclusive 0.006 boundary', () => {
+  it('gates C26 on native full Bollinger width at the inclusive 0.010 boundary', () => {
     const features = {
       close: 1_000,
-    } as ReturnType<typeof fastReplayFeaturesAt>
-    const macro = {
-      bollingerMid: 1_000,
-      bollingerLower: 997,
       ready: true,
+      bollingerWidth: 10,
     } as ReturnType<typeof fastReplayFeaturesAt>
 
     expect(
-      fastReplayCanEnter('micro-bollinger-reversion', features, null, macro),
+      fastReplayCanEnter('micro-bollinger-reversion', features, null),
     ).toBe(true)
     expect(
-      fastReplayCanEnter('micro-bollinger-reversion', features, null, {
-        ...macro,
-        bollingerLower: 997.001,
-      }),
+      fastReplayCanEnter(
+        'micro-bollinger-reversion',
+        { ...features, bollingerWidth: 9.999 },
+        null,
+      ),
     ).toBe(false)
-    expect(
-      fastReplayCanEnter('micro-regime-adapter', features, 'range', macro),
-    ).toBe(true)
-    expect(
-      candidateTargetPct('micro-bollinger-reversion', features, null, macro),
-    ).toBe(0.006)
-    expect(
-      candidateTargetPct('micro-regime-adapter', features, 'range', macro),
-    ).toBe(0.006)
   })
 
   it('maps all registered candidates to their existing raw-entry target rules', () => {
@@ -143,10 +197,11 @@ describe('PaperForwardService', () => {
       ema9: 102,
       ema21: 101,
       sma50: 97,
-      rsi14: 30,
+      rsi14: 29,
       close: 98,
       bollingerLower: 99,
       bollingerMid: 100,
+      bollingerWidth: 2,
       atr14: 1,
       priorAtrSma20: 2,
       donchianHigh20: 97,
@@ -308,7 +363,7 @@ describe('PaperForwardService', () => {
     store.close()
   })
 
-  it('keeps a restarted regime-adapter position open while its regime is neutral and abstained', () => {
+  it('keeps a restarted position open when native regime warm-up is incomplete', () => {
     const store = new MarketStore({ path: ':memory:' })
     const history = Array.from({ length: 55 }, (_, index) => {
       const base = makeCandle(index)
@@ -341,12 +396,6 @@ describe('PaperForwardService', () => {
       high: 20_007,
       low: 19_993,
     }
-    expect(
-      fastReplayFeaturesAt([...history, latest]).atrPercentile50,
-    ).toBeGreaterThanOrEqual(40)
-    expect(
-      fastReplayFeaturesAt([...history, latest]).atrPercentile50,
-    ).toBeLessThanOrEqual(60)
     const service = new PaperForwardService({ store })
     service.processClosedCandle(latest, 20_000)
     expect(service.status().active_positions).toHaveLength(1)
@@ -356,7 +405,7 @@ describe('PaperForwardService', () => {
     store.close()
   })
 
-  it('applies the C27 stop from the executed fill and sells at the next open', () => {
+  it('does not execute a C27 exit using a 1m open instead of the next 15m open', () => {
     const store = new MarketStore({ path: ':memory:' })
     const history = Array.from({ length: 55 }, (_, index) => {
       const base = makeCandle(index)
@@ -386,10 +435,7 @@ describe('PaperForwardService', () => {
     }
     service.processClosedCandle(exitCandle, 88)
     const sell = store.listPaperOrders().find((row) => row.action === 'SELL')
-    expect(sell).toMatchObject({
-      price: 88 * 0.9995,
-      executionTimestamp: exitCandle.timestamp + 60,
-    })
+    expect(sell).toBeUndefined()
     store.close()
   })
 
@@ -445,21 +491,18 @@ describe('PaperForwardService', () => {
     const service = new PaperForwardService({ store })
     service.processClosedCandle(exitCandle, 100.4)
     const sell = store.listPaperOrders().find((row) => row.action === 'SELL')
-    expect(sell).toMatchObject({
-      price: 100.4 * 0.9995,
-      executionTimestamp: exitCandle.timestamp + 60,
-    })
+    expect(sell).toBeUndefined()
     store.close()
   })
 
-  it('waits for 55 continuous closed candles and persists no row from snapshots', () => {
+  it('does not report ready before 50 complete native 15m candles', () => {
     const store = new MarketStore({ path: ':memory:' })
     const service = new PaperForwardService({ store })
-    for (let index = 0; index < 54; index += 1)
+    for (let index = 0; index < 749; index += 1)
       service.processClosedCandle(makeCandle(index))
     expect(service.status().execution_summary.total_signals).toBe(0)
     expect(store.listPaperOrders()).toHaveLength(0)
-    service.processClosedCandle(makeCandle(54))
+    service.processClosedCandle(makeCandle(749))
     expect(service.status().candles_ready).toBe(true)
     store.close()
   })
@@ -529,12 +572,12 @@ describe('PaperForwardService', () => {
 
   it('does not claim stored historical OHLC was processed by a fresh paper service', () => {
     const store = new MarketStore({ path: ':memory:' })
-    for (let index = 0; index < 55; index += 1)
+    for (let index = 0; index < 750; index += 1)
       store.insertOhlcCandles([makeCandle(index)])
     const service = new PaperForwardService({ store })
     expect(service.status().last_processed_event_time).toBeNull()
     expect(service.status().candles_ready).toBe(true)
-    const next = makeCandle(55)
+    const next = makeCandle(750)
     service.processClosedCandle(next)
     expect(service.status().last_processed_event_time).toBe(
       next.timestamp * 1000,
@@ -556,14 +599,14 @@ describe('PaperForwardService', () => {
 
   it('uses REST-refilled SQLite history for the next decision after a stream gap', () => {
     const store = new MarketStore({ path: ':memory:' })
-    const history = Array.from({ length: 55 }, (_, index) => makeCandle(index))
-    store.insertOhlcCandles(history.slice(0, 54))
+    const history = Array.from({ length: 750 }, (_, index) => makeCandle(index))
+    store.insertOhlcCandles(history.slice(0, 749))
     const service = new PaperForwardService({ store })
 
-    service.processClosedCandle(makeCandle(55))
+    service.processClosedCandle(makeCandle(750))
     expect(service.status().candles_ready).toBe(false)
-    store.insertOhlcCandles([history[54]!])
-    service.processClosedCandle(makeCandle(56))
+    store.insertOhlcCandles([history[749]!])
+    service.processClosedCandle(makeCandle(751))
 
     expect(service.status().candles_ready).toBe(true)
     store.close()

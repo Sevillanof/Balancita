@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { resample1mTo15m, runFastReplay } from './fast-replay-engine.ts'
+import {
+  fastReplayFeaturesAt,
+  resample1mTo15m,
+  runFastReplay,
+} from './fast-replay-engine.ts'
 
 describe('runFastReplay', () => {
   it('resamples only complete UTC-aligned buckets closed by the 1m cutoff', () => {
@@ -40,9 +44,24 @@ describe('runFastReplay', () => {
     expect(resample1mTo15m(candles.slice(0, 14), start + 10_000)).toEqual([])
   })
 
+  it('requires 50 ATR observations before exposing C28 percentile and computes it on native bars', () => {
+    const history = Array.from({ length: 64 }, (_, index) => ({
+      timestamp: 1_700_000_100 + index * 900,
+      open: 100 + index,
+      high: 102 + index,
+      low: 99 + index,
+      close: 101 + index,
+      volume: 1,
+    }))
+    expect(
+      fastReplayFeaturesAt(history.slice(0, 63)).atrPercentile50,
+    ).toBeNull()
+    expect(fastReplayFeaturesAt(history).atrPercentile50).not.toBeNull()
+  })
+
   it('rejects unsupported candidates and gaps, and returns deterministic metrics for a contiguous dataset', () => {
     const candles = Array.from({ length: 80 }, (_, index) => ({
-      timestamp: 1_700_000_000 + index * 60,
+      timestamp: 1_700_000_100 + index * 60,
       open: 30_000 + index,
       high: 30_002 + index,
       low: 29_999 + index,
@@ -54,7 +73,7 @@ describe('runFastReplay', () => {
       candles,
       ticketEur: 30,
     })
-    expect(result.candlesEvaluated).toBe(80)
+    expect(result.candlesEvaluated).toBe(5)
     expect(result.baselineUniformBrier).toBe(0.6667)
     expect(Number.isFinite(result.executionTimeMs)).toBe(true)
     expect(result.executionTimeMs).toBeGreaterThanOrEqual(0)
@@ -66,7 +85,7 @@ describe('runFastReplay', () => {
 
   it('does not score any forecast origin before a past outcome has matured', () => {
     const candles = Array.from({ length: 100 }, (_, index) => ({
-      timestamp: 1_700_000_000 + index * 60,
+      timestamp: 1_700_000_100 + index * 60,
       open: 30_000,
       high: 30_002,
       low: 29_999,
@@ -78,7 +97,7 @@ describe('runFastReplay', () => {
       candles,
       ticketEur: 30,
     })
-    expect(result.sampleCount).toBe(19)
+    expect(result.sampleCount).toBe(0)
   })
 
   it('does not emit a raw C27 breakout before macro Donchian warm-up', () => {
@@ -86,7 +105,7 @@ describe('runFastReplay', () => {
       const blockedBreakout = index === 66
       const postBreakout = index > 66
       return {
-        timestamp: 1_700_000_000 + index * 60,
+        timestamp: 1_700_000_100 + index * 60,
         open: blockedBreakout ? 100.2 : postBreakout ? 100.2 : 100,
         high: blockedBreakout ? 100.21 : postBreakout ? 100.25 : 100.05,
         low: blockedBreakout ? 100.19 : postBreakout ? 100.15 : 99.95,
@@ -102,13 +121,13 @@ describe('runFastReplay', () => {
     expect(result.trades).toEqual([])
     expect(result.rawSignalsCount).toBe(0)
     expect(result.gateRejectionsCount).toBe(0)
-    expect(result.sampleCount).toBe(1)
-    expect(result.brierScoreMulticlass).toBeCloseTo(0, 12)
+    expect(result.sampleCount).toBe(0)
+    expect(result.brierScoreMulticlass).toBeNull()
   })
 
   it('does not emit a C27 raw breakout when the 15m Donchian channel is unavailable', () => {
     const candles = Array.from({ length: 52 }, (_, index) => ({
-      timestamp: 1_700_000_000 + index * 60,
+      timestamp: 1_700_000_100 + index * 60,
       open: index === 51 ? 212 : index === 50 ? 210 : 100,
       high: index === 50 ? 211 : index === 51 ? 220 : 200,
       low: index === 50 ? 209 : 1,
@@ -127,7 +146,7 @@ describe('runFastReplay', () => {
 
   it('does not fabricate a terminal C27 breakout without 15m features', () => {
     const candles = Array.from({ length: 51 }, (_, index) => ({
-      timestamp: 1_700_000_000 + index * 60,
+      timestamp: 1_700_000_100 + index * 60,
       open: index === 50 ? 210 : 100,
       high: index === 50 ? 211 : 200,
       low: index === 50 ? 209 : 1,
@@ -163,8 +182,8 @@ describe('runFastReplay', () => {
     expect(result.gateRejectionsCount).toBe(0)
   })
 
-  it('uses 15m Donchian mid for Fast Replay C27 exit despite a different 1m mid', () => {
-    const start = Math.floor(1_700_000_000 / 900) * 900
+  it('does not fill a replay signal when its next native 15m open is incomplete', () => {
+    const start = Math.floor(1_700_000_100 / 900) * 900
     const candles = Array.from({ length: 1_103 }, (_, index) => {
       const breakout = index === 1_100
       const firstAfterBreakout = index === 1_101
@@ -206,16 +225,12 @@ describe('runFastReplay', () => {
       ticketEur: 30,
     })
 
-    expect(result.rawSignalsCount).toBe(1)
-    expect(result.gateRejectionsCount).toBe(0)
-    expect(result.trades.map(({ side }) => side)).toEqual(['buy', 'sell'])
-    expect(result.trades[1]?.timestamp).toBe(candles[1_102]?.timestamp)
-    expect(result.trades[1]?.price).toBeCloseTo(100.53 * 0.9995)
+    expect(result.trades).toEqual([])
   })
 
   it('runs the complete 720-candle path and exposes measured execution time', () => {
     const candles = Array.from({ length: 720 }, (_, index) => ({
-      timestamp: 1_700_000_000 + index * 60,
+      timestamp: 1_700_000_100 + index * 60,
       open: 30_000 + Math.sin(index / 8) * 20,
       high: 30_030 + Math.sin(index / 8) * 20,
       low: 29_970 + Math.sin(index / 8) * 20,
@@ -227,8 +242,76 @@ describe('runFastReplay', () => {
       candles,
       ticketEur: 30,
     })
-    expect(result.candlesEvaluated).toBe(720)
-    expect(result.sampleCount).toBe(639)
+    expect(result.candlesEvaluated).toBe(48)
+    expect(result.sampleCount).toBe(0)
     expect(Number.isFinite(result.executionTimeMs)).toBe(true)
+  })
+
+  it('evaluates only complete contiguous native 15m candles', () => {
+    const start = 1_700_000_100
+    const candles = Array.from({ length: 46 }, (_, index) => ({
+      timestamp: start + index * 60,
+      open: 30_000,
+      high: 30_002,
+      low: 29_999,
+      close: 30_001,
+      volume: 10,
+    }))
+    const result = runFastReplay({
+      strategyId: 'micro-bollinger-reversion',
+      candles,
+      ticketEur: 30,
+    })
+    expect(result.candlesEvaluated).toBe(3)
+  })
+
+  it('rejects gapped 1m replay input instead of silently dropping affected buckets', () => {
+    const start = 1_700_000_100
+    const candles = Array.from({ length: 31 }, (_, index) => ({
+      timestamp: start + index * 60,
+      open: 100,
+      high: 101,
+      low: 99,
+      close: 100,
+      volume: 1,
+    })).filter((_, index) => index !== 20)
+
+    expect(() =>
+      runFastReplay({
+        strategyId: 'micro-trend-pullback',
+        candles,
+        ticketEur: 30,
+      }),
+    ).toThrow(/contains 1 gap\(s\)/)
+  })
+
+  it('reports an open replay position without fabricating a terminal sell fill', () => {
+    const start = 1_700_000_100
+    const candles = Array.from({ length: 51 * 15 }, (_, index) => {
+      const nativeBar = Math.floor(index / 15)
+      const breakout = nativeBar === 49
+      const afterBreakout = nativeBar === 50
+      return {
+        timestamp: start + index * 60,
+        open: breakout || afterBreakout ? 102 : 100,
+        high: breakout ? 103 : afterBreakout ? 102.5 : 101,
+        low: breakout ? 99 : afterBreakout ? 101.5 : 99,
+        close: breakout || afterBreakout ? 102 : 100,
+        volume: breakout ? 20 : 1,
+      }
+    })
+    const result = runFastReplay({
+      strategyId: 'micro-donchian-breakout',
+      candles,
+      ticketEur: 30,
+    })
+
+    expect(result.trades.map(({ side }) => side)).toEqual(['buy'])
+    expect(result.openPositionAtEnd).toMatchObject({
+      entryPrice: 102 * 1.0005,
+      entryCostEur: 30.03,
+    })
+    expect(result.tradesCount).toBe(0)
+    expect(result.netPnlEur).toBe(0)
   })
 })

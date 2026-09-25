@@ -13,7 +13,7 @@ import { FIXED_PROBABILITY_MAP_VERSION } from './fixed-proportional-shift.ts'
  */
 export const PRODUCTION_RULE_VERSION = 'technical-direction.v1'
 
-export const SIMULATION_MANIFEST_VERSION = 'simulations-manifest.v3' as const
+export const SIMULATION_MANIFEST_VERSION = 'simulations-manifest.v4' as const
 
 /**
  * Frozen outcome band for the whole comparison. Varying it per variant would
@@ -324,7 +324,7 @@ export const SIMULATION_CANDIDATES: readonly SimulationCandidate[] = [
   candidate(
     'micro-trend-pullback',
     'micro-strategy',
-    'simulation-micro-trend-pullback.v1',
+    'simulation-micro-trend-pullback-15m.v1',
     {},
     {
       ...defaultParams(),
@@ -332,47 +332,47 @@ export const SIMULATION_CANDIDATES: readonly SimulationCandidate[] = [
       emaPeriod: 21,
       rsiPeriod: 14,
       atrPeriod: 14,
-      paramSetVersion: 'micro-trend-pullback.v1',
+      paramSetVersion: 'micro-trend-pullback-15m.v1',
     },
-    'Long while EMA9 exceeds EMA21, close exceeds SMA50 and RSI14 is below 42; exit below EMA21 or above RSI68.',
+    'Evaluates closed 15m bars: enter when EMA9 > EMA21, close > SMA50 and RSI14 < 45; exit when close < EMA21 or RSI14 > 68. Entry gate: 2*ATR14/close >= 0.006.',
     undefined,
     'trend-pullback',
   ),
   candidate(
     'micro-bollinger-reversion',
     'micro-strategy',
-    'simulation-micro-bollinger-reversion.v1',
+    'simulation-micro-bollinger-reversion-15m.v1',
     {},
     {
       ...defaultParams(),
       smaPeriod: 20,
       rsiPeriod: 14,
       atrPeriod: 14,
-      paramSetVersion: 'micro-bollinger-reversion.v1',
+      paramSetVersion: 'micro-bollinger-reversion-15m.v1',
     },
-    'Long below BB20 lower at RSI below 32 in a low ATR regime; exit at BB20 mid or RSI above 55.',
+    'Evaluates closed 15m bars: enter below BB20 lower when RSI14 < 30 and full Bollinger width/close >= 0.010; exit at or above BB20 mid or when RSI14 > 55.',
     undefined,
     'bollinger-reversion',
   ),
   candidate(
     'micro-donchian-breakout',
     'micro-strategy',
-    'simulation-micro-donchian-breakout.v1',
+    'simulation-micro-donchian-breakout-15m.v1',
     {},
     {
       ...defaultParams(),
       rsiPeriod: 14,
       atrPeriod: 14,
-      paramSetVersion: 'micro-donchian-breakout.v1',
+      paramSetVersion: 'micro-donchian-breakout-15m.v1',
     },
-    'Long on a previous-20-bar Donchian breakout confirmed by prior-volume mean; exit below channel mid.',
+    'Evaluates closed 15m bars: enter on Donchian20 breakout with volume > 1.25x prior volume SMA20 and Donchian width/close >= 0.008; exit at +1.80%, -0.90%, below Donchian mid, or after 8 bars below entry*1.005.',
     undefined,
     'donchian-breakout',
   ),
   candidate(
     'micro-regime-adapter',
     'micro-strategy',
-    'simulation-micro-regime-adapter.v1',
+    'simulation-micro-regime-adapter-15m.v1',
     {},
     {
       ...defaultParams(),
@@ -380,9 +380,9 @@ export const SIMULATION_CANDIDATES: readonly SimulationCandidate[] = [
       emaPeriod: 21,
       rsiPeriod: 14,
       atrPeriod: 14,
-      paramSetVersion: 'micro-regime-adapter.v1',
+      paramSetVersion: 'micro-regime-adapter-15m.v1',
     },
-    'Selects trend rules above ATR percentile 60 and range rules below 40, retaining the prior regime in between.',
+    'Evaluates closed 15m bars: ATR14 percentile over the last 50 ATR observations selects C25 above 60, C26 below 40, and retains the previous regime on [40,60].',
     undefined,
     'regime-adapter',
   ),

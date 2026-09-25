@@ -726,14 +726,13 @@ export async function buildApp(options: {
       !Number.isSafeInteger(start) ||
       !Number.isSafeInteger(end) ||
       start < 0 ||
-      end < start ||
-      end - start > 14 * 24 * 60 * 60_000
+      end < start
     )
       return reply.code(400).send({
         error: {
           code: 'invalid_request',
           message:
-            'start_time and end_time must be ordered epoch milliseconds spanning at most 14 days.',
+            'start_time and end_time must be ordered epoch milliseconds.',
         },
       })
     if (marketStore === undefined)
@@ -793,9 +792,6 @@ export async function buildApp(options: {
       typeof end !== 'number' ||
       !Number.isSafeInteger(end) ||
       end < start ||
-      (body.start_time !== undefined &&
-        body.end_time !== undefined &&
-        end - start > 14 * 24 * 60 * 60_000) ||
       typeof ticket !== 'number' ||
       !Number.isFinite(ticket) ||
       ticket <= 0
@@ -821,33 +817,8 @@ export async function buildApp(options: {
           message: 'At least 51 stored closed 1-minute candles are required.',
         },
       })
-    let segmentStart = requestedCandles.length - 1
-    while (
-      segmentStart > 0 &&
-      requestedCandles[segmentStart]!.timestamp -
-        requestedCandles[segmentStart - 1]!.timestamp ===
-        60
-    )
-      segmentStart -= 1
-    const candles = requestedCandles.slice(segmentStart)
-    if (candles.length < 51)
-      return reply.code(422).send({
-        error: {
-          code: 'insufficient_ohlc',
-          message: 'At least 51 stored closed 1-minute candles are required.',
-        },
-      })
+    const candles = requestedCandles
     try {
-      if (
-        (candles.at(-1)!.timestamp - candles[0]!.timestamp) * 1000 >
-        14 * 24 * 60 * 60_000
-      )
-        return reply.code(400).send({
-          error: {
-            code: 'invalid_request',
-            message: 'Fast Replay windows are limited to 14 days.',
-          },
-        })
       const bounds = {
         start_time: candles[0]!.timestamp * 1000,
         end_time: candles.at(-1)!.timestamp * 1000,

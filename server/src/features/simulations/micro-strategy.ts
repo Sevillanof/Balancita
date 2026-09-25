@@ -11,6 +11,8 @@ export interface MicroStrategyFeatures {
   readonly close: number
   readonly bollingerLower: number | null
   readonly bollingerMid: number | null
+  readonly bollingerUpper?: number | null
+  readonly bollingerWidth?: number | null
   readonly atr14: number | null
   readonly priorAtrSma20: number | null
   readonly donchianHigh20: number | null
@@ -56,14 +58,14 @@ export function evaluateC27Exit(input: {
   readonly donchianMid: number | null
   readonly barsHeld: number
 }): C27ExitReason {
-  if (input.close >= input.entryPrice * 1.008) return 'take-profit'
-  if (input.barsHeld >= 30 && input.close < input.entryPrice * 1.003)
-    return 'time-stop'
+  if (input.close >= input.entryPrice * 1.018) return 'take-profit'
   if (
-    input.close <= input.entryPrice * 0.994 ||
+    input.close <= input.entryPrice * 0.991 ||
     (input.donchianMid !== null && input.close < input.donchianMid)
   )
     return 'stop-loss'
+  if (input.barsHeld >= 8 && input.close < input.entryPrice * 1.005)
+    return 'time-stop'
   return 'hold'
 }
 
@@ -157,11 +159,11 @@ function evaluateDirect(
     strategy === 'trend-pullback'
       ? features.ema9! > features.ema21! &&
         features.close > features.sma50! &&
-        features.rsi14! < 42
+        features.rsi14! < 45
       : strategy === 'bollinger-reversion'
         ? features.close < features.bollingerLower! &&
-          features.rsi14! < 32 &&
-          features.atr14! < features.priorAtrSma20!
+          features.rsi14! < 30 &&
+          (features.bollingerWidth ?? 0) / features.close >= 0.01
         : macroDonchianHigh20 !== null &&
           features.close > macroDonchianHigh20 &&
           features.volume > 1.25 * features.priorVolumeSma20!

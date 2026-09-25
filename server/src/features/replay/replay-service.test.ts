@@ -124,7 +124,7 @@ describe('replay run orchestration', () => {
       result.forecasts[50]?.technicalFeatureSnapshot.values,
     ).toHaveProperty('bollingerMid')
     expect(result.forecasts[50]?.ruleVersion).toBe(
-      'simulation-micro-regime-adapter.v1',
+      'simulation-micro-regime-adapter-15m.v1',
     )
     expect(result.microTargets.some((entry) => entry.priorReady)).toBe(true)
     expect(

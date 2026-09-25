@@ -156,8 +156,9 @@ describe('Fast Replay API', () => {
       url: `/api/market/ohlc?start_time=${(now - 300) * 1000}&end_time=${now * 1000}`,
     })
     expect(ohlc.json().candles[0].timestamp).toBe((now - 300) * 1000)
+    const replayStart = Math.ceil((now + 60) / 900) * 900
     for (let index = 0; index < 80; index += 1) {
-      const timestamp = now - 10_000 + index * 60
+      const timestamp = replayStart + index * 60
       store.upsertOhlcCandles([
         {
           timestamp,
@@ -169,8 +170,8 @@ describe('Fast Replay API', () => {
         },
       ])
     }
-    const start = (now - 10_000) * 1000
-    const end = (now - 10_000 + 79 * 60) * 1000
+    const start = replayStart * 1000
+    const end = (replayStart + 79 * 60) * 1000
     const run = await app.inject({
       method: 'POST',
       url: '/api/replay/fast-run',
@@ -204,7 +205,7 @@ describe('Fast Replay API', () => {
       strategyId: 'micro-donchian-breakout',
       trades: run.json().trades,
       netPnlEur: run.json().netPnlEur,
-      candlesEvaluated: 80,
+      candlesEvaluated: 5,
       raw_signals_count: run.json().raw_signals_count,
       gate_rejections_count: run.json().gate_rejections_count,
       window: { start_time: start, end_time: end },
@@ -274,9 +275,10 @@ describe('Fast Replay API', () => {
     await app.close()
   })
 
-  it('runs and persists only the latest contiguous segment, and rejects a short latest segment', async () => {
+  it('replays the full persisted contiguous history and rejects short 1m history', async () => {
     const store = temporaryStore()
     const now = Math.floor(Date.now() / 1000)
+    const start = Math.ceil((now + 60) / 900) * 900
     const candle = (timestamp: number) => ({
       timestamp,
       open: 30_000,
@@ -285,13 +287,10 @@ describe('Fast Replay API', () => {
       close: 30_001,
       volume: 10,
     })
-    const older = Array.from({ length: 60 }, (_, i) =>
-      candle(now - 10_000 + i * 60),
+    const history = Array.from({ length: 780 }, (_, i) =>
+      candle(start + i * 60),
     )
-    const recent = Array.from({ length: 55 }, (_, i) =>
-      candle(now - 5_000 + i * 60),
-    )
-    store.insertOhlcCandles([...older, ...recent])
+    store.insertOhlcCandles(history)
     const app = await buildApp({
       config: serverConfigFrom({
         KRAKEN_WS_COLLECTOR_ENABLED: 'false',
@@ -304,16 +303,16 @@ describe('Fast Replay API', () => {
       url: '/api/replay/fast-run',
       payload: {
         strategy_id: 'micro-trend-pullback',
-        start_time: older[0]!.timestamp * 1000,
-        end_time: recent.at(-1)!.timestamp * 1000,
+        start_time: history[0]!.timestamp * 1000,
+        end_time: history.at(-1)!.timestamp * 1000,
       },
     })
     expect(response.statusCode).toBe(200)
     expect(response.json()).toMatchObject({
-      candlesEvaluated: 55,
+      candlesEvaluated: 52,
       window: {
-        start_time: recent[0]!.timestamp * 1000,
-        end_time: recent.at(-1)!.timestamp * 1000,
+        start_time: history[0]!.timestamp * 1000,
+        end_time: history.at(-1)!.timestamp * 1000,
       },
     })
     const saved = store.listFastReplayRuns()[0] as {
@@ -322,15 +321,15 @@ describe('Fast Replay API', () => {
     }
     expect(saved.request).toEqual({
       strategy_id: 'micro-trend-pullback',
-      start_time: recent[0]!.timestamp * 1000,
-      end_time: recent.at(-1)!.timestamp * 1000,
+      start_time: history[0]!.timestamp * 1000,
+      end_time: history.at(-1)!.timestamp * 1000,
       ticket_eur: 30,
     })
-    expect(saved.result.candlesEvaluated).toBe(55)
+    expect(saved.result.candlesEvaluated).toBe(52)
     await app.close()
 
     const shortStore = temporaryStore()
-    shortStore.insertOhlcCandles([...older, ...recent.slice(0, 50)])
+    shortStore.insertOhlcCandles(history.slice(0, 50))
     const shortApp = await buildApp({
       config: serverConfigFrom({
         KRAKEN_WS_COLLECTOR_ENABLED: 'false',
@@ -343,8 +342,8 @@ describe('Fast Replay API', () => {
       url: '/api/replay/fast-run',
       payload: {
         strategy_id: 'micro-trend-pullback',
-        start_time: older[0]!.timestamp * 1000,
-        end_time: recent[49]!.timestamp * 1000,
+        start_time: history[0]!.timestamp * 1000,
+        end_time: history[49]!.timestamp * 1000,
       },
     })
     expect(short.statusCode).toBe(422)

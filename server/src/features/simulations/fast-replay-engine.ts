@@ -46,16 +46,20 @@ export interface FastReplayResult {
   readonly baselineUniformBrier: 0.6667
   readonly baselineNoChangeBrier: number | null
   readonly trades: readonly FastReplayTrade[]
+  readonly openPositionAtEnd: {
+    readonly quantity: number
+    readonly entryPrice: number
+    readonly entryCostEur: number
+  } | null
   readonly gaps: readonly number[]
   readonly executionTimeMs: number
 }
-const HORIZON = 15
+const HORIZON = 1
 export const FAST_REPLAY_FEE = 0.001
 export const FAST_REPLAY_SLIPPAGE = 0.0005
 export const FAST_REPLAY_COST_GATE = 0.006
 const FEE = FAST_REPLAY_FEE
 const SLIPPAGE = FAST_REPLAY_SLIPPAGE
-const COST_GATE = FAST_REPLAY_COST_GATE
 
 export function fastReplayStrategyFor(
   id: FastReplayStrategyId,
@@ -87,16 +91,19 @@ export function runFastReplay(input: {
     throw new Error('Unsupported Fast Replay strategy.')
   if (!Number.isFinite(input.ticketEur) || input.ticketEur <= 0)
     throw new Error('ticket_eur must be finite and positive.')
-  const candles = [...input.candles].sort((a, b) => a.timestamp - b.timestamp)
-  validateCandles(candles)
+  const minuteCandles = [...input.candles].sort(
+    (a, b) => a.timestamp - b.timestamp,
+  )
+  validateCandles(minuteCandles)
   const gaps: number[] = []
-  for (let i = 1; i < candles.length; i += 1)
-    if (candles[i]!.timestamp - candles[i - 1]!.timestamp !== 60)
-      gaps.push(candles[i]!.timestamp)
+  for (let i = 1; i < minuteCandles.length; i += 1)
+    if (minuteCandles[i]!.timestamp - minuteCandles[i - 1]!.timestamp !== 60)
+      gaps.push(minuteCandles[i]!.timestamp)
   if (gaps.length > 0)
     throw new Error(
-      `OHLC dataset contains ${gaps.length} gap(s); Fast Replay requires contiguous 1-minute candles.`,
+      `OHLC dataset contains ${gaps.length} gap(s); Fast Replay requires contiguous 1-minute input.`,
     )
+  const candles = resample1mTo15m(minuteCandles, Number.MAX_SAFE_INTEGER)
   const trades: FastReplayTrade[] = []
   const closedPnls: number[] = []
   const forecasts: {
@@ -119,22 +126,11 @@ export function runFastReplay(input: {
   let sampleCount = 0
   let rawSignalsCount = 0
   let gateRejectionsCount = 0
-  const macroCandles = resample1mTo15m(candles, Number.MAX_SAFE_INTEGER)
-  const macroFeatures = macroCandles.map((_, macroIndex) =>
-    fastReplayFeaturesAt(macroCandles.slice(0, macroIndex + 1)),
-  )
-  let completedMacroCount = 0
-  for (let index = 50; index < candles.length; index += 1) {
+  for (let index = 49; index < candles.length; index += 1) {
     const candle = candles[index]!
     const history = candles.slice(0, index + 1)
     const features = fastReplayFeaturesAt(history)
-    const cutoff = candle.timestamp + 60
-    while (
-      completedMacroCount < macroCandles.length &&
-      macroCandles[completedMacroCount]!.timestamp + 900 <= cutoff
-    )
-      completedMacroCount += 1
-    const macro = macroFeatures[completedMacroCount - 1] ?? null
+    const macro = features
     const strategy = fastReplayStrategyFor(strategyId as FastReplayStrategyId)
     const decision = evaluateMicroTarget(
       strategy,
@@ -154,7 +150,7 @@ export function runFastReplay(input: {
         )
       ) {
         const next = candles[index + 1]
-        if (next !== undefined) {
+        if (next !== undefined && next.timestamp === candle.timestamp + 900) {
           const price = next.open * (1 + SLIPPAGE)
           const quantity = input.ticketEur / price
           const feeEur = input.ticketEur * FEE
@@ -195,7 +191,7 @@ export function runFastReplay(input: {
       state.exposure === 'long'
     ) {
       const next = candles[index + 1]
-      if (next !== undefined) {
+      if (next !== undefined && next.timestamp === candle.timestamp + 900) {
         const price = next.open * (1 - SLIPPAGE)
         const proceedsGross = position.quantity * price
         const feeEur = proceedsGross * FEE
@@ -271,24 +267,6 @@ export function runFastReplay(input: {
       })
     }
   }
-  if (position !== null && candles.length > 0) {
-    const last = candles.at(-1)!
-    const price = last.close * (1 - SLIPPAGE)
-    const proceedsGross = position.quantity * price
-    const feeEur = proceedsGross * FEE
-    const pnlEur = proceedsGross - feeEur - position.entryCost
-    trades.push({
-      side: 'sell',
-      timestamp: last.timestamp,
-      price,
-      quantity: position.quantity,
-      feeEur,
-      pnlEur,
-    })
-    closedPnls.push(pnlEur)
-    if (pnlEur > 0) grossWins += pnlEur
-    else grossLosses += Math.abs(pnlEur)
-  }
   return {
     strategyId: strategyId as FastReplayStrategyId,
     candlesEvaluated: candles.length,
@@ -313,6 +291,14 @@ export function runFastReplay(input: {
     baselineNoChangeBrier:
       sampleCount === 0 ? null : noChangeBrierSum / sampleCount,
     trades,
+    openPositionAtEnd:
+      position === null
+        ? null
+        : {
+            quantity: position.quantity,
+            entryPrice: position.entryPrice,
+            entryCostEur: position.entryCost,
+          },
     gaps,
     executionTimeMs: performance.now() - started,
   }
@@ -328,34 +314,34 @@ export function fastReplayCanEnter(
   activeRegime: 'trend' | 'range' | null,
   macroFeatures: MicroStrategyFeatures | null = null,
 ): boolean {
-  if (macroFeatures?.ready !== true) return false
+  void macroFeatures
+  if (features.ready !== true) return false
   const distance =
     id === 'micro-trend-pullback'
-      ? macroFeatures?.atr14 == null
+      ? features.atr14 == null
         ? 0
-        : (2 * macroFeatures.atr14) / features.close
+        : (2 * features.atr14) / features.close
       : id === 'micro-bollinger-reversion'
-        ? macroFeatures?.bollingerMid == null ||
-          macroFeatures.bollingerLower == null
+        ? features.bollingerWidth == null
           ? 0
-          : (2 * (macroFeatures.bollingerMid - macroFeatures.bollingerLower)) /
-            features.close
+          : features.bollingerWidth / features.close
         : id === 'micro-donchian-breakout'
-          ? macroFeatures?.donchianHigh20 == null ||
-            macroFeatures.donchianLow20 == null
+          ? features.donchianHigh20 == null || features.donchianLow20 == null
             ? 0
-            : (macroFeatures.donchianHigh20 - macroFeatures.donchianLow20) /
+            : (features.donchianHigh20 - features.donchianLow20) /
               features.close
           : activeRegime === 'trend'
-            ? ((macroFeatures?.atr14 ?? 0) * 2) / features.close
-            : activeRegime === 'range' &&
-                macroFeatures?.bollingerMid != null &&
-                macroFeatures.bollingerLower != null
-              ? (2 *
-                  (macroFeatures.bollingerMid - macroFeatures.bollingerLower)) /
-                features.close
+            ? ((features.atr14 ?? 0) * 2) / features.close
+            : activeRegime === 'range' && features.bollingerWidth != null
+              ? features.bollingerWidth / features.close
               : 0
-  return distance >= COST_GATE
+  const threshold =
+    id === 'micro-bollinger-reversion'
+      ? 0.01
+      : id === 'micro-donchian-breakout'
+        ? 0.008
+        : FAST_REPLAY_COST_GATE
+  return distance >= threshold
 }
 
 export function resample1mTo15m(
@@ -373,7 +359,12 @@ export function resample1mTo15m(
   }
   const result: FastReplayCandle[] = []
   for (const [timestamp, rows] of buckets) {
-    if (timestamp + 900 > cutoffEpochSeconds || rows.length !== 15) continue
+    if (
+      timestamp % 900 !== 0 ||
+      timestamp + 900 > cutoffEpochSeconds ||
+      rows.length !== 15
+    )
+      continue
     if (rows.some((row, index) => row.timestamp !== timestamp + index * 60))
       continue
     result.push({
@@ -411,6 +402,11 @@ export function fastReplayFeaturesAt(
     bollingerMid === null
       ? null
       : bollingerMid -
+        2 * Math.sqrt(mean(bb.map((value) => (value - bollingerMid) ** 2)))
+  const bollingerUpper =
+    bollingerMid === null
+      ? null
+      : bollingerMid +
         2 * Math.sqrt(mean(bb.map((value) => (value - bollingerMid) ** 2)))
   const channel = history.slice(0, -1).slice(-20)
   const donchianHigh20 =
@@ -453,7 +449,7 @@ export function fastReplayFeaturesAt(
     .slice(-50)
     .filter((value): value is number => value !== null)
   const atrPercentile50 =
-    atr14 === null || atrWindow.length === 0
+    atr14 === null || atrWindow.length < 50
       ? null
       : (atrWindow.filter((value) => value <= atr14).length /
           atrWindow.length) *
@@ -466,6 +462,11 @@ export function fastReplayFeaturesAt(
     close,
     bollingerLower,
     bollingerMid,
+    bollingerUpper,
+    bollingerWidth:
+      bollingerUpper === null || bollingerLower === null
+        ? null
+        : bollingerUpper - bollingerLower,
     atr14,
     priorAtrSma20,
     donchianHigh20,
