@@ -1,0 +1,33 @@
+server/src/features/simulations/fast-replay-engine.ts
+  s_24c3935ad96aa8::t_aa6b0f9723f201 338-339,341-342,351-356
+server/src/features/simulations/micro-strategy.test.ts
+  s_95ee877f1a38e0::t_ee6f3f9f159eeb 33,40-43,57,60-73
+server/src/features/simulations/micro-strategy.ts
+  s_24c3935ad96aa8::t_ff398e7f301852 60
+server/src/features/simulations/paper-forward.ts
+  s_95ee877f1a38e0::t_7817ba78aab87b 358,368,370,377-381
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2158382dd2833f0fe92e00fbd739e220e40fcbb4",
+  "prompts": {},
+  "sessions": {
+    "s_24c3935ad96aa8": {
+      "agent_id": {
+        "tool": "github-copilot",
+        "id": "9c0a27f1-9c6a-4f2f-8c58-e2a5ceb5d737",
+        "model": "copilot/gpt-5.6-sol"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    },
+    "s_95ee877f1a38e0": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f27999968ffezffhv6mpRFxe1v",
+        "model": "gpt-6-luna-fast"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
