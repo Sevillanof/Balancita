@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { makeCandle } from './paper-forward-test-helpers.ts'
 import { PaperForwardService } from './paper-forward.ts'
 import { MarketStore } from '../market-data/market-store.ts'
@@ -40,16 +40,31 @@ describe('PaperForwardService', () => {
       rsi14: null,
       close: 1_000,
       bollingerLower: null,
-      bollingerMid: 1_006.1,
-      atr14: 3.1,
+      bollingerMid: 1_000,
+      atr14: 0.1,
       priorAtrSma20: null,
-      donchianHigh20: 1_006.1,
-      donchianLow20: 1_000,
+      donchianHigh20: 1_000.1,
+      donchianLow20: 999.9,
       donchianMid20: null,
       volume: 10,
       priorVolumeSma20: null,
       atrPercentile50: null,
       ready: true,
+    }
+    const macro = {
+      ...features,
+      atr14: 3.1,
+      bollingerMid: 1_006.1,
+      donchianHigh20: 1_006.1,
+      donchianLow20: 1_000,
+      ready: true,
+    }
+    const weakMacro = {
+      ...macro,
+      atr14: 0.1,
+      bollingerMid: 1_000,
+      donchianHigh20: 1_000.1,
+      donchianLow20: 999.9,
     }
     for (const id of FAST_REPLAY_STRATEGIES)
       expect(
@@ -57,8 +72,27 @@ describe('PaperForwardService', () => {
           id,
           features,
           id === 'micro-regime-adapter' ? 'range' : null,
+          macro,
         ),
       ).toBe(true)
+    for (const id of FAST_REPLAY_STRATEGIES)
+      expect(
+        fastReplayCanEnter(
+          id,
+          {
+            ...features,
+            atr14: 10,
+            bollingerMid: 2_000,
+            donchianHigh20: 2_000,
+            donchianLow20: 1,
+          },
+          id === 'micro-regime-adapter' ? 'range' : null,
+          weakMacro,
+        ),
+      ).toBe(false)
+    expect(fastReplayCanEnter('micro-trend-pullback', features, null)).toBe(
+      false,
+    )
     expect(FAST_REPLAY_STRATEGIES.map(fastReplayStrategyFor)).toEqual([
       'trend-pullback',
       'bollinger-reversion',
@@ -239,6 +273,34 @@ describe('PaperForwardService', () => {
     expect(service.status().execution_summary.total_signals).toBe(0)
     expect(store.listPaperOrders()).toHaveLength(0)
     service.processClosedCandle(makeCandle(54))
+    expect(service.status().candles_ready).toBe(true)
+    store.close()
+  })
+
+  it('loads bounded persisted 1m history for causal 15m macro warm-up', () => {
+    const store = new MarketStore({ path: ':memory:' })
+    const history = Array.from({ length: 1_200 }, (_, index) => {
+      const candle = makeCandle(index)
+      const range = 10 + (index % 7)
+      return {
+        ...candle,
+        high: candle.close + range,
+        low: candle.close - range,
+        volume: 10,
+      }
+    })
+    store.insertOhlcCandles(history)
+    const query = vi.spyOn(store, 'latestContinuousOhlcCandles')
+    const service = new PaperForwardService({ store })
+    const next = makeCandle(1_200)
+    service.processClosedCandle(next)
+    expect(query).toHaveBeenCalled()
+    expect(
+      query.mock.calls.some(
+        ([limit, cutoff]) =>
+          limit >= 1_000 && cutoff === next.timestamp * 1_000,
+      ),
+    ).toBe(true)
     expect(service.status().candles_ready).toBe(true)
     store.close()
   })

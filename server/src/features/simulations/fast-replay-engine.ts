@@ -118,12 +118,29 @@ export function runFastReplay(input: {
   let sampleCount = 0
   let rawSignalsCount = 0
   let gateRejectionsCount = 0
+  const macroCandles = resample1mTo15m(candles, Number.MAX_SAFE_INTEGER)
+  const macroFeatures = macroCandles.map((_, macroIndex) =>
+    fastReplayFeaturesAt(macroCandles.slice(0, macroIndex + 1)),
+  )
+  let completedMacroCount = 0
   for (let index = 50; index < candles.length; index += 1) {
     const candle = candles[index]!
     const history = candles.slice(0, index + 1)
     const features = fastReplayFeaturesAt(history)
+    const cutoff = candle.timestamp + 60
+    while (
+      completedMacroCount < macroCandles.length &&
+      macroCandles[completedMacroCount]!.timestamp + 900 <= cutoff
+    )
+      completedMacroCount += 1
+    const macro = macroFeatures[completedMacroCount - 1] ?? null
     const strategy = fastReplayStrategyFor(strategyId as FastReplayStrategyId)
-    const decision = evaluateMicroTarget(strategy, features, state)
+    const decision = evaluateMicroTarget(
+      strategy,
+      features,
+      state,
+      macro?.ready === true ? macro.atrPercentile50 : null,
+    )
     let effectiveTarget = decision.target
     if (state.exposure === 'flat' && decision.target === 'long') {
       rawSignalsCount += 1
@@ -132,6 +149,7 @@ export function runFastReplay(input: {
           strategyId as FastReplayStrategyId,
           features,
           decision.state.regime,
+          macro,
         )
       ) {
         const next = candles[index + 1]
@@ -307,27 +325,60 @@ export function fastReplayCanEnter(
   id: FastReplayStrategyId,
   features: MicroStrategyFeatures,
   activeRegime: 'trend' | 'range' | null,
+  macroFeatures: MicroStrategyFeatures | null = null,
 ): boolean {
+  if (macroFeatures?.ready !== true) return false
   const distance =
     id === 'micro-trend-pullback'
-      ? features.atr14 === null
+      ? macroFeatures?.atr14 == null
         ? 0
-        : (2 * features.atr14) / features.close
+        : (2 * macroFeatures.atr14) / features.close
       : id === 'micro-bollinger-reversion'
-        ? features.bollingerMid === null
+        ? macroFeatures?.bollingerMid == null
           ? 0
-          : (features.bollingerMid - features.close) / features.close
+          : (macroFeatures.bollingerMid - features.close) / features.close
         : id === 'micro-donchian-breakout'
-          ? features.donchianHigh20 === null || features.donchianLow20 == null
+          ? macroFeatures?.donchianHigh20 == null ||
+            macroFeatures.donchianLow20 == null
             ? 0
-            : (features.donchianHigh20 - features.donchianLow20) /
+            : (macroFeatures.donchianHigh20 - macroFeatures.donchianLow20) /
               features.close
           : activeRegime === 'trend'
-            ? ((features.atr14 ?? 0) * 2) / features.close
-            : activeRegime === 'range' && features.bollingerMid !== null
-              ? (features.bollingerMid - features.close) / features.close
+            ? ((macroFeatures?.atr14 ?? 0) * 2) / features.close
+            : activeRegime === 'range' && macroFeatures?.bollingerMid != null
+              ? (macroFeatures.bollingerMid - features.close) / features.close
               : 0
   return distance >= COST_GATE
+}
+
+export function resample1mTo15m(
+  candles: readonly FastReplayCandle[],
+  cutoffEpochSeconds: number,
+): FastReplayCandle[] {
+  const sorted = [...candles].sort((a, b) => a.timestamp - b.timestamp)
+  const buckets = new Map<number, FastReplayCandle[]>()
+  for (const candle of sorted) {
+    if (candle.timestamp + 60 > cutoffEpochSeconds) continue
+    const start = Math.floor(candle.timestamp / 900) * 900
+    const bucket = buckets.get(start) ?? []
+    bucket.push(candle)
+    buckets.set(start, bucket)
+  }
+  const result: FastReplayCandle[] = []
+  for (const [timestamp, rows] of buckets) {
+    if (timestamp + 900 > cutoffEpochSeconds || rows.length !== 15) continue
+    if (rows.some((row, index) => row.timestamp !== timestamp + index * 60))
+      continue
+    result.push({
+      timestamp,
+      open: rows[0]!.open,
+      high: Math.max(...rows.map(({ high }) => high)),
+      low: Math.min(...rows.map(({ low }) => low)),
+      close: rows[14]!.close,
+      volume: rows.reduce((sum, row) => sum + row.volume, 0),
+    })
+  }
+  return result
 }
 export function fastReplayFeaturesAt(
   history: readonly FastReplayCandle[],

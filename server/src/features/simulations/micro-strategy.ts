@@ -54,6 +54,7 @@ export function evaluateMicroTarget(
   strategy: MicroStrategy,
   features: MicroStrategyFeatures,
   prior: MicroStrategyState,
+  macroAtrPercentile50: number | null = features.atrPercentile50,
 ): {
   readonly target: MicroExposure
   readonly state: MicroStrategyState
@@ -67,7 +68,7 @@ export function evaluateMicroTarget(
     }
   }
   if (strategy === 'regime-adapter') {
-    const percentile = features.atrPercentile50
+    const percentile = macroAtrPercentile50
     const regime =
       percentile !== null && percentile > 60
         ? 'trend'

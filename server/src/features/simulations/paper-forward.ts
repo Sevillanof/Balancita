@@ -9,6 +9,7 @@ import {
   fastReplayCanEnter,
   fastReplayFeaturesAt,
   fastReplayStrategyFor,
+  resample1mTo15m,
 } from './fast-replay-engine.ts'
 import {
   evaluateC27Exit,
@@ -21,6 +22,7 @@ import type { MarketStore, PaperOrder } from '../market-data/market-store.ts'
 const INITIAL_CASH_EUR = 10_000
 const TICKET_EUR = 30
 const MAX_CANDLES = 55
+const MACRO_HISTORY_CANDLES = 1_200
 
 export interface PaperForwardStatus {
   enabled: boolean
@@ -97,20 +99,28 @@ export class PaperForwardService {
     this.options.store.insertOhlcCandles([
       { ...candle, source: 'kraken_ws_ohlc' },
     ])
-    this.candles = [
+    const persistedHistory = [
       ...this.options.store.latestContinuousOhlcCandles(
-        MAX_CANDLES,
+        MACRO_HISTORY_CANDLES,
         candle.timestamp * 1000,
       ),
     ]
+    this.candles = persistedHistory.slice(-MAX_CANDLES)
     if (this.candles.length < MAX_CANDLES) return
     const features = fastReplayFeaturesAt(this.candles)
+    const macroCandles = resample1mTo15m(
+      persistedHistory,
+      candle.timestamp + 60,
+    )
+    const macroFeatures =
+      macroCandles.length === 0 ? null : fastReplayFeaturesAt(macroCandles)
     for (const id of FAST_REPLAY_STRATEGIES) {
       const prior = this.states.get(id) ?? initialMicroState()
       const decision = evaluateMicroTarget(
         fastReplayStrategyFor(id),
         features,
         prior,
+        macroFeatures?.atrPercentile50 ?? null,
       )
       const position = this.position(id)
       const target =
@@ -130,8 +140,21 @@ export class PaperForwardService {
         continue
       }
       if (position === null && decision.target === 'long') {
-        const distance = candidateTargetPct(id, features, decision.state.regime)
-        const passed = fastReplayCanEnter(id, features, decision.state.regime)
+        const distance =
+          macroFeatures?.ready !== true
+            ? 0
+            : candidateTargetPct(
+                id,
+                features,
+                decision.state.regime,
+                macroFeatures,
+              )
+        const passed = fastReplayCanEnter(
+          id,
+          features,
+          decision.state.regime,
+          macroFeatures,
+        )
         if (!passed) {
           const inserted = this.options.store.insertPaperOrder({
             strategyId: id,
@@ -335,23 +358,23 @@ function candidateTargetPct(
   id: FastReplayStrategyId,
   features: ReturnType<typeof fastReplayFeaturesAt>,
   regime: 'trend' | 'range' | null,
+  macro: ReturnType<typeof fastReplayFeaturesAt>,
 ): number {
   const distance =
     id === 'micro-trend-pullback'
-      ? ((features.atr14 ?? 0) * 2) / features.close
+      ? ((macro.atr14 ?? 0) * 2) / features.close
       : id === 'micro-bollinger-reversion'
-        ? features.bollingerMid === null
+        ? macro.bollingerMid === null
           ? 0
-          : (features.bollingerMid - features.close) / features.close
+          : (macro.bollingerMid - features.close) / features.close
         : id === 'micro-donchian-breakout'
-          ? features.donchianHigh20 === null || features.donchianLow20 == null
+          ? macro.donchianHigh20 === null || macro.donchianLow20 == null
             ? 0
-            : (features.donchianHigh20 - features.donchianLow20) /
-              features.close
+            : (macro.donchianHigh20 - macro.donchianLow20) / features.close
           : regime === 'trend'
-            ? ((features.atr14 ?? 0) * 2) / features.close
+            ? ((macro.atr14 ?? 0) * 2) / features.close
             : regime === 'range'
-              ? (features.bollingerMid ?? features.close) / features.close - 1
+              ? (macro.bollingerMid ?? features.close) / features.close - 1
               : 0
   return Math.max(0, distance)
 }

@@ -89,6 +89,41 @@ describe('micro strategy target state', () => {
     ).toMatchObject({ target: 'flat', abstained: true })
   })
 
+  it('classifies C28 from the supplied macro ATR percentile, retaining neutral prior regimes', () => {
+    expect(
+      evaluateMicroTarget(
+        'regime-adapter',
+        readyFeatures,
+        initialMicroState(),
+        70,
+      ).state.regime,
+    ).toBe('trend')
+    expect(
+      evaluateMicroTarget(
+        'regime-adapter',
+        readyFeatures,
+        initialMicroState(),
+        30,
+      ).state.regime,
+    ).toBe('range')
+    expect(
+      evaluateMicroTarget(
+        'regime-adapter',
+        readyFeatures,
+        { exposure: 'flat', regime: 'trend' },
+        50,
+      ).state.regime,
+    ).toBe('trend')
+    expect(
+      evaluateMicroTarget(
+        'regime-adapter',
+        readyFeatures,
+        initialMicroState(),
+        null,
+      ).abstained,
+    ).toBe(true)
+  })
+
   it('applies Bollinger regime reversion and prior-volume Donchian breakout rules', () => {
     expect(
       evaluateMicroTarget(

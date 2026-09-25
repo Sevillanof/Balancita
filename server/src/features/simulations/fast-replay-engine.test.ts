@@ -1,7 +1,45 @@
 import { describe, expect, it } from 'vitest'
-import { runFastReplay } from './fast-replay-engine.ts'
+import { resample1mTo15m, runFastReplay } from './fast-replay-engine.ts'
 
 describe('runFastReplay', () => {
+  it('resamples only complete UTC-aligned buckets closed by the 1m cutoff', () => {
+    const start = Math.floor(1_700_000_010 / 900) * 900
+    const candles = Array.from({ length: 31 }, (_, index) => ({
+      timestamp: start + index * 60,
+      open: 100 + index,
+      high: 101 + index,
+      low: 99 + index,
+      close: 100.5 + index,
+      volume: 2,
+    }))
+    expect(resample1mTo15m(candles, start + 900 - 1)).toEqual([])
+    const complete = resample1mTo15m(candles, start + 15 * 60)
+    expect(complete).toHaveLength(1)
+    expect(complete[0]).toMatchObject({
+      timestamp: start,
+      open: 100,
+      high: 115,
+      low: 99,
+      close: 114.5,
+      volume: 30,
+    })
+    expect(resample1mTo15m(candles, start + 15 * 60 + 60)).toHaveLength(1)
+  })
+
+  it('drops partial and missing-minute UTC buckets without overflowing the input', () => {
+    const start = Math.floor(1_700_000_010 / 900) * 900
+    const candles = Array.from({ length: 31 }, (_, index) => ({
+      timestamp: start + index * 60,
+      open: 100,
+      high: 102,
+      low: 98,
+      close: 101,
+      volume: 1,
+    })).filter((_, index) => index !== 20)
+    expect(resample1mTo15m(candles, start + 10_000)).toHaveLength(1)
+    expect(resample1mTo15m(candles.slice(0, 14), start + 10_000)).toEqual([])
+  })
+
   it('rejects unsupported candidates and gaps, and returns deterministic metrics for a contiguous dataset', () => {
     const candles = Array.from({ length: 80 }, (_, index) => ({
       timestamp: 1_700_000_000 + index * 60,
@@ -68,7 +106,7 @@ describe('runFastReplay', () => {
     expect(result.brierScoreMulticlass).toBeCloseTo(0, 12)
   })
 
-  it('uses next-open fills, fixed euro ticket costs, and final-close liquidation', () => {
+  it('fails closed when no completed 15m macro history is ready', () => {
     const candles = Array.from({ length: 52 }, (_, index) => ({
       timestamp: 1_700_000_000 + index * 60,
       open: index === 51 ? 212 : index === 50 ? 210 : 100,
@@ -82,20 +120,12 @@ describe('runFastReplay', () => {
       candles,
       ticketEur: 30,
     })
-    expect(result.trades.map(({ side }) => side)).toEqual(['buy', 'sell'])
+    expect(result.trades).toEqual([])
     expect(result.rawSignalsCount).toBe(1)
-    expect(result.gateRejectionsCount).toBe(0)
-    expect(result.trades[0]?.price).toBeCloseTo(212 * 1.0005)
-    expect(result.trades[0]?.feeEur).toBeCloseTo(0.03)
-    expect(result.trades[1]?.price).toBeCloseTo(212 * 0.9995)
-    expect(result.trades[1]?.feeEur).toBeCloseTo(
-      (30 / (212 * 1.0005)) * 212 * 0.9995 * 0.001,
-    )
-    expect(result.tradesCount).toBe(1)
-    expect(result.netPnlEur).toBeLessThan(0)
+    expect(result.gateRejectionsCount).toBe(1)
   })
 
-  it('counts a gate-passing terminal raw signal without treating it as rejected', () => {
+  it('records a terminal signal as rejected when macro features are unavailable', () => {
     const candles = Array.from({ length: 51 }, (_, index) => ({
       timestamp: 1_700_000_000 + index * 60,
       open: index === 50 ? 210 : 100,
@@ -111,10 +141,10 @@ describe('runFastReplay', () => {
     })
     expect(result.trades).toEqual([])
     expect(result.rawSignalsCount).toBe(1)
-    expect(result.gateRejectionsCount).toBe(0)
+    expect(result.gateRejectionsCount).toBe(1)
   })
 
-  it('uses the C27 close stop and fills the resulting sell at the next open', () => {
+  it('does not open C27 before completed macro features are available', () => {
     const candles = Array.from({ length: 53 }, (_, index) => ({
       timestamp: 1_700_000_000 + index * 60,
       open: index === 51 ? 100 : index === 52 ? 90 : 100,
@@ -128,9 +158,9 @@ describe('runFastReplay', () => {
       candles,
       ticketEur: 30,
     })
-    expect(result.trades.map(({ side }) => side)).toEqual(['buy', 'sell'])
-    expect(result.trades[1]?.timestamp).toBe(candles[52]?.timestamp)
-    expect(result.trades[1]?.price).toBeCloseTo(90 * 0.9995)
+    expect(result.trades).toEqual([])
+    expect(result.rawSignalsCount).toBe(1)
+    expect(result.gateRejectionsCount).toBe(1)
   })
 
   it('runs the complete 720-candle path and exposes measured execution time', () => {
