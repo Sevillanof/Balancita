@@ -1,0 +1,19 @@
+server/src/features/simulations/micro-strategy.test.ts
+  s_2df81cda3ab59d::t_c02c4d2cf2f719 2-6,27-57
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9b9b9cd960c82c145f03d29d2d6ef0b3fecd2ef4",
+  "prompts": {},
+  "sessions": {
+    "s_2df81cda3ab59d": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f27f4d5bdffesOYj5k0H7yIRMO",
+        "model": "gpt-6-luna-fast"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
