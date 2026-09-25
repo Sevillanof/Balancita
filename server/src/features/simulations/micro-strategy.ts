@@ -57,7 +57,7 @@ export function evaluateC27Exit(input: {
   readonly barsHeld: number
 }): C27ExitReason {
   if (input.close >= input.entryPrice * 1.008) return 'take-profit'
-  if (input.barsHeld >= 10 && input.close < input.entryPrice * 1.003)
+  if (input.barsHeld >= 30 && input.close < input.entryPrice * 1.003)
     return 'time-stop'
   if (
     input.close <= input.entryPrice * 0.994 ||

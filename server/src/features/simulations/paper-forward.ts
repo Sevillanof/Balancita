@@ -355,7 +355,7 @@ function quantityForSell(
   return quantity
 }
 
-function candidateTargetPct(
+export function candidateTargetPct(
   id: FastReplayStrategyId,
   features: ReturnType<typeof fastReplayFeaturesAt>,
   regime: 'trend' | 'range' | null,
@@ -365,17 +365,20 @@ function candidateTargetPct(
     id === 'micro-trend-pullback'
       ? ((macro.atr14 ?? 0) * 2) / features.close
       : id === 'micro-bollinger-reversion'
-        ? macro.bollingerMid === null
+        ? macro.bollingerMid === null || macro.bollingerLower === null
           ? 0
-          : (macro.bollingerMid - features.close) / features.close
+          : (2 * (macro.bollingerMid - macro.bollingerLower)) / features.close
         : id === 'micro-donchian-breakout'
           ? macro.donchianHigh20 === null || macro.donchianLow20 == null
             ? 0
             : (macro.donchianHigh20 - macro.donchianLow20) / features.close
           : regime === 'trend'
             ? ((macro.atr14 ?? 0) * 2) / features.close
-            : regime === 'range'
-              ? (macro.bollingerMid ?? features.close) / features.close - 1
+            : regime === 'range' &&
+                macro.bollingerMid !== null &&
+                macro.bollingerLower !== null
+              ? (2 * (macro.bollingerMid - macro.bollingerLower)) /
+                features.close
               : 0
   return Math.max(0, distance)
 }

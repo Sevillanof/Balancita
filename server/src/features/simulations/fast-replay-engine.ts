@@ -335,9 +335,11 @@ export function fastReplayCanEnter(
         ? 0
         : (2 * macroFeatures.atr14) / features.close
       : id === 'micro-bollinger-reversion'
-        ? macroFeatures?.bollingerMid == null
+        ? macroFeatures?.bollingerMid == null ||
+          macroFeatures.bollingerLower == null
           ? 0
-          : (macroFeatures.bollingerMid - features.close) / features.close
+          : (2 * (macroFeatures.bollingerMid - macroFeatures.bollingerLower)) /
+            features.close
         : id === 'micro-donchian-breakout'
           ? macroFeatures?.donchianHigh20 == null ||
             macroFeatures.donchianLow20 == null
@@ -346,8 +348,12 @@ export function fastReplayCanEnter(
               features.close
           : activeRegime === 'trend'
             ? ((macroFeatures?.atr14 ?? 0) * 2) / features.close
-            : activeRegime === 'range' && macroFeatures?.bollingerMid != null
-              ? (macroFeatures.bollingerMid - features.close) / features.close
+            : activeRegime === 'range' &&
+                macroFeatures?.bollingerMid != null &&
+                macroFeatures.bollingerLower != null
+              ? (2 *
+                  (macroFeatures.bollingerMid - macroFeatures.bollingerLower)) /
+                features.close
               : 0
   return distance >= COST_GATE
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { makeCandle } from './paper-forward-test-helpers.ts'
-import { PaperForwardService } from './paper-forward.ts'
+import { candidateTargetPct, PaperForwardService } from './paper-forward.ts'
 import { MarketStore } from '../market-data/market-store.ts'
 import {
   FAST_REPLAY_STRATEGIES,
@@ -60,6 +60,7 @@ describe('PaperForwardService', () => {
       ...features,
       atr14: 3.1,
       bollingerMid: 1_006.1,
+      bollingerLower: 1_000,
       donchianHigh20: 1_006.1,
       donchianLow20: 1_000,
       ready: true,
@@ -68,6 +69,7 @@ describe('PaperForwardService', () => {
       ...macro,
       atr14: 0.1,
       bollingerMid: 1_000,
+      bollingerLower: 1_000,
       donchianHigh20: 1_000.1,
       donchianLow20: 999.9,
     }
@@ -104,6 +106,36 @@ describe('PaperForwardService', () => {
       'donchian-breakout',
       'regime-adapter',
     ])
+  })
+
+  it('gates C26 on full 15m Bollinger width at the inclusive 0.006 boundary', () => {
+    const features = {
+      close: 1_000,
+    } as ReturnType<typeof fastReplayFeaturesAt>
+    const macro = {
+      bollingerMid: 1_000,
+      bollingerLower: 997,
+      ready: true,
+    } as ReturnType<typeof fastReplayFeaturesAt>
+
+    expect(
+      fastReplayCanEnter('micro-bollinger-reversion', features, null, macro),
+    ).toBe(true)
+    expect(
+      fastReplayCanEnter('micro-bollinger-reversion', features, null, {
+        ...macro,
+        bollingerLower: 997.001,
+      }),
+    ).toBe(false)
+    expect(
+      fastReplayCanEnter('micro-regime-adapter', features, 'range', macro),
+    ).toBe(true)
+    expect(
+      candidateTargetPct('micro-bollinger-reversion', features, null, macro),
+    ).toBe(0.006)
+    expect(
+      candidateTargetPct('micro-regime-adapter', features, 'range', macro),
+    ).toBe(0.006)
   })
 
   it('maps all registered candidates to their existing raw-entry target rules', () => {

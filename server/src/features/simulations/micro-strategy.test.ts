@@ -30,14 +30,17 @@ describe('micro strategy target state', () => {
       entryPrice: 100,
       close: 100.8,
       donchianMid: 99,
-      barsHeld: 10,
+      barsHeld: 29,
     }
     expect(evaluateC27Exit(input)).toBe('take-profit')
     expect(evaluateC27Exit({ ...input, close: 100.3 })).toBe('hold')
     expect(evaluateC27Exit({ ...input, close: 100.299, barsHeld: 9 })).toBe(
       'hold',
     )
-    expect(evaluateC27Exit({ ...input, close: 100.299, barsHeld: 10 })).toBe(
+    expect(evaluateC27Exit({ ...input, close: 100.299, barsHeld: 29 })).toBe(
+      'hold',
+    )
+    expect(evaluateC27Exit({ ...input, close: 100.299, barsHeld: 30 })).toBe(
       'time-stop',
     )
     expect(evaluateC27Exit({ ...input, close: 99.4, barsHeld: 1 })).toBe(
@@ -51,9 +54,23 @@ describe('micro strategy target state', () => {
         barsHeld: 1,
       }),
     ).toBe('stop-loss')
-    expect(evaluateC27Exit({ ...input, close: 99.4, barsHeld: 10 })).toBe(
+    expect(evaluateC27Exit({ ...input, close: 99.4, barsHeld: 30 })).toBe(
       'time-stop',
     )
+    expect(evaluateC27Exit({ ...input, close: 100.3, barsHeld: 30 })).toBe(
+      'hold',
+    )
+    expect(evaluateC27Exit({ ...input, close: 100.8, barsHeld: 30 })).toBe(
+      'take-profit',
+    )
+    expect(
+      evaluateC27Exit({
+        ...input,
+        close: 100,
+        donchianMid: 100.01,
+        barsHeld: 30,
+      }),
+    ).toBe('time-stop')
   })
 
   it('uses the macro Donchian mid for C27 stop-loss rather than a differing 1m mid', () => {
