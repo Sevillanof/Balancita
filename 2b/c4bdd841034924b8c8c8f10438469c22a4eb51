@@ -1,0 +1,33 @@
+server/src/app/fast-replay-api.test.ts
+  s_f3cf1831066c01::t_dd2712b97dfddd 22-63
+server/src/features/simulations/candidate-manifest.test.ts
+  s_f3cf1831066c01::t_48ea6192cd2f86 5-6,12-13,48-68,252-280,282-293,322-334
+server/src/features/simulations/candidate-manifest.ts
+  s_f3cf1831066c01::t_96b0a711b75ab9 83,135,325-336,342-352,358-367,373-384,391-400,445-453
+server/src/features/simulations/rule-registry.test.ts
+  s_f3cf1831066c01::t_6dda7751119a9e 8,11,83-85,110-112
+server/src/features/simulations/simulations-runner.test.ts
+  s_f3cf1831066c01::t_a24465039ede0f 7-11,68,84-92,100-102,176-182,265-266,268-269
+server/src/features/simulations/simulations-runner.ts
+  s_f3cf1831066c01::t_ebff7caadab493 18,218,233,273-275,325-328,331,347-349,358-361,367-368,373-375,383-387,415-419,422-449,451-458,660-672
+src/app/FastReplaySection.test.tsx
+  s_f3cf1831066c01::t_2ac0d3b4a1e506 17-42,44-77,79-82,102-115,159-184
+src/app/FastReplaySection.tsx
+  s_f3cf1831066c01::t_fb981e99d52bd7 36-42,56-59,68,94-97,99,104-105,120-156,160-162,166,245-248,259,289,330-333,351
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2bc4bdd841034924b8c8c8f10438469c22a4eb51",
+  "prompts": {},
+  "sessions": {
+    "s_f3cf1831066c01": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f28047ba0ffevZ0g28nwCTHFiH",
+        "model": "gpt-6-luna-fast"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
