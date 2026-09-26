@@ -129,7 +129,20 @@ function reportFile(): SimulationsReportFile {
         profitability: {
           ruleVersion: 'strategy-rule.v1',
           costsVersion: 'costs.v1',
-          costs: { commissionRate: 0.001, slippageRate: 0.0005 },
+          costs: { commissionRate: 0.008, slippageRate: 0.0005 },
+          feeScenario: {
+            version: 'kraken-pro-spot-btc-eur-tier1-taker.v1',
+            venue: 'Kraken Pro Spot',
+            pair: 'BTC-EUR',
+            tier: 'Tier 1 (0+ USD qualifying 30-day volume)',
+            role: 'taker',
+            sourceUrl: 'https://www.kraken.com/features/fee-schedule',
+            verifiedAt: '2026-09-26',
+            commissionRate: 0.008,
+            slippageRate: 0.0005,
+            accountTier: 'unknown',
+            classification: 'model-scenario-not-account-fee',
+          },
           startingCash: 10_000,
           entryThreshold: 0.55,
           exitUpThreshold: 0.45,
@@ -248,6 +261,39 @@ describe('SimulationsPanel', () => {
     ).toBeInTheDocument()
   })
 
+  it('labels historical profitability reports without fee provenance', () => {
+    const source = reportFile()
+    const historicalReport = {
+      ...source,
+      reports: source.reports.map((report) => ({
+        ...report,
+        profitability:
+          report.profitability === null
+            ? null
+            : { ...report.profitability, feeScenario: undefined },
+      })),
+    }
+    render(
+      <SimulationsPanel
+        status="ready"
+        file={historicalReport}
+        error={null}
+        onRetry={() => undefined}
+      />,
+    )
+
+    expect(
+      screen.getByText(
+        /informe histórico: la procedencia del escenario de comisión no está registrada/i,
+      ),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByRole('link', {
+        name: /kraken.com\/features\/fee-schedule/i,
+      }),
+    ).not.toBeInTheDocument()
+  })
+
   it('announces loading while the report is fetched', () => {
     render(
       <SimulationsPanel
@@ -315,6 +361,17 @@ describe('SimulationsPanel', () => {
     expect(card).toHaveTextContent(/cobertura/i)
     expect(card).toHaveTextContent(/brier/i)
     expect(card).toHaveTextContent(/profit factor/i)
+    expect(
+      screen.getByText(/Escenario estimado de comisión/),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole('link', {
+        name: 'https://www.kraken.com/features/fee-schedule',
+      }),
+    ).toHaveAttribute('href', 'https://www.kraken.com/features/fee-schedule')
+    expect(
+      screen.getByText(/no representa una tarifa ni ejecución real/i),
+    ).toBeInTheDocument()
     // Validation values are emphasized in their own section.
     expect(
       within(card).getByRole('region', { name: 'Validación' }),

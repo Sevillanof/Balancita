@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -8,8 +8,9 @@ import { getActiveCandidates } from './candidate-manifest.ts'
 import { runSimulationsCli } from './simulations-cli.ts'
 import { runSimulationsFromLiveDb } from './simulations-runner.ts'
 import {
-  DEFAULT_TRADE_COSTS,
+  simulateBuyAndHold,
   STRATEGY_RULE_VERSION,
+  type TradeSimBar,
 } from './trade-simulation.ts'
 
 const tempDirectories: string[] = []
@@ -35,6 +36,24 @@ function makePaths() {
 const T0 = 1_789_984_800_000
 const MINUTE_MS = 60_000
 const CANDLES = 200
+
+it('applies Tier 1 commission per actual €30 buy and sell notional', () => {
+  const bars: TradeSimBar[] = [
+    { time: T0 as TimestampMs, open: 30, close: 30 },
+    { time: (T0 + MINUTE_MS) as TimestampMs, open: 30, close: 30 },
+  ]
+  const result = simulateBuyAndHold({
+    bars,
+    startingCash: 30,
+    costs: { commissionRate: 0.008, slippageRate: 0.0005 },
+  })
+
+  for (const fill of result.fills) {
+    expect(fill.commission).toBeCloseTo(fill.qty * fill.price * 0.008, 10)
+    expect(fill.commission).toBeCloseTo(0.24, 2)
+  }
+  expect(result.fills.every(({ commission }) => commission > 0)).toBe(true)
+})
 
 function seedContiguousMarket(path: string): void {
   const store = new MarketStore({ path })
@@ -66,7 +85,7 @@ function seedContiguousMarket(path: string): void {
 }
 
 describe('simulations runner profitability wiring', () => {
-  it('simulates every candidate on both slices with versioned rule and costs', () => {
+  it('simulates every candidate on both slices with sourced Kraken fee provenance', () => {
     const paths = makePaths()
     seedContiguousMarket(paths.marketDbPath)
 
@@ -79,7 +98,29 @@ describe('simulations runner profitability wiring', () => {
     const block = result.horizons[0]!.report.profitability
     expect(block).not.toBeNull()
     expect(block!.ruleVersion).toBe(STRATEGY_RULE_VERSION)
-    expect(block!.costs).toEqual(DEFAULT_TRADE_COSTS)
+    expect(block!.costs).toEqual({
+      commissionRate: 0.008,
+      slippageRate: 0.0005,
+    })
+    expect(block!.feeScenario).toEqual({
+      version: 'kraken-pro-spot-btc-eur-tier1-taker.v1',
+      venue: 'Kraken Pro Spot',
+      pair: 'BTC-EUR',
+      tier: 'Tier 1 (0+ USD qualifying 30-day volume)',
+      role: 'taker',
+      sourceUrl: 'https://www.kraken.com/features/fee-schedule',
+      verifiedAt: '2026-09-26',
+      commissionRate: 0.008,
+      slippageRate: 0.0005,
+      accountTier: 'unknown',
+      classification: 'model-scenario-not-account-fee',
+    })
+    const cached = JSON.parse(readFileSync(paths.reportPath, 'utf8'))
+    expect(cached.request).toMatchObject({
+      feeScenarioVersion: 'kraken-pro-spot-btc-eur-tier1-taker.v1',
+      commissionRate: 0.008,
+      slippageRate: 0.0005,
+    })
     expect(block!.startingCash).toBe(10_000)
     expect(block!.entryThreshold).toBe(0.55)
     expect(block!.exitUpThreshold).toBe(0.45)

@@ -352,6 +352,32 @@ export default function SimulationsPanel({
                       {formatRate(report.profitability.exitUpThreshold)}.
                     </p>
                   )}
+                  {report.profitability?.feeScenario !== undefined && (
+                    <p>
+                      Escenario estimado de comisión:{' '}
+                      {report.profitability.feeScenario.venue} ·{' '}
+                      {report.profitability.feeScenario.pair} ·{' '}
+                      {report.profitability.feeScenario.tier} ·{' '}
+                      {report.profitability.feeScenario.role} por lado ·
+                      comisión{' '}
+                      {formatRate(
+                        report.profitability.feeScenario.commissionRate,
+                      )}
+                      . Cuenta/tier real: desconocido; no representa una tarifa
+                      ni ejecución real. Fuente verificada el{' '}
+                      {report.profitability.feeScenario.verifiedAt}:{' '}
+                      <a href={report.profitability.feeScenario.sourceUrl}>
+                        {report.profitability.feeScenario.sourceUrl}
+                      </a>
+                    </p>
+                  )}
+                  {report.profitability !== null &&
+                    report.profitability.feeScenario === undefined && (
+                      <p>
+                        Informe histórico: la procedencia del escenario de
+                        comisión no está registrada.
+                      </p>
+                    )}
                   {file.window !== undefined && (
                     <p>
                       Ventana UTC: {new Date(file.window.since).toISOString()} –{' '}

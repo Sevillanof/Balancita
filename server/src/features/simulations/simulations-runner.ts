@@ -20,6 +20,7 @@ import {
 } from './candidate-manifest.ts'
 import {
   buildComparisonReport,
+  KRAKEN_PRO_SPOT_TIER1_TAKER_FEE_SCENARIO,
   type SimulationComparisonReport,
   type SimulationProfitabilityInput,
   type SimulationScoredEntry,
@@ -30,7 +31,6 @@ import {
   DEFAULT_EXIT_DOWN_THRESHOLD,
   DEFAULT_EXIT_UP_THRESHOLD,
   DEFAULT_STARTING_CASH,
-  DEFAULT_TRADE_COSTS,
   STRATEGY_RULE_VERSION,
   TRADE_COSTS_VERSION,
   type TradeSimBar,
@@ -130,6 +130,7 @@ export interface SimulationRequestIdentity {
   readonly exitDownThreshold: number
   readonly strategyRuleVersion: string
   readonly tradeCostsVersion: string
+  readonly feeScenarioVersion: string
   readonly commissionRate: number
   readonly slippageRate: number
   readonly stage?: 'smoke' | 'confirm'
@@ -562,8 +563,9 @@ function simulationRequestIdentity(args: {
     exitDownThreshold: DEFAULT_EXIT_DOWN_THRESHOLD,
     strategyRuleVersion: STRATEGY_RULE_VERSION,
     tradeCostsVersion: TRADE_COSTS_VERSION,
-    commissionRate: DEFAULT_TRADE_COSTS.commissionRate,
-    slippageRate: DEFAULT_TRADE_COSTS.slippageRate,
+    feeScenarioVersion: KRAKEN_PRO_SPOT_TIER1_TAKER_FEE_SCENARIO.version,
+    commissionRate: KRAKEN_PRO_SPOT_TIER1_TAKER_FEE_SCENARIO.commissionRate,
+    slippageRate: KRAKEN_PRO_SPOT_TIER1_TAKER_FEE_SCENARIO.slippageRate,
   }
 }
 
@@ -688,6 +690,10 @@ function profitabilityInputFor(args: {
     entryThreshold: args.entryThreshold,
     exitUpThreshold: args.exitThreshold,
     exitDownThreshold: DEFAULT_EXIT_DOWN_THRESHOLD,
-    costs: { ...DEFAULT_TRADE_COSTS },
+    costs: {
+      commissionRate: KRAKEN_PRO_SPOT_TIER1_TAKER_FEE_SCENARIO.commissionRate,
+      slippageRate: KRAKEN_PRO_SPOT_TIER1_TAKER_FEE_SCENARIO.slippageRate,
+    },
+    feeScenario: KRAKEN_PRO_SPOT_TIER1_TAKER_FEE_SCENARIO,
   }
 }

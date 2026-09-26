@@ -73,6 +73,19 @@ export interface SimulationsProfitabilityBlock {
     readonly commissionRate: number
     readonly slippageRate: number
   }
+  readonly feeScenario?: {
+    readonly version: string
+    readonly venue: string
+    readonly pair: string
+    readonly tier: string
+    readonly role: string
+    readonly sourceUrl: string
+    readonly verifiedAt: string
+    readonly commissionRate: number
+    readonly slippageRate: number
+    readonly accountTier: string
+    readonly classification: string
+  }
   readonly startingCash: number
   readonly entryThreshold: number
   readonly exitUpThreshold: number

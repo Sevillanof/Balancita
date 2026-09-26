@@ -55,6 +55,22 @@ export const SIMULATION_COMPARISON_VERSION =
  */
 export const MAX_PROFITABILITY_EQUITY_POINTS = 60 as const
 
+export const KRAKEN_PRO_SPOT_TIER1_TAKER_FEE_SCENARIO = {
+  version: 'kraken-pro-spot-btc-eur-tier1-taker.v1',
+  venue: 'Kraken Pro Spot',
+  pair: 'BTC-EUR',
+  tier: 'Tier 1 (0+ USD qualifying 30-day volume)',
+  role: 'taker',
+  sourceUrl: 'https://www.kraken.com/features/fee-schedule',
+  verifiedAt: '2026-09-26',
+  commissionRate: 0.008,
+  slippageRate: 0.0005,
+  accountTier: 'unknown',
+  classification: 'model-scenario-not-account-fee',
+} as const
+
+export type FeeScenario = typeof KRAKEN_PRO_SPOT_TIER1_TAKER_FEE_SCENARIO
+
 export interface SimulationProfitabilitySlice {
   readonly metrics: TradeSimMetrics
   readonly readiness?: BacktestReadiness
@@ -80,6 +96,7 @@ export interface SimulationProfitabilityBlock {
   readonly ruleVersion: typeof STRATEGY_RULE_VERSION
   readonly costsVersion: typeof TRADE_COSTS_VERSION
   readonly costs: TradeSimCosts
+  readonly feeScenario?: FeeScenario
   readonly startingCash: number
   readonly entryThreshold: number
   readonly exitUpThreshold: number
@@ -110,6 +127,7 @@ export interface SimulationProfitabilityInput {
   readonly exitUpThreshold: number
   readonly exitDownThreshold: number
   readonly costs: TradeSimCosts
+  readonly feeScenario?: FeeScenario
 }
 
 const CALIBRATION_BANDS: readonly CalibrationBandDefinition[] = [
@@ -674,6 +692,9 @@ export function buildProfitabilityBlock(
     ruleVersion: STRATEGY_RULE_VERSION,
     costsVersion: TRADE_COSTS_VERSION,
     costs: input.costs,
+    ...(input.feeScenario === undefined
+      ? {}
+      : { feeScenario: input.feeScenario }),
     startingCash: input.startingCash,
     entryThreshold: input.entryThreshold,
     exitUpThreshold: input.exitUpThreshold,
