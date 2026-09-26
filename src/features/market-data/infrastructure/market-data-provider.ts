@@ -14,7 +14,7 @@ export type CreateMarketDataProviderOptions = {
 export function resolveMarketDataProviderMode(
   value: unknown = import.meta.env.VITE_MARKET_DATA_PROVIDER,
 ): MarketDataProviderMode {
-  if (value === undefined || value === '') return 'mock'
+  if (value === undefined || value === '') return 'kraken'
   if (value === 'mock' || value === 'kraken') return value
   throw new Error(
     'VITE_MARKET_DATA_PROVIDER must be mock or kraken when provided',

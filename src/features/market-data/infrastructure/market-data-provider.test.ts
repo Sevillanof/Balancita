@@ -38,12 +38,11 @@ function webSocketFactory(): KrakenWebSocket {
 }
 
 describe('market data provider selection', () => {
-  it('defaults to mock when the environment setting is absent', async () => {
-    expect(resolveMarketDataProviderMode(undefined)).toBe('mock')
+  it('defaults to Kraken when the environment setting is absent', async () => {
+    expect(resolveMarketDataProviderMode(undefined)).toBe('kraken')
     const provider = createMarketDataProvider({ mode: undefined })
 
-    expect(provider).toBeInstanceOf(DeterministicMockMarketDataProvider)
-    await expect(provider.getInstruments()).resolves.toHaveLength(3)
+    expect(provider).toBeInstanceOf(KrakenMarketDataProvider)
   })
 
   it('accepts explicit mock mode without creating a network provider', () => {
@@ -51,6 +50,11 @@ describe('market data provider selection', () => {
 
     expect(provider).toBeInstanceOf(DeterministicMockMarketDataProvider)
     expect('fetcher' in provider).toBe(false)
+  })
+
+  it('keeps explicit mock selection deterministic', async () => {
+    const provider = createMarketDataProvider({ mode: 'mock', mockSeed: 42 })
+    await expect(provider.getInstruments()).resolves.toHaveLength(3)
   })
 
   it('creates Kraken mode only when explicitly selected and keeps its catalog BTC-EUR only', async () => {
