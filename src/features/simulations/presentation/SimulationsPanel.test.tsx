@@ -209,6 +209,69 @@ function baselineEntry(candidateId: string) {
 }
 
 describe('SimulationsPanel', () => {
+  it('shows the flat-cash baseline separately from buy-and-hold and flags its tiny sample', () => {
+    const source = reportFile()
+    const report = source.reports[0]!
+    const flatSlice = {
+      ...profitabilitySlice(0, 0),
+      metrics: {
+        ...profitabilitySlice(0, 0).metrics,
+        fillCount: 0,
+        exposurePct: 0,
+        finalEquity: 10_000,
+      },
+      readiness: {
+        status: 'insufficient' as const,
+        windowDays: 0.001,
+        reasons: ['Se requieren al menos 300 operaciones cerradas.'],
+      },
+    }
+    const withFlat = {
+      ...source,
+      reports: [
+        {
+          ...report,
+          profitability: {
+            ...report.profitability!,
+            baselines: {
+              ...report.profitability!.baselines,
+              flatCash: {
+                candidateId: 'flatCash',
+                selection: flatSlice,
+                validation: flatSlice,
+              },
+            },
+          },
+        },
+      ],
+    }
+    render(
+      <SimulationsPanel
+        status="ready"
+        file={withFlat}
+        error={null}
+        onRetry={() => undefined}
+      />,
+    )
+
+    const flatCard = screen.getByRole('article', {
+      name: 'Efectivo sin operar (base)',
+    })
+    expect(within(flatCard).getByText(/capital constante/i)).toBeInTheDocument()
+    expect(within(flatCard).getAllByText('0').length).toBeGreaterThan(0)
+    expect(
+      within(flatCard).getByText(/evidencia insuficiente/i),
+    ).toBeInTheDocument()
+    expect(
+      within(flatCard).getByText(/ventana evaluada: 0\.0 días/i),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole('article', {
+        name: 'Sin cambio, comprar y mantener (base)',
+      }),
+    ).toBeInTheDocument()
+  })
+
   it('shows measured source coverage and does not claim gaps for irregular trades', () => {
     const boundedReport = {
       ...reportFile(),

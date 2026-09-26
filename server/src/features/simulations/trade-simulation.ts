@@ -370,6 +370,40 @@ export function simulateBuyAndHold(options: {
   return { fills, equityCurve, metrics, ledgerHash }
 }
 
+/** Keep all capital in cash for the full window; no order means no costs. */
+export function simulateFlatCash(options: {
+  readonly bars: readonly TradeSimBar[]
+  readonly startingCash?: number
+}): TradeSimResult {
+  const startingCash = options.startingCash ?? DEFAULT_STARTING_CASH
+  if (!Number.isFinite(startingCash) || startingCash <= 0) {
+    throw new Error('Starting cash must be a finite positive amount.')
+  }
+  const equityCurve = options.bars.map(({ time }) => ({
+    time,
+    equity: startingCash,
+  }))
+  const metrics: TradeSimMetrics = {
+    netReturnPct: 0,
+    tradeCount: 0,
+    fillCount: 0,
+    winRate: null,
+    profitFactor: null,
+    maxDrawdownPct: 0,
+    exposurePct: options.bars.length === 0 ? null : 0,
+    finalEquity: startingCash,
+  }
+  const ledgerHash = contentHashFor({
+    ruleVersion: STRATEGY_RULE_VERSION,
+    costsVersion: TRADE_COSTS_VERSION,
+    baseline: 'flat-cash-no-trade',
+    startingCash,
+    bars: options.bars,
+    metrics,
+  })
+  return { fills: [], equityCurve, metrics, ledgerHash }
+}
+
 function maxDrawdownOf(
   equities: readonly number[],
   startingCash: number,

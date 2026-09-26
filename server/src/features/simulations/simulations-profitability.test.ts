@@ -5,9 +5,13 @@ import { afterEach, describe, expect, it } from 'vitest'
 import type { TimestampMs } from '../../domain/contracts.ts'
 import { MarketStore } from '../market-data/market-store.ts'
 import { getActiveCandidates } from './candidate-manifest.ts'
+import { buildProfitabilityBlock } from './comparison-report.ts'
 import { runSimulationsCli } from './simulations-cli.ts'
 import { runSimulationsFromLiveDb } from './simulations-runner.ts'
 import {
+  DEFAULT_ENTRY_THRESHOLD,
+  DEFAULT_EXIT_DOWN_THRESHOLD,
+  DEFAULT_EXIT_UP_THRESHOLD,
   simulateBuyAndHold,
   STRATEGY_RULE_VERSION,
   type TradeSimBar,
@@ -53,6 +57,56 @@ it('applies Tier 1 commission per actual €30 buy and sell notional', () => {
     expect(fill.commission).toBeCloseTo(0.24, 2)
   }
   expect(result.fills.every(({ commission }) => commission > 0)).toBe(true)
+})
+
+it('compares an explicit no-trade cash baseline on identical slices without fills or fees', () => {
+  const selectionBars: TradeSimBar[] = [
+    { time: T0 as TimestampMs, open: 30, close: 31 },
+    { time: (T0 + MINUTE_MS) as TimestampMs, open: 31, close: 32 },
+  ]
+  const validationBars: TradeSimBar[] = [
+    { time: (T0 + 2 * MINUTE_MS) as TimestampMs, open: 32, close: 33 },
+    { time: (T0 + 3 * MINUTE_MS) as TimestampMs, open: 33, close: 34 },
+  ]
+  const report = buildProfitabilityBlock(
+    {
+      selectionBars,
+      validationBars,
+      signalsByCandidate: {},
+      outcomeLabelsByTime: {},
+      startingCash: 30,
+      entryThreshold: DEFAULT_ENTRY_THRESHOLD,
+      exitUpThreshold: DEFAULT_EXIT_UP_THRESHOLD,
+      exitDownThreshold: DEFAULT_EXIT_DOWN_THRESHOLD,
+      costs: { commissionRate: 0.008, slippageRate: 0.0005 },
+    },
+    ['test-candidate'],
+  )
+  const flat = report.baselines.flatCash
+  expect(flat.selection.equityCurve.map(({ time }) => time)).toEqual(
+    selectionBars.map(({ time }) => time),
+  )
+  expect(flat.validation.equityCurve.map(({ time }) => time)).toEqual(
+    validationBars.map(({ time }) => time),
+  )
+  expect(flat.selection.metrics).toMatchObject({
+    finalEquity: 30,
+    netReturnPct: 0,
+    fillCount: 0,
+    tradeCount: 0,
+    exposurePct: 0,
+  })
+  expect(flat.selection.equityCurve.every(({ equity }) => equity === 30)).toBe(
+    true,
+  )
+  expect(flat.selection.readiness?.status).toBe('insufficient')
+  expect(flat.selection.readiness?.reasons.join(' ')).toMatch(/300 operaciones/)
+  expect(flat.validation.metrics.fillCount).toBe(0)
+  expect(report.baselines.noChange.candidateId).toBe('noChange')
+  expect(report.baselines.noChange.selection.metrics.fillCount).toBe(2)
+  expect(flat.selection.ledgerHash).not.toBe(
+    report.baselines.noChange.selection.ledgerHash,
+  )
 })
 
 function seedContiguousMarket(path: string): void {
@@ -126,6 +180,23 @@ describe('simulations runner profitability wiring', () => {
     expect(block!.exitUpThreshold).toBe(0.45)
     expect(block!.exitDownThreshold).toBe(0.55)
     expect(block!.candidates).toHaveLength(getActiveCandidates().length)
+    const flat = block!.baselines.flatCash
+    expect(flat.selection.metrics).toMatchObject({
+      fillCount: 0,
+      tradeCount: 0,
+      netReturnPct: 0,
+      exposurePct: 0,
+    })
+    expect(flat.validation.metrics.fillCount).toBe(0)
+    expect(flat.selection.readiness?.status).toBe('insufficient')
+    expect(flat.validation.readiness?.status).toBe('insufficient')
+    expect(flat.selection.equityCurve.map(({ time }) => time)).toEqual(
+      block!.candidates[0]!.selection.equityCurve.map(({ time }) => time),
+    )
+    expect(flat.validation.equityCurve.map(({ time }) => time)).toEqual(
+      block!.candidates[0]!.validation.equityCurve.map(({ time }) => time),
+    )
+    expect(block!.baselines.noChange.selection.metrics.fillCount).toBe(2)
     for (const entry of block!.candidates) {
       expect(entry.selection.ledgerHash).toMatch(/^[0-9a-f]{64}$/)
       expect(entry.validation.ledgerHash).toMatch(/^[0-9a-f]{64}$/)

@@ -34,6 +34,7 @@ import {
   TRADE_COSTS_VERSION,
   momentumSignalsFor,
   simulateBuyAndHold,
+  simulateFlatCash,
   simulateLongFlat,
   uniformSignalsFor,
   type TradeSimBar,
@@ -45,7 +46,7 @@ import {
 } from './trade-simulation.ts'
 
 export const SIMULATION_COMPARISON_VERSION =
-  'simulations-comparison.v3' as const
+  'simulations-comparison.v4' as const
 
 /**
  * Maximum equity-curve points stored per candidate per slice. Longer
@@ -87,6 +88,7 @@ export interface SimulationProfitabilityEntry {
 }
 
 export interface SimulationProfitabilityBaselines {
+  readonly flatCash: SimulationProfitabilityEntry
   readonly uniform: SimulationProfitabilityEntry
   readonly noChange: SimulationProfitabilityEntry
   readonly momentum: SimulationProfitabilityEntry
@@ -630,6 +632,21 @@ export function buildProfitabilityBlock(
     ),
   }))
   const baselines: SimulationProfitabilityBaselines = {
+    flatCash: {
+      candidateId: 'flatCash',
+      selection: slice(
+        simulateFlatCash({
+          bars: input.selectionBars,
+          startingCash: input.startingCash,
+        }),
+      ),
+      validation: slice(
+        simulateFlatCash({
+          bars: input.validationBars,
+          startingCash: input.startingCash,
+        }),
+      ),
+    },
     uniform: {
       candidateId: 'uniform',
       selection: slice(

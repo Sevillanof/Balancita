@@ -48,7 +48,7 @@ import {
 export const SIMULATIONS_DEFAULT_HORIZON: ForecastHorizon = '15m'
 export const SIMULATIONS_DEFAULT_SELECTION_PCT = 0.7
 export const SIMULATIONS_REPORT_FILE_VERSION =
-  'simulations-report-file.v3' as const
+  'simulations-report-file.v4' as const
 
 export interface SimulationsRunnerOptions {
   /** Live market database. Opened strictly read-only, never written. */

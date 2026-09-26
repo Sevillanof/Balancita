@@ -93,6 +93,8 @@ export interface SimulationsProfitabilityBlock {
   readonly equityPointsDownsampledTo: number
   readonly candidates: readonly SimulationsProfitabilityEntry[]
   readonly baselines: {
+    /** Absent on historical reports; never reconstructed without original slice bars. */
+    readonly flatCash?: SimulationsProfitabilityEntry
     readonly uniform: SimulationsProfitabilityEntry
     readonly noChange: SimulationsProfitabilityEntry
     readonly momentum: SimulationsProfitabilityEntry

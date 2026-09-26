@@ -292,6 +292,19 @@ export default function SimulationsPanel({
                       />
                     </article>
                   </li>
+                  {report.profitability?.baselines.flatCash !== undefined && (
+                    <li>
+                      <article
+                        className="simulations__card simulations__card--baseline"
+                        aria-label="Efectivo sin operar (base)"
+                      >
+                        <FlatCashCard
+                          entry={report.profitability.baselines.flatCash}
+                          report={report}
+                        />
+                      </article>
+                    </li>
+                  )}
                 </ul>
                 {report.microCandidateDiagnostics !== null &&
                   report.microCandidateDiagnostics !== undefined &&
@@ -563,6 +576,27 @@ function BaselineCard({
   )
 }
 
+function FlatCashCard({
+  entry,
+  report,
+}: {
+  readonly entry: SimulationsProfitabilityEntry
+  readonly report: SimulationsComparisonReport
+}) {
+  return (
+    <>
+      <h4 className="simulations__card-title">Efectivo sin operar (base)</h4>
+      <p>Capital constante; cero órdenes y sin comisiones ni deslizamiento.</p>
+      <ProfitabilityDetails
+        entry={entry}
+        baselineValidation={
+          report.profitability?.buyAndHoldEquity.validation ?? []
+        }
+      />
+    </>
+  )
+}
+
 function ProfitabilityDetails({
   entry,
   baselineValidation,
@@ -590,7 +624,9 @@ function ProfitabilityDetails({
               {entry.validation.readiness.status === 'insufficient'
                 ? 'Evidencia insuficiente'
                 : 'Pendiente de revisión'}
-              : {entry.validation.readiness.reasons.join(' ')}
+              : Ventana evaluada:{' '}
+              {entry.validation.readiness.windowDays.toFixed(1)} días.{' '}
+              {entry.validation.readiness.reasons.join(' ')}
             </p>
           )}
         </section>
@@ -617,6 +653,12 @@ function ProfitabilityMetrics({
         <dt>Operaciones</dt>
         <dd>{metrics.tradeCount}</dd>
       </div>
+      {metrics.fillCount !== undefined && (
+        <div>
+          <dt>Ejecuciones</dt>
+          <dd>{metrics.fillCount}</dd>
+        </div>
+      )}
       <div>
         <dt>Aciertos</dt>
         <dd>{formatPercent(metrics.winRate)}</dd>
