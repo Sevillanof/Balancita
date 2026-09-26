@@ -34,7 +34,11 @@ function App({
   analysis,
   geminiAnalysis,
 }: AppProps) {
-  const defaultProvider = useMemo(() => createMarketDataProvider(), [])
+  const configuredProviderMode = resolveMarketDataProviderMode()
+  const defaultProvider = useMemo(
+    () => createMarketDataProvider({ mode: configuredProviderMode }),
+    [configuredProviderMode],
+  )
   const labProvider = useMemo(
     () => new DeterministicMockMarketDataProvider(1),
     [],
@@ -73,7 +77,6 @@ function App({
 
   return (
     <main className="app">
-      <GeminiControl onEnabledChange={handleGeminiChange} />
       <BtcEurDashboard
         provider={activeProvider}
         labProvider={activeLabProvider}
@@ -83,10 +86,11 @@ function App({
         analysisMode={analysisMode}
         analysisFallback={analysisMode === 'ai' ? activeAnalysis : undefined}
         dataMode={
-          provider === undefined && resolveMarketDataProviderMode() === 'kraken'
+          provider === undefined && configuredProviderMode === 'kraken'
             ? 'real'
             : 'simulated'
         }
+        aiControl={<GeminiControl onEnabledChange={handleGeminiChange} />}
       />
     </main>
   )

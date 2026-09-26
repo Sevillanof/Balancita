@@ -129,15 +129,16 @@ describe('BtcEurDashboard main screen (Phase 1)', () => {
     vi.restoreAllMocks()
   })
 
-  it('renders ONLY the six wireframe areas A–F', async () => {
+  it('starts in a real-time panel containing only chart and news', async () => {
     renderDashboard(readyProvider())
     await waitForReady()
 
-    const chartMode = screen.getByRole('group', { name: 'Modo de gráfico' })
+    const tabs = screen.getByRole('tablist', { name: 'Vista del mercado' })
     expect(
-      within(chartMode).getByRole('button', {
-        name: 'Fast Replay Histórico',
-      }),
+      within(tabs).getByRole('tab', { name: 'Tiempo real' }),
+    ).toHaveAttribute('aria-selected', 'true')
+    expect(
+      within(tabs).getByRole('tab', { name: 'Estrategias' }),
     ).toBeInTheDocument()
 
     // A. Brand/title with the nested BTC-EUR summary.
@@ -177,12 +178,12 @@ describe('BtcEurDashboard main screen (Phase 1)', () => {
     expect(
       document.querySelector('#dashboard-news-title'),
     ).not.toBeInTheDocument()
-    // E. Buy / sell / auto control.
-    expect(screen.getByRole('button', { name: 'Comprar' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Vender' })).toBeInTheDocument()
     expect(
-      screen.getByRole('switch', { name: 'Trading automático simulado' }),
-    ).toBeDisabled()
+      screen.queryByRole('group', { name: 'Acciones de trading' }),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('region', { name: 'Estado de paper trading' }),
+    ).not.toBeInTheDocument()
     // F. BTC-EUR instrument summary.
     expect(
       screen.getByRole('region', { name: 'Resumen BTC-EUR' }),
@@ -194,12 +195,36 @@ describe('BtcEurDashboard main screen (Phase 1)', () => {
     ).not.toBeInTheDocument()
   })
 
+  it('moves replay and trading features into Estrategias without unmounting the live chart', async () => {
+    const user = userEvent.setup()
+    renderDashboard(readyProvider())
+    await waitForReady()
+    const chart = screen.getByRole('region', { name: 'Gráfico BTC-EUR' })
+    await user.click(screen.getByRole('tab', { name: 'Estrategias' }))
+    expect(
+      screen.getByRole('group', { name: 'Acciones de trading' }),
+    ).toBeVisible()
+    expect(
+      screen.getByRole('region', { name: 'Estado de paper trading' }),
+    ).toBeVisible()
+    expect(screen.getByRole('region', { name: 'Fast Replay' })).toBeVisible()
+    expect(
+      screen.getByRole('region', {
+        name: 'Noticias BTC-EUR',
+        hidden: true,
+      }),
+    ).not.toBeVisible()
+    await user.click(screen.getByRole('tab', { name: 'Tiempo real' }))
+    expect(screen.getByRole('region', { name: 'Gráfico BTC-EUR' })).toBe(chart)
+  })
+
   it('shows OHLC ingestion independently from the optional intelligence WebSocket', async () => {
     const provider = readyProvider()
     renderDashboard(provider)
     await waitForReady()
 
     const status = screen.getByRole('region', { name: 'Estado de servicios' })
+    await userEvent.setup().click(within(status).getByText('Detalles'))
     expect(status).toHaveTextContent('Ingesta de velas OHLC · Kraken')
     expect(status).toHaveTextContent('Pausada')
     expect(status).toHaveTextContent('WebSocket de inteligencia de mercado')
@@ -207,8 +232,10 @@ describe('BtcEurDashboard main screen (Phase 1)', () => {
   })
 
   it('renders exactly the three action buttons', async () => {
+    const user = userEvent.setup()
     renderDashboard(readyProvider())
     await waitForReady()
+    await user.click(screen.getByRole('tab', { name: 'Estrategias' }))
 
     const actions = screen.getByRole('group', {
       name: 'Acciones de trading',
@@ -236,8 +263,10 @@ describe('BtcEurDashboard main screen (Phase 1)', () => {
   })
 
   it('does not render any surface that is outside the wireframe', async () => {
+    const user = userEvent.setup()
     renderDashboard(readyProvider())
     await waitForReady()
+    await user.click(screen.getByRole('tab', { name: 'Estrategias' }))
 
     // No instrument detail.
     expect(
@@ -302,6 +331,7 @@ describe('BtcEurDashboard main screen (Phase 1)', () => {
     const provider = readyProvider()
     renderDashboard(provider)
     await waitForReady()
+    await user.click(screen.getByRole('tab', { name: 'Estrategias' }))
     act(() =>
       provider.emit(makeQuote({ instrumentId: 'BTC-EUR', price: 60_000 })),
     )
@@ -399,6 +429,7 @@ describe('BtcEurDashboard main screen (Phase 1)', () => {
     const user = userEvent.setup()
     renderDashboard(readyProvider())
     await waitForReady()
+    await user.click(screen.getByRole('tab', { name: 'Estrategias' }))
 
     expect(
       screen.queryByRole('button', { name: 'Vista previa de la orden' }),
@@ -418,6 +449,7 @@ describe('BtcEurDashboard main screen (Phase 1)', () => {
     const user = userEvent.setup()
     renderDashboard(readyProvider())
     await waitForReady()
+    await user.click(screen.getByRole('tab', { name: 'Estrategias' }))
 
     await user.click(screen.getByRole('button', { name: 'Comprar' }))
     const buyForm = await screen.findByRole('form', {
@@ -535,6 +567,7 @@ describe('BtcEurDashboard main screen (Phase 1)', () => {
   })
 
   it('shows paper trading OFF when enabled but its engine is not running', async () => {
+    const user = userEvent.setup()
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
       const url = String(input)
       const body = url.includes('/paper-trading/status')
@@ -560,6 +593,7 @@ describe('BtcEurDashboard main screen (Phase 1)', () => {
 
     renderDashboard(readyProvider())
     await waitForReady()
+    await user.click(screen.getByRole('tab', { name: 'Estrategias' }))
     const status = screen.getByRole('region', {
       name: 'Estado de paper trading',
     })

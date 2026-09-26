@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import type { ReactNode } from 'react'
 import type { AnalysisProvider } from '../domain/analysis.ts'
 import type { MarketDataProvider } from '../features/market-data/domain/market-data.ts'
 import type { PortfolioRepository } from '../features/portfolio/domain/portfolio.ts'
@@ -50,6 +51,7 @@ type BtcEurDashboardProps = {
   analysisMode: AnalysisMode
   analysisFallback?: AnalysisProvider
   dataMode: 'real' | 'simulated'
+  aiControl?: ReactNode
 }
 
 /**
@@ -69,6 +71,7 @@ export default function BtcEurDashboard({
   provider,
   portfolioRepository,
   dataMode,
+  aiControl,
 }: BtcEurDashboardProps) {
   const market = useWatchlist(provider)
   const history = useCandleHistory(provider, 'BTC-EUR')
@@ -84,7 +87,9 @@ export default function BtcEurDashboard({
   const [showOrderHistory, setShowOrderHistory] = useState(false)
   const balanceButtonRef = useRef<HTMLButtonElement>(null)
   const [showSimulations, setShowSimulations] = useState(false)
-  const [chartMode, setChartMode] = useState<'realtime' | 'fast'>('realtime')
+  const [activeTab, setActiveTab] = useState<'realtime' | 'strategies'>(
+    'realtime',
+  )
   const paper = usePaperTelemetry()
   const ohlcTelemetry = useOhlcCollectorTelemetry()
   const loadedTimes = useMemo(
@@ -107,84 +112,92 @@ export default function BtcEurDashboard({
 
   return (
     <div className="dashboard">
-      <DashboardServiceStatus
-        ohlc={ohlcTelemetry.status}
-        ohlcError={ohlcTelemetry.error}
-        stream={news.stream}
-        dataMode={dataMode}
-      />
-      <div className="dashboard__grid">
-        <header className="dashboard__brand">
+      <header className="dashboard__header">
+        <div className="dashboard__brand">
           <span className="dashboard__brand-mark" aria-hidden="true" />
           <h1 className="dashboard__brand-title">Balancita (BTC/EUR)</h1>
           {ready && instrument !== undefined && (
             <BtcEurSummary quote={quote} candles={history.candles} />
           )}
-        </header>
-        <section
-          className="paper-telemetry"
-          aria-label="Estado de paper trading"
-        >
-          <span
-            className={`paper-telemetry__status paper-telemetry__status--${paper.status?.enabled && paper.status.running ? 'connected' : 'neutral'}`}
+        </div>
+        <DashboardServiceStatus
+          ohlc={ohlcTelemetry.status}
+          ohlcError={ohlcTelemetry.error}
+          stream={news.stream}
+          dataMode={dataMode}
+        />
+        <div className="dashboard__header-tools">
+          {aiControl}
+          <section
+            className="dashboard__available"
+            aria-label="Dinero disponible"
           >
-            {paper.status === null
-              ? '—'
-              : paper.status.enabled && paper.status.running
-                ? 'ON'
-                : 'OFF'}
-          </span>
-          <span>Operación simulada</span>
-          <span>
-            Saldo disponible{' '}
-            {paper.status
-              ? formatPrice(paper.status.account.balance_eur, 'EUR')
-              : '—'}
-          </span>
-          <span>
-            Patrimonio{' '}
-            {paper.status
-              ? formatPrice(paper.status.account.total_equity_eur, 'EUR')
-              : '—'}
-          </span>
-          <span>
-            Ejecuciones {paper.status?.execution_summary.executed_trades ?? '—'}
-          </span>
-          <span>
-            Rechazos de gate{' '}
-            {paper.status?.execution_summary.gate_rejections ?? '—'}
-          </span>
-          {paper.error !== null && (
-            <span role="status">Estado temporalmente desactualizado</span>
-          )}
-        </section>
+            <p className="dashboard__eyebrow">Dinero disponible</p>
+            <button
+              ref={balanceButtonRef}
+              type="button"
+              className="dashboard__available-amount"
+              aria-expanded={showOrderHistory}
+              aria-controls="dashboard-order-history"
+              onClick={() => setShowOrderHistory((visible) => !visible)}
+            >
+              {eur === undefined ? '—' : formatPriceMoney(eur, 'EUR')}
+            </button>
+            {showOrderHistory && (
+              <OrderHistoryPopover
+                history={orderHistory}
+                onClose={() => {
+                  setShowOrderHistory(false)
+                  balanceButtonRef.current?.focus()
+                }}
+              />
+            )}
+          </section>
+        </div>
+      </header>
 
-        <section
-          className="dashboard__available"
-          aria-label="Dinero disponible"
+      <nav
+        className="dashboard__tabs"
+        role="tablist"
+        aria-label="Vista del mercado"
+        onKeyDown={(event) => {
+          if (event.key === 'ArrowRight' || event.key === 'ArrowLeft') {
+            event.preventDefault()
+            const next = activeTab === 'realtime' ? 'strategies' : 'realtime'
+            setActiveTab(next)
+            document
+              .getElementById(
+                next === 'realtime' ? 'tab-realtime' : 'tab-strategies',
+              )
+              ?.focus()
+          }
+        }}
+      >
+        <button
+          id="tab-realtime"
+          type="button"
+          role="tab"
+          aria-selected={activeTab === 'realtime'}
+          aria-controls="panel-realtime"
+          tabIndex={activeTab === 'realtime' ? 0 : -1}
+          onClick={() => setActiveTab('realtime')}
         >
-          <p className="dashboard__eyebrow">Dinero disponible</p>
-          <button
-            ref={balanceButtonRef}
-            type="button"
-            className="dashboard__available-amount"
-            aria-expanded={showOrderHistory}
-            aria-controls="dashboard-order-history"
-            onClick={() => setShowOrderHistory((visible) => !visible)}
-          >
-            {eur === undefined ? '—' : formatPriceMoney(eur, 'EUR')}
-          </button>
-          {showOrderHistory && (
-            <OrderHistoryPopover
-              history={orderHistory}
-              onClose={() => {
-                setShowOrderHistory(false)
-                balanceButtonRef.current?.focus()
-              }}
-            />
-          )}
-        </section>
+          Tiempo real
+        </button>
+        <button
+          id="tab-strategies"
+          type="button"
+          role="tab"
+          aria-selected={activeTab === 'strategies'}
+          aria-controls="panel-strategies"
+          tabIndex={activeTab === 'strategies' ? 0 : -1}
+          onClick={() => setActiveTab('strategies')}
+        >
+          Estrategias
+        </button>
+      </nav>
 
+      <div className="dashboard__content">
         {market.status === 'loading' && <GridState kind="loading" />}
         {market.status === 'error' && (
           <GridState kind="error" onRetry={market.retry} />
@@ -196,89 +209,116 @@ export default function BtcEurDashboard({
 
         {ready && instrument !== undefined && (
           <>
-            <section className="dashboard__chart-surface">
+            <section
+              id="panel-realtime"
+              role="tabpanel"
+              aria-labelledby="tab-realtime"
+              hidden={activeTab !== 'realtime'}
+              className="dashboard__panel dashboard__panel--realtime"
+            >
+              <ChartPanel
+                status={history.status}
+                candles={history.candles}
+                quote={quote}
+                onRetry={history.retry}
+                markers={paperMarkers}
+              />
+              <NewsPanel status={news.status} items={news.items} />
+            </section>
+            <section
+              id="panel-strategies"
+              role="tabpanel"
+              aria-labelledby="tab-strategies"
+              hidden={activeTab !== 'strategies'}
+              className="dashboard__panel dashboard__panel--strategies"
+            >
+              <section
+                className="paper-telemetry"
+                aria-label="Estado de paper trading"
+              >
+                <span
+                  className={`paper-telemetry__status paper-telemetry__status--${paper.status?.enabled && paper.status.running ? 'connected' : 'neutral'}`}
+                >
+                  {paper.status === null
+                    ? '—'
+                    : paper.status.enabled && paper.status.running
+                      ? 'ON'
+                      : 'OFF'}
+                </span>
+                <span>Operación simulada</span>
+                <span>
+                  Saldo disponible{' '}
+                  {paper.status
+                    ? formatPrice(paper.status.account.balance_eur, 'EUR')
+                    : '—'}
+                </span>
+                <span>
+                  Patrimonio{' '}
+                  {paper.status
+                    ? formatPrice(paper.status.account.total_equity_eur, 'EUR')
+                    : '—'}
+                </span>
+                <span>
+                  Ejecuciones{' '}
+                  {paper.status?.execution_summary.executed_trades ?? '—'}
+                </span>
+                <span>
+                  Rechazos de gate{' '}
+                  {paper.status?.execution_summary.gate_rejections ?? '—'}
+                </span>
+                {paper.error !== null && (
+                  <span role="status">Estado temporalmente desactualizado</span>
+                )}
+              </section>
+              <FastReplaySection />
               <div
+                className="dashboard__actions"
                 role="group"
-                aria-label="Modo de gráfico"
-                className="dashboard__chart-mode"
+                aria-label="Acciones de trading"
               >
                 <button
                   type="button"
-                  aria-pressed={chartMode === 'realtime'}
-                  onClick={() => setChartMode('realtime')}
+                  className="button button--primary"
+                  onClick={() => setOrderFlowSide(BUY)}
                 >
-                  Tiempo Real
+                  Comprar
                 </button>
                 <button
                   type="button"
-                  aria-pressed={chartMode === 'fast'}
-                  onClick={() => setChartMode('fast')}
+                  className="button button--secondary"
+                  onClick={() => setOrderFlowSide(SELL)}
                 >
-                  Fast Replay Histórico
+                  Vender
+                </button>
+                <AutoTradingControl
+                  enabled={ledger.autoTradingEnabled}
+                  available={
+                    market.connectionStatus === 'connected' &&
+                    ledger.strategyReady
+                  }
+                  ready={ledger.strategyReady}
+                  onChange={ledger.setAutoTrading}
+                />
+                <button
+                  type="button"
+                  className="button button--secondary"
+                  aria-expanded={showSimulations}
+                  aria-controls="simulaciones"
+                  onClick={() => setShowSimulations((visible) => !visible)}
+                >
+                  Simulaciones
                 </button>
               </div>
-              {chartMode === 'realtime' ? (
-                <ChartPanel
-                  status={history.status}
-                  candles={history.candles}
-                  quote={quote}
-                  onRetry={history.retry}
-                  markers={paperMarkers}
-                />
-              ) : (
-                <FastReplaySection />
+              {showSimulations && (
+                <div id="simulaciones">
+                  <SimulationsSection />
+                </div>
               )}
+              <StrategyAnalyticsDisclosure />
             </section>
-            <NewsPanel status={news.status} items={news.items} />
-            <div
-              className="dashboard__actions"
-              role="group"
-              aria-label="Acciones de trading"
-            >
-              <button
-                type="button"
-                className="button button--primary"
-                onClick={() => setOrderFlowSide(BUY)}
-              >
-                Comprar
-              </button>
-              <button
-                type="button"
-                className="button button--secondary"
-                onClick={() => setOrderFlowSide(SELL)}
-              >
-                Vender
-              </button>
-              <AutoTradingControl
-                enabled={ledger.autoTradingEnabled}
-                available={
-                  market.connectionStatus === 'connected' &&
-                  ledger.strategyReady
-                }
-                ready={ledger.strategyReady}
-                onChange={ledger.setAutoTrading}
-              />
-              <button
-                type="button"
-                className="button button--secondary"
-                aria-expanded={showSimulations}
-                aria-controls="simulaciones"
-                onClick={() => setShowSimulations((visible) => !visible)}
-              >
-                Simulaciones
-              </button>
-            </div>
           </>
         )}
       </div>
-
-      {ready && instrument !== undefined && showSimulations && (
-        <div id="simulaciones">
-          <SimulationsSection />
-        </div>
-      )}
-
-      {ready && instrument !== undefined && <StrategyAnalyticsDisclosure />}
 
       {ready && instrument !== undefined && orderFlowSide !== null && (
         <OrderFlowDialog
@@ -371,30 +411,50 @@ function DashboardServiceStatus({
       className="dashboard__service-status"
       aria-label="Estado de servicios"
     >
-      <article>
-        <strong>Ingesta de velas OHLC · Kraken</strong>
-        <span>{ohlc?.running ? 'Activa' : 'Pausada'}</span>
-        <small>
-          {ohlc === null
-            ? (ohlcError ?? 'Esperando el estado del colector')
-            : `${ohlc.candleCount.toLocaleString('es-ES')} velas · ${ohlc.coverageHours.toFixed(2)} h de cobertura · ${ohlc.gapCount} huecos · última vela: ${ohlc.maxTimestamp === null ? '—' : formatServiceTime(ohlc.maxTimestamp)}`}
-        </small>
-      </article>
-      <article>
-        <strong>WebSocket de inteligencia de mercado</strong>
-        <span
-          className={websocketActive ? undefined : 'service-status__inactive'}
-        >
-          {websocketActive
-            ? collectorLabel(marketStatus)
-            : 'Inactivo (Opcional)'}
-        </span>
-        <small>
-          {dataMode === 'real'
-            ? 'Canal de mercado independiente del gráfico y de la ingesta OHLC.'
-            : 'Disponible únicamente cuando se habilita el colector de inteligencia.'}
-        </small>
-      </article>
+      <span
+        className={
+          ohlc?.running ? 'service-status__active' : 'service-status__inactive'
+        }
+      >
+        OHLC {ohlc?.running ? 'Activo' : 'Pausado'}
+      </span>
+      <span
+        className={
+          websocketActive
+            ? 'service-status__active'
+            : 'service-status__inactive'
+        }
+      >
+        Inteligencia{' '}
+        {websocketActive ? collectorLabel(marketStatus) : 'No disponible'}
+      </span>
+      <details className="dashboard__service-details">
+        <summary>Detalles</summary>
+        <article>
+          <strong>Ingesta de velas OHLC · Kraken</strong>
+          <span>{ohlc?.running ? 'Activa' : 'Pausada'}</span>
+          <small>
+            {ohlc === null
+              ? (ohlcError ?? 'Esperando el estado del colector')
+              : `${ohlc.candleCount.toLocaleString('es-ES')} velas · ${ohlc.coverageHours.toFixed(2)} h de cobertura · ${ohlc.gapCount} huecos · última vela: ${ohlc.maxTimestamp === null ? '—' : formatServiceTime(ohlc.maxTimestamp)}`}
+          </small>
+        </article>
+        <article>
+          <strong>WebSocket de inteligencia de mercado</strong>
+          <span
+            className={websocketActive ? undefined : 'service-status__inactive'}
+          >
+            {websocketActive
+              ? collectorLabel(marketStatus)
+              : 'Inactivo (Opcional)'}
+          </span>
+          <small>
+            {dataMode === 'real'
+              ? 'Canal de mercado independiente del gráfico y de la ingesta OHLC.'
+              : 'Disponible únicamente cuando se habilita el colector de inteligencia.'}
+          </small>
+        </article>
+      </details>
     </section>
   )
 }

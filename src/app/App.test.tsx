@@ -95,9 +95,17 @@ describe('dashboard BTC-EUR', () => {
       }),
     ).toBeInTheDocument()
     expect(
+      screen
+        .getByRole('switch', { name: 'Llamadas a Gemini' })
+        .closest('header'),
+    ).toBeInTheDocument()
+    expect(
       screen.queryByText('Un espacio personal de inversión local y educativo.'),
     ).not.toBeInTheDocument()
-    expect(screen.queryAllByRole('tablist', { hidden: true })).toHaveLength(0)
+    expect(
+      screen.getByRole('tablist', { name: 'Vista del mercado' }),
+    ).toBeInTheDocument()
+    await user.click(screen.getByRole('tab', { name: 'Estrategias' }))
     const auditSummary = screen.getByText(
       'Auditoría por Estrategia y Ledger de Posiciones',
       { selector: 'summary' },
@@ -110,13 +118,15 @@ describe('dashboard BTC-EUR', () => {
         hidden: true,
       }),
     ).not.toBeInTheDocument()
-    expect(screen.queryByRole('navigation')).not.toBeInTheDocument()
+    expect(
+      screen.getByRole('tablist', { name: 'Vista del mercado' }),
+    ).toBeInTheDocument()
 
     await user.click(auditSummary)
     expect(
       await screen.findByRole('tablist', { name: 'Estado de posiciones' }),
     ).toBeInTheDocument()
-    expect(screen.getAllByRole('tablist')).toHaveLength(1)
+    expect(screen.getAllByRole('tablist')).toHaveLength(2)
     expect(auditDetails).toHaveAttribute('open')
     expect(
       screen.getByRole('tablist', {
@@ -137,7 +147,9 @@ describe('dashboard BTC-EUR', () => {
     ).not.toBeInTheDocument()
     await user.click(auditSummary)
     await waitFor(() => expect(auditDetails).not.toHaveAttribute('open'))
-    expect(screen.queryAllByRole('tablist', { hidden: true })).toHaveLength(0)
+    expect(
+      screen.getByRole('tablist', { name: 'Vista del mercado' }),
+    ).toBeInTheDocument()
     await user.click(auditSummary)
     expect(
       await screen.findByRole('tablist', { name: 'Estado de posiciones' }),
@@ -148,6 +160,7 @@ describe('dashboard BTC-EUR', () => {
     const user = userEvent.setup()
     const { provider } = renderApp()
 
+    await user.click(await screen.findByRole('tab', { name: 'Estrategias' }))
     await screen.findByRole('group', { name: 'Acciones de trading' })
     await user.click(screen.getByRole('button', { name: 'Comprar' }))
     await screen.findByRole('form', { name: 'Orden del simulador' })
@@ -183,6 +196,7 @@ describe('dashboard BTC-EUR', () => {
     analysis.analyzeCall.mockResolvedValue(localResult())
     const { provider } = renderApp({ analysis })
 
+    await user.click(await screen.findByRole('tab', { name: 'Estrategias' }))
     await screen.findByRole('group', { name: 'Acciones de trading' })
     await user.click(screen.getByRole('button', { name: 'Vender' }))
     await screen.findByRole('form', { name: 'Orden del simulador' })
@@ -245,6 +259,7 @@ describe('dashboard Gemini boundary', () => {
       />,
     )
 
+    await user.click(await screen.findByRole('tab', { name: 'Estrategias' }))
     await screen.findByRole('group', { name: 'Acciones de trading' })
     await user.click(screen.getByRole('button', { name: 'Comprar' }))
     await waitFor(() =>
@@ -255,11 +270,9 @@ describe('dashboard Gemini boundary', () => {
     await waitFor(() =>
       expect(screen.getByLabelText('Cantidad')).toBeInTheDocument(),
     )
-    // Phase 1 renders only the six wireframe areas: there is no analysis
-    // surface and no IA toggle, so neither provider may ever be invoked.
     expect(
-      screen.queryByRole('switch', { name: /análisis con ia/i }),
-    ).not.toBeInTheDocument()
+      screen.getByRole('switch', { name: 'Llamadas a Gemini' }),
+    ).toBeInTheDocument()
     expect(local.analyzeCall).not.toHaveBeenCalled()
     expect(gemini.analyzeCall).not.toHaveBeenCalled()
   })

@@ -100,6 +100,9 @@ describe('Simulaciones navigation', () => {
   it('shows an enabled Simulaciones button and the disabled automation switch during warmup', async () => {
     renderDashboard()
     await screen.findByRole('region', { name: 'Gráfico BTC-EUR' })
+    await userEvent
+      .setup()
+      .click(screen.getByRole('tab', { name: 'Estrategias' }))
 
     const actions = screen.getByRole('group', {
       name: 'Acciones de trading',
@@ -124,6 +127,7 @@ describe('Simulaciones navigation', () => {
     const user = userEvent.setup()
     renderDashboard()
     await screen.findByRole('region', { name: 'Gráfico BTC-EUR' })
+    await user.click(screen.getByRole('tab', { name: 'Estrategias' }))
 
     const toggle = screen.getByRole('button', { name: 'Simulaciones' })
     expect(toggle).toHaveAttribute('aria-expanded', 'false')
@@ -158,6 +162,7 @@ describe('Simulaciones navigation', () => {
     )
     renderDashboard()
     await screen.findByRole('region', { name: 'Gráfico BTC-EUR' })
+    await user.click(screen.getByRole('tab', { name: 'Estrategias' }))
 
     await user.click(screen.getByRole('button', { name: 'Simulaciones' }))
     await waitFor(() =>
