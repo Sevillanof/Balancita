@@ -1,0 +1,28 @@
+odd/tasks/simulation-evidence-usability.md
+  h_2f68313623be98 1-126
+server/src/features/replay/market-data-coverage.test.ts
+  h_2f68313623be98 1-152
+server/src/features/replay/market-data-coverage.ts
+  h_2f68313623be98 1-334
+server/src/features/simulations/simulations-runner.test.ts
+  h_2f68313623be98 1,80-90,117-120,145-168
+server/src/features/simulations/simulations-runner.ts
+  h_2f68313623be98 43-46,93,105-106,202,204,309,501,537
+src/features/simulations/presentation/SimulationsPanel.test.tsx
+  h_2f68313623be98 33-71,199-241
+src/features/simulations/presentation/SimulationsPanel.tsx
+  h_2f68313623be98 200,296-299,333,386-461
+src/features/simulations/presentation/simulations-types.ts
+  h_2f68313623be98 160-214
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f1c6f2defe7290925b5df5c05df8f90a58b16b71",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
