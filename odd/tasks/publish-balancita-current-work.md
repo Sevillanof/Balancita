@@ -107,9 +107,11 @@ Verified before authoring this task record:
     file; `git diff --check` passed; `docs/` contains exactly the two retained
     Markdown paths. An outside-scope stale link remains in
     `odd/tasks/kraken-market-data.md:113`; it was not edited.
-- [ ] **PBCW-4 — Push the documentation update to `main`**
-  - Commit the documentation replacement as its own coherent work unit and
-    push non-force. On rejection, stop and report; do not retry blindly.
+- [x] **PBCW-4 — Push the documentation update to `main`**
+  - Documentation commit: `eb27462dc61fefd75e921e62412aabaebf1fd090`.
+    The second normal push succeeded without force, with exact output
+    `486fd75..eb27462 HEAD -> main`. It published the two retained documents
+    and four deletions. The first push was `a79ec1f..486fd75`.
 
 ## Acceptance criteria
 
@@ -154,8 +156,16 @@ docs/bitcoin-market-intelligence-roadmap.md
 odd/tasks/publish-balancita-current-work.md` passed; `git diff --check`
   passed; the targeted top-level Markdown inventory returned exactly
   `implementation-progress.md` and `bitcoin-market-intelligence-roadmap.md`.
-  PBCW-4 remains pending until the parent creates the docs commit and performs
-  the second push.
+  PBCW-4 is complete: commit `eb27462dc61fefd75e921e62412aabaebf1fd090`
+  was published by the successful normal push recorded above. The outside-scope
+  stale link in `odd/tasks/kraken-market-data.md:113` remains unchanged.
+
+## Final status and next step
+
+- All four tasks are complete. The publication result is recorded above and in
+  Git history; future delivery decisions follow ordinary repository policy.
+- The native RDD attempt failed at `pre_native/not_started`; no receipt exists
+  or is claimed. The Engram mirror remains pending.
 
 ## Engram mirror
 
