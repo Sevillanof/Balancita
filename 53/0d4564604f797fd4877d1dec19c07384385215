@@ -1,0 +1,34 @@
+odd/tasks/simulation-evidence-usability.md
+  h_2f68313623be98 3,105,107-115
+server/src/app/app.ts
+  h_2f68313623be98 52-55,170-182,1012-1014,1017-1021
+server/src/app/fast-replay-api.test.ts
+  h_2f68313623be98 321-344,358-377,391-400
+server/src/features/simulations/comparison-report.ts
+  h_2f68313623be98 59-60
+server/src/features/simulations/fast-replay-engine.test.ts
+  h_2f68313623be98 77-82,318
+server/src/features/simulations/fast-replay-engine.ts
+  h_2f68313623be98 11-14,40-41,64-68,280-281
+server/src/features/simulations/fee-scenario.ts
+  h_2f68313623be98 1-16
+server/src/features/simulations/paper-forward.test.ts
+  h_2f68313623be98 3-6,88,97-104,122-189
+server/src/features/simulations/paper-forward.ts
+  h_2f68313623be98 14-17,33-42,51-52,272-273,394-398,407-408
+src/app/FastReplaySection.test.tsx
+  h_2f68313623be98 162-182,225-249
+src/app/FastReplaySection.tsx
+  h_2f68313623be98 35-46,68-85,423,444-465
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "530d4564604f797fd4877d1dec19c07384385215",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
