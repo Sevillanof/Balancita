@@ -1,0 +1,22 @@
+odd/tasks/simulation-evidence-usability.md
+  h_2f68313623be98 107-112
+server/src/features/simulations/comparison-report.ts
+  h_2f68313623be98 154
+server/src/features/simulations/sample-window.test.ts
+  h_2f68313623be98 2,84-89,112,116-121,141,147,151-156,177-276
+server/src/features/simulations/sample-window.ts
+  h_2f68313623be98 25,65,67-70,73
+server/src/features/simulations/simulations-runner.test.ts
+  h_2f68313623be98 38-42,44,59,228-330
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7f729338bdbe98a8b5e57b68517f5cfa0802dfcb",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
