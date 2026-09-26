@@ -1,0 +1,47 @@
+package.json
+  s_032349feeb72a0::t_6036777d7ac3f1 25
+pnpm-lock.yaml
+  s_032349feeb72a0::t_e20fcb9d0c021c 11-13,433-443,1689-1696
+src/features/strategy-analytics/StrategyAnalyticsPanel.test.tsx
+  s_001c1ebcd79264::t_7ae4d0d0df95da 2-9,51,53-71,79-96,102-168,171-174,177-179,263-323
+src/features/strategy-analytics/StrategyAnalyticsPanel.tsx
+  s_001c1ebcd79264::t_5ffe79f763b6c1 16-38,40-44,67-72,77-98
+src/features/strategy-analytics/StrategyCards.tsx
+  s_d49bb852c30422::t_a49b945193daeb 1-7,14-17,19,28-131,133-163
+src/features/strategy-analytics/useStrategyAnalytics.test.tsx
+  s_001c1ebcd79264::t_718c6e341d8dfb 1-249
+src/features/strategy-analytics/useStrategyAnalytics.ts
+  s_001c1ebcd79264::t_f9dd222409c38d 10-14,24-28,38-52,54-77,79-121,123-124,129-132,135,140,142-148,200-233
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "369a85b947d0757fbbc640d13544028290ab026a",
+  "prompts": {},
+  "sessions": {
+    "s_001c1ebcd79264": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f232b3333fferbK76BZtCLKuhP",
+        "model": "gpt-6-luna-fast"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    },
+    "s_032349feeb72a0": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f2581c0e6ffe0sOxr7dcu385Av",
+        "model": "gpt-6-luna-fast"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    },
+    "s_d49bb852c30422": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f416043b0ffe018dRDpb5OGIqx",
+        "model": "big-pickle"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
