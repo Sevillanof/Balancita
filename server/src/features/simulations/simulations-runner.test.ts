@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -77,6 +77,17 @@ describe('simulations runner', () => {
     })
 
     expect(result.datasetHash).toMatch(/^[0-9a-f]{64}$/)
+    expect(result.marketDataCoverage.measuredAt).toBe(1)
+    expect(result.marketDataCoverage.observations).toMatchObject({
+      source: 'kraken_market_observations',
+      count: CANDLES,
+      firstReceivedTime: T0 + 10_100,
+    })
+    expect(result.marketDataCoverage.ohlc).toMatchObject({
+      source: 'kraken_rest_ohlc_1m',
+      count: 0,
+      status: 'missing',
+    })
     expect(result.manifestHash).toMatch(/^[0-9a-f]{64}$/)
     expect(result.horizons).toHaveLength(1)
     const horizon = result.horizons[0]!
@@ -103,6 +114,10 @@ describe('simulations runner', () => {
 
     const persisted = JSON.parse(readFileSync(paths.reportPath, 'utf8'))
     expect(persisted.reports[0].contentHash).toBe(horizon.report.contentHash)
+    expect(persisted.marketDataCoverage.observations.source).toBe(
+      'kraken_market_observations',
+    )
+    expect(persisted.marketDataCoverage.ohlc.source).toBe('kraken_rest_ohlc_1m')
   }, 45_000)
 
   it('hits the persisted report when the live dataset and request identity match', () => {
@@ -125,6 +140,30 @@ describe('simulations runner', () => {
     expect(JSON.parse(readFileSync(paths.reportPath, 'utf8')).generatedAt).toBe(
       1,
     )
+  }, 45_000)
+
+  it('keeps a legacy cache hit without rewriting or upgrading its coverage snapshot', () => {
+    const paths = makePaths()
+    seedContiguousMarket(paths.marketDbPath)
+    const options = {
+      ...paths,
+      horizons: ['15m'] as const,
+      clock: () => 1 as TimestampMs,
+    }
+    runSimulationsFromLiveDb(options)
+    const legacy = JSON.parse(readFileSync(paths.reportPath, 'utf8'))
+    delete legacy.marketDataCoverage
+    writeFileSync(paths.reportPath, JSON.stringify(legacy))
+
+    const cached = runSimulationsFromLiveDb({
+      ...options,
+      clock: () => (T0 + CANDLES * MINUTE_MS) as TimestampMs,
+    })
+    const persisted = JSON.parse(readFileSync(paths.reportPath, 'utf8'))
+
+    expect(cached.marketDataCoverage.measuredAt).toBe(T0 + CANDLES * MINUTE_MS)
+    expect(persisted.marketDataCoverage).toBeUndefined()
+    expect(persisted.generatedAt).toBe(1)
   }, 45_000)
 
   it('misses the cache when a simulation parameter changes', () => {

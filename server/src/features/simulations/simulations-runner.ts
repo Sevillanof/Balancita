@@ -40,6 +40,10 @@ import { splitByTime } from './time-split.ts'
 import { confirmationCohort, selectSeededTimeWindow } from './sample-window.ts'
 import { candidateForId } from './candidate-manifest.ts'
 import { writeSimulationReportArchive } from './simulations-history.ts'
+import {
+  readMarketDataCoverage,
+  type MarketDataCoverage,
+} from '../replay/market-data-coverage.ts'
 
 export const SIMULATIONS_DEFAULT_HORIZON: ForecastHorizon = '15m'
 export const SIMULATIONS_DEFAULT_SELECTION_PCT = 0.7
@@ -86,6 +90,7 @@ export interface SimulationsRunnerResult {
   readonly asOfTimestamp: TimestampMs
   readonly candleCount: number
   readonly selectionPct: number
+  readonly marketDataCoverage: MarketDataCoverage
   readonly horizons: readonly HorizonSimulationResult[]
 }
 
@@ -97,6 +102,8 @@ export interface SimulationsReportFile {
   readonly datasetHash: string
   readonly manifestHash: string
   readonly selectionPct: number
+  /** Absent only in historical reports written before coverage was added. */
+  readonly marketDataCoverage?: MarketDataCoverage
   readonly window: { readonly since: TimestampMs; readonly until: TimestampMs }
   readonly request: SimulationRequestIdentity
   readonly sample?: {
@@ -192,7 +199,9 @@ export function runSimulationsFromLiveDb(
 
   const live = openLiveMarketDbReadOnly(options.marketDbPath)
   let observations
+  let marketDataCoverage: MarketDataCoverage
   try {
+    marketDataCoverage = readMarketDataCoverage(live, clock())
     const rows = readKrakenObservationRows(live, {
       ...(options.stage === undefined && options.since !== undefined
         ? { since: options.since }
@@ -297,6 +306,7 @@ export function runSimulationsFromLiveDb(
       asOfTimestamp: dataset.asOfTimestamp,
       candleCount: dataset.candles.length,
       selectionPct: cached.selectionPct,
+      marketDataCoverage,
       horizons: cached.reports.map((report) => ({
         horizon: report.horizon,
         report,
@@ -488,6 +498,7 @@ export function runSimulationsFromLiveDb(
       datasetHash: dataset.datasetHash,
       manifestHash,
       selectionPct,
+      marketDataCoverage,
       request: stageRequest,
       ...(sample === undefined ? {} : { sample }),
       window: {
@@ -523,6 +534,7 @@ export function runSimulationsFromLiveDb(
       asOfTimestamp: dataset.asOfTimestamp,
       candleCount: dataset.candles.length,
       selectionPct,
+      marketDataCoverage,
       horizons,
     }
   } finally {

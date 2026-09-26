@@ -197,6 +197,7 @@ export default function SimulationsPanel({
               {file.sample.horizons.join(', ')}.
             </p>
           )}
+          <CoverageEvidence coverage={file.marketDataCoverage} />
           {file.reports.length > 1 && (
             <div role="tablist" aria-label="Horizonte de simulación">
               {file.reports.map((report) => (
@@ -292,8 +293,10 @@ export default function SimulationsPanel({
                     </article>
                   </li>
                 </ul>
-                {report.microCandidateDiagnostics !== null && report.microCandidateDiagnostics !== undefined && (
-                  <section aria-label="Validación experimental de estrategias micro">
+                {report.microCandidateDiagnostics !== null &&
+                  report.microCandidateDiagnostics !== undefined &&
+                    // prettier-ignore
+                    <section aria-label="Validación experimental de estrategias micro">
                     <h4>Validación experimental · candidatas micro</h4>
                     <p>{report.microCandidateDiagnostics.holdoutNotice}</p>
                     <div className="table-scroll">
@@ -327,8 +330,7 @@ export default function SimulationsPanel({
                         </tbody>
                       </table>
                     </div>
-                  </section>
-                )}
+                  </section>}
                 <footer className="simulations__provenance">
                   <p>
                     Procedencia: conjunto {shortHash(report.datasetHash)} ·
@@ -379,6 +381,82 @@ export default function SimulationsPanel({
       )}
     </section>
   )
+}
+
+function CoverageEvidence({
+  coverage,
+}: {
+  readonly coverage: SimulationsReportFile['marketDataCoverage']
+}) {
+  if (coverage === undefined)
+    return (
+      <p role="status">
+        Este informe histórico no incluye cobertura de fuentes.
+      </p>
+    )
+
+  const observation = coverage.observations
+  const ohlc = coverage.ohlc
+  return (
+    <details className="simulations__provenance">
+      <summary>Cobertura de datos al momento de la medición</summary>
+      <p>Medición: {new Date(coverage.measuredAt).toISOString()}.</p>
+      <p>
+        Los estados de frescura pertenecen a esta instantánea y no describen la
+        frescura actual.
+      </p>
+      <p>
+        Los informes del simulador usan observaciones de mercado; Fast Replay
+        usa velas REST OHLC. Son fuentes distintas.
+      </p>
+      <p>
+        La suficiencia de la estrategia se mide con operaciones cerradas en cada
+        tramo, no con el número de observaciones.
+      </p>
+      <dl>
+        <div>
+          <dt>{observation.source}</dt>
+          <dd>
+            {observation.count} observaciones · evento{' '}
+            {formatCoverageTime(observation.firstEventTime)} –{' '}
+            {formatCoverageTime(observation.lastEventTime)} · recepción máxima{' '}
+            {formatCoverageTime(observation.maxReceivedTime)} · antigüedad{' '}
+            {formatAge(observation.ageMs)} · frescura{' '}
+            {observation.freshnessStatus} al momento de la medición · intervalo{' '}
+            {observation.spanAdequacy} · integridad de observaciones{' '}
+            {observation.completeness} · suficiencia global{' '}
+            {observation.coverageAdequacy}.{' Huecos: no medidos. '}
+            {observation.gaps.reason}
+            {observation.reason === null ? '' : ` ${observation.reason}`}
+          </dd>
+        </div>
+        <div>
+          <dt>{ohlc.source}</dt>
+          <dd>
+            {ohlc.count} velas de 1 minuto · cierre/evento{' '}
+            {formatCoverageTime(ohlc.firstEventTime)} –{' '}
+            {formatCoverageTime(ohlc.lastEventTime)} · antigüedad{' '}
+            {formatAge(ohlc.ageMs)} · huecos{' '}
+            {ohlc.gapCount === null ? 'no medidos' : ohlc.gapCount} · frescura{' '}
+            {ohlc.freshnessStatus} al momento de la medición · intervalo{' '}
+            {ohlc.spanAdequacy} · continuidad/suficiencia{' '}
+            {ohlc.coverageAdequacy}.
+            {ohlc.reason === null ? '' : ` ${ohlc.reason}`}
+          </dd>
+        </div>
+      </dl>
+    </details>
+  )
+}
+
+function formatCoverageTime(value: number | null): string {
+  return value === null ? 'sin datos' : new Date(value).toISOString()
+}
+
+function formatAge(value: number | null): string {
+  return value === null
+    ? 'no disponible'
+    : `${value.toLocaleString('es-ES')} ms`
 }
 
 function CandidateCard({

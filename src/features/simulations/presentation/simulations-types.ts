@@ -157,6 +157,61 @@ export interface SimulationsReportFile {
   readonly datasetHash: string
   readonly manifestHash: string
   readonly selectionPct: number
+  readonly marketDataCoverage?: {
+    readonly measuredAt: number
+    readonly staleAfterMs: number
+    readonly minimumCoverageMs: number
+    readonly observations: {
+      readonly source: 'kraken_market_observations'
+      readonly count: number
+      readonly firstEventTime: number | null
+      readonly lastEventTime: number | null
+      readonly firstReceivedTime: number | null
+      readonly maxReceivedTime: number | null
+      readonly ageMs: number | null
+      readonly receiveAgeMs: number | null
+      readonly timeSpanMs: number
+      readonly clockInverted: boolean
+      readonly gaps: {
+        readonly status: 'not_measured'
+        readonly reason: string
+      }
+      readonly spanAdequacy: 'insufficient' | 'sufficient'
+      readonly completeness: 'unknown'
+      readonly coverageAdequacy: 'missing' | 'insufficient' | 'unknown'
+      readonly freshnessStatus: 'unknown' | 'fresh' | 'stale' | 'future_dated'
+      readonly status:
+        | 'missing'
+        | 'insufficient'
+        | 'unverified'
+        | 'available'
+        | 'stale'
+        | 'future_dated'
+      readonly reason: string | null
+    }
+    readonly ohlc: {
+      readonly source: 'kraken_rest_ohlc_1m'
+      readonly count: number
+      readonly firstEventTime: number | null
+      readonly lastEventTime: number | null
+      readonly ageMs: number | null
+      readonly timeSpanMs: number
+      readonly gapCount: number | null
+      readonly clockInverted: boolean
+      readonly spanAdequacy: 'insufficient' | 'sufficient'
+      readonly coverageAdequacy:
+        'missing' | 'insufficient' | 'adequate' | 'unknown'
+      readonly freshnessStatus: 'unknown' | 'fresh' | 'stale' | 'future_dated'
+      readonly status:
+        | 'missing'
+        | 'insufficient'
+        | 'unverified'
+        | 'available'
+        | 'stale'
+        | 'future_dated'
+      readonly reason: string | null
+    }
+  }
   readonly window?: { readonly since: number; readonly until: number }
   readonly sample?: {
     readonly stage: 'smoke' | 'confirm'

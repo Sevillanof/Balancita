@@ -30,6 +30,45 @@ function reportFile(): SimulationsReportFile {
     datasetHash: 'a'.repeat(64),
     manifestHash: 'b'.repeat(64),
     selectionPct: 0.7,
+    marketDataCoverage: {
+      measuredAt: 500_000,
+      staleAfterMs: 120_000,
+      minimumCoverageMs: 1_000,
+      observations: {
+        source: 'kraken_market_observations',
+        count: 2,
+        firstEventTime: 100_000,
+        lastEventTime: 220_000,
+        firstReceivedTime: 101_000,
+        maxReceivedTime: 221_000,
+        ageMs: 280_000,
+        receiveAgeMs: 279_000,
+        timeSpanMs: 120_000,
+        clockInverted: false,
+        gaps: { status: 'not_measured', reason: 'Trade times are irregular.' },
+        spanAdequacy: 'sufficient',
+        completeness: 'unknown',
+        coverageAdequacy: 'unknown',
+        freshnessStatus: 'stale',
+        status: 'stale',
+        reason: 'Latest event is old.',
+      },
+      ohlc: {
+        source: 'kraken_rest_ohlc_1m',
+        count: 0,
+        firstEventTime: null,
+        lastEventTime: null,
+        ageMs: null,
+        timeSpanMs: 0,
+        gapCount: null,
+        clockInverted: false,
+        spanAdequacy: 'insufficient',
+        coverageAdequacy: 'missing',
+        freshnessStatus: 'unknown',
+        status: 'missing',
+        reason: 'No bars.',
+      },
+    },
     reports: [
       {
         version: 'simulations-comparison.v1',
@@ -157,6 +196,49 @@ function baselineEntry(candidateId: string) {
 }
 
 describe('SimulationsPanel', () => {
+  it('shows measured source coverage and does not claim gaps for irregular trades', () => {
+    render(
+      <SimulationsPanel
+        status="ready"
+        file={reportFile()}
+        error={null}
+        onRetry={() => undefined}
+      />,
+    )
+
+    expect(screen.getByText(/Cobertura de datos/)).toBeInTheDocument()
+    expect(
+      screen.getAllByText(/al momento de la medición/i).length,
+    ).toBeGreaterThan(0)
+    expect(screen.getByText(/kraken_market_observations/)).toBeInTheDocument()
+    expect(screen.getByText(/huecos: no medidos/i)).toBeInTheDocument()
+    expect(
+      screen.getByText(/integridad de observaciones unknown/i),
+    ).toBeInTheDocument()
+    expect(screen.getByText(/1970-01-01T00:03:41/)).toBeInTheDocument()
+    expect(screen.getByText(/kraken_rest_ohlc_1m/)).toBeInTheDocument()
+    expect(screen.getByText(/1970-01-01T00:08:20\.000Z/)).toBeInTheDocument()
+    expect(
+      screen.getByText(/suficiencia de la estrategia.*operaciones cerradas/i),
+    ).toBeInTheDocument()
+  })
+
+  it('labels historical reports without coverage instead of rejecting them', () => {
+    const legacyReport = { ...reportFile(), marketDataCoverage: undefined }
+    render(
+      <SimulationsPanel
+        status="ready"
+        file={legacyReport}
+        error={null}
+        onRetry={() => undefined}
+      />,
+    )
+
+    expect(
+      screen.getByText(/informe histórico no incluye cobertura/i),
+    ).toBeInTheDocument()
+  })
+
   it('announces loading while the report is fetched', () => {
     render(
       <SimulationsPanel
