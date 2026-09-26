@@ -1,6 +1,6 @@
 # BTC-EUR Simulator Evidence and Usability
 
-**Status:** SIM-EVID-01 implementation tested; bounded-scope correction in progress. Candidate commit `f1c6f2defe7290925b5df5c05df8f90a58b16b71` predates the correction; a new corrected commit and proof remain pending.
+**Status:** SIM-EVID-01 checked; SIM-EVID-02 through SIM-EVID-04 remain pending.
 **Branch:** `fix-graph-panel` (non-default; preserve the existing user changes).
 **Review mode:** on.
 **Git branch point / merge-base:** `a79ec1facac6c917c9da918c9f4e3fdc5c4e8902` (15 pre-existing commits on this branch since this point).
@@ -8,6 +8,13 @@
 **Native review candidate:** one new work-unit commit for this feature, reviewed against the initial work-unit boundary above; not the accumulated feature branch.
 **Delivery strategy:** `feature-branch-chain` (selected by user); no PR, push, or merge authorized.
 **Engram mirror:** pending; mirror the full document to project `balancita`, topic `odd/simulation-evidence-usability/tasks`, with this repo-relative locator and `capture_prompt: false`. Do not invent a session ID. If Engram is unavailable or session/project resolution is ambiguous, leave pending and report it.
+
+## Stable task checklist
+
+- [x] SIM-EVID-01
+- [ ] SIM-EVID-02
+- [ ] SIM-EVID-03
+- [ ] SIM-EVID-04
 
 ## Objective and problem
 
@@ -73,7 +80,11 @@ For every task, record focused test exact result, applicable typecheck/lint/form
 
 **Evidence:** RED: `pnpm --dir server exec vitest run src/features/replay/market-data-coverage.test.ts src/features/simulations/simulations-runner.test.ts` — 3 expected failures: a year-long OHLC span with an internal gap was called adequate, a long observation span implied adequate completeness, and legacy cached reports were rewritten/replayed to add coverage. UI RED: `pnpm exec vitest run src/features/simulations/presentation/SimulationsPanel.test.tsx` — failed the explicit at-measurement-time label. GREEN: `pnpm --dir server exec vitest run src/features/simulations/simulations-runner.test.ts src/features/replay/kraken-observation-import.test.ts src/features/replay/market-data-coverage.test.ts` — 3 files, 25 tests passed. UI GREEN: `pnpm exec vitest run src/features/simulations/presentation/SimulationsPanel.test.tsx` — 1 file, 12 tests passed, including historical reports without coverage. REFACTOR: restored the unrelated micro-diagnostics table formatting using a narrow Prettier ignore so the panel diff stays focused; final Prettier checks passed. `pnpm --dir server run typecheck` and `pnpm run typecheck` passed. `pnpm run lint` passed with one warning in untouched `src/features/strategy-analytics/StrategyCards.tsx:126` and zero errors. Runtime: 6 isolated in-memory SQLite fixtures used `PRAGMA query_only=ON` before coverage reads and injected measurement/freshness clocks; they cover irregular trade observations, received-time maxima, OHLC gap spans, stale/future timestamps, short spans, and absent legacy tables. No live database was opened or modified. Rollback: above; commit identity: pending (parent owns commit). Observation completeness remains explicitly unknown; OHLC adequacy requires the configured span and zero internal gaps. Final bounded status correction: RED added assertions that long-span OHLC with gaps is `insufficient` and fresh long-span observations are `unverified`; `pnpm --dir server exec vitest run src/features/replay/market-data-coverage.test.ts` failed both assertions before the implementation change. GREEN reran the required focused server command (3 files, 25 tests passed) and panel command (1 file, 12 tests passed); both typechecks, root lint, and Prettier check passed again. Root status is now adequacy-aware while `freshnessStatus` remains independent. Final freeze correction RED: focused coverage test failed on two new status assertions (`available` for gapped year-long OHLC and fresh observations with unknown continuity); after the fix it passed as part of the exact server command above (25/25 tests). A follow-up RED assertion caught a misleading span-only explanation for OHLC gaps; the final reason now names internal gaps. Final root/panel typechecks, lint, and Prettier checks all passed; lint retains the single unrelated StrategyCards warning. Persisted coverage is a historical measurement snapshot; legacy cache hits are not rewritten, while runner results carry a fresh current measurement.
 
-**Verifier correction:** Independent verification found that `market-data-coverage.ts:84-93` summarizes the full database while `simulations-runner.ts:205-210` bounds rows for `since`/`until`; attaching that global coverage to a bounded report without a scope label was misleading. Corrected by explicitly labeling coverage as global database coverage at measurement time, not evaluation-window coverage. Focused bounded-window and UI scope-notice tests plus all required verification remain pending. Candidate commit `f1c6f2defe7290925b5df5c05df8f90a58b16b71` does not contain this correction; task closure awaits a corrected commit and proof.
+**Verifier correction and close evidence:** Independent verification found that full-database coverage could be mistaken for evaluation-window coverage. The correction labels the scope as global database coverage at measurement time. Work-unit commit `f1c6f2defe7290925b5df5c05df8f90a58b16b71` contains the initial work; corrective commit `ad66d474e2282688648351d04948bf2dca65d5b6` applies the scope correction. The first work-unit diff was 883 lines, exceeding the approximately 400-line advisory; it was not compressed for size. Future PR slices remain human-owned; no automatic publication. Delivery strategy is `feature-branch-chain`; no PR or push.
+
+Writer RED/GREEN evidence: server focused tests, 25 passed; panel tests, 12 passed. Parent spotcheck: coverage tests, 6 passed; panel tests, 12 passed. Independent verifier: requested server command ran all 74 server test files, 583 tests passed; panel tests, 12 passed. Server and root typechecks passed. Lint reported zero errors and one warning in untouched `StrategyCards.tsx:126`. Prettier check passed. Independent verifier returned PASS on corrected committed diff `369a85b..ad66d47` for both window and global scope.
+
+Native RDD assessment: unavailable. Assessment failed as unclassifiable; exact `START` returned `pre_native git_command_failed` with `mutation_outcome: not_started`. No review receipt or native authority exists; this is not a PASS. SIM-EVID-01 closed on functional proof plus independent verifier evidence, not a fabricated native result. No real orders were placed. Engram mirror remains pending because session resolution is ambiguous.
 
 ### SIM-EVID-02 — Fair baselines, selection, and validation
 
@@ -125,4 +136,4 @@ For every task, record focused test exact result, applicable typecheck/lint/form
 
 ## Task close record
 
-Implementation has not started. The Git branch point is not this feature's review boundary: the 15 commits already on `fix-graph-panel` are pre-existing history. The native candidate for this feature is one new work-unit commit reviewed against `369a85b947d0757fbbc640d13544028290ab026a`, not the accumulated branch. Before any implementation commit: inspect the exact worktree diff; preserve all pre-existing changes; resolve pending delivery strategy if risk requires a chain; never stage unrelated files. This document itself does not authorize git staging/committing or remote operations.
+SIM-EVID-01 is complete with the commits and evidence recorded above. SIM-EVID-02 through SIM-EVID-04 are pending. The initial review boundary was `369a85b947d0757fbbc640d13544028290ab026a`; the independent verifier's corrected-diff comparison used `369a85b..ad66d47`. The selected delivery strategy is feature-branch-chain, with no PR or push. This document does not authorize remote operations.
