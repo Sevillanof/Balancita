@@ -1,0 +1,16 @@
+src/features/market-data/infrastructure/market-data-provider.test.ts
+  h_2f68313623be98 41-42,45,55-59
+src/features/market-data/infrastructure/market-data-provider.ts
+  h_2f68313623be98 17
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d61fbe4f24de59b61aecfa693e26c662a3dbb319",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
