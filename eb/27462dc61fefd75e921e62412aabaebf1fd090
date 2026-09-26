@@ -1,0 +1,18 @@
+docs/bitcoin-market-intelligence-roadmap.md
+  h_2f68313623be98 1-87,90-107
+docs/implementation-progress.md
+  h_2f68313623be98 1-101
+odd/tasks/publish-balancita-current-work.md
+  h_2f68313623be98 6-10,17-21,74-76,95-109,121-123,134-136,141-159
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "eb27462dc61fefd75e921e62412aabaebf1fd090",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
