@@ -49,6 +49,10 @@ import {
   runFastReplay,
 } from '../features/simulations/fast-replay-engine.ts'
 import { NewsPollingService } from '../features/news/news-poller.ts'
+import {
+  KRAKEN_PRO_SPOT_TIER1_TAKER_FEE_SCENARIO,
+  SIMULATED_COSTS_CAVEAT,
+} from '../features/simulations/fee-scenario.ts'
 import type { NewsHttpFetcher } from '../features/news/rss-collector.ts'
 import { OFFICIAL_RSS_SOURCES } from '../features/news/rss-collector.ts'
 import {
@@ -161,6 +165,19 @@ function isFiniteNumber(value: unknown): value is number {
 
 function isSafeInteger(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value)
+}
+
+function isCurrentFeeScenario(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    value.version === KRAKEN_PRO_SPOT_TIER1_TAKER_FEE_SCENARIO.version &&
+    value.pair === KRAKEN_PRO_SPOT_TIER1_TAKER_FEE_SCENARIO.pair &&
+    value.role === KRAKEN_PRO_SPOT_TIER1_TAKER_FEE_SCENARIO.role &&
+    value.sourceUrl === KRAKEN_PRO_SPOT_TIER1_TAKER_FEE_SCENARIO.sourceUrl &&
+    value.commissionRate ===
+      KRAKEN_PRO_SPOT_TIER1_TAKER_FEE_SCENARIO.commissionRate &&
+    value.slippageRate === KRAKEN_PRO_SPOT_TIER1_TAKER_FEE_SCENARIO.slippageRate
+  )
 }
 
 function isFastReplayHistoryRecord(value: unknown): boolean {
@@ -992,8 +1009,16 @@ export async function buildApp(options: {
       })
     const runs = marketStore.listFastReplayRuns(limit).flatMap((stored) => {
       if (!isRecord(stored) || !isRecord(stored.result)) return []
+      const feeScenario = isCurrentFeeScenario(stored.result.feeScenario)
+        ? KRAKEN_PRO_SPOT_TIER1_TAKER_FEE_SCENARIO
+        : null
       const flat = {
         ...stored.result,
+        feeScenario,
+        costCaveat:
+          feeScenario === null
+            ? 'Fee provenance is unknown for this historical run; recorded results are unchanged.'
+            : SIMULATED_COSTS_CAVEAT,
         id: stored.id,
         request: stored.request,
         datasetHash: stored.datasetHash,

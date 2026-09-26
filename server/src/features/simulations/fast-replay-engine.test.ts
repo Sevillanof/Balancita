@@ -74,6 +74,12 @@ describe('runFastReplay', () => {
       ticketEur: 30,
     })
     expect(result.candlesEvaluated).toBe(5)
+    expect(result.feeScenario.version).toBe(
+      'kraken-pro-spot-btc-eur-tier1-taker.v1',
+    )
+    expect(result.feeScenario.commissionRate).toBe(0.008)
+    expect(result.feeScenario.slippageRate).toBe(0.0005)
+    expect(result.costCaveat).toMatch(/historical recorded fees.*unchanged/i)
     expect(result.baselineUniformBrier).toBe(0.6667)
     expect(Number.isFinite(result.executionTimeMs)).toBe(true)
     expect(result.executionTimeMs).toBeGreaterThanOrEqual(0)
@@ -309,7 +315,7 @@ describe('runFastReplay', () => {
     expect(result.trades.map(({ side }) => side)).toEqual(['buy'])
     expect(result.openPositionAtEnd).toMatchObject({
       entryPrice: 102 * 1.0005,
-      entryCostEur: 30.03,
+      entryCostEur: 30.24,
     })
     expect(result.tradesCount).toBe(0)
     expect(result.netPnlEur).toBe(0)

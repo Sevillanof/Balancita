@@ -12,6 +12,10 @@ import {
   resample1mTo15m,
 } from './fast-replay-engine.ts'
 import {
+  KRAKEN_PRO_SPOT_TIER1_TAKER_FEE_SCENARIO,
+  SIMULATED_COSTS_CAVEAT,
+} from './fee-scenario.ts'
+import {
   evaluateC27ExitWithMacroContext,
   evaluateMicroTarget,
   initialMicroState,
@@ -26,6 +30,16 @@ const TICKET_EUR = 30
 const MACRO_HISTORY_CANDLES = 1_200
 const REQUIRED_NATIVE_CANDLES = 50
 
+export function paperForwardSellAccounting(
+  quantityBtc: number,
+  priceEur: number,
+  persistedEntryCostEur: number,
+): { feeEur: number; pnlEur: number } {
+  const gross = quantityBtc * priceEur
+  const feeEur = gross * FAST_REPLAY_FEE
+  return { feeEur, pnlEur: gross - feeEur - persistedEntryCostEur }
+}
+
 interface PendingExecution {
   readonly action: 'BUY' | 'SELL'
   readonly signalTimestamp: number
@@ -34,6 +48,8 @@ interface PendingExecution {
 }
 
 export interface PaperForwardStatus {
+  fee_scenario: typeof KRAKEN_PRO_SPOT_TIER1_TAKER_FEE_SCENARIO
+  cost_caveat: typeof SIMULATED_COSTS_CAVEAT
   enabled: boolean
   running: boolean
   stream_state: string
@@ -253,6 +269,8 @@ export class PaperForwardService {
         ?.close ??
       0
     return {
+      fee_scenario: KRAKEN_PRO_SPOT_TIER1_TAKER_FEE_SCENARIO,
+      cost_caveat: SIMULATED_COSTS_CAVEAT,
       enabled,
       running: this.running,
       stream_state: this.streamState,
@@ -373,8 +391,11 @@ export class PaperForwardService {
     }
     if (position === null) return
     const price = barOpen * (1 - FAST_REPLAY_SLIPPAGE)
-    const gross = position.quantityBtc * price
-    const fee = gross * FAST_REPLAY_FEE
+    const { feeEur, pnlEur } = paperForwardSellAccounting(
+      position.quantityBtc,
+      price,
+      position.entryCost,
+    )
     const inserted = this.options.store.insertPaperOrder({
       strategyId: id,
       signalTimestamp: pending.signalTimestamp,
@@ -383,8 +404,8 @@ export class PaperForwardService {
       price,
       executionTimestamp: pending.signalTimestamp,
       amountEur: TICKET_EUR,
-      feeEur: fee,
-      pnlEur: gross - fee - position.entryCost,
+      feeEur,
+      pnlEur,
       targetPct: 0,
     })
     if (inserted) this.states.set(id, { ...pending.state, exposure: 'flat' })

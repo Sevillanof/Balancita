@@ -56,19 +56,8 @@ export const SIMULATION_COMPARISON_VERSION =
  */
 export const MAX_PROFITABILITY_EQUITY_POINTS = 60 as const
 
-export const KRAKEN_PRO_SPOT_TIER1_TAKER_FEE_SCENARIO = {
-  version: 'kraken-pro-spot-btc-eur-tier1-taker.v1',
-  venue: 'Kraken Pro Spot',
-  pair: 'BTC-EUR',
-  tier: 'Tier 1 (0+ USD qualifying 30-day volume)',
-  role: 'taker',
-  sourceUrl: 'https://www.kraken.com/features/fee-schedule',
-  verifiedAt: '2026-09-26',
-  commissionRate: 0.008,
-  slippageRate: 0.0005,
-  accountTier: 'unknown',
-  classification: 'model-scenario-not-account-fee',
-} as const
+export { KRAKEN_PRO_SPOT_TIER1_TAKER_FEE_SCENARIO } from './fee-scenario.ts'
+import { KRAKEN_PRO_SPOT_TIER1_TAKER_FEE_SCENARIO } from './fee-scenario.ts'
 
 export type FeeScenario = typeof KRAKEN_PRO_SPOT_TIER1_TAKER_FEE_SCENARIO
 

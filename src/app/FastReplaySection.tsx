@@ -32,6 +32,18 @@ type FastRun = {
   winRatePct: number
   profitFactor: number | null
   window: { start_time: number; end_time: number }
+  feeScenario?: {
+    version: string
+    venue: string
+    pair: string
+    tier: string
+    role: string
+    sourceUrl: string
+    verifiedAt: string
+    commissionRate: number
+    slippageRate: number
+    accountTier: string
+  } | null
 }
 type Strategy = { id: string; status: 'active'; name: string; label: string }
 const STRATEGY_LABELS: Readonly<Record<string, string>> = {
@@ -51,6 +63,24 @@ function isFiniteNumber(value: unknown): value is number {
 
 function isSafeInteger(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value)
+}
+
+function hasCurrentFeeScenario(
+  value: FastRun['feeScenario'] | unknown,
+): value is NonNullable<FastRun['feeScenario']> {
+  return (
+    isRecord(value) &&
+    value.version === 'kraken-pro-spot-btc-eur-tier1-taker.v1' &&
+    value.pair === 'BTC-EUR' &&
+    value.tier === 'Tier 1 (0+ USD qualifying 30-day volume)' &&
+    value.role === 'taker' &&
+    value.sourceUrl === 'https://www.kraken.com/features/fee-schedule' &&
+    value.commissionRate === 0.008 &&
+    value.slippageRate === 0.0005 &&
+    typeof value.venue === 'string' &&
+    typeof value.verifiedAt === 'string' &&
+    typeof value.accountTier === 'string'
+  )
 }
 
 function isFastRun(
@@ -390,7 +420,7 @@ export default function FastReplaySection() {
                 <td>{run.trades.length}</td>
               </tr>
               <tr>
-                <th scope="row">P&amp;L neto después de costos.v1</th>
+                <th scope="row">P&amp;L neto (comisión y deslizamiento)</th>
                 <td>{run.netPnlEur.toFixed(2)} €</td>
               </tr>
               <tr>
@@ -410,6 +440,28 @@ export default function FastReplaySection() {
             {run.profitFactor !== null && Number.isFinite(run.profitFactor)
               ? run.profitFactor.toFixed(2)
               : 'No disponible'}
+          </p>
+          <p>
+            {hasCurrentFeeScenario(run.feeScenario) ? (
+              <>
+                Escenario público modelado de comisiones (no tarifa real de
+                cuenta): {run.feeScenario.venue} {run.feeScenario.pair}{' '}
+                {run.feeScenario.role}, {run.feeScenario.tier}; comisión{' '}
+                {(run.feeScenario.commissionRate * 100).toFixed(2)} % por lado,
+                deslizamiento {(run.feeScenario.slippageRate * 100).toFixed(2)}{' '}
+                % por lado.{' '}
+                <a href={run.feeScenario.sourceUrl}>Fuente oficial</a> · nivel
+                real de cuenta desconocido. Solo aplica a corridas nuevas; las
+                comisiones históricas registradas no cambian.
+              </>
+            ) : (
+              'Procedencia de comisiones desconocida para esta corrida histórica; los valores guardados no se revaluaron.'
+            )}
+          </p>
+          <p>
+            El filtro de entrada no garantiza rentabilidad ni equilibrio con
+            comisiones; es un umbral de distancia de características, no un
+            cálculo de punto de equilibrio.
           </p>
         </div>
       )}

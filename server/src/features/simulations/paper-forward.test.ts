@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
 import { makeCandle } from './paper-forward-test-helpers.ts'
-import { PaperForwardService } from './paper-forward.ts'
+import {
+  PaperForwardService,
+  paperForwardSellAccounting,
+} from './paper-forward.ts'
 import { MarketStore } from '../market-data/market-store.ts'
 import {
   FAST_REPLAY_STRATEGIES,
@@ -82,7 +85,7 @@ describe('PaperForwardService', () => {
       action: 'BUY',
       price: 105 * 1.0005,
       executionTimestamp: signalTimestamp,
-      feeEur: 0.03,
+      feeEur: 0.24,
     })
     store.close()
   })
@@ -91,6 +94,14 @@ describe('PaperForwardService', () => {
     const store = new MarketStore({ path: ':memory:' })
     const status = new PaperForwardService({ store }).status(false)
     expect(status).toMatchObject({
+      fee_scenario: {
+        version: 'kraken-pro-spot-btc-eur-tier1-taker.v1',
+        commissionRate: 0.008,
+        slippageRate: 0.0005,
+      },
+      cost_caveat: expect.stringMatching(
+        /future paper orders only.*historical recorded fees/i,
+      ),
       enabled: false,
       account: {
         balance_eur: 10_000,
@@ -105,6 +116,74 @@ describe('PaperForwardService', () => {
         closed_pnl_eur: 0,
       },
     })
+    store.close()
+  })
+
+  it('uses the persisted historical BUY fee when calculating a future SELL at the shared rate', () => {
+    const historicalBuyFee = 0.03
+    const notional = 30
+    const quantity = notional / 100
+    const historicalEntryCost = notional + historicalBuyFee
+    const { feeEur, pnlEur } = paperForwardSellAccounting(
+      quantity,
+      100,
+      historicalEntryCost,
+    )
+
+    expect(feeEur).toBeCloseTo(0.24)
+    expect(pnlEur).toBeCloseTo(-0.27)
+    expect(historicalBuyFee).toBe(0.03)
+  })
+
+  it('persists a new 0.80% SELL beside an unchanged historical 0.10% BUY and uses that BUY fee in P&L', () => {
+    const store = new MarketStore({ path: ':memory:' })
+    store.insertPaperOrder({
+      strategyId: 'micro-trend-pullback',
+      signalTimestamp: 100,
+      action: 'BUY',
+      gatePassed: true,
+      price: 100,
+      executionTimestamp: 100,
+      amountEur: 30,
+      feeEur: 0.03,
+      pnlEur: null,
+      targetPct: 0.01,
+    })
+    const originalBuy = store.listPaperOrders()[0]!
+    const service = new PaperForwardService({ store })
+    const executePending = Reflect.get(service, 'executePending') as (
+      strategyId: string,
+      pending: {
+        action: 'SELL'
+        signalTimestamp: number
+        targetPct: number
+        state: ReturnType<typeof initialMicroState>
+      },
+      barOpen: number,
+    ) => void
+
+    executePending.call(
+      service,
+      'micro-trend-pullback',
+      {
+        action: 'SELL',
+        signalTimestamp: 160,
+        targetPct: 0,
+        state: initialMicroState(),
+      },
+      100,
+    )
+
+    const [storedBuy, newSell] = store.listPaperOrders()
+    const sellGross = 0.3 * (100 * (1 - 0.0005))
+    const expectedPnl = sellGross - sellGross * 0.008 - (30 + 0.03)
+    expect(storedBuy).toEqual(originalBuy)
+    expect(storedBuy).toMatchObject({ feeEur: 0.03, pnlEur: null })
+    expect(newSell).toMatchObject({ action: 'SELL', feeEur: sellGross * 0.008 })
+    expect(newSell!.pnlEur).toBeCloseTo(expectedPnl)
+    expect(newSell!.pnlEur).not.toBeCloseTo(
+      sellGross - sellGross * 0.008 - 30.24,
+    )
     store.close()
   })
 

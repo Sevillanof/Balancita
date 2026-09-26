@@ -318,6 +318,30 @@ describe('Fast Replay API', () => {
     expect(run.json().id).toMatch(/^fast-/)
     expect(Number.isSafeInteger(run.json().raw_signals_count)).toBe(true)
     expect(Number.isSafeInteger(run.json().gate_rejections_count)).toBe(true)
+    const persistedLegacyResult = {
+      ...(run.json() as Record<string, unknown>),
+    }
+    delete persistedLegacyResult.feeScenario
+    delete persistedLegacyResult.costCaveat
+    store.saveFastReplayRun(
+      'fast-legacy-fees',
+      {},
+      persistedLegacyResult,
+      'legacy-dataset',
+      'legacy-content',
+      2 as TimestampMs,
+    )
+    store.saveFastReplayRun(
+      'fast-malformed-fees',
+      {},
+      {
+        ...(run.json() as Record<string, unknown>),
+        feeScenario: { version: 'unknown', commissionRate: 0.008 },
+      },
+      'malformed-dataset',
+      'malformed-content',
+      3 as TimestampMs,
+    )
     store.saveFastReplayRun(
       'fast-corrupt',
       {},
@@ -331,8 +355,26 @@ describe('Fast Replay API', () => {
       url: '/api/replay/fast-run/history?limit=10',
     })
     expect(history.statusCode).toBe(200)
-    expect(history.json().runs).toHaveLength(1)
-    expect(history.json().runs[0]).toMatchObject({
+    expect(history.json().runs).toHaveLength(3)
+    const returnedRuns = history.json().runs as Record<string, unknown>[]
+    const legacy = returnedRuns.find(({ id }) => id === 'fast-legacy-fees')
+    const malformed = returnedRuns.find(
+      ({ id }) => id === 'fast-malformed-fees',
+    )
+    const fresh = returnedRuns.find(({ id }) => id === run.json().id)
+    expect(legacy).toMatchObject({
+      feeScenario: null,
+      costCaveat: expect.stringMatching(/provenance is unknown/i),
+    })
+    expect(malformed).toMatchObject({
+      feeScenario: null,
+      costCaveat: expect.stringMatching(/provenance is unknown/i),
+    })
+    expect(fresh).toMatchObject({
+      feeScenario: run.json().feeScenario,
+      costCaveat: expect.stringMatching(/historical recorded fees/i),
+    })
+    expect(fresh).toMatchObject({
       id: run.json().id,
       strategyId: 'micro-donchian-breakout',
       trades: run.json().trades,
@@ -346,7 +388,16 @@ describe('Fast Replay API', () => {
       createdAt: expect.any(Number),
       request: { strategy_id: 'micro-donchian-breakout' },
     })
-    expect(history.json().runs[0]).not.toHaveProperty('result')
+    expect(legacy).not.toHaveProperty('result')
+    expect(fresh).not.toHaveProperty('result')
+    const persistedAfterRead = store
+      .listFastReplayRuns()
+      .find(
+        (stored) => (stored as { id: string }).id === 'fast-legacy-fees',
+      ) as {
+      result: Record<string, unknown>
+    }
+    expect(persistedAfterRead.result).not.toHaveProperty('feeScenario')
     expect(
       (
         await app.inject({

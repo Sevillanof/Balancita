@@ -159,7 +159,27 @@ describe('FastReplaySection', () => {
       input === '/api/strategies'
         ? strategiesResponse()
         : input.startsWith('/api/replay/fast-run/history')
-          ? jsonResponse({ runs: [savedRun] })
+          ? jsonResponse({
+              runs: [
+                savedRun,
+                {
+                  ...savedRun,
+                  id: 'fast-current-fees',
+                  feeScenario: {
+                    version: 'kraken-pro-spot-btc-eur-tier1-taker.v1',
+                    venue: 'Kraken Pro Spot',
+                    pair: 'BTC-EUR',
+                    tier: 'Tier 1 (0+ USD qualifying 30-day volume)',
+                    role: 'taker',
+                    sourceUrl: 'https://www.kraken.com/features/fee-schedule',
+                    verifiedAt: '2026-09-26',
+                    commissionRate: 0.008,
+                    slippageRate: 0.0005,
+                    accountTier: 'unknown',
+                  },
+                },
+              ],
+            })
           : input.startsWith('/api/market/ohlc')
             ? jsonResponse({
                 candles: [
@@ -201,6 +221,31 @@ describe('FastReplaySection', () => {
     )
     expect(
       screen.getByRole('table', { name: 'Métricas de Fast Replay' }),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText(/procedencia de comisiones desconocida.*histórica/i),
+    ).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /fast-current-fees/ }))
+    expect(
+      await screen.findByText(/comisión 0\.80 % por lado/i),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText(/Tier 1 \(0\+ USD qualifying 30-day volume\)/i),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText(/nivel real de cuenta desconocido/i),
+    ).toBeInTheDocument()
+    expect(screen.getByText(/no tarifa real de cuenta/i)).toBeInTheDocument()
+    expect(
+      screen.getByRole('row', {
+        name: /p&l neto \(comisión y deslizamiento\)/i,
+      }),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole('link', { name: 'Fuente oficial' }),
+    ).toHaveAttribute('href', 'https://www.kraken.com/features/fee-schedule')
+    expect(
+      screen.getByText(/el filtro de entrada no garantiza rentabilidad/i),
     ).toBeInTheDocument()
   })
 })

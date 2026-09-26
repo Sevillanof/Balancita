@@ -8,6 +8,10 @@ import {
   macroContextWhenReady,
   type MicroStrategyFeatures,
 } from './micro-strategy.ts'
+import {
+  KRAKEN_PRO_SPOT_TIER1_TAKER_FEE_SCENARIO,
+  SIMULATED_COSTS_CAVEAT,
+} from './fee-scenario.ts'
 
 export const FAST_REPLAY_STRATEGIES = [
   'micro-trend-pullback',
@@ -33,6 +37,8 @@ export interface FastReplayTrade {
   readonly pnlEur?: number
 }
 export interface FastReplayResult {
+  readonly feeScenario: typeof KRAKEN_PRO_SPOT_TIER1_TAKER_FEE_SCENARIO
+  readonly costCaveat: typeof SIMULATED_COSTS_CAVEAT
   readonly strategyId: FastReplayStrategyId
   readonly candlesEvaluated: number
   readonly sampleCount: number
@@ -55,8 +61,11 @@ export interface FastReplayResult {
   readonly executionTimeMs: number
 }
 const HORIZON = 1
-export const FAST_REPLAY_FEE = 0.001
-export const FAST_REPLAY_SLIPPAGE = 0.0005
+export const FAST_REPLAY_FEE =
+  KRAKEN_PRO_SPOT_TIER1_TAKER_FEE_SCENARIO.commissionRate
+export const FAST_REPLAY_SLIPPAGE =
+  KRAKEN_PRO_SPOT_TIER1_TAKER_FEE_SCENARIO.slippageRate
+// Feature-distance heuristic only; it is not an economic break-even threshold.
 export const FAST_REPLAY_COST_GATE = 0.006
 const FEE = FAST_REPLAY_FEE
 const SLIPPAGE = FAST_REPLAY_SLIPPAGE
@@ -268,6 +277,8 @@ export function runFastReplay(input: {
     }
   }
   return {
+    feeScenario: KRAKEN_PRO_SPOT_TIER1_TAKER_FEE_SCENARIO,
+    costCaveat: SIMULATED_COSTS_CAVEAT,
     strategyId: strategyId as FastReplayStrategyId,
     candlesEvaluated: candles.length,
     sampleCount,
