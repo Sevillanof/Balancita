@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { getActiveCandidates, getAllCandidates } from './candidate-manifest.ts'
 import {
   confirmationCohort,
   selectSeededTimeWindow,
@@ -80,7 +81,12 @@ describe('selectSeededWindow', () => {
   it('rejects missing, stale, and manifest-mismatched smoke reports', () => {
     const smoke = {
       manifestHash: 'current',
-      sample: { stage: 'smoke', until: 90_000, horizons: ['15m'] },
+      sample: {
+        stage: 'smoke',
+        until: 90_000,
+        horizons: ['15m'],
+        candidateIds: [],
+      },
       request: { horizons: ['15m'] },
       reports: [],
     }
@@ -103,11 +109,16 @@ describe('selectSeededWindow', () => {
     ).toThrow(/latest compatible/i)
   })
 
-  it('selects the top three smoke candidates by selection Brier and records the embargo', () => {
+  it('keeps every known active candidate regardless of selection score and records the embargo', () => {
     const cohort = confirmationCohort(
       {
         manifestHash: 'current',
-        sample: { stage: 'smoke', until: 90_000, horizons: ['15m'] },
+        sample: {
+          stage: 'smoke',
+          until: 90_000,
+          horizons: ['15m'],
+          candidateIds: ['fourth', 'best', 'second', 'third'],
+        },
         request: { horizons: ['15m'] },
         reports: [
           {
@@ -127,17 +138,22 @@ describe('selectSeededWindow', () => {
       new Set(['best', 'second', 'third', 'fourth']),
     )
     expect(cohort).toEqual({
-      candidateIds: ['best', 'second', 'third'],
+      candidateIds: ['fourth', 'best', 'second', 'third'],
       embargoedUntil: 3_690_000,
       smokeReportHash: 'selection-hash',
     })
   })
 
-  it('ranks active micro candidates from diagnostics when the smoke has no legacy rows', () => {
+  it('keeps all active micro candidates from diagnostics when the smoke has no legacy rows', () => {
     const cohort = confirmationCohort(
       {
         manifestHash: 'current',
-        sample: { stage: 'smoke', until: 90_000, horizons: ['15m'] },
+        sample: {
+          stage: 'smoke',
+          until: 90_000,
+          horizons: ['15m'],
+          candidateIds: ['micro-a', 'micro-b', 'micro-c', 'micro-d'],
+        },
         request: { horizons: ['15m'] },
         reports: [
           {
@@ -158,6 +174,105 @@ describe('selectSeededWindow', () => {
       'current',
       new Set(['micro-a', 'micro-b', 'micro-c', 'micro-d']),
     )
-    expect(cohort.candidateIds).toEqual(['micro-b', 'micro-c', 'micro-a'])
+    expect(cohort.candidateIds).toEqual([
+      'micro-a',
+      'micro-b',
+      'micro-c',
+      'micro-d',
+    ])
+  })
+
+  it('fails closed when smoke provenance omits or adds a candidate', () => {
+    const smoke = {
+      manifestHash: 'current',
+      sample: {
+        stage: 'smoke',
+        until: 90_000,
+        horizons: ['15m'],
+        candidateIds: ['active-a', 'active-b', 'active-c'],
+      },
+      request: { horizons: ['15m'] },
+      reports: [
+        {
+          horizon: '15m',
+          contentHash: 'selection-hash',
+          rows: [{ candidateId: 'winner', brier: 0.01 }],
+        },
+      ],
+    }
+    expect(() =>
+      confirmationCohort(
+        smoke,
+        'current',
+        new Set(['active-a', 'active-b', 'active-c', 'active-d']),
+      ),
+    ).toThrow(/candidate set does not match/i)
+  })
+
+  it('rejects duplicate active candidate IDs even when provenance length matches', () => {
+    const activeIds = getActiveCandidates().map(
+      ({ candidateId }) => candidateId,
+    )
+    const duplicatedIds = [...activeIds]
+    duplicatedIds[duplicatedIds.length - 1] = duplicatedIds[0]!
+
+    expect(() =>
+      confirmationCohort(
+        {
+          manifestHash: 'current',
+          sample: {
+            stage: 'smoke',
+            until: 90_000,
+            horizons: ['15m'],
+            candidateIds: duplicatedIds,
+          },
+          request: { horizons: ['15m'] },
+          reports: [
+            { horizon: '15m', contentHash: 'selection-hash', rows: [] },
+          ],
+        },
+        'current',
+        new Set(activeIds),
+      ),
+    ).toThrow(/candidate set does not match/i)
+  })
+
+  it('rejects an unknown same-length candidate and never returns archived IDs', () => {
+    const activeIds = getActiveCandidates().map(
+      ({ candidateId }) => candidateId,
+    )
+    const archived = getAllCandidates().find(
+      ({ status }) => status === 'archived',
+    )!
+    const unknownIds = [...activeIds.slice(0, -1), 'unregistered-candidate']
+    const report = {
+      manifestHash: 'current',
+      sample: {
+        stage: 'smoke',
+        until: 90_000,
+        horizons: ['15m'],
+        candidateIds: activeIds,
+      },
+      request: { horizons: ['15m'] },
+      reports: [
+        {
+          horizon: '15m',
+          contentHash: 'selection-hash',
+          rows: [{ candidateId: archived.candidateId, brier: 0 }],
+        },
+      ],
+    }
+
+    expect(() =>
+      confirmationCohort(
+        { ...report, sample: { ...report.sample, candidateIds: unknownIds } },
+        'current',
+        new Set(activeIds),
+      ),
+    ).toThrow(/candidate set does not match/i)
+
+    const cohort = confirmationCohort(report, 'current', new Set(activeIds))
+    expect(cohort.candidateIds).toEqual(activeIds)
+    expect(cohort.candidateIds).not.toContain(archived.candidateId)
   })
 })

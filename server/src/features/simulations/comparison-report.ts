@@ -151,7 +151,7 @@ export interface SimulationCandidateRow {
   readonly accuracy: number | null
   readonly logLoss: number | null
   readonly calibration: readonly CalibrationBand[]
-  /** Set only for the selection winner; every other row stays null. */
+  /** Legacy non-micro winner-only metric; active micro candidates use the all-candidate diagnostics below. */
   readonly validationBrier: number | null
   readonly validationCoverage: number | null
 }

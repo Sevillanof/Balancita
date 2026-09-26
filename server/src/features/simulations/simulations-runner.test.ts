@@ -35,9 +35,13 @@ const T0 = 1_789_984_800_000
 const MINUTE_MS = 60_000
 const CANDLES = 200
 
-function seedContiguousMarket(path: string): void {
+function seedContiguousMarket(
+  path: string,
+  count = CANDLES,
+  priceAt: (index: number) => number = (index) => 60_000 + index,
+): void {
   const store = new MarketStore({ path })
-  for (let index = 0; index < CANDLES; index += 1) {
+  for (let index = 0; index < count; index += 1) {
     const eventTime = T0 + index * MINUTE_MS + 10_000
     store.insertObservation({
       source: 'kraken',
@@ -52,7 +56,7 @@ function seedContiguousMarket(path: string): void {
         productId: 'BTC-EUR',
         tradeId: 5_000 + index,
         sequence: 5_000 + index,
-        price: 60_000 + index,
+        price: priceAt(index),
         qty: 0.01,
         side: index % 2 === 0 ? 'buy' : 'sell',
         orderType: 'limit',
@@ -220,6 +224,109 @@ describe('simulations runner', () => {
         ?.generatedAt,
     ).toBe(1)
   }, 45_000)
+
+  it('runs every active candidate in smoke and confirmation selection/holdout diagnostics and profitability', () => {
+    const paths = makePaths()
+    const minuteCount = 8 * 24 * 60
+    seedContiguousMarket(
+      paths.marketDbPath,
+      minuteCount,
+      (index) =>
+        60_000 +
+        (index % 180 < 90 ? index % 90 : 90 - (index % 90)) * 8 +
+        Math.sin(index / 11) * 20,
+    )
+    const activeIds = getActiveCandidates().map(
+      ({ candidateId }) => candidateId,
+    )
+    const smoke = runSimulationsFromLiveDb({
+      ...paths,
+      horizons: ['15m'],
+      stage: 'smoke',
+      seed: 13,
+      clock: () => 1 as TimestampMs,
+    })
+    const smokeReport = smoke.horizons[0]!.report
+    const persistedSmoke = JSON.parse(readFileSync(paths.reportPath, 'utf8'))
+    expect(persistedSmoke.sample.candidateIds).toEqual(activeIds)
+    expect(smokeReport.microCandidateDiagnostics?.candidates).toHaveLength(4)
+    expect(
+      smokeReport.profitability?.candidates.map((entry) => entry.candidateId),
+    ).toEqual(activeIds)
+
+    const confirm = runSimulationsFromLiveDb({
+      ...paths,
+      horizons: ['15m', '1h'],
+      stage: 'confirm',
+      seed: 29,
+      clock: () => 2 as TimestampMs,
+    })
+    const confirmReport = confirm.horizons[0]!.report
+    const persistedConfirm = JSON.parse(readFileSync(paths.reportPath, 'utf8'))
+    expect(persistedConfirm.sample.candidateIds).toEqual(activeIds)
+    expect(persistedConfirm.sample.since).toBeGreaterThanOrEqual(
+      persistedSmoke.sample.until + 60 * MINUTE_MS,
+    )
+    expect(
+      confirmReport.microCandidateDiagnostics?.candidates.map(
+        ({ candidateId }) => candidateId,
+      ),
+    ).toEqual(activeIds)
+    expect(
+      confirmReport.microCandidateDiagnostics?.candidates.every(
+        (entry) =>
+          entry.selectionMaturedCount > 0 && entry.validationMaturedCount > 0,
+      ),
+    ).toBe(true)
+    expect(
+      confirmReport.profitability?.candidates.map((entry) => entry.candidateId),
+    ).toEqual(activeIds)
+    expect(confirmReport.profitability?.costs).toMatchObject({
+      commissionRate: 0.008,
+      slippageRate: 0.0005,
+    })
+    for (const { report } of confirm.horizons) {
+      expect(
+        report.microCandidateDiagnostics?.candidates.map(
+          ({ candidateId }) => candidateId,
+        ),
+      ).toEqual(activeIds)
+      expect(
+        report.profitability?.candidates.map((entry) => entry.candidateId),
+      ).toEqual(activeIds)
+    }
+    expect(
+      confirmReport.profitability?.candidates.every(
+        (entry) =>
+          entry.selection.equityCurve.length > 0 &&
+          entry.validation.equityCurve.length > 0,
+      ),
+    ).toBe(true)
+    const profitability = confirmReport.profitability!
+    expect(
+      profitability.candidates.some(
+        (entry) => entry.validation.metrics.netReturnPct < 0,
+      ),
+    ).toBe(true)
+    expect(
+      profitability.candidates.every(
+        (entry) =>
+          entry.selection.readiness?.status === 'insufficient' &&
+          entry.validation.readiness?.status === 'insufficient',
+      ),
+    ).toBe(true)
+    const timestampsFor = (points: readonly { readonly time: number }[]) =>
+      points.map(({ time }) => time)
+    for (const entry of profitability.candidates) {
+      expect(timestampsFor(entry.selection.equityCurve)).toEqual(
+        timestampsFor(profitability.baselines.flatCash.selection.equityCurve),
+      )
+      expect(timestampsFor(entry.validation.equityCurve)).toEqual(
+        timestampsFor(profitability.baselines.flatCash.validation.equityCurve),
+      )
+    }
+    expect(listSimulationReportHistory(paths.reportPath)).toHaveLength(2)
+  }, 180_000)
 
   it('invalidates the cache when the live dataset changes', () => {
     const paths = makePaths()

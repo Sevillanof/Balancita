@@ -22,6 +22,7 @@ export interface SmokeSelectionReport {
     readonly stage: string
     readonly until: number
     readonly horizons: readonly string[]
+    readonly candidateIds: readonly string[]
   }
   readonly request: { readonly horizons: readonly string[] }
   readonly reports: readonly {
@@ -61,33 +62,15 @@ export function confirmationCohort(
   const selection = report.reports.find((entry) => entry.horizon === '15m')
   if (selection === undefined)
     throw new Error('Smoke report has no 15m selection results.')
-  const rankedLegacy = [...selection.rows]
-    .filter((row) => row.brier !== null && Number.isFinite(row.brier))
-    .sort((left, right) => left.brier! - right.brier!)
-    .slice(0, 3)
-    .map((row) => row.candidateId)
-  const candidateIds =
-    rankedLegacy.length === 3
-      ? rankedLegacy
-      : [...(selection.microCandidateDiagnostics?.candidates ?? [])]
-          .filter(
-            (candidate) =>
-              candidate.selectionBrier !== null &&
-              Number.isFinite(candidate.selectionBrier),
-          )
-          .sort(
-            (left, right) =>
-              left.selectionBrier! - right.selectionBrier! ||
-              left.candidateId.localeCompare(right.candidateId),
-          )
-          .slice(0, 3)
-          .map((candidate) => candidate.candidateId)
+  const candidateIds = report.sample.candidateIds
   if (
-    candidateIds.length !== 3 ||
-    candidateIds.some((id) => !knownCandidateIds.has(id))
+    candidateIds.length !== knownCandidateIds.size ||
+    new Set(candidateIds).size !== candidateIds.length ||
+    candidateIds.some((id) => !knownCandidateIds.has(id)) ||
+    [...knownCandidateIds].some((id) => !candidateIds.includes(id))
   )
     throw new Error(
-      'Smoke report has fewer than three known candidates with selection Brier scores.',
+      'Smoke report candidate set does not match the active candidate manifest.',
     )
   return {
     candidateIds,
