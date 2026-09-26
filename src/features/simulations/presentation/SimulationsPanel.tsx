@@ -406,6 +406,10 @@ function CoverageEvidence({
         frescura actual.
       </p>
       <p>
+        La cobertura global de la base de datos se mide al momento de la
+        medición; no corresponde a la ventana evaluada en este informe.
+      </p>
+      <p>
         Los informes del simulador usan observaciones de mercado; Fast Replay
         usa velas REST OHLC. Son fuentes distintas.
       </p>

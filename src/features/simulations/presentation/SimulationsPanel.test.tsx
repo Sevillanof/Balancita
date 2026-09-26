@@ -197,10 +197,14 @@ function baselineEntry(candidateId: string) {
 
 describe('SimulationsPanel', () => {
   it('shows measured source coverage and does not claim gaps for irregular trades', () => {
+    const boundedReport = {
+      ...reportFile(),
+      window: { since: 100_000, until: 220_000 },
+    }
     render(
       <SimulationsPanel
         status="ready"
-        file={reportFile()}
+        file={boundedReport}
         error={null}
         onRetry={() => undefined}
       />,
@@ -220,6 +224,11 @@ describe('SimulationsPanel', () => {
     expect(screen.getByText(/1970-01-01T00:08:20\.000Z/)).toBeInTheDocument()
     expect(
       screen.getByText(/suficiencia de la estrategia.*operaciones cerradas/i),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText(
+        /cobertura global de la base de datos.*no corresponde a la ventana evaluada/i,
+      ),
     ).toBeInTheDocument()
   })
 

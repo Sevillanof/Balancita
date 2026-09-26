@@ -300,6 +300,14 @@ describe('simulations runner', () => {
       clock: () => 1 as TimestampMs,
     })
     expect(windowed.datasetHash).not.toBe(full.datasetHash)
+    expect(windowed.marketDataCoverage.observations).toEqual(
+      full.marketDataCoverage.observations,
+    )
+    expect(windowed.marketDataCoverage.observations).toMatchObject({
+      count: CANDLES,
+      firstEventTime: T0 + 10_000,
+      lastEventTime: T0 + (CANDLES - 1) * MINUTE_MS + 10_000,
+    })
     expect(
       windowed.horizons[0]!.report.microCandidateDiagnostics!.candidates[0]!
         .forecastOrigins,
