@@ -1,0 +1,24 @@
+src/app/App.test.tsx
+  h_2f68313623be98 97-101,105-108,121-123,129,150-152,163,199,262,274-275
+src/app/App.tsx
+  h_2f68313623be98 37-41,89,93
+src/app/BtcEurDashboard.test.tsx
+  h_2f68313623be98 132,136,138-141,182-186,198-220,227,235,238,266,269,334,432,452,570,596
+src/app/BtcEurDashboard.tsx
+  h_2f68313623be98 2,54,74,90-92,115-116,122-133,135-157,159-183,185-198,200,212-273,275,277,281-282,284,288-289,291,293-300,302-315,317,414-457
+src/app/dashboard.css
+  h_2f68313623be98 422-701
+src/features/simulations/presentation/SimulationsNavigation.test.tsx
+  h_2f68313623be98 103-105,130,165
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5616e69d1387b8f3a7ff61ef07212486401cd89e",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
