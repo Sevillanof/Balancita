@@ -161,12 +161,17 @@ export function useIntelligenceStream(
   })
 
   useEffect(() => {
-    const baseUrl =
-      options.url ??
-      import.meta.env.VITE_INTELLIGENCE_SERVER_URL ??
-      import.meta.env.VITE_GEMINI_SERVER_URL ??
-      'http://127.0.0.1:8787'
-    const streamUrl = `${baseUrl.replace(/\/$/, '')}/api/intelligence/stream?instrumentId=BTC-EUR`
+    const configuredBaseUrl =
+      options.url !== undefined
+        ? options.url
+        : import.meta.env.DEV
+          ? undefined
+          : (import.meta.env.VITE_INTELLIGENCE_SERVER_URL ??
+            import.meta.env.VITE_GEMINI_SERVER_URL)
+    const streamUrl =
+      configuredBaseUrl === undefined
+        ? '/api/intelligence/stream?instrumentId=BTC-EUR'
+        : `${configuredBaseUrl.replace(/\/$/, '')}/api/intelligence/stream?instrumentId=BTC-EUR`
     const factory =
       options.eventSourceFactory ??
       ((url: string) => new EventSource(url) as unknown as SseEventSource)

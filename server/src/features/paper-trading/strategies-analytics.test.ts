@@ -213,6 +213,20 @@ describe('strategy analytics summary', () => {
     expect(position.unrealized_net_pnl_eur).toBeCloseTo(1.42275)
   })
 
+  it('recalculates open-position net floating PnL when the latest mark price changes', () => {
+    const orders = [order({ id: 12, executionTimestamp: 900 })]
+    const atEntry = buildStrategyPositions(orders, 100, null)[0]!
+    const afterPriceRise = buildStrategyPositions(orders, 110, null)[0]!
+    expect(atEntry.current_price).toBe(100)
+    expect(afterPriceRise.current_price).toBe(110)
+    expect(afterPriceRise.unrealized_net_pnl_eur!).toBeGreaterThan(
+      atEntry.unrealized_net_pnl_eur!,
+    )
+    expect(afterPriceRise.unrealized_net_pnl_eur).toBeCloseTo(
+      (30 / 100) * 110 * (1 - 0.001 - 0.0005) - (30 + 0.03),
+    )
+  })
+
   it('uses the PaperForward C28 regime through the neutral ATR band and abstains without it', () => {
     const build = (regime: MicroRegime) =>
       buildStrategyPositions(

@@ -7,10 +7,7 @@ export default defineConfig({
   plugins: [react(), babel({ presets: [reactCompilerPreset()] })],
   server: {
     proxy: {
-      '/api/replay': {
-        target: 'http://127.0.0.1:8787',
-      },
-      '/api/market': {
+      '/api': {
         target: 'http://127.0.0.1:8787',
       },
     },

@@ -1,5 +1,5 @@
 import { renderHook, act } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   parseIntelligenceStreamEvent,
   useIntelligenceStream,
@@ -92,7 +92,23 @@ class FakeEventSource implements SseEventSource {
 
 const makeSource = (url: string) => new FakeEventSource(url)
 
+afterEach(() => vi.unstubAllEnvs())
+
 describe('useIntelligenceStream', () => {
+  it('uses the same-origin stream route when no URL override is configured', () => {
+    FakeEventSource.instances = []
+    vi.stubEnv('VITE_INTELLIGENCE_SERVER_URL', 'http://127.0.0.1:8787')
+    vi.stubEnv('VITE_GEMINI_SERVER_URL', 'http://localhost:8787')
+    const { unmount } = renderHook(() =>
+      useIntelligenceStream({ eventSourceFactory: makeSource }),
+    )
+
+    expect(FakeEventSource.instances[0]?.url).toBe(
+      '/api/intelligence/stream?instrumentId=BTC-EUR',
+    )
+    unmount()
+  })
+
   it('validates server events and reaches ready, then cleans up', () => {
     FakeEventSource.instances = []
     const { result, unmount } = renderHook(() =>
@@ -104,6 +120,9 @@ describe('useIntelligenceStream', () => {
 
     expect(result.current.status).toBe('loading')
     const source = FakeEventSource.instances[0]!
+    expect(source.url).toBe(
+      'http://127.0.0.1:8787/api/intelligence/stream?instrumentId=BTC-EUR',
+    )
     act(() => source.onopen?.())
     act(() => source.emit(event()))
     expect(result.current.status).toBe('ready')

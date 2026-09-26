@@ -1,5 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import {
+  act,
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react'
 import StrategyAnalyticsPanel from './StrategyAnalyticsPanel.tsx'
 import PositionLifecycleTable from './PositionLifecycleTable.tsx'
 import type { PaperTradePosition } from './types.ts'
@@ -41,10 +48,27 @@ const metric = (
 })
 
 describe('StrategyAnalyticsPanel', () => {
-  it('renders exact API arrays, four cards, Fast Replay Brier separately, and empty tabs', async () => {
+  it('renders the TanStack strategy table, separates Brier sources, and keeps empty tabs', async () => {
     const metrics = [
-      metric('micro-trend-pullback', 'C25: Trend Pullback', 0.1234),
-      metric('micro-bollinger-reversion', 'C26: Bollinger Reversion'),
+      {
+        ...metric('micro-trend-pullback', 'C25: Trend Pullback', 0.1234),
+        total_signals: 12,
+        gate_rejections: 3,
+        executed_buys: 5,
+        approval_rate_pct: 75,
+        net_pnl_eur: 1.25,
+        net_pnl_pct: 4.17,
+        gross_pnl_eur: 1.5,
+        total_fees_eur: 0.15,
+        total_slippage_eur: 0.1,
+        win_rate_pct: 60,
+        profit_factor: 1.5,
+        avg_holding_bars_15m: 2.5,
+      },
+      {
+        ...metric('micro-bollinger-reversion', 'C26: Bollinger Reversion'),
+        net_pnl_eur: -0.5,
+      },
       metric('micro-donchian-breakout', 'C27: Donchian Breakout'),
       metric('micro-regime-adapter', 'C28: Regime Adapter'),
     ]
@@ -52,42 +76,107 @@ describe('StrategyAnalyticsPanel', () => {
       const url = String(input)
       const payload = url.includes('strategies-summary')
         ? metrics
-        : url.includes('/positions?')
-          ? []
-          : {
-              runs: [
-                {
-                  strategyId: 'micro-trend-pullback',
-                  createdAt: 100,
-                  brierScoreMulticlass: 0.9999,
-                },
-                {
-                  strategyId: 'micro-trend-pullback',
-                  createdAt: 200,
-                  brierScoreMulticlass: 0.2345,
-                },
-              ],
-            }
+        : url.includes('/api/paper-trading/status')
+          ? { stream_state: 'connected', last_processed_event_time: null }
+          : url.includes('/positions?')
+            ? []
+            : {
+                runs: [
+                  {
+                    strategyId: 'micro-trend-pullback',
+                    createdAt: 100,
+                    brierScoreMulticlass: 0.9999,
+                  },
+                  {
+                    strategyId: 'micro-trend-pullback',
+                    createdAt: 200,
+                    brierScoreMulticlass: 0.2345,
+                  },
+                ],
+              }
       return new Response(JSON.stringify(payload), { status: 200 })
     })
     vi.stubGlobal('fetch', fetchMock as typeof fetch)
     render(<StrategyAnalyticsPanel />)
     expect(screen.getByText('Cargando auditoría…')).toBeInTheDocument()
-    expect(await screen.findByText('C25: Trend Pullback')).toBeInTheDocument()
-    expect(screen.getByText('C26: Bollinger Reversion')).toBeInTheDocument()
-    expect(screen.getByText('C27: Donchian Breakout')).toBeInTheDocument()
-    expect(screen.getByText('C28: Regime Adapter')).toBeInTheDocument()
-    const firstCard = screen.getByText('C25: Trend Pullback').closest('article')
-    expect(firstCard).toHaveTextContent('Brier en vivo: N/A')
-    expect(firstCard).toHaveTextContent(
-      'Brier Fast Replay 0.2345 vs baseline uniforme 0.6667',
+    const strategyTable = await screen.findByRole('table', {
+      name: 'Resumen de métricas por estrategia',
+    })
+    expect(strategyTable).toBeInTheDocument()
+    expect(
+      within(strategyTable).getByText('C25: Trend Pullback'),
+    ).toBeInTheDocument()
+    expect(
+      within(strategyTable).getByText('C26: Bollinger Reversion'),
+    ).toBeInTheDocument()
+    expect(
+      within(strategyTable).getByText('C27: Donchian Breakout'),
+    ).toBeInTheDocument()
+    expect(
+      within(strategyTable).getByText('C28: Regime Adapter'),
+    ).toBeInTheDocument()
+    expect(strategyTable.parentElement).toHaveClass('table-scroll')
+    expect(within(strategyTable).getAllByRole('row')).toHaveLength(5)
+    for (const heading of [
+      'Estrategia / estado',
+      'Señales',
+      'Rechazos Gate',
+      'Compras / fills',
+      'Aprobación',
+      'PnL neto',
+      'PnL bruto',
+      'Comisiones',
+      'Deslizamiento',
+      'Peaje / bruto',
+      'Acierto',
+      'Factor de beneficio',
+      'Tenencia media',
+      'Brier en vivo',
+      'Brier Fast Replay',
+    ])
+      expect(
+        within(strategyTable).getByRole('columnheader', { name: heading }),
+      ).toBeInTheDocument()
+    const firstRow = within(strategyTable).getByRole('row', {
+      name: /C25: Trend Pullback/,
+    })
+    expect(firstRow).toHaveTextContent('12')
+    expect(firstRow).toHaveTextContent('3')
+    expect(firstRow).toHaveTextContent('5')
+    expect(firstRow).toHaveTextContent('75,00%')
+    expect(firstRow).toHaveTextContent('1,25')
+    expect(firstRow).toHaveTextContent('12,34%')
+    expect(firstRow).toHaveTextContent('1,50')
+    expect(firstRow).toHaveTextContent('2,50 velas')
+    expect(firstRow.children[5].firstElementChild).toHaveClass(
+      'strategy-analytics__positive',
     )
-    expect(firstCard).toHaveTextContent('baseline uniforme 0.6667')
-    expect(firstCard).toHaveTextContent('Peaje / bruto 12.34%')
-    expect(firstCard).toHaveTextContent('Factor —')
+    expect(firstRow).toHaveTextContent('N/A')
+    expect(firstRow).toHaveTextContent('0.2345 vs baseline uniforme 0.6667')
+    const secondRow = within(strategyTable).getByRole('row', {
+      name: /C26: Bollinger/,
+    })
+    expect(secondRow).toHaveTextContent('-0,50')
+    expect(secondRow.children[5].firstElementChild).toHaveClass(
+      'strategy-analytics__negative',
+    )
+    const thirdRow = within(strategyTable).getByRole('row', {
+      name: /C27: Donchian/,
+    })
+    expect(thirdRow.children[11]).toHaveTextContent('—')
+    expect(thirdRow).toHaveTextContent(
+      'Sin muestras vs baseline uniforme 0.6667',
+    )
     expect(screen.getByText('Sin posiciones abiertas.')).toBeInTheDocument()
+    expect(screen.getByText('Flujo ascendente: connected')).toBeInTheDocument()
+    expect(screen.getByLabelText('Última vela evaluada')).toHaveTextContent(
+      'Sin velas procesadas',
+    )
     await userEventClick(screen.getByRole('tab', { name: 'Historial cerrado' }))
     expect(screen.getByText('No hay operaciones cerradas.')).toBeInTheDocument()
+    expect(
+      screen.getByRole('tab', { name: 'Historial cerrado' }),
+    ).toHaveAttribute('aria-selected', 'true')
     expect(fetchMock).toHaveBeenCalledWith(
       '/api/paper-trading/strategies-summary',
       expect.any(Object),
@@ -170,6 +259,67 @@ describe('StrategyAnalyticsPanel', () => {
       />,
     )
     expect(screen.getByText('Salida inmediata (0,00%)')).toBeInTheDocument()
+  })
+
+  it('shows the exact retry badge while a poll fails', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        if (String(input).includes('strategies-summary'))
+          return new Response('{}', { status: 503 })
+        return new Response(JSON.stringify({ runs: [] }), { status: 200 })
+      }),
+    )
+    render(<StrategyAnalyticsPanel />)
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Desconectado / Reintentando...',
+    )
+    expect(screen.getByLabelText('Última sincronización')).toHaveTextContent(
+      'Sin sincronizar',
+    )
+    expect(screen.queryByText('Cargando auditoría…')).not.toBeInTheDocument()
+    expect(
+      screen.queryByText('Sin posiciones abiertas.'),
+    ).not.toBeInTheDocument()
+  })
+
+  it('keeps a newly selected tab loading until its own positions response settles', async () => {
+    let resolveClosed!: (value: Response) => void
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input)
+        if (url.includes('strategies-summary')) return new Response('[]')
+        if (url.endsWith('/api/paper-trading/status'))
+          return new Response(
+            JSON.stringify({
+              stream_state: 'connected',
+              last_processed_event_time: null,
+            }),
+          )
+        if (url.includes('status=closed'))
+          return new Promise<Response>((resolve) => {
+            resolveClosed = resolve
+          })
+        if (url.includes('/positions?')) return new Response('[]')
+        return new Response(JSON.stringify({ runs: [] }))
+      }),
+    )
+    render(<StrategyAnalyticsPanel />)
+    expect(
+      await screen.findByText('Sin posiciones abiertas.'),
+    ).toBeInTheDocument()
+    await userEventClick(screen.getByRole('tab', { name: 'Historial cerrado' }))
+    expect(screen.getByText('Cargando auditoría…')).toBeInTheDocument()
+    expect(
+      screen.queryByText('No hay operaciones cerradas.'),
+    ).not.toBeInTheDocument()
+    await act(async () => {
+      resolveClosed(new Response('[]'))
+    })
+    expect(
+      await screen.findByText('No hay operaciones cerradas.'),
+    ).toBeInTheDocument()
   })
 })
 

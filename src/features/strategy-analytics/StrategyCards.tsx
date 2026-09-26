@@ -1,11 +1,22 @@
+import { useMemo } from 'react'
+import {
+  flexRender,
+  getCoreRowModel,
+  useReactTable,
+  type ColumnDef,
+} from '@tanstack/react-table'
 import type { StrategySummaryMetric } from './types.ts'
 
 const euro = new Intl.NumberFormat('es-ES', {
   style: 'currency',
   currency: 'EUR',
 })
+const decimal = new Intl.NumberFormat('es-ES', {
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+})
 const percent = (value: number | null) =>
-  value === null ? '—' : `${value.toFixed(2)}%`
+  value === null ? '—' : `${decimal.format(value)}%`
 
 export default function StrategyCards({
   strategies,
@@ -14,48 +25,142 @@ export default function StrategyCards({
   strategies: readonly StrategySummaryMetric[]
   fastReplayBrier: Readonly<Record<string, number | null>>
 }) {
+  const columns = useMemo<ColumnDef<StrategySummaryMetric>[]>(
+    () => [
+      {
+        id: 'strategy',
+        header: 'Estrategia / estado',
+        cell: ({ row }) => (
+          <>
+            <strong>{row.original.name}</strong>
+            <br />
+            {row.original.current_exposure === 'long' ? 'LONG' : 'FLAT'} ·{' '}
+            {euro.format(row.original.assigned_capital_eur)}
+          </>
+        ),
+      },
+      { accessorKey: 'total_signals', header: 'Señales' },
+      { accessorKey: 'gate_rejections', header: 'Rechazos Gate' },
+      { accessorKey: 'executed_buys', header: 'Compras / fills' },
+      {
+        accessorKey: 'approval_rate_pct',
+        header: 'Aprobación',
+        cell: ({ getValue }) => percent(getValue<number>()),
+      },
+      {
+        accessorKey: 'net_pnl_eur',
+        header: 'PnL neto',
+        cell: ({ row }) => (
+          <span
+            className={
+              row.original.net_pnl_eur > 0
+                ? 'strategy-analytics__positive'
+                : row.original.net_pnl_eur < 0
+                  ? 'strategy-analytics__negative'
+                  : undefined
+            }
+          >
+            {euro.format(row.original.net_pnl_eur)} (
+            {percent(row.original.net_pnl_pct)})
+          </span>
+        ),
+      },
+      {
+        accessorKey: 'gross_pnl_eur',
+        header: 'PnL bruto',
+        cell: ({ getValue }) => euro.format(getValue<number>()),
+      },
+      {
+        accessorKey: 'total_fees_eur',
+        header: 'Comisiones',
+        cell: ({ getValue }) => euro.format(getValue<number>()),
+      },
+      {
+        accessorKey: 'total_slippage_eur',
+        header: 'Deslizamiento',
+        cell: ({ getValue }) => euro.format(getValue<number>()),
+      },
+      {
+        accessorKey: 'toll_ratio',
+        header: 'Peaje / bruto',
+        cell: ({ getValue }) => {
+          const value = getValue<number | null>()
+          return value === null ? '—' : percent(value * 100)
+        },
+      },
+      {
+        accessorKey: 'win_rate_pct',
+        header: 'Acierto',
+        cell: ({ getValue }) => percent(getValue<number>()),
+      },
+      {
+        accessorKey: 'profit_factor',
+        header: 'Factor de beneficio',
+        cell: ({ getValue }) => {
+          const value = getValue<number | null>()
+          return value === null ? '—' : decimal.format(value)
+        },
+      },
+      {
+        accessorKey: 'avg_holding_bars_15m',
+        header: 'Tenencia media',
+        cell: ({ getValue }) => `${decimal.format(getValue<number>())} velas`,
+      },
+      {
+        id: 'liveBrier',
+        header: 'Brier en vivo',
+        cell: () => 'N/A',
+      },
+      {
+        id: 'fastReplayBrier',
+        header: 'Brier Fast Replay',
+        cell: ({ row }) => {
+          const value = fastReplayBrier[row.original.strategy_id]
+          return `${value == null ? 'Sin muestras' : value.toFixed(4)} vs baseline uniforme 0.6667`
+        },
+      },
+    ],
+    [fastReplayBrier],
+  )
+  const data = useMemo(() => [...strategies], [strategies])
+  const table = useReactTable({
+    data,
+    columns,
+    getCoreRowModel: getCoreRowModel(),
+  })
+
   return (
-    <div className="strategy-analytics__cards">
-      {strategies.map((item) => (
-        <article className="strategy-analytics__card" key={item.strategy_id}>
-          <header>
-            <h3>{item.name}</h3>
-            <span className="strategy-analytics__badge">
-              {item.current_exposure === 'long' ? 'LONG' : 'FLAT'} ·{' '}
-              {euro.format(item.assigned_capital_eur)}
-            </span>
-          </header>
-          <p>
-            Señales {item.total_signals} → rechazos {item.gate_rejections} →
-            compras {item.executed_buys} · Posiciones abiertas{' '}
-            {item.open_positions_count}
-          </p>
-          <p>
-            Aprobación {percent(item.approval_rate_pct)} · Neto{' '}
-            {euro.format(item.net_pnl_eur)} ({percent(item.net_pnl_pct)})
-          </p>
-          <p>
-            Bruto {euro.format(item.gross_pnl_eur)} · Comisiones{' '}
-            {euro.format(item.total_fees_eur)} · Deslizamiento{' '}
-            {euro.format(item.total_slippage_eur)}
-          </p>
-          <p>
-            Peaje / bruto{' '}
-            {item.toll_ratio === null ? '—' : percent(item.toll_ratio * 100)} ·{' '}
-            Acierto {percent(item.win_rate_pct)} · Factor{' '}
-            {item.profit_factor === null ? '—' : item.profit_factor.toFixed(2)}{' '}
-            · Tenencia {item.avg_holding_bars_15m.toFixed(1)} velas
-          </p>
-          <p>Objetivo medio: {percent(item.avg_target_pct * 100)}</p>
-          <p>
-            Brier en vivo: N/A · Brier Fast Replay{' '}
-            {fastReplayBrier[item.strategy_id] == null
-              ? 'Sin muestras'
-              : fastReplayBrier[item.strategy_id]!.toFixed(4)}{' '}
-            vs baseline uniforme 0.6667
-          </p>
-        </article>
-      ))}
+    <div className="table-scroll">
+      <table className="data-table strategy-analytics__table">
+        <caption>Resumen de métricas por estrategia</caption>
+        <thead>
+          {table.getHeaderGroups().map((headerGroup) => (
+            <tr key={headerGroup.id}>
+              {headerGroup.headers.map((header) => (
+                <th key={header.id} scope="col">
+                  {header.isPlaceholder
+                    ? null
+                    : flexRender(
+                        header.column.columnDef.header,
+                        header.getContext(),
+                      )}
+                </th>
+              ))}
+            </tr>
+          ))}
+        </thead>
+        <tbody>
+          {table.getRowModel().rows.map((row) => (
+            <tr key={row.id}>
+              {row.getVisibleCells().map((cell) => (
+                <td key={cell.id}>
+                  {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   )
 }

@@ -2,33 +2,27 @@
   display: grid;
   gap: var(--space-4);
 }
-.strategy-analytics__cards {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 19rem), 1fr));
-  gap: var(--space-3);
+.strategy-analytics__table {
+  width: max-content;
+  min-width: 100%;
 }
-.strategy-analytics__card {
-  padding: var(--space-3);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  background: var(--color-surface);
+.strategy-analytics__positive {
+  color: var(--color-success);
 }
-.strategy-analytics__card h3 {
-  margin: 0;
+.strategy-analytics__negative {
+  color: var(--color-danger);
 }
-.strategy-analytics__card header {
+.strategy-analytics__heartbeat {
   display: flex;
   flex-wrap: wrap;
-  justify-content: space-between;
-  gap: var(--space-2);
+  gap: 0.5rem 1.25rem;
+  overflow-wrap: anywhere;
 }
-.strategy-analytics__badge {
-  align-self: start;
-  padding: 0.2rem 0.5rem;
-  border-radius: var(--radius-sm);
-  background: var(--color-surface-muted);
-  font-size: 0.8rem;
+
+.strategy-analytics__heartbeat p {
+  margin: 0;
 }
-.strategy-analytics__card p {
-  margin: var(--space-2) 0 0;
+
+.strategy-analytics__connection-error {
+  color: #ef5350;
 }
