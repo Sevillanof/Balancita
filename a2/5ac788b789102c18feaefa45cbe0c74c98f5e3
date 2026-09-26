@@ -1,0 +1,14 @@
+odd/tasks/simulation-evidence-usability.md
+  h_2f68313623be98 3,15,103,105,113,115,117,119,121,123,127,163-167
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a25ac788b789102c18feaefa45cbe0c74c98f5e3",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
