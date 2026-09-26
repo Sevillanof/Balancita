@@ -1,0 +1,14 @@
+odd/tasks/publish-balancita-current-work.md
+  h_2f68313623be98 110-114,159-169
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "375ef78ff911cbb6b4dbca7b22ae0cb7f7b14636",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
