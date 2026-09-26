@@ -209,6 +209,62 @@ function baselineEntry(candidateId: string) {
 }
 
 describe('SimulationsPanel', () => {
+  it('labels micro diagnostic metrics as computability, not strategy sufficiency', () => {
+    const source = reportFile()
+    const report = source.reports[0]!
+    const withDiagnostics: SimulationsReportFile = {
+      ...source,
+      reports: [
+        {
+          ...report,
+          microCandidateDiagnostics: {
+            version: 'micro-candidate-diagnostics.v2',
+            selectionStatus: 'computable',
+            selectionEligibleCount: 2,
+            selectionAsOfTimestamps: [1_000, 2_000],
+            validationStatus: 'insufficient',
+            validationEligibleCount: 0,
+            validationAsOfTimestamps: [],
+            computabilityNotice:
+              'Computable solo indica que se alcanzó el mínimo de marcas de tiempo compartidas; no acredita suficiencia estadística ni viabilidad de la estrategia.',
+            holdoutConsumed: true,
+            holdoutNotice: 'Holdout consumed.',
+            candidates: [],
+            selectionBaselines: {
+              uniform: { brier: 0.5, count: 2 },
+              noChange: { brier: 0.5, count: 2 },
+              momentum: { brier: 0.5, count: 2 },
+            },
+            validationBaselines: {
+              uniform: { brier: null, count: 0 },
+              noChange: { brier: null, count: 0 },
+              momentum: { brier: null, count: 0 },
+            },
+          },
+        },
+      ],
+    }
+
+    render(
+      <SimulationsPanel
+        status="ready"
+        file={withDiagnostics}
+        error={null}
+        onRetry={() => undefined}
+      />,
+    )
+
+    expect(
+      screen.getByText(/selección computable \(2 instantes compartidos\)/i),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText(
+        /no acredita suficiencia estadística ni viabilidad de la estrategia/i,
+      ),
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/estrategia viable/i)).not.toBeInTheDocument()
+  })
+
   it('shows the flat-cash baseline separately from buy-and-hold and flags its tiny sample', () => {
     const source = reportFile()
     const report = source.reports[0]!

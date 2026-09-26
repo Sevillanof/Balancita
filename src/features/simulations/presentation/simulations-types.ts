@@ -132,7 +132,15 @@ export interface SimulationsComparisonReport {
   readonly contentHash: string
   readonly profitability: SimulationsProfitabilityBlock | null
   readonly microCandidateDiagnostics?: {
-    readonly version: 'micro-candidate-diagnostics.v1'
+    readonly version:
+      'micro-candidate-diagnostics.v1' | 'micro-candidate-diagnostics.v2'
+    readonly selectionStatus?: 'computable' | 'insufficient'
+    readonly selectionEligibleCount?: number
+    readonly selectionAsOfTimestamps?: readonly number[]
+    readonly validationStatus?: 'computable' | 'insufficient'
+    readonly validationEligibleCount?: number
+    readonly validationAsOfTimestamps?: readonly number[]
+    readonly computabilityNotice?: string
     readonly holdoutConsumed: true
     readonly holdoutNotice: string
     readonly candidates: readonly {

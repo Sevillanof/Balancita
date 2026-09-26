@@ -149,4 +149,121 @@ describe('simulation comparison report', () => {
     expect(text).toMatch(/profitability/i)
     expect(text).toMatch(/causal/i)
   })
+
+  it('scores every active micro candidate and baseline on the shared eligible timestamps', () => {
+    const ids = [
+      'micro-trend-pullback',
+      'micro-bollinger-reversion',
+      'micro-donchian-breakout',
+      'micro-regime-adapter',
+    ]
+    const selection = ids.flatMap((id, index) => [
+      entry(id, 10, [0.6, 0.2, 0.2], 'up'),
+      entry(id, 20, [0.6, 0.2, 0.2], 'up'),
+      ...(index === 0 ? [entry(id, 30, [0.6, 0.2, 0.2], 'up')] : []),
+      ...(index === 1 ? [entry(id, 40, [0.6, 0.2, 0.2], 'down')] : []),
+    ])
+    const report = buildComparisonReport({
+      horizon: HORIZON,
+      datasetHash: 'abc',
+      manifestHash: 'def',
+      selectionPct: 0.7,
+      selectionCutTimestamp: 50 as TimestampMs,
+      selection,
+      validation: [],
+      candidates: ids.map((candidateId) => ({
+        candidateId,
+        ruleVersion: 'test.v1',
+        paramSetVersion: 'test.v1',
+        runId: 'run',
+      })),
+    })
+    const diagnostics = report.microCandidateDiagnostics!
+    expect(diagnostics.selectionEligibleCount).toBe(2)
+    expect(diagnostics.selectionStatus).toBe('computable')
+    expect(diagnostics.computabilityNotice).toMatch(
+      /no acredita suficiencia estadística ni viabilidad de la estrategia/i,
+    )
+    expect(diagnostics.selectionAsOfTimestamps).toEqual([10, 20])
+    expect(
+      diagnostics.candidates.map(
+        (candidate) => candidate.selectionMaturedCount,
+      ),
+    ).toEqual([2, 2, 2, 2])
+    expect(diagnostics.selectionBaselines.uniform.count).toBe(2)
+  })
+
+  it('marks micro prediction comparison insufficient when candidates have no shared timestamp', () => {
+    const ids = [
+      'micro-trend-pullback',
+      'micro-bollinger-reversion',
+      'micro-donchian-breakout',
+      'micro-regime-adapter',
+    ]
+    const report = buildComparisonReport({
+      horizon: HORIZON,
+      datasetHash: 'abc',
+      manifestHash: 'def',
+      selectionPct: 0.7,
+      selectionCutTimestamp: 50 as TimestampMs,
+      selection: ids.map((id, index) =>
+        entry(id, index + 1, [0.6, 0.2, 0.2], 'up'),
+      ),
+      validation: [],
+      candidates: ids.map((candidateId) => ({
+        candidateId,
+        ruleVersion: 'test.v1',
+        paramSetVersion: 'test.v1',
+        runId: 'run',
+      })),
+    })
+    const diagnostics = report.microCandidateDiagnostics!
+    expect(diagnostics.selectionEligibleCount).toBe(0)
+    expect(diagnostics.selectionStatus).toBe('insufficient')
+    expect(
+      diagnostics.candidates.map((candidate) => candidate.selectionBrier),
+    ).toEqual([null, null, null, null])
+    expect(diagnostics.selectionBaselines.uniform).toEqual({
+      brier: null,
+      count: 0,
+    })
+  })
+
+  it('includes a registered candidate with no scored rows in the eligibility denominator', () => {
+    const ids = [
+      'micro-trend-pullback',
+      'micro-bollinger-reversion',
+      'micro-donchian-breakout',
+      'micro-regime-adapter',
+    ]
+    const report = buildComparisonReport({
+      horizon: HORIZON,
+      datasetHash: 'abc',
+      manifestHash: 'def',
+      selectionPct: 0.7,
+      selectionCutTimestamp: 50 as TimestampMs,
+      selection: ids
+        .slice(0, 3)
+        .flatMap((id) => [
+          entry(id, 10, [0.6, 0.2, 0.2], 'up'),
+          entry(id, 20, [0.6, 0.2, 0.2], 'up'),
+        ]),
+      validation: [],
+      candidates: ids.map((candidateId) => ({
+        candidateId,
+        ruleVersion: 'test.v1',
+        paramSetVersion: 'test.v1',
+        runId: 'run',
+      })),
+    })
+    const diagnostics = report.microCandidateDiagnostics!
+    expect(
+      diagnostics.candidates.map((candidate) => candidate.candidateId),
+    ).toEqual(ids)
+    expect(diagnostics.selectionEligibleCount).toBe(0)
+    expect(diagnostics.selectionStatus).toBe('insufficient')
+    expect(
+      diagnostics.candidates.map((candidate) => candidate.selectionBrier),
+    ).toEqual([null, null, null, null])
+  })
 })

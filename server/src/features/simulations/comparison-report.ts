@@ -46,7 +46,7 @@ import {
 } from './trade-simulation.ts'
 
 export const SIMULATION_COMPARISON_VERSION =
-  'simulations-comparison.v4' as const
+  'simulations-comparison.v5' as const
 
 /**
  * Maximum equity-curve points stored per candidate per slice. Longer
@@ -192,7 +192,14 @@ export interface SimulationComparisonReport {
 }
 
 export interface MicroCandidateDiagnostics {
-  readonly version: 'micro-candidate-diagnostics.v1'
+  readonly version: 'micro-candidate-diagnostics.v2'
+  readonly selectionStatus: 'computable' | 'insufficient'
+  readonly selectionEligibleCount: number
+  readonly selectionAsOfTimestamps: readonly TimestampMs[]
+  readonly validationStatus: 'computable' | 'insufficient'
+  readonly validationEligibleCount: number
+  readonly validationAsOfTimestamps: readonly TimestampMs[]
+  readonly computabilityNotice: string
   readonly holdoutConsumed: true
   readonly holdoutNotice: string
   readonly candidates: readonly {
@@ -438,8 +445,28 @@ function buildMicroDiagnostics(args: {
     [
       ...new Map(entries.map((entry) => [entry.asOfTimestamp, entry])).values(),
     ].sort((a, b) => a.asOfTimestamp - b.asOfTimestamp)
-  const selectionMatched = uniqueByTime(microSelection)
-  const validationMatched = uniqueByTime(microValidation)
+  const sharedTimes = (entries: readonly SimulationScoredEntry[]) => {
+    const byCandidate = new Map<string, Set<number>>()
+    for (const entry of entries) {
+      const times = byCandidate.get(entry.candidateId) ?? new Set<number>()
+      times.add(entry.asOfTimestamp)
+      byCandidate.set(entry.candidateId, times)
+    }
+    return MICRO_CANDIDATE_IDS.filter((id) => present.has(id))
+      .map((id) => byCandidate.get(id) ?? new Set<number>())
+      .reduce<Set<number>>((shared, candidateTimes, index) => {
+        if (index === 0) return new Set(candidateTimes)
+        return new Set([...shared].filter((time) => candidateTimes.has(time)))
+      }, new Set())
+  }
+  const selectionTimes = sharedTimes(microSelection)
+  const validationTimes = sharedTimes(microValidation)
+  const selectionMatched = uniqueByTime(
+    microSelection.filter((entry) => selectionTimes.has(entry.asOfTimestamp)),
+  )
+  const validationMatched = uniqueByTime(
+    microValidation.filter((entry) => validationTimes.has(entry.asOfTimestamp)),
+  )
   const baselineSet = (
     entries: readonly SimulationScoredEntry[],
     history: readonly SimulationScoredEntry[],
@@ -460,7 +487,10 @@ function buildMicroDiagnostics(args: {
               ? noChangeBaseline()
               : momentumBaseline(matured[index] ?? null),
       }))
-      return { brier: baselineMetrics(mapped).brier, count: mapped.length }
+      return {
+        brier: mapped.length < 2 ? null : baselineMetrics(mapped).brier,
+        count: mapped.length,
+      }
     }
     return {
       uniform: calculate('uniform'),
@@ -476,10 +506,14 @@ function buildMicroDiagnostics(args: {
   const diagnostics = MICRO_CANDIDATE_IDS.filter((id) => present.has(id)).map(
     (candidateId) => {
       const selection = args.selection.filter(
-        (entry) => entry.candidateId === candidateId,
+        (entry) =>
+          entry.candidateId === candidateId &&
+          selectionTimes.has(entry.asOfTimestamp),
       )
       const validation = args.validation.filter(
-        (entry) => entry.candidateId === candidateId,
+        (entry) =>
+          entry.candidateId === candidateId &&
+          validationTimes.has(entry.asOfTimestamp),
       )
       const profit = args.profitability?.candidates.find(
         (entry) => entry.candidateId === candidateId,
@@ -498,14 +532,22 @@ function buildMicroDiagnostics(args: {
       const validationTrade = profit?.validation.metrics ?? sliceDefaults
       return {
         candidateId,
-        selectionBrier: calculateBrierScore(toMetricEntries(selection)),
+        selectionBrier:
+          selection.length < 2
+            ? null
+            : calculateBrierScore(toMetricEntries(selection)),
         selectionMaturedCount: selection.length,
-        validationBrier: calculateBrierScore(toMetricEntries(validation)),
+        validationBrier:
+          validation.length < 2
+            ? null
+            : calculateBrierScore(toMetricEntries(validation)),
         validationMaturedCount: validation.length,
         priorReadyCount: readiness.priorReadyCount,
         forecastOrigins: readiness.forecastOrigins,
-        forecastCoverage: calculateCoverage(toMetricEntries(validation))
-          .coverage,
+        forecastCoverage:
+          validation.length < 2
+            ? null
+            : calculateCoverage(toMetricEntries(validation)).coverage,
         selectionFillCount: selectionTrade.fillCount,
         selectionRoundTripCount: selectionTrade.tradeCount,
         selectionNetReturnPct: selectionTrade.netReturnPct,
@@ -518,7 +560,21 @@ function buildMicroDiagnostics(args: {
     },
   )
   return {
-    version: 'micro-candidate-diagnostics.v1',
+    version: 'micro-candidate-diagnostics.v2',
+    selectionStatus:
+      selectionMatched.length >= 2 ? 'computable' : 'insufficient',
+    selectionEligibleCount: selectionMatched.length,
+    selectionAsOfTimestamps: selectionMatched.map(
+      ({ asOfTimestamp }) => asOfTimestamp,
+    ),
+    validationStatus:
+      validationMatched.length >= 2 ? 'computable' : 'insufficient',
+    validationEligibleCount: validationMatched.length,
+    validationAsOfTimestamps: validationMatched.map(
+      ({ asOfTimestamp }) => asOfTimestamp,
+    ),
+    computabilityNotice:
+      'Computable solo indica que se alcanzó el mínimo de marcas de tiempo compartidas; no acredita suficiencia estadística ni viabilidad de la estrategia.',
     holdoutConsumed: true,
     holdoutNotice:
       'Testing all four pre-registered micro candidates consumes this holdout; do not reuse it for further parameter selection.',

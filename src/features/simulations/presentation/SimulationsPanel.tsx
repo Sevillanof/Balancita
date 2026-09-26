@@ -312,6 +312,18 @@ export default function SimulationsPanel({
                     <section aria-label="Validación experimental de estrategias micro">
                     <h4>Validación experimental · candidatas micro</h4>
                     <p>{report.microCandidateDiagnostics.holdoutNotice}</p>
+                    {report.microCandidateDiagnostics.version === 'micro-candidate-diagnostics.v2' ? (
+                      <>
+                        <p>
+                          Comparabilidad predictiva: selección {report.microCandidateDiagnostics.selectionStatus} ({report.microCandidateDiagnostics.selectionEligibleCount} instantes compartidos) · validación {report.microCandidateDiagnostics.validationStatus} ({report.microCandidateDiagnostics.validationEligibleCount} instantes compartidos).
+                        </p>
+                        <p>{report.microCandidateDiagnostics.computabilityNotice}</p>
+                      </>
+                    ) : (
+                      <p>
+                        Informe histórico: no registra los instantes elegibles compartidos; la comparabilidad predictiva no se puede reconstruir.
+                      </p>
+                    )}
                     <div className="table-scroll">
                       <table className="data-table">
                         <caption>Resultados del mismo tramo de validación; no usar para ajustar reglas</caption>
