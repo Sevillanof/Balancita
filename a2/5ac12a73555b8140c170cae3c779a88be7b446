@@ -1,0 +1,24 @@
+odd/tasks/python-simulation-engine.md
+  h_2f68313623be98 1-237
+plans/btc-eur-simulation-implementation.md
+  h_2f68313623be98 1-220
+python/balancita_simulation.py
+  h_2f68313623be98 1-236
+python/fixtures/long-flat-default-costs.json
+  h_2f68313623be98 1-121
+python/fixtures/long-flat-parity.json
+  h_2f68313623be98 1-86
+python/tests/test_long_flat.py
+  h_2f68313623be98 1-260
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a25ac12a73555b8140c170cae3c779a88be7b446",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
