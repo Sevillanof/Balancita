@@ -1,0 +1,121 @@
+{
+  "oracle": "server/src/features/simulations/trade-simulation.ts simulateLongFlat",
+  "tolerance": { "relative": 1e-12, "absolute": 1e-10 },
+  "input": {
+    "startingCash": 500,
+    "bars": [
+      { "time": 1000, "open": 100, "close": 100 },
+      { "time": 2000, "open": 100, "close": 105 },
+      { "time": 3000, "open": 110, "close": 111 },
+      { "time": 4000, "open": 107, "close": 106 },
+      { "time": 5000, "open": 103, "close": 104 },
+      { "time": 6000, "open": 101, "close": 99 },
+      { "time": 7000, "open": 97, "close": 96 }
+    ],
+    "signals": [
+      {
+        "time": 1000,
+        "probabilityUp": 0.7,
+        "probabilityDown": 0.1,
+        "abstained": false
+      },
+      {
+        "time": 2000,
+        "probabilityUp": 0.8,
+        "probabilityDown": 0.1,
+        "abstained": false
+      },
+      {
+        "time": 3000,
+        "probabilityUp": 0.9,
+        "probabilityDown": 0.05,
+        "abstained": false,
+        "directTarget": "flat"
+      },
+      {
+        "time": 4000,
+        "probabilityUp": 0.8,
+        "probabilityDown": 0.1,
+        "abstained": false,
+        "directTarget": "long"
+      },
+      {
+        "time": 5000,
+        "probabilityUp": 0.2,
+        "probabilityDown": 0.6,
+        "abstained": false
+      },
+      {
+        "time": 6000,
+        "probabilityUp": 0.9,
+        "probabilityDown": 0.1,
+        "abstained": false
+      },
+      {
+        "time": 7000,
+        "probabilityUp": 0.1,
+        "probabilityDown": 0.8,
+        "abstained": false
+      }
+    ]
+  },
+  "expected": {
+    "fills": [
+      {
+        "time": 2000,
+        "side": "buy",
+        "price": 100.05,
+        "qty": 4.992508740634678,
+        "commission": 0.4995004995004995
+      },
+      {
+        "time": 4000,
+        "side": "sell",
+        "price": 106.9465,
+        "qty": 4.992508740634678,
+        "commission": 0.5339313360302866
+      },
+      {
+        "time": 5000,
+        "side": "buy",
+        "price": 103.05149999999999,
+        "qty": 5.170856709063937,
+        "commission": 0.5328645401541022
+      },
+      {
+        "time": 6000,
+        "side": "sell",
+        "price": 100.9495,
+        "qty": 5.170856709063937,
+        "commission": 0.52199539935165
+      },
+      {
+        "time": 7000,
+        "side": "buy",
+        "price": 97.04849999999999,
+        "qty": 5.3679598499801395,
+        "commission": 0.5209524515007976
+      }
+    ],
+    "equityCurve": [
+      { "time": 1000, "equity": 500 },
+      { "time": 2000, "equity": 524.2134177666412 },
+      { "time": 3000, "equity": 554.1684702104493 },
+      { "time": 4000, "equity": 533.3974046942564 },
+      { "time": 5000, "equity": 537.7690977426495 },
+      { "time": 6000, "equity": 521.4734039522982 },
+      { "time": 7000, "equity": 515.3241455980934 }
+    ],
+    "metrics": {
+      "netReturnPct": 3.0648291196186848,
+      "tradeCount": 2,
+      "fillCount": 5,
+      "winRate": 0.5,
+      "profitFactor": 2.8008556370461806,
+      "maxDrawdownPct": 7.00947937323184,
+      "exposurePct": 57.14285714285714,
+      "finalEquity": 515.3241455980934
+    },
+    "ledgerHash": "3cc1ae778f55b4ea705b8ef5bb0414199b463546532c35d624e24405e2fd4c6d"
+  }
+}
