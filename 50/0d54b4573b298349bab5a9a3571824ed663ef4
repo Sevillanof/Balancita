@@ -1,0 +1,18 @@
+odd/tasks/python-simulation-engine.md
+  h_2f68313623be98 45,304-315
+server/src/features/simulations/fast-replay-engine.test.ts
+  h_2f68313623be98 7,310-311,315-323,325,328-349,357-466
+server/src/features/simulations/fast-replay-engine.ts
+  h_2f68313623be98 63-79,110,113,169-174,178-186,189-190,232-233,260-281
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "500d54b4573b298349bab5a9a3571824ed663ef4",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
