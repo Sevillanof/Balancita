@@ -4,6 +4,7 @@ import {
   resample1mTo15m,
   runFastReplay,
 } from './fast-replay-engine.ts'
+import type { FastReplayDecisionSnapshot } from './fast-replay-engine.ts'
 
 describe('runFastReplay', () => {
   it('resamples only complete UTC-aligned buckets closed by the 1m cutoff', () => {
@@ -306,18 +307,161 @@ describe('runFastReplay', () => {
         volume: breakout ? 20 : 1,
       }
     })
-    const result = runFastReplay({
+    const trace: FastReplayDecisionSnapshot[] = []
+    const input = {
       strategyId: 'micro-donchian-breakout',
       candles,
       ticketEur: 30,
+    }
+    const result = runFastReplay({
+      ...input,
+      onDecision: (snapshot) => trace.push(snapshot),
     })
+    const repeatedTrace: FastReplayDecisionSnapshot[] = []
+    runFastReplay({
+      ...input,
+      onDecision: (snapshot) => repeatedTrace.push(snapshot),
+    })
+    const withoutObserver = runFastReplay(input)
 
     expect(result.trades.map(({ side }) => side)).toEqual(['buy'])
+    expect(trace).toHaveLength(2)
+    expect(repeatedTrace).toEqual(trace)
+    expect(Object.isFrozen(trace[0])).toBe(true)
+    expect(Object.isFrozen(trace[0]?.fill)).toBe(true)
+    expect(trace[0]).toMatchObject({
+      timestamp: start + 49 * 900,
+      rawTarget: 'long',
+      abstained: false,
+      entryGate: 'accepted',
+      effectiveTarget: 'long',
+      fill: { scheduled: true, timestamp: start + 50 * 900, side: 'buy' },
+      postExposure: 'long',
+    })
+    expect(trace[1]).toMatchObject({
+      timestamp: start + 50 * 900,
+      fill: { scheduled: false, timestamp: null, side: null },
+      postExposure: 'long',
+    })
+    expect({ ...result, executionTimeMs: 0 }).toEqual({
+      ...withoutObserver,
+      executionTimeMs: 0,
+    })
     expect(result.openPositionAtEnd).toMatchObject({
       entryPrice: 102 * 1.0005,
       entryCostEur: 30.24,
     })
     expect(result.tradesCount).toBe(0)
     expect(result.netPnlEur).toBe(0)
+  })
+
+  it('traces a native long signal rejected by the FastReplay entry gate', () => {
+    const start = Math.floor(1_700_000_100 / 900) * 900
+    const nativeBars = Array.from({ length: 50 }, (_, index) => ({
+      timestamp: start + index * 900,
+      open: 100,
+      high: index === 49 ? 100.6 : 100.4,
+      low: 100,
+      close: index === 49 ? 100.5 : 100.2,
+      volume: index === 49 ? 2 : 1,
+    }))
+    const candles = nativeBars.flatMap((bar) =>
+      Array.from({ length: 15 }, (_, minute) => ({
+        timestamp: bar.timestamp + minute * 60,
+        open: bar.open,
+        high: bar.high,
+        low: bar.low,
+        close: bar.close,
+        volume: bar.volume / 15,
+      })),
+    )
+    const trace: FastReplayDecisionSnapshot[] = []
+    const input = {
+      strategyId: 'micro-donchian-breakout',
+      candles,
+      ticketEur: 30,
+    }
+    const result = runFastReplay({
+      ...input,
+      onDecision: (snapshot) => trace.push(snapshot),
+    })
+    const withoutObserver = runFastReplay(input)
+
+    expect(trace).toHaveLength(1)
+    expect(trace[0]).toMatchObject({
+      timestamp: start + 49 * 900,
+      rawTarget: 'long',
+      entryGate: 'rejected',
+      entryGateReason: 'entry_gate_rejected',
+      effectiveTarget: 'flat',
+      fill: { scheduled: false, performed: false, timestamp: null, side: null },
+      postExposure: 'flat',
+    })
+    expect(result.rawSignalsCount).toBe(1)
+    expect(result.gateRejectionsCount).toBe(1)
+    expect(result.trades).toEqual([])
+    expect({ ...result, executionTimeMs: 0 }).toEqual({
+      ...withoutObserver,
+      executionTimeMs: 0,
+    })
+  })
+
+  it('traces a C27 stop-loss exit from the native long position at the next open', () => {
+    const start = Math.floor(1_700_000_100 / 900) * 900
+    const nativeBars = Array.from({ length: 52 }, (_, index) => {
+      const breakout = index === 49
+      const stoppedOut = index === 50
+      return {
+        timestamp: start + index * 900,
+        open: breakout ? 102 : stoppedOut ? 100 : 100,
+        high: breakout ? 103 : 101,
+        low: breakout ? 99 : 99,
+        close: breakout ? 102 : stoppedOut ? 100 : 100,
+        volume: breakout ? 20 : 1,
+      }
+    })
+    const candles = nativeBars.flatMap((bar) =>
+      Array.from({ length: 15 }, (_, minute) => ({
+        timestamp: bar.timestamp + minute * 60,
+        open: bar.open,
+        high: bar.high,
+        low: bar.low,
+        close: bar.close,
+        volume: bar.volume / 15,
+      })),
+    )
+    const trace: FastReplayDecisionSnapshot[] = []
+    const input = {
+      strategyId: 'micro-donchian-breakout',
+      candles,
+      ticketEur: 30,
+    }
+    const result = runFastReplay({
+      ...input,
+      onDecision: (snapshot) => trace.push(snapshot),
+    })
+    const withoutObserver = runFastReplay(input)
+
+    expect(result.trades.map(({ side }) => side)).toEqual(['buy', 'sell'])
+    expect(trace[0]).toMatchObject({
+      rawTarget: 'long',
+      fill: { side: 'buy', scheduled: true, performed: true },
+      postExposure: 'long',
+    })
+    expect(trace[1]).toMatchObject({
+      timestamp: start + 50 * 900,
+      priorExposure: 'long',
+      fill: {
+        scheduled: true,
+        performed: true,
+        timestamp: start + 51 * 900,
+        side: 'sell',
+      },
+      postExposure: 'flat',
+    })
+    expect({ ...result, executionTimeMs: 0 }).toEqual({
+      ...withoutObserver,
+      executionTimeMs: 0,
+    })
   })
 })

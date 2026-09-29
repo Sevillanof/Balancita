@@ -60,6 +60,23 @@ export interface FastReplayResult {
   readonly gaps: readonly number[]
   readonly executionTimeMs: number
 }
+export interface FastReplayDecisionSnapshot {
+  readonly timestamp: number
+  readonly priorExposure: 'flat' | 'long'
+  readonly priorRegime: 'trend' | 'range' | null
+  readonly rawTarget: 'flat' | 'long'
+  readonly abstained: boolean
+  readonly entryGate: 'not_applicable' | 'accepted' | 'rejected'
+  readonly entryGateReason: 'entry_gate_rejected' | null
+  readonly effectiveTarget: 'flat' | 'long'
+  readonly fill: {
+    readonly scheduled: boolean
+    readonly performed: boolean
+    readonly timestamp: number | null
+    readonly side: 'buy' | 'sell' | null
+  }
+  readonly postExposure: 'flat' | 'long'
+}
 const HORIZON = 1
 export const FAST_REPLAY_FEE =
   KRAKEN_PRO_SPOT_TIER1_TAKER_FEE_SCENARIO.commissionRate
@@ -90,8 +107,10 @@ export function runFastReplay(input: {
   readonly strategyId: string
   readonly candles: readonly FastReplayCandle[]
   readonly ticketEur: number
+  readonly onDecision?: (snapshot: FastReplayDecisionSnapshot) => void
 }): FastReplayResult {
   const started = performance.now()
+  const onDecision = input.onDecision
   const strategyId =
     input.strategyId === 'donchian-volume-breakout'
       ? 'micro-donchian-breakout'
@@ -147,19 +166,28 @@ export function runFastReplay(input: {
       state,
       macroContextWhenReady(macro),
     )
+    const priorExposure = state.exposure
+    const priorRegime = state.regime
+    let entryGate: FastReplayDecisionSnapshot['entryGate'] = 'not_applicable'
+    let entryGateReason: FastReplayDecisionSnapshot['entryGateReason'] = null
+    let fillTimestamp: number | null = null
+    let fillSide: FastReplayDecisionSnapshot['fill']['side'] = null
     let effectiveTarget = decision.target
     if (state.exposure === 'flat' && decision.target === 'long') {
       rawSignalsCount += 1
-      if (
-        fastReplayCanEnter(
-          strategyId as FastReplayStrategyId,
-          features,
-          decision.state.regime,
-          macro,
-        )
-      ) {
+      const canEnter = fastReplayCanEnter(
+        strategyId as FastReplayStrategyId,
+        features,
+        decision.state.regime,
+        macro,
+      )
+      entryGate = canEnter ? 'accepted' : 'rejected'
+      if (!canEnter) entryGateReason = 'entry_gate_rejected'
+      if (canEnter) {
         const next = candles[index + 1]
         if (next !== undefined && next.timestamp === candle.timestamp + 900) {
+          fillTimestamp = next.timestamp
+          fillSide = 'buy'
           const price = next.open * (1 + SLIPPAGE)
           const quantity = input.ticketEur / price
           const feeEur = input.ticketEur * FEE
@@ -201,6 +229,8 @@ export function runFastReplay(input: {
     ) {
       const next = candles[index + 1]
       if (next !== undefined && next.timestamp === candle.timestamp + 900) {
+        fillTimestamp = next.timestamp
+        fillSide = 'sell'
         const price = next.open * (1 - SLIPPAGE)
         const proceedsGross = position.quantity * price
         const feeEur = proceedsGross * FEE
@@ -225,6 +255,28 @@ export function runFastReplay(input: {
     } else {
       effectiveTarget = position === null ? 'flat' : 'long'
       state = { ...decision.state, exposure: effectiveTarget }
+    }
+
+    if (onDecision !== undefined) {
+      onDecision(
+        Object.freeze({
+          timestamp: candle.timestamp,
+          priorExposure,
+          priorRegime,
+          rawTarget: decision.target,
+          abstained: decision.abstained,
+          entryGate,
+          entryGateReason,
+          effectiveTarget,
+          fill: Object.freeze({
+            scheduled: fillSide !== null,
+            performed: fillSide !== null,
+            timestamp: fillTimestamp,
+            side: fillSide,
+          }),
+          postExposure: state.exposure,
+        }),
+      )
     }
 
     const dueIndex = index - HORIZON
