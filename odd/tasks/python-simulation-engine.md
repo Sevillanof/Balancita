@@ -13,7 +13,7 @@
 - If collateral is insufficient to value the case coherently, report it as unvalued; do not invent liquidation or a forced fill.
 - Model assumptions: explicit `directTarget` takes priority. With no explicit target, FLAT enters SHORT when `probabilityDown >= entryThreshold`; if both probabilities meet the entry threshold, remain FLAT conservatively. SHORT exits to FLAT on abstention, `probabilityDown < exitUpThreshold`, or `probabilityUp >= exitDownThreshold` (the inverse of the LONG exit rules). These decisions fill at the next candle OPEN. An explicit opposite-side target closes the current position and opens the requested side at the same next open; short entry uses available free cash as 1x locked collateral, commission is paid from that cash, proceeds are separately restricted, and cover losses consume collateral. Insufficient equity/collateral raises a clear unvalued-case error. These are synthetic ledger conventions, not venue rules.
 - This synthetic model is not Binance Futures and supports no economic-validity/viability conclusion. Funding, maintenance margin, and liquidation require a separate future unit before any viability conclusion.
-- Python-only implementation includes the synthetic SHORT 1x alongside LONG/FLAT, with its tests and documented limitations. TypeScript is a read-only oracle/reference for already-supported LONG/FLAT behavior. No funding, liquidation, Binance integration, orders, push, or PR. Preserve pre-existing untracked files; do not start PY-SIM-02 or FastReplay/PaperForward work. User authorized a local work-unit commit after rerunning verification; commit `a25ac12a73555b8140c170cae3c779a88be7b446` exists. Native review did not yield a receipt; the documented high-tier fallback was used, not a native PASS. No push was authorized.
+- **Dated/superseded PY-SIM-01 checkpoint (2026-09-28):** Python-only implementation includes the synthetic SHORT 1x alongside LONG/FLAT, with its tests and documented limitations. TypeScript is a read-only oracle/reference for already-supported LONG/FLAT behavior. No funding, liquidation, Binance integration, orders, push, or PR. Preserve pre-existing untracked files; do not start PY-SIM-02 or FastReplay/PaperForward work. User authorized a local work-unit commit after rerunning verification; commit `a25ac12a73555b8140c170cae3c779a88be7b446` exists. Native review did not yield a receipt; the documented high-tier fallback was used, not a native PASS. No push was authorized. The no-PY-SIM-02 instruction records that checkpoint only; subsequent authorized offline replay work is documented under PY-SIM-02 below.
 - TDD remains strict RED → GREEN → REFACTOR. Record explicit model assumptions and return unresolved business behavior as a gap rather than inventing it. Engram mirror remains pending unless an authorized write succeeds.
 
 ## Objective and problem
@@ -41,10 +41,22 @@ Establish a safe, evidence-driven path for evaluating Python as Balancita's futu
 ## Stable task IDs and sequence
 
 - [x] **PY-SIM-01 — Inert Python LONG/FLAT plus synthetic SHORT ledger.** Complete in `a25ac12a73555b8140c170cae3c779a88be7b446` (`feat(simulations): add isolated Python directional ledger`). Python unittest: 16 passed; existing TS LONG/FLAT baseline: 13 passed (no TS files edited); server typecheck passed; current TS oracle matched both LONG/FLAT fixtures exactly; Markdown/JSON Prettier check passed; whitespace clean across six files. Independent read-only verifier reported no blocking defects. Native assessment returned high risk/unassessable because the git-provider diff command failed; native START returned `invalid_request`, `mutation_outcome: not_started`, target-evidence/target mismatch. No native review receipt/acknowledgement exists; this completion records writer self-verification plus independent-verifier fallback, not a native PASS. Synthetic model is not Binance Futures validation. Rollback boundary: remove only this Python package/tests/fixtures and this task's plan/tracker evidence.
-- [ ] **PY-SIM-02 — FastReplay + PaperForward shared semantics.** Separately specify and test both existing paths before any shared implementation; reconcile their seconds/closed-resampling and persisted-history constraints. No wiring or migration before explicit bounded scope and parity evidence.
+- [ ] **PY-SIM-02 — Offline Python replay on frozen inputs.** Implement one deterministic offline replay using the existing Python ledger/target and cost contract. Keep FastReplay as a reference-only LONG/FLAT comparator where a genuinely shared contract applies; do not build a second accounting path, claim parity with the proposed futures strategy, wire either path, or change the TypeScript production default. PaperForward persistence/restart migration is a later separate unit, after offline proof.
 - [ ] **PY-SIM-03 — Controlled engine benchmark.** Only after representative frozen local inputs and interpretable trade-log parity exist, compare identical semantics, costs, runtime, memory and maintenance/setup burden. No external data fetch as part of this task.
 - [ ] **PY-SIM-04 — Explicit opt-in boundary.** If justified, define an inert, explicit opt-in integration boundary with rollback and historical-report compatibility; production remains TypeScript-default until separately gated.
 - [ ] **PY-SIM-05 — Default-switch decision.** Consider switching only after parity, rollback, scope reconciliation, benchmark evidence, and explicit authorization. Retain TypeScript if Python's user-relevant superiority is not demonstrated.
+
+### PY-SIM-02 implementation handoff
+
+This is one cohesive, offline Python replay unit over frozen local fixture inputs. It may reuse the existing Python ledger/target and its established cost contract; it must not introduce a second accounting path or silently reprice costs. Implementation and verification evidence are recorded below. This status records implementation evidence only; it does not claim a commit or native receipt.
+
+- **Input/time contract:** Replay only closed candles available at each decision time. Make the source interval and cutoff explicit; never use a bar before it is closed or bridge a gap as though data were continuous. Define how stale data and scans with no new closed hourly bar behave. At the FastReplay boundary, convert its epoch-seconds timestamps to the Python ledger's UTC epoch-milliseconds explicitly and exactly once; retain the source timestamps/provenance in replay outputs.
+- **Replay/fill contract:** Decisions are deterministic and causal. A signal derived from a closed bar may fill only at the next eligible candle OPEN, never that bar's open or close. Preserve state across replay steps and expose enough outputs to audit decisions, fills, equity/metrics, input window, gaps/cutoff, strategy/config identity, and cost identity. Repeated 15-minute scans over unchanged hourly data add no new hourly evidence and must not manufacture a new bar or repeated transition.
+- **Boundary to legacy FastReplay:** FastReplay accepts contiguous one-minute epoch-second bars, resamples complete 15-minute buckets, evaluates the TS micro-strategy and fills next open. Compare only shared LONG/FLAT semantics, using identical frozen inputs, identical complete 1m-to-15m resampling and costs when applicable. Report gaps or unsupported differences; if a shared contract cannot be established, mark the comparator not comparable. The proposed new 1h/15m LONG/SHORT strategy is different behavior, not parity evidence. Keep its comparison separate and make no Python-superiority claim.
+- **Unspecified behavior:** Do not invent ADX threshold choices in the 20–25 band, intrahour triggers/signals, funding, or exchange/venue semantics. Defer those features and identify the missing product/strategy decision rather than approximating it. Synthetic SHORT ledger behavior remains subject to PY-SIM-01's limitations; no funding, liquidation, venue validity, or economic viability claim follows.
+- **Out of scope:** No production wiring, API/CLI/default switch, live inputs/orders, TypeScript production changes, or PaperForward persistence/restart migration. PaperForward consumes streaming closed candles and persists/rebuilds state; its restart semantics require a separately bounded unit after this offline replay is proven.
+
+**Acceptance and verification:** Use strict focused Python RED → GREEN → REFACTOR with frozen fixtures covering complete and incomplete bars, gaps/cutoffs, stale input and no new hourly bar at 15-minute scans, next-open fills, null/missing/abstaining signals, preserved deterministic state/reproducibility, and identity of the existing cost contract. Compare with the legacy TS baseline only for real shared LONG/FLAT behavior and record exactly which contract was compared; otherwise explicitly report not comparable. Run the exact existing Python runner `PYTHONPATH=python python3 -m unittest discover -s python/tests -v` and, when the shared comparator applies, the exact TS baseline `pnpm --dir server exec vitest run src/features/simulations/trade-simulation.test.ts`. The implementing session must record actual commands/results and any applicable formatting/type checks; do not claim tests or parity have run before they do.
 
 ## Workload and delivery
 
@@ -73,7 +85,7 @@ Forecast authored changed lines for the whole feature: approximately **700–1,2
 - REFACTOR: removed the now-unreachable duplicate LONG close branch; exact Python runner passed all 12 tests again after the behavior-preserving cleanup.
 - Short equity is marked as `freeCash + lockedCollateral + restrictedProceeds - liability`; the short equity points expose those components. Existing LONG oracle fixtures remain the only cross-language parity claim; there is no TS SHORT oracle.
 - Final verification: `PYTHONPATH=python python3 -m unittest discover -s python/tests -v` — 12 tests passed; `pnpm --dir server exec vitest run src/features/simulations/trade-simulation.test.ts` — 1 file / 13 tests passed (baseline only); `pnpm --dir server typecheck` — passed; `node_modules/.bin/prettier --check plans/btc-eur-simulation-implementation.md odd/tasks/python-simulation-engine.md python/fixtures/long-flat-parity.json python/fixtures/long-flat-default-costs.json` — passed; `git diff --check` plus direct trailing-whitespace scan of all six new files — no findings. Prettier was not run on Python.
-- Product/model caveat: this is a synthetic 1x collateral ledger, not Binance Futures valuation. Funding, maintenance margin and liquidation are not modeled; no viability conclusion follows. PY-SIM-02 and FastReplay/PaperForward remain untouched.
+- Product/model caveat (2026-09-28 PY-SIM-01 checkpoint): this is a synthetic 1x collateral ledger, not Binance Futures valuation. Funding, maintenance margin and liquidation are not modeled; no viability conclusion follows. At that checkpoint PY-SIM-02 and FastReplay/PaperForward remained untouched; subsequent PY-SIM-02 offline replay work is recorded in the later implementation evidence below. FastReplay/PaperForward remain untouched.
 - Historical checkpoint (2026-09-28): at that point the Engram mirror was pending and the commit identity had not yet been observed, so the task remained unchecked. This checkpoint was superseded by the later completion evidence recorded above. Engram mirror remains pending; no mirror write is claimed.
 
 ### Probability-driven SHORT correction (2026-09-28)
@@ -235,3 +247,46 @@ this tracker records the conflict and does not amend `doc/**`.
       execution; preserve contiguous data windows and never fabricate fills.
 - [ ] Define CSV correction/audit and EUR valuation provenance, and obtain
       appropriate jurisdiction-specific review before asserting tax sufficiency.
+
+### PY-SIM-02 implementation evidence (2026-09-29)
+
+- Implemented an inert `python/balancita_replay.py::run_replay` wrapper over
+  `simulate_long_flat`; it does not duplicate ledger accounting. Source candle
+  timestamps denote candle close, the source interval/cutoff/scan/max-age are
+  explicit, bars after cutoff are excluded, missing interval steps are reported,
+  and an explicit max-age policy distinguishes stale input from a scan with no
+  newly closed bar. Repeated scans rebuild the same ledger deterministically
+  from the frozen prefix; no persisted/restart state is introduced.
+- Audit output includes signal inputs, source timestamp provenance, converted
+  UTC epoch milliseconds, input window, cutoff, gaps, strategy/config IDs,
+  parameters, resolved existing cost rates, and the reused ledger's fills,
+  equity curve, and metrics. The optional epoch-seconds boundary multiplies
+  timestamps by 1,000 once; source values/units are retained.
+- Comparator outcome: `not_comparable`. No identical frozen FastReplay 1m input,
+  complete-bucket resampling, strategy contract, and costs were provided as a
+  common replay input; no TS FastReplay oracle or parity claim was added. The
+  distinct proposed 1h/15m LONG/SHORT strategy remains unsupported here.
+- TDD: RED — exact Python runner failed to import the not-yet-implemented
+  `balancita_replay` module (16 existing tests passed). GREEN — new replay tests
+  passed after implementation; two initial assertions exposed float exactness
+  and cutoff-relative status expectations, and a further assertion confirmed
+  excluded post-cutoff bars do not fabricate a reported gap. Corrected tests
+  pass. REFACTOR — consolidated both replay statuses through one call to the
+  existing ledger; exact Python runner passed all 20 tests after cleanup.
+- Cutoff-provenance regression: RED — extended the deterministic cutoff case
+  with a future bar and signal, then ran the exact Python command; all existing
+  cases passed but the new assertion failed because future time `14400000`
+  appeared in `sourceTimestamps`. GREEN — only append bar/signal provenance
+  after its converted timestamp passes the cutoff; the same runner passed all
+  20 tests. The case also asserts that future values are absent from
+  `signalTimestampProvenance`, `decisionInputs`, and ledger equity/window output.
+- Verification: Python runner — `PYTHONPATH=python python3 -m unittest discover -s python/tests -v` — 20 passed; TS baseline — `pnpm --dir server exec vitest run src/features/simulations/trade-simulation.test.ts` — 1 file / 13 tests passed; `pnpm --dir server typecheck` — passed.
+- Formatting/whitespace: `node_modules/.bin/prettier --check plans/btc-eur-simulation-implementation.md odd/tasks/python-simulation-engine.md` — passed; `git diff --check` — passed; direct whitespace scan of both Python files and this tracker — no trailing whitespace. Python syntax compilation — passed. No production runtime harness applies; no Python dependency or TypeScript source change was made.
+- Rollback boundary: remove `python/balancita_replay.py`,
+  `python/tests/test_replay.py`, and this PY-SIM-02 evidence block only; the
+  established ledger and PY-SIM-01 artifacts remain intact.
+- Open gaps: replay is LONG/FLAT only through the existing target contract;
+  no ADX threshold, intrahour trigger, funding, venue, or exchange semantics
+  were selected. FastReplay parity remains unsupported/not comparable, and no
+  strategy validity, exchange validity, viability, or superiority is claimed.
+- Engram mirror remains pending; no mirror write is claimed.
