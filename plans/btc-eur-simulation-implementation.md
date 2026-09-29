@@ -1,6 +1,6 @@
 # BTC-EUR Simulation: Outcome-First Implementation Plan
 
-**Status:** Incremental Python simulation-engine migration is explicitly authorized to start on a bounded, inert parity unit. This does not authorize production integration, a default switch, or a claim that Python is superior; no implementation is claimed by this plan text alone.
+**Status (2026-09-29):** PY-SIM-01 is complete at commit `a25ac12a73555b8140c170cae3c779a88be7b446` as a bounded, inert Python LONG/FLAT plus synthetic SHORT 1x ledger. Verification and the documented high-tier fallback review are complete; native review did not yield a receipt or PASS. This does not authorize production integration, a default switch, or a claim that Python is superior. Engram mirror remains pending; no push was made. PY-SIM-02 through PY-SIM-05 remain future work.
 
 **Decision:** Keep Balancita's React/Vite + TypeScript and Fastify/TypeScript + SQLite architecture and TypeScript production simulator. Begin an incremental Python migration with independently testable, inert units so parity and maintenance evidence can be gathered before integration. Python may be a better long-term fit, but that expectation is unproven; production remains TypeScript-default unless parity, rollback, scope reconciliation, a controlled benchmark, and a separate explicit decision support changing it. Do not adopt Freqtrade or replace the stack by implication.
 
@@ -206,9 +206,11 @@ Benchmark report must include repeat count and variance, wall time, peak memory,
 
 ## Implementation handoff checklist
 
-### Incremental migration status (2026-09-28)
+### Incremental migration status (2026-09-29)
 
-The decision above authorizes isolated Python ledger work, now extended by the user's bounded approval to LONG/FLAT plus a synthetic 1x SHORT ledger. This does not authorize production wiring, Binance Futures claims, or switching the default. The exact scope, assumptions, TDD evidence, and limitations are tracked in [`odd/tasks/python-simulation-engine.md`](../odd/tasks/python-simulation-engine.md) under PY-SIM-01. The task remains unchecked until review/commit evidence is supplied. Python's superiority remains unproven; FastReplay/PaperForward semantics, funding/margin/liquidation modeling, representative benchmarking, any opt-in boundary, and any default decision remain separate follow-ups.
+PY-SIM-01 completed in commit `a25ac12a73555b8140c170cae3c779a88be7b446` (`feat(simulations): add isolated Python directional ledger`): Python unittest 16 passed; existing TS LONG/FLAT baseline 13 passed (no TS files edited); server typecheck passed; current TS oracle matched both LONG/FLAT fixtures exactly; Markdown/JSON Prettier check passed; whitespace was clean across six files. Independent read-only verifier reported no blocking defects. Native review assessment was high-risk/unassessable after the git-provider diff command failed; native START returned `invalid_request` with `mutation_outcome: not_started` due to target-evidence/target mismatch. No native receipt/acknowledgement exists; completion is based on writer self-verification plus independent-verifier fallback, not a native PASS. This does not authorize production wiring, Binance Futures claims, or switching the default. Python's superiority remains unproven; PY-SIM-02 through PY-SIM-05 and FastReplay/PaperForward, funding/margin/liquidation modeling, benchmarking, any opt-in boundary, and any default decision remain future work. Engram mirror remains pending.
+
+The earlier 2026-09-28 checkpoint recorded a pending commit and unchecked task before the later completion evidence was available; it is superseded by this status. No push was made.
 
 - [ ] Product owner reconciles the product-definition conflict before production integration/default migration; current explicit authorization is limited to incremental, inert parity work.
 - [ ] BTC-EUR source coverage, rights, quota/cost, continuity and data lifecycle are verified before integration.
