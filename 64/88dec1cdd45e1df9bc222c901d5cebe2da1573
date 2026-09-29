@@ -1,0 +1,16 @@
+odd/tasks/python-simulation-engine.md
+  h_2f68313623be98 44,51,293-294
+plans/btc-eur-simulation-implementation.md
+  h_2f68313623be98 3,211,213
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6488dec1cdd45e1df9bc222c901d5cebe2da1573",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
