@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { CandlestickData, SeriesMarker, Time } from 'lightweight-charts'
 import PriceChart from '../features/price-chart/presentation/PriceChart.tsx'
 
@@ -12,6 +12,20 @@ type Ohlc = {
 }
 type FastRun = {
   id: string
+  datasetHash?: string
+  artifact?: {
+    schema: 'fast-replay-artifact.v1'
+    runId: string
+    datasetHash: string
+    source: string
+    engineOwner: string
+    timestampUnit: 'unix-seconds'
+    candleIntervalSeconds: 60
+    candleTimestampSemantics: 'bucket-start'
+    cutoffEpochMs: number
+    window: { start_time: number; end_time: number }
+    candles: readonly Ohlc[]
+  }
   sizingModel?: 'cash-all-in.v1'
   initialCashEur?: number
   availableCashEur?: number
@@ -142,11 +156,68 @@ function fastRunsFromPayload(
     : []
 }
 
+function candlesFromArtifact(
+  value: unknown,
+  runId: string,
+  datasetHash: string | undefined,
+): Ohlc[] {
+  if (
+    !isRecord(value) ||
+    value.schema !== 'fast-replay-artifact.v1' ||
+    value.runId !== runId ||
+    typeof datasetHash !== 'string' ||
+    value.datasetHash !== datasetHash ||
+    value.timestampUnit !== 'unix-seconds' ||
+    value.candleIntervalSeconds !== 60 ||
+    value.candleTimestampSemantics !== 'bucket-start' ||
+    !isRecord(value.window) ||
+    !isSafeInteger(value.window.start_time) ||
+    !isSafeInteger(value.window.end_time) ||
+    value.source !== 'kraken_rest_ohlc' ||
+    value.engineOwner !== 'typescript' ||
+    !Array.isArray(value.candles)
+  )
+    return []
+  if (
+    value.candles.length === 0 ||
+    !value.candles.every(
+      (candle) =>
+        isRecord(candle) &&
+        isSafeInteger(candle.timestamp) &&
+        isSafeInteger(candle.timestamp * 1000) &&
+        [
+          candle.open,
+          candle.high,
+          candle.low,
+          candle.close,
+          candle.volume,
+        ].every(isFiniteNumber),
+    )
+  )
+    return []
+  const candles = value.candles as Ohlc[]
+  if (
+    candles.some(
+      (candle, index) =>
+        index > 0 && candle.timestamp - candles[index - 1]!.timestamp !== 60,
+    ) ||
+    candles[0]!.timestamp * 1000 !== value.window.start_time ||
+    candles.at(-1)!.timestamp * 1000 !== value.window.end_time
+  )
+    return []
+  return candles.map((candle) => ({
+    ...candle,
+    timestamp: candle.timestamp * 1000,
+  }))
+}
+
 export default function FastReplaySection() {
+  const selectedRunRequestId = useRef(0)
   const [strategies, setStrategies] = useState<readonly Strategy[]>([])
   const [strategy, setStrategy] = useState('')
   const [candles, setCandles] = useState<readonly Ohlc[]>([])
   const [run, setRun] = useState<FastRun | null>(null)
+  const [artifactNotice, setArtifactNotice] = useState<string | null>(null)
   const [history, setHistory] = useState<readonly FastRun[]>([])
   const [cursor, setCursor] = useState(-1)
   const [speed, setSpeed] = useState(1)
@@ -284,8 +355,10 @@ export default function FastReplaySection() {
   }
 
   async function execute() {
+    const requestId = ++selectedRunRequestId.current
     if (!strategies.some(({ id }) => id === strategy)) {
       setError('No hay una estrategia activa disponible para ejecutar.')
+      setBusy(false)
       return
     }
     setBusy(true)
@@ -298,6 +371,7 @@ export default function FastReplaySection() {
         body: JSON.stringify({ strategy_id: strategy }),
       })
       const payload: unknown = await response.json()
+      if (requestId !== selectedRunRequestId.current) return
       if (!response.ok || !isFastRun(payload, strategies))
         throw new Error(
           isRecord(payload) &&
@@ -306,22 +380,29 @@ export default function FastReplaySection() {
             ? payload.error.message
             : 'No se pudo ejecutar el replay.',
         )
-      const loaded = await loadCandles(
-        payload.window.start_time,
-        payload.window.end_time,
+      const loaded = candlesFromArtifact(
+        payload.artifact,
+        payload.id,
+        payload.datasetHash,
       )
       setRun(payload)
       setCandles(loaded)
+      setArtifactNotice(
+        loaded.length === 0
+          ? 'Frozen chart data are unavailable or unverifiable for this run.'
+          : null,
+      )
       setCursor(0)
       setHistory((current) => [payload, ...current].slice(0, 50))
     } catch (cause) {
-      setError(
-        cause instanceof Error
-          ? cause.message
-          : 'Ocurrió un error al ejecutar el replay.',
-      )
+      if (requestId === selectedRunRequestId.current)
+        setError(
+          cause instanceof Error
+            ? cause.message
+            : 'Ocurrió un error al ejecutar el replay.',
+        )
     } finally {
-      setBusy(false)
+      if (requestId === selectedRunRequestId.current) setBusy(false)
     }
   }
 
@@ -331,32 +412,36 @@ export default function FastReplaySection() {
       setHistory(fastRunsFromPayload(await response.json(), strategies))
     }
   }
-  async function loadCandles(start: number, end: number) {
-    const response = await fetch(
-      `/api/market/ohlc?start_time=${start}&end_time=${end}`,
-    )
-    if (!response.ok)
-      throw new Error('No se pudieron cargar las velas guardadas.')
-    return ((await response.json()) as { candles: Ohlc[] }).candles
-  }
   async function inspect(saved: FastRun) {
+    const requestId = ++selectedRunRequestId.current
     setBusy(true)
     setError(null)
     setPlaying(false)
     try {
-      setCandles(
-        await loadCandles(saved.window.start_time, saved.window.end_time),
+      const response = await fetch(
+        `/api/replay/fast-run/history/${encodeURIComponent(saved.id)}/artifact`,
       )
+      const payload: unknown = response.ok ? await response.json() : null
+      if (requestId !== selectedRunRequestId.current) return
+      const artifact = isRecord(payload) ? payload.artifact : undefined
+      const loaded = candlesFromArtifact(artifact, saved.id, saved.datasetHash)
       setRun(saved)
+      setCandles(loaded)
+      setArtifactNotice(
+        loaded.length === 0
+          ? 'Frozen chart data are unavailable or unverifiable for this historical run.'
+          : null,
+      )
       setCursor(0)
     } catch (cause) {
-      setError(
-        cause instanceof Error
-          ? cause.message
-          : 'No se pudo abrir la corrida guardada.',
-      )
+      if (requestId === selectedRunRequestId.current)
+        setError(
+          cause instanceof Error
+            ? cause.message
+            : 'No se pudo abrir la corrida guardada.',
+        )
     } finally {
-      setBusy(false)
+      if (requestId === selectedRunRequestId.current) setBusy(false)
     }
   }
 
@@ -483,6 +568,7 @@ export default function FastReplaySection() {
           </p>
         </div>
       )}
+      {artifactNotice !== null && <p role="status">{artifactNotice}</p>}
       <PriceChart data={chartData} markers={markers} />
       <div
         className="fast-replay__playback"
