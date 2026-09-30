@@ -931,15 +931,52 @@ export async function buildApp(options: {
         start_time: candles[0]!.timestamp * 1000,
         end_time: candles.at(-1)!.timestamp * 1000,
       }
-      const datasetHash = fastReplayHash(candles)
+      const frozenCandles = candles.map((candle) => ({
+        timestamp: candle.timestamp,
+        open: candle.open,
+        high: candle.high,
+        low: candle.low,
+        close: candle.close,
+        volume: candle.volume,
+      }))
+      const datasetHash = fastReplayHash({
+        schema: 'fast-replay-candles.v1',
+        columns: ['timestamp', 'open', 'high', 'low', 'close', 'volume'],
+        candles: frozenCandles.map((candle) => [
+          candle.timestamp,
+          candle.open,
+          candle.high,
+          candle.low,
+          candle.close,
+          candle.volume,
+        ]),
+      })
       const result = runFastReplay({ strategyId, candles, ticketEur: ticket })
       const id = `fast-${randomUUID()}`
+      const artifact = {
+        schema: 'fast-replay-artifact.v1',
+        runId: id,
+        datasetHash,
+        source: 'kraken_rest_ohlc',
+        engineOwner: 'typescript',
+        timestampUnit: 'unix-seconds',
+        candleIntervalSeconds: 60,
+        candleTimestampSemantics: 'bucket-start',
+        cutoffEpochMs: bounds.end_time,
+        strategyId: result.strategyId,
+        window: bounds,
+        feeScenario: result.feeScenario,
+        sizingModel: result.sizingModel,
+        initialCashEur: result.initialCashEur,
+        candles: frozenCandles,
+      }
       const contentHash = fastReplayHash({
         id,
         strategyId: result.strategyId,
         bounds,
         result,
         datasetHash,
+        artifact,
       })
       const trades = result.trades.map((trade) => ({
         ...trade,
@@ -965,6 +1002,7 @@ export async function buildApp(options: {
         datasetHash,
         contentHash,
         window: bounds,
+        artifact,
       }
       marketStore.saveFastReplayRun(
         id,
@@ -1016,6 +1054,8 @@ export async function buildApp(options: {
         : null
       const flat = {
         ...stored.result,
+        artifactStatus:
+          stored.artifactStatus === 'stored' ? 'stored' : 'unavailable',
         feeScenario,
         costCaveat:
           feeScenario === null
@@ -1030,6 +1070,47 @@ export async function buildApp(options: {
       return isFastReplayHistoryRecord(flat) ? [flat] : []
     })
     return reply.send({ runs })
+  })
+
+  app.get('/api/replay/fast-run/history/:runId/artifact', (request, reply) => {
+    if (marketStore === undefined)
+      return reply.code(503).send({
+        error: {
+          code: 'market_store_unavailable',
+          message: 'Fast Replay history is unavailable.',
+        },
+      })
+    const { runId } = request.params as { runId: string }
+    const stored = marketStore.getFastReplayRun(runId)
+    if (!isRecord(stored) || !isRecord(stored.result))
+      return reply.code(404).send({ artifactStatus: 'unavailable' })
+    const artifact = stored.result.artifact
+    if (!isRecord(artifact))
+      return reply.code(404).send({ artifactStatus: 'unavailable' })
+    if (
+      artifact.schema !== 'fast-replay-artifact.v1' ||
+      artifact.runId !== runId ||
+      artifact.datasetHash !== stored.datasetHash ||
+      !Array.isArray(artifact.candles) ||
+      fastReplayHash({
+        schema: 'fast-replay-candles.v1',
+        columns: ['timestamp', 'open', 'high', 'low', 'close', 'volume'],
+        candles: artifact.candles.map((value) =>
+          isRecord(value)
+            ? [
+                value.timestamp,
+                value.open,
+                value.high,
+                value.low,
+                value.close,
+                value.volume,
+              ]
+            : null,
+        ),
+      }) !== artifact.datasetHash
+    )
+      return reply.code(409).send({ artifactStatus: 'unverifiable' })
+    return reply.send({ artifactStatus: 'verified', artifact })
   })
 
   app.get('/api/intelligence/stream', (request, reply) => {

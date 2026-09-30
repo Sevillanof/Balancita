@@ -316,6 +316,15 @@ describe('Fast Replay API', () => {
     })
     expect(run.statusCode).toBe(200)
     expect(run.json().strategyId).toBe('micro-donchian-breakout')
+    expect(run.json().artifact).toMatchObject({
+      schema: 'fast-replay-artifact.v1',
+      timestampUnit: 'unix-seconds',
+      candleIntervalSeconds: 60,
+      candles: expect.any(Array),
+    })
+    expect(run.json().artifact.candles).toHaveLength(80)
+    expect(run.json().artifact.datasetHash).toBe(run.json().datasetHash)
+    expect(run.json().artifact.initialCashEur).toBe(47)
     expect(run.json().sizingModel).toBe('cash-all-in.v1')
     expect(run.json().initialCashEur).toBe(47)
     expect(run.json().id).toMatch(/^fast-/)
@@ -330,6 +339,7 @@ describe('Fast Replay API', () => {
     delete persistedLegacyResult.initialCashEur
     delete persistedLegacyResult.availableCashEur
     delete persistedLegacyResult.finalEquityEur
+    delete persistedLegacyResult.artifact
     store.saveFastReplayRun(
       'fast-legacy-fees',
       {},
@@ -372,6 +382,7 @@ describe('Fast Replay API', () => {
     expect(legacy).toMatchObject({
       feeScenario: null,
       costCaveat: expect.stringMatching(/provenance is unknown/i),
+      artifactStatus: 'unavailable',
     })
     expect(legacy).not.toHaveProperty('sizingModel')
     expect(malformed).toMatchObject({
@@ -401,6 +412,77 @@ describe('Fast Replay API', () => {
     expect(legacy).not.toHaveProperty('result')
     expect(legacy).not.toHaveProperty('sizingModel')
     expect(fresh).not.toHaveProperty('result')
+    expect(fresh).not.toHaveProperty('artifact')
+    const runRecord = run.json() as {
+      id: string
+      datasetHash: string
+      artifact: {
+        runId: string
+        candles: {
+          timestamp: number
+          open: number
+          high: number
+          low: number
+          close: number
+          volume: number
+        }[]
+      }
+    }
+    const frozenBeforeMutation = runRecord.artifact.candles
+    store.upsertOhlcCandles([
+      {
+        timestamp: replayStart,
+        open: 999,
+        high: 1000,
+        low: 998,
+        close: 999,
+        volume: 1,
+      },
+    ])
+    const artifactResponse = await app.inject({
+      method: 'GET',
+      url: `/api/replay/fast-run/history/${runRecord.id}/artifact`,
+    })
+    expect(artifactResponse.statusCode).toBe(200)
+    expect(artifactResponse.json()).toMatchObject({
+      artifactStatus: 'verified',
+      artifact: { runId: runRecord.id, candles: frozenBeforeMutation },
+    })
+    expect(artifactResponse.json().artifact.candles[0].open).toBe(30_000)
+    const invalidArtifact = runRecord.artifact
+    store.saveFastReplayRun(
+      'fast-invalid-artifact',
+      {},
+      {
+        ...runRecord,
+        id: 'fast-invalid-artifact',
+        artifact: {
+          ...invalidArtifact,
+          runId: 'fast-invalid-artifact',
+          candles: invalidArtifact.candles.map((candle, index) =>
+            index === 0 ? { ...candle, close: candle.close + 1 } : candle,
+          ),
+        },
+      },
+      runRecord.datasetHash,
+      'invalid-artifact-content',
+    )
+    expect(
+      (
+        await app.inject({
+          method: 'GET',
+          url: '/api/replay/fast-run/history/fast-invalid-artifact/artifact',
+        })
+      ).statusCode,
+    ).toBe(409)
+    expect(
+      (
+        await app.inject({
+          method: 'GET',
+          url: '/api/replay/fast-run/history/fast-legacy-fees/artifact',
+        })
+      ).statusCode,
+    ).toBe(404)
     const persistedAfterRead = store
       .listFastReplayRuns()
       .find(
@@ -502,6 +584,18 @@ describe('Fast Replay API', () => {
       },
     })
     expect(response.statusCode).toBe(200)
+    expect(response.json().artifact).toMatchObject({
+      schema: 'fast-replay-artifact.v1',
+      engineOwner: 'typescript',
+      timestampUnit: 'unix-seconds',
+      candleIntervalSeconds: 60,
+      candleTimestampSemantics: 'bucket-start',
+      candles: expect.any(Array),
+    })
+    expect(response.json().artifact.candles).toHaveLength(780)
+    expect(Buffer.byteLength(JSON.stringify(response.json().artifact))).toBe(
+      70_315,
+    )
     expect(response.json()).toMatchObject({
       candlesEvaluated: 52,
       window: {

@@ -616,7 +616,28 @@ export class MarketStore {
     contentHash: string,
     createdAt = this.clock(),
   ): void {
-    const record = { id, request, result, datasetHash, contentHash, createdAt }
+    let historyResult = result
+    let artifactStatus: 'stored' | 'unavailable' = 'unavailable'
+    if (
+      typeof result === 'object' &&
+      result !== null &&
+      !Array.isArray(result)
+    ) {
+      const resultRecord = result as Record<string, unknown>
+      if (Object.hasOwn(resultRecord, 'artifact')) artifactStatus = 'stored'
+      historyResult = Object.fromEntries(
+        Object.entries(resultRecord).filter(([key]) => key !== 'artifact'),
+      )
+    }
+    const record = {
+      id,
+      request,
+      result: historyResult,
+      artifactStatus,
+      datasetHash,
+      contentHash,
+      createdAt,
+    }
     this.database
       .prepare(
         `INSERT INTO fast_replay_runs
@@ -648,6 +669,42 @@ export class MarketStore {
         return []
       }
     })
+  }
+
+  getFastReplayRun(id: string): unknown | null {
+    const row = this.database
+      .prepare(
+        'SELECT record_json, result_json FROM fast_replay_runs WHERE id = ?',
+      )
+      .get(id) as SqlRow | undefined
+    if (row === undefined) return null
+    try {
+      const record = JSON.parse(String(row.record_json)) as unknown
+      const result = JSON.parse(String(row.result_json)) as unknown
+      const recordValue =
+        typeof record === 'object' && record !== null
+          ? (record as Record<string, unknown>)
+          : null
+      const resultValue =
+        typeof result === 'object' && result !== null
+          ? (result as Record<string, unknown>)
+          : null
+      if (
+        recordValue !== null &&
+        resultValue !== null &&
+        typeof recordValue.result === 'object' &&
+        recordValue.result !== null &&
+        Object.hasOwn(resultValue, 'artifact')
+      ) {
+        recordValue.result = {
+          ...(recordValue.result as Record<string, unknown>),
+          artifact: resultValue.artifact,
+        }
+      }
+      return record
+    } catch {
+      return null
+    }
   }
 
   listObservations(): readonly StoredMarketObservation[] {
