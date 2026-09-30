@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
 import {
   fastReplayFeaturesAt,
   resample1mTo15m,
@@ -7,6 +8,79 @@ import {
 import type { FastReplayDecisionSnapshot } from './fast-replay-engine.ts'
 
 describe('runFastReplay', () => {
+  it('matches the shared frozen UTC 1m-to-15m closed-interval contract', () => {
+    const fixture = JSON.parse(
+      readFileSync(
+        new URL(
+          '../../../../python/fixtures/shared-time-contract.json',
+          import.meta.url,
+        ),
+        'utf8',
+      ),
+    ) as {
+      candles: number[][]
+      expected: Array<{
+        startSeconds: number
+        endSeconds: number
+        memberIndices: number[]
+        open: number
+        high: number
+        low: number
+        close: number
+        volume: number
+      }>
+    }
+    const source = fixture.candles.map(
+      ([timestamp, open, high, low, close, volume]) => ({
+        timestamp: timestamp!,
+        open: open!,
+        high: high!,
+        low: low!,
+        close: close!,
+        volume: volume!,
+      }),
+    )
+    const end = fixture.expected[0]!.endSeconds
+    expect(resample1mTo15m(source, end - 1)).toEqual([])
+    expect(resample1mTo15m(source, end)).toHaveLength(1)
+    const actual = resample1mTo15m(source, fixture.expected[1]!.endSeconds)
+    expect(actual).toHaveLength(2)
+    for (const [index, expected] of fixture.expected.entries()) {
+      const members = source.filter(
+        (row) =>
+          row.timestamp >= expected.startSeconds &&
+          row.timestamp < expected.endSeconds,
+      )
+      expect(members.map((row) => source.indexOf(row))).toEqual(
+        expected.memberIndices,
+      )
+      expect(actual[index]).toEqual({
+        timestamp: expected.startSeconds,
+        open: expected.open,
+        high: expected.high,
+        low: expected.low,
+        close: expected.close,
+        volume: expected.volume,
+      })
+    }
+    expect(actual[1]!.timestamp).toBe(fixture.expected[0]!.endSeconds)
+    expect(
+      resample1mTo15m(
+        source.filter((_, index) => index !== 20),
+        fixture.expected[1]!.endSeconds,
+      ),
+    ).toHaveLength(1)
+    const shiftedSource = source.map((row) => ({ ...row }))
+    shiftedSource[5]!.timestamp += 60
+    const shiftedResult = resample1mTo15m(
+      shiftedSource,
+      fixture.expected[1]!.endSeconds,
+    )
+    expect(shiftedResult).toEqual([actual[1]])
+    expect(shiftedResult).not.toEqual(actual)
+    expect(source[5]!.timestamp).toBe(fixture.candles[5]![0])
+  })
+
   it('resamples only complete UTC-aligned buckets closed by the 1m cutoff', () => {
     const start = Math.floor(1_700_000_010 / 900) * 900
     const candles = Array.from({ length: 31 }, (_, index) => ({
