@@ -1,0 +1,16 @@
+src/app/FastReplaySection.test.tsx
+  h_2f68313623be98 1,6-21,31-99,127-367,485-490,492-504,506-524,526-591,603,606-608,610,612-614,628,650-656
+src/app/FastReplaySection.tsx
+  h_2f68313623be98 1,15-28,159-213,215,220,358,361,374,383-386,390-394,398-403,405,416,421-422,424-427,429-434,437-442,444,571
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5ff456d37e06fd66b43d4f7f5ebe9f02a8bf59a2",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
