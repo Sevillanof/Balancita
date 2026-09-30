@@ -1,0 +1,20 @@
+python/balancita_replay_cli.py
+  h_2f68313623be98 1-23
+server/src/app/app.ts
+  h_2f68313623be98 51-56,211,1036-1258
+server/src/app/fast-replay-api.test.ts
+  h_2f68313623be98 554-659
+server/src/features/simulations/python-ledger-bridge.ts
+  h_2f68313623be98 1-358
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "78a488f5ba95b67b41d5beaf22554b5a5fac7288",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
