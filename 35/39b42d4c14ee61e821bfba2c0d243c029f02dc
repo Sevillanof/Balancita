@@ -1,0 +1,30 @@
+odd/tasks/python-simulation-engine.md
+  h_2f68313623be98 50-65
+python/fixtures/fast-replay-execution-trace.json
+  h_2f68313623be98 2,12,17-50,53,72-80,112,114-126,128,130-133
+python/tests/test_replay.py
+  h_2f68313623be98 360,373,384-385,387-401
+server/src/app/app.ts
+  h_2f68313623be98 893-894
+server/src/app/fast-replay-api.test.ts
+  h_2f68313623be98 314,319-320,329-332,376,384-385,402
+server/src/features/simulations/fast-replay-engine.test.ts
+  h_2f68313623be98 157-159,187-202,443-448,577,579-589,687-709
+server/src/features/simulations/fast-replay-engine.ts
+  h_2f68313623be98 40-43,126,148,198-200,210,215,255,341-348
+src/app/FastReplaySection.test.tsx
+  h_2f68313623be98 168-171,232-234,239-241
+src/app/FastReplaySection.tsx
+  h_2f68313623be98 15-18,102-109,456-461
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3539b42d4c14ee61e821bfba2c0d243c029f02dc",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
