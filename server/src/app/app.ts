@@ -48,6 +48,12 @@ import {
   fastReplayHash,
   runFastReplay,
 } from '../features/simulations/fast-replay-engine.ts'
+import {
+  PythonLedgerExecutionError,
+  PythonLedgerTimeoutError,
+  PythonLedgerUnavailableError,
+  runPythonLedgerBridge,
+} from '../features/simulations/python-ledger-bridge.ts'
 import { NewsPollingService } from '../features/news/news-poller.ts'
 import {
   KRAKEN_PRO_SPOT_TIER1_TAKER_FEE_SCENARIO,
@@ -202,7 +208,7 @@ function isFastReplayHistoryRecord(value: unknown): boolean {
     (value.gateRejectionsCount !== undefined &&
       !isSafeInteger(value.gateRejectionsCount)) ||
     !isFiniteNumber(value.netPnlEur) ||
-    !isFiniteNumber(value.winRatePct) ||
+    !(value.winRatePct === null || isFiniteNumber(value.winRatePct)) ||
     !(value.profitFactor === null || isFiniteNumber(value.profitFactor)) ||
     !(
       value.brierScoreMulticlass === null ||
@@ -1025,6 +1031,229 @@ export async function buildApp(options: {
             error instanceof Error
               ? error.message
               : 'Fast Replay could not process this dataset.',
+        },
+      })
+    }
+  })
+
+  app.post('/api/replay/python-ledger-run', async (request, reply) => {
+    const body = (request.body ?? {}) as {
+      strategy_id?: unknown
+      start_time?: unknown
+      end_time?: unknown
+      ticket_eur?: unknown
+    }
+    const strategyId =
+      body.strategy_id === 'donchian-volume-breakout'
+        ? 'micro-donchian-breakout'
+        : body.strategy_id
+    if (
+      typeof strategyId !== 'string' ||
+      !(FAST_REPLAY_STRATEGIES as readonly string[]).includes(strategyId)
+    )
+      return reply.code(400).send({
+        error: {
+          code: 'invalid_request',
+          message:
+            'strategy_id must name one of the four supported micro candidates.',
+        },
+      })
+    const start = body.start_time === undefined ? 0 : body.start_time
+    const end =
+      body.end_time === undefined ? Number.MAX_SAFE_INTEGER : body.end_time
+    const ticket = body.ticket_eur === undefined ? 30 : body.ticket_eur
+    if (
+      typeof start !== 'number' ||
+      !Number.isSafeInteger(start) ||
+      start < 0 ||
+      typeof end !== 'number' ||
+      !Number.isSafeInteger(end) ||
+      end < start ||
+      typeof ticket !== 'number' ||
+      !Number.isFinite(ticket) ||
+      ticket <= 0
+    )
+      return reply.code(400).send({
+        error: {
+          code: 'invalid_request',
+          message: 'The Python ledger time window or ticket_eur is invalid.',
+        },
+      })
+    if (marketStore === undefined)
+      return reply.code(503).send({
+        error: {
+          code: 'market_store_unavailable',
+          message: 'Persisted OHLC storage is unavailable.',
+        },
+      })
+    const candles = marketStore.listOhlcCandles(start, end)
+    if (candles.length < 51)
+      return reply.code(422).send({
+        error: {
+          code: 'insufficient_ohlc',
+          message: 'At least 51 stored closed 1-minute candles are required.',
+        },
+      })
+
+    const started = performance.now()
+    try {
+      const bounds = {
+        start_time: candles[0]!.timestamp * 1000,
+        end_time: candles.at(-1)!.timestamp * 1000,
+      }
+      const frozenCandles = candles.map((candle) => ({
+        timestamp: candle.timestamp,
+        open: candle.open,
+        high: candle.high,
+        low: candle.low,
+        close: candle.close,
+        volume: candle.volume,
+      }))
+      const datasetHash = fastReplayHash({
+        schema: 'fast-replay-candles.v1',
+        columns: ['timestamp', 'open', 'high', 'low', 'close', 'volume'],
+        candles: frozenCandles.map((candle) => [
+          candle.timestamp,
+          candle.open,
+          candle.high,
+          candle.low,
+          candle.close,
+          candle.volume,
+        ]),
+      })
+      const { typescriptResult, pythonLedger } = await runPythonLedgerBridge({
+        strategyId,
+        candles,
+        startingCash: ticket,
+      })
+      if (pythonLedger.ledger === null)
+        return reply.code(422).send({
+          error: {
+            code: 'python_ledger_unavailable',
+            message: `The Python replay returned ${pythonLedger.status} without a ledger.`,
+          },
+        })
+
+      const id = `python-ledger-${randomUUID()}`
+      const artifact = {
+        schema: 'fast-replay-artifact.v1',
+        runId: id,
+        datasetHash,
+        source: 'kraken_rest_ohlc',
+        engineOwner: 'typescript',
+        timestampUnit: 'unix-seconds',
+        candleIntervalSeconds: 60,
+        candleTimestampSemantics: 'bucket-start',
+        cutoffEpochMs: bounds.end_time,
+        strategyId: typescriptResult.strategyId,
+        window: bounds,
+        feeScenario: typescriptResult.feeScenario,
+        sizingModel: 'python-long-flat-ledger.v1',
+        initialCashEur: ticket,
+        candles: frozenCandles,
+      }
+      const trades = pythonLedger.executionAudit.fills.flatMap((audit) => {
+        const fill = pythonLedger.ledger!.fills[audit.fillIndex]
+        if (
+          fill === undefined ||
+          audit.timingStatus !== 'modeled_next_open' ||
+          !isSafeInteger(audit.executionAtMs) ||
+          (fill.side !== 'buy' && fill.side !== 'sell') ||
+          audit.fillSide !== fill.side ||
+          !isFiniteNumber(fill.price) ||
+          !isFiniteNumber(fill.qty) ||
+          !isFiniteNumber(fill.commission)
+        )
+          return []
+        return [
+          {
+            side: fill.side,
+            timestamp: audit.executionAtMs,
+            price: fill.price,
+            quantity: fill.qty,
+            feeEur: fill.commission,
+          },
+        ]
+      })
+      const ledgerMetrics = pythonLedger.ledger.metrics
+      const record = {
+        id,
+        strategyId: typescriptResult.strategyId,
+        strategyOwner: 'typescript-native',
+        ledgerOwner: 'python-ledger',
+        sizingModel: 'python-long-flat-ledger.v1',
+        initialCashEur: ticket,
+        finalEquityEur: ledgerMetrics.finalEquity,
+        trades,
+        candlesEvaluated: pythonLedger.inputWindow.barCount,
+        sampleCount: 0,
+        tradesCount: ledgerMetrics.tradeCount,
+        rawSignalsCount: typescriptResult.rawSignalsCount,
+        gateRejectionsCount: typescriptResult.gateRejectionsCount,
+        winRatePct:
+          ledgerMetrics.winRate === null ? null : ledgerMetrics.winRate * 100,
+        profitFactor: ledgerMetrics.profitFactor,
+        netPnlEur: ledgerMetrics.finalEquity - ticket,
+        brierScoreMulticlass: null,
+        baselineUniformBrier: 0.6667,
+        baselineNoChangeBrier: null,
+        executionTimeMs: performance.now() - started,
+        feeScenario: typescriptResult.feeScenario,
+        costCaveat: SIMULATED_COSTS_CAVEAT,
+        comparator: {
+          status: 'not_comparable',
+          reason:
+            'Python ledger consumes TypeScript-native strategy targets; this is not native Python strategy parity.',
+        },
+        pythonLedger,
+        datasetHash,
+        contentHash: '',
+        window: bounds,
+        artifact,
+      }
+      const contentHash = fastReplayHash({
+        id,
+        strategyId: typescriptResult.strategyId,
+        bounds,
+        datasetHash,
+        pythonLedger,
+        artifact,
+      })
+      const completeRecord = { ...record, contentHash }
+      marketStore.saveFastReplayRun(
+        id,
+        {
+          strategy_id: strategyId,
+          start_time: bounds.start_time,
+          end_time: bounds.end_time,
+          ticket_eur: ticket,
+          ledger_owner: 'python-ledger',
+        },
+        completeRecord,
+        datasetHash,
+        contentHash,
+      )
+      return reply.send(completeRecord)
+    } catch (error) {
+      if (error instanceof PythonLedgerUnavailableError)
+        return reply.code(503).send({
+          error: { code: 'python_runtime_unavailable', message: error.message },
+        })
+      if (error instanceof PythonLedgerTimeoutError)
+        return reply.code(504).send({
+          error: { code: 'python_runtime_timeout', message: error.message },
+        })
+      if (error instanceof PythonLedgerExecutionError)
+        return reply.code(502).send({
+          error: { code: 'python_replay_failed', message: error.message },
+        })
+      return reply.code(422).send({
+        error: {
+          code: 'python_ledger_invalid_dataset',
+          message:
+            error instanceof Error
+              ? error.message
+              : 'Python ledger could not process this dataset.',
         },
       })
     }

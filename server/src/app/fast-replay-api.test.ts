@@ -551,6 +551,112 @@ describe('Fast Replay API', () => {
     await app.close()
   })
 
+  it('runs the frozen TypeScript decision trace through the Python ledger and persists its distinct identity', async () => {
+    const store = temporaryStore()
+    const now = Math.floor(Date.now() / 1000)
+    const start = Math.ceil((now + 120) / 900) * 900
+    const candles = Array.from({ length: 780 }, (_, index) => ({
+      timestamp: start + index * 60,
+      open: 30_000 + index,
+      high: 30_002 + index,
+      low: 29_999 + index,
+      close: 30_001 + index,
+      volume: 10,
+    }))
+    store.insertOhlcCandles(candles)
+    const app = await buildApp({
+      config: serverConfigFrom({
+        KRAKEN_WS_COLLECTOR_ENABLED: 'false',
+        KRAKEN_REST_OHLC_WORKER_ENABLED: 'false',
+      }),
+      overrides: { marketStore: store },
+    })
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/replay/python-ledger-run',
+      payload: {
+        strategy_id: 'micro-trend-pullback',
+        start_time: candles[0]!.timestamp * 1000,
+        end_time: candles.at(-1)!.timestamp * 1000,
+        ticket_eur: 47,
+      },
+    })
+
+    expect(response.statusCode).toBe(200)
+    const run = response.json()
+    expect(run).toMatchObject({
+      strategyOwner: 'typescript-native',
+      ledgerOwner: 'python-ledger',
+      comparator: { status: 'not_comparable' },
+      artifact: {
+        schema: 'fast-replay-artifact.v1',
+        engineOwner: 'typescript',
+        candles: expect.any(Array),
+      },
+      pythonLedger: {
+        status: 'replayed',
+        parameters: { startingCash: 47 },
+        costIdentity: { commissionRate: 0.008, slippageRate: 0.0005 },
+        inputWindow: {
+          barCount: 52,
+          barTimesMs: expect.any(Array),
+        },
+        decisionInputs: expect.any(Array),
+        ledger: {
+          metrics: { finalEquity: expect.any(Number) },
+          fills: expect.any(Array),
+        },
+        executionAudit: {
+          version: 'python-replay-execution.v1',
+          executionBasis: 'next_bar_open_model_only',
+        },
+      },
+    })
+    expect(run.artifact.candles).toHaveLength(780)
+    expect(run.pythonLedger.inputWindow.barTimesMs[0]).toBe(
+      (start + 900) * 1000,
+    )
+    expect(run.pythonLedger.decisionInputs).toHaveLength(3)
+    expect(
+      run.pythonLedger.decisionInputs.every(
+        (signal: { directTarget: string; time: number }) =>
+          (signal.directTarget === 'flat' || signal.directTarget === 'long') &&
+          signal.time % 900_000 === 0,
+      ),
+    ).toBe(true)
+
+    const history = await app.inject({
+      method: 'GET',
+      url: '/api/replay/fast-run/history?limit=10',
+    })
+    expect(history.statusCode).toBe(200)
+    expect(history.json().runs).toContainEqual(
+      expect.objectContaining({
+        id: run.id,
+        strategyOwner: 'typescript-native',
+        ledgerOwner: 'python-ledger',
+        pythonLedger: expect.objectContaining({
+          ledger: expect.objectContaining({ metrics: expect.any(Object) }),
+        }),
+      }),
+    )
+    const storedArtifact = await app.inject({
+      method: 'GET',
+      url: `/api/replay/fast-run/history/${encodeURIComponent(run.id)}/artifact`,
+    })
+    expect(storedArtifact.statusCode).toBe(200)
+    expect(storedArtifact.json()).toMatchObject({
+      artifactStatus: 'verified',
+      artifact: {
+        runId: run.id,
+        datasetHash: run.datasetHash,
+        candles: run.artifact.candles,
+      },
+    })
+    await app.close()
+  })
+
   it('replays the full persisted contiguous history and rejects short 1m history', async () => {
     const store = temporaryStore()
     const now = Math.floor(Date.now() / 1000)
