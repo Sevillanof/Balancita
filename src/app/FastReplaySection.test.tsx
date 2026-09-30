@@ -8,7 +8,7 @@ vi.mock('../features/price-chart/presentation/PriceChart.tsx', () => ({
     markers,
   }: {
     data: readonly { close: number }[]
-    markers: readonly { text?: string }[]
+    markers: readonly { text?: string; time?: number }[]
   }) => (
     <>
       <div data-testid="replay-candle-count">{data.length}</div>
@@ -17,6 +17,9 @@ vi.mock('../features/price-chart/presentation/PriceChart.tsx', () => ({
       </div>
       <div data-testid="replay-marker-labels">
         {markers.map(({ text }) => text).join(',')}
+      </div>
+      <div data-testid="replay-marker-times">
+        {markers.map(({ time }) => time).join(',')}
       </div>
     </>
   ),
@@ -196,6 +199,245 @@ describe('FastReplaySection', () => {
     expect(fetch).toHaveBeenCalledWith(
       '/api/replay/fast-run',
       expect.objectContaining({ method: 'POST' }),
+    )
+  })
+
+  it('labels a Python-ledger run honestly and places its marker at audited next-open time', async () => {
+    const start = 1_700_000_000
+    const run = {
+      id: 'python-ledger-run',
+      datasetHash: 'python-dataset-hash',
+      strategyId: 'micro-trend-pullback',
+      trades: [],
+      netPnlEur: 0,
+      candlesEvaluated: 1,
+      rawSignalsCount: 0,
+      gateRejectionsCount: 0,
+      sampleCount: 0,
+      brierScoreMulticlass: null,
+      winRatePct: 0,
+      profitFactor: 0,
+      window: { start_time: start * 1000, end_time: start * 1000 },
+      artifact: {
+        ...historyArtifact('python-ledger-run', 'python-dataset-hash', 100),
+        window: { start_time: start * 1000, end_time: start * 1000 },
+        candles: [
+          {
+            timestamp: start,
+            open: 100,
+            high: 101,
+            low: 99,
+            close: 100,
+            volume: 1,
+          },
+        ],
+      },
+      strategyOwner: 'typescript-native',
+      ledgerOwner: 'python-ledger',
+      pythonLedger: {
+        status: 'replayed',
+        ledger: {
+          fills: [
+            {
+              time: (start + 900) * 1000,
+              side: 'buy',
+              price: 100,
+              qty: 1,
+              commission: 0,
+            },
+          ],
+          metrics: {
+            finalEquity: 100,
+            tradeCount: 0,
+            winRate: null,
+            profitFactor: null,
+          },
+        },
+        executionAudit: {
+          comparability: 'modeled_only',
+          fills: [
+            {
+              fillIndex: 0,
+              fillSide: 'buy',
+              timingStatus: 'modeled_next_open',
+              legacyLedgerTimeMs: (start + 900) * 1000,
+              executionAtMs: start * 1000,
+            },
+          ],
+        },
+      },
+    }
+    const ambiguousRun = {
+      ...run,
+      pythonLedger: {
+        ...run.pythonLedger,
+        executionAudit: {
+          comparability: 'unavailable_for_ambiguous_fills',
+          fills: [
+            {
+              fillIndex: 0,
+              fillSide: 'buy',
+              timingStatus: 'ambiguous_gap_or_irregular_interval',
+              legacyLedgerTimeMs: (start + 900) * 1000,
+              executionAtMs: null,
+            },
+          ],
+        },
+      },
+    }
+    let pythonResponseCount = 0
+    const savedRun = { ...run, id: 'python-ledger-saved-run' }
+    const fetch = vi.fn(async (input: string) =>
+      input === '/api/strategies'
+        ? strategiesResponse()
+        : input === '/api/replay/python-ledger-run'
+          ? jsonResponse(pythonResponseCount++ === 0 ? run : ambiguousRun)
+          : input.startsWith('/api/replay/fast-run/history')
+            ? jsonResponse({ runs: [savedRun] })
+            : jsonResponse({}),
+    )
+    vi.stubGlobal('fetch', fetch)
+
+    render(<FastReplaySection />)
+    fireEvent.click(
+      await screen.findByRole('button', { name: /run python ledger/i }),
+    )
+
+    expect(
+      await screen.findByText(
+        /Python ledger \(TS signals\).*not native Python strategy parity/i,
+      ),
+    ).toBeInTheDocument()
+    expect(screen.getByTestId('replay-marker-labels')).toHaveTextContent(
+      'Compra',
+    )
+    expect(screen.getByTestId('replay-marker-times')).toHaveTextContent(
+      String(start),
+    )
+    expect(
+      screen.getByRole('button', {
+        name: /Python ledger \(TS signals\) · python-ledger-saved-run/,
+      }),
+    ).toBeInTheDocument()
+    expect(fetch).toHaveBeenCalledWith(
+      '/api/replay/python-ledger-run',
+      expect.objectContaining({ method: 'POST' }),
+    )
+    expect(fetch).not.toHaveBeenCalledWith(
+      expect.stringContaining('/api/market/ohlc'),
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: /run python ledger/i }))
+    expect(
+      await screen.findByText(
+        'Some Python ledger fills have ambiguous timing and are not charted.',
+      ),
+    ).toBeInTheDocument()
+    expect(screen.getByTestId('replay-marker-labels')).not.toHaveTextContent(
+      /Compra|Venta/,
+    )
+  })
+
+  it('does not let a stale Python-ledger response replace a newer history selection', async () => {
+    const pythonResponse = deferred<Response>()
+    const artifactResponse = deferred<Response>()
+    const selected = historyRun(
+      'fast-selected-after-python',
+      'hash-selected',
+      222,
+    )
+    const fetch = vi.fn((input: string) => {
+      if (input === '/api/strategies')
+        return Promise.resolve(strategiesResponse())
+      if (input === '/api/replay/python-ledger-run')
+        return pythonResponse.promise
+      if (input.endsWith('/fast-selected-after-python/artifact'))
+        return artifactResponse.promise
+      if (input.startsWith('/api/replay/fast-run/history'))
+        return Promise.resolve(jsonResponse({ runs: [selected] }))
+      return Promise.resolve(jsonResponse({}))
+    })
+    vi.stubGlobal('fetch', fetch)
+
+    render(<FastReplaySection />)
+    fireEvent.click(
+      await screen.findByRole('button', { name: /run python ledger/i }),
+    )
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: /fast-selected-after-python/i,
+      }),
+    )
+    await act(async () => {
+      artifactResponse.resolve(
+        jsonResponse({
+          artifactStatus: 'verified',
+          artifact: historyArtifact(
+            'fast-selected-after-python',
+            'hash-selected',
+            222,
+          ),
+        }),
+      )
+    })
+
+    await act(async () => {
+      pythonResponse.resolve(
+        jsonResponse({
+          ...historyRun('fast-stale-python', 'hash-stale-python', 111, 'sell'),
+          artifact: historyArtifact(
+            'fast-stale-python',
+            'hash-stale-python',
+            111,
+          ),
+        }),
+      )
+    })
+
+    expect(
+      screen.getByText(
+        'Resultado de la corrida seleccionada · fast-selected-after-python',
+      ),
+    ).toBeInTheDocument()
+    expect(screen.getByTestId('replay-candle-closes')).toHaveTextContent('222')
+    expect(screen.getByTestId('replay-marker-labels')).toHaveTextContent(
+      'Compra',
+    )
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: /run python ledger/i }),
+    ).toBeEnabled()
+  })
+
+  it('surfaces Python runtime unavailability without falling back to TypeScript-only replay', async () => {
+    const fetch = vi.fn(async (input: string) => {
+      if (input === '/api/strategies') return strategiesResponse()
+      if (input === '/api/replay/python-ledger-run')
+        return {
+          ok: false,
+          json: async () => ({
+            error: {
+              code: 'python_runtime_unavailable',
+              message:
+                'python3 is unavailable; no TypeScript-only fallback was run.',
+            },
+          }),
+        } as Response
+      return jsonResponse({ runs: [] })
+    })
+    vi.stubGlobal('fetch', fetch)
+
+    render(<FastReplaySection />)
+    fireEvent.click(
+      await screen.findByRole('button', { name: /run python ledger/i }),
+    )
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'python3 is unavailable; no TypeScript-only fallback was run.',
+    )
+    expect(fetch).not.toHaveBeenCalledWith(
+      '/api/replay/fast-run',
+      expect.anything(),
     )
   })
 

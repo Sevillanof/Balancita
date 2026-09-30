@@ -13,6 +13,36 @@ type Ohlc = {
 type FastRun = {
   id: string
   datasetHash?: string
+  strategyOwner?: 'typescript-native'
+  ledgerOwner?: 'python-ledger'
+  pythonLedger?: {
+    status: 'replayed' | 'no_new_closed_bar' | 'stale'
+    ledger: {
+      fills: readonly {
+        time: number
+        side: string
+        price: number
+        qty: number
+        commission: number
+      }[]
+      metrics: {
+        finalEquity: number
+        tradeCount: number
+        winRate: number | null
+        profitFactor: number | null
+      }
+    } | null
+    executionAudit: {
+      comparability: string
+      fills: readonly {
+        fillIndex: number
+        fillSide: string
+        timingStatus: string
+        legacyLedgerTimeMs: number
+        executionAtMs: number | null
+      }[]
+    }
+  }
   artifact?: {
     schema: 'fast-replay-artifact.v1'
     runId: string
@@ -26,7 +56,7 @@ type FastRun = {
     window: { start_time: number; end_time: number }
     candles: readonly Ohlc[]
   }
-  sizingModel?: 'cash-all-in.v1'
+  sizingModel?: 'cash-all-in.v1' | 'python-long-flat-ledger.v1'
   initialCashEur?: number
   availableCashEur?: number
   finalEquityEur?: number
@@ -47,7 +77,7 @@ type FastRun = {
   gateRejectionsCount: number
   sampleCount: number
   brierScoreMulticlass: number | null
-  winRatePct: number
+  winRatePct: number | null
   profitFactor: number | null
   window: { start_time: number; end_time: number }
   feeScenario?: {
@@ -83,6 +113,48 @@ function isSafeInteger(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value)
 }
 
+function hasValidPythonLedger(value: unknown): boolean {
+  if (
+    !isRecord(value) ||
+    !['replayed', 'no_new_closed_bar', 'stale'].includes(
+      String(value.status),
+    ) ||
+    !isRecord(value.executionAudit) ||
+    typeof value.executionAudit.comparability !== 'string' ||
+    !Array.isArray(value.executionAudit.fills) ||
+    !value.executionAudit.fills.every(
+      (fill) =>
+        isRecord(fill) &&
+        isSafeInteger(fill.fillIndex) &&
+        typeof fill.fillSide === 'string' &&
+        typeof fill.timingStatus === 'string' &&
+        isSafeInteger(fill.legacyLedgerTimeMs) &&
+        (fill.executionAtMs === null || isSafeInteger(fill.executionAtMs)),
+    ) ||
+    !(value.ledger === null || isRecord(value.ledger))
+  )
+    return false
+  if (value.ledger === null) return true
+  const metrics = value.ledger.metrics
+  return (
+    Array.isArray(value.ledger.fills) &&
+    value.ledger.fills.every(
+      (fill) =>
+        isRecord(fill) &&
+        isSafeInteger(fill.time) &&
+        typeof fill.side === 'string' &&
+        isFiniteNumber(fill.price) &&
+        isFiniteNumber(fill.qty) &&
+        isFiniteNumber(fill.commission),
+    ) &&
+    isRecord(metrics) &&
+    isFiniteNumber(metrics.finalEquity) &&
+    isSafeInteger(metrics.tradeCount) &&
+    (metrics.winRate === null || isFiniteNumber(metrics.winRate)) &&
+    (metrics.profitFactor === null || isFiniteNumber(metrics.profitFactor))
+  )
+}
+
 function hasCurrentFeeScenario(
   value: FastRun['feeScenario'] | unknown,
 ): value is NonNullable<FastRun['feeScenario']> {
@@ -114,7 +186,12 @@ function isFastRun(
   return (
     typeof value.id === 'string' &&
     (value.sizingModel === undefined ||
-      value.sizingModel === 'cash-all-in.v1') &&
+      value.sizingModel === 'cash-all-in.v1' ||
+      value.sizingModel === 'python-long-flat-ledger.v1') &&
+    (value.ledgerOwner === undefined ||
+      value.ledgerOwner === 'python-ledger') &&
+    (value.strategyOwner === undefined ||
+      value.strategyOwner === 'typescript-native') &&
     (value.initialCashEur === undefined ||
       isFiniteNumber(value.initialCashEur)) &&
     (value.availableCashEur === undefined ||
@@ -129,7 +206,7 @@ function isFastRun(
     isSafeInteger(value.sampleCount ?? value.sample_count) &&
     (value.brierScoreMulticlass === null ||
       isFiniteNumber(value.brierScoreMulticlass)) &&
-    isFiniteNumber(value.winRatePct) &&
+    (value.winRatePct === null || isFiniteNumber(value.winRatePct)) &&
     (value.profitFactor === null || isFiniteNumber(value.profitFactor)) &&
     isSafeInteger(value.window.start_time) &&
     isSafeInteger(value.window.end_time) &&
@@ -143,7 +220,9 @@ function isFastRun(
         isFiniteNumber(trade.quantity) &&
         isFiniteNumber(trade.feeEur) &&
         (trade.pnlEur === undefined || isFiniteNumber(trade.pnlEur)),
-    )
+    ) &&
+    (value.ledgerOwner !== 'python-ledger' ||
+      hasValidPythonLedger(value.pythonLedger))
   )
 }
 
@@ -299,22 +378,59 @@ export default function FastReplaySection() {
       })),
     [candles, cursor],
   )
-  const markers = useMemo<readonly SeriesMarker<Time>[]>(
-    () =>
-      (run?.trades ?? [])
-        .filter(
-          ({ timestamp }) =>
-            cursor >= 0 && timestamp <= candles[cursor]!.timestamp,
+  const markers = useMemo<readonly SeriesMarker<Time>[]>(() => {
+    if (run?.ledgerOwner === 'python-ledger') {
+      if (cursor < 0 || candles[cursor] === undefined) return []
+      const ledger = run.pythonLedger?.ledger
+      const auditFills = run.pythonLedger?.executionAudit.fills ?? []
+      return auditFills.flatMap((audit) => {
+        const fill = ledger?.fills[audit.fillIndex]
+        if (
+          fill === undefined ||
+          audit.timingStatus !== 'modeled_next_open' ||
+          !isFiniteNumber(audit.executionAtMs) ||
+          (fill.side !== 'buy' && fill.side !== 'sell') ||
+          audit.fillSide !== fill.side ||
+          audit.executionAtMs > candles[cursor]!.timestamp
         )
-        .map((trade) => ({
-          time: (trade.timestamp / 1000) as Time,
-          position: trade.side === 'buy' ? 'belowBar' : 'aboveBar',
-          color: trade.side === 'buy' ? '#13795b' : '#b42318',
-          shape: trade.side === 'buy' ? 'arrowUp' : 'arrowDown',
-          text: trade.side === 'buy' ? 'Compra' : 'Venta',
-        })),
-    [run, candles, cursor],
-  )
+          return []
+        return [
+          {
+            time: (audit.executionAtMs / 1000) as Time,
+            position: fill.side === 'buy' ? 'belowBar' : 'aboveBar',
+            color: fill.side === 'buy' ? '#13795b' : '#b42318',
+            shape: fill.side === 'buy' ? 'arrowUp' : 'arrowDown',
+            text: fill.side === 'buy' ? 'Compra' : 'Venta',
+          },
+        ]
+      })
+    }
+    return (run?.trades ?? [])
+      .filter(
+        ({ timestamp }) =>
+          cursor >= 0 && timestamp <= candles[cursor]!.timestamp,
+      )
+      .map((trade) => ({
+        time: (trade.timestamp / 1000) as Time,
+        position: trade.side === 'buy' ? 'belowBar' : 'aboveBar',
+        color: trade.side === 'buy' ? '#13795b' : '#b42318',
+        shape: trade.side === 'buy' ? 'arrowUp' : 'arrowDown',
+        text: trade.side === 'buy' ? 'Compra' : 'Venta',
+      }))
+  }, [run, candles, cursor])
+
+  const pythonTimingNotice =
+    run?.ledgerOwner !== 'python-ledger'
+      ? null
+      : run.pythonLedger?.ledger === null
+        ? 'Python ledger fills are unavailable for this saved run.'
+        : run.pythonLedger?.executionAudit.comparability ===
+            'unavailable_for_ambiguous_fills'
+          ? 'Some Python ledger fills have ambiguous timing and are not charted.'
+          : run.pythonLedger?.executionAudit.comparability ===
+              'unavailable_no_ledger'
+            ? 'Python ledger execution timing is unavailable for this run.'
+            : null
 
   async function synchronize() {
     setBusy(true)
@@ -406,6 +522,58 @@ export default function FastReplaySection() {
     }
   }
 
+  async function executePythonLedger() {
+    const requestId = ++selectedRunRequestId.current
+    if (!strategies.some(({ id }) => id === strategy)) {
+      setError('No hay una estrategia activa disponible para ejecutar.')
+      setBusy(false)
+      return
+    }
+    setBusy(true)
+    setError(null)
+    setPlaying(false)
+    try {
+      const response = await fetch('/api/replay/python-ledger-run', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ strategy_id: strategy }),
+      })
+      const payload: unknown = await response.json()
+      if (requestId !== selectedRunRequestId.current) return
+      if (!response.ok || !isFastRun(payload, strategies))
+        throw new Error(
+          isRecord(payload) &&
+            isRecord(payload.error) &&
+            typeof payload.error.message === 'string'
+            ? payload.error.message
+            : 'Python ledger replay is unavailable or invalid.',
+        )
+      const loaded = candlesFromArtifact(
+        payload.artifact,
+        payload.id,
+        payload.datasetHash,
+      )
+      setRun(payload)
+      setCandles(loaded)
+      setArtifactNotice(
+        loaded.length === 0
+          ? 'Frozen chart data are unavailable or unverifiable for this run.'
+          : null,
+      )
+      setCursor(0)
+      setHistory((current) => [payload, ...current].slice(0, 50))
+    } catch (cause) {
+      if (requestId === selectedRunRequestId.current)
+        setError(
+          cause instanceof Error
+            ? cause.message
+            : 'Python ledger replay is unavailable or invalid.',
+        )
+    } finally {
+      if (requestId === selectedRunRequestId.current) setBusy(false)
+    }
+  }
+
   async function loadHistory() {
     const response = await fetch('/api/replay/fast-run/history?limit=50')
     if (response.ok) {
@@ -480,6 +648,14 @@ export default function FastReplaySection() {
         >
           {busy ? 'Procesando…' : 'Ejecutar Replay Local'}
         </button>
+        <button
+          type="button"
+          className="button button--secondary"
+          disabled={busy || !strategies.some(({ id }) => id === strategy)}
+          onClick={() => void executePythonLedger()}
+        >
+          Run Python ledger (TS signals)
+        </button>
       </div>
       <p>
         Máximo documentado: 720 velas de 1 minuto (aprox. 12 horas). Kraken no
@@ -497,6 +673,13 @@ export default function FastReplaySection() {
       {error !== null && <p role="alert">{error}</p>}
       {run !== null && (
         <div className="fast-replay__results" aria-live="polite">
+          {run.ledgerOwner === 'python-ledger' && (
+            <p>
+              Python ledger (TS signals) · strategy owner: TypeScript-native ·
+              ledger owner: Python. This is a hybrid replay, not native Python
+              strategy parity. Python replay status: {run.pythonLedger?.status}.
+            </p>
+          )}
           <table aria-label="Métricas de Fast Replay">
             <caption>Resultado de la corrida seleccionada · {run.id}</caption>
             <tbody>
@@ -514,7 +697,11 @@ export default function FastReplaySection() {
               </tr>
               <tr>
                 <th scope="row">Ejecuciones</th>
-                <td>{run.trades.length}</td>
+                <td>
+                  {run.ledgerOwner === 'python-ledger'
+                    ? (run.pythonLedger?.ledger?.fills.length ?? 0)
+                    : run.trades.length}
+                </td>
               </tr>
               <tr>
                 <th scope="row">P&amp;L neto (comisión y deslizamiento)</th>
@@ -542,7 +729,9 @@ export default function FastReplaySection() {
             Sizing model:{' '}
             {run.sizingModel === 'cash-all-in.v1'
               ? `cash-all-in.v1 · capital inicial ${run.initialCashEur?.toFixed(2) ?? 'unknown'} €`
-              : 'unknown for this historical run'}
+              : run.sizingModel === 'python-long-flat-ledger.v1'
+                ? `python-long-flat-ledger.v1 · starting cash ${run.initialCashEur?.toFixed(2) ?? 'unknown'} €`
+                : 'unknown for this historical run'}
           </p>
           <p>
             {hasCurrentFeeScenario(run.feeScenario) ? (
@@ -569,6 +758,7 @@ export default function FastReplaySection() {
         </div>
       )}
       {artifactNotice !== null && <p role="status">{artifactNotice}</p>}
+      {pythonTimingNotice !== null && <p role="status">{pythonTimingNotice}</p>}
       <PriceChart data={chartData} markers={markers} />
       <div
         className="fast-replay__playback"
@@ -614,6 +804,9 @@ export default function FastReplaySection() {
             {history.map((item) => (
               <li key={item.id}>
                 <button type="button" onClick={() => void inspect(item)}>
+                  {item.ledgerOwner === 'python-ledger'
+                    ? 'Python ledger (TS signals) · '
+                    : ''}
                   {item.id} · {item.strategyId} · {item.netPnlEur.toFixed(2)} €
                 </button>
               </li>
