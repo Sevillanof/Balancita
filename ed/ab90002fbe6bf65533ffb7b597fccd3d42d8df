@@ -1,0 +1,20 @@
+server/src/app/app.ts
+  h_2f68313623be98 934-953,956-972,979,1005,1057-1058,1075-1115
+server/src/app/fast-replay-api.test.ts
+  h_2f68313623be98 319-327,342,385,415-485,587-598
+server/src/features/market-data/fast-replay-store.test.ts
+  h_2f68313623be98 42,82-113
+server/src/features/market-data/market-store.ts
+  h_2f68313623be98 619-640,674-709
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "edab90002fbe6bf65533ffb7b597fccd3d42d8df",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
