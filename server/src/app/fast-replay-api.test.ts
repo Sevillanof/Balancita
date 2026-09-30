@@ -311,10 +311,13 @@ describe('Fast Replay API', () => {
         strategy_id: 'donchian-volume-breakout',
         start_time: start,
         end_time: end,
+        ticket_eur: 47,
       },
     })
     expect(run.statusCode).toBe(200)
     expect(run.json().strategyId).toBe('micro-donchian-breakout')
+    expect(run.json().sizingModel).toBe('cash-all-in.v1')
+    expect(run.json().initialCashEur).toBe(47)
     expect(run.json().id).toMatch(/^fast-/)
     expect(Number.isSafeInteger(run.json().raw_signals_count)).toBe(true)
     expect(Number.isSafeInteger(run.json().gate_rejections_count)).toBe(true)
@@ -323,6 +326,10 @@ describe('Fast Replay API', () => {
     }
     delete persistedLegacyResult.feeScenario
     delete persistedLegacyResult.costCaveat
+    delete persistedLegacyResult.sizingModel
+    delete persistedLegacyResult.initialCashEur
+    delete persistedLegacyResult.availableCashEur
+    delete persistedLegacyResult.finalEquityEur
     store.saveFastReplayRun(
       'fast-legacy-fees',
       {},
@@ -366,6 +373,7 @@ describe('Fast Replay API', () => {
       feeScenario: null,
       costCaveat: expect.stringMatching(/provenance is unknown/i),
     })
+    expect(legacy).not.toHaveProperty('sizingModel')
     expect(malformed).toMatchObject({
       feeScenario: null,
       costCaveat: expect.stringMatching(/provenance is unknown/i),
@@ -373,6 +381,8 @@ describe('Fast Replay API', () => {
     expect(fresh).toMatchObject({
       feeScenario: run.json().feeScenario,
       costCaveat: expect.stringMatching(/historical recorded fees/i),
+      sizingModel: 'cash-all-in.v1',
+      initialCashEur: 47,
     })
     expect(fresh).toMatchObject({
       id: run.json().id,
@@ -389,6 +399,7 @@ describe('Fast Replay API', () => {
       request: { strategy_id: 'micro-donchian-breakout' },
     })
     expect(legacy).not.toHaveProperty('result')
+    expect(legacy).not.toHaveProperty('sizingModel')
     expect(fresh).not.toHaveProperty('result')
     const persistedAfterRead = store
       .listFastReplayRuns()

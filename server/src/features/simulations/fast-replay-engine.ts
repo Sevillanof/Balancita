@@ -37,6 +37,10 @@ export interface FastReplayTrade {
   readonly pnlEur?: number
 }
 export interface FastReplayResult {
+  readonly sizingModel: 'cash-all-in.v1'
+  readonly initialCashEur: number
+  readonly availableCashEur: number
+  readonly finalEquityEur: number
   readonly feeScenario: typeof KRAKEN_PRO_SPOT_TIER1_TAKER_FEE_SCENARIO
   readonly costCaveat: typeof SIMULATED_COSTS_CAVEAT
   readonly strategyId: FastReplayStrategyId
@@ -119,6 +123,7 @@ export function runFastReplay(input: {
     throw new Error('Unsupported Fast Replay strategy.')
   if (!Number.isFinite(input.ticketEur) || input.ticketEur <= 0)
     throw new Error('ticket_eur must be finite and positive.')
+  const initialCashEur = input.ticketEur
   const minuteCandles = [...input.candles].sort(
     (a, b) => a.timestamp - b.timestamp,
   )
@@ -140,6 +145,7 @@ export function runFastReplay(input: {
   }[] = []
   const outcomes: { maturedAt: number; label: 'up' | 'down' | 'flat' }[] = []
   let state = initialMicroState()
+  let availableCashEur = initialCashEur
   let position: {
     quantity: number
     entryCost: number
@@ -189,8 +195,9 @@ export function runFastReplay(input: {
           fillTimestamp = next.timestamp
           fillSide = 'buy'
           const price = next.open * (1 + SLIPPAGE)
-          const quantity = input.ticketEur / price
-          const feeEur = input.ticketEur * FEE
+          const quantity = availableCashEur / (price * (1 + FEE))
+          const entryNotionalEur = quantity * price
+          const feeEur = entryNotionalEur * FEE
           trades.push({
             side: 'buy',
             timestamp: next.timestamp,
@@ -200,11 +207,12 @@ export function runFastReplay(input: {
           })
           position = {
             quantity,
-            entryCost: input.ticketEur + feeEur,
+            entryCost: entryNotionalEur + feeEur,
             buyTradeIndex: trades.length - 1,
             entryPrice: price,
             entryIndex: index + 1,
           }
+          availableCashEur = 0
           state = { ...decision.state, exposure: 'long' }
         } else {
           effectiveTarget = 'flat'
@@ -244,6 +252,7 @@ export function runFastReplay(input: {
           pnlEur,
         })
         closedPnls.push(pnlEur)
+        availableCashEur = proceedsGross - feeEur
         if (pnlEur > 0) grossWins += pnlEur
         else grossLosses += Math.abs(pnlEur)
         position = null
@@ -329,6 +338,14 @@ export function runFastReplay(input: {
     }
   }
   return {
+    sizingModel: 'cash-all-in.v1',
+    initialCashEur,
+    availableCashEur,
+    finalEquityEur:
+      availableCashEur +
+      (position === null
+        ? 0
+        : position.quantity * (candles.at(-1)?.close ?? 0)),
     feeScenario: KRAKEN_PRO_SPOT_TIER1_TAKER_FEE_SCENARIO,
     costCaveat: SIMULATED_COSTS_CAVEAT,
     strategyId: strategyId as FastReplayStrategyId,

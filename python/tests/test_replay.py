@@ -357,6 +357,7 @@ class ReplayTests(unittest.TestCase):
             "sourceIntervalMs": 900_000, "cutoffMs": last_close_ms,
             "scanTimeMs": last_close_ms, "maxAgeMs": 900_000,
             "strategyId": "captured-fastreplay-trace", "configId": "execution-only",
+            "startingCash": fixture["provenance"]["economicExpected"]["startingCashEur"],
             "costs": fixture["provenance"]["pythonCostIdentity"],
         })
         audit = replay["executionAudit"]
@@ -369,7 +370,7 @@ class ReplayTests(unittest.TestCase):
                          [bar["time"] * 1000 for bar in aggregated])
         self.assertEqual([item["time"] for item in replay["decisionInputs"]],
                          [signal["time"] * 1000 for signal in signals])
-        self.assertEqual([event["side"] for event in native_fill_events], ["buy", "sell"])
+        self.assertEqual([event["side"] for event in native_fill_events], ["buy", "sell", "buy", "sell"])
         self.assertEqual([fill["fillSide"] for fill in audit["fills"]],
                          [event["side"] for event in native_fill_events])
         self.assertEqual([fill["executionAtMs"] for fill in audit["fills"]],
@@ -380,11 +381,24 @@ class ReplayTests(unittest.TestCase):
                             for fill in audit["fills"]))
         self.assertEqual(audit["fills"][-1]["timingStatus"], "modeled_next_open")
         self.assertEqual(replay["ledger"]["fills"][-1]["time"], native_fill_events[-1]["timeMs"] + 900_000)
-        self.assertEqual(fixture["expectedTrace"][-1]["entryGate"], "rejected")
-        self.assertFalse(fixture["expectedTrace"][-1]["fill"]["performed"])
-        self.assertEqual(fixture["expectedTrace"][-1]["effectiveTarget"], "flat")
+        self.assertEqual([event["effectiveTarget"] for event in fixture["expectedTrace"]],
+                         ["long", "flat", "long", "flat"])
         self.assertIn("not forecasts", fixture["provenance"]["pythonSignalAdapter"])
-        self.assertEqual(len(replay["ledger"]["fills"]), 2)
+        self.assertEqual(len(replay["ledger"]["fills"]), 4)
+        expected_economics = fixture["provenance"]["economicExpected"]
+        self.assertEqual(replay["parameters"]["startingCash"], expected_economics["startingCashEur"])
+        for actual, expected in zip(replay["ledger"]["fills"], expected_economics["fills"]):
+            self.assertEqual(actual["side"], expected["side"])
+            self.assertAlmostEqual(actual["price"], expected["price"], places=12)
+            self.assertAlmostEqual(actual["qty"], expected["quantity"], places=12)
+            self.assertAlmostEqual(actual["commission"], expected["feeEur"], places=12)
+        final_cash = replay["ledger"]["metrics"]["finalEquity"]
+        self.assertAlmostEqual(final_cash, expected_economics["finalCashEur"], places=12)
+        self.assertAlmostEqual(
+            final_cash - expected_economics["startingCashEur"],
+            sum(fill.get("pnlEur", 0) for fill in expected_economics["fills"]),
+            places=12,
+        )
 
         terminal = fixture["terminalTrace"][0]
         terminal_close_seconds = terminal["timestamp"] + 900

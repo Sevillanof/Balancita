@@ -154,6 +154,9 @@ describe('runFastReplay', () => {
     )
     expect(result.feeScenario.commissionRate).toBe(0.008)
     expect(result.feeScenario.slippageRate).toBe(0.0005)
+    expect(result.sizingModel).toBe('cash-all-in.v1')
+    expect(result.initialCashEur).toBe(30)
+    expect(result.availableCashEur).toBe(30)
     expect(result.costCaveat).toMatch(/historical recorded fees.*unchanged/i)
     expect(result.baselineUniformBrier).toBe(0.6667)
     expect(Number.isFinite(result.executionTimeMs)).toBe(true)
@@ -179,6 +182,22 @@ describe('runFastReplay', () => {
       ticketEur: 30,
     })
     expect(result.sampleCount).toBe(0)
+  })
+
+  it('keeps initial cash and equity when there are no bars or entries', () => {
+    const result = runFastReplay({
+      strategyId: 'micro-trend-pullback',
+      candles: [],
+      ticketEur: 42.5,
+    })
+
+    expect(result.sizingModel).toBe('cash-all-in.v1')
+    expect(result.initialCashEur).toBe(42.5)
+    expect(result.availableCashEur).toBe(42.5)
+    expect(result.finalEquityEur).toBe(42.5)
+    expect(result.trades).toEqual([])
+    expect(result.tradesCount).toBe(0)
+    expect(result.openPositionAtEnd).toBeNull()
   })
 
   it('does not emit a raw C27 breakout before macro Donchian warm-up', () => {
@@ -421,10 +440,12 @@ describe('runFastReplay', () => {
       ...withoutObserver,
       executionTimeMs: 0,
     })
-    expect(result.openPositionAtEnd).toMatchObject({
-      entryPrice: 102 * 1.0005,
-      entryCostEur: 30.24,
-    })
+    expect(result.openPositionAtEnd?.entryPrice).toBeCloseTo(102 * 1.0005)
+    expect(result.openPositionAtEnd?.entryCostEur).toBeCloseTo(30)
+    expect(result.openPositionAtEnd?.quantity).toBeCloseTo(
+      30 / (102 * 1.0005 * 1.008),
+    )
+    expect(result.availableCashEur).toBe(0)
     expect(result.tradesCount).toBe(0)
     expect(result.netPnlEur).toBe(0)
   })
@@ -553,7 +574,19 @@ describe('runFastReplay', () => {
         firstBarTimestampSeconds: number
         ticketEur: number
         strategyId: string
+        sizingModel: string
         fastReplayCostIdentity: { commissionRate: number; slippageRate: number }
+        economicExpected: {
+          startingCashEur: number
+          fills: Array<{
+            side: 'buy' | 'sell'
+            price: number
+            quantity: number
+            feeEur: number
+            pnlEur?: number
+          }>
+          finalCashEur: number
+        }
       }
       nativeBarRecipe: {
         barCount: number
@@ -651,6 +684,29 @@ describe('runFastReplay', () => {
         }),
       )
     expect(comparisonTrace).toEqual(fixture.expectedTrace)
+    expect(result.initialCashEur).toBe(fixture.provenance.ticketEur)
+    expect(result.sizingModel).toBe(fixture.provenance.sizingModel)
+    expect(result.trades).toHaveLength(
+      fixture.provenance.economicExpected.fills.length,
+    )
+    for (const [
+      index,
+      expected,
+    ] of fixture.provenance.economicExpected.fills.entries()) {
+      const actual = result.trades[index]!
+      expect(actual.side).toBe(expected.side)
+      expect(actual.price).toBeCloseTo(expected.price, 12)
+      expect(actual.quantity).toBeCloseTo(expected.quantity, 12)
+      expect(actual.feeEur).toBeCloseTo(expected.feeEur, 12)
+      if (expected.pnlEur !== undefined)
+        expect(actual.pnlEur).toBeCloseTo(expected.pnlEur, 12)
+    }
+    expect(result.availableCashEur).toBeCloseTo(
+      fixture.provenance.economicExpected.finalCashEur,
+    )
+    expect(result.finalEquityEur).toBeCloseTo(
+      fixture.provenance.economicExpected.finalCashEur,
+    )
 
     const terminalTrace: FastReplayDecisionSnapshot[] = []
     runFastReplay({

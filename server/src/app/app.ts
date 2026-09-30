@@ -890,6 +890,8 @@ export async function buildApp(options: {
     const start = body.start_time === undefined ? 0 : body.start_time
     const end =
       body.end_time === undefined ? Number.MAX_SAFE_INTEGER : body.end_time
+    // For new cash-all-in.v1 runs, ticket_eur is initial capital inclusive of entry commission.
+    // Historical stored runs retain their original sizing meaning, which may be unknown.
     const ticket = body.ticket_eur === undefined ? 30 : body.ticket_eur
     if (
       typeof start !== 'number' ||

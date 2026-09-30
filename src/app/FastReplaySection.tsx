@@ -12,6 +12,10 @@ type Ohlc = {
 }
 type FastRun = {
   id: string
+  sizingModel?: 'cash-all-in.v1'
+  initialCashEur?: number
+  availableCashEur?: number
+  finalEquityEur?: number
   strategyId:
     | 'micro-trend-pullback'
     | 'micro-bollinger-reversion'
@@ -95,6 +99,14 @@ function isFastRun(
     return false
   return (
     typeof value.id === 'string' &&
+    (value.sizingModel === undefined ||
+      value.sizingModel === 'cash-all-in.v1') &&
+    (value.initialCashEur === undefined ||
+      isFiniteNumber(value.initialCashEur)) &&
+    (value.availableCashEur === undefined ||
+      isFiniteNumber(value.availableCashEur)) &&
+    (value.finalEquityEur === undefined ||
+      isFiniteNumber(value.finalEquityEur)) &&
     strategies.some(({ id }) => id === value.strategyId) &&
     isFiniteNumber(value.netPnlEur) &&
     isSafeInteger(value.candlesEvaluated) &&
@@ -440,6 +452,12 @@ export default function FastReplaySection() {
             {run.profitFactor !== null && Number.isFinite(run.profitFactor)
               ? run.profitFactor.toFixed(2)
               : 'No disponible'}
+          </p>
+          <p>
+            Sizing model:{' '}
+            {run.sizingModel === 'cash-all-in.v1'
+              ? `cash-all-in.v1 · capital inicial ${run.initialCashEur?.toFixed(2) ?? 'unknown'} €`
+              : 'unknown for this historical run'}
           </p>
           <p>
             {hasCurrentFeeScenario(run.feeScenario) ? (

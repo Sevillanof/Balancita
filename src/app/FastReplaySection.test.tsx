@@ -165,6 +165,10 @@ describe('FastReplaySection', () => {
                 {
                   ...savedRun,
                   id: 'fast-current-fees',
+                  sizingModel: 'cash-all-in.v1',
+                  initialCashEur: 30,
+                  availableCashEur: 0,
+                  finalEquityEur: 30,
                   feeScenario: {
                     version: 'kraken-pro-spot-btc-eur-tier1-taker.v1',
                     venue: 'Kraken Pro Spot',
@@ -225,9 +229,15 @@ describe('FastReplaySection', () => {
     expect(
       screen.getByText(/procedencia de comisiones desconocida.*histórica/i),
     ).toBeInTheDocument()
+    expect(
+      screen.getByText(/sizing model: unknown for this historical run/i),
+    ).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: /fast-current-fees/ }))
     expect(
       await screen.findByText(/comisión 0\.80 % por lado/i),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText(/cash-all-in\.v1 · capital inicial 30\.00 €/i),
     ).toBeInTheDocument()
     expect(
       screen.getByText(/Tier 1 \(0\+ USD qualifying 30-day volume\)/i),
