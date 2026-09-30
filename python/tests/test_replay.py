@@ -297,6 +297,117 @@ class ReplayTests(unittest.TestCase):
         self.assertEqual(at_first_close["ledger"]["fills"], [])
         self.assertEqual(replay["comparator"]["status"], "not_comparable")
 
+    def test_captured_fastreplay_trace_matches_python_execution_event_times(self):
+        fixture = json.loads((Path(__file__).parents[1] / "fixtures" / "fast-replay-execution-trace.json").read_text())
+        provenance = fixture["provenance"]
+        recipe = fixture["nativeBarRecipe"]
+        source_minutes = []
+        native_bars = []
+        for index in range(recipe["barCount"]):
+            values = dict(recipe["tail"] if index >= recipe["tailStartIndex"] else recipe["default"])
+            values.update(recipe["overrides"].get(str(index), {}))
+            start = provenance["firstBarTimestampSeconds"] + index * provenance["nativeIntervalSeconds"]
+            native_bars.append(dict(
+                time=start + 900, open=values["open"], high=values["high"],
+                low=values["low"], close=values["close"],
+            ))
+            for minute in range(provenance["minuteCountPerNativeBar"]):
+                source_minutes.append([
+                    start + minute * 60, values["open"], values["high"],
+                    values["low"], values["close"],
+                    values["volume"] / provenance["minuteCountPerNativeBar"],
+                ])
+
+        # Test-only adapter uses the exact shared 1m recipe and complete [start,end) windows.
+        aggregated = []
+        for offset in range(0, len(source_minutes), 15):
+            rows = source_minutes[offset:offset + 15]
+            self.assertEqual(len(rows), 15)
+            start = rows[0][0]
+            self.assertEqual(start % 900, 0)
+            self.assertEqual([row[0] for row in rows], list(range(start, start + 900, 60)))
+            aggregated.append({
+                "time": start + 900, "open": rows[0][1],
+                "high": max(row[2] for row in rows),
+                "low": min(row[3] for row in rows), "close": rows[-1][4],
+            })
+        self.assertEqual(aggregated, native_bars)
+
+        signals = []
+        native_fill_events = []
+        for event in fixture["expectedTrace"]:
+            decision_close_seconds = event["timestamp"] + provenance["nativeIntervalSeconds"]
+            signals.append({
+                "time": decision_close_seconds,
+                "directTarget": event["effectiveTarget"],
+                "probabilityUp": 0.5,
+                "probabilityDown": 0.5,
+                "abstained": False,
+            })
+            if event["fill"]["performed"]:
+                native_fill_events.append({
+                    "side": event["fill"]["side"],
+                    "timeMs": event["fill"]["timestamp"] * 1000,
+                    "decisionCloseMs": decision_close_seconds * 1000,
+                })
+
+        last_close_ms = aggregated[-1]["time"] * 1000
+        replay = run_replay({
+            "bars": aggregated, "signals": signals, "timestampUnit": "seconds",
+            "sourceIntervalMs": 900_000, "cutoffMs": last_close_ms,
+            "scanTimeMs": last_close_ms, "maxAgeMs": 900_000,
+            "strategyId": "captured-fastreplay-trace", "configId": "execution-only",
+            "costs": fixture["provenance"]["pythonCostIdentity"],
+        })
+        audit = replay["executionAudit"]
+        self.assertEqual(replay["comparator"]["status"], "not_comparable")
+        self.assertEqual(replay["costIdentity"], fixture["provenance"]["pythonCostIdentity"])
+        self.assertEqual([item["unit"] for item in replay["sourceTimestamps"]], ["seconds"] * len(aggregated))
+        self.assertEqual([item["value"] for item in replay["sourceTimestamps"]],
+                         [bar["time"] for bar in aggregated])
+        self.assertEqual(replay["inputWindow"]["barTimesMs"],
+                         [bar["time"] * 1000 for bar in aggregated])
+        self.assertEqual([item["time"] for item in replay["decisionInputs"]],
+                         [signal["time"] * 1000 for signal in signals])
+        self.assertEqual([event["side"] for event in native_fill_events], ["buy", "sell"])
+        self.assertEqual([fill["fillSide"] for fill in audit["fills"]],
+                         [event["side"] for event in native_fill_events])
+        self.assertEqual([fill["executionAtMs"] for fill in audit["fills"]],
+                         [event["timeMs"] for event in native_fill_events])
+        self.assertEqual([fill["decisionCandleCloseMs"] for fill in audit["fills"]],
+                         [event["decisionCloseMs"] for event in native_fill_events])
+        self.assertTrue(all(fill["executionAtMs"] >= fill["decisionCandleCloseMs"]
+                            for fill in audit["fills"]))
+        self.assertEqual(audit["fills"][-1]["timingStatus"], "modeled_next_open")
+        self.assertEqual(replay["ledger"]["fills"][-1]["time"], native_fill_events[-1]["timeMs"] + 900_000)
+        self.assertEqual(fixture["expectedTrace"][-1]["entryGate"], "rejected")
+        self.assertFalse(fixture["expectedTrace"][-1]["fill"]["performed"])
+        self.assertEqual(fixture["expectedTrace"][-1]["effectiveTarget"], "flat")
+        self.assertIn("not forecasts", fixture["provenance"]["pythonSignalAdapter"])
+        self.assertEqual(len(replay["ledger"]["fills"]), 2)
+
+        terminal = fixture["terminalTrace"][0]
+        terminal_close_seconds = terminal["timestamp"] + 900
+        terminal_replay = run_replay({
+            "bars": aggregated[:50], "timestampUnit": "seconds",
+            "signals": [{
+                "time": terminal_close_seconds, "directTarget": terminal["effectiveTarget"],
+                "probabilityUp": 0.5, "probabilityDown": 0.5, "abstained": False,
+            }],
+            "sourceIntervalMs": 900_000,
+            "cutoffMs": terminal_close_seconds * 1000,
+            "scanTimeMs": terminal_close_seconds * 1000,
+            "maxAgeMs": 900_000, "strategyId": "captured-fastreplay-terminal",
+            "configId": "terminal-no-next-open",
+            "costs": fixture["provenance"]["pythonCostIdentity"],
+        })
+        self.assertEqual(terminal["rawTarget"], "long")
+        self.assertEqual(terminal["entryGate"], "accepted")
+        self.assertEqual(terminal["effectiveTarget"], "flat")
+        self.assertEqual(terminal["fill"]["timestamp"], None)
+        self.assertEqual(terminal_replay["ledger"]["fills"], [])
+        self.assertEqual(terminal_replay["executionAudit"]["fills"], [])
+
 
 if __name__ == "__main__":
     unittest.main()

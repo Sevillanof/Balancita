@@ -538,4 +538,127 @@ describe('runFastReplay', () => {
       executionTimeMs: 0,
     })
   })
+
+  it('matches the captured trace from the shared synthetic source recipe', () => {
+    const fixture = JSON.parse(
+      readFileSync(
+        new URL(
+          '../../../../python/fixtures/fast-replay-execution-trace.json',
+          import.meta.url,
+        ),
+        'utf8',
+      ),
+    ) as {
+      provenance: {
+        firstBarTimestampSeconds: number
+        ticketEur: number
+        strategyId: string
+        fastReplayCostIdentity: { commissionRate: number; slippageRate: number }
+      }
+      nativeBarRecipe: {
+        barCount: number
+        tailStartIndex: number
+        default: {
+          open: number
+          high: number
+          low: number
+          close: number
+          volume: number
+        }
+        tail: {
+          open: number
+          high: number
+          low: number
+          close: number
+          volume: number
+        }
+        overrides: Record<
+          string,
+          {
+            open: number
+            high: number
+            low: number
+            close: number
+            volume: number
+          }
+        >
+      }
+      expectedTrace: Array<
+        Pick<
+          FastReplayDecisionSnapshot,
+          | 'timestamp'
+          | 'rawTarget'
+          | 'effectiveTarget'
+          | 'entryGate'
+          | 'fill'
+          | 'postExposure'
+        >
+      >
+      terminalTrace: FastReplayDecisionSnapshot[]
+    }
+    const nativeBars = Array.from(
+      { length: fixture.nativeBarRecipe.barCount },
+      (_, index) => ({
+        timestamp: fixture.provenance.firstBarTimestampSeconds + index * 900,
+        ...(index >= fixture.nativeBarRecipe.tailStartIndex
+          ? fixture.nativeBarRecipe.tail
+          : fixture.nativeBarRecipe.default),
+        ...fixture.nativeBarRecipe.overrides[String(index)],
+      }),
+    )
+    const candles = nativeBars.flatMap((bar) =>
+      Array.from({ length: 15 }, (_, minute) => ({
+        timestamp: bar.timestamp + minute * 60,
+        open: bar.open,
+        high: bar.high,
+        low: bar.low,
+        close: bar.close,
+        volume: bar.volume / 15,
+      })),
+    )
+    const trace: FastReplayDecisionSnapshot[] = []
+    const result = runFastReplay({
+      strategyId: fixture.provenance.strategyId,
+      candles,
+      ticketEur: fixture.provenance.ticketEur,
+      onDecision: (snapshot) => trace.push(snapshot),
+    })
+    expect(result.feeScenario.commissionRate).toBe(
+      fixture.provenance.fastReplayCostIdentity.commissionRate,
+    )
+    expect(result.feeScenario.slippageRate).toBe(
+      fixture.provenance.fastReplayCostIdentity.slippageRate,
+    )
+    const comparisonTrace = trace
+      .filter(
+        (snapshot) => snapshot.rawTarget === 'long' || snapshot.fill.performed,
+      )
+      .map(
+        ({
+          timestamp,
+          rawTarget,
+          effectiveTarget,
+          entryGate,
+          fill,
+          postExposure,
+        }) => ({
+          timestamp,
+          rawTarget,
+          effectiveTarget,
+          entryGate,
+          fill,
+          postExposure,
+        }),
+      )
+    expect(comparisonTrace).toEqual(fixture.expectedTrace)
+
+    const terminalTrace: FastReplayDecisionSnapshot[] = []
+    runFastReplay({
+      strategyId: fixture.provenance.strategyId,
+      candles: candles.slice(0, 50 * 15),
+      ticketEur: fixture.provenance.ticketEur,
+      onDecision: (snapshot) => terminalTrace.push(snapshot),
+    })
+    expect(terminalTrace).toEqual(fixture.terminalTrace)
+  })
 })
