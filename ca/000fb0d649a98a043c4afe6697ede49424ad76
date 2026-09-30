@@ -1,0 +1,14 @@
+odd/tasks/python-simulation-engine.md
+  h_2f68313623be98 45,315-316
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ca000fb0d649a98a043c4afe6697ede49424ad76",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
