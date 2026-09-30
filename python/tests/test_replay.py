@@ -31,10 +31,136 @@ class ReplayTests(unittest.TestCase):
         result = run_replay(self.options)
         self.assertEqual(result["status"], "replayed")
         self.assertEqual(result["ledger"]["fills"][0]["time"], 7_200_000)
-        self.assertAlmostEqual(result["ledger"]["fills"][0]["price"], 110.055)
+        legacy_fill = result["ledger"]["fills"][0]
+        self.assertEqual(legacy_fill["side"], "buy")
+        self.assertAlmostEqual(legacy_fill["price"], 110.055)
+        self.assertAlmostEqual(legacy_fill["qty"], 10_000 / (110.055 * 1.001))
+        self.assertAlmostEqual(
+            legacy_fill["commission"], legacy_fill["qty"] * 110.055 * 0.001
+        )
         self.assertEqual(result["strategyId"], "fixture-long-flat-v1")
         self.assertEqual(result["costIdentity"]["commissionRate"], 0.001)
         self.assertEqual(result["inputWindow"]["cutoffMs"], 10_800_000)
+        self.assertEqual(
+            result["executionAudit"]["version"], "python-replay-execution.v1"
+        )
+        self.assertEqual(result["executionAudit"]["fills"], [{
+            "fillIndex": 0, "fillSide": "buy", "legacyLedgerTimeMs": 7_200_000,
+            "timingStatus": "modeled_next_open",
+            "decisionCandleCloseMs": 3_600_000,
+            "decisionSignalTimeMs": 3_600_000,
+            "decisionAvailableAtMs": 3_600_000,
+            "executionAtMs": 3_600_000,
+        }])
+        self.assertEqual(result["executionAudit"]["comparability"], "modeled_only")
+        self.assertEqual(
+            result["executionAudit"]["availabilityBasis"],
+            "decision_candle_close_not_measured_arrival",
+        )
+
+    def test_execution_audit_keeps_legacy_times_and_marks_gap_fill_ambiguous(self):
+        options = dict(self.options)
+        options["bars"] = [self.bars[0], self.bars[2]]
+        result = run_replay(options)
+        self.assertEqual(result["ledger"]["fills"][0]["time"], 10_800_000)
+        self.assertEqual(result["executionAudit"]["fills"], [{
+            "fillIndex": 0, "fillSide": "buy", "legacyLedgerTimeMs": 10_800_000,
+            "timingStatus": "ambiguous_gap_or_irregular_interval",
+            "decisionCandleCloseMs": 3_600_000,
+            "decisionSignalTimeMs": 3_600_000,
+            "decisionAvailableAtMs": 3_600_000,
+            "executionAtMs": None,
+        }])
+        self.assertEqual(
+            result["executionAudit"]["comparability"],
+            "unavailable_for_ambiguous_fills",
+        )
+
+    def test_execution_audit_does_not_invent_terminal_or_cutoff_fill(self):
+        terminal = run_replay(dict(self.options, bars=self.bars[:1],
+                                   cutoffMs=3_600_000, scanTimeMs=3_600_000))
+        self.assertEqual(terminal["ledger"]["fills"], [])
+        self.assertEqual(terminal["executionAudit"]["fills"], [])
+        before_fill = run_replay(dict(self.options, cutoffMs=3_600_000,
+                                      scanTimeMs=3_600_000))
+        self.assertEqual(before_fill["ledger"]["fills"], [])
+        self.assertEqual(before_fill["executionAudit"]["fills"], [])
+
+    def test_execution_audit_is_deterministic_and_preserves_seconds_legacy_fill(self):
+        options = dict(
+            self.options,
+            timestampUnit="seconds",
+            sourceIntervalMs=3_600_000,
+            cutoffMs=10_800_000,
+            scanTimeMs=10_800_000,
+            bars=[dict(bar, time=bar["time"] // 1000) for bar in self.bars],
+            signals=[
+                dict(signal, time=signal["time"] // 1000)
+                for signal in self.signals
+            ],
+        )
+        first = run_replay(options)
+        second = run_replay(options)
+        self.assertEqual(first["executionAudit"], second["executionAudit"])
+        self.assertEqual(first["ledger"]["fills"], second["ledger"]["fills"])
+        self.assertEqual(first["ledger"]["fills"][0]["time"], 7_200_000)
+
+    def test_execution_audit_schema_is_consistent_without_a_ledger(self):
+        stale = run_replay(dict(self.options, scanTimeMs=18_000_000))
+        no_closed_data = run_replay(dict(
+            self.options, cutoffMs=3_599_999, scanTimeMs=3_599_999
+        ))
+        valid_no_fills = run_replay(dict(self.options, signals=[]))
+
+        for result in (stale, no_closed_data):
+            audit = result["executionAudit"]
+            self.assertEqual(audit["availabilityBasis"],
+                             "decision_candle_close_not_measured_arrival")
+            self.assertEqual(audit["executionBasis"], "next_bar_open_model_only")
+            self.assertEqual(audit["comparability"], "unavailable_no_ledger")
+            self.assertEqual(audit["fills"], [])
+        self.assertEqual(valid_no_fills["executionAudit"]["comparability"],
+                         "modeled_only")
+        self.assertEqual(valid_no_fills["executionAudit"]["fills"], [])
+
+    def test_abstention_exit_and_same_bar_reversal_audit_actual_fill_order(self):
+        options = dict(self.options, bars=self.bars[:3], cutoffMs=10_800_000,
+                       signals=[
+                           {"time": 3_600_000, "probabilityUp": 0.8,
+                            "probabilityDown": 0.1, "abstained": False},
+                           {"time": 7_200_000, "probabilityUp": 0.5,
+                            "probabilityDown": 0.5, "abstained": True},
+                       ])
+        result = run_replay(options)
+        self.assertEqual([fill["side"] for fill in result["ledger"]["fills"]],
+                         ["buy", "sell"])
+        self.assertEqual(result["executionAudit"]["fills"], [
+            {"fillIndex": 0, "fillSide": "buy", "legacyLedgerTimeMs": 7_200_000,
+             "timingStatus": "modeled_next_open", "decisionCandleCloseMs": 3_600_000,
+             "decisionSignalTimeMs": 3_600_000, "decisionAvailableAtMs": 3_600_000,
+             "executionAtMs": 3_600_000},
+            {"fillIndex": 1, "fillSide": "sell", "legacyLedgerTimeMs": 10_800_000,
+             "timingStatus": "modeled_next_open", "decisionCandleCloseMs": 7_200_000,
+             "decisionSignalTimeMs": 7_200_000, "decisionAvailableAtMs": 7_200_000,
+             "executionAtMs": 7_200_000},
+        ])
+
+    def test_same_bar_reversal_has_two_audit_rows_for_actual_order(self):
+        options = dict(self.options, bars=self.bars[:3], cutoffMs=10_800_000,
+                       signals=[
+                           {"time": 3_600_000, "probabilityUp": 0.8,
+                            "probabilityDown": 0.1, "abstained": False},
+                           {"time": 7_200_000, "probabilityUp": 0.5,
+                            "probabilityDown": 0.5, "abstained": False,
+                            "directTarget": "short"},
+                       ])
+        result = run_replay(options)
+        self.assertEqual([fill["side"] for fill in result["ledger"]["fills"]],
+                         ["buy", "sell", "sell_short"])
+        reversal = result["executionAudit"]["fills"][1:]
+        self.assertEqual([row["fillSide"] for row in reversal], ["sell", "sell_short"])
+        self.assertEqual([row["executionAtMs"] for row in reversal],
+                         [7_200_000, 7_200_000])
 
     def test_no_new_closed_bar_is_idempotent_and_stale_is_distinct(self):
         first = run_replay(self.options)
@@ -42,6 +168,7 @@ class ReplayTests(unittest.TestCase):
         second = run_replay(no_new)
         self.assertEqual(second["status"], "no_new_closed_bar")
         self.assertEqual(second["ledger"], first["ledger"])
+        self.assertEqual(second["executionAudit"], first["executionAudit"])
         stale = dict(self.options, scanTimeMs=18_000_000)
         self.assertEqual(run_replay(stale)["status"], "stale")
 

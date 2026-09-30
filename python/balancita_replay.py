@@ -3,6 +3,57 @@
 from balancita_simulation import DEFAULT_COSTS, simulate_long_flat
 
 
+def _execution_audit(bars, signals, fills, interval):
+    """Describe modeled timing without changing close-labeled legacy fills."""
+    bars_by_close = {bar["time"]: index for index, bar in enumerate(bars)}
+    signal_times = {signal["time"] for signal in signals}
+    audit_fills = []
+    for fill_index, fill in enumerate(fills):
+        bar_index = bars_by_close.get(fill["time"])
+        if bar_index is None or bar_index == 0:
+            audit_fills.append({
+                "fillIndex": fill_index,
+                "fillSide": fill["side"],
+                "legacyLedgerTimeMs": fill["time"],
+                "timingStatus": "ambiguous_missing_decision_bar",
+                "decisionCandleCloseMs": None,
+                "decisionSignalTimeMs": None,
+                "decisionAvailableAtMs": None,
+                "executionAtMs": None,
+            })
+            continue
+        decision_close = bars[bar_index - 1]["time"]
+        contiguous = fill["time"] - decision_close == interval
+        audit_fills.append({
+            "fillIndex": fill_index,
+            "fillSide": fill["side"],
+            "legacyLedgerTimeMs": fill["time"],
+            "timingStatus": (
+                "modeled_next_open"
+                if contiguous else "ambiguous_gap_or_irregular_interval"
+            ),
+            "decisionCandleCloseMs": decision_close,
+            "decisionSignalTimeMs": (
+                decision_close if decision_close in signal_times else None
+            ),
+            "decisionAvailableAtMs": decision_close,
+            "executionAtMs": decision_close if contiguous else None,
+        })
+    has_ambiguous_fill = any(
+        fill["timingStatus"] != "modeled_next_open" for fill in audit_fills
+    )
+    return {
+        "version": "python-replay-execution.v1",
+        "availabilityBasis": "decision_candle_close_not_measured_arrival",
+        "executionBasis": "next_bar_open_model_only",
+        "comparability": (
+            "unavailable_for_ambiguous_fills"
+            if has_ambiguous_fill else "modeled_only"
+        ),
+        "fills": audit_fills,
+    }
+
+
 def _safe_int(value, name):
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         raise ValueError("{} must be a non-negative integer".format(name))
@@ -78,6 +129,13 @@ def run_replay(options):
         "decisionInputs": signals,
         "comparator": {"status": "not_comparable", "reason": "No frozen FastReplay-identical 1m input and resampling contract supplied."},
         "ledger": None,
+        "executionAudit": {
+            "version": "python-replay-execution.v1",
+            "availabilityBasis": "decision_candle_close_not_measured_arrival",
+            "executionBasis": "next_bar_open_model_only",
+            "comparability": "unavailable_no_ledger",
+            "fills": [],
+        },
     }
     if latest is None or scan_time - latest > max_age:
         result["status"] = "stale"
@@ -91,4 +149,7 @@ def run_replay(options):
         "exitDownThreshold": options.get("exitDownThreshold", 0.55),
         "costs": costs,
     })
+    result["executionAudit"] = _execution_audit(
+        closed, signals, result["ledger"]["fills"], interval
+    )
     return result
