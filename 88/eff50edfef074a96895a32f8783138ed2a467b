@@ -1,0 +1,20 @@
+odd/tasks/python-simulation-engine.md
+  h_2f68313623be98 50-56
+python/fixtures/shared-time-contract.json
+  h_2f68313623be98 1-62
+python/tests/test_replay.py
+  h_2f68313623be98 2-3,83-172
+server/src/features/simulations/fast-replay-engine.test.ts
+  h_2f68313623be98 2,11-83
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "88eff50edfef074a96895a32f8783138ed2a467b",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
