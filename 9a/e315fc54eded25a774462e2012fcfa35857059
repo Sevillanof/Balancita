@@ -1,0 +1,18 @@
+odd/tasks/python-simulation-engine.md
+  h_2f68313623be98 50-51,329-338
+python/balancita_replay.py
+  h_2f68313623be98 6-56,132-138,152-154
+python/tests/test_replay.py
+  h_2f68313623be98 34-40,44-163,171
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9ae315fc54eded25a774462e2012fcfa35857059",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
