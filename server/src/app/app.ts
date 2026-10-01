@@ -1035,6 +1035,8 @@ export async function buildApp(options: {
       const record = {
         ...result,
         trades,
+        nativeTradeTimestampUnit: 'unix-milliseconds',
+        nativeTradeTimestampMeaning: 'simulated-next-15m-candle-open',
         id,
         strategy_id: result.strategyId,
         candles_evaluated: result.candlesEvaluated,

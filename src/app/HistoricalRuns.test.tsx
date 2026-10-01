@@ -26,6 +26,8 @@ const run = {
   strategyId: 'micro-trend-pullback',
   strategyOwner: 'typescript-native',
   sizingModel: 'cash-all-in.v1',
+  nativeTradeTimestampUnit: 'unix-milliseconds',
+  nativeTradeTimestampMeaning: 'simulated-next-15m-candle-open',
   initialCashEur: 100,
   netPnlEur: 5,
   candlesEvaluated: 3,
@@ -39,7 +41,7 @@ const run = {
   trades: [
     {
       side: 'buy',
-      timestamp: 1_700_000_060,
+      timestamp: 1_700_000_060_000,
       price: 50_000,
       quantity: 0.002,
       feeEur: 0.08,

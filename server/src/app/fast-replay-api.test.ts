@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -19,6 +19,143 @@ function temporaryStore() {
 }
 
 describe('Fast Replay API', () => {
+  it('publishes native fill-time provenance at serialization and keeps Python audit times distinct', async () => {
+    const store = temporaryStore()
+    const fixture = JSON.parse(
+      readFileSync(
+        new URL(
+          '../../../python/fixtures/fast-replay-execution-trace.json',
+          import.meta.url,
+        ),
+        'utf8',
+      ),
+    ) as {
+      provenance: {
+        firstBarTimestampSeconds: number
+        strategyId: string
+        ticketEur: number
+      }
+      nativeBarRecipe: {
+        barCount: number
+        tailStartIndex: number
+        default: Record<string, number>
+        tail: Record<string, number>
+        overrides: Record<string, Record<string, number>>
+      }
+      expectedTrace: Array<{
+        fill: { performed: boolean; timestamp: number | null }
+      }>
+    }
+    const nativeBars = Array.from(
+      { length: fixture.nativeBarRecipe.barCount },
+      (_, index) => {
+        const bar = {
+          ...(index >= fixture.nativeBarRecipe.tailStartIndex
+            ? fixture.nativeBarRecipe.tail
+            : fixture.nativeBarRecipe.default),
+          ...fixture.nativeBarRecipe.overrides[String(index)],
+        }
+        return {
+          timestamp: fixture.provenance.firstBarTimestampSeconds + index * 900,
+          open: bar.open!,
+          high: bar.high!,
+          low: bar.low!,
+          close: bar.close!,
+          volume: bar.volume!,
+        }
+      },
+    ) as Array<{
+      timestamp: number
+      open: number
+      high: number
+      low: number
+      close: number
+      volume: number
+    }>
+    const candles = nativeBars.flatMap((bar) =>
+      Array.from({ length: 15 }, (_, minute) => ({
+        timestamp: bar.timestamp + minute * 60,
+        open: bar.open,
+        high: bar.high,
+        low: bar.low,
+        close: bar.close,
+        volume: bar.volume / 15,
+      })),
+    )
+    store.insertOhlcCandles(candles)
+    const app = await buildApp({
+      config: serverConfigFrom({
+        MARKET_COLLECTOR_ENABLED: 'false',
+        KRAKEN_WS_COLLECTOR_ENABLED: 'false',
+        KRAKEN_REST_OHLC_WORKER_ENABLED: 'false',
+      }),
+      overrides: { marketStore: store },
+    })
+    const payload = {
+      strategy_id: fixture.provenance.strategyId,
+      start_time: candles[0]!.timestamp * 1000,
+      end_time: candles.at(-1)!.timestamp * 1000,
+      ticket_eur: fixture.provenance.ticketEur,
+    }
+    const nativeResponse = await app.inject({
+      method: 'POST',
+      url: '/api/replay/fast-run',
+      payload,
+    })
+    expect(nativeResponse.statusCode).toBe(200)
+    const native = nativeResponse.json()
+    expect(native.trades).toHaveLength(4)
+    expect(native.nativeTradeTimestampUnit).toBe('unix-milliseconds')
+    expect(native.nativeTradeTimestampMeaning).toBe(
+      'simulated-next-15m-candle-open',
+    )
+    expect(
+      native.trades.map((trade: { timestamp: number }) => trade.timestamp),
+    ).toEqual(
+      fixture.expectedTrace
+        .filter(({ fill }) => fill.performed)
+        .map(({ fill }) => fill.timestamp! * 1000),
+    )
+    const nativeHash = native.datasetHash
+    const candleIdentity = native.artifact.candles
+    expect(native.artifact.timestampUnit).toBe('unix-seconds')
+    expect(native.artifact.datasetHash).toBe(nativeHash)
+
+    const pythonResponse = await app.inject({
+      method: 'POST',
+      url: '/api/replay/python-ledger-run',
+      payload,
+    })
+    expect(pythonResponse.statusCode).toBe(200)
+    const python = pythonResponse.json()
+    expect(python.pythonLedger.ledger.fills.length).toBeGreaterThan(0)
+    expect(python).not.toHaveProperty('nativeTradeTimestampUnit')
+    expect(python).not.toHaveProperty('nativeTradeTimestampMeaning')
+    expect(python.datasetHash).toBe(nativeHash)
+    expect(python.artifact.candles).toEqual(candleIdentity)
+    expect(
+      python.pythonLedger.executionAudit.fills.every(
+        (audit: { executionAtMs: number | null }) =>
+          audit.executionAtMs === null ||
+          Number.isSafeInteger(audit.executionAtMs),
+      ),
+    ).toBe(true)
+
+    const history = await app.inject({
+      method: 'GET',
+      url: '/api/replay/fast-run/history?limit=10',
+    })
+    const rows = history.json().runs as Record<string, unknown>[]
+    expect(rows.find(({ id }) => id === native.id)).toMatchObject({
+      nativeTradeTimestampUnit: 'unix-milliseconds',
+      nativeTradeTimestampMeaning: 'simulated-next-15m-candle-open',
+    })
+    expect(rows.find(({ id }) => id === python.id)).not.toHaveProperty(
+      'nativeTradeTimestampUnit',
+    )
+    await app.close()
+  })
+
   it('marks open holds and C27 time-stop distance through the latest closed 15m bucket end', async () => {
     const store = temporaryStore()
     const bucketEnd = Math.floor(Date.now() / 900_000) * 900

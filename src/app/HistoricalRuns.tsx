@@ -2,7 +2,12 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { CandlestickData, SeriesMarker, Time } from 'lightweight-charts'
 import PriceChart from '../features/price-chart/presentation/PriceChart.tsx'
 import ReplayRunForm from './ReplayRunForm.tsx'
-import { isRun, type Run } from './replay-run-contract.ts'
+import {
+  isRun,
+  nativeTradeTimeMs,
+  pythonExecutionTimeMs,
+  type Run,
+} from './replay-run-contract.ts'
 import './DemoShell.css'
 import './ConnectedTerminal.css'
 
@@ -222,17 +227,17 @@ export default function HistoricalRuns() {
       return (selected.pythonLedger?.executionAudit.fills ?? []).flatMap(
         (audit) => {
           const fill = ledger?.fills[audit.fillIndex]
+          const executionAt = pythonExecutionTimeMs(selected, audit.fillIndex)
           if (
             !fill ||
-            audit.timingStatus !== 'modeled_next_open' ||
-            audit.executionAtMs === null ||
+            executionAt === null ||
             fill.side !== audit.fillSide ||
             (fill.side !== 'buy' && fill.side !== 'sell')
           )
             return []
           return [
             {
-              time: Math.floor(audit.executionAtMs / 1000) as Time,
+              time: Math.floor(executionAt / 1000) as Time,
               position: fill.side === 'buy' ? 'belowBar' : 'aboveBar',
               color: fill.side === 'buy' ? '#13795b' : '#b42318',
               shape: fill.side === 'buy' ? 'arrowUp' : 'arrowDown',
@@ -242,13 +247,20 @@ export default function HistoricalRuns() {
         },
       )
     }
-    return selected.trades.map((trade) => ({
-      time: trade.timestamp as Time,
-      position: trade.side === 'buy' ? 'belowBar' : 'aboveBar',
-      color: trade.side === 'buy' ? '#13795b' : '#b42318',
-      shape: trade.side === 'buy' ? 'arrowUp' : 'arrowDown',
-      text: trade.side === 'buy' ? 'Compra' : 'Venta',
-    }))
+    return selected.trades.flatMap((trade) => {
+      const timestamp = nativeTradeTimeMs(selected, trade.timestamp)
+      return timestamp === null
+        ? []
+        : [
+            {
+              time: Math.floor(timestamp / 1000) as Time,
+              position: trade.side === 'buy' ? 'belowBar' : 'aboveBar',
+              color: trade.side === 'buy' ? '#13795b' : '#b42318',
+              shape: trade.side === 'buy' ? 'arrowUp' : 'arrowDown',
+              text: trade.side === 'buy' ? 'Compra' : 'Venta',
+            },
+          ]
+    })
   }, [selected, candles])
 
   const owner =
@@ -260,12 +272,14 @@ export default function HistoricalRuns() {
         : selected
           ? 'Propiedad: No disponible'
           : null
-  const ambiguousPythonFills =
+  const unavailableFillTimes =
     selected?.ledgerOwner === 'python-ledger'
-      ? (selected.pythonLedger?.executionAudit.fills.filter(
-          (fill) => fill.timingStatus !== 'modeled_next_open',
+      ? (selected.pythonLedger?.ledger?.fills.filter(
+          (_, index) => pythonExecutionTimeMs(selected, index) === null,
         ).length ?? 0)
-      : 0
+      : (selected?.trades.filter(
+          (trade) => nativeTradeTimeMs(selected, trade.timestamp) === null,
+        ).length ?? 0)
 
   return (
     <div className="demo-shell connected-terminal">
@@ -388,6 +402,15 @@ export default function HistoricalRuns() {
                     estrategia Python nativa ni paridad comparable.
                   </p>
                 )}
+                {selected.ledgerOwner !== 'python-ledger' &&
+                  selected.nativeTradeTimestampUnit === 'unix-milliseconds' &&
+                  selected.nativeTradeTimestampMeaning ===
+                    'simulated-next-15m-candle-open' && (
+                    <p>
+                      Fills simulados a la apertura de la siguiente vela de 15
+                      minutos; no representan una hora de orden real.
+                    </p>
+                  )}
                 <p>
                   ID: {selected.id} · Dataset:{' '}
                   {selected.datasetHash ?? 'No disponible'}
@@ -432,13 +455,12 @@ export default function HistoricalRuns() {
                   </p>
                 )}
                 {artifactNotice && <p role="alert">{artifactNotice}</p>}
-                {selected.ledgerOwner === 'python-ledger' &&
-                  ambiguousPythonFills > 0 && (
-                    <p role="status">
-                      {ambiguousPythonFills} fills Python tienen tiempo ambiguo
-                      y no se marcan en el gráfico.
-                    </p>
-                  )}
+                {unavailableFillTimes > 0 && (
+                  <p role="status">
+                    {unavailableFillTimes} fills tienen una hora no disponible o
+                    no verificable y no se marcan en el gráfico.
+                  </p>
+                )}
                 <PriceChart
                   data={chartData}
                   markers={artifactNotice ? [] : markers}
@@ -449,7 +471,11 @@ export default function HistoricalRuns() {
                     <thead>
                       <tr>
                         <th>Lado</th>
-                        <th>Hora</th>
+                        <th>
+                          {selected.ledgerOwner === 'python-ledger'
+                            ? 'Hora (fill modelado, UTC)'
+                            : 'Hora (fill simulado · apertura 15m, UTC)'}
+                        </th>
                         <th>Precio</th>
                         <th>Cantidad</th>
                         <th>Comisión</th>
@@ -459,14 +485,10 @@ export default function HistoricalRuns() {
                       {selected.ledgerOwner === 'python-ledger'
                         ? (selected.pythonLedger?.ledger?.fills ?? []).map(
                             (fill, index) => {
-                              const audit =
-                                selected.pythonLedger?.executionAudit.fills.find(
-                                  (entry) => entry.fillIndex === index,
-                                )
-                              const executionAt =
-                                audit?.timingStatus === 'modeled_next_open'
-                                  ? audit.executionAtMs
-                                  : null
+                              const executionAt = pythonExecutionTimeMs(
+                                selected,
+                                index,
+                              )
                               return (
                                 <tr key={`${selected.id}-${index}`}>
                                   <td>
@@ -477,9 +499,8 @@ export default function HistoricalRuns() {
                                         : 'No disponible'}
                                   </td>
                                   <td>
-                                    {executionAt === null ||
-                                    executionAt === undefined
-                                      ? 'No disponible (tiempo ambiguo)'
+                                    {executionAt === null
+                                      ? 'No disponible'
                                       : new Date(executionAt).toISOString()}
                                   </td>
                                   <td>{eur.format(fill.price)}</td>
@@ -492,10 +513,22 @@ export default function HistoricalRuns() {
                         : selected.trades.map((trade, index) => (
                             <tr key={`${selected.id}-${index}`}>
                               <td>
-                                {trade.side === 'buy' ? 'Compra' : 'Venta'}
+                                {trade.side === 'buy'
+                                  ? 'Compra simulada'
+                                  : 'Venta simulada'}
                               </td>
                               <td>
-                                {new Date(trade.timestamp * 1000).toISOString()}
+                                {nativeTradeTimeMs(
+                                  selected,
+                                  trade.timestamp,
+                                ) === null
+                                  ? 'No disponible'
+                                  : new Date(
+                                      nativeTradeTimeMs(
+                                        selected,
+                                        trade.timestamp,
+                                      )!,
+                                    ).toISOString()}
                               </td>
                               <td>{eur.format(trade.price)}</td>
                               <td>{trade.quantity}</td>

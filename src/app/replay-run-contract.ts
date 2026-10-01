@@ -5,13 +5,15 @@ export type Run = {
   strategyOwner?: 'typescript-native'
   ledgerOwner?: 'python-ledger'
   sizingModel?: string
+  nativeTradeTimestampUnit?: string
+  nativeTradeTimestampMeaning?: string
   initialCashEur?: number
   finalEquityEur?: number
   netPnlEur?: number
   window: { start_time: number; end_time: number }
   trades: readonly {
     side: 'buy' | 'sell'
-    timestamp: number
+    timestamp: unknown
     price: number
     quantity: number
     feeEur?: number
@@ -39,7 +41,7 @@ export type Run = {
         fillIndex: number
         fillSide: string
         timingStatus: string
-        executionAtMs: number | null
+        executionAtMs: unknown
       }[]
     }
   }
@@ -71,8 +73,7 @@ function validPythonLedger(value: unknown): boolean {
         record(fill) &&
         integer(fill.fillIndex) &&
         typeof fill.fillSide === 'string' &&
-        typeof fill.timingStatus === 'string' &&
-        (fill.executionAtMs === null || dateInteger(fill.executionAtMs)),
+        typeof fill.timingStatus === 'string',
     )
   )
     return false
@@ -106,7 +107,6 @@ export function isRun(value: unknown): value is Run {
       (trade) =>
         record(trade) &&
         (trade.side === 'buy' || trade.side === 'sell') &&
-        integer(trade.timestamp) &&
         finite(trade.price) &&
         finite(trade.quantity) &&
         (trade.feeEur === undefined || finite(trade.feeEur)),
@@ -123,4 +123,57 @@ export function isRun(value: unknown): value is Run {
     (value.finalEquityEur === undefined || finite(value.finalEquityEur)) &&
     (value.netPnlEur === undefined || finite(value.netPnlEur))
   )
+}
+
+export function nativeTradeTimeMs(
+  run: Pick<
+    Run,
+    'window' | 'nativeTradeTimestampUnit' | 'nativeTradeTimestampMeaning'
+  >,
+  timestamp: unknown,
+): number | null {
+  if (
+    run.nativeTradeTimestampUnit !== 'unix-milliseconds' ||
+    run.nativeTradeTimestampMeaning !== 'simulated-next-15m-candle-open' ||
+    !dateInteger(timestamp) ||
+    !dateInteger(run.window.start_time) ||
+    !dateInteger(run.window.end_time) ||
+    timestamp < run.window.start_time ||
+    timestamp > run.window.end_time
+  )
+    return null
+  return timestamp
+}
+
+export function pythonExecutionTimeMs(
+  run: Pick<Run, 'window' | 'pythonLedger'>,
+  fillIndex: unknown,
+): number | null {
+  const ledger = run.pythonLedger?.ledger
+  const audits = run.pythonLedger?.executionAudit.fills
+  if (
+    ledger === null ||
+    ledger === undefined ||
+    audits === undefined ||
+    !integer(fillIndex) ||
+    fillIndex < 0 ||
+    fillIndex >= ledger.fills.length
+  )
+    return null
+  const fill = ledger.fills[fillIndex]
+  const matchingAudits = audits.filter((audit) => audit.fillIndex === fillIndex)
+  if (fill === undefined || matchingAudits.length !== 1) return null
+  const audit = matchingAudits[0]!
+  if (
+    audit.timingStatus !== 'modeled_next_open' ||
+    audit.fillSide !== fill.side ||
+    (fill.side !== 'buy' && fill.side !== 'sell') ||
+    !dateInteger(audit.executionAtMs) ||
+    !dateInteger(run.window.start_time) ||
+    !dateInteger(run.window.end_time) ||
+    audit.executionAtMs < run.window.start_time ||
+    audit.executionAtMs > run.window.end_time
+  )
+    return null
+  return audit.executionAtMs
 }
