@@ -23,6 +23,16 @@ describe('deterministic demo trading source', () => {
     ).toBe('execution-03')
   })
 
+  it('uses one continuous one-minute source history for interval regrouping', () => {
+    const { candles } = createDemoSnapshot()
+    expect(candles).toHaveLength(120)
+    expect(
+      candles
+        .slice(1)
+        .every((candle, index) => candle.time - candles[index]!.time === 60),
+    ).toBe(true)
+  })
+
   it('keeps illustrative trade PnL equal to direction-adjusted gross less both fees', () => {
     const { trades } = createDemoSnapshot()
     for (const trade of trades) {

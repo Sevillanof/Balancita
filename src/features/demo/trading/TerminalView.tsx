@@ -1,7 +1,12 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { createDemoTradingProvider, openUnrealizedPnl } from './provider.ts'
 import type { DemoSnapshot } from './types.ts'
 import TerminalChart from './TerminalChart.tsx'
+import {
+  resampleCandles,
+  TERMINAL_INTERVALS,
+  type TerminalInterval,
+} from './terminal-model.ts'
 
 const money = (value: number) =>
   new Intl.NumberFormat('es-ES', {
@@ -22,9 +27,24 @@ export default function TerminalView() {
   )
   const [paused, setPaused] = useState(true)
   const [selectedId, setSelectedId] = useState('decision-08')
+  const [interval, setInterval] = useState<TerminalInterval>('5m')
+  const [filters, setFilters] = useState({
+    entry: true,
+    exit: true,
+    discard: true,
+  })
+  const [bucketChoices, setBucketChoices] = useState<readonly string[]>([])
+  const eventRefs = useRef(new Map<string, HTMLButtonElement>())
 
   useEffect(() => provider.subscribe(setSnapshot), [provider])
   const latest = snapshot.candles.at(-1)!
+  const chartCandles = useMemo(
+    () => resampleCandles(snapshot.candles, TERMINAL_INTERVALS[interval]),
+    [snapshot.candles, interval],
+  )
+  const visibleDecisions = snapshot.decisions.filter(
+    (decision) => filters[decision.kind],
+  )
   const realized = snapshot.trades.reduce(
     (total, trade) => total + trade.realizedPnlEur,
     0,
@@ -33,9 +53,42 @@ export default function TerminalView() {
     (total, position) => total + openUnrealizedPnl(position, latest.close),
     0,
   )
-  const selected = snapshot.decisions.find(
+  const selected = visibleDecisions.find(
     (decision) => decision.id === selectedId,
   )
+
+  useEffect(() => {
+    if (!selectedId) return
+    eventRefs.current.get(selectedId)?.scrollIntoView?.({ block: 'nearest' })
+  }, [selectedId])
+
+  const chooseBucket = (time: number) => {
+    const intervalSeconds = TERMINAL_INTERVALS[interval]
+    const choices = visibleDecisions.filter(
+      (event) =>
+        Math.floor(event.time / intervalSeconds) * intervalSeconds === time,
+    )
+    if (choices.length === 1) setSelectedId(choices[0]!.id)
+    else if (choices.length > 1)
+      setBucketChoices(choices.map((event) => event.id))
+  }
+
+  const toggleFilter = (kind: keyof typeof filters, checked: boolean) => {
+    setFilters((current) => ({ ...current, [kind]: checked }))
+    if (
+      !checked &&
+      snapshot.decisions.find((decision) => decision.id === selectedId)
+        ?.kind === kind
+    ) {
+      setSelectedId(
+        snapshot.decisions
+          .filter(
+            (decision) => decision.kind !== kind && filters[decision.kind],
+          )
+          .at(-1)?.id ?? '',
+      )
+    }
+  }
 
   const toggleClock = () => {
     if (paused) provider.resume()
@@ -85,17 +138,51 @@ export default function TerminalView() {
           <div className="demo-terminal__panel-head">
             <strong>BTC/EUR</strong>
             <span>Velas japonesas / Volumen</span>
-            <div aria-label="Intervalo del gráfico">5m</div>
+            <div
+              className="demo-terminal__intervals"
+              role="group"
+              aria-label="Intervalo del gráfico"
+            >
+              {(Object.keys(TERMINAL_INTERVALS) as TerminalInterval[]).map(
+                (value) => (
+                  <button
+                    key={value}
+                    type="button"
+                    aria-pressed={interval === value}
+                    onClick={() => setInterval(value)}
+                  >
+                    {value}
+                  </button>
+                ),
+              )}
+            </div>
           </div>
           <TerminalChart
-            candles={snapshot.candles}
-            decisions={snapshot.decisions}
+            candles={chartCandles}
+            decisions={visibleDecisions}
+            positions={snapshot.positions}
+            trades={snapshot.trades}
+            selectedId={selectedId}
+            interval={interval}
+            onBucketSelect={chooseBucket}
           />
           <div className="demo-terminal__legend">
-            <span>↑ Larga</span>
-            <span>↓ Corta</span>
-            <span>□ Descartada</span>
-            <span>○ Salida</span>
+            {(['entry', 'exit', 'discard'] as const).map((kind) => (
+              <label key={kind}>
+                <input
+                  type="checkbox"
+                  checked={filters[kind]}
+                  onChange={(event) => toggleFilter(kind, event.target.checked)}
+                />
+                {kind === 'entry'
+                  ? 'Entradas'
+                  : kind === 'exit'
+                    ? 'Salidas'
+                    : 'Descartes'}
+              </label>
+            ))}
+            <span>↑ Larga · ↓ Corta</span>
+            <span>El símbolo y la etiqueta indican dirección/estado</span>
             <small>Desplazamiento y zoom disponibles en el gráfico</small>
           </div>
         </section>
@@ -108,13 +195,17 @@ export default function TerminalView() {
               <p className="demo-shell__eyebrow">TRAZABILIDAD SIMULADA</p>
               <h3>Decisiones del motor</h3>
             </div>
-            <span>{snapshot.decisions.length} eventos</span>
+            <span>{visibleDecisions.length} eventos visibles</span>
           </div>
           <div className="demo-terminal__event-list">
-            {[...snapshot.decisions].reverse().map((decision) => (
+            {[...visibleDecisions].reverse().map((decision) => (
               <button
                 type="button"
                 key={decision.id}
+                ref={(node) => {
+                  if (node) eventRefs.current.set(decision.id, node)
+                  else eventRefs.current.delete(decision.id)
+                }}
                 className={`demo-terminal__event ${selectedId === decision.id ? 'is-selected' : ''}`}
                 onClick={() => setSelectedId(decision.id)}
                 aria-pressed={selectedId === decision.id}
@@ -145,6 +236,39 @@ export default function TerminalView() {
           </p>
         </aside>
       </div>
+      {bucketChoices.length > 0 && (
+        <div
+          className="demo-terminal__chooser"
+          role="dialog"
+          aria-label="Decisiones en esta vela"
+        >
+          <strong>Varias decisiones en esta vela</strong>
+          {bucketChoices.map((id) => {
+            const event = visibleDecisions.find((item) => item.id === id)!
+            return (
+              <button
+                key={id}
+                type="button"
+                onClick={() => {
+                  setSelectedId(id)
+                  setBucketChoices([])
+                }}
+              >
+                {time(event.time)} UTC ·{' '}
+                {event.kind === 'entry'
+                  ? `Entrada ${event.direction === 'long' ? 'larga' : 'corta'}`
+                  : event.kind === 'exit'
+                    ? 'Salida'
+                    : 'Descartada'}{' '}
+                · {event.reason}
+              </button>
+            )
+          })}
+          <button type="button" onClick={() => setBucketChoices([])}>
+            Cerrar
+          </button>
+        </div>
+      )}
       {selected && (
         <p className="demo-terminal__selection">
           <strong>Evento seleccionado</strong>

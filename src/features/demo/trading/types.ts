@@ -44,6 +44,8 @@ export type DemoTrade = {
   realizedPnlEur: number
   entryTime: number
   exitTime: number
+  stopEur: number
+  targetEur: number
 }
 
 export type DemoSnapshot = {

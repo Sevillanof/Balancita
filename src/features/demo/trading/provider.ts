@@ -25,7 +25,7 @@ export function createDemoSnapshot(): DemoSnapshot {
     const close = round(previous + drift + (i >= 86 && i <= 92 ? 135 : 0))
     const wick = 35 + Math.abs(Math.sin(i * 1.91)) * 60
     candles.push({
-      time: END_TIME - (119 - i) * 300,
+      time: END_TIME - (119 - i) * 60,
       open: previous,
       high: round(Math.max(previous, close) + wick),
       low: round(Math.min(previous, close) - wick * 0.82),
@@ -153,6 +153,8 @@ export function createDemoSnapshot(): DemoSnapshot {
       realizedPnlEur: round(gross - entryFeeEur - exitFeeEur),
       entryTime: candles[entryIndex]!.time,
       exitTime: candles[exitIndex]!.time,
+      stopEur: round(entryEur + (direction === 'long' ? -240 : 240)),
+      targetEur: round(entryEur + (direction === 'long' ? 310 : -310)),
     }
   }
   const trades = [
@@ -214,7 +216,7 @@ export function createDemoTradingProvider(tickMs = 2500): DemoTradingProvider {
       const next =
         tick % 8 === 0
           ? {
-              time: last.time + 300,
+              time: last.time + 60,
               open: last.close,
               high: round(Math.max(last.close, close) + 12),
               low: round(Math.min(last.close, close) - 12),
@@ -281,6 +283,8 @@ export function createDemoTradingProvider(tickMs = 2500): DemoTradingProvider {
             realizedPnlEur: round(gross - position.entryFeeEur - exitFeeEur),
             entryTime: position.entryTime,
             exitTime: next.time,
+            stopEur: position.stopEur,
+            targetEur: position.targetEur,
           })
           positions = positions.filter(({ id }) => id !== position.id)
           decisions.push({
