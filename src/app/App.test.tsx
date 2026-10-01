@@ -287,7 +287,7 @@ describe('dashboard Gemini boundary', () => {
     const view = render(<App />)
     try {
       expect(
-        await screen.findByRole('heading', { name: 'Terminal BTC-EUR' }),
+        await screen.findByRole('heading', { name: 'Terminal' }),
       ).toBeInTheDocument()
       expect(await screen.findByRole('alert')).toHaveTextContent(
         'No se pudo cargar la terminal conectada',

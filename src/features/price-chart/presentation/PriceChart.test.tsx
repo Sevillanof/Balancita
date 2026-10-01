@@ -9,6 +9,12 @@ const mocks = vi.hoisted(() => {
     update: vi.fn(),
     remove: vi.fn(),
     applyOptions: vi.fn(),
+    priceScale: vi.fn(() => ({ applyOptions: vi.fn() })),
+  }
+  const volumeSeries = {
+    setData: vi.fn(),
+    applyOptions: vi.fn(),
+    priceScale: vi.fn(() => ({ applyOptions: vi.fn() })),
   }
   const markerPlugin = {
     setMarkers: vi.fn(),
@@ -21,7 +27,9 @@ const mocks = vi.hoisted(() => {
     scrollToRealTime: vi.fn(),
   }
   const chart = {
-    addSeries: vi.fn(() => series),
+    addSeries: vi.fn((definition: unknown) =>
+      definition === mocks.HistogramSeries ? volumeSeries : series,
+    ),
     timeScale: vi.fn(() => timeScale),
     remove: vi.fn(),
     applyOptions: vi.fn(),
@@ -29,10 +37,12 @@ const mocks = vi.hoisted(() => {
   const createChart = vi.fn(() => chart)
   return {
     CandlestickSeries: { kind: 'candlestick' },
+    HistogramSeries: { kind: 'histogram' },
     createChart,
     createSeriesMarkers,
     chart,
     series,
+    volumeSeries,
     markerPlugin,
     timeScale,
     reset() {
@@ -40,6 +50,8 @@ const mocks = vi.hoisted(() => {
       createSeriesMarkers.mockClear()
       chart.addSeries.mockClear()
       series.setData.mockClear()
+      volumeSeries.setData.mockClear()
+      volumeSeries.priceScale.mockClear()
       series.update.mockClear()
       chart.timeScale.mockClear()
       timeScale.fitContent.mockClear()
@@ -56,6 +68,7 @@ vi.mock('lightweight-charts', () => ({
   createChart: mocks.createChart,
   createSeriesMarkers: mocks.createSeriesMarkers,
   CandlestickSeries: mocks.CandlestickSeries,
+  HistogramSeries: mocks.HistogramSeries,
   ColorType: { Solid: 'solid' },
 }))
 
@@ -124,6 +137,28 @@ describe('PriceChart', () => {
     })
     expect(mocks.timeScale.fitContent).not.toHaveBeenCalled()
     expect(mocks.timeScale.scrollToRealTime).not.toHaveBeenCalled()
+  })
+
+  it('renders volume in the approved chart frame when volume is supplied', () => {
+    const data = [{ ...candlestick(1704067200, 100), volume: 12 }]
+    render(
+      <PriceChart
+        data={data}
+        containerClassName="demo-terminal__chart"
+        showVolume
+      />,
+    )
+
+    expect(screen.getByTestId('price-chart')).toHaveClass(
+      'demo-terminal__chart',
+    )
+    expect(mocks.chart.addSeries).toHaveBeenCalledWith(
+      mocks.HistogramSeries,
+      expect.objectContaining({ priceScaleId: '', priceLineVisible: false }),
+    )
+    expect(mocks.volumeSeries.setData).toHaveBeenCalledWith([
+      { time: data[0]!.time, value: 12, color: '#285d50' },
+    ])
   })
 
   it('does not create a markers plugin in normal real-time mode', () => {

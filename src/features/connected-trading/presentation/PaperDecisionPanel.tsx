@@ -2,6 +2,7 @@ import type {
   PaperDecisionCondition,
   PaperDecisionEvent,
 } from '../infrastructure/connected-trading-provider.ts'
+import { paperDecisionReasonLabel } from './decision-labels.ts'
 
 type PaperDecisionPanelProps = {
   decisions: readonly PaperDecisionEvent[]
@@ -15,73 +16,80 @@ export default function PaperDecisionPanel({
   onSelect,
 }: PaperDecisionPanelProps) {
   return (
-    <section
-      className="connected-terminal__panel"
-      aria-label="Decisiones paper"
+    <aside
+      className="demo-terminal__panel demo-terminal__events"
+      aria-label="Decisiones del motor"
     >
-      <h2>Decisiones del motor</h2>
-      <p>
-        Evidencia prospectiva del motor. Motivo y condiciones: solo si el
-        evaluador los proporciona.
-      </p>
+      <div className="demo-terminal__panel-title">
+        <div>
+          <p className="demo-shell__eyebrow">EVIDENCIA DEL BACKEND · PAPER</p>
+          <h3>Decisiones del motor</h3>
+        </div>
+        <span>{decisions.length} eventos</span>
+      </div>
       {decisions.length === 0 ? (
-        <p role="status">No hay decisiones registradas.</p>
+        <p role="status" className="demo-terminal__empty">
+          No hay decisiones registradas.
+        </p>
       ) : (
-        <div className="connected-terminal__table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Hora del evento (UTC)</th>
-                <th>Recepción (UTC)</th>
-                <th>Estrategia</th>
-                <th>Dirección</th>
-                <th>Resultado</th>
-                <th>Motivo</th>
-                <th>Condiciones</th>
-              </tr>
-            </thead>
-            <tbody>
-              {decisions.map((decision) => (
-                <tr
-                  key={decision.id}
-                  data-selected={selectedId === decision.id}
-                >
-                  <td>
-                    <button
-                      type="button"
-                      aria-pressed={selectedId === decision.id}
-                      onClick={() => onSelect(decision)}
-                    >
-                      {new Date(decision.eventTime).toLocaleString('es-ES', {
-                        timeZone: 'UTC',
-                      })}
-                    </button>
-                  </td>
-                  <td>
-                    {new Date(decision.receivedAt).toLocaleString('es-ES', {
-                      timeZone: 'UTC',
-                    })}
-                  </td>
-                  <td>{decision.strategyId}</td>
-                  <td>{decision.direction === 'long' ? 'Larga' : 'Plana'}</td>
-                  <td>{outcomeLabel(decision.outcome)}</td>
-                  <td>
-                    {decision.reasonCode === null
-                      ? (decision.reason ?? 'No disponible')
-                      : reasonLabel(decision.reasonCode)}
-                  </td>
-                  <td>
-                    {decision.conditions.length > 0
-                      ? decision.conditions.map(conditionLabel).join(' · ')
-                      : 'No disponible'}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div className="demo-terminal__event-list">
+          {[...decisions].reverse().map((decision) => (
+            <button
+              type="button"
+              key={decision.id}
+              className={`demo-terminal__event ${selectedId === decision.id ? 'is-selected' : ''}`}
+              data-selected={selectedId === decision.id}
+              aria-pressed={selectedId === decision.id}
+              onClick={() => onSelect(decision)}
+            >
+              <span className="demo-terminal__event-kind">
+                {outcomeLabel(decision.outcome)}
+              </span>
+              <time>
+                {new Date(decision.eventTime).toLocaleString('es-ES', {
+                  timeZone: 'UTC',
+                })}{' '}
+                UTC
+              </time>
+              <span>
+                {decision.reasonCode === null
+                  ? (decision.reason ?? 'No disponible')
+                  : paperDecisionReasonLabel(decision.reasonCode)}
+              </span>
+              <strong>
+                {decision.strategyId} ·{' '}
+                {decision.direction === 'long' ? 'Larga' : 'Plana'} · Precio: No
+                disponible
+              </strong>
+              <small>
+                <span>
+                  Versión: {decision.strategyVersion || 'No disponible'}
+                </span>
+                <span>Sesión: {decision.sessionId ?? 'No disponible'}</span>
+                <span>
+                  Recepción UTC:{' '}
+                  {new Date(decision.receivedAt).toLocaleString('es-ES', {
+                    timeZone: 'UTC',
+                  })}
+                </span>
+                <span>
+                  Condiciones:{' '}
+                  {decision.conditions.length > 0 ? (
+                    decision.conditions.map(conditionLabel).join(' · ')
+                  ) : (
+                    <span>No disponible</span>
+                  )}
+                </span>
+              </small>
+            </button>
+          ))}
         </div>
       )}
-    </section>
+      <p className="demo-terminal__disclaimer">
+        Datos de decisión y recepción proporcionados por el backend; no implican
+        una ejecución.
+      </p>
+    </aside>
   )
 }
 
@@ -96,25 +104,6 @@ function outcomeLabel(outcome: PaperDecisionEvent['outcome']): string {
     case 'hold':
       return 'Sin cambio de exposición'
   }
-}
-
-function reasonLabel(code: string): string {
-  const labels: Record<string, string> = {
-    entry_conditions_met: 'Condiciones de entrada cumplidas',
-    entry_conditions_not_met: 'Condiciones de entrada no cumplidas',
-    exit_conditions_met: 'Condiciones de salida cumplidas',
-    exit_conditions_not_met: 'Condiciones de salida no cumplidas',
-    features_not_ready: 'Indicadores insuficientes para evaluar',
-    regime_unavailable: 'Régimen no disponible',
-    entry_gate_accepted: 'Gate de entrada aceptado',
-    entry_gate_rejected: 'Gate de entrada rechazado',
-    entry_gate_features_not_ready: 'Gate sin indicadores suficientes',
-    c27_take_profit: 'Salida C27: objetivo alcanzado',
-    c27_stop_loss: 'Salida C27: condición de stop',
-    c27_time_stop: 'Salida C27: límite temporal',
-    c27_hold: 'C27 mantiene la posición',
-  }
-  return labels[code] ?? `Código de decisión: ${code}`
 }
 
 function conditionLabel(condition: PaperDecisionCondition): string {

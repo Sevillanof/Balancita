@@ -1,16 +1,31 @@
-import { expect, test } from '@playwright/test'
+import { expect, test, type Locator } from '@playwright/test'
 
-const fixtureStart = 1_700_000_000_000
+const fixtureStart = 1_699_999_980_000
 
 function connectedFixtures() {
   const candle = {
-    timestamp: fixtureStart,
-    open: 50_000,
-    high: 51_000,
-    low: 49_000,
+    timestamp: fixtureStart + 60_000,
+    open: 50_470,
+    high: 50_540,
+    low: 50_420,
     close: 50_500,
     volume: 1,
   }
+  const candles = Array.from({ length: 241 }, (_, index) => {
+    const timestamp = fixtureStart - (240 - index) * 60_000 + 60_000
+    if (index === 240) return candle
+    const center = 48_000 + index * 10 + Math.sin(index / 5) * 65
+    const open = center + Math.sin(index / 2) * 18
+    const close = center + Math.cos(index / 3) * 22
+    return {
+      timestamp,
+      open,
+      high: Math.max(open, close) + 12 + (index % 4),
+      low: Math.min(open, close) - 11 - (index % 3),
+      close,
+      volume: 0.25 + (index % 9) * 0.17,
+    }
+  })
   const decision = (
     id: string,
     outcome: 'pending' | 'hold',
@@ -33,7 +48,7 @@ function connectedFixtures() {
   return {
     candle,
     snapshot: {
-      candles: [candle],
+      candles,
       collector: { enabled: true, running: false, newest_candle_iso: null },
       paper: {
         enabled: true,
@@ -49,7 +64,7 @@ function connectedFixtures() {
     decisions: {
       decisions: [
         decision('fixture-event-a', 'pending', 'long', 30_000),
-        decision('fixture-event-b', 'hold', 'flat', 45_000),
+        decision('fixture-event-b', 'hold', 'flat', 75_000),
       ],
     },
   }
@@ -72,6 +87,143 @@ async function routeConnectedApi(
     await route.continue()
   })
 }
+
+async function openIfClosed(details: Locator) {
+  if (
+    !(await details.evaluate((element) => (element as HTMLDetailsElement).open))
+  )
+    await details.locator('summary').click()
+}
+
+test('R01 reuses the demo chart renderer with representative fixture data', async ({
+  page,
+}, testInfo) => {
+  const fixture = connectedFixtures()
+  expect(fixture.snapshot.candles.length).toBeGreaterThanOrEqual(180)
+  expect(
+    fixture.snapshot.candles
+      .slice(1)
+      .every(
+        (candle, index) =>
+          candle.timestamp - fixture.snapshot.candles[index]!.timestamp ===
+          60_000,
+      ),
+  ).toBeTruthy()
+  expect(
+    new Set(fixture.snapshot.candles.map((candle) => candle.close)).size,
+  ).toBeGreaterThan(100)
+  expect(
+    new Set(fixture.snapshot.candles.map((candle) => candle.volume)).size,
+  ).toBeGreaterThan(5)
+  const pageErrors: string[] = []
+  const apiMethods: string[] = []
+  page.on('pageerror', (error) => pageErrors.push(error.message))
+  page.on('request', (request) => {
+    if (new URL(request.url()).pathname.startsWith('/api/'))
+      apiMethods.push(request.method())
+  })
+  await page.goto('/demo')
+  await expect(page.getByTestId('approved-trading-header')).toBeVisible()
+  await expect(
+    page.getByRole('img', { name: /Gráfico ilustrativo de velas/ }),
+  ).toBeVisible()
+  await expect(
+    page.locator('.demo-terminal__chart canvas').first(),
+  ).toBeVisible()
+  await page.waitForTimeout(500)
+  const demoChart = page.getByTestId('approved-chart-renderer')
+  expect(
+    Number(await demoChart.getAttribute('data-candle-count')),
+  ).toBeGreaterThan(0)
+  await page.screenshot({
+    path: `playwright-artifacts/design-repair/demo-${testInfo.project.name}.png`,
+    fullPage: true,
+  })
+
+  await page.clock.pauseAt(fixtureStart + 120_000)
+  await routeConnectedApi(page, async (url, route) => {
+    if (url.pathname === '/api/market/ohlc')
+      await route.fulfill({ json: { candles: fixture.snapshot.candles } })
+    else if (url.pathname === '/api/market/collector/status')
+      await route.fulfill({ json: fixture.snapshot.collector })
+    else if (url.pathname === '/api/paper-trading/status')
+      await route.fulfill({ json: fixture.snapshot.paper })
+    else if (url.pathname === '/api/paper-trading/orders')
+      await route.fulfill({ json: { orders: fixture.snapshot.orders } })
+    else if (url.pathname.includes('/positions'))
+      await route.fulfill({ json: { positions: [] } })
+    else if (url.pathname === '/api/paper-trading/strategies-summary')
+      await route.fulfill({ json: { strategies: fixture.snapshot.summary } })
+    else if (url.pathname === '/api/paper-trading/decisions')
+      await route.fulfill({ json: fixture.decisions })
+    else throw new Error(`Unexpected API request: ${url.pathname}`)
+  })
+  await page.goto('/terminal')
+  await expect(page.getByTestId('approved-chart-renderer')).toBeVisible()
+  await page.waitForTimeout(500)
+  await expect(
+    page.getByRole('heading', { name: 'Decisiones del motor' }),
+  ).toBeVisible()
+  await expect(
+    page.getByRole('heading', { name: 'Posiciones y operaciones' }),
+  ).toBeVisible()
+  await expect(
+    page.getByRole('button', { name: /fixture-version/ }),
+  ).toHaveCount(2)
+  expect(
+    await page
+      .locator('[data-testid="approved-chart-renderer"] canvas')
+      .count(),
+  ).toBeGreaterThan(0)
+
+  const geometry = await page.evaluate(() => {
+    const grid = document.querySelector<HTMLElement>(
+      '[data-testid="approved-terminal-layout"]',
+    )!
+    const chart = grid.children[0]!.getBoundingClientRect()
+    const decisions = grid.children[1]!.getBoundingClientRect()
+    const chartFrame = grid.querySelector<HTMLElement>(
+      '[data-testid="approved-chart-renderer"]',
+    )!
+    const frame = chartFrame.getBoundingClientRect()
+    return {
+      chart: {
+        left: chart.left,
+        top: chart.top,
+        width: chart.width,
+        height: chart.height,
+      },
+      decisions: {
+        left: decisions.left,
+        top: decisions.top,
+        width: decisions.width,
+      },
+      frame: { width: frame.width, height: frame.height },
+      viewport: window.innerWidth,
+      documentWidth: document.documentElement.scrollWidth,
+    }
+  })
+  expect(geometry.documentWidth).toBeLessThanOrEqual(geometry.viewport)
+  if (testInfo.project.name === 'desktop-1440x900') {
+    expect(geometry.frame.height).toBe(560)
+    expect(geometry.decisions.width).toBeGreaterThanOrEqual(310)
+    expect(geometry.chart.width).toBeGreaterThan(geometry.decisions.width)
+    expect(geometry.decisions.left).toBeGreaterThan(geometry.chart.left)
+  }
+  if (testInfo.project.name === 'desktop-1280x800')
+    expect(geometry.frame.height).toBe(560)
+  if (testInfo.project.name === 'mobile-390x844')
+    expect(geometry.frame.height).toBe(440)
+  if (testInfo.project.name === 'mobile-390x844')
+    expect(geometry.decisions.top).toBeGreaterThan(geometry.chart.top)
+
+  await page.screenshot({
+    path: `playwright-artifacts/design-repair/connected-${testInfo.project.name}.png`,
+    fullPage: true,
+  })
+  expect(apiMethods.every((method) => method === 'GET')).toBeTruthy()
+  expect(pageErrors).toEqual([])
+})
 
 async function traceFetchLifecycles(page: import('@playwright/test').Page) {
   await page.addInitScript(() => {
@@ -166,7 +318,7 @@ test('terminal reports unavailable without fallback and recovers only after retr
     if (failing) {
       await route.fulfill({ status: 503, json: { error: 'fixture outage' } })
     } else if (url.pathname === '/api/market/ohlc') {
-      await route.fulfill({ json: { candles: [fixture.candle] } })
+      await route.fulfill({ json: { candles: fixture.snapshot.candles } })
     } else if (url.pathname === '/api/market/collector/status') {
       await route.fulfill({ json: fixture.snapshot.collector })
     } else if (url.pathname === '/api/paper-trading/status') {
@@ -257,15 +409,17 @@ test('terminal reports unavailable without fallback and recovers only after retr
   await page.getByRole('button', { name: 'Reintentar' }).click()
   await expect(page.getByText('CONECTADO · PAPER')).toBeVisible()
   await expect(page.getByText('50.500,00 €')).toBeVisible()
-  const panel = page.getByRole('region', { name: 'Decisiones paper' })
-  const decisionRows = panel.getByRole('table').getByRole('row')
-  await expect(decisionRows).toHaveCount(3)
+  const panel = page.getByRole('complementary', {
+    name: 'Decisiones del motor',
+  })
+  const decisionButtons = panel.getByRole('button', { name: /fixture-version/ })
+  await expect(decisionButtons).toHaveCount(2)
   await expect(panel.getByText('Pendiente, sin ejecución')).toBeVisible()
   await expect(panel.getByText('Sin cambio de exposición')).toBeVisible()
   await expect(panel.getByText('Larga')).toBeVisible()
   await expect(panel.getByText('Plana')).toBeVisible()
-  const firstDecision = decisionRows.nth(1).getByRole('button')
-  const secondDecision = decisionRows.nth(2).getByRole('button')
+  const firstDecision = decisionButtons.nth(0)
+  const secondDecision = decisionButtons.nth(1)
   await firstDecision.click()
   await expect(firstDecision).toHaveAttribute('aria-pressed', 'true')
   await expect(secondDecision).toHaveAttribute('aria-pressed', 'false')
@@ -277,7 +431,7 @@ test('terminal reports unavailable without fallback and recovers only after retr
     await expect(
       page.getByRole('button', { name: interval, exact: true }),
     ).toHaveAttribute('aria-pressed', 'true')
-    await expect(decisionRows).toHaveCount(3)
+    await expect(decisionButtons).toHaveCount(2)
     await expect(panel.getByText('Pendiente, sin ejecución')).toBeVisible()
     await expect(panel.getByText('Sin cambio de exposición')).toBeVisible()
   }
@@ -295,9 +449,12 @@ test('terminal reports unavailable without fallback and recovers only after retr
       1,
     )
   }
-  expect(apiRequests).toHaveLength(
-    completeTrace.filter(({ aborted }) => !aborted).length,
+  const expectedPaths = new Set(
+    [...expectedEndpoints].map(
+      (endpoint) => new URL(endpoint, 'http://localhost').pathname,
+    ),
   )
+  expect(apiRequests.every((path) => expectedPaths.has(path))).toBeTruthy()
   expect(pageErrors).toEqual([])
 })
 
@@ -316,7 +473,7 @@ test('terminal retains its last source snapshot across a failed poll and retry',
     } else if (failSnapshot) {
       await route.fulfill({ status: 503, json: { error: 'fixture outage' } })
     } else if (url.pathname === '/api/market/ohlc') {
-      await route.fulfill({ json: { candles: [fixture.candle] } })
+      await route.fulfill({ json: { candles: fixture.snapshot.candles } })
     } else if (url.pathname === '/api/market/collector/status') {
       await route.fulfill({ json: fixture.snapshot.collector })
     } else if (url.pathname === '/api/paper-trading/status') {
@@ -334,24 +491,29 @@ test('terminal retains its last source snapshot across a failed poll and retry',
   await page.goto('/terminal')
   await expect(page.getByText('CONECTADO · PAPER')).toBeVisible()
   await expect(page.getByText('50.500,00 €')).toBeVisible()
+  const provenance = page.getByText('Proveniencia y horas UTC')
+  await provenance.click()
   await expect(
     page.getByText(
-      `Respuesta recibida: ${new Date(fixtureStart + 120_000).toLocaleString('es-ES', { timeZone: 'UTC' })} UTC`,
+      `Recepción: ${new Date(fixtureStart + 120_000).toLocaleString('es-ES', { timeZone: 'UTC' })} UTC`,
     ),
   ).toBeVisible()
-  await expect(page.getByText(/Apertura de última vela:/)).toBeVisible()
+  await expect(page.getByText(/Última vela:/)).toBeVisible()
   const decisions = page
-    .getByRole('region', { name: 'Decisiones paper' })
-    .getByRole('table')
-    .getByRole('row')
-  await expect(decisions).toHaveCount(3)
+    .getByRole('complementary', { name: 'Decisiones del motor' })
+    .getByRole('button', { name: /fixture-version/ })
+  await expect(decisions).toHaveCount(2)
 
   failSnapshot = true
   await page.clock.runFor(5_000)
   await expect(page.getByText('SIN CONEXIÓN · PAPER')).toBeVisible()
   await expect(page.getByText('50.500,00 €')).toBeVisible()
-  await expect(page.getByText('Datos desactualizados')).toBeVisible()
-  await expect(decisions).toHaveCount(3)
+  await expect(
+    page
+      .getByTestId('approved-trading-header')
+      .getByText('Datos desactualizados'),
+  ).toBeVisible()
+  await expect(decisions).toHaveCount(2)
   expect(
     requests.filter((request) => request === 'GET /api/market/ohlc').length,
   ).toBeLessThanOrEqual(3)
@@ -366,7 +528,7 @@ test('terminal retains its last source snapshot across a failed poll and retry',
   await page.getByRole('button', { name: 'Reintentar' }).click()
   await expect(page.getByText('CONECTADO · PAPER')).toBeVisible()
   await expect(page.getByText('50.500,00 €')).toBeVisible()
-  await expect(decisions).toHaveCount(3)
+  await expect(decisions).toHaveCount(2)
   const trace = await fetchTrace(page)
   expect(trace.every(({ settled }) => settled)).toBeTruthy()
   expect(trace.some(({ method }) => method === 'POST')).toBeFalsy()
@@ -385,7 +547,7 @@ test('terminal polling aborts on navigation and remounts with one active snapsho
   await page.clock.pauseAt(fixtureStart + 120_000)
   await routeConnectedApi(page, async (url, route) => {
     if (url.pathname === '/api/market/ohlc') {
-      await route.fulfill({ json: { candles: [fixture.candle] } })
+      await route.fulfill({ json: { candles: fixture.snapshot.candles } })
     } else if (url.pathname === '/api/market/collector/status') {
       await route.fulfill({ json: fixture.snapshot.collector })
     } else if (url.pathname === '/api/paper-trading/status') {
@@ -544,6 +706,7 @@ test('historical list merges a created run with delayed history and keeps user s
     }
   })
   await page.goto('/historicos')
+  await page.locator('.demo-history__run-selector summary').click()
   const form = page.getByRole('region', { name: 'Nueva prueba histórica' })
   await form
     .getByLabel('Inicio UTC (ISO 8601)')
@@ -555,10 +718,11 @@ test('historical list merges a created run with delayed history and keeps user s
   await expect.poll(() => pendingPost.length).toBe(1)
   resolvePost()
   await expect(
-    page.getByRole('button', { name: 'created-native', exact: true }),
-  ).toBeVisible()
-  await expect(
     page.getByRole('heading', { name: 'Corrida created-native' }),
+  ).toBeVisible()
+  await page.locator('.demo-history__run-selector summary').click()
+  await expect(
+    page.getByRole('button', { name: 'created-native', exact: true }),
   ).toBeVisible()
   releaseHistory()
   await expect(
@@ -571,6 +735,7 @@ test('historical list merges a created run with delayed history and keeps user s
   await expect(
     page.getByRole('heading', { name: 'Corrida stored-old' }),
   ).toBeVisible()
+  await openIfClosed(page.locator('.demo-history__run-metadata'))
   await expect(
     page.getByText('Dataset verificado: kraken_rest_ohlc'),
   ).toBeVisible()
@@ -733,12 +898,15 @@ test('late native artifact cannot replace the selected Python run or its ownersh
     }
   })
   await page.goto('/historicos')
+  await page.locator('.demo-history__run-selector summary').click()
   await page.getByRole('button', { name: native.id, exact: true }).click()
   await nativeRequested
+  await page.locator('.demo-history__run-selector summary').click()
   await page.getByRole('button', { name: python.id, exact: true }).click()
   await expect(
     page.getByRole('heading', { name: `Corrida ${python.id}` }),
   ).toBeVisible()
+  await openIfClosed(page.locator('.demo-history__run-metadata'))
   await expect(
     page.getByText('Ledger Python híbrido · señales TypeScript nativas'),
   ).toBeVisible()
@@ -756,10 +924,12 @@ test('late native artifact cannot replace the selected Python run or its ownersh
     page.getByText(`ID: ${python.id} · Dataset: ${python.datasetHash}`),
   ).toBeVisible()
   await expect(page.getByRole('alert')).toHaveCount(0)
+  await page.locator('.demo-history__run-selector summary').click()
   await page
     .getByRole('button', { name: delayedFailure.id, exact: true })
     .click()
   await failureRequested
+  await page.locator('.demo-history__run-selector summary').click()
   await page.getByRole('button', { name: python.id, exact: true }).click()
   await expect(
     page.getByRole('heading', { name: `Corrida ${python.id}` }),
@@ -800,6 +970,7 @@ test('uncertain replay transport failure advises history check without retrying 
     }
   })
   await page.goto('/historicos')
+  await page.locator('.demo-history__run-selector summary').click()
   const form = page.getByRole('region', { name: 'Nueva prueba histórica' })
   await form.getByLabel('Inicio UTC (ISO 8601)').fill('2023-11-14T22:13:20Z')
   await form.getByLabel('Fin UTC (ISO 8601)').fill('2023-11-14T22:14:20Z')
@@ -907,6 +1078,7 @@ test('pending replay keeps its submitted parameters when editable form values ch
     }
   })
   await page.goto('/historicos')
+  await page.locator('.demo-history__run-selector summary').click()
   const form = page.getByRole('region', { name: 'Nueva prueba histórica' })
   const startInput = form.getByLabel('Inicio UTC (ISO 8601)')
   const endInput = form.getByLabel('Fin UTC (ISO 8601)')
@@ -944,6 +1116,7 @@ test('pending replay keeps its submitted parameters when editable form values ch
   await expect(
     page.getByRole('heading', { name: `Corrida ${created.id}` }),
   ).toBeVisible()
+  await openIfClosed(page.locator('.demo-history__run-metadata'))
   await expect(page.getByText('Capital inicial: 30,00 €')).toBeVisible()
   await expect(cashInput).toHaveValue('77')
   await expect(startInput).toHaveValue(
@@ -1052,7 +1225,9 @@ test('fixture-backed saved history renders only verified fill times', async ({
     await route.continue()
   })
   await page.goto('/historicos')
+  await page.locator('.demo-history__run-selector summary').click()
   await page.getByRole('button', { name: run.id, exact: true }).click()
+  await openIfClosed(page.locator('.demo-history__run-metadata'))
   await expect(page.getByText(/Fills simulados a la apertura/)).toBeVisible()
   await expect(
     page.getByRole('cell', { name: '2023-11-14T22:14:20.000Z' }),
@@ -1089,6 +1264,106 @@ test('fixture-backed saved history renders only verified fill times', async ({
     ),
   ).toBeTruthy()
   await expect(page.getByRole('alert')).toHaveCount(0)
+})
+
+test('historical demo and connected views keep the approved form/results split', async ({
+  page,
+}, testInfo) => {
+  const errors: string[] = []
+  page.on('pageerror', (error) => errors.push(error.message))
+  await page.goto('/demo/historicas')
+  await page.getByRole('button', { name: /ejecutar simulación/i }).click()
+  await expect(page.getByText('Curva de capital')).toBeVisible()
+  await page.screenshot({
+    path: `playwright-artifacts/design-repair/historical-demo-${testInfo.project.name}.png`,
+    fullPage: true,
+  })
+
+  const start = fixtureStart
+  const run = {
+    id: 'visual-history-run',
+    datasetHash: 'visual-history-hash',
+    strategyId: 'micro-trend-pullback',
+    strategyOwner: 'typescript-native',
+    nativeTradeTimestampUnit: 'unix-milliseconds',
+    nativeTradeTimestampMeaning: 'simulated-next-15m-candle-open',
+    initialCashEur: 30,
+    window: { start_time: start, end_time: start + 60_000 },
+    trades: [],
+  }
+  const artifact = {
+    schema: 'fast-replay-artifact.v1',
+    runId: run.id,
+    datasetHash: run.datasetHash,
+    source: 'kraken_rest_ohlc',
+    engineOwner: 'typescript',
+    timestampUnit: 'unix-seconds',
+    candleIntervalSeconds: 60,
+    candleTimestampSemantics: 'bucket-start',
+    cutoffEpochMs: start + 60_000,
+    window: run.window,
+    candles: [
+      {
+        timestamp: start / 1000,
+        open: 50_000,
+        high: 51_000,
+        low: 49_000,
+        close: 50_500,
+        volume: 1,
+      },
+      {
+        timestamp: start / 1000 + 60,
+        open: 50_500,
+        high: 52_000,
+        low: 50_000,
+        close: 51_000,
+        volume: 2,
+      },
+    ],
+  }
+  const requests: string[] = []
+  await routeConnectedApi(page, async (url, route) => {
+    requests.push(`${route.request().method()} ${url.pathname}`)
+    if (url.pathname === '/api/replay/fast-run/history')
+      await route.fulfill({ json: { runs: [run] } })
+    else if (url.pathname.endsWith('/visual-history-run/artifact'))
+      await route.fulfill({ json: { artifact } })
+    else throw new Error(`Unexpected API request: ${url.pathname}`)
+  })
+  await page.goto('/historicos')
+  const layout = page.locator('.demo-history__layout')
+  const form = page.getByRole('region', { name: 'Nueva prueba histórica' })
+  const results = page.getByRole('region', {
+    name: 'Resultado de corrida guardada',
+  })
+  await page.locator('.demo-history__run-selector summary').click()
+  await page.getByRole('button', { name: run.id, exact: true }).click()
+  await expect(page.getByTestId('price-chart')).toBeVisible()
+  const [layoutBox, formBox, resultsBox] = await Promise.all([
+    layout.boundingBox(),
+    form.boundingBox(),
+    results.boundingBox(),
+  ])
+  expect(layoutBox).not.toBeNull()
+  expect(formBox).not.toBeNull()
+  expect(resultsBox).not.toBeNull()
+  if (testInfo.project.name === 'mobile-390x844') {
+    expect(resultsBox!.y).toBeGreaterThan(formBox!.y)
+  } else {
+    expect(resultsBox!.x).toBeGreaterThan(formBox!.x)
+    expect(resultsBox!.y).toBe(formBox!.y)
+  }
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth,
+    ),
+  ).toBeTruthy()
+  await page.screenshot({
+    path: `playwright-artifacts/design-repair/historical-connected-${testInfo.project.name}.png`,
+    fullPage: true,
+  })
+  expect(requests.every((entry) => entry.startsWith('GET '))).toBeTruthy()
+  expect(errors).toEqual([])
 })
 
 test('connected terminal and saved native/Python runs remain usable at this viewport', async ({
@@ -1145,14 +1420,13 @@ test('connected terminal and saved native/Python runs remain usable at this view
   ).toBeTruthy()
 
   await page.goto('/terminal')
-  await expect(
-    page.getByRole('heading', { name: 'Terminal BTC-EUR' }),
-  ).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Terminal' })).toBeVisible()
+  await page.getByText('Estado del motor y cuenta paper').click()
   await expect(
     page.getByRole('heading', { name: 'Estado del motor' }),
   ).toBeVisible()
   await expect(
-    page.getByRole('navigation', { name: 'Navegación conectada' }),
+    page.getByRole('navigation', { name: 'Navegación principal' }),
   ).toBeVisible()
   await page.screenshot({
     path: `playwright-artifacts/connected-terminal-${testInfo.project.name}.png`,
@@ -1167,13 +1441,17 @@ test('connected terminal and saved native/Python runs remain usable at this view
   await expect(
     page.getByRole('heading', { name: 'Nueva prueba histórica' }),
   ).toBeVisible()
+  await expect(page.getByTestId('approved-trading-header')).toBeVisible()
+  await expect(page.locator('.demo-shell__brand-mark svg')).toBeVisible()
   for (const run of [native!, python!]) {
+    await page.locator('.demo-history__run-selector summary').click()
     const row = page.getByRole('button', { name: run.id, exact: true })
     await expect(row).toBeVisible()
     await row.click()
     await expect(
       page.getByRole('heading', { name: `Corrida ${run.id}` }),
     ).toBeVisible()
+    await openIfClosed(page.locator('.demo-history__run-metadata'))
     await expect(
       page.getByText(/Dataset verificado: kraken_rest_ohlc/),
     ).toBeVisible()
@@ -1185,7 +1463,7 @@ test('connected terminal and saved native/Python runs remain usable at this view
     viewportWidth: window.innerWidth,
     bounds: [
       ...document.querySelectorAll(
-        '.demo-shell, .demo-shell__main, .connected-terminal__layout, .connected-terminal__panel, .chart__container',
+        '.demo-shell, .demo-shell__main, .demo-history__layout, .demo-history__panel, .chart__container',
       ),
     ].map((element) => ({
       className: element.className,
@@ -1204,7 +1482,9 @@ test('connected terminal and saved native/Python runs remain usable at this view
       .filter((element) => element.right > window.innerWidth + 1)
       .slice(0, 8),
     tables: [
-      ...document.querySelectorAll('.connected-terminal__table-wrap'),
+      ...document.querySelectorAll(
+        '.demo-history__table-scroll, .connected-terminal__table-wrap',
+      ),
     ].map((element) => ({
       left: Math.floor(element.getBoundingClientRect().left),
       right: Math.ceil(element.getBoundingClientRect().right),
@@ -1326,6 +1606,7 @@ test('submits one native and one Python replay against verified stored candles',
     await expect(
       page.getByRole('heading', { name: `Corrida ${payload.id}` }),
     ).toBeVisible()
+    await openIfClosed(page.locator('.demo-history__run-metadata'))
     await expect(
       page.getByText(/Dataset verificado: kraken_rest_ohlc/),
     ).toBeVisible()

@@ -32,6 +32,95 @@
   gap: 1.25rem;
   align-items: start;
 }
+.demo-history__results {
+  min-width: 0;
+}
+.historical-connected-form > p,
+.historical-connected-form form > p {
+  margin: 0;
+  color: #929da1;
+  font-size: 0.72rem;
+  line-height: 1.55;
+}
+.historical-connected-form form {
+  display: contents;
+}
+.historical-connected-form label {
+  display: grid;
+  gap: 0.45rem;
+  color: #aab3b5;
+  font-size: 0.75rem;
+}
+.historical-connected-form input,
+.historical-connected-form select {
+  width: 100%;
+  min-width: 0;
+  min-height: 2.5rem;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid #303a3e;
+  border-radius: 0.25rem;
+  background: #171c20;
+  color: #e6e9e9;
+  font: inherit;
+  color-scheme: dark;
+}
+.historical-connected-form button[type='submit'] {
+  min-height: 2.65rem;
+  border: 0;
+  border-radius: 0.25rem;
+  background: #55c7a2;
+  color: #101816;
+  font-weight: 600;
+  cursor: pointer;
+}
+.demo-history__connected-results {
+  min-width: 0;
+  padding: 1.25rem;
+}
+.demo-history__connected-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+.demo-history__connected-heading h2 {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.demo-history__run-selector {
+  position: relative;
+  flex: 0 0 auto;
+  color: #aab3b5;
+  font-size: 0.72rem;
+}
+.demo-history__run-selector summary {
+  cursor: pointer;
+}
+.demo-history__run-selector[open] > div,
+.demo-history__run-selector[open] > p,
+.demo-history__run-selector[open] > .connected-terminal__table-wrap {
+  position: absolute;
+  z-index: 2;
+  right: 0;
+  width: min(76vw, 42rem);
+  max-height: 20rem;
+  overflow: auto;
+  padding: 0.75rem;
+  border: 1px solid #303a3e;
+  background: #1b2024;
+  box-shadow: 0 0.7rem 1.5rem #0007;
+}
+.demo-history__run-selector button {
+  color: inherit;
+}
+.historical-connected-form button:focus-visible,
+.demo-history__run-selector summary:focus-visible {
+  outline: 2px solid #55c7a2;
+  outline-offset: 2px;
+}
 .demo-history__panel {
   border: 1px solid #303a3e;
   border-radius: 0.375rem;
@@ -233,5 +322,16 @@
   }
   .demo-history__curve svg {
     height: 15rem;
+  }
+  .demo-history__connected-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .demo-history__run-selector[open] > div,
+  .demo-history__run-selector[open] > p,
+  .demo-history__run-selector[open] > .connected-terminal__table-wrap {
+    right: auto;
+    left: 0;
+    width: calc(100vw - 48px);
   }
 }

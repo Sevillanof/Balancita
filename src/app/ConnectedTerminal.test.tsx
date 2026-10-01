@@ -2,9 +2,36 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render, screen } from '@testing-library/react'
 import ConnectedTerminal from './ConnectedTerminal.tsx'
 
-vi.mock('../features/price-chart/presentation/PriceChart.tsx', () => ({
-  default: () => null,
+const chartProbe = vi.hoisted(() => ({
+  candleTimes: [] as number[],
+  candleVolumes: [] as number[],
+  markers: [] as Array<{
+    id: string
+    time: number
+    type: string
+    label: string
+  }>,
 }))
+
+vi.mock(
+  '../features/trading-view/presentation/ApprovedTerminalChart.tsx',
+  () => ({
+    default: (props: {
+      candles: Array<{ time: number; volume: number }>
+      markers: Array<{ id: string; time: number; type: string; label: string }>
+    }) => {
+      chartProbe.candleTimes = props.candles.map((candle) => candle.time)
+      chartProbe.candleVolumes = props.candles.map((candle) => candle.volume)
+      chartProbe.markers = props.markers
+      return (
+        <div
+          data-testid="approved-chart-renderer"
+          className="demo-terminal__chart"
+        />
+      )
+    },
+  }),
+)
 
 afterEach(() => {
   cleanup()
@@ -49,7 +76,24 @@ describe('ConnectedTerminal', () => {
             : url.includes('/collector/status')
               ? { enabled: true, running: true, newest_candle_iso: null }
               : url.includes('/paper-trading/decisions')
-                ? { decisions: [] }
+                ? {
+                    decisions: [
+                      {
+                        id: 'native-decision-01',
+                        instrumentId: 'BTC-EUR',
+                        eventTime: 1_700_000_030_000,
+                        receivedAt: 1_700_000_031_000,
+                        strategyId: 'native-paper-fixture',
+                        strategyVersion: 'native-v1',
+                        direction: 'long',
+                        outcome: 'pending',
+                        reasonCode: null,
+                        sessionId: null,
+                        reason: 'Declared API fixture decision; not a fill.',
+                        conditions: [],
+                      },
+                    ],
+                  }
                 : { orders: [], strategies: [], positions: [] }
         return { ok: true, status: 200, json: async () => body }
       }),
@@ -64,6 +108,44 @@ describe('ConnectedTerminal', () => {
     expect(
       screen.queryByText(/datos simulados|modo demo/i),
     ).not.toBeInTheDocument()
+    const approvedLayout = screen.getByTestId('approved-terminal-layout')
+    expect(approvedLayout).toHaveClass('demo-terminal__grid')
+    expect(
+      approvedLayout.querySelector(
+        ':scope > [aria-label="Gráfico de velas BTC-EUR"]',
+      ),
+    ).not.toBeNull()
+    expect(
+      approvedLayout.querySelector(
+        ':scope > [aria-label="Decisiones del motor"]',
+      ),
+    ).not.toBeNull()
+    expect(screen.getByTestId('approved-trading-header')).toBeInTheDocument()
+    expect(screen.getByTestId('approved-market-row')).toBeInTheDocument()
+    expect(screen.getByTestId('approved-chart-toolbar')).toBeInTheDocument()
+    expect(screen.getByTestId('approved-portfolio-tables')).toBeInTheDocument()
+    expect(
+      screen
+        .getByLabelText('Balancita, volver a la aplicación')
+        .querySelector('.demo-shell__brand-mark'),
+    ).not.toBeNull()
+    expect(approvedLayout.querySelector('.demo-terminal__chart')).not.toBeNull()
+    expect(screen.getByTestId('approved-chart-renderer')).toBeInTheDocument()
+    expect(chartProbe.candleTimes).toEqual([1_699_999_980])
+    expect(chartProbe.candleVolumes).toEqual([2])
+    expect(chartProbe.markers).toEqual([
+      {
+        id: 'native-decision-01',
+        time: 1_700_000_030,
+        type: 'decision',
+        direction: 'long',
+        label: 'PEND',
+        decisionStatus: 'pending',
+      },
+    ])
+    expect(
+      screen.getByText('Declared API fixture decision; not a fill.'),
+    ).toBeInTheDocument()
   })
 
   it('does not substitute demo data when the backend is unavailable', async () => {

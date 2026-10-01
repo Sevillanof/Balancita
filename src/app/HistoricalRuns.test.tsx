@@ -88,6 +88,47 @@ const artifact = {
 }
 
 describe('connected historical replay runs', () => {
+  it('uses the approved shared brand header with explicit connected navigation', () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: true, json: async () => ({ runs: [] }) })),
+    )
+    render(<HistoricalRuns />)
+
+    const header = screen.getByTestId('approved-trading-header')
+    expect(
+      screen.getByRole('link', { name: 'Balancita, volver a la aplicación' }),
+    ).toHaveAttribute('href', '/')
+    expect(header.querySelector('.demo-shell__brand-mark svg')).not.toBeNull()
+    expect(
+      screen.getByRole('link', { name: 'Pruebas históricas' }),
+    ).toHaveAttribute('href', '/historicos')
+    expect(screen.getByRole('link', { name: 'Terminal' })).toHaveAttribute(
+      'href',
+      '/terminal',
+    )
+    expect(
+      screen.getByRole('link', { name: 'Pruebas históricas' }),
+    ).toHaveAttribute('aria-current', 'page')
+  })
+
+  it('places the connected form and selected result in the approved shared split', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: true, json: async () => ({ runs: [] }) })),
+    )
+    render(<HistoricalRuns />)
+
+    const layout = document.querySelector('.demo-history__layout')
+    expect(layout).not.toBeNull()
+    expect(layout?.firstElementChild).toContainElement(
+      screen.getByRole('region', { name: 'Nueva prueba histórica' }),
+    )
+    expect(layout?.lastElementChild).toContainElement(
+      screen.getByRole('region', { name: 'Resultado de corrida guardada' }),
+    )
+  })
+
   it('preserves a created run when the initial history response resolves late', async () => {
     let resolveHistory!: (response: {
       ok: boolean
@@ -124,6 +165,7 @@ describe('connected historical replay runs', () => {
     vi.stubGlobal('fetch', fetchMock)
     const user = userEvent.setup()
     render(<HistoricalRuns />)
+    await user.click(screen.getByText(/Historial \(/))
 
     await user.type(
       screen.getByLabelText('Inicio UTC (ISO 8601)'),
@@ -172,6 +214,7 @@ describe('connected historical replay runs', () => {
     vi.stubGlobal('fetch', fetchMock)
     const user = userEvent.setup()
     render(<HistoricalRuns />)
+    await user.click(screen.getByText(/Historial \(/))
 
     await user.click(await screen.findByRole('button', { name: /run-one/ }))
     await waitFor(() =>
@@ -191,6 +234,41 @@ describe('connected historical replay runs', () => {
     )
     expect(screen.getAllByText(/TypeScript nativo/).length).toBeGreaterThan(0)
     expect(screen.getAllByText(/No disponible/).length).toBeGreaterThan(0)
+    expect(screen.getByText('Patrimonio final (EUR)')).toBeInTheDocument()
+    expect(screen.queryByText('Curva de capital')).not.toBeInTheDocument()
+  })
+
+  it('keeps legacy ownership unknown and never substitutes current candles for a missing frozen artifact', async () => {
+    const legacyRun = {
+      ...run,
+      strategyOwner: undefined,
+      sizingModel: undefined,
+      nativeTradeTimestampUnit: undefined,
+      nativeTradeTimestampMeaning: undefined,
+      datasetHash: undefined,
+    }
+    const fetchMock = vi.fn(async (url: string) =>
+      url.includes('/artifact')
+        ? { ok: true, json: async () => ({ artifact: null }) }
+        : { ok: true, json: async () => ({ runs: [legacyRun] }) },
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const user = userEvent.setup()
+    render(<HistoricalRuns />)
+    await user.click(screen.getByText(/Historial \(/))
+    await user.click(await screen.findByRole('button', { name: /run-one/ }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      /artefacto de velas está ausente/i,
+    )
+    await user.click(screen.getByText('Parámetros, procedencia y auditoría'))
+    expect(screen.getByText('Propiedad: No disponible')).toBeInTheDocument()
+    expect(chart).toHaveBeenLastCalledWith(
+      expect.objectContaining({ data: [], markers: [] }),
+    )
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      expect.stringContaining('/api/market/ohlc'),
+    )
   })
 
   it('refuses an artifact belonging to a different selected run and keeps it uncharted', async () => {
@@ -209,6 +287,7 @@ describe('connected historical replay runs', () => {
     )
     const user = userEvent.setup()
     render(<HistoricalRuns />)
+    await user.click(screen.getByText(/Historial \(/))
     await user.click(await screen.findByRole('button', { name: /run-one/ }))
     expect(await screen.findByRole('alert')).toHaveTextContent(
       /no se puede verificar/i,

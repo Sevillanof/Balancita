@@ -123,7 +123,7 @@ export default function ReplayRunForm({
 
   return (
     <section
-      className="connected-terminal__panel"
+      className="demo-history__panel demo-history__form historical-connected-form"
       aria-label="Nueva prueba histórica"
     >
       <h2>Nueva prueba histórica</h2>

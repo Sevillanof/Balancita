@@ -312,6 +312,11 @@
   width: 100%;
   height: 440px;
 }
+.demo-terminal__chart.chart__container {
+  margin-top: 0;
+  border: 0;
+  border-radius: 0;
+}
 .demo-terminal__present {
   margin: 0.45rem 0 0 0.75rem;
   font-size: 0.68rem;
@@ -424,6 +429,8 @@
   color: var(--demo-text);
 }
 .demo-terminal__event small {
+  display: grid;
+  gap: 0.2rem;
   color: var(--demo-muted);
 }
 .demo-terminal__event-kind.is-entry {
@@ -529,12 +536,14 @@
 }
 
 @media (min-width: 1200px) {
-  .demo-terminal__chart {
+  .demo-terminal__chart,
+  .demo-terminal__chart.chart__container {
     height: 560px;
   }
 }
 @media (min-width: 901px) and (max-width: 1199px) {
-  .demo-terminal__chart {
+  .demo-terminal__chart,
+  .demo-terminal__chart.chart__container {
     height: 500px;
   }
 }
@@ -556,7 +565,8 @@
   .demo-terminal__clock {
     width: 100%;
   }
-  .demo-terminal__chart {
+  .demo-terminal__chart,
+  .demo-terminal__chart.chart__container {
     height: 440px;
   }
   .demo-terminal__legend small {

@@ -21,6 +21,12 @@ describe('demo navigation shell', () => {
     expect(
       screen.getByRole('heading', { name: 'Terminal' }),
     ).toBeInTheDocument()
+    expect(screen.getByTestId('approved-trading-header')).toBeInTheDocument()
+    expect(
+      screen
+        .getByLabelText('Balancita, ir a la terminal demo')
+        .querySelector('.demo-shell__brand-mark'),
+    ).not.toBeNull()
     expect(screen.getByText('DEMO · DATOS SIMULADOS')).toBeInTheDocument()
     expect(
       screen.getByRole('link', { name: 'Aplicación actual' }),

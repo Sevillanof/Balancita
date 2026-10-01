@@ -3,13 +3,10 @@
 }
 
 .connected-terminal__main {
-  display: grid;
   min-width: 0;
-  gap: 1rem;
   overflow-x: clip;
 }
 
-.connected-terminal__market,
 .connected-terminal__panel,
 .connected-terminal__error,
 .connected-terminal__state {
@@ -21,36 +18,31 @@
   padding: 1rem;
 }
 
-.connected-terminal__market > div,
-.connected-terminal__panel-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-}
-
-.connected-terminal__market strong {
-  display: block;
-  margin-top: 0.35rem;
-  font:
-    600 1.6rem 'IBM Plex Mono',
-    monospace;
-}
-
-.connected-terminal__market p,
-.connected-terminal__note,
 .connected-terminal__panel small {
   color: #aab6b5;
   font-size: 0.8rem;
 }
 
-.connected-terminal__layout {
-  display: grid;
-  grid-template-columns: minmax(0, 7fr) minmax(18rem, 3fr);
-  min-width: 0;
-  align-items: start;
-  gap: 1rem;
-  overflow-x: clip;
+.connected-terminal__metadata {
+  margin-top: 0.75rem;
+  color: var(--demo-muted);
+  font-size: 0.75rem;
+}
+
+.connected-terminal__metadata > summary {
+  cursor: pointer;
+}
+
+.connected-terminal__metadata summary {
+  cursor: pointer;
+  color: #aab6b5;
+  font-size: 0.8rem;
+}
+.connected-terminal__metadata[open] > section {
+  margin-top: 0.6rem;
+}
+.connected-terminal__metadata .connected-terminal__panel {
+  margin: 0;
 }
 
 .connected-terminal__panel h2 {
@@ -75,7 +67,6 @@
   font-family: 'IBM Plex Mono', monospace;
 }
 
-.connected-terminal__panel-heading button,
 .connected-terminal__error button {
   border: 1px solid #3b484a;
   border-radius: 0.25rem;
@@ -83,15 +74,6 @@
   color: inherit;
   padding: 0.35rem 0.55rem;
   cursor: pointer;
-}
-
-.connected-terminal__panel-heading button[aria-pressed='true'] {
-  border-color: #55c7a2;
-  color: #55c7a2;
-}
-
-.connected-terminal .chart__container {
-  height: 28rem;
 }
 
 .connected-terminal__table-wrap {
@@ -140,17 +122,4 @@
 .connected-terminal a:focus-visible {
   outline: 2px solid #55c7a2;
   outline-offset: 2px;
-}
-
-@media (max-width: 800px) {
-  .connected-terminal__layout {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .connected-terminal .chart__container {
-    height: 22rem;
-  }
-  .connected-terminal__market > div {
-    align-items: flex-start;
-    flex-direction: column;
-  }
 }

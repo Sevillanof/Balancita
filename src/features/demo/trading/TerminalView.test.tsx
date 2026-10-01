@@ -21,6 +21,21 @@ describe('demo terminal', () => {
 
   it('renders useful simulated data and keeps decisions separate from executions', () => {
     render(<TerminalView />)
+    const approvedLayout = screen.getByTestId('approved-terminal-layout')
+    expect(screen.getByTestId('approved-market-row')).toBeInTheDocument()
+    expect(screen.getByTestId('approved-chart-toolbar')).toBeInTheDocument()
+    expect(screen.getByTestId('approved-portfolio-tables')).toBeInTheDocument()
+    expect(approvedLayout).toHaveClass('demo-terminal__grid')
+    expect(
+      approvedLayout.querySelector(
+        ':scope > [aria-label="Gráfico de mercado"]',
+      ),
+    ).not.toBeNull()
+    expect(
+      approvedLayout.querySelector(
+        ':scope > [aria-label="Decisiones del motor"]',
+      ),
+    ).not.toBeNull()
     expect(
       screen.getByRole('heading', { name: 'Decisiones del motor' }),
     ).toBeInTheDocument()
