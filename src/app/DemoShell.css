@@ -222,7 +222,7 @@
 .demo-terminal__quote {
   display: grid;
   margin-left: auto;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
   text-align: right;
 }
 .demo-terminal__quote strong {
@@ -285,7 +285,7 @@
   border: 1px solid var(--demo-border);
   border-radius: 0.2rem;
   padding: 0.25rem 0.5rem;
-  font-family: ui-monospace, monospace;
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
 }
 .demo-terminal__intervals {
   display: flex;
@@ -359,7 +359,8 @@
   padding: 0.25rem 0.45rem;
   color: var(--demo-muted);
   font:
-    0.68rem ui-monospace,
+    0.68rem 'IBM Plex Mono',
+    ui-monospace,
     monospace;
 }
 .demo-terminal__event-list {
@@ -411,7 +412,8 @@
 .demo-terminal__event small {
   color: var(--demo-muted);
   font:
-    0.68rem ui-monospace,
+    0.68rem 'IBM Plex Mono',
+    ui-monospace,
     monospace;
 }
 .demo-terminal__event > span:nth-of-type(2) {
@@ -472,7 +474,7 @@
 }
 .demo-terminal__results-heading strong {
   margin-left: 0.3rem;
-  font-family: ui-monospace, monospace;
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
 }
 .demo-terminal__results-heading .is-positive {
   color: #55c7a2;
@@ -499,7 +501,8 @@
   border-collapse: collapse;
   white-space: nowrap;
   font:
-    0.68rem ui-monospace,
+    0.68rem 'IBM Plex Mono',
+    ui-monospace,
     monospace;
 }
 .demo-terminal__tables th,
@@ -578,10 +581,6 @@
 
   .demo-shell__status {
     gap: 8px;
-  }
-
-  .demo-shell__existing-link {
-    display: none;
   }
 
   .demo-shell__navigation {

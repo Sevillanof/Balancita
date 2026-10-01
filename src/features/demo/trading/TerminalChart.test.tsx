@@ -34,7 +34,10 @@ const chartMocks = vi.hoisted(() => {
     volume,
     timeScale,
     chart,
-    createChart: vi.fn(() => chart),
+    createChart: vi.fn((container: HTMLElement, options: unknown) => {
+      if (!container || !options) throw new Error('Chart options are required.')
+      return chart
+    }),
     createSeriesMarkers: vi.fn(() => ({ setMarkers: vi.fn() })),
   }
 })
@@ -63,6 +66,25 @@ describe('terminal chart viewport', () => {
       disconnect() {}
     }
     vi.stubGlobal('ResizeObserver', ResizeObserverStub)
+  })
+
+  it('uses the owned resize observer without enabling autoSize', () => {
+    render(
+      <TerminalChart
+        candles={[candle]}
+        decisions={[]}
+        positions={[]}
+        trades={[]}
+        selectedId=""
+        interval="1m"
+        onBucketSelect={vi.fn()}
+      />,
+    )
+
+    expect(chartMocks.createChart).toHaveBeenCalledWith(
+      expect.any(HTMLDivElement),
+      expect.objectContaining({ autoSize: false }),
+    )
   })
 
   it('fits once, then preserves the visible range while replacing corrected history', () => {

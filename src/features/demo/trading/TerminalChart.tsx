@@ -61,7 +61,7 @@ export default function TerminalChart({
     const node = container.current
     if (!node) return
     const chart = createChart(node, {
-      autoSize: true,
+      autoSize: false,
       layout: {
         background: { color: '#171c20' },
         textColor: '#8b969a',

@@ -23,6 +23,7 @@
 .demo-history__curve > div:first-child span {
   color: #d4aa62;
   font-size: 0.68rem;
+  font-family: 'IBM Plex Mono', monospace;
   letter-spacing: 0.06em;
 }
 .demo-history__layout {
@@ -197,6 +198,7 @@
   border-collapse: collapse;
   white-space: nowrap;
   font-size: 0.75rem;
+  font-family: 'IBM Plex Mono', monospace;
 }
 .demo-history__trades th,
 .demo-history__trades td {
