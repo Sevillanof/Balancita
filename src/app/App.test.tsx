@@ -276,4 +276,27 @@ describe('dashboard Gemini boundary', () => {
     expect(local.analyzeCall).not.toHaveBeenCalled()
     expect(gemini.analyzeCall).not.toHaveBeenCalled()
   })
+
+  it('routes /terminal to connected data without falling back when the API fails', async () => {
+    const priorPath = window.location.pathname
+    window.history.pushState({}, '', '/terminal')
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: false, status: 503, json: async () => ({}) })),
+    )
+    const view = render(<App />)
+    try {
+      expect(
+        await screen.findByRole('heading', { name: 'Terminal BTC-EUR' }),
+      ).toBeInTheDocument()
+      expect(await screen.findByRole('alert')).toHaveTextContent(
+        'No se pudo cargar la terminal conectada',
+      )
+      expect(screen.queryByText('Balancita (BTC/EUR)')).not.toBeInTheDocument()
+    } finally {
+      view.unmount()
+      vi.unstubAllGlobals()
+      window.history.pushState({}, '', priorPath)
+    }
+  })
 })

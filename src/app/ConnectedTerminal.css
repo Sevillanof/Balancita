@@ -1,0 +1,136 @@
+.connected-terminal {
+  min-height: 100vh;
+}
+
+.connected-terminal__main {
+  display: grid;
+  gap: 1rem;
+}
+
+.connected-terminal__market,
+.connected-terminal__panel,
+.connected-terminal__error,
+.connected-terminal__state {
+  border: 1px solid var(--demo-border, #303a3e);
+  border-radius: 0.375rem;
+  background: #171c20;
+  padding: 1rem;
+}
+
+.connected-terminal__market > div,
+.connected-terminal__panel-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.connected-terminal__market strong {
+  display: block;
+  margin-top: 0.35rem;
+  font:
+    600 1.6rem 'IBM Plex Mono',
+    monospace;
+}
+
+.connected-terminal__market p,
+.connected-terminal__note,
+.connected-terminal__panel small {
+  color: #aab6b5;
+  font-size: 0.8rem;
+}
+
+.connected-terminal__layout {
+  display: grid;
+  grid-template-columns: minmax(0, 7fr) minmax(18rem, 3fr);
+  align-items: start;
+  gap: 1rem;
+}
+
+.connected-terminal__panel h2 {
+  margin: 0 0 0.8rem;
+  font-size: 1rem;
+}
+
+.connected-terminal__panel h3 {
+  margin: 1rem 0 0.5rem;
+  font-size: 0.9rem;
+}
+
+.connected-terminal__panel dl {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.55rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.connected-terminal__panel dd {
+  margin: 0;
+  font-family: 'IBM Plex Mono', monospace;
+}
+
+.connected-terminal__panel-heading button,
+.connected-terminal__error button {
+  border: 1px solid #3b484a;
+  border-radius: 0.25rem;
+  background: transparent;
+  color: inherit;
+  padding: 0.35rem 0.55rem;
+  cursor: pointer;
+}
+
+.connected-terminal__panel-heading button[aria-pressed='true'] {
+  border-color: #55c7a2;
+  color: #55c7a2;
+}
+
+.connected-terminal .chart__container {
+  height: 28rem;
+}
+
+.connected-terminal__table-wrap {
+  overflow-x: auto;
+}
+.connected-terminal table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+.connected-terminal th,
+.connected-terminal td {
+  padding: 0.65rem;
+  border-bottom: 1px solid #303a3e;
+  text-align: left;
+  white-space: nowrap;
+}
+.connected-terminal th {
+  color: #aab6b5;
+  font-weight: 500;
+}
+.connected-terminal__stale {
+  color: #e6ba72;
+}
+.connected-terminal__error {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  color: #ff9b91;
+}
+.connected-terminal button:focus-visible,
+.connected-terminal a:focus-visible {
+  outline: 2px solid #55c7a2;
+  outline-offset: 2px;
+}
+
+@media (max-width: 800px) {
+  .connected-terminal__layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .connected-terminal .chart__container {
+    height: 22rem;
+  }
+  .connected-terminal__market > div {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}

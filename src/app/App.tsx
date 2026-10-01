@@ -16,6 +16,7 @@ import GeminiControl from '../features/analysis/presentation/GeminiControl.tsx'
 import { resolveMarketDataProviderMode } from '../features/market-data/infrastructure/market-data-provider.ts'
 import './App.css'
 import DemoShell from './DemoShell.tsx'
+import ConnectedTerminal from './ConnectedTerminal.tsx'
 
 type AppProps = {
   provider?: MarketDataProvider
@@ -78,6 +79,12 @@ function AppContent({
 
   return (
     <main className="app">
+      <nav
+        className="app__connected-navigation"
+        aria-label="Navegación de la aplicación"
+      >
+        <a href="/terminal">Terminal conectada</a>
+      </nav>
       <BtcEurDashboard
         provider={activeProvider}
         labProvider={activeLabProvider}
@@ -98,6 +105,7 @@ function AppContent({
 }
 
 export default function App(props: AppProps) {
+  if (window.location.pathname === '/terminal') return <ConnectedTerminal />
   if (
     window.location.pathname === '/demo' ||
     window.location.pathname.startsWith('/demo/')
