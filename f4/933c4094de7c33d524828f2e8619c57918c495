@@ -1,0 +1,14 @@
+odd/tasks/preserve-approved-connected-design.md
+  h_2f68313623be98 108-109
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f4933c4094de7c33d524828f2e8619c57918c495",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
