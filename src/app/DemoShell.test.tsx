@@ -30,7 +30,7 @@ describe('demo navigation shell', () => {
     ).toHaveAttribute('href', '/demo/historicas')
   })
 
-  it('selects the historical shell route without presenting unbuilt results', () => {
+  it('selects the functional historical demo route with its empty initial state', () => {
     window.history.pushState({}, '', '/demo/historicas')
     render(<DemoShell />)
 
@@ -38,8 +38,12 @@ describe('demo navigation shell', () => {
       screen.getByRole('heading', { name: 'Pruebas históricas' }),
     ).toBeInTheDocument()
     expect(
-      screen.getByText('Esta pantalla se completará en FE-A-04.'),
+      screen.getByRole('heading', { name: 'Sin resultados todavía' }),
     ).toBeInTheDocument()
+    expect(screen.getByLabelText('Activo')).toHaveValue('BTC/EUR')
+    expect(
+      screen.getByRole('button', { name: /ejecutar simulación/i }),
+    ).toBeEnabled()
     expect(
       screen.getByRole('link', { name: 'Pruebas históricas' }),
     ).toHaveAttribute('aria-current', 'page')

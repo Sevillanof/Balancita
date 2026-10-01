@@ -1,5 +1,7 @@
 import './DemoShell.css'
 import TerminalView from '../features/demo/trading/TerminalView.tsx'
+import HistoricalView from '../features/demo/history/HistoricalView.tsx'
+import { historicalDemoProvider } from '../features/demo/history/provider.ts'
 
 const terminalPath = '/demo'
 const historicalPath = '/demo/historicas'
@@ -77,14 +79,7 @@ export default function DemoShell() {
           <h1 id="demo-page-title">{title}</h1>
         </div>
         {historical ? (
-          <section
-            className="demo-shell__placeholder"
-            aria-label="Pruebas históricas demo"
-          >
-            <h2>Ejemplos históricos</h2>
-            <p>Esta pantalla se completará en FE-A-04.</p>
-            <p>Los resultados demostrativos todavía no están disponibles.</p>
-          </section>
+          <HistoricalView provider={historicalDemoProvider} />
         ) : (
           <TerminalView />
         )}
