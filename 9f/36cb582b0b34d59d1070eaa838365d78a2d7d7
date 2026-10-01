@@ -1,0 +1,74 @@
+e2e/connected-trading.pw.ts
+  h_2f68313623be98 1,3,7-10,14-28,51,67,91-227,321,412-416,421-422,434,452-455,457,476,494-495,498,501,503-505,511-516,531,550,709,721,723,725,738,901,904,909,927,932,973,1081,1119,1228,1230,1269-1368,1423-1424,1429,1444-1445,1447,1454,1466,1485-1487,1609
+odd/tasks/preserve-approved-connected-design.md
+  h_2f68313623be98 1-108
+src/app/App.test.tsx
+  h_2f68313623be98 290
+src/app/ConnectedTerminal.css
+  h_2f68313623be98 21-23,26-29,32-37,41-45
+src/app/ConnectedTerminal.test.tsx
+  h_2f68313623be98 5-13,16-35,79-96,111-148
+src/app/ConnectedTerminal.tsx
+  h_2f68313623be98 2-4,12-18,144,150,153-160,163-168,172-175,190-198,217-226,229-230,232-288,315-328,330-405,449,455-501,504-522,524-567,569-588
+src/app/DemoShell.css
+  h_2f68313623be98 315-319,432-433,539-540,545-546,568-569
+src/app/DemoShell.test.tsx
+  h_2f68313623be98 24-29
+src/app/DemoShell.tsx
+  h_2f68313623be98 13,25-41,49-51
+src/app/HistoricalRuns.test.tsx
+  h_2f68313623be98 91-131,168,217,237-271,290
+src/app/HistoricalRuns.tsx
+  h_2f68313623be98 5-11,116,171,278,281,294-302,308-327,329-385,387-388,390-518,521-552,554-579,581,584-586,589-592,594-606,609-618
+src/app/ReplayRunForm.tsx
+  h_2f68313623be98 126
+src/features/connected-trading/presentation/PaperDecisionPanel.tsx
+  h_2f68313623be98 5,19-21,23-29,31-33,35-85,88-92
+src/features/connected-trading/presentation/decision-labels.ts
+  h_2f68313623be98 1-18
+src/features/demo/history/HistoricalView.tsx
+  h_2f68313623be98 11-16,103-111,113-124,126-143,145-181,183-194,197-205,207-211,213-231,233-283,285-294,296-318
+src/features/demo/history/historical.css
+  h_2f68313623be98 35-123,326-336
+src/features/demo/trading/TerminalChart.test.tsx
+  h_2f68313623be98 22,29,38,44,49,75,90,121-169
+src/features/demo/trading/TerminalChart.tsx
+  h_2f68313623be98 1-4,11,20-27,39-65,68-76
+src/features/demo/trading/TerminalView.test.tsx
+  h_2f68313623be98 24-38
+src/features/demo/trading/TerminalView.tsx
+  h_2f68313623be98 5-9,70-74,115-123,125-129,131-146,148-163,165-263,306-310,327-383
+src/features/price-chart/presentation/PriceChart.test.tsx
+  h_2f68313623be98 12-17,30-32,40,45,53-54,71,142-163
+src/features/price-chart/presentation/PriceChart.tsx
+  h_2f68313623be98 18-21,25,27-29,81-91,125-131,135,145,154-164,167,173,179,189-201,242-254,279
+src/features/trading-view/presentation/ApprovedChartLegend.tsx
+  h_2f68313623be98 1-13
+src/features/trading-view/presentation/ApprovedChartToolbar.tsx
+  h_2f68313623be98 1-24
+src/features/trading-view/presentation/ApprovedMarketRow.tsx
+  h_2f68313623be98 1-25
+src/features/trading-view/presentation/ApprovedPortfolioTables.tsx
+  h_2f68313623be98 1-90
+src/features/trading-view/presentation/ApprovedTerminalChart.tsx
+  h_2f68313623be98 1-310
+src/features/trading-view/presentation/ApprovedTerminalLayout.tsx
+  h_2f68313623be98 1-18
+src/features/trading-view/presentation/ApprovedTradingHeader.tsx
+  h_2f68313623be98 1-71
+src/features/trading-view/presentation/HistoricalPresentationSlots.tsx
+  h_2f68313623be98 1-53
+src/features/trading-view/presentation/HistoricalWorkbench.tsx
+  h_2f68313623be98 1-17
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9f36cb582b0b34d59d1070eaa838365d78a2d7d7",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
