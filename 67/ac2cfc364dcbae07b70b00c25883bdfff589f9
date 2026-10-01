@@ -1,0 +1,34 @@
+odd/tasks/approved-lovable-frontend.md
+  h_2f68313623be98 97,100,115,121-139
+src/app/DemoShell.css
+  h_2f68313623be98 290-310,315-318,328-331,369-387,533-537,557
+src/features/demo/trading/TerminalChart.test.tsx
+  h_2f68313623be98 1-95
+src/features/demo/trading/TerminalChart.tsx
+  h_2f68313623be98 7-12,14-20,25-29,32-40,42-58,106-134,142-145,148-150,152-155,160-284,287-301
+src/features/demo/trading/TerminalView.test.tsx
+  h_2f68313623be98 7-16,55-98
+src/features/demo/trading/TerminalView.tsx
+  h_2f68313623be98 1,5-9,30-37,41-47,56,60-92,141-158,161-167,170-185,198,201,205-208,239-271
+src/features/demo/trading/provider.test.ts
+  h_2f68313623be98 26-35
+src/features/demo/trading/provider.ts
+  h_2f68313623be98 28,156-157,219,286-287
+src/features/demo/trading/terminal-model.test.ts
+  h_2f68313623be98 1-39
+src/features/demo/trading/terminal-model.ts
+  h_2f68313623be98 1-49
+src/features/demo/trading/types.ts
+  h_2f68313623be98 47-48
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "67ac2cfc364dcbae07b70b00c25883bdfff589f9",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
