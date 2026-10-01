@@ -1,0 +1,42 @@
+server/src/features/simulations/fast-replay-engine.test.ts
+  h_2f68313623be98 4,10,13-73
+server/src/app/paper-decision-events-api.test.ts
+  h_2f68313623be98 1-103
+server/src/features/market-data/market-store.test.ts
+  h_2f68313623be98 68,78,181,293,315
+server/src/features/simulations/fast-replay-engine.ts
+  h_2f68313623be98 84-89,402,405-413,439-446
+server/src/features/simulations/micro-strategy.test.ts
+  h_2f68313623be98 86-267
+server/src/features/simulations/paper-decision-events.test.ts
+  h_2f68313623be98 1-147
+server/src/features/simulations/micro-strategy.ts
+  h_2f68313623be98 2,39-43,61-72,74-106,108-125,127-128,132-149,157,164-175,191-223,225-228,243-246,248,259-262,264,275-288,291-303,305-330,333-338,340-396
+server/src/features/simulations/paper-forward.ts
+  h_2f68313623be98 1-3,6,28,95,177,183-185,188,191-201,205-210,212-219,233,239-241,243-265,267-274,291-298,307-314,321-331,504-540
+server/src/features/market-data/market-store.ts
+  h_2f68313623be98 12,61-75,507-579,2228-2263,2267-2291
+server/src/app/app.ts
+  h_2f68313623be98 631-674
+server/src/domain/contracts.ts
+  h_2f68313623be98 13-22
+server/src/features/market-data/fast-replay-store.test.ts
+  h_2f68313623be98 20,73
+server/src/features/news/news-store.test.ts
+  h_2f68313623be98 60
+server/src/features/replay/forecast-source-mode.test.ts
+  h_2f68313623be98 214,249,253,261
+server/src/features/shadow-runs/shadow-store.test.ts
+  h_2f68313623be98 87
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1ee7dc5335a854934a828bc8608834a566c41ba9",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
