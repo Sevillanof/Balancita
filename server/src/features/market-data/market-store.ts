@@ -9,6 +9,7 @@ import {
   type ForecastHorizon,
   type ForecastRecord,
   type ForecastSourceMode,
+  type DecisionCondition,
   type NewsEvidenceRecord,
   type NewsRelevance,
   type SupportedInstrumentId,
@@ -55,6 +56,21 @@ export interface PaperOrder {
   readonly feeEur: number
   readonly pnlEur: number | null
   readonly targetPct: number
+}
+
+export interface PaperDecisionEvent {
+  readonly id: string
+  readonly instrumentId: 'BTC-EUR'
+  readonly eventTime: number
+  readonly receivedAt: number
+  readonly strategyId: string
+  readonly strategyVersion: string
+  readonly direction: 'flat' | 'long'
+  readonly outcome: 'abstained' | 'gate-rejected' | 'pending' | 'hold'
+  readonly reason: string | null
+  readonly reasonCode: string | null
+  readonly sessionId: string | null
+  readonly conditions: readonly DecisionCondition[]
 }
 
 export interface PaperOrderSignalAggregate {
@@ -485,6 +501,79 @@ export class MarketStore {
       feeEur: Number(row.fee_eur),
       pnlEur: row.pnl_eur === null ? null : Number(row.pnl_eur),
       targetPct: Number(row.target_pct),
+    }))
+  }
+
+  insertPaperDecision(event: PaperDecisionEvent): boolean {
+    const result = this.database
+      .prepare(
+        `INSERT OR IGNORE INTO paper_decision_events
+          (id, instrument_id, event_time, received_at, strategy_id,
+           strategy_version, direction, outcome, reason, conditions_json,
+           reason_code, session_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        event.id,
+        event.instrumentId,
+        event.eventTime,
+        event.receivedAt,
+        event.strategyId,
+        event.strategyVersion,
+        event.direction,
+        event.outcome,
+        event.reason,
+        JSON.stringify(event.conditions),
+        event.reasonCode,
+        event.sessionId,
+      )
+    return Number(result.changes) > 0
+  }
+
+  listPaperDecisions(
+    options: {
+      readonly limit?: number
+      readonly before?: number
+      readonly beforeId?: string
+      readonly strategyId?: string
+    } = {},
+  ): readonly PaperDecisionEvent[] {
+    const limit = Math.max(1, Math.min(501, Math.trunc(options.limit ?? 100)))
+    const rows = this.database
+      .prepare(
+        `SELECT * FROM paper_decision_events
+         WHERE (? IS NULL OR event_time < ? OR (event_time = ? AND id < ?))
+           AND (? IS NULL OR strategy_id = ?)
+         ORDER BY event_time DESC, id DESC LIMIT ?`,
+      )
+      .all(
+        options.before ?? null,
+        options.before ?? null,
+        options.before ?? null,
+        options.beforeId ?? null,
+        options.strategyId ?? null,
+        options.strategyId ?? null,
+        limit,
+      ) as SqlRow[]
+    return rows.map((row) => ({
+      id: String(row.id),
+      instrumentId: 'BTC-EUR',
+      eventTime: Number(row.event_time),
+      receivedAt: Number(row.received_at),
+      strategyId: String(row.strategy_id),
+      strategyVersion: String(row.strategy_version),
+      direction: row.direction as 'flat' | 'long',
+      outcome: row.outcome as PaperDecisionEvent['outcome'],
+      reason: row.reason === null ? null : String(row.reason),
+      reasonCode:
+        row.reason_code === null || row.reason_code === undefined
+          ? null
+          : String(row.reason_code),
+      sessionId:
+        row.session_id === null || row.session_id === undefined
+          ? null
+          : String(row.session_id),
+      conditions: decisionConditionsFromJson(String(row.conditions_json)),
     }))
   }
 
@@ -2136,7 +2225,68 @@ export class MarketStore {
         throw error
       }
     }
+    if (currentVersion < 11) {
+      this.database.exec(`
+        CREATE TABLE IF NOT EXISTS paper_decision_events (
+          id TEXT PRIMARY KEY,
+          instrument_id TEXT NOT NULL CHECK (instrument_id = 'BTC-EUR'),
+          event_time INTEGER NOT NULL,
+          received_at INTEGER NOT NULL,
+          strategy_id TEXT NOT NULL,
+          strategy_version TEXT NOT NULL,
+          direction TEXT NOT NULL CHECK (direction IN ('flat', 'long')),
+          outcome TEXT NOT NULL CHECK (outcome IN ('abstained', 'gate-rejected', 'pending', 'hold')),
+          reason TEXT,
+          conditions_json TEXT NOT NULL
+        ) STRICT;
+        CREATE INDEX IF NOT EXISTS idx_paper_decision_events_time
+          ON paper_decision_events(event_time DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_paper_decision_events_strategy_time
+          ON paper_decision_events(strategy_id, event_time DESC, id DESC);
+      `)
+      this.database
+        .prepare(
+          'INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)',
+        )
+        .run(11, this.clock())
+    }
+    if (currentVersion < 12) {
+      this.database.exec(`
+        ALTER TABLE paper_decision_events ADD COLUMN reason_code TEXT;
+        ALTER TABLE paper_decision_events ADD COLUMN session_id TEXT;
+      `)
+      this.database
+        .prepare(
+          'INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)',
+        )
+        .run(12, this.clock())
+    }
   }
+}
+
+function decisionConditionsFromJson(
+  value: string,
+): readonly DecisionCondition[] {
+  const parsed: unknown = JSON.parse(value)
+  if (!Array.isArray(parsed)) return []
+  return parsed.every(isDecisionCondition) ? parsed : []
+}
+
+function isDecisionCondition(value: unknown): value is DecisionCondition {
+  if (typeof value !== 'object' || value === null || Array.isArray(value))
+    return false
+  const condition = value as Record<string, unknown>
+  return (
+    typeof condition.code === 'string' &&
+    (typeof condition.value === 'number' ||
+      typeof condition.value === 'boolean' ||
+      condition.value === null) &&
+    typeof condition.operator === 'string' &&
+    (typeof condition.threshold === 'number' ||
+      typeof condition.threshold === 'boolean' ||
+      condition.threshold === null) &&
+    typeof condition.passed === 'boolean'
+  )
 }
 
 function streamKey(source: string, instrumentId: string): string {

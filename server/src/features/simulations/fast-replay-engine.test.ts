@@ -1,13 +1,76 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import {
+  fastReplayCanEnter,
   fastReplayFeaturesAt,
   resample1mTo15m,
   runFastReplay,
 } from './fast-replay-engine.ts'
 import type { FastReplayDecisionSnapshot } from './fast-replay-engine.ts'
+import type { MicroStrategyFeatures } from './micro-strategy.ts'
 
 describe('runFastReplay', () => {
+  it('exposes the exact entry-gate distance, threshold, and result without changing the boolean', () => {
+    const features = {
+      ready: true,
+      close: 100,
+      atr14: 0.3,
+      bollingerWidth: 1,
+      donchianHigh20: 102,
+      donchianLow20: 98,
+    } as MicroStrategyFeatures
+    const traces: unknown[] = []
+    expect(
+      fastReplayCanEnter(
+        'micro-trend-pullback',
+        features,
+        null,
+        null,
+        (trace) => traces.push(trace),
+      ),
+    ).toBe(true)
+    expect(traces[0]).toEqual({
+      reasonCode: 'entry_gate_accepted',
+      distance: 0.006,
+      threshold: 0.006,
+      passed: true,
+    })
+
+    const rejected: unknown[] = []
+    expect(
+      fastReplayCanEnter(
+        'micro-trend-pullback',
+        { ...features, atr14: 0.299 },
+        null,
+        null,
+        (trace) => rejected.push(trace),
+      ),
+    ).toBe(false)
+    expect(rejected[0]).toEqual({
+      reasonCode: 'entry_gate_rejected',
+      distance: (2 * 0.299) / 100,
+      threshold: 0.006,
+      passed: false,
+    })
+
+    const unready: unknown[] = []
+    expect(
+      fastReplayCanEnter(
+        'micro-trend-pullback',
+        { ...features, ready: false },
+        null,
+        null,
+        (trace) => unready.push(trace),
+      ),
+    ).toBe(false)
+    expect(unready[0]).toEqual({
+      reasonCode: 'entry_gate_features_not_ready',
+      distance: null,
+      threshold: null,
+      passed: false,
+    })
+  })
+
   it('matches the shared frozen UTC 1m-to-15m closed-interval contract', () => {
     const fixture = JSON.parse(
       readFileSync(

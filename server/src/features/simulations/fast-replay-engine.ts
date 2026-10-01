@@ -81,6 +81,12 @@ export interface FastReplayDecisionSnapshot {
   }
   readonly postExposure: 'flat' | 'long'
 }
+export interface FastReplayEntryGateDiagnostic {
+  readonly reasonCode: string
+  readonly distance: number | null
+  readonly threshold: number | null
+  readonly passed: boolean
+}
 const HORIZON = 1
 export const FAST_REPLAY_FEE =
   KRAKEN_PRO_SPOT_TIER1_TAKER_FEE_SCENARIO.commissionRate
@@ -393,9 +399,18 @@ export function fastReplayCanEnter(
   features: MicroStrategyFeatures,
   activeRegime: 'trend' | 'range' | null,
   macroFeatures: MicroStrategyFeatures | null = null,
+  onDiagnostic?: (diagnostic: FastReplayEntryGateDiagnostic) => void,
 ): boolean {
   void macroFeatures
-  if (features.ready !== true) return false
+  if (features.ready !== true) {
+    onDiagnostic?.({
+      reasonCode: 'entry_gate_features_not_ready',
+      distance: null,
+      threshold: null,
+      passed: false,
+    })
+    return false
+  }
   const distance =
     id === 'micro-trend-pullback'
       ? features.atr14 == null
@@ -421,7 +436,14 @@ export function fastReplayCanEnter(
       : id === 'micro-donchian-breakout'
         ? 0.008
         : FAST_REPLAY_COST_GATE
-  return distance >= threshold
+  const passed = distance >= threshold
+  onDiagnostic?.({
+    reasonCode: passed ? 'entry_gate_accepted' : 'entry_gate_rejected',
+    distance,
+    threshold,
+    passed,
+  })
+  return passed
 }
 
 export function resample1mTo15m(

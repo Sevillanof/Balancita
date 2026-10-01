@@ -83,6 +83,188 @@ describe('micro strategy target state', () => {
     ).toBe('flat')
   })
 
+  it('exposes branch-computed entry and exit facts without changing the result shape', () => {
+    const diagnostics: unknown[] = []
+    const entered = evaluateMicroTarget(
+      'trend-pullback',
+      readyFeatures,
+      initialMicroState(),
+      undefined,
+      (diagnostic) => diagnostics.push(diagnostic),
+    )
+    expect(entered).toEqual({
+      target: 'long',
+      state: { exposure: 'long', regime: null },
+      abstained: false,
+    })
+    expect(diagnostics[0]).toMatchObject({
+      reasonCode: 'entry_conditions_met',
+      conditions: expect.arrayContaining([
+        {
+          code: 'entry_ema9_above_ema21',
+          value: 12,
+          operator: '>',
+          threshold: 11,
+          passed: true,
+        },
+        {
+          code: 'entry_close_above_sma50',
+          value: 12,
+          operator: '>',
+          threshold: 10,
+          passed: true,
+        },
+        {
+          code: 'entry_rsi_below_45',
+          value: 29,
+          operator: '<',
+          threshold: 45,
+          passed: true,
+        },
+      ]),
+    })
+
+    const failedDiagnostics: unknown[] = []
+    const failed = evaluateMicroTarget(
+      'trend-pullback',
+      { ...readyFeatures, ema9: 10 },
+      initialMicroState(),
+      undefined,
+      (diagnostic) => failedDiagnostics.push(diagnostic),
+    )
+    expect(failed.target).toBe('flat')
+    expect(failedDiagnostics[0]).toMatchObject({
+      reasonCode: 'entry_conditions_not_met',
+      conditions: expect.arrayContaining([
+        {
+          code: 'entry_ema9_above_ema21',
+          value: 10,
+          operator: '>',
+          threshold: 11,
+          passed: false,
+        },
+      ]),
+    })
+    expect(
+      (failedDiagnostics[0] as { conditions: unknown[] }).conditions,
+    ).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: 'entry_close_above_sma50' }),
+      ]),
+    )
+  })
+
+  it('reports readiness and regime-abstention predicates only when evaluated', () => {
+    const unready: unknown[] = []
+    expect(
+      evaluateMicroTarget(
+        'trend-pullback',
+        { ...readyFeatures, ready: false },
+        initialMicroState(),
+        undefined,
+        (diagnostic) => unready.push(diagnostic),
+      ),
+    ).toMatchObject({ target: 'flat', abstained: true })
+    expect(unready[0]).toMatchObject({
+      reasonCode: 'features_not_ready',
+      conditions: expect.arrayContaining([
+        {
+          code: 'features_ready',
+          value: false,
+          operator: 'is',
+          threshold: true,
+          passed: false,
+        },
+      ]),
+    })
+
+    const regime: unknown[] = []
+    const result = evaluateMicroTarget(
+      'regime-adapter',
+      readyFeatures,
+      initialMicroState(),
+      null,
+      (diagnostic) => regime.push(diagnostic),
+    )
+    expect(result).toMatchObject({ target: 'flat', abstained: true })
+    expect(regime[0]).toMatchObject({
+      reasonCode: 'regime_unavailable',
+      conditions: expect.arrayContaining([
+        {
+          code: 'atr_percentile_available',
+          value: false,
+          operator: 'is',
+          threshold: true,
+          passed: false,
+        },
+      ]),
+    })
+
+    for (const percentile of [40, 60]) {
+      const boundary: unknown[] = []
+      const decision = evaluateMicroTarget(
+        'regime-adapter',
+        { ...readyFeatures, atrPercentile50: percentile },
+        initialMicroState(),
+        undefined,
+        (diagnostic) => boundary.push(diagnostic),
+      )
+      expect(decision.abstained).toBe(true)
+      expect(boundary[0]).toMatchObject({
+        reasonCode: 'regime_unavailable',
+        conditions: expect.arrayContaining([
+          expect.objectContaining({
+            value: percentile,
+            passed: false,
+          }),
+        ]),
+      })
+    }
+
+    for (const [percentile, expectedRegime] of [
+      [39.99, 'range'],
+      [60.01, 'trend'],
+    ] as const) {
+      const decision = evaluateMicroTarget(
+        'regime-adapter',
+        { ...readyFeatures, atrPercentile50: percentile },
+        initialMicroState(),
+      )
+      expect(decision.state.regime).toBe(expectedRegime)
+    }
+  })
+
+  it('reports the existing long-position exit predicates without changing target', () => {
+    const diagnostics: unknown[] = []
+    const decision = evaluateMicroTarget(
+      'trend-pullback',
+      readyFeatures,
+      { exposure: 'long', regime: null },
+      undefined,
+      (diagnostic) => diagnostics.push(diagnostic),
+    )
+    expect(decision.target).toBe('long')
+    expect(diagnostics[0]).toMatchObject({
+      reasonCode: 'exit_conditions_not_met',
+      conditions: expect.arrayContaining([
+        {
+          code: 'exit_close_below_ema21',
+          value: 12,
+          operator: '<',
+          threshold: 11,
+          passed: false,
+        },
+        {
+          code: 'exit_rsi_above_68',
+          value: 29,
+          operator: '>',
+          threshold: 68,
+          passed: false,
+        },
+      ]),
+    })
+  })
+
   it('uses trend/range regime hysteresis and starts flat without a regime', () => {
     const initial = initialMicroState()
     expect(

@@ -17,7 +17,7 @@ describe('Fast Replay MarketStore migration', () => {
     const directory = mkdtempSync(join(tmpdir(), 'balancita-fast-replay-'))
     directories.push(directory)
     const store = new MarketStore({ path: join(directory, 'market.sqlite') })
-    expect(store.schemaVersion()).toBe(10)
+    expect(store.schemaVersion()).toBe(12)
     expect(
       store.upsertOhlcCandles([
         { timestamp: 60, open: 10, high: 11, low: 9, close: 10, volume: 2 },
@@ -70,7 +70,7 @@ describe('Fast Replay MarketStore migration', () => {
     )
     legacy.close()
     const store = new MarketStore({ path })
-    expect(store.schemaVersion()).toBe(10)
+    expect(store.schemaVersion()).toBe(12)
     const verify = new DatabaseSync(path)
     expect(verify.prepare('SELECT id FROM legacy_rows').get()).toEqual({
       id: 'preserve-me',

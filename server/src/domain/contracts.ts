@@ -10,6 +10,16 @@ import {
 
 export type TimestampMs = number & { readonly __unit: 'epoch-milliseconds' }
 
+export type DecisionConditionValue = number | boolean | null
+
+export interface DecisionCondition {
+  readonly code: string
+  readonly value: DecisionConditionValue
+  readonly operator: string
+  readonly threshold: DecisionConditionValue
+  readonly passed: boolean
+}
+
 export function parseTimestampMs(
   input: unknown,
   path = 'timestamp',

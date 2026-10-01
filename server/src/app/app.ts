@@ -628,6 +628,50 @@ export async function buildApp(options: {
           ) ?? [],
     }
   })
+  app.get('/api/paper-trading/decisions', (request, reply) => {
+    const query = request.query as {
+      limit?: unknown
+      before?: unknown
+      before_id?: unknown
+      strategy_id?: unknown
+    }
+    const limit = query.limit === undefined ? 100 : Number(query.limit)
+    const before = query.before === undefined ? undefined : Number(query.before)
+    if (
+      !Number.isSafeInteger(limit) ||
+      limit < 1 ||
+      (before !== undefined && (!Number.isSafeInteger(before) || before < 0)) ||
+      (before !== undefined && typeof query.before_id !== 'string') ||
+      (before === undefined && query.before_id !== undefined) ||
+      (query.strategy_id !== undefined &&
+        (typeof query.strategy_id !== 'string' ||
+          query.strategy_id.length === 0))
+    )
+      return reply.code(400).send({
+        error: {
+          code: 'invalid_request',
+          message: 'Decision query parameters are invalid.',
+        },
+      })
+    const pageLimit = Math.min(limit, 500)
+    const page =
+      marketStore?.listPaperDecisions({
+        limit: pageLimit + 1,
+        before,
+        beforeId: query.before_id as string | undefined,
+        strategyId: query.strategy_id as string | undefined,
+      }) ?? []
+    const hasMore = page.length > pageLimit
+    const decisions = hasMore ? page.slice(0, pageLimit) : page
+    const last = decisions.at(-1)
+    return {
+      decisions,
+      nextCursor:
+        hasMore && last !== undefined
+          ? { before: last.eventTime, before_id: last.id }
+          : null,
+    }
+  })
   app.get('/api/paper-trading/strategies-summary', () => {
     return getStrategiesAnalyticsSummary({
       paperOrderSignalAggregates: () =>
