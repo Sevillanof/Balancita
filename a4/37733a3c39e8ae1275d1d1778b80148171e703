@@ -1,0 +1,14 @@
+odd/tasks/connected-trading-view.md
+  h_2f68313623be98 170,194-197
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a437733a3c39e8ae1275d1d1778b80148171e703",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
