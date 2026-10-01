@@ -15,6 +15,7 @@ import type { AnalysisMode } from '../features/analysis/presentation/AnalysisMod
 import GeminiControl from '../features/analysis/presentation/GeminiControl.tsx'
 import { resolveMarketDataProviderMode } from '../features/market-data/infrastructure/market-data-provider.ts'
 import './App.css'
+import DemoShell from './DemoShell.tsx'
 
 type AppProps = {
   provider?: MarketDataProvider
@@ -26,7 +27,7 @@ type AppProps = {
   geminiAnalysis?: AnalysisProvider
 }
 
-function App({
+function AppContent({
   provider,
   paperTradingProvider,
   portfolioRepository,
@@ -96,4 +97,12 @@ function App({
   )
 }
 
-export default App
+export default function App(props: AppProps) {
+  if (
+    window.location.pathname === '/demo' ||
+    window.location.pathname.startsWith('/demo/')
+  )
+    return <DemoShell />
+
+  return <AppContent {...props} />
+}
