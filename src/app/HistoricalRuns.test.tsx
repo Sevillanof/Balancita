@@ -86,6 +86,81 @@ const artifact = {
 }
 
 describe('connected historical replay runs', () => {
+  it('preserves a created run when the initial history response resolves late', async () => {
+    let resolveHistory!: (response: {
+      ok: boolean
+      json: () => Promise<unknown>
+    }) => void
+    const historyResponse = new Promise<{
+      ok: boolean
+      json: () => Promise<unknown>
+    }>((resolve) => {
+      resolveHistory = resolve
+    })
+    const createdRun = {
+      ...run,
+      id: 'created-run',
+      datasetHash: 'created-hash',
+    }
+    const createdArtifact = {
+      ...artifact,
+      runId: 'created-run',
+      datasetHash: 'created-hash',
+    }
+    const fetchMock = vi.fn((url: string) => {
+      if (url === '/api/replay/fast-run/history?limit=50')
+        return historyResponse
+      if (url === '/api/replay/fast-run')
+        return Promise.resolve({ ok: true, json: async () => createdRun })
+      if (url.includes('/artifact'))
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ artifact: createdArtifact }),
+        })
+      throw new Error(`Unexpected request: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const user = userEvent.setup()
+    render(<HistoricalRuns />)
+
+    await user.type(
+      screen.getByLabelText('Inicio UTC (ISO 8601)'),
+      '2023-11-14T22:13:20Z',
+    )
+    await user.type(
+      screen.getByLabelText('Fin UTC (ISO 8601)'),
+      '2023-11-14T22:14:20Z',
+    )
+    await user.click(
+      screen.getByRole('button', { name: 'Ejecutar replay TypeScript' }),
+    )
+    expect(
+      await screen.findByRole('heading', { name: 'Corrida created-run' }),
+    ).toBeInTheDocument()
+
+    resolveHistory({ ok: true, json: async () => ({ runs: [run] }) })
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', { name: 'created-run' }),
+      ).toHaveAttribute('aria-pressed', 'true'),
+    )
+    expect(screen.getByRole('button', { name: 'run-one' })).toBeInTheDocument()
+    expect(screen.getAllByRole('button', { name: 'created-run' })).toHaveLength(
+      1,
+    )
+    expect(chart).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        data: expect.arrayContaining([
+          expect.objectContaining({ close: 50_000 }),
+        ]),
+        markers: expect.arrayContaining([
+          expect.objectContaining({ time: 1_700_000_060 }),
+        ]),
+      }),
+    )
+  })
+
   it('loads only the selected saved run artifact and renders frozen candles and its fills', async () => {
     const fetchMock = vi.fn(async (url: string) =>
       url.includes('/artifact')
@@ -112,7 +187,7 @@ describe('connected historical replay runs', () => {
     expect(fetchMock).not.toHaveBeenCalledWith(
       expect.stringContaining('/api/market/ohlc'),
     )
-    expect(screen.getByText(/TypeScript nativo/)).toBeInTheDocument()
+    expect(screen.getAllByText(/TypeScript nativo/).length).toBeGreaterThan(0)
     expect(screen.getAllByText(/No disponible/).length).toBeGreaterThan(0)
   })
 

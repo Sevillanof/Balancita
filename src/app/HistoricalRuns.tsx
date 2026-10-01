@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { CandlestickData, SeriesMarker, Time } from 'lightweight-charts'
 import PriceChart from '../features/price-chart/presentation/PriceChart.tsx'
+import ReplayRunForm from './ReplayRunForm.tsx'
+import { isRun, type Run } from './replay-run-contract.ts'
 import './DemoShell.css'
 import './ConnectedTerminal.css'
 
@@ -11,52 +13,6 @@ type Candle = {
   low: number
   close: number
   volume: number
-}
-type Run = {
-  id: string
-  datasetHash?: string
-  strategyId: string
-  strategyOwner?: 'typescript-native'
-  ledgerOwner?: 'python-ledger'
-  sizingModel?: string
-  initialCashEur?: number
-  finalEquityEur?: number
-  netPnlEur?: number
-  window: { start_time: number; end_time: number }
-  trades: readonly {
-    side: 'buy' | 'sell'
-    timestamp: number
-    price: number
-    quantity: number
-    feeEur?: number
-  }[]
-  feeScenario?: {
-    version?: string
-    venue?: string
-    commissionRate?: number
-    slippageRate?: number
-    sourceUrl?: string
-    verifiedAt?: string
-  } | null
-  pythonLedger?: {
-    ledger: {
-      fills: readonly {
-        side: string
-        time: number
-        price: number
-        qty: number
-        commission: number
-      }[]
-    } | null
-    executionAudit: {
-      fills: readonly {
-        fillIndex: number
-        fillSide: string
-        timingStatus: string
-        executionAtMs: number | null
-      }[]
-    }
-  }
 }
 type VerifiedArtifact = {
   source: string
@@ -71,71 +27,6 @@ function integer(value: unknown): value is number {
 }
 function finite(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value)
-}
-function dateInteger(value: unknown): value is number {
-  return integer(value) && Number.isFinite(new Date(value).getTime())
-}
-function validPythonLedger(value: unknown): boolean {
-  if (
-    !record(value) ||
-    !record(value.executionAudit) ||
-    !Array.isArray(value.executionAudit.fills) ||
-    !value.executionAudit.fills.every(
-      (fill) =>
-        record(fill) &&
-        integer(fill.fillIndex) &&
-        typeof fill.fillSide === 'string' &&
-        typeof fill.timingStatus === 'string' &&
-        (fill.executionAtMs === null || dateInteger(fill.executionAtMs)),
-    )
-  )
-    return false
-  if (value.ledger === null) return true
-  return (
-    record(value.ledger) &&
-    Array.isArray(value.ledger.fills) &&
-    value.ledger.fills.every(
-      (fill) =>
-        record(fill) &&
-        dateInteger(fill.time) &&
-        typeof fill.side === 'string' &&
-        finite(fill.price) &&
-        finite(fill.qty) &&
-        finite(fill.commission),
-    )
-  )
-}
-function isRun(value: unknown): value is Run {
-  return (
-    record(value) &&
-    typeof value.id === 'string' &&
-    typeof value.strategyId === 'string' &&
-    record(value.window) &&
-    dateInteger(value.window.start_time) &&
-    dateInteger(value.window.end_time) &&
-    value.window.end_time >= value.window.start_time &&
-    Array.isArray(value.trades) &&
-    value.trades.every(
-      (trade) =>
-        record(trade) &&
-        (trade.side === 'buy' || trade.side === 'sell') &&
-        integer(trade.timestamp) &&
-        finite(trade.price) &&
-        finite(trade.quantity) &&
-        (trade.feeEur === undefined || finite(trade.feeEur)),
-    ) &&
-    (value.datasetHash === undefined ||
-      typeof value.datasetHash === 'string') &&
-    (value.strategyOwner === undefined ||
-      value.strategyOwner === 'typescript-native') &&
-    (value.ledgerOwner === undefined ||
-      value.ledgerOwner === 'python-ledger') &&
-    (value.ledgerOwner !== 'python-ledger' ||
-      validPythonLedger(value.pythonLedger)) &&
-    (value.initialCashEur === undefined || finite(value.initialCashEur)) &&
-    (value.finalEquityEur === undefined || finite(value.finalEquityEur)) &&
-    (value.netPnlEur === undefined || finite(value.netPnlEur))
-  )
 }
 function historyFrom(value: unknown): Run[] {
   return record(value) && Array.isArray(value.runs)
@@ -210,6 +101,9 @@ const eur = new Intl.NumberFormat('es-ES', {
 
 export default function HistoricalRuns() {
   const request = useRef(0)
+  const historyRequest = useRef(0)
+  const createdRunRevision = useRef(0)
+  const createdRuns = useRef<Run[]>([])
   const [runs, setRuns] = useState<Run[]>([])
   const [selected, setSelected] = useState<Run | null>(null)
   const [candles, setCandles] = useState<Candle[]>([])
@@ -223,6 +117,8 @@ export default function HistoricalRuns() {
 
   useEffect(() => {
     const controller = new AbortController()
+    const current = ++historyRequest.current
+    const createdRevisionAtRequest = createdRunRevision.current
     void fetch('/api/replay/fast-run/history?limit=50', {
       signal: controller.signal,
     })
@@ -231,9 +127,24 @@ export default function HistoricalRuns() {
           throw new Error('No se pudo cargar el historial guardado.')
         return historyFrom(await response.json())
       })
-      .then(setRuns)
+      .then((history) => {
+        if (current !== historyRequest.current) return
+        if (createdRevisionAtRequest === createdRunRevision.current) {
+          setRuns(history)
+          return
+        }
+        const historyIds = new Set(history.map(({ id }) => id))
+        const newlyCreated = createdRuns.current.filter(
+          ({ id }) => !historyIds.has(id),
+        )
+        setRuns([...newlyCreated, ...history].slice(0, 50))
+      })
       .catch((cause: unknown) => {
-        if (!controller.signal.aborted)
+        if (
+          !controller.signal.aborted &&
+          current === historyRequest.current &&
+          createdRevisionAtRequest === createdRunRevision.current
+        )
           setError(
             cause instanceof Error
               ? cause.message
@@ -279,6 +190,18 @@ export default function HistoricalRuns() {
     } finally {
       if (current === request.current) setBusy(false)
     }
+  }
+
+  function receiveCreatedRun(run: Run, selectionRevision: number) {
+    createdRunRevision.current += 1
+    createdRuns.current = [
+      run,
+      ...createdRuns.current.filter(({ id }) => id !== run.id),
+    ].slice(0, 50)
+    setRuns((existing) =>
+      [run, ...existing.filter(({ id }) => id !== run.id)].slice(0, 50),
+    )
+    if (selectionRevision === request.current) void select(run)
   }
 
   const chartData = useMemo<readonly CandlestickData<Time>[]>(
@@ -374,6 +297,10 @@ export default function HistoricalRuns() {
           <p className="demo-shell__eyebrow">BALANCITA · MODO CONECTADO</p>
           <h1>Pruebas históricas</h1>
         </div>
+        <ReplayRunForm
+          getSelectionRevision={() => request.current}
+          onRunCreated={receiveCreatedRun}
+        />
         <div className="connected-terminal__layout">
           <section
             className="connected-terminal__panel"
