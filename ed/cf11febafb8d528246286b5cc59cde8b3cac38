@@ -1,0 +1,30 @@
+e2e/connected-trading.pw.ts
+  h_2f68313623be98 1-1351
+odd/tasks/connected-trading-view.md
+  h_2f68313623be98 106,121-135,145-171,191-192
+server/src/app/app.ts
+  h_2f68313623be98 1038-1039
+server/src/app/fast-replay-api.test.ts
+  h_2f68313623be98 1,22-158
+src/app/ConnectedTerminal.css
+  h_2f68313623be98 7,9,16-17,50,53,98,125-126,129,132-138
+src/app/HistoricalRuns.test.tsx
+  h_2f68313623be98 29-30,44
+src/app/HistoricalRuns.tsx
+  h_2f68313623be98 5-10,230,233,240,250-263,275,277-281,405-413,458-463,474-478,488-491,502-503,516-518,521-531
+src/app/replay-run-contract.test.ts
+  h_2f68313623be98 1-124
+src/app/replay-run-contract.ts
+  h_2f68313623be98 8-9,16,44,76,127-179
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "edcf11febafb8d528246286b5cc59cde8b3cac38",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
