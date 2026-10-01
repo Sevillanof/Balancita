@@ -1,0 +1,14 @@
+odd/tasks/approved-lovable-frontend.md
+  h_2f68313623be98 171
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "15acae8731d8d3c952bcae75380d465514dd5616",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
