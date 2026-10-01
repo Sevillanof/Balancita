@@ -1,0 +1,32 @@
+odd/tasks/approved-lovable-frontend.md
+  h_2f68313623be98 96,111-121
+src/app/DemoShell.css
+  h_2f68313623be98 204-529
+src/app/DemoShell.test.tsx
+  h_2f68313623be98 2-7
+src/app/DemoShell.tsx
+  h_2f68313623be98 2,89
+src/features/demo/trading/TerminalChart.tsx
+  h_2f68313623be98 1-149
+src/features/demo/trading/TerminalView.test.tsx
+  h_2f68313623be98 1-46
+src/features/demo/trading/TerminalView.tsx
+  h_2f68313623be98 1-258
+src/features/demo/trading/provider.test.ts
+  h_2f68313623be98 1-64
+src/features/demo/trading/provider.ts
+  h_2f68313623be98 1-339
+src/features/demo/trading/types.ts
+  h_2f68313623be98 1-55
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b824ce1f4017502ee1b2a294820977467d2f9621",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
