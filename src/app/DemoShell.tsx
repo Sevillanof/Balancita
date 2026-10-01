@@ -1,4 +1,5 @@
 import './DemoShell.css'
+import TerminalView from '../features/demo/trading/TerminalView.tsx'
 
 const terminalPath = '/demo'
 const historicalPath = '/demo/historicas'
@@ -85,19 +86,7 @@ export default function DemoShell() {
             <p>Los resultados demostrativos todavía no están disponibles.</p>
           </section>
         ) : (
-          <section
-            className="demo-shell__placeholder"
-            aria-label="Terminal demo"
-          >
-            <h2>Terminal de observación</h2>
-            <p>
-              La base visual está lista; los datos y controles de terminal se
-              incorporarán en FE-A-02 y FE-A-03.
-            </p>
-            <p>
-              Esta vista no consulta servicios ni representa datos de mercado.
-            </p>
-          </section>
+          <TerminalView />
         )}
       </main>
     </div>

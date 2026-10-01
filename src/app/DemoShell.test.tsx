@@ -1,5 +1,10 @@
 import { cleanup, render, screen } from '@testing-library/react'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+
+vi.mock('../features/demo/trading/TerminalChart.tsx', () => ({
+  default: () => <div role="img" aria-label="Gráfico ilustrativo" />,
+}))
+
 import App from './App.tsx'
 import DemoShell from './DemoShell.tsx'
 
