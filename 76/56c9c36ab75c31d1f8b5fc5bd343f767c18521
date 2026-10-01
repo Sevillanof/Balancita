@@ -1,0 +1,30 @@
+odd/tasks/connected-trading-view.md
+  h_2f68313623be98 1-125
+src/app/App.css
+  h_2f68313623be98 164-172
+src/app/App.test.tsx
+  h_2f68313623be98 279-301
+src/app/App.tsx
+  h_2f68313623be98 19,82-87,108
+src/app/ConnectedTerminal.css
+  h_2f68313623be98 1-136
+src/app/ConnectedTerminal.test.tsx
+  h_2f68313623be98 1-80
+src/app/ConnectedTerminal.tsx
+  h_2f68313623be98 1-480
+src/features/connected-trading/infrastructure/connected-trading-provider.test.ts
+  h_2f68313623be98 1-123
+src/features/connected-trading/infrastructure/connected-trading-provider.ts
+  h_2f68313623be98 1-267
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7656c9c36ab75c31d1f8b5fc5bd343f767c18521",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
