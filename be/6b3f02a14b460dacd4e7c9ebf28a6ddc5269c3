@@ -1,0 +1,19 @@
+src/app/ConnectedTerminal.test.tsx
+  s_47802ac5d999bc::t_a55f9de2093d15 51-53
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "be6b3f02a14b460dacd4e7c9ebf28a6ddc5269c3",
+  "prompts": {},
+  "sessions": {
+    "s_47802ac5d999bc": {
+      "agent_id": {
+        "tool": "github-copilot",
+        "id": "efd45c97-c37e-4084-a1e8-72da5cc34a10",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
