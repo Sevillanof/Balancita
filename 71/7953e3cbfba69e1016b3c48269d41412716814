@@ -1,0 +1,22 @@
+odd/tasks/approved-lovable-frontend.md
+  h_2f68313623be98 1-110
+src/app/App.tsx
+  h_2f68313623be98 18,30,100-108
+src/app/DemoShell.css
+  h_2f68313623be98 1-253
+src/app/DemoShell.test.tsx
+  h_2f68313623be98 1-54
+src/app/DemoShell.tsx
+  h_2f68313623be98 1-105
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "717953e3cbfba69e1016b3c48269d41412716814",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
