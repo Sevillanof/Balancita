@@ -1,0 +1,22 @@
+src/app/HistoricalRuns.test.tsx
+  h_2f68313623be98 89-163,190
+src/app/HistoricalRuns.tsx
+  h_2f68313623be98 4-5,104-106,120-121,130-141,143-147,195-206,300-303
+src/app/ReplayRunForm.test.tsx
+  h_2f68313623be98 1-217
+src/app/ReplayRunForm.tsx
+  h_2f68313623be98 1-207
+src/app/replay-run-contract.ts
+  h_2f68313623be98 1-126
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5c966dd1dd7e1d007fdc968fc6d157751f1c0c5b",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
