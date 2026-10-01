@@ -1,0 +1,34 @@
+.gitignore
+  h_2f68313623be98 14-16
+e2e/delivery-a.pw.ts
+  h_2f68313623be98 1-263
+odd/tasks/approved-lovable-frontend.md
+  h_2f68313623be98 20,98-99,158-176
+package.json
+  h_2f68313623be98 10,26-27,36
+playwright.config.ts
+  h_2f68313623be98 1-38
+pnpm-lock.yaml
+  h_2f68313623be98 11-16,36-38,278-283,332-336,1114-1123,1618-1621,1667-1670,2364-2369
+src/app/DemoShell.css
+  h_2f68313623be98 225,288,362-363,415-416,477,504-505
+src/app/DemoShell.tsx
+  h_2f68313623be98 1-8
+src/features/demo/history/historical.css
+  h_2f68313623be98 26,201
+src/features/demo/trading/TerminalChart.test.tsx
+  h_2f68313623be98 37-40,71-89
+src/features/demo/trading/TerminalChart.tsx
+  h_2f68313623be98 64
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3a559520f230634954883723a270560168d2c4e6",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
