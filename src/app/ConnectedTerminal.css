@@ -107,6 +107,9 @@
   color: #aab6b5;
   font-weight: 500;
 }
+.connected-terminal tr[data-selected='true'] {
+  background: rgb(69 214 165 / 10%);
+}
 .connected-terminal__stale {
   color: #e6ba72;
 }

@@ -1,10 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
-import type { CandlestickData, Time } from 'lightweight-charts'
+import type { CandlestickData, SeriesMarker, Time } from 'lightweight-charts'
 import PriceChart from '../features/price-chart/presentation/PriceChart.tsx'
 import {
   loadConnectedSnapshot,
+  loadPaperDecisions,
   type ConnectedSnapshot,
+  type PaperDecisionEvent,
 } from '../features/connected-trading/infrastructure/connected-trading-provider.ts'
+import PaperDecisionPanel from '../features/connected-trading/presentation/PaperDecisionPanel.tsx'
 import './DemoShell.css'
 import './ConnectedTerminal.css'
 
@@ -22,6 +25,11 @@ export default function ConnectedTerminal() {
   const [retry, setRetry] = useState(0)
   const [interval, setInterval] = useState<keyof typeof INTERVALS>('1m')
   const [clock, setClock] = useState(0)
+  const [decisions, setDecisions] = useState<PaperDecisionEvent[]>([])
+  const [decisionError, setDecisionError] = useState<string | null>(null)
+  const [selectedDecisionId, setSelectedDecisionId] = useState<string | null>(
+    null,
+  )
 
   useEffect(() => {
     const timer = globalThis.setInterval(() => setClock(Date.now()), REFRESH_MS)
@@ -46,6 +54,37 @@ export default function ConnectedTerminal() {
             cause instanceof Error
               ? cause.message
               : 'No se pudieron cargar los datos conectados.',
+          )
+      } finally {
+        if (!cancelled)
+          timer = globalThis.setTimeout(() => void refresh(), REFRESH_MS)
+      }
+    }
+    void refresh()
+    return () => {
+      cancelled = true
+      controller.abort()
+      if (timer !== undefined) globalThis.clearTimeout(timer)
+    }
+  }, [retry])
+
+  useEffect(() => {
+    let cancelled = false
+    let timer: ReturnType<typeof globalThis.setTimeout> | undefined
+    const controller = new AbortController()
+    const refresh = async () => {
+      try {
+        const fresh = await loadPaperDecisions({ signal: controller.signal })
+        if (!cancelled) {
+          setDecisions(fresh)
+          setDecisionError(null)
+        }
+      } catch (cause) {
+        if (!cancelled && !controller.signal.aborted)
+          setDecisionError(
+            cause instanceof Error
+              ? cause.message
+              : 'No se pudieron cargar las decisiones paper.',
           )
       } finally {
         if (!cancelled)
@@ -100,6 +139,32 @@ export default function ConnectedTerminal() {
     }))
   }, [snapshot, interval, clock])
 
+  const decisionMarkers = useMemo(() => {
+    const seconds = INTERVALS[interval]
+    const candleTimes = new Set(candles.map((candle) => Number(candle.time)))
+    return decisions.flatMap((decision): SeriesMarker<Time>[] => {
+      const bucket = Math.floor(decision.eventTime / 1000 / seconds) * seconds
+      if (!candleTimes.has(bucket)) return []
+      const selected = selectedDecisionId === decision.id
+      return [
+        {
+          time: bucket as Time,
+          position: decision.direction === 'long' ? 'belowBar' : 'aboveBar',
+          color:
+            decision.outcome === 'gate-rejected'
+              ? '#d8a34a'
+              : selected
+                ? '#45d6a5'
+                : '#8a9aaa',
+          shape: decision.direction === 'long' ? 'arrowUp' : 'circle',
+          text: selected
+            ? 'Decisión seleccionada'
+            : decisionOutcomeLabel(decision.outcome),
+        },
+      ]
+    })
+  }, [candles, decisions, interval, selectedDecisionId])
+
   const newest = snapshot?.candles
     .filter((item) => item.timestamp + 60_000 <= clock)
     .at(-1)
@@ -132,6 +197,9 @@ export default function ConnectedTerminal() {
               aria-current="page"
             >
               Terminal
+            </a>
+            <a className="demo-shell__nav-link" href="/historicos">
+              Pruebas históricas
             </a>
             <a className="demo-shell__nav-link" href="/">
               Aplicación
@@ -236,14 +304,14 @@ export default function ConnectedTerminal() {
                     ))}
                   </div>
                 </div>
-                <PriceChart data={candles} />
+                <PriceChart data={candles} markers={decisionMarkers} />
                 {candles.length === 0 && (
                   <p role="status">No hay velas BTC-EUR disponibles.</p>
                 )}
                 <p className="connected-terminal__note">
                   Historia nativa de 1 minuto, reagrupada solo para
-                  visualización. No se muestran motivos de decisión: el backend
-                  aún no expone ese registro.
+                  visualización. Los motivos no registrados aparecen como “No
+                  disponible”.
                 </p>
               </section>
               <section
@@ -290,6 +358,21 @@ export default function ConnectedTerminal() {
                 </small>
               </section>
             </div>
+            {decisionError && (
+              <p role="alert">
+                No se pudo actualizar el registro de decisiones: {decisionError}
+              </p>
+            )}
+            <PaperDecisionPanel
+              decisions={decisions}
+              selectedId={selectedDecisionId}
+              onSelect={(decision) => {
+                setSelectedDecisionId(decision.id)
+                document
+                  .querySelector('[data-testid="price-chart"]')
+                  ?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+              }}
+            />
             <section
               className="connected-terminal__panel"
               aria-label="Posiciones paper"
@@ -477,4 +560,17 @@ function eventTime(value: unknown): string {
     return 'No disponible'
   const ms = value < 100_000_000_000 ? value * 1000 : value
   return new Date(ms).toLocaleString('es-ES', { timeZone: 'UTC' })
+}
+
+function decisionOutcomeLabel(outcome: PaperDecisionEvent['outcome']): string {
+  switch (outcome) {
+    case 'abstained':
+      return 'Abstención'
+    case 'gate-rejected':
+      return 'Gate rechazado'
+    case 'pending':
+      return 'Pendiente'
+    case 'hold':
+      return 'Sin cambio'
+  }
 }

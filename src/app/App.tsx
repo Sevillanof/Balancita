@@ -17,6 +17,7 @@ import { resolveMarketDataProviderMode } from '../features/market-data/infrastru
 import './App.css'
 import DemoShell from './DemoShell.tsx'
 import ConnectedTerminal from './ConnectedTerminal.tsx'
+import HistoricalRuns from './HistoricalRuns.tsx'
 
 type AppProps = {
   provider?: MarketDataProvider
@@ -106,6 +107,7 @@ function AppContent({
 
 export default function App(props: AppProps) {
   if (window.location.pathname === '/terminal') return <ConnectedTerminal />
+  if (window.location.pathname === '/historicos') return <HistoricalRuns />
   if (
     window.location.pathname === '/demo' ||
     window.location.pathname.startsWith('/demo/')

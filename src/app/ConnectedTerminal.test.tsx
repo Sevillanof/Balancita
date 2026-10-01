@@ -48,7 +48,9 @@ describe('ConnectedTerminal', () => {
               }
             : url.includes('/collector/status')
               ? { enabled: true, running: true, newest_candle_iso: null }
-              : { orders: [], strategies: [], positions: [] }
+              : url.includes('/paper-trading/decisions')
+                ? { decisions: [] }
+                : { orders: [], strategies: [], positions: [] }
         return { ok: true, status: 200, json: async () => body }
       }),
     )

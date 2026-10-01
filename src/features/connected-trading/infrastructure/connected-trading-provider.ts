@@ -27,6 +27,29 @@ export type ConnectedSnapshot = {
   summary: Record<string, unknown>[]
 }
 
+export type PaperDecisionEvent = {
+  id: string
+  instrumentId: 'BTC-EUR'
+  eventTime: number
+  receivedAt: number
+  strategyId: string
+  strategyVersion: string
+  direction: 'flat' | 'long'
+  outcome: 'abstained' | 'gate-rejected' | 'pending' | 'hold'
+  reasonCode: string | null
+  sessionId: string | null
+  reason: string | null
+  conditions: PaperDecisionCondition[]
+}
+
+export type PaperDecisionCondition = {
+  code: string
+  value: number | boolean | null
+  operator: string
+  threshold: number | boolean | null
+  passed: boolean
+}
+
 type Fetcher = (
   input: RequestInfo | URL,
   init?: RequestInit,
@@ -264,4 +287,60 @@ export async function loadConnectedSnapshot(
     },
     summary,
   }
+}
+
+export async function loadPaperDecisions(
+  options: {
+    fetcher?: Fetcher
+    signal?: AbortSignal
+  } = {},
+): Promise<PaperDecisionEvent[]> {
+  const value = await getJson(
+    options.fetcher ?? fetch,
+    '/api/paper-trading/decisions?limit=200',
+    options.signal,
+  )
+  const payload = requiredRecord(value, 'las decisiones paper')
+  if (!Array.isArray(payload.decisions))
+    throw new Error('La respuesta de las decisiones paper no es válida.')
+  return payload.decisions.map((item): PaperDecisionEvent => {
+    const row = requiredRecord(item, 'las decisiones paper')
+    const valid =
+      typeof row.id === 'string' &&
+      row.instrumentId === 'BTC-EUR' &&
+      Number.isSafeInteger(row.eventTime) &&
+      Number.isSafeInteger(row.receivedAt) &&
+      typeof row.strategyId === 'string' &&
+      typeof row.strategyVersion === 'string' &&
+      (row.direction === 'flat' || row.direction === 'long') &&
+      (row.outcome === 'abstained' ||
+        row.outcome === 'gate-rejected' ||
+        row.outcome === 'pending' ||
+        row.outcome === 'hold') &&
+      (row.reasonCode === null || typeof row.reasonCode === 'string') &&
+      (row.sessionId === null || typeof row.sessionId === 'string') &&
+      (row.reason === null || typeof row.reason === 'string') &&
+      Array.isArray(row.conditions) &&
+      row.conditions.every(isPaperDecisionCondition)
+    if (!valid)
+      throw new Error('La respuesta de las decisiones paper no es válida.')
+    return row as PaperDecisionEvent
+  })
+}
+
+function isPaperDecisionCondition(
+  value: unknown,
+): value is PaperDecisionCondition {
+  if (!record(value)) return false
+  return (
+    typeof value.code === 'string' &&
+    (finite(value.value) ||
+      typeof value.value === 'boolean' ||
+      value.value === null) &&
+    typeof value.operator === 'string' &&
+    (finite(value.threshold) ||
+      typeof value.threshold === 'boolean' ||
+      value.threshold === null) &&
+    typeof value.passed === 'boolean'
+  )
 }

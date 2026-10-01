@@ -299,4 +299,33 @@ describe('dashboard Gemini boundary', () => {
       window.history.pushState({}, '', priorPath)
     }
   })
+
+  it('routes /historicos to the saved connected replay history without running a replay', async () => {
+    const priorPath = window.location.pathname
+    window.history.pushState({}, '', '/historicos')
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ runs: [] }),
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    const view = render(<App />)
+    try {
+      expect(
+        await screen.findByRole('heading', { name: 'Pruebas históricas' }),
+      ).toBeInTheDocument()
+      expect(
+        await screen.findByText('No hay corridas guardadas.'),
+      ).toBeInTheDocument()
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/replay/fast-run/history?limit=50',
+        expect.anything(),
+      )
+      expect(screen.queryByText('Balancita (BTC/EUR)')).not.toBeInTheDocument()
+    } finally {
+      view.unmount()
+      vi.unstubAllGlobals()
+      window.history.pushState({}, '', priorPath)
+    }
+  })
 })

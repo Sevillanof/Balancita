@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
-import { loadConnectedSnapshot } from './connected-trading-provider.ts'
+import {
+  loadConnectedSnapshot,
+  loadPaperDecisions,
+} from './connected-trading-provider.ts'
 
 function response(body: unknown, ok = true): Response {
   return { ok, json: async () => body } as Response
@@ -119,5 +122,44 @@ describe('connected trading provider', () => {
     await expect(
       loadConnectedSnapshot({ fetcher, now: 1_700_000_100_000 }),
     ).rejects.toThrow('OHLC')
+  })
+
+  it('validates actual decision events and preserves backend IDs and unavailable rationale', async () => {
+    const event = {
+      id: 'session-a:strategy:1',
+      instrumentId: 'BTC-EUR',
+      eventTime: 1_700_000_000_000,
+      receivedAt: 1_700_000_000_100,
+      strategyId: 'micro-trend-pullback',
+      strategyVersion: 'strategy-rule.v2',
+      direction: 'flat',
+      outcome: 'gate-rejected',
+      reasonCode: 'entry_gate_rejected',
+      sessionId: 'runtime-1',
+      reason: null,
+      conditions: [
+        {
+          code: 'entry_gate_distance',
+          value: 0.004,
+          operator: '>=',
+          threshold: 0.006,
+          passed: false,
+        },
+      ],
+    }
+    const fetcher = vi.fn(async () => response({ decisions: [event] }))
+    const decisions = await loadPaperDecisions({ fetcher })
+    expect(decisions).toEqual([event])
+    expect(fetcher).toHaveBeenCalledWith(
+      '/api/paper-trading/decisions?limit=200',
+      expect.any(Object),
+    )
+    await expect(
+      loadPaperDecisions({
+        fetcher: vi.fn(async () =>
+          response({ decisions: [{ ...event, direction: 'short' }] }),
+        ),
+      }),
+    ).rejects.toThrow('decisiones paper')
   })
 })
