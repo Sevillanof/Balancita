@@ -168,7 +168,7 @@ test('R01 reuses the demo chart renderer with representative fixture data', asyn
     page.getByRole('heading', { name: 'Posiciones y operaciones' }),
   ).toBeVisible()
   await expect(
-    page.getByRole('button', { name: /fixture-version/ }),
+    page.getByRole('button', { name: /micro-trend-pullback/ }),
   ).toHaveCount(2)
   expect(
     await page
@@ -412,7 +412,9 @@ test('terminal reports unavailable without fallback and recovers only after retr
   const panel = page.getByRole('complementary', {
     name: 'Decisiones del motor',
   })
-  const decisionButtons = panel.getByRole('button', { name: /fixture-version/ })
+  const decisionButtons = panel.getByRole('button', {
+    name: /micro-trend-pullback/,
+  })
   await expect(decisionButtons).toHaveCount(2)
   await expect(panel.getByText('Pendiente, sin ejecución')).toBeVisible()
   await expect(panel.getByText('Sin cambio de exposición')).toBeVisible()
@@ -501,7 +503,7 @@ test('terminal retains its last source snapshot across a failed poll and retry',
   await expect(page.getByText(/Última vela:/)).toBeVisible()
   const decisions = page
     .getByRole('complementary', { name: 'Decisiones del motor' })
-    .getByRole('button', { name: /fixture-version/ })
+    .getByRole('button', { name: /micro-trend-pullback/ })
   await expect(decisions).toHaveCount(2)
 
   failSnapshot = true
@@ -617,6 +619,307 @@ test('terminal polling aborts on navigation and remounts with one active snapsho
   expect(
     (await fetchTrace(page)).some(({ method }) => method === 'POST'),
   ).toBeFalsy()
+})
+
+test('R06 keeps recent native decisions visible, selectable, and recoverable', async ({
+  page,
+}, testInfo) => {
+  const fixture = connectedFixtures()
+  const decisions = Array.from({ length: 200 }, (_, index) => {
+    const eventTime =
+      index === 188 || index === 189
+        ? fixtureStart - 10 * 60_000
+        : fixtureStart - 24 * 60 * 60_000 - index * 60_000
+    return {
+      ...fixture.decisions.decisions[0]!,
+      id: `recent-${index}`,
+      eventTime,
+      receivedAt: eventTime + 1_000,
+      outcome:
+        index === 188
+          ? 'gate-rejected'
+          : index === 189
+            ? 'hold'
+            : fixture.decisions.decisions[0]!.outcome,
+      reason: `Backend reason ${index}`,
+      conditions: [
+        {
+          code: 'entry_gate_distance',
+          value: index / 1_000,
+          operator: '>=',
+          threshold: 0.1,
+          passed: false,
+        },
+      ],
+    }
+  }).sort((left, right) => right.eventTime - left.eventTime)
+  const newest = decisions[0]!
+  let failDecisionPoll = false
+  const apiRequests: string[] = []
+  const pageErrors: string[] = []
+  page.on('pageerror', (error) => pageErrors.push(error.message))
+  page.on('console', (message) => {
+    if (message.type() === 'error') pageErrors.push(message.text())
+  })
+  page.on('request', (request) => {
+    const url = new URL(request.url())
+    if (url.pathname.startsWith('/api/')) apiRequests.push(request.method())
+  })
+  await page.clock.pauseAt(fixtureStart + 300 * 60_000)
+  await routeConnectedApi(page, async (url, route) => {
+    if (url.pathname === '/api/market/ohlc')
+      await route.fulfill({ json: { candles: fixture.snapshot.candles } })
+    else if (url.pathname === '/api/market/collector/status')
+      await route.fulfill({ json: fixture.snapshot.collector })
+    else if (url.pathname === '/api/paper-trading/status')
+      await route.fulfill({ json: fixture.snapshot.paper })
+    else if (url.pathname === '/api/paper-trading/orders')
+      await route.fulfill({ json: { orders: [] } })
+    else if (url.pathname.includes('/positions'))
+      await route.fulfill({ json: { positions: [] } })
+    else if (url.pathname === '/api/paper-trading/strategies-summary')
+      await route.fulfill({ json: { strategies: [] } })
+    else if (url.pathname === '/api/paper-trading/decisions') {
+      if (failDecisionPoll)
+        await route.fulfill({
+          json: { decisions: 'invalid fixture payload' },
+        })
+      else await route.fulfill({ json: { decisions } })
+    } else throw new Error(`Unexpected API request: ${url.pathname}`)
+  })
+
+  await page.goto('/terminal')
+  const panel = page.getByRole('complementary', {
+    name: 'Decisiones del motor',
+  })
+  await expect(panel.locator('.demo-terminal__event')).toHaveCount(200)
+  const row = panel.locator('.demo-terminal__event').first()
+  await expect(row).toContainText(`Backend reason ${newest.id.split('-')[1]}`)
+  await expect(row).toContainText('Precio —')
+  await expect(row).toHaveAttribute('aria-expanded', 'false')
+  await expect(panel.getByText(/Consulta cada 5 s/)).toBeVisible()
+  await expect(
+    panel.getByText(/Ventana reciente.*200 decisiones/),
+  ).toBeVisible()
+  await expect(panel.getByText(/Actualizado:.*UTC/)).toBeVisible()
+  await expect(panel.getByText(/Última decisión:.*UTC/)).toBeVisible()
+
+  const chartFrame = page.getByTestId('approved-chart-renderer')
+  await expect(chartFrame).toBeVisible()
+  await expect(chartFrame.locator('canvas').first()).toBeVisible()
+  await expect(chartFrame).toHaveAttribute('data-marker-count', '2')
+  await expect(
+    page.getByRole('heading', { name: 'Decisiones del motor' }),
+  ).toBeVisible()
+  const layout = page.getByTestId('approved-terminal-layout')
+  const bounds = await layout.evaluate((element) => {
+    const [chart, feed] = Array.from(element.children).map((child) =>
+      child.getBoundingClientRect(),
+    )
+    return {
+      chart: {
+        x: chart!.x,
+        y: chart!.y,
+        width: chart!.width,
+        height: chart!.height,
+      },
+      feed: {
+        x: feed!.x,
+        y: feed!.y,
+        width: feed!.width,
+        height: feed!.height,
+      },
+      viewport: window.innerWidth,
+      document: document.documentElement.scrollWidth,
+    }
+  })
+  expect(bounds.document).toBeLessThanOrEqual(bounds.viewport)
+  const feedState = await panel.evaluate((element) => {
+    const row = element.querySelector<HTMLElement>('.demo-terminal__event')!
+    const panelBounds = element.getBoundingClientRect()
+    const rowBounds = row.getBoundingClientRect()
+    return {
+      scrollTop: element.querySelector<HTMLElement>(
+        '.demo-terminal__event-list',
+      )!.scrollTop,
+      rowTop: rowBounds.top,
+      panelTop: panelBounds.top,
+      panelBottom: panelBounds.bottom,
+    }
+  })
+  expect(feedState.scrollTop).toBe(0)
+  expect(feedState.rowTop).toBeGreaterThanOrEqual(feedState.panelTop)
+  expect(feedState.rowTop).toBeLessThan(feedState.panelBottom)
+  if (testInfo.project.name.startsWith('desktop')) {
+    expect(bounds.feed.width).toBeGreaterThanOrEqual(310)
+    expect(bounds.feed.x).toBeGreaterThan(bounds.chart.x)
+  } else {
+    expect(bounds.feed.y).toBeGreaterThan(bounds.chart.y)
+  }
+
+  await row.focus()
+  await expect(row).toBeFocused()
+  await page.keyboard.press('Enter')
+  await expect(row).toHaveAttribute('aria-pressed', 'true')
+  await expect(row).toHaveAttribute('aria-expanded', 'true')
+  await expect(panel.getByText('Sesión: No disponible')).toBeVisible()
+  await expect(panel.getByText('Recepción UTC:')).toBeVisible()
+  await expect(panel.getByText(/Distancia del gate/)).toBeVisible()
+  await expect(panel.getByText(/Precio: No disponible/)).toBeVisible()
+
+  const secondMarkerRow = panel.locator('.demo-terminal__event').nth(1)
+  await secondMarkerRow.focus()
+  await page.keyboard.press('Enter')
+  await expect(secondMarkerRow).toHaveAttribute('aria-pressed', 'true')
+  await expect(
+    panel.getByText('Motivo recibido: Backend reason 189'),
+  ).toBeVisible()
+
+  // Advance the paused browser clock so smooth scrolling and focus-range requestAnimationFrame paints complete.
+  await page.clock.runFor(500)
+  const chartCanvas = chartFrame.locator('canvas').first()
+  await expect
+    .poll(async () =>
+      chartCanvas.evaluate((canvas) => (canvas as HTMLCanvasElement).width),
+    )
+    .toBeGreaterThan(0)
+  await chartFrame.screenshot({
+    path: `playwright-artifacts/r06-marker-before-click-${testInfo.project.name}.png`,
+  })
+  const markerTarget = await chartFrame.evaluate((frame) => {
+    const probe = document.createElement('canvas')
+    const probeContext = probe.getContext('2d')!
+    probeContext.fillStyle =
+      getComputedStyle(document.documentElement)
+        .getPropertyValue('--warning')
+        .trim() || '#d4aa62'
+    probeContext.fillRect(0, 0, 1, 1)
+    const [red, green, blue] = probeContext.getImageData(0, 0, 1, 1).data
+    const candidates: Array<{
+      x: number
+      y: number
+      area: number
+      width: number
+      height: number
+    }> = []
+
+    for (const canvas of frame.querySelectorAll('canvas')) {
+      const context = canvas.getContext('2d')
+      if (!context || canvas.width === 0 || canvas.height === 0) continue
+      const image = context.getImageData(0, 0, canvas.width, canvas.height)
+      const visited = new Uint8Array(canvas.width * canvas.height)
+      for (let offset = 0; offset < image.data.length; offset += 4) {
+        const pixel = offset / 4
+        if (
+          visited[pixel] ||
+          image.data[offset] !== red ||
+          image.data[offset + 1] !== green ||
+          image.data[offset + 2] !== blue ||
+          image.data[offset + 3] < 240
+        )
+          continue
+        const pending = [pixel]
+        visited[pixel] = 1
+        let left = canvas.width
+        let right = 0
+        let top = canvas.height
+        let bottom = 0
+        let area = 0
+        while (pending.length) {
+          const current = pending.pop()!
+          const x = current % canvas.width
+          const y = Math.floor(current / canvas.width)
+          left = Math.min(left, x)
+          right = Math.max(right, x)
+          top = Math.min(top, y)
+          bottom = Math.max(bottom, y)
+          area += 1
+          for (let dy = -1; dy <= 1; dy += 1)
+            for (let dx = -1; dx <= 1; dx += 1) {
+              const nx = x + dx
+              const ny = y + dy
+              if (nx < 0 || ny < 0 || nx >= canvas.width || ny >= canvas.height)
+                continue
+              const neighbor = ny * canvas.width + nx
+              const neighborOffset = neighbor * 4
+              if (
+                !visited[neighbor] &&
+                image.data[neighborOffset] === red &&
+                image.data[neighborOffset + 1] === green &&
+                image.data[neighborOffset + 2] === blue &&
+                image.data[neighborOffset + 3] >= 240
+              ) {
+                visited[neighbor] = 1
+                pending.push(neighbor)
+              }
+            }
+        }
+        const width = right - left + 1
+        const height = bottom - top + 1
+        if (
+          area >= 16 &&
+          width >= 4 &&
+          height >= 4 &&
+          width <= 30 &&
+          height <= 30 &&
+          width / height >= 0.65 &&
+          width / height <= 1.5
+        ) {
+          const rect = canvas.getBoundingClientRect()
+          candidates.push({
+            x: rect.left + ((left + right) / 2 / canvas.width) * rect.width,
+            y: rect.top + ((top + bottom) / 2 / canvas.height) * rect.height,
+            area,
+            width,
+            height,
+          })
+        }
+      }
+    }
+    return candidates.sort((left, right) => right.area - left.area)[0] ?? null
+  })
+  expect(markerTarget, 'rendered amber square decision marker').not.toBeNull()
+  expect(markerTarget!.area).toBeGreaterThanOrEqual(16)
+  await page.mouse.click(markerTarget!.x, markerTarget!.y)
+  await page.clock.runFor(100)
+  const chartSelectedRow = panel.locator(
+    '.demo-terminal__event[aria-pressed="true"]',
+  )
+  await expect(chartSelectedRow).toHaveCount(1)
+  const chartSelectedId = await chartSelectedRow.getAttribute('aria-controls')
+  expect(chartSelectedId).toMatch(/^decision-detail-recent-\d+$/)
+  expect(chartSelectedId).toBe('decision-detail-recent-188')
+  await expect(chartSelectedRow).toHaveAttribute('aria-expanded', 'true')
+  const chartSelectedIndex = chartSelectedId!.replace(
+    'decision-detail-recent-',
+    '',
+  )
+  await expect(
+    panel.getByText(`Motivo recibido: Backend reason ${chartSelectedIndex}`),
+  ).toBeVisible()
+  await expect(row).toHaveAttribute('aria-pressed', 'true')
+
+  await page.screenshot({
+    path: `playwright-artifacts/terminal-refinement-${testInfo.project.name}-after.png`,
+    fullPage: true,
+  })
+  failDecisionPoll = true
+  await page.clock.runFor(5_000)
+  await expect(
+    panel.getByText(/Feed desactualizado:.*respuesta de las decisiones paper/),
+  ).toBeVisible()
+  await expect(panel.locator('.demo-terminal__event')).toHaveCount(200)
+  await expect(chartSelectedRow).toHaveAttribute('aria-pressed', 'true')
+  await expect(panel.getByText(/Actualizado:.*UTC/)).toBeVisible()
+
+  failDecisionPoll = false
+  await panel.getByRole('button', { name: 'Reintentar decisiones' }).click()
+  await expect(panel.getByText(/Feed desactualizado/)).toHaveCount(0)
+  await expect(panel.locator('.demo-terminal__event')).toHaveCount(200)
+  await expect(chartSelectedRow).toHaveAttribute('aria-pressed', 'true')
+  expect(apiRequests.length).toBeGreaterThan(0)
+  expect(apiRequests.every((method) => method === 'GET')).toBeTruthy()
+  expect(pageErrors).toEqual([])
 })
 
 test('historical list merges a created run with delayed history and keeps user selection', async ({

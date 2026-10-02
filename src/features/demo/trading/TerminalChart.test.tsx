@@ -89,6 +89,17 @@ describe('terminal chart viewport', () => {
       expect.any(HTMLDivElement),
       expect.objectContaining({ autoSize: true }),
     )
+    const [, options] = chartMocks.createChart.mock.calls[0] as [
+      HTMLElement,
+      {
+        localization?: unknown
+        crosshair?: unknown
+        grid: { vertLines: { style?: number } }
+      },
+    ]
+    expect(options.localization).toBeUndefined()
+    expect(options.crosshair).toBeUndefined()
+    expect(options.grid.vertLines.style).toBeUndefined()
   })
 
   it('fits once, then preserves the visible range while replacing corrected history', () => {

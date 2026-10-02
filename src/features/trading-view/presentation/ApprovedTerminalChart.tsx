@@ -42,43 +42,55 @@ type Props = {
   selectedId: string
   intervalSeconds: number
   levels?: readonly ApprovedTerminalLevel[]
+  initialViewport?: 'approved-terminal'
   onSelect: (time: number, markerId?: string) => void
   ariaLabel?: string
 }
 
-function markerPresentation(marker: ApprovedTerminalMarker) {
+function cssColor(name: string, fallback: string): string {
+  if (typeof document === 'undefined') return fallback
+  return (
+    getComputedStyle(document.documentElement).getPropertyValue(name).trim() ||
+    fallback
+  )
+}
+
+function markerPresentation(
+  marker: ApprovedTerminalMarker,
+  colors: { up: string; down: string; amber: string; info: string },
+) {
   if (marker.type === 'discard')
     return {
-      color: '#d4aa62',
+      color: colors.amber,
       shape: 'square' as const,
       position: 'aboveBar' as const,
     }
   if (marker.type === 'exit')
     return {
-      color: '#79a9bd',
+      color: colors.info,
       shape: 'circle' as const,
       position: 'aboveBar' as const,
     }
   if (marker.type === 'decision')
     return marker.decisionStatus === 'gate-rejected'
       ? {
-          color: '#d4aa62',
+          color: colors.amber,
           shape: 'square' as const,
           position: 'aboveBar' as const,
         }
       : {
-          color: '#79a9bd',
+          color: colors.info,
           shape: 'circle' as const,
           position: 'aboveBar' as const,
         }
   return marker.direction === 'short'
     ? {
-        color: '#ee7777',
+        color: colors.down,
         shape: 'arrowDown' as const,
         position: 'aboveBar' as const,
       }
     : {
-        color: '#55c7a2',
+        color: colors.up,
         shape: 'arrowUp' as const,
         position: 'belowBar' as const,
       }
@@ -90,6 +102,7 @@ export default function ApprovedTerminalChart({
   selectedId,
   intervalSeconds,
   levels = [],
+  initialViewport,
   onSelect,
   ariaLabel = 'Gráfico de velas BTC/EUR con volumen; las decisiones del backend se describen y seleccionan en el panel lateral',
 }: Props) {
@@ -104,6 +117,7 @@ export default function ApprovedTerminalChart({
     ReturnType<ISeriesApi<'Candlestick'>['createPriceLine']>[]
   >([])
   const fitted = useRef(false)
+  const focusedSelection = useRef<string | null>(null)
   const propsRef = useRef({ candles, markers, intervalSeconds, onSelect })
 
   useEffect(() => {
@@ -113,38 +127,89 @@ export default function ApprovedTerminalChart({
   useEffect(() => {
     const node = container.current
     if (!node) return
+    const colors = {
+      background: cssColor('--card', '#171c20'),
+      text: cssColor('--muted-foreground', '#8b969a'),
+      grid: cssColor('--border', '#252d31'),
+      up: cssColor('--chart-up', '#55c7a2'),
+      down: cssColor('--chart-down', '#ee7777'),
+      amber: cssColor('--warning', '#d4aa62'),
+      info: cssColor('--info', '#79a9bd'),
+    }
     const chart = createChart(node, {
       autoSize: true,
       layout: {
-        background: { type: ColorType.Solid, color: '#171c20' },
-        textColor: '#8b969a',
+        background: { type: ColorType.Solid, color: colors.background },
+        textColor: colors.text,
         fontFamily: 'IBM Plex Mono, monospace',
+        ...(initialViewport === 'approved-terminal' ? { fontSize: 11 } : {}),
         attributionLogo: true,
       },
+      ...(initialViewport === 'approved-terminal'
+        ? { localization: { locale: 'es-ES' } }
+        : {}),
       grid: {
-        vertLines: { color: '#252d31' },
-        horzLines: { color: '#252d31' },
+        vertLines: {
+          color: colors.grid,
+          ...(initialViewport === 'approved-terminal'
+            ? { style: 2 as const }
+            : {}),
+        },
+        horzLines: {
+          color: colors.grid,
+          ...(initialViewport === 'approved-terminal'
+            ? { style: 2 as const }
+            : {}),
+        },
       },
+      ...(initialViewport === 'approved-terminal'
+        ? {
+            crosshair: {
+              vertLine: {
+                color: colors.info,
+                labelBackgroundColor: colors.grid,
+              },
+              horzLine: {
+                color: colors.info,
+                labelBackgroundColor: colors.grid,
+              },
+            },
+          }
+        : {}),
       rightPriceScale: {
-        borderColor: '#303a3e',
+        borderColor: colors.grid,
         scaleMargins: { top: 0.12, bottom: 0.22 },
       },
       timeScale: {
-        borderColor: '#303a3e',
+        borderColor: colors.grid,
         timeVisible: true,
         secondsVisible: false,
         rightOffset: 8,
+        ...(initialViewport === 'approved-terminal' ? { barSpacing: 8 } : {}),
       },
       handleScroll: true,
       handleScale: true,
     })
     const series = chart.addSeries(CandlestickSeries, {
-      upColor: '#55c7a2',
-      downColor: '#ee7777',
+      upColor: colors.up,
+      downColor: colors.down,
       borderVisible: false,
-      wickUpColor: '#55c7a2',
-      wickDownColor: '#ee7777',
-      priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
+      wickUpColor: colors.up,
+      wickDownColor: colors.down,
+      priceFormat:
+        initialViewport === 'approved-terminal'
+          ? {
+              type: 'custom',
+              minMove: 0.01,
+              formatter: (price: number) =>
+                new Intl.NumberFormat('es-ES', {
+                  style: 'currency',
+                  currency: 'EUR',
+                  minimumFractionDigits: 2,
+                  maximumFractionDigits: 2,
+                }).format(price),
+            }
+          : { type: 'price', precision: 2, minMove: 0.01 },
     })
     const volume = chart.addSeries(HistogramSeries, {
       priceScaleId: '',
@@ -191,8 +256,10 @@ export default function ApprovedTerminalChart({
       candleSeriesRef.current = null
       volumeRef.current = null
       markerRef.current = null
+      fitted.current = false
+      focusedSelection.current = null
     }
-  }, [])
+  }, [initialViewport])
 
   useEffect(() => {
     const series = candleSeriesRef.current
@@ -210,39 +277,61 @@ export default function ApprovedTerminalChart({
         close: candle.close,
       })),
     )
+    const volumeUpColor = cssColor('--chart-volume-up', '#285d50')
+    const volumeDownColor = cssColor('--chart-volume-down', '#653f42')
     volumeRef.current?.setData(
       candles.map((candle) => ({
         time: candle.time as Time,
         value: candle.volume,
-        color: candle.close >= candle.open ? '#285d50' : '#653f42',
+        color: candle.close >= candle.open ? volumeUpColor : volumeDownColor,
       })),
     )
     if (!fitted.current) {
-      if (candles.length) chartRef.current?.timeScale().fitContent()
+      if (candles.length) {
+        if (initialViewport === 'approved-terminal')
+          chartRef.current?.timeScale().setVisibleLogicalRange({
+            from: Math.max(0, candles.length - 67),
+            to: candles.length + 6,
+          })
+        else chartRef.current?.timeScale().fitContent()
+      }
       fitted.current = candles.length > 0
     } else if (visibleRange) timeScale?.setVisibleLogicalRange(visibleRange)
-  }, [candles])
+  }, [candles, initialViewport])
 
   useEffect(() => {
     const candleTimes = new Set(candles.map((candle) => candle.time))
-    const visibleMarkers: SeriesMarker<Time>[] = markers.flatMap((marker) => {
-      const bucket = Math.floor(marker.time / intervalSeconds) * intervalSeconds
-      if (!candleTimes.has(bucket)) return []
-      const appearance = markerPresentation(marker)
-      return [
-        {
-          time: bucket as Time,
-          position: appearance.position,
-          color: appearance.color,
-          shape: appearance.shape,
-          text: `${marker.label}${selectedId === marker.id ? ' ◀' : ''}`,
-          id: marker.id,
-          size: selectedId === marker.id ? 2 : 1,
-        },
-      ]
-    })
-    markerRef.current?.setMarkers(visibleMarkers)
-  }, [candles, markers, selectedId, intervalSeconds])
+    const markerColors = {
+      up: cssColor('--chart-up', '#55c7a2'),
+      down: cssColor('--chart-down', '#ee7777'),
+      amber: cssColor('--warning', '#d4aa62'),
+      info: cssColor('--info', '#79a9bd'),
+    }
+    const visibleMarkers: SeriesMarker<Time>[] = [...markers]
+      .sort((left, right) => left.time - right.time)
+      .flatMap((marker) => {
+        const bucket =
+          Math.floor(marker.time / intervalSeconds) * intervalSeconds
+        if (!candleTimes.has(bucket)) return []
+        const appearance = markerPresentation(marker, markerColors)
+        return [
+          {
+            time: bucket as Time,
+            position: appearance.position,
+            color: appearance.color,
+            shape: appearance.shape,
+            text: `${marker.label}${selectedId === marker.id ? ' ◀' : ''}`,
+            id: marker.id,
+            size: selectedId === marker.id ? 2 : 1,
+          },
+        ]
+      })
+    markerRef.current?.setMarkers(
+      visibleMarkers
+        .sort((left, right) => Number(left.time) - Number(right.time))
+        .slice(-200),
+    )
+  }, [candles, markers, selectedId, intervalSeconds, initialViewport])
 
   useEffect(() => {
     const series = candleSeriesRef.current
@@ -273,19 +362,22 @@ export default function ApprovedTerminalChart({
         title: 'OBJETIVO',
       }),
     ]
-  }, [markers, levels, selectedId])
+  }, [markers, levels, selectedId, initialViewport])
 
   useEffect(() => {
     const selected = markers.find((marker) => marker.id === selectedId)
     if (!selected) return
     const bucket = Math.floor(selected.time / intervalSeconds) * intervalSeconds
     const index = candles.findIndex((candle) => candle.time === bucket)
-    if (index >= 0)
+    const selectionKey = `${selectedId}:${intervalSeconds}:${bucket}`
+    if (index >= 0 && focusedSelection.current !== selectionKey) {
       chartRef.current?.timeScale().setVisibleLogicalRange({
         from: Math.max(0, index - 30),
         to: index + 30,
       })
-  }, [markers, selectedId, intervalSeconds, candles])
+      focusedSelection.current = selectionKey
+    }
+  }, [markers, selectedId, intervalSeconds, candles, initialViewport])
 
   return (
     <>

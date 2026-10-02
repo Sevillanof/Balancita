@@ -8,13 +8,27 @@ type PaperDecisionPanelProps = {
   decisions: readonly PaperDecisionEvent[]
   selectedId: string | null
   onSelect: (decision: PaperDecisionEvent) => void
+  error?: string | null
+  receivedAt?: number | null
+  onRetry?: () => void
 }
 
 export default function PaperDecisionPanel({
   decisions,
   selectedId,
   onSelect,
+  error,
+  receivedAt,
+  onRetry = () => {},
 }: PaperDecisionPanelProps) {
+  const ordered = decisions
+    .map((decision, index) => ({ decision, index }))
+    .sort(
+      (left, right) =>
+        right.decision.eventTime - left.decision.eventTime ||
+        left.index - right.index,
+    )
+  const latest = ordered[0]?.decision
   return (
     <aside
       className="demo-terminal__panel demo-terminal__events"
@@ -27,62 +41,148 @@ export default function PaperDecisionPanel({
         </div>
         <span>{decisions.length} eventos</span>
       </div>
+      <div className="connected-terminal__decision-status" role="status">
+        <span>Consulta cada 5 s · Motor: evaluación cada 15 min</span>
+        <span>Ventana reciente · máximo consultado: 200 decisiones</span>
+        {receivedAt == null ? (
+          <span>Esperando primera consulta correcta</span>
+        ) : (
+          <span>
+            Actualizado:{' '}
+            {new Date(receivedAt).toLocaleTimeString('es-ES', {
+              timeZone: 'UTC',
+              hour: '2-digit',
+              minute: '2-digit',
+            })}{' '}
+            UTC
+          </span>
+        )}
+        {latest && (
+          <span>
+            Última decisión:{' '}
+            {new Date(latest.eventTime).toLocaleTimeString('es-ES', {
+              timeZone: 'UTC',
+              hour: '2-digit',
+              minute: '2-digit',
+            })}{' '}
+            UTC
+          </span>
+        )}
+        {error && (
+          <span className="connected-terminal__stale">
+            Feed desactualizado: {error}
+          </span>
+        )}
+        {error && (
+          <button type="button" onClick={onRetry}>
+            Reintentar decisiones
+          </button>
+        )}
+      </div>
       {decisions.length === 0 ? (
         <p role="status" className="demo-terminal__empty">
-          No hay decisiones registradas.
+          {error
+            ? 'No se pudo cargar la lista de decisiones.'
+            : receivedAt == null
+              ? 'Cargando decisiones…'
+              : 'Esperando próxima evaluación.'}
         </p>
       ) : (
         <div className="demo-terminal__event-list">
-          {[...decisions].reverse().map((decision) => (
-            <button
-              type="button"
-              key={decision.id}
-              className={`demo-terminal__event ${selectedId === decision.id ? 'is-selected' : ''}`}
-              data-selected={selectedId === decision.id}
-              aria-pressed={selectedId === decision.id}
-              onClick={() => onSelect(decision)}
-            >
-              <span className="demo-terminal__event-kind">
-                {outcomeLabel(decision.outcome)}
-              </span>
-              <time>
-                {new Date(decision.eventTime).toLocaleString('es-ES', {
-                  timeZone: 'UTC',
-                })}{' '}
-                UTC
-              </time>
-              <span>
-                {decision.reasonCode === null
-                  ? (decision.reason ?? 'No disponible')
-                  : paperDecisionReasonLabel(decision.reasonCode)}
-              </span>
-              <strong>
-                {decision.strategyId} ·{' '}
-                {decision.direction === 'long' ? 'Larga' : 'Plana'} · Precio: No
-                disponible
-              </strong>
-              <small>
-                <span>
-                  Versión: {decision.strategyVersion || 'No disponible'}
-                </span>
-                <span>Sesión: {decision.sessionId ?? 'No disponible'}</span>
-                <span>
-                  Recepción UTC:{' '}
-                  {new Date(decision.receivedAt).toLocaleString('es-ES', {
-                    timeZone: 'UTC',
-                  })}
-                </span>
-                <span>
-                  Condiciones:{' '}
-                  {decision.conditions.length > 0 ? (
-                    decision.conditions.map(conditionLabel).join(' · ')
-                  ) : (
-                    <span>No disponible</span>
-                  )}
-                </span>
-              </small>
-            </button>
-          ))}
+          {ordered.map(({ decision }) => {
+            const selected = selectedId === decision.id
+            const eventDate = new Date(decision.eventTime)
+            return (
+              <article key={decision.id}>
+                <button
+                  type="button"
+                  className={`demo-terminal__event ${selected ? 'is-selected' : ''}`}
+                  data-selected={selected}
+                  aria-pressed={selected}
+                  aria-expanded={selected}
+                  aria-controls={`decision-detail-${decision.id}`}
+                  onClick={() => onSelect(decision)}
+                >
+                  <span className="demo-terminal__event-kind">
+                    {outcomeLabel(decision.outcome)}
+                  </span>
+                  <time
+                    dateTime={eventDate.toISOString()}
+                    title={`${eventDate.toLocaleDateString('es-ES', { timeZone: 'UTC' })} ${eventDate.toLocaleTimeString('es-ES', { timeZone: 'UTC' })} UTC`}
+                  >
+                    {eventDate.toLocaleTimeString('es-ES', {
+                      timeZone: 'UTC',
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    })}{' '}
+                    UTC
+                  </time>
+                  <strong title={decision.strategyId}>
+                    {decision.strategyId} ·{' '}
+                    {decision.direction === 'long' ? 'Larga' : 'Plana'} ·{' '}
+                    <span
+                      className="demo-terminal__event-reason"
+                      title={
+                        decision.reason ??
+                        (decision.reasonCode === null
+                          ? 'No disponible'
+                          : paperDecisionReasonLabel(decision.reasonCode))
+                      }
+                    >
+                      {decision.reason ??
+                        (decision.reasonCode === null
+                          ? 'No disponible'
+                          : paperDecisionReasonLabel(decision.reasonCode))}
+                    </span>{' '}
+                    · Precio —
+                  </strong>
+                  <span
+                    className="demo-terminal__event-price"
+                    aria-label="Precio: No disponible"
+                  >
+                    —
+                  </span>
+                </button>
+                {selected && (
+                  <div
+                    id={`decision-detail-${decision.id}`}
+                    className="demo-terminal__event-detail"
+                  >
+                    {decision.reasonCode !== null && (
+                      <span>
+                        Motivo estructurado:{' '}
+                        {paperDecisionReasonLabel(decision.reasonCode)}
+                      </span>
+                    )}
+                    {decision.reason !== null && (
+                      <span>Motivo recibido: {decision.reason}</span>
+                    )}
+                    <span>
+                      Versión: {decision.strategyVersion || 'No disponible'}
+                    </span>
+                    <span>Sesión: {decision.sessionId ?? 'No disponible'}</span>
+                    <span>
+                      Recepción UTC:{' '}
+                      {new Date(decision.receivedAt).toLocaleString('es-ES', {
+                        timeZone: 'UTC',
+                      })}
+                    </span>
+                    <span>Precio: No disponible</span>
+                    <span>
+                      Evento UTC:{' '}
+                      {eventDate.toLocaleString('es-ES', { timeZone: 'UTC' })}
+                    </span>
+                    <span>
+                      Condiciones:{' '}
+                      {decision.conditions.length > 0
+                        ? decision.conditions.map(conditionLabel).join(' · ')
+                        : 'No disponible'}
+                    </span>
+                  </div>
+                )}
+              </article>
+            )
+          })}
         </div>
       )}
       <p className="demo-terminal__disclaimer">

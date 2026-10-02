@@ -35,6 +35,10 @@ export default function ConnectedTerminal() {
   const [clock, setClock] = useState(0)
   const [decisions, setDecisions] = useState<PaperDecisionEvent[]>([])
   const [decisionError, setDecisionError] = useState<string | null>(null)
+  const [decisionReceivedAt, setDecisionReceivedAt] = useState<number | null>(
+    null,
+  )
+  const [decisionRetry, setDecisionRetry] = useState(0)
   const [selectedDecisionId, setSelectedDecisionId] = useState<string | null>(
     null,
   )
@@ -84,7 +88,12 @@ export default function ConnectedTerminal() {
       try {
         const fresh = await loadPaperDecisions({ signal: controller.signal })
         if (!cancelled) {
-          setDecisions(fresh)
+          setDecisions([
+            ...new Map(
+              fresh.map((decision) => [decision.id, decision]),
+            ).values(),
+          ])
+          setDecisionReceivedAt(Date.now())
           setDecisionError(null)
         }
       } catch (cause) {
@@ -105,7 +114,7 @@ export default function ConnectedTerminal() {
       controller.abort()
       if (timer !== undefined) globalThis.clearTimeout(timer)
     }
-  }, [retry])
+  }, [retry, decisionRetry])
 
   const candles = useMemo(() => {
     const seconds = INTERVALS[interval]
@@ -347,6 +356,7 @@ export default function ConnectedTerminal() {
                     markers={decisionMarkers}
                     selectedId={selectedDecisionId ?? ''}
                     intervalSeconds={INTERVALS[interval]}
+                    initialViewport="approved-terminal"
                     onSelect={(time, markerId) => {
                       if (markerId) setSelectedDecisionId(markerId)
                       else {
@@ -381,6 +391,9 @@ export default function ConnectedTerminal() {
                 <PaperDecisionPanel
                   decisions={decisions}
                   selectedId={selectedDecisionId}
+                  error={decisionError}
+                  receivedAt={decisionReceivedAt}
+                  onRetry={() => setDecisionRetry((value) => value + 1)}
                   onSelect={(decision) => {
                     setSelectedDecisionId(decision.id)
                     document

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import ConnectedTerminal from './ConnectedTerminal.tsx'
 
 const chartProbe = vi.hoisted(() => ({
@@ -35,6 +35,7 @@ vi.mock(
 
 afterEach(() => {
   cleanup()
+  vi.useRealTimers()
   vi.unstubAllGlobals()
 })
 
@@ -146,6 +147,12 @@ describe('ConnectedTerminal', () => {
     expect(
       screen.getByText('Declared API fixture decision; not a fill.'),
     ).toBeInTheDocument()
+    expect(screen.getByText(/Consulta cada 5 s/)).toBeInTheDocument()
+    expect(
+      screen.getByText(/Motor: evaluación cada 15 min/),
+    ).toBeInTheDocument()
+    expect(screen.getByText(/Última decisión:/)).toBeInTheDocument()
+    expect(screen.getByText(/Actualizado:/)).toBeInTheDocument()
   })
 
   it('does not substitute demo data when the backend is unavailable', async () => {
@@ -160,5 +167,114 @@ describe('ConnectedTerminal', () => {
     expect(
       screen.getByRole('button', { name: 'Reintentar' }),
     ).toBeInTheDocument()
+  })
+
+  it('retains the last decision receipt during a failed poll and recovers on feed retry', async () => {
+    vi.useFakeTimers()
+    let decisionRequests = 0
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input)
+        if (url.includes('/paper-trading/decisions')) {
+          decisionRequests += 1
+          if (decisionRequests === 2)
+            return { ok: false, status: 503, json: async () => ({}) }
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              decisions: [
+                {
+                  id: 'cached-native-decision',
+                  instrumentId: 'BTC-EUR',
+                  eventTime: 1_700_000_030_000,
+                  receivedAt: 1_700_000_031_000,
+                  strategyId: 'native-paper-fixture',
+                  strategyVersion: 'native-v1',
+                  direction: 'long',
+                  outcome: 'pending',
+                  reasonCode: null,
+                  sessionId: null,
+                  reason: 'Cached backend decision; not a fill.',
+                  conditions: [],
+                },
+              ],
+            }),
+          }
+        }
+        if (url.includes('/market/ohlc'))
+          return { ok: true, status: 200, json: async () => ({ candles: [] }) }
+        if (url.includes('/paper-trading/status'))
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              enabled: true,
+              running: true,
+              account: {
+                balance_eur: 10,
+                btc_balance: 0,
+                total_equity_eur: 10,
+              },
+              execution_summary: {
+                total_signals: 0,
+                gate_rejections: 0,
+                executed_trades: 0,
+                closed_pnl_eur: 0,
+              },
+            }),
+          }
+        if (url.includes('/collector/status'))
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              enabled: true,
+              running: true,
+              newest_candle_iso: null,
+            }),
+          }
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ orders: [], strategies: [], positions: [] }),
+        }
+      }),
+    )
+
+    render(<ConnectedTerminal />)
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(
+      screen.getByText('Cached backend decision; not a fill.'),
+    ).toBeInTheDocument()
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000)
+    })
+    expect(
+      screen.getByText('Cached backend decision; not a fill.'),
+    ).toBeInTheDocument()
+    expect(screen.getByText(/Feed desactualizado:/)).toBeInTheDocument()
+    expect(screen.getByText(/Actualizado:/)).toBeInTheDocument()
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Reintentar decisiones' }),
+    )
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(
+      screen.getByText('Cached backend decision; not a fill.'),
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/Feed desactualizado:/)).not.toBeInTheDocument()
+    expect(decisionRequests).toBe(3)
   })
 })
