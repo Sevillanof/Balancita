@@ -1,0 +1,24 @@
+odd/tasks/kraken-futures-deterministic.md
+  h_2f68313623be98 3-4,56-57,132,136,142-152
+python/balancita_engine/futures_indicators.py
+  h_2f68313623be98 1-297
+python/balancita_engine/futures_runtime.py
+  h_2f68313623be98 1-724
+python/tests/futures_runtime_fixtures.py
+  h_2f68313623be98 1-193
+python/tests/test_futures_indicators.py
+  h_2f68313623be98 1-100
+python/tests/test_futures_runtime.py
+  h_2f68313623be98 1-303
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6e442d687cc0a63eff20252228d819c8f464c1b5",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
