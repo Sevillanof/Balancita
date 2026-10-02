@@ -67,6 +67,9 @@ describe('isolated paper-futures SQLite store', () => {
       const receipt = store.applyResult(result)
       expect(receipt.status).toBe('committed')
       expect(store.applyResult(result)).toEqual(receipt)
+      expect(() =>
+        store.applyResult({ ...result, result: { equity: '999' } }),
+      ).toThrow('Applied work result conflicts with stored result.')
       store.close()
       const reopened = new FuturesStore(path)
       expect(reopened.exportRun('run-1').receipt).toEqual(receipt)

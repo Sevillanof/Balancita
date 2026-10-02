@@ -85,6 +85,14 @@ export class FuturesStore {
     expectedVersion: number
     snapshot: unknown
   }): void {
+    if (
+      !input.workId ||
+      !input.runId ||
+      !input.cycleKey ||
+      !Number.isSafeInteger(input.expectedVersion) ||
+      input.expectedVersion < 0
+    )
+      throw new Error('Invalid immutable work identity or expected version.')
     const json = canonicalJson(input.snapshot)
     const hash = canonicalHash(input.snapshot)
     const prior = this.db
