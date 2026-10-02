@@ -1,0 +1,16 @@
+server/src/features/paper-futures/futures-canonical.test.ts
+  h_2f68313623be98 1-35
+server/src/features/paper-futures/futures-canonical.ts
+  h_2f68313623be98 1-75
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7c5f7e52ab7fc18dcd6e38f88a7c09a62a7a6b16",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
