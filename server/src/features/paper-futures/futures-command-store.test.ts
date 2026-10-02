@@ -132,6 +132,53 @@ describe('durable futures worker commands', () => {
       rmSync(directory, { recursive: true, force: true })
     }
   })
+
+  it('resumes a durable queued command from the Node-owned persisted ledger checkpoint', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'futures-worker-checkpoint-'))
+    const path = join(directory, 'fixture.sqlite')
+    try {
+      const store = new FuturesStore(path)
+      createRun(store)
+      const runner = new FuturesCommandRunner(store)
+      const first = runner.accept(request())
+      await first.result
+      const nextCommand = request(
+        'checkpoint-request-2',
+        'checkpoint-work-2',
+        1,
+      )
+      const checkpoint =
+        store.getRunProjection(nextCommand.run_id)?.result ?? null
+      expect(
+        (checkpoint as { realized_net_complete: string }).realized_net_complete,
+      ).toBe('0.09895')
+      store.acceptCommand(
+        nextCommand.work_id,
+        nextCommand,
+        undefined,
+        checkpoint,
+      )
+      await runner.close()
+      store.close()
+
+      const reopened = new FuturesStore(path)
+      const restarted = new FuturesCommandRunner(reopened)
+      const results = await restarted.resumePending()
+      expect(results).toHaveLength(1)
+      expect(reopened.exportRun(nextCommand.run_id).events).toHaveLength(8)
+      expect(
+        (
+          reopened.exportRun(nextCommand.run_id).projection as {
+            result: { realized_net_complete: string }
+          }
+        ).result.realized_net_complete,
+      ).toBe('0.1979')
+      await restarted.close()
+      reopened.close()
+    } finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
 })
 
 function createRun(store: FuturesStore): void {
