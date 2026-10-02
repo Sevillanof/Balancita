@@ -1,0 +1,20 @@
+server/src/features/paper-futures/futures-command-runner.ts
+  h_2f68313623be98 1-218
+server/src/features/paper-futures/futures-command-store.test.ts
+  h_2f68313623be98 1-174
+server/src/features/paper-futures/futures-store.test.ts
+  h_2f68313623be98 169-219,289
+server/src/features/paper-futures/futures-store.ts
+  h_2f68313623be98 46-49,388-404,406-412,422-429,444-446,450-451,460-512
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4d640f5b13ef19924304a7d0b087a1467e88075d",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
