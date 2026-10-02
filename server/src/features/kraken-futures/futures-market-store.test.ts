@@ -59,6 +59,75 @@ describe('FuturesMarketStore', () => {
     store.close()
   })
 
+  it('preserves persisted global receipt order across feed-local sequence values and duplicates', () => {
+    const path = dbPath()
+    const book = {
+      type: 'book',
+      productId: 'PF_XBTUSD',
+      seq: 100,
+      eventTime: 1000,
+      receivedAt: 1010,
+      persistedAt: 1020,
+      epoch: 1,
+      snapshot: true,
+      bids: [{ price: '89999', quantity: '1' }],
+      asks: [{ price: '90001', quantity: '1' }],
+      raw: { feed: 'book_snapshot' },
+    }
+    const trade = { ...event, seq: 5, receivedAt: 1010 }
+    let store = new FuturesMarketStore(path)
+    expect(store.append(book)).toBe('inserted')
+    expect(store.append(trade)).toBe('inserted')
+    const exported = store
+      .exportJsonl()
+      .trim()
+      .split('\n')
+      .map(
+        (line) =>
+          JSON.parse(line) as {
+            type: string
+            seq: number
+            receivedSequence: number
+          },
+      )
+    expect(
+      exported.map((item) => [item.type, item.seq, item.receivedSequence]),
+    ).toEqual([
+      ['book', 100, 1],
+      ['trade', 5, 2],
+    ])
+    expect(
+      store
+        .eventsAsOf(1010)
+        .map(
+          (item) => (item as { type: string; receivedSequence: number }).type,
+        ),
+    ).toEqual(['book', 'trade'])
+    expect(store.eventsAsOf(1009)).toEqual([])
+    store.close()
+    store = new FuturesMarketStore(path)
+    expect(store.append(book)).toBe('duplicate')
+    expect(store.exportJsonl().trim().split('\n')).toEqual(
+      exported.map((item) => JSON.stringify(item)),
+    )
+    store.close()
+  })
+
+  it('guards durable market evidence against update and delete', () => {
+    const path = dbPath()
+    const store = new FuturesMarketStore(path)
+    store.append(event)
+    store.close()
+    const raw = new DatabaseSync(path)
+    expect(() =>
+      raw.prepare('UPDATE paper_futures_market_events SET seq=9').run(),
+    ).toThrow(/immutable/i)
+    expect(() =>
+      raw.prepare('DELETE FROM paper_futures_market_events').run(),
+    ).toThrow(/immutable/i)
+    raw.close()
+  })
+
   it('uses namespaced additive schema without changing legacy fixture tables or migration version', () => {
     const path = dbPath()
     const fixture = new DatabaseSync(path)
@@ -68,7 +137,7 @@ describe('FuturesMarketStore', () => {
       INSERT INTO market_observations VALUES('spot-fixture','untouched');`)
     fixture.close()
     const store = new FuturesMarketStore(path)
-    expect(store.schemaVersion()).toBe(1)
+    expect(store.schemaVersion()).toBe(2)
     store.append(event)
     store.close()
     const reopened = new DatabaseSync(path)

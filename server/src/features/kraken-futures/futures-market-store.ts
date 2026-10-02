@@ -5,7 +5,14 @@ import { dirname } from 'node:path'
 import { canonicalJson } from '../paper-futures/futures-canonical.ts'
 
 type RecordValue = Record<string, unknown>
-type StoredRow = { normalized_json: string }
+type StoredRow = { normalized_json: string; received_sequence: number }
+
+function withReceivedSequence(row: StoredRow): unknown {
+  return {
+    ...JSON.parse(row.normalized_json),
+    receivedSequence: Number(row.received_sequence),
+  }
+}
 
 function asRecord(value: unknown): RecordValue {
   if (typeof value !== 'object' || value === null || Array.isArray(value))
@@ -79,6 +86,31 @@ export class FuturesMarketStore {
         volume_btc TEXT NOT NULL, trade_count INTEGER NOT NULL, source_hash TEXT NOT NULL,
         PRIMARY KEY(candle_id, revision)
       ) STRICT;
+      INSERT OR IGNORE INTO paper_futures_market_migrations VALUES(2, unixepoch('subsec') * 1000);
+      CREATE TRIGGER IF NOT EXISTS paper_futures_market_events_no_update
+        BEFORE UPDATE ON paper_futures_market_events BEGIN SELECT RAISE(ABORT, 'market evidence is immutable'); END;
+      CREATE TRIGGER IF NOT EXISTS paper_futures_market_events_no_delete
+        BEFORE DELETE ON paper_futures_market_events BEGIN SELECT RAISE(ABORT, 'market evidence is immutable'); END;
+      CREATE TRIGGER IF NOT EXISTS paper_futures_instrument_versions_no_update
+        BEFORE UPDATE ON paper_futures_instrument_versions BEGIN SELECT RAISE(ABORT, 'market evidence is immutable'); END;
+      CREATE TRIGGER IF NOT EXISTS paper_futures_instrument_versions_no_delete
+        BEFORE DELETE ON paper_futures_instrument_versions BEGIN SELECT RAISE(ABORT, 'market evidence is immutable'); END;
+      CREATE TRIGGER IF NOT EXISTS paper_futures_book_snapshots_no_update
+        BEFORE UPDATE ON paper_futures_book_snapshots BEGIN SELECT RAISE(ABORT, 'market evidence is immutable'); END;
+      CREATE TRIGGER IF NOT EXISTS paper_futures_book_snapshots_no_delete
+        BEFORE DELETE ON paper_futures_book_snapshots BEGIN SELECT RAISE(ABORT, 'market evidence is immutable'); END;
+      CREATE TRIGGER IF NOT EXISTS paper_futures_ticker_snapshots_no_update
+        BEFORE UPDATE ON paper_futures_ticker_snapshots BEGIN SELECT RAISE(ABORT, 'market evidence is immutable'); END;
+      CREATE TRIGGER IF NOT EXISTS paper_futures_ticker_snapshots_no_delete
+        BEFORE DELETE ON paper_futures_ticker_snapshots BEGIN SELECT RAISE(ABORT, 'market evidence is immutable'); END;
+      CREATE TRIGGER IF NOT EXISTS paper_futures_data_gaps_no_update
+        BEFORE UPDATE ON paper_futures_data_gaps BEGIN SELECT RAISE(ABORT, 'market evidence is immutable'); END;
+      CREATE TRIGGER IF NOT EXISTS paper_futures_data_gaps_no_delete
+        BEFORE DELETE ON paper_futures_data_gaps BEGIN SELECT RAISE(ABORT, 'market evidence is immutable'); END;
+      CREATE TRIGGER IF NOT EXISTS paper_futures_candle_revisions_no_update
+        BEFORE UPDATE ON paper_futures_candle_revisions BEGIN SELECT RAISE(ABORT, 'market evidence is immutable'); END;
+      CREATE TRIGGER IF NOT EXISTS paper_futures_candle_revisions_no_delete
+        BEFORE DELETE ON paper_futures_candle_revisions BEGIN SELECT RAISE(ABORT, 'market evidence is immutable'); END;
     `)
   }
 
@@ -142,7 +174,9 @@ export class FuturesMarketStore {
             priceUsd: event.priceUsd,
           }
         : event
-    const contentHash = digest(content)
+    const normalizedEvent = { ...event }
+    delete normalizedEvent.receivedSequence
+    const contentHash = digest(feed === 'trade' ? content : normalizedEvent)
     if (uid !== null) {
       const existing = this.db
         .prepare(
@@ -160,6 +194,16 @@ export class FuturesMarketStore {
       uid === null
         ? `${feed}:${product}:${epoch}:${seq}:${contentHash}`
         : `${feed}:${product}:${uid}`
+    const existingEvent = this.db
+      .prepare(
+        'SELECT content_hash FROM paper_futures_market_events WHERE event_id=?',
+      )
+      .get(eventId) as { content_hash: string } | undefined
+    if (existingEvent) {
+      if (existingEvent.content_hash !== contentHash)
+        throw new Error('Market event identity payload conflict.')
+      return 'duplicate'
+    }
     const rawJson =
       typeof event.rawJson === 'string'
         ? event.rawJson
@@ -168,7 +212,7 @@ export class FuturesMarketStore {
       throw new RangeError(
         'Raw market evidence exceeds the configured size bound.',
       )
-    const normalizedJson = canonicalJson(event)
+    const normalizedJson = canonicalJson(normalizedEvent)
     this.db.exec('BEGIN IMMEDIATE')
     try {
       this.db
@@ -307,11 +351,11 @@ export class FuturesMarketStore {
     return (
       this.db
         .prepare(
-          `SELECT normalized_json FROM paper_futures_market_events
-      WHERE received_at<=? ORDER BY received_at,seq,event_id`,
+          `SELECT normalized_json,rowid AS received_sequence FROM paper_futures_market_events
+      WHERE received_at<=? ORDER BY rowid`,
         )
         .all(receivedCutoff) as StoredRow[]
-    ).map((row) => JSON.parse(row.normalized_json) as unknown)
+    ).map(withReceivedSequence)
   }
 
   eventCount(): number {
@@ -333,12 +377,12 @@ export class FuturesMarketStore {
   exportJsonl(): string {
     const rows = this.db
       .prepare(
-        `SELECT normalized_json FROM paper_futures_market_events
-      ORDER BY received_at,seq,event_id`,
+        `SELECT normalized_json,rowid AS received_sequence FROM paper_futures_market_events
+      ORDER BY rowid`,
       )
       .all() as StoredRow[]
     return (
-      rows.map((row) => row.normalized_json).join('\n') +
+      rows.map((row) => canonicalJson(withReceivedSequence(row))).join('\n') +
       (rows.length ? '\n' : '')
     )
   }
