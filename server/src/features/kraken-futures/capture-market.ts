@@ -10,6 +10,7 @@ import {
   parseBookMessage,
   parseTickerMessage,
   parseTradeMessage,
+  PAPER_MARKET_QUALITY_POLICY,
   validateInstrumentCatalog,
 } from './futures-market.ts'
 import { FuturesCandleBuilder } from './futures-candles.ts'
@@ -21,10 +22,17 @@ const MOCK_TIME = 1_790_950_000_000
 
 function args(argv: string[]): Map<string, string> {
   const result = new Map<string, string>()
+  const allowed = new Set(['--mode', '--db-path', '--seconds', '--export'])
   for (let index = 0; index < argv.length; index += 2) {
     const key = argv[index]
     const value = argv[index + 1]
-    if (!key?.startsWith('--') || !value || result.has(key))
+    if (
+      !key?.startsWith('--') ||
+      !allowed.has(key) ||
+      !value ||
+      value.startsWith('--') ||
+      result.has(key)
+    )
       throw new Error(usage)
     result.set(key, value)
   }
@@ -180,6 +188,7 @@ async function runLive(
   candles: FuturesCandleBuilder,
   seconds: number,
 ): Promise<void> {
+  store.saveQualityPolicy(PAPER_MARKET_QUALITY_POLICY, Date.now())
   if (typeof WebSocket === 'undefined')
     throw new Error(
       'This Node runtime does not expose WebSocket; live capture unavailable.',
@@ -199,31 +208,47 @@ async function runLive(
       ),
   })
   collector.start()
+  let liveMetrics: unknown
   try {
     await new Promise<void>((resolvePromise) =>
       setTimeout(resolvePromise, seconds * 1000),
     )
+    liveMetrics = {
+      status: collector.status,
+      metrics: collector.metrics,
+      book: collector.book,
+      qualityPolicy: PAPER_MARKET_QUALITY_POLICY.version,
+      sourceGuarantee: 'undocumented',
+      fundingStatus: 'unknown_or_provider_unresolved',
+    }
   } finally {
     collector.stop()
   }
   candles.advanceClock(Date.now())
   process.stderr.write(
-    `collector_metrics ${JSON.stringify(collector.metrics)}\n`,
+    `collector_metrics phase=pre_stop ${JSON.stringify(liveMetrics)}\n`,
+  )
+  process.stderr.write(
+    `collector_metrics phase=post_stop ${JSON.stringify({ status: collector.status, metrics: collector.metrics, book: collector.book })}\n`,
   )
 }
 
 async function main(): Promise<void> {
+  if (process.env.EXECUTION_MODE !== undefined)
+    throw new Error('EXECUTION_MODE is unsupported by the market capture CLI.')
   const options = args(process.argv.slice(2))
   const mode = options.get('--mode')
-  const dbPath = isolatedPath(options.get('--db-path') ?? '', 'Database path')
+  const rawDbPath = options.get('--db-path')
   const seconds = Number(options.get('--seconds') ?? '15')
   if (
     (mode !== 'mock' && mode !== 'paper_live') ||
+    !rawDbPath ||
     !Number.isSafeInteger(seconds) ||
     seconds < 1 ||
     seconds > 30
   )
     throw new Error(usage)
+  const dbPath = isolatedPath(rawDbPath, 'Database path')
   const exportPath = options.has('--export')
     ? isolatedPath(options.get('--export')!, 'Export path')
     : undefined
@@ -247,6 +272,10 @@ async function main(): Promise<void> {
       process.stderr.write(
         `source=paper_live url=${FUTURES_WS_URL} product=${FUTURES_PRODUCT} entry_eligibility=${spec.entryEligibility} metadata_hash=${spec.metadataHash}\n`,
       )
+      if (spec.entryEligibility !== 'eligible')
+        throw new Error(
+          'Paper-live capture is blocked because instrument metadata is not eligible.',
+        )
       const candles = new FuturesCandleBuilder(store)
       await runLive(store, candles, seconds)
     }

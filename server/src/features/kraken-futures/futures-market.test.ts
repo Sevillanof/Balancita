@@ -249,8 +249,9 @@ describe('Kraken Futures market decoding', () => {
     expect(collector.tick()).toBe('live')
     send(book('book', 11, { side: 'sell', price: 101, qty: 0 }))
     expect(collector.book.asks).toEqual([{ price: '102', quantity: '1' }])
+    expect(collector.book.executableEligible).toBe(true)
     send(book('book', 13, { side: 'sell', price: 103, qty: 1 }))
-    expect(collector.status).toBe('live')
+    expect(collector.status).toBe('degraded')
     expect(collector.metrics.sequenceDiscontinuityCount).toBe(1)
     expect(collector.book.executableEligible).toBe(false)
     send(book('book', 12, { side: 'sell', price: 104, qty: 1 }))
@@ -260,14 +261,43 @@ describe('Kraken Futures market decoding', () => {
     expect(collector.metrics.bookValid).toBe(false)
     send(book('book_snapshot', 20))
     expect(collector.metrics.bookValid).toBe(true)
+    expect(collector.book.executableEligible).toBe(true)
+    expect(collector.book.qualityPolicy).toBe('snapshot-contiguous-observed.v1')
+    expect(collector.book.sourceGuarantee).toBe('undocumented')
+    send(book('book_snapshot', 21, { bids: [] }))
+    expect(collector.book.valid).toBe(false)
+    expect(collector.book.executableEligible).toBe(false)
+    send(book('book_snapshot', 22))
+    expect(collector.book.executableEligible).toBe(true)
+    const ticker = (seq: number, suspended: boolean, includeMark = true) => ({
+      feed: 'ticker',
+      product_id: 'PF_XBTUSD',
+      time: now,
+      seq,
+      bid: 100,
+      ask: 101,
+      last: 100,
+      ...(includeMark ? { markPrice: 100 } : {}),
+      index: 100,
+      suspended,
+    })
+    send(ticker(2, true))
+    expect(collector.book.executableEligible).toBe(false)
+    send(ticker(3, false))
+    expect(collector.book.executableEligible).toBe(true)
+    send(ticker(4, false, false))
+    expect(collector.book.executableEligible).toBe(false)
+    send(ticker(5, false))
+    expect(collector.book.executableEligible).toBe(true)
     now += 3001
     callbacks
       .filter((timer) => timer.active && timer.delay === 3001)
       .at(-1)!
       .callback()
     expect(collector.status).toBe('stale')
-    expect(messages).toHaveLength(7)
-    expect(persisted).toHaveLength(6)
+    expect(collector.book.executableEligible).toBe(false)
+    expect(messages).toHaveLength(9)
+    expect(persisted).toHaveLength(11)
     socket!.onclose!()
     callbacks.find((timer) => timer.active && timer.delay === 500)!.callback()
     socket!.onopen!()

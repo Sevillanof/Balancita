@@ -87,6 +87,15 @@ export class FuturesMarketStore {
         PRIMARY KEY(candle_id, revision)
       ) STRICT;
       INSERT OR IGNORE INTO paper_futures_market_migrations VALUES(2, unixepoch('subsec') * 1000);
+      CREATE TABLE IF NOT EXISTS paper_futures_market_quality_policies (
+        policy_version TEXT PRIMARY KEY, recorded_at INTEGER NOT NULL,
+        payload_json TEXT NOT NULL
+      ) STRICT;
+      INSERT OR IGNORE INTO paper_futures_market_migrations VALUES(3, unixepoch('subsec') * 1000);
+      CREATE TRIGGER IF NOT EXISTS paper_futures_market_quality_policies_no_update
+        BEFORE UPDATE ON paper_futures_market_quality_policies BEGIN SELECT RAISE(ABORT, 'market evidence is immutable'); END;
+      CREATE TRIGGER IF NOT EXISTS paper_futures_market_quality_policies_no_delete
+        BEFORE DELETE ON paper_futures_market_quality_policies BEGIN SELECT RAISE(ABORT, 'market evidence is immutable'); END;
       CREATE TRIGGER IF NOT EXISTS paper_futures_market_events_no_update
         BEFORE UPDATE ON paper_futures_market_events BEGIN SELECT RAISE(ABORT, 'market evidence is immutable'); END;
       CREATE TRIGGER IF NOT EXISTS paper_futures_market_events_no_delete
@@ -145,6 +154,36 @@ export class FuturesMarketStore {
         canonicalJson(spec),
         canonicalJson(rawCatalog),
       )
+  }
+
+  saveQualityPolicy(policy: unknown, recordedAt: number): void {
+    const value = asRecord(policy)
+    const version = String(value.version ?? '')
+    if (!/^[a-z0-9.-]{1,80}$/.test(version))
+      throw new TypeError('Market quality policy version is invalid.')
+    const payloadJson = canonicalJson(policy)
+    const existing = this.db
+      .prepare(
+        'SELECT payload_json FROM paper_futures_market_quality_policies WHERE policy_version=?',
+      )
+      .get(version) as { payload_json: string } | undefined
+    if (existing && existing.payload_json !== payloadJson)
+      throw new Error('Market quality policy version payload conflict.')
+    this.db
+      .prepare(
+        `INSERT OR IGNORE INTO paper_futures_market_quality_policies
+        (policy_version,recorded_at,payload_json) VALUES(?,?,?)`,
+      )
+      .run(version, time(recordedAt, 'recordedAt'), payloadJson)
+  }
+
+  qualityPolicies(): unknown[] {
+    return this.db
+      .prepare(
+        `SELECT policy_version AS version,recorded_at AS recordedAt,payload_json AS payloadJson
+        FROM paper_futures_market_quality_policies ORDER BY policy_version`,
+      )
+      .all() as unknown[]
   }
 
   append(value: unknown): 'inserted' | 'duplicate' {

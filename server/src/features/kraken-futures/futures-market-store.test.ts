@@ -128,6 +128,30 @@ describe('FuturesMarketStore', () => {
     raw.close()
   })
 
+  it('persists an immutable versioned paper-quality policy without relabeling events', () => {
+    const path = dbPath()
+    const store = new FuturesMarketStore(path)
+    store.append(event)
+    const policy = {
+      version: 'snapshot-contiguous-observed.v1',
+      sourceGuarantee: 'undocumented',
+      eligibility: 'paper_only',
+    }
+    store.saveQualityPolicy(policy, 2000)
+    expect(store.qualityPolicies()).toHaveLength(1)
+    expect(store.eventsAsOf(1010)).toHaveLength(1)
+    store.close()
+    const raw = new DatabaseSync(path)
+    expect(() =>
+      raw
+        .prepare(
+          'UPDATE paper_futures_market_quality_policies SET recorded_at=3',
+        )
+        .run(),
+    ).toThrow(/immutable/i)
+    raw.close()
+  })
+
   it('uses namespaced additive schema without changing legacy fixture tables or migration version', () => {
     const path = dbPath()
     const fixture = new DatabaseSync(path)
@@ -137,7 +161,7 @@ describe('FuturesMarketStore', () => {
       INSERT INTO market_observations VALUES('spot-fixture','untouched');`)
     fixture.close()
     const store = new FuturesMarketStore(path)
-    expect(store.schemaVersion()).toBe(2)
+    expect(store.schemaVersion()).toBe(3)
     store.append(event)
     store.close()
     const reopened = new DatabaseSync(path)

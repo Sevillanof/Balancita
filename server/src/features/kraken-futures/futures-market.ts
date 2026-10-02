@@ -4,6 +4,24 @@ export const FUTURES_PRODUCT = 'PF_XBTUSD'
 export const FUTURES_INSTRUMENT_ID = 'kraken-futures:PF_XBTUSD'
 export const FUTURES_WS_URL = 'wss://futures.kraken.com/ws/v1'
 export const MARKET_POLICY_VERSION = 'kraken-futures-ordering-unproven-v2'
+export const PAPER_MARKET_QUALITY_POLICY = Object.freeze({
+  version: 'snapshot-contiguous-observed.v1',
+  sourceGuarantee: 'undocumented',
+  eligibility: 'paper_only',
+  requirements: [
+    'valid instrument metadata',
+    'instrument is not suspended',
+    'fresh ticker mark and book',
+    'book reconstructed from a valid snapshot',
+    'observed contiguous book sequence within the epoch',
+    'no feed gap, malformed depth, crossed book, or stale market status',
+  ],
+  exclusions: [
+    'provider sequence-delivery guarantee is not established',
+    'real exchange execution is unavailable',
+    'unknown funding keeps cost accounting incomplete',
+  ],
+})
 const MAX_MESSAGE_BYTES = 256_000
 const MAX_BOOK_LEVELS = 5_000
 
@@ -531,12 +549,15 @@ export class KrakenFuturesMarketCollector {
   private reconnectAttempt = 0
   private stopped = true
   private bookValid = false
+  private bookSequenceContiguous = false
   private bookResnapshotRequested = false
   private readonly bids = new Map<string, string>()
   private readonly asks = new Map<string, string>()
   private lastBookSeq: number | null = null
   private lastBookAt: number | null = null
   private lastTickerAt: number | null = null
+  private lastTickerSuspended = true
+  private lastTickerMarkAvailable = false
   private lastReceivedAt: number | null = null
   private lastClockSkewMs: number | null = null
   private gapCount = 0
@@ -568,8 +589,10 @@ export class KrakenFuturesMarketCollector {
   }
   get book(): {
     readonly valid: boolean
-    readonly executableEligible: false
-    readonly sequenceIntegrity: 'monotonic_only_unproven'
+    readonly executableEligible: boolean
+    readonly sequenceIntegrity: 'observed_contiguous' | 'invalid_or_unproven'
+    readonly qualityPolicy: 'snapshot-contiguous-observed.v1'
+    readonly sourceGuarantee: 'undocumented'
     readonly bids: readonly BookLevel[]
     readonly asks: readonly BookLevel[]
     readonly sequence: number | null
@@ -577,8 +600,24 @@ export class KrakenFuturesMarketCollector {
   } {
     return {
       valid: this.bookValid,
-      executableEligible: false,
-      sequenceIntegrity: 'monotonic_only_unproven',
+      executableEligible:
+        this.state === 'live' &&
+        this.bookValid &&
+        this.bookSequenceContiguous &&
+        this.bids.size > 0 &&
+        this.asks.size > 0 &&
+        !this.lastTickerSuspended &&
+        this.lastTickerMarkAvailable &&
+        this.lastBookAt !== null &&
+        this.lastTickerAt !== null &&
+        this.options.clock() - this.lastBookAt <= this.limits.stale &&
+        this.options.clock() - this.lastTickerAt <= this.limits.stale,
+      sequenceIntegrity:
+        this.bookValid && this.bookSequenceContiguous
+          ? 'observed_contiguous'
+          : 'invalid_or_unproven',
+      qualityPolicy: 'snapshot-contiguous-observed.v1',
+      sourceGuarantee: 'undocumented',
       bids: [...this.bids]
         .map(([price, quantity]) => ({ price, quantity }))
         .sort((a, b) => -compareDecimals(a.price, b.price)),
@@ -681,6 +720,8 @@ export class KrakenFuturesMarketCollector {
     this.asks.clear()
     this.seqs.clear()
     this.lastTickerAt = null
+    this.lastTickerSuspended = true
+    this.lastTickerMarkAvailable = false
     this.setState('connecting')
     try {
       const socket = this.options.makeSocket(this.options.url ?? FUTURES_WS_URL)
@@ -795,10 +836,21 @@ export class KrakenFuturesMarketCollector {
         this.bids.set(entry.price, entry.quantity)
       for (const entry of event.asks ?? [])
         this.asks.set(entry.price, entry.quantity)
-      this.bookValid = true
+      this.bookValid = this.bids.size > 0 && this.asks.size > 0
+      this.bookSequenceContiguous = this.bookValid
       this.bookResnapshotRequested = false
       this.lastBookSeq = event.seq
       this.lastBookAt = receivedAt
+      if (!this.bookValid) {
+        this.gapCount += 1
+        this.setState('degraded', 'invalid_book_depth_requires_snapshot')
+        this.requestBookSnapshot()
+      }
+      if (!this.bookValid) {
+        this.gapCount += 1
+        this.setState('degraded', 'invalid_book_depth_requires_snapshot')
+        this.requestBookSnapshot()
+      }
     } else if (event.type === 'book') {
       const expectedSeq = previous === undefined ? undefined : previous + 1
       if (!this.bookValid) return
@@ -819,7 +871,25 @@ export class KrakenFuturesMarketCollector {
         this.requestBookSnapshot()
         return
       }
-      if (event.seq > expectedSeq) this.sequenceDiscontinuityCount += 1
+      if (event.seq > expectedSeq) {
+        this.sequenceDiscontinuityCount += 1
+        this.bookValid = false
+        this.bookSequenceContiguous = false
+        this.gapCount += 1
+        this.options.persistGap({
+          feed: 'book',
+          productId: FUTURES_PRODUCT,
+          epoch: this.epoch,
+          expectedSeq,
+          actualSeq: event.seq,
+          detectedAt: receivedAt,
+          reason: 'book_sequence_gap_requires_fresh_snapshot',
+          policyVersion: MARKET_POLICY_VERSION,
+        })
+        this.setState('degraded', 'book_sequence_gap_requires_snapshot')
+        this.requestBookSnapshot()
+        return
+      }
       const levels = event.side === 'bid' ? this.bids : this.asks
       if (event.quantity === '0') levels.delete(event.price!)
       else levels.set(event.price!, event.quantity!)
@@ -896,7 +966,11 @@ export class KrakenFuturesMarketCollector {
     this.seqs.set(event.type, event.seq)
     this.lastReceivedAt = receivedAt
     this.lastClockSkewMs = receivedAt - event.eventTime
-    if (event.type === 'ticker') this.lastTickerAt = receivedAt
+    if (event.type === 'ticker') {
+      this.lastTickerAt = receivedAt
+      this.lastTickerSuspended = event.suspended
+      this.lastTickerMarkAvailable = event.mark !== undefined
+    }
     this.scheduleFreshnessCheck()
     try {
       const integrityEvent =
