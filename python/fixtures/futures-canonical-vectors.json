@@ -1,0 +1,23 @@
+[
+  {
+    "name": "unicode-and-decimal",
+    "value": {
+      "z": "é",
+      "a": "1.23",
+      "nested": {
+        "b": true,
+        "a": null
+      }
+    },
+    "canonical": "{\"a\":\"1.23\",\"nested\":{\"a\":null,\"b\":true},\"z\":\"é\"}",
+    "sha256": "32fbe7f48eb67345cf27634fb45d076be4b38b5bbfcb6d38c06882ccebd9bd1e"
+  },
+  {
+    "name": "semantic-array-order",
+    "value": {
+      "items": ["1", "2"]
+    },
+    "canonical": "{\"items\":[\"1\",\"2\"]}",
+    "sha256": "e2505179a6840b780a03acfab5e0efb38b35ab035a92c3396f171957592b73b9"
+  }
+]
