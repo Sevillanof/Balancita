@@ -1,0 +1,32 @@
+e2e/connected-trading.pw.ts
+  h_2f68313623be98 171,415-417,506,624-924
+odd/tasks/preserve-approved-connected-design.md
+  h_2f68313623be98 111-221
+src/app/ConnectedTerminal.css
+  h_2f68313623be98 126-196
+src/app/ConnectedTerminal.test.tsx
+  h_2f68313623be98 2,38,150-155,171-279
+src/app/ConnectedTerminal.tsx
+  h_2f68313623be98 38-41,91-96,117,359,394-396
+src/features/connected-trading/presentation/PaperDecisionPanel.test.tsx
+  h_2f68313623be98 30-97,103,120,123-136,138-144,155-156
+src/features/connected-trading/presentation/PaperDecisionPanel.tsx
+  h_2f68313623be98 11-13,20-22,24-31,44-81,84-88,92-185
+src/features/demo/trading/TerminalChart.test.tsx
+  h_2f68313623be98 92-102
+src/features/trading-view/presentation/ApprovedTerminalChart.test.tsx
+  h_2f68313623be98 1-223
+src/features/trading-view/presentation/ApprovedTerminalChart.tsx
+  h_2f68313623be98 45,50-61,64,70,77,82,88,93,105,120,130-138,142-143,145,148-150,152-163,165-178,180,184,188,194-195,197-212,259-260,262,280-281,286,290-297,300,304-334,365,372-373,378-380
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "105afda18da87fe99a516655a843a7ba1959e0f6",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
