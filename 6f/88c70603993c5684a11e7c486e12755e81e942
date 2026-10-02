@@ -1,0 +1,24 @@
+server/src/features/paper-futures/futures-command-runner.ts
+  h_2f68313623be98 1,26,39-71,105,107-115,118-139,213-216,276-366
+server/src/features/paper-futures/futures-worker.ts
+  h_2f68313623be98 20-38,49-56,59-61,91,99,346,367,464-466,468-469,473-682,697-698
+python/balancita_engine/futures_worker.py
+  h_2f68313623be98 6,8-9,39-116
+python/tests/test_futures_worker.py
+  h_2f68313623be98 118-188
+odd/tasks/kraken-futures-deterministic.md
+  h_2f68313623be98 3,57,153,156-160
+server/src/features/paper-futures/futures-runtime.test.ts
+  h_2f68313623be98 1-609
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6f88c70603993c5684a11e7c486e12755e81e942",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
