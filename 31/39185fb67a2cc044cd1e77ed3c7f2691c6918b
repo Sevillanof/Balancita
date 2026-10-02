@@ -1,0 +1,16 @@
+docs/kraken-futures-market-data.md
+  h_2f68313623be98 61
+odd/tasks/kraken-futures-deterministic.md
+  h_2f68313623be98 55,108
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3139185fb67a2cc044cd1e77ed3c7f2691c6918b",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
