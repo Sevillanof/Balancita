@@ -1,0 +1,22 @@
+docs/kraken-futures-market-data.md
+  h_2f68313623be98 1-59
+server/src/features/kraken-futures/capture-market.ts
+  h_2f68313623be98 1-271
+server/src/features/kraken-futures/futures-candles.ts
+  h_2f68313623be98 1-186
+server/src/features/kraken-futures/futures-market.test.ts
+  h_2f68313623be98 1-369
+server/src/features/kraken-futures/futures-market.ts
+  h_2f68313623be98 1-969
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d3cfd461d768fccf1a3f807c8ebaf24a2be92556",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
