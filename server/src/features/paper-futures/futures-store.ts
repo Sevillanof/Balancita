@@ -60,6 +60,7 @@ export class FuturesStore {
     seed: unknown
     instrument: unknown
     costs: unknown
+    runtime?: unknown
   }): void {
     validateFrozenRun(input)
     const frozen = {
@@ -67,6 +68,7 @@ export class FuturesStore {
       seed: input.seed,
       instrument: input.instrument,
       costs: input.costs,
+      ...(input.runtime === undefined ? {} : { runtime: input.runtime }),
     }
     const json = canonicalJson(frozen)
     const hash = canonicalHash(frozen)
@@ -118,6 +120,24 @@ export class FuturesStore {
       this.db.exec('ROLLBACK')
       throw error
     }
+  }
+
+  getRuntimeBinding(runId: string): JsonRecord | undefined {
+    const row = this.db
+      .prepare(
+        'SELECT frozen_json,frozen_hash FROM paper_futures_runs WHERE run_id=?',
+      )
+      .get(runId) as { frozen_json: string; frozen_hash: string } | undefined
+    if (!row) return undefined
+    const frozen = JSON.parse(row.frozen_json) as JsonRecord
+    if (
+      canonicalJson(frozen) !== row.frozen_json ||
+      canonicalHash(frozen) !== row.frozen_hash
+    )
+      throw new Error('Stored frozen run configuration is inconsistent.')
+    if (!('runtime' in frozen)) return undefined
+    validateRuntimeBinding(frozen.runtime, frozen)
+    return JSON.parse(canonicalJson(frozen.runtime)) as JsonRecord
   }
 
   recordWork(input: {
@@ -173,6 +193,7 @@ export class FuturesStore {
 
   applyResult(value: unknown, injectFailureAt?: 'before-commit'): JsonRecord {
     if (!isRecord(value)) throw new Error('Invalid futures result schema.')
+    const runtimeWork = value.schema_version === 'futures-runtime-work.v1'
     assertKeys(
       value,
       [
@@ -183,7 +204,14 @@ export class FuturesStore {
         'result',
         'events',
       ],
-      ['result_hash'],
+      runtimeWork
+        ? [
+            'result_hash',
+            'schema_version',
+            'runtime_checkpoint',
+            'runtime_output',
+          ]
+        : ['result_hash'],
     )
     if (
       value.protocol_version !== 1 ||
@@ -212,6 +240,16 @@ export class FuturesStore {
     const frozen = JSON.parse(String(run.frozen_json)) as JsonRecord
     if (canonicalHash(frozen) !== run.frozen_hash)
       throw new Error('Stored frozen run hash mismatch.')
+    const runtimeBound = 'runtime' in frozen
+    if (runtimeWork !== runtimeBound)
+      throw new Error('Runtime work schema does not match frozen run binding.')
+    if (runtimeWork)
+      validateRuntimeWork(
+        value,
+        frozen,
+        String(value.run_id),
+        Number(value.applied_state_version),
+      )
     validateLedgerSnapshot(value.result, frozen)
     validateFuturesEvents(
       value.events,
@@ -325,6 +363,20 @@ export class FuturesStore {
             .prepare('INSERT INTO paper_futures_fill_ids VALUES(?,?)')
             .run(String(event.fill_id ?? event.id), value.work_id)
       }
+      if (
+        runtimeWork &&
+        isRecord(value.result) &&
+        Array.isArray(value.result.events)
+      )
+        value.result.events.forEach((event, index) => {
+          this.db
+            .prepare('INSERT INTO paper_futures_ledger VALUES(?,?,?)')
+            .run(
+              String(value.work_id),
+              `runtime:${value.work_id}:${index}`,
+              canonicalJson(event),
+            )
+        })
       const previous = String(run.head_hash)
       const payloadHash = canonicalHash(value)
       const recordHash = createHash('sha256')
@@ -359,6 +411,7 @@ export class FuturesStore {
           canonicalJson({
             state_version: value.applied_state_version,
             result: value.result,
+            ...(runtimeWork ? { checkpoint: value.runtime_checkpoint } : {}),
           }),
           value.run_id,
         )
@@ -603,6 +656,7 @@ export class FuturesStore {
         seed: frozen.seed,
         instrument: frozen.instrument,
         costs: frozen.costs,
+        runtime: frozen.runtime,
       })
     } catch {
       return false
@@ -633,7 +687,10 @@ export class FuturesStore {
       .all(runId) as JsonRecord[]
     let previous = '0'.repeat(64)
     const expectedEvents = new Map<string, string>()
+    const expectedRuntimeLedger = new Map<string, string>()
     let expectedStateVersion = 0
+    let latestRuntimeCheckpoint: unknown
+    let hasRuntimeCheckpoint = false
     for (const row of records) {
       if (!workIds.has(String(row.work_id))) return false
       let payload: unknown
@@ -682,6 +739,28 @@ export class FuturesStore {
           )
           .get(String(row.work_id)) as { result_hash: string } | undefined
         if (!applied || applied.result_hash !== resultHash) return false
+        if (payload.schema_version === 'futures-runtime-work.v1') {
+          if (!('runtime' in frozen)) return false
+          validateRuntimeWork(
+            payload,
+            frozen,
+            runId,
+            Number(payload.applied_state_version),
+          )
+          latestRuntimeCheckpoint = payload.runtime_checkpoint
+          hasRuntimeCheckpoint = true
+          if (
+            !isRecord(payload.result) ||
+            !Array.isArray(payload.result.events)
+          )
+            return false
+          payload.result.events.forEach((event, index) => {
+            expectedRuntimeLedger.set(
+              `runtime:${String(row.work_id)}:${index}`,
+              canonicalJson(event),
+            )
+          })
+        }
         for (const event of payload.events) {
           if (
             !isRecord(event) ||
@@ -697,6 +776,24 @@ export class FuturesStore {
     if (
       previous !== run.head_hash ||
       run.state_version !== expectedStateVersion
+    )
+      return false
+    const projectionRow = this.db
+      .prepare(
+        'SELECT state_json FROM paper_futures_projections WHERE run_id=?',
+      )
+      .get(runId) as { state_json: string } | undefined
+    if (!projectionRow) return false
+    const projection = JSON.parse(projectionRow.state_json) as JsonRecord
+    if (
+      canonicalJson(projection) !== projectionRow.state_json ||
+      projection.state_version !== expectedStateVersion
+    )
+      return false
+    if (
+      hasRuntimeCheckpoint &&
+      canonicalJson(projection.checkpoint) !==
+        canonicalJson(latestRuntimeCheckpoint)
     )
       return false
     const committedEvents = new Map(expectedEvents)
@@ -728,7 +825,8 @@ export class FuturesStore {
         'SELECT l.work_id,l.event_id,l.payload_json FROM paper_futures_ledger l JOIN paper_futures_work w ON w.work_id=l.work_id WHERE w.run_id=? ORDER BY l.rowid',
       )
       .all(runId) as JsonRecord[]
-    if (ledgerRows.length !== expectedLedger.size) return false
+    if (ledgerRows.length !== expectedLedger.size + expectedRuntimeLedger.size)
+      return false
     for (const ledgerEvent of ledgerRows) {
       if (
         typeof ledgerEvent.event_id !== 'string' ||
@@ -741,19 +839,26 @@ export class FuturesStore {
       if (
         !work ||
         work.run_id !== runId ||
-        expectedLedger.get(ledgerEvent.event_id) !== ledgerEvent.payload_json
+        (expectedLedger.get(ledgerEvent.event_id) ??
+          expectedRuntimeLedger.get(ledgerEvent.event_id)) !==
+          ledgerEvent.payload_json
       )
         return false
       const payload = JSON.parse(ledgerEvent.payload_json) as JsonRecord
-      if (
-        !['fill', 'funding', 'position', 'account'].includes(
-          String(payload.type),
+      if (expectedRuntimeLedger.has(ledgerEvent.event_id)) {
+        validateLedgerAuditEvent(payload)
+        expectedRuntimeLedger.delete(ledgerEvent.event_id)
+      } else {
+        if (
+          !['fill', 'funding', 'position', 'account'].includes(
+            String(payload.type),
+          )
         )
-      )
-        return false
-      expectedLedger.delete(ledgerEvent.event_id)
+          return false
+        expectedLedger.delete(ledgerEvent.event_id)
+      }
     }
-    return expectedLedger.size === 0
+    return expectedLedger.size === 0 && expectedRuntimeLedger.size === 0
   }
 }
 
@@ -821,6 +926,7 @@ function validateFrozenRun(input: {
   seed: unknown
   instrument: unknown
   costs: unknown
+  runtime?: unknown
 }): void {
   if (
     !input.runId.trim() ||
@@ -861,6 +967,555 @@ function validateFrozenRun(input: {
     canonicalDecimal(input.costs.taker, 'taker fee', 'nonnegative') !== '0.0005'
   )
     throw new Error('Unsupported frozen futures cost identity.')
+  if (input.runtime !== undefined) {
+    const frozen = {
+      config: input.config,
+      seed: input.seed,
+      instrument: input.instrument,
+      costs: input.costs,
+      runtime: input.runtime,
+    }
+    validateRuntimeBinding(input.runtime, frozen)
+  }
+}
+
+function validateRuntimeBinding(value: unknown, frozen: JsonRecord): void {
+  if (!isRecord(value)) throw new Error('Runtime binding must be an object.')
+  assertKeys(value, ['schema_version', 'runtime_config', 'instrument_spec'])
+  if (
+    value.schema_version !== 'futures-runtime-binding.v1' ||
+    !isRecord(value.runtime_config) ||
+    !isRecord(value.instrument_spec)
+  )
+    throw new Error('Unsupported futures runtime binding.')
+  const config = value.runtime_config
+  assertKeys(config, [
+    'version',
+    'initial_cash_usd',
+    'max_notional_usd',
+    'max_exposure_multiple',
+    'risk_fraction',
+    'execution_latency_ms',
+    'max_book_age_ms',
+    'max_spread_bps',
+    'cost_version',
+    'maker_rate',
+    'taker_rate',
+  ])
+  if (
+    config.version !== 'futures-runtime-lab.v1' ||
+    config.cost_version !== (frozen.costs as JsonRecord).version
+  )
+    throw new Error('Unsupported futures runtime configuration.')
+  for (const key of [
+    'initial_cash_usd',
+    'max_notional_usd',
+    'max_exposure_multiple',
+    'risk_fraction',
+    'max_spread_bps',
+    'maker_rate',
+    'taker_rate',
+  ])
+    canonicalDecimal(
+      config[key],
+      `runtime ${key}`,
+      key === 'initial_cash_usd' || key.endsWith('_rate')
+        ? 'nonnegative'
+        : 'positive',
+    )
+  if (
+    compareDecimal(String(config.max_exposure_multiple), '1') > 0 ||
+    compareDecimal(String(config.risk_fraction), '1') > 0 ||
+    config.initial_cash_usd !== (frozen.seed as JsonRecord).cash_usd ||
+    config.cost_version !== (frozen.costs as JsonRecord).version ||
+    config.maker_rate !== (frozen.costs as JsonRecord).maker ||
+    config.taker_rate !== (frozen.costs as JsonRecord).taker
+  )
+    throw new Error(
+      'Runtime configuration conflicts with frozen seed or costs.',
+    )
+  for (const key of ['execution_latency_ms', 'max_book_age_ms'])
+    if (
+      !Number.isSafeInteger(config[key]) ||
+      (config[key] as number) < 0 ||
+      (config[key] as number) > 86_400_000
+    )
+      throw new Error(`Invalid runtime timing ${key}.`)
+  if (
+    (frozen.config as JsonRecord).decimal_precision !== 50 ||
+    (frozen.config as JsonRecord).leverage !== '1'
+  )
+    throw new Error(
+      'Runtime precision or leverage conflicts with frozen ledger config.',
+    )
+  const instrument = value.instrument_spec
+  assertKeys(instrument, [
+    'instrument_id',
+    'provider_symbol',
+    'quantity_step_btc',
+    'minimum_quantity_btc',
+    'price_tick_usd',
+  ])
+  if (
+    instrument.instrument_id !==
+      (frozen.instrument as JsonRecord).instrument_id ||
+    instrument.provider_symbol !== 'PF_XBTUSD'
+  )
+    throw new Error('Runtime instrument conflicts with frozen instrument.')
+  for (const key of [
+    'quantity_step_btc',
+    'minimum_quantity_btc',
+    'price_tick_usd',
+  ])
+    canonicalDecimal(instrument[key], `instrument ${key}`, 'positive')
+}
+
+function validateRuntimeWork(
+  value: JsonRecord,
+  frozen: JsonRecord,
+  runId: string,
+  version: number,
+): void {
+  if (!('runtime' in frozen))
+    throw new Error('Runtime work requires a frozen runtime binding.')
+  validateRuntimeBinding(frozen.runtime, frozen)
+  if (!isRecord(value.runtime_checkpoint) || !isRecord(value.runtime_output))
+    throw new Error('Runtime work checkpoint and output are required.')
+  const cp = value.runtime_checkpoint
+  const output = value.runtime_output
+  assertKeys(cp, [
+    'schema_version',
+    'runtime_version',
+    'run_id',
+    'instrument_id',
+    'runtime_config',
+    'instrument_spec',
+    'cash_usd',
+    'leverage',
+    'realized_gross_usd',
+    'fees_usd',
+    'funding_paid',
+    'funding_complete',
+    'funding_cursor_ms',
+    'ledger_last_accrual_ms',
+    'ledger_position',
+    'funding_rates',
+    'accrued',
+    'ledger_events',
+    'owner_strategy_id',
+    'position_protection',
+    'signal_keys',
+    'consumed_depth',
+  ])
+  if (
+    cp.schema_version !== 1 ||
+    cp.runtime_version !== 'c27-breakout-perp-v1' ||
+    cp.run_id !== runId ||
+    cp.runtime_config === undefined ||
+    cp.instrument_spec === undefined ||
+    cp.runtime_config === null ||
+    cp.instrument_spec === null
+  )
+    throw new Error('Unsupported or mismatched runtime checkpoint identity.')
+  const binding = frozen.runtime as JsonRecord
+  if (
+    canonicalJson(cp.runtime_config) !==
+      canonicalJson(binding.runtime_config) ||
+    canonicalJson(cp.instrument_spec) !==
+      canonicalJson(binding.instrument_spec) ||
+    cp.instrument_id !== (binding.instrument_spec as JsonRecord).instrument_id
+  )
+    throw new Error('Runtime checkpoint configuration or instrument drifted.')
+  if (
+    value.applied_state_version !== version ||
+    !Number.isSafeInteger(version) ||
+    version < 1 ||
+    value.protocol_version !== 1 ||
+    value.schema_version !== 'futures-runtime-work.v1'
+  )
+    throw new Error('Invalid versioned runtime work identity.')
+  assertKeys(output, [
+    'schema_version',
+    'run_id',
+    'runtime_version',
+    'analysis',
+    'risk',
+    'orders',
+    'fills',
+    'position',
+    'ledger',
+    'valuation_source',
+  ])
+  if (
+    output.schema_version !== 'futures-runtime-result.v1' ||
+    output.run_id !== runId ||
+    output.runtime_version !== cp.runtime_version ||
+    !isRecord(output.analysis) ||
+    !isRecord(output.risk) ||
+    !Array.isArray(output.orders) ||
+    !Array.isArray(output.fills) ||
+    !isRecord(output.position) ||
+    !isRecord(output.ledger) ||
+    (output.valuation_source !== 'ticker_mark' &&
+      output.valuation_source !== 'observed_book_midpoint')
+  )
+    throw new Error('Invalid C27 runtime output shape.')
+  assertKeys(output.analysis, [
+    'strategy_id',
+    'selected_strategy_id',
+    'action',
+    'reason_codes',
+    'features',
+    'strategy_status',
+  ])
+  if (
+    typeof output.analysis.action !== 'string' ||
+    !Array.isArray(output.analysis.reason_codes) ||
+    output.analysis.reason_codes.some((code) => typeof code !== 'string') ||
+    !isRecord(output.analysis.features) ||
+    typeof output.analysis.strategy_status !== 'string'
+  )
+    throw new Error('Invalid runtime analysis evidence.')
+  if (
+    output.analysis.action !== 'long' &&
+    output.analysis.action !== 'short' &&
+    output.analysis.action !== 'WAIT' &&
+    output.analysis.action !== 'FLAT'
+  )
+    throw new Error('Unsupported runtime action.')
+  if (
+    output.analysis.selected_strategy_id !== null &&
+    output.analysis.selected_strategy_id !== 'c27-breakout-perp-v1'
+  )
+    throw new Error('Unsupported selected runtime strategy.')
+  if (
+    output.analysis.strategy_id !== null &&
+    output.analysis.strategy_id !== 'c27-breakout-perp-v1'
+  )
+    throw new Error('Unsupported runtime strategy identity.')
+  assertKeys(output.analysis.features, [
+    'schema_version',
+    'ready',
+    'reason_codes',
+    'candidate_close',
+    'ema9',
+    'ema21',
+    'sma50',
+    'rsi14',
+    'atr14',
+    'bollinger_mid20',
+    'bollinger_variance20',
+    'bollinger_stddev20',
+    'bollinger_lower20',
+    'bollinger_upper20',
+    'bollinger_ddof',
+    'donchian_high20',
+    'donchian_low20',
+    'prior_volume_mean20',
+    'candidate_volume',
+    'smoothing',
+    'candidate_bucket_start_ms',
+  ])
+  if (
+    output.analysis.features.schema_version !== 'c27-features.v1' ||
+    typeof output.analysis.features.ready !== 'boolean' ||
+    !Array.isArray(output.analysis.features.reason_codes) ||
+    output.analysis.features.reason_codes.some(
+      (code) => typeof code !== 'string',
+    ) ||
+    output.analysis.features.smoothing !== 'wilder' ||
+    output.analysis.features.bollinger_ddof !== 0
+  )
+    throw new Error('Invalid C27 feature result.')
+  if (
+    !['accepted', 'not_applicable', 'not_evaluated', 'rejected'].includes(
+      String(output.risk.status),
+    ) ||
+    !Array.isArray(output.risk.reason_codes) ||
+    output.risk.reason_codes.some((code) => typeof code !== 'string')
+  )
+    throw new Error('Invalid runtime risk result.')
+  if (output.risk.status === 'accepted') {
+    assertKeys(output.risk, [
+      'status',
+      'quantity_btc',
+      'risk_budget_usd',
+      'estimated_round_trip_cost_usd',
+      'stop_price_usd_per_btc',
+      'target_price_usd_per_btc',
+      'reason_codes',
+    ])
+    for (const field of [
+      'quantity_btc',
+      'risk_budget_usd',
+      'estimated_round_trip_cost_usd',
+      'stop_price_usd_per_btc',
+      'target_price_usd_per_btc',
+    ])
+      canonicalDecimal(
+        output.risk[field],
+        `runtime risk ${field}`,
+        'nonnegative',
+      )
+  } else assertKeys(output.risk, ['status', 'reason_codes'])
+  if (output.position.side === null)
+    assertKeys(output.position, ['side', 'quantity_btc', 'owner_strategy_id'])
+  else
+    assertKeys(output.position, [
+      'side',
+      'quantity_btc',
+      'entry_price_usd_per_btc',
+      'owner_strategy_id',
+      'stop_price_usd_per_btc',
+      'target_price_usd_per_btc',
+      'mark_usd_per_btc',
+    ])
+  if (output.position.side === null) {
+    if (
+      output.position.quantity_btc !== '0' ||
+      output.position.owner_strategy_id !== null
+    )
+      throw new Error('Invalid flat runtime position.')
+  } else {
+    if (output.position.side !== 'long' && output.position.side !== 'short')
+      throw new Error('Invalid runtime position side.')
+    canonicalDecimal(
+      output.position.quantity_btc,
+      'runtime position quantity',
+      'positive',
+    )
+    canonicalDecimal(
+      output.position.entry_price_usd_per_btc,
+      'runtime position entry',
+      'positive',
+    )
+    canonicalDecimal(
+      output.position.stop_price_usd_per_btc,
+      'runtime position stop',
+      'positive',
+    )
+    canonicalDecimal(
+      output.position.target_price_usd_per_btc,
+      'runtime position target',
+      'positive',
+    )
+    canonicalDecimal(
+      output.position.mark_usd_per_btc,
+      'runtime position mark',
+      'positive',
+    )
+  }
+  for (const order of output.orders) {
+    if (!isRecord(order)) throw new Error('Invalid runtime order evidence.')
+    assertKeys(
+      order,
+      [
+        'order_id',
+        'status',
+        'time_in_force',
+        'purpose',
+        'requested_quantity_btc',
+        'filled_quantity_btc',
+        'cancelled_quantity_btc',
+        'eligible_at_ms',
+      ],
+      order.purpose === 'close' ? ['reason'] : [],
+    )
+    for (const field of [
+      'requested_quantity_btc',
+      'filled_quantity_btc',
+      'cancelled_quantity_btc',
+    ])
+      canonicalDecimal(order[field], `runtime order ${field}`, 'nonnegative')
+    if (
+      typeof order.order_id !== 'string' ||
+      (order.status !== 'filled' && order.status !== 'cancelled') ||
+      order.time_in_force !== 'IOC' ||
+      (order.purpose !== 'entry' && order.purpose !== 'close') ||
+      !Number.isSafeInteger(order.eligible_at_ms)
+    )
+      throw new Error('Invalid runtime order fields.')
+  }
+  for (const fill of output.fills) {
+    if (!isRecord(fill)) throw new Error('Invalid runtime fill evidence.')
+    assertKeys(fill, [
+      'fill_id',
+      'side',
+      'action',
+      'quantity_btc',
+      'price_usd_per_btc',
+      'fee_usd',
+      'liquidity',
+      'event_time_ms',
+    ])
+    if (
+      typeof fill.fill_id !== 'string' ||
+      (fill.side !== 'long' && fill.side !== 'short') ||
+      (fill.action !== 'buy' && fill.action !== 'sell') ||
+      fill.liquidity !== 'taker' ||
+      !Number.isSafeInteger(fill.event_time_ms)
+    )
+      throw new Error('Invalid runtime fill fields.')
+    canonicalDecimal(fill.quantity_btc, 'runtime fill quantity', 'positive')
+    canonicalDecimal(fill.price_usd_per_btc, 'runtime fill price', 'positive')
+    canonicalDecimal(fill.fee_usd, 'runtime fill fee', 'nonnegative')
+  }
+  const ledger = value.result
+  if (
+    !isRecord(ledger) ||
+    output.ledger === null ||
+    canonicalJson(output.ledger) !== canonicalJson(ledger) ||
+    !Array.isArray(cp.ledger_events) ||
+    canonicalJson(cp.ledger_events) !== canonicalJson(ledger.events)
+  )
+    throw new Error('Runtime ledger evidence is inconsistent.')
+  for (const [field, checkpointField] of [
+    ['cash_usd', 'cash_usd'],
+    ['leverage', 'leverage'],
+    ['realized_gross_usd', 'realized_gross_usd'],
+    ['fees_usd', 'fees_usd'],
+    ['funding_paid', 'funding_paid'],
+    ['funding_complete', 'funding_complete'],
+  ] as const)
+    if (ledger[field] !== cp[checkpointField])
+      throw new Error(`Runtime checkpoint ${field} differs from ledger result.`)
+  const position = cp.ledger_position
+  if (position !== null) {
+    if (
+      !isRecord(position) ||
+      (position.side !== 'long' && position.side !== 'short')
+    )
+      throw new Error('Invalid runtime checkpoint position.')
+    assertKeys(position, [
+      'side',
+      'qty',
+      'entry',
+      'entry_fee_remaining',
+      'funding_remaining',
+      'opened_at',
+      'funding_cursor_ms',
+    ])
+    canonicalDecimal(position.qty, 'checkpoint position quantity', 'positive')
+    canonicalDecimal(position.entry, 'checkpoint entry price', 'positive')
+    canonicalDecimal(
+      position.entry_fee_remaining,
+      'checkpoint entry fee',
+      'nonnegative',
+    )
+    canonicalDecimal(position.funding_remaining, 'checkpoint remaining funding')
+    if (
+      ledger.side !== position.side ||
+      ledger.quantity_btc !== position.qty ||
+      cp.owner_strategy_id !== 'c27-breakout-perp-v1' ||
+      output.position.side !== position.side ||
+      output.position.quantity_btc !== position.qty ||
+      output.position.owner_strategy_id !== cp.owner_strategy_id ||
+      output.position.entry_price_usd_per_btc !== position.entry ||
+      !isRecord(cp.position_protection) ||
+      output.position.stop_price_usd_per_btc !== cp.position_protection.stop ||
+      output.position.target_price_usd_per_btc !== cp.position_protection.target
+    )
+      throw new Error('Runtime position ownership/accounting mismatch.')
+    if (!isRecord(cp.position_protection))
+      throw new Error('Open runtime position requires protection state.')
+    assertKeys(cp.position_protection, [
+      'stop',
+      'target',
+      'donchian_mid',
+      'opened_at_ms',
+      'signal_key',
+    ])
+    for (const key of ['stop', 'target', 'donchian_mid'])
+      canonicalDecimal(
+        cp.position_protection[key],
+        `position protection ${key}`,
+        'positive',
+      )
+    if (
+      !Number.isSafeInteger(cp.position_protection.opened_at_ms) ||
+      typeof cp.position_protection.signal_key !== 'string'
+    )
+      throw new Error('Invalid position protection state.')
+  } else if (
+    ledger.side !== null ||
+    ledger.quantity_btc !== '0' ||
+    cp.owner_strategy_id !== null
+  )
+    throw new Error('Flat checkpoint does not match ledger position.')
+  for (const key of [
+    'cash_usd',
+    'leverage',
+    'realized_gross_usd',
+    'fees_usd',
+    'funding_paid',
+  ])
+    canonicalDecimal(
+      cp[key],
+      `checkpoint ${key}`,
+      key === 'cash_usd' || key === 'fees_usd' ? 'nonnegative' : 'any',
+    )
+  if (
+    cp.funding_complete !== ledger.funding_complete ||
+    typeof cp.funding_complete !== 'boolean' ||
+    !Array.isArray(cp.funding_rates) ||
+    !Array.isArray(cp.accrued) ||
+    !Array.isArray(cp.signal_keys) ||
+    cp.signal_keys.some((item) => typeof item !== 'string') ||
+    !isRecord(cp.consumed_depth)
+  )
+    throw new Error('Invalid runtime checkpoint funding or signal state.')
+  if (
+    cp.funding_cursor_ms !== null &&
+    (!Number.isSafeInteger(cp.funding_cursor_ms) ||
+      (cp.funding_cursor_ms as number) < 0)
+  )
+    throw new Error('Invalid runtime funding cursor.')
+  if (
+    cp.ledger_last_accrual_ms !== null &&
+    (!Number.isSafeInteger(cp.ledger_last_accrual_ms) ||
+      (cp.ledger_last_accrual_ms as number) < 0)
+  )
+    throw new Error('Invalid runtime accrual timestamp.')
+  if (
+    cp.ledger_position !== null &&
+    (!isRecord(cp.ledger_position) ||
+      !Number.isSafeInteger(cp.ledger_position.opened_at) ||
+      !Number.isSafeInteger(cp.ledger_position.funding_cursor_ms))
+  )
+    throw new Error('Invalid runtime position timestamps.')
+  if (cp.position_protection !== null && !isRecord(cp.position_protection))
+    throw new Error('Invalid runtime position protection.')
+  for (const rate of cp.funding_rates) {
+    if (
+      !Array.isArray(rate) ||
+      rate.length !== 4 ||
+      typeof rate[0] !== 'string' ||
+      !Number.isSafeInteger(rate[1]) ||
+      !Number.isSafeInteger(rate[2]) ||
+      (rate[2] as number) <= (rate[1] as number)
+    )
+      throw new Error('Invalid checkpoint funding rate interval.')
+    canonicalDecimal(rate[3], 'checkpoint funding rate')
+  }
+  for (const accrued of cp.accrued) {
+    if (
+      !Array.isArray(accrued) ||
+      accrued.length !== 4 ||
+      typeof accrued[0] !== 'string' ||
+      !Number.isSafeInteger(accrued[1]) ||
+      !Number.isSafeInteger(accrued[2]) ||
+      (accrued[2] as number) <= (accrued[1] as number)
+    )
+      throw new Error('Invalid checkpoint accrued interval.')
+    canonicalDecimal(accrued[3], 'checkpoint accrued quantity', 'positive')
+  }
+  for (const levels of Object.values(cp.consumed_depth)) {
+    if (!isRecord(levels)) throw new Error('Invalid consumed-depth checkpoint.')
+    for (const quantity of Object.values(levels))
+      canonicalDecimal(quantity, 'consumed depth', 'nonnegative')
+  }
+  if (!Array.isArray(value.events))
+    throw new Error('Runtime audit events must be an array.')
 }
 
 function validateLedgerSnapshot(value: JsonRecord, frozen: JsonRecord): void {
