@@ -1,0 +1,16 @@
+server/src/features/kraken-futures/futures-market-store.test.ts
+  h_2f68313623be98 62-130,140
+server/src/features/kraken-futures/futures-market-store.ts
+  h_2f68313623be98 8-15,89-113,177-179,197-206,215,354-355,358,380-381,385
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3a020f365aa03f9196f1579a82f16b15209d94f3",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
