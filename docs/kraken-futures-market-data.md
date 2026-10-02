@@ -2,6 +2,8 @@
 
 The isolated FK-02 capture utility stores public `PF_XBTUSD` observations in a new SQLite database and exports their normalized event stream as JSONL. It does not connect to application startup, submit orders, use credentials, or access the spot market store.
 
+**Implementation slice:** `feat/kraken-futures-market`, based on `2143c174dd63fadfcbe5874c15b36420dd8d3bbf`, local tip `d3cfd461d768fccf1a3f807c8ebaf24a2be92556` (FK-02 remains pending parent functional check). FK-01 has its own observed functional evidence; native RDD review remains unavailable, and no approval is claimed. The planned next task is FK-03 durable Python worker/command protocol; it has not started.
+
 ## Quick path
 
 Use a newly created temporary directory and an explicit capture mode. `mock` is offline fixture data; `paper_live` requests the current public catalog and opens the documented public market-data WebSocket for at most 30 seconds.
