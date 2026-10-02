@@ -17,17 +17,25 @@ export interface FuturesWorkerRequest {
   readonly work_id: string
   readonly expected_state_version: number
   readonly checkpoint?: Record<string, unknown> | null
-  readonly payload: {
-    readonly operation: 'round_trip'
-    readonly cash_usd: string
-    readonly leverage?: string
-    readonly side: 'long' | 'short'
-    readonly quantity_btc: string
-    readonly entry_price: string
-    readonly exit_price: string
-    readonly opened_at_ms?: number
-    readonly closed_at_ms?: number
-  }
+  readonly payload:
+    | {
+        readonly operation: 'round_trip'
+        readonly cash_usd: string
+        readonly leverage?: string
+        readonly side: 'long' | 'short'
+        readonly quantity_btc: string
+        readonly entry_price: string
+        readonly exit_price: string
+        readonly opened_at_ms?: number
+        readonly closed_at_ms?: number
+      }
+    | {
+        readonly operation: 'futures_runtime.v1'
+        readonly runtime_config: Record<string, unknown>
+        readonly instrument: Record<string, unknown>
+        readonly market_snapshot: Record<string, unknown>
+        readonly control?: Record<string, unknown>
+      }
 }
 
 export interface FuturesWorkerResult {
@@ -38,12 +46,19 @@ export interface FuturesWorkerResult {
   readonly work_id: string
   readonly expected_state_version: number
   readonly applied_state_version: number
-  readonly event_times_ms: {
-    readonly opened_at_ms: number
-    readonly closed_at_ms: number
-  }
+  readonly event_times_ms?:
+    | {
+        readonly opened_at_ms: number
+        readonly closed_at_ms: number
+      }
+    | undefined
+  readonly operation?: 'futures_runtime.v1'
+  readonly runtime_event_time_ms?: number
   readonly result: Record<string, unknown>
   readonly events: readonly Record<string, unknown>[]
+  readonly runtime_output?: Record<string, unknown>
+  readonly runtime_checkpoint?: Record<string, unknown>
+  readonly runtime_funding_events?: readonly Record<string, unknown>[]
 }
 
 export interface FuturesWorkerCommit {
@@ -73,6 +88,7 @@ export class FuturesWorker {
   private readonly timeoutMs: number
   private readonly commitResult: (
     result: FuturesWorkerResult,
+    request: FuturesWorkerRequest,
   ) => Promise<FuturesWorkerCommit>
 
   constructor(options: {
@@ -80,6 +96,7 @@ export class FuturesWorker {
     readonly maxQueue?: number
     readonly commitResult: (
       result: FuturesWorkerResult,
+      request: FuturesWorkerRequest,
     ) => Promise<FuturesWorkerCommit>
   }) {
     this.timeoutMs = options.timeoutMs ?? 10_000
@@ -326,7 +343,7 @@ export class FuturesWorker {
       return
     }
     if (
-      !isResult(message) ||
+      !isResult(message, active.request) ||
       message.request_id !== active.request.request_id ||
       message.run_id !== active.request.run_id ||
       message.work_id !== active.request.work_id ||
@@ -347,7 +364,7 @@ export class FuturesWorker {
     result: FuturesWorkerResult,
   ): Promise<void> {
     try {
-      const commit = await this.commitResult(result)
+      const commit = await this.commitResult(result, active.request)
       if (
         !['committed', 'superseded'].includes(commit.status) ||
         !Number.isSafeInteger(commit.applied_state_version) ||
@@ -444,48 +461,225 @@ export function validateFuturesWorkerRequest(
   )
     throw new Error('Invalid expected state version.')
   if (
-    !isRecord(request.payload) ||
-    Object.keys(request.payload).some(
-      (key) =>
-        ![
-          'operation',
-          'cash_usd',
-          'leverage',
-          'side',
-          'quantity_btc',
-          'entry_price',
-          'exit_price',
-          'opened_at_ms',
-          'closed_at_ms',
-        ].includes(key),
-    ) ||
-    request.payload.operation !== 'round_trip' ||
-    !['cash_usd', 'quantity_btc', 'entry_price', 'exit_price'].every(
-      (key) =>
-        typeof request.payload[key as keyof FuturesWorkerRequest['payload']] ===
-          'string' &&
-        String(request.payload[key as keyof FuturesWorkerRequest['payload']])
-          .length <= 128 &&
-        /^-?(?:0|[1-9]\d*)(?:\.\d+)?$/.test(
-          String(request.payload[key as keyof FuturesWorkerRequest['payload']]),
-        ),
-    ) ||
-    (request.payload.leverage !== undefined &&
-      typeof request.payload.leverage !== 'string') ||
-    (request.payload.side !== 'long' && request.payload.side !== 'short') ||
-    ['opened_at_ms', 'closed_at_ms'].some((key) => {
-      const value =
-        request.payload[key as keyof FuturesWorkerRequest['payload']]
-      return (
-        value !== undefined &&
-        (!Number.isSafeInteger(value) || (value as number) < 0)
-      )
-    })
+    request.checkpoint !== undefined &&
+    request.checkpoint !== null &&
+    (!isRecord(request.checkpoint) || !isJsonSafe(request.checkpoint))
   )
+    throw new Error('Invalid worker checkpoint.')
+  if (!isRecord(request.payload) || !validateWorkerPayload(request.payload))
     throw new Error('Invalid futures worker payload.')
 }
 
-function isResult(value: unknown): value is FuturesWorkerResult {
+function validateWorkerPayload(payload: Record<string, unknown>): boolean {
+  if (payload.operation === 'futures_runtime.v1') {
+    const allowed = [
+      'operation',
+      'runtime_config',
+      'instrument',
+      'market_snapshot',
+      'control',
+    ]
+    if (Object.keys(payload).some((key) => !allowed.includes(key))) return false
+    if (
+      !isRecord(payload.runtime_config) ||
+      !isRecord(payload.instrument) ||
+      !isRecord(payload.market_snapshot)
+    )
+      return false
+    const config = payload.runtime_config
+    if (
+      !hasExactKeys(config, [
+        'version',
+        'initial_cash_usd',
+        'max_notional_usd',
+        'max_exposure_multiple',
+        'risk_fraction',
+        'execution_latency_ms',
+        'max_book_age_ms',
+        'max_spread_bps',
+        'cost_version',
+        'maker_rate',
+        'taker_rate',
+      ]) ||
+      config.version !== 'futures-runtime-lab.v1' ||
+      config.cost_version !== 'kraken-futures-eea-btcusd-base.v1'
+    )
+      return false
+    for (const key of [
+      'initial_cash_usd',
+      'max_notional_usd',
+      'max_exposure_multiple',
+      'risk_fraction',
+      'max_spread_bps',
+      'maker_rate',
+      'taker_rate',
+    ])
+      if (!isDecimalString(config[key])) return false
+    for (const key of ['execution_latency_ms', 'max_book_age_ms'])
+      if (
+        !Number.isSafeInteger(config[key]) ||
+        Number(config[key]) < 0 ||
+        Number(config[key]) > 86_400_000
+      )
+        return false
+    const instrument = payload.instrument
+    if (
+      !hasExactKeys(instrument, [
+        'instrument_id',
+        'provider_symbol',
+        'quantity_step_btc',
+        'minimum_quantity_btc',
+        'price_tick_usd',
+      ]) ||
+      instrument.instrument_id !== 'kraken-futures:PF_XBTUSD' ||
+      instrument.provider_symbol !== 'PF_XBTUSD'
+    )
+      return false
+    for (const key of [
+      'quantity_step_btc',
+      'minimum_quantity_btc',
+      'price_tick_usd',
+    ])
+      if (
+        !isDecimalString(instrument[key]) ||
+        String(instrument[key]).startsWith('-') ||
+        /^0(?:\.0+)?$/.test(String(instrument[key]))
+      )
+        return false
+    if (
+      payload.control !== undefined &&
+      (!isRecord(payload.control) ||
+        !hasExactKeys(payload.control, ['type', 'command_id']) ||
+        payload.control.type !== 'paper.close' ||
+        typeof payload.control.command_id !== 'string' ||
+        payload.control.command_id.length < 1 ||
+        payload.control.command_id.length > 128)
+    )
+      return false
+    const market = payload.market_snapshot
+    if (
+      !hasExactKeys(market, [
+        'mode',
+        'instrument',
+        'decision_time_ms',
+        'cutoff_received_at_ms',
+        'events',
+      ]) ||
+      !isRecord(market.instrument) ||
+      !sameKeys(market.instrument, instrument) ||
+      !Array.isArray(market.events) ||
+      market.events.length > 100_000 ||
+      !Number.isSafeInteger(market.decision_time_ms) ||
+      !Number.isSafeInteger(market.cutoff_received_at_ms) ||
+      Number(market.decision_time_ms) < 0 ||
+      Number(market.cutoff_received_at_ms) < 0 ||
+      Number(market.cutoff_received_at_ms) > Number(market.decision_time_ms) ||
+      !['mock', 'replay', 'paper_live'].includes(String(market.mode)) ||
+      !market.events.every(isRecord) ||
+      !isJsonSafe(market) ||
+      Buffer.byteLength(JSON.stringify(payload), 'utf8') > MAX_LINE_BYTES - 1024
+    )
+      return false
+    return true
+  }
+  const allowed = [
+    'operation',
+    'cash_usd',
+    'leverage',
+    'side',
+    'quantity_btc',
+    'entry_price',
+    'exit_price',
+    'opened_at_ms',
+    'closed_at_ms',
+  ]
+  if (
+    Object.keys(payload).some((key) => !allowed.includes(key)) ||
+    payload.operation !== 'round_trip'
+  )
+    return false
+  if (
+    !['cash_usd', 'quantity_btc', 'entry_price', 'exit_price'].every((key) =>
+      isDecimalString(payload[key]),
+    )
+  )
+    return false
+  if (
+    (payload.leverage !== undefined && typeof payload.leverage !== 'string') ||
+    (payload.side !== 'long' && payload.side !== 'short')
+  )
+    return false
+  return ['opened_at_ms', 'closed_at_ms'].every(
+    (key) =>
+      payload[key] === undefined ||
+      (Number.isSafeInteger(payload[key]) && Number(payload[key]) >= 0),
+  )
+}
+
+function hasExactKeys(value: Record<string, unknown>, keys: string[]): boolean {
+  return Object.keys(value).sort().join(',') === [...keys].sort().join(',')
+}
+
+function sameKeys(
+  left: Record<string, unknown>,
+  right: Record<string, unknown>,
+): boolean {
+  return (
+    hasExactKeys(left, Object.keys(right)) &&
+    Object.keys(right).every((key) => left[key] === right[key])
+  )
+}
+
+function isDecimalString(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    value.length <= 128 &&
+    /^-?(?:0|[1-9]\d*)(?:\.\d+)?$/.test(value)
+  )
+}
+
+function isJsonSafe(value: unknown, depth = 0): boolean {
+  if (depth > 20) return false
+  if (value === null || typeof value === 'string' || typeof value === 'boolean')
+    return true
+  if (typeof value === 'number')
+    return Number.isFinite(value) && Number.isSafeInteger(value)
+  if (Array.isArray(value))
+    return (
+      value.length <= 100_000 &&
+      value.every((item) => isJsonSafe(item, depth + 1))
+    )
+  return (
+    isRecord(value) &&
+    Object.keys(value).length <= 100 &&
+    Object.values(value).every((item) => isJsonSafe(item, depth + 1))
+  )
+}
+
+function isResult(
+  value: unknown,
+  request: FuturesWorkerRequest,
+): value is FuturesWorkerResult {
+  if (request.payload.operation === 'futures_runtime.v1')
+    return (
+      isRecord(value) &&
+      value.type === 'result' &&
+      value.protocol_version === PROTOCOL_VERSION &&
+      value.operation === 'futures_runtime.v1' &&
+      value.request_id === request.request_id &&
+      value.run_id === request.run_id &&
+      value.work_id === request.work_id &&
+      value.expected_state_version === request.expected_state_version &&
+      value.applied_state_version === request.expected_state_version + 1 &&
+      Number.isSafeInteger(value.runtime_event_time_ms) &&
+      isRecord(value.result) &&
+      Array.isArray(value.events) &&
+      value.events.every(isRecord) &&
+      isRecord(value.runtime_output) &&
+      isRecord(value.runtime_checkpoint) &&
+      Array.isArray(value.runtime_funding_events) &&
+      value.runtime_funding_events.every(isRecord)
+    )
   return (
     isRecord(value) &&
     value.type === 'result' &&
@@ -500,7 +694,8 @@ function isResult(value: unknown): value is FuturesWorkerResult {
     Number.isSafeInteger(value.event_times_ms.closed_at_ms) &&
     isRecord(value.result) &&
     Array.isArray(value.events) &&
-    value.events.every(isRecord)
+    value.events.every(isRecord) &&
+    value.operation === undefined
   )
 }
 

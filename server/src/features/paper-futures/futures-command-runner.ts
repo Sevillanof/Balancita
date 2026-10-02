@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from 'node:util'
 import { FuturesStore } from './futures-store.ts'
 import {
   FuturesWorker,
@@ -22,7 +23,7 @@ export class FuturesCommandRunner {
   constructor(store: FuturesStore) {
     this.store = store
     this.worker = new FuturesWorker({
-      commitResult: (result) => this.commit(result),
+      commitResult: (result, request) => this.commit(result, request),
     })
   }
 
@@ -35,8 +36,39 @@ export class FuturesCommandRunner {
         'Futures command checkpoint is assigned by the Node store.',
       )
     validateFuturesWorkerRequest(request)
-    const checkpoint =
-      this.store.getRunProjection(request.run_id)?.result ?? null
+    let checkpoint: Record<string, unknown> | null
+    const binding = this.store.getRuntimeBinding(request.run_id)
+    if (request.payload.operation === 'futures_runtime.v1') {
+      if (!binding)
+        throw new Error(
+          'C27 runtime request requires a frozen runtime binding.',
+        )
+      if (
+        !isDeepStrictEqual(
+          request.payload.runtime_config,
+          binding.runtime_config,
+        ) ||
+        !isDeepStrictEqual(request.payload.instrument, binding.instrument_spec)
+      )
+        throw new Error(
+          'C27 runtime request conflicts with frozen run binding.',
+        )
+      checkpoint =
+        (this.store.getRunProjection(request.run_id)?.checkpoint as Record<
+          string,
+          unknown
+        > | null) ?? null
+    } else {
+      if (binding)
+        throw new Error(
+          'Futures command operation does not match frozen run binding.',
+        )
+      checkpoint =
+        (this.store.getRunProjection(request.run_id)?.result as Record<
+          string,
+          unknown
+        > | null) ?? null
+    }
     const acknowledgement = this.store.acceptCommand(
       request.work_id,
       request,
@@ -70,17 +102,41 @@ export class FuturesCommandRunner {
 
   private async commit(
     result: FuturesWorkerResult,
+    request: FuturesWorkerRequest,
   ): Promise<FuturesWorkerCommit> {
+    if (
+      result.operation === 'futures_runtime.v1' &&
+      request.payload.operation === 'futures_runtime.v1' &&
+      result.runtime_event_time_ms !==
+        request.payload.market_snapshot.decision_time_ms
+    )
+      throw new Error(
+        'Python C27 runtime decision time does not match accepted work.',
+      )
     const snapshot = result.result
     const events = toStoreEvents(result)
-    const receipt = this.store.applyResult({
-      protocol_version: 1,
-      run_id: result.run_id,
-      work_id: result.work_id,
-      applied_state_version: result.applied_state_version,
-      result: snapshot,
-      events,
-    })
+    const envelope =
+      result.operation === 'futures_runtime.v1'
+        ? {
+            schema_version: 'futures-runtime-work.v1',
+            protocol_version: 1,
+            run_id: result.run_id,
+            work_id: result.work_id,
+            applied_state_version: result.applied_state_version,
+            result: snapshot,
+            events,
+            runtime_output: result.runtime_output,
+            runtime_checkpoint: result.runtime_checkpoint,
+          }
+        : {
+            protocol_version: 1,
+            run_id: result.run_id,
+            work_id: result.work_id,
+            applied_state_version: result.applied_state_version,
+            result: snapshot,
+            events,
+          }
+    const receipt = this.store.applyResult(envelope)
     if (
       typeof receipt.result_hash !== 'string' ||
       (receipt.status !== 'committed' && receipt.status !== 'superseded') ||
@@ -154,6 +210,10 @@ function parseQueuedCommand(
 }
 
 function toStoreEvents(result: FuturesWorkerResult): Record<string, unknown>[] {
+  if (result.operation === 'futures_runtime.v1')
+    return toRuntimeStoreEvents(result)
+  if (!result.event_times_ms)
+    throw new Error('Round-trip result omitted its event times.')
   const ledgerEvents = result.result.events
   if (!Array.isArray(ledgerEvents) || !ledgerEvents.every(isRecord))
     throw new Error('Python ledger audit events are invalid.')
@@ -211,6 +271,97 @@ function toStoreEvents(result: FuturesWorkerResult): Record<string, unknown>[] {
       funding_paid: account.funding_paid,
     },
   ]
+}
+
+function toRuntimeStoreEvents(
+  result: FuturesWorkerResult,
+): Record<string, unknown>[] {
+  const output = result.runtime_output
+  const checkpoint = result.runtime_checkpoint
+  if (
+    !output ||
+    !checkpoint ||
+    !Number.isSafeInteger(result.runtime_event_time_ms)
+  )
+    throw new Error(
+      'Python C27 runtime response is missing its checkpoint or decision time.',
+    )
+  if (
+    !Array.isArray(output.fills) ||
+    !isRecord(output.position) ||
+    !isRecord(output.ledger)
+  )
+    throw new Error(
+      'Python C27 runtime response has invalid financial projections.',
+    )
+  const common = {
+    event_version: 1,
+    run_id: result.run_id,
+    work_id: result.work_id,
+    instrument_id: INSTRUMENT_ID,
+    cost_version: COST_VERSION,
+  }
+  const fills = output.fills.map((candidate) => {
+    if (!isRecord(candidate) || typeof candidate.fill_id !== 'string')
+      throw new Error('Python C27 runtime fill identity is invalid.')
+    return {
+      ...common,
+      id: `${result.work_id}:fill:${candidate.fill_id}`,
+      fill_id: `${result.work_id}:fill:${candidate.fill_id}`,
+      type: 'fill',
+      side: candidate.side,
+      quantity_btc: candidate.quantity_btc,
+      price_usd_per_btc: candidate.price_usd_per_btc,
+      fee_usd: candidate.fee_usd,
+      liquidity: candidate.liquidity,
+    }
+  })
+  const position = output.position
+  const events: Record<string, unknown>[] = [
+    ...fills,
+    {
+      ...common,
+      id: `${result.work_id}:position`,
+      type: 'position',
+      event_time_ms: result.runtime_event_time_ms,
+      side: position.side,
+      quantity_btc: position.quantity_btc,
+    },
+  ]
+  const ledger = output.ledger
+  for (const name of [
+    'equity_usd',
+    'available_margin_usd',
+    'reserved_margin_usd',
+    'fees_usd',
+    'funding_paid',
+  ])
+    if (typeof ledger[name] !== 'string')
+      throw new Error(`Python C27 runtime ledger is missing ${name}.`)
+  events.push({
+    ...common,
+    id: `${result.work_id}:account`,
+    type: 'account',
+    event_time_ms: result.runtime_event_time_ms,
+    equity_usd: ledger.equity_usd,
+    available_margin_usd: ledger.available_margin_usd,
+    reserved_margin_usd: ledger.reserved_margin_usd,
+    fees_usd: ledger.fees_usd,
+    funding_paid: ledger.funding_paid,
+  })
+  const funding = result.runtime_funding_events
+  if (!Array.isArray(funding))
+    throw new Error('Python C27 funding audit is missing.')
+  funding.forEach((item, index) => {
+    if (!isRecord(item)) throw new Error('Python C27 funding audit is invalid.')
+    events.push({
+      ...item,
+      ...common,
+      id: `${result.work_id}:funding:${index}`,
+      type: 'funding',
+    })
+  })
+  return events
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

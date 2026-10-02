@@ -3,9 +3,10 @@
 import json
 import sys
 from copy import deepcopy
-from decimal import Decimal
+from decimal import Decimal, localcontext
 
-from .futures_ledger import FuturesLedger
+from .futures_ledger import FuturesLedger, normalize_decimal
+from .futures_runtime import FuturesRuntime
 
 PROTOCOL_VERSION = 1
 MAX_LINE_BYTES = 1_048_576
@@ -35,6 +36,84 @@ def _work(message):
     if isinstance(version, bool) or not isinstance(version, int) or version < 0 or version >= 2**53:
         raise ValueError("invalid expected_state_version")
     payload = message.get("payload")
+    if isinstance(payload, dict) and payload.get("operation") == "futures_runtime.v1":
+        if set(payload) - {"operation", "runtime_config", "instrument", "market_snapshot", "control"}:
+            raise ValueError("runtime payload contains unsupported fields")
+        if (
+            not isinstance(payload.get("runtime_config"), dict)
+            or not isinstance(payload.get("instrument"), dict)
+            or not isinstance(payload.get("market_snapshot"), dict)
+            or ("control" in payload and not isinstance(payload["control"], dict))
+        ):
+            raise ValueError("invalid runtime payload")
+        checkpoint = message.get("checkpoint")
+        if checkpoint is not None and not isinstance(checkpoint, dict):
+            raise ValueError("runtime checkpoint must be an object or null")
+        runtime = FuturesRuntime(
+            run_id=message["run_id"],
+            config=payload["runtime_config"],
+            instrument=payload["instrument"],
+            checkpoint=checkpoint,
+        )
+        output = runtime.process(
+            payload["market_snapshot"], control=payload.get("control")
+        )
+        next_checkpoint = runtime.checkpoint()
+        previous_accrued = {
+            tuple(item) for item in (checkpoint or {}).get("accrued", [])
+        }
+        prior_position = (checkpoint or {}).get("ledger_position")
+        position_side = (
+            prior_position.get("side") if isinstance(prior_position, dict)
+            else next_checkpoint.get("ledger_position", {}).get("side")
+            if isinstance(next_checkpoint.get("ledger_position"), dict) else None
+        )
+        rates = {item[0]: item for item in next_checkpoint["funding_rates"]}
+        funding_events = []
+        for item in next_checkpoint["accrued"]:
+            if tuple(item) in previous_accrued:
+                continue
+            identifier, start, end, quantity = item
+            rate_item = rates.get(identifier)
+            if rate_item is None or position_side not in ("long", "short"):
+                raise ValueError("accrued funding is missing its source rate or position side")
+            rate = Decimal(rate_item[3])
+            with localcontext() as context:
+                context.prec = 50
+                amount = rate * Decimal(end - start) / Decimal(3_600_000) * Decimal(quantity)
+                if position_side == "short":
+                    amount = -amount
+            funding_events.append({
+                "interval_id": identifier, "start_time_ms": start,
+                "end_time_ms": end, "rate_usd_per_btc_hour": rate_item[3],
+                "amount_usd": normalize_decimal(str(amount)),
+                "position_side": position_side, "quantity_btc": quantity,
+            })
+        with localcontext() as context:
+            context.prec = 50
+            previous_paid = Decimal((checkpoint or {}).get("funding_paid", "0"))
+            funding_delta = Decimal(next_checkpoint["funding_paid"]) - previous_paid
+            event_total = sum(
+                (Decimal(item["amount_usd"]) for item in funding_events), Decimal("0")
+            )
+        if event_total != funding_delta:
+            raise ValueError("funding audit delta does not reconcile to the runtime ledger")
+        return {
+            "type": "result",
+            "protocol_version": PROTOCOL_VERSION,
+            "request_id": message["request_id"],
+            "run_id": message["run_id"],
+            "work_id": message["work_id"],
+            "expected_state_version": version,
+            "applied_state_version": version + 1,
+            "operation": "futures_runtime.v1",
+            "result": output["ledger"],
+            "events": [],
+            "runtime_output": output,
+            "runtime_checkpoint": next_checkpoint,
+            "runtime_event_time_ms": payload["market_snapshot"]["decision_time_ms"],
+            "runtime_funding_events": funding_events,
+        }
     if not isinstance(payload, dict) or set(payload) - {
             "operation", "cash_usd", "leverage", "side", "quantity_btc", "entry_price",
             "exit_price", "opened_at_ms", "closed_at_ms"} or payload.get("operation") != "round_trip":
