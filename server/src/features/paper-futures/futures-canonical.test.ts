@@ -32,4 +32,32 @@ describe('futures canonical identity', () => {
     expect(() => normalizeDecimal(1.2)).toThrow()
     expect(() => canonicalJson({ value: Number.NaN })).toThrow()
   })
+
+  it('rejects unpaired surrogates while agreeing on supplementary Unicode vectors', () => {
+    const vectors = JSON.parse(
+      readFileSync(
+        new URL(
+          '../../../../python/fixtures/futures-canonical-vectors.json',
+          import.meta.url,
+        ),
+        'utf8',
+      ),
+    ) as { name: string; value: unknown; canonical: string; sha256: string }[]
+    const supplementary = vectors.find(
+      (vector) => vector.name === 'unicode-order-and-supplementary',
+    )!
+    expect(canonicalJson(supplementary.value)).toBe(supplementary.canonical)
+    expect(canonicalHash(supplementary.value)).toBe(supplementary.sha256)
+    const invalid = JSON.parse(
+      readFileSync(
+        new URL(
+          '../../../../python/fixtures/futures-canonical-invalid.json',
+          import.meta.url,
+        ),
+        'utf8',
+      ),
+    ) as { unpaired: unknown }
+    expect(() => canonicalJson(invalid.unpaired)).toThrow()
+    expect(() => normalizeDecimal('1'.repeat(5000))).toThrow()
+  })
 })

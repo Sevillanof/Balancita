@@ -1,5 +1,8 @@
 """Pure Decimal linear USD-settled BTC paper-futures ledger."""
+from copy import deepcopy
+from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation, localcontext
+from types import MappingProxyType
 
 from .canonical import normalize_decimal, normalize_timestamp_ms
 
@@ -10,11 +13,19 @@ LEDGER_VERSION = "linear-usd-ledger.v1"
 DECIMAL_PRECISION = 50
 
 
+@dataclass(frozen=True)
+class LedgerConfiguration:
+    version: str
+    cost_version: str
+    precision: int
+    fee_rates: tuple
+
+
 def _d(value, name):
     if not isinstance(value, str):
         raise ValueError("{} must be a decimal string".format(name))
     try:
-        result = Decimal(value)
+        result = Decimal(normalize_decimal(value))
     except InvalidOperation as error:
         raise ValueError("{} must be a decimal string".format(name)) from error
     if not result.is_finite():
@@ -28,14 +39,15 @@ class FuturesLedger:
             config = {}
         if not isinstance(config, dict):
             raise ValueError("ledger config must be a mapping")
-        self.version = config.get("version", LEDGER_VERSION)
-        self.cost_version = config.get("cost_version", COST_VERSION)
-        self.precision = config.get("precision", DECIMAL_PRECISION)
-        if not isinstance(self.version, str) or not self.version or not isinstance(self.cost_version, str) or not self.cost_version or isinstance(self.precision, bool) or not isinstance(self.precision, int) or not 28 <= self.precision <= 100:
+        version = config.get("version", LEDGER_VERSION)
+        cost_version = config.get("cost_version", COST_VERSION)
+        precision = config.get("precision", DECIMAL_PRECISION)
+        if not isinstance(version, str) or not version or not isinstance(cost_version, str) or not cost_version or isinstance(precision, bool) or not isinstance(precision, int) or not 28 <= precision <= 100:
             raise ValueError("invalid versioned ledger precision configuration")
-        self.fee_rates = {name: _d(config.get(name, str(rate)), name) for name, rate in FEES.items()}
-        if any(rate < 0 for rate in self.fee_rates.values()):
+        fee_rates = {name: _d(config.get(name, str(rate)), name) for name, rate in FEES.items()}
+        if any(rate < 0 for rate in fee_rates.values()):
             raise ValueError("fee rates must be nonnegative")
+        self._config = LedgerConfiguration(version, cost_version, precision, tuple(sorted(fee_rates.items())))
         with localcontext() as ctx:
             ctx.prec = self.precision
             self.cash = _d(cash, "cash")
@@ -165,6 +177,22 @@ class FuturesLedger:
             raise ValueError("liquidity must be maker or taker")
         return self.fee_rates[liquidity]
 
+    @property
+    def version(self):
+        return self._config.version
+
+    @property
+    def cost_version(self):
+        return self._config.cost_version
+
+    @property
+    def precision(self):
+        return self._config.precision
+
+    @property
+    def fee_rates(self):
+        return MappingProxyType(dict(self._config.fee_rates))
+
     def snapshot(self, mark_price):
         with localcontext() as ctx:
             ctx.prec = self.precision
@@ -189,4 +217,4 @@ class FuturesLedger:
                     "net_complete": None if net is None else normalize_decimal(str(net)),
                     "realized_net_complete": None if realized_net is None else normalize_decimal(str(realized_net)),
                     "funding_complete": self.funding_complete, "cost_version": self.cost_version,
-                    "leverage": normalize_decimal(str(self.leverage)), "events": list(self.events)}
+                    "leverage": normalize_decimal(str(self.leverage)), "events": deepcopy(self.events)}

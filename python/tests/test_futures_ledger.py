@@ -63,6 +63,17 @@ class FuturesLedgerTests(unittest.TestCase):
         self.assertEqual(closes[1]["allocated_entry_fee"], "0.04")
         self.assertEqual(sum(Decimal(event["allocated_entry_fee"]) for event in closes), Decimal("0.06"))
 
+    def test_snapshot_event_history_and_cost_configuration_are_immutable(self):
+        ledger = FuturesLedger("1000")
+        ledger.open("long", "1", "100", "maker")
+        snapshot = ledger.snapshot("100")
+        snapshot["events"][0]["qty"] = "999"
+        self.assertEqual(ledger.snapshot("100")["events"][0]["qty"], "1")
+        with self.assertRaises(TypeError):
+            ledger.fee_rates["maker"] = Decimal("0.5")
+        with self.assertRaises(AttributeError):
+            ledger.precision = 99
+
 
 if __name__ == "__main__":
     unittest.main()

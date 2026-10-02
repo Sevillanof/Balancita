@@ -3,16 +3,17 @@ import { createHash } from 'node:crypto'
 export function normalizeDecimal(value: unknown): string {
   if (
     typeof value !== 'string' ||
+    value.length > 4096 ||
     !/^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$/.test(value)
   )
     throw new TypeError('Decimal values must be finite decimal strings.')
-  if (/^[+-]?0*(?:\.0*)?(?:e[+-]?\d+)?$/i.test(value)) return '0'
   const [mantissa, exponentText] = value.toLowerCase().split('e')
   const exponent = Number(exponentText ?? 0)
   if (!Number.isSafeInteger(exponent) || Math.abs(exponent) > 10_000)
     throw new RangeError(
       'Decimal exponent is outside the supported canonical range.',
     )
+  if (/^[+-]?0*(?:\.0*)?(?:e[+-]?\d+)?$/i.test(value)) return '0'
   const sign = mantissa.startsWith('-') ? '-' : ''
   const unsigned = mantissa.replace(/^[+-]/, '')
   const [whole = '', fraction = ''] = unsigned.split('.')
@@ -36,9 +37,25 @@ export function normalizeTimestampMs(value: unknown): number {
 }
 
 export function canonicalJson(value: unknown): string {
+  const validateUnicode = (text: string): void => {
+    for (let index = 0; index < text.length; index += 1) {
+      const code = text.charCodeAt(index)
+      if (code >= 0xd800 && code <= 0xdbff) {
+        const low = text.charCodeAt(index + 1)
+        if (!(low >= 0xdc00 && low <= 0xdfff))
+          throw new TypeError('Unpaired Unicode surrogate.')
+        index += 1
+      } else if (code >= 0xdc00 && code <= 0xdfff) {
+        throw new TypeError('Unpaired Unicode surrogate.')
+      }
+    }
+  }
   const encode = (item: unknown): string => {
-    if (item === null || typeof item === 'string' || typeof item === 'boolean')
+    if (typeof item === 'string') {
+      validateUnicode(item)
       return JSON.stringify(item)
+    }
+    if (item === null || typeof item === 'boolean') return JSON.stringify(item)
     if (typeof item === 'number') {
       if (!Number.isFinite(item) || !Number.isSafeInteger(item))
         throw new TypeError('Only safe integers are canonical numbers.')
@@ -48,6 +65,10 @@ export function canonicalJson(value: unknown): string {
     if (typeof item === 'object' && item !== null) {
       const record = item as Record<string, unknown>
       return `{${Object.keys(record)
+        .map((key) => {
+          validateUnicode(key)
+          return key
+        })
         .sort(compareUnicodeScalars)
         .map((key) => {
           if (record[key] === undefined)

@@ -19,5 +19,15 @@
     },
     "canonical": "{\"items\":[\"1\",\"2\"]}",
     "sha256": "e2505179a6840b780a03acfab5e0efb38b35ab035a92c3396f171957592b73b9"
+  },
+  {
+    "name": "unicode-order-and-supplementary",
+    "value": {
+      "𐀀": "supplementary",
+      "": "bmp",
+      "emoji": "💹"
+    },
+    "canonical": "{\"emoji\":\"💹\",\"\":\"bmp\",\"𐀀\":\"supplementary\"}",
+    "sha256": "63666573c7938d74c47251121de528fea650f4dea6a4590c7911528457862081"
   }
 ]
