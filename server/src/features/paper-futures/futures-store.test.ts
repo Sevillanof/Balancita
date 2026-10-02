@@ -166,6 +166,57 @@ describe('isolated paper-futures SQLite store', () => {
     }
   })
 
+  it('durably retains accepted command payloads across reopen and removes them from pending only after result persistence', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'paper-futures-queue-'))
+    const path = join(directory, 'queue.sqlite')
+    try {
+      const store = new FuturesStore(path)
+      const payload = {
+        command_id: 'queued-1',
+        operation: 'fixture',
+        amount: '0.01',
+      }
+      const accepted = store.acceptCommand('queued-1', payload)
+      expect(accepted.type).toBe('command.ack')
+      expect(store.loadPendingCommands()).toEqual([
+        { command_id: 'queued-1', payload },
+      ])
+      store.close()
+
+      const reopened = new FuturesStore(path)
+      expect(reopened.loadPendingCommands()).toEqual([
+        { command_id: 'queued-1', payload },
+      ])
+      const result = reopened.persistCommandResult('queued-1', {
+        status: 'done',
+      })
+      expect(
+        reopened.persistCommandResult('queued-1', { status: 'done' }),
+      ).toEqual(result)
+      expect(reopened.loadPendingCommands()).toEqual([])
+      reopened.close()
+    } finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
+  it('emits no accepted command receipt when the acceptance and outbox transaction rolls back', () => {
+    const store = new FuturesStore(':memory:')
+    expect(() =>
+      store.acceptCommand(
+        'rollback-command',
+        { operation: 'test' },
+        'before-commit',
+      ),
+    ).toThrow('Injected command acceptance pre-commit failure.')
+    expect(store.loadPendingCommands()).toEqual([])
+    expect(() => store.getCommandResult('rollback-command')).not.toThrow()
+    expect(
+      store.acceptCommand('rollback-command', { operation: 'test' }).status,
+    ).toBe('accepted')
+    store.close()
+  })
+
   it('persists a real offline Decimal-ledger result, reopens, exports, and verifies hashes', () => {
     const root = new URL('../../../../', import.meta.url).pathname
     const output = execFileSync(
@@ -235,7 +286,7 @@ describe('isolated paper-futures SQLite store', () => {
             "SELECT COUNT(*) AS count FROM sqlite_master WHERE type='table' AND name LIKE 'paper_futures_%'",
           )
           .get(),
-      ).toEqual({ count: 12 })
+      ).toEqual({ count: 13 })
       check.close()
     } finally {
       rmSync(directory, { recursive: true, force: true })

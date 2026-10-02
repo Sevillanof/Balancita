@@ -43,6 +43,10 @@ export class FuturesStore {
       CREATE TABLE IF NOT EXISTS paper_futures_commands(command_id TEXT PRIMARY KEY, payload_hash TEXT NOT NULL, acceptance_json TEXT NOT NULL) STRICT;
       CREATE TRIGGER IF NOT EXISTS paper_futures_commands_no_update BEFORE UPDATE ON paper_futures_commands BEGIN SELECT RAISE(ABORT,'immutable accepted command'); END;
       CREATE TRIGGER IF NOT EXISTS paper_futures_commands_no_delete BEFORE DELETE ON paper_futures_commands BEGIN SELECT RAISE(ABORT,'immutable accepted command'); END;
+      CREATE TABLE IF NOT EXISTS paper_futures_command_queue(command_id TEXT PRIMARY KEY REFERENCES paper_futures_commands(command_id), payload_json TEXT NOT NULL) STRICT;
+      CREATE TRIGGER IF NOT EXISTS paper_futures_command_queue_no_update BEFORE UPDATE ON paper_futures_command_queue BEGIN SELECT RAISE(ABORT,'immutable queued futures command'); END;
+      CREATE TRIGGER IF NOT EXISTS paper_futures_command_queue_no_delete BEFORE DELETE ON paper_futures_command_queue BEGIN SELECT RAISE(ABORT,'immutable queued futures command'); END;
+      INSERT OR IGNORE INTO paper_futures_schema_migrations VALUES(2, unixepoch('subsec') * 1000);
     `)
   }
 
@@ -381,8 +385,31 @@ export class FuturesStore {
     }
   }
 
-  acceptCommand(commandId: string, payload: unknown): JsonRecord {
+  acceptCommand(
+    commandId: string,
+    payload: unknown,
+    injectFailureAt?: 'before-commit',
+    checkpoint?: unknown,
+  ): JsonRecord {
+    if (
+      typeof commandId !== 'string' ||
+      commandId.length < 1 ||
+      commandId.length > 128
+    )
+      throw new Error('Invalid durable command identity.')
+    const payloadJson = canonicalJson(payload)
+    if (Buffer.byteLength(payloadJson, 'utf8') > 1_048_576)
+      throw new Error(
+        'Durable command payload exceeds the JSONL message limit.',
+      )
     const hash = canonicalHash(payload)
+    const queuedJson = canonicalJson(
+      checkpoint === undefined ? payload : { request: payload, checkpoint },
+    )
+    if (Buffer.byteLength(queuedJson, 'utf8') > 1_048_576)
+      throw new Error(
+        'Durable command checkpoint exceeds the JSONL message limit.',
+      )
     const old = this.db
       .prepare(
         'SELECT payload_hash,acceptance_json FROM paper_futures_commands WHERE command_id=?',
@@ -392,6 +419,14 @@ export class FuturesStore {
     if (old) {
       if (old.payload_hash !== hash)
         throw new Error('Command identity conflicts with accepted payload.')
+      const queued = this.db
+        .prepare('SELECT 1 FROM paper_futures_command_queue WHERE command_id=?')
+        .get(commandId)
+      const result = this.db
+        .prepare('SELECT 1 FROM paper_futures_outbox WHERE outbox_id=?')
+        .get(`command-result:${commandId}`)
+      if (!queued && !result)
+        throw new Error('Accepted command predates durable payload recovery.')
       return JSON.parse(old.acceptance_json) as JsonRecord
     }
     const receipt = {
@@ -407,14 +442,72 @@ export class FuturesStore {
         .prepare('INSERT INTO paper_futures_commands VALUES(?,?,?)')
         .run(commandId, hash, canonicalJson(receipt))
       this.db
+        .prepare('INSERT INTO paper_futures_command_queue VALUES(?,?)')
+        .run(commandId, queuedJson)
+      this.db
         .prepare('INSERT INTO paper_futures_outbox VALUES(?,?,?,?)')
         .run(`command:${commandId}`, '', commandId, canonicalJson(receipt))
+      if (injectFailureAt === 'before-commit')
+        throw new Error('Injected command acceptance pre-commit failure.')
       this.db.exec('COMMIT')
       return receipt
     } catch (error) {
       this.db.exec('ROLLBACK')
       throw error
     }
+  }
+
+  loadPendingCommands(limit = 32): { command_id: string; payload: unknown }[] {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 32)
+      throw new Error('Pending command batch limit must be between 1 and 32.')
+    const rows = this.db
+      .prepare(
+        `SELECT q.command_id,q.payload_json FROM paper_futures_command_queue q
+        LEFT JOIN paper_futures_outbox o ON o.outbox_id='command-result:' || q.command_id
+        WHERE o.outbox_id IS NULL ORDER BY q.rowid LIMIT ?`,
+      )
+      .all(limit) as { command_id: string; payload_json: string }[]
+    return rows.map((row) => ({
+      command_id: row.command_id,
+      payload: JSON.parse(row.payload_json) as unknown,
+    }))
+  }
+
+  getCommandResult(commandId: string): JsonRecord | undefined {
+    const row = this.db
+      .prepare(
+        'SELECT payload_json FROM paper_futures_outbox WHERE outbox_id=?',
+      )
+      .get(`command-result:${commandId}`) as
+      { payload_json: string } | undefined
+    return row ? (JSON.parse(row.payload_json) as JsonRecord) : undefined
+  }
+
+  getAppliedReceipt(workId: string): JsonRecord | undefined {
+    const row = this.db
+      .prepare('SELECT receipt_json FROM paper_futures_applied WHERE work_id=?')
+      .get(workId) as { receipt_json: string } | undefined
+    return row ? (JSON.parse(row.receipt_json) as JsonRecord) : undefined
+  }
+
+  getAcceptedCommand(commandId: string): unknown {
+    const row = this.db
+      .prepare(
+        'SELECT payload_json FROM paper_futures_command_queue WHERE command_id=?',
+      )
+      .get(commandId) as { payload_json: string } | undefined
+    return row ? (JSON.parse(row.payload_json) as unknown) : undefined
+  }
+
+  getRunProjection(runId: string): JsonRecord | undefined {
+    if (!this.verifyRun(runId))
+      throw new Error('Futures run checkpoint failed integrity verification.')
+    const row = this.db
+      .prepare(
+        'SELECT state_json FROM paper_futures_projections WHERE run_id=?',
+      )
+      .get(runId) as { state_json: string } | undefined
+    return row ? (JSON.parse(row.state_json) as JsonRecord) : undefined
   }
 
   persistCommandResult(commandId: string, result: unknown): JsonRecord {
