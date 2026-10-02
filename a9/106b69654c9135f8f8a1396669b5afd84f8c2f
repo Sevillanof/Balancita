@@ -1,0 +1,28 @@
+AGENTS.md
+  h_2f68313623be98 12-16
+docs/adr/0001-isolated-paper-futures-accounting.md
+  h_2f68313623be98 1-25
+python/balancita_engine/__init__.py
+  h_2f68313623be98 1
+python/balancita_engine/canonical.py
+  h_2f68313623be98 1-55
+python/balancita_engine/futures_ledger.py
+  h_2f68313623be98 1-192
+python/fixtures/futures-canonical-vectors.json
+  h_2f68313623be98 1-23
+python/tests/test_futures_canonical.py
+  h_2f68313623be98 1-23
+python/tests/test_futures_ledger.py
+  h_2f68313623be98 1-68
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a9106b69654c9135f8f8a1396669b5afd84f8c2f",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
