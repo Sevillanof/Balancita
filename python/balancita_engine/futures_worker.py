@@ -36,7 +36,8 @@ def _work(message):
     if isinstance(version, bool) or not isinstance(version, int) or version < 0 or version >= 2**53:
         raise ValueError("invalid expected_state_version")
     payload = message.get("payload")
-    if isinstance(payload, dict) and payload.get("operation") == "futures_runtime.v1":
+    if isinstance(payload, dict) and payload.get("operation") in ("futures_runtime.v1", "futures_runtime.v2"):
+        execution_runtime = payload.get("operation") == "futures_runtime.v2"
         if set(payload) - {"operation", "runtime_config", "instrument", "market_snapshot", "control"}:
             raise ValueError("runtime payload contains unsupported fields")
         if (
@@ -46,6 +47,8 @@ def _work(message):
             or ("control" in payload and not isinstance(payload["control"], dict))
         ):
             raise ValueError("invalid runtime payload")
+        if execution_runtime != (payload["runtime_config"].get("version") == "futures-runtime-execution.v1"):
+            raise ValueError("runtime operation does not match frozen configuration version")
         checkpoint = message.get("checkpoint")
         if checkpoint is not None and not isinstance(checkpoint, dict):
             raise ValueError("runtime checkpoint must be an object or null")
@@ -106,7 +109,7 @@ def _work(message):
             "work_id": message["work_id"],
             "expected_state_version": version,
             "applied_state_version": version + 1,
-            "operation": "futures_runtime.v1",
+            "operation": payload["operation"],
             "result": output["ledger"],
             "events": [],
             "runtime_output": output,

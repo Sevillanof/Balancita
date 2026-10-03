@@ -38,12 +38,23 @@ export class FuturesCommandRunner {
     validateFuturesWorkerRequest(request)
     let checkpoint: Record<string, unknown> | null
     const binding = this.store.getRuntimeBinding(request.run_id)
-    if (request.payload.operation === 'futures_runtime.v1') {
+    if (
+      request.payload.operation === 'futures_runtime.v1' ||
+      request.payload.operation === 'futures_runtime.v2'
+    ) {
+      const expectedBinding =
+        request.payload.operation === 'futures_runtime.v2'
+          ? 'futures-runtime-binding.v3'
+          : request.payload.runtime_config.version ===
+              'futures-runtime-strategies.v1'
+            ? 'futures-runtime-binding.v2'
+            : 'futures-runtime-binding.v1'
       if (!binding)
         throw new Error(
           'C27 runtime request requires a frozen runtime binding.',
         )
       if (
+        binding.schema_version !== expectedBinding ||
         !isDeepStrictEqual(
           request.payload.runtime_config,
           binding.runtime_config,
@@ -105,8 +116,9 @@ export class FuturesCommandRunner {
     request: FuturesWorkerRequest,
   ): Promise<FuturesWorkerCommit> {
     if (
-      result.operation === 'futures_runtime.v1' &&
-      request.payload.operation === 'futures_runtime.v1' &&
+      (result.operation === 'futures_runtime.v1' ||
+        result.operation === 'futures_runtime.v2') &&
+      result.operation === request.payload.operation &&
       result.runtime_event_time_ms !==
         request.payload.market_snapshot.decision_time_ms
     )
@@ -116,9 +128,13 @@ export class FuturesCommandRunner {
     const snapshot = result.result
     const events = toStoreEvents(result)
     const envelope =
-      result.operation === 'futures_runtime.v1'
+      result.operation === 'futures_runtime.v1' ||
+      result.operation === 'futures_runtime.v2'
         ? {
-            schema_version: 'futures-runtime-work.v1',
+            schema_version:
+              result.operation === 'futures_runtime.v2'
+                ? 'futures-runtime-work.v2'
+                : 'futures-runtime-work.v1',
             protocol_version: 1,
             run_id: result.run_id,
             work_id: result.work_id,
@@ -210,7 +226,10 @@ function parseQueuedCommand(
 }
 
 function toStoreEvents(result: FuturesWorkerResult): Record<string, unknown>[] {
-  if (result.operation === 'futures_runtime.v1')
+  if (
+    result.operation === 'futures_runtime.v1' ||
+    result.operation === 'futures_runtime.v2'
+  )
     return toRuntimeStoreEvents(result)
   if (!result.event_times_ms)
     throw new Error('Round-trip result omitted its event times.')
@@ -316,9 +335,71 @@ function toRuntimeStoreEvents(
       liquidity: candidate.liquidity,
     }
   })
+  const orderEvents = (
+    output.runtime_version === 'futures-runtime-execution.v1'
+      ? (output.orders as Record<string, unknown>[])
+      : []
+  ).flatMap((candidate: Record<string, unknown>) => {
+    if (!isRecord(candidate) || typeof candidate.type !== 'string')
+      throw new Error('Python runtime order event is invalid.')
+    if (
+      ![
+        'order_created',
+        'order_accepted',
+        'order_filled',
+        'cancelled',
+        'rejected',
+        'expired',
+      ].includes(candidate.type)
+    )
+      return []
+    const execution = result.runtime_checkpoint?.execution_checkpoint
+    const savedOrder =
+      isRecord(execution) &&
+      isRecord(execution.orders) &&
+      typeof candidate.order_id === 'string'
+        ? execution.orders[candidate.order_id]
+        : undefined
+    const intent =
+      isRecord(savedOrder) && isRecord(savedOrder.intent)
+        ? savedOrder.intent
+        : {}
+    const orderType = candidate.order_type ?? intent.order_type
+    const side = candidate.side ?? intent.side
+    const quantity =
+      candidate.quantity_btc ??
+      candidate.filled_quantity_btc ??
+      intent.quantity_btc
+    if (
+      typeof candidate.order_id !== 'string' ||
+      typeof orderType !== 'string' ||
+      typeof side !== 'string' ||
+      typeof quantity !== 'string'
+    )
+      throw new Error('Python runtime order event is incomplete.')
+    const eventTime =
+      candidate.effective_at_ms ??
+      candidate.decision_at_ms ??
+      candidate.eligible_at_ms ??
+      result.runtime_event_time_ms
+    return [
+      {
+        ...common,
+        id: `${result.work_id}:order:${String(candidate.event_id ?? candidate.order_id)}:${candidate.type}`,
+        type: 'order',
+        order_id: candidate.order_id,
+        status: candidate.type,
+        order_type: orderType,
+        side,
+        quantity_btc: quantity,
+        event_time_ms: eventTime,
+      },
+    ]
+  })
   const position = output.position
   const events: Record<string, unknown>[] = [
     ...fills,
+    ...orderEvents,
     {
       ...common,
       id: `${result.work_id}:position`,

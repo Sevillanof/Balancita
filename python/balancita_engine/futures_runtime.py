@@ -10,6 +10,7 @@ from decimal import Decimal, InvalidOperation, ROUND_CEILING, ROUND_FLOOR, local
 from .canonical import normalize_decimal, normalize_timestamp_ms
 from .futures_indicators import calculate_features
 from .futures_ledger import FuturesLedger
+from .futures_execution import PaperExecutionAdapter
 from .futures_strategies import (
     C25_ID,
     C26_ID,
@@ -25,6 +26,8 @@ from .futures_strategies import (
 RUNTIME_VERSION = "c27-breakout-perp-v1"
 CHECKPOINT_VERSION = 1
 STRATEGY_CHECKPOINT_VERSION = 2
+EXECUTION_RUNTIME_VERSION = "futures-runtime-execution.v1"
+EXECUTION_CHECKPOINT_VERSION = 3
 FEATURE_INTERVAL_MS = 60_000
 ZERO = Decimal(0)
 ONE = Decimal(1)
@@ -75,6 +78,8 @@ class FuturesRuntime:
         self.runtime_version = (
             "futures-strategy-baseline-perp-v1"
             if self.config.get("version") == "futures-runtime-strategies.v1"
+            else EXECUTION_RUNTIME_VERSION
+            if self.config.get("version") == EXECUTION_RUNTIME_VERSION
             else RUNTIME_VERSION
         )
         self.instrument = deepcopy(instrument) if isinstance(instrument, dict) else None
@@ -95,6 +100,23 @@ class FuturesRuntime:
         self.consumed_depth = {}
         self.funding_cursor_ms = None
         self.regime = "unknown"
+        self.execution_adapter = None
+        self.execution_metadata = {}
+        if self.runtime_version == EXECUTION_RUNTIME_VERSION:
+            if self.instrument is None:
+                raise ValueError("execution runtime requires instrument metadata")
+            self.execution_adapter = PaperExecutionAdapter(
+                {
+                    "run_id": self.run_id,
+                    "instrument_id": self.instrument.get("instrument_id"),
+                },
+                {
+                    "latency_ms": self.config["execution_latency_ms"],
+                    "tick_size": self.instrument["price_tick_usd"],
+                    "lot_size": self.instrument["quantity_step_btc"],
+                    "max_book_age_ms": self.config["max_book_age_ms"],
+                },
+            )
         if checkpoint is not None:
             self._restore(checkpoint)
 
@@ -122,7 +144,7 @@ class FuturesRuntime:
             if key not in ("version", "cost_version")
         }
         if (
-            self.config["version"] not in ("futures-runtime-lab.v1", "futures-runtime-strategies.v1")
+            self.config["version"] not in ("futures-runtime-lab.v1", "futures-runtime-strategies.v1", EXECUTION_RUNTIME_VERSION)
             or
             values["initial_cash_usd"] < 0
             or values["max_notional_usd"] <= 0
@@ -151,11 +173,31 @@ class FuturesRuntime:
         mark = self._mark(ticker, book)
         fills = []
         orders = []
+        if self.execution_adapter is not None:
+            adapter_events = self._advance_execution(evidence, cutoff)
+            for event in adapter_events:
+                if event.get("type") not in (
+                    "order_created", "order_accepted", "order_filled",
+                    "cancelled", "rejected", "expired",
+                ):
+                    continue
+                intent = self.execution_adapter.orders[event["order_id"]]["intent"]
+                order_event = deepcopy(event)
+                order_event.update({
+                    "order_type": intent["order_type"],
+                    "side": intent["side"],
+                    "quantity_btc": intent["quantity_btc"],
+                    "decision_at_ms": intent["decision_at_ms"],
+                })
+                orders.append(order_event)
+            fills.extend(self._apply_execution_fills(adapter_events))
         features = self._features(evidence, now)
         strategy_context = None
         if self.config["version"] == "futures-runtime-strategies.v1":
             strategy_context = self._strategy_context(evidence, now, cutoff, features)
         guard = self._market_guard(market, book, ticker, now, cutoff)
+        if self.execution_adapter is not None and self._has_pending_entry():
+            guard = "incompatible_order_pending"
 
         if self.ledger.position is not None:
             self._observe_funding(evidence, now, cutoff)
@@ -175,8 +217,22 @@ class FuturesRuntime:
             else:
                 should_close, close_reason = False, guard
             if should_close and guard is None:
-                closed, order = self._close_position(book, now, close_reason)
-                fills.extend(closed)
+                if self.execution_adapter is not None:
+                    order = self._submit_execution_close(now, close_reason)
+                    if order is not None:
+                        orders.append(order)
+                else:
+                    closed, order = self._close_position(book, now, close_reason)
+                    fills.extend(closed)
+                    if order is not None:
+                        orders.append(order)
+            elif (
+                self.execution_adapter is not None
+                and isinstance(control, dict)
+                and control.get("type") == "paper.close"
+                and self.ledger.position is not None
+            ):
+                order = self._submit_execution_close(now, close_reason)
                 if order is not None:
                     orders.append(order)
             elif self.ledger.position is not None:
@@ -256,9 +312,32 @@ class FuturesRuntime:
                                 "reason_codes": [],
                             }
                             order_id = "{}:{}".format(strategy_id, signal_key)
-                            entry_fills, order = self._execute(
-                                book, side, plan["quantity"], now, order_id, "entry"
-                            )
+                            if self.execution_adapter is not None:
+                                receipt = self.execution_adapter.submit({
+                                    "run_id": self.run_id,
+                                    "instrument_id": self.instrument["instrument_id"],
+                                    "order_id": order_id,
+                                    "side": "buy" if side == "long" else "sell",
+                                    "order_type": "market_ioc",
+                                    "quantity_btc": _text(plan["quantity"]),
+                                    "decision_at_ms": now,
+                                })
+                                order = receipt
+                                self.execution_metadata[order_id] = {
+                                    "purpose": "entry",
+                                    "side": side,
+                                    "strategy_id": strategy_id,
+                                    "signal_key": signal_key,
+                                    "stop": _text(plan["stop"]),
+                                    "target": _text(plan["target"]),
+                                    "donchian_mid": _text(plan["donchian_mid"]),
+                                    "selected": deepcopy(selected),
+                                }
+                                entry_fills = []
+                            else:
+                                entry_fills, order = self._execute(
+                                    book, side, plan["quantity"], now, order_id, "entry"
+                                )
                             fills.extend(entry_fills)
                             if order is not None:
                                 orders.append(order)
@@ -289,7 +368,7 @@ class FuturesRuntime:
                                     self.position_protection["strategy_invalidation"] = selected.get("invalidation")
                                 self.funding_cursor_ms = now
                                 self._observe_funding(evidence, now, cutoff)
-                            else:
+                            elif self.execution_adapter is None:
                                 analysis = self._analysis("WAIT", "ioc_unfilled", features)
                             if strategy_context is not None:
                                 analysis.update(strategy_context)
@@ -309,6 +388,7 @@ class FuturesRuntime:
             "position": position,
             "ledger": account,
             "valuation_source": "ticker_mark" if isinstance(ticker, dict) and ticker.get("mark_usd") is not None else "observed_book_midpoint",
+            **({"execution_events": self.execution_adapter.events} if self.execution_adapter is not None else {}),
         }
 
     def checkpoint(self):
@@ -357,10 +437,14 @@ class FuturesRuntime:
                 for snapshot, levels in sorted(self.consumed_depth.items())
             },
             **({"regime": self.regime} if self.runtime_version != RUNTIME_VERSION else {}),
+            **({"execution_checkpoint": self.execution_adapter.checkpoint()} if self.execution_adapter is not None else {}),
+            **({"execution_metadata": deepcopy(self.execution_metadata)} if self.execution_adapter is not None else {}),
         }
 
     @property
     def _checkpoint_version(self):
+        if self.runtime_version == EXECUTION_RUNTIME_VERSION:
+            return EXECUTION_CHECKPOINT_VERSION
         return STRATEGY_CHECKPOINT_VERSION if self.runtime_version != RUNTIME_VERSION else CHECKPOINT_VERSION
 
     def _restore(self, checkpoint):
@@ -380,6 +464,22 @@ class FuturesRuntime:
         if checkpoint.get("instrument_spec") != self.instrument:
             raise ValueError("checkpoint instrument specification does not match runtime")
         ledger = self.ledger
+        if self.execution_adapter is not None:
+            execution_checkpoint = checkpoint.get("execution_checkpoint")
+            restored_execution = PaperExecutionAdapter.restore(execution_checkpoint)
+            if (
+                restored_execution.run_id != self.run_id
+                or restored_execution.instrument_id != self.instrument.get("instrument_id")
+                or restored_execution.config["latency_ms"] != self.config["execution_latency_ms"]
+                or restored_execution.config["tick_size"] != self.instrument["price_tick_usd"]
+                or restored_execution.config["lot_size"] != self.instrument["quantity_step_btc"]
+            ):
+                raise ValueError("execution checkpoint binding does not match runtime")
+            self.execution_adapter = restored_execution
+            metadata = checkpoint.get("execution_metadata")
+            if not isinstance(metadata, dict) or any(not isinstance(key, str) or not isinstance(value, dict) for key, value in metadata.items()):
+                raise ValueError("execution checkpoint metadata is invalid")
+            self.execution_metadata = deepcopy(metadata)
         ledger.cash = _d(checkpoint["cash_usd"], "checkpoint cash")
         ledger.leverage = _d(checkpoint["leverage"], "checkpoint leverage")
         ledger.realized_gross = _d(checkpoint["realized_gross_usd"], "checkpoint realized gross")
@@ -428,6 +528,12 @@ class FuturesRuntime:
         self.funding_cursor_ms = checkpoint.get("funding_cursor_ms")
         if (ledger.position is None) != (self.owner_strategy_id is None):
             raise ValueError("checkpoint position ownership is inconsistent")
+        if self.execution_adapter is not None:
+            expected_side = None if ledger.position is None else ledger.position["side"]
+            expected_qty = ZERO if ledger.position is None else ledger.position["qty"]
+            adapter_position = self.execution_adapter.position
+            if adapter_position["side"] != expected_side or _d(adapter_position["quantity_btc"], "execution position") != expected_qty:
+                raise ValueError("execution checkpoint position disagrees with ledger")
 
     def _available_events(self, events, now, cutoff):
         if not isinstance(events, list):
@@ -584,7 +690,10 @@ class FuturesRuntime:
                 or cutoff - received > self.config["max_book_age_ms"]
             ):
                 return "stale_book_or_ticker"
-        if book["event_time_ms"] < now + self.config["execution_latency_ms"]:
+        if (
+            self.execution_adapter is None
+            and book["event_time_ms"] < now + self.config["execution_latency_ms"]
+        ):
             return "book_precedes_execution_eligibility"
         bids = book.get("bids")
         asks = book.get("asks")
@@ -601,6 +710,153 @@ class FuturesRuntime:
         except (KeyError, IndexError, TypeError, ValueError, ZeroDivisionError):
             return "invalid_or_crossed_book"
         return None
+
+    def _execution_book(self, event, cutoff):
+        if not isinstance(event, dict):
+            return {"invalid": True}
+        return {
+            "provider": "kraken-futures",
+            "product_id": "PF_XBTUSD",
+            "epoch": str(event.get("epoch", "unknown")),
+            "snapshot_id": str(event.get("snapshot_id", "{}:{}".format(event.get("epoch"), event.get("sequence")))),
+            "revision": str(event.get("revision", event.get("sequence", "unknown"))),
+            "event_time_ms": event.get("event_time_ms"),
+            "known_at_ms": event.get("known_at_ms", event.get("received_at_ms")),
+            "valid": event.get("valid") is True and event.get("contiguous") is True,
+            "gap": event.get("contiguous") is False,
+            "crossed": event.get("crossed", False),
+            "mark_price_usd": self._ticker_mark_for(event, cutoff),
+            "bids": [[level.get("price_usd"), level.get("quantity_btc")] for level in event.get("bids", []) if isinstance(level, dict)],
+            "asks": [[level.get("price_usd"), level.get("quantity_btc")] for level in event.get("asks", []) if isinstance(level, dict)],
+        }
+
+    @staticmethod
+    def _ticker_mark_for(book, cutoff):
+        # Runtime book snapshots are the only execution input here; a mark must
+        # be carried on that same observation rather than borrowed from a later ticker.
+        return book.get("mark_price_usd")
+
+    def _advance_execution(self, evidence, cutoff):
+        book_event = self._select(evidence, "book_snapshot")
+        book = self._execution_book(book_event, cutoff)
+        ticker = self._select(evidence, "ticker")
+        if isinstance(ticker, dict) and isinstance(book, dict):
+            book["mark_price_usd"] = ticker.get("mark_usd")
+        trades = []
+        for event in evidence:
+            if event.get("type") != "trade":
+                continue
+            trades.append({
+                "provider": "kraken-futures",
+                "product_id": "PF_XBTUSD",
+                "epoch": str(event.get("epoch", "unknown")),
+                "uid": event.get("uid"),
+                "event_time_ms": event.get("event_time_ms"),
+                "known_at_ms": event.get("known_at_ms"),
+                "price_usd": event.get("price_usd"),
+                "quantity_btc": event.get("quantity_btc"),
+                "aggressor_side": event.get("aggressor_side"),
+            })
+        self.execution_adapter.set_position({
+            "side": None if self.ledger.position is None else self.ledger.position["side"],
+            "quantity_btc": "0" if self.ledger.position is None else _text(self.ledger.position["qty"]),
+        })
+        return self.execution_adapter.advance(cutoff, book, trades)
+
+    def _apply_execution_fills(self, events):
+        fills = [event for event in events if event.get("type") == "fill"]
+        by_order = {}
+        for fill in fills:
+            by_order.setdefault(fill["order_id"], []).append(fill)
+        output = []
+        for order_id, order_fills in by_order.items():
+            metadata = self.execution_metadata.get(order_id)
+            if not isinstance(metadata, dict):
+                raise ValueError("execution fill has no immutable runtime intent")
+            side = metadata["side"]
+            if metadata["purpose"] == "entry":
+                quantity = sum((_d(item["quantity_btc"], "fill quantity") for item in order_fills), ZERO)
+                notional = sum((_d(item["quantity_btc"], "fill quantity") * _d(item["price_usd"], "fill price") for item in order_fills), ZERO)
+                average = notional / quantity
+                with localcontext() as context:
+                    context.prec = self.ledger.precision
+                    self.ledger.open(side, _text(quantity), _text(average), order_fills[0]["liquidity"], at_ms=order_fills[0]["event_time_ms"])
+                self.owner_strategy_id = metadata["strategy_id"]
+                self.position_protection = {
+                    "stop": metadata["stop"], "target": metadata["target"],
+                    "donchian_mid": metadata["donchian_mid"],
+                    "opened_at_ms": order_fills[0]["event_time_ms"],
+                    "signal_key": metadata["signal_key"],
+                }
+                selected = metadata.get("selected")
+                if isinstance(selected, dict):
+                    self.position_protection["strategy_target"] = selected.get("proposed_target")
+                    self.position_protection["strategy_invalidation"] = selected.get("invalidation")
+                self.funding_cursor_ms = order_fills[0]["event_time_ms"]
+            else:
+                for item in order_fills:
+                    self._accrue_until(item["event_time_ms"])
+                    self.ledger.close(item["quantity_btc"], item["price_usd"], item["liquidity"], at_ms=item["event_time_ms"])
+                if self.ledger.position is None:
+                    self.owner_strategy_id = None
+                    self.position_protection = None
+                    self.funding_cursor_ms = None
+            for item in order_fills:
+                output.append({
+                    "fill_id": item["fill_id"], "order_id": order_id,
+                    "side": side,
+                    "action": ("sell" if side == "long" else "buy") if metadata["purpose"] == "close" else ("buy" if side == "long" else "sell"),
+                    "quantity_btc": item["quantity_btc"],
+                    "price_usd_per_btc": item["price_usd"],
+                    "fee_usd": item["fee_usd"], "liquidity": item["liquidity"],
+                    "event_time_ms": item["event_time_ms"],
+                })
+        if self.execution_adapter is not None:
+            self.execution_adapter.set_position({
+                "side": None if self.ledger.position is None else self.ledger.position["side"],
+                "quantity_btc": "0" if self.ledger.position is None else _text(self.ledger.position["qty"]),
+            })
+        return output
+
+    def _has_pending_entry(self):
+        if self.execution_adapter is None:
+            return False
+        return any(
+            self.execution_metadata.get(order_id, {}).get("purpose") == "entry"
+            and order["state"] in ("accepted", "partially_filled")
+            for order_id, order in self.execution_adapter.orders.items()
+        )
+
+    def _has_pending_exit(self):
+        if self.execution_adapter is None:
+            return False
+        return any(
+            self.execution_metadata.get(order_id, {}).get("purpose") == "close"
+            and order["state"] in ("accepted", "partially_filled")
+            for order_id, order in self.execution_adapter.orders.items()
+        )
+
+    def _submit_execution_close(self, now, reason):
+        if self._has_pending_exit() or self.ledger.position is None:
+            return None
+        pos = self.ledger.position
+        side = pos["side"]
+        command = "close"
+        order_id = "{}:{}:{}".format(self.run_id, command, now)
+        self.execution_adapter.set_position({"side": side, "quantity_btc": _text(pos["qty"])})
+        receipt = self.execution_adapter.submit({
+            "run_id": self.run_id,
+            "instrument_id": self.instrument["instrument_id"],
+            "order_id": order_id,
+            "side": "sell" if side == "long" else "buy",
+            "order_type": "reduce_only",
+            "quantity_btc": _text(pos["qty"]),
+            "decision_at_ms": now,
+        })
+        self.execution_metadata[order_id] = {
+            "purpose": "close", "side": side, "reason": reason,
+        }
+        return receipt
 
     def _valid_instrument(self, instrument):
         try:

@@ -36,6 +36,13 @@ export interface FuturesWorkerRequest {
         readonly market_snapshot: Record<string, unknown>
         readonly control?: Record<string, unknown>
       }
+    | {
+        readonly operation: 'futures_runtime.v2'
+        readonly runtime_config: Record<string, unknown>
+        readonly instrument: Record<string, unknown>
+        readonly market_snapshot: Record<string, unknown>
+        readonly control?: Record<string, unknown>
+      }
 }
 
 export interface FuturesWorkerResult {
@@ -52,7 +59,7 @@ export interface FuturesWorkerResult {
         readonly closed_at_ms: number
       }
     | undefined
-  readonly operation?: 'futures_runtime.v1'
+  readonly operation?: 'futures_runtime.v1' | 'futures_runtime.v2'
   readonly runtime_event_time_ms?: number
   readonly result: Record<string, unknown>
   readonly events: readonly Record<string, unknown>[]
@@ -471,7 +478,10 @@ export function validateFuturesWorkerRequest(
 }
 
 function validateWorkerPayload(payload: Record<string, unknown>): boolean {
-  if (payload.operation === 'futures_runtime.v1') {
+  if (
+    payload.operation === 'futures_runtime.v1' ||
+    payload.operation === 'futures_runtime.v2'
+  ) {
     const allowed = [
       'operation',
       'runtime_config',
@@ -501,9 +511,13 @@ function validateWorkerPayload(payload: Record<string, unknown>): boolean {
         'maker_rate',
         'taker_rate',
       ]) ||
-      !['futures-runtime-lab.v1', 'futures-runtime-strategies.v1'].includes(
-        String(config.version),
-      ) ||
+      ![
+        'futures-runtime-lab.v1',
+        'futures-runtime-strategies.v1',
+        ...(payload.operation === 'futures_runtime.v2'
+          ? ['futures-runtime-execution.v1']
+          : []),
+      ].includes(String(config.version)) ||
       config.cost_version !== 'kraken-futures-eea-btcusd-base.v1'
     )
       return false
@@ -662,12 +676,15 @@ function isResult(
   value: unknown,
   request: FuturesWorkerRequest,
 ): value is FuturesWorkerResult {
-  if (request.payload.operation === 'futures_runtime.v1')
+  if (
+    request.payload.operation === 'futures_runtime.v1' ||
+    request.payload.operation === 'futures_runtime.v2'
+  )
     return (
       isRecord(value) &&
       value.type === 'result' &&
       value.protocol_version === PROTOCOL_VERSION &&
-      value.operation === 'futures_runtime.v1' &&
+      value.operation === request.payload.operation &&
       value.request_id === request.request_id &&
       value.run_id === request.run_id &&
       value.work_id === request.work_id &&

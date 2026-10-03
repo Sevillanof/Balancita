@@ -60,14 +60,19 @@ print(json.dumps({'opened': opened, 'open_checkpoint': open_checkpoint, 'closed'
   return JSON.parse(result.stdout) as RuntimeFixture
 }
 
-function createRuntimeRun(store: FuturesStore): void {
+function createRuntimeRun(
+  store: FuturesStore,
+  revision:
+    | 'futures-runtime-lab.v1'
+    | 'futures-runtime-execution.v1' = 'futures-runtime-lab.v1',
+): void {
   const runtimeConfig = {
-    version: 'futures-runtime-lab.v1',
+    version: revision,
     initial_cash_usd: '10000',
     max_notional_usd: '1000',
     max_exposure_multiple: '1',
     risk_fraction: '0.001',
-    execution_latency_ms: 0,
+    execution_latency_ms: revision === 'futures-runtime-execution.v1' ? 100 : 0,
     max_book_age_ms: 3000,
     max_spread_bps: '5',
     cost_version: 'kraken-futures-eea-btcusd-base.v1',
@@ -89,7 +94,10 @@ function createRuntimeRun(store: FuturesStore): void {
       taker: '0.0005',
     },
     runtime: {
-      schema_version: 'futures-runtime-binding.v1',
+      schema_version:
+        revision === 'futures-runtime-execution.v1'
+          ? 'futures-runtime-binding.v3'
+          : 'futures-runtime-binding.v1',
       runtime_config: runtimeConfig,
       instrument_spec: {
         instrument_id: 'kraken-futures:PF_XBTUSD',
@@ -160,6 +168,15 @@ function runtimeEvents(
 }
 
 describe('versioned C27 runtime persistence', () => {
+  it('accepts an immutable execution binding as a distinct runtime revision', () => {
+    const store = newStore()
+    createRuntimeRun(store, 'futures-runtime-execution.v1')
+    expect(store.getRuntimeBinding('runtime-store-run')?.schema_version).toBe(
+      'futures-runtime-binding.v3',
+    )
+    store.close()
+  })
+
   it('persists actual long-open output and checkpoint, closes after restore, and verifies after reopen', () => {
     const cycles = actualRuntimeCycles()
     const store = newStore()

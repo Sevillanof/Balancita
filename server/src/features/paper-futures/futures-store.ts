@@ -193,7 +193,9 @@ export class FuturesStore {
 
   applyResult(value: unknown, injectFailureAt?: 'before-commit'): JsonRecord {
     if (!isRecord(value)) throw new Error('Invalid futures result schema.')
-    const runtimeWork = value.schema_version === 'futures-runtime-work.v1'
+    const runtimeWork =
+      value.schema_version === 'futures-runtime-work.v1' ||
+      value.schema_version === 'futures-runtime-work.v2'
     assertKeys(
       value,
       [
@@ -739,7 +741,10 @@ export class FuturesStore {
           )
           .get(String(row.work_id)) as { result_hash: string } | undefined
         if (!applied || applied.result_hash !== resultHash) return false
-        if (payload.schema_version === 'futures-runtime-work.v1') {
+        if (
+          payload.schema_version === 'futures-runtime-work.v1' ||
+          payload.schema_version === 'futures-runtime-work.v2'
+        ) {
           if (!('runtime' in frozen)) return false
           validateRuntimeWork(
             payload,
@@ -1011,7 +1016,8 @@ function validateRuntimeBinding(value: unknown, frozen: JsonRecord): void {
   }
   if (
     (value.schema_version !== 'futures-runtime-binding.v1' &&
-      value.schema_version !== 'futures-runtime-binding.v2') ||
+      value.schema_version !== 'futures-runtime-binding.v2' &&
+      value.schema_version !== 'futures-runtime-binding.v3') ||
     !isRecord(value.runtime_config) ||
     !isRecord(value.instrument_spec)
   )
@@ -1034,7 +1040,9 @@ function validateRuntimeBinding(value: unknown, frozen: JsonRecord): void {
     config.version !==
       (value.schema_version === 'futures-runtime-binding.v2'
         ? 'futures-runtime-strategies.v1'
-        : 'futures-runtime-lab.v1') ||
+        : value.schema_version === 'futures-runtime-binding.v3'
+          ? 'futures-runtime-execution.v1'
+          : 'futures-runtime-lab.v1') ||
     config.cost_version !== (frozen.costs as JsonRecord).version
   )
     throw new Error('Unsupported futures runtime configuration.')
@@ -1101,6 +1109,346 @@ function validateRuntimeBinding(value: unknown, frozen: JsonRecord): void {
     canonicalDecimal(instrument[key], `instrument ${key}`, 'positive')
 }
 
+function validateExecutionCheckpoint(
+  cp: JsonRecord,
+  binding: JsonRecord,
+): void {
+  const execution = cp.execution_checkpoint
+  if (!isRecord(execution))
+    throw new Error('Missing paper execution checkpoint.')
+  assertKeys(execution, [
+    'checkpoint_version',
+    'model_version',
+    'run_id',
+    'instrument_id',
+    'config',
+    'orders',
+    'events',
+    'command_receipts',
+    'position',
+    'position_reduced',
+    'book_budgets',
+    'trade_budgets',
+    'trade_ids',
+    'sequence',
+    'last_cutoff_ms',
+  ])
+  const instrument = binding.instrument_spec as JsonRecord
+  const config = execution.config
+  if (
+    execution.checkpoint_version !== 'paper-execution-checkpoint.v1' ||
+    execution.model_version !== 'paper-execution.v1' ||
+    execution.run_id !== cp.run_id ||
+    execution.instrument_id !== instrument.instrument_id ||
+    !isRecord(config)
+  )
+    throw new Error('Execution checkpoint identity is invalid.')
+  assertKeys(config, [
+    'version',
+    'latency_ms',
+    'tick_size',
+    'lot_size',
+    'max_book_age_ms',
+    'precision',
+    'queue_model',
+  ])
+  const runtimeConfig = binding.runtime_config as JsonRecord
+  if (
+    config.version !== 'paper-execution.v1' ||
+    config.latency_ms !== runtimeConfig.execution_latency_ms ||
+    config.tick_size !== instrument.price_tick_usd ||
+    config.lot_size !== instrument.quantity_step_btc ||
+    config.max_book_age_ms !== runtimeConfig.max_book_age_ms ||
+    config.precision !== 50 ||
+    config.queue_model !== 'conservative.v1'
+  )
+    throw new Error('Execution checkpoint config differs from frozen binding.')
+  if (
+    !isRecord(execution.orders) ||
+    !Array.isArray(execution.events) ||
+    !isRecord(execution.position) ||
+    !Array.isArray(execution.book_budgets) ||
+    !Array.isArray(execution.trade_budgets) ||
+    !Array.isArray(execution.trade_ids) ||
+    !isRecord(execution.command_receipts)
+  )
+    throw new Error('Execution checkpoint collections are invalid.')
+  const position = execution.position
+  assertKeys(position, ['side', 'quantity_btc'])
+  const ledgerPosition = cp.ledger_position
+  const expectedSide = isRecord(ledgerPosition) ? ledgerPosition.side : null
+  const expectedQuantity = isRecord(ledgerPosition) ? ledgerPosition.qty : '0'
+  if (
+    position.side !== expectedSide ||
+    position.quantity_btc !== expectedQuantity
+  )
+    throw new Error(
+      'Execution checkpoint position differs from ledger checkpoint.',
+    )
+  canonicalDecimal(
+    position.quantity_btc,
+    'execution position quantity',
+    position.side === null ? 'nonnegative' : 'positive',
+  )
+  if (
+    position.side !== null &&
+    position.side !== 'long' &&
+    position.side !== 'short'
+  )
+    throw new Error('Execution checkpoint position side is invalid.')
+  canonicalDecimal(
+    execution.position_reduced,
+    'execution reduced position',
+    'nonnegative',
+  )
+  if (
+    !Number.isSafeInteger(execution.sequence) ||
+    Number(execution.sequence) < 0
+  )
+    throw new Error('Execution checkpoint event sequence is invalid.')
+  if (execution.last_cutoff_ms !== null)
+    normalizeTimestampMs(execution.last_cutoff_ms)
+  const eventIds = new Set<string>()
+  for (const event of execution.events) {
+    if (
+      !isRecord(event) ||
+      typeof event.event_id !== 'string' ||
+      !event.event_id ||
+      eventIds.has(event.event_id) ||
+      event.run_id !== cp.run_id ||
+      event.instrument_id !== instrument.instrument_id ||
+      typeof event.type !== 'string'
+    )
+      throw new Error('Execution checkpoint event identity is invalid.')
+    eventIds.add(event.event_id)
+    const common = ['event_id', 'type', 'run_id', 'instrument_id']
+    const fields: Record<string, string[]> = {
+      order_created: [
+        'order_id',
+        'order_type',
+        'side',
+        'quantity_btc',
+        'decision_at_ms',
+      ],
+      order_accepted: [
+        'order_id',
+        'order_type',
+        'side',
+        'quantity_btc',
+        'decision_at_ms',
+        'eligible_at_ms',
+        'model_version',
+      ],
+      fill: [
+        'order_id',
+        'fill_id',
+        'quantity_btc',
+        'price_usd',
+        'fee_usd',
+        'liquidity',
+        'event_time_ms',
+        'source_event_time_ms',
+        'fee_rate',
+        'notional_usd',
+      ],
+      order_filled: ['order_id', 'filled_quantity_btc', 'effective_at_ms'],
+      cancelled: [
+        'order_id',
+        'reason',
+        'effective_at_ms',
+        'filled_quantity_btc',
+      ],
+      expired: ['order_id', 'effective_at_ms', 'filled_quantity_btc'],
+      rejected: ['order_id', 'reason'],
+      market_uncertainty: ['cutoff_ms', 'reason'],
+      stop_triggered: [
+        'order_id',
+        'mark_price_usd',
+        'stop_price_usd',
+        'event_time_ms',
+      ],
+      queue_established: ['order_id', 'queue_ahead_btc', 'assumption'],
+    }
+    const eventFields = fields[event.type]
+    if (!eventFields)
+      throw new Error('Unsupported execution checkpoint event type.')
+    assertKeys(event, [...common, ...eventFields])
+    for (const key of [
+      'decision_at_ms',
+      'eligible_at_ms',
+      'event_time_ms',
+      'source_event_time_ms',
+      'effective_at_ms',
+      'cutoff_ms',
+    ])
+      if (key in event) normalizeTimestampMs(event[key])
+    for (const key of [
+      'quantity_btc',
+      'filled_quantity_btc',
+      'price_usd',
+      'fee_usd',
+      'fee_rate',
+      'notional_usd',
+      'mark_price_usd',
+      'stop_price_usd',
+      'queue_ahead_btc',
+    ])
+      if (key in event)
+        canonicalDecimal(
+          event[key],
+          `execution event ${key}`,
+          ['fee_usd', 'fee_rate', 'queue_ahead_btc'].includes(key)
+            ? 'nonnegative'
+            : 'positive',
+        )
+    if (
+      event.type === 'fill' &&
+      (!['maker', 'taker'].includes(String(event.liquidity)) ||
+        typeof event.fill_id !== 'string' ||
+        !event.fill_id)
+    )
+      throw new Error('Execution checkpoint fill fields are invalid.')
+    if (
+      'order_type' in event &&
+      ![
+        'market_ioc',
+        'limit',
+        'post_only',
+        'stop_market',
+        'reduce_only',
+      ].includes(String(event.order_type))
+    )
+      throw new Error('Execution checkpoint order type is invalid.')
+    if ('side' in event && !['buy', 'sell'].includes(String(event.side)))
+      throw new Error('Execution checkpoint order side is invalid.')
+  }
+  for (const [orderId, candidate] of Object.entries(execution.orders)) {
+    if (!isRecord(candidate))
+      throw new Error('Execution order checkpoint is invalid.')
+    assertKeys(candidate, [
+      'intent',
+      'remaining',
+      'filled',
+      'state',
+      'eligible_at_ms',
+      'expiry_ms',
+      'triggered',
+      'queue_ahead',
+      'resting',
+      'trade_seen',
+      'receipt',
+    ])
+    const intent = candidate.intent
+    if (!isRecord(intent))
+      throw new Error('Execution intent checkpoint is invalid.')
+    const kind = intent.order_type
+    assertKeys(intent, [
+      'run_id',
+      'instrument_id',
+      'order_id',
+      'side',
+      'order_type',
+      'quantity_btc',
+      'decision_at_ms',
+      ...(kind === 'limit' || kind === 'post_only' ? ['limit_price_usd'] : []),
+      ...(kind === 'stop_market' ? ['stop_price_usd'] : []),
+      ...(intent.expire_at_ms === undefined ? [] : ['expire_at_ms']),
+    ])
+    if (
+      intent.order_id !== orderId ||
+      intent.run_id !== cp.run_id ||
+      intent.instrument_id !== instrument.instrument_id ||
+      !['buy', 'sell'].includes(String(intent.side)) ||
+      ![
+        'market_ioc',
+        'limit',
+        'post_only',
+        'stop_market',
+        'reduce_only',
+      ].includes(String(kind)) ||
+      ![
+        'created',
+        'accepted',
+        'partially_filled',
+        'filled',
+        'cancelled',
+        'rejected',
+        'expired',
+      ].includes(String(candidate.state)) ||
+      !isRecord(candidate.receipt) ||
+      !Array.isArray(candidate.trade_seen)
+    )
+      throw new Error(
+        'Execution order checkpoint identity or state is invalid.',
+      )
+    canonicalDecimal(
+      intent.quantity_btc,
+      'execution intent quantity',
+      'positive',
+    )
+    normalizeTimestampMs(intent.decision_at_ms)
+    if (
+      !Number.isSafeInteger(candidate.expiry_ms) &&
+      candidate.expiry_ms !== null
+    )
+      throw new Error('Execution order expiry is invalid.')
+    if (candidate.expiry_ms !== null) normalizeTimestampMs(candidate.expiry_ms)
+    if (
+      typeof candidate.triggered !== 'boolean' ||
+      typeof candidate.resting !== 'boolean' ||
+      !Array.isArray(candidate.trade_seen) ||
+      candidate.trade_seen.some((tradeId) => typeof tradeId !== 'string')
+    )
+      throw new Error('Execution order state flags are invalid.')
+    canonicalDecimal(
+      candidate.remaining,
+      'execution remaining quantity',
+      'nonnegative',
+    )
+    canonicalDecimal(
+      candidate.filled,
+      'execution filled quantity',
+      'nonnegative',
+    )
+    normalizeTimestampMs(candidate.eligible_at_ms)
+  }
+  if (!isRecord(cp.execution_metadata))
+    throw new Error('Execution intent metadata is invalid.')
+  for (const [orderId, metadata] of Object.entries(cp.execution_metadata)) {
+    if (!isRecord(metadata) || !(orderId in execution.orders))
+      throw new Error('Execution metadata has no associated order.')
+    if (metadata.purpose === 'entry') {
+      assertKeys(metadata, [
+        'purpose',
+        'side',
+        'strategy_id',
+        'signal_key',
+        'stop',
+        'target',
+        'donchian_mid',
+        'selected',
+      ])
+      if (
+        !['long', 'short'].includes(String(metadata.side)) ||
+        typeof metadata.strategy_id !== 'string' ||
+        typeof metadata.signal_key !== 'string' ||
+        (metadata.selected !== null && !isRecord(metadata.selected))
+      )
+        throw new Error('Invalid immutable entry intent metadata.')
+      canonicalDecimal(metadata.stop, 'entry stop', 'positive')
+      canonicalDecimal(metadata.target, 'entry target', 'positive')
+      canonicalDecimal(metadata.donchian_mid, 'entry midline')
+    } else if (metadata.purpose === 'close') {
+      assertKeys(metadata, ['purpose', 'side', 'reason'])
+      if (
+        !['long', 'short'].includes(String(metadata.side)) ||
+        typeof metadata.reason !== 'string'
+      )
+        throw new Error('Invalid immutable exit intent metadata.')
+    } else throw new Error('Unknown execution intent purpose.')
+  }
+}
+
 function validateRuntimeWork(
   value: JsonRecord,
   frozen: JsonRecord,
@@ -1117,6 +1465,8 @@ function validateRuntimeWork(
   const binding = frozen.runtime as JsonRecord
   const strategyRuntime =
     binding.schema_version === 'futures-runtime-binding.v2'
+  const executionRuntime =
+    binding.schema_version === 'futures-runtime-binding.v3'
   assertKeys(cp, [
     'schema_version',
     'runtime_version',
@@ -1140,14 +1490,17 @@ function validateRuntimeWork(
     'position_protection',
     'signal_keys',
     'consumed_depth',
-    ...(strategyRuntime ? ['regime'] : []),
+    ...(strategyRuntime || executionRuntime ? ['regime'] : []),
+    ...(executionRuntime ? ['execution_checkpoint', 'execution_metadata'] : []),
   ])
   if (
-    cp.schema_version !== (strategyRuntime ? 2 : 1) ||
+    cp.schema_version !== (executionRuntime ? 3 : strategyRuntime ? 2 : 1) ||
     cp.runtime_version !==
-      (strategyRuntime
-        ? 'futures-strategy-baseline-perp-v1'
-        : 'c27-breakout-perp-v1') ||
+      (executionRuntime
+        ? 'futures-runtime-execution.v1'
+        : strategyRuntime
+          ? 'futures-strategy-baseline-perp-v1'
+          : 'c27-breakout-perp-v1') ||
     cp.run_id !== runId ||
     cp.runtime_config === undefined ||
     cp.instrument_spec === undefined ||
@@ -1168,7 +1521,8 @@ function validateRuntimeWork(
     !Number.isSafeInteger(version) ||
     version < 1 ||
     value.protocol_version !== 1 ||
-    value.schema_version !== 'futures-runtime-work.v1'
+    value.schema_version !==
+      (executionRuntime ? 'futures-runtime-work.v2' : 'futures-runtime-work.v1')
   )
     throw new Error('Invalid versioned runtime work identity.')
   assertKeys(output, [
@@ -1182,6 +1536,7 @@ function validateRuntimeWork(
     'position',
     'ledger',
     'valuation_source',
+    ...(executionRuntime ? ['execution_events'] : []),
   ])
   if (
     output.schema_version !== 'futures-runtime-result.v1' ||
@@ -1197,6 +1552,7 @@ function validateRuntimeWork(
       output.valuation_source !== 'observed_book_midpoint')
   )
     throw new Error('Invalid C27 runtime output shape.')
+  if (executionRuntime) validateExecutionCheckpoint(cp, binding)
   assertKeys(output.analysis, [
     'strategy_id',
     'selected_strategy_id',
@@ -1349,7 +1705,9 @@ function validateRuntimeWork(
     output.analysis.strategy_id !==
       (strategyRuntime
         ? 'futures-strategy-baseline-perp-v1'
-        : 'c27-breakout-perp-v1')
+        : executionRuntime
+          ? 'futures-runtime-execution.v1'
+          : 'c27-breakout-perp-v1')
   )
     throw new Error('Unsupported runtime strategy identity.')
   assertKeys(output.analysis.features, [
@@ -1467,6 +1825,79 @@ function validateRuntimeWork(
   }
   for (const order of output.orders) {
     if (!isRecord(order)) throw new Error('Invalid runtime order evidence.')
+    if (executionRuntime) {
+      assertKeys(
+        order,
+        [
+          'event_id',
+          'type',
+          'run_id',
+          'instrument_id',
+          'order_id',
+          'order_type',
+          'side',
+          'quantity_btc',
+        ],
+        [
+          'decision_at_ms',
+          'eligible_at_ms',
+          'model_version',
+          'filled_quantity_btc',
+          'effective_at_ms',
+          'reason',
+        ],
+      )
+      if (
+        ![
+          'order_created',
+          'order_accepted',
+          'order_filled',
+          'cancelled',
+          'rejected',
+          'expired',
+        ].includes(String(order.type)) ||
+        order.run_id !== runId ||
+        order.instrument_id !==
+          (binding.instrument_spec as JsonRecord).instrument_id ||
+        typeof order.order_id !== 'string' ||
+        ![
+          'market_ioc',
+          'limit',
+          'post_only',
+          'stop_market',
+          'reduce_only',
+        ].includes(String(order.order_type)) ||
+        !['buy', 'sell'].includes(String(order.side)) ||
+        (order.type === 'order_accepted' &&
+          order.model_version !== 'paper-execution.v1')
+      )
+        throw new Error('Invalid versioned execution order evidence.')
+      canonicalDecimal(
+        order.quantity_btc,
+        'execution order quantity',
+        'positive',
+      )
+      if (order.decision_at_ms !== undefined)
+        normalizeTimestampMs(order.decision_at_ms)
+      else if (
+        order.type !== 'order_filled' &&
+        order.type !== 'cancelled' &&
+        order.type !== 'expired' &&
+        order.type !== 'rejected'
+      )
+        throw new Error('Execution order decision time is missing.')
+      if (order.filled_quantity_btc !== undefined)
+        canonicalDecimal(
+          order.filled_quantity_btc,
+          'execution filled quantity',
+          'nonnegative',
+        )
+      if (order.eligible_at_ms !== undefined)
+        normalizeTimestampMs(order.eligible_at_ms)
+      if (order.effective_at_ms !== undefined)
+        normalizeTimestampMs(order.effective_at_ms)
+      continue
+    }
     assertKeys(
       order,
       [
@@ -1498,21 +1929,27 @@ function validateRuntimeWork(
   }
   for (const fill of output.fills) {
     if (!isRecord(fill)) throw new Error('Invalid runtime fill evidence.')
-    assertKeys(fill, [
-      'fill_id',
-      'side',
-      'action',
-      'quantity_btc',
-      'price_usd_per_btc',
-      'fee_usd',
-      'liquidity',
-      'event_time_ms',
-    ])
+    assertKeys(
+      fill,
+      [
+        'fill_id',
+        'side',
+        'action',
+        'quantity_btc',
+        'price_usd_per_btc',
+        'fee_usd',
+        'liquidity',
+        'event_time_ms',
+      ],
+      executionRuntime ? ['order_id'] : [],
+    )
     if (
       typeof fill.fill_id !== 'string' ||
       (fill.side !== 'long' && fill.side !== 'short') ||
       (fill.action !== 'buy' && fill.action !== 'sell') ||
-      fill.liquidity !== 'taker' ||
+      !(executionRuntime
+        ? ['maker', 'taker'].includes(String(fill.liquidity))
+        : fill.liquidity === 'taker') ||
       !Number.isSafeInteger(fill.event_time_ms)
     )
       throw new Error('Invalid runtime fill fields.')
@@ -2043,6 +2480,45 @@ function validateFuturesEvents(
         throw new Error('Invalid position event side.')
       if (event.side === null && event.quantity_btc !== '0')
         throw new Error('Flat position event must have zero quantity.')
+    } else if (event.type === 'order') {
+      assertKeys(event, [
+        'event_version',
+        'id',
+        'run_id',
+        'work_id',
+        'type',
+        'instrument_id',
+        'order_id',
+        'status',
+        'order_type',
+        'side',
+        'quantity_btc',
+        'event_time_ms',
+        'cost_version',
+      ])
+      if (
+        typeof event.order_id !== 'string' ||
+        !event.order_id ||
+        ![
+          'order_created',
+          'order_accepted',
+          'order_filled',
+          'cancelled',
+          'rejected',
+          'expired',
+        ].includes(String(event.status)) ||
+        ![
+          'market_ioc',
+          'limit',
+          'post_only',
+          'stop_market',
+          'reduce_only',
+        ].includes(String(event.order_type)) ||
+        !['buy', 'sell'].includes(String(event.side))
+      )
+        throw new Error('Invalid paper execution order event.')
+      canonicalDecimal(event.quantity_btc, 'order quantity', 'positive')
+      normalizeTimestampMs(event.event_time_ms)
     } else if (event.type === 'account') {
       assertKeys(event, [
         'event_version',

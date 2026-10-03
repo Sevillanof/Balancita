@@ -26,6 +26,102 @@ def close_command(command_id):
 
 
 class FuturesRuntimeTests(unittest.TestCase):
+    def test_execution_runtime_routes_strategy_entry_through_causal_adapter_and_ledger(self):
+        execution_config = dict(CONFIG)
+        execution_config.update(
+            version="futures-runtime-execution.v1", execution_latency_ms=100
+        )
+        engine = FuturesRuntime(
+            run_id="execution-flow", config=execution_config, instrument=INSTRUMENT
+        )
+        at_zero = warmed_market(21_600_000, breakout="long")
+        initial = engine.process(at_zero)
+        self.assertEqual(initial["fills"], [])
+        self.assertEqual(initial["position"]["quantity_btc"], "0")
+        self.assertEqual([event["type"] for event in initial["orders"]], ["order_accepted"])
+        eligible = initial["orders"][0]["eligible_at_ms"]
+        checkpoint = json.loads(json.dumps(engine.checkpoint()))
+        engine = FuturesRuntime(
+            run_id="execution-flow", config=execution_config,
+            instrument=INSTRUMENT, checkpoint=checkpoint,
+        )
+
+        at_99 = warmed_market(21_600_099)
+        at_99["events"] = [
+            event for event in at_zero["events"] if event["type"] not in ("book_snapshot", "ticker")
+        ] + [
+            event for event in at_zero["events"] if event["type"] in ("book_snapshot", "ticker")
+        ]
+        at_99["events"][-2]["known_at_ms"] = 21_600_099
+        at_99["events"][-2]["received_at_ms"] = 21_600_099
+        at_99["events"][-1]["known_at_ms"] = 21_600_099
+        at_99["events"][-1]["received_at_ms"] = 21_600_099
+        still_pending = engine.process(at_99)
+        self.assertEqual(still_pending["fills"], [])
+        self.assertEqual(engine.checkpoint()["execution_checkpoint"]["orders"][initial["orders"][0]["order_id"]]["eligible_at_ms"], eligible)
+
+        at_100 = warmed_market(21_600_100)
+        book = next(event for event in at_100["events"] if event["type"] == "book_snapshot")
+        book.update(epoch="feed-1", sequence=2, snapshot_id="book-100", revision="2")
+        filled = engine.process(at_100)
+        self.assertEqual(len(filled["fills"]), 1)
+        self.assertEqual(filled["fills"][0]["event_time_ms"], eligible)
+        self.assertEqual(filled["position"]["quantity_btc"], filled["fills"][0]["quantity_btc"])
+        self.assertEqual(filled["ledger"]["fees_usd"], filled["fills"][0]["fee_usd"])
+
+        close_pending = engine.process(
+            warmed_market(21_600_100, base_price="100100"),
+            control=close_command("execution-close"),
+        )
+        self.assertEqual(close_pending["fills"], [])
+        self.assertEqual(close_pending["position"]["quantity_btc"], filled["position"]["quantity_btc"])
+        close_eligible = close_pending["orders"][-1]["eligible_at_ms"]
+        close_checkpoint = json.loads(json.dumps(engine.checkpoint()))
+        engine = FuturesRuntime(
+            run_id="execution-flow", config=execution_config,
+            instrument=INSTRUMENT, checkpoint=close_checkpoint,
+        )
+        close_market = warmed_market(close_eligible, base_price="100100")
+        close_book = next(event for event in close_market["events"] if event["type"] == "book_snapshot")
+        close_book.update(epoch="feed-1", sequence=3, snapshot_id="book-close", revision="3")
+        closed = engine.process(close_market)
+        self.assertEqual(closed["position"]["quantity_btc"], "0")
+        self.assertEqual(closed["fills"][0]["action"], "sell")
+        self.assertEqual(closed["owner_strategy_id"] if "owner_strategy_id" in closed else engine.checkpoint()["owner_strategy_id"], None)
+
+    def test_execution_runtime_revision_owns_adapter_checkpoint_and_default_latency(self):
+        execution_config = dict(CONFIG)
+        execution_config.update(
+            version="futures-runtime-execution.v1",
+            execution_latency_ms=100,
+        )
+        engine = FuturesRuntime(
+            run_id="execution-run", config=execution_config, instrument=INSTRUMENT
+        )
+        saved = engine.checkpoint()
+
+        self.assertEqual(saved["schema_version"], 3)
+        self.assertEqual(
+            saved["execution_checkpoint"]["model_version"], "paper-execution.v1"
+        )
+        self.assertEqual(saved["execution_checkpoint"]["config"]["latency_ms"], 100)
+        altered = json.loads(json.dumps(saved))
+        altered["execution_checkpoint"]["config"]["latency_ms"] = 0
+        with self.assertRaises(ValueError):
+            FuturesRuntime(
+                run_id="execution-run",
+                config=execution_config,
+                instrument=INSTRUMENT,
+                checkpoint=altered,
+            )
+        restored = FuturesRuntime(
+            run_id="execution-run",
+            config=execution_config,
+            instrument=INSTRUMENT,
+            checkpoint=json.loads(json.dumps(saved)),
+        )
+        self.assertEqual(restored.checkpoint(), saved)
+
     def test_versioned_strategy_runtime_persists_registry_proposals_and_owner(self):
         strategy_config = dict(CONFIG)
         strategy_config["version"] = "futures-runtime-strategies.v1"

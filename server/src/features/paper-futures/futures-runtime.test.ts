@@ -37,6 +37,200 @@ type RuntimeRequest = Omit<FuturesWorkerRequest, 'payload'> & {
 }
 
 describe('durable C27 futures runtime', () => {
+  it('durably resumes a pending 100ms execution order, fills only on a later book, and closes through the real worker', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'futures-execution-runtime-'))
+    const path = join(directory, 'fixture.sqlite')
+    const runId = 'execution-runtime-run'
+    const executionConfig = {
+      ...runtimeConfig,
+      version: 'futures-runtime-execution.v1',
+      execution_latency_ms: 100,
+    }
+    const storeFor = () => {
+      const value = new FuturesStore(path)
+      value.createRun({
+        runId,
+        config: {
+          ledger_version: 'linear-usd-ledger.v1',
+          decimal_precision: 50,
+          leverage: '1',
+        },
+        seed: { cash_usd: '10000' },
+        instrument: { instrument_id: instrument.instrument_id },
+        costs: {
+          version: runtimeConfig.cost_version,
+          maker: runtimeConfig.maker_rate,
+          taker: runtimeConfig.taker_rate,
+        },
+        runtime: {
+          schema_version: 'futures-runtime-binding.v3',
+          runtime_config: executionConfig,
+          instrument_spec: instrument,
+        },
+      })
+      return value
+    }
+    let store = storeFor()
+    let runner = new FuturesCommandRunner(store)
+    const makeExecutionRequest = (
+      workId: string,
+      version: number,
+      snapshot: Record<string, unknown>,
+      control?: Record<string, unknown>,
+    ): FuturesWorkerRequest => ({
+      request_id: `request-${workId}`,
+      run_id: runId,
+      work_id: workId,
+      expected_state_version: version,
+      payload: {
+        operation: 'futures_runtime.v2',
+        runtime_config: executionConfig,
+        instrument,
+        market_snapshot: snapshot,
+        ...(control ? { control } : {}),
+      },
+    })
+    try {
+      const t0 = 21_600_000
+      const initial = makeExecutionRequest(
+        'execution-open',
+        0,
+        market(t0, 'long'),
+      )
+      const initialResult = await runner.accept(initial).result
+      const openedPending = store.getRunProjection(runId) as {
+        result: { quantity_btc: string; fees_usd: string }
+        checkpoint: Record<string, unknown> & {
+          execution_checkpoint: Record<string, unknown>
+        }
+      }
+      expect(openedPending.result.quantity_btc).toBe('0')
+      expect(openedPending.checkpoint.schema_version).toBe(3)
+      const executionCheckpoint = openedPending.checkpoint.execution_checkpoint
+      const pendingOrders = executionCheckpoint.orders as Record<
+        string,
+        { eligible_at_ms: number }
+      >
+      const originalOrderId = Object.keys(pendingOrders)[0]!
+      expect(pendingOrders[originalOrderId]!.eligible_at_ms).toBe(t0 + 100)
+      expect(store.verifyRun(runId)).toBe(true)
+      expect(await runner.accept(initial).result).toEqual(initialResult)
+      expect(store.exportRun(runId).events).toHaveLength(3)
+      await runner.close()
+      store.close()
+
+      store = storeFor()
+      runner = new FuturesCommandRunner(store)
+      const beforeEligible = market(t0 + 99, 'flat')
+      beforeEligible.events = (
+        market(t0, 'long').events as Record<string, unknown>[]
+      ).map((event) =>
+        event.type === 'book_snapshot' || event.type === 'ticker'
+          ? { ...event, received_at_ms: t0 + 99, known_at_ms: t0 + 99 }
+          : event,
+      )
+      beforeEligible.decision_time_ms = t0 + 99
+      beforeEligible.cutoff_received_at_ms = t0 + 99
+      const t99 = makeExecutionRequest('execution-t99', 1, beforeEligible)
+      await runner.accept(t99).result
+      expect(
+        (store.getRunProjection(runId)?.result as Record<string, unknown>)
+          .quantity_btc,
+      ).toBe('0')
+      const t99Checkpoint = (
+        store.getRunProjection(runId)?.checkpoint as Record<string, unknown>
+      ).execution_checkpoint as Record<string, unknown>
+      expect(
+        (t99Checkpoint.orders as Record<string, { eligible_at_ms: number }>)[
+          originalOrderId
+        ]!.eligible_at_ms,
+      ).toBe(t0 + 100)
+
+      const t100 = makeExecutionRequest(
+        'execution-t100',
+        2,
+        market(t0 + 100, 'flat'),
+      )
+      const t100Result = await runner.accept(t100).result
+      const t100Output = store.getRunProjection(runId)?.result as Record<
+        string,
+        unknown
+      >
+      expect(t100Output.quantity_btc).not.toBe('0')
+      expect(t100Output.fees_usd).toBe('0.49500495')
+      expect(store.verifyRun(runId)).toBe(true)
+      const fillEvents = (
+        store.exportRun(runId).events as Record<string, unknown>[]
+      ).filter((event) => event.type === 'fill')
+      expect(fillEvents).toHaveLength(1)
+      expect(await runner.accept(t100).result).toEqual(t100Result)
+      expect(
+        (store.exportRun(runId).events as Record<string, unknown>[]).filter(
+          (event) => event.type === 'fill',
+        ),
+      ).toHaveLength(1)
+
+      const closeIntent = makeExecutionRequest(
+        'execution-close-intent',
+        3,
+        market(t0 + 100, 'flat'),
+        { type: 'paper.close', command_id: 'close-execution' },
+      )
+      await runner.accept(closeIntent).result
+      await runner.close()
+      store.close()
+      store = storeFor()
+      runner = new FuturesCommandRunner(store)
+      const closeMarket = market(t0 + 200, 'flat')
+      const closeBook = (closeMarket.events as Record<string, unknown>[]).find(
+        (event) => event.type === 'book_snapshot',
+      )!
+      ;(closeBook.bids as Record<string, unknown>[])[0]!.quantity_btc = '0.001'
+      const closeRequest = makeExecutionRequest(
+        'execution-close-fill',
+        4,
+        closeMarket,
+      )
+      await runner.accept(closeRequest).result
+      const partiallyClosed = store.getRunProjection(runId)?.result as Record<
+        string,
+        unknown
+      >
+      expect(partiallyClosed.quantity_btc).toBe('0.0089')
+      expect(
+        (store.getRunProjection(runId)?.checkpoint as Record<string, unknown>)
+          .owner_strategy_id,
+      ).toBe('c27-breakout-perp-v1')
+      expect(store.verifyRun(runId)).toBe(true)
+
+      const remainingCloseIntent = makeExecutionRequest(
+        'execution-close-remainder-intent',
+        5,
+        market(t0 + 300, 'flat'),
+        { type: 'paper.close', command_id: 'close-execution-remainder' },
+      )
+      await runner.accept(remainingCloseIntent).result
+      const finalClose = makeExecutionRequest(
+        'execution-close-remainder-fill',
+        6,
+        market(t0 + 400, 'flat'),
+      )
+      await runner.accept(finalClose).result
+      expect(
+        (store.getRunProjection(runId)?.result as Record<string, unknown>)
+          .quantity_btc,
+      ).toBe('0')
+      expect(store.verifyRun(runId)).toBe(true)
+      expect(
+        store.getAppliedReceipt('execution-close-remainder-fill')?.status,
+      ).toBe('committed')
+    } finally {
+      await runner.close().catch(() => undefined)
+      store.close()
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
   it('integrates the versioned four-strategy runtime through durable open, restart, owner hold and close', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'futures-strategies-'))
     const path = join(directory, 'fixture.sqlite')
