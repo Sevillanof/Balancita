@@ -85,13 +85,44 @@ export class FuturesCandleBuilder {
   >()
   private readonly seen = new Set<string>()
   private readonly maxCandles = 50_000
+  private readonly onRevision?: (candle: {
+    readonly id: string
+    readonly interval_ms: number
+    readonly bucket_start_ms: number
+    readonly known_at_ms: number
+    readonly close_at_ms: number | null
+    readonly closed: boolean
+    readonly coverage: string
+    readonly open: string
+    readonly high: string
+    readonly low: string
+    readonly close: string
+    readonly volume_btc: string
+    readonly trade_count: number
+  }) => void
 
   constructor(
     store: CandleRevisionStore,
     intervals = [60_000, 300_000, 900_000, 3_600_000],
+    onRevision?: (candle: {
+      readonly id: string
+      readonly interval_ms: number
+      readonly bucket_start_ms: number
+      readonly known_at_ms: number
+      readonly close_at_ms: number | null
+      readonly closed: boolean
+      readonly coverage: string
+      readonly open: string
+      readonly high: string
+      readonly low: string
+      readonly close: string
+      readonly volume_btc: string
+      readonly trade_count: number
+    }) => void,
   ) {
     this.store = store
     this.intervals = intervals
+    this.onRevision = onRevision
   }
 
   addTrade(trade: TradeEvent, now: number): void {
@@ -181,6 +212,21 @@ export class FuturesCandleBuilder {
       volumeBtc: candle.volume,
       tradeCount: candle.count,
       sourceHash,
+    })
+    this.onRevision?.({
+      id,
+      interval_ms: candle.interval,
+      bucket_start_ms: candle.bucket,
+      known_at_ms: knownAt,
+      close_at_ms: candle.closed ? candle.bucket + candle.interval : null,
+      closed: candle.closed,
+      coverage: 'observed_trades_only_no_gap_certification',
+      open: candle.open,
+      high: candle.high,
+      low: candle.low,
+      close: candle.close,
+      volume_btc: candle.volume,
+      trade_count: candle.count,
     })
   }
 }

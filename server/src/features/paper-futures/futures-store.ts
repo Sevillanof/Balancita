@@ -19,6 +19,7 @@ export type TerminalEventType =
   | 'position.updated'
   | 'account.updated'
   | 'engine.status'
+  | 'market.updated'
   | 'command.ack'
   | 'command.result'
 
@@ -56,6 +57,7 @@ export interface TerminalSnapshot {
   readonly watermark: number
   readonly instrument_id: string
   readonly state: JsonRecord
+  readonly market?: JsonRecord
 }
 
 function terminalEntriesFromResult(result: JsonRecord): TerminalEventInput[] {
@@ -275,6 +277,13 @@ export class FuturesStore {
             ? instrument.instrument_id
             : 'kraken-futures:PF_XBTUSD',
         state,
+        ...(frozen.config &&
+        isRecord(frozen.config) &&
+        frozen.config.mode === 'mock' &&
+        isRecord(frozen.seed) &&
+        isRecord(frozen.seed.terminal_market)
+          ? { market: frozen.seed.terminal_market }
+          : {}),
       }
     } catch (error) {
       this.db.exec('ROLLBACK')
@@ -1819,7 +1828,7 @@ function validateFrozenRun(input: {
     ['ledger_version', 'decimal_precision', 'leverage'],
     ['mode', 'mode_config_hash'],
   )
-  assertKeys(input.seed, ['cash_usd'], ['seed', 'source'])
+  assertKeys(input.seed, ['cash_usd'], ['seed', 'source', 'terminal_market'])
   assertKeys(input.instrument, ['instrument_id'])
   assertKeys(input.costs, ['version', 'maker', 'taker'])
   if (
@@ -1845,6 +1854,11 @@ function validateFrozenRun(input: {
   if (compareDecimal(leverage, '1') > 0)
     throw new Error('Futures laboratory leverage cannot exceed 1x.')
   canonicalDecimal(input.seed.cash_usd, 'seed cash', 'nonnegative')
+  if (input.seed.terminal_market !== undefined) {
+    if (input.config.mode !== 'mock')
+      throw new Error('Terminal market fixture is only valid for MOCK runs.')
+    validateTerminalMarketFixture(input.seed.terminal_market)
+  }
   if (
     typeof input.instrument.instrument_id !== 'string' ||
     !input.instrument.instrument_id.trim()
@@ -1866,6 +1880,80 @@ function validateFrozenRun(input: {
       runtime: input.runtime,
     }
     validateRuntimeBinding(input.runtime, frozen)
+  }
+}
+
+function validateTerminalMarketFixture(value: unknown): void {
+  if (!isRecord(value)) throw new Error('Terminal market fixture is invalid.')
+  assertKeys(value, ['schema_version', 'as_of_ms', 'interval_ms', 'candles'])
+  if (
+    value.schema_version !== 'mock-terminal-market.v1' ||
+    !Number.isSafeInteger(value.as_of_ms) ||
+    (value.as_of_ms as number) < 0 ||
+    ![60_000, 300_000, 900_000, 3_600_000].includes(
+      Number(value.interval_ms),
+    ) ||
+    !Array.isArray(value.candles) ||
+    value.candles.length > 500
+  )
+    throw new Error('Terminal market fixture version or bounds are invalid.')
+  let previousTime = -1
+  for (const candidate of value.candles) {
+    if (!isRecord(candidate))
+      throw new Error('Terminal fixture candle is invalid.')
+    assertKeys(candidate, [
+      'time_ms',
+      'open',
+      'high',
+      'low',
+      'close',
+      'volume_btc',
+      'closed',
+    ])
+    if (
+      !Number.isSafeInteger(candidate.time_ms) ||
+      (candidate.time_ms as number) <= previousTime ||
+      (candidate.time_ms as number) + Number(value.interval_ms) >
+        (value.as_of_ms as number) ||
+      candidate.closed !== true
+    )
+      throw new Error(
+        'Terminal fixture candles must be ordered and closed as of the snapshot.',
+      )
+    previousTime = candidate.time_ms as number
+    const open = canonicalDecimal(
+      candidate.open,
+      'terminal candle open',
+      'positive',
+    )
+    const high = canonicalDecimal(
+      candidate.high,
+      'terminal candle high',
+      'positive',
+    )
+    const low = canonicalDecimal(
+      candidate.low,
+      'terminal candle low',
+      'positive',
+    )
+    const close = canonicalDecimal(
+      candidate.close,
+      'terminal candle close',
+      'positive',
+    )
+    canonicalDecimal(
+      candidate.volume_btc,
+      'terminal candle volume',
+      'nonnegative',
+    )
+    if (
+      compareDecimal(high, low) < 0 ||
+      compareDecimal(high, open) < 0 ||
+      compareDecimal(high, close) < 0 ||
+      compareDecimal(low, open) > 0 ||
+      compareDecimal(low, close) > 0
+    )
+      throw new Error('Terminal fixture OHLC values are inconsistent.')
   }
 }
 

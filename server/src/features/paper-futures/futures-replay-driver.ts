@@ -185,6 +185,7 @@ export class FuturesReplayDriver {
     controlForSource?: (
       source: Record<string, unknown>,
     ) => Record<string, unknown> | undefined,
+    mode: 'mock' | 'paper_live' = 'mock',
   ): Promise<void> {
     validateTimestamp(receivedCutoff, 'received cutoff')
     this.bindMarketSource(instrument, store)
@@ -253,8 +254,22 @@ export class FuturesReplayDriver {
             event_time_ms: eventAt,
             received_at_ms: known,
             known_at_ms: known,
-            contiguous: event.contiguous === true && !gap,
-            valid: event.valid !== false && !gap,
+            contiguous:
+              (event.contiguous === true ||
+                (isRecord(event.marketQuality) &&
+                  event.marketQuality.schema_version ===
+                    'futures-market-quality-attestation.v1' &&
+                  event.marketQuality.policy_version ===
+                    'snapshot-contiguous-observed.v1' &&
+                  event.marketQuality.source_guarantee === 'undocumented' &&
+                  event.marketQuality.book_sequence_integrity ===
+                    'observed_contiguous')) &&
+              !gap,
+            valid:
+              event.valid !== false &&
+              (!isRecord(event.marketQuality) ||
+                event.marketQuality.book_valid === true) &&
+              !gap,
             bids: Array.isArray(event.bids)
               ? (event.bids as Record<string, string>[]).map((level) => ({
                   price_usd: level.price,
@@ -317,7 +332,7 @@ export class FuturesReplayDriver {
       )
         continue
       const snapshot = {
-        mode: 'mock',
+        mode,
         instrument,
         decision_time_ms: receivedAt,
         cutoff_received_at_ms: receivedAt,
@@ -361,7 +376,10 @@ export class FuturesReplayDriver {
       throw new Error(
         'Replay session does not match the frozen runtime binding.',
       )
-    if (sourceStore) {
+    if (
+      sourceStore &&
+      this.manifest.source !== 'kraken-public-live-stream.v1'
+    ) {
       const sourceHash = canonicalHash({
         events: sourceStore.eventsAsOf(Number.MAX_SAFE_INTEGER),
         candles: sourceStore.candlesAsOf(Number.MAX_SAFE_INTEGER),

@@ -510,4 +510,62 @@ describe('isolated paper-futures SQLite store', () => {
       'tamper-ledger',
     )
   })
+
+  it('projects bounded as-of mock fixture candles into the initial terminal snapshot', () => {
+    const store = new FuturesStore(':memory:')
+    store.createRun({
+      runId: 'terminal-candle-run',
+      config: {
+        ledger_version: 'linear-usd-ledger.v1',
+        decimal_precision: 50,
+        leverage: '1',
+        mode: 'mock',
+      },
+      seed: {
+        cash_usd: '10000',
+        source: 'mock',
+        terminal_market: {
+          schema_version: 'mock-terminal-market.v1',
+          as_of_ms: 21_600_000,
+          interval_ms: 60_000,
+          candles: [
+            {
+              time_ms: 21_540_000,
+              open: '100000',
+              high: '100050',
+              low: '99950',
+              close: '100000',
+              volume_btc: '1',
+              closed: true,
+            },
+          ],
+        },
+      },
+      instrument: { instrument_id: 'kraken-futures:PF_XBTUSD' },
+      costs: {
+        version: 'kraken-futures-eea-btcusd-base.v1',
+        maker: '0.0002',
+        taker: '0.0005',
+      },
+    })
+
+    const snapshot = store.getTerminalSnapshot('terminal-candle-run')
+    expect(snapshot.market).toEqual({
+      schema_version: 'mock-terminal-market.v1',
+      as_of_ms: 21_600_000,
+      interval_ms: 60_000,
+      candles: [
+        {
+          time_ms: 21_540_000,
+          open: '100000',
+          high: '100050',
+          low: '99950',
+          close: '100000',
+          volume_btc: '1',
+          closed: true,
+        },
+      ],
+    })
+    store.close()
+  })
 })

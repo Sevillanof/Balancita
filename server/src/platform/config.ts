@@ -51,6 +51,9 @@ export interface ServerConfig {
   intelligenceStreamWindowSize: number
   futuresMode: 'mock' | 'paper_live' | 'replay' | undefined
   futuresDbPath: string
+  futuresMarketDbPath: string
+  futuresReplaySourceDbPath: string | undefined
+  futuresReplaySourceRunId: string | undefined
 }
 
 const DEFAULT_MODEL = 'gemini-3.5-flash-lite'
@@ -87,6 +90,36 @@ export function serverConfigFrom(
   if (treeNewsReconnectMaxMs < treeNewsReconnectMinMs) {
     throw new ServerConfigError(
       'TREE_NEWS_RECONNECT_MAX_MS must be greater than or equal to TREE_NEWS_RECONNECT_MIN_MS.',
+    )
+  }
+
+  const futuresMode = futuresModeFrom(env.FUTURES_MODE)
+  const futuresDbPath = stringValue(
+    env,
+    'FUTURES_DB_PATH',
+    './data/futures-paper.sqlite',
+  )
+  const futuresReplaySourceDbPath = optionalStringValue(
+    env.FUTURES_REPLAY_SOURCE_DB_PATH,
+  )
+  const futuresReplaySourceRunId = optionalStringValue(
+    env.FUTURES_REPLAY_SOURCE_RUN_ID,
+  )
+  if (futuresMode === 'replay') {
+    if (futuresReplaySourceDbPath === undefined)
+      throw new ServerConfigError(
+        'FUTURES_REPLAY_SOURCE_DB_PATH is required when FUTURES_MODE=replay.',
+      )
+    if (futuresReplaySourceDbPath === futuresDbPath)
+      throw new ServerConfigError(
+        'FUTURES_REPLAY_SOURCE_DB_PATH and FUTURES_DB_PATH must differ.',
+      )
+  } else if (
+    futuresReplaySourceDbPath !== undefined ||
+    futuresReplaySourceRunId !== undefined
+  ) {
+    throw new ServerConfigError(
+      'FUTURES_REPLAY_SOURCE_DB_PATH and FUTURES_REPLAY_SOURCE_RUN_ID require FUTURES_MODE=replay.',
     )
   }
 
@@ -189,21 +222,29 @@ export function serverConfigFrom(
       'INTELLIGENCE_SSE_WINDOW_SIZE',
       200,
     ),
-    futuresMode: futuresMode(env.FUTURES_MODE),
-    futuresDbPath: stringValue(
+    futuresMode,
+    futuresDbPath,
+    futuresMarketDbPath: stringValue(
       env,
-      'FUTURES_DB_PATH',
-      './data/futures-paper.sqlite',
+      'FUTURES_MARKET_DB_PATH',
+      './data/futures-market.sqlite',
     ),
+    futuresReplaySourceDbPath,
+    futuresReplaySourceRunId,
   }
 }
 
-function futuresMode(raw: string | undefined): ServerConfig['futuresMode'] {
+function futuresModeFrom(raw: string | undefined): ServerConfig['futuresMode'] {
   if (raw === undefined || raw === '') return undefined
   if (raw === 'mock' || raw === 'paper_live' || raw === 'replay') return raw
   throw new ServerConfigError(
     'FUTURES_MODE must be mock, paper_live, or replay when specified.',
   )
+}
+
+function optionalStringValue(raw: string | undefined): string | undefined {
+  if (raw === undefined || raw.trim() === '') return undefined
+  return raw.trim()
 }
 
 function collectorFlag(

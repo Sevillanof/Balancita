@@ -3,6 +3,8 @@ import { canonicalHash } from './futures-canonical.ts'
 import { FuturesStore } from './futures-store.ts'
 import type { FuturesWorkerRequest } from './futures-worker.ts'
 import { FuturesReplayDriver } from './futures-replay-driver.ts'
+import { randomUUID } from 'node:crypto'
+import type { FuturesMarketStore } from '../kraken-futures/futures-market-store.ts'
 import type { TerminalPaperCommand } from '../terminal-stream/terminal-stream.ts'
 
 const instrument = {
@@ -43,12 +45,19 @@ export class FuturesSessionRuntime {
   readonly store: FuturesStore
   readonly runner: FuturesCommandRunner
   runId: string
+  private readonly mode: 'mock' | 'paper_live' | 'replay'
   private readonly drivers = new Map<string, Promise<FuturesReplayDriver>>()
+  private readonly eventQueues = new Map<string, Promise<unknown>>()
+  private readonly mockTickTimers = new Map<
+    string,
+    ReturnType<typeof setTimeout>
+  >()
 
   constructor(options: {
     dbPath: string
     mode: 'mock' | 'paper_live' | 'replay'
   }) {
+    this.mode = options.mode
     this.store = new FuturesStore(options.dbPath)
     const primaryRunId = 'futures-session:primary'
     this.store.createRun({
@@ -64,6 +73,9 @@ export class FuturesSessionRuntime {
         cash_usd: '10000',
         seed: 'mock-fixture-v1',
         source: options.mode,
+        ...(options.mode === 'mock'
+          ? { terminal_market: createTerminalMarketFixture() }
+          : {}),
       },
       instrument: { instrument_id: instrument.instrument_id },
       costs: {
@@ -103,9 +115,8 @@ export class FuturesSessionRuntime {
         operation: 'futures_runtime.v3',
         runtime_config: runtimeConfig,
         instrument,
-        market_snapshot: createMockMarketSnapshot(
+        market_snapshot: this.initialMarketSnapshot(
           decisionTime,
-          action === 'paper.start',
           action === 'paper.start',
         ),
         ...(control ? { control } : {}),
@@ -126,13 +137,25 @@ export class FuturesSessionRuntime {
         operation: 'futures_runtime.v3',
         runtime_config: runtimeConfig,
         instrument,
-        market_snapshot: createMockMarketSnapshot(21_600_000, false),
+        market_snapshot: this.initialMarketSnapshot(Date.now(), false),
       },
     }
   }
 
   activateRun = (runId: string): void => {
     this.runId = runId
+  }
+
+  private initialMarketSnapshot(time: number, breakout: boolean) {
+    if (this.mode === 'mock')
+      return createMockMarketSnapshot(time, breakout, breakout)
+    return {
+      mode: this.mode,
+      instrument,
+      decision_time_ms: time,
+      cutoff_received_at_ms: time,
+      events: [],
+    }
   }
 
   async start(): Promise<void> {
@@ -143,6 +166,22 @@ export class FuturesSessionRuntime {
       this.drivers.delete(this.runId)
       await this.restoreDriver(this.runId)
     }
+  }
+
+  async processMarketEvidence(
+    source: FuturesMarketStore,
+    receivedAt: number,
+  ): Promise<void> {
+    if (this.mode !== 'paper_live')
+      throw new Error('Public market evidence is only accepted in PAPER_LIVE.')
+    const driver = await this.restoreDriver(this.runId)
+    await driver.processMarketStore(
+      source,
+      receivedAt,
+      instrument as unknown as Record<string, unknown>,
+      undefined,
+      'paper_live',
+    )
   }
 
   private restoreDriver(runId: string): Promise<FuturesReplayDriver> {
@@ -167,12 +206,29 @@ export class FuturesSessionRuntime {
           ? 0
           : Number(this.store.getRunProjection(runId)?.state_version ?? 0),
       apply: async (work) => {
-        const request = work.input.payload.request as FuturesWorkerRequest
+        const savedRequest = work.input.payload.request
+        const request =
+          savedRequest && typeof savedRequest === 'object'
+            ? (savedRequest as FuturesWorkerRequest)
+            : {
+                request_id: work.analysis_id,
+                run_id: runId,
+                work_id: work.work_id,
+                expected_state_version: work.version,
+                payload: {
+                  operation: 'futures_runtime.v3' as const,
+                  runtime_config: runtimeConfig,
+                  instrument,
+                  market_snapshot: work.input.payload.market_snapshot as Record<
+                    string,
+                    unknown
+                  >,
+                },
+              }
         const accepted = this.runner.accept(
           request,
-          work.input.payload.terminal_command as Parameters<
-            FuturesCommandRunner['accept']
-          >[1],
+          work.input.payload.terminal_command as
+            Parameters<FuturesCommandRunner['accept']>[1] | undefined,
         )
         const result = await accepted.result
         return {
@@ -202,8 +258,9 @@ export class FuturesSessionRuntime {
     if (request.payload.operation !== 'futures_runtime.v3')
       throw new Error('Futures session runtime requires risk protocol v3.')
     const snapshot = request.payload.market_snapshot
-    const driverResult = this.restoreDriver(request.run_id).then((driver) =>
-      driver.processEvent({
+    const driverResult = this.enqueueEvent(request.run_id, async () => {
+      const driver = await this.restoreDriver(request.run_id)
+      return driver.processEvent({
         sequence: metadata.expected_state_version + 1,
         received_at_ms: Number(snapshot.decision_time_ms),
         event_time_ms: Number(snapshot.decision_time_ms),
@@ -213,8 +270,13 @@ export class FuturesSessionRuntime {
           request,
           terminal_command: metadata,
         },
-      }),
+      })
+    })
+    if (
+      this.mode === 'mock' &&
+      (metadata.action === 'paper.start' || metadata.action === 'paper.close')
     )
+      void driverResult.then(() => this.scheduleMockTick(request.run_id))
     return {
       acknowledgement: {
         command_id: metadata.command_id,
@@ -229,7 +291,76 @@ export class FuturesSessionRuntime {
     }
   }
 
+  private enqueueEvent<T>(
+    runId: string,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    const previous = this.eventQueues.get(runId) ?? Promise.resolve()
+    const current = previous.catch(() => undefined).then(operation)
+    this.eventQueues.set(runId, current)
+    const clear = () => {
+      if (this.eventQueues.get(runId) === current)
+        this.eventQueues.delete(runId)
+    }
+    void current.then(clear, clear)
+    return current
+  }
+
+  private scheduleMockTick(runId: string): void {
+    if (this.mockTickTimers.has(runId)) return
+    const timer = setTimeout(() => {
+      this.mockTickTimers.delete(runId)
+      void this.enqueueEvent(runId, async () => {
+        const projection = this.store.getRunProjection(runId)
+        if (!projection) return
+        const stateVersion = Number(projection.state_version)
+        const time = 21_600_000 + (stateVersion + 1) * 100
+        const snapshot = createMockMarketSnapshot(time, false, false)
+        const events = snapshot.events as Record<string, unknown>[]
+        const scheduledBook = events.find(
+          (event) => event.type === 'book_snapshot',
+        )
+        if (!scheduledBook) return
+        scheduledBook.epoch = 'mock-runtime-clock.v1'
+        const request: FuturesWorkerRequest = {
+          request_id: randomUUID(),
+          run_id: runId,
+          work_id: randomUUID(),
+          expected_state_version: stateVersion,
+          payload: {
+            operation: 'futures_runtime.v3',
+            runtime_config: runtimeConfig,
+            instrument,
+            market_snapshot: snapshot,
+          },
+        }
+        const driver = await this.restoreDriver(runId)
+        await driver.processEvent({
+          sequence: stateVersion + 1,
+          received_at_ms: time,
+          event_time_ms: time,
+          cycle_key: `mock-runtime-clock.v1:${stateVersion}`,
+          payload: { market_snapshot: snapshot, request },
+        })
+      }).catch((error: unknown) => {
+        console.error('Deterministic MOCK clock event failed.', error)
+      })
+    }, 100)
+    this.mockTickTimers.set(runId, timer)
+  }
+
   private replayManifest() {
+    if (this.mode === 'paper_live')
+      return {
+        schema_version: 'futures-replay-manifest.v1',
+        source: 'kraken-public-live-stream.v1',
+        source_hash: canonicalHash({ mode: this.mode, instrument }),
+        config_hash: canonicalHash(runtimeConfig),
+        seed: 'paper-live-session-v1',
+        fidelity: 'observed-public-trades-book-ticker-candles.v1',
+        runtime_version: runtimeConfig.version,
+        instrument_hash: canonicalHash(instrument),
+      } as const
     return {
       schema_version: 'futures-replay-manifest.v1',
       source: 'versioned-mock-fixture.v1',
@@ -245,6 +376,9 @@ export class FuturesSessionRuntime {
   }
 
   async close(): Promise<void> {
+    this.mockTickTimers.forEach(clearTimeout)
+    this.mockTickTimers.clear()
+    await Promise.allSettled([...this.eventQueues.values()])
     await this.runner.close()
     this.store.close()
   }
@@ -340,5 +474,32 @@ export function createMockMarketSnapshot(
     decision_time_ms: time,
     cutoff_received_at_ms: time,
     events,
+  }
+}
+
+function createTerminalMarketFixture(): Record<string, unknown> {
+  const snapshot = createMockMarketSnapshot(21_600_000, false, true)
+  const events = snapshot.events as Record<string, unknown>[]
+  const candles = events
+    .filter(
+      (event) =>
+        event.type === 'candle' &&
+        event.interval_ms === 60_000 &&
+        event.closed === true,
+    )
+    .map((event) => ({
+      time_ms: event.bucket_start_ms,
+      open: event.open,
+      high: event.high,
+      low: event.low,
+      close: event.close,
+      volume_btc: event.volume_btc,
+      closed: true,
+    }))
+  return {
+    schema_version: 'mock-terminal-market.v1',
+    as_of_ms: snapshot.decision_time_ms,
+    interval_ms: 60_000,
+    candles,
   }
 }

@@ -202,6 +202,10 @@ export class FuturesMarketStore {
     const uid = feed === 'trade' ? String(event.uid ?? '') : null
     if (feed === 'trade' && (!uid || uid.length > 128))
       throw new TypeError('Trade UID is required.')
+    const normalizedEvent = Object.fromEntries(
+      Object.entries(event).filter(([, value]) => value !== undefined),
+    )
+    delete normalizedEvent.receivedSequence
     const content =
       feed === 'trade'
         ? {
@@ -212,9 +216,7 @@ export class FuturesMarketStore {
             quantityBtc: event.quantityBtc,
             priceUsd: event.priceUsd,
           }
-        : event
-    const normalizedEvent = { ...event }
-    delete normalizedEvent.receivedSequence
+        : normalizedEvent
     const contentHash = digest(feed === 'trade' ? content : normalizedEvent)
     if (uid !== null) {
       const existing = this.db

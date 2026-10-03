@@ -360,6 +360,7 @@ export function registerTerminalStream(
       data: {
         watermark: snapshot.watermark,
         state: snapshot.state,
+        ...(snapshot.market ? { market: snapshot.market } : {}),
       },
     }
     sendEphemeral(session, envelope, (error) => {

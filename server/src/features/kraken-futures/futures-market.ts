@@ -242,6 +242,17 @@ interface MarketEnvelope {
   readonly persistedAt: number
   readonly epoch: number
   readonly raw: unknown
+  readonly marketQuality?: {
+    readonly schema_version: 'futures-market-quality-attestation.v1'
+    readonly policy_version: 'snapshot-contiguous-observed.v1'
+    readonly source_guarantee: 'undocumented'
+    readonly epoch: number
+    readonly feed_sequence: number
+    readonly received_at: number
+    readonly book_valid: boolean
+    readonly book_sequence_integrity:
+      'observed_contiguous' | 'invalid_or_unproven'
+  }
 }
 
 export interface TradeEvent extends MarketEnvelope {
@@ -973,10 +984,22 @@ export class KrakenFuturesMarketCollector {
     }
     this.scheduleFreshnessCheck()
     try {
-      const integrityEvent =
-        event.type === 'book' || event.type === 'trade'
-          ? { ...event, sequenceIntegrity: 'monotonic_only_unproven' as const }
-          : event
+      const integrityEvent = {
+        ...event,
+        ...(event.type === 'book' || event.type === 'trade'
+          ? { sequenceIntegrity: 'monotonic_only_unproven' as const }
+          : {}),
+        marketQuality: {
+          schema_version: 'futures-market-quality-attestation.v1' as const,
+          policy_version: this.book.qualityPolicy,
+          source_guarantee: this.book.sourceGuarantee,
+          epoch: this.epoch,
+          feed_sequence: event.seq,
+          received_at: receivedAt,
+          book_valid: this.book.valid,
+          book_sequence_integrity: this.book.sequenceIntegrity,
+        },
+      }
       const outcome = this.persistRaw(integrityEvent, text)
       if (event.type === 'trade' && outcome !== 'duplicate' && !event.recovered)
         this.options.onTrade?.(event)

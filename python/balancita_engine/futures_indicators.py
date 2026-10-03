@@ -84,12 +84,15 @@ def _unavailable(reasons, candidate_close=None):
         "ready": False,
         "reason_codes": list(dict.fromkeys(reasons)),
         "candidate_close": candidate_close,
+        "candidate_low": None,
+        "candidate_high": None,
         "ema9": None,
         "ema21": None,
         "sma50": None,
         "rsi14": None,
         "atr14": None,
         "bollinger_mid20": None,
+        "bollinger_variance20": None,
         "bollinger_stddev20": None,
         "bollinger_lower20": None,
         "bollinger_upper20": None,
@@ -99,6 +102,7 @@ def _unavailable(reasons, candidate_close=None):
         "prior_volume_mean20": None,
         "candidate_volume": None,
         "smoothing": "wilder",
+        "candidate_bucket_start_ms": None,
     }
 
 

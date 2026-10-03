@@ -1,5 +1,6 @@
 import cors from '@fastify/cors'
 import Fastify, { type FastifyInstance, type FastifyReply } from 'fastify'
+import WebSocket from 'ws'
 import { randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { refreshSimulations } from '../features/simulations/refresh-simulations.ts'
@@ -80,6 +81,16 @@ import { AnalyzeService } from '../features/analysis/service.ts'
 import { parseAnalysisInputRequest } from '../features/analysis/wire.ts'
 import { FuturesSessionRuntime } from '../features/paper-futures/futures-session-runtime.ts'
 import { registerTerminalStream } from '../features/terminal-stream/terminal-stream.ts'
+import {
+  FUTURES_PRODUCT,
+  KrakenFuturesMarketCollector,
+  PAPER_MARKET_QUALITY_POLICY,
+  validateInstrumentCatalog,
+  type FuturesSocket,
+  type MarketStatus,
+} from '../features/kraken-futures/futures-market.ts'
+import { FuturesCandleBuilder } from '../features/kraken-futures/futures-candles.ts'
+import { FuturesMarketStore } from '../features/kraken-futures/futures-market-store.ts'
 
 export interface AnalysisDependencies {
   client: GeminiClient
@@ -157,6 +168,9 @@ export interface MarketDependencies {
     readonly stage: 'smoke' | 'confirm'
     readonly seed: number
   }) => Promise<void>
+  futuresPublicCatalog?: () => Promise<unknown>
+  futuresSocketFactory?: (url: string) => FuturesSocket
+  futuresClock?: () => number
 }
 
 type ErrorEnvelope = {
@@ -281,11 +295,33 @@ function defaultSimulationsReportReader(
   }
 }
 
+async function fetchFuturesPublicCatalog(): Promise<unknown> {
+  const response = await fetch(
+    'https://futures.kraken.com/derivatives/api/v3/instruments',
+    {
+      signal: AbortSignal.timeout(10_000),
+      headers: {
+        accept: 'application/json',
+        'user-agent': 'Balancita public futures market',
+      },
+    },
+  )
+  if (!response.ok)
+    throw new Error(
+      `Public futures instrument catalog HTTP ${response.status}.`,
+    )
+  return response.json()
+}
+
 export async function buildApp(options: {
   config: ServerConfig
   overrides?: Partial<AnalysisDependencies & MarketDependencies>
 }): Promise<FastifyInstance> {
   const { config } = options
+  if (config.futuresMode === 'replay')
+    throw new Error(
+      'FUTURES_MODE=replay is not available in this runtime build; refusing to substitute mock data.',
+    )
   const legacyServicesEnabled = config.futuresMode === undefined
   const marketFetch: MarketRestFetch =
     options.overrides?.marketFetch ??
@@ -555,16 +591,54 @@ export async function buildApp(options: {
             dbPath: config.futuresDbPath,
             mode: config.futuresMode,
           })
-        : (() => {
-            throw new Error(
-              `FUTURES_MODE=${config.futuresMode} is not available in this runtime build; refusing to substitute mock data.`,
-            )
-          })()
+        : new FuturesSessionRuntime({
+            dbPath: config.futuresDbPath,
+            mode: config.futuresMode,
+          })
+  let futuresMarketStore: FuturesMarketStore | undefined
+  let futuresCollector: KrakenFuturesMarketCollector | undefined
+  let futuresStatus: MarketStatus | 'unavailable' =
+    config.futuresMode === 'paper_live' ? 'connecting' : 'stopped'
+  let futuresStatusReason: string | undefined
+  let futuresLastReceivedAt: number | null = null
+  let futuresInstrumentMetadataHash: string | null = null
+  let futuresMarketTail = Promise.resolve()
+  let pendingFuturesUiUpdate: Record<string, unknown> | undefined
+  let futuresUiTimer: ReturnType<typeof setTimeout> | undefined
+  const flushFuturesUiUpdate = (): void => {
+    if (!pendingFuturesUiUpdate || !futuresRuntime) return
+    const update = pendingFuturesUiUpdate
+    pendingFuturesUiUpdate = undefined
+    futuresRuntime.store.appendTerminalEvents(futuresRuntime.runId, [
+      { type: 'market.updated', data: update },
+    ])
+  }
+  const queueFuturesUiUpdate = (update: Record<string, unknown>): void => {
+    pendingFuturesUiUpdate = update
+    if (futuresUiTimer !== undefined) return
+    futuresUiTimer = setTimeout(() => {
+      futuresUiTimer = undefined
+      flushFuturesUiUpdate()
+    }, 100)
+  }
+  if (config.futuresMode === 'paper_live' && futuresRuntime !== undefined) {
+    futuresMarketStore = new FuturesMarketStore(config.futuresMarketDbPath)
+    futuresMarketStore.saveQualityPolicy(
+      PAPER_MARKET_QUALITY_POLICY,
+      (options.overrides?.futuresClock ?? Date.now)(),
+    )
+  }
   if (futuresRuntime !== undefined) {
     registerTerminalStream(app, {
       store: futuresRuntime.store,
       runner: futuresRuntime.runner,
       commandFactory: futuresRuntime.commandFactory,
+      allowedOrigins: [
+        config.corsOrigin,
+        'http://localhost',
+        'http://127.0.0.1',
+        'http://[::1]',
+      ],
       newRunFactory: futuresRuntime.newRunFactory,
       commandExecutor: futuresRuntime.commandExecutor,
       onNewRunCreated: futuresRuntime.activateRun,
@@ -573,11 +647,149 @@ export async function buildApp(options: {
       schema_version: 1,
       mode: config.futuresMode,
       source:
-        config.futuresMode === 'mock' ? 'versioned-mock-fixture.v1' : null,
+        config.futuresMode === 'mock'
+          ? 'versioned-mock-fixture.v1'
+          : config.futuresMode === 'paper_live'
+            ? 'kraken-public-live-stream.v1'
+            : null,
       active_run_id: futuresRuntime.runId,
+      ...(config.futuresMode === 'paper_live'
+        ? {
+            instrument_id: 'kraken-futures:PF_XBTUSD',
+            product_id: FUTURES_PRODUCT,
+            quote_currency: 'USD',
+            metadata_hash: futuresInstrumentMetadataHash,
+            market: {
+              status: futuresStatus,
+              reason: futuresStatusReason ?? null,
+              last_received_at: futuresLastReceivedAt,
+              book_status: futuresCollector?.book.valid
+                ? 'valid'
+                : 'unavailable',
+              book_quality:
+                futuresCollector?.book.sequenceIntegrity ??
+                'invalid_or_unproven',
+              book_quality_policy: PAPER_MARKET_QUALITY_POLICY.version,
+              source_guarantee: 'undocumented',
+            },
+            engine: {
+              status:
+                futuresLastReceivedAt === null ? 'warming' : 'blocked_funding',
+              funding: 'unresolved',
+            },
+          }
+        : {}),
     }))
-    app.addHook('onReady', async () => futuresRuntime.start())
-    app.addHook('onClose', async () => futuresRuntime.close())
+    app.addHook('onReady', async () => {
+      await futuresRuntime.start()
+      if (config.futuresMode !== 'paper_live' || !futuresMarketStore) return
+      const clock = options.overrides?.futuresClock ?? Date.now
+      try {
+        const catalog =
+          options.overrides?.futuresPublicCatalog !== undefined
+            ? await options.overrides.futuresPublicCatalog()
+            : await fetchFuturesPublicCatalog()
+        const spec = validateInstrumentCatalog(catalog, {
+          source: 'live',
+          retrievedAt: clock(),
+        })
+        futuresMarketStore.saveInstrument(spec, catalog)
+        futuresInstrumentMetadataHash = spec.metadataHash
+        if (spec.entryEligibility !== 'eligible') {
+          futuresStatus = 'unavailable'
+          futuresStatusReason = `catalog_${spec.entryEligibility}`
+          return
+        }
+        const candleBuilder = new FuturesCandleBuilder(
+          futuresMarketStore,
+          undefined,
+          (candle) => queueFuturesUiUpdate({ candle }),
+        )
+        futuresCollector = new KrakenFuturesMarketCollector({
+          clock,
+          random: Math.random,
+          makeSocket:
+            options.overrides?.futuresSocketFactory ??
+            ((url) => new WebSocket(url) as unknown as FuturesSocket),
+          setTimeout,
+          clearTimeout,
+          staleAfterMs: config.marketStaleAfterMs,
+          reconnectMinMs: config.marketReconnectMinMs,
+          reconnectMaxMs: config.marketReconnectMaxMs,
+          persist: (event) => {
+            const inserted = futuresMarketStore!.append(event)
+            if (inserted === 'inserted') {
+              futuresLastReceivedAt = event.receivedAt
+              if (event.type === 'trade')
+                candleBuilder.addTrade(event, event.receivedAt)
+              const normalized = Object.fromEntries(
+                Object.entries(event).filter(
+                  ([key]) => key !== 'raw' && key !== 'rawJson',
+                ),
+              )
+              queueFuturesUiUpdate({
+                feed: event.type,
+                product_id: event.productId,
+                event_time: event.eventTime,
+                received_at: event.receivedAt,
+                normalized,
+              })
+              futuresMarketTail = futuresMarketTail
+                .then(() =>
+                  futuresRuntime.processMarketEvidence(
+                    futuresMarketStore!,
+                    event.receivedAt,
+                  ),
+                )
+                .catch((error: unknown) => {
+                  console.error(
+                    'futures runtime evidence processing failed',
+                    error,
+                  )
+                  futuresStatus = 'unavailable'
+                  futuresStatusReason =
+                    error instanceof Error ? error.message : 'runtime_error'
+                })
+            }
+            return inserted
+          },
+          persistGap: (gap) => {
+            futuresMarketStore!.appendGap(gap)
+            futuresStatus = 'degraded'
+            futuresStatusReason = gap.reason
+            queueFuturesUiUpdate({
+              feed_status: 'degraded',
+              reason: gap.reason,
+              gap,
+              received_at: gap.detectedAt,
+            })
+          },
+          onState: (state, reason) => {
+            futuresStatus = state
+            futuresStatusReason = reason
+            queueFuturesUiUpdate({
+              feed_status: state,
+              reason: reason ?? null,
+              received_at: futuresLastReceivedAt,
+            })
+          },
+        })
+        futuresCollector.start()
+      } catch (error) {
+        futuresStatus = 'unavailable'
+        futuresStatusReason =
+          error instanceof Error ? error.message : 'catalog_unavailable'
+      }
+    })
+    app.addHook('onClose', async () => {
+      futuresCollector?.stop()
+      if (futuresUiTimer !== undefined) clearTimeout(futuresUiTimer)
+      futuresUiTimer = undefined
+      flushFuturesUiUpdate()
+      await futuresMarketTail
+      futuresMarketStore?.close()
+      await futuresRuntime.close()
+    })
   }
 
   const proxyMarketRequest = async (

@@ -185,6 +185,10 @@ class FuturesRuntime:
         if cutoff > now:
             raise ValueError("received-time cutoff cannot follow decision time")
         evidence = self._available_events(market.get("events"), now, cutoff)
+        if market.get("mode") == "paper_live":
+            # The currently validated public ticker exposes no verified funding
+            # unit/interval mapping. Keep realized net incomplete and fail closed.
+            self.ledger.funding_complete = False
         book = self._select(evidence, "book_snapshot")
         ticker = self._select(evidence, "ticker")
         mark = self._mark(ticker, book)
@@ -765,6 +769,13 @@ class FuturesRuntime:
             return "invalid_or_gapped_book"
         if ticker.get("suspended") is True or ticker.get("market_status", "open") != "open":
             return "market_suspended_or_unavailable"
+        if market.get("mode") == "paper_live":
+            funding = [
+                event for event in market.get("events", [])
+                if isinstance(event, dict) and event.get("type") == "funding_observation"
+            ]
+            if not funding:
+                return "funding_unresolved"
         for item in (book, ticker):
             event_time = item.get("event_time_ms")
             received = item.get("received_at_ms")

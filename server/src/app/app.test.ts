@@ -24,6 +24,7 @@ import WebSocket from 'ws'
 import { randomUUID } from 'node:crypto'
 import { FuturesStore } from '../features/paper-futures/futures-store.ts'
 import { createMockMarketSnapshot } from '../features/paper-futures/futures-session-runtime.ts'
+import type { FuturesSocket } from '../features/kraken-futures/futures-market.ts'
 
 const resultText = JSON.stringify({
   instrumentId: 'BTC-EUR',
@@ -84,9 +85,12 @@ describe('app test configuration', () => {
     expect(testConfigFrom({ FUTURES_MODE: 'paper_live' }).futuresMode).toBe(
       'paper_live',
     )
-    expect(testConfigFrom({ FUTURES_MODE: 'replay' }).futuresMode).toBe(
-      'replay',
-    )
+    expect(
+      testConfigFrom({
+        FUTURES_MODE: 'replay',
+        FUTURES_REPLAY_SOURCE_DB_PATH: 'frozen.sqlite',
+      }).futuresMode,
+    ).toBe('replay')
     expect(() => testConfigFrom({ FUTURES_MODE: 'live' })).toThrow(
       'FUTURES_MODE must be mock, paper_live, or replay when specified.',
     )
@@ -140,21 +144,19 @@ describe('app test configuration', () => {
     }
   })
 
-  it.each(['paper_live', 'replay'] as const)(
-    'fails closed for explicit %s rather than silently selecting mock',
-    async (mode) => {
-      await expect(
-        buildApp({
-          config: testConfigFrom({
-            FUTURES_MODE: mode,
-            FUTURES_DB_PATH: ':memory:',
-          }),
+  it('fails closed for explicit replay rather than silently selecting mock', async () => {
+    await expect(
+      buildApp({
+        config: testConfigFrom({
+          FUTURES_MODE: 'replay',
+          FUTURES_DB_PATH: ':memory:',
+          FUTURES_REPLAY_SOURCE_DB_PATH: 'frozen.sqlite',
         }),
-      ).rejects.toThrow(
-        `FUTURES_MODE=${mode} is not available in this runtime build; refusing to substitute mock data.`,
-      )
-    },
-  )
+      }),
+    ).rejects.toThrow(
+      'FUTURES_MODE=replay is not available in this runtime build; refusing to substitute mock data.',
+    )
+  })
 
   it('shares one offline Python/SQLite runtime across two WebSocket subscribers', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'balancita-futures-app-'))
@@ -162,6 +164,7 @@ describe('app test configuration', () => {
     const config = testConfigFrom({
       FUTURES_MODE: 'mock',
       FUTURES_DB_PATH: dbPath,
+      GEMINI_SERVER_CORS_ORIGIN: 'http://127.0.0.1:15173',
     })
     let app = await buildApp({
       config,
@@ -181,7 +184,7 @@ describe('app test configuration', () => {
       const connect = async () => {
         const socket = new WebSocket(
           address.replace('http:', 'ws:') + '/api/terminal/stream',
-          { origin: 'http://localhost' },
+          { origin: config.corsOrigin },
         )
         await new Promise<void>((resolve, reject) => {
           socket.once('open', resolve)
@@ -223,12 +226,21 @@ describe('app test configuration', () => {
         waitFor(one.received, (item) => item.type === 'snapshot'),
         waitFor(two.received, (item) => item.type === 'snapshot'),
       ])
-      const initialState = (
-        one.received.find((item) => item.type === 'snapshot')!.data as Record<
-          string,
-          unknown
-        >
-      ).state as Record<string, unknown>
+      const initialSnapshot = one.received.find(
+        (item) => item.type === 'snapshot',
+      )!
+      const initialSnapshotData = initialSnapshot.data as Record<
+        string,
+        unknown
+      >
+      expect(initialSnapshotData.market).toMatchObject({
+        schema_version: 'mock-terminal-market.v1',
+        interval_ms: 60_000,
+      })
+      expect(
+        (initialSnapshotData.market as { candles: unknown[] }).candles,
+      ).toHaveLength(60)
+      const initialState = initialSnapshotData.state as Record<string, unknown>
       expect(initialState.account).toMatchObject({
         cash_usd: '10000',
         equity_usd: '10000',
@@ -267,6 +279,13 @@ describe('app test configuration', () => {
         },
       })
       expect(Number(acknowledgement.seq)).toBeLessThan(Number(result.seq))
+      const startedFill = await waitFor(
+        one.received,
+        (item) => item.type === 'fill.created',
+      )
+      expect((startedFill.data as Record<string, unknown>).fill).toMatchObject({
+        event_time_ms: 21_600_200,
+      })
       const sendCommand = async (
         action: 'paper.pause' | 'paper.close',
         expectedStateVersion: number,
@@ -290,15 +309,23 @@ describe('app test configuration', () => {
         )
         return completion
       }
-      const fillFromLaterMockBook = await sendCommand('paper.pause', 1)
+      const fillFromLaterMockBook = await sendCommand('paper.pause', 2)
       expect(one.received.some((item) => item.type === 'fill.created')).toBe(
         true,
       )
       expect(
         fillFromLaterMockBook.data as Record<string, unknown>,
       ).toMatchObject({ command_id: expect.any(String) })
-      await sendCommand('paper.close', 2)
-      await sendCommand('paper.pause', 3)
+      await sendCommand('paper.close', 3)
+      const closedFill = await waitFor(
+        one.received,
+        (item) =>
+          item.type === 'fill.created' &&
+          item.event_id !== startedFill.event_id,
+      )
+      expect((closedFill.data as Record<string, unknown>).fill).toMatchObject({
+        event_time_ms: 21_600_500,
+      })
       const firstFills = one.received.filter(
         (item) => item.type === 'fill.created',
       )
@@ -319,7 +346,7 @@ describe('app test configuration', () => {
               >,
           )
           .map((fill) => fill.event_time_ms),
-      ).toEqual([21_600_100, 21_600_300])
+      ).toEqual([21_600_200, 21_600_500])
       const snapshot = await app.inject({
         method: 'GET',
         url: '/api/terminal/bootstrap',
@@ -378,7 +405,7 @@ describe('app test configuration', () => {
           type: 'paper.command',
           run_id: runId,
           command_id: postRestartCommand,
-          expected_state_version: 4,
+          expected_state_version: 5,
           action: 'paper.pause',
         }),
       )
@@ -402,7 +429,7 @@ describe('app test configuration', () => {
           type: 'paper.command',
           run_id: runId,
           command_id: newRunCommand,
-          expected_state_version: 5,
+          expected_state_version: 6,
           action: 'paper.new_run',
         }),
       )
@@ -564,6 +591,134 @@ function testConfigFrom(env: Record<string, string | undefined> = {}) {
     ...env,
   })
 }
+
+describe('PAPER_LIVE startup integration', () => {
+  it('starts the selected public-feed mode with an injected recorded catalog and socket', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'balancita-paper-live-'))
+    const fakeSocket: FuturesSocket = {
+      onopen: null,
+      onmessage: null,
+      onerror: null,
+      onclose: null,
+      send: () => undefined,
+      close: () => undefined,
+    }
+    const app = await buildApp({
+      config: testConfigFrom({
+        FUTURES_MODE: 'paper_live',
+        FUTURES_DB_PATH: join(root, 'account.sqlite'),
+        FUTURES_MARKET_DB_PATH: join(root, 'market.sqlite'),
+      }),
+      overrides: {
+        futuresPublicCatalog: async () => ({
+          instruments: [
+            {
+              symbol: 'PF_XBTUSD',
+              type: 'flexible_futures',
+              pair: 'BTC:USD',
+              base: 'BTC',
+              quote: 'USD',
+              contractSize: '1',
+              tickSize: '1',
+              contractValueTradePrecision: 4,
+              tradeable: true,
+              isExpired: false,
+            },
+          ],
+        }),
+        futuresSocketFactory: () => fakeSocket,
+        futuresClock: () => 1_790_950_000_000,
+      } as never,
+    })
+    try {
+      await app.ready()
+      const response = await app.inject({
+        method: 'GET',
+        url: '/api/terminal/bootstrap',
+      })
+      expect(response.statusCode).toBe(200)
+      expect(response.json()).toMatchObject({
+        mode: 'paper_live',
+        instrument_id: 'kraken-futures:PF_XBTUSD',
+        product_id: 'PF_XBTUSD',
+        market: {
+          status: 'connecting',
+          book_status: 'unavailable',
+          last_received_at: null,
+        },
+        engine: { status: 'warming' },
+      })
+      fakeSocket.onopen?.()
+      fakeSocket.onmessage?.({
+        data: JSON.stringify({
+          feed: 'book_snapshot',
+          product_id: 'PF_XBTUSD',
+          seq: 10,
+          timestamp: 1_790_950_000_000,
+          bids: [{ price: '90000', qty: '0.5' }],
+          asks: [{ price: '90001', qty: '0.5' }],
+        }),
+      })
+      fakeSocket.onmessage?.({
+        data: JSON.stringify({
+          feed: 'ticker',
+          product_id: 'PF_XBTUSD',
+          seq: 20,
+          time: 1_790_950_000_000,
+          last: '90000.5',
+          markPrice: '90000',
+          suspended: false,
+        }),
+      })
+      fakeSocket.onmessage?.({
+        data: JSON.stringify({
+          feed: 'trade',
+          product_id: 'PF_XBTUSD',
+          uid: 'recorded-public-trade-1',
+          side: 'buy',
+          type: 'fill',
+          seq: 30,
+          time: 1_790_950_000_000,
+          qty: '0.0001',
+          price: '90000.5',
+        }),
+      })
+      await new Promise((resolve) => setTimeout(resolve, 150))
+    } finally {
+      await app.close()
+      const account = new FuturesStore(join(root, 'account.sqlite'))
+      const source = new (
+        await import('../features/kraken-futures/futures-market-store.ts')
+      ).FuturesMarketStore(join(root, 'market.sqlite'))
+      const marketEvents = source.eventsAsOf(Number.MAX_SAFE_INTEGER) as Record<
+        string,
+        unknown
+      >[]
+      expect(marketEvents.map((event) => event.type)).toEqual(
+        expect.arrayContaining(['book', 'ticker', 'trade']),
+      )
+      const book = marketEvents.find((event) => event.type === 'book')
+      expect(book?.marketQuality).toMatchObject({
+        schema_version: 'futures-market-quality-attestation.v1',
+        policy_version: 'snapshot-contiguous-observed.v1',
+        source_guarantee: 'undocumented',
+        book_valid: true,
+        book_sequence_integrity: 'observed_contiguous',
+      })
+      source.close()
+      const events = account.listTerminalEvents('futures-session:primary', {
+        afterSeq: 0,
+        limit: 100,
+      }).events
+      expect(events.some((event) => event.type === 'market.updated')).toBe(true)
+      expect(events.some((event) => event.type === 'analysis.completed')).toBe(
+        true,
+      )
+      account.close()
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+})
 
 async function makeApp(options: {
   env?: Record<string, string | undefined>

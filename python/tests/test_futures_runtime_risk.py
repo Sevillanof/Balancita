@@ -29,6 +29,17 @@ def open_position(engine):
 
 
 class FuturesRuntimeRiskTests(unittest.TestCase):
+    def test_paper_live_unknown_funding_is_blocked_without_synthetic_zero_funding(self):
+        engine = risk_runtime()
+        market = warmed_market(21_600_000, breakout='long')
+        market['mode'] = 'paper_live'
+
+        result = engine.process(market)
+
+        self.assertEqual(result['position']['quantity_btc'], '0')
+        self.assertEqual(result['fills'], [])
+        self.assertIn('funding_unresolved', result['risk']['reason_codes'])
+
     def test_close_estimate_is_incomplete_for_partial_depth_and_marks_adverse_cost(self):
         engine = risk_runtime()
         open_position(engine)
