@@ -40,15 +40,18 @@ export class FuturesCommandRunner {
     const binding = this.store.getRuntimeBinding(request.run_id)
     if (
       request.payload.operation === 'futures_runtime.v1' ||
-      request.payload.operation === 'futures_runtime.v2'
+      request.payload.operation === 'futures_runtime.v2' ||
+      request.payload.operation === 'futures_runtime.v3'
     ) {
       const expectedBinding =
-        request.payload.operation === 'futures_runtime.v2'
-          ? 'futures-runtime-binding.v3'
-          : request.payload.runtime_config.version ===
-              'futures-runtime-strategies.v1'
-            ? 'futures-runtime-binding.v2'
-            : 'futures-runtime-binding.v1'
+        request.payload.operation === 'futures_runtime.v3'
+          ? 'futures-runtime-binding.v4'
+          : request.payload.operation === 'futures_runtime.v2'
+            ? 'futures-runtime-binding.v3'
+            : request.payload.runtime_config.version ===
+                'futures-runtime-strategies.v1'
+              ? 'futures-runtime-binding.v2'
+              : 'futures-runtime-binding.v1'
       if (!binding)
         throw new Error(
           'C27 runtime request requires a frozen runtime binding.',
@@ -117,7 +120,8 @@ export class FuturesCommandRunner {
   ): Promise<FuturesWorkerCommit> {
     if (
       (result.operation === 'futures_runtime.v1' ||
-        result.operation === 'futures_runtime.v2') &&
+        result.operation === 'futures_runtime.v2' ||
+        result.operation === 'futures_runtime.v3') &&
       result.operation === request.payload.operation &&
       result.runtime_event_time_ms !==
         request.payload.market_snapshot.decision_time_ms
@@ -129,12 +133,15 @@ export class FuturesCommandRunner {
     const events = toStoreEvents(result)
     const envelope =
       result.operation === 'futures_runtime.v1' ||
-      result.operation === 'futures_runtime.v2'
+      result.operation === 'futures_runtime.v2' ||
+      result.operation === 'futures_runtime.v3'
         ? {
             schema_version:
-              result.operation === 'futures_runtime.v2'
-                ? 'futures-runtime-work.v2'
-                : 'futures-runtime-work.v1',
+              result.operation === 'futures_runtime.v3'
+                ? 'futures-runtime-work.v3'
+                : result.operation === 'futures_runtime.v2'
+                  ? 'futures-runtime-work.v2'
+                  : 'futures-runtime-work.v1',
             protocol_version: 1,
             run_id: result.run_id,
             work_id: result.work_id,
@@ -228,7 +235,8 @@ function parseQueuedCommand(
 function toStoreEvents(result: FuturesWorkerResult): Record<string, unknown>[] {
   if (
     result.operation === 'futures_runtime.v1' ||
-    result.operation === 'futures_runtime.v2'
+    result.operation === 'futures_runtime.v2' ||
+    result.operation === 'futures_runtime.v3'
   )
     return toRuntimeStoreEvents(result)
   if (!result.event_times_ms)
@@ -336,7 +344,8 @@ function toRuntimeStoreEvents(
     }
   })
   const orderEvents = (
-    output.runtime_version === 'futures-runtime-execution.v1'
+    output.runtime_version === 'futures-runtime-execution.v1' ||
+    output.runtime_version === 'futures-runtime-risk.v1'
       ? (output.orders as Record<string, unknown>[])
       : []
   ).flatMap((candidate: Record<string, unknown>) => {

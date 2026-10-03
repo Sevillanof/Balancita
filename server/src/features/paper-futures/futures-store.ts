@@ -195,7 +195,8 @@ export class FuturesStore {
     if (!isRecord(value)) throw new Error('Invalid futures result schema.')
     const runtimeWork =
       value.schema_version === 'futures-runtime-work.v1' ||
-      value.schema_version === 'futures-runtime-work.v2'
+      value.schema_version === 'futures-runtime-work.v2' ||
+      value.schema_version === 'futures-runtime-work.v3'
     assertKeys(
       value,
       [
@@ -743,7 +744,8 @@ export class FuturesStore {
         if (!applied || applied.result_hash !== resultHash) return false
         if (
           payload.schema_version === 'futures-runtime-work.v1' ||
-          payload.schema_version === 'futures-runtime-work.v2'
+          payload.schema_version === 'futures-runtime-work.v2' ||
+          payload.schema_version === 'futures-runtime-work.v3'
         ) {
           if (!('runtime' in frozen)) return false
           validateRuntimeWork(
@@ -873,6 +875,18 @@ function isRecord(value: unknown): value is JsonRecord {
 
 const LEDGER_VERSION = 'linear-usd-ledger.v1'
 const COST_VERSION = 'kraken-futures-eea-btcusd-base.v1'
+const RISK_RESULT_FIELDS = [
+  'daily_loss_latched',
+  'entry_paused',
+  'user_paused',
+  'system_paused',
+  'utc_day',
+  'opening_equity_usd',
+  'mark_quality',
+  'reduction_intent_id',
+  'estimated_close_net_usd',
+  'estimated_close_complete',
+]
 
 function assertKeys(
   value: JsonRecord,
@@ -986,7 +1000,10 @@ function validateFrozenRun(input: {
 
 function validateRuntimeBinding(value: unknown, frozen: JsonRecord): void {
   if (!isRecord(value)) throw new Error('Runtime binding must be an object.')
-  if (value.schema_version === 'futures-runtime-binding.v2') {
+  if (
+    value.schema_version === 'futures-runtime-binding.v2' ||
+    value.schema_version === 'futures-runtime-binding.v4'
+  ) {
     assertKeys(value, [
       'schema_version',
       'runtime_config',
@@ -1017,32 +1034,46 @@ function validateRuntimeBinding(value: unknown, frozen: JsonRecord): void {
   if (
     (value.schema_version !== 'futures-runtime-binding.v1' &&
       value.schema_version !== 'futures-runtime-binding.v2' &&
-      value.schema_version !== 'futures-runtime-binding.v3') ||
+      value.schema_version !== 'futures-runtime-binding.v3' &&
+      value.schema_version !== 'futures-runtime-binding.v4') ||
     !isRecord(value.runtime_config) ||
     !isRecord(value.instrument_spec)
   )
     throw new Error('Unsupported futures runtime binding.')
   const config = value.runtime_config
-  assertKeys(config, [
-    'version',
-    'initial_cash_usd',
-    'max_notional_usd',
-    'max_exposure_multiple',
-    'risk_fraction',
-    'execution_latency_ms',
-    'max_book_age_ms',
-    'max_spread_bps',
-    'cost_version',
-    'maker_rate',
-    'taker_rate',
-  ])
+  assertKeys(
+    config,
+    [
+      'version',
+      'initial_cash_usd',
+      'max_notional_usd',
+      'max_exposure_multiple',
+      'risk_fraction',
+      'execution_latency_ms',
+      'max_book_age_ms',
+      'max_spread_bps',
+      'cost_version',
+      'maker_rate',
+      'taker_rate',
+    ],
+    value.schema_version === 'futures-runtime-binding.v4'
+      ? ['daily_loss_fraction']
+      : [],
+  )
+  if (
+    value.schema_version === 'futures-runtime-binding.v4' &&
+    config.daily_loss_fraction !== '0.01'
+  )
+    throw new Error('Unsupported frozen daily-loss risk limit.')
   if (
     config.version !==
       (value.schema_version === 'futures-runtime-binding.v2'
         ? 'futures-runtime-strategies.v1'
         : value.schema_version === 'futures-runtime-binding.v3'
           ? 'futures-runtime-execution.v1'
-          : 'futures-runtime-lab.v1') ||
+          : value.schema_version === 'futures-runtime-binding.v4'
+            ? 'futures-runtime-risk.v1'
+            : 'futures-runtime-lab.v1') ||
     config.cost_version !== (frozen.costs as JsonRecord).version
   )
     throw new Error('Unsupported futures runtime configuration.')
@@ -1449,6 +1480,82 @@ function validateExecutionCheckpoint(
   }
 }
 
+function validateRiskCheckpoint(
+  value: unknown,
+  output: JsonRecord,
+  binding: JsonRecord,
+  checkpoint: JsonRecord,
+): void {
+  if (!isRecord(value)) throw new Error('Missing daily risk checkpoint.')
+  assertKeys(value, [
+    'utc_day',
+    'opening_equity_usd',
+    'daily_loss_latched',
+    'entry_paused',
+    'user_paused',
+    'system_paused',
+    'mark_quality',
+    'reduction_intent_id',
+  ])
+  if (
+    typeof value.utc_day !== 'string' ||
+    !/^\d{4}-\d{2}-\d{2}$/.test(value.utc_day) ||
+    ![
+      'daily_loss_latched',
+      'entry_paused',
+      'user_paused',
+      'system_paused',
+    ].every((key) => typeof value[key] === 'boolean') ||
+    !['unknown', 'valid', 'stale', 'gapped'].includes(
+      String(value.mark_quality),
+    ) ||
+    (value.reduction_intent_id !== null &&
+      typeof value.reduction_intent_id !== 'string')
+  )
+    throw new Error('Invalid daily risk checkpoint fields.')
+  if (value.opening_equity_usd !== null)
+    canonicalDecimal(
+      value.opening_equity_usd,
+      'risk opening equity',
+      'positive',
+    )
+  if (value.daily_loss_latched === true && value.entry_paused !== true)
+    throw new Error('Daily loss latch must keep entries paused.')
+  if (value.reduction_intent_id !== null) {
+    const execution = checkpoint.execution_checkpoint
+    if (!isRecord(execution) || !isRecord(execution.orders))
+      throw new Error(
+        'Risk reduction intent has no execution order checkpoint.',
+      )
+    const order = execution.orders[value.reduction_intent_id]
+    if (
+      !isRecord(order) ||
+      !isRecord(order.intent) ||
+      order.intent.order_type !== 'reduce_only'
+    )
+      throw new Error(
+        'Risk reduction intent does not bind to a reduce-only order.',
+      )
+  }
+  if (
+    canonicalJson(value) !==
+    canonicalJson({
+      utc_day: output.risk && (output.risk as JsonRecord).utc_day,
+      opening_equity_usd: (output.risk as JsonRecord).opening_equity_usd,
+      daily_loss_latched: (output.risk as JsonRecord).daily_loss_latched,
+      entry_paused: (output.risk as JsonRecord).entry_paused,
+      user_paused: (output.risk as JsonRecord).user_paused,
+      system_paused: (output.risk as JsonRecord).system_paused,
+      mark_quality: (output.risk as JsonRecord).mark_quality,
+      reduction_intent_id: (output.risk as JsonRecord).reduction_intent_id,
+    })
+  )
+    throw new Error('Risk output differs from the durable risk checkpoint.')
+  const config = binding.runtime_config as JsonRecord
+  if (config.daily_loss_fraction !== '0.01')
+    throw new Error('Daily risk limit differs from frozen configuration.')
+}
+
 function validateRuntimeWork(
   value: JsonRecord,
   frozen: JsonRecord,
@@ -1464,9 +1571,12 @@ function validateRuntimeWork(
   const output = value.runtime_output
   const binding = frozen.runtime as JsonRecord
   const strategyRuntime =
-    binding.schema_version === 'futures-runtime-binding.v2'
+    binding.schema_version === 'futures-runtime-binding.v2' ||
+    binding.schema_version === 'futures-runtime-binding.v4'
   const executionRuntime =
-    binding.schema_version === 'futures-runtime-binding.v3'
+    binding.schema_version === 'futures-runtime-binding.v3' ||
+    binding.schema_version === 'futures-runtime-binding.v4'
+  const riskRuntime = binding.schema_version === 'futures-runtime-binding.v4'
   assertKeys(cp, [
     'schema_version',
     'runtime_version',
@@ -1492,15 +1602,19 @@ function validateRuntimeWork(
     'consumed_depth',
     ...(strategyRuntime || executionRuntime ? ['regime'] : []),
     ...(executionRuntime ? ['execution_checkpoint', 'execution_metadata'] : []),
+    ...(riskRuntime ? ['risk_checkpoint'] : []),
   ])
   if (
-    cp.schema_version !== (executionRuntime ? 3 : strategyRuntime ? 2 : 1) ||
+    cp.schema_version !==
+      (riskRuntime ? 4 : executionRuntime ? 3 : strategyRuntime ? 2 : 1) ||
     cp.runtime_version !==
-      (executionRuntime
-        ? 'futures-runtime-execution.v1'
-        : strategyRuntime
-          ? 'futures-strategy-baseline-perp-v1'
-          : 'c27-breakout-perp-v1') ||
+      (riskRuntime
+        ? 'futures-runtime-risk.v1'
+        : executionRuntime
+          ? 'futures-runtime-execution.v1'
+          : strategyRuntime
+            ? 'futures-strategy-baseline-perp-v1'
+            : 'c27-breakout-perp-v1') ||
     cp.run_id !== runId ||
     cp.runtime_config === undefined ||
     cp.instrument_spec === undefined ||
@@ -1522,7 +1636,11 @@ function validateRuntimeWork(
     version < 1 ||
     value.protocol_version !== 1 ||
     value.schema_version !==
-      (executionRuntime ? 'futures-runtime-work.v2' : 'futures-runtime-work.v1')
+      (riskRuntime
+        ? 'futures-runtime-work.v3'
+        : executionRuntime
+          ? 'futures-runtime-work.v2'
+          : 'futures-runtime-work.v1')
   )
     throw new Error('Invalid versioned runtime work identity.')
   assertKeys(output, [
@@ -1553,6 +1671,8 @@ function validateRuntimeWork(
   )
     throw new Error('Invalid C27 runtime output shape.')
   if (executionRuntime) validateExecutionCheckpoint(cp, binding)
+  if (riskRuntime)
+    validateRiskCheckpoint(cp.risk_checkpoint, output, binding, cp)
   assertKeys(output.analysis, [
     'strategy_id',
     'selected_strategy_id',
@@ -1703,11 +1823,13 @@ function validateRuntimeWork(
   if (
     output.analysis.strategy_id !== null &&
     output.analysis.strategy_id !==
-      (strategyRuntime
-        ? 'futures-strategy-baseline-perp-v1'
-        : executionRuntime
-          ? 'futures-runtime-execution.v1'
-          : 'c27-breakout-perp-v1')
+      (riskRuntime
+        ? 'futures-runtime-risk.v1'
+        : strategyRuntime
+          ? 'futures-strategy-baseline-perp-v1'
+          : executionRuntime
+            ? 'futures-runtime-execution.v1'
+            : 'c27-breakout-perp-v1')
   )
     throw new Error('Unsupported runtime strategy identity.')
   assertKeys(output.analysis.features, [
@@ -1754,15 +1876,19 @@ function validateRuntimeWork(
   )
     throw new Error('Invalid runtime risk result.')
   if (output.risk.status === 'accepted') {
-    assertKeys(output.risk, [
-      'status',
-      'quantity_btc',
-      'risk_budget_usd',
-      'estimated_round_trip_cost_usd',
-      'stop_price_usd_per_btc',
-      'target_price_usd_per_btc',
-      'reason_codes',
-    ])
+    assertKeys(
+      output.risk,
+      [
+        'status',
+        'quantity_btc',
+        'risk_budget_usd',
+        'estimated_round_trip_cost_usd',
+        'stop_price_usd_per_btc',
+        'target_price_usd_per_btc',
+        'reason_codes',
+      ],
+      riskRuntime ? RISK_RESULT_FIELDS : [],
+    )
     for (const field of [
       'quantity_btc',
       'risk_budget_usd',
@@ -1775,7 +1901,51 @@ function validateRuntimeWork(
         `runtime risk ${field}`,
         'nonnegative',
       )
-  } else assertKeys(output.risk, ['status', 'reason_codes'])
+  } else
+    assertKeys(
+      output.risk,
+      ['status', 'reason_codes'],
+      riskRuntime ? RISK_RESULT_FIELDS : [],
+    )
+  if (riskRuntime) {
+    for (const key of [
+      'daily_loss_latched',
+      'entry_paused',
+      'user_paused',
+      'system_paused',
+    ])
+      if (typeof output.risk[key] !== 'boolean')
+        throw new Error(`Invalid risk result flag ${key}.`)
+    if (
+      typeof output.risk.utc_day !== 'string' ||
+      !/^\d{4}-\d{2}-\d{2}$/.test(output.risk.utc_day) ||
+      typeof output.risk.mark_quality !== 'string' ||
+      !['unknown', 'valid', 'stale', 'gapped'].includes(
+        output.risk.mark_quality,
+      ) ||
+      (output.risk.opening_equity_usd !== null &&
+        typeof output.risk.opening_equity_usd !== 'string') ||
+      (output.risk.reduction_intent_id !== null &&
+        typeof output.risk.reduction_intent_id !== 'string') ||
+      (output.risk.estimated_close_net_usd !== null &&
+        typeof output.risk.estimated_close_net_usd !== 'string') ||
+      typeof output.risk.estimated_close_complete !== 'boolean' ||
+      output.risk.estimated_close_complete !==
+        (output.risk.estimated_close_net_usd !== null)
+    )
+      throw new Error('Invalid daily risk result fields.')
+    if (output.risk.opening_equity_usd !== null)
+      canonicalDecimal(
+        output.risk.opening_equity_usd,
+        'risk opening equity',
+        'positive',
+      )
+    if (output.risk.estimated_close_net_usd !== null)
+      canonicalDecimal(
+        output.risk.estimated_close_net_usd,
+        'estimated close net',
+      )
+  }
   if (output.position.side === null)
     assertKeys(output.position, ['side', 'quantity_btc', 'owner_strategy_id'])
   else

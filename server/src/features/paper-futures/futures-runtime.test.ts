@@ -1,4 +1,5 @@
 import { mkdtempSync, rmSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
 import { DatabaseSync } from 'node:sqlite'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -421,6 +422,373 @@ describe('durable C27 futures runtime', () => {
       expect(store.verifyRun(runId)).toBe(true)
     } finally {
       await runner.close()
+      store.close()
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
+  it('persists the daily-loss latch and queued protective reduction across a real worker restart', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'futures-risk-runtime-'))
+    const path = join(directory, 'fixture.sqlite')
+    const runId = 'risk-runtime-run'
+    const riskConfig = {
+      ...runtimeConfig,
+      version: 'futures-runtime-risk.v1',
+      execution_latency_ms: 100,
+      daily_loss_fraction: '0.01',
+    }
+    const manifest = {
+      config_version: 'futures-strategies-config.v1',
+      indicator_version: 'futures-closed-indicators.v1',
+      strategy_ids: [
+        'c25-pullback-perp-v1',
+        'c26-reversion-perp-v1',
+        'c27-breakout-perp-v1',
+        'c28-adapter-perp-v1',
+      ],
+    }
+    const binding = {
+      schema_version: 'futures-runtime-binding.v4',
+      runtime_config: riskConfig,
+      instrument_spec: instrument,
+      strategy_manifest: manifest,
+      strategy_config_hash: canonicalHash(manifest),
+    }
+    const createStore = () => {
+      const value = new FuturesStore(path)
+      value.createRun({
+        runId,
+        config: {
+          ledger_version: 'linear-usd-ledger.v1',
+          decimal_precision: 50,
+          leverage: '1',
+        },
+        seed: { cash_usd: '10000' },
+        instrument: { instrument_id: instrument.instrument_id },
+        costs: {
+          version: runtimeConfig.cost_version,
+          maker: runtimeConfig.maker_rate,
+          taker: runtimeConfig.taker_rate,
+        },
+        runtime: binding,
+      })
+      return value
+    }
+    const makeRiskRequest = (
+      workId: string,
+      expectedStateVersion: number,
+      snapshot: Record<string, unknown>,
+      control?: Record<string, unknown>,
+    ): FuturesWorkerRequest => ({
+      request_id: `request-${workId}`,
+      run_id: runId,
+      work_id: workId,
+      expected_state_version: expectedStateVersion,
+      payload: {
+        operation: 'futures_runtime.v3',
+        runtime_config: riskConfig,
+        instrument,
+        market_snapshot: snapshot,
+        ...(control ? { control } : {}),
+      },
+    })
+    let store = createStore()
+    let runner = new FuturesCommandRunner(store)
+    try {
+      await runner.accept(
+        makeRiskRequest('risk-open', 0, market(21_600_000, 'long')),
+      ).result
+      const entryMarket = market(21_600_100, 'flat')
+      ;(entryMarket.events as Record<string, unknown>[]).find(
+        (event) => event.type === 'book_snapshot',
+      )!.asks = [{ price_usd: '100001', quantity_btc: '0.005' }]
+      ;(entryMarket.events as Record<string, unknown>[]).push({
+        type: 'funding',
+        interval_id: 'observed-zero-risk-test',
+        start_time_ms: 21_600_000,
+        end_time_ms: 25_200_000,
+        known_at_ms: 21_600_000,
+        received_at_ms: 21_600_000,
+        rate_usd_per_btc_hour: '0',
+      })
+      await runner.accept(makeRiskRequest('risk-entry-fill', 1, entryMarket))
+        .result
+      const opened = store.getRunProjection(runId) as {
+        result: { quantity_btc: string; cash_usd: string }
+        checkpoint: Record<string, unknown> & {
+          risk_checkpoint: Record<string, unknown>
+        }
+      }
+      expect(opened.result.quantity_btc).toBe('0.005')
+      expect(opened.checkpoint.schema_version).toBe(4)
+      expect(opened.checkpoint.risk_checkpoint.opening_equity_usd).toBe('10000')
+      const entryOrders = opened.checkpoint.execution_checkpoint as {
+        orders: Record<
+          string,
+          { state: string; remaining: string; filled: string }
+        >
+      }
+      expect(Object.values(entryOrders.orders)).toEqual([
+        expect.objectContaining({
+          state: 'cancelled',
+          remaining: '0.0049',
+          filled: '0.005',
+        }),
+      ])
+
+      const loss = market(21_600_200, 'flat', '70000')
+      const pending = makeRiskRequest('risk-stop-gap', 2, loss, {
+        type: 'paper.pause',
+      })
+      await runner.accept(pending).result
+      let projection = store.getRunProjection(runId) as {
+        result: { quantity_btc: string; fees_usd: string }
+        checkpoint: Record<string, unknown> & {
+          risk_checkpoint: Record<string, unknown>
+          execution_checkpoint: Record<string, unknown>
+        }
+        runtime_output: Record<string, unknown>
+      }
+      expect(projection.checkpoint.risk_checkpoint.daily_loss_latched).toBe(
+        true,
+      )
+      expect(projection.checkpoint.risk_checkpoint.user_paused).toBe(true)
+      expect(
+        projection.checkpoint.risk_checkpoint.reduction_intent_id,
+      ).toBeTruthy()
+      const reductionId = String(
+        projection.checkpoint.risk_checkpoint.reduction_intent_id,
+      )
+      const reductionOrder = (
+        projection.checkpoint.execution_checkpoint.orders as Record<
+          string,
+          { eligible_at_ms: number; intent: { quantity_btc: string } }
+        >
+      )[reductionId]
+      expect(reductionOrder.eligible_at_ms).toBe(21_600_300)
+      expect(reductionOrder.intent.quantity_btc).toBe('0.005')
+      expect(projection.result.quantity_btc).toBe('0.005')
+      const latchHash = store.getAppliedReceipt('risk-stop-gap')?.result_hash
+      expect(store.verifyRun(runId)).toBe(true)
+      await runner.accept(pending).result
+      expect(store.getAppliedReceipt('risk-stop-gap')?.result_hash).toBe(
+        latchHash,
+      )
+      await runner.close()
+      store.close()
+
+      store = createStore()
+      runner = new FuturesCommandRunner(store)
+      const recoveredGap = market(21_600_300, 'flat', '87000')
+      ;(recoveredGap.events as Record<string, unknown>[]).find(
+        (event) => event.type === 'book_snapshot',
+      )!.contiguous = false
+      await runner.accept(
+        makeRiskRequest('risk-gap-still-open', 3, recoveredGap),
+      ).result
+      projection = store.getRunProjection(runId) as typeof projection
+      expect(projection.result.quantity_btc).toBe('0.005')
+      expect(projection.checkpoint.risk_checkpoint.daily_loss_latched).toBe(
+        true,
+      )
+      expect(
+        (
+          projection.checkpoint.execution_checkpoint.orders as Record<
+            string,
+            { eligible_at_ms: number }
+          >
+        )[reductionId]!.eligible_at_ms,
+      ).toBe(21_600_300)
+      await runner.close()
+      store.close()
+
+      store = createStore()
+      runner = new FuturesCommandRunner(store)
+      const recovered = market(21_600_400, 'flat', '87000')
+      const result = await runner.accept(
+        makeRiskRequest('risk-stop-fill', 4, recovered),
+      ).result
+      projection = store.getRunProjection(runId) as typeof projection
+      expect(projection.result.quantity_btc).toBe('0')
+      expect(projection.result.fees_usd).toBe('0.4675025')
+      const fills = (
+        store.exportRun(runId).events as Record<string, unknown>[]
+      ).filter((event) => event.type === 'fill')
+      expect(fills).toHaveLength(2)
+      expect(fills[0]?.quantity_btc).toBe('0.005')
+      expect(fills[1]?.quantity_btc).toBe('0.005')
+      expect(fills[1]?.price_usd_per_btc).toBe('87000')
+      const database = new DatabaseSync(path)
+      const records = database
+        .prepare(
+          "SELECT work_id,payload_json FROM paper_futures_records WHERE run_id=? AND kind='applied-result' ORDER BY seq",
+        )
+        .all(runId) as { work_id: string; payload_json: string }[]
+      const appliedRecords = records.map(
+        (record) =>
+          JSON.parse(record.payload_json) as {
+            work_id: string
+            runtime_output: {
+              risk: Record<string, unknown>
+              fills: Record<string, string>[]
+              ledger: Record<string, string | boolean>
+            }
+          },
+      )
+      const openedRuntime = appliedRecords.find(
+        (record) => record.work_id === 'risk-entry-fill',
+      )!
+      expect(openedRuntime.runtime_output.risk.estimated_close_complete).toBe(
+        true,
+      )
+      expect(
+        openedRuntime.runtime_output.risk.estimated_close_net_usd,
+      ).toBeTypeOf('string')
+      const gapRuntime = appliedRecords.find(
+        (record) => record.work_id === 'risk-stop-gap',
+      )!
+      expect(gapRuntime.runtime_output.risk.estimated_close_net_usd).toBeTypeOf(
+        'string',
+      )
+      expect(gapRuntime.runtime_output.risk.estimated_close_complete).toBe(true)
+      const invalidBookRuntime = appliedRecords.find(
+        (record) => record.work_id === 'risk-gap-still-open',
+      )!
+      expect(
+        invalidBookRuntime.runtime_output.risk.estimated_close_net_usd,
+      ).toBeNull()
+      expect(
+        invalidBookRuntime.runtime_output.risk.estimated_close_complete,
+      ).toBe(false)
+      const lossRuntime = appliedRecords.find(
+        (record) => record.work_id === 'risk-stop-gap',
+      )!
+      expect(lossRuntime.runtime_output.ledger.unrealized_gross_usd).toBe(
+        '-150.005',
+      )
+      expect(lossRuntime.runtime_output.ledger.fees_usd).toBe('0.2500025')
+      expect(lossRuntime.runtime_output.ledger.funding_paid).toBe('0')
+      expect(lossRuntime.runtime_output.ledger.equity_usd).toBe('9849.7449975')
+      const runtimeFills = appliedRecords.flatMap((applied) => {
+        return applied.runtime_output.fills
+      })
+      const reconciled = spawnSync(
+        'python3',
+        [
+          '-c',
+          "import json,sys; from decimal import Decimal; rows=json.loads(sys.argv[1]); gross=sum((Decimal(r['quantity_btc'])*(Decimal(r['price_usd_per_btc'])-Decimal('100001'))*(1 if r['action']=='sell' else -1) for r in rows),Decimal(0)); fees=sum((Decimal(r['fee_usd']) for r in rows),Decimal(0)); print(json.dumps({'gross':str(gross),'fees':str(fees),'equity':str(Decimal('10000')+gross-fees)}))",
+          JSON.stringify(runtimeFills),
+        ],
+        { encoding: 'utf8' },
+      )
+      expect(reconciled.status).toBe(0)
+      expect(JSON.parse(reconciled.stdout)).toEqual({
+        gross: '-65.005',
+        fees: '0.4675025',
+        equity: '9934.5274975',
+      })
+      const finalRuntime = appliedRecords.find(
+        (record) => record.work_id === 'risk-stop-fill',
+      )!
+      expect(finalRuntime.runtime_output.ledger.funding_paid).toBe('0')
+      expect(finalRuntime.runtime_output.ledger.funding_complete).toBe(true)
+      database.close()
+      expect(store.verifyRun(runId)).toBe(true)
+      const replay = await runner.accept(
+        makeRiskRequest('risk-stop-fill', 4, recovered),
+      ).result
+      expect(replay).toEqual(result)
+      expect(
+        (store.exportRun(runId).events as Record<string, unknown>[]).filter(
+          (event) => event.type === 'fill',
+        ),
+      ).toHaveLength(2)
+      const denied = await runner.accept(
+        makeRiskRequest('risk-entry-denied', 5, market(21_600_500, 'long'), {
+          type: 'paper.resume',
+        }),
+      ).result
+      expect(denied.type).toBe('command.result')
+      projection = store.getRunProjection(runId) as typeof projection
+      expect(projection.result.quantity_btc).toBe('0')
+      expect(projection.checkpoint.risk_checkpoint.daily_loss_latched).toBe(
+        true,
+      )
+      expect(projection.checkpoint.risk_checkpoint.user_paused).toBe(true)
+      expect(projection.checkpoint.risk_checkpoint.entry_paused).toBe(true)
+      const rollover = await runner.accept(
+        makeRiskRequest('risk-utc-rollover', 6, market(86_400_000, 'long')),
+      ).result
+      expect(rollover.type).toBe('command.result')
+      projection = store.getRunProjection(runId) as typeof projection
+      expect(projection.checkpoint.risk_checkpoint.daily_loss_latched).toBe(
+        false,
+      )
+      expect(projection.checkpoint.risk_checkpoint.utc_day).toBe('1970-01-02')
+      expect(projection.checkpoint.risk_checkpoint.user_paused).toBe(true)
+      expect(projection.checkpoint.risk_checkpoint.entry_paused).toBe(true)
+      expect(store.verifyRun(runId)).toBe(true)
+
+      await runner.accept(
+        makeRiskRequest('risk-next-day-entry', 7, market(86_400_000, 'long'), {
+          type: 'paper.resume',
+        }),
+      ).result
+      await runner.accept(
+        makeRiskRequest('risk-next-day-fill', 8, market(86_400_100, 'flat')),
+      ).result
+      const timeStopAt = 86_400_100 + 30 * 60_000
+      const clockMarket = market(timeStopAt, 'flat')
+      const oldBars = (
+        market(86_400_000, 'flat').events as Record<string, unknown>[]
+      ).filter((event) => event.type === 'candle')
+      clockMarket.events = [
+        ...(clockMarket.events as Record<string, unknown>[]).filter(
+          (event) => event.type !== 'candle' && event.type !== 'funding',
+        ),
+        ...oldBars,
+      ]
+      await runner.accept(
+        makeRiskRequest('risk-clock-stop', 9, clockMarket, {
+          type: 'paper.pause',
+        }),
+      ).result
+      projection = store.getRunProjection(runId) as typeof projection
+      expect(projection.result.quantity_btc).toBe('0.0099')
+      expect(projection.checkpoint.risk_checkpoint.user_paused).toBe(true)
+      expect(projection.checkpoint.funding_complete).toBe(false)
+      expect(projection.checkpoint.risk_checkpoint.system_paused).toBe(true)
+      const timeExitId = String(
+        projection.checkpoint.risk_checkpoint.reduction_intent_id,
+      )
+      expect(
+        (
+          projection.checkpoint.execution_metadata as Record<
+            string,
+            { reason: string }
+          >
+        )[timeExitId]!.reason,
+      ).toBe('time_stop')
+      expect(
+        (
+          projection.checkpoint.execution_checkpoint.orders as Record<
+            string,
+            { eligible_at_ms: number }
+          >
+        )[timeExitId]!.eligible_at_ms,
+      ).toBe(timeStopAt + 100)
+      await runner.accept(
+        makeRiskRequest(
+          'risk-clock-stop-fill',
+          10,
+          market(timeStopAt + 100, 'flat', '87000'),
+        ),
+      ).result
+      projection = store.getRunProjection(runId) as typeof projection
+      expect(projection.result.quantity_btc).toBe('0')
+      expect(store.verifyRun(runId)).toBe(true)
+    } finally {
+      await runner.close().catch(() => undefined)
       store.close()
       rmSync(directory, { recursive: true, force: true })
     }

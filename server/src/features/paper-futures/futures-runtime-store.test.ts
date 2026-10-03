@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { FuturesStore } from './futures-store.ts'
+import { canonicalHash } from './futures-canonical.ts'
 
 const directories: string[] = []
 type RuntimeCheckpoint = Record<string, unknown> & {
@@ -173,6 +174,68 @@ describe('versioned C27 runtime persistence', () => {
     createRuntimeRun(store, 'futures-runtime-execution.v1')
     expect(store.getRuntimeBinding('runtime-store-run')?.schema_version).toBe(
       'futures-runtime-binding.v3',
+    )
+    store.close()
+  })
+
+  it('accepts the new immutable risk-controller binding without changing execution v1', () => {
+    const store = newStore()
+    const config = {
+      version: 'futures-runtime-risk.v1',
+      initial_cash_usd: '10000',
+      max_notional_usd: '1000',
+      max_exposure_multiple: '1',
+      risk_fraction: '0.001',
+      execution_latency_ms: 100,
+      max_book_age_ms: 3000,
+      max_spread_bps: '5',
+      cost_version: 'kraken-futures-eea-btcusd-base.v1',
+      maker_rate: '0.0002',
+      taker_rate: '0.0005',
+      daily_loss_fraction: '0.01',
+    }
+    const strategyManifest = {
+      config_version: 'futures-strategies-config.v1',
+      indicator_version: 'futures-closed-indicators.v1',
+      strategy_ids: [
+        'c25-pullback-perp-v1',
+        'c26-reversion-perp-v1',
+        'c27-breakout-perp-v1',
+        'c28-adapter-perp-v1',
+      ],
+    }
+    expect(() =>
+      store.createRun({
+        runId: 'runtime-store-run',
+        config: {
+          ledger_version: 'linear-usd-ledger.v1',
+          decimal_precision: 50,
+          leverage: '1',
+        },
+        seed: { cash_usd: '10000' },
+        instrument: { instrument_id: 'kraken-futures:PF_XBTUSD' },
+        costs: {
+          version: 'kraken-futures-eea-btcusd-base.v1',
+          maker: '0.0002',
+          taker: '0.0005',
+        },
+        runtime: {
+          schema_version: 'futures-runtime-binding.v4',
+          runtime_config: config,
+          strategy_manifest: strategyManifest,
+          strategy_config_hash: canonicalHash(strategyManifest),
+          instrument_spec: {
+            instrument_id: 'kraken-futures:PF_XBTUSD',
+            provider_symbol: 'PF_XBTUSD',
+            quantity_step_btc: '0.0001',
+            minimum_quantity_btc: '0.0001',
+            price_tick_usd: '1',
+          },
+        },
+      }),
+    ).not.toThrow()
+    expect(store.getRuntimeBinding('runtime-store-run')?.schema_version).toBe(
+      'futures-runtime-binding.v4',
     )
     store.close()
   })

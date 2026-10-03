@@ -43,6 +43,13 @@ export interface FuturesWorkerRequest {
         readonly market_snapshot: Record<string, unknown>
         readonly control?: Record<string, unknown>
       }
+    | {
+        readonly operation: 'futures_runtime.v3'
+        readonly runtime_config: Record<string, unknown>
+        readonly instrument: Record<string, unknown>
+        readonly market_snapshot: Record<string, unknown>
+        readonly control?: Record<string, unknown>
+      }
 }
 
 export interface FuturesWorkerResult {
@@ -59,7 +66,8 @@ export interface FuturesWorkerResult {
         readonly closed_at_ms: number
       }
     | undefined
-  readonly operation?: 'futures_runtime.v1' | 'futures_runtime.v2'
+  readonly operation?:
+    'futures_runtime.v1' | 'futures_runtime.v2' | 'futures_runtime.v3'
   readonly runtime_event_time_ms?: number
   readonly result: Record<string, unknown>
   readonly events: readonly Record<string, unknown>[]
@@ -480,7 +488,8 @@ export function validateFuturesWorkerRequest(
 function validateWorkerPayload(payload: Record<string, unknown>): boolean {
   if (
     payload.operation === 'futures_runtime.v1' ||
-    payload.operation === 'futures_runtime.v2'
+    payload.operation === 'futures_runtime.v2' ||
+    payload.operation === 'futures_runtime.v3'
   ) {
     const allowed = [
       'operation',
@@ -498,27 +507,40 @@ function validateWorkerPayload(payload: Record<string, unknown>): boolean {
       return false
     const config = payload.runtime_config
     if (
-      !hasExactKeys(config, [
-        'version',
-        'initial_cash_usd',
-        'max_notional_usd',
-        'max_exposure_multiple',
-        'risk_fraction',
-        'execution_latency_ms',
-        'max_book_age_ms',
-        'max_spread_bps',
-        'cost_version',
-        'maker_rate',
-        'taker_rate',
-      ]) ||
+      !hasExactKeys(
+        config,
+        [
+          'version',
+          'initial_cash_usd',
+          'max_notional_usd',
+          'max_exposure_multiple',
+          'risk_fraction',
+          'execution_latency_ms',
+          'max_book_age_ms',
+          'max_spread_bps',
+          'cost_version',
+          'maker_rate',
+          'taker_rate',
+        ],
+        payload.operation === 'futures_runtime.v3'
+          ? ['daily_loss_fraction']
+          : [],
+      ) ||
       ![
         'futures-runtime-lab.v1',
         'futures-runtime-strategies.v1',
         ...(payload.operation === 'futures_runtime.v2'
           ? ['futures-runtime-execution.v1']
-          : []),
+          : payload.operation === 'futures_runtime.v3'
+            ? ['futures-runtime-risk.v1']
+            : []),
       ].includes(String(config.version)) ||
       config.cost_version !== 'kraken-futures-eea-btcusd-base.v1'
+    )
+      return false
+    if (
+      payload.operation === 'futures_runtime.v3' &&
+      config.daily_loss_fraction !== '0.01'
     )
       return false
     for (const key of [
@@ -565,11 +587,20 @@ function validateWorkerPayload(payload: Record<string, unknown>): boolean {
     if (
       payload.control !== undefined &&
       (!isRecord(payload.control) ||
-        !hasExactKeys(payload.control, ['type', 'command_id']) ||
-        payload.control.type !== 'paper.close' ||
-        typeof payload.control.command_id !== 'string' ||
-        payload.control.command_id.length < 1 ||
-        payload.control.command_id.length > 128)
+        (payload.operation === 'futures_runtime.v3'
+          ? !hasExactKeys(payload.control, ['type'], ['command_id']) ||
+            !['paper.close', 'paper.pause', 'paper.resume'].includes(
+              String(payload.control.type),
+            ) ||
+            ('command_id' in payload.control &&
+              (typeof payload.control.command_id !== 'string' ||
+                payload.control.command_id.length < 1 ||
+                payload.control.command_id.length > 128))
+          : !hasExactKeys(payload.control, ['type', 'command_id']) ||
+            payload.control.type !== 'paper.close' ||
+            typeof payload.control.command_id !== 'string' ||
+            payload.control.command_id.length < 1 ||
+            payload.control.command_id.length > 128))
     )
       return false
     const market = payload.market_snapshot
@@ -632,8 +663,16 @@ function validateWorkerPayload(payload: Record<string, unknown>): boolean {
   )
 }
 
-function hasExactKeys(value: Record<string, unknown>, keys: string[]): boolean {
-  return Object.keys(value).sort().join(',') === [...keys].sort().join(',')
+function hasExactKeys(
+  value: Record<string, unknown>,
+  keys: string[],
+  optional: string[] = [],
+): boolean {
+  const actual = Object.keys(value)
+  return (
+    keys.every((key) => actual.includes(key)) &&
+    actual.every((key) => keys.includes(key) || optional.includes(key))
+  )
 }
 
 function sameKeys(
@@ -678,7 +717,8 @@ function isResult(
 ): value is FuturesWorkerResult {
   if (
     request.payload.operation === 'futures_runtime.v1' ||
-    request.payload.operation === 'futures_runtime.v2'
+    request.payload.operation === 'futures_runtime.v2' ||
+    request.payload.operation === 'futures_runtime.v3'
   )
     return (
       isRecord(value) &&

@@ -5,6 +5,7 @@ the decision cutoff. It never connects to a provider or submits a real order.
 """
 
 from copy import deepcopy
+from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation, ROUND_CEILING, ROUND_FLOOR, localcontext
 
 from .canonical import normalize_decimal, normalize_timestamp_ms
@@ -28,6 +29,8 @@ CHECKPOINT_VERSION = 1
 STRATEGY_CHECKPOINT_VERSION = 2
 EXECUTION_RUNTIME_VERSION = "futures-runtime-execution.v1"
 EXECUTION_CHECKPOINT_VERSION = 3
+RISK_RUNTIME_VERSION = "futures-runtime-risk.v1"
+RISK_CHECKPOINT_VERSION = 4
 FEATURE_INTERVAL_MS = 60_000
 ZERO = Decimal(0)
 ONE = Decimal(1)
@@ -80,6 +83,8 @@ class FuturesRuntime:
             if self.config.get("version") == "futures-runtime-strategies.v1"
             else EXECUTION_RUNTIME_VERSION
             if self.config.get("version") == EXECUTION_RUNTIME_VERSION
+            else RISK_RUNTIME_VERSION
+            if self.config.get("version") == RISK_RUNTIME_VERSION
             else RUNTIME_VERSION
         )
         self.instrument = deepcopy(instrument) if isinstance(instrument, dict) else None
@@ -102,7 +107,17 @@ class FuturesRuntime:
         self.regime = "unknown"
         self.execution_adapter = None
         self.execution_metadata = {}
-        if self.runtime_version == EXECUTION_RUNTIME_VERSION:
+        self.risk_state = {
+            "utc_day": None,
+            "opening_equity_usd": None,
+            "daily_loss_latched": False,
+            "entry_paused": False,
+            "user_paused": False,
+            "system_paused": False,
+            "mark_quality": "unknown",
+            "reduction_intent_id": None,
+        }
+        if self.runtime_version in (EXECUTION_RUNTIME_VERSION, RISK_RUNTIME_VERSION):
             if self.instrument is None:
                 raise ValueError("execution runtime requires instrument metadata")
             self.execution_adapter = PaperExecutionAdapter(
@@ -144,7 +159,7 @@ class FuturesRuntime:
             if key not in ("version", "cost_version")
         }
         if (
-            self.config["version"] not in ("futures-runtime-lab.v1", "futures-runtime-strategies.v1", EXECUTION_RUNTIME_VERSION)
+            self.config["version"] not in ("futures-runtime-lab.v1", "futures-runtime-strategies.v1", EXECUTION_RUNTIME_VERSION, RISK_RUNTIME_VERSION)
             or
             values["initial_cash_usd"] < 0
             or values["max_notional_usd"] <= 0
@@ -156,6 +171,7 @@ class FuturesRuntime:
             or values["maker_rate"] < 0
             or values["taker_rate"] < 0
             or self.config["cost_version"] != "kraken-futures-eea-btcusd-base.v1"
+            or (self.config["version"] == RISK_RUNTIME_VERSION and self.config.get("daily_loss_fraction") != "0.01")
         ):
             raise ValueError("unsupported or unsafe runtime configuration")
 
@@ -171,8 +187,15 @@ class FuturesRuntime:
         book = self._select(evidence, "book_snapshot")
         ticker = self._select(evidence, "ticker")
         mark = self._mark(ticker, book)
+        if self.ledger.position is not None:
+            self._observe_funding(evidence, now, cutoff)
+            self._accrue_until(now)
         fills = []
         orders = []
+        risk_reasons = []
+        if self.runtime_version == RISK_RUNTIME_VERSION:
+            risk_reasons = self._update_risk_day(now, mark, book, ticker, control)
+        closed_this_cycle = False
         if self.execution_adapter is not None:
             adapter_events = self._advance_execution(evidence, cutoff)
             for event in adapter_events:
@@ -190,20 +213,43 @@ class FuturesRuntime:
                     "decision_at_ms": intent["decision_at_ms"],
                 })
                 orders.append(order_event)
+            close_fill_seen = any(
+                event.get("type") == "fill"
+                and self.execution_metadata.get(event.get("order_id"), {}).get("purpose") == "close"
+                for event in adapter_events
+            )
             fills.extend(self._apply_execution_fills(adapter_events))
+            closed_this_cycle = close_fill_seen and self.ledger.position is None
+        if (
+            self.runtime_version == RISK_RUNTIME_VERSION
+            and self.risk_state["daily_loss_latched"]
+        ):
+            self._cancel_pending_entries(now, orders)
         features = self._features(evidence, now)
         strategy_context = None
-        if self.config["version"] == "futures-runtime-strategies.v1":
+        if self.config["version"] in ("futures-runtime-strategies.v1", RISK_RUNTIME_VERSION):
             strategy_context = self._strategy_context(evidence, now, cutoff, features)
         guard = self._market_guard(market, book, ticker, now, cutoff)
+        if closed_this_cycle:
+            guard = "position_closed_this_cycle"
         if self.execution_adapter is not None and self._has_pending_entry():
             guard = "incompatible_order_pending"
+        self._risk_close_estimate = (
+            self._estimate_close_net(book)
+            if self.runtime_version == RISK_RUNTIME_VERSION and guard is None
+            else None
+        )
 
         if self.ledger.position is not None:
-            self._observe_funding(evidence, now, cutoff)
-            if guard is None:
+            if guard is None or self.runtime_version == RISK_RUNTIME_VERSION:
+                protection_mark = (
+                    mark
+                    if self.runtime_version != RISK_RUNTIME_VERSION
+                    or self._valid_risk_mark(ticker, now)
+                    else None
+                )
                 should_close, close_reason = self._should_close(
-                    control, features, mark, now
+                    control, features, protection_mark, now
                 )
                 if (
                     not should_close
@@ -216,11 +262,13 @@ class FuturesRuntime:
                     )
             else:
                 should_close, close_reason = False, guard
-            if should_close and guard is None:
+            if should_close and (guard is None or self.runtime_version == RISK_RUNTIME_VERSION):
                 if self.execution_adapter is not None:
                     order = self._submit_execution_close(now, close_reason)
                     if order is not None:
                         orders.append(order)
+                        if self.runtime_version == RISK_RUNTIME_VERSION:
+                            self.risk_state["reduction_intent_id"] = order.get("order_id")
                 else:
                     closed, order = self._close_position(book, now, close_reason)
                     fills.extend(closed)
@@ -246,11 +294,26 @@ class FuturesRuntime:
             if strategy_context is not None:
                 analysis.update(strategy_context)
             risk = {"status": "not_applicable", "reason_codes": []}
+            if self.runtime_version == RISK_RUNTIME_VERSION:
+                risk.update(self._risk_result(risk_reasons, guard))
         elif guard is not None:
             analysis = self._analysis("WAIT", guard, features)
             if strategy_context is not None:
                 analysis.update(strategy_context)
             risk = {"status": "not_evaluated", "reason_codes": [guard]}
+            if self.runtime_version == RISK_RUNTIME_VERSION:
+                risk.update(self._risk_result(risk_reasons, guard))
+        elif self.runtime_version == RISK_RUNTIME_VERSION and (
+            self.risk_state["entry_paused"] or self.risk_state["user_paused"] or self.risk_state["system_paused"]
+        ):
+            reason = risk_reasons[0] if risk_reasons else (
+                "daily_loss_limit" if self.risk_state["daily_loss_latched"] else "entries_paused"
+            )
+            analysis = self._analysis("WAIT", reason, features)
+            if strategy_context is not None:
+                analysis.update(strategy_context)
+            risk = {"status": "rejected", "reason_codes": [reason]}
+            risk.update(self._risk_result(risk_reasons, guard))
         elif not features.get("ready"):
             reason = (features.get("reason_codes") or ["features_unavailable"])[0]
             analysis = self._analysis("WAIT", reason, features)
@@ -377,6 +440,8 @@ class FuturesRuntime:
             analysis.update(strategy_context)
         position = self._position(mark)
         account = None if mark is None else self.ledger.snapshot(_text(mark))
+        if self.runtime_version == RISK_RUNTIME_VERSION:
+            risk.update(self._risk_result(risk_reasons, guard))
         return {
             "schema_version": "futures-runtime-result.v1",
             "run_id": self.run_id,
@@ -439,10 +504,13 @@ class FuturesRuntime:
             **({"regime": self.regime} if self.runtime_version != RUNTIME_VERSION else {}),
             **({"execution_checkpoint": self.execution_adapter.checkpoint()} if self.execution_adapter is not None else {}),
             **({"execution_metadata": deepcopy(self.execution_metadata)} if self.execution_adapter is not None else {}),
+            **({"risk_checkpoint": deepcopy(self.risk_state)} if self.runtime_version == RISK_RUNTIME_VERSION else {}),
         }
 
     @property
     def _checkpoint_version(self):
+        if self.runtime_version == RISK_RUNTIME_VERSION:
+            return RISK_CHECKPOINT_VERSION
         if self.runtime_version == EXECUTION_RUNTIME_VERSION:
             return EXECUTION_CHECKPOINT_VERSION
         return STRATEGY_CHECKPOINT_VERSION if self.runtime_version != RUNTIME_VERSION else CHECKPOINT_VERSION
@@ -526,6 +594,23 @@ class FuturesRuntime:
             if isinstance(snapshot, str) and isinstance(levels, dict)
         }
         self.funding_cursor_ms = checkpoint.get("funding_cursor_ms")
+        if self.runtime_version == RISK_RUNTIME_VERSION:
+            state = checkpoint.get("risk_checkpoint")
+            expected = {
+                "utc_day", "opening_equity_usd", "daily_loss_latched", "entry_paused",
+                "user_paused", "system_paused", "mark_quality", "reduction_intent_id",
+            }
+            if not isinstance(state, dict) or set(state) != expected:
+                raise ValueError("risk checkpoint schema is invalid")
+            if any(not isinstance(state[key], bool) for key in (
+                "daily_loss_latched", "entry_paused", "user_paused", "system_paused"
+            )):
+                raise ValueError("risk checkpoint flags must be boolean")
+            if state["opening_equity_usd"] is not None:
+                _d(state["opening_equity_usd"], "risk opening equity")
+            if state["mark_quality"] not in ("unknown", "valid", "stale", "gapped"):
+                raise ValueError("risk checkpoint mark quality is invalid")
+            self.risk_state = deepcopy(state)
         if (ledger.position is None) != (self.owner_strategy_id is None):
             raise ValueError("checkpoint position ownership is inconsistent")
         if self.execution_adapter is not None:
@@ -801,6 +886,8 @@ class FuturesRuntime:
                     self.owner_strategy_id = None
                     self.position_protection = None
                     self.funding_cursor_ms = None
+                    if self.runtime_version == RISK_RUNTIME_VERSION:
+                        self.risk_state["reduction_intent_id"] = None
             for item in order_fills:
                 output.append({
                     "fill_id": item["fill_id"], "order_id": order_id,
@@ -1050,32 +1137,77 @@ class FuturesRuntime:
         if self.ledger.position is None or self.position_protection is None:
             return False, "position_state_unavailable"
         pos = self.ledger.position
+        if self.runtime_version == RISK_RUNTIME_VERSION and self.risk_state["daily_loss_latched"]:
+            return True, "daily_loss_limit"
         stop = _d(self.position_protection["stop"], "protective stop")
         target = _d(self.position_protection["target"], "target")
         midline = _d(self.position_protection["donchian_mid"], "Donchian midline")
         opened = self.position_protection["opened_at_ms"]
-        if pos["side"] == "long":
-            if mark <= stop:
-                return True, "protective_stop"
-            if mark >= target:
-                return True, "profit_target"
-            if (
-                (self.runtime_version == RUNTIME_VERSION or self.owner_strategy_id == C27_ID)
-                and features.get("candidate_close") is not None
-                and _d(features["candidate_close"], "candidate close") < midline
-            ):
-                return True, "donchian_midline_cross"
-        else:
-            if mark >= stop:
-                return True, "protective_stop"
-            if mark <= target:
-                return True, "profit_target"
-            if (
-                (self.runtime_version == RUNTIME_VERSION or self.owner_strategy_id == C27_ID)
-                and features.get("candidate_close") is not None
-                and _d(features["candidate_close"], "candidate close") > midline
-            ):
-                return True, "donchian_midline_cross"
+        invalidation = self.position_protection.get("strategy_invalidation")
+        c25_owner = self.owner_strategy_id == C25_ID or invalidation in (
+            "close_below_ema21", "close_above_ema21"
+        )
+        c26_owner = self.owner_strategy_id == C26_ID or invalidation == "regime_invalid"
+        c27_owner = self.owner_strategy_id == C27_ID or (
+            isinstance(invalidation, str)
+            and invalidation.startswith("opposite_donchian_mid_cross@")
+        )
+        if mark is not None:
+            if pos["side"] == "long":
+                if mark <= stop:
+                    return True, "protective_stop"
+                if mark >= target:
+                    return True, "profit_target"
+            else:
+                if mark >= stop:
+                    return True, "protective_stop"
+                if mark <= target:
+                    return True, "profit_target"
+        candidate = features.get("candidate_close")
+        if candidate is not None:
+            candidate = _d(candidate, "candidate close")
+            ema21 = features.get("ema21")
+            frozen_target = self.position_protection.get("strategy_target")
+            if pos["side"] == "long":
+                if (
+                    c25_owner
+                    and ema21 is not None
+                    and candidate < _d(ema21, "EMA21")
+                ):
+                    return True, "owner_invalidation"
+                if c26_owner and (
+                    self.regime != "range"
+                    or (
+                        frozen_target is not None
+                        and candidate >= _d(frozen_target, "frozen middle target")
+                    )
+                ):
+                    return True, "owner_invalidation"
+                if (
+                    (self.runtime_version == RUNTIME_VERSION or c27_owner)
+                    and candidate < midline
+                ):
+                    return True, "donchian_midline_cross"
+            else:
+                if (
+                    c25_owner
+                    and ema21 is not None
+                    and candidate > _d(ema21, "EMA21")
+                ):
+                    return True, "owner_invalidation"
+                if c26_owner and (
+                    self.regime != "range"
+                    or (
+                        frozen_target is not None
+                        and candidate <= _d(frozen_target, "frozen middle target")
+                    )
+                ):
+                    return True, "owner_invalidation"
+                if (
+                    (self.runtime_version == RUNTIME_VERSION or c27_owner)
+                    and candidate > midline
+                ):
+                    return True, "donchian_midline_cross"
         if now - opened >= 30 * 60_000:
             return True, "time_stop"
         return False, "position_owned"
@@ -1127,3 +1259,156 @@ class FuturesRuntime:
             "strategy_status": "ready" if features.get("ready") else "warming_up",
         }
         return result
+
+    def _risk_result(self, reasons, guard):
+        result = {
+            "daily_loss_latched": self.risk_state["daily_loss_latched"],
+            "entry_paused": self.risk_state["entry_paused"],
+            "user_paused": self.risk_state["user_paused"],
+            "system_paused": self.risk_state["system_paused"],
+            "utc_day": self.risk_state["utc_day"],
+            "opening_equity_usd": self.risk_state["opening_equity_usd"],
+            "mark_quality": self.risk_state["mark_quality"],
+            "reduction_intent_id": self.risk_state["reduction_intent_id"],
+            "estimated_close_net_usd": getattr(self, "_risk_close_estimate", None),
+            "estimated_close_complete": getattr(self, "_risk_close_estimate", None) is not None,
+        }
+        codes = list(dict.fromkeys(reasons + ([guard] if guard else [])))
+        result["reason_codes"] = codes
+        return result
+
+    def _estimate_close_net(self, book):
+        position = self.ledger.position
+        if (
+            position is None
+            or not self.ledger.funding_complete
+            or not isinstance(book, dict)
+        ):
+            return None
+        levels = book.get("bids" if position["side"] == "long" else "asks")
+        if not isinstance(levels, list):
+            return None
+        try:
+            quantity = position["qty"]
+            remaining = quantity
+            gross = ZERO
+            exit_fee = ZERO
+            snapshot = (
+                "kraken-futures",
+                "PF_XBTUSD",
+                str(book.get("epoch", "unknown")),
+                str(book.get("snapshot_id", "{}:{}".format(book.get("epoch"), book.get("sequence")))),
+                str(book.get("revision", book.get("sequence", "unknown"))),
+            )
+            side = "bids" if position["side"] == "long" else "asks"
+            budget = self.execution_adapter.book_budgets.get(snapshot)
+            for level in levels:
+                price = _d(level["price_usd"], "close estimate price")
+                visible = _d(level["quantity_btc"], "close estimate quantity")
+                if budget is not None:
+                    visible = min(visible, _d(budget[side].get(_text(price), "0"), "remaining close depth"))
+                take = min(remaining, visible)
+                if take <= 0:
+                    continue
+                gross += take * (price - position["entry"]) * (1 if position["side"] == "long" else -1)
+                exit_fee += take * price * _d(self.config["taker_rate"], "taker rate")
+                remaining -= take
+                if remaining == 0:
+                    net = self.ledger.realized_gross + gross - self.ledger.fees - self.ledger.funding_paid - exit_fee
+                    return _text(net)
+        except (KeyError, TypeError, ValueError, ZeroDivisionError):
+            return None
+        return None
+
+    def _update_risk_day(self, now, mark, book, ticker, control):
+        state = self.risk_state
+        reasons = []
+        if isinstance(control, dict):
+            if control.get("type") == "paper.pause":
+                state["user_paused"] = True
+            elif control.get("type") == "paper.resume":
+                if not state["daily_loss_latched"]:
+                    state["user_paused"] = False
+        book_gap = isinstance(book, dict) and book.get("contiguous") is False
+        mark_valid = mark is not None and self._valid_risk_mark(ticker, now)
+        missing_mark = not isinstance(ticker, dict) or ticker.get("mark_usd") is None
+        state["mark_quality"] = "gapped" if book_gap else (
+            "valid" if mark_valid else "unknown" if missing_mark else "stale"
+        )
+        if not mark_valid and self.ledger.position is not None:
+            state["entry_paused"] = True
+            reasons.append("risk_mark_unavailable")
+        if not self.ledger.funding_complete:
+            state["entry_paused"] = True
+            state["system_paused"] = True
+            reasons.append("funding_incomplete")
+        day = datetime.fromtimestamp(now / 1000, timezone.utc).date().isoformat()
+        equity = self.ledger.cash + self.ledger.realized_gross - self.ledger.fees - self.ledger.funding_paid
+        if mark_valid:
+            with localcontext() as ctx:
+                ctx.prec = self.ledger.precision
+                if self.ledger.position is not None:
+                    pos = self.ledger.position
+                    equity += pos["qty"] * (mark - pos["entry"]) * (1 if pos["side"] == "long" else -1)
+        if state["utc_day"] is None:
+            state["utc_day"] = day
+            state["opening_equity_usd"] = _text(equity)
+        elif day != state["utc_day"] and (mark_valid or self.ledger.position is None):
+            state["utc_day"] = day
+            state["opening_equity_usd"] = _text(equity)
+            state["daily_loss_latched"] = False
+            state["entry_paused"] = state["user_paused"] or state["system_paused"]
+            if self.ledger.position is None and not self._has_pending_exit():
+                state["reduction_intent_id"] = None
+        opening = _d(state["opening_equity_usd"], "daily opening equity")
+        if mark_valid and opening > 0 and opening - equity >= opening * _d(self.config["daily_loss_fraction"], "daily loss fraction"):
+            state["daily_loss_latched"] = True
+            state["entry_paused"] = True
+            reasons.append("daily_loss_limit")
+        elif state["daily_loss_latched"]:
+            state["entry_paused"] = True
+            reasons.append("daily_loss_limit")
+        elif mark_valid and self.ledger.funding_complete:
+            state["entry_paused"] = state["user_paused"] or state["system_paused"]
+        if state["user_paused"]:
+            reasons.append("entries_paused")
+        return list(dict.fromkeys(reasons))
+
+    def _valid_risk_mark(self, ticker, now):
+        if not isinstance(ticker, dict):
+            return False
+        event_time = ticker.get("event_time_ms")
+        received = ticker.get("received_at_ms")
+        known = ticker.get("known_at_ms", received)
+        try:
+            mark = _d(ticker.get("mark_usd"), "ticker mark")
+        except ValueError:
+            return False
+        return (
+            mark > 0
+            and all(
+                isinstance(value, int) and not isinstance(value, bool)
+                for value in (event_time, received, known)
+            )
+            and 0 <= event_time <= received <= known <= now
+            and now - event_time <= self.config["max_book_age_ms"]
+            and now - received <= self.config["max_book_age_ms"]
+        )
+
+    def _cancel_pending_entries(self, now, orders):
+        for order_id, order in self.execution_adapter.orders.items():
+            if (
+                self.execution_metadata.get(order_id, {}).get("purpose") == "entry"
+                and order["state"] in ("accepted", "partially_filled")
+            ):
+                cancelled = self.execution_adapter.cancel(
+                    order_id, "risk-cancel:" + order_id, now
+                )
+                for event in cancelled:
+                    orders.append({
+                        **event,
+                        "order_type": order["intent"]["order_type"],
+                        "side": order["intent"]["side"],
+                        "quantity_btc": order["intent"]["quantity_btc"],
+                        "decision_at_ms": order["intent"]["decision_at_ms"],
+                    })
