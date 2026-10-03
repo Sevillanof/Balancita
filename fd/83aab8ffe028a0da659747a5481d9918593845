@@ -1,0 +1,20 @@
+e2e/futures-terminal/acceptance.pw.ts
+  h_2f68313623be98 11,387,389
+e2e/futures-terminal/evidence-output.test.ts
+  h_2f68313623be98 1-26
+e2e/futures-terminal/evidence-output.ts
+  h_2f68313623be98 1-8
+odd/tasks/kraken-futures-deterministic.md
+  h_2f68313623be98 3,6,8,47,67,104-122,124-141
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "fd83aab8ffe028a0da659747a5481d9918593845",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
