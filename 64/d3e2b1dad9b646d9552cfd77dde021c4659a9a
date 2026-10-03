@@ -1,0 +1,38 @@
+e2e/futures-terminal/acceptance.pw.ts
+  h_2f68313623be98 1-451
+e2e/futures-terminal/evidence.json
+  h_2f68313623be98 1-42
+playwright.futures.config.ts
+  h_2f68313623be98 1-11
+src/app/App.tsx
+  h_2f68313623be98 20,109
+src/app/ConnectedTerminal.css
+  h_2f68313623be98 58-83
+src/app/FuturesTerminal.tsx
+  h_2f68313623be98 1-633
+src/app/TerminalEntry.tsx
+  h_2f68313623be98 1-49
+src/features/connected-trading/infrastructure/terminal-state.test.ts
+  h_2f68313623be98 1-46
+src/features/connected-trading/infrastructure/terminal-state.ts
+  h_2f68313623be98 1-39
+src/features/connected-trading/infrastructure/terminal-stream-client.test.ts
+  h_2f68313623be98 1-76
+src/features/connected-trading/infrastructure/terminal-stream-client.ts
+  h_2f68313623be98 1-122
+src/features/trading-view/presentation/ApprovedTerminalChart.test.tsx
+  h_2f68313623be98 8,15,160-161,183-188,226-263
+src/features/trading-view/presentation/ApprovedTerminalChart.tsx
+  h_2f68313623be98 44-45,106-107,111,125-126,213,267-268,270,278-321,333,424-427
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "64d3e2b1dad9b646d9552cfd77dde021c4659a9a",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
