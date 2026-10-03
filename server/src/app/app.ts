@@ -78,6 +78,8 @@ import {
 import { AnalysisRateLimiter } from '../platform/limits.ts'
 import { AnalyzeService } from '../features/analysis/service.ts'
 import { parseAnalysisInputRequest } from '../features/analysis/wire.ts'
+import { FuturesSessionRuntime } from '../features/paper-futures/futures-session-runtime.ts'
+import { registerTerminalStream } from '../features/terminal-stream/terminal-stream.ts'
 
 export interface AnalysisDependencies {
   client: GeminiClient
@@ -284,6 +286,7 @@ export async function buildApp(options: {
   overrides?: Partial<AnalysisDependencies & MarketDependencies>
 }): Promise<FastifyInstance> {
   const { config } = options
+  const legacyServicesEnabled = config.futuresMode === undefined
   const marketFetch: MarketRestFetch =
     options.overrides?.marketFetch ??
     ((input, init) => globalThis.fetch(input, init))
@@ -297,9 +300,10 @@ export async function buildApp(options: {
   const cache =
     options.overrides?.cache ??
     new AnalysisCache(config.cacheMaxEntries, config.cacheTtlMs)
-  const rawClient =
-    options.overrides?.client ??
-    (config.apiKey === '' ? undefined : createGeminiClient(config.apiKey))
+  const rawClient = legacyServicesEnabled
+    ? (options.overrides?.client ??
+      (config.apiKey === '' ? undefined : createGeminiClient(config.apiKey)))
+    : undefined
   const geminiGate =
     rawClient === undefined ? undefined : new GeminiGate(rawClient)
   const client = geminiGate
@@ -317,12 +321,13 @@ export async function buildApp(options: {
 
   let marketStore: MarketStore | undefined
   if (
-    config.krakenWsCollectorEnabled ||
-    config.krakenPaperTradingEnabled ||
-    config.krakenRestOhlcWorkerEnabled ||
-    config.newsPollingEnabled ||
-    config.treeNewsEnabled ||
-    config.extraNewsRssSources.length > 0 ||
+    (legacyServicesEnabled &&
+      (config.krakenWsCollectorEnabled ||
+        config.krakenPaperTradingEnabled ||
+        config.krakenRestOhlcWorkerEnabled ||
+        config.newsPollingEnabled ||
+        config.treeNewsEnabled ||
+        config.extraNewsRssSources.length > 0)) ||
     options.overrides?.marketStore !== undefined
   ) {
     marketStore =
@@ -542,6 +547,38 @@ export async function buildApp(options: {
   )
 
   const app = Fastify({ logger: false })
+  const futuresRuntime =
+    config.futuresMode === undefined
+      ? undefined
+      : config.futuresMode === 'mock'
+        ? new FuturesSessionRuntime({
+            dbPath: config.futuresDbPath,
+            mode: config.futuresMode,
+          })
+        : (() => {
+            throw new Error(
+              `FUTURES_MODE=${config.futuresMode} is not available in this runtime build; refusing to substitute mock data.`,
+            )
+          })()
+  if (futuresRuntime !== undefined) {
+    registerTerminalStream(app, {
+      store: futuresRuntime.store,
+      runner: futuresRuntime.runner,
+      commandFactory: futuresRuntime.commandFactory,
+      newRunFactory: futuresRuntime.newRunFactory,
+      commandExecutor: futuresRuntime.commandExecutor,
+      onNewRunCreated: futuresRuntime.activateRun,
+    })
+    app.get('/api/terminal/bootstrap', () => ({
+      schema_version: 1,
+      mode: config.futuresMode,
+      source:
+        config.futuresMode === 'mock' ? 'versioned-mock-fixture.v1' : null,
+      active_run_id: futuresRuntime.runId,
+    }))
+    app.addHook('onReady', async () => futuresRuntime.start())
+    app.addHook('onClose', async () => futuresRuntime.close())
+  }
 
   const proxyMarketRequest = async (
     reply: FastifyReply,

@@ -39,6 +39,14 @@ export type TerminalWorkerRequestFactory = (
   command: TerminalPaperCommand,
 ) => FuturesWorkerRequest
 
+export type TerminalCommandExecutor = (
+  request: FuturesWorkerRequest,
+  metadata: TerminalCommandMetadata,
+) => {
+  readonly acknowledgement: Record<string, unknown>
+  readonly result: Promise<Record<string, unknown>>
+}
+
 export interface TerminalStreamOptions {
   readonly store: FuturesStore
   readonly runner: FuturesCommandRunner
@@ -53,6 +61,8 @@ export interface TerminalStreamOptions {
     command: TerminalPaperCommand,
     childRunId: string,
   ) => FuturesWorkerRequest
+  readonly commandExecutor?: TerminalCommandExecutor
+  readonly onNewRunCreated?: (runId: string) => void
 }
 
 interface StreamEnvelope {
@@ -721,11 +731,15 @@ export function registerTerminalStream(
             .digest('hex'),
           ...parent,
         })
+        options.onNewRunCreated?.(childRunId)
       } else if (command.action === 'paper.new_run')
         throw new Error('new_run_factory_required')
       if (
         request.work_id !== command.command_id ||
-        request.expected_state_version !== command.expected_state_version ||
+        request.expected_state_version !==
+          (command.action === 'paper.new_run'
+            ? 0
+            : command.expected_state_version) ||
         request.payload.operation === undefined ||
         ![
           'futures_runtime.v1',
@@ -754,7 +768,9 @@ export function registerTerminalStream(
         ? { child_run_id: request.run_id }
         : {}),
     }
-    const accepted = runner.accept(request, terminalCommand)
+    const accepted =
+      options.commandExecutor?.(request, terminalCommand) ??
+      runner.accept(request, terminalCommand)
     if (
       accepted.acknowledgement.command_id !== command.command_id ||
       accepted.acknowledgement.status !== 'accepted'
@@ -762,29 +778,8 @@ export function registerTerminalStream(
       throw new Error('durable_command_ack_invalid')
     if (command.action === 'paper.new_run') {
       const childRunId = request.run_id
-      store.appendTerminalEvents(command.run_id, [
-        {
-          type: 'command.ack',
-          data: {
-            command_id: command.command_id,
-            status: 'accepted',
-            child_run_id: childRunId,
-          },
-        },
-      ])
       try {
         const result = await accepted.result
-        store.appendTerminalEvents(command.run_id, [
-          {
-            type: 'command.result',
-            data: {
-              command_id: command.command_id,
-              status: 'committed',
-              child_run_id: childRunId,
-              result,
-            },
-          },
-        ])
         await waitUntilIdle(session)
         await subscribe(session, childRunId)
         return result
@@ -795,17 +790,6 @@ export function registerTerminalStream(
           error_code: 'execution_failed',
           child_run_id: childRunId,
         })
-        store.appendTerminalEvents(command.run_id, [
-          {
-            type: 'command.result',
-            data: {
-              command_id: command.command_id,
-              status: 'failed',
-              child_run_id: childRunId,
-              result: failed,
-            },
-          },
-        ])
         return failed
       }
     }

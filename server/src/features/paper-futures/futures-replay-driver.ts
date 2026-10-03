@@ -45,6 +45,7 @@ type DriverOptions = {
   manifest: ReplayManifest
   apply: (work: RuntimeWork) => Promise<RuntimeReceipt>
   durableStore?: FuturesStore
+  initialStateVersion?: number
 }
 
 type AppliedWork = RuntimeWork & { receipt: RuntimeReceipt }
@@ -71,6 +72,13 @@ export class FuturesReplayDriver {
     this.manifest = structuredClone(options.manifest)
     this.apply = options.apply
     this.durableStore = options.durableStore
+    if (
+      options.initialStateVersion !== undefined &&
+      (!Number.isSafeInteger(options.initialStateVersion) ||
+        options.initialStateVersion < 0)
+    )
+      throw new Error('Replay state version is invalid.')
+    this.stateVersion = options.initialStateVersion ?? 0
   }
 
   async processEvent(input: CausalInput, cutoff = input.received_at_ms) {
@@ -472,6 +480,66 @@ export class FuturesReplayDriver {
       options.instrument,
       options.controlForSource,
     )
+    return driver
+  }
+
+  static async resumeSession(
+    options: DriverOptions & {
+      durableStore: FuturesStore
+      instrument: Record<string, unknown>
+    },
+  ): Promise<FuturesReplayDriver> {
+    const driver = new FuturesReplayDriver(options)
+    const binding = {
+      schema_version: 'futures-replay-session.v1',
+      run_id: options.runId,
+      manifest: driver.manifest,
+      instrument_hash: canonicalHash(options.instrument),
+    }
+    driver.durableBinding = binding
+    const restored = options.durableStore.loadReplaySession(
+      options.runId,
+      binding,
+    )
+    for (const item of restored.works) {
+      const work = item as RuntimeWork & { receipt: RuntimeReceipt | null }
+      const input = work.input
+      const inputHash = canonicalHash(input)
+      driver.inputs.push(structuredClone(input))
+      driver.bySequence.set(input.sequence, inputHash)
+      driver.lastSequence = Math.max(driver.lastSequence, input.sequence)
+      driver.virtualTime = Math.max(driver.virtualTime, work.virtual_time_ms)
+      const identity = canonicalHash({
+        cycleKey:
+          input.cycle_key ?? `received:${input.sequence}:state:${work.version}`,
+        evidence: inputHash,
+      })
+      let receipt = work.receipt
+      if (!receipt) {
+        receipt = await driver.apply(work)
+        if (
+          receipt.status !== 'committed' ||
+          receipt.applied_state_version !== driver.stateVersion + 1
+        )
+          throw new Error(
+            'Prepared replay work did not commit during restoration.',
+          )
+        options.durableStore.commitReplayWork(
+          options.runId,
+          work.work_id,
+          receipt,
+        )
+      }
+      driver.work.push({ ...work, receipt: structuredClone(receipt) })
+      driver.byWorkIdentity.set(identity, {
+        ...work,
+        receipt: structuredClone(receipt),
+      })
+      driver.stateVersion = Math.max(
+        driver.stateVersion,
+        receipt.applied_state_version,
+      )
+    }
     return driver
   }
 

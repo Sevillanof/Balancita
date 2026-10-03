@@ -49,6 +49,8 @@ export interface ServerConfig {
   intelligenceStreamMaxClients: number
   intelligenceStreamKeepAliveMs: number
   intelligenceStreamWindowSize: number
+  futuresMode: 'mock' | 'paper_live' | 'replay' | undefined
+  futuresDbPath: string
 }
 
 const DEFAULT_MODEL = 'gemini-3.5-flash-lite'
@@ -187,7 +189,21 @@ export function serverConfigFrom(
       'INTELLIGENCE_SSE_WINDOW_SIZE',
       200,
     ),
+    futuresMode: futuresMode(env.FUTURES_MODE),
+    futuresDbPath: stringValue(
+      env,
+      'FUTURES_DB_PATH',
+      './data/futures-paper.sqlite',
+    ),
   }
+}
+
+function futuresMode(raw: string | undefined): ServerConfig['futuresMode'] {
+  if (raw === undefined || raw === '') return undefined
+  if (raw === 'mock' || raw === 'paper_live' || raw === 'replay') return raw
+  throw new ServerConfigError(
+    'FUTURES_MODE must be mock, paper_live, or replay when specified.',
+  )
 }
 
 function collectorFlag(

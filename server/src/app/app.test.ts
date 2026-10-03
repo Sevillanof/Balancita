@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -20,6 +20,10 @@ import type { SupportedInstrumentId } from '../domain/contracts.ts'
 import type { NewsHttpFetcher } from '../features/news/rss-collector.ts'
 import { MarketStore } from '../features/market-data/market-store.ts'
 import { createShadowRunStart } from '../features/shadow-runs/shadow-run.ts'
+import WebSocket from 'ws'
+import { randomUUID } from 'node:crypto'
+import { FuturesStore } from '../features/paper-futures/futures-store.ts'
+import { createMockMarketSnapshot } from '../features/paper-futures/futures-session-runtime.ts'
 
 const resultText = JSON.stringify({
   instrumentId: 'BTC-EUR',
@@ -74,6 +78,454 @@ class FakeGeminiClient implements GeminiClient {
 }
 
 describe('app test configuration', () => {
+  it('keeps futures disabled by default and parses only explicit run modes', () => {
+    expect(testConfigFrom({}).futuresMode).toBeUndefined()
+    expect(testConfigFrom({ FUTURES_MODE: 'mock' }).futuresMode).toBe('mock')
+    expect(testConfigFrom({ FUTURES_MODE: 'paper_live' }).futuresMode).toBe(
+      'paper_live',
+    )
+    expect(testConfigFrom({ FUTURES_MODE: 'replay' }).futuresMode).toBe(
+      'replay',
+    )
+    expect(() => testConfigFrom({ FUTURES_MODE: 'live' })).toThrow(
+      'FUTURES_MODE must be mock, paper_live, or replay when specified.',
+    )
+  })
+
+  it('registers an explicitly selected offline futures runtime during buildApp startup', async () => {
+    const app = await buildApp({
+      config: testConfigFrom({
+        FUTURES_MODE: 'mock',
+        FUTURES_DB_PATH: ':memory:',
+      }),
+    })
+    try {
+      await app.ready()
+      const response = await app.inject({
+        method: 'GET',
+        url: '/api/terminal/stream',
+      })
+      expect(response.statusCode).toBe(426)
+      expect(response.json()).toEqual({
+        error: { code: 'websocket_required' },
+      })
+    } finally {
+      await app.close()
+    }
+  })
+
+  it('does not open the legacy market database in explicit mock mode', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'balancita-mode-isolation-'))
+    const marketPath = join(directory, 'legacy-market.sqlite')
+    const futuresPath = join(directory, 'futures.sqlite')
+    const config = serverConfigFrom({
+      FUTURES_MODE: 'mock',
+      FUTURES_DB_PATH: futuresPath,
+      MARKET_DB_PATH: marketPath,
+    })
+    const app = await buildApp({
+      config,
+      overrides: {
+        ohlcCollector: new FakeOhlcCollector(),
+        marketCollector: new FakeMarketCollector(),
+      },
+    })
+    try {
+      await app.ready()
+      expect(existsSync(marketPath)).toBe(false)
+      expect(existsSync(futuresPath)).toBe(true)
+    } finally {
+      await app.close()
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
+  it.each(['paper_live', 'replay'] as const)(
+    'fails closed for explicit %s rather than silently selecting mock',
+    async (mode) => {
+      await expect(
+        buildApp({
+          config: testConfigFrom({
+            FUTURES_MODE: mode,
+            FUTURES_DB_PATH: ':memory:',
+          }),
+        }),
+      ).rejects.toThrow(
+        `FUTURES_MODE=${mode} is not available in this runtime build; refusing to substitute mock data.`,
+      )
+    },
+  )
+
+  it('shares one offline Python/SQLite runtime across two WebSocket subscribers', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'balancita-futures-app-'))
+    const dbPath = join(directory, 'futures.sqlite')
+    const config = testConfigFrom({
+      FUTURES_MODE: 'mock',
+      FUTURES_DB_PATH: dbPath,
+    })
+    let app = await buildApp({
+      config,
+    })
+    let first: WebSocket | undefined
+    let second: WebSocket | undefined
+    try {
+      await app.ready()
+      const bootstrap = await app.inject({
+        method: 'GET',
+        url: '/api/terminal/bootstrap',
+      })
+      const { active_run_id: runId } = bootstrap.json() as {
+        active_run_id: string
+      }
+      const address = await app.listen({ port: 0, host: '127.0.0.1' })
+      const connect = async () => {
+        const socket = new WebSocket(
+          address.replace('http:', 'ws:') + '/api/terminal/stream',
+          { origin: 'http://localhost' },
+        )
+        await new Promise<void>((resolve, reject) => {
+          socket.once('open', resolve)
+          socket.once('error', reject)
+        })
+        const received: Record<string, unknown>[] = []
+        socket.on('message', (raw) => {
+          received.push(JSON.parse(raw.toString()) as Record<string, unknown>)
+        })
+        return { socket, received }
+      }
+      const one = await connect()
+      first = one.socket
+      const two = await connect()
+      second = two.socket
+      const waitFor = async (
+        received: Record<string, unknown>[],
+        predicate: (item: Record<string, unknown>) => boolean,
+      ) => {
+        const deadline = Date.now() + 10_000
+        while (Date.now() < deadline) {
+          const match = received.find(predicate)
+          if (match) return match
+          await new Promise((resolve) => setTimeout(resolve, 10))
+        }
+        throw new Error(
+          `Timed out waiting for terminal event: ${JSON.stringify(received)}`,
+        )
+      }
+      for (const socket of [one.socket, two.socket])
+        socket.send(
+          JSON.stringify({
+            schema_version: 1,
+            type: 'subscribe',
+            run_id: runId,
+          }),
+        )
+      await Promise.all([
+        waitFor(one.received, (item) => item.type === 'snapshot'),
+        waitFor(two.received, (item) => item.type === 'snapshot'),
+      ])
+      const initialState = (
+        one.received.find((item) => item.type === 'snapshot')!.data as Record<
+          string,
+          unknown
+        >
+      ).state as Record<string, unknown>
+      expect(initialState.account).toMatchObject({
+        cash_usd: '10000',
+        equity_usd: '10000',
+        funding_complete: false,
+        net_usd: null,
+      })
+      const commandId = randomUUID()
+      one.socket.send(
+        JSON.stringify({
+          schema_version: 1,
+          type: 'paper.command',
+          run_id: runId,
+          command_id: commandId,
+          expected_state_version: 0,
+          action: 'paper.start',
+        }),
+      )
+      const analysis = await Promise.all([
+        waitFor(one.received, (item) => item.type === 'analysis.completed'),
+        waitFor(two.received, (item) => item.type === 'analysis.completed'),
+      ])
+      expect(analysis[0]?.event_id).toBe(analysis[1]?.event_id)
+      expect(analysis[0]?.seq).toBe(analysis[1]?.seq)
+      const [acknowledgement, result] = await Promise.all([
+        waitFor(one.received, (item) => item.type === 'command.ack'),
+        waitFor(one.received, (item) => item.type === 'command.result'),
+      ])
+      expect(acknowledgement.data).toMatchObject({
+        command_id: commandId,
+        status: 'accepted',
+      })
+      expect(result.data).toMatchObject({
+        command_id: commandId,
+        result: {
+          result: { status: 'committed' },
+        },
+      })
+      expect(Number(acknowledgement.seq)).toBeLessThan(Number(result.seq))
+      const sendCommand = async (
+        action: 'paper.pause' | 'paper.close',
+        expectedStateVersion: number,
+      ) => {
+        const id = randomUUID()
+        const completion = waitFor(
+          one.received,
+          (item) =>
+            item.type === 'command.result' &&
+            (item.data as Record<string, unknown>).command_id === id,
+        )
+        one.socket.send(
+          JSON.stringify({
+            schema_version: 1,
+            type: 'paper.command',
+            run_id: runId,
+            command_id: id,
+            expected_state_version: expectedStateVersion,
+            action,
+          }),
+        )
+        return completion
+      }
+      const fillFromLaterMockBook = await sendCommand('paper.pause', 1)
+      expect(one.received.some((item) => item.type === 'fill.created')).toBe(
+        true,
+      )
+      expect(
+        fillFromLaterMockBook.data as Record<string, unknown>,
+      ).toMatchObject({ command_id: expect.any(String) })
+      await sendCommand('paper.close', 2)
+      await sendCommand('paper.pause', 3)
+      const firstFills = one.received.filter(
+        (item) => item.type === 'fill.created',
+      )
+      const secondFills = two.received.filter(
+        (item) => item.type === 'fill.created',
+      )
+      expect(firstFills).toHaveLength(2)
+      expect(firstFills.map((item) => item.event_id)).toEqual(
+        secondFills.map((item) => item.event_id),
+      )
+      expect(
+        firstFills
+          .map(
+            (item) =>
+              (item.data as Record<string, unknown>).fill as Record<
+                string,
+                unknown
+              >,
+          )
+          .map((fill) => fill.event_time_ms),
+      ).toEqual([21_600_100, 21_600_300])
+      const snapshot = await app.inject({
+        method: 'GET',
+        url: '/api/terminal/bootstrap',
+      })
+      expect(snapshot.json()).toMatchObject({
+        mode: 'mock',
+        source: 'versioned-mock-fixture.v1',
+      })
+      expect(bootstrap.statusCode).toBe(200)
+
+      const runCursor = Number(result.seq)
+      first.close()
+      second.close()
+      first = undefined
+      second = undefined
+      await app.close()
+      app = await buildApp({ config })
+      await app.ready()
+      const restartedAddress = await app.listen({ port: 0, host: '127.0.0.1' })
+      const restarted = await connectAt(restartedAddress, runId)
+      first = restarted.socket
+      const restoredSnapshot = await waitFor(
+        restarted.received,
+        (item) => item.type === 'snapshot',
+      )
+      expect(restoredSnapshot.run_id).toBe(runId)
+      expect(Number(restoredSnapshot.seq)).toBeGreaterThanOrEqual(runCursor)
+      const restoredState = (restoredSnapshot.data as Record<string, unknown>)
+        .state as Record<string, unknown>
+      expect(restoredState.currency).toBe('USD')
+      expect(restoredState.quantity_unit).toBe('BTC')
+      expect(restoredState.position).toBeNull()
+      expect(restoredState.account).toMatchObject({
+        cash_usd: '10000',
+        realized_gross_usd: '-0.0099',
+        fees_usd: '0.99000495',
+        net_usd: null,
+      })
+      expect(
+        (restoredState.account as Record<string, unknown>).funding_complete,
+      ).toBe(false)
+      expect(
+        (restoredState.account as Record<string, unknown>).net_usd,
+      ).toBeNull()
+      const postRestartCommand = randomUUID()
+      const postRestartResult = waitFor(
+        restarted.received,
+        (item) =>
+          item.type === 'command.result' &&
+          (item.data as Record<string, unknown>).command_id ===
+            postRestartCommand,
+      )
+      restarted.socket.send(
+        JSON.stringify({
+          schema_version: 1,
+          type: 'paper.command',
+          run_id: runId,
+          command_id: postRestartCommand,
+          expected_state_version: 4,
+          action: 'paper.pause',
+        }),
+      )
+      await postRestartResult
+      expect(
+        restarted.received.some(
+          (item) =>
+            item.type === 'analysis.completed' &&
+            (item.data as Record<string, unknown>).command_id ===
+              postRestartCommand,
+        ),
+      ).toBe(true)
+      const newRunCommand = randomUUID()
+      const childSnapshot = waitFor(
+        restarted.received,
+        (item) => item.type === 'snapshot' && item.run_id !== runId,
+      )
+      restarted.socket.send(
+        JSON.stringify({
+          schema_version: 1,
+          type: 'paper.command',
+          run_id: runId,
+          command_id: newRunCommand,
+          expected_state_version: 5,
+          action: 'paper.new_run',
+        }),
+      )
+      const child = await childSnapshot
+      expect(child.run_id).not.toBe(runId)
+      expect(
+        Number((child.data as Record<string, unknown>).watermark),
+      ).toBeGreaterThan(0)
+      const activeRun = await app.inject({
+        method: 'GET',
+        url: '/api/terminal/bootstrap',
+      })
+      expect(activeRun.json()).toMatchObject({ active_run_id: child.run_id })
+    } finally {
+      first?.close()
+      second?.close()
+      await app.close()
+      rmSync(directory, { recursive: true, force: true })
+    }
+
+    async function connectAt(address: string, runId: string) {
+      const socket = new WebSocket(
+        address.replace('http:', 'ws:') + '/api/terminal/stream',
+        { origin: 'http://localhost' },
+      )
+      await new Promise<void>((resolve, reject) => {
+        socket.once('open', resolve)
+        socket.once('error', reject)
+      })
+      const received: Record<string, unknown>[] = []
+      socket.on('message', (raw) => {
+        const item = JSON.parse(raw.toString()) as Record<string, unknown>
+        received.push(item)
+      })
+      socket.send(
+        JSON.stringify({ schema_version: 1, type: 'subscribe', run_id: runId }),
+      )
+      return { socket, received }
+    }
+  }, 20_000)
+
+  it('recovers a durably accepted futures command during actual app startup', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'balancita-pending-startup-'))
+    const dbPath = join(directory, 'futures.sqlite')
+    const config = testConfigFrom({
+      FUTURES_MODE: 'mock',
+      FUTURES_DB_PATH: dbPath,
+    })
+    let app = await buildApp({ config })
+    let socket: WebSocket | undefined
+    try {
+      await app.ready()
+      await app.close()
+      const store = new FuturesStore(dbPath)
+      const runId = 'futures-session:primary'
+      const definition = store.getRunDefinition(runId)
+      const binding = definition.runtime as {
+        runtime_config: Record<string, unknown>
+        instrument_spec: Record<string, unknown>
+      }
+      const commandId = randomUUID()
+      const request = {
+        request_id: commandId,
+        run_id: runId,
+        work_id: commandId,
+        expected_state_version: 0,
+        payload: {
+          operation: 'futures_runtime.v3',
+          runtime_config: binding.runtime_config,
+          instrument: binding.instrument_spec,
+          market_snapshot: createMockMarketSnapshot(21_600_000, false),
+        },
+      }
+      store.acceptCommand(commandId, request, undefined, null, {
+        command_id: commandId,
+        action: 'paper.start',
+        stream_run_id: runId,
+        expected_state_version: 0,
+      })
+      store.close()
+
+      app = await buildApp({ config })
+      await app.ready()
+      const address = await app.listen({ port: 0, host: '127.0.0.1' })
+      socket = new WebSocket(
+        address.replace('http:', 'ws:') + '/api/terminal/stream',
+        { origin: 'http://localhost' },
+      )
+      await new Promise<void>((resolve, reject) => {
+        socket!.once('open', resolve)
+        socket!.once('error', reject)
+      })
+      const messages: Record<string, unknown>[] = []
+      socket.on('message', (raw) => {
+        messages.push(JSON.parse(raw.toString()) as Record<string, unknown>)
+      })
+      socket.send(
+        JSON.stringify({ schema_version: 1, type: 'subscribe', run_id: runId }),
+      )
+      const deadline = Date.now() + 10_000
+      let snapshot: Record<string, unknown> | undefined
+      while (Date.now() < deadline) {
+        snapshot = messages.find((item) => item.type === 'snapshot')
+        if (snapshot) break
+        await new Promise((resolve) => setTimeout(resolve, 10))
+      }
+      expect(snapshot).toBeDefined()
+      const state = (snapshot!.data as Record<string, unknown>).state as Record<
+        string,
+        unknown
+      >
+      expect(state.state_version).toBe(1)
+      expect(state.analyses).toHaveLength(1)
+      expect((state.analyses as Record<string, unknown>[])[0]?.action).toBe(
+        'WAIT',
+      )
+    } finally {
+      socket?.close()
+      await app.close()
+      rmSync(directory, { recursive: true, force: true })
+    }
+  }, 20_000)
+
   it('opts out of live paper and REST workers by default while preserving explicit environment overrides', () => {
     expect(testConfigFrom({})).toMatchObject({
       krakenPaperTradingEnabled: false,

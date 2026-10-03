@@ -262,6 +262,7 @@ export class FuturesStore {
         JSON.parse(projection.state_json) as JsonRecord,
         runId,
         analyses,
+        isRecord(frozen.seed) ? frozen.seed.cash_usd : null,
       )
       this.db.exec('COMMIT')
       return {
@@ -719,6 +720,15 @@ export class FuturesStore {
           ? frozen.revision_id
           : canonicalHash(frozen),
     }
+  }
+
+  getLatestRunId(): string | undefined {
+    const row = this.db
+      .prepare(
+        'SELECT run_id FROM paper_futures_runs ORDER BY rowid DESC LIMIT 1',
+      )
+      .get() as { run_id: string } | undefined
+    return row?.run_id
   }
 
   appendTerminalEvents(
@@ -1607,6 +1617,7 @@ function projectTerminalState(
   projection: JsonRecord,
   runId: string,
   analyses: readonly JsonRecord[],
+  initialCash: unknown,
 ): JsonRecord {
   const checkpoint = isRecord(projection.checkpoint)
     ? projection.checkpoint
@@ -1617,10 +1628,11 @@ function projectTerminalState(
     : {}
   const decimal = (value: unknown): string | null =>
     typeof value === 'string' && /^-?\d+(?:\.\d+)?$/.test(value) ? value : null
-  const cash = decimal(checkpoint.cash_usd)
-  const funding = decimal(checkpoint.funding_paid)
-  const fees = decimal(checkpoint.fees_usd)
-  const realized = decimal(checkpoint.realized_gross_usd)
+  const seedCash = decimal(initialCash)
+  const cash = decimal(checkpoint.cash_usd) ?? seedCash
+  const funding = decimal(checkpoint.funding_paid) ?? '0'
+  const fees = decimal(checkpoint.fees_usd) ?? '0'
+  const realized = decimal(checkpoint.realized_gross_usd) ?? '0'
   const position = isRecord(checkpoint.ledger_position)
     ? checkpoint.ledger_position
     : null
@@ -1802,8 +1814,12 @@ function validateFrozenRun(input: {
     !isRecord(input.costs)
   )
     throw new Error('Invalid frozen futures run identity.')
-  assertKeys(input.config, ['ledger_version', 'decimal_precision', 'leverage'])
-  assertKeys(input.seed, ['cash_usd'])
+  assertKeys(
+    input.config,
+    ['ledger_version', 'decimal_precision', 'leverage'],
+    ['mode', 'mode_config_hash'],
+  )
+  assertKeys(input.seed, ['cash_usd'], ['seed', 'source'])
   assertKeys(input.instrument, ['instrument_id'])
   assertKeys(input.costs, ['version', 'maker', 'taker'])
   if (
@@ -1813,6 +1829,14 @@ function validateFrozenRun(input: {
     (input.config.decimal_precision as number) > 100
   )
     throw new Error('Unsupported frozen ledger configuration.')
+  if (
+    (input.config.mode !== undefined &&
+      !['mock', 'paper_live', 'replay'].includes(String(input.config.mode))) ||
+    (input.config.mode_config_hash !== undefined &&
+      (typeof input.config.mode_config_hash !== 'string' ||
+        !/^[a-f0-9]{64}$/.test(input.config.mode_config_hash)))
+  )
+    throw new Error('Unsupported frozen futures run mode metadata.')
   const leverage = canonicalDecimal(
     input.config.leverage,
     'leverage',
