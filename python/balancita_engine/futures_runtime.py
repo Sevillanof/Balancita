@@ -10,10 +10,21 @@ from decimal import Decimal, InvalidOperation, ROUND_CEILING, ROUND_FLOOR, local
 from .canonical import normalize_decimal, normalize_timestamp_ms
 from .futures_indicators import calculate_features
 from .futures_ledger import FuturesLedger
+from .futures_strategies import (
+    C25_ID,
+    C26_ID,
+    C27_ID,
+    C28_ID,
+    STRATEGY_IDS,
+    propose as propose_strategy,
+    select_proposal,
+    update_regime,
+)
 
 
 RUNTIME_VERSION = "c27-breakout-perp-v1"
 CHECKPOINT_VERSION = 1
+STRATEGY_CHECKPOINT_VERSION = 2
 FEATURE_INTERVAL_MS = 60_000
 ZERO = Decimal(0)
 ONE = Decimal(1)
@@ -61,6 +72,11 @@ class FuturesRuntime:
             raise ValueError("runtime config must be a mapping")
         self.run_id = run_id
         self.config = deepcopy(config)
+        self.runtime_version = (
+            "futures-strategy-baseline-perp-v1"
+            if self.config.get("version") == "futures-runtime-strategies.v1"
+            else RUNTIME_VERSION
+        )
         self.instrument = deepcopy(instrument) if isinstance(instrument, dict) else None
         self._validate_config()
         self._ledger_config = {
@@ -78,6 +94,7 @@ class FuturesRuntime:
         self.signal_keys = set()
         self.consumed_depth = {}
         self.funding_cursor_ms = None
+        self.regime = "unknown"
         if checkpoint is not None:
             self._restore(checkpoint)
 
@@ -105,6 +122,8 @@ class FuturesRuntime:
             if key not in ("version", "cost_version")
         }
         if (
+            self.config["version"] not in ("futures-runtime-lab.v1", "futures-runtime-strategies.v1")
+            or
             values["initial_cash_usd"] < 0
             or values["max_notional_usd"] <= 0
             or values["max_exposure_multiple"] <= 0
@@ -133,6 +152,9 @@ class FuturesRuntime:
         fills = []
         orders = []
         features = self._features(evidence, now)
+        strategy_context = None
+        if self.config["version"] == "futures-runtime-strategies.v1":
+            strategy_context = self._strategy_context(evidence, now, cutoff, features)
         guard = self._market_guard(market, book, ticker, now, cutoff)
 
         if self.ledger.position is not None:
@@ -141,6 +163,15 @@ class FuturesRuntime:
                 should_close, close_reason = self._should_close(
                     control, features, mark, now
                 )
+                if (
+                    not should_close
+                    and strategy_context is not None
+                    and strategy_context["selector"].get("action") == "FLAT"
+                ):
+                    should_close = True
+                    close_reason = strategy_context["selector"].get(
+                        "reason_code", "owner_exit_condition_met"
+                    )
             else:
                 should_close, close_reason = False, guard
             if should_close and guard is None:
@@ -156,25 +187,45 @@ class FuturesRuntime:
                 features,
                 self.owner_strategy_id,
             )
+            if strategy_context is not None:
+                analysis.update(strategy_context)
             risk = {"status": "not_applicable", "reason_codes": []}
         elif guard is not None:
             analysis = self._analysis("WAIT", guard, features)
+            if strategy_context is not None:
+                analysis.update(strategy_context)
             risk = {"status": "not_evaluated", "reason_codes": [guard]}
         elif not features.get("ready"):
             reason = (features.get("reason_codes") or ["features_unavailable"])[0]
             analysis = self._analysis("WAIT", reason, features)
+            if strategy_context is not None:
+                analysis.update(strategy_context)
             risk = {"status": "not_evaluated", "reason_codes": [reason]}
         else:
-            proposal = self._proposal(features)
+            selected = strategy_context["selector"] if strategy_context is not None else None
+            if strategy_context is not None:
+                proposal = None
+                if selected.get("action") in ("LONG", "SHORT"):
+                    proposal = (
+                        selected["action"].lower(),
+                        selected.get("signal_key"),
+                    )
+            else:
+                proposal = self._proposal(features)
             if proposal is None:
-                analysis = self._analysis("WAIT", "no_c27_breakout", features)
-                risk = {"status": "not_evaluated", "reason_codes": ["no_c27_breakout"]}
+                reason = selected.get("reason_code", "no_c27_breakout") if strategy_context is not None else "no_c27_breakout"
+                analysis = self._analysis("WAIT", reason, features)
+                risk = {"status": "not_evaluated", "reason_codes": [reason]}
+                if strategy_context is not None:
+                    analysis.update(strategy_context)
             else:
                 side, signal_key = proposal
-                strategy_id = RUNTIME_VERSION
+                strategy_id = selected["strategy_id"] if strategy_context is not None else RUNTIME_VERSION
                 if signal_key in self.signal_keys:
                     analysis = self._analysis("WAIT", "signal_already_evaluated", features)
                     risk = {"status": "not_evaluated", "reason_codes": ["signal_already_evaluated"]}
+                    if strategy_context is not None:
+                        analysis.update(strategy_context)
                 else:
                     self.signal_keys.add(signal_key)
                     levels = book.get("asks" if side == "long" else "bids", [])
@@ -183,12 +234,18 @@ class FuturesRuntime:
                         analysis = self._analysis("WAIT", "missing_executable_depth", features)
                         risk = {"status": "rejected", "reason_codes": ["missing_executable_depth"]}
                     else:
-                        plan = self._risk_plan(side, best_price, features)
+                        plan = self._risk_plan(
+                            side,
+                            best_price,
+                            features,
+                            selected if strategy_context is not None else None,
+                        )
                         if plan["quantity"] <= 0:
                             analysis = self._analysis("WAIT", plan["reason"], features)
                             risk = {"status": "rejected", "reason_codes": [plan["reason"]]}
                         else:
-                            analysis = self._analysis(side, "c27_volume_breakout", features, strategy_id)
+                            reason = selected["reason_code"] if strategy_context is not None else "c27_volume_breakout"
+                            analysis = self._analysis(side, reason, features, strategy_id)
                             risk = {
                                 "status": "accepted",
                                 "quantity_btc": _text(plan["quantity"]),
@@ -227,17 +284,24 @@ class FuturesRuntime:
                                     "opened_at_ms": now,
                                     "signal_key": signal_key,
                                 }
+                                if strategy_context is not None:
+                                    self.position_protection["strategy_target"] = selected.get("proposed_target")
+                                    self.position_protection["strategy_invalidation"] = selected.get("invalidation")
                                 self.funding_cursor_ms = now
                                 self._observe_funding(evidence, now, cutoff)
                             else:
                                 analysis = self._analysis("WAIT", "ioc_unfilled", features)
+                            if strategy_context is not None:
+                                analysis.update(strategy_context)
 
+        if strategy_context is not None:
+            analysis.update(strategy_context)
         position = self._position(mark)
         account = None if mark is None else self.ledger.snapshot(_text(mark))
         return {
             "schema_version": "futures-runtime-result.v1",
             "run_id": self.run_id,
-            "runtime_version": RUNTIME_VERSION,
+            "runtime_version": self.runtime_version,
             "analysis": analysis,
             "risk": risk,
             "orders": orders,
@@ -258,8 +322,8 @@ class FuturesRuntime:
                 for key, value in raw.items()
             }
         return {
-            "schema_version": CHECKPOINT_VERSION,
-            "runtime_version": RUNTIME_VERSION,
+            "schema_version": self._checkpoint_version,
+            "runtime_version": self.runtime_version,
             "run_id": self.run_id,
             "instrument_id": None if self.instrument is None else self.instrument.get("instrument_id"),
             "runtime_config": deepcopy(self.config),
@@ -292,13 +356,18 @@ class FuturesRuntime:
                 }
                 for snapshot, levels in sorted(self.consumed_depth.items())
             },
+            **({"regime": self.regime} if self.runtime_version != RUNTIME_VERSION else {}),
         }
+
+    @property
+    def _checkpoint_version(self):
+        return STRATEGY_CHECKPOINT_VERSION if self.runtime_version != RUNTIME_VERSION else CHECKPOINT_VERSION
 
     def _restore(self, checkpoint):
         if (
             not isinstance(checkpoint, dict)
-            or checkpoint.get("schema_version") != CHECKPOINT_VERSION
-            or checkpoint.get("runtime_version") != RUNTIME_VERSION
+            or checkpoint.get("schema_version") != self._checkpoint_version
+            or checkpoint.get("runtime_version") != self.runtime_version
             or checkpoint.get("run_id") != self.run_id
         ):
             raise ValueError("unsupported or mismatched futures runtime checkpoint")
@@ -340,6 +409,9 @@ class FuturesRuntime:
         }
         ledger.events = deepcopy(checkpoint.get("ledger_events", []))
         self.owner_strategy_id = checkpoint.get("owner_strategy_id")
+        self.regime = checkpoint.get("regime", "unknown")
+        if self.regime not in ("unknown", "trend", "range"):
+            raise ValueError("checkpoint regime is invalid")
         self.position_protection = deepcopy(checkpoint.get("position_protection"))
         self.signal_keys = set(checkpoint.get("signal_keys", []))
         raw_depth = checkpoint.get("consumed_depth", {})
@@ -424,6 +496,64 @@ class FuturesRuntime:
             result[str(interval)] = features
         return result["60000"]
 
+    def _strategy_context(self, events, now, cutoff, features):
+        bars_by_interval = {}
+        for interval in (FEATURE_INTERVAL_MS, 300_000):
+            bars = sorted(
+                [event for event in events if event.get("type") == "candle" and event.get("interval_ms") == interval],
+                key=lambda event: (event.get("bucket_start_ms", -1), event.get("reception_order", -1)),
+            )
+            bars_by_interval[interval] = bars
+        five = calculate_features(
+            bars_by_interval[300_000], interval_ms=300_000, decision_time_ms=now
+        )
+        self.regime = update_regime(
+            self.regime, five.get("ema9"), five.get("ema21"), five.get("atr14")
+        )
+        one_bars = bars_by_interval[FEATURE_INTERVAL_MS]
+        previous = calculate_features(
+            one_bars,
+            interval_ms=FEATURE_INTERVAL_MS,
+            decision_time_ms=now,
+            candidate_index=len(one_bars) - 2,
+        ) if len(one_bars) > 1 else None
+        previous_features = None if previous is None else {
+            **previous,
+            "candidate_bucket_start_ms": one_bars[-2].get("bucket_start_ms"),
+            "candidate_low": one_bars[-2].get("low"),
+            "candidate_high": one_bars[-2].get("high"),
+        }
+        if one_bars:
+            features["candidate_low"] = one_bars[-1].get("low")
+            features["candidate_high"] = one_bars[-1].get("high")
+        age_ms = None
+        if one_bars:
+            age_ms = max(0, cutoff - one_bars[-1].get("received_at_ms", cutoff))
+        trend = five
+        proposals = [
+            propose_strategy(
+                strategy_id,
+                features,
+                previous=previous_features,
+                trend=trend,
+                regime=self.regime,
+                age_ms=age_ms,
+                tick_size=self.instrument["price_tick_usd"],
+                cost_config=self.config,
+                position_side=None if self.ledger.position is None else self.ledger.position["side"].upper(),
+                frozen_target=None if self.position_protection is None else self.position_protection.get("strategy_target"),
+                frozen_invalidation=None if self.position_protection is None else self.position_protection.get("donchian_mid"),
+                delegated_strategy_id=(self.owner_strategy_id if strategy_id == C28_ID and self.owner_strategy_id in (C25_ID, C26_ID) else None),
+            )
+            for strategy_id in STRATEGY_IDS
+        ]
+        selector = select_proposal(
+            proposals,
+            owner_strategy_id=self.owner_strategy_id,
+            consumed_signal_keys=self.signal_keys,
+        )
+        return {"proposals": proposals, "selector": selector, "regime": self.regime}
+
     def _market_guard(self, market, book, ticker, now, cutoff):
         if self.instrument is None or not self._valid_instrument(self.instrument):
             return "invalid_instrument_metadata"
@@ -502,23 +632,34 @@ class FuturesRuntime:
             return "short", "short:{}".format(candidate_ms)
         return None
 
-    def _risk_plan(self, side, entry, features):
+    def _risk_plan(self, side, entry, features, proposal=None):
         with localcontext() as ctx:
             ctx.prec = self.ledger.precision
             atr = _d(features["atr14"], "ATR14")
             tick = _d(self.instrument["price_tick_usd"], "price tick")
             step = _d(self.instrument["quantity_step_btc"], "quantity step")
             minimum = _d(self.instrument["minimum_quantity_btc"], "minimum quantity")
-            stop_distance = atr * Decimal("1.5")
-            target_distance = stop_distance * Decimal(2)
-            if side == "long":
-                stop = _floor_tick(entry - stop_distance, tick)
-                target = _ceil_tick(entry + target_distance, tick)
+            if proposal is None:
+                stop_distance = atr * Decimal("1.5")
+                target_distance = stop_distance * Decimal(2)
+                if side == "long":
+                    stop = _floor_tick(entry - stop_distance, tick)
+                    target = _ceil_tick(entry + target_distance, tick)
+                else:
+                    stop = _ceil_tick(entry + stop_distance, tick)
+                    target = _floor_tick(entry - target_distance, tick)
             else:
-                stop = _ceil_tick(entry + stop_distance, tick)
-                target = _floor_tick(entry - target_distance, tick)
+                try:
+                    stop = _d(proposal["proposed_stop"], "proposed strategy stop")
+                    target = _d(proposal["proposed_target"], "proposed strategy target")
+                except (KeyError, ValueError):
+                    return {"quantity": ZERO, "reason": "strategy_protective_levels_unavailable"}
+                stop_distance = abs(entry - stop)
+                target_distance = abs(target - entry)
             if stop <= 0 or (side == "long" and stop >= entry) or (side == "short" and stop <= entry):
                 return {"quantity": ZERO, "reason": "invalid_tick_adjusted_stop"}
+            if (side == "long" and target <= entry) or (side == "short" and target >= entry):
+                return {"quantity": ZERO, "reason": "strategy_target_on_wrong_side"}
             taker = _d(self.config["taker_rate"], "taker rate")
             cost_per_btc = entry * (Decimal(2) * taker + Decimal("0.0002"))
             buffer_per_btc = entry * Decimal("0.0002")
@@ -662,14 +803,22 @@ class FuturesRuntime:
                 return True, "protective_stop"
             if mark >= target:
                 return True, "profit_target"
-            if features.get("candidate_close") is not None and _d(features["candidate_close"], "candidate close") < midline:
+            if (
+                (self.runtime_version == RUNTIME_VERSION or self.owner_strategy_id == C27_ID)
+                and features.get("candidate_close") is not None
+                and _d(features["candidate_close"], "candidate close") < midline
+            ):
                 return True, "donchian_midline_cross"
         else:
             if mark >= stop:
                 return True, "protective_stop"
             if mark <= target:
                 return True, "profit_target"
-            if features.get("candidate_close") is not None and _d(features["candidate_close"], "candidate close") > midline:
+            if (
+                (self.runtime_version == RUNTIME_VERSION or self.owner_strategy_id == C27_ID)
+                and features.get("candidate_close") is not None
+                and _d(features["candidate_close"], "candidate close") > midline
+            ):
                 return True, "donchian_midline_cross"
         if now - opened >= 30 * 60_000:
             return True, "time_stop"
@@ -714,7 +863,7 @@ class FuturesRuntime:
 
     def _analysis(self, action, reason, features, selected=None):
         result = {
-            "strategy_id": RUNTIME_VERSION,
+            "strategy_id": self.runtime_version,
             "selected_strategy_id": selected,
             "action": action,
             "reason_codes": [reason],

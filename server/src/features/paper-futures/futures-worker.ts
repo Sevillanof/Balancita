@@ -501,7 +501,9 @@ function validateWorkerPayload(payload: Record<string, unknown>): boolean {
         'maker_rate',
         'taker_rate',
       ]) ||
-      config.version !== 'futures-runtime-lab.v1' ||
+      !['futures-runtime-lab.v1', 'futures-runtime-strategies.v1'].includes(
+        String(config.version),
+      ) ||
       config.cost_version !== 'kraken-futures-eea-btcusd-base.v1'
     )
       return false

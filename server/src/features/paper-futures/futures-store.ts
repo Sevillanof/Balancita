@@ -981,9 +981,37 @@ function validateFrozenRun(input: {
 
 function validateRuntimeBinding(value: unknown, frozen: JsonRecord): void {
   if (!isRecord(value)) throw new Error('Runtime binding must be an object.')
-  assertKeys(value, ['schema_version', 'runtime_config', 'instrument_spec'])
+  if (value.schema_version === 'futures-runtime-binding.v2') {
+    assertKeys(value, [
+      'schema_version',
+      'runtime_config',
+      'instrument_spec',
+      'strategy_manifest',
+      'strategy_config_hash',
+    ])
+    const manifest = value.strategy_manifest
+    const expectedManifest = {
+      config_version: 'futures-strategies-config.v1',
+      indicator_version: 'futures-closed-indicators.v1',
+      strategy_ids: [
+        'c25-pullback-perp-v1',
+        'c26-reversion-perp-v1',
+        'c27-breakout-perp-v1',
+        'c28-adapter-perp-v1',
+      ],
+    }
+    if (
+      !isRecord(manifest) ||
+      canonicalJson(manifest) !== canonicalJson(expectedManifest) ||
+      value.strategy_config_hash !== canonicalHash(expectedManifest)
+    )
+      throw new Error('Unsupported or altered futures strategy manifest.')
+  } else {
+    assertKeys(value, ['schema_version', 'runtime_config', 'instrument_spec'])
+  }
   if (
-    value.schema_version !== 'futures-runtime-binding.v1' ||
+    (value.schema_version !== 'futures-runtime-binding.v1' &&
+      value.schema_version !== 'futures-runtime-binding.v2') ||
     !isRecord(value.runtime_config) ||
     !isRecord(value.instrument_spec)
   )
@@ -1003,7 +1031,10 @@ function validateRuntimeBinding(value: unknown, frozen: JsonRecord): void {
     'taker_rate',
   ])
   if (
-    config.version !== 'futures-runtime-lab.v1' ||
+    config.version !==
+      (value.schema_version === 'futures-runtime-binding.v2'
+        ? 'futures-runtime-strategies.v1'
+        : 'futures-runtime-lab.v1') ||
     config.cost_version !== (frozen.costs as JsonRecord).version
   )
     throw new Error('Unsupported futures runtime configuration.')
@@ -1083,6 +1114,9 @@ function validateRuntimeWork(
     throw new Error('Runtime work checkpoint and output are required.')
   const cp = value.runtime_checkpoint
   const output = value.runtime_output
+  const binding = frozen.runtime as JsonRecord
+  const strategyRuntime =
+    binding.schema_version === 'futures-runtime-binding.v2'
   assertKeys(cp, [
     'schema_version',
     'runtime_version',
@@ -1106,10 +1140,14 @@ function validateRuntimeWork(
     'position_protection',
     'signal_keys',
     'consumed_depth',
+    ...(strategyRuntime ? ['regime'] : []),
   ])
   if (
-    cp.schema_version !== 1 ||
-    cp.runtime_version !== 'c27-breakout-perp-v1' ||
+    cp.schema_version !== (strategyRuntime ? 2 : 1) ||
+    cp.runtime_version !==
+      (strategyRuntime
+        ? 'futures-strategy-baseline-perp-v1'
+        : 'c27-breakout-perp-v1') ||
     cp.run_id !== runId ||
     cp.runtime_config === undefined ||
     cp.instrument_spec === undefined ||
@@ -1117,7 +1155,6 @@ function validateRuntimeWork(
     cp.instrument_spec === null
   )
     throw new Error('Unsupported or mismatched runtime checkpoint identity.')
-  const binding = frozen.runtime as JsonRecord
   if (
     canonicalJson(cp.runtime_config) !==
       canonicalJson(binding.runtime_config) ||
@@ -1167,6 +1204,7 @@ function validateRuntimeWork(
     'reason_codes',
     'features',
     'strategy_status',
+    ...(strategyRuntime ? ['proposals', 'selector', 'regime'] : []),
   ])
   if (
     typeof output.analysis.action !== 'string' ||
@@ -1176,6 +1214,117 @@ function validateRuntimeWork(
     typeof output.analysis.strategy_status !== 'string'
   )
     throw new Error('Invalid runtime analysis evidence.')
+  if (strategyRuntime) {
+    if (
+      !['unknown', 'trend', 'range'].includes(String(output.analysis.regime)) ||
+      cp.regime !== output.analysis.regime ||
+      !Array.isArray(output.analysis.proposals) ||
+      output.analysis.proposals.length !== 4 ||
+      !isRecord(output.analysis.selector)
+    )
+      throw new Error('Invalid versioned strategy analysis state.')
+    const strategyIds = [
+      'c25-pullback-perp-v1',
+      'c26-reversion-perp-v1',
+      'c27-breakout-perp-v1',
+      'c28-adapter-perp-v1',
+    ]
+    output.analysis.proposals.forEach((proposal, index) => {
+      if (!isRecord(proposal)) throw new Error('Invalid strategy proposal.')
+      assertKeys(
+        proposal,
+        [
+          'strategy_id',
+          'strategy_version',
+          'action',
+          'reason_code',
+          'conditions',
+          'feature_age_ms',
+          'supported_direction',
+          'invalidation',
+          'proposed_stop',
+          'proposed_target',
+          'horizon_minutes',
+          'estimated_round_trip_cost_bps',
+          'status',
+          'delegated_strategy_id',
+          'signal_key',
+        ],
+        ['stop_distance', 'target_distance'],
+      )
+      if (
+        proposal.strategy_id !== strategyIds[index] ||
+        !strategyIds.includes(String(proposal.strategy_version)) ||
+        !['LONG', 'SHORT', 'FLAT', 'WAIT', 'ABSTAIN'].includes(
+          String(proposal.action),
+        ) ||
+        typeof proposal.reason_code !== 'string' ||
+        !Array.isArray(proposal.conditions) ||
+        !Array.isArray(proposal.supported_direction) ||
+        proposal.supported_direction.some(
+          (side) => side !== 'LONG' && side !== 'SHORT',
+        ) ||
+        !['ready', 'warming_up', 'invalid'].includes(String(proposal.status)) ||
+        (proposal.delegated_strategy_id !== null &&
+          proposal.delegated_strategy_id !== 'c25-pullback-perp-v1' &&
+          proposal.delegated_strategy_id !== 'c26-reversion-perp-v1')
+      )
+        throw new Error('Invalid strategy proposal identity or diagnostics.')
+      for (const key of [
+        'proposed_stop',
+        'proposed_target',
+        'stop_distance',
+        'target_distance',
+      ])
+        if (proposal[key] !== null && proposal[key] !== undefined)
+          canonicalDecimal(proposal[key], `proposal ${key}`, 'nonnegative')
+      for (const condition of proposal.conditions) {
+        if (!isRecord(condition)) throw new Error('Invalid strategy condition.')
+        assertKeys(condition, [
+          'code',
+          'value',
+          'operator',
+          'threshold',
+          'passed',
+        ])
+        if (
+          typeof condition.code !== 'string' ||
+          typeof condition.operator !== 'string' ||
+          typeof condition.passed !== 'boolean'
+        )
+          throw new Error('Invalid strategy condition fields.')
+      }
+    })
+    const selector = output.analysis.selector
+    assertKeys(
+      selector,
+      ['action', 'reason_code'],
+      [
+        'strategy_id',
+        'strategy_version',
+        'conditions',
+        'feature_age_ms',
+        'supported_direction',
+        'invalidation',
+        'proposed_stop',
+        'proposed_target',
+        'horizon_minutes',
+        'estimated_round_trip_cost_bps',
+        'status',
+        'delegated_strategy_id',
+        'signal_key',
+        'stop_distance',
+        'target_distance',
+      ],
+    )
+    if (
+      !['LONG', 'SHORT', 'FLAT', 'WAIT', 'ABSTAIN'].includes(
+        String(selector.action),
+      ) ||
+      typeof selector.reason_code !== 'string'
+    )
+      throw new Error('Invalid strategy selector result.')
+  }
   if (
     output.analysis.action !== 'long' &&
     output.analysis.action !== 'short' &&
@@ -1185,12 +1334,22 @@ function validateRuntimeWork(
     throw new Error('Unsupported runtime action.')
   if (
     output.analysis.selected_strategy_id !== null &&
-    output.analysis.selected_strategy_id !== 'c27-breakout-perp-v1'
+    !(strategyRuntime
+      ? [
+          'c25-pullback-perp-v1',
+          'c26-reversion-perp-v1',
+          'c27-breakout-perp-v1',
+          'c28-adapter-perp-v1',
+        ].includes(String(output.analysis.selected_strategy_id))
+      : output.analysis.selected_strategy_id === 'c27-breakout-perp-v1')
   )
     throw new Error('Unsupported selected runtime strategy.')
   if (
     output.analysis.strategy_id !== null &&
-    output.analysis.strategy_id !== 'c27-breakout-perp-v1'
+    output.analysis.strategy_id !==
+      (strategyRuntime
+        ? 'futures-strategy-baseline-perp-v1'
+        : 'c27-breakout-perp-v1')
   )
     throw new Error('Unsupported runtime strategy identity.')
   assertKeys(output.analysis.features, [
@@ -1215,6 +1374,7 @@ function validateRuntimeWork(
     'candidate_volume',
     'smoothing',
     'candidate_bucket_start_ms',
+    ...(strategyRuntime ? ['candidate_low', 'candidate_high'] : []),
   ])
   if (
     output.analysis.features.schema_version !== 'c27-features.v1' ||
@@ -1406,10 +1566,19 @@ function validateRuntimeWork(
     if (
       ledger.side !== position.side ||
       ledger.quantity_btc !== position.qty ||
-      cp.owner_strategy_id !== 'c27-breakout-perp-v1' ||
+      !(strategyRuntime
+        ? [
+            'c25-pullback-perp-v1',
+            'c26-reversion-perp-v1',
+            'c27-breakout-perp-v1',
+            'c28-adapter-perp-v1',
+          ].includes(String(cp.owner_strategy_id))
+        : cp.owner_strategy_id === 'c27-breakout-perp-v1') ||
       output.position.side !== position.side ||
       output.position.quantity_btc !== position.qty ||
       output.position.owner_strategy_id !== cp.owner_strategy_id ||
+      (strategyRuntime &&
+        output.analysis.selected_strategy_id !== cp.owner_strategy_id) ||
       output.position.entry_price_usd_per_btc !== position.entry ||
       !isRecord(cp.position_protection) ||
       output.position.stop_price_usd_per_btc !== cp.position_protection.stop ||
@@ -1424,6 +1593,7 @@ function validateRuntimeWork(
       'donchian_mid',
       'opened_at_ms',
       'signal_key',
+      ...(strategyRuntime ? ['strategy_target', 'strategy_invalidation'] : []),
     ])
     for (const key of ['stop', 'target', 'donchian_mid'])
       canonicalDecimal(
@@ -1436,6 +1606,16 @@ function validateRuntimeWork(
       typeof cp.position_protection.signal_key !== 'string'
     )
       throw new Error('Invalid position protection state.')
+    if (
+      strategyRuntime &&
+      cp.position_protection.strategy_target !== null &&
+      cp.position_protection.strategy_target !== undefined
+    )
+      canonicalDecimal(
+        cp.position_protection.strategy_target,
+        'strategy target',
+        'positive',
+      )
   } else if (
     ledger.side !== null ||
     ledger.quantity_btc !== '0' ||

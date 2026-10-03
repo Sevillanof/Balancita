@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { FuturesCommandRunner } from './futures-command-runner.ts'
 import { FuturesStore } from './futures-store.ts'
+import { canonicalHash } from './futures-canonical.ts'
 import type { FuturesWorkerRequest } from './futures-worker.ts'
 
 const instrument = {
@@ -36,6 +37,201 @@ type RuntimeRequest = Omit<FuturesWorkerRequest, 'payload'> & {
 }
 
 describe('durable C27 futures runtime', () => {
+  it('integrates the versioned four-strategy runtime through durable open, restart, owner hold and close', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'futures-strategies-'))
+    const path = join(directory, 'fixture.sqlite')
+    const runId = 'strategy-runtime-run'
+    const strategyConfig = {
+      ...runtimeConfig,
+      version: 'futures-runtime-strategies.v1',
+    }
+    const strategyManifest = {
+      config_version: 'futures-strategies-config.v1',
+      indicator_version: 'futures-closed-indicators.v1',
+      strategy_ids: [
+        'c25-pullback-perp-v1',
+        'c26-reversion-perp-v1',
+        'c27-breakout-perp-v1',
+        'c28-adapter-perp-v1',
+      ],
+    }
+    const binding = {
+      schema_version: 'futures-runtime-binding.v2',
+      runtime_config: strategyConfig,
+      instrument_spec: instrument,
+      strategy_manifest: strategyManifest,
+      strategy_config_hash: canonicalHash(strategyManifest),
+    }
+    const createStore = () => {
+      const value = new FuturesStore(path)
+      value.createRun({
+        runId,
+        config: {
+          ledger_version: 'linear-usd-ledger.v1',
+          decimal_precision: 50,
+          leverage: '1',
+        },
+        seed: { cash_usd: '10000' },
+        instrument: { instrument_id: instrument.instrument_id },
+        costs: {
+          version: runtimeConfig.cost_version,
+          maker: runtimeConfig.maker_rate,
+          taker: runtimeConfig.taker_rate,
+        },
+        runtime: binding,
+      })
+      return value
+    }
+    let store = createStore()
+    let runner = new FuturesCommandRunner(store)
+    try {
+      const first = request(
+        runId,
+        'strategy-open',
+        0,
+        market(21_600_000, 'long'),
+        undefined,
+        strategyConfig,
+      )
+      const opened = await runner.accept(first).result
+      expect(opened.type).toBe('command.result')
+      let projection = store.getRunProjection(runId) as {
+        result: { side: string; quantity_btc: string }
+        checkpoint: Record<string, unknown>
+      }
+      expect(projection.result.side).toBe('long')
+      expect(projection.checkpoint.runtime_version).toBe(
+        'futures-strategy-baseline-perp-v1',
+      )
+      expect(projection.checkpoint.owner_strategy_id).toBe(
+        'c27-breakout-perp-v1',
+      )
+      expect(projection.checkpoint.regime).toBe('range')
+      const database = new DatabaseSync(path)
+      const persisted = JSON.parse(
+        (
+          database
+            .prepare(
+              "SELECT payload_json FROM paper_futures_records WHERE work_id=? AND kind='applied-result'",
+            )
+            .get(first.work_id) as { payload_json: string }
+        ).payload_json,
+      ) as {
+        runtime_output: {
+          analysis: {
+            proposals: {
+              strategy_id: string
+              delegated_strategy_id: string | null
+            }[]
+            selector: { action: string }
+          }
+        }
+      }
+      expect(
+        persisted.runtime_output.analysis.proposals.map(
+          (item) => item.strategy_id,
+        ),
+      ).toEqual([
+        'c25-pullback-perp-v1',
+        'c26-reversion-perp-v1',
+        'c27-breakout-perp-v1',
+        'c28-adapter-perp-v1',
+      ])
+      expect(persisted.runtime_output.analysis.selector.action).toBe('LONG')
+      expect(
+        persisted.runtime_output.analysis.proposals[3]?.delegated_strategy_id,
+      ).toBe('c26-reversion-perp-v1')
+      database.close()
+      expect(await runner.accept(first).result).toEqual(opened)
+      expect(
+        (store.exportRun(runId).events as Record<string, unknown>[]).filter(
+          (event) => event.type === 'fill',
+        ),
+      ).toHaveLength(1)
+      expect(store.verifyRun(runId)).toBe(true)
+      await runner.close()
+      store.close()
+
+      store = new FuturesStore(path)
+      runner = new FuturesCommandRunner(store)
+      const changedRegime = market(21_601_000, 'flat')
+      const regimeBars = (
+        changedRegime.events as Record<string, unknown>[]
+      ).filter(
+        (event) => event.type === 'candle' && event.interval_ms === 300_000,
+      )
+      regimeBars.forEach((bar, index) => {
+        const close = 99_000 + index * 5
+        bar.open = String(close - 10)
+        bar.high = String(close + 50)
+        bar.low = String(close - 50)
+        bar.close = String(close)
+      })
+      const hysteresis = request(
+        runId,
+        'strategy-hysteresis',
+        1,
+        changedRegime,
+        undefined,
+        strategyConfig,
+      )
+      await runner.accept(hysteresis).result
+      projection = store.getRunProjection(runId) as typeof projection
+      expect(projection.result.quantity_btc).not.toBe('0')
+      expect(projection.checkpoint.owner_strategy_id).toBe(
+        'c27-breakout-perp-v1',
+      )
+      expect(projection.checkpoint.regime).toBe('range')
+
+      const trending = market(21_602_000, 'flat')
+      const trendingBars = (
+        trending.events as Record<string, unknown>[]
+      ).filter(
+        (event) => event.type === 'candle' && event.interval_ms === 300_000,
+      )
+      trendingBars.forEach((bar, index) => {
+        const close = 99_000 + index * 10
+        bar.open = String(close - 10)
+        bar.high = String(close + 50)
+        bar.low = String(close - 50)
+        bar.close = String(close)
+      })
+      const hold = request(
+        runId,
+        'strategy-hold',
+        2,
+        trending,
+        undefined,
+        strategyConfig,
+      )
+      await runner.accept(hold).result
+      projection = store.getRunProjection(runId) as typeof projection
+      expect(projection.checkpoint.owner_strategy_id).toBe(
+        'c27-breakout-perp-v1',
+      )
+      expect(projection.checkpoint.regime).toBe('trend')
+      expect(store.verifyRun(runId)).toBe(true)
+
+      const close = request(
+        runId,
+        'strategy-close',
+        3,
+        market(21_660_000, 'flat', '100500'),
+        { type: 'paper.close', command_id: 'close-strategy-owner' },
+        strategyConfig,
+      )
+      await runner.accept(close).result
+      projection = store.getRunProjection(runId) as typeof projection
+      expect(projection.result.quantity_btc).toBe('0')
+      expect(projection.checkpoint.owner_strategy_id).toBeNull()
+      expect(store.verifyRun(runId)).toBe(true)
+    } finally {
+      await runner.close()
+      store.close()
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
   it('persists an open C27 position, replays another cycle, reopens and closes at the observed book', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'futures-runtime-'))
     const path = join(directory, 'fixture.sqlite')
@@ -485,6 +681,7 @@ function request(
   expectedStateVersion: number,
   snapshot: Record<string, unknown>,
   control?: Record<string, unknown>,
+  config: Record<string, unknown> = runtimeConfig,
 ): RuntimeRequest {
   return {
     request_id: `request-${workId}`,
@@ -493,7 +690,7 @@ function request(
     expected_state_version: expectedStateVersion,
     payload: {
       operation: 'futures_runtime.v1',
-      runtime_config: runtimeConfig,
+      runtime_config: config,
       instrument,
       market_snapshot: snapshot,
       ...(control ? { control } : {}),

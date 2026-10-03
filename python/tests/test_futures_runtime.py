@@ -26,6 +26,202 @@ def close_command(command_id):
 
 
 class FuturesRuntimeTests(unittest.TestCase):
+    def test_versioned_strategy_runtime_persists_registry_proposals_and_owner(self):
+        strategy_config = dict(CONFIG)
+        strategy_config["version"] = "futures-runtime-strategies.v1"
+        engine = FuturesRuntime(
+            run_id="strategy-run",
+            config=strategy_config,
+            instrument=INSTRUMENT,
+        )
+        market = warmed_market(21_600_000, breakout="long")
+
+        opened = engine.process(market)
+
+        self.assertEqual(
+            [item["strategy_id"] for item in opened["analysis"]["proposals"]],
+            [
+                "c25-pullback-perp-v1",
+                "c26-reversion-perp-v1",
+                "c27-breakout-perp-v1",
+                "c28-adapter-perp-v1",
+            ],
+        )
+        self.assertEqual(opened["analysis"]["selector"]["action"], "LONG")
+        self.assertEqual(opened["position"]["owner_strategy_id"], "c27-breakout-perp-v1")
+
+        saved = engine.checkpoint()
+        restored = FuturesRuntime(
+            run_id="strategy-run",
+            config=strategy_config,
+            instrument=INSTRUMENT,
+            checkpoint=json.loads(json.dumps(saved)),
+        )
+        regime_changed = warmed_market(21_660_000, base_price="100100")
+        held = restored.process(regime_changed)
+        self.assertEqual(held["position"]["owner_strategy_id"], "c27-breakout-perp-v1")
+        self.assertEqual(held["analysis"]["selected_strategy_id"], "c27-breakout-perp-v1")
+        self.assertEqual(restored.checkpoint()["regime"], saved["regime"])
+
+        closed = restored.process(
+            warmed_market(21_720_000, base_price="100100"),
+            control=close_command("close-owned-strategy"),
+        )
+        self.assertEqual(closed["position"]["quantity_btc"], "0")
+        self.assertIsNone(restored.checkpoint()["owner_strategy_id"])
+
+    def test_actual_ohlc_c26_signal_reaches_selector_and_owns_proposed_levels(self):
+        strategy_config = dict(CONFIG)
+        strategy_config["version"] = "futures-runtime-strategies.v1"
+        market = warmed_market(21_600_000)
+        one_minute = [
+            event
+            for event in market["events"]
+            if event["type"] == "candle" and event["interval_ms"] == 60_000
+        ]
+        closes = [101_000 + (index % 5) * 10 for index in range(58)]
+        closes.extend([99_500, 100_300])
+        for event, close in zip(one_minute, closes):
+            event.update(
+                open=str(close),
+                high=str(close + 100),
+                low=str(close - 100),
+                close=str(close),
+            )
+
+        opened = FuturesRuntime(
+            run_id="actual-c26-run",
+            config=strategy_config,
+            instrument=INSTRUMENT,
+        ).process(market)
+
+        c26 = opened["analysis"]["proposals"][1]
+        self.assertEqual(c26["strategy_id"], "c26-reversion-perp-v1")
+        self.assertEqual(c26["action"], "LONG")
+        self.assertEqual(opened["analysis"]["selector"]["strategy_id"], c26["strategy_id"])
+        self.assertEqual(opened["position"]["owner_strategy_id"], c26["strategy_id"])
+        self.assertEqual(opened["position"]["stop_price_usd_per_btc"], c26["proposed_stop"])
+        self.assertEqual(opened["position"]["target_price_usd_per_btc"], c26["proposed_target"])
+
+        short_market = warmed_market(21_600_000)
+        short_bars = [
+            event
+            for event in short_market["events"]
+            if event["type"] == "candle" and event["interval_ms"] == 60_000
+        ]
+        for event, close in zip(short_bars, closes):
+            mirror = 200_000 - close
+            event.update(
+                open=str(mirror),
+                high=str(mirror + 100),
+                low=str(mirror - 100),
+                close=str(mirror),
+            )
+        short_opened = FuturesRuntime(
+            run_id="actual-c26-short-run",
+            config=strategy_config,
+            instrument=INSTRUMENT,
+        ).process(short_market)
+        short_c26 = short_opened["analysis"]["proposals"][1]
+        self.assertEqual(short_c26["action"], "SHORT")
+        self.assertEqual(short_opened["analysis"]["selector"]["strategy_id"], short_c26["strategy_id"])
+        self.assertEqual(short_opened["position"]["owner_strategy_id"], short_c26["strategy_id"])
+        self.assertEqual(short_opened["position"]["stop_price_usd_per_btc"], short_c26["proposed_stop"])
+        self.assertEqual(short_opened["position"]["target_price_usd_per_btc"], short_c26["proposed_target"])
+
+    def test_actual_ohlc_c25_pullback_opens_with_engine_calculated_protection(self):
+        strategy_config = dict(CONFIG)
+        strategy_config["version"] = "futures-runtime-strategies.v1"
+        market = warmed_market(21_600_000)
+        closes = [
+            99000, 99100, 99150, 99250, 99300, 99250, 99150, 99250, 99350, 99330,
+            99280, 99230, 99210, 99260, 99280, 99230, 99130, 99150, 99250, 99230,
+            99210, 99260, 99280, 99180, 99160, 99260, 99310, 99410, 99430, 99480,
+            99460, 99480, 99380, 99280, 99230, 99250, 99230, 99180, 99200, 99100,
+            99120, 99170, 99150, 99050, 99100, 99000, 98900, 99000, 98950, 99000,
+            99050, 98950, 98900, 98850, 98900, 98880, 98830, 98810, 98710, 99010,
+        ]
+        one_minute = [
+            event
+            for event in market["events"]
+            if event["type"] == "candle" and event["interval_ms"] == 60_000
+        ]
+        for event, value in zip(one_minute, closes):
+            close = value + 1000
+            event.update(
+                open=str(close),
+                high=str(close + 100),
+                low=str(close - 100),
+                close=str(close),
+            )
+        five_minute = [
+            event
+            for event in market["events"]
+            if event["type"] == "candle" and event["interval_ms"] == 300_000
+        ]
+        for index, event in enumerate(five_minute):
+            close = 99_000 + index * 50
+            event.update(
+                open=str(close),
+                high=str(close + 100),
+                low=str(close - 100),
+                close=str(close),
+            )
+
+        opened = FuturesRuntime(
+            run_id="actual-c25-run",
+            config=strategy_config,
+            instrument=INSTRUMENT,
+        ).process(market)
+
+        c25 = opened["analysis"]["proposals"][0]
+        self.assertEqual(c25["action"], "LONG")
+        self.assertEqual(c25["reason_code"], "c25_long_pullback")
+        self.assertEqual(opened["analysis"]["selector"]["strategy_id"], c25["strategy_id"])
+        self.assertEqual(opened["position"]["owner_strategy_id"], c25["strategy_id"])
+        self.assertEqual(opened["position"]["stop_price_usd_per_btc"], c25["proposed_stop"])
+        self.assertEqual(opened["position"]["target_price_usd_per_btc"], c25["proposed_target"])
+
+        short_market = warmed_market(21_600_000)
+        short_one_minute = [
+            event
+            for event in short_market["events"]
+            if event["type"] == "candle" and event["interval_ms"] == 60_000
+        ]
+        for event, value in zip(short_one_minute, closes):
+            close = 200_000 - (value + 1000)
+            event.update(
+                open=str(close),
+                high=str(close + 100),
+                low=str(close - 100),
+                close=str(close),
+            )
+        short_five_minute = [
+            event
+            for event in short_market["events"]
+            if event["type"] == "candle" and event["interval_ms"] == 300_000
+        ]
+        for index, event in enumerate(short_five_minute):
+            close = 200_000 - (99_000 + index * 50)
+            event.update(
+                open=str(close),
+                high=str(close + 100),
+                low=str(close - 100),
+                close=str(close),
+            )
+        short_opened = FuturesRuntime(
+            run_id="actual-c25-short-run",
+            config=strategy_config,
+            instrument=INSTRUMENT,
+        ).process(short_market)
+        short_c25 = short_opened["analysis"]["proposals"][0]
+        self.assertEqual(short_c25["action"], "SHORT")
+        self.assertEqual(short_c25["reason_code"], "c25_short_pullback")
+        self.assertEqual(short_opened["analysis"]["selector"]["strategy_id"], short_c25["strategy_id"])
+        self.assertEqual(short_opened["position"]["owner_strategy_id"], short_c25["strategy_id"])
+        self.assertEqual(short_opened["position"]["stop_price_usd_per_btc"], short_c25["proposed_stop"])
+        self.assertEqual(short_opened["position"]["target_price_usd_per_btc"], short_c25["proposed_target"])
+
     def test_c27_long_and_short_market_to_fill_and_explicit_executable_close(self):
         for side, base, exit_base in (
             ("long", "100000", "100500"),
