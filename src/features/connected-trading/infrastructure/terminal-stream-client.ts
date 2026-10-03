@@ -19,6 +19,7 @@ export type TerminalBootstrap = {
   instrument_id?: string
   quote_currency?: string
   market?: Record<string, unknown>
+  source_manifest?: Record<string, unknown>
   engine?: Record<string, unknown>
 }
 
@@ -64,7 +65,9 @@ export function parseTerminalEnvelope(value: unknown): TerminalEnvelope | null {
     const market = value.data.market
     if (
       !isRecord(market) ||
-      market.schema_version !== 'mock-terminal-market.v1' ||
+      !['mock-terminal-market.v1', 'futures-terminal-market.v1'].includes(
+        String(market.schema_version),
+      ) ||
       !Number.isSafeInteger(market.as_of_ms) ||
       ![60_000, 300_000, 900_000, 3_600_000].includes(
         Number(market.interval_ms),

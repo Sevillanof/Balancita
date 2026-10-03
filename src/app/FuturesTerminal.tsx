@@ -77,15 +77,18 @@ function TerminalMarketChart({ market }: { market: Record<string, unknown> }) {
       })
     : []
   if (
-    market.schema_version !== 'mock-terminal-market.v1' ||
+    !['mock-terminal-market.v1', 'futures-terminal-market.v1'].includes(
+      String(market.schema_version),
+    ) ||
     candles.length === 0
   )
     return <p>El snapshot no contiene velas BTC/USD verificables.</p>
   return (
     <>
       <p>
-        Velas cerradas del fixture del runtime MOCK · actualización por
-        WebSocket.
+        {market.schema_version === 'futures-terminal-market.v1'
+          ? 'Velas cerradas del origen registrado · operaciones simuladas.'
+          : 'Velas cerradas del fixture del runtime MOCK · actualización por WebSocket.'}
       </p>
       <ApprovedTerminalChart
         candles={candles}
@@ -169,7 +172,8 @@ export default function FuturesTerminal({
           setState({
             ...snapshotState,
             terminal_market:
-              market.schema_version === 'mock-terminal-market.v1'
+              market.schema_version === 'mock-terminal-market.v1' ||
+              market.schema_version === 'futures-terminal-market.v1'
                 ? market
                 : null,
           })
@@ -323,7 +327,9 @@ export default function FuturesTerminal({
               <span>
                 {position.mark_usd_per_btc !== undefined
                   ? 'Precio de marca · USD/BTC'
-                  : 'Último cierre del fixture · USD/BTC'}
+                  : bootstrap?.mode === 'replay'
+                    ? 'Último cierre registrado · USD/BTC'
+                    : 'Último cierre del fixture · USD/BTC'}
               </span>
             </div>
           }
@@ -346,6 +352,32 @@ export default function FuturesTerminal({
         {!state && <p role="status">Conectando al runtime de futuros…</p>}
         {state && (
           <>
+            {bootstrap?.mode === 'replay' && (
+              <section aria-label="Evidencia del replay">
+                <p>Origen registrado · operaciones simuladas</p>
+                <dl>
+                  <dt>Hash del dataset</dt>
+                  <dd>
+                    {String(
+                      bootstrap.source_manifest?.source_hash ?? 'No disponible',
+                    )}
+                  </dd>
+                  <dt>Hash del archivo fuente</dt>
+                  <dd>
+                    {String(
+                      bootstrap.source_manifest?.source_file_hash ??
+                        'No disponible',
+                    )}
+                  </dd>
+                </dl>
+                <a
+                  href="/api/terminal/export"
+                  download="futures-replay-export.json"
+                >
+                  Descargar exportación verificada del run
+                </a>
+              </section>
+            )}
             <ApprovedTerminalLayout
               chart={
                 <section
