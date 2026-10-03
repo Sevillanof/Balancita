@@ -1,0 +1,18 @@
+odd/tasks/kraken-futures-deterministic.md
+  h_2f68313623be98 3,67-70
+python/balancita_engine/legacy_micro_strategy.py
+  h_2f68313623be98 1-243
+server/src/features/simulations/micro-strategy-python-parity.test.ts
+  h_2f68313623be98 1-288
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "28603bfce0c30cee22d8e8ff60a5f8a830a1b60f",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
