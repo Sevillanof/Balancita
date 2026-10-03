@@ -127,7 +127,7 @@ FK-01 candidate is on `feat/kraken-futures-ledger`; the original `feat/python-si
 
 ### Tracker mirror and recovery
 
-- Local tracker is authoritative. Canonical Engram target: observation `#984`, project `balancita`, topic `odd/kraken-futures-deterministic/tasks`. Its prior contents were overwritten/truncated during earlier progress saves; after this bounded tracker update, rewrite and verify the complete source body as post-commit bookkeeping. Historical continuation `#1006` and standalone `#999` remain preserved; `#999` is not canonical. Current locator: `odd/tasks/kraken-futures-deterministic.md`.
+- Local tracker is authoritative. Canonical Engram target: observation `#984`, project `balancita`, topic `odd/kraken-futures-deterministic/tasks`. Latest export/readback confirms the full UTF-8 body equals the local file except Engram save strips the terminal LF. Historical continuation `#1006` and standalone `#999` remain preserved; `#999` is not canonical. Current locator: `odd/tasks/kraken-futures-deterministic.md`.
 
 ### 4.2c — protective and daily-risk controller (bounded work unit complete; FK-04 partial)
 
