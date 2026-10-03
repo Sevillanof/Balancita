@@ -1,0 +1,22 @@
+e2e/futures-terminal/replay-acceptance.pw.ts
+  h_2f68313623be98 1-206
+e2e/futures-terminal/replay-source-fixture.ts
+  h_2f68313623be98 1-98
+src/app/FuturesTerminal.tsx
+  h_2f68313623be98 80-82,89-91,175-176,330-332,355-380
+src/features/connected-trading/infrastructure/terminal-stream-client.test.ts
+  h_2f68313623be98 76-110
+src/features/connected-trading/infrastructure/terminal-stream-client.ts
+  h_2f68313623be98 22,68-70
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d11cd70755da8f746ec8ad7bd4ff4afb7a169c82",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
