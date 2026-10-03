@@ -88,9 +88,9 @@ def _work(message):
             rate = Decimal(rate_item[3])
             with localcontext() as context:
                 context.prec = 50
-                amount = rate * Decimal(end - start) / Decimal(3_600_000) * Decimal(quantity)
-                if position_side == "short":
-                    amount = -amount
+                hours = Decimal(end - start) / Decimal(3_600_000)
+                side_sign = Decimal(1) if position_side == "long" else Decimal(-1)
+                amount = rate * hours * Decimal(quantity) * side_sign
             funding_events.append({
                 "interval_id": identifier, "start_time_ms": start,
                 "end_time_ms": end, "rate_usd_per_btc_hour": rate_item[3],
@@ -104,6 +104,24 @@ def _work(message):
             event_total = sum(
                 (Decimal(item["amount_usd"]) for item in funding_events), Decimal("0")
             )
+            if funding_events and event_total != funding_delta:
+                reference = max(
+                    abs(Decimal(next_checkpoint["funding_paid"])),
+                    abs(previous_paid),
+                    abs(event_total),
+                )
+                if reference:
+                    rounding_unit = Decimal(1).scaleb(reference.adjusted() - 49)
+                    residual = funding_delta - event_total
+                    if abs(residual) <= rounding_unit * (len(funding_events) + 1):
+                        last = funding_events[-1]
+                        last["amount_usd"] = normalize_decimal(
+                            str(Decimal(last["amount_usd"]) + residual)
+                        )
+                        event_total = sum(
+                            (Decimal(item["amount_usd"]) for item in funding_events),
+                            Decimal("0"),
+                        )
         if event_total != funding_delta:
             raise ValueError("funding audit delta does not reconcile to the runtime ledger")
         return {

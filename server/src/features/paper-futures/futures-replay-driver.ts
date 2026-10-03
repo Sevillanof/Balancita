@@ -189,8 +189,17 @@ export class FuturesReplayDriver {
     )
     for (const [sourceIndex, source] of eligible.entries()) {
       const receivedAt = Number(source.receivedAt)
-      const candles = store.candlesAsOf(receivedAt) as Record<string, unknown>[]
       const gaps = store.gapsAsOf(receivedAt) as Record<string, unknown>[]
+      const candles = (
+        store.candlesAsOf(receivedAt) as Record<string, unknown>[]
+      ).filter(
+        (candle) =>
+          !gaps.some(
+            (gap) =>
+              Number(gap.detected_at) < Number(candle.known_at) &&
+              Number(candle.close_at) <= Number(gap.detected_at),
+          ),
+      )
       const current = eligible
         .slice(0, sourceIndex + 1)
         .filter((event) => Number(event.receivedAt) <= receivedAt)
@@ -215,9 +224,15 @@ export class FuturesReplayDriver {
         const eventAt = Number(event.eventTime)
         const seq = Number(event.receivedSequence)
         if (event.type === 'book' && event.snapshot === true) {
-          const gap = gaps.some(
-            (item) => item.feed === 'book' && Number(item.detected_at) <= known,
-          )
+          const gap = gaps.some((item) => {
+            if (item.feed !== 'book' || Number(item.detected_at) > known)
+              return false
+            return (
+              eventAt <= Number(item.detected_at) ||
+              (Number(event.epoch) === Number(item.epoch) &&
+                Number(event.seq) < Number(item.actual_seq))
+            )
+          })
           marketEvents.push({
             type: 'book_snapshot',
             source_receipt_sequence: seq,
@@ -589,6 +604,19 @@ export function compareEconomicSemantics(
 }
 
 function semanticValue(value: unknown): unknown {
+  if (
+    isRecord(value) &&
+    value.schema_version === 'futures-replay-export.v1' &&
+    'economic_projection' in value
+  )
+    return {
+      ...(Array.isArray(value.inputs)
+        ? { inputs: cloneWithoutGeneratedIdentity(value.inputs) }
+        : {}),
+      economic_projection: cloneWithoutGeneratedIdentity(
+        value.economic_projection,
+      ),
+    }
   if (isRecord(value) && 'economic_projection' in value)
     return cloneWithoutGeneratedIdentity(value.economic_projection)
   return cloneWithoutGeneratedIdentity(value)
