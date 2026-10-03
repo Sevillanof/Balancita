@@ -1,0 +1,42 @@
+python/balancita_engine/futures_indicators.py
+  h_2f68313623be98 87-88,95,105
+python/balancita_engine/futures_runtime.py
+  h_2f68313623be98 188-191,772-778
+python/tests/test_futures_runtime_risk.py
+  h_2f68313623be98 32-42
+server/src/app/app.test.ts
+  h_2f68313623be98 27,88-93,147-153,155-159,167,187,229-243,282-288,312,319-328,349,408,432,595-722
+server/src/app/app.ts
+  h_2f68313623be98 3,84-93,171-173,298-315,321-324,594-630,636-641,650-654,656-681,683-792
+server/src/features/kraken-futures/futures-candles.ts
+  h_2f68313623be98 88-102,107-121,125,216-230
+server/src/features/kraken-futures/futures-market-store.ts
+  h_2f68313623be98 205-208,219
+server/src/features/kraken-futures/futures-market.ts
+  h_2f68313623be98 245-255,987-1002
+server/src/features/paper-futures/futures-replay-driver.ts
+  h_2f68313623be98 188,257-272,335,379-382
+server/src/features/paper-futures/futures-session-runtime.ts
+  h_2f68313623be98 6-7,48,50-54,60,76-78,118,140,149-160,171-186,209-227,230-231,261-263,273-277,279,294-351,353-363,379-381,479-505
+server/src/features/paper-futures/futures-store.test.ts
+  h_2f68313623be98 513-570
+server/src/features/paper-futures/futures-store.ts
+  h_2f68313623be98 22,60,280-286,1831,1857-1861,1886-1959
+server/src/features/terminal-stream/terminal-stream.ts
+  h_2f68313623be98 363
+server/src/platform/config.test.ts
+  h_2f68313623be98 5-48
+server/src/platform/config.ts
+  h_2f68313623be98 54-56,96-125,225-227,229-230,232-233,237,245-249
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b0d532b2398e35ba09b41aeabd4763777e7f50be",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
