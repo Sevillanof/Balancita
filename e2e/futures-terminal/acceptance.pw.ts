@@ -8,6 +8,7 @@ import { createServer as createViteServer } from 'vite'
 import react from '@vitejs/plugin-react'
 import { buildApp } from '../../server/src/app/app.ts'
 import { serverConfigFrom } from '../../server/src/platform/config.ts'
+import { runtimeEvidencePath } from './evidence-output.ts'
 
 const root = resolve(import.meta.dirname, '../..')
 const evidenceDirectory = join(root, 'playwright-artifacts/futures-baseline')
@@ -383,9 +384,9 @@ test('actual isolated MOCK terminal acceptance', async () => {
       page_errors: pageErrors,
       protocol_error: malformed,
     }
-    await mkdir(join(root, 'e2e/futures-terminal'), { recursive: true })
+    await mkdir(evidenceDirectory, { recursive: true })
     await writeFile(
-      join(root, 'e2e/futures-terminal/evidence.json'),
+      runtimeEvidencePath(root),
       `${JSON.stringify(json, null, 2)}\n`,
     )
   } finally {
