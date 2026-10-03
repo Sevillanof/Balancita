@@ -1,0 +1,24 @@
+python/balancita_engine/futures_funding.py
+  h_2f68313623be98 1-110
+python/balancita_engine/futures_runtime.py
+  h_2f68313623be98 14,1105-1147
+python/tests/test_futures_funding.py
+  h_2f68313623be98 1-136
+server/src/features/paper-futures/futures-runtime.test.ts
+  h_2f68313623be98 545-551,766-768,798-800,995-996,1018,1020-1026,1030-1031,1038-1041,1045-1056,1058-1068,1076,1079-1083,1085-1098,1288-1313
+server/src/features/paper-futures/futures-worker.test.ts
+  h_2f68313623be98 2-5,8-23,106-168
+server/src/features/paper-futures/futures-worker.ts
+  h_2f68313623be98 626,667-744
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "762cf36ffa6a9356803aadbcf95c78ff5b01a17f",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
