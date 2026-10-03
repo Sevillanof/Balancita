@@ -54,6 +54,7 @@ export interface ServerConfig {
   futuresMarketDbPath: string
   futuresReplaySourceDbPath: string | undefined
   futuresReplaySourceRunId: string | undefined
+  futuresReplayCutoffMs: number | undefined
 }
 
 const DEFAULT_MODEL = 'gemini-3.5-flash-lite'
@@ -105,6 +106,9 @@ export function serverConfigFrom(
   const futuresReplaySourceRunId = optionalStringValue(
     env.FUTURES_REPLAY_SOURCE_RUN_ID,
   )
+  const futuresReplayCutoffMs = optionalNonNegativeInt(
+    env.FUTURES_REPLAY_CUTOFF_MS,
+  )
   if (futuresMode === 'replay') {
     if (futuresReplaySourceDbPath === undefined)
       throw new ServerConfigError(
@@ -116,7 +120,8 @@ export function serverConfigFrom(
       )
   } else if (
     futuresReplaySourceDbPath !== undefined ||
-    futuresReplaySourceRunId !== undefined
+    futuresReplaySourceRunId !== undefined ||
+    futuresReplayCutoffMs !== undefined
   ) {
     throw new ServerConfigError(
       'FUTURES_REPLAY_SOURCE_DB_PATH and FUTURES_REPLAY_SOURCE_RUN_ID require FUTURES_MODE=replay.',
@@ -231,6 +236,7 @@ export function serverConfigFrom(
     ),
     futuresReplaySourceDbPath,
     futuresReplaySourceRunId,
+    futuresReplayCutoffMs,
   }
 }
 
@@ -245,6 +251,16 @@ function futuresModeFrom(raw: string | undefined): ServerConfig['futuresMode'] {
 function optionalStringValue(raw: string | undefined): string | undefined {
   if (raw === undefined || raw.trim() === '') return undefined
   return raw.trim()
+}
+
+function optionalNonNegativeInt(raw: string | undefined): number | undefined {
+  if (raw === undefined || raw.trim() === '') return undefined
+  const value = Number(raw)
+  if (!Number.isSafeInteger(value) || value < 0)
+    throw new ServerConfigError(
+      `FUTURES_REPLAY_CUTOFF_MS must be a non-negative integer, got ${JSON.stringify(raw)}.`,
+    )
+  return value
 }
 
 function collectorFlag(

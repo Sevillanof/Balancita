@@ -1,6 +1,6 @@
 import { DatabaseSync } from 'node:sqlite'
 import { createHash } from 'node:crypto'
-import { mkdirSync } from 'node:fs'
+import { existsSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { canonicalJson } from '../paper-futures/futures-canonical.ts'
 
@@ -33,17 +33,34 @@ function time(value: unknown, name: string): number {
 /** Append-only public futures evidence store; callers must supply an isolated path. */
 export class FuturesMarketStore {
   private readonly db: DatabaseSync
+  readonly readOnly: boolean
 
-  constructor(path: string) {
+  constructor(path: string, options: { readOnly?: boolean } = {}) {
+    this.readOnly = options.readOnly ?? false
     if (!path || path === ':memory:') {
       if (path !== ':memory:')
         throw new TypeError('An explicit database path is required.')
+      if (this.readOnly)
+        throw new TypeError(
+          'A read-only market source must be a database file.',
+        )
     } else {
-      mkdirSync(dirname(path), { recursive: true })
+      if (this.readOnly && !existsSync(path))
+        throw new Error('Read-only futures market source does not exist.')
+      if (!this.readOnly) mkdirSync(dirname(path), { recursive: true })
     }
-    this.db = new DatabaseSync(path)
-    this.db.exec('PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;')
-    if (path !== ':memory:') this.db.exec('PRAGMA journal_mode=WAL;')
+    this.db = new DatabaseSync(path, { readOnly: this.readOnly })
+    if (!this.readOnly)
+      this.db.exec('PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;')
+    if (path !== ':memory:' && !this.readOnly)
+      this.db.exec('PRAGMA journal_mode=WAL;')
+    if (this.readOnly) {
+      if (this.schemaVersion() !== 3)
+        throw new Error(
+          'Read-only futures market source schema is unsupported.',
+        )
+      return
+    }
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS paper_futures_market_migrations (
         version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL
@@ -184,6 +201,29 @@ export class FuturesMarketStore {
         FROM paper_futures_market_quality_policies ORDER BY policy_version`,
       )
       .all() as unknown[]
+  }
+
+  instrumentVersions(): unknown[] {
+    return this.db
+      .prepare(
+        `SELECT metadata_hash,instrument_id,retrieved_at,payload_json,raw_json
+         FROM paper_futures_instrument_versions ORDER BY retrieved_at,metadata_hash`,
+      )
+      .all() as unknown[]
+  }
+
+  frozenSnapshot(): Record<string, unknown> {
+    const events = this.eventsAsOf(Number.MAX_SAFE_INTEGER)
+    const candles = this.candleRevisions()
+    const gaps = this.gapsAsOf(Number.MAX_SAFE_INTEGER)
+    return {
+      schema_version: 'futures-market-source-snapshot.v1',
+      instruments: this.instrumentVersions(),
+      quality_policies: this.qualityPolicies(),
+      events,
+      candles,
+      gaps,
+    }
   }
 
   append(value: unknown): 'inserted' | 'duplicate' {

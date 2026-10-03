@@ -279,7 +279,7 @@ export class FuturesStore {
         state,
         ...(frozen.config &&
         isRecord(frozen.config) &&
-        frozen.config.mode === 'mock' &&
+        (frozen.config.mode === 'mock' || frozen.config.mode === 'replay') &&
         isRecord(frozen.seed) &&
         isRecord(frozen.seed.terminal_market)
           ? { market: frozen.seed.terminal_market }
@@ -734,7 +734,9 @@ export class FuturesStore {
   getLatestRunId(): string | undefined {
     const row = this.db
       .prepare(
-        'SELECT run_id FROM paper_futures_runs ORDER BY rowid DESC LIMIT 1',
+        `SELECT run_id FROM paper_futures_runs
+         WHERE run_id NOT LIKE '%:batch-verification:%'
+         ORDER BY rowid DESC LIMIT 1`,
       )
       .get() as { run_id: string } | undefined
     return row?.run_id
@@ -1855,9 +1857,11 @@ function validateFrozenRun(input: {
     throw new Error('Futures laboratory leverage cannot exceed 1x.')
   canonicalDecimal(input.seed.cash_usd, 'seed cash', 'nonnegative')
   if (input.seed.terminal_market !== undefined) {
-    if (input.config.mode !== 'mock')
-      throw new Error('Terminal market fixture is only valid for MOCK runs.')
-    validateTerminalMarketFixture(input.seed.terminal_market)
+    if (input.config.mode !== 'mock' && input.config.mode !== 'replay')
+      throw new Error(
+        'Terminal market data is only valid for MOCK or REPLAY runs.',
+      )
+    validateTerminalMarketFixture(input.seed.terminal_market, input.config.mode)
   }
   if (
     typeof input.instrument.instrument_id !== 'string' ||
@@ -1883,11 +1887,17 @@ function validateFrozenRun(input: {
   }
 }
 
-function validateTerminalMarketFixture(value: unknown): void {
-  if (!isRecord(value)) throw new Error('Terminal market fixture is invalid.')
+function validateTerminalMarketFixture(
+  value: unknown,
+  mode: 'mock' | 'replay',
+): void {
+  if (!isRecord(value)) throw new Error('Terminal market data is invalid.')
   assertKeys(value, ['schema_version', 'as_of_ms', 'interval_ms', 'candles'])
   if (
-    value.schema_version !== 'mock-terminal-market.v1' ||
+    value.schema_version !==
+      (mode === 'mock'
+        ? 'mock-terminal-market.v1'
+        : 'futures-terminal-market.v1') ||
     !Number.isSafeInteger(value.as_of_ms) ||
     (value.as_of_ms as number) < 0 ||
     ![60_000, 300_000, 900_000, 3_600_000].includes(
@@ -1896,7 +1906,7 @@ function validateTerminalMarketFixture(value: unknown): void {
     !Array.isArray(value.candles) ||
     value.candles.length > 500
   )
-    throw new Error('Terminal market fixture version or bounds are invalid.')
+    throw new Error('Terminal market version or bounds are invalid.')
   let previousTime = -1
   for (const candidate of value.candles) {
     if (!isRecord(candidate))

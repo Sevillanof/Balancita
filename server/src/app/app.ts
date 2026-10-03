@@ -1,8 +1,9 @@
 import cors from '@fastify/cors'
 import Fastify, { type FastifyInstance, type FastifyReply } from 'fastify'
 import WebSocket from 'ws'
-import { randomUUID } from 'node:crypto'
-import { readFileSync } from 'node:fs'
+import { createHash, randomUUID } from 'node:crypto'
+import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { refreshSimulations } from '../features/simulations/refresh-simulations.ts'
 import { getActiveCandidates } from '../features/simulations/candidate-manifest.ts'
 import {
@@ -80,6 +81,7 @@ import { AnalysisRateLimiter } from '../platform/limits.ts'
 import { AnalyzeService } from '../features/analysis/service.ts'
 import { parseAnalysisInputRequest } from '../features/analysis/wire.ts'
 import { FuturesSessionRuntime } from '../features/paper-futures/futures-session-runtime.ts'
+import { canonicalHash } from '../features/paper-futures/futures-canonical.ts'
 import { registerTerminalStream } from '../features/terminal-stream/terminal-stream.ts'
 import {
   FUTURES_PRODUCT,
@@ -144,6 +146,28 @@ const defaultForecastScheduler: ForecastLoopScheduler = {
   setInterval: (callback, intervalMs) => setInterval(callback, intervalMs),
   clearInterval: (handle) =>
     clearInterval(handle as ReturnType<typeof setInterval>),
+}
+
+function assertReplaySourceIsSeparate(sourcePath: string, accountPath: string) {
+  if (accountPath === ':memory:') return
+  const source = realpathSync(sourcePath)
+  const account = existsSync(accountPath)
+    ? realpathSync(accountPath)
+    : resolve(accountPath)
+  const sourceStat = statSync(source)
+  if (
+    source === account ||
+    (existsSync(accountPath) &&
+      sourceStat.dev === statSync(account).dev &&
+      sourceStat.ino === statSync(account).ino)
+  )
+    throw new Error(
+      'Futures account database must be distinct from the replay source.',
+    )
+}
+
+function fileSha256(path: string): string {
+  return createHash('sha256').update(readFileSync(path)).digest('hex')
 }
 
 export interface MarketDependencies {
@@ -318,10 +342,6 @@ export async function buildApp(options: {
   overrides?: Partial<AnalysisDependencies & MarketDependencies>
 }): Promise<FastifyInstance> {
   const { config } = options
-  if (config.futuresMode === 'replay')
-    throw new Error(
-      'FUTURES_MODE=replay is not available in this runtime build; refusing to substitute mock data.',
-    )
   const legacyServicesEnabled = config.futuresMode === undefined
   const marketFetch: MarketRestFetch =
     options.overrides?.marketFetch ??
@@ -583,6 +603,69 @@ export async function buildApp(options: {
   )
 
   const app = Fastify({ logger: false })
+  let futuresMarketStore: FuturesMarketStore | undefined
+  let futuresSourceHash: string | null = null
+  let futuresSourceMetadataHash: string | null = null
+  let futuresSourceQualityHash: string | null = null
+  let sourceInitialHash: string | null = null
+  let futuresReplayCutoffMs: number | null = null
+  if (config.futuresMode === 'replay') {
+    assertReplaySourceIsSeparate(
+      config.futuresReplaySourceDbPath!,
+      config.futuresDbPath,
+    )
+    sourceInitialHash = fileSha256(config.futuresReplaySourceDbPath!)
+    futuresMarketStore = new FuturesMarketStore(
+      config.futuresReplaySourceDbPath!,
+      { readOnly: true },
+    )
+    const instruments = futuresMarketStore.instrumentVersions() as {
+      metadata_hash: string
+      payload_json: string
+    }[]
+    const policies = futuresMarketStore.qualityPolicies() as {
+      version: string
+      payloadJson: string
+    }[]
+    const sourceEvents = futuresMarketStore.eventsAsOf(
+      Number.MAX_SAFE_INTEGER,
+    ) as Record<string, unknown>[]
+    const sourceCandles = futuresMarketStore.candleRevisions() as Record<
+      string,
+      unknown
+    >[]
+    if (
+      instruments.length !== 1 ||
+      policies.length === 0 ||
+      JSON.parse(instruments[0]!.payload_json).productId !== FUTURES_PRODUCT
+    ) {
+      futuresMarketStore.close()
+      throw new Error(
+        'Replay source must contain one frozen PF_XBTUSD catalog and a quality policy.',
+      )
+    }
+    futuresSourceMetadataHash = canonicalHash(instruments)
+    futuresSourceQualityHash = canonicalHash(policies)
+    futuresReplayCutoffMs =
+      config.futuresReplayCutoffMs ??
+      Math.max(
+        0,
+        ...sourceEvents.map((event) => Number(event.receivedAt)),
+        ...sourceCandles.map((candle) => Number(candle.known_at)),
+      )
+    futuresSourceHash = canonicalHash({
+      events: futuresMarketStore.eventsAsOf(Number.MAX_SAFE_INTEGER),
+      candles: futuresMarketStore.candlesAsOf(Number.MAX_SAFE_INTEGER),
+      gaps: futuresMarketStore.gapsAsOf(Number.MAX_SAFE_INTEGER),
+    })
+    if (
+      futuresMarketStore.eventCount() > 100_000 ||
+      futuresMarketStore.candleRevisions().length > 100_000
+    ) {
+      futuresMarketStore.close()
+      throw new Error('Replay source exceeds the configured evidence bound.')
+    }
+  }
   const futuresRuntime =
     config.futuresMode === undefined
       ? undefined
@@ -594,8 +677,20 @@ export async function buildApp(options: {
         : new FuturesSessionRuntime({
             dbPath: config.futuresDbPath,
             mode: config.futuresMode,
+            ...(futuresMarketStore ? { replaySource: futuresMarketStore } : {}),
+            ...(sourceInitialHash
+              ? { replaySourceFileHash: sourceInitialHash }
+              : {}),
+            ...(futuresReplayCutoffMs === null
+              ? {}
+              : { replayCutoffMs: futuresReplayCutoffMs }),
+            ...(futuresSourceMetadataHash
+              ? { replaySourceMetadataHash: futuresSourceMetadataHash }
+              : {}),
+            ...(futuresSourceQualityHash
+              ? { replaySourceQualityHash: futuresSourceQualityHash }
+              : {}),
           })
-  let futuresMarketStore: FuturesMarketStore | undefined
   let futuresCollector: KrakenFuturesMarketCollector | undefined
   let futuresStatus: MarketStatus | 'unavailable' =
     config.futuresMode === 'paper_live' ? 'connecting' : 'stopped'
@@ -651,8 +746,67 @@ export async function buildApp(options: {
           ? 'versioned-mock-fixture.v1'
           : config.futuresMode === 'paper_live'
             ? 'kraken-public-live-stream.v1'
-            : null,
+            : 'frozen-kraken-futures-market.v1',
       active_run_id: futuresRuntime.runId,
+      ...(config.futuresMode === 'replay'
+        ? {
+            instrument_id: 'kraken-futures:PF_XBTUSD',
+            product_id: FUTURES_PRODUCT,
+            quote_currency: 'USD',
+            source_manifest: {
+              schema_version: 'futures-replay-source-manifest.v1',
+              source_hash: futuresSourceHash,
+              source_file_hash: sourceInitialHash,
+              instrument_metadata_hash: futuresSourceMetadataHash,
+              quality_policy_hash: futuresSourceQualityHash,
+              replay_cutoff_ms: futuresReplayCutoffMs,
+              received_cursor: futuresMarketStore?.eventCount() ?? 0,
+            },
+            market: {
+              status: (
+                futuresMarketStore?.candlesAsOf(futuresReplayCutoffMs ?? 0) ??
+                []
+              ).some(
+                (candle) =>
+                  typeof candle === 'object' &&
+                  candle !== null &&
+                  'interval_ms' in candle &&
+                  Number(candle.interval_ms) === 60_000,
+              )
+                ? 'ready'
+                : 'insufficient_history',
+              reason: (
+                futuresMarketStore?.candlesAsOf(futuresReplayCutoffMs ?? 0) ??
+                []
+              ).some(
+                (candle) =>
+                  typeof candle === 'object' &&
+                  candle !== null &&
+                  'interval_ms' in candle &&
+                  Number(candle.interval_ms) === 60_000,
+              )
+                ? null
+                : 'No closed source candles were known by the frozen replay cutoff.',
+              last_received_at: null,
+              book_status: 'recorded',
+              fidelity: 'persisted_public_futures_evidence',
+              funding: 'unknown_unless_explicitly_proven',
+              candles: (
+                futuresMarketStore?.candlesAsOf(futuresReplayCutoffMs ?? 0) ??
+                []
+              )
+                .filter(
+                  (candle) =>
+                    typeof candle === 'object' &&
+                    candle !== null &&
+                    'interval_ms' in candle &&
+                    Number(candle.interval_ms) === 60_000,
+                )
+                .slice(-500),
+            },
+            operations: 'simulated',
+          }
+        : {}),
       ...(config.futuresMode === 'paper_live'
         ? {
             instrument_id: 'kraken-futures:PF_XBTUSD',
@@ -680,8 +834,50 @@ export async function buildApp(options: {
           }
         : {}),
     }))
+    app.get('/api/terminal/export', async (_request, reply) => {
+      if (config.futuresMode !== 'replay' || !futuresRuntime)
+        return reply.code(404).send({
+          error: { code: 'replay_export_unavailable' },
+        })
+      try {
+        if (fileSha256(config.futuresReplaySourceDbPath!) !== sourceInitialHash)
+          throw new Error('Replay source database bytes changed after startup.')
+        const exported = await futuresRuntime.exportReplayRun()
+        if (!exported.verified)
+          return reply.code(409).send({
+            error: { code: 'replay_export_verification_failed' },
+          })
+        const body = JSON.stringify(exported)
+        if (Buffer.byteLength(body, 'utf8') > 10_000_000)
+          return reply.code(413).send({
+            error: { code: 'replay_export_exceeds_size_limit' },
+          })
+        return reply
+          .header('content-type', 'application/json; charset=utf-8')
+          .header(
+            'content-disposition',
+            'attachment; filename="futures-replay-export.json"',
+          )
+          .send(body)
+      } catch (error) {
+        return reply.code(409).send({
+          error: {
+            code: 'replay_export_failed',
+            message:
+              error instanceof Error ? error.message : 'Replay export failed.',
+          },
+        })
+      }
+    })
     app.addHook('onReady', async () => {
       await futuresRuntime.start()
+      if (config.futuresMode === 'replay' && futuresMarketStore) {
+        if (fileSha256(config.futuresReplaySourceDbPath!) !== sourceInitialHash)
+          throw new Error(
+            'Replay source database bytes changed during startup.',
+          )
+        return
+      }
       if (config.futuresMode !== 'paper_live' || !futuresMarketStore) return
       const clock = options.overrides?.futuresClock ?? Date.now
       try {

@@ -1,4 +1,14 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import {
+  appendFileSync,
+  existsSync,
+  linkSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -25,6 +35,11 @@ import { randomUUID } from 'node:crypto'
 import { FuturesStore } from '../features/paper-futures/futures-store.ts'
 import { createMockMarketSnapshot } from '../features/paper-futures/futures-session-runtime.ts'
 import type { FuturesSocket } from '../features/kraken-futures/futures-market.ts'
+import { FuturesMarketStore } from '../features/kraken-futures/futures-market-store.ts'
+import {
+  PAPER_MARKET_QUALITY_POLICY,
+  validateInstrumentCatalog,
+} from '../features/kraken-futures/futures-market.ts'
 
 const resultText = JSON.stringify({
   instrumentId: 'BTC-EUR',
@@ -144,18 +159,207 @@ describe('app test configuration', () => {
     }
   })
 
-  it('fails closed for explicit replay rather than silently selecting mock', async () => {
-    await expect(
-      buildApp({
-        config: testConfigFrom({
-          FUTURES_MODE: 'replay',
-          FUTURES_DB_PATH: ':memory:',
-          FUTURES_REPLAY_SOURCE_DB_PATH: 'frozen.sqlite',
-        }),
-      }),
-    ).rejects.toThrow(
-      'FUTURES_MODE=replay is not available in this runtime build; refusing to substitute mock data.',
+  it('starts REPLAY from a frozen market source without modifying it', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'balancita-futures-replay-'))
+    const sourcePath = join(directory, 'source.sqlite')
+    const accountPath = join(directory, 'account.sqlite')
+    const writer = new FuturesMarketStore(sourcePath)
+    const catalog = {
+      instruments: [
+        {
+          symbol: 'PF_XBTUSD',
+          type: 'flexible_futures',
+          pair: 'BTC:USD',
+          base: 'BTC',
+          quote: 'USD',
+          contractSize: '1',
+          tickSize: '1',
+          contractValueTradePrecision: 4,
+          tradeable: true,
+          isExpired: false,
+        },
+      ],
+    }
+    const instrument = validateInstrumentCatalog(catalog, {
+      source: 'fixture',
+      retrievedAt: 1,
+    })
+    writer.saveInstrument(instrument, catalog)
+    writer.saveQualityPolicy(PAPER_MARKET_QUALITY_POLICY, 1)
+    const knownAt = 21_600_000
+    for (const intervalMs of [60_000, 300_000]) {
+      const count = intervalMs === 60_000 ? 60 : 12
+      for (let index = 0; index < count; index += 1) {
+        const bucketStart = knownAt - (count - index) * intervalMs
+        writer.saveCandleRevision({
+          id: `${intervalMs}:${bucketStart}`,
+          intervalMs,
+          bucketStart,
+          revision: 1,
+          knownAt,
+          closeAt: bucketStart + intervalMs,
+          isClosed: true,
+          coverage: 'complete',
+          open: '100000',
+          high: '100050',
+          low: '99950',
+          close: '100000',
+          volumeBtc: '1',
+          tradeCount: 1,
+          sourceHash: `fixture-${intervalMs}-${index}`,
+        })
+      }
+    }
+    writer.append({
+      type: 'book',
+      productId: 'PF_XBTUSD',
+      epoch: 1,
+      seq: 1,
+      eventTime: knownAt,
+      receivedAt: knownAt,
+      persistedAt: knownAt,
+      snapshot: true,
+      contiguous: true,
+      valid: true,
+      bids: [{ price: '100000', quantity: '1' }],
+      asks: [{ price: '100001', quantity: '1' }],
+      rawJson: '{}',
+    })
+    writer.append({
+      type: 'ticker',
+      productId: 'PF_XBTUSD',
+      epoch: 1,
+      seq: 2,
+      eventTime: knownAt,
+      receivedAt: knownAt,
+      persistedAt: knownAt,
+      mark: '100000.5',
+      last: '100000.5',
+      rawJson: '{}',
+    })
+    writer.close()
+    const sourceHash = () =>
+      createHash('sha256').update(readFileSync(sourcePath)).digest('hex')
+    const sourceBytes = readFileSync(sourcePath)
+    const before = sourceHash()
+    const replayConfig = (accountDbPath: string, cutoff?: number) =>
+      testConfigFrom({
+        FUTURES_MODE: 'replay',
+        FUTURES_DB_PATH: accountDbPath,
+        FUTURES_REPLAY_SOURCE_DB_PATH: sourcePath,
+        ...(cutoff === undefined
+          ? {}
+          : { FUTURES_REPLAY_CUTOFF_MS: String(cutoff) }),
+      })
+    const symlinkPath = join(directory, 'source-symlink.sqlite')
+    const hardlinkPath = join(directory, 'source-hardlink.sqlite')
+    symlinkSync(sourcePath, symlinkPath)
+    linkSync(sourcePath, hardlinkPath)
+    expect(() => replayConfig(sourcePath)).toThrow(
+      'FUTURES_REPLAY_SOURCE_DB_PATH and FUTURES_DB_PATH must differ.',
     )
+    for (const accountAlias of [symlinkPath, hardlinkPath])
+      await expect(
+        buildApp({ config: replayConfig(accountAlias) }),
+      ).rejects.toThrow('Futures account database must be distinct')
+    expect(sourceHash()).toBe(before)
+    let app = await buildApp({
+      config: replayConfig(accountPath),
+    })
+    try {
+      await app.ready()
+      const response = await app.inject({
+        method: 'GET',
+        url: '/api/terminal/bootstrap',
+      })
+      expect(response.statusCode).toBe(200)
+      expect(response.json()).toMatchObject({
+        mode: 'replay',
+        source: 'frozen-kraken-futures-market.v1',
+        market: { status: 'ready' },
+        source_manifest: { received_cursor: 2 },
+        instrument_id: 'kraken-futures:PF_XBTUSD',
+      })
+      const exported = await app.inject({
+        method: 'GET',
+        url: '/api/terminal/export',
+      })
+      expect(exported.statusCode).toBe(200)
+      expect(exported.json()).toMatchObject({
+        schema_version: 'futures-replay-export.v1',
+        verified: true,
+        source_hash: expect.stringMatching(/^[a-f0-9]{64}$/),
+        economic_export: { schema_version: 'futures-replay-export.v1' },
+      })
+      expect(exported.json().economic_export.manifest).toMatchObject({
+        source_file_hash: before,
+        replay_cutoff_ms: knownAt,
+      })
+      expect(
+        exported.json().economic_export.manifest.source_metadata_hash,
+      ).toMatch(/^[a-f0-9]{64}$/)
+      expect(
+        exported.json().economic_export.manifest.source_quality_hash,
+      ).toMatch(/^[a-f0-9]{64}$/)
+      expect(existsSync(accountPath)).toBe(true)
+      const firstExport = exported.json()
+      await app.close()
+      app = await buildApp({ config: replayConfig(accountPath) })
+      await app.ready()
+      const restoredBootstrap = await app.inject({
+        method: 'GET',
+        url: '/api/terminal/bootstrap',
+      })
+      const restoredExport = await app.inject({
+        method: 'GET',
+        url: '/api/terminal/export',
+      })
+      expect(restoredBootstrap.json().active_run_id).toBe(firstExport.run_id)
+      expect(restoredExport.json().economic_export.semantic_hash).toBe(
+        firstExport.economic_export.semantic_hash,
+      )
+      expect(restoredExport.json().economic_export.inputs).toEqual(
+        firstExport.economic_export.inputs,
+      )
+      appendFileSync(sourcePath, Buffer.from('changed source bytes'))
+      const changedSourceExport = await app.inject({
+        method: 'GET',
+        url: '/api/terminal/export',
+      })
+      expect(changedSourceExport.statusCode).toBe(409)
+      expect(changedSourceExport.json().error.message).toContain(
+        'source database bytes changed',
+      )
+      writeFileSync(sourcePath, sourceBytes)
+      const limitedApp = await buildApp({
+        config: replayConfig(
+          join(directory, 'cutoff-account.sqlite'),
+          knownAt - 1,
+        ),
+      })
+      try {
+        await limitedApp.ready()
+        const limitedBootstrap = await limitedApp.inject({
+          method: 'GET',
+          url: '/api/terminal/bootstrap',
+        })
+        expect(limitedBootstrap.json()).toMatchObject({
+          source_manifest: { replay_cutoff_ms: knownAt - 1 },
+          market: { status: 'insufficient_history', candles: [] },
+        })
+        const limitedExport = await limitedApp.inject({
+          method: 'GET',
+          url: '/api/terminal/export',
+        })
+        expect(limitedExport.json().economic_export.inputs).toHaveLength(0)
+      } finally {
+        await limitedApp.close()
+      }
+    } finally {
+      await app.close()
+      expect(sourceHash()).toBe(before)
+      rmSync(directory, { recursive: true, force: true })
+    }
   })
 
   it('shares one offline Python/SQLite runtime across two WebSocket subscribers', async () => {

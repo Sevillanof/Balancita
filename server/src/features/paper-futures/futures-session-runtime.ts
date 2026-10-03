@@ -2,7 +2,10 @@ import { FuturesCommandRunner } from './futures-command-runner.ts'
 import { canonicalHash } from './futures-canonical.ts'
 import { FuturesStore } from './futures-store.ts'
 import type { FuturesWorkerRequest } from './futures-worker.ts'
-import { FuturesReplayDriver } from './futures-replay-driver.ts'
+import {
+  compareEconomicSemantics,
+  FuturesReplayDriver,
+} from './futures-replay-driver.ts'
 import { randomUUID } from 'node:crypto'
 import type { FuturesMarketStore } from '../kraken-futures/futures-market-store.ts'
 import type { TerminalPaperCommand } from '../terminal-stream/terminal-stream.ts'
@@ -41,11 +44,44 @@ const strategies = {
   ],
 } as const
 
+function createReplayTerminalMarket(
+  source: FuturesMarketStore,
+  receivedCutoff: number,
+) {
+  const candles = (
+    source.candlesAsOf(receivedCutoff) as Record<string, unknown>[]
+  )
+    .filter((candle) => Number(candle.interval_ms) === 60_000)
+    .slice(-500)
+    .map((candle) => ({
+      time_ms: candle.bucket_start,
+      open: candle.open_price,
+      high: candle.high_price,
+      low: candle.low_price,
+      close: candle.close_price,
+      volume_btc: candle.volume_btc,
+      closed: true as const,
+    }))
+  const last = candles.at(-1)
+  return {
+    schema_version: 'futures-terminal-market.v1' as const,
+    as_of_ms: last ? Number(last.time_ms) + 60_000 : 0,
+    interval_ms: 60_000,
+    candles,
+  }
+}
+
 export class FuturesSessionRuntime {
   readonly store: FuturesStore
   readonly runner: FuturesCommandRunner
   runId: string
   private readonly mode: 'mock' | 'paper_live' | 'replay'
+  private readonly replaySource?: FuturesMarketStore
+  private readonly replaySourceHash?: string
+  private readonly replaySourceFileHash?: string
+  private readonly replaySourceMetadataHash?: string
+  private readonly replaySourceQualityHash?: string
+  private readonly replayCutoffMs?: number
   private readonly drivers = new Map<string, Promise<FuturesReplayDriver>>()
   private readonly eventQueues = new Map<string, Promise<unknown>>()
   private readonly mockTickTimers = new Map<
@@ -56,8 +92,27 @@ export class FuturesSessionRuntime {
   constructor(options: {
     dbPath: string
     mode: 'mock' | 'paper_live' | 'replay'
+    replaySource?: FuturesMarketStore
+    replaySourceFileHash?: string
+    replaySourceMetadataHash?: string
+    replaySourceQualityHash?: string
+    replayCutoffMs?: number
   }) {
     this.mode = options.mode
+    if (options.mode === 'replay' && options.replaySource === undefined)
+      throw new Error('REPLAY requires a frozen futures market source.')
+    this.replaySource = options.replaySource
+    this.replaySourceFileHash = options.replaySourceFileHash
+    this.replaySourceMetadataHash = options.replaySourceMetadataHash
+    this.replaySourceQualityHash = options.replaySourceQualityHash
+    this.replayCutoffMs = options.replayCutoffMs
+    this.replaySourceHash = options.replaySource
+      ? canonicalHash({
+          events: options.replaySource.eventsAsOf(Number.MAX_SAFE_INTEGER),
+          candles: options.replaySource.candlesAsOf(Number.MAX_SAFE_INTEGER),
+          gaps: options.replaySource.gapsAsOf(Number.MAX_SAFE_INTEGER),
+        })
+      : undefined
     this.store = new FuturesStore(options.dbPath)
     const primaryRunId = 'futures-session:primary'
     this.store.createRun({
@@ -71,11 +126,21 @@ export class FuturesSessionRuntime {
       },
       seed: {
         cash_usd: '10000',
-        seed: 'mock-fixture-v1',
+        seed:
+          options.mode === 'replay'
+            ? `frozen-market:${this.replaySourceHash}`
+            : 'mock-fixture-v1',
         source: options.mode,
         ...(options.mode === 'mock'
           ? { terminal_market: createTerminalMarketFixture() }
-          : {}),
+          : options.mode === 'replay' && options.replaySource
+            ? {
+                terminal_market: createReplayTerminalMarket(
+                  options.replaySource,
+                  options.replayCutoffMs ?? Number.MAX_SAFE_INTEGER,
+                ),
+              }
+            : {}),
       },
       instrument: { instrument_id: instrument.instrument_id },
       costs: {
@@ -166,22 +231,126 @@ export class FuturesSessionRuntime {
       this.drivers.delete(this.runId)
       await this.restoreDriver(this.runId)
     }
+    if (this.mode === 'replay' && this.replaySource !== undefined) {
+      const driver = await this.restoreDriver(this.runId)
+      await driver.processMarketStore(
+        this.replaySource,
+        this.replayCutoffMs ?? Number.MAX_SAFE_INTEGER,
+        instrument as unknown as Record<string, unknown>,
+        undefined,
+        'replay',
+      )
+    }
   }
 
   async processMarketEvidence(
     source: FuturesMarketStore,
     receivedAt: number,
   ): Promise<void> {
-    if (this.mode !== 'paper_live')
-      throw new Error('Public market evidence is only accepted in PAPER_LIVE.')
+    if (this.mode !== 'paper_live' && this.mode !== 'replay')
+      throw new Error('Market evidence is not accepted in MOCK.')
     const driver = await this.restoreDriver(this.runId)
     await driver.processMarketStore(
       source,
       receivedAt,
       instrument as unknown as Record<string, unknown>,
       undefined,
-      'paper_live',
+      this.mode,
     )
+  }
+
+  async exportReplayRun() {
+    if (this.mode !== 'replay' || this.replaySource === undefined)
+      throw new Error('Verified run export is available only for REPLAY.')
+    const activeDriver = await this.restoreDriver(this.runId)
+    const activeExport = activeDriver.exportRun()
+    const batchRunId = `${this.runId}:batch-verification:${randomUUID()}`
+    const terminalMarket = createReplayTerminalMarket(
+      this.replaySource,
+      this.replayCutoffMs ?? Number.MAX_SAFE_INTEGER,
+    )
+    const frozen = {
+      config: {
+        ledger_version: 'linear-usd-ledger.v1',
+        decimal_precision: 50,
+        leverage: '1',
+        mode: 'replay',
+        mode_config_hash: canonicalHash({ mode: 'replay', runtimeConfig }),
+      },
+      seed: {
+        cash_usd: '10000',
+        seed: `frozen-market:${this.replaySourceHash}`,
+        source: 'replay',
+        terminal_market: terminalMarket,
+      },
+      instrument: { instrument_id: instrument.instrument_id },
+      costs: {
+        version: runtimeConfig.cost_version,
+        maker: runtimeConfig.maker_rate,
+        taker: runtimeConfig.taker_rate,
+      },
+      runtime: {
+        schema_version: 'futures-runtime-binding.v4',
+        runtime_config: runtimeConfig,
+        instrument_spec: instrument,
+        strategy_manifest: strategies,
+        strategy_config_hash: canonicalHash(strategies),
+      },
+    }
+    this.store.createRun({ runId: batchRunId, ...frozen })
+    const batchExport = await FuturesReplayDriver.replayMarketStore({
+      runId: batchRunId,
+      manifest: this.replayManifest(),
+      store: this.replaySource,
+      receivedCutoff: this.replayCutoffMs ?? Number.MAX_SAFE_INTEGER,
+      instrument: instrument as unknown as Record<string, unknown>,
+      mode: 'replay',
+      durableStore: this.store,
+      apply: async (work) => {
+        const request: FuturesWorkerRequest = {
+          request_id: work.analysis_id,
+          run_id: batchRunId,
+          work_id: work.work_id,
+          expected_state_version: work.version,
+          payload: {
+            operation: 'futures_runtime.v3',
+            runtime_config: runtimeConfig,
+            instrument,
+            market_snapshot: work.input.payload.market_snapshot as Record<
+              string,
+              unknown
+            >,
+          },
+        }
+        const result = await this.runner.accept(request).result
+        return {
+          status: 'committed',
+          applied_state_version: Number(
+            this.store.getRunProjection(batchRunId)?.state_version,
+          ),
+          economic_projection: result,
+        }
+      },
+    })
+    const comparison = compareEconomicSemantics(activeExport, batchExport)
+    const verified =
+      this.store.verifyRun(this.runId) &&
+      this.store.verifyRun(batchRunId) &&
+      comparison.equal &&
+      activeExport.manifest.source_hash === this.replaySourceHash
+    return {
+      schema_version: 'futures-replay-export.v1',
+      verified,
+      run_id: this.runId,
+      source_hash: this.replaySourceHash,
+      source_file_hash: this.replaySourceFileHash,
+      manifest_hash: activeExport.manifest_hash,
+      semantic_hash: activeExport.semantic_hash,
+      comparison,
+      economic_export: activeExport,
+      batch_verification: batchExport,
+      ledger_export: this.store.exportRun(this.runId),
+    }
   }
 
   private restoreDriver(runId: string): Promise<FuturesReplayDriver> {
@@ -350,6 +519,27 @@ export class FuturesSessionRuntime {
   }
 
   private replayManifest() {
+    if (this.mode === 'replay')
+      return {
+        schema_version: 'futures-replay-manifest.v1',
+        source: 'frozen-kraken-futures-market.v1',
+        source_hash: this.replaySourceHash!,
+        config_hash: canonicalHash(runtimeConfig),
+        seed: `frozen-market:${this.replaySourceHash}`,
+        fidelity: 'persisted-public-futures-events-and-known-candles.v1',
+        runtime_version: runtimeConfig.version,
+        instrument_hash: canonicalHash(instrument),
+        source_file_hash: this.replaySourceFileHash,
+        ...(this.replaySourceMetadataHash === undefined
+          ? {}
+          : { source_metadata_hash: this.replaySourceMetadataHash }),
+        ...(this.replaySourceQualityHash === undefined
+          ? {}
+          : { source_quality_hash: this.replaySourceQualityHash }),
+        ...(this.replayCutoffMs === undefined
+          ? {}
+          : { replay_cutoff_ms: this.replayCutoffMs }),
+      } as const
     if (this.mode === 'paper_live')
       return {
         schema_version: 'futures-replay-manifest.v1',

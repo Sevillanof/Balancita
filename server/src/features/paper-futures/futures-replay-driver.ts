@@ -12,6 +12,10 @@ export type ReplayManifest = Readonly<{
   fidelity: string
   runtime_version?: string
   instrument_hash?: string
+  source_file_hash?: string
+  source_metadata_hash?: string
+  source_quality_hash?: string
+  replay_cutoff_ms?: number
 }>
 
 export type CausalInput = Readonly<{
@@ -185,7 +189,7 @@ export class FuturesReplayDriver {
     controlForSource?: (
       source: Record<string, unknown>,
     ) => Record<string, unknown> | undefined,
-    mode: 'mock' | 'paper_live' = 'mock',
+    mode: 'mock' | 'paper_live' | 'replay' = 'mock',
   ): Promise<void> {
     validateTimestamp(receivedCutoff, 'received cutoff')
     this.bindMarketSource(instrument, store)
@@ -389,6 +393,17 @@ export class FuturesReplayDriver {
         throw new Error(
           'Replay dataset hash does not match the frozen manifest.',
         )
+      if (
+        (this.manifest.source_metadata_hash !== undefined &&
+          canonicalHash(sourceStore.instrumentVersions()) !==
+            this.manifest.source_metadata_hash) ||
+        (this.manifest.source_quality_hash !== undefined &&
+          canonicalHash(sourceStore.qualityPolicies()) !==
+            this.manifest.source_quality_hash)
+      )
+        throw new Error(
+          'Replay catalog or quality policy does not match the frozen manifest.',
+        )
     }
     const binding = {
       schema_version: 'futures-replay-session.v1',
@@ -576,6 +591,7 @@ export class FuturesReplayDriver {
       store: FuturesMarketStore
       receivedCutoff: number
       instrument: Record<string, unknown>
+      mode?: 'mock' | 'paper_live' | 'replay'
       controlForSource?: (
         source: Record<string, unknown>,
       ) => Record<string, unknown> | undefined
@@ -587,6 +603,7 @@ export class FuturesReplayDriver {
       options.receivedCutoff,
       options.instrument,
       options.controlForSource,
+      options.mode,
     )
     return driver.exportRun()
   }
