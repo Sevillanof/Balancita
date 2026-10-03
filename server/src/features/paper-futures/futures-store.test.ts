@@ -286,7 +286,7 @@ describe('isolated paper-futures SQLite store', () => {
             "SELECT COUNT(*) AS count FROM sqlite_master WHERE type='table' AND name LIKE 'paper_futures_%'",
           )
           .get(),
-      ).toEqual({ count: 13 })
+      ).toEqual({ count: 15 })
       check.close()
     } finally {
       rmSync(directory, { recursive: true, force: true })

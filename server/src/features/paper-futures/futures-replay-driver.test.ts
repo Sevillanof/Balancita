@@ -55,6 +55,39 @@ function pythonMarket(decisionTime: number, breakout: 'long' | 'flat') {
 }
 
 describe('shared causal futures replay driver', () => {
+  it('assigns a durable-shaped unique UUID to each distinct WAIT evidence cycle', async () => {
+    const driver = new FuturesReplayDriver({
+      runId: 'wait-cycle-identities',
+      manifest: {
+        schema_version: 'futures-replay-manifest.v1',
+        source: 'fixture',
+        source_hash: 'a'.repeat(64),
+        config_hash: 'b'.repeat(64),
+        seed: 'fixture',
+        fidelity: 'ohlc-low.v1',
+      },
+      apply: async (work) => ({
+        status: 'committed',
+        applied_state_version: work.version + 1,
+        economic_projection: { analysis: { action: 'WAIT' } },
+      }),
+    })
+    const evidence = {
+      received_at_ms: 10,
+      event_time_ms: 10,
+      payload: { market_snapshot_hash: 'c'.repeat(64), wait: true },
+    }
+    await driver.processEvent({ ...evidence, sequence: 1 })
+    await driver.processEvent({ ...evidence, sequence: 2 })
+    const works = driver.exportRun().work
+    expect(works).toHaveLength(2)
+    expect(new Set(works.map((work) => work.analysis_id)).size).toBe(2)
+    expect(
+      works.every((work) => /^[0-9a-f-]{36}$/i.test(work.analysis_id)),
+    ).toBe(true)
+    expect(works[0]?.cycle_key).not.toBe(works[1]?.cycle_key)
+  })
+
   it('ingests persisted receipt-order market events and as-of candles into actual runtime work', async () => {
     const directory = mkdtempSync(
       join(tmpdir(), 'futures-replay-market-source-'),
@@ -205,6 +238,9 @@ describe('shared causal futures replay driver', () => {
       raw: { fixture: 'ticker' },
     })
     appendBook(start + 100, 2, '100000', '100001')
+    appendBook(start + 101, 3, '100000', '100001')
+    appendBook(start + 201, 4, '100000', '100001')
+    appendBook(start + 301, 5, '100000', '100001')
     marketStore.saveCandleRevision({
       id: 'fixture:60000:future',
       intervalMs: 60_000,
@@ -222,10 +258,10 @@ describe('shared causal futures replay driver', () => {
       tradeCount: 1,
       sourceHash: 'e'.repeat(64),
     })
-    appendBook(start + 101, 3, '100000', '100001')
     const sourceHash = canonicalHash({
-      events: marketStore.eventsAsOf(start + 100),
-      candles: marketStore.candlesAsOf(start + 100),
+      events: marketStore.eventsAsOf(Number.MAX_SAFE_INTEGER),
+      candles: marketStore.candlesAsOf(Number.MAX_SAFE_INTEGER),
+      gaps: marketStore.gapsAsOf(Number.MAX_SAFE_INTEGER),
     })
     const manifest = {
       schema_version: 'futures-replay-manifest.v1' as const,
@@ -249,7 +285,7 @@ describe('shared causal futures replay driver', () => {
     }
     const run = async (runId: string, batch: boolean) => {
       const dbPath = join(directory, `${runId}.sqlite`)
-      const store = new FuturesStore(dbPath)
+      let store = new FuturesStore(dbPath)
       const createRun = () =>
         store.createRun({
           runId,
@@ -274,7 +310,7 @@ describe('shared causal futures replay driver', () => {
           },
         })
       createRun()
-      const runner = new FuturesCommandRunner(store)
+      let runner = new FuturesCommandRunner(store)
       const audit: Record<string, unknown>[] = []
       const apply = async (work: RuntimeWork) => {
         const market = work.input.payload.market_snapshot as Record<
@@ -291,12 +327,23 @@ describe('shared causal futures replay driver', () => {
             runtime_config: runtimeConfig,
             instrument,
             market_snapshot: market,
+            ...(work.input.payload.control
+              ? {
+                  control: work.input.payload.control as Record<
+                    string,
+                    unknown
+                  >,
+                }
+              : {}),
           },
         }
         await runner.accept(request).result
         const projection = store.getRunProjection(runId)
         const raw = store.exportRun(runId)
         const result = projection?.result as Record<string, unknown>
+        const runtimeOutput = (
+          raw.runtime_outputs as Record<string, unknown>[]
+        ).at(-1)
         const checkpoint = projection?.checkpoint as Record<string, unknown>
         const execution = checkpoint.execution_checkpoint as Record<
           string,
@@ -311,11 +358,13 @@ describe('shared causal futures replay driver', () => {
         audit.push({
           received_sequence: work.input.sequence,
           version: projection?.state_version,
+          ledger: result,
           quantity_btc:
             result.quantity_btc ??
             (result.position as Record<string, unknown> | undefined)
               ?.quantity_btc,
           eligible_at_ms: pending?.eligible_at_ms,
+          runtime_output: runtimeOutput,
           fills: raw.events,
         })
         return {
@@ -323,6 +372,7 @@ describe('shared causal futures replay driver', () => {
           applied_state_version: Number(projection?.state_version),
           economic_projection: {
             ledger: projection?.result,
+            runtime_output: runtimeOutput,
             events: raw.events,
           },
         }
@@ -332,20 +382,161 @@ describe('shared causal futures replay driver', () => {
         manifest,
         apply,
         store: marketStore,
-        receivedCutoff: start + 100,
+        receivedCutoff: start + 301,
         instrument,
+        controlForSource: (source: Record<string, unknown>) =>
+          Number(source.receivedSequence) === 5
+            ? { type: 'paper.close' }
+            : undefined,
       }
-      const result = batch
-        ? await FuturesReplayDriver.replayMarketStore(common)
-        : await (async () => {
-            const driver = new FuturesReplayDriver({ runId, manifest, apply })
-            await driver.processMarketStore(
-              marketStore,
-              start + 100,
-              instrument,
-            )
-            return driver.exportRun()
-          })()
+      let result
+      if (batch) {
+        result = await FuturesReplayDriver.replayMarketStore(common)
+      } else {
+        let driver = new FuturesReplayDriver({
+          runId,
+          manifest,
+          apply,
+          durableStore: store,
+        })
+        await driver.processMarketStore(marketStore, start, instrument)
+        expect(
+          driver.exportRun().inputs.map((input) => input.sequence),
+        ).toEqual([3])
+        const beforeRestart = store.getRunProjection(runId)
+        const pendingCheckpoint = beforeRestart?.checkpoint as Record<
+          string,
+          unknown
+        >
+        const pendingExecution =
+          pendingCheckpoint.execution_checkpoint as Record<string, unknown>
+        const pendingOrders = Object.values(
+          pendingExecution.orders as Record<string, Record<string, unknown>>,
+        )
+        expect(
+          pendingOrders.some((order) => order.eligible_at_ms === start + 100),
+        ).toBe(true)
+        await runner.close()
+        store.close()
+
+        store = new FuturesStore(dbPath)
+        createRun()
+        runner = new FuturesCommandRunner(store)
+        driver = await FuturesReplayDriver.resumeMarketStore({
+          runId,
+          manifest,
+          apply,
+          durableStore: store,
+          marketStore,
+          receivedCutoff: start,
+          instrument,
+        })
+        expect(
+          driver.exportRun().inputs.map((input) => input.sequence),
+        ).toEqual([3])
+        const restoredPending = store.getRunProjection(runId)
+          ?.checkpoint as Record<string, unknown>
+        const restoredExecution =
+          restoredPending.execution_checkpoint as Record<string, unknown>
+        const restoredOrders = Object.values(
+          restoredExecution.orders as Record<string, Record<string, unknown>>,
+        )
+        expect(
+          restoredOrders.some((order) => order.eligible_at_ms === start + 100),
+        ).toBe(true)
+        expect(
+          store.loadReplaySession(runId, {
+            schema_version: 'futures-replay-session.v1',
+            run_id: runId,
+            manifest,
+            instrument_hash: canonicalHash(instrument),
+          }).cursor,
+        ).toBe(3)
+        const headBeforeRetry = store.exportRun(runId).head_hash
+        const effectsBeforeRetry = (store.exportRun(runId).events as unknown[])
+          .length
+        await expect(
+          driver.processEvent({
+            sequence: 2,
+            received_at_ms: start,
+            event_time_ms: start,
+            payload: { invalid_cursor_probe: true },
+          }),
+        ).rejects.toThrow(
+          'Causal inputs must arrive in persisted receive order.',
+        )
+        expect(store.exportRun(runId).head_hash).toBe(headBeforeRetry)
+        expect((store.exportRun(runId).events as unknown[]).length).toBe(
+          effectsBeforeRetry,
+        )
+        await expect(
+          FuturesReplayDriver.resumeMarketStore({
+            runId,
+            manifest: { ...manifest, source_hash: 'f'.repeat(64) },
+            apply,
+            durableStore: store,
+            marketStore,
+            receivedCutoff: start,
+            instrument,
+          }),
+        ).rejects.toThrow(
+          'Replay dataset hash does not match the frozen manifest.',
+        )
+        await expect(
+          FuturesReplayDriver.resumeMarketStore({
+            runId,
+            manifest: { ...manifest, config_hash: 'f'.repeat(64) },
+            apply,
+            durableStore: store,
+            marketStore,
+            receivedCutoff: start,
+            instrument,
+          }),
+        ).rejects.toThrow(
+          'Replay session does not match the frozen runtime binding.',
+        )
+        expect(store.exportRun(runId).head_hash).toBe(headBeforeRetry)
+        expect((store.exportRun(runId).events as unknown[]).length).toBe(
+          effectsBeforeRetry,
+        )
+        const analysesBeforeRetry = driver
+          .exportRun()
+          .work.map((work) => work.analysis_id)
+        await driver.processMarketStore(marketStore, start, instrument)
+        expect(store.exportRun(runId).head_hash).toBe(headBeforeRetry)
+        expect((store.exportRun(runId).events as unknown[]).length).toBe(
+          effectsBeforeRetry,
+        )
+        expect(driver.exportRun().work.map((work) => work.analysis_id)).toEqual(
+          analysesBeforeRetry,
+        )
+        await driver.processMarketStore(
+          marketStore,
+          start + 301,
+          instrument,
+          (source) =>
+            Number(source.receivedSequence) === 5
+              ? { type: 'paper.close' }
+              : undefined,
+        )
+        result = driver.exportRun()
+        expect(result.inputs.map((input) => input.sequence)).toEqual([
+          3, 4, 5, 6, 7,
+        ])
+        expect(store.exportRun(runId).head_hash).not.toBe(headBeforeRetry)
+        expect(
+          (store.exportRun(runId).events as unknown[]).length,
+        ).toBeGreaterThan(effectsBeforeRetry)
+        expect(store.verifyRun(runId)).toBe(true)
+        const session = store.loadReplaySession(runId, {
+          schema_version: 'futures-replay-session.v1',
+          run_id: runId,
+          manifest,
+          instrument_hash: canonicalHash(instrument),
+        })
+        expect(session.cursor).toBe(7)
+        expect(session.works).toHaveLength(5)
+      }
       await runner.close()
       store.close()
       const fills = result.economic_projection as Record<string, unknown>[]
@@ -358,20 +549,42 @@ describe('shared causal futures replay driver', () => {
     expect(incremental.result.work.map((work) => work.work_id)).not.toEqual(
       batch.result.work.map((work) => work.work_id),
     )
-    expect(
-      compareEconomicSemantics(incremental.result, batch.result),
-    ).toMatchObject({ equal: true })
+    const semanticComparison = compareEconomicSemantics(
+      incremental.result,
+      batch.result,
+    )
+    expect(semanticComparison.differences).toEqual([])
     expect(incremental.result.inputs.map((input) => input.sequence)).toEqual([
-      3, 4,
+      3, 4, 5, 6, 7,
     ])
     expect(incremental.audit.map((entry) => entry.received_sequence)).toEqual([
-      3, 4,
+      3, 4, 5, 6, 7,
     ])
     expect(incremental.audit[0]).toMatchObject({
       quantity_btc: '0',
       eligible_at_ms: start + 100,
     })
     expect(incremental.audit[1]?.quantity_btc).toBe('0.0099')
+    expect(incremental.audit[2]).toMatchObject({
+      quantity_btc: '0.0099',
+      eligible_at_ms: start + 201,
+    })
+    const closeIntent = (
+      incremental.audit[2]?.fills as Record<string, unknown>[]
+    ).find(
+      (event) => event.type === 'order' && event.order_type === 'reduce_only',
+    )
+    expect(closeIntent).toMatchObject({
+      side: 'sell',
+      order_type: 'reduce_only',
+    })
+    expect(closeIntent).not.toHaveProperty('limit_price_usd')
+    expect(closeIntent).not.toHaveProperty('price_usd')
+    expect(incremental.audit[3]?.quantity_btc).toBe('0')
+    expect(
+      (incremental.audit[4]?.runtime_output as Record<string, unknown>)
+        .analysis,
+    ).toMatchObject({ action: 'WAIT' })
     expect(
       incremental.result.inputs.every((input) => {
         const event = input.payload.market_event as Record<string, unknown>
@@ -417,6 +630,25 @@ describe('shared causal futures replay driver', () => {
       fee_usd: '0.49500495',
       quantity_btc: '0.0099',
     })
+    expect(
+      (incremental.audit[3]?.fills as Record<string, unknown>[]).filter(
+        (event) => event.type === 'fill',
+      ),
+    ).toHaveLength(2)
+    expect(
+      (incremental.audit[3]?.fills as Record<string, unknown>[]).find(
+        (event) =>
+          event.type === 'fill' && event.price_usd_per_btc === '100000',
+      ),
+    ).toMatchObject({ quantity_btc: '0.0099', fee_usd: '0.495' })
+    expect(incremental.audit[3]?.ledger).toMatchObject({
+      quantity_btc: '0',
+      fees_usd: '0.99000495',
+      realized_net_complete: '-0.99990495',
+    })
+    const analysisIds = incremental.result.work.map((work) => work.analysis_id)
+    expect(new Set(analysisIds).size).toBe(analysisIds.length)
+    expect(analysisIds.every((id) => /^[0-9a-f-]{36}$/i.test(id))).toBe(true)
     expect(JSON.stringify(incremental.result.economic_projection)).toContain(
       '0.0099',
     )

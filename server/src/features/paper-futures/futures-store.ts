@@ -46,12 +46,153 @@ export class FuturesStore {
       CREATE TABLE IF NOT EXISTS paper_futures_command_queue(command_id TEXT PRIMARY KEY REFERENCES paper_futures_commands(command_id), payload_json TEXT NOT NULL) STRICT;
       CREATE TRIGGER IF NOT EXISTS paper_futures_command_queue_no_update BEFORE UPDATE ON paper_futures_command_queue BEGIN SELECT RAISE(ABORT,'immutable queued futures command'); END;
       CREATE TRIGGER IF NOT EXISTS paper_futures_command_queue_no_delete BEFORE DELETE ON paper_futures_command_queue BEGIN SELECT RAISE(ABORT,'immutable queued futures command'); END;
-      INSERT OR IGNORE INTO paper_futures_schema_migrations VALUES(2, unixepoch('subsec') * 1000);
+       INSERT OR IGNORE INTO paper_futures_schema_migrations VALUES(2, unixepoch('subsec') * 1000);
+       CREATE TABLE IF NOT EXISTS paper_futures_replay_sessions(run_id TEXT PRIMARY KEY REFERENCES paper_futures_runs(run_id), binding_json TEXT NOT NULL, binding_hash TEXT NOT NULL) STRICT;
+        CREATE TABLE IF NOT EXISTS paper_futures_replay_work(work_id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES paper_futures_replay_sessions(run_id), source_sequence INTEGER NOT NULL, input_hash TEXT NOT NULL, work_json TEXT NOT NULL, work_hash TEXT NOT NULL, receipt_json TEXT, receipt_hash TEXT, UNIQUE(run_id,source_sequence)) STRICT;
+       CREATE TRIGGER IF NOT EXISTS paper_futures_replay_work_identity_immutable BEFORE UPDATE OF work_id,run_id,source_sequence,input_hash,work_json,work_hash ON paper_futures_replay_work BEGIN SELECT RAISE(ABORT,'immutable replay work identity'); END;
+       INSERT OR IGNORE INTO paper_futures_schema_migrations VALUES(3, unixepoch('subsec') * 1000);
     `)
   }
 
   close(): void {
     this.db.close()
+  }
+
+  bindReplaySession(runId: string, binding: unknown): void {
+    const json = canonicalJson(binding)
+    const hash = canonicalHash(binding)
+    const existing = this.db
+      .prepare(
+        'SELECT binding_json,binding_hash FROM paper_futures_replay_sessions WHERE run_id=?',
+      )
+      .get(runId) as { binding_json: string; binding_hash: string } | undefined
+    if (existing) {
+      if (existing.binding_hash !== hash || existing.binding_json !== json)
+        throw new Error(
+          'Replay session conflicts with frozen dataset or configuration.',
+        )
+      return
+    }
+    this.db
+      .prepare('INSERT INTO paper_futures_replay_sessions VALUES(?,?,?)')
+      .run(runId, json, hash)
+  }
+
+  persistReplayWork(
+    runId: string,
+    sourceSequence: number,
+    inputHash: string,
+    work: unknown,
+  ): JsonRecord {
+    const json = canonicalJson(work)
+    const hash = canonicalHash(work)
+    const prior = this.db
+      .prepare(
+        'SELECT * FROM paper_futures_replay_work WHERE run_id=? AND source_sequence=?',
+      )
+      .get(runId, sourceSequence) as JsonRecord | undefined
+    if (prior) {
+      if (prior.input_hash !== inputHash)
+        throw new Error(
+          'Replay source sequence conflicts with durable evidence.',
+        )
+      const savedWork = JSON.parse(String(prior.work_json)) as JsonRecord
+      if (
+        canonicalJson(savedWork) !== prior.work_json ||
+        canonicalHash(savedWork) !== prior.work_hash
+      )
+        throw new Error('Durable replay work hash verification failed.')
+      return {
+        ...(JSON.parse(String(prior.work_json)) as JsonRecord),
+        receipt: prior.receipt_json
+          ? JSON.parse(String(prior.receipt_json))
+          : null,
+      }
+    }
+    this.db
+      .prepare(
+        'INSERT INTO paper_futures_replay_work(work_id,run_id,source_sequence,input_hash,work_json,work_hash) VALUES(?,?,?,?,?,?)',
+      )
+      .run(
+        String((work as JsonRecord).work_id),
+        runId,
+        sourceSequence,
+        inputHash,
+        json,
+        hash,
+      )
+    return { ...(work as JsonRecord), receipt: null }
+  }
+
+  commitReplayWork(runId: string, workId: string, receipt: unknown): void {
+    const json = canonicalJson(receipt)
+    const row = this.db
+      .prepare(
+        'SELECT receipt_json FROM paper_futures_replay_work WHERE run_id=? AND work_id=?',
+      )
+      .get(runId, workId) as { receipt_json: string | null } | undefined
+    if (!row) throw new Error('Cannot commit unknown replay work.')
+    if (row.receipt_json) {
+      if (row.receipt_json !== json)
+        throw new Error('Replay work receipt conflicts with durable result.')
+      return
+    }
+    const parsed = receipt as JsonRecord
+    if (parsed.status !== 'committed')
+      throw new Error('Only committed runtime work advances replay cursor.')
+    this.db
+      .prepare(
+        'UPDATE paper_futures_replay_work SET receipt_json=?,receipt_hash=? WHERE run_id=? AND work_id=?',
+      )
+      .run(json, canonicalHash(receipt), runId, workId)
+  }
+
+  loadReplaySession(
+    runId: string,
+    binding: unknown,
+  ): { works: JsonRecord[]; cursor: number } {
+    const session = this.db
+      .prepare(
+        'SELECT binding_json,binding_hash FROM paper_futures_replay_sessions WHERE run_id=?',
+      )
+      .get(runId) as { binding_json: string; binding_hash: string } | undefined
+    if (
+      !session ||
+      session.binding_hash !== canonicalHash(binding) ||
+      session.binding_json !== canonicalJson(binding)
+    )
+      throw new Error('Replay session binding is missing or has drifted.')
+    const rows = this.db
+      .prepare(
+        'SELECT * FROM paper_futures_replay_work WHERE run_id=? ORDER BY source_sequence',
+      )
+      .all(runId) as JsonRecord[]
+    let cursor = 0
+    const works = rows.map((row) => {
+      const work = JSON.parse(String(row.work_json)) as JsonRecord
+      if (
+        canonicalJson(work) !== row.work_json ||
+        canonicalHash(work) !== row.work_hash
+      )
+        throw new Error('Durable replay work hash verification failed.')
+      if (canonicalHash(work.input) !== row.input_hash)
+        throw new Error('Durable replay input hash verification failed.')
+      if (row.receipt_json) {
+        const receipt = JSON.parse(String(row.receipt_json)) as JsonRecord
+        if (
+          canonicalJson(receipt) !== row.receipt_json ||
+          canonicalHash(receipt) !== row.receipt_hash ||
+          receipt.status !== 'committed'
+        )
+          throw new Error('Durable replay receipt verification failed.')
+        cursor = Math.max(cursor, Number(row.source_sequence))
+      }
+      return {
+        ...work,
+        receipt: row.receipt_json ? JSON.parse(String(row.receipt_json)) : null,
+      }
+    })
+    return { works, cursor }
   }
 
   createRun(input: {
@@ -608,6 +749,9 @@ export class FuturesStore {
   }
 
   exportRun(runId: string): JsonRecord {
+    const run = this.db
+      .prepare('SELECT head_hash FROM paper_futures_runs WHERE run_id=?')
+      .get(runId) as { head_hash: string } | undefined
     const receipt = this.db
       .prepare(
         `SELECT a.receipt_json FROM paper_futures_applied a JOIN paper_futures_work w ON w.work_id=a.work_id WHERE w.run_id=? ORDER BY w.rowid DESC LIMIT 1`,
@@ -623,10 +767,21 @@ export class FuturesStore {
         'SELECT state_json FROM paper_futures_projections WHERE run_id=?',
       )
       .get(runId) as { state_json: string } | undefined
+    const runtimeOutputs = this.db
+      .prepare(
+        `SELECT r.payload_json FROM paper_futures_records r
+         WHERE r.run_id=? AND r.kind='applied-result' ORDER BY r.seq`,
+      )
+      .all(runId) as { payload_json: string }[]
     return {
       receipt: receipt ? JSON.parse(receipt.receipt_json) : null,
       events: events.map((row) => JSON.parse(row.payload_json)),
       projection: projection ? JSON.parse(projection.state_json) : null,
+      head_hash: run?.head_hash ?? null,
+      runtime_outputs: runtimeOutputs.flatMap((row) => {
+        const payload = JSON.parse(row.payload_json) as JsonRecord
+        return payload.runtime_output ? [payload.runtime_output] : []
+      }),
     }
   }
 

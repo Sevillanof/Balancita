@@ -418,16 +418,21 @@ export class FuturesMarketStore {
     return this.db
       .prepare(
         `SELECT * FROM paper_futures_candle_revisions
-         WHERE known_at<=? AND is_closed=1
+         WHERE known_at<=? AND close_at<=? AND is_closed=1
            AND revision=(
              SELECT MAX(latest.revision)
              FROM paper_futures_candle_revisions AS latest
              WHERE latest.candle_id=paper_futures_candle_revisions.candle_id
-               AND latest.known_at<=? AND latest.is_closed=1
+               AND latest.known_at<=? AND latest.close_at<=? AND latest.is_closed=1
            )
          ORDER BY interval_ms,bucket_start,candle_id`,
       )
-      .all(knownAtCutoff, knownAtCutoff) as unknown[]
+      .all(
+        knownAtCutoff,
+        knownAtCutoff,
+        knownAtCutoff,
+        knownAtCutoff,
+      ) as unknown[]
   }
 
   gapsAsOf(detectedAtCutoff: number): unknown[] {

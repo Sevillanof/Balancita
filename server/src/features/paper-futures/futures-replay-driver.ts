@@ -1,5 +1,7 @@
 import { canonicalHash } from './futures-canonical.ts'
 import type { FuturesMarketStore } from '../kraken-futures/futures-market-store.ts'
+import { randomUUID } from 'node:crypto'
+import type { FuturesStore } from './futures-store.ts'
 
 export type ReplayManifest = Readonly<{
   schema_version: 'futures-replay-manifest.v1'
@@ -42,6 +44,7 @@ type DriverOptions = {
   runId: string
   manifest: ReplayManifest
   apply: (work: RuntimeWork) => Promise<RuntimeReceipt>
+  durableStore?: FuturesStore
 }
 
 type AppliedWork = RuntimeWork & { receipt: RuntimeReceipt }
@@ -51,6 +54,8 @@ export class FuturesReplayDriver {
   readonly manifest: ReplayManifest
   private readonly runId: string
   private readonly apply: DriverOptions['apply']
+  private readonly durableStore?: FuturesStore
+  private durableBinding?: Record<string, unknown>
   private readonly inputs: CausalInput[] = []
   private readonly work: AppliedWork[] = []
   private readonly byWorkIdentity = new Map<string, AppliedWork>()
@@ -65,6 +70,7 @@ export class FuturesReplayDriver {
     this.runId = options.runId
     this.manifest = structuredClone(options.manifest)
     this.apply = options.apply
+    this.durableStore = options.durableStore
   }
 
   async processEvent(input: CausalInput, cutoff = input.received_at_ms) {
@@ -90,25 +96,49 @@ export class FuturesReplayDriver {
     this.inputs.push(structuredClone(input))
     this.bySequence.set(input.sequence, inputHash)
     this.lastSequence = input.sequence
-    const cycleKey = input.cycle_key ?? `received:${input.sequence}`
+    const cycleKey =
+      input.cycle_key ?? `received:${input.sequence}:state:${this.stateVersion}`
     const identity = canonicalHash({ cycleKey, evidence: inputHash })
     const prior = this.byWorkIdentity.get(identity)
     if (prior) return prior.receipt
 
     const work: RuntimeWork = {
       work_id: canonicalHash({ run_id: this.runId, identity }),
-      analysis_id: canonicalHash({
-        run_id: this.runId,
-        identity,
-        type: 'analysis',
-      }),
+      analysis_id: randomUUID(),
       cycle_key: cycleKey,
       version: this.stateVersion,
       cutoff_received_at_ms: cutoff,
       virtual_time_ms: this.virtualTime,
       input: structuredClone(input),
     }
-    const receipt = await this.apply(work)
+    const durable = this.durableStore?.persistReplayWork(
+      this.runId,
+      input.sequence,
+      inputHash,
+      work,
+    ) as (RuntimeWork & { receipt: RuntimeReceipt | null }) | undefined
+    if (durable?.receipt) {
+      const applied = { ...durable, receipt: structuredClone(durable.receipt) }
+      this.work.push(applied)
+      this.byWorkIdentity.set(identity, applied)
+      this.stateVersion = Math.max(
+        this.stateVersion,
+        applied.receipt.applied_state_version,
+      )
+      return applied.receipt
+    }
+    const effectiveWork: RuntimeWork = durable
+      ? {
+          work_id: durable.work_id,
+          analysis_id: durable.analysis_id,
+          cycle_key: durable.cycle_key,
+          version: durable.version,
+          cutoff_received_at_ms: durable.cutoff_received_at_ms,
+          virtual_time_ms: durable.virtual_time_ms,
+          input: durable.input,
+        }
+      : work
+    const receipt = await this.apply(effectiveWork)
     if (
       receipt.status === 'committed' &&
       receipt.applied_state_version === this.stateVersion + 1
@@ -121,7 +151,13 @@ export class FuturesReplayDriver {
         `Runtime receipt does not match expected version: ${JSON.stringify(receipt)}.`,
       )
     }
-    const applied = { ...work, receipt: structuredClone(receipt) }
+    const applied = { ...effectiveWork, receipt: structuredClone(receipt) }
+    if (receipt.status === 'committed')
+      this.durableStore?.commitReplayWork(
+        this.runId,
+        effectiveWork.work_id,
+        receipt,
+      )
     this.work.push(applied)
     this.byWorkIdentity.set(identity, applied)
     return receipt
@@ -138,8 +174,12 @@ export class FuturesReplayDriver {
     store: FuturesMarketStore,
     receivedCutoff: number,
     instrument: Record<string, unknown>,
+    controlForSource?: (
+      source: Record<string, unknown>,
+    ) => Record<string, unknown> | undefined,
   ): Promise<void> {
     validateTimestamp(receivedCutoff, 'received cutoff')
+    this.bindMarketSource(instrument, store)
     const allEvents = store.eventsAsOf(Number.MAX_SAFE_INTEGER) as Record<
       string,
       unknown
@@ -260,6 +300,7 @@ export class FuturesReplayDriver {
         cutoff_received_at_ms: receivedAt,
         events: marketEvents,
       }
+      const control = controlForSource?.(source)
       await this.processEvent(
         {
           sequence: Number(source.receivedSequence),
@@ -269,12 +310,154 @@ export class FuturesReplayDriver {
           payload: {
             market_event: source,
             market_source_watermark: Number(source.receivedSequence),
+            market_gaps: structuredClone(gaps),
             market_snapshot: snapshot,
+            ...(control ? { control } : {}),
           },
         },
         receivedAt,
       )
     }
+  }
+
+  private bindMarketSource(
+    instrument: Record<string, unknown>,
+    sourceStore?: FuturesMarketStore,
+  ): void {
+    if (!this.durableStore) return
+    const runtimeBinding = this.durableStore.getRuntimeBinding(this.runId)
+    if (
+      !runtimeBinding ||
+      canonicalHash(runtimeBinding.runtime_config) !==
+        this.manifest.config_hash ||
+      canonicalHash(runtimeBinding.instrument_spec) !==
+        canonicalHash(instrument) ||
+      (this.manifest.instrument_hash !== undefined &&
+        canonicalHash(instrument) !== this.manifest.instrument_hash)
+    )
+      throw new Error(
+        'Replay session does not match the frozen runtime binding.',
+      )
+    if (sourceStore) {
+      const sourceHash = canonicalHash({
+        events: sourceStore.eventsAsOf(Number.MAX_SAFE_INTEGER),
+        candles: sourceStore.candlesAsOf(Number.MAX_SAFE_INTEGER),
+        gaps: sourceStore.gapsAsOf(Number.MAX_SAFE_INTEGER),
+      })
+      if (sourceHash !== this.manifest.source_hash)
+        throw new Error(
+          'Replay dataset hash does not match the frozen manifest.',
+        )
+    }
+    const binding = {
+      schema_version: 'futures-replay-session.v1',
+      run_id: this.runId,
+      manifest: this.manifest,
+      instrument_hash: canonicalHash(instrument),
+    }
+    this.durableStore.bindReplaySession(this.runId, binding)
+    this.durableBinding = binding
+  }
+
+  static async resumeMarketStore(
+    options: DriverOptions & {
+      durableStore: FuturesStore
+      marketStore: FuturesMarketStore
+      receivedCutoff: number
+      instrument: Record<string, unknown>
+      controlForSource?: (
+        source: Record<string, unknown>,
+      ) => Record<string, unknown> | undefined
+    },
+  ): Promise<FuturesReplayDriver> {
+    const driver = new FuturesReplayDriver(options)
+    driver.bindMarketSource(options.instrument, options.marketStore)
+    const restored = options.durableStore.loadReplaySession(
+      options.runId,
+      driver.durableBinding,
+    )
+    for (const item of restored.works) {
+      const work = item as RuntimeWork & { receipt: RuntimeReceipt | null }
+      const input = work.input
+      const inputHash = canonicalHash(input)
+      driver.inputs.push(structuredClone(input))
+      driver.bySequence.set(input.sequence, inputHash)
+      driver.lastSequence = Math.max(driver.lastSequence, input.sequence)
+      driver.virtualTime = Math.max(driver.virtualTime, work.virtual_time_ms)
+      if (work.receipt) {
+        driver.work.push({ ...work, receipt: structuredClone(work.receipt) })
+        const identity = canonicalHash({
+          cycleKey:
+            input.cycle_key ??
+            `received:${input.sequence}:state:${work.version}`,
+          evidence: inputHash,
+        })
+        driver.byWorkIdentity.set(identity, {
+          ...work,
+          receipt: structuredClone(work.receipt),
+        })
+        driver.stateVersion = Math.max(
+          driver.stateVersion,
+          work.receipt.applied_state_version,
+        )
+      } else {
+        const persisted = options.durableStore.getAppliedReceipt(work.work_id)
+        if (persisted) {
+          const receipt: RuntimeReceipt = {
+            status: persisted.status as RuntimeReceipt['status'],
+            applied_state_version: Number(persisted.applied_state_version),
+          }
+          options.durableStore.commitReplayWork(
+            options.runId,
+            work.work_id,
+            receipt,
+          )
+          driver.work.push({ ...work, receipt })
+          const identity = canonicalHash({
+            cycleKey:
+              input.cycle_key ??
+              `received:${input.sequence}:state:${work.version}`,
+            evidence: inputHash,
+          })
+          driver.byWorkIdentity.set(identity, { ...work, receipt })
+          driver.stateVersion = Math.max(
+            driver.stateVersion,
+            receipt.applied_state_version,
+          )
+        } else {
+          const receipt = await driver.apply(work)
+          if (receipt.status !== 'committed')
+            throw new Error(
+              'Prepared replay work did not commit during restoration.',
+            )
+          options.durableStore.commitReplayWork(
+            options.runId,
+            work.work_id,
+            receipt,
+          )
+          const applied = { ...work, receipt: structuredClone(receipt) }
+          driver.work.push(applied)
+          const identity = canonicalHash({
+            cycleKey:
+              input.cycle_key ??
+              `received:${input.sequence}:state:${work.version}`,
+            evidence: inputHash,
+          })
+          driver.byWorkIdentity.set(identity, applied)
+          driver.stateVersion = Math.max(
+            driver.stateVersion,
+            receipt.applied_state_version,
+          )
+        }
+      }
+    }
+    await driver.processMarketStore(
+      options.marketStore,
+      options.receivedCutoff,
+      options.instrument,
+      options.controlForSource,
+    )
+    return driver
   }
 
   static async replay(
@@ -292,6 +475,9 @@ export class FuturesReplayDriver {
       store: FuturesMarketStore
       receivedCutoff: number
       instrument: Record<string, unknown>
+      controlForSource?: (
+        source: Record<string, unknown>,
+      ) => Record<string, unknown> | undefined
     },
   ): Promise<ReturnType<FuturesReplayDriver['exportRun']>> {
     const driver = new FuturesReplayDriver(options)
@@ -299,6 +485,7 @@ export class FuturesReplayDriver {
       options.store,
       options.receivedCutoff,
       options.instrument,
+      options.controlForSource,
     )
     return driver.exportRun()
   }
@@ -416,9 +603,12 @@ function cloneWithoutGeneratedIdentity(value: unknown): unknown {
     'order_id',
     'fill_id',
     'request_id',
+    'event_id',
+    'execution_event_id',
     'id',
   ])
   const excluded = new Set([
+    ...generatedKeys,
     'record_hash',
     'snapshot_hash',
     'input_hash',
@@ -477,6 +667,12 @@ function replaceIdentities(
 
 function differingPaths(left: unknown, right: unknown, prefix = ''): string[] {
   if (canonicalHash(left) === canonicalHash(right)) return []
+  if (Array.isArray(left) && Array.isArray(right)) {
+    if (left.length !== right.length) return [`${prefix || '$'}.length`]
+    return left.flatMap((value, index) =>
+      differingPaths(value, right[index], `${prefix}[${index}]`),
+    )
+  }
   if (!isRecord(left) || !isRecord(right)) return [prefix || '$']
   const keys = new Set([...Object.keys(left), ...Object.keys(right)])
   return [...keys].flatMap((key) =>
