@@ -1,0 +1,26 @@
+server/src/app/app.test.ts
+  h_2f68313623be98 1-11,38-42,162-259,261-362
+server/src/app/app.ts
+  h_2f68313623be98 4-6,84,151-172,606-668,680-692,749,751-809,837-871,874-880
+server/src/features/kraken-futures/futures-market-store.ts
+  h_2f68313623be98 3,36,38-39,43-46,48-62,206-228
+server/src/features/paper-futures/futures-replay-driver.ts
+  h_2f68313623be98 15-18,192,396-406,594,606
+server/src/features/paper-futures/futures-session-runtime.ts
+  h_2f68313623be98 5-8,47-73,79-84,95-99,102-115,129-132,136-143,234-243,250-251,258,262-355,522-542
+server/src/features/paper-futures/futures-store.ts
+  h_2f68313623be98 282,737-739,1860-1864,1890-1894,1897-1900,1909
+server/src/platform/config.ts
+  h_2f68313623be98 57,109-111,123-124,239,256-265
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "44b60daaec207b820debb759e66f6d51c153e949",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
