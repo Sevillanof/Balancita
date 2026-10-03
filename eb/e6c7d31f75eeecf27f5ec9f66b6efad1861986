@@ -1,0 +1,18 @@
+odd/tasks/kraken-futures-deterministic.md
+  h_2f68313623be98 149-159
+server/src/features/paper-futures/futures-replay-driver.test.ts
+  h_2f68313623be98 1-351
+server/src/features/paper-futures/futures-replay-driver.ts
+  h_2f68313623be98 1-349
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ebe6c7d31f75eeecf27f5ec9f66b6efad1861986",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
