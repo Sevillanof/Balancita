@@ -1,5 +1,5 @@
 import { DatabaseSync } from 'node:sqlite'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import {
@@ -11,8 +11,138 @@ import {
 
 type JsonRecord = Record<string, unknown>
 
+export type TerminalEventType =
+  | 'analysis.completed'
+  | 'analysis.superseded'
+  | 'order.updated'
+  | 'fill.created'
+  | 'position.updated'
+  | 'account.updated'
+  | 'engine.status'
+  | 'command.ack'
+  | 'command.result'
+
+export interface TerminalEventInput {
+  readonly type: TerminalEventType
+  readonly data: JsonRecord
+  readonly eventTime?: number
+}
+
+export interface TerminalStoredEvent {
+  readonly schema_version: 1
+  readonly event_id: string
+  readonly stream_id: string
+  readonly run_id: string
+  readonly seq: number
+  readonly type: TerminalEventType
+  readonly instrument_id: string
+  readonly event_time: number
+  readonly published_at: number
+  readonly data: JsonRecord
+}
+
+export interface TerminalCommandMetadata {
+  readonly command_id: string
+  readonly action: string
+  readonly stream_run_id: string
+  readonly expected_state_version: number
+  readonly child_run_id?: string
+}
+
+export interface TerminalSnapshot {
+  readonly schema_version: 1
+  readonly stream_id: string
+  readonly run_id: string
+  readonly watermark: number
+  readonly instrument_id: string
+  readonly state: JsonRecord
+}
+
+function terminalEntriesFromResult(result: JsonRecord): TerminalEventInput[] {
+  const output = isRecord(result.runtime_output)
+    ? result.runtime_output
+    : undefined
+  if (output === undefined)
+    return [
+      {
+        type: 'engine.status',
+        data: {
+          work_id: result.work_id,
+          run_id: result.run_id,
+          status: 'committed',
+        },
+      },
+    ]
+
+  const runId = String(result.run_id)
+  const workId = String(result.work_id)
+  const common = { run_id: runId, work_id: workId, command_id: workId }
+  const timestamp =
+    (typeof output.decision_time_ms === 'number' && output.decision_time_ms) ||
+    Date.now()
+  const entries: TerminalEventInput[] = []
+  if (isRecord(output.analysis))
+    entries.push({
+      type: 'analysis.completed',
+      eventTime: timestamp,
+      data: {
+        ...common,
+        analysis_id:
+          typeof output.analysis.analysis_id === 'string'
+            ? output.analysis.analysis_id
+            : workId,
+        analysis: output.analysis,
+      },
+    })
+  if (Array.isArray(output.orders))
+    for (const order of output.orders)
+      if (isRecord(order))
+        entries.push({
+          type: 'order.updated',
+          eventTime:
+            typeof order.event_time_ms === 'number'
+              ? order.event_time_ms
+              : timestamp,
+          data: { ...common, order },
+        })
+  if (Array.isArray(output.fills))
+    for (const fill of output.fills)
+      if (isRecord(fill))
+        entries.push({
+          type: 'fill.created',
+          eventTime:
+            typeof fill.event_time_ms === 'number'
+              ? fill.event_time_ms
+              : timestamp,
+          data: { ...common, fill },
+        })
+  if (isRecord(output.position))
+    entries.push({
+      type: 'position.updated',
+      eventTime: timestamp,
+      data: { ...common, position: output.position },
+    })
+  if (isRecord(output.ledger))
+    entries.push({
+      type: 'account.updated',
+      eventTime: timestamp,
+      data: { ...common, account: output.ledger },
+    })
+  if (entries.length === 0)
+    entries.push({
+      type: 'engine.status',
+      eventTime: timestamp,
+      data: { ...common, status: 'committed' },
+    })
+  return entries
+}
+
 export class FuturesStore {
   private readonly db: DatabaseSync
+  private terminalRetention = 10_000
+  private readonly terminalListeners = new Set<
+    (event: TerminalStoredEvent) => void
+  >()
 
   constructor(path: string) {
     if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true })
@@ -51,11 +181,274 @@ export class FuturesStore {
         CREATE TABLE IF NOT EXISTS paper_futures_replay_work(work_id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES paper_futures_replay_sessions(run_id), source_sequence INTEGER NOT NULL, input_hash TEXT NOT NULL, work_json TEXT NOT NULL, work_hash TEXT NOT NULL, receipt_json TEXT, receipt_hash TEXT, UNIQUE(run_id,source_sequence)) STRICT;
        CREATE TRIGGER IF NOT EXISTS paper_futures_replay_work_identity_immutable BEFORE UPDATE OF work_id,run_id,source_sequence,input_hash,work_json,work_hash ON paper_futures_replay_work BEGIN SELECT RAISE(ABORT,'immutable replay work identity'); END;
        INSERT OR IGNORE INTO paper_futures_schema_migrations VALUES(3, unixepoch('subsec') * 1000);
+       CREATE TABLE IF NOT EXISTS paper_futures_terminal_streams(run_id TEXT PRIMARY KEY REFERENCES paper_futures_runs(run_id), stream_id TEXT NOT NULL UNIQUE, last_seq INTEGER NOT NULL DEFAULT 0, first_seq INTEGER NOT NULL DEFAULT 1) STRICT;
+       CREATE TABLE IF NOT EXISTS paper_futures_terminal_events(run_id TEXT NOT NULL REFERENCES paper_futures_terminal_streams(run_id), seq INTEGER NOT NULL, event_id TEXT NOT NULL UNIQUE, type TEXT NOT NULL, event_json TEXT NOT NULL, PRIMARY KEY(run_id,seq)) STRICT;
+       CREATE TRIGGER IF NOT EXISTS paper_futures_terminal_events_no_update BEFORE UPDATE ON paper_futures_terminal_events BEGIN SELECT RAISE(ABORT,'immutable terminal stream event'); END;
+       INSERT OR IGNORE INTO paper_futures_schema_migrations VALUES(4, unixepoch('subsec') * 1000);
     `)
+    const existingRuns = this.db
+      .prepare('SELECT run_id FROM paper_futures_runs')
+      .all() as { run_id: string }[]
+    for (const { run_id } of existingRuns) this.ensureTerminalStream(run_id)
   }
 
   close(): void {
     this.db.close()
+    this.terminalListeners.clear()
+  }
+
+  subscribeTerminalEvents(
+    listener: (event: TerminalStoredEvent) => void,
+  ): () => void {
+    this.terminalListeners.add(listener)
+    return () => this.terminalListeners.delete(listener)
+  }
+
+  setTerminalEventRetention(retention: number): void {
+    if (
+      !Number.isSafeInteger(retention) ||
+      retention < 1 ||
+      retention > 100_000
+    )
+      throw new Error('Terminal event retention must be between 1 and 100000.')
+    this.terminalRetention = retention
+  }
+
+  getTerminalSnapshot(runId: string): TerminalSnapshot {
+    this.ensureTerminalStream(runId)
+    this.db.exec('BEGIN')
+    try {
+      const run = this.db
+        .prepare('SELECT frozen_json FROM paper_futures_runs WHERE run_id=?')
+        .get(runId) as { frozen_json: string } | undefined
+      if (!run) throw new Error('Unknown futures run.')
+      const stream = this.db
+        .prepare(
+          'SELECT stream_id,last_seq FROM paper_futures_terminal_streams WHERE run_id=?',
+        )
+        .get(runId) as { stream_id: string; last_seq: number } | undefined
+      const projection = this.db
+        .prepare(
+          'SELECT state_json FROM paper_futures_projections WHERE run_id=?',
+        )
+        .get(runId) as { state_json: string } | undefined
+      if (!stream || !projection)
+        throw new Error('Terminal snapshot projection is incomplete.')
+      const frozen = JSON.parse(run.frozen_json) as JsonRecord
+      const instrument = isRecord(frozen.instrument) ? frozen.instrument : {}
+      const analysisRows = this.db
+        .prepare(
+          `SELECT work_id,payload_json FROM paper_futures_records
+           WHERE run_id=? AND kind='applied-result' ORDER BY seq`,
+        )
+        .all(runId) as { work_id: string; payload_json: string }[]
+      const analyses = analysisRows.flatMap(({ work_id, payload_json }) => {
+        const applied = JSON.parse(payload_json) as JsonRecord
+        const output = isRecord(applied.runtime_output)
+          ? applied.runtime_output
+          : undefined
+        if (!output || !isRecord(output.analysis)) return []
+        return [
+          {
+            analysis_id:
+              typeof output.analysis.analysis_id === 'string'
+                ? output.analysis.analysis_id
+                : work_id,
+            ...output.analysis,
+          },
+        ]
+      })
+      const state = projectTerminalState(
+        JSON.parse(projection.state_json) as JsonRecord,
+        runId,
+        analyses,
+      )
+      this.db.exec('COMMIT')
+      return {
+        schema_version: 1,
+        stream_id: stream.stream_id,
+        run_id: runId,
+        watermark: Number(stream.last_seq),
+        instrument_id:
+          typeof instrument.instrument_id === 'string'
+            ? instrument.instrument_id
+            : 'kraken-futures:PF_XBTUSD',
+        state,
+      }
+    } catch (error) {
+      this.db.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  listTerminalEvents(
+    runId: string,
+    input: { afterSeq?: number; beforeSeq?: number; limit: number },
+  ): {
+    readonly streamId: string
+    readonly firstSeq: number
+    readonly lastSeq: number
+    readonly expired: boolean
+    readonly events: TerminalStoredEvent[]
+    readonly nextBeforeSeq: number | null
+  } {
+    const { afterSeq = 0, beforeSeq, limit } = input
+    if (
+      !Number.isSafeInteger(afterSeq) ||
+      afterSeq < 0 ||
+      (beforeSeq !== undefined &&
+        (!Number.isSafeInteger(beforeSeq) || beforeSeq < 1)) ||
+      !Number.isSafeInteger(limit) ||
+      limit < 1 ||
+      limit > 500
+    )
+      throw new Error('Terminal event cursor or page size is invalid.')
+    const stream = this.db
+      .prepare(
+        'SELECT stream_id,first_seq,last_seq FROM paper_futures_terminal_streams WHERE run_id=?',
+      )
+      .get(runId) as
+      { stream_id: string; first_seq: number; last_seq: number } | undefined
+    if (!stream) throw new Error('Unknown terminal stream.')
+    const expired =
+      beforeSeq === undefined && afterSeq < Number(stream.first_seq) - 1
+    const rows =
+      beforeSeq === undefined
+        ? (this.db
+            .prepare(
+              'SELECT event_json FROM paper_futures_terminal_events WHERE run_id=? AND seq>? ORDER BY seq LIMIT ?',
+            )
+            .all(runId, afterSeq, limit + 1) as { event_json: string }[])
+        : (this.db
+            .prepare(
+              'SELECT event_json FROM paper_futures_terminal_events WHERE run_id=? AND seq<? ORDER BY seq DESC LIMIT ?',
+            )
+            .all(runId, beforeSeq, limit + 1) as { event_json: string }[])
+    const hasMore = rows.length > limit
+    const page = rows.slice(0, limit)
+    if (beforeSeq !== undefined) page.reverse()
+    const events = page.map(
+      (row) => JSON.parse(row.event_json) as TerminalStoredEvent,
+    )
+    const nextBeforeSeq = hasMore ? (events[0]?.seq ?? null) : null
+    return {
+      streamId: stream.stream_id,
+      firstSeq: Number(stream.first_seq),
+      lastSeq: Number(stream.last_seq),
+      expired,
+      events,
+      nextBeforeSeq,
+    }
+  }
+
+  getTerminalAnalysisDetail(
+    runId: string,
+    analysisId: string,
+  ): JsonRecord | undefined {
+    const row = this.db
+      .prepare(
+        `SELECT work_id,record_hash,payload_json FROM paper_futures_records
+         WHERE run_id=? AND kind='applied-result' AND work_id=? ORDER BY seq DESC LIMIT 1`,
+      )
+      .get(runId, analysisId) as
+      { work_id: string; record_hash: string; payload_json: string } | undefined
+    if (!row) return undefined
+    const result = JSON.parse(row.payload_json) as JsonRecord
+    const runtimeOutput = isRecord(result.runtime_output)
+      ? result.runtime_output
+      : undefined
+    const analysis = runtimeOutput?.analysis
+    if (!isRecord(analysis)) return undefined
+    return {
+      analysis_id: row.work_id,
+      record_hash: row.record_hash,
+      analysis,
+      runtime_output: runtimeOutput,
+    }
+  }
+
+  private ensureTerminalStream(runId: string): void {
+    this.db
+      .prepare(
+        'INSERT OR IGNORE INTO paper_futures_terminal_streams(run_id,stream_id,last_seq,first_seq) VALUES(?,?,0,1)',
+      )
+      .run(runId, randomUUID())
+  }
+
+  private appendTerminalEventsInTransaction(
+    runId: string,
+    entries: readonly TerminalEventInput[],
+    retention: number,
+  ): TerminalStoredEvent[] {
+    if (!Number.isSafeInteger(retention) || retention < 1)
+      throw new Error('Terminal outbox retention must be a positive integer.')
+    this.ensureTerminalStream(runId)
+    const stream = this.db
+      .prepare(
+        'SELECT stream_id,last_seq FROM paper_futures_terminal_streams WHERE run_id=?',
+      )
+      .get(runId) as { stream_id: string; last_seq: number }
+    const instrumentId = this.instrumentId(runId)
+    const events = entries.map((entry, index) => {
+      const seq = Number(stream.last_seq) + index + 1
+      const publishedAt = Date.now()
+      const event: TerminalStoredEvent = {
+        schema_version: 1,
+        event_id: randomUUID(),
+        stream_id: stream.stream_id,
+        run_id: runId,
+        seq,
+        type: entry.type,
+        instrument_id: instrumentId,
+        event_time: entry.eventTime ?? publishedAt,
+        published_at: publishedAt,
+        data: entry.data,
+      }
+      this.db
+        .prepare(
+          'INSERT INTO paper_futures_terminal_events(run_id,seq,event_id,type,event_json) VALUES(?,?,?,?,?)',
+        )
+        .run(runId, seq, event.event_id, event.type, canonicalJson(event))
+      return event
+    })
+    if (events.length > 0) {
+      const lastSeq = events.at(-1)!.seq
+      const firstSeq = Math.max(1, lastSeq - retention + 1)
+      this.db
+        .prepare(
+          'UPDATE paper_futures_terminal_streams SET last_seq=?,first_seq=? WHERE run_id=?',
+        )
+        .run(lastSeq, firstSeq, runId)
+      this.db
+        .prepare(
+          'DELETE FROM paper_futures_terminal_events WHERE run_id=? AND seq<?',
+        )
+        .run(runId, firstSeq)
+    }
+    return events
+  }
+
+  private instrumentId(runId: string): string {
+    const row = this.db
+      .prepare('SELECT frozen_json FROM paper_futures_runs WHERE run_id=?')
+      .get(runId) as { frozen_json: string } | undefined
+    if (!row) throw new Error('Unknown futures run.')
+    const frozen = JSON.parse(row.frozen_json) as JsonRecord
+    return isRecord(frozen.instrument) &&
+      typeof frozen.instrument.instrument_id === 'string'
+      ? frozen.instrument.instrument_id
+      : 'kraken-futures:PF_XBTUSD'
+  }
+
+  private notifyTerminalEvents(events: readonly TerminalStoredEvent[]): void {
+    for (const event of events)
+      for (const listener of this.terminalListeners) {
+        try {
+          listener(event)
+        } catch {
+          // A transport subscriber must never roll back committed financial state.
+        }
+      }
   }
 
   bindReplaySession(runId: string, binding: unknown): void {
@@ -202,6 +595,8 @@ export class FuturesStore {
     instrument: unknown
     costs: unknown
     runtime?: unknown
+    parentRunId?: string
+    revisionId?: string
   }): void {
     validateFrozenRun(input)
     const frozen = {
@@ -210,6 +605,12 @@ export class FuturesStore {
       instrument: input.instrument,
       costs: input.costs,
       ...(input.runtime === undefined ? {} : { runtime: input.runtime }),
+      ...(input.parentRunId === undefined
+        ? {}
+        : { parent_run_id: input.parentRunId }),
+      ...(input.revisionId === undefined
+        ? {}
+        : { revision_id: input.revisionId }),
     }
     const json = canonicalJson(frozen)
     const hash = canonicalHash(frozen)
@@ -256,7 +657,84 @@ export class FuturesStore {
       this.db
         .prepare('INSERT INTO paper_futures_projections VALUES(?,?)')
         .run(input.runId, canonicalJson({ state_version: 0 }))
+      this.ensureTerminalStream(input.runId)
       this.db.exec('COMMIT')
+    } catch (error) {
+      this.db.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  getRunDefinition(runId: string): {
+    config: unknown
+    seed: unknown
+    instrument: unknown
+    costs: unknown
+    runtime?: unknown
+  } {
+    const row = this.db
+      .prepare('SELECT frozen_json FROM paper_futures_runs WHERE run_id=?')
+      .get(runId) as { frozen_json: string } | undefined
+    if (!row) throw new Error('Unknown futures run.')
+    const frozen = JSON.parse(row.frozen_json) as JsonRecord
+    return {
+      config: frozen.config,
+      seed: frozen.seed,
+      instrument: frozen.instrument,
+      costs: frozen.costs,
+      ...(frozen.runtime === undefined ? {} : { runtime: frozen.runtime }),
+    }
+  }
+
+  createChildRun(input: {
+    runId: string
+    parentRunId: string
+    revisionId: string
+    config: unknown
+    seed: unknown
+    instrument: unknown
+    costs: unknown
+    runtime?: unknown
+  }): void {
+    this.createRun({
+      ...input,
+      parentRunId: input.parentRunId,
+      revisionId: input.revisionId,
+    })
+  }
+
+  getRunMetadata(
+    runId: string,
+  ): { parent_run_id: string | null; revision_id: string } | undefined {
+    const row = this.db
+      .prepare('SELECT frozen_json FROM paper_futures_runs WHERE run_id=?')
+      .get(runId) as { frozen_json: string } | undefined
+    if (!row) return undefined
+    const frozen = JSON.parse(row.frozen_json) as JsonRecord
+    return {
+      parent_run_id:
+        typeof frozen.parent_run_id === 'string' ? frozen.parent_run_id : null,
+      revision_id:
+        typeof frozen.revision_id === 'string'
+          ? frozen.revision_id
+          : canonicalHash(frozen),
+    }
+  }
+
+  appendTerminalEvents(
+    runId: string,
+    entries: readonly TerminalEventInput[],
+  ): TerminalStoredEvent[] {
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      const events = this.appendTerminalEventsInTransaction(
+        runId,
+        entries,
+        this.terminalRetention,
+      )
+      this.db.exec('COMMIT')
+      this.notifyTerminalEvents(events)
+      return events
     } catch (error) {
       this.db.exec('ROLLBACK')
       throw error
@@ -468,7 +946,23 @@ export class FuturesStore {
             value.work_id,
             canonicalJson(receipt),
           )
+        const terminalEvents = this.appendTerminalEventsInTransaction(
+          String(value.run_id),
+          [
+            {
+              type: 'analysis.superseded',
+              data: {
+                work_id: value.work_id,
+                run_id: value.run_id,
+                result_hash: resultHash,
+                status: 'superseded',
+              },
+            },
+          ],
+          this.terminalRetention,
+        )
         this.db.exec('COMMIT')
+        this.notifyTerminalEvents(terminalEvents)
         return receipt
       } catch (error) {
         this.db.exec('ROLLBACK')
@@ -555,6 +1049,9 @@ export class FuturesStore {
           canonicalJson({
             state_version: value.applied_state_version,
             result: value.result,
+            ...(isRecord(value.runtime_output)
+              ? { runtime_output: value.runtime_output }
+              : {}),
             ...(runtimeWork ? { checkpoint: value.runtime_checkpoint } : {}),
           }),
           value.run_id,
@@ -572,9 +1069,15 @@ export class FuturesStore {
           value.work_id,
           canonicalJson({ result: value, receipt }),
         )
+      const terminalEvents = this.appendTerminalEventsInTransaction(
+        String(value.run_id),
+        terminalEntriesFromResult(value),
+        this.terminalRetention,
+      )
       if (injectFailureAt === 'before-commit')
         throw new Error('Injected pre-commit failure.')
       this.db.exec('COMMIT')
+      this.notifyTerminalEvents(terminalEvents)
       return receipt
     } catch (error) {
       this.db.exec('ROLLBACK')
@@ -587,6 +1090,7 @@ export class FuturesStore {
     payload: unknown,
     injectFailureAt?: 'before-commit',
     checkpoint?: unknown,
+    terminalCommand?: TerminalCommandMetadata,
   ): JsonRecord {
     if (
       typeof commandId !== 'string' ||
@@ -599,9 +1103,24 @@ export class FuturesStore {
       throw new Error(
         'Durable command payload exceeds the JSONL message limit.',
       )
-    const hash = canonicalHash(payload)
+    if (
+      terminalCommand !== undefined &&
+      (terminalCommand.command_id !== commandId ||
+        !terminalCommand.stream_run_id ||
+        !terminalCommand.action ||
+        !Number.isSafeInteger(terminalCommand.expected_state_version) ||
+        terminalCommand.expected_state_version < 0)
+    )
+      throw new Error('Invalid terminal command acceptance metadata.')
+    const hash = canonicalHash(
+      terminalCommand === undefined ? payload : { payload, terminalCommand },
+    )
     const queuedJson = canonicalJson(
-      checkpoint === undefined ? payload : { request: payload, checkpoint },
+      terminalCommand !== undefined
+        ? { request: payload, checkpoint: checkpoint ?? null, terminalCommand }
+        : checkpoint === undefined
+          ? payload
+          : { request: payload, checkpoint },
     )
     if (Buffer.byteLength(queuedJson, 'utf8') > 1_048_576)
       throw new Error(
@@ -644,9 +1163,31 @@ export class FuturesStore {
       this.db
         .prepare('INSERT INTO paper_futures_outbox VALUES(?,?,?,?)')
         .run(`command:${commandId}`, '', commandId, canonicalJson(receipt))
+      const terminalEvents = terminalCommand
+        ? this.appendTerminalEventsInTransaction(
+            terminalCommand.stream_run_id,
+            [
+              {
+                type: 'command.ack',
+                data: {
+                  command_id: commandId,
+                  action: terminalCommand.action,
+                  status: 'accepted',
+                  expected_state_version:
+                    terminalCommand.expected_state_version,
+                  ...(terminalCommand.child_run_id
+                    ? { child_run_id: terminalCommand.child_run_id }
+                    : {}),
+                },
+              },
+            ],
+            this.terminalRetention,
+          )
+        : []
       if (injectFailureAt === 'before-commit')
         throw new Error('Injected command acceptance pre-commit failure.')
       this.db.exec('COMMIT')
+      this.notifyTerminalEvents(terminalEvents)
       return receipt
     } catch (error) {
       this.db.exec('ROLLBACK')
@@ -735,12 +1276,50 @@ export class FuturesStore {
       result_hash: hash,
       result,
     }
+    const queuedRow = this.db
+      .prepare(
+        'SELECT payload_json FROM paper_futures_command_queue WHERE command_id=?',
+      )
+      .get(commandId) as { payload_json: string } | undefined
+    const queued = queuedRow
+      ? (JSON.parse(queuedRow.payload_json) as JsonRecord)
+      : undefined
+    const terminalCommand = queued?.terminalCommand
+    if (
+      terminalCommand !== undefined &&
+      (!isRecord(terminalCommand) ||
+        terminalCommand.command_id !== commandId ||
+        typeof terminalCommand.stream_run_id !== 'string' ||
+        typeof terminalCommand.action !== 'string')
+    )
+      throw new Error('Persisted terminal command metadata is invalid.')
     this.db.exec('BEGIN IMMEDIATE')
     try {
       this.db
         .prepare('INSERT INTO paper_futures_outbox VALUES(?,?,?,?)')
         .run(id, '', commandId, canonicalJson(stored))
+      const terminalEvents = isRecord(terminalCommand)
+        ? this.appendTerminalEventsInTransaction(
+            String(terminalCommand.stream_run_id),
+            [
+              {
+                type: 'command.result',
+                data: {
+                  command_id: commandId,
+                  action: terminalCommand.action,
+                  result_hash: hash,
+                  result: stored,
+                  ...(terminalCommand.child_run_id
+                    ? { child_run_id: terminalCommand.child_run_id }
+                    : {}),
+                },
+              },
+            ],
+            this.terminalRetention,
+          )
+        : []
       this.db.exec('COMMIT')
+      this.notifyTerminalEvents(terminalEvents)
       return stored
     } catch (error) {
       this.db.exec('ROLLBACK')
@@ -1022,6 +1601,119 @@ export class FuturesStore {
     }
     return expectedLedger.size === 0 && expectedRuntimeLedger.size === 0
   }
+}
+
+function projectTerminalState(
+  projection: JsonRecord,
+  runId: string,
+  analyses: readonly JsonRecord[],
+): JsonRecord {
+  const checkpoint = isRecord(projection.checkpoint)
+    ? projection.checkpoint
+    : {}
+  const result = isRecord(projection.result) ? projection.result : {}
+  const runtimeOutput = isRecord(projection.runtime_output)
+    ? projection.runtime_output
+    : {}
+  const decimal = (value: unknown): string | null =>
+    typeof value === 'string' && /^-?\d+(?:\.\d+)?$/.test(value) ? value : null
+  const cash = decimal(checkpoint.cash_usd)
+  const funding = decimal(checkpoint.funding_paid)
+  const fees = decimal(checkpoint.fees_usd)
+  const realized = decimal(checkpoint.realized_gross_usd)
+  const position = isRecord(checkpoint.ledger_position)
+    ? checkpoint.ledger_position
+    : null
+  const ledgerEvents = Array.isArray(checkpoint.ledger_events)
+    ? checkpoint.ledger_events.filter(isRecord)
+    : []
+  const orders = Array.isArray(runtimeOutput.orders) ? runtimeOutput.orders : []
+  const fills = Array.isArray(runtimeOutput.fills) ? runtimeOutput.fills : []
+  const fundingComplete = checkpoint.funding_complete === true
+  const equity = decimal(result.equity_usd) ?? cash
+  const net =
+    fundingComplete && realized !== null && fees !== null && funding !== null
+      ? addDecimalStrings(realized, funding, fees)
+      : null
+  const dto: JsonRecord = {
+    schema_version: 'paper-futures-terminal-state.v1',
+    run_id: runId,
+    state_version: projection.state_version,
+    currency: 'USD',
+    quantity_unit: 'BTC',
+    account: {
+      cash_usd: cash,
+      equity_usd: equity,
+      realized_gross_usd: realized,
+      fees_usd: fees,
+      funding_paid_usd: funding,
+      funding_complete: fundingComplete,
+      net_usd: net,
+    },
+    position: position
+      ? {
+          side: position.side ?? null,
+          quantity_btc: decimal(position.quantity_btc ?? position.qty),
+          entry_price_usd_per_btc: decimal(
+            position.entry_price_usd_per_btc ?? position.entry_price,
+          ),
+        }
+      : null,
+    orders: orders.filter(isRecord),
+    fills: (fills.filter(isRecord).length > 0
+      ? fills.filter(isRecord)
+      : ledgerEvents
+    ).map((fill, index) => ({
+      fill_id:
+        typeof fill.fill_id === 'string'
+          ? fill.fill_id
+          : `${runId}:fill:${index}`,
+      ...fill,
+    })),
+    analyses: [...analyses],
+    ledger_events: ledgerEvents,
+    feed_status: { status: 'unknown', observed_at_ms: null },
+    engine_status: { status: 'unknown', observed_at_ms: null },
+  }
+  if (!validateTerminalState(dto))
+    throw new Error('Terminal financial snapshot DTO is invalid.')
+  return dto
+}
+
+function addDecimalStrings(...values: string[]): string {
+  // Financial inputs remain decimal strings; this projection only combines the
+  // already-normalized exact ledger totals using BigInt fixed-point arithmetic.
+  const scale = Math.max(
+    ...values.map((value) => value.split('.')[1]?.length ?? 0),
+  )
+  const factor = 10n ** BigInt(scale)
+  const total = values.reduce((sum, value) => {
+    const negative = value.startsWith('-')
+    const [whole, fraction = ''] = value.replace(/^-/, '').split('.')
+    const amount =
+      BigInt(whole) * factor + BigInt(fraction.padEnd(scale, '0') || '0')
+    return sum + (negative ? -amount : amount)
+  }, 0n)
+  const sign = total < 0n ? '-' : ''
+  const absolute = total < 0n ? -total : total
+  const whole = absolute / factor
+  const fraction = scale
+    ? `.${(absolute % factor).toString().padStart(scale, '0').replace(/0+$/, '')}`
+    : ''
+  return `${sign}${whole}${fraction === '.' ? '' : fraction}`
+}
+
+function validateTerminalState(value: JsonRecord): boolean {
+  return (
+    value.schema_version === 'paper-futures-terminal-state.v1' &&
+    value.currency === 'USD' &&
+    value.quantity_unit === 'BTC' &&
+    isRecord(value.account) &&
+    typeof value.account.funding_complete === 'boolean' &&
+    (value.account.funding_complete
+      ? typeof value.account.net_usd === 'string'
+      : value.account.net_usd === null)
+  )
 }
 
 function isRecord(value: unknown): value is JsonRecord {

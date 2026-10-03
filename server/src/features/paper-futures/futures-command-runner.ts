@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from 'node:util'
-import { FuturesStore } from './futures-store.ts'
+import { FuturesStore, type TerminalCommandMetadata } from './futures-store.ts'
 import {
   FuturesWorker,
   type FuturesWorkerCommit,
@@ -27,7 +27,10 @@ export class FuturesCommandRunner {
     })
   }
 
-  accept(request: FuturesWorkerRequest): {
+  accept(
+    request: FuturesWorkerRequest,
+    terminalCommand?: TerminalCommandMetadata,
+  ): {
     readonly acknowledgement: Record<string, unknown>
     readonly result: Promise<Record<string, unknown>>
   } {
@@ -88,6 +91,7 @@ export class FuturesCommandRunner {
       request,
       undefined,
       checkpoint,
+      terminalCommand,
     )
     const existingResult = this.store.getCommandResult(request.work_id)
     if (existingResult)
