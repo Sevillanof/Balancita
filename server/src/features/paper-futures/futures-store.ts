@@ -2136,7 +2136,10 @@ function validateExecutionCheckpoint(
   const instrument = binding.instrument_spec as JsonRecord
   const config = execution.config
   if (
-    execution.checkpoint_version !== 'paper-execution-checkpoint.v1' ||
+    ![
+      'paper-execution-checkpoint.v1',
+      'paper-execution-checkpoint.v2',
+    ].includes(String(execution.checkpoint_version)) ||
     execution.model_version !== 'paper-execution.v1' ||
     execution.run_id !== cp.run_id ||
     execution.instrument_id !== instrument.instrument_id ||
@@ -2173,6 +2176,46 @@ function validateExecutionCheckpoint(
     !isRecord(execution.command_receipts)
   )
     throw new Error('Execution checkpoint collections are invalid.')
+  if (execution.checkpoint_version === 'paper-execution-checkpoint.v2') {
+    for (const candidate of execution.book_budgets) {
+      if (
+        !Array.isArray(candidate) ||
+        candidate.length !== 2 ||
+        !Array.isArray(candidate[0]) ||
+        candidate[0].length !== 5 ||
+        !candidate[0].every((part) => typeof part === 'string') ||
+        !isRecord(candidate[1])
+      )
+        throw new Error('Execution checkpoint book budget identity is invalid.')
+      const budget = candidate[1]
+      assertKeys(budget, ['asks', 'bids'])
+      for (const side of ['asks', 'bids']) {
+        const levels = budget[side]
+        if (!Array.isArray(levels))
+          throw new Error(
+            'Execution checkpoint book budget levels are invalid.',
+          )
+        const prices = new Set<string>()
+        for (const level of levels) {
+          if (
+            !Array.isArray(level) ||
+            level.length !== 2 ||
+            typeof level[0] !== 'string' ||
+            typeof level[1] !== 'string' ||
+            prices.has(level[0])
+          )
+            throw new Error('Execution checkpoint book budget row is invalid.')
+          canonicalDecimal(level[0], 'execution book budget price', 'positive')
+          canonicalDecimal(
+            level[1],
+            'execution book budget quantity',
+            'nonnegative',
+          )
+          prices.add(level[0])
+        }
+      }
+    }
+  }
   const position = execution.position
   assertKeys(position, ['side', 'quantity_btc'])
   const ledgerPosition = cp.ledger_position

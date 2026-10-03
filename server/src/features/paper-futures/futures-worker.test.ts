@@ -21,6 +21,18 @@ describe('FuturesWorker', () => {
     expect(() => validateFuturesWorkerRequest(request)).not.toThrow()
   })
 
+  it('continues to reject oversized arbitrary checkpoint objects', () => {
+    const request = {
+      ...normalizedFundingRequest(),
+      checkpoint: Object.fromEntries(
+        Array.from({ length: 101 }, (_, index) => [`key-${index}`, 'value']),
+      ),
+    }
+    expect(() => validateFuturesWorkerRequest(request)).toThrow(
+      'Invalid worker checkpoint.',
+    )
+  })
+
   it('uses one persistent Python process for ordered ledger requests', async () => {
     const committed: string[] = []
     const worker = new FuturesWorker({

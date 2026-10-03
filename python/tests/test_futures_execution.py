@@ -1,5 +1,6 @@
 import json
 import unittest
+from decimal import Decimal
 
 from balancita_engine.futures_execution import PaperExecutionAdapter
 
@@ -94,6 +95,100 @@ class PaperExecutionAdapterTests(unittest.TestCase):
         conflict = restored.submit({"order_id": "o1", "run_id": "run-1", "instrument_id": "kraken-futures:PF_XBTUSD",
             "decision_at_ms": 0, "side": "sell", "order_type": "market_ioc", "quantity_btc": "0.0004"})
         self.assertEqual(conflict["type"], "rejected")
+
+    def test_checkpoint_roundtrips_full_depth_without_price_keyed_budget_objects(self):
+        asks = [[str(100001 + 2 * index), "0.0001"] for index in range(101)]
+        bids = [[str(100000 - 2 * index), "0.0001"] for index in range(101)]
+        self.submit(quantity_btc="0.005")
+        first_fills = [
+            event
+            for event in self.adapter.advance(100, self.book(100, asks=asks, bids=bids))
+            if event["type"] == "fill"
+        ]
+        self.assertEqual(len(first_fills), 50)
+        self.assertEqual(first_fills[0]["price_usd"], "100001")
+        self.assertEqual(first_fills[-1]["price_usd"], "100099")
+        first_quantity = sum(
+            (Decimal(event["quantity_btc"]) for event in first_fills), Decimal("0")
+        )
+        first_notional = sum(
+            (
+                Decimal(event["quantity_btc"]) * Decimal(event["price_usd"])
+                for event in first_fills
+            ),
+            Decimal("0"),
+        )
+        self.assertEqual(first_notional / first_quantity, Decimal("100050"))
+
+        checkpoint = json.loads(json.dumps(self.adapter.checkpoint()))
+        budget = checkpoint["book_budgets"][0][1]
+
+        self.assertEqual(checkpoint["checkpoint_version"], "paper-execution-checkpoint.v2")
+        self.assertEqual(len(budget["asks"]), 101)
+        self.assertEqual(len(budget["bids"]), 101)
+        self.assertTrue(all(len(level) == 2 for level in budget["asks"]))
+        restored = PaperExecutionAdapter.restore(checkpoint)
+        self.assertEqual(restored.checkpoint(), self.adapter.checkpoint())
+        restored.submit({
+            "order_id": "o2",
+            "run_id": "run-1",
+            "instrument_id": "kraken-futures:PF_XBTUSD",
+            "decision_at_ms": 100,
+            "side": "buy",
+            "order_type": "market_ioc",
+            "quantity_btc": "0.005",
+        })
+        next_book = self.book(200, asks=asks, bids=bids, snapshot_id="100", revision="100")
+        next_fills = [
+            event
+            for event in restored.advance(200, next_book)
+            if event["type"] == "fill"
+        ]
+        self.assertEqual(
+            sum(
+                (Decimal(event["quantity_btc"]) for event in next_fills),
+                Decimal("0"),
+            ),
+            Decimal("0.005"),
+        )
+        self.assertEqual(next_fills[0]["price_usd"], "100101")
+        next_quantity = sum(
+            (Decimal(event["quantity_btc"]) for event in next_fills), Decimal("0")
+        )
+        next_notional = sum(
+            (
+                Decimal(event["quantity_btc"]) * Decimal(event["price_usd"])
+                for event in next_fills
+            ),
+            Decimal("0"),
+        )
+        self.assertEqual(next_notional / next_quantity, Decimal("100150"))
+
+    def test_checkpoint_v2_restores_legacy_v1_price_maps(self):
+        self.adapter.advance(
+            100,
+            self.book(100, asks=[["100001", "0.0005"]], bids=[["100000", "0.0005"]]),
+        )
+        legacy = self.adapter.checkpoint()
+        legacy["checkpoint_version"] = "paper-execution-checkpoint.v1"
+        legacy["book_budgets"] = [
+            (
+                key,
+                {
+                    side: {price: quantity for price, quantity in levels}
+                    for side, levels in budget.items()
+                },
+            )
+            for key, budget in legacy["book_budgets"]
+        ]
+
+        restored = PaperExecutionAdapter.restore(json.loads(json.dumps(legacy)))
+
+        self.assertEqual(restored.book_budgets, self.adapter.book_budgets)
+        self.assertEqual(
+            restored.advance(101, self.book(100)),
+            self.adapter.advance(101, self.book(100)),
+        )
 
     def test_checkpoint_restores_partial_resting_order_without_replaying_old_depth(self):
         self.submit(order_type="limit", limit_price_usd="100001")

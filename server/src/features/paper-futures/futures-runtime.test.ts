@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { DatabaseSync } from 'node:sqlite'
 import { tmpdir } from 'node:os'
@@ -8,6 +8,10 @@ import { FuturesCommandRunner } from './futures-command-runner.ts'
 import { FuturesStore } from './futures-store.ts'
 import { canonicalHash } from './futures-canonical.ts'
 import type { FuturesWorkerRequest } from './futures-worker.ts'
+import {
+  parseBookMessage,
+  parseTickerMessage,
+} from '../kraken-futures/futures-market.ts'
 
 const instrument = {
   instrument_id: 'kraken-futures:PF_XBTUSD',
@@ -38,6 +42,135 @@ type RuntimeRequest = Omit<FuturesWorkerRequest, 'payload'> & {
 }
 
 describe('durable C27 futures runtime', () => {
+  it.each([
+    [100, 100],
+    [101, 101],
+    [1222, 2039],
+  ])(
+    'resumes a durable worker checkpoint with %i asks and %i bids',
+    async (askCount, bidCount) => {
+      const directory = mkdtempSync(join(tmpdir(), 'futures-depth-checkpoint-'))
+      const path = join(directory, 'fixture.sqlite')
+      const runId = 'depth-checkpoint-run'
+      const executionConfig = {
+        ...runtimeConfig,
+        version: 'futures-runtime-execution.v1',
+        execution_latency_ms: 100,
+      }
+      const store = new FuturesStore(path)
+      store.createRun({
+        runId,
+        config: {
+          ledger_version: 'linear-usd-ledger.v1',
+          decimal_precision: 50,
+          leverage: '1',
+        },
+        seed: { cash_usd: '10000' },
+        instrument: { instrument_id: instrument.instrument_id },
+        costs: {
+          version: runtimeConfig.cost_version,
+          maker: runtimeConfig.maker_rate,
+          taker: runtimeConfig.taker_rate,
+        },
+        runtime: {
+          schema_version: 'futures-runtime-binding.v3',
+          runtime_config: executionConfig,
+          instrument_spec: instrument,
+        },
+      })
+      let runner = new FuturesCommandRunner(store)
+      const makeRequest = (
+        workId: string,
+        expectedStateVersion: number,
+        snapshot: Record<string, unknown>,
+      ): FuturesWorkerRequest => ({
+        request_id: `request-${workId}`,
+        run_id: runId,
+        work_id: workId,
+        expected_state_version: expectedStateVersion,
+        payload: {
+          operation: 'futures_runtime.v2',
+          runtime_config: executionConfig,
+          instrument,
+          market_snapshot: snapshot,
+        },
+      })
+      try {
+        const captured =
+          askCount === 1222 && bidCount === 2039
+            ? capturedPublicDepthFixture()
+            : undefined
+        const timestamp = captured?.decisionTimeMs ?? 21_600_000
+        const firstMarket = market(timestamp, 'long', '84770')
+        const book = (firstMarket.events as Record<string, unknown>[]).find(
+          (event) => event.type === 'book_snapshot',
+        )!
+        book.asks =
+          captured?.asks ??
+          Array.from({ length: askCount }, (_, index) => ({
+            price_usd: String(84771 + index * 2),
+            quantity_btc: '0.0001',
+          }))
+        book.bids =
+          captured?.bids ??
+          Array.from({ length: bidCount }, (_, index) => ({
+            price_usd: String(84770 - index * 2),
+            quantity_btc: '0.0001',
+          }))
+        if (captured) {
+          book.event_time_ms = captured.bookEventTimeMs
+          book.received_at_ms = captured.bookReceivedAtMs
+          book.known_at_ms = captured.bookReceivedAtMs
+          book.epoch = captured.sequence
+          book.sequence = captured.sequence
+          const ticker = (firstMarket.events as Record<string, unknown>[]).find(
+            (event) => event.type === 'ticker',
+          )!
+          ticker.event_time_ms = captured.tickerEventTimeMs
+          ticker.received_at_ms = captured.tickerReceivedAtMs
+          ticker.known_at_ms = captured.tickerReceivedAtMs
+          ticker.mark_usd = captured.markUsd
+        }
+        await runner.accept(makeRequest('depth-open', 0, firstMarket)).result
+        const saved = store.getRunProjection(runId)?.checkpoint as Record<
+          string,
+          unknown
+        >
+        const execution = saved.execution_checkpoint as Record<string, unknown>
+        expect(execution.checkpoint_version).toBe(
+          'paper-execution-checkpoint.v2',
+        )
+        const budgets = execution.book_budgets as [
+          unknown,
+          { asks: [string, string][]; bids: [string, string][] },
+        ][]
+        expect(budgets[0]![1].asks).toHaveLength(askCount)
+        expect(budgets[0]![1].bids).toHaveLength(bidCount)
+
+        const before = store.exportRun(runId)
+        await runner.close()
+        runner = new FuturesCommandRunner(store)
+        const next = market(timestamp + 1, 'flat', '84770')
+        await runner.accept(makeRequest('depth-next', 1, next)).result
+        expect(store.getAppliedReceipt('depth-next')?.status).toBe('committed')
+        expect(store.verifyRun(runId)).toBe(true)
+        expect(
+          (store.exportRun(runId).events as Record<string, unknown>[]).filter(
+            (event) => event.type === 'fill',
+          ),
+        ).toEqual(
+          (before.events as Record<string, unknown>[]).filter(
+            (event) => event.type === 'fill',
+          ),
+        )
+      } finally {
+        await runner.close().catch(() => undefined)
+        store.close()
+        rmSync(directory, { recursive: true, force: true })
+      }
+    },
+  )
+
   it('durably resumes a pending 100ms execution order, fills only on a later book, and closes through the real worker', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'futures-execution-runtime-'))
     const path = join(directory, 'fixture.sqlite')
@@ -1440,5 +1573,75 @@ function market(
     decision_time_ms: cutoffMs,
     cutoff_received_at_ms: cutoffMs,
     events,
+  }
+}
+
+function capturedPublicDepthFixture():
+  | {
+      readonly asks: { price_usd: string; quantity_btc: string }[]
+      readonly bids: { price_usd: string; quantity_btc: string }[]
+      readonly bookEventTimeMs: number
+      readonly bookReceivedAtMs: number
+      readonly decisionTimeMs: number
+      readonly markUsd: string
+      readonly sequence: number
+      readonly tickerEventTimeMs: number
+      readonly tickerReceivedAtMs: number
+    }
+  | undefined {
+  const capturePath = join(
+    process.cwd(),
+    '../playwright-artifacts/futures-diagnostics/diag-20261003T221450Z-43308/public-frames.jsonl',
+  )
+  if (!existsSync(capturePath)) return undefined
+  const frames = readFileSync(capturePath, 'utf8')
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line) as { receivedAt: string; raw: string })
+  const bookFrame = frames
+    .map((frame) => ({
+      frame,
+      message: JSON.parse(frame.raw) as Record<string, unknown>,
+    }))
+    .find(({ message }) => message.feed === 'book_snapshot')
+  const tickerFrame = frames
+    .map((frame) => ({
+      frame,
+      message: JSON.parse(frame.raw) as Record<string, unknown>,
+    }))
+    .find(
+      ({ message }) =>
+        message.feed === 'ticker' && typeof message.markPrice === 'number',
+    )
+  if (!bookFrame || !tickerFrame) return undefined
+  const book = bookFrame.message as Record<string, unknown> & {
+    seq: number
+  }
+  const bookReceivedAtMs = Date.parse(bookFrame.frame.receivedAt)
+  const tickerReceivedAtMs = Date.parse(tickerFrame.frame.receivedAt)
+  const parsedBook = parseBookMessage(book, {
+    receivedAt: bookReceivedAtMs,
+    epoch: 1,
+  })
+  const parsedTicker = parseTickerMessage(tickerFrame.message, {
+    receivedAt: tickerReceivedAtMs,
+    epoch: 1,
+  })
+  return {
+    asks: (parsedBook.asks ?? []).map(({ price, quantity }) => ({
+      price_usd: price,
+      quantity_btc: quantity,
+    })),
+    bids: (parsedBook.bids ?? []).map(({ price, quantity }) => ({
+      price_usd: price,
+      quantity_btc: quantity,
+    })),
+    bookEventTimeMs: parsedBook.eventTime,
+    bookReceivedAtMs,
+    decisionTimeMs: Math.max(bookReceivedAtMs, tickerReceivedAtMs),
+    markUsd: parsedTicker.mark ?? '0',
+    sequence: book.seq,
+    tickerEventTimeMs: parsedTicker.eventTime,
+    tickerReceivedAtMs,
   }
 }

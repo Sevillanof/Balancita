@@ -7,7 +7,8 @@ from .canonical import normalize_decimal, normalize_timestamp_ms
 from .futures_ledger import DECIMAL_PRECISION, FEES
 
 EXECUTION_MODEL_VERSION = "paper-execution.v1"
-CHECKPOINT_VERSION = "paper-execution-checkpoint.v1"
+LEGACY_CHECKPOINT_VERSION = "paper-execution-checkpoint.v1"
+CHECKPOINT_VERSION = "paper-execution-checkpoint.v2"
 ZERO = Decimal("0")
 
 
@@ -378,14 +379,26 @@ class PaperExecutionAdapter:
             "run_id": self.run_id, "instrument_id": self.instrument_id, "config": self._config,
             "orders": orders, "events": self._events, "command_receipts": self.command_receipts,
             "position": self._position, "position_reduced": _plain(self._position_reduced),
-            "book_budgets": [(list(key), value) for key, value in self.book_budgets.items()],
+            "book_budgets": [
+                (
+                    list(key),
+                    {
+                        side: [[price, quantity] for price, quantity in levels.items()]
+                        for side, levels in budget.items()
+                    },
+                )
+                for key, budget in self.book_budgets.items()
+            ],
             "trade_budgets": [(key, _plain(value)) for key, value in self.trade_budgets.items()],
             "trade_ids": [(key, [_plain(value[0]), _plain(value[1]), value[2]]) for key, value in self.trade_ids.items()],
             "sequence": self._sequence, "last_cutoff_ms": self._last_cutoff_ms})
 
     @classmethod
     def restore(cls, checkpoint):
-        if not isinstance(checkpoint, dict) or checkpoint.get("checkpoint_version") != CHECKPOINT_VERSION:
+        if not isinstance(checkpoint, dict) or checkpoint.get("checkpoint_version") not in (
+            LEGACY_CHECKPOINT_VERSION,
+            CHECKPOINT_VERSION,
+        ):
             raise ValueError("unsupported execution checkpoint")
         result = cls({"run_id": checkpoint["run_id"], "instrument_id": checkpoint["instrument_id"]}, checkpoint["config"])
         if checkpoint.get("model_version") != result._config["version"]:
@@ -398,7 +411,16 @@ class PaperExecutionAdapter:
         result.command_receipts = {key: (tuple(value[0]), deepcopy(value[1])) for key, value in checkpoint["command_receipts"].items()}
         result._position = deepcopy(checkpoint["position"])
         result._position_reduced = Decimal(checkpoint["position_reduced"])
-        result.book_budgets = {tuple(key): deepcopy(value) for key, value in checkpoint["book_budgets"]}
+        result.book_budgets = {}
+        for key, budget in checkpoint["book_budgets"]:
+            if checkpoint["checkpoint_version"] == LEGACY_CHECKPOINT_VERSION:
+                restored_budget = deepcopy(budget)
+            else:
+                restored_budget = {
+                    side: {price: quantity for price, quantity in levels}
+                    for side, levels in budget.items()
+                }
+            result.book_budgets[tuple(key)] = restored_budget
         result.trade_budgets = {key: Decimal(value) for key, value in checkpoint["trade_budgets"]}
         result.trade_ids = {key: (Decimal(value[0]), Decimal(value[1]), value[2]) for key, value in checkpoint["trade_ids"]}
         result._sequence = checkpoint["sequence"]
