@@ -1,0 +1,14 @@
+server/src/features/paper-futures/futures-runtime.test.ts
+  h_2f68313623be98 1080-1082
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "59acb747350c0a62c846ceb714402957872f2509",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
