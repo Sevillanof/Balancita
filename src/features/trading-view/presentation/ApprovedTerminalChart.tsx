@@ -41,6 +41,8 @@ type Props = {
   markers: readonly ApprovedTerminalMarker[]
   selectedId: string
   intervalSeconds: number
+  currency?: 'EUR' | 'USD'
+  instrument?: string
   levels?: readonly ApprovedTerminalLevel[]
   initialViewport?: 'approved-terminal'
   onSelect: (time: number, markerId?: string) => void
@@ -101,10 +103,12 @@ export default function ApprovedTerminalChart({
   markers,
   selectedId,
   intervalSeconds,
+  currency = 'EUR',
+  instrument = 'BTC/EUR',
   levels = [],
   initialViewport,
   onSelect,
-  ariaLabel = 'Gráfico de velas BTC/EUR con volumen; las decisiones del backend se describen y seleccionan en el panel lateral',
+  ariaLabel,
 }: Props) {
   const container = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
@@ -118,6 +122,8 @@ export default function ApprovedTerminalChart({
   >([])
   const fitted = useRef(false)
   const focusedSelection = useRef<string | null>(null)
+  const renderedCandles = useRef<readonly ApprovedTerminalCandle[] | null>(null)
+  const renderedInterval = useRef<number | null>(null)
   const propsRef = useRef({ candles, markers, intervalSeconds, onSelect })
 
   useEffect(() => {
@@ -204,7 +210,7 @@ export default function ApprovedTerminalChart({
               formatter: (price: number) =>
                 new Intl.NumberFormat('es-ES', {
                   style: 'currency',
-                  currency: 'EUR',
+                  currency,
                   minimumFractionDigits: 2,
                   maximumFractionDigits: 2,
                 }).format(price),
@@ -258,34 +264,61 @@ export default function ApprovedTerminalChart({
       markerRef.current = null
       fitted.current = false
       focusedSelection.current = null
+      renderedCandles.current = null
+      renderedInterval.current = null
     }
-  }, [initialViewport])
+  }, [currency, initialViewport])
 
   useEffect(() => {
     const series = candleSeriesRef.current
     if (!series) return
     const timeScale = chartRef.current?.timeScale()
-    const visibleRange = fitted.current
-      ? timeScale?.getVisibleLogicalRange()
-      : null
-    series.setData(
-      candles.map((candle) => ({
-        time: candle.time as Time,
-        open: candle.open,
-        high: candle.high,
-        low: candle.low,
-        close: candle.close,
-      })),
-    )
     const volumeUpColor = cssColor('--chart-volume-up', '#285d50')
     const volumeDownColor = cssColor('--chart-volume-down', '#653f42')
-    volumeRef.current?.setData(
-      candles.map((candle) => ({
-        time: candle.time as Time,
-        value: candle.volume,
-        color: candle.close >= candle.open ? volumeUpColor : volumeDownColor,
-      })),
-    )
+    const previous = renderedCandles.current
+    const rebuild =
+      previous === null ||
+      renderedInterval.current !== intervalSeconds ||
+      candles.length < previous.length ||
+      previous.some((candle, index) => {
+        if (index === previous.length - 1) return false
+        const next = candles[index]
+        return (
+          !next ||
+          next.time !== candle.time ||
+          next.open !== candle.open ||
+          next.high !== candle.high ||
+          next.low !== candle.low ||
+          next.close !== candle.close ||
+          next.volume !== candle.volume
+        )
+      })
+    const visibleRange =
+      rebuild && fitted.current ? timeScale?.getVisibleLogicalRange() : null
+    const pricePoint = (candle: ApprovedTerminalCandle) => ({
+      time: candle.time as Time,
+      open: candle.open,
+      high: candle.high,
+      low: candle.low,
+      close: candle.close,
+    })
+    const volumePoint = (candle: ApprovedTerminalCandle) => ({
+      time: candle.time as Time,
+      value: candle.volume,
+      color: candle.close >= candle.open ? volumeUpColor : volumeDownColor,
+    })
+    if (rebuild) {
+      series.setData(candles.map(pricePoint))
+      volumeRef.current?.setData(candles.map(volumePoint))
+      renderedInterval.current = intervalSeconds
+    } else if (candles.length > 0 && previous !== null) {
+      const firstUpdate = Math.max(0, previous.length - 1)
+      for (const candle of candles.slice(firstUpdate)) {
+        series.update(pricePoint(candle))
+        volumeRef.current?.update(volumePoint(candle))
+      }
+    }
+    renderedCandles.current = candles
     if (!fitted.current) {
       if (candles.length) {
         if (initialViewport === 'approved-terminal')
@@ -297,7 +330,7 @@ export default function ApprovedTerminalChart({
       }
       fitted.current = candles.length > 0
     } else if (visibleRange) timeScale?.setVisibleLogicalRange(visibleRange)
-  }, [candles, initialViewport])
+  }, [candles, intervalSeconds, initialViewport])
 
   useEffect(() => {
     const candleTimes = new Set(candles.map((candle) => candle.time))
@@ -388,7 +421,10 @@ export default function ApprovedTerminalChart({
         data-marker-count={markers.length}
         className="demo-terminal__chart"
         role="img"
-        aria-label={ariaLabel}
+        aria-label={
+          ariaLabel ??
+          `Gráfico de velas ${instrument} con volumen; las decisiones del backend se describen y seleccionan en el panel lateral`
+        }
       />
       <button
         className="demo-terminal__present"

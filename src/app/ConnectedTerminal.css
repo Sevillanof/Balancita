@@ -55,6 +55,32 @@
   font-size: 0.9rem;
 }
 
+.connected-terminal .demo-terminal__present {
+  min-height: 2.5rem;
+  margin: 0.25rem 0.5rem 0.25rem 0;
+  padding: 0.55rem 0.8rem;
+  border: 1px solid var(--demo-border, #303a3e);
+  border-radius: 0.25rem;
+  background: var(--demo-panel, #171c20);
+  color: var(--demo-text, #f0f2ed);
+  font: inherit;
+  cursor: pointer;
+}
+
+.connected-terminal .demo-terminal__present:hover:not(:disabled) {
+  border-color: var(--demo-accent, #d4aa62);
+}
+
+.connected-terminal .demo-terminal__present:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.connected-terminal .demo-terminal__present:focus-visible {
+  outline: 2px solid var(--demo-accent, #d4aa62);
+  outline-offset: 2px;
+}
+
 .connected-terminal__panel dl {
   display: grid;
   grid-template-columns: 1fr auto;

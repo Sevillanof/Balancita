@@ -5,12 +5,14 @@ import ApprovedTerminalChart from './ApprovedTerminalChart.tsx'
 const chartMocks = vi.hoisted(() => {
   const candles = {
     setData: vi.fn(),
+    update: vi.fn(),
     applyOptions: vi.fn(),
     createPriceLine: vi.fn(),
     removePriceLine: vi.fn(),
   }
   const volume = {
     setData: vi.fn(),
+    update: vi.fn(),
     priceScale: vi.fn(() => ({ applyOptions: vi.fn() })),
   }
   const timeScale = {
@@ -155,6 +157,8 @@ describe('approved connected terminal chart', () => {
       onSelect,
     }
     const view = render(<ApprovedTerminalChart {...props} />)
+    const logicalRangeWrites =
+      chartMocks.timeScale.setVisibleLogicalRange.mock.calls.length
 
     expect(chartMocks.markerApi.setMarkers).toHaveBeenLastCalledWith([
       expect.objectContaining({ id: 'earlier', time: candles[2]!.time }),
@@ -176,14 +180,13 @@ describe('approved connected terminal chart', () => {
         )}
       />,
     )
-    expect(chartMocks.candles.setData).toHaveBeenLastCalledWith(
-      expect.arrayContaining([
-        expect.objectContaining({ time: newest.time, close: 102 }),
-      ]),
+    expect(chartMocks.candles.update).toHaveBeenLastCalledWith(
+      expect.objectContaining({ time: newest.time, close: 102 }),
     )
-    expect(
-      chartMocks.timeScale.setVisibleLogicalRange,
-    ).toHaveBeenLastCalledWith({ from: 7, to: 74 })
+    expect(chartMocks.candles.setData).toHaveBeenCalledTimes(1)
+    expect(chartMocks.timeScale.setVisibleLogicalRange).toHaveBeenCalledTimes(
+      logicalRangeWrites,
+    )
 
     const click = chartMocks.chart.subscribeClick.mock
       .calls[0]?.[0] as (event: { hoveredObjectId: string }) => void
@@ -218,6 +221,44 @@ describe('approved connected terminal chart', () => {
       [...rendered.map((marker) => marker.time)].sort(
         (left, right) => left - right,
       ),
+    )
+  })
+
+  it('formats the selected quote currency and incrementally updates the forming candle', () => {
+    const props = {
+      candles,
+      markers: [],
+      selectedId: '',
+      intervalSeconds: 60,
+      currency: 'USD' as const,
+      initialViewport: 'approved-terminal' as const,
+      onSelect: vi.fn(),
+    }
+    const view = render(<ApprovedTerminalChart {...props} />)
+    const seriesOptions = chartMocks.chart.addSeries.mock.calls[0]?.[1] as {
+      priceFormat: { formatter: (price: number) => string }
+    }
+    expect(seriesOptions.priceFormat.formatter(100_000)).toContain('$')
+    const callsAfterBootstrap = chartMocks.candles.setData.mock.calls.length
+    const newest = candles.at(-1)!
+    view.rerender(
+      <ApprovedTerminalChart
+        {...props}
+        candles={candles.map((candle, index) =>
+          index === candles.length - 1
+            ? { ...candle, close: 100_010, high: 100_020 }
+            : candle,
+        )}
+      />,
+    )
+    expect(chartMocks.candles.update).toHaveBeenLastCalledWith(
+      expect.objectContaining({ time: newest.time, close: 100_010 }),
+    )
+    expect(chartMocks.volume.update).toHaveBeenLastCalledWith(
+      expect.objectContaining({ time: newest.time, value: newest.volume }),
+    )
+    expect(chartMocks.candles.setData).toHaveBeenCalledTimes(
+      callsAfterBootstrap,
     )
   })
 })
