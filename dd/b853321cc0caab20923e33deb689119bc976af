@@ -1,0 +1,18 @@
+odd/tasks/kraken-futures-deterministic.md
+  h_2f68313623be98 57-66,105
+python/balancita_engine/futures_strategies.py
+  h_2f68313623be98 1-293
+python/tests/test_futures_strategies.py
+  h_2f68313623be98 1-132
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ddb853321cc0caab20923e33deb689119bc976af",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
