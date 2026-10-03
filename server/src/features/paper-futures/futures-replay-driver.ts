@@ -1,4 +1,5 @@
 import { canonicalHash } from './futures-canonical.ts'
+import type { FuturesMarketStore } from '../kraken-futures/futures-market-store.ts'
 
 export type ReplayManifest = Readonly<{
   schema_version: 'futures-replay-manifest.v1'
@@ -54,6 +55,7 @@ export class FuturesReplayDriver {
   private readonly work: AppliedWork[] = []
   private readonly byWorkIdentity = new Map<string, AppliedWork>()
   private readonly bySequence = new Map<number, string>()
+  private lastSequence = 0
   private stateVersion = 0
   private virtualTime = 0
 
@@ -77,7 +79,7 @@ export class FuturesReplayDriver {
       )
       return duplicate?.receipt
     }
-    if (input.sequence !== this.inputs.length + 1)
+    if (input.sequence <= this.lastSequence)
       throw new Error('Causal inputs must arrive in persisted receive order.')
     if (input.known_at_ms !== undefined && input.known_at_ms > cutoff) return
     if (input.received_at_ms > cutoff) return
@@ -87,6 +89,7 @@ export class FuturesReplayDriver {
     this.virtualTime = Math.max(this.virtualTime, input.received_at_ms)
     this.inputs.push(structuredClone(input))
     this.bySequence.set(input.sequence, inputHash)
+    this.lastSequence = input.sequence
     const cycleKey = input.cycle_key ?? `received:${input.sequence}`
     const identity = canonicalHash({ cycleKey, evidence: inputHash })
     const prior = this.byWorkIdentity.get(identity)
@@ -130,6 +133,150 @@ export class FuturesReplayDriver {
     this.virtualTime = timeMs
   }
 
+  /** Feed persisted market rows through the same incremental causal core. */
+  async processMarketStore(
+    store: FuturesMarketStore,
+    receivedCutoff: number,
+    instrument: Record<string, unknown>,
+  ): Promise<void> {
+    validateTimestamp(receivedCutoff, 'received cutoff')
+    const allEvents = store.eventsAsOf(Number.MAX_SAFE_INTEGER) as Record<
+      string,
+      unknown
+    >[]
+    const eligible = allEvents.filter(
+      (event) => Number(event.receivedAt) <= receivedCutoff,
+    )
+    for (const [sourceIndex, source] of eligible.entries()) {
+      const receivedAt = Number(source.receivedAt)
+      const candles = store.candlesAsOf(receivedAt) as Record<string, unknown>[]
+      const gaps = store.gapsAsOf(receivedAt) as Record<string, unknown>[]
+      const current = eligible
+        .slice(0, sourceIndex + 1)
+        .filter((event) => Number(event.receivedAt) <= receivedAt)
+      const marketEvents: Record<string, unknown>[] = candles.map((candle) => ({
+        type: 'candle',
+        interval_ms: Number(candle.interval_ms),
+        bucket_start_ms: Number(candle.bucket_start),
+        event_time_ms: Number(candle.close_at ?? candle.known_at),
+        received_at_ms: Number(candle.known_at),
+        known_at_ms: Number(candle.known_at),
+        reception_order: Number(candle.known_at),
+        closed: true,
+        coverage: candle.coverage,
+        open: candle.open_price,
+        high: candle.high_price,
+        low: candle.low_price,
+        close: candle.close_price,
+        volume_btc: candle.volume_btc,
+      }))
+      for (const event of current) {
+        const known = Number(event.receivedAt)
+        const eventAt = Number(event.eventTime)
+        const seq = Number(event.receivedSequence)
+        if (event.type === 'book' && event.snapshot === true) {
+          const gap = gaps.some(
+            (item) => item.feed === 'book' && Number(item.detected_at) <= known,
+          )
+          marketEvents.push({
+            type: 'book_snapshot',
+            source_receipt_sequence: seq,
+            provider: 'kraken-futures',
+            product_id: 'PF_XBTUSD',
+            epoch: String(event.epoch),
+            sequence: seq,
+            snapshot_id: `${event.epoch}:${event.seq}`,
+            revision: String(event.seq),
+            event_time_ms: eventAt,
+            received_at_ms: known,
+            known_at_ms: known,
+            contiguous: event.contiguous === true && !gap,
+            valid: event.valid !== false && !gap,
+            bids: Array.isArray(event.bids)
+              ? (event.bids as Record<string, string>[]).map((level) => ({
+                  price_usd: level.price,
+                  quantity_btc: level.quantity,
+                }))
+              : [],
+            asks: Array.isArray(event.asks)
+              ? (event.asks as Record<string, string>[]).map((level) => ({
+                  price_usd: level.price,
+                  quantity_btc: level.quantity,
+                }))
+              : [],
+          })
+        } else if (event.type === 'ticker') {
+          marketEvents.push({
+            type: 'ticker',
+            source_receipt_sequence: seq,
+            provider: 'kraken-futures',
+            product_id: 'PF_XBTUSD',
+            epoch: String(event.epoch),
+            sequence: seq,
+            event_time_ms: eventAt,
+            received_at_ms: known,
+            known_at_ms: known,
+            mark_usd: event.mark ?? event.last,
+            market_status: event.suspended ? 'suspended' : 'open',
+          })
+          if (event.fundingObservation) {
+            marketEvents.push({
+              type: 'funding_observation',
+              received_at_ms: known,
+              known_at_ms: known,
+              observation: event.fundingObservation,
+              reception_order: seq,
+            })
+          }
+        } else if (event.type === 'trade') {
+          marketEvents.push({
+            type: event.recovered === true ? 'recovered_trade_audit' : 'trade',
+            source_receipt_sequence: seq,
+            provider: 'kraken-futures',
+            product_id: 'PF_XBTUSD',
+            epoch: String(event.epoch),
+            uid: event.uid,
+            event_time_ms: eventAt,
+            received_at_ms: known,
+            known_at_ms: known,
+            price_usd: event.priceUsd,
+            quantity_btc: event.quantityBtc,
+            aggressor_side: event.side,
+          })
+        }
+      }
+      marketEvents.forEach((event, index) => {
+        event.reception_order = index + 1
+      })
+      if (
+        !marketEvents.some((event) => event.type === 'book_snapshot') ||
+        !marketEvents.some((event) => event.type === 'ticker')
+      )
+        continue
+      const snapshot = {
+        mode: 'mock',
+        instrument,
+        decision_time_ms: receivedAt,
+        cutoff_received_at_ms: receivedAt,
+        events: marketEvents,
+      }
+      await this.processEvent(
+        {
+          sequence: Number(source.receivedSequence),
+          received_at_ms: receivedAt,
+          event_time_ms: Number(source.eventTime),
+          known_at_ms: receivedAt,
+          payload: {
+            market_event: source,
+            market_source_watermark: Number(source.receivedSequence),
+            market_snapshot: snapshot,
+          },
+        },
+        receivedAt,
+      )
+    }
+  }
+
   static async replay(
     options: DriverOptions & {
       inputs: readonly CausalInput[]
@@ -137,6 +284,22 @@ export class FuturesReplayDriver {
   ): Promise<ReturnType<FuturesReplayDriver['exportRun']>> {
     const driver = new FuturesReplayDriver(options)
     for (const input of options.inputs) await driver.processEvent(input)
+    return driver.exportRun()
+  }
+
+  static async replayMarketStore(
+    options: DriverOptions & {
+      store: FuturesMarketStore
+      receivedCutoff: number
+      instrument: Record<string, unknown>
+    },
+  ): Promise<ReturnType<FuturesReplayDriver['exportRun']>> {
+    const driver = new FuturesReplayDriver(options)
+    await driver.processMarketStore(
+      options.store,
+      options.receivedCutoff,
+      options.instrument,
+    )
     return driver.exportRun()
   }
 
@@ -173,6 +336,11 @@ export class FuturesReplayDriver {
       state_version: this.stateVersion,
     }
   }
+}
+
+function validateTimestamp(value: number, name: string): void {
+  if (!Number.isSafeInteger(value) || value < 0)
+    throw new TypeError(`${name} must be a non-negative safe integer.`)
 }
 
 const ECONOMIC_FIELDS = [

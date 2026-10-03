@@ -59,6 +59,39 @@ describe('FuturesMarketStore', () => {
     store.close()
   })
 
+  it('selects only closed candle revisions known by the cutoff', () => {
+    const store = new FuturesMarketStore(dbPath())
+    const revision = (revision: number, knownAt: number, isClosed: boolean) =>
+      store.saveCandleRevision({
+        id: 'PF_XBTUSD:60000:0',
+        intervalMs: 60_000,
+        bucketStart: 0,
+        revision,
+        knownAt,
+        closeAt: 60_000,
+        isClosed,
+        coverage: 'observed_trades_only_no_gap_certification',
+        open: '100',
+        high: '101',
+        low: '99',
+        close: '100',
+        volumeBtc: '1',
+        tradeCount: 1,
+        sourceHash: 'a'.repeat(64),
+      })
+    revision(1, 60_000, false)
+    revision(2, 60_001, true)
+    revision(3, 60_002, true)
+    expect(store.candlesAsOf(60_000)).toEqual([])
+    expect(
+      (store.candlesAsOf(60_001)[0] as { revision: number }).revision,
+    ).toBe(2)
+    expect(
+      (store.candlesAsOf(60_002)[0] as { revision: number }).revision,
+    ).toBe(3)
+    store.close()
+  })
+
   it('preserves persisted global receipt order across feed-local sequence values and duplicates', () => {
     const path = dbPath()
     const book = {

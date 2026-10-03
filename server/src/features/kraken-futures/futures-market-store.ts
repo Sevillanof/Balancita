@@ -413,6 +413,33 @@ export class FuturesMarketStore {
       .all() as unknown[]
   }
 
+  candlesAsOf(knownAtCutoff: number): unknown[] {
+    time(knownAtCutoff, 'knownAtCutoff')
+    return this.db
+      .prepare(
+        `SELECT * FROM paper_futures_candle_revisions
+         WHERE known_at<=? AND is_closed=1
+           AND revision=(
+             SELECT MAX(latest.revision)
+             FROM paper_futures_candle_revisions AS latest
+             WHERE latest.candle_id=paper_futures_candle_revisions.candle_id
+               AND latest.known_at<=? AND latest.is_closed=1
+           )
+         ORDER BY interval_ms,bucket_start,candle_id`,
+      )
+      .all(knownAtCutoff, knownAtCutoff) as unknown[]
+  }
+
+  gapsAsOf(detectedAtCutoff: number): unknown[] {
+    time(detectedAtCutoff, 'detectedAtCutoff')
+    return this.db
+      .prepare(
+        `SELECT * FROM paper_futures_data_gaps WHERE detected_at<=?
+         ORDER BY detected_at,rowid`,
+      )
+      .all(detectedAtCutoff) as unknown[]
+  }
+
   exportJsonl(): string {
     const rows = this.db
       .prepare(

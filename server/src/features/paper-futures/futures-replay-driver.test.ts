@@ -12,6 +12,7 @@ import { FuturesCommandRunner } from './futures-command-runner.ts'
 import { FuturesStore } from './futures-store.ts'
 import { canonicalHash } from './futures-canonical.ts'
 import type { FuturesWorkerRequest } from './futures-worker.ts'
+import { FuturesMarketStore } from '../kraken-futures/futures-market-store.ts'
 
 const directories: string[] = []
 const instrument = {
@@ -54,6 +55,376 @@ function pythonMarket(decisionTime: number, breakout: 'long' | 'flat') {
 }
 
 describe('shared causal futures replay driver', () => {
+  it('ingests persisted receipt-order market events and as-of candles into actual runtime work', async () => {
+    const directory = mkdtempSync(
+      join(tmpdir(), 'futures-replay-market-source-'),
+    )
+    directories.push(directory)
+    const marketStore = new FuturesMarketStore(join(directory, 'market.sqlite'))
+    marketStore.append({
+      type: 'book',
+      productId: 'PF_XBTUSD',
+      seq: 1,
+      eventTime: 1000,
+      receivedAt: 1010,
+      persistedAt: 1011,
+      epoch: 1,
+      snapshot: true,
+      contiguous: true,
+      valid: true,
+      bids: [{ price: '100000', quantity: '1' }],
+      asks: [{ price: '100001', quantity: '1' }],
+      raw: { fixture: true },
+    })
+    marketStore.append({
+      type: 'ticker',
+      productId: 'PF_XBTUSD',
+      seq: 1,
+      eventTime: 1000,
+      receivedAt: 1010,
+      persistedAt: 1011,
+      epoch: 1,
+      mark: '100000',
+      suspended: false,
+      funding: { status: 'unknown' },
+      raw: { fixture: true },
+    })
+    const ordered = marketStore.eventsAsOf(1010) as Record<string, unknown>[]
+    const driver = new FuturesReplayDriver({
+      runId: 'persisted-market-red',
+      manifest: {
+        schema_version: 'futures-replay-manifest.v1',
+        source: 'fixture',
+        source_hash: 'a'.repeat(64),
+        config_hash: 'b'.repeat(64),
+        seed: 'fixture',
+        fidelity: 'book-trade-ticker.v1',
+      },
+      apply: async (work) => ({
+        status: 'committed',
+        applied_state_version: work.version + 1,
+      }),
+    })
+    expect(ordered[0]?.receivedSequence).toBe(1)
+    await driver.processMarketStore(marketStore, 1010, instrument)
+    expect(driver.exportRun().inputs[0]?.sequence).toBe(2)
+    expect(driver.exportRun().inputs[0]?.payload.market_snapshot).toBeDefined()
+    marketStore.close()
+  })
+
+  it('runs persisted market evidence through Python worker and Node SQLite for incremental and batch runs', async () => {
+    const directory = mkdtempSync(
+      join(tmpdir(), 'futures-persisted-market-e2e-'),
+    )
+    directories.push(directory)
+    const marketStore = new FuturesMarketStore(join(directory, 'market.sqlite'))
+    const start = 21_600_000
+    const warm = pythonMarket(start, 'long')
+    const warmEvents = warm.events as Record<string, unknown>[]
+    for (const candle of warmEvents.filter(
+      (event) => event.type === 'candle',
+    )) {
+      marketStore.saveCandleRevision({
+        id: `fixture:${candle.interval_ms}:${candle.bucket_start_ms}`,
+        intervalMs: Number(candle.interval_ms),
+        bucketStart: Number(candle.bucket_start_ms),
+        revision: 1,
+        knownAt: Number(candle.known_at_ms),
+        closeAt: Number(candle.event_time_ms),
+        isClosed: true,
+        coverage: 'complete',
+        open: String(candle.open),
+        high: String(candle.high),
+        low: String(candle.low),
+        close: String(candle.close),
+        volumeBtc: String(candle.volume_btc),
+        tradeCount: 1,
+        sourceHash: 'c'.repeat(64),
+      })
+    }
+    const appendBook = (at: number, seq: number, bid: string, ask: string) =>
+      marketStore.append({
+        type: 'book',
+        productId: 'PF_XBTUSD',
+        seq,
+        eventTime: at,
+        receivedAt: at,
+        persistedAt: at,
+        epoch: 1,
+        snapshot: true,
+        contiguous: true,
+        valid: true,
+        bids: [{ price: bid, quantity: '1' }],
+        asks: [{ price: ask, quantity: '1' }],
+        raw: { fixture: 'book' },
+      })
+    marketStore.append({
+      type: 'trade',
+      productId: 'PF_XBTUSD',
+      seq: 1,
+      eventTime: start - 1,
+      receivedAt: start,
+      persistedAt: start,
+      epoch: 1,
+      uid: 'fixture-trade-1',
+      side: 'buy',
+      tradeType: 'fill',
+      quantityBtc: '0.001',
+      priceUsd: '100000',
+      recovered: false,
+      raw: { fixture: 'trade' },
+    })
+    appendBook(start, 1, '100000', '100001')
+    marketStore.append({
+      type: 'ticker',
+      productId: 'PF_XBTUSD',
+      seq: 1,
+      eventTime: start,
+      receivedAt: start,
+      persistedAt: start,
+      epoch: 1,
+      mark: '100000',
+      last: '100000',
+      suspended: false,
+      fundingObservation: {
+        source: 'fixture',
+        provider: 'kraken',
+        product: 'PF_XBTUSD',
+        field: 'funding_rate',
+        raw_rate: '0',
+        unit: 'usd_per_btc_per_hour',
+        effective_start_ms: start,
+        effective_end_ms: start + 3_600_000,
+        known_at_ms: start,
+        received_seq: 3,
+        observation_id: 'fixture-zero',
+        sha256: 'd'.repeat(64),
+        semantic_version: 'kraken-funding-normalization.v1',
+        predicted: false,
+      },
+      raw: { fixture: 'ticker' },
+    })
+    appendBook(start + 100, 2, '100000', '100001')
+    marketStore.saveCandleRevision({
+      id: 'fixture:60000:future',
+      intervalMs: 60_000,
+      bucketStart: start + 60_000,
+      revision: 1,
+      knownAt: start + 101,
+      closeAt: start + 120_000,
+      isClosed: true,
+      coverage: 'complete',
+      open: '100000',
+      high: '100001',
+      low: '99999',
+      close: '100000',
+      volumeBtc: '1',
+      tradeCount: 1,
+      sourceHash: 'e'.repeat(64),
+    })
+    appendBook(start + 101, 3, '100000', '100001')
+    const sourceHash = canonicalHash({
+      events: marketStore.eventsAsOf(start + 100),
+      candles: marketStore.candlesAsOf(start + 100),
+    })
+    const manifest = {
+      schema_version: 'futures-replay-manifest.v1' as const,
+      source: 'persisted-fixture-market-store',
+      source_hash: sourceHash,
+      config_hash: canonicalHash(runtimeConfig),
+      seed: 'fixture-seed',
+      fidelity: 'fixture-complete-ohlc-plus-observed-book-trade-ticker.v1',
+      runtime_version: 'futures-runtime-risk.v1',
+      instrument_hash: canonicalHash(instrument),
+    }
+    const manifestData = {
+      config_version: 'futures-strategies-config.v1',
+      indicator_version: 'futures-closed-indicators.v1',
+      strategy_ids: [
+        'c25-pullback-perp-v1',
+        'c26-reversion-perp-v1',
+        'c27-breakout-perp-v1',
+        'c28-adapter-perp-v1',
+      ],
+    }
+    const run = async (runId: string, batch: boolean) => {
+      const dbPath = join(directory, `${runId}.sqlite`)
+      const store = new FuturesStore(dbPath)
+      const createRun = () =>
+        store.createRun({
+          runId,
+          config: {
+            ledger_version: 'linear-usd-ledger.v1',
+            decimal_precision: 50,
+            leverage: '1',
+          },
+          seed: { cash_usd: '10000' },
+          instrument: { instrument_id: instrument.instrument_id },
+          costs: {
+            version: runtimeConfig.cost_version,
+            maker: runtimeConfig.maker_rate,
+            taker: runtimeConfig.taker_rate,
+          },
+          runtime: {
+            schema_version: 'futures-runtime-binding.v4',
+            runtime_config: runtimeConfig,
+            instrument_spec: instrument,
+            strategy_manifest: manifestData,
+            strategy_config_hash: canonicalHash(manifestData),
+          },
+        })
+      createRun()
+      const runner = new FuturesCommandRunner(store)
+      const audit: Record<string, unknown>[] = []
+      const apply = async (work: RuntimeWork) => {
+        const market = work.input.payload.market_snapshot as Record<
+          string,
+          unknown
+        >
+        const request: FuturesWorkerRequest = {
+          request_id: `request-${work.work_id}`,
+          run_id: runId,
+          work_id: work.work_id,
+          expected_state_version: work.version,
+          payload: {
+            operation: 'futures_runtime.v3',
+            runtime_config: runtimeConfig,
+            instrument,
+            market_snapshot: market,
+          },
+        }
+        await runner.accept(request).result
+        const projection = store.getRunProjection(runId)
+        const raw = store.exportRun(runId)
+        const result = projection?.result as Record<string, unknown>
+        const checkpoint = projection?.checkpoint as Record<string, unknown>
+        const execution = checkpoint.execution_checkpoint as Record<
+          string,
+          unknown
+        >
+        const pending = Object.values(
+          execution.orders as Record<string, Record<string, unknown>>,
+        ).find(
+          (order) =>
+            order.state === 'accepted' || order.state === 'partially_filled',
+        )
+        audit.push({
+          received_sequence: work.input.sequence,
+          version: projection?.state_version,
+          quantity_btc:
+            result.quantity_btc ??
+            (result.position as Record<string, unknown> | undefined)
+              ?.quantity_btc,
+          eligible_at_ms: pending?.eligible_at_ms,
+          fills: raw.events,
+        })
+        return {
+          status: 'committed' as const,
+          applied_state_version: Number(projection?.state_version),
+          economic_projection: {
+            ledger: projection?.result,
+            events: raw.events,
+          },
+        }
+      }
+      const common = {
+        runId,
+        manifest,
+        apply,
+        store: marketStore,
+        receivedCutoff: start + 100,
+        instrument,
+      }
+      const result = batch
+        ? await FuturesReplayDriver.replayMarketStore(common)
+        : await (async () => {
+            const driver = new FuturesReplayDriver({ runId, manifest, apply })
+            await driver.processMarketStore(
+              marketStore,
+              start + 100,
+              instrument,
+            )
+            return driver.exportRun()
+          })()
+      await runner.close()
+      store.close()
+      const fills = result.economic_projection as Record<string, unknown>[]
+      return { result, audit, fills }
+    }
+    const incremental = await run('stored-incremental', false)
+    const batch = await run('stored-batch', true)
+    expect(incremental.result.run_id).not.toBe(batch.result.run_id)
+    expect(incremental.result.manifest_hash).toBe(batch.result.manifest_hash)
+    expect(incremental.result.work.map((work) => work.work_id)).not.toEqual(
+      batch.result.work.map((work) => work.work_id),
+    )
+    expect(
+      compareEconomicSemantics(incremental.result, batch.result),
+    ).toMatchObject({ equal: true })
+    expect(incremental.result.inputs.map((input) => input.sequence)).toEqual([
+      3, 4,
+    ])
+    expect(incremental.audit.map((entry) => entry.received_sequence)).toEqual([
+      3, 4,
+    ])
+    expect(incremental.audit[0]).toMatchObject({
+      quantity_btc: '0',
+      eligible_at_ms: start + 100,
+    })
+    expect(incremental.audit[1]?.quantity_btc).toBe('0.0099')
+    expect(
+      incremental.result.inputs.every((input) => {
+        const event = input.payload.market_event as Record<string, unknown>
+        const snapshot = input.payload.market_snapshot as Record<
+          string,
+          unknown
+        >
+        const candles = snapshot.events as Record<string, unknown>[]
+        return (
+          Number(event.receivedSequence) === input.sequence &&
+          candles
+            .filter((candle) => candle.type === 'candle')
+            .every((candle) => Number(candle.bucket_start_ms) <= start)
+        )
+      }),
+    ).toBe(true)
+    const firstSnapshot = incremental.result.inputs[0]!.payload
+      .market_snapshot as Record<string, unknown>
+    const firstSnapshotEvents = firstSnapshot.events as Record<
+      string,
+      unknown
+    >[]
+    expect(firstSnapshotEvents.map((event) => event.type)).toEqual(
+      expect.arrayContaining([
+        'trade',
+        'book_snapshot',
+        'ticker',
+        'funding_observation',
+        'candle',
+      ]),
+    )
+    expect(
+      firstSnapshotEvents
+        .filter((event) => event.source_receipt_sequence !== undefined)
+        .map((event) => event.source_receipt_sequence),
+    ).toEqual([1, 2, 3])
+    expect(
+      (incremental.audit[1]?.fills as Record<string, unknown>[]).find(
+        (event) => event.type === 'fill',
+      ),
+    ).toMatchObject({
+      price_usd_per_btc: '100001',
+      fee_usd: '0.49500495',
+      quantity_btc: '0.0099',
+    })
+    expect(JSON.stringify(incremental.result.economic_projection)).toContain(
+      '0.0099',
+    )
+    expect(JSON.stringify(incremental.result.economic_projection)).toContain(
+      '0.49500495',
+    )
+    marketStore.close()
+  }, 30_000)
   it('uses one process core for incremental and batch inputs and excludes only generated identities', async () => {
     const requests: string[] = []
     const driver = new FuturesReplayDriver({
