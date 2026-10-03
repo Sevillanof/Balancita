@@ -542,7 +542,13 @@ describe('durable C27 futures runtime', () => {
       })
       await runner.accept(pending).result
       let projection = store.getRunProjection(runId) as {
-        result: { quantity_btc: string; fees_usd: string }
+        result: {
+          quantity_btc: string
+          fees_usd: string
+          funding_complete: boolean
+          net_complete: string | null
+          realized_net_complete: string | null
+        }
         checkpoint: Record<string, unknown> & {
           risk_checkpoint: Record<string, unknown>
           execution_checkpoint: Record<string, unknown>
@@ -757,6 +763,9 @@ describe('durable C27 futures runtime', () => {
       expect(projection.result.quantity_btc).toBe('0.0099')
       expect(projection.checkpoint.risk_checkpoint.user_paused).toBe(true)
       expect(projection.checkpoint.funding_complete).toBe(false)
+      expect(projection.result.funding_complete).toBe(false)
+      expect(projection.result.net_complete).toBeNull()
+      expect(projection.result.realized_net_complete).toBeNull()
       expect(projection.checkpoint.risk_checkpoint.system_paused).toBe(true)
       const timeExitId = String(
         projection.checkpoint.risk_checkpoint.reduction_intent_id,
@@ -786,6 +795,9 @@ describe('durable C27 futures runtime', () => {
       ).result
       projection = store.getRunProjection(runId) as typeof projection
       expect(projection.result.quantity_btc).toBe('0')
+      expect(projection.result.funding_complete).toBe(false)
+      expect(projection.result.net_complete).toBeNull()
+      expect(projection.result.realized_net_complete).toBeNull()
       expect(store.verifyRun(runId)).toBe(true)
     } finally {
       await runner.close().catch(() => undefined)
@@ -980,7 +992,8 @@ describe('durable C27 futures runtime', () => {
 
   it('executes the C27 short branch through the same persistent worker and ledger', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'futures-runtime-short-'))
-    const store = new FuturesStore(join(directory, 'fixture.sqlite'))
+    const storePath = join(directory, 'fixture.sqlite')
+    let store = new FuturesStore(storePath)
     const runId = 'c27-short-run'
     store.createRun({
       runId,
@@ -1002,39 +1015,57 @@ describe('durable C27 futures runtime', () => {
         instrument_spec: instrument,
       },
     })
-    const runner = new FuturesCommandRunner(store)
+    let runner = new FuturesCommandRunner(store)
     try {
-      const command = request(
-        runId,
-        'c27-short-open',
-        0,
-        market(21_600_000, 'short', '100000', false),
-      )
-      await runner.accept(command).result
+      const openingMarket = market(21_600_000, 'short', '100000', false)
+      const openingEvents = openingMarket.events as Record<string, unknown>[]
+      openingEvents.push(fundingObservation(21_600_000, 'short-rate'))
+      const command = request(runId, 'c27-short-open', 0, openingMarket)
+      const firstReceipt = await runner.accept(command).result
+      const retryReceipt = await runner.accept(command).result
+      expect(retryReceipt.result_hash).toBe(firstReceipt.result_hash)
       const projection = store.getRunProjection(runId) as {
         result: { side: string; quantity_btc: string }
         checkpoint: {
-          ledger_position: { side: string }
+          ledger_position: { side: string; funding_cursor_ms: number }
+          funding_paid: string
           owner_strategy_id: string
         }
       }
       expect(projection.result.side).toBe('short')
       expect(projection.result.quantity_btc).toBe('0.01')
       expect(projection.checkpoint.ledger_position.side).toBe('short')
+      expect(projection.checkpoint.ledger_position.funding_cursor_ms).toBe(
+        21_600_000,
+      )
+      expect(projection.checkpoint.funding_paid).toBe('0')
       expect(projection.checkpoint.owner_strategy_id).toBe(
         'c27-breakout-perp-v1',
       )
+      const appliedDb = new DatabaseSync(storePath, { readOnly: true })
+      const appliedRow = appliedDb
+        .prepare(
+          "SELECT payload_json FROM paper_futures_records WHERE work_id=? AND kind='applied-result'",
+        )
+        .get('c27-short-open') as { payload_json: string }
+      const applied = JSON.parse(appliedRow.payload_json) as {
+        runtime_output: { fills: Record<string, unknown>[] }
+      }
+      expect(applied.runtime_output.fills).toHaveLength(1)
+      expect(applied.runtime_output.fills[0]?.event_time_ms).toBe(21_600_000)
+      appliedDb.close()
       expect(store.verifyRun(runId)).toBe(true)
-      const close = request(
-        runId,
-        'c27-short-close',
-        1,
-        market(21_660_000, 'flat', '100500', false),
-        {
-          type: 'paper.close',
-          command_id: 'close-short',
-        },
-      )
+      await runner.close()
+      store.close()
+      store = new FuturesStore(storePath)
+      runner = new FuturesCommandRunner(store)
+      const closeMarket = market(21_660_000, 'flat', '100500', false)
+      const closeEvents = closeMarket.events as Record<string, unknown>[]
+      closeEvents.push(fundingObservation(21_600_000, 'short-rate'))
+      const close = request(runId, 'c27-short-close', 1, closeMarket, {
+        type: 'paper.close',
+        command_id: 'close-short',
+      })
       await runner.accept(close).result
       const closed = store.getRunProjection(runId) as {
         result: {
@@ -1042,12 +1073,29 @@ describe('durable C27 futures runtime', () => {
           funding_complete: boolean
           net_complete: string | null
         }
-        checkpoint: { ledger_position: unknown }
+        checkpoint: { ledger_position: unknown; funding_paid: string }
       }
       expect(closed.result.side).toBeNull()
-      expect(closed.result.funding_complete).toBe(false)
-      expect(closed.result.net_complete).toBeNull()
+      expect(closed.result.funding_complete).toBe(true)
+      expect(closed.result.net_complete).not.toBeNull()
+      expect(closed.checkpoint.funding_paid).toBe(
+        '0.000000016666666666666666666666666666666666666666666666667',
+      )
       expect(closed.checkpoint.ledger_position).toBeNull()
+      const closeDb = new DatabaseSync(storePath, { readOnly: true })
+      const closeRow = closeDb
+        .prepare(
+          "SELECT payload_json FROM paper_futures_records WHERE work_id=? AND kind='applied-result'",
+        )
+        .get('c27-short-close') as { payload_json: string }
+      const closeApplied = JSON.parse(closeRow.payload_json) as {
+        runtime_output: { fills: Record<string, unknown>[] }
+      }
+      expect(closeApplied.runtime_output.fills).toHaveLength(1)
+      expect(closeApplied.runtime_output.fills[0]?.event_time_ms).toBe(
+        21_660_000,
+      )
+      closeDb.close()
       expect(store.verifyRun(runId)).toBe(true)
     } finally {
       await runner.close()
@@ -1236,6 +1284,32 @@ describe('durable C27 futures runtime', () => {
     }
   })
 })
+
+function fundingObservation(startMs: number, observationId: string) {
+  return {
+    type: 'funding_observation',
+    event_time_ms: startMs,
+    received_at_ms: startMs,
+    known_at_ms: startMs,
+    reception_order: 10_000,
+    observation: {
+      source: 'deterministic-test-fixture',
+      provider: 'kraken',
+      product: 'PF_XBTUSD',
+      field: 'funding_rate',
+      raw_rate: '-0.0001',
+      unit: 'usd_per_btc_per_hour',
+      effective_start_ms: startMs,
+      effective_end_ms: startMs + 3_600_000,
+      known_at_ms: startMs,
+      received_seq: 1,
+      observation_id: observationId,
+      sha256: 'a'.repeat(64),
+      semantic_version: 'kraken-funding-normalization.v1',
+      predicted: false,
+    },
+  }
+}
 
 function request(
   runId: string,

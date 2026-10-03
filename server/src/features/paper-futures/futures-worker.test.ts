@@ -1,7 +1,26 @@
 import { describe, expect, it } from 'vitest'
-import { FuturesWorker } from './futures-worker.ts'
+import {
+  FuturesWorker,
+  validateFuturesWorkerRequest,
+} from './futures-worker.ts'
 
 describe('FuturesWorker', () => {
+  it('rejects untyped funding provenance before worker submission', () => {
+    const request = normalizedFundingRequest()
+    request.payload.market_snapshot.events[0]!.observation.unit = 'unknown'
+    expect(() => validateFuturesWorkerRequest(request)).toThrow(/payload/)
+  })
+
+  it('accepts explicitly unresolved funding without inventing an interval', () => {
+    const request = normalizedFundingRequest()
+    const observation = request.payload.market_snapshot.events[0]!
+      .observation as unknown as Record<string, unknown>
+    observation.unit = 'provider-unresolved'
+    observation.effective_start_ms = null
+    observation.effective_end_ms = null
+    expect(() => validateFuturesWorkerRequest(request)).not.toThrow()
+  })
+
   it('uses one persistent Python process for ordered ledger requests', async () => {
     const committed: string[] = []
     const worker = new FuturesWorker({
@@ -83,6 +102,69 @@ describe('FuturesWorker', () => {
     await worker.close()
   })
 })
+
+function normalizedFundingRequest() {
+  const instrument = {
+    instrument_id: 'kraken-futures:PF_XBTUSD',
+    provider_symbol: 'PF_XBTUSD',
+    quantity_step_btc: '0.0001',
+    minimum_quantity_btc: '0.0001',
+    price_tick_usd: '1',
+  }
+  return {
+    request_id: 'funding-request',
+    run_id: 'funding-run',
+    work_id: 'funding-work',
+    expected_state_version: 0,
+    payload: {
+      operation: 'futures_runtime.v3' as const,
+      runtime_config: {
+        version: 'futures-runtime-risk.v1',
+        initial_cash_usd: '10000',
+        max_notional_usd: '1000',
+        max_exposure_multiple: '1',
+        risk_fraction: '0.001',
+        execution_latency_ms: 100,
+        max_book_age_ms: 3000,
+        max_spread_bps: '5',
+        cost_version: 'kraken-futures-eea-btcusd-base.v1',
+        maker_rate: '0.0002',
+        taker_rate: '0.0005',
+        daily_loss_fraction: '0.01',
+      },
+      instrument,
+      market_snapshot: {
+        mode: 'mock',
+        instrument,
+        decision_time_ms: 1000,
+        cutoff_received_at_ms: 1000,
+        events: [
+          {
+            type: 'funding_observation',
+            received_at_ms: 0,
+            known_at_ms: 0,
+            observation: {
+              source: 'fixture',
+              provider: 'kraken',
+              product: 'PF_XBTUSD',
+              field: 'funding_rate',
+              raw_rate: '0.0001',
+              unit: 'usd_per_btc_per_hour',
+              effective_start_ms: 0,
+              effective_end_ms: 3_600_000,
+              known_at_ms: 0,
+              received_seq: 1,
+              observation_id: 'funding-1',
+              sha256: 'a'.repeat(64),
+              semantic_version: 'kraken-funding-normalization.v1',
+              predicted: false,
+            },
+          },
+        ],
+      },
+    },
+  }
+}
 
 function request(requestId: string, workId: string, side: 'long' | 'short') {
   return {

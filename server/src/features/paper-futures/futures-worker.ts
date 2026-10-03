@@ -623,6 +623,7 @@ function validateWorkerPayload(payload: Record<string, unknown>): boolean {
       Number(market.cutoff_received_at_ms) > Number(market.decision_time_ms) ||
       !['mock', 'replay', 'paper_live'].includes(String(market.mode)) ||
       !market.events.every(isRecord) ||
+      !market.events.every(isValidFundingEvent) ||
       !isJsonSafe(market) ||
       Buffer.byteLength(JSON.stringify(payload), 'utf8') > MAX_LINE_BYTES - 1024
     )
@@ -660,6 +661,84 @@ function validateWorkerPayload(payload: Record<string, unknown>): boolean {
     (key) =>
       payload[key] === undefined ||
       (Number.isSafeInteger(payload[key]) && Number(payload[key]) >= 0),
+  )
+}
+
+function isValidFundingEvent(event: Record<string, unknown>): boolean {
+  if (event.type !== 'funding_observation') return true
+  if (
+    !hasExactKeys(
+      event,
+      ['type', 'received_at_ms', 'known_at_ms', 'observation'],
+      ['id', 'event_time_ms', 'reception_order', 'epoch'],
+    ) ||
+    !Number.isSafeInteger(event.received_at_ms) ||
+    !Number.isSafeInteger(event.known_at_ms) ||
+    !isRecord(event.observation)
+  )
+    return false
+  const observation = event.observation
+  if (
+    !hasExactKeys(
+      observation,
+      [
+        'source',
+        'provider',
+        'product',
+        'field',
+        'raw_rate',
+        'unit',
+        'effective_start_ms',
+        'effective_end_ms',
+        'known_at_ms',
+        'received_seq',
+        'observation_id',
+        'sha256',
+        'semantic_version',
+        'predicted',
+      ],
+      ['reference_price_usd_per_btc', 'reference_price_at_ms'],
+    ) ||
+    !['source', 'observation_id'].every(
+      (key) => typeof observation[key] === 'string' && observation[key] !== '',
+    ) ||
+    observation.provider !== 'kraken' ||
+    observation.product !== 'PF_XBTUSD' ||
+    !['funding_rate', 'relative_funding_rate'].includes(
+      String(observation.field),
+    ) ||
+    !isDecimalString(observation.raw_rate) ||
+    ![
+      'usd_per_btc_per_hour',
+      'relative_per_hour',
+      'provider-unresolved',
+    ].includes(String(observation.unit)) ||
+    (observation.unit !== 'provider-unresolved' &&
+      ((observation.field === 'funding_rate' &&
+        observation.unit !== 'usd_per_btc_per_hour') ||
+        (observation.field === 'relative_funding_rate' &&
+          observation.unit !== 'relative_per_hour'))) ||
+    !Number.isSafeInteger(observation.known_at_ms) ||
+    !Number.isSafeInteger(observation.received_seq) ||
+    Number(observation.received_seq) < 0 ||
+    typeof observation.predicted !== 'boolean' ||
+    observation.semantic_version !== 'kraken-funding-normalization.v1' ||
+    typeof observation.sha256 !== 'string' ||
+    !/^[a-f0-9]{64}$/.test(observation.sha256) ||
+    'reference_price_usd_per_btc' in observation !==
+      'reference_price_at_ms' in observation ||
+    ('reference_price_usd_per_btc' in observation &&
+      (!isDecimalString(observation.reference_price_usd_per_btc) ||
+        !Number.isSafeInteger(observation.reference_price_at_ms)))
+  )
+    return false
+  const start = observation.effective_start_ms
+  const end = observation.effective_end_ms
+  return (
+    (start === null && end === null) ||
+    (Number.isSafeInteger(start) &&
+      Number.isSafeInteger(end) &&
+      Number(end) > Number(start))
   )
 }
 

@@ -11,6 +11,7 @@ from decimal import Decimal, InvalidOperation, ROUND_CEILING, ROUND_FLOOR, local
 from .canonical import normalize_decimal, normalize_timestamp_ms
 from .futures_indicators import calculate_features
 from .futures_ledger import FuturesLedger
+from .futures_funding import normalize_observation
 from .futures_execution import PaperExecutionAdapter
 from .futures_strategies import (
     C25_ID,
@@ -1101,6 +1102,49 @@ class FuturesRuntime:
 
     def _observe_funding(self, events, now, cutoff):
         for event in events:
+            if event.get("type") == "funding_observation":
+                try:
+                    observation = normalize_observation(
+                        event["observation"], cutoff
+                    )
+                    if observation["status"] != "known":
+                        self.ledger.funding_complete = False
+                        continue
+                    cursor = self.ledger.position["funding_cursor_ms"]
+                    if (
+                        observation["effective_start_ms"] < cursor
+                        and observation["known_at_ms"] > cursor
+                    ):
+                        # A rate learned after the position boundary cannot repair
+                        # an interval that was unknown at that decision/fill time.
+                        self.ledger.funding_complete = False
+                        continue
+                    same_interval = [
+                        rate
+                        for _, start, end, rate in self.ledger.funding_rates
+                        if start == observation["effective_start_ms"]
+                        and end == observation["effective_end_ms"]
+                    ]
+                    if same_interval:
+                        if any(
+                            rate != _d(
+                                observation["rate_usd_per_btc_hour"],
+                                "normalized funding rate",
+                            )
+                            for rate in same_interval
+                        ):
+                            self.ledger.funding_complete = False
+                        continue
+                    self.ledger.observe_funding(
+                        observation["observation_id"] + ":" + observation["sha256"],
+                        observation["effective_start_ms"],
+                        observation["effective_end_ms"],
+                        observation["rate_usd_per_btc_hour"],
+                        known_at_ms=observation["known_at_ms"],
+                    )
+                except (KeyError, TypeError, ValueError):
+                    self.ledger.funding_complete = False
+                continue
             if event.get("type") != "funding":
                 continue
             start = event.get("start_time_ms")
