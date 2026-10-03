@@ -1077,7 +1077,9 @@ describe('durable C27 futures runtime', () => {
       }
       expect(closed.result.side).toBeNull()
       expect(closed.result.funding_complete).toBe(true)
-      expect(closed.result.net_complete).not.toBeNull()
+      expect(closed.result.net_complete).toBe(
+        '-6.0125050166666666666666666666666666666666666666667',
+      )
       expect(closed.checkpoint.funding_paid).toBe(
         '0.000000016666666666666666666666666666666666666666666666667',
       )
