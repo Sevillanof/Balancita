@@ -1,0 +1,18 @@
+odd/tasks/kraken-futures-deterministic.md
+  h_2f68313623be98 3,8,118-126
+src/app/App.test.tsx
+  h_2f68313623be98 283-286,288,297-300,306-332
+src/features/demo/trading/TerminalChart.test.tsx
+  h_2f68313623be98 9,15,108,110,123-146,151-157
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b62c64525902e6ff18a3d78a3d49658725220f28",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
