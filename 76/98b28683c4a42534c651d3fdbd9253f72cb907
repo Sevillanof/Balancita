@@ -1,0 +1,24 @@
+server/src/features/paper-futures/futures-replay-driver.ts
+  h_2f68313623be98 3-4,47,57-58,73,99-100,107,114-141,154-160,177-179,182,303,313,315,323-462,478-480,488,606-607,611,670-675
+server/src/features/kraken-futures/futures-market-store.ts
+  h_2f68313623be98 421,426,430-435
+odd/tasks/kraken-futures-deterministic.md
+  h_2f68313623be98 5,51-56,61-63
+server/src/features/paper-futures/futures-store.ts
+  h_2f68313623be98 49-53,61-197,752-754,770-775,780-784
+server/src/features/paper-futures/futures-replay-driver.test.ts
+  h_2f68313623be98 58-90,241-243,262-264,288,313,330-337,344-346,361,367,375,385,387-538,552-556,558,561,568-587,633-651
+server/src/features/paper-futures/futures-store.test.ts
+  h_2f68313623be98 289
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7698b28683c4a42534c651d3fdbd9253f72cb907",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
