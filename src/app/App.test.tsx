@@ -280,10 +280,12 @@ describe('dashboard Gemini boundary', () => {
   it('routes /terminal to connected data without falling back when the API fails', async () => {
     const priorPath = window.location.pathname
     window.history.pushState({}, '', '/terminal')
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async () => ({ ok: false, status: 503, json: async () => ({}) })),
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) =>
+      String(input) === '/api/terminal/bootstrap'
+        ? { ok: false, status: 404, json: async () => ({}) }
+        : { ok: false, status: 503, json: async () => ({}) },
     )
+    vi.stubGlobal('fetch', fetchMock)
     const view = render(<App />)
     try {
       expect(
@@ -292,7 +294,38 @@ describe('dashboard Gemini boundary', () => {
       expect(await screen.findByRole('alert')).toHaveTextContent(
         'No se pudo cargar la terminal conectada',
       )
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/terminal/bootstrap',
+        expect.anything(),
+      )
       expect(screen.queryByText('Balancita (BTC/EUR)')).not.toBeInTheDocument()
+    } finally {
+      view.unmount()
+      vi.unstubAllGlobals()
+      window.history.pushState({}, '', priorPath)
+    }
+  })
+
+  it('fails closed when the futures bootstrap is unavailable', async () => {
+    const priorPath = window.location.pathname
+    window.history.pushState({}, '', '/terminal')
+    const fetchMock = vi.fn(async () => ({
+      ok: false,
+      status: 503,
+      json: async () => ({}),
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    const view = render(<App />)
+    try {
+      expect(
+        await screen.findByRole('heading', {
+          name: 'Terminal de futuros no disponible',
+        }),
+      ).toBeInTheDocument()
+      expect(
+        screen.queryByRole('heading', { name: 'Terminal' }),
+      ).not.toBeInTheDocument()
+      expect(fetchMock).toHaveBeenCalledTimes(1)
     } finally {
       view.unmount()
       vi.unstubAllGlobals()

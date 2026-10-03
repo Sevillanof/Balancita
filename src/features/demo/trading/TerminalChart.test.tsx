@@ -6,11 +6,13 @@ import type { DemoCandle } from './types.ts'
 const chartMocks = vi.hoisted(() => {
   const candles = {
     setData: vi.fn(),
+    update: vi.fn(),
     createPriceLine: vi.fn(() => ({})),
     removePriceLine: vi.fn(),
   }
   const volume = {
     setData: vi.fn(),
+    update: vi.fn(),
     priceScale: vi.fn(() => ({ applyOptions: vi.fn() })),
   }
   const timeScale = {
@@ -103,8 +105,9 @@ describe('terminal chart viewport', () => {
   })
 
   it('fits once, then preserves the visible range while replacing corrected history', () => {
+    const latest = { ...candle, time: candle.time + 60, close: 12 }
     const props = {
-      candles: [candle],
+      candles: [candle, latest],
       decisions: [],
       positions: [],
       trades: [],
@@ -117,11 +120,41 @@ describe('terminal chart viewport', () => {
     view.rerender(
       <TerminalChart
         {...props}
-        candles={[{ ...candle, high: 14, close: 12 }]}
+        candles={[candle, { ...latest, high: 14, close: 13 }]}
+      />,
+    )
+    expect(chartMocks.candles.update).toHaveBeenCalledWith({
+      time: latest.time,
+      open: latest.open,
+      high: 14,
+      low: latest.low,
+      close: 13,
+    })
+    expect(chartMocks.candles.setData).toHaveBeenCalledTimes(1)
+    expect(chartMocks.volume.update).toHaveBeenCalledWith({
+      time: latest.time,
+      value: 5,
+      color: expect.any(String),
+    })
+
+    view.rerender(
+      <TerminalChart
+        {...props}
+        candles={[
+          { ...candle, high: 14, close: 12 },
+          { ...latest, high: 14, close: 13 },
+        ]}
       />,
     )
     expect(chartMocks.candles.setData).toHaveBeenLastCalledWith([
       { time: candle.time, open: 10, high: 14, low: 9, close: 12 },
+      {
+        time: latest.time,
+        open: latest.open,
+        high: 14,
+        low: latest.low,
+        close: 13,
+      },
     ])
     expect(chartMocks.timeScale.setVisibleLogicalRange).toHaveBeenCalledWith({
       from: 5,
