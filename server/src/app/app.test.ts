@@ -1073,6 +1073,206 @@ describe('PAPER_LIVE startup integration', () => {
     }
     runtimeErrors.mockRestore()
   })
+
+  it.skipIf(!process.env.FUTURES_PERF_RAW_EVIDENCE_PATH)(
+    'drains a bounded recorded public-frame burst without rescanning source history',
+    async () => {
+      const root = mkdtempSync(join(tmpdir(), 'balancita-paper-live-burst-'))
+      const marketPath = join(root, 'market.sqlite')
+      const accountPath = join(root, 'account.sqlite')
+      const rawRows = readFileSync(
+        process.env.FUTURES_PERF_RAW_EVIDENCE_PATH!,
+        'utf8',
+      )
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line) as Record<string, unknown>)
+      const frames = rawRows.flatMap((row) => {
+        if (row.kind !== 'websocket_frame' || typeof row.raw !== 'string')
+          return []
+        let message: Record<string, unknown>
+        try {
+          message = JSON.parse(row.raw)
+        } catch {
+          return []
+        }
+        return message.feed === 'book_snapshot' ||
+          message.feed === 'book' ||
+          message.feed === 'ticker' ||
+          message.feed === 'trade'
+          ? [{ receivedAt: Number(row.received_at), raw: row.raw }]
+          : []
+      })
+      const snapshotIndex = frames.findIndex((frame) => {
+        const message = JSON.parse(frame.raw) as Record<string, unknown>
+        return message.feed === 'book_snapshot'
+      })
+      expect(snapshotIndex).toBeGreaterThanOrEqual(0)
+      const burst = frames.slice(snapshotIndex, snapshotIndex + 6)
+      expect(
+        burst.some((frame) => JSON.parse(frame.raw).feed === 'ticker'),
+      ).toBe(true)
+
+      let socketClosed = false
+      const fakeSocket: FuturesSocket = {
+        onopen: null,
+        onmessage: null,
+        onerror: null,
+        onclose: null,
+        send: () => undefined,
+        close: () => {
+          socketClosed = true
+        },
+      }
+      let receivedAt = burst[0]!.receivedAt
+      const app = await buildApp({
+        config: testConfigFrom({
+          FUTURES_MODE: 'paper_live',
+          FUTURES_DB_PATH: accountPath,
+          FUTURES_MARKET_DB_PATH: marketPath,
+        }),
+        overrides: {
+          futuresFundingFetch: async () =>
+            new Response(
+              JSON.stringify({
+                result: 'success',
+                serverTime: new Date(receivedAt).toISOString(),
+                rates: [],
+              }),
+              { status: 200, headers: { 'content-type': 'application/json' } },
+            ),
+          futuresPublicCatalog: async () => ({
+            instruments: [
+              {
+                symbol: 'PF_XBTUSD',
+                type: 'flexible_futures',
+                pair: 'BTC:USD',
+                base: 'BTC',
+                quote: 'USD',
+                contractSize: '1',
+                tickSize: '1',
+                contractValueTradePrecision: 4,
+                tradeable: true,
+                isExpired: false,
+              },
+            ],
+          }),
+          futuresSocketFactory: () => fakeSocket,
+          futuresClock: () => receivedAt,
+        } as never,
+      })
+      const originalEventsAsOf = FuturesMarketStore.prototype.eventsAsOf
+      const originalEventsAfter = FuturesMarketStore.prototype.eventsAfter
+      let eventQueryCount = 0
+      let eventRowsReturned = 0
+      let tailQueryRowsReturned = 0
+      vi.spyOn(FuturesMarketStore.prototype, 'eventsAsOf').mockImplementation(
+        function (this: FuturesMarketStore, cutoff: number) {
+          const rows = originalEventsAsOf.call(this, cutoff)
+          if (cutoff === Number.MAX_SAFE_INTEGER) {
+            eventQueryCount += 1
+            eventRowsReturned += rows.length
+          }
+          return rows
+        },
+      )
+      vi.spyOn(FuturesMarketStore.prototype, 'eventsAfter').mockImplementation(
+        function (this: FuturesMarketStore, sequence: number) {
+          const rows = originalEventsAfter.call(this, sequence)
+          tailQueryRowsReturned += rows.length
+          return rows
+        },
+      )
+      const runtimeErrors = vi
+        .spyOn(console, 'error')
+        .mockImplementation(() => {})
+      const accountProbe = new FuturesStore(accountPath)
+      let closeCompleted = false
+      let observedEventQueryCount: number
+      let observedEventRowsReturned: number
+      let observedTailQueryRowsReturned: number
+      let observedRuntimeErrorCount: number
+      let closeElapsedMs: number
+      try {
+        await app.ready()
+        fakeSocket.onopen?.()
+        for (const frame of burst.slice(0, 2)) {
+          receivedAt = frame.receivedAt
+          fakeSocket.onmessage?.({ data: frame.raw })
+        }
+        await new Promise<void>((resolve) => setImmediate(resolve))
+        const binding = accountProbe.getReplaySessionBinding(
+          'futures-session:primary',
+        )
+        expect(
+          binding
+            ? accountProbe.loadReplaySession('futures-session:primary', binding)
+                .works.length
+            : 0,
+        ).toBe(1)
+        for (const frame of burst.slice(2)) {
+          receivedAt = frame.receivedAt
+          fakeSocket.onmessage?.({ data: frame.raw })
+        }
+        const closeStartedAt = performance.now()
+        await app.close()
+        closeElapsedMs = performance.now() - closeStartedAt
+        closeCompleted = true
+        observedEventQueryCount = eventQueryCount
+        observedEventRowsReturned = eventRowsReturned
+        observedTailQueryRowsReturned = tailQueryRowsReturned
+        observedRuntimeErrorCount = runtimeErrors.mock.calls.length
+      } finally {
+        if (!closeCompleted) await app.close()
+        accountProbe.close()
+        runtimeErrors.mockRestore()
+        vi.restoreAllMocks()
+      }
+
+      const source = new FuturesMarketStore(marketPath)
+      const persistedRows = source.eventsAsOf(
+        Number.MAX_SAFE_INTEGER,
+      ) as Record<string, unknown>[]
+      source.close()
+      const capturedBook = JSON.parse(burst[0]!.raw) as Record<string, unknown>
+      const persistedBook = persistedRows.find(
+        (event) => event.type === 'book' && event.snapshot === true,
+      )
+      expect(persistedBook?.bids).toHaveLength(
+        (capturedBook.bids as unknown[]).length,
+      )
+      expect(persistedBook?.asks).toHaveLength(
+        (capturedBook.asks as unknown[]).length,
+      )
+      const account = new FuturesStore(accountPath)
+      const binding = account.getReplaySessionBinding('futures-session:primary')
+      const works = binding
+        ? account.loadReplaySession('futures-session:primary', binding).works
+        : []
+      expect(account.verifyRun('futures-session:primary')).toBe(true)
+      account.close()
+      expect(persistedRows.length).toBeGreaterThanOrEqual(6)
+      expect(works.length).toBe(persistedRows.length - 1)
+      console.info('PAPER_LIVE bounded burst work counts', {
+        frames: burst.length,
+        snapshotBidLevels: (capturedBook.bids as unknown[]).length,
+        snapshotAskLevels: (capturedBook.asks as unknown[]).length,
+        storedEvents: persistedRows.length,
+        durableWorks: works.length,
+        fullHistoryQueries: observedEventQueryCount,
+        sourceRowsReturned: observedEventRowsReturned,
+        tailRowsReturned: observedTailQueryRowsReturned,
+        closeElapsedMs: Math.round(closeElapsedMs),
+      })
+      expect(observedEventQueryCount).toBeLessThanOrEqual(2)
+      expect(observedEventRowsReturned).toBeLessThanOrEqual(2)
+      expect(observedTailQueryRowsReturned).toBe(persistedRows.length - 2)
+      expect(observedRuntimeErrorCount).toBe(0)
+      expect(closeCompleted).toBe(true)
+      expect(socketClosed).toBe(true)
+      rmSync(root, { recursive: true, force: true })
+    },
+  )
 })
 
 async function makeApp(options: {

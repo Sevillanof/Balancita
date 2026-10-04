@@ -68,6 +68,10 @@ export class FuturesReplayDriver {
   private lastSequence = 0
   private stateVersion = 0
   private virtualTime = 0
+  private marketSourceEvents: Record<string, unknown>[] | undefined
+  private marketSourcePending: Record<string, unknown>[] = []
+  private marketSourceReadCursor = 0
+  private marketSourceCursor = 0
 
   constructor(options: DriverOptions) {
     validateManifest(options.manifest)
@@ -193,14 +197,34 @@ export class FuturesReplayDriver {
   ): Promise<void> {
     validateTimestamp(receivedCutoff, 'received cutoff')
     this.bindMarketSource(instrument, store)
-    const allEvents = store.eventsAsOf(Number.MAX_SAFE_INTEGER) as Record<
-      string,
-      unknown
-    >[]
-    const eligible = allEvents.filter(
-      (event) => Number(event.receivedAt) <= receivedCutoff,
+    if (this.marketSourceEvents === undefined) {
+      this.marketSourceEvents = store.eventsAsOf(
+        Number.MAX_SAFE_INTEGER,
+      ) as Record<string, unknown>[]
+      this.marketSourceReadCursor = Number(
+        this.marketSourceEvents.at(-1)?.receivedSequence ?? 0,
+      )
+      this.marketSourcePending = this.marketSourceEvents.filter(
+        (event) => Number(event.receivedSequence) > this.marketSourceCursor,
+      )
+    } else {
+      const appended = store.eventsAfter(this.marketSourceReadCursor) as Record<
+        string,
+        unknown
+      >[]
+      this.marketSourceEvents.push(...appended)
+      this.marketSourcePending.push(...appended)
+      this.marketSourceReadCursor = Number(
+        appended.at(-1)?.receivedSequence ?? this.marketSourceReadCursor,
+      )
+    }
+    const allEvents = this.marketSourceEvents
+    const eligible = this.marketSourcePending.filter(
+      (event) =>
+        Number(event.receivedSequence) > this.marketSourceCursor &&
+        Number(event.receivedAt) <= receivedCutoff,
     )
-    for (const [sourceIndex, source] of eligible.entries()) {
+    for (const source of eligible) {
       const receivedAt = Number(source.receivedAt)
       const gaps = store.gapsAsOf(receivedAt) as Record<string, unknown>[]
       const candles = (
@@ -213,9 +237,12 @@ export class FuturesReplayDriver {
               Number(candle.close_at) <= Number(gap.detected_at),
           ),
       )
-      const current = eligible
-        .slice(0, sourceIndex + 1)
-        .filter((event) => Number(event.receivedAt) <= receivedAt)
+      const sourceSequence = Number(source.receivedSequence)
+      const current = allEvents.filter(
+        (event) =>
+          Number(event.receivedSequence) <= sourceSequence &&
+          Number(event.receivedAt) <= receivedAt,
+      )
       const marketEvents: Record<string, unknown>[] = candles.map((candle) => ({
         type: 'candle',
         interval_ms: Number(candle.interval_ms),
@@ -368,8 +395,10 @@ export class FuturesReplayDriver {
       if (
         !marketEvents.some((event) => event.type === 'book_snapshot') ||
         !marketEvents.some((event) => event.type === 'ticker')
-      )
+      ) {
+        this.marketSourceCursor = sourceSequence
         continue
+      }
       const snapshot = {
         mode,
         instrument,
@@ -394,7 +423,11 @@ export class FuturesReplayDriver {
         },
         receivedAt,
       )
+      this.marketSourceCursor = sourceSequence
     }
+    this.marketSourcePending = this.marketSourcePending.filter(
+      (event) => Number(event.receivedSequence) > this.marketSourceCursor,
+    )
   }
 
   private bindMarketSource(
@@ -474,6 +507,7 @@ export class FuturesReplayDriver {
       const work = item as RuntimeWork & { receipt: RuntimeReceipt | null }
       const input = work.input
       const inputHash = canonicalHash(input)
+      driver.restoreMarketSourceCursor(input)
       driver.inputs.push(structuredClone(input))
       driver.bySequence.set(input.sequence, inputHash)
       driver.lastSequence = Math.max(driver.lastSequence, input.sequence)
@@ -576,6 +610,7 @@ export class FuturesReplayDriver {
       const work = item as RuntimeWork & { receipt: RuntimeReceipt | null }
       const input = work.input
       const inputHash = canonicalHash(input)
+      driver.restoreMarketSourceCursor(input)
       driver.inputs.push(structuredClone(input))
       driver.bySequence.set(input.sequence, inputHash)
       driver.lastSequence = Math.max(driver.lastSequence, input.sequence)
@@ -612,6 +647,12 @@ export class FuturesReplayDriver {
       )
     }
     return driver
+  }
+
+  private restoreMarketSourceCursor(input: CausalInput): void {
+    const watermark = Number(input.payload.market_source_watermark)
+    if (Number.isSafeInteger(watermark) && watermark >= 0)
+      this.marketSourceCursor = Math.max(this.marketSourceCursor, watermark)
   }
 
   static async replay(
