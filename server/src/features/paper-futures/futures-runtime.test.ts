@@ -129,6 +129,20 @@ describe('durable C27 futures runtime', () => {
       expect(activeOrder.active_order_count).toBe(1)
       expect(activeOrder.execution_required).toBe(true)
       expect(activeOrder.may_omit_entry_evaluation).toBe(false)
+      expect(activeOrder.next_due_at).toMatchObject({
+        time_ms: 21_600_102,
+        reasons: ['order_eligibility'],
+      })
+      const unservedEligibility = runner.readAdmissionState(
+        runId,
+        policy,
+        21_600_103,
+      )
+      expect(unservedEligibility.execution_required).toBe(true)
+      expect(unservedEligibility.next_due_at).toMatchObject({
+        time_ms: 21_600_102,
+        reasons: ['order_eligibility'],
+      })
 
       const partialMarket = market(21_600_102, 'long')
       const partialBook = (
@@ -166,6 +180,10 @@ describe('durable C27 futures runtime', () => {
       )
       expect(partialAdmission.execution_required).toBe(true)
       expect(partialAdmission.may_omit_entry_evaluation).toBe(false)
+      expect(partialAdmission.next_due_at).toMatchObject({
+        time_ms: 21_605_102,
+        reasons: ['strategy_evaluation'],
+      })
 
       const protection = checkpoint.position_protection as Record<
         string,

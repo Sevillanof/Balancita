@@ -341,22 +341,29 @@ export class FuturesCommandRunner {
       if (orders) {
         for (const order of orders) {
           if (!isRecord(order)) continue
+          const activeOrder =
+            order.state === 'accepted' || order.state === 'partially_filled'
+          if (!activeOrder) continue
           let orderClockFound = false
-          for (const [key, reason] of [
-            ['eligible_at_ms', 'order_eligibility'],
-            ['expiry_ms', 'order_expiry'],
-          ] as const) {
-            const time = order[key]
-            if (Number.isSafeInteger(time)) {
-              due.push({ time: Number(time), reason })
-              orderClockFound = true
-            }
+          const eligibleAt = order.eligible_at_ms
+          if (Number.isSafeInteger(eligibleAt)) {
+            orderClockFound = true
+            if (
+              lastDecisionTime === null ||
+              !Number.isSafeInteger(lastDecisionTime) ||
+              Number(eligibleAt) > lastDecisionTime
+            )
+              due.push({
+                time: Number(eligibleAt),
+                reason: 'order_eligibility',
+              })
           }
-          if (
-            (order.state === 'accepted' ||
-              order.state === 'partially_filled') &&
-            !orderClockFound
-          )
+          const expiryAt = order.expiry_ms
+          if (Number.isSafeInteger(expiryAt)) {
+            due.push({ time: Number(expiryAt), reason: 'order_expiry' })
+            orderClockFound = true
+          }
+          if (!orderClockFound)
             unknownReasons.push('active_order_clock_unknown')
         }
       }
