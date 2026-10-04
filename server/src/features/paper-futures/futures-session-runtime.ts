@@ -260,17 +260,31 @@ export class FuturesSessionRuntime {
   async processMarketEvidence(
     source: FuturesMarketStore,
     receivedAt: number,
-  ): Promise<{ sourceWatermark: number }> {
+    stopRequested?: () => boolean,
+  ): Promise<{
+    sourceWatermark: number
+    lastDurableWatermark: number
+    stopped: boolean
+    deferredSourceRows: number
+    checkpointStateVersion: number
+  }> {
     if (this.mode !== 'paper_live' && this.mode !== 'replay')
       throw new Error('Market evidence is not accepted in MOCK.')
     const driver = await this.restoreDriver(this.runId)
-    return driver.processMarketStore(
+    const outcome = await driver.processMarketStore(
       source,
       receivedAt,
       instrument as unknown as Record<string, unknown>,
       undefined,
       this.mode,
+      stopRequested,
     )
+    return {
+      ...outcome,
+      checkpointStateVersion: Number(
+        this.store.getRunProjection(this.runId)?.state_version ?? 0,
+      ),
+    }
   }
 
   async exportReplayRun() {

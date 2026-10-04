@@ -158,6 +158,11 @@ export interface FuturesLifecycleEvent {
   readonly resource_id?: string
   readonly pending_count?: number
   readonly running_count?: number
+  readonly source_watermark?: number
+  readonly deferred_source_rows?: number
+  readonly deferred_source_first_sequence?: number
+  readonly deferred_source_last_sequence?: number
+  readonly checkpoint_state_version?: number
 }
 
 export type FuturesLifecycleObserver = (event: FuturesLifecycleEvent) => void
@@ -395,6 +400,7 @@ export async function buildApp(options: {
   config: ServerConfig
   overrides?: Partial<AnalysisDependencies & MarketDependencies> & {
     futuresFundingFetch?: HistoricalFundingFetch
+    futuresSourceDrainCloseMs?: number
     futuresSqlObserver?: FuturesSqlObserver
     futuresWorkerObserver?: (event: FuturesWorkerDiagnostic) => void
     futuresReplayDriverObserver?: (event: ReplayTimingEvent) => void
@@ -778,6 +784,8 @@ export async function buildApp(options: {
   let futuresSourceRunning = 0
   let futuresSourceDirty = false
   let futuresSourceFailed = false
+  let futuresSourceAdmissionOpen = true
+  let futuresSourceStopRequested = false
   let futuresSourceWatermark = 0
   const observeFuturesSourceQueue = (
     phase: FuturesSourceQueueEvent['phase'],
@@ -827,6 +835,14 @@ export async function buildApp(options: {
     phase: string,
     state: FuturesLifecycleEvent['state'],
     resourceId?: string,
+    sourceProgress?: Pick<
+      FuturesLifecycleEvent,
+      | 'source_watermark'
+      | 'deferred_source_rows'
+      | 'deferred_source_first_sequence'
+      | 'deferred_source_last_sequence'
+      | 'checkpoint_state_version'
+    >,
   ): void => {
     try {
       options.overrides?.futuresLifecycleObserver?.({
@@ -840,6 +856,7 @@ export async function buildApp(options: {
             }
           : {}),
         ...(resourceId === undefined ? {} : { resource_id: resourceId }),
+        ...(sourceProgress ?? {}),
       })
     } catch {
       // Lifecycle diagnostics must never alter shutdown behavior.
@@ -1180,7 +1197,7 @@ export async function buildApp(options: {
                 sourceReceivedSeq: event.seq,
                 receivedAt: event.receivedAt,
               }
-              if (!futuresSourceFailed) {
+              if (!futuresSourceFailed && futuresSourceAdmissionOpen) {
                 futuresSourceDirty = true
                 const existingJob = futuresSourceJobs[0]
                 if (existingJob) {
@@ -1214,8 +1231,49 @@ export async function buildApp(options: {
                         await futuresRuntime!.processMarketEvidence(
                           futuresMarketStore!,
                           pump.receivedAt,
+                          () => futuresSourceStopRequested,
                         )
                       futuresSourceWatermark = result.sourceWatermark
+                      if (result.stopped) {
+                        const deferred = futuresMarketStore!.eventsAfter(
+                          result.sourceWatermark,
+                        ) as Record<string, unknown>[]
+                        const firstSequence = Number(
+                          deferred[0]?.receivedSequence,
+                        )
+                        const lastSequence = Number(
+                          deferred.at(-1)?.receivedSequence,
+                        )
+                        const drainProgress = {
+                          source_watermark: result.lastDurableWatermark,
+                          deferred_source_rows: result.deferredSourceRows,
+                          ...(Number.isSafeInteger(firstSequence)
+                            ? {
+                                deferred_source_first_sequence: firstSequence,
+                              }
+                            : {}),
+                          ...(Number.isSafeInteger(lastSequence)
+                            ? {
+                                deferred_source_last_sequence: lastSequence,
+                              }
+                            : {}),
+                          checkpoint_state_version:
+                            result.checkpointStateVersion,
+                        }
+                        observeFuturesLifecycle(
+                          'futures-source-drain-deferred',
+                          'begin',
+                          undefined,
+                          drainProgress,
+                        )
+                        observeFuturesLifecycle(
+                          'futures-source-drain-deferred',
+                          'end',
+                          undefined,
+                          drainProgress,
+                        )
+                        break
+                      }
                     }
                   } catch (error: unknown) {
                     failure = error
@@ -1285,6 +1343,7 @@ export async function buildApp(options: {
       }
     })
     app.addHook('onClose', async () => {
+      futuresSourceAdmissionOpen = false
       closePhase(
         'futures-collector-stop',
         () => futuresCollector?.stop(),
@@ -1328,7 +1387,31 @@ export async function buildApp(options: {
       )
       await closePhase(
         'futures-market-tail-drain',
-        () => futuresMarketTail,
+        async () => {
+          const sourceDrainBudgetMs =
+            options.overrides?.futuresSourceDrainCloseMs ?? 10_000
+          if (
+            !Number.isSafeInteger(sourceDrainBudgetMs) ||
+            sourceDrainBudgetMs < 1
+          )
+            throw new Error('Futures source-drain close budget is invalid.')
+          const stopTimer = setTimeout(() => {
+            futuresSourceStopRequested = true
+            observeFuturesLifecycle(
+              'futures-source-drain-stop-requested',
+              'begin',
+            )
+            observeFuturesLifecycle(
+              'futures-source-drain-stop-requested',
+              'end',
+            )
+          }, sourceDrainBudgetMs)
+          try {
+            await futuresMarketTail
+          } finally {
+            clearTimeout(stopTimer)
+          }
+        },
         'futures-market-tail',
       )
       closePhase(

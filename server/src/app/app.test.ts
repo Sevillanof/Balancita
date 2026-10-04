@@ -21,12 +21,14 @@ import type {
 import { AnalysisRateLimiter } from '../platform/limits.ts'
 import { buildApp } from './app.ts'
 import type {
+  FuturesLifecycleEvent,
   FuturesSourceQueueEvent,
   ForecastLoopScheduler,
   MarketCollectorLifecycle,
   OhlcCollectorLifecycle,
   MarketRestFetch,
 } from './app.ts'
+import type { FuturesWorkerDiagnostic } from '../features/paper-futures/futures-worker.ts'
 import type { SupportedInstrumentId } from '../domain/contracts.ts'
 import type { NewsHttpFetcher } from '../features/news/rss-collector.ts'
 import { MarketStore } from '../features/market-data/market-store.ts'
@@ -37,6 +39,7 @@ import { FuturesStore } from '../features/paper-futures/futures-store.ts'
 import { createMockMarketSnapshot } from '../features/paper-futures/futures-session-runtime.ts'
 import type { FuturesSocket } from '../features/kraken-futures/futures-market.ts'
 import { FuturesMarketStore } from '../features/kraken-futures/futures-market-store.ts'
+import { FuturesReplayDriver } from '../features/paper-futures/futures-replay-driver.ts'
 import {
   PAPER_MARKET_QUALITY_POLICY,
   parseTickerMessage,
@@ -933,6 +936,227 @@ function testConfigFrom(env: Record<string, string | undefined> = {}) {
 }
 
 describe('PAPER_LIVE startup integration', () => {
+  it('reports pending source rows when shutdown interrupts source draining', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'balancita-paper-live-close-'))
+    const accountPath = join(root, 'account.sqlite')
+    const marketPath = join(root, 'market.sqlite')
+    let releaseProcessing!: () => void
+    let processingStarted!: () => void
+    let stopRequested!: () => void
+    const processingGate = new Promise<void>((resolve) => {
+      releaseProcessing = resolve
+    })
+    const started = new Promise<void>((resolve) => {
+      processingStarted = resolve
+    })
+    const stopped = new Promise<void>((resolve) => {
+      stopRequested = resolve
+    })
+    const sourceQueueEvents: FuturesSourceQueueEvent[] = []
+    const lifecycleEvents: FuturesLifecycleEvent[] = []
+    const workerEvents: FuturesWorkerDiagnostic[] = []
+    const runtimeErrors: unknown[][] = []
+    const consoleError = vi
+      .spyOn(console, 'error')
+      .mockImplementation((...args) => {
+        runtimeErrors.push(args)
+      })
+    let socketClosed = false
+    const fakeSocket: FuturesSocket = {
+      onopen: null,
+      onmessage: null,
+      onerror: null,
+      onclose: null,
+      send: () => undefined,
+      close: () => {
+        socketClosed = true
+      },
+    }
+    const app = await buildApp({
+      config: testConfigFrom({
+        FUTURES_MODE: 'paper_live',
+        FUTURES_DB_PATH: accountPath,
+        FUTURES_MARKET_DB_PATH: marketPath,
+      }),
+      overrides: {
+        futuresSourceDrainCloseMs: 30,
+        futuresSourceQueueObserver: (event: FuturesSourceQueueEvent) =>
+          sourceQueueEvents.push(event),
+        futuresLifecycleObserver: (event: FuturesLifecycleEvent) => {
+          lifecycleEvents.push(event)
+          if (event.phase === 'futures-source-drain-stop-requested')
+            stopRequested()
+        },
+        futuresWorkerObserver: (event: FuturesWorkerDiagnostic) =>
+          workerEvents.push(event),
+        futuresFundingFetch: async () =>
+          new Response(
+            JSON.stringify({
+              result: 'success',
+              serverTime: '2026-10-04T00:00:00.000Z',
+              rates: [],
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          ),
+        futuresPublicCatalog: async () => ({
+          instruments: [
+            {
+              symbol: 'PF_XBTUSD',
+              type: 'flexible_futures',
+              pair: 'BTC:USD',
+              base: 'BTC',
+              quote: 'USD',
+              contractSize: '1',
+              tickSize: '1',
+              contractValueTradePrecision: 4,
+              tradeable: true,
+              isExpired: false,
+            },
+          ],
+        }),
+        futuresSocketFactory: () => fakeSocket,
+        futuresClock: () => 1_790_950_000_000,
+      } as never,
+    })
+    const originalProcessEvent = FuturesReplayDriver.prototype.processEvent
+    const processSpy = vi
+      .spyOn(FuturesReplayDriver.prototype, 'processEvent')
+      .mockImplementation(async function (
+        this: FuturesReplayDriver,
+        ...args: Parameters<FuturesReplayDriver['processEvent']>
+      ) {
+        if (args[0].payload.market_event && !closeGateEntered) {
+          closeGateEntered = true
+          processingStarted()
+          await processingGate
+        }
+        return originalProcessEvent.apply(this, args)
+      })
+    let closeGateEntered = false
+    let closePromise: Promise<void> | undefined
+    let closeFinished = false
+    let stopRequestError: unknown
+    let sourceEventCount: number
+    let persistedWorks: Array<{ receipt: { status: string } }> = []
+    let accountVerified: boolean
+    let workerClosed: boolean
+    try {
+      await app.ready()
+      fakeSocket.onopen?.()
+      for (const raw of [
+        JSON.stringify({
+          feed: 'book_snapshot',
+          product_id: 'PF_XBTUSD',
+          seq: 10,
+          timestamp: 1_790_950_000_000,
+          bids: [{ price: '90000', qty: '0.5' }],
+          asks: [{ price: '90001', qty: '0.5' }],
+        }),
+        JSON.stringify({
+          feed: 'ticker',
+          product_id: 'PF_XBTUSD',
+          seq: 20,
+          time: 1_790_950_000_000,
+          last: '90000.5',
+          markPrice: '90000',
+          suspended: false,
+        }),
+        JSON.stringify({
+          feed: 'book',
+          product_id: 'PF_XBTUSD',
+          seq: 11,
+          timestamp: 1_790_950_000_100,
+          side: 'buy',
+          price: '90000',
+          qty: '0.6',
+        }),
+      ])
+        fakeSocket.onmessage?.({ data: raw })
+      await Promise.race([
+        started,
+        new Promise<never>((_, reject) =>
+          setTimeout(
+            () => reject(new Error('Source processing did not start.')),
+            2_000,
+          ),
+        ),
+      ])
+      const active = sourceQueueEvents.at(-1)
+      expect(active).toMatchObject({ phase: 'start', running_count: 1 })
+      expect(active?.durable_source_backlog).toBeGreaterThan(0)
+
+      closePromise = app.close().then(() => {
+        closeFinished = true
+      })
+      try {
+        await Promise.race([
+          stopped,
+          new Promise<never>((_, reject) =>
+            setTimeout(
+              () =>
+                reject(
+                  new Error('Close did not request cooperative source stop.'),
+                ),
+              1_000,
+            ),
+          ),
+        ])
+      } catch (error) {
+        stopRequestError = error
+      }
+      releaseProcessing()
+      if (stopRequestError === undefined) await closePromise
+    } finally {
+      releaseProcessing()
+      if (closePromise) await closePromise
+      else await app.close()
+      processSpy.mockRestore()
+      consoleError.mockRestore()
+      const source = new FuturesMarketStore(marketPath)
+      sourceEventCount = source.eventCount()
+      source.close()
+      workerClosed = workerEvents.some((event) => event.phase === 'closed')
+      const account = new FuturesStore(accountPath)
+      accountVerified = account.verifyRun('futures-session:primary')
+      const binding = account.getReplaySessionBinding('futures-session:primary')
+      if (binding)
+        persistedWorks = account.loadReplaySession(
+          'futures-session:primary',
+          binding,
+        ).works as typeof persistedWorks
+      account.close()
+      rmSync(root, { recursive: true, force: true })
+    }
+    expect(stopRequestError).toBeUndefined()
+    expect(closeFinished).toBe(true)
+    expect(lifecycleEvents).toContainEqual(
+      expect.objectContaining({
+        phase: 'futures-source-drain-deferred',
+        state: 'end',
+        deferred_source_rows: 1,
+        deferred_source_first_sequence: 3,
+        deferred_source_last_sequence: 3,
+        source_watermark: 2,
+        checkpoint_state_version: 1,
+      }),
+    )
+    expect(sourceEventCount).toBe(3)
+    expect(socketClosed).toBe(true)
+    expect(workerClosed).toBe(true)
+    expect(accountVerified).toBe(true)
+    expect(persistedWorks).toHaveLength(1)
+    expect(persistedWorks[0]?.receipt.status).toBe('committed')
+    expect(
+      runtimeErrors.map((args) =>
+        args
+          .map((argument) =>
+            argument instanceof Error ? argument.stack : String(argument),
+          )
+          .join('\n'),
+      ),
+    ).toEqual([])
+  }, 5_000)
+
   it('restores the latest persisted public quote in bootstrap before new socket events', async () => {
     const root = mkdtempSync(join(tmpdir(), 'balancita-paper-live-restore-'))
     const marketPath = join(root, 'market.sqlite')
