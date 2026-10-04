@@ -175,11 +175,13 @@ export interface FuturesSourceQueueEvent {
   readonly pending_count: number
   readonly pending_notifications: number
   readonly durable_source_backlog: number | null
-  readonly source_watermark: number
+  readonly source_watermark: number | null
   readonly last_inspected_source_seq: number | null
   readonly last_financial_source_seq: number | null
   readonly source_events_persisted: number | null
   readonly inspection_policy_bound: boolean
+  readonly inspected_no_action_range_count: number | null
+  readonly inspected_no_action_source_rows: number | null
   readonly oldest_job_age_ms: number
   readonly source_received_seq: number
   readonly assignment_state: 'unassigned_before_work_created'
@@ -192,12 +194,14 @@ export function buildFuturesSourceQueueSnapshot(input: {
   source: FuturesMarketStore | undefined
   sourceReceivedSeq: number
   receivedCutoff: number
-  financialWatermark: number
+  legacyFinancialWatermark: number
   progress:
     | {
         inspectionPolicyBound: boolean
         lastInspectedSourceSeq: number | null
         lastFinancialSourceSeq: number | null
+        inspectedNoActionRangeCount: number | null
+        inspectedNoActionSourceRows: number | null
       }
     | undefined
 }): Pick<
@@ -208,13 +212,15 @@ export function buildFuturesSourceQueueSnapshot(input: {
   | 'last_financial_source_seq'
   | 'source_events_persisted'
   | 'inspection_policy_bound'
+  | 'inspected_no_action_range_count'
+  | 'inspected_no_action_source_rows'
 > {
   const inspectionCursor = input.progress?.inspectionPolicyBound
     ? input.progress.lastInspectedSourceSeq
     : null
   const backlogCursor = input.progress?.inspectionPolicyBound
     ? input.progress.lastInspectedSourceSeq
-    : input.financialWatermark
+    : input.legacyFinancialWatermark
   const backlogCursorValid =
     backlogCursor !== null && backlogCursor <= input.sourceReceivedSeq
   const inspectionCursorValid =
@@ -226,11 +232,17 @@ export function buildFuturesSourceQueueSnapshot(input: {
           input.receivedCutoff,
         ).count ?? null)
       : null,
-    source_watermark: input.financialWatermark,
+    source_watermark: input.progress?.inspectionPolicyBound
+      ? input.progress.lastFinancialSourceSeq
+      : input.legacyFinancialWatermark,
     last_inspected_source_seq: inspectionCursorValid ? inspectionCursor : null,
     last_financial_source_seq: input.progress?.lastFinancialSourceSeq ?? null,
     source_events_persisted: input.source?.eventCount() ?? null,
     inspection_policy_bound: input.progress?.inspectionPolicyBound ?? false,
+    inspected_no_action_range_count:
+      input.progress?.inspectedNoActionRangeCount ?? null,
+    inspected_no_action_source_rows:
+      input.progress?.inspectedNoActionSourceRows ?? null,
   }
 }
 
@@ -852,7 +864,7 @@ export async function buildApp(options: {
       source: futuresMarketStore,
       sourceReceivedSeq: job.sourceReceivedSeq,
       receivedCutoff: job.receivedAt,
-      financialWatermark: futuresSourceWatermark,
+      legacyFinancialWatermark: futuresSourceWatermark,
       progress: futuresRuntime?.getSourceProgressSnapshot(),
     })
     try {

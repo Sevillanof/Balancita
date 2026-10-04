@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   classifyReplayCompletion,
   createReplayScheduler,
+  summarizeOfflineDiagnostics,
 } from './offline-futures-scheduler.mjs'
 
 describe('offline replay scheduler', () => {
@@ -75,7 +76,17 @@ describe('offline replay scheduler', () => {
       source_watermark: 127,
       durable_pending_source_rows: 24,
       normal_close: true,
-      final_source_queue: { durable_source_backlog: 6068 },
+      child_process_closed: true,
+      app_resources_closed: true,
+      worker_closed: true,
+      final_source_queue: {
+        inspection_policy_bound: true,
+        source_events_persisted: 6195,
+        source_received_seq: 6195,
+        last_inspected_source_seq: 127,
+        last_financial_source_seq: 127,
+        durable_source_backlog: 6068,
+      },
     }
 
     expect(
@@ -97,14 +108,43 @@ describe('offline replay scheduler', () => {
         closeMessage: {
           ...closeMessage,
           source_count: 6195,
-          source_watermark: 6195,
+          source_watermark: 148,
           durable_pending_source_rows: 0,
-          final_source_queue: { durable_source_backlog: 0 },
+          child_process_closed: true,
+          child_exit_code: 0,
+          child_signal_code: null,
+          forced_termination: false,
+          app_resources_closed: true,
+          worker_closed: true,
+          final_source_queue: {
+            inspection_policy_bound: true,
+            source_events_persisted: 6195,
+            source_received_seq: 6195,
+            last_inspected_source_seq: 6195,
+            source_watermark: 148,
+            last_financial_source_seq: 148,
+            durable_source_backlog: 0,
+            inspected_no_action_source_rows: 6047,
+            financial_source_coverage_rows: 148,
+            source_coverage_rows: 6195,
+          },
         },
-        processed: 6195,
+        processed: 6100,
         total: 6195,
-      }).outcome,
-    ).toBe('source_complete')
+      }),
+    ).toMatchObject({
+      outcome: 'source_complete',
+      processing_complete: true,
+      delivery_complete: false,
+      durable_pending_source_rows: 0,
+      normalized_source_events_persisted: 6195,
+      source_watermark: 148,
+      last_inspected_source_seq: 6195,
+      last_financial_source_seq: 148,
+      inspected_no_action_source_rows: 6047,
+      financial_source_coverage_rows: 148,
+      source_coverage_rows: 6195,
+    })
     expect(
       classifyReplayCompletion({
         closeMessage: { type: 'closed', normal_close: true },
@@ -115,6 +155,29 @@ describe('offline replay scheduler', () => {
       outcome: 'unknown_processing',
       processing_complete: false,
       closed: true,
+      durable_pending_source_rows: null,
+    })
+    expect(
+      classifyReplayCompletion({
+        closeMessage: {
+          type: 'closed',
+          normal_close: true,
+          source_inspection_contract: 'futures-source-inspection.v1',
+          final_source_queue: {
+            inspection_policy_bound: true,
+            source_events_persisted: 6195,
+            source_received_seq: 6195,
+            last_inspected_source_seq: null,
+            durable_source_backlog: null,
+          },
+        },
+        processed: 6100,
+        total: 6100,
+      }),
+    ).toMatchObject({
+      outcome: 'unknown_processing',
+      processing_complete: false,
+      delivery_complete: true,
       durable_pending_source_rows: null,
     })
   })
@@ -132,6 +195,47 @@ describe('offline replay scheduler', () => {
       durable_pending_source_rows: null,
       eligible_pending_source_rows: null,
       outcome: 'unknown_processing',
+    })
+    expect(
+      summarizeOfflineDiagnostics({
+        workerEvents: [
+          {
+            request_id: 'work-1',
+            phase: 'serialization_end',
+            request_bytes: 41,
+          },
+          { request_id: 'work-1', phase: 'stdin_write_callback' },
+          { request_id: 'work-1', phase: 'stdin_write_callback' },
+          { request_id: 'work-1', phase: 'frame_complete', frame_bytes: 73 },
+          { request_id: 'work-1', phase: 'ack_write_callback' },
+        ],
+        driverEvents: [
+          {
+            run_id: 'run-1',
+            work_id: 'work-1',
+            source_received_seq: 4,
+            phase: 'receipt-materialize-hash',
+            outcome: 'end',
+          },
+          {
+            run_id: 'run-1',
+            work_id: 'work-1',
+            source_received_seq: 4,
+            phase: 'receipt-materialize-hash',
+            outcome: 'end',
+          },
+        ],
+      }),
+    ).toMatchObject({
+      ipc_request_wire_bytes: 41,
+      ipc_request_write_count: 1,
+      ipc_response_line_bytes: 73,
+      ipc_response_line_count: 1,
+      ipc_ack_write_bytes: null,
+      ipc_ack_write_count: 1,
+      financial_work_count: 1,
+      financial_source_coverage_rows: 1,
+      confirmed_full_cycle_analysis_count: null,
     })
   })
 })

@@ -304,6 +304,8 @@ export class FuturesSessionRuntime {
     inspectionPolicyBound: boolean
     lastInspectedSourceSeq: number | null
     lastFinancialSourceSeq: number | null
+    inspectedNoActionRangeCount: number | null
+    inspectedNoActionSourceRows: number | null
   } {
     const binding = this.store.getReplaySessionBinding(this.runId)
     const manifest = binding?.manifest
@@ -314,6 +316,8 @@ export class FuturesSessionRuntime {
         lastFinancialSourceSeq: this.store.getLastAppliedReplaySourceSequence(
           this.runId,
         ),
+        inspectedNoActionRangeCount: null,
+        inspectedNoActionSourceRows: null,
       }
     const replayManifest = manifest as Record<string, unknown>
     const policy = replayManifest.admission_policy
@@ -328,6 +332,8 @@ export class FuturesSessionRuntime {
         lastFinancialSourceSeq: this.store.getLastAppliedReplaySourceSequence(
           this.runId,
         ),
+        inspectedNoActionRangeCount: null,
+        inspectedNoActionSourceRows: null,
       }
     const sourceIdentity = canonicalHash({
       schema_version: 'futures-market-source-binding.v1',
@@ -338,12 +344,31 @@ export class FuturesSessionRuntime {
     const validProgress =
       progress?.policyIdentity === policyHash &&
       progress.sourceIdentity === sourceIdentity
+    const skippedRanges = validProgress
+      ? this.store.getEvaluationSkippedRanges(this.runId)
+      : []
+    const validRanges = skippedRanges.every(
+      (range) =>
+        range.policyIdentity === policyHash &&
+        range.sourceIdentity === sourceIdentity &&
+        Number.isSafeInteger(range.inspectedRowCount) &&
+        range.inspectedRowCount > 0,
+    )
     return {
       inspectionPolicyBound: true,
       lastInspectedSourceSeq: validProgress ? progress.cursorRowid : null,
       lastFinancialSourceSeq: this.store.getLastAppliedReplaySourceSequence(
         this.runId,
       ),
+      inspectedNoActionRangeCount:
+        validProgress && validRanges ? skippedRanges.length : null,
+      inspectedNoActionSourceRows:
+        validProgress && validRanges
+          ? skippedRanges.reduce(
+              (sum, range) => sum + range.inspectedRowCount,
+              0,
+            )
+          : null,
     }
   }
 

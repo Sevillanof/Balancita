@@ -1000,12 +1000,18 @@ describe('PAPER_LIVE startup integration', () => {
         source,
         sourceReceivedSeq: 5,
         receivedCutoff: 5000,
-        financialWatermark: 2,
+        legacyFinancialWatermark: 4,
         progress: {
           inspectionPolicyBound: true,
           lastInspectedSourceSeq: account.getEvaluationProgress(
             'observer-progress-run',
           )!.cursorRowid,
+          inspectedNoActionRangeCount: account.getEvaluationSkippedRanges(
+            'observer-progress-run',
+          ).length,
+          inspectedNoActionSourceRows: account
+            .getEvaluationSkippedRanges('observer-progress-run')
+            .reduce((sum, range) => sum + range.inspectedRowCount, 0),
           // This plumbing fixture supplies the separate financial count; it creates no receipt.
           lastFinancialSourceSeq: 2,
         },
@@ -1018,6 +1024,8 @@ describe('PAPER_LIVE startup integration', () => {
         source_events_persisted: 5,
         durable_source_backlog: 1,
         inspection_policy_bound: true,
+        inspected_no_action_range_count: 1,
+        inspected_no_action_source_rows: 2,
       })
       expect(account.getAdmissionHead('observer-progress-run')).toMatchObject({
         stateVersion: 0,

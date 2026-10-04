@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync } from 'node:fs'
+import { appendFileSync, mkdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { buildApp } from '../server/src/app/app.ts'
 import { serverConfigFrom } from '../server/src/platform/config.ts'
@@ -7,6 +7,36 @@ let socket
 let app
 let activeTimestamp
 let closeSourceState = null
+
+function readLastTraceEvent(path) {
+  try {
+    const lines = readFileSync(path, 'utf8').trim().split('\n')
+    for (let index = lines.length - 1; index >= 0; index -= 1) {
+      try {
+        return JSON.parse(lines[index])
+      } catch {}
+    }
+  } catch {}
+  return null
+}
+
+function readTraceEvents(path) {
+  try {
+    return readFileSync(path, 'utf8')
+      .split('\n')
+      .filter(Boolean)
+      .flatMap((line) => {
+        try {
+          return [JSON.parse(line)]
+        } catch {
+          return []
+        }
+      })
+  } catch {
+    return null
+  }
+}
+
 process.on('message', async (message) => {
   try {
     if (message.type === 'start') {
@@ -86,10 +116,27 @@ process.on('message', async (message) => {
       process.send?.({ type: 'delivered', id: message.id })
     } else if (message.type === 'finish') {
       await app?.close()
+      const closeEvents = readTraceEvents(closePhasesTracePath)
+      const workerEvents = readTraceEvents(workerTracePath)
+      const openResources = new Map()
+      for (const event of closeEvents ?? []) {
+        const key = `${event.phase}:${event.resource_id ?? ''}`
+        if (event.state === 'begin' || event.state === 'error')
+          openResources.set(key, event)
+        else if (event.state === 'end') openResources.delete(key)
+      }
       process.send?.({
         type: 'closed',
         normal_close: true,
+        source_inspection_contract: 'futures-source-inspection.v1',
         ...closeSourceState,
+        final_source_queue: readLastTraceEvent(sourceQueueTracePath),
+        app_resources_closed:
+          closeEvents !== null &&
+          closeEvents.length > 0 &&
+          openResources.size === 0,
+        worker_closed:
+          workerEvents?.some((event) => event.phase === 'closed') ?? false,
       })
       process.disconnect()
     }
