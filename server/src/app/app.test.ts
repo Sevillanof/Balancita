@@ -1111,7 +1111,7 @@ describe('PAPER_LIVE startup integration', () => {
       })
       const active = sourceQueueEvents.at(-1)
       expect(active).toMatchObject({ phase: 'start', running_count: 1 })
-      expect(active?.durable_source_backlog).toBeGreaterThan(0)
+      expect(active?.durable_source_backlog).toBeNull()
 
       closePromise = app.close().then(() => {
         closeFinished = true
@@ -1170,6 +1170,15 @@ describe('PAPER_LIVE startup integration', () => {
       }),
     )
     expect(sourceEventCount).toBe(5)
+    expect(sourceQueueEvents.at(-1)).toMatchObject({
+      phase: 'end',
+      source_watermark: 2,
+      last_inspected_source_seq: 2,
+      last_financial_source_seq: 2,
+      durable_source_backlog: 3,
+      source_events_persisted: 5,
+      inspection_policy_bound: true,
+    })
     expect(socketClosed).toBe(true)
     expect(workerClosed).toBe(true)
     expect(accountVerified).toBe(true)

@@ -300,6 +300,53 @@ export class FuturesSessionRuntime {
     }
   }
 
+  getSourceProgressSnapshot(): {
+    inspectionPolicyBound: boolean
+    lastInspectedSourceSeq: number | null
+    lastFinancialSourceSeq: number | null
+  } {
+    const binding = this.store.getReplaySessionBinding(this.runId)
+    const manifest = binding?.manifest
+    if (!manifest || typeof manifest !== 'object')
+      return {
+        inspectionPolicyBound: false,
+        lastInspectedSourceSeq: null,
+        lastFinancialSourceSeq: this.store.getLastAppliedReplaySourceSequence(
+          this.runId,
+        ),
+      }
+    const replayManifest = manifest as Record<string, unknown>
+    const policy = replayManifest.admission_policy
+    const policyHash =
+      policy && typeof policy === 'object'
+        ? (policy as Record<string, unknown>).hash
+        : undefined
+    if (typeof policyHash !== 'string')
+      return {
+        inspectionPolicyBound: false,
+        lastInspectedSourceSeq: null,
+        lastFinancialSourceSeq: this.store.getLastAppliedReplaySourceSequence(
+          this.runId,
+        ),
+      }
+    const sourceIdentity = canonicalHash({
+      schema_version: 'futures-market-source-binding.v1',
+      source: replayManifest.source,
+      source_hash: replayManifest.source_hash,
+    })
+    const progress = this.store.getEvaluationProgress(this.runId)
+    const validProgress =
+      progress?.policyIdentity === policyHash &&
+      progress.sourceIdentity === sourceIdentity
+    return {
+      inspectionPolicyBound: true,
+      lastInspectedSourceSeq: validProgress ? progress.cursorRowid : null,
+      lastFinancialSourceSeq: this.store.getLastAppliedReplaySourceSequence(
+        this.runId,
+      ),
+    }
+  }
+
   async exportReplayRun() {
     if (this.mode !== 'replay' || this.replaySource === undefined)
       throw new Error('Verified run export is available only for REPLAY.')

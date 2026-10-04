@@ -174,8 +174,12 @@ export interface FuturesSourceQueueEvent {
   readonly running_count: number
   readonly pending_count: number
   readonly pending_notifications: number
-  readonly durable_source_backlog: number
+  readonly durable_source_backlog: number | null
   readonly source_watermark: number
+  readonly last_inspected_source_seq: number | null
+  readonly last_financial_source_seq: number | null
+  readonly source_events_persisted: number | null
+  readonly inspection_policy_bound: boolean
   readonly oldest_job_age_ms: number
   readonly source_received_seq: number
   readonly assignment_state: 'unassigned_before_work_created'
@@ -798,6 +802,23 @@ export async function buildApp(options: {
   ): void => {
     const now = performance.now()
     const oldest = futuresSourceJobs[0]
+    const progress = futuresRuntime?.getSourceProgressSnapshot()
+    const inspectionCursor = progress?.inspectionPolicyBound
+      ? progress.lastInspectedSourceSeq
+      : null
+    const backlogCursor = progress?.inspectionPolicyBound
+      ? progress.lastInspectedSourceSeq
+      : futuresSourceWatermark
+    const inspectedCursorValid =
+      inspectionCursor !== null && inspectionCursor <= job.sourceReceivedSeq
+    const backlogCursorValid =
+      backlogCursor !== null && backlogCursor <= job.sourceReceivedSeq
+    const pendingSourceRows = backlogCursorValid
+      ? (futuresMarketStore?.pendingEventsAfterAsOf(
+          backlogCursor,
+          job.receivedAt,
+        ).count ?? null)
+      : null
     try {
       options.overrides?.futuresSourceQueueObserver?.({
         phase,
@@ -806,9 +827,14 @@ export async function buildApp(options: {
         running_count: futuresSourceRunning,
         pending_count: futuresSourceJobs.length,
         pending_notifications: futuresSourceJobs.length,
-        durable_source_backlog:
-          futuresMarketStore?.eventCountAfter(futuresSourceWatermark) ?? 0,
+        durable_source_backlog: pendingSourceRows,
         source_watermark: futuresSourceWatermark,
+        last_inspected_source_seq: inspectedCursorValid
+          ? inspectionCursor
+          : null,
+        last_financial_source_seq: progress?.lastFinancialSourceSeq ?? null,
+        source_events_persisted: futuresMarketStore?.eventCount() ?? null,
+        inspection_policy_bound: progress?.inspectionPolicyBound ?? false,
         oldest_job_age_ms: oldest ? Math.max(0, now - oldest.enqueuedAt) : 0,
         source_received_seq: job.sourceReceivedSeq,
         assignment_state: 'unassigned_before_work_created',
