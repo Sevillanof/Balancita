@@ -1,5 +1,6 @@
 import json
 import os
+import tempfile
 from pathlib import Path
 import subprocess
 import sys
@@ -37,11 +38,11 @@ def read_message(process):
 
 
 class FuturesWorkerProcessTests(unittest.TestCase):
-    def launch(self):
+    def launch(self, env=None):
         return subprocess.Popen(
             [sys.executable, "-m", "balancita_engine.futures_worker"],
             cwd=ROOT,
-            env=ENV,
+            env={**ENV, **(env or {})},
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -90,6 +91,76 @@ class FuturesWorkerProcessTests(unittest.TestCase):
             process.stdin.close()
             process.stdout.close()
             process.stderr.close()
+
+    def test_opt_in_diagnostics_are_separate_and_correlated_without_changing_protocol(self):
+        with tempfile.TemporaryDirectory() as directory:
+            trace_path = Path(directory) / "trace.jsonl"
+            disabled = self.run_round_trip()
+            enabled = self.run_round_trip({"BALANCITA_FUTURES_DIAGNOSTICS_PATH": str(trace_path)})
+
+            self.assertEqual(enabled[0], disabled[0])
+            self.assertEqual(enabled[1], disabled[1])
+            self.assertEqual(enabled[2], "")
+            records = [json.loads(line) for line in trace_path.read_text().splitlines()]
+            phases = [record["phase"] for record in records]
+            self.assertEqual(phases, [
+                "request_received", "request_decoded", "compute_start", "input_snapshot", "compute_end",
+                "response_encoded", "response_written", "ack_received", "ack_parsed",
+                "committed_ack_encoded", "committed_ack_sent",
+            ])
+            for record in records:
+                self.assertEqual((record["request_id"], record["run_id"], record["work_id"]),
+                                 ("r1", "run-fixture", "w1"))
+                self.assertEqual(record["process_pid"], enabled[3])
+                self.assertEqual(record["clock"], "time.perf_counter_ns")
+                self.assertIsInstance(record["duration_ns"], int)
+                self.assertGreaterEqual(record["duration_ns"], 0)
+                self.assertGreaterEqual(record["rss_bytes"], 0)
+            self.assertEqual(records[0]["strategy_evaluations"], "not_instrumented")
+            snapshot = records[3]
+            self.assertEqual(snapshot["input_event_count"], 0)
+            self.assertEqual(snapshot["book_depth"], 0)
+            self.assertEqual(snapshot["state_bytes"], 0)
+
+    def run_round_trip(self, extra_env=None):
+        process = self.launch(extra_env)
+        try:
+            ready = read_message(process)
+            process.stdin.write(json.dumps(command()) + "\n")
+            process.stdin.flush()
+            result = read_message(process)
+            process.stdin.write(json.dumps({
+                "type": "ack", "status": "committed", "protocol_version": 1,
+                "request_id": "r1", "run_id": "run-fixture", "work_id": "w1",
+                "applied_state_version": 1, "result_hash": "a" * 64,
+            }) + "\n")
+            process.stdin.flush()
+            ack = read_message(process)
+            process.stdin.write(json.dumps({
+                "type": "shutdown", "protocol_version": 1, "request_id": "shutdown",
+                "run_id": "worker", "work_id": "shutdown",
+            }) + "\n")
+            process.stdin.flush()
+            shutdown = read_message(process)
+            stderr = process.stderr.read()
+            process.wait(timeout=5)
+            return [ready, result], [ack, shutdown], stderr, process.pid
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=5)
+            process.stdin.close()
+            process.stdout.close()
+            process.stderr.close()
+
+    def test_diagnostic_output_failure_does_not_break_worker_protocol(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output, acknowledgements, stderr, _ = self.run_round_trip({
+                "BALANCITA_FUTURES_DIAGNOSTICS_PATH": directory,
+            })
+        self.assertEqual(output[1]["result"]["realized_net_complete"], "0.09895")
+        self.assertEqual(acknowledgements[0]["status"], "committed")
+        self.assertEqual(stderr, "")
 
     def test_rejects_protocol_version_mismatch_and_oversized_line(self):
         process = self.launch()

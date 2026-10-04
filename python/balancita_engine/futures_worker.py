@@ -1,7 +1,10 @@
 """Persistent JSONL worker for isolated paper-futures ledger fixtures."""
 
 import json
+import os
+import resource
 import sys
+import time
 from copy import deepcopy
 from decimal import Decimal, localcontext
 
@@ -10,6 +13,34 @@ from .futures_runtime import FuturesRuntime
 
 PROTOCOL_VERSION = 1
 MAX_LINE_BYTES = 1_048_576
+_DIAGNOSTICS_PATH = os.environ.get("BALANCITA_FUTURES_DIAGNOSTICS_PATH")
+_DIAGNOSTICS_ENABLED = bool(_DIAGNOSTICS_PATH)
+
+
+def _diagnostic(phase, message=None, duration_ns=0, **details):
+    if not _DIAGNOSTICS_ENABLED:
+        return
+    try:
+        usage = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        rss_bytes = int(usage if sys.platform == "darwin" else usage * 1024)
+        record = {
+            "phase": phase,
+            "request_id": message.get("request_id") if isinstance(message, dict) else None,
+            "run_id": message.get("run_id") if isinstance(message, dict) else None,
+            "work_id": message.get("work_id") if isinstance(message, dict) else None,
+            "process_pid": os.getpid(),
+            "clock": "time.perf_counter_ns",
+            "monotonic_ns": time.perf_counter_ns(),
+            "duration_ns": max(0, int(duration_ns)),
+            "rss_bytes": rss_bytes,
+            "strategy_evaluations": "not_instrumented",
+            **details,
+        }
+        with open(_DIAGNOSTICS_PATH, "a", encoding="utf-8") as output:
+            output.write(json.dumps(record, separators=(",", ":"), allow_nan=False) + "\n")
+    except Exception:
+        # Diagnostics are optional and must never alter worker behavior.
+        pass
 
 
 def _emit(message):
@@ -209,6 +240,7 @@ def main():
     _emit({"type": "ready", "protocol_version": PROTOCOL_VERSION, "worker": "futures-ledger.v1"})
     while True:
         message = None
+        receive_started = time.perf_counter_ns() if _DIAGNOSTICS_ENABLED else 0
         raw = sys.stdin.buffer.readline(MAX_LINE_BYTES + 1)
         if not raw:
             return 0
@@ -216,7 +248,16 @@ def main():
             _emit({"type": "error", "protocol_version": PROTOCOL_VERSION, "error": "oversized_or_unterminated_line"})
             return 2
         try:
+            decode_started = time.perf_counter_ns() if _DIAGNOSTICS_ENABLED else 0
             message = json.loads(raw.decode("utf-8"))
+            if isinstance(message, dict) and message.get("type") == "work":
+                _diagnostic("request_received", message,
+                            time.perf_counter_ns() - receive_started if _DIAGNOSTICS_ENABLED else 0,
+                            request_bytes=len(raw))
+            if isinstance(message, dict) and message.get("type") == "work":
+                _diagnostic("request_decoded", message,
+                            time.perf_counter_ns() - decode_started if _DIAGNOSTICS_ENABLED else 0,
+                            request_bytes=len(raw))
             if not isinstance(message, dict) or not isinstance(message.get("type"), str):
                 raise ValueError("message must be an object with type")
             if message["type"] == "shutdown":
@@ -227,12 +268,35 @@ def main():
                 return 0
             if message["type"] != "work":
                 raise ValueError("unsupported message type")
+            _diagnostic("compute_start", message)
+            compute_started = time.perf_counter_ns() if _DIAGNOSTICS_ENABLED else 0
+            if _DIAGNOSTICS_ENABLED:
+                payload = message.get("payload")
+                snapshot = payload.get("market_snapshot", {}) if isinstance(payload, dict) else {}
+                checkpoint = message.get("checkpoint")
+                _diagnostic("input_snapshot", message,
+                            input_event_count=len(snapshot.get("events", [])) if isinstance(snapshot, dict) and isinstance(snapshot.get("events", []), list) else None,
+                            book_depth=sum(len(snapshot.get(key, [])) for key in ("bids", "asks") if isinstance(snapshot, dict) and isinstance(snapshot.get(key, []), list)),
+                            state_bytes=len(json.dumps(checkpoint, separators=(",", ":")).encode("utf-8")) if checkpoint is not None else 0)
             result = _work(message)
-            _emit(result)
+            _diagnostic("compute_end", message, time.perf_counter_ns() - compute_started if _DIAGNOSTICS_ENABLED else 0)
+            encode_started = time.perf_counter_ns() if _DIAGNOSTICS_ENABLED else 0
+            encoded = json.dumps(result, separators=(",", ":"), allow_nan=False) + "\n"
+            _diagnostic("response_encoded", message, time.perf_counter_ns() - encode_started if _DIAGNOSTICS_ENABLED else 0,
+                        response_bytes=len(encoded.encode("utf-8")))
+            write_started = time.perf_counter_ns() if _DIAGNOSTICS_ENABLED else 0
+            sys.stdout.write(encoded)
+            sys.stdout.flush()
+            _diagnostic("response_written", message, time.perf_counter_ns() - write_started if _DIAGNOSTICS_ENABLED else 0)
+            ack_receive_started = time.perf_counter_ns() if _DIAGNOSTICS_ENABLED else 0
             ack_line = sys.stdin.buffer.readline(MAX_LINE_BYTES + 1)
+            _diagnostic("ack_received", message, time.perf_counter_ns() - ack_receive_started if _DIAGNOSTICS_ENABLED else 0,
+                        ack_bytes=len(ack_line))
             if not ack_line or len(ack_line) > MAX_LINE_BYTES or not ack_line.endswith(b"\n"):
                 return 3
+            ack_parse_started = time.perf_counter_ns() if _DIAGNOSTICS_ENABLED else 0
             ack = json.loads(ack_line.decode("utf-8"))
+            _diagnostic("ack_parsed", message, time.perf_counter_ns() - ack_parse_started if _DIAGNOSTICS_ENABLED else 0)
             if (not isinstance(ack, dict) or ack.get("type") != "ack" or
                     ack.get("status") not in ("committed", "superseded") or
                     ack.get("protocol_version") != PROTOCOL_VERSION or
@@ -242,11 +306,20 @@ def main():
                     not isinstance(ack.get("applied_state_version"), int) or
                     not isinstance(ack.get("result_hash"), str) or len(ack["result_hash"]) != 64):
                 return 4
-            _emit({"type": "ack", "status": ack["status"], "protocol_version": PROTOCOL_VERSION,
+            committed = {"type": "ack", "status": ack["status"], "protocol_version": PROTOCOL_VERSION,
                    "request_id": result["request_id"], "run_id": result["run_id"],
                    "work_id": result["work_id"], "applied_state_version": ack["applied_state_version"],
-                   "result_hash": ack["result_hash"]})
+                   "result_hash": ack["result_hash"]}
+            encode_started = time.perf_counter_ns() if _DIAGNOSTICS_ENABLED else 0
+            encoded = json.dumps(committed, separators=(",", ":"), allow_nan=False) + "\n"
+            _diagnostic("committed_ack_encoded", message, time.perf_counter_ns() - encode_started if _DIAGNOSTICS_ENABLED else 0,
+                        response_bytes=len(encoded.encode("utf-8")))
+            write_started = time.perf_counter_ns() if _DIAGNOSTICS_ENABLED else 0
+            sys.stdout.write(encoded)
+            sys.stdout.flush()
+            _diagnostic("committed_ack_sent", message, time.perf_counter_ns() - write_started if _DIAGNOSTICS_ENABLED else 0)
         except (UnicodeDecodeError, json.JSONDecodeError, ValueError, TypeError, ArithmeticError) as error:
+            _diagnostic("error", message, error=str(error)[:512])
             _emit({"type": "error", "protocol_version": PROTOCOL_VERSION,
                    "request_id": message.get("request_id") if isinstance(message, dict) else None,
                    "error": str(error)[:512]})
