@@ -1,5 +1,11 @@
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -678,7 +684,20 @@ describe('shared causal futures replay driver', () => {
           })
         createRun()
         let runner = new FuturesCommandRunner(store)
+        const applyCounts = new Map<string, number>()
+        const appliedInputByWork = new Map<
+          string,
+          { sequence: number; control: unknown }
+        >()
         const apply = async (work: RuntimeWork) => {
+          applyCounts.set(
+            work.work_id,
+            (applyCounts.get(work.work_id) ?? 0) + 1,
+          )
+          appliedInputByWork.set(work.work_id, {
+            sequence: work.input.sequence,
+            control: work.input.payload.control,
+          })
           const request: FuturesWorkerRequest = {
             request_id: `request-${work.work_id}`,
             run_id: runId,
@@ -732,6 +751,7 @@ describe('shared causal futures replay driver', () => {
         let result
         let checkpointAfterPartial: Record<string, unknown> | undefined
         let restoredAnalysisIds: string[] = []
+        let interruptedWorkId: string | undefined
         if (incremental) {
           let driver = new FuturesReplayDriver({
             runId,
@@ -746,12 +766,77 @@ describe('shared causal futures replay driver', () => {
             instrument,
             controlForSource,
           )
-          await driver.processMarketStore(
-            marketStore,
-            start + 30 * 60_000 + 100,
-            instrument,
-            controlForSource,
-          )
+          if (side === 'long') {
+            const commitReplayWork = store.commitReplayWork.bind(store)
+            let injected = false
+            store.commitReplayWork = (targetRunId, workId, receipt) => {
+              const durableReceipt = store.getAppliedReceipt(workId)
+              const projection = store.getRunProjection(runId)
+              const checkpoint = projection?.checkpoint as
+                Record<string, unknown> | undefined
+              const position = checkpoint?.ledger_position as
+                Record<string, unknown> | undefined
+              const ledger = projection?.result as
+                Record<string, unknown> | undefined
+              if (
+                !injected &&
+                targetRunId === runId &&
+                durableReceipt &&
+                position?.side === 'long' &&
+                position.qty === '0.005' &&
+                Number(ledger?.fees_usd) > 0 &&
+                Number(ledger?.funding_paid) > 0
+              ) {
+                injected = true
+                interruptedWorkId = workId
+                throw new Error(
+                  'injected after financial commit before replay receipt',
+                )
+              }
+              commitReplayWork(targetRunId, workId, receipt)
+            }
+            await expect(
+              driver.processMarketStore(
+                marketStore,
+                start + 30 * 60_000 + 100,
+                instrument,
+                controlForSource,
+              ),
+            ).rejects.toThrow(
+              'injected after financial commit before replay receipt',
+            )
+            expect(injected).toBe(true)
+            expect(interruptedWorkId).toBeDefined()
+            const interruptedProjection = store.getRunProjection(runId)!
+            const interruptedCheckpoint =
+              interruptedProjection.checkpoint as Record<string, unknown>
+            const interruptedPosition =
+              interruptedCheckpoint.ledger_position as Record<string, unknown>
+            const interruptedLedger = interruptedProjection.result as Record<
+              string,
+              unknown
+            >
+            expect(interruptedPosition.side).toBe('long')
+            expect(interruptedPosition.qty).toBe('0.005')
+            expect(Number(interruptedLedger.fees_usd)).toBeGreaterThan(0)
+            expect(Number(interruptedLedger.funding_paid)).toBeGreaterThan(0)
+            expect(store.getAppliedReceipt(interruptedWorkId!)).toBeDefined()
+            expect(appliedInputByWork.get(interruptedWorkId!)).toEqual({
+              sequence: 6,
+              control: undefined,
+            })
+            expect([...appliedInputByWork.values()]).toContainEqual({
+              sequence: 5,
+              control: { type: 'paper.close' },
+            })
+          } else {
+            await driver.processMarketStore(
+              marketStore,
+              start + 30 * 60_000 + 100,
+              instrument,
+              controlForSource,
+            )
+          }
           checkpointAfterPartial = store.getRunProjection(runId)
             ?.checkpoint as Record<string, unknown>
           await runner.close()
@@ -769,6 +854,8 @@ describe('shared causal futures replay driver', () => {
             instrument,
             controlForSource,
           })
+          if (interruptedWorkId)
+            expect(applyCounts.get(interruptedWorkId)).toBe(1)
           const headAtRestore = store.exportRun(runId).head_hash
           const effectsAtRestore = (store.exportRun(runId).events as unknown[])
             .length
@@ -821,6 +908,10 @@ describe('shared causal futures replay driver', () => {
           restoredAnalysisIds,
           workIds,
           outputSequence,
+          interruptedWorkId,
+          interruptedInput: interruptedWorkId
+            ? appliedInputByWork.get(interruptedWorkId)
+            : undefined,
         }
       }
 
@@ -832,6 +923,39 @@ describe('shared causal futures replay driver', () => {
         incremental.result,
         batch.result,
       )
+      if (!semantic.equal && side === 'long') {
+        const diagnosticDirectory = resolve(
+          import.meta.dirname,
+          '../../../../playwright-artifacts/futures-diagnostics',
+        )
+        mkdirSync(diagnosticDirectory, { recursive: true })
+        writeFileSync(
+          join(
+            diagnosticDirectory,
+            'long-replay-recovery-semantic-failure.json',
+          ),
+          JSON.stringify(
+            {
+              run_ids: {
+                interrupted: incremental.result.run_id,
+                uninterrupted: batch.result.run_id,
+              },
+              source_hash: manifest.source_hash,
+              cutoff_ms: end,
+              interrupted_work_id: incremental.interruptedWorkId,
+              interrupted_input: incremental.interruptedInput,
+              partial_checkpoint: incremental.checkpointAfterPartial,
+              differences: semantic.differences,
+              interrupted_export: incremental.result,
+              uninterrupted_export: batch.result,
+            },
+            (_key, value) =>
+              value === undefined ? { __undefined_sentinel__: true } : value,
+            2,
+          ),
+          'utf8',
+        )
+      }
       expect(semantic).toMatchObject({ equal: true, differences: [] })
       expect(incremental.checkpointAfterPartial).toBeDefined()
       const partialCheckpoint = incremental.checkpointAfterPartial!

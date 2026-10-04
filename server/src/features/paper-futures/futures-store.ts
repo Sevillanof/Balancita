@@ -1321,6 +1321,62 @@ export class FuturesStore {
     return row ? (JSON.parse(row.receipt_json) as JsonRecord) : undefined
   }
 
+  getAppliedRuntimeProjection(
+    runId: string,
+    workId: string,
+    appliedStateVersion: number,
+  ): { runtime_output: JsonRecord; ledger: JsonRecord } {
+    if (!this.verifyRun(runId))
+      throw new Error('Cannot restore runtime projection from an invalid run.')
+    const row = this.db
+      .prepare(
+        `SELECT r.payload_json,r.payload_hash,a.result_hash,a.receipt_json
+         FROM paper_futures_records r
+         JOIN paper_futures_applied a ON a.work_id=r.work_id
+         WHERE r.run_id=? AND r.work_id=? AND r.kind='applied-result'`,
+      )
+      .get(runId, workId) as
+      | {
+          payload_json: string
+          payload_hash: string
+          result_hash: string
+          receipt_json: string
+        }
+      | undefined
+    if (!row)
+      throw new Error(
+        'Applied runtime result is missing during replay recovery.',
+      )
+    const payload = JSON.parse(row.payload_json) as JsonRecord
+    const receipt = JSON.parse(row.receipt_json) as JsonRecord
+    const hashedPayload = { ...payload }
+    delete hashedPayload.result_hash
+    if (
+      canonicalJson(payload) !== row.payload_json ||
+      canonicalHash(payload) !== row.payload_hash ||
+      canonicalHash(hashedPayload) !== row.result_hash ||
+      payload.run_id !== runId ||
+      payload.work_id !== workId ||
+      ![
+        'futures-runtime-work.v1',
+        'futures-runtime-work.v2',
+        'futures-runtime-work.v3',
+      ].includes(String(payload.schema_version)) ||
+      payload.applied_state_version !== appliedStateVersion ||
+      receipt.status !== 'committed' ||
+      receipt.applied_state_version !== appliedStateVersion ||
+      !isRecord(payload.runtime_output) ||
+      !isRecord(payload.result)
+    )
+      throw new Error(
+        'Applied runtime result failed replay recovery validation.',
+      )
+    return {
+      runtime_output: payload.runtime_output,
+      ledger: payload.result,
+    }
+  }
+
   getAcceptedCommand(commandId: string): unknown {
     const row = this.db
       .prepare(

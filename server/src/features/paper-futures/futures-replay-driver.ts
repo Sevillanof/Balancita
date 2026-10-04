@@ -721,9 +721,20 @@ export class FuturesReplayDriver {
       } else {
         const persisted = options.durableStore.getAppliedReceipt(work.work_id)
         if (persisted) {
+          const appliedStateVersion = Number(persisted.applied_state_version)
+          const economicProjection =
+            options.durableStore.getAppliedRuntimeProjection(
+              options.runId,
+              work.work_id,
+              appliedStateVersion,
+            )
           const receipt: RuntimeReceipt = {
             status: persisted.status as RuntimeReceipt['status'],
-            applied_state_version: Number(persisted.applied_state_version),
+            applied_state_version: appliedStateVersion,
+            economic_projection: {
+              runtime_output: economicProjection.runtime_output,
+              ledger: economicProjection.ledger,
+            },
           }
           options.durableStore.commitReplayWork(
             options.runId,
@@ -1066,6 +1077,7 @@ function replaceIdentities(
 }
 
 function differingPaths(left: unknown, right: unknown, prefix = ''): string[] {
+  if (left === undefined || right === undefined) return [prefix || '$']
   if (canonicalHash(left) === canonicalHash(right)) return []
   if (Array.isArray(left) && Array.isArray(right)) {
     if (left.length !== right.length) return [`${prefix || '$'}.length`]
