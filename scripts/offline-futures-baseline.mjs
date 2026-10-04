@@ -92,6 +92,9 @@ const writeReport = (partial = false) => {
         child_process_group: childPid,
         child_closed: childClosed,
         processing_complete: closeClassification?.processing_complete ?? false,
+        delivery_complete: closeClassification?.delivery_complete ?? false,
+        eligible_pending_source_rows:
+          closeClassification?.eligible_pending_source_rows ?? null,
         source_processing_outcome: closeClassification?.outcome ?? outcome,
         source_count: closeClassification?.source_count ?? null,
         source_watermark: closeClassification?.source_watermark ?? null,
@@ -168,6 +171,16 @@ const killOwnedGroup = () => {
     timer.unref()
   }
 }
+const finalSourceQueue = () => {
+  const path = join(temp, 'app-source-queue.jsonl')
+  if (!existsSync(path)) return null
+  const lines = readFileSync(path, 'utf8').trim().split('\n')
+  try {
+    return JSON.parse(lines.at(-1))
+  } catch {
+    return null
+  }
+}
 child.on('message', (message) => {
   if (message.type === 'ready') {
     scheduler = createReplayScheduler({
@@ -201,7 +214,7 @@ child.on('message', (message) => {
   } else if (message.type === 'closed') {
     childClosed = true
     closeClassification = classifyReplayCompletion({
-      closeMessage: message,
+      closeMessage: { ...message, final_source_queue: finalSourceQueue() },
       processed: delivered.length,
       total: frames.length,
     })

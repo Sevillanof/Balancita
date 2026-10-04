@@ -73,21 +73,24 @@ describe('offline replay scheduler', () => {
       type: 'closed',
       source_count: 6195,
       source_watermark: 127,
-      durable_pending_source_rows: 6068,
+      durable_pending_source_rows: 24,
       normal_close: true,
+      final_source_queue: { durable_source_backlog: 6068 },
     }
 
     expect(
       classifyReplayCompletion({
         closeMessage,
-        processed: 6195,
-        total: 6195,
+        processed: 6100,
+        total: 6100,
       }),
     ).toMatchObject({
       outcome: 'stopped_deferred',
-      processing_complete: true,
+      processing_complete: false,
+      delivery_complete: true,
       closed: true,
       durable_pending_source_rows: 6068,
+      eligible_pending_source_rows: 24,
     })
     expect(
       classifyReplayCompletion({
@@ -96,6 +99,7 @@ describe('offline replay scheduler', () => {
           source_count: 6195,
           source_watermark: 6195,
           durable_pending_source_rows: 0,
+          final_source_queue: { durable_source_backlog: 0 },
         },
         processed: 6195,
         total: 6195,
@@ -112,6 +116,22 @@ describe('offline replay scheduler', () => {
       processing_complete: false,
       closed: true,
       durable_pending_source_rows: null,
+    })
+  })
+
+  it('keeps unknown processing distinct from complete frame delivery', () => {
+    expect(
+      classifyReplayCompletion({
+        closeMessage: { type: 'closed', normal_close: true },
+        processed: 6100,
+        total: 6100,
+      }),
+    ).toMatchObject({
+      delivery_complete: true,
+      processing_complete: false,
+      durable_pending_source_rows: null,
+      eligible_pending_source_rows: null,
+      outcome: 'unknown_processing',
     })
   })
 })

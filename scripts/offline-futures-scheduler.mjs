@@ -1,11 +1,16 @@
 export function classifyReplayCompletion({ closeMessage, processed, total }) {
-  const processingComplete =
+  const deliveryComplete =
     Number.isSafeInteger(processed) &&
     Number.isSafeInteger(total) &&
     processed === total
   const closed = closeMessage?.type === 'closed'
-  const pending = closeMessage?.durable_pending_source_rows
+  const sourceQueue = closeMessage?.final_source_queue
+  const eligiblePending = closeMessage?.durable_pending_source_rows
+  const pending = Number.isSafeInteger(sourceQueue?.durable_source_backlog)
+    ? sourceQueue.durable_source_backlog
+    : eligiblePending
   const knownPending = Number.isSafeInteger(pending) && pending >= 0
+  const processingComplete = deliveryComplete && knownPending && pending === 0
   let outcome = 'unknown_processing'
 
   if (knownPending && pending > 0) outcome = 'stopped_deferred'
@@ -25,7 +30,11 @@ export function classifyReplayCompletion({ closeMessage, processed, total }) {
     outcome,
     processing_complete: processingComplete,
     closed,
+    delivery_complete: deliveryComplete,
     durable_pending_source_rows: knownPending ? pending : null,
+    eligible_pending_source_rows: Number.isSafeInteger(eligiblePending)
+      ? eligiblePending
+      : null,
     source_count: Number.isSafeInteger(closeMessage?.source_count)
       ? closeMessage.source_count
       : null,
