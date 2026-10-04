@@ -48,6 +48,19 @@ def _emit(message):
     sys.stdout.flush()
 
 
+def _emit_timed(message, line, prefix):
+    write_started = time.perf_counter_ns() if _DIAGNOSTICS_ENABLED else 0
+    sys.stdout.write(line)
+    write_ended = time.perf_counter_ns() if _DIAGNOSTICS_ENABLED else 0
+    sys.stdout.flush()
+    flush_ended = time.perf_counter_ns() if _DIAGNOSTICS_ENABLED else 0
+    if _DIAGNOSTICS_ENABLED:
+        _diagnostic(prefix + "_write", message, write_ended - write_started,
+                    monotonic_ns=write_ended, response_bytes=len(line.encode("utf-8")))
+        _diagnostic(prefix + "_flush", message, flush_ended - write_ended,
+                    monotonic_ns=flush_ended, response_bytes=len(line.encode("utf-8")))
+
+
 def _validate_identity(message):
     if message.get("protocol_version") != PROTOCOL_VERSION:
         raise ValueError("unsupported protocol_version")
@@ -242,6 +255,7 @@ def main():
         message = None
         receive_started = time.perf_counter_ns() if _DIAGNOSTICS_ENABLED else 0
         raw = sys.stdin.buffer.readline(MAX_LINE_BYTES + 1)
+        receive_ended = time.perf_counter_ns() if _DIAGNOSTICS_ENABLED else 0
         if not raw:
             return 0
         if len(raw) > MAX_LINE_BYTES or not raw.endswith(b"\n"):
@@ -251,6 +265,11 @@ def main():
             decode_started = time.perf_counter_ns() if _DIAGNOSTICS_ENABLED else 0
             message = json.loads(raw.decode("utf-8"))
             if isinstance(message, dict) and message.get("type") == "work":
+                _diagnostic("request_read_start", message, 0,
+                            monotonic_ns=receive_started, read_scope="line_and_transport_wait")
+                _diagnostic("request_read_end", message, receive_ended - receive_started,
+                            monotonic_ns=receive_ended, read_scope="line_and_transport_wait",
+                            request_bytes=len(raw))
                 _diagnostic("request_received", message,
                             time.perf_counter_ns() - receive_started if _DIAGNOSTICS_ENABLED else 0,
                             request_bytes=len(raw))
@@ -284,12 +303,15 @@ def main():
             encoded = json.dumps(result, separators=(",", ":"), allow_nan=False) + "\n"
             _diagnostic("response_encoded", message, time.perf_counter_ns() - encode_started if _DIAGNOSTICS_ENABLED else 0,
                         response_bytes=len(encoded.encode("utf-8")))
-            write_started = time.perf_counter_ns() if _DIAGNOSTICS_ENABLED else 0
-            sys.stdout.write(encoded)
-            sys.stdout.flush()
-            _diagnostic("response_written", message, time.perf_counter_ns() - write_started if _DIAGNOSTICS_ENABLED else 0)
+            _emit_timed(message, encoded, "response")
             ack_receive_started = time.perf_counter_ns() if _DIAGNOSTICS_ENABLED else 0
             ack_line = sys.stdin.buffer.readline(MAX_LINE_BYTES + 1)
+            ack_receive_ended = time.perf_counter_ns() if _DIAGNOSTICS_ENABLED else 0
+            _diagnostic("ack_read_start", message, 0, monotonic_ns=ack_receive_started,
+                        read_scope="line_and_transport_wait")
+            _diagnostic("ack_read_end", message, ack_receive_ended - ack_receive_started,
+                        monotonic_ns=ack_receive_ended, read_scope="line_and_transport_wait",
+                        ack_bytes=len(ack_line))
             _diagnostic("ack_received", message, time.perf_counter_ns() - ack_receive_started if _DIAGNOSTICS_ENABLED else 0,
                         ack_bytes=len(ack_line))
             if not ack_line or len(ack_line) > MAX_LINE_BYTES or not ack_line.endswith(b"\n"):
@@ -314,10 +336,7 @@ def main():
             encoded = json.dumps(committed, separators=(",", ":"), allow_nan=False) + "\n"
             _diagnostic("committed_ack_encoded", message, time.perf_counter_ns() - encode_started if _DIAGNOSTICS_ENABLED else 0,
                         response_bytes=len(encoded.encode("utf-8")))
-            write_started = time.perf_counter_ns() if _DIAGNOSTICS_ENABLED else 0
-            sys.stdout.write(encoded)
-            sys.stdout.flush()
-            _diagnostic("committed_ack_sent", message, time.perf_counter_ns() - write_started if _DIAGNOSTICS_ENABLED else 0)
+            _emit_timed(message, encoded, "committed_ack")
         except (UnicodeDecodeError, json.JSONDecodeError, ValueError, TypeError, ArithmeticError) as error:
             _diagnostic("error", message, error=str(error)[:512])
             _emit({"type": "error", "protocol_version": PROTOCOL_VERSION,

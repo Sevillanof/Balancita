@@ -59,7 +59,9 @@ export type ReplayTimingEvent = Readonly<{
     | 'replay-work-create'
     | 'runner-invocation'
     | 'receipt-materialize-hash'
-  outcome: 'end' | 'error'
+    | 'market-source-read-cache'
+    | 'market-source-snapshot-preparation'
+  outcome: 'start' | 'end' | 'error'
   monotonic_ms: number
   duration_ms: number
   run_id: string
@@ -304,7 +306,7 @@ export class FuturesReplayDriver {
 
   private emitTiming(
     phase: ReplayTimingEvent['phase'],
-    outcome: 'end' | 'error',
+    outcome: 'start' | 'end' | 'error',
     started: number,
     sourceReceivedSeq: number,
     workId: string | null,
@@ -363,6 +365,7 @@ export class FuturesReplayDriver {
   }> {
     validateTimestamp(receivedCutoff, 'received cutoff')
     this.bindMarketSource(instrument, store)
+    const sourceReadStarted = performance.now()
     if (this.marketSourceEvents === undefined) {
       this.marketSourceEvents = store.eventsAsOf(
         Number.MAX_SAFE_INTEGER,
@@ -384,6 +387,13 @@ export class FuturesReplayDriver {
         appended.at(-1)?.receivedSequence ?? this.marketSourceReadCursor,
       )
     }
+    this.emitTiming(
+      'market-source-read-cache',
+      'end',
+      sourceReadStarted,
+      this.marketSourceReadCursor,
+      null,
+    )
     const allEvents = this.marketSourceEvents
     const eligible = this.marketSourcePending.filter(
       (event) =>
@@ -399,6 +409,14 @@ export class FuturesReplayDriver {
         break
       }
       const receivedAt = Number(source.receivedAt)
+      const snapshotPreparationStarted = performance.now()
+      this.emitTiming(
+        'market-source-snapshot-preparation',
+        'start',
+        snapshotPreparationStarted,
+        Number(source.receivedSequence),
+        null,
+      )
       const gaps = store.gapsAsOf(receivedAt) as Record<string, unknown>[]
       const candles = (
         store.candlesAsOf(receivedAt) as Record<string, unknown>[]
@@ -569,6 +587,13 @@ export class FuturesReplayDriver {
         !marketEvents.some((event) => event.type === 'book_snapshot') ||
         !marketEvents.some((event) => event.type === 'ticker')
       ) {
+        this.emitTiming(
+          'market-source-snapshot-preparation',
+          'end',
+          snapshotPreparationStarted,
+          Number(source.receivedSequence),
+          null,
+        )
         this.marketSourceCursor = sourceSequence
         continue
       }
@@ -580,6 +605,13 @@ export class FuturesReplayDriver {
         events: marketEvents,
       }
       const control = controlForSource?.(source)
+      this.emitTiming(
+        'market-source-snapshot-preparation',
+        'end',
+        snapshotPreparationStarted,
+        Number(source.receivedSequence),
+        null,
+      )
       await this.processEvent(
         {
           sequence: Number(source.receivedSequence),

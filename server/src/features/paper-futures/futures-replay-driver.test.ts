@@ -1205,6 +1205,7 @@ with localcontext() as ctx:
       raw: { fixture: true },
     })
     const ordered = marketStore.eventsAsOf(1010) as Record<string, unknown>[]
+    const timings: Record<string, unknown>[] = []
     const driver = new FuturesReplayDriver({
       runId: 'persisted-market-red',
       manifest: {
@@ -1215,6 +1216,7 @@ with localcontext() as ctx:
         seed: 'fixture',
         fidelity: 'book-trade-ticker.v1',
       },
+      observeTiming: (event) => timings.push(event),
       apply: async (work) => ({
         status: 'committed',
         applied_state_version: work.version + 1,
@@ -1224,6 +1226,26 @@ with localcontext() as ctx:
     await driver.processMarketStore(marketStore, 1010, instrument)
     expect(driver.exportRun().inputs[0]?.sequence).toBe(2)
     expect(driver.exportRun().inputs[0]?.payload.market_snapshot).toBeDefined()
+    expect(timings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          phase: 'market-source-read-cache',
+          run_id: 'persisted-market-red',
+          source_received_seq: 2,
+          work_id: null,
+          assignment_state: 'unassigned_before_work_created',
+          duration_ms: expect.any(Number),
+        }),
+        expect.objectContaining({
+          phase: 'market-source-snapshot-preparation',
+          run_id: 'persisted-market-red',
+          source_received_seq: 2,
+          work_id: null,
+          assignment_state: 'unassigned_before_work_created',
+          duration_ms: expect.any(Number),
+        }),
+      ]),
+    )
     marketStore.close()
   })
 

@@ -104,9 +104,11 @@ class FuturesWorkerProcessTests(unittest.TestCase):
             records = [json.loads(line) for line in trace_path.read_text().splitlines()]
             phases = [record["phase"] for record in records]
             self.assertEqual(phases, [
-                "request_received", "request_decoded", "compute_start", "input_snapshot", "compute_end",
-                "response_encoded", "response_written", "ack_received", "ack_parsed",
-                "committed_ack_encoded", "committed_ack_sent",
+                "request_read_start", "request_read_end", "request_received", "request_decoded",
+                "compute_start", "input_snapshot", "compute_end", "response_encoded",
+                "response_write", "response_flush", "ack_read_start", "ack_read_end",
+                "ack_received", "ack_parsed", "committed_ack_encoded",
+                "committed_ack_write", "committed_ack_flush",
             ])
             for record in records:
                 self.assertEqual((record["request_id"], record["run_id"], record["work_id"]),
@@ -117,7 +119,14 @@ class FuturesWorkerProcessTests(unittest.TestCase):
                 self.assertGreaterEqual(record["duration_ns"], 0)
                 self.assertGreaterEqual(record["rss_bytes"], 0)
             self.assertEqual(records[0]["strategy_evaluations"], "not_instrumented")
-            snapshot = records[3]
+            request_read = records[1]
+            self.assertEqual(request_read["read_scope"], "line_and_transport_wait")
+            self.assertGreaterEqual(request_read["duration_ns"], 0)
+            self.assertEqual(request_read["request_bytes"], enabled[4])
+            self.assertEqual(records[8]["response_bytes"], records[9]["response_bytes"])
+            self.assertGreaterEqual(records[8]["duration_ns"], 0)
+            self.assertGreaterEqual(records[9]["duration_ns"], 0)
+            snapshot = records[5]
             self.assertEqual(snapshot["input_event_count"], 0)
             self.assertEqual(snapshot["book_depth"], 0)
             self.assertEqual(snapshot["state_bytes"], 0)
@@ -144,7 +153,8 @@ class FuturesWorkerProcessTests(unittest.TestCase):
             shutdown = read_message(process)
             stderr = process.stderr.read()
             process.wait(timeout=5)
-            return [ready, result], [ack, shutdown], stderr, process.pid
+            request_bytes = len((json.dumps(command()) + "\n").encode())
+            return [ready, result], [ack, shutdown], stderr, process.pid, request_bytes
         finally:
             if process.poll() is None:
                 process.kill()
@@ -155,7 +165,7 @@ class FuturesWorkerProcessTests(unittest.TestCase):
 
     def test_diagnostic_output_failure_does_not_break_worker_protocol(self):
         with tempfile.TemporaryDirectory() as directory:
-            output, acknowledgements, stderr, _ = self.run_round_trip({
+            output, acknowledgements, stderr, _, _ = self.run_round_trip({
                 "BALANCITA_FUTURES_DIAGNOSTICS_PATH": directory,
             })
         self.assertEqual(output[1]["result"]["realized_net_complete"], "0.09895")
