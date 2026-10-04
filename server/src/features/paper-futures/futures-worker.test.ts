@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { EventEmitter } from 'node:events'
 import {
   FuturesWorker,
@@ -209,6 +209,44 @@ describe('FuturesWorker', () => {
     })
   })
 
+  it('reports forced shutdown when the active child ignores SIGTERM', async () => {
+    const events: Array<Record<string, unknown>> = []
+    let commitStarted!: () => void
+    const started = new Promise<void>((resolve) => {
+      commitStarted = resolve
+    })
+    const worker = new FuturesWorker({
+      observer: (event) => events.push(event),
+      commitResult: async () => {
+        commitStarted()
+        return new Promise(() => {})
+      },
+    })
+    const requestPromise = worker.submit(
+      request('stalled-close-request', 'stalled-close-work', 'long'),
+    )
+    void requestPromise.catch(() => {})
+    await started
+    const child = (
+      worker as unknown as {
+        child: { kill: (signal: NodeJS.Signals) => boolean }
+      }
+    ).child
+    const kill = child.kill.bind(child)
+    child.kill = (signal) => signal === 'SIGTERM' || kill(signal)
+
+    await worker.close()
+
+    expect(events.map((event) => event.phase)).toContain('force_sigkill')
+    expect(
+      events.find((event) => event.phase === 'wait_python_exit_end'),
+    ).toMatchObject({
+      forced: true,
+      graceful: false,
+      signal: 'SIGKILL',
+    })
+  })
+
   it('samples event-loop and worker state only when opted in and clears on close', async () => {
     const events: Array<Record<string, unknown>> = []
     const worker = new FuturesWorker({
@@ -236,14 +274,27 @@ describe('FuturesWorker', () => {
 
   it('ignores observer exceptions and emits active timeout diagnostics', async () => {
     const events: Array<Record<string, unknown>> = []
+    const originalSetTimeout = globalThis.setTimeout
+    let requestTimeout!: () => void
+    const setTimeoutSpy = vi
+      .spyOn(globalThis, 'setTimeout')
+      .mockImplementation(((
+        handler: Parameters<typeof setTimeout>[0],
+        timeout?: number,
+      ) => {
+        const timer = originalSetTimeout(handler, timeout)
+        if (!requestTimeout && timeout === 5_000)
+          requestTimeout = () => handler()
+        return timer
+      }) as typeof setTimeout)
     const worker = new FuturesWorker({
-      timeoutMs: 100,
+      timeoutMs: 5_000,
       observer: (event) => {
         events.push(event)
+        if (event.phase === 'send') requestTimeout()
         throw new Error('observer failure')
       },
       commitResult: async (result) => {
-        await new Promise((resolve) => setTimeout(resolve, 250))
         return {
           status: 'committed',
           applied_state_version: result.applied_state_version,
@@ -256,9 +307,11 @@ describe('FuturesWorker', () => {
         worker.submit(request('timeout-request', 'timeout-work', 'long')),
       ).rejects.toThrow(/timed out/)
     } finally {
+      setTimeoutSpy.mockRestore()
       await worker.close()
     }
     expect(events.some((event) => event.phase === 'active_timeout')).toBe(true)
+    expect(events.some((event) => event.phase === 'queued_timeout')).toBe(false)
   })
 
   it('rejects invalid identity and state version before writing to the process', async () => {
