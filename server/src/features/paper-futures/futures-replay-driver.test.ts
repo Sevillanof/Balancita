@@ -104,7 +104,7 @@ describe('shared causal futures replay driver', () => {
     appendTicker(start, 1)
     for (let seq = 2; seq <= 62; seq += 1) {
       appendBook(start + seq * 100, seq + 1)
-      appendTicker(start + seq * 100, seq + 1)
+      appendTicker(start + seq * 100 + (seq === 11 ? 1 : 0), seq + 1)
     }
     const sourceHash = canonicalHash({
       events: marketStore.eventsAsOf(Number.MAX_SAFE_INTEGER),
@@ -168,36 +168,42 @@ describe('shared causal futures replay driver', () => {
     let baselineStore: FuturesStore | undefined
     let baselineRunner: FuturesCommandRunner | undefined
     const runId = 'idle-cadence-run'
-    const apply = async (work: RuntimeWork) => {
-      const result = await runner.accept({
-        request_id: `request-${work.work_id}`,
-        run_id: runId,
-        work_id: work.work_id,
-        expected_state_version: work.version,
-        payload: {
-          operation: 'futures_runtime.v3',
-          runtime_config: runtimeConfig,
-          instrument,
-          market_snapshot: work.input.payload.market_snapshot as Record<
-            string,
-            unknown
-          >,
-        },
-      }).result
-      return {
-        status: 'committed' as const,
-        applied_state_version: Number(
-          store.getRunProjection(runId)?.state_version,
-        ),
-        economic_projection: { result },
+    const applyFor =
+      (targetStore: FuturesStore, targetRunner: FuturesCommandRunner) =>
+      async (work: RuntimeWork) => {
+        const result = await targetRunner.accept({
+          request_id: `request-${work.work_id}`,
+          run_id: runId,
+          work_id: work.work_id,
+          expected_state_version: work.version,
+          payload: {
+            operation: 'futures_runtime.v3',
+            runtime_config: runtimeConfig,
+            instrument,
+            market_snapshot: work.input.payload.market_snapshot as Record<
+              string,
+              unknown
+            >,
+          },
+        }).result
+        return {
+          status: 'committed' as const,
+          applied_state_version: Number(
+            targetStore.getRunProjection(runId)?.state_version,
+          ),
+          economic_projection: { result },
+        }
       }
-    }
-    const admissionForSource = (id: string, sourceClock: number) =>
-      runner.readAdmissionState(
-        id,
-        policyBody,
-        sourceClock,
-      ) as unknown as Record<string, unknown>
+    const admissionFor =
+      (targetRunner: FuturesCommandRunner) =>
+      (id: string, sourceClock: number) =>
+        targetRunner.readAdmissionState(
+          id,
+          policyBody,
+          sourceClock,
+        ) as unknown as Record<string, unknown>
+    let apply = applyFor(store, runner)
+    let admissionForSource = admissionFor(runner)
     try {
       await runner.accept({
         request_id: 'idle-seed',
@@ -257,6 +263,8 @@ describe('shared causal futures replay driver', () => {
 
       store = new FuturesStore(dbPath)
       runner = new FuturesCommandRunner(store)
+      apply = applyFor(store, runner)
+      admissionForSource = admissionFor(runner)
       driver = await FuturesReplayDriver.resumeMarketStore({
         runId,
         manifest,
@@ -289,6 +297,20 @@ describe('shared causal futures replay driver', () => {
           market_snapshot: createMockMarketSnapshot(start, false, false),
         },
       }).result
+
+      await FuturesReplayDriver.resumeMarketStore({
+        runId,
+        manifest,
+        apply: applyFor(baselineStore, baselineRunner),
+        durableStore: baselineStore,
+        marketStore,
+        receivedCutoff: start + 1000,
+        instrument,
+        admissionForSource: admissionFor(baselineRunner),
+      })
+      expect(baselineStore.getEvaluationProgress(runId)?.cursorRowid).toBe(
+        first.sourceWatermark,
+      )
 
       const runFinancialTail = async (
         targetStore: FuturesStore,
@@ -340,14 +362,14 @@ describe('shared causal futures replay driver', () => {
         const accepted = execute(
           'entry-accepted',
           1,
-          start + 2,
+          start + 1002,
           'long',
           '0.005',
         )
         const admissionBeforeCommit = targetRunner.readAdmissionState(
           runId,
           policyBody,
-          start + 2,
+          start + 1002,
         )
         expect(admissionBeforeCommit.execution_required).toBe(true)
         expect(admissionBeforeCommit.may_omit_entry_evaluation).toBe(false)
@@ -357,17 +379,62 @@ describe('shared causal futures replay driver', () => {
           quantity_btc: '0',
         })
         expect(
-          targetRunner.readAdmissionState(runId, policyBody, start + 3)
+          targetRunner.readAdmissionState(runId, policyBody, start + 1003)
             .execution_required,
         ).toBe(true)
 
-        await execute('entry-before-eligible', 2, start + 101, 'flat').result
+        const cursorBeforeActiveRow =
+          targetStore.getEvaluationProgress(runId)?.cursorRowid
+        const skippedBeforeActiveRow =
+          targetStore.getEvaluationSkippedRanges(runId)
+        const activeSource = (
+          marketStore.eventsAsOf(Number.MAX_SAFE_INTEGER) as Record<
+            string,
+            unknown
+          >[]
+        ).find(
+          (event) =>
+            event.type === 'book' && Number(event.receivedAt) === start + 1100,
+        )!
+        const sourceDriver = await FuturesReplayDriver.resumeMarketStore({
+          runId,
+          manifest,
+          apply: applyFor(targetStore, targetRunner),
+          durableStore: targetStore,
+          marketStore,
+          receivedCutoff: start + 1100,
+          instrument,
+          admissionForSource: admissionFor(targetRunner),
+        })
+        const sourceRun = sourceDriver.exportRun()
+        expect(sourceRun.inputs).toHaveLength(1)
+        expect(sourceRun.inputs[0]?.sequence).toBe(
+          activeSource.receivedSequence,
+        )
+        expect(sourceRun.work).toHaveLength(1)
+        expect(sourceRun.work[0]?.receipt.status).toBe('committed')
+        expect(sourceRun.work[0]?.receipt.applied_state_version).toBe(
+          targetStore.getRunProjection(runId)?.state_version,
+        )
+        expect(targetStore.getEvaluationProgress(runId)?.cursorRowid).toBe(
+          activeSource.receivedSequence,
+        )
+        expect(
+          targetStore.getEvaluationProgress(runId)?.cursorRowid,
+        ).toBeGreaterThan(cursorBeforeActiveRow!)
+        expect(targetStore.getEvaluationSkippedRanges(runId)).toEqual(
+          skippedBeforeActiveRow,
+        )
         expect(targetStore.getRunProjection(runId)?.result).toMatchObject({
           quantity_btc: '0',
         })
+        expect(
+          targetRunner.readAdmissionState(runId, policyBody, start + 1100)
+            .active_order_count,
+        ).toBe(1)
 
-        const partialSnapshot = pythonMarket(start + 102, 'long')
-        const partialBook = bookFor(partialSnapshot, start + 102)
+        const partialSnapshot = pythonMarket(start + 1102, 'long')
+        const partialBook = bookFor(partialSnapshot, start + 1102)
         ;(partialBook.asks as { quantity_btc: string }[])[0]!.quantity_btc =
           '0.005'
         await targetRunner
@@ -375,7 +442,9 @@ describe('shared causal futures replay driver', () => {
             request_id: 'request-entry-partial',
             run_id: runId,
             work_id: 'entry-partial',
-            expected_state_version: 3,
+            expected_state_version: Number(
+              targetStore.getRunProjection(runId)?.state_version,
+            ),
             payload: {
               operation: 'futures_runtime.v3',
               runtime_config: runtimeConfig,
@@ -390,7 +459,7 @@ describe('shared causal futures replay driver', () => {
           quantity_btc: '0.005',
         })
         expect(
-          targetRunner.readAdmissionState(runId, policyBody, start + 102)
+          targetRunner.readAdmissionState(runId, policyBody, start + 1102)
             .execution_required,
         ).toBe(true)
 
@@ -401,8 +470,8 @@ describe('shared causal futures replay driver', () => {
           unknown
         >
         const stop = BigInt(protection.stop as string)
-        const atStop = pythonMarket(start + 202, 'long')
-        bookFor(atStop, start + 202)
+        const atStop = pythonMarket(start + 1202, 'long')
+        bookFor(atStop, start + 1202)
         for (const event of atStop.events as Record<string, unknown>[]) {
           if (event.type === 'book_snapshot') {
             event.bids = [
@@ -417,7 +486,9 @@ describe('shared causal futures replay driver', () => {
           request_id: 'request-stop-trigger',
           run_id: runId,
           work_id: 'stop-trigger',
-          expected_state_version: 4,
+          expected_state_version: Number(
+            targetStore.getRunProjection(runId)?.state_version,
+          ),
           payload: {
             operation: 'futures_runtime.v3',
             runtime_config: runtimeConfig,
@@ -432,12 +503,12 @@ describe('shared causal futures replay driver', () => {
             .reduction_intent_id,
         ).toEqual(expect.any(String))
         expect(
-          targetRunner.readAdmissionState(runId, policyBody, start + 202)
+          targetRunner.readAdmissionState(runId, policyBody, start + 1202)
             .execution_required,
         ).toBe(true)
 
-        const atClose = pythonMarket(start + 302, 'flat')
-        bookFor(atClose, start + 302)
+        const atClose = pythonMarket(start + 1302, 'flat')
+        bookFor(atClose, start + 1302)
         for (const event of atClose.events as Record<string, unknown>[]) {
           if (event.type === 'book_snapshot') {
             event.bids = [
@@ -452,7 +523,9 @@ describe('shared causal futures replay driver', () => {
           request_id: 'request-protection-close',
           run_id: runId,
           work_id: 'protection-close',
-          expected_state_version: 5,
+          expected_state_version: Number(
+            targetStore.getRunProjection(runId)?.state_version,
+          ),
           payload: {
             operation: 'futures_runtime.v3',
             runtime_config: runtimeConfig,
@@ -465,12 +538,13 @@ describe('shared causal futures replay driver', () => {
           fees_usd: '0.4998725',
         })
         expect(
-          targetRunner.readAdmissionState(runId, policyBody, start + 302)
+          targetRunner.readAdmissionState(runId, policyBody, start + 1302)
             .execution_required,
         ).toBe(true)
         return {
           final: targetStore.getRunProjection(runId)?.result,
           events: targetStore.exportRun(runId).events,
+          sourceCursor: targetStore.getEvaluationProgress(runId)?.cursorRowid,
         }
       }
 
@@ -483,8 +557,9 @@ describe('shared causal futures replay driver', () => {
         >[]
       ).length
       const restartedFinal = await runFinancialTail(store, runner)
+      expect(restartedFinal.sourceCursor).toBeGreaterThan(resumedCursor!)
       expect(store.getEvaluationProgress(runId)?.cursorRowid).toBe(
-        resumedCursor,
+        restartedFinal.sourceCursor,
       )
       const continuousFinal = await runFinancialTail(
         baselineStore,
@@ -496,6 +571,7 @@ describe('shared causal futures replay driver', () => {
           { economic_projection: continuousFinal },
         ),
       ).toMatchObject({ equal: true, differences: [] })
+      expect(continuousFinal.sourceCursor).toBe(restartedFinal.sourceCursor)
       expect(store.getEvaluationSkippedRanges(runId)).toEqual(auditedIdleRanges)
       expect(store.verifyRun(runId)).toBe(true)
       expect(baselineStore.verifyRun(runId)).toBe(true)
