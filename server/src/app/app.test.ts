@@ -19,7 +19,7 @@ import type {
   GeminiGenerateParams,
 } from '../platform/gemini/gemini-client.ts'
 import { AnalysisRateLimiter } from '../platform/limits.ts'
-import { buildApp } from './app.ts'
+import { buildApp, buildFuturesSourceQueueSnapshot } from './app.ts'
 import type {
   FuturesLifecycleEvent,
   FuturesSourceQueueEvent,
@@ -936,6 +936,103 @@ function testConfigFrom(env: Record<string, string | undefined> = {}) {
 }
 
 describe('PAPER_LIVE startup integration', () => {
+  it('counts source backlog after durable inspection progress, not financial progress', () => {
+    const root = mkdtempSync(join(tmpdir(), 'futures-source-observer-cursor-'))
+    const account = new FuturesStore(join(root, 'account.sqlite'))
+    const source = new FuturesMarketStore(join(root, 'market.sqlite'))
+    try {
+      account.createRun({
+        runId: 'observer-progress-run',
+        config: {
+          ledger_version: 'linear-usd-ledger.v1',
+          decimal_precision: 50,
+          leverage: '1',
+        },
+        seed: { cash_usd: '10000' },
+        instrument: { instrument_id: 'kraken-futures:PF_XBTUSD' },
+        costs: {
+          version: 'kraken-futures-eea-btcusd-base.v1',
+          maker: '0.0002',
+          taker: '0.0005',
+        },
+      })
+      account.bindEvaluationProgress({
+        runId: 'observer-progress-run',
+        policyIdentity: 'observer-policy-hash',
+        sourceIdentity: 'observer-source-hash',
+        baselineRowid: 2,
+        nextDueAt: 5000,
+        nextDueReasons: ['strategy-clock'],
+      })
+      const head = account.getAdmissionHead('observer-progress-run')!
+      account.commitEvaluationSkippedRange({
+        runId: 'observer-progress-run',
+        expectedPolicyIdentity: 'observer-policy-hash',
+        expectedSourceIdentity: 'observer-source-hash',
+        expectedStateVersion: head.stateVersion,
+        expectedHeadHash: head.headHash,
+        fromRowid: 3,
+        toRowid: 4,
+        inspectedRowCount: 2,
+        reason: 'confirmed-idle',
+        nextDueAt: 5000,
+        nextDueReasons: ['strategy-clock'],
+      })
+      const sourceRow = {
+        type: 'trade',
+        productId: 'PF_XBTUSD',
+        seq: 1,
+        eventTime: 1000,
+        receivedAt: 1000,
+        persistedAt: 1000,
+        epoch: 1,
+        side: 'buy',
+        tradeType: 'fill',
+        quantityBtc: '0.01',
+        priceUsd: '90000',
+        recovered: false,
+        raw: { price: '90000', qty: '0.01' },
+      }
+      for (let index = 1; index <= 5; index += 1)
+        source.append({ ...sourceRow, seq: index, uid: `observer-${index}` })
+
+      const snapshot = buildFuturesSourceQueueSnapshot({
+        source,
+        sourceReceivedSeq: 5,
+        receivedCutoff: 5000,
+        financialWatermark: 2,
+        progress: {
+          inspectionPolicyBound: true,
+          lastInspectedSourceSeq: account.getEvaluationProgress(
+            'observer-progress-run',
+          )!.cursorRowid,
+          // This plumbing fixture supplies the separate financial count; it creates no receipt.
+          lastFinancialSourceSeq: 2,
+        },
+      })
+
+      expect(snapshot).toMatchObject({
+        source_watermark: 2,
+        last_financial_source_seq: 2,
+        last_inspected_source_seq: 4,
+        source_events_persisted: 5,
+        durable_source_backlog: 1,
+        inspection_policy_bound: true,
+      })
+      expect(account.getAdmissionHead('observer-progress-run')).toMatchObject({
+        stateVersion: 0,
+      })
+      expect(account.loadPendingCommands()).toEqual([])
+      expect(
+        account.getEvaluationSkippedRanges('observer-progress-run'),
+      ).toHaveLength(1)
+    } finally {
+      account.close()
+      source.close()
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   it('reports pending source rows when shutdown interrupts source draining', async () => {
     const root = mkdtempSync(join(tmpdir(), 'balancita-paper-live-close-'))
     const accountPath = join(root, 'account.sqlite')

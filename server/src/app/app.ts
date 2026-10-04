@@ -188,6 +188,52 @@ export interface FuturesSourceQueueEvent {
   readonly error?: string
 }
 
+export function buildFuturesSourceQueueSnapshot(input: {
+  source: FuturesMarketStore | undefined
+  sourceReceivedSeq: number
+  receivedCutoff: number
+  financialWatermark: number
+  progress:
+    | {
+        inspectionPolicyBound: boolean
+        lastInspectedSourceSeq: number | null
+        lastFinancialSourceSeq: number | null
+      }
+    | undefined
+}): Pick<
+  FuturesSourceQueueEvent,
+  | 'durable_source_backlog'
+  | 'source_watermark'
+  | 'last_inspected_source_seq'
+  | 'last_financial_source_seq'
+  | 'source_events_persisted'
+  | 'inspection_policy_bound'
+> {
+  const inspectionCursor = input.progress?.inspectionPolicyBound
+    ? input.progress.lastInspectedSourceSeq
+    : null
+  const backlogCursor = input.progress?.inspectionPolicyBound
+    ? input.progress.lastInspectedSourceSeq
+    : input.financialWatermark
+  const backlogCursorValid =
+    backlogCursor !== null && backlogCursor <= input.sourceReceivedSeq
+  const inspectionCursorValid =
+    inspectionCursor !== null && inspectionCursor <= input.sourceReceivedSeq
+  return {
+    durable_source_backlog: backlogCursorValid
+      ? (input.source?.pendingEventsAfterAsOf(
+          backlogCursor,
+          input.receivedCutoff,
+        ).count ?? null)
+      : null,
+    source_watermark: input.financialWatermark,
+    last_inspected_source_seq: inspectionCursorValid ? inspectionCursor : null,
+    last_financial_source_seq: input.progress?.lastFinancialSourceSeq ?? null,
+    source_events_persisted: input.source?.eventCount() ?? null,
+    inspection_policy_bound: input.progress?.inspectionPolicyBound ?? false,
+  }
+}
+
 const defaultForecastScheduler: ForecastLoopScheduler = {
   setInterval: (callback, intervalMs) => setInterval(callback, intervalMs),
   clearInterval: (handle) =>
@@ -802,23 +848,13 @@ export async function buildApp(options: {
   ): void => {
     const now = performance.now()
     const oldest = futuresSourceJobs[0]
-    const progress = futuresRuntime?.getSourceProgressSnapshot()
-    const inspectionCursor = progress?.inspectionPolicyBound
-      ? progress.lastInspectedSourceSeq
-      : null
-    const backlogCursor = progress?.inspectionPolicyBound
-      ? progress.lastInspectedSourceSeq
-      : futuresSourceWatermark
-    const inspectedCursorValid =
-      inspectionCursor !== null && inspectionCursor <= job.sourceReceivedSeq
-    const backlogCursorValid =
-      backlogCursor !== null && backlogCursor <= job.sourceReceivedSeq
-    const pendingSourceRows = backlogCursorValid
-      ? (futuresMarketStore?.pendingEventsAfterAsOf(
-          backlogCursor,
-          job.receivedAt,
-        ).count ?? null)
-      : null
+    const sourceProgress = buildFuturesSourceQueueSnapshot({
+      source: futuresMarketStore,
+      sourceReceivedSeq: job.sourceReceivedSeq,
+      receivedCutoff: job.receivedAt,
+      financialWatermark: futuresSourceWatermark,
+      progress: futuresRuntime?.getSourceProgressSnapshot(),
+    })
     try {
       options.overrides?.futuresSourceQueueObserver?.({
         phase,
@@ -827,14 +863,7 @@ export async function buildApp(options: {
         running_count: futuresSourceRunning,
         pending_count: futuresSourceJobs.length,
         pending_notifications: futuresSourceJobs.length,
-        durable_source_backlog: pendingSourceRows,
-        source_watermark: futuresSourceWatermark,
-        last_inspected_source_seq: inspectedCursorValid
-          ? inspectionCursor
-          : null,
-        last_financial_source_seq: progress?.lastFinancialSourceSeq ?? null,
-        source_events_persisted: futuresMarketStore?.eventCount() ?? null,
-        inspection_policy_bound: progress?.inspectionPolicyBound ?? false,
+        ...sourceProgress,
         oldest_job_age_ms: oldest ? Math.max(0, now - oldest.enqueuedAt) : 0,
         source_received_seq: job.sourceReceivedSeq,
         assignment_state: 'unassigned_before_work_created',
