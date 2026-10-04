@@ -87,6 +87,8 @@ import { AnalysisRateLimiter } from '../platform/limits.ts'
 import { AnalyzeService } from '../features/analysis/service.ts'
 import { parseAnalysisInputRequest } from '../features/analysis/wire.ts'
 import { FuturesSessionRuntime } from '../features/paper-futures/futures-session-runtime.ts'
+import type { FuturesSqlObserver } from '../features/paper-futures/futures-store.ts'
+import type { FuturesWorkerDiagnostic } from '../features/paper-futures/futures-worker.ts'
 import { canonicalHash } from '../features/paper-futures/futures-canonical.ts'
 import { registerTerminalStream } from '../features/terminal-stream/terminal-stream.ts'
 import {
@@ -364,6 +366,8 @@ export async function buildApp(options: {
   config: ServerConfig
   overrides?: Partial<AnalysisDependencies & MarketDependencies> & {
     futuresFundingFetch?: HistoricalFundingFetch
+    futuresSqlObserver?: FuturesSqlObserver
+    futuresWorkerObserver?: (event: FuturesWorkerDiagnostic) => void
   }
 }): Promise<FastifyInstance> {
   const { config } = options
@@ -701,10 +705,14 @@ export async function buildApp(options: {
         ? new FuturesSessionRuntime({
             dbPath: config.futuresDbPath,
             mode: config.futuresMode,
+            observer: options.overrides?.futuresSqlObserver,
+            workerObserver: options.overrides?.futuresWorkerObserver,
           })
         : new FuturesSessionRuntime({
             dbPath: config.futuresDbPath,
             mode: config.futuresMode,
+            observer: options.overrides?.futuresSqlObserver,
+            workerObserver: options.overrides?.futuresWorkerObserver,
             ...(futuresMarketStore ? { replaySource: futuresMarketStore } : {}),
             ...(sourceInitialHash
               ? { replaySourceFileHash: sourceInitialHash }

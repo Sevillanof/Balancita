@@ -1,4 +1,6 @@
 import { FuturesCommandRunner } from './futures-command-runner.ts'
+import type { FuturesSqlObserver } from './futures-store.ts'
+import type { FuturesWorkerDiagnostic } from './futures-worker.ts'
 import { canonicalHash } from './futures-canonical.ts'
 import { FuturesStore } from './futures-store.ts'
 import type { FuturesWorkerRequest } from './futures-worker.ts'
@@ -97,6 +99,8 @@ export class FuturesSessionRuntime {
     replaySourceMetadataHash?: string
     replaySourceQualityHash?: string
     replayCutoffMs?: number
+    observer?: FuturesSqlObserver
+    workerObserver?: (event: FuturesWorkerDiagnostic) => void
   }) {
     this.mode = options.mode
     if (options.mode === 'replay' && options.replaySource === undefined)
@@ -160,7 +164,10 @@ export class FuturesSessionRuntime {
       },
     })
     this.runId = this.store.getLatestRunId() ?? primaryRunId
-    this.runner = new FuturesCommandRunner(this.store)
+    this.runner = new FuturesCommandRunner(this.store, {
+      observer: options.observer,
+      workerObserver: options.workerObserver,
+    })
   }
 
   commandFactory = (command: TerminalPaperCommand): FuturesWorkerRequest => {

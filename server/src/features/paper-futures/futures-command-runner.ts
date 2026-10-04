@@ -7,6 +7,7 @@ import {
 import {
   FuturesWorker,
   type FuturesWorkerCommit,
+  type FuturesWorkerDiagnostic,
   type FuturesWorkerRequest,
   type FuturesWorkerResult,
   validateFuturesWorkerRequest,
@@ -27,11 +28,15 @@ export class FuturesCommandRunner {
 
   constructor(
     store: FuturesStore,
-    options: { readonly observer?: FuturesSqlObserver } = {},
+    options: {
+      readonly observer?: FuturesSqlObserver
+      readonly workerObserver?: (event: FuturesWorkerDiagnostic) => void
+    } = {},
   ) {
     this.store = store
     this.sqlObserver = options.observer
     this.worker = new FuturesWorker({
+      observer: options.workerObserver,
       commitResult: (result, request) => this.commit(result, request),
     })
   }

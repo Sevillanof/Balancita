@@ -1,4 +1,4 @@
-import { mkdirSync } from 'node:fs'
+import { appendFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { buildApp } from '../server/src/app/app.ts'
 import { serverConfigFrom } from '../server/src/platform/config.ts'
@@ -25,6 +25,13 @@ process.on('message', async (message) => {
         }
       }
       mkdirSync(message.temp, { recursive: true })
+      const workerTracePath = join(message.temp, 'worker-observer.jsonl')
+      const sqliteTracePath = join(message.temp, 'sqlite-observer.jsonl')
+      const pythonDiagnosticsPath = join(
+        message.temp,
+        'python-diagnostics.jsonl',
+      )
+      process.env.BALANCITA_FUTURES_DIAGNOSTICS_PATH = pythonDiagnosticsPath
       app = await buildApp({
         config: serverConfigFrom({
           FUTURES_MODE: 'paper_live',
@@ -41,6 +48,10 @@ process.on('message', async (message) => {
               headers: message.funding.headers,
             }),
           futuresClock: () => activeTimestamp,
+          futuresWorkerObserver: (event) =>
+            appendFileSync(workerTracePath, `${JSON.stringify(event)}\n`),
+          futuresSqlObserver: (event) =>
+            appendFileSync(sqliteTracePath, `${JSON.stringify(event)}\n`),
         },
       })
       await app.ready()
