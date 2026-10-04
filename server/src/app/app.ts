@@ -155,9 +155,25 @@ export interface FuturesLifecycleEvent {
   readonly state: 'begin' | 'end' | 'error'
   readonly monotonic_ms: number
   readonly resource_id?: string
+  readonly pending_count?: number
+  readonly running_count?: number
 }
 
 export type FuturesLifecycleObserver = (event: FuturesLifecycleEvent) => void
+
+export interface FuturesSourceQueueEvent {
+  readonly phase: 'enqueue' | 'start' | 'end' | 'error'
+  readonly monotonic_ms: number
+  readonly queue_count: number
+  readonly running_count: number
+  readonly pending_count: number
+  readonly oldest_job_age_ms: number
+  readonly source_received_seq: number
+  readonly assignment_state: 'unassigned_before_work_created'
+  readonly request_id?: string
+  readonly run_id?: string
+  readonly error?: string
+}
 
 const defaultForecastScheduler: ForecastLoopScheduler = {
   setInterval: (callback, intervalMs) => setInterval(callback, intervalMs),
@@ -378,6 +394,7 @@ export async function buildApp(options: {
     futuresSqlObserver?: FuturesSqlObserver
     futuresWorkerObserver?: (event: FuturesWorkerDiagnostic) => void
     futuresLifecycleObserver?: FuturesLifecycleObserver
+    futuresSourceQueueObserver?: (event: FuturesSourceQueueEvent) => void
   }
 }): Promise<FastifyInstance> {
   const { config } = options
@@ -744,6 +761,36 @@ export async function buildApp(options: {
   let futuresLastReceivedAt: number | null = null
   let futuresInstrumentMetadataHash: string | null = null
   let futuresMarketTail = Promise.resolve()
+  const futuresSourceJobs: Array<{ enqueuedAt: number }> = []
+  let futuresSourceRunning = 0
+  const observeFuturesSourceQueue = (
+    phase: FuturesSourceQueueEvent['phase'],
+    job: { enqueuedAt: number; sourceReceivedSeq: number },
+    error?: unknown,
+  ): void => {
+    const now = performance.now()
+    const oldest = futuresSourceJobs[0]
+    try {
+      options.overrides?.futuresSourceQueueObserver?.({
+        phase,
+        monotonic_ms: now,
+        queue_count: futuresSourceJobs.length - futuresSourceRunning,
+        running_count: futuresSourceRunning,
+        pending_count: futuresSourceJobs.length,
+        oldest_job_age_ms: oldest ? Math.max(0, now - oldest.enqueuedAt) : 0,
+        source_received_seq: job.sourceReceivedSeq,
+        assignment_state: 'unassigned_before_work_created',
+        ...(futuresRuntime === undefined
+          ? {}
+          : { run_id: futuresRuntime.runId }),
+        ...(error === undefined
+          ? {}
+          : { error: error instanceof Error ? error.message : String(error) }),
+      })
+    } catch {
+      // Queue diagnostics must never interfere with market processing.
+    }
+  }
   let futuresCandleTimer: ReturnType<typeof setInterval> | undefined
   let futuresFundingTimer: ReturnType<typeof setInterval> | undefined
   let futuresFundingClient:
@@ -762,6 +809,12 @@ export async function buildApp(options: {
         phase,
         state,
         monotonic_ms: performance.now(),
+        ...(phase === 'futures-market-tail-drain'
+          ? {
+              pending_count: futuresSourceJobs.length,
+              running_count: futuresSourceRunning,
+            }
+          : {}),
         ...(resourceId === undefined ? {} : { resource_id: resourceId }),
       })
     } catch {
@@ -1098,14 +1151,23 @@ export async function buildApp(options: {
                   : null,
                 normalized,
               })
-              futuresMarketTail = futuresMarketTail
-                .then(() =>
-                  futuresRuntime.processMarketEvidence(
+              const sourceJob = {
+                enqueuedAt: performance.now(),
+                sourceReceivedSeq: event.seq,
+              }
+              futuresSourceJobs.push(sourceJob)
+              observeFuturesSourceQueue('enqueue', sourceJob)
+              futuresMarketTail = futuresMarketTail.then(async () => {
+                futuresSourceRunning += 1
+                observeFuturesSourceQueue('start', sourceJob)
+                let failure: unknown
+                try {
+                  await futuresRuntime!.processMarketEvidence(
                     futuresMarketStore!,
                     event.receivedAt,
-                  ),
-                )
-                .catch((error: unknown) => {
+                  )
+                } catch (error: unknown) {
+                  failure = error
                   console.error(
                     'futures runtime evidence processing failed',
                     error,
@@ -1113,7 +1175,15 @@ export async function buildApp(options: {
                   futuresStatus = 'unavailable'
                   futuresStatusReason =
                     error instanceof Error ? error.message : 'runtime_error'
-                })
+                } finally {
+                  futuresSourceRunning -= 1
+                  const index = futuresSourceJobs.indexOf(sourceJob)
+                  if (index >= 0) futuresSourceJobs.splice(index, 1)
+                  if (failure === undefined)
+                    observeFuturesSourceQueue('end', sourceJob)
+                  else observeFuturesSourceQueue('error', sourceJob, failure)
+                }
+              })
             }
             return inserted
           },

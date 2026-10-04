@@ -21,6 +21,7 @@ import type {
 import { AnalysisRateLimiter } from '../platform/limits.ts'
 import { buildApp } from './app.ts'
 import type {
+  FuturesSourceQueueEvent,
   ForecastLoopScheduler,
   MarketCollectorLifecycle,
   OhlcCollectorLifecycle,
@@ -989,6 +990,7 @@ describe('PAPER_LIVE startup integration', () => {
       send: () => undefined,
       close: () => undefined,
     }
+    const sourceQueueEvents: FuturesSourceQueueEvent[] = []
     const app = await buildApp({
       config: testConfigFrom({
         FUTURES_MODE: 'paper_live',
@@ -996,6 +998,10 @@ describe('PAPER_LIVE startup integration', () => {
         FUTURES_MARKET_DB_PATH: join(root, 'market.sqlite'),
       }),
       overrides: {
+        futuresSourceQueueObserver: (event: FuturesSourceQueueEvent) => {
+          sourceQueueEvents.push(event)
+          throw new Error('source queue observer failed')
+        },
         futuresFundingFetch: async () =>
           new Response(
             JSON.stringify({
@@ -1108,6 +1114,31 @@ describe('PAPER_LIVE startup integration', () => {
       await new Promise((resolve) => setTimeout(resolve, 150))
     } finally {
       await app.close()
+      expect(sourceQueueEvents.map((event) => event.phase)).toContain('enqueue')
+      expect(sourceQueueEvents.map((event) => event.phase)).toContain('start')
+      expect(
+        sourceQueueEvents.some((event) =>
+          ['end', 'error'].includes(String(event.phase)),
+        ),
+      ).toBe(true)
+      expect(
+        Math.max(
+          ...sourceQueueEvents.map((event) => Number(event.pending_count)),
+        ),
+      ).toBeGreaterThan(0)
+      expect(
+        sourceQueueEvents.every(
+          (event) => typeof event.source_received_seq === 'number',
+        ),
+      ).toBe(true)
+      expect(
+        sourceQueueEvents.every((event) => event.oldest_job_age_ms >= 0),
+      ).toBe(true)
+      expect(sourceQueueEvents.at(-1)).toMatchObject({
+        pending_count: 0,
+        running_count: 0,
+        queue_count: 0,
+      })
       const account = new FuturesStore(join(root, 'account.sqlite'))
       const source = new (
         await import('../features/kraken-futures/futures-market-store.ts')
