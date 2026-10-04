@@ -1,3 +1,40 @@
+export function classifyReplayCompletion({ closeMessage, processed, total }) {
+  const processingComplete =
+    Number.isSafeInteger(processed) &&
+    Number.isSafeInteger(total) &&
+    processed === total
+  const closed = closeMessage?.type === 'closed'
+  const pending = closeMessage?.durable_pending_source_rows
+  const knownPending = Number.isSafeInteger(pending) && pending >= 0
+  let outcome = 'unknown_processing'
+
+  if (knownPending && pending > 0) outcome = 'stopped_deferred'
+  else if (
+    knownPending &&
+    pending === 0 &&
+    Number.isSafeInteger(closeMessage.source_count) &&
+    Number.isSafeInteger(closeMessage.source_watermark) &&
+    closeMessage.source_watermark === closeMessage.source_count &&
+    closeMessage.normal_close === true &&
+    processingComplete &&
+    closed
+  )
+    outcome = 'source_complete'
+
+  return {
+    outcome,
+    processing_complete: processingComplete,
+    closed,
+    durable_pending_source_rows: knownPending ? pending : null,
+    source_count: Number.isSafeInteger(closeMessage?.source_count)
+      ? closeMessage.source_count
+      : null,
+    source_watermark: Number.isSafeInteger(closeMessage?.source_watermark)
+      ? closeMessage.source_watermark
+      : null,
+  }
+}
+
 export function createReplayScheduler({
   rows,
   deliver,

@@ -4,7 +4,10 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 import { performance } from 'node:perf_hooks'
-import { createReplayScheduler } from './offline-futures-scheduler.mjs'
+import {
+  classifyReplayCompletion,
+  createReplayScheduler,
+} from './offline-futures-scheduler.mjs'
 
 const input = resolve(process.argv[2] ?? '')
 if (!process.argv[2]) throw new Error('Pass the immutable JSONL input path.')
@@ -64,6 +67,7 @@ let childPid = child.pid
 let outcome = 'starting'
 let error = null
 let childClosed = false
+let closeClassification = null
 let forcedTermination = false
 const writeReport = (partial = false) => {
   if (finalized) return
@@ -87,6 +91,12 @@ const writeReport = (partial = false) => {
         child_pid: childPid,
         child_process_group: childPid,
         child_closed: childClosed,
+        processing_complete: closeClassification?.processing_complete ?? false,
+        source_processing_outcome: closeClassification?.outcome ?? outcome,
+        source_count: closeClassification?.source_count ?? null,
+        source_watermark: closeClassification?.source_watermark ?? null,
+        durable_pending_source_rows:
+          closeClassification?.durable_pending_source_rows ?? null,
         child_exit_code: child.exitCode,
         child_signal_code: child.signalCode,
         forced_termination: forcedTermination,
@@ -190,7 +200,12 @@ child.on('message', (message) => {
     killOwnedGroup()
   } else if (message.type === 'closed') {
     childClosed = true
-    outcome = 'replay_complete'
+    closeClassification = classifyReplayCompletion({
+      closeMessage: message,
+      processed: delivered.length,
+      total: frames.length,
+    })
+    outcome = closeClassification.outcome
     writeReport()
   }
 })

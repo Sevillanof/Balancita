@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { createReplayScheduler } from './offline-futures-scheduler.mjs'
+import {
+  classifyReplayCompletion,
+  createReplayScheduler,
+} from './offline-futures-scheduler.mjs'
 
 describe('offline replay scheduler', () => {
   afterEach(() => vi.useRealTimers())
@@ -63,5 +66,52 @@ describe('offline replay scheduler', () => {
     await vi.advanceTimersByTimeAsync(20)
     expect(delivered).toEqual([0, 10, 20])
     expect(scheduler.processed).toBe(3)
+  })
+
+  it('does not report replay complete when close reports durable pending rows', () => {
+    const closeMessage = {
+      type: 'closed',
+      source_count: 6195,
+      source_watermark: 127,
+      durable_pending_source_rows: 6068,
+      normal_close: true,
+    }
+
+    expect(
+      classifyReplayCompletion({
+        closeMessage,
+        processed: 6195,
+        total: 6195,
+      }),
+    ).toMatchObject({
+      outcome: 'stopped_deferred',
+      processing_complete: true,
+      closed: true,
+      durable_pending_source_rows: 6068,
+    })
+    expect(
+      classifyReplayCompletion({
+        closeMessage: {
+          ...closeMessage,
+          source_count: 6195,
+          source_watermark: 6195,
+          durable_pending_source_rows: 0,
+        },
+        processed: 6195,
+        total: 6195,
+      }).outcome,
+    ).toBe('source_complete')
+    expect(
+      classifyReplayCompletion({
+        closeMessage: { type: 'closed', normal_close: true },
+        processed: 6194,
+        total: 6195,
+      }),
+    ).toMatchObject({
+      outcome: 'unknown_processing',
+      processing_complete: false,
+      closed: true,
+      durable_pending_source_rows: null,
+    })
   })
 })

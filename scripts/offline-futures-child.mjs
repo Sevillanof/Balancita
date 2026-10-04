@@ -6,6 +6,7 @@ import { serverConfigFrom } from '../server/src/platform/config.ts'
 let socket
 let app
 let activeTimestamp
+let closeSourceState = null
 process.on('message', async (message) => {
   try {
     if (message.type === 'start') {
@@ -61,7 +62,20 @@ process.on('message', async (message) => {
           futuresSourceQueueObserver: (event) =>
             appendFileSync(sourceQueueTracePath, `${JSON.stringify(event)}\n`),
           futuresLifecycleObserver: (event) =>
-            appendFileSync(closePhasesTracePath, `${JSON.stringify(event)}\n`),
+            (() => {
+              appendFileSync(closePhasesTracePath, `${JSON.stringify(event)}\n`)
+              if (Number.isSafeInteger(event.deferred_source_rows)) {
+                closeSourceState = {
+                  durable_pending_source_rows: event.deferred_source_rows,
+                  source_watermark: Number.isSafeInteger(event.source_watermark)
+                    ? event.source_watermark
+                    : null,
+                  source_count: Number.isSafeInteger(event.source_count)
+                    ? event.source_count
+                    : null,
+                }
+              }
+            })(),
         },
       })
       await app.ready()
@@ -72,7 +86,11 @@ process.on('message', async (message) => {
       process.send?.({ type: 'delivered', id: message.id })
     } else if (message.type === 'finish') {
       await app?.close()
-      process.send?.({ type: 'closed' })
+      process.send?.({
+        type: 'closed',
+        normal_close: true,
+        ...closeSourceState,
+      })
       process.disconnect()
     }
   } catch (error) {
