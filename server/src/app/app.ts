@@ -851,6 +851,23 @@ export async function buildApp(options: {
               status: futuresStatus,
               reason: futuresStatusReason ?? null,
               last_received_at: futuresLastReceivedAt,
+              latest_quote: (() => {
+                const event = futuresMarketStore?.latestTickerAsOf(
+                  Number.MAX_SAFE_INTEGER,
+                )
+                return event
+                  ? {
+                      last: event.last ?? null,
+                      mark: event.mark ?? null,
+                      event_time: event.eventTime,
+                      received_at: event.receivedAt,
+                      persisted_at: event.persistedAt,
+                      epoch: event.epoch,
+                      sequence: event.seq,
+                      received_sequence: event.receivedSequence,
+                    }
+                  : null
+              })(),
               book_status: futuresCollector?.book.valid
                 ? 'valid'
                 : 'unavailable',

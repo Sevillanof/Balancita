@@ -586,6 +586,23 @@ export class FuturesMarketStore {
     ).map(withReceivedSequence)
   }
 
+  latestTickerAsOf(
+    receivedCutoff: number,
+  ): Record<string, unknown> | undefined {
+    time(receivedCutoff, 'receivedCutoff')
+    const row = this.db
+      .prepare(
+        `SELECT normalized_json, rowid AS received_sequence
+         FROM paper_futures_market_events
+         WHERE feed='ticker' AND received_at<=?
+         ORDER BY received_at DESC,rowid DESC LIMIT 1`,
+      )
+      .get(receivedCutoff) as StoredRow | undefined
+    return row
+      ? (withReceivedSequence(row) as Record<string, unknown>)
+      : undefined
+  }
+
   eventCount(): number {
     const row = this.db
       .prepare('SELECT COUNT(*) AS count FROM paper_futures_market_events')

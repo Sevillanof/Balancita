@@ -38,6 +38,7 @@ import type { FuturesSocket } from '../features/kraken-futures/futures-market.ts
 import { FuturesMarketStore } from '../features/kraken-futures/futures-market-store.ts'
 import {
   PAPER_MARKET_QUALITY_POLICY,
+  parseTickerMessage,
   validateInstrumentCatalog,
 } from '../features/kraken-futures/futures-market.ts'
 
@@ -797,6 +798,85 @@ function testConfigFrom(env: Record<string, string | undefined> = {}) {
 }
 
 describe('PAPER_LIVE startup integration', () => {
+  it('restores the latest persisted public quote in bootstrap before new socket events', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'balancita-paper-live-restore-'))
+    const marketPath = join(root, 'market.sqlite')
+    const persisted = new FuturesMarketStore(marketPath)
+    const ticker = parseTickerMessage(
+      {
+        feed: 'ticker',
+        product_id: 'PF_XBTUSD',
+        seq: 417,
+        time: 1_790_949_999_900,
+        last: '68123.45',
+        markPrice: '68120.5',
+        suspended: false,
+      },
+      {
+        receivedAt: 1_790_950_000_000,
+        persistedAt: 1_790_950_000_001,
+        epoch: 4,
+      },
+    )
+    persisted.append(ticker)
+    persisted.close()
+
+    const app = await buildApp({
+      config: testConfigFrom({
+        FUTURES_MODE: 'paper_live',
+        FUTURES_DB_PATH: join(root, 'account.sqlite'),
+        FUTURES_MARKET_DB_PATH: marketPath,
+      }),
+      overrides: {
+        futuresPublicCatalog: async () => ({
+          instruments: [
+            {
+              symbol: 'PF_XBTUSD',
+              type: 'flexible_futures',
+              pair: 'BTC:USD',
+              base: 'BTC',
+              quote: 'USD',
+              contractSize: '1',
+              tickSize: '1',
+              contractValueTradePrecision: 4,
+              tradeable: true,
+              isExpired: false,
+            },
+          ],
+        }),
+        futuresSocketFactory: () => ({
+          onopen: null,
+          onmessage: null,
+          onerror: null,
+          onclose: null,
+          send: () => undefined,
+          close: () => undefined,
+        }),
+        futuresClock: () => 1_790_950_000_010,
+      } as never,
+    })
+    try {
+      await app.ready()
+      const bootstrap = await app.inject({
+        method: 'GET',
+        url: '/api/terminal/bootstrap',
+      })
+      expect(bootstrap.json().market.latest_quote).toMatchObject({
+        last: '68123.45',
+        mark: '68120.5',
+        event_time: 1_790_949_999_900,
+        received_at: 1_790_950_000_000,
+        persisted_at: 1_790_950_000_001,
+        epoch: 4,
+        sequence: 417,
+        received_sequence: 1,
+      })
+    } finally {
+      await app.close()
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   it('starts the selected public-feed mode with an injected recorded catalog and socket', async () => {
     const root = mkdtempSync(join(tmpdir(), 'balancita-paper-live-'))
     const fakeSocket: FuturesSocket = {
