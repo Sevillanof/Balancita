@@ -1,0 +1,20 @@
+scripts/offline-futures-baseline.mjs
+  h_2f68313623be98 1-182
+scripts/offline-futures-child.mjs
+  h_2f68313623be98 1-63
+scripts/offline-futures-scheduler.mjs
+  h_2f68313623be98 1-54
+scripts/offline-futures-scheduler.test.mjs
+  h_2f68313623be98 1-67
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "caa815e0bcdbda733f0280ca31f4ddbe593d6dfb",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
