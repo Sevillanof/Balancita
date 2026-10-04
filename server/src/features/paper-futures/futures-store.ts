@@ -481,6 +481,24 @@ export class FuturesStore {
       .run(runId, json, hash)
   }
 
+  getReplaySessionBinding(runId: string): JsonRecord | undefined {
+    const row = this.db
+      .prepare(
+        'SELECT binding_json,binding_hash FROM paper_futures_replay_sessions WHERE run_id=?',
+      )
+      .get(runId) as { binding_json: string; binding_hash: string } | undefined
+    if (!row) return undefined
+    const binding = JSON.parse(row.binding_json) as JsonRecord
+    if (
+      canonicalJson(binding) !== row.binding_json ||
+      canonicalHash(binding) !== row.binding_hash
+    )
+      throw new Error(
+        'Durable replay session binding hash verification failed.',
+      )
+    return binding
+  }
+
   persistReplayWork(
     runId: string,
     sourceSequence: number,

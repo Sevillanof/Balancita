@@ -34,6 +34,24 @@ const event = {
 }
 
 describe('FuturesMarketStore', () => {
+  it('stores public catalog decimals as raw JSON without canonicalizing them as hashes', () => {
+    const store = new FuturesMarketStore(dbPath())
+    const rawCatalog = {
+      instruments: [{ symbol: 'PF_XBTUSD', impactMidSize: 0.08 }],
+    }
+    store.saveInstrument(
+      {
+        instrumentId: 'kraken-futures:PF_XBTUSD',
+        metadataHash: 'a'.repeat(64),
+        retrievedAt: 1000,
+      },
+      rawCatalog,
+    )
+    const row = store.instrumentVersions()[0] as { raw_json: string }
+    expect(JSON.parse(row.raw_json)).toEqual(rawCatalog)
+    store.close()
+  })
+
   it('deduplicates trades across epochs and rejects changed UID payloads', () => {
     const store = new FuturesMarketStore(dbPath())
     expect(store.append(event)).toBe('inserted')

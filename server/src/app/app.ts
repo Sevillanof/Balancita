@@ -30,6 +30,12 @@ import type { SupportedInstrumentId, TimestampMs } from '../domain/contracts.ts'
 import { LiveForecastService } from '../features/forecasts/live-forecast.ts'
 import { KrakenMarketCollector } from '../features/market-data/kraken-market-collector.ts'
 import { MarketStore } from '../features/market-data/market-store.ts'
+import {
+  createHistoricalFundingClient,
+  historicalFundingAt,
+  type HistoricalFundingFetch,
+  type HistoricalFundingRecord,
+} from '../features/kraken-futures/historical-funding.ts'
 import { KrakenOhlcCollector } from '../features/market-data/kraken-ohlc-collector.ts'
 import { PaperForwardService } from '../features/simulations/paper-forward.ts'
 import {
@@ -293,6 +299,23 @@ export interface ShadowStatusResponse {
   readonly state: ShadowStatusState
 }
 
+function fundingAvailableAt(
+  store: FuturesMarketStore | undefined,
+  at: number,
+): HistoricalFundingRecord | null {
+  const records = (store?.fundingForInterval(at, at) ?? []).map((record) => ({
+    startMs: Number(record.startMs),
+    endMs: Number(record.endMs),
+    fundingRate: String(record.fundingRate),
+    unit: 'USD/BTC/hour' as const,
+    knownAtMs: Number(record.knownAtMs),
+    serverTime: String(record.serverTime),
+    sha256: String(record.sha256),
+    rawResponse: '',
+  }))
+  return historicalFundingAt(records, at, at)
+}
+
 function envelope(error: {
   code: AnalysisGatewayErrorCode | 'internal_error'
   message: string
@@ -339,7 +362,9 @@ async function fetchFuturesPublicCatalog(): Promise<unknown> {
 
 export async function buildApp(options: {
   config: ServerConfig
-  overrides?: Partial<AnalysisDependencies & MarketDependencies>
+  overrides?: Partial<AnalysisDependencies & MarketDependencies> & {
+    futuresFundingFetch?: HistoricalFundingFetch
+  }
 }): Promise<FastifyInstance> {
   const { config } = options
   const legacyServicesEnabled = config.futuresMode === undefined
@@ -634,6 +659,7 @@ export async function buildApp(options: {
       string,
       unknown
     >[]
+    const sourceFunding = futuresMarketStore.fundingSourceEvidence()
     if (
       instruments.length !== 1 ||
       policies.length === 0 ||
@@ -652,11 +678,13 @@ export async function buildApp(options: {
         0,
         ...sourceEvents.map((event) => Number(event.receivedAt)),
         ...sourceCandles.map((candle) => Number(candle.known_at)),
+        ...sourceFunding.map((record) => Number(record.knownAtMs)),
       )
     futuresSourceHash = canonicalHash({
       events: futuresMarketStore.eventsAsOf(Number.MAX_SAFE_INTEGER),
       candles: futuresMarketStore.candlesAsOf(Number.MAX_SAFE_INTEGER),
       gaps: futuresMarketStore.gapsAsOf(Number.MAX_SAFE_INTEGER),
+      ...(sourceFunding.length === 0 ? {} : { funding: sourceFunding }),
     })
     if (
       futuresMarketStore.eventCount() > 100_000 ||
@@ -698,6 +726,12 @@ export async function buildApp(options: {
   let futuresLastReceivedAt: number | null = null
   let futuresInstrumentMetadataHash: string | null = null
   let futuresMarketTail = Promise.resolve()
+  let futuresCandleTimer: ReturnType<typeof setInterval> | undefined
+  let futuresFundingTimer: ReturnType<typeof setInterval> | undefined
+  let futuresFundingClient:
+    ReturnType<typeof createHistoricalFundingClient> | undefined
+  let futuresFundingPoll: Promise<void> | undefined
+  let futuresFundingKnownAt: number | null = null
   let pendingFuturesUiUpdate: Record<string, unknown> | undefined
   let futuresUiTimer: ReturnType<typeof setTimeout> | undefined
   const flushFuturesUiUpdate = (): void => {
@@ -709,7 +743,7 @@ export async function buildApp(options: {
     ])
   }
   const queueFuturesUiUpdate = (update: Record<string, unknown>): void => {
-    pendingFuturesUiUpdate = update
+    pendingFuturesUiUpdate = { ...pendingFuturesUiUpdate, ...update }
     if (futuresUiTimer !== undefined) return
     futuresUiTimer = setTimeout(() => {
       futuresUiTimer = undefined
@@ -825,11 +859,19 @@ export async function buildApp(options: {
                 'invalid_or_unproven',
               book_quality_policy: PAPER_MARKET_QUALITY_POLICY.version,
               source_guarantee: 'undocumented',
+              funding: fundingAvailableAt(
+                futuresMarketStore,
+                options.overrides?.futuresClock?.() ?? Date.now(),
+              )
+                ? 'known_current_interval'
+                : 'unknown',
+              funding_known_at: futuresFundingKnownAt,
             },
             engine: {
               status:
                 futuresLastReceivedAt === null ? 'warming' : 'blocked_funding',
-              funding: 'unresolved',
+              funding:
+                futuresFundingKnownAt === null ? 'unresolved' : 'observed',
             },
           }
         : {}),
@@ -899,8 +941,41 @@ export async function buildApp(options: {
         const candleBuilder = new FuturesCandleBuilder(
           futuresMarketStore,
           undefined,
-          (candle) => queueFuturesUiUpdate({ candle }),
+          (candle) => {
+            if (candle.interval_ms === 60_000) queueFuturesUiUpdate({ candle })
+          },
         )
+        futuresCandleTimer = setInterval(
+          () => candleBuilder.advanceClock(clock()),
+          1_000,
+        )
+        futuresFundingClient = createHistoricalFundingClient({
+          fetch: options.overrides?.futuresFundingFetch,
+        })
+        const pollFunding = async (): Promise<void> => {
+          const receivedAt = clock()
+          try {
+            const response = await futuresFundingClient!.fetch(receivedAt)
+            futuresMarketStore!.appendFundingResponse(response)
+            futuresFundingKnownAt = fundingAvailableAt(
+              futuresMarketStore,
+              receivedAt,
+            )
+              ? receivedAt
+              : null
+          } catch (error) {
+            futuresFundingKnownAt = null
+            if (!(error instanceof Error && error.name === 'AbortError'))
+              console.warn(
+                'Public Kraken historical funding unavailable.',
+                error,
+              )
+          }
+        }
+        futuresFundingPoll = pollFunding()
+        futuresFundingTimer = setInterval(() => {
+          futuresFundingPoll = pollFunding()
+        }, 300_000)
         futuresCollector = new KrakenFuturesMarketCollector({
           clock,
           random: Math.random,
@@ -928,6 +1003,22 @@ export async function buildApp(options: {
                 product_id: event.productId,
                 event_time: event.eventTime,
                 received_at: event.receivedAt,
+                last_received_at: futuresLastReceivedAt,
+                market_status: futuresStatus,
+                book_quality: futuresCollector?.book
+                  ? {
+                      schema_version: 'futures-market-quality-attestation.v1',
+                      policy_version: futuresCollector.book.qualityPolicy,
+                      source_guarantee: futuresCollector.book.sourceGuarantee,
+                      book_valid: futuresCollector.book.valid,
+                      book_sequence_integrity:
+                        futuresCollector.book.sequenceIntegrity,
+                      executable_eligible:
+                        futuresCollector.book.executableEligible,
+                      epoch: futuresCollector.book.epoch,
+                      sequence: futuresCollector.book.sequence,
+                    }
+                  : null,
                 normalized,
               })
               futuresMarketTail = futuresMarketTail
@@ -965,8 +1056,24 @@ export async function buildApp(options: {
             futuresStatusReason = reason
             queueFuturesUiUpdate({
               feed_status: state,
+              market_status: state,
               reason: reason ?? null,
               received_at: futuresLastReceivedAt,
+              last_received_at: futuresLastReceivedAt,
+              book_quality: futuresCollector?.book
+                ? {
+                    schema_version: 'futures-market-quality-attestation.v1',
+                    policy_version: futuresCollector.book.qualityPolicy,
+                    source_guarantee: futuresCollector.book.sourceGuarantee,
+                    book_valid: futuresCollector.book.valid,
+                    book_sequence_integrity:
+                      futuresCollector.book.sequenceIntegrity,
+                    executable_eligible:
+                      futuresCollector.book.executableEligible,
+                    epoch: futuresCollector.book.epoch,
+                    sequence: futuresCollector.book.sequence,
+                  }
+                : null,
             })
           },
         })
@@ -979,6 +1086,14 @@ export async function buildApp(options: {
     })
     app.addHook('onClose', async () => {
       futuresCollector?.stop()
+      if (futuresCandleTimer !== undefined) clearInterval(futuresCandleTimer)
+      futuresCandleTimer = undefined
+      if (futuresFundingTimer !== undefined) clearInterval(futuresFundingTimer)
+      futuresFundingTimer = undefined
+      futuresFundingClient?.close()
+      futuresFundingClient = undefined
+      await futuresFundingPoll
+      futuresFundingPoll = undefined
       if (futuresUiTimer !== undefined) clearTimeout(futuresUiTimer)
       futuresUiTimer = undefined
       flushFuturesUiUpdate()

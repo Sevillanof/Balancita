@@ -301,7 +301,11 @@ export class FuturesReplayDriver {
             mark_usd: event.mark ?? event.last,
             market_status: event.suspended ? 'suspended' : 'open',
           })
-          if (event.fundingObservation) {
+          const historicalFundingMode =
+            mode === 'paper_live' ||
+            (mode === 'replay' &&
+              this.manifest.source === 'frozen-kraken-futures-market.v2')
+          if (!historicalFundingMode && event.fundingObservation) {
             marketEvents.push({
               type: 'funding_observation',
               received_at_ms: known,
@@ -309,6 +313,37 @@ export class FuturesReplayDriver {
               observation: event.fundingObservation,
               reception_order: seq,
             })
+          }
+          if (historicalFundingMode) {
+            const covering = store.fundingForInterval(receivedAt, receivedAt)
+            const rates = new Set(
+              covering.map((record) => String(record.fundingRate)),
+            )
+            if (covering.length > 0 && rates.size === 1) {
+              const evidence = covering.at(-1)!
+              marketEvents.push({
+                type: 'funding_observation',
+                received_at_ms: Number(evidence.knownAtMs),
+                known_at_ms: Number(evidence.knownAtMs),
+                reception_order: seq,
+                observation: {
+                  source: 'kraken-historical-funding-rates.v1',
+                  provider: 'kraken',
+                  product: 'PF_XBTUSD',
+                  field: 'funding_rate',
+                  raw_rate: String(evidence.fundingRate),
+                  unit: 'usd_per_btc_per_hour',
+                  effective_start_ms: Number(evidence.startMs),
+                  effective_end_ms: Number(evidence.endMs),
+                  known_at_ms: Number(evidence.knownAtMs),
+                  received_seq: seq,
+                  observation_id: `${String(evidence.sha256)}:${String(evidence.startMs)}`,
+                  sha256: String(evidence.sha256),
+                  semantic_version: 'kraken-funding-normalization.v1',
+                  predicted: false,
+                },
+              })
+            }
           }
         } else if (event.type === 'trade') {
           marketEvents.push({
@@ -382,12 +417,15 @@ export class FuturesReplayDriver {
       )
     if (
       sourceStore &&
-      this.manifest.source !== 'kraken-public-live-stream.v1'
+      !this.manifest.source.startsWith('kraken-public-live-stream.')
     ) {
       const sourceHash = canonicalHash({
         events: sourceStore.eventsAsOf(Number.MAX_SAFE_INTEGER),
         candles: sourceStore.candlesAsOf(Number.MAX_SAFE_INTEGER),
         gaps: sourceStore.gapsAsOf(Number.MAX_SAFE_INTEGER),
+        ...(this.manifest.source === 'frozen-kraken-futures-market.v2'
+          ? { funding: sourceStore.fundingSourceEvidence() }
+          : {}),
       })
       if (sourceHash !== this.manifest.source_hash)
         throw new Error(

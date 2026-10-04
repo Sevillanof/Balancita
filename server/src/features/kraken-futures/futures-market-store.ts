@@ -1,5 +1,6 @@
 import { DatabaseSync } from 'node:sqlite'
 import { createHash } from 'node:crypto'
+import type { HistoricalFundingResponse } from './historical-funding.ts'
 import { existsSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { canonicalJson } from '../paper-futures/futures-canonical.ts'
@@ -109,6 +110,22 @@ export class FuturesMarketStore {
         payload_json TEXT NOT NULL
       ) STRICT;
       INSERT OR IGNORE INTO paper_futures_market_migrations VALUES(3, unixepoch('subsec') * 1000);
+      CREATE TABLE IF NOT EXISTS paper_futures_funding_responses(
+        sha256 TEXT PRIMARY KEY, received_at INTEGER NOT NULL, server_time TEXT NOT NULL, raw_response TEXT NOT NULL
+      ) STRICT;
+      CREATE TABLE IF NOT EXISTS paper_futures_funding_periods(
+        response_sha256 TEXT NOT NULL REFERENCES paper_futures_funding_responses(sha256),
+        start_ms INTEGER NOT NULL, end_ms INTEGER NOT NULL, funding_rate TEXT NOT NULL,
+        known_at INTEGER NOT NULL, unit TEXT NOT NULL, PRIMARY KEY(response_sha256,start_ms)
+      ) STRICT;
+      CREATE TRIGGER IF NOT EXISTS paper_futures_funding_responses_no_update
+        BEFORE UPDATE ON paper_futures_funding_responses BEGIN SELECT RAISE(ABORT, 'funding evidence is immutable'); END;
+      CREATE TRIGGER IF NOT EXISTS paper_futures_funding_responses_no_delete
+        BEFORE DELETE ON paper_futures_funding_responses BEGIN SELECT RAISE(ABORT, 'funding evidence is immutable'); END;
+      CREATE TRIGGER IF NOT EXISTS paper_futures_funding_periods_no_update
+        BEFORE UPDATE ON paper_futures_funding_periods BEGIN SELECT RAISE(ABORT, 'funding evidence is immutable'); END;
+      CREATE TRIGGER IF NOT EXISTS paper_futures_funding_periods_no_delete
+        BEFORE DELETE ON paper_futures_funding_periods BEGIN SELECT RAISE(ABORT, 'funding evidence is immutable'); END;
       CREATE TRIGGER IF NOT EXISTS paper_futures_market_quality_policies_no_update
         BEFORE UPDATE ON paper_futures_market_quality_policies BEGIN SELECT RAISE(ABORT, 'market evidence is immutable'); END;
       CREATE TRIGGER IF NOT EXISTS paper_futures_market_quality_policies_no_delete
@@ -144,6 +161,122 @@ export class FuturesMarketStore {
     this.db.close()
   }
 
+  appendFundingResponse(response: HistoricalFundingResponse): void {
+    if (this.readOnly)
+      throw new Error('Cannot append to a read-only market store.')
+    const raw = response.rawResponse
+    if (Buffer.byteLength(raw, 'utf8') > 2 * 1024 * 1024)
+      throw new RangeError('Historical funding response exceeds 2 MiB.')
+    const hash = createHash('sha256').update(raw, 'utf8').digest('hex')
+    if (hash !== response.sha256)
+      throw new Error('Funding response hash mismatch.')
+    const prior = this.db
+      .prepare(
+        'SELECT raw_response FROM paper_futures_funding_responses WHERE sha256=?',
+      )
+      .get(hash) as { raw_response: string } | undefined
+    if (prior && prior.raw_response !== raw)
+      throw new Error('Funding response hash identity conflict.')
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      this.db
+        .prepare(
+          'INSERT OR IGNORE INTO paper_futures_funding_responses VALUES(?,?,?,?)',
+        )
+        .run(
+          hash,
+          time(response.receivedAtMs, 'receivedAtMs'),
+          response.serverTime,
+          raw,
+        )
+      const insert = this.db.prepare(
+        'INSERT OR IGNORE INTO paper_futures_funding_periods VALUES(?,?,?,?,?,?)',
+      )
+      for (const record of response.records) {
+        if (
+          record.sha256 !== hash ||
+          record.knownAtMs !== response.receivedAtMs ||
+          record.unit !== 'USD/BTC/hour'
+        )
+          throw new Error(
+            'Funding period provenance does not match its response.',
+          )
+        insert.run(
+          hash,
+          time(record.startMs, 'funding start'),
+          time(record.endMs, 'funding end'),
+          record.fundingRate,
+          time(record.knownAtMs, 'funding knownAt'),
+          record.unit,
+        )
+      }
+      this.db.exec('COMMIT')
+    } catch (error) {
+      this.db.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  fundingRecordsAsOf(knownAtCutoff: number): Record<string, unknown>[] {
+    time(knownAtCutoff, 'knownAtCutoff')
+    try {
+      return this.db
+        .prepare(
+          `SELECT p.start_ms AS startMs,p.end_ms AS endMs,p.funding_rate AS fundingRate,
+      p.known_at AS knownAtMs,p.unit,r.server_time AS serverTime,r.sha256
+      FROM paper_futures_funding_periods p JOIN paper_futures_funding_responses r ON r.sha256=p.response_sha256
+      WHERE p.known_at<=? ORDER BY p.start_ms,p.known_at,r.sha256`,
+        )
+        .all(knownAtCutoff) as Record<string, unknown>[]
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('no such table'))
+        return []
+      throw error
+    }
+  }
+
+  fundingSourceEvidence(): Record<string, unknown>[] {
+    return this.fundingRecordsAsOf(Number.MAX_SAFE_INTEGER).map((record) => ({
+      startMs: record.startMs,
+      endMs: record.endMs,
+      fundingRate: record.fundingRate,
+      knownAtMs: record.knownAtMs,
+      unit: record.unit,
+      serverTime: record.serverTime,
+      sha256: record.sha256,
+    }))
+  }
+
+  fundingResponse(sha256: string): Record<string, unknown> | undefined {
+    return this.db
+      .prepare(
+        'SELECT sha256,received_at AS receivedAt,server_time AS serverTime,raw_response AS rawResponse FROM paper_futures_funding_responses WHERE sha256=?',
+      )
+      .get(sha256) as Record<string, unknown> | undefined
+  }
+
+  fundingForInterval(
+    at: number,
+    knownAtCutoff: number,
+  ): Record<string, unknown>[] {
+    time(at, 'funding decision time')
+    time(knownAtCutoff, 'funding known cutoff')
+    try {
+      return this.db
+        .prepare(
+          `SELECT p.start_ms AS startMs,p.end_ms AS endMs,p.funding_rate AS fundingRate,
+        p.known_at AS knownAtMs,p.unit,r.server_time AS serverTime,r.sha256
+        FROM paper_futures_funding_periods p JOIN paper_futures_funding_responses r ON r.sha256=p.response_sha256
+        WHERE p.start_ms<=? AND p.end_ms>? AND p.known_at<=? ORDER BY p.known_at,r.sha256`,
+        )
+        .all(at, at, knownAtCutoff) as Record<string, unknown>[]
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('no such table'))
+        return []
+      throw error
+    }
+  }
+
   schemaVersion(): number {
     const row = this.db
       .prepare(
@@ -159,6 +292,15 @@ export class FuturesMarketStore {
     if (!/^[a-f0-9]{64}$/.test(metadataHash))
       throw new TypeError('Instrument metadata hash is invalid.')
     const retrievedAt = time(instrument.retrievedAt, 'retrievedAt')
+    const rawJson =
+      typeof rawCatalog === 'string' ? rawCatalog : JSON.stringify(rawCatalog)
+    if (
+      typeof rawJson !== 'string' ||
+      Buffer.byteLength(rawJson, 'utf8') > 5_000_000
+    )
+      throw new RangeError(
+        'Instrument catalog exceeds the 5 MB evidence bound.',
+      )
     this.db
       .prepare(
         `INSERT OR IGNORE INTO paper_futures_instrument_versions
@@ -169,7 +311,7 @@ export class FuturesMarketStore {
         String(instrument.instrumentId),
         retrievedAt,
         canonicalJson(spec),
-        canonicalJson(rawCatalog),
+        rawJson,
       )
   }
 
@@ -216,13 +358,18 @@ export class FuturesMarketStore {
     const events = this.eventsAsOf(Number.MAX_SAFE_INTEGER)
     const candles = this.candleRevisions()
     const gaps = this.gapsAsOf(Number.MAX_SAFE_INTEGER)
+    const funding = this.fundingSourceEvidence()
     return {
-      schema_version: 'futures-market-source-snapshot.v1',
+      schema_version:
+        funding.length === 0
+          ? 'futures-market-source-snapshot.v1'
+          : 'futures-market-source-snapshot.v2',
       instruments: this.instrumentVersions(),
       quality_policies: this.qualityPolicies(),
       events,
       candles,
       gaps,
+      ...(funding.length === 0 ? {} : { funding_observations: funding }),
     }
   }
 

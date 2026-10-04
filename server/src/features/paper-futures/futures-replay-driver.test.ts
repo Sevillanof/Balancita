@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -13,6 +13,7 @@ import { FuturesStore } from './futures-store.ts'
 import { canonicalHash } from './futures-canonical.ts'
 import type { FuturesWorkerRequest } from './futures-worker.ts'
 import { FuturesMarketStore } from '../kraken-futures/futures-market-store.ts'
+import { parseHistoricalFundingResponse } from '../kraken-futures/historical-funding.ts'
 
 const directories: string[] = []
 const instrument = {
@@ -58,6 +59,100 @@ function pythonMarket(
 }
 
 describe('shared causal futures replay driver', () => {
+  it('feeds only received, explicit historical funding through the shared paper-live driver after SQLite reopen', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'futures-funding-driver-'))
+    directories.push(directory)
+    const path = join(directory, 'market.sqlite')
+    const receivedAt = Date.parse('2026-10-03T22:54:04.316Z')
+    const capture = readFileSync(
+      new URL(
+        '../../../../playwright-artifacts/futures-diagnostics/funding-current-20261003T225404Z/response.json',
+        import.meta.url,
+      ),
+      'utf8',
+    )
+    const response = parseHistoricalFundingResponse(capture, receivedAt)
+    let market = new FuturesMarketStore(path)
+    market.appendFundingResponse(response)
+    market.append({
+      type: 'book',
+      productId: 'PF_XBTUSD',
+      seq: 1,
+      epoch: 1,
+      eventTime: receivedAt,
+      receivedAt,
+      persistedAt: receivedAt,
+      snapshot: true,
+      contiguous: true,
+      valid: true,
+      bids: [{ price: '100000', quantity: '1' }],
+      asks: [{ price: '100001', quantity: '1' }],
+      raw: { fixture: 'book' },
+    })
+    market.append({
+      type: 'ticker',
+      productId: 'PF_XBTUSD',
+      seq: 1,
+      epoch: 1,
+      eventTime: receivedAt,
+      receivedAt,
+      persistedAt: receivedAt,
+      mark: '100000',
+      suspended: false,
+      fundingObservation: {
+        source: 'unresolved-ticker',
+        raw_rate: '1',
+        unit: 'provider-unresolved',
+      },
+      raw: { fixture: 'ticker' },
+    })
+    market.close()
+    market = new FuturesMarketStore(path)
+    const seen: Record<string, unknown>[] = []
+    const driver = new FuturesReplayDriver({
+      runId: 'funding-driver',
+      manifest: {
+        schema_version: 'futures-replay-manifest.v1',
+        source: 'kraken-public-live-stream.v1',
+        source_hash: 'a'.repeat(64),
+        config_hash: canonicalHash(runtimeConfig),
+        seed: 'fixture',
+        fidelity: 'funding-test',
+      },
+      apply: async (work) => {
+        seen.push(work.input.payload.market_snapshot as Record<string, unknown>)
+        return { status: 'committed', applied_state_version: work.version + 1 }
+      },
+    })
+    await driver.processMarketStore(
+      market,
+      receivedAt,
+      instrument,
+      undefined,
+      'paper_live',
+    )
+    const snapshot = seen.at(-1)!
+    const events = snapshot.events as Record<string, unknown>[]
+    const funding = events.find((event) => event.type === 'funding_observation')
+    expect(funding?.observation).toMatchObject({
+      source: 'kraken-historical-funding-rates.v1',
+      raw_rate: '-0.075852351405',
+      unit: 'usd_per_btc_per_hour',
+      effective_start_ms: Date.parse('2026-10-03T22:00:00Z'),
+      effective_end_ms: Date.parse('2026-10-03T23:00:00Z'),
+      known_at_ms: receivedAt,
+    })
+    expect(
+      events.some(
+        (event) =>
+          event.type === 'funding_observation' &&
+          (event.observation as Record<string, unknown>).source ===
+            'unresolved-ticker',
+      ),
+    ).toBe(false)
+    market.close()
+  })
+
   it('does not retrofill late recovery evidence and resumes an open close intent on the first post-gap eligible book', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'futures-gap-replay-'))
     directories.push(directory)

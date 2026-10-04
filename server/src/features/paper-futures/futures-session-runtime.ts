@@ -111,6 +111,9 @@ export class FuturesSessionRuntime {
           events: options.replaySource.eventsAsOf(Number.MAX_SAFE_INTEGER),
           candles: options.replaySource.candlesAsOf(Number.MAX_SAFE_INTEGER),
           gaps: options.replaySource.gapsAsOf(Number.MAX_SAFE_INTEGER),
+          ...(options.replaySource.fundingSourceEvidence().length === 0
+            ? {}
+            : { funding: options.replaySource.fundingSourceEvidence() }),
         })
       : undefined
     this.store = new FuturesStore(options.dbPath)
@@ -356,7 +359,12 @@ export class FuturesSessionRuntime {
   private restoreDriver(runId: string): Promise<FuturesReplayDriver> {
     const existing = this.drivers.get(runId)
     if (existing) return existing
-    const manifest = this.replayManifest()
+    const savedBinding = this.store.getReplaySessionBinding(runId)
+    const savedManifest = savedBinding?.manifest
+    const manifest =
+      savedManifest && typeof savedManifest === 'object'
+        ? (savedManifest as ReturnType<FuturesSessionRuntime['replayManifest']>)
+        : this.replayManifest()
     const binding = {
       schema_version: 'futures-replay-session.v1',
       run_id: runId,
@@ -522,14 +530,20 @@ export class FuturesSessionRuntime {
     if (this.mode === 'replay')
       return {
         schema_version: 'futures-replay-manifest.v1',
-        source: 'frozen-kraken-futures-market.v1',
+        source: this.replaySource?.fundingSourceEvidence().length
+          ? 'frozen-kraken-futures-market.v2'
+          : 'frozen-kraken-futures-market.v1',
         source_hash: this.replaySourceHash!,
         config_hash: canonicalHash(runtimeConfig),
         seed: `frozen-market:${this.replaySourceHash}`,
-        fidelity: 'persisted-public-futures-events-and-known-candles.v1',
+        fidelity: this.replaySource?.fundingSourceEvidence().length
+          ? 'persisted-public-events-known-candles-explicit-funding.v2'
+          : 'persisted-public-futures-events-and-known-candles.v1',
         runtime_version: runtimeConfig.version,
         instrument_hash: canonicalHash(instrument),
-        source_file_hash: this.replaySourceFileHash,
+        ...(this.replaySourceFileHash === undefined
+          ? {}
+          : { source_file_hash: this.replaySourceFileHash }),
         ...(this.replaySourceMetadataHash === undefined
           ? {}
           : { source_metadata_hash: this.replaySourceMetadataHash }),
@@ -543,11 +557,16 @@ export class FuturesSessionRuntime {
     if (this.mode === 'paper_live')
       return {
         schema_version: 'futures-replay-manifest.v1',
-        source: 'kraken-public-live-stream.v1',
-        source_hash: canonicalHash({ mode: this.mode, instrument }),
+        source: 'kraken-public-live-stream.v2',
+        source_hash: canonicalHash({
+          mode: this.mode,
+          instrument,
+          funding_source: 'kraken-historical-funding-rates.v1',
+        }),
         config_hash: canonicalHash(runtimeConfig),
-        seed: 'paper-live-session-v1',
-        fidelity: 'observed-public-trades-book-ticker-candles.v1',
+        seed: 'paper-live-session-v2',
+        fidelity:
+          'observed-public-trades-book-ticker-candles-explicit-funding.v2',
         runtime_version: runtimeConfig.version,
         instrument_hash: canonicalHash(instrument),
       } as const

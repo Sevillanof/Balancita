@@ -11,7 +11,7 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { AnalysisCache } from '../platform/cache.ts'
 import { serverConfigFrom } from '../platform/config.ts'
 import type {
@@ -834,6 +834,9 @@ describe('PAPER_LIVE startup integration', () => {
         futuresClock: () => 1_790_950_000_000,
       } as never,
     })
+    const runtimeErrors = vi
+      .spyOn(console, 'error')
+      .mockImplementation(() => {})
     try {
       await app.ready()
       const response = await app.inject({
@@ -887,6 +890,30 @@ describe('PAPER_LIVE startup integration', () => {
           price: '90000.5',
         }),
       })
+      fakeSocket.onmessage?.({
+        data: JSON.stringify({
+          feed: 'book',
+          product_id: 'PF_XBTUSD',
+          seq: 11,
+          timestamp: 1_790_950_000_100,
+          side: 'buy',
+          price: '90000',
+          qty: '0.6',
+        }),
+      })
+      fakeSocket.onmessage?.({
+        data: JSON.stringify({
+          feed: 'trade',
+          product_id: 'PF_XBTUSD',
+          uid: 'recorded-public-trade-2',
+          side: 'sell',
+          type: 'fill',
+          seq: 31,
+          time: 1_790_950_000_100,
+          qty: '0.0002',
+          price: '90000',
+        }),
+      })
       await new Promise((resolve) => setTimeout(resolve, 150))
     } finally {
       await app.close()
@@ -915,12 +942,38 @@ describe('PAPER_LIVE startup integration', () => {
         limit: 100,
       }).events
       expect(events.some((event) => event.type === 'market.updated')).toBe(true)
+      const marketUpdate = events.find(
+        (event) =>
+          event.type === 'market.updated' &&
+          (event.data as Record<string, unknown>).feed === 'trade',
+      )
+      expect(marketUpdate?.data).toMatchObject({
+        market_status: 'live',
+        last_received_at: 1_790_950_000_000,
+        book_quality: {
+          schema_version: 'futures-market-quality-attestation.v1',
+          policy_version: 'snapshot-contiguous-observed.v1',
+          source_guarantee: 'undocumented',
+          book_valid: true,
+        },
+        candle: {
+          interval_ms: 60_000,
+          closed: false,
+          close: '90000',
+          volume_btc: '0.0003',
+        },
+      })
       expect(events.some((event) => event.type === 'analysis.completed')).toBe(
         true,
+      )
+      expect(runtimeErrors).not.toHaveBeenCalledWith(
+        'futures runtime evidence processing failed',
+        expect.anything(),
       )
       account.close()
       rmSync(root, { recursive: true, force: true })
     }
+    runtimeErrors.mockRestore()
   })
 })
 
