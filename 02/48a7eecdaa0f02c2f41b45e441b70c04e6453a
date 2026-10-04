@@ -1,0 +1,28 @@
+odd/tasks/futures-bounded-processing.md
+  h_2f68313623be98 36,48
+python/balancita_engine/futures_runtime.py
+  h_2f68313623be98 35-36,98-104,203-216,320-340,366,437,641-652,756-819,901-906
+python/tests/test_futures_strategy_cadence.py
+  h_2f68313623be98 1-209
+server/src/features/paper-futures/futures-command-runner.ts
+  h_2f68313623be98 46-49,223,364-368,371-405,535-541
+server/src/features/paper-futures/futures-runtime.test.ts
+  h_2f68313623be98 56,58-134,143-158,166-172,174,191-192,204,235,340,345,361,366,372,376,380,391-397,403-438,454,459,462-483,491,512,514-520,522,548,554
+server/src/features/paper-futures/futures-session-runtime.ts
+  h_2f68313623be98 58-61,97-98,129-134
+server/src/features/paper-futures/futures-store.ts
+  h_2f68313623be98 2545-2549,2562-2572,3286-3378,3440-3443,3521-3528,3543-3555,3564-3570,3713-3739
+server/src/features/paper-futures/futures-worker.ts
+  h_2f68313623be98 849-854,878-888,1172-1177
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "0248a7eecdaa0f02c2f41b45e441b70c04e6453a",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
