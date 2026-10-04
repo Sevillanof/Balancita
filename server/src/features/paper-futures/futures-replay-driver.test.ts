@@ -1103,6 +1103,106 @@ with localcontext() as ctx:
     marketStore.close()
   })
 
+  it('stops between persisted source rows and resumes the deferred rows', async () => {
+    const directory = mkdtempSync(
+      join(tmpdir(), 'futures-replay-cooperative-stop-'),
+    )
+    directories.push(directory)
+    const marketStore = new FuturesMarketStore(join(directory, 'market.sqlite'))
+    const appendBook = (at: number, seq: number) =>
+      marketStore.append({
+        type: 'book',
+        productId: 'PF_XBTUSD',
+        seq,
+        eventTime: at,
+        receivedAt: at,
+        persistedAt: at,
+        epoch: 1,
+        snapshot: true,
+        contiguous: true,
+        valid: true,
+        bids: [{ price: '100000', quantity: '1' }],
+        asks: [{ price: '100001', quantity: '1' }],
+        raw: { fixture: `book-${seq}` },
+      })
+    const appendTicker = (at: number, seq: number) =>
+      marketStore.append({
+        type: 'ticker',
+        productId: 'PF_XBTUSD',
+        seq,
+        eventTime: at,
+        receivedAt: at,
+        persistedAt: at,
+        epoch: 1,
+        mark: '100000',
+        suspended: false,
+        raw: { fixture: `ticker-${seq}` },
+      })
+    appendBook(1000, 1)
+    appendTicker(1000, 1)
+    appendBook(1001, 2)
+    appendTicker(1002, 2)
+    const sourceCount = marketStore.eventsAsOf(Number.MAX_SAFE_INTEGER).length
+    let shouldStop = false
+    const applied: number[] = []
+    const driver = new FuturesReplayDriver({
+      runId: 'cooperative-stop',
+      manifest: {
+        schema_version: 'futures-replay-manifest.v1',
+        source: 'fixture',
+        source_hash: 'a'.repeat(64),
+        config_hash: 'b'.repeat(64),
+        seed: 'fixture',
+        fidelity: 'book-ticker.v1',
+      },
+      apply: async (work) => {
+        applied.push(work.input.sequence)
+        if (applied.length === 1) shouldStop = true
+        return { status: 'committed', applied_state_version: work.version + 1 }
+      },
+    })
+
+    const stopped = await driver.processMarketStore(
+      marketStore,
+      1002,
+      instrument,
+      undefined,
+      'mock',
+      () => shouldStop,
+    )
+    expect(stopped).toMatchObject({
+      sourceWatermark: 2,
+      lastDurableWatermark: 2,
+      stopped: true,
+      deferredSourceRows: 2,
+    })
+    expect(applied).toEqual([2])
+    expect(marketStore.eventsAsOf(Number.MAX_SAFE_INTEGER)).toHaveLength(
+      sourceCount,
+    )
+
+    shouldStop = false
+    const resumed = await driver.processMarketStore(
+      marketStore,
+      1002,
+      instrument,
+      undefined,
+      'mock',
+      () => shouldStop,
+    )
+    expect(resumed).toMatchObject({
+      sourceWatermark: 4,
+      lastDurableWatermark: 4,
+      stopped: false,
+      deferredSourceRows: 0,
+    })
+    expect(applied).toEqual([2, 3, 4])
+    expect(marketStore.eventsAsOf(Number.MAX_SAFE_INTEGER)).toHaveLength(
+      sourceCount,
+    )
+    marketStore.close()
+  })
+
   it('runs persisted market evidence through Python worker and Node SQLite for incremental and batch runs', async () => {
     const directory = mkdtempSync(
       join(tmpdir(), 'futures-persisted-market-e2e-'),

@@ -351,7 +351,13 @@ export class FuturesReplayDriver {
       source: Record<string, unknown>,
     ) => Record<string, unknown> | undefined,
     mode: 'mock' | 'paper_live' | 'replay' = 'mock',
-  ): Promise<{ sourceWatermark: number }> {
+    stopRequested?: () => boolean,
+  ): Promise<{
+    sourceWatermark: number
+    lastDurableWatermark: number
+    stopped: boolean
+    deferredSourceRows: number
+  }> {
     validateTimestamp(receivedCutoff, 'received cutoff')
     this.bindMarketSource(instrument, store)
     if (this.marketSourceEvents === undefined) {
@@ -381,7 +387,14 @@ export class FuturesReplayDriver {
         Number(event.receivedSequence) > this.marketSourceCursor &&
         Number(event.receivedAt) <= receivedCutoff,
     )
-    for (const source of eligible) {
+    let stopped = false
+    let deferredSourceRows = 0
+    for (const [index, source] of eligible.entries()) {
+      if (stopRequested?.()) {
+        stopped = true
+        deferredSourceRows = eligible.length - index
+        break
+      }
       const receivedAt = Number(source.receivedAt)
       const gaps = store.gapsAsOf(receivedAt) as Record<string, unknown>[]
       const candles = (
@@ -585,7 +598,12 @@ export class FuturesReplayDriver {
     this.marketSourcePending = this.marketSourcePending.filter(
       (event) => Number(event.receivedSequence) > this.marketSourceCursor,
     )
-    return { sourceWatermark: this.marketSourceCursor }
+    return {
+      sourceWatermark: this.marketSourceCursor,
+      lastDurableWatermark: this.marketSourceCursor,
+      stopped,
+      deferredSourceRows,
+    }
   }
 
   private bindMarketSource(
