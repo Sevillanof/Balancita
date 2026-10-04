@@ -34,7 +34,7 @@ export type MockTerminalMarket = {
     low: string
     close: string
     volume_btc: string
-    closed: true
+    closed: boolean
   }>
 }
 
@@ -82,9 +82,10 @@ export function parseTerminalEnvelope(value: unknown): TerminalEnvelope | null {
         !isRecord(candle) ||
         !Number.isSafeInteger(candle.time_ms) ||
         (candle.time_ms as number) <= previousTime ||
-        (candle.time_ms as number) + Number(market.interval_ms) >
-          (market.as_of_ms as number) ||
-        candle.closed !== true ||
+        (candle.closed === true &&
+          (candle.time_ms as number) + Number(market.interval_ms) >
+            (market.as_of_ms as number)) ||
+        typeof candle.closed !== 'boolean' ||
         !['open', 'high', 'low', 'close', 'volume_btc'].every(
           (key) =>
             typeof candle[key] === 'string' &&
@@ -95,6 +96,37 @@ export function parseTerminalEnvelope(value: unknown): TerminalEnvelope | null {
       previousTime = candle.time_ms as number
     }
   }
+  if (value.type === 'market.updated' && value.data.candle !== undefined) {
+    const candle = value.data.candle
+    if (
+      !isRecord(candle) ||
+      !Number.isSafeInteger(candle.bucket_start_ms) ||
+      ![60_000, 300_000, 900_000, 3_600_000].includes(
+        Number(candle.interval_ms),
+      ) ||
+      !Number.isSafeInteger(candle.known_at_ms) ||
+      typeof candle.closed !== 'boolean' ||
+      (candle.closed === true &&
+        Number(candle.known_at_ms) <
+          Number(candle.bucket_start_ms) + Number(candle.interval_ms)) ||
+      !['open', 'high', 'low', 'close', 'volume_btc'].every(
+        (key) =>
+          typeof candle[key] === 'string' &&
+          /^\d+(?:\.\d+)?$/.test(candle[key] as string),
+      )
+    )
+      return null
+  }
+  if (
+    value.type === 'market.updated' &&
+    value.data.book_quality !== undefined &&
+    (!isRecord(value.data.book_quality) ||
+      value.data.book_quality.source_guarantee !== 'undocumented' ||
+      !['observed_contiguous', 'invalid_or_unproven'].includes(
+        String(value.data.book_quality.book_sequence_integrity),
+      ))
+  )
+    return null
   return value as unknown as TerminalEnvelope
 }
 

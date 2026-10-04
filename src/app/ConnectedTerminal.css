@@ -93,6 +93,18 @@
   font-family: 'IBM Plex Mono', monospace;
 }
 
+.connected-terminal .connected-terminal__hash {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  margin-block: 0.35rem;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: normal;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 0.75rem;
+}
+
 .connected-terminal__error button {
   border: 1px solid #3b484a;
   border-radius: 0.25rem;

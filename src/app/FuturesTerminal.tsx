@@ -12,6 +12,8 @@ import {
   type TerminalBootstrap,
 } from '../features/connected-trading/infrastructure/terminal-stream-client.ts'
 import { applyTerminalEvent } from '../features/connected-trading/infrastructure/terminal-state.ts'
+import { projectTerminalQuote } from './terminal-market.ts'
+import { reasonLabel } from './terminal-copy.ts'
 import './DemoShell.css'
 import './ConnectedTerminal.css'
 
@@ -39,20 +41,41 @@ function quantity(value: unknown): string {
   return `${value} BTC`
 }
 
-function reasonLabel(value: unknown): string {
+function strategyLabel(value: unknown): string {
   if (typeof value !== 'string' || value.length === 0)
-    return 'Motivo no registrado'
+    return 'Sin estrategia seleccionada'
   const known: Record<string, string> = {
-    c27_long_breakout: 'Ruptura alcista C27',
-    c27_short_breakout: 'Ruptura bajista C27',
-    position_owned: 'La posición sigue bajo gestión de su estrategia',
-    owner_exit_condition_not_met: 'La condición de salida no se ha activado',
-    entry_conditions_not_met: 'No se cumplen las condiciones de entrada',
+    'c25-pullback-perp-v1': 'C25 · retroceso (experimental)',
+    'c26-reversion-perp-v1': 'C26 · reversión (experimental)',
+    'c27-breakout-perp-v1': 'C27 · ruptura (experimental)',
+    'c28-adapter-perp-v1': 'C28 · adaptador (experimental)',
   }
-  return known[value] ?? value.replaceAll('_', ' ')
+  return known[value] ?? 'Sin estrategia seleccionada'
 }
 
-function TerminalMarketChart({ market }: { market: Record<string, unknown> }) {
+function marketStatusLabel(value: unknown): string {
+  const labels: Record<string, string> = {
+    connecting: 'Conectando',
+    syncing: 'Sincronizando libro',
+    live: 'Feed activo',
+    degraded: 'Feed degradado',
+    stale: 'Feed desactualizado',
+    disconnected: 'Feed desconectado',
+    stopped: 'Feed detenido',
+    unavailable: 'Feed no disponible',
+  }
+  return typeof value === 'string'
+    ? (labels[value] ?? 'Estado del feed no disponible')
+    : 'Estado del feed no disponible'
+}
+
+function TerminalMarketChart({
+  market,
+  mode,
+}: {
+  market: Record<string, unknown>
+  mode: TerminalBootstrap['mode']
+}) {
   const candles: ApprovedTerminalCandle[] = Array.isArray(market.candles)
     ? market.candles.flatMap((value) => {
         const candle = record(value)
@@ -86,10 +109,19 @@ function TerminalMarketChart({ market }: { market: Record<string, unknown> }) {
   return (
     <>
       <p>
-        {market.schema_version === 'futures-terminal-market.v1'
-          ? 'Velas cerradas del origen registrado · operaciones simuladas.'
-          : 'Velas cerradas del fixture del runtime MOCK · actualización por WebSocket.'}
+        {mode === 'paper_live'
+          ? 'Velas públicas de Kraken Futures · operaciones simuladas.'
+          : mode === 'replay'
+            ? 'Velas cerradas del origen registrado · operaciones simuladas.'
+            : 'Velas cerradas del fixture determinista MOCK · actualización por WebSocket.'}
       </p>
+      {market.candles instanceof Array && market.candles.length > 0 && (
+        <p role="status">
+          {record(market.candles.at(-1)).closed === true
+            ? 'Última vela cerrada'
+            : 'Vela en formación'}
+        </p>
+      )}
       <ApprovedTerminalChart
         candles={candles}
         markers={[]}
@@ -171,6 +203,10 @@ export default function FuturesTerminal({
           const snapshotState = record(event.data.state)
           setState({
             ...snapshotState,
+            market: {
+              ...record(bootstrap.market),
+              ...record(snapshotState.market),
+            },
             terminal_market:
               market.schema_version === 'mock-terminal-market.v1' ||
               market.schema_version === 'futures-terminal-market.v1'
@@ -252,11 +288,23 @@ export default function FuturesTerminal({
   const account = record(state?.account)
   const position = record(state?.position)
   const market = record(state?.terminal_market)
-  const candles = Array.isArray(market.candles) ? market.candles : []
-  const lastCandle = record(candles.at(-1))
-  const displayedPrice = position.mark_usd_per_btc ?? lastCandle.close
+  const marketState = record(state?.market)
+  const quote = projectTerminalQuote({
+    mode: bootstrap.mode,
+    market: record(state?.market ?? bootstrap.market),
+    terminalMarket: market,
+    position,
+  })
+  const displayedPrice = quote.price
   const analyses = Array.isArray(state?.analyses) ? state.analyses : []
   const orders = Array.isArray(state?.orders) ? state.orders : []
+  const [displayClock, setDisplayClock] = useState(() => Date.now())
+
+  useEffect(() => {
+    if (bootstrap.mode !== 'paper_live' || quote.receivedAt === null) return
+    const timer = setInterval(() => setDisplayClock(Date.now()), 1_000)
+    return () => clearInterval(timer)
+  }, [bootstrap.mode, quote.receivedAt])
 
   const sendCommand = (action: string) => {
     const socket = socketRef.current
@@ -324,13 +372,18 @@ export default function FuturesTerminal({
           quote={
             <div className="demo-terminal__quote">
               <strong>{money(displayedPrice)}</strong>
-              <span>
-                {position.mark_usd_per_btc !== undefined
-                  ? 'Precio de marca · USD/BTC'
-                  : bootstrap?.mode === 'replay'
-                    ? 'Último cierre registrado · USD/BTC'
-                    : 'Último cierre del fixture · USD/BTC'}
-              </span>
+              <span>{quote.label}</span>
+              {bootstrap.mode === 'paper_live' && (
+                <small>
+                  {quote.eventTime === null
+                    ? 'Hora del evento no disponible'
+                    : `Evento ${new Date(quote.eventTime).toLocaleString('es-ES', { timeZone: 'UTC' })} UTC`}
+                  {' · '}
+                  {quote.receivedAt === null
+                    ? 'Recepción no disponible'
+                    : `recibido ${new Date(quote.receivedAt).toLocaleString('es-ES', { timeZone: 'UTC' })} UTC · hace ${Math.floor(Math.max(0, displayClock - quote.receivedAt) / 1_000)} s`}
+                </small>
+              )}
             </div>
           }
           context={
@@ -340,6 +393,14 @@ export default function FuturesTerminal({
                   ? 'Eventos WebSocket recibidos'
                   : 'Esperando WebSocket'}
               </span>
+              {bootstrap.mode === 'paper_live' && (
+                <p>
+                  {marketStatusLabel(
+                    marketState.market_status ??
+                      record(bootstrap.market).status,
+                  )}
+                </p>
+              )}
               <p>Run: {bootstrap?.active_run_id ?? 'cargando'}</p>
             </div>
           }
@@ -357,13 +418,13 @@ export default function FuturesTerminal({
                 <p>Origen registrado · operaciones simuladas</p>
                 <dl>
                   <dt>Hash del dataset</dt>
-                  <dd>
+                  <dd className="connected-terminal__hash">
                     {String(
                       bootstrap.source_manifest?.source_hash ?? 'No disponible',
                     )}
                   </dd>
                   <dt>Hash del archivo fuente</dt>
-                  <dd>
+                  <dd className="connected-terminal__hash">
                     {String(
                       bootstrap.source_manifest?.source_file_hash ??
                         'No disponible',
@@ -378,6 +439,70 @@ export default function FuturesTerminal({
                 </a>
               </section>
             )}
+            {bootstrap.mode === 'paper_live' && (
+              <section
+                className="connected-terminal__panel"
+                aria-label="Calidad del mercado público"
+              >
+                <h2>Calidad del feed público</h2>
+                <p>
+                  Estado:{' '}
+                  {marketStatusLabel(
+                    marketState.market_status ??
+                      record(bootstrap.market).status,
+                  )}
+                </p>
+                <p>
+                  Última recepción:{' '}
+                  {Number.isSafeInteger(
+                    marketState.last_received_at ??
+                      record(bootstrap.market).last_received_at,
+                  )
+                    ? `${new Date(
+                        Number(
+                          marketState.last_received_at ??
+                            record(bootstrap.market).last_received_at,
+                        ),
+                      ).toLocaleString('es-ES', { timeZone: 'UTC' })} UTC`
+                    : 'Aún no hay datos recibidos'}
+                </p>
+                {typeof (
+                  marketState.reason ?? record(bootstrap.market).reason
+                ) === 'string' && (
+                  <p>
+                    Detalle del feed:{' '}
+                    {String(
+                      marketState.reason ?? record(bootstrap.market).reason,
+                    )}
+                  </p>
+                )}
+                <p>
+                  Integridad del libro:{' '}
+                  {String(
+                    record(
+                      marketState.book_quality ??
+                        record(bootstrap.market).book_quality,
+                    ).book_sequence_integrity ??
+                      record(bootstrap.market).book_quality ??
+                      'No verificada',
+                  )}
+                </p>
+                <p>Garantía de secuencia del proveedor: no documentada.</p>
+                <p>Profundidad bid/ask: no expuesta por el DTO de terminal.</p>
+                <p>
+                  Financiación:{' '}
+                  {record(bootstrap.market).funding === 'known_current_interval'
+                    ? 'cobertura del período actual disponible; tasa y límites del período no se exponen en esta API.'
+                    : 'desconocida; entradas bloqueadas y PnL neto incompleto.'}
+                </p>
+                <p>
+                  Warm-up:{' '}
+                  {bootstrap.engine?.status === 'warming'
+                    ? 'el motor aún no ha recibido evidencia suficiente.'
+                    : 'el conteo de velas de calentamiento no está expuesto.'}
+                </p>
+              </section>
+            )}
             <ApprovedTerminalLayout
               chart={
                 <section
@@ -385,7 +510,7 @@ export default function FuturesTerminal({
                   aria-label="Gráfico BTC/USD"
                 >
                   <h2>BTC/USD perpetuo</h2>
-                  <TerminalMarketChart market={market} />
+                  <TerminalMarketChart market={market} mode={bootstrap.mode} />
                   <p>
                     Las cifras de cuenta y decisiones siguientes provienen del
                     snapshot/eventos durables.
@@ -441,22 +566,30 @@ export default function FuturesTerminal({
                             </p>
                             <p>
                               Estrategia seleccionada:{' '}
-                              {String(
+                              {strategyLabel(
                                 selector.strategy_id ??
-                                  analysis.selected_strategy_id ??
-                                  analysis.strategy_id ??
-                                  'No registrada',
+                                  analysis.selected_strategy_id,
+                              )}
+                            </p>
+                            <p>
+                              Versión del motor:{' '}
+                              {String(
+                                analysis.runtime_version ?? 'No disponible',
                               )}
                             </p>
                             <button
                               type="button"
                               className="demo-terminal__present"
+                              aria-label={`Copiar ID completo ${analysisId}`}
                               onClick={() =>
                                 void navigator.clipboard?.writeText(analysisId)
                               }
                             >
-                              Copiar ID {analysisId.slice(0, 8)}
+                              Copiar ID de análisis
                             </button>
+                            <code className="connected-terminal__hash">
+                              {analysisId || 'ID no disponible'}
+                            </code>
                             <details>
                               <summary>Propuestas y condiciones</summary>
                               {proposals.map((proposalValue, proposalIndex) => {
@@ -576,7 +709,7 @@ export default function FuturesTerminal({
                   <dd>{money(account.equity_usd)}</dd>
                   <dt>Fees USD</dt>
                   <dd>{money(account.fees_usd)}</dd>
-                  <dt>Funding</dt>
+                  <dt>Funding pagado (USD)</dt>
                   <dd>
                     {account.funding_complete === true
                       ? money(account.funding_paid_usd ?? account.funding_paid)

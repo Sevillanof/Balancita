@@ -108,4 +108,37 @@ describe('parseTerminalEnvelope', () => {
     }
     expect(parseTerminalEnvelope(envelope)).toEqual(envelope)
   })
+
+  it('accepts a public forming candle before its interval closes', () => {
+    const envelope = {
+      schema_version: 1,
+      event_id: 'event-forming-candle',
+      stream_id: 'stream-1',
+      run_id: 'run-1',
+      seq: 1,
+      type: 'market.updated',
+      instrument_id: 'kraken-futures:PF_XBTUSD',
+      event_time: 90_000,
+      published_at: 90_000,
+      data: {
+        market_status: 'live',
+        last_received_at: 90_000,
+        candle: {
+          interval_ms: 60_000,
+          bucket_start_ms: 60_000,
+          known_at_ms: 90_000,
+          open: '100000',
+          high: '100050',
+          low: '99950',
+          close: '100025',
+          volume_btc: '0.2',
+          closed: false,
+        },
+      },
+    }
+    expect(parseTerminalEnvelope(envelope)).toEqual(envelope)
+    const malformed = structuredClone(envelope)
+    malformed.data.candle.volume_btc = '-1'
+    expect(parseTerminalEnvelope(malformed)).toBeNull()
+  })
 })
