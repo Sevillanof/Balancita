@@ -37,6 +37,10 @@ export class FuturesCommandRunner {
     this.sqlObserver = options.observer
     this.worker = new FuturesWorker({
       observer: options.workerObserver,
+      eventLoopSampleIntervalMs:
+        process.env.BALANCITA_WORKER_EVENT_LOOP_INTERVAL_MS === undefined
+          ? undefined
+          : Number(process.env.BALANCITA_WORKER_EVENT_LOOP_INTERVAL_MS),
       commitResult: (result, request) => this.commit(result, request),
     })
   }

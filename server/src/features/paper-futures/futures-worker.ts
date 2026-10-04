@@ -1,7 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { performance } from 'node:perf_hooks'
+import { monitorEventLoopDelay, performance } from 'node:perf_hooks'
 
 const PROTOCOL_VERSION = 1
 const MAX_LINE_BYTES = 1_048_576
@@ -89,6 +89,7 @@ interface Pending {
   readonly reject: (error: Error) => void
   readonly timer: NodeJS.Timeout
   readonly enqueuedAt: number
+  readonly wireLine: string
   result?: FuturesWorkerResult
   commit?: FuturesWorkerCommit
 }
@@ -109,11 +110,15 @@ export class FuturesWorker {
     result: FuturesWorkerResult,
     request: FuturesWorkerRequest,
   ) => Promise<FuturesWorkerCommit>
+  private readonly loopDelay:
+    ReturnType<typeof monitorEventLoopDelay> | undefined
+  private readonly sampler: NodeJS.Timeout | undefined
 
   constructor(options: {
     readonly timeoutMs?: number
     readonly maxQueue?: number
     readonly observer?: (event: FuturesWorkerDiagnostic) => void
+    readonly eventLoopSampleIntervalMs?: number
     readonly commitResult: (
       result: FuturesWorkerResult,
       request: FuturesWorkerRequest,
@@ -126,6 +131,50 @@ export class FuturesWorker {
       throw new Error(`Worker queue capacity is fixed at ${MAX_QUEUE}.`)
     this.commitResult = options.commitResult
     this.observer = options.observer
+    if (options.eventLoopSampleIntervalMs !== undefined) {
+      if (
+        !Number.isSafeInteger(options.eventLoopSampleIntervalMs) ||
+        options.eventLoopSampleIntervalMs < 10
+      )
+        throw new Error('Event-loop sample interval must be at least 10ms.')
+      this.loopDelay = monitorEventLoopDelay({ resolution: 10 })
+      this.loopDelay.enable()
+      this.sampler = setInterval(() => {
+        const delay = this.loopDelay!
+        const memory = process.memoryUsage()
+        const cpu = process.cpuUsage()
+        if (this.observer)
+          try {
+            this.observer({
+              phase: 'event_loop_sample',
+              request_id: this.active?.request.request_id ?? 'worker',
+              run_id: this.active?.request.run_id ?? 'worker',
+              work_id: this.active?.request.work_id ?? 'worker',
+              monotonic_ms: performance.now(),
+              queue_count: this.queue.length,
+              oldest_queue_age_ms: this.queue.length
+                ? performance.now() - this.queue[0]!.enqueuedAt
+                : 0,
+              event_loop_delay_p50_ms: delay.percentile(50) / 1e6,
+              event_loop_delay_p95_ms: delay.percentile(95) / 1e6,
+              event_loop_delay_max_ms: delay.max / 1e6,
+              event_loop_sample_count: delay.count,
+              memory_usage: memory,
+              cpu_usage: cpu,
+              worker_pending_count:
+                this.queue.length + Number(this.active !== undefined),
+              worker_queue_depth: this.queue.length,
+              worker_oldest_age_ms: this.queue.length
+                ? performance.now() - this.queue[0]!.enqueuedAt
+                : 0,
+            })
+          } catch {
+            // Diagnostics must not interfere with worker processing.
+          }
+        delay.reset()
+      }, options.eventLoopSampleIntervalMs)
+      this.sampler.unref()
+    }
   }
 
   get pid(): number | undefined {
@@ -137,12 +186,17 @@ export class FuturesWorker {
       return Promise.reject(new Error('Futures worker is closed.'))
     validateFuturesWorkerRequest(request)
     const serializedAt = performance.now()
+    this.emitIdentity(request, 'serialization_start')
     const wireLine = JSON.stringify({
       type: 'work',
       protocol_version: PROTOCOL_VERSION,
       ...request,
     })
     const requestBytes = Buffer.byteLength(wireLine, 'utf8') + 1
+    this.emitIdentity(request, 'serialization_end', {
+      request_bytes: requestBytes,
+      duration_ms: performance.now() - serializedAt,
+    })
     if (requestBytes > MAX_LINE_BYTES)
       return Promise.reject(
         new Error('Futures worker request exceeds the JSONL line limit.'),
@@ -176,6 +230,7 @@ export class FuturesWorker {
         reject: rejectPromise,
         timer,
         enqueuedAt: performance.now(),
+        wireLine,
       })
       const item = this.queue.at(-1)!
       this.emit(item, 'enqueue')
@@ -189,6 +244,8 @@ export class FuturesWorker {
 
   async close(): Promise<void> {
     this.closed = true
+    if (this.sampler) clearInterval(this.sampler)
+    this.loopDelay?.disable()
     const pending = this.queue.splice(0)
     for (const item of pending) {
       clearTimeout(item.timer)
@@ -242,13 +299,7 @@ export class FuturesWorker {
     this.emit(item, 'send', {
       queue_wait_ms: performance.now() - item.enqueuedAt,
     })
-    this.child!.stdin.write(
-      `${JSON.stringify({
-        type: 'work',
-        protocol_version: PROTOCOL_VERSION,
-        ...item.request,
-      })}\n`,
-    )
+    this.write(item, this.child!.stdin, `${item.wireLine}\n`, 'stdin_write')
   }
 
   private start(): Promise<void> {
@@ -275,15 +326,31 @@ export class FuturesWorker {
       }, this.timeoutMs)
       this.stdoutBuffer = Buffer.alloc(0)
       child.stdout.on('data', (chunk: Buffer) => {
+        if (this.active)
+          this.emit(this.active, 'stdout_data', {
+            chunk_bytes: chunk.length,
+            readable_length: child.stdout.readableLength,
+            readable_high_water_mark: child.stdout.readableHighWaterMark,
+            readable_paused: child.stdout.isPaused(),
+          })
         for (const line of this.readLines(chunk)) {
+          if (this.active)
+            this.emit(this.active, 'frame_complete', {
+              frame_bytes: line.length + 1,
+            })
           let message: unknown
           const parseStartedAt = performance.now()
+          if (this.active) this.emit(this.active, 'json_parse_start')
           try {
             message = JSON.parse(line.toString('utf8'))
           } catch {
             child.kill('SIGKILL')
             return
           }
+          if (this.active)
+            this.emit(this.active, 'json_parse_end', {
+              duration_ms: performance.now() - parseStartedAt,
+            })
           if (!settled) {
             if (
               !isRecord(message) ||
@@ -384,6 +451,7 @@ export class FuturesWorker {
       void this.drain()
       return
     }
+    this.emit(active, 'schema_validation_start')
     if (
       !isResult(message, active.request) ||
       message.request_id !== active.request.request_id ||
@@ -397,6 +465,7 @@ export class FuturesWorker {
       this.child?.kill('SIGKILL')
       return
     }
+    this.emit(active, 'schema_validation_end')
     active.result = message
     this.emit(active, 'result_parse_validation', {
       duration_ms: parseDurationMs,
@@ -422,18 +491,17 @@ export class FuturesWorker {
       )
         throw new Error('Node did not confirm a matching committed result.')
       active.commit = commit
-      this.child!.stdin.write(
-        `${JSON.stringify({
-          type: 'ack',
-          status: commit.status,
-          protocol_version: PROTOCOL_VERSION,
-          request_id: result.request_id,
-          run_id: result.run_id,
-          work_id: result.work_id,
-          applied_state_version: commit.applied_state_version,
-          result_hash: commit.result_hash,
-        })}\n`,
-      )
+      const ackLine = `${JSON.stringify({
+        type: 'ack',
+        status: commit.status,
+        protocol_version: PROTOCOL_VERSION,
+        request_id: result.request_id,
+        run_id: result.run_id,
+        work_id: result.work_id,
+        applied_state_version: commit.applied_state_version,
+        result_hash: commit.result_hash,
+      })}\n`
+      this.write(active, this.child!.stdin, ackLine, 'ack_write')
       this.emit(active, 'ack_sent')
     } catch (error) {
       this.active = undefined
@@ -486,6 +554,46 @@ export class FuturesWorker {
     }
   }
 
+  private emitIdentity(
+    request: FuturesWorkerRequest,
+    phase: string,
+    details: Record<string, unknown> = {},
+  ): void {
+    if (!this.observer) return
+    try {
+      this.observer({
+        phase,
+        request_id: request.request_id,
+        run_id: request.run_id,
+        work_id: request.work_id,
+        monotonic_ms: performance.now(),
+        queue_count: this.queue.length,
+        oldest_queue_age_ms: this.queue.length
+          ? performance.now() - this.queue[0]!.enqueuedAt
+          : 0,
+        rss_bytes: process.memoryUsage().rss,
+        ...details,
+      })
+    } catch {
+      // Diagnostics must never interfere with worker or financial processing.
+    }
+  }
+
+  private write(
+    item: Pending,
+    stream: ChildProcessWithoutNullStreams['stdin'],
+    data: string,
+    phase: string,
+  ): void {
+    observeWorkerPipeWrite(
+      stream,
+      (event) => this.emit(item, event.phase, event),
+      item.request,
+      phase,
+      data,
+    )
+  }
+
   private readLines(chunk: Buffer): Buffer[] {
     this.stdoutBuffer = Buffer.concat([this.stdoutBuffer, chunk])
     if (
@@ -514,6 +622,52 @@ export class FuturesWorker {
     }
     return lines
   }
+}
+
+export function observeWorkerPipeWrite(
+  stream: Pick<
+    ChildProcessWithoutNullStreams['stdin'],
+    | 'write'
+    | 'once'
+    | 'writableLength'
+    | 'writableNeedDrain'
+    | 'writableHighWaterMark'
+  >,
+  emit: (event: Record<string, unknown> & { readonly phase: string }) => void,
+  request: Pick<FuturesWorkerRequest, 'request_id' | 'run_id' | 'work_id'>,
+  phase: string,
+  data = '',
+): void {
+  const started = performance.now()
+  const base = { ...request }
+  const accepted = stream.write(data, () =>
+    emit({
+      ...base,
+      phase: `${phase}_callback`,
+      monotonic_ms: performance.now(),
+      callback_duration_ms: performance.now() - started,
+    }),
+  )
+  emit({
+    ...base,
+    phase: `${phase}_return`,
+    monotonic_ms: performance.now(),
+    write_return: accepted,
+    writable_length: stream.writableLength,
+    writable_need_drain: stream.writableNeedDrain,
+    writable_high_water_mark: stream.writableHighWaterMark,
+  })
+  if (!accepted)
+    stream.once('drain', () =>
+      emit({
+        ...base,
+        phase: `${phase}_drain`,
+        monotonic_ms: performance.now(),
+        drain_duration_ms: performance.now() - started,
+        writable_length: stream.writableLength,
+        writable_need_drain: stream.writableNeedDrain,
+      }),
+    )
 }
 
 export interface FuturesWorkerDiagnostic {

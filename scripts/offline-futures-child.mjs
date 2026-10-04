@@ -32,6 +32,7 @@ process.on('message', async (message) => {
         'python-diagnostics.jsonl',
       )
       process.env.BALANCITA_FUTURES_DIAGNOSTICS_PATH = pythonDiagnosticsPath
+      process.env.BALANCITA_WORKER_EVENT_LOOP_INTERVAL_MS = '1000'
       app = await buildApp({
         config: serverConfigFrom({
           FUTURES_MODE: 'paper_live',

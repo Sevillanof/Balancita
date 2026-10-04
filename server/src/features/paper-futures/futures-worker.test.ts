@@ -1,10 +1,51 @@
 import { describe, expect, it } from 'vitest'
+import { EventEmitter } from 'node:events'
 import {
   FuturesWorker,
+  observeWorkerPipeWrite,
   validateFuturesWorkerRequest,
 } from './futures-worker.ts'
 
 describe('FuturesWorker', () => {
+  it('records deterministic false-write, callback, and drain backpressure timing', () => {
+    class ControlledPipe extends EventEmitter {
+      writableLength = 9
+      writableNeedDrain = true
+      writableHighWaterMark = 8
+      write(_data: string, callback: () => void) {
+        callback()
+        return false
+      }
+    }
+    const pipe = new ControlledPipe()
+    const events: Array<Record<string, unknown>> = []
+    observeWorkerPipeWrite(
+      pipe as unknown as Parameters<typeof observeWorkerPipeWrite>[0],
+      (event) => events.push(event),
+      {
+        request_id: 'backpressure-request',
+        run_id: 'run-fixture',
+        work_id: 'backpressure-work',
+      },
+      'request_write',
+    )
+    pipe.emit('drain')
+    expect(events.map((event) => event.phase)).toEqual([
+      'request_write_callback',
+      'request_write_return',
+      'request_write_drain',
+    ])
+    expect(events[1]).toMatchObject({
+      write_return: false,
+      writable_length: 9,
+      writable_need_drain: true,
+    })
+    expect(events[2]).toMatchObject({
+      request_id: 'backpressure-request',
+      drain_duration_ms: expect.any(Number),
+    })
+  })
+
   it('rejects untyped funding provenance before worker submission', () => {
     const request = normalizedFundingRequest()
     request.payload.market_snapshot.events[0]!.observation.unit = 'unknown'
@@ -83,16 +124,34 @@ describe('FuturesWorker', () => {
     } finally {
       await worker.close()
     }
-    expect(events.map((event) => event.phase)).toEqual([
-      'enqueue',
-      'serialization',
-      'send',
-      'result_parse_validation',
-      'commit_callback_start',
-      'commit_callback_end',
-      'ack_sent',
-      'ack_received',
-    ])
+    expect(events.map((event) => event.phase)).toEqual(
+      expect.arrayContaining([
+        'serialization_start',
+        'serialization_end',
+        'stdin_write_return',
+        'stdin_write_callback',
+        'stdout_data',
+        'frame_complete',
+        'json_parse_start',
+        'json_parse_end',
+        'schema_validation_start',
+        'schema_validation_end',
+        'ack_write_return',
+      ]),
+    )
+    expect(
+      events.find((event) => event.phase === 'stdin_write_return'),
+    ).toMatchObject({
+      request_id: 'diagnostic-request',
+      write_return: expect.any(Boolean),
+      writable_length: expect.any(Number),
+      writable_high_water_mark: expect.any(Number),
+    })
+    expect(events.some((event) => event.phase === 'stdin_write_return')).toBe(
+      true,
+    )
+    expect(events.some((event) => event.phase === 'stdout_data')).toBe(true)
+    expect(events.some((event) => event.phase === 'frame_complete')).toBe(true)
     expect(
       events.every(
         (event) =>
@@ -104,6 +163,31 @@ describe('FuturesWorker', () => {
           typeof event.rss_bytes === 'number',
       ),
     ).toBe(true)
+  })
+
+  it('samples event-loop and worker state only when opted in and clears on close', async () => {
+    const events: Array<Record<string, unknown>> = []
+    const worker = new FuturesWorker({
+      eventLoopSampleIntervalMs: 10,
+      observer: (event) => events.push(event),
+      commitResult: async (result) => ({
+        status: 'committed',
+        applied_state_version: result.applied_state_version,
+        result_hash: 'f'.repeat(64),
+      }),
+    })
+    await worker.submit(request('sample-request', 'sample-work', 'long'))
+    await worker.close()
+    expect(events.some((event) => event.phase === 'event_loop_sample')).toBe(
+      true,
+    )
+    expect(
+      events.find((event) => event.phase === 'event_loop_sample'),
+    ).toMatchObject({
+      event_loop_sample_count: expect.any(Number),
+      event_loop_delay_p95_ms: expect.any(Number),
+      worker_pending_count: expect.any(Number),
+    })
   })
 
   it('ignores observer exceptions and emits active timeout diagnostics', async () => {
