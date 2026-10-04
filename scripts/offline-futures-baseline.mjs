@@ -1,10 +1,4 @@
-import {
-  readFileSync,
-  mkdirSync,
-  writeFileSync,
-  existsSync,
-  rmSync,
-} from 'node:fs'
+import { readFileSync, mkdirSync, writeFileSync, existsSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -70,6 +64,7 @@ let childPid = child.pid
 let outcome = 'starting'
 let error = null
 let childClosed = false
+let forcedTermination = false
 const writeReport = (partial = false) => {
   if (finalized) return
   finalized = true
@@ -92,7 +87,55 @@ const writeReport = (partial = false) => {
         child_pid: childPid,
         child_process_group: childPid,
         child_closed: childClosed,
+        child_exit_code: child.exitCode,
+        child_signal_code: child.signalCode,
+        forced_termination: forcedTermination,
+        source_queue_snapshot: (() => {
+          const path = join(temp, 'app-source-queue.jsonl')
+          if (!existsSync(path)) return null
+          const lines = readFileSync(path, 'utf8').trim().split('\n')
+          try {
+            return JSON.parse(lines.at(-1))
+          } catch {
+            return null
+          }
+        })(),
+        last_unended_close_phase: (() => {
+          const path = join(temp, 'app-close-phases.jsonl')
+          if (!existsSync(path)) return null
+          const events = readFileSync(path, 'utf8')
+            .trim()
+            .split('\n')
+            .filter(Boolean)
+            .map((line) => JSON.parse(line))
+          const open = new Map()
+          for (const event of events) {
+            const key = `${event.phase}:${event.resource_id ?? ''}`
+            if (event.state === 'begin') open.set(key, event)
+            else open.delete(key)
+          }
+          return [...open.values()].at(-1) ?? null
+        })(),
+        worker_pid: (() => {
+          const path = join(temp, 'python-diagnostics.jsonl')
+          if (!existsSync(path)) return null
+          const events = readFileSync(path, 'utf8').trim().split('\n')
+          for (let i = events.length - 1; i >= 0; i -= 1) {
+            try {
+              const event = JSON.parse(events[i])
+              if (event.process_pid) return event.process_pid
+            } catch {}
+          }
+          return null
+        })(),
         preserved_temp_directory: existsSync(temp) ? temp : null,
+        trace_paths: {
+          worker: join(temp, 'worker-observer.jsonl'),
+          sqlite: join(temp, 'sqlite-observer.jsonl'),
+          python: join(temp, 'python-diagnostics.jsonl'),
+          account_db: join(temp, 'account.sqlite'),
+          market_db: join(temp, 'market.sqlite'),
+        },
         error,
       },
       null,
@@ -106,6 +149,7 @@ const killOwnedGroup = () => {
       process.kill(-childPid, 'SIGTERM')
     } catch {}
     const timer = setTimeout(() => {
+      forcedTermination = true
       try {
         process.kill(-childPid, 'SIGKILL')
       } catch {}
@@ -147,7 +191,6 @@ child.on('message', (message) => {
     childClosed = true
     outcome = 'replay_complete'
     writeReport()
-    rmSync(temp, { recursive: true, force: true })
   }
 })
 child.once('close', () => {
@@ -176,7 +219,10 @@ child.once('close', () => {
   clearTimeout(watchdog)
   clearInterval(poll)
   if (!finalized) {
-    outcome ||= 'child_exited'
+    outcome = child.exitCode === 0 ? 'child_exited' : 'child_failed'
+    writeReport(true)
+  } else if (outcome === 'watchdog_deadline') {
+    finalized = false
     writeReport(true)
   }
 })

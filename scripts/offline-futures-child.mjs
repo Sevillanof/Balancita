@@ -27,6 +27,8 @@ process.on('message', async (message) => {
       mkdirSync(message.temp, { recursive: true })
       const workerTracePath = join(message.temp, 'worker-observer.jsonl')
       const sqliteTracePath = join(message.temp, 'sqlite-observer.jsonl')
+      const sourceQueueTracePath = join(message.temp, 'app-source-queue.jsonl')
+      const closePhasesTracePath = join(message.temp, 'app-close-phases.jsonl')
       const pythonDiagnosticsPath = join(
         message.temp,
         'python-diagnostics.jsonl',
@@ -53,6 +55,10 @@ process.on('message', async (message) => {
             appendFileSync(workerTracePath, `${JSON.stringify(event)}\n`),
           futuresSqlObserver: (event) =>
             appendFileSync(sqliteTracePath, `${JSON.stringify(event)}\n`),
+          futuresSourceQueueObserver: (event) =>
+            appendFileSync(sourceQueueTracePath, `${JSON.stringify(event)}\n`),
+          futuresLifecycleObserver: (event) =>
+            appendFileSync(closePhasesTracePath, `${JSON.stringify(event)}\n`),
         },
       })
       await app.ready()
