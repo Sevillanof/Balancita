@@ -53,3 +53,5 @@ Parallel preparation is limited to read-only contract mapping and independent di
 - [ ] State remaining semantic questions, limitations, and any incomplete native review explicitly; make no performance, financial-completeness, or cleanup claim without corresponding evidence.
 
 BP-01a behavior commit: `7bbeff864eda59a32c9270c5c9d5e6c8395a1e53` (`fix(futures): bound admission order clocks`).
+
+BP-01b behavior commit: `28dc2bd42a088c619463e6bd6222fe2018ca1255` (`fix(futures): separate funding availability and entry obligations`).
