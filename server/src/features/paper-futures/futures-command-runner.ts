@@ -1,5 +1,9 @@
 import { isDeepStrictEqual } from 'node:util'
-import { FuturesStore, type TerminalCommandMetadata } from './futures-store.ts'
+import {
+  FuturesStore,
+  type FuturesSqlObserver,
+  type TerminalCommandMetadata,
+} from './futures-store.ts'
 import {
   FuturesWorker,
   type FuturesWorkerCommit,
@@ -19,9 +23,14 @@ export class FuturesCommandRunner {
     Promise<Record<string, unknown>>
   >()
   private readonly store: FuturesStore
+  private readonly sqlObserver?: FuturesSqlObserver
 
-  constructor(store: FuturesStore) {
+  constructor(
+    store: FuturesStore,
+    options: { readonly observer?: FuturesSqlObserver } = {},
+  ) {
     this.store = store
+    this.sqlObserver = options.observer
     this.worker = new FuturesWorker({
       commitResult: (result, request) => this.commit(result, request),
     })
@@ -163,7 +172,13 @@ export class FuturesCommandRunner {
             result: snapshot,
             events,
           }
-    const receipt = this.store.applyResult(envelope)
+    const receipt = this.store.applyResult(
+      envelope,
+      undefined,
+      this.sqlObserver
+        ? { requestId: result.request_id, observer: this.sqlObserver }
+        : undefined,
+    )
     if (
       typeof receipt.result_hash !== 'string' ||
       (receipt.status !== 'committed' && receipt.status !== 'superseded') ||

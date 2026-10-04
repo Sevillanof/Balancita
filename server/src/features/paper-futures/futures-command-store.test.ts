@@ -53,6 +53,68 @@ describe('durable futures worker commands', () => {
     }
   })
 
+  it('observes actual SQLite commit phases correlated to the worker request', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'futures-worker-sql-trace-'))
+    const command = request('sql-trace-request', 'sql-trace-work')
+    const phases: Record<string, unknown>[] = []
+    try {
+      const store = new FuturesStore(join(directory, 'fixture.sqlite'))
+      createRun(store)
+      const runner = new FuturesCommandRunner(store, {
+        observer: (event) => phases.push(event),
+      })
+      const accepted = runner.accept(command)
+      const result = await accepted.result
+      expect(result.type).toBe('command.result')
+      expect(phases.map((event) => event.phase)).toEqual(
+        expect.arrayContaining([
+          'sql_prepare',
+          'sql_begin_immediate',
+          'sql_transaction_body',
+          'sql_commit_call',
+          'sql_commit_success',
+        ]),
+      )
+      expect(
+        phases.every(
+          (event) =>
+            event.request_id === command.request_id &&
+            event.run_id === command.run_id &&
+            event.work_id === command.work_id,
+        ),
+      ).toBe(true)
+      expect(store.verifyRun(command.run_id)).toBe(true)
+      await runner.close()
+      store.close()
+    } finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps the durable result unchanged when the SQL observer throws', async () => {
+    const directory = mkdtempSync(
+      join(tmpdir(), 'futures-worker-sql-observer-'),
+    )
+    const command = request('observer-request', 'observer-work')
+    try {
+      const store = new FuturesStore(join(directory, 'fixture.sqlite'))
+      createRun(store)
+      const runner = new FuturesCommandRunner(store, {
+        observer: () => {
+          throw new Error('diagnostic failure')
+        },
+      })
+      const accepted = runner.accept(command)
+      expect((await accepted.result).type).toBe('command.result')
+      expect(store.getAppliedReceipt(command.work_id)?.status).toBe('committed')
+      expect(store.verifyRun(command.run_id)).toBe(true)
+      await runner.close()
+      store.close()
+    } finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
   it('sends no committed worker acknowledgement before result transaction and resumes accepted work after restart', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'futures-worker-restart-'))
     const path = join(directory, 'fixture.sqlite')
@@ -60,11 +122,14 @@ describe('durable futures worker commands', () => {
     try {
       const store = new FuturesStore(path)
       createRun(store)
+      const phases: Record<string, unknown>[] = []
       const apply = store.applyResult.bind(store)
-      vi.spyOn(store, 'applyResult').mockImplementation((value) =>
-        apply(value, 'before-commit'),
+      vi.spyOn(store, 'applyResult').mockImplementation(
+        (value, _failure, trace) => apply(value, 'before-commit', trace),
       )
-      const runner = new FuturesCommandRunner(store)
+      const runner = new FuturesCommandRunner(store, {
+        observer: (event) => phases.push(event),
+      })
       const accepted = runner.accept(command)
       expect(accepted.acknowledgement.status).toBe('accepted')
       await expect(accepted.result).rejects.toThrow(
@@ -72,6 +137,10 @@ describe('durable futures worker commands', () => {
       )
       expect(store.exportRun(command.run_id).events).toEqual([])
       expect(store.getAppliedReceipt(command.work_id)).toBeUndefined()
+      expect(phases.map((event) => event.phase)).toContain('sql_rollback')
+      expect(phases.map((event) => event.phase)).not.toContain(
+        'sql_commit_success',
+      )
       expect(store.loadPendingCommands()).toHaveLength(1)
       await runner.close()
       store.close()

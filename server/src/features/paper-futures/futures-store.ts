@@ -2,6 +2,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { createHash, randomUUID } from 'node:crypto'
 import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
+import { performance } from 'node:perf_hooks'
 import {
   canonicalHash,
   canonicalJson,
@@ -10,6 +11,15 @@ import {
 } from './futures-canonical.ts'
 
 type JsonRecord = Record<string, unknown>
+
+export type FuturesSqlObserver = (event: {
+  readonly phase: string
+  readonly request_id: string
+  readonly run_id: string
+  readonly work_id: string
+  readonly monotonic_ms: number
+  readonly duration_ms?: number
+}) => void
 
 export type TerminalEventType =
   | 'analysis.completed'
@@ -849,7 +859,31 @@ export class FuturesStore {
       )
   }
 
-  applyResult(value: unknown, injectFailureAt?: 'before-commit'): JsonRecord {
+  applyResult(
+    value: unknown,
+    injectFailureAt?: 'before-commit',
+    trace?: {
+      readonly requestId: string
+      readonly observer: FuturesSqlObserver
+    },
+  ): JsonRecord {
+    const enteredAt = performance.now()
+    const report = (phase: string, duration_ms?: number) => {
+      if (!trace || !isRecord(value)) return
+      try {
+        trace.observer({
+          phase,
+          request_id: trace.requestId,
+          run_id: String(value.run_id ?? ''),
+          work_id: String(value.work_id ?? ''),
+          monotonic_ms: performance.now(),
+          ...(duration_ms === undefined ? {} : { duration_ms }),
+        })
+      } catch {
+        // Diagnostics must not affect durable result processing.
+      }
+    }
+    report('sql_entry')
     if (!isRecord(value)) throw new Error('Invalid futures result schema.')
     const runtimeWork =
       value.schema_version === 'futures-runtime-work.v1' ||
@@ -956,7 +990,11 @@ export class FuturesStore {
       const recordHash = createHash('sha256')
         .update(`${previous}${payloadHash}`)
         .digest('hex')
+      report('sql_prepare', performance.now() - enteredAt)
+      const beginAt = performance.now()
       this.db.exec('BEGIN IMMEDIATE')
+      report('sql_begin_immediate', performance.now() - beginAt)
+      const bodyAt = performance.now()
       try {
         this.db
           .prepare(
@@ -1000,10 +1038,16 @@ export class FuturesStore {
           ],
           this.terminalRetention,
         )
+        report('sql_transaction_body', performance.now() - bodyAt)
+        const commitAt = performance.now()
+        report('sql_commit_call')
         this.db.exec('COMMIT')
+        report('sql_commit_success', performance.now() - commitAt)
         this.notifyTerminalEvents(terminalEvents)
         return receipt
       } catch (error) {
+        report('sql_error')
+        report('sql_rollback')
         this.db.exec('ROLLBACK')
         throw error
       }
@@ -1021,7 +1065,11 @@ export class FuturesStore {
       applied_state_version: value.applied_state_version,
       result_hash: resultHash,
     }
+    report('sql_prepare', performance.now() - enteredAt)
+    const beginAt = performance.now()
     this.db.exec('BEGIN IMMEDIATE')
+    report('sql_begin_immediate', performance.now() - beginAt)
+    const bodyAt = performance.now()
     try {
       for (const event of events) {
         this.db
@@ -1115,10 +1163,16 @@ export class FuturesStore {
       )
       if (injectFailureAt === 'before-commit')
         throw new Error('Injected pre-commit failure.')
+      report('sql_transaction_body', performance.now() - bodyAt)
+      const commitAt = performance.now()
+      report('sql_commit_call')
       this.db.exec('COMMIT')
+      report('sql_commit_success', performance.now() - commitAt)
       this.notifyTerminalEvents(terminalEvents)
       return receipt
     } catch (error) {
+      report('sql_error')
+      report('sql_rollback')
       this.db.exec('ROLLBACK')
       throw error
     }
