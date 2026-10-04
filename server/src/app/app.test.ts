@@ -828,6 +828,15 @@ describe('PAPER_LIVE startup integration', () => {
         FUTURES_MARKET_DB_PATH: marketPath,
       }),
       overrides: {
+        futuresFundingFetch: async () =>
+          new Response(
+            JSON.stringify({
+              result: 'success',
+              serverTime: '2026-10-04T00:00:00.000Z',
+              rates: [],
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          ),
         futuresPublicCatalog: async () => ({
           instruments: [
             {
@@ -894,6 +903,15 @@ describe('PAPER_LIVE startup integration', () => {
         FUTURES_MARKET_DB_PATH: join(root, 'market.sqlite'),
       }),
       overrides: {
+        futuresFundingFetch: async () =>
+          new Response(
+            JSON.stringify({
+              result: 'success',
+              serverTime: '2026-10-04T00:00:00.000Z',
+              rates: [],
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          ),
         futuresPublicCatalog: async () => ({
           instruments: [
             {

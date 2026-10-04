@@ -124,6 +124,7 @@ export function historicalFundingAt(
 export function createHistoricalFundingClient(
   options: {
     fetch?: HistoricalFundingFetch
+    clock?: () => number
     timeoutMs?: number
   } = {},
 ) {
@@ -137,7 +138,7 @@ export function createHistoricalFundingClient(
   const controllers = new Set<AbortController>()
   let closed = false
   return {
-    async fetch(receivedAtMs: number): Promise<HistoricalFundingResponse> {
+    async fetch(receivedAtMs?: number): Promise<HistoricalFundingResponse> {
       if (closed) throw new Error('Historical funding client is closed.')
       const controller = new AbortController()
       controllers.add(controller)
@@ -158,9 +159,12 @@ export function createHistoricalFundingClient(
         const bytes = await readBoundedBody(response, MAX_RESPONSE_BYTES)
         if (bytes.byteLength > MAX_RESPONSE_BYTES)
           throw new RangeError('Historical funding response exceeds 2 MiB.')
+        const responseReceivedAtMs = options.clock?.() ?? receivedAtMs
+        if (responseReceivedAtMs === undefined)
+          throw new TypeError('Funding response receipt time is required.')
         return parseHistoricalFundingResponse(
           new TextDecoder('utf-8', { fatal: true }).decode(bytes),
-          receivedAtMs,
+          responseReceivedAtMs,
         )
       } finally {
         clearTimeout(timeout)

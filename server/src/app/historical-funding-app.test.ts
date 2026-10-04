@@ -1,7 +1,7 @@
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { buildApp } from './app.ts'
 import { serverConfigFrom } from '../platform/config.ts'
 import { FuturesStore } from '../features/paper-futures/futures-store.ts'
@@ -18,6 +18,96 @@ const capturedResponse = readFileSync(
 const now = 1_790_950_000_000
 
 describe('PAPER_LIVE historical funding integration', () => {
+  it('marks historical funding known only when the deferred response body is received', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'funding-receipt-time-'))
+    const marketPath = join(directory, 'market.sqlite')
+    const accountPath = join(directory, 'account.sqlite')
+    const requestAt = Date.parse('2026-10-04T00:00:00.000Z')
+    let clock = requestAt
+    let resolveResponse!: (response: Response) => void
+    const responsePending = new Promise<Response>((resolve) => {
+      resolveResponse = resolve
+    })
+    const period = new Date(requestAt - 1_800_000).toISOString()
+    const responseBody = JSON.stringify({
+      result: 'success',
+      serverTime: new Date(requestAt + 1_000).toISOString(),
+      rates: [
+        {
+          timestamp: period,
+          fundingRate: -0.125,
+          relativeFundingRate: -0.00000125,
+        },
+      ],
+    })
+    const socket: FuturesSocket = {
+      onopen: null,
+      onmessage: null,
+      onerror: null,
+      onclose: null,
+      send: () => undefined,
+      close: () => undefined,
+    }
+    const app = await buildApp({
+      config: serverConfigFrom({
+        FUTURES_MODE: 'paper_live',
+        FUTURES_DB_PATH: accountPath,
+        FUTURES_MARKET_DB_PATH: marketPath,
+        KRAKEN_REST_OHLC_WORKER_ENABLED: 'false',
+      }),
+      overrides: {
+        futuresPublicCatalog: async () => ({
+          instruments: [
+            {
+              symbol: 'PF_XBTUSD',
+              type: 'flexible_futures',
+              pair: 'BTC:USD',
+              base: 'BTC',
+              quote: 'USD',
+              contractSize: '1',
+              tickSize: '1',
+              contractValueTradePrecision: 4,
+              tradeable: true,
+              isExpired: false,
+            },
+          ],
+        }),
+        futuresSocketFactory: () => socket,
+        futuresClock: () => clock,
+        futuresFundingFetch: () => responsePending,
+      } as never,
+    })
+    try {
+      await app.ready()
+      const market = new FuturesMarketStore(marketPath)
+      const fundingAt = (at: number) =>
+        market
+          .fundingForInterval(at, at)
+          .filter((record) => Number(record.knownAtMs) <= at)
+      expect(fundingAt(requestAt + 500)).toEqual([])
+
+      clock = requestAt + 1_000
+      resolveResponse(new Response(responseBody, { status: 200 }))
+      await vi.waitFor(() => {
+        expect(
+          market.fundingForInterval(requestAt, Number.MAX_SAFE_INTEGER).length,
+        ).toBe(1)
+      })
+      expect(fundingAt(requestAt + 500)).toEqual([])
+      expect(fundingAt(requestAt + 1_000)).toHaveLength(1)
+      expect(
+        Number(
+          market.fundingForInterval(requestAt, Number.MAX_SAFE_INTEGER)[0]!
+            .knownAtMs,
+        ),
+      ).toBe(requestAt + 1_000)
+      market.close()
+    } finally {
+      await app.close()
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
   it('persists source audit and delivers known absolute funding through the shared Python runtime', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'funding-app-integration-'))
     const marketPath = join(directory, 'market.sqlite')

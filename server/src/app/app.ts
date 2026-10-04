@@ -968,17 +968,17 @@ export async function buildApp(options: {
         )
         futuresFundingClient = createHistoricalFundingClient({
           fetch: options.overrides?.futuresFundingFetch,
+          clock,
         })
         const pollFunding = async (): Promise<void> => {
-          const receivedAt = clock()
           try {
-            const response = await futuresFundingClient!.fetch(receivedAt)
+            const response = await futuresFundingClient!.fetch()
             futuresMarketStore!.appendFundingResponse(response)
             futuresFundingKnownAt = fundingAvailableAt(
               futuresMarketStore,
-              receivedAt,
+              response.receivedAtMs,
             )
-              ? receivedAt
+              ? response.receivedAtMs
               : null
           } catch (error) {
             futuresFundingKnownAt = null
