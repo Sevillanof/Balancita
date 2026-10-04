@@ -1,0 +1,16 @@
+server/src/app/app.test.ts
+  h_2f68313623be98 24,993,1001-1004,1117-1141
+server/src/app/app.ts
+  h_2f68313623be98 158-159,164-177,397,764-793,812-817,1154-1165,1168-1170,1178-1186
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6fe7d901f4a4c6a9ccc0df5ad006f22f8661d442",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
