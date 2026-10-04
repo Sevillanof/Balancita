@@ -1,0 +1,26 @@
+odd/tasks/kraken-futures-deterministic.md
+  h_2f68313623be98 219-225
+server/src/app/app.test.ts
+  h_2f68313623be98 1084-1111,1164-1165,1167,1172
+server/src/app/app.ts
+  h_2f68313623be98 1240-1243,1245-1246,1249,1251-1252
+server/src/features/kraken-futures/futures-market-store.test.ts
+  h_2f68313623be98 80-98
+server/src/features/kraken-futures/futures-market-store.ts
+  h_2f68313623be98 611-641
+server/src/features/paper-futures/futures-replay-driver.ts
+  h_2f68313623be98 360-362,609-619
+server/src/features/paper-futures/futures-session-runtime.ts
+  h_2f68313623be98 269-271
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b3ddc384f6346a175fa245d5821149da7e3ed889",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
