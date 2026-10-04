@@ -77,6 +77,25 @@ describe('FuturesMarketStore', () => {
     store.close()
   })
 
+  it('counts pending durable events by watermark and received-time cutoff', () => {
+    const store = new FuturesMarketStore(dbPath())
+    store.append(event)
+    store.append({ ...event, seq: 2, uid: 'trade-2', receivedAt: 2020 })
+    store.append({ ...event, seq: 3, uid: 'trade-3', receivedAt: 3030 })
+
+    expect(store.pendingEventsAfterAsOf(1, 2020)).toEqual({
+      count: 1,
+      firstSequence: 2,
+      lastSequence: 2,
+    })
+    expect(store.pendingEventsAfterAsOf(1, 3030)).toEqual({
+      count: 2,
+      firstSequence: 2,
+      lastSequence: 3,
+    })
+    store.close()
+  })
+
   it('selects only closed candle revisions known by the cutoff', () => {
     const store = new FuturesMarketStore(dbPath())
     const revision = (revision: number, knownAt: number, isClosed: boolean) =>

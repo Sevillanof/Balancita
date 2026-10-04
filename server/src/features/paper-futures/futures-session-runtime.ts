@@ -266,6 +266,9 @@ export class FuturesSessionRuntime {
     lastDurableWatermark: number
     stopped: boolean
     deferredSourceRows: number
+    durablePendingSourceRows: number
+    durablePendingFirstSequence: number | null
+    durablePendingLastSequence: number | null
     checkpointStateVersion: number
   }> {
     if (this.mode !== 'paper_live' && this.mode !== 'replay')

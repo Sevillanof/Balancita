@@ -1235,26 +1235,21 @@ export async function buildApp(options: {
                         )
                       futuresSourceWatermark = result.sourceWatermark
                       if (result.stopped) {
-                        const deferred = futuresMarketStore!.eventsAfter(
-                          result.sourceWatermark,
-                        ) as Record<string, unknown>[]
-                        const firstSequence = Number(
-                          deferred[0]?.receivedSequence,
-                        )
-                        const lastSequence = Number(
-                          deferred.at(-1)?.receivedSequence,
-                        )
                         const drainProgress = {
                           source_watermark: result.lastDurableWatermark,
-                          deferred_source_rows: result.deferredSourceRows,
-                          ...(Number.isSafeInteger(firstSequence)
+                          cached_deferred_source_rows:
+                            result.deferredSourceRows,
+                          deferred_source_rows: result.durablePendingSourceRows,
+                          ...(result.durablePendingFirstSequence !== null
                             ? {
-                                deferred_source_first_sequence: firstSequence,
+                                deferred_source_first_sequence:
+                                  result.durablePendingFirstSequence,
                               }
                             : {}),
-                          ...(Number.isSafeInteger(lastSequence)
+                          ...(result.durablePendingLastSequence !== null
                             ? {
-                                deferred_source_last_sequence: lastSequence,
+                                deferred_source_last_sequence:
+                                  result.durablePendingLastSequence,
                               }
                             : {}),
                           checkpoint_state_version:

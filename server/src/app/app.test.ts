@@ -1081,6 +1081,34 @@ describe('PAPER_LIVE startup integration', () => {
           ),
         ),
       ])
+      for (const raw of [
+        JSON.stringify({
+          feed: 'ticker',
+          product_id: 'PF_XBTUSD',
+          seq: 21,
+          time: 1_790_950_000_200,
+          last: '90001',
+          markPrice: '90001',
+          suspended: false,
+        }),
+        JSON.stringify({
+          feed: 'book_snapshot',
+          product_id: 'PF_XBTUSD',
+          seq: 12,
+          timestamp: 1_790_950_000_300,
+          bids: [{ price: '90000', qty: '0.6' }],
+          asks: [{ price: '90001', qty: '0.6' }],
+        }),
+      ])
+        fakeSocket.onmessage?.({ data: raw })
+      await vi.waitFor(() => {
+        const source = new FuturesMarketStore(marketPath, { readOnly: true })
+        try {
+          expect(source.eventCount()).toBe(5)
+        } finally {
+          source.close()
+        }
+      })
       const active = sourceQueueEvents.at(-1)
       expect(active).toMatchObject({ phase: 'start', running_count: 1 })
       expect(active?.durable_source_backlog).toBeGreaterThan(0)
@@ -1133,14 +1161,15 @@ describe('PAPER_LIVE startup integration', () => {
       expect.objectContaining({
         phase: 'futures-source-drain-deferred',
         state: 'end',
-        deferred_source_rows: 1,
+        deferred_source_rows: 3,
+        cached_deferred_source_rows: 1,
         deferred_source_first_sequence: 3,
-        deferred_source_last_sequence: 3,
+        deferred_source_last_sequence: 5,
         source_watermark: 2,
         checkpoint_state_version: 1,
       }),
     )
-    expect(sourceEventCount).toBe(3)
+    expect(sourceEventCount).toBe(5)
     expect(socketClosed).toBe(true)
     expect(workerClosed).toBe(true)
     expect(accountVerified).toBe(true)

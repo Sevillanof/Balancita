@@ -608,6 +608,37 @@ export class FuturesMarketStore {
     return Number(row.count)
   }
 
+  pendingEventsAfterAsOf(
+    receivedSequence: number,
+    receivedCutoff: number,
+  ): {
+    count: number
+    firstSequence: number | null
+    lastSequence: number | null
+  } {
+    time(receivedSequence, 'receivedSequence')
+    time(receivedCutoff, 'receivedCutoff')
+    const row = this.db
+      .prepare(
+        `SELECT COUNT(*) AS count, MIN(rowid) AS first_sequence,
+                MAX(rowid) AS last_sequence
+         FROM paper_futures_market_events
+         WHERE rowid>? AND received_at<=?`,
+      )
+      .get(receivedSequence, receivedCutoff) as {
+      count: number
+      first_sequence: number | null
+      last_sequence: number | null
+    }
+    return {
+      count: Number(row.count),
+      firstSequence:
+        row.first_sequence === null ? null : Number(row.first_sequence),
+      lastSequence:
+        row.last_sequence === null ? null : Number(row.last_sequence),
+    }
+  }
+
   latestTickerAsOf(
     receivedCutoff: number,
   ): Record<string, unknown> | undefined {

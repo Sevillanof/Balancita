@@ -357,6 +357,9 @@ export class FuturesReplayDriver {
     lastDurableWatermark: number
     stopped: boolean
     deferredSourceRows: number
+    durablePendingSourceRows: number
+    durablePendingFirstSequence: number | null
+    durablePendingLastSequence: number | null
   }> {
     validateTimestamp(receivedCutoff, 'received cutoff')
     this.bindMarketSource(instrument, store)
@@ -603,6 +606,17 @@ export class FuturesReplayDriver {
       lastDurableWatermark: this.marketSourceCursor,
       stopped,
       deferredSourceRows,
+      ...(() => {
+        const pending = store.pendingEventsAfterAsOf(
+          this.marketSourceCursor,
+          receivedCutoff,
+        )
+        return {
+          durablePendingSourceRows: pending.count,
+          durablePendingFirstSequence: pending.firstSequence,
+          durablePendingLastSequence: pending.lastSequence,
+        }
+      })(),
     }
   }
 
