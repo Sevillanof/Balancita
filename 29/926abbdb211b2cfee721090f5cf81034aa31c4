@@ -1,0 +1,22 @@
+odd/tasks/kraken-futures-deterministic.md
+  h_2f68313623be98 199-206
+scripts/offline-futures-baseline.mjs
+  h_2f68313623be98 7-10,70,94-99,203-208
+scripts/offline-futures-child.mjs
+  h_2f68313623be98 9,65-78,89-93
+scripts/offline-futures-scheduler.mjs
+  h_2f68313623be98 1-37
+scripts/offline-futures-scheduler.test.mjs
+  h_2f68313623be98 2-5,70-116
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "29926abbdb211b2cfee721090f5cf81034aa31c4",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
