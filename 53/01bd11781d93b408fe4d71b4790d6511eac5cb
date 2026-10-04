@@ -1,0 +1,36 @@
+e2e/futures-terminal/paper-live-acceptance.pw.ts
+  h_2f68313623be98 1-421
+odd/tasks/kraken-futures-deterministic.md
+  h_2f68313623be98 64,108-109,111,113-119,121,123-129
+src/app/ConnectedTerminal.css
+  h_2f68313623be98 96-107
+src/app/FuturesTerminal.test.tsx
+  h_2f68313623be98 1-135
+src/app/FuturesTerminal.tsx
+  h_2f68313623be98 15-16,44,46,48-51,53,56-78,112-116,118-124,206-209,291-298,301-307,375-386,396-403,421,427,442-505,513,569,571-577,583,588,590-592,712
+src/app/terminal-copy.ts
+  h_2f68313623be98 1-18
+src/app/terminal-market.test.ts
+  h_2f68313623be98 1-38
+src/app/terminal-market.ts
+  h_2f68313623be98 1-72
+src/features/connected-trading/infrastructure/terminal-state.test.ts
+  h_2f68313623be98 46-173
+src/features/connected-trading/infrastructure/terminal-state.ts
+  h_2f68313623be98 24-88
+src/features/connected-trading/infrastructure/terminal-stream-client.test.ts
+  h_2f68313623be98 111-143
+src/features/connected-trading/infrastructure/terminal-stream-client.ts
+  h_2f68313623be98 37,85-88,99-129
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5301bd11781d93b408fe4d71b4790d6511eac5cb",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
