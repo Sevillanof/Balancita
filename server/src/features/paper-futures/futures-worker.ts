@@ -243,6 +243,7 @@ export class FuturesWorker {
   }
 
   async close(): Promise<void> {
+    this.emitClose('closing_admission_begin')
     this.closed = true
     if (this.sampler) clearInterval(this.sampler)
     this.loopDelay?.disable()
@@ -251,13 +252,29 @@ export class FuturesWorker {
       clearTimeout(item.timer)
       item.reject(new Error('Futures worker closed before request was sent.'))
     }
-    if (!this.child) return
+    this.emitClose('closing_admission_end', {
+      pending_request_ids: pending.map((item) => item.request.request_id),
+      active_request_id: this.active?.request.request_id ?? null,
+      pending_count: pending.length + Number(this.active !== undefined),
+      oldest_pending_age_ms: this.oldestPendingAgeMs(),
+    })
+    if (!this.child) {
+      this.emitClose('detached')
+      this.emitClose('closed')
+      return
+    }
+    const child = this.child
     if (this.active) {
-      this.child.kill('SIGTERM')
+      this.emitClose('active_termination', {
+        signal_requested: 'SIGTERM',
+        request_id: this.active.request.request_id,
+      })
+      child.kill('SIGTERM')
       this.active.reject(new Error('Futures worker closed during request.'))
       clearTimeout(this.active.timer)
       this.active = undefined
     } else {
+      this.emitClose('request_shutdown', { protocol_request_id: 'shutdown' })
       this.child.stdin.write(
         `${JSON.stringify({
           type: 'shutdown',
@@ -268,16 +285,39 @@ export class FuturesWorker {
         })}\n`,
       )
     }
+    this.emitClose('wait_python_exit_begin', { worker_pid: child.pid })
     await new Promise<void>((resolvePromise) => {
-      const child = this.child
-      if (!child || child.exitCode !== null) return resolvePromise()
-      const timeout = setTimeout(() => child.kill('SIGKILL'), 500)
-      child.once('close', () => {
+      if (child.exitCode !== null || child.signalCode !== null) {
+        this.emitClose('wait_python_exit_end', {
+          worker_pid: child.pid,
+          exit_code: child.exitCode,
+          signal: child.signalCode,
+          forced: false,
+          graceful: child.exitCode === 0 && child.signalCode === null,
+        })
+        return resolvePromise()
+      }
+      let forced = false
+      const timeout = setTimeout(() => {
+        forced = true
+        this.emitClose('force_sigkill', { worker_pid: child.pid })
+        child.kill('SIGKILL')
+      }, 500)
+      child.once('close', (code, signal) => {
         clearTimeout(timeout)
+        this.emitClose('wait_python_exit_end', {
+          worker_pid: child.pid,
+          exit_code: code,
+          signal,
+          forced,
+          graceful: !forced && code === 0 && signal === null,
+        })
         resolvePromise()
       })
     })
     this.detach()
+    this.emitClose('detached', { worker_pid: child.pid })
+    this.emitClose('closed', { worker_pid: child.pid })
   }
 
   private async drain(): Promise<void> {
@@ -576,6 +616,33 @@ export class FuturesWorker {
       })
     } catch {
       // Diagnostics must never interfere with worker or financial processing.
+    }
+  }
+
+  private oldestPendingAgeMs(): number {
+    const oldest = this.queue[0] ?? this.active
+    return oldest ? performance.now() - oldest.enqueuedAt : 0
+  }
+
+  private emitClose(
+    phase: string,
+    details: Record<string, unknown> = {},
+  ): void {
+    if (!this.observer) return
+    try {
+      this.observer({
+        phase,
+        request_id: 'worker',
+        run_id: 'worker',
+        work_id: 'close',
+        monotonic_ms: performance.now(),
+        queue_count: this.queue.length,
+        oldest_queue_age_ms: this.oldestPendingAgeMs(),
+        rss_bytes: process.memoryUsage().rss,
+        ...details,
+      })
+    } catch {
+      // Diagnostics must never interfere with worker processing.
     }
   }
 

@@ -155,14 +155,58 @@ describe('FuturesWorker', () => {
     expect(
       events.every(
         (event) =>
-          event.request_id === 'diagnostic-request' &&
-          event.run_id === 'run-fixture' &&
-          event.work_id === 'diagnostic-work' &&
-          typeof event.monotonic_ms === 'number' &&
-          typeof event.queue_count === 'number' &&
-          typeof event.rss_bytes === 'number',
+          (typeof event.phase === 'string' &&
+            (event.phase.startsWith('closing_') ||
+              event.phase.startsWith('wait_python_'))) ||
+          event.phase === 'request_shutdown' ||
+          event.phase === 'detached' ||
+          event.phase === 'closed' ||
+          (event.request_id === 'diagnostic-request' &&
+            event.run_id === 'run-fixture' &&
+            event.work_id === 'diagnostic-work' &&
+            typeof event.monotonic_ms === 'number' &&
+            typeof event.queue_count === 'number' &&
+            typeof event.rss_bytes === 'number'),
       ),
     ).toBe(true)
+  })
+
+  it('reports shutdown phases and confirmed Python process exit', async () => {
+    const events: Array<Record<string, unknown>> = []
+    const worker = new FuturesWorker({
+      observer: (event) => events.push(event),
+      commitResult: async (result) => ({
+        status: 'committed',
+        applied_state_version: result.applied_state_version,
+        result_hash: 'd'.repeat(64),
+      }),
+    })
+    await worker.submit(request('close-request', 'close-work', 'long'))
+    const pid = worker.pid
+    expect(pid).toBeDefined()
+    await worker.close()
+    expect(events.map((event) => event.phase)).toEqual(
+      expect.arrayContaining([
+        'closing_admission_begin',
+        'closing_admission_end',
+        'request_shutdown',
+        'wait_python_exit_begin',
+        'wait_python_exit_end',
+        'detached',
+      ]),
+    )
+    expect(
+      events.find((event) => event.phase === 'wait_python_exit_begin'),
+    ).toMatchObject({
+      worker_pid: pid,
+    })
+    expect(
+      events.find((event) => event.phase === 'wait_python_exit_end'),
+    ).toMatchObject({
+      worker_pid: pid,
+      exit_code: 0,
+      signal: null,
+    })
   })
 
   it('samples event-loop and worker state only when opted in and clears on close', async () => {
