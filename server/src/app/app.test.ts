@@ -95,6 +95,99 @@ class FakeGeminiClient implements GeminiClient {
 }
 
 describe('app test configuration', () => {
+  it('observes paired futures close phases without letting observer errors interrupt shutdown', async () => {
+    const phases: Array<{
+      phase: string
+      state: string
+      monotonic_ms: number
+    }> = []
+    const app = await buildApp({
+      config: testConfigFrom({
+        FUTURES_MODE: 'paper_live',
+        FUTURES_DB_PATH: ':memory:',
+        FUTURES_MARKET_DB_PATH: ':memory:',
+      }),
+      overrides: {
+        futuresLifecycleObserver: (event) => {
+          phases.push({
+            phase: event.phase,
+            state: event.state,
+            monotonic_ms: event.monotonic_ms,
+          })
+        },
+        futuresPublicCatalog: async () => ({
+          instruments: [
+            {
+              symbol: 'PF_XBTUSD',
+              type: 'flexible_futures',
+              pair: 'BTC:USD',
+              base: 'BTC',
+              quote: 'USD',
+              contractSize: '1',
+              tickSize: '1',
+              contractValueTradePrecision: 4,
+              tradeable: true,
+              isExpired: false,
+            },
+          ],
+        }),
+        futuresFundingFetch: async () =>
+          new Response(
+            JSON.stringify({
+              result: 'success',
+              serverTime: new Date(1_800_000_000_000).toISOString(),
+              rates: [],
+            }),
+            { status: 200 },
+          ),
+        futuresSocketFactory: () => ({
+          onopen: null,
+          onmessage: null,
+          onerror: null,
+          onclose: null,
+          send: () => undefined,
+          close: () => undefined,
+        }),
+        futuresClock: () => 1_800_000_000_000,
+      },
+    })
+    await app.ready()
+    await app.close()
+    const phaseNames = [...new Set(phases.map(({ phase }) => phase))]
+    expect(phaseNames).toEqual([
+      'futures-collector-stop',
+      'futures-candle-timer-stop',
+      'futures-funding-timer-stop',
+      'futures-funding-client-close-and-poll-wait',
+      'futures-ui-flush',
+      'futures-market-tail-drain',
+      'futures-market-store-close',
+      'futures-runtime-close',
+    ])
+    for (const phase of phaseNames)
+      expect(
+        phases
+          .filter((event) => event.phase === phase)
+          .map((event) => event.state),
+      ).toEqual(['begin', 'end'])
+    expect(phases.map((event) => event.monotonic_ms)).toEqual(
+      [...phases.map((event) => event.monotonic_ms)].sort((a, b) => a - b),
+    )
+
+    const throwingApp = await buildApp({
+      config: testConfigFrom({
+        FUTURES_MODE: 'mock',
+        FUTURES_DB_PATH: ':memory:',
+      }),
+      overrides: {
+        futuresLifecycleObserver: () => {
+          throw new Error('observer failed')
+        },
+      },
+    })
+    await expect(throwingApp.close()).resolves.toBeUndefined()
+  })
+
   it('keeps futures disabled by default and parses only explicit run modes', () => {
     expect(testConfigFrom({}).futuresMode).toBeUndefined()
     expect(testConfigFrom({ FUTURES_MODE: 'mock' }).futuresMode).toBe('mock')

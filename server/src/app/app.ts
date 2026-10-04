@@ -150,6 +150,15 @@ export type MarketRestFetch = (
   init?: RequestInit,
 ) => Promise<Response>
 
+export interface FuturesLifecycleEvent {
+  readonly phase: string
+  readonly state: 'begin' | 'end' | 'error'
+  readonly monotonic_ms: number
+  readonly resource_id?: string
+}
+
+export type FuturesLifecycleObserver = (event: FuturesLifecycleEvent) => void
+
 const defaultForecastScheduler: ForecastLoopScheduler = {
   setInterval: (callback, intervalMs) => setInterval(callback, intervalMs),
   clearInterval: (handle) =>
@@ -368,6 +377,7 @@ export async function buildApp(options: {
     futuresFundingFetch?: HistoricalFundingFetch
     futuresSqlObserver?: FuturesSqlObserver
     futuresWorkerObserver?: (event: FuturesWorkerDiagnostic) => void
+    futuresLifecycleObserver?: FuturesLifecycleObserver
   }
 }): Promise<FastifyInstance> {
   const { config } = options
@@ -742,6 +752,48 @@ export async function buildApp(options: {
   let futuresFundingKnownAt: number | null = null
   let pendingFuturesUiUpdate: Record<string, unknown> | undefined
   let futuresUiTimer: ReturnType<typeof setTimeout> | undefined
+  const observeFuturesLifecycle = (
+    phase: string,
+    state: FuturesLifecycleEvent['state'],
+    resourceId?: string,
+  ): void => {
+    try {
+      options.overrides?.futuresLifecycleObserver?.({
+        phase,
+        state,
+        monotonic_ms: performance.now(),
+        ...(resourceId === undefined ? {} : { resource_id: resourceId }),
+      })
+    } catch {
+      // Lifecycle diagnostics must never alter shutdown behavior.
+    }
+  }
+  const closePhase = <T>(
+    phase: string,
+    action: () => T | Promise<T>,
+    resourceId?: string,
+  ): T | Promise<T> => {
+    observeFuturesLifecycle(phase, 'begin', resourceId)
+    try {
+      const result = action()
+      if (result instanceof Promise)
+        return result.then(
+          (value) => {
+            observeFuturesLifecycle(phase, 'end', resourceId)
+            return value
+          },
+          (error: unknown) => {
+            observeFuturesLifecycle(phase, 'error', resourceId)
+            throw error
+          },
+        )
+      observeFuturesLifecycle(phase, 'end', resourceId)
+      return result
+    } catch (error) {
+      observeFuturesLifecycle(phase, 'error', resourceId)
+      throw error
+    }
+  }
   const flushFuturesUiUpdate = (): void => {
     if (!pendingFuturesUiUpdate || !futuresRuntime) return
     const update = pendingFuturesUiUpdate
@@ -1110,21 +1162,62 @@ export async function buildApp(options: {
       }
     })
     app.addHook('onClose', async () => {
-      futuresCollector?.stop()
-      if (futuresCandleTimer !== undefined) clearInterval(futuresCandleTimer)
+      closePhase(
+        'futures-collector-stop',
+        () => futuresCollector?.stop(),
+        'kraken-futures-market-collector',
+      )
+      closePhase(
+        'futures-candle-timer-stop',
+        () => {
+          if (futuresCandleTimer !== undefined)
+            clearInterval(futuresCandleTimer)
+        },
+        'futures-candle-timer',
+      )
       futuresCandleTimer = undefined
-      if (futuresFundingTimer !== undefined) clearInterval(futuresFundingTimer)
+      closePhase(
+        'futures-funding-timer-stop',
+        () => {
+          if (futuresFundingTimer !== undefined)
+            clearInterval(futuresFundingTimer)
+        },
+        'futures-funding-timer',
+      )
       futuresFundingTimer = undefined
-      futuresFundingClient?.close()
+      await closePhase(
+        'futures-funding-client-close-and-poll-wait',
+        async () => {
+          futuresFundingClient?.close()
+          await futuresFundingPoll
+        },
+      )
       futuresFundingClient = undefined
-      await futuresFundingPoll
       futuresFundingPoll = undefined
-      if (futuresUiTimer !== undefined) clearTimeout(futuresUiTimer)
-      futuresUiTimer = undefined
-      flushFuturesUiUpdate()
-      await futuresMarketTail
-      futuresMarketStore?.close()
-      await futuresRuntime.close()
+      closePhase(
+        'futures-ui-flush',
+        () => {
+          if (futuresUiTimer !== undefined) clearTimeout(futuresUiTimer)
+          futuresUiTimer = undefined
+          flushFuturesUiUpdate()
+        },
+        'futures-ui-update',
+      )
+      await closePhase(
+        'futures-market-tail-drain',
+        () => futuresMarketTail,
+        'futures-market-tail',
+      )
+      closePhase(
+        'futures-market-store-close',
+        () => futuresMarketStore?.close(),
+        config.futuresMarketDbPath,
+      )
+      await closePhase(
+        'futures-runtime-close',
+        () => futuresRuntime.close(),
+        config.futuresDbPath,
+      )
     })
   }
 
