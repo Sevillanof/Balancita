@@ -1,0 +1,22 @@
+odd/tasks/kraken-futures-deterministic.md
+  h_2f68313623be98 129-132
+server/src/app/app.test.ts
+  h_2f68313623be98 831-839,906-914
+server/src/app/app.ts
+  h_2f68313623be98 971,975,979,981
+server/src/app/historical-funding-app.test.ts
+  h_2f68313623be98 4,21-110
+server/src/features/kraken-futures/historical-funding.ts
+  h_2f68313623be98 127,141,162-164,167
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6ea566f575b68f845340afb161b576c53426d638",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
