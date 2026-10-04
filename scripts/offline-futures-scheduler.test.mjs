@@ -4,9 +4,47 @@ import {
   createReplayScheduler,
   summarizeOfflineDiagnostics,
 } from './offline-futures-scheduler.mjs'
+import { closeOfflineChild } from './offline-futures-child-close.mjs'
 
 describe('offline replay scheduler', () => {
   afterEach(() => vi.useRealTimers())
+
+  it('closes the owned app and emits closed IPC using the app-close trace paths', async () => {
+    const messages = []
+    const closePhasesTracePath = '/owned/app-close-phases.jsonl'
+    const workerTracePath = '/owned/worker-observer.jsonl'
+
+    await closeOfflineChild({
+      app: { close: vi.fn().mockResolvedValue(undefined) },
+      closePhasesTracePath,
+      workerTracePath,
+      closeSourceState: { durable_pending_source_rows: 0 },
+      readTraceEvents: vi.fn((path) => {
+        expect([closePhasesTracePath, workerTracePath]).toContain(path)
+        return [
+          {
+            phase: path === closePhasesTracePath ? 'close' : 'closed',
+            state: 'end',
+          },
+        ]
+      }),
+      readLastTraceEvent: vi.fn(() => ({ source_received_seq: 0 })),
+      sourceQueueTracePath: '/owned/app-source-queue.jsonl',
+      send: (message) => messages.push(message),
+      disconnect: vi.fn(),
+    })
+
+    expect(messages).toEqual([
+      expect.objectContaining({
+        type: 'closed',
+        normal_close: true,
+        app_resources_closed: true,
+        worker_closed: true,
+        durable_pending_source_rows: 0,
+        final_source_queue: { source_received_seq: 0 },
+      }),
+    ])
+  })
 
   it('preserves source order and schedules against monotonic receive offsets', () => {
     vi.useFakeTimers()
