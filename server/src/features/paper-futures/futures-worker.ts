@@ -333,13 +333,31 @@ export class FuturesWorker {
       return
     }
     if (this.active || this.closed) return
+    const child = this.child
+    if (
+      !child ||
+      child.stdin.destroyed ||
+      child.stdin.writableEnded ||
+      !child.stdin.writable
+    ) {
+      const error = new Error(
+        'Futures worker process is unavailable before request was sent.',
+      )
+      const queued = this.queue.splice(0)
+      for (const item of queued) {
+        clearTimeout(item.timer)
+        this.emit(item, 'worker_error', { message: error.message })
+        item.reject(error)
+      }
+      return
+    }
     const item = this.queue.shift()
     if (!item) return
     this.active = item
     this.emit(item, 'send', {
       queue_wait_ms: performance.now() - item.enqueuedAt,
     })
-    this.write(item, this.child!.stdin, `${item.wireLine}\n`, 'stdin_write')
+    this.write(item, child.stdin, `${item.wireLine}\n`, 'stdin_write')
   }
 
   private start(): Promise<void> {

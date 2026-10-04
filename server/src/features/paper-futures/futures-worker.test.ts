@@ -107,6 +107,27 @@ describe('FuturesWorker', () => {
     ).rejects.toThrow(/closed/)
   })
 
+  it('rejects accepted requests explicitly when the child disappears after start', async () => {
+    const worker = new FuturesWorker({
+      commitResult: async () => {
+        throw new Error('unexpected commit')
+      },
+    })
+    vi.spyOn(
+      worker as unknown as { start: () => Promise<void> },
+      'start',
+    ).mockImplementation(async () => {
+      ;(worker as unknown as { child: undefined }).child = undefined
+    })
+
+    await expect(
+      worker.submit(request('vanished-request', 'vanished-work', 'long')),
+    ).rejects.toThrow(
+      'Futures worker process is unavailable before request was sent.',
+    )
+    await worker.close()
+  })
+
   it('emits correlated worker phase diagnostics without affecting completion', async () => {
     const events: Array<Record<string, unknown>> = []
     const worker = new FuturesWorker({
