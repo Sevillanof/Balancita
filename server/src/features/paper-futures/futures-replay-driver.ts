@@ -16,6 +16,11 @@ export type ReplayManifest = Readonly<{
   source_metadata_hash?: string
   source_quality_hash?: string
   replay_cutoff_ms?: number
+  admission_policy?: Readonly<{
+    schema_version: 'futures-entry-admission.v1'
+    evaluation_interval_ms: 5000
+    hash: string
+  }>
 }>
 
 export type CausalInput = Readonly<{
@@ -51,6 +56,10 @@ type DriverOptions = {
   durableStore?: FuturesStore
   initialStateVersion?: number
   observeTiming?: ReplayTimingObserver
+  admissionForSource?: (
+    runId: string,
+    sourceClock: number,
+  ) => Record<string, unknown>
 }
 
 export type ReplayTimingEvent = Readonly<{
@@ -83,6 +92,7 @@ export class FuturesReplayDriver {
   private readonly apply: DriverOptions['apply']
   private readonly durableStore?: FuturesStore
   private readonly observeTiming?: DriverOptions['observeTiming']
+  private readonly admissionForSource?: DriverOptions['admissionForSource']
   private durableBinding?: Record<string, unknown>
   private readonly inputs: CausalInput[] = []
   private readonly work: AppliedWork[] = []
@@ -95,6 +105,13 @@ export class FuturesReplayDriver {
   private marketSourcePending: Record<string, unknown>[] = []
   private marketSourceReadCursor = 0
   private marketSourceCursor = 0
+  private evaluationProgress?: {
+    policyIdentity: string
+    sourceIdentity: string
+    cursorRowid: number
+    nextDueAt: number | null
+    nextDueReasons: string[]
+  }
 
   constructor(options: DriverOptions) {
     validateManifest(options.manifest)
@@ -104,6 +121,7 @@ export class FuturesReplayDriver {
     this.apply = options.apply
     this.durableStore = options.durableStore
     this.observeTiming = options.observeTiming
+    this.admissionForSource = options.admissionForSource
     if (
       options.initialStateVersion !== undefined &&
       (!Number.isSafeInteger(options.initialStateVersion) ||
@@ -402,8 +420,80 @@ export class FuturesReplayDriver {
     )
     let stopped = false
     let deferredSourceRows = 0
+    let pendingSkipped: { rowid: number; input: CausalInput }[] = []
+    let inspectedSinceProgress = 0
+    let pendingSkippedInspectedCount = 0
+    const flushSkipped = async (): Promise<void> => {
+      if (pendingSkipped.length === 0) return
+      const rows = pendingSkipped
+      pendingSkipped = []
+      const last = rows.at(-1)!
+      const admission = this.admissionForSource?.(
+        this.runId,
+        last.input.received_at_ms,
+      )
+      const progress = this.evaluationProgress!
+      try {
+        if (!this.isSafeIdleAdmission(admission, last.input.received_at_ms))
+          throw new Error('Admission changed before durable skip commit.')
+        const due = admission!.next_due_at as Record<string, unknown>
+        const rowids = rows.map((row) => row.rowid)
+        if (
+          rowids.some(
+            (rowid, index) => index > 0 && rowid !== rowids[index - 1]! + 1,
+          )
+        )
+          throw new Error('Skipped source range contains a ROWID hole.')
+        this.durableStore!.commitEvaluationSkippedRange({
+          runId: this.runId,
+          expectedPolicyIdentity: progress.policyIdentity,
+          expectedSourceIdentity: progress.sourceIdentity,
+          expectedStateVersion: Number(admission!.confirmed_state_version),
+          expectedHeadHash: String(admission!.head_hash),
+          fromRowid: progress.cursorRowid + 1,
+          toRowid: rowids.at(-1)!,
+          inspectedRowCount: pendingSkippedInspectedCount,
+          reason: 'confirmed-idle-before-next-due',
+          nextDueAt: Number(due.time_ms),
+          nextDueReasons: due.reasons as string[],
+        })
+        this.evaluationProgress = { ...progress, cursorRowid: rowids.at(-1)! }
+        this.marketSourceCursor = rowids.at(-1)!
+        inspectedSinceProgress = 0
+        pendingSkippedInspectedCount = 0
+      } catch {
+        // On a guard race, process the already-inspected rows through the full path.
+        const row = rows.at(-1)!
+        const receipt = await this.processEvent(
+          row.input,
+          row.input.received_at_ms,
+        )
+        if (!receipt || receipt.status !== 'committed')
+          throw new Error(
+            'Skipped-row fallback did not obtain a committed receipt.',
+          )
+        const workId = this.durableStore!.getCommittedReplayWorkIdForSource(
+          this.runId,
+          row.rowid,
+        )
+        if (!workId)
+          throw new Error(
+            'Committed fallback source is missing its durable replay binding.',
+          )
+        this.commitProcessedSource({
+          rowid: row.rowid,
+          fromRowid: progress.cursorRowid + 1,
+          inspectedRowCount: pendingSkippedInspectedCount,
+          workId,
+          sourceClock: row.input.received_at_ms,
+        })
+        inspectedSinceProgress = 0
+        pendingSkippedInspectedCount = 0
+      }
+    }
     for (const [index, source] of eligible.entries()) {
       if (stopRequested?.()) {
+        await flushSkipped()
         stopped = true
         deferredSourceRows = eligible.length - index
         break
@@ -594,7 +684,11 @@ export class FuturesReplayDriver {
           Number(source.receivedSequence),
           null,
         )
-        this.marketSourceCursor = sourceSequence
+        if (!this.manifest.admission_policy) {
+          this.marketSourceCursor = sourceSequence
+          continue
+        }
+        inspectedSinceProgress += 1
         continue
       }
       const snapshot = {
@@ -612,24 +706,90 @@ export class FuturesReplayDriver {
         Number(source.receivedSequence),
         null,
       )
-      await this.processEvent(
-        {
-          sequence: Number(source.receivedSequence),
-          received_at_ms: receivedAt,
-          event_time_ms: Number(source.eventTime),
-          known_at_ms: receivedAt,
-          payload: {
-            market_event: source,
-            market_source_watermark: Number(source.receivedSequence),
-            market_gaps: structuredClone(gaps),
-            market_snapshot: snapshot,
-            ...(control ? { control } : {}),
-          },
+      const input: CausalInput = {
+        sequence: Number(source.receivedSequence),
+        received_at_ms: receivedAt,
+        event_time_ms: Number(source.eventTime),
+        known_at_ms: receivedAt,
+        payload: {
+          market_event: source,
+          market_source_watermark: Number(source.receivedSequence),
+          market_gaps: structuredClone(gaps),
+          market_snapshot: snapshot,
+          ...(control ? { control } : {}),
         },
-        receivedAt,
-      )
+      }
+      if (
+        this.evaluationProgress &&
+        this.canSkipIdleSource({
+          source,
+          requiredSourceEvent:
+            source.type === 'trade' ||
+            source.recovered === true ||
+            (source.type === 'ticker' &&
+              (source.fundingObservation !== undefined ||
+                ((mode === 'paper_live' ||
+                  (mode === 'replay' &&
+                    this.manifest.source ===
+                      'frozen-kraken-futures-market.v2')) &&
+                  (() => {
+                    const covering = store.fundingForInterval(
+                      receivedAt,
+                      receivedAt,
+                    )
+                    return (
+                      covering.length > 0 &&
+                      new Set(
+                        covering.map((record) => String(record.fundingRate)),
+                      ).size === 1
+                    )
+                  })()))),
+          admission: this.admissionForSource?.(this.runId, receivedAt),
+          sourceClock: receivedAt,
+          marketEvents,
+          gaps,
+          control,
+        })
+      ) {
+        inspectedSinceProgress += 1
+        if (
+          pendingSkipped.length > 0 &&
+          sourceSequence !== pendingSkipped.at(-1)!.rowid + 1
+        )
+          await flushSkipped()
+        pendingSkipped.push({ rowid: sourceSequence, input })
+        pendingSkippedInspectedCount = inspectedSinceProgress
+        if (pendingSkipped.length >= 128) await flushSkipped()
+        continue
+      }
+      await flushSkipped()
+      inspectedSinceProgress += 1
+      const receipt = await this.processEvent(input, receivedAt)
+      if (this.evaluationProgress) {
+        if (!receipt || receipt.status !== 'committed')
+          throw new Error(
+            'Source cursor advances only after a committed financial receipt.',
+          )
+        const workId = this.durableStore!.getCommittedReplayWorkIdForSource(
+          this.runId,
+          sourceSequence,
+        )
+        if (!workId)
+          throw new Error(
+            'Committed source is missing its durable replay binding.',
+          )
+        this.commitProcessedSource({
+          rowid: sourceSequence,
+          fromRowid: this.evaluationProgress.cursorRowid + 1,
+          inspectedRowCount: inspectedSinceProgress,
+          workId,
+          sourceClock: receivedAt,
+        })
+        inspectedSinceProgress = 0
+      }
       this.marketSourceCursor = sourceSequence
     }
+    await flushSkipped()
     this.marketSourcePending = this.marketSourcePending.filter(
       (event) => Number(event.receivedSequence) > this.marketSourceCursor,
     )
@@ -671,6 +831,16 @@ export class FuturesReplayDriver {
         'Replay session does not match the frozen runtime binding.',
       )
     if (
+      Boolean(this.manifest.admission_policy) !==
+        Boolean(runtimeBinding.admission_policy) ||
+      (this.manifest.admission_policy !== undefined &&
+        canonicalHash(this.manifest.admission_policy) !==
+          canonicalHash(runtimeBinding.admission_policy))
+    )
+      throw new Error(
+        'Replay admission policy differs from the frozen runtime binding.',
+      )
+    if (
       sourceStore &&
       !this.manifest.source.startsWith('kraken-public-live-stream.')
     ) {
@@ -706,6 +876,147 @@ export class FuturesReplayDriver {
     }
     this.durableStore.bindReplaySession(this.runId, binding)
     this.durableBinding = binding
+    if (this.manifest.admission_policy && sourceStore) {
+      const policyIdentity = this.manifest.admission_policy.hash
+      const sourceIdentity = canonicalHash({
+        schema_version: 'futures-market-source-binding.v1',
+        source: this.manifest.source,
+        source_hash: this.manifest.source_hash,
+      })
+      const existing = this.durableStore.getEvaluationProgress(this.runId)
+      if (!existing)
+        this.durableStore.bindEvaluationProgress({
+          runId: this.runId,
+          policyIdentity,
+          sourceIdentity,
+          baselineRowid: 0,
+          nextDueAt: null,
+          nextDueReasons: [],
+        })
+      this.evaluationProgress = this.durableStore.getEvaluationProgress(
+        this.runId,
+      )
+      if (
+        !this.evaluationProgress ||
+        this.evaluationProgress.policyIdentity !== policyIdentity ||
+        this.evaluationProgress.sourceIdentity !== sourceIdentity
+      )
+        throw new Error(
+          'Durable source progress does not match the bound run manifest.',
+        )
+      this.marketSourceCursor = this.evaluationProgress.cursorRowid
+    }
+  }
+
+  private isSafeIdleAdmission(
+    admission: Record<string, unknown> | undefined,
+    sourceClock: number,
+  ): boolean {
+    if (!admission || !this.manifest.admission_policy) return false
+    const due = isRecord(admission.next_due_at)
+      ? admission.next_due_at
+      : undefined
+    const position = isRecord(admission.ledger_position)
+      ? admission.ledger_position
+      : undefined
+    const risk = isRecord(admission.outstanding_risk)
+      ? admission.outstanding_risk
+      : undefined
+    const pending = isRecord(admission.pending_commands)
+      ? admission.pending_commands
+      : undefined
+    return (
+      admission.policy_hash ===
+        canonicalHash({
+          schema_version: this.manifest.admission_policy.schema_version,
+          evaluation_interval_ms:
+            this.manifest.admission_policy.evaluation_interval_ms,
+        }) &&
+      admission.run_id === this.runId &&
+      admission.source_clock_ms === sourceClock &&
+      admission.may_omit_entry_evaluation === true &&
+      admission.execution_required === false &&
+      position?.known === true &&
+      position.value === null &&
+      admission.active_order_count === 0 &&
+      risk?.known === true &&
+      risk.position === false &&
+      risk.protection === false &&
+      risk.controls_active === false &&
+      pending?.known === true &&
+      pending.any === false &&
+      admission.in_flight_work_count === 0 &&
+      due !== undefined &&
+      Number.isSafeInteger(due.time_ms) &&
+      Number(due.time_ms) > sourceClock &&
+      Array.isArray(due.reasons) &&
+      due.reasons.length > 0 &&
+      Array.isArray(due.unknown_reasons) &&
+      due.unknown_reasons.length === 0
+    )
+  }
+
+  private commitProcessedSource(input: {
+    rowid: number
+    fromRowid: number
+    inspectedRowCount: number
+    workId: string
+    sourceClock: number
+  }): void {
+    const progress = this.evaluationProgress!
+    const head = this.durableStore!.getAdmissionHead(this.runId)
+    if (!head)
+      throw new Error('Financial head disappeared after source processing.')
+    const state = this.admissionForSource?.(this.runId, input.sourceClock)
+    const due =
+      state && isRecord(state.next_due_at) ? state.next_due_at : undefined
+    this.durableStore!.commitEvaluationProcessedSource({
+      runId: this.runId,
+      expectedPolicyIdentity: progress.policyIdentity,
+      expectedSourceIdentity: progress.sourceIdentity,
+      expectedStateVersion: head.stateVersion,
+      expectedHeadHash: head.headHash,
+      fromRowid: input.fromRowid,
+      sourceRowid: input.rowid,
+      inspectedRowCount: input.inspectedRowCount,
+      workId: input.workId,
+      nextDueAt:
+        due && Number.isSafeInteger(due.time_ms) ? Number(due.time_ms) : null,
+      nextDueReasons:
+        due && Array.isArray(due.reasons)
+          ? [
+              ...(due.reasons as string[]),
+              ...(Array.isArray(due.unknown_reasons)
+                ? (due.unknown_reasons as string[])
+                : []),
+            ]
+          : ['due_clock_unknown'],
+    })
+    this.evaluationProgress = { ...progress, cursorRowid: input.rowid }
+    this.marketSourceCursor = input.rowid
+  }
+
+  private canSkipIdleSource(input: {
+    source: Record<string, unknown>
+    requiredSourceEvent: boolean
+    admission: Record<string, unknown> | undefined
+    sourceClock: number
+    marketEvents: Record<string, unknown>[]
+    gaps: Record<string, unknown>[]
+    control: Record<string, unknown> | undefined
+  }): boolean {
+    const books = input.marketEvents.filter(
+      (event) => event.type === 'book_snapshot',
+    )
+    return (
+      input.control === undefined &&
+      input.gaps.length === 0 &&
+      books.length > 0 &&
+      books.every((book) => book.valid === true && book.contiguous === true) &&
+      input.marketEvents.some((event) => event.type === 'ticker') &&
+      !input.requiredSourceEvent &&
+      this.isSafeIdleAdmission(input.admission, input.sourceClock)
+    )
   }
 
   static async resumeMarketStore(
@@ -812,6 +1123,11 @@ export class FuturesReplayDriver {
         }
       }
     }
+    if (restored.works.length === 0)
+      driver.stateVersion = Number(
+        options.durableStore.getRunProjection(options.runId)?.state_version ??
+          0,
+      )
     await driver.processMarketStore(
       options.marketStore,
       options.receivedCutoff,
@@ -1135,6 +1451,18 @@ function validateManifest(manifest: ReplayManifest): void {
     !manifest.fidelity
   )
     throw new Error('Replay manifest is incomplete or invalid.')
+  if (
+    manifest.admission_policy !== undefined &&
+    (manifest.admission_policy.schema_version !==
+      'futures-entry-admission.v1' ||
+      manifest.admission_policy.evaluation_interval_ms !== 5000 ||
+      manifest.admission_policy.hash !==
+        canonicalHash({
+          schema_version: 'futures-entry-admission.v1',
+          evaluation_interval_ms: 5000,
+        }))
+  )
+    throw new Error('Replay manifest admission policy is invalid.')
 }
 
 function validateInput(input: CausalInput, cutoff: number): void {

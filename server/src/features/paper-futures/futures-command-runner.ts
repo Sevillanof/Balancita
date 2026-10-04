@@ -12,6 +12,42 @@ import {
   type FuturesWorkerResult,
   validateFuturesWorkerRequest,
 } from './futures-worker.ts'
+import { canonicalHash } from './futures-canonical.ts'
+
+export type FuturesAdmissionPolicy = Readonly<{
+  schema_version: 'futures-entry-admission.v1'
+  evaluation_interval_ms: 5000
+}>
+
+export type FuturesAdmissionState = Readonly<
+  Record<string, unknown> & {
+    schema_version: 'futures-admission-state.v1'
+    policy_hash: string
+    run_id: string
+    source_clock_ms: number | null
+    confirmed_state_version: number | null
+    head_hash: string | null
+    last_applied_source_seq: number | null
+    ledger_position: { known: boolean; value: Record<string, unknown> | null }
+    active_order_count: number | null
+    outstanding_risk: {
+      known: boolean
+      position: boolean | null
+      protection: boolean | null
+      controls_active: boolean | null
+      reduction_intent_id: string | null
+    }
+    execution_required: boolean
+    may_omit_entry_evaluation: boolean
+    in_flight_work_count: number
+    pending_commands: { known: boolean; any: boolean | null }
+    next_due_at: {
+      time_ms: number | null
+      reasons: string[]
+      unknown_reasons: string[]
+    }
+  }
+>
 
 const INSTRUMENT_ID = 'kraken-futures:PF_XBTUSD'
 const COST_VERSION = 'kraken-futures-eea-btcusd-base.v1'
@@ -22,6 +58,11 @@ export class FuturesCommandRunner {
   private readonly inFlight = new Map<
     string,
     Promise<Record<string, unknown>>
+  >()
+  private readonly inFlightRuns = new Map<string, string>()
+  private readonly admissionCache = new Map<
+    string,
+    { stateVersion: number; headHash: string; state: FuturesAdmissionState }
   >()
   private readonly store: FuturesStore
   private readonly sqlObserver?: FuturesSqlObserver
@@ -66,7 +107,9 @@ export class FuturesCommandRunner {
     ) {
       const expectedBinding =
         request.payload.operation === 'futures_runtime.v3'
-          ? 'futures-runtime-binding.v4'
+          ? binding?.schema_version === 'futures-runtime-binding.v5'
+            ? 'futures-runtime-binding.v5'
+            : 'futures-runtime-binding.v4'
           : request.payload.operation === 'futures_runtime.v2'
             ? 'futures-runtime-binding.v3'
             : request.payload.runtime_config.version ===
@@ -134,6 +177,296 @@ export class FuturesCommandRunner {
 
   close(): Promise<void> {
     return this.worker.close()
+  }
+
+  readAdmissionState(
+    runId: string,
+    policy: FuturesAdmissionPolicy,
+    sourceClock: number,
+  ): FuturesAdmissionState {
+    const policyHash = canonicalHash(policy)
+    const failClosed = (
+      reason: string,
+      stateVersion: number | null = null,
+      headHash: string | null = null,
+      sourceSequence: number | null = null,
+    ): FuturesAdmissionState =>
+      deepFreeze({
+        schema_version: 'futures-admission-state.v1',
+        policy_hash: policyHash,
+        run_id: runId,
+        source_clock_ms: Number.isSafeInteger(sourceClock) ? sourceClock : null,
+        confirmed_state_version: stateVersion,
+        head_hash: headHash,
+        last_applied_source_seq: sourceSequence,
+        ledger_position: { known: false, value: null },
+        active_order_count: null,
+        outstanding_risk: {
+          known: false,
+          position: null,
+          protection: null,
+          controls_active: null,
+          reduction_intent_id: null,
+        },
+        execution_required: true,
+        may_omit_entry_evaluation: false,
+        in_flight_work_count: this.inFlightRunCount(runId),
+        pending_commands: { known: false, any: null },
+        next_due_at: { time_ms: null, reasons: [], unknown_reasons: [reason] },
+      })
+
+    if (
+      policy.schema_version !== 'futures-entry-admission.v1' ||
+      policy.evaluation_interval_ms !== 5000 ||
+      !Number.isSafeInteger(sourceClock) ||
+      sourceClock < 0
+    )
+      return failClosed('unsupported_policy_or_source_clock')
+
+    let head: ReturnType<FuturesStore['getAdmissionHead']>
+    try {
+      head = this.store.getAdmissionHead(runId)
+    } catch {
+      return failClosed('verified_head_unavailable')
+    }
+    if (
+      !head ||
+      !Number.isSafeInteger(head.stateVersion) ||
+      typeof head.headHash !== 'string'
+    )
+      return failClosed('run_head_missing_or_invalid')
+
+    let state = this.admissionCache.get(runId)?.state
+    const cached = this.admissionCache.get(runId)
+    if (
+      !cached ||
+      cached.stateVersion !== head.stateVersion ||
+      cached.headHash !== head.headHash ||
+      cached.state.policy_hash !== policyHash
+    ) {
+      let projection: Record<string, unknown> | undefined
+      try {
+        projection = this.store.getRunProjection(runId)
+      } catch {
+        return failClosed(
+          'projection_verification_failed',
+          head.stateVersion,
+          head.headHash,
+        )
+      }
+      if (
+        !projection ||
+        projection.state_version !== head.stateVersion ||
+        !isRecord(projection.checkpoint) ||
+        projection.checkpoint.run_id !== runId
+      )
+        return failClosed(
+          'projection_or_checkpoint_missing',
+          head.stateVersion,
+          head.headHash,
+        )
+      const checkpoint = projection.checkpoint
+      if (checkpoint.schema_version !== 3 && checkpoint.schema_version !== 4)
+        return failClosed(
+          'unsupported_checkpoint_schema',
+          head.stateVersion,
+          head.headHash,
+        )
+      const positionKnown =
+        checkpoint.ledger_position === null ||
+        isRecord(checkpoint.ledger_position)
+      const execution = checkpoint.execution_checkpoint
+      const orders =
+        isRecord(execution) && isRecord(execution.orders)
+          ? Object.values(execution.orders)
+          : undefined
+      let activeOrderCount: number | null = 0
+      if (!orders) activeOrderCount = null
+      else
+        for (const order of orders) {
+          if (!isRecord(order) || typeof order.state !== 'string') {
+            activeOrderCount = null
+            break
+          }
+          if (order.state === 'accepted' || order.state === 'partially_filled')
+            activeOrderCount += 1
+          else if (
+            ![
+              'filled',
+              'cancelled',
+              'canceled',
+              'rejected',
+              'expired',
+            ].includes(order.state)
+          ) {
+            activeOrderCount = null
+            break
+          }
+        }
+      const protectionKnown =
+        checkpoint.position_protection === null ||
+        isRecord(checkpoint.position_protection)
+      const rawRisk = checkpoint.risk_checkpoint
+      const riskKnown =
+        isRecord(rawRisk) &&
+        [
+          'daily_loss_latched',
+          'entry_paused',
+          'user_paused',
+          'system_paused',
+        ].every((key) => typeof rawRisk[key] === 'boolean') &&
+        (rawRisk.reduction_intent_id === null ||
+          typeof rawRisk.reduction_intent_id === 'string')
+      const risk = riskKnown
+        ? (checkpoint.risk_checkpoint as Record<string, unknown>)
+        : undefined
+      const riskControlsActive = riskKnown
+        ? risk!.daily_loss_latched === true ||
+          risk!.entry_paused === true ||
+          risk!.user_paused === true ||
+          risk!.system_paused === true ||
+          risk!.reduction_intent_id !== null
+        : null
+      const sourceSequence =
+        this.store.getLastAppliedReplaySourceSequence(runId)
+      const lastDecisionTime = this.store.getLastAppliedDecisionTime(runId)
+      const due: { time: number; reason: string }[] = []
+      const unknownReasons: string[] = []
+      if (lastDecisionTime !== null && Number.isSafeInteger(lastDecisionTime))
+        due.push({
+          time: lastDecisionTime + policy.evaluation_interval_ms,
+          reason: 'strategy_evaluation',
+        })
+      else unknownReasons.push('strategy_evaluation_clock_unknown')
+      if (orders) {
+        for (const order of orders) {
+          if (!isRecord(order)) continue
+          let orderClockFound = false
+          for (const [key, reason] of [
+            ['eligible_at_ms', 'order_eligibility'],
+            ['expiry_ms', 'order_expiry'],
+          ] as const) {
+            const time = order[key]
+            if (Number.isSafeInteger(time)) {
+              due.push({ time: Number(time), reason })
+              orderClockFound = true
+            }
+          }
+          if (
+            (order.state === 'accepted' ||
+              order.state === 'partially_filled') &&
+            !orderClockFound
+          )
+            unknownReasons.push('active_order_clock_unknown')
+        }
+      }
+      const riskCheckpoint = isRecord(checkpoint.risk_checkpoint)
+        ? checkpoint.risk_checkpoint
+        : undefined
+      const utcDay = riskCheckpoint?.utc_day
+      if (typeof utcDay === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(utcDay)) {
+        const dayStart = Date.parse(`${utcDay}T00:00:00.000Z`)
+        if (Number.isSafeInteger(dayStart))
+          due.push({
+            time: dayStart + 86_400_000,
+            reason: 'utc_risk_day_rollover',
+          })
+        else unknownReasons.push('utc_risk_day_clock_invalid')
+      } else {
+        unknownReasons.push('utc_risk_day_clock_unknown')
+      }
+      if (activeOrderCount === null) unknownReasons.push('order_state_unknown')
+      if (!riskKnown) unknownReasons.push('risk_checkpoint_unknown')
+      if (!positionKnown) unknownReasons.push('ledger_position_unknown')
+      if (!protectionKnown) unknownReasons.push('position_protection_unknown')
+      if (checkpoint.ledger_position !== null)
+        unknownReasons.push('funding_boundary_unknown')
+      const nextTime = due.length
+        ? Math.min(...due.map((item) => item.time))
+        : null
+      const nextReasons =
+        nextTime === null
+          ? []
+          : due
+              .filter((item) => item.time === nextTime)
+              .map((item) => item.reason)
+      const position =
+        positionKnown && isRecord(checkpoint.ledger_position)
+          ? checkpoint.ledger_position
+          : null
+      const executionRequired =
+        !positionKnown ||
+        !protectionKnown ||
+        !riskKnown ||
+        activeOrderCount === null ||
+        position !== null ||
+        checkpoint.position_protection !== null ||
+        activeOrderCount > 0 ||
+        riskControlsActive !== false
+      const pendingCommands = this.store.loadPendingCommands(1).length > 0
+      const base = deepFreeze<FuturesAdmissionState>({
+        schema_version: 'futures-admission-state.v1',
+        policy_hash: policyHash,
+        run_id: runId,
+        source_clock_ms: sourceClock,
+        confirmed_state_version: head.stateVersion,
+        head_hash: head.headHash,
+        last_applied_source_seq: sourceSequence,
+        ledger_position: { known: positionKnown, value: position },
+        active_order_count: activeOrderCount,
+        outstanding_risk: {
+          known: positionKnown && protectionKnown && riskKnown,
+          position: positionKnown ? position !== null : null,
+          protection: protectionKnown
+            ? checkpoint.position_protection !== null
+            : null,
+          controls_active: riskControlsActive,
+          reduction_intent_id:
+            riskKnown && typeof risk!.reduction_intent_id === 'string'
+              ? risk!.reduction_intent_id
+              : null,
+        },
+        execution_required: executionRequired,
+        may_omit_entry_evaluation:
+          !executionRequired &&
+          !pendingCommands &&
+          this.inFlightRunCount(runId) === 0,
+        in_flight_work_count: this.inFlightRunCount(runId),
+        pending_commands: { known: true, any: pendingCommands },
+        next_due_at: {
+          time_ms: nextTime,
+          reasons: nextReasons,
+          unknown_reasons: unknownReasons,
+        },
+      })
+      state = base
+      this.admissionCache.set(runId, {
+        stateVersion: head.stateVersion,
+        headHash: head.headHash,
+        state: base,
+      })
+    }
+
+    if (state!.source_clock_ms !== sourceClock)
+      state = deepFreeze({ ...state!, source_clock_ms: sourceClock })
+
+    const pending = this.store.loadPendingCommands(1).length > 0
+    const inFlight = this.inFlightRunCount(runId)
+    if (!pending && inFlight === 0) return state!
+    return Object.freeze({
+      ...state!,
+      execution_required: true,
+      may_omit_entry_evaluation: false,
+      in_flight_work_count: inFlight,
+      pending_commands: { known: true, any: pending },
+    })
+  }
+
+  private inFlightRunCount(runId: string): number {
+    let count = 0
+    for (const activeRunId of this.inFlightRuns.values())
+      if (activeRunId === runId) count += 1
+    return count
   }
 
   private async commit(
@@ -232,8 +565,10 @@ export class FuturesCommandRunner {
     if (existing) return existing
     const result = this.processAccepted(request, checkpoint).finally(() => {
       this.inFlight.delete(request.work_id)
+      this.inFlightRuns.delete(request.work_id)
     })
     this.inFlight.set(request.work_id, result)
+    this.inFlightRuns.set(request.work_id, request.run_id)
     return result
   }
 }
@@ -258,6 +593,15 @@ function parseQueuedCommand(
     )
   validateFuturesWorkerRequest(request)
   return { request, checkpoint: value.checkpoint }
+}
+
+function deepFreeze<T>(value: T): T {
+  if (value !== null && typeof value === 'object' && !Object.isFrozen(value)) {
+    for (const child of Object.values(value as Record<string, unknown>))
+      deepFreeze(child)
+    Object.freeze(value)
+  }
+  return value
 }
 
 function toStoreEvents(result: FuturesWorkerResult): Record<string, unknown>[] {

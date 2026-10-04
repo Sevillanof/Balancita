@@ -47,6 +47,15 @@ const strategies = {
   ],
 } as const
 
+const admissionPolicyBody = {
+  schema_version: 'futures-entry-admission.v1',
+  evaluation_interval_ms: 5000,
+} as const
+const admissionPolicy = {
+  ...admissionPolicyBody,
+  hash: canonicalHash(admissionPolicyBody),
+} as const
+
 function createReplayTerminalMarket(
   source: FuturesMarketStore,
   receivedCutoff: number,
@@ -160,11 +169,12 @@ export class FuturesSessionRuntime {
         taker: runtimeConfig.taker_rate,
       },
       runtime: {
-        schema_version: 'futures-runtime-binding.v4',
+        schema_version: 'futures-runtime-binding.v5',
         runtime_config: runtimeConfig,
         instrument_spec: instrument,
         strategy_manifest: strategies,
         strategy_config_hash: canonicalHash(strategies),
+        admission_policy: admissionPolicy,
       },
     })
     this.runId = this.store.getLatestRunId() ?? primaryRunId
@@ -321,11 +331,12 @@ export class FuturesSessionRuntime {
         taker: runtimeConfig.taker_rate,
       },
       runtime: {
-        schema_version: 'futures-runtime-binding.v4',
+        schema_version: 'futures-runtime-binding.v5',
         runtime_config: runtimeConfig,
         instrument_spec: instrument,
         strategy_manifest: strategies,
         strategy_config_hash: canonicalHash(strategies),
+        admission_policy: admissionPolicy,
       },
     }
     this.store.createRun({ runId: batchRunId, ...frozen })
@@ -390,10 +401,15 @@ export class FuturesSessionRuntime {
     if (existing) return existing
     const savedBinding = this.store.getReplaySessionBinding(runId)
     const savedManifest = savedBinding?.manifest
+    const runtimeBinding = this.store.getRuntimeBinding(runId)
+    const admissionEnabled =
+      runtimeBinding?.schema_version === 'futures-runtime-binding.v5' &&
+      canonicalHash(runtimeBinding.admission_policy) ===
+        canonicalHash(admissionPolicy)
     const manifest =
       savedManifest && typeof savedManifest === 'object'
         ? (savedManifest as ReturnType<FuturesSessionRuntime['replayManifest']>)
-        : this.replayManifest()
+        : this.replayManifest(admissionEnabled)
     const binding = {
       schema_version: 'futures-replay-session.v1',
       run_id: runId,
@@ -407,6 +423,15 @@ export class FuturesSessionRuntime {
       manifest,
       durableStore: this.store,
       observeTiming: this.replayTimingObserver,
+      admissionForSource:
+        manifest.admission_policy === undefined
+          ? undefined
+          : (id, sourceClock) =>
+              this.runner.readAdmissionState(
+                id,
+                admissionPolicyBody,
+                sourceClock,
+              ) as unknown as Record<string, unknown>,
       instrument,
       initialStateVersion:
         replay.works.length > 0
@@ -556,7 +581,10 @@ export class FuturesSessionRuntime {
     this.mockTickTimers.set(runId, timer)
   }
 
-  private replayManifest() {
+  private replayManifest(admissionEnabled = true) {
+    const admission = admissionEnabled
+      ? { admission_policy: admissionPolicy }
+      : {}
     if (this.mode === 'replay')
       return {
         schema_version: 'futures-replay-manifest.v1',
@@ -565,6 +593,7 @@ export class FuturesSessionRuntime {
           : 'frozen-kraken-futures-market.v1',
         source_hash: this.replaySourceHash!,
         config_hash: canonicalHash(runtimeConfig),
+        ...admission,
         seed: `frozen-market:${this.replaySourceHash}`,
         fidelity: this.replaySource?.fundingSourceEvidence().length
           ? 'persisted-public-events-known-candles-explicit-funding.v2'
@@ -594,6 +623,7 @@ export class FuturesSessionRuntime {
           funding_source: 'kraken-historical-funding-rates.v1',
         }),
         config_hash: canonicalHash(runtimeConfig),
+        ...admission,
         seed: 'paper-live-session-v2',
         fidelity:
           'observed-public-trades-book-ticker-candles-explicit-funding.v2',
@@ -607,6 +637,7 @@ export class FuturesSessionRuntime {
         createMockMarketSnapshot(21_600_000, true, true),
       ),
       config_hash: canonicalHash(runtimeConfig),
+      ...admission,
       seed: 'mock-fixture-v1',
       fidelity: 'closed-ohlc-book-ticker-known-zero-funding.v1',
       runtime_version: runtimeConfig.version,

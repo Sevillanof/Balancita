@@ -42,6 +42,196 @@ type RuntimeRequest = Omit<FuturesWorkerRequest, 'payload'> & {
 }
 
 describe('durable C27 futures runtime', () => {
+  it('fails admission closed while accepted runtime work is pending despite a cached flat checkpoint', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'futures-admission-snapshot-'))
+    const path = join(directory, 'fixture.sqlite')
+    const runId = 'admission-snapshot-run'
+    const executionConfig = {
+      ...runtimeConfig,
+      version: 'futures-runtime-risk.v1',
+      daily_loss_fraction: '0.01',
+      execution_latency_ms: 100,
+    }
+    const strategyManifest = {
+      config_version: 'futures-strategies-config.v1',
+      indicator_version: 'futures-closed-indicators.v1',
+      strategy_ids: [
+        'c25-pullback-perp-v1',
+        'c26-reversion-perp-v1',
+        'c27-breakout-perp-v1',
+        'c28-adapter-perp-v1',
+      ],
+    }
+    const store = new FuturesStore(path)
+    store.createRun({
+      runId,
+      config: {
+        ledger_version: 'linear-usd-ledger.v1',
+        decimal_precision: 50,
+        leverage: '1',
+      },
+      seed: { cash_usd: '10000' },
+      instrument: { instrument_id: instrument.instrument_id },
+      costs: {
+        version: runtimeConfig.cost_version,
+        maker: runtimeConfig.maker_rate,
+        taker: runtimeConfig.taker_rate,
+      },
+      runtime: {
+        schema_version: 'futures-runtime-binding.v4',
+        runtime_config: executionConfig,
+        instrument_spec: instrument,
+        strategy_manifest: strategyManifest,
+        strategy_config_hash: canonicalHash(strategyManifest),
+      },
+    })
+    const runner = new FuturesCommandRunner(store)
+    const request = (
+      workId: string,
+      version: number,
+      snapshot: Record<string, unknown>,
+    ): FuturesWorkerRequest => ({
+      request_id: `request-${workId}`,
+      run_id: runId,
+      work_id: workId,
+      expected_state_version: version,
+      payload: {
+        operation: 'futures_runtime.v3',
+        runtime_config: executionConfig,
+        instrument,
+        market_snapshot: snapshot,
+      },
+    })
+    const policy = {
+      schema_version: 'futures-entry-admission.v1',
+      evaluation_interval_ms: 5000,
+    } as const
+    try {
+      await runner.accept(
+        request('admission-flat', 0, market(21_600_000, 'flat')),
+      ).result
+      const flat = runner.readAdmissionState(runId, policy, 21_600_001)
+      expect(flat.ledger_position).toEqual({ known: true, value: null })
+      expect(flat.may_omit_entry_evaluation).toBe(true)
+      expect(
+        runner.readAdmissionState(runId, policy, 21_600_002).source_clock_ms,
+      ).toBe(21_600_002)
+
+      const accepted = runner.accept(
+        request('admission-order', 1, market(21_600_002, 'long')),
+      )
+      const beforeCommit = runner.readAdmissionState(runId, policy, 21_600_002)
+      expect(beforeCommit.execution_required).toBe(true)
+      expect(beforeCommit.may_omit_entry_evaluation).toBe(false)
+      await accepted.result
+
+      const activeOrder = runner.readAdmissionState(runId, policy, 21_600_003)
+      expect(activeOrder.active_order_count).toBe(1)
+      expect(activeOrder.execution_required).toBe(true)
+      expect(activeOrder.may_omit_entry_evaluation).toBe(false)
+
+      const partialMarket = market(21_600_102, 'long')
+      const partialBook = (
+        partialMarket.events as Record<string, unknown>[]
+      ).find((event) => event.type === 'book_snapshot')!
+      ;(partialBook.asks as { quantity_btc: string }[])[0]!.quantity_btc =
+        '0.005'
+      await runner.accept(request('admission-partial-fill', 2, partialMarket))
+        .result
+      expect(store.getRunProjection(runId)?.result).toMatchObject({
+        quantity_btc: '0.005',
+      })
+      expect(
+        (store.exportRun(runId).events as Record<string, unknown>[]).filter(
+          (event) => event.type === 'fill',
+        ),
+      ).toHaveLength(1)
+      const checkpoint = store.getRunProjection(runId)?.checkpoint as Record<
+        string,
+        unknown
+      >
+      const partialExecution = checkpoint.execution_checkpoint as Record<
+        string,
+        unknown
+      >
+      expect(
+        Object.values(
+          partialExecution.orders as Record<string, { state: string }>,
+        ).map((order) => order.state),
+      ).toContain('cancelled')
+      const partialAdmission = runner.readAdmissionState(
+        runId,
+        policy,
+        21_600_102,
+      )
+      expect(partialAdmission.execution_required).toBe(true)
+      expect(partialAdmission.may_omit_entry_evaluation).toBe(false)
+
+      const protection = checkpoint.position_protection as Record<
+        string,
+        unknown
+      >
+      expect(typeof protection.stop).toBe('string')
+      const stop = BigInt(protection.stop as string)
+      const stopMarket = market(21_600_202, 'flat')
+      for (const event of stopMarket.events as Record<string, unknown>[]) {
+        if (event.type === 'book_snapshot') {
+          event.bids = [
+            { price_usd: (stop - 1n).toString(), quantity_btc: '1' },
+          ]
+          event.asks = [{ price_usd: stop.toString(), quantity_btc: '1' }]
+        } else if (event.type === 'ticker') {
+          event.mark_usd = (stop - 1n).toString()
+        }
+      }
+      await runner.accept(request('admission-stop-trigger', 3, stopMarket))
+        .result
+      const stopCheckpoint = store.getRunProjection(runId)
+        ?.checkpoint as Record<string, unknown>
+      const riskCheckpoint = stopCheckpoint.risk_checkpoint as Record<
+        string,
+        unknown
+      >
+      expect(typeof riskCheckpoint.reduction_intent_id).toBe('string')
+      expect(
+        runner.readAdmissionState(runId, policy, 21_600_202).execution_required,
+      ).toBe(true)
+
+      const closeMarket = market(21_600_302, 'flat')
+      for (const event of closeMarket.events as Record<string, unknown>[]) {
+        if (event.type === 'book_snapshot') {
+          event.bids = [
+            { price_usd: (stop - 1n).toString(), quantity_btc: '1' },
+          ]
+          event.asks = [{ price_usd: stop.toString(), quantity_btc: '1' }]
+        } else if (event.type === 'ticker') {
+          event.mark_usd = (stop - 1n).toString()
+        }
+      }
+      await runner.accept(request('admission-protection-fill', 4, closeMarket))
+        .result
+      expect(store.getRunProjection(runId)?.result).toMatchObject({
+        quantity_btc: '0',
+      })
+      expect(
+        (store.exportRun(runId).events as Record<string, unknown>[]).filter(
+          (event) => event.type === 'fill',
+        ),
+      ).toHaveLength(2)
+      expect(
+        (store.getRunProjection(runId)?.result as Record<string, unknown>)
+          .fees_usd,
+      ).toBe('0.4998725')
+      expect(
+        runner.readAdmissionState(runId, policy, 21_600_302).execution_required,
+      ).toBe(false)
+    } finally {
+      await runner.close().catch(() => undefined)
+      store.close()
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
   it.each([
     [100, 100],
     [101, 101],

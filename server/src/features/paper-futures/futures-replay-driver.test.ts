@@ -20,6 +20,7 @@ import { canonicalHash } from './futures-canonical.ts'
 import type { FuturesWorkerRequest } from './futures-worker.ts'
 import { FuturesMarketStore } from '../kraken-futures/futures-market-store.ts'
 import { parseHistoricalFundingResponse } from '../kraken-futures/historical-funding.ts'
+import { createMockMarketSnapshot } from './futures-session-runtime.ts'
 
 const directories: string[] = []
 const instrument = {
@@ -65,6 +66,468 @@ function pythonMarket(
 }
 
 describe('shared causal futures replay driver', () => {
+  it('resumes confirmed idle source progress and matches the continuous financial lifecycle', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'futures-idle-cadence-'))
+    directories.push(directory)
+    const start = 86_400_000
+    const marketStore = new FuturesMarketStore(join(directory, 'market.sqlite'))
+    const appendBook = (receivedAt: number, seq: number) =>
+      marketStore.append({
+        type: 'book',
+        productId: 'PF_XBTUSD',
+        seq,
+        epoch: 1,
+        eventTime: receivedAt,
+        receivedAt,
+        persistedAt: receivedAt,
+        snapshot: true,
+        contiguous: true,
+        valid: true,
+        bids: [{ price: '100000', quantity: '1' }],
+        asks: [{ price: '100001', quantity: '1' }],
+        raw: { fixture: `book-${seq}` },
+      })
+    const appendTicker = (receivedAt: number, seq: number) =>
+      marketStore.append({
+        type: 'ticker',
+        productId: 'PF_XBTUSD',
+        seq,
+        epoch: 1,
+        eventTime: receivedAt,
+        receivedAt,
+        persistedAt: receivedAt,
+        mark: '100000',
+        suspended: false,
+        raw: { fixture: `ticker-${seq}` },
+      })
+    appendBook(start, 1)
+    appendTicker(start, 1)
+    for (let seq = 2; seq <= 62; seq += 1) {
+      appendBook(start + seq * 100, seq + 1)
+      appendTicker(start + seq * 100, seq + 1)
+    }
+    const sourceHash = canonicalHash({
+      events: marketStore.eventsAsOf(Number.MAX_SAFE_INTEGER),
+      candles: marketStore.candlesAsOf(Number.MAX_SAFE_INTEGER),
+      gaps: marketStore.gapsAsOf(Number.MAX_SAFE_INTEGER),
+    })
+    const policyBody = {
+      schema_version: 'futures-entry-admission.v1',
+      evaluation_interval_ms: 5000,
+    } as const
+    const policy = { ...policyBody, hash: canonicalHash(policyBody) }
+    const manifest = {
+      schema_version: 'futures-replay-manifest.v1' as const,
+      source: 'idle-cadence-fixture.v1',
+      source_hash: sourceHash,
+      config_hash: canonicalHash(runtimeConfig),
+      seed: 'fixture',
+      fidelity: 'idle-cadence',
+      instrument_hash: canonicalHash(instrument),
+      admission_policy: policy,
+    }
+    const dbPath = join(directory, 'futures.sqlite')
+    const baselineDbPath = join(directory, 'continuous.sqlite')
+    const strategies = {
+      config_version: 'futures-strategies-config.v1',
+      indicator_version: 'futures-closed-indicators.v1',
+      strategy_ids: [
+        'c25-pullback-perp-v1',
+        'c26-reversion-perp-v1',
+        'c27-breakout-perp-v1',
+        'c28-adapter-perp-v1',
+      ],
+    }
+    const createBoundRun = (targetStore: FuturesStore) =>
+      targetStore.createRun({
+        runId: 'idle-cadence-run',
+        config: {
+          ledger_version: 'linear-usd-ledger.v1',
+          decimal_precision: 50,
+          leverage: '1',
+        },
+        seed: { cash_usd: '10000' },
+        instrument: { instrument_id: instrument.instrument_id },
+        costs: {
+          version: runtimeConfig.cost_version,
+          maker: runtimeConfig.maker_rate,
+          taker: runtimeConfig.taker_rate,
+        },
+        runtime: {
+          schema_version: 'futures-runtime-binding.v5',
+          runtime_config: runtimeConfig,
+          instrument_spec: instrument,
+          strategy_manifest: strategies,
+          strategy_config_hash: canonicalHash(strategies),
+          admission_policy: policy,
+        },
+      })
+    let store = new FuturesStore(dbPath)
+    createBoundRun(store)
+    let runner = new FuturesCommandRunner(store)
+    let baselineStore: FuturesStore | undefined
+    let baselineRunner: FuturesCommandRunner | undefined
+    const runId = 'idle-cadence-run'
+    const apply = async (work: RuntimeWork) => {
+      const result = await runner.accept({
+        request_id: `request-${work.work_id}`,
+        run_id: runId,
+        work_id: work.work_id,
+        expected_state_version: work.version,
+        payload: {
+          operation: 'futures_runtime.v3',
+          runtime_config: runtimeConfig,
+          instrument,
+          market_snapshot: work.input.payload.market_snapshot as Record<
+            string,
+            unknown
+          >,
+        },
+      }).result
+      return {
+        status: 'committed' as const,
+        applied_state_version: Number(
+          store.getRunProjection(runId)?.state_version,
+        ),
+        economic_projection: { result },
+      }
+    }
+    const admissionForSource = (id: string, sourceClock: number) =>
+      runner.readAdmissionState(
+        id,
+        policyBody,
+        sourceClock,
+      ) as unknown as Record<string, unknown>
+    try {
+      await runner.accept({
+        request_id: 'idle-seed',
+        run_id: runId,
+        work_id: 'idle-seed',
+        expected_state_version: 0,
+        payload: {
+          operation: 'futures_runtime.v3',
+          runtime_config: runtimeConfig,
+          instrument,
+          market_snapshot: createMockMarketSnapshot(start, false, false),
+        },
+      }).result
+      let driver = new FuturesReplayDriver({
+        runId,
+        manifest,
+        apply,
+        durableStore: store,
+        admissionForSource,
+        initialStateVersion: 1,
+      })
+      const initial = store.getAdmissionHead(runId)!
+      store.bindReplaySession(runId, {
+        schema_version: 'futures-replay-session.v1',
+        run_id: runId,
+        manifest,
+        instrument_hash: canonicalHash(instrument),
+      })
+      store.bindEvaluationProgress({
+        runId,
+        policyIdentity: policy.hash,
+        sourceIdentity: canonicalHash({
+          schema_version: 'futures-market-source-binding.v1',
+          source: manifest.source,
+          source_hash: manifest.source_hash,
+        }),
+        baselineRowid: 2,
+        nextDueAt: start + 5000,
+        nextDueReasons: ['strategy_evaluation'],
+      })
+      const first = await driver.processMarketStore(
+        marketStore,
+        start + 1000,
+        instrument,
+        undefined,
+        'replay',
+      )
+      expect(first.sourceWatermark).toBeGreaterThan(2)
+      expect(store.getEvaluationSkippedRanges(runId).length).toBeGreaterThan(0)
+      expect(store.getEvaluationProgress(runId)?.nextDueAt).toBe(start + 5000)
+      expect(store.getEvaluationProgress(runId)?.cursorRowid).toBe(
+        first.sourceWatermark,
+      )
+      expect(store.getAdmissionHead(runId)).toEqual(initial)
+      await runner.close()
+      store.close()
+
+      store = new FuturesStore(dbPath)
+      runner = new FuturesCommandRunner(store)
+      driver = await FuturesReplayDriver.resumeMarketStore({
+        runId,
+        manifest,
+        apply,
+        durableStore: store,
+        marketStore,
+        receivedCutoff: start + 1000,
+        instrument,
+        admissionForSource,
+      })
+      expect(store.getEvaluationProgress(runId)?.cursorRowid).toBe(
+        first.sourceWatermark,
+      )
+      expect(store.getEvaluationSkippedRanges(runId).length).toBeGreaterThan(0)
+      expect(store.getRunProjection(runId)?.state_version).toBe(1)
+      expect(store.verifyRun(runId)).toBe(true)
+
+      baselineStore = new FuturesStore(baselineDbPath)
+      createBoundRun(baselineStore)
+      baselineRunner = new FuturesCommandRunner(baselineStore)
+      await baselineRunner.accept({
+        request_id: 'idle-seed',
+        run_id: runId,
+        work_id: 'idle-seed',
+        expected_state_version: 0,
+        payload: {
+          operation: 'futures_runtime.v3',
+          runtime_config: runtimeConfig,
+          instrument,
+          market_snapshot: createMockMarketSnapshot(start, false, false),
+        },
+      }).result
+
+      const runFinancialTail = async (
+        targetStore: FuturesStore,
+        targetRunner: FuturesCommandRunner,
+      ) => {
+        const bookFor = (
+          snapshot: Record<string, unknown>,
+          sequence: number,
+        ) => {
+          const book = (snapshot.events as Record<string, unknown>[]).find(
+            (event) => event.type === 'book_snapshot',
+          )!
+          book.epoch = 1
+          book.sequence = sequence
+          return book
+        }
+        const execute = (
+          workId: string,
+          version: number,
+          decisionTime: number,
+          breakout: 'long' | 'flat',
+          askBudget?: string,
+        ) => {
+          const snapshot = pythonMarket(decisionTime, breakout)
+          const book = bookFor(snapshot, decisionTime)
+          if (askBudget) {
+            ;(book.asks as { quantity_btc: string }[])[0]!.quantity_btc =
+              askBudget
+          }
+          const accepted = targetRunner.accept({
+            request_id: `request-${workId}`,
+            run_id: runId,
+            work_id: workId,
+            expected_state_version: version,
+            payload: {
+              operation: 'futures_runtime.v3',
+              runtime_config: runtimeConfig,
+              instrument,
+              market_snapshot: snapshot,
+            },
+          })
+          return {
+            ...accepted,
+            result: accepted.result.catch((error: unknown) => {
+              throw new Error(`${workId}: ${String(error)}`)
+            }),
+          }
+        }
+        const accepted = execute(
+          'entry-accepted',
+          1,
+          start + 2,
+          'long',
+          '0.005',
+        )
+        const admissionBeforeCommit = targetRunner.readAdmissionState(
+          runId,
+          policyBody,
+          start + 2,
+        )
+        expect(admissionBeforeCommit.execution_required).toBe(true)
+        expect(admissionBeforeCommit.may_omit_entry_evaluation).toBe(false)
+        expect(admissionBeforeCommit.in_flight_work_count).toBe(1)
+        await accepted.result
+        expect(targetStore.getRunProjection(runId)?.result).toMatchObject({
+          quantity_btc: '0',
+        })
+        expect(
+          targetRunner.readAdmissionState(runId, policyBody, start + 3)
+            .execution_required,
+        ).toBe(true)
+
+        await execute('entry-before-eligible', 2, start + 101, 'flat').result
+        expect(targetStore.getRunProjection(runId)?.result).toMatchObject({
+          quantity_btc: '0',
+        })
+
+        const partialSnapshot = pythonMarket(start + 102, 'long')
+        const partialBook = bookFor(partialSnapshot, start + 102)
+        ;(partialBook.asks as { quantity_btc: string }[])[0]!.quantity_btc =
+          '0.005'
+        await targetRunner
+          .accept({
+            request_id: 'request-entry-partial',
+            run_id: runId,
+            work_id: 'entry-partial',
+            expected_state_version: 3,
+            payload: {
+              operation: 'futures_runtime.v3',
+              runtime_config: runtimeConfig,
+              instrument,
+              market_snapshot: partialSnapshot,
+            },
+          })
+          .result.catch((error: unknown) => {
+            throw new Error(`entry partial: ${String(error)}`)
+          })
+        expect(targetStore.getRunProjection(runId)?.result).toMatchObject({
+          quantity_btc: '0.005',
+        })
+        expect(
+          targetRunner.readAdmissionState(runId, policyBody, start + 102)
+            .execution_required,
+        ).toBe(true)
+
+        const positionCheckpoint = targetStore.getRunProjection(runId)
+          ?.checkpoint as Record<string, unknown>
+        const protection = positionCheckpoint.position_protection as Record<
+          string,
+          unknown
+        >
+        const stop = BigInt(protection.stop as string)
+        const atStop = pythonMarket(start + 202, 'long')
+        bookFor(atStop, start + 202)
+        for (const event of atStop.events as Record<string, unknown>[]) {
+          if (event.type === 'book_snapshot') {
+            event.bids = [
+              { price_usd: (stop - 1n).toString(), quantity_btc: '1' },
+            ]
+            event.asks = [{ price_usd: stop.toString(), quantity_btc: '1' }]
+          } else if (event.type === 'ticker') {
+            event.mark_usd = (stop - 1n).toString()
+          }
+        }
+        await targetRunner.accept({
+          request_id: 'request-stop-trigger',
+          run_id: runId,
+          work_id: 'stop-trigger',
+          expected_state_version: 4,
+          payload: {
+            operation: 'futures_runtime.v3',
+            runtime_config: runtimeConfig,
+            instrument,
+            market_snapshot: atStop,
+          },
+        }).result
+        const pendingClose = targetStore.getRunProjection(runId)
+          ?.checkpoint as Record<string, unknown>
+        expect(
+          (pendingClose.risk_checkpoint as Record<string, unknown>)
+            .reduction_intent_id,
+        ).toEqual(expect.any(String))
+        expect(
+          targetRunner.readAdmissionState(runId, policyBody, start + 202)
+            .execution_required,
+        ).toBe(true)
+
+        const atClose = pythonMarket(start + 302, 'flat')
+        bookFor(atClose, start + 302)
+        for (const event of atClose.events as Record<string, unknown>[]) {
+          if (event.type === 'book_snapshot') {
+            event.bids = [
+              { price_usd: (stop - 1n).toString(), quantity_btc: '1' },
+            ]
+            event.asks = [{ price_usd: stop.toString(), quantity_btc: '1' }]
+          } else if (event.type === 'ticker') {
+            event.mark_usd = (stop - 1n).toString()
+          }
+        }
+        await targetRunner.accept({
+          request_id: 'request-protection-close',
+          run_id: runId,
+          work_id: 'protection-close',
+          expected_state_version: 5,
+          payload: {
+            operation: 'futures_runtime.v3',
+            runtime_config: runtimeConfig,
+            instrument,
+            market_snapshot: atClose,
+          },
+        }).result
+        expect(targetStore.getRunProjection(runId)?.result).toMatchObject({
+          quantity_btc: '0',
+          fees_usd: '0.4998725',
+        })
+        expect(
+          targetRunner.readAdmissionState(runId, policyBody, start + 302)
+            .execution_required,
+        ).toBe(true)
+        return {
+          final: targetStore.getRunProjection(runId)?.result,
+          events: targetStore.exportRun(runId).events,
+        }
+      }
+
+      const resumedCursor = store.getEvaluationProgress(runId)?.cursorRowid
+      const auditedIdleRanges = store.getEvaluationSkippedRanges(runId)
+      const normalizedSourceRowCount = (
+        marketStore.eventsAsOf(Number.MAX_SAFE_INTEGER) as Record<
+          string,
+          unknown
+        >[]
+      ).length
+      const restartedFinal = await runFinancialTail(store, runner)
+      expect(store.getEvaluationProgress(runId)?.cursorRowid).toBe(
+        resumedCursor,
+      )
+      const continuousFinal = await runFinancialTail(
+        baselineStore,
+        baselineRunner,
+      )
+      expect(
+        compareEconomicSemantics(
+          { economic_projection: restartedFinal },
+          { economic_projection: continuousFinal },
+        ),
+      ).toMatchObject({ equal: true, differences: [] })
+      expect(store.getEvaluationSkippedRanges(runId)).toEqual(auditedIdleRanges)
+      expect(store.verifyRun(runId)).toBe(true)
+      expect(baselineStore.verifyRun(runId)).toBe(true)
+      expect(
+        (
+          marketStore.eventsAsOf(Number.MAX_SAFE_INTEGER) as Record<
+            string,
+            unknown
+          >[]
+        ).length,
+      ).toBe(normalizedSourceRowCount)
+      await runner.close()
+      store.close()
+      await baselineRunner.close()
+      baselineStore.close()
+    } finally {
+      await runner.close().catch(() => undefined)
+      await baselineRunner?.close().catch(() => undefined)
+      try {
+        store.close()
+      } catch {
+        // The reopen branch already closed the original store handle.
+      }
+      try {
+        baselineStore?.close()
+      } catch {
+        // The successful branch already closed the comparison store handle.
+      }
+      marketStore.close()
+    }
+  })
+
   it('feeds only received, explicit historical funding through the shared paper-live driver after SQLite reopen', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'futures-funding-driver-'))
     directories.push(directory)
@@ -993,7 +1456,6 @@ describe('shared causal futures replay driver', () => {
         funding_complete: true,
       })
       expect(incremental.outputSequence).toBe(outputs.length)
-
       const fills = outputs.flatMap((output) =>
         (output.fills as Record<string, string>[]).map((fill) => ({
           ...fill,

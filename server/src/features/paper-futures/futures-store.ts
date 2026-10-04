@@ -197,6 +197,9 @@ export class FuturesStore {
        CREATE TABLE IF NOT EXISTS paper_futures_terminal_events(run_id TEXT NOT NULL REFERENCES paper_futures_terminal_streams(run_id), seq INTEGER NOT NULL, event_id TEXT NOT NULL UNIQUE, type TEXT NOT NULL, event_json TEXT NOT NULL, PRIMARY KEY(run_id,seq)) STRICT;
        CREATE TRIGGER IF NOT EXISTS paper_futures_terminal_events_no_update BEFORE UPDATE ON paper_futures_terminal_events BEGIN SELECT RAISE(ABORT,'immutable terminal stream event'); END;
        INSERT OR IGNORE INTO paper_futures_schema_migrations VALUES(4, unixepoch('subsec') * 1000);
+       CREATE TABLE IF NOT EXISTS paper_futures_evaluation_progress(run_id TEXT PRIMARY KEY REFERENCES paper_futures_runs(run_id), policy_identity TEXT NOT NULL, source_identity TEXT NOT NULL, cursor_rowid INTEGER NOT NULL, next_due_at INTEGER, next_due_reasons_json TEXT NOT NULL) STRICT;
+       CREATE TABLE IF NOT EXISTS paper_futures_evaluation_skipped(run_id TEXT NOT NULL REFERENCES paper_futures_runs(run_id), policy_identity TEXT NOT NULL, source_identity TEXT NOT NULL, from_rowid INTEGER NOT NULL, to_rowid INTEGER NOT NULL, inspected_row_count INTEGER NOT NULL, reason TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY(run_id,from_rowid), CHECK(from_rowid>0 AND to_rowid>=from_rowid AND inspected_row_count>0)) STRICT;
+       INSERT OR IGNORE INTO paper_futures_schema_migrations VALUES(5, unixepoch('subsec') * 1000);
     `)
     const existingRuns = this.db
       .prepare('SELECT run_id FROM paper_futures_runs')
@@ -1304,6 +1307,302 @@ export class FuturesStore {
     }))
   }
 
+  /** Bind only after the caller has verified these immutable identities. Existing runs are never assigned a default policy. */
+  bindEvaluationProgress(input: {
+    runId: string
+    policyIdentity: string
+    sourceIdentity: string
+    baselineRowid: number
+    nextDueAt: number | null
+    nextDueReasons: readonly string[]
+  }): void {
+    if (
+      !input.policyIdentity ||
+      !input.sourceIdentity ||
+      !Number.isSafeInteger(input.baselineRowid) ||
+      input.baselineRowid < 0
+    )
+      throw new Error('Evaluation progress binding is invalid.')
+    const reasons = canonicalJson(input.nextDueReasons)
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      if (
+        !this.db
+          .prepare('SELECT 1 FROM paper_futures_runs WHERE run_id=?')
+          .get(input.runId)
+      )
+        throw new Error('Unknown futures run.')
+      const existing = this.db
+        .prepare(
+          'SELECT * FROM paper_futures_evaluation_progress WHERE run_id=?',
+        )
+        .get(input.runId) as JsonRecord | undefined
+      if (existing) {
+        if (
+          existing.policy_identity !== input.policyIdentity ||
+          existing.source_identity !== input.sourceIdentity ||
+          Number(existing.cursor_rowid) !== input.baselineRowid ||
+          existing.next_due_at !== input.nextDueAt ||
+          existing.next_due_reasons_json !== reasons
+        )
+          throw new Error(
+            'Evaluation progress is already bound to different identities or baseline.',
+          )
+      } else {
+        this.db
+          .prepare(
+            'INSERT INTO paper_futures_evaluation_progress VALUES(?,?,?,?,?,?)',
+          )
+          .run(
+            input.runId,
+            input.policyIdentity,
+            input.sourceIdentity,
+            input.baselineRowid,
+            input.nextDueAt,
+            reasons,
+          )
+      }
+      this.db.exec('COMMIT')
+    } catch (error) {
+      this.db.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  getEvaluationProgress(runId: string):
+    | {
+        policyIdentity: string
+        sourceIdentity: string
+        cursorRowid: number
+        nextDueAt: number | null
+        nextDueReasons: string[]
+      }
+    | undefined {
+    const row = this.db
+      .prepare('SELECT * FROM paper_futures_evaluation_progress WHERE run_id=?')
+      .get(runId) as JsonRecord | undefined
+    if (!row) return undefined
+    return {
+      policyIdentity: String(row.policy_identity),
+      sourceIdentity: String(row.source_identity),
+      cursorRowid: Number(row.cursor_rowid),
+      nextDueAt: row.next_due_at === null ? null : Number(row.next_due_at),
+      nextDueReasons: JSON.parse(String(row.next_due_reasons_json)) as string[],
+    }
+  }
+
+  getEvaluationSkippedRanges(runId: string): {
+    policyIdentity: string
+    sourceIdentity: string
+    fromRowid: number
+    toRowid: number
+    inspectedRowCount: number
+    reason: string
+  }[] {
+    return (
+      this.db
+        .prepare(
+          'SELECT * FROM paper_futures_evaluation_skipped WHERE run_id=? ORDER BY from_rowid',
+        )
+        .all(runId) as JsonRecord[]
+    ).map((row) => ({
+      policyIdentity: String(row.policy_identity),
+      sourceIdentity: String(row.source_identity),
+      fromRowid: Number(row.from_rowid),
+      toRowid: Number(row.to_rowid),
+      inspectedRowCount: Number(row.inspected_row_count),
+      reason: String(row.reason),
+    }))
+  }
+
+  commitEvaluationProcessedSource(input: {
+    runId: string
+    expectedPolicyIdentity: string
+    expectedSourceIdentity: string
+    expectedStateVersion: number
+    expectedHeadHash: string
+    fromRowid: number
+    sourceRowid: number
+    inspectedRowCount: number
+    workId: string
+    nextDueAt: number | null
+    nextDueReasons: readonly string[]
+  }): void {
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      const run = this.db
+        .prepare(
+          'SELECT state_version,head_hash FROM paper_futures_runs WHERE run_id=?',
+        )
+        .get(input.runId) as
+        { state_version: number; head_hash: string } | undefined
+      const progress = this.db
+        .prepare(
+          'SELECT * FROM paper_futures_evaluation_progress WHERE run_id=?',
+        )
+        .get(input.runId) as JsonRecord | undefined
+      const receiptRow = this.db
+        .prepare(
+          'SELECT source_sequence,receipt_json FROM paper_futures_replay_work WHERE run_id=? AND work_id=?',
+        )
+        .get(input.runId, input.workId) as
+        { source_sequence: number; receipt_json: string | null } | undefined
+      if (
+        !run ||
+        Number(run.state_version) !== input.expectedStateVersion ||
+        run.head_hash !== input.expectedHeadHash
+      )
+        throw new Error('Processed source expected financial head is stale.')
+      if (
+        !progress ||
+        progress.policy_identity !== input.expectedPolicyIdentity ||
+        progress.source_identity !== input.expectedSourceIdentity
+      )
+        throw new Error(
+          'Processed source policy or source identity is not bound.',
+        )
+      if (
+        !receiptRow ||
+        Number(receiptRow.source_sequence) !== input.sourceRowid ||
+        !receiptRow.receipt_json ||
+        (JSON.parse(receiptRow.receipt_json) as JsonRecord).status !==
+          'committed'
+      )
+        throw new Error(
+          'Processed source requires its durable committed replay receipt.',
+        )
+      if (
+        !Number.isSafeInteger(input.fromRowid) ||
+        !Number.isSafeInteger(input.sourceRowid) ||
+        input.fromRowid !== Number(progress.cursor_rowid) + 1 ||
+        input.sourceRowid < input.fromRowid ||
+        !Number.isSafeInteger(input.inspectedRowCount) ||
+        input.inspectedRowCount < 1
+      )
+        throw new Error(
+          'Processed source must be contiguous with the consumed-source cursor.',
+        )
+      this.db
+        .prepare(
+          'UPDATE paper_futures_evaluation_progress SET cursor_rowid=?,next_due_at=?,next_due_reasons_json=? WHERE run_id=?',
+        )
+        .run(
+          input.sourceRowid,
+          input.nextDueAt,
+          canonicalJson(input.nextDueReasons),
+          input.runId,
+        )
+      this.db.exec('COMMIT')
+    } catch (error) {
+      this.db.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  /** Audit and cursor advance are atomic; source ROWIDs are opaque ordered IDs, not a count. Exact retries are accepted. */
+  commitEvaluationSkippedRange(input: {
+    runId: string
+    expectedPolicyIdentity: string
+    expectedSourceIdentity: string
+    expectedStateVersion: number
+    expectedHeadHash: string
+    fromRowid: number
+    toRowid: number
+    inspectedRowCount: number
+    reason: string
+    nextDueAt: number | null
+    nextDueReasons: readonly string[]
+  }): void {
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      const run = this.db
+        .prepare(
+          'SELECT state_version,head_hash FROM paper_futures_runs WHERE run_id=?',
+        )
+        .get(input.runId) as
+        { state_version: number; head_hash: string } | undefined
+      if (
+        !run ||
+        Number(run.state_version) !== input.expectedStateVersion ||
+        run.head_hash !== input.expectedHeadHash
+      )
+        throw new Error('Evaluation range expected financial head is stale.')
+      const progress = this.db
+        .prepare(
+          'SELECT * FROM paper_futures_evaluation_progress WHERE run_id=?',
+        )
+        .get(input.runId) as JsonRecord | undefined
+      if (
+        !progress ||
+        progress.policy_identity !== input.expectedPolicyIdentity ||
+        progress.source_identity !== input.expectedSourceIdentity
+      )
+        throw new Error(
+          'Evaluation range policy or source identity is not bound.',
+        )
+      if (this.loadPendingCommands(1).length)
+        throw new Error(
+          'Cannot skip evaluation while accepted commands are pending.',
+        )
+      if (
+        !Number.isSafeInteger(input.fromRowid) ||
+        !Number.isSafeInteger(input.toRowid) ||
+        input.fromRowid < 1 ||
+        input.toRowid < input.fromRowid ||
+        !Number.isSafeInteger(input.inspectedRowCount) ||
+        input.inspectedRowCount < 1 ||
+        !input.reason.trim()
+      )
+        throw new Error('Evaluation range is invalid.')
+      const cursor = Number(progress.cursor_rowid)
+      const prior = this.db
+        .prepare(
+          'SELECT * FROM paper_futures_evaluation_skipped WHERE run_id=? AND from_rowid=?',
+        )
+        .get(input.runId, input.fromRowid) as JsonRecord | undefined
+      if (
+        prior &&
+        Number(prior.to_rowid) === input.toRowid &&
+        Number(prior.inspected_row_count) === input.inspectedRowCount &&
+        prior.reason === input.reason &&
+        prior.policy_identity === input.expectedPolicyIdentity &&
+        prior.source_identity === input.expectedSourceIdentity &&
+        cursor === input.toRowid
+      ) {
+        this.db.exec('COMMIT')
+        return
+      }
+      if (input.fromRowid !== cursor + 1)
+        throw new Error(
+          'Evaluation range must be contiguous with the consumed-source cursor.',
+        )
+      const reasons = canonicalJson(input.nextDueReasons)
+      this.db
+        .prepare(
+          'INSERT INTO paper_futures_evaluation_skipped VALUES(?,?,?,?,?,?,?,?)',
+        )
+        .run(
+          input.runId,
+          input.expectedPolicyIdentity,
+          input.expectedSourceIdentity,
+          input.fromRowid,
+          input.toRowid,
+          input.inspectedRowCount,
+          input.reason,
+          Date.now(),
+        )
+      this.db
+        .prepare(
+          'UPDATE paper_futures_evaluation_progress SET cursor_rowid=?,next_due_at=?,next_due_reasons_json=? WHERE run_id=?',
+        )
+        .run(input.toRowid, input.nextDueAt, reasons, input.runId)
+      this.db.exec('COMMIT')
+    } catch (error) {
+      this.db.exec('ROLLBACK')
+      throw error
+    }
+  }
+
   getCommandResult(commandId: string): JsonRecord | undefined {
     const row = this.db
       .prepare(
@@ -1395,6 +1694,73 @@ export class FuturesStore {
       )
       .get(runId) as { state_json: string } | undefined
     return row ? (JSON.parse(row.state_json) as JsonRecord) : undefined
+  }
+
+  getAdmissionHead(
+    runId: string,
+  ): { stateVersion: number; headHash: string } | undefined {
+    const row = this.db
+      .prepare(
+        'SELECT state_version,head_hash FROM paper_futures_runs WHERE run_id=?',
+      )
+      .get(runId) as { state_version: number; head_hash: string } | undefined
+    return row
+      ? { stateVersion: Number(row.state_version), headHash: row.head_hash }
+      : undefined
+  }
+
+  getLastAppliedReplaySourceSequence(runId: string): number | null {
+    const row = this.db
+      .prepare(
+        `SELECT MAX(r.source_sequence) AS source_sequence
+         FROM paper_futures_replay_work r
+         JOIN paper_futures_applied a ON a.work_id=r.work_id
+         WHERE r.run_id=?`,
+      )
+      .get(runId) as { source_sequence: number | null }
+    return row.source_sequence === null ? null : Number(row.source_sequence)
+  }
+
+  getCommittedReplayWorkIdForSource(
+    runId: string,
+    sourceSequence: number,
+  ): string | undefined {
+    const row = this.db
+      .prepare(
+        'SELECT work_id,receipt_json,receipt_hash FROM paper_futures_replay_work WHERE run_id=? AND source_sequence=?',
+      )
+      .get(runId, sourceSequence) as
+      | {
+          work_id: string
+          receipt_json: string | null
+          receipt_hash: string | null
+        }
+      | undefined
+    if (!row?.receipt_json || !row.receipt_hash) return undefined
+    const receipt = JSON.parse(row.receipt_json) as unknown
+    if (
+      canonicalJson(receipt) !== row.receipt_json ||
+      canonicalHash(receipt) !== row.receipt_hash ||
+      !isRecord(receipt) ||
+      receipt.status !== 'committed'
+    )
+      throw new Error('Durable replay receipt verification failed.')
+    return row.work_id
+  }
+
+  getLastAppliedDecisionTime(runId: string): number | null {
+    const row = this.db
+      .prepare(
+        `SELECT json_extract(w.snapshot_json,'$.request.payload.market_snapshot.decision_time_ms') AS decision_time_ms
+         FROM paper_futures_work w
+         JOIN paper_futures_applied a ON a.work_id=w.work_id
+         WHERE w.run_id=?
+         ORDER BY w.rowid DESC LIMIT 1`,
+      )
+      .get(runId) as { decision_time_ms: number | null } | undefined
+    return row?.decision_time_ms === null || row === undefined
+      ? null
+      : Number(row.decision_time_ms)
   }
 
   persistCommandResult(commandId: string, result: unknown): JsonRecord {
@@ -2099,7 +2465,8 @@ function validateRuntimeBinding(value: unknown, frozen: JsonRecord): void {
   if (!isRecord(value)) throw new Error('Runtime binding must be an object.')
   if (
     value.schema_version === 'futures-runtime-binding.v2' ||
-    value.schema_version === 'futures-runtime-binding.v4'
+    value.schema_version === 'futures-runtime-binding.v4' ||
+    value.schema_version === 'futures-runtime-binding.v5'
   ) {
     assertKeys(value, [
       'schema_version',
@@ -2107,7 +2474,23 @@ function validateRuntimeBinding(value: unknown, frozen: JsonRecord): void {
       'instrument_spec',
       'strategy_manifest',
       'strategy_config_hash',
+      ...(value.schema_version === 'futures-runtime-binding.v5'
+        ? ['admission_policy']
+        : []),
     ])
+    if (
+      value.schema_version === 'futures-runtime-binding.v5' &&
+      (!isRecord(value.admission_policy) ||
+        value.admission_policy.schema_version !==
+          'futures-entry-admission.v1' ||
+        value.admission_policy.evaluation_interval_ms !== 5000 ||
+        value.admission_policy.hash !==
+          canonicalHash({
+            schema_version: 'futures-entry-admission.v1',
+            evaluation_interval_ms: 5000,
+          }))
+    )
+      throw new Error('Unsupported frozen entry-admission policy.')
     const manifest = value.strategy_manifest
     const expectedManifest = {
       config_version: 'futures-strategies-config.v1',
@@ -2132,7 +2515,8 @@ function validateRuntimeBinding(value: unknown, frozen: JsonRecord): void {
     (value.schema_version !== 'futures-runtime-binding.v1' &&
       value.schema_version !== 'futures-runtime-binding.v2' &&
       value.schema_version !== 'futures-runtime-binding.v3' &&
-      value.schema_version !== 'futures-runtime-binding.v4') ||
+      value.schema_version !== 'futures-runtime-binding.v4' &&
+      value.schema_version !== 'futures-runtime-binding.v5') ||
     !isRecord(value.runtime_config) ||
     !isRecord(value.instrument_spec)
   )
@@ -2153,12 +2537,14 @@ function validateRuntimeBinding(value: unknown, frozen: JsonRecord): void {
       'maker_rate',
       'taker_rate',
     ],
-    value.schema_version === 'futures-runtime-binding.v4'
+    value.schema_version === 'futures-runtime-binding.v4' ||
+      value.schema_version === 'futures-runtime-binding.v5'
       ? ['daily_loss_fraction']
       : [],
   )
   if (
-    value.schema_version === 'futures-runtime-binding.v4' &&
+    (value.schema_version === 'futures-runtime-binding.v4' ||
+      value.schema_version === 'futures-runtime-binding.v5') &&
     config.daily_loss_fraction !== '0.01'
   )
     throw new Error('Unsupported frozen daily-loss risk limit.')
@@ -2168,7 +2554,8 @@ function validateRuntimeBinding(value: unknown, frozen: JsonRecord): void {
         ? 'futures-runtime-strategies.v1'
         : value.schema_version === 'futures-runtime-binding.v3'
           ? 'futures-runtime-execution.v1'
-          : value.schema_version === 'futures-runtime-binding.v4'
+          : value.schema_version === 'futures-runtime-binding.v4' ||
+              value.schema_version === 'futures-runtime-binding.v5'
             ? 'futures-runtime-risk.v1'
             : 'futures-runtime-lab.v1') ||
     config.cost_version !== (frozen.costs as JsonRecord).version
@@ -2712,11 +3099,15 @@ function validateRuntimeWork(
   const binding = frozen.runtime as JsonRecord
   const strategyRuntime =
     binding.schema_version === 'futures-runtime-binding.v2' ||
-    binding.schema_version === 'futures-runtime-binding.v4'
+    binding.schema_version === 'futures-runtime-binding.v4' ||
+    binding.schema_version === 'futures-runtime-binding.v5'
   const executionRuntime =
     binding.schema_version === 'futures-runtime-binding.v3' ||
-    binding.schema_version === 'futures-runtime-binding.v4'
-  const riskRuntime = binding.schema_version === 'futures-runtime-binding.v4'
+    binding.schema_version === 'futures-runtime-binding.v4' ||
+    binding.schema_version === 'futures-runtime-binding.v5'
+  const riskRuntime =
+    binding.schema_version === 'futures-runtime-binding.v4' ||
+    binding.schema_version === 'futures-runtime-binding.v5'
   assertKeys(cp, [
     'schema_version',
     'runtime_version',
