@@ -77,6 +77,32 @@ describe('FuturesMarketStore', () => {
     store.close()
   })
 
+  it('reports indexed gap knowledge with the existing detected-time cutoff', () => {
+    const store = new FuturesMarketStore(dbPath())
+    store.appendGap({
+      feed: 'book',
+      productId: 'PF_XBTUSD',
+      epoch: 1,
+      expectedSeq: 2,
+      actualSeq: 3,
+      detectedAt: 1015,
+      reason: 'sequence_gap',
+      policyVersion: 'snapshot-contiguous-observed.v1',
+    })
+
+    expect(store.gapStatusAsOf(1014)).toEqual({
+      knownAtMs: 1014,
+      gapFree: true,
+    })
+    expect(store.gapStatusAsOf(1015)).toEqual({
+      knownAtMs: 1015,
+      gapFree: false,
+    })
+    expect(store.gapsAsOf(1014)).toEqual([])
+    expect(store.gapsAsOf(1015)).toHaveLength(1)
+    store.close()
+  })
+
   it('counts pending durable events by watermark and received-time cutoff', () => {
     const store = new FuturesMarketStore(dbPath())
     store.append(event)

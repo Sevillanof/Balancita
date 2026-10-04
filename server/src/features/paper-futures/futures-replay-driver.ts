@@ -2,6 +2,7 @@ import { canonicalHash } from './futures-canonical.ts'
 import type { FuturesMarketStore } from '../kraken-futures/futures-market-store.ts'
 import { randomUUID } from 'node:crypto'
 import type { FuturesStore } from './futures-store.ts'
+import { IncrementalMarketProjection } from './futures-market-projection.ts'
 
 export type ReplayManifest = Readonly<{
   schema_version: 'futures-replay-manifest.v1'
@@ -105,6 +106,8 @@ export class FuturesReplayDriver {
   private marketSourcePending: Record<string, unknown>[] = []
   private marketSourceReadCursor = 0
   private marketSourceCursor = 0
+  private marketProjection?: IncrementalMarketProjection
+  private marketProjectionDisabled = false
   private evaluationProgress?: {
     policyIdentity: string
     sourceIdentity: string
@@ -413,6 +416,7 @@ export class FuturesReplayDriver {
       null,
     )
     const allEvents = this.marketSourceEvents
+    this.ensureMarketProjection(allEvents)
     const eligible = this.marketSourcePending.filter(
       (event) =>
         Number(event.receivedSequence) > this.marketSourceCursor &&
@@ -420,7 +424,11 @@ export class FuturesReplayDriver {
     )
     let stopped = false
     let deferredSourceRows = 0
-    let pendingSkipped: { rowid: number; input: CausalInput }[] = []
+    let pendingSkipped: {
+      rowid: number
+      sourceClock: number
+      materializeInput: () => CausalInput | undefined
+    }[] = []
     let inspectedSinceProgress = 0
     let pendingSkippedInspectedCount = 0
     const flushSkipped = async (): Promise<void> => {
@@ -428,13 +436,10 @@ export class FuturesReplayDriver {
       const rows = pendingSkipped
       pendingSkipped = []
       const last = rows.at(-1)!
-      const admission = this.admissionForSource?.(
-        this.runId,
-        last.input.received_at_ms,
-      )
+      const admission = this.admissionForSource?.(this.runId, last.sourceClock)
       const progress = this.evaluationProgress!
       try {
-        if (!this.isSafeIdleAdmission(admission, last.input.received_at_ms))
+        if (!this.isSafeIdleAdmission(admission, last.sourceClock))
           throw new Error('Admission changed before durable skip commit.')
         const due = admission!.next_due_at as Record<string, unknown>
         const rowids = rows.map((row) => row.rowid)
@@ -464,10 +469,12 @@ export class FuturesReplayDriver {
       } catch {
         // On a guard race, process the already-inspected rows through the full path.
         const row = rows.at(-1)!
-        const receipt = await this.processEvent(
-          row.input,
-          row.input.received_at_ms,
-        )
+        const input = row.materializeInput()
+        if (!input)
+          throw new Error(
+            'Skipped-row fallback could not build its full input.',
+          )
+        const receipt = await this.processEvent(input, input.received_at_ms)
         if (!receipt || receipt.status !== 'committed')
           throw new Error(
             'Skipped-row fallback did not obtain a committed receipt.',
@@ -485,7 +492,7 @@ export class FuturesReplayDriver {
           fromRowid: progress.cursorRowid + 1,
           inspectedRowCount: pendingSkippedInspectedCount,
           workId,
-          sourceClock: row.input.received_at_ms,
+          sourceClock: row.sourceClock,
         })
         inspectedSinceProgress = 0
         pendingSkippedInspectedCount = 0
@@ -499,270 +506,70 @@ export class FuturesReplayDriver {
         break
       }
       const receivedAt = Number(source.receivedAt)
-      const snapshotPreparationStarted = performance.now()
-      this.emitTiming(
-        'market-source-snapshot-preparation',
-        'start',
-        snapshotPreparationStarted,
-        Number(source.receivedSequence),
-        null,
-      )
-      const gaps = store.gapsAsOf(receivedAt) as Record<string, unknown>[]
-      const candles = (
-        store.candlesAsOf(receivedAt) as Record<string, unknown>[]
-      ).filter(
-        (candle) =>
-          !gaps.some(
-            (gap) =>
-              Number(gap.detected_at) < Number(candle.known_at) &&
-              Number(candle.close_at) <= Number(gap.detected_at),
-          ),
-      )
       const sourceSequence = Number(source.receivedSequence)
-      const current = allEvents.filter(
-        (event) =>
-          Number(event.receivedSequence) <= sourceSequence &&
-          Number(event.receivedAt) <= receivedAt,
-      )
-      const marketEvents: Record<string, unknown>[] = candles.map((candle) => ({
-        type: 'candle',
-        interval_ms: Number(candle.interval_ms),
-        bucket_start_ms: Number(candle.bucket_start),
-        event_time_ms: Number(candle.close_at ?? candle.known_at),
-        received_at_ms: Number(candle.known_at),
-        known_at_ms: Number(candle.known_at),
-        reception_order: Number(candle.known_at),
-        closed: true,
-        coverage: candle.coverage,
-        open: candle.open_price,
-        high: candle.high_price,
-        low: candle.low_price,
-        close: candle.close_price,
-        volume_btc: candle.volume_btc,
-      }))
-      for (const event of current) {
-        const known = Number(event.receivedAt)
-        const eventAt = Number(event.eventTime)
-        const seq = Number(event.receivedSequence)
-        if (event.type === 'book' && event.snapshot === true) {
-          const gap = gaps.some((item) => {
-            if (item.feed !== 'book' || Number(item.detected_at) > known)
-              return false
-            return (
-              eventAt <= Number(item.detected_at) ||
-              (Number(event.epoch) === Number(item.epoch) &&
-                Number(event.seq) < Number(item.actual_seq))
-            )
-          })
-          marketEvents.push({
-            type: 'book_snapshot',
-            source_receipt_sequence: seq,
-            provider: 'kraken-futures',
-            product_id: 'PF_XBTUSD',
-            epoch: String(event.epoch),
-            sequence: seq,
-            snapshot_id: `${event.epoch}:${event.seq}`,
-            revision: String(event.seq),
-            event_time_ms: eventAt,
-            received_at_ms: known,
-            known_at_ms: known,
-            contiguous:
-              (event.contiguous === true ||
-                (isRecord(event.marketQuality) &&
-                  event.marketQuality.schema_version ===
-                    'futures-market-quality-attestation.v1' &&
-                  event.marketQuality.policy_version ===
-                    'snapshot-contiguous-observed.v1' &&
-                  event.marketQuality.source_guarantee === 'undocumented' &&
-                  event.marketQuality.book_sequence_integrity ===
-                    'observed_contiguous')) &&
-              !gap,
-            valid:
-              event.valid !== false &&
-              (!isRecord(event.marketQuality) ||
-                event.marketQuality.book_valid === true) &&
-              !gap,
-            bids: Array.isArray(event.bids)
-              ? (event.bids as Record<string, string>[]).map((level) => ({
-                  price_usd: level.price,
-                  quantity_btc: level.quantity,
-                }))
-              : [],
-            asks: Array.isArray(event.asks)
-              ? (event.asks as Record<string, string>[]).map((level) => ({
-                  price_usd: level.price,
-                  quantity_btc: level.quantity,
-                }))
-              : [],
-          })
-        } else if (event.type === 'ticker') {
-          marketEvents.push({
-            type: 'ticker',
-            source_receipt_sequence: seq,
-            provider: 'kraken-futures',
-            product_id: 'PF_XBTUSD',
-            epoch: String(event.epoch),
-            sequence: seq,
-            event_time_ms: eventAt,
-            received_at_ms: known,
-            known_at_ms: known,
-            mark_usd: event.mark ?? event.last,
-            market_status: event.suspended ? 'suspended' : 'open',
-          })
-          const historicalFundingMode =
-            mode === 'paper_live' ||
-            (mode === 'replay' &&
-              this.manifest.source === 'frozen-kraken-futures-market.v2')
-          if (!historicalFundingMode && event.fundingObservation) {
-            marketEvents.push({
-              type: 'funding_observation',
-              received_at_ms: known,
-              known_at_ms: known,
-              observation: event.fundingObservation,
-              reception_order: seq,
-            })
-          }
-          if (historicalFundingMode) {
-            const covering = store.fundingForInterval(receivedAt, receivedAt)
-            const rates = new Set(
-              covering.map((record) => String(record.fundingRate)),
-            )
-            if (covering.length > 0 && rates.size === 1) {
-              const evidence = covering.at(-1)!
-              marketEvents.push({
-                type: 'funding_observation',
-                received_at_ms: Number(evidence.knownAtMs),
-                known_at_ms: Number(evidence.knownAtMs),
-                reception_order: seq,
-                observation: {
-                  source: 'kraken-historical-funding-rates.v1',
-                  provider: 'kraken',
-                  product: 'PF_XBTUSD',
-                  field: 'funding_rate',
-                  raw_rate: String(evidence.fundingRate),
-                  unit: 'usd_per_btc_per_hour',
-                  effective_start_ms: Number(evidence.startMs),
-                  effective_end_ms: Number(evidence.endMs),
-                  known_at_ms: Number(evidence.knownAtMs),
-                  received_seq: seq,
-                  observation_id: `${String(evidence.sha256)}:${String(evidence.startMs)}`,
-                  sha256: String(evidence.sha256),
-                  semantic_version: 'kraken-funding-normalization.v1',
-                  predicted: false,
-                },
-              })
-            }
-          }
-        } else if (event.type === 'trade') {
-          marketEvents.push({
-            type: event.recovered === true ? 'recovered_trade_audit' : 'trade',
-            source_receipt_sequence: seq,
-            provider: 'kraken-futures',
-            product_id: 'PF_XBTUSD',
-            epoch: String(event.epoch),
-            uid: event.uid,
-            event_time_ms: eventAt,
-            received_at_ms: known,
-            known_at_ms: known,
-            price_usd: event.priceUsd,
-            quantity_btc: event.quantityBtc,
-            aggressor_side: event.side,
-          })
-        }
-      }
-      marketEvents.forEach((event, index) => {
-        event.reception_order = index + 1
-      })
-      if (
-        !marketEvents.some((event) => event.type === 'book_snapshot') ||
-        !marketEvents.some((event) => event.type === 'ticker')
-      ) {
-        this.emitTiming(
-          'market-source-snapshot-preparation',
-          'end',
-          snapshotPreparationStarted,
-          Number(source.receivedSequence),
-          null,
-        )
-        if (!this.manifest.admission_policy) {
-          this.marketSourceCursor = sourceSequence
-          continue
-        }
-        inspectedSinceProgress += 1
-        continue
-      }
-      const snapshot = {
-        mode,
-        instrument,
-        decision_time_ms: receivedAt,
-        cutoff_received_at_ms: receivedAt,
-        events: marketEvents,
-      }
       const control = controlForSource?.(source)
-      this.emitTiming(
-        'market-source-snapshot-preparation',
-        'end',
-        snapshotPreparationStarted,
-        Number(source.receivedSequence),
-        null,
+      const projectionAdvanced = this.applyMarketProjectionRow(
+        source,
+        receivedCutoff,
       )
-      const input: CausalInput = {
-        sequence: Number(source.receivedSequence),
-        received_at_ms: receivedAt,
-        event_time_ms: Number(source.eventTime),
-        known_at_ms: receivedAt,
-        payload: {
-          market_event: source,
-          market_source_watermark: Number(source.receivedSequence),
-          market_gaps: structuredClone(gaps),
-          market_snapshot: snapshot,
-          ...(control ? { control } : {}),
-        },
-      }
+      const requiredSourceEvent = this.isRequiredMarketSourceEvent(
+        source,
+        store,
+        receivedAt,
+        mode,
+      )
+      const materializeInput = () =>
+        this.prepareMarketSourceInput(
+          store,
+          allEvents,
+          source,
+          instrument,
+          mode,
+          control,
+        )
+      let safeToSkip = false
       if (
         this.evaluationProgress &&
-        this.canSkipIdleSource({
+        projectionAdvanced &&
+        control === undefined &&
+        !requiredSourceEvent &&
+        (source.type === 'book' || source.type === 'ticker') &&
+        this.marketProjection
+      ) {
+        this.marketProjection.updateGapStatus(store.gapStatusAsOf(receivedAt))
+        safeToSkip = this.canSkipIdleProjection({
           source,
-          requiredSourceEvent:
-            source.type === 'trade' ||
-            source.recovered === true ||
-            (source.type === 'ticker' &&
-              (source.fundingObservation !== undefined ||
-                ((mode === 'paper_live' ||
-                  (mode === 'replay' &&
-                    this.manifest.source ===
-                      'frozen-kraken-futures-market.v2')) &&
-                  (() => {
-                    const covering = store.fundingForInterval(
-                      receivedAt,
-                      receivedAt,
-                    )
-                    return (
-                      covering.length > 0 &&
-                      new Set(
-                        covering.map((record) => String(record.fundingRate)),
-                      ).size === 1
-                    )
-                  })()))),
+          requiredSourceEvent,
           admission: this.admissionForSource?.(this.runId, receivedAt),
           sourceClock: receivedAt,
-          marketEvents,
-          gaps,
+          projection: this.marketProjection.snapshotAt(receivedAt),
           control,
         })
-      ) {
+      }
+      if (safeToSkip) {
         inspectedSinceProgress += 1
         if (
           pendingSkipped.length > 0 &&
           sourceSequence !== pendingSkipped.at(-1)!.rowid + 1
         )
           await flushSkipped()
-        pendingSkipped.push({ rowid: sourceSequence, input })
+        pendingSkipped.push({
+          rowid: sourceSequence,
+          sourceClock: receivedAt,
+          materializeInput,
+        })
         pendingSkippedInspectedCount = inspectedSinceProgress
         if (pendingSkipped.length >= 128) await flushSkipped()
         continue
       }
       await flushSkipped()
+      const input = materializeInput()
+      if (!input) {
+        if (!this.manifest.admission_policy)
+          this.marketSourceCursor = sourceSequence
+        else inspectedSinceProgress += 1
+        continue
+      }
       inspectedSinceProgress += 1
       const receipt = await this.processEvent(input, receivedAt)
       if (this.evaluationProgress) {
@@ -810,6 +617,321 @@ export class FuturesReplayDriver {
         }
       })(),
     }
+  }
+
+  private ensureMarketProjection(
+    sourceEvents: Record<string, unknown>[],
+  ): void {
+    if (this.marketProjection || this.marketProjectionDisabled) return
+    const first = sourceEvents[0]
+    const firstSequence = first ? Number(first.receivedSequence) : undefined
+    const baselineReceivedSequence =
+      firstSequence === undefined
+        ? this.marketSourceCursor
+        : Math.min(this.marketSourceCursor, firstSequence - 1)
+    const baselineKnownAtMs = first ? Number(first.receivedAt) : 0
+    this.marketProjection = new IncrementalMarketProjection({
+      baselineReceivedSequence,
+      baselineKnownAtMs,
+    })
+    try {
+      for (const source of sourceEvents) {
+        const sequence = Number(source.receivedSequence)
+        if (sequence > this.marketSourceCursor) break
+        if (sequence > this.marketProjection.lastReceivedSequence)
+          this.marketProjection.applySourceRow(source, Number.MAX_SAFE_INTEGER)
+      }
+    } catch {
+      this.marketProjection = undefined
+      this.marketProjectionDisabled = true
+    }
+  }
+
+  private applyMarketProjectionRow(
+    source: Record<string, unknown>,
+    receivedCutoff: number,
+  ): boolean {
+    const projection = this.marketProjection
+    if (!projection || this.marketProjectionDisabled) return false
+    const sequence = Number(source.receivedSequence)
+    if (
+      !Number.isSafeInteger(sequence) ||
+      sequence <= projection.lastReceivedSequence
+    )
+      return false
+    try {
+      projection.applySourceRow(source, receivedCutoff)
+      return true
+    } catch {
+      this.marketProjection = undefined
+      this.marketProjectionDisabled = true
+      return false
+    }
+  }
+
+  private isRequiredMarketSourceEvent(
+    source: Record<string, unknown>,
+    store: FuturesMarketStore,
+    receivedAt: number,
+    mode: 'mock' | 'paper_live' | 'replay',
+  ): boolean {
+    if (source.type === 'trade' || source.recovered === true) return true
+    if (source.type !== 'ticker') return false
+    if (source.fundingObservation !== undefined) return true
+    const historicalFundingMode =
+      mode === 'paper_live' ||
+      (mode === 'replay' &&
+        this.manifest.source === 'frozen-kraken-futures-market.v2')
+    if (!historicalFundingMode) return false
+    const covering = store.fundingForInterval(receivedAt, receivedAt)
+    return (
+      covering.length > 0 &&
+      new Set(covering.map((record) => String(record.fundingRate))).size === 1
+    )
+  }
+
+  private canSkipIdleProjection(input: {
+    source: Record<string, unknown>
+    requiredSourceEvent: boolean
+    admission: Record<string, unknown> | undefined
+    sourceClock: number
+    projection: ReturnType<IncrementalMarketProjection['snapshotAt']>
+    control: Record<string, unknown> | undefined
+  }): boolean {
+    return (
+      input.control === undefined &&
+      !input.requiredSourceEvent &&
+      (input.source.type === 'book' || input.source.type === 'ticker') &&
+      input.projection.eligible &&
+      input.projection.gapStatusKnown &&
+      input.projection.gapFree === true &&
+      this.isSafeIdleAdmission(input.admission, input.sourceClock)
+    )
+  }
+
+  private prepareMarketSourceInput(
+    store: FuturesMarketStore,
+    allEvents: Record<string, unknown>[],
+    source: Record<string, unknown>,
+    instrument: Record<string, unknown>,
+    mode: 'mock' | 'paper_live' | 'replay',
+    control: Record<string, unknown> | undefined,
+  ): CausalInput | undefined {
+    const receivedAt = Number(source.receivedAt)
+    const sourceSequence = Number(source.receivedSequence)
+    const preparationStarted = performance.now()
+    this.emitTiming(
+      'market-source-snapshot-preparation',
+      'start',
+      preparationStarted,
+      sourceSequence,
+      null,
+    )
+    const gaps = store.gapsAsOf(receivedAt) as Record<string, unknown>[]
+    const candles = (
+      store.candlesAsOf(receivedAt) as Record<string, unknown>[]
+    ).filter(
+      (candle) =>
+        !gaps.some(
+          (gap) =>
+            Number(gap.detected_at) < Number(candle.known_at) &&
+            Number(candle.close_at) <= Number(gap.detected_at),
+        ),
+    )
+    const current = allEvents.filter(
+      (event) =>
+        Number(event.receivedSequence) <= sourceSequence &&
+        Number(event.receivedAt) <= receivedAt,
+    )
+    const marketEvents: Record<string, unknown>[] = candles.map((candle) => ({
+      type: 'candle',
+      interval_ms: Number(candle.interval_ms),
+      bucket_start_ms: Number(candle.bucket_start),
+      event_time_ms: Number(candle.close_at ?? candle.known_at),
+      received_at_ms: Number(candle.known_at),
+      known_at_ms: Number(candle.known_at),
+      reception_order: Number(candle.known_at),
+      closed: true,
+      coverage: candle.coverage,
+      open: candle.open_price,
+      high: candle.high_price,
+      low: candle.low_price,
+      close: candle.close_price,
+      volume_btc: candle.volume_btc,
+    }))
+    for (const event of current) {
+      const known = Number(event.receivedAt)
+      const eventAt = Number(event.eventTime)
+      const sequence = Number(event.receivedSequence)
+      if (event.type === 'book' && event.snapshot === true) {
+        const gap = gaps.some((item) => {
+          if (item.feed !== 'book' || Number(item.detected_at) > known)
+            return false
+          return (
+            eventAt <= Number(item.detected_at) ||
+            (Number(event.epoch) === Number(item.epoch) &&
+              Number(event.seq) < Number(item.actual_seq))
+          )
+        })
+        marketEvents.push({
+          type: 'book_snapshot',
+          source_receipt_sequence: sequence,
+          provider: 'kraken-futures',
+          product_id: 'PF_XBTUSD',
+          epoch: String(event.epoch),
+          sequence,
+          snapshot_id: `${event.epoch}:${event.seq}`,
+          revision: String(event.seq),
+          event_time_ms: eventAt,
+          received_at_ms: known,
+          known_at_ms: known,
+          contiguous:
+            (event.contiguous === true ||
+              (isRecord(event.marketQuality) &&
+                event.marketQuality.schema_version ===
+                  'futures-market-quality-attestation.v1' &&
+                event.marketQuality.policy_version ===
+                  'snapshot-contiguous-observed.v1' &&
+                event.marketQuality.source_guarantee === 'undocumented' &&
+                event.marketQuality.book_sequence_integrity ===
+                  'observed_contiguous')) &&
+            !gap,
+          valid:
+            event.valid !== false &&
+            (!isRecord(event.marketQuality) ||
+              event.marketQuality.book_valid === true) &&
+            !gap,
+          bids: Array.isArray(event.bids)
+            ? (event.bids as Record<string, string>[]).map((level) => ({
+                price_usd: level.price,
+                quantity_btc: level.quantity,
+              }))
+            : [],
+          asks: Array.isArray(event.asks)
+            ? (event.asks as Record<string, string>[]).map((level) => ({
+                price_usd: level.price,
+                quantity_btc: level.quantity,
+              }))
+            : [],
+        })
+      } else if (event.type === 'ticker') {
+        marketEvents.push({
+          type: 'ticker',
+          source_receipt_sequence: sequence,
+          provider: 'kraken-futures',
+          product_id: 'PF_XBTUSD',
+          epoch: String(event.epoch),
+          sequence,
+          event_time_ms: eventAt,
+          received_at_ms: known,
+          known_at_ms: known,
+          mark_usd: event.mark ?? event.last,
+          market_status: event.suspended ? 'suspended' : 'open',
+        })
+        const historicalFundingMode =
+          mode === 'paper_live' ||
+          (mode === 'replay' &&
+            this.manifest.source === 'frozen-kraken-futures-market.v2')
+        if (!historicalFundingMode && event.fundingObservation) {
+          marketEvents.push({
+            type: 'funding_observation',
+            received_at_ms: known,
+            known_at_ms: known,
+            observation: event.fundingObservation,
+            reception_order: sequence,
+          })
+        }
+        if (historicalFundingMode) {
+          const covering = store.fundingForInterval(receivedAt, receivedAt)
+          const rates = new Set(
+            covering.map((record) => String(record.fundingRate)),
+          )
+          if (covering.length > 0 && rates.size === 1) {
+            const evidence = covering.at(-1)!
+            marketEvents.push({
+              type: 'funding_observation',
+              received_at_ms: Number(evidence.knownAtMs),
+              known_at_ms: Number(evidence.knownAtMs),
+              reception_order: sequence,
+              observation: {
+                source: 'kraken-historical-funding-rates.v1',
+                provider: 'kraken',
+                product: 'PF_XBTUSD',
+                field: 'funding_rate',
+                raw_rate: String(evidence.fundingRate),
+                unit: 'usd_per_btc_per_hour',
+                effective_start_ms: Number(evidence.startMs),
+                effective_end_ms: Number(evidence.endMs),
+                known_at_ms: Number(evidence.knownAtMs),
+                received_seq: sequence,
+                observation_id: `${String(evidence.sha256)}:${String(evidence.startMs)}`,
+                sha256: String(evidence.sha256),
+                semantic_version: 'kraken-funding-normalization.v1',
+                predicted: false,
+              },
+            })
+          }
+        }
+      } else if (event.type === 'trade') {
+        marketEvents.push({
+          type: event.recovered === true ? 'recovered_trade_audit' : 'trade',
+          source_receipt_sequence: sequence,
+          provider: 'kraken-futures',
+          product_id: 'PF_XBTUSD',
+          epoch: String(event.epoch),
+          uid: event.uid,
+          event_time_ms: eventAt,
+          received_at_ms: known,
+          known_at_ms: known,
+          price_usd: event.priceUsd,
+          quantity_btc: event.quantityBtc,
+          aggressor_side: event.side,
+        })
+      }
+    }
+    marketEvents.forEach((event, index) => {
+      event.reception_order = index + 1
+    })
+    if (
+      !marketEvents.some((event) => event.type === 'book_snapshot') ||
+      !marketEvents.some((event) => event.type === 'ticker')
+    ) {
+      this.emitTiming(
+        'market-source-snapshot-preparation',
+        'end',
+        preparationStarted,
+        sourceSequence,
+        null,
+      )
+      return undefined
+    }
+    const input: CausalInput = {
+      sequence: sourceSequence,
+      received_at_ms: receivedAt,
+      event_time_ms: Number(source.eventTime),
+      known_at_ms: receivedAt,
+      payload: {
+        market_event: source,
+        market_source_watermark: sourceSequence,
+        market_gaps: structuredClone(gaps),
+        market_snapshot: {
+          mode,
+          instrument,
+          decision_time_ms: receivedAt,
+          cutoff_received_at_ms: receivedAt,
+          events: marketEvents,
+        },
+        ...(control ? { control } : {}),
+      },
+    }
+    this.emitTiming(
+      'market-source-snapshot-preparation',
+      'end',
+      preparationStarted,
+      sourceSequence,
+      null,
+    )
+    return input
   }
 
   private bindMarketSource(
@@ -1006,29 +1128,6 @@ export class FuturesReplayDriver {
     })
     this.evaluationProgress = { ...progress, cursorRowid: input.rowid }
     this.marketSourceCursor = input.rowid
-  }
-
-  private canSkipIdleSource(input: {
-    source: Record<string, unknown>
-    requiredSourceEvent: boolean
-    admission: Record<string, unknown> | undefined
-    sourceClock: number
-    marketEvents: Record<string, unknown>[]
-    gaps: Record<string, unknown>[]
-    control: Record<string, unknown> | undefined
-  }): boolean {
-    const books = input.marketEvents.filter(
-      (event) => event.type === 'book_snapshot',
-    )
-    return (
-      input.control === undefined &&
-      input.gaps.length === 0 &&
-      books.length > 0 &&
-      books.every((book) => book.valid === true && book.contiguous === true) &&
-      input.marketEvents.some((event) => event.type === 'ticker') &&
-      !input.requiredSourceEvent &&
-      this.isSafeIdleAdmission(input.admission, input.sourceClock)
-    )
   }
 
   static async resumeMarketStore(

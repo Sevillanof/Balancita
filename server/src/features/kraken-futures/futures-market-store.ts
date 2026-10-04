@@ -96,6 +96,8 @@ export class FuturesMarketStore {
         epoch INTEGER NOT NULL, expected_seq INTEGER, actual_seq INTEGER,
         detected_at INTEGER NOT NULL, reason TEXT NOT NULL, policy_version TEXT NOT NULL
       ) STRICT;
+      CREATE INDEX IF NOT EXISTS paper_futures_data_gaps_detected_at
+        ON paper_futures_data_gaps(detected_at);
       CREATE TABLE IF NOT EXISTS paper_futures_candle_revisions (
         candle_id TEXT NOT NULL, interval_ms INTEGER NOT NULL, bucket_start INTEGER NOT NULL,
         revision INTEGER NOT NULL, known_at INTEGER NOT NULL, close_at INTEGER,
@@ -702,6 +704,21 @@ export class FuturesMarketStore {
          ORDER BY detected_at,rowid`,
       )
       .all(detectedAtCutoff) as unknown[]
+  }
+
+  gapStatusAsOf(detectedAtCutoff: number): {
+    knownAtMs: number
+    gapFree: boolean
+  } {
+    time(detectedAtCutoff, 'detectedAtCutoff')
+    const row = this.db
+      .prepare(
+        `SELECT EXISTS(
+           SELECT 1 FROM paper_futures_data_gaps WHERE detected_at<=?
+         ) AS has_gap`,
+      )
+      .get(detectedAtCutoff) as { has_gap: number }
+    return { knownAtMs: detectedAtCutoff, gapFree: Number(row.has_gap) === 0 }
   }
 
   exportJsonl(): string {

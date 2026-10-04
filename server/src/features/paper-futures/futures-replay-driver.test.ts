@@ -8,10 +8,11 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   FuturesReplayDriver,
   compareEconomicSemantics,
+  type ReplayTimingEvent,
   type RuntimeWork,
 } from './futures-replay-driver.ts'
 import { FuturesCommandRunner } from './futures-command-runner.ts'
@@ -21,6 +22,7 @@ import type { FuturesWorkerRequest } from './futures-worker.ts'
 import { FuturesMarketStore } from '../kraken-futures/futures-market-store.ts'
 import { parseHistoricalFundingResponse } from '../kraken-futures/historical-funding.ts'
 import { createMockMarketSnapshot } from './futures-session-runtime.ts'
+import { IncrementalMarketProjection } from './futures-market-projection.ts'
 
 const directories: string[] = []
 const instrument = {
@@ -186,12 +188,39 @@ describe('shared causal futures replay driver', () => {
         policyBody,
         sourceClock,
       ) as unknown as Record<string, unknown>
+    const preparationSequences: number[] = []
+    const projectedSequences: number[] = []
+    const observePreparation = vi.fn((event: ReplayTimingEvent) => {
+      if (
+        event.phase === 'market-source-snapshot-preparation' &&
+        event.outcome === 'start'
+      )
+        preparationSequences.push(event.source_received_seq)
+    })
+    const gapsAsOf = vi.spyOn(marketStore, 'gapsAsOf')
+    const gapStatusAsOf = vi.spyOn(marketStore, 'gapStatusAsOf')
+    const candlesAsOf = vi.spyOn(marketStore, 'candlesAsOf')
+    const applyProjectionRowOriginal =
+      IncrementalMarketProjection.prototype.applySourceRow
+    const applyProjectionRow = vi.spyOn(
+      IncrementalMarketProjection.prototype,
+      'applySourceRow',
+    )
+    applyProjectionRow.mockImplementation(function (
+      this: IncrementalMarketProjection,
+      source,
+      cutoff,
+    ) {
+      projectedSequences.push(Number(source.receivedSequence))
+      return applyProjectionRowOriginal.call(this, source, cutoff)
+    })
     const driver = new FuturesReplayDriver({
       runId,
       manifest,
       initialStateVersion: 1,
       durableStore: store,
       admissionForSource,
+      observeTiming: observePreparation,
       apply: async (work) => {
         const result = await runner.accept({
           request_id: `request-${work.work_id}`,
@@ -276,6 +305,20 @@ describe('shared causal futures replay driver', () => {
         undefined,
         'paper_live',
       )
+      expect(preparationSequences).toEqual([])
+      expect(gapsAsOf).toHaveBeenCalledTimes(1)
+      expect(candlesAsOf).toHaveBeenCalledTimes(1)
+      expect(gapStatusAsOf.mock.calls.map(([cutoff]) => cutoff)).toEqual([
+        start + 200,
+        start + 200,
+        start + 300,
+        start + 300,
+        start + 400,
+        start + 400,
+      ])
+      expect(projectedSequences.filter((sequence) => sequence >= 3)).toEqual([
+        3, 4, 5, 6, 7, 8,
+      ])
       const validSkipRanges = store.getEvaluationSkippedRanges(runId)
       expect(validSkipRanges.length).toBeGreaterThan(0)
       expect(
@@ -294,6 +337,13 @@ describe('shared causal futures replay driver', () => {
         undefined,
         'paper_live',
       )
+      expect(preparationSequences).toEqual([9, 10])
+      expect(gapsAsOf).toHaveBeenCalledTimes(4)
+      expect(candlesAsOf).toHaveBeenCalledTimes(4)
+      expect(
+        gapStatusAsOf.mock.calls.slice(-2).map(([cutoff]) => cutoff),
+      ).toEqual([start + 500, start + 500])
+      expect(projectedSequences).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
       expect(
         store
           .getEvaluationSkippedRanges(runId)
