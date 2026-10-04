@@ -66,6 +66,73 @@ describe('FuturesWorker', () => {
     ).rejects.toThrow(/closed/)
   })
 
+  it('emits correlated worker phase diagnostics without affecting completion', async () => {
+    const events: Array<Record<string, unknown>> = []
+    const worker = new FuturesWorker({
+      observer: (event) => events.push(event),
+      commitResult: async (result) => ({
+        status: 'committed',
+        applied_state_version: result.applied_state_version,
+        result_hash: 'd'.repeat(64),
+      }),
+    })
+    try {
+      await worker.submit(
+        request('diagnostic-request', 'diagnostic-work', 'long'),
+      )
+    } finally {
+      await worker.close()
+    }
+    expect(events.map((event) => event.phase)).toEqual([
+      'enqueue',
+      'serialization',
+      'send',
+      'result_parse_validation',
+      'commit_callback_start',
+      'commit_callback_end',
+      'ack_sent',
+      'ack_received',
+    ])
+    expect(
+      events.every(
+        (event) =>
+          event.request_id === 'diagnostic-request' &&
+          event.run_id === 'run-fixture' &&
+          event.work_id === 'diagnostic-work' &&
+          typeof event.monotonic_ms === 'number' &&
+          typeof event.queue_count === 'number' &&
+          typeof event.rss_bytes === 'number',
+      ),
+    ).toBe(true)
+  })
+
+  it('ignores observer exceptions and emits active timeout diagnostics', async () => {
+    const events: Array<Record<string, unknown>> = []
+    const worker = new FuturesWorker({
+      timeoutMs: 100,
+      observer: (event) => {
+        events.push(event)
+        throw new Error('observer failure')
+      },
+      commitResult: async (result) => {
+        await new Promise((resolve) => setTimeout(resolve, 250))
+        return {
+          status: 'committed',
+          applied_state_version: result.applied_state_version,
+          result_hash: 'e'.repeat(64),
+        }
+      },
+    })
+    try {
+      await expect(
+        worker.submit(request('timeout-request', 'timeout-work', 'long')),
+      ).rejects.toThrow(/timed out/)
+    } finally {
+      await worker.close()
+    }
+    expect(events.some((event) => event.phase === 'active_timeout')).toBe(true)
+  })
+
   it('rejects invalid identity and state version before writing to the process', async () => {
     const worker = new FuturesWorker({
       commitResult: async (result) => ({

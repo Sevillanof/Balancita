@@ -1,6 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { performance } from 'node:perf_hooks'
 
 const PROTOCOL_VERSION = 1
 const MAX_LINE_BYTES = 1_048_576
@@ -87,6 +88,7 @@ interface Pending {
   readonly resolve: (result: FuturesWorkerResult) => void
   readonly reject: (error: Error) => void
   readonly timer: NodeJS.Timeout
+  readonly enqueuedAt: number
   result?: FuturesWorkerResult
   commit?: FuturesWorkerCommit
 }
@@ -101,6 +103,8 @@ export class FuturesWorker {
   private starting: Promise<void> | undefined
   private closed = false
   private readonly timeoutMs: number
+  private readonly observer:
+    ((event: FuturesWorkerDiagnostic) => void) | undefined
   private readonly commitResult: (
     result: FuturesWorkerResult,
     request: FuturesWorkerRequest,
@@ -109,6 +113,7 @@ export class FuturesWorker {
   constructor(options: {
     readonly timeoutMs?: number
     readonly maxQueue?: number
+    readonly observer?: (event: FuturesWorkerDiagnostic) => void
     readonly commitResult: (
       result: FuturesWorkerResult,
       request: FuturesWorkerRequest,
@@ -120,6 +125,7 @@ export class FuturesWorker {
     if (options.maxQueue !== undefined && options.maxQueue !== MAX_QUEUE)
       throw new Error(`Worker queue capacity is fixed at ${MAX_QUEUE}.`)
     this.commitResult = options.commitResult
+    this.observer = options.observer
   }
 
   get pid(): number | undefined {
@@ -130,12 +136,14 @@ export class FuturesWorker {
     if (this.closed)
       return Promise.reject(new Error('Futures worker is closed.'))
     validateFuturesWorkerRequest(request)
+    const serializedAt = performance.now()
     const wireLine = JSON.stringify({
       type: 'work',
       protocol_version: PROTOCOL_VERSION,
       ...request,
     })
-    if (Buffer.byteLength(wireLine, 'utf8') + 1 > MAX_LINE_BYTES)
+    const requestBytes = Buffer.byteLength(wireLine, 'utf8') + 1
+    if (requestBytes > MAX_LINE_BYTES)
       return Promise.reject(
         new Error('Futures worker request exceeds the JSONL line limit.'),
       )
@@ -147,10 +155,16 @@ export class FuturesWorker {
         if (index >= 0) {
           const [expired] = this.queue.splice(index, 1)
           clearTimeout(expired!.timer)
+          this.emit(expired!, 'queued_timeout', {
+            queue_wait_ms: performance.now() - expired!.enqueuedAt,
+          })
           rejectPromise(new Error('Futures worker request timed out in queue.'))
           return
         }
         if (this.active?.request === request) {
+          this.emit(this.active, 'active_timeout', {
+            duration_ms: performance.now() - this.active.enqueuedAt,
+          })
           this.active = undefined
           this.child?.kill('SIGKILL')
           rejectPromise(new Error('Futures worker request timed out.'))
@@ -161,6 +175,13 @@ export class FuturesWorker {
         resolve: resolvePromise,
         reject: rejectPromise,
         timer,
+        enqueuedAt: performance.now(),
+      })
+      const item = this.queue.at(-1)!
+      this.emit(item, 'enqueue')
+      this.emit(item, 'serialization', {
+        request_bytes: requestBytes,
+        duration_ms: performance.now() - serializedAt,
       })
       void this.drain()
     })
@@ -218,6 +239,9 @@ export class FuturesWorker {
     const item = this.queue.shift()
     if (!item) return
     this.active = item
+    this.emit(item, 'send', {
+      queue_wait_ms: performance.now() - item.enqueuedAt,
+    })
     this.child!.stdin.write(
       `${JSON.stringify({
         type: 'work',
@@ -253,6 +277,7 @@ export class FuturesWorker {
       child.stdout.on('data', (chunk: Buffer) => {
         for (const line of this.readLines(chunk)) {
           let message: unknown
+          const parseStartedAt = performance.now()
           try {
             message = JSON.parse(line.toString('utf8'))
           } catch {
@@ -280,7 +305,7 @@ export class FuturesWorker {
             resolvePromise()
             continue
           }
-          this.receive(message)
+          this.receive(message, performance.now() - parseStartedAt)
         }
       })
       child.stderr.on('data', (chunk: Buffer) => {
@@ -321,7 +346,7 @@ export class FuturesWorker {
     return this.starting
   }
 
-  private receive(message: unknown): void {
+  private receive(message: unknown, parseDurationMs = 0): void {
     const active = this.active
     if (!active) {
       if (
@@ -344,6 +369,7 @@ export class FuturesWorker {
       active.reject(
         new Error(`Futures worker rejected request: ${String(message.error)}`),
       )
+      this.emit(active, 'worker_error')
       void this.drain()
       return
     }
@@ -352,6 +378,7 @@ export class FuturesWorker {
       isCommittedAck(message, active.request, active.commit)
     ) {
       this.active = undefined
+      this.emit(active, 'ack_received')
       clearTimeout(active.timer)
       active.resolve(active.result!)
       void this.drain()
@@ -371,6 +398,9 @@ export class FuturesWorker {
       return
     }
     active.result = message
+    this.emit(active, 'result_parse_validation', {
+      duration_ms: parseDurationMs,
+    })
     void this.commitAndAcknowledge(active, message)
   }
 
@@ -379,7 +409,12 @@ export class FuturesWorker {
     result: FuturesWorkerResult,
   ): Promise<void> {
     try {
+      const commitStartedAt = performance.now()
+      this.emit(active, 'commit_callback_start')
       const commit = await this.commitResult(result, active.request)
+      this.emit(active, 'commit_callback_end', {
+        duration_ms: performance.now() - commitStartedAt,
+      })
       if (
         !['committed', 'superseded'].includes(commit.status) ||
         !Number.isSafeInteger(commit.applied_state_version) ||
@@ -399,8 +434,10 @@ export class FuturesWorker {
           result_hash: commit.result_hash,
         })}\n`,
       )
+      this.emit(active, 'ack_sent')
     } catch (error) {
       this.active = undefined
+      this.emit(active, 'worker_error', { message: asError(error).message })
       clearTimeout(active.timer)
       active.reject(asError(error))
       this.child?.kill('SIGKILL')
@@ -411,6 +448,7 @@ export class FuturesWorker {
     this.detach()
     const active = this.active
     if (active) {
+      this.emit(active, 'worker_error', { message: error.message })
       clearTimeout(active.timer)
       this.active = undefined
       active.reject(error)
@@ -421,6 +459,31 @@ export class FuturesWorker {
   private detach(): void {
     this.child = undefined
     this.stdoutBuffer = Buffer.alloc(0)
+  }
+
+  private emit(
+    item: Pending,
+    phase: string,
+    details: Record<string, unknown> = {},
+  ): void {
+    if (!this.observer) return
+    try {
+      this.observer({
+        phase,
+        request_id: item.request.request_id,
+        run_id: item.request.run_id,
+        work_id: item.request.work_id,
+        monotonic_ms: performance.now(),
+        queue_count: this.queue.length,
+        oldest_queue_age_ms: this.queue.length
+          ? performance.now() - this.queue[0]!.enqueuedAt
+          : 0,
+        rss_bytes: process.memoryUsage().rss,
+        ...details,
+      })
+    } catch {
+      // Diagnostics must never interfere with worker or financial processing.
+    }
   }
 
   private readLines(chunk: Buffer): Buffer[] {
@@ -451,6 +514,18 @@ export class FuturesWorker {
     }
     return lines
   }
+}
+
+export interface FuturesWorkerDiagnostic {
+  readonly phase: string
+  readonly request_id: string
+  readonly run_id: string
+  readonly work_id: string
+  readonly monotonic_ms: number
+  readonly queue_count: number
+  readonly oldest_queue_age_ms: number
+  readonly rss_bytes?: number
+  readonly [key: string]: unknown
 }
 
 export function validateFuturesWorkerRequest(
