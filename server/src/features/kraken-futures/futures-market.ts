@@ -392,15 +392,25 @@ function level(value: unknown): BookLevel {
   }
 }
 function compareDecimals(a: string, b: string): number {
-  const [aw, af = ''] = a.split('.')
-  const [bw, bf = ''] = b.split('.')
-  const ai = BigInt(aw!),
-    bi = BigInt(bw!)
-  if (ai !== bi) return ai < bi ? -1 : 1
-  const width = Math.max(af.length, bf.length)
-  const av = BigInt(af.padEnd(width, '0') || '0')
-  const bv = BigInt(bf.padEnd(width, '0') || '0')
-  return av === bv ? 0 : av < bv ? -1 : 1
+  const aPoint = a.indexOf('.')
+  const bPoint = b.indexOf('.')
+  const aWholeEnd = aPoint === -1 ? a.length : aPoint
+  const bWholeEnd = bPoint === -1 ? b.length : bPoint
+  const aWhole = a.slice(0, aWholeEnd)
+  const bWhole = b.slice(0, bWholeEnd)
+  if (aWhole.length !== bWhole.length)
+    return aWhole.length < bWhole.length ? -1 : 1
+  if (aWhole !== bWhole) return aWhole < bWhole ? -1 : 1
+
+  const aFractionStart = aPoint === -1 ? a.length : aPoint + 1
+  const bFractionStart = bPoint === -1 ? b.length : bPoint + 1
+  const width = Math.max(a.length - aFractionStart, b.length - bFractionStart)
+  for (let i = 0; i < width; i += 1) {
+    const aDigit = a.charCodeAt(aFractionStart + i) || 48
+    const bDigit = b.charCodeAt(bFractionStart + i) || 48
+    if (aDigit !== bDigit) return aDigit < bDigit ? -1 : 1
+  }
+  return 0
 }
 
 export function parseBookMessage(

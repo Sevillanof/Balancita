@@ -136,6 +136,36 @@ describe('Kraken Futures market decoding', () => {
     ).toThrow(/seq/)
   })
 
+  it('sorts large book prices exactly across mixed decimal precision', () => {
+    const book = parseBookMessage(
+      {
+        feed: 'book_snapshot',
+        product_id: 'PF_XBTUSD',
+        seq: 1,
+        timestamp: 1,
+        bids: [
+          { price: '9007199254740993.12', qty: '1' },
+          { price: '9007199254740993.119999999999', qty: '1' },
+          { price: '9007199254740993.1200000000005', qty: '1' },
+        ],
+        asks: [
+          { price: '9007199254740993.120000000002', qty: '1' },
+          { price: '9007199254740993.120000000001', qty: '1' },
+        ],
+      },
+      { receivedAt: 1, epoch: 1 },
+    )
+    expect(book.bids?.map(({ price }) => price)).toEqual([
+      '9007199254740993.1200000000005',
+      '9007199254740993.12',
+      '9007199254740993.119999999999',
+    ])
+    expect(book.asks?.map(({ price }) => price)).toEqual([
+      '9007199254740993.120000000001',
+      '9007199254740993.120000000002',
+    ])
+  })
+
   it('invalidates a book gap, ignores heartbeats for freshness, and recovers only on a new snapshot', () => {
     let now = 100_000
     let socket: {
