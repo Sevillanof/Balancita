@@ -53,7 +53,85 @@ describe('durable C27 futures runtime', () => {
       dbPath: join(directory, 'mock.sqlite'),
       mode: 'mock',
     })
+    let reused: FuturesSessionRuntime | undefined
     try {
+      const legacyPath = join(directory, 'legacy-live.sqlite')
+      const legacyConfig = {
+        ...(live.store.getRuntimeBinding(live.runId)!.runtime_config as Record<
+          string,
+          unknown
+        >),
+      }
+      delete legacyConfig.strategy_selection_policy_version
+      delete legacyConfig.strategy_selection_interval_ms
+      const admissionPolicyBody = {
+        schema_version: 'futures-entry-admission.v1',
+        evaluation_interval_ms: 5000,
+      }
+      const legacyStore = new FuturesStore(legacyPath)
+      legacyStore.createRun({
+        runId: 'futures-session:primary',
+        config: {
+          ledger_version: 'linear-usd-ledger.v1',
+          decimal_precision: 50,
+          leverage: '1',
+          mode: 'paper_live',
+          mode_config_hash: canonicalHash({
+            mode: 'paper_live',
+            runtimeConfig: legacyConfig,
+          }),
+        },
+        seed: {
+          cash_usd: '10000',
+          seed: 'mock-fixture-v1',
+          source: 'paper_live',
+        },
+        instrument: { instrument_id: instrument.instrument_id },
+        costs: {
+          version: runtimeConfig.cost_version,
+          maker: runtimeConfig.maker_rate,
+          taker: runtimeConfig.taker_rate,
+        },
+        runtime: {
+          schema_version: 'futures-runtime-binding.v5',
+          runtime_config: legacyConfig,
+          instrument_spec: instrument,
+          strategy_manifest: {
+            config_version: 'futures-strategies-config.v1',
+            indicator_version: 'futures-closed-indicators.v1',
+            strategy_ids: [
+              'c25-pullback-perp-v1',
+              'c26-reversion-perp-v1',
+              'c27-breakout-perp-v1',
+              'c28-adapter-perp-v1',
+            ],
+          },
+          strategy_config_hash: canonicalHash({
+            config_version: 'futures-strategies-config.v1',
+            indicator_version: 'futures-closed-indicators.v1',
+            strategy_ids: [
+              'c25-pullback-perp-v1',
+              'c26-reversion-perp-v1',
+              'c27-breakout-perp-v1',
+              'c28-adapter-perp-v1',
+            ],
+          }),
+          admission_policy: {
+            ...admissionPolicyBody,
+            hash: canonicalHash(admissionPolicyBody),
+          },
+        },
+      })
+      legacyStore.close()
+      reused = new FuturesSessionRuntime({
+        dbPath: legacyPath,
+        mode: 'paper_live',
+      })
+      expect(
+        'strategy_selection_policy_version' in
+          (reused.store.getRuntimeBinding(reused.runId)!
+            .runtime_config as Record<string, unknown>),
+      ).toBe(false)
       expect(
         (
           live.store.getRuntimeBinding(live.runId)!.runtime_config as Record<
@@ -63,13 +141,37 @@ describe('durable C27 futures runtime', () => {
         ).funding_policy_version,
       ).toBe('funding-separation.v1')
       expect(
+        (
+          live.store.getRuntimeBinding(live.runId)!.runtime_config as Record<
+            string,
+            unknown
+          >
+        ).strategy_selection_policy_version,
+      ).toBe('strategy-selection-cadence.v1')
+      expect(
+        (
+          live.store.getRuntimeBinding(live.runId)!.runtime_config as Record<
+            string,
+            unknown
+          >
+        ).strategy_selection_interval_ms,
+      ).toBe(5000)
+      expect(
         'funding_policy_version' in
           (mock.store.getRuntimeBinding(mock.runId)!.runtime_config as Record<
             string,
             unknown
           >),
       ).toBe(false)
+      expect(
+        'strategy_selection_policy_version' in
+          (mock.store.getRuntimeBinding(mock.runId)!.runtime_config as Record<
+            string,
+            unknown
+          >),
+      ).toBe(false)
     } finally {
+      await reused?.close()
       await live.close()
       await mock.close()
       rmSync(directory, { recursive: true, force: true })
@@ -86,6 +188,8 @@ describe('durable C27 futures runtime', () => {
       daily_loss_fraction: '0.01',
       execution_latency_ms: 100,
       funding_policy_version: 'funding-separation.v1',
+      strategy_selection_policy_version: 'strategy-selection-cadence.v1',
+      strategy_selection_interval_ms: 5000,
     }
     const strategyManifest = {
       config_version: 'futures-strategies-config.v1',
@@ -97,7 +201,7 @@ describe('durable C27 futures runtime', () => {
         'c28-adapter-perp-v1',
       ],
     }
-    const store = new FuturesStore(path)
+    let store = new FuturesStore(path)
     store.createRun({
       runId,
       config: {
@@ -128,7 +232,7 @@ describe('durable C27 futures runtime', () => {
         },
       },
     })
-    const runner = new FuturesCommandRunner(store)
+    let runner = new FuturesCommandRunner(store)
     const request = (
       workId: string,
       version: number,
@@ -233,12 +337,12 @@ describe('durable C27 futures runtime', () => {
         runner.readAdmissionState(runId, policy, 21_600_002).source_clock_ms,
       ).toBe(21_600_002)
 
-      const knownFundingMarket = withKnownFunding(market(21_600_002, 'long'))
+      const knownFundingMarket = withKnownFunding(market(21_605_000, 'long'))
       knownFundingMarket.mode = 'paper_live'
       const accepted = runner.accept(
         request('admission-order', 1, knownFundingMarket),
       )
-      const beforeCommit = runner.readAdmissionState(runId, policy, 21_600_002)
+      const beforeCommit = runner.readAdmissionState(runId, policy, 21_605_000)
       expect(beforeCommit.execution_required).toBe(true)
       expect(beforeCommit.may_omit_entry_evaluation).toBe(false)
       await accepted.result
@@ -254,26 +358,26 @@ describe('durable C27 futures runtime', () => {
         entry_block_causes: [],
       })
 
-      const activeOrder = runner.readAdmissionState(runId, policy, 21_600_003)
+      const activeOrder = runner.readAdmissionState(runId, policy, 21_605_001)
       expect(activeOrder.active_order_count).toBe(1)
       expect(activeOrder.execution_required).toBe(true)
       expect(activeOrder.may_omit_entry_evaluation).toBe(false)
       expect(activeOrder.next_due_at).toMatchObject({
-        time_ms: 21_600_102,
+        time_ms: 21_605_100,
         reasons: ['order_eligibility'],
       })
       const unservedEligibility = runner.readAdmissionState(
         runId,
         policy,
-        21_600_103,
+        21_605_101,
       )
       expect(unservedEligibility.execution_required).toBe(true)
       expect(unservedEligibility.next_due_at).toMatchObject({
-        time_ms: 21_600_102,
+        time_ms: 21_605_100,
         reasons: ['order_eligibility'],
       })
 
-      const partialMarket = withKnownFunding(market(21_600_102, 'long'))
+      const partialMarket = withKnownFunding(market(21_605_100, 'long'))
       const partialBook = (
         partialMarket.events as Record<string, unknown>[]
       ).find((event) => event.type === 'book_snapshot')!
@@ -285,11 +389,53 @@ describe('durable C27 futures runtime', () => {
         quantity_btc: '0.005',
       })
       expect(
+        (
+          store.getRunProjection(runId)?.runtime_output as {
+            analysis: { as_of_ms: number }
+          }
+        ).analysis.as_of_ms,
+      ).toBe(21_605_000)
+      expect(
         (store.exportRun(runId).events as Record<string, unknown>[]).filter(
           (event) => event.type === 'fill',
         ),
       ).toHaveLength(1)
-      const checkpoint = store.getRunProjection(runId)?.checkpoint as Record<
+      const persistedDatabase = new DatabaseSync(path)
+      const persistedResult = JSON.parse(
+        (
+          persistedDatabase
+            .prepare(
+              "SELECT payload_json FROM paper_futures_records WHERE work_id=? AND kind='applied-result'",
+            )
+            .get('admission-partial-fill') as { payload_json: string }
+        ).payload_json,
+      ) as Record<string, unknown>
+      persistedDatabase.close()
+      const malformedIdentity = structuredClone(persistedResult) as Record<
+        string,
+        unknown
+      >
+      ;(
+        (malformedIdentity.runtime_checkpoint as Record<string, unknown>)
+          .strategy_selection_checkpoint as Record<string, unknown>
+      ).run_id = 'different-run'
+      expect(() => store.applyResult(malformedIdentity)).toThrow(
+        /strategy-selection checkpoint identity/i,
+      )
+      const malformedCache = structuredClone(persistedResult) as Record<
+        string,
+        unknown
+      >
+      ;(
+        (
+          (malformedCache.runtime_checkpoint as Record<string, unknown>)
+            .strategy_selection_checkpoint as Record<string, unknown>
+        ).context as Record<string, unknown>
+      ).as_of_ms = 21_605_001
+      expect(() => store.applyResult(malformedCache)).toThrow(
+        /strategy-selection checkpoint cache/i,
+      )
+      let checkpoint = store.getRunProjection(runId)?.checkpoint as Record<
         string,
         unknown
       >
@@ -305,14 +451,36 @@ describe('durable C27 futures runtime', () => {
       const partialAdmission = runner.readAdmissionState(
         runId,
         policy,
-        21_600_102,
+        21_605_100,
       )
       expect(partialAdmission.execution_required).toBe(true)
       expect(partialAdmission.may_omit_entry_evaluation).toBe(false)
       expect(partialAdmission.next_due_at).toMatchObject({
-        time_ms: 21_605_102,
+        time_ms: 21_610_000,
         reasons: ['strategy_evaluation'],
       })
+      expect(partialAdmission.strategy_selection_due_at).toEqual({
+        time_ms: 21_610_000,
+        reason: 'strategy_evaluation',
+      })
+
+      await runner.close()
+      store.close()
+      store = new FuturesStore(path)
+      runner = new FuturesCommandRunner(store)
+      checkpoint = store.getRunProjection(runId)?.checkpoint as Record<
+        string,
+        unknown
+      >
+      expect(checkpoint.strategy_selection_checkpoint).toMatchObject({
+        policy_version: 'strategy-selection-cadence.v1',
+        interval_ms: 5000,
+        run_id: runId,
+        instrument_id: instrument.instrument_id,
+        last_selection_ms: 21_605_000,
+        next_selection_due_ms: 21_610_000,
+      })
+      expect(store.verifyRun(runId)).toBe(true)
 
       const protection = checkpoint.position_protection as Record<
         string,
@@ -320,7 +488,7 @@ describe('durable C27 futures runtime', () => {
       >
       expect(typeof protection.stop).toBe('string')
       const stop = BigInt(protection.stop as string)
-      const stopMarket = withKnownFunding(market(21_600_202, 'flat'))
+      const stopMarket = withKnownFunding(market(21_605_200, 'flat'))
       for (const event of stopMarket.events as Record<string, unknown>[]) {
         if (event.type === 'book_snapshot') {
           event.bids = [
@@ -341,10 +509,17 @@ describe('durable C27 futures runtime', () => {
       >
       expect(typeof riskCheckpoint.reduction_intent_id).toBe('string')
       expect(
-        runner.readAdmissionState(runId, policy, 21_600_202).execution_required,
+        runner.readAdmissionState(runId, policy, 21_605_200).execution_required,
       ).toBe(true)
+      expect(
+        runner.readAdmissionState(runId, policy, 21_605_200)
+          .strategy_selection_due_at,
+      ).toEqual({
+        time_ms: 21_610_000,
+        reason: 'strategy_evaluation',
+      })
 
-      const closeMarket = withKnownFunding(market(21_600_302, 'flat'))
+      const closeMarket = withKnownFunding(market(21_605_300, 'flat'))
       for (const event of closeMarket.events as Record<string, unknown>[]) {
         if (event.type === 'book_snapshot') {
           event.bids = [
@@ -370,13 +545,13 @@ describe('durable C27 futures runtime', () => {
           .fees_usd,
       ).toBe('0.4998725')
       expect(
-        runner.readAdmissionState(runId, policy, 21_600_302).execution_required,
+        runner.readAdmissionState(runId, policy, 21_605_300).execution_required,
       ).toBe(false)
 
       const pausedRequest = request(
         'admission-user-pause',
         5,
-        withKnownFunding(market(21_600_402, 'flat')),
+        withKnownFunding(market(21_605_400, 'flat')),
       )
       await runner.accept({
         ...pausedRequest,

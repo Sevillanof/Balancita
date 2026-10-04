@@ -32,6 +32,8 @@ EXECUTION_RUNTIME_VERSION = "futures-runtime-execution.v1"
 EXECUTION_CHECKPOINT_VERSION = 3
 RISK_RUNTIME_VERSION = "futures-runtime-risk.v1"
 RISK_CHECKPOINT_VERSION = 4
+STRATEGY_SELECTION_POLICY_VERSION = "strategy-selection-cadence.v1"
+STRATEGY_SELECTION_INTERVAL_MS = 5000
 FEATURE_INTERVAL_MS = 60_000
 ZERO = Decimal(0)
 ONE = Decimal(1)
@@ -93,6 +95,13 @@ class FuturesRuntime:
         self._funding_separation = (
             self.config.get("funding_policy_version") == "funding-separation.v1"
         )
+        self._strategy_cadence = (
+            self.config.get("strategy_selection_policy_version")
+            == STRATEGY_SELECTION_POLICY_VERSION
+        )
+        self._strategy_cache = None
+        self._last_strategy_selection_ms = None
+        self._strategy_selection_fresh = True
         self._funding_entry_causes = []
         self._funding_availability = "unknown"
         self._funding_evidence = None
@@ -190,6 +199,20 @@ class FuturesRuntime:
             or (
                 "funding_policy_version" in self.config
                 and self.config["funding_policy_version"] != "funding-separation.v1"
+            )
+            or (
+                "strategy_selection_policy_version" in self.config
+                and (
+                    self.config["strategy_selection_policy_version"]
+                    != STRATEGY_SELECTION_POLICY_VERSION
+                    or self.config.get("strategy_selection_interval_ms")
+                    != STRATEGY_SELECTION_INTERVAL_MS
+                    or self.config["version"] != RISK_RUNTIME_VERSION
+                )
+            )
+            or (
+                "strategy_selection_policy_version" not in self.config
+                and "strategy_selection_interval_ms" in self.config
             )
         ):
             raise ValueError("unsupported or unsafe runtime configuration")
@@ -294,7 +317,27 @@ class FuturesRuntime:
         features = self._features(evidence, now)
         strategy_context = None
         if self.config["version"] in ("futures-runtime-strategies.v1", RISK_RUNTIME_VERSION):
-            strategy_context = self._strategy_context(evidence, now, cutoff, features)
+            if self._strategy_cadence:
+                due = (
+                    self._last_strategy_selection_ms is None
+                    or now >= self._last_strategy_selection_ms + STRATEGY_SELECTION_INTERVAL_MS
+                )
+                if due:
+                    selected_context = self._strategy_context(evidence, now, cutoff, features)
+                    self._strategy_cache = {
+                        **deepcopy(selected_context),
+                        "as_of_ms": now,
+                    }
+                    self._last_strategy_selection_ms = now
+                    self._strategy_selection_fresh = True
+                else:
+                    self._strategy_selection_fresh = False
+                    selected_context = deepcopy(self._strategy_cache)
+                if selected_context is not None:
+                    strategy_context = selected_context
+            else:
+                strategy_context = self._strategy_context(evidence, now, cutoff, features)
+                self._strategy_selection_fresh = True
         guard = self._market_guard(market, book, ticker, now, cutoff)
         if closed_this_cycle:
             guard = "position_closed_this_cycle"
@@ -320,6 +363,7 @@ class FuturesRuntime:
                 if (
                     not should_close
                     and strategy_context is not None
+                    and self._strategy_selection_fresh
                     and strategy_context["selector"].get("action") == "FLAT"
                 ):
                     should_close = True
@@ -390,7 +434,7 @@ class FuturesRuntime:
             selected = strategy_context["selector"] if strategy_context is not None else None
             if strategy_context is not None:
                 proposal = None
-                if selected.get("action") in ("LONG", "SHORT"):
+                if self._strategy_selection_fresh and selected.get("action") in ("LONG", "SHORT"):
                     proposal = (
                         selected["action"].lower(),
                         selected.get("signal_key"),
@@ -594,6 +638,18 @@ class FuturesRuntime:
                 "evidence": deepcopy(self._funding_evidence),
                 "pending_financial_obligations": self._pending_financial_obligations(),
             }} if self._funding_separation else {}),
+            **({"strategy_selection_checkpoint": {
+                "policy_version": STRATEGY_SELECTION_POLICY_VERSION,
+                "interval_ms": STRATEGY_SELECTION_INTERVAL_MS,
+                "run_id": self.run_id,
+                "instrument_id": None if self.instrument is None else self.instrument.get("instrument_id"),
+                "last_selection_ms": self._last_strategy_selection_ms,
+                "next_selection_due_ms": (
+                    None if self._last_strategy_selection_ms is None
+                    else self._last_strategy_selection_ms + STRATEGY_SELECTION_INTERVAL_MS
+                ),
+                "context": deepcopy(self._strategy_cache),
+            }} if self._strategy_cadence else {}),
         }
 
     def _pending_financial_obligations(self):
@@ -697,6 +753,70 @@ class FuturesRuntime:
             raise ValueError("checkpoint configuration does not match runtime")
         if checkpoint.get("instrument_spec") != self.instrument:
             raise ValueError("checkpoint instrument specification does not match runtime")
+        selection_checkpoint = checkpoint.get("strategy_selection_checkpoint")
+        if self._strategy_cadence:
+            if (
+                not isinstance(selection_checkpoint, dict)
+                or set(selection_checkpoint) != {
+                    "policy_version", "interval_ms", "run_id", "instrument_id",
+                    "last_selection_ms", "next_selection_due_ms", "context",
+                }
+                or selection_checkpoint.get("policy_version") != STRATEGY_SELECTION_POLICY_VERSION
+                or selection_checkpoint.get("interval_ms") != STRATEGY_SELECTION_INTERVAL_MS
+                or selection_checkpoint.get("run_id") != self.run_id
+                or selection_checkpoint.get("instrument_id") != self.instrument.get("instrument_id")
+            ):
+                raise ValueError("strategy selection checkpoint identity is invalid")
+            last_selected = selection_checkpoint.get("last_selection_ms")
+            cached = selection_checkpoint.get("context")
+            execution_checkpoint = checkpoint.get("execution_checkpoint")
+            last_execution_time = (
+                execution_checkpoint.get("last_cutoff_ms")
+                if isinstance(execution_checkpoint, dict)
+                else None
+            )
+            if last_selected is None:
+                if selection_checkpoint.get("next_selection_due_ms") is not None or cached is not None:
+                    raise ValueError("empty strategy selection checkpoint is inconsistent")
+            elif (
+                isinstance(last_selected, bool)
+                or not isinstance(last_selected, int)
+                or not 0 <= last_selected <= 9_007_199_254_740_991
+                or not isinstance(last_execution_time, int)
+                or isinstance(last_execution_time, bool)
+                or last_selected > last_execution_time
+                or selection_checkpoint.get("next_selection_due_ms")
+                != last_selected + STRATEGY_SELECTION_INTERVAL_MS
+                or not isinstance(cached, dict)
+                or set(cached) != {"proposals", "selector", "regime", "as_of_ms"}
+                or not isinstance(cached.get("proposals"), list)
+                or len(cached["proposals"]) != 4
+                or not isinstance(cached.get("selector"), dict)
+                or any(
+                    not isinstance(proposal, dict)
+                    or proposal.get("strategy_id") != strategy_id
+                    or proposal.get("action") not in ("LONG", "SHORT", "FLAT", "WAIT")
+                    for proposal, strategy_id in zip(cached["proposals"], STRATEGY_IDS)
+                )
+                or cached["selector"].get("action") not in ("LONG", "SHORT", "FLAT", "WAIT", "ABSTAIN")
+                or (
+                    cached["selector"].get("action") in ("LONG", "SHORT")
+                    and not any(
+                        proposal.get("strategy_id") == cached["selector"].get("strategy_id")
+                        and proposal.get("action") == cached["selector"].get("action")
+                        and proposal.get("signal_key") == cached["selector"].get("signal_key")
+                        for proposal in cached["proposals"]
+                    )
+                )
+                or cached.get("regime") not in ("unknown", "trend", "range")
+                or cached.get("as_of_ms") != last_selected
+            ):
+                raise ValueError("strategy selection checkpoint cache is invalid")
+            self._last_strategy_selection_ms = last_selected
+            self._strategy_cache = deepcopy(cached)
+            self.regime = cached["regime"] if cached is not None else "unknown"
+        elif selection_checkpoint is not None:
+            raise ValueError("unexpected strategy selection checkpoint policy")
         if self._funding_separation:
             policy = checkpoint.get("funding_policy_checkpoint")
             if (
@@ -778,6 +898,12 @@ class FuturesRuntime:
         self.regime = checkpoint.get("regime", "unknown")
         if self.regime not in ("unknown", "trend", "range"):
             raise ValueError("checkpoint regime is invalid")
+        if (
+            self._strategy_cadence
+            and self._strategy_cache is not None
+            and self.regime != self._strategy_cache["regime"]
+        ):
+            raise ValueError("strategy selection cache regime differs from checkpoint")
         self.position_protection = deepcopy(checkpoint.get("position_protection"))
         self.signal_keys = set(checkpoint.get("signal_keys", []))
         raw_depth = checkpoint.get("consumed_depth", {})

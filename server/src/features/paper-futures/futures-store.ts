@@ -2542,7 +2542,11 @@ function validateRuntimeBinding(value: unknown, frozen: JsonRecord): void {
       ? [
           'daily_loss_fraction',
           ...(value.schema_version === 'futures-runtime-binding.v5'
-            ? ['funding_policy_version']
+            ? [
+                'funding_policy_version',
+                'strategy_selection_policy_version',
+                'strategy_selection_interval_ms',
+              ]
             : []),
         ]
       : [],
@@ -2555,6 +2559,17 @@ function validateRuntimeBinding(value: unknown, frozen: JsonRecord): void {
     )
       throw new Error('Unsupported frozen funding-separation policy.')
   }
+  if (
+    ('strategy_selection_policy_version' in config &&
+      (value.schema_version !== 'futures-runtime-binding.v5' ||
+        config.version !== 'futures-runtime-risk.v1' ||
+        config.strategy_selection_policy_version !==
+          'strategy-selection-cadence.v1' ||
+        config.strategy_selection_interval_ms !== 5000)) ||
+    (config.strategy_selection_policy_version === undefined &&
+      config.strategy_selection_interval_ms !== undefined)
+  )
+    throw new Error('Unsupported frozen strategy-selection cadence policy.')
   if (
     (value.schema_version === 'futures-runtime-binding.v4' ||
       value.schema_version === 'futures-runtime-binding.v5') &&
@@ -3268,6 +3283,99 @@ function validateFundingPolicy(
     )
 }
 
+function validateStrategySelectionCheckpoint(
+  checkpoint: JsonRecord,
+  binding: JsonRecord,
+  output: JsonRecord,
+): void {
+  const config = binding.runtime_config as JsonRecord
+  const value = checkpoint.strategy_selection_checkpoint
+  if (!isRecord(value))
+    throw new Error('Missing strategy-selection checkpoint metadata.')
+  assertKeys(value, [
+    'policy_version',
+    'interval_ms',
+    'run_id',
+    'instrument_id',
+    'last_selection_ms',
+    'next_selection_due_ms',
+    'context',
+  ])
+  const last = value.last_selection_ms
+  const next = value.next_selection_due_ms
+  const execution = checkpoint.execution_checkpoint
+  const lastExecution = isRecord(execution) ? execution.last_cutoff_ms : null
+  const context = value.context
+  if (
+    config.strategy_selection_policy_version !==
+      'strategy-selection-cadence.v1' ||
+    config.strategy_selection_interval_ms !== 5000 ||
+    value.policy_version !== 'strategy-selection-cadence.v1' ||
+    value.interval_ms !== 5000 ||
+    value.run_id !== checkpoint.run_id ||
+    value.instrument_id !== checkpoint.instrument_id ||
+    !Number.isSafeInteger(lastExecution) ||
+    (last !== null &&
+      (!Number.isSafeInteger(last) ||
+        (last as number) < 0 ||
+        (last as number) > Number.MAX_SAFE_INTEGER - 5000 ||
+        (last as number) > (lastExecution as number) ||
+        next !== (last as number) + 5000)) ||
+    (last === null && (next !== null || context !== null)) ||
+    !isRecord(context)
+  )
+    throw new Error(
+      'Strategy-selection checkpoint identity or clock is invalid.',
+    )
+  assertKeys(context, ['proposals', 'selector', 'regime', 'as_of_ms'])
+  const manifest = binding.strategy_manifest
+  const strategyIds = isRecord(manifest) ? manifest.strategy_ids : undefined
+  if (
+    !Array.isArray(strategyIds) ||
+    strategyIds.length !== 4 ||
+    !Array.isArray(context.proposals) ||
+    context.proposals.length !== 4 ||
+    !isRecord(context.selector) ||
+    !['unknown', 'trend', 'range'].includes(String(context.regime)) ||
+    context.as_of_ms !== last ||
+    !isRecord(output.analysis) ||
+    canonicalJson(context.proposals) !==
+      canonicalJson(output.analysis.proposals) ||
+    canonicalJson(context.selector) !==
+      canonicalJson(output.analysis.selector) ||
+    context.regime !== output.analysis.regime ||
+    ('as_of_ms' in output.analysis && output.analysis.as_of_ms !== last)
+  )
+    throw new Error('Strategy-selection checkpoint cache is invalid.')
+  for (let index = 0; index < strategyIds.length; index += 1) {
+    const proposal = context.proposals[index]
+    if (
+      !isRecord(proposal) ||
+      proposal.strategy_id !== strategyIds[index] ||
+      !['LONG', 'SHORT', 'FLAT', 'WAIT'].includes(String(proposal.action))
+    )
+      throw new Error('Strategy-selection proposal cache is invalid.')
+  }
+  const selector = context.selector
+  if (
+    !['LONG', 'SHORT', 'FLAT', 'WAIT', 'ABSTAIN'].includes(
+      String(selector.action),
+    )
+  )
+    throw new Error('Strategy-selection selector cache is invalid.')
+  if (
+    (selector.action === 'LONG' || selector.action === 'SHORT') &&
+    !context.proposals.some(
+      (candidate) =>
+        isRecord(candidate) &&
+        candidate.strategy_id === selector.strategy_id &&
+        candidate.action === selector.action &&
+        candidate.signal_key === selector.signal_key,
+    )
+  )
+    throw new Error('Directional selector cache does not match a proposal.')
+}
+
 function validateRuntimeWork(
   value: JsonRecord,
   frozen: JsonRecord,
@@ -3328,6 +3436,10 @@ function validateRuntimeWork(
       ...((binding.runtime_config as JsonRecord).funding_policy_version ===
       'funding-separation.v1'
         ? ['funding_policy_checkpoint']
+        : []),
+      ...((binding.runtime_config as JsonRecord)
+        .strategy_selection_policy_version === 'strategy-selection-cadence.v1'
+        ? ['strategy_selection_checkpoint']
         : []),
     ],
   )
@@ -3406,6 +3518,14 @@ function validateRuntimeWork(
       output.valuation_source !== 'observed_book_midpoint')
   )
     throw new Error('Invalid C27 runtime output shape.')
+  const cadenceEnabled =
+    (binding.runtime_config as JsonRecord).strategy_selection_policy_version ===
+    'strategy-selection-cadence.v1'
+  if (cadenceEnabled) {
+    validateStrategySelectionCheckpoint(cp, binding, output)
+  } else if ('strategy_selection_checkpoint' in cp) {
+    throw new Error('Unexpected strategy-selection checkpoint metadata.')
+  }
   if (executionRuntime) validateExecutionCheckpoint(cp, binding)
   if (riskRuntime)
     validateRiskCheckpoint(cp.risk_checkpoint, output, binding, cp)
@@ -3420,15 +3540,19 @@ function validateRuntimeWork(
       cp,
       Number(value.runtime_event_time_ms),
     )
-  assertKeys(output.analysis, [
-    'strategy_id',
-    'selected_strategy_id',
-    'action',
-    'reason_codes',
-    'features',
-    'strategy_status',
-    ...(strategyRuntime ? ['proposals', 'selector', 'regime'] : []),
-  ])
+  assertKeys(
+    output.analysis,
+    [
+      'strategy_id',
+      'selected_strategy_id',
+      'action',
+      'reason_codes',
+      'features',
+      'strategy_status',
+      ...(strategyRuntime ? ['proposals', 'selector', 'regime'] : []),
+    ],
+    cadenceEnabled ? ['as_of_ms'] : [],
+  )
   if (
     typeof output.analysis.action !== 'string' ||
     !Array.isArray(output.analysis.reason_codes) ||
@@ -3437,6 +3561,13 @@ function validateRuntimeWork(
     typeof output.analysis.strategy_status !== 'string'
   )
     throw new Error('Invalid runtime analysis evidence.')
+  if (
+    cadenceEnabled &&
+    'as_of_ms' in output.analysis &&
+    output.analysis.as_of_ms !==
+      (cp.strategy_selection_checkpoint as JsonRecord).last_selection_ms
+  )
+    throw new Error('Cached strategy-selection display time is inconsistent.')
   if (strategyRuntime) {
     if (
       !['unknown', 'trend', 'range'].includes(String(output.analysis.regime)) ||
@@ -3579,30 +3710,33 @@ function validateRuntimeWork(
             : 'c27-breakout-perp-v1')
   )
     throw new Error('Unsupported runtime strategy identity.')
-  assertKeys(output.analysis.features, [
-    'schema_version',
-    'ready',
-    'reason_codes',
-    'candidate_close',
-    'ema9',
-    'ema21',
-    'sma50',
-    'rsi14',
-    'atr14',
-    'bollinger_mid20',
-    'bollinger_variance20',
-    'bollinger_stddev20',
-    'bollinger_lower20',
-    'bollinger_upper20',
-    'bollinger_ddof',
-    'donchian_high20',
-    'donchian_low20',
-    'prior_volume_mean20',
-    'candidate_volume',
-    'smoothing',
-    'candidate_bucket_start_ms',
-    ...(strategyRuntime ? ['candidate_low', 'candidate_high'] : []),
-  ])
+  assertKeys(
+    output.analysis.features,
+    [
+      'schema_version',
+      'ready',
+      'reason_codes',
+      'candidate_close',
+      'ema9',
+      'ema21',
+      'sma50',
+      'rsi14',
+      'atr14',
+      'bollinger_mid20',
+      'bollinger_variance20',
+      'bollinger_stddev20',
+      'bollinger_lower20',
+      'bollinger_upper20',
+      'bollinger_ddof',
+      'donchian_high20',
+      'donchian_low20',
+      'prior_volume_mean20',
+      'candidate_volume',
+      'smoothing',
+      'candidate_bucket_start_ms',
+    ],
+    strategyRuntime ? ['candidate_low', 'candidate_high'] : [],
+  )
   if (
     output.analysis.features.schema_version !== 'c27-features.v1' ||
     typeof output.analysis.features.ready !== 'boolean' ||

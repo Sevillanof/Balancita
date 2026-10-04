@@ -55,6 +55,10 @@ const admissionPolicy = {
   ...admissionPolicyBody,
   hash: canonicalHash(admissionPolicyBody),
 } as const
+const strategySelectionPolicy = {
+  version: 'strategy-selection-cadence.v1',
+  interval_ms: 5000,
+} as const
 
 function createReplayTerminalMarket(
   source: FuturesMarketStore,
@@ -90,6 +94,8 @@ export class FuturesSessionRuntime {
   private readonly mode: 'mock' | 'paper_live' | 'replay'
   private runtimeConfig: typeof runtimeConfig & {
     funding_policy_version?: 'funding-separation.v1'
+    strategy_selection_policy_version?: 'strategy-selection-cadence.v1'
+    strategy_selection_interval_ms?: 5000
   }
   private readonly replaySource?: FuturesMarketStore
   private readonly replaySourceHash?: string
@@ -120,7 +126,12 @@ export class FuturesSessionRuntime {
     this.mode = options.mode
     this.runtimeConfig =
       options.mode === 'paper_live'
-        ? { ...runtimeConfig, funding_policy_version: 'funding-separation.v1' }
+        ? {
+            ...runtimeConfig,
+            funding_policy_version: 'funding-separation.v1',
+            strategy_selection_policy_version: strategySelectionPolicy.version,
+            strategy_selection_interval_ms: strategySelectionPolicy.interval_ms,
+          }
         : runtimeConfig
     if (options.mode === 'replay' && options.replaySource === undefined)
       throw new Error('REPLAY requires a frozen futures market source.')

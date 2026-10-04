@@ -43,6 +43,10 @@ export type FuturesAdmissionState = Readonly<
     may_omit_entry_evaluation: boolean
     in_flight_work_count: number
     pending_commands: { known: boolean; any: boolean | null }
+    strategy_selection_due_at: {
+      time_ms: number
+      reason: 'strategy_evaluation'
+    } | null
     next_due_at: {
       time_ms: number | null
       reasons: string[]
@@ -216,6 +220,7 @@ export class FuturesCommandRunner {
         may_omit_entry_evaluation: false,
         in_flight_work_count: this.inFlightRunCount(runId),
         pending_commands: { known: false, any: null },
+        strategy_selection_due_at: null,
         next_due_at: { time_ms: null, reasons: [], unknown_reasons: [reason] },
       })
 
@@ -356,9 +361,48 @@ export class FuturesCommandRunner {
       const sourceSequence =
         this.store.getLastAppliedReplaySourceSequence(runId)
       const lastDecisionTime = this.store.getLastAppliedDecisionTime(runId)
+      const runtimeConfig = this.store.getRuntimeBinding(runId)?.runtime_config
+      const cadenceEnabled =
+        isRecord(runtimeConfig) &&
+        runtimeConfig.strategy_selection_policy_version ===
+          'strategy-selection-cadence.v1'
       const due: { time: number; reason: string }[] = []
       const unknownReasons: string[] = []
-      if (lastDecisionTime !== null && Number.isSafeInteger(lastDecisionTime))
+      let strategySelectionDueAt: number | null = null
+      if (cadenceEnabled) {
+        const selection = checkpoint.strategy_selection_checkpoint
+        if (
+          runtimeConfig.strategy_selection_interval_ms !== 5000 ||
+          !isRecord(selection) ||
+          selection.policy_version !== 'strategy-selection-cadence.v1' ||
+          selection.interval_ms !== 5000 ||
+          selection.run_id !== runId ||
+          (selection.last_selection_ms !== null &&
+            (!Number.isSafeInteger(selection.last_selection_ms) ||
+              (selection.last_selection_ms as number) < 0))
+        ) {
+          return failClosed(
+            'strategy_selection_checkpoint_invalid',
+            head.stateVersion,
+            head.headHash,
+            sourceSequence,
+          )
+        }
+        const lastSelection = selection.last_selection_ms as number
+        const dueAt =
+          lastSelection === null
+            ? sourceClock
+            : lastSelection + runtimeConfig.strategy_selection_interval_ms
+        if (!Number.isSafeInteger(dueAt))
+          unknownReasons.push('strategy_evaluation_clock_invalid')
+        else {
+          strategySelectionDueAt = dueAt
+          due.push({ time: dueAt, reason: 'strategy_evaluation' })
+        }
+      } else if (
+        lastDecisionTime !== null &&
+        Number.isSafeInteger(lastDecisionTime)
+      )
         due.push({
           time: lastDecisionTime + policy.evaluation_interval_ms,
           reason: 'strategy_evaluation',
@@ -488,6 +532,13 @@ export class FuturesCommandRunner {
           this.inFlightRunCount(runId) === 0,
         in_flight_work_count: this.inFlightRunCount(runId),
         pending_commands: { known: true, any: pendingCommands },
+        strategy_selection_due_at:
+          strategySelectionDueAt === null
+            ? null
+            : {
+                time_ms: strategySelectionDueAt,
+                reason: 'strategy_evaluation',
+              },
         next_due_at: {
           time_ms: nextTime,
           reasons: nextReasons,

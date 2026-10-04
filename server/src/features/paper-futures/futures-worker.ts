@@ -846,7 +846,12 @@ function validateWorkerPayload(payload: Record<string, unknown>): boolean {
           'taker_rate',
         ],
         payload.operation === 'futures_runtime.v3'
-          ? ['daily_loss_fraction', 'funding_policy_version']
+          ? [
+              'daily_loss_fraction',
+              'funding_policy_version',
+              'strategy_selection_policy_version',
+              'strategy_selection_interval_ms',
+            ]
           : [],
       ) ||
       ![
@@ -868,6 +873,17 @@ function validateWorkerPayload(payload: Record<string, unknown>): boolean {
           config.funding_policy_version !== 'funding-separation.v1')) ||
       (config.funding_policy_version !== undefined &&
         config.funding_policy_version !== 'funding-separation.v1')
+    )
+      return false
+    if (
+      ('strategy_selection_policy_version' in config &&
+        (payload.operation !== 'futures_runtime.v3' ||
+          config.version !== 'futures-runtime-risk.v1' ||
+          config.strategy_selection_policy_version !==
+            'strategy-selection-cadence.v1' ||
+          config.strategy_selection_interval_ms !== 5000)) ||
+      (config.strategy_selection_policy_version === undefined &&
+        config.strategy_selection_interval_ms !== undefined)
     )
       return false
     if (
@@ -1153,7 +1169,12 @@ function isResult(
         'funding-separation.v1' ||
         (isRecord(value.runtime_output) &&
           isRecord(value.runtime_output.funding_policy) &&
-          isRecord(value.runtime_checkpoint.funding_policy_checkpoint)))
+          isRecord(value.runtime_checkpoint.funding_policy_checkpoint))) &&
+      (request.payload.runtime_config.strategy_selection_policy_version !==
+        'strategy-selection-cadence.v1' ||
+        (isRecord(value.runtime_output) &&
+          isRecord(value.runtime_output.analysis) &&
+          isRecord(value.runtime_checkpoint.strategy_selection_checkpoint)))
     )
   return (
     isRecord(value) &&
