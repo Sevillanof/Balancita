@@ -1,0 +1,20 @@
+server/src/app/app.test.ts
+  h_2f68313623be98 41,801-879
+odd/tasks/kraken-futures-deterministic.md
+  h_2f68313623be98 8,56,58,106-107,109,111,114,123-127,150
+server/src/features/kraken-futures/futures-market-store.ts
+  h_2f68313623be98 589-605
+server/src/app/app.ts
+  h_2f68313623be98 854-870
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7adf80ac4de6a17631a5e084bfbfb4a99063763b",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
