@@ -2539,9 +2539,22 @@ function validateRuntimeBinding(value: unknown, frozen: JsonRecord): void {
     ],
     value.schema_version === 'futures-runtime-binding.v4' ||
       value.schema_version === 'futures-runtime-binding.v5'
-      ? ['daily_loss_fraction']
+      ? [
+          'daily_loss_fraction',
+          ...(value.schema_version === 'futures-runtime-binding.v5'
+            ? ['funding_policy_version']
+            : []),
+        ]
       : [],
   )
+  if ('funding_policy_version' in config) {
+    if (
+      value.schema_version !== 'futures-runtime-binding.v5' ||
+      config.version !== 'futures-runtime-risk.v1' ||
+      config.funding_policy_version !== 'funding-separation.v1'
+    )
+      throw new Error('Unsupported frozen funding-separation policy.')
+  }
   if (
     (value.schema_version === 'futures-runtime-binding.v4' ||
       value.schema_version === 'futures-runtime-binding.v5') &&
@@ -3083,6 +3096,178 @@ function validateRiskCheckpoint(
     throw new Error('Daily risk limit differs from frozen configuration.')
 }
 
+function validateFundingPolicy(
+  outputValue: unknown,
+  checkpointValue: unknown,
+  output: JsonRecord,
+  checkpoint: JsonRecord,
+  decisionTime: number,
+): void {
+  if (!isRecord(outputValue) || !isRecord(checkpointValue))
+    throw new Error('Funding-separation output and checkpoint are required.')
+  const outputPolicy = outputValue
+  const savedPolicy = checkpointValue
+  const causes = outputPolicy.entry_block_causes
+  const fundingCauses = savedPolicy.funding_entry_causes
+  const obligations = outputPolicy.pending_financial_obligations
+  const evidence = outputPolicy.evidence
+  const allowedCauses = new Set([
+    'funding_unavailable',
+    'funding_accounting_incomplete',
+    'user_paused',
+    'daily_loss_latched',
+    'legacy_system_paused',
+    'risk_mark_unavailable',
+    'unclassified_restored_pause',
+  ])
+  const obligationKinds = new Set([
+    'open_position',
+    'position_protection',
+    'reduction_intent',
+    'active_order',
+  ])
+  if (
+    outputPolicy.contract_version !== 'funding-separation.v1' ||
+    outputPolicy.version !== 'funding-separation.v1' ||
+    savedPolicy.contract_version !== 'funding-separation.v1' ||
+    savedPolicy.version !== 'funding-separation.v1' ||
+    !['known', 'unknown'].includes(String(outputPolicy.availability)) ||
+    savedPolicy.availability !== outputPolicy.availability ||
+    !Array.isArray(causes) ||
+    !causes.every(
+      (cause) => typeof cause === 'string' && allowedCauses.has(cause),
+    ) ||
+    !Array.isArray(fundingCauses) ||
+    !fundingCauses.every(
+      (cause) => typeof cause === 'string' && allowedCauses.has(cause),
+    ) ||
+    !Array.isArray(obligations) ||
+    !obligations.every(
+      (item) => isRecord(item) && obligationKinds.has(String(item.kind)),
+    ) ||
+    (evidence !== null &&
+      (!isRecord(evidence) ||
+        typeof evidence.observation_id !== 'string' ||
+        !['known', 'unknown'].includes(String(evidence.status)) ||
+        !Number.isSafeInteger(evidence.known_at_ms) ||
+        (evidence.effective_start_ms !== null &&
+          !Number.isSafeInteger(evidence.effective_start_ms)) ||
+        (evidence.effective_end_ms !== null &&
+          !Number.isSafeInteger(evidence.effective_end_ms)) ||
+        typeof evidence.applicable_at_decision !== 'boolean' ||
+        (evidence.reason !== null && typeof evidence.reason !== 'string'))) ||
+    (outputPolicy.availability === 'known' &&
+      (!isRecord(evidence) ||
+        evidence.status !== 'known' ||
+        evidence.applicable_at_decision !== true ||
+        evidence.reason !== null ||
+        Number(evidence.effective_start_ms) > decisionTime ||
+        decisionTime >= Number(evidence.effective_end_ms))) ||
+    (outputPolicy.availability === 'unknown' &&
+      evidence !== null &&
+      (!isRecord(evidence) || evidence.applicable_at_decision !== false)) ||
+    typeof savedPolicy.funding_data_pause_active !== 'boolean' ||
+    typeof savedPolicy.risk_mark_pause_active !== 'boolean' ||
+    !('evidence' in outputPolicy) ||
+    canonicalJson(causes) !== canonicalJson(savedPolicy.entry_block_causes) ||
+    canonicalJson(obligations) !==
+      canonicalJson(savedPolicy.pending_financial_obligations)
+  )
+    throw new Error('Funding-separation metadata is invalid or inconsistent.')
+  const risk = output.risk as JsonRecord
+  const ledgerPosition = checkpoint.ledger_position
+  const openPosition = isRecord(ledgerPosition)
+  const openObligations = obligations.filter(
+    (item) => item.kind === 'open_position',
+  )
+  const protectionObligations = obligations.filter(
+    (item) => item.kind === 'position_protection',
+  )
+  const reductionObligations = obligations.filter(
+    (item) => item.kind === 'reduction_intent',
+  )
+  const activeOrderObligations = obligations.filter(
+    (item) => item.kind === 'active_order',
+  )
+  const execution = checkpoint.execution_checkpoint
+  const executionOrders =
+    isRecord(execution) && isRecord(execution.orders)
+      ? Object.entries(execution.orders).filter(
+          ([, order]) =>
+            isRecord(order) &&
+            ['accepted', 'partially_filled'].includes(String(order.state)),
+        )
+      : []
+  if (
+    (outputPolicy.availability === 'unknown') !==
+      fundingCauses.includes('funding_unavailable') ||
+    (risk.entry_paused !== true && causes.length > 0) ||
+    (risk.user_paused === true && !causes.includes('user_paused')) ||
+    (risk.daily_loss_latched === true &&
+      !causes.includes('daily_loss_latched')) ||
+    (risk.system_paused === true && !causes.includes('legacy_system_paused')) ||
+    (checkpoint.funding_complete === false &&
+      !causes.includes('funding_accounting_incomplete')) ||
+    canonicalJson(risk.entry_block_causes) !== canonicalJson(causes) ||
+    risk.funding_availability !== outputPolicy.availability ||
+    openObligations.length !== (openPosition ? 1 : 0) ||
+    protectionObligations.length !==
+      (checkpoint.position_protection === null ? 0 : 1) ||
+    activeOrderObligations.length !== executionOrders.length ||
+    new Set(activeOrderObligations.map((item) => item.order_id)).size !==
+      activeOrderObligations.length ||
+    activeOrderObligations.some(
+      (item) =>
+        !executionOrders.some(
+          ([orderId, order]) =>
+            item.order_id === orderId &&
+            isRecord(order) &&
+            item.state === order.state &&
+            item.remaining_quantity_btc === order.remaining &&
+            isRecord(order.intent) &&
+            item.order_type === order.intent.order_type &&
+            item.side === order.intent.side,
+        ),
+    ) ||
+    (openPosition &&
+      !openObligations.some(
+        (item) =>
+          item.side === ledgerPosition.side &&
+          item.quantity_btc === ledgerPosition.qty &&
+          item.owner_strategy_id === checkpoint.owner_strategy_id &&
+          item.funding_cursor_ms === checkpoint.funding_cursor_ms &&
+          item.opened_at_ms ===
+            (isRecord(checkpoint.position_protection)
+              ? checkpoint.position_protection.opened_at_ms
+              : null) &&
+          item.funding_clock ===
+            (outputPolicy.availability === 'unknown' ||
+            checkpoint.funding_complete === false
+              ? 'unknown'
+              : 'observation_available'),
+      )) ||
+    (checkpoint.position_protection !== null &&
+      !protectionObligations.some(
+        (item) =>
+          item.signal_key ===
+            (checkpoint.position_protection as JsonRecord).signal_key &&
+          item.opened_at_ms ===
+            (checkpoint.position_protection as JsonRecord).opened_at_ms,
+      )) ||
+    reductionObligations.length !==
+      (isRecord(checkpoint.risk_checkpoint) &&
+      typeof checkpoint.risk_checkpoint.reduction_intent_id === 'string'
+        ? 1
+        : 0) ||
+    (reductionObligations.length === 1 &&
+      reductionObligations[0]!.order_id !==
+        (checkpoint.risk_checkpoint as JsonRecord).reduction_intent_id)
+  )
+    throw new Error(
+      'Funding-separation causes disagree with ledger or risk state.',
+    )
+}
+
 function validateRuntimeWork(
   value: JsonRecord,
   frozen: JsonRecord,
@@ -3108,33 +3293,44 @@ function validateRuntimeWork(
   const riskRuntime =
     binding.schema_version === 'futures-runtime-binding.v4' ||
     binding.schema_version === 'futures-runtime-binding.v5'
-  assertKeys(cp, [
-    'schema_version',
-    'runtime_version',
-    'run_id',
-    'instrument_id',
-    'runtime_config',
-    'instrument_spec',
-    'cash_usd',
-    'leverage',
-    'realized_gross_usd',
-    'fees_usd',
-    'funding_paid',
-    'funding_complete',
-    'funding_cursor_ms',
-    'ledger_last_accrual_ms',
-    'ledger_position',
-    'funding_rates',
-    'accrued',
-    'ledger_events',
-    'owner_strategy_id',
-    'position_protection',
-    'signal_keys',
-    'consumed_depth',
-    ...(strategyRuntime || executionRuntime ? ['regime'] : []),
-    ...(executionRuntime ? ['execution_checkpoint', 'execution_metadata'] : []),
-    ...(riskRuntime ? ['risk_checkpoint'] : []),
-  ])
+  assertKeys(
+    cp,
+    [
+      'schema_version',
+      'runtime_version',
+      'run_id',
+      'instrument_id',
+      'runtime_config',
+      'instrument_spec',
+      'cash_usd',
+      'leverage',
+      'realized_gross_usd',
+      'fees_usd',
+      'funding_paid',
+      'funding_complete',
+      'funding_cursor_ms',
+      'ledger_last_accrual_ms',
+      'ledger_position',
+      'funding_rates',
+      'accrued',
+      'ledger_events',
+      'owner_strategy_id',
+      'position_protection',
+      'signal_keys',
+      'consumed_depth',
+      ...(strategyRuntime || executionRuntime ? ['regime'] : []),
+      ...(executionRuntime
+        ? ['execution_checkpoint', 'execution_metadata']
+        : []),
+      ...(riskRuntime ? ['risk_checkpoint'] : []),
+    ],
+    [
+      ...((binding.runtime_config as JsonRecord).funding_policy_version ===
+      'funding-separation.v1'
+        ? ['funding_policy_checkpoint']
+        : []),
+    ],
+  )
   if (
     cp.schema_version !==
       (riskRuntime ? 4 : executionRuntime ? 3 : strategyRuntime ? 2 : 1) ||
@@ -3174,19 +3370,28 @@ function validateRuntimeWork(
           : 'futures-runtime-work.v1')
   )
     throw new Error('Invalid versioned runtime work identity.')
-  assertKeys(output, [
-    'schema_version',
-    'run_id',
-    'runtime_version',
-    'analysis',
-    'risk',
-    'orders',
-    'fills',
-    'position',
-    'ledger',
-    'valuation_source',
-    ...(executionRuntime ? ['execution_events'] : []),
-  ])
+  assertKeys(
+    output,
+    [
+      'schema_version',
+      'run_id',
+      'runtime_version',
+      'analysis',
+      'risk',
+      'orders',
+      'fills',
+      'position',
+      'ledger',
+      'valuation_source',
+      ...(executionRuntime ? ['execution_events'] : []),
+    ],
+    [
+      ...((binding.runtime_config as JsonRecord).funding_policy_version ===
+      'funding-separation.v1'
+        ? ['funding_policy']
+        : []),
+    ],
+  )
   if (
     output.schema_version !== 'futures-runtime-result.v1' ||
     output.run_id !== runId ||
@@ -3204,6 +3409,17 @@ function validateRuntimeWork(
   if (executionRuntime) validateExecutionCheckpoint(cp, binding)
   if (riskRuntime)
     validateRiskCheckpoint(cp.risk_checkpoint, output, binding, cp)
+  if (
+    (binding.runtime_config as JsonRecord).funding_policy_version ===
+    'funding-separation.v1'
+  )
+    validateFundingPolicy(
+      output.funding_policy,
+      cp.funding_policy_checkpoint,
+      output,
+      cp,
+      Number(value.runtime_event_time_ms),
+    )
   assertKeys(output.analysis, [
     'strategy_id',
     'selected_strategy_id',
@@ -3418,7 +3634,15 @@ function validateRuntimeWork(
         'target_price_usd_per_btc',
         'reason_codes',
       ],
-      riskRuntime ? RISK_RESULT_FIELDS : [],
+      riskRuntime
+        ? [
+            ...RISK_RESULT_FIELDS,
+            ...((binding.runtime_config as JsonRecord)
+              .funding_policy_version === 'funding-separation.v1'
+              ? ['entry_block_causes', 'funding_availability']
+              : []),
+          ]
+        : [],
     )
     for (const field of [
       'quantity_btc',
@@ -3436,7 +3660,15 @@ function validateRuntimeWork(
     assertKeys(
       output.risk,
       ['status', 'reason_codes'],
-      riskRuntime ? RISK_RESULT_FIELDS : [],
+      riskRuntime
+        ? [
+            ...RISK_RESULT_FIELDS,
+            ...((binding.runtime_config as JsonRecord)
+              .funding_policy_version === 'funding-separation.v1'
+              ? ['entry_block_causes', 'funding_availability']
+              : []),
+          ]
+        : [],
     )
   if (riskRuntime) {
     for (const key of [

@@ -90,6 +90,16 @@ class FuturesRuntime:
         )
         self.instrument = deepcopy(instrument) if isinstance(instrument, dict) else None
         self._validate_config()
+        self._funding_separation = (
+            self.config.get("funding_policy_version") == "funding-separation.v1"
+        )
+        self._funding_entry_causes = []
+        self._funding_availability = "unknown"
+        self._funding_evidence = None
+        self._funding_pause_active = False
+        self._risk_mark_pause_active = False
+        if self._funding_separation:
+            self._funding_entry_causes = ["funding_unavailable"]
         self._ledger_config = {
             "version": "linear-usd-ledger.v1",
             "cost_version": self.config["cost_version"],
@@ -173,6 +183,10 @@ class FuturesRuntime:
             or values["taker_rate"] < 0
             or self.config["cost_version"] != "kraken-futures-eea-btcusd-base.v1"
             or (self.config["version"] == RISK_RUNTIME_VERSION and self.config.get("daily_loss_fraction") != "0.01")
+            or (
+                "funding_policy_version" in self.config
+                and self.config["funding_policy_version"] != "funding-separation.v1"
+            )
         ):
             raise ValueError("unsupported or unsafe runtime configuration")
 
@@ -185,7 +199,46 @@ class FuturesRuntime:
         if cutoff > now:
             raise ValueError("received-time cutoff cannot follow decision time")
         evidence = self._available_events(market.get("events"), now, cutoff)
-        if market.get("mode") == "paper_live":
+        self._funding_entry_causes = []
+        self._funding_availability = "unknown"
+        self._funding_evidence = None
+        if self._funding_separation:
+            for event in evidence:
+                if event.get("type") != "funding_observation":
+                    continue
+                try:
+                    observation = normalize_observation(event["observation"], cutoff)
+                    applicable = (
+                        observation["status"] == "known"
+                        and observation["provider"] == "kraken"
+                        and observation["product"] == "PF_XBTUSD"
+                        and observation["unit"] == "usd_per_btc_per_hour"
+                        and observation["effective_start_ms"] is not None
+                        and observation["effective_end_ms"]
+                        > observation["effective_start_ms"]
+                        and observation["effective_start_ms"] <= now
+                        and now < observation["effective_end_ms"]
+                        and observation["known_at_ms"] <= cutoff
+                    )
+                    self._funding_evidence = {
+                        "observation_id": observation["observation_id"],
+                        "status": observation["status"],
+                        "known_at_ms": observation["known_at_ms"],
+                        "effective_start_ms": observation["effective_start_ms"],
+                        "effective_end_ms": observation["effective_end_ms"],
+                        "applicable_at_decision": applicable,
+                        "reason": self._funding_evidence_reason(
+                            applicable, observation
+                        ),
+                    }
+                    if applicable:
+                        self._funding_availability = "known"
+                        break
+                except (KeyError, TypeError, ValueError):
+                    continue
+            if self._funding_availability == "unknown":
+                self._funding_entry_causes = ["funding_unavailable"]
+        if market.get("mode") == "paper_live" and not self._funding_separation:
             # The currently validated public ticker exposes no verified funding
             # unit/interval mapping. Keep realized net incomplete and fail closed.
             self.ledger.funding_complete = False
@@ -459,6 +512,14 @@ class FuturesRuntime:
             "ledger": account,
             "valuation_source": "ticker_mark" if isinstance(ticker, dict) and ticker.get("mark_usd") is not None else "observed_book_midpoint",
             **({"execution_events": self.execution_adapter.events} if self.execution_adapter is not None else {}),
+            **({"funding_policy": {
+                "contract_version": "funding-separation.v1",
+                "version": "funding-separation.v1",
+                "availability": self._funding_availability,
+                "entry_block_causes": self._current_entry_block_causes(),
+                "evidence": deepcopy(self._funding_evidence),
+                "pending_financial_obligations": self._pending_financial_obligations(),
+            }} if self._funding_separation else {}),
         }
 
     def checkpoint(self):
@@ -510,7 +571,95 @@ class FuturesRuntime:
             **({"execution_checkpoint": self.execution_adapter.checkpoint()} if self.execution_adapter is not None else {}),
             **({"execution_metadata": deepcopy(self.execution_metadata)} if self.execution_adapter is not None else {}),
             **({"risk_checkpoint": deepcopy(self.risk_state)} if self.runtime_version == RISK_RUNTIME_VERSION else {}),
+            **({"funding_policy_checkpoint": {
+                "contract_version": "funding-separation.v1",
+                "version": "funding-separation.v1",
+                "availability": self._funding_availability,
+                "entry_block_causes": self._current_entry_block_causes(),
+                "funding_entry_causes": list(self._funding_entry_causes),
+                "funding_data_pause_active": self._funding_pause_active,
+                "risk_mark_pause_active": self._risk_mark_pause_active,
+                "evidence": deepcopy(self._funding_evidence),
+                "pending_financial_obligations": self._pending_financial_obligations(),
+            }} if self._funding_separation else {}),
         }
+
+    def _pending_financial_obligations(self):
+        obligations = []
+        position = self.ledger.position
+        if position is not None:
+            obligations.append({
+                "kind": "open_position",
+                "side": position["side"],
+                "quantity_btc": _text(position["qty"]),
+                "opened_at_ms": (
+                    None if self.position_protection is None
+                    else self.position_protection.get("opened_at_ms")
+                ),
+                "owner_strategy_id": self.owner_strategy_id,
+                "funding_cursor_ms": self.funding_cursor_ms,
+                "funding_clock": (
+                    "unknown"
+                    if self._funding_availability == "unknown"
+                    or not self.ledger.funding_complete
+                    else "observation_available"
+                ),
+            })
+            if self.position_protection is not None:
+                obligations.append({
+                    "kind": "position_protection",
+                    "opened_at_ms": self.position_protection.get("opened_at_ms"),
+                    "signal_key": self.position_protection.get("signal_key"),
+                })
+        if self.risk_state.get("reduction_intent_id") is not None:
+            obligations.append({
+                "kind": "reduction_intent",
+                "order_id": self.risk_state["reduction_intent_id"],
+            })
+        if self.execution_adapter is not None:
+            obligations.extend([
+                {
+                    "kind": "active_order",
+                    "order_id": order_id,
+                    "order_type": order["intent"]["order_type"],
+                    "side": order["intent"]["side"],
+                    "state": order["state"],
+                    "remaining_quantity_btc": order["remaining"],
+                }
+                for order_id, order in self.execution_adapter.orders.items()
+                if order["state"] in ("accepted", "partially_filled")
+            ])
+        return obligations
+
+    @staticmethod
+    def _funding_evidence_reason(applicable, observation):
+        if applicable:
+            return None
+        if observation["status"] != "known":
+            return "funding_observation_not_known"
+        if (observation["provider"], observation["product"], observation["unit"]) != (
+            "kraken", "PF_XBTUSD", "usd_per_btc_per_hour"
+        ):
+            return "funding_instrument_or_unit_mismatch"
+        return "funding_interval_not_applicable"
+
+    def _current_entry_block_causes(self):
+        causes = list(self._funding_entry_causes)
+        if not self.ledger.funding_complete:
+            causes.append("funding_accounting_incomplete")
+        if self.risk_state["user_paused"]:
+            causes.append("user_paused")
+        if self.risk_state["daily_loss_latched"]:
+            causes.append("daily_loss_latched")
+        if self.risk_state["system_paused"]:
+            causes.append("legacy_system_paused")
+        if self.risk_state["mark_quality"] in ("unknown", "stale", "gapped"):
+            causes.append("risk_mark_unavailable")
+        if self._risk_mark_pause_active:
+            causes.append("risk_mark_unavailable")
+        if self.risk_state["entry_paused"] and not causes:
+            causes.append("unclassified_restored_pause")
+        return list(dict.fromkeys(causes))
 
     @property
     def _checkpoint_version(self):
@@ -536,6 +685,38 @@ class FuturesRuntime:
             raise ValueError("checkpoint configuration does not match runtime")
         if checkpoint.get("instrument_spec") != self.instrument:
             raise ValueError("checkpoint instrument specification does not match runtime")
+        if self._funding_separation:
+            policy = checkpoint.get("funding_policy_checkpoint")
+            if (
+                not isinstance(policy, dict)
+                or policy.get("contract_version") != "funding-separation.v1"
+                or policy.get("version") != "funding-separation.v1"
+                or policy.get("availability") not in ("known", "unknown")
+                or not isinstance(policy.get("entry_block_causes"), list)
+                or any(not isinstance(cause, str) for cause in policy["entry_block_causes"])
+                or not isinstance(policy.get("funding_entry_causes"), list)
+                or any(not isinstance(cause, str) for cause in policy["funding_entry_causes"])
+                or not isinstance(policy.get("funding_data_pause_active"), bool)
+                or not isinstance(policy.get("risk_mark_pause_active"), bool)
+                or (policy["availability"] == "unknown") != (
+                    "funding_unavailable" in policy["funding_entry_causes"]
+                )
+                or not isinstance(policy.get("pending_financial_obligations"), list)
+                or (policy["availability"] == "known") != isinstance(policy.get("evidence"), dict)
+                or (
+                    policy["availability"] == "known"
+                    and (
+                        policy["evidence"].get("status") != "known"
+                        or policy["evidence"].get("applicable_at_decision") is not True
+                    )
+                )
+            ):
+                raise ValueError("funding policy checkpoint is invalid")
+            self._funding_availability = policy["availability"]
+            self._funding_entry_causes = list(policy["funding_entry_causes"])
+            self._funding_pause_active = policy["funding_data_pause_active"]
+            self._risk_mark_pause_active = policy["risk_mark_pause_active"]
+            self._funding_evidence = deepcopy(policy.get("evidence"))
         ledger = self.ledger
         if self.execution_adapter is not None:
             execution_checkpoint = checkpoint.get("execution_checkpoint")
@@ -616,6 +797,31 @@ class FuturesRuntime:
             if state["mark_quality"] not in ("unknown", "valid", "stale", "gapped"):
                 raise ValueError("risk checkpoint mark quality is invalid")
             self.risk_state = deepcopy(state)
+        if self._funding_separation:
+            if (
+                checkpoint["funding_policy_checkpoint"]["entry_block_causes"]
+                != self._current_entry_block_causes()
+            ):
+                raise ValueError("funding policy causes disagree with risk flags")
+            if self._funding_pause_active and (
+                not self.risk_state["entry_paused"]
+                or self.risk_state["user_paused"]
+                or self.risk_state["daily_loss_latched"]
+                or self.risk_state["system_paused"]
+                or not ledger.funding_complete
+                or self._funding_availability != "unknown"
+            ):
+                raise ValueError("funding pause checkpoint disagrees with risk flags")
+            if self._risk_mark_pause_active and (
+                not self.risk_state["entry_paused"]
+                or self.risk_state["mark_quality"] == "valid"
+            ):
+                raise ValueError("risk mark pause checkpoint disagrees with risk flags")
+            if (
+                checkpoint["funding_policy_checkpoint"]["pending_financial_obligations"]
+                != self._pending_financial_obligations()
+            ):
+                raise ValueError("funding policy obligations disagree with runtime checkpoint")
         if (ledger.position is None) != (self.owner_strategy_id is None):
             raise ValueError("checkpoint position ownership is inconsistent")
         if self.execution_adapter is not None:
@@ -1330,6 +1536,9 @@ class FuturesRuntime:
         }
         codes = list(dict.fromkeys(reasons + ([guard] if guard else [])))
         result["reason_codes"] = codes
+        if self._funding_separation:
+            result["entry_block_causes"] = self._current_entry_block_causes()
+            result["funding_availability"] = self._funding_availability
         return result
 
     def _estimate_close_net(self, book):
@@ -1378,6 +1587,13 @@ class FuturesRuntime:
     def _update_risk_day(self, now, mark, book, ticker, control):
         state = self.risk_state
         reasons = []
+        pause_was_unclassified = state["entry_paused"] and not (
+            self._funding_pause_active
+            or self._risk_mark_pause_active
+            or state["user_paused"]
+            or state["daily_loss_latched"]
+            or state["system_paused"]
+        )
         if isinstance(control, dict):
             if control.get("type") == "paper.pause":
                 state["user_paused"] = True
@@ -1390,10 +1606,16 @@ class FuturesRuntime:
         state["mark_quality"] = "gapped" if book_gap else (
             "valid" if mark_valid else "unknown" if missing_mark else "stale"
         )
-        if not mark_valid and self.ledger.position is not None:
+        if not mark_valid and (
+            self.ledger.position is not None or self._funding_separation
+        ):
             state["entry_paused"] = True
+            if self._funding_separation:
+                self._risk_mark_pause_active = True
             reasons.append("risk_mark_unavailable")
-        if not self.ledger.funding_complete:
+        elif mark_valid and self._risk_mark_pause_active:
+            self._risk_mark_pause_active = False
+        if not self._funding_separation and not self.ledger.funding_complete:
             state["entry_paused"] = True
             state["system_paused"] = True
             reasons.append("funding_incomplete")
@@ -1423,10 +1645,45 @@ class FuturesRuntime:
         elif state["daily_loss_latched"]:
             state["entry_paused"] = True
             reasons.append("daily_loss_limit")
-        elif mark_valid and self.ledger.funding_complete:
+        elif mark_valid and self.ledger.funding_complete and not self._funding_separation:
             state["entry_paused"] = state["user_paused"] or state["system_paused"]
         if state["user_paused"]:
             reasons.append("entries_paused")
+        if self._funding_separation:
+            if not self.ledger.funding_complete:
+                self._funding_entry_causes.append("funding_accounting_incomplete")
+            if self._funding_entry_causes:
+                state["entry_paused"] = True
+                reasons.extend(self._funding_entry_causes)
+            can_clear_funding_pause = (
+                self._funding_pause_active
+                and self._funding_availability == "known"
+                and self.ledger.funding_complete
+                and not state["user_paused"]
+                and not state["daily_loss_latched"]
+                and not state["system_paused"]
+                and (self.ledger.position is None or mark_valid)
+            )
+            if can_clear_funding_pause:
+                state["entry_paused"] = False
+                self._funding_pause_active = False
+            elif self._funding_availability == "unknown" and not (
+                state["user_paused"] or state["daily_loss_latched"]
+                or state["system_paused"] or not self.ledger.funding_complete
+                or not mark_valid and self.ledger.position is not None
+                or pause_was_unclassified
+            ):
+                self._funding_pause_active = True
+                state["entry_paused"] = True
+            elif self._funding_availability == "known" and not self._funding_pause_active:
+                state["entry_paused"] = (
+                    state["user_paused"]
+                    or state["daily_loss_latched"]
+                    or state["system_paused"]
+                    or not self.ledger.funding_complete
+                    or not mark_valid
+                    or pause_was_unclassified
+                )
         return list(dict.fromkeys(reasons))
 
     def _valid_risk_mark(self, ticker, now):

@@ -37,6 +37,8 @@ export type FuturesAdmissionState = Readonly<
       controls_active: boolean | null
       reduction_intent_id: string | null
     }
+    entry_block_causes: string[] | null
+    financial_obligations: Record<string, unknown>[] | null
     execution_required: boolean
     may_omit_entry_evaluation: boolean
     in_flight_work_count: number
@@ -208,6 +210,8 @@ export class FuturesCommandRunner {
           controls_active: null,
           reduction_intent_id: null,
         },
+        entry_block_causes: null,
+        financial_obligations: null,
         execution_required: true,
         may_omit_entry_evaluation: false,
         in_flight_work_count: this.inFlightRunCount(runId),
@@ -327,6 +331,28 @@ export class FuturesCommandRunner {
           risk!.system_paused === true ||
           risk!.reduction_intent_id !== null
         : null
+      const fundingPolicy = isRecord(checkpoint.funding_policy_checkpoint)
+        ? checkpoint.funding_policy_checkpoint
+        : undefined
+      const fundingContract =
+        fundingPolicy?.contract_version === 'funding-separation.v1' &&
+        fundingPolicy.version === 'funding-separation.v1' &&
+        ['known', 'unknown'].includes(String(fundingPolicy.availability)) &&
+        Array.isArray(fundingPolicy.entry_block_causes) &&
+        fundingPolicy.entry_block_causes.every(
+          (cause) => typeof cause === 'string',
+        ) &&
+        Array.isArray(fundingPolicy.pending_financial_obligations) &&
+        fundingPolicy.pending_financial_obligations.every(isRecord)
+      const entryBlockCauses = fundingContract
+        ? (fundingPolicy.entry_block_causes as string[])
+        : null
+      const financialObligations = fundingContract
+        ? (fundingPolicy.pending_financial_obligations as Record<
+            string,
+            unknown
+          >[])
+        : null
       const sourceSequence =
         this.store.getLastAppliedReplaySourceSequence(runId)
       const lastDecisionTime = this.store.getLastAppliedDecisionTime(runId)
@@ -401,6 +427,26 @@ export class FuturesCommandRunner {
         positionKnown && isRecord(checkpoint.ledger_position)
           ? checkpoint.ledger_position
           : null
+      const typedEntryOnlyPause =
+        fundingContract &&
+        entryBlockCauses!.length > 0 &&
+        entryBlockCauses!.every((cause) =>
+          ['funding_unavailable', 'funding_accounting_incomplete'].includes(
+            cause,
+          ),
+        ) &&
+        financialObligations!.length === 0 &&
+        positionKnown &&
+        position === null &&
+        protectionKnown &&
+        checkpoint.position_protection === null &&
+        activeOrderCount === 0 &&
+        riskKnown &&
+        risk!.user_paused !== true &&
+        risk!.daily_loss_latched !== true &&
+        risk!.system_paused !== true &&
+        risk!.reduction_intent_id === null &&
+        risk!.mark_quality === 'valid'
       const executionRequired =
         !positionKnown ||
         !protectionKnown ||
@@ -409,7 +455,7 @@ export class FuturesCommandRunner {
         position !== null ||
         checkpoint.position_protection !== null ||
         activeOrderCount > 0 ||
-        riskControlsActive !== false
+        (riskControlsActive !== false && !typedEntryOnlyPause)
       const pendingCommands = this.store.loadPendingCommands(1).length > 0
       const base = deepFreeze<FuturesAdmissionState>({
         schema_version: 'futures-admission-state.v1',
@@ -433,6 +479,8 @@ export class FuturesCommandRunner {
               ? risk!.reduction_intent_id
               : null,
         },
+        entry_block_causes: entryBlockCauses,
+        financial_obligations: financialObligations,
         execution_required: executionRequired,
         may_omit_entry_evaluation:
           !executionRequired &&

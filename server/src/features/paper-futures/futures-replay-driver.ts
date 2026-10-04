@@ -925,6 +925,18 @@ export class FuturesReplayDriver {
     const pending = isRecord(admission.pending_commands)
       ? admission.pending_commands
       : undefined
+    const entryBlockCauses = admission.entry_block_causes
+    const financialObligations = admission.financial_obligations
+    const fundingOnlyPause =
+      Array.isArray(entryBlockCauses) &&
+      entryBlockCauses.length > 0 &&
+      entryBlockCauses.every(
+        (cause) =>
+          cause === 'funding_unavailable' ||
+          cause === 'funding_accounting_incomplete',
+      ) &&
+      Array.isArray(financialObligations) &&
+      financialObligations.length === 0
     return (
       admission.policy_hash ===
         canonicalHash({
@@ -942,7 +954,7 @@ export class FuturesReplayDriver {
       risk?.known === true &&
       risk.position === false &&
       risk.protection === false &&
-      risk.controls_active === false &&
+      (risk.controls_active === false || fundingOnlyPause) &&
       pending?.known === true &&
       pending.any === false &&
       admission.in_flight_work_count === 0 &&

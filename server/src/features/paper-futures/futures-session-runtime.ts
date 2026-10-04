@@ -88,6 +88,9 @@ export class FuturesSessionRuntime {
   readonly runner: FuturesCommandRunner
   runId: string
   private readonly mode: 'mock' | 'paper_live' | 'replay'
+  private runtimeConfig: typeof runtimeConfig & {
+    funding_policy_version?: 'funding-separation.v1'
+  }
   private readonly replaySource?: FuturesMarketStore
   private readonly replaySourceHash?: string
   private readonly replaySourceFileHash?: string
@@ -115,6 +118,10 @@ export class FuturesSessionRuntime {
     replayTimingObserver?: ReplayTimingObserver
   }) {
     this.mode = options.mode
+    this.runtimeConfig =
+      options.mode === 'paper_live'
+        ? { ...runtimeConfig, funding_policy_version: 'funding-separation.v1' }
+        : runtimeConfig
     if (options.mode === 'replay' && options.replaySource === undefined)
       throw new Error('REPLAY requires a frozen futures market source.')
     this.replaySource = options.replaySource
@@ -135,6 +142,14 @@ export class FuturesSessionRuntime {
       : undefined
     this.store = new FuturesStore(options.dbPath)
     const primaryRunId = 'futures-session:primary'
+    const existingBinding = this.store.getRuntimeBinding(primaryRunId)
+    if (
+      existingBinding &&
+      typeof existingBinding.runtime_config === 'object' &&
+      existingBinding.runtime_config !== null
+    )
+      this.runtimeConfig =
+        existingBinding.runtime_config as typeof this.runtimeConfig
     this.store.createRun({
       runId: primaryRunId,
       config: {
@@ -142,7 +157,10 @@ export class FuturesSessionRuntime {
         decimal_precision: 50,
         leverage: '1',
         mode: options.mode,
-        mode_config_hash: canonicalHash({ mode: options.mode, runtimeConfig }),
+        mode_config_hash: canonicalHash({
+          mode: options.mode,
+          runtimeConfig: this.runtimeConfig,
+        }),
       },
       seed: {
         cash_usd: '10000',
@@ -164,13 +182,13 @@ export class FuturesSessionRuntime {
       },
       instrument: { instrument_id: instrument.instrument_id },
       costs: {
-        version: runtimeConfig.cost_version,
-        maker: runtimeConfig.maker_rate,
-        taker: runtimeConfig.taker_rate,
+        version: this.runtimeConfig.cost_version,
+        maker: this.runtimeConfig.maker_rate,
+        taker: this.runtimeConfig.taker_rate,
       },
       runtime: {
         schema_version: 'futures-runtime-binding.v5',
-        runtime_config: runtimeConfig,
+        runtime_config: this.runtimeConfig,
         instrument_spec: instrument,
         strategy_manifest: strategies,
         strategy_config_hash: canonicalHash(strategies),
@@ -202,7 +220,7 @@ export class FuturesSessionRuntime {
       expected_state_version: command.expected_state_version,
       payload: {
         operation: 'futures_runtime.v3',
-        runtime_config: runtimeConfig,
+        runtime_config: this.runtimeConfig,
         instrument,
         market_snapshot: this.initialMarketSnapshot(
           decisionTime,
@@ -224,7 +242,7 @@ export class FuturesSessionRuntime {
       expected_state_version: 0,
       payload: {
         operation: 'futures_runtime.v3',
-        runtime_config: runtimeConfig,
+        runtime_config: this.runtimeConfig,
         instrument,
         market_snapshot: this.initialMarketSnapshot(Date.now(), false),
       },
@@ -388,7 +406,10 @@ export class FuturesSessionRuntime {
         decimal_precision: 50,
         leverage: '1',
         mode: 'replay',
-        mode_config_hash: canonicalHash({ mode: 'replay', runtimeConfig }),
+        mode_config_hash: canonicalHash({
+          mode: 'replay',
+          runtimeConfig: this.runtimeConfig,
+        }),
       },
       seed: {
         cash_usd: '10000',
@@ -398,13 +419,13 @@ export class FuturesSessionRuntime {
       },
       instrument: { instrument_id: instrument.instrument_id },
       costs: {
-        version: runtimeConfig.cost_version,
-        maker: runtimeConfig.maker_rate,
-        taker: runtimeConfig.taker_rate,
+        version: this.runtimeConfig.cost_version,
+        maker: this.runtimeConfig.maker_rate,
+        taker: this.runtimeConfig.taker_rate,
       },
       runtime: {
         schema_version: 'futures-runtime-binding.v5',
-        runtime_config: runtimeConfig,
+        runtime_config: this.runtimeConfig,
         instrument_spec: instrument,
         strategy_manifest: strategies,
         strategy_config_hash: canonicalHash(strategies),
@@ -429,7 +450,7 @@ export class FuturesSessionRuntime {
           expected_state_version: work.version,
           payload: {
             operation: 'futures_runtime.v3',
-            runtime_config: runtimeConfig,
+            runtime_config: this.runtimeConfig,
             instrument,
             market_snapshot: work.input.payload.market_snapshot as Record<
               string,
@@ -521,7 +542,7 @@ export class FuturesSessionRuntime {
                 expected_state_version: work.version,
                 payload: {
                   operation: 'futures_runtime.v3' as const,
-                  runtime_config: runtimeConfig,
+                  runtime_config: this.runtimeConfig,
                   instrument,
                   market_snapshot: work.input.payload.market_snapshot as Record<
                     string,
@@ -633,7 +654,7 @@ export class FuturesSessionRuntime {
           expected_state_version: stateVersion,
           payload: {
             operation: 'futures_runtime.v3',
-            runtime_config: runtimeConfig,
+            runtime_config: this.runtimeConfig,
             instrument,
             market_snapshot: snapshot,
           },
@@ -664,13 +685,13 @@ export class FuturesSessionRuntime {
           ? 'frozen-kraken-futures-market.v2'
           : 'frozen-kraken-futures-market.v1',
         source_hash: this.replaySourceHash!,
-        config_hash: canonicalHash(runtimeConfig),
+        config_hash: canonicalHash(this.runtimeConfig),
         ...admission,
         seed: `frozen-market:${this.replaySourceHash}`,
         fidelity: this.replaySource?.fundingSourceEvidence().length
           ? 'persisted-public-events-known-candles-explicit-funding.v2'
           : 'persisted-public-futures-events-and-known-candles.v1',
-        runtime_version: runtimeConfig.version,
+        runtime_version: this.runtimeConfig.version,
         instrument_hash: canonicalHash(instrument),
         ...(this.replaySourceFileHash === undefined
           ? {}
@@ -694,12 +715,12 @@ export class FuturesSessionRuntime {
           instrument,
           funding_source: 'kraken-historical-funding-rates.v1',
         }),
-        config_hash: canonicalHash(runtimeConfig),
+        config_hash: canonicalHash(this.runtimeConfig),
         ...admission,
         seed: 'paper-live-session-v2',
         fidelity:
           'observed-public-trades-book-ticker-candles-explicit-funding.v2',
-        runtime_version: runtimeConfig.version,
+        runtime_version: this.runtimeConfig.version,
         instrument_hash: canonicalHash(instrument),
       } as const
     return {
@@ -708,11 +729,11 @@ export class FuturesSessionRuntime {
       source_hash: canonicalHash(
         createMockMarketSnapshot(21_600_000, true, true),
       ),
-      config_hash: canonicalHash(runtimeConfig),
+      config_hash: canonicalHash(this.runtimeConfig),
       ...admission,
       seed: 'mock-fixture-v1',
       fidelity: 'closed-ohlc-book-ticker-known-zero-funding.v1',
-      runtime_version: runtimeConfig.version,
+      runtime_version: this.runtimeConfig.version,
       instrument_hash: canonicalHash(instrument),
     } as const
   }

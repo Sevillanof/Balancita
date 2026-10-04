@@ -837,7 +837,7 @@ function validateWorkerPayload(payload: Record<string, unknown>): boolean {
           'taker_rate',
         ],
         payload.operation === 'futures_runtime.v3'
-          ? ['daily_loss_fraction']
+          ? ['daily_loss_fraction', 'funding_policy_version']
           : [],
       ) ||
       ![
@@ -850,6 +850,15 @@ function validateWorkerPayload(payload: Record<string, unknown>): boolean {
             : []),
       ].includes(String(config.version)) ||
       config.cost_version !== 'kraken-futures-eea-btcusd-base.v1'
+    )
+      return false
+    if (
+      ('funding_policy_version' in config &&
+        (payload.operation !== 'futures_runtime.v3' ||
+          config.version !== 'futures-runtime-risk.v1' ||
+          config.funding_policy_version !== 'funding-separation.v1')) ||
+      (config.funding_policy_version !== undefined &&
+        config.funding_policy_version !== 'funding-separation.v1')
     )
       return false
     if (
@@ -1130,7 +1139,12 @@ function isResult(
       isRecord(value.runtime_output) &&
       isRecord(value.runtime_checkpoint) &&
       Array.isArray(value.runtime_funding_events) &&
-      value.runtime_funding_events.every(isRecord)
+      value.runtime_funding_events.every(isRecord) &&
+      (request.payload.runtime_config.funding_policy_version !==
+        'funding-separation.v1' ||
+        (isRecord(value.runtime_output) &&
+          isRecord(value.runtime_output.funding_policy) &&
+          isRecord(value.runtime_checkpoint.funding_policy_checkpoint)))
     )
   return (
     isRecord(value) &&

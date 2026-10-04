@@ -3,9 +3,10 @@ import { spawnSync } from 'node:child_process'
 import { DatabaseSync } from 'node:sqlite'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { FuturesCommandRunner } from './futures-command-runner.ts'
 import { FuturesStore } from './futures-store.ts'
+import { FuturesSessionRuntime } from './futures-session-runtime.ts'
 import { canonicalHash } from './futures-canonical.ts'
 import type { FuturesWorkerRequest } from './futures-worker.ts'
 import {
@@ -42,6 +43,39 @@ type RuntimeRequest = Omit<FuturesWorkerRequest, 'payload'> & {
 }
 
 describe('durable C27 futures runtime', () => {
+  it('opts only new PAPER_LIVE session bindings into funding separation', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'futures-funding-binding-'))
+    const live = new FuturesSessionRuntime({
+      dbPath: join(directory, 'live.sqlite'),
+      mode: 'paper_live',
+    })
+    const mock = new FuturesSessionRuntime({
+      dbPath: join(directory, 'mock.sqlite'),
+      mode: 'mock',
+    })
+    try {
+      expect(
+        (
+          live.store.getRuntimeBinding(live.runId)!.runtime_config as Record<
+            string,
+            unknown
+          >
+        ).funding_policy_version,
+      ).toBe('funding-separation.v1')
+      expect(
+        'funding_policy_version' in
+          (mock.store.getRuntimeBinding(mock.runId)!.runtime_config as Record<
+            string,
+            unknown
+          >),
+      ).toBe(false)
+    } finally {
+      await live.close()
+      await mock.close()
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
   it('fails admission closed while accepted runtime work is pending despite a cached flat checkpoint', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'futures-admission-snapshot-'))
     const path = join(directory, 'fixture.sqlite')
@@ -51,6 +85,7 @@ describe('durable C27 futures runtime', () => {
       version: 'futures-runtime-risk.v1',
       daily_loss_fraction: '0.01',
       execution_latency_ms: 100,
+      funding_policy_version: 'funding-separation.v1',
     }
     const strategyManifest = {
       config_version: 'futures-strategies-config.v1',
@@ -78,11 +113,19 @@ describe('durable C27 futures runtime', () => {
         taker: runtimeConfig.taker_rate,
       },
       runtime: {
-        schema_version: 'futures-runtime-binding.v4',
+        schema_version: 'futures-runtime-binding.v5',
         runtime_config: executionConfig,
         instrument_spec: instrument,
         strategy_manifest: strategyManifest,
         strategy_config_hash: canonicalHash(strategyManifest),
+        admission_policy: {
+          schema_version: 'futures-entry-admission.v1',
+          evaluation_interval_ms: 5000,
+          hash: canonicalHash({
+            schema_version: 'futures-entry-admission.v1',
+            evaluation_interval_ms: 5000,
+          }),
+        },
       },
     })
     const runner = new FuturesCommandRunner(store)
@@ -107,23 +150,109 @@ describe('durable C27 futures runtime', () => {
       evaluation_interval_ms: 5000,
     } as const
     try {
-      await runner.accept(
-        request('admission-flat', 0, market(21_600_000, 'flat')),
-      ).result
+      const unknownFundingMarket = market(21_600_000, 'flat', '100000', false)
+      unknownFundingMarket.mode = 'paper_live'
+      await runner.accept(request('admission-flat', 0, unknownFundingMarket))
+        .result
       const flat = runner.readAdmissionState(runId, policy, 21_600_001)
       expect(flat.ledger_position).toEqual({ known: true, value: null })
       expect(flat.may_omit_entry_evaluation).toBe(true)
+      expect(flat.execution_required).toBe(false)
+      expect(flat.entry_block_causes).toContain('funding_unavailable')
+      expect(flat.financial_obligations).toEqual([])
+      expect(store.getRunProjection(runId)?.result).toMatchObject({
+        funding_complete: true,
+        quantity_btc: '0',
+      })
+      const originalGetProjection = store.getRunProjection.bind(store)
+      for (const guardCase of [
+        { name: 'daily_loss_latched', flag: 'daily_loss_latched' },
+        { name: 'unclassified system pause', flag: 'system_paused' },
+      ]) {
+        const projection = originalGetProjection(runId)!
+        const checkpoint = structuredClone(
+          projection.checkpoint as Record<string, unknown>,
+        )
+        const risk = checkpoint.risk_checkpoint as Record<string, unknown>
+        const funding = checkpoint.funding_policy_checkpoint as Record<
+          string,
+          unknown
+        >
+        risk[guardCase.flag] = true
+        risk.entry_paused = true
+        funding.entry_block_causes = [
+          'funding_unavailable',
+          ...(guardCase.flag === 'daily_loss_latched'
+            ? ['daily_loss_latched']
+            : ['unclassified_restored_pause']),
+        ]
+        vi.spyOn(store, 'getRunProjection').mockReturnValue({
+          ...projection,
+          checkpoint,
+        })
+        const guardRunner = new FuturesCommandRunner(store)
+        try {
+          const guarded = guardRunner.readAdmissionState(
+            runId,
+            policy,
+            21_600_001,
+          )
+          expect(guarded.execution_required, guardCase.name).toBe(true)
+          expect(guarded.may_omit_entry_evaluation, guardCase.name).toBe(false)
+          expect(guarded.entry_block_causes).toContain(
+            guardCase.flag === 'daily_loss_latched'
+              ? 'daily_loss_latched'
+              : 'unclassified_restored_pause',
+          )
+        } finally {
+          await guardRunner.close()
+          vi.restoreAllMocks()
+        }
+      }
+      expect(
+        (
+          (
+            store.getRunProjection(runId)?.runtime_output as Record<
+              string,
+              unknown
+            >
+          ).risk as Record<string, unknown>
+        ).entry_paused,
+      ).toBe(true)
+      expect(
+        (
+          (
+            store.getRunProjection(runId)?.runtime_output as Record<
+              string,
+              unknown
+            >
+          ).funding_policy as Record<string, unknown>
+        ).availability,
+      ).toBe('unknown')
       expect(
         runner.readAdmissionState(runId, policy, 21_600_002).source_clock_ms,
       ).toBe(21_600_002)
 
+      const knownFundingMarket = withKnownFunding(market(21_600_002, 'long'))
+      knownFundingMarket.mode = 'paper_live'
       const accepted = runner.accept(
-        request('admission-order', 1, market(21_600_002, 'long')),
+        request('admission-order', 1, knownFundingMarket),
       )
       const beforeCommit = runner.readAdmissionState(runId, policy, 21_600_002)
       expect(beforeCommit.execution_required).toBe(true)
       expect(beforeCommit.may_omit_entry_evaluation).toBe(false)
       await accepted.result
+      expect(
+        (
+          store.getRunProjection(runId)?.runtime_output as Record<
+            string,
+            unknown
+          >
+        ).funding_policy,
+      ).toMatchObject({
+        availability: 'known',
+        entry_block_causes: [],
+      })
 
       const activeOrder = runner.readAdmissionState(runId, policy, 21_600_003)
       expect(activeOrder.active_order_count).toBe(1)
@@ -144,7 +273,7 @@ describe('durable C27 futures runtime', () => {
         reasons: ['order_eligibility'],
       })
 
-      const partialMarket = market(21_600_102, 'long')
+      const partialMarket = withKnownFunding(market(21_600_102, 'long'))
       const partialBook = (
         partialMarket.events as Record<string, unknown>[]
       ).find((event) => event.type === 'book_snapshot')!
@@ -191,7 +320,7 @@ describe('durable C27 futures runtime', () => {
       >
       expect(typeof protection.stop).toBe('string')
       const stop = BigInt(protection.stop as string)
-      const stopMarket = market(21_600_202, 'flat')
+      const stopMarket = withKnownFunding(market(21_600_202, 'flat'))
       for (const event of stopMarket.events as Record<string, unknown>[]) {
         if (event.type === 'book_snapshot') {
           event.bids = [
@@ -215,7 +344,7 @@ describe('durable C27 futures runtime', () => {
         runner.readAdmissionState(runId, policy, 21_600_202).execution_required,
       ).toBe(true)
 
-      const closeMarket = market(21_600_302, 'flat')
+      const closeMarket = withKnownFunding(market(21_600_302, 'flat'))
       for (const event of closeMarket.events as Record<string, unknown>[]) {
         if (event.type === 'book_snapshot') {
           event.bids = [
@@ -243,6 +372,40 @@ describe('durable C27 futures runtime', () => {
       expect(
         runner.readAdmissionState(runId, policy, 21_600_302).execution_required,
       ).toBe(false)
+
+      const pausedRequest = request(
+        'admission-user-pause',
+        5,
+        withKnownFunding(market(21_600_402, 'flat')),
+      )
+      await runner.accept({
+        ...pausedRequest,
+        payload: {
+          ...pausedRequest.payload,
+          control: {
+            type: 'paper.pause',
+            command_id: 'admission-user-pause',
+          },
+        } as Extract<
+          FuturesWorkerRequest['payload'],
+          { operation: 'futures_runtime.v3' }
+        >,
+      }).result
+      const pausedOutput = store.getRunProjection(runId)
+        ?.runtime_output as Record<string, unknown>
+      expect((pausedOutput.risk as Record<string, unknown>).user_paused).toBe(
+        true,
+      )
+      expect(
+        (pausedOutput.risk as Record<string, unknown>).entry_block_causes,
+      ).toContain('user_paused')
+      const userPausedAdmission = runner.readAdmissionState(
+        runId,
+        policy,
+        21_600_402,
+      )
+      expect(userPausedAdmission.execution_required).toBe(true)
+      expect(userPausedAdmission.may_omit_entry_evaluation).toBe(false)
     } finally {
       await runner.close().catch(() => undefined)
       store.close()
@@ -1782,6 +1945,34 @@ function market(
     cutoff_received_at_ms: cutoffMs,
     events,
   }
+}
+
+function withKnownFunding(snapshot: Record<string, unknown>) {
+  const now = Number(snapshot.decision_time_ms)
+  const start = Math.floor(now / 3_600_000) * 3_600_000
+  const observation = {
+    source: 'runtime-test',
+    provider: 'kraken',
+    product: 'PF_XBTUSD',
+    field: 'funding_rate',
+    raw_rate: '0',
+    unit: 'usd_per_btc_per_hour',
+    effective_start_ms: start,
+    effective_end_ms: start + 3_600_000,
+    known_at_ms: now,
+    received_seq: 1,
+    observation_id: `funding-${now}`,
+    sha256: 'a'.repeat(64),
+    semantic_version: 'kraken-funding-normalization.v1',
+    predicted: false,
+  }
+  ;(snapshot.events as Record<string, unknown>[]).push({
+    type: 'funding_observation',
+    received_at_ms: now,
+    known_at_ms: now,
+    observation,
+  })
+  return snapshot
 }
 
 function capturedPublicDepthFixture():

@@ -66,6 +66,275 @@ function pythonMarket(
 }
 
 describe('shared causal futures replay driver', () => {
+  it('skips only quality-valid PAPER_LIVE book bursts while funding alone blocks entry', async () => {
+    const directory = mkdtempSync(
+      join(tmpdir(), 'futures-funding-idle-quality-'),
+    )
+    directories.push(directory)
+    const start = 86_400_000
+    const runId = 'funding-idle-quality-run'
+    const marketStore = new FuturesMarketStore(join(directory, 'market.sqlite'))
+    const appendBook = (receivedAt: number, seq: number, valid = true) =>
+      marketStore.append({
+        type: 'book',
+        productId: 'PF_XBTUSD',
+        seq,
+        epoch: 1,
+        eventTime: receivedAt,
+        receivedAt,
+        persistedAt: receivedAt,
+        snapshot: true,
+        contiguous: true,
+        valid,
+        bids: [{ price: '100000', quantity: '1' }],
+        asks: [{ price: '100001', quantity: '1' }],
+        raw: { fixture: `book-${seq}` },
+      })
+    const appendTicker = (receivedAt: number, seq: number) =>
+      marketStore.append({
+        type: 'ticker',
+        productId: 'PF_XBTUSD',
+        seq,
+        epoch: 1,
+        eventTime: receivedAt,
+        receivedAt,
+        persistedAt: receivedAt,
+        mark: '100000',
+        suspended: false,
+        raw: { fixture: `ticker-${seq}` },
+      })
+    appendBook(start, 1)
+    appendTicker(start, 1)
+    for (let seq = 2; seq <= 4; seq += 1) {
+      const at = start + seq * 100
+      appendBook(at, seq)
+      appendTicker(at, seq)
+    }
+    appendBook(start + 500, 5, false)
+    const invalidBookRowid = Number(
+      (
+        marketStore.eventsAsOf(Number.MAX_SAFE_INTEGER) as Record<
+          string,
+          unknown
+        >[]
+      ).at(-1)?.receivedSequence,
+    )
+    appendTicker(start + 500, 5)
+
+    const policyBody = {
+      schema_version: 'futures-entry-admission.v1',
+      evaluation_interval_ms: 5000,
+    } as const
+    const policy = { ...policyBody, hash: canonicalHash(policyBody) }
+    const paperLiveConfig = {
+      ...runtimeConfig,
+      funding_policy_version: 'funding-separation.v1',
+    }
+    const sourceHash = canonicalHash({
+      events: marketStore.eventsAsOf(Number.MAX_SAFE_INTEGER),
+      candles: marketStore.candlesAsOf(Number.MAX_SAFE_INTEGER),
+      gaps: marketStore.gapsAsOf(Number.MAX_SAFE_INTEGER),
+    })
+    const strategies = {
+      config_version: 'futures-strategies-config.v1',
+      indicator_version: 'futures-closed-indicators.v1',
+      strategy_ids: [
+        'c25-pullback-perp-v1',
+        'c26-reversion-perp-v1',
+        'c27-breakout-perp-v1',
+        'c28-adapter-perp-v1',
+      ],
+    }
+    const manifest = {
+      schema_version: 'futures-replay-manifest.v1' as const,
+      source: 'funding-idle-quality-fixture.v1',
+      source_hash: sourceHash,
+      config_hash: canonicalHash(paperLiveConfig),
+      seed: 'funding-idle-quality',
+      fidelity: 'neutral-valid-book-ticker-burst',
+      instrument_hash: canonicalHash(instrument),
+      admission_policy: policy,
+    }
+    const store = new FuturesStore(join(directory, 'futures.sqlite'))
+    store.createRun({
+      runId,
+      config: {
+        ledger_version: 'linear-usd-ledger.v1',
+        decimal_precision: 50,
+        leverage: '1',
+      },
+      seed: { cash_usd: '10000' },
+      instrument: { instrument_id: instrument.instrument_id },
+      costs: {
+        version: paperLiveConfig.cost_version,
+        maker: paperLiveConfig.maker_rate,
+        taker: paperLiveConfig.taker_rate,
+      },
+      runtime: {
+        schema_version: 'futures-runtime-binding.v5',
+        runtime_config: paperLiveConfig,
+        instrument_spec: instrument,
+        strategy_manifest: strategies,
+        strategy_config_hash: canonicalHash(strategies),
+        admission_policy: policy,
+      },
+    })
+    const runner = new FuturesCommandRunner(store)
+    const admissionForSource = (id: string, sourceClock: number) =>
+      runner.readAdmissionState(
+        id,
+        policyBody,
+        sourceClock,
+      ) as unknown as Record<string, unknown>
+    const driver = new FuturesReplayDriver({
+      runId,
+      manifest,
+      initialStateVersion: 1,
+      durableStore: store,
+      admissionForSource,
+      apply: async (work) => {
+        const result = await runner.accept({
+          request_id: `request-${work.work_id}`,
+          run_id: runId,
+          work_id: work.work_id,
+          expected_state_version: work.version,
+          payload: {
+            operation: 'futures_runtime.v3',
+            runtime_config: paperLiveConfig,
+            instrument,
+            market_snapshot: work.input.payload.market_snapshot as Record<
+              string,
+              unknown
+            >,
+          },
+        }).result
+        return {
+          status: 'committed',
+          applied_state_version: Number(
+            store.getRunProjection(runId)?.state_version,
+          ),
+          economic_projection: { result },
+        }
+      },
+    })
+    try {
+      const seedSnapshot = createMockMarketSnapshot(start, false, false)
+      seedSnapshot.mode = 'paper_live'
+      await runner.accept({
+        request_id: 'funding-idle-seed',
+        run_id: runId,
+        work_id: 'funding-idle-seed',
+        expected_state_version: 0,
+        payload: {
+          operation: 'futures_runtime.v3',
+          runtime_config: paperLiveConfig,
+          instrument,
+          market_snapshot: seedSnapshot,
+        },
+      }).result
+      expect(store.getRunProjection(runId)?.result).toMatchObject({
+        funding_complete: true,
+        quantity_btc: '0',
+      })
+      const seedOutput = store.getRunProjection(runId)
+        ?.runtime_output as Record<string, unknown>
+      expect((seedOutput.risk as Record<string, unknown>).entry_paused).toBe(
+        true,
+      )
+      expect(
+        (seedOutput.funding_policy as Record<string, unknown>)
+          .pending_financial_obligations,
+      ).toEqual([])
+      expect(
+        (seedOutput.funding_policy as Record<string, unknown>)
+          .entry_block_causes,
+      ).toContain('funding_unavailable')
+
+      store.bindReplaySession(runId, {
+        schema_version: 'futures-replay-session.v1',
+        run_id: runId,
+        manifest,
+        instrument_hash: canonicalHash(instrument),
+      })
+      store.bindEvaluationProgress({
+        runId,
+        policyIdentity: policy.hash,
+        sourceIdentity: canonicalHash({
+          schema_version: 'futures-market-source-binding.v1',
+          source: manifest.source,
+          source_hash: manifest.source_hash,
+        }),
+        baselineRowid: 2,
+        nextDueAt: start + 5000,
+        nextDueReasons: ['strategy_evaluation'],
+      })
+      const financialHead = store.getAdmissionHead(runId)!
+      const burst = await driver.processMarketStore(
+        marketStore,
+        start + 400,
+        instrument,
+        undefined,
+        'paper_live',
+      )
+      const validSkipRanges = store.getEvaluationSkippedRanges(runId)
+      expect(validSkipRanges.length).toBeGreaterThan(0)
+      expect(
+        validSkipRanges.some(
+          (range) => range.fromRowid <= 8 && range.toRowid >= 3,
+        ),
+      ).toBe(true)
+      expect(burst.sourceWatermark).toBe(8)
+      expect(store.getEvaluationProgress(runId)?.cursorRowid).toBe(8)
+      expect(store.getAdmissionHead(runId)).toEqual(financialHead)
+
+      const qualityResult = await driver.processMarketStore(
+        marketStore,
+        start + 1000,
+        instrument,
+        undefined,
+        'paper_live',
+      )
+      expect(
+        store
+          .getEvaluationSkippedRanges(runId)
+          .some(
+            (range) =>
+              range.fromRowid <= invalidBookRowid &&
+              range.toRowid >= invalidBookRowid,
+          ),
+      ).toBe(false)
+      expect(marketStore.eventsAsOf(Number.MAX_SAFE_INTEGER)).toHaveLength(10)
+      const finalProjection = store.getRunProjection(runId)!
+      const finalOutput = finalProjection.runtime_output as Record<
+        string,
+        unknown
+      >
+      expect(
+        (finalOutput.funding_policy as Record<string, unknown>)
+          .entry_block_causes,
+      ).toContain('funding_unavailable')
+      expect((finalOutput.risk as Record<string, unknown>).entry_paused).toBe(
+        true,
+      )
+      if (qualityResult.sourceWatermark >= invalidBookRowid) {
+        expect(qualityResult.sourceWatermark).toBe(10)
+        expect(store.getAdmissionHead(runId)).not.toEqual(financialHead)
+        expect(finalProjection.result).toMatchObject({
+          funding_complete: true,
+          quantity_btc: '0',
+        })
+      } else {
+        expect(qualityResult.sourceWatermark).toBe(8)
+        expect(qualityResult.durablePendingSourceRows).toBe(2)
+        expect(store.getAdmissionHead(runId)).toEqual(financialHead)
+      }
+    } finally {
+      await runner.close()
+      store.close()
+      marketStore.close()
+    }
+  })
+
   it('resumes confirmed idle source progress and matches the continuous financial lifecycle', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'futures-idle-cadence-'))
     directories.push(directory)

@@ -5,13 +5,15 @@ from balancita_engine.futures_runtime import FuturesRuntime
 from futures_runtime_fixtures import CONFIG, INSTRUMENT, warmed_market
 
 
-def risk_runtime(checkpoint=None):
+def risk_runtime(checkpoint=None, funding_policy=False):
     config = dict(CONFIG)
     config.update(
         version="futures-runtime-risk.v1",
         execution_latency_ms=100,
         daily_loss_fraction="0.01",
     )
+    if funding_policy:
+        config["funding_policy_version"] = "funding-separation.v1"
     return FuturesRuntime(
         run_id="risk-run",
         config=config,
@@ -28,7 +30,113 @@ def open_position(engine):
     return filled
 
 
+def with_known_funding(market):
+    now = market["decision_time_ms"]
+    market["events"].append({
+        "type": "funding_observation", "received_at_ms": now,
+        "known_at_ms": now, "observation": {
+            "source": "fixture", "provider": "kraken", "product": "PF_XBTUSD",
+            "field": "funding_rate", "raw_rate": "0", "unit": "usd_per_btc_per_hour",
+            "effective_start_ms": max(0, now - 3_600_000),
+            "effective_end_ms": now + 3_600_000, "known_at_ms": now,
+            "received_seq": 1, "observation_id": "funding-{}".format(now),
+            "sha256": "a" * 64, "semantic_version": "kraken-funding-normalization.v1",
+            "predicted": False,
+        },
+    })
+    return market
+
+
 class FuturesRuntimeRiskTests(unittest.TestCase):
+    def test_opt_in_funding_separation_keeps_flat_ledger_complete_and_blocks_unknown_entries(self):
+        known = risk_runtime(funding_policy=True)
+        known.ledger.funding_complete = True
+        known_market = with_known_funding(warmed_market(21_600_000, breakout="long"))
+        result = known.process(known_market)
+        self.assertTrue(result["ledger"]["funding_complete"])
+        self.assertFalse(result["risk"]["system_paused"])
+        self.assertFalse(result["risk"]["entry_paused"])
+        self.assertTrue(any(
+            item["kind"] == "active_order"
+            for item in result["funding_policy"]["pending_financial_obligations"]
+        ))
+        policy_checkpoint = known.checkpoint()["funding_policy_checkpoint"]
+        self.assertEqual(policy_checkpoint["contract_version"], "funding-separation.v1")
+        self.assertEqual(policy_checkpoint["version"], "funding-separation.v1")
+
+        unknown = risk_runtime(funding_policy=True)
+        blocked = unknown.process(warmed_market(21_600_000, breakout="long"))
+        self.assertTrue(blocked["ledger"]["funding_complete"])
+        self.assertEqual(blocked["position"]["quantity_btc"], "0")
+        self.assertIn("funding_unavailable", blocked["risk"]["reason_codes"])
+        self.assertEqual(blocked["risk"]["entry_block_causes"], ["funding_unavailable"])
+        self.assertTrue(blocked["risk"]["entry_paused"])
+        self.assertFalse(blocked["risk"]["system_paused"])
+        self.assertFalse(any(order.get("type") == "order_accepted" for order in blocked["orders"]))
+
+        recovered = unknown.process(known_market)
+        self.assertEqual(recovered["funding_policy"]["availability"], "known")
+        self.assertFalse(recovered["risk"]["entry_paused"])
+        self.assertNotIn("funding_unavailable", recovered["risk"]["entry_block_causes"])
+
+        legacy = risk_runtime()
+        old = warmed_market(21_600_000, breakout="long")
+        old["mode"] = "paper_live"
+        legacy_result = legacy.process(old)
+        self.assertFalse(legacy_result["ledger"]["funding_complete"])
+
+        historical = risk_runtime(funding_policy=True)
+        historical.ledger.funding_complete = False
+        historical.risk_state["system_paused"] = True
+        restored = risk_runtime(checkpoint=historical.checkpoint(), funding_policy=True)
+        repaired = restored.process(known_market)
+        self.assertFalse(repaired["ledger"]["funding_complete"])
+        self.assertTrue(repaired["risk"]["system_paused"])
+        self.assertIn("funding_accounting_incomplete", repaired["risk"]["entry_block_causes"])
+        self.assertIsNone(repaired["ledger"]["realized_net_complete"])
+
+        incomplete = risk_runtime(funding_policy=True)
+        incomplete.ledger.funding_complete = False
+        incomplete_result = incomplete.process(known_market)
+        self.assertEqual(incomplete_result["funding_policy"]["availability"], "known")
+        self.assertFalse(incomplete_result["risk"]["system_paused"])
+        self.assertTrue(incomplete_result["risk"]["entry_paused"])
+        self.assertIn("funding_accounting_incomplete", incomplete_result["risk"]["entry_block_causes"])
+        self.assertFalse(any(order.get("type") == "order_accepted" for order in incomplete_result["orders"]))
+
+        expired = with_known_funding(warmed_market(25_200_000, breakout="long"))
+        expired_observation = next(event["observation"] for event in expired["events"] if event["type"] == "funding_observation")
+        expired_observation["effective_end_ms"] = 25_200_000
+        expired_engine = risk_runtime(funding_policy=True)
+        self.assertEqual(expired_engine.process(expired)["funding_policy"]["availability"], "unknown")
+
+        user_paused = risk_runtime(funding_policy=True)
+        user_result = user_paused.process(
+            with_known_funding(warmed_market(21_600_000, breakout="long")),
+            control={"type": "paper.pause"},
+        )
+        self.assertTrue(user_result["risk"]["user_paused"])
+        self.assertTrue(user_result["risk"]["entry_paused"])
+        self.assertIn("user_paused", user_result["risk"]["entry_block_causes"])
+        self.assertFalse(any(order.get("type") == "order_accepted" for order in user_result["orders"]))
+
+        daily_paused = risk_runtime(funding_policy=True)
+        daily_paused.risk_state["daily_loss_latched"] = True
+        daily_result = daily_paused.process(
+            with_known_funding(warmed_market(21_600_000, breakout="long"))
+        )
+        self.assertTrue(daily_result["risk"]["entry_paused"])
+        self.assertIn("daily_loss_latched", daily_result["risk"]["entry_block_causes"])
+        self.assertFalse(any(order.get("type") == "order_accepted" for order in daily_result["orders"]))
+
+        active = risk_runtime(funding_policy=True)
+        active.process(with_known_funding(warmed_market(21_600_000, breakout="long")))
+        active_result = active.process(with_known_funding(warmed_market(21_600_100, base_price="100000")))
+        self.assertNotEqual(active_result["position"]["quantity_btc"], "0")
+        obligations = active_result["funding_policy"]["pending_financial_obligations"]
+        self.assertTrue(any(item["kind"] == "open_position" for item in obligations))
+        self.assertTrue(any(item["kind"] == "position_protection" for item in obligations))
+
     def test_paper_live_unknown_funding_is_blocked_without_synthetic_zero_funding(self):
         engine = risk_runtime()
         market = warmed_market(21_600_000, breakout='long')
