@@ -1,0 +1,26 @@
+scripts/offline-futures-baseline.mjs
+  h_2f68313623be98 134
+scripts/offline-futures-child.mjs
+  h_2f68313623be98 29,57-58
+server/src/app/app.test.ts
+  h_2f68313623be98 468-469,472-475,587-621
+server/src/app/app.ts
+  h_2f68313623be98 92,400,742-743,750-751
+server/src/features/paper-futures/futures-replay-driver.test.ts
+  h_2f68313623be98 1747-1880
+server/src/features/paper-futures/futures-replay-driver.ts
+  h_2f68313623be98 53,56-74,83,104,117-162,197-207,229-252,254,256-260,262-336
+server/src/features/paper-futures/futures-session-runtime.ts
+  h_2f68313623be98 10,88,106,116,323,392
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "aca3066f5af47e93d51834c1b7868f3da336ffc7",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
