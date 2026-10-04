@@ -253,8 +253,12 @@ test('one bounded anonymous PAPER_LIVE public capture', async () => {
   const temporaryDirectory = await mkdtemp(
     join(tmpdir(), 'balancita-paper-live-public-'),
   )
-  mkdirSync(evidenceDirectory, { recursive: true })
-  const rawPath = join(evidenceDirectory, 'public-raw-evidence.jsonl')
+  const runDirectory = join(
+    evidenceDirectory,
+    `public-${new Date().toISOString().replaceAll(':', '-')}`,
+  )
+  mkdirSync(runDirectory, { recursive: true })
+  const rawPath = join(runDirectory, 'public-raw-evidence.jsonl')
   const startedAt = Date.now()
   const audit = {
     started_at: new Date(startedAt).toISOString(),
@@ -358,11 +362,11 @@ test('one bounded anonymous PAPER_LIVE public capture', async () => {
       page.getByText(/Último trade público|Último ticker público/),
     ).toBeVisible()
     await page.screenshot({
-      path: join(evidenceDirectory, 'paper-live-public-desktop-1440x900.png'),
+      path: join(runDirectory, 'paper-live-public-desktop-1440x900.png'),
       fullPage: true,
     })
     await mobile.screenshot({
-      path: join(evidenceDirectory, 'paper-live-public-mobile-390x844.png'),
+      path: join(runDirectory, 'paper-live-public-mobile-390x844.png'),
       fullPage: true,
     })
     const viewportOverflow = await mobile.evaluate(
@@ -398,12 +402,46 @@ test('one bounded anonymous PAPER_LIVE public capture', async () => {
     throw error
   } finally {
     globalThis.fetch = nativeFetch
-    await browser?.close()
-    await vite?.close()
-    await app?.close()
-    await rm(temporaryDirectory, { recursive: true, force: true })
+    const cleanupStartedAt = Date.now()
+    const cleanupErrors: string[] = []
+    for (const [name, close] of [
+      ['browser', () => browser?.close()],
+      ['vite', () => vite?.close()],
+      ['app', () => app?.close()],
+      [
+        'temporary_database',
+        () => rm(temporaryDirectory, { recursive: true, force: true }),
+      ],
+    ] as const) {
+      try {
+        await close()
+      } catch (error) {
+        cleanupErrors.push(
+          `${name}: ${error instanceof Error ? error.message : String(error)}`,
+        )
+      }
+    }
+    appendFileSync(
+      rawPath,
+      `${JSON.stringify({
+        kind: 'cleanup_receipt',
+        finished_at: new Date().toISOString(),
+        duration_ms: Date.now() - cleanupStartedAt,
+        closed: ['browser', 'vite', 'app', 'temporary_database'].filter(
+          (name) =>
+            !cleanupErrors.some((error) => error.startsWith(`${name}:`)),
+        ),
+        errors: cleanupErrors,
+      })}\n`,
+    )
+    assertCleanCleanup(cleanupErrors)
   }
 })
+
+function assertCleanCleanup(errors: string[]): void {
+  if (errors.length > 0)
+    throw new Error(`Owned-resource cleanup failed: ${errors.join('; ')}`)
+}
 
 async function availablePort(): Promise<number> {
   const server = createNetServer()

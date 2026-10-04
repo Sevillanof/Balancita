@@ -321,3 +321,10 @@ Backend/Python fix `7c82626efaeeb3bed535ec46461be6ab8bf30ee6` accepts typed chec
 - **Correction:** Extracted the real child close and closed-IPC payload construction into `scripts/offline-futures-child-close.mjs`; its caller now passes the exact existing app-close and worker trace paths created during startup. The worker trace identity remains separate from app-close phases; no placeholder metadata is substituted.
 - **Regression:** Added an owned-app close fixture asserting close invocation, both distinct trace path reads, closed IPC metadata and disconnect. Initial focused attempt failed to resolve the not-yet-created close helper module; after implementation, the named case passed (1 passed, 7 skipped). This RED confirms the test seam was absent, not an independently observed pre-fix `ReferenceError` regression.
 - **Status:** One correction only; no capture retry, full capture, capacity/performance conclusion or completion claim. Full 1x processing and capacity evidence remain pending.
+
+### Local main snapshot delivery — 2026-10-04
+
+- **Scope:** Preserve the current feature-branch snapshot on local `main` as-is, including the previously uncommitted PAPER_LIVE acceptance harness change. This is a local backup/commit/merge only; remote delivery awaits explicit authorization.
+- **Backup/base:** `backup/main-before-merge-20261004-1739f9c` points to pre-merge `main` `1739f9cb2a05721c76ccda9a94854d29c7694bb1`. Feature tip before snapshot commit: `5b16ad058452b1eb29225dc47116ce6d52aa246b`.
+- **Evidence boundary:** Current state is knowingly incomplete: 1x stopped at the child-close `ReferenceError` and was not rerun; report evidence records 6,055 pending from 6,195 normalized rows with zero omissions and incomplete funding pause. No operability, production approval, or completed acceptance is claimed. Full delivery gates were not rerun here.
+- **Checks:** `git diff --check` passed; the focused E2E Prettier and ESLint checks are recorded with the snapshot commit. Public-capture E2E and full suite were not run. Existing preserved capture evidence was not opened or modified.
