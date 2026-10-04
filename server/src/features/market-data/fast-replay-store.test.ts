@@ -17,7 +17,7 @@ describe('Fast Replay MarketStore migration', () => {
     const directory = mkdtempSync(join(tmpdir(), 'balancita-fast-replay-'))
     directories.push(directory)
     const store = new MarketStore({ path: join(directory, 'market.sqlite') })
-    expect(store.schemaVersion()).toBe(10)
+    expect(store.schemaVersion()).toBe(12)
     expect(
       store.upsertOhlcCandles([
         { timestamp: 60, open: 10, high: 11, low: 9, close: 10, volume: 2 },
@@ -39,6 +39,7 @@ describe('Fast Replay MarketStore migration', () => {
         id: 'run-one',
         request: { strategy_id: 'micro-bollinger-reversion' },
         result: { netPnlEur: 1 },
+        artifactStatus: 'unavailable',
         datasetHash: 'data-hash',
         contentHash: 'content-hash',
         createdAt: 100,
@@ -69,12 +70,44 @@ describe('Fast Replay MarketStore migration', () => {
     )
     legacy.close()
     const store = new MarketStore({ path })
-    expect(store.schemaVersion()).toBe(10)
+    expect(store.schemaVersion()).toBe(12)
     const verify = new DatabaseSync(path)
     expect(verify.prepare('SELECT id FROM legacy_rows').get()).toEqual({
       id: 'preserve-me',
     })
     verify.close()
+    store.close()
+  })
+
+  it('keeps frozen candle snapshots out of history records and reconstructs them for a single run', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'balancita-frozen-run-'))
+    directories.push(directory)
+    const store = new MarketStore({ path: join(directory, 'market.sqlite') })
+    const artifact = {
+      schema: 'fast-replay-artifact.v1',
+      runId: 'run-frozen',
+      datasetHash: 'dataset-hash',
+      candles: [
+        { timestamp: 60, open: 1, high: 2, low: 1, close: 2, volume: 3 },
+      ],
+    }
+    store.saveFastReplayRun(
+      'run-frozen',
+      { strategy_id: 'micro-bollinger-reversion' },
+      { netPnlEur: 1, artifact },
+      'dataset-hash',
+      'content-hash',
+    )
+
+    const [history] = store.listFastReplayRuns() as {
+      artifactStatus: string
+      result: Record<string, unknown>
+    }[]
+    expect(history?.artifactStatus).toBe('stored')
+    expect(history?.result).not.toHaveProperty('artifact')
+    expect(store.getFastReplayRun('run-frozen')).toMatchObject({
+      result: { artifact },
+    })
     store.close()
   })
 

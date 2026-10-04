@@ -37,6 +37,10 @@ export interface FastReplayTrade {
   readonly pnlEur?: number
 }
 export interface FastReplayResult {
+  readonly sizingModel: 'cash-all-in.v1'
+  readonly initialCashEur: number
+  readonly availableCashEur: number
+  readonly finalEquityEur: number
   readonly feeScenario: typeof KRAKEN_PRO_SPOT_TIER1_TAKER_FEE_SCENARIO
   readonly costCaveat: typeof SIMULATED_COSTS_CAVEAT
   readonly strategyId: FastReplayStrategyId
@@ -59,6 +63,29 @@ export interface FastReplayResult {
   } | null
   readonly gaps: readonly number[]
   readonly executionTimeMs: number
+}
+export interface FastReplayDecisionSnapshot {
+  readonly timestamp: number
+  readonly priorExposure: 'flat' | 'long'
+  readonly priorRegime: 'trend' | 'range' | null
+  readonly rawTarget: 'flat' | 'long'
+  readonly abstained: boolean
+  readonly entryGate: 'not_applicable' | 'accepted' | 'rejected'
+  readonly entryGateReason: 'entry_gate_rejected' | null
+  readonly effectiveTarget: 'flat' | 'long'
+  readonly fill: {
+    readonly scheduled: boolean
+    readonly performed: boolean
+    readonly timestamp: number | null
+    readonly side: 'buy' | 'sell' | null
+  }
+  readonly postExposure: 'flat' | 'long'
+}
+export interface FastReplayEntryGateDiagnostic {
+  readonly reasonCode: string
+  readonly distance: number | null
+  readonly threshold: number | null
+  readonly passed: boolean
 }
 const HORIZON = 1
 export const FAST_REPLAY_FEE =
@@ -90,8 +117,10 @@ export function runFastReplay(input: {
   readonly strategyId: string
   readonly candles: readonly FastReplayCandle[]
   readonly ticketEur: number
+  readonly onDecision?: (snapshot: FastReplayDecisionSnapshot) => void
 }): FastReplayResult {
   const started = performance.now()
+  const onDecision = input.onDecision
   const strategyId =
     input.strategyId === 'donchian-volume-breakout'
       ? 'micro-donchian-breakout'
@@ -100,6 +129,7 @@ export function runFastReplay(input: {
     throw new Error('Unsupported Fast Replay strategy.')
   if (!Number.isFinite(input.ticketEur) || input.ticketEur <= 0)
     throw new Error('ticket_eur must be finite and positive.')
+  const initialCashEur = input.ticketEur
   const minuteCandles = [...input.candles].sort(
     (a, b) => a.timestamp - b.timestamp,
   )
@@ -121,6 +151,7 @@ export function runFastReplay(input: {
   }[] = []
   const outcomes: { maturedAt: number; label: 'up' | 'down' | 'flat' }[] = []
   let state = initialMicroState()
+  let availableCashEur = initialCashEur
   let position: {
     quantity: number
     entryCost: number
@@ -147,22 +178,32 @@ export function runFastReplay(input: {
       state,
       macroContextWhenReady(macro),
     )
+    const priorExposure = state.exposure
+    const priorRegime = state.regime
+    let entryGate: FastReplayDecisionSnapshot['entryGate'] = 'not_applicable'
+    let entryGateReason: FastReplayDecisionSnapshot['entryGateReason'] = null
+    let fillTimestamp: number | null = null
+    let fillSide: FastReplayDecisionSnapshot['fill']['side'] = null
     let effectiveTarget = decision.target
     if (state.exposure === 'flat' && decision.target === 'long') {
       rawSignalsCount += 1
-      if (
-        fastReplayCanEnter(
-          strategyId as FastReplayStrategyId,
-          features,
-          decision.state.regime,
-          macro,
-        )
-      ) {
+      const canEnter = fastReplayCanEnter(
+        strategyId as FastReplayStrategyId,
+        features,
+        decision.state.regime,
+        macro,
+      )
+      entryGate = canEnter ? 'accepted' : 'rejected'
+      if (!canEnter) entryGateReason = 'entry_gate_rejected'
+      if (canEnter) {
         const next = candles[index + 1]
         if (next !== undefined && next.timestamp === candle.timestamp + 900) {
+          fillTimestamp = next.timestamp
+          fillSide = 'buy'
           const price = next.open * (1 + SLIPPAGE)
-          const quantity = input.ticketEur / price
-          const feeEur = input.ticketEur * FEE
+          const quantity = availableCashEur / (price * (1 + FEE))
+          const entryNotionalEur = quantity * price
+          const feeEur = entryNotionalEur * FEE
           trades.push({
             side: 'buy',
             timestamp: next.timestamp,
@@ -172,11 +213,12 @@ export function runFastReplay(input: {
           })
           position = {
             quantity,
-            entryCost: input.ticketEur + feeEur,
+            entryCost: entryNotionalEur + feeEur,
             buyTradeIndex: trades.length - 1,
             entryPrice: price,
             entryIndex: index + 1,
           }
+          availableCashEur = 0
           state = { ...decision.state, exposure: 'long' }
         } else {
           effectiveTarget = 'flat'
@@ -201,6 +243,8 @@ export function runFastReplay(input: {
     ) {
       const next = candles[index + 1]
       if (next !== undefined && next.timestamp === candle.timestamp + 900) {
+        fillTimestamp = next.timestamp
+        fillSide = 'sell'
         const price = next.open * (1 - SLIPPAGE)
         const proceedsGross = position.quantity * price
         const feeEur = proceedsGross * FEE
@@ -214,6 +258,7 @@ export function runFastReplay(input: {
           pnlEur,
         })
         closedPnls.push(pnlEur)
+        availableCashEur = proceedsGross - feeEur
         if (pnlEur > 0) grossWins += pnlEur
         else grossLosses += Math.abs(pnlEur)
         position = null
@@ -225,6 +270,28 @@ export function runFastReplay(input: {
     } else {
       effectiveTarget = position === null ? 'flat' : 'long'
       state = { ...decision.state, exposure: effectiveTarget }
+    }
+
+    if (onDecision !== undefined) {
+      onDecision(
+        Object.freeze({
+          timestamp: candle.timestamp,
+          priorExposure,
+          priorRegime,
+          rawTarget: decision.target,
+          abstained: decision.abstained,
+          entryGate,
+          entryGateReason,
+          effectiveTarget,
+          fill: Object.freeze({
+            scheduled: fillSide !== null,
+            performed: fillSide !== null,
+            timestamp: fillTimestamp,
+            side: fillSide,
+          }),
+          postExposure: state.exposure,
+        }),
+      )
     }
 
     const dueIndex = index - HORIZON
@@ -277,6 +344,14 @@ export function runFastReplay(input: {
     }
   }
   return {
+    sizingModel: 'cash-all-in.v1',
+    initialCashEur,
+    availableCashEur,
+    finalEquityEur:
+      availableCashEur +
+      (position === null
+        ? 0
+        : position.quantity * (candles.at(-1)?.close ?? 0)),
     feeScenario: KRAKEN_PRO_SPOT_TIER1_TAKER_FEE_SCENARIO,
     costCaveat: SIMULATED_COSTS_CAVEAT,
     strategyId: strategyId as FastReplayStrategyId,
@@ -324,9 +399,18 @@ export function fastReplayCanEnter(
   features: MicroStrategyFeatures,
   activeRegime: 'trend' | 'range' | null,
   macroFeatures: MicroStrategyFeatures | null = null,
+  onDiagnostic?: (diagnostic: FastReplayEntryGateDiagnostic) => void,
 ): boolean {
   void macroFeatures
-  if (features.ready !== true) return false
+  if (features.ready !== true) {
+    onDiagnostic?.({
+      reasonCode: 'entry_gate_features_not_ready',
+      distance: null,
+      threshold: null,
+      passed: false,
+    })
+    return false
+  }
   const distance =
     id === 'micro-trend-pullback'
       ? features.atr14 == null
@@ -352,7 +436,14 @@ export function fastReplayCanEnter(
       : id === 'micro-donchian-breakout'
         ? 0.008
         : FAST_REPLAY_COST_GATE
-  return distance >= threshold
+  const passed = distance >= threshold
+  onDiagnostic?.({
+    reasonCode: passed ? 'entry_gate_accepted' : 'entry_gate_rejected',
+    distance,
+    threshold,
+    passed,
+  })
+  return passed
 }
 
 export function resample1mTo15m(

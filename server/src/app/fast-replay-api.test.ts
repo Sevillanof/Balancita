@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -19,6 +19,143 @@ function temporaryStore() {
 }
 
 describe('Fast Replay API', () => {
+  it('publishes native fill-time provenance at serialization and keeps Python audit times distinct', async () => {
+    const store = temporaryStore()
+    const fixture = JSON.parse(
+      readFileSync(
+        new URL(
+          '../../../python/fixtures/fast-replay-execution-trace.json',
+          import.meta.url,
+        ),
+        'utf8',
+      ),
+    ) as {
+      provenance: {
+        firstBarTimestampSeconds: number
+        strategyId: string
+        ticketEur: number
+      }
+      nativeBarRecipe: {
+        barCount: number
+        tailStartIndex: number
+        default: Record<string, number>
+        tail: Record<string, number>
+        overrides: Record<string, Record<string, number>>
+      }
+      expectedTrace: Array<{
+        fill: { performed: boolean; timestamp: number | null }
+      }>
+    }
+    const nativeBars = Array.from(
+      { length: fixture.nativeBarRecipe.barCount },
+      (_, index) => {
+        const bar = {
+          ...(index >= fixture.nativeBarRecipe.tailStartIndex
+            ? fixture.nativeBarRecipe.tail
+            : fixture.nativeBarRecipe.default),
+          ...fixture.nativeBarRecipe.overrides[String(index)],
+        }
+        return {
+          timestamp: fixture.provenance.firstBarTimestampSeconds + index * 900,
+          open: bar.open!,
+          high: bar.high!,
+          low: bar.low!,
+          close: bar.close!,
+          volume: bar.volume!,
+        }
+      },
+    ) as Array<{
+      timestamp: number
+      open: number
+      high: number
+      low: number
+      close: number
+      volume: number
+    }>
+    const candles = nativeBars.flatMap((bar) =>
+      Array.from({ length: 15 }, (_, minute) => ({
+        timestamp: bar.timestamp + minute * 60,
+        open: bar.open,
+        high: bar.high,
+        low: bar.low,
+        close: bar.close,
+        volume: bar.volume / 15,
+      })),
+    )
+    store.insertOhlcCandles(candles)
+    const app = await buildApp({
+      config: serverConfigFrom({
+        MARKET_COLLECTOR_ENABLED: 'false',
+        KRAKEN_WS_COLLECTOR_ENABLED: 'false',
+        KRAKEN_REST_OHLC_WORKER_ENABLED: 'false',
+      }),
+      overrides: { marketStore: store },
+    })
+    const payload = {
+      strategy_id: fixture.provenance.strategyId,
+      start_time: candles[0]!.timestamp * 1000,
+      end_time: candles.at(-1)!.timestamp * 1000,
+      ticket_eur: fixture.provenance.ticketEur,
+    }
+    const nativeResponse = await app.inject({
+      method: 'POST',
+      url: '/api/replay/fast-run',
+      payload,
+    })
+    expect(nativeResponse.statusCode).toBe(200)
+    const native = nativeResponse.json()
+    expect(native.trades).toHaveLength(4)
+    expect(native.nativeTradeTimestampUnit).toBe('unix-milliseconds')
+    expect(native.nativeTradeTimestampMeaning).toBe(
+      'simulated-next-15m-candle-open',
+    )
+    expect(
+      native.trades.map((trade: { timestamp: number }) => trade.timestamp),
+    ).toEqual(
+      fixture.expectedTrace
+        .filter(({ fill }) => fill.performed)
+        .map(({ fill }) => fill.timestamp! * 1000),
+    )
+    const nativeHash = native.datasetHash
+    const candleIdentity = native.artifact.candles
+    expect(native.artifact.timestampUnit).toBe('unix-seconds')
+    expect(native.artifact.datasetHash).toBe(nativeHash)
+
+    const pythonResponse = await app.inject({
+      method: 'POST',
+      url: '/api/replay/python-ledger-run',
+      payload,
+    })
+    expect(pythonResponse.statusCode).toBe(200)
+    const python = pythonResponse.json()
+    expect(python.pythonLedger.ledger.fills.length).toBeGreaterThan(0)
+    expect(python).not.toHaveProperty('nativeTradeTimestampUnit')
+    expect(python).not.toHaveProperty('nativeTradeTimestampMeaning')
+    expect(python.datasetHash).toBe(nativeHash)
+    expect(python.artifact.candles).toEqual(candleIdentity)
+    expect(
+      python.pythonLedger.executionAudit.fills.every(
+        (audit: { executionAtMs: number | null }) =>
+          audit.executionAtMs === null ||
+          Number.isSafeInteger(audit.executionAtMs),
+      ),
+    ).toBe(true)
+
+    const history = await app.inject({
+      method: 'GET',
+      url: '/api/replay/fast-run/history?limit=10',
+    })
+    const rows = history.json().runs as Record<string, unknown>[]
+    expect(rows.find(({ id }) => id === native.id)).toMatchObject({
+      nativeTradeTimestampUnit: 'unix-milliseconds',
+      nativeTradeTimestampMeaning: 'simulated-next-15m-candle-open',
+    })
+    expect(rows.find(({ id }) => id === python.id)).not.toHaveProperty(
+      'nativeTradeTimestampUnit',
+    )
+    await app.close()
+  })
+
   it('marks open holds and C27 time-stop distance through the latest closed 15m bucket end', async () => {
     const store = temporaryStore()
     const bucketEnd = Math.floor(Date.now() / 900_000) * 900
@@ -311,10 +448,22 @@ describe('Fast Replay API', () => {
         strategy_id: 'donchian-volume-breakout',
         start_time: start,
         end_time: end,
+        ticket_eur: 47,
       },
     })
     expect(run.statusCode).toBe(200)
     expect(run.json().strategyId).toBe('micro-donchian-breakout')
+    expect(run.json().artifact).toMatchObject({
+      schema: 'fast-replay-artifact.v1',
+      timestampUnit: 'unix-seconds',
+      candleIntervalSeconds: 60,
+      candles: expect.any(Array),
+    })
+    expect(run.json().artifact.candles).toHaveLength(80)
+    expect(run.json().artifact.datasetHash).toBe(run.json().datasetHash)
+    expect(run.json().artifact.initialCashEur).toBe(47)
+    expect(run.json().sizingModel).toBe('cash-all-in.v1')
+    expect(run.json().initialCashEur).toBe(47)
     expect(run.json().id).toMatch(/^fast-/)
     expect(Number.isSafeInteger(run.json().raw_signals_count)).toBe(true)
     expect(Number.isSafeInteger(run.json().gate_rejections_count)).toBe(true)
@@ -323,6 +472,11 @@ describe('Fast Replay API', () => {
     }
     delete persistedLegacyResult.feeScenario
     delete persistedLegacyResult.costCaveat
+    delete persistedLegacyResult.sizingModel
+    delete persistedLegacyResult.initialCashEur
+    delete persistedLegacyResult.availableCashEur
+    delete persistedLegacyResult.finalEquityEur
+    delete persistedLegacyResult.artifact
     store.saveFastReplayRun(
       'fast-legacy-fees',
       {},
@@ -365,7 +519,9 @@ describe('Fast Replay API', () => {
     expect(legacy).toMatchObject({
       feeScenario: null,
       costCaveat: expect.stringMatching(/provenance is unknown/i),
+      artifactStatus: 'unavailable',
     })
+    expect(legacy).not.toHaveProperty('sizingModel')
     expect(malformed).toMatchObject({
       feeScenario: null,
       costCaveat: expect.stringMatching(/provenance is unknown/i),
@@ -373,6 +529,8 @@ describe('Fast Replay API', () => {
     expect(fresh).toMatchObject({
       feeScenario: run.json().feeScenario,
       costCaveat: expect.stringMatching(/historical recorded fees/i),
+      sizingModel: 'cash-all-in.v1',
+      initialCashEur: 47,
     })
     expect(fresh).toMatchObject({
       id: run.json().id,
@@ -389,7 +547,79 @@ describe('Fast Replay API', () => {
       request: { strategy_id: 'micro-donchian-breakout' },
     })
     expect(legacy).not.toHaveProperty('result')
+    expect(legacy).not.toHaveProperty('sizingModel')
     expect(fresh).not.toHaveProperty('result')
+    expect(fresh).not.toHaveProperty('artifact')
+    const runRecord = run.json() as {
+      id: string
+      datasetHash: string
+      artifact: {
+        runId: string
+        candles: {
+          timestamp: number
+          open: number
+          high: number
+          low: number
+          close: number
+          volume: number
+        }[]
+      }
+    }
+    const frozenBeforeMutation = runRecord.artifact.candles
+    store.upsertOhlcCandles([
+      {
+        timestamp: replayStart,
+        open: 999,
+        high: 1000,
+        low: 998,
+        close: 999,
+        volume: 1,
+      },
+    ])
+    const artifactResponse = await app.inject({
+      method: 'GET',
+      url: `/api/replay/fast-run/history/${runRecord.id}/artifact`,
+    })
+    expect(artifactResponse.statusCode).toBe(200)
+    expect(artifactResponse.json()).toMatchObject({
+      artifactStatus: 'verified',
+      artifact: { runId: runRecord.id, candles: frozenBeforeMutation },
+    })
+    expect(artifactResponse.json().artifact.candles[0].open).toBe(30_000)
+    const invalidArtifact = runRecord.artifact
+    store.saveFastReplayRun(
+      'fast-invalid-artifact',
+      {},
+      {
+        ...runRecord,
+        id: 'fast-invalid-artifact',
+        artifact: {
+          ...invalidArtifact,
+          runId: 'fast-invalid-artifact',
+          candles: invalidArtifact.candles.map((candle, index) =>
+            index === 0 ? { ...candle, close: candle.close + 1 } : candle,
+          ),
+        },
+      },
+      runRecord.datasetHash,
+      'invalid-artifact-content',
+    )
+    expect(
+      (
+        await app.inject({
+          method: 'GET',
+          url: '/api/replay/fast-run/history/fast-invalid-artifact/artifact',
+        })
+      ).statusCode,
+    ).toBe(409)
+    expect(
+      (
+        await app.inject({
+          method: 'GET',
+          url: '/api/replay/fast-run/history/fast-legacy-fees/artifact',
+        })
+      ).statusCode,
+    ).toBe(404)
     const persistedAfterRead = store
       .listFastReplayRuns()
       .find(
@@ -458,6 +688,112 @@ describe('Fast Replay API', () => {
     await app.close()
   })
 
+  it('runs the frozen TypeScript decision trace through the Python ledger and persists its distinct identity', async () => {
+    const store = temporaryStore()
+    const now = Math.floor(Date.now() / 1000)
+    const start = Math.ceil((now + 120) / 900) * 900
+    const candles = Array.from({ length: 780 }, (_, index) => ({
+      timestamp: start + index * 60,
+      open: 30_000 + index,
+      high: 30_002 + index,
+      low: 29_999 + index,
+      close: 30_001 + index,
+      volume: 10,
+    }))
+    store.insertOhlcCandles(candles)
+    const app = await buildApp({
+      config: serverConfigFrom({
+        KRAKEN_WS_COLLECTOR_ENABLED: 'false',
+        KRAKEN_REST_OHLC_WORKER_ENABLED: 'false',
+      }),
+      overrides: { marketStore: store },
+    })
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/replay/python-ledger-run',
+      payload: {
+        strategy_id: 'micro-trend-pullback',
+        start_time: candles[0]!.timestamp * 1000,
+        end_time: candles.at(-1)!.timestamp * 1000,
+        ticket_eur: 47,
+      },
+    })
+
+    expect(response.statusCode).toBe(200)
+    const run = response.json()
+    expect(run).toMatchObject({
+      strategyOwner: 'typescript-native',
+      ledgerOwner: 'python-ledger',
+      comparator: { status: 'not_comparable' },
+      artifact: {
+        schema: 'fast-replay-artifact.v1',
+        engineOwner: 'typescript',
+        candles: expect.any(Array),
+      },
+      pythonLedger: {
+        status: 'replayed',
+        parameters: { startingCash: 47 },
+        costIdentity: { commissionRate: 0.008, slippageRate: 0.0005 },
+        inputWindow: {
+          barCount: 52,
+          barTimesMs: expect.any(Array),
+        },
+        decisionInputs: expect.any(Array),
+        ledger: {
+          metrics: { finalEquity: expect.any(Number) },
+          fills: expect.any(Array),
+        },
+        executionAudit: {
+          version: 'python-replay-execution.v1',
+          executionBasis: 'next_bar_open_model_only',
+        },
+      },
+    })
+    expect(run.artifact.candles).toHaveLength(780)
+    expect(run.pythonLedger.inputWindow.barTimesMs[0]).toBe(
+      (start + 900) * 1000,
+    )
+    expect(run.pythonLedger.decisionInputs).toHaveLength(3)
+    expect(
+      run.pythonLedger.decisionInputs.every(
+        (signal: { directTarget: string; time: number }) =>
+          (signal.directTarget === 'flat' || signal.directTarget === 'long') &&
+          signal.time % 900_000 === 0,
+      ),
+    ).toBe(true)
+
+    const history = await app.inject({
+      method: 'GET',
+      url: '/api/replay/fast-run/history?limit=10',
+    })
+    expect(history.statusCode).toBe(200)
+    expect(history.json().runs).toContainEqual(
+      expect.objectContaining({
+        id: run.id,
+        strategyOwner: 'typescript-native',
+        ledgerOwner: 'python-ledger',
+        pythonLedger: expect.objectContaining({
+          ledger: expect.objectContaining({ metrics: expect.any(Object) }),
+        }),
+      }),
+    )
+    const storedArtifact = await app.inject({
+      method: 'GET',
+      url: `/api/replay/fast-run/history/${encodeURIComponent(run.id)}/artifact`,
+    })
+    expect(storedArtifact.statusCode).toBe(200)
+    expect(storedArtifact.json()).toMatchObject({
+      artifactStatus: 'verified',
+      artifact: {
+        runId: run.id,
+        datasetHash: run.datasetHash,
+        candles: run.artifact.candles,
+      },
+    })
+    await app.close()
+  })
+
   it('replays the full persisted contiguous history and rejects short 1m history', async () => {
     const store = temporaryStore()
     const now = Math.floor(Date.now() / 1000)
@@ -491,6 +827,18 @@ describe('Fast Replay API', () => {
       },
     })
     expect(response.statusCode).toBe(200)
+    expect(response.json().artifact).toMatchObject({
+      schema: 'fast-replay-artifact.v1',
+      engineOwner: 'typescript',
+      timestampUnit: 'unix-seconds',
+      candleIntervalSeconds: 60,
+      candleTimestampSemantics: 'bucket-start',
+      candles: expect.any(Array),
+    })
+    expect(response.json().artifact.candles).toHaveLength(780)
+    expect(Buffer.byteLength(JSON.stringify(response.json().artifact))).toBe(
+      70_315,
+    )
     expect(response.json()).toMatchObject({
       candlesEvaluated: 52,
       window: {

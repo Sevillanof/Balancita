@@ -1,0 +1,86 @@
+{
+  "oracle": "server/src/features/simulations/trade-simulation.ts simulateLongFlat",
+  "tolerance": { "relative": 1e-12, "absolute": 1e-10 },
+  "input": {
+    "startingCash": 1000,
+    "bars": [
+      { "time": 1000, "open": 100, "close": 102 },
+      { "time": 2000, "open": 105, "close": 108 },
+      { "time": 3000, "open": 107, "close": 106 },
+      { "time": 4000, "open": 104, "close": 103 },
+      { "time": 5000, "open": 101, "close": 99 }
+    ],
+    "signals": [
+      {
+        "time": 1000,
+        "probabilityUp": 0.8,
+        "probabilityDown": 0.1,
+        "abstained": false
+      },
+      {
+        "time": 2000,
+        "probabilityUp": 0.4,
+        "probabilityDown": 0.2,
+        "abstained": true
+      },
+      {
+        "time": 3000,
+        "probabilityUp": 0.8,
+        "probabilityDown": 0.1,
+        "abstained": false,
+        "directTarget": "flat"
+      },
+      {
+        "time": 4000,
+        "probabilityUp": 0.9,
+        "probabilityDown": 0.05,
+        "abstained": false,
+        "directTarget": "long"
+      }
+    ],
+    "costs": { "commissionRate": 0.008, "slippageRate": 0.0005 }
+  },
+  "expected": {
+    "fills": [
+      {
+        "time": 2000,
+        "side": "buy",
+        "price": 105.0525,
+        "qty": 9.443501982946547,
+        "commission": 7.936507936507937
+      },
+      {
+        "time": 3000,
+        "side": "sell",
+        "price": 106.9465,
+        "qty": 9.443501982946547,
+        "commission": 8.079595878553544
+      },
+      {
+        "time": 5000,
+        "side": "buy",
+        "price": 101.0505,
+        "qty": 9.835859700008548,
+        "commission": 7.951348324925711
+      }
+    ],
+    "equityCurve": [
+      { "time": 1000, "equity": 1000 },
+      { "time": 2000, "equity": 1019.898214158227 },
+      { "time": 3000, "equity": 1001.8698889406394 },
+      { "time": 4000, "equity": 1001.8698889406394 },
+      { "time": 5000, "equity": 973.7501103008462 }
+    ],
+    "metrics": {
+      "netReturnPct": -2.6249889699153752,
+      "tradeCount": 1,
+      "fillCount": 3,
+      "winRate": 1,
+      "profitFactor": null,
+      "maxDrawdownPct": 4.524775435112327,
+      "exposurePct": 40,
+      "finalEquity": 973.7501103008462
+    },
+    "ledgerHash": "b3aa2ae77b6b17343413e581b3d239b966d4bf8c97d37823169c5c54bd6a4206"
+  }
+}

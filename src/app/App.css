@@ -161,3 +161,12 @@
     border-radius: 0;
   }
 }
+.app__connected-navigation {
+  padding: 0.5rem 1rem;
+  text-align: right;
+}
+
+.app__connected-navigation a {
+  color: var(--color-primary, #13795b);
+  font-size: 0.85rem;
+}

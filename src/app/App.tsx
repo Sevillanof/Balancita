@@ -15,6 +15,9 @@ import type { AnalysisMode } from '../features/analysis/presentation/AnalysisMod
 import GeminiControl from '../features/analysis/presentation/GeminiControl.tsx'
 import { resolveMarketDataProviderMode } from '../features/market-data/infrastructure/market-data-provider.ts'
 import './App.css'
+import DemoShell from './DemoShell.tsx'
+import HistoricalRuns from './HistoricalRuns.tsx'
+import TerminalEntry from './TerminalEntry.tsx'
 
 type AppProps = {
   provider?: MarketDataProvider
@@ -26,7 +29,7 @@ type AppProps = {
   geminiAnalysis?: AnalysisProvider
 }
 
-function App({
+function AppContent({
   provider,
   paperTradingProvider,
   portfolioRepository,
@@ -77,6 +80,12 @@ function App({
 
   return (
     <main className="app">
+      <nav
+        className="app__connected-navigation"
+        aria-label="Navegación de la aplicación"
+      >
+        <a href="/terminal">Terminal conectada</a>
+      </nav>
       <BtcEurDashboard
         provider={activeProvider}
         labProvider={activeLabProvider}
@@ -96,4 +105,14 @@ function App({
   )
 }
 
-export default App
+export default function App(props: AppProps) {
+  if (window.location.pathname === '/terminal') return <TerminalEntry />
+  if (window.location.pathname === '/historicos') return <HistoricalRuns />
+  if (
+    window.location.pathname === '/demo' ||
+    window.location.pathname.startsWith('/demo/')
+  )
+    return <DemoShell />
+
+  return <AppContent {...props} />
+}

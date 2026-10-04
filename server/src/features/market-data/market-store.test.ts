@@ -65,7 +65,7 @@ describe('MarketStore', () => {
 
   it('keeps in-memory stores usable with a 5000ms busy timeout', () => {
     const store = new MarketStore({ path: ':memory:' })
-    expect(store.schemaVersion()).toBe(10)
+    expect(store.schemaVersion()).toBe(12)
     expect(store.sqliteSettings()).toEqual({
       journalMode: 'memory',
       busyTimeout: 5000,
@@ -75,7 +75,7 @@ describe('MarketStore', () => {
   it('initializes the versioned schema at the injected path', () => {
     const store = new MarketStore({ path: makePath() })
 
-    expect(store.schemaVersion()).toBe(10)
+    expect(store.schemaVersion()).toBe(12)
     expect(store.observationCount()).toBe(0)
 
     store.close()
@@ -178,7 +178,7 @@ describe('MarketStore', () => {
     store.close()
 
     const reopened = new MarketStore({ path })
-    expect(reopened.schemaVersion()).toBe(10)
+    expect(reopened.schemaVersion()).toBe(12)
     expect(reopened.listPaperOrders()).toHaveLength(1)
     reopened.close()
   })
@@ -290,7 +290,7 @@ describe('MarketStore', () => {
     database.close()
 
     const store = new MarketStore({ path })
-    expect(store.schemaVersion()).toBe(10)
+    expect(store.schemaVersion()).toBe(12)
     expect(store.observationCount()).toBe(0)
     store.close()
   })
@@ -312,7 +312,7 @@ describe('MarketStore', () => {
       )
       .get()
     migratedDatabase.close()
-    expect(store.schemaVersion()).toBe(10)
+    expect(store.schemaVersion()).toBe(12)
     expect(ledgerTable).toEqual({ name: 'forecast_records' })
     store.close()
   })

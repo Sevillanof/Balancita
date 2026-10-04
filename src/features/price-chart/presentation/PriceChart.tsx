@@ -15,12 +15,18 @@ import type {
   Time,
 } from 'lightweight-charts'
 import { useEffect, useRef } from 'react'
-import type { ISeriesMarkersPluginApi } from 'lightweight-charts'
+import {
+  HistogramSeries,
+  type ISeriesMarkersPluginApi,
+} from 'lightweight-charts'
 import './chart.css'
 
 type PriceChartProps = {
-  data: readonly CandlestickData[]
+  data: readonly (CandlestickData & { volume?: number })[]
   markers?: readonly SeriesMarker<Time>[]
+  containerClassName?: string
+  showVolume?: boolean
+  palette?: 'application' | 'approved-terminal'
 }
 
 const EMPTY_MESSAGE = 'No hay datos de gráfico disponibles.'
@@ -72,7 +78,17 @@ function cssVariable(name: string, fallback: string): string {
   return value || fallback
 }
 
-function currentPalette(): Palette {
+function currentPalette(mode: 'application' | 'approved-terminal'): Palette {
+  if (mode === 'approved-terminal') {
+    return {
+      background: '#171c20',
+      text: '#dce4e2',
+      muted: '#82918f',
+      grid: 'rgba(220, 228, 226, 0.09)',
+      up: '#35b88f',
+      down: '#df777c',
+    }
+  }
   const fallback = prefersDarkMode() ? DARK_FALLBACK : LIGHT_FALLBACK
   return {
     background: cssVariable('--color-surface', fallback.background),
@@ -106,10 +122,17 @@ function chartOptions(palette: Palette): DeepPartial<ChartOptions> {
   }
 }
 
-export default function PriceChart({ data, markers = [] }: PriceChartProps) {
+export default function PriceChart({
+  data,
+  markers = [],
+  containerClassName = 'chart__container',
+  showVolume = false,
+  palette: paletteMode = 'application',
+}: PriceChartProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
   const seriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null)
+  const volumeSeriesRef = useRef<ISeriesApi<'Histogram'> | null>(null)
   const previousDataRef = useRef<readonly CandlestickData[] | null>(null)
   const markerPluginRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null)
   const hasData = data.length > 0
@@ -119,7 +142,7 @@ export default function PriceChart({ data, markers = [] }: PriceChartProps) {
     const container = containerRef.current
     if (!container) return undefined
 
-    const palette = currentPalette()
+    const palette = currentPalette(paletteMode)
     const chart = createChart(container, chartOptions(palette))
     const series = chart.addSeries(CandlestickSeries, {
       upColor: palette.up,
@@ -128,19 +151,32 @@ export default function PriceChart({ data, markers = [] }: PriceChartProps) {
       wickDownColor: palette.down,
       borderVisible: false,
     })
+    const volumeSeries = showVolume
+      ? chart.addSeries(HistogramSeries, {
+          priceScaleId: '',
+          priceFormat: { type: 'volume' },
+          lastValueVisible: false,
+          priceLineVisible: false,
+        })
+      : null
+    volumeSeries?.priceScale().applyOptions({
+      scaleMargins: { top: 0.83, bottom: 0.02 },
+    })
     chartRef.current = chart
     seriesRef.current = series
+    volumeSeriesRef.current = volumeSeries
     previousDataRef.current = null
 
     return () => {
       chartRef.current = null
       seriesRef.current = null
+      volumeSeriesRef.current = null
       markerPluginRef.current?.detach()
       markerPluginRef.current = null
       previousDataRef.current = null
       chart.remove()
     }
-  }, [hasData])
+  }, [hasData, paletteMode, showVolume])
 
   useEffect(() => {
     const series = seriesRef.current
@@ -150,6 +186,19 @@ export default function PriceChart({ data, markers = [] }: PriceChartProps) {
     const previousData = previousDataRef.current
     if (previousData === null) {
       series.setData([...data])
+      volumeSeriesRef.current?.setData(
+        data.flatMap((candle) =>
+          typeof candle.volume === 'number'
+            ? [
+                {
+                  time: candle.time,
+                  value: candle.volume,
+                  color: candle.close >= candle.open ? '#285d50' : '#653f42',
+                },
+              ]
+            : [],
+        ),
+      )
       const latestTime = data.at(-1)?.time
       const timeScale = chart.timeScale()
       if (
@@ -190,6 +239,19 @@ export default function PriceChart({ data, markers = [] }: PriceChartProps) {
     } else {
       series.setData([...data])
     }
+    volumeSeriesRef.current?.setData(
+      data.flatMap((candle) =>
+        typeof candle.volume === 'number'
+          ? [
+              {
+                time: candle.time,
+                value: candle.volume,
+                color: candle.close >= candle.open ? '#285d50' : '#653f42',
+              },
+            ]
+          : [],
+      ),
+    )
     previousDataRef.current = [...data]
   }, [data])
 
@@ -214,7 +276,7 @@ export default function PriceChart({ data, markers = [] }: PriceChartProps) {
     <div
       ref={containerRef}
       data-testid="price-chart"
-      className="chart__container"
+      className={`${containerClassName} chart__container`}
       role="img"
       aria-label="Gráfico de precio"
     />

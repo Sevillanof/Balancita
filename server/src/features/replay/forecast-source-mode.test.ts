@@ -211,7 +211,7 @@ describe('forecast source mode migration', () => {
     writeLegacyV4Database(path)
 
     const store = new MarketStore({ path })
-    expect(store.schemaVersion()).toBe(10)
+    expect(store.schemaVersion()).toBe(12)
 
     const legacy = store.getForecast('legacy-1')
     expect(legacy?.sourceMode).toBe('shadow_live')
@@ -246,11 +246,11 @@ describe('forecast source mode migration', () => {
     writeLegacyV4Database(path)
 
     const first = new MarketStore({ path })
-    expect(first.schemaVersion()).toBe(10)
+    expect(first.schemaVersion()).toBe(12)
     first.close()
 
     const second = new MarketStore({ path })
-    expect(second.schemaVersion()).toBe(10)
+    expect(second.schemaVersion()).toBe(12)
     expect(second.getForecast('legacy-1')?.sourceMode).toBe('shadow_live')
 
     const raw = new DatabaseSync(path)
@@ -258,7 +258,7 @@ describe('forecast source mode migration', () => {
       .prepare('SELECT version FROM schema_migrations ORDER BY version')
       .all() as { version: number }[]
     expect(versions.map((row) => row.version)).toEqual([
-      1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
+      1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12,
     ])
     raw.close()
     second.close()

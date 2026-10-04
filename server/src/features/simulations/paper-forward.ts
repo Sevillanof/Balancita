@@ -1,5 +1,9 @@
+import { createHash, randomUUID } from 'node:crypto'
+import { candidateForId } from './candidate-manifest.ts'
+import type { DecisionCondition } from '../../domain/contracts.ts'
 import type {
   FastReplayCandle,
+  FastReplayEntryGateDiagnostic,
   FastReplayStrategyId,
 } from './fast-replay-engine.ts'
 import {
@@ -21,6 +25,7 @@ import {
   initialMicroState,
   macroContextWhenReady,
   type MicroRegime,
+  type MicroStrategyDiagnostic,
   type MicroStrategyState,
 } from './micro-strategy.ts'
 import type { MarketStore, PaperOrder } from '../market-data/market-store.ts'
@@ -87,6 +92,7 @@ export class PaperForwardService {
   private running = false
   private streamState = 'disabled'
   private lastEvaluatedBucketEnd: number | null = null
+  private readonly sessionId = randomUUID()
 
   constructor(options: { store: MarketStore; clock?: () => number }) {
     this.options = options
@@ -168,25 +174,49 @@ export class PaperForwardService {
     const macroFeatures = features
     for (const id of FAST_REPLAY_STRATEGIES) {
       const prior = this.states.get(id) ?? initialMicroState()
+      let strategyDiagnostic: MicroStrategyDiagnostic | undefined
       const decision = evaluateMicroTarget(
         fastReplayStrategyFor(id),
         features,
         prior,
         macroContextWhenReady(macroFeatures),
+        (diagnostic) => {
+          strategyDiagnostic = diagnostic
+        },
       )
       const position = this.position(id)
+      let c27Diagnostic: MicroStrategyDiagnostic | undefined
       const target =
         id === 'micro-donchian-breakout' && position !== null
-          ? evaluateC27ExitWithMacroContext({
-              entryPrice: position.entryPrice,
-              close: completed.close,
-              macroContext: macroContextWhenReady(macroFeatures),
-              barsHeld: Math.floor((bucketEnd - position.openTime) / 900),
-            }) === 'hold'
+          ? evaluateC27ExitWithMacroContext(
+              {
+                entryPrice: position.entryPrice,
+                close: completed.close,
+                macroContext: macroContextWhenReady(macroFeatures),
+                barsHeld: Math.floor((bucketEnd - position.openTime) / 900),
+              },
+              (diagnostic) => {
+                c27Diagnostic = diagnostic
+              },
+            ) === 'hold'
             ? 'long'
             : 'flat'
           : decision.target
+      let reasonCode = strategyDiagnostic?.reasonCode ?? null
+      let conditions = [...(strategyDiagnostic?.conditions ?? [])]
+      if (c27Diagnostic !== undefined && !decision.abstained) {
+        reasonCode = c27Diagnostic.reasonCode
+        conditions = [...c27Diagnostic.conditions]
+      }
       if (position !== null && decision.abstained) {
+        this.recordDecision(
+          id,
+          bucketEnd,
+          'flat',
+          'abstained',
+          reasonCode,
+          conditions,
+        )
         this.states.set(id, { ...prior, exposure: 'long' })
         continue
       }
@@ -200,13 +230,48 @@ export class PaperForwardService {
                 decision.state.regime,
                 macroFeatures,
               )
+        let gateDiagnostic: FastReplayEntryGateDiagnostic | undefined
         const passed = fastReplayCanEnter(
           id,
           features,
           decision.state.regime,
           macroFeatures,
+          (diagnostic) => {
+            gateDiagnostic = diagnostic
+          },
         )
+        const gateConditions: DecisionCondition[] =
+          gateDiagnostic === undefined
+            ? []
+            : gateDiagnostic.distance === null ||
+                gateDiagnostic.threshold === null
+              ? [
+                  {
+                    code: 'entry_gate_features_ready',
+                    value: false,
+                    operator: 'is',
+                    threshold: true,
+                    passed: false,
+                  },
+                ]
+              : [
+                  {
+                    code: 'entry_gate_distance',
+                    value: gateDiagnostic.distance,
+                    operator: '>=',
+                    threshold: gateDiagnostic.threshold,
+                    passed: gateDiagnostic.passed,
+                  },
+                ]
         if (!passed) {
+          this.recordDecision(
+            id,
+            bucketEnd,
+            'long',
+            'gate-rejected',
+            gateDiagnostic?.reasonCode ?? 'entry_gate_rejected',
+            [...conditions, ...gateConditions],
+          )
           const inserted = this.options.store.insertPaperOrder({
             strategyId: id,
             signalTimestamp: bucketEnd,
@@ -223,6 +288,14 @@ export class PaperForwardService {
             this.states.set(id, { ...decision.state, exposure: 'flat' })
           continue
         }
+        this.recordDecision(
+          id,
+          bucketEnd,
+          'long',
+          'pending',
+          gateDiagnostic?.reasonCode ?? reasonCode,
+          [...conditions, ...gateConditions],
+        )
         this.pending.set(id, {
           action: 'BUY',
           signalTimestamp: bucketEnd,
@@ -231,13 +304,31 @@ export class PaperForwardService {
         })
         this.states.set(id, { ...decision.state, exposure: 'flat' })
       } else if (position !== null && target === 'flat') {
+        this.recordDecision(
+          id,
+          bucketEnd,
+          'flat',
+          'pending',
+          reasonCode,
+          conditions,
+        )
         this.pending.set(id, {
           action: 'SELL',
           signalTimestamp: bucketEnd,
           targetPct: 0,
           state: decision.state,
         })
-      } else this.states.set(id, decision.state)
+      } else {
+        this.recordDecision(
+          id,
+          bucketEnd,
+          target,
+          decision.abstained ? 'abstained' : 'hold',
+          reasonCode,
+          conditions,
+        )
+        this.states.set(id, decision.state)
+      }
     }
     void nextOpen
   }
@@ -409,6 +500,43 @@ export class PaperForwardService {
       targetPct: 0,
     })
     if (inserted) this.states.set(id, { ...pending.state, exposure: 'flat' })
+  }
+
+  private recordDecision(
+    strategyId: FastReplayStrategyId,
+    timestampSeconds: number,
+    direction: 'flat' | 'long',
+    outcome: 'abstained' | 'gate-rejected' | 'pending' | 'hold',
+    reasonCode: string | null,
+    conditions: readonly DecisionCondition[],
+  ): void {
+    const strategyVersion = candidateForId(strategyId).ruleVersion
+    const eventTime = timestampSeconds * 1000
+    const id = createHash('sha256')
+      .update(
+        JSON.stringify([
+          'paper-forward',
+          'BTC-EUR',
+          strategyId,
+          strategyVersion,
+          eventTime,
+        ]),
+      )
+      .digest('hex')
+    this.options.store.insertPaperDecision({
+      id,
+      instrumentId: 'BTC-EUR',
+      eventTime,
+      receivedAt: (this.options.clock ?? Date.now)(),
+      strategyId,
+      strategyVersion,
+      direction,
+      outcome,
+      reason: null,
+      reasonCode,
+      sessionId: this.sessionId,
+      conditions,
+    })
   }
 }
 
