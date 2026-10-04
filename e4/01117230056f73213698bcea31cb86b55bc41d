@@ -1,0 +1,14 @@
+odd/tasks/kraken-futures-deterministic.md
+  h_2f68313623be98 8,196-197
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e401117230056f73213698bcea31cb86b55bc41d",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
