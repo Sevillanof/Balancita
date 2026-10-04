@@ -118,7 +118,8 @@ class FuturesWorkerProcessTests(unittest.TestCase):
                 self.assertIsInstance(record["duration_ns"], int)
                 self.assertGreaterEqual(record["duration_ns"], 0)
                 self.assertGreaterEqual(record["rss_bytes"], 0)
-            self.assertEqual(records[0]["strategy_evaluations"], "not_instrumented")
+            self.assertIsNone(records[0]["strategy_evaluations"])
+            self.assertIsNone(records[0]["strategy_selection_cycles"])
             request_read = records[1]
             self.assertEqual(request_read["read_scope"], "line_and_transport_wait")
             self.assertGreaterEqual(request_read["duration_ns"], 0)
@@ -266,6 +267,66 @@ class FuturesWorkerProcessTests(unittest.TestCase):
             process.stdin.close()
             process.stdout.close()
             process.stderr.close()
+
+    def test_runtime_worker_diagnostics_report_measured_strategy_invocations(self):
+        sys.path.insert(0, str(ROOT / "python" / "tests"))
+        from futures_runtime_fixtures import CONFIG, INSTRUMENT, warmed_market
+
+        with tempfile.TemporaryDirectory() as directory:
+            trace_path = Path(directory) / "trace.jsonl"
+            config = {**CONFIG, "version": "futures-runtime-strategies.v1"}
+            request = {
+                "type": "work",
+                "protocol_version": 1,
+                "request_id": "diag-r1",
+                "run_id": "diag-run",
+                "work_id": "diag-w1",
+                "expected_state_version": 0,
+                "payload": {
+                    "operation": "futures_runtime.v1",
+                    "runtime_config": config,
+                    "instrument": INSTRUMENT,
+                    "market_snapshot": warmed_market(
+                        21_600_000, breakout="long"
+                    ),
+                },
+            }
+
+            def run(extra_env=None):
+                process = self.launch(extra_env)
+                try:
+                    self.assertEqual(read_message(process)["type"], "ready")
+                    process.stdin.write(json.dumps(request) + "\n")
+                    process.stdin.flush()
+                    return read_message(process)
+                finally:
+                    if process.poll() is None:
+                        process.kill()
+                        process.wait(timeout=5)
+                    process.stdin.close()
+                    process.stdout.close()
+                    process.stderr.close()
+
+            enabled = run({"BALANCITA_FUTURES_DIAGNOSTICS_PATH": str(trace_path)})
+            disabled = run()
+            self.assertEqual(
+                json.dumps(
+                    {key: enabled[key] for key in ("result", "runtime_output", "runtime_checkpoint")},
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+                json.dumps(
+                    {key: disabled[key] for key in ("result", "runtime_output", "runtime_checkpoint")},
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+            )
+            records = [json.loads(line) for line in trace_path.read_text().splitlines()]
+            measured = next(record for record in records if record["phase"] == "strategy_work")
+            self.assertEqual(measured["strategy_selection_cycles"], 1)
+            self.assertEqual(measured["strategy_evaluations"], 4)
+            self.assertEqual((measured["request_id"], measured["run_id"], measured["work_id"]),
+                             ("diag-r1", "diag-run", "diag-w1"))
 
 
 if __name__ == "__main__":

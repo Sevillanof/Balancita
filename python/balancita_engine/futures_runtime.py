@@ -118,6 +118,10 @@ class FuturesRuntime:
         self.regime = "unknown"
         self.execution_adapter = None
         self.execution_metadata = {}
+        self._diagnostics = {
+            "strategy_selection_cycles": 0,
+            "strategy_evaluations": 0,
+        }
         self.risk_state = {
             "utc_day": None,
             "opening_equity_usd": None,
@@ -192,6 +196,10 @@ class FuturesRuntime:
 
     def process(self, market, *, control=None):
         """Evaluate one as-of snapshot and return analysis, risk, fills and ledger."""
+        self._diagnostics = {
+            "strategy_selection_cycles": 0,
+            "strategy_evaluations": 0,
+        }
         if not isinstance(market, dict):
             raise ValueError("market snapshot must be a mapping")
         now = normalize_timestamp_ms(market.get("decision_time_ms"))
@@ -521,6 +529,10 @@ class FuturesRuntime:
                 "pending_financial_obligations": self._pending_financial_obligations(),
             }} if self._funding_separation else {}),
         }
+
+    def get_diagnostics(self):
+        """Return private per-process work counters, outside financial output."""
+        return dict(self._diagnostics)
 
     def checkpoint(self):
         """Return a normalized, versioned checkpoint sufficient to resume open risk."""
@@ -932,8 +944,9 @@ class FuturesRuntime:
         if one_bars:
             age_ms = max(0, cutoff - one_bars[-1].get("received_at_ms", cutoff))
         trend = five
-        proposals = [
-            propose_strategy(
+        proposals = []
+        for strategy_id in STRATEGY_IDS:
+            proposal = propose_strategy(
                 strategy_id,
                 features,
                 previous=previous_features,
@@ -947,13 +960,14 @@ class FuturesRuntime:
                 frozen_invalidation=None if self.position_protection is None else self.position_protection.get("donchian_mid"),
                 delegated_strategy_id=(self.owner_strategy_id if strategy_id == C28_ID and self.owner_strategy_id in (C25_ID, C26_ID) else None),
             )
-            for strategy_id in STRATEGY_IDS
-        ]
+            self._diagnostics["strategy_evaluations"] += 1
+            proposals.append(proposal)
         selector = select_proposal(
             proposals,
             owner_strategy_id=self.owner_strategy_id,
             consumed_signal_keys=self.signal_keys,
         )
+        self._diagnostics["strategy_selection_cycles"] += 1
         return {"proposals": proposals, "selector": selector, "regime": self.regime}
 
     def _market_guard(self, market, book, ticker, now, cutoff):

@@ -46,6 +46,33 @@ describe('FuturesWorker', () => {
     })
   })
 
+  it('counts transmitted UTF-8 payload bytes including the JSONL newline', () => {
+    class ControlledPipe extends EventEmitter {
+      writableLength = 0
+      writableNeedDrain = false
+      writableHighWaterMark = 8
+      write(_data: string, callback: () => void) {
+        callback()
+        return true
+      }
+    }
+    const events: Array<Record<string, unknown>> = []
+    observeWorkerPipeWrite(
+      new ControlledPipe() as unknown as Parameters<
+        typeof observeWorkerPipeWrite
+      >[0],
+      (event) => events.push(event),
+      { request_id: 'ack-request', run_id: 'run-fixture', work_id: 'ack-work' },
+      'ack_write',
+      '{"value":"€"}\n',
+    )
+    expect(events[0]).toMatchObject({
+      phase: 'ack_write_callback',
+      payload_bytes: Buffer.byteLength('{"value":"€"}\n', 'utf8'),
+      payload_bytes_include_newline: true,
+    })
+  })
+
   it('rejects untyped funding provenance before worker submission', () => {
     const request = normalizedFundingRequest()
     request.payload.market_snapshot.events[0]!.observation.unit = 'unknown'

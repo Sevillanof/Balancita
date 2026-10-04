@@ -33,7 +33,8 @@ def _diagnostic(phase, message=None, duration_ns=0, **details):
             "monotonic_ns": time.perf_counter_ns(),
             "duration_ns": max(0, int(duration_ns)),
             "rss_bytes": rss_bytes,
-            "strategy_evaluations": "not_instrumented",
+            "strategy_selection_cycles": None,
+            "strategy_evaluations": None,
             **details,
         }
         with open(_DIAGNOSTICS_PATH, "a", encoding="utf-8") as output:
@@ -110,6 +111,7 @@ def _work(message):
         output = runtime.process(
             payload["market_snapshot"], control=payload.get("control")
         )
+        _diagnostic("strategy_work", message, **runtime.get_diagnostics())
         next_checkpoint = runtime.checkpoint()
         previous_accrued = {
             tuple(item) for item in (checkpoint or {}).get("accrued", [])

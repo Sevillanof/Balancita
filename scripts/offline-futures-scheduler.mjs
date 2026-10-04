@@ -184,14 +184,42 @@ export function summarizeOfflineDiagnostics({ workerEvents, driverEvents }) {
           0,
         )
       : null
-  const completedAckRequestIds = workerAvailable
-    ? new Set(
-        workerEvents
-          .filter((event) => event.phase === 'ack_write_callback')
-          .map((event) => event.request_id)
-          .filter((id) => typeof id === 'string'),
-      )
-    : null
+  const ackPayloadBytes = new Map()
+  const completedAckRequestIds = workerAvailable ? new Set() : null
+  for (const event of workerEvents ?? [])
+    if (
+      event.phase === 'ack_write_callback' &&
+      typeof event.request_id === 'string'
+    ) {
+      completedAckRequestIds.add(event.request_id)
+      if (Number.isSafeInteger(event.payload_bytes) && event.payload_bytes >= 0)
+        ackPayloadBytes.set(event.request_id, event.payload_bytes)
+    }
+  const strategyWork = new Map()
+  for (const event of workerEvents ?? [])
+    if (
+      event.phase === 'strategy_work' &&
+      typeof event.request_id === 'string' &&
+      typeof event.run_id === 'string' &&
+      typeof event.work_id === 'string' &&
+      Number.isSafeInteger(event.strategy_selection_cycles) &&
+      event.strategy_selection_cycles >= 0 &&
+      Number.isSafeInteger(event.strategy_evaluations) &&
+      event.strategy_evaluations >= 0
+    )
+      strategyWork.set(event.request_id, event)
+  const completeStrategyWork =
+    workerAvailable &&
+    completedRequestIds.size > 0 &&
+    [...completedRequestIds].every((id) => strategyWork.has(id))
+  const ackBytesComplete =
+    workerAvailable &&
+    completedAckRequestIds.size > 0 &&
+    [...completedAckRequestIds].every((id) => ackPayloadBytes.has(id))
+  const uniqueStrategyWork = new Map()
+  for (const event of strategyWork.values())
+    if (completedRequestIds.has(event.request_id))
+      uniqueStrategyWork.set(`${event.run_id}:${event.work_id}`, event)
   return {
     ipc_request_wire_bytes: requestWireBytes,
     ipc_request_write_count: workerAvailable ? completedRequestIds.size : null,
@@ -213,17 +241,39 @@ export function summarizeOfflineDiagnostics({ workerEvents, driverEvents }) {
             .filter((id) => typeof id === 'string'),
         ).size
       : null,
-    ipc_ack_write_bytes: null,
+    ipc_ack_write_bytes: ackBytesComplete
+      ? [...completedAckRequestIds].reduce(
+          (total, id) => total + ackPayloadBytes.get(id),
+          0,
+        )
+      : null,
     ipc_ack_write_count: completedAckRequestIds?.size ?? null,
-    ipc_ack_bytes_unavailable_reason:
-      'The worker pipe observer does not record ACK payload byte lengths.',
+    ipc_ack_bytes_unavailable_reason: !workerAvailable
+      ? 'Worker trace was unavailable.'
+      : ackBytesComplete
+        ? null
+        : 'One or more completed ACK writes have no measured payload byte length.',
     financial_work_count: driverAvailable ? financialReceipts.size : null,
     financial_source_coverage_rows: driverAvailable
       ? financialSourceSequences.size
       : null,
-    confirmed_full_cycle_analysis_count: null,
-    analysis_count_unavailable_reason:
-      'Current worker diagnostics do not expose a strategy-analysis completion counter; financial work is not equated with analyses.',
+    confirmed_full_cycle_analysis_count: completeStrategyWork
+      ? [...uniqueStrategyWork.values()].reduce(
+          (total, event) => total + event.strategy_selection_cycles,
+          0,
+        )
+      : null,
+    strategy_evaluation_count: completeStrategyWork
+      ? [...uniqueStrategyWork.values()].reduce(
+          (total, event) => total + event.strategy_evaluations,
+          0,
+        )
+      : null,
+    analysis_count_unavailable_reason: !workerAvailable
+      ? 'Worker trace was unavailable.'
+      : completeStrategyWork
+        ? null
+        : 'One or more completed works have no measured strategy counters; financial work is not equated with analyses.',
   }
 }
 

@@ -26,6 +26,32 @@ def close_command(command_id):
 
 
 class FuturesRuntimeTests(unittest.TestCase):
+    def test_strategy_diagnostics_count_actual_selector_cycles_and_proposals(self):
+        strategy_config = dict(CONFIG)
+        strategy_config["version"] = "futures-runtime-strategies.v1"
+        engine = FuturesRuntime(
+            run_id="diagnostic-run", config=strategy_config, instrument=INSTRUMENT
+        )
+        engine.process(warmed_market(21_600_000, breakout="long"))
+        self.assertEqual(
+            engine.get_diagnostics(),
+            {"strategy_selection_cycles": 1, "strategy_evaluations": 4},
+        )
+
+        engine.process(valid_flat_market(21_600_001))
+        self.assertEqual(
+            engine.get_diagnostics(),
+            {"strategy_selection_cycles": 1, "strategy_evaluations": 4},
+        )
+
+    def test_strategy_diagnostics_are_zero_when_runtime_does_not_select_strategies(self):
+        engine = runtime()
+        engine.process(warmed_market(21_600_000, breakout="long"))
+        self.assertEqual(
+            engine.get_diagnostics(),
+            {"strategy_selection_cycles": 0, "strategy_evaluations": 0},
+        )
+
     def test_execution_runtime_routes_strategy_entry_through_causal_adapter_and_ledger(self):
         execution_config = dict(CONFIG)
         execution_config.update(

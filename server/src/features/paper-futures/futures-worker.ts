@@ -498,16 +498,22 @@ export class FuturesWorker {
       void this.drain()
       return
     }
-    if (
-      active.commit &&
-      isCommittedAck(message, active.request, active.commit)
-    ) {
-      this.active = undefined
-      this.emit(active, 'ack_received')
-      clearTimeout(active.timer)
-      active.resolve(active.result!)
-      void this.drain()
-      return
+    if (active.commit) {
+      const validationStartedAt = performance.now()
+      this.emit(active, 'ack_validation_start')
+      const validAck = isCommittedAck(message, active.request, active.commit)
+      this.emit(active, 'ack_validation_end', {
+        duration_ms: performance.now() - validationStartedAt,
+        valid: validAck,
+      })
+      if (validAck) {
+        this.active = undefined
+        this.emit(active, 'ack_received')
+        clearTimeout(active.timer)
+        active.resolve(active.result!)
+        void this.drain()
+        return
+      }
     }
     this.emit(active, 'schema_validation_start')
     if (
@@ -725,12 +731,15 @@ export function observeWorkerPipeWrite(
 ): void {
   const started = performance.now()
   const base = { ...request }
+  const payloadBytes = Buffer.byteLength(data, 'utf8')
   const accepted = stream.write(data, () =>
     emit({
       ...base,
       phase: `${phase}_callback`,
       monotonic_ms: performance.now(),
       callback_duration_ms: performance.now() - started,
+      payload_bytes: payloadBytes,
+      payload_bytes_include_newline: data.endsWith('\n'),
     }),
   )
   emit({

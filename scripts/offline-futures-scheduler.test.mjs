@@ -246,6 +246,19 @@ describe('offline replay scheduler', () => {
           { request_id: 'work-1', phase: 'stdin_write_callback' },
           { request_id: 'work-1', phase: 'frame_complete', frame_bytes: 73 },
           { request_id: 'work-1', phase: 'ack_write_callback' },
+          {
+            request_id: 'work-1',
+            phase: 'ack_write_callback',
+            payload_bytes: 29,
+          },
+          {
+            request_id: 'work-1',
+            run_id: 'run-1',
+            work_id: 'work-1',
+            phase: 'strategy_work',
+            strategy_selection_cycles: 1,
+            strategy_evaluations: 4,
+          },
         ],
         driverEvents: [
           {
@@ -269,11 +282,25 @@ describe('offline replay scheduler', () => {
       ipc_request_write_count: 1,
       ipc_response_line_bytes: 73,
       ipc_response_line_count: 1,
-      ipc_ack_write_bytes: null,
+      ipc_ack_write_bytes: 29,
       ipc_ack_write_count: 1,
       financial_work_count: 1,
       financial_source_coverage_rows: 1,
+      confirmed_full_cycle_analysis_count: 1,
+      strategy_evaluation_count: 4,
+    })
+    expect(
+      summarizeOfflineDiagnostics({
+        workerEvents: [
+          { request_id: 'legacy-request', phase: 'stdin_write_callback' },
+          { request_id: 'legacy-request', phase: 'ack_write_callback' },
+        ],
+        driverEvents: [],
+      }),
+    ).toMatchObject({
+      ipc_ack_write_bytes: null,
       confirmed_full_cycle_analysis_count: null,
+      strategy_evaluation_count: null,
     })
   })
 })
