@@ -1744,6 +1744,140 @@ with localcontext() as ctx:
     expect(driver.exportRun().work).toHaveLength(2)
   })
 
+  it('emits ordered replay phase timings with exact sequence and work identity', async () => {
+    const phases: Record<string, unknown>[] = []
+    const driver = new FuturesReplayDriver({
+      runId: 'run-timing',
+      manifest: {
+        schema_version: 'futures-replay-manifest.v1',
+        source: 'fixture',
+        source_hash: 'a'.repeat(64),
+        config_hash: 'b'.repeat(64),
+        seed: 'fixture-seed',
+        fidelity: 'book-trade-funding.v1',
+      },
+      observeTiming: (event) => phases.push(event),
+      apply: async (work) => ({
+        status: 'committed',
+        applied_state_version: work.version + 1,
+      }),
+    })
+    await driver.processEvent({
+      sequence: 1,
+      received_at_ms: 100,
+      event_time_ms: 100,
+      payload: {
+        market_snapshot: { events: [] },
+        request: {
+          request_id: 'request-timing-1',
+          work_id: 'request-work-timing-1',
+        },
+      },
+    })
+    expect(phases.map((event) => event.phase)).toEqual([
+      'input-canonical-hash',
+      'replay-work-create',
+      'runner-invocation',
+      'receipt-materialize-hash',
+    ])
+    expect(phases).toEqual([
+      expect.objectContaining({
+        source_received_seq: 1,
+        run_id: 'run-timing',
+        request_id: 'request-timing-1',
+        request_work_id: 'request-work-timing-1',
+        work_id: null,
+        assignment_state: 'unassigned_before_work_created',
+        outcome: 'end',
+        duration_ms: expect.any(Number),
+      }),
+      ...phases.slice(1).map(() =>
+        expect.objectContaining({
+          source_received_seq: 1,
+          run_id: 'run-timing',
+          request_id: 'request-timing-1',
+          request_work_id: 'request-work-timing-1',
+          work_id: expect.any(String),
+          assignment_state: 'assigned',
+          outcome: 'end',
+          duration_ms: expect.any(Number),
+        }),
+      ),
+    ])
+    expect(phases.every((event) => Number(event.duration_ms) >= 0)).toBe(true)
+  })
+
+  it('isolates a throwing timing observer and preserves the default-off semantic export', async () => {
+    const input = {
+      sequence: 1,
+      received_at_ms: 100,
+      event_time_ms: 100,
+      payload: { market_snapshot: { events: [] } },
+    }
+    const options = {
+      runId: 'run-timing-parity',
+      manifest: {
+        schema_version: 'futures-replay-manifest.v1' as const,
+        source: 'fixture',
+        source_hash: 'a'.repeat(64),
+        config_hash: 'b'.repeat(64),
+        seed: 'fixture-seed',
+        fidelity: 'book-trade-funding.v1',
+      },
+      apply: async (work: RuntimeWork) => ({
+        status: 'committed' as const,
+        applied_state_version: work.version + 1,
+        economic_projection: { position: { quantity_btc: '0' } },
+      }),
+    }
+    const baseline = new FuturesReplayDriver(options)
+    const observed = new FuturesReplayDriver({
+      ...options,
+      observeTiming: () => {
+        throw new Error('diagnostics unavailable')
+      },
+    })
+    await baseline.processEvent(input)
+    await observed.processEvent(input)
+    expect(observed.exportRun()).toMatchObject({
+      semantic_hash: baseline.exportRun().semantic_hash,
+      state_version: baseline.exportRun().state_version,
+      economic_projection: baseline.exportRun().economic_projection,
+    })
+  })
+
+  it('reports a runner error without emitting a false runner end', async () => {
+    const phases: Record<string, unknown>[] = []
+    const driver = new FuturesReplayDriver({
+      runId: 'run-timing-error',
+      manifest: {
+        schema_version: 'futures-replay-manifest.v1',
+        source: 'fixture',
+        source_hash: 'a'.repeat(64),
+        config_hash: 'b'.repeat(64),
+        seed: 'fixture-seed',
+        fidelity: 'book-trade-funding.v1',
+      },
+      observeTiming: (event) => phases.push(event),
+      apply: async () => {
+        throw new Error('runner failed')
+      },
+    })
+    await expect(
+      driver.processEvent({
+        sequence: 1,
+        received_at_ms: 100,
+        event_time_ms: 100,
+        payload: {},
+      }),
+    ).rejects.toThrow('runner failed')
+    expect(phases.map((event) => [event.phase, event.outcome])).toEqual([
+      ['input-canonical-hash', 'end'],
+      ['replay-work-create', 'end'],
+      ['runner-invocation', 'error'],
+    ])
+  })
+
   it('runs stream and batch through separate real Python workers and Node SQLite runs', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'futures-shared-replay-'))
     directories.push(directory)

@@ -50,7 +50,27 @@ type DriverOptions = {
   apply: (work: RuntimeWork) => Promise<RuntimeReceipt>
   durableStore?: FuturesStore
   initialStateVersion?: number
+  observeTiming?: ReplayTimingObserver
 }
+
+export type ReplayTimingEvent = Readonly<{
+  phase:
+    | 'input-canonical-hash'
+    | 'replay-work-create'
+    | 'runner-invocation'
+    | 'receipt-materialize-hash'
+  outcome: 'end' | 'error'
+  monotonic_ms: number
+  duration_ms: number
+  run_id: string
+  source_received_seq: number
+  request_id?: string
+  request_work_id?: string
+  work_id: string | null
+  assignment_state: 'unassigned_before_work_created' | 'assigned'
+  error?: string
+}>
+export type ReplayTimingObserver = (event: ReplayTimingEvent) => void
 
 type AppliedWork = RuntimeWork & { receipt: RuntimeReceipt }
 
@@ -60,6 +80,7 @@ export class FuturesReplayDriver {
   private readonly runId: string
   private readonly apply: DriverOptions['apply']
   private readonly durableStore?: FuturesStore
+  private readonly observeTiming?: DriverOptions['observeTiming']
   private durableBinding?: Record<string, unknown>
   private readonly inputs: CausalInput[] = []
   private readonly work: AppliedWork[] = []
@@ -80,6 +101,7 @@ export class FuturesReplayDriver {
     this.manifest = structuredClone(options.manifest)
     this.apply = options.apply
     this.durableStore = options.durableStore
+    this.observeTiming = options.observeTiming
     if (
       options.initialStateVersion !== undefined &&
       (!Number.isSafeInteger(options.initialStateVersion) ||
@@ -92,7 +114,52 @@ export class FuturesReplayDriver {
   async processEvent(input: CausalInput, cutoff = input.received_at_ms) {
     validateInput(input, cutoff)
     const existingHash = this.bySequence.get(input.sequence)
-    const inputHash = canonicalHash(input)
+    let workId: string | null = null
+    const requestId =
+      isRecord(input.payload.request) &&
+      typeof input.payload.request.request_id === 'string'
+        ? input.payload.request.request_id
+        : undefined
+    const requestWorkId =
+      isRecord(input.payload.request) &&
+      typeof input.payload.request.work_id === 'string'
+        ? input.payload.request.work_id
+        : undefined
+    const measure = <T>(
+      phase: ReplayTimingEvent['phase'],
+      action: () => T,
+    ): T => {
+      const started = performance.now()
+      try {
+        const value = action()
+        this.emitTiming(
+          phase,
+          'end',
+          started,
+          input.sequence,
+          workId,
+          undefined,
+          requestId,
+          requestWorkId,
+        )
+        return value
+      } catch (error) {
+        this.emitTiming(
+          phase,
+          'error',
+          started,
+          input.sequence,
+          workId,
+          error,
+          requestId,
+          requestWorkId,
+        )
+        throw error
+      }
+    }
+    const inputHash = measure('input-canonical-hash', () =>
+      canonicalHash(input),
+    )
     if (existingHash) {
       if (existingHash !== inputHash)
         throw new Error('Received sequence is already bound to other evidence.')
@@ -127,12 +194,17 @@ export class FuturesReplayDriver {
       virtual_time_ms: this.virtualTime,
       input: structuredClone(input),
     }
-    const durable = this.durableStore?.persistReplayWork(
-      this.runId,
-      input.sequence,
-      inputHash,
-      work,
-    ) as (RuntimeWork & { receipt: RuntimeReceipt | null }) | undefined
+    workId = work.work_id
+    const durable = measure(
+      'replay-work-create',
+      () =>
+        this.durableStore?.persistReplayWork(
+          this.runId,
+          input.sequence,
+          inputHash,
+          work,
+        ) as (RuntimeWork & { receipt: RuntimeReceipt | null }) | undefined,
+    )
     if (durable?.receipt) {
       const applied = { ...durable, receipt: structuredClone(durable.receipt) }
       this.work.push(applied)
@@ -154,29 +226,114 @@ export class FuturesReplayDriver {
           input: durable.input,
         }
       : work
-    const receipt = await this.apply(effectiveWork)
-    if (
-      receipt.status === 'committed' &&
-      receipt.applied_state_version === this.stateVersion + 1
-    )
-      this.stateVersion += 1
-    else if (receipt.status === 'superseded') {
-      // Preserve the durable result for audit but do not advance local state.
-    } else {
-      throw new Error(
-        `Runtime receipt does not match expected version: ${JSON.stringify(receipt)}.`,
+    const runnerStarted = performance.now()
+    let receipt: RuntimeReceipt
+    try {
+      receipt = await this.apply(effectiveWork)
+      this.emitTiming(
+        'runner-invocation',
+        'end',
+        runnerStarted,
+        input.sequence,
+        workId,
+        undefined,
+        requestId,
+        requestWorkId,
       )
+    } catch (error) {
+      this.emitTiming(
+        'runner-invocation',
+        'error',
+        runnerStarted,
+        input.sequence,
+        workId,
+        error,
+        requestId,
+        requestWorkId,
+      )
+      throw error
     }
-    const applied = { ...effectiveWork, receipt: structuredClone(receipt) }
-    if (receipt.status === 'committed')
-      this.durableStore?.commitReplayWork(
-        this.runId,
-        effectiveWork.work_id,
-        receipt,
+    const receiptStarted = performance.now()
+    try {
+      if (
+        receipt.status === 'committed' &&
+        receipt.applied_state_version === this.stateVersion + 1
       )
-    this.work.push(applied)
-    this.byWorkIdentity.set(identity, applied)
-    return receipt
+        this.stateVersion += 1
+      else if (receipt.status === 'superseded') {
+        // Preserve the durable result for audit but do not advance local state.
+      } else {
+        throw new Error(
+          `Runtime receipt does not match expected version: ${JSON.stringify(receipt)}.`,
+        )
+      }
+      const applied = { ...effectiveWork, receipt: structuredClone(receipt) }
+      if (receipt.status === 'committed')
+        this.durableStore?.commitReplayWork(
+          this.runId,
+          effectiveWork.work_id,
+          receipt,
+        )
+      this.work.push(applied)
+      this.byWorkIdentity.set(identity, applied)
+      this.emitTiming(
+        'receipt-materialize-hash',
+        'end',
+        receiptStarted,
+        input.sequence,
+        workId,
+        undefined,
+        requestId,
+        requestWorkId,
+      )
+      return receipt
+    } catch (error) {
+      this.emitTiming(
+        'receipt-materialize-hash',
+        'error',
+        receiptStarted,
+        input.sequence,
+        workId,
+        error,
+        requestId,
+        requestWorkId,
+      )
+      throw error
+    }
+  }
+
+  private emitTiming(
+    phase: ReplayTimingEvent['phase'],
+    outcome: 'end' | 'error',
+    started: number,
+    sourceReceivedSeq: number,
+    workId: string | null,
+    error?: unknown,
+    requestId?: string,
+    requestWorkId?: string,
+  ): void {
+    try {
+      this.observeTiming?.({
+        phase,
+        outcome,
+        monotonic_ms: performance.now(),
+        duration_ms: Math.max(0, performance.now() - started),
+        run_id: this.runId,
+        source_received_seq: sourceReceivedSeq,
+        ...(requestId === undefined ? {} : { request_id: requestId }),
+        ...(requestWorkId === undefined
+          ? {}
+          : { request_work_id: requestWorkId }),
+        work_id: workId,
+        assignment_state:
+          workId === null ? 'unassigned_before_work_created' : 'assigned',
+        ...(error === undefined
+          ? {}
+          : { error: error instanceof Error ? error.message : String(error) }),
+      })
+    } catch {
+      // Diagnostics are best-effort and must never affect replay semantics.
+    }
   }
 
   async advanceClock(timeMs: number): Promise<void> {

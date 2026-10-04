@@ -465,8 +465,14 @@ describe('app test configuration', () => {
       FUTURES_DB_PATH: dbPath,
       GEMINI_SERVER_CORS_ORIGIN: 'http://127.0.0.1:15173',
     })
+    const replayTimingEvents: Record<string, unknown>[] = []
+    const workerDiagnostics: Record<string, unknown>[] = []
     let app = await buildApp({
       config,
+      overrides: {
+        futuresReplayDriverObserver: (event) => replayTimingEvents.push(event),
+        futuresWorkerObserver: (event) => workerDiagnostics.push(event),
+      },
     })
     let first: WebSocket | undefined
     let second: WebSocket | undefined
@@ -578,6 +584,41 @@ describe('app test configuration', () => {
         },
       })
       expect(Number(acknowledgement.seq)).toBeLessThan(Number(result.seq))
+      const startTimings = replayTimingEvents.filter(
+        (event) => event.source_received_seq === 1,
+      )
+      expect(startTimings.map((event) => event.phase)).toEqual([
+        'input-canonical-hash',
+        'replay-work-create',
+        'runner-invocation',
+        'receipt-materialize-hash',
+      ])
+      expect(startTimings).toHaveLength(4)
+      expect(startTimings[0]).toMatchObject({
+        run_id: runId,
+        source_received_seq: 1,
+        work_id: null,
+        assignment_state: 'unassigned_before_work_created',
+      })
+      for (const timing of startTimings.slice(1)) {
+        expect(timing).toMatchObject({
+          run_id: runId,
+          source_received_seq: 1,
+          work_id: expect.any(String),
+          request_id: expect.any(String),
+          request_work_id: expect.any(String),
+          outcome: 'end',
+          duration_ms: expect.any(Number),
+        })
+        expect(
+          workerDiagnostics.some(
+            (diagnostic) =>
+              diagnostic.run_id === timing.run_id &&
+              diagnostic.work_id === timing.request_work_id &&
+              diagnostic.request_id === timing.request_id,
+          ),
+        ).toBe(true)
+      }
       const startedFill = await waitFor(
         one.received,
         (item) => item.type === 'fill.created',

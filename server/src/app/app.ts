@@ -89,6 +89,7 @@ import { parseAnalysisInputRequest } from '../features/analysis/wire.ts'
 import { FuturesSessionRuntime } from '../features/paper-futures/futures-session-runtime.ts'
 import type { FuturesSqlObserver } from '../features/paper-futures/futures-store.ts'
 import type { FuturesWorkerDiagnostic } from '../features/paper-futures/futures-worker.ts'
+import type { ReplayTimingEvent } from '../features/paper-futures/futures-replay-driver.ts'
 import { canonicalHash } from '../features/paper-futures/futures-canonical.ts'
 import { registerTerminalStream } from '../features/terminal-stream/terminal-stream.ts'
 import {
@@ -396,6 +397,7 @@ export async function buildApp(options: {
     futuresFundingFetch?: HistoricalFundingFetch
     futuresSqlObserver?: FuturesSqlObserver
     futuresWorkerObserver?: (event: FuturesWorkerDiagnostic) => void
+    futuresReplayDriverObserver?: (event: ReplayTimingEvent) => void
     futuresLifecycleObserver?: FuturesLifecycleObserver
     futuresSourceQueueObserver?: (event: FuturesSourceQueueEvent) => void
   }
@@ -737,12 +739,16 @@ export async function buildApp(options: {
             mode: config.futuresMode,
             observer: options.overrides?.futuresSqlObserver,
             workerObserver: options.overrides?.futuresWorkerObserver,
+            replayTimingObserver:
+              options.overrides?.futuresReplayDriverObserver,
           })
         : new FuturesSessionRuntime({
             dbPath: config.futuresDbPath,
             mode: config.futuresMode,
             observer: options.overrides?.futuresSqlObserver,
             workerObserver: options.overrides?.futuresWorkerObserver,
+            replayTimingObserver:
+              options.overrides?.futuresReplayDriverObserver,
             ...(futuresMarketStore ? { replaySource: futuresMarketStore } : {}),
             ...(sourceInitialHash
               ? { replaySourceFileHash: sourceInitialHash }

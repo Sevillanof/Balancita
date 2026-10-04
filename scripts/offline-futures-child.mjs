@@ -26,6 +26,7 @@ process.on('message', async (message) => {
       }
       mkdirSync(message.temp, { recursive: true })
       const workerTracePath = join(message.temp, 'worker-observer.jsonl')
+      const replayDriverTracePath = join(message.temp, 'driver-trace.jsonl')
       const sqliteTracePath = join(message.temp, 'sqlite-observer.jsonl')
       const sourceQueueTracePath = join(message.temp, 'app-source-queue.jsonl')
       const closePhasesTracePath = join(message.temp, 'app-close-phases.jsonl')
@@ -53,6 +54,8 @@ process.on('message', async (message) => {
           futuresClock: () => activeTimestamp,
           futuresWorkerObserver: (event) =>
             appendFileSync(workerTracePath, `${JSON.stringify(event)}\n`),
+          futuresReplayDriverObserver: (event) =>
+            appendFileSync(replayDriverTracePath, `${JSON.stringify(event)}\n`),
           futuresSqlObserver: (event) =>
             appendFileSync(sqliteTracePath, `${JSON.stringify(event)}\n`),
           futuresSourceQueueObserver: (event) =>

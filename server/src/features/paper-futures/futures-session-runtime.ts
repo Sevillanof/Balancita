@@ -7,6 +7,7 @@ import type { FuturesWorkerRequest } from './futures-worker.ts'
 import {
   compareEconomicSemantics,
   FuturesReplayDriver,
+  type ReplayTimingObserver,
 } from './futures-replay-driver.ts'
 import { randomUUID } from 'node:crypto'
 import type { FuturesMarketStore } from '../kraken-futures/futures-market-store.ts'
@@ -84,6 +85,7 @@ export class FuturesSessionRuntime {
   private readonly replaySourceMetadataHash?: string
   private readonly replaySourceQualityHash?: string
   private readonly replayCutoffMs?: number
+  private readonly replayTimingObserver?: ReplayTimingObserver
   private readonly drivers = new Map<string, Promise<FuturesReplayDriver>>()
   private readonly eventQueues = new Map<string, Promise<unknown>>()
   private readonly mockTickTimers = new Map<
@@ -101,6 +103,7 @@ export class FuturesSessionRuntime {
     replayCutoffMs?: number
     observer?: FuturesSqlObserver
     workerObserver?: (event: FuturesWorkerDiagnostic) => void
+    replayTimingObserver?: ReplayTimingObserver
   }) {
     this.mode = options.mode
     if (options.mode === 'replay' && options.replaySource === undefined)
@@ -110,6 +113,7 @@ export class FuturesSessionRuntime {
     this.replaySourceMetadataHash = options.replaySourceMetadataHash
     this.replaySourceQualityHash = options.replaySourceQualityHash
     this.replayCutoffMs = options.replayCutoffMs
+    this.replayTimingObserver = options.replayTimingObserver
     this.replaySourceHash = options.replaySource
       ? canonicalHash({
           events: options.replaySource.eventsAsOf(Number.MAX_SAFE_INTEGER),
@@ -316,6 +320,7 @@ export class FuturesSessionRuntime {
       instrument: instrument as unknown as Record<string, unknown>,
       mode: 'replay',
       durableStore: this.store,
+      observeTiming: this.replayTimingObserver,
       apply: async (work) => {
         const request: FuturesWorkerRequest = {
           request_id: work.analysis_id,
@@ -384,6 +389,7 @@ export class FuturesSessionRuntime {
       runId,
       manifest,
       durableStore: this.store,
+      observeTiming: this.replayTimingObserver,
       instrument,
       initialStateVersion:
         replay.works.length > 0

@@ -131,6 +131,7 @@ const writeReport = (partial = false) => {
         preserved_temp_directory: existsSync(temp) ? temp : null,
         trace_paths: {
           worker: join(temp, 'worker-observer.jsonl'),
+          driver: join(temp, 'driver-trace.jsonl'),
           sqlite: join(temp, 'sqlite-observer.jsonl'),
           python: join(temp, 'python-diagnostics.jsonl'),
           account_db: join(temp, 'account.sqlite'),
