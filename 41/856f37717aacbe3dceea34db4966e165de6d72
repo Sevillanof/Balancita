@@ -1,0 +1,26 @@
+odd/tasks/futures-bounded-processing.md
+  h_2f68313623be98 38-39
+scripts/offline-futures-baseline.mjs
+  h_2f68313623be98 13-50,197
+scripts/offline-futures-baseline.test.mjs
+  h_2f68313623be98 1-62
+server/src/app/app.test.ts
+  h_2f68313623be98 1026-1033
+server/src/app/app.ts
+  h_2f68313623be98 178-185,218-225,244-246,249-271
+server/src/features/kraken-futures/futures-market-store.test.ts
+  h_2f68313623be98 125-168
+server/src/features/kraken-futures/futures-market-store.ts
+  h_2f68313623be98 644-754
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "41856f37717aacbe3dceea34db4966e165de6d72",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
