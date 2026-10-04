@@ -1256,6 +1256,9 @@ describe('PAPER_LIVE startup integration', () => {
           FUTURES_MARKET_DB_PATH: marketPath,
         }),
         overrides: {
+          futuresSourceQueueObserver: (event: FuturesSourceQueueEvent) => {
+            sourceQueueEvents.push(event)
+          },
           futuresFundingFetch: async () =>
             new Response(
               JSON.stringify({
@@ -1317,6 +1320,7 @@ describe('PAPER_LIVE startup integration', () => {
       let observedTailQueryRowsReturned: number
       let observedRuntimeErrorCount: number
       let closeElapsedMs: number
+      const sourceQueueEvents: FuturesSourceQueueEvent[] = []
       try {
         await app.ready()
         fakeSocket.onopen?.()
@@ -1358,6 +1362,14 @@ describe('PAPER_LIVE startup integration', () => {
         Number.MAX_SAFE_INTEGER,
       ) as Record<string, unknown>[]
       source.close()
+      expect(persistedRows.map((event) => event.receivedSequence)).toEqual(
+        [...persistedRows]
+          .map((event) => event.receivedSequence)
+          .sort((a, b) => Number(a) - Number(b)),
+      )
+      expect(
+        persistedRows.map((event) => JSON.parse(String(event.rawJson))),
+      ).toEqual(burst.map((frame) => JSON.parse(frame.raw)))
       const capturedBook = JSON.parse(burst[0]!.raw) as Record<string, unknown>
       const persistedBook = persistedRows.find(
         (event) => event.type === 'book' && event.snapshot === true,
@@ -1377,6 +1389,11 @@ describe('PAPER_LIVE startup integration', () => {
       account.close()
       expect(persistedRows.length).toBeGreaterThanOrEqual(6)
       expect(works.length).toBe(persistedRows.length - 1)
+      expect(
+        works.map(
+          (work) => (work as { input: { sequence: number } }).input.sequence,
+        ),
+      ).toEqual(persistedRows.slice(1).map((event) => event.receivedSequence))
       console.info('PAPER_LIVE bounded burst work counts', {
         frames: burst.length,
         snapshotBidLevels: (capturedBook.bids as unknown[]).length,
@@ -1392,6 +1409,14 @@ describe('PAPER_LIVE startup integration', () => {
       expect(observedEventRowsReturned).toBeLessThanOrEqual(2)
       expect(observedTailQueryRowsReturned).toBe(persistedRows.length - 2)
       expect(observedRuntimeErrorCount).toBe(0)
+      expect(sourceQueueEvents.at(-1)).toMatchObject({
+        pending_notifications: 0,
+        durable_source_backlog: 0,
+        source_watermark: persistedRows.length,
+      })
+      expect(
+        Math.max(...sourceQueueEvents.map((event) => event.pending_count)),
+      ).toBeLessThanOrEqual(1)
       expect(closeCompleted).toBe(true)
       expect(socketClosed).toBe(true)
       rmSync(root, { recursive: true, force: true })

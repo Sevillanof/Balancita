@@ -256,11 +256,11 @@ export class FuturesSessionRuntime {
   async processMarketEvidence(
     source: FuturesMarketStore,
     receivedAt: number,
-  ): Promise<void> {
+  ): Promise<{ sourceWatermark: number }> {
     if (this.mode !== 'paper_live' && this.mode !== 'replay')
       throw new Error('Market evidence is not accepted in MOCK.')
     const driver = await this.restoreDriver(this.runId)
-    await driver.processMarketStore(
+    return driver.processMarketStore(
       source,
       receivedAt,
       instrument as unknown as Record<string, unknown>,

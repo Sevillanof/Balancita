@@ -194,7 +194,7 @@ export class FuturesReplayDriver {
       source: Record<string, unknown>,
     ) => Record<string, unknown> | undefined,
     mode: 'mock' | 'paper_live' | 'replay' = 'mock',
-  ): Promise<void> {
+  ): Promise<{ sourceWatermark: number }> {
     validateTimestamp(receivedCutoff, 'received cutoff')
     this.bindMarketSource(instrument, store)
     if (this.marketSourceEvents === undefined) {
@@ -428,6 +428,7 @@ export class FuturesReplayDriver {
     this.marketSourcePending = this.marketSourcePending.filter(
       (event) => Number(event.receivedSequence) > this.marketSourceCursor,
     )
+    return { sourceWatermark: this.marketSourceCursor }
   }
 
   private bindMarketSource(

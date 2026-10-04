@@ -167,6 +167,9 @@ export interface FuturesSourceQueueEvent {
   readonly queue_count: number
   readonly running_count: number
   readonly pending_count: number
+  readonly pending_notifications: number
+  readonly durable_source_backlog: number
+  readonly source_watermark: number
   readonly oldest_job_age_ms: number
   readonly source_received_seq: number
   readonly assignment_state: 'unassigned_before_work_created'
@@ -761,11 +764,22 @@ export async function buildApp(options: {
   let futuresLastReceivedAt: number | null = null
   let futuresInstrumentMetadataHash: string | null = null
   let futuresMarketTail = Promise.resolve()
-  const futuresSourceJobs: Array<{ enqueuedAt: number }> = []
+  const futuresSourceJobs: Array<{
+    enqueuedAt: number
+    sourceReceivedSeq: number
+    receivedAt: number
+  }> = []
   let futuresSourceRunning = 0
+  let futuresSourceDirty = false
+  let futuresSourceFailed = false
+  let futuresSourceWatermark = 0
   const observeFuturesSourceQueue = (
     phase: FuturesSourceQueueEvent['phase'],
-    job: { enqueuedAt: number; sourceReceivedSeq: number },
+    job: {
+      enqueuedAt: number
+      sourceReceivedSeq: number
+      receivedAt: number
+    },
     error?: unknown,
   ): void => {
     const now = performance.now()
@@ -777,6 +791,10 @@ export async function buildApp(options: {
         queue_count: futuresSourceJobs.length - futuresSourceRunning,
         running_count: futuresSourceRunning,
         pending_count: futuresSourceJobs.length,
+        pending_notifications: futuresSourceJobs.length,
+        durable_source_backlog:
+          futuresMarketStore?.eventCountAfter(futuresSourceWatermark) ?? 0,
+        source_watermark: futuresSourceWatermark,
         oldest_job_age_ms: oldest ? Math.max(0, now - oldest.enqueuedAt) : 0,
         source_received_seq: job.sourceReceivedSeq,
         assignment_state: 'unassigned_before_work_created',
@@ -1154,36 +1172,65 @@ export async function buildApp(options: {
               const sourceJob = {
                 enqueuedAt: performance.now(),
                 sourceReceivedSeq: event.seq,
+                receivedAt: event.receivedAt,
               }
-              futuresSourceJobs.push(sourceJob)
-              observeFuturesSourceQueue('enqueue', sourceJob)
-              futuresMarketTail = futuresMarketTail.then(async () => {
-                futuresSourceRunning += 1
-                observeFuturesSourceQueue('start', sourceJob)
-                let failure: unknown
-                try {
-                  await futuresRuntime!.processMarketEvidence(
-                    futuresMarketStore!,
+              if (!futuresSourceFailed) {
+                futuresSourceDirty = true
+                const existingJob = futuresSourceJobs[0]
+                if (existingJob) {
+                  existingJob.sourceReceivedSeq = Math.max(
+                    existingJob.sourceReceivedSeq,
+                    event.seq,
+                  )
+                  existingJob.receivedAt = Math.max(
+                    existingJob.receivedAt,
                     event.receivedAt,
                   )
-                } catch (error: unknown) {
-                  failure = error
-                  console.error(
-                    'futures runtime evidence processing failed',
-                    error,
-                  )
-                  futuresStatus = 'unavailable'
-                  futuresStatusReason =
-                    error instanceof Error ? error.message : 'runtime_error'
-                } finally {
-                  futuresSourceRunning -= 1
-                  const index = futuresSourceJobs.indexOf(sourceJob)
-                  if (index >= 0) futuresSourceJobs.splice(index, 1)
-                  if (failure === undefined)
-                    observeFuturesSourceQueue('end', sourceJob)
-                  else observeFuturesSourceQueue('error', sourceJob, failure)
+                } else {
+                  futuresSourceJobs.push(sourceJob)
+                  observeFuturesSourceQueue('enqueue', sourceJob)
                 }
-              })
+              }
+              if (!futuresSourceRunning && !futuresSourceFailed) {
+                futuresSourceRunning = 1
+                futuresMarketTail = futuresMarketTail.then(async () => {
+                  const pump = futuresSourceJobs[0]
+                  if (!pump) {
+                    futuresSourceRunning = 0
+                    return
+                  }
+                  observeFuturesSourceQueue('start', pump)
+                  let failure: unknown
+                  try {
+                    while (futuresSourceDirty) {
+                      futuresSourceDirty = false
+                      const result =
+                        await futuresRuntime!.processMarketEvidence(
+                          futuresMarketStore!,
+                          pump.receivedAt,
+                        )
+                      futuresSourceWatermark = result.sourceWatermark
+                    }
+                  } catch (error: unknown) {
+                    failure = error
+                    futuresSourceFailed = true
+                    console.error(
+                      'futures runtime evidence processing failed',
+                      error,
+                    )
+                    futuresStatus = 'unavailable'
+                    futuresStatusReason =
+                      error instanceof Error ? error.message : 'runtime_error'
+                  } finally {
+                    futuresSourceRunning = 0
+                    const index = futuresSourceJobs.indexOf(pump)
+                    if (index >= 0) futuresSourceJobs.splice(index, 1)
+                    if (failure === undefined)
+                      observeFuturesSourceQueue('end', pump)
+                    else observeFuturesSourceQueue('error', pump, failure)
+                  }
+                })
+              }
             }
             return inserted
           },

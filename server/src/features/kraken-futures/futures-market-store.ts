@@ -598,6 +598,16 @@ export class FuturesMarketStore {
     ).map(withReceivedSequence)
   }
 
+  eventCountAfter(receivedSequence: number): number {
+    time(receivedSequence, 'receivedSequence')
+    const row = this.db
+      .prepare(
+        'SELECT COUNT(*) AS count FROM paper_futures_market_events WHERE rowid>?',
+      )
+      .get(receivedSequence) as { count: number }
+    return Number(row.count)
+  }
+
   latestTickerAsOf(
     receivedCutoff: number,
   ): Record<string, unknown> | undefined {
