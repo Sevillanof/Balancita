@@ -1,0 +1,36 @@
+odd/tasks/kraken-futures-deterministic.md
+  h_2f68313623be98 111,126-139
+server/src/app/app.test.ts
+  h_2f68313623be98 14,837-839,893-916,945-965,969-972,976
+server/src/app/app.ts
+  h_2f68313623be98 33-38,302-318,365-367,662,681,687,729-734,746,862-868,873-874,944-950,952-978,1006-1021,1059,1062-1076,1089-1096
+server/src/app/historical-funding-app.test.ts
+  h_2f68313623be98 1-156
+server/src/features/kraken-futures/futures-market-store.test.ts
+  h_2f68313623be98 37-54
+server/src/features/kraken-futures/futures-market-store.ts
+  h_2f68313623be98 3,113-128,164-279,295-303,314,361,363-366,372
+server/src/features/kraken-futures/historical-funding.test.ts
+  h_2f68313623be98 1-206
+server/src/features/kraken-futures/historical-funding.ts
+  h_2f68313623be98 1-242
+server/src/features/paper-futures/futures-replay-driver.test.ts
+  h_2f68313623be98 2,16,62-155
+server/src/features/paper-futures/futures-replay-driver.ts
+  h_2f68313623be98 304-308,317-347,420,426-428
+server/src/features/paper-futures/futures-session-runtime.ts
+  h_2f68313623be98 114-116,362-367,533-535,539-541,544-546,560-565,567-569
+server/src/features/paper-futures/futures-store.ts
+  h_2f68313623be98 484-501
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4ed5075be2b2b81cc59079f502349e7cff583526",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
