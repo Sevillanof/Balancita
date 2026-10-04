@@ -122,6 +122,50 @@ describe('FuturesMarketStore', () => {
     store.close()
   })
 
+  it('measures pending source lag against its durable receipt watermark', () => {
+    const store = new FuturesMarketStore(dbPath())
+    store.append({ ...event, receivedAt: 10 })
+    store.append({ ...event, seq: 2, uid: 'lag-2', receivedAt: 20 })
+    store.append({ ...event, seq: 3, uid: 'lag-3', receivedAt: 30 })
+    store.append({ ...event, seq: 4, uid: 'lag-4', receivedAt: 40 })
+
+    expect(store.pendingSourceProgressAsOf(1, 30, 3)).toMatchObject({
+      pendingCount: 2,
+      firstPendingSequence: 2,
+      oldestPendingReceivedAt: 20,
+      watermarkSequence: 3,
+      watermarkReceivedAt: 30,
+      sourcePendingLagMs: 10,
+      sourcePendingLagUnavailableReason: null,
+      clockDomain: 'source_received_time',
+    })
+    expect(store.pendingSourceProgressAsOf(2, 30, 3)).toMatchObject({
+      pendingCount: 1,
+      sourcePendingLagMs: 0,
+    })
+    expect(store.pendingSourceProgressAsOf(3, 30, 3)).toMatchObject({
+      pendingCount: 0,
+      firstPendingSequence: null,
+      sourcePendingLagMs: null,
+      sourcePendingLagUnavailableReason: 'no_pending_source_rows',
+    })
+    store.close()
+  })
+
+  it('does not report comparable lag across backwards source receipt clocks', () => {
+    const store = new FuturesMarketStore(dbPath())
+    store.append({ ...event, receivedAt: 10 })
+    store.append({ ...event, seq: 2, uid: 'reverse-2', receivedAt: 30 })
+    store.append({ ...event, seq: 3, uid: 'reverse-3', receivedAt: 20 })
+
+    expect(store.pendingSourceProgressAsOf(1, 30, 3)).toMatchObject({
+      pendingCount: 2,
+      sourcePendingLagMs: null,
+      sourcePendingLagUnavailableReason: 'non_monotonic_source_received_time',
+    })
+    store.close()
+  })
+
   it('selects only closed candle revisions known by the cutoff', () => {
     const store = new FuturesMarketStore(dbPath())
     const revision = (revision: number, knownAt: number, isClosed: boolean) =>

@@ -175,6 +175,14 @@ export interface FuturesSourceQueueEvent {
   readonly pending_count: number
   readonly pending_notifications: number
   readonly durable_source_backlog: number | null
+  readonly source_pending_lag_ms: number | null
+  readonly source_pending_lag_unavailable_reason: string | null
+  readonly source_pending_lag_clock_domain: 'source_received_time' | null
+  readonly source_pending_lag_cutoff_received_at: number | null
+  readonly source_pending_lag_watermark_sequence: number | null
+  readonly source_pending_lag_watermark_received_at: number | null
+  readonly source_pending_lag_oldest_sequence: number | null
+  readonly source_pending_lag_oldest_received_at: number | null
   readonly source_watermark: number | null
   readonly last_inspected_source_seq: number | null
   readonly last_financial_source_seq: number | null
@@ -207,6 +215,14 @@ export function buildFuturesSourceQueueSnapshot(input: {
 }): Pick<
   FuturesSourceQueueEvent,
   | 'durable_source_backlog'
+  | 'source_pending_lag_ms'
+  | 'source_pending_lag_unavailable_reason'
+  | 'source_pending_lag_clock_domain'
+  | 'source_pending_lag_cutoff_received_at'
+  | 'source_pending_lag_watermark_sequence'
+  | 'source_pending_lag_watermark_received_at'
+  | 'source_pending_lag_oldest_sequence'
+  | 'source_pending_lag_oldest_received_at'
   | 'source_watermark'
   | 'last_inspected_source_seq'
   | 'last_financial_source_seq'
@@ -225,13 +241,34 @@ export function buildFuturesSourceQueueSnapshot(input: {
     backlogCursor !== null && backlogCursor <= input.sourceReceivedSeq
   const inspectionCursorValid =
     inspectionCursor !== null && inspectionCursor <= input.sourceReceivedSeq
-  return {
-    durable_source_backlog: backlogCursorValid
-      ? (input.source?.pendingEventsAfterAsOf(
+  const sourceProgress =
+    backlogCursorValid && input.source
+      ? input.source.pendingSourceProgressAsOf(
           backlogCursor,
           input.receivedCutoff,
-        ).count ?? null)
-      : null,
+          input.sourceReceivedSeq,
+        )
+      : null
+  return {
+    durable_source_backlog: sourceProgress?.pendingCount ?? null,
+    source_pending_lag_ms: sourceProgress?.sourcePendingLagMs ?? null,
+    source_pending_lag_unavailable_reason:
+      sourceProgress === null
+        ? input.source === undefined
+          ? 'source_store_unavailable'
+          : 'source_cursor_unavailable'
+        : sourceProgress.sourcePendingLagUnavailableReason,
+    source_pending_lag_clock_domain: sourceProgress?.clockDomain ?? null,
+    source_pending_lag_cutoff_received_at:
+      sourceProgress === null ? null : input.receivedCutoff,
+    source_pending_lag_watermark_sequence:
+      sourceProgress?.watermarkSequence ?? null,
+    source_pending_lag_watermark_received_at:
+      sourceProgress?.watermarkReceivedAt ?? null,
+    source_pending_lag_oldest_sequence:
+      sourceProgress?.firstPendingSequence ?? null,
+    source_pending_lag_oldest_received_at:
+      sourceProgress?.oldestPendingReceivedAt ?? null,
     source_watermark: input.progress?.inspectionPolicyBound
       ? input.progress.lastFinancialSourceSeq
       : input.legacyFinancialWatermark,

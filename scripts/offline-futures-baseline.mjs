@@ -10,6 +10,44 @@ import {
   summarizeOfflineDiagnostics,
 } from './offline-futures-scheduler.mjs'
 
+export function sourcePendingLagReportFields(sourceQueueSnapshot) {
+  return {
+    source_pending_lag_ms: sourceQueueSnapshot?.source_pending_lag_ms ?? null,
+    source_pending_lag_clock_domain:
+      sourceQueueSnapshot?.source_pending_lag_clock_domain ?? null,
+    source_pending_lag_cutoff_received_at:
+      sourceQueueSnapshot?.source_pending_lag_cutoff_received_at ?? null,
+    source_pending_lag_watermark_sequence:
+      sourceQueueSnapshot?.source_pending_lag_watermark_sequence ?? null,
+    source_pending_lag_watermark_received_at:
+      sourceQueueSnapshot?.source_pending_lag_watermark_received_at ?? null,
+    source_pending_lag_oldest_sequence:
+      sourceQueueSnapshot?.source_pending_lag_oldest_sequence ?? null,
+    source_pending_lag_oldest_received_at:
+      sourceQueueSnapshot?.source_pending_lag_oldest_received_at ?? null,
+    source_pending_lag_unavailable_reason:
+      sourceQueueSnapshot &&
+      Object.hasOwn(
+        sourceQueueSnapshot,
+        'source_pending_lag_unavailable_reason',
+      )
+        ? sourceQueueSnapshot.source_pending_lag_unavailable_reason
+        : sourceQueueSnapshot
+          ? 'source_pending_lag_unavailable'
+          : 'source_queue_snapshot_unavailable',
+    source_oldest_pending_age_ms: null,
+    source_oldest_pending_age_unavailable_reason:
+      'No mapping from source received time to wall clock is established.',
+  }
+}
+
+if (process.argv[2] === '--source-pending-lag-fixture') {
+  process.stdout.write(
+    `${JSON.stringify(sourcePendingLagReportFields(JSON.parse(process.argv[3] ?? 'null')))}\n`,
+  )
+  process.exit(0)
+}
+
 const input = resolve(process.argv[2] ?? '')
 if (!process.argv[2]) throw new Error('Pass the immutable JSONL input path.')
 const speed = Number(process.env.OFFLINE_REPLAY_SPEED ?? 1)
@@ -156,9 +194,7 @@ const writeReport = (partial = false) => {
         ipc_ack_write_count: diagnostics.ipc_ack_write_count,
         ipc_ack_bytes_unavailable_reason:
           diagnostics.ipc_ack_bytes_unavailable_reason,
-        source_oldest_pending_age_ms: null,
-        source_oldest_pending_age_unavailable_reason:
-          'The source observer does not expose the oldest pending row received_at timestamp.',
+        ...sourcePendingLagReportFields(sourceQueueSnapshot),
         local_oldest_source_job_age_ms: Number.isFinite(localQueueAge)
           ? localQueueAge
           : null,

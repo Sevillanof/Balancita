@@ -641,6 +641,117 @@ export class FuturesMarketStore {
     }
   }
 
+  pendingSourceProgressAsOf(
+    receivedSequence: number,
+    receivedCutoff: number,
+    sourceWatermark: number,
+  ): {
+    pendingCount: number
+    firstPendingSequence: number | null
+    oldestPendingReceivedAt: number | null
+    watermarkSequence: number | null
+    watermarkReceivedAt: number | null
+    sourcePendingLagMs: number | null
+    sourcePendingLagUnavailableReason: string | null
+    clockDomain: 'source_received_time'
+  } {
+    time(receivedSequence, 'receivedSequence')
+    time(receivedCutoff, 'receivedCutoff')
+    time(sourceWatermark, 'sourceWatermark')
+    this.db.exec('BEGIN')
+    try {
+      const pending = this.db
+        .prepare(
+          `SELECT COUNT(*) AS count, MIN(rowid) AS first_sequence,
+                  MIN(received_at) FILTER (WHERE rowid=(
+                    SELECT MIN(rowid) FROM paper_futures_market_events
+                    WHERE product_id='PF_XBTUSD' AND rowid>? AND rowid<=? AND received_at<=?
+                  )) AS first_received_at
+           FROM paper_futures_market_events
+           WHERE product_id='PF_XBTUSD' AND rowid>? AND rowid<=? AND received_at<=?`,
+        )
+        .get(
+          receivedSequence,
+          sourceWatermark,
+          receivedCutoff,
+          receivedSequence,
+          sourceWatermark,
+          receivedCutoff,
+        ) as {
+        count: number
+        first_sequence: number | null
+        first_received_at: number | null
+      }
+      const watermark = this.db
+        .prepare(
+          `SELECT rowid AS sequence, received_at
+           FROM paper_futures_market_events
+           WHERE product_id='PF_XBTUSD' AND rowid<=? AND received_at<=?
+           ORDER BY rowid DESC LIMIT 1`,
+        )
+        .get(sourceWatermark, receivedCutoff) as
+        { sequence: number; received_at: number } | undefined
+      const pendingCount = Number(pending.count)
+      const firstSequence =
+        pending.first_sequence === null ? null : Number(pending.first_sequence)
+      const firstReceivedAt =
+        pending.first_received_at === null
+          ? null
+          : Number(pending.first_received_at)
+      const watermarkSequence = watermark ? Number(watermark.sequence) : null
+      const watermarkReceivedAt = watermark
+        ? Number(watermark.received_at)
+        : null
+      let unavailableReason: string | null = null
+      let lag: number | null = null
+      if (pendingCount === 0) {
+        unavailableReason = 'no_pending_source_rows'
+      } else if (
+        firstSequence === null ||
+        firstReceivedAt === null ||
+        watermarkSequence === null ||
+        watermarkReceivedAt === null ||
+        !Number.isSafeInteger(firstReceivedAt) ||
+        !Number.isSafeInteger(watermarkReceivedAt)
+      ) {
+        unavailableReason = 'invalid_source_received_time'
+      } else {
+        const reversals = this.db
+          .prepare(
+            `SELECT COUNT(*) AS count FROM (
+               SELECT received_at,
+                      LAG(received_at) OVER (ORDER BY rowid) AS prior_received_at
+               FROM paper_futures_market_events
+               WHERE product_id='PF_XBTUSD' AND rowid>=? AND rowid<=?
+             ) WHERE prior_received_at IS NOT NULL
+               AND received_at<prior_received_at`,
+          )
+          .get(firstSequence, watermarkSequence) as { count: number }
+        if (Number(reversals.count) > 0) {
+          unavailableReason = 'non_monotonic_source_received_time'
+        } else if (watermarkReceivedAt < firstReceivedAt) {
+          unavailableReason = 'non_comparable_source_received_time'
+        } else {
+          lag = watermarkReceivedAt - firstReceivedAt
+        }
+      }
+      this.db.exec('COMMIT')
+      return {
+        pendingCount,
+        firstPendingSequence: firstSequence,
+        oldestPendingReceivedAt: firstReceivedAt,
+        watermarkSequence,
+        watermarkReceivedAt,
+        sourcePendingLagMs: lag,
+        sourcePendingLagUnavailableReason: unavailableReason,
+        clockDomain: 'source_received_time',
+      }
+    } catch (error) {
+      this.db.exec('ROLLBACK')
+      throw error
+    }
+  }
+
   latestTickerAsOf(
     receivedCutoff: number,
   ): Record<string, unknown> | undefined {
