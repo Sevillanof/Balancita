@@ -71,7 +71,12 @@ describe('shared causal futures replay driver', () => {
     directories.push(directory)
     const start = 86_400_000
     const marketStore = new FuturesMarketStore(join(directory, 'market.sqlite'))
-    const appendBook = (receivedAt: number, seq: number) =>
+    const appendBook = (
+      receivedAt: number,
+      seq: number,
+      bid = '100000',
+      ask = '100001',
+    ) =>
       marketStore.append({
         type: 'book',
         productId: 'PF_XBTUSD',
@@ -83,11 +88,11 @@ describe('shared causal futures replay driver', () => {
         snapshot: true,
         contiguous: true,
         valid: true,
-        bids: [{ price: '100000', quantity: '1' }],
-        asks: [{ price: '100001', quantity: '1' }],
+        bids: [{ price: bid, quantity: '1' }],
+        asks: [{ price: ask, quantity: '1' }],
         raw: { fixture: `book-${seq}` },
       })
-    const appendTicker = (receivedAt: number, seq: number) =>
+    const appendTicker = (receivedAt: number, seq: number, mark = '100000') =>
       marketStore.append({
         type: 'ticker',
         productId: 'PF_XBTUSD',
@@ -96,15 +101,20 @@ describe('shared causal futures replay driver', () => {
         eventTime: receivedAt,
         receivedAt,
         persistedAt: receivedAt,
-        mark: '100000',
+        mark,
         suspended: false,
         raw: { fixture: `ticker-${seq}` },
       })
     appendBook(start, 1)
     appendTicker(start, 1)
     for (let seq = 2; seq <= 62; seq += 1) {
-      appendBook(start + seq * 100, seq + 1)
-      appendTicker(start + seq * 100 + (seq === 11 ? 1 : 0), seq + 1)
+      if (seq === 12) {
+        appendBook(start + 1202, seq + 1, '99948', '99949')
+        appendTicker(start + 1202, seq + 1, '99948')
+      } else {
+        appendBook(start + seq * 100, seq + 1)
+        appendTicker(start + seq * 100 + (seq === 11 ? 1 : 0), seq + 1)
+      }
     }
     const sourceHash = canonicalHash({
       events: marketStore.eventsAsOf(Number.MAX_SAFE_INTEGER),
@@ -396,28 +406,40 @@ describe('shared causal futures replay driver', () => {
           (event) =>
             event.type === 'book' && Number(event.receivedAt) === start + 1100,
         )!
+        const activeTicker = (
+          marketStore.eventsAsOf(Number.MAX_SAFE_INTEGER) as Record<
+            string,
+            unknown
+          >[]
+        ).find(
+          (event) =>
+            event.type === 'ticker' &&
+            Number(event.receivedAt) === start + 1101,
+        )!
         const sourceDriver = await FuturesReplayDriver.resumeMarketStore({
           runId,
           manifest,
           apply: applyFor(targetStore, targetRunner),
           durableStore: targetStore,
           marketStore,
-          receivedCutoff: start + 1100,
+          receivedCutoff: start + 1101,
           instrument,
           admissionForSource: admissionFor(targetRunner),
         })
         const sourceRun = sourceDriver.exportRun()
-        expect(sourceRun.inputs).toHaveLength(1)
-        expect(sourceRun.inputs[0]?.sequence).toBe(
+        expect(sourceRun.inputs).toHaveLength(2)
+        expect(sourceRun.inputs.map((input) => input.sequence)).toContain(
           activeSource.receivedSequence,
         )
-        expect(sourceRun.work).toHaveLength(1)
-        expect(sourceRun.work[0]?.receipt.status).toBe('committed')
-        expect(sourceRun.work[0]?.receipt.applied_state_version).toBe(
+        expect(sourceRun.work).toHaveLength(2)
+        expect(
+          sourceRun.work.every((work) => work.receipt.status === 'committed'),
+        ).toBe(true)
+        expect(sourceRun.work.at(-1)?.receipt.applied_state_version).toBe(
           targetStore.getRunProjection(runId)?.state_version,
         )
         expect(targetStore.getEvaluationProgress(runId)?.cursorRowid).toBe(
-          activeSource.receivedSequence,
+          activeTicker.receivedSequence,
         )
         expect(
           targetStore.getEvaluationProgress(runId)?.cursorRowid,
@@ -429,7 +451,7 @@ describe('shared causal futures replay driver', () => {
           quantity_btc: '0',
         })
         expect(
-          targetRunner.readAdmissionState(runId, policyBody, start + 1100)
+          targetRunner.readAdmissionState(runId, policyBody, start + 1101)
             .active_order_count,
         ).toBe(1)
 
@@ -470,34 +492,74 @@ describe('shared causal futures replay driver', () => {
           unknown
         >
         const stop = BigInt(protection.stop as string)
-        const atStop = pythonMarket(start + 1202, 'long')
-        bookFor(atStop, start + 1202)
-        for (const event of atStop.events as Record<string, unknown>[]) {
-          if (event.type === 'book_snapshot') {
-            event.bids = [
-              { price_usd: (stop - 1n).toString(), quantity_btc: '1' },
-            ]
-            event.asks = [{ price_usd: stop.toString(), quantity_btc: '1' }]
-          } else if (event.type === 'ticker') {
-            event.mark_usd = (stop - 1n).toString()
-          }
-        }
-        await targetRunner.accept({
-          request_id: 'request-stop-trigger',
-          run_id: runId,
-          work_id: 'stop-trigger',
-          expected_state_version: Number(
-            targetStore.getRunProjection(runId)?.state_version,
-          ),
-          payload: {
-            operation: 'futures_runtime.v3',
-            runtime_config: runtimeConfig,
-            instrument,
-            market_snapshot: atStop,
-          },
-        }).result
+        expect(stop).toBe(99949n)
+        const sourceEvents = marketStore.eventsAsOf(
+          Number.MAX_SAFE_INTEGER,
+        ) as Record<string, unknown>[]
+        const stopBook = sourceEvents.find(
+          (event) =>
+            event.type === 'book' && Number(event.receivedAt) === start + 1202,
+        )!
+        const stopTicker = sourceEvents.find(
+          (event) =>
+            event.type === 'ticker' &&
+            Number(event.receivedAt) === start + 1202,
+        )!
+        expect(stopBook.bids).toEqual([
+          { price: (stop - 1n).toString(), quantity: '1' },
+        ])
+        expect(stopBook.asks).toEqual([
+          { price: stop.toString(), quantity: '1' },
+        ])
+        expect(stopTicker.mark).toBe((stop - 1n).toString())
+        expect(stopBook.seq).not.toBe(activeSource.seq)
+        expect(Number(stopBook.receivedAt)).toBe(Number(stopTicker.receivedAt))
+        const skipsBeforeStop = targetStore.getEvaluationSkippedRanges(runId)
+        const stopDriver = await FuturesReplayDriver.resumeMarketStore({
+          runId,
+          manifest,
+          apply: applyFor(targetStore, targetRunner),
+          durableStore: targetStore,
+          marketStore,
+          receivedCutoff: start + 1202,
+          instrument,
+          admissionForSource: admissionFor(targetRunner),
+        })
+        const stopRun = stopDriver.exportRun()
+        expect(stopRun.inputs.slice(-2).map((input) => input.sequence)).toEqual(
+          [stopBook.receivedSequence, stopTicker.receivedSequence],
+        )
+        expect(
+          stopRun.work
+            .slice(-2)
+            .every((work) => work.receipt.status === 'committed'),
+        ).toBe(true)
+        expect(stopRun.work.slice(-2)).toHaveLength(2)
+        expect(
+          stopRun.work.slice(-2).map((work) => work.input_sequence),
+        ).toEqual([stopBook.receivedSequence, stopTicker.receivedSequence])
+        expect(stopRun.work.at(-1)?.receipt.applied_state_version).toBe(
+          targetStore.getRunProjection(runId)?.state_version,
+        )
+        expect(targetStore.getEvaluationProgress(runId)?.cursorRowid).toBe(
+          stopTicker.receivedSequence,
+        )
+        expect(targetStore.getEvaluationSkippedRanges(runId)).toEqual(
+          skipsBeforeStop,
+        )
+        for (const row of [stopBook, stopTicker])
+          expect(
+            skipsBeforeStop.some(
+              ({ fromRowid, toRowid }) =>
+                Number(row.receivedSequence) >= fromRowid &&
+                Number(row.receivedSequence) <= toRowid,
+            ),
+          ).toBe(false)
         const pendingClose = targetStore.getRunProjection(runId)
           ?.checkpoint as Record<string, unknown>
+        expect(targetStore.getRunProjection(runId)?.result).toMatchObject({
+          quantity_btc: '0.005',
+        })
         expect(
           (pendingClose.risk_checkpoint as Record<string, unknown>)
             .reduction_intent_id,
