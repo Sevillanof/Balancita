@@ -1,0 +1,19 @@
+python/balancita_engine/futures_operative_state.py
+  h_2f68313623be98 1-58
+python/balancita_engine/futures_execution.py
+  h_2f68313623be98 3,9,36,78-97,146-151,192,257-260,266-268,282-285,289-293,337-340,350,376,388-392,424-429,432-435,440,447,450-526,528-529
+python/tests/test_futures_operative_checkpoint.py
+  h_2f68313623be98 1-310,312-315
+  h_2f68313623be98 311
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9a87d0656e09eaf01d6bd7dd5efb5ef29771cb1e",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
