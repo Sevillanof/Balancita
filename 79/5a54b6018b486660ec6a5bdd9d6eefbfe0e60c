@@ -1,0 +1,31 @@
+odd/tasks/futures-bounded-processing.md
+  s_4c416eb7c67ab5::t_7c6a7f0f0d8451 55-64
+server/src/features/paper-futures/futures-local-scenario.test.ts
+  s_4c416eb7c67ab5::t_2a4506e7cf49a3 5-9,99-120
+server/src/features/paper-futures/futures-local-scenario.ts
+  s_4c416eb7c67ab5::t_8494f48c4eabe4 50-53,80,84-119,123-132,159-166,168-186,192,194-201,203,221,230,232,245,247-249,256,261,264,275-304,313-315,434-473
+server/src/features/paper-futures/futures-local-terminal.test.ts
+  s_4c416eb7c67ab5::t_a4c9703134f520 5-10,15-40,43-45,266-614,629-802
+server/src/features/paper-futures/futures-local-terminal.ts
+  s_4c416eb7c67ab5::t_c998351f94b042 6-9,12-18,28,41-42,76-102,112-133,137,141-173,176-181,206,218-222,226-327,332-405,407-411,413-431,449,463,471-474
+src/app/FuturesTerminal.test.tsx
+  s_4c416eb7c67ab5::t_e5b8d4dd01f329 252,358-367,372-589,948,952-954
+src/app/FuturesTerminal.tsx
+  s_4c416eb7c67ab5::t_c83823cd3248e4 17,23-28,99-109,262-264,287,293,312-320,330,337-339,360-365,367-369,373,380,464,468,472-475,489,494,583,913-930,936-949,951-981
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "795a54b6018b486660ec6a5bdd9d6eefbfe0e60c",
+  "prompts": {},
+  "sessions": {
+    "s_4c416eb7c67ab5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8fb4e35b-ecee-47bd-89d4-41bd62d0571a",
+        "model": "unknown"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
