@@ -1,10 +1,12 @@
 """Deterministic, offline-only paper execution model for linear BTC/USD."""
 
+import json
 from copy import deepcopy
 from decimal import Decimal, InvalidOperation, localcontext
 
 from .canonical import normalize_decimal, normalize_timestamp_ms
 from .futures_ledger import DECIMAL_PRECISION, FEES
+from .futures_operative_state import ExactIdentityPort
 
 EXECUTION_MODEL_VERSION = "paper-execution.v1"
 LEGACY_CHECKPOINT_VERSION = "paper-execution-checkpoint.v1"
@@ -31,7 +33,7 @@ def _plain(value):
 class PaperExecutionAdapter:
     """Pure deterministic matcher. It neither owns a position ledger nor I/O."""
 
-    def __init__(self, binding, config=None):
+    def __init__(self, binding, config=None, *, identity_port=None):
         config = {} if config is None else deepcopy(config)
         if not isinstance(binding, dict) or not isinstance(config, dict):
             raise ValueError("binding and config must be mappings")
@@ -73,6 +75,26 @@ class PaperExecutionAdapter:
         self.trade_ids = {}
         self._sequence = 0
         self._last_cutoff_ms = None
+        if identity_port is not None and not isinstance(identity_port, ExactIdentityPort):
+            raise ValueError("identity_port must provide exact operative identity semantics")
+        self._identity_port = identity_port
+        self._operative_restored = False
+
+    def _identity_lookup(self, kind, key):
+        if self._identity_port is None:
+            return None
+        return self._identity_port.lookup(kind, key)
+
+    def _identity_stage(self, kind, key, value, *, provenance=None):
+        if self._identity_port is None:
+            return
+        self._identity_port.stage(kind, key, value, provenance=provenance or kind + ":" + key)
+
+    def drain_identity_updates(self):
+        """Drain provisional exact-identity changes for the owning job dispatcher."""
+        if self._identity_port is None:
+            raise ValueError("identity updates require an exact identity port")
+        return self._identity_port.drain_updates()
 
     def _emit(self, kind, **fields):
         self._sequence += 1
@@ -121,6 +143,12 @@ class PaperExecutionAdapter:
             raise ValueError("order_id is required")
         previous = self.orders.get(order_id)
         payload = deepcopy(intent)
+        if previous is None:
+            historical = self._identity_lookup("order", order_id)
+            if historical is not None:
+                if historical.get("intent") == payload:
+                    return deepcopy(historical["receipt"])
+                raise ValueError("conflicting order ID reuse")
         if previous:
             if previous["intent"] == payload:
                 return deepcopy(previous["receipt"])
@@ -161,6 +189,7 @@ class PaperExecutionAdapter:
             "state": "accepted", "eligible_at_ms": eligible, "expiry_ms": expiry,
             "triggered": kind != "stop_market", "queue_ahead": None, "resting": False, "trade_seen": []}
         self.orders[order_id]["receipt"] = receipt
+        self._identity_stage("order", order_id, {"intent": payload, "receipt": receipt}, provenance=receipt["event_id"])
         return deepcopy(receipt)
 
     @staticmethod
@@ -225,13 +254,18 @@ class PaperExecutionAdapter:
         mark = mark_or_error
         identity = (book["provider"], book["product_id"], book["epoch"], book["snapshot_id"], book["revision"])
         if identity not in self.book_budgets:
-            if execution_clock is not None:
+            historical_budget = self._identity_lookup("book_budget", self._book_key(identity))
+            if historical_budget is not None:
+                self.book_budgets[identity] = deepcopy(historical_budget)
+            elif execution_clock is not None:
                 return deepcopy(expired + [self._emit(
                     "market_uncertainty",
                     cutoff_ms=cutoff,
                     reason="due execution has no previously verified liquidity budget",
                 )])
-            self.book_budgets[identity] = {"asks": {_plain(p): _plain(q) for p, q in asks}, "bids": {_plain(p): _plain(q) for p, q in bids}}
+            else:
+                self.book_budgets[identity] = {"asks": {_plain(p): _plain(q) for p, q in asks}, "bids": {_plain(p): _plain(q) for p, q in bids}}
+                self._identity_stage("book_budget", self._book_key(identity), self.book_budgets[identity])
         budget = self.book_budgets[identity]
         emitted = []
         verified_trades = []
@@ -245,10 +279,18 @@ class PaperExecutionAdapter:
                 if not isinstance(uid, str) or not uid or known > cutoff or t > known or t < 0 or qty <= ZERO or price <= ZERO or trade.get("aggressor_side") not in ("buy", "sell"):
                     continue
                 previous = self.trade_ids.get(uid)
+                if previous is None:
+                    previous = self._identity_lookup("trade", uid)
+                    if previous is not None:
+                        previous = (_decimal(previous[0], "trade price"), _decimal(previous[1], "trade quantity"), previous[2])
                 if previous is not None and previous != (price, qty, trade["aggressor_side"]):
                     continue
                 self.trade_ids[uid] = (price, qty, trade["aggressor_side"])
-                remaining = self.trade_budgets.setdefault(uid, qty)
+                self._identity_stage("trade", uid, [_plain(price), _plain(qty), trade["aggressor_side"]])
+                if uid not in self.trade_budgets:
+                    remaining_budget = self._identity_lookup("trade_budget", uid)
+                    self.trade_budgets[uid] = qty if remaining_budget is None else _decimal(remaining_budget, "trade budget")
+                remaining = self.trade_budgets[uid]
                 verified_trades.append((uid, t, price, remaining, trade["aggressor_side"]))
             except (KeyError, TypeError, ValueError):
                 continue
@@ -292,6 +334,10 @@ class PaperExecutionAdapter:
                     if uid in order["trade_seen"]:
                         continue
                     order["trade_seen"].append(uid)
+                    seen_key = json.dumps([order_id, uid], ensure_ascii=False, separators=(",", ":"))
+                    if self._identity_lookup("order_trade", seen_key) is not None:
+                        continue
+                    self._identity_stage("order_trade", seen_key, True)
                     consumed = min(qty, self.trade_budgets.get(uid, ZERO))
                     ahead = min(order["queue_ahead"], consumed)
                     order["queue_ahead"] -= ahead
@@ -301,6 +347,7 @@ class PaperExecutionAdapter:
                         fill_qty = min(_decimal(order["remaining"], "remaining"), consumed)
                         emitted.extend(self._fill(order_id, order, fill_qty, limit, "maker", match_time, t))
                         self.trade_budgets[uid] -= fill_qty
+                    self._identity_stage("trade_budget", uid, _plain(self.trade_budgets[uid]))
                 continue
             if kind in ("limit", "post_only"):
                 contra = [(p, q) for p, q in contra if (p <= limit if side == "buy" else p >= limit)]
@@ -326,6 +373,7 @@ class PaperExecutionAdapter:
                     continue
                 emitted.extend(self._fill(order_id, order, take, level_price, "taker", match_time, event_at))
                 budget["asks" if side == "buy" else "bids"][level_key] = _plain(available - take)
+                self._identity_stage("book_budget", self._book_key(identity), budget)
                 to_take -= take
                 if to_take == ZERO:
                     break
@@ -337,6 +385,11 @@ class PaperExecutionAdapter:
             if order["state"] not in ("filled", "rejected", "cancelled", "expired") and kind in ("market_ioc", "reduce_only", "stop_market"):
                 order["state"] = "cancelled"
                 emitted.append(self._emit("cancelled", order_id=order_id, reason="ioc_remainder", effective_at_ms=match_time, filled_quantity_btc=order["filled"]))
+        for order_id, order in self.orders.items():
+            self._identity_stage("order", order_id, {
+                "intent": order["intent"], "receipt": order["receipt"],
+                "state": order["state"], "filled": order["filled"],
+            }, provenance=next((event["event_id"] for event in reversed(self._events) if event.get("order_id") == order_id), order["receipt"]["event_id"]))
         return deepcopy(emitted)
 
     def _fill(self, order_id, order, quantity, price, liquidity, event_time, source_time):
@@ -368,23 +421,112 @@ class PaperExecutionAdapter:
             if prior != payload:
                 raise ValueError("conflicting cancellation command ID")
             return deepcopy(result)
+        historical = self._identity_lookup("cancel", command_id)
+        if historical is not None:
+            prior, result = historical
+            if tuple(prior) != payload:
+                raise ValueError("conflicting cancellation command ID")
+            return deepcopy(result)
         order = self.orders.get(order_id)
         if order is None:
-            raise ValueError("unknown order")
+            historical_order = self._identity_lookup("order", order_id)
+            if historical_order is None:
+                raise ValueError("unknown order")
+            order = historical_order
         if effective < order["intent"]["decision_at_ms"]:
             raise ValueError("cancellation cannot precede order creation")
         if self._last_cutoff_ms is not None and effective < self._last_cutoff_ms:
             raise ValueError("cancellation cannot be retroactive to the execution clock")
-        if order["state"] in ("accepted", "partially_filled"):
+        if order.get("state") in ("accepted", "partially_filled"):
             order["state"] = "cancelled"
             events = [self._emit("cancelled", order_id=order_id, command_id=command_id,
                 effective_at_ms=effective, filled_quantity_btc=order["filled"])]
         else:
             events = []
         self.command_receipts[command_id] = (payload, events)
+        self._identity_stage("cancel", command_id, [list(payload), events], provenance=events[-1]["event_id"] if events else command_id)
         return deepcopy(events)
 
+    @staticmethod
+    def _book_key(identity):
+        return json.dumps(list(identity), ensure_ascii=False, separators=(",", ":"))
+
+    def operative_checkpoint(self, *, live_book_identities=(), live_trade_ids=()):
+        """Return compact operative state; history remains in legacy checkpoint/events."""
+        if self._identity_port is None:
+            raise ValueError("operative checkpoint requires an exact identity port")
+        books = {tuple(identity) for identity in live_book_identities}
+        trades = set(live_trade_ids)
+        active_orders = {
+            order_id: deepcopy(order)
+            for order_id, order in self.orders.items()
+            if order["state"] in ("accepted", "partially_filled")
+        }
+        for order in active_orders.values():
+            order["trade_seen"] = []
+            if order["queue_ahead"] is not None:
+                order["queue_ahead"] = _plain(order["queue_ahead"])
+        for identity in books:
+            if identity not in self.book_budgets:
+                raise ValueError("live book identity has no verified operative budget")
+        if any(not isinstance(uid, str) or not uid for uid in trades):
+            raise ValueError("live trade identities must be non-empty strings")
+        return deepcopy({
+            "checkpoint_version": "paper-execution-operative-checkpoint.v1",
+            "model_version": self._config["version"], "run_id": self.run_id,
+            "instrument_id": self.instrument_id, "config": self._config,
+            "orders": active_orders, "position": self._position,
+            "position_reduced": _plain(self._position_reduced),
+            "book_budgets": [(list(key), self.book_budgets[key]) for key in sorted(books)],
+            "trade_budgets": [(key, _plain(self.trade_budgets[key])) for key in sorted(trades) if key in self.trade_budgets],
+            "sequence": self._sequence, "last_cutoff_ms": self._last_cutoff_ms,
+        })
+
+    @classmethod
+    def restore_operative(cls, checkpoint, *, identity_port):
+        if not isinstance(identity_port, ExactIdentityPort):
+            raise ValueError("operative restore requires an exact identity port")
+        required = {"checkpoint_version", "model_version", "run_id", "instrument_id", "config", "orders", "position", "position_reduced", "book_budgets", "trade_budgets", "sequence", "last_cutoff_ms"}
+        if not isinstance(checkpoint, dict) or set(checkpoint) != required or checkpoint.get("checkpoint_version") != "paper-execution-operative-checkpoint.v1":
+            raise ValueError("unsupported operative execution checkpoint")
+        result = cls({"run_id": checkpoint["run_id"], "instrument_id": checkpoint["instrument_id"]}, checkpoint["config"], identity_port=identity_port)
+        if checkpoint["model_version"] != result._config["version"]:
+            raise ValueError("operative checkpoint model version mismatch")
+        if (
+            not isinstance(checkpoint["orders"], dict)
+            or not isinstance(checkpoint["book_budgets"], list)
+            or not isinstance(checkpoint["trade_budgets"], list)
+            or not isinstance(checkpoint["position"], dict)
+            or set(checkpoint["position"]) != {"side", "quantity_btc"}
+        ):
+            raise ValueError("operative checkpoint collections are invalid")
+        result.orders = deepcopy(checkpoint["orders"])
+        for order in result.orders.values():
+            if (
+                not isinstance(order, dict)
+                or order.get("state") not in ("accepted", "partially_filled")
+                or not isinstance(order.get("trade_seen"), list)
+                or order["trade_seen"]
+            ):
+                raise ValueError("operative checkpoint contains invalid active order")
+            if order["queue_ahead"] is not None:
+                order["queue_ahead"] = _decimal(order["queue_ahead"], "queue ahead")
+        result._position = deepcopy(checkpoint["position"])
+        result._position_reduced = _decimal(checkpoint["position_reduced"], "position reduced")
+        result.book_budgets = {tuple(key): deepcopy(value) for key, value in checkpoint["book_budgets"]}
+        result.trade_budgets = {key: _decimal(value, "trade budget") for key, value in checkpoint["trade_budgets"]}
+        result._sequence = checkpoint["sequence"]
+        if isinstance(result._sequence, bool) or not isinstance(result._sequence, int) or result._sequence < 0:
+            raise ValueError("invalid operative checkpoint sequence")
+        result._last_cutoff_ms = checkpoint["last_cutoff_ms"]
+        if result._last_cutoff_ms is not None:
+            result._last_cutoff_ms = normalize_timestamp_ms(result._last_cutoff_ms)
+        result._operative_restored = True
+        return result
+
     def checkpoint(self):
+        if self._operative_restored:
+            raise ValueError("legacy full-history checkpoint is unavailable after operative restore")
         orders = deepcopy(self.orders)
         for order in orders.values():
             if order["queue_ahead"] is not None:
