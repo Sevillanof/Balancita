@@ -1,0 +1,44 @@
+odd/tasks/futures-bounded-processing.md
+  h_2f68313623be98 14,23,27,43-55
+python/balancita_engine/futures_execution.py
+  h_2f68313623be98 205,209-213,228-233,259-260,264-265,302,327,339
+python/balancita_engine/futures_runtime.py
+  h_2f68313623be98 37,111,219-226,242,244,249,253,270-276,291-329,349-354,392-401,626-627,629-680,693-699,787-913,915,1019-1074,1155-1162,1170-1174,1506-1544,1551,1576-1581,1835,1843-1844,1846-1851,1883-1884,1903-1904
+python/tests/test_futures_execution.py
+  h_2f68313623be98 42-114
+python/tests/test_futures_market_context.py
+  h_2f68313623be98 1-153
+server/src/app/app.test.ts
+  h_2f68313623be98 39-42,105-254,315
+server/src/app/app.ts
+  h_2f68313623be98 938-941,1015-1139,1159-1170,1408-1412,1539,1590-1595
+server/src/features/kraken-futures/futures-market-store.ts
+  h_2f68313623be98 591-616,836-895
+server/src/features/paper-futures/futures-command-runner.ts
+  h_2f68313623be98 16-19,64,106-259,314-326,345-584,775-776,871-880,998-1147,1152-1268
+server/src/features/paper-futures/futures-market-context.ts
+  h_2f68313623be98 1-101
+server/src/features/paper-futures/futures-replay-driver.test.ts
+  h_2f68313623be98 20,71-268,1280,1437-1441,1443-1461,1479-1480,1484,1497,1517,1544,1584,1602,1622-1648,1662-1671,1684,1690-1696
+server/src/features/paper-futures/futures-replay-driver.ts
+  h_2f68313623be98 6-10,114,395-444,525,586-591,595,662-663,785,797-827,849-864,888-890,922-924,930-934,937,944-947,956,1012-1033,1049,1425-1427,1443,1445-1457
+server/src/features/paper-futures/futures-runtime.test.ts
+  h_2f68313623be98 46-1828
+server/src/features/paper-futures/futures-session-runtime.ts
+  h_2f68313623be98 1-4,102,117,139,338-416,675,678,840
+server/src/features/paper-futures/futures-store.ts
+  h_2f68313623be98 2240-2275,2585,2599-2605,3207,3359,3364-3366,3392-3394,3431-3440,3493-3496,3525-3581,3628-3629,4366-4367,4386-4387
+server/src/features/paper-futures/futures-worker.ts
+  h_2f68313623be98 5-8,858,894-900,967-968,970-980,992-1000,1041-1044,1050-1056,1060-1063,1188,1218
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1cbbfc8f3c67443ddc3cb6582fb20e385f868a5c",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
