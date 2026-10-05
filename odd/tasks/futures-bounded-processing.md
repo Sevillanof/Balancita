@@ -121,3 +121,37 @@ BP-05a tracker evidence commit: `8e3afc0cdccf0439dad21fcf95ff082dbbd0c0f3` (`doc
 BP-05b behavior commit: `41856f37717aacbe3dceea34db4966e165de6d72` (`feat(futures): expose durable source backlog lag`).
 
 LOCAL-01 behavior commit: `76d2643ba3289342de091e4a0169b73a4afac607` (`feat(futures): add reproducible local protection scenario`).
+
+- [x] **LOCAL-03 / STEP4 — Stream the existing isolated local scenario into the approved terminal.**
+  - **Objective:** Display the existing real MOCK protection scenario over the approved terminal's durable WebSocket stream; candles, decisions, orders, fills, position, protective close, and account values come from backend evidence.
+  - **Scope delivered:** Added `node scripts/futures-local-terminal.mjs`, an isolated loopback API (default `8787`) plus Vite UI (`5174`) with fresh owned output (reused output targets refused). It reuses `registerTerminalStream`, the existing store/WS contract, `runLocalFuturesScenario`, and the real Node/Python worker. The scenario waits for its first stream subscription; an awaited post-commit hook streams only committed worker results and market inputs, with backend presentation pacing and unchanged virtual financial clocks. Frontend presentation uses supplied stream values; no polling, frontend-generated events, financial math, redesign, or step-6 controls. Paper controls are hidden only for this opted-in local demo. Exact label: **MOCK · mercado simulado**; backend status labels: **Escenario iniciado**, **Escenario ejecutándose**, and **Escenario finalizado**. The parent-authorized optional `terminal_market` bootstrap field lets the frontend consume backend market data on bootstrap/reconnect.
+  - **Acceptance:** [x] committed receipts and closed market inputs; [x] existing snapshot/resume stream; [x] exact backend financial strings and demo-only controls; [x] focused tests/typechecks/lint/format; [x] independent complete browser journey and reload evidence; [x] protected dirty runtime test remains byte-identical.
+  - **Browser-exposed corrections (2026-10-05):** (1) Five work items produced ten live cards because the local bridge republished `analysis.completed` events already emitted by the store. Removed duplicate bridge financial events; durable store events now carry actual work IDs and `futures-runtime-risk.v1`. (2) Reconnect displayed net `+0.20986` instead of `-0.78986`; corrected snapshot projection to realized gross minus positive fees minus signed funding, retaining `null` when funding is incomplete. (3) Protective SELL remained “order accepted” though its committed execution checkpoint was filled; live and snapshot order projections now reflect checkpoint state and filled/remaining quantities. Pre-fix evidence remains at `playwright-artifacts/futures-local-terminal/step4-20261005-visual/`.
+  - **Independent browser evidence:** Fresh headless installed Google Chrome (`channel: chrome`, fresh profile), alternate ports `8788`/`5175`, and a fresh owned DB completed started → running with the actual `0.005 BTC` partial position → finished, then reload/reconnect. It showed five unique decisions with durable work IDs/runtime version; restored identical decisions, orders, and account; net `-0.78986`; backend candles/chart; and no polling beyond bootstrap. SQL evidence was unchanged across reload: five committed receipts, 17 financial events, integrity OK. Evidence: `playwright-artifacts/futures-local-terminal/step4-20261005-verified/` (`started.png`, `running-partial-fill.png`, `finished.png`, `reconnected.png`, `browser-journey-verified.json`, `browser-journey.json`). Final values: position `0 BTC`, realized gross `-0.29`, fees `0.49986`, complete net `-0.78986`, equity `9999.21014`, funding `0`. Zero funding is fixture-only and does not verify non-zero accrual, sign, interval coverage, or allocation.
+  - **Focused verification:** Backend command `pnpm --dir server exec vitest run src/features/paper-futures/futures-local-terminal.test.ts src/features/paper-futures/futures-local-scenario.test.ts src/features/paper-futures/futures-terminal-store.test.ts --reporter=dot`: **3 files / 5 tests passed** (also independently spot-checked by parent). Frontend/launcher/CLI command `pnpm exec vitest run src/app/FuturesTerminal.test.tsx scripts/futures-local-terminal.test.mjs scripts/futures-local-scenario.test.mjs --reporter=dot`: **3 files / 5 tests passed**. Root and server typechecks, targeted ESLint, Prettier, and `git diff --check` passed. Standalone financial reference: 3 accounting checks, 5 committed ACKs, 17 durable events, zero pending commands, verified; funding limitation above remains.
+  - **Run locally:** From repo root on Node `22.22.2`: `PATH=/Users/franco.sevillano/.nvm/versions/node/v22.22.2/bin:$PATH node scripts/futures-local-terminal.mjs`, then open `http://127.0.0.1:5174/terminal`. The first WebSocket subscription starts the scenario; Ctrl-C stops cleanly. Optional `--api-port`, `--ui-port`, and `--output-dir` are supported.
+  - **Delivery:** Behavior work unit committed as `d317b49` (`feat(futures): stream the local mock scenario to the terminal`; 11 files). Native committed-only assessment against `64a5e7579df6906eb00040b7456505711473914d` was unassessable because the git diff provider binary and `git-og` fallback are unavailable. The exact returned JSON was:
+
+    ```json
+    {
+      "schema": "gentle-ai.review-assessment/v1",
+      "risk": "high",
+      "reasons": [
+        {
+          "code": "unassessable",
+          "detail": "review assess could not classify the candidate; retry with `gentle-ai review assess --help` or a narrower --base-ref: git diff --numstat -z --no-renames --no-ext-diff --no-textconv --ignore-submodules=none cc722a4d444cbe2f242101ccf8a89cee14a141d 24d6ba6d450411356852a2efeed5fd7ba03ad621 -- failed with exit code 1: provider binary unavailable and no git-og fallback found"
+        }
+      ],
+      "changed_paths": 0,
+      "changed_lines": 0,
+      "candidate": {
+        "kind": "base-diff",
+        "base_ref": "64a5e7579df6906eb00040b7456505711473914d",
+        "consumed": false
+      },
+      "review_due": true,
+      "review_due_reason": "high_risk"
+    }
+    ```
+
+    Assessment command exited `1` with the same provider-unavailable error. This is not approval; no native lifecycle or mode action was taken. **Only LOCAL-03 is closed.** BP-03b/c, BP-06/07, broader UI/performance, non-zero funding, native approval, and full Engram mirror #1312 remain open/pending. No push.
