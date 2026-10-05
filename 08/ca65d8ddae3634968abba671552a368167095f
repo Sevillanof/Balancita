@@ -1,0 +1,26 @@
+odd/tasks/futures-bounded-processing.md
+  h_2f68313623be98 55,59-60
+server/src/features/paper-futures/futures-identity-transport.test.ts
+  h_2f68313623be98 1-40
+server/src/features/paper-futures/futures-worker.test.ts
+  h_2f68313623be98 3-5,8,141-303,644-770
+python/tests/test_futures_identity_transport.py
+  h_2f68313623be98 1-47
+python/balancita_engine/futures_identity_transport.py
+  h_2f68313623be98 1-76
+server/src/features/paper-futures/futures-identity-transport.ts
+  h_2f68313623be98 1-106
+server/src/features/paper-futures/futures-worker.ts
+  h_2f68313623be98 2,10-15,106-114,133-140,154-161,169-170,225-226,228,232,235,245-251,254-256,266-267,277,283-286,321,421,541-642,690,740,969-1119
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "08ca65d8ddae3634968abba671552a368167095f",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
