@@ -9,6 +9,7 @@ import {
   normalizeDecimal,
   normalizeTimestampMs,
 } from './futures-canonical.ts'
+import { ensureFuturesOperativeIdentitySchema } from './futures-operative-state.ts'
 
 type JsonRecord = Record<string, unknown>
 
@@ -201,6 +202,12 @@ export class FuturesStore {
        CREATE TABLE IF NOT EXISTS paper_futures_evaluation_skipped(run_id TEXT NOT NULL REFERENCES paper_futures_runs(run_id), policy_identity TEXT NOT NULL, source_identity TEXT NOT NULL, from_rowid INTEGER NOT NULL, to_rowid INTEGER NOT NULL, inspected_row_count INTEGER NOT NULL, reason TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY(run_id,from_rowid), CHECK(from_rowid>0 AND to_rowid>=from_rowid AND inspected_row_count>0)) STRICT;
        INSERT OR IGNORE INTO paper_futures_schema_migrations VALUES(5, unixepoch('subsec') * 1000);
     `)
+    ensureFuturesOperativeIdentitySchema(this.db)
+    this.db
+      .prepare(
+        "INSERT OR IGNORE INTO paper_futures_schema_migrations VALUES(6, unixepoch('subsec') * 1000)",
+      )
+      .run()
     const existingRuns = this.db
       .prepare('SELECT run_id FROM paper_futures_runs')
       .all() as { run_id: string }[]
