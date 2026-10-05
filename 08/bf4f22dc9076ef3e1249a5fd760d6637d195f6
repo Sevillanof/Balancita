@@ -1,0 +1,14 @@
+odd/tasks/futures-bounded-processing.md
+  h_2f68313623be98 109-110
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "08bf4f22dc9076ef3e1249a5fd760d6637d195f6",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
