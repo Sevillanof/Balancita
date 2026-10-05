@@ -1,0 +1,31 @@
+README.md
+  s_4c416eb7c67ab5::t_23bbcc3d9e9d29 46-98
+odd/tasks/futures-bounded-processing.md
+  s_4c416eb7c67ab5::t_e57de2a5169765 64-65,67-74
+server/src/features/paper-futures/futures-local-scenario.test.ts
+  s_4c416eb7c67ab5::t_3a28fc02977319 1,6-7,10,15-178,290-415
+server/src/features/paper-futures/futures-local-scenario.ts
+  s_4c416eb7c67ab5::t_8e05f85fb3b98d 88,105-109,115,249-270,276,302,339,463-488
+server/src/features/paper-futures/futures-local-terminal.test.ts
+  s_4c416eb7c67ab5::t_95bb657c05a909 1-2,9-10,14-15,632-835
+server/src/features/paper-futures/futures-local-terminal.ts
+  s_4c416eb7c67ab5::t_7615a30824ef1e 1-2,4-10,24,33-34,37-115,125-128,141-142,152-160,165-180,195-200,204-207,220-225,360-368,405-410,413-421,567-571,600-635,639,647,652-654
+scripts/futures-local-terminal.mjs
+  s_4c416eb7c67ab5::t_be7d68b0a29d8d 5-19,50-51,63-77,81-82,90,93-96,98-107,110-111,114-117
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "94bfa4e1b8ffb82a6dba6a2e3ef47756ae989d36",
+  "prompts": {},
+  "sessions": {
+    "s_4c416eb7c67ab5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8fb4e35b-ecee-47bd-89d4-41bd62d0571a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
