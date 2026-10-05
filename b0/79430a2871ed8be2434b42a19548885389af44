@@ -1,0 +1,19 @@
+odd/tasks/futures-bounded-processing.md
+  s_4c416eb7c67ab5::t_2ca41f2b95b449 90
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b079430a2871ed8be2434b42a19548885389af44",
+  "prompts": {},
+  "sessions": {
+    "s_4c416eb7c67ab5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8fb4e35b-ecee-47bd-89d4-41bd62d0571a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
