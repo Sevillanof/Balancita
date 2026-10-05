@@ -14,11 +14,17 @@ import {
 } from '../features/connected-trading/infrastructure/terminal-stream-client.ts'
 import { applyTerminalEvent } from '../features/connected-trading/infrastructure/terminal-state.ts'
 import { projectTerminalQuote } from './terminal-market.ts'
-import { reasonLabel } from './terminal-copy.ts'
+import { reasonLabel as baseReasonLabel } from './terminal-copy.ts'
 import './DemoShell.css'
 import './ConnectedTerminal.css'
 
 type ViewState = Record<string, unknown>
+
+function reasonLabel(value: unknown): string {
+  if (value === 'entries_paused')
+    return 'Entradas pausadas: el motor no abre nuevas posiciones'
+  return baseReasonLabel(value)
+}
 
 function record(value: unknown): Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -88,6 +94,17 @@ function strategyLabel(value: unknown): string {
     'c28-adapter-perp-v1': 'C28 · adaptador (experimental)',
   }
   return known[value] ?? 'Sin estrategia seleccionada'
+}
+
+function entryStateLabel(risk: Record<string, unknown>): string {
+  if (Object.keys(risk).length === 0) return 'Estado de entradas no disponible'
+  if (risk.daily_loss_latched === true)
+    return 'Entradas bloqueadas por límite de pérdida diaria'
+  if (risk.user_paused === true)
+    return 'Entradas pausadas por el usuario (MOCK)'
+  if (risk.entry_paused === true || risk.system_paused === true)
+    return 'Entradas pausadas por el sistema'
+  return 'Entradas activas'
 }
 
 function marketStatusLabel(value: unknown): string {
@@ -242,6 +259,9 @@ export default function FuturesTerminal({
     null,
   )
   const socketRef = useRef<WebSocket | null>(null)
+  const [activeRunId, setActiveRunId] = useState(bootstrap.active_run_id)
+  const activeRunRef = useRef(bootstrap.active_run_id)
+  const awaitingNewRunRef = useRef(false)
 
   useEffect(() => {
     let cancelled = false
@@ -264,13 +284,13 @@ export default function FuturesTerminal({
               ? {
                   schema_version: 1,
                   type: 'resume',
-                  run_id: bootstrap.active_run_id,
+                  run_id: activeRunRef.current,
                   last_seq: lastSeq,
                 }
               : {
                   schema_version: 1,
                   type: 'subscribe',
-                  run_id: bootstrap.active_run_id,
+                  run_id: activeRunRef.current,
                 },
           ),
         )
@@ -289,6 +309,15 @@ export default function FuturesTerminal({
           return
         }
         if (event.type === 'snapshot') {
+          if (event.run_id !== activeRunRef.current) {
+            // Only a requested new run may move the view to another run.
+            if (!awaitingNewRunRef.current) return
+            awaitingNewRunRef.current = false
+            activeRunRef.current = event.run_id
+            setActiveRunId(event.run_id)
+            setSelectedAnalysisId(null)
+          }
+          const originalRun = event.run_id === bootstrap.active_run_id
           const watermark = event.data.watermark as number
           streamId = event.stream_id
           lastSeq = watermark
@@ -298,15 +327,16 @@ export default function FuturesTerminal({
           setState({
             ...snapshotState,
             market: {
-              ...record(bootstrap.market),
+              ...(originalRun ? record(bootstrap.market) : {}),
               ...record(snapshotState.market),
             },
             terminal_market:
               market.schema_version === 'mock-terminal-market.v1' ||
               market.schema_version === 'futures-terminal-market.v1'
                 ? market
-                : record(bootstrap.terminal_market).schema_version ===
-                    'mock-terminal-market.v1'
+                : originalRun &&
+                    record(bootstrap.terminal_market).schema_version ===
+                      'mock-terminal-market.v1'
                   ? bootstrap.terminal_market
                   : null,
           })
@@ -327,21 +357,27 @@ export default function FuturesTerminal({
         if (event.type === 'command.result') {
           setCommandPending(false)
           const result = record(record(event.data.result).result)
+          if (
+            record(event.data.result).status === 'failed' ||
+            result.status === 'failed'
+          )
+            awaitingNewRunRef.current = false
+          const outcome = String(result.status ?? 'registrado')
           setCommandStatus(
-            `Resultado durable recibido: ${String(result.status ?? 'registrado')}.`,
+            outcome === 'failed' || outcome === 'superseded'
+              ? `Comando no aplicado: ${outcome}. Vuelve a intentarlo.`
+              : `Resultado durable recibido: ${outcome}.`,
           )
         }
         if (event.type === 'protocol.error') {
+          awaitingNewRunRef.current = false
           setCommandPending(false)
           setError(
             `Comando rechazado por el servidor: ${String(event.data.code ?? 'error')}`,
           )
           return
         }
-        if (
-          event.run_id !== bootstrap.active_run_id ||
-          seen.has(event.event_id)
-        )
+        if (event.run_id !== activeRunRef.current || seen.has(event.event_id))
           return
         if (event.type === 'engine.status')
           setState((previous) => ({
@@ -425,13 +461,18 @@ export default function FuturesTerminal({
       : []
   const [displayClock, setDisplayClock] = useState(() => Date.now())
   const localDemo = bootstrap.source === 'local-protection.v1'
+  const originalRunActive = activeRunId === bootstrap.active_run_id
   const localScenarioStatus = localDemo
     ? String(
         record(state?.engine).message ??
-          bootstrap.engine?.scenario_status ??
+          (originalRunActive ? bootstrap.engine?.scenario_status : undefined) ??
           'Escenario iniciado',
       )
     : null
+  const entryRisk = record(
+    record(state?.engine).risk ??
+      (originalRunActive ? bootstrap.engine?.risk : undefined),
+  )
 
   useEffect(() => {
     if (bootstrap.mode !== 'paper_live' || quote.receivedAt === null) return
@@ -445,11 +486,12 @@ export default function FuturesTerminal({
       return
     setCommandPending(true)
     setCommandStatus('Enviando comando; aceptación no significa fill.')
+    if (action === 'paper.new_run') awaitingNewRunRef.current = true
     socket.send(
       JSON.stringify({
         schema_version: 1,
         type: 'paper.command',
-        run_id: bootstrap.active_run_id,
+        run_id: activeRunRef.current,
         command_id: crypto.randomUUID(),
         expected_state_version: Number(commandVersion),
         action,
@@ -538,7 +580,7 @@ export default function FuturesTerminal({
                   )}
                 </p>
               )}
-              <p>Run: {bootstrap?.active_run_id ?? 'cargando'}</p>
+              <p>Run: {activeRunId ?? 'cargando'}</p>
             </div>
           }
         />
@@ -868,56 +910,75 @@ export default function FuturesTerminal({
                 </section>
               }
             />
-            {!localDemo && (
-              <section
-                className="connected-terminal__panel"
-                aria-label="Controles paper"
-              >
-                <h2>Controles simulados</h2>
-                {(
-                  [
+            <section
+              className="connected-terminal__panel"
+              aria-label="Controles paper"
+            >
+              <h2>Controles simulados</h2>
+              {localDemo && (
+                <>
+                  <p>
+                    Pausar entradas bloquea solo nuevas entradas en esta
+                    ejecución MOCK; no detiene el motor, el mercado simulado, la
+                    protección ni los cierres.
+                  </p>
+                  <p>{entryStateLabel(entryRisk)}</p>
+                </>
+              )}
+              {(localDemo
+                ? (['paper.pause', 'paper.resume', 'paper.new_run'] as const)
+                : ([
                     'paper.start',
                     'paper.pause',
                     'paper.resume',
                     'paper.close',
                     'paper.new_run',
-                  ] as const
-                ).map((action) => (
-                  <button
-                    key={action}
-                    type="button"
-                    className="demo-terminal__present"
-                    disabled={!connected || commandPending}
-                    onClick={() => {
-                      if (
-                        action === 'paper.new_run' &&
-                        !window.confirm(
-                          'Crear una cuenta/run nuevo y conservar el historial anterior?',
-                        )
+                  ] as const)
+              ).map((action) => (
+                <button
+                  key={action}
+                  type="button"
+                  className="demo-terminal__present"
+                  disabled={!connected || commandPending}
+                  onClick={() => {
+                    if (
+                      action === 'paper.new_run' &&
+                      !window.confirm(
+                        localDemo
+                          ? 'Crear una cuenta/run MOCK nueva que repite el escenario y conservar el historial anterior?'
+                          : 'Crear una cuenta/run nuevo y conservar el historial anterior?',
                       )
-                        return
-                      sendCommand(action)
-                    }}
-                  >
-                    {
-                      {
-                        'paper.start': 'Iniciar simulación',
-                        'paper.pause': 'Pausar entradas',
-                        'paper.resume': 'Reanudar entradas',
-                        'paper.close': 'Cerrar posición',
-                        'paper.new_run': 'Nueva cuenta/run',
-                      }[action]
-                    }
-                  </button>
-                ))}
-                {commandPending && (
-                  <span role="status">
-                    Comando enviado; aceptación no significa fill.
-                  </span>
-                )}
-                {commandStatus && <p role="status">{commandStatus}</p>}
-              </section>
-            )}
+                    )
+                      return
+                    sendCommand(action)
+                  }}
+                >
+                  {
+                    (localDemo
+                      ? {
+                          'paper.start': 'Iniciar simulación',
+                          'paper.pause': 'Pausar entradas (MOCK)',
+                          'paper.resume': 'Reanudar entradas (MOCK)',
+                          'paper.close': 'Cerrar posición',
+                          'paper.new_run': 'Nueva cuenta/run (MOCK)',
+                        }
+                      : {
+                          'paper.start': 'Iniciar simulación',
+                          'paper.pause': 'Pausar entradas',
+                          'paper.resume': 'Reanudar entradas',
+                          'paper.close': 'Cerrar posición',
+                          'paper.new_run': 'Nueva cuenta/run',
+                        })[action]
+                  }
+                </button>
+              ))}
+              {commandPending && (
+                <span role="status">
+                  Comando enviado; aceptación no significa fill.
+                </span>
+              )}
+              {commandStatus && <p role="status">{commandStatus}</p>}
+            </section>
             <details className="connected-terminal__metadata" open>
               <summary>Cuenta y estado de riesgo</summary>
               <section className="connected-terminal__panel">

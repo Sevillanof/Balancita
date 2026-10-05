@@ -47,6 +47,10 @@ const strategyManifest = {
     'c28-adapter-perp-v1',
   ],
 }
+export const localScenarioRuntime = {
+  runtimeConfig: baseConfig,
+  instrument,
+} as const
 const admissionPolicy = {
   schema_version: 'futures-entry-admission.v1',
   evaluation_interval_ms: 5000,
@@ -73,30 +77,59 @@ type Scenario = {
     book_quantity_btc: string
   }[]
 }
+export type LocalScenario = Scenario
 type LocalScenarioReport = Record<string, unknown> & {
   financialChecks: ReturnType<typeof checkLocalScenarioFinancials>
+}
+type LocalScenarioLightReport = Record<string, unknown> & {
+  interactive: true
+  protectionExercised: boolean
+  verified: boolean
+}
+type LocalScenarioOptions = {
+  outputDirectory?: string
+  inputSha256?: string
+  store?: FuturesStore
+  runner?: FuturesCommandRunner
+  /**
+   * Interactive runs share the durable run with operator commands. Stage
+   * versions are read from the durable projection, a stage that depends on a
+   * protective stop tolerates its absence, and the strict financial report is
+   * only produced when the protection path was actually exercised.
+   */
+  interactive?: boolean
+  /** Continue a run that already exists (for example a new-run child). */
+  adoptExistingRun?: boolean
+  startIndex?: number
+  /** Awaited before each durable read so interleaved commands settle first. */
+  beforeWork?: (index: number) => Promise<void>
+  /** Awaited after a stage is durably accepted and before its result. */
+  afterAccept?: (index: number) => Promise<void>
+  onStage?: (stage: {
+    kind: 'started' | 'committed' | 'completed'
+    runId: string
+    store: FuturesStore
+    index?: number
+    workId?: string
+    receipt?: Record<string, unknown>
+    marketSnapshot?: Record<string, unknown>
+    output?: Record<string, unknown>
+    report?: LocalScenarioReport | LocalScenarioLightReport
+  }) => void | Promise<void>
 }
 
 export async function runLocalFuturesScenario(
   scenario: Scenario,
-  options: {
-    outputDirectory?: string
-    inputSha256?: string
-    store?: FuturesStore
-    runner?: FuturesCommandRunner
-    onStage?: (stage: {
-      kind: 'started' | 'committed' | 'completed'
-      runId: string
-      store: FuturesStore
-      index?: number
-      workId?: string
-      receipt?: Record<string, unknown>
-      marketSnapshot?: Record<string, unknown>
-      output?: Record<string, unknown>
-      report?: LocalScenarioReport
-    }) => void | Promise<void>
-  } = {},
-) {
+  options?: LocalScenarioOptions & { interactive?: false },
+): Promise<LocalScenarioReport>
+export async function runLocalFuturesScenario(
+  scenario: Scenario,
+  options: LocalScenarioOptions,
+): Promise<LocalScenarioReport | LocalScenarioLightReport>
+export async function runLocalFuturesScenario(
+  scenario: Scenario,
+  options: LocalScenarioOptions = {},
+): Promise<LocalScenarioReport | LocalScenarioLightReport> {
   validateScenario(scenario)
   const outputDirectory = options.outputDirectory
     ? resolve(options.outputDirectory)
@@ -123,63 +156,51 @@ export async function runLocalFuturesScenario(
   const runner = options.runner ?? new FuturesCommandRunner(store)
   let report: LocalScenarioReport | undefined
   try {
-    store.createRun({
-      runId,
-      config: {
-        ledger_version: 'linear-usd-ledger.v1',
-        decimal_precision: 50,
-        leverage: '1',
-        mode: 'paper_live',
-      },
-      seed: { cash_usd: '10000', source: 'paper_live' },
-      instrument: { instrument_id: instrument.instrument_id },
-      costs: {
-        version: runtimeConfig.cost_version,
-        maker: runtimeConfig.maker_rate,
-        taker: runtimeConfig.taker_rate,
-      },
-      runtime: {
-        schema_version: 'futures-runtime-binding.v5',
-        runtime_config: runtimeConfig,
-        instrument_spec: instrument,
-        strategy_manifest: strategyManifest,
-        strategy_config_hash: canonicalHash(strategyManifest),
-        admission_policy: {
-          ...admissionPolicy,
-          hash: canonicalHash(admissionPolicy),
+    if (!options.adoptExistingRun)
+      store.createRun({
+        runId,
+        config: {
+          ledger_version: 'linear-usd-ledger.v1',
+          decimal_precision: 50,
+          leverage: '1',
+          mode: 'paper_live',
         },
-      },
-    })
+        seed: { cash_usd: '10000', source: 'paper_live' },
+        instrument: { instrument_id: instrument.instrument_id },
+        costs: {
+          version: runtimeConfig.cost_version,
+          maker: runtimeConfig.maker_rate,
+          taker: runtimeConfig.taker_rate,
+        },
+        runtime: {
+          schema_version: 'futures-runtime-binding.v5',
+          runtime_config: runtimeConfig,
+          instrument_spec: instrument,
+          strategy_manifest: strategyManifest,
+          strategy_config_hash: canonicalHash(strategyManifest),
+          admission_policy: {
+            ...admissionPolicy,
+            hash: canonicalHash(admissionPolicy),
+          },
+        },
+      })
     await options.onStage?.({ kind: 'started', runId, store })
 
-    let stateVersion = 0
     const receipts: Record<string, unknown>[] = []
     const outputs: Record<string, unknown>[] = []
     const acceptedSnapshots: Record<string, unknown>[] = []
+    const startIndex = options.startIndex ?? 0
     for (const [index, event] of scenario.events.entries()) {
-      const snapshot = scenarioSnapshot(event.time_ms, event.breakout)
-      setBookQuantity(snapshot, event.book_quantity_btc)
-      if (event.name === 'warmup') addFixtureFunding(snapshot, scenario.funding)
-      if (event.name === 'protective-stop-crossing') {
-        const checkpoint = store.getRunProjection(runId)?.checkpoint as
-          Record<string, unknown> | undefined
-        const protection = checkpoint?.position_protection as
-          Record<string, unknown> | undefined
-        if (typeof protection?.stop !== 'string')
-          throw new Error('Real strategy did not establish protective stop.')
-        setStopCrossing(snapshot, BigInt(protection.stop))
-      }
-      if (event.name === 'protective-close-fill') {
-        const checkpoint = store.getRunProjection(runId)?.checkpoint as
-          Record<string, unknown> | undefined
-        const protection = checkpoint?.position_protection as
-          Record<string, unknown> | undefined
-        if (typeof protection?.stop !== 'string')
-          throw new Error('Protective stop disappeared before its fill.')
-        setStopCrossing(snapshot, BigInt(protection.stop))
-      }
-      acceptedSnapshots.push(snapshot)
+      if (index < startIndex) continue
+      await options.beforeWork?.(index)
+      const snapshot = buildLocalScenarioSnapshot(scenario, index, {
+        store,
+        runId,
+        tolerateMissingProtection: options.interactive === true,
+      })
+      acceptedSnapshots[index] = snapshot
       const workId = `${runId}-${index + 1}-${event.name}`
+      const stateVersion = Number(store.getRunProjection(runId)!.state_version)
       const accepted = runner.accept({
         request_id: `request-${workId}`,
         run_id: runId,
@@ -197,18 +218,18 @@ export async function runLocalFuturesScenario(
         accepted.acknowledgement.status !== 'already_accepted'
       )
         throw new Error(`Work ${workId} was not durably accepted.`)
+      await options.afterAccept?.(index)
       await accepted.result
       const receipt = store.getAppliedReceipt(workId)
       if (!receipt || receipt.status !== 'committed')
         throw new Error(`Work ${workId} lacks its committed receipt.`)
       receipts.push(receipt)
-      stateVersion += 1
       const output = store.getAppliedRuntimeProjection(
         runId,
         workId,
-        stateVersion,
+        Number(receipt.applied_state_version),
       ).runtime_output
-      outputs.push(output)
+      outputs[index] = output
       await options.onStage?.({
         kind: 'committed',
         runId,
@@ -221,24 +242,26 @@ export async function runLocalFuturesScenario(
       })
     }
 
+    await options.beforeWork?.(scenario.events.length)
     const projection = store.getRunProjection(runId)
-    const finalOutput = outputs.at(-1)!
-    const initialOutput = outputs.find((output) => {
+    const stageOutputs = outputs.filter((output) => output !== undefined)
+    const finalOutput = stageOutputs.at(-1)!
+    const initialOutput = stageOutputs.find((output) => {
       const analysis = output.analysis as Record<string, unknown> | undefined
       return analysis?.selected_strategy_id === 'c27-breakout-perp-v1'
     })
     const entryOrder = (
       initialOutput?.orders as Record<string, unknown>[] | undefined
     )?.find((order) => order.type === 'order_accepted')
-    const partialOutput = outputs.find((output) =>
+    const partialOutput = stageOutputs.find((output) =>
       (output.fills as Record<string, unknown>[]).some(
         (fill) => fill.quantity_btc === '0.005' && fill.side === 'long',
       ),
     )
-    const protectiveOrder = outputs
+    const protectiveOrder = stageOutputs
       .flatMap((output) => output.orders as Record<string, unknown>[])
       .find((order) => order.order_type === 'reduce_only')
-    const protectionFill = outputs
+    const protectionFill = stageOutputs
       .flatMap((output) => output.fills as Record<string, unknown>[])
       .findLast((fill) => fill.side === 'long' && fill.quantity_btc === '0.005')
     const pendingCommands = store.loadPendingCommands()
@@ -249,6 +272,36 @@ export async function runLocalFuturesScenario(
     const executionOrders = executionCheckpoint?.orders as
       Record<string, unknown> | undefined
     const ledger = finalOutput.ledger as Record<string, unknown>
+    const protectionExercised = Boolean(
+      entryOrder &&
+      partialOutput &&
+      protectiveOrder &&
+      protectionFill &&
+      executionOrders,
+    )
+    if (
+      options.interactive &&
+      (options.adoptExistingRun || !protectionExercised)
+    ) {
+      const light: LocalScenarioLightReport = {
+        schemaVersion: scenario.schema_version,
+        mode: scenario.mode,
+        runId,
+        interactive: true,
+        protectionExercised,
+        stateVersion: projection?.state_version,
+        committedStages: receipts.length,
+        pendingCommands: pendingCommands.length,
+        verified: store.verifyRun(runId),
+      }
+      await options.onStage?.({
+        kind: 'completed',
+        runId,
+        store,
+        report: light,
+      })
+      return light
+    }
     if (
       !entryOrder ||
       !partialOutput ||
@@ -257,7 +310,9 @@ export async function runLocalFuturesScenario(
       !executionOrders ||
       (finalOutput.position as Record<string, unknown>).quantity_btc !== '0' ||
       pendingCommands.length !== 0 ||
-      projection?.state_version !== scenario.events.length ||
+      (options.interactive
+        ? Number(projection?.state_version) < scenario.events.length
+        : projection?.state_version !== scenario.events.length) ||
       !store.verifyRun(runId)
     )
       throw new Error('Scenario did not satisfy the durable protection path.')
@@ -374,6 +429,46 @@ export async function runLocalFuturesScenario(
     throw new Error('Scenario database was not retained as a file.')
   await options.onStage?.({ kind: 'completed', runId, store, report })
   return report
+}
+
+/**
+ * Builds the scripted market snapshot for one scenario stage. The two stages
+ * that cross the protective stop read the durable stop from the run checkpoint;
+ * an interactive run that never opened a position tolerates its absence and
+ * keeps the plain scripted market instead.
+ */
+export function buildLocalScenarioSnapshot(
+  scenario: Scenario,
+  index: number,
+  context: {
+    store?: FuturesStore
+    runId?: string
+    tolerateMissingProtection?: boolean
+  } = {},
+): Record<string, unknown> {
+  const event = scenario.events[index]
+  if (!event) throw new Error('Unknown local scenario stage.')
+  const snapshot = scenarioSnapshot(event.time_ms, event.breakout)
+  setBookQuantity(snapshot, event.book_quantity_btc)
+  if (event.name === 'warmup') addFixtureFunding(snapshot, scenario.funding)
+  if (
+    event.name === 'protective-stop-crossing' ||
+    event.name === 'protective-close-fill'
+  ) {
+    const checkpoint = context.store?.getRunProjection(context.runId!)
+      ?.checkpoint as Record<string, unknown> | undefined
+    const protection = checkpoint?.position_protection as
+      Record<string, unknown> | undefined
+    if (typeof protection?.stop === 'string')
+      setStopCrossing(snapshot, BigInt(protection.stop))
+    else if (!context.tolerateMissingProtection)
+      throw new Error(
+        event.name === 'protective-stop-crossing'
+          ? 'Real strategy did not establish protective stop.'
+          : 'Protective stop disappeared before its fill.',
+      )
+  }
+  return snapshot
 }
 
 function validateScenario(value: Scenario): void {

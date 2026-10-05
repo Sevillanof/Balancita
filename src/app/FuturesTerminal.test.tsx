@@ -249,7 +249,7 @@ describe('FuturesTerminal local scenario presentation', () => {
     expect(screen.getByText('Incompleto')).toBeTruthy()
   })
 
-  it('renders backend status and exact account/order/position values without controls or polling', async () => {
+  it('renders backend status and exact account/order/position values with MOCK entry controls and no polling', async () => {
     const interval = vi.spyOn(globalThis, 'setInterval')
     vi.stubGlobal('WebSocket', TestWebSocket)
     render(<FuturesTerminal bootstrap={bootstrap} />)
@@ -355,12 +355,236 @@ describe('FuturesTerminal local scenario presentation', () => {
     expect(
       [...values].map((item) => item.getAttribute('data-value')),
     ).toContain('0.49986')
-    expect(screen.queryByText('Controles simulados')).toBeNull()
-    expect(
-      screen.queryByRole('button', { name: 'Iniciar simulación' }),
-    ).toBeNull()
+    expect(screen.getByText('Controles simulados')).toBeTruthy()
+    expect(screen.getByText(/no detiene el motor/)).toBeTruthy()
+    for (const name of [
+      'Pausar entradas (MOCK)',
+      'Reanudar entradas (MOCK)',
+      'Nueva cuenta/run (MOCK)',
+    ])
+      expect(screen.getByRole('button', { name })).toBeTruthy()
+    for (const name of ['Iniciar simulación', 'Cerrar posición'])
+      expect(screen.queryByRole('button', { name })).toBeNull()
     expect(screen.getByText(/0.005 · local-entry/)).toBeTruthy()
     interval.mockRestore()
+  })
+
+  it('sends entry pause and resume to the active run and renders paused state only from durable risk', async () => {
+    vi.stubGlobal('WebSocket', TestWebSocket)
+    render(<FuturesTerminal bootstrap={bootstrap} />)
+    const socket = TestWebSocket.instances[0]!
+    await act(async () => socket.open())
+    await act(async () =>
+      socket.receive(
+        envelope('snapshot', 0, {
+          watermark: 0,
+          state: { state_version: 3, analyses: [], orders: [], fills: [] },
+        }),
+      ),
+    )
+    expect(screen.getByText('Estado de entradas no disponible')).toBeTruthy()
+    await act(async () =>
+      screen.getByRole('button', { name: 'Pausar entradas (MOCK)' }).click(),
+    )
+    expect(JSON.parse(socket.sent.at(-1)!)).toMatchObject({
+      type: 'paper.command',
+      run_id: bootstrap.active_run_id,
+      action: 'paper.pause',
+      expected_state_version: 3,
+    })
+    expect(screen.queryByText(/Entradas pausadas por el usuario/)).toBeNull()
+    await act(async () =>
+      socket.receive(
+        envelope('engine.status', 1, {
+          scenario_status: 'running',
+          message: 'Escenario ejecutándose',
+          risk: {
+            user_paused: true,
+            entry_paused: true,
+            daily_loss_latched: false,
+            system_paused: false,
+          },
+        }),
+      ),
+    )
+    expect(
+      screen.getByText('Entradas pausadas por el usuario (MOCK)'),
+    ).toBeTruthy()
+    await act(async () =>
+      socket.receive(
+        envelope('engine.status', 2, {
+          scenario_status: 'running',
+          message: 'Escenario ejecutándose',
+          risk: {
+            user_paused: false,
+            entry_paused: true,
+            daily_loss_latched: true,
+            system_paused: false,
+          },
+        }),
+      ),
+    )
+    expect(
+      screen.getByText('Entradas bloqueadas por límite de pérdida diaria'),
+    ).toBeTruthy()
+    expect(screen.queryByText('Entradas activas')).toBeNull()
+    await act(async () =>
+      socket.receive(
+        envelope('engine.status', 3, {
+          scenario_status: 'running',
+          message: 'Escenario ejecutándose',
+          risk: {
+            user_paused: false,
+            entry_paused: false,
+            daily_loss_latched: false,
+            system_paused: false,
+          },
+        }),
+      ),
+    )
+    expect(screen.getByText('Entradas activas')).toBeTruthy()
+  })
+
+  it('switches the displayed run to the isolated child after a new run', async () => {
+    vi.stubGlobal('WebSocket', TestWebSocket)
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    render(<FuturesTerminal bootstrap={bootstrap} />)
+    const socket = TestWebSocket.instances[0]!
+    await act(async () => socket.open())
+    await act(async () =>
+      socket.receive(
+        envelope('snapshot', 0, {
+          watermark: 0,
+          state: {
+            state_version: 6,
+            analyses: [{ analysis_id: 'parent-analysis', action: 'WAIT' }],
+            orders: [],
+            fills: [],
+          },
+        }),
+      ),
+    )
+    await act(async () =>
+      screen.getByRole('button', { name: 'Nueva cuenta/run (MOCK)' }).click(),
+    )
+    expect(JSON.parse(socket.sent.at(-1)!)).toMatchObject({
+      action: 'paper.new_run',
+      run_id: bootstrap.active_run_id,
+      expected_state_version: 6,
+    })
+    await act(async () => {
+      socket.receive(
+        envelope('command.result', 1, {
+          command_id: 'x',
+          child_run_id: 'child-run',
+          result: { result: { status: 'committed', applied_state_version: 1 } },
+        }),
+      )
+      socket.receive(
+        envelope(
+          'snapshot',
+          0,
+          {
+            watermark: 4,
+            state: {
+              run_id: 'child-run',
+              state_version: 1,
+              account: { equity_usd: '10000', cash_usd: '10000' },
+              position: null,
+              analyses: [{ analysis_id: 'child-analysis-1', action: 'WAIT' }],
+              orders: [],
+              fills: [],
+            },
+          },
+          21_600_000,
+          'child-run',
+        ),
+      )
+    })
+    await act(async () =>
+      socket.receive(
+        envelope(
+          'engine.status',
+          5,
+          {
+            scenario_status: 'running',
+            message: 'Escenario ejecutándose',
+            risk: { user_paused: false, entry_paused: false },
+          },
+          21_600_005,
+          'child-run',
+        ),
+      ),
+    )
+    expect(screen.getByText('Entradas activas')).toBeTruthy()
+    expect(screen.getByText(`Run: child-run`)).toBeTruthy()
+    expect(screen.queryByText(`Run: ${bootstrap.active_run_id}`)).toBeNull()
+    expect(screen.queryByText('parent-analysis')).toBeNull()
+    await act(async () =>
+      socket.receive(
+        envelope('engine.status', 7, { message: 'Evento del padre' }),
+      ),
+    )
+    expect(screen.queryByText('Evento del padre')).toBeNull()
+    await act(async () =>
+      screen.getByRole('button', { name: 'Pausar entradas (MOCK)' }).click(),
+    )
+    expect(JSON.parse(socket.sent.at(-1)!)).toMatchObject({
+      action: 'paper.pause',
+      run_id: 'child-run',
+      expected_state_version: 1,
+    })
+    await act(async () => socket.close())
+    await waitFor(() => expect(TestWebSocket.instances).toHaveLength(2), {
+      timeout: 3_000,
+    })
+    const reconnect = TestWebSocket.instances[1]!
+    await act(async () => reconnect.open())
+    expect(JSON.parse(reconnect.sent[0]!)).toMatchObject({
+      type: 'resume',
+      run_id: 'child-run',
+      last_seq: 5,
+    })
+  })
+
+  it('renders the entries-paused analysis reason in Spanish and reports a command that was not applied', async () => {
+    vi.stubGlobal('WebSocket', TestWebSocket)
+    render(<FuturesTerminal bootstrap={bootstrap} />)
+    const socket = TestWebSocket.instances[0]!
+    await act(async () => socket.open())
+    await act(async () =>
+      socket.receive(
+        envelope('snapshot', 0, {
+          watermark: 0,
+          state: {
+            state_version: 2,
+            analyses: [
+              {
+                analysis_id: 'paused-analysis',
+                action: 'WAIT',
+                reason_codes: ['entries_paused'],
+                decision_time_ms: 21_605_000,
+              },
+            ],
+            orders: [],
+            fills: [],
+          },
+        }),
+      ),
+    )
+    expect(
+      screen.getAllByText(/Entradas pausadas: el motor no abre nuevas/).length,
+    ).toBeGreaterThan(0)
+    expect(screen.queryByText('entries_paused')).toBeNull()
+    await act(async () =>
+      socket.receive(
+        envelope('command.result', 1, {
+          command_id: 'c1',
+          result: { result: { status: 'superseded' } },
+        }),
+      ),
+    )
+    expect(screen.getByText(/Comando no aplicado: superseded/)).toBeTruthy()
   })
 
   it('renders and selects real same-candle chart markers using durable analysis and ledger times', async () => {
@@ -721,12 +945,13 @@ function envelope(
   seq: number,
   data: Record<string, unknown>,
   eventTime = 21_600_000 + seq,
+  runId = bootstrap.active_run_id,
 ): TerminalEnvelope {
   return {
     schema_version: 1,
-    event_id: `event-${seq}-${type}`,
-    stream_id: 'local-stream',
-    run_id: bootstrap.active_run_id,
+    event_id: `event-${runId}-${seq}-${type}`,
+    stream_id: `stream-${runId}`,
+    run_id: runId,
     seq,
     type,
     instrument_id: 'kraken-futures:PF_XBTUSD',

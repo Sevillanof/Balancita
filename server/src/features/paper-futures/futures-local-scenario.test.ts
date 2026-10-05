@@ -2,7 +2,11 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { runLocalFuturesScenario } from './futures-local-scenario.js'
+import {
+  buildLocalScenarioSnapshot,
+  runLocalFuturesScenario,
+  type LocalScenario,
+} from './futures-local-scenario.js'
 
 describe('local futures scenario', () => {
   it('awaits presentation hooks only after actual committed receipts', async () => {
@@ -91,5 +95,27 @@ describe('local futures scenario', () => {
     } finally {
       rmSync(parent, { recursive: true, force: true })
     }
+  })
+
+  it('requires the durable protective stop unless the run is interactive', () => {
+    const fixture = JSON.parse(
+      readFileSync(
+        resolve(
+          process.cwd(),
+          'src/features/paper-futures/fixtures/local-protection.v1.json',
+        ),
+        'utf8',
+      ),
+    ) as LocalScenario
+    expect(() => buildLocalScenarioSnapshot(fixture, 3)).toThrow(
+      'Real strategy did not establish protective stop.',
+    )
+    const tolerated = buildLocalScenarioSnapshot(fixture, 3, {
+      tolerateMissingProtection: true,
+    })
+    const book = (tolerated.events as Record<string, unknown>[]).find(
+      (event) => event.type === 'book_snapshot',
+    )
+    expect(book?.bids).toEqual([{ price_usd: '100000', quantity_btc: '1' }])
   })
 })
