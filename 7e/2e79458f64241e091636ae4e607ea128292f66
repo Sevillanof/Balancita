@@ -1,0 +1,25 @@
+odd/tasks/futures-bounded-processing.md
+  s_4c416eb7c67ab5::t_ce7521e08e0373 85-89
+python/balancita_engine/futures_operative_state.py
+  s_4c416eb7c67ab5::t_583189f23f2e25 10-27,31,61,71,92,100
+python/balancita_engine/futures_runtime.py
+  s_4c416eb7c67ab5::t_9f1861d836f319 16,39-50,91-94,112-128,157-158,195,255-262,276-297,595,601,784-785,833-838,868-933,1151-1163,1212-1215,1247-1249,1343-1351,1365-1394,1396,1472-1487,1610-1614,1766,1772-1786,1805-1809,1825-1829
+python/tests/test_futures_runtime_operative.py
+  s_4c416eb7c67ab5::t_858eeed0021c59 1-302
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7e2e79458f64241e091636ae4e607ea128292f66",
+  "prompts": {},
+  "sessions": {
+    "s_4c416eb7c67ab5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8fb4e35b-ecee-47bd-89d4-41bd62d0571a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
