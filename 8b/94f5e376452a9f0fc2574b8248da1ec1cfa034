@@ -1,0 +1,18 @@
+python/balancita_engine/futures_ledger.py
+  h_2f68313623be98 2,67-68,70-165,170-176,189-190,192,199-205,228-229,240-245,255,274,287-289,291,298-301
+python/balancita_engine/futures_operative_state.py
+  h_2f68313623be98 59-87
+python/tests/test_futures_operative_ledger.py
+  h_2f68313623be98 1-90
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8b94f5e376452a9f0fc2574b8248da1ec1cfa034",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
