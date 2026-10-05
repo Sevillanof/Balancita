@@ -1,13 +1,18 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { WebSocket } from 'ws'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { FuturesStore } from './futures-store.js'
 import {
+  localTerminalOutputMarker,
+  resolveInterruptStage,
   startLocalFuturesTerminal,
   type LocalTerminalHandle,
 } from './futures-local-terminal.js'
+import { runLocalFuturesScenario } from './futures-local-scenario.js'
+import { readFileSync } from 'node:fs'
 
 describe('isolated local futures terminal', () => {
   let closeCurrent: (() => Promise<void>) | undefined
@@ -624,6 +629,210 @@ describe('isolated local futures terminal', () => {
     ).rejects.toThrow('Refusing existing terminal output path')
     rmSync(parent, { recursive: true, force: true })
   })
+
+  it('interrupts after a stage with the position open and resumes from SQLite', async () => {
+    const parent = mkdtempSync(join(tmpdir(), 'local-futures-terminal-resume-'))
+    outputParent = parent
+    const output = resolve(parent, 'owned-output')
+    const first = await startLocalFuturesTerminal({
+      port: 0,
+      outputDirectory: output,
+      pacingMs: 0,
+      interruptAfterStage: 'partial-fill',
+    })
+    closeCurrent = first.close
+    const firstClient = await openClient(first, first.runId)
+    await expect(first.interrupted).resolves.toMatchObject({
+      stage: 'partial-fill',
+      index: 2,
+    })
+    const interruptedStatus = await firstClient.next(
+      (m) =>
+        m.type === 'engine.status' &&
+        String(m.data.message).includes('interrumpido'),
+    )
+    expect(String(interruptedStatus.data.message)).toContain('MOCK')
+    await shutdown()
+    let store = new FuturesStore(first.databasePath)
+    try {
+      expect(store.getRunProjection(first.runId)?.state_version).toBe(3)
+      expect(store.loadPendingCommands()).toHaveLength(0)
+      const checkpoint = record(store.getRunProjection(first.runId)?.checkpoint)
+      expect(JSON.stringify(record(checkpoint.execution_checkpoint))).toContain(
+        '0.005',
+      )
+    } finally {
+      store.close()
+    }
+
+    const second = await startLocalFuturesTerminal({
+      port: 0,
+      outputDirectory: output,
+      pacingMs: 0,
+      resume: true,
+    })
+    closeCurrent = second.close
+    expect(second.runId).toBe(first.runId)
+    const bootstrap = record(
+      await (await fetch(`${second.apiUrl}/api/terminal/bootstrap`)).json(),
+    )
+    expect(bootstrap).toMatchObject({
+      mode: 'mock',
+      source: 'local-protection.v1',
+      engine: { scenario_status: expect.stringContaining('reanudado') },
+    })
+    expect(record(bootstrap.terminal_market).candles as unknown[]).toHaveLength(
+      60,
+    )
+    const secondClient = await openClient(second, second.runId)
+    const recovered = await secondClient.next(
+      (m) =>
+        m.type === 'engine.status' &&
+        String(m.data.message).includes('reanudado desde SQLite'),
+    )
+    expect(String(recovered.data.message)).toContain('MOCK')
+    await secondClient.completed(second.runId)
+    await shutdown()
+    store = new FuturesStore(second.databasePath)
+    try {
+      expect(store.verifyRun(second.runId)).toBe(true)
+      expect(store.getRunProjection(second.runId)?.state_version).toBe(5)
+      expect(store.loadPendingCommands()).toHaveLength(0)
+      const analyses = secondClient.messages.filter(
+        (m) => m.type === 'analysis.completed' && m.run_id === second.runId,
+      )
+      const ids = analyses.map((m) => String(m.data.work_id))
+      expect(new Set(ids).size).toBe(ids.length)
+    } finally {
+      store.close()
+    }
+  }, 120_000)
+
+  it('restores missing market candles for committed stages when resuming', async () => {
+    const parent = mkdtempSync(join(tmpdir(), 'local-futures-terminal-gap-'))
+    outputParent = parent
+    const output = resolve(parent, 'owned-output')
+    const fixture = JSON.parse(
+      readFileSync(
+        resolve(
+          process.cwd(),
+          'src/features/paper-futures/fixtures/local-protection.v1.json',
+        ),
+        'utf8',
+      ),
+    )
+    // Stages commit durably but no terminal market events were presented (the
+    // process died between the commit and the presentation).
+    await runLocalFuturesScenario(fixture, {
+      outputDirectory: output,
+      interactive: true,
+      stopAfterIndex: 2,
+    })
+    writeFileSync(
+      join(output, 'local-terminal-output.json'),
+      JSON.stringify(localTerminalOutputMarker()),
+    )
+    const terminal = await startLocalFuturesTerminal({
+      port: 0,
+      outputDirectory: output,
+      pacingMs: 0,
+      resume: true,
+    })
+    closeCurrent = terminal.close
+    const bootstrap = record(
+      await (await fetch(`${terminal.apiUrl}/api/terminal/bootstrap`)).json(),
+    )
+    expect(record(bootstrap.terminal_market).candles as unknown[]).toHaveLength(
+      60,
+    )
+  }, 120_000)
+
+  it('refuses to resume a missing, foreign, mismatched or corrupted output directory', async () => {
+    const parent = mkdtempSync(join(tmpdir(), 'local-futures-terminal-bad-'))
+    outputParent = parent
+    const resume = (name: string) =>
+      startLocalFuturesTerminal({
+        port: 0,
+        outputDirectory: join(parent, name),
+        resume: true,
+      })
+    await expect(resume('missing')).rejects.toThrow(
+      'Refusing to resume: output directory does not exist',
+    )
+    mkdirSync(join(parent, 'foreign'))
+    writeFileSync(join(parent, 'foreign', 'paper-futures.sqlite'), 'x')
+    await expect(resume('foreign')).rejects.toThrow(
+      'not created by the local MOCK terminal',
+    )
+    mkdirSync(join(parent, 'other-scenario'))
+    writeFileSync(
+      join(parent, 'other-scenario', 'local-terminal-output.json'),
+      JSON.stringify({ ...localTerminalOutputMarker(), fixture_sha256: '0' }),
+    )
+    await expect(resume('other-scenario')).rejects.toThrow('different scenario')
+    mkdirSync(join(parent, 'corrupt'))
+    writeFileSync(
+      join(parent, 'corrupt', 'local-terminal-output.json'),
+      JSON.stringify(localTerminalOutputMarker()),
+    )
+    writeFileSync(join(parent, 'corrupt', 'paper-futures.sqlite'), 'garbage')
+    await expect(resume('corrupt')).rejects.toThrow(
+      'Refusing to resume: database is unreadable or has no scenario run',
+    )
+    mkdirSync(join(parent, 'empty-db'))
+    writeFileSync(
+      join(parent, 'empty-db', 'local-terminal-output.json'),
+      JSON.stringify(localTerminalOutputMarker()),
+    )
+    await expect(resume('empty-db')).rejects.toThrow(
+      'database is unreadable or has no scenario run',
+    )
+    await expect(
+      startLocalFuturesTerminal({ port: 0, resume: true }),
+    ).rejects.toThrow('--resume requires an existing output directory')
+  })
+
+  it('validates the interrupt stage and the launcher flags', () => {
+    expect(resolveInterruptStage('partial-fill')).toBe(2)
+    expect(resolveInterruptStage('3')).toBe(2)
+    expect(resolveInterruptStage(1)).toBe(0)
+    for (const bad of ['nope', 'protective-close-fill', '5', '0', '9', ''])
+      expect(() => resolveInterruptStage(bad)).toThrow(
+        'Unknown interrupt stage',
+      )
+    const script = resolve(
+      process.cwd(),
+      '..',
+      'scripts/futures-local-terminal.mjs',
+    )
+    const help = spawnSync(process.execPath, [script, '--help'], {
+      encoding: 'utf8',
+    })
+    expect(help.status).toBe(0)
+    expect(help.stdout).toContain('--resume')
+    expect(help.stdout).toContain('--interrupt-after-stage')
+    const noDir = spawnSync(process.execPath, [script, '--resume'], {
+      encoding: 'utf8',
+    })
+    expect(noDir.status).not.toBe(0)
+    expect(noDir.stderr).toContain('--resume requires --output-dir')
+    const missing = spawnSync(
+      process.execPath,
+      [
+        script,
+        '--resume',
+        '--output-dir',
+        join(tmpdir(), 'no-such-local-futures-dir'),
+      ],
+      { encoding: 'utf8' },
+    )
+    expect(missing.status).toBe(1)
+    expect(missing.stderr).toContain(
+      'Refusing to resume: output directory does not exist',
+    )
+    expect(missing.stderr).not.toContain('    at ')
+    expect(noDir.stderr).not.toContain('    at ')
+  }, 60_000)
 })
 
 type Message = Record<string, unknown> & {

@@ -85,6 +85,7 @@ type LocalScenarioLightReport = Record<string, unknown> & {
   interactive: true
   protectionExercised: boolean
   verified: boolean
+  interrupted?: true
 }
 type LocalScenarioOptions = {
   outputDirectory?: string
@@ -101,12 +102,17 @@ type LocalScenarioOptions = {
   /** Continue a run that already exists (for example a new-run child). */
   adoptExistingRun?: boolean
   startIndex?: number
+  /**
+   * Stop cleanly right after this stage (0-based) is durably committed and
+   * presented, leaving the run resumable from SQLite. Never a completion.
+   */
+  stopAfterIndex?: number
   /** Awaited before each durable read so interleaved commands settle first. */
   beforeWork?: (index: number) => Promise<void>
   /** Awaited after a stage is durably accepted and before its result. */
   afterAccept?: (index: number) => Promise<void>
   onStage?: (stage: {
-    kind: 'started' | 'committed' | 'completed'
+    kind: 'started' | 'committed' | 'completed' | 'interrupted'
     runId: string
     store: FuturesStore
     index?: number
@@ -240,12 +246,34 @@ export async function runLocalFuturesScenario(
         marketSnapshot: snapshot,
         output,
       })
+      if (options.stopAfterIndex === index) {
+        const stopped: LocalScenarioLightReport = {
+          schemaVersion: scenario.schema_version,
+          mode: scenario.mode,
+          runId,
+          interactive: true,
+          interrupted: true,
+          protectionExercised: false,
+          stateVersion: store.getRunProjection(runId)?.state_version,
+          committedStages: index + 1,
+          pendingCommands: store.loadPendingCommands().length,
+          verified: store.verifyRun(runId),
+        }
+        await options.onStage?.({
+          kind: 'interrupted',
+          runId,
+          store,
+          index,
+          report: stopped,
+        })
+        return stopped
+      }
     }
 
     await options.beforeWork?.(scenario.events.length)
     const projection = store.getRunProjection(runId)
     const stageOutputs = outputs.filter((output) => output !== undefined)
-    const finalOutput = stageOutputs.at(-1)!
+    const finalOutput = stageOutputs.at(-1)
     const initialOutput = stageOutputs.find((output) => {
       const analysis = output.analysis as Record<string, unknown> | undefined
       return analysis?.selected_strategy_id === 'c27-breakout-perp-v1'
@@ -271,7 +299,7 @@ export async function runLocalFuturesScenario(
       Record<string, unknown> | undefined
     const executionOrders = executionCheckpoint?.orders as
       Record<string, unknown> | undefined
-    const ledger = finalOutput.ledger as Record<string, unknown>
+    const ledger = (finalOutput?.ledger ?? {}) as Record<string, unknown>
     const protectionExercised = Boolean(
       entryOrder &&
       partialOutput &&
@@ -308,6 +336,7 @@ export async function runLocalFuturesScenario(
       !protectiveOrder ||
       !protectionFill ||
       !executionOrders ||
+      !finalOutput ||
       (finalOutput.position as Record<string, unknown>).quantity_btc !== '0' ||
       pendingCommands.length !== 0 ||
       (options.interactive
@@ -429,6 +458,32 @@ export async function runLocalFuturesScenario(
     throw new Error('Scenario database was not retained as a file.')
   await options.onStage?.({ kind: 'completed', runId, store, report })
   return report
+}
+
+/**
+ * Derives resumable progress from durable state only: the next stage is the
+ * first one without a committed receipt. A stage accepted but not committed at
+ * interruption has no receipt, so it is re-driven by its own work id, which the
+ * store and runner treat idempotently (already_accepted / pending resume).
+ */
+export function recoverLocalScenarioProgress(
+  scenario: Scenario,
+  store: FuturesStore,
+): { nextStageIndex: number; committedStages: number; pendingStage: boolean } {
+  validateScenario(scenario)
+  let nextStageIndex = 0
+  while (
+    nextStageIndex < scenario.events.length &&
+    store.getAppliedReceipt(
+      `${scenario.run_id}-${nextStageIndex + 1}-${scenario.events[nextStageIndex]!.name}`,
+    )?.status === 'committed'
+  )
+    nextStageIndex += 1
+  return {
+    nextStageIndex,
+    committedStages: nextStageIndex,
+    pendingStage: store.loadPendingCommands().length > 0,
+  }
 }
 
 /**

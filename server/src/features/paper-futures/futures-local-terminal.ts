@@ -1,5 +1,13 @@
+import { createHash } from 'node:crypto'
+import { isDeepStrictEqual } from 'node:util'
 import { readFileSync } from 'node:fs'
-import { mkdtempSync, mkdirSync, existsSync } from 'node:fs'
+import {
+  mkdtempSync,
+  mkdirSync,
+  existsSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import Fastify, { type FastifyInstance } from 'fastify'
@@ -13,6 +21,7 @@ import type { FuturesWorkerRequest } from './futures-worker.js'
 import {
   buildLocalScenarioSnapshot,
   localScenarioRuntime,
+  recoverLocalScenarioProgress,
   runLocalFuturesScenario,
   type LocalScenario,
 } from './futures-local-scenario.js'
@@ -21,12 +30,89 @@ const fixturePath = new URL(
   './fixtures/local-protection.v1.json',
   import.meta.url,
 )
-const fixture = JSON.parse(readFileSync(fixturePath, 'utf8')) as Record<
-  string,
-  unknown
->
+const fixtureText = readFileSync(fixturePath, 'utf8')
+const fixture = JSON.parse(fixtureText) as Record<string, unknown>
 const scenarioDefinition = fixture as unknown as LocalScenario
 const instrumentId = 'kraken-futures:PF_XBTUSD'
+const markerFile = 'local-terminal-output.json'
+const stageNames = (scenarioDefinition.events as { name: string }[]).map(
+  (event) => event.name,
+)
+
+/** Identity written into every output directory this launcher owns. */
+export function localTerminalOutputMarker() {
+  return {
+    schema_version: 'local-futures-terminal-output.v1',
+    mode: 'MOCK',
+    scenario_run_id: String(fixture.run_id),
+    fixture_sha256: createHash('sha256').update(fixtureText).digest('hex'),
+  }
+}
+
+/**
+ * Resolves a stage name or 1-based stage number to its 0-based index. The last
+ * stage is rejected: interrupting after it would just be a completion.
+ */
+export function resolveInterruptStage(value: string | number): number {
+  const text = String(value).trim()
+  const byName = stageNames.slice(0, -1).indexOf(text)
+  const index =
+    byName >= 0 ? byName : /^[1-9]$/.test(text) ? Number(text) - 1 : -1
+  if (index < 0 || index >= stageNames.length - 1)
+    throw new Error(
+      `Unknown interrupt stage "${text}"; use ${stageNames.slice(0, -1).join(', ')} or 1-${stageNames.length - 1}.`,
+    )
+  return index
+}
+
+function openResumableStore(outputDirectory: string): FuturesStore {
+  const refuse = (reason: string) =>
+    new Error(`Refusing to resume: ${reason} (${outputDirectory})`)
+  if (!existsSync(outputDirectory) || !statSync(outputDirectory).isDirectory())
+    throw refuse('output directory does not exist')
+  let marker: unknown
+  try {
+    marker = JSON.parse(readFileSync(join(outputDirectory, markerFile), 'utf8'))
+  } catch {
+    throw refuse('directory was not created by the local MOCK terminal')
+  }
+  if (!isDeepStrictEqual(marker, localTerminalOutputMarker()))
+    throw refuse('directory belongs to a different scenario or version')
+  const databasePath = join(outputDirectory, 'paper-futures.sqlite')
+  const unreadable = refuse('database is unreadable or has no scenario run')
+  if (!existsSync(databasePath)) throw unreadable
+  let store: FuturesStore
+  try {
+    store = new FuturesStore(databasePath)
+  } catch {
+    throw unreadable
+  }
+  try {
+    const runId = String(fixture.run_id)
+    const binding = store.getRuntimeBinding(runId)
+    if (!store.getRunMetadata(runId) || !binding) throw unreadable
+    if (
+      !isDeepStrictEqual(
+        binding.runtime_config,
+        localScenarioRuntime.runtimeConfig,
+      ) ||
+      !isDeepStrictEqual(
+        binding.instrument_spec,
+        localScenarioRuntime.instrument,
+      )
+    )
+      throw refuse('run binding differs from the local scenario')
+    if (!store.verifyRun(runId))
+      throw refuse('run failed integrity verification')
+  } catch (error) {
+    store.close()
+    throw error instanceof Error && error.message.startsWith('Refusing')
+      ? error
+      : unreadable
+  }
+  return store
+}
+
 type TerminalEventInput = Parameters<
   FuturesStore['appendTerminalEvents']
 >[1][number]
@@ -36,6 +122,10 @@ type LocalTerminalOptions = {
   outputDirectory?: string
   uiOrigin?: string
   pacingMs?: number
+  /** Reopen an existing output directory of this launcher and continue it. */
+  resume?: boolean
+  /** Stage name or 1-based number; stop cleanly after it commits. */
+  interruptAfterStage?: string | number
   wait?: (milliseconds: number) => Promise<void>
   onLog?: (line: string) => void
   /** Test seam: awaited while a scripted stage is accepted but not committed. */
@@ -48,6 +138,8 @@ export type LocalTerminalHandle = {
   readonly databasePath: string
   readonly runId: string
   readonly app: FastifyInstance
+  /** Resolves only when `interruptAfterStage` was reached and committed. */
+  readonly interrupted: Promise<{ stage: string; index: number }>
   close(): Promise<void>
 }
 
@@ -57,18 +149,35 @@ export async function startLocalFuturesTerminal(
   const port = options.port ?? 8787
   if (!Number.isSafeInteger(port) || port < 0 || port > 65_535)
     throw new Error('API port must be an integer between 0 and 65535.')
+  const resume = options.resume === true
+  const interruptIndex =
+    options.interruptAfterStage === undefined
+      ? undefined
+      : resolveInterruptStage(options.interruptAfterStage)
+  if (resume && !options.outputDirectory)
+    throw new Error(
+      '--resume requires an existing output directory (--output-dir).',
+    )
   const outputDirectory = options.outputDirectory
     ? resolve(options.outputDirectory)
     : mkdtempSync(join(tmpdir(), 'balancita-local-terminal-'))
-  if (options.outputDirectory) {
-    if (existsSync(outputDirectory))
-      throw new Error(
-        `Refusing existing terminal output path: ${outputDirectory}`,
-      )
-    mkdirSync(outputDirectory, { recursive: true })
-  }
   const databasePath = join(outputDirectory, 'paper-futures.sqlite')
-  const store = new FuturesStore(databasePath)
+  let store: FuturesStore
+  if (resume) store = openResumableStore(outputDirectory)
+  else {
+    if (options.outputDirectory) {
+      if (existsSync(outputDirectory))
+        throw new Error(
+          `Refusing existing terminal output path: ${outputDirectory}`,
+        )
+      mkdirSync(outputDirectory, { recursive: true })
+    }
+    writeFileSync(
+      join(outputDirectory, markerFile),
+      JSON.stringify(localTerminalOutputMarker()),
+    )
+    store = new FuturesStore(databasePath)
+  }
   const runner = new FuturesCommandRunner(store)
   const app = Fastify({ logger: false })
   const runId = String(fixture.run_id)
@@ -83,10 +192,19 @@ export async function startLocalFuturesTerminal(
     commands: Set<Promise<void>>
     stage: { settled: Promise<void>; settle: () => void } | undefined
   }
+  const resumeProgress = resume
+    ? recoverLocalScenarioProgress(scenarioDefinition, store)
+    : undefined
+  const resumeMessage = resumeProgress
+    ? `Escenario reanudado desde SQLite (MOCK): ${resumeProgress.committedStages} de ${stageNames.length} etapas ya confirmadas; continúa en la etapa ${Math.min(resumeProgress.nextStageIndex + 1, stageNames.length)}`
+    : undefined
   const runs = new Map<string, RunState>()
   const registerRun = (target: string) => {
     const state: RunState = {
-      message: 'Escenario iniciado',
+      message:
+        target === String(fixture.run_id) && resumeMessage
+          ? resumeMessage
+          : 'Escenario iniciado',
       scenarioStatus: 'running',
       started: false,
       latestSnapshot: undefined,
@@ -99,6 +217,12 @@ export async function startLocalFuturesTerminal(
   }
   registerRun(runId)
   const scenarios: Promise<unknown>[] = []
+  let signalInterrupted!: (value: { stage: string; index: number }) => void
+  const interrupted = new Promise<{ stage: string; index: number }>(
+    (resolveInterrupted) => {
+      signalInterrupted = resolveInterrupted
+    },
+  )
   let activeRunId = runId
   let closing = false
   let releaseSubscription: (() => void) | undefined
@@ -233,6 +357,15 @@ export async function startLocalFuturesTerminal(
         runner,
         interactive: true,
         ...(child ? { adoptExistingRun: true } : {}),
+        ...(resumeProgress && target === runId
+          ? {
+              adoptExistingRun: true,
+              startIndex: resumeProgress.nextStageIndex,
+            }
+          : {}),
+        ...(interruptIndex !== undefined && target === runId
+          ? { stopAfterIndex: interruptIndex }
+          : {}),
         beforeWork: async (index) => {
           await settleCommands(target)
           // The stage is accepted synchronously after this point; commands
@@ -269,8 +402,22 @@ export async function startLocalFuturesTerminal(
             if (entries.length) store.appendTerminalEvents(target, entries)
             if (JSON.stringify(durableRisk(target)) !== state.lastRiskKey)
               emitStatus(target, state.scenarioStatus, state.message)
-            if (stage.index !== undefined && stage.index < 4 && pacingMs > 0)
+            if (
+              stage.index !== undefined &&
+              stage.index < 4 &&
+              stage.index !== interruptIndex &&
+              pacingMs > 0
+            )
               await (options.wait ?? delay)(pacingMs)
+          }
+          if (stage.kind === 'interrupted') {
+            const name = stageNames[stage.index!]!
+            emitStatus(
+              target,
+              'interrupted',
+              `Escenario interrumpido tras ${name} (MOCK); reanudar con --resume sobre el mismo --output-dir`,
+            )
+            signalInterrupted({ stage: name, index: stage.index! })
           }
           if (stage.kind === 'completed')
             emitStatus(target, 'completed', 'Escenario finalizado')
@@ -417,7 +564,11 @@ export async function startLocalFuturesTerminal(
             return
           }
           if (target === runId) {
-            emitStatus(target, 'running', 'Escenario ejecutándose')
+            emitStatus(
+              target,
+              'running',
+              resumeMessage ?? 'Escenario ejecutándose',
+            )
             releaseSubscription?.()
             return
           }
@@ -446,10 +597,46 @@ export async function startLocalFuturesTerminal(
     throw new Error('API bind failed.')
   const actualPort = address.port
 
+  if (resumeProgress) {
+    // A crash can fall between a stage's durable commit and its market
+    // presentation: restore any committed stage's candles that are missing.
+    store.getTerminalSnapshot(runId)
+    const present = new Set(
+      store
+        .listTerminalEvents(runId, { afterSeq: 0, limit: 500 })
+        .events.flatMap((event) =>
+          event.type === 'market.updated' && isRecord(event.data.candle)
+            ? [Number(event.data.candle.bucket_start_ms)]
+            : [],
+        ),
+    )
+    for (let index = 0; index < resumeProgress.nextStageIndex; index += 1) {
+      const missing = candleEntries(
+        buildLocalScenarioSnapshot(scenarioDefinition, index, {
+          tolerateMissingProtection: true,
+        }),
+        index === 0,
+      ).filter((entry) => {
+        const bucket = Number(
+          (entry.data.candle as Record<string, unknown>).bucket_start_ms,
+        )
+        if (present.has(bucket)) return false
+        present.add(bucket)
+        return true
+      })
+      if (missing.length) store.appendTerminalEvents(runId, missing)
+    }
+    if (resumeProgress.nextStageIndex > 0)
+      runs.get(runId)!.latestSnapshot = buildLocalScenarioSnapshot(
+        scenarioDefinition,
+        resumeProgress.nextStageIndex - 1,
+        { store, runId, tolerateMissingProtection: true },
+      )
+  }
   startScenario(runId, false)
 
   options.onLog?.(
-    `API http://127.0.0.1:${actualPort} · DB ${databasePath} · source local-protection.v1 · funding=0 fixture only`,
+    `API http://127.0.0.1:${actualPort} · DB ${databasePath} · source local-protection.v1 · funding=0 fixture only${resumeProgress ? ` · RESUMED at stage ${Math.min(resumeProgress.nextStageIndex + 1, stageNames.length)}/${stageNames.length}` : ''}`,
   )
   return {
     apiUrl: `http://127.0.0.1:${actualPort}`,
@@ -457,11 +644,14 @@ export async function startLocalFuturesTerminal(
     databasePath,
     runId,
     app,
+    interrupted,
     async close() {
       closing = true
       releaseClosing?.()
       await Promise.allSettled(scenarios)
-      await app.close()
+      // An attached browser keeps its stream socket open; never let that hold
+      // back the durable close of the run (the process exits right after).
+      await Promise.race([app.close(), delay(2_000)])
       await runner.close()
       store.close()
     },

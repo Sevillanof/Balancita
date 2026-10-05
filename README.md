@@ -43,6 +43,59 @@ to third parties. Kraken's terms of use were last reviewed on 2026-09-21. Paper
 trading always uses the deterministic mock feed and its existing local simulator
 authority; Kraken prices are never used to execute or simulate orders.
 
+### Local MOCK futures terminal: start, interrupt, recover
+
+A reproducible, fully simulated BTC/USD perpetual scenario (no network market
+data, no real orders, no credentials, funding fixed at zero). It needs Node
+`>=22.12` (verified on v22.22.2) and `python3` on `PATH` (standard library only).
+The UI is always labeled MOCK; nothing falls back silently to another mode.
+
+Start (fresh run; the output directory must not exist):
+
+```bash
+node scripts/futures-local-terminal.mjs --api-port 8787 --ui-port 5174 \
+  --output-dir /tmp/balancita-demo --interrupt-after-stage partial-fill
+```
+
+Open <http://127.0.0.1:5174/terminal>. The scenario starts when the page
+subscribes. After `partial-fill` commits (stage 3 of 5; long 0.005 BTC open) the
+status line reads "Escenario interrumpido ... (MOCK)", the process prints
+`INTERRUPTED ...` plus a one-line `--resume` hint, and exits with code `75`
+(check with `echo $?`). The UI server stops with it, so the open page cannot be
+reloaded until `--resume` starts it again. All state stays in
+`/tmp/balancita-demo/paper-futures.sqlite`. `--interrupt-after-stage` takes a
+stage name (`warmup`, `entry-selection`, `partial-fill`,
+`protective-stop-crossing`) or `1`-`4`. Without it the run just completes
+(flat, equity `9999.21014`, fees `0.49986`, gross `-0.29`, two fills).
+
+Recover (same ports and directory; reload the page):
+
+```bash
+node scripts/futures-local-terminal.mjs --api-port 8787 --ui-port 5174 \
+  --output-dir /tmp/balancita-demo --resume
+```
+
+`--resume` only accepts a directory created by this launcher for this exact
+scenario (`local-terminal-output.json` plus a verified SQLite run) and refuses a
+missing, foreign, mismatched or corrupted one. It re-verifies the run, continues
+at the first stage without a committed receipt (a stage that was accepted but
+not committed is re-driven by its own work id, so there are no duplicate orders
+or fills), restores any candles that were committed but not yet presented, and
+shows "Escenario reanudado desde SQLite (MOCK) ...". A killed process (Ctrl-C,
+`kill -9`) is recovered the same way.
+
+Verify against a continuous run: the automated check is
+`pnpm --dir server exec vitest run src/features/paper-futures/futures-local-scenario.test.ts`,
+which compares the recovered run with a continuous one (orders, fills, fees,
+position, P&L, analyses, durable events and head hash), including a `SIGKILL`
+at a committed boundary and with a stage accepted but not committed. Manually,
+the final account must equal the continuous values above.
+
+Limits: single scripted scenario; funding is zero, so this does not verify
+funding accrual; recovery is of the scripted MOCK run, not of any real feed;
+pause/resume/new-run commands issued after a recovery replay a rebuilt copy
+of the last scripted market; that path is not verified here.
+
 ## Scripts
 
 | Command             | Description                             |
