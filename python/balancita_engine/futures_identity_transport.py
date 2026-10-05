@@ -6,7 +6,7 @@ PROTOCOL_VERSION = 1
 MAX_KEYS = 128
 MAX_BYTES = 1_048_576
 MAX_QUERIES = 1024
-KINDS = frozenset(("order", "cancel", "trade", "book_budget", "trade_budget", "order_trade", "ledger_fill", "ledger_funding", "ledger_accrual", "runtime_signal"))
+KINDS = frozenset(("order", "cancel", "trade", "book_budget", "trade_budget", "order_trade", "ledger_fill", "ledger_funding", "ledger_accrual", "signal"))
 
 
 class IdentityTransportError(ValueError):
@@ -31,6 +31,8 @@ class JobIdentityClient:
             raise IdentityTransportError("invalid funding range")
         if any(not isinstance(key, str) or not key or len(key.encode("utf-8")) > 4096 for key in keys) or len(set(keys)) != len(keys):
             raise IdentityTransportError("invalid or duplicate identity key")
+        if knowledge_cutoff_ms is None:
+            knowledge_cutoff_ms = self.binding.get("knowledge_cutoff_ms")
         self.sequence += 1
         message = {"type": "identity_query", "protocol_version": PROTOCOL_VERSION, **self.binding,
                    "query_sequence": self.sequence, "operation": operation, "kind": kind, "keys": keys,

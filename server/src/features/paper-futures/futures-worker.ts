@@ -86,6 +86,11 @@ export interface FuturesWorkerResult {
   readonly runtime_output?: Record<string, unknown>
   readonly runtime_checkpoint?: Record<string, unknown>
   readonly runtime_funding_events?: readonly Record<string, unknown>[]
+  /** Present only for explicitly opted-in operative checkpoint runs. */
+  readonly runtime_identity_updates?: {
+    readonly execution: readonly Record<string, unknown>[]
+    readonly ledger: readonly Record<string, unknown>[]
+  }
 }
 
 export interface FuturesWorkerCommit {
@@ -107,6 +112,7 @@ interface Pending {
   identityPending: boolean
   identityAbort?: AbortController
   resultReceived: boolean
+  readonly identityEnabled: boolean
   readonly binding: Readonly<{
     checkpoint_hash: string
     source_frontier: number
@@ -137,6 +143,8 @@ export class FuturesWorker {
         signal: AbortSignal,
       ) => Promise<readonly unknown[] | null>)
     | undefined
+  private readonly identityScope:
+    ((request: FuturesWorkerRequest) => boolean) | undefined
   private readonly spawnProcess: typeof spawn
   private readonly loopDelay:
     ReturnType<typeof monitorEventLoopDelay> | undefined
@@ -157,6 +165,8 @@ export class FuturesWorker {
       query: FuturesIdentityQuery,
       signal: AbortSignal,
     ) => Promise<readonly unknown[] | null>
+    /** Narrows identity RPC to requests that explicitly need it (default: all). */
+    readonly identityScope?: (request: FuturesWorkerRequest) => boolean
     /** Process factory is injectable for protocol-boundary tests. */
     readonly spawnProcess?: typeof spawn
   }) {
@@ -167,6 +177,7 @@ export class FuturesWorker {
       throw new Error(`Worker queue capacity is fixed at ${MAX_QUEUE}.`)
     this.commitResult = options.commitResult
     this.identityLookup = options.identityLookup
+    this.identityScope = options.identityScope
     this.spawnProcess = options.spawnProcess ?? spawn
     this.observer = options.observer
     if (options.eventLoopSampleIntervalMs !== undefined) {
@@ -242,7 +253,10 @@ export class FuturesWorker {
       )
     if (this.queue.length + Number(this.active !== undefined) >= MAX_QUEUE)
       return Promise.reject(new Error('Futures worker queue is full.'))
-    const binding = this.identityLookup
+    const identityEnabled =
+      this.identityLookup !== undefined &&
+      (this.identityScope === undefined || this.identityScope(frozenRequest))
+    const binding = identityEnabled
       ? identityBinding(frozenRequest)
       : Object.freeze({
           checkpoint_hash: '0'.repeat(64),
@@ -283,6 +297,7 @@ export class FuturesWorker {
         identitySequence: 0,
         identityPending: false,
         resultReceived: false,
+        identityEnabled,
         binding,
       })
       const item = this.queue.at(-1)!
@@ -542,6 +557,7 @@ export class FuturesWorker {
       const query = message as unknown as FuturesIdentityQuery
       if (
         !this.identityLookup ||
+        !active.identityEnabled ||
         !validateFuturesIdentityQuery(message) ||
         active.identityPending ||
         active.resultReceived ||
@@ -994,13 +1010,14 @@ function findConfirmedFrontier(checkpoint: unknown): number {
   const context =
     checkpoint.market_context_checkpoint ?? checkpoint.market_context
   if (context === undefined || context === null) return 0
-  if (
-    !isRecord(context) ||
-    !Number.isSafeInteger(context.current_frontier) ||
-    Number(context.current_frontier) < 0
-  )
+  // Runtime checkpoints persist the confirmed frontier as `frontier`; the
+  // transport context names it `current_frontier`.
+  const frontier = isRecord(context)
+    ? (context.current_frontier ?? context.frontier)
+    : undefined
+  if (!Number.isSafeInteger(frontier) || Number(frontier) < 0)
     throw new Error('Checkpoint has no valid confirmed source frontier.')
-  return Number(context.current_frontier)
+  return Number(frontier)
 }
 
 function canonicalJson(value: unknown): string {
@@ -1111,8 +1128,8 @@ function validateIdentityValues(
           ['maker', 'taker'].includes(String(value.liquidity)) &&
           Number.isSafeInteger(value.at_ms)
         )
-      case 'runtime_signal':
-        return false
+      case 'signal':
+        return value === true
     }
   })
 }
@@ -1161,6 +1178,7 @@ function validateWorkerPayload(payload: Record<string, unknown>): boolean {
               'strategy_selection_policy_version',
               'strategy_selection_interval_ms',
               'market_context_policy_version',
+              'operative_checkpoint_policy_version',
             ]
           : [],
       ) ||
@@ -1201,6 +1219,14 @@ function validateWorkerPayload(payload: Record<string, unknown>): boolean {
       (payload.operation !== 'futures_runtime.v3' ||
         config.version !== 'futures-runtime-risk.v1' ||
         config.market_context_policy_version !== 'market-context-transport.v1')
+    )
+      return false
+    if (
+      'operative_checkpoint_policy_version' in config &&
+      (payload.operation !== 'futures_runtime.v3' ||
+        config.version !== 'futures-runtime-risk.v1' ||
+        config.operative_checkpoint_policy_version !==
+          'futures-operative-checkpoint.v1')
     )
       return false
     if (
@@ -1509,6 +1535,16 @@ function isResult(
       isRecord(value.runtime_checkpoint) &&
       Array.isArray(value.runtime_funding_events) &&
       value.runtime_funding_events.every(isRecord) &&
+      (request.payload.runtime_config.operative_checkpoint_policy_version ===
+      'futures-operative-checkpoint.v1'
+        ? isRecord(value.runtime_identity_updates) &&
+          Object.keys(value.runtime_identity_updates).sort().join(',') ===
+            'execution,ledger' &&
+          Array.isArray(value.runtime_identity_updates.execution) &&
+          value.runtime_identity_updates.execution.every(isRecord) &&
+          Array.isArray(value.runtime_identity_updates.ledger) &&
+          value.runtime_identity_updates.ledger.every(isRecord)
+        : value.runtime_identity_updates === undefined) &&
       (request.payload.runtime_config.funding_policy_version !==
         'funding-separation.v1' ||
         (isRecord(value.runtime_output) &&

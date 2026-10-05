@@ -19,6 +19,14 @@ describe('futures identity transport protocol schema', () => {
   }
   it('accepts a bound, typed lookup query', () =>
     expect(validateFuturesIdentityQuery(query)).toBe(true))
+  it('accepts the exact signal kind and no longer exposes runtime_signal', () => {
+    expect(
+      validateFuturesIdentityQuery({ ...query, kind: 'signal', keys: ['s'] }),
+    ).toBe(true)
+    expect(
+      validateFuturesIdentityQuery({ ...query, kind: 'runtime_signal' }),
+    ).toBe(false)
+  })
   it('rejects foreign shape, excess keys, and invalid funding horizon', () => {
     expect(validateFuturesIdentityQuery({ ...query, surprise: true })).toBe(
       false,

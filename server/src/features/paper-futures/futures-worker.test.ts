@@ -278,6 +278,26 @@ describe('FuturesWorker', () => {
     await worker.close()
   })
 
+  it('keeps identity queries disabled for requests outside the trusted scope', async () => {
+    const order: string[] = []
+    const lookup = vi.fn(async () => [null] as readonly unknown[])
+    const worker = new FuturesWorker({
+      spawnProcess: fakeQueryWorker(order) as typeof spawn,
+      identityLookup: lookup,
+      identityScope: () => false,
+      commitResult: async () => {
+        order.push('commit')
+        throw new Error('out-of-scope query must not commit')
+      },
+    })
+    await expect(
+      worker.submit(request('scoped-rpc', 'scoped-work', 'long')),
+    ).rejects.toThrow()
+    expect(lookup).not.toHaveBeenCalled()
+    expect(order).not.toContain('commit')
+    await worker.close()
+  })
+
   it('aborts an in-flight read-only lookup when the worker closes', async () => {
     const order: string[] = []
     let receivedSignal: AbortSignal | undefined

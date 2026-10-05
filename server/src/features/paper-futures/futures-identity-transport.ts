@@ -8,7 +8,7 @@ export const FUTURES_IDENTITY_KINDS = [
   'ledger_fill',
   'ledger_funding',
   'ledger_accrual',
-  'runtime_signal',
+  'signal',
 ] as const
 
 export type FuturesIdentityKind = (typeof FUTURES_IDENTITY_KINDS)[number]

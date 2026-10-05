@@ -1,8 +1,12 @@
 import hashlib
 import json
+import os
+import subprocess
+import sys
 import unittest
+from pathlib import Path
 from copy import deepcopy
-from decimal import Decimal
+from decimal import Decimal, localcontext
 from itertools import count
 
 from balancita_engine.futures_operative_state import (
@@ -296,6 +300,155 @@ class RuntimeOperativeRestoreTests(unittest.TestCase):
         recovered = operative_runtime(store, checkpoint=checkpoint)
         recovered.process(warmed_market(21_600_000, breakout="long"))
         recovered.checkpoint()
+
+
+
+WORKER_ROOT = Path(__file__).resolve().parents[2]
+
+
+class WorkerHost:
+    """Plays the Node host: answers job-bound identity RPC and commit ACKs."""
+
+    def __init__(self, unavailable=False):
+        self.rows, self.queries, self.unavailable = {}, [], unavailable
+        self.process = subprocess.Popen(
+            [sys.executable, "-m", "balancita_engine.futures_worker"], cwd=WORKER_ROOT,
+            env={**os.environ, "PYTHONPATH": str(WORKER_ROOT / "python")},
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1,
+        )
+        self.read()  # ready
+
+    def read(self):
+        line = self.process.stdout.readline()
+        return json.loads(line) if line else None
+
+    def send(self, message):
+        self.process.stdin.write(json.dumps(message) + "\n")
+        self.process.stdin.flush()
+
+    def run(self, work_id, checkpoint, market, version, config=None):
+        request = {
+            "type": "work", "protocol_version": 1, "request_id": "req-" + work_id,
+            "run_id": "operative-run", "work_id": work_id, "expected_state_version": version,
+            "payload": {"operation": "futures_runtime.v3",
+                        "runtime_config": config or risk_config(operative_checkpoint_policy_version=POLICY),
+                        "instrument": INSTRUMENT, "market_snapshot": market},
+            "checkpoint": checkpoint,
+        }
+        self.send(request)
+        while True:
+            message = self.read()
+            if message is None or message["type"] == "error":
+                return message
+            if message["type"] == "identity_query":
+                self.queries.append(message)
+                status = "unavailable" if self.unavailable else "ok"
+                reply = {**message, "type": "identity_reply", "status": status}
+                if status == "ok":
+                    reply["values"] = [self.rows.get((message["kind"], key)) for key in message["keys"]]
+                self.send(reply)
+                continue
+            assert message["type"] == "result", message
+            for group in message["runtime_identity_updates"].values():
+                for item in group:
+                    self.rows[(item["kind"], item["key"])] = item["value"]
+            self.send({"type": "ack", "status": "committed", "protocol_version": 1,
+                       "request_id": request["request_id"], "run_id": "operative-run",
+                       "work_id": work_id, "applied_state_version": version + 1, "result_hash": "a" * 64})
+            self.read()  # committed ack echo
+            return message
+
+    def close(self):
+        self.process.stdin.close()
+        self.process.wait(timeout=10)
+        self.process.stdout.close()
+        self.process.stderr.close()
+
+
+class WorkerOperativeBridgeTests(unittest.TestCase):
+    def test_opted_in_worker_uses_job_bound_identity_rpc_and_returns_compact_state(self):
+        host = WorkerHost()
+        try:
+            market = warmed_market(21_600_000, breakout="long")
+            first = host.run("w1", None, market, 0)
+            self.assertIn("execution_operative_checkpoint", first["runtime_checkpoint"])
+            self.assertNotIn("ledger_events", first["runtime_checkpoint"])
+            self.assertEqual(first["runtime_checkpoint"]["operative_checkpoint_policy_version"], POLICY)
+            signals = [u for u in first["runtime_identity_updates"]["execution"] if u["kind"] == "signal"]
+            self.assertEqual(len(signals), 1)
+            self.assertEqual(host.queries[0]["checkpoint_hash"], hashlib.sha256(b"null").hexdigest())
+            self.assertEqual({q["kind"] for q in host.queries} >= {"signal"}, True)
+            self.assertEqual([q["query_sequence"] for q in host.queries], list(range(1, len(host.queries) + 1)))
+            replay = warmed_market(21_600_100, breakout="long")
+            second = host.run("w2", first["runtime_checkpoint"], replay, 1)
+            self.assertEqual(second["applied_state_version"], 2)
+            self.assertIn("ledger_operative_checkpoint", second["runtime_checkpoint"])
+            self.assertTrue(all(q["checkpoint_hash"] != hashlib.sha256(b"null").hexdigest()
+                                for q in host.queries if q["work_id"] == "w2"))
+        finally:
+            host.close()
+
+    def test_full_funded_cycle_through_the_worker_reconciles_compact_funding_audit(self):
+        host = WorkerHost()
+        try:
+            base, checkpoint, version, sequence, funding_events = 21_600_000, None, 0, count(1), []
+
+            def job(market):
+                nonlocal checkpoint, version
+                next(e for e in market["events"] if e["type"] == "book_snapshot")["sequence"] = next(sequence)
+                outcome = host.run("w{}".format(version), checkpoint, market, version)
+                self.assertEqual(outcome["type"], "result", outcome)
+                checkpoint, version = outcome["runtime_checkpoint"], version + 1
+                funding_events.extend(outcome["runtime_funding_events"])
+                return outcome["runtime_output"]
+
+            job(funded(warmed_market(base, breakout="long", book_size="0.005"), base))
+            opened = job(funded(warmed_market(base + 100, book_size="0.005"), base))
+            self.assertEqual(opened["position"]["quantity_btc"], "0.005")
+            crossing = funded(warmed_market(base + 200, base_price="100000"), base)
+            stop = Decimal(opened["position"]["stop_price_usd_per_btc"])
+            next(e for e in crossing["events"] if e["type"] == "ticker")["mark_usd"] = str(stop - 1)
+            next(e for e in crossing["events"] if e["type"] == "book_snapshot").update(valid=False, contiguous=False)
+            job(crossing)
+            closed = job(funded(warmed_market(base + 300, base_price="100000"), base))
+            self.assertEqual(closed["position"]["quantity_btc"], "0")
+            self.assertTrue(funding_events)
+            with localcontext() as context:
+                context.prec = 50
+                self.assertEqual(
+                    sum((Decimal(item["amount_usd"]) for item in funding_events), Decimal(0)),
+                    Decimal(checkpoint["ledger_operative_checkpoint"]["funding_paid"]),
+                )
+        finally:
+            host.close()
+
+    def test_unavailable_identity_lookup_fails_closed_without_a_result(self):
+        host = WorkerHost(unavailable=True)
+        try:
+            outcome = host.run("w1", None, warmed_market(21_600_000, breakout="long"), 0)
+            self.assertTrue(outcome is None or outcome["type"] == "error")
+        finally:
+            host.process.kill()
+            host.process.wait(timeout=10)
+
+    def test_non_opted_worker_result_and_checkpoint_are_unchanged(self):
+        host = WorkerHost()
+        try:
+            config = risk_config()
+            host.send({
+                "type": "work", "protocol_version": 1, "request_id": "r", "run_id": "operative-run",
+                "work_id": "w", "expected_state_version": 0,
+                "payload": {"operation": "futures_runtime.v3", "runtime_config": config,
+                            "instrument": INSTRUMENT, "market_snapshot": warmed_market(21_600_000, breakout="long")},
+            })
+            message = host.read()
+            self.assertEqual(message["type"], "result")
+            self.assertNotIn("runtime_identity_updates", message)
+            self.assertIn("ledger_events", message["runtime_checkpoint"])
+            self.assertEqual(host.queries, [])
+        finally:
+            host.process.kill()
+            host.process.wait(timeout=10)
 
 
 if __name__ == "__main__":

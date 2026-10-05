@@ -12,7 +12,19 @@ const KINDS = [
   'book_budget',
   'trade_budget',
   'order_trade',
+  'signal',
+  'ledger_fill',
+  'ledger_funding',
+  'ledger_accrual',
 ] as const
+const IMMUTABLE_UNIQUE_KINDS = [
+  'signal',
+  'ledger_fill',
+  'ledger_funding',
+  'ledger_accrual',
+] as const
+export const OPERATIVE_CHECKPOINT_POLICY_VERSION =
+  'futures-operative-checkpoint.v1'
 const MAX_BATCH = 128
 const MAX_BATCH_BYTES = 1_048_576
 const MAX_KEY_BYTES = 4096
@@ -40,6 +52,16 @@ export type FuturesOperativeIdentityValue = {
   book_budget: { asks: Record<string, string>; bids: Record<string, string> }
   trade_budget: string
   order_trade: true
+  signal: true
+  ledger_fill: {
+    side?: 'long' | 'short'
+    quantity: string
+    price: string
+    liquidity: 'maker' | 'taker'
+    at_ms: number
+  }
+  ledger_funding: string
+  ledger_accrual: string
 }
 
 export type FuturesOperativeIdentityUpdate = {
@@ -73,6 +95,75 @@ type HistoryRow = {
   source_frontier: number
   work_id: string
   expected_version: number
+}
+
+/** True only for a frozen runtime configuration that explicitly opts in. */
+export function isOperativeRuntimeConfig(config: unknown): boolean {
+  return (
+    isRecord(config) &&
+    config.operative_checkpoint_policy_version ===
+      OPERATIVE_CHECKPOINT_POLICY_VERSION
+  )
+}
+
+const LEDGER_OPERATIVE_KEYS = [
+  'checkpoint_version',
+  'config',
+  'cash',
+  'leverage',
+  'realized_gross',
+  'fees',
+  'funding_paid',
+  'funding_complete',
+  'position',
+  'last_accrual_ms',
+  'funding_rates',
+]
+
+/**
+ * Legacy-shaped read view of a compact operative checkpoint, so existing
+ * validators and admission readers see the same ledger and active-order fields.
+ * Audit history (events, accrued, consumed depth) is intentionally absent from
+ * the compact state and is surfaced as empty here.
+ */
+export function operativeCheckpointView(
+  checkpoint: Record<string, unknown>,
+): Record<string, unknown> {
+  if (!isRecord(checkpoint)) return checkpoint
+  const ledger = checkpoint.ledger_operative_checkpoint
+  const execution = checkpoint.execution_operative_checkpoint
+  if (ledger === undefined && execution === undefined) return checkpoint
+  if (
+    !isRecord(ledger) ||
+    !isRecord(execution) ||
+    Object.keys(ledger).sort().join(',') !==
+      [...LEDGER_OPERATIVE_KEYS].sort().join(',') ||
+    ledger.checkpoint_version !== 'paper-futures-ledger-operative.v1' ||
+    !Array.isArray(ledger.funding_rates) ||
+    ledger.funding_rates.length > MAX_BATCH ||
+    !(ledger.position === null || isRecord(ledger.position)) ||
+    typeof ledger.funding_complete !== 'boolean' ||
+    !['cash', 'leverage', 'realized_gross', 'fees', 'funding_paid'].every(
+      (key) => isDecimalString(ledger[key]),
+    )
+  )
+    throw new Error('Malformed compact operative checkpoint.')
+  return {
+    ...checkpoint,
+    cash_usd: ledger.cash,
+    leverage: ledger.leverage,
+    realized_gross_usd: ledger.realized_gross,
+    fees_usd: ledger.fees,
+    funding_paid: ledger.funding_paid,
+    funding_complete: ledger.funding_complete,
+    ledger_last_accrual_ms: ledger.last_accrual_ms,
+    ledger_position: ledger.position,
+    funding_rates: ledger.funding_rates,
+    accrued: [],
+    consumed_depth: {},
+    ledger_events: [],
+    execution_checkpoint: execution,
+  }
 }
 
 export type FuturesOperativeIdentityTransaction = {
@@ -448,6 +539,17 @@ export class FuturesOperativeIdentityStore {
     return output
   }
 
+  /** Batch hash recorded for each applied work; verifyRun proves these rows. */
+  workBatchHashes(runId: string): Map<string, string> {
+    validateRunId(runId)
+    const rows = this.db
+      .prepare(
+        'SELECT work_id,batch_hash FROM futures_operative_identity_work WHERE run_id=?',
+      )
+      .all(runId) as { work_id: string; batch_hash: string }[]
+    return new Map(rows.map((row) => [row.work_id, row.batch_hash]))
+  }
+
   verifyRun(runId: string): { records: number; identities: number } {
     validateRunId(runId)
     const rows = this.db
@@ -725,6 +827,35 @@ function validateValue<K extends FuturesOperativeIdentityKind>(
       throw new Error('Malformed operative trade-budget payload.')
     return
   }
+  if (kind === 'signal') {
+    if (value !== true)
+      throw new Error('Malformed operative signal identity payload.')
+    return
+  }
+  if (kind === 'ledger_funding' || kind === 'ledger_accrual') {
+    if (!isDecimalString(value))
+      throw new Error(`Malformed operative ${kind} identity payload.`)
+    return
+  }
+  if (kind === 'ledger_fill') {
+    const keys = isRecord(candidate)
+      ? Object.keys(candidate).sort().join(',')
+      : ''
+    if (
+      !isRecord(candidate) ||
+      (keys !== 'at_ms,liquidity,price,quantity' &&
+        keys !== 'at_ms,liquidity,price,quantity,side') ||
+      (candidate.side !== undefined &&
+        candidate.side !== 'long' &&
+        candidate.side !== 'short') ||
+      !isDecimalString(candidate.quantity) ||
+      !isDecimalString(candidate.price) ||
+      (candidate.liquidity !== 'maker' && candidate.liquidity !== 'taker') ||
+      !Number.isSafeInteger(candidate.at_ms)
+    )
+      throw new Error('Malformed operative ledger fill identity payload.')
+    return
+  }
   if (value !== true)
     throw new Error('Malformed per-order trade-seen identity payload.')
 }
@@ -735,6 +866,10 @@ function validateTransition(
   next: FuturesOperativeIdentityValue[FuturesOperativeIdentityKind],
 ): void {
   if (prior === null) return
+  if ((IMMUTABLE_UNIQUE_KINDS as readonly string[]).includes(kind))
+    throw new Error(
+      `Duplicate or conflicting immutable operative ${kind} identity.`,
+    )
   if (kind === 'cancel' || kind === 'trade' || kind === 'order_trade') {
     if (canonicalJson(prior) !== canonicalJson(next))
       throw new Error(`Conflicting immutable operative ${kind} identity.`)

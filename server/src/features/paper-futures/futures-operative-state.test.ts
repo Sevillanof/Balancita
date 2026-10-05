@@ -437,4 +437,86 @@ describe('FuturesOperativeIdentityStore', () => {
       ),
     ).toThrow(/conflict/i)
   })
+
+  it('stores exact append-only signal and ledger identities and rejects a duplicate', () => {
+    const { identities } = fixture()
+    const fill = {
+      quantity: '0.1',
+      price: '100000',
+      liquidity: 'taker',
+      at_ms: 5,
+      side: 'long',
+    }
+    const updates = [
+      {
+        kind: 'signal',
+        key: 'c27:long:1',
+        value: true,
+        provenance: 'signal:c27:long:1',
+      },
+      {
+        kind: 'ledger_fill',
+        key: 'fill-1',
+        value: fill,
+        provenance: 'fill:fill-1',
+      },
+      {
+        kind: 'ledger_funding',
+        key: '["f1",0,3600000]',
+        value: '0.0001',
+        provenance: 'funding:f1',
+      },
+      {
+        kind: 'ledger_accrual',
+        key: '["f1",0,10,"0.1"]',
+        value: '-0.00001',
+        provenance: 'accrual:f1',
+      },
+    ] as unknown as FuturesOperativeIdentityUpdate[]
+    identities.withTransaction((transaction) =>
+      identities.apply(transaction, {
+        runId: 'run-a',
+        workId: 'work-a',
+        expectedStateVersion: 0,
+        sourceFrontier: 0,
+        confirmedSourceFrontier: 0,
+        updates,
+      }),
+    )
+    expect(identities.lookup('run-a', 'signal', 'c27:long:1')).toBe(true)
+    expect(identities.lookup('run-a', 'ledger_fill', 'fill-1')).toEqual(fill)
+    expect(identities.lookup('run-a', 'signal', 'c27:long:2')).toBeNull()
+    expect(identities.verifyRun('run-a')).toEqual({ records: 4, identities: 4 })
+    expect(() =>
+      identities.withTransaction((transaction) =>
+        identities.apply(transaction, {
+          runId: 'run-a',
+          workId: 'size-work',
+          expectedStateVersion: 0,
+          sourceFrontier: 0,
+          confirmedSourceFrontier: 0,
+          updates: [updates[0]!],
+        }),
+      ),
+    ).toThrow(/duplicate|conflict/i)
+    expect(() =>
+      identities.withTransaction((transaction) =>
+        identities.apply(transaction, {
+          runId: 'run-a',
+          workId: 'size-work',
+          expectedStateVersion: 0,
+          sourceFrontier: 0,
+          confirmedSourceFrontier: 0,
+          updates: [
+            {
+              kind: 'signal',
+              key: 'c27:long:9',
+              value: false,
+              provenance: 'x',
+            },
+          ] as unknown as FuturesOperativeIdentityUpdate[],
+        }),
+      ),
+    ).toThrow(/signal/i)
+  })
 })

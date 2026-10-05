@@ -14,6 +14,11 @@ import {
 } from './futures-worker.ts'
 import { canonicalHash } from './futures-canonical.ts'
 import {
+  isOperativeRuntimeConfig,
+  operativeCheckpointView,
+  type FuturesOperativeIdentityKind,
+} from './futures-operative-state.ts'
+import {
   MARKET_CONTEXT_SCHEMA_VERSION,
   validateMarketContextTransport,
 } from './futures-market-context.ts'
@@ -59,6 +64,15 @@ export type FuturesAdmissionState = Readonly<
   }
 >
 
+/** Read-only legacy-shaped view; opted-in compact checkpoints are never rewritten. */
+function readableCheckpoint(
+  checkpoint: Record<string, unknown>,
+): Record<string, unknown> {
+  return isOperativeRuntimeConfig(checkpoint.runtime_config)
+    ? operativeCheckpointView(checkpoint)
+    : checkpoint
+}
+
 const INSTRUMENT_ID = 'kraken-futures:PF_XBTUSD'
 const COST_VERSION = 'kraken-futures-eea-btcusd-base.v1'
 const VERIFIED_DUE = Symbol('verified-due')
@@ -94,6 +108,31 @@ export class FuturesCommandRunner {
           ? undefined
           : Number(process.env.BALANCITA_WORKER_EVENT_LOOP_INTERVAL_MS),
       commitResult: (result, request) => this.commit(result, request),
+      // Operative identity RPC is wired for explicitly opted-in runs only; other
+      // runs keep their exact legacy worker behavior (no binding, no queries).
+      identityScope: (request) =>
+        'runtime_config' in request.payload &&
+        isOperativeRuntimeConfig(request.payload.runtime_config),
+      identityLookup: async (request, query) => {
+        if (
+          query.operation !== 'lookup' ||
+          !isOperativeRuntimeConfig(
+            'runtime_config' in request.payload
+              ? request.payload.runtime_config
+              : undefined,
+          )
+        )
+          return null
+        try {
+          return this.store.lookupOperativeIdentities(
+            query.run_id,
+            query.kind as FuturesOperativeIdentityKind,
+            query.keys,
+          )
+        } catch {
+          return null
+        }
+      },
     })
   }
 
@@ -206,7 +245,9 @@ export class FuturesCommandRunner {
       decisionClock,
     )
     const dueReduction = this.hasDueReductionOrder(checkpoint, decisionClock)
-    const positionOpen = isRecord(checkpoint.ledger_position)
+    const positionOpen = isRecord(
+      readableCheckpoint(checkpoint).ledger_position,
+    )
     const fundingBoundaryOnly =
       admission.next_due_at.unknown_reasons.length > 0 &&
       admission.next_due_at.unknown_reasons.every(
@@ -685,7 +726,7 @@ export class FuturesCommandRunner {
           head.stateVersion,
           head.headHash,
         )
-      const checkpoint = projection.checkpoint
+      const checkpoint = readableCheckpoint(projection.checkpoint)
       if (checkpoint.schema_version !== 3 && checkpoint.schema_version !== 4)
         return failClosed(
           'unsupported_checkpoint_schema',
@@ -1003,7 +1044,7 @@ export class FuturesCommandRunner {
     if (request.payload.operation !== 'futures_runtime.v3') return false
     const decisionTime = request.payload.market_snapshot.decision_time_ms
     if (!Number.isSafeInteger(decisionTime)) return false
-    const execution = checkpoint.execution_checkpoint
+    const execution = readableCheckpoint(checkpoint).execution_checkpoint
     const orders =
       isRecord(execution) && isRecord(execution.orders)
         ? Object.values(execution.orders)
@@ -1056,6 +1097,7 @@ export class FuturesCommandRunner {
     lastDecisionTime: number | null,
     instrumentSpec: unknown,
   ): number | null {
+    checkpoint = readableCheckpoint(checkpoint)
     const position = checkpoint.ledger_position
     const policy = checkpoint.funding_policy_checkpoint
     const evidence = isRecord(policy) ? policy.evidence : undefined
@@ -1129,7 +1171,7 @@ export class FuturesCommandRunner {
     checkpoint: Record<string, unknown>,
     decisionClock: number,
   ): boolean {
-    const execution = checkpoint.execution_checkpoint
+    const execution = readableCheckpoint(checkpoint).execution_checkpoint
     const orders =
       isRecord(execution) && isRecord(execution.orders)
         ? Object.values(execution.orders)
@@ -1298,6 +1340,9 @@ export class FuturesCommandRunner {
             events,
             runtime_output: result.runtime_output,
             runtime_checkpoint: result.runtime_checkpoint,
+            ...(result.runtime_identity_updates === undefined
+              ? {}
+              : { runtime_identity_updates: result.runtime_identity_updates }),
           }
         : {
             protocol_version: 1,
