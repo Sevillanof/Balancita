@@ -1,0 +1,23 @@
+odd/tasks/futures-bounded-processing.md
+  s_4c416eb7c67ab5::t_4ca6bd5a7019a8 41-53
+src/features/trading-view/presentation/ApprovedTerminalChart.test.tsx
+  s_4c416eb7c67ab5::t_ef955a86ca3b45 6,8,38,267-304
+src/features/trading-view/presentation/ApprovedTerminalChart.tsx
+  s_4c416eb7c67ab5::t_d9c0000c6eae3e 101-141,165,229,308,405-410,412-421
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "51162245914ef46f4a31817f3ec3a6726d7f486b",
+  "prompts": {},
+  "sessions": {
+    "s_4c416eb7c67ab5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8fb4e35b-ecee-47bd-89d4-41bd62d0571a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
