@@ -1,0 +1,43 @@
+odd/tasks/futures-bounded-processing.md
+  s_4c416eb7c67ab5::t_9aa2a73391bd52 91-97
+python/balancita_engine/futures_identity_transport.py
+  s_4c416eb7c67ab5::t_08555cecf4a6ab 9,34-35
+python/balancita_engine/futures_worker.py
+  s_4c416eb7c67ab5::t_fce5c8debe2b96 11-12,14-19,80-145,178-185,191,198-219,221,240,246,264,280-282,436-443
+python/tests/test_futures_runtime_operative.py
+  s_4c416eb7c67ab5::t_3ede6a610134ff 3-5,7,9,305-453
+server/src/features/paper-futures/futures-command-runner.ts
+  s_4c416eb7c67ab5::t_4a15eff835ab09 16-20,67-75,111-135,248-250,729,1047,1100,1174,1343-1345
+server/src/features/paper-futures/futures-identity-transport.test.ts
+  s_4c416eb7c67ab5::t_7558bda0328a39 22-29
+server/src/features/paper-futures/futures-identity-transport.ts
+  s_4c416eb7c67ab5::t_800d6ccf2190f1 11
+server/src/features/paper-futures/futures-operative-bridge.test.ts
+  s_4c416eb7c67ab5::t_4f3ec34de70787 1-323
+server/src/features/paper-futures/futures-operative-state.test.ts
+  s_4c416eb7c67ab5::t_cd275c0e6afa22 440-521
+server/src/features/paper-futures/futures-operative-state.ts
+  s_4c416eb7c67ab5::t_8b9ed228451c4a 15-18,20-27,55-64,100-168,542-552,830-858,869-872
+server/src/features/paper-futures/futures-store.ts
+  s_4c416eb7c67ab5::t_a2c174921ef678 12-21,102-104,240,303-317,1053,1094-1100,1258-1273,2112-2115,2178-2186,2216-2229,2321-2323,2817,2823-2830,2942,2947-2981,2986-2988,3021-3024,3027-3039,3054-3069,3131,3707-3771,3783,3785-3795,3818-3819,3821-3869,3885-3890,4032
+server/src/features/paper-futures/futures-worker.test.ts
+  s_4c416eb7c67ab5::t_6862448b36151e 281-300
+server/src/features/paper-futures/futures-worker.ts
+  s_4c416eb7c67ab5::t_4733a021be047c 89-93,115,146-147,168-169,180,256-259,300,560,1013-1018,1020,1131-1132,1181,1224-1231,1538-1547
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d2503b4038d7cc640db4d5b919a5bdbdefcb4dcf",
+  "prompts": {},
+  "sessions": {
+    "s_4c416eb7c67ab5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8fb4e35b-ecee-47bd-89d4-41bd62d0571a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
