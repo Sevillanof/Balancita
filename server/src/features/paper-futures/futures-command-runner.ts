@@ -13,6 +13,10 @@ import {
   validateFuturesWorkerRequest,
 } from './futures-worker.ts'
 import { canonicalHash } from './futures-canonical.ts'
+import {
+  MARKET_CONTEXT_SCHEMA_VERSION,
+  validateMarketContextTransport,
+} from './futures-market-context.ts'
 
 export type FuturesAdmissionPolicy = Readonly<{
   schema_version: 'futures-entry-admission.v1'
@@ -57,6 +61,7 @@ export type FuturesAdmissionState = Readonly<
 
 const INSTRUMENT_ID = 'kraken-futures:PF_XBTUSD'
 const COST_VERSION = 'kraken-futures-eea-btcusd-base.v1'
+const VERIFIED_DUE = Symbol('verified-due')
 
 /** Accepts commands durably before scheduling their deterministic ledger fixture. */
 export class FuturesCommandRunner {
@@ -99,11 +104,164 @@ export class FuturesCommandRunner {
     readonly acknowledgement: Record<string, unknown>
     readonly result: Promise<Record<string, unknown>>
   } {
+    return this.acceptInternal(request, terminalCommand)
+  }
+
+  /**
+   * Accept a source-free execution decision when frozen admission state proves
+   * that financial work is due. Callers must drain/check pending source rows
+   * before invoking this method; queue ownership belongs to the session layer.
+   */
+  acceptDue(
+    request: FuturesWorkerRequest,
+    policy: FuturesAdmissionPolicy,
+    decisionClock: number,
+  ): {
+    readonly acknowledgement: Record<string, unknown>
+    readonly result: Promise<Record<string, unknown>>
+  } {
+    const existing = this.store.getAcceptedCommand(request.work_id)
+    if (existing !== undefined) {
+      const queued = parseQueuedCommand(existing, request.work_id)
+      const reconstructed = this.prepareAcceptedMarketContext(
+        request,
+        undefined,
+        queued.checkpoint,
+        VERIFIED_DUE,
+      )
+      if (
+        !queued.checkpoint ||
+        !this.hasDueOrderDeadline(
+          reconstructed,
+          queued.checkpoint,
+          decisionClock,
+        ) ||
+        !isDeepStrictEqual(reconstructed, queued.request)
+      )
+        throw new Error('Due work identity conflicts with its durable request.')
+      const acknowledgement = this.store.acceptCommand(
+        request.work_id,
+        queued.request,
+        undefined,
+        queued.checkpoint,
+      )
+      const result = this.store.getCommandResult(request.work_id)
+      if (result) return { acknowledgement, result: Promise.resolve(result) }
+    }
+    if (
+      request.payload.operation !== 'futures_runtime.v3' ||
+      request.payload.runtime_config.market_context_policy_version !==
+        MARKET_CONTEXT_SCHEMA_VERSION ||
+      !Number.isSafeInteger(decisionClock) ||
+      request.payload.market_snapshot.cutoff_received_at_ms !== decisionClock ||
+      request.payload.market_snapshot.decision_time_ms !== decisionClock ||
+      request.payload.market_snapshot.market_context !== undefined ||
+      !Array.isArray(request.payload.market_snapshot.events) ||
+      request.payload.market_snapshot.events.length !== 0
+    )
+      throw new Error(
+        'A due request requires a marked runtime and decision clock.',
+      )
+    const binding = this.store.getRuntimeBinding(request.run_id)
+    if (
+      !binding ||
+      binding.schema_version !== 'futures-runtime-binding.v5' ||
+      !isDeepStrictEqual(
+        binding.runtime_config,
+        request.payload.runtime_config,
+      ) ||
+      !isDeepStrictEqual(binding.instrument_spec, request.payload.instrument)
+    )
+      throw new Error('Due request requires its frozen runtime binding.')
+    if (
+      !isRecord(binding.admission_policy) ||
+      binding.admission_policy.schema_version !== policy.schema_version ||
+      binding.admission_policy.evaluation_interval_ms !==
+        policy.evaluation_interval_ms ||
+      binding.admission_policy.hash !== canonicalHash(policy)
+    )
+      throw new Error('Due request conflicts with frozen admission policy.')
+    const projection = this.store.getRunProjection(request.run_id)
+    const checkpoint = isRecord(projection?.checkpoint)
+      ? (projection.checkpoint as Record<string, unknown>)
+      : null
+    const priorContext = isRecord(checkpoint?.market_context_checkpoint)
+      ? checkpoint.market_context_checkpoint
+      : undefined
+    if (
+      !checkpoint ||
+      !priorContext ||
+      priorContext.policy_version !== MARKET_CONTEXT_SCHEMA_VERSION ||
+      priorContext.instrument_id !== request.payload.instrument.instrument_id ||
+      typeof priorContext.source_identity !== 'string' ||
+      !Number.isSafeInteger(priorContext.frontier) ||
+      !isRecord(priorContext.anchors)
+    )
+      throw new Error('Due work requires a verified source-bound checkpoint.')
+    if (!this.hasDueOrderDeadline(request, checkpoint, decisionClock))
+      throw new Error('Due request has no persisted supported deadline.')
+    const admission = this.readAdmissionState(
+      request.run_id,
+      policy,
+      decisionClock,
+    )
+    const dueReduction = this.hasDueReductionOrder(checkpoint, decisionClock)
+    const positionOpen = isRecord(checkpoint.ledger_position)
+    const fundingBoundaryOnly =
+      admission.next_due_at.unknown_reasons.length > 0 &&
+      admission.next_due_at.unknown_reasons.every(
+        (reason) => reason === 'funding_boundary_unknown',
+      )
+    const fundingBlocksEntry =
+      admission.entry_block_causes?.some((cause) =>
+        ['funding_unavailable', 'funding_accounting_incomplete'].includes(
+          cause,
+        ),
+      ) ?? false
+    if (
+      admission.confirmed_state_version !== request.expected_state_version ||
+      admission.source_clock_ms !== decisionClock ||
+      admission.next_due_at.time_ms === null ||
+      admission.next_due_at.time_ms > decisionClock ||
+      (admission.next_due_at.unknown_reasons.length !== 0 &&
+        !(fundingBoundaryOnly && (dueReduction || positionOpen))) ||
+      (fundingBlocksEntry &&
+        admission.next_due_at.reasons.some(
+          (reason) => reason === 'strategy_evaluation',
+        ) &&
+        !dueReduction &&
+        !positionOpen &&
+        admission.active_order_count === 0) ||
+      admission.next_due_at.reasons.length === 0 ||
+      admission.next_due_at.reasons.some(
+        (reason) =>
+          ![
+            'order_eligibility',
+            'order_expiry',
+            'strategy_evaluation',
+            'utc_risk_day_rollover',
+            'funding_boundary',
+          ].includes(reason),
+      ) ||
+      admission.in_flight_work_count !== 0 ||
+      admission.pending_commands.any !== false
+    )
+      throw new Error('Verified admission state does not prove due work.')
+    return this.acceptInternal(request, undefined, VERIFIED_DUE)
+  }
+
+  private acceptInternal(
+    request: FuturesWorkerRequest,
+    terminalCommand?: TerminalCommandMetadata,
+    dueCapability?: typeof VERIFIED_DUE,
+  ): {
+    readonly acknowledgement: Record<string, unknown>
+    readonly result: Promise<Record<string, unknown>>
+  } {
     if (request.checkpoint !== undefined)
       throw new Error(
         'Futures command checkpoint is assigned by the Node store.',
       )
-    validateFuturesWorkerRequest(request)
     let checkpoint: Record<string, unknown> | null
     const binding = this.store.getRuntimeBinding(request.run_id)
     if (
@@ -153,6 +311,19 @@ export class FuturesCommandRunner {
           unknown
         > | null) ?? null
     }
+    request = this.prepareAcceptedMarketContext(
+      request,
+      terminalCommand,
+      checkpoint,
+      dueCapability,
+    )
+    this.validateAcceptedMarketContext(
+      request,
+      terminalCommand,
+      checkpoint,
+      dueCapability,
+    )
+    validateFuturesWorkerRequest(request)
     const acknowledgement = this.store.acceptCommand(
       request.work_id,
       request,
@@ -169,6 +340,246 @@ export class FuturesCommandRunner {
     )
     const result = this.startOrJoin(queued.request, queued.checkpoint)
     return { acknowledgement, result }
+  }
+
+  private validateAcceptedMarketContext(
+    request: FuturesWorkerRequest,
+    terminalCommand: TerminalCommandMetadata | undefined,
+    checkpoint: Record<string, unknown> | null,
+    dueCapability?: typeof VERIFIED_DUE,
+  ): void {
+    if (
+      request.payload.operation !== 'futures_runtime.v3' ||
+      request.payload.runtime_config.market_context_policy_version !==
+        MARKET_CONTEXT_SCHEMA_VERSION
+    )
+      return
+    const snapshot = request.payload.market_snapshot
+    const context = snapshot.market_context
+    if (
+      !validateMarketContextTransport(context) ||
+      context.instrument_id !== request.payload.instrument.instrument_id ||
+      context.knowledge_cutoff_ms !== snapshot.cutoff_received_at_ms
+    )
+      throw new Error('Accepted market context is missing or invalid.')
+    const acceptedControl =
+      request.payload.control !== undefined &&
+      isRecord(request.payload.control) &&
+      terminalCommand !== undefined &&
+      terminalCommand.command_id === request.work_id &&
+      terminalCommand.action === request.payload.control.type &&
+      terminalCommand.stream_run_id === request.run_id &&
+      terminalCommand.expected_state_version ===
+        request.expected_state_version &&
+      request.payload.control.command_id === request.work_id &&
+      ['paper.pause', 'paper.resume', 'paper.close'].includes(
+        terminalCommand.action,
+      )
+    const acceptedNewRun =
+      terminalCommand?.action === 'paper.new_run' &&
+      terminalCommand.command_id === request.work_id &&
+      terminalCommand.child_run_id === request.run_id &&
+      terminalCommand.expected_state_version ===
+        request.expected_state_version &&
+      request.expected_state_version === 0 &&
+      this.store.getRunProjection(request.run_id)?.state_version === 0
+    const priorContext = isRecord(checkpoint?.market_context_checkpoint)
+      ? checkpoint.market_context_checkpoint
+      : undefined
+    const previousFrontier = priorContext ? priorContext.frontier : 0
+    if (context.previous_frontier !== previousFrontier)
+      throw new Error('Accepted market context frontier is discontinuous.')
+    if (context.source_identity === null) {
+      const unboundPrior =
+        priorContext?.source_identity === null &&
+        priorContext.frontier === 0 &&
+        isRecord(priorContext.anchors) &&
+        Object.keys(priorContext.anchors).length === 0
+      const initialRun =
+        priorContext === undefined &&
+        checkpoint === null &&
+        request.expected_state_version === 0 &&
+        this.store.getRunProjection(request.run_id)?.state_version === 0
+      if (
+        (!acceptedControl && !acceptedNewRun) ||
+        (!unboundPrior && !initialRun) ||
+        context.current_frontier !== 0 ||
+        context.bootstrap_events.length !== 0 ||
+        context.delta_events.length !== 0 ||
+        !Array.isArray(snapshot.events) ||
+        snapshot.events.length !== 0
+      )
+        throw new Error(
+          'Unbound market context is restricted to a cold flat control.',
+        )
+      return
+    }
+    const replayBinding = this.store.getReplaySessionBinding(request.run_id)
+    const manifest = isRecord(replayBinding?.manifest)
+      ? replayBinding.manifest
+      : undefined
+    if (!manifest)
+      throw new Error('Source-bound market context requires a frozen manifest.')
+    const expectedSourceIdentity = canonicalHash({
+      schema_version: 'market-context-source-identity.v1',
+      source: manifest.source,
+      source_hash: manifest.source_hash,
+      instrument_hash:
+        manifest.instrument_hash ?? canonicalHash(request.payload.instrument),
+    })
+    const unboundPrior =
+      priorContext?.source_identity === null &&
+      priorContext.frontier === 0 &&
+      isRecord(priorContext.anchors) &&
+      Object.keys(priorContext.anchors).length === 0
+    if (
+      context.source_identity !== expectedSourceIdentity ||
+      (priorContext &&
+        !unboundPrior &&
+        priorContext.source_identity !== expectedSourceIdentity) ||
+      (unboundPrior && context.previous_frontier !== 0) ||
+      (context.current_frontier === context.previous_frontier &&
+        ((!acceptedControl && dueCapability !== VERIFIED_DUE) ||
+          !isDeepStrictEqual(snapshot.events, context.bootstrap_events))) ||
+      (context.current_frontier > context.previous_frontier &&
+        context.delta_events.length === 0)
+    )
+      throw new Error(
+        'Accepted market context source identity or progress is invalid.',
+      )
+  }
+
+  private prepareAcceptedMarketContext(
+    request: FuturesWorkerRequest,
+    terminalCommand: TerminalCommandMetadata | undefined,
+    checkpoint: Record<string, unknown> | null,
+    dueCapability?: typeof VERIFIED_DUE,
+  ): FuturesWorkerRequest {
+    if (request.payload.operation !== 'futures_runtime.v3') return request
+    const config = request.payload.runtime_config
+    const acceptedControl =
+      isRecord(request.payload.control) &&
+      terminalCommand !== undefined &&
+      terminalCommand.command_id === request.work_id &&
+      terminalCommand.action === request.payload.control.type &&
+      terminalCommand.stream_run_id === request.run_id &&
+      terminalCommand.expected_state_version ===
+        request.expected_state_version &&
+      request.payload.control.command_id === request.work_id &&
+      ['paper.pause', 'paper.resume', 'paper.close'].includes(
+        terminalCommand.action,
+      )
+    const acceptedNewRun =
+      terminalCommand?.action === 'paper.new_run' &&
+      terminalCommand.command_id === request.work_id &&
+      terminalCommand.child_run_id === request.run_id &&
+      terminalCommand.expected_state_version ===
+        request.expected_state_version &&
+      request.expected_state_version === 0 &&
+      this.store.getRunProjection(request.run_id)?.state_version === 0
+    if (
+      config.market_context_policy_version !== MARKET_CONTEXT_SCHEMA_VERSION ||
+      request.payload.market_snapshot.market_context !== undefined ||
+      (!acceptedControl && !acceptedNewRun && dueCapability !== VERIFIED_DUE) ||
+      !Array.isArray(request.payload.market_snapshot.events) ||
+      request.payload.market_snapshot.events.length !== 0
+    )
+      return request
+
+    const priorCheckpoint = isRecord(checkpoint?.market_context_checkpoint)
+      ? checkpoint.market_context_checkpoint
+      : undefined
+    const replayBinding = this.store.getReplaySessionBinding(request.run_id)
+    const manifest = isRecord(replayBinding?.manifest)
+      ? replayBinding.manifest
+      : undefined
+    const priorUnbound =
+      priorCheckpoint?.policy_version === MARKET_CONTEXT_SCHEMA_VERSION &&
+      priorCheckpoint.source_identity === null &&
+      priorCheckpoint.frontier === 0 &&
+      isRecord(priorCheckpoint.anchors) &&
+      Object.keys(priorCheckpoint.anchors).length === 0
+    const projection = this.store.getRunProjection(request.run_id)
+    const coldStart =
+      !priorCheckpoint &&
+      checkpoint === null &&
+      request.expected_state_version === 0 &&
+      projection?.state_version === 0
+    let sourceIdentity: string | null
+    let frontier: number
+    let anchors: Record<string, unknown>[]
+    if (coldStart || priorUnbound) {
+      if (
+        priorUnbound &&
+        priorCheckpoint?.instrument_id !==
+          request.payload.instrument.instrument_id
+      )
+        return request
+      sourceIdentity = null
+      frontier = 0
+      anchors = []
+    } else {
+      if (
+        !priorCheckpoint ||
+        priorCheckpoint.policy_version !== MARKET_CONTEXT_SCHEMA_VERSION ||
+        priorCheckpoint.instrument_id !==
+          request.payload.instrument.instrument_id ||
+        typeof priorCheckpoint.source_identity !== 'string' ||
+        !Number.isSafeInteger(priorCheckpoint.frontier) ||
+        !isRecord(priorCheckpoint.anchors) ||
+        !manifest
+      )
+        return request
+      const expectedSourceIdentity = canonicalHash({
+        schema_version: 'market-context-source-identity.v1',
+        source: manifest.source,
+        source_hash: manifest.source_hash,
+        instrument_hash:
+          manifest.instrument_hash ?? canonicalHash(request.payload.instrument),
+      })
+      if (priorCheckpoint.source_identity !== expectedSourceIdentity)
+        return request
+      sourceIdentity = expectedSourceIdentity
+      frontier = Number(priorCheckpoint.frontier)
+      const cutoffForAnchors = Number(
+        request.payload.market_snapshot.cutoff_received_at_ms,
+      )
+      anchors = Object.values(priorCheckpoint.anchors).filter(
+        (event) =>
+          isRecord(event) &&
+          event.context_anchor === true &&
+          Number.isSafeInteger(event.source_receipt_sequence) &&
+          Number(event.source_receipt_sequence) <= frontier &&
+          Number.isSafeInteger(event.known_at_ms) &&
+          Number(event.known_at_ms) <= cutoffForAnchors &&
+          Number.isSafeInteger(event.received_at_ms) &&
+          Number(event.received_at_ms) <= cutoffForAnchors,
+      ) as Record<string, unknown>[]
+    }
+    const cutoff = Number(request.payload.market_snapshot.cutoff_received_at_ms)
+    const context = {
+      schema_version: MARKET_CONTEXT_SCHEMA_VERSION,
+      source_identity: sourceIdentity,
+      instrument_id: request.payload.instrument.instrument_id,
+      previous_frontier: frontier,
+      current_frontier: frontier,
+      knowledge_cutoff_ms: cutoff,
+      bootstrap_events: anchors,
+      delta_events: [],
+    }
+    if (!validateMarketContextTransport(context))
+      throw new Error(
+        'Durable market context cannot bind accepted control work.',
+      )
+    const payload = {
+      ...request.payload,
+      market_snapshot: {
+        ...request.payload.market_snapshot,
+        events: anchors,
+        market_context: context,
+      },
+    }
+    return { ...request, payload } as FuturesWorkerRequest
   }
 
   async resumePending(): Promise<Record<string, unknown>[]> {
@@ -361,7 +772,8 @@ export class FuturesCommandRunner {
       const sourceSequence =
         this.store.getLastAppliedReplaySourceSequence(runId)
       const lastDecisionTime = this.store.getLastAppliedDecisionTime(runId)
-      const runtimeConfig = this.store.getRuntimeBinding(runId)?.runtime_config
+      const runtimeBinding = this.store.getRuntimeBinding(runId)
+      const runtimeConfig = runtimeBinding?.runtime_config
       const cadenceEnabled =
         isRecord(runtimeConfig) &&
         runtimeConfig.strategy_selection_policy_version ===
@@ -456,8 +868,16 @@ export class FuturesCommandRunner {
       if (!riskKnown) unknownReasons.push('risk_checkpoint_unknown')
       if (!positionKnown) unknownReasons.push('ledger_position_unknown')
       if (!protectionKnown) unknownReasons.push('position_protection_unknown')
-      if (checkpoint.ledger_position !== null)
-        unknownReasons.push('funding_boundary_unknown')
+      if (checkpoint.ledger_position !== null) {
+        const fundingBoundary = this.verifiedFundingBoundaryAt(
+          checkpoint,
+          lastDecisionTime,
+          runtimeBinding?.instrument_spec,
+        )
+        if (fundingBoundary === null)
+          unknownReasons.push('funding_boundary_unknown')
+        else due.push({ time: fundingBoundary, reason: 'funding_boundary' })
+      }
       const nextTime = due.length
         ? Math.min(...due.map((item) => item.time))
         : null
@@ -575,10 +995,277 @@ export class FuturesCommandRunner {
     return count
   }
 
+  private hasDueOrderDeadline(
+    request: FuturesWorkerRequest,
+    checkpoint: Record<string, unknown>,
+    decisionClock: number,
+  ): boolean {
+    if (request.payload.operation !== 'futures_runtime.v3') return false
+    const decisionTime = request.payload.market_snapshot.decision_time_ms
+    if (!Number.isSafeInteger(decisionTime)) return false
+    const execution = checkpoint.execution_checkpoint
+    const orders =
+      isRecord(execution) && isRecord(execution.orders)
+        ? Object.values(execution.orders)
+        : []
+    const previousDecision =
+      isRecord(execution) && Number.isSafeInteger(execution.last_cutoff_ms)
+        ? Number(execution.last_cutoff_ms)
+        : this.store.getLastAppliedDecisionTime(request.run_id)
+    const dueOrder = orders.some(
+      (order) =>
+        isRecord(order) &&
+        ['accepted', 'partially_filled'].includes(String(order.state)) &&
+        ((Number.isSafeInteger(order.eligible_at_ms) &&
+          Number(order.eligible_at_ms) <= Number(decisionTime) &&
+          (previousDecision === null ||
+            Number(order.eligible_at_ms) > previousDecision)) ||
+          (Number.isSafeInteger(order.expiry_ms) &&
+            Number(order.expiry_ms) <= Number(decisionTime))),
+    )
+    const risk = checkpoint.risk_checkpoint
+    const utcDue =
+      isRecord(risk) &&
+      typeof risk.utc_day === 'string' &&
+      /^\d{4}-\d{2}-\d{2}$/.test(risk.utc_day) &&
+      Date.parse(`${risk.utc_day}T00:00:00.000Z`) + 86_400_000 <=
+        Number(decisionTime)
+    const selection = checkpoint.strategy_selection_checkpoint
+    const selectionDue =
+      isRecord(selection) &&
+      selection.policy_version === 'strategy-selection-cadence.v1' &&
+      selection.interval_ms === 5000 &&
+      Number.isSafeInteger(selection.last_selection_ms) &&
+      Number(selection.last_selection_ms) + 5000 <= Number(decisionTime)
+    const fundingBoundary = this.verifiedFundingBoundaryAt(
+      checkpoint,
+      previousDecision,
+      this.store.getRuntimeBinding(request.run_id)?.instrument_spec,
+    )
+    return (
+      decisionTime === decisionClock &&
+      (dueOrder ||
+        utcDue ||
+        selectionDue ||
+        (fundingBoundary !== null && fundingBoundary <= Number(decisionTime)))
+    )
+  }
+
+  private verifiedFundingBoundaryAt(
+    checkpoint: Record<string, unknown>,
+    lastDecisionTime: number | null,
+    instrumentSpec: unknown,
+  ): number | null {
+    const position = checkpoint.ledger_position
+    const policy = checkpoint.funding_policy_checkpoint
+    const evidence = isRecord(policy) ? policy.evidence : undefined
+    if (
+      !isRecord(position) ||
+      !isRecord(policy) ||
+      !isRecord(evidence) ||
+      !isRecord(instrumentSpec) ||
+      policy.contract_version !== 'funding-separation.v1' ||
+      policy.version !== 'funding-separation.v1' ||
+      policy.availability !== 'known' ||
+      evidence.status !== 'known' ||
+      evidence.applicable_at_decision !== true ||
+      evidence.reason !== null ||
+      evidence.provider !== 'kraken' ||
+      evidence.product !== 'PF_XBTUSD' ||
+      evidence.field !== 'funding_rate' ||
+      evidence.unit !== 'usd_per_btc_per_hour' ||
+      evidence.semantic_version !== 'kraken-funding-normalization.v1' ||
+      evidence.predicted !== false ||
+      typeof evidence.observation_id !== 'string' ||
+      !/^[a-f0-9]{64}$/.test(String(evidence.sha256)) ||
+      instrumentSpec.instrument_id !== 'kraken-futures:PF_XBTUSD' ||
+      checkpoint.instrument_id !== instrumentSpec.instrument_id ||
+      checkpoint.funding_cursor_ms !== position.funding_cursor_ms ||
+      !Number.isSafeInteger(lastDecisionTime) ||
+      !Number.isSafeInteger(position.funding_cursor_ms) ||
+      !Number.isSafeInteger(evidence.effective_start_ms) ||
+      !Number.isSafeInteger(evidence.effective_end_ms) ||
+      !Number.isSafeInteger(evidence.known_at_ms)
+    )
+      return null
+
+    const start = Number(evidence.effective_start_ms)
+    const end = Number(evidence.effective_end_ms)
+    const knownAt = Number(evidence.known_at_ms)
+    const cursor = Number(position.funding_cursor_ms)
+    const decision = Number(lastDecisionTime)
+    const recordedRate = Array.isArray(checkpoint.funding_rates)
+      ? checkpoint.funding_rates.some(
+          (rate) =>
+            Array.isArray(rate) &&
+            rate[0] === `${evidence.observation_id}:${evidence.sha256}` &&
+            rate[1] === start &&
+            rate[2] === end &&
+            typeof rate[3] === 'string',
+        )
+      : false
+    const openPositionObligation = Array.isArray(
+      policy.pending_financial_obligations,
+    )
+      ? policy.pending_financial_obligations.some(
+          (obligation) =>
+            isRecord(obligation) && obligation.kind === 'open_position',
+        )
+      : false
+    if (
+      !recordedRate ||
+      !openPositionObligation ||
+      knownAt > start ||
+      start > cursor ||
+      cursor >= end ||
+      start > decision ||
+      decision >= end
+    )
+      return null
+    return end
+  }
+
+  private hasDueReductionOrder(
+    checkpoint: Record<string, unknown>,
+    decisionClock: number,
+  ): boolean {
+    const execution = checkpoint.execution_checkpoint
+    const orders =
+      isRecord(execution) && isRecord(execution.orders)
+        ? Object.values(execution.orders)
+        : []
+    return orders.some(
+      (order) =>
+        isRecord(order) &&
+        ['accepted', 'partially_filled'].includes(String(order.state)) &&
+        Number.isSafeInteger(order.eligible_at_ms) &&
+        Number(order.eligible_at_ms) <= decisionClock &&
+        isRecord(order.intent) &&
+        order.intent.order_type === 'reduce_only',
+    )
+  }
+
   private async commit(
     result: FuturesWorkerResult,
     request: FuturesWorkerRequest,
   ): Promise<FuturesWorkerCommit> {
+    if (
+      request.payload.operation === 'futures_runtime.v3' &&
+      request.payload.runtime_config.market_context_policy_version ===
+        MARKET_CONTEXT_SCHEMA_VERSION
+    ) {
+      const context = request.payload.market_snapshot.market_context
+      const contextCheckpoint =
+        isRecord(result.runtime_checkpoint) &&
+        isRecord(result.runtime_checkpoint.market_context_checkpoint)
+          ? result.runtime_checkpoint.market_context_checkpoint
+          : undefined
+      const runBinding = this.store.getReplaySessionBinding(request.run_id)
+      const manifest = isRecord(runBinding?.manifest)
+        ? runBinding.manifest
+        : undefined
+      const expectedSourceIdentity = manifest
+        ? canonicalHash({
+            schema_version: 'market-context-source-identity.v1',
+            source: manifest.source,
+            source_hash: manifest.source_hash,
+            instrument_hash:
+              manifest.instrument_hash ??
+              canonicalHash(request.payload.instrument),
+          })
+        : undefined
+      const priorProjection = this.store.getRunProjection(request.run_id)
+      const priorCheckpoint =
+        isRecord(priorProjection?.checkpoint) &&
+        isRecord(priorProjection.checkpoint.market_context_checkpoint)
+          ? priorProjection.checkpoint.market_context_checkpoint
+          : undefined
+      const expectedPreviousFrontier = priorCheckpoint
+        ? priorCheckpoint.frontier
+        : 0
+      const noSourceProgress =
+        validateMarketContextTransport(context) &&
+        context.current_frontier === context.previous_frontier
+      const acceptedControl =
+        request.payload.control !== undefined &&
+        request.payload.control.command_id === request.work_id &&
+        this.store.getAcceptedCommand(request.work_id) !== undefined
+      const queuedCommand = this.store.getAcceptedCommand(request.work_id)
+      const acceptedNewRun =
+        isRecord(queuedCommand) &&
+        isRecord(queuedCommand.terminalCommand) &&
+        queuedCommand.terminalCommand.action === 'paper.new_run' &&
+        queuedCommand.terminalCommand.command_id === request.work_id &&
+        queuedCommand.terminalCommand.child_run_id === request.run_id &&
+        queuedCommand.terminalCommand.expected_state_version === 0 &&
+        request.expected_state_version === 0 &&
+        priorProjection?.state_version === 0
+      const queuedRequest =
+        isRecord(queuedCommand) && isRecord(queuedCommand.request)
+          ? queuedCommand.request
+          : undefined
+      const dueContext = validateMarketContextTransport(context)
+        ? context
+        : undefined
+      const dueEvents = Array.isArray(request.payload.market_snapshot.events)
+        ? request.payload.market_snapshot.events
+        : undefined
+      const durableRequest = { ...request }
+      delete durableRequest.checkpoint
+      const dueOrderWork =
+        !request.payload.control &&
+        queuedRequest !== undefined &&
+        isDeepStrictEqual(queuedRequest, durableRequest) &&
+        isRecord(queuedCommand) &&
+        isDeepStrictEqual(
+          queuedCommand.checkpoint,
+          priorProjection?.checkpoint,
+        ) &&
+        priorProjection?.state_version === request.expected_state_version &&
+        dueContext !== undefined &&
+        dueEvents !== undefined &&
+        dueEvents.length === dueContext.bootstrap_events.length &&
+        isDeepStrictEqual(dueEvents, dueContext.bootstrap_events) &&
+        dueContext.delta_events.length === 0 &&
+        this.hasDueOrderDeadline(
+          request,
+          priorProjection?.checkpoint as Record<string, unknown>,
+          Number(request.payload.market_snapshot.decision_time_ms),
+        )
+      const coldUnboundControl =
+        noSourceProgress &&
+        (acceptedControl || acceptedNewRun) &&
+        context.source_identity === null &&
+        context.current_frontier === 0
+      if (
+        !validateMarketContextTransport(context) ||
+        context.instrument_id !== request.payload.instrument.instrument_id ||
+        context.knowledge_cutoff_ms !==
+          request.payload.market_snapshot.cutoff_received_at_ms ||
+        (context.source_identity !== expectedSourceIdentity &&
+          !coldUnboundControl) ||
+        context.previous_frontier !== expectedPreviousFrontier ||
+        (noSourceProgress &&
+          (!(acceptedControl || acceptedNewRun || dueOrderWork) ||
+            !Array.isArray(request.payload.market_snapshot.events) ||
+            !isDeepStrictEqual(
+              request.payload.market_snapshot.events,
+              context.bootstrap_events,
+            ))) ||
+        (!noSourceProgress &&
+          acceptedControl &&
+          context.delta_events.length === 0) ||
+        !contextCheckpoint ||
+        contextCheckpoint.policy_version !== MARKET_CONTEXT_SCHEMA_VERSION ||
+        contextCheckpoint.source_identity !== context.source_identity ||
+        contextCheckpoint.instrument_id !== context.instrument_id ||
+        contextCheckpoint.frontier !== context.current_frontier ||
+        contextCheckpoint.knowledge_cutoff_ms !== context.knowledge_cutoff_ms
+      )
+        throw new Error(
+          'Market-context input and returned checkpoint frontier differ.',
+        )
+    }
     if (
       (result.operation === 'futures_runtime.v1' ||
         result.operation === 'futures_runtime.v2' ||

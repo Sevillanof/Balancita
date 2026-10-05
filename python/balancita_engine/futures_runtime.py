@@ -34,6 +34,7 @@ RISK_RUNTIME_VERSION = "futures-runtime-risk.v1"
 RISK_CHECKPOINT_VERSION = 4
 STRATEGY_SELECTION_POLICY_VERSION = "strategy-selection-cadence.v1"
 STRATEGY_SELECTION_INTERVAL_MS = 5000
+MARKET_CONTEXT_POLICY_VERSION = "market-context-transport.v1"
 FEATURE_INTERVAL_MS = 60_000
 ZERO = Decimal(0)
 ONE = Decimal(1)
@@ -107,6 +108,7 @@ class FuturesRuntime:
         self._funding_evidence = None
         self._funding_pause_active = False
         self._risk_mark_pause_active = False
+        self._market_context_checkpoint = None
         if self._funding_separation:
             self._funding_entry_causes = ["funding_unavailable"]
         self._ledger_config = {
@@ -214,6 +216,14 @@ class FuturesRuntime:
                 "strategy_selection_policy_version" not in self.config
                 and "strategy_selection_interval_ms" in self.config
             )
+            or (
+                "market_context_policy_version" in self.config
+                and (
+                    self.config["market_context_policy_version"]
+                    != MARKET_CONTEXT_POLICY_VERSION
+                    or self.config["version"] != RISK_RUNTIME_VERSION
+                )
+            )
         ):
             raise ValueError("unsupported or unsafe runtime configuration")
 
@@ -229,14 +239,18 @@ class FuturesRuntime:
         cutoff = normalize_timestamp_ms(market.get("cutoff_received_at_ms", now))
         if cutoff > now:
             raise ValueError("received-time cutoff cannot follow decision time")
+        context = self._validate_market_context(market, now, cutoff)
         evidence = self._available_events(market.get("events"), now, cutoff)
+        prior_funding_evidence = deepcopy(self._funding_evidence)
         self._funding_entry_causes = []
         self._funding_availability = "unknown"
         self._funding_evidence = None
         if self._funding_separation:
+            saw_funding_observation = False
             for event in evidence:
                 if event.get("type") != "funding_observation":
                     continue
+                saw_funding_observation = True
                 try:
                     observation = normalize_observation(event["observation"], cutoff)
                     applicable = (
@@ -253,6 +267,13 @@ class FuturesRuntime:
                     )
                     self._funding_evidence = {
                         "observation_id": observation["observation_id"],
+                        "sha256": observation["sha256"],
+                        "provider": observation["provider"],
+                        "product": observation["product"],
+                        "field": observation["field"],
+                        "unit": observation["unit"],
+                        "semantic_version": observation["semantic_version"],
+                        "predicted": observation["predicted"],
                         "status": observation["status"],
                         "known_at_ms": observation["known_at_ms"],
                         "effective_start_ms": observation["effective_start_ms"],
@@ -267,6 +288,45 @@ class FuturesRuntime:
                         break
                 except (KeyError, TypeError, ValueError):
                     continue
+            if not saw_funding_observation and isinstance(
+                prior_funding_evidence, dict
+            ):
+                evidence_start = prior_funding_evidence.get(
+                    "effective_start_ms"
+                )
+                evidence_end = prior_funding_evidence.get("effective_end_ms")
+                evidence_known_at = prior_funding_evidence.get("known_at_ms")
+                still_applicable = (
+                    prior_funding_evidence.get("status") == "known"
+                    and prior_funding_evidence.get("provider") == "kraken"
+                    and prior_funding_evidence.get("product") == "PF_XBTUSD"
+                    and prior_funding_evidence.get("field") == "funding_rate"
+                    and prior_funding_evidence.get("unit")
+                    == "usd_per_btc_per_hour"
+                    and prior_funding_evidence.get("predicted") is False
+                    and isinstance(evidence_start, int)
+                    and not isinstance(evidence_start, bool)
+                    and isinstance(evidence_end, int)
+                    and not isinstance(evidence_end, bool)
+                    and isinstance(evidence_known_at, int)
+                    and not isinstance(evidence_known_at, bool)
+                    and evidence_start <= now < evidence_end
+                    and evidence_known_at <= evidence_start
+                    and evidence_known_at <= cutoff
+                )
+                self._funding_evidence = deepcopy(prior_funding_evidence)
+                self._funding_evidence["applicable_at_decision"] = (
+                    still_applicable
+                )
+                self._funding_evidence["reason"] = (
+                    None
+                    if still_applicable
+                    else "funding_interval_not_current_at_decision"
+                )
+                if still_applicable:
+                    self._funding_availability = "known"
+                else:
+                    self._funding_entry_causes = ["funding_unavailable"]
             if self._funding_availability == "unknown":
                 self._funding_entry_causes = ["funding_unavailable"]
         if market.get("mode") == "paper_live" and not self._funding_separation:
@@ -286,7 +346,12 @@ class FuturesRuntime:
             risk_reasons = self._update_risk_day(now, mark, book, ticker, control)
         closed_this_cycle = False
         if self.execution_adapter is not None:
-            adapter_events = self._advance_execution(evidence, cutoff)
+            due_execution_clock = self._due_order_execution_clock(
+                context, market, book, ticker, now, cutoff
+            )
+            adapter_events = self._advance_execution(
+                evidence, cutoff, execution_clock_ms=due_execution_clock
+            )
             for event in adapter_events:
                 if event.get("type") not in (
                     "order_created", "order_accepted", "order_filled",
@@ -324,6 +389,16 @@ class FuturesRuntime:
                 )
                 if due:
                     selected_context = self._strategy_context(evidence, now, cutoff, features)
+                    if context is not None and context.get("source_identity") is None:
+                        for proposal in selected_context["proposals"]:
+                            proposal["action"] = "WAIT"
+                            proposal["reason_code"] = "market_context_unbound"
+                        selected_context["selector"] = {
+                            "action": "WAIT",
+                            "reason_code": "market_context_unbound",
+                            "strategy_id": None,
+                            "signal_key": None,
+                        }
                     self._strategy_cache = {
                         **deepcopy(selected_context),
                         "as_of_ms": now,
@@ -548,8 +623,61 @@ class FuturesRuntime:
 
         if strategy_context is not None:
             analysis.update(strategy_context)
+        if self.ledger.position is None and self._has_pending_entry():
+            self._observe_funding(evidence, now, cutoff)
         position = self._position(mark)
-        account = None if mark is None else self.ledger.snapshot(_text(mark))
+        if mark is None:
+            with localcontext() as ctx:
+                ctx.prec = self.ledger.precision
+                equity = (
+                    self.ledger.cash
+                    + self.ledger.realized_gross
+                    - self.ledger.fees
+                    - self.ledger.funding_paid
+                )
+                account = {
+                    "ledger_version": self.ledger.version,
+                    "decimal_precision": self.ledger.precision,
+                    "fee_rates": {
+                        key: _text(value)
+                        for key, value in self.ledger.fee_rates.items()
+                    },
+                    "cash_usd": _text(self.ledger.cash),
+                    "side": None,
+                    "quantity_btc": "0",
+                    "mark_usd_per_btc": None,
+                    "unrealized_gross_usd": "0",
+                    "reserved_margin_usd": "0",
+                    "available_margin_usd": _text(equity),
+                    "equity_usd": _text(equity),
+                    "realized_gross_usd": _text(self.ledger.realized_gross),
+                    "fees_usd": _text(self.ledger.fees),
+                    "funding_paid": _text(self.ledger.funding_paid),
+                    "net_complete": (
+                        _text(
+                            self.ledger.realized_gross
+                            - self.ledger.fees
+                            - self.ledger.funding_paid
+                        )
+                        if self.ledger.funding_complete
+                        else None
+                    ),
+                    "realized_net_complete": (
+                        _text(
+                            self.ledger.realized_gross
+                            - self.ledger.fees
+                            - self.ledger.funding_paid
+                        )
+                        if self.ledger.funding_complete
+                        else None
+                    ),
+                    "funding_complete": self.ledger.funding_complete,
+                    "cost_version": self.ledger.cost_version,
+                    "leverage": _text(self.ledger.leverage),
+                    "events": deepcopy(self.ledger.events),
+                }
+        else:
+            account = self.ledger.snapshot(_text(mark))
         if self.runtime_version == RISK_RUNTIME_VERSION:
             risk.update(self._risk_result(risk_reasons, guard))
         return {
@@ -562,7 +690,13 @@ class FuturesRuntime:
             "fills": fills,
             "position": position,
             "ledger": account,
-            "valuation_source": "ticker_mark" if isinstance(ticker, dict) and ticker.get("mark_usd") is not None else "observed_book_midpoint",
+            "valuation_source": (
+                "unavailable"
+                if mark is None
+                else "ticker_mark"
+                if isinstance(ticker, dict) and ticker.get("mark_usd") is not None
+                else "observed_book_midpoint"
+            ),
             **({"execution_events": self.execution_adapter.events} if self.execution_adapter is not None else {}),
             **({"funding_policy": {
                 "contract_version": "funding-separation.v1",
@@ -650,7 +784,135 @@ class FuturesRuntime:
                 ),
                 "context": deepcopy(self._strategy_cache),
             }} if self._strategy_cadence else {}),
+            **({"market_context_checkpoint": {
+                "policy_version": MARKET_CONTEXT_POLICY_VERSION,
+                **deepcopy(self._market_context_checkpoint),
+            }} if self.config.get("market_context_policy_version") == MARKET_CONTEXT_POLICY_VERSION else {}),
         }
+
+    def _validate_market_context(self, market, now, cutoff):
+        if self.config.get("market_context_policy_version") != MARKET_CONTEXT_POLICY_VERSION:
+            if "market_context" in market:
+                raise ValueError("unexpected market context transport")
+            return None
+        context = market.get("market_context")
+        expected_keys = {
+            "schema_version", "source_identity", "instrument_id",
+            "previous_frontier", "current_frontier", "knowledge_cutoff_ms",
+            "bootstrap_events", "delta_events",
+        }
+        if not isinstance(context, dict) or set(context) != expected_keys:
+            raise ValueError("market context transport schema is invalid")
+        if (
+            context.get("schema_version") != MARKET_CONTEXT_POLICY_VERSION
+            or (
+                context.get("source_identity") is not None
+                and (
+                    not isinstance(context.get("source_identity"), str)
+                    or len(context["source_identity"]) != 64
+                    or any(character not in "0123456789abcdef" for character in context["source_identity"])
+                )
+            )
+            or context.get("instrument_id") != self.instrument.get("instrument_id")
+            or context.get("knowledge_cutoff_ms") != cutoff
+            or cutoff != now
+            or cutoff > now
+        ):
+            raise ValueError("market context identity or cutoff is invalid")
+        previous = context.get("previous_frontier")
+        current = context.get("current_frontier")
+        if (
+            isinstance(previous, bool) or not isinstance(previous, int) or previous < 0
+            or isinstance(current, bool) or not isinstance(current, int) or current < previous
+        ):
+            raise ValueError("market context frontier is invalid")
+        bootstrap = context.get("bootstrap_events")
+        delta = context.get("delta_events")
+        if (
+            not isinstance(bootstrap, list) or len(bootstrap) > 1002
+            or not isinstance(delta, list)
+            or len(delta) > 128
+            or (current == previous and len(delta) != 0)
+            or (current > previous and len(delta) == 0)
+            or any(not isinstance(event, dict) for event in bootstrap + delta)
+        ):
+            raise ValueError("market context event bounds are invalid")
+        if context["source_identity"] is None and (
+            previous != 0 or current != 0 or bootstrap or delta
+        ):
+            raise ValueError("unbound market context must be empty at frontier zero")
+        sequences = [event.get("source_receipt_sequence") for event in delta]
+        if (
+            any(isinstance(sequence, bool) or not isinstance(sequence, int) for sequence in sequences)
+            or sequences != sorted(sequences)
+            or any(sequence <= previous or sequence > current for sequence in sequences)
+            or (current == previous and sequences)
+            or (current > previous and sequences[-1] != current)
+        ):
+            raise ValueError("market context delta frontier is invalid")
+        prior = self._market_context_checkpoint
+        if prior is not None:
+            prior_unbound = (
+                prior["source_identity"] is None
+                and prior["frontier"] == 0
+                and not prior["anchors"]
+            )
+            first_source_binding = (
+                prior_unbound
+                and isinstance(context["source_identity"], str)
+                and previous == 0
+                and current > 0
+            )
+            unbound_control_continuation = (
+                prior_unbound
+                and context["source_identity"] is None
+                and previous == 0
+                and current == 0
+                and not bootstrap
+                and not delta
+            )
+            if (
+                context["instrument_id"] != prior["instrument_id"]
+                or previous != prior["frontier"]
+                or (
+                    context["source_identity"] != prior["source_identity"]
+                    and not first_source_binding
+                    and not unbound_control_continuation
+                )
+            ):
+                raise ValueError("market context continuation conflicts with checkpoint")
+        if prior is None and previous != 0:
+            raise ValueError("initial market context frontier must start at zero")
+        events = market.get("events")
+        expected_events = bootstrap + delta
+        if events != expected_events:
+            raise ValueError("market context events differ from transported context")
+        anchors = {}
+        for event in expected_events:
+            if event.get("type") in ("book_snapshot", "ticker"):
+                anchor = deepcopy(event)
+                anchor["context_anchor"] = True
+                anchors[event["type"]] = anchor
+        for anchor in anchors.values():
+            if (
+                anchor.get("context_anchor") is not True
+                or isinstance(anchor.get("source_receipt_sequence"), bool)
+                or not isinstance(anchor.get("source_receipt_sequence"), int)
+                or anchor["source_receipt_sequence"] > current
+                or isinstance(anchor.get("known_at_ms"), bool)
+                or not isinstance(anchor.get("known_at_ms"), int)
+                or anchor["known_at_ms"] > cutoff
+                or anchor.get("received_at_ms", cutoff) > cutoff
+            ):
+                raise ValueError("market context bootstrap anchor is invalid")
+        self._market_context_checkpoint = {
+            "source_identity": context["source_identity"],
+            "instrument_id": context["instrument_id"],
+            "frontier": current,
+            "knowledge_cutoff_ms": cutoff,
+            "anchors": anchors,
+        }
+        return context
 
     def _pending_financial_obligations(self):
         obligations = []
@@ -754,6 +1016,62 @@ class FuturesRuntime:
         if checkpoint.get("instrument_spec") != self.instrument:
             raise ValueError("checkpoint instrument specification does not match runtime")
         selection_checkpoint = checkpoint.get("strategy_selection_checkpoint")
+        market_context_checkpoint = checkpoint.get("market_context_checkpoint")
+        if self.config.get("market_context_policy_version") == MARKET_CONTEXT_POLICY_VERSION:
+            if (
+                not isinstance(market_context_checkpoint, dict)
+                or set(market_context_checkpoint) != {
+                    "policy_version", "source_identity", "instrument_id",
+                    "frontier", "knowledge_cutoff_ms", "anchors",
+                }
+            or market_context_checkpoint.get("policy_version")
+                != MARKET_CONTEXT_POLICY_VERSION
+                or (
+                    market_context_checkpoint.get("source_identity") is not None
+                    and (
+                        not isinstance(market_context_checkpoint.get("source_identity"), str)
+                        or len(market_context_checkpoint["source_identity"]) != 64
+                    )
+                )
+                or market_context_checkpoint.get("instrument_id")
+                != self.instrument.get("instrument_id")
+                or isinstance(market_context_checkpoint.get("frontier"), bool)
+                or not isinstance(market_context_checkpoint.get("frontier"), int)
+                or market_context_checkpoint["frontier"] < 0
+                or isinstance(market_context_checkpoint.get("knowledge_cutoff_ms"), bool)
+                or not isinstance(market_context_checkpoint.get("knowledge_cutoff_ms"), int)
+                or not isinstance(market_context_checkpoint.get("anchors"), dict)
+                or set(market_context_checkpoint["anchors"]) - {"book_snapshot", "ticker"}
+                or any(not isinstance(item, dict) for item in market_context_checkpoint["anchors"].values())
+            ):
+                raise ValueError("market context checkpoint policy is invalid")
+            if any(
+                event.get("context_anchor") is not True
+                or event.get("type") != event_type
+                or event.get("source_receipt_sequence") > market_context_checkpoint["frontier"]
+                for event_type, event in market_context_checkpoint["anchors"].items()
+            ):
+                raise ValueError("market context checkpoint anchors are invalid")
+            if market_context_checkpoint["source_identity"] is None and (
+                market_context_checkpoint["frontier"] != 0
+                or market_context_checkpoint["anchors"]
+                or checkpoint.get("ledger_position") is not None
+                or checkpoint.get("position_protection") is not None
+                or (
+                    isinstance(checkpoint.get("funding_policy_checkpoint"), dict)
+                    and checkpoint["funding_policy_checkpoint"].get(
+                        "pending_financial_obligations"
+                    )
+                )
+            ):
+                raise ValueError("unbound market context requires a flat empty source checkpoint")
+            self._market_context_checkpoint = {
+                key: deepcopy(value)
+                for key, value in market_context_checkpoint.items()
+                if key != "policy_version"
+            }
+        elif market_context_checkpoint is not None:
+            raise ValueError("unexpected market context checkpoint policy")
         if self._strategy_cadence:
             if (
                 not isinstance(selection_checkpoint, dict)
@@ -834,13 +1152,25 @@ class FuturesRuntime:
                     "funding_unavailable" in policy["funding_entry_causes"]
                 )
                 or not isinstance(policy.get("pending_financial_obligations"), list)
-                or (policy["availability"] == "known") != isinstance(policy.get("evidence"), dict)
+                or (
+                    policy["availability"] == "known"
+                    and not isinstance(policy.get("evidence"), dict)
+                )
+                or (
+                    policy.get("evidence") is not None
+                    and not isinstance(policy.get("evidence"), dict)
+                )
                 or (
                     policy["availability"] == "known"
                     and (
                         policy["evidence"].get("status") != "known"
                         or policy["evidence"].get("applicable_at_decision") is not True
                     )
+                )
+                or (
+                    policy["availability"] == "unknown"
+                    and isinstance(policy.get("evidence"), dict)
+                    and policy["evidence"].get("applicable_at_decision") is not False
                 )
             ):
                 raise ValueError("funding policy checkpoint is invalid")
@@ -1173,13 +1503,52 @@ class FuturesRuntime:
             "asks": [[level.get("price_usd"), level.get("quantity_btc")] for level in event.get("asks", []) if isinstance(level, dict)],
         }
 
+    def _due_order_execution_clock(self, context, market, book, ticker, now, cutoff):
+        if (
+            self.config.get("market_context_policy_version")
+            != MARKET_CONTEXT_POLICY_VERSION
+            or not isinstance(context, dict)
+            or context.get("source_identity") is None
+            or context.get("current_frontier") != context.get("previous_frontier")
+            or context.get("delta_events") != []
+            or self.execution_adapter is None
+        ):
+            return None
+        previous_clock = self.execution_adapter._last_cutoff_ms
+        due_orders = [
+            order
+            for order in self.execution_adapter.orders.values()
+            if order.get("state") in ("accepted", "partially_filled")
+            and isinstance(order.get("eligible_at_ms"), int)
+            and not isinstance(order.get("eligible_at_ms"), bool)
+            and order["eligible_at_ms"] <= now
+            and (
+                previous_clock is None
+                or order["eligible_at_ms"] > previous_clock
+            )
+            and isinstance(order.get("intent"), dict)
+            and (
+                order["intent"].get("order_type") in ("market_ioc", "reduce_only")
+                or (
+                    order["intent"].get("order_type") == "stop_market"
+                    and order.get("triggered") is True
+                )
+            )
+        ]
+        if not due_orders:
+            return None
+        guard = self._market_guard(market, book, ticker, now, cutoff)
+        if guard not in (None, "funding_unresolved"):
+            return None
+        return now
+
     @staticmethod
     def _ticker_mark_for(book, cutoff):
         # Runtime book snapshots are the only execution input here; a mark must
         # be carried on that same observation rather than borrowed from a later ticker.
         return book.get("mark_price_usd")
 
-    def _advance_execution(self, evidence, cutoff):
+    def _advance_execution(self, evidence, cutoff, *, execution_clock_ms=None):
         book_event = self._select(evidence, "book_snapshot")
         book = self._execution_book(book_event, cutoff)
         ticker = self._select(evidence, "ticker")
@@ -1204,7 +1573,12 @@ class FuturesRuntime:
             "side": None if self.ledger.position is None else self.ledger.position["side"],
             "quantity_btc": "0" if self.ledger.position is None else _text(self.ledger.position["qty"]),
         })
-        return self.execution_adapter.advance(cutoff, book, trades)
+        return self.execution_adapter.advance(
+            cutoff,
+            book,
+            trades,
+            execution_clock_ms=execution_clock_ms,
+        )
 
     def _apply_execution_fills(self, events):
         fills = [event for event in events if event.get("type") == "fill"]
@@ -1458,6 +1832,7 @@ class FuturesRuntime:
         }
 
     def _observe_funding(self, events, now, cutoff):
+        position = self.ledger.position
         for event in events:
             if event.get("type") == "funding_observation":
                 try:
@@ -1465,10 +1840,15 @@ class FuturesRuntime:
                         event["observation"], cutoff
                     )
                     if observation["status"] != "known":
-                        self.ledger.funding_complete = False
+                        if position is not None:
+                            self.ledger.funding_complete = False
                         continue
-                    cursor = self.ledger.position["funding_cursor_ms"]
-                    if (
+                    cursor = (
+                        position["funding_cursor_ms"]
+                        if position is not None
+                        else None
+                    )
+                    if cursor is not None and (
                         observation["effective_start_ms"] < cursor
                         and observation["known_at_ms"] > cursor
                     ):
@@ -1500,7 +1880,8 @@ class FuturesRuntime:
                         known_at_ms=observation["known_at_ms"],
                     )
                 except (KeyError, TypeError, ValueError):
-                    self.ledger.funding_complete = False
+                    if position is not None:
+                        self.ledger.funding_complete = False
                 continue
             if event.get("type") != "funding":
                 continue
@@ -1519,7 +1900,8 @@ class FuturesRuntime:
                 )
             except (KeyError, TypeError, ValueError):
                 # Malformed or conflicting funding cannot be treated as a zero rate.
-                self.ledger.funding_complete = False
+                if position is not None:
+                    self.ledger.funding_complete = False
 
     def _accrue_until(self, now):
         position = self.ledger.position

@@ -1,4 +1,7 @@
-import { FuturesCommandRunner } from './futures-command-runner.ts'
+import {
+  FuturesCommandRunner,
+  type FuturesAdmissionState,
+} from './futures-command-runner.ts'
 import type { FuturesSqlObserver } from './futures-store.ts'
 import type { FuturesWorkerDiagnostic } from './futures-worker.ts'
 import { canonicalHash } from './futures-canonical.ts'
@@ -96,6 +99,7 @@ export class FuturesSessionRuntime {
     funding_policy_version?: 'funding-separation.v1'
     strategy_selection_policy_version?: 'strategy-selection-cadence.v1'
     strategy_selection_interval_ms?: 5000
+    market_context_policy_version?: 'market-context-transport.v1'
   }
   private readonly replaySource?: FuturesMarketStore
   private readonly replaySourceHash?: string
@@ -110,6 +114,7 @@ export class FuturesSessionRuntime {
     string,
     ReturnType<typeof setTimeout>
   >()
+  private closed = false
 
   constructor(options: {
     dbPath: string
@@ -131,6 +136,7 @@ export class FuturesSessionRuntime {
             funding_policy_version: 'funding-separation.v1',
             strategy_selection_policy_version: strategySelectionPolicy.version,
             strategy_selection_interval_ms: strategySelectionPolicy.interval_ms,
+            market_context_policy_version: 'market-context-transport.v1',
           }
         : runtimeConfig
     if (options.mode === 'replay' && options.replaySource === undefined)
@@ -327,6 +333,85 @@ export class FuturesSessionRuntime {
         this.store.getRunProjection(this.runId)?.state_version ?? 0,
       ),
     }
+  }
+
+  getAdmissionState(sourceClock: number): FuturesAdmissionState {
+    return this.runner.readAdmissionState(
+      this.runId,
+      admissionPolicyBody,
+      sourceClock,
+    )
+  }
+
+  processDue(
+    decisionClock: number,
+  ): Promise<{ status: 'processed' | 'not_due' | 'unavailable' }> {
+    if (this.closed) return Promise.resolve({ status: 'unavailable' })
+    const runId = this.runId
+    return this.enqueueEvent(runId, async () => {
+      if (this.closed || this.runId !== runId)
+        return { status: 'unavailable' as const }
+      const admission = this.getAdmissionState(decisionClock)
+      if (
+        admission.source_clock_ms !== decisionClock ||
+        admission.confirmed_state_version === null ||
+        admission.next_due_at.time_ms === null ||
+        admission.next_due_at.time_ms > decisionClock ||
+        (admission.next_due_at.unknown_reasons.length > 0 &&
+          !(
+            admission.next_due_at.unknown_reasons.every(
+              (reason) => reason === 'funding_boundary_unknown',
+            ) &&
+            (admission.outstanding_risk.reduction_intent_id !== null ||
+              admission.outstanding_risk.position === true)
+          )) ||
+        (admission.entry_block_causes?.some((cause) =>
+          ['funding_unavailable', 'funding_accounting_incomplete'].includes(
+            cause,
+          ),
+        ) &&
+          admission.next_due_at.reasons.includes('strategy_evaluation') &&
+          admission.outstanding_risk.reduction_intent_id === null &&
+          admission.outstanding_risk.position !== true &&
+          admission.active_order_count === 0) ||
+        admission.next_due_at.reasons.length === 0 ||
+        admission.next_due_at.reasons.some(
+          (reason) =>
+            ![
+              'order_eligibility',
+              'order_expiry',
+              'strategy_evaluation',
+              'utc_risk_day_rollover',
+              'funding_boundary',
+            ].includes(reason),
+        ) ||
+        admission.in_flight_work_count !== 0 ||
+        admission.pending_commands.known !== true ||
+        admission.pending_commands.any !== false
+      )
+        return { status: 'not_due' as const }
+
+      const requestId = randomUUID()
+      const request: FuturesWorkerRequest = {
+        request_id: requestId,
+        run_id: runId,
+        work_id: requestId,
+        expected_state_version: admission.confirmed_state_version,
+        payload: {
+          operation: 'futures_runtime.v3',
+          runtime_config: this.runtimeConfig,
+          instrument,
+          market_snapshot: this.initialMarketSnapshot(decisionClock, false),
+        },
+      }
+      const accepted = this.runner.acceptDue(
+        request,
+        admissionPolicyBody,
+        decisionClock,
+      )
+      await accepted.result
+      return { status: 'processed' as const }
+    })
   }
 
   getSourceProgressSnapshot(): {
@@ -587,8 +672,10 @@ export class FuturesSessionRuntime {
       readonly action: string
       readonly stream_run_id: string
       readonly expected_state_version: number
+      readonly child_run_id?: string
     },
   ) => {
+    if (this.closed) throw new Error('Futures session runtime is closed.')
     if (metadata.action === 'paper.new_run' || request.run_id.length === 0)
       return this.runner.accept(request, metadata)
     if (request.payload.operation !== 'futures_runtime.v3')
@@ -750,6 +837,7 @@ export class FuturesSessionRuntime {
   }
 
   async close(): Promise<void> {
+    this.closed = true
     this.mockTickTimers.forEach(clearTimeout)
     this.mockTickTimers.clear()
     await Promise.allSettled([...this.eventQueues.values()])

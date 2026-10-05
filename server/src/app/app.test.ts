@@ -36,7 +36,10 @@ import { createShadowRunStart } from '../features/shadow-runs/shadow-run.ts'
 import WebSocket from 'ws'
 import { randomUUID } from 'node:crypto'
 import { FuturesStore } from '../features/paper-futures/futures-store.ts'
-import { createMockMarketSnapshot } from '../features/paper-futures/futures-session-runtime.ts'
+import {
+  createMockMarketSnapshot,
+  FuturesSessionRuntime,
+} from '../features/paper-futures/futures-session-runtime.ts'
 import type { FuturesSocket } from '../features/kraken-futures/futures-market.ts'
 import { FuturesMarketStore } from '../features/kraken-futures/futures-market-store.ts'
 import { FuturesReplayDriver } from '../features/paper-futures/futures-replay-driver.ts'
@@ -99,6 +102,156 @@ class FakeGeminiClient implements GeminiClient {
 }
 
 describe('app test configuration', () => {
+  it('queues due deadlines after source work and clears the timer before close', async () => {
+    vi.useFakeTimers()
+    const root = mkdtempSync(join(tmpdir(), 'futures-due-app-clock-'))
+    const baseClock = 1_800_000_000_000
+    let sourceClock = baseClock
+    let releaseSource!: () => void
+    let sourceStarted!: () => void
+    const sourceGate = new Promise<void>((resolve) => {
+      releaseSource = resolve
+    })
+    const started = new Promise<void>((resolve) => {
+      sourceStarted = resolve
+    })
+    const order: string[] = []
+    let dueProcessed = false
+    let sourceCalls = 0
+    const sourceSpy = vi
+      .spyOn(FuturesSessionRuntime.prototype, 'processMarketEvidence')
+      .mockImplementation(async () => {
+        sourceCalls += 1
+        if (sourceCalls === 1) {
+          order.push('source-start')
+          sourceStarted()
+          await sourceGate
+          order.push('source-end')
+        } else order.push('deadline-source-pump')
+        return {
+          sourceWatermark: 1,
+          lastDurableWatermark: 1,
+          stopped: false,
+          deferredSourceRows: 0,
+          durablePendingSourceRows: 0,
+          durablePendingFirstSequence: null,
+          durablePendingLastSequence: null,
+          checkpointStateVersion: 7,
+        }
+      })
+    const admissionSpy = vi
+      .spyOn(FuturesSessionRuntime.prototype, 'getAdmissionState')
+      .mockImplementation(function (sourceClockAtRead) {
+        const deadline = dueProcessed
+          ? sourceClockAtRead + 100
+          : baseClock + 100
+        return {
+          confirmed_state_version: 7,
+          source_clock_ms: sourceClockAtRead,
+          next_due_at: {
+            time_ms: deadline,
+            reasons: ['order_eligibility'],
+            unknown_reasons: [],
+          },
+          in_flight_work_count: 0,
+          pending_commands: { known: true, any: false },
+        } as never
+      })
+    const dueSpy = vi
+      .spyOn(FuturesSessionRuntime.prototype, 'processDue')
+      .mockImplementation(async () => {
+        order.push('due')
+        dueProcessed = true
+        return { status: 'processed' }
+      })
+    let socket: FuturesSocket | undefined
+    const app = await buildApp({
+      config: testConfigFrom({
+        FUTURES_MODE: 'paper_live',
+        FUTURES_DB_PATH: join(root, 'account.sqlite'),
+        FUTURES_MARKET_DB_PATH: join(root, 'market.sqlite'),
+      }),
+      overrides: {
+        futuresPublicCatalog: async () => ({
+          instruments: [
+            {
+              symbol: 'PF_XBTUSD',
+              type: 'flexible_futures',
+              pair: 'BTC:USD',
+              base: 'BTC',
+              quote: 'USD',
+              contractSize: '1',
+              tickSize: '1',
+              contractValueTradePrecision: 4,
+              tradeable: true,
+              isExpired: false,
+            },
+          ],
+        }),
+        futuresFundingFetch: async () =>
+          new Response(
+            JSON.stringify({
+              result: 'success',
+              serverTime: new Date(baseClock).toISOString(),
+              rates: [],
+            }),
+            { status: 200 },
+          ),
+        futuresSocketFactory: () => {
+          const created: FuturesSocket = {
+            onopen: null,
+            onmessage: null,
+            onerror: null,
+            onclose: null,
+            send: () => undefined,
+            close: () => undefined,
+          }
+          socket = created
+          return created
+        },
+        futuresClock: () => sourceClock,
+      },
+    })
+    try {
+      await app.ready()
+      socket?.onopen?.()
+      socket?.onmessage?.({
+        data: JSON.stringify({
+          feed: 'book_snapshot',
+          product_id: 'PF_XBTUSD',
+          seq: 1,
+          timestamp: baseClock,
+          bids: [{ price: '90000', qty: '0.5' }],
+          asks: [{ price: '90001', qty: '0.5' }],
+        }),
+      })
+      await started
+      sourceClock += 500
+      await vi.advanceTimersByTimeAsync(500)
+      expect(dueSpy).not.toHaveBeenCalled()
+      releaseSource()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(order).toEqual([
+        'source-start',
+        'source-end',
+        'deadline-source-pump',
+        'due',
+      ])
+      expect(dueSpy).toHaveBeenCalledTimes(1)
+      await app.close()
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(dueSpy).toHaveBeenCalledTimes(1)
+    } finally {
+      releaseSource()
+      await app.close()
+      sourceSpy.mockRestore()
+      admissionSpy.mockRestore()
+      dueSpy.mockRestore()
+      vi.useRealTimers()
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   it('observes paired futures close phases without letting observer errors interrupt shutdown', async () => {
     const phases: Array<{
       phase: string
@@ -159,6 +312,7 @@ describe('app test configuration', () => {
     await app.close()
     const phaseNames = [...new Set(phases.map(({ phase }) => phase))]
     expect(phaseNames).toEqual([
+      'futures-due-deadline-timer-stop',
       'futures-collector-stop',
       'futures-candle-timer-stop',
       'futures-funding-timer-stop',

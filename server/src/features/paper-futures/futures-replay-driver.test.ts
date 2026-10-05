@@ -17,7 +17,7 @@ import {
 } from './futures-replay-driver.ts'
 import { FuturesCommandRunner } from './futures-command-runner.ts'
 import { FuturesStore } from './futures-store.ts'
-import { canonicalHash } from './futures-canonical.ts'
+import { canonicalHash, canonicalJson } from './futures-canonical.ts'
 import type { FuturesWorkerRequest } from './futures-worker.ts'
 import { FuturesMarketStore } from '../kraken-futures/futures-market-store.ts'
 import { parseHistoricalFundingResponse } from '../kraken-futures/historical-funding.ts'
@@ -68,6 +68,204 @@ function pythonMarket(
 }
 
 describe('shared causal futures replay driver', () => {
+  it('bounds required market context across 20, 40, and 80 retained source rows', async () => {
+    const directory = mkdtempSync(
+      join(tmpdir(), 'futures-market-context-growth-'),
+    )
+    directories.push(directory)
+    const start = 86_400_000
+    const runId = 'market-context-growth-run'
+    const marketStore = new FuturesMarketStore(join(directory, 'market.sqlite'))
+    for (let row = 1; row <= 80; row += 1) {
+      const receivedAt = start + row * 100
+      if (row % 2 === 1) {
+        marketStore.append({
+          type: 'book',
+          productId: 'PF_XBTUSD',
+          seq: row,
+          epoch: 1,
+          eventTime: receivedAt,
+          receivedAt,
+          persistedAt: receivedAt,
+          snapshot: true,
+          contiguous: true,
+          valid: true,
+          bids: [{ price: '100000', quantity: '1' }],
+          asks: [{ price: '100001', quantity: '1' }],
+          raw: { fixture: `book-${row}` },
+        })
+      } else {
+        marketStore.append({
+          type: 'ticker',
+          productId: 'PF_XBTUSD',
+          seq: row,
+          epoch: 1,
+          eventTime: receivedAt,
+          receivedAt,
+          persistedAt: receivedAt,
+          mark: '100000',
+          suspended: false,
+          raw: { fixture: `ticker-${row}` },
+        })
+      }
+    }
+    const marketContextConfig = {
+      ...runtimeConfig,
+      market_context_policy_version: 'market-context-transport.v1',
+    }
+    const admissionPolicyBody = {
+      schema_version: 'futures-entry-admission.v1',
+      evaluation_interval_ms: 5000,
+    } as const
+    const admissionPolicy = {
+      ...admissionPolicyBody,
+      hash: canonicalHash(admissionPolicyBody),
+    }
+    const strategies = {
+      config_version: 'futures-strategies-config.v1',
+      indicator_version: 'futures-closed-indicators.v1',
+      strategy_ids: [
+        'c25-pullback-perp-v1',
+        'c26-reversion-perp-v1',
+        'c27-breakout-perp-v1',
+        'c28-adapter-perp-v1',
+      ],
+    }
+    const manifest = {
+      schema_version: 'futures-replay-manifest.v1' as const,
+      source: 'market-context-growth-fixture.v1',
+      source_hash: canonicalHash({
+        events: marketStore.eventsAsOf(Number.MAX_SAFE_INTEGER),
+        candles: marketStore.candlesAsOf(Number.MAX_SAFE_INTEGER),
+        gaps: marketStore.gapsAsOf(Number.MAX_SAFE_INTEGER),
+      }),
+      config_hash: canonicalHash(marketContextConfig),
+      seed: 'market-context-growth',
+      fidelity: 'neutral-valid-book-ticker-history',
+      instrument_hash: canonicalHash(instrument),
+      admission_policy: admissionPolicy,
+    }
+    const store = new FuturesStore(join(directory, 'futures.sqlite'))
+    store.createRun({
+      runId,
+      config: {
+        ledger_version: 'linear-usd-ledger.v1',
+        decimal_precision: 50,
+        leverage: '1',
+      },
+      seed: { cash_usd: '10000' },
+      instrument: { instrument_id: instrument.instrument_id },
+      costs: {
+        version: marketContextConfig.cost_version,
+        maker: marketContextConfig.maker_rate,
+        taker: marketContextConfig.taker_rate,
+      },
+      runtime: {
+        schema_version: 'futures-runtime-binding.v5',
+        runtime_config: marketContextConfig,
+        instrument_spec: instrument,
+        strategy_manifest: strategies,
+        strategy_config_hash: canonicalHash(strategies),
+        admission_policy: admissionPolicy,
+      },
+    })
+    const runner = new FuturesCommandRunner(store)
+    const measured: {
+      rows: number
+      eventCount: number
+      marketBytes: number
+    }[] = []
+    const driver = new FuturesReplayDriver({
+      runId,
+      manifest,
+      initialStateVersion: 0,
+      durableStore: store,
+      apply: async (work) => {
+        const snapshot = work.input.payload.market_snapshot as Record<
+          string,
+          unknown
+        >
+        const events = snapshot.events as Record<string, unknown>[]
+        const marketPayload = {
+          mode: snapshot.mode,
+          instrument: snapshot.instrument,
+          decision_time_ms: snapshot.decision_time_ms,
+          cutoff_received_at_ms: snapshot.cutoff_received_at_ms,
+          events,
+          market_context: snapshot.market_context,
+        }
+        const result = await runner.accept({
+          request_id: `request-${work.work_id}`,
+          run_id: runId,
+          work_id: work.work_id,
+          expected_state_version: work.version,
+          payload: {
+            operation: 'futures_runtime.v3',
+            runtime_config: marketContextConfig,
+            instrument,
+            market_snapshot: marketPayload,
+          },
+        }).result
+        const rowCount = Number(work.input.payload.market_source_watermark)
+        if (rowCount === 20 || rowCount === 40 || rowCount === 80)
+          measured.push({
+            rows: rowCount,
+            eventCount: events.length,
+            marketBytes: Buffer.byteLength(
+              canonicalJson(marketPayload),
+              'utf8',
+            ),
+          })
+        return {
+          status: 'committed',
+          applied_state_version: Number(
+            store.getRunProjection(runId)?.state_version,
+          ),
+          economic_projection: { result },
+        }
+      },
+    })
+
+    // No admission policy is bound, so available rows take the required full
+    // processing path rather than being skipped as an audited idle range.
+    await driver.processMarketStore(
+      marketStore,
+      start + 2000,
+      instrument,
+      undefined,
+      'paper_live',
+    )
+    await driver.processMarketStore(
+      marketStore,
+      start + 4000,
+      instrument,
+      undefined,
+      'paper_live',
+    )
+    await driver.processMarketStore(
+      marketStore,
+      start + 8000,
+      instrument,
+      undefined,
+      'paper_live',
+    )
+
+    expect(measured.map(({ rows }) => rows)).toEqual([20, 40, 80])
+    console.info('required-market-context-growth', JSON.stringify(measured))
+    expect(measured[1]!.eventCount).toBeLessThanOrEqual(
+      measured[0]!.eventCount + 2,
+    )
+    expect(measured[2]!.eventCount).toBeLessThanOrEqual(
+      measured[0]!.eventCount + 2,
+    )
+    expect(measured[1]!.marketBytes).toBeLessThanOrEqual(
+      measured[0]!.marketBytes + 512,
+    )
+    expect(measured[2]!.marketBytes).toBeLessThanOrEqual(
+      measured[0]!.marketBytes + 512,
+    )
+  }, 30_000)
+
   it('skips only quality-valid PAPER_LIVE book bursts while funding alone blocks entry', async () => {
     const directory = mkdtempSync(
       join(tmpdir(), 'futures-funding-idle-quality-'),
@@ -1079,7 +1277,7 @@ describe('shared causal futures replay driver', () => {
     market.close()
   })
 
-  it('does not retrofill late recovery evidence and resumes an open close intent on the first post-gap eligible book', async () => {
+  it('preserves late-recovery protections across opted-in and legacy source replay restart', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'futures-gap-replay-'))
     directories.push(directory)
     const start = 21_600_000
@@ -1236,8 +1434,31 @@ describe('shared causal futures replay driver', () => {
         'c28-adapter-perp-v1',
       ],
     }
-    const run = async (runId: string, incremental: boolean) => {
+    const run = async (
+      runId: string,
+      incremental: boolean,
+      useMarketContext: boolean,
+    ) => {
       const dbPath = join(directory, `${runId}.sqlite`)
+      const admissionPolicy = {
+        schema_version: 'futures-entry-admission.v1',
+        evaluation_interval_ms: 5000,
+        hash: canonicalHash({
+          schema_version: 'futures-entry-admission.v1',
+          evaluation_interval_ms: 5000,
+        }),
+      } as const
+      const runConfig = useMarketContext
+        ? {
+            ...runtimeConfig,
+            market_context_policy_version: 'market-context-transport.v1',
+          }
+        : runtimeConfig
+      const runManifest = {
+        ...manifest,
+        config_hash: canonicalHash(runConfig),
+        admission_policy: admissionPolicy,
+      }
       let store = new FuturesStore(dbPath)
       const createRun = () =>
         store.createRun({
@@ -1255,11 +1476,12 @@ describe('shared causal futures replay driver', () => {
             taker: runtimeConfig.taker_rate,
           },
           runtime: {
-            schema_version: 'futures-runtime-binding.v4',
-            runtime_config: runtimeConfig,
+            schema_version: 'futures-runtime-binding.v5',
+            runtime_config: runConfig,
             instrument_spec: instrument,
             strategy_manifest: strategies,
             strategy_config_hash: canonicalHash(strategies),
+            admission_policy: admissionPolicy,
           },
         })
       createRun()
@@ -1272,7 +1494,7 @@ describe('shared causal futures replay driver', () => {
           expected_state_version: work.version,
           payload: {
             operation: 'futures_runtime.v3',
-            runtime_config: runtimeConfig,
+            runtime_config: runConfig,
             instrument,
             market_snapshot: work.input.payload.market_snapshot as Record<
               string,
@@ -1291,12 +1513,8 @@ describe('shared causal futures replay driver', () => {
         try {
           await runner.accept(request).result
         } catch (error) {
-          const snapshot = work.input.payload.market_snapshot as Record<
-            string,
-            unknown
-          >
           throw new Error(
-            `gap source row ${work.input.sequence} candles=${(snapshot.events as Record<string, unknown>[]).filter((event) => event.type === 'candle').length}: ${String(error)}`,
+            `gap source row ${work.input.sequence}: ${String(error)}`,
             {
               cause: error,
             },
@@ -1323,7 +1541,7 @@ describe('shared causal futures replay driver', () => {
       if (incremental) {
         let driver = new FuturesReplayDriver({
           runId,
-          manifest,
+          manifest: runManifest,
           apply,
           durableStore: store,
         })
@@ -1363,7 +1581,7 @@ describe('shared causal futures replay driver', () => {
         runner = new FuturesCommandRunner(store)
         driver = await FuturesReplayDriver.resumeMarketStore({
           runId,
-          manifest,
+          manifest: runManifest,
           apply,
           durableStore: store,
           marketStore,
@@ -1381,7 +1599,7 @@ describe('shared causal futures replay driver', () => {
       } else {
         result = await FuturesReplayDriver.replayMarketStore({
           runId,
-          manifest,
+          manifest: runManifest,
           apply,
           store: marketStore,
           receivedCutoff: start + 400,
@@ -1401,11 +1619,33 @@ describe('shared causal futures replay driver', () => {
       return { result, outputs, finalOutput, projection }
     }
 
-    const incremental = await run('gap-incremental', true)
-    const batch = await run('gap-batch', false)
-    expect(
-      compareEconomicSemantics(incremental.result, batch.result),
-    ).toMatchObject({ equal: true, differences: [] })
+    const incremental = await run('gap-incremental', true, true)
+    const batch = await run('gap-batch', false, false)
+    const legacy = await run('gap-legacy', true, false)
+    expect(compareEconomicSemantics(legacy.result, batch.result)).toMatchObject(
+      { equal: true, differences: [] },
+    )
+    const effectiveFinancialView = (result: typeof incremental.result) => ({
+      inputs: (result.inputs as Record<string, unknown>[]).map((input) => {
+        const payload = input.payload as Record<string, unknown>
+        return {
+          sequence: input.sequence,
+          received_at_ms: input.received_at_ms,
+          event_time_ms: input.event_time_ms,
+          known_at_ms: input.known_at_ms,
+          market_event: payload.market_event,
+          control: payload.control,
+        }
+      }),
+      economic_projection: result.economic_projection,
+    })
+    const optInView = effectiveFinancialView(incremental.result)
+    const legacyView = effectiveFinancialView(legacy.result)
+    expect(optInView.inputs).toHaveLength(legacyView.inputs.length)
+    expect(compareEconomicSemantics(optInView, legacyView)).toMatchObject({
+      equal: true,
+      differences: [],
+    })
     expect(incremental.finalOutput.position).toMatchObject({
       side: null,
       quantity_btc: '0',
@@ -1419,6 +1659,16 @@ describe('shared causal futures replay driver', () => {
       .payload as Record<string, unknown>
     const postGapSnapshot = postGap.market_snapshot as Record<string, unknown>
     const postGapEvents = postGapSnapshot.events as Record<string, unknown>[]
+    const recoveredSource = resumedInputs.find((input) => input.sequence === 4)!
+      .payload as Record<string, unknown>
+    const recoveredSourceSnapshot = recoveredSource.market_snapshot as Record<
+      string,
+      unknown
+    >
+    const recoveredSourceEvents = recoveredSourceSnapshot.events as Record<
+      string,
+      unknown
+    >[]
     expect(
       postGapEvents.some(
         (event) =>
@@ -1431,12 +1681,19 @@ describe('shared causal futures replay driver', () => {
       ),
     ).toBe(false)
     expect(
-      postGapEvents.some(
+      recoveredSourceEvents.some(
         (event) =>
           event.type === 'recovered_trade_audit' &&
           event.source_receipt_sequence === 4,
       ),
     ).toBe(true)
+    expect(
+      postGapEvents.some(
+        (event) =>
+          event.type === 'recovered_trade_audit' &&
+          event.source_receipt_sequence === 4,
+      ),
+    ).toBe(false)
     expect(incremental.result.inputs.map((input) => input.sequence)).toContain(
       9,
     )

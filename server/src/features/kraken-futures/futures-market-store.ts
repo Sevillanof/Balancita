@@ -588,6 +588,32 @@ export class FuturesMarketStore {
     ).map(withReceivedSequence)
   }
 
+  latestBookTickerAsOf(
+    receivedCutoff: number,
+    maximumReceivedSequence?: number,
+  ): Record<string, unknown>[] {
+    time(receivedCutoff, 'receivedCutoff')
+    if (maximumReceivedSequence !== undefined)
+      time(maximumReceivedSequence, 'maximumReceivedSequence')
+    const latest = (feed: 'book' | 'ticker') =>
+      this.db
+        .prepare(
+          `SELECT normalized_json,rowid AS received_sequence
+           FROM paper_futures_market_events
+           WHERE received_at<=? AND feed=?
+             ${maximumReceivedSequence === undefined ? '' : 'AND rowid<=?'}
+           ORDER BY rowid DESC LIMIT 1`,
+        )
+        .all(
+          ...(maximumReceivedSequence === undefined
+            ? [receivedCutoff, feed]
+            : [receivedCutoff, feed, maximumReceivedSequence]),
+        ) as StoredRow[]
+    return latest('book')
+      .concat(latest('ticker'))
+      .map(withReceivedSequence) as Record<string, unknown>[]
+  }
+
   eventsAfter(receivedSequence: number): unknown[] {
     time(receivedSequence, 'receivedSequence')
     return (
@@ -805,6 +831,66 @@ export class FuturesMarketStore {
         knownAtCutoff,
         knownAtCutoff,
       ) as unknown[]
+  }
+
+  candlesTailAsOf(knownAtCutoff: number, limitPerInterval = 500): unknown[] {
+    time(knownAtCutoff, 'knownAtCutoff')
+    if (
+      !Number.isSafeInteger(limitPerInterval) ||
+      limitPerInterval < 1 ||
+      limitPerInterval > 500
+    )
+      throw new RangeError('Candle tail limit must be between 1 and 500.')
+    return this.db
+      .prepare(
+        `WITH eligible AS (
+           SELECT *, ROW_NUMBER() OVER (
+             PARTITION BY candle_id ORDER BY revision DESC
+           ) AS revision_rank
+           FROM paper_futures_candle_revisions
+           WHERE known_at<=? AND close_at<=? AND is_closed=1
+             AND NOT EXISTS (
+               SELECT 1 FROM paper_futures_data_gaps AS gap
+               WHERE gap.detected_at < paper_futures_candle_revisions.known_at
+                 AND paper_futures_candle_revisions.close_at<=gap.detected_at
+             )
+         ), ranked AS (
+           SELECT *, ROW_NUMBER() OVER (
+             PARTITION BY interval_ms ORDER BY bucket_start DESC,candle_id DESC
+           ) AS tail_rank
+           FROM eligible WHERE revision_rank=1
+         )
+         SELECT candle_id,interval_ms,bucket_start,revision,known_at,close_at,
+           is_closed,coverage,open_price,high_price,low_price,close_price,
+           volume_btc,trade_count,source_hash
+         FROM ranked WHERE tail_rank<=?
+         ORDER BY interval_ms,bucket_start,candle_id`,
+      )
+      .all(knownAtCutoff, knownAtCutoff, limitPerInterval) as unknown[]
+  }
+
+  bookSnapshotHasKnownGap(event: {
+    epoch: number
+    seq: number
+    eventTime: number
+    receivedAt: number
+  }): boolean {
+    time(event.epoch, 'book epoch')
+    time(event.seq, 'book sequence')
+    time(event.eventTime, 'book event time')
+    time(event.receivedAt, 'book received time')
+    const row = this.db
+      .prepare(
+        `SELECT EXISTS(
+           SELECT 1 FROM paper_futures_data_gaps
+           WHERE feed='book' AND detected_at<=?
+             AND ( ?<=detected_at OR (epoch=? AND actual_seq IS NOT NULL AND ?<actual_seq) )
+         ) AS has_gap`,
+      )
+      .get(event.receivedAt, event.eventTime, event.epoch, event.seq) as {
+      has_gap: number
+    }
+    return Number(row.has_gap) === 1
   }
 
   gapsAsOf(detectedAtCutoff: number): unknown[] {

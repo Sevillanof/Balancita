@@ -2237,6 +2237,42 @@ function isRecord(value: unknown): value is JsonRecord {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
+function isFundingPolicyEvidence(value: unknown): value is JsonRecord {
+  if (
+    !isRecord(value) ||
+    typeof value.observation_id !== 'string' ||
+    !['known', 'unknown'].includes(String(value.status)) ||
+    !Number.isSafeInteger(value.known_at_ms) ||
+    (value.effective_start_ms !== null &&
+      !Number.isSafeInteger(value.effective_start_ms)) ||
+    (value.effective_end_ms !== null &&
+      !Number.isSafeInteger(value.effective_end_ms)) ||
+    typeof value.applicable_at_decision !== 'boolean' ||
+    (value.reason !== null && typeof value.reason !== 'string')
+  )
+    return false
+  const hasBoundaryIdentity = [
+    'provider',
+    'product',
+    'field',
+    'unit',
+    'sha256',
+    'semantic_version',
+    'predicted',
+  ].some((key) => key in value)
+  return (
+    !hasBoundaryIdentity ||
+    (value.provider === 'kraken' &&
+      value.product === 'PF_XBTUSD' &&
+      value.field === 'funding_rate' &&
+      value.unit === 'usd_per_btc_per_hour' &&
+      typeof value.sha256 === 'string' &&
+      /^[a-f0-9]{64}$/.test(value.sha256) &&
+      value.semantic_version === 'kraken-funding-normalization.v1' &&
+      value.predicted === false)
+  )
+}
+
 const LEDGER_VERSION = 'linear-usd-ledger.v1'
 const COST_VERSION = 'kraken-futures-eea-btcusd-base.v1'
 const RISK_RESULT_FIELDS = [
@@ -2546,6 +2582,7 @@ function validateRuntimeBinding(value: unknown, frozen: JsonRecord): void {
                 'funding_policy_version',
                 'strategy_selection_policy_version',
                 'strategy_selection_interval_ms',
+                'market_context_policy_version',
               ]
             : []),
         ]
@@ -2559,6 +2596,13 @@ function validateRuntimeBinding(value: unknown, frozen: JsonRecord): void {
     )
       throw new Error('Unsupported frozen funding-separation policy.')
   }
+  if (
+    'market_context_policy_version' in config &&
+    (value.schema_version !== 'futures-runtime-binding.v5' ||
+      config.version !== 'futures-runtime-risk.v1' ||
+      config.market_context_policy_version !== 'market-context-transport.v1')
+  )
+    throw new Error('Unsupported frozen market-context transport policy.')
   if (
     ('strategy_selection_policy_version' in config &&
       (value.schema_version !== 'futures-runtime-binding.v5' ||
@@ -3160,17 +3204,7 @@ function validateFundingPolicy(
     !obligations.every(
       (item) => isRecord(item) && obligationKinds.has(String(item.kind)),
     ) ||
-    (evidence !== null &&
-      (!isRecord(evidence) ||
-        typeof evidence.observation_id !== 'string' ||
-        !['known', 'unknown'].includes(String(evidence.status)) ||
-        !Number.isSafeInteger(evidence.known_at_ms) ||
-        (evidence.effective_start_ms !== null &&
-          !Number.isSafeInteger(evidence.effective_start_ms)) ||
-        (evidence.effective_end_ms !== null &&
-          !Number.isSafeInteger(evidence.effective_end_ms)) ||
-        typeof evidence.applicable_at_decision !== 'boolean' ||
-        (evidence.reason !== null && typeof evidence.reason !== 'string'))) ||
+    (evidence !== null && !isFundingPolicyEvidence(evidence)) ||
     (outputPolicy.availability === 'known' &&
       (!isRecord(evidence) ||
         evidence.status !== 'known' ||
@@ -3322,11 +3356,14 @@ function validateStrategySelectionCheckpoint(
         (last as number) > (lastExecution as number) ||
         next !== (last as number) + 5000)) ||
     (last === null && (next !== null || context !== null)) ||
-    !isRecord(context)
+    (last !== null && !isRecord(context))
   )
     throw new Error(
       'Strategy-selection checkpoint identity or clock is invalid.',
     )
+  if (last === null) return
+  if (!isRecord(context))
+    throw new Error('Strategy-selection checkpoint cache is invalid.')
   assertKeys(context, ['proposals', 'selector', 'regime', 'as_of_ms'])
   const manifest = binding.strategy_manifest
   const strategyIds = isRecord(manifest) ? manifest.strategy_ids : undefined
@@ -3352,7 +3389,9 @@ function validateStrategySelectionCheckpoint(
     if (
       !isRecord(proposal) ||
       proposal.strategy_id !== strategyIds[index] ||
-      !['LONG', 'SHORT', 'FLAT', 'WAIT'].includes(String(proposal.action))
+      !['LONG', 'SHORT', 'FLAT', 'WAIT', 'ABSTAIN'].includes(
+        String(proposal.action),
+      )
     )
       throw new Error('Strategy-selection proposal cache is invalid.')
   }
@@ -3389,6 +3428,16 @@ function validateRuntimeWork(
     throw new Error('Runtime work checkpoint and output are required.')
   const cp = value.runtime_checkpoint
   const output = value.runtime_output
+  if (
+    isRecord(output.ledger) &&
+    output.ledger.mark_usd_per_btc === null &&
+    (!isRecord(cp.market_context_checkpoint) ||
+      cp.market_context_checkpoint.source_identity !== null ||
+      cp.market_context_checkpoint.frontier !== 0)
+  )
+    throw new Error(
+      'Unmarked account valuation is restricted to cold unbound state.',
+    )
   const binding = frozen.runtime as JsonRecord
   const strategyRuntime =
     binding.schema_version === 'futures-runtime-binding.v2' ||
@@ -3441,6 +3490,10 @@ function validateRuntimeWork(
         .strategy_selection_policy_version === 'strategy-selection-cadence.v1'
         ? ['strategy_selection_checkpoint']
         : []),
+      ...((binding.runtime_config as JsonRecord)
+        .market_context_policy_version === 'market-context-transport.v1'
+        ? ['market_context_checkpoint']
+        : []),
     ],
   )
   if (
@@ -3469,6 +3522,63 @@ function validateRuntimeWork(
     cp.instrument_id !== (binding.instrument_spec as JsonRecord).instrument_id
   )
     throw new Error('Runtime checkpoint configuration or instrument drifted.')
+  const marketContextCheckpoint = cp.market_context_checkpoint
+  const marketContextAnchors = isRecord(marketContextCheckpoint)
+    ? marketContextCheckpoint.anchors
+    : undefined
+  const marketContextUnbound =
+    isRecord(marketContextCheckpoint) &&
+    marketContextCheckpoint.source_identity === null &&
+    marketContextCheckpoint.frontier === 0 &&
+    isRecord(marketContextAnchors) &&
+    Object.keys(marketContextAnchors).length === 0 &&
+    cp.ledger_position === null &&
+    cp.position_protection === null &&
+    isRecord(cp.execution_checkpoint) &&
+    isRecord(cp.execution_checkpoint.orders) &&
+    Object.values(cp.execution_checkpoint.orders).every(
+      (order) =>
+        isRecord(order) &&
+        !['accepted', 'partially_filled'].includes(String(order.state)),
+    ) &&
+    (isRecord(cp.risk_checkpoint)
+      ? cp.risk_checkpoint.reduction_intent_id === null
+      : false) &&
+    (isRecord(cp.funding_policy_checkpoint)
+      ? Array.isArray(
+          cp.funding_policy_checkpoint.pending_financial_obligations,
+        ) &&
+        cp.funding_policy_checkpoint.pending_financial_obligations.length === 0
+      : true)
+  if (
+    (binding.runtime_config as JsonRecord).market_context_policy_version ===
+    'market-context-transport.v1'
+      ? !isRecord(marketContextCheckpoint) ||
+        Object.keys(marketContextCheckpoint).sort().join(',') !==
+          'anchors,frontier,instrument_id,knowledge_cutoff_ms,policy_version,source_identity' ||
+        marketContextCheckpoint.policy_version !==
+          'market-context-transport.v1' ||
+        (marketContextCheckpoint.source_identity !== null &&
+          (typeof marketContextCheckpoint.source_identity !== 'string' ||
+            !/^[a-f0-9]{64}$/.test(marketContextCheckpoint.source_identity))) ||
+        (marketContextCheckpoint.source_identity === null &&
+          !marketContextUnbound) ||
+        marketContextCheckpoint.instrument_id !==
+          (binding.instrument_spec as JsonRecord).instrument_id ||
+        !Number.isSafeInteger(marketContextCheckpoint.frontier) ||
+        Number(marketContextCheckpoint.frontier) < 0 ||
+        !Number.isSafeInteger(marketContextCheckpoint.knowledge_cutoff_ms) ||
+        !isRecord(marketContextAnchors) ||
+        Object.keys(marketContextAnchors).some(
+          (key) =>
+            !['book_snapshot', 'ticker'].includes(key) ||
+            !isRecord(marketContextAnchors[key]) ||
+            marketContextAnchors[key].context_anchor !== true ||
+            marketContextAnchors[key].type !== key,
+        )
+      : cp.market_context_checkpoint !== undefined
+  )
+    throw new Error('Runtime market-context checkpoint policy drifted.')
   if (
     value.applied_state_version !== version ||
     !Number.isSafeInteger(version) ||
@@ -3515,7 +3625,8 @@ function validateRuntimeWork(
     !isRecord(output.position) ||
     !isRecord(output.ledger) ||
     (output.valuation_source !== 'ticker_mark' &&
-      output.valuation_source !== 'observed_book_midpoint')
+      output.valuation_source !== 'observed_book_midpoint' &&
+      output.valuation_source !== 'unavailable')
   )
     throw new Error('Invalid C27 runtime output shape.')
   const cadenceEnabled =
@@ -4252,7 +4363,8 @@ function validateLedgerSnapshot(value: JsonRecord, frozen: JsonRecord): void {
   canonicalDecimal(value.cash_usd, 'cash_usd', 'nonnegative')
   canonicalDecimal(value.leverage, 'leverage', 'positive')
   canonicalDecimal(value.quantity_btc, 'quantity_btc', 'nonnegative')
-  canonicalDecimal(value.mark_usd_per_btc, 'mark_usd_per_btc', 'positive')
+  if (value.mark_usd_per_btc !== null)
+    canonicalDecimal(value.mark_usd_per_btc, 'mark_usd_per_btc', 'positive')
   canonicalDecimal(value.unrealized_gross_usd, 'unrealized_gross_usd')
   canonicalDecimal(
     value.reserved_margin_usd,
@@ -4271,6 +4383,8 @@ function validateLedgerSnapshot(value: JsonRecord, frozen: JsonRecord): void {
   if (value.side !== null && value.side !== 'long' && value.side !== 'short')
     throw new Error('Invalid futures position side.')
   const isFlat = value.side === null
+  if (value.mark_usd_per_btc === null && !isFlat)
+    throw new Error('An unmarked futures account must be flat.')
   const quantity = canonicalDecimal(
     value.quantity_btc,
     'quantity_btc',

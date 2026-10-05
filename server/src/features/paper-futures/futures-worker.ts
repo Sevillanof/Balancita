@@ -2,6 +2,10 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { monitorEventLoopDelay, performance } from 'node:perf_hooks'
+import {
+  MARKET_CONTEXT_SCHEMA_VERSION,
+  validateMarketContextTransport,
+} from './futures-market-context.ts'
 
 const PROTOCOL_VERSION = 1
 const MAX_LINE_BYTES = 1_048_576
@@ -851,6 +855,7 @@ function validateWorkerPayload(payload: Record<string, unknown>): boolean {
               'funding_policy_version',
               'strategy_selection_policy_version',
               'strategy_selection_interval_ms',
+              'market_context_policy_version',
             ]
           : [],
       ) ||
@@ -884,6 +889,13 @@ function validateWorkerPayload(payload: Record<string, unknown>): boolean {
           config.strategy_selection_interval_ms !== 5000)) ||
       (config.strategy_selection_policy_version === undefined &&
         config.strategy_selection_interval_ms !== undefined)
+    )
+      return false
+    if (
+      'market_context_policy_version' in config &&
+      (payload.operation !== 'futures_runtime.v3' ||
+        config.version !== 'futures-runtime-risk.v1' ||
+        config.market_context_policy_version !== 'market-context-transport.v1')
     )
       return false
     if (
@@ -952,14 +964,20 @@ function validateWorkerPayload(payload: Record<string, unknown>): boolean {
     )
       return false
     const market = payload.market_snapshot
+    const marketContextEnabled =
+      config.market_context_policy_version === MARKET_CONTEXT_SCHEMA_VERSION
     if (
-      !hasExactKeys(market, [
-        'mode',
-        'instrument',
-        'decision_time_ms',
-        'cutoff_received_at_ms',
-        'events',
-      ]) ||
+      !hasExactKeys(
+        market,
+        [
+          'mode',
+          'instrument',
+          'decision_time_ms',
+          'cutoff_received_at_ms',
+          'events',
+        ],
+        marketContextEnabled ? ['market_context'] : [],
+      ) ||
       !isRecord(market.instrument) ||
       !sameKeys(market.instrument, instrument) ||
       !Array.isArray(market.events) ||
@@ -971,7 +989,15 @@ function validateWorkerPayload(payload: Record<string, unknown>): boolean {
       Number(market.cutoff_received_at_ms) > Number(market.decision_time_ms) ||
       !['mock', 'replay', 'paper_live'].includes(String(market.mode)) ||
       !market.events.every(isRecord) ||
-      !market.events.every(isValidFundingEvent) ||
+      !market.events.every((event) =>
+        isValidFundingEvent(event, marketContextEnabled),
+      ) ||
+      (marketContextEnabled
+        ? !validateMarketContextTransport(market.market_context) ||
+          market.market_context.instrument_id !== instrument.instrument_id ||
+          market.market_context.knowledge_cutoff_ms !==
+            market.cutoff_received_at_ms
+        : market.market_context !== undefined) ||
       !isJsonSafe(market) ||
       Buffer.byteLength(JSON.stringify(payload), 'utf8') > MAX_LINE_BYTES - 1024
     )
@@ -1012,16 +1038,29 @@ function validateWorkerPayload(payload: Record<string, unknown>): boolean {
   )
 }
 
-function isValidFundingEvent(event: Record<string, unknown>): boolean {
+function isValidFundingEvent(
+  event: Record<string, unknown>,
+  allowMarketContextSequence = false,
+): boolean {
   if (event.type !== 'funding_observation') return true
   if (
     !hasExactKeys(
       event,
       ['type', 'received_at_ms', 'known_at_ms', 'observation'],
-      ['id', 'event_time_ms', 'reception_order', 'epoch'],
+      [
+        'id',
+        'event_time_ms',
+        'reception_order',
+        'epoch',
+        ...(allowMarketContextSequence ? ['source_receipt_sequence'] : []),
+      ],
     ) ||
     !Number.isSafeInteger(event.received_at_ms) ||
     !Number.isSafeInteger(event.known_at_ms) ||
+    (allowMarketContextSequence &&
+      'source_receipt_sequence' in event &&
+      (!Number.isSafeInteger(event.source_receipt_sequence) ||
+        Number(event.source_receipt_sequence) < 0)) ||
     !isRecord(event.observation)
   )
     return false
@@ -1146,7 +1185,7 @@ function isResult(
     request.payload.operation === 'futures_runtime.v1' ||
     request.payload.operation === 'futures_runtime.v2' ||
     request.payload.operation === 'futures_runtime.v3'
-  )
+  ) {
     return (
       isRecord(value) &&
       value.type === 'result' &&
@@ -1176,6 +1215,7 @@ function isResult(
           isRecord(value.runtime_output.analysis) &&
           isRecord(value.runtime_checkpoint.strategy_selection_checkpoint)))
     )
+  }
   return (
     isRecord(value) &&
     value.type === 'result' &&

@@ -43,6 +43,1789 @@ type RuntimeRequest = Omit<FuturesWorkerRequest, 'payload'> & {
 }
 
 describe('durable C27 futures runtime', () => {
+  it('marks only newly created PAPER_LIVE sessions for bounded market context', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'futures-context-factory-'))
+    const runtime = new FuturesSessionRuntime({
+      dbPath: join(directory, 'fixture.sqlite'),
+      mode: 'paper_live',
+    })
+    try {
+      const binding = runtime.store.getRuntimeBinding(runtime.runId)!
+      const boundConfig = binding.runtime_config as Record<string, unknown>
+      expect(boundConfig.market_context_policy_version).toBe(
+        'market-context-transport.v1',
+      )
+      expect(boundConfig.funding_policy_version).toBe('funding-separation.v1')
+      expect(boundConfig.strategy_selection_policy_version).toBe(
+        'strategy-selection-cadence.v1',
+      )
+      const childRunId = 'new-run-factory-child'
+      const definition = runtime.store.getRunDefinition(runtime.runId)
+      runtime.store.createChildRun({
+        runId: childRunId,
+        parentRunId: runtime.runId,
+        revisionId: canonicalHash({ runId: runtime.runId, childRunId }),
+        ...definition,
+      })
+      const command = {
+        command_id: 'new-run-factory-command',
+        run_id: runtime.runId,
+        expected_state_version: 0,
+        action: 'paper.new_run' as const,
+      }
+      const request = runtime.newRunFactory(command, childRunId)
+      const accepted = runtime.commandExecutor(request, {
+        command_id: command.command_id,
+        action: command.action,
+        stream_run_id: command.run_id,
+        expected_state_version: command.expected_state_version,
+        child_run_id: childRunId,
+      })
+      await accepted.result
+      const child = runtime.store.getRunProjection(childRunId)!
+      expect(
+        (child.checkpoint as Record<string, unknown>).market_context_checkpoint,
+      ).toMatchObject({ source_identity: null, frontier: 0, anchors: {} })
+      expect(
+        (
+          (child.runtime_output as Record<string, unknown>).ledger as Record<
+            string,
+            unknown
+          >
+        ).mark_usd_per_btc,
+      ).toBeNull()
+      expect(runtime.store.verifyRun(childRunId)).toBe(true)
+    } finally {
+      await runtime.close()
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
+  it('executes a due IOC from verified market context without a new source receipt', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'futures-due-ioc-'))
+    const path = join(directory, 'fixture.sqlite')
+    const runId = 'market-context-due-ioc-run'
+    const policy = {
+      schema_version: 'futures-entry-admission.v1' as const,
+      evaluation_interval_ms: 5000 as const,
+    }
+    const config = {
+      ...runtimeConfig,
+      version: 'futures-runtime-risk.v1',
+      execution_latency_ms: 100,
+      daily_loss_fraction: '0.01',
+      funding_policy_version: 'funding-separation.v1',
+      strategy_selection_policy_version: 'strategy-selection-cadence.v1',
+      strategy_selection_interval_ms: 5000,
+      market_context_policy_version: 'market-context-transport.v1',
+    }
+    const manifest = {
+      source: 'due-ioc-public-market.v1',
+      source_hash: 'd'.repeat(64),
+      instrument_hash: canonicalHash(instrument),
+    }
+    const strategyManifest = {
+      config_version: 'futures-strategies-config.v1',
+      indicator_version: 'futures-closed-indicators.v1',
+      strategy_ids: [
+        'c25-pullback-perp-v1',
+        'c26-reversion-perp-v1',
+        'c27-breakout-perp-v1',
+        'c28-adapter-perp-v1',
+      ],
+    }
+    const store = new FuturesStore(path)
+    store.createRun({
+      runId,
+      config: {
+        ledger_version: 'linear-usd-ledger.v1',
+        decimal_precision: 50,
+        leverage: '1',
+        mode: 'paper_live',
+      },
+      seed: { cash_usd: '10000', source: 'paper_live' },
+      instrument: { instrument_id: instrument.instrument_id },
+      costs: {
+        version: runtimeConfig.cost_version,
+        maker: runtimeConfig.maker_rate,
+        taker: runtimeConfig.taker_rate,
+      },
+      runtime: {
+        schema_version: 'futures-runtime-binding.v5',
+        runtime_config: config,
+        instrument_spec: instrument,
+        strategy_manifest: strategyManifest,
+        strategy_config_hash: canonicalHash(strategyManifest),
+        admission_policy: { ...policy, hash: canonicalHash(policy) },
+      },
+    })
+    store.bindReplaySession(runId, {
+      schema_version: 'futures-replay-session.v1',
+      run_id: runId,
+      manifest,
+      instrument_hash: canonicalHash(instrument),
+    })
+    const runner = new FuturesCommandRunner(store)
+    const sourceIdentity = canonicalHash({
+      schema_version: 'market-context-source-identity.v1',
+      ...manifest,
+    })
+    const makeRequest = (
+      id: string,
+      version: number,
+      time: number,
+      events: Record<string, unknown>[],
+      context?: Record<string, unknown>,
+    ): FuturesWorkerRequest => ({
+      request_id: `request-${id}`,
+      run_id: runId,
+      work_id: id,
+      expected_state_version: version,
+      payload: {
+        operation: 'futures_runtime.v3',
+        runtime_config: config,
+        instrument,
+        market_snapshot: {
+          mode: 'paper_live',
+          instrument,
+          decision_time_ms: time,
+          cutoff_received_at_ms: time,
+          events,
+          ...(context ? { market_context: context } : {}),
+        },
+      },
+    })
+    try {
+      const source = withKnownFunding(market(21_605_000, 'long'))
+      source.mode = 'paper_live'
+      const sourceEvents = source.events as Record<string, unknown>[]
+      const book = sourceEvents.find((event) => event.type === 'book_snapshot')!
+      ;(book.asks as { quantity_btc: string }[])[0]!.quantity_btc = '0.005'
+      const bootstrap = sourceEvents.filter(
+        (event) =>
+          event.type === 'candle' || event.type === 'funding_observation',
+      )
+      const delta = sourceEvents.filter(
+        (event) => event.type === 'book_snapshot' || event.type === 'ticker',
+      )
+      delta.forEach((event, index) => {
+        event.source_receipt_sequence = index + 1
+      })
+      const context = {
+        schema_version: 'market-context-transport.v1',
+        source_identity: sourceIdentity,
+        instrument_id: instrument.instrument_id,
+        previous_frontier: 0,
+        current_frontier: delta.length,
+        knowledge_cutoff_ms: 21_605_000,
+        bootstrap_events: bootstrap,
+        delta_events: delta,
+      }
+      await runner.accept(
+        makeRequest(
+          'due-ioc-source',
+          0,
+          21_605_000,
+          [...bootstrap, ...delta],
+          context,
+        ),
+      ).result
+      const before = store.getRunProjection(runId)!
+      const checkpoint = before.checkpoint as Record<string, unknown>
+      expect(checkpoint.market_context_checkpoint).toMatchObject({
+        frontier: delta.length,
+        source_identity: sourceIdentity,
+      })
+      expect(before.result).toMatchObject({ quantity_btc: '0' })
+      expect(() =>
+        runner.acceptDue(
+          makeRequest('due-ioc-too-early', 1, 21_605_099, []),
+          policy,
+          21_605_099,
+        ),
+      ).toThrow(/due|admission/i)
+      expect(store.getRunProjection(runId)?.state_version).toBe(1)
+      expect(store.getAppliedReceipt('due-ioc-too-early')).toBeUndefined()
+      expect(() =>
+        runner.accept(makeRequest('due-ioc-ordinary', 1, 21_605_100, [])),
+      ).toThrow(/market context|worker payload/i)
+      expect(store.getRunProjection(runId)?.state_version).toBe(1)
+
+      const dueRequest = makeRequest('due-ioc-fill', 1, 21_605_100, [])
+      const due = runner.acceptDue(dueRequest, policy, 21_605_100)
+      const firstResult = await due.result
+      expect(firstResult).toMatchObject({
+        result: { status: 'committed' },
+      })
+      const applied = store.getRunProjection(runId)!
+      expect(applied.state_version).toBe(2)
+      expect(applied.result).toMatchObject({ quantity_btc: '0.005' })
+      expect(applied.result).toMatchObject({ cash_usd: '10000' })
+      const output = applied.runtime_output as Record<string, unknown>
+      expect(output.fills).toHaveLength(1)
+      expect(output.fills).toMatchObject([
+        { quantity_btc: '0.005', event_time_ms: 21_605_100 },
+      ])
+      expect(output.orders).toContainEqual(
+        expect.objectContaining({
+          type: 'cancelled',
+          filled_quantity_btc: '0.005',
+        }),
+      )
+      expect((output.ledger as Record<string, unknown>).fees_usd).toBe(
+        '0.2500025',
+      )
+      expect((output.ledger as Record<string, unknown>).equity_usd).toBe(
+        '9999.7449975',
+      )
+      const afterCheckpoint = applied.checkpoint as Record<string, unknown>
+      expect(afterCheckpoint.market_context_checkpoint).toMatchObject({
+        frontier: delta.length,
+        source_identity: sourceIdentity,
+      })
+      expect(
+        (afterCheckpoint.market_context_checkpoint as Record<string, unknown>)
+          .anchors,
+      ).toMatchObject({
+        book_snapshot: {
+          event_time_ms: 21_605_000,
+          received_at_ms: 21_605_000,
+        },
+      })
+      const eventsBeforeRetry = store.exportRun(runId).events
+      const retry = runner.acceptDue(dueRequest, policy, 21_605_100)
+      expect(await retry.result).toEqual(firstResult)
+      expect(store.exportRun(runId).events).toEqual(eventsBeforeRetry)
+      expect(store.getAppliedReceipt('due-ioc-fill')).toBeDefined()
+      expect(store.verifyRun(runId)).toBe(true)
+    } finally {
+      await runner.close()
+      store.close()
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
+  it('processes a source-free due IOC through the session runtime API', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'futures-session-due-ioc-'))
+    const databasePath = join(directory, 'fixture.sqlite')
+    let session = new FuturesSessionRuntime({
+      dbPath: databasePath,
+      mode: 'paper_live',
+    })
+    try {
+      const runId = session.runId
+      const binding = session.store.getRuntimeBinding(runId)!
+      const config = binding.runtime_config as Record<string, unknown>
+      const manifest = {
+        source: 'session-due-public-market.v1',
+        source_hash: 'f'.repeat(64),
+        instrument_hash: canonicalHash(instrument),
+      }
+      session.store.bindReplaySession(runId, {
+        schema_version: 'futures-replay-session.v1',
+        run_id: runId,
+        manifest,
+        instrument_hash: canonicalHash(instrument),
+      })
+      const source = withKnownFunding(market(21_605_000, 'long'))
+      source.mode = 'paper_live'
+      const sourceEvents = source.events as Record<string, unknown>[]
+      const book = sourceEvents.find((event) => event.type === 'book_snapshot')!
+      ;(book.asks as { quantity_btc: string }[])[0]!.quantity_btc = '0.005'
+      const bootstrap = sourceEvents.filter(
+        (event) =>
+          event.type === 'candle' || event.type === 'funding_observation',
+      )
+      const delta = sourceEvents.filter(
+        (event) => event.type === 'book_snapshot' || event.type === 'ticker',
+      )
+      delta.forEach((event, index) => {
+        event.source_receipt_sequence = index + 1
+      })
+      const sourceIdentity = canonicalHash({
+        schema_version: 'market-context-source-identity.v1',
+        ...manifest,
+      })
+      const context = {
+        schema_version: 'market-context-transport.v1',
+        source_identity: sourceIdentity,
+        instrument_id: instrument.instrument_id,
+        previous_frontier: 0,
+        current_frontier: delta.length,
+        knowledge_cutoff_ms: 21_605_000,
+        bootstrap_events: bootstrap,
+        delta_events: delta,
+      }
+      type V3Payload = Extract<
+        FuturesWorkerRequest['payload'],
+        { operation: 'futures_runtime.v3' }
+      >
+      const request: FuturesWorkerRequest = {
+        request_id: 'session-due-source-request',
+        run_id: runId,
+        work_id: 'session-due-source-work',
+        expected_state_version: 0,
+        payload: {
+          operation: 'futures_runtime.v3',
+          runtime_config: config as V3Payload['runtime_config'],
+          instrument: instrument as V3Payload['instrument'],
+          market_snapshot: {
+            ...source,
+            events: [...bootstrap, ...delta],
+            market_context: context,
+          } as V3Payload['market_snapshot'],
+        },
+      }
+      await session.runner.accept(request).result
+      expect(
+        session.getAdmissionState(21_605_100).next_due_at.reasons,
+      ).toContain('order_eligibility')
+      expect(await session.processDue(21_605_100)).toEqual({
+        status: 'processed',
+      })
+      const projection = session.store.getRunProjection(runId)!
+      expect(projection.result).toMatchObject({ quantity_btc: '0.005' })
+      const output = projection.runtime_output as Record<string, unknown>
+      expect(output.fills).toMatchObject([
+        {
+          quantity_btc: '0.005',
+          event_time_ms: 21_605_100,
+        },
+      ])
+      expect(
+        (
+          (
+            (projection.checkpoint as Record<string, unknown>)
+              .market_context_checkpoint as Record<string, unknown>
+          ).anchors as Record<string, Record<string, unknown>>
+        ).book_snapshot,
+      ).toMatchObject({ event_time_ms: 21_605_000, received_at_ms: 21_605_000 })
+      const selectorBefore = (projection.checkpoint as Record<string, unknown>)
+        .strategy_selection_checkpoint as Record<string, unknown>
+      expect(selectorBefore.last_selection_ms).toBe(21_605_000)
+      const selectorDue = session.getAdmissionState(21_610_000)
+      expect(selectorDue.strategy_selection_due_at).toEqual({
+        time_ms: 21_610_000,
+        reason: 'strategy_evaluation',
+      })
+      expect(selectorDue.next_due_at.reasons).toContain('strategy_evaluation')
+      const feesBeforeSelector = output.fees_usd
+      expect(await session.processDue(21_610_000)).toEqual({
+        status: 'processed',
+      })
+      const afterSelector = session.store.getRunProjection(runId)!
+      const afterSelectorOutput = afterSelector.runtime_output as Record<
+        string,
+        unknown
+      >
+      const afterSelectorCheckpoint = afterSelector.checkpoint as Record<
+        string,
+        unknown
+      >
+      const selectionCheckpoint =
+        afterSelectorCheckpoint.strategy_selection_checkpoint as Record<
+          string,
+          unknown
+        >
+      expect(selectionCheckpoint.last_selection_ms).toBe(21_610_000)
+      expect(selectionCheckpoint.next_selection_due_ms).toBe(21_615_000)
+      expect(selectionCheckpoint.context).toMatchObject({
+        as_of_ms: 21_610_000,
+        proposals: expect.arrayContaining([
+          expect.objectContaining({ strategy_id: 'c28-adapter-perp-v1' }),
+        ]),
+      })
+      expect(
+        (selectionCheckpoint.context as Record<string, unknown>).proposals,
+      ).toHaveLength(4)
+      expect(
+        (
+          (selectionCheckpoint.context as Record<string, unknown>)
+            .proposals as Record<string, unknown>[]
+        ).find((proposal) => proposal.strategy_id === 'c28-adapter-perp-v1'),
+      ).toMatchObject({ action: 'ABSTAIN' })
+      expect(afterSelectorOutput.fees_usd).toBe(feesBeforeSelector)
+      expect(afterSelectorOutput.fills).toEqual([])
+      expect(afterSelectorOutput.orders).toEqual([])
+      expect(afterSelector.result).toMatchObject({ quantity_btc: '0.005' })
+      expect(afterSelector.result).toMatchObject({ cash_usd: '10000' })
+      expect(afterSelectorOutput.ledger).toMatchObject({
+        cash_usd: '10000',
+        fees_usd: '0.2500025',
+        equity_usd: '9999.7449975',
+        funding_complete: false,
+        net_complete: null,
+      })
+      expect(
+        (
+          afterSelectorCheckpoint.market_context_checkpoint as Record<
+            string,
+            unknown
+          >
+        ).frontier,
+      ).toBe(delta.length)
+      const versionAfterSelector = afterSelector.state_version
+      expect(await session.processDue(21_614_999)).toEqual({
+        status: 'not_due',
+      })
+      expect(session.store.getRunProjection(runId)?.state_version).toBe(
+        versionAfterSelector,
+      )
+      await session.close()
+      session = new FuturesSessionRuntime({
+        dbPath: databasePath,
+        mode: 'paper_live',
+      })
+      const reopened = session.store.getRunProjection(runId)!
+      expect(
+        (
+          (reopened.checkpoint as Record<string, unknown>)
+            .strategy_selection_checkpoint as Record<string, unknown>
+        ).last_selection_ms,
+      ).toBe(21_610_000)
+      expect(
+        session.getAdmissionState(21_614_999).strategy_selection_due_at,
+      ).toEqual({
+        time_ms: 21_615_000,
+        reason: 'strategy_evaluation',
+      })
+    } finally {
+      await session.close()
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
+  it('services an accepted entry IOC when funding expires before eligibility', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'futures-unknown-due-order-'))
+    const databasePath = join(directory, 'fixture.sqlite')
+    const diagnosticsPath = join(directory, 'worker-diagnostics.jsonl')
+    vi.stubEnv('BALANCITA_FUTURES_DIAGNOSTICS_PATH', diagnosticsPath)
+    const session = new FuturesSessionRuntime({
+      dbPath: databasePath,
+      mode: 'paper_live',
+    })
+    const acceptedAt = 21_605_000
+    const fundingEndsAt = acceptedAt + 50
+    const eligibleAt = acceptedAt + 100
+    const runId = session.runId
+    try {
+      const binding = session.store.getRuntimeBinding(runId)!
+      const manifest = {
+        source: 'unknown-funding-order-public-market.v1',
+        source_hash: 'b'.repeat(64),
+        instrument_hash: canonicalHash(instrument),
+      }
+      session.store.bindReplaySession(runId, {
+        schema_version: 'futures-replay-session.v1',
+        run_id: runId,
+        manifest,
+        instrument_hash: canonicalHash(instrument),
+      })
+      const source = withKnownFunding(market(acceptedAt, 'long'))
+      source.mode = 'paper_live'
+      const sourceEvents = source.events as Record<string, unknown>[]
+      const book = sourceEvents.find((event) => event.type === 'book_snapshot')!
+      ;(book.asks as { quantity_btc: string }[])[0]!.quantity_btc = '0.0099'
+      const fundingEvent = sourceEvents.find(
+        (event) => event.type === 'funding_observation',
+      )!
+      const observation = fundingEvent.observation as Record<string, unknown>
+      observation.effective_end_ms = fundingEndsAt
+      const bootstrap = sourceEvents.filter(
+        (event) =>
+          event.type === 'candle' || event.type === 'funding_observation',
+      )
+      const delta = sourceEvents.filter(
+        (event) => event.type === 'book_snapshot' || event.type === 'ticker',
+      )
+      delta.forEach((event, index) => {
+        event.source_receipt_sequence = index + 1
+      })
+      const sourceIdentity = canonicalHash({
+        schema_version: 'market-context-source-identity.v1',
+        ...manifest,
+      })
+      const context = {
+        schema_version: 'market-context-transport.v1',
+        source_identity: sourceIdentity,
+        instrument_id: instrument.instrument_id,
+        previous_frontier: 0,
+        current_frontier: delta.length,
+        knowledge_cutoff_ms: acceptedAt,
+        bootstrap_events: bootstrap,
+        delta_events: delta,
+      }
+      type V3Payload = Extract<
+        FuturesWorkerRequest['payload'],
+        { operation: 'futures_runtime.v3' }
+      >
+      const makeRequest = (
+        id: string,
+        version: number,
+        time: number,
+        events: Record<string, unknown>[],
+        control?: { type: 'paper.pause'; command_id: string },
+        marketContext?: Record<string, unknown>,
+      ): FuturesWorkerRequest => ({
+        request_id: id,
+        run_id: runId,
+        work_id: id,
+        expected_state_version: version,
+        payload: {
+          operation: 'futures_runtime.v3',
+          runtime_config: binding.runtime_config as V3Payload['runtime_config'],
+          instrument: binding.instrument_spec as V3Payload['instrument'],
+          market_snapshot: {
+            mode: 'paper_live',
+            instrument,
+            decision_time_ms: time,
+            cutoff_received_at_ms: time,
+            events,
+            ...(marketContext ? { market_context: marketContext } : {}),
+          } as V3Payload['market_snapshot'],
+          ...(control ? { control } : {}),
+        },
+      })
+
+      const sourceRequest = makeRequest(
+        'unknown-funding-order-source',
+        0,
+        acceptedAt,
+        [...bootstrap, ...delta],
+        undefined,
+        context,
+      )
+      await session.runner.accept(sourceRequest).result
+      expect(
+        session.store.getAppliedReceipt('unknown-funding-order-source'),
+      ).toMatchObject({ status: 'committed' })
+      const submitted = session.store.getRunProjection(runId)!
+      expect(submitted.result).toMatchObject({ quantity_btc: '0' })
+      const submittedOutput = submitted.runtime_output as Record<
+        string,
+        unknown
+      >
+      expect(submittedOutput.orders).toContainEqual(
+        expect.objectContaining({ type: 'order_accepted' }),
+      )
+      const submittedCheckpoint = submitted.checkpoint as Record<
+        string,
+        unknown
+      >
+      const submittedExecution =
+        submittedCheckpoint.execution_checkpoint as Record<string, unknown>
+      const submittedOrders = submittedExecution.orders as Record<
+        string,
+        Record<string, unknown>
+      >
+      const [acceptedOrderId, acceptedOrder] = Object.entries(
+        submittedOrders,
+      ).find(([, order]) => order.state === 'accepted')!
+      expect(acceptedOrder.eligible_at_ms).toBe(eligibleAt)
+
+      const pauseId = 'unknown-funding-before-order-eligibility'
+      const pauseRequest = makeRequest(
+        pauseId,
+        Number(submitted.state_version),
+        fundingEndsAt + 1,
+        [],
+        { type: 'paper.pause', command_id: pauseId },
+      )
+      const pauseMetadata = {
+        command_id: pauseId,
+        action: 'paper.pause',
+        stream_run_id: runId,
+        expected_state_version: Number(submitted.state_version),
+      }
+      const pauseResult = await session.runner.accept(
+        pauseRequest,
+        pauseMetadata,
+      ).result
+      const paused = session.store.getRunProjection(runId)!
+      const pausedCheckpoint = paused.checkpoint as Record<string, unknown>
+      const pausedPolicy = pausedCheckpoint.funding_policy_checkpoint as Record<
+        string,
+        unknown
+      >
+      expect(pausedPolicy.availability).toBe('unknown')
+      expect(pausedPolicy.entry_block_causes).toContain('funding_unavailable')
+      expect(
+        Object.values(
+          (pausedCheckpoint.execution_checkpoint as Record<string, unknown>)
+            .orders as Record<string, Record<string, unknown>>,
+        ).some((order) => order.state === 'accepted'),
+      ).toBe(true)
+      const pausedExecution = pausedCheckpoint.execution_checkpoint as Record<
+        string,
+        unknown
+      >
+      const pausedOrders = pausedExecution.orders as Record<
+        string,
+        Record<string, unknown>
+      >
+      const orderIdsBeforeDue = Object.keys(pausedOrders).sort()
+      expect(orderIdsBeforeDue).toEqual([acceptedOrderId])
+      const pausedSelection =
+        pausedCheckpoint.strategy_selection_checkpoint as Record<
+          string,
+          unknown
+        >
+      expect(pausedSelection).toMatchObject({
+        last_selection_ms: acceptedAt,
+        next_selection_due_ms: acceptedAt + 5000,
+        context: { as_of_ms: acceptedAt },
+      })
+      expect(session.getAdmissionState(eligibleAt).next_due_at).toMatchObject({
+        time_ms: eligibleAt,
+        reasons: ['order_eligibility'],
+      })
+
+      expect(await session.processDue(eligibleAt)).toEqual({
+        status: 'processed',
+      })
+      const serviced = session.store.getRunProjection(runId)!
+      expect(serviced.state_version).toBe(Number(paused.state_version) + 1)
+      const servicedCheckpoint = serviced.checkpoint as Record<string, unknown>
+      const servicedExecution =
+        servicedCheckpoint.execution_checkpoint as Record<string, unknown>
+      const servicedOrder = (
+        servicedExecution.orders as Record<string, Record<string, unknown>>
+      )[acceptedOrderId]
+      expect(
+        Object.keys(
+          servicedExecution.orders as Record<string, Record<string, unknown>>,
+        ).sort(),
+      ).toEqual(orderIdsBeforeDue)
+      expect([
+        'filled',
+        'cancelled',
+        'canceled',
+        'rejected',
+        'expired',
+      ]).toContain(servicedOrder.state)
+      expect(servicedOrder.state).toBe('filled')
+      const servicedOutput = serviced.runtime_output as Record<string, unknown>
+      const servicedLedger = servicedOutput.ledger as Record<string, unknown>
+      expect(servicedOutput.orders).not.toContainEqual(
+        expect.objectContaining({ type: 'order_accepted' }),
+      )
+      expect(servicedOutput.fills).toHaveLength(1)
+      expect(servicedOutput.fills).toMatchObject([
+        { event_time_ms: eligibleAt },
+      ])
+      expect(servicedLedger.cash_usd).toBe('10000')
+      expect(servicedLedger.net_complete).toBeNull()
+      expect(
+        (
+          servicedCheckpoint.funding_policy_checkpoint as Record<
+            string,
+            unknown
+          >
+        ).entry_block_causes,
+      ).toContain('funding_unavailable')
+      expect(
+        (
+          servicedCheckpoint.market_context_checkpoint as Record<
+            string,
+            unknown
+          >
+        ).frontier,
+      ).toBe(delta.length)
+      expect(
+        (
+          (
+            servicedCheckpoint.market_context_checkpoint as Record<
+              string,
+              unknown
+            >
+          ).anchors as Record<string, Record<string, unknown>>
+        ).book_snapshot,
+      ).toMatchObject({
+        event_time_ms: acceptedAt,
+        received_at_ms: acceptedAt,
+      })
+      expect(servicedCheckpoint.strategy_selection_checkpoint).toEqual(
+        pausedSelection,
+      )
+      const strategyWork = readFileSync(diagnosticsPath, 'utf8')
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line) as Record<string, unknown>)
+        .filter(
+          (record) =>
+            record.phase === 'strategy_work' && record.run_id === runId,
+        )
+      expect(strategyWork).toHaveLength(3)
+      expect(strategyWork.at(-1)).toMatchObject({
+        strategy_selection_cycles: 0,
+        strategy_evaluations: 0,
+      })
+      const expectedEquity = spawnSync(
+        'python3',
+        [
+          '-c',
+          "import json,sys; from decimal import Decimal; x=json.loads(sys.argv[1]); l=x['ledger']; fills=x['fills']; expected=Decimal(l['cash_usd'])+Decimal(l['realized_gross_usd'])+Decimal(l['unrealized_gross_usd'])-Decimal(l['fees_usd'])+Decimal(l['funding_paid']); fees=sum((Decimal(f['fee_usd']) for f in fills),Decimal(0)); quantity=sum((Decimal(f['quantity_btc']) for f in fills),Decimal(0)); print(json.dumps({'equity':str(expected),'fees':str(fees),'filled_quantity':str(quantity)}))",
+          JSON.stringify({
+            ledger: servicedLedger,
+            fills: servicedOutput.fills,
+          }),
+        ],
+        { encoding: 'utf8' },
+      )
+      expect(expectedEquity.status).toBe(0)
+      const reconciled = JSON.parse(expectedEquity.stdout) as Record<
+        string,
+        string
+      >
+      expect(reconciled.equity).toBe(servicedLedger.equity_usd)
+      expect(reconciled.fees).toBe(servicedLedger.fees_usd)
+      expect(reconciled.filled_quantity).toBe(servicedLedger.quantity_btc)
+      const versionAfterService = serviced.state_version
+      expect(await session.processDue(eligibleAt)).toEqual({
+        status: 'not_due',
+      })
+      expect(session.store.getRunProjection(runId)?.state_version).toBe(
+        versionAfterService,
+      )
+      expect(
+        await session.runner.accept(pauseRequest, pauseMetadata).result,
+      ).toEqual(pauseResult)
+      expect(session.store.getRunProjection(runId)?.state_version).toBe(
+        versionAfterService,
+      )
+      expect(session.store.verifyRun(runId)).toBe(true)
+    } finally {
+      await session.close()
+      vi.unstubAllEnvs()
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
+  it('rolls the UTC risk day at its checkpoint deadline without another source receipt', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'futures-utc-due-'))
+    const databasePath = join(directory, 'fixture.sqlite')
+    const session = new FuturesSessionRuntime({
+      dbPath: databasePath,
+      mode: 'paper_live',
+    })
+    const sourceClock = Date.parse('2026-10-04T23:59:56.000Z')
+    const rolloverClock = Date.parse('2026-10-05T00:00:00.000Z')
+    const runId = session.runId
+    try {
+      const manifest = {
+        source: 'utc-deadline-public-market.v1',
+        source_hash: '9'.repeat(64),
+        instrument_hash: canonicalHash(instrument),
+      }
+      session.store.bindReplaySession(runId, {
+        schema_version: 'futures-replay-session.v1',
+        run_id: runId,
+        manifest,
+        instrument_hash: canonicalHash(instrument),
+      })
+      const source = withKnownFunding(market(sourceClock, 'flat'))
+      source.mode = 'paper_live'
+      const allEvents = source.events as Record<string, unknown>[]
+      const bootstrap = allEvents.filter(
+        (event) =>
+          event.type === 'candle' || event.type === 'funding_observation',
+      )
+      const delta = allEvents.filter(
+        (event) => event.type === 'book_snapshot' || event.type === 'ticker',
+      )
+      delta.forEach((event, index) => {
+        event.source_receipt_sequence = index + 1
+      })
+      const sourceIdentity = canonicalHash({
+        schema_version: 'market-context-source-identity.v1',
+        ...manifest,
+      })
+      const context = {
+        schema_version: 'market-context-transport.v1',
+        source_identity: sourceIdentity,
+        instrument_id: instrument.instrument_id,
+        previous_frontier: 0,
+        current_frontier: delta.length,
+        knowledge_cutoff_ms: sourceClock,
+        bootstrap_events: bootstrap,
+        delta_events: delta,
+      }
+      type V3Payload = Extract<
+        FuturesWorkerRequest['payload'],
+        { operation: 'futures_runtime.v3' }
+      >
+      const binding = session.store.getRuntimeBinding(runId)!
+      const sourceRequest: FuturesWorkerRequest = {
+        request_id: 'utc-deadline-source',
+        run_id: runId,
+        work_id: 'utc-deadline-source',
+        expected_state_version: 0,
+        payload: {
+          operation: 'futures_runtime.v3',
+          runtime_config: binding.runtime_config as V3Payload['runtime_config'],
+          instrument: instrument as V3Payload['instrument'],
+          market_snapshot: {
+            ...source,
+            events: [...bootstrap, ...delta],
+            market_context: context,
+          } as V3Payload['market_snapshot'],
+        },
+      }
+      await session.runner.accept(sourceRequest).result
+      const pauseId = 'utc-deadline-user-pause'
+      const pauseRequest: FuturesWorkerRequest = {
+        request_id: pauseId,
+        run_id: runId,
+        work_id: pauseId,
+        expected_state_version: 1,
+        payload: {
+          operation: 'futures_runtime.v3',
+          runtime_config: binding.runtime_config as V3Payload['runtime_config'],
+          instrument: instrument as V3Payload['instrument'],
+          market_snapshot: {
+            mode: 'paper_live',
+            instrument,
+            decision_time_ms: sourceClock + 100,
+            cutoff_received_at_ms: sourceClock + 100,
+            events: [],
+          },
+          control: { type: 'paper.pause', command_id: pauseId },
+        },
+      }
+      await session.runner.accept(pauseRequest, {
+        command_id: pauseId,
+        action: 'paper.pause',
+        stream_run_id: runId,
+        expected_state_version: 1,
+      }).result
+      const paused = session.store.getRunProjection(runId)!
+      const pausedCheckpoint = paused.checkpoint as Record<string, unknown>
+      const priorFrontier = (
+        pausedCheckpoint.market_context_checkpoint as Record<string, unknown>
+      ).frontier
+      const beforeLedger = (paused.runtime_output as Record<string, unknown>)
+        .ledger as Record<string, unknown>
+      expect(
+        (pausedCheckpoint.risk_checkpoint as Record<string, unknown>)
+          .user_paused,
+      ).toBe(true)
+      const admission = session.getAdmissionState(rolloverClock)
+      expect(admission.next_due_at).toMatchObject({
+        time_ms: rolloverClock,
+        reasons: ['utc_risk_day_rollover'],
+      })
+      expect(await session.processDue(rolloverClock)).toEqual({
+        status: 'processed',
+      })
+      const after = session.store.getRunProjection(runId)!
+      const checkpoint = after.checkpoint as Record<string, unknown>
+      const risk = checkpoint.risk_checkpoint as Record<string, unknown>
+      expect(risk).toMatchObject({
+        utc_day: '2026-10-05',
+        opening_equity_usd: '10000',
+        daily_loss_latched: false,
+        user_paused: true,
+        system_paused: false,
+        entry_paused: true,
+      })
+      expect(
+        (checkpoint.market_context_checkpoint as Record<string, unknown>)
+          .frontier,
+      ).toBe(priorFrontier)
+      expect(checkpoint.funding_complete).toBe(true)
+      const fundingPolicy = checkpoint.funding_policy_checkpoint as Record<
+        string,
+        unknown
+      >
+      expect(fundingPolicy.availability).toBe('unknown')
+      expect(fundingPolicy.entry_block_causes).toContain('funding_unavailable')
+      const afterLedger = (after.runtime_output as Record<string, unknown>)
+        .ledger as Record<string, unknown>
+      expect(afterLedger).toMatchObject({
+        cash_usd: beforeLedger.cash_usd,
+        equity_usd: beforeLedger.equity_usd,
+        fees_usd: beforeLedger.fees_usd,
+        funding_paid: beforeLedger.funding_paid,
+      })
+      expect((after.runtime_output as Record<string, unknown>).fills).toEqual(
+        [],
+      )
+      const rolloverVersion = after.state_version
+      expect(await session.processDue(rolloverClock)).toEqual({
+        status: 'not_due',
+      })
+      expect(session.store.getRunProjection(runId)?.state_version).toBe(
+        rolloverVersion,
+      )
+      expect(
+        session.getAdmissionState(rolloverClock).next_due_at,
+      ).toMatchObject({
+        time_ms: sourceClock + 5000,
+        reasons: ['strategy_evaluation'],
+      })
+      expect(session.store.verifyRun(runId)).toBe(true)
+    } finally {
+      await session.close()
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
+  it('accrues a known funding interval at its durable boundary without new source', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'futures-funding-boundary-'))
+    const databasePath = join(directory, 'fixture.sqlite')
+    let session = new FuturesSessionRuntime({
+      dbPath: databasePath,
+      mode: 'paper_live',
+    })
+    const fundingBoundary = Date.parse('2026-10-05T13:00:00.000Z')
+    const sourceTime = fundingBoundary - 1_000
+    const intervalStart = fundingBoundary - 3_600_000
+    const runId = session.runId
+    try {
+      const binding = session.store.getRuntimeBinding(runId)!
+      const config = binding.runtime_config as Record<string, unknown>
+      const manifest = {
+        source: 'funding-boundary-public-market.v1',
+        source_hash: '8'.repeat(64),
+        instrument_hash: canonicalHash(instrument),
+      }
+      session.store.bindReplaySession(runId, {
+        schema_version: 'futures-replay-session.v1',
+        run_id: runId,
+        manifest,
+        instrument_hash: canonicalHash(instrument),
+      })
+      const source = market(sourceTime, 'long', '100000', false)
+      source.mode = 'paper_live'
+      const sourceEvents = source.events as Record<string, unknown>[]
+      const book = sourceEvents.find((event) => event.type === 'book_snapshot')!
+      ;(book.asks as { quantity_btc: string }[])[0]!.quantity_btc = '0.005'
+      const observation = {
+        source: 'runtime-test-normalized-funding.v1',
+        provider: 'kraken',
+        product: 'PF_XBTUSD',
+        field: 'funding_rate',
+        raw_rate: '0.0001',
+        unit: 'usd_per_btc_per_hour',
+        effective_start_ms: intervalStart,
+        effective_end_ms: fundingBoundary,
+        known_at_ms: intervalStart,
+        received_seq: 1,
+        observation_id: 'funding-boundary-interval-1',
+        sha256: 'a'.repeat(64),
+        semantic_version: 'kraken-funding-normalization.v1',
+        predicted: false,
+      }
+      sourceEvents.push({
+        type: 'funding_observation',
+        received_at_ms: sourceTime,
+        known_at_ms: intervalStart,
+        observation,
+      })
+      const bootstrap = sourceEvents.filter(
+        (event) =>
+          event.type === 'candle' || event.type === 'funding_observation',
+      )
+      const delta = sourceEvents.filter(
+        (event) => event.type === 'book_snapshot' || event.type === 'ticker',
+      )
+      delta.forEach((event, index) => {
+        event.source_receipt_sequence = index + 1
+      })
+      const sourceIdentity = canonicalHash({
+        schema_version: 'market-context-source-identity.v1',
+        ...manifest,
+      })
+      const context = {
+        schema_version: 'market-context-transport.v1',
+        source_identity: sourceIdentity,
+        instrument_id: instrument.instrument_id,
+        previous_frontier: 0,
+        current_frontier: delta.length,
+        knowledge_cutoff_ms: sourceTime,
+        bootstrap_events: bootstrap,
+        delta_events: delta,
+      }
+      type V3Payload = Extract<
+        FuturesWorkerRequest['payload'],
+        { operation: 'futures_runtime.v3' }
+      >
+      const makeRequest = (
+        id: string,
+        expectedVersion: number,
+        time: number,
+        events: Record<string, unknown>[],
+        marketContext?: Record<string, unknown>,
+        control?: { type: 'paper.pause'; command_id: string },
+      ): FuturesWorkerRequest => ({
+        request_id: id,
+        run_id: runId,
+        work_id: id,
+        expected_state_version: expectedVersion,
+        payload: {
+          operation: 'futures_runtime.v3',
+          runtime_config: config as V3Payload['runtime_config'],
+          instrument: instrument as V3Payload['instrument'],
+          market_snapshot: {
+            mode: 'paper_live',
+            instrument,
+            decision_time_ms: time,
+            cutoff_received_at_ms: time,
+            events,
+            ...(marketContext ? { market_context: marketContext } : {}),
+          } as V3Payload['market_snapshot'],
+          ...(control ? { control } : {}),
+        },
+      })
+      await session.runner.accept(
+        makeRequest(
+          'funding-boundary-source',
+          0,
+          sourceTime,
+          [...bootstrap, ...delta],
+          context,
+        ),
+      ).result
+      const sourceProjection = session.store.getRunProjection(runId)!
+      const sourceCheckpoint = sourceProjection.checkpoint as Record<
+        string,
+        unknown
+      >
+      const sourceFunding =
+        sourceCheckpoint.funding_policy_checkpoint as Record<string, unknown>
+      expect(sourceFunding.availability).toBe('known')
+      expect(sourceFunding.evidence).toMatchObject({
+        status: 'known',
+        effective_start_ms: intervalStart,
+        effective_end_ms: fundingBoundary,
+        known_at_ms: intervalStart,
+        applicable_at_decision: true,
+      })
+      expect(sourceCheckpoint.funding_rates).toContainEqual([
+        `${observation.observation_id}:${observation.sha256}`,
+        intervalStart,
+        fundingBoundary,
+        '0.0001',
+      ])
+
+      expect(await session.processDue(sourceTime + 100)).toEqual({
+        status: 'processed',
+      })
+      const opened = session.store.getRunProjection(runId)!
+      expect(opened.result).toMatchObject({ quantity_btc: '0.005' })
+      const openedCheckpoint = opened.checkpoint as Record<string, unknown>
+      const position = openedCheckpoint.ledger_position as Record<
+        string,
+        unknown
+      >
+      expect(position.funding_cursor_ms).toBe(sourceTime + 100)
+      const openedOutput = opened.runtime_output as Record<string, unknown>
+      const openedLedger = openedOutput.ledger as Record<string, unknown>
+      expect(openedLedger.funding_paid).toBe('0')
+      const pauseId = 'funding-boundary-user-pause'
+      await session.runner.accept(
+        makeRequest(
+          pauseId,
+          Number(opened.state_version),
+          sourceTime + 200,
+          [],
+          undefined,
+          { type: 'paper.pause', command_id: pauseId },
+        ),
+        {
+          command_id: pauseId,
+          action: 'paper.pause',
+          stream_run_id: runId,
+          expected_state_version: Number(opened.state_version),
+        },
+      ).result
+      const paused = session.store.getRunProjection(runId)!
+      expect(
+        (
+          (paused.checkpoint as Record<string, unknown>)
+            .risk_checkpoint as Record<string, unknown>
+        ).user_paused,
+      ).toBe(true)
+      expect(
+        session.getAdmissionState(fundingBoundary).next_due_at,
+      ).toMatchObject({
+        time_ms: fundingBoundary,
+        reasons: ['funding_boundary'],
+      })
+
+      const pausedOutput = paused.runtime_output as Record<string, unknown>
+      const pausedLedger = pausedOutput.ledger as Record<string, unknown>
+      expect(pausedLedger.funding_paid).toBe(
+        '0.000000000013888888888888888888888888888888888888888888888889',
+      )
+      const pausedCheckpoint = paused.checkpoint as Record<string, unknown>
+      const pausedContext =
+        pausedCheckpoint.market_context_checkpoint as Record<string, unknown>
+      expect(await session.processDue(fundingBoundary)).toEqual({
+        status: 'processed',
+      })
+      const accrued = session.store.getRunProjection(runId)!
+      const accruedCheckpoint = accrued.checkpoint as Record<string, unknown>
+      const accruedPosition = accruedCheckpoint.ledger_position as Record<
+        string,
+        unknown
+      >
+      expect(accruedPosition.funding_cursor_ms).toBe(fundingBoundary)
+      const accruedOutput = accrued.runtime_output as Record<string, unknown>
+      const accruedLedger = accruedOutput.ledger as Record<string, unknown>
+      expect(accruedLedger.funding_paid).toBe('0.000000000125')
+      expect(accruedLedger.funding_complete).toBe(true)
+      expect(accruedLedger.net_complete).toBeNull()
+      expect(accruedLedger.cash_usd).toBe(pausedLedger.cash_usd)
+      expect(accruedLedger.fees_usd).toBe(pausedLedger.fees_usd)
+      expect(accruedLedger.unrealized_gross_usd).toBe(
+        pausedLedger.unrealized_gross_usd,
+      )
+      expect(accruedLedger.equity_usd).toBe('9999.744997499875')
+      expect(accruedLedger.realized_gross_usd).toBe(
+        pausedLedger.realized_gross_usd,
+      )
+      expect(accrued.result).toMatchObject({ quantity_btc: '0.005' })
+      expect(accruedOutput.fills).toEqual(pausedOutput.fills)
+      expect(
+        (accruedCheckpoint.market_context_checkpoint as Record<string, unknown>)
+          .frontier,
+      ).toBe(pausedContext.frontier)
+      expect(accruedCheckpoint.funding_rates).toEqual([
+        [
+          `${observation.observation_id}:${observation.sha256}`,
+          intervalStart,
+          fundingBoundary,
+          '0.0001',
+        ],
+      ])
+      const fundingAfter =
+        accruedCheckpoint.funding_policy_checkpoint as Record<string, unknown>
+      expect(fundingAfter.availability).toBe('unknown')
+      expect(fundingAfter.entry_block_causes).toContain('funding_unavailable')
+      expect(
+        (fundingAfter.evidence as Record<string, unknown>)
+          .applicable_at_decision,
+      ).toBe(false)
+      const dueVersion = Number(accrued.state_version)
+      expect(await session.processDue(fundingBoundary)).toEqual({
+        status: 'not_due',
+      })
+      expect(session.store.getRunProjection(runId)?.state_version).toBe(
+        dueVersion,
+      )
+
+      const independentClock = sourceTime + 5_000
+      const independentAdmission = session.getAdmissionState(independentClock)
+      expect(independentAdmission.next_due_at).toMatchObject({
+        time_ms: independentClock,
+        reasons: ['strategy_evaluation'],
+        unknown_reasons: ['funding_boundary_unknown'],
+      })
+      expect(await session.processDue(independentClock)).toEqual({
+        status: 'processed',
+      })
+      const serviced = session.store.getRunProjection(runId)!
+      const servicedCheckpoint = serviced.checkpoint as Record<string, unknown>
+      const servicedOutput = serviced.runtime_output as Record<string, unknown>
+      const servicedLedger = servicedOutput.ledger as Record<string, unknown>
+      expect(servicedCheckpoint.funding_cursor_ms).toBe(independentClock)
+      expect(servicedLedger.funding_paid).toBe(accruedLedger.funding_paid)
+      expect(servicedLedger.funding_complete).toBe(false)
+      expect(servicedLedger.net_complete).toBeNull()
+      expect(servicedLedger.equity_usd).toBe(accruedLedger.equity_usd)
+      expect(servicedOutput.fills).toEqual(accruedOutput.fills)
+      expect(
+        (
+          (
+            servicedCheckpoint.market_context_checkpoint as Record<
+              string,
+              unknown
+            >
+          ).anchors as Record<string, Record<string, unknown>>
+        ).book_snapshot,
+      ).toMatchObject({
+        event_time_ms: sourceTime,
+        received_at_ms: sourceTime,
+      })
+      const servicedVersion = Number(serviced.state_version)
+      expect(await session.processDue(independentClock)).toEqual({
+        status: 'not_due',
+      })
+      expect(session.store.getRunProjection(runId)?.state_version).toBe(
+        servicedVersion,
+      )
+      expect(session.store.verifyRun(runId)).toBe(true)
+      await session.close()
+      session = new FuturesSessionRuntime({
+        dbPath: databasePath,
+        mode: 'paper_live',
+      })
+      const restored = session.store.getRunProjection(runId)!
+      expect(
+        (restored.checkpoint as Record<string, unknown>).funding_cursor_ms,
+      ).toBe(independentClock)
+      expect(
+        (
+          (restored.runtime_output as Record<string, unknown>).ledger as Record<
+            string,
+            unknown
+          >
+        ).funding_paid,
+      ).toBe('0.000000000125')
+      expect(await session.processDue(independentClock)).toEqual({
+        status: 'not_due',
+      })
+      expect(session.store.getRunProjection(runId)?.state_version).toBe(
+        servicedVersion,
+      )
+      expect(session.store.verifyRun(runId)).toBe(true)
+    } finally {
+      await session.close()
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
+  it('bootstraps a cold marked run without inventing market data and binds its first source identity', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'futures-market-cold-start-'))
+    const path = join(directory, 'fixture.sqlite')
+    const runId = 'market-context-cold-run'
+    const manifest = {
+      source: 'cold-start-public-stream.v1',
+      source_hash: 'e'.repeat(64),
+      instrument_hash: canonicalHash(instrument),
+    }
+    const config = {
+      ...runtimeConfig,
+      version: 'futures-runtime-risk.v1',
+      daily_loss_fraction: '0.01',
+      funding_policy_version: 'funding-separation.v1',
+      strategy_selection_policy_version: 'strategy-selection-cadence.v1',
+      strategy_selection_interval_ms: 5000,
+      market_context_policy_version: 'market-context-transport.v1',
+    }
+    const strategyManifest = {
+      config_version: 'futures-strategies-config.v1',
+      indicator_version: 'futures-closed-indicators.v1',
+      strategy_ids: [
+        'c25-pullback-perp-v1',
+        'c26-reversion-perp-v1',
+        'c27-breakout-perp-v1',
+        'c28-adapter-perp-v1',
+      ],
+    }
+    let store = new FuturesStore(path)
+    store.createRun({
+      runId,
+      config: {
+        ledger_version: 'linear-usd-ledger.v1',
+        decimal_precision: 50,
+        leverage: '1',
+        mode: 'paper_live',
+      },
+      seed: { cash_usd: '10000', source: 'paper_live' },
+      instrument: { instrument_id: instrument.instrument_id },
+      costs: {
+        version: runtimeConfig.cost_version,
+        maker: runtimeConfig.maker_rate,
+        taker: runtimeConfig.taker_rate,
+      },
+      runtime: {
+        schema_version: 'futures-runtime-binding.v5',
+        runtime_config: config,
+        instrument_spec: instrument,
+        strategy_manifest: strategyManifest,
+        strategy_config_hash: canonicalHash(strategyManifest),
+        admission_policy: {
+          schema_version: 'futures-entry-admission.v1',
+          evaluation_interval_ms: 5000,
+          hash: canonicalHash({
+            schema_version: 'futures-entry-admission.v1',
+            evaluation_interval_ms: 5000,
+          }),
+        },
+      },
+    })
+    store.bindReplaySession(runId, {
+      schema_version: 'futures-replay-session.v1',
+      run_id: runId,
+      manifest,
+      instrument_hash: canonicalHash(instrument),
+    })
+    let runner = new FuturesCommandRunner(store)
+    const sourceIdentity = canonicalHash({
+      schema_version: 'market-context-source-identity.v1',
+      ...manifest,
+    })
+    const makeRequest = (
+      id: string,
+      version: number,
+      time: number,
+      marketContext?: Record<string, unknown>,
+      events: Record<string, unknown>[] = [],
+      action?: 'paper.pause' | 'paper.resume',
+    ): FuturesWorkerRequest => ({
+      request_id: id,
+      run_id: runId,
+      work_id: id,
+      expected_state_version: version,
+      payload: {
+        operation: 'futures_runtime.v3',
+        runtime_config: config,
+        instrument,
+        market_snapshot: {
+          mode: 'paper_live',
+          instrument,
+          decision_time_ms: time,
+          cutoff_received_at_ms: time,
+          events,
+          ...(marketContext ? { market_context: marketContext } : {}),
+        },
+        ...(action ? { control: { type: action, command_id: id } } : {}),
+      },
+    })
+    const commandMetadata = (
+      id: string,
+      version: number,
+      action: 'paper.pause' | 'paper.resume',
+    ) => ({
+      command_id: id,
+      action,
+      stream_run_id: runId,
+      expected_state_version: version,
+    })
+    const sourceInput = (time: number, previous: number, identity: string) => {
+      const snapshot = withKnownFunding(market(time, 'flat'))
+      snapshot.mode = 'paper_live'
+      const sourceEvents = snapshot.events as Record<string, unknown>[]
+      const bootstrap = sourceEvents.filter(
+        (event) =>
+          event.type === 'candle' || event.type === 'funding_observation',
+      )
+      const delta = sourceEvents.filter(
+        (event) => event.type === 'book_snapshot' || event.type === 'ticker',
+      )
+      delta.forEach((event, index) => {
+        event.source_receipt_sequence = previous + index + 1
+      })
+      const events = [...bootstrap, ...delta]
+      return {
+        events,
+        context: {
+          schema_version: 'market-context-transport.v1',
+          source_identity: identity,
+          instrument_id: instrument.instrument_id,
+          previous_frontier: previous,
+          current_frontier: previous + delta.length,
+          knowledge_cutoff_ms: time,
+          bootstrap_events: bootstrap,
+          delta_events: delta,
+        },
+      }
+    }
+    try {
+      const pauseId = 'cold-run-pause-before-data'
+      await runner.accept(
+        makeRequest(pauseId, 0, 21_600_000, undefined, [], 'paper.pause'),
+        commandMetadata(pauseId, 0, 'paper.pause'),
+      ).result
+      const coldProjection = store.getRunProjection(runId)!
+      const coldCheckpoint = coldProjection.checkpoint as Record<
+        string,
+        unknown
+      >
+      const coldContext = coldCheckpoint.market_context_checkpoint as Record<
+        string,
+        unknown
+      >
+      expect(coldContext).toMatchObject({
+        source_identity: null,
+        instrument_id: instrument.instrument_id,
+        frontier: 0,
+        anchors: {},
+      })
+      expect((coldProjection.result as Record<string, unknown>).cash_usd).toBe(
+        '10000',
+      )
+      expect(store.getAppliedReceipt(pauseId)?.status).toBe('committed')
+      expect(
+        (coldProjection.runtime_output as Record<string, unknown>)
+          .valuation_source,
+      ).toBe('unavailable')
+      expect(
+        (
+          (coldProjection.runtime_output as Record<string, unknown>)
+            .ledger as Record<string, unknown>
+        ).mark_usd_per_btc,
+      ).toBeNull()
+      expect(
+        (coldProjection.runtime_output as Record<string, unknown>).fills,
+      ).toEqual([])
+      expect(
+        (
+          (coldProjection.runtime_output as Record<string, unknown>)
+            .risk as Record<string, unknown>
+        ).user_paused,
+      ).toBe(true)
+      expect(
+        (
+          (coldProjection.runtime_output as Record<string, unknown>)
+            .risk as Record<string, unknown>
+        ).mark_quality,
+      ).toBe('unknown')
+
+      await runner.close()
+      store.close()
+      store = new FuturesStore(path)
+      runner = new FuturesCommandRunner(store)
+      expect(store.verifyRun(runId)).toBe(true)
+      const reopened = store.getRunProjection(runId)!
+      expect(
+        (reopened.checkpoint as Record<string, unknown>)
+          .market_context_checkpoint,
+      ).toMatchObject({ source_identity: null, frontier: 0, anchors: {} })
+      expect(
+        (
+          (reopened.checkpoint as Record<string, unknown>)
+            .risk_checkpoint as Record<string, unknown>
+        ).user_paused,
+      ).toBe(true)
+
+      const firstSource = sourceInput(21_600_100, 0, sourceIdentity)
+      await runner.accept(
+        makeRequest(
+          'cold-run-first-source',
+          1,
+          21_600_100,
+          firstSource.context,
+          firstSource.events,
+        ),
+      ).result
+      const bound = store.getRunProjection(runId)!
+      expect(
+        (bound.checkpoint as Record<string, unknown>).market_context_checkpoint,
+      ).toMatchObject({
+        source_identity: sourceIdentity,
+        frontier: 2,
+      })
+      expect(
+        (
+          (bound.checkpoint as Record<string, unknown>)
+            .risk_checkpoint as Record<string, unknown>
+        ).user_paused,
+      ).toBe(true)
+      expect((bound.result as Record<string, unknown>).cash_usd).toBe('10000')
+      expect((bound.runtime_output as Record<string, unknown>).fills).toEqual(
+        [],
+      )
+
+      const resumeId = 'cold-run-resume-after-binding'
+      await runner.accept(
+        makeRequest(resumeId, 2, 21_600_200, undefined, [], 'paper.resume'),
+        commandMetadata(resumeId, 2, 'paper.resume'),
+      ).result
+      const resumed = store.getRunProjection(runId)!
+      expect(
+        (
+          (resumed.checkpoint as Record<string, unknown>)
+            .risk_checkpoint as Record<string, unknown>
+        ).user_paused,
+      ).toBe(false)
+      expect(
+        (resumed.checkpoint as Record<string, unknown>)
+          .market_context_checkpoint,
+      ).toMatchObject({ source_identity: sourceIdentity, frontier: 2 })
+      expect((resumed.runtime_output as Record<string, unknown>).fills).toEqual(
+        [],
+      )
+
+      const wrongSource = sourceInput(21_600_300, 2, 'f'.repeat(64))
+      expect(() =>
+        runner.accept(
+          makeRequest(
+            'cold-run-wrong-source',
+            3,
+            21_600_300,
+            wrongSource.context,
+            wrongSource.events,
+          ),
+        ),
+      ).toThrow(/source identity|market context/i)
+      const afterConflict = store.getRunProjection(runId)!
+      expect(afterConflict.state_version).toBe(resumed.state_version)
+      expect((afterConflict.result as Record<string, unknown>).cash_usd).toBe(
+        '10000',
+      )
+      expect(
+        (afterConflict.checkpoint as Record<string, unknown>)
+          .market_context_checkpoint,
+      ).toMatchObject({ source_identity: sourceIdentity, frontier: 2 })
+      expect(store.getAppliedReceipt('cold-run-wrong-source')).toBeUndefined()
+      expect(store.verifyRun(runId)).toBe(true)
+    } finally {
+      await runner.close().catch(() => undefined)
+      store.close()
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
+  it('binds accepted pause to the confirmed market context without advancing its frontier', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'futures-market-control-'))
+    const path = join(directory, 'fixture.sqlite')
+    const runId = 'market-context-control-run'
+    const manifest = {
+      source: 'test-normalized-market.v1',
+      source_hash: 'c'.repeat(64),
+      instrument_hash: canonicalHash(instrument),
+    }
+    const config = {
+      ...runtimeConfig,
+      version: 'futures-runtime-risk.v1',
+      daily_loss_fraction: '0.01',
+      funding_policy_version: 'funding-separation.v1',
+      strategy_selection_policy_version: 'strategy-selection-cadence.v1',
+      strategy_selection_interval_ms: 5000,
+      market_context_policy_version: 'market-context-transport.v1',
+    }
+    const strategyManifest = {
+      config_version: 'futures-strategies-config.v1',
+      indicator_version: 'futures-closed-indicators.v1',
+      strategy_ids: [
+        'c25-pullback-perp-v1',
+        'c26-reversion-perp-v1',
+        'c27-breakout-perp-v1',
+        'c28-adapter-perp-v1',
+      ],
+    }
+    let store = new FuturesStore(path)
+    store.createRun({
+      runId,
+      config: {
+        ledger_version: 'linear-usd-ledger.v1',
+        decimal_precision: 50,
+        leverage: '1',
+      },
+      seed: { cash_usd: '10000' },
+      instrument: { instrument_id: instrument.instrument_id },
+      costs: {
+        version: runtimeConfig.cost_version,
+        maker: runtimeConfig.maker_rate,
+        taker: runtimeConfig.taker_rate,
+      },
+      runtime: {
+        schema_version: 'futures-runtime-binding.v5',
+        runtime_config: config,
+        instrument_spec: instrument,
+        strategy_manifest: strategyManifest,
+        strategy_config_hash: canonicalHash(strategyManifest),
+        admission_policy: {
+          schema_version: 'futures-entry-admission.v1',
+          evaluation_interval_ms: 5000,
+          hash: canonicalHash({
+            schema_version: 'futures-entry-admission.v1',
+            evaluation_interval_ms: 5000,
+          }),
+        },
+      },
+    })
+    store.bindReplaySession(runId, {
+      schema_version: 'futures-replay-session.v1',
+      run_id: runId,
+      manifest,
+      instrument_hash: canonicalHash(instrument),
+    })
+    let runner = new FuturesCommandRunner(store)
+    const sourceIdentity = canonicalHash({
+      schema_version: 'market-context-source-identity.v1',
+      ...manifest,
+    })
+    const sourceMarket = withKnownFunding(market(21_600_000, 'flat'))
+    sourceMarket.mode = 'paper_live'
+    const sourceEvents = (
+      sourceMarket.events as Record<string, unknown>[]
+    ).filter(
+      (event) =>
+        event.type === 'candle' ||
+        event.type === 'funding_observation' ||
+        event.type === 'book_snapshot' ||
+        event.type === 'ticker',
+    )
+    const bootstrapEvents = sourceEvents.filter(
+      (event) =>
+        event.type === 'candle' || event.type === 'funding_observation',
+    )
+    const deltaEvents = sourceEvents.filter(
+      (event) => event.type === 'book_snapshot' || event.type === 'ticker',
+    )
+    deltaEvents.forEach((event, index) => {
+      event.source_receipt_sequence = index + 1
+    })
+    sourceMarket.events = [...bootstrapEvents, ...deltaEvents]
+    sourceMarket.market_context = {
+      schema_version: 'market-context-transport.v1',
+      source_identity: sourceIdentity,
+      instrument_id: instrument.instrument_id,
+      previous_frontier: 0,
+      current_frontier: deltaEvents.length,
+      knowledge_cutoff_ms: 21_600_000,
+      bootstrap_events: bootstrapEvents,
+      delta_events: deltaEvents,
+    }
+    const makeRequest = (
+      workId: string,
+      version: number,
+      snapshot: Record<string, unknown>,
+      control?: Record<string, unknown>,
+    ): FuturesWorkerRequest => ({
+      request_id: workId,
+      run_id: runId,
+      work_id: workId,
+      expected_state_version: version,
+      payload: {
+        operation: 'futures_runtime.v3',
+        runtime_config: config,
+        instrument,
+        market_snapshot: snapshot,
+        ...(control ? { control } : {}),
+      },
+    })
+    try {
+      await runner.accept(makeRequest('source-context-seed', 0, sourceMarket))
+        .result
+      const before = store.getRunProjection(runId)!
+      const beforeCheckpoint = before.checkpoint as Record<string, unknown>
+      const priorFrontier = (
+        beforeCheckpoint.market_context_checkpoint as Record<string, unknown>
+      ).frontier
+      const priorCash = (before.result as Record<string, unknown>).cash_usd
+      const priorLedgerEvents = store.exportRun(runId).events as Record<
+        string,
+        unknown
+      >[]
+      const priorFillCount = priorLedgerEvents.filter(
+        (event) => event.type === 'fill',
+      ).length
+      const priorFundingCount = priorLedgerEvents.filter(
+        (event) => event.type === 'funding',
+      ).length
+      const pauseMarket = {
+        mode: 'paper_live',
+        instrument,
+        decision_time_ms: 21_600_100,
+        cutoff_received_at_ms: 21_600_100,
+        events: [],
+      }
+      const pauseId = 'market-context-confirmed-pause'
+      const ack = runner.accept(
+        makeRequest(pauseId, 1, pauseMarket, {
+          type: 'paper.pause',
+          command_id: pauseId,
+        }),
+        {
+          command_id: pauseId,
+          action: 'paper.pause',
+          stream_run_id: runId,
+          expected_state_version: 1,
+        },
+      )
+      expect(ack.acknowledgement).toMatchObject({
+        command_id: pauseId,
+        status: 'accepted',
+      })
+      await ack.result
+      const paused = store.getRunProjection(runId)!
+      expect(
+        (paused.runtime_output as Record<string, unknown>).risk,
+      ).toMatchObject({ user_paused: true })
+      expect(
+        (paused.checkpoint as Record<string, unknown>)
+          .market_context_checkpoint,
+      ).toMatchObject({
+        frontier: priorFrontier,
+        source_identity: sourceIdentity,
+      })
+      expect((paused.result as Record<string, unknown>).cash_usd).toBe(
+        priorCash,
+      )
+      expect(store.getAppliedReceipt(pauseId)).toMatchObject({
+        status: 'committed',
+      })
+      const pausedEvents = store.exportRun(runId).events as Record<
+        string,
+        unknown
+      >[]
+      expect(
+        pausedEvents.filter((event) => event.type === 'fill'),
+      ).toHaveLength(priorFillCount)
+      expect(
+        pausedEvents.filter((event) => event.type === 'funding'),
+      ).toHaveLength(priorFundingCount)
+
+      await runner.close()
+      store.close()
+      store = new FuturesStore(path)
+      runner = new FuturesCommandRunner(store)
+      const restored = store.getRunProjection(runId)!
+      expect(
+        (restored.checkpoint as Record<string, unknown>)
+          .market_context_checkpoint,
+      ).toMatchObject({
+        frontier: priorFrontier,
+        source_identity: sourceIdentity,
+      })
+      expect(
+        (
+          (restored.checkpoint as Record<string, unknown>)
+            .risk_checkpoint as Record<string, unknown>
+        ).user_paused,
+      ).toBe(true)
+      expect(store.verifyRun(runId)).toBe(true)
+      const resumeId = 'market-context-confirmed-resume'
+      await runner.accept(
+        makeRequest(
+          resumeId,
+          2,
+          {
+            ...pauseMarket,
+            decision_time_ms: 21_600_200,
+            cutoff_received_at_ms: 21_600_200,
+          },
+          {
+            type: 'paper.resume',
+            command_id: resumeId,
+          },
+        ),
+        {
+          command_id: resumeId,
+          action: 'paper.resume',
+          stream_run_id: runId,
+          expected_state_version: 2,
+        },
+      ).result
+      const resumed = store.getRunProjection(runId)!
+      expect(
+        (resumed.checkpoint as Record<string, unknown>)
+          .market_context_checkpoint,
+      ).toMatchObject({
+        frontier: priorFrontier,
+        source_identity: sourceIdentity,
+      })
+      expect(
+        (
+          (resumed.checkpoint as Record<string, unknown>)
+            .risk_checkpoint as Record<string, unknown>
+        ).user_paused,
+      ).toBe(false)
+      expect((resumed.result as Record<string, unknown>).cash_usd).toBe(
+        priorCash,
+      )
+    } finally {
+      await runner.close().catch(() => undefined)
+      store.close()
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
   it('opts only new PAPER_LIVE session bindings into funding separation', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'futures-funding-binding-'))
     const live = new FuturesSessionRuntime({

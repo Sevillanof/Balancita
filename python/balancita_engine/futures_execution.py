@@ -202,10 +202,15 @@ class PaperExecutionAdapter:
         except (KeyError, TypeError, ValueError) as error:
             return None, None, None, None, str(error)
 
-    def advance(self, cutoff_ms, book, trades=()):
+    def advance(self, cutoff_ms, book, trades=(), *, execution_clock_ms=None):
         cutoff = normalize_timestamp_ms(cutoff_ms)
         if cutoff < 0:
             raise ValueError("cutoff cannot be negative")
+        execution_clock = None
+        if execution_clock_ms is not None:
+            execution_clock = normalize_timestamp_ms(execution_clock_ms)
+            if execution_clock < 0 or execution_clock > cutoff:
+                raise ValueError("execution clock must be within the verified cutoff")
         if self._last_cutoff_ms is not None and cutoff < self._last_cutoff_ms:
             raise ValueError("execution clock cannot move backwards")
         self._last_cutoff_ms = cutoff
@@ -220,6 +225,12 @@ class PaperExecutionAdapter:
         mark = mark_or_error
         identity = (book["provider"], book["product_id"], book["epoch"], book["snapshot_id"], book["revision"])
         if identity not in self.book_budgets:
+            if execution_clock is not None:
+                return deepcopy(expired + [self._emit(
+                    "market_uncertainty",
+                    cutoff_ms=cutoff,
+                    reason="due execution has no previously verified liquidity budget",
+                )])
             self.book_budgets[identity] = {"asks": {_plain(p): _plain(q) for p, q in asks}, "bids": {_plain(p): _plain(q) for p, q in bids}}
         budget = self.book_budgets[identity]
         emitted = []
@@ -245,10 +256,13 @@ class PaperExecutionAdapter:
             if order["state"] not in ("accepted", "partially_filled"):
                 continue
             intent = order["intent"]
-            if event_at < order["eligible_at_ms"] or known_at > cutoff:
+            match_time = event_at if execution_clock is None else max(event_at, execution_clock)
+            if match_time < order["eligible_at_ms"] or known_at > cutoff:
                 continue
             kind, side = intent["order_type"], intent["side"]
             if kind == "stop_market" and not order["triggered"]:
+                if execution_clock is not None:
+                    continue
                 if mark is None:
                     emitted.append(self._emit("market_uncertainty", order_id=order_id, cutoff_ms=cutoff, reason="stop mark unavailable"))
                     continue
@@ -285,7 +299,7 @@ class PaperExecutionAdapter:
                     self.trade_budgets[uid] -= ahead
                     if consumed > ZERO and order["queue_ahead"] == ZERO:
                         fill_qty = min(_decimal(order["remaining"], "remaining"), consumed)
-                        emitted.extend(self._fill(order_id, order, fill_qty, limit, "maker", event_at, t))
+                        emitted.extend(self._fill(order_id, order, fill_qty, limit, "maker", match_time, t))
                         self.trade_budgets[uid] -= fill_qty
                 continue
             if kind in ("limit", "post_only"):
@@ -310,7 +324,7 @@ class PaperExecutionAdapter:
                 take = min(to_take, available)
                 if take <= ZERO:
                     continue
-                emitted.extend(self._fill(order_id, order, take, level_price, "taker", event_at, event_at))
+                emitted.extend(self._fill(order_id, order, take, level_price, "taker", match_time, event_at))
                 budget["asks" if side == "buy" else "bids"][level_key] = _plain(available - take)
                 to_take -= take
                 if to_take == ZERO:
@@ -322,7 +336,7 @@ class PaperExecutionAdapter:
                     queue_ahead_btc=_plain(order["queue_ahead"]), assumption="conservative.v1"))
             if order["state"] not in ("filled", "rejected", "cancelled", "expired") and kind in ("market_ioc", "reduce_only", "stop_market"):
                 order["state"] = "cancelled"
-                emitted.append(self._emit("cancelled", order_id=order_id, reason="ioc_remainder", effective_at_ms=event_at, filled_quantity_btc=order["filled"]))
+                emitted.append(self._emit("cancelled", order_id=order_id, reason="ioc_remainder", effective_at_ms=match_time, filled_quantity_btc=order["filled"]))
         return deepcopy(emitted)
 
     def _fill(self, order_id, order, quantity, price, liquidity, event_time, source_time):

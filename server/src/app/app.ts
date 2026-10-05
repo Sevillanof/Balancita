@@ -935,6 +935,10 @@ export async function buildApp(options: {
   let futuresFundingKnownAt: number | null = null
   let pendingFuturesUiUpdate: Record<string, unknown> | undefined
   let futuresUiTimer: ReturnType<typeof setTimeout> | undefined
+  let futuresDeadlineTimer: ReturnType<typeof setTimeout> | undefined
+  let futuresDeadlineClosed = false
+  let futuresClockAnchor:
+    { sourceClockMs: number; monotonicMs: number } | undefined
   const observeFuturesLifecycle = (
     phase: string,
     state: FuturesLifecycleEvent['state'],
@@ -1008,6 +1012,131 @@ export async function buildApp(options: {
       flushFuturesUiUpdate()
     }, 100)
   }
+  const mappedFuturesClock = (): number | null => {
+    if (!futuresClockAnchor) return null
+    const elapsed = Math.max(
+      0,
+      performance.now() - futuresClockAnchor.monotonicMs,
+    )
+    const mapped = Math.floor(futuresClockAnchor.sourceClockMs + elapsed)
+    return Number.isSafeInteger(mapped) ? mapped : null
+  }
+  const clearFuturesDeadlineTimer = (): void => {
+    if (futuresDeadlineTimer !== undefined) clearTimeout(futuresDeadlineTimer)
+    futuresDeadlineTimer = undefined
+  }
+  const scheduleFuturesDeadline = (allowOverdue: boolean): void => {
+    clearFuturesDeadlineTimer()
+    if (
+      futuresDeadlineClosed ||
+      config.futuresMode !== 'paper_live' ||
+      !futuresRuntime ||
+      !futuresMarketStore
+    )
+      return
+    const sourceClock = mappedFuturesClock()
+    if (sourceClock === null) return
+    const admission = futuresRuntime.getAdmissionState(sourceClock)
+    const deadline = admission.next_due_at.time_ms
+    const fundingBoundaryForReduction =
+      admission.next_due_at.unknown_reasons.length > 0 &&
+      admission.next_due_at.unknown_reasons.every(
+        (reason) => reason === 'funding_boundary_unknown',
+      ) &&
+      (admission.outstanding_risk.reduction_intent_id !== null ||
+        admission.outstanding_risk.position === true)
+    if (
+      deadline === null ||
+      (admission.next_due_at.unknown_reasons.length > 0 &&
+        !fundingBoundaryForReduction) ||
+      admission.next_due_at.reasons.length === 0 ||
+      admission.next_due_at.reasons.some(
+        (reason) =>
+          ![
+            'order_eligibility',
+            'order_expiry',
+            'strategy_evaluation',
+            'utc_risk_day_rollover',
+            'funding_boundary',
+          ].includes(reason),
+      ) ||
+      admission.in_flight_work_count !== 0 ||
+      admission.pending_commands.known !== true ||
+      admission.pending_commands.any !== false
+    )
+      return
+    const delay = deadline - sourceClock
+    if (delay <= 0 && !allowOverdue) return
+    futuresDeadlineTimer = setTimeout(
+      () => {
+        futuresDeadlineTimer = undefined
+        if (futuresDeadlineClosed) return
+        futuresMarketTail = futuresMarketTail
+          .then(async () => {
+            if (futuresDeadlineClosed || !futuresRuntime || !futuresMarketStore)
+              return
+            const runId = futuresRuntime.runId
+            const beforePumpClock = mappedFuturesClock()
+            if (beforePumpClock === null) return
+            const pumped = await futuresRuntime.processMarketEvidence(
+              futuresMarketStore,
+              beforePumpClock,
+              () => futuresSourceStopRequested,
+            )
+            if (
+              pumped.stopped ||
+              pumped.deferredSourceRows > 0 ||
+              pumped.durablePendingSourceRows > 0 ||
+              futuresSourceJobs.length > 0 ||
+              futuresSourceDirty ||
+              futuresSourceRunning > 0 ||
+              futuresDeadlineClosed ||
+              futuresRuntime.runId !== runId
+            )
+              return
+            const decisionClock = mappedFuturesClock()
+            if (decisionClock === null) return
+            const current = futuresRuntime.getAdmissionState(decisionClock)
+            const currentFundingBoundaryForReduction =
+              current.next_due_at.unknown_reasons.length > 0 &&
+              current.next_due_at.unknown_reasons.every(
+                (reason) => reason === 'funding_boundary_unknown',
+              ) &&
+              (current.outstanding_risk.reduction_intent_id !== null ||
+                current.outstanding_risk.position === true)
+            if (
+              current.confirmed_state_version !==
+                pumped.checkpointStateVersion ||
+              current.in_flight_work_count !== 0 ||
+              current.pending_commands.known !== true ||
+              current.pending_commands.any !== false ||
+              (current.next_due_at.unknown_reasons.length > 0 &&
+                !currentFundingBoundaryForReduction) ||
+              current.next_due_at.time_ms === null ||
+              current.next_due_at.time_ms > decisionClock ||
+              current.next_due_at.reasons.length === 0 ||
+              current.next_due_at.reasons.some(
+                (reason) =>
+                  ![
+                    'order_eligibility',
+                    'order_expiry',
+                    'strategy_evaluation',
+                    'utc_risk_day_rollover',
+                    'funding_boundary',
+                  ].includes(reason),
+              )
+            )
+              return
+            const outcome = await futuresRuntime.processDue(decisionClock)
+            if (outcome.status === 'processed') scheduleFuturesDeadline(true)
+          })
+          .catch((error: unknown) => {
+            console.error('Futures due-deadline processing failed.', error)
+          })
+      },
+      Math.max(0, Math.min(delay, 2_147_000_000)),
+    )
+  }
   if (config.futuresMode === 'paper_live' && futuresRuntime !== undefined) {
     futuresMarketStore = new FuturesMarketStore(config.futuresMarketDbPath)
     futuresMarketStore.saveQualityPolicy(
@@ -1027,8 +1156,18 @@ export async function buildApp(options: {
         'http://[::1]',
       ],
       newRunFactory: futuresRuntime.newRunFactory,
-      commandExecutor: futuresRuntime.commandExecutor,
-      onNewRunCreated: futuresRuntime.activateRun,
+      commandExecutor: (request, metadata) => {
+        const accepted = futuresRuntime.commandExecutor(request, metadata)
+        void accepted.result.then(
+          () => scheduleFuturesDeadline(true),
+          () => scheduleFuturesDeadline(true),
+        )
+        return accepted
+      },
+      onNewRunCreated: (runId) => {
+        futuresRuntime.activateRun(runId)
+        scheduleFuturesDeadline(true)
+      },
     })
     app.get('/api/terminal/bootstrap', () => ({
       schema_version: 1,
@@ -1266,6 +1405,11 @@ export async function buildApp(options: {
             const inserted = futuresMarketStore!.append(event)
             if (inserted === 'inserted') {
               futuresLastReceivedAt = event.receivedAt
+              futuresClockAnchor = {
+                sourceClockMs: event.receivedAt,
+                monotonicMs: performance.now(),
+              }
+              clearFuturesDeadlineTimer()
               if (event.type === 'trade')
                 candleBuilder.addTrade(event, event.receivedAt)
               const normalized = Object.fromEntries(
@@ -1392,6 +1536,7 @@ export async function buildApp(options: {
                       observeFuturesSourceQueue('end', pump)
                     else observeFuturesSourceQueue('error', pump, failure)
                   }
+                  if (failure === undefined) scheduleFuturesDeadline(true)
                 })
               }
             }
@@ -1442,6 +1587,12 @@ export async function buildApp(options: {
       }
     })
     app.addHook('onClose', async () => {
+      futuresDeadlineClosed = true
+      closePhase(
+        'futures-due-deadline-timer-stop',
+        clearFuturesDeadlineTimer,
+        'futures-due-deadline-timer',
+      )
       futuresSourceAdmissionOpen = false
       closePhase(
         'futures-collector-stop',

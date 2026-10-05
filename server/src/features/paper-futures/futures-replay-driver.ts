@@ -3,6 +3,11 @@ import type { FuturesMarketStore } from '../kraken-futures/futures-market-store.
 import { randomUUID } from 'node:crypto'
 import type { FuturesStore } from './futures-store.ts'
 import { IncrementalMarketProjection } from './futures-market-projection.ts'
+import {
+  MARKET_CONTEXT_SCHEMA_VERSION,
+  MAX_MARKET_CONTEXT_DELTAS,
+  validateMarketContextTransport,
+} from './futures-market-context.ts'
 
 export type ReplayManifest = Readonly<{
   schema_version: 'futures-replay-manifest.v1'
@@ -106,6 +111,7 @@ export class FuturesReplayDriver {
   private marketSourcePending: Record<string, unknown>[] = []
   private marketSourceReadCursor = 0
   private marketSourceCursor = 0
+  private marketContextFrontier = 0
   private marketProjection?: IncrementalMarketProjection
   private marketProjectionDisabled = false
   private evaluationProgress?: {
@@ -386,6 +392,56 @@ export class FuturesReplayDriver {
   }> {
     validateTimestamp(receivedCutoff, 'received cutoff')
     this.bindMarketSource(instrument, store)
+    const runtimeBinding = this.durableStore?.getRuntimeBinding(this.runId)
+    const runtimeConfig = isRecord(runtimeBinding?.runtime_config)
+      ? runtimeBinding.runtime_config
+      : undefined
+    const useMarketContext =
+      runtimeConfig?.market_context_policy_version ===
+      MARKET_CONTEXT_SCHEMA_VERSION
+    const contextSourceIdentity = useMarketContext
+      ? canonicalHash({
+          schema_version: 'market-context-source-identity.v1',
+          source: this.manifest.source,
+          source_hash: this.manifest.source_hash,
+          instrument_hash:
+            this.manifest.instrument_hash ?? canonicalHash(instrument),
+        })
+      : undefined
+    if (useMarketContext) {
+      const checkpoint = this.durableStore?.getRunProjection(
+        this.runId,
+      )?.checkpoint
+      const contextCheckpoint =
+        isRecord(checkpoint) && isRecord(checkpoint.market_context_checkpoint)
+          ? checkpoint.market_context_checkpoint
+          : undefined
+      if (contextCheckpoint) {
+        if (
+          contextCheckpoint.policy_version !== MARKET_CONTEXT_SCHEMA_VERSION ||
+          contextCheckpoint.source_identity !== contextSourceIdentity ||
+          contextCheckpoint.instrument_id !== instrument.instrument_id ||
+          !Number.isSafeInteger(contextCheckpoint.frontier) ||
+          Number(contextCheckpoint.frontier) < 0 ||
+          Number(contextCheckpoint.frontier) > this.marketSourceCursor
+        )
+          throw new Error(
+            'Restored market-context frontier identity is invalid.',
+          )
+        if (
+          this.marketContextFrontier !== 0 &&
+          this.marketContextFrontier !== Number(contextCheckpoint.frontier)
+        )
+          throw new Error(
+            'Restored market-context frontier conflicts with replay work.',
+          )
+        this.marketContextFrontier = Number(contextCheckpoint.frontier)
+      } else if (this.marketSourceCursor > 0) {
+        throw new Error(
+          'Opted-in market context cannot restore without its checkpoint.',
+        )
+      }
+    }
     const sourceReadStarted = performance.now()
     if (this.marketSourceEvents === undefined) {
       this.marketSourceEvents = store.eventsAsOf(
@@ -466,6 +522,7 @@ export class FuturesReplayDriver {
         this.marketSourceCursor = rowids.at(-1)!
         inspectedSinceProgress = 0
         pendingSkippedInspectedCount = 0
+        this.marketContextFrontier = rowids.at(-1)!
       } catch {
         // On a guard race, process the already-inspected rows through the full path.
         const row = rows.at(-1)!
@@ -526,9 +583,16 @@ export class FuturesReplayDriver {
           instrument,
           mode,
           control,
+          useMarketContext
+            ? {
+                sourceIdentity: contextSourceIdentity!,
+                previousFrontier: this.marketContextFrontier,
+              }
+            : undefined,
         )
       let safeToSkip = false
       if (
+        !useMarketContext &&
         this.evaluationProgress &&
         projectionAdvanced &&
         control === undefined &&
@@ -595,6 +659,8 @@ export class FuturesReplayDriver {
         inspectedSinceProgress = 0
       }
       this.marketSourceCursor = sourceSequence
+      if (useMarketContext && receipt?.status === 'committed')
+        this.marketContextFrontier = sourceSequence
     }
     await flushSkipped()
     this.marketSourcePending = this.marketSourcePending.filter(
@@ -716,6 +782,7 @@ export class FuturesReplayDriver {
     instrument: Record<string, unknown>,
     mode: 'mock' | 'paper_live' | 'replay',
     control: Record<string, unknown> | undefined,
+    context?: { sourceIdentity: string; previousFrontier: number },
   ): CausalInput | undefined {
     const receivedAt = Number(source.receivedAt)
     const sourceSequence = Number(source.receivedSequence)
@@ -727,22 +794,37 @@ export class FuturesReplayDriver {
       sourceSequence,
       null,
     )
-    const gaps = store.gapsAsOf(receivedAt) as Record<string, unknown>[]
-    const candles = (
-      store.candlesAsOf(receivedAt) as Record<string, unknown>[]
-    ).filter(
-      (candle) =>
-        !gaps.some(
-          (gap) =>
-            Number(gap.detected_at) < Number(candle.known_at) &&
-            Number(candle.close_at) <= Number(gap.detected_at),
-        ),
-    )
-    const current = allEvents.filter(
-      (event) =>
-        Number(event.receivedSequence) <= sourceSequence &&
-        Number(event.receivedAt) <= receivedAt,
-    )
+    const gaps = context
+      ? []
+      : (store.gapsAsOf(receivedAt) as Record<string, unknown>[])
+    const candles = context
+      ? (store.candlesTailAsOf(receivedAt) as Record<string, unknown>[])
+      : (store.candlesAsOf(receivedAt) as Record<string, unknown>[]).filter(
+          (candle) =>
+            !gaps.some(
+              (gap) =>
+                Number(gap.detected_at) < Number(candle.known_at) &&
+                Number(candle.close_at) <= Number(gap.detected_at),
+            ),
+        )
+    const current = context
+      ? [
+          ...(
+            store.latestBookTickerAsOf(
+              receivedAt,
+              sourceSequence - 1,
+            ) as Record<string, unknown>[]
+          ).filter((event) => Number(event.receivedSequence) < sourceSequence),
+          source,
+        ].sort(
+          (left, right) =>
+            Number(left.receivedSequence) - Number(right.receivedSequence),
+        )
+      : allEvents.filter(
+          (event) =>
+            Number(event.receivedSequence) <= sourceSequence &&
+            Number(event.receivedAt) <= receivedAt,
+        )
     const marketEvents: Record<string, unknown>[] = candles.map((candle) => ({
       type: 'candle',
       interval_ms: Number(candle.interval_ms),
@@ -764,15 +846,22 @@ export class FuturesReplayDriver {
       const eventAt = Number(event.eventTime)
       const sequence = Number(event.receivedSequence)
       if (event.type === 'book' && event.snapshot === true) {
-        const gap = gaps.some((item) => {
-          if (item.feed !== 'book' || Number(item.detected_at) > known)
-            return false
-          return (
-            eventAt <= Number(item.detected_at) ||
-            (Number(event.epoch) === Number(item.epoch) &&
-              Number(event.seq) < Number(item.actual_seq))
-          )
-        })
+        const gap = context
+          ? store.bookSnapshotHasKnownGap({
+              epoch: Number(event.epoch),
+              seq: Number(event.seq),
+              eventTime: eventAt,
+              receivedAt: known,
+            })
+          : gaps.some((item) => {
+              if (item.feed !== 'book' || Number(item.detected_at) > known)
+                return false
+              return (
+                eventAt <= Number(item.detected_at) ||
+                (Number(event.epoch) === Number(item.epoch) &&
+                  Number(event.seq) < Number(item.actual_seq))
+              )
+            })
         marketEvents.push({
           type: 'book_snapshot',
           source_receipt_sequence: sequence,
@@ -796,6 +885,9 @@ export class FuturesReplayDriver {
                 event.marketQuality.book_sequence_integrity ===
                   'observed_contiguous')) &&
             !gap,
+          ...(context && sequence < sourceSequence
+            ? { context_anchor: true }
+            : {}),
           valid:
             event.valid !== false &&
             (!isRecord(event.marketQuality) ||
@@ -827,21 +919,32 @@ export class FuturesReplayDriver {
           known_at_ms: known,
           mark_usd: event.mark ?? event.last,
           market_status: event.suspended ? 'suspended' : 'open',
+          ...(context && sequence < sourceSequence
+            ? { context_anchor: true }
+            : {}),
         })
         const historicalFundingMode =
           mode === 'paper_live' ||
           (mode === 'replay' &&
             this.manifest.source === 'frozen-kraken-futures-market.v2')
-        if (!historicalFundingMode && event.fundingObservation) {
+        if (
+          !historicalFundingMode &&
+          event.fundingObservation &&
+          (!context || sequence > context.previousFrontier)
+        ) {
           marketEvents.push({
             type: 'funding_observation',
+            ...(context ? { source_receipt_sequence: sequence } : {}),
             received_at_ms: known,
             known_at_ms: known,
             observation: event.fundingObservation,
             reception_order: sequence,
           })
         }
-        if (historicalFundingMode) {
+        if (
+          historicalFundingMode &&
+          (!context || sequence > context.previousFrontier)
+        ) {
           const covering = store.fundingForInterval(receivedAt, receivedAt)
           const rates = new Set(
             covering.map((record) => String(record.fundingRate)),
@@ -850,6 +953,7 @@ export class FuturesReplayDriver {
             const evidence = covering.at(-1)!
             marketEvents.push({
               type: 'funding_observation',
+              ...(context ? { source_receipt_sequence: sequence } : {}),
               received_at_ms: Number(evidence.knownAtMs),
               known_at_ms: Number(evidence.knownAtMs),
               reception_order: sequence,
@@ -905,6 +1009,28 @@ export class FuturesReplayDriver {
       )
       return undefined
     }
+    const marketContext = context
+      ? {
+          schema_version: MARKET_CONTEXT_SCHEMA_VERSION,
+          source_identity: context.sourceIdentity,
+          instrument_id: String(instrument.instrument_id),
+          previous_frontier: context.previousFrontier,
+          current_frontier: sourceSequence,
+          knowledge_cutoff_ms: receivedAt,
+          bootstrap_events: marketEvents.filter(
+            (event) => event.type === 'candle' || event.context_anchor === true,
+          ),
+          delta_events: marketEvents.filter(
+            (event) => event.type !== 'candle' && event.context_anchor !== true,
+          ),
+        }
+      : undefined
+    if (
+      context &&
+      (!validateMarketContextTransport(marketContext) ||
+        marketContext.delta_events.length > MAX_MARKET_CONTEXT_DELTAS)
+    )
+      throw new Error('Generated market context transport is invalid.')
     const input: CausalInput = {
       sequence: sourceSequence,
       received_at_ms: receivedAt,
@@ -920,6 +1046,7 @@ export class FuturesReplayDriver {
           decision_time_ms: receivedAt,
           cutoff_received_at_ms: receivedAt,
           events: marketEvents,
+          ...(marketContext ? { market_context: marketContext } : {}),
         },
         ...(control ? { control } : {}),
       },
@@ -1151,7 +1278,6 @@ export class FuturesReplayDriver {
       const work = item as RuntimeWork & { receipt: RuntimeReceipt | null }
       const input = work.input
       const inputHash = canonicalHash(input)
-      driver.restoreMarketSourceCursor(input)
       driver.inputs.push(structuredClone(input))
       driver.bySequence.set(input.sequence, inputHash)
       driver.lastSequence = Math.max(driver.lastSequence, input.sequence)
@@ -1296,6 +1422,9 @@ export class FuturesReplayDriver {
           receipt,
         )
       }
+      if (receipt.status !== 'committed')
+        throw new Error('Restored replay work has no committed source receipt.')
+      driver.restoreMarketSourceCursor(input)
       driver.work.push({ ...work, receipt: structuredClone(receipt) })
       driver.byWorkIdentity.set(identity, {
         ...work,
@@ -1311,8 +1440,21 @@ export class FuturesReplayDriver {
 
   private restoreMarketSourceCursor(input: CausalInput): void {
     const watermark = Number(input.payload.market_source_watermark)
-    if (Number.isSafeInteger(watermark) && watermark >= 0)
+    if (Number.isSafeInteger(watermark) && watermark >= 0) {
       this.marketSourceCursor = Math.max(this.marketSourceCursor, watermark)
+      const snapshot = input.payload.market_snapshot
+      const context = isRecord(snapshot) ? snapshot.market_context : undefined
+      if (validateMarketContextTransport(context)) {
+        if (
+          context.previous_frontier !== this.marketContextFrontier ||
+          context.current_frontier !== watermark
+        )
+          throw new Error(
+            'Restored market-context work frontier is discontinuous.',
+          )
+        this.marketContextFrontier = context.current_frontier
+      }
+    }
   }
 
   static async replay(

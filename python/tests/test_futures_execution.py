@@ -39,6 +39,79 @@ class PaperExecutionAdapterTests(unittest.TestCase):
         self.assertEqual(result[0]["quantity_btc"], "0.0002")
         self.assertEqual(self.adapter.advance(101, self.book(100, asks=[["100001", "0.0002"]])), [])
 
+    def test_due_execution_clock_uses_preserved_quote_once_without_changing_legacy(self):
+        self.submit(decision_at_ms=1000, quantity_btc="0.0099")
+        quote = self.book(1000, asks=[["100001", "0.005"]])
+        self.assertEqual(self.adapter.advance(1000, quote), [])
+
+        result = self.adapter.advance(
+            1100, quote, execution_clock_ms=1100
+        )
+        self.assertEqual([event["type"] for event in result], ["fill", "cancelled"])
+        fill = result[0]
+        self.assertEqual(
+            (
+                fill["quantity_btc"],
+                fill["event_time_ms"],
+                fill["source_event_time_ms"],
+            ),
+            ("0.005", 1100, 1000),
+        )
+        self.assertEqual(quote["event_time_ms"], 1000)
+        self.assertEqual(
+            self.adapter.advance(1200, quote, execution_clock_ms=1200), []
+        )
+
+        self.adapter.submit({
+            "order_id": "o2",
+            "run_id": "run-1",
+            "instrument_id": "kraken-futures:PF_XBTUSD",
+            "decision_at_ms": 1100,
+            "side": "buy",
+            "order_type": "market_ioc",
+            "quantity_btc": "0.0001",
+        })
+        repeated = self.adapter.advance(
+            1200, quote, execution_clock_ms=1200
+        )
+        self.assertEqual([event["type"] for event in repeated], ["cancelled"])
+        self.assertEqual(repeated[0]["filled_quantity_btc"], "0")
+
+        stale_adapter = PaperExecutionAdapter(
+            {"run_id": "stale", "instrument_id": "kraken-futures:PF_XBTUSD"},
+            {"latency_ms": 100, "max_book_age_ms": 3000},
+        )
+        stale_adapter.submit({
+            "order_id": "stale-order",
+            "run_id": "stale",
+            "instrument_id": "kraken-futures:PF_XBTUSD",
+            "decision_at_ms": 1000,
+            "side": "buy",
+            "order_type": "market_ioc",
+            "quantity_btc": "0.0001",
+        })
+        stale_adapter.advance(1000, quote)
+        stale = stale_adapter.advance(
+            5000, quote, execution_clock_ms=5000
+        )
+        self.assertEqual([event["type"] for event in stale], ["market_uncertainty"])
+        self.assertEqual(stale_adapter.state["stale-order"]["state"], "accepted")
+
+        legacy = PaperExecutionAdapter(
+            {"run_id": "legacy", "instrument_id": "kraken-futures:PF_XBTUSD"},
+            {"latency_ms": 100},
+        )
+        legacy.submit({
+            "order_id": "legacy-order",
+            "run_id": "legacy",
+            "instrument_id": "kraken-futures:PF_XBTUSD",
+            "decision_at_ms": 1000,
+            "side": "buy",
+            "order_type": "market_ioc",
+            "quantity_btc": "0.0001",
+        })
+        self.assertEqual(legacy.advance(1100, quote), [])
+
     def test_post_only_is_checked_on_arrival_while_crossing_limit_takes(self):
         base = {"run_id": "run-1", "instrument_id": "kraken-futures:PF_XBTUSD", "decision_at_ms": 0,
                 "side": "buy", "quantity_btc": "0.0001", "limit_price_usd": "100001"}
