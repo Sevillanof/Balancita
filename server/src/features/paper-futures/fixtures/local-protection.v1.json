@@ -1,0 +1,47 @@
+{
+  "schema_version": "local-futures-scenario.v1",
+  "mode": "LOCAL_SIMULATION",
+  "run_id": "local-protection-v1",
+  "base_time_ms": 21600000,
+  "input_provenance": "owned deterministic local fixture; not a public capture",
+  "funding": {
+    "source": "versioned-local-mock.v1",
+    "raw_rate": "0",
+    "unit": "usd_per_btc_per_hour",
+    "known_at_ms": 21600000,
+    "effective_start_ms": 21600000,
+    "effective_end_ms": 25200000
+  },
+  "events": [
+    {
+      "name": "warmup",
+      "time_ms": 21600000,
+      "breakout": false,
+      "book_quantity_btc": "1"
+    },
+    {
+      "name": "entry-selection",
+      "time_ms": 21605000,
+      "breakout": true,
+      "book_quantity_btc": "0.0099"
+    },
+    {
+      "name": "partial-fill",
+      "time_ms": 21605100,
+      "breakout": false,
+      "book_quantity_btc": "0.005"
+    },
+    {
+      "name": "protective-stop-crossing",
+      "time_ms": 21605200,
+      "breakout": false,
+      "book_quantity_btc": "1"
+    },
+    {
+      "name": "protective-close-fill",
+      "time_ms": 21605300,
+      "breakout": false,
+      "book_quantity_btc": "1"
+    }
+  ]
+}
