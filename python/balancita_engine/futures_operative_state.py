@@ -7,10 +7,28 @@ import json
 from copy import deepcopy
 
 
+class OperativeIdentityUnavailableError(RuntimeError):
+    """Exact identity storage could not answer; callers must fail closed.
+
+    Deliberately not a ValueError: execution and ledger code treat malformed
+    evidence (ValueError) as skippable, but an unreachable identity store must
+    never be mistaken for "no historical identity".
+    """
+
+
+def _guarded(call, *args):
+    try:
+        return call(*args)
+    except OperativeIdentityUnavailableError:
+        raise
+    except Exception as error:
+        raise OperativeIdentityUnavailableError("operative identity store is unavailable") from error
+
+
 class ExactIdentityPort:
     """Exact-key identity lookup with isolated pending updates."""
 
-    KINDS = frozenset({"order", "cancel", "trade", "book_budget", "trade_budget", "order_trade"})
+    KINDS = frozenset({"order", "cancel", "trade", "book_budget", "trade_budget", "order_trade", "signal"})
 
     def __init__(self, committed, pending=None):
         if not callable(committed) or not callable(pending):
@@ -40,7 +58,7 @@ class ExactIdentityPort:
 
     def lookup(self, kind, key):
         key = self.canonical_key(kind, key)
-        value = self._committed(kind, key)
+        value = _guarded(self._committed, kind, key)
         return deepcopy(value)
 
     def stage(self, kind, key, value, *, provenance):
@@ -50,7 +68,7 @@ class ExactIdentityPort:
         if not isinstance(provenance, str) or not provenance:
             raise ValueError("operative identity update provenance is required")
         copied = deepcopy(value)
-        self._pending(kind, key, deepcopy(copied))
+        _guarded(self._pending, kind, key, deepcopy(copied))
         self._updates.append({"kind": kind, "key": key, "value": copied, "provenance": provenance})
 
     def drain_updates(self):
@@ -71,7 +89,7 @@ class ExactLedgerIdentityPort:
     def lookup(self, kind, key):
         if kind not in self.KINDS or not isinstance(key, str) or not key:
             raise ValueError("unsupported ledger identity kind or key")
-        return deepcopy(self._committed(kind, key))
+        return deepcopy(_guarded(self._committed, kind, key))
 
     def stage(self, kind, key, value, *, provenance):
         if kind not in self.KINDS or not isinstance(key, str) or not key or value is None:
@@ -79,7 +97,7 @@ class ExactLedgerIdentityPort:
         if not isinstance(provenance, str) or not provenance:
             raise ValueError("ledger identity provenance is required")
         record = {"kind": kind, "key": key, "value": deepcopy(value), "provenance": provenance}
-        self._pending(kind, key, deepcopy(value))
+        _guarded(self._pending, kind, key, deepcopy(value))
         self._updates.append(record)
 
     def drain_updates(self):

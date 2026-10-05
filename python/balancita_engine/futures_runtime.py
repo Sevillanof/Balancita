@@ -13,6 +13,7 @@ from .futures_indicators import calculate_features
 from .futures_ledger import FuturesLedger
 from .futures_funding import normalize_observation
 from .futures_execution import PaperExecutionAdapter
+from .futures_operative_state import ExactIdentityPort, ExactLedgerIdentityPort
 from .futures_strategies import (
     C25_ID,
     C26_ID,
@@ -35,6 +36,18 @@ RISK_CHECKPOINT_VERSION = 4
 STRATEGY_SELECTION_POLICY_VERSION = "strategy-selection-cadence.v1"
 STRATEGY_SELECTION_INTERVAL_MS = 5000
 MARKET_CONTEXT_POLICY_VERSION = "market-context-transport.v1"
+OPERATIVE_CHECKPOINT_POLICY_VERSION = "futures-operative-checkpoint.v1"
+_ACTIVE_ORDER_STATES = ("accepted", "partially_filled")
+_LEGACY_ONLY_CHECKPOINT_KEYS = (
+    "cash_usd", "leverage", "realized_gross_usd", "fees_usd", "funding_paid",
+    "funding_complete", "ledger_last_accrual_ms", "ledger_position",
+    "funding_rates", "accrued", "ledger_events", "execution_checkpoint",
+    "consumed_depth",
+)
+_COMPACT_ONLY_CHECKPOINT_KEYS = (
+    "operative_checkpoint_policy_version", "execution_operative_checkpoint",
+    "ledger_operative_checkpoint",
+)
 FEATURE_INTERVAL_MS = 60_000
 ZERO = Decimal(0)
 ONE = Decimal(1)
@@ -75,7 +88,10 @@ def _ceil_tick(value, tick):
 class FuturesRuntime:
     """Single-position Decimal strategy/risk/book simulator for C27 v1."""
 
-    def __init__(self, *, run_id, config, instrument, checkpoint=None):
+    def __init__(
+        self, *, run_id, config, instrument, checkpoint=None,
+        execution_identity_port=None, ledger_identity_port=None,
+    ):
         if not isinstance(run_id, str) or not run_id or len(run_id) > 128:
             raise ValueError("run_id must be a non-empty bounded string")
         if not isinstance(config, dict):
@@ -93,6 +109,23 @@ class FuturesRuntime:
         )
         self.instrument = deepcopy(instrument) if isinstance(instrument, dict) else None
         self._validate_config()
+        self._operative = (
+            self.config.get("operative_checkpoint_policy_version")
+            == OPERATIVE_CHECKPOINT_POLICY_VERSION
+        )
+        self._operative_failed = False
+        self._live_book_identities = ()
+        self._live_trade_ids = ()
+        self._execution_identity_port = execution_identity_port
+        self._ledger_identity_port = ledger_identity_port
+        if self._operative:
+            if (
+                not isinstance(execution_identity_port, ExactIdentityPort)
+                or not isinstance(ledger_identity_port, ExactLedgerIdentityPort)
+            ):
+                raise ValueError("operative checkpoint policy requires exact identity ports")
+        elif execution_identity_port is not None or ledger_identity_port is not None:
+            raise ValueError("identity ports require the operative checkpoint policy")
         self._funding_separation = (
             self.config.get("funding_policy_version") == "funding-separation.v1"
         )
@@ -121,6 +154,8 @@ class FuturesRuntime:
         self.ledger = FuturesLedger(
             self.config["initial_cash_usd"], "1", self._ledger_config
         )
+        if self._operative:
+            self.ledger._ledger_identity_port = ledger_identity_port
         self.owner_strategy_id = None
         self.position_protection = None
         self.signal_keys = set()
@@ -157,6 +192,7 @@ class FuturesRuntime:
                     "lot_size": self.instrument["quantity_step_btc"],
                     "max_book_age_ms": self.config["max_book_age_ms"],
                 },
+                identity_port=execution_identity_port,
             )
         if checkpoint is not None:
             self._restore(checkpoint)
@@ -217,6 +253,14 @@ class FuturesRuntime:
                 and "strategy_selection_interval_ms" in self.config
             )
             or (
+                "operative_checkpoint_policy_version" in self.config
+                and (
+                    self.config["operative_checkpoint_policy_version"]
+                    != OPERATIVE_CHECKPOINT_POLICY_VERSION
+                    or self.config["version"] != RISK_RUNTIME_VERSION
+                )
+            )
+            or (
                 "market_context_policy_version" in self.config
                 and (
                     self.config["market_context_policy_version"]
@@ -229,6 +273,28 @@ class FuturesRuntime:
 
     def process(self, market, *, control=None):
         """Evaluate one as-of snapshot and return analysis, risk, fills and ledger."""
+        if not self._operative:
+            return self._process(market, control=control)
+        if self._operative_failed:
+            raise ValueError("operative runtime failed closed and cannot process")
+        try:
+            return self._process(market, control=control)
+        except Exception:
+            # Identity lookups or validation failed mid-job: the in-memory state
+            # may be partial, so it can never be checkpointed or committed.
+            self._operative_failed = True
+            raise
+
+    def drain_operative_identity_updates(self):
+        """Drain staged exact identities for the owning durable transaction."""
+        if not self._operative or self._operative_failed:
+            raise ValueError("operative identity updates are unavailable")
+        return {
+            "execution": self.execution_adapter.drain_identity_updates(),
+            "ledger": self.ledger.drain_operative_identity_updates(),
+        }
+
+    def _process(self, market, *, control=None):
         self._diagnostics = {
             "strategy_selection_cycles": 0,
             "strategy_evaluations": 0,
@@ -526,13 +592,13 @@ class FuturesRuntime:
             else:
                 side, signal_key = proposal
                 strategy_id = selected["strategy_id"] if strategy_context is not None else RUNTIME_VERSION
-                if signal_key in self.signal_keys:
+                if self._signal_consumed(signal_key):
                     analysis = self._analysis("WAIT", "signal_already_evaluated", features)
                     risk = {"status": "not_evaluated", "reason_codes": ["signal_already_evaluated"]}
                     if strategy_context is not None:
                         analysis.update(strategy_context)
                 else:
-                    self.signal_keys.add(signal_key)
+                    self._consume_signal(signal_key)
                     levels = book.get("asks" if side == "long" else "bids", [])
                     best_price = self._best_price(levels)
                     if best_price is None:
@@ -715,6 +781,8 @@ class FuturesRuntime:
 
     def checkpoint(self):
         """Return a normalized, versioned checkpoint sufficient to resume open risk."""
+        if self._operative:
+            return self._operative_checkpoint()
         ledger = self.ledger
         position = None
         if ledger.position is not None:
@@ -762,6 +830,12 @@ class FuturesRuntime:
             **({"execution_checkpoint": self.execution_adapter.checkpoint()} if self.execution_adapter is not None else {}),
             **({"execution_metadata": deepcopy(self.execution_metadata)} if self.execution_adapter is not None else {}),
             **({"risk_checkpoint": deepcopy(self.risk_state)} if self.runtime_version == RISK_RUNTIME_VERSION else {}),
+            **self._policy_checkpoints(),
+        }
+
+    def _policy_checkpoints(self):
+        """Optional policy blocks shared by legacy and compact checkpoints."""
+        return {
             **({"funding_policy_checkpoint": {
                 "contract_version": "funding-separation.v1",
                 "version": "funding-separation.v1",
@@ -790,6 +864,72 @@ class FuturesRuntime:
                 **deepcopy(self._market_context_checkpoint),
             }} if self.config.get("market_context_policy_version") == MARKET_CONTEXT_POLICY_VERSION else {}),
         }
+
+    def _operative_checkpoint(self):
+        if self._operative_failed:
+            raise ValueError("operative runtime failed closed; checkpoint is unavailable")
+        adapter = self.execution_adapter
+        active = [
+            order_id for order_id, order in adapter.orders.items()
+            if order["state"] in _ACTIVE_ORDER_STATES
+        ]
+        return {
+            "schema_version": self._checkpoint_version,
+            "runtime_version": self.runtime_version,
+            "run_id": self.run_id,
+            "instrument_id": self.instrument.get("instrument_id"),
+            "runtime_config": deepcopy(self.config),
+            "instrument_spec": deepcopy(self.instrument),
+            "operative_checkpoint_policy_version": OPERATIVE_CHECKPOINT_POLICY_VERSION,
+            "execution_operative_checkpoint": adapter.operative_checkpoint(
+                live_book_identities=self._live_book_identities,
+                live_trade_ids=self._live_trade_ids,
+            ),
+            "ledger_operative_checkpoint": self.ledger.operative_checkpoint(),
+            "funding_cursor_ms": self.funding_cursor_ms,
+            "owner_strategy_id": self.owner_strategy_id,
+            "position_protection": deepcopy(self.position_protection),
+            "signal_keys": self._compact_signal_keys(),
+            "regime": self.regime,
+            "execution_metadata": {
+                order_id: deepcopy(self.execution_metadata[order_id])
+                for order_id in active if order_id in self.execution_metadata
+            },
+            "risk_checkpoint": deepcopy(self.risk_state),
+            **self._policy_checkpoints(),
+        }
+
+    def _signal_consumed(self, signal_key):
+        if signal_key in self.signal_keys:
+            return True
+        if not self._operative:
+            return False
+        # Exact append-only history; an unavailable store raises (fail closed).
+        return self._execution_identity_port.lookup("signal", signal_key) is not None
+
+    def _consume_signal(self, signal_key):
+        self.signal_keys.add(signal_key)
+        if self._operative:
+            self._execution_identity_port.stage(
+                "signal", signal_key, True, provenance="signal:" + signal_key
+            )
+
+    def _compact_signal_keys(self):
+        """Recent-window cache only: exact history lives in the identity port.
+
+        Correctness never depends on this window; older keys are answered by the
+        append-only "signal" identity lookup.
+        """
+        keys = sorted(self.signal_keys)
+        buckets = {key: key.rsplit(":", 1)[-1] for key in keys}
+        known = [int(tail) for tail in buckets.values() if tail.isdigit()]
+        if not known:
+            return keys
+        newest = max(known)
+        return [
+            key for key in keys
+            if not buckets[key].isdigit() or int(buckets[key]) >= newest
+        ]
 
     def _validate_market_context(self, market, now, cutoff):
         if self.config.get("market_context_policy_version") != MARKET_CONTEXT_POLICY_VERSION:
@@ -1008,6 +1148,19 @@ class FuturesRuntime:
             or checkpoint.get("run_id") != self.run_id
         ):
             raise ValueError("unsupported or mismatched futures runtime checkpoint")
+        compact_present = [key in checkpoint for key in _COMPACT_ONLY_CHECKPOINT_KEYS]
+        if self._operative:
+            if (
+                not all(compact_present)
+                or checkpoint["operative_checkpoint_policy_version"]
+                != OPERATIVE_CHECKPOINT_POLICY_VERSION
+                or any(key in checkpoint for key in _LEGACY_ONLY_CHECKPOINT_KEYS)
+                or not isinstance(checkpoint["execution_operative_checkpoint"], dict)
+                or not isinstance(checkpoint["ledger_operative_checkpoint"], dict)
+            ):
+                raise ValueError("operative runtime requires a compact operative checkpoint")
+        elif any(compact_present):
+            raise ValueError("legacy runtime cannot restore a compact operative checkpoint")
         if checkpoint.get("instrument_id") != (
             None if self.instrument is None else self.instrument.get("instrument_id")
         ):
@@ -1056,7 +1209,10 @@ class FuturesRuntime:
             if market_context_checkpoint["source_identity"] is None and (
                 market_context_checkpoint["frontier"] != 0
                 or market_context_checkpoint["anchors"]
-                or checkpoint.get("ledger_position") is not None
+                or (
+                    checkpoint["ledger_operative_checkpoint"].get("position")
+                    if self._operative else checkpoint.get("ledger_position")
+                ) is not None
                 or checkpoint.get("position_protection") is not None
                 or (
                     isinstance(checkpoint.get("funding_policy_checkpoint"), dict)
@@ -1088,7 +1244,9 @@ class FuturesRuntime:
                 raise ValueError("strategy selection checkpoint identity is invalid")
             last_selected = selection_checkpoint.get("last_selection_ms")
             cached = selection_checkpoint.get("context")
-            execution_checkpoint = checkpoint.get("execution_checkpoint")
+            execution_checkpoint = checkpoint.get(
+                "execution_operative_checkpoint" if self._operative else "execution_checkpoint"
+            )
             last_execution_time = (
                 execution_checkpoint.get("last_cutoff_ms")
                 if isinstance(execution_checkpoint, dict)
@@ -1182,8 +1340,15 @@ class FuturesRuntime:
             self._funding_evidence = deepcopy(policy.get("evidence"))
         ledger = self.ledger
         if self.execution_adapter is not None:
-            execution_checkpoint = checkpoint.get("execution_checkpoint")
-            restored_execution = PaperExecutionAdapter.restore(execution_checkpoint)
+            if self._operative:
+                restored_execution = PaperExecutionAdapter.restore_operative(
+                    checkpoint["execution_operative_checkpoint"],
+                    identity_port=self._execution_identity_port,
+                )
+            else:
+                restored_execution = PaperExecutionAdapter.restore(
+                    checkpoint.get("execution_checkpoint")
+                )
             if (
                 restored_execution.run_id != self.run_id
                 or restored_execution.instrument_id != self.instrument.get("instrument_id")
@@ -1197,34 +1362,38 @@ class FuturesRuntime:
             if not isinstance(metadata, dict) or any(not isinstance(key, str) or not isinstance(value, dict) for key, value in metadata.items()):
                 raise ValueError("execution checkpoint metadata is invalid")
             self.execution_metadata = deepcopy(metadata)
-        ledger.cash = _d(checkpoint["cash_usd"], "checkpoint cash")
-        ledger.leverage = _d(checkpoint["leverage"], "checkpoint leverage")
-        ledger.realized_gross = _d(checkpoint["realized_gross_usd"], "checkpoint realized gross")
-        ledger.fees = _d(checkpoint["fees_usd"], "checkpoint fees")
-        ledger.funding_paid = _d(checkpoint["funding_paid"], "checkpoint funding")
-        if not isinstance(checkpoint.get("funding_complete"), bool):
-            raise ValueError("checkpoint funding completeness must be explicit")
-        ledger.funding_complete = checkpoint["funding_complete"]
-        ledger.last_accrual_ms = checkpoint.get("ledger_last_accrual_ms")
-        raw_position = checkpoint.get("ledger_position")
-        if raw_position is not None:
-            if not isinstance(raw_position, dict) or raw_position.get("side") not in ("long", "short"):
-                raise ValueError("invalid checkpoint position")
-            ledger.position = {
-                key: _d(value, "checkpoint position " + key)
-                if key in ("qty", "entry", "entry_fee_remaining", "funding_remaining")
-                else value
-                for key, value in raw_position.items()
+        if self._operative:
+            ledger = self._restore_operative_ledger(checkpoint["ledger_operative_checkpoint"])
+            self.ledger = ledger
+        else:
+            ledger.cash = _d(checkpoint["cash_usd"], "checkpoint cash")
+            ledger.leverage = _d(checkpoint["leverage"], "checkpoint leverage")
+            ledger.realized_gross = _d(checkpoint["realized_gross_usd"], "checkpoint realized gross")
+            ledger.fees = _d(checkpoint["fees_usd"], "checkpoint fees")
+            ledger.funding_paid = _d(checkpoint["funding_paid"], "checkpoint funding")
+            if not isinstance(checkpoint.get("funding_complete"), bool):
+                raise ValueError("checkpoint funding completeness must be explicit")
+            ledger.funding_complete = checkpoint["funding_complete"]
+            ledger.last_accrual_ms = checkpoint.get("ledger_last_accrual_ms")
+            raw_position = checkpoint.get("ledger_position")
+            if raw_position is not None:
+                if not isinstance(raw_position, dict) or raw_position.get("side") not in ("long", "short"):
+                    raise ValueError("invalid checkpoint position")
+                ledger.position = {
+                    key: _d(value, "checkpoint position " + key)
+                    if key in ("qty", "entry", "entry_fee_remaining", "funding_remaining")
+                    else value
+                    for key, value in raw_position.items()
+                }
+            ledger.funding_rates = [
+                (str(identifier), int(start), int(end), _d(rate, "checkpoint funding rate"))
+                for identifier, start, end, rate in checkpoint.get("funding_rates", [])
+            ]
+            ledger.accrued = {
+                (str(identifier), int(start), int(end), _d(quantity, "checkpoint accrued quantity"))
+                for identifier, start, end, quantity in checkpoint.get("accrued", [])
             }
-        ledger.funding_rates = [
-            (str(identifier), int(start), int(end), _d(rate, "checkpoint funding rate"))
-            for identifier, start, end, rate in checkpoint.get("funding_rates", [])
-        ]
-        ledger.accrued = {
-            (str(identifier), int(start), int(end), _d(quantity, "checkpoint accrued quantity"))
-            for identifier, start, end, quantity in checkpoint.get("accrued", [])
-        }
-        ledger.events = deepcopy(checkpoint.get("ledger_events", []))
+            ledger.events = deepcopy(checkpoint.get("ledger_events", []))
         self.owner_strategy_id = checkpoint.get("owner_strategy_id")
         self.regime = checkpoint.get("regime", "unknown")
         if self.regime not in ("unknown", "trend", "range"):
@@ -1299,6 +1468,22 @@ class FuturesRuntime:
             adapter_position = self.execution_adapter.position
             if adapter_position["side"] != expected_side or _d(adapter_position["quantity_btc"], "execution position") != expected_qty:
                 raise ValueError("execution checkpoint position disagrees with ledger")
+
+    def _restore_operative_ledger(self, ledger_checkpoint):
+        ledger = FuturesLedger.restore_operative(
+            ledger_checkpoint, identity_port=self._ledger_identity_port
+        )
+        expected = self._ledger_config
+        if (
+            ledger.version != expected["version"]
+            or ledger.cost_version != expected["cost_version"]
+            or ledger.precision != expected["precision"]
+            or ledger.fee_rates["maker"] != _d(expected["maker"], "maker rate")
+            or ledger.fee_rates["taker"] != _d(expected["taker"], "taker rate")
+            or ledger.cash != _d(self.config["initial_cash_usd"], "initial cash")
+        ):
+            raise ValueError("operative ledger checkpoint does not match runtime")
+        return ledger
 
     def _available_events(self, events, now, cutoff):
         if not isinstance(events, list):
@@ -1422,7 +1607,11 @@ class FuturesRuntime:
         selector = select_proposal(
             proposals,
             owner_strategy_id=self.owner_strategy_id,
-            consumed_signal_keys=self.signal_keys,
+            consumed_signal_keys=self.signal_keys | {
+                proposal["signal_key"] for proposal in proposals
+                if isinstance(proposal.get("signal_key"), str)
+                and self._signal_consumed(proposal["signal_key"])
+            },
         )
         self._diagnostics["strategy_selection_cycles"] += 1
         return {"proposals": proposals, "selector": selector, "regime": self.regime}
@@ -1574,12 +1763,27 @@ class FuturesRuntime:
             "side": None if self.ledger.position is None else self.ledger.position["side"],
             "quantity_btc": "0" if self.ledger.position is None else _text(self.ledger.position["qty"]),
         })
-        return self.execution_adapter.advance(
+        events = self.execution_adapter.advance(
             cutoff,
             book,
             trades,
             execution_clock_ms=execution_clock_ms,
         )
+        if self._operative:
+            # Only this job's book and trades are live; older exact identities
+            # are re-read from the identity port when a later job needs them.
+            identity = tuple(
+                book.get(key) if isinstance(book, dict) else None
+                for key in ("provider", "product_id", "epoch", "snapshot_id", "revision")
+            )
+            self._live_book_identities = (
+                (identity,) if identity in self.execution_adapter.book_budgets else ()
+            )
+            self._live_trade_ids = tuple(sorted({
+                trade["uid"] for trade in trades
+                if trade["uid"] in self.execution_adapter.trade_budgets
+            }))
+        return events
 
     def _apply_execution_fills(self, events):
         fills = [event for event in events if event.get("type") == "fill"]
@@ -1598,7 +1802,11 @@ class FuturesRuntime:
                 average = notional / quantity
                 with localcontext() as context:
                     context.prec = self.ledger.precision
-                    self.ledger.open(side, _text(quantity), _text(average), order_fills[0]["liquidity"], at_ms=order_fills[0]["event_time_ms"])
+                    self.ledger.open(
+                        side, _text(quantity), _text(average), order_fills[0]["liquidity"],
+                        at_ms=order_fills[0]["event_time_ms"],
+                        **({"fill_id": order_fills[0]["fill_id"]} if self._operative else {}),
+                    )
                 self.owner_strategy_id = metadata["strategy_id"]
                 self.position_protection = {
                     "stop": metadata["stop"], "target": metadata["target"],
@@ -1614,7 +1822,11 @@ class FuturesRuntime:
             else:
                 for item in order_fills:
                     self._accrue_until(item["event_time_ms"])
-                    self.ledger.close(item["quantity_btc"], item["price_usd"], item["liquidity"], at_ms=item["event_time_ms"])
+                    self.ledger.close(
+                        item["quantity_btc"], item["price_usd"], item["liquidity"],
+                        at_ms=item["event_time_ms"],
+                        **({"fill_id": item["fill_id"]} if self._operative else {}),
+                    )
                 if self.ledger.position is None:
                     self.owner_strategy_id = None
                     self.position_protection = None
