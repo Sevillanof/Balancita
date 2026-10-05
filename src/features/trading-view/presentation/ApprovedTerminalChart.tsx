@@ -98,6 +98,47 @@ function markerPresentation(
       }
 }
 
+const BASE_SCALE_MARGINS = { top: 0.12, bottom: 0.22 }
+const MARKER_STACK_PX = 54
+const FALLBACK_PANE_HEIGHT_PX = 420
+const MAX_STACK_MARGIN = 0.6
+
+type StackedMarker = { time: unknown; position: 'aboveBar' | 'belowBar' }
+
+/**
+ * Same-bucket, same-side markers stack by roughly one glyph plus its label per
+ * marker, so each extra stacked marker needs extra price-scale headroom or the
+ * outermost glyph is painted outside the pane. Depth <= 1 keeps the base margins.
+ */
+function markerStackScaleMargins(
+  markers: readonly StackedMarker[],
+  paneHeightPx: number,
+): { top: number; bottom: number } {
+  const depth = {
+    aboveBar: new Map<unknown, number>(),
+    belowBar: new Map<unknown, number>(),
+  }
+  let maxAbove = 0
+  let maxBelow = 0
+  for (const marker of markers) {
+    const side = depth[marker.position]
+    const count = (side.get(marker.time) ?? 0) + 1
+    side.set(marker.time, count)
+    if (marker.position === 'aboveBar') maxAbove = Math.max(maxAbove, count)
+    else maxBelow = Math.max(maxBelow, count)
+  }
+  const height = paneHeightPx > 0 ? paneHeightPx : FALLBACK_PANE_HEIGHT_PX
+  const extra = (count: number) =>
+    Math.min(
+      MAX_STACK_MARGIN,
+      Math.max(0, count - 1) * (MARKER_STACK_PX / height),
+    )
+  return {
+    top: BASE_SCALE_MARGINS.top + extra(maxAbove),
+    bottom: BASE_SCALE_MARGINS.bottom + extra(maxBelow),
+  }
+}
+
 export default function ApprovedTerminalChart({
   candles,
   markers,
@@ -121,6 +162,7 @@ export default function ApprovedTerminalChart({
     ReturnType<ISeriesApi<'Candlestick'>['createPriceLine']>[]
   >([])
   const fitted = useRef(false)
+  const marginsApplied = useRef(false)
   const focusedSelection = useRef<string | null>(null)
   const renderedCandles = useRef<readonly ApprovedTerminalCandle[] | null>(null)
   const renderedInterval = useRef<number | null>(null)
@@ -184,7 +226,7 @@ export default function ApprovedTerminalChart({
         : {}),
       rightPriceScale: {
         borderColor: colors.grid,
-        scaleMargins: { top: 0.12, bottom: 0.22 },
+        scaleMargins: BASE_SCALE_MARGINS,
       },
       timeScale: {
         borderColor: colors.grid,
@@ -263,6 +305,7 @@ export default function ApprovedTerminalChart({
       volumeRef.current = null
       markerRef.current = null
       fitted.current = false
+      marginsApplied.current = false
       focusedSelection.current = null
       renderedCandles.current = null
       renderedInterval.current = null
@@ -359,11 +402,23 @@ export default function ApprovedTerminalChart({
           },
         ]
       })
-    markerRef.current?.setMarkers(
-      visibleMarkers
-        .sort((left, right) => Number(left.time) - Number(right.time))
-        .slice(-200),
+    const painted = visibleMarkers
+      .sort((left, right) => Number(left.time) - Number(right.time))
+      .slice(-200)
+    const margins = markerStackScaleMargins(
+      painted as StackedMarker[],
+      container.current?.clientHeight ?? 0,
     )
+    const stacked =
+      margins.top !== BASE_SCALE_MARGINS.top ||
+      margins.bottom !== BASE_SCALE_MARGINS.bottom
+    if (stacked || marginsApplied.current) {
+      candleSeriesRef.current
+        ?.priceScale()
+        .applyOptions({ scaleMargins: margins })
+      marginsApplied.current = stacked
+    }
+    markerRef.current?.setMarkers(painted)
   }, [candles, markers, selectedId, intervalSeconds, initialViewport])
 
   useEffect(() => {

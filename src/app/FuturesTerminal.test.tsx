@@ -1,4 +1,11 @@
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
+import {
+  act,
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import FuturesTerminal from './FuturesTerminal.tsx'
 import type {
@@ -8,12 +15,57 @@ import type {
 import { parseTerminalEnvelope } from '../features/connected-trading/infrastructure/terminal-stream-client.ts'
 import { reasonLabel } from './terminal-copy.ts'
 
-vi.mock(
-  '../features/trading-view/presentation/ApprovedTerminalChart.tsx',
-  () => ({
-    default: () => null,
-  }),
-)
+type ChartClickParameter = {
+  hoveredInfo?: { objectId?: string }
+  hoveredObjectId?: string
+  time?: number
+}
+
+const chartHarness = vi.hoisted(() => ({
+  clickHandlers: [] as Array<(parameter: ChartClickParameter) => void>,
+  markerSets: [] as Array<Record<string, unknown>[]>,
+}))
+
+vi.mock('lightweight-charts', () => {
+  const priceScale = { applyOptions() {} }
+  const series = {
+    setData() {},
+    update() {},
+    priceScale: () => priceScale,
+    createPriceLine: () => ({}),
+    removePriceLine() {},
+  }
+  const timeScale = {
+    getVisibleLogicalRange: () => null,
+    setVisibleLogicalRange() {},
+    fitContent() {},
+    scrollToRealTime() {},
+  }
+  const chart = {
+    addSeries: () => series,
+    timeScale: () => timeScale,
+    subscribeClick(handler: (parameter: ChartClickParameter) => void) {
+      chartHarness.clickHandlers.push(handler)
+    },
+    unsubscribeClick(handler: (parameter: ChartClickParameter) => void) {
+      chartHarness.clickHandlers = chartHarness.clickHandlers.filter(
+        (candidate) => candidate !== handler,
+      )
+    },
+    remove() {},
+  }
+  return {
+    CandlestickSeries: 'candlestick',
+    ColorType: { Solid: 'solid' },
+    HistogramSeries: 'histogram',
+    createChart: () => chart,
+    createSeriesMarkers: () => ({
+      setMarkers(markers: Record<string, unknown>[]) {
+        chartHarness.markerSets.push(markers)
+      },
+    }),
+  }
+})
 
 class TestWebSocket {
   static readonly OPEN = 1
@@ -100,6 +152,8 @@ describe('FuturesTerminal local scenario presentation', () => {
   afterEach(() => {
     cleanup()
     TestWebSocket.instances = []
+    chartHarness.clickHandlers = []
+    chartHarness.markerSets = []
     vi.unstubAllGlobals()
   })
 
@@ -308,12 +362,365 @@ describe('FuturesTerminal local scenario presentation', () => {
     expect(screen.getByText(/0.005 · local-entry/)).toBeTruthy()
     interval.mockRestore()
   })
+
+  it('renders and selects real same-candle chart markers using durable analysis and ledger times', async () => {
+    vi.stubGlobal('WebSocket', TestWebSocket)
+    render(<FuturesTerminal bootstrap={bootstrap} />)
+    const socket = TestWebSocket.instances[0]!
+    await act(async () => socket.open())
+    const decisionTimes = [
+      21_600_000, 21_605_000, 21_605_100, 21_605_200, 21_605_300,
+    ]
+    const wallClockTimes = [
+      1_791_197_302_785, 1_791_197_306_352, 1_791_197_309_932,
+      1_791_197_313_541, 1_791_197_317_177,
+    ]
+    const analyses = decisionTimes.map((decisionTime, index) => ({
+      analysis_id: `analysis-${index + 1}`,
+      action: index === 1 ? 'LONG' : 'WAIT',
+      reason_codes:
+        index === 0
+          ? ['no_directional_proposal']
+          : index === 1
+            ? ['c27_long_breakout']
+            : [index === 4 ? 'position_closed_this_cycle' : 'position_owned'],
+      selector:
+        index > 1
+          ? { action: 'LONG', reason_code: 'c27_long_breakout' }
+          : undefined,
+      decision_time_ms: decisionTime,
+      runtime_version: 'futures-runtime.v1',
+    }))
+    await act(async () =>
+      socket.receive(
+        envelope('snapshot', 0, {
+          watermark: 0,
+          market: {
+            schema_version: 'mock-terminal-market.v1',
+            as_of_ms: decisionTimes[0],
+            interval_ms: 60_000,
+            candles: [
+              {
+                time_ms: decisionTimes[0]! - 60_000,
+                open: '100000',
+                high: '100050',
+                low: '99950',
+                close: '100000',
+                volume_btc: '1',
+                closed: true,
+              },
+            ],
+          },
+          state: { analyses: [], orders: [], fills: [] },
+        }),
+      ),
+    )
+
+    for (const [index, analysis] of analyses.entries())
+      await act(async () =>
+        socket.receive(
+          envelope(
+            'analysis.completed',
+            index + 1,
+            { analysis },
+            wallClockTimes[index]!,
+          ),
+        ),
+      )
+    await act(async () => {
+      socket.receive(
+        envelope(
+          'order.updated',
+          6,
+          {
+            order: {
+              order_id: 'entry-order',
+              decision_at_ms: decisionTimes[1],
+              order_type: 'market_ioc',
+              side: 'buy',
+              state: 'cancelled',
+              quantity_btc: '0.0099',
+            },
+          },
+          wallClockTimes[1],
+        ),
+      )
+      socket.receive(
+        envelope(
+          'order.updated',
+          7,
+          {
+            order: {
+              order_id: 'close-order',
+              decision_at_ms: decisionTimes[3],
+              order_type: 'reduce_only',
+              side: 'sell',
+              state: 'filled',
+              quantity_btc: '0.005',
+              reason_code: 'protective_stop',
+            },
+          },
+          wallClockTimes[3],
+        ),
+      )
+      socket.receive(
+        envelope(
+          'order.updated',
+          8,
+          {
+            order: {
+              order_id: 'wall-clock-only-order',
+              decision_at_ms: wallClockTimes[2],
+              type: 'order_accepted',
+              side: 'buy',
+              state: 'filled',
+              quantity_btc: '0.001',
+            },
+          },
+          wallClockTimes[2],
+        ),
+      )
+      socket.receive(
+        envelope(
+          'fill.created',
+          9,
+          {
+            fill: {
+              fill_id: 'entry-fill',
+              order_id: 'entry-order',
+              side: 'long',
+              quantity_btc: '0.005',
+              price_usd_per_btc: '100001',
+              event_time_ms: decisionTimes[2],
+            },
+          },
+          wallClockTimes[2],
+        ),
+      )
+      socket.receive(
+        envelope(
+          'fill.created',
+          10,
+          {
+            fill: {
+              fill_id: 'close-fill',
+              order_id: 'close-order',
+              side: 'long',
+              quantity_btc: '0.005',
+              price_usd_per_btc: '99943',
+              event_time_ms: decisionTimes[4],
+            },
+          },
+          wallClockTimes[4],
+        ),
+      )
+    })
+
+    expect(
+      screen
+        .getByTestId('approved-chart-renderer')
+        .getAttribute('data-marker-count'),
+    ).toBe('5')
+    const visibleMarkers = chartHarness.markerSets.at(-1)!
+    expect(visibleMarkers).toHaveLength(5)
+    expect(visibleMarkers.map((marker) => marker.id)).toEqual(
+      analyses.map((analysis) => analysis.analysis_id),
+    )
+    expect(new Set(visibleMarkers.map((marker) => marker.time)).size).toBe(1)
+    expect(visibleMarkers.map((marker) => marker.time)).toEqual([
+      21_540, 21_540, 21_540, 21_540, 21_540,
+    ])
+    expect(visibleMarkers.map((marker) => marker.shape)).toEqual([
+      'square',
+      'arrowUp',
+      'square',
+      'square',
+      'square',
+    ])
+    expect(
+      screen.getAllByRole('button', {
+        name: /^Seleccionar análisis analysis-/,
+      }),
+    ).toHaveLength(5)
+
+    for (const [index, analysis] of analyses.entries()) {
+      await act(async () =>
+        chartHarness.clickHandlers.at(-1)?.({
+          hoveredInfo: { objectId: analysis.analysis_id },
+        }),
+      )
+      const selected = within(
+        screen.getByRole('region', { name: 'Análisis seleccionado' }),
+      )
+      expect(selected.getByText(analysis.analysis_id)).toBeTruthy()
+      expect(
+        selected.getByText(
+          `${new Date(decisionTimes[index]!).toLocaleString('es-ES', { timeZone: 'UTC' })} UTC`,
+        ),
+      ).toBeTruthy()
+      if (index === 1) {
+        expect(selected.getByText('entry-order')).toBeTruthy()
+        expect(selected.getByText(/market_ioc\s*·\s*buy/)).toBeTruthy()
+        expect(selected.getByText(/0\.005 BTC @/)).toBeTruthy()
+        expect(selected.queryByText('wall-clock-only-order')).toBeNull()
+      } else if (index === 3) {
+        expect(selected.getByText('close-order')).toBeTruthy()
+        expect(selected.getByText('protective_stop')).toBeTruthy()
+        expect(selected.getByText(/close-fill/)).toBeTruthy()
+      } else {
+        expect(selected.getByText('Sin efecto')).toBeTruthy()
+        expect(selected.queryByText('entry-order')).toBeNull()
+        expect(selected.queryByText('close-order')).toBeNull()
+        if (index === 0)
+          expect(
+            selected.getByText(
+              'No hay una propuesta direccional disponible; el motor espera.',
+            ),
+          ).toBeTruthy()
+        if (index === 2 || index === 3)
+          expect(
+            selected.getByText(
+              'La posición sigue bajo gestión de su estrategia',
+            ),
+          ).toBeTruthy()
+        if (index === 4)
+          expect(
+            selected.getByText('La posición se cerró durante este ciclo'),
+          ).toBeTruthy()
+      }
+    }
+  })
+
+  it('resolves same-bucket chart clicks to every marker in that candle', async () => {
+    vi.stubGlobal('WebSocket', TestWebSocket)
+    render(<FuturesTerminal bootstrap={bootstrap} />)
+    const socket = TestWebSocket.instances[0]!
+    await act(async () => socket.open())
+    const decisionTimes = [
+      21_600_000, 21_605_000, 21_605_100, 21_605_200, 21_605_300,
+    ]
+    const analyses = decisionTimes.map((decisionTime, index) => ({
+      analysis_id: `analysis-${index + 1}`,
+      action: index === 1 ? 'LONG' : 'WAIT',
+      reason_codes:
+        index === 1 ? ['c27_long_breakout'] : ['no_directional_proposal'],
+      decision_time_ms: decisionTime,
+      runtime_version: 'futures-runtime.v1',
+    }))
+    await act(async () =>
+      socket.receive(
+        envelope('snapshot', 0, {
+          watermark: 0,
+          market: {
+            schema_version: 'mock-terminal-market.v1',
+            as_of_ms: decisionTimes[0],
+            interval_ms: 60_000,
+            candles: [
+              {
+                time_ms: 21_540_000,
+                open: '100000',
+                high: '100050',
+                low: '99950',
+                close: '100000',
+                volume_btc: '1',
+                closed: true,
+              },
+            ],
+          },
+          state: { analyses, orders: [], fills: [] },
+        }),
+      ),
+    )
+
+    expect(chartHarness.markerSets.at(-1)).toMatchObject(
+      analyses.map((analysis) => ({ id: analysis.analysis_id, time: 21_540 })),
+    )
+    expect(selectedAnalysisId()).toBe('analysis-5')
+
+    const reached: (string | undefined)[] = []
+    for (let click = 0; click < 5; click += 1) {
+      await act(async () =>
+        chartHarness.clickHandlers.at(-1)?.({ time: 21_540 }),
+      )
+      reached.push(selectedAnalysisId())
+    }
+    expect(reached).toEqual([
+      'analysis-1',
+      'analysis-2',
+      'analysis-3',
+      'analysis-4',
+      'analysis-5',
+    ])
+
+    await act(async () => chartHarness.clickHandlers.at(-1)?.({ time: 21_600 }))
+    expect(selectedAnalysisId()).toBe('analysis-5')
+    await act(async () => chartHarness.clickHandlers.at(-1)?.({ time: 21_480 }))
+    expect(selectedAnalysisId()).toBe('analysis-5')
+
+    await act(async () =>
+      screen
+        .getByRole('button', { name: 'Seleccionar análisis analysis-3' })
+        .click(),
+    )
+    expect(selectedAnalysisId()).toBe('analysis-3')
+    await act(async () => chartHarness.clickHandlers.at(-1)?.({ time: 21_540 }))
+    expect(selectedAnalysisId()).toBe('analysis-4')
+  })
+
+  it('snaps prehistory markers to the first candle and shows durable order_type', async () => {
+    vi.stubGlobal('WebSocket', TestWebSocket)
+    render(<FuturesTerminal bootstrap={bootstrap} />)
+    const socket = TestWebSocket.instances[0]!
+    await act(async () => socket.open())
+    await act(async () =>
+      socket.receive(
+        envelope('snapshot', 0, {
+          watermark: 0,
+          state: {
+            analyses: [
+              {
+                analysis_id: 'entry-analysis',
+                action: 'LONG',
+                reason_codes: ['c27_long_breakout'],
+                decision_time_ms: 21_000_000,
+              },
+            ],
+            orders: [
+              {
+                order_id: 'entry-order',
+                decision_at_ms: 21_000_000,
+                order_type: 'market_ioc',
+                side: 'buy',
+                state: 'cancelled',
+                quantity_btc: '0.0099',
+              },
+            ],
+            fills: [],
+          },
+        }),
+      ),
+    )
+    expect(chartHarness.markerSets.at(-1)).toMatchObject([
+      { id: 'entry-analysis', time: 21_540 },
+    ])
+    const selected = within(
+      screen.getByRole('region', { name: 'Análisis seleccionado' }),
+    )
+    expect(selected.getByText('1/1/1970, 5:50:00 UTC')).toBeTruthy()
+    expect(selected.getByText(/market_ioc\s*·\s*buy/)).toBeTruthy()
+  })
 })
+
+function selectedAnalysisId(): string | undefined {
+  const panel = screen.getByRole('region', { name: 'Análisis seleccionado' })
+  return panel.querySelectorAll('dd')[0]?.textContent ?? undefined
+}
 
 function envelope(
   type: string,
   seq: number,
   data: Record<string, unknown>,
+  eventTime = 21_600_000 + seq,
 ): TerminalEnvelope {
   return {
     schema_version: 1,
@@ -323,8 +730,8 @@ function envelope(
     seq,
     type,
     instrument_id: 'kraken-futures:PF_XBTUSD',
-    event_time: 21_600_000 + seq,
-    published_at: 21_600_000 + seq,
+    event_time: eventTime,
+    published_at: eventTime,
     data,
   }
 }

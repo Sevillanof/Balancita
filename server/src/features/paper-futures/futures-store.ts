@@ -99,6 +99,7 @@ function terminalEntriesFromResult(result: JsonRecord): TerminalEventInput[] {
   const executionOrders =
     execution && isRecord(execution.orders) ? execution.orders : {}
   const common = { run_id: runId, work_id: workId, command_id: workId }
+  const decisionTime = appliedDecisionTime(result)
   const timestamp =
     (typeof output.decision_time_ms === 'number' && output.decision_time_ms) ||
     Date.now()
@@ -116,6 +117,9 @@ function terminalEntriesFromResult(result: JsonRecord): TerminalEventInput[] {
         analysis: {
           ...output.analysis,
           analysis_id: workId,
+          ...(decisionTime === undefined
+            ? {}
+            : { decision_time_ms: decisionTime }),
           runtime_version:
             typeof output.runtime_version === 'string'
               ? output.runtime_version
@@ -205,6 +209,19 @@ function terminalEntriesFromResult(result: JsonRecord): TerminalEventInput[] {
       data: { ...common, status: 'committed' },
     })
   return entries
+}
+
+function appliedDecisionTime(result: JsonRecord): number | undefined {
+  if (!Array.isArray(result.events)) return undefined
+  let decisionTime: number | undefined
+  for (const event of result.events)
+    if (
+      isRecord(event) &&
+      event.type === 'account' &&
+      Number.isSafeInteger(event.event_time_ms)
+    )
+      decisionTime = Number(event.event_time_ms)
+  return decisionTime
 }
 
 export class FuturesStore {
@@ -321,22 +338,58 @@ export class FuturesStore {
            WHERE run_id=? AND kind='applied-result' ORDER BY seq`,
         )
         .all(runId) as { work_id: string; payload_json: string }[]
-      const analyses = analysisRows.flatMap(({ work_id, payload_json }) => {
-        const applied = JSON.parse(payload_json) as JsonRecord
+      const appliedResults = analysisRows.map(({ work_id, payload_json }) => ({
+        workId: work_id,
+        applied: JSON.parse(payload_json) as JsonRecord,
+      }))
+      const analyses = appliedResults.flatMap(({ workId, applied }) => {
         const output = isRecord(applied.runtime_output)
           ? applied.runtime_output
           : undefined
         if (!output || !isRecord(output.analysis)) return []
+        const decisionTime = appliedDecisionTime(applied)
         return [
           {
             ...output.analysis,
-            analysis_id: work_id,
+            analysis_id: workId,
+            ...(decisionTime === undefined
+              ? {}
+              : { decision_time_ms: decisionTime }),
             runtime_version: output.runtime_version,
           },
         ]
       })
+      const projectionState = JSON.parse(projection.state_json) as JsonRecord
+      const projectionRuntimeOutput = isRecord(projectionState.runtime_output)
+        ? projectionState.runtime_output
+        : {}
+      const runtimeFills = new Map<string, JsonRecord>()
+      const fillsWithoutIdentity: JsonRecord[] = []
+      const collectFills = (output: JsonRecord) => {
+        if (!Array.isArray(output.fills)) return
+        for (const value of output.fills) {
+          if (!isRecord(value)) continue
+          if (typeof value.fill_id !== 'string') {
+            fillsWithoutIdentity.push(value)
+            continue
+          }
+          if (!runtimeFills.has(value.fill_id))
+            runtimeFills.set(value.fill_id, value)
+        }
+      }
+      for (const { applied } of appliedResults)
+        if (isRecord(applied.runtime_output))
+          collectFills(applied.runtime_output)
+      collectFills(projectionRuntimeOutput)
+      const terminalProjection = {
+        ...projectionState,
+        runtime_output: {
+          ...projectionRuntimeOutput,
+          fills: [...runtimeFills.values(), ...fillsWithoutIdentity],
+        },
+      }
       const state = projectTerminalState(
-        JSON.parse(projection.state_json) as JsonRecord,
+        terminalProjection,
         runId,
         analyses,
         isRecord(frozen.seed) ? frozen.seed.cash_usd : null,

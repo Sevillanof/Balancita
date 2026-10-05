@@ -3,7 +3,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import ApprovedTerminalChart from './ApprovedTerminalChart.tsx'
 
 const chartMocks = vi.hoisted(() => {
+  const priceScaleApply = vi.fn()
   const candles = {
+    priceScale: vi.fn(() => ({ applyOptions: priceScaleApply })),
     setData: vi.fn(),
     update: vi.fn(),
     applyOptions: vi.fn(),
@@ -33,6 +35,7 @@ const chartMocks = vi.hoisted(() => {
     remove: vi.fn(),
   }
   return {
+    priceScaleApply,
     candles,
     volume,
     timeScale,
@@ -259,6 +262,44 @@ describe('approved connected terminal chart', () => {
     )
     expect(chartMocks.candles.setData).toHaveBeenCalledTimes(
       callsAfterBootstrap,
+    )
+  })
+
+  it('reserves price-scale headroom for a dense same-bucket marker stack', () => {
+    const marker = (id: string) => ({
+      id,
+      time: candles[50]!.time,
+      type: 'decision' as const,
+      label: 'WAIT',
+      decisionStatus: 'hold' as const,
+    })
+    render(
+      <ApprovedTerminalChart
+        candles={candles}
+        markers={[
+          ...['a', 'b', 'c', 'd'].map(marker),
+          {
+            id: 'e',
+            time: candles[50]!.time,
+            type: 'entry' as const,
+            direction: 'long' as const,
+            label: 'LONG',
+          },
+        ]}
+        selectedId=""
+        intervalSeconds={60}
+        initialViewport="approved-terminal"
+        onSelect={vi.fn()}
+      />,
+    )
+    const margins = chartMocks.priceScaleApply.mock.calls.at(-1)?.[0] as {
+      scaleMargins: { top: number; bottom: number }
+    }
+    expect(margins.scaleMargins.top).toBeGreaterThan(0.12 + 0.3)
+    expect(margins.scaleMargins.bottom).toBe(0.22)
+    expect(chartMocks.priceScaleApply).toHaveBeenCalledTimes(1)
+    expect(chartMocks.markerApi.setMarkers.mock.calls.at(-1)?.[0]).toHaveLength(
+      5,
     )
   })
 })

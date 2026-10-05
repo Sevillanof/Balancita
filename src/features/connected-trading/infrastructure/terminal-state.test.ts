@@ -32,15 +32,23 @@ describe('terminal state event projection', () => {
       seq: 2,
       type: 'analysis.completed',
       instrument_id: 'kraken-futures:PF_XBTUSD',
-      event_time: 101,
-      published_at: 101,
+      event_time: 1_791_197_302_785,
+      published_at: 1_791_197_302_785,
       data: {
-        analysis: { analysis_id: 'analysis', reason_codes: ['position_owned'] },
+        analysis: {
+          analysis_id: 'analysis',
+          reason_codes: ['position_owned'],
+          decision_time_ms: 21_600_000,
+        },
       },
     })
     expect(advanced.state_version).toBe(2)
     expect(advanced.analyses).toEqual([
-      { analysis_id: 'analysis', reason_codes: ['position_owned'] },
+      {
+        analysis_id: 'analysis',
+        reason_codes: ['position_owned'],
+        decision_time_ms: 21_600_000,
+      },
     ])
   })
 
@@ -136,7 +144,13 @@ describe('terminal state event projection', () => {
       instrument_id: 'kraken-futures:PF_XBTUSD',
       event_time: 2,
       published_at: 2,
-      data: { analysis: { analysis_id: 'analysis-wait', action: 'WAIT' } },
+      data: {
+        analysis: {
+          analysis_id: 'analysis-wait',
+          action: 'WAIT',
+          decision_time_ms: 21_600_123,
+        },
+      },
     })
     const retried = applyTerminalEvent(
       waiting,
@@ -144,7 +158,11 @@ describe('terminal state event projection', () => {
     )
     expect(retried.fills).toEqual([{ fill_id: 'fill-1', quantity_btc: '0.01' }])
     expect(retried.analyses).toEqual([
-      { analysis_id: 'analysis-wait', action: 'WAIT' },
+      {
+        analysis_id: 'analysis-wait',
+        action: 'WAIT',
+        decision_time_ms: 21_600_123,
+      },
     ])
   })
 

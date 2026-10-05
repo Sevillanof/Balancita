@@ -5,6 +5,7 @@ import ApprovedMarketRow from '../features/trading-view/presentation/ApprovedMar
 import ApprovedPortfolioTables from '../features/trading-view/presentation/ApprovedPortfolioTables.tsx'
 import ApprovedTerminalChart, {
   type ApprovedTerminalCandle,
+  type ApprovedTerminalMarker,
 } from '../features/trading-view/presentation/ApprovedTerminalChart.tsx'
 import {
   parseTerminalEnvelope,
@@ -41,6 +42,42 @@ function quantity(value: unknown): string {
   return `${value} BTC`
 }
 
+function utcTime(value: unknown): string {
+  if (!Number.isSafeInteger(value)) return 'Hora no disponible'
+  return `${new Date(Number(value)).toLocaleString('es-ES', { timeZone: 'UTC' })} UTC`
+}
+
+function analysisAction(value: unknown): string {
+  const analysis = record(value)
+  return String(
+    analysis.action ?? record(analysis.selector).action ?? 'WAIT',
+  ).toUpperCase()
+}
+
+function analysisReason(value: unknown, preferOwnReason = false): string {
+  const analysis = record(value)
+  const selector = record(analysis.selector)
+  const proposals = Array.isArray(analysis.proposals) ? analysis.proposals : []
+  const selectedProposal = proposals.find(
+    (proposal) =>
+      record(proposal).strategy_id ===
+      (selector.strategy_id ?? analysis.selected_strategy_id),
+  )
+  const reasonCodes = Array.isArray(analysis.reason_codes)
+    ? analysis.reason_codes
+    : []
+  const analysisReasonCode = analysis.reason_code
+  const firstReasonCode = reasonCodes[0]
+  const selectorReason =
+    selector.reason_code ?? record(selectedProposal).reason_code
+  const reason = preferOwnReason
+    ? (analysisReasonCode ?? firstReasonCode ?? selectorReason)
+    : (selectorReason ?? firstReasonCode ?? analysisReasonCode)
+  if (preferOwnReason && reason === 'position_closed_this_cycle')
+    return 'La posición se cerró durante este ciclo'
+  return reasonLabel(reason)
+}
+
 function strategyLabel(value: unknown): string {
   if (typeof value !== 'string' || value.length === 0)
     return 'Sin estrategia seleccionada'
@@ -72,9 +109,15 @@ function marketStatusLabel(value: unknown): string {
 function TerminalMarketChart({
   market,
   mode,
+  analyses,
+  selectedId,
+  onSelect,
 }: {
   market: Record<string, unknown>
   mode: TerminalBootstrap['mode']
+  analyses: unknown[]
+  selectedId: string
+  onSelect: (analysisId: string) => void
 }) {
   const candles: ApprovedTerminalCandle[] = Array.isArray(market.candles)
     ? market.candles.flatMap((value) => {
@@ -106,6 +149,36 @@ function TerminalMarketChart({
     candles.length === 0
   )
     return <p>El snapshot no contiene velas BTC/USD verificables.</p>
+  const markers: ApprovedTerminalMarker[] = analyses.flatMap((value) => {
+    const analysis = record(value)
+    const id = analysis.analysis_id
+    const time = analysis.decision_time_ms
+    if (
+      typeof id !== 'string' ||
+      id.length === 0 ||
+      !Number.isSafeInteger(time)
+    )
+      return []
+    const action = analysisAction(analysis)
+    const decisionSeconds = Math.floor(Number(time) / 1000)
+    const renderTime = candles.reduce(
+      (latestTime, candle) =>
+        candle.time <= decisionSeconds ? candle.time : latestTime,
+      candles[0]!.time,
+    )
+    const direction =
+      action === 'LONG' ? 'long' : action === 'SHORT' ? 'short' : undefined
+    return [
+      {
+        id,
+        time: renderTime,
+        type: direction ? 'entry' : 'discard',
+        ...(direction ? { direction } : {}),
+        label: direction ? action : 'WAIT',
+      },
+    ]
+  })
+  const intervalSeconds = Number(market.interval_ms) / 1000
   return (
     <>
       <p>
@@ -124,13 +197,31 @@ function TerminalMarketChart({
       )}
       <ApprovedTerminalChart
         candles={candles}
-        markers={[]}
-        selectedId=""
-        intervalSeconds={Number(market.interval_ms) / 1000}
+        markers={markers}
+        selectedId={selectedId}
+        intervalSeconds={intervalSeconds}
         currency="USD"
         instrument="BTC/USD perpetuo"
         initialViewport="approved-terminal"
-        onSelect={() => undefined}
+        onSelect={(time, markerId) => {
+          if (markerId) {
+            onSelect(markerId)
+            return
+          }
+          if (!Number.isFinite(time) || !(intervalSeconds > 0)) return
+          const bucket = Math.floor(time / intervalSeconds) * intervalSeconds
+          const bucketMarkers = markers.filter(
+            (marker) =>
+              Math.floor(marker.time / intervalSeconds) * intervalSeconds ===
+              bucket,
+          )
+          if (bucketMarkers.length === 0) return
+          const current = bucketMarkers.findIndex(
+            (marker) => marker.id === selectedId,
+          )
+          const next = bucketMarkers[(current + 1) % bucketMarkers.length]
+          if (next) onSelect(next.id)
+        }}
       />
     </>
   )
@@ -147,6 +238,9 @@ export default function FuturesTerminal({
   const [commandPending, setCommandPending] = useState(false)
   const [commandStatus, setCommandStatus] = useState('')
   const [commandVersion, setCommandVersion] = useState(0)
+  const [selectedAnalysisId, setSelectedAnalysisId] = useState<string | null>(
+    null,
+  )
   const socketRef = useRef<WebSocket | null>(null)
 
   useEffect(() => {
@@ -310,6 +404,25 @@ export default function FuturesTerminal({
   const displayedPrice = quote.price
   const analyses = Array.isArray(state?.analyses) ? state.analyses : []
   const orders = Array.isArray(state?.orders) ? state.orders : []
+  const fills = Array.isArray(state?.fills) ? state.fills : []
+  const selectedAnalysis =
+    analyses
+      .map(record)
+      .find((analysis) => analysis.analysis_id === selectedAnalysisId) ??
+    (analyses.length > 0 ? record(analyses.at(-1)) : null)
+  const selectedId = String(selectedAnalysis?.analysis_id ?? '')
+  const selectedDecisionTime = selectedAnalysis?.decision_time_ms
+  const selectedOrder =
+    selectedAnalysis && Number.isSafeInteger(selectedDecisionTime)
+      ? orders
+          .map(record)
+          .find((order) => order.decision_at_ms === selectedDecisionTime)
+      : undefined
+  const selectedOrderId = selectedOrder?.order_id
+  const selectedFills =
+    typeof selectedOrderId === 'string'
+      ? fills.map(record).filter((fill) => fill.order_id === selectedOrderId)
+      : []
   const [displayClock, setDisplayClock] = useState(() => Date.now())
   const localDemo = bootstrap.source === 'local-protection.v1'
   const localScenarioStatus = localDemo
@@ -534,7 +647,13 @@ export default function FuturesTerminal({
                   aria-label="Gráfico BTC/USD"
                 >
                   <h2>BTC/USD perpetuo</h2>
-                  <TerminalMarketChart market={market} mode={bootstrap.mode} />
+                  <TerminalMarketChart
+                    market={market}
+                    mode={bootstrap.mode}
+                    analyses={localDemo ? analyses : []}
+                    selectedId={localDemo ? selectedId : ''}
+                    onSelect={setSelectedAnalysisId}
+                  />
                   <p>
                     Las cifras de cuenta y decisiones siguientes provienen del
                     snapshot/eventos durables.
@@ -554,40 +673,40 @@ export default function FuturesTerminal({
                       .map((item, index) => {
                         const analysis = record(item)
                         const selector = record(analysis.selector)
-                        const selectedProposal = (
-                          Array.isArray(analysis.proposals)
-                            ? analysis.proposals
-                            : []
-                        ).find(
-                          (proposal) =>
-                            record(proposal).strategy_id ===
-                            (selector.strategy_id ??
-                              analysis.selected_strategy_id),
-                        )
                         const proposals = Array.isArray(analysis.proposals)
                           ? analysis.proposals
                           : []
-                        const reasonCodes = Array.isArray(analysis.reason_codes)
-                          ? analysis.reason_codes
-                          : []
                         const analysisId = String(analysis.analysis_id ?? '')
                         return (
-                          <article key={String(analysis.analysis_id ?? index)}>
+                          <article
+                            key={String(analysis.analysis_id ?? index)}
+                            aria-current={selectedId === analysisId}
+                          >
+                            {localDemo && (
+                              <button
+                                type="button"
+                                aria-pressed={selectedId === analysisId}
+                                aria-label={`Seleccionar análisis ${analysisId}`}
+                                onClick={() =>
+                                  setSelectedAnalysisId(analysisId)
+                                }
+                              >
+                                Seleccionar análisis
+                              </button>
+                            )}
                             <strong>
-                              {String(
-                                selector.action ??
-                                  analysis.action ??
-                                  'Análisis',
-                              )}
+                              {localDemo
+                                ? analysisAction(analysis)
+                                : String(
+                                    selector.action ??
+                                      analysis.action ??
+                                      'Análisis',
+                                  )}
                             </strong>
-                            <p>
-                              {reasonLabel(
-                                selector.reason_code ??
-                                  record(selectedProposal).reason_code ??
-                                  reasonCodes[0] ??
-                                  analysis.reason_code,
-                              )}
-                            </p>
+                            <p>{analysisReason(analysis, localDemo)}</p>
+                            {localDemo && (
+                              <p>Hora: {utcTime(analysis.decision_time_ms)}</p>
+                            )}
                             <p>
                               Estrategia seleccionada:{' '}
                               {strategyLabel(
@@ -671,6 +790,80 @@ export default function FuturesTerminal({
                       })
                   ) : (
                     <p>Aún no hay análisis registrados.</p>
+                  )}
+                  {localDemo && selectedAnalysis && (
+                    <section aria-label="Análisis seleccionado">
+                      <h3>Análisis seleccionado</h3>
+                      <dl>
+                        <dt>ID de análisis</dt>
+                        <dd>{selectedId || 'ID no disponible'}</dd>
+                        <dt>Hora</dt>
+                        <dd>{utcTime(selectedDecisionTime)}</dd>
+                        <dt>Motivo</dt>
+                        <dd>{analysisReason(selectedAnalysis, true)}</dd>
+                      </dl>
+                      {selectedOrder ? (
+                        <div>
+                          <h4>Efecto durable</h4>
+                          <dl>
+                            <dt>ID de orden</dt>
+                            <dd>{String(selectedOrder.order_id)}</dd>
+                            <dt>Tipo / dirección</dt>
+                            <dd>
+                              {String(
+                                selectedOrder.order_type ??
+                                  selectedOrder.type ??
+                                  'Tipo no disponible',
+                              )}{' '}
+                              ·{' '}
+                              {String(
+                                selectedOrder.side ?? 'Dirección no disponible',
+                              )}
+                            </dd>
+                            <dt>Estado</dt>
+                            <dd>
+                              {String(
+                                selectedOrder.state ??
+                                  selectedOrder.status ??
+                                  'Estado no disponible',
+                              )}
+                            </dd>
+                            <dt>Cantidad</dt>
+                            <dd>
+                              {quantity(
+                                selectedOrder.quantity_btc ??
+                                  selectedOrder.quantity,
+                              )}
+                            </dd>
+                            <dt>Motivo de la orden</dt>
+                            <dd>
+                              {String(
+                                selectedOrder.reason_code ??
+                                  selectedOrder.reason ??
+                                  'No disponible',
+                              )}
+                            </dd>
+                          </dl>
+                          <h4>Ejecuciones de la orden</h4>
+                          {selectedFills.length > 0 ? (
+                            <ul>
+                              {selectedFills.map((fill, index) => (
+                                <li key={String(fill.fill_id ?? index)}>
+                                  {String(fill.fill_id ?? 'Ejecución')} ·{' '}
+                                  {quantity(fill.quantity_btc)} @{' '}
+                                  {money(fill.price_usd_per_btc)} ·{' '}
+                                  {utcTime(fill.event_time_ms)}
+                                </li>
+                              ))}
+                            </ul>
+                          ) : (
+                            <p>Sin ejecuciones registradas para esta orden.</p>
+                          )}
+                        </div>
+                      ) : (
+                        <p>Sin efecto</p>
+                      )}
+                    </section>
                   )}
                 </section>
               }

@@ -84,6 +84,155 @@ const fillEvent = (runId: string, workId: string, id = 'fill-1') => ({
   cost_version: 'kraken-futures-eea-btcusd-base.v1',
 })
 
+function seedTerminalAnalysisHistory(store: FuturesStore, runId: string): void {
+  frozenRun(store, runId, `${runId}-seed`)
+  const database = (store as unknown as { db: DatabaseSync }).db
+  const decisions = [
+    {
+      work: 'warmup',
+      time: 21_600_000,
+      action: 'WAIT',
+      reason: 'no_directional_proposal',
+    },
+    {
+      work: 'entry-selection',
+      time: 21_605_000,
+      action: 'LONG',
+      reason: 'c27_long_breakout',
+    },
+    {
+      work: 'partial-fill',
+      time: 21_605_100,
+      action: 'WAIT',
+      reason: 'position_owned',
+    },
+    {
+      work: 'protective-stop-crossing',
+      time: 21_605_200,
+      action: 'WAIT',
+      reason: 'position_owned',
+    },
+    {
+      work: 'protective-close-fill',
+      time: 21_605_300,
+      action: 'WAIT',
+      reason: 'position_closed_this_cycle',
+    },
+  ]
+  const entryOrder = {
+    order_id: 'entry-order',
+    decision_at_ms: 21_605_000,
+    order_type: 'market_ioc',
+    side: 'buy',
+    quantity_btc: '0.0099',
+  }
+  const closeOrder = {
+    order_id: 'close-order',
+    decision_at_ms: 21_605_200,
+    order_type: 'reduce_only',
+    side: 'sell',
+    quantity_btc: '0.005',
+  }
+  const entryFill = {
+    fill_id: 'entry-fill',
+    order_id: entryOrder.order_id,
+    side: 'long',
+    quantity_btc: '0.005',
+    price_usd_per_btc: '100001',
+    event_time_ms: 21_605_100,
+  }
+  const closeFill = {
+    fill_id: 'close-fill',
+    order_id: closeOrder.order_id,
+    side: 'long',
+    quantity_btc: '0.005',
+    price_usd_per_btc: '99943',
+    event_time_ms: 21_605_300,
+  }
+  for (const [index, decision] of decisions.entries()) {
+    const workId = `${runId}-${decision.work}`
+    const applied = {
+      protocol_version: 1,
+      run_id: runId,
+      work_id: workId,
+      applied_state_version: index + 1,
+      result: {},
+      events: [{ type: 'account', event_time_ms: decision.time }],
+      runtime_output: {
+        analysis: {
+          action: decision.action,
+          reason_codes: [decision.reason],
+        },
+        runtime_version: 'futures-runtime-risk.v1',
+        orders:
+          index === 1
+            ? [entryOrder]
+            : index === 2
+              ? [entryOrder]
+              : index === 3
+                ? [closeOrder]
+                : [],
+        fills:
+          index === 2 || index === 3
+            ? [entryFill]
+            : index === 4
+              ? [closeFill]
+              : [],
+      },
+    }
+    database
+      .prepare(
+        'INSERT INTO paper_futures_records(run_id,work_id,kind,payload_json,payload_hash,previous_hash,record_hash) VALUES(?,?,?,?,?,?,?)',
+      )
+      .run(
+        runId,
+        workId,
+        'applied-result',
+        JSON.stringify(applied),
+        `payload-${index}`,
+        `previous-${index}`,
+        `record-${index}`,
+      )
+  }
+
+  const projectionRow = database
+    .prepare('SELECT state_json FROM paper_futures_projections WHERE run_id=?')
+    .get(runId) as { state_json: string }
+  const projection = JSON.parse(projectionRow.state_json) as Record<
+    string,
+    unknown
+  >
+  const checkpoint =
+    typeof projection.checkpoint === 'object' &&
+    projection.checkpoint !== null &&
+    !Array.isArray(projection.checkpoint)
+      ? (projection.checkpoint as Record<string, unknown>)
+      : {}
+  projection.runtime_output = { orders: [], fills: [closeFill] }
+  projection.checkpoint = {
+    ...checkpoint,
+    execution_checkpoint: {
+      orders: {
+        [entryOrder.order_id]: {
+          intent: entryOrder,
+          state: 'cancelled',
+          filled: '0.005',
+          remaining: '0.0049',
+        },
+        [closeOrder.order_id]: {
+          intent: closeOrder,
+          state: 'filled',
+          filled: '0.005',
+          remaining: '0',
+        },
+      },
+    },
+  }
+  database
+    .prepare('UPDATE paper_futures_projections SET state_json=? WHERE run_id=?')
+    .run(JSON.stringify(projection), runId)
+}
+
 describe('isolated paper-futures SQLite store', () => {
   it('commits evaluation audit ranges with a durable cursor and rejects stale heads or pending commands atomically', () => {
     const directory = mkdtempSync(join(tmpdir(), 'paper-futures-progress-'))
@@ -682,5 +831,59 @@ describe('isolated paper-futures SQLite store', () => {
       ],
     })
     store.close()
+  })
+
+  it('projects exact decision times from durable account events in applied payloads', () => {
+    const store = new FuturesStore(':memory:')
+    try {
+      seedTerminalAnalysisHistory(store, 'terminal-analysis-run')
+      const analyses = store.getTerminalSnapshot('terminal-analysis-run').state
+        .analyses as Record<string, unknown>[]
+      expect(analyses.map((analysis) => analysis.decision_time_ms)).toEqual([
+        21_600_000, 21_605_000, 21_605_100, 21_605_200, 21_605_300,
+      ])
+      expect(analyses.map((analysis) => analysis.analysis_id)).toEqual([
+        'terminal-analysis-run-warmup',
+        'terminal-analysis-run-entry-selection',
+        'terminal-analysis-run-partial-fill',
+        'terminal-analysis-run-protective-stop-crossing',
+        'terminal-analysis-run-protective-close-fill',
+      ])
+    } finally {
+      store.close()
+    }
+  })
+
+  it('projects history fills once while retaining final checkpoint order states', () => {
+    const store = new FuturesStore(':memory:')
+    try {
+      seedTerminalAnalysisHistory(store, 'terminal-history-run')
+      const state = store.getTerminalSnapshot('terminal-history-run').state
+      const orders = state.orders as Record<string, unknown>[]
+      const fills = state.fills as Record<string, unknown>[]
+      expect(orders).toHaveLength(2)
+      expect(orders.map((order) => order.order_id)).toEqual([
+        'entry-order',
+        'close-order',
+      ])
+      expect(orders.map((order) => order.state)).toEqual([
+        'cancelled',
+        'filled',
+      ])
+      expect(fills).toHaveLength(2)
+      expect(fills.map((fill) => fill.fill_id)).toEqual([
+        'entry-fill',
+        'close-fill',
+      ])
+      expect(fills[0]).toMatchObject({
+        order_id: 'entry-order',
+        quantity_btc: '0.005',
+        price_usd_per_btc: '100001',
+        event_time_ms: 21_605_100,
+      })
+      expect(new Set(fills.map((fill) => fill.fill_id)).size).toBe(fills.length)
+    } finally {
+      store.close()
+    }
   })
 })

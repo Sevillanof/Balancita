@@ -16,7 +16,7 @@ export function applyTerminalEvent(
   if (event.type === 'analysis.completed') {
     state.analyses = [
       ...(Array.isArray(state.analyses) ? state.analyses : []),
-      data.analysis,
+      { ...record(data.analysis) },
     ].slice(-500)
     state.state_version = Number(state.state_version ?? 0) + 1
   } else if (event.type === 'account.updated') state.account = data.account
