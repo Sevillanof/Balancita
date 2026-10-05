@@ -519,4 +519,48 @@ describe('FuturesOperativeIdentityStore', () => {
       ),
     ).toThrow(/signal/i)
   })
+
+  it('rejects more than 128 identity updates in one job with no partial commit and accepts exactly 128 for the same work', () => {
+    const { identities } = fixture()
+    const make = (count: number): FuturesOperativeIdentityUpdate[] =>
+      Array.from({ length: count }, (_, index) => ({
+        kind: 'order',
+        key: `cap-${index}`,
+        value: {
+          intent: { order_id: `cap-${index}`, quantity_btc: '0.1' },
+          receipt: {
+            event_id: `run-a:${index + 1}`,
+            order_id: `cap-${index}`,
+            type: 'order_accepted',
+          },
+        },
+        provenance: `run-a:${index + 1}`,
+      }))
+    const apply = (updates: FuturesOperativeIdentityUpdate[]) =>
+      identities.withTransaction((transaction) =>
+        identities.apply(transaction, {
+          runId: 'run-a',
+          workId: 'work-a',
+          expectedStateVersion: 0,
+          sourceFrontier: 0,
+          confirmedSourceFrontier: 0,
+          updates,
+        }),
+      )
+
+    expect(() => apply(make(129))).toThrow(/at most 128/i)
+    expect(identities.verifyRun('run-a')).toEqual({ records: 0, identities: 0 })
+    expect(identities.workBatchHashes('run-a').size).toBe(0)
+    expect(identities.lookup('run-a', 'order', 'cap-0')).toBeNull()
+    expect(identities.lookup('run-a', 'order', 'cap-128')).toBeNull()
+
+    // The rejection is deterministic for the same batch (replay cannot succeed),
+    // but leaves no state: a bounded batch for the same work still commits.
+    expect(() => apply(make(129))).toThrow(/at most 128/i)
+    apply(make(128))
+    expect(identities.verifyRun('run-a')).toEqual({
+      records: 128,
+      identities: 128,
+    })
+  })
 })
