@@ -1,0 +1,24 @@
+odd/tasks/futures-bounded-processing.md
+  h_2f68313623be98 30-31,72-76
+scripts/futures-local-scenario.mjs
+  h_2f68313623be98 1-45
+scripts/futures-local-scenario.test.mjs
+  h_2f68313623be98 1-102
+server/src/features/paper-futures/fixtures/local-protection.v1.json
+  h_2f68313623be98 1-47
+server/src/features/paper-futures/futures-local-scenario.test.ts
+  h_2f68313623be98 1-43
+server/src/features/paper-futures/futures-local-scenario.ts
+  h_2f68313623be98 1-412
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "76d2643ba3289342de091e4a0169b73a4afac607",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
