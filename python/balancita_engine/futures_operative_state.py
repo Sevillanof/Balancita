@@ -56,3 +56,32 @@ class ExactIdentityPort:
     def drain_updates(self):
         updates, self._updates = self._updates, []
         return deepcopy(updates)
+
+
+class ExactLedgerIdentityPort:
+    """Separate exact-key namespace for Python ledger identities (not Node v1 kinds)."""
+
+    KINDS = frozenset({"ledger_fill", "ledger_funding", "ledger_accrual"})
+
+    def __init__(self, committed, pending):
+        if not callable(committed) or not callable(pending):
+            raise ValueError("ledger identity port requires lookup and provisional update callbacks")
+        self._committed, self._pending, self._updates = committed, pending, []
+
+    def lookup(self, kind, key):
+        if kind not in self.KINDS or not isinstance(key, str) or not key:
+            raise ValueError("unsupported ledger identity kind or key")
+        return deepcopy(self._committed(kind, key))
+
+    def stage(self, kind, key, value, *, provenance):
+        if kind not in self.KINDS or not isinstance(key, str) or not key or value is None:
+            raise ValueError("invalid ledger identity update")
+        if not isinstance(provenance, str) or not provenance:
+            raise ValueError("ledger identity provenance is required")
+        record = {"kind": kind, "key": key, "value": deepcopy(value), "provenance": provenance}
+        self._pending(kind, key, deepcopy(value))
+        self._updates.append(record)
+
+    def drain_updates(self):
+        updates, self._updates = self._updates, []
+        return deepcopy(updates)

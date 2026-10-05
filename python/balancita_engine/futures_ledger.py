@@ -1,4 +1,5 @@
 """Pure Decimal linear USD-settled BTC paper-futures ledger."""
+import json
 from copy import deepcopy
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation, localcontext
@@ -63,12 +64,116 @@ class FuturesLedger:
         self.accrued = set()
         self.last_accrual_ms = None
         self.events = []
+        self._ledger_identity_port = None
+        self._operative_restored = False
 
-    def open(self, side, quantity, price, liquidity, at_ms=0):
+    def _ledger_identity(self, kind, key):
+        if self._ledger_identity_port is None:
+            return None
+        return self._ledger_identity_port.lookup(kind, key)
+
+    def _stage_ledger_identity(self, kind, key, value, provenance):
+        if self._ledger_identity_port is not None:
+            self._ledger_identity_port.stage(kind, key, value, provenance=provenance)
+
+    def drain_operative_identity_updates(self):
+        if self._ledger_identity_port is None:
+            raise ValueError("operative ledger identity updates require an exact identity port")
+        return self._ledger_identity_port.drain_updates()
+
+    def operative_checkpoint(self):
+        """Serialize compact current accounting state, not the audit history."""
+        clock = (self.position["funding_cursor_ms"] if self.position is not None else self.last_accrual_ms)
+        rates = [item for item in self.funding_rates if clock is None or item[2] > clock]
+        if len(rates) > 128:
+            raise ValueError("operative funding evidence exceeds the bounded catch-up limit")
+        return {
+            "checkpoint_version": "paper-futures-ledger-operative.v1",
+            "config": {"version": self.version, "cost_version": self.cost_version,
+                       "precision": self.precision,
+                       **{key: normalize_decimal(str(value)) for key, value in self.fee_rates.items()}},
+            "cash": normalize_decimal(str(self.cash)),
+            "leverage": normalize_decimal(str(self.leverage)),
+            "realized_gross": normalize_decimal(str(self.realized_gross)),
+            "fees": normalize_decimal(str(self.fees)),
+            "funding_paid": normalize_decimal(str(self.funding_paid)),
+            "funding_complete": self.funding_complete,
+            "position": None if self.position is None else {
+                key: normalize_decimal(str(value)) if isinstance(value, Decimal) else value
+                for key, value in self.position.items()},
+            "last_accrual_ms": self.last_accrual_ms,
+            "funding_rates": [[identity, start, end, normalize_decimal(str(rate))]
+                              for identity, start, end, rate in rates],
+        }
+
+    @classmethod
+    def restore_operative(cls, checkpoint, *, identity_port):
+        from .futures_operative_state import ExactLedgerIdentityPort
+        if not isinstance(identity_port, ExactLedgerIdentityPort):
+            raise ValueError("operative ledger restore requires an exact ledger identity port")
+        expected = {"checkpoint_version", "config", "cash", "leverage", "realized_gross",
+                    "fees", "funding_paid", "funding_complete", "position",
+                    "last_accrual_ms", "funding_rates"}
+        if not isinstance(checkpoint, dict) or set(checkpoint) != expected or checkpoint.get("checkpoint_version") != "paper-futures-ledger-operative.v1":
+            raise ValueError("unsupported operative ledger checkpoint")
+        result = cls(checkpoint["cash"], checkpoint["leverage"], checkpoint["config"])
+        result._ledger_identity_port = identity_port
+        for field in ("realized_gross", "fees", "funding_paid"):
+            value = _d(checkpoint[field], field)
+            if field != "funding_paid" and value < 0:
+                if field == "realized_gross":
+                    pass
+                else:
+                    raise ValueError("operative ledger totals violate sign invariants")
+            setattr(result, field, value)
+        if not isinstance(checkpoint["funding_complete"], bool):
+            raise ValueError("invalid operative funding completeness flag")
+        result.funding_complete = checkpoint["funding_complete"]
+        pos = checkpoint["position"]
+        if pos is not None:
+            required_pos = {"side", "qty", "entry", "entry_fee_remaining", "funding_remaining", "opened_at", "funding_cursor_ms"}
+            if not isinstance(pos, dict) or set(pos) != required_pos or pos["side"] not in ("long", "short"):
+                raise ValueError("invalid operative ledger position")
+            restored = dict(pos)
+            for key in ("qty", "entry", "entry_fee_remaining", "funding_remaining"):
+                restored[key] = _d(restored[key], "position " + key)
+            if restored["qty"] <= 0 or restored["entry"] <= 0 or restored["entry_fee_remaining"] < 0:
+                raise ValueError("operative ledger position violates quantity or fee invariants")
+            restored["opened_at"] = normalize_timestamp_ms(restored["opened_at"])
+            restored["funding_cursor_ms"] = normalize_timestamp_ms(restored["funding_cursor_ms"])
+            if restored["funding_cursor_ms"] < restored["opened_at"]:
+                raise ValueError("operative funding cursor precedes position")
+            result.position = restored
+        last = checkpoint["last_accrual_ms"]
+        result.last_accrual_ms = None if last is None else normalize_timestamp_ms(last)
+        raw_rates = checkpoint["funding_rates"]
+        if not isinstance(raw_rates, list) or len(raw_rates) > 128:
+            raise ValueError("invalid or over-budget operative funding evidence")
+        for item in raw_rates:
+            if not isinstance(item, list) or len(item) != 4:
+                raise ValueError("malformed operative funding evidence")
+            start, end = normalize_timestamp_ms(item[1]), normalize_timestamp_ms(item[2])
+            rate = _d(item[3], "funding rate")
+            if not isinstance(item[0], str) or not item[0] or start < 0 or end <= start:
+                raise ValueError("invalid operative funding interval")
+            if result.funding_rates and (start < result.funding_rates[-1][2]):
+                raise ValueError("overlapping operative funding intervals")
+            result.funding_rates.append((item[0], start, end, rate))
+        result._operative_restored = True
+        return result
+
+    def open(self, side, quantity, price, liquidity, at_ms=0, *, fill_id=None):
         at_ms = normalize_timestamp_ms(at_ms)
         with localcontext() as ctx:
             ctx.prec = self.precision
             qty, px = _d(quantity, "quantity"), _d(price, "price")
+            if fill_id is not None:
+                payload = {"side": side, "quantity": normalize_decimal(str(qty)), "price": normalize_decimal(str(px)), "liquidity": liquidity, "at_ms": at_ms}
+                prior = self._ledger_identity("ledger_fill", fill_id)
+                if prior is not None:
+                    if prior != payload:
+                        raise ValueError("conflicting fill identity retry")
+                    return
             if self.position is not None or side not in ("long", "short") or qty <= 0 or px <= 0:
                 raise ValueError("invalid position opening")
             fee = qty * px * self._fee(liquidity)
@@ -81,14 +186,23 @@ class FuturesLedger:
                              "opened_at": at_ms, "funding_cursor_ms": at_ms}
             self.events.append({"type": "open", "side": side, "qty": normalize_decimal(str(qty)),
                                 "price": normalize_decimal(str(px)), "fee": normalize_decimal(str(fee))})
+            if fill_id is not None:
+                self._stage_ledger_identity("ledger_fill", fill_id, payload, "fill:" + fill_id)
 
-    def close(self, quantity, price, liquidity, at_ms=0):
+    def close(self, quantity, price, liquidity, at_ms=0, *, fill_id=None):
         at_ms = normalize_timestamp_ms(at_ms)
         with localcontext() as ctx:
             ctx.prec = self.precision
             if self.position is None:
                 raise ValueError("no open position")
             qty, px, pos = _d(quantity, "quantity"), _d(price, "price"), self.position
+            if fill_id is not None:
+                payload = {"quantity": normalize_decimal(str(qty)), "price": normalize_decimal(str(px)), "liquidity": liquidity, "at_ms": at_ms}
+                prior = self._ledger_identity("ledger_fill", fill_id)
+                if prior is not None:
+                    if prior != payload:
+                        raise ValueError("conflicting fill identity retry")
+                    return ZERO
             if qty <= 0 or px <= 0 or qty > pos["qty"]:
                 raise ValueError("impossible position reduction")
             if at_ms != pos["funding_cursor_ms"]:
@@ -111,6 +225,8 @@ class FuturesLedger:
                                 "allocated_entry_fee": normalize_decimal(str(entry_fee)),
                                 "exit_fee": normalize_decimal(str(exit_fee)),
                                 "allocated_funding": normalize_decimal(str(funding))})
+            if fill_id is not None:
+                self._stage_ledger_identity("ledger_fill", fill_id, payload, "fill:" + fill_id)
             return gross - entry_fee - exit_fee - funding
 
     def observe_funding(self, interval_id, start_ms, end_ms, rate, known_at_ms=None):
@@ -121,6 +237,12 @@ class FuturesLedger:
         if start_ms < 0 or end_ms <= start_ms or (known_at_ms is not None and known_at_ms > start_ms):
             raise ValueError("invalid or look-ahead funding interval")
         record = (interval_id, start_ms, end_ms, value)
+        funding_key = json.dumps([interval_id, start_ms, end_ms], ensure_ascii=False, separators=(",", ":"))
+        historical = self._ledger_identity("ledger_funding", funding_key)
+        if historical is not None:
+            if historical != normalize_decimal(str(value)):
+                raise ValueError("conflicting funding interval retry")
+            return
         for existing in self.funding_rates:
             if existing[0] == interval_id:
                 if existing != record:
@@ -130,6 +252,7 @@ class FuturesLedger:
                 raise ValueError("overlapping funding interval")
         self.funding_rates.append(record)
         self.funding_rates.sort(key=lambda item: item[1])
+        self._stage_ledger_identity("ledger_funding", funding_key, normalize_decimal(str(value)), "funding:" + funding_key)
 
     def accrue_funding(self, start_ms, end_ms):
         start_ms, end_ms = normalize_timestamp_ms(start_ms), normalize_timestamp_ms(end_ms)
@@ -145,10 +268,10 @@ class FuturesLedger:
                 return ZERO
             if start_ms != pos["funding_cursor_ms"]:
                 raise ValueError("funding accrual must continue at the prior position boundary")
-            self.last_accrual_ms = end_ms
             amount = ZERO
             cursor = start_ms
             has_gap = False
+            accrual_identities = []
             for interval_id, left, right, rate in self.funding_rates:
                 a, b = max(start_ms, left), min(end_ms, right)
                 if b <= a:
@@ -161,15 +284,21 @@ class FuturesLedger:
                 amount += part
                 cursor = max(cursor, b)
                 key = (interval_id, a, b, pos["qty"])
-                if key in self.accrued:
+                identity_key = json.dumps([interval_id, a, b, normalize_decimal(str(pos["qty"]))], ensure_ascii=False, separators=(",", ":"))
+                historical = self._ledger_identity("ledger_accrual", identity_key)
+                if key in self.accrued or historical is not None:
                     raise ValueError("funding accrual was already applied")
-                self.accrued.add(key)
+                accrual_identities.append((key, identity_key, part))
             if cursor < end_ms:
                 has_gap = True
             self.funding_complete = self.funding_complete and not has_gap
             self.funding_paid += amount
             pos["funding_remaining"] += amount
             pos["funding_cursor_ms"] = end_ms
+            self.last_accrual_ms = end_ms
+            for key, identity_key, part in accrual_identities:
+                self.accrued.add(key)
+                self._stage_ledger_identity("ledger_accrual", identity_key, normalize_decimal(str(part)), "accrual:" + identity_key)
             return amount
 
     def _fee(self, liquidity):
