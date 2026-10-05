@@ -1,0 +1,34 @@
+scripts/futures-local-terminal.mjs
+  h_2f68313623be98 1-75
+scripts/futures-local-terminal.test.mjs
+  h_2f68313623be98 1-18
+server/src/features/paper-futures/futures-local-scenario.test.ts
+  h_2f68313623be98 8-52
+server/src/features/paper-futures/futures-local-scenario.ts
+  h_2f68313623be98 82-98,105,109-112,119-120,122-123,153,206-221,354-355,375
+server/src/features/paper-futures/futures-local-terminal.test.ts
+  h_2f68313623be98 1-251
+server/src/features/paper-futures/futures-local-terminal.ts
+  h_2f68313623be98 1-244
+server/src/features/paper-futures/futures-store.ts
+  h_2f68313623be98 92-100,116-123,126,128-177,333-334,2183,2198-2199,2217,2219-2252,2277
+server/src/features/paper-futures/futures-terminal-store.test.ts
+  h_2f68313623be98 1-49
+src/app/FuturesTerminal.test.tsx
+  h_2f68313623be98 1,4-7,9,18-51,75-97,99-106,112,197-310,312-330
+src/app/FuturesTerminal.tsx
+  h_2f68313623be98 28,34,214-217,252-259,300,314-321,348-350,371,387-389,678-703,705-708,710-727,735-751,753-758,766-774,778,784-786
+src/features/connected-trading/infrastructure/terminal-stream-client.ts
+  h_2f68313623be98 22
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d317b4971b8f3ee3eefa0297173def7d48e8cbc5",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
