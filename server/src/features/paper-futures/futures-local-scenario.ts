@@ -11,6 +11,7 @@ import { dirname, join, resolve } from 'node:path'
 import { FuturesCommandRunner } from './futures-command-runner.ts'
 import { canonicalHash } from './futures-canonical.ts'
 import { FuturesStore } from './futures-store.ts'
+import { checkLocalScenarioFinancials } from './futures-local-financial-check.ts'
 
 const instrument = {
   instrument_id: 'kraken-futures:PF_XBTUSD',
@@ -72,6 +73,9 @@ type Scenario = {
     book_quantity_btc: string
   }[]
 }
+type LocalScenarioReport = Record<string, unknown> & {
+  financialChecks: ReturnType<typeof checkLocalScenarioFinancials>
+}
 
 export async function runLocalFuturesScenario(
   scenario: Scenario,
@@ -97,7 +101,7 @@ export async function runLocalFuturesScenario(
   const store = new FuturesStore(databasePath)
   const runId = scenario.run_id
   const runner = new FuturesCommandRunner(store)
-  let report: Record<string, unknown> | undefined
+  let report: LocalScenarioReport | undefined
   try {
     store.createRun({
       runId,
@@ -130,6 +134,7 @@ export async function runLocalFuturesScenario(
     let stateVersion = 0
     const receipts: Record<string, unknown>[] = []
     const outputs: Record<string, unknown>[] = []
+    const acceptedSnapshots: Record<string, unknown>[] = []
     for (const [index, event] of scenario.events.entries()) {
       const snapshot = scenarioSnapshot(event.time_ms, event.breakout)
       setBookQuantity(snapshot, event.book_quantity_btc)
@@ -152,6 +157,7 @@ export async function runLocalFuturesScenario(
           throw new Error('Protective stop disappeared before its fill.')
         setStopCrossing(snapshot, BigInt(protection.stop))
       }
+      acceptedSnapshots.push(snapshot)
       const workId = `${runId}-${index + 1}-${event.name}`
       const accepted = runner.accept({
         request_id: `request-${workId}`,
@@ -223,6 +229,63 @@ export async function runLocalFuturesScenario(
     )
       throw new Error('Scenario did not satisfy the durable protection path.')
 
+    const inputEvent = (snapshotIndex: number, type: string) =>
+      (
+        acceptedSnapshots[snapshotIndex]!.events as Record<string, unknown>[]
+      ).find((event) => event.type === type)!
+    const financialChecks = checkLocalScenarioFinancials({
+      initialCashUsd: baseConfig.initial_cash_usd,
+      makerRate: baseConfig.maker_rate,
+      takerRate: baseConfig.taker_rate,
+      fundingRate: scenario.funding.raw_rate,
+      fundingKnown: scenario.funding.known_at_ms <= scenario.base_time_ms,
+      fundingCoversClose:
+        scenario.funding.effective_start_ms <= scenario.events[2]!.time_ms &&
+        scenario.funding.effective_end_ms > scenario.events[4]!.time_ms,
+      partialQuantityBtc: scenario.events[2]!.book_quantity_btc,
+      entryAskUsdPerBtc: (
+        inputEvent(2, 'book_snapshot').asks as Record<string, unknown>[]
+      )[0]!.price_usd as string,
+      closeBidUsdPerBtc: (
+        inputEvent(4, 'book_snapshot').bids as Record<string, unknown>[]
+      )[0]!.price_usd as string,
+      partialMarkUsdPerBtc: inputEvent(2, 'ticker').mark_usd as string,
+      observations: [1, 2, 4].map((index, boundaryIndex) => {
+        const output = outputs[index]!
+        const position = output.position as Record<string, unknown>
+        const outputLedger = output.ledger as Record<string, unknown>
+        return {
+          stage: ['entry-accepted', 'partial-fill', 'close'][boundaryIndex]!,
+          position: {
+            side: position.side as string | null,
+            quantityBtc: position.quantity_btc as string,
+            averageEntryPriceUsdPerBtc: position.entry_price_usd_per_btc as
+              string | undefined,
+          },
+          ledger: {
+            cashUsd: outputLedger.cash_usd as string,
+            realizedGrossUsd: outputLedger.realized_gross_usd as string,
+            unrealizedGrossUsd: outputLedger.unrealized_gross_usd as string,
+            feesUsd: outputLedger.fees_usd as string,
+            fundingPaidUsd: outputLedger.funding_paid as string,
+            netCompleteUsd: outputLedger.net_complete as string | null,
+            equityUsd: outputLedger.equity_usd as string,
+          },
+          fills: (output.fills as Record<string, unknown>[]).map((fill) => ({
+            side: fill.side as string,
+            liquidity: fill.liquidity as string,
+            quantityBtc: fill.quantity_btc as string,
+            priceUsdPerBtc: fill.price_usd_per_btc as string,
+            feeUsd: fill.fee_usd as string,
+          })),
+        }
+      }),
+    })
+    if (financialChecks.checks.some((check) => !check.passed))
+      throw new Error(
+        `Independent scenario financial checks failed: ${JSON.stringify(financialChecks)}.`,
+      )
+
     report = {
       schemaVersion: scenario.schema_version,
       mode: scenario.mode,
@@ -248,6 +311,7 @@ export async function runLocalFuturesScenario(
       feesUsd: ledger.fees_usd,
       realizedGrossUsd: ledger.realized_gross_usd,
       fundingPaid: ledger.funding_paid,
+      financialChecks,
       committedAcknowledgements: receipts.length,
       durableEvents: (store.exportRun(runId).events as unknown[]).length,
       pendingCommands: pendingCommands.length,

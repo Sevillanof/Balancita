@@ -25,7 +25,97 @@ def close_command(command_id):
     return {"type": "paper.close", "command_id": command_id}
 
 
+def funding_observation_event(start_ms, known_at_ms, observation_id):
+    return {
+        "type": "funding_observation",
+        "received_at_ms": known_at_ms,
+        "known_at_ms": known_at_ms,
+        "reception_order": 10_000,
+        "observation": {
+            "source": "versioned-local-mock.v1",
+            "provider": "kraken",
+            "product": "PF_XBTUSD",
+            "field": "funding_rate",
+            "raw_rate": "0",
+            "unit": "usd_per_btc_per_hour",
+            "effective_start_ms": start_ms,
+            "effective_end_ms": start_ms + 3_600_000,
+            "known_at_ms": known_at_ms,
+            "received_seq": 10_000,
+            "observation_id": observation_id,
+            "sha256": "0" * 64,
+            "semantic_version": "kraken-funding-normalization.v1",
+            "predicted": False,
+        },
+    }
+
+
 class FuturesRuntimeTests(unittest.TestCase):
+    def test_known_zero_funding_observed_while_flat_survives_runtime_restore(self):
+        config = dict(CONFIG)
+        config.update(
+            version="futures-runtime-risk.v1",
+            daily_loss_fraction="0.01",
+            execution_latency_ms=100,
+            funding_policy_version="funding-separation.v1",
+        )
+        at_flat = warmed_market(21_600_000)
+        at_flat["events"].append(
+            funding_observation_event(21_600_000, 21_600_000, "flat-known-zero")
+        )
+        engine = FuturesRuntime(
+            run_id="flat-funding-restore",
+            config=config,
+            instrument=INSTRUMENT,
+        )
+
+        output = engine.process(at_flat)
+
+        self.assertEqual(output["position"]["quantity_btc"], "0")
+        self.assertEqual(output["ledger"]["cash_usd"], "10000")
+        self.assertEqual(output["ledger"]["fees_usd"], "0")
+        self.assertTrue(output["ledger"]["funding_complete"])
+        self.assertEqual(len(engine.ledger.funding_rates), 1)
+        saved = json.loads(json.dumps(engine.checkpoint()))
+        restored = FuturesRuntime(
+            run_id="flat-funding-restore",
+            config=config,
+            instrument=INSTRUMENT,
+            checkpoint=saved,
+        )
+        self.assertEqual(len(restored.ledger.funding_rates), 1)
+        self.assertEqual(restored.ledger.funding_rates[0][1:], (21_600_000, 25_200_000, Decimal("0")))
+        self.assertTrue(restored.ledger.funding_complete)
+
+    def test_late_zero_funding_cannot_heal_a_gap_already_accrued_on_exposure(self):
+        config = dict(CONFIG)
+        config.update(version="futures-runtime-execution.v1", execution_latency_ms=100)
+        engine = FuturesRuntime(
+            run_id="late-zero-funding-gap",
+            config=config,
+            instrument=INSTRUMENT,
+        )
+        accepted = engine.process(warmed_market(21_600_000, breakout="long"))
+        self.assertEqual(accepted["fills"], [])
+        filled_market = warmed_market(21_600_100, book_size="0.005")
+        book = next(event for event in filled_market["events"] if event["type"] == "book_snapshot")
+        book.update(epoch="funding-gap", sequence=2)
+        filled = engine.process(filled_market)
+        self.assertEqual(filled["position"]["quantity_btc"], "0.005")
+
+        uncovered = engine.process(warmed_market(21_600_101))
+        self.assertFalse(uncovered["ledger"]["funding_complete"])
+        late_market = warmed_market(21_600_102)
+        late_market["events"].append(
+            funding_observation_event(21_600_000, 21_600_102, "late-known-zero")
+        )
+
+        after_late_observation = engine.process(late_market)
+
+        self.assertFalse(after_late_observation["ledger"]["funding_complete"])
+        self.assertIsNone(after_late_observation["ledger"]["realized_net_complete"])
+        self.assertEqual(engine.ledger.funding_rates, [])
+
     def test_strategy_diagnostics_count_actual_selector_cycles_and_proposals(self):
         strategy_config = dict(CONFIG)
         strategy_config["version"] = "futures-runtime-strategies.v1"

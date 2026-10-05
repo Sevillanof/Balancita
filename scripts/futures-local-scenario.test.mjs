@@ -33,6 +33,13 @@ describe('futures local scenario CLI', () => {
         'local-protection-v1:close:21605200',
       ])
       expect(reports[1].orderIds).toEqual(reports[0].orderIds)
+      expect(reports[0].financialChecks.checks).toHaveLength(3)
+      expect(
+        reports[0].financialChecks.checks.every(({ passed }) => passed),
+      ).toBe(true)
+      expect(reports[0].financialChecks.fundingLimitation).toContain(
+        'non-zero funding accrual, sign, interval coverage and allocation are not verified',
+      )
       expect(
         reports.map(
           ({ equityUsd, feesUsd, realizedGrossUsd, finalQuantityBtc }) => ({

@@ -336,8 +336,9 @@ class FuturesRuntime:
         book = self._select(evidence, "book_snapshot")
         ticker = self._select(evidence, "ticker")
         mark = self._mark(ticker, book)
-        if self.ledger.position is not None:
+        if self._funding_separation or self.ledger.position is not None:
             self._observe_funding(evidence, now, cutoff)
+        if self.ledger.position is not None:
             self._accrue_until(now)
         fills = []
         orders = []

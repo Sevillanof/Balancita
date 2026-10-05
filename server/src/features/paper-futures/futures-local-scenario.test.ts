@@ -34,6 +34,13 @@ describe('local futures scenario', () => {
       expect(report.protectiveCloseQuantityBtc).toBe('0.005')
       expect(report.protectiveCloseAtMs).toBe(21_605_300)
       expect(report.verified).toBe(true)
+      expect(report.financialChecks.checks).toHaveLength(3)
+      expect(
+        report.financialChecks.checks.map((check) => check.expected.equityUsd),
+      ).toEqual(['10000', '9999.7474975', '9999.21014'])
+      expect(report.financialChecks.fundingLimitation).toContain(
+        'Funding is zero in this local scenario',
+      )
       expect(report.committedAcknowledgements).toBe(5)
       expect(report.pendingCommands).toBe(0)
     } finally {
