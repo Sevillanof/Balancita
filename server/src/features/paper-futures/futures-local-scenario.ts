@@ -79,28 +79,48 @@ type LocalScenarioReport = Record<string, unknown> & {
 
 export async function runLocalFuturesScenario(
   scenario: Scenario,
-  options: { outputDirectory?: string; inputSha256?: string } = {},
+  options: {
+    outputDirectory?: string
+    inputSha256?: string
+    store?: FuturesStore
+    runner?: FuturesCommandRunner
+    onStage?: (stage: {
+      kind: 'started' | 'committed' | 'completed'
+      runId: string
+      store: FuturesStore
+      index?: number
+      workId?: string
+      receipt?: Record<string, unknown>
+      marketSnapshot?: Record<string, unknown>
+      output?: Record<string, unknown>
+      report?: LocalScenarioReport
+    }) => void | Promise<void>
+  } = {},
 ) {
   validateScenario(scenario)
   const outputDirectory = options.outputDirectory
     ? resolve(options.outputDirectory)
     : mkdtempSync(join(tmpdir(), 'balancita-local-futures-'))
   if (options.outputDirectory) {
-    if (existsSync(outputDirectory))
+    if (existsSync(outputDirectory) && options.store === undefined)
       throw new Error(
         `Refusing existing scenario output path: ${outputDirectory}`,
       )
-    mkdirSync(dirname(outputDirectory), { recursive: true })
-    mkdirSync(outputDirectory)
+    if (!existsSync(outputDirectory)) {
+      mkdirSync(dirname(outputDirectory), { recursive: true })
+      mkdirSync(outputDirectory)
+    }
   }
   const databasePath = join(outputDirectory, 'paper-futures.sqlite')
   const fixtureHash =
     options.inputSha256 ??
     createHash('sha256').update(JSON.stringify(scenario)).digest('hex')
   const runtimeConfig = { ...baseConfig }
-  const store = new FuturesStore(databasePath)
+  const ownsStore = options.store === undefined
+  const store = options.store ?? new FuturesStore(databasePath)
   const runId = scenario.run_id
-  const runner = new FuturesCommandRunner(store)
+  const ownsRunner = options.runner === undefined
+  const runner = options.runner ?? new FuturesCommandRunner(store)
   let report: LocalScenarioReport | undefined
   try {
     store.createRun({
@@ -130,6 +150,7 @@ export async function runLocalFuturesScenario(
         },
       },
     })
+    await options.onStage?.({ kind: 'started', runId, store })
 
     let stateVersion = 0
     const receipts: Record<string, unknown>[] = []
@@ -182,10 +203,22 @@ export async function runLocalFuturesScenario(
         throw new Error(`Work ${workId} lacks its committed receipt.`)
       receipts.push(receipt)
       stateVersion += 1
-      outputs.push(
-        store.getAppliedRuntimeProjection(runId, workId, stateVersion)
-          .runtime_output,
-      )
+      const output = store.getAppliedRuntimeProjection(
+        runId,
+        workId,
+        stateVersion,
+      ).runtime_output
+      outputs.push(output)
+      await options.onStage?.({
+        kind: 'committed',
+        runId,
+        store,
+        index,
+        workId,
+        receipt,
+        marketSnapshot: snapshot,
+        output,
+      })
     }
 
     const projection = store.getRunProjection(runId)
@@ -318,8 +351,8 @@ export async function runLocalFuturesScenario(
       verified: true,
     }
   } finally {
-    await runner.close()
-    store.close()
+    if (ownsRunner) await runner.close()
+    if (ownsStore) store.close()
   }
   if (!report) throw new Error('Scenario completed without a report.')
   const integrity = new FuturesStore(databasePath)
@@ -339,6 +372,7 @@ export async function runLocalFuturesScenario(
     throw new Error('SQLite left a WAL/SHM sidecar after graceful close.')
   if (!statSync(databasePath).isFile())
     throw new Error('Scenario database was not retained as a file.')
+  await options.onStage?.({ kind: 'completed', runId, store, report })
   return report
 }
 

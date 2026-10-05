@@ -5,6 +5,51 @@ import { describe, expect, it } from 'vitest'
 import { runLocalFuturesScenario } from './futures-local-scenario.js'
 
 describe('local futures scenario', () => {
+  it('awaits presentation hooks only after actual committed receipts', async () => {
+    const fixture = JSON.parse(
+      readFileSync(
+        resolve(
+          process.cwd(),
+          'src/features/paper-futures/fixtures/local-protection.v1.json',
+        ),
+        'utf8',
+      ),
+    )
+    const parent = mkdtempSync(join(tmpdir(), 'local-futures-hook-test-'))
+    const stages: Array<{ kind: string; index?: number; receipt?: string }> = []
+    try {
+      await runLocalFuturesScenario(fixture, {
+        outputDirectory: resolve(parent, 'fresh-output'),
+        onStage: async (stage) => {
+          stages.push({
+            kind: stage.kind,
+            index: stage.index,
+            receipt: String(stage.receipt?.status ?? ''),
+          })
+          if (stage.kind === 'committed') {
+            expect(stage.receipt?.status).toBe('committed')
+            expect(stage.output).toBeTruthy()
+            expect(stage.marketSnapshot).toBeTruthy()
+          }
+        },
+      })
+      expect(stages.map(({ kind }) => kind)).toEqual([
+        'started',
+        'committed',
+        'committed',
+        'committed',
+        'committed',
+        'committed',
+        'completed',
+      ])
+      expect(stages.slice(1, 6).map(({ receipt }) => receipt)).toEqual(
+        Array(5).fill('committed'),
+      )
+    } finally {
+      rmSync(parent, { recursive: true, force: true })
+    }
+  })
+
   it('runs the owned protection fixture through the real worker and durable store', async () => {
     const fixture = JSON.parse(
       readFileSync(

@@ -25,13 +25,13 @@ function record(value: unknown): Record<string, unknown> {
     : {}
 }
 
-function money(value: unknown): string {
+function money(value: unknown, maximumFractionDigits = 2): string {
   if (typeof value !== 'string' || !/^-?\d+(?:\.\d+)?$/.test(value))
     return 'No disponible'
   return new Intl.NumberFormat('es-ES', {
     style: 'currency',
     currency: 'USD',
-    maximumFractionDigits: 2,
+    maximumFractionDigits,
   }).format(Number(value))
 }
 
@@ -211,7 +211,10 @@ export default function FuturesTerminal({
               market.schema_version === 'mock-terminal-market.v1' ||
               market.schema_version === 'futures-terminal-market.v1'
                 ? market
-                : null,
+                : record(bootstrap.terminal_market).schema_version ===
+                    'mock-terminal-market.v1'
+                  ? bootstrap.terminal_market
+                  : null,
           })
           setCommandVersion(Number(snapshotState.state_version ?? 0))
           setError(null)
@@ -246,6 +249,14 @@ export default function FuturesTerminal({
           seen.has(event.event_id)
         )
           return
+        if (event.type === 'engine.status')
+          setState((previous) => ({
+            ...(previous ?? {}),
+            engine: {
+              ...record(previous?.engine),
+              ...event.data,
+            },
+          }))
         if (event.seq <= lastSeq) return
         if (event.seq !== lastSeq + 1) {
           setError('Se detectó un salto en el flujo; resincronizando.')
@@ -286,6 +297,7 @@ export default function FuturesTerminal({
   }, [bootstrap])
 
   const account = record(state?.account)
+  const netValue = account.net_usd ?? account.net_complete
   const position = record(state?.position)
   const market = record(state?.terminal_market)
   const marketState = record(state?.market)
@@ -299,6 +311,14 @@ export default function FuturesTerminal({
   const analyses = Array.isArray(state?.analyses) ? state.analyses : []
   const orders = Array.isArray(state?.orders) ? state.orders : []
   const [displayClock, setDisplayClock] = useState(() => Date.now())
+  const localDemo = bootstrap.source === 'local-protection.v1'
+  const localScenarioStatus = localDemo
+    ? String(
+        record(state?.engine).message ??
+          bootstrap.engine?.scenario_status ??
+          'Escenario iniciado',
+      )
+    : null
 
   useEffect(() => {
     if (bootstrap.mode !== 'paper_live' || quote.receivedAt === null) return
@@ -325,8 +345,9 @@ export default function FuturesTerminal({
     setCommandVersion((version) => version + 1)
   }
 
-  const modeLabel =
-    bootstrap?.mode === 'mock'
+  const modeLabel = localDemo
+    ? 'MOCK · mercado simulado'
+    : bootstrap?.mode === 'mock'
       ? 'DATOS Y OPERACIONES SIMULADAS'
       : bootstrap?.mode === 'paper_live'
         ? 'MERCADO REAL · OPERACIONES SIMULADAS'
@@ -347,6 +368,7 @@ export default function FuturesTerminal({
               {connected ? 'FLUJO CONECTADO' : 'SIN CONEXIÓN'}
             </span>
             <span>{modeLabel}</span>
+            {localScenarioStatus && <span>{localScenarioStatus}</span>}
           </>
         }
       />
@@ -362,7 +384,9 @@ export default function FuturesTerminal({
           identity={
             <div>
               <p className="demo-shell__eyebrow">
-                KRAKEN FUTURES · BTC/USD PERPETUO
+                {bootstrap.source === 'local-protection.v1'
+                  ? 'MOCK · BTC/USD PERPETUO'
+                  : 'KRAKEN FUTURES · BTC/USD PERPETUO'}
               </p>
               <h2>
                 Bitcoin <span>/ Dólar</span>
@@ -651,54 +675,56 @@ export default function FuturesTerminal({
                 </section>
               }
             />
-            <section
-              className="connected-terminal__panel"
-              aria-label="Controles paper"
-            >
-              <h2>Controles simulados</h2>
-              {(
-                [
-                  'paper.start',
-                  'paper.pause',
-                  'paper.resume',
-                  'paper.close',
-                  'paper.new_run',
-                ] as const
-              ).map((action) => (
-                <button
-                  key={action}
-                  type="button"
-                  className="demo-terminal__present"
-                  disabled={!connected || commandPending}
-                  onClick={() => {
-                    if (
-                      action === 'paper.new_run' &&
-                      !window.confirm(
-                        'Crear una cuenta/run nuevo y conservar el historial anterior?',
+            {!localDemo && (
+              <section
+                className="connected-terminal__panel"
+                aria-label="Controles paper"
+              >
+                <h2>Controles simulados</h2>
+                {(
+                  [
+                    'paper.start',
+                    'paper.pause',
+                    'paper.resume',
+                    'paper.close',
+                    'paper.new_run',
+                  ] as const
+                ).map((action) => (
+                  <button
+                    key={action}
+                    type="button"
+                    className="demo-terminal__present"
+                    disabled={!connected || commandPending}
+                    onClick={() => {
+                      if (
+                        action === 'paper.new_run' &&
+                        !window.confirm(
+                          'Crear una cuenta/run nuevo y conservar el historial anterior?',
+                        )
                       )
-                    )
-                      return
-                    sendCommand(action)
-                  }}
-                >
-                  {
+                        return
+                      sendCommand(action)
+                    }}
+                  >
                     {
-                      'paper.start': 'Iniciar simulación',
-                      'paper.pause': 'Pausar entradas',
-                      'paper.resume': 'Reanudar entradas',
-                      'paper.close': 'Cerrar posición',
-                      'paper.new_run': 'Nueva cuenta/run',
-                    }[action]
-                  }
-                </button>
-              ))}
-              {commandPending && (
-                <span role="status">
-                  Comando enviado; aceptación no significa fill.
-                </span>
-              )}
-              {commandStatus && <p role="status">{commandStatus}</p>}
-            </section>
+                      {
+                        'paper.start': 'Iniciar simulación',
+                        'paper.pause': 'Pausar entradas',
+                        'paper.resume': 'Reanudar entradas',
+                        'paper.close': 'Cerrar posición',
+                        'paper.new_run': 'Nueva cuenta/run',
+                      }[action]
+                    }
+                  </button>
+                ))}
+                {commandPending && (
+                  <span role="status">
+                    Comando enviado; aceptación no significa fill.
+                  </span>
+                )}
+                {commandStatus && <p role="status">{commandStatus}</p>}
+              </section>
+            )}
             <details className="connected-terminal__metadata" open>
               <summary>Cuenta y estado de riesgo</summary>
               <section className="connected-terminal__panel">
@@ -706,9 +732,30 @@ export default function FuturesTerminal({
                   <dt>Saldo USD</dt>
                   <dd>{money(account.cash_usd)}</dd>
                   <dt>Patrimonio USD</dt>
-                  <dd>{money(account.equity_usd)}</dd>
+                  <dd
+                    title={String(account.equity_usd ?? '')}
+                    data-value={String(account.equity_usd ?? '')}
+                  >
+                    {money(account.equity_usd, localDemo ? 5 : 2)}
+                  </dd>
+                  {localDemo && (
+                    <>
+                      <dt>PnL bruto realizado USD</dt>
+                      <dd
+                        title={String(account.realized_gross_usd ?? '')}
+                        data-value={String(account.realized_gross_usd ?? '')}
+                      >
+                        {money(account.realized_gross_usd, 5)}
+                      </dd>
+                    </>
+                  )}
                   <dt>Fees USD</dt>
-                  <dd>{money(account.fees_usd)}</dd>
+                  <dd
+                    title={String(account.fees_usd ?? '')}
+                    data-value={String(account.fees_usd ?? '')}
+                  >
+                    {money(account.fees_usd, localDemo ? 5 : 2)}
+                  </dd>
                   <dt>Funding pagado (USD)</dt>
                   <dd>
                     {account.funding_complete === true
@@ -716,18 +763,27 @@ export default function FuturesTerminal({
                       : 'Incompleto · neto no disponible'}
                   </dd>
                   <dt>PnL neto</dt>
-                  <dd>
-                    {(account.net_usd ?? account.net_complete) == null
+                  <dd
+                    {...(localDemo && netValue != null
+                      ? {
+                          title: String(netValue),
+                          'data-value': String(netValue),
+                        }
+                      : {})}
+                  >
+                    {netValue == null
                       ? account.funding_complete === true
                         ? 'No disponible durante posición abierta'
                         : 'Incompleto'
-                      : money(account.net_usd ?? account.net_complete)}
+                      : money(netValue, localDemo ? 5 : 2)}
                   </dd>
                   <dt>Posición</dt>
                   <dd>
                     {position.side
                       ? `${String(position.side)} · ${quantity(position.quantity_btc)}`
-                      : 'Sin posición abierta'}
+                      : localDemo
+                        ? `${quantity(position.quantity_btc ?? '0')} · Sin exposición`
+                        : 'Sin posición abierta'}
                   </dd>
                 </dl>
               </section>

@@ -19,6 +19,7 @@ export type TerminalBootstrap = {
   instrument_id?: string
   quote_currency?: string
   market?: Record<string, unknown>
+  terminal_market?: Record<string, unknown>
   source_manifest?: Record<string, unknown>
   engine?: Record<string, unknown>
 }

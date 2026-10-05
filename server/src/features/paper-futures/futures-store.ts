@@ -89,6 +89,15 @@ function terminalEntriesFromResult(result: JsonRecord): TerminalEventInput[] {
 
   const runId = String(result.run_id)
   const workId = String(result.work_id)
+  const checkpoint = isRecord(result.runtime_checkpoint)
+    ? result.runtime_checkpoint
+    : undefined
+  const execution =
+    checkpoint && isRecord(checkpoint.execution_checkpoint)
+      ? checkpoint.execution_checkpoint
+      : undefined
+  const executionOrders =
+    execution && isRecord(execution.orders) ? execution.orders : {}
   const common = { run_id: runId, work_id: workId, command_id: workId }
   const timestamp =
     (typeof output.decision_time_ms === 'number' && output.decision_time_ms) ||
@@ -104,20 +113,68 @@ function terminalEntriesFromResult(result: JsonRecord): TerminalEventInput[] {
           typeof output.analysis.analysis_id === 'string'
             ? output.analysis.analysis_id
             : workId,
-        analysis: output.analysis,
+        analysis: {
+          ...output.analysis,
+          analysis_id: workId,
+          runtime_version:
+            typeof output.runtime_version === 'string'
+              ? output.runtime_version
+              : undefined,
+        },
       },
     })
+  const observedOrderIds = new Set<string>()
   if (Array.isArray(output.orders))
-    for (const order of output.orders)
-      if (isRecord(order))
-        entries.push({
-          type: 'order.updated',
-          eventTime:
-            typeof order.event_time_ms === 'number'
-              ? order.event_time_ms
-              : timestamp,
-          data: { ...common, order },
-        })
+    for (const order of output.orders) {
+      if (!isRecord(order)) continue
+      const orderId = typeof order.order_id === 'string' ? order.order_id : null
+      const checkpointOrder =
+        orderId && isRecord(executionOrders[orderId])
+          ? executionOrders[orderId]
+          : undefined
+      if (orderId) observedOrderIds.add(orderId)
+      entries.push({
+        type: 'order.updated',
+        eventTime:
+          typeof order.event_time_ms === 'number'
+            ? order.event_time_ms
+            : timestamp,
+        data: {
+          ...common,
+          order:
+            checkpointOrder && isRecord(checkpointOrder.intent)
+              ? {
+                  ...order,
+                  ...checkpointOrder.intent,
+                  state: checkpointOrder.state,
+                  status: checkpointOrder.state,
+                  filled_quantity_btc: checkpointOrder.filled,
+                  remaining_quantity_btc: checkpointOrder.remaining,
+                }
+              : order,
+        },
+      })
+    }
+  for (const [orderId, checkpointOrder] of Object.entries(executionOrders))
+    if (
+      !observedOrderIds.has(orderId) &&
+      isRecord(checkpointOrder) &&
+      isRecord(checkpointOrder.intent)
+    )
+      entries.push({
+        type: 'order.updated',
+        eventTime: timestamp,
+        data: {
+          ...common,
+          order: {
+            ...checkpointOrder.intent,
+            state: checkpointOrder.state,
+            status: checkpointOrder.state,
+            filled_quantity_btc: checkpointOrder.filled,
+            remaining_quantity_btc: checkpointOrder.remaining,
+          },
+        },
+      })
   if (Array.isArray(output.fills))
     for (const fill of output.fills)
       if (isRecord(fill))
@@ -272,11 +329,9 @@ export class FuturesStore {
         if (!output || !isRecord(output.analysis)) return []
         return [
           {
-            analysis_id:
-              typeof output.analysis.analysis_id === 'string'
-                ? output.analysis.analysis_id
-                : work_id,
             ...output.analysis,
+            analysis_id: work_id,
+            runtime_version: output.runtime_version,
           },
         ]
       })
@@ -2125,7 +2180,7 @@ export class FuturesStore {
   }
 }
 
-function projectTerminalState(
+export function projectTerminalState(
   projection: JsonRecord,
   runId: string,
   analyses: readonly JsonRecord[],
@@ -2140,6 +2195,8 @@ function projectTerminalState(
     : {}
   const decimal = (value: unknown): string | null =>
     typeof value === 'string' && /^-?\d+(?:\.\d+)?$/.test(value) ? value : null
+  const negateDecimal = (value: string): string =>
+    value.startsWith('-') ? value.slice(1) : value === '0' ? '0' : `-${value}`
   const seedCash = decimal(initialCash)
   const cash = decimal(checkpoint.cash_usd) ?? seedCash
   const funding = decimal(checkpoint.funding_paid) ?? '0'
@@ -2157,8 +2214,42 @@ function projectTerminalState(
   const equity = decimal(result.equity_usd) ?? cash
   const net =
     fundingComplete && realized !== null && fees !== null && funding !== null
-      ? addDecimalStrings(realized, funding, fees)
+      ? addDecimalStrings(realized, negateDecimal(fees), negateDecimal(funding))
       : null
+  const execution = isRecord(checkpoint.execution_checkpoint)
+    ? checkpoint.execution_checkpoint
+    : {}
+  const executionOrders = isRecord(execution.orders) ? execution.orders : {}
+  const projectedOrders = orders.filter(isRecord).map((order) => {
+    const orderId = typeof order.order_id === 'string' ? order.order_id : null
+    const checkpointOrder =
+      orderId && isRecord(executionOrders[orderId])
+        ? executionOrders[orderId]
+        : undefined
+    return checkpointOrder && isRecord(checkpointOrder.intent)
+      ? {
+          ...order,
+          ...checkpointOrder.intent,
+          state: checkpointOrder.state,
+          status: checkpointOrder.state,
+          filled_quantity_btc: checkpointOrder.filled,
+          remaining_quantity_btc: checkpointOrder.remaining,
+        }
+      : order
+  })
+  for (const [orderId, checkpointOrder] of Object.entries(executionOrders))
+    if (
+      !projectedOrders.some((order) => order.order_id === orderId) &&
+      isRecord(checkpointOrder) &&
+      isRecord(checkpointOrder.intent)
+    )
+      projectedOrders.push({
+        ...checkpointOrder.intent,
+        state: checkpointOrder.state,
+        status: checkpointOrder.state,
+        filled_quantity_btc: checkpointOrder.filled,
+        remaining_quantity_btc: checkpointOrder.remaining,
+      })
   const dto: JsonRecord = {
     schema_version: 'paper-futures-terminal-state.v1',
     run_id: runId,
@@ -2183,7 +2274,7 @@ function projectTerminalState(
           ),
         }
       : null,
-    orders: orders.filter(isRecord),
+    orders: projectedOrders,
     fills: (fills.filter(isRecord).length > 0
       ? fills.filter(isRecord)
       : ledgerEvents
