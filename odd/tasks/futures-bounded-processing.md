@@ -106,3 +106,5 @@ BP-05a behavior commit: `1d74f5bba2029dd99613a81c282afd667c323b4c` (`feat(future
 BP-05a tracker evidence commit: `8e3afc0cdccf0439dad21fcf95ff082dbbd0c0f3` (`docs(futures): record BP-05a diagnostic evidence`).
 
 BP-05b behavior commit: `41856f37717aacbe3dceea34db4966e165de6d72` (`feat(futures): expose durable source backlog lag`).
+
+LOCAL-01 behavior commit: `76d2643ba3289342de091e4a0169b73a4afac607` (`feat(futures): add reproducible local protection scenario`).
