@@ -1,0 +1,20 @@
+odd/tasks/futures-bounded-processing.md
+  h_2f68313623be98 55-58
+server/src/features/paper-futures/futures-operative-state.test.ts
+  h_2f68313623be98 1-440
+server/src/features/paper-futures/futures-operative-state.ts
+  h_2f68313623be98 1-885
+server/src/features/paper-futures/futures-store.ts
+  h_2f68313623be98 12,205-210
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a8f50889e8fd8ce4228594835010bcac16a71754",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
