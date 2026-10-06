@@ -37,7 +37,10 @@ Every sustained live run of the single process surfaced a new engine defect: the
 - [x] PS-03a [M] Official Kraken candles as the canonical series: capture backfills and polls closed 1 m / 5 m candles from the public charts API into append-only market DB tables (raw response + hash, `known_at` for as-of reads); observed-vs-official quality report.
 - [x] PS-03b [M] Verdict service C: pure Python function over official candles (C25-C28 entry proposals only; exits stay with D), regime chained in the verdicts DB, writes verdicts on candle close; double replay gives identical verdicts.
 - [ ] PS-04 [M] News process N wired into C (Gemini as veto/confidence, stored per item).
-- [ ] PS-05 [L] Paper execution D consumes verdicts; retire per-delta driver, market-context transport, operative bridge, `futuresSourceFailed` latch; fix funding-pause bug (`python/balancita_engine/futures_runtime.py:2393-2404`).
+- [ ] PS-05a [L] Paper execution D (Python, own account DB, single writer): consumes fresh verdicts, ticker and funding read-only; top-of-ticker taker fills; exits via `propose` with the position; append-only hash-chained events plus snapshots; live run equals replay.
+- [ ] PS-05b [M] Gateway serves D's account, position, fills and verdict analyses read-only, so the terminal shows the engine instead of "engine off".
+- [ ] PS-05c [S] Fix the funding-pause overwrite in the legacy runtime (`python/balancita_engine/futures_runtime.py:2393-2404`), with a test. The legacy runtime is still used by the MOCK local terminal. Blocked until the user's uncommitted local edits to `futures_runtime.py` are reconciled.
+- [ ] PS-05d [L] Retire the legacy live engine once D is proven: per-delta driver, market-context transport, operative bridge, `futuresSourceFailed` latch, `FUTURES_MODE=mock/replay` in `app.ts`, and the `DEV_LIVE_SINGLE_PROCESS` rollback. The dev MOCK child, which uses the local terminal, stays.
 - [ ] PS-06 [S] Process supervision + per-process health in UI.
 
 ## Acceptance (PS-01)
@@ -125,6 +128,16 @@ Every sustained live run of the single process surfaced a new engine defect: the
     - Actions over 1448 verdicts: WAIT 1273; LONG 96 (C25 45, C27 43, C26 4, ...); SHORT 79. Regime: trend 907, range 537.
   - Double replay: the live run and two `--once` replays from the same market DB were identical on `(bucket_start, verdict_hash, payload_json)` for every bucket, after the fix too (1445/1445).
   - Note: 1 m features become ready at 50 candles, but the window is pinned at 200; the first 199 verdicts after an empty DB use a shorter window. The official backfill covers this in practice.
+
+- 2026-10-06 PS-05 design (user decisions; engine map from a read-only explore agent):
+  - Reuse the pure blocks: `FuturesLedger`, `PaperExecutionAdapter` semantics, `futures_funding`, the sizing rule of `_risk_plan`, and exits through `futures_strategies.propose` with `position_side`, using the next verdicts' features.
+  - Do not reuse the TS store validators (about 2000 lines), the identity bridge or the market-context transport.
+  - Fills: taker at the best bid/ask of the first ticker with `received_at >= decision + latency`, capped by the displayed `bid_size`/`ask_size`. The ticker carries bid/ask/sizes/mark at about 3/s. Rebuilding the book from deltas was rejected as too costly for at most 1000 USD orders.
+  - Account DB: new, written only by D. Hash-chained append-only events plus append-only snapshots, so a restart never replays all history.
+  - The funding-pause bug class is avoided by design: entry gates are recomputed from independent causes, with no shared `entry_paused` flag.
+  - D acts only on fresh verdicts (`knowledge_lag_ms` within a threshold); a verdict becomes available at its stored `written_at`.
+  - Pause/resume/close controls need a command channel to D; they are deferred to PS-06.
+  - Retirement (PS-05d) is approved for the end, once D is proven live.
 
 ## Next step
 
