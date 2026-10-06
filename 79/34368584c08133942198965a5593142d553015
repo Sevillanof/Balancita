@@ -1,0 +1,33 @@
+odd/tasks/futures-process-split.md
+  s_12ba8cc318628e::t_4c33a7d35ab28e 62-71,74-77
+server/src/features/kraken-futures/futures-candles.test.ts
+  s_12ba8cc318628e::t_2b707fa3c950a7 1-105
+server/src/features/kraken-futures/futures-candles.ts
+  s_12ba8cc318628e::t_a7674096f7d9fa 3,23-27,86-87,142-143,189-231,248,250-254
+server/src/features/kraken-futures/futures-market-store.test.ts
+  s_12ba8cc318628e::t_36a1984c9a5461 5-7,194-196,365,388-390,421-534
+server/src/features/kraken-futures/futures-market-store.ts
+  s_12ba8cc318628e::t_8161791865b367 1,24-58,60-137,149,281-290,300,547-555,557-558,560,571-573,582,587-588,590-591,594-612,619-620,624-625,627-635,637,1046-1077
+server/src/features/kraken-futures/futures-market.test.ts
+  s_12ba8cc318628e::t_a5ed549227303e 1-2,443-616
+server/src/features/kraken-futures/futures-market.ts
+  s_12ba8cc318628e::t_47769acb69d28e 416-427,589-592,772,891-892,948-968
+server/src/features/live-gateway/live-capture.ts
+  s_12ba8cc318628e::t_3479c729d0cb39 49-50
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7934368584c08133942198965a5593142d553015",
+  "prompts": {},
+  "sessions": {
+    "s_12ba8cc318628e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "be8053e5-4281-40d7-9662-85433f1cb3ae",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
