@@ -38,7 +38,7 @@ Every sustained live run of the single process surfaced a new engine defect: the
 - [x] PS-03b [M] Verdict service C: pure Python function over official candles (C25-C28 entry proposals only; exits stay with D), regime chained in the verdicts DB, writes verdicts on candle close; double replay gives identical verdicts.
 - [ ] PS-04 [M] News process N wired into C (Gemini as veto/confidence, stored per item).
 - [x] PS-05a [L] Paper execution D (Python, own account DB, single writer): consumes fresh verdicts, ticker and funding read-only; top-of-ticker taker fills; exits via `propose` with the position; append-only hash-chained events plus snapshots; live run equals replay.
-- [ ] PS-05b [M] Gateway serves D's account, position, fills and verdict analyses read-only, so the terminal shows the engine instead of "engine off".
+- [x] PS-05b [M] Gateway serves D's account, position, fills and verdict analyses read-only, so the terminal shows the engine instead of "engine off".
 - [x] PS-05c [S] Fix the funding-pause overwrite in the legacy runtime (`python/balancita_engine/futures_runtime.py:2393-2404`), with a test. The legacy runtime is still used by the MOCK local terminal.
 - [ ] PS-05d [L] Retire the legacy live engine once D is proven: per-delta driver, market-context transport, operative bridge, `futuresSourceFailed` latch, `FUTURES_MODE=mock/replay` in `app.ts`, and the `DEV_LIVE_SINGLE_PROCESS` rollback. The dev MOCK child, which uses the local terminal, stays.
 - [ ] PS-06 [S] Process supervision + per-process health in UI.
@@ -171,6 +171,26 @@ Every sustained live run of the single process surfaced a new engine defect: the
     - Live equals replay assuming each source commits within `horizon_margin_ms` (2 s) of its row time.
     - Kraken publishes an hour's funding only after the hour ends. A position closed earlier accrues nothing for that hour and reports `funding_complete: false`. It is never inferred, so funding cost is understated for short trades.
     - At current volatility, C25 targets (about 3 ATR) do not clear taker round-trip costs. That is a strategy and economics question for the user.
+
+- 2026-10-06 PS-05b (delegated writer, Sonnet; reviewed by the parent, including the screenshots).
+  - D: `order_filled`, `position_opened`, `position_closed` and `funding_accrued` carry an `account` block. It holds running cash, realized, fees, funding, `funding_complete` and the position. `net_usd` is null while funding is incomplete. The config moves to `futures-paper-execution-config.v2`, so older account DBs are refused.
+  - Gateway, read-only: the new `paper-engine-follower.ts` reads `FUTURES_PAPER_ACCOUNT_DB_PATH` and `FUTURES_VERDICTS_DB_PATH`, which are wired for the `live` child.
+    - Bounded tails: the last 500 events by `seq`, one probe for the latest account block, and the last 100 verdicts.
+    - Fixed poll order: analyses, then events, then the equity mark (at most every 2 s with a position), then the engine status.
+    - It serves `paper-futures-terminal-state.v1` and the existing stream events. A replaced account DB triggers `resync.required`.
+    - Engine status: `off` (not configured), `starting`, `unavailable`, `running` (activity within 10 min) or `idle`. `commands: unavailable`; `paper.command` is rejected.
+  - Client: live shows the account, position, orders/fills and analyses. Verdict markers appear on the live chart for fresh LONG/SHORT verdicts only. Pause, resume and close are disabled, with a Spanish PS-06 notice.
+  - Tests:
+    - D account-block tests RED, then GREEN. Python paper + verdicts: OK.
+    - Gateway follower, engine and decimal tests: written before the modules existed. live-gateway + kraken-futures: 79/79.
+    - Root `src/app src/features/paper-futures`: 116 (baseline 108).
+    - `dev.node-test`: 13/13. Server and root typecheck clean.
+    - Mutations caught: the short sign, poll order, the equity throttle, the cash formula, `funding_complete` gating, and re-enabled controls.
+  - Browser (real `pnpm run dev` against Kraken, plus the PS-05a DBs with an injected trade):
+    - Engine running; account 9999.71 cash / 9999.78 equity with the long 0.0068 BTC open.
+    - Orders filled and rejected with reasons; fills at 86282/86283; LONG markers on their candles.
+    - Controls disabled with the notice. No console errors.
+  - Known: a fresh account DB shows `starting` until D's first event or 5-minute snapshot. Rejected entries show no quantity, because it is only known at fill.
 
 ## Next step
 

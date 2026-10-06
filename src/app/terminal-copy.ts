@@ -11,6 +11,10 @@ export function reasonLabel(value: unknown): string {
     no_directional_proposal:
       'No hay una propuesta direccional disponible; el motor espera.',
     insufficient_history: 'Histórico insuficiente para evaluar estrategias.',
+    open: 'Abierta',
+    filled: 'Ejecutada',
+    rejected: 'Rechazada',
+    expired: 'Caducada',
     unknown_funding:
       'Financiación sin semántica verificada; entradas bloqueadas.',
   }

@@ -6,6 +6,9 @@ async function main(): Promise<void> {
   // Read-only: opens the capture process's market DB, starts no collector/engine.
   const app = await buildLiveGateway({
     marketDbPath: config.futuresMarketDbPath,
+    // Optional read-only views of C's verdicts and D's account (unset: engine off).
+    accountDbPath: process.env.FUTURES_PAPER_ACCOUNT_DB_PATH || undefined,
+    verdictsDbPath: process.env.FUTURES_VERDICTS_DB_PATH || undefined,
     staleAfterMs: config.marketStaleAfterMs,
     allowedOrigins: [
       config.corsOrigin,

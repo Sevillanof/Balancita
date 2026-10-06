@@ -540,6 +540,90 @@ class FundingTests(Case):
         self.assertEqual(len(events_of(self.path("account.sqlite"), "funding_accrued")), 1)
 
 
+class AccountBlockTests(Case):
+    """Every state-changing event carries the running totals after it."""
+
+    def account_of(self, kind, index=0):
+        return body(events_of(self.path("account.sqlite"), kind)[index])["account"]
+
+    def test_entry_fill_and_position_opened_carry_the_account_after_the_fill(self):
+        _, written = self.long_entry()
+        self.market.tickers([(written + 120, "100010", "100011", "100010")])
+        self.replay()
+        expected = {
+            "cash_usd": "9999.90498955", "realized_gross_usd": "0", "fees_usd": "0.09501045",
+            "funding_paid_usd": "0", "funding_complete": True, "net_usd": "-0.09501045",
+            "position": {
+                "side": "long", "quantity_btc": "0.0019", "entry_price_usd_per_btc": "100011",
+                "opened_at_ms": written + 120, "stop": "95001", "target": "100500", "strategy_id": C25,
+            },
+        }
+        self.assertEqual(self.account_of("order_filled"), expected)
+        self.assertEqual(self.account_of("position_opened"), expected)
+
+    def test_close_carries_the_realized_totals_and_no_position(self):
+        _, written = self.long_entry(stop="99900")
+        self.market.tickers([
+            (written + 150, "100010", "100011", "100010"),
+            (written + 5 * SECOND, "99890", "99891", "99890"),
+            (written + 5 * SECOND + 300, "99870", "99871", "99870"),
+        ])
+        self.replay()
+        closed = body(events_of(self.path("account.sqlite"), "position_closed")[0])
+        for account in (self.account_of("position_closed"), self.account_of("order_filled", 1)):
+            self.assertIsNone(account["position"])
+            # Closed before the hour's funding is published: completeness is never inferred.
+            self.assertFalse(closed["funding_complete"])
+            self.assertFalse(account["funding_complete"])
+            self.assertIsNone(account["net_usd"])
+            self.assertEqual(account["fees_usd"], closed["fees"])
+            self.assertEqual(account["realized_gross_usd"], closed["gross"])
+            self.assertEqual(account["cash_usd"], "9997.61468905")
+            self.assertEqual(account["funding_paid_usd"], "0")
+
+    def test_funding_accrual_carries_the_running_funding_total(self):
+        FundingTests.funded_position(self, "long")
+        self.replay(config=cfg(time_stop_ms=10 * HOUR))
+        paid = body(events_of(self.path("account.sqlite"), "funding_accrued")[0])["funding_paid"]
+        account = self.account_of("funding_accrued")
+        self.assertEqual(account["funding_paid_usd"], paid)
+        self.assertEqual(account["position"]["side"], "long")
+        self.assertEqual(account["position"]["strategy_id"], C25)
+
+    def test_net_is_reported_exactly_when_funding_is_complete(self):
+        FundingTests.funded_position(self, "long")
+        self.market.tickers([(BASE + HOUR + 20 * SECOND, "89000", "89001", "89000"),
+                             (BASE + HOUR + 21 * SECOND, "89000", "89001", "89000")])
+        self.replay(config=cfg(time_stop_ms=10 * HOUR))
+        closed = body(events_of(self.path("account.sqlite"), "position_closed")[0])
+        account = self.account_of("position_closed")
+        self.assertEqual(account["funding_complete"], closed["funding_complete"])
+        self.assertEqual(account["net_usd"], closed["net"] if closed["funding_complete"] else None)
+        self.assertEqual(account["funding_paid_usd"], closed["funding"])
+
+    def test_only_account_changing_events_carry_an_account(self):
+        _, written = self.long_entry(stop="99900")
+        self.market.tickers([
+            (written + 150, "100010", "100011", "100010"),
+            (written + 5 * SECOND, "99890", "99891", "99890"),
+            (written + 5 * SECOND + 300, "99870", "99871", "99870"),
+        ])
+        self.replay()
+        with_account = {"order_filled", "position_opened", "position_closed", "funding_accrued"}
+        seen = set()
+        for event in events_of(self.path("account.sqlite")):
+            self.assertEqual("account" in event["body"], event["kind"] in with_account, event["kind"])
+            seen.add(event["kind"])
+        self.assertTrue(with_account - {"funding_accrued"} <= seen)
+
+    def test_an_account_db_from_the_previous_event_schema_is_refused(self):
+        old = cfg(version="futures-paper-execution-config.v1")
+        AccountStore(self.path("old.sqlite"), old).close()
+        with self.assertRaises(ValueError):
+            AccountStore(self.path("old.sqlite"), PAPER_EXECUTION_CONFIG)
+        self.assertEqual(PAPER_EXECUTION_CONFIG["version"], "futures-paper-execution-config.v2")
+
+
 class ReplayAndRestartTests(Case):
     def busy_inputs(self):
         """Entry, stop, re-entry on a new signal, with funding, all in one input set."""

@@ -50,7 +50,8 @@ const CAPTURE_ARGS = [
  * - server: legacy services (FUTURES_MODE forced empty so `.env` cannot change it),
  * - mock: scripted MOCK futures API only,
  * - capture: Kraken public WS -> live market DB (sole writer, no HTTP/engine),
- * - live: read-only gateway on 8789 tailing that DB (no collector, no engine),
+ * - live: read-only gateway on 8789 tailing that DB plus the paper account and
+ *   verdicts DBs (no collector, no engine),
  * - verdict: Python verdict service C (market DB read-only -> verdicts DB, sole
  *   writer of the latter; its own `command` instead of node),
  * - paper: Python paper execution D (market + verdicts DBs read-only -> account
@@ -113,6 +114,8 @@ export function devChildSpecs({
       },
     ]
   const marketDb = liveDb('futures-market.sqlite')
+  const verdictsDb = liveDb('futures-verdicts.sqlite')
+  const accountDb = liveDb('futures-paper-account.sqlite')
   return [
     ...common,
     {
@@ -134,6 +137,9 @@ export function devChildSpecs({
         PORT: String(DEV_PORTS.live),
         FUTURES_MODE: '',
         FUTURES_MARKET_DB_PATH: marketDb,
+        // Read-only views of C's verdicts and D's account for the terminal.
+        FUTURES_VERDICTS_DB_PATH: verdictsDb,
+        FUTURES_PAPER_ACCOUNT_DB_PATH: accountDb,
       },
     },
     {
@@ -146,7 +152,7 @@ export function devChildSpecs({
         '--market-db',
         marketDb,
         '--verdicts-db',
-        liveDb('futures-verdicts.sqlite'),
+        verdictsDb,
       ],
       env: {
         ...env,
@@ -165,9 +171,9 @@ export function devChildSpecs({
         '--market-db',
         marketDb,
         '--verdicts-db',
-        liveDb('futures-verdicts.sqlite'),
+        verdictsDb,
         '--account-db',
-        liveDb('futures-paper-account.sqlite'),
+        accountDb,
       ],
       env: {
         ...env,

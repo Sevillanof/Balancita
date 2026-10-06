@@ -107,6 +107,25 @@ function entryStateLabel(risk: Record<string, unknown>): string {
   return 'Entradas activas'
 }
 
+function paperEngineLabel(status: unknown, reason: unknown): string {
+  const labels: Record<string, string> = {
+    running: 'en marcha',
+    idle: 'inactivo',
+    starting: 'arrancando',
+    unavailable: 'no disponible',
+  }
+  const reasons: Record<string, string> = {
+    paper_execution_active: 'ejecución paper activa',
+    no_recent_paper_execution_activity: 'sin actividad reciente',
+    account_db_not_ready: 'la cuenta paper aún no existe',
+    no_paper_execution_records_yet: 'aún sin registros de ejecución',
+    account_db_unreadable: 'no se puede leer la cuenta paper',
+  }
+  const label = labels[String(status)] ?? 'estado desconocido'
+  const detail = typeof reason === 'string' ? reasons[reason] : undefined
+  return detail ? `${label} (${detail})` : label
+}
+
 function marketStatusLabel(value: unknown): string {
   const labels: Record<string, string> = {
     connecting: 'Conectando',
@@ -128,12 +147,15 @@ function TerminalMarketChart({
   mode,
   analyses,
   selectedId,
+  entriesOnly = false,
   onSelect,
 }: {
   market: Record<string, unknown>
   mode: TerminalBootstrap['mode']
   analyses: unknown[]
   selectedId: string
+  /** Mark only LONG/SHORT verdicts: a WAIT every minute would bury the chart. */
+  entriesOnly?: boolean
   onSelect: (analysisId: string) => void
 }) {
   const candles: ApprovedTerminalCandle[] = Array.isArray(market.candles)
@@ -177,6 +199,12 @@ function TerminalMarketChart({
     )
       return []
     const action = analysisAction(analysis)
+    if (entriesOnly && action !== 'LONG' && action !== 'SHORT') return []
+    // Verdicts rebuilt from a backfill were not decisions taken at that time
+    // (paper execution ignores them too: max_verdict_lag_ms).
+    if (entriesOnly && Number(analysis.knowledge_lag_ms) > 15_000) return []
+    // A verdict older than the chart has no candle: do not pile it on the first.
+    if (entriesOnly && Number(time) < candles[0]!.time * 1000) return []
     const decisionSeconds = Math.floor(Number(time) / 1000)
     const renderTime = candles.reduce(
       (latestTime, candle) =>
@@ -475,6 +503,17 @@ export default function FuturesTerminal({
     bootstrap.mode === 'paper_live' &&
     (record(state?.engine).status ?? bootstrap.engine?.status) === 'off'
   const localDemo = bootstrap.source === 'local-protection.v1'
+  // The live gateway shows paper execution D read-only: it has no command
+  // channel yet (PS-06), so controls render disabled.
+  const gatewayEngine =
+    bootstrap.mode === 'paper_live' &&
+    (record(state?.engine).commands ?? bootstrap.engine?.commands) ===
+      'unavailable'
+  const gatewayEngineStatus =
+    record(state?.engine).status ?? bootstrap.engine?.status
+  const gatewayEngineReason =
+    record(state?.engine).reason ?? bootstrap.engine?.reason
+  const showAnalysisTime = localDemo || gatewayEngine
   const originalRunActive = activeRunId === bootstrap.active_run_id
   const localScenarioStatus = localDemo
     ? String(
@@ -689,6 +728,12 @@ export default function FuturesTerminal({
                     ? 'cobertura del período actual disponible; tasa y límites del período no se exponen en esta API.'
                     : 'desconocida; entradas bloqueadas y PnL neto incompleto.'}
                 </p>
+                {gatewayEngine && !engineOff && (
+                  <p>
+                    Motor paper:{' '}
+                    {paperEngineLabel(gatewayEngineStatus, gatewayEngineReason)}
+                  </p>
+                )}
                 <p>
                   Warm-up:{' '}
                   {engineOff
@@ -709,8 +754,9 @@ export default function FuturesTerminal({
                   <TerminalMarketChart
                     market={market}
                     mode={bootstrap.mode}
-                    analyses={localDemo ? analyses : []}
-                    selectedId={localDemo ? selectedId : ''}
+                    analyses={localDemo || gatewayEngine ? analyses : []}
+                    selectedId={localDemo || gatewayEngine ? selectedId : ''}
+                    entriesOnly={!localDemo}
                     onSelect={setSelectedAnalysisId}
                   />
                   {!engineOff && (
@@ -771,7 +817,7 @@ export default function FuturesTerminal({
                                   )}
                             </strong>
                             <p>{analysisReason(analysis, localDemo)}</p>
-                            {localDemo && (
+                            {showAnalysisTime && (
                               <p>Hora: {utcTime(analysis.decision_time_ms)}</p>
                             )}
                             <p>
@@ -952,25 +998,37 @@ export default function FuturesTerminal({
                       <p>{entryStateLabel(entryRisk)}</p>
                     </>
                   )}
+                  {gatewayEngine && (
+                    <p>
+                      Pausar, reanudar y cerrar llegarán en PS-06: por ahora el
+                      terminal live es de solo lectura.
+                    </p>
+                  )}
                   {(localDemo
                     ? ([
                         'paper.pause',
                         'paper.resume',
                         'paper.new_run',
                       ] as const)
-                    : ([
-                        'paper.start',
-                        'paper.pause',
-                        'paper.resume',
-                        'paper.close',
-                        'paper.new_run',
-                      ] as const)
+                    : gatewayEngine
+                      ? ([
+                          'paper.pause',
+                          'paper.resume',
+                          'paper.close',
+                        ] as const)
+                      : ([
+                          'paper.start',
+                          'paper.pause',
+                          'paper.resume',
+                          'paper.close',
+                          'paper.new_run',
+                        ] as const)
                   ).map((action) => (
                     <button
                       key={action}
                       type="button"
                       className="demo-terminal__present"
-                      disabled={!connected || commandPending}
+                      disabled={gatewayEngine || !connected || commandPending}
                       onClick={() => {
                         if (
                           action === 'paper.new_run' &&
@@ -1023,7 +1081,7 @@ export default function FuturesTerminal({
                       >
                         {money(account.equity_usd, localDemo ? 5 : 2)}
                       </dd>
-                      {localDemo && (
+                      {showAnalysisTime && (
                         <>
                           <dt>PnL bruto realizado USD</dt>
                           <dd
@@ -1115,7 +1173,12 @@ export default function FuturesTerminal({
                                 'Orden paper',
                             ),
                             reasonLabel(order.status ?? order.type),
-                            `${String(order.quantity_btc ?? 'Cantidad no disponible')} · ${String(order.order_id ?? 'ID no disponible')}`,
+                            `${String(order.quantity_btc ?? 'Cantidad no disponible')} · ${String(order.order_id ?? 'ID no disponible')}${
+                              gatewayEngine &&
+                              typeof order.reason_code === 'string'
+                                ? ` · ${reasonLabel(order.reason_code)}`
+                                : ''
+                            }`,
                           ],
                         }
                       }),

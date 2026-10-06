@@ -5,6 +5,7 @@ import type { Socket } from 'node:net'
 import Fastify, { type FastifyInstance } from 'fastify'
 import WebSocket, { WebSocketServer } from 'ws'
 import { LiveMarketFollower } from './market-follower.ts'
+import { PaperEngineFollower } from './paper-engine-follower.ts'
 
 /** Synthetic stream id: the gateway has no engine run, only a market view. */
 export const LIVE_RUN_ID = 'live-market-view'
@@ -20,6 +21,10 @@ type Row = Record<string, unknown>
 
 export interface LiveGatewayOptions {
   readonly marketDbPath: string
+  /** D's account DB, read-only. Absent: the engine is reported `off`. */
+  readonly accountDbPath?: string
+  /** C's verdicts DB, read-only: feeds the analyses panel and chart markers. */
+  readonly verdictsDbPath?: string
   readonly allowedOrigins?: readonly string[]
   readonly staleAfterMs?: number
   readonly pollMs?: number
@@ -46,17 +51,12 @@ interface Session {
   closed: boolean
 }
 
-const ENGINE_OFF = {
-  status: 'off',
-  reason: 'engine_not_running',
-  funding: 'unresolved',
-} as const
-
 /**
- * Read-only live market gateway: HTTP bootstrap plus the terminal WebSocket,
- * fed by tailing the capture process's market database by rowid. It starts no
- * collector and no engine and never writes. Terminal events live in memory
- * only; resume past the ring or across a restart falls back to a snapshot.
+ * Read-only live gateway: HTTP bootstrap plus the terminal WebSocket, fed by
+ * tailing the capture process's market database by rowid and, when configured,
+ * paper execution D's account DB and C's verdicts DB. It starts no collector
+ * and no engine and never writes. Terminal events live in memory only; resume
+ * past the ring or across a restart falls back to a snapshot.
  */
 export async function buildLiveGateway(
   options: LiveGatewayOptions,
@@ -66,6 +66,12 @@ export async function buildLiveGateway(
     dbPath: options.marketDbPath,
     clock,
     staleAfterMs: options.staleAfterMs,
+  })
+  const engine = new PaperEngineFollower({
+    accountDbPath: options.accountDbPath,
+    verdictsDbPath: options.verdictsDbPath,
+    clock,
+    markPrice: () => follower.markPrice(),
   })
   const allowedOrigins = new Set(
     options.allowedOrigins ?? [
@@ -124,19 +130,29 @@ export async function buildLiveGateway(
       state: {
         run_id: LIVE_RUN_ID,
         state_version: 0,
-        engine: ENGINE_OFF,
+        engine: engine.engineStatus(),
         market: { ...follower.marketView(), ...follower.priceFields() },
+        ...engine.snapshotFields(),
       },
       market: follower.terminalMarket(),
     })
 
-  const publish = (data: Row): void => {
+  const publish = (data: Row, type = 'market.updated'): void => {
     seq += 1
-    const event = envelope('market.updated', data)
+    const event = envelope(type, data)
     ring.push(event)
     if (ring.length > RING_SIZE) ring.splice(0, ring.length - RING_SIZE)
     for (const session of [...sessions])
       if (session.subscribed) send(session, event)
+  }
+
+  // The engine view was rebuilt (account DB replaced or first seen after a
+  // snapshot was served): every client resyncs from a fresh snapshot.
+  const resyncAll = (reason: string): void => {
+    for (const session of [...sessions])
+      if (session.subscribed) closeForResync(session, reason)
+    ring.length = 0
+    seq += 1
   }
 
   const poll = (): void => {
@@ -144,6 +160,15 @@ export async function buildLiveGateway(
       for (const data of follower.poll()) publish(data)
     } catch (error) {
       console.error('[live-gateway] poll failed', error)
+    }
+    // After the market poll, so equity is marked to the newest price.
+    try {
+      for (const event of engine.poll())
+        if (event.type === 'resync.required')
+          resyncAll(String(event.data.reason))
+        else publish(event.data, event.type)
+    } catch (error) {
+      console.error('[live-gateway] engine poll failed', error)
     }
   }
   const pollTimer = setInterval(poll, options.pollMs ?? 250)
@@ -170,13 +195,13 @@ export async function buildLiveGateway(
       ...(hash ? { metadata_hash: hash } : {}),
       terminal_market: follower.terminalMarket(),
       market,
-      engine: ENGINE_OFF,
+      engine: engine.engineStatus(),
     }
   })
   app.get('/api/health', () => ({
     process: 'live-gateway',
     capture: follower.status(),
-    engine: ENGINE_OFF,
+    engine: engine.engineStatus(),
   }))
   app.get(STREAM_PATH, async (_request, reply) =>
     reply.code(426).send({ error: { code: 'websocket_required' } }),
@@ -289,7 +314,9 @@ export async function buildLiveGateway(
           next_before_seq: null,
         })
       else if (message.type === 'paper.command')
-        control(session, 'protocol.error', { code: 'engine_off' })
+        control(session, 'protocol.error', {
+          code: engine.enabled ? 'commands_unavailable' : 'engine_off',
+        })
       else if (message.type === 'analysis.detail.request')
         control(session, 'protocol.error', { code: 'analysis_not_found' })
       else control(session, 'protocol.error', { code: 'invalid_message' })
@@ -314,6 +341,7 @@ export async function buildLiveGateway(
     sessions.clear()
     await new Promise<void>((resolve) => wss.close(() => resolve()))
     follower.close()
+    engine.close()
   })
   return app
 }

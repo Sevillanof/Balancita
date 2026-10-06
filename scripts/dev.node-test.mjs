@@ -65,6 +65,28 @@ describe('devChildSpecs', () => {
     assert.equal(env.FUTURES_DB_PATH, undefined)
   })
 
+  it('points the gateway at the paper account and verdicts databases, the ones D and C write', () => {
+    const { env } = byName.live
+    const paperArgs = byName.paper.args
+    assert.equal(
+      env.FUTURES_PAPER_ACCOUNT_DB_PATH,
+      paperArgs[paperArgs.indexOf('--account-db') + 1],
+    )
+    const verdictArgs = byName.verdict.args
+    assert.equal(
+      env.FUTURES_VERDICTS_DB_PATH,
+      verdictArgs[verdictArgs.indexOf('--verdicts-db') + 1],
+    )
+    // The rollback child is the legacy single process: it gets neither.
+    const rollback = devChildSpecs({
+      root,
+      env: { DEV_LIVE_SINGLE_PROCESS: '1' },
+      allowedFlags: noFlags,
+    }).find((spec) => spec.name === 'live')
+    assert.equal(rollback.env.FUTURES_PAPER_ACCOUNT_DB_PATH, undefined)
+    assert.equal(rollback.env.FUTURES_VERDICTS_DB_PATH, undefined)
+  })
+
   it('runs the Python verdict service over the capture market database', () => {
     const { command, args, cwd, env } = byName.verdict
     assert.equal(command, 'python3')

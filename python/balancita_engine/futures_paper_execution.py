@@ -42,7 +42,7 @@ from .futures_ledger import FuturesLedger
 from .futures_strategies import C25_ID, C26_ID, C27_ID, C28_ID, propose
 
 PAPER_EXECUTION_CONFIG = {
-    "version": "futures-paper-execution-config.v1",
+    "version": "futures-paper-execution-config.v2",
     "initial_cash_usd": "10000",
     "max_notional_usd": "1000",
     "max_exposure_multiple": "1",
@@ -386,6 +386,34 @@ class PaperExecutionEngine:
             equity += position["qty"] * (reference - position["entry"]) * sign
         return equity
 
+    def _account_block(self):
+        """Running totals after the event being emitted, for read-only consumers.
+
+        ``cash_usd`` is the balance after realized PnL, fees and funding (the
+        ledger's own ``cash`` is the constant seed). Equity needs a mark, which
+        the consumer holds, so it is not stored. ``net_usd`` is None while the
+        funding total is incomplete: it is never inferred.
+        """
+        ledger = self.ledger
+        balance = ledger.cash + ledger.realized_gross - ledger.fees - ledger.funding_paid
+        position = None
+        if ledger.position is not None:
+            trade = self.trade
+            position = {
+                "side": ledger.position["side"], "quantity_btc": _s(ledger.position["qty"]),
+                "entry_price_usd_per_btc": _s(ledger.position["entry"]),
+                "opened_at_ms": trade["opened_at_ms"], "stop": trade["stop"],
+                "target": trade["target"], "strategy_id": trade["strategy_id"],
+            }
+        net = ledger.realized_gross - ledger.fees - ledger.funding_paid
+        return {
+            "cash_usd": _s(balance), "realized_gross_usd": _s(ledger.realized_gross),
+            "fees_usd": _s(ledger.fees), "funding_paid_usd": _s(ledger.funding_paid),
+            "funding_complete": ledger.funding_complete,
+            "net_usd": _s(net) if ledger.funding_complete else None,
+            "position": position,
+        }
+
     def _floor_lot(self, quantity):
         return (quantity / self.lot).to_integral_value(rounding=ROUND_FLOOR) * self.lot
 
@@ -516,13 +544,15 @@ class PaperExecutionEngine:
             "invalidation": order["invalidation"], "opened_at_ms": time_ms,
         }
         self.pending = None
+        account = self._account_block()
         self._emit("order_filled", time_ms, {
             "order_id": order["order_id"], "side": "buy" if side == "long" else "sell",
             "quantity": _s(quantity), "price": _s(entry), "liquidity": "taker", "fee": _s(fee),
             "bid": _s(bid), "ask": _s(ask), "displayed_size": _s(displayed),
             "ticker_rowid": item["id"], "eligible_at_ms": order["eligible_at_ms"],
+            "account": account,
         })
-        self._emit("position_opened", time_ms, dict(self.trade, fee=_s(fee)))
+        self._emit("position_opened", time_ms, dict(self.trade, fee=_s(fee), account=account))
 
     def _fill_exit(self, time_ms, item, bid, ask):
         order = self.pending
@@ -540,12 +570,14 @@ class PaperExecutionEngine:
         fees = Decimal(closed["allocated_entry_fee"]) + Decimal(closed["exit_fee"])
         self.pending = None
         self.trade = None
+        account = self._account_block()
         self._emit("order_filled", time_ms, {
             "order_id": order["order_id"], "side": "sell" if side == "long" else "buy",
             "quantity": _s(quantity), "price": _s(price), "liquidity": "taker",
             "fee": closed["exit_fee"], "bid": _s(bid), "ask": _s(ask),
             "displayed_size": None if displayed is None else _s(displayed),
             "reduce_only": True, "ticker_rowid": item["id"], "eligible_at_ms": order["eligible_at_ms"],
+            "account": account,
         })
         self._emit("position_closed", time_ms, {
             "order_id": trade["order_id"], "reason": order["reason"], "side": side,
@@ -553,7 +585,7 @@ class PaperExecutionEngine:
             "gross": closed["gross"], "fees": _s(fees), "funding": closed["allocated_funding"],
             "net": _s(net), "funding_complete": complete, "opened_at_ms": trade["opened_at_ms"],
             "held_ms": time_ms - trade["opened_at_ms"], "strategy_id": trade["strategy_id"],
-            "signal_key": trade["signal_key"],
+            "signal_key": trade["signal_key"], "account": account,
         })
 
     def _risk(self, time_ms, mark):
@@ -723,7 +755,7 @@ class PaperExecutionEngine:
         if force_event or amount != 0:
             self._emit("funding_accrued", until_ms if time_ms is None else time_ms, {
                 "from_ms": cursor, "to_ms": until_ms, "funding_paid": _s(amount),
-                "funding_complete": ledger.funding_complete,
+                "funding_complete": ledger.funding_complete, "account": self._account_block(),
             })
         return amount
 

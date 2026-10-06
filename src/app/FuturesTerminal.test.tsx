@@ -1151,6 +1151,293 @@ describe('FuturesTerminal local scenario presentation', () => {
   })
 })
 
+describe('FuturesTerminal on the live gateway with paper execution', () => {
+  const T0 = 1_800_000_000_000
+  const liveBootstrap = (status = 'running'): TerminalBootstrap => ({
+    schema_version: 1,
+    mode: 'paper_live',
+    source: 'kraken-public-live-stream.v1',
+    active_run_id: 'live-market-view',
+    market: { status: 'live', last_received_at: T0 + 125, funding: 'unknown' },
+    engine: {
+      status,
+      reason: 'paper_execution_active',
+      commands: 'unavailable',
+    },
+    terminal_market: {
+      schema_version: 'futures-terminal-market.v1',
+      as_of_ms: T0,
+      interval_ms: 60_000,
+      candles: [-3, -2, -1].map((offset) => ({
+        time_ms: T0 + offset * 60_000,
+        open: '100000',
+        high: '100050',
+        low: '99950',
+        close: '100010',
+        volume_btc: '0.5',
+        closed: true,
+      })),
+    },
+  })
+  const live = (seq: number, type: string, data: Record<string, unknown>) =>
+    envelope(type, seq, data, T0 + seq, 'live-market-view')
+  const analysis = (index: number, action: string) => ({
+    analysis_id: `verdict-hash-${index}`,
+    decision_time_ms: T0 - (3 - index) * 60_000 + 3_000,
+    action,
+    selector: {
+      action,
+      strategy_id: action === 'WAIT' ? null : 'c25-pullback-perp-v1',
+      reason_code: action === 'WAIT' ? 'no_proposal' : 'c25_long',
+    },
+    selected_strategy_id: action === 'WAIT' ? null : 'c25-pullback-perp-v1',
+    runtime_version: 'futures-verdict.v1',
+    proposals: [],
+  })
+  const state = {
+    run_id: 'live-market-view',
+    state_version: 0,
+    engine: {
+      status: 'running',
+      reason: 'paper_execution_active',
+      commands: 'unavailable',
+    },
+    account: {
+      cash_usd: '9999.50494555',
+      equity_usd: '10000.49',
+      realized_gross_usd: '0',
+      fees_usd: '0.49505445',
+      funding_paid_usd: '0',
+      funding_complete: true,
+      net_usd: '-0.49505445',
+    },
+    position: {
+      side: 'long',
+      quantity_btc: '0.0099',
+      entry_price_usd_per_btc: '100011',
+    },
+    orders: [
+      {
+        order_id: 'o1',
+        side: 'buy',
+        type: 'entry',
+        state: 'filled',
+        status: 'filled',
+        quantity_btc: '0.0099',
+      },
+      {
+        order_id: 'o0',
+        side: 'buy',
+        type: 'entry',
+        state: 'rejected',
+        status: 'rejected',
+        reason_code: 'target_does_not_clear_cost_buffer',
+      },
+    ],
+    fills: [
+      {
+        fill_id: 'fill:3',
+        order_id: 'o1',
+        side: 'buy',
+        quantity_btc: '0.0099',
+        price_usd_per_btc: '100011',
+      },
+    ],
+    analyses: [analysis(1, 'WAIT'), analysis(2, 'LONG'), analysis(3, 'SHORT')],
+    market: {
+      feed: 'ticker',
+      event_time: T0,
+      received_at: T0 + 100,
+      normalized: { type: 'ticker', last: '100123.45' },
+    },
+  }
+
+  async function renderLive(snapshotState: Record<string, unknown> = state) {
+    vi.stubGlobal('WebSocket', TerminalSocket)
+    render(
+      <FuturesTerminal
+        bootstrap={liveBootstrap(
+          String(record(snapshotState.engine).status ?? 'running'),
+        )}
+      />,
+    )
+    await waitFor(() => expect(TerminalSocket.latest).toBeDefined())
+    TerminalSocket.latest!.publish(
+      live(0, 'snapshot', { watermark: 0, state: snapshotState }),
+    )
+    await screen.findByText('Saldo USD')
+  }
+
+  afterEach(() => {
+    cleanup()
+    chartHarness.markerSets = []
+    vi.unstubAllGlobals()
+  })
+
+  it('shows account, position, orders, fills and analyses instead of the engine-off notice', async () => {
+    await renderLive()
+    expect(screen.queryByText(/Motor de decisiones apagado/)).toBeNull()
+    expect(screen.getByText('long · 0.0099 BTC')).toBeTruthy()
+    expect(screen.getByText(/10\.000,49/)).toBeTruthy()
+    expect(screen.getByText('Posiciones y operaciones')).toBeTruthy()
+    expect(screen.getAllByText(/0\.0099 · o1/).length).toBeGreaterThan(0)
+    expect(screen.getByText(/Ejecución buy/)).toBeTruthy()
+    expect(screen.getByText('Análisis recientes')).toBeTruthy()
+    expect(screen.getAllByText(/Hora:/).length).toBe(3)
+    expect(screen.getByText(/Motor paper: en marcha/)).toBeTruthy()
+    // The rejected order says why; the filled one is in Spanish.
+    expect(
+      screen.getByText(
+        /Cantidad no disponible · o0 · target does not clear cost buffer/,
+      ),
+    ).toBeTruthy()
+    expect(screen.getByText('Ejecutada')).toBeTruthy()
+    expect(screen.getByText('Rechazada')).toBeTruthy()
+  })
+
+  it('draws verdict markers for entry verdicts only, none before the first candle or rebuilt from a backfill', async () => {
+    await renderLive({
+      ...state,
+      analyses: [
+        {
+          ...analysis(0, 'LONG'),
+          analysis_id: 'verdict-hash-old',
+          decision_time_ms: T0 - 3_600_000,
+        },
+        {
+          ...analysis(0, 'LONG'),
+          analysis_id: 'verdict-hash-backfill',
+          knowledge_lag_ms: 3_600_000,
+        },
+        ...state.analyses,
+      ],
+    })
+    const markers = chartHarness.markerSets.at(-1)!
+    // WAIT verdicts (one per minute) would only clutter the chart.
+    expect(markers.map((marker) => marker.id)).toEqual([
+      'verdict-hash-2',
+      'verdict-hash-3',
+    ])
+    expect(markers.map((marker) => marker.shape)).toEqual([
+      'arrowUp',
+      'arrowDown',
+    ])
+  })
+
+  it('keeps pause, resume and close visibly disabled with the PS-06 notice, and sends nothing', async () => {
+    await renderLive()
+    const socket = TerminalSocket.latest!
+    const send = vi.spyOn(socket, 'send')
+    for (const name of [
+      'Pausar entradas',
+      'Reanudar entradas',
+      'Cerrar posición',
+    ]) {
+      const button = screen.getByRole('button', { name }) as HTMLButtonElement
+      expect(button.disabled).toBe(true)
+      button.click()
+    }
+    expect(
+      screen.queryByRole('button', { name: 'Iniciar simulación' }),
+    ).toBeNull()
+    expect(
+      screen.queryByRole('button', { name: 'Nueva cuenta/run' }),
+    ).toBeNull()
+    expect(screen.getByText(/llegarán en PS-06/)).toBeTruthy()
+    expect(send).not.toHaveBeenCalled()
+  })
+
+  it('applies streamed verdicts, orders, fills and account updates in seq order', async () => {
+    await renderLive({
+      ...state,
+      analyses: [],
+      orders: [],
+      fills: [],
+      position: null,
+    })
+    const socket = TerminalSocket.latest!
+    await act(async () => {
+      socket.publish(
+        live(1, 'analysis.completed', { analysis: analysis(4, 'LONG') }),
+      )
+      socket.publish(
+        live(2, 'order.updated', {
+          order: { order_id: 'o9', side: 'buy', state: 'open', status: 'open' },
+        }),
+      )
+      socket.publish(
+        live(3, 'order.updated', {
+          order: {
+            order_id: 'o9',
+            side: 'buy',
+            state: 'filled',
+            status: 'filled',
+            quantity_btc: '0.01',
+          },
+        }),
+      )
+      socket.publish(
+        live(4, 'fill.created', {
+          fill: {
+            fill_id: 'fill:9',
+            order_id: 'o9',
+            side: 'buy',
+            quantity_btc: '0.01',
+            price_usd_per_btc: '100000',
+          },
+        }),
+      )
+      socket.publish(
+        live(5, 'position.updated', {
+          position: {
+            side: 'long',
+            quantity_btc: '0.01',
+            entry_price_usd_per_btc: '100000',
+          },
+        }),
+      )
+    })
+    expect(await screen.findByText('long · 0.01 BTC')).toBeTruthy()
+    expect(screen.getAllByText(/0\.01 · o9/).length).toBe(1)
+    expect(screen.getByText(/Ejecución buy/)).toBeTruthy()
+    expect(screen.getAllByText(/Hora:/).length).toBe(1)
+    expect(screen.queryByText(/Se detectó un salto/)).toBeNull()
+  })
+
+  it.each([
+    ['starting', /Motor paper: arrancando/],
+    ['idle', /Motor paper: inactivo/],
+    ['unavailable', /Motor paper: no disponible/],
+  ])('reports the %s engine without calling it off', async (status, label) => {
+    await renderLive({ ...state, engine: { ...state.engine, status } })
+    expect(screen.getByText(label)).toBeTruthy()
+    expect(screen.queryByText(/Motor de decisiones apagado/)).toBeNull()
+  })
+
+  it('follows an engine.status event from starting to running', async () => {
+    await renderLive({
+      ...state,
+      engine: { ...state.engine, status: 'starting' },
+    })
+    await act(async () => {
+      TerminalSocket.latest!.publish(
+        live(1, 'engine.status', {
+          status: 'running',
+          reason: 'paper_execution_active',
+          commands: 'unavailable',
+        }),
+      )
+    })
+    expect(await screen.findByText(/Motor paper: en marcha/)).toBeTruthy()
+  })
+})
+
+function record(value: unknown): Record<string, unknown> {
+  return typeof value === 'object' && value !== null
+    ? (value as Record<string, unknown>)
+    : {}
+}
+
 function selectedAnalysisId(): string | undefined {
   const panel = screen.getByRole('region', { name: 'Análisis seleccionado' })
   return panel.querySelectorAll('dd')[0]?.textContent ?? undefined

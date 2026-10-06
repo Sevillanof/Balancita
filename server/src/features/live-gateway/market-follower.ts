@@ -213,6 +213,14 @@ export class LiveMarketFollower {
     }
   }
 
+  /** Latest mark price as a decimal string (equity is marked to it). */
+  markPrice(): string | null {
+    const mark = this.latestPrice?.normalized.mark
+    return typeof mark === 'string' && /^-?\d+(?:\.\d+)?$/.test(mark)
+      ? mark
+      : null
+  }
+
   /** Price block in the shape `market.updated` consumers read. */
   priceFields(): Row {
     const price = this.latestPrice
