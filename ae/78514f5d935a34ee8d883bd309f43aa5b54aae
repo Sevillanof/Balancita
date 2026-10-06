@@ -1,0 +1,14 @@
+doc/decision-qwen-implementation.md
+  h_2f68313623be98 1-153
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ae78514f5d935a34ee8d883bd309f43aa5b54aae",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
