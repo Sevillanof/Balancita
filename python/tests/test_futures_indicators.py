@@ -33,13 +33,25 @@ class FuturesIndicatorTests(unittest.TestCase):
             candidate_index=59,
         )
         self.assertTrue(features["ready"])
-        self.assertEqual(features["schema_version"], "c27-features.v1")
+        self.assertEqual(features["schema_version"], "c27-features.v2")
         self.assertEqual(features["sma50"], "134.5")
         self.assertEqual(features["donchian_high20"], "159")
+        # Prior 20 bars are closes 139..158 with lows (close - 1) and highs (close + 1).
+        self.assertEqual(features["donchian_low20"], "138")
+        self.assertEqual(features["donchian_mid20"], "148.5")
         self.assertEqual(features["candidate_close"], "159")
         self.assertEqual(features["bollinger_ddof"], 0)
         self.assertEqual(features["smoothing"], "wilder")
         self.assertGreater(Decimal(features["atr14"]), 0)
+
+    def test_donchian_mid_is_none_without_warmup(self):
+        features = calculate_features(
+            [candle(i, str(100 + i)) for i in range(15)],
+            interval_ms=60_000, decision_time_ms=900_000, candidate_index=14,
+        )
+        self.assertIn("donchian_mid20", features)
+        self.assertIsNone(features["donchian_mid20"])
+        self.assertIsNone(features["donchian_high20"])
 
     def test_open_unavailable_late_and_incomplete_bars_do_not_create_ready_features(self):
         candles = [candle(i, str(100 + i)) for i in range(60)]

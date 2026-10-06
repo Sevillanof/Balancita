@@ -12,6 +12,8 @@ from balancita_engine.futures_paper_execution import (
     process_available,
     verify_chain,
 )
+from balancita_engine.futures_paper_execution import PaperExecutionEngine
+from balancita_engine.futures_strategies import C27_ID, propose
 from balancita_engine.futures_verdicts import VERDICT_CONFIG, VerdictStore
 
 SECOND = 1_000
@@ -442,6 +444,76 @@ class ExitTests(Case):
         self.replay()
         triggered = body(events_of(self.path("account.sqlite"), "exit_triggered")[0])
         self.assertEqual(triggered["reason"], "strategy_exit")
+
+    def test_c27_entry_from_propose_carries_a_numeric_level_and_exits_on_it(self):
+        # End to end: the invalidation D freezes is the one `propose` really emits.
+        entry = propose(C27_ID, {
+            "ready": True, "candidate_close": "100100", "donchian_high20": "100050",
+            "donchian_low20": "99950", "donchian_mid20": "100000", "candidate_volume": "13",
+            "prior_volume_mean20": "10", "candidate_bucket_start_ms": 60000, "atr14": "100",
+        })
+        self.assertEqual(entry["action"], "LONG")
+        self.assertEqual(entry["invalidation"], "opposite_donchian_mid_cross@100000")
+        written = self.open_long(strategy=C27, invalidation=entry["invalidation"])
+        self.verdicts.add(BASE, written + 30 * SECOND, verdict_payload(
+            BASE, action="WAIT", strategy=C27, one=features("99999", donchian_mid20="99000")))
+        self.market.tickers([(written + 31 * SECOND, "100010", "100011", "100010"),
+                             (written + 32 * SECOND, "100010", "100011", "100010")])
+        self.replay()
+        triggered = body(events_of(self.path("account.sqlite"), "exit_triggered")[0])
+        self.assertEqual(triggered["reason"], "strategy_exit")
+        self.assertEqual(triggered["detail"], "owner_exit_condition_met")
+
+    def test_c27_holds_while_the_close_stays_above_the_frozen_mid(self):
+        written = self.open_long(strategy=C27, invalidation="opposite_donchian_mid_cross@100000")
+        self.verdicts.add(BASE, written + 30 * SECOND, verdict_payload(
+            BASE, action="WAIT", strategy=C27, one=features("100001")))
+        self.market.tickers([(written + 31 * SECOND, "100010", "100011", "100010")])
+        self.replay()
+        self.assertNotIn("exit_triggered", self.kinds())
+
+    def test_c27_entry_without_a_numeric_invalidation_level_is_rejected(self):
+        for bad in ("opposite_donchian_mid_cross@None", "opposite_donchian_mid_cross@",
+                    "opposite_donchian_mid_cross@abc", "opposite_donchian_mid_cross@NaN", None,
+                    "close_below_ema21"):
+            with self.subTest(invalidation=bad):
+                self.setUp()
+                self.long_entry(strategy=C27, invalidation=bad)
+                self.market.tickers([(BASE + SECOND + 150, "100010", "100011", "100010")])
+                self.replay()
+                considered = body(events_of(self.path("account.sqlite"), "verdict_considered")[0])
+                self.assertEqual(considered["outcome"], "skipped")
+                self.assertEqual(considered["reason"], "invalidation_level_unavailable")
+                self.assertNotIn("order_created", self.kinds())
+                self.tearDown()
+
+    def test_unparseable_frozen_level_is_recorded_not_swallowed(self):
+        class Sink:
+            def __init__(self):
+                self.events = []
+
+            def emit(self, kind, time_ms, payload):
+                self.events.append((kind, payload))
+
+            def snapshot(self, *args):
+                pass
+
+        sink = Sink()
+        engine = PaperExecutionEngine(PAPER_EXECUTION_CONFIG, sink)
+        engine.trade = {
+            "order_id": "o1", "side": "long", "quantity": "0.01", "entry_price": "100011",
+            "stop": "99900", "target": "100500", "strategy_id": C27, "delegated_strategy_id": None,
+            "signal_key": "k", "invalidation": "opposite_donchian_mid_cross@None", "opened_at_ms": BASE,
+        }
+        payload = verdict_payload(BASE, action="WAIT", strategy=C27, one=features("99000"))
+        engine._strategy_exit(BASE + MINUTE, payload)
+        considered = [p for kind, p in sink.events if kind == "verdict_considered"]
+        self.assertEqual(len(considered), 1)
+        self.assertEqual(considered[0]["reason"], "invalidation_level_unavailable")
+        self.assertEqual(considered[0]["phase"], "exit")
+        self.assertEqual(considered[0]["outcome"], "skipped")
+        self.assertIsNotNone(engine.trade)  # still managed by stop / target / time stop
+        self.assertNotIn("exit_triggered", [kind for kind, _ in sink.events])
 
     def test_c28_uses_the_delegated_strategy_recorded_at_entry(self):
         written = self.open_long(strategy=C28, delegated=C25)

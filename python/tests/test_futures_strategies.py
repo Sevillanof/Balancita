@@ -78,6 +78,23 @@ class FuturesStrategyTests(unittest.TestCase):
         self.assertEqual(proposal["action"], "SHORT")
         self.assertEqual(proposal["signal_key"], C27_ID + ":SHORT:60000")
 
+    def test_c27_entry_invalidation_carries_the_numeric_donchian_mid(self):
+        features = {"ready": True, "candidate_close": "121", "donchian_high20": "120", "donchian_low20": "90",
+                    "donchian_mid20": "105", "candidate_volume": "13", "prior_volume_mean20": "10",
+                    "candidate_bucket_start_ms": 60000, "atr14": "2"}
+        self.assertEqual(propose(C27_ID, features)["invalidation"], "opposite_donchian_mid_cross@105")
+        self.assertEqual(propose(C27_ID, dict(features, candidate_close="89"))["invalidation"],
+                         "opposite_donchian_mid_cross@105")
+
+    def test_c27_exit_uses_the_frozen_mid_with_engine_features(self):
+        exit_features = {"ready": True, "candidate_close": "104"}
+        long_exit = propose(C27_ID, exit_features, position_side="LONG", frozen_invalidation="105")
+        self.assertEqual(long_exit["action"], "FLAT")
+        self.assertEqual(propose(C27_ID, dict(exit_features, candidate_close="106"), position_side="LONG",
+                                 frozen_invalidation="105")["action"], "WAIT")
+        self.assertEqual(propose(C27_ID, dict(exit_features, candidate_close="106"), position_side="SHORT",
+                                 frozen_invalidation="105")["action"], "FLAT")
+
     def test_selector_uses_ratio_then_stable_id_and_preserves_owner(self):
         proposals = [
             {"strategy_id": C27_ID, "action": "LONG", "target_distance": "10", "stop_distance": "2"},
@@ -114,6 +131,7 @@ class FuturesStrategyTests(unittest.TestCase):
         proposal = propose(C27_ID, features)
         self.assertEqual(features["ready"], True)
         self.assertIn(proposal["action"], ("WAIT", "LONG", "SHORT"))
+        self.assertIn("donchian_mid20", features)
 
     def test_c28_keeps_open_delegate_after_regime_changes_and_reports_warmup(self):
         current = {"ready": True, "candidate_close": "101", "ema9": "100", "atr14": "2", "rsi14": "55"}

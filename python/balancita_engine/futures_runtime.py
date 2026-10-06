@@ -1546,6 +1546,7 @@ class FuturesRuntime:
                 bars,
                 interval_ms=interval,
                 decision_time_ms=now,
+                legacy_v1=True,
             )
             if bars:
                 features["candidate_bucket_start_ms"] = bars[-1].get("bucket_start_ms")
@@ -1561,7 +1562,8 @@ class FuturesRuntime:
             )
             bars_by_interval[interval] = bars
         five = calculate_features(
-            bars_by_interval[300_000], interval_ms=300_000, decision_time_ms=now
+            bars_by_interval[300_000], interval_ms=300_000, decision_time_ms=now,
+            legacy_v1=True,
         )
         self.regime = update_regime(
             self.regime, five.get("ema9"), five.get("ema21"), five.get("atr14")
@@ -1572,6 +1574,7 @@ class FuturesRuntime:
             interval_ms=FEATURE_INTERVAL_MS,
             decision_time_ms=now,
             candidate_index=len(one_bars) - 2,
+            legacy_v1=True,
         ) if len(one_bars) > 1 else None
         previous_features = None if previous is None else {
             **previous,

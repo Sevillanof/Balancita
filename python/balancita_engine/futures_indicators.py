@@ -5,7 +5,7 @@ from decimal import Decimal, InvalidOperation, localcontext
 from .canonical import normalize_decimal
 
 
-FEATURE_SCHEMA_VERSION = "c27-features.v1"
+FEATURE_SCHEMA_VERSION = "c27-features.v2"
 INDICATOR_PRECISION = 50
 MINIMUM_CANDLES = 50
 
@@ -99,11 +99,15 @@ def _unavailable(reasons, candidate_close=None):
         "bollinger_ddof": 0,
         "donchian_high20": None,
         "donchian_low20": None,
+        "donchian_mid20": None,
         "prior_volume_mean20": None,
         "candidate_volume": None,
         "smoothing": "wilder",
         "candidate_bucket_start_ms": None,
     }
+
+
+LEGACY_FEATURE_SCHEMA_VERSION = "c27-features.v1"
 
 
 def calculate_features(
@@ -112,8 +116,31 @@ def calculate_features(
     interval_ms,
     decision_time_ms,
     candidate_index=None,
+    legacy_v1=False,
 ):
-    """Calculate v1 indicators; never use open, incomplete, or future-known bars."""
+    """Calculate indicators (c27-features.v2); ``legacy_v1`` reproduces the v1 shape.
+
+    The legacy lab runtime checkpoints (and the TS validator) pin the v1 key set,
+    so it asks for v1: no ``donchian_mid20`` and the v1 schema label.
+    """
+    features = _calculate_features(
+        candles, interval_ms=interval_ms, decision_time_ms=decision_time_ms,
+        candidate_index=candidate_index,
+    )
+    if legacy_v1:
+        features.pop("donchian_mid20", None)
+        features["schema_version"] = LEGACY_FEATURE_SCHEMA_VERSION
+    return features
+
+
+def _calculate_features(
+    candles,
+    *,
+    interval_ms,
+    decision_time_ms,
+    candidate_index=None,
+):
+    """Calculate v2 indicators; never use open, incomplete, or future-known bars."""
     if not isinstance(candles, list):
         raise ValueError("candles must be a list")
     if (
@@ -270,6 +297,10 @@ def calculate_features(
             "bollinger_ddof": 0,
             "donchian_high20": _optional_decimal(donchian_high),
             "donchian_low20": _optional_decimal(donchian_low),
+            "donchian_mid20": _optional_decimal(
+                None if donchian_high is None or donchian_low is None
+                else (donchian_high + donchian_low) / Decimal(2)
+            ),
             "prior_volume_mean20": _optional_decimal(prior_volume_mean),
             "candidate_volume": normalize_decimal(str(candidate_volume)),
             "smoothing": "wilder",

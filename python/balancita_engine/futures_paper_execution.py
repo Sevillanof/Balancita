@@ -67,6 +67,8 @@ FUNDING_UNIT = "USD/BTC/hour"
 # Same constant `_risk_plan` uses for the round-trip slippage allowance and buffer.
 COST_BUFFER_RATE = Decimal("0.0002")
 INVALIDATION_PREFIX = "opposite_donchian_mid_cross@"
+INVALIDATION_UNAVAILABLE = "invalidation_level_unavailable"
+C27_STRATEGY_ID = "c27-breakout-perp-v1"
 STATE_VERSION = "futures-paper-execution-state.v1"
 FUNDING_PERIODS_KEPT = 200
 CONSUMED_SIGNALS_KEPT = 5000
@@ -87,6 +89,14 @@ def _dec(value):
     except InvalidOperation:
         return None
     return result if result.is_finite() else None
+
+
+def _frozen_level(invalidation):
+    """The numeric Donchian-mid level frozen in a C27 invalidation string, else None."""
+    if not isinstance(invalidation, str) or not invalidation.startswith(INVALIDATION_PREFIX):
+        return None
+    level = invalidation[len(INVALIDATION_PREFIX):]
+    return level if _dec(level) is not None else None
 
 
 def _s(value):
@@ -654,9 +664,16 @@ class PaperExecutionEngine:
             return
         features = verdict.get("features") or {}
         invalidation = trade["invalidation"]
-        frozen_invalidation = None
-        if isinstance(invalidation, str) and invalidation.startswith(INVALIDATION_PREFIX):
-            frozen_invalidation = invalidation[len(INVALIDATION_PREFIX):]
+        frozen_invalidation = _frozen_level(invalidation)
+        if trade["strategy_id"] == C27_STRATEGY_ID and frozen_invalidation is None:
+            # Never silent: the position stays managed by stop, target and time stop.
+            self._emit("verdict_considered", time_ms, {
+                "phase": "exit", "outcome": "skipped", "reason": INVALIDATION_UNAVAILABLE,
+                "bucket_start_ms": verdict.get("bucket_start_ms"), "action": verdict.get("action"),
+                "strategy_id": trade["strategy_id"], "order_id": trade["order_id"],
+                "invalidation": invalidation, "knowledge_lag_ms": lag, "causes": [],
+            })
+            return
         try:
             proposal = propose(
                 trade["strategy_id"], features.get("1m"), previous=features.get("1m_previous"),
@@ -665,7 +682,14 @@ class PaperExecutionEngine:
                 position_side="LONG" if trade["side"] == "long" else "SHORT",
                 frozen_target=trade["target"], frozen_invalidation=frozen_invalidation,
             )
-        except ValueError:
+        except ValueError as error:
+            # Malformed features are recorded, not swallowed; other exits keep managing the trade.
+            self._emit("verdict_considered", time_ms, {
+                "phase": "exit", "outcome": "skipped", "reason": "exit_evaluation_failed",
+                "detail": str(error), "bucket_start_ms": verdict.get("bucket_start_ms"),
+                "action": verdict.get("action"), "strategy_id": trade["strategy_id"],
+                "order_id": trade["order_id"], "knowledge_lag_ms": lag, "causes": [],
+            })
             return
         if proposal["action"] == "FLAT":
             self._trigger_exit(time_ms, "strategy_exit", proposal["reason_code"], None)
@@ -686,6 +710,8 @@ class PaperExecutionEngine:
             reason = "verdict_malformed"
         elif not isinstance(lag, int) or lag > self.max_lag:
             reason = "verdict_stale"
+        elif selected["strategy_id"] == C27_STRATEGY_ID and _frozen_level(selected.get("invalidation")) is None:
+            reason = INVALIDATION_UNAVAILABLE
         elif signal_key in self._consumed_set:
             reason = "signal_already_consumed"
         elif self.trade is not None:

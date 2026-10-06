@@ -37,7 +37,7 @@ CONFIG_MISMATCH = "verdicts DB was written with a different config; use a new DB
 # Base config shared by every product. The per-product part (``product_id`` and
 # ``tick_size`` from the pinned catalog values) is added by ``product_config``.
 VERDICT_CONFIG = {
-    "version": "futures-verdict-config.v2",
+    "version": "futures-verdict-config.v3",
     "strategy_config": CONFIG_VERSION,
     "feature_schema": FEATURE_SCHEMA_VERSION,
     # Fixed windows: EMA/RSI depend on their first bar, so the window length
