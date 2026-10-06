@@ -1,0 +1,19 @@
+odd/tasks/futures-process-split.md
+  s_12ba8cc318628e::t_12adddcef022db 60-61
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b973bd5dcddb9c56a41b02f3b2c842d32b3b1227",
+  "prompts": {},
+  "sessions": {
+    "s_12ba8cc318628e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "be8053e5-4281-40d7-9662-85433f1cb3ae",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
