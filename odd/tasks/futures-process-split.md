@@ -67,6 +67,10 @@ Every sustained live run of the single process surfaced a new engine defect: the
   - RED: `futures-market.test.ts` "never sorts book levels while applying a delta" (790 sorts vs <=8); `futures-market-store.test.ts` "reuses prepared statements" (120 prepares vs 2); `futures-candles.test.ts` both restart tests (UNIQUE collision; `restoreOpenCandles` missing). Golden equivalence (book state per message + persisted rows/gaps digests over 400 deltas with best-level deletes, crossing, gap, snapshots) and canonical-JSON equivalence were GREEN on the old code first and stay GREEN.
   - GREEN: kraken-futures + live-gateway 48/48; `src/features/kraken-futures src/features/live-gateway src/features/paper-futures src/app` 274 passed, 3 known pre-existing failures; `pnpm typecheck` clean.
   - Note: `canonicalJson` in `paper-futures/futures-canonical.ts` (outside this task's surface) has the same per-comparison `Array.from` key sort; fixing it there would drop the store-local `canonicalEvent`.
+  - Parent live spot check (2026-10-06, cloud container, 4 vCPU; capture child alone, `NODE_USE_ENV_PROXY=1` because Node `fetch`/`WebSocket` ignore `HTTPS_PROXY` there; fresh market DB under scratchpad):
+    - Run 1, 180 s: 101,800 events (~565/s), 0 gaps, 0 errors. CPU from `/proc` ticks per 10 s window was 7.6-15%; steady average 100-180 s was 11.2%.
+    - Run 2, restart on the same DB, 150 s: 0 `UNIQUE` errors, no degraded state. Open candles resumed from their stored revision; 15 m and 1 h candles continued to revision 807 across the restart. Steady CPU was about 11-13%.
+    - Restart acceptance is met. CPU is just above the 10% target on this machine, which is slower than the local one where the writer measured 5-9%. The remaining cost is the mandated per-event commit.
 
 
 ## Next step
