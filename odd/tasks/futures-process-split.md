@@ -211,6 +211,21 @@ Every sustained live run of the single process surfaced a new engine defect: the
   - Evidence: `scripts/*.node-test.mjs` 45/45. Real runs: without `.env`, health returned `running` from `paper-execution-d`; with 8789 occupied, dev refused to start; SIGINT left no ports or children behind.
   - Limits: a SIGKILL of `dev.mjs` itself still orphans its children.
 
+- 2026-10-06 Market DB growth cut (delegated writer, Sonnet, isolated worktree; cherry-picked and re-verified by the parent).
+  - Measured before: about 2.7 GB/h, of which book events were 463k per 17 min (445 MB of JSON). A full historical-funding response (about 1 MB and 8.75k rows) was stored every 5 min.
+  - Consumer map: nothing in the split reads book events. D reads tickers, C reads candles, and the gateway tails ticker and trade only. Legacy and replay readers act only when book rows exist and are unchanged.
+  - Changes:
+    - The collector has a `bookFeed` option, default true. Capture alone sets it false: no book subscription, live/stale driven by the ticker, and ticker attestations report `book_valid: null` / `not_observed`.
+    - `appendNewFundingKnowledge` stores a response only if it adds a period or a changed rate, and writes rows for the new periods only. Funding is polled at start and 30 s after each hour, retrying each minute up to 10 times.
+    - Legacy `appendFundingResponse` and the default collector are untouched.
+  - Live (22 min, real Kraken):
+    - About 204 MB/h, 13x less. Capture CPU about 1.5%, down from 10-12%.
+    - Funding: +1 period at the 14:00 poll. Official candles and D kept running.
+  - Remaining growth comes from `paper_futures_ticker_snapshots` (an unread duplicate of each ticker) and per-trade candle revisions.
+  - Tests:
+    - 7 new tests went RED, then GREEN. A Python test covers D following hour-by-hour funding responses.
+    - Merged suites: the 7 baseline failures, plus the pre-existing `gateway.test.ts` flake, which also failed 2 of 4 runs on 0ff9aab.
+
 ## Next step
 
 - PS-04: news process N wired into C, with Gemini as veto/confidence stored per item. Or PS-05 first: paper execution D consuming fresh verdicts (`knowledge_lag_ms` below a threshold). The order is the user's call.
