@@ -9,16 +9,6 @@ import {
   normalizeDecimal,
   normalizeTimestampMs,
 } from './futures-canonical.ts'
-import {
-  FuturesOperativeIdentityStore,
-  OPERATIVE_CHECKPOINT_POLICY_VERSION,
-  ensureFuturesOperativeIdentitySchema,
-  isOperativeRuntimeConfig,
-  operativeCheckpointView,
-  type FuturesOperativeIdentityKind,
-  type FuturesOperativeIdentityUpdate,
-  type FuturesOperativeIdentityValue,
-} from './futures-operative-state.ts'
 
 type JsonRecord = Record<string, unknown>
 
@@ -99,9 +89,7 @@ function terminalEntriesFromResult(result: JsonRecord): TerminalEventInput[] {
   const runId = String(result.run_id)
   const workId = String(result.work_id)
   const checkpoint = isRecord(result.runtime_checkpoint)
-    ? isOperativeRuntimeConfig(result.runtime_checkpoint.runtime_config)
-      ? operativeCheckpointView(result.runtime_checkpoint)
-      : result.runtime_checkpoint
+    ? result.runtime_checkpoint
     : undefined
   const execution =
     checkpoint && isRecord(checkpoint.execution_checkpoint)
@@ -244,14 +232,12 @@ interface VerifiedBoundary {
   maxEventRowid: number
   maxLedgerRowid: number
   frozen: JsonRecord
-  operativeRun: boolean
   latestCheckpointJson: string | undefined
 }
 
 export class FuturesStore {
   private readonly db: DatabaseSync
   private readonly verifiedBoundaries = new Map<string, VerifiedBoundary>()
-  private operativeIdentityStore: FuturesOperativeIdentityStore | undefined
   private terminalRetention = 10_000
   private readonly terminalListeners = new Set<
     (event: TerminalStoredEvent) => void
@@ -308,31 +294,10 @@ export class FuturesStore {
        CREATE TABLE IF NOT EXISTS paper_futures_evaluation_skipped(run_id TEXT NOT NULL REFERENCES paper_futures_runs(run_id), policy_identity TEXT NOT NULL, source_identity TEXT NOT NULL, from_rowid INTEGER NOT NULL, to_rowid INTEGER NOT NULL, inspected_row_count INTEGER NOT NULL, reason TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY(run_id,from_rowid), CHECK(from_rowid>0 AND to_rowid>=from_rowid AND inspected_row_count>0)) STRICT;
        INSERT OR IGNORE INTO paper_futures_schema_migrations VALUES(5, unixepoch('subsec') * 1000);
     `)
-    ensureFuturesOperativeIdentitySchema(this.db)
-    this.db
-      .prepare(
-        "INSERT OR IGNORE INTO paper_futures_schema_migrations VALUES(6, unixepoch('subsec') * 1000)",
-      )
-      .run()
     const existingRuns = this.db
       .prepare('SELECT run_id FROM paper_futures_runs')
       .all() as { run_id: string }[]
     for (const { run_id } of existingRuns) this.ensureTerminalStream(run_id)
-  }
-
-  private identities(): FuturesOperativeIdentityStore {
-    this.operativeIdentityStore ??= new FuturesOperativeIdentityStore(this.db)
-    return this.operativeIdentityStore
-  }
-
-  /** Committed exact identity lookup for the job-bound worker RPC (null = absent). */
-  lookupOperativeIdentities(
-    runId: string,
-    kind: FuturesOperativeIdentityKind,
-    keys: readonly string[],
-  ): (FuturesOperativeIdentityValue[FuturesOperativeIdentityKind] | null)[] {
-    const found = this.identities().lookupMany(runId, kind, keys)
-    return keys.map((key) => found.get(key) ?? null)
   }
 
   close(): void {
@@ -1070,7 +1035,6 @@ export class FuturesStore {
             'schema_version',
             'runtime_checkpoint',
             'runtime_output',
-            'runtime_identity_updates',
           ]
         : ['result_hash'],
     )
@@ -1111,13 +1075,6 @@ export class FuturesStore {
         String(value.run_id),
         Number(value.applied_state_version),
       )
-    const operative =
-      runtimeWork &&
-      isOperativeRuntimeConfig((frozen.runtime as JsonRecord).runtime_config)
-    const identityUpdates = parseOperativeIdentityUpdates(
-      value.runtime_identity_updates,
-      operative,
-    )
     validateLedgerSnapshot(value.result, frozen)
     validateFuturesEvents(
       value.events,
@@ -1275,22 +1232,6 @@ export class FuturesStore {
               canonicalJson(event),
             )
         })
-      if (operative) {
-        // Provisional until COMMIT: same transaction as the result record, so a
-        // duplicate, conflict, or gap rolls back the whole job.
-        const frontier = operativeSourceFrontier(value.runtime_checkpoint)
-        const identities = this.identities()
-        identities.withOwnerTransaction((transaction) =>
-          identities.apply(transaction, {
-            runId: String(value.run_id),
-            workId: String(value.work_id),
-            expectedStateVersion: Number(work.expected_version),
-            sourceFrontier: frontier,
-            confirmedSourceFrontier: frontier,
-            updates: identityUpdates,
-          }),
-        )
-      }
       const previous = String(run.head_hash)
       const payloadHash = canonicalHash(value)
       const recordHash = createHash('sha256')
@@ -2087,9 +2028,7 @@ export class FuturesStore {
     const prior = this.verifiedBoundaries.get(runId)
     return this.verifyAndRememberBoundary(
       runId,
-      prior && !prior.operativeRun && this.boundaryTailIntact(runId, prior)
-        ? prior
-        : undefined,
+      prior && this.boundaryTailIntact(runId, prior) ? prior : undefined,
     )
   }
 
@@ -2113,7 +2052,10 @@ export class FuturesStore {
     }
   }
 
-  private boundaryTailIntact(runId: string, boundary: VerifiedBoundary): boolean {
+  private boundaryTailIntact(
+    runId: string,
+    boundary: VerifiedBoundary,
+  ): boolean {
     if (boundary.lastSeq === 0) return true
     const tail = this.db
       .prepare(
@@ -2185,20 +2127,13 @@ export class FuturesStore {
     const expectedRuntimeLedger = new Map<string, string>()
     let expectedStateVersion = prior?.stateVersion ?? 0
     let latestCheckpointJson = prior?.latestCheckpointJson
-    const operativeRun = prior
-      ? prior.operativeRun
-      : isOperativeRuntimeConfig(
-          isRecord(frozen.runtime) ? frozen.runtime.runtime_config : undefined,
-        )
-    const expectedIdentityBatches = new Map<string, string>()
     for (const row of records) {
       const work = this.db
         .prepare(
           'SELECT run_id,expected_version FROM paper_futures_work WHERE work_id=?',
         )
         .get(String(row.work_id)) as
-        | { run_id: string; expected_version: number }
-        | undefined
+        { run_id: string; expected_version: number } | undefined
       if (!work || work.run_id !== runId) return undefined
       let payload: unknown
       try {
@@ -2253,15 +2188,6 @@ export class FuturesStore {
             Number(payload.applied_state_version),
           )
           latestCheckpointJson = canonicalJson(payload.runtime_checkpoint)
-          expectedIdentityBatches.set(
-            String(row.work_id),
-            canonicalHash(
-              parseOperativeIdentityUpdates(
-                payload.runtime_identity_updates,
-                operativeRun,
-              ),
-            ),
-          )
           if (
             !isRecord(payload.result) ||
             !Array.isArray(payload.result.events)
@@ -2292,22 +2218,6 @@ export class FuturesStore {
       run.state_version !== expectedStateVersion
     )
       return undefined
-    {
-      // Exact identity history is verified in full and must match, batch for
-      // batch, the identity updates carried by the hash-chained applied results.
-      // Operative runs never take the incremental path, so `prior` here only
-      // covers non-operative runs where this is a constant-cost emptiness proof.
-      const identities = this.identities()
-      const proof = identities.verifyRun(runId)
-      const stored = identities.workBatchHashes(runId)
-      if (!operativeRun) {
-        if (proof.records !== 0 || stored.size !== 0) return undefined
-      } else {
-        if (stored.size !== expectedIdentityBatches.size) return undefined
-        for (const [workId, hash] of expectedIdentityBatches)
-          if (stored.get(workId) !== hash) return undefined
-      }
-    }
     const projectionRow = this.db
       .prepare(
         'SELECT state_json FROM paper_futures_projections WHERE run_id=?',
@@ -2393,7 +2303,6 @@ export class FuturesStore {
       maxEventRowid,
       maxLedgerRowid,
       frozen,
-      operativeRun,
       latestCheckpointJson,
     }
   }
@@ -2406,9 +2315,7 @@ export function projectTerminalState(
   initialCash: unknown,
 ): JsonRecord {
   const checkpoint = isRecord(projection.checkpoint)
-    ? isOperativeRuntimeConfig(projection.checkpoint.runtime_config)
-      ? operativeCheckpointView(projection.checkpoint)
-      : projection.checkpoint
+    ? projection.checkpoint
     : {}
   const result = isRecord(projection.result) ? projection.result : {}
   const runtimeOutput = isRecord(projection.runtime_output)
@@ -2902,20 +2809,11 @@ function validateRuntimeBinding(value: unknown, frozen: JsonRecord): void {
                 'strategy_selection_policy_version',
                 'strategy_selection_interval_ms',
                 'market_context_policy_version',
-                'operative_checkpoint_policy_version',
               ]
             : []),
         ]
       : [],
   )
-  if (
-    'operative_checkpoint_policy_version' in config &&
-    (value.schema_version !== 'futures-runtime-binding.v5' ||
-      config.version !== 'futures-runtime-risk.v1' ||
-      config.operative_checkpoint_policy_version !==
-        OPERATIVE_CHECKPOINT_POLICY_VERSION)
-  )
-    throw new Error('Unsupported frozen operative checkpoint policy.')
   if ('funding_policy_version' in config) {
     if (
       value.schema_version !== 'futures-runtime-binding.v5' ||
@@ -3027,53 +2925,33 @@ function validateRuntimeBinding(value: unknown, frozen: JsonRecord): void {
 function validateExecutionCheckpoint(
   cp: JsonRecord,
   binding: JsonRecord,
-  compact = false,
 ): void {
   const execution = cp.execution_checkpoint
   if (!isRecord(execution))
     throw new Error('Missing paper execution checkpoint.')
-  assertKeys(
-    execution,
-    compact
-      ? [
-          'checkpoint_version',
-          'model_version',
-          'run_id',
-          'instrument_id',
-          'config',
-          'orders',
-          'position',
-          'position_reduced',
-          'book_budgets',
-          'trade_budgets',
-          'sequence',
-          'last_cutoff_ms',
-        ]
-      : [
-          'checkpoint_version',
-          'model_version',
-          'run_id',
-          'instrument_id',
-          'config',
-          'orders',
-          'events',
-          'command_receipts',
-          'position',
-          'position_reduced',
-          'book_budgets',
-          'trade_budgets',
-          'trade_ids',
-          'sequence',
-          'last_cutoff_ms',
-        ],
-  )
+  assertKeys(execution, [
+    'checkpoint_version',
+    'model_version',
+    'run_id',
+    'instrument_id',
+    'config',
+    'orders',
+    'events',
+    'command_receipts',
+    'position',
+    'position_reduced',
+    'book_budgets',
+    'trade_budgets',
+    'trade_ids',
+    'sequence',
+    'last_cutoff_ms',
+  ])
   const instrument = binding.instrument_spec as JsonRecord
   const config = execution.config
   if (
     ![
-      ...(compact
-        ? ['paper-execution-operative-checkpoint.v1']
-        : ['paper-execution-checkpoint.v1', 'paper-execution-checkpoint.v2']),
+      'paper-execution-checkpoint.v1',
+      'paper-execution-checkpoint.v2',
     ].includes(String(execution.checkpoint_version)) ||
     execution.model_version !== 'paper-execution.v1' ||
     execution.run_id !== cp.run_id ||
@@ -3106,25 +2984,12 @@ function validateExecutionCheckpoint(
     !isRecord(execution.position) ||
     !Array.isArray(execution.book_budgets) ||
     !Array.isArray(execution.trade_budgets) ||
-    (!compact &&
-      (!Array.isArray(execution.events) ||
-        !Array.isArray(execution.trade_ids) ||
-        !isRecord(execution.command_receipts)))
+    !Array.isArray(execution.events) ||
+    !Array.isArray(execution.trade_ids) ||
+    !isRecord(execution.command_receipts)
   )
     throw new Error('Execution checkpoint collections are invalid.')
-  if (
-    compact &&
-    Object.values(execution.orders).some(
-      (order) =>
-        !isRecord(order) ||
-        !['accepted', 'partially_filled'].includes(String(order.state)),
-    )
-  )
-    throw new Error('Compact execution checkpoint retains a terminal order.')
-  if (
-    compact ||
-    execution.checkpoint_version === 'paper-execution-checkpoint.v2'
-  ) {
+  if (execution.checkpoint_version === 'paper-execution-checkpoint.v2') {
     for (const candidate of execution.book_budgets) {
       if (
         !Array.isArray(candidate) ||
@@ -3139,22 +3004,6 @@ function validateExecutionCheckpoint(
       assertKeys(budget, ['asks', 'bids'])
       for (const side of ['asks', 'bids']) {
         const levels = budget[side]
-        if (compact) {
-          // Compact budgets keep the exact identity-port shape: price -> remaining.
-          if (!isRecord(levels))
-            throw new Error(
-              'Execution checkpoint book budget levels are invalid.',
-            )
-          for (const [price, quantity] of Object.entries(levels)) {
-            canonicalDecimal(price, 'execution book budget price', 'positive')
-            canonicalDecimal(
-              quantity,
-              'execution book budget quantity',
-              'nonnegative',
-            )
-          }
-          continue
-        }
         if (!Array.isArray(levels))
           throw new Error(
             'Execution checkpoint book budget levels are invalid.',
@@ -3216,7 +3065,7 @@ function validateExecutionCheckpoint(
   if (execution.last_cutoff_ms !== null)
     normalizeTimestampMs(execution.last_cutoff_ms)
   const eventIds = new Set<string>()
-  for (const event of compact ? [] : (execution.events as unknown[])) {
+  for (const event of execution.events as unknown[]) {
     if (
       !isRecord(event) ||
       typeof event.event_id !== 'string' ||
@@ -3792,71 +3641,6 @@ function validateStrategySelectionCheckpoint(
     throw new Error('Directional selector cache does not match a proposal.')
 }
 
-const EXECUTION_IDENTITY_KINDS = [
-  'order',
-  'cancel',
-  'trade',
-  'book_budget',
-  'trade_budget',
-  'order_trade',
-  'signal',
-]
-const LEDGER_IDENTITY_KINDS = [
-  'ledger_fill',
-  'ledger_funding',
-  'ledger_accrual',
-]
-
-/** Exact drained updates: required for opted-in runs, forbidden otherwise. */
-function parseOperativeIdentityUpdates(
-  value: unknown,
-  operative: boolean,
-): FuturesOperativeIdentityUpdate[] {
-  if (!operative) {
-    if (value !== undefined)
-      throw new Error('Unexpected operative identity updates.')
-    return []
-  }
-  if (
-    !isRecord(value) ||
-    Object.keys(value).sort().join(',') !== 'execution,ledger' ||
-    !Array.isArray(value.execution) ||
-    !Array.isArray(value.ledger)
-  )
-    throw new Error('Operative identity updates are required and exact.')
-  const parse = (items: unknown[], kinds: string[]) =>
-    items.map((item) => {
-      if (
-        !isRecord(item) ||
-        Object.keys(item).sort().join(',') !== 'key,kind,provenance,value' ||
-        typeof item.kind !== 'string' ||
-        !kinds.includes(item.kind) ||
-        typeof item.key !== 'string' ||
-        typeof item.provenance !== 'string'
-      )
-        throw new Error('Malformed operative identity update.')
-      return {
-        kind: item.kind,
-        key: item.key,
-        value: item.value,
-        provenance: item.provenance,
-      } as FuturesOperativeIdentityUpdate
-    })
-  return [
-    ...parse(value.execution, EXECUTION_IDENTITY_KINDS),
-    ...parse(value.ledger, LEDGER_IDENTITY_KINDS),
-  ]
-}
-
-function operativeSourceFrontier(checkpoint: unknown): number {
-  if (!isRecord(checkpoint)) return 0
-  const context = checkpoint.market_context_checkpoint
-  if (context === undefined || context === null) return 0
-  if (!isRecord(context) || !Number.isSafeInteger(context.frontier))
-    throw new Error('Operative checkpoint has no valid source frontier.')
-  return Number(context.frontier)
-}
-
 function validateRuntimeWork(
   value: JsonRecord,
   frozen: JsonRecord,
@@ -3870,17 +3654,7 @@ function validateRuntimeWork(
     throw new Error('Runtime work checkpoint and output are required.')
   const rawCp = value.runtime_checkpoint
   const output = value.runtime_output
-  const compact = isOperativeRuntimeConfig(
-    (frozen.runtime as JsonRecord).runtime_config,
-  )
-  // Compact operative state is validated through a legacy-shaped read view so
-  // every ledger, order and risk invariant below still applies to it.
-  const cp: JsonRecord = compact
-    ? {
-        ...operativeCheckpointView(rawCp),
-        ledger_events: isRecord(value.result) ? value.result.events : undefined,
-      }
-    : rawCp
+  const cp: JsonRecord = rawCp
   if (
     isRecord(output.ledger) &&
     output.ledger.mark_usd_per_btc === null &&
@@ -3903,58 +3677,37 @@ function validateRuntimeWork(
   const riskRuntime =
     binding.schema_version === 'futures-runtime-binding.v4' ||
     binding.schema_version === 'futures-runtime-binding.v5'
-  if (compact && !riskRuntime)
-    throw new Error('Operative checkpoints require the risk runtime.')
   assertKeys(
     rawCp,
-    compact
-      ? [
-          'schema_version',
-          'runtime_version',
-          'run_id',
-          'instrument_id',
-          'runtime_config',
-          'instrument_spec',
-          'operative_checkpoint_policy_version',
-          'execution_operative_checkpoint',
-          'ledger_operative_checkpoint',
-          'funding_cursor_ms',
-          'owner_strategy_id',
-          'position_protection',
-          'signal_keys',
-          'regime',
-          'execution_metadata',
-          'risk_checkpoint',
-        ]
-      : [
-          'schema_version',
-          'runtime_version',
-          'run_id',
-          'instrument_id',
-          'runtime_config',
-          'instrument_spec',
-          'cash_usd',
-          'leverage',
-          'realized_gross_usd',
-          'fees_usd',
-          'funding_paid',
-          'funding_complete',
-          'funding_cursor_ms',
-          'ledger_last_accrual_ms',
-          'ledger_position',
-          'funding_rates',
-          'accrued',
-          'ledger_events',
-          'owner_strategy_id',
-          'position_protection',
-          'signal_keys',
-          'consumed_depth',
-          ...(strategyRuntime || executionRuntime ? ['regime'] : []),
-          ...(executionRuntime
-            ? ['execution_checkpoint', 'execution_metadata']
-            : []),
-          ...(riskRuntime ? ['risk_checkpoint'] : []),
-        ],
+    [
+      'schema_version',
+      'runtime_version',
+      'run_id',
+      'instrument_id',
+      'runtime_config',
+      'instrument_spec',
+      'cash_usd',
+      'leverage',
+      'realized_gross_usd',
+      'fees_usd',
+      'funding_paid',
+      'funding_complete',
+      'funding_cursor_ms',
+      'ledger_last_accrual_ms',
+      'ledger_position',
+      'funding_rates',
+      'accrued',
+      'ledger_events',
+      'owner_strategy_id',
+      'position_protection',
+      'signal_keys',
+      'consumed_depth',
+      ...(strategyRuntime || executionRuntime ? ['regime'] : []),
+      ...(executionRuntime
+        ? ['execution_checkpoint', 'execution_metadata']
+        : []),
+      ...(riskRuntime ? ['risk_checkpoint'] : []),
+    ],
     [
       ...((binding.runtime_config as JsonRecord).funding_policy_version ===
       'funding-separation.v1'
@@ -3970,12 +3723,6 @@ function validateRuntimeWork(
         : []),
     ],
   )
-  if (
-    compact &&
-    rawCp.operative_checkpoint_policy_version !==
-      OPERATIVE_CHECKPOINT_POLICY_VERSION
-  )
-    throw new Error('Operative checkpoint policy marker drifted.')
   if (
     cp.schema_version !==
       (riskRuntime ? 4 : executionRuntime ? 3 : strategyRuntime ? 2 : 1) ||
@@ -4117,7 +3864,7 @@ function validateRuntimeWork(
   } else if ('strategy_selection_checkpoint' in cp) {
     throw new Error('Unexpected strategy-selection checkpoint metadata.')
   }
-  if (executionRuntime) validateExecutionCheckpoint(cp, binding, compact)
+  if (executionRuntime) validateExecutionCheckpoint(cp, binding)
   if (riskRuntime)
     validateRiskCheckpoint(cp.risk_checkpoint, output, binding, cp)
   if (

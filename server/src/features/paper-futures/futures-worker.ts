@@ -1,5 +1,4 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
-import { createHash } from 'node:crypto'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { monitorEventLoopDelay, performance } from 'node:perf_hooks'
@@ -7,12 +6,6 @@ import {
   MARKET_CONTEXT_SCHEMA_VERSION,
   validateMarketContextTransport,
 } from './futures-market-context.ts'
-import {
-  MAX_IDENTITY_KEYS,
-  MAX_IDENTITY_QUERIES_PER_JOB,
-  validateFuturesIdentityQuery,
-  type FuturesIdentityQuery,
-} from './futures-identity-transport.ts'
 
 const PROTOCOL_VERSION = 1
 const MAX_LINE_BYTES = 1_048_576
@@ -86,11 +79,6 @@ export interface FuturesWorkerResult {
   readonly runtime_output?: Record<string, unknown>
   readonly runtime_checkpoint?: Record<string, unknown>
   readonly runtime_funding_events?: readonly Record<string, unknown>[]
-  /** Present only for explicitly opted-in operative checkpoint runs. */
-  readonly runtime_identity_updates?: {
-    readonly execution: readonly Record<string, unknown>[]
-    readonly ledger: readonly Record<string, unknown>[]
-  }
 }
 
 export interface FuturesWorkerCommit {
@@ -108,16 +96,7 @@ interface Pending {
   readonly wireLine: string
   result?: FuturesWorkerResult
   commit?: FuturesWorkerCommit
-  identitySequence: number
-  identityPending: boolean
-  identityAbort?: AbortController
   resultReceived: boolean
-  readonly identityEnabled: boolean
-  readonly binding: Readonly<{
-    checkpoint_hash: string
-    source_frontier: number
-    knowledge_cutoff_ms: number
-  }>
 }
 
 /** A bounded, single-flight JSONL process manager. Persistence remains Node-owned. */
@@ -136,15 +115,6 @@ export class FuturesWorker {
     result: FuturesWorkerResult,
     request: FuturesWorkerRequest,
   ) => Promise<FuturesWorkerCommit>
-  private readonly identityLookup:
-    | ((
-        request: FuturesWorkerRequest,
-        query: FuturesIdentityQuery,
-        signal: AbortSignal,
-      ) => Promise<readonly unknown[] | null>)
-    | undefined
-  private readonly identityScope:
-    ((request: FuturesWorkerRequest) => boolean) | undefined
   private readonly spawnProcess: typeof spawn
   private readonly loopDelay:
     ReturnType<typeof monitorEventLoopDelay> | undefined
@@ -159,14 +129,6 @@ export class FuturesWorker {
       result: FuturesWorkerResult,
       request: FuturesWorkerRequest,
     ) => Promise<FuturesWorkerCommit>
-    /** Trusted host callback; absence keeps identity RPC disabled. */
-    readonly identityLookup?: (
-      request: FuturesWorkerRequest,
-      query: FuturesIdentityQuery,
-      signal: AbortSignal,
-    ) => Promise<readonly unknown[] | null>
-    /** Narrows identity RPC to requests that explicitly need it (default: all). */
-    readonly identityScope?: (request: FuturesWorkerRequest) => boolean
     /** Process factory is injectable for protocol-boundary tests. */
     readonly spawnProcess?: typeof spawn
   }) {
@@ -176,8 +138,6 @@ export class FuturesWorker {
     if (options.maxQueue !== undefined && options.maxQueue !== MAX_QUEUE)
       throw new Error(`Worker queue capacity is fixed at ${MAX_QUEUE}.`)
     this.commitResult = options.commitResult
-    this.identityLookup = options.identityLookup
-    this.identityScope = options.identityScope
     this.spawnProcess = options.spawnProcess ?? spawn
     this.observer = options.observer
     if (options.eventLoopSampleIntervalMs !== undefined) {
@@ -253,16 +213,6 @@ export class FuturesWorker {
       )
     if (this.queue.length + Number(this.active !== undefined) >= MAX_QUEUE)
       return Promise.reject(new Error('Futures worker queue is full.'))
-    const identityEnabled =
-      this.identityLookup !== undefined &&
-      (this.identityScope === undefined || this.identityScope(frozenRequest))
-    const binding = identityEnabled
-      ? identityBinding(frozenRequest)
-      : Object.freeze({
-          checkpoint_hash: '0'.repeat(64),
-          source_frontier: 0,
-          knowledge_cutoff_ms: 0,
-        })
     return new Promise((resolvePromise, rejectPromise) => {
       const timer = setTimeout(() => {
         const index = this.queue.findIndex(
@@ -278,7 +228,6 @@ export class FuturesWorker {
           return
         }
         if (this.active?.request === frozenRequest) {
-          this.active.identityAbort?.abort()
           this.emit(this.active, 'active_timeout', {
             duration_ms: performance.now() - this.active.enqueuedAt,
           })
@@ -294,11 +243,7 @@ export class FuturesWorker {
         timer,
         enqueuedAt: performance.now(),
         wireLine,
-        identitySequence: 0,
-        identityPending: false,
         resultReceived: false,
-        identityEnabled,
-        binding,
       })
       const item = this.queue.at(-1)!
       this.emit(item, 'enqueue')
@@ -333,7 +278,6 @@ export class FuturesWorker {
     }
     const child = this.child
     if (this.active) {
-      this.active.identityAbort?.abort()
       this.emitClose('active_termination', {
         signal_requested: 'SIGTERM',
         request_id: this.active.request.request_id,
@@ -553,109 +497,6 @@ export class FuturesWorker {
       this.child?.kill('SIGKILL')
       return
     }
-    if (isRecord(message) && message.type === 'identity_query') {
-      const query = message as unknown as FuturesIdentityQuery
-      if (
-        !this.identityLookup ||
-        !active.identityEnabled ||
-        !validateFuturesIdentityQuery(message) ||
-        active.identityPending ||
-        active.resultReceived ||
-        active.commit ||
-        query.request_id !== active.request.request_id ||
-        query.run_id !== active.request.run_id ||
-        query.work_id !== active.request.work_id ||
-        query.expected_state_version !==
-          active.request.expected_state_version ||
-        query.checkpoint_hash !== active.binding.checkpoint_hash ||
-        query.source_frontier !== active.binding.source_frontier ||
-        query.knowledge_cutoff_ms > active.binding.knowledge_cutoff_ms ||
-        query.query_sequence !== active.identitySequence + 1 ||
-        query.query_sequence > MAX_IDENTITY_QUERIES_PER_JOB
-      ) {
-        this.emit(active, 'identity_query_rejected', {
-          schema_valid: validateFuturesIdentityQuery(message),
-          query_keys: Object.keys(message).sort().join(','),
-          request_id_match: query.request_id === active.request.request_id,
-          run_id_match: query.run_id === active.request.run_id,
-          work_id_match: query.work_id === active.request.work_id,
-          version_match:
-            query.expected_state_version ===
-            active.request.expected_state_version,
-          checkpoint_match:
-            query.checkpoint_hash === active.binding.checkpoint_hash,
-          frontier_match:
-            query.source_frontier === active.binding.source_frontier,
-          cutoff_within_accepted:
-            query.knowledge_cutoff_ms <= active.binding.knowledge_cutoff_ms,
-        })
-        this.child?.kill('SIGKILL')
-        return
-      }
-      active.identitySequence = query.query_sequence
-      active.identityPending = true
-      const identityAbort = new AbortController()
-      active.identityAbort = identityAbort
-      this.emit(active, 'identity_query_received', {
-        query_bytes: Buffer.byteLength(JSON.stringify(message), 'utf8') + 1,
-        query_sequence: query.query_sequence,
-      })
-      void this.identityLookup(active.request, query, identityAbort.signal)
-        .then((values) => {
-          if (this.active !== active || !this.child) return
-          active.identityAbort = undefined
-          if (values !== null && !validateIdentityValues(query, values)) {
-            this.child.kill('SIGKILL')
-            return
-          }
-          const reply =
-            values === null
-              ? {
-                  ...query,
-                  type: 'identity_reply',
-                  status: 'unavailable',
-                }
-              : {
-                  ...query,
-                  type: 'identity_reply',
-                  status: 'ok',
-                  values,
-                }
-          const line = `${JSON.stringify(reply)}\n`
-          if (Buffer.byteLength(line, 'utf8') > MAX_LINE_BYTES)
-            this.child.kill('SIGKILL')
-          else {
-            active.identityPending = false
-            this.emit(active, 'identity_reply_ready', {
-              reply_bytes: Buffer.byteLength(line, 'utf8'),
-              query_sequence: query.query_sequence,
-            })
-            this.write(active, this.child.stdin, line, 'identity_reply_write')
-          }
-        })
-        .catch(() => {
-          if (this.active !== active || !this.child) return
-          active.identityAbort = undefined
-          active.identityPending = false
-          const unavailable = {
-            ...query,
-            type: 'identity_reply',
-            status: 'unavailable',
-          }
-          const line = `${JSON.stringify(unavailable)}\n`
-          this.emit(active, 'identity_reply_ready', {
-            reply_bytes: Buffer.byteLength(line, 'utf8'),
-            query_sequence: query.query_sequence,
-            unavailable: true,
-          })
-          this.write(active, this.child.stdin, line, 'identity_reply_write')
-        })
-      return
-    }
-    if (active.identityPending) {
-      this.child?.kill('SIGKILL')
-      return
-    }
     if (
       isRecord(message) &&
       message.type === 'error' &&
@@ -753,7 +594,6 @@ export class FuturesWorker {
     this.detach()
     const active = this.active
     if (active) {
-      active.identityAbort?.abort()
       this.emit(active, 'worker_error', { message: error.message })
       clearTimeout(active.timer)
       this.active = undefined
@@ -982,54 +822,6 @@ export function validateFuturesWorkerRequest(
     throw new Error('Invalid futures worker payload.')
 }
 
-function identityBinding(request: FuturesWorkerRequest): Pending['binding'] {
-  const checkpoint = request.checkpoint ?? null
-  const checkpointHash = createHash('sha256')
-    .update(canonicalJson(checkpoint), 'utf8')
-    .digest('hex')
-  const sourceFrontier = findConfirmedFrontier(checkpoint)
-  const snapshot =
-    'market_snapshot' in request.payload
-      ? request.payload.market_snapshot
-      : undefined
-  const cutoff =
-    snapshot?.cutoff_received_at_ms ?? snapshot?.decision_time_ms ?? 0
-  if (!Number.isSafeInteger(cutoff) || Number(cutoff) < 0)
-    throw new Error('Invalid accepted market knowledge cutoff.')
-  return Object.freeze({
-    checkpoint_hash: checkpointHash,
-    source_frontier: sourceFrontier,
-    knowledge_cutoff_ms: Number(cutoff),
-  })
-}
-
-function findConfirmedFrontier(checkpoint: unknown): number {
-  if (checkpoint === null) return 0
-  if (!isRecord(checkpoint))
-    throw new Error('Invalid checkpoint for identity binding.')
-  const context =
-    checkpoint.market_context_checkpoint ?? checkpoint.market_context
-  if (context === undefined || context === null) return 0
-  // Runtime checkpoints persist the confirmed frontier as `frontier`; the
-  // transport context names it `current_frontier`.
-  const frontier = isRecord(context)
-    ? (context.current_frontier ?? context.frontier)
-    : undefined
-  if (!Number.isSafeInteger(frontier) || Number(frontier) < 0)
-    throw new Error('Checkpoint has no valid confirmed source frontier.')
-  return Number(frontier)
-}
-
-function canonicalJson(value: unknown): string {
-  if (value === null || typeof value !== 'object') return JSON.stringify(value)
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`
-  const record = value as Record<string, unknown>
-  return `{${Object.keys(record)
-    .sort()
-    .map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`)
-    .join(',')}}`
-}
-
 function deepFreeze<T>(value: T): T {
   if (value && typeof value === 'object' && !Object.isFrozen(value)) {
     Object.freeze(value)
@@ -1037,101 +829,6 @@ function deepFreeze<T>(value: T): T {
       deepFreeze(child)
   }
   return value
-}
-
-function validateIdentityValues(
-  query: FuturesIdentityQuery,
-  values: readonly unknown[],
-): boolean {
-  if (query.operation === 'funding_range')
-    return (
-      Array.isArray(values) &&
-      values.length <= MAX_IDENTITY_KEYS &&
-      isJsonSafe(values) &&
-      values.every(
-        (row) =>
-          Array.isArray(row) &&
-          row.length === 4 &&
-          typeof row[0] === 'string' &&
-          Number.isSafeInteger(row[1]) &&
-          Number.isSafeInteger(row[2]) &&
-          Number(row[2]) > Number(row[1]) &&
-          typeof row[3] === 'string',
-      )
-    )
-  if (
-    !Array.isArray(values) ||
-    values.length !== query.keys.length ||
-    !isJsonSafe(values)
-  )
-    return false
-  return values.every((value) => {
-    if (value === null) return true
-    switch (query.kind) {
-      case 'order':
-        if (!isRecord(value)) return false
-        return (
-          isRecord(value.intent) &&
-          isRecord(value.receipt) &&
-          (value.state === undefined || typeof value.state === 'string') &&
-          (value.filled === undefined || typeof value.filled === 'string') &&
-          Object.keys(value).every((key) =>
-            ['intent', 'receipt', 'state', 'filled'].includes(key),
-          )
-        )
-      case 'cancel':
-        return (
-          Array.isArray(value) &&
-          value.length === 2 &&
-          Array.isArray(value[0]) &&
-          value[0].length === 2 &&
-          typeof value[0][0] === 'string' &&
-          Number.isSafeInteger(value[0][1]) &&
-          Array.isArray(value[1])
-        )
-      case 'trade':
-        return (
-          Array.isArray(value) &&
-          value.length === 3 &&
-          value.every((part) => typeof part === 'string') &&
-          (value[2] === 'buy' || value[2] === 'sell')
-        )
-      case 'book_budget':
-        if (!isRecord(value)) return false
-        return (
-          isRecord(value.asks) &&
-          isRecord(value.bids) &&
-          Object.values(value.asks).every(
-            (amount) => typeof amount === 'string',
-          ) &&
-          Object.values(value.bids).every(
-            (amount) => typeof amount === 'string',
-          ) &&
-          Object.keys(value).sort().join(',') === 'asks,bids'
-        )
-      case 'trade_budget':
-      case 'ledger_funding':
-      case 'ledger_accrual':
-        return typeof value === 'string'
-      case 'order_trade':
-        return value === true
-      case 'ledger_fill':
-        if (!isRecord(value)) return false
-        return (
-          ((Object.keys(value).sort().join(',') ===
-            'at_ms,liquidity,price,quantity,side' &&
-            ['long', 'short'].includes(String(value.side))) ||
-            Object.keys(value).sort().join(',') ===
-              'at_ms,liquidity,price,quantity') &&
-          typeof value.quantity === 'string' &&
-          typeof value.price === 'string' &&
-          ['maker', 'taker'].includes(String(value.liquidity)) &&
-          Number.isSafeInteger(value.at_ms)
-        )
-      case 'signal':
-        return value === true
-    }
-  })
 }
 
 function validateWorkerPayload(payload: Record<string, unknown>): boolean {
@@ -1178,7 +875,6 @@ function validateWorkerPayload(payload: Record<string, unknown>): boolean {
               'strategy_selection_policy_version',
               'strategy_selection_interval_ms',
               'market_context_policy_version',
-              'operative_checkpoint_policy_version',
             ]
           : [],
       ) ||
@@ -1219,14 +915,6 @@ function validateWorkerPayload(payload: Record<string, unknown>): boolean {
       (payload.operation !== 'futures_runtime.v3' ||
         config.version !== 'futures-runtime-risk.v1' ||
         config.market_context_policy_version !== 'market-context-transport.v1')
-    )
-      return false
-    if (
-      'operative_checkpoint_policy_version' in config &&
-      (payload.operation !== 'futures_runtime.v3' ||
-        config.version !== 'futures-runtime-risk.v1' ||
-        config.operative_checkpoint_policy_version !==
-          'futures-operative-checkpoint.v1')
     )
       return false
     if (
@@ -1535,16 +1223,7 @@ function isResult(
       isRecord(value.runtime_checkpoint) &&
       Array.isArray(value.runtime_funding_events) &&
       value.runtime_funding_events.every(isRecord) &&
-      (request.payload.runtime_config.operative_checkpoint_policy_version ===
-      'futures-operative-checkpoint.v1'
-        ? isRecord(value.runtime_identity_updates) &&
-          Object.keys(value.runtime_identity_updates).sort().join(',') ===
-            'execution,ledger' &&
-          Array.isArray(value.runtime_identity_updates.execution) &&
-          value.runtime_identity_updates.execution.every(isRecord) &&
-          Array.isArray(value.runtime_identity_updates.ledger) &&
-          value.runtime_identity_updates.ledger.every(isRecord)
-        : value.runtime_identity_updates === undefined) &&
+      value.runtime_identity_updates === undefined &&
       (request.payload.runtime_config.funding_policy_version !==
         'funding-separation.v1' ||
         (isRecord(value.runtime_output) &&

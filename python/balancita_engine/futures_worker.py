@@ -8,15 +8,8 @@ import time
 from copy import deepcopy
 from decimal import Decimal, localcontext
 
-from .canonical import canonical_hash
-from .futures_identity_transport import JobIdentityClient
 from .futures_ledger import FuturesLedger, normalize_decimal
-from .futures_operative_state import (
-    ExactIdentityPort,
-    ExactLedgerIdentityPort,
-    OperativeIdentityUnavailableError,
-)
-from .futures_runtime import FuturesRuntime, OPERATIVE_CHECKPOINT_POLICY_VERSION
+from .futures_runtime import FuturesRuntime
 
 PROTOCOL_VERSION = 1
 MAX_LINE_BYTES = 1_048_576
@@ -77,72 +70,6 @@ def _validate_identity(message):
             raise ValueError("invalid " + key)
 
 
-class _StdinTextReader:
-    """Text view over the binary stdin used by the main loop (same buffer, no read-ahead)."""
-
-    @staticmethod
-    def readline(limit=-1):
-        return sys.stdin.buffer.readline(limit).decode("utf-8")
-
-
-def _operative_binding(message, payload, checkpoint):
-    context = None
-    if isinstance(checkpoint, dict):
-        context = checkpoint.get("market_context_checkpoint") or checkpoint.get("market_context")
-    frontier = 0
-    if context is not None:
-        frontier = context.get("current_frontier", context.get("frontier")) if isinstance(context, dict) else None
-        if isinstance(frontier, bool) or not isinstance(frontier, int) or frontier < 0:
-            raise ValueError("checkpoint has no valid confirmed source frontier")
-    snapshot = payload["market_snapshot"]
-    cutoff = snapshot.get("cutoff_received_at_ms")
-    if cutoff is None:
-        cutoff = snapshot.get("decision_time_ms", 0)
-    if isinstance(cutoff, bool) or not isinstance(cutoff, int) or cutoff < 0:
-        raise ValueError("invalid accepted market knowledge cutoff")
-    return {
-        "request_id": message["request_id"], "run_id": message["run_id"],
-        "work_id": message["work_id"], "expected_state_version": message["expected_state_version"],
-        "checkpoint_hash": canonical_hash(checkpoint), "source_frontier": frontier,
-        "knowledge_cutoff_ms": cutoff,
-    }
-
-
-def _operative_ports(binding):
-    client = JobIdentityClient(_StdinTextReader(), sys.stdout, binding)
-
-    def committed(kind, key):
-        return client.query(kind, [key])[0]
-
-    return {
-        "execution_identity_port": ExactIdentityPort(committed, lambda kind, key, value: None),
-        "ledger_identity_port": ExactLedgerIdentityPort(committed, lambda kind, key, value: None),
-    }
-
-
-def _compact_funding_events(checkpoint, next_checkpoint, runtime, ledger_updates):
-    """Funding audit rows for a compact job, from the job-local accrual identities."""
-    rates = {
-        identifier: [identifier, start, end, normalize_decimal(str(rate))]
-        for identifier, start, end, rate in runtime.ledger.funding_rates
-    }
-    accrued = []
-    for update in ledger_updates:
-        if update["kind"] == "ledger_accrual":
-            identifier, start, end, quantity = json.loads(update["key"])
-            accrued.append((identifier, start, end, quantity))
-    prior = ((checkpoint or {}).get("ledger_operative_checkpoint") or {})
-    prior_position = prior.get("position")
-    next_position = next_checkpoint["ledger_operative_checkpoint"]["position"]
-    position_side = (
-        prior_position.get("side") if isinstance(prior_position, dict)
-        else next_position.get("side") if isinstance(next_position, dict) else None
-    )
-    previous_paid = Decimal(prior.get("funding_paid", "0"))
-    next_paid = next_checkpoint["ledger_operative_checkpoint"]["funding_paid"]
-    return accrued, rates, position_side, previous_paid, next_paid
-
-
 def _work(message):
     _validate_identity(message)
     allowed = {"type", "protocol_version", "request_id", "run_id", "work_id",
@@ -175,48 +102,33 @@ def _work(message):
         checkpoint = message.get("checkpoint")
         if checkpoint is not None and not isinstance(checkpoint, dict):
             raise ValueError("runtime checkpoint must be an object or null")
-        operative = (
-            payload["runtime_config"].get("operative_checkpoint_policy_version")
-            == OPERATIVE_CHECKPOINT_POLICY_VERSION
-        )
-        ports = (
-            _operative_ports(_operative_binding(message, payload, checkpoint))
-            if operative else {}
-        )
         runtime = FuturesRuntime(
             run_id=message["run_id"],
             config=payload["runtime_config"],
             instrument=payload["instrument"],
             checkpoint=checkpoint,
-            **ports,
         )
         output = runtime.process(
             payload["market_snapshot"], control=payload.get("control")
         )
         _diagnostic("strategy_work", message, **runtime.get_diagnostics())
         next_checkpoint = runtime.checkpoint()
-        identity_updates = runtime.drain_operative_identity_updates() if operative else None
-        if operative:
-            (new_accrued, rates, position_side, previous_paid,
-             next_paid) = _compact_funding_events(
-                checkpoint, next_checkpoint, runtime, identity_updates["ledger"])
-        else:
-            previous_accrued = {
-                tuple(item) for item in (checkpoint or {}).get("accrued", [])
-            }
-            prior_position = (checkpoint or {}).get("ledger_position")
-            position_side = (
-                prior_position.get("side") if isinstance(prior_position, dict)
-                else next_checkpoint.get("ledger_position", {}).get("side")
-                if isinstance(next_checkpoint.get("ledger_position"), dict) else None
-            )
-            rates = {item[0]: item for item in next_checkpoint["funding_rates"]}
-            new_accrued = [
-                item for item in next_checkpoint["accrued"]
-                if tuple(item) not in previous_accrued
-            ]
-            previous_paid = Decimal((checkpoint or {}).get("funding_paid", "0"))
-            next_paid = next_checkpoint["funding_paid"]
+        previous_accrued = {
+            tuple(item) for item in (checkpoint or {}).get("accrued", [])
+        }
+        prior_position = (checkpoint or {}).get("ledger_position")
+        position_side = (
+            prior_position.get("side") if isinstance(prior_position, dict)
+            else next_checkpoint.get("ledger_position", {}).get("side")
+            if isinstance(next_checkpoint.get("ledger_position"), dict) else None
+        )
+        rates = {item[0]: item for item in next_checkpoint["funding_rates"]}
+        new_accrued = [
+            item for item in next_checkpoint["accrued"]
+            if tuple(item) not in previous_accrued
+        ]
+        previous_paid = Decimal((checkpoint or {}).get("funding_paid", "0"))
+        next_paid = next_checkpoint["funding_paid"]
         funding_events = []
         for item in new_accrued:
             identifier, start, end, quantity = item
@@ -277,8 +189,6 @@ def _work(message):
             "runtime_event_time_ms": payload["market_snapshot"]["decision_time_ms"],
             "runtime_funding_events": funding_events,
         }
-        if operative:
-            response["runtime_identity_updates"] = identity_updates
         return response
     if not isinstance(payload, dict) or set(payload) - {
             "operation", "cash_usd", "leverage", "side", "quantity_btc", "entry_price",
@@ -433,14 +343,6 @@ def main():
             _diagnostic("committed_ack_encoded", message, time.perf_counter_ns() - encode_started if _DIAGNOSTICS_ENABLED else 0,
                         response_bytes=len(encoded.encode("utf-8")))
             _emit_timed(message, encoded, "committed_ack")
-        except OperativeIdentityUnavailableError as error:
-            # The identity stream may be out of step with the host: fail closed and
-            # let the host restart a fresh worker rather than guess at history.
-            _diagnostic("error", message, error=str(error)[:512])
-            _emit({"type": "error", "protocol_version": PROTOCOL_VERSION,
-                   "request_id": message.get("request_id") if isinstance(message, dict) else None,
-                   "error": "operative_identity_unavailable"})
-            return 5
         except (UnicodeDecodeError, json.JSONDecodeError, ValueError, TypeError, ArithmeticError) as error:
             _diagnostic("error", message, error=str(error)[:512])
             _emit({"type": "error", "protocol_version": PROTOCOL_VERSION,
