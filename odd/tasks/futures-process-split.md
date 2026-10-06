@@ -37,7 +37,7 @@ Every sustained live run of the single process surfaced a new engine defect: the
 - [x] PS-03a [M] Official Kraken candles as the canonical series: capture backfills and polls closed 1 m / 5 m candles from the public charts API into append-only market DB tables (raw response + hash, `known_at` for as-of reads); observed-vs-official quality report.
 - [x] PS-03b [M] Verdict service C: pure Python function over official candles (C25-C28 entry proposals only; exits stay with D), regime chained in the verdicts DB, writes verdicts on candle close; double replay gives identical verdicts.
 - [ ] PS-04 [M] News process N wired into C (Gemini as veto/confidence, stored per item).
-- [ ] PS-05a [L] Paper execution D (Python, own account DB, single writer): consumes fresh verdicts, ticker and funding read-only; top-of-ticker taker fills; exits via `propose` with the position; append-only hash-chained events plus snapshots; live run equals replay.
+- [x] PS-05a [L] Paper execution D (Python, own account DB, single writer): consumes fresh verdicts, ticker and funding read-only; top-of-ticker taker fills; exits via `propose` with the position; append-only hash-chained events plus snapshots; live run equals replay.
 - [ ] PS-05b [M] Gateway serves D's account, position, fills and verdict analyses read-only, so the terminal shows the engine instead of "engine off".
 - [x] PS-05c [S] Fix the funding-pause overwrite in the legacy runtime (`python/balancita_engine/futures_runtime.py:2393-2404`), with a test. The legacy runtime is still used by the MOCK local terminal.
 - [ ] PS-05d [L] Retire the legacy live engine once D is proven: per-delta driver, market-context transport, operative bridge, `futuresSourceFailed` latch, `FUTURES_MODE=mock/replay` in `app.ts`, and the `DEV_LIVE_SINGLE_PROCESS` rollback. The dev MOCK child, which uses the local terminal, stays.
@@ -149,6 +149,28 @@ Every sustained live run of the single process surfaced a new engine defect: the
   - Suites:
     - Python runtime suite: 87, then 89 OK. It needs `PYTHONPATH=python:python/tests`.
     - TS paper-futures + app: 7 failures, identical to the baseline. The `futures-runtime.test.ts` l.3227 `funding_complete` failure is unrelated and unchanged.
+
+- 2026-10-06 PS-05a (delegated writer, Sonnet; reviewed and spot-checked by the parent).
+  - `python/balancita_engine/futures_paper_execution.py` (D) is the single writer of `futures-paper-account.sqlite`.
+    - Hash-chained append-only events: the hash covers `{kind, time_ms, body}`.
+    - Append-only snapshots: a restart restores the latest snapshot, re-derives the later events and compares them byte for byte. A mismatch raises `ReplayDivergence`.
+    - Inputs are merged in time order: funding, then verdict at `written_at`, then ticker, with per-source rowid/PK cursors.
+    - Entry gate is pure, from independent causes: latch by UTC day, `funding_unresolved`, pending order.
+    - Exits on the mark (stop/target), via `propose` with the position on fresh verdicts only, by time stop, or by daily-loss latch. Exits are not spread-capped.
+    - Taker fills at the ticker bid/ask, capped by displayed size.
+  - `pnpm run dev` starts the optional `paper` child.
+  - Tests: 43 in `test_futures_paper_execution.py`; RED was a missing module. Mutations caught: long filling at bid, horizon ignored, funding sign flipped, tie order (a test was added for it). Combined Python run: 94 OK. `dev.node-test`: 12/12.
+  - Live smoke (real Kraken, about 17 min):
+    - D considered 174 LONG/SHORT verdicts: 171 `verdict_stale` (backfill), 3 fresh C25 LONG.
+    - All 3 were rejected as `target_does_not_clear_cost_buffer`. Measured from the fill price, target distances were 109-113 USD against a cost-plus-buffer threshold of about 120 USD (0.12% + 0.02% of about 86,300). This is the legacy `_risk_plan` rule, reproduced faithfully.
+    - Idle CPU 0.13%; per poll median 1.2 ms, p95 3 ms; catch-up 44 µs per input item.
+    - Restart from a snapshot: no divergence.
+  - Injected check on a DB copy with real tickers: a LONG filled at ask 86282 for 0.0068 BTC, capped by displayed size. It exited via C25 `propose` at bid 86283; net -0.58 USD after fees. A SHORT was rejected as `invalid_stop`.
+  - Replay: the live account (180 events, two process runs) equals two `--once` replays row for row, head hash `dcb35c352e8bd307...`. The parent re-checked this.
+  - Known limits:
+    - Live equals replay assuming each source commits within `horizon_margin_ms` (2 s) of its row time.
+    - Kraken publishes an hour's funding only after the hour ends. A position closed earlier accrues nothing for that hour and reports `funding_complete: false`. It is never inferred, so funding cost is understated for short trades.
+    - At current volatility, C25 targets (about 3 ATR) do not clear taker round-trip costs. That is a strategy and economics question for the user.
 
 ## Next step
 

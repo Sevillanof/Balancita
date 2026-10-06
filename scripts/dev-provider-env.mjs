@@ -52,7 +52,9 @@ const CAPTURE_ARGS = [
  * - capture: Kraken public WS -> live market DB (sole writer, no HTTP/engine),
  * - live: read-only gateway on 8789 tailing that DB (no collector, no engine),
  * - verdict: Python verdict service C (market DB read-only -> verdicts DB, sole
- *   writer of the latter; its own `command` instead of node).
+ *   writer of the latter; its own `command` instead of node),
+ * - paper: Python paper execution D (market + verdicts DBs read-only -> account
+ *   DB, sole writer of the latter).
  * `DEV_LIVE_SINGLE_PROCESS=1` restores the old single-process paper_live child
  * (collector + engine + HTTP in one process) as a rollback path.
  */
@@ -145,6 +147,27 @@ export function devChildSpecs({
         marketDb,
         '--verdicts-db',
         liveDb('futures-verdicts.sqlite'),
+      ],
+      env: {
+        ...env,
+        PYTHONPATH: [`${root}/python`, env.PYTHONPATH]
+          .filter(Boolean)
+          .join(delimiter),
+      },
+    },
+    {
+      name: 'paper',
+      command: 'python3',
+      cwd: serverCwd,
+      args: [
+        '-m',
+        'balancita_engine.futures_paper_execution',
+        '--market-db',
+        marketDb,
+        '--verdicts-db',
+        liveDb('futures-verdicts.sqlite'),
+        '--account-db',
+        liveDb('futures-paper-account.sqlite'),
       ],
       env: {
         ...env,
