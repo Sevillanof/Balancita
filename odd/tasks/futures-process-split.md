@@ -39,7 +39,7 @@ Every sustained live run of the single process surfaced a new engine defect: the
 - [ ] PS-04 [M] News process N wired into C (Gemini as veto/confidence, stored per item).
 - [ ] PS-05a [L] Paper execution D (Python, own account DB, single writer): consumes fresh verdicts, ticker and funding read-only; top-of-ticker taker fills; exits via `propose` with the position; append-only hash-chained events plus snapshots; live run equals replay.
 - [ ] PS-05b [M] Gateway serves D's account, position, fills and verdict analyses read-only, so the terminal shows the engine instead of "engine off".
-- [ ] PS-05c [S] Fix the funding-pause overwrite in the legacy runtime (`python/balancita_engine/futures_runtime.py:2393-2404`), with a test. The legacy runtime is still used by the MOCK local terminal. Blocked until the user's uncommitted local edits to `futures_runtime.py` are reconciled.
+- [x] PS-05c [S] Fix the funding-pause overwrite in the legacy runtime (`python/balancita_engine/futures_runtime.py:2393-2404`), with a test. The legacy runtime is still used by the MOCK local terminal.
 - [ ] PS-05d [L] Retire the legacy live engine once D is proven: per-delta driver, market-context transport, operative bridge, `futuresSourceFailed` latch, `FUTURES_MODE=mock/replay` in `app.ts`, and the `DEV_LIVE_SINGLE_PROCESS` rollback. The dev MOCK child, which uses the local terminal, stays.
 - [ ] PS-06 [S] Process supervision + per-process health in UI.
 
@@ -138,6 +138,17 @@ Every sustained live run of the single process surfaced a new engine defect: the
   - D acts only on fresh verdicts (`knowledge_lag_ms` within a threshold); a verdict becomes available at its stored `written_at`.
   - Pause/resume/close controls need a command channel to D; they are deferred to PS-06.
   - Retirement (PS-05d) is approved for the end, once D is proven live.
+
+- 2026-10-06 PS-05c (delegated writer, Sonnet; reviewed by the parent). The user's unpushed local edits to the legacy files were discarded by user decision; the fix applies to the committed version.
+  - Root cause: in `_update_risk_day`, `can_clear_funding_pause` wrote `entry_paused = False` after the invalid-mark branch had set it. Entries then passed the gate on a bad mark, and `_restore` rejected the checkpoint ("risk mark pause checkpoint disagrees").
+  - Fix: on clear, `entry_paused = bool(_risk_mark_pause_active or _funding_entry_causes)`, both recomputed earlier in the same cycle. These are the same inputs the restore check reads.
+  - Tests in `test_futures_runtime_risk.py`:
+    - the funding clear keeps the pause while the risk mark is unavailable: no entry, and the checkpoint restores;
+    - the funding clear lifts the pause when the mark is valid.
+    - RED on the first test, then GREEN 15/15. A mutation back to `False` was caught.
+  - Suites:
+    - Python runtime suite: 87, then 89 OK. It needs `PYTHONPATH=python:python/tests`.
+    - TS paper-futures + app: 7 failures, identical to the baseline. The `futures-runtime.test.ts` l.3227 `funding_complete` failure is unrelated and unchanged.
 
 ## Next step
 

@@ -137,6 +137,40 @@ class FuturesRuntimeRiskTests(unittest.TestCase):
         self.assertTrue(any(item["kind"] == "open_position" for item in obligations))
         self.assertTrue(any(item["kind"] == "position_protection" for item in obligations))
 
+    def test_funding_clear_keeps_entry_pause_while_risk_mark_is_unavailable(self):
+        def without_ticker(market):
+            market["events"] = [e for e in market["events"] if e["type"] != "ticker"]
+            return market
+
+        engine = risk_runtime(funding_policy=True)
+        first = engine.process(without_ticker(warmed_market(21_600_000, breakout="long")))
+        self.assertTrue(first["risk"]["entry_paused"])
+        self.assertTrue(engine._funding_pause_active)
+        self.assertTrue(engine._risk_mark_pause_active)
+
+        second = engine.process(without_ticker(with_known_funding(
+            warmed_market(21_660_000, breakout="long")
+        )))
+        self.assertEqual(second["funding_policy"]["availability"], "known")
+        self.assertTrue(second["risk"]["entry_paused"])
+        self.assertIn("risk_mark_unavailable", second["risk"]["entry_block_causes"])
+        self.assertEqual(second["position"]["quantity_btc"], "0")
+        self.assertFalse(any(order.get("type") == "order_accepted" for order in second["orders"]))
+        restored = risk_runtime(checkpoint=engine.checkpoint(), funding_policy=True)
+        self.assertTrue(restored.risk_state["entry_paused"])
+        self.assertTrue(restored._risk_mark_pause_active)
+
+    def test_funding_clear_lifts_entry_pause_when_risk_mark_is_valid(self):
+        engine = risk_runtime(funding_policy=True)
+        engine.process(warmed_market(21_600_000, breakout="long"))
+        self.assertTrue(engine._funding_pause_active)
+        result = engine.process(with_known_funding(warmed_market(21_660_000, breakout="long")))
+        self.assertFalse(result["risk"]["entry_paused"])
+        self.assertFalse(engine._funding_pause_active)
+        self.assertFalse(engine._risk_mark_pause_active)
+        restored = risk_runtime(checkpoint=engine.checkpoint(), funding_policy=True)
+        self.assertFalse(restored.risk_state["entry_paused"])
+
     def test_paper_live_unknown_funding_is_blocked_without_synthetic_zero_funding(self):
         engine = risk_runtime()
         market = warmed_market(21_600_000, breakout='long')

@@ -2400,7 +2400,9 @@ class FuturesRuntime:
                 and (self.ledger.position is None or mark_valid)
             )
             if can_clear_funding_pause:
-                state["entry_paused"] = False
+                state["entry_paused"] = bool(
+                    self._risk_mark_pause_active or self._funding_entry_causes
+                )
                 self._funding_pause_active = False
             elif self._funding_availability == "unknown" and not (
                 state["user_paused"] or state["daily_loss_latched"]
