@@ -57,6 +57,8 @@ Every sustained live run of the single process surfaced a new engine defect: the
 
   - Parent browser verification (2026-10-06, `pnpm run dev` on the existing dev-live market DB): capture + gateway start; `/terminal?source=live` shows the Kraken price, 37→39 stored candles plus new live candles without reload, and the "Motor de decisiones apagado" notice; no console errors; MOCK ↔ Real switch works both ways (also closes DEV-03). Bootstrap 55–74 ms; gateway CPU 0.1–0.3%; capture CPU 15–45%, so the low-CPU goal is met for the gateway only. Capture CPU moves to PS-02. History shows gaps from earlier periods when the old single process was starved.
 
+- Commits on `feat/futures-process-split` (branched from frozen `fix/futures-bounded-processing` @ 94bfa4e): 10df50d dev-mode-switch + DEV-06; bfc5212 BP-03d incremental verification; e23dbfe PS-01 capture + gateway. Pre-session uncommitted changes are left out on purpose: `futures_runtime.py`, `test_futures_strategy_cadence.py`, `futures-replay-driver.ts` and its test, and the protected `futures-runtime.test.ts`.
+
 ## Next step
 
 PS-02 (capture hot path: CPU 15–45%), then PS-03.
