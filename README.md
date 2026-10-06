@@ -90,10 +90,6 @@ the others. If `capture` stops, the `live` gateway keeps serving stored candles
 and reports the feed as stale; restarting `live` does not affect `capture`.
 Press Ctrl-C once to stop every process.
 
-Rollback: `DEV_LIVE_SINGLE_PROCESS=1 pnpm run dev` runs the previous
-single-process `live` child (`FUTURES_MODE=paper_live`: collector, engine and
-HTTP together) instead of `capture` + gateway (no `verdict` or `paper` child).
-
 ### Market data mode
 
 Kraken mode uses public, unauthenticated REST and WebSocket market-data

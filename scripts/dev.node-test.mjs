@@ -85,14 +85,6 @@ describe('devChildSpecs', () => {
       env.FUTURES_VERDICTS_DB_PATH,
       verdictArgs[verdictArgs.indexOf('--verdicts-db') + 1],
     )
-    // The rollback child is the legacy single process: it gets neither.
-    const rollback = devChildSpecs({
-      root,
-      env: { DEV_LIVE_SINGLE_PROCESS: '1' },
-      allowedFlags: noFlags,
-    }).find((spec) => spec.name === 'live')
-    assert.equal(rollback.env.FUTURES_PAPER_ACCOUNT_DB_PATH, undefined)
-    assert.equal(rollback.env.FUTURES_VERDICTS_DB_PATH, undefined)
   })
 
   it('runs the Python verdict service over the capture market database', () => {
@@ -127,35 +119,6 @@ describe('devChildSpecs', () => {
     ])
     assert.equal(env.PYTHONPATH, '/repo/python')
     assert.equal(env.KEEP, 'yes')
-  })
-
-  it('keeps the single-process paper_live rollback behind DEV_LIVE_SINGLE_PROCESS', () => {
-    const rollback = devChildSpecs({
-      root,
-      env: { DEV_LIVE_SINGLE_PROCESS: '1' },
-      allowedFlags: noFlags,
-    })
-    assert.deepEqual(
-      rollback.map((spec) => spec.name),
-      ['vite', 'server', 'mock', 'live'],
-    )
-    const { env, args } = rollback.find((spec) => spec.name === 'live')
-    assert.equal(env.FUTURES_MODE, 'paper_live')
-    assert.equal(env.PORT, '8789')
-    assert.ok(args.includes('src/app/index.ts'))
-    for (const name of ['verdict', 'paper'])
-      assert.equal(
-        rollback.find((spec) => spec.name === name),
-        undefined,
-      )
-    const paths = [
-      env.FUTURES_DB_PATH,
-      env.FUTURES_MARKET_DB_PATH,
-      env.MARKET_DB_PATH,
-      env.SIMULATIONS_REPORT_PATH,
-    ]
-    for (const path of paths) assert.match(path, /^\.\/data\/dev-live\//)
-    assert.equal(new Set(paths).size, paths.length)
   })
 
   it('keeps vite on the default provider environment', () => {
@@ -427,13 +390,6 @@ describe('server/.env is optional', () => {
     for (const spec of specs.filter((s) => watched.includes(s.name)))
       assert.equal(spec.args[0], flag, spec.name)
     assert.ok(!specs.find((s) => s.name === 'vite').args.includes(flag))
-  })
-
-  it('applies to the single-process rollback child too', () => {
-    const none = specsWith(() => false, { DEV_LIVE_SINGLE_PROCESS: '1' })
-    assert.ok(!none.find((s) => s.name === 'live').args.includes(flag))
-    const some = specsWith(() => true, { DEV_LIVE_SINGLE_PROCESS: '1' })
-    assert.ok(some.find((s) => s.name === 'live').args.includes(flag))
   })
 })
 

@@ -234,8 +234,6 @@ const CAPTURE_ARGS = ['--experimental-strip-types', 'src/app/capture-main.ts']
  *   writer of the latter; its own `command` instead of node),
  * - paper: Python paper execution D (market + verdicts DBs read-only -> account
  *   DB, sole writer of the latter).
- * `DEV_LIVE_SINGLE_PROCESS=1` restores the old single-process paper_live child
- * (collector + engine + HTTP in one process) as a rollback path.
  */
 export function devChildSpecs({
   root,
@@ -284,24 +282,6 @@ export function devChildSpecs({
       env: { ...env },
     },
   ]
-  if (env.DEV_LIVE_SINGLE_PROCESS === '1')
-    return [
-      ...common,
-      {
-        name: 'live',
-        cwd: serverCwd,
-        args: nodeArgs(SERVER_ARGS),
-        env: {
-          ...serverEnvironment(env),
-          PORT: String(DEV_PORTS.live),
-          FUTURES_MODE: 'paper_live',
-          FUTURES_DB_PATH: liveDb('futures-paper.sqlite'),
-          FUTURES_MARKET_DB_PATH: liveDb('futures-market.sqlite'),
-          MARKET_DB_PATH: liveDb('market.sqlite'),
-          SIMULATIONS_REPORT_PATH: liveDb('simulations-report.json'),
-        },
-      },
-    ]
   const marketDb = liveDb('futures-market.sqlite')
   const verdictsDb = liveDb('futures-verdicts.sqlite')
   const accountDb = liveDb('futures-paper-account.sqlite')
