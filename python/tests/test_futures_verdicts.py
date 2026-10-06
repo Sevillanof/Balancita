@@ -7,6 +7,7 @@ import unittest
 from balancita_engine.canonical import canonical_json
 from balancita_engine.futures_verdicts import (
     VERDICT_CONFIG,
+    VerdictService,
     VerdictStore,
     evaluate_verdict,
     process_available,
@@ -149,7 +150,7 @@ class EvaluateVerdictTests(unittest.TestCase):
         self.assertIn("candle_sequence_gap", verdict["features"]["1m"]["reason_codes"])
 
 
-class VerdictServiceTests(unittest.TestCase):
+class ServiceCase(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.mkdtemp(prefix="balancita-verdicts-")
 
@@ -174,6 +175,8 @@ class VerdictServiceTests(unittest.TestCase):
         market.insert([official(MINUTE, bucket, known_at + 5, close=close,
                                 high=max(close, "100050"), volume=volume)])
 
+
+class VerdictServiceTests(ServiceCase):
     def test_incremental_live_processing_equals_a_later_full_replay(self):
         market = self.live_market("market.sqlite")
         live = VerdictStore(self.path("live-verdicts.sqlite"), VERDICT_CONFIG)
@@ -234,6 +237,79 @@ class VerdictServiceTests(unittest.TestCase):
         sqlite3.connect(path).close()
         store = VerdictStore(self.path("verdicts.sqlite"), VERDICT_CONFIG)
         self.assertEqual(process_available(path, store), 0)
+        store.close()
+
+
+class VerdictServiceLoopTests(ServiceCase):
+    """Idle cost, query plans and resilience of the long-running poll loop."""
+
+    def service(self, market_path, store, logs=None):
+        return VerdictService(market_path, store, log=(logs.append if logs is not None else (lambda line: None)))
+
+    def test_idle_poll_runs_one_cheap_statement_over_a_persistent_connection(self):
+        market = self.live_market("market.sqlite")
+        store = VerdictStore(self.path("verdicts.sqlite"), VERDICT_CONFIG)
+        service = self.service(market.path, store)
+        self.assertEqual(service.poll(), 240)
+        statements = []
+        service.market.db.set_trace_callback(statements.append)
+        connection = service.market
+        for _ in range(3):
+            self.assertEqual(service.poll(), 0)
+        self.assertIs(service.market, connection)
+        self.assertEqual(len(statements), 3)
+        self.assertTrue(all("MAX(bucket_start)" in statement for statement in statements))
+        self.arrive(market, START + 240 * MINUTE)
+        self.assertEqual(service.poll(), 1)
+        service.close()
+        store.close()
+
+    def test_window_and_pending_queries_use_the_primary_key_range(self):
+        market = self.live_market("market.sqlite")
+        store = VerdictStore(self.path("verdicts.sqlite"), VERDICT_CONFIG)
+        service = self.service(market.path, store)
+        service.poll()
+        plans = service.market.query_plans(START + 100 * MINUTE, START + 100 * MINUTE + 3_000)
+        self.assertGreaterEqual(len(plans), 4)
+        for plan in plans:
+            for step in plan:
+                if "paper_futures_official_candles" in step:
+                    self.assertIn("USING INDEX sqlite_autoindex_paper_futures_official_candles_1", step)
+                    self.assertIn("bucket_start", step.split("(", 1)[-1], step)
+        service.close()
+        store.close()
+
+    def test_survives_a_missing_then_created_then_recreated_market_db(self):
+        path = self.path("market.sqlite")
+        logs = []
+        store = VerdictStore(self.path("verdicts.sqlite"), VERDICT_CONFIG)
+        service = self.service(path, store, logs)
+        self.assertEqual(service.poll(), 0)
+        self.assertEqual(service.poll(), 0)
+        self.assertEqual(len([line for line in logs if "unavailable" in line]), 1)
+        market = self.live_market("market.sqlite")
+        self.assertEqual(service.poll(), 240)
+        os.remove(path)
+        self.assertEqual(service.poll(), 0)
+        recreated = self.live_market("market.sqlite")
+        self.arrive(recreated, START + 240 * MINUTE)
+        self.assertEqual(service.poll(), 1)
+        service.close()
+        store.close()
+
+    def test_survives_a_locked_market_db(self):
+        market = self.live_market("market.sqlite")
+        store = VerdictStore(self.path("verdicts.sqlite"), VERDICT_CONFIG)
+        service = self.service(market.path, store)
+        service.poll()
+        def locked():
+            raise sqlite3.OperationalError("database is locked")
+
+        service.market.latest_bucket = locked
+        self.assertEqual(service.poll(), 0)
+        self.arrive(market, START + 240 * MINUTE)
+        self.assertEqual(service.poll(), 1)
+        service.close()
         store.close()
 
 

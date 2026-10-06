@@ -35,7 +35,7 @@ Every sustained live run of the single process surfaced a new engine defect: the
 - [x] PS-01 [M] Live candles without the engine: capture process A + gateway B; terminal works with the engine off; `pnpm run dev` runs A + B for live.
 - [x] PS-02 [S] Capture hot-path leftovers (remaining book sorts) and trivial market DB restore.
 - [x] PS-03a [M] Official Kraken candles as the canonical series: capture backfills and polls closed 1 m / 5 m candles from the public charts API into append-only market DB tables (raw response + hash, `known_at` for as-of reads); observed-vs-official quality report.
-- [ ] PS-03b [M] Verdict service C: pure Python function over official candles (C25-C28 entry proposals only; exits stay with D), regime chained in the verdicts DB, writes verdicts on candle close; double replay gives identical verdicts.
+- [x] PS-03b [M] Verdict service C: pure Python function over official candles (C25-C28 entry proposals only; exits stay with D), regime chained in the verdicts DB, writes verdicts on candle close; double replay gives identical verdicts.
 - [ ] PS-04 [M] News process N wired into C (Gemini as veto/confidence, stored per item).
 - [ ] PS-05 [L] Paper execution D consumes verdicts; retire per-delta driver, market-context transport, operative bridge, `futuresSourceFailed` latch; fix funding-pause bug (`python/balancita_engine/futures_runtime.py:2393-2404`).
 - [ ] PS-06 [S] Process supervision + per-process health in UI.
@@ -103,14 +103,33 @@ Every sustained live run of the single process surfaced a new engine defect: the
     - Quality over the last 10 minutes: 4 compared, 3 matched exactly. The one volume mismatch is the partial first minute, as capture started at 10:38:34. Buckets before capture are reported as observed-missing.
   - Follow-up (PS-06): surface `officialCandleQuality` and official-candle freshness in per-process health.
 
+- 2026-10-06 PS-03b (cloud session). Verdict core written by the parent; capture order, dev wiring and the poll fix written by a delegated writer (Sonnet) and reviewed by the parent.
+  - Design: `python/balancita_engine/futures_verdicts.py`.
+    - `evaluate_verdict` evaluates C25-C28 flat-position proposals per closed 1 m bucket over fixed 200-bar 1 m and 5 m windows of official candles. It uses only candles that closed by the bucket close and were known by its `known_at`, so backfills have no lookahead. `knowledge_lag_ms` marks verdicts rebuilt from a backfill; D should act only on fresh ones.
+    - `VerdictStore` is an append-only verdicts DB with a config-hash guard. The regime is chained from the last verdict.
+    - `VerdictService` keeps one read-only market connection. An idle poll is a single `MAX(bucket_start)` probe. It survives a missing, locked or recreated market DB.
+    - A CLI `--once` mode does replays.
+  - Capture now fetches 5 m before 1 m, so the 5 m bar closing on a boundary is in that minute's verdict.
+  - `pnpm run dev` starts the `verdict` child (`python3`, `PYTHONPATH=python/`). It is absent with `DEV_LIVE_SINGLE_PROCESS=1`.
+  - RED/GREEN:
+    - Verdict tests: module missing, then 8/8. A mutation that removed the close-time filter, and one that ignored the chained regime, were each caught.
+    - Service tests: missing `VerdictService`, then 12/12. They cover one idle statement, PK-bounded query plans, a missing/recreated DB and a locked DB.
+    - Python verdicts + strategies + indicators: 26 OK.
+    - `scripts/dev.node-test.mjs`: 9 pass / 2 fail, then 11/11.
+    - Capture-order test RED, then GREEN.
+  - Live smoke (real Kraken, fresh DBs):
+    - Backfill 1440 1 m + 863 5 m; catch-up 1440 verdicts in about 30 s, compute-bound at about 20 ms per verdict.
+    - Then one verdict per minute, with official candles about 3.5 s after close.
+    - Write latency after `known_at` was 31-407 ms. It is the phase of the 1 s poll; per-verdict compute was flat at 1x vs 10x synthetic history.
+    - Idle CPU was about 0.02% of a core after the fix. It was about 0.17% before; a first report of 17% was a units misreading.
+    - Actions over 1448 verdicts: WAIT 1273; LONG 96 (C25 45, C27 43, C26 4, ...); SHORT 79. Regime: trend 907, range 537.
+  - Double replay: the live run and two `--once` replays from the same market DB were identical on `(bucket_start, verdict_hash, payload_json)` for every bucket, after the fix too (1445/1445).
+  - Note: 1 m features become ready at 50 candles, but the window is pinned at 200; the first 199 verdicts after an empty DB use a shorter window. The official backfill covers this in practice.
+
 ## Next step
 
-- PS-03b, the verdict service C (Python, stdlib `sqlite3` only):
-  - Read official 1 m / 5 m candles read-only from the market DB using `known_at` as-of semantics.
-  - Use a fixed-length indicator window, because EMA/RSI depend on their start point. Pin the window length in the verdict config.
-  - On each new closed 1 m candle, evaluate C25-C28 entry proposals with the flat-position path of `propose`. Chain the regime from the last verdict.
-  - Write the verdicts DB with input candle hashes.
-  - Test that a double replay gives identical verdicts.
+- PS-04: news process N wired into C, with Gemini as veto/confidence stored per item. Or PS-05 first: paper execution D consuming fresh verdicts (`knowledge_lag_ms` below a threshold). The order is the user's call.
 - In the cloud container, Node's `fetch` and `WebSocket` need `NODE_USE_ENV_PROXY=1` to reach Kraken; this does not apply locally.
-- Open follow-up: `paper-futures/futures-canonical.ts` `canonicalJson` still uses a key sort that allocates per comparison, and it was outside the PS-02 surface. The store-local `canonicalEvent` duplicates the fix; consolidate them later.
+- Open follow-up: `paper-futures/futures-canonical.ts` `canonicalJson` still uses a key sort that allocates per comparison. The store-local `canonicalEvent` duplicates the fix; consolidate them later.
+- Open follow-up: the `gateway.test.ts` candle-streaming timing flake (pre-existing).
 - Handoff (2026-10-06): the 5 files that were already modified before the cloud session are still uncommitted locally and not pushed: `futures_runtime.py`, `test_futures_strategy_cadence.py`, `futures-replay-driver.ts` and its test, and the protected `futures-runtime.test.ts`.

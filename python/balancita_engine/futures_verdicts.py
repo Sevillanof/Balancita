@@ -8,6 +8,7 @@ consumed signals belong to paper execution (D).
 """
 
 import json
+import os
 import sqlite3
 import time
 
@@ -206,29 +207,61 @@ class VerdictStore:
 
 
 class _OfficialCandles:
-    """Read-only view of the market DB's official candles (first-known revisions)."""
+    """Read-only view of the market DB's official candles (first-known revisions).
+
+    Every query is bounded by the (interval_ms, bucket_start) primary key range,
+    so its cost does not grow with the stored history. The connection is kept
+    open across polls.
+    """
 
     def __init__(self, path):
+        self.path = path
         self.db = sqlite3.connect("file:{}?mode=ro".format(path), uri=True)
-        self.available = self.db.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='paper_futures_official_candles'"
-        ).fetchone() is not None
+        self.identity = _file_identity(path)
+        self._available = False
 
-    def _rows(self, where, params):
-        rows = self.db.execute(
-            """
-            WITH ranked AS (
-              SELECT *, ROW_NUMBER() OVER (
-                PARTITION BY interval_ms, bucket_start ORDER BY known_at, rowid
-              ) AS revision_rank
-              FROM paper_futures_official_candles WHERE {}
-            )
-            SELECT interval_ms, bucket_start, known_at, open_price, high_price,
-              low_price, close_price, volume_btc, revision_hash
-            FROM ranked WHERE revision_rank=1 ORDER BY bucket_start
-            """.format(where),
-            params,
-        ).fetchall()
+    @property
+    def available(self):
+        if not self._available:
+            self._available = self.db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='paper_futures_official_candles'"
+            ).fetchone() is not None
+        return self._available
+
+    def replaced(self):
+        """True when the file at the path is no longer the one this connection opened."""
+        return _file_identity(self.path) != self.identity
+
+    def latest_bucket(self):
+        """Newest stored 1m bucket (None when there is none): one index probe."""
+        return self.db.execute(
+            "SELECT MAX(bucket_start) FROM paper_futures_official_candles WHERE interval_ms=?",
+            (ONE_MINUTE_MS,),
+        ).fetchone()[0]
+
+    _ROWS_SQL = """
+        WITH ranked AS (
+          SELECT *, ROW_NUMBER() OVER (
+            PARTITION BY interval_ms, bucket_start ORDER BY known_at, rowid
+          ) AS revision_rank
+          FROM paper_futures_official_candles WHERE {}
+        )
+        SELECT interval_ms, bucket_start, known_at, open_price, high_price,
+          low_price, close_price, volume_btc, revision_hash
+        FROM ranked WHERE revision_rank=1 ORDER BY bucket_start
+        """
+    # Bounds are on bucket_start itself (not bucket_start+interval_ms) so the
+    # primary key range applies.
+    _PENDING_WHERE = "interval_ms=? AND bucket_start>?"
+    _WINDOW_FLOOR_SQL = """
+        SELECT bucket_start FROM paper_futures_official_candles
+        WHERE interval_ms=? AND bucket_start<=? AND known_at<=?
+        GROUP BY bucket_start ORDER BY bucket_start DESC LIMIT 1 OFFSET ?
+        """
+    _WINDOW_WHERE = "interval_ms=? AND bucket_start>=? AND bucket_start<=? AND known_at<=?"
+
+    @staticmethod
+    def _candles(rows):
         return [
             {
                 "interval_ms": row[0], "bucket_start": row[1], "close_at": row[1] + row[0],
@@ -240,38 +273,64 @@ class _OfficialCandles:
 
     def pending(self, after_bucket):
         """1m buckets after the last verdict, each with its first-known revision."""
-        return self._rows("interval_ms=? AND bucket_start>?", (ONE_MINUTE_MS, after_bucket))
+        rows = self.db.execute(self._ROWS_SQL.format(self._PENDING_WHERE), (ONE_MINUTE_MS, after_bucket))
+        return self._candles(rows.fetchall())
 
     def window(self, interval_ms, close_cutoff, known_cutoff, size):
-        rows = self.db.execute(
-            """
-            SELECT bucket_start FROM paper_futures_official_candles
-            WHERE interval_ms=? AND bucket_start+interval_ms<=? AND known_at<=?
-            GROUP BY bucket_start ORDER BY bucket_start DESC LIMIT 1 OFFSET ?
-            """,
-            (interval_ms, close_cutoff, known_cutoff, size - 1),
+        last_start = close_cutoff - interval_ms
+        row = self.db.execute(
+            self._WINDOW_FLOOR_SQL, (interval_ms, last_start, known_cutoff, size - 1)
         ).fetchone()
-        floor = 0 if rows is None else rows[0]
-        candles = self._rows(
-            "interval_ms=? AND bucket_start>=? AND bucket_start+interval_ms<=? AND known_at<=?",
-            (interval_ms, floor, close_cutoff, known_cutoff),
+        floor = 0 if row is None else row[0]
+        rows = self.db.execute(
+            self._ROWS_SQL.format(self._WINDOW_WHERE), (interval_ms, floor, last_start, known_cutoff)
         )
-        return candles[-size:]
+        return self._candles(rows.fetchall())[-size:]
+
+    def query_plans(self, close_cutoff, known_cutoff):
+        """EXPLAIN QUERY PLAN detail lines of each query, for regression tests."""
+        plans = []
+        for sql, params in (
+            (self._ROWS_SQL.format(self._PENDING_WHERE), (ONE_MINUTE_MS, close_cutoff)),
+            (self._WINDOW_FLOOR_SQL, (ONE_MINUTE_MS, close_cutoff, known_cutoff, 199)),
+            (self._ROWS_SQL.format(self._WINDOW_WHERE), (ONE_MINUTE_MS, 0, close_cutoff, known_cutoff)),
+            (self._ROWS_SQL.format(self._WINDOW_WHERE), (FIVE_MINUTES_MS, 0, close_cutoff, known_cutoff)),
+        ):
+            plans.append([row[3] for row in self.db.execute("EXPLAIN QUERY PLAN " + sql, params)])
+        return plans
 
     def close(self):
         self.db.close()
 
 
-def process_available(market_db_path, store, limit=None):
-    """Writes a verdict for every pending official 1m bucket, in order."""
-    market = _OfficialCandles(market_db_path)
+def _file_identity(path):
+    try:
+        info = os.stat(path)
+    except OSError:
+        return None
+    return (info.st_dev, info.st_ino)
+
+
+def process_available(market_db_path, store, limit=None, market=None):
+    """Writes a verdict for every pending official 1m bucket, in order.
+
+    ``market`` is an already open reader (kept by the service loop); without
+    one a reader is opened and closed for this call.
+    """
+    owned = market is None
+    if owned:
+        market = _OfficialCandles(market_db_path)
     try:
         if not market.available:
             return 0
         last = store.last_verdict()
+        after = -1 if last is None else last[0]
+        latest = market.latest_bucket()
+        if latest is None or latest <= after:
+            return 0
         regime = "unknown" if last is None else last[1]
         processed = 0
-        for candidate in market.pending(-1 if last is None else last[0]):
+        for candidate in market.pending(after):
             if limit is not None and processed >= limit:
                 break
             decision = candidate["known_at"]
@@ -286,24 +345,65 @@ def process_available(market_db_path, store, limit=None):
             processed += 1
         return processed
     finally:
-        market.close()
+        if owned:
+            market.close()
+
+
+class VerdictService:
+    """Poll loop state: one persistent market reader that survives a missing,
+    locked or recreated market DB without ever raising."""
+
+    def __init__(self, market_db_path, store, log=print):
+        self.market_db_path = market_db_path
+        self.store = store
+        self.log = log
+        self.market = None
+        self._unavailable = None
+
+    def _drop(self):
+        if self.market is not None:
+            try:
+                self.market.close()
+            except sqlite3.Error:
+                pass
+            self.market = None
+
+    def poll(self):
+        """Processes pending buckets; returns the number of verdicts written."""
+        try:
+            if self.market is not None and self.market.replaced():
+                self._drop()
+            if self.market is None:
+                self.market = _OfficialCandles(self.market_db_path)
+            count = process_available(self.market_db_path, self.store, market=self.market)
+        except sqlite3.OperationalError as error:
+            self._drop()
+            # Log a given condition once, not on every poll.
+            if str(error) != self._unavailable:
+                self.log("market DB unavailable: {}".format(error))
+                self._unavailable = str(error)
+            return 0
+        self._unavailable = None
+        if count:
+            last = self.store.last_verdict()
+            self.log("verdicts +{} through bucket {} regime {}".format(count, last[0], last[1]))
+        return count
+
+    def close(self):
+        self._drop()
 
 
 def run(market_db_path, verdicts_db_path, poll_seconds=1.0, log=print):
     """Long-running service loop: one verdict per newly closed official 1m candle."""
     store = VerdictStore(verdicts_db_path, VERDICT_CONFIG)
     log("verdicts writing to {} (config {})".format(verdicts_db_path, store.config_hash[:12]))
+    service = VerdictService(market_db_path, store, log)
     try:
         while True:
-            try:
-                count = process_available(market_db_path, store)
-                if count:
-                    last = store.last_verdict()
-                    log("verdicts +{} through bucket {} regime {}".format(count, last[0], last[1]))
-            except sqlite3.OperationalError as error:
-                log("market DB unavailable: {}".format(error))
+            service.poll()
             time.sleep(poll_seconds)
     finally:
+        service.close()
         store.close()
 
 
