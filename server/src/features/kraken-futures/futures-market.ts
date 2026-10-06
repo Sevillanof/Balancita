@@ -608,14 +608,13 @@ export class KrakenFuturesMarketCollector {
   get status(): MarketStatus {
     return this.state
   }
-  get book(): {
+  /** O(1) scalar book-quality view; never copies or sorts book levels. */
+  get bookQuality(): {
     readonly valid: boolean
     readonly executableEligible: boolean
     readonly sequenceIntegrity: 'observed_contiguous' | 'invalid_or_unproven'
     readonly qualityPolicy: 'snapshot-contiguous-observed.v1'
     readonly sourceGuarantee: 'undocumented'
-    readonly bids: readonly BookLevel[]
-    readonly asks: readonly BookLevel[]
     readonly sequence: number | null
     readonly epoch: number
   } {
@@ -639,14 +638,29 @@ export class KrakenFuturesMarketCollector {
           : 'invalid_or_unproven',
       qualityPolicy: 'snapshot-contiguous-observed.v1',
       sourceGuarantee: 'undocumented',
+      sequence: this.lastBookSeq,
+      epoch: this.epoch,
+    }
+  }
+  get book(): {
+    readonly valid: boolean
+    readonly executableEligible: boolean
+    readonly sequenceIntegrity: 'observed_contiguous' | 'invalid_or_unproven'
+    readonly qualityPolicy: 'snapshot-contiguous-observed.v1'
+    readonly sourceGuarantee: 'undocumented'
+    readonly bids: readonly BookLevel[]
+    readonly asks: readonly BookLevel[]
+    readonly sequence: number | null
+    readonly epoch: number
+  } {
+    return {
+      ...this.bookQuality,
       bids: [...this.bids]
         .map(([price, quantity]) => ({ price, quantity }))
         .sort((a, b) => -compareDecimals(a.price, b.price)),
       asks: [...this.asks]
         .map(([price, quantity]) => ({ price, quantity }))
         .sort((a, b) => compareDecimals(a.price, b.price)),
-      sequence: this.lastBookSeq,
-      epoch: this.epoch,
     }
   }
   get metrics(): {
@@ -994,6 +1008,7 @@ export class KrakenFuturesMarketCollector {
     }
     this.scheduleFreshnessCheck()
     try {
+      const quality = this.bookQuality
       const integrityEvent = {
         ...event,
         ...(event.type === 'book' || event.type === 'trade'
@@ -1001,13 +1016,13 @@ export class KrakenFuturesMarketCollector {
           : {}),
         marketQuality: {
           schema_version: 'futures-market-quality-attestation.v1' as const,
-          policy_version: this.book.qualityPolicy,
-          source_guarantee: this.book.sourceGuarantee,
+          policy_version: quality.qualityPolicy,
+          source_guarantee: quality.sourceGuarantee,
           epoch: this.epoch,
           feed_sequence: event.seq,
           received_at: receivedAt,
-          book_valid: this.book.valid,
-          book_sequence_integrity: this.book.sequenceIntegrity,
+          book_valid: quality.valid,
+          book_sequence_integrity: quality.sequenceIntegrity,
         },
       }
       const outcome = this.persistRaw(integrityEvent, text)

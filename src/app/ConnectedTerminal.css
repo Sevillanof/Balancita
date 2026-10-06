@@ -232,3 +232,90 @@
   line-height: 1.45;
   overflow-wrap: anywhere;
 }
+
+/* Data-source switch: compact dark segmented control (native radios). */
+.source-switch {
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--demo-border);
+  border-radius: 4px;
+  background: var(--demo-surface);
+}
+
+.source-switch__option {
+  position: relative;
+  display: inline-flex;
+}
+
+.source-switch__input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.source-switch__label {
+  display: inline-flex;
+  min-height: 28px;
+  align-items: center;
+  padding: 0 10px;
+  border-radius: 3px;
+  color: var(--demo-muted);
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.source-switch__input:checked + .source-switch__label {
+  color: var(--demo-text);
+  background: color-mix(in oklab, var(--demo-primary) 18%, transparent);
+  box-shadow: inset 0 -2px 0 var(--demo-primary);
+  font-weight: 700;
+}
+
+.source-switch__input:checked + .source-switch__label::before {
+  content: '● ';
+  color: var(--demo-primary);
+}
+
+.source-switch__input:focus-visible + .source-switch__label {
+  outline: 2px solid var(--demo-primary);
+  outline-offset: 1px;
+}
+
+.source-switch-bar {
+  display: flex;
+  justify-content: flex-end;
+  padding: 8px 28px;
+  border-bottom: 1px solid var(--demo-border);
+}
+
+.source-switch__announce {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+@media (max-width: 480px) {
+  .source-switch {
+    max-width: 100%;
+  }
+
+  .source-switch__label {
+    min-height: 44px;
+    padding: 0 8px;
+    font-size: 10px;
+  }
+
+  .source-switch-bar {
+    padding-inline: 16px;
+  }
+}

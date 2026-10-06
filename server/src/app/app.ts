@@ -86,7 +86,10 @@ import {
 import { AnalysisRateLimiter } from '../platform/limits.ts'
 import { AnalyzeService } from '../features/analysis/service.ts'
 import { parseAnalysisInputRequest } from '../features/analysis/wire.ts'
-import { FuturesSessionRuntime } from '../features/paper-futures/futures-session-runtime.ts'
+import {
+  createLiveTerminalMarket,
+  FuturesSessionRuntime,
+} from '../features/paper-futures/futures-session-runtime.ts'
 import type { FuturesSqlObserver } from '../features/paper-futures/futures-store.ts'
 import type { FuturesWorkerDiagnostic } from '../features/paper-futures/futures-worker.ts'
 import type { ReplayTimingEvent } from '../features/paper-futures/futures-replay-driver.ts'
@@ -1004,6 +1007,22 @@ export async function buildApp(options: {
       { type: 'market.updated', data: update },
     ])
   }
+  const futuresBookQualityAttestation = () => {
+    // One O(1) scalar read per update; never copies or sorts book levels.
+    const quality = futuresCollector?.bookQuality
+    return quality
+      ? {
+          schema_version: 'futures-market-quality-attestation.v1',
+          policy_version: quality.qualityPolicy,
+          source_guarantee: quality.sourceGuarantee,
+          book_valid: quality.valid,
+          book_sequence_integrity: quality.sequenceIntegrity,
+          executable_eligible: quality.executableEligible,
+          epoch: quality.epoch,
+          sequence: quality.sequence,
+        }
+      : null
+  }
   const queueFuturesUiUpdate = (update: Record<string, unknown>): void => {
     pendingFuturesUiUpdate = { ...pendingFuturesUiUpdate, ...update }
     if (futuresUiTimer !== undefined) return
@@ -1244,6 +1263,9 @@ export async function buildApp(options: {
             product_id: FUTURES_PRODUCT,
             quote_currency: 'USD',
             metadata_hash: futuresInstrumentMetadataHash,
+            ...(futuresMarketStore
+              ? { terminal_market: createLiveTerminalMarket(futuresMarketStore) }
+              : {}),
             market: {
               status: futuresStatus,
               reason: futuresStatusReason ?? null,
@@ -1265,11 +1287,11 @@ export async function buildApp(options: {
                     }
                   : null
               })(),
-              book_status: futuresCollector?.book.valid
+              book_status: futuresCollector?.bookQuality.valid
                 ? 'valid'
                 : 'unavailable',
               book_quality:
-                futuresCollector?.book.sequenceIntegrity ??
+                futuresCollector?.bookQuality.sequenceIntegrity ??
                 'invalid_or_unproven',
               book_quality_policy: PAPER_MARKET_QUALITY_POLICY.version,
               source_guarantee: 'undocumented',
@@ -1424,20 +1446,7 @@ export async function buildApp(options: {
                 received_at: event.receivedAt,
                 last_received_at: futuresLastReceivedAt,
                 market_status: futuresStatus,
-                book_quality: futuresCollector?.book
-                  ? {
-                      schema_version: 'futures-market-quality-attestation.v1',
-                      policy_version: futuresCollector.book.qualityPolicy,
-                      source_guarantee: futuresCollector.book.sourceGuarantee,
-                      book_valid: futuresCollector.book.valid,
-                      book_sequence_integrity:
-                        futuresCollector.book.sequenceIntegrity,
-                      executable_eligible:
-                        futuresCollector.book.executableEligible,
-                      epoch: futuresCollector.book.epoch,
-                      sequence: futuresCollector.book.sequence,
-                    }
-                  : null,
+                book_quality: futuresBookQualityAttestation(),
                 normalized,
               })
               const sourceJob = {
@@ -1562,20 +1571,7 @@ export async function buildApp(options: {
               reason: reason ?? null,
               received_at: futuresLastReceivedAt,
               last_received_at: futuresLastReceivedAt,
-              book_quality: futuresCollector?.book
-                ? {
-                    schema_version: 'futures-market-quality-attestation.v1',
-                    policy_version: futuresCollector.book.qualityPolicy,
-                    source_guarantee: futuresCollector.book.sourceGuarantee,
-                    book_valid: futuresCollector.book.valid,
-                    book_sequence_integrity:
-                      futuresCollector.book.sequenceIntegrity,
-                    executable_eligible:
-                      futuresCollector.book.executableEligible,
-                    epoch: futuresCollector.book.epoch,
-                    sequence: futuresCollector.book.sequence,
-                  }
-                : null,
+              book_quality: futuresBookQualityAttestation(),
             })
           },
         })

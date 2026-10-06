@@ -277,9 +277,9 @@ describe('dashboard Gemini boundary', () => {
     expect(gemini.analyzeCall).not.toHaveBeenCalled()
   })
 
-  it('routes /terminal to connected data without falling back when the API fails', async () => {
+  it('routes the explicit legacy terminal source to connected data without falling back when the API fails', async () => {
     const priorPath = window.location.pathname
-    window.history.pushState({}, '', '/terminal')
+    window.history.pushState({}, '', '/terminal?source=legacy')
     const fetchMock = vi.fn(async (input: RequestInfo | URL) =>
       String(input) === '/api/terminal/bootstrap'
         ? { ok: false, status: 404, json: async () => ({}) }
@@ -308,7 +308,7 @@ describe('dashboard Gemini boundary', () => {
 
   it('fails closed when the futures bootstrap is unavailable', async () => {
     const priorPath = window.location.pathname
-    window.history.pushState({}, '', '/terminal')
+    window.history.pushState({}, '', '/terminal?source=mock')
     const fetchMock = vi.fn(async () => ({
       ok: false,
       status: 503,
@@ -360,5 +360,71 @@ describe('dashboard Gemini boundary', () => {
       vi.unstubAllGlobals()
       window.history.pushState({}, '', priorPath)
     }
+  })
+
+  describe('spot market data source switch', () => {
+    function renderSwitchable() {
+      const created: Array<{
+        mode: unknown
+        provider: FakeMarketDataProvider
+      }> = []
+      const view = render(
+        <App
+          marketDataProviderFactory={(mode) => {
+            const provider = new FakeMarketDataProvider(WATCHLIST_INSTRUMENTS, {
+              historyByInstrument: Object.fromEntries(
+                WATCHLIST_INSTRUMENTS.map((instrument) => [
+                  instrument.id,
+                  [makeCandle({ time: '2024-01-01T00:00:00.000Z' })],
+                ]),
+              ),
+            })
+            created.push({ mode, provider })
+            return provider
+          }}
+          portfolioRepository={new LocalStoragePortfolioRepository()}
+        />,
+      )
+      return { created, ...view }
+    }
+
+    it('starts from the configured default and shows the data mode', async () => {
+      const { created } = renderSwitchable()
+      expect(
+        await screen.findByRole('radio', { name: 'Real (Kraken)' }),
+      ).toBeChecked()
+      expect(screen.getByText('Datos reales (Kraken)')).toBeInTheDocument()
+      expect(created.map((entry) => entry.mode)).toEqual(['kraken'])
+    })
+
+    it('recreates the provider on switch and relabels the data mode', async () => {
+      const user = userEvent.setup()
+      const { created } = renderSwitchable()
+      await user.click(await screen.findByRole('radio', { name: 'MOCK' }))
+      expect(screen.getByText('Datos simulados (MOCK)')).toBeInTheDocument()
+      expect(created.map((entry) => entry.mode)).toEqual(['kraken', 'mock'])
+      expect(created[0]!.provider).not.toBe(created[1]!.provider)
+      await user.click(screen.getByRole('radio', { name: 'Real (Kraken)' }))
+      expect(screen.getByText('Datos reales (Kraken)')).toBeInTheDocument()
+      expect(created.map((entry) => entry.mode)).toEqual([
+        'kraken',
+        'mock',
+        'kraken',
+      ])
+    })
+
+    it('names the group "Fuente de datos" and reuses the tab pill styling', async () => {
+      renderSwitchable()
+      const group = await screen.findByRole('radiogroup', {
+        name: 'Fuente de datos',
+      })
+      expect(group).toHaveClass('app__data-source')
+    })
+
+    it('does not offer the switch when a provider is injected', async () => {
+      renderApp()
+      await screen.findByRole('heading', { level: 1 })
+      expect(screen.queryByRole('radio', { name: 'MOCK' })).toBeNull()
+    })
   })
 })

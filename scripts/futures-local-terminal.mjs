@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url'
 import { createServer } from 'vite'
 
 const usage =
-  'Usage: node scripts/futures-local-terminal.mjs [--api-port 8787] [--ui-port 5174] [--output-dir new-path] [--interrupt-after-stage partial-fill|1-4] | --resume --output-dir existing-path [--interrupt-after-stage ...]'
+  'Usage: node scripts/futures-local-terminal.mjs [--api-port 8787] [--ui-port 5174] [--api-only] [--output-dir new-path] [--interrupt-after-stage partial-fill|1-4] | --resume --output-dir existing-path [--interrupt-after-stage ...]'
 
 process.on('uncaughtException', (error) => {
   // Expected resume refusals print one line; unexpected errors keep their stack.
@@ -25,20 +25,28 @@ if (apiPort < 1024 || apiPort > 65_535 || uiPort < 1024 || uiPort > 65_535)
   throw new Error('Ports must be between 1024 and 65535.')
 if (apiPort === uiPort) throw new Error('API and UI ports must be different.')
 
-const vite = await createServer({
-  root,
-  server: {
-    host: '127.0.0.1',
-    port: uiPort,
-    strictPort: true,
-    proxy: {
-      '/api': {
-        target: `http://127.0.0.1:${apiPort}`,
-        ws: true,
+// --api-only keeps Vite in middleware mode (module loader only, no listener);
+// the dev orchestrator proxies the API through its own Vite server, whose
+// browser origin the proxy normalises to http://localhost.
+const apiOnly = args.apiOnly === true
+const vite = await createServer(
+  apiOnly
+    ? { root, server: { middlewareMode: true }, appType: 'custom' }
+    : {
+        root,
+        server: {
+          host: '127.0.0.1',
+          port: uiPort,
+          strictPort: true,
+          proxy: {
+            '/api': {
+              target: `http://127.0.0.1:${apiPort}`,
+              ws: true,
+            },
+          },
+        },
       },
-    },
-  },
-})
+)
 let terminal
 try {
   const { startLocalFuturesTerminal } = await vite.ssrLoadModule(
@@ -49,11 +57,13 @@ try {
     outputDirectory: args.outputDirectory,
     resume: args.resume === true,
     interruptAfterStage: args.interruptAfterStage,
-    uiOrigin: `http://127.0.0.1:${uiPort}`,
+    uiOrigin: apiOnly ? 'http://localhost' : `http://127.0.0.1:${uiPort}`,
     onLog: (line) => process.stdout.write(`${line}\n`),
   })
-  await vite.listen()
-  process.stdout.write(`Terminal http://127.0.0.1:${uiPort}/terminal\n`)
+  if (!apiOnly) {
+    await vite.listen()
+    process.stdout.write(`Terminal http://127.0.0.1:${uiPort}/terminal\n`)
+  }
   process.stdout.write(
     `API http://127.0.0.1:${apiPort} · output ${terminal.outputDirectory}\n`,
   )
@@ -89,6 +99,10 @@ function parseArguments(values) {
     if (flag === '--help') {
       process.stdout.write(`${usage}\n`)
       process.exit(0)
+    }
+    if (flag === '--api-only') {
+      parsed.apiOnly = true
+      continue
     }
     if (flag === '--resume') {
       parsed.resume = true

@@ -299,6 +299,18 @@ describe('Kraken Futures market decoding', () => {
     expect(collector.book.executableEligible).toBe(false)
     send(book('book_snapshot', 22))
     expect(collector.book.executableEligible).toBe(true)
+    const quality = collector.bookQuality
+    expect(quality).toEqual({
+      valid: collector.book.valid,
+      executableEligible: collector.book.executableEligible,
+      sequenceIntegrity: collector.book.sequenceIntegrity,
+      qualityPolicy: 'snapshot-contiguous-observed.v1',
+      sourceGuarantee: 'undocumented',
+      sequence: collector.book.sequence,
+      epoch: collector.book.epoch,
+    })
+    expect(quality).not.toHaveProperty('bids')
+    expect(quality).not.toHaveProperty('asks')
     const ticker = (seq: number, suspended: boolean, includeMark = true) => ({
       feed: 'ticker',
       product_id: 'PF_XBTUSD',

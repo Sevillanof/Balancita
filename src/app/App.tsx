@@ -7,7 +7,10 @@ import type { PortfolioRepository } from '../features/portfolio/domain/portfolio
 import type { AlertRepository } from '../features/alerts/domain/alerts.ts'
 import { LocalStoragePortfolioRepository } from '../features/portfolio/infrastructure/local-storage-portfolio-repository.ts'
 import { LocalStorageAlertRepository } from '../features/alerts/infrastructure/local-storage-alert-repository.ts'
-import { createMarketDataProvider } from '../features/market-data/infrastructure/market-data-provider.ts'
+import {
+  createMarketDataProvider,
+  type MarketDataProviderMode,
+} from '../features/market-data/infrastructure/market-data-provider.ts'
 import { DeterministicMockMarketDataProvider } from '../features/market-data/infrastructure/deterministic-mock-market-data.ts'
 import { GeminiAnalysisProvider } from '../features/analysis/infrastructure/gemini-analysis-provider.ts'
 import { MockAnalysisProvider } from '../features/analysis/infrastructure/mock-analysis-provider.ts'
@@ -27,7 +30,13 @@ type AppProps = {
   analysis?: AnalysisProvider
   /** Optional remote Gemini provider. When provided, the AI toggle is enabled. */
   geminiAnalysis?: AnalysisProvider
+  /** Test seam: builds the spot provider for the selected mode. */
+  marketDataProviderFactory?: (
+    mode: MarketDataProviderMode,
+  ) => MarketDataProvider
 }
+
+type AppContentProps = AppProps & { providerMode: MarketDataProviderMode }
 
 function AppContent({
   provider,
@@ -36,11 +45,15 @@ function AppContent({
   alertRepository,
   analysis,
   geminiAnalysis,
-}: AppProps) {
-  const configuredProviderMode = resolveMarketDataProviderMode()
+  marketDataProviderFactory,
+  providerMode: configuredProviderMode,
+}: AppContentProps) {
   const defaultProvider = useMemo(
-    () => createMarketDataProvider({ mode: configuredProviderMode }),
-    [configuredProviderMode],
+    () =>
+      marketDataProviderFactory
+        ? marketDataProviderFactory(configuredProviderMode)
+        : createMarketDataProvider({ mode: configuredProviderMode }),
+    [configuredProviderMode, marketDataProviderFactory],
   )
   const labProvider = useMemo(
     () => new DeterministicMockMarketDataProvider(1),
@@ -105,6 +118,58 @@ function AppContent({
   )
 }
 
+const PROVIDER_MODE_OPTIONS: Array<{
+  mode: MarketDataProviderMode
+  label: string
+  status: string
+}> = [
+  { mode: 'mock', label: 'MOCK', status: 'Datos simulados (MOCK)' },
+  { mode: 'kraken', label: 'Real (Kraken)', status: 'Datos reales (Kraken)' },
+]
+
+/**
+ * Spot dashboard with a runtime MOCK/Real switch. The env var only sets the
+ * initial mode; switching remounts the dashboard so subscriptions, quotes and
+ * alert evaluation never carry over between providers.
+ */
+function SpotApp(props: AppProps) {
+  const [mode, setMode] = useState<MarketDataProviderMode>(() =>
+    resolveMarketDataProviderMode(),
+  )
+  const switchable = props.provider === undefined
+  return (
+    <>
+      {switchable && (
+        <div
+          role="radiogroup"
+          aria-label="Fuente de datos"
+          className="app__data-source"
+        >
+          {PROVIDER_MODE_OPTIONS.map((option) => (
+            <label key={option.mode} className="app__data-source-option">
+              <input
+                type="radio"
+                name="market-data-source"
+                className="app__data-source-input"
+                checked={mode === option.mode}
+                onChange={() => setMode(option.mode)}
+              />
+              <span className="app__data-source-label">{option.label}</span>
+            </label>
+          ))}
+          <span role="status" className="app__data-source-status">
+            {
+              PROVIDER_MODE_OPTIONS.find((option) => option.mode === mode)
+                ?.status
+            }
+          </span>
+        </div>
+      )}
+      <AppContent key={mode} {...props} providerMode={mode} />
+    </>
+  )
+}
+
 export default function App(props: AppProps) {
   if (window.location.pathname === '/terminal') return <TerminalEntry />
   if (window.location.pathname === '/historicos') return <HistoricalRuns />
@@ -114,5 +179,5 @@ export default function App(props: AppProps) {
   )
     return <DemoShell />
 
-  return <AppContent {...props} />
+  return <SpotApp {...props} />
 }

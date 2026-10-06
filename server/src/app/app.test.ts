@@ -1550,6 +1550,110 @@ describe('PAPER_LIVE startup integration', () => {
     }
   })
 
+  it('serves stored closed 60s candles as terminal_market in the paper_live bootstrap', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'balancita-paper-live-candles-'))
+    const marketPath = join(root, 'market.sqlite')
+    const persisted = new FuturesMarketStore(marketPath)
+    const save = (bucket: number, revision: number, isClosed: boolean) =>
+      persisted.saveCandleRevision({
+        id: `PF_XBTUSD:60000:${bucket}`,
+        intervalMs: 60_000,
+        bucketStart: bucket,
+        revision,
+        knownAt: bucket + 60_000 + revision,
+        closeAt: bucket + 60_000,
+        isClosed,
+        coverage: 'observed_trades_only_no_gap_certification',
+        open: '90000',
+        high: '90010',
+        low: '89990',
+        close: `${90000 + revision}`,
+        volumeBtc: '1.5',
+        tradeCount: 3,
+        sourceHash: 'b'.repeat(64),
+      })
+    const base = 1_790_000_000_000 - (1_790_000_000_000 % 60_000)
+    for (let index = 0; index < 502; index += 1)
+      save(base + index * 60_000, 1, true)
+    save(base + 502 * 60_000, 1, false)
+    persisted.close()
+    const app = await buildApp({
+      config: testConfigFrom({
+        FUTURES_MODE: 'paper_live',
+        FUTURES_DB_PATH: join(root, 'account.sqlite'),
+        FUTURES_MARKET_DB_PATH: marketPath,
+      }),
+      overrides: {
+        futuresFundingFetch: async () =>
+          new Response(
+            JSON.stringify({
+              result: 'success',
+              serverTime: '2026-10-04T00:00:00.000Z',
+              rates: [],
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          ),
+        futuresPublicCatalog: async () => ({
+          instruments: [
+            {
+              symbol: 'PF_XBTUSD',
+              type: 'flexible_futures',
+              pair: 'BTC:USD',
+              base: 'BTC',
+              quote: 'USD',
+              contractSize: '1',
+              tickSize: '1',
+              contractValueTradePrecision: 4,
+              tradeable: true,
+              isExpired: false,
+            },
+          ],
+        }),
+        futuresSocketFactory: () => ({
+          onopen: null,
+          onmessage: null,
+          onerror: null,
+          onclose: null,
+          send: () => undefined,
+          close: () => undefined,
+        }),
+        futuresClock: () => 1_790_950_000_010,
+      } as never,
+    })
+    try {
+      await app.ready()
+      const response = await app.inject({
+        method: 'GET',
+        url: '/api/terminal/bootstrap',
+      })
+      const market = response.json().terminal_market as {
+        schema_version: string
+        as_of_ms: number
+        interval_ms: number
+        candles: { time_ms: number; closed: boolean; close: string }[]
+      }
+      expect(market.schema_version).toBe('futures-terminal-market.v1')
+      expect(market.interval_ms).toBe(60_000)
+      expect(market.candles).toHaveLength(500)
+      expect(market.candles.every((candle) => candle.closed)).toBe(true)
+      expect(market.candles[0]!.time_ms).toBe(base + 2 * 60_000)
+      expect(market.candles.at(-1)!.time_ms).toBe(base + 501 * 60_000)
+      expect(market.candles.at(-1)).toMatchObject({
+        open: '90000',
+        high: '90010',
+        low: '89990',
+        close: '90001',
+        volume_btc: '1.5',
+      })
+      const times = market.candles.map((candle) => candle.time_ms)
+      expect(times).toEqual([...times].sort((a, b) => a - b))
+      expect(market.as_of_ms).toBe(base + 502 * 60_000)
+    } finally {
+      await app.close()
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   it('starts the selected public-feed mode with an injected recorded catalog and socket', async () => {
     const root = mkdtempSync(join(tmpdir(), 'balancita-paper-live-'))
     const fakeSocket: FuturesSocket = {

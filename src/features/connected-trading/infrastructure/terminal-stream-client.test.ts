@@ -1,5 +1,73 @@
-import { describe, expect, it } from 'vitest'
-import { parseTerminalEnvelope } from './terminal-stream-client.ts'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import {
+  loadTerminalBootstrap,
+  parseTerminalEnvelope,
+  terminalApiBase,
+  terminalWebSocketUrl,
+} from './terminal-stream-client.ts'
+
+describe('terminal API base selection', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('maps each source to its proxy prefix', () => {
+    expect(terminalApiBase('mock')).toBe('/api-mock')
+    expect(terminalApiBase('live')).toBe('/api-live')
+    expect(terminalApiBase('legacy')).toBe('/api')
+  })
+
+  it('builds the websocket URL from the selected base and defaults to /api', () => {
+    expect(terminalWebSocketUrl('/api-live')).toBe(
+      `ws://${location.host}/api-live/terminal/stream`,
+    )
+    expect(terminalWebSocketUrl()).toBe(
+      `ws://${location.host}/api/terminal/stream`,
+    )
+  })
+
+  it('loads the bootstrap from the selected base', async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        schema_version: 1,
+        mode: 'mock',
+        source: null,
+        active_run_id: 'r',
+      }),
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    await loadTerminalBootstrap('/api-mock')
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api-mock/terminal/bootstrap',
+      expect.anything(),
+    )
+  })
+
+  it('aborts a hung bootstrap after the timeout instead of waiting forever', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(
+          (_url: string, init: RequestInit) =>
+            new Promise((_resolve, reject) => {
+              init.signal?.addEventListener('abort', () =>
+                reject(new DOMException('aborted', 'AbortError')),
+              )
+            }),
+        ),
+      )
+      const outcome = loadTerminalBootstrap('/api-mock').then(
+        () => 'resolved',
+        (error: unknown) => (error as Error).name,
+      )
+      await vi.advanceTimersByTimeAsync(8_001)
+      await expect(outcome).resolves.toBe('AbortError')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
 
 describe('parseTerminalEnvelope', () => {
   it('rejects malformed and financially incomplete envelopes', () => {

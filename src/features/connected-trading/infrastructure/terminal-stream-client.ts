@@ -131,9 +131,40 @@ export function parseTerminalEnvelope(value: unknown): TerminalEnvelope | null {
   return value as unknown as TerminalEnvelope
 }
 
-export async function loadTerminalBootstrap(): Promise<TerminalBootstrap> {
-  const response = await fetch('/api/terminal/bootstrap', {
+/** Data source behind the terminal; `legacy` is the unmodified `/api` server. */
+export type TerminalSource = 'mock' | 'live' | 'legacy'
+
+export function terminalApiBase(source: TerminalSource): string {
+  if (source === 'mock') return '/api-mock'
+  if (source === 'live') return '/api-live'
+  return '/api'
+}
+
+/** A hung backend must surface as an explicit error, never an endless spinner. */
+export const TERMINAL_BOOTSTRAP_TIMEOUT_MS = 8_000
+
+export async function loadTerminalBootstrap(
+  apiBase = '/api',
+): Promise<TerminalBootstrap> {
+  const controller = new AbortController()
+  const timer = setTimeout(
+    () => controller.abort(),
+    TERMINAL_BOOTSTRAP_TIMEOUT_MS,
+  )
+  try {
+    return await fetchTerminalBootstrap(apiBase, controller.signal)
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+async function fetchTerminalBootstrap(
+  apiBase: string,
+  signal: AbortSignal,
+): Promise<TerminalBootstrap> {
+  const response = await fetch(`${apiBase}/terminal/bootstrap`, {
     headers: { accept: 'application/json' },
+    signal,
   })
   if (!response.ok) {
     const failure = new Error(`Terminal bootstrap failed (${response.status}).`)
@@ -152,7 +183,7 @@ export async function loadTerminalBootstrap(): Promise<TerminalBootstrap> {
   return value as unknown as TerminalBootstrap
 }
 
-export function terminalWebSocketUrl(): string {
+export function terminalWebSocketUrl(apiBase = '/api'): string {
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
-  return `${protocol}//${location.host}/api/terminal/stream`
+  return `${protocol}//${location.host}${apiBase}/terminal/stream`
 }
