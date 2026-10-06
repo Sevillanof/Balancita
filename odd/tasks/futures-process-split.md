@@ -40,7 +40,7 @@ Every sustained live run of the single process surfaced a new engine defect: the
 - [x] PS-05a [L] Paper execution D (Python, own account DB, single writer): consumes fresh verdicts, ticker and funding read-only; top-of-ticker taker fills; exits via `propose` with the position; append-only hash-chained events plus snapshots; live run equals replay.
 - [x] PS-05b [M] Gateway serves D's account, position, fills and verdict analyses read-only, so the terminal shows the engine instead of "engine off".
 - [x] PS-05c [S] Fix the funding-pause overwrite in the legacy runtime (`python/balancita_engine/futures_runtime.py:2393-2404`), with a test. The legacy runtime is still used by the MOCK local terminal.
-- [ ] PS-05d [L] Retire the legacy live engine once D is proven: per-delta driver, market-context transport, operative bridge, `futuresSourceFailed` latch, `FUTURES_MODE=mock/replay` in `app.ts`, and the `DEV_LIVE_SINGLE_PROCESS` rollback. The dev MOCK child, which uses the local terminal, stays.
+- [x] PS-05d [L] Retire the legacy live engine once D is proven: per-delta driver, market-context transport, operative bridge, `futuresSourceFailed` latch, `FUTURES_MODE=mock/replay` in `app.ts`, and the `DEV_LIVE_SINGLE_PROCESS` rollback. The dev MOCK child, which uses the local terminal, stays.
 - [ ] PS-06 [S] Process supervision + per-process health in UI.
 
 ## Acceptance (PS-01)
@@ -225,6 +225,19 @@ Every sustained live run of the single process surfaced a new engine defect: the
   - Tests:
     - 7 new tests went RED, then GREEN. A Python test covers D following hour-by-hour funding responses.
     - Merged suites: the 7 baseline failures, plus the pre-existing `gateway.test.ts` flake, which also failed 2 of 4 runs on 0ff9aab.
+
+- 2026-10-06 PS-05d (delegated writer, Sonnet; reviewed by the parent from its report). Five commits, 00a86f9..7c46e8b, about 16.1k lines removed.
+  - Removed:
+    - the `DEV_LIVE_SINGLE_PROCESS` rollback;
+    - the operative identity bridge (Python transport and worker ports, TS transport, worker RPC, runner and store identity code and tests);
+    - the `app.ts` single-process pump with `futuresSourceFailed` and the FUTURES_MODE wiring. `FUTURES_MODE` non-empty now refuses to start, bilingual;
+    - the per-delta driver, the replay/evaluation store tables and methods, and the offline-futures harness;
+    - `e2e/futures-terminal/*` and `playwright.futures.config.ts`. E2E terminal coverage through `buildApp` is gone.
+  - Capture writes 60 s candles only and no ticker snapshots. Market DB growth dropped from about 204 to about 74 MB/h.
+  - Kept, at user decision, for the protected `futures-runtime.test.ts`: the market-context transport (TS and Python), `bindReplaySession` and the replay sessions table, the `replay_work` schema, and the `paper_live`/`mock` bindings of a trimmed `FuturesSessionRuntime`. These are marked as having no production caller.
+  - The protected test shows only its known l.3227 failure after every step. The 4 driver and 2 app failures are gone with the deletions.
+  - Pre-existing, not addressed: `profitability-report.test.ts`; a `simulations-runner.test.ts` 180 s timeout (not baselined); `test_futures_canonical.py` 2 errors; the `futures-local-scenario.test.mjs` 5 s timeout; the gateway flake.
+  - `pnpm run dev` end to end: live health running from `paper-execution-d`; the mock bootstrap answers; the legacy `/api/terminal` returns 404. Screenshots show no console errors.
 
 ## Next step
 
