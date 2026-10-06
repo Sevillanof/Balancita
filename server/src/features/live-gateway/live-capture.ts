@@ -24,6 +24,7 @@ const OFFICIAL_LOOKBACK_MS: Readonly<Record<number, number>> = {
 /** Poll this long after each minute boundary so the closed candle settled. */
 const OFFICIAL_POLL_OFFSET_MS = 3_000
 const HOUR_MS = 3_600_000
+const CAPTURE_CANDLE_INTERVAL_MS = 60_000
 /**
  * Kraken lists the funding period starting at hh:00 (hourly cadence) at or
  * shortly after the boundary; a response only adds knowledge when a new hour
@@ -68,8 +69,7 @@ export function createLiveCapture(options: LiveCaptureOptions) {
   let fundingTimer: ReturnType<typeof setTimeout> | undefined
   let catalogTimer: ReturnType<typeof setTimeout> | undefined
   let fundingClient:
-    | ReturnType<typeof createHistoricalFundingClient>
-    | undefined
+    ReturnType<typeof createHistoricalFundingClient> | undefined
   let officialTimer: ReturnType<typeof setTimeout> | undefined
   let officialClient: ReturnType<typeof createOfficialCandlesClient> | undefined
   let stopped = true
@@ -116,7 +116,10 @@ export function createLiveCapture(options: LiveCaptureOptions) {
   }
 
   const startCollecting = (): void => {
-    const candles = new FuturesCandleBuilder(store)
+    // The terminal only draws 60 s candles; verdicts read the official series.
+    const candles = new FuturesCandleBuilder(store, [
+      CAPTURE_CANDLE_INTERVAL_MS,
+    ])
     // Resume candles a previous capture process left open on this database.
     candles.restoreOpenCandles(clock())
     candleTimer = setInterval(() => {

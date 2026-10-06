@@ -418,6 +418,34 @@ describe('FuturesMarketStore', () => {
     ).toEqual({ id: 'spot-fixture', payload: 'untouched' })
     reopened.close()
   })
+
+  it('no longer writes the redundant ticker snapshot table', () => {
+    const path = dbPath()
+    const store = new FuturesMarketStore(path)
+    store.append({
+      type: 'ticker',
+      productId: 'PF_XBTUSD',
+      epoch: 1,
+      seq: 2,
+      eventTime: 1000,
+      receivedAt: 1011,
+      persistedAt: 1011,
+      last: '100',
+      suspended: false,
+      funding: { status: 'unknown' },
+      rawJson: '{}',
+    })
+    const rows = store.eventCount()
+    store.close()
+    const check = new DatabaseSync(path)
+    expect(rows).toBeGreaterThan(0)
+    expect(
+      check
+        .prepare('SELECT COUNT(*) AS count FROM paper_futures_ticker_snapshots')
+        .get(),
+    ).toEqual({ count: 0 })
+    check.close()
+  })
 })
 
 describe('FuturesMarketStore append hot path', () => {

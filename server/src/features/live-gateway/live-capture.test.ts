@@ -107,6 +107,8 @@ describe('live capture process core', () => {
       is_closed: number
     }>
     expect(revisions.some((row) => row.interval_ms === 60_000)).toBe(true)
+    // Only 60 s candles are built; the 5 m/15 m/1 h series come from the official feed.
+    expect(revisions.every((row) => row.interval_ms === 60_000)).toBe(true)
     expect(revisions.some((row) => row.is_closed === 1)).toBe(true)
     reader.close()
     expect(lines.some((line) => line.includes('connecting'))).toBe(true)

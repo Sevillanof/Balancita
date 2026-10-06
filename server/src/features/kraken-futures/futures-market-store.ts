@@ -258,6 +258,7 @@ export class FuturesMarketStore {
         product_id TEXT NOT NULL, epoch INTEGER NOT NULL, seq INTEGER NOT NULL,
         event_time INTEGER NOT NULL, received_at INTEGER NOT NULL, bids_json TEXT NOT NULL, asks_json TEXT NOT NULL
       ) STRICT;
+      -- Legacy: no longer written (the ticker payload lives in market_events); kept so old DBs open.
       CREATE TABLE IF NOT EXISTS paper_futures_ticker_snapshots (
         event_id TEXT PRIMARY KEY REFERENCES paper_futures_market_events(event_id),
         product_id TEXT NOT NULL, epoch INTEGER NOT NULL, seq INTEGER NOT NULL,
@@ -959,20 +960,6 @@ export class FuturesMarketStore {
           receivedAt,
           canonicalEvent(event.bids),
           canonicalEvent(event.asks),
-        )
-      }
-      if (feed === 'ticker') {
-        this.prepared(
-          `INSERT INTO paper_futures_ticker_snapshots
-          (event_id,product_id,epoch,seq,event_time,received_at,payload_json) VALUES(?,?,?,?,?,?,?)`,
-        ).run(
-          eventId,
-          product,
-          epoch,
-          seq,
-          eventTime,
-          receivedAt,
-          normalizedJson,
         )
       }
       this.prepared('COMMIT').run()

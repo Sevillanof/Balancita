@@ -40,7 +40,9 @@ prefixed log:
 `server/.env` is optional: the dev run adds `--env-file-if-exists=.env` only
 when the file exists (with `--watch`, Node crashes on a missing watched file).
 Create it if you need `GEMINI_API_KEY` or other settings; restart after
-creating it.
+creating it. `FUTURES_MODE` was retired: the server refuses to start if it is set
+to any non-empty value, so remove it from `.env` (live now runs as the separate
+`capture`, `live`, `verdict` and `paper` processes above).
 
 Before spawning anything `pnpm run dev` checks ports 5173, 8787, 8788 and 8789.
 If one is taken (usually a stale `pnpm run dev` from another checkout) it prints
