@@ -114,6 +114,57 @@ describe('live capture process core', () => {
     expect(lines.some((line) => line.includes('connecting'))).toBe(true)
   })
 
+  it('keeps committing market events when candle revisions fail', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'balancita-capture-'))
+    dirs.push(dir)
+    const path = join(dir, 'market.sqlite')
+    const store = new FuturesMarketStore(path)
+    store.saveCandleRevision = () => {
+      throw new Error('UNIQUE constraint failed: candle revisions')
+    }
+    const { socket } = fakeSocket()
+    let now = 1_790_000_000_000
+    const lines: string[] = []
+    const capture = createLiveCapture({
+      store,
+      clock: () => now,
+      makeSocket: () => socket,
+      fetchCatalog: async () => catalog,
+      fundingFetch: async () => {
+        throw new Error('funding offline in test')
+      },
+      candleTickMs: 5,
+      log: (line) => lines.push(line),
+    })
+    await capture.start()
+    socket.onopen!()
+    for (let i = 1; i <= 3; i += 1)
+      socket.onmessage!({
+        data: JSON.stringify({
+          feed: 'trade',
+          product_id: 'PF_XBTUSD',
+          uid: `trade-${i}`,
+          side: 'buy',
+          type: 'fill',
+          seq: i,
+          time: now + i,
+          qty: 0.01,
+          price: 90000.5,
+        }),
+      })
+    now += 120_000
+    await wait(40)
+    await capture.stop()
+    store.close()
+    const reader = new FuturesMarketStore(path, { readOnly: true })
+    expect(reader.eventCount()).toBeGreaterThanOrEqual(3)
+    reader.close()
+    expect(lines.some((line) => line.includes('degraded'))).toBe(false)
+    expect(
+      lines.filter((line) => line.includes('candle revision')),
+    ).toHaveLength(1)
+  })
+
   it('captures without subscribing to the book and writes no book rows', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'balancita-capture-'))
     dirs.push(dir)

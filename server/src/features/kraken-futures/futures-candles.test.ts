@@ -102,4 +102,75 @@ describe('FuturesCandleBuilder restart over an existing market database', () => 
       rows(store).filter((row) => row.candle_id === 'PF_XBTUSD:60000:60000'),
     ).toHaveLength(2)
   })
+
+  it('never collides with a second writer that advanced the same candle', () => {
+    const store = new FuturesMarketStore(':memory:')
+    const stale = new FuturesCandleBuilder(store, intervals)
+    const t1 = trade('a', 60_000, '100', '1', 1)
+    store.append(t1)
+    stale.addTrade(t1, t1.receivedAt)
+    // Another capture process resumes the same candle and moves it on.
+    const other = new FuturesCandleBuilder(store, intervals)
+    const t2 = trade('b', 70_000, '105', '0.5', 2)
+    store.append(t2)
+    other.addTrade(t2, t2.receivedAt)
+    // The stale process still holds revision 1 in memory.
+    const t3 = trade('c', 80_000, '95', '0.25', 3)
+    store.append(t3)
+    expect(() => stale.addTrade(t3, t3.receivedAt)).not.toThrow()
+    const minute = rows(store).filter(
+      (row) => row.candle_id === 'PF_XBTUSD:60000:60000',
+    )
+    expect(minute.map((row) => row.revision)).toEqual([1, 2, 3])
+    expect(minute.at(-1)!.trade_count).toBe(3)
+    expect(minute.at(-1)!.volume_btc).toBe('1.75')
+    expect(minute.at(-1)!.low_price).toBe('95')
+  })
+
+  it('never collides when the clock closes a candle another writer already moved on', () => {
+    const store = new FuturesMarketStore(':memory:')
+    const stale = new FuturesCandleBuilder(store, intervals)
+    const t1 = trade('a', 60_000, '100', '1', 1)
+    store.append(t1)
+    stale.addTrade(t1, t1.receivedAt)
+    const other = new FuturesCandleBuilder(store, intervals)
+    const t2 = trade('b', 70_000, '105', '0.5', 2)
+    store.append(t2)
+    other.addTrade(t2, t2.receivedAt)
+    expect(() => stale.advanceClock(130_000)).not.toThrow()
+    // The other writer closes it too: the candle ends up closed exactly once.
+    expect(() => other.advanceClock(130_000)).not.toThrow()
+    const minute = rows(store).filter(
+      (row) => row.candle_id === 'PF_XBTUSD:60000:60000',
+    )
+    expect(minute.map((row) => [row.revision, row.is_closed])).toEqual([
+      [1, 0],
+      [2, 0],
+      [3, 1],
+    ])
+    expect(minute.at(-1)!.trade_count).toBe(2)
+  })
+
+  it('forgets a candle whose revision write failed and resumes it from the store', () => {
+    const store = new FuturesMarketStore(':memory:')
+    let fail = true
+    const flaky = {
+      saveCandleRevision: (
+        ...args: Parameters<FuturesMarketStore['saveCandleRevision']>
+      ) => {
+        if (fail) throw new Error('disk hiccup')
+        store.saveCandleRevision(...args)
+      },
+      candleHeadById: (id: string) => store.candleHeadById(id),
+    }
+    const builder = new FuturesCandleBuilder(flaky, [60_000])
+    const t1 = trade('a', 60_000, '100', '1', 1)
+    expect(() => builder.addTrade(t1, t1.receivedAt)).toThrow('disk hiccup')
+    fail = false
+    const t2 = trade('b', 70_000, '105', '0.5', 2)
+    builder.addTrade(t2, t2.receivedAt)
+    expect(rows(store).map((row) => [row.revision, row.trade_count])).toEqual([
+      [1, 1],
+    ])
+  })
 })

@@ -68,6 +68,29 @@ describe('FuturesMarketStore', () => {
     store.close()
   })
 
+  it('treats an event another writer committed mid-append as a duplicate', () => {
+    const path = dbPath()
+    const first = new FuturesMarketStore(path)
+    const second = new FuturesMarketStore(path)
+    // The second process checked for the uid before the first one committed.
+    const prepared = (
+      second as unknown as { prepared: (sql: string) => unknown }
+    ).prepared.bind(second)
+    ;(second as unknown as { prepared: (sql: string) => unknown }).prepared = (
+      sql: string,
+    ) =>
+      /SELECT content_hash FROM paper_futures_market_events\s+WHERE (feed|event_id)=\?(?! OR)/.test(
+        sql,
+      )
+        ? { get: () => undefined }
+        : prepared(sql)
+    expect(first.append(event)).toBe('inserted')
+    expect(second.append(event)).toBe('duplicate')
+    expect(first.eventCount()).toBe(1)
+    first.close()
+    second.close()
+  })
+
   it('reopens durable events and filters knowledge by received-time cutoff', () => {
     const path = dbPath()
     let store = new FuturesMarketStore(path)

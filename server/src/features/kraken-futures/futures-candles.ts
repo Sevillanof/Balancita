@@ -67,30 +67,35 @@ function addDecimals(left: string, right: string): string {
   return fraction ? `${whole}.${fraction}` : String(whole)
 }
 
+function isRevisionCollision(error: unknown): boolean {
+  return (
+    error instanceof Error && /UNIQUE constraint failed/.test(error.message)
+  )
+}
+
+interface CandleState {
+  bucket: number
+  interval: number
+  open: string
+  high: string
+  low: string
+  close: string
+  volume: string
+  count: number
+  uids: string[]
+  /** Source hash of the revisions persisted before a restart, if resumed. */
+  baseHash?: string
+  revision: number
+  closed: boolean
+  latestTime: number
+  latestSeq: number
+}
+
 /** Trade-derived revisions only; no empty-candle or zero-volume inference. */
 export class FuturesCandleBuilder {
   private readonly store: CandleRevisionStore
   private readonly intervals: number[]
-  private readonly candles = new Map<
-    string,
-    {
-      bucket: number
-      interval: number
-      open: string
-      high: string
-      low: string
-      close: string
-      volume: string
-      count: number
-      uids: string[]
-      /** Source hash of the revisions persisted before a restart, if resumed. */
-      baseHash?: string
-      revision: number
-      closed: boolean
-      latestTime: number
-      latestSeq: number
-    }
-  >()
+  private readonly candles = new Map<string, CandleState>()
   private readonly seen = new Set<string>()
   private readonly maxCandles = 50_000
   private readonly onRevision?: (candle: {
@@ -136,12 +141,25 @@ export class FuturesCandleBuilder {
   addTrade(trade: TradeEvent, now: number): void {
     if (trade.recovered || this.seen.has(trade.uid)) return
     this.seen.add(trade.uid)
+    let failure: unknown
+    // One interval failing must not skip the others.
     for (const interval of this.intervals) {
-      const bucket = Math.floor(trade.eventTime / interval) * interval
-      const id = `${trade.productId}:${interval}:${bucket}`
-      const current =
-        this.candles.get(id) ?? this.resume(this.store.candleHeadById?.(id))
-      const closed = now >= bucket + interval
+      try {
+        this.addToInterval(trade, now, interval)
+      } catch (error) {
+        failure ??= error
+      }
+    }
+    if (this.seen.size > 250_000)
+      this.seen.delete(this.seen.values().next().value!)
+    if (failure !== undefined) throw failure
+  }
+
+  private addToInterval(trade: TradeEvent, now: number, interval: number) {
+    const bucket = Math.floor(trade.eventTime / interval) * interval
+    const id = `${trade.productId}:${interval}:${bucket}`
+    const closed = now >= bucket + interval
+    const apply = (current: CandleState | undefined): CandleState => {
       const candle = current ?? {
         bucket,
         interval,
@@ -180,10 +198,31 @@ export class FuturesCandleBuilder {
         if (oldest === undefined) break
         this.candles.delete(oldest)
       }
-      this.persist(id, candle, trade.receivedAt)
+      return candle
     }
-    if (this.seen.size > 250_000)
-      this.seen.delete(this.seen.values().next().value!)
+    const candle = apply(
+      this.candles.get(id) ?? this.resume(this.store.candleHeadById?.(id)),
+    )
+    try {
+      this.persist(id, candle, trade.receivedAt)
+    } catch (error) {
+      // Whatever failed, the in-memory state is ahead of the store: forget it
+      // so the next trade resumes from the stored head.
+      this.candles.delete(id)
+      if (!isRevisionCollision(error)) throw error
+      // Another writer advanced this candle since we last read it. Each trade
+      // is committed by exactly one writer (market events dedupe on uid), so
+      // this trade is still ours to add on top of the stored head.
+      const head = this.store.candleHeadById?.(id)
+      if (head === undefined) throw error
+      const rebuilt = apply(this.resume(head))
+      try {
+        this.persist(id, rebuilt, trade.receivedAt)
+      } catch (retry) {
+        this.candles.delete(id)
+        throw retry
+      }
+    }
   }
 
   /**
@@ -205,7 +244,7 @@ export class FuturesCandleBuilder {
   }
 
   /** Rebuilds in-memory candle state from its latest stored revision. */
-  private resume(head: StoredCandleHead | undefined) {
+  private resume(head: StoredCandleHead | undefined): CandleState | undefined {
     if (head === undefined) return undefined
     const candle = {
       bucket: head.bucketStart,
@@ -231,20 +270,48 @@ export class FuturesCandleBuilder {
 
   advanceClock(now: number): void {
     integer(now, 'candle clock')
-    for (const [id, candle] of this.candles) {
-      if (!candle.closed && now >= candle.bucket + candle.interval) {
-        candle.closed = true
-        candle.revision += 1
-        this.persist(id, candle, now)
+    let failure: unknown
+    for (const [id, candle] of [...this.candles]) {
+      if (candle.closed || now < candle.bucket + candle.interval) continue
+      try {
+        this.closeCandle(id, candle, now)
+      } catch (error) {
+        failure ??= error
+      }
+    }
+    if (failure !== undefined) throw failure
+  }
+
+  private closeCandle(id: string, candle: CandleState, now: number): void {
+    candle.closed = true
+    candle.revision += 1
+    try {
+      this.persist(id, candle, now)
+    } catch (error) {
+      if (!isRevisionCollision(error)) {
+        // Retry on the next tick.
+        candle.closed = false
+        candle.revision -= 1
+        throw error
+      }
+      // Another writer moved this candle on: re-read it and close that.
+      this.candles.delete(id)
+      const head = this.store.candleHeadById?.(id)
+      if (head === undefined) throw error
+      const fresh = this.resume(head)!
+      if (fresh.closed) return
+      fresh.closed = true
+      fresh.revision += 1
+      try {
+        this.persist(id, fresh, now)
+      } catch (retry) {
+        this.candles.delete(id)
+        throw retry
       }
     }
   }
 
-  private persist(
-    id: string,
-    candle: NonNullable<ReturnType<typeof this.candles.get>>,
-    knownAt: number,
-  ): void {
+  private persist(id: string, candle: CandleState, knownAt: number): void {
     // A resumed candle chains the hash persisted before the restart.
     const sourceHash = createHash('sha256')
       .update(

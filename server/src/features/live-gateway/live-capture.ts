@@ -172,13 +172,21 @@ export function createLiveCapture(options: LiveCaptureOptions) {
     const candles = new FuturesCandleBuilder(store, [
       CAPTURE_CANDLE_INTERVAL_MS,
     ])
+    // Candle errors are logged once per distinct message, not per trade.
+    let lastCandleError: string | undefined
+    const logCandleError = (label: string, error: unknown): void => {
+      const text = `${label}: ${describe(error)}`
+      if (text === lastCandleError) return
+      lastCandleError = text
+      log(text)
+    }
     // Resume candles a previous capture process left open on this database.
     candles.restoreOpenCandles(clock())
     candleTimer = setInterval(() => {
       try {
         candles.advanceClock(clock())
       } catch (error) {
-        log(`candle clock failed: ${describe(error)}`)
+        logCandleError('candle clock failed', error)
       }
     }, options.candleTickMs ?? 1_000)
     fundingClient = createHistoricalFundingClient({
@@ -238,8 +246,15 @@ export function createLiveCapture(options: LiveCaptureOptions) {
       // Every event is its own committed transaction: never batched or dropped.
       persist: (event) => {
         const inserted = store.append(event)
-        if (inserted === 'inserted' && event.type === 'trade')
-          candles.addTrade(event, event.receivedAt)
+        // The event is already committed. A candle revision failure must
+        // never fail the market event, or the collector would stop capturing.
+        if (inserted === 'inserted' && event.type === 'trade') {
+          try {
+            candles.addTrade(event, event.receivedAt)
+          } catch (error) {
+            logCandleError('candle revision failed', error)
+          }
+        }
         return inserted
       },
       persistGap: (gap) => store.appendGap(gap),

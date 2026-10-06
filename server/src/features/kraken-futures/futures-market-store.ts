@@ -1083,6 +1083,21 @@ export class FuturesMarketStore {
       return 'inserted'
     } catch (error) {
       this.db.exec('ROLLBACK')
+      // Another writer committed the same event between our duplicate check
+      // and our insert (two capture processes on one file): it is a duplicate.
+      if (
+        error instanceof Error &&
+        /UNIQUE constraint failed: paper_futures_market_events/.test(
+          error.message,
+        )
+      ) {
+        const stored = this.prepared(
+          `SELECT content_hash FROM paper_futures_market_events
+          WHERE event_id=? OR (feed=? AND product_id=? AND uid=?)`,
+        ).get(eventId, feed, product, uid) as
+          { content_hash: string } | undefined
+        if (stored?.content_hash === contentHash) return 'duplicate'
+      }
       throw error
     }
   }
