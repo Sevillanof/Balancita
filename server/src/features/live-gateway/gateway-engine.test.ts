@@ -237,4 +237,57 @@ describe('live gateway serving paper execution state', () => {
     const health = (await app.inject('/api/health')).json() as any
     expect(health.engine.status).toBe('off')
   })
+
+  it('reports the engine unavailable with python_unavailable when dev found no Python', async () => {
+    const dir = scratch()
+    const { app, port } = await start({
+      marketDbPath: marketDb(dir),
+      engineUnavailableReason: 'python_unavailable',
+    })
+    const expected = {
+      status: 'unavailable',
+      reason: 'python_unavailable',
+      commands: 'unavailable',
+    }
+    const bootstrap = (
+      await app.inject('/api/terminal/bootstrap')
+    ).json() as any
+    expect(bootstrap.engine).toMatchObject(expected)
+    const health = (await app.inject('/api/health')).json() as any
+    expect(health.engine).toMatchObject(expected)
+    const client = connect(port)
+    await client.subscribe()
+    const snapshot = client.messages.find((m) => m.type === 'snapshot')!
+    expect(snapshot.data.state.engine).toMatchObject(expected)
+    expect(snapshot.data.state.analyses).toBeUndefined()
+    client.socket.send(
+      JSON.stringify({
+        schema_version: 1,
+        type: 'paper.command',
+        run_id: LIVE_RUN_ID,
+        command_id: 'c1',
+        expected_state_version: 0,
+        action: 'paper.close',
+      }),
+    )
+    await client.until((all) => all.some((m) => m.type === 'protocol.error'))
+    expect(
+      client.messages.find((m) => m.type === 'protocol.error')!.data.code,
+    ).toBe('commands_unavailable')
+  })
+
+  it('keeps the distinct python_sqlite_too_old reason', async () => {
+    const dir = scratch()
+    const { app } = await start({
+      marketDbPath: marketDb(dir),
+      engineUnavailableReason: 'python_sqlite_too_old',
+    })
+    const bootstrap = (
+      await app.inject('/api/terminal/bootstrap')
+    ).json() as any
+    expect(bootstrap.engine).toMatchObject({
+      status: 'unavailable',
+      reason: 'python_sqlite_too_old',
+    })
+  })
 })

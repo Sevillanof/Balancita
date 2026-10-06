@@ -181,6 +181,22 @@ function time(value: unknown, name: string): number {
   return value
 }
 
+function officialRow(row: RecordValue): OfficialStoredCandle {
+  return {
+    intervalMs: Number(row.interval_ms),
+    closeAt: Number(row.bucket_start) + Number(row.interval_ms),
+    bucketStart: Number(row.bucket_start),
+    knownAt: Number(row.known_at),
+    open: String(row.open_price),
+    high: String(row.high_price),
+    low: String(row.low_price),
+    close: String(row.close_price),
+    volumeBtc: String(row.volume_btc),
+    responseSha256: String(row.response_sha256),
+    revisionHash: String(row.revision_hash),
+  }
+}
+
 /** Append-only public futures evidence store; callers must supply an isolated path. */
 export class FuturesMarketStore {
   private readonly db: DatabaseSync
@@ -519,18 +535,46 @@ export class FuturesMarketStore {
       time(knownAtCutoff, 'knownAtCutoff'),
       limit,
     ) as RecordValue[]
+    return rows.map(officialRow)
+  }
+
+  /** Highest official-candle rowid (0 when none or on a schema-3 store). */
+  maxOfficialRowid(): number {
+    if (!this.hasOfficialCandles()) return 0
+    const row = this.prepared(
+      'SELECT MAX(rowid) AS id FROM paper_futures_official_candles',
+    ).get() as { id: number | null }
+    return Number(row.id ?? 0)
+  }
+
+  /**
+   * First-known official candles of one interval appended after a rowid
+   * cursor, ascending. A later changed revision of a known bucket is skipped,
+   * like `officialCandlesAsOf`. Bounded by rowid and the primary key.
+   */
+  officialCandlesAfter(
+    rowid: number,
+    intervalMs: number,
+    limit = 500,
+  ): Array<{ rowid: number; candle: OfficialStoredCandle }> {
+    time(rowid, 'rowid')
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 5_000)
+      throw new RangeError('Official candle limit must be between 1 and 5000.')
+    if (!this.hasOfficialCandles()) return []
+    const rows = this.prepared(
+      `SELECT o.rowid AS id, o.* FROM paper_futures_official_candles AS o
+       WHERE o.rowid>? AND o.interval_ms=?
+         AND NOT EXISTS (
+           SELECT 1 FROM paper_futures_official_candles AS earlier
+           WHERE earlier.interval_ms=o.interval_ms
+             AND earlier.bucket_start=o.bucket_start
+             AND earlier.rowid<o.rowid
+         )
+       ORDER BY o.rowid LIMIT ?`,
+    ).all(rowid, time(intervalMs, 'official interval'), limit) as RecordValue[]
     return rows.map((row) => ({
-      intervalMs: Number(row.interval_ms),
-      bucketStart: Number(row.bucket_start),
-      closeAt: Number(row.bucket_start) + Number(row.interval_ms),
-      knownAt: Number(row.known_at),
-      open: String(row.open_price),
-      high: String(row.high_price),
-      low: String(row.low_price),
-      close: String(row.close_price),
-      volumeBtc: String(row.volume_btc),
-      responseSha256: String(row.response_sha256),
-      revisionHash: String(row.revision_hash),
+      rowid: Number(row.id),
+      candle: officialRow(row),
     }))
   }
 

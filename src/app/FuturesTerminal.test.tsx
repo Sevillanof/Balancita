@@ -1414,6 +1414,62 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
     expect(screen.queryByText(/Motor de decisiones apagado/)).toBeNull()
   })
 
+  it('explains in the analyses area and engine line that Python is missing', async () => {
+    await renderLive({
+      ...state,
+      analyses: [],
+      engine: {
+        status: 'unavailable',
+        reason: 'python_unavailable',
+        commands: 'unavailable',
+      },
+    })
+    expect(
+      screen.getByText(
+        /Servicio de veredicto y ejecución paper no disponibles: no se encontró Python 3\.9\+ \(configurá BALANCITA_PYTHON\)/,
+      ),
+    ).toBeTruthy()
+    expect(screen.getByText(/Motor paper: no disponible/)).toBeTruthy()
+    expect(screen.queryByText('Aún no hay análisis registrados.')).toBeNull()
+  })
+
+  it('explains that Python was found but its SQLite is too old', async () => {
+    await renderLive({
+      ...state,
+      analyses: [],
+      engine: {
+        status: 'unavailable',
+        reason: 'python_sqlite_too_old',
+        commands: 'unavailable',
+      },
+    })
+    expect(
+      screen.getByText(
+        /Python encontrado pero su SQLite es anterior a 3\.37 \(necesario para tablas STRICT\): instalá Python desde python\.org o Homebrew, o configurá BALANCITA_PYTHON\./,
+      ),
+    ).toBeTruthy()
+  })
+
+  it('waits for the first verdict while the engine starts with no analyses', async () => {
+    await renderLive({
+      ...state,
+      analyses: [],
+      engine: {
+        status: 'starting',
+        reason: 'account_db_not_ready',
+        commands: 'unavailable',
+      },
+    })
+    expect(screen.getByText(/Esperando el primer veredicto/)).toBeTruthy()
+    expect(screen.queryByText('Aún no hay análisis registrados.')).toBeNull()
+  })
+
+  it('keeps the plain empty message for a running engine without analyses', async () => {
+    await renderLive({ ...state, analyses: [] })
+    expect(screen.getByText('Aún no hay análisis registrados.')).toBeTruthy()
+    expect(screen.queryByText(/Esperando el primer veredicto/)).toBeNull()
+  })
+
   it('follows an engine.status event from starting to running', async () => {
     await renderLive({
       ...state,

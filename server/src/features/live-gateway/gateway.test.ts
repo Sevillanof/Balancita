@@ -7,6 +7,7 @@ import type { AddressInfo } from 'node:net'
 import WebSocket from 'ws'
 import { afterEach, describe, expect, it } from 'vitest'
 import { FuturesMarketStore } from '../kraken-futures/futures-market-store.ts'
+import { DatabaseSync } from 'node:sqlite'
 import { buildLiveGateway, LIVE_RUN_ID } from './gateway.ts'
 
 const dirs: string[] = []
@@ -75,6 +76,42 @@ function seedWriter(path: string, closedCandles = 5) {
     saveCandle(writer, index, 1, true)
   writer.append(ticker(1, BASE + closedCandles * MINUTE + 1_000))
   return writer
+}
+
+let officialSerial = 0
+/** Appends official 1m candles for bucket indexes, as one response each. */
+function saveOfficial(
+  store: FuturesMarketStore,
+  indexes: number[],
+  close = '90100',
+  receivedAtMs = BASE + 100 * MINUTE,
+): void {
+  officialSerial += 1
+  const candles = indexes.map((index) => ({
+    intervalMs: MINUTE,
+    bucketStart: BASE + index * MINUTE,
+    open: '90090',
+    high: '90120',
+    low: '90080',
+    close,
+    volumeBtc: '2.5',
+  }))
+  const rawResponse = JSON.stringify({ officialSerial, candles })
+  store.appendOfficialCandles({
+    intervalMs: MINUTE,
+    fromMs: BASE,
+    toMs: receivedAtMs,
+    receivedAtMs,
+    rawResponse,
+    sha256: createHash('sha256').update(rawResponse, 'utf8').digest('hex'),
+    candles,
+  })
+}
+
+function demoteToSchema3(path: string): void {
+  const raw = new DatabaseSync(path)
+  raw.exec('DELETE FROM paper_futures_market_migrations WHERE version=4')
+  raw.close()
 }
 
 async function start(
@@ -231,6 +268,152 @@ describe('live market gateway', () => {
         m.type === 'market.updated' && (m.data as any).candle?.closed === true,
     )
     expect((closed.data as any).candle.close).toBe('90050')
+  })
+
+  describe('history from official candles', () => {
+    /** Official 0..19; observed closed 17..21 (17-19 overlap, 20-21 newer). */
+    function seedOfficialHistory(path: string) {
+      const writer = new FuturesMarketStore(path)
+      saveOfficial(
+        writer,
+        Array.from({ length: 20 }, (_, index) => index),
+      )
+      for (let index = 17; index <= 21; index += 1)
+        saveCandle(writer, index, 1, true, '90000')
+      writer.append(ticker(1, BASE + 22 * MINUTE + 1_000))
+      return writer
+    }
+    const clock = () => BASE + 22 * MINUTE + 2_000
+
+    it('serves official candles for every bucket that has one and observed ones only after them', async () => {
+      const path = dbPath()
+      const writer = seedOfficialHistory(path)
+      closers.push(() => writer.close())
+      const { app } = await start(path, { clock })
+      const body = (await app.inject('/api/terminal/bootstrap')).json() as any
+      const candles = body.terminal_market.candles as any[]
+      expect(candles.map((c) => c.time_ms)).toEqual(
+        Array.from({ length: 22 }, (_, index) => BASE + index * MINUTE),
+      )
+      expect(candles.every((c) => c.closed === true)).toBe(true)
+      // official wins, including the overlap with observed buckets 17-19
+      expect(candles.slice(0, 20).map((c) => c.close)).toEqual(
+        Array(20).fill('90100'),
+      )
+      expect(candles.slice(20).map((c) => c.close)).toEqual(['90000', '90000'])
+      expect(body.terminal_market.as_of_ms).toBe(BASE + 22 * MINUTE)
+    })
+
+    it('has no duplicate buckets and honors the 500 limit, newest kept', async () => {
+      const path = dbPath()
+      const writer = new FuturesMarketStore(path)
+      saveOfficial(
+        writer,
+        Array.from({ length: 600 }, (_, index) => index),
+      )
+      saveCandle(writer, 599, 1, true, '90000')
+      saveCandle(writer, 600, 1, true, '90000')
+      writer.append(ticker(1, BASE + 601 * MINUTE + 1_000))
+      closers.push(() => writer.close())
+      const { app } = await start(path, {
+        clock: () => BASE + 601 * MINUTE + 2_000,
+      })
+      const body = (await app.inject('/api/terminal/bootstrap')).json() as any
+      const times = body.terminal_market.candles.map((c: any) => c.time_ms)
+      expect(times).toHaveLength(500)
+      expect(new Set(times).size).toBe(500)
+      expect(times).toEqual([...times].sort((a, b) => a - b))
+      expect(times.at(-1)).toBe(BASE + 600 * MINUTE)
+      expect(times[0]).toBe(BASE + 101 * MINUTE)
+    })
+
+    it('keeps the forming candle after the official history', async () => {
+      const path = dbPath()
+      const writer = seedOfficialHistory(path)
+      closers.push(() => writer.close())
+      saveCandle(writer, 22, 1, false, '90042')
+      const { app } = await start(path, { clock })
+      const body = (await app.inject('/api/terminal/bootstrap')).json() as any
+      const last = body.terminal_market.candles.at(-1)
+      expect(last).toMatchObject({
+        time_ms: BASE + 22 * MINUTE,
+        closed: false,
+        close: '90042',
+      })
+      expect(body.terminal_market.candles.slice(0, 20)[0].close).toBe('90100')
+    })
+
+    it('falls back to observed candles on a schema-3 database', async () => {
+      const path = dbPath()
+      const writer = seedOfficialHistory(path)
+      writer.close()
+      demoteToSchema3(path)
+      const { app } = await start(path, { clock })
+      const body = (await app.inject('/api/terminal/bootstrap')).json() as any
+      const candles = body.terminal_market.candles as any[]
+      expect(candles).toHaveLength(5)
+      expect(candles.every((c) => c.close === '90000')).toBe(true)
+    })
+
+    it('serves observed candles when no official candle exists yet', async () => {
+      const path = dbPath()
+      const writer = seedWriter(path, 4)
+      closers.push(() => writer.close())
+      const { app } = await start(path, {
+        clock: () => BASE + 4 * MINUTE + 2_000,
+      })
+      const body = (await app.inject('/api/terminal/bootstrap')).json() as any
+      expect(body.terminal_market.candles).toHaveLength(4)
+    })
+
+    it('streams a late official candle as a closed update and ignores observed revisions of that bucket afterwards', async () => {
+      const path = dbPath()
+      const writer = seedOfficialHistory(path)
+      closers.push(() => writer.close())
+      const { port } = await start(path, { clock })
+      const client = connect(port)
+      await new Promise((resolve) => client.socket.once('open', resolve))
+      client.socket.send(
+        JSON.stringify({
+          schema_version: 1,
+          type: 'subscribe',
+          run_id: LIVE_RUN_ID,
+        }),
+      )
+      await client.next((m) => m.type === 'snapshot')
+      saveOfficial(writer, [20], '90111')
+      const official = await client.next(
+        (m) =>
+          m.type === 'market.updated' &&
+          (m.data as any).candle?.bucket_start_ms === BASE + 20 * MINUTE,
+      )
+      expect((official.data as any).candle).toMatchObject({
+        interval_ms: MINUTE,
+        closed: true,
+        close: '90111',
+        open: '90090',
+        volume_btc: '2.5',
+      })
+      expect((official.data as any).candle.known_at_ms).toBeGreaterThanOrEqual(
+        BASE + 21 * MINUTE,
+      )
+      // A later observed revision of bucket 20 must not overwrite it.
+      saveCandle(writer, 20, 2, true, '95000')
+      saveCandle(writer, 22, 1, false, '90042')
+      await client.next(
+        (m) =>
+          m.type === 'market.updated' &&
+          (m.data as any).candle?.bucket_start_ms === BASE + 22 * MINUTE,
+      )
+      const bucket20 = client.messages.filter(
+        (m) =>
+          m.type === 'market.updated' &&
+          (m.data as any).candle?.bucket_start_ms === BASE + 20 * MINUTE,
+      )
+      expect(bucket20.map((m) => (m.data as any).candle.close)).toEqual([
+        '90111',
+      ])
+    })
   })
 
   it('reports capture as stale but still serves stored history', async () => {

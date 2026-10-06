@@ -1,11 +1,15 @@
 import { existsSync } from 'node:fs'
-import { FuturesMarketStore } from '../kraken-futures/futures-market-store.ts'
-import { toTerminalMarket } from './terminal-market.ts'
+import {
+  FuturesMarketStore,
+  type OfficialStoredCandle,
+} from '../kraken-futures/futures-market-store.ts'
+import { closedHistoryRows, toTerminalMarket } from './terminal-market.ts'
 
 export const CANDLE_INTERVAL_MS = 60_000
 const PRICE_LOOKBACK_ROWS = 2_000
 const PAGE = 500
 const MAX_PAGES = 10
+const OFFICIAL_BUCKETS_KEPT = 500
 
 export interface TerminalMarketView {
   readonly schema_version: 'futures-terminal-market.v1'
@@ -73,6 +77,25 @@ function toCandle(row: Row): CandleDto {
   }
 }
 
+/** An official candle as the closed-candle update the client already reduces. */
+function toOfficialCandle(candle: OfficialStoredCandle): CandleDto {
+  return {
+    id: `PF_XBTUSD:${candle.intervalMs}:${candle.bucketStart}`,
+    interval_ms: candle.intervalMs,
+    bucket_start_ms: candle.bucketStart,
+    known_at_ms: Math.max(candle.knownAt, candle.closeAt),
+    close_at_ms: candle.closeAt,
+    closed: true,
+    coverage: 'official_kraken_charts',
+    open: candle.open,
+    high: candle.high,
+    low: candle.low,
+    close: candle.close,
+    volume_btc: candle.volumeBtc,
+    trade_count: 0,
+  }
+}
+
 function toPrice(event: Row): PriceView {
   const normalized = { ...event }
   delete normalized.raw
@@ -97,6 +120,9 @@ export class LiveMarketFollower {
   private store: FuturesMarketStore | undefined
   private eventCursor = 0
   private candleCursor = 0
+  private officialCursor = 0
+  /** Recent buckets whose official candle was served: observed ones lose. */
+  private readonly officialBuckets = new Set<number>()
   private latestPrice: PriceView | undefined
   private latestCandle: CandleDto | undefined
   private lastStatusKey = ''
@@ -130,6 +156,14 @@ export class LiveMarketFollower {
       opened = new FuturesMarketStore(this.dbPath, { readOnly: true })
       this.eventCursor = opened.maxEventRowid()
       this.candleCursor = opened.maxCandleRevisionRowid()
+      this.officialCursor = opened.maxOfficialRowid()
+      this.officialBuckets.clear()
+      for (const candle of opened.officialCandlesAsOf(
+        CANDLE_INTERVAL_MS,
+        Number.MAX_SAFE_INTEGER,
+        OFFICIAL_BUCKETS_KEPT,
+      ))
+        this.officialBuckets.add(candle.bucketStart)
       const recent = opened.tickerTradeEventsAfter(
         Math.max(0, this.eventCursor - PRICE_LOOKBACK_ROWS),
         PRICE_LOOKBACK_ROWS,
@@ -239,9 +273,7 @@ export class LiveMarketFollower {
     if (!store) return toTerminalMarket([])
     let base: TerminalMarketView
     try {
-      base = toTerminalMarket(
-        store.closedCandlesTail(CANDLE_INTERVAL_MS, 500) as Row[],
-      )
+      base = toTerminalMarket(closedHistoryRows(store))
     } catch (error) {
       this.dropStore(error)
       return toTerminalMarket([])
@@ -305,12 +337,37 @@ export class LiveMarketFollower {
           if (rows.length === 0) break
           for (const row of rows) {
             const candle = toCandle(row.revision)
+            // The official candle already won this bucket: an observed
+            // revision must not replace it on the client.
+            if (
+              candle.closed &&
+              this.officialBuckets.has(candle.bucket_start_ms)
+            )
+              continue
             candles.set(candle.bucket_start_ms, candle)
             this.latestCandle = candle
           }
           this.candleCursor = rows.at(-1)!.rowid
           if (rows.length < PAGE) break
         }
+        for (let page = 0; page < MAX_PAGES; page += 1) {
+          const rows = store.officialCandlesAfter(
+            this.officialCursor,
+            CANDLE_INTERVAL_MS,
+            PAGE,
+          )
+          if (rows.length === 0) break
+          for (const row of rows) {
+            const candle = toOfficialCandle(row.candle)
+            this.officialBuckets.add(candle.bucket_start_ms)
+            candles.set(candle.bucket_start_ms, candle)
+          }
+          this.officialCursor = rows.at(-1)!.rowid
+          if (rows.length < PAGE) break
+        }
+        for (const bucket of this.officialBuckets)
+          if (this.officialBuckets.size <= OFFICIAL_BUCKETS_KEPT) break
+          else this.officialBuckets.delete(bucket)
         for (let page = 0; page < MAX_PAGES; page += 1) {
           const rows = store.tickerTradeEventsAfter(this.eventCursor, PAGE)
           if (rows.length === 0) break

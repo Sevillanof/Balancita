@@ -25,6 +25,8 @@ export interface LiveGatewayOptions {
   readonly accountDbPath?: string
   /** C's verdicts DB, read-only: feeds the analyses panel and chart markers. */
   readonly verdictsDbPath?: string
+  /** Reports the engine `unavailable` with this reason (e.g. no Python). */
+  readonly engineUnavailableReason?: string
   readonly allowedOrigins?: readonly string[]
   readonly staleAfterMs?: number
   readonly pollMs?: number
@@ -70,6 +72,7 @@ export async function buildLiveGateway(
   const engine = new PaperEngineFollower({
     accountDbPath: options.accountDbPath,
     verdictsDbPath: options.verdictsDbPath,
+    unavailableReason: options.engineUnavailableReason,
     clock,
     markPrice: () => follower.markPrice(),
   })

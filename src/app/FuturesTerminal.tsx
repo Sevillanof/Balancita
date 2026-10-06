@@ -120,10 +120,23 @@ function paperEngineLabel(status: unknown, reason: unknown): string {
     account_db_not_ready: 'la cuenta paper aún no existe',
     no_paper_execution_records_yet: 'aún sin registros de ejecución',
     account_db_unreadable: 'no se puede leer la cuenta paper',
+    python_unavailable: 'no se encontró Python',
+    python_sqlite_too_old: 'el SQLite de Python es demasiado antiguo',
   }
   const label = labels[String(status)] ?? 'estado desconocido'
   const detail = typeof reason === 'string' ? reasons[reason] : undefined
   return detail ? `${label} (${detail})` : label
+}
+
+/** Spanish notice for the analyses panel when the engine has nothing to show. */
+function analysesNotice(status: unknown, reason: unknown): string | null {
+  if (reason === 'python_unavailable')
+    return 'Servicio de veredicto y ejecución paper no disponibles: no se encontró Python 3.9+ (configurá BALANCITA_PYTHON).'
+  if (reason === 'python_sqlite_too_old')
+    return 'Python encontrado pero su SQLite es anterior a 3.37 (necesario para tablas STRICT): instalá Python desde python.org o Homebrew, o configurá BALANCITA_PYTHON.'
+  if (status === 'starting')
+    return 'Esperando el primer veredicto: el servicio de veredicto emite uno al cerrar cada vela de 1 minuto.'
+  return null
 }
 
 function marketStatusLabel(value: unknown): string {
@@ -778,6 +791,12 @@ export default function FuturesTerminal({
                       Motor de decisiones apagado. Solo se muestran velas y
                       precio públicos de Kraken Futures; no hay análisis, cuenta
                       ni operaciones simuladas.
+                    </p>
+                  ) : !analyses.length &&
+                    gatewayEngine &&
+                    analysesNotice(gatewayEngineStatus, gatewayEngineReason) ? (
+                    <p role="status">
+                      {analysesNotice(gatewayEngineStatus, gatewayEngineReason)}
                     </p>
                   ) : analyses.length ? (
                     analyses

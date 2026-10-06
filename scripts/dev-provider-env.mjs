@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process'
 import { delimiter } from 'node:path'
 
 export function devEnvironment(environment) {
@@ -22,6 +23,101 @@ export function serverNodeArgs(
   return allowedFlags.has('--use-system-ca')
     ? ['--use-system-ca', ...args]
     : args
+}
+
+export const MIN_PYTHON = [3, 9]
+// The market, verdicts and account tables are STRICT (SQLite 3.37); window
+// functions need 3.25.
+export const MIN_SQLITE = [3, 37]
+const PROBE_CODE =
+  'import sys,sqlite3;print(sys.version_info[0],sys.version_info[1],sqlite3.sqlite_version)'
+
+function defaultRun(command, args) {
+  return spawnSync(command, args, {
+    encoding: 'utf8',
+    timeout: 10_000,
+    windowsHide: true,
+  })
+}
+
+function atLeast(actual, minimum) {
+  for (let index = 0; index < minimum.length; index += 1) {
+    if (actual[index] !== minimum[index]) return actual[index] > minimum[index]
+  }
+  return true
+}
+
+/** Checks one interpreter; returns its version text or why it does not qualify. */
+function probePython({ command, prefixArgs }, run) {
+  const result = run(command, [...prefixArgs, '-c', PROBE_CODE])
+  if (result.error || result.status !== 0)
+    return { reason: 'not found or not runnable' }
+  const match = /^(\d+) (\d+) (\d+)\.(\d+)\.(\d+)/.exec(
+    String(result.stdout ?? '').trim(),
+  )
+  if (!match) return { reason: 'does not look like Python' }
+  const [python, sqlite] = [
+    [Number(match[1]), Number(match[2])],
+    [Number(match[3]), Number(match[4])],
+  ]
+  const version = `Python ${python.join('.')}, SQLite ${match[3]}.${match[4]}.${match[5]}`
+  if (!atLeast(python, MIN_PYTHON))
+    return { reason: `${version}: Python ${MIN_PYTHON.join('.')}+ required` }
+  if (!atLeast(sqlite, MIN_SQLITE))
+    return {
+      reason: `${version}: SQLite ${MIN_SQLITE.join('.')}+ required (STRICT tables)`,
+      sqliteTooOld: true,
+    }
+  return { version }
+}
+
+/**
+ * Finds the Python for the verdict (C) and paper (D) services, once, before
+ * spawning. `BALANCITA_PYTHON` (a single executable path or name) is honored
+ * first and never falls back; otherwise `python3`, `python` and, on Windows,
+ * `py -3`. Returns `{ command, prefixArgs, version }` or `{ message, failure }`, where
+ * `failure` is `sqlite_too_old` when a Python was found but only its SQLite
+ * is too old, else `not_found`.
+ */
+export function resolvePython({
+  env,
+  platform = process.platform,
+  run = defaultRun,
+}) {
+  const explicit = (env.BALANCITA_PYTHON ?? '').trim()
+  const candidates = explicit
+    ? [{ command: explicit, prefixArgs: [] }]
+    : [
+        { command: 'python3', prefixArgs: [] },
+        { command: 'python', prefixArgs: [] },
+        ...(platform === 'win32'
+          ? [{ command: 'py', prefixArgs: ['-3'] }]
+          : []),
+      ]
+  const tried = []
+  let sqliteTooOld = false
+  for (const candidate of candidates) {
+    const outcome = probePython(candidate, run)
+    if (outcome.version) return { ...candidate, version: outcome.version }
+    if (outcome.sqliteTooOld) sqliteTooOld = true
+    const label = [candidate.command, ...candidate.prefixArgs].join(' ')
+    tried.push(`${label} (${outcome.reason})`)
+  }
+  const target = explicit
+    ? `BALANCITA_PYTHON=${explicit}`
+    : `tried ${tried.map((entry) => entry.split(' (')[0]).join(', ')}`
+  return {
+    failure: sqliteTooOld ? 'sqlite_too_old' : 'not_found',
+    message: `Python ${MIN_PYTHON.join('.')}+ not found (${target}; ${tried.join('; ')}). The verdict and paper services will not start. Install Python ${MIN_PYTHON.join('.')}+ with SQLite ${MIN_SQLITE.join('.')}+ (python.org or Homebrew on macOS) or set BALANCITA_PYTHON to its executable.`,
+  }
+}
+
+/** Env value telling the gateway whether C and D can run. */
+function pythonStatus(python) {
+  if (python?.command) return 'available'
+  return python?.unavailable === 'sqlite_too_old'
+    ? 'sqlite_too_old'
+    : 'unavailable'
 }
 
 export const DEV_PORTS = { vite: 5173, server: 8787, mock: 8788, live: 8789 }
@@ -63,6 +159,10 @@ export function devChildSpecs({
   root,
   env,
   allowedFlags = process.allowedNodeEnvironmentFlags,
+  // `{ command, prefixArgs }` from `resolvePython`; `null` or
+  // `{ unavailable: 'sqlite_too_old' }` when none qualifies (no verdict/paper
+  // children; the gateway is told).
+  python = { command: 'python3', prefixArgs: [] },
 }) {
   const serverCwd = `${root}/server`
   const liveDb = (name) => `./data/dev-live/${name}`
@@ -140,49 +240,58 @@ export function devChildSpecs({
         // Read-only views of C's verdicts and D's account for the terminal.
         FUTURES_VERDICTS_DB_PATH: verdictsDb,
         FUTURES_PAPER_ACCOUNT_DB_PATH: accountDb,
+        BALANCITA_PYTHON_STATUS: pythonStatus(python),
       },
     },
-    {
-      name: 'verdict',
-      command: 'python3',
-      cwd: serverCwd,
-      args: [
-        '-m',
-        'balancita_engine.futures_verdicts',
-        '--market-db',
-        marketDb,
-        '--verdicts-db',
-        verdictsDb,
-      ],
-      env: {
-        ...env,
-        PYTHONPATH: [`${root}/python`, env.PYTHONPATH]
-          .filter(Boolean)
-          .join(delimiter),
-      },
-    },
-    {
-      name: 'paper',
-      command: 'python3',
-      cwd: serverCwd,
-      args: [
-        '-m',
-        'balancita_engine.futures_paper_execution',
-        '--market-db',
-        marketDb,
-        '--verdicts-db',
-        verdictsDb,
-        '--account-db',
-        accountDb,
-      ],
-      env: {
-        ...env,
-        PYTHONPATH: [`${root}/python`, env.PYTHONPATH]
-          .filter(Boolean)
-          .join(delimiter),
-      },
-    },
+    ...(python?.command ? pythonChildren() : []),
   ]
+
+  function pythonChildren() {
+    return [
+      {
+        name: 'verdict',
+        command: python.command,
+        cwd: serverCwd,
+        args: [
+          ...python.prefixArgs,
+          '-m',
+          'balancita_engine.futures_verdicts',
+          '--market-db',
+          marketDb,
+          '--verdicts-db',
+          verdictsDb,
+        ],
+        env: {
+          ...env,
+          PYTHONPATH: [`${root}/python`, env.PYTHONPATH]
+            .filter(Boolean)
+            .join(delimiter),
+        },
+      },
+      {
+        name: 'paper',
+        command: python.command,
+        cwd: serverCwd,
+        args: [
+          ...python.prefixArgs,
+          '-m',
+          'balancita_engine.futures_paper_execution',
+          '--market-db',
+          marketDb,
+          '--verdicts-db',
+          verdictsDb,
+          '--account-db',
+          accountDb,
+        ],
+        env: {
+          ...env,
+          PYTHONPATH: [`${root}/python`, env.PYTHONPATH]
+            .filter(Boolean)
+            .join(delimiter),
+        },
+      },
+    ]
+  }
 }
 
 // Futures backends accept only loopback origins on the terminal stream; the

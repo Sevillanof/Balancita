@@ -39,6 +39,12 @@ export interface PaperEngineFollowerOptions {
   /** Absent: the engine is reported `off` and nothing is read. */
   readonly accountDbPath?: string
   readonly verdictsDbPath?: string
+  /**
+   * Set when the services that feed the account and verdicts DBs cannot run
+   * (dev found no Python): the engine is reported `unavailable` with this
+   * reason and nothing is read.
+   */
+  readonly unavailableReason?: string
   readonly clock?: () => number
   /** Latest market mark as a decimal string, for equity at the mark. */
   readonly markPrice?: () => string | null
@@ -135,21 +141,34 @@ export class PaperEngineFollower {
   private lastEquityAt = Number.NEGATIVE_INFINITY
   private lastEquity: string | null = null
 
+  private readonly forcedUnavailable: string | undefined
+
   constructor(options: PaperEngineFollowerOptions) {
+    this.forcedUnavailable = options.unavailableReason
     this.accountPath = options.accountDbPath
     this.verdictsPath = options.verdictsDbPath
     this.clock = options.clock ?? Date.now
     this.markPrice = options.markPrice ?? (() => null)
     this.staleAfterMs = options.staleAfterMs ?? DEFAULT_STALE_AFTER_MS
-    if (this.enabled) {
+    if (this.reading) {
       this.ensureAccount()
       this.ensureVerdicts()
       this.servedStatusKey = this.statusKey()
     }
   }
 
+  /** Whether the gateway reports an engine at all (not `off`). */
   get enabled(): boolean {
-    return this.accountPath !== undefined
+    return (
+      this.accountPath !== undefined || this.forcedUnavailable !== undefined
+    )
+  }
+
+  /** Whether the account and verdicts DBs are read. */
+  private get reading(): boolean {
+    return (
+      this.forcedUnavailable === undefined && this.accountPath !== undefined
+    )
   }
 
   close(): void {
@@ -162,6 +181,8 @@ export class PaperEngineFollower {
   // -- status -----------------------------------------------------------------
 
   private statusParts(): { status: string; reason: string | null } {
+    if (this.forcedUnavailable !== undefined)
+      return { status: 'unavailable', reason: this.forcedUnavailable }
     if (!this.enabled)
       return { status: ENGINE_OFF.status, reason: ENGINE_OFF.reason }
     if (this.accountState === 'unreadable')
@@ -385,7 +406,7 @@ export class PaperEngineFollower {
 
   /** Engine-owned fields of the terminal state; empty while the engine is off. */
   snapshotFields(): Row {
-    if (!this.enabled) return {}
+    if (!this.reading) return {}
     this.refresh()
     this.everServed = true
     this.servedStatusKey = this.statusKey()
@@ -571,7 +592,7 @@ export class PaperEngineFollower {
    * an equity refresh at the mark, then an engine status change.
    */
   poll(): EngineEvent[] {
-    if (!this.enabled) return []
+    if (!this.reading) return []
     const events: EngineEvent[] = []
     try {
       this.refresh()

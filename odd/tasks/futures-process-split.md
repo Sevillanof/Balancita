@@ -192,6 +192,14 @@ Every sustained live run of the single process surfaced a new engine defect: the
     - Controls disabled with the notice. No console errors.
   - Known: a fresh account DB shows `starting` until D's first event or 5-minute snapshot. Rejected entries show no quantity, because it is only known at fill.
 
+- 2026-10-06 Dev Python resolution and live chart history (delegated writer, Sonnet; reviewed by the parent). Context: the user saw empty "Análisis recientes". The root cause was a stale local checkout at 7934368 (with the discarded legacy edits) that lacked the verdict and paper children; the fixes below harden what the investigation exposed.
+  - `scripts/dev-provider-env.mjs` `resolvePython` tries `BALANCITA_PYTHON`, then `python3`, `python`, and `py -3` on win32. It requires Python 3.9+ and SQLite 3.37+ (STRICT tables). C and D tests pass on CPython 3.9.25.
+  - Without a usable Python, `verdict` and `paper` are not spawned, and `live` gets `BALANCITA_PYTHON_STATUS`. The terminal then shows `python_unavailable` / `python_sqlite_too_old` notices in Spanish, and "Esperando el primer veredicto…" while starting.
+  - The live chart's closed history comes from official candles (newest 500; official wins per bucket; observed fills only buckets without one). A late official candle streams as a closed update for its bucket, and observed closed revisions of official buckets are suppressed. Store reads `maxOfficialRowid` / `officialCandlesAfter` are rowid-bounded and fall back on schema 3.
+  - Evidence: `dev.node-test` 27/27; live-gateway + kraken-futures 89; root `src/app src/features/paper-futures` 120 (needs `--exclude '**/.claude/**'` while agent worktrees exist).
+  - Mutations caught: observed-wins precedence and disabled suppression.
+  - Browser: 500 contiguous 1 m candles (about 6 h) on bootstrap; the no-Python notice rendered.
+
 ## Next step
 
 - PS-04: news process N wired into C, with Gemini as veto/confidence stored per item. Or PS-05 first: paper execution D consuming fresh verdicts (`knowledge_lag_ms` below a threshold). The order is the user's call.

@@ -39,3 +39,6 @@ server/data/
 # Python bytecode caches
 __pycache__/
 *.pyc
+
+# Claude Code agent worktrees
+.claude/worktrees/

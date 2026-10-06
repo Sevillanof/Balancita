@@ -655,6 +655,46 @@ describe('FuturesMarketStore official candles', () => {
     raw.close()
   })
 
+  it('tails first-known official candles by rowid', () => {
+    const store = new FuturesMarketStore(dbPath())
+    expect(store.maxOfficialRowid()).toBe(0)
+    store.appendOfficialCandles(
+      response(T + 3 * M, [official(T), official(T + M)]),
+    )
+    const cursor = store.maxOfficialRowid()
+    expect(cursor).toBe(2)
+    store.appendOfficialCandles(
+      response(T + 4 * M, [
+        official(T + M, { volumeBtc: '9' }), // changed revision of a known bucket
+        official(T + 2 * M),
+      ]),
+    )
+    const rows = store.officialCandlesAfter(cursor, M, 10)
+    // The changed revision is not the first known one: only the new bucket.
+    expect(rows.map((row) => row.candle.bucketStart)).toEqual([T + 2 * M])
+    expect(rows[0]!.rowid).toBe(store.maxOfficialRowid())
+    expect(
+      store.officialCandlesAfter(0, M, 10).map((r) => r.candle.bucketStart),
+    ).toEqual([T, T + M, T + 2 * M])
+    expect(store.officialCandlesAfter(0, 300_000, 10)).toEqual([])
+    expect(() => store.officialCandlesAfter(0, M, 0)).toThrow(RangeError)
+    store.close()
+  })
+
+  it('reports no official rows on a schema-3 read-only store', () => {
+    const path = dbPath()
+    const writer = new FuturesMarketStore(path)
+    writer.appendOfficialCandles(response(T + 3 * M, [official(T)]))
+    writer.close()
+    const raw = new DatabaseSync(path)
+    raw.exec('DELETE FROM paper_futures_market_migrations WHERE version=4')
+    raw.close()
+    const v3 = new FuturesMarketStore(path, { readOnly: true })
+    expect(v3.maxOfficialRowid()).toBe(0)
+    expect(v3.officialCandlesAfter(0, M, 10)).toEqual([])
+    v3.close()
+  })
+
   it('opens schema 3 and schema 4 databases read-only', () => {
     const path = dbPath()
     new FuturesMarketStore(path).close()
