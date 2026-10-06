@@ -24,16 +24,17 @@ Start everything (MOCK and real data) with one command:
 pnpm run dev
 ```
 
-Open <http://localhost:5173>. `pnpm run dev` starts five processes, each with a
+Open <http://localhost:5173>. `pnpm run dev` starts six processes, each with a
 prefixed log:
 
-| Process   | Port | What it is                                                                                                                                  |
-| --------- | ---- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| `vite`    | 5173 | Web app and proxy (`/api` -> 8787, `/api-mock` -> 8788, `/api-live` -> 8789, rewritten to `/api`)                                           |
-| `server`  | 8787 | Legacy backend (Gemini, spot collectors); `FUTURES_MODE` is forced unset, so `.env` cannot change it                                        |
-| `mock`    | 8788 | Scripted MOCK futures API (`futures-local-terminal.mjs --api-only`); fresh temporary database per start                                     |
-| `capture` | -    | Kraken public WebSocket -> `server/data/dev-live/futures-market.sqlite` (sole writer; no HTTP, no engine, no account DB; per-event commits) |
-| `live`    | 8789 | Read-only gateway: serves `/api/terminal/*` by tailing that market DB by rowid; starts no collector and no engine (engine shown as off)     |
+| Process   | Port | What it is                                                                                                                                                         |
+| --------- | ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `vite`    | 5173 | Web app and proxy (`/api` -> 8787, `/api-mock` -> 8788, `/api-live` -> 8789, rewritten to `/api`)                                                                  |
+| `server`  | 8787 | Legacy backend (Gemini, spot collectors); `FUTURES_MODE` is forced unset, so `.env` cannot change it                                                               |
+| `mock`    | 8788 | Scripted MOCK futures API (`futures-local-terminal.mjs --api-only`); fresh temporary database per start                                                            |
+| `capture` | -    | Kraken public WebSocket -> `server/data/dev-live/futures-market.sqlite` (sole writer; no HTTP, no engine, no account DB; per-event commits)                        |
+| `live`    | 8789 | Read-only gateway: serves `/api/terminal/*` by tailing that market DB by rowid; starts no collector and no engine (engine shown as off)                            |
+| `verdict` | -    | Python verdict service C: reads the market DB read-only and writes entry verdicts to `server/data/dev-live/futures-verdicts.sqlite` (sole writer; needs `python3`) |
 
 ### Switching between MOCK and real data
 
@@ -53,14 +54,14 @@ prefixed log:
 
 Without network access the `capture` process (and the Real source) cannot reach
 Kraken and report it; `vite`, `server` and `mock` keep running, so MOCK stays
-usable. A failed `mock`, `capture` or `live` process is logged and does not stop
+usable. A failed `mock`, `capture`, `live` or `verdict` process is logged and does not stop
 the others. If `capture` stops, the `live` gateway keeps serving stored candles
 and reports the feed as stale; restarting `live` does not affect `capture`.
 Press Ctrl-C once to stop every process.
 
 Rollback: `DEV_LIVE_SINGLE_PROCESS=1 pnpm run dev` runs the previous
 single-process `live` child (`FUTURES_MODE=paper_live`: collector, engine and
-HTTP together) instead of `capture` + gateway.
+HTTP together) instead of `capture` + gateway (no `verdict` child).
 
 ### Market data mode
 

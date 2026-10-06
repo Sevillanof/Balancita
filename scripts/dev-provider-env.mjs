@@ -1,3 +1,5 @@
+import { delimiter } from 'node:path'
+
 export function devEnvironment(environment) {
   return {
     ...environment,
@@ -48,7 +50,9 @@ const CAPTURE_ARGS = [
  * - server: legacy services (FUTURES_MODE forced empty so `.env` cannot change it),
  * - mock: scripted MOCK futures API only,
  * - capture: Kraken public WS -> live market DB (sole writer, no HTTP/engine),
- * - live: read-only gateway on 8789 tailing that DB (no collector, no engine).
+ * - live: read-only gateway on 8789 tailing that DB (no collector, no engine),
+ * - verdict: Python verdict service C (market DB read-only -> verdicts DB, sole
+ *   writer of the latter; its own `command` instead of node).
  * `DEV_LIVE_SINGLE_PROCESS=1` restores the old single-process paper_live child
  * (collector + engine + HTTP in one process) as a rollback path.
  */
@@ -128,6 +132,25 @@ export function devChildSpecs({
         PORT: String(DEV_PORTS.live),
         FUTURES_MODE: '',
         FUTURES_MARKET_DB_PATH: marketDb,
+      },
+    },
+    {
+      name: 'verdict',
+      command: 'python3',
+      cwd: serverCwd,
+      args: [
+        '-m',
+        'balancita_engine.futures_verdicts',
+        '--market-db',
+        marketDb,
+        '--verdicts-db',
+        liveDb('futures-verdicts.sqlite'),
+      ],
+      env: {
+        ...env,
+        PYTHONPATH: [`${root}/python`, env.PYTHONPATH]
+          .filter(Boolean)
+          .join(delimiter),
       },
     },
   ]

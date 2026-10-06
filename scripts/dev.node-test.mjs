@@ -13,10 +13,10 @@ describe('devChildSpecs', () => {
   })
   const byName = Object.fromEntries(specs.map((spec) => [spec.name, spec]))
 
-  it('starts vite, legacy server, mock API, live capture and live gateway', () => {
+  it('starts vite, legacy server, mock API, live capture, live gateway and verdict service', () => {
     assert.deepEqual(
       specs.map((spec) => spec.name),
-      ['vite', 'server', 'mock', 'capture', 'live'],
+      ['vite', 'server', 'mock', 'capture', 'live', 'verdict'],
     )
   })
 
@@ -65,6 +65,22 @@ describe('devChildSpecs', () => {
     assert.equal(env.FUTURES_DB_PATH, undefined)
   })
 
+  it('runs the Python verdict service over the capture market database', () => {
+    const { command, args, cwd, env } = byName.verdict
+    assert.equal(command, 'python3')
+    assert.equal(cwd, '/repo/server')
+    assert.deepEqual(args, [
+      '-m',
+      'balancita_engine.futures_verdicts',
+      '--market-db',
+      byName.capture.env.FUTURES_MARKET_DB_PATH,
+      '--verdicts-db',
+      './data/dev-live/futures-verdicts.sqlite',
+    ])
+    assert.equal(env.PYTHONPATH, '/repo/python')
+    assert.equal(env.KEEP, 'yes')
+  })
+
   it('keeps the single-process paper_live rollback behind DEV_LIVE_SINGLE_PROCESS', () => {
     const rollback = devChildSpecs({
       root,
@@ -79,6 +95,10 @@ describe('devChildSpecs', () => {
     assert.equal(env.FUTURES_MODE, 'paper_live')
     assert.equal(env.PORT, '8789')
     assert.ok(args.includes('src/app/index.ts'))
+    assert.equal(
+      rollback.find((spec) => spec.name === 'verdict'),
+      undefined,
+    )
     const paths = [
       env.FUTURES_DB_PATH,
       env.FUTURES_MARKET_DB_PATH,

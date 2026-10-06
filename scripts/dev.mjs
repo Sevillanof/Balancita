@@ -6,11 +6,11 @@ import { devChildSpecs } from './dev-provider-env.mjs'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 // Optional backends: when one fails the others (and the app) keep running.
-const optionalChildren = new Set(['mock', 'capture', 'live'])
+const optionalChildren = new Set(['mock', 'capture', 'live', 'verdict'])
 mkdirSync(resolve(root, 'server/data/dev-live'), { recursive: true })
 const children = devChildSpecs({ root, env: process.env }).map(
-  ({ name, cwd, args, env }) => {
-    const child = spawn(process.execPath, args, {
+  ({ name, command, cwd, args, env }) => {
+    const child = spawn(command ?? process.execPath, args, {
       cwd,
       stdio: ['inherit', 'pipe', 'pipe'],
       env,
@@ -63,7 +63,7 @@ for (const { name, child } of children) {
     if (shuttingDown) return
     if (optionalChildren.has(name)) {
       process.stderr.write(
-        `[dev] ${name} exited (${signal ?? code}); the other processes keep running. ${name === 'mock' ? 'The MOCK source' : name === 'capture' ? 'Live market capture (new candles)' : 'The Real source'} will be unavailable until you restart pnpm run dev.\n`,
+        `[dev] ${name} exited (${signal ?? code}); the other processes keep running. ${name === 'mock' ? 'The MOCK source' : name === 'capture' ? 'Live market capture (new candles)' : name === 'verdict' ? 'The verdict service (new verdicts)' : 'The Real source'} will be unavailable until you restart pnpm run dev.\n`,
       )
       return
     }

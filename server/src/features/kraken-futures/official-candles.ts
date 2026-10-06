@@ -13,7 +13,8 @@ const RESOLUTIONS: Readonly<Record<number, string>> = {
   60_000: '1m',
   300_000: '5m',
 }
-export const OFFICIAL_CANDLE_INTERVALS = [60_000, 300_000] as const
+// 5m first: on a 5-minute boundary the closed 5m candle must be known before the 1m candle that closes with it.
+export const OFFICIAL_CANDLE_INTERVALS = [300_000, 60_000] as const
 
 /**
  * One closed official Kraken candle. Kraken's convention: open is the

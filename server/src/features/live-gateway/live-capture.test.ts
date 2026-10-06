@@ -151,10 +151,12 @@ describe('live capture process core', () => {
     })
     await capture.start()
     await wait(30)
+    // 5m first: on a 5 minute boundary the closed 5m candle is known before
+    // the 1m candle that closes with it, so verdicts see the fresh trend bar.
     const backfill = requests.slice(0, 2)
     expect(backfill).toEqual([
-      { interval: '1m', from: now - 5 * M, to: now },
       { interval: '5m', from: now - 30 * M, to: now },
+      { interval: '1m', from: now - 5 * M, to: now },
     ])
     const lastMinute = store.latestOfficialBucket(M)!
     // Settled closed candles only: the open minute is never stored.
