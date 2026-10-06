@@ -122,6 +122,38 @@ function pythonStatus(python) {
     : 'unavailable'
 }
 
+export const DEFAULT_LLAMA_PORT = 8088
+export const DEFAULT_LLAMA_HF = 'unsloth/Qwen3.5-4B-GGUF:Q8_0'
+
+/** Port of the optional `llama-server` child (`LLAMA_PORT`, default 8088). */
+export function llamaPort(env) {
+  const port = Number(env.LLAMA_PORT)
+  return Number.isInteger(port) && port > 0 && port < 65536
+    ? port
+    : DEFAULT_LLAMA_PORT
+}
+
+/**
+ * Decides whether the optional `llm` (llama-server) and `q` children start:
+ * only when `DECISIONS_ENABLED` is not `0` and the `llama-server` binary runs
+ * from PATH. Never throws and never blocks startup: returns `{ command }` or
+ * `{ message }` (one line for `[dev]`).
+ */
+export function resolveLlamaServer({ env, run = defaultRun }) {
+  if ((env.DECISIONS_ENABLED ?? '').trim() === '0')
+    return {
+      message:
+        'LLM decisions are off (DECISIONS_ENABLED=0); llm and q will not start.',
+    }
+  const result = run('llama-server', ['--version'])
+  if (result.error)
+    return {
+      message:
+        'llama-server was not found on PATH; llm and q (LLM decisions) will not start. Install llama.cpp (brew install llama.cpp) or set DECISIONS_ENABLED=0 to silence this.',
+    }
+  return { command: 'llama-server' }
+}
+
 export const DEV_PORTS = { vite: 5173, server: 8787, mock: 8788, live: 8789 }
 // Hosts the children bind to: server, gateway and mock use 127.0.0.1 (HOST
 // defaults to it); vite uses its default `localhost`. Vite HMR shares the
@@ -144,12 +176,21 @@ export function canListen(port, host) {
 export async function checkDevPorts({
   names = Object.keys(DEV_PORTS),
   probe = canListen,
+  // Env-driven ports (the optional llm child): `[{ name, port, host }]`.
+  extra = [],
 } = {}) {
   const conflicts = []
-  for (const name of names) {
-    const port = DEV_PORTS[name]
+  const targets = [
+    ...names.map((name) => ({
+      name,
+      port: DEV_PORTS[name],
+      host: DEV_PORT_HOSTS[name] ?? '127.0.0.1',
+    })),
+    ...extra,
+  ]
+  for (const { name, port, host } of targets) {
     if (port === undefined) continue
-    if (!(await probe(port, DEV_PORT_HOSTS[name] ?? '127.0.0.1')))
+    if (!(await probe(port, host)))
       conflicts.push({
         name,
         port,
@@ -235,7 +276,10 @@ const CAPTURE_ARGS = ['--experimental-strip-types', 'src/app/capture-main.ts']
  * - paper: Python paper execution D (market + verdicts DBs read-only -> account
  *   DB, sole writer of the latter),
  * - scores: Python forecast scorer E (market + verdicts DBs read-only -> scores
- *   DB, sole writer of the latter).
+ *   DB, sole writer of the latter),
+ * - llm (optional): `llama-server` on loopback, only with a resolved binary,
+ * - q (optional): Python LLM decisions Q (market + verdicts DBs read-only ->
+ *   decisions DB, sole writer of the latter), started together with llm.
  */
 export function devChildSpecs({
   root,
@@ -247,6 +291,8 @@ export function devChildSpecs({
   python = { command: 'python3', prefixArgs: [] },
   // Injectable so the function stays pure; `.env` is looked up in `server/`.
   exists = existsSync,
+  // `{ command }` from `resolveLlamaServer`; absent/`null` leaves llm and q out.
+  llm = null,
 }) {
   const serverCwd = `${root}/server`
   const hasEnvFile = exists(`${serverCwd}/.env`)
@@ -288,6 +334,7 @@ export function devChildSpecs({
   const verdictsDb = liveDb('futures-verdicts.sqlite')
   const accountDb = liveDb('futures-paper-account.sqlite')
   const scoresDb = liveDb('futures-forecast-scores.sqlite')
+  const decisionsDb = liveDb('futures-llm-decisions.sqlite')
   return [
     ...common,
     {
@@ -316,7 +363,60 @@ export function devChildSpecs({
       },
     },
     ...(python?.command ? pythonChildren() : []),
+    ...(python?.command && llm?.command ? llmChildren() : []),
   ]
+
+  function llmChildren() {
+    const port = String(llamaPort(env))
+    const modelPath = (env.LLAMA_MODEL_PATH ?? '').trim()
+    const model = modelPath
+      ? ['-m', modelPath]
+      : ['-hf', (env.LLAMA_HF ?? '').trim() || DEFAULT_LLAMA_HF]
+    return [
+      {
+        name: 'llm',
+        command: llm.command,
+        cwd: root,
+        args: [
+          ...model,
+          '--host',
+          '127.0.0.1',
+          '--port',
+          port,
+          '-c',
+          (env.LLAMA_CTX ?? '').trim() || '8192',
+          '-np',
+          (env.LLAMA_PARALLEL ?? '').trim() || '2',
+          '--no-mmproj',
+          '--no-webui',
+        ],
+        env: { ...env },
+      },
+      {
+        name: 'q',
+        command: python.command,
+        cwd: serverCwd,
+        args: [
+          ...python.prefixArgs,
+          '-m',
+          'balancita_engine.futures_llm_decisions',
+          '--market-db',
+          marketDb,
+          '--verdicts-db',
+          verdictsDb,
+          '--decisions-db',
+          decisionsDb,
+        ],
+        env: {
+          ...env,
+          LLAMA_PORT: port,
+          PYTHONPATH: [`${root}/python`, env.PYTHONPATH]
+            .filter(Boolean)
+            .join(delimiter),
+        },
+      },
+    ]
+  }
 
   function pythonChildren() {
     return [

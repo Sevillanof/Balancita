@@ -84,6 +84,64 @@ ejecución paper no disponibles" with the engine as unavailable
 (`python_unavailable`, or `python_sqlite_too_old`). The other processes keep
 running.
 
+### Optional LLM decisions (`llm` and `q`)
+
+`pnpm run dev` can also start a local `llama-server` (`llm`) and the Python
+decision service Q (`q`), which asks typed questions about each new verdict and
+stores the answer probabilities in `server/data/dev-live/futures-llm-decisions.sqlite`
+(append-only, single writer). They are optional and never block startup: they
+start only when `DECISIONS_ENABLED` is not `0`, the `llama-server` binary is on
+`PATH` (`brew install llama.cpp`) and Python is available; otherwise `dev`
+prints one `[dev]` line and goes on. Ctrl-C stops `llm` with the rest. Settings
+are read from the environment `pnpm run dev` runs in (export them or prefix the
+command; `dev` does not load `.env` files itself):
+
+| Variable             | Default                        | Meaning                                    |
+| -------------------- | ------------------------------ | ------------------------------------------ |
+| `DECISIONS_ENABLED`  | on                             | `0` disables `llm` and `q`                 |
+| `LLAMA_MODEL_PATH`   | -                              | local `.gguf` (`-m`); wins over `LLAMA_HF` |
+| `LLAMA_HF`           | `unsloth/Qwen3.5-4B-GGUF:Q8_0` | Hugging Face model (`-hf`)                 |
+| `LLAMA_PORT`         | `8088`                         | loopback port (also checked for conflicts) |
+| `LLAMA_CTX`          | `8192`                         | context (`-c`)                             |
+| `LLAMA_PARALLEL`     | `2`                            | parallel slots (`-np`)                     |
+| `DECISIONS_PRODUCTS` | `PF_XBTUSD`                    | products Q decides, comma separated        |
+
+**First thing to run** (with `llama-server` up, by hand or via `pnpm run dev`):
+
+```bash
+PYTHONPATH=python python3 -m balancita_engine.futures_llm_decisions --probe
+```
+
+It sends one `direction_1h` request and prints whether `A`/`B`/`C` appear in
+`top_logprobs` (with their exact token strings, `"A"` or `" A"`), whether
+thinking leaked (`<think>`), the token count of each letter via `/tokenize`,
+the latency from `timings`, and the normalized probabilities. Exit code `0`
+means usable, `1` means a problem (do not continue; if thinking leaked, start
+`llama-server` with `--reasoning off`), `2` means the model is not healthy.
+`--ask <question_id> [--product PF_X] --market-db ... --verdicts-db ...` asks one
+catalog question about the latest stored state and prints the probabilities,
+chosen option, confidence and latency without storing anything.
+
+Questions are data in `config/decision-questions.json`: id, version, type
+(`choice`, `bool` asked as `A) true B) false`, or `score` with a numeric value
+per option), instruction, options with descriptions and the STATE fields the
+question needs (named, normalized fields from one registry in
+`futures_llm_decisions.py`). Add a question by editing that file; changing the
+text of an existing one requires bumping its `version` (a test pins a hash per
+`id@version`). Calibration temperatures live in `config/decision-calibration.json`
+(default T=1).
+
+Behavior: one decision per question for each new verdict bucket whose lag is at
+most 15 s (the backfill is skipped) and that was written recently. If the model is
+down, loading or times out, nothing is stored for that bucket (one log line per
+state change) and it is never retried. Downstream code reads stored decisions
+only; `--once` never asks again for a stored bucket. STATE carries normalized
+values only (returns in bp, distances in ATR units, RSI, band positions, regime,
+strategy actions) and no dates, absolute prices or product name. Note the
+residual risk: a model can still recognize a market episode from its numeric
+shape, so decisions on past data are not proof of skill; judge them only on
+data after the model's training cutoff and against the stored calibration.
+
 ### Offline behavior
 
 Without network access the `capture` process (and the Real source) cannot reach

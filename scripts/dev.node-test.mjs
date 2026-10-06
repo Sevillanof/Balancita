@@ -5,7 +5,9 @@ import {
   describeChildExit,
   devChildSpecs,
   devProxyConfig,
+  llamaPort,
   planStartup,
+  resolveLlamaServer,
   resolvePython,
   signalChild,
 } from './dev-provider-env.mjs'
@@ -524,5 +526,180 @@ describe('child exit and shutdown', () => {
       ['direct', 'SIGKILL'],
       ['direct', 'SIGTERM'],
     ])
+  })
+})
+
+describe('optional LLM decision children (llm and q)', () => {
+  const base = {
+    root,
+    allowedFlags: noFlags,
+    python: { command: 'python3', prefixArgs: [] },
+  }
+  const llm = { command: 'llama-server' }
+  const byName = (specs) => Object.fromEntries(specs.map((s) => [s.name, s]))
+  const names = (specs) => specs.map((s) => s.name)
+
+  it('adds neither child unless llama-server was resolved', () => {
+    for (const absent of [undefined, null, { unavailable: 'not_found' }])
+      assert.ok(
+        !names(devChildSpecs({ ...base, env: {}, llm: absent })).includes(
+          'llm',
+        ),
+      )
+    assert.ok(!names(devChildSpecs({ ...base, env: {} })).includes('q'))
+  })
+
+  it('starts llm and q after the other children when enabled', () => {
+    const specs = devChildSpecs({ ...base, env: {}, llm })
+    assert.deepEqual(names(specs).slice(-2), ['llm', 'q'])
+  })
+
+  it('runs llama-server on loopback with the guide flags and the default HF model', () => {
+    const { llm: spec } = byName(devChildSpecs({ ...base, env: {}, llm }))
+    assert.equal(spec.command, 'llama-server')
+    assert.deepEqual(spec.args, [
+      '-hf',
+      'unsloth/Qwen3.5-4B-GGUF:Q8_0',
+      '--host',
+      '127.0.0.1',
+      '--port',
+      '8088',
+      '-c',
+      '8192',
+      '-np',
+      '2',
+      '--no-mmproj',
+      '--no-webui',
+    ])
+  })
+
+  it('takes port, context, parallelism and model from the environment; a local path wins over LLAMA_HF', () => {
+    const env = {
+      LLAMA_PORT: '9001',
+      LLAMA_CTX: '4096',
+      LLAMA_PARALLEL: '3',
+      LLAMA_MODEL_PATH: '/models/q.gguf',
+      LLAMA_HF: 'org/other:Q6_K',
+    }
+    const { llm: spec } = byName(devChildSpecs({ ...base, env, llm }))
+    assert.deepEqual(spec.args.slice(0, 2), ['-m', '/models/q.gguf'])
+    assert.ok(!spec.args.includes('-hf'))
+    assert.equal(spec.args[spec.args.indexOf('--port') + 1], '9001')
+    assert.equal(spec.args[spec.args.indexOf('-c') + 1], '4096')
+    assert.equal(spec.args[spec.args.indexOf('-np') + 1], '3')
+    const hf = byName(
+      devChildSpecs({ ...base, env: { LLAMA_HF: 'org/other:Q6_K' }, llm }),
+    )
+    assert.deepEqual(hf.llm.args.slice(0, 2), ['-hf', 'org/other:Q6_K'])
+  })
+
+  it('never exposes a tools or agent flag nor binds beyond loopback', () => {
+    const { llm: spec } = byName(devChildSpecs({ ...base, env: {}, llm }))
+    assert.equal(spec.args[spec.args.indexOf('--host') + 1], '127.0.0.1')
+    assert.ok(!spec.args.some((a) => /tools|agent/.test(a)))
+  })
+
+  it('runs Python process Q over the market and verdicts databases into its own decisions database', () => {
+    const { q } = byName(devChildSpecs({ ...base, env: { KEEP: 'yes' }, llm }))
+    assert.equal(q.command, 'python3')
+    assert.equal(q.cwd, '/repo/server')
+    assert.deepEqual(q.args, [
+      '-m',
+      'balancita_engine.futures_llm_decisions',
+      '--market-db',
+      './data/dev-live/futures-market.sqlite',
+      '--verdicts-db',
+      './data/dev-live/futures-verdicts.sqlite',
+      '--decisions-db',
+      './data/dev-live/futures-llm-decisions.sqlite',
+    ])
+    assert.equal(q.env.PYTHONPATH, '/repo/python')
+    assert.equal(q.env.KEEP, 'yes')
+  })
+
+  it('hands q the llama port so it follows LLAMA_PORT', () => {
+    const { q } = byName(
+      devChildSpecs({ ...base, env: { LLAMA_PORT: '9001' }, llm }),
+    )
+    assert.equal(q.env.LLAMA_PORT, '9001')
+  })
+
+  it('starts neither llm nor q without Python', () => {
+    const specs = devChildSpecs({ ...base, env: {}, llm, python: null })
+    assert.ok(!names(specs).includes('llm'))
+    assert.ok(!names(specs).includes('q'))
+  })
+
+  it('llamaPort defaults to 8088 and rejects junk', () => {
+    assert.equal(llamaPort({}), 8088)
+    assert.equal(llamaPort({ LLAMA_PORT: '9001' }), 9001)
+    assert.equal(llamaPort({ LLAMA_PORT: 'abc' }), 8088)
+  })
+})
+
+describe('resolveLlamaServer', () => {
+  const found = () => ({ status: 0, stdout: 'version: 1', stderr: '' })
+  const missing = () => ({ error: new Error('spawn llama-server ENOENT') })
+
+  it('is enabled when the binary runs and DECISIONS_ENABLED is not 0', () => {
+    for (const env of [{}, { DECISIONS_ENABLED: '1' }])
+      assert.equal(
+        resolveLlamaServer({ env, run: found }).command,
+        'llama-server',
+      )
+  })
+
+  it('is disabled by DECISIONS_ENABLED=0 without even probing the binary', () => {
+    const calls = []
+    const result = resolveLlamaServer({
+      env: { DECISIONS_ENABLED: '0' },
+      run: (...a) => (calls.push(a), found()),
+    })
+    assert.equal(result.command, undefined)
+    assert.deepEqual(calls, [])
+    assert.match(result.message, /DECISIONS_ENABLED=0/)
+  })
+
+  it('reports one message when the binary is not on PATH', () => {
+    const result = resolveLlamaServer({ env: {}, run: missing })
+    assert.equal(result.command, undefined)
+    assert.match(result.message, /llama-server/)
+    assert.match(result.message, /PATH/)
+    assert.ok(!result.message.includes('\n'))
+  })
+
+  it('probes the binary named llama-server', () => {
+    const calls = []
+    resolveLlamaServer({
+      env: {},
+      run: (command, args) => (calls.push([command, args]), found()),
+    })
+    assert.equal(calls[0][0], 'llama-server')
+  })
+})
+
+describe('port check includes llm only when enabled', () => {
+  it('probes the llama port on loopback when it is passed as extra', async () => {
+    const calls = []
+    await checkDevPorts({
+      extra: [{ name: 'llm', port: 9001, host: '127.0.0.1' }],
+      probe: async (port, host) => (calls.push([port, host]), true),
+    })
+    assert.deepEqual(calls.at(-1), [9001, '127.0.0.1'])
+  })
+
+  it('does not probe it by default', async () => {
+    const ports = []
+    await checkDevPorts({ probe: async (port) => (ports.push(port), true) })
+    assert.ok(!ports.includes(8088))
+  })
+
+  it('names llm in the conflict and planStartup forwards extra', async () => {
+    const plan = await planStartup({
+      extra: [{ name: 'llm', port: 8088, host: '127.0.0.1' }],
+      probe: async (port) => port !== 8088,
+    })
+    assert.equal(plan.start, false)
+    assert.match(plan.messages[0], /8088 \(llm\)/)
   })
 })

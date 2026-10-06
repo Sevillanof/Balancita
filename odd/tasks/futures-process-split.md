@@ -268,6 +268,21 @@ Every sustained live run of the single process surfaced a new engine defect: the
     - Catch-up from empty takes about 4 min.
     - The old verdicts and scores DBs must be deleted (config change).
 
+- 2026-10-06 Q1 local LLM decisions (delegated writer, Sonnet; reviewed by the parent from its report). The user explicitly waived, for the Qwen decision work, the ADR 0001 amendment rule that LLMs do not decide. The ADR itself is unchanged, and the user's guide is `doc/decision-qwen-implementation.md`.
+  - Optional dev children:
+    - `llm` runs `llama-server` on 127.0.0.1:8088 (`-np 2`, `--no-mmproj`, `--no-webui`; model from `LLAMA_MODEL_PATH` or `LLAMA_HF`, default `unsloth/Qwen3.5-4B-GGUF:Q8_0`);
+    - `q` runs `futures_llm_decisions.py`;
+    - both start only with `DECISIONS_ENABLED`≠0, the binary on PATH and a resolved Python.
+  - Q per fresh verdict (lag ≤15 s and written ≤120 s ago):
+    - asks the catalog questions (`config/decision-questions.json`, data-driven; `direction_1h` v1 is the example) with grammar over the option letters, `max_tokens` 1, temperature 0, `top_logprobs` 20 and thinking off — the user's reference capture;
+    - renormalizes over the letters, computes confidence = 1−H/ln n and applies T from `config/decision-calibration.json`;
+    - STATE comes from a registry of normalized fields declared per question, with no dates, absolute prices or product name;
+    - stores the full state, raw logprobs, probabilities, model identity and timings, append-only; errors go to a separate table;
+    - if the model is unavailable it stores nothing and never retries old buckets.
+  - CLI: `--probe` (the guide's step-4 check, with exit codes) and `--ask <id>`.
+  - Evidence: 68 tests, also on 3.9; `scripts` 60/60; mutations caught. Live run with real capture and verdicts and a fake `llama-server`: Q skipped the backfill and decided one fresh bucket; `--once` made no model calls. No real model was run here (no GPU).
+  - Next: Q2 scoring and calibration with E's outcomes; Q3 D consuming Q decisions.
+
 ## Next step
 
 - PS-04: news process N wired into C, with Gemini as veto/confidence stored per item. Or PS-05 first: paper execution D consuming fresh verdicts (`knowledge_lag_ms` below a threshold). The order is the user's call.

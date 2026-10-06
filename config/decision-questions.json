@@ -1,0 +1,37 @@
+{
+  "version": "decision-questions.v1",
+  "note": "Question catalog for LLM decisions (process Q). Callers use ids only. Changing any text of a question requires bumping its version, because a rewritten question is a different question and its calibration no longer applies; python/tests/test_futures_llm_decisions.py pins a hash per id@version. Each question declares the STATE fields it needs (names from the registry STATE_FIELDS in futures_llm_decisions.py); adding a question, any number of options or any of the three types (choice, bool, score) needs no code change.",
+  "questions": [
+    {
+      "id": "direction_1h",
+      "version": 1,
+      "type": "choice",
+      "instruction": "Using only the normalized market state above, where is the price most likely to be one hour from now compared with the last close?",
+      "options": [
+        {
+          "id": "up",
+          "description": "higher by more than 15 basis points"
+        },
+        {
+          "id": "down",
+          "description": "lower by more than 15 basis points"
+        },
+        {
+          "id": "flat",
+          "description": "within 15 basis points of the last close in either direction"
+        }
+      ],
+      "state_fields": [
+        "regime",
+        "returns_bp",
+        "dist_atr",
+        "rsi14",
+        "bollinger_pos",
+        "donchian_pos",
+        "atr_bp",
+        "volume_rel",
+        "proposals"
+      ]
+    }
+  ]
+}

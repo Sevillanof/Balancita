@@ -1,0 +1,7 @@
+{
+  "version": "decision-calibration.v1",
+  "note": "Calibration temperature T per question id@version (logprobs are divided by T before normalizing). Default 1 when a question is absent. Fitted offline (Q2); never edited by process Q.",
+  "temperatures": {
+    "direction_1h@1": 1.0
+  }
+}
