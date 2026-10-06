@@ -4,7 +4,6 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { FuturesMarketStore } from './futures-market-store.ts'
-import { FuturesSessionRuntime } from '../paper-futures/futures-session-runtime.ts'
 import {
   createHistoricalFundingClient,
   historicalFundingAt,
@@ -138,68 +137,6 @@ describe('public historical Kraken futures funding', () => {
       )
       reopened.close()
     } finally {
-      rmSync(directory, { recursive: true, force: true })
-    }
-  })
-
-  it('binds the new live funding policy on new sessions and keeps that binding on restart', async () => {
-    const directory = mkdtempSync(join(tmpdir(), 'funding-runtime-binding-'))
-    const dbPath = join(directory, 'account.sqlite')
-    try {
-      const first = new FuturesSessionRuntime({ dbPath, mode: 'paper_live' })
-      await first.start()
-      const initial = first.store.getReplaySessionBinding(first.runId)
-      expect(initial?.manifest).toMatchObject({
-        source: 'kraken-public-live-stream.v2',
-        seed: 'paper-live-session-v2',
-        fidelity:
-          'observed-public-trades-book-ticker-candles-explicit-funding.v2',
-      })
-      await first.close()
-      const restored = new FuturesSessionRuntime({ dbPath, mode: 'paper_live' })
-      await restored.start()
-      expect(restored.store.getReplaySessionBinding(restored.runId)).toEqual(
-        initial,
-      )
-      await restored.close()
-    } finally {
-      rmSync(directory, { recursive: true, force: true })
-    }
-  })
-
-  it('binds funding evidence into new replay source identity without changing empty legacy sources', async () => {
-    const directory = mkdtempSync(join(tmpdir(), 'funding-replay-binding-'))
-    const source = new FuturesMarketStore(join(directory, 'source.sqlite'))
-    source.saveInstrument(
-      {
-        instrumentId: 'kraken-futures:PF_XBTUSD',
-        metadataHash: 'a'.repeat(64),
-        retrievedAt: receivedAt,
-      },
-      { productId: 'PF_XBTUSD' },
-    )
-    source.saveQualityPolicy(
-      { version: 'snapshot-contiguous-observed.v1' },
-      receivedAt,
-    )
-    source.appendFundingResponse(
-      parseHistoricalFundingResponse(capture, receivedAt),
-    )
-    const runtime = new FuturesSessionRuntime({
-      dbPath: join(directory, 'account.sqlite'),
-      mode: 'replay',
-      replaySource: source,
-    })
-    try {
-      await runtime.start()
-      const binding = runtime.store.getReplaySessionBinding(runtime.runId)
-      expect(binding?.manifest).toMatchObject({
-        source: 'frozen-kraken-futures-market.v2',
-        fidelity: 'persisted-public-events-known-candles-explicit-funding.v2',
-      })
-    } finally {
-      await runtime.close()
-      source.close()
       rmSync(directory, { recursive: true, force: true })
     }
   })

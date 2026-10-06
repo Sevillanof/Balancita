@@ -242,9 +242,7 @@ function TerminalMarketChart({
       <p>
         {mode === 'paper_live'
           ? 'Velas públicas de Kraken Futures · operaciones simuladas.'
-          : mode === 'replay'
-            ? 'Velas cerradas del origen registrado · operaciones simuladas.'
-            : 'Velas cerradas del fixture determinista MOCK · actualización por WebSocket.'}
+          : 'Velas cerradas del fixture determinista MOCK · actualización por WebSocket.'}
       </p>
       {market.candles instanceof Array && market.candles.length > 0 && (
         <p role="status">
@@ -570,9 +568,7 @@ export default function FuturesTerminal({
     ? 'MOCK · mercado simulado'
     : bootstrap?.mode === 'mock'
       ? 'DATOS Y OPERACIONES SIMULADAS'
-      : bootstrap?.mode === 'paper_live'
-        ? 'MERCADO REAL · OPERACIONES SIMULADAS'
-        : 'REPLAY · OPERACIONES SIMULADAS'
+      : 'MERCADO REAL · OPERACIONES SIMULADAS'
 
   return (
     <div className="demo-shell connected-terminal">
@@ -659,32 +655,6 @@ export default function FuturesTerminal({
         {!state && <p role="status">Conectando al runtime de futuros…</p>}
         {state && (
           <>
-            {bootstrap?.mode === 'replay' && (
-              <section aria-label="Evidencia del replay">
-                <p>Origen registrado · operaciones simuladas</p>
-                <dl>
-                  <dt>Hash del dataset</dt>
-                  <dd className="connected-terminal__hash">
-                    {String(
-                      bootstrap.source_manifest?.source_hash ?? 'No disponible',
-                    )}
-                  </dd>
-                  <dt>Hash del archivo fuente</dt>
-                  <dd className="connected-terminal__hash">
-                    {String(
-                      bootstrap.source_manifest?.source_file_hash ??
-                        'No disponible',
-                    )}
-                  </dd>
-                </dl>
-                <a
-                  href={`${apiBase}/terminal/export`}
-                  download="futures-replay-export.json"
-                >
-                  Descargar exportación verificada del run
-                </a>
-              </section>
-            )}
             {bootstrap.mode === 'paper_live' && (
               <section
                 className="connected-terminal__panel"

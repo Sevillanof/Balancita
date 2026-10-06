@@ -13,7 +13,7 @@ export type TerminalEnvelope = {
 
 export type TerminalBootstrap = {
   schema_version: 1
-  mode: 'mock' | 'paper_live' | 'replay'
+  mode: 'mock' | 'paper_live'
   source: string | null
   active_run_id: string
   instrument_id?: string
@@ -175,7 +175,7 @@ async function fetchTerminalBootstrap(
   if (
     !isRecord(value) ||
     value.schema_version !== 1 ||
-    !['mock', 'paper_live', 'replay'].includes(String(value.mode)) ||
+    !['mock', 'paper_live'].includes(String(value.mode)) ||
     typeof value.active_run_id !== 'string' ||
     !(typeof value.source === 'string' || value.source === null)
   )

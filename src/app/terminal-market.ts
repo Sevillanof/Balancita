@@ -45,9 +45,7 @@ export function projectTerminalQuote(input: {
     price: positionMark ?? candleClose,
     label: positionMark
       ? 'Precio de marca · USD/BTC'
-      : input.mode === 'replay'
-        ? 'Último cierre registrado · USD/BTC'
-        : 'Último cierre del fixture · USD/BTC',
+      : 'Último cierre del fixture · USD/BTC',
     eventTime: null,
     receivedAt: null,
   }

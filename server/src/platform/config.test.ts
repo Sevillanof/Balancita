@@ -2,48 +2,25 @@ import { describe, expect, it } from 'vitest'
 import { ServerConfigError, serverConfigFrom } from './config.ts'
 
 describe('serverConfigFrom', () => {
-  it('selects explicit isolated futures modes and source paths without requiring Gemini', () => {
-    expect(serverConfigFrom({ FUTURES_MODE: 'mock' })).toMatchObject({
-      futuresMode: 'mock',
-      futuresDbPath: './data/futures-paper.sqlite',
-      futuresMarketDbPath: './data/futures-market.sqlite',
-      futuresReplaySourceDbPath: undefined,
-      apiKey: '',
-    })
-    expect(
-      serverConfigFrom({
-        FUTURES_MODE: 'paper_live',
-        FUTURES_DB_PATH: '/tmp/account.sqlite',
-        FUTURES_MARKET_DB_PATH: '/tmp/market.sqlite',
-      }),
-    ).toMatchObject({
-      futuresMode: 'paper_live',
-      futuresDbPath: '/tmp/account.sqlite',
-      futuresMarketDbPath: '/tmp/market.sqlite',
-      apiKey: '',
-    })
-    expect(
-      serverConfigFrom({
-        FUTURES_MODE: 'replay',
-        FUTURES_DB_PATH: '/tmp/account.sqlite',
-        FUTURES_REPLAY_SOURCE_DB_PATH: '/tmp/source.sqlite',
-        FUTURES_REPLAY_SOURCE_RUN_ID: 'capture-1',
-      }),
-    ).toMatchObject({
-      futuresMode: 'replay',
-      futuresReplaySourceDbPath: '/tmp/source.sqlite',
-      futuresReplaySourceRunId: 'capture-1',
-    })
-    expect(() => serverConfigFrom({ FUTURES_MODE: 'replay' })).toThrow(
-      'FUTURES_REPLAY_SOURCE_DB_PATH',
+  it('refuses to start when the retired FUTURES_MODE is set', () => {
+    for (const mode of ['mock', 'paper_live', 'replay', 'anything'])
+      expect(() => serverConfigFrom({ FUTURES_MODE: mode })).toThrow(
+        ServerConfigError,
+      )
+    expect(() => serverConfigFrom({ FUTURES_MODE: 'paper_live' })).toThrow(
+      /retirado.*retired.*pnpm run dev.*\.env/s,
     )
-    expect(() =>
-      serverConfigFrom({
-        FUTURES_MODE: 'replay',
-        FUTURES_DB_PATH: '/tmp/same.sqlite',
-        FUTURES_REPLAY_SOURCE_DB_PATH: '/tmp/same.sqlite',
-      }),
-    ).toThrow('must differ')
+  })
+
+  it('treats an empty FUTURES_MODE as unset and keeps the market DB path', () => {
+    expect(serverConfigFrom({ FUTURES_MODE: '' })).toMatchObject({
+      futuresMarketDbPath: './data/futures-market.sqlite',
+      apiKey: '',
+    })
+    expect(
+      serverConfigFrom({ FUTURES_MARKET_DB_PATH: '/tmp/market.sqlite' })
+        .futuresMarketDbPath,
+    ).toBe('/tmp/market.sqlite')
   })
 
   it('enables paper trading by default and gives the canonical setting precedence', () => {

@@ -49,15 +49,15 @@ export interface ServerConfig {
   intelligenceStreamMaxClients: number
   intelligenceStreamKeepAliveMs: number
   intelligenceStreamWindowSize: number
-  futuresMode: 'mock' | 'paper_live' | 'replay' | undefined
-  futuresDbPath: string
   futuresMarketDbPath: string
-  futuresReplaySourceDbPath: string | undefined
-  futuresReplaySourceRunId: string | undefined
-  futuresReplayCutoffMs: number | undefined
 }
 
 const DEFAULT_MODEL = 'gemini-3.5-flash-lite'
+
+const FUTURES_MODE_RETIRED_MESSAGE =
+  'FUTURES_MODE fue retirado / FUTURES_MODE was retired: the futures live ' +
+  'mode now runs via `pnpm run dev` (capture, gateway, verdict and paper ' +
+  'processes). Elimina FUTURES_MODE de .env / Remove FUTURES_MODE from .env.'
 
 export function serverConfigFrom(
   env: Readonly<Record<string, string | undefined>>,
@@ -94,39 +94,10 @@ export function serverConfigFrom(
     )
   }
 
-  const futuresMode = futuresModeFrom(env.FUTURES_MODE)
-  const futuresDbPath = stringValue(
-    env,
-    'FUTURES_DB_PATH',
-    './data/futures-paper.sqlite',
-  )
-  const futuresReplaySourceDbPath = optionalStringValue(
-    env.FUTURES_REPLAY_SOURCE_DB_PATH,
-  )
-  const futuresReplaySourceRunId = optionalStringValue(
-    env.FUTURES_REPLAY_SOURCE_RUN_ID,
-  )
-  const futuresReplayCutoffMs = optionalNonNegativeInt(
-    env.FUTURES_REPLAY_CUTOFF_MS,
-  )
-  if (futuresMode === 'replay') {
-    if (futuresReplaySourceDbPath === undefined)
-      throw new ServerConfigError(
-        'FUTURES_REPLAY_SOURCE_DB_PATH is required when FUTURES_MODE=replay.',
-      )
-    if (futuresReplaySourceDbPath === futuresDbPath)
-      throw new ServerConfigError(
-        'FUTURES_REPLAY_SOURCE_DB_PATH and FUTURES_DB_PATH must differ.',
-      )
-  } else if (
-    futuresReplaySourceDbPath !== undefined ||
-    futuresReplaySourceRunId !== undefined ||
-    futuresReplayCutoffMs !== undefined
-  ) {
-    throw new ServerConfigError(
-      'FUTURES_REPLAY_SOURCE_DB_PATH and FUTURES_REPLAY_SOURCE_RUN_ID require FUTURES_MODE=replay.',
-    )
-  }
+  // The single-process futures modes were retired: live now runs as separate
+  // processes (`pnpm run dev`). An empty value counts as unset.
+  if (env.FUTURES_MODE !== undefined && env.FUTURES_MODE.trim() !== '')
+    throw new ServerConfigError(FUTURES_MODE_RETIRED_MESSAGE)
 
   return {
     host: stringValue(env, 'HOST', '127.0.0.1'),
@@ -227,40 +198,12 @@ export function serverConfigFrom(
       'INTELLIGENCE_SSE_WINDOW_SIZE',
       200,
     ),
-    futuresMode,
-    futuresDbPath,
     futuresMarketDbPath: stringValue(
       env,
       'FUTURES_MARKET_DB_PATH',
       './data/futures-market.sqlite',
     ),
-    futuresReplaySourceDbPath,
-    futuresReplaySourceRunId,
-    futuresReplayCutoffMs,
   }
-}
-
-function futuresModeFrom(raw: string | undefined): ServerConfig['futuresMode'] {
-  if (raw === undefined || raw === '') return undefined
-  if (raw === 'mock' || raw === 'paper_live' || raw === 'replay') return raw
-  throw new ServerConfigError(
-    'FUTURES_MODE must be mock, paper_live, or replay when specified.',
-  )
-}
-
-function optionalStringValue(raw: string | undefined): string | undefined {
-  if (raw === undefined || raw.trim() === '') return undefined
-  return raw.trim()
-}
-
-function optionalNonNegativeInt(raw: string | undefined): number | undefined {
-  if (raw === undefined || raw.trim() === '') return undefined
-  const value = Number(raw)
-  if (!Number.isSafeInteger(value) || value < 0)
-    throw new ServerConfigError(
-      `FUTURES_REPLAY_CUTOFF_MS must be a non-negative integer, got ${JSON.stringify(raw)}.`,
-    )
-  return value
 }
 
 function collectorFlag(
