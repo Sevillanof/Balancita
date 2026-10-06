@@ -3,6 +3,7 @@ import { createLiveCapture } from '../features/live-gateway/live-capture.ts'
 import type { FuturesSocket } from '../features/kraken-futures/futures-market.ts'
 import { resolveFuturesProducts } from '../features/kraken-futures/futures-products.ts'
 import { serverConfigFrom } from '../platform/config.ts'
+import { acquireWriterLock, WriterLockError } from '../platform/writer-lock.ts'
 
 /** Public instrument catalog (no credentials); bounded by a 10 s timeout. */
 async function fetchPublicCatalog(): Promise<unknown> {
@@ -31,6 +32,10 @@ async function main(): Promise<void> {
   // Pinned list (config/futures-products.json or FUTURES_PRODUCTS): the same
   // one the Python services read, never chosen at runtime.
   const products = resolveFuturesProducts(process.env)
+  // Refuse to start beside another live writer (duplicate rows, collisions);
+  // readers (gateway, Python) never take this lock.
+  const lock = acquireWriterLock(config.futuresMarketDbPath)
+  process.once('exit', () => lock.release())
   const store = new FuturesMarketStore(config.futuresMarketDbPath)
   const log = (line: string) =>
     process.stderr.write(`${new Date().toISOString()} [capture] ${line}\n`)
@@ -52,7 +57,10 @@ async function main(): Promise<void> {
     void capture
       .stop()
       .then(() => store.close())
-      .finally(() => process.exit(0))
+      .finally(() => {
+        lock.release()
+        process.exit(0)
+      })
   }
   process.once('SIGINT', () => shutdown('SIGINT'))
   process.once('SIGTERM', () => shutdown('SIGTERM'))
@@ -65,6 +73,11 @@ async function main(): Promise<void> {
 }
 
 main().catch((error) => {
+  if (error instanceof WriterLockError) {
+    console.error(`[capture] refusing to start: ${error.message}`)
+    process.exitCode = 3
+    return
+  }
   console.error('[capture] failed to start', error)
   process.exitCode = 1
 })

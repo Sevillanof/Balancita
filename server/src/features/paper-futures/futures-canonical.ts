@@ -36,52 +36,23 @@ export function normalizeTimestampMs(value: unknown): number {
   return value
 }
 
-export function canonicalJson(value: unknown): string {
-  const validateUnicode = (text: string): void => {
-    for (let index = 0; index < text.length; index += 1) {
-      const code = text.charCodeAt(index)
-      if (code >= 0xd800 && code <= 0xdbff) {
-        const low = text.charCodeAt(index + 1)
-        if (!(low >= 0xdc00 && low <= 0xdfff))
-          throw new TypeError('Unpaired Unicode surrogate.')
-        index += 1
-      } else if (code >= 0xdc00 && code <= 0xdfff) {
+const SURROGATE = /[\ud800-\udfff]/
+
+function validateScalarText(text: string): void {
+  for (let index = 0; index < text.length; index += 1) {
+    const code = text.charCodeAt(index)
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const low = text.charCodeAt(index + 1)
+      if (!(low >= 0xdc00 && low <= 0xdfff))
         throw new TypeError('Unpaired Unicode surrogate.')
-      }
+      index += 1
+    } else if (code >= 0xdc00 && code <= 0xdfff) {
+      throw new TypeError('Unpaired Unicode surrogate.')
     }
   }
-  const encode = (item: unknown): string => {
-    if (typeof item === 'string') {
-      validateUnicode(item)
-      return JSON.stringify(item)
-    }
-    if (item === null || typeof item === 'boolean') return JSON.stringify(item)
-    if (typeof item === 'number') {
-      if (!Number.isFinite(item) || !Number.isSafeInteger(item))
-        throw new TypeError('Only safe integers are canonical numbers.')
-      return String(item)
-    }
-    if (Array.isArray(item)) return `[${item.map(encode).join(',')}]`
-    if (typeof item === 'object' && item !== null) {
-      const record = item as Record<string, unknown>
-      return `{${Object.keys(record)
-        .map((key) => {
-          validateUnicode(key)
-          return key
-        })
-        .sort(compareUnicodeScalars)
-        .map((key) => {
-          if (record[key] === undefined)
-            throw new TypeError('Undefined is not canonical.')
-          return `${JSON.stringify(key)}:${encode(record[key])}`
-        })
-        .join(',')}}`
-    }
-    throw new TypeError('Unsupported canonical value.')
-  }
-  return encode(value)
 }
 
+/** Code point order; only needed when a key holds surrogate pairs. */
 function compareUnicodeScalars(left: string, right: string): number {
   const a = Array.from(left, (character) => character.codePointAt(0)!)
   const b = Array.from(right, (character) => character.codePointAt(0)!)
@@ -89,6 +60,54 @@ function compareUnicodeScalars(left: string, right: string): number {
     if (a[index] !== b[index]) return a[index]! - b[index]!
   }
   return a.length - b.length
+}
+
+/**
+ * Canonical JSON (code point key order, safe integers only, no undefined, no
+ * unpaired surrogates). UTF-16 code unit order equals code point order unless
+ * a key contains surrogates, so the default sort allocates nothing; keys with
+ * surrogates fall back to the explicit code point comparison. Equivalence with
+ * the original comparator-only algorithm is pinned by a randomized test.
+ */
+export function canonicalJson(item: unknown): string {
+  if (typeof item === 'string') {
+    validateScalarText(item)
+    return JSON.stringify(item)
+  }
+  if (item === null || typeof item === 'boolean') return JSON.stringify(item)
+  if (typeof item === 'number') {
+    if (!Number.isFinite(item) || !Number.isSafeInteger(item))
+      throw new TypeError('Only safe integers are canonical numbers.')
+    return String(item)
+  }
+  if (Array.isArray(item)) {
+    let out = '['
+    for (let index = 0; index < item.length; index += 1)
+      out += (index === 0 ? '' : ',') + canonicalJson(item[index])
+    return `${out}]`
+  }
+  if (typeof item === 'object' && item !== null) {
+    const record = item as Record<string, unknown>
+    const keys = Object.keys(record)
+    let surrogates = false
+    for (const key of keys) {
+      validateScalarText(key)
+      if (!surrogates && SURROGATE.test(key)) surrogates = true
+    }
+    if (surrogates) keys.sort(compareUnicodeScalars)
+    else keys.sort()
+    let out = '{'
+    for (let index = 0; index < keys.length; index += 1) {
+      const key = keys[index]!
+      if (record[key] === undefined)
+        throw new TypeError('Undefined is not canonical.')
+      out +=
+        (index === 0 ? '' : ',') +
+        `${JSON.stringify(key)}:${canonicalJson(record[key])}`
+    }
+    return `${out}}`
+  }
+  throw new TypeError('Unsupported canonical value.')
 }
 
 export function canonicalHash(value: unknown): string {

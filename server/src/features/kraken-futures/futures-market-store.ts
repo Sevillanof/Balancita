@@ -103,79 +103,6 @@ function sha256(text: string): string {
   return createHash('sha256').update(text, 'utf8').digest('hex')
 }
 
-const SURROGATE = /[\ud800-\udfff]/
-
-function validateScalarText(text: string): void {
-  for (let index = 0; index < text.length; index += 1) {
-    const code = text.charCodeAt(index)
-    if (code >= 0xd800 && code <= 0xdbff) {
-      const low = text.charCodeAt(index + 1)
-      if (!(low >= 0xdc00 && low <= 0xdfff))
-        throw new TypeError('Unpaired Unicode surrogate.')
-      index += 1
-    } else if (code >= 0xdc00 && code <= 0xdfff) {
-      throw new TypeError('Unpaired Unicode surrogate.')
-    }
-  }
-}
-
-function compareScalars(left: string, right: string): number {
-  const a = Array.from(left, (character) => character.codePointAt(0)!)
-  const b = Array.from(right, (character) => character.codePointAt(0)!)
-  for (let index = 0; index < Math.min(a.length, b.length); index += 1) {
-    if (a[index] !== b[index]) return a[index]! - b[index]!
-  }
-  return a.length - b.length
-}
-
-/**
- * Output-identical to `canonicalJson` (RFC 8785-style code point key order,
- * same validation errors) but sorts keys without per-comparison allocation:
- * UTF-16 code unit order equals code point order unless a key has surrogates.
- * Equivalence is covered by the store tests; the shared helper stays the
- * contract for every other canonical consumer.
- */
-function canonicalEvent(item: unknown): string {
-  if (typeof item === 'string') {
-    validateScalarText(item)
-    return JSON.stringify(item)
-  }
-  if (item === null || typeof item === 'boolean') return JSON.stringify(item)
-  if (typeof item === 'number') {
-    if (!Number.isFinite(item) || !Number.isSafeInteger(item))
-      throw new TypeError('Only safe integers are canonical numbers.')
-    return String(item)
-  }
-  if (Array.isArray(item)) {
-    let out = '['
-    for (let index = 0; index < item.length; index += 1)
-      out += (index === 0 ? '' : ',') + canonicalEvent(item[index])
-    return `${out}]`
-  }
-  if (typeof item === 'object' && item !== null) {
-    const record = item as Record<string, unknown>
-    const keys = Object.keys(record)
-    let surrogates = false
-    for (const key of keys) {
-      validateScalarText(key)
-      if (!surrogates && SURROGATE.test(key)) surrogates = true
-    }
-    if (surrogates) keys.sort(compareScalars)
-    else keys.sort()
-    let out = '{'
-    for (let index = 0; index < keys.length; index += 1) {
-      const key = keys[index]!
-      if (record[key] === undefined)
-        throw new TypeError('Undefined is not canonical.')
-      out +=
-        (index === 0 ? '' : ',') +
-        `${JSON.stringify(key)}:${canonicalEvent(record[key])}`
-    }
-    return `${out}}`
-  }
-  throw new TypeError('Unsupported canonical value.')
-}
-
 function time(value: unknown, name: string): number {
   if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0)
     throw new TypeError(`${name} must be a non-negative safe integer.`)
@@ -1007,9 +934,9 @@ export class FuturesMarketStore {
     // and reuse the text for both the hash and the stored JSON.
     let normalizedJson: string | undefined
     let contentHash: string
-    if (feed === 'trade') contentHash = sha256(canonicalEvent(content))
+    if (feed === 'trade') contentHash = sha256(canonicalJson(content))
     else {
-      normalizedJson = canonicalEvent(normalizedEvent)
+      normalizedJson = canonicalJson(normalizedEvent)
       contentHash = sha256(normalizedJson)
     }
     if (uid !== null) {
@@ -1038,12 +965,12 @@ export class FuturesMarketStore {
     const rawJson =
       typeof event.rawJson === 'string'
         ? event.rawJson
-        : canonicalEvent(event.raw)
+        : canonicalJson(event.raw)
     if (Buffer.byteLength(rawJson, 'utf8') > 256_000)
       throw new RangeError(
         'Raw market evidence exceeds the configured size bound.',
       )
-    normalizedJson ??= canonicalEvent(normalizedEvent)
+    normalizedJson ??= canonicalJson(normalizedEvent)
     this.prepared('BEGIN IMMEDIATE').run()
     try {
       this.prepared(
@@ -1075,8 +1002,8 @@ export class FuturesMarketStore {
           seq,
           eventTime,
           receivedAt,
-          canonicalEvent(event.bids),
-          canonicalEvent(event.asks),
+          canonicalJson(event.bids),
+          canonicalJson(event.asks),
         )
       }
       this.prepared('COMMIT').run()
