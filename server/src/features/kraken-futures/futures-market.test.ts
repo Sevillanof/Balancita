@@ -614,3 +614,123 @@ describe('capture hot path equivalence', () => {
     }
   })
 })
+
+describe('collector without the book feed', () => {
+  function harness(options: { bookFeed?: boolean } = {}) {
+    let now = 100_000
+    let socket!: {
+      onopen: (() => void) | null
+      onmessage: ((event: { data: unknown }) => void) | null
+      onerror: (() => void) | null
+      onclose: (() => void) | null
+      send: (message: string) => void
+      close: () => void
+    }
+    const sent: string[] = []
+    const persisted: Array<Record<string, unknown>> = []
+    const states: string[] = []
+    const collector = new KrakenFuturesMarketCollector({
+      ...options,
+      clock: () => now,
+      random: () => 0.5,
+      makeSocket: () =>
+        (socket = {
+          onopen: null,
+          onmessage: null,
+          onerror: null,
+          onclose: null,
+          send: (message) => sent.push(message),
+          close: () => {},
+        }),
+      setTimeout: () => 0 as unknown as ReturnType<typeof setTimeout>,
+      clearTimeout: () => {},
+      persist: (event) => {
+        persisted.push(event as unknown as Record<string, unknown>)
+      },
+      persistGap: () => {},
+      onState: (state, reason) => states.push(`${state}:${reason ?? ''}`),
+      staleAfterMs: 3000,
+    })
+    collector.start()
+    socket.onopen!()
+    const ticker = (seq: number) =>
+      socket.onmessage!({
+        data: JSON.stringify({
+          feed: 'ticker',
+          product_id: 'PF_XBTUSD',
+          time: now,
+          seq,
+          bid: 100,
+          ask: 101,
+          last: 100,
+          markPrice: 100,
+          index: 100,
+          suspended: false,
+        }),
+      })
+    return {
+      collector,
+      sent,
+      persisted,
+      states,
+      ticker,
+      advance: (ms: number) => (now += ms),
+    }
+  }
+
+  it('marketSubscriptions can omit the book and defaults to all three feeds', () => {
+    expect(marketSubscriptions(['trade', 'ticker'])).toEqual([
+      '{"event":"subscribe","feed":"trade","product_ids":["PF_XBTUSD"]}',
+      '{"event":"subscribe","feed":"ticker","product_ids":["PF_XBTUSD"]}',
+    ])
+    expect(marketSubscriptions()).toHaveLength(3)
+  })
+
+  it('subscribes to trade and ticker only and goes live on a fresh ticker', () => {
+    const h = harness({ bookFeed: false })
+    expect(h.sent.map((m) => JSON.parse(m).feed)).toEqual(['trade', 'ticker'])
+    h.ticker(1)
+    expect(h.collector.status, h.states.join(',')).toBe('live')
+    expect(h.persisted.map((e) => e.type)).toEqual(['ticker'])
+  })
+
+  it('goes stale on ticker silence without ever re-requesting a book snapshot', () => {
+    const h = harness({ bookFeed: false })
+    h.ticker(1)
+    h.advance(3_001)
+    expect(h.collector.tick()).toBe('stale')
+    expect(h.sent.map((m) => JSON.parse(m).event)).toEqual([
+      'subscribe',
+      'subscribe',
+    ])
+    h.ticker(2)
+    expect(h.collector.status).toBe('live')
+    expect(h.sent).toHaveLength(2)
+  })
+
+  it('attests the book as not observed instead of valid or invalid', () => {
+    const h = harness({ bookFeed: false })
+    h.ticker(1)
+    expect(h.persisted[0]!.marketQuality).toMatchObject({
+      schema_version: 'futures-market-quality-attestation.v1',
+      book_valid: null,
+      book_sequence_integrity: 'not_observed',
+    })
+  })
+
+  it('keeps the default (book enabled) behaviour for every other caller', () => {
+    const h = harness()
+    expect(h.sent.map((m) => JSON.parse(m).feed)).toEqual([
+      'trade',
+      'book',
+      'ticker',
+    ])
+    h.ticker(1)
+    // No book yet: the default collector is not live and asks for a snapshot.
+    expect(h.collector.status).toBe('stale')
+    expect(h.persisted[0]!.marketQuality).toMatchObject({
+      book_valid: false,
+      book_sequence_integrity: 'invalid_or_unproven',
+    })
+  })
+})

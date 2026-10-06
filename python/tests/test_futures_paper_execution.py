@@ -539,6 +539,29 @@ class FundingTests(Case):
         self.replay(config=cfg(time_stop_ms=10 * HOUR))
         self.assertEqual(len(events_of(self.path("account.sqlite"), "funding_accrued")), 1)
 
+    def test_deduped_capture_one_new_period_per_response_is_followed_incrementally(self):
+        # The capture process stores a funding response only when it adds a period,
+        # and then only the new period: one row per hour, never a re-listed history.
+        opened_at = self.funded_position("long")
+        store = AccountStore(self.path("live.sqlite"), cfg(time_stop_ms=10 * HOUR))
+        service = PaperExecutionService(self.market.path, self.verdicts.path, store, log=lambda line: None)
+        service.poll(now_ms=BASE + HOUR + 20 * SECOND)
+        self.market.funding(BASE + HOUR, BASE + 2 * HOUR, "3", BASE + 2 * HOUR + 500)
+        self.market.tickers([(BASE + 2 * HOUR + 10 * SECOND, "100010", "100011", "100010")])
+        service.poll(now_ms=BASE + 2 * HOUR + 20 * SECOND)
+        self.market.funding(BASE + 2 * HOUR, BASE + 3 * HOUR, "4", BASE + 3 * HOUR + 500)
+        self.market.tickers([(BASE + 3 * HOUR + 10 * SECOND, "100010", "100011", "100010")])
+        service.poll(now_ms=BASE + 3 * HOUR + 20 * SECOND)
+        service.close()
+        store.close()
+        live = events_of(self.path("live.sqlite"), "funding_accrued")
+        # every new period reached the engine in order, none skipped or repeated
+        self.assertEqual([body(event)["to_ms"] for event in live],
+                         [BASE + HOUR, BASE + 2 * HOUR, BASE + 3 * HOUR])
+        self.replay("replay.sqlite", config=cfg(time_stop_ms=10 * HOUR))
+        self.assertEqual(account_rows(self.path("live.sqlite")), account_rows(self.path("replay.sqlite")))
+        self.assertGreater(opened_at, BASE)
+
 
 class AccountBlockTests(Case):
     """Every state-changing event carries the running totals after it."""

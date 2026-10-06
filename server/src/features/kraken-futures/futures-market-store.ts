@@ -381,7 +381,49 @@ export class FuturesMarketStore {
     this.db.close()
   }
 
+  /** Stores every period of the response, even those already known. */
   appendFundingResponse(response: HistoricalFundingResponse): void {
+    this.writeFundingResponse(response, response.records)
+  }
+
+  /**
+   * Stores the response (raw bytes and hash kept as provenance) only when it
+   * adds knowledge: at least one `start_ms` not yet stored with the same rate.
+   * Only those periods get rows, so a re-fetch of known history writes nothing.
+   * A known period whose rate changed is new, conflicting evidence and is kept
+   * with its own `known_at`. Readers still pick the first-known row per
+   * `start_ms`, and new rows always get a higher rowid than every older one.
+   */
+  appendNewFundingKnowledge(response: HistoricalFundingResponse): {
+    stored: boolean
+    newPeriods: number
+  } {
+    if (this.readOnly)
+      throw new Error('Cannot append to a read-only market store.')
+    const known = new Set<string>()
+    try {
+      const rows = this.db
+        .prepare(
+          'SELECT DISTINCT start_ms, funding_rate FROM paper_futures_funding_periods',
+        )
+        .all() as Array<{ start_ms: number; funding_rate: string }>
+      for (const row of rows) known.add(`${row.start_ms}:${row.funding_rate}`)
+    } catch (error) {
+      if (!(error instanceof Error && error.message.includes('no such table')))
+        throw error
+    }
+    const fresh = response.records.filter(
+      (record) => !known.has(`${record.startMs}:${record.fundingRate}`),
+    )
+    if (fresh.length === 0) return { stored: false, newPeriods: 0 }
+    this.writeFundingResponse(response, fresh)
+    return { stored: true, newPeriods: fresh.length }
+  }
+
+  private writeFundingResponse(
+    response: HistoricalFundingResponse,
+    records: HistoricalFundingResponse['records'],
+  ): void {
     if (this.readOnly)
       throw new Error('Cannot append to a read-only market store.')
     const raw = response.rawResponse
@@ -412,7 +454,7 @@ export class FuturesMarketStore {
       const insert = this.db.prepare(
         'INSERT OR IGNORE INTO paper_futures_funding_periods VALUES(?,?,?,?,?,?)',
       )
-      for (const record of response.records) {
+      for (const record of records) {
         if (
           record.sha256 !== hash ||
           record.knownAtMs !== response.receivedAtMs ||
@@ -1151,7 +1193,8 @@ export class FuturesMarketStore {
            ORDER BY rowid DESC LIMIT 1`,
         )
         .get(sourceWatermark, receivedCutoff) as
-        { sequence: number; received_at: number } | undefined
+        | { sequence: number; received_at: number }
+        | undefined
       const pendingCount = Number(pending.count)
       const firstSequence =
         pending.first_sequence === null ? null : Number(pending.first_sequence)

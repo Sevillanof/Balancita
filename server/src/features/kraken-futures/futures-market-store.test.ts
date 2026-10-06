@@ -6,6 +6,7 @@ import { createHash } from 'node:crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { canonicalJson } from '../paper-futures/futures-canonical.ts'
 import { FuturesMarketStore } from './futures-market-store.ts'
+import { parseHistoricalFundingResponse } from './historical-funding.ts'
 
 const dirs: string[] = []
 function dbPath(): string {
@@ -759,6 +760,107 @@ describe('FuturesMarketStore official candles', () => {
       officialRevisionConflicts: [],
     })
     expect(store.officialCandleQuality(M, T + M).compared).toBe(2)
+    store.close()
+  })
+})
+
+describe('funding evidence dedupe', () => {
+  const HOUR = 3_600_000
+  const T0 = Date.parse('2026-10-05T00:00:00.000Z')
+  const response = (
+    periods: ReadonlyArray<readonly [number, string]>,
+    receivedAt: number,
+  ) =>
+    parseHistoricalFundingResponse(
+      JSON.stringify({
+        result: 'success',
+        serverTime: new Date(receivedAt).toISOString(),
+        rates: periods.map(([hour, rate]) => ({
+          timestamp: new Date(T0 + hour * HOUR).toISOString(),
+          fundingRate: Number(rate),
+          relativeFundingRate: 0.0001,
+        })),
+      }),
+      receivedAt,
+    )
+  const counts = (path: string) => {
+    const db = new DatabaseSync(path, { readOnly: true })
+    const row = (table: string) =>
+      Number(
+        (
+          db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as {
+            n: number
+          }
+        ).n,
+      )
+    const result = {
+      responses: row('paper_futures_funding_responses'),
+      periods: row('paper_futures_funding_periods'),
+    }
+    db.close()
+    return result
+  }
+
+  it('stores nothing for a repeated response and only the new periods otherwise', () => {
+    const path = dbPath()
+    const store = new FuturesMarketStore(path)
+    const base = [
+      [0, '0.1'],
+      [1, '0.2'],
+      [2, '0.3'],
+    ] as const
+    expect(
+      store.appendNewFundingKnowledge(response(base, T0 + 3 * HOUR + 1_000)),
+    ).toEqual({ stored: true, newPeriods: 3 })
+    expect(counts(path)).toEqual({ responses: 1, periods: 3 })
+
+    // Same periods re-fetched later: different bytes (serverTime), no news.
+    expect(
+      store.appendNewFundingKnowledge(response(base, T0 + 3 * HOUR + 301_000)),
+    ).toEqual({ stored: false, newPeriods: 0 })
+    expect(counts(path)).toEqual({ responses: 1, periods: 3 })
+
+    // One new period: exactly one new row, first-known rows are untouched.
+    expect(
+      store.appendNewFundingKnowledge(
+        response([...base, [3, '0.4']], T0 + 4 * HOUR + 1_000),
+      ),
+    ).toEqual({ stored: true, newPeriods: 1 })
+    expect(counts(path)).toEqual({ responses: 2, periods: 4 })
+    const known = store.fundingRecordsAsOf(Number.MAX_SAFE_INTEGER)
+    expect(known.map((r) => [r.startMs, r.knownAtMs])).toEqual([
+      [T0, T0 + 3 * HOUR + 1_000],
+      [T0 + HOUR, T0 + 3 * HOUR + 1_000],
+      [T0 + 2 * HOUR, T0 + 3 * HOUR + 1_000],
+      [T0 + 3 * HOUR, T0 + 4 * HOUR + 1_000],
+    ])
+    store.close()
+  })
+
+  it('keeps a changed rate for a known period as new, conflicting evidence', () => {
+    const path = dbPath()
+    const store = new FuturesMarketStore(path)
+    store.appendNewFundingKnowledge(response([[0, '0.1']], T0 + HOUR + 1_000))
+    expect(
+      store.appendNewFundingKnowledge(
+        response([[0, '0.5']], T0 + HOUR + 9_000),
+      ),
+    ).toEqual({ stored: true, newPeriods: 1 })
+    expect(counts(path)).toEqual({ responses: 2, periods: 2 })
+    expect(store.fundingForInterval(T0 + 10, T0 + 2 * HOUR)).toHaveLength(2)
+    store.close()
+  })
+
+  it('leaves appendFundingResponse (legacy single-process path) unchanged', () => {
+    const path = dbPath()
+    const store = new FuturesMarketStore(path)
+    const base = [
+      [0, '0.1'],
+      [1, '0.2'],
+    ] as const
+    store.appendFundingResponse(response(base, T0 + 2 * HOUR + 1_000))
+    store.appendFundingResponse(response(base, T0 + 2 * HOUR + 301_000))
+    expect(counts(path)).toEqual({ responses: 2, periods: 4 })
     store.close()
   })
 })

@@ -23,6 +23,16 @@ const OFFICIAL_LOOKBACK_MS: Readonly<Record<number, number>> = {
 }
 /** Poll this long after each minute boundary so the closed candle settled. */
 const OFFICIAL_POLL_OFFSET_MS = 3_000
+const HOUR_MS = 3_600_000
+/**
+ * Kraken lists the funding period starting at hh:00 (hourly cadence) at or
+ * shortly after the boundary; a response only adds knowledge when a new hour
+ * appeared. So poll once at start, then 30 s after each hour boundary, and
+ * retry every minute (up to 10 times) while that new period is not listed yet.
+ */
+const FUNDING_POLL_OFFSET_MS = 30_000
+const FUNDING_RETRY_MS = 60_000
+const FUNDING_MAX_RETRIES = 10
 
 export interface LiveCaptureOptions {
   readonly store: FuturesMarketStore
@@ -34,6 +44,7 @@ export interface LiveCaptureOptions {
   readonly reconnectMinMs?: number
   readonly reconnectMaxMs?: number
   readonly candleTickMs?: number
+  /** Fixed funding poll period; by default aligned to just after each hour. */
   readonly fundingPollMs?: number
   readonly catalogRetryMs?: number
   readonly officialCandlesFetch?: HistoricalFundingFetch
@@ -54,10 +65,11 @@ export function createLiveCapture(options: LiveCaptureOptions) {
   const { store } = options
   let collector: KrakenFuturesMarketCollector | undefined
   let candleTimer: ReturnType<typeof setInterval> | undefined
-  let fundingTimer: ReturnType<typeof setInterval> | undefined
+  let fundingTimer: ReturnType<typeof setTimeout> | undefined
   let catalogTimer: ReturnType<typeof setTimeout> | undefined
   let fundingClient:
-    ReturnType<typeof createHistoricalFundingClient> | undefined
+    | ReturnType<typeof createHistoricalFundingClient>
+    | undefined
   let officialTimer: ReturnType<typeof setTimeout> | undefined
   let officialClient: ReturnType<typeof createOfficialCandlesClient> | undefined
   let stopped = true
@@ -118,24 +130,53 @@ export function createLiveCapture(options: LiveCaptureOptions) {
       fetch: options.fundingFetch,
       clock,
     })
+    // Newest period start Kraken has listed so far (drives the post-boundary retry).
+    let latestFundingStart = 0
     const pollFunding = async (): Promise<void> => {
       try {
-        store.appendFundingResponse(await fundingClient!.fetch())
+        const response = await fundingClient!.fetch()
+        const { newPeriods } = store.appendNewFundingKnowledge(response)
+        if (newPeriods > 0) log(`funding +${newPeriods} period(s)`)
+        for (const record of response.records)
+          latestFundingStart = Math.max(latestFundingStart, record.startMs)
       } catch (error) {
         if (!(error instanceof Error && error.name === 'AbortError'))
           log(`funding unavailable: ${describe(error)}`)
       }
     }
-    fundingPoll = pollFunding()
-    fundingTimer = setInterval(() => {
-      fundingPoll = pollFunding()
-    }, options.fundingPollMs ?? 300_000)
+    let fundingRetries = 0
+    const scheduleFundingPoll = (): void => {
+      if (stopped) return
+      const now = clock()
+      const currentHour = now - (now % HOUR_MS)
+      let delay: number
+      if (options.fundingPollMs !== undefined) delay = options.fundingPollMs
+      else if (
+        latestFundingStart < currentHour &&
+        now - currentHour < 10 * 60_000 &&
+        fundingRetries < FUNDING_MAX_RETRIES
+      ) {
+        // Just after a boundary and the new hour is not listed yet.
+        fundingRetries += 1
+        delay = FUNDING_RETRY_MS
+      } else {
+        fundingRetries = 0
+        delay = HOUR_MS - (now % HOUR_MS) + FUNDING_POLL_OFFSET_MS
+      }
+      fundingTimer = setTimeout(() => {
+        fundingPoll = pollFunding().then(scheduleFundingPoll)
+      }, delay)
+    }
+    fundingPoll = pollFunding().then(scheduleFundingPoll)
     collector = new KrakenFuturesMarketCollector({
       clock,
       random: Math.random,
       makeSocket: options.makeSocket,
       setTimeout,
       clearTimeout,
+      // Nothing downstream consumes the order book (execution fills from the
+      // ticker, verdicts from official candles): do not subscribe to it.
+      bookFeed: false,
       staleAfterMs: options.staleAfterMs,
       reconnectMinMs: options.reconnectMinMs,
       reconnectMaxMs: options.reconnectMaxMs,
@@ -199,7 +240,7 @@ export function createLiveCapture(options: LiveCaptureOptions) {
       stopped = true
       if (catalogTimer !== undefined) clearTimeout(catalogTimer)
       if (candleTimer !== undefined) clearInterval(candleTimer)
-      if (fundingTimer !== undefined) clearInterval(fundingTimer)
+      if (fundingTimer !== undefined) clearTimeout(fundingTimer)
       if (officialTimer !== undefined) clearTimeout(officialTimer)
       collector?.stop()
       fundingClient?.close()

@@ -140,8 +140,10 @@ export function decodeProviderJson(
   })
 }
 
-export function marketSubscriptions(): string[] {
-  return (['trade', 'book', 'ticker'] as const).map((feed) =>
+export function marketSubscriptions(
+  feeds: readonly MarketFeed[] = ['trade', 'book', 'ticker'],
+): string[] {
+  return feeds.map((feed) =>
     JSON.stringify({
       event: 'subscribe',
       feed,
@@ -249,9 +251,12 @@ interface MarketEnvelope {
     readonly epoch: number
     readonly feed_sequence: number
     readonly received_at: number
-    readonly book_valid: boolean
+    /** `null` and `not_observed`: the book feed was never subscribed to. */
+    readonly book_valid: boolean | null
     readonly book_sequence_integrity:
-      'observed_contiguous' | 'invalid_or_unproven'
+      | 'observed_contiguous'
+      | 'invalid_or_unproven'
+      | 'not_observed'
   }
 }
 
@@ -565,6 +570,13 @@ export interface FuturesCollectorOptions {
     policyVersion: string
   }) => void
   readonly onTrade?: (event: TradeEvent) => void
+  /**
+   * Subscribe to and reconstruct the order book (default true). When false the
+   * collector only follows trade and ticker: freshness is driven by the ticker
+   * alone, no book snapshot is ever requested, and event attestations report
+   * the book as not observed.
+   */
+  readonly bookFeed?: boolean
   readonly staleAfterMs?: number
   readonly reconnectMinMs?: number
   readonly reconnectMaxMs?: number
@@ -619,6 +631,10 @@ export class KrakenFuturesMarketCollector {
       this.limits.stale < 1
     )
       throw new RangeError('Invalid futures collector timing bounds.')
+  }
+
+  private get bookEnabled(): boolean {
+    return this.options.bookFeed !== false
   }
 
   get status(): MarketStatus {
@@ -737,10 +753,18 @@ export class KrakenFuturesMarketCollector {
   tick(): MarketStatus {
     if (this.stopped) return this.state
     const now = this.options.clock()
-    const bookStale =
-      this.lastBookAt === null || now - this.lastBookAt > this.limits.stale
     const tickerStale =
       this.lastTickerAt === null || now - this.lastTickerAt > this.limits.stale
+    if (!this.bookEnabled) {
+      if (tickerStale) this.setState('stale', 'ticker_stale')
+      else {
+        this.reconnectAttempt = 0
+        this.setState('live')
+      }
+      return this.state
+    }
+    const bookStale =
+      this.lastBookAt === null || now - this.lastBookAt > this.limits.stale
     if (bookStale || tickerStale || !this.bookValid) {
       if (bookStale) {
         this.bookValid = false
@@ -781,7 +805,10 @@ export class KrakenFuturesMarketCollector {
       socket.onopen = () => {
         if (this.stopped || this.socket !== socket) return
         this.setState('syncing')
-        for (const message of marketSubscriptions()) socket.send(message)
+        for (const message of marketSubscriptions(
+          this.bookEnabled ? undefined : ['trade', 'ticker'],
+        ))
+          socket.send(message)
       }
       socket.onmessage = ({ data }) => {
         if (this.stopped || this.socket !== socket) return
@@ -1055,8 +1082,10 @@ export class KrakenFuturesMarketCollector {
           epoch: this.epoch,
           feed_sequence: event.seq,
           received_at: receivedAt,
-          book_valid: quality.valid,
-          book_sequence_integrity: quality.sequenceIntegrity,
+          book_valid: this.bookEnabled ? quality.valid : null,
+          book_sequence_integrity: this.bookEnabled
+            ? quality.sequenceIntegrity
+            : ('not_observed' as const),
         },
       }
       const outcome = this.persistRaw(integrityEvent, text)
@@ -1094,7 +1123,8 @@ export class KrakenFuturesMarketCollector {
   }
 
   private requestBookSnapshot(): void {
-    if (!this.socket || this.bookResnapshotRequested) return
+    if (!this.bookEnabled || !this.socket || this.bookResnapshotRequested)
+      return
     this.bookResnapshotRequested = true
     this.socket.send(
       JSON.stringify({
