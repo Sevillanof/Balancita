@@ -1,9 +1,13 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import {
+  checkDevPorts,
+  describeChildExit,
   devChildSpecs,
   devProxyConfig,
+  planStartup,
   resolvePython,
+  signalChild,
 } from './dev-provider-env.mjs'
 
 const root = '/repo'
@@ -401,5 +405,141 @@ describe('devProxyConfig', () => {
       proxy['/api'] &&
         Object.keys(proxy).every((key) => key.startsWith('/api')),
     )
+  })
+})
+
+describe('server/.env is optional', () => {
+  const flag = '--env-file-if-exists=.env'
+  const watched = ['server', 'capture', 'live']
+  const specsWith = (exists, env = {}) =>
+    devChildSpecs({ root, env, allowedFlags: noFlags, exists })
+
+  it('omits the env-file flag when server/.env is missing (it crashes --watch)', () => {
+    const seen = []
+    const specs = specsWith((path) => (seen.push(path), false))
+    assert.deepEqual(seen, ['/repo/server/.env'])
+    for (const spec of specs.filter((s) => watched.includes(s.name)))
+      assert.ok(!spec.args.includes(flag), spec.name)
+  })
+
+  it('adds the flag to the node children of server/ when the file exists', () => {
+    const specs = specsWith(() => true)
+    for (const spec of specs.filter((s) => watched.includes(s.name)))
+      assert.equal(spec.args[0], flag, spec.name)
+    assert.ok(!specs.find((s) => s.name === 'vite').args.includes(flag))
+  })
+
+  it('applies to the single-process rollback child too', () => {
+    const none = specsWith(() => false, { DEV_LIVE_SINGLE_PROCESS: '1' })
+    assert.ok(!none.find((s) => s.name === 'live').args.includes(flag))
+    const some = specsWith(() => true, { DEV_LIVE_SINGLE_PROCESS: '1' })
+    assert.ok(some.find((s) => s.name === 'live').args.includes(flag))
+  })
+})
+
+describe('port checks before startup', () => {
+  const taken =
+    (...ports) =>
+    async (port) =>
+      !ports.includes(port)
+
+  it('passes when every dev port is free and probes the right hosts', async () => {
+    const calls = []
+    const result = await checkDevPorts({
+      probe: async (port, host) => (calls.push([port, host]), true),
+    })
+    assert.equal(result.ok, true)
+    assert.deepEqual(calls, [
+      [5173, 'localhost'],
+      [8787, '127.0.0.1'],
+      [8788, '127.0.0.1'],
+      [8789, '127.0.0.1'],
+    ])
+  })
+
+  it('names the port, the child and how to free it', async () => {
+    const result = await checkDevPorts({ probe: taken(8789) })
+    assert.equal(result.ok, false)
+    assert.equal(result.conflicts.length, 1)
+    const { message } = result.conflicts[0]
+    assert.match(message, /8789/)
+    assert.match(message, /live/)
+    assert.match(message, /lsof -ti tcp:8789 \| xargs kill/)
+  })
+
+  it('reports every conflict', async () => {
+    const result = await checkDevPorts({ probe: taken(5173, 8787) })
+    assert.deepEqual(
+      result.conflicts.map((c) => c.port),
+      [5173, 8787],
+    )
+  })
+
+  it('planStartup exits non-zero without starting on a conflict', async () => {
+    const plan = await planStartup({ probe: taken(8789) })
+    assert.equal(plan.start, false)
+    assert.equal(plan.exitCode, 1)
+    assert.equal(plan.messages.length, 1)
+    assert.deepEqual(await planStartup({ probe: taken() }), {
+      start: true,
+      messages: [],
+    })
+  })
+
+  it('the default probe sees a real listener', async () => {
+    const { createServer } = await import('node:net')
+    const holder = createServer()
+    await new Promise((ok) => holder.listen(0, '127.0.0.1', ok))
+    const { port } = holder.address()
+    const { canListen } = await import('./dev-provider-env.mjs')
+    assert.equal(await canListen(port, '127.0.0.1'), false)
+    await new Promise((ok) => holder.close(ok))
+    assert.equal(await canListen(port, '127.0.0.1'), true)
+  })
+})
+
+describe('child exit and shutdown', () => {
+  it('states that the browser may be talking to another process on EADDRINUSE', () => {
+    const text = describeChildExit({
+      name: 'live',
+      code: 1,
+      signal: null,
+      sawAddrInUse: true,
+    })
+    assert.match(text, /EADDRINUSE/)
+    assert.match(text, /8789/)
+    assert.match(text, /browser may be talking to/)
+    assert.doesNotMatch(
+      describeChildExit({ name: 'live', code: 1, sawAddrInUse: false }),
+      /EADDRINUSE/,
+    )
+  })
+
+  it('signals the whole process group on POSIX', () => {
+    const calls = []
+    signalChild({ pid: 42, kill: () => calls.push('direct') }, 'SIGTERM', {
+      platform: 'darwin',
+      killGroup: (...a) => calls.push(a),
+    })
+    assert.deepEqual(calls, [[-42, 'SIGTERM']])
+  })
+
+  it('falls back to the direct kill when the group is gone, and on win32', () => {
+    const calls = []
+    const child = { pid: 42, kill: (s) => calls.push(['direct', s]) }
+    signalChild(child, 'SIGKILL', {
+      platform: 'linux',
+      killGroup: () => {
+        throw new Error('ESRCH')
+      },
+    })
+    signalChild(child, 'SIGTERM', {
+      platform: 'win32',
+      killGroup: () => assert.fail('no group kill on win32'),
+    })
+    assert.deepEqual(calls, [
+      ['direct', 'SIGKILL'],
+      ['direct', 'SIGTERM'],
+    ])
   })
 })

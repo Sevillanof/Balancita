@@ -200,6 +200,17 @@ Every sustained live run of the single process surfaced a new engine defect: the
   - Mutations caught: observed-wins precedence and disabled suppression.
   - Browser: 500 contiguous 1 m candles (about 6 h) on bootstrap; the no-Python notice rendered.
 
+- 2026-10-06 Dev startup hardening (delegated writer, Sonnet; reviewed by the parent). On the user's macOS machine the terminal showed no analyses because:
+  - an orphaned pre-PS-05b gateway still held port 8789 (health reported `engine_not_running`);
+  - the new gateway then could not start without `server/.env`, because `--env-file-if-exists=.env` plus `--watch` dies with `ENOENT ... watch '.../server/.env'` on Node 22.
+  - Fixes in `scripts/dev-provider-env.mjs` and `scripts/dev.mjs`:
+    - The env-file flag is only added when `server/.env` exists.
+    - `planStartup` refuses to start, exit 1 with per-port `lsof` hints, when 5173/8787/8788/8789 are busy.
+    - Children run in their own process groups on POSIX, and shutdown signals the group, so Ctrl+C leaves no orphans.
+    - A child that hits `EADDRINUSE` gets a loud message.
+  - Evidence: `scripts/*.node-test.mjs` 45/45. Real runs: without `.env`, health returned `running` from `paper-execution-d`; with 8789 occupied, dev refused to start; SIGINT left no ports or children behind.
+  - Limits: a SIGKILL of `dev.mjs` itself still orphans its children.
+
 ## Next step
 
 - PS-04: news process N wired into C, with Gemini as veto/confidence stored per item. Or PS-05 first: paper execution D consuming fresh verdicts (`knowledge_lag_ms` below a threshold). The order is the user's call.

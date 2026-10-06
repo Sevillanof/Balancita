@@ -37,6 +37,18 @@ prefixed log:
 | `verdict` | -    | Python verdict service C: reads the market DB read-only and writes entry verdicts to `server/data/dev-live/futures-verdicts.sqlite` (sole writer; needs Python 3.9+, see below)                                                            |
 | `paper`   | -    | Python paper execution D: reads the market and verdicts DBs read-only and writes the paper account (hash-chained events plus snapshots) to `server/data/dev-live/futures-paper-account.sqlite` (sole writer; needs Python 3.9+, see below) |
 
+`server/.env` is optional: the dev run adds `--env-file-if-exists=.env` only
+when the file exists (with `--watch`, Node crashes on a missing watched file).
+Create it if you need `GEMINI_API_KEY` or other settings; restart after
+creating it.
+
+Before spawning anything `pnpm run dev` checks ports 5173, 8787, 8788 and 8789.
+If one is taken (usually a stale `pnpm run dev` from another checkout) it prints
+the port and the child and exits with code 1 without starting anything. Free
+the port with `lsof -ti tcp:<port> | xargs kill` (macOS/Linux) and retry. On
+macOS/Linux each child runs in its own process group and Ctrl+C or SIGTERM
+stops the whole group, so no orphan keeps a port.
+
 ### Switching between MOCK and real data
 
 - **Futures terminal** (`/terminal`): choose "MOCK" or "Real (paper, Kraken
