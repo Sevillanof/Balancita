@@ -35,3 +35,7 @@ server/data/
 *.njsproj
 *.sln
 *.sw?
+
+# Python bytecode caches
+__pycache__/
+*.pyc
