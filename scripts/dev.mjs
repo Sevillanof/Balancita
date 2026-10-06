@@ -27,6 +27,7 @@ const optionalChildren = new Set([
   'verdict',
   'paper',
   'scores',
+  'news',
   'llm',
   'q',
 ])
@@ -36,6 +37,7 @@ const exitLabels = {
   verdict: 'The verdict service (new verdicts)',
   paper: 'Paper execution (new paper fills)',
   scores: 'The forecast scorer (new forecast scores)',
+  news: 'The news process (new news items and analyses)',
   llm: 'The llama-server model (new LLM decisions)',
   q: 'The LLM decision service (new LLM decisions)',
 }

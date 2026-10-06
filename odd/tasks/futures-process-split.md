@@ -36,7 +36,7 @@ Every sustained live run of the single process surfaced a new engine defect: the
 - [x] PS-02 [S] Capture hot-path leftovers (remaining book sorts) and trivial market DB restore.
 - [x] PS-03a [M] Official Kraken candles as the canonical series: capture backfills and polls closed 1 m / 5 m candles from the public charts API into append-only market DB tables (raw response + hash, `known_at` for as-of reads); observed-vs-official quality report.
 - [x] PS-03b [M] Verdict service C: pure Python function over official candles (C25-C28 entry proposals only; exits stay with D), regime chained in the verdicts DB, writes verdicts on candle close; double replay gives identical verdicts.
-- [ ] PS-04 [M] News process N wired into C (Gemini as veto/confidence, stored per item).
+- [x] PS-04 [M] News process N wired into C (Gemini as veto/confidence, stored per item).
 - [x] PS-05a [L] Paper execution D (Python, own account DB, single writer): consumes fresh verdicts, ticker and funding read-only; top-of-ticker taker fills; exits via `propose` with the position; append-only hash-chained events plus snapshots; live run equals replay.
 - [x] PS-05b [M] Gateway serves D's account, position, fills and verdict analyses read-only, so the terminal shows the engine instead of "engine off".
 - [x] PS-05c [S] Fix the funding-pause overwrite in the legacy runtime (`python/balancita_engine/futures_runtime.py:2393-2404`), with a test. The legacy runtime is still used by the MOCK local terminal.
@@ -282,6 +282,20 @@ Every sustained live run of the single process surfaced a new engine defect: the
   - CLI: `--probe` (the guide's step-4 check, with exit codes) and `--ask <id>`.
   - Evidence: 68 tests, also on 3.9; `scripts` 60/60; mutations caught. Live run with real capture and verdicts and a fake `llama-server`: Q skipped the backfill and decided one fresh bucket; `--once` made no model calls. No real model was run here (no GPU).
   - Next: Q2 scoring and calibration with E's outcomes; Q3 D consuming Q decisions.
+
+- 2026-10-06 Batch (delegated writers A, B and C, Sonnet; reviewed by the parent).
+  - Capture writer lock: `<db>.writer.lock` holds pid, start time and token. A second writer exits with code 3. Stale and reused-pid locks are recovered, and readers are unaffected.
+  - `canonicalJson` is consolidated to the allocation-free sort, with a randomized equivalence test against the old algorithm (0e8cf62).
+  - C27 fix in place: `calculate_features` emits `donchian_mid20` (features v2, verdict config v3; the legacy runtime keeps v1). D rejects C27 entries without a numeric invalidation level and records unparseable levels instead of swallowing them (6897f88).
+  - The C25 invalid-on-arrival figure was not measured, for lack of data.
+  - PS-04, news process N: `futures_news.py` is the single writer of `futures-news.sqlite`.
+    - It polls the RSS sources in `config/news-sources.json` (the legacy SEC/ECB/Fed/The Block feeds plus four crypto outlets), sanitizes and dedupes them.
+    - Each item is analyzed by local Qwen through Q's provider, with `news_relevance_btc` and `news_direction` (scope `news`).
+    - Model down means the item stays pending for 30 min, then `skipped_stale`.
+    - `news_features(t)` returns no-lookahead 1 h / 4 h aggregates for C. C does not consume them yet.
+    - It runs as an optional dev child (`NEWS_ENABLED=0` turns it off).
+  - Legacy Gemini news polling in the `server` child stays off by default and is not retired here.
+  - The container egress proxy blocked every real feed, so the Mac must confirm which feeds work.
 
 ## Next step
 

@@ -196,6 +196,43 @@ residual risk: a model can still recognize a market episode from its numeric
 shape, so decisions on past data are not proof of skill; judge them only on
 data after the model's training cutoff and against the stored calibration.
 
+### News process (`news`)
+
+`pnpm run dev` starts the Python news process N (`news`) whenever Python is
+available (`NEWS_ENABLED=0` turns it off). It polls the public RSS/Atom feeds in
+`config/news-sources.json` (every 5 minutes per feed, with a timeout, a 2 MB cap
+and backoff after failures; add feeds with `NEWS_EXTRA_RSS_FEEDS`, the same
+`id|label|https url|license` format as the legacy news feature) and is the single
+writer of `server/data/dev-live/futures-news.sqlite` (append-only). Each item is
+stored with its source, URL, sanitized title and summary, published time,
+`received_at` and a dedupe hash. The legacy Gemini news polling in the `server`
+child is untouched and still off unless you enable it; N never calls Gemini.
+
+Ingest never needs the model. When the `llm` child is enabled (same
+`DECISIONS_ENABLED` and local-model rules as above) `news` is started with
+`--analyze` and asks the local Qwen, through Q's own provider (loopback only,
+grammar plus logprobs), the two `news` questions of `config/decision-questions.json`
+about each new item: `news_relevance_btc` (none, low, medium, high) and
+`news_direction` (bullish, bearish, neutral). The probabilities, chosen option,
+confidence, prompt and question versions and model identity are stored per
+`(item, question, version)`. News is never sent to a remote API. If the model is down the
+items stay pending and are retried only while they were received within the last 30
+minutes; older ones get an explicit `skipped_stale` row and are never asked, so there
+is no catch-up storm.
+
+```bash
+# one polling round without the model (works anywhere with internet access)
+cd server && PYTHONPATH=../python python3 -m balancita_engine.futures_news \
+  --once --news-db ./data/dev-live/futures-news.sqlite
+# what the verdict service will be able to read at a decision time (epoch ms)
+PYTHONPATH=../python python3 -m balancita_engine.futures_news \
+  --news-db ./data/dev-live/futures-news.sqlite --features-at $(date +%s)000
+```
+
+`news_features(db, t)` returns, for the last 1 h and 4 h, `items`, `count_relevant`,
+`relevance_mass`, `weighted_sentiment` and `max_relevance` using only rows received
+and analyzed at or before `t` (no lookahead). Process C does not read them yet.
+
 ### Offline behavior
 
 Without network access the `capture` process (and the Real source) cannot reach

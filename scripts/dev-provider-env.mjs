@@ -438,6 +438,11 @@ const CAPTURE_ARGS = ['--experimental-strip-types', 'src/app/capture-main.ts']
  *   DB, sole writer of the latter),
  * - scores: Python forecast scorer E (market + verdicts DBs read-only -> scores
  *   DB, sole writer of the latter),
+ * - news (optional): Python news process N (public RSS -> news DB, sole writer
+ *   of the latter; its own `command` instead of node). Ingest needs no model;
+ *   it analyses with the local model (`--analyze`) only when llm is enabled,
+ *   under the same DECISIONS_ENABLED and model rules. `NEWS_ENABLED=0` turns
+ *   it off,
  * - llm (optional): `llama-server` on loopback, only with a resolved binary,
  * - q (optional): Python LLM decisions Q (market + verdicts DBs read-only ->
  *   decisions DB, sole writer of the latter), started together with llm.
@@ -499,6 +504,11 @@ export function devChildSpecs({
   const accountDb = liveDb('futures-paper-account.sqlite')
   const scoresDb = liveDb('futures-forecast-scores.sqlite')
   const decisionsDb = liveDb('futures-llm-decisions.sqlite')
+  const newsDb = liveDb('futures-news.sqlite')
+  const llmOn =
+    Boolean(python?.command && llm?.command) &&
+    (env.DECISIONS_ENABLED ?? '').trim() !== '0' &&
+    Boolean(resolveLlamaModel({ env, findModel }).args)
   return [
     ...common,
     {
@@ -527,8 +537,37 @@ export function devChildSpecs({
       },
     },
     ...(python?.command ? pythonChildren() : []),
+    ...(python?.command && (env.NEWS_ENABLED ?? '').trim() !== '0'
+      ? newsChildren()
+      : []),
     ...(python?.command && llm?.command ? llmChildren() : []),
   ]
+
+  function newsChildren() {
+    return [
+      {
+        name: 'news',
+        command: python.command,
+        cwd: serverCwd,
+        args: [
+          ...python.prefixArgs,
+          '-m',
+          'balancita_engine.futures_news',
+          '--news-db',
+          newsDb,
+          // The news is only ever sent to the local model, on the same port as q.
+          ...(llmOn ? ['--analyze'] : []),
+        ],
+        env: {
+          ...env,
+          ...(llmOn ? { LLAMA_PORT: String(llamaPort(env)) } : {}),
+          PYTHONPATH: [`${root}/python`, env.PYTHONPATH]
+            .filter(Boolean)
+            .join(delimiter),
+        },
+      },
+    ]
+  }
 
   function llmChildren() {
     const port = String(llamaPort(env))

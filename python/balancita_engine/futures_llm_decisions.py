@@ -133,6 +133,9 @@ def text_hash(text):
 _ID = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 _OPTION_ID = re.compile(r"^[a-z0-9_]{1,32}$")
 QUESTION_TYPES = ("choice", "bool", "score")
+# ``verdict`` (default, the only scope Q asks) questions describe a verdict STATE; ``news`` questions
+# are asked by the news process N about one news item (its text is the state), never by Q.
+QUESTION_SCOPES = ("verdict", "news")
 
 
 def question_hash(question):
@@ -154,12 +157,19 @@ def validate_question(question):
         raise ValueError("{}: type must be one of {}".format(name, ", ".join(QUESTION_TYPES)))
     if not isinstance(question.get("instruction"), str) or not question["instruction"].strip():
         raise ValueError("{}: instruction is required".format(name))
+    scope = question.get("scope", "verdict")
+    if scope not in QUESTION_SCOPES:
+        raise ValueError("{}: scope must be one of {}".format(name, ", ".join(QUESTION_SCOPES)))
     fields = question.get("state_fields")
-    if not isinstance(fields, list) or not fields:
-        raise ValueError("{}: state_fields must be a non-empty list".format(name))
-    for field in fields:
-        if field not in STATE_FIELDS:
-            raise ValueError("{}: unknown state field {!r}".format(name, field))
+    if scope == "news":
+        if fields:
+            raise ValueError("{}: a news question carries the item text, not state_fields".format(name))
+    else:
+        if not isinstance(fields, list) or not fields:
+            raise ValueError("{}: state_fields must be a non-empty list".format(name))
+        for field in fields:
+            if field not in STATE_FIELDS:
+                raise ValueError("{}: unknown state field {!r}".format(name, field))
     if kind == "bool":
         if question.get("options"):
             raise ValueError("{}: a bool question has no options (A) true B) false)".format(name))
@@ -183,8 +193,12 @@ def validate_question(question):
     return question
 
 
-def load_questions(path=None):
-    """The catalog as ``{id: question}``; every question is validated."""
+def load_questions(path=None, scope="verdict"):
+    """The catalog as ``{id: question}``; every question is validated.
+
+    ``scope`` filters by the question's scope (``verdict`` by default, so Q never asks a news
+    question); ``None`` returns every scope.
+    """
     with open(path or QUESTIONS_PATH) as handle:
         body = json.load(handle)
     questions = {}
@@ -193,6 +207,8 @@ def load_questions(path=None):
         if question["id"] in questions:
             raise ValueError("duplicate question id {}".format(question["id"]))
         questions[question["id"]] = question
+    if scope is not None:
+        questions = {k: v for k, v in questions.items() if v.get("scope", "verdict") == scope}
     return questions
 
 

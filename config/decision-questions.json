@@ -1,6 +1,6 @@
 {
   "version": "decision-questions.v1",
-  "note": "Question catalog for LLM decisions (process Q). Callers use ids only. Changing any text of a question requires bumping its version, because a rewritten question is a different question and its calibration no longer applies; python/tests/test_futures_llm_decisions.py pins a hash per id@version. Each question declares the STATE fields it needs (names from the registry STATE_FIELDS in futures_llm_decisions.py); adding a question, any number of options or any of the three types (choice, bool, score) needs no code change.",
+  "note": "Question catalog for LLM decisions (process Q). Callers use ids only. Changing any text of a question requires bumping its version, because a rewritten question is a different question and its calibration no longer applies; python/tests/test_futures_llm_decisions.py pins a hash per id@version. Each question declares the STATE fields it needs (names from the registry STATE_FIELDS in futures_llm_decisions.py); adding a question, any number of options or any of the three types (choice, bool, score) needs no code change. Questions with \"scope\": \"news\" are asked by the news process N (python/balancita_engine/futures_news.py) about one news item, whose sanitized headline and summary are the STATE; they have no state_fields and Q never asks them (Q loads only the default \"verdict\" scope). The same id/version rules and pins apply (python/tests/test_futures_news.py).",
   "questions": [
     {
       "id": "direction_1h",
@@ -31,6 +31,56 @@
         "atr_bp",
         "volume_rel",
         "proposals"
+      ]
+    },
+    {
+      "id": "news_relevance_btc",
+      "version": 1,
+      "scope": "news",
+      "type": "score",
+      "instruction": "Read the news item above. How relevant is it to the price of Bitcoin over the next few hours?",
+      "options": [
+        {
+          "id": "none",
+          "description": "no plausible effect on the Bitcoin price",
+          "value": 0.0
+        },
+        {
+          "id": "low",
+          "description": "a minor or indirect effect",
+          "value": 0.2
+        },
+        {
+          "id": "medium",
+          "description": "a clear effect on crypto markets",
+          "value": 0.6
+        },
+        {
+          "id": "high",
+          "description": "a major and immediate effect on Bitcoin",
+          "value": 1.0
+        }
+      ]
+    },
+    {
+      "id": "news_direction",
+      "version": 1,
+      "scope": "news",
+      "type": "choice",
+      "instruction": "Read the news item above. Over the next few hours, is its likely effect on crypto prices bullish, bearish or neutral?",
+      "options": [
+        {
+          "id": "bullish",
+          "description": "likely to push crypto prices up"
+        },
+        {
+          "id": "bearish",
+          "description": "likely to push crypto prices down"
+        },
+        {
+          "id": "neutral",
+          "description": "no clear direction, or no effect"
+        }
       ]
     }
   ]
