@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest'
+import { createHash } from 'node:crypto'
+import { describe, expect, it, vi } from 'vitest'
 import {
   decodeProviderJson,
   KrakenFuturesMarketCollector,
@@ -437,5 +438,179 @@ describe('Kraken Futures market decoding', () => {
     expect(collector.metrics.persistenceErrorCount).toBe(1)
     expect(closes).toBe(1)
     expect(states.at(-1)).toMatch(/market_persistence_failed:disk full/)
+  })
+})
+
+type GoldenSocket = {
+  onopen: (() => void) | null
+  onmessage: ((event: { data: unknown }) => void) | null
+  onerror: (() => void) | null
+  onclose: (() => void) | null
+  send: (message: string) => void
+  close: () => void
+}
+
+/**
+ * Drives a collector with a deterministic snapshot/delta/ticker/trade sequence
+ * (including deletes of the best level, a crossing delta, a sequence gap and
+ * snapshot recoveries). Without a store, persistence is a stub.
+ */
+function driveGoldenSequence(options: {
+  store?: FuturesMarketStore
+  observe: boolean
+}): unknown[] {
+  let now = 1_000_000
+  let socket!: GoldenSocket
+  const observed: unknown[] = []
+  const collector = new KrakenFuturesMarketCollector({
+    clock: () => now,
+    random: () => 0.5,
+    makeSocket: () =>
+      (socket = {
+        onopen: null,
+        onmessage: null,
+        onerror: null,
+        onclose: null,
+        send: () => {},
+        close: () => {},
+      }),
+    setTimeout: () => 0 as unknown as ReturnType<typeof setTimeout>,
+    clearTimeout: () => {},
+    persist: (event) => options.store?.append(event),
+    persistGap: (gap) => options.store?.appendGap(gap),
+    staleAfterMs: 1_000_000,
+  })
+  collector.start()
+  socket.onopen!()
+  let state = 12345
+  const random = (n: number) => {
+    state = (state * 1103515245 + 12345) % 2147483648
+    return Math.floor(state / 65536) % n
+  }
+  const bidLadder = ['90', '95.5', '98.125', '99', '99.25', '99.5', '100.0625']
+  const askLadder = [
+    '101',
+    '101.5',
+    '102.25',
+    '103',
+    '105.125',
+    '110',
+    '9007199254740993.12',
+  ]
+  let seq = 100
+  const send = (value: Record<string, unknown>) => {
+    now += 7
+    socket.onmessage!({ data: JSON.stringify(value) })
+    if (!options.observe) return
+    const book = collector.book
+    observed.push({
+      bids: book.bids,
+      asks: book.asks,
+      valid: book.valid,
+      eligible: book.executableEligible,
+      integrity: book.sequenceIntegrity,
+      sequence: book.sequence,
+      status: collector.status,
+      gaps: collector.metrics.gapCount,
+    })
+  }
+  const snapshot = () =>
+    send({
+      feed: 'book_snapshot',
+      product_id: 'PF_XBTUSD',
+      seq: (seq += 1),
+      timestamp: now,
+      bids: [...bidLadder].reverse().map((p) => ({ price: Number(p), qty: 1 })),
+      asks: askLadder.slice(0, 5).map((p) => ({ price: Number(p), qty: 2 })),
+    })
+  const ticker = (n: number) =>
+    send({
+      feed: 'ticker',
+      product_id: 'PF_XBTUSD',
+      time: now,
+      seq: n,
+      bid: 100,
+      ask: 101,
+      last: 100,
+      markPrice: 100,
+      index: 100,
+      suspended: false,
+    })
+  const delta = (side: string, price: string, qty: number) =>
+    send({
+      feed: 'book',
+      product_id: 'PF_XBTUSD',
+      seq: (seq += 1),
+      timestamp: now,
+      side,
+      price: Number(price),
+      qty,
+    })
+  snapshot()
+  ticker(1)
+  for (let i = 0; i < 400; i += 1) {
+    const buy = random(2) === 0
+    const ladder = buy ? bidLadder : askLadder
+    const price = ladder[random(ladder.length)]!
+    delta(buy ? 'buy' : 'sell', price, random(3) === 0 ? 0 : 1 + random(5))
+    if (i % 25 === 0) ticker(2 + i)
+    if (i === 150) delta('buy', '101.5', 3) // crosses the book -> invalid
+    if (i === 160 || i === 330) snapshot()
+    if (i === 250) {
+      seq += 3 // sequence gap -> invalid until snapshot
+      delta('sell', '104', 1)
+      snapshot()
+    }
+    if (i % 40 === 0)
+      send({
+        feed: 'trade',
+        product_id: 'PF_XBTUSD',
+        uid: `golden-${i}`,
+        side: 'buy',
+        type: 'fill',
+        seq: 5_000 + i,
+        time: now,
+        qty: 0.25,
+        price: 100.5,
+      })
+  }
+  return observed
+}
+
+describe('capture hot path equivalence', () => {
+  const sha = (value: unknown) =>
+    createHash('sha256').update(JSON.stringify(value)).digest('hex')
+
+  // Golden digests were recorded on the pre-optimisation implementation
+  // (full-book sorts per delta, double canonicalisation per append).
+  it('keeps book state per message identical over a recorded sequence', () => {
+    const observed = driveGoldenSequence({ observe: true })
+    expect(observed.length).toBeGreaterThan(400)
+    expect(sha(observed)).toBe(
+      '1b98e3334ec4c1b6bde8564c714c27a42602736b803bc885e9bf05ef0dadfdf2',
+    )
+  })
+
+  it('persists byte-identical rows for the same recorded sequence', () => {
+    const store = new FuturesMarketStore(':memory:')
+    driveGoldenSequence({ store, observe: false })
+    const events = store.eventsAsOf(Number.MAX_SAFE_INTEGER) as unknown[]
+    const gaps = store.gapsAsOf(Number.MAX_SAFE_INTEGER) as unknown[]
+    expect(events.length).toBeGreaterThan(400)
+    expect(gaps.length).toBeGreaterThan(1)
+    expect(sha({ events, gaps })).toBe(
+      'a2846da19dbfacecfbe82e5c7aa33c11068eadb6eda5b9d28a5ff30fa4605403',
+    )
+  })
+
+  it('never sorts book levels while applying a delta', () => {
+    const sortSpy = vi.spyOn(Array.prototype, 'sort')
+    try {
+      driveGoldenSequence({ observe: false })
+      // Only the 4 snapshots (2 sorts each) may sort; 400+ deltas must not.
+      expect(sortSpy.mock.calls.length).toBeLessThanOrEqual(8)
+    } finally {
+      sortSpy.mockRestore()
+    }
   })
 })

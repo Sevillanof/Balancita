@@ -2,7 +2,9 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import { afterEach, describe, expect, it } from 'vitest'
+import { createHash } from 'node:crypto'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { canonicalJson } from '../paper-futures/futures-canonical.ts'
 import { FuturesMarketStore } from './futures-market-store.ts'
 
 const dirs: string[] = []
@@ -189,7 +191,9 @@ describe('FuturesMarketStore', () => {
     store.close()
     const raw = new DatabaseSync(path)
     expect(() =>
-      raw.prepare("UPDATE paper_futures_candle_revisions SET close_price='1'").run(),
+      raw
+        .prepare("UPDATE paper_futures_candle_revisions SET close_price='1'")
+        .run(),
     ).toThrow(/immutable/i)
     expect(() =>
       raw.prepare('DELETE FROM paper_futures_candle_revisions').run(),
@@ -358,8 +362,7 @@ describe('FuturesMarketStore', () => {
         tradeCount: 1,
         sourceHash: 'a'.repeat(64),
       })
-    for (let index = 0; index < 505; index += 1)
-      save(index * 60_000, 1, true)
+    for (let index = 0; index < 505; index += 1) save(index * 60_000, 1, true)
     save(505 * 60_000, 1, false)
     save(10 * 60_000, 2, true, 60_000, '777')
     save(0, 1, true, 300_000)
@@ -382,9 +385,9 @@ describe('FuturesMarketStore', () => {
       504 * 60_000,
     ])
     const revised = store.closedCandlesTail(60_000, 500) as typeof tail
-    expect(revised.find((row) => row.bucket_start === 10 * 60_000)).toMatchObject(
-      { revision: 2, close_price: '777' },
-    )
+    expect(
+      revised.find((row) => row.bucket_start === 10 * 60_000),
+    ).toMatchObject({ revision: 2, close_price: '777' })
     expect(() => store.closedCandlesTail(60_000, 501)).toThrow(RangeError)
     store.close()
   })
@@ -413,5 +416,119 @@ describe('FuturesMarketStore', () => {
       reopened.prepare('SELECT id,payload FROM market_observations').get(),
     ).toEqual({ id: 'spot-fixture', payload: 'untouched' })
     reopened.close()
+  })
+})
+
+describe('FuturesMarketStore append hot path', () => {
+  const base = {
+    type: 'book',
+    productId: 'PF_XBTUSD',
+    epoch: 1,
+    eventTime: 1000,
+    receivedAt: 1010,
+    persistedAt: 1010,
+    snapshot: false,
+    side: 'bid',
+    price: '99.5',
+    quantity: '2',
+    marketQuality: { policy_version: 'p', book_valid: true },
+  }
+
+  it('reuses prepared statements instead of re-preparing per event', () => {
+    const store = new FuturesMarketStore(':memory:')
+    const prepare = vi.spyOn(DatabaseSync.prototype, 'prepare')
+    try {
+      store.append({ ...base, seq: 1, rawJson: '{"a":1}' })
+      const afterFirst = prepare.mock.calls.length
+      for (let seq = 2; seq <= 60; seq += 1)
+        store.append({ ...base, seq, rawJson: `{"a":${seq}}` })
+      expect(prepare.mock.calls.length).toBe(afterFirst)
+    } finally {
+      prepare.mockRestore()
+    }
+  })
+
+  it('stores canonical JSON and content hashes identical to canonicalJson', () => {
+    const path = dbPath()
+    const store = new FuturesMarketStore(path)
+    const events: Array<Record<string, unknown>> = [
+      {
+        ...base,
+        seq: 1,
+        rawJson: '{}',
+        // non-ASCII, astral and surrogate-ordering keys, nested arrays
+        extra: {
+          é: 1,
+          '\u{1F600}': 2,
+          '～': 3,
+          z: [{ b: 1, a: 'x' }],
+          Z: null,
+        },
+        optional: undefined,
+      },
+      {
+        type: 'ticker',
+        productId: 'PF_XBTUSD',
+        epoch: 1,
+        seq: 2,
+        eventTime: 1000,
+        receivedAt: 1011,
+        persistedAt: 1011,
+        last: '100',
+        suspended: false,
+        funding: { status: 'unknown' },
+        rawJson: '{}',
+      },
+      {
+        ...base,
+        seq: 3,
+        snapshot: true,
+        bids: [{ price: '99', quantity: '1' }],
+        asks: [{ price: '101', quantity: '2' }],
+        rawJson: '{}',
+      },
+      { ...event, rawJson: '{}' },
+    ]
+    for (const item of events) store.append(item)
+    store.close()
+    const db = new DatabaseSync(path, { readOnly: true })
+    const rows = db
+      .prepare(
+        'SELECT feed,normalized_json,content_hash,event_id,raw_json FROM paper_futures_market_events ORDER BY rowid',
+      )
+      .all() as Array<Record<string, string>>
+    db.close()
+    expect(rows).toHaveLength(events.length)
+    events.forEach((item, index) => {
+      const normalized = Object.fromEntries(
+        Object.entries(item).filter(([, value]) => value !== undefined),
+      )
+      const expected = canonicalJson(normalized)
+      expect(rows[index]!.normalized_json).toBe(expected)
+      const hashed =
+        item.type === 'trade'
+          ? canonicalJson({
+              uid: item.uid,
+              eventTime: item.eventTime,
+              side: item.side,
+              tradeType: item.tradeType,
+              quantityBtc: item.quantityBtc,
+              priceUsd: item.priceUsd,
+            })
+          : expected
+      expect(rows[index]!.content_hash).toBe(
+        createHash('sha256').update(hashed, 'utf8').digest('hex'),
+      )
+    })
+  })
+
+  it('rejects unpaired surrogates in keys and values like canonicalJson', () => {
+    const store = new FuturesMarketStore(':memory:')
+    expect(() =>
+      store.append({ ...base, seq: 1, rawJson: '{}', '\uD800': 1 }),
+    ).toThrow(/surrogate/)
+    expect(() =>
+      store.append({ ...base, seq: 2, rawJson: '{}', note: 'a\uDC00' }),
+    ).toThrow(/surrogate/)
   })
 })

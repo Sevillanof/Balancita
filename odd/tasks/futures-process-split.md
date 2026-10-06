@@ -59,6 +59,19 @@ Every sustained live run of the single process surfaced a new engine defect: the
 
 - Commits on `feat/futures-process-split` (branched from frozen `fix/futures-bounded-processing` @ 94bfa4e): 10df50d dev-mode-switch + DEV-06; bfc5212 BP-03d incremental verification; e23dbfe PS-01 capture + gateway. Pre-session uncommitted changes are left out on purpose: `futures_runtime.py`, `test_futures_strategy_cadence.py`, `futures-replay-driver.ts` and its test, and the protected `futures-runtime.test.ts`.
 
+- 2026-10-06 PS-02 (route: delegated writer; triggers: mapping + 2+ non-trivial files). Implemented, not committed; PS-02 stays unchecked.
+  - Profile before (live Kraken, ~90 s, fresh DB, `--cpu-prof`, busy 44.6% of wall time, ps CPU 17-98% decayed, steady ~25%): `accept` (inlined per-delta `[...keys()].sort` x2) 28.5%, `FuturesMarketStore.append` 18.3% (native sqlite + re-prepare), `compareUnicodeScalars` (canonicalJson key sort via `Array.from` per comparison, called twice per event) 17.8%, `compareDecimals` 16.0%, sort comparator 6.3%.
+  - After (same method, ~100 s): busy 8.4%, ps CPU 5-9% steady (4.2% on a 75 s restart run); remaining self time is `append` native sqlite (64% of busy, per-event BEGIN/INSERT/COMMIT) plus `canonicalEvent` 7%, `decodeProviderJson` 6%.
+  - Changes: collector tracks best bid/ask incrementally (rescan only when the best level is removed; no per-delta sort); store caches prepared statements, canonicalises a non-trade event once (hash = sha256 of the stored normalized JSON) with an output-identical `canonicalEvent` that avoids per-comparison allocation; `FuturesCandleBuilder` resumes candles from their latest stored revision (`restoreOpenCandles` + lazy `candleHeadById`), called by live-capture at start.
+  - Restore finding: a capture restart on an existing market DB used to fail with `UNIQUE constraint failed: paper_futures_candle_revisions` (builder restarted at revision 1) and degraded persistence. Fixed and verified live on a DB from a previous capture run; no frontier/engine checks are involved.
+  - RED: `futures-market.test.ts` "never sorts book levels while applying a delta" (790 sorts vs <=8); `futures-market-store.test.ts` "reuses prepared statements" (120 prepares vs 2); `futures-candles.test.ts` both restart tests (UNIQUE collision; `restoreOpenCandles` missing). Golden equivalence (book state per message + persisted rows/gaps digests over 400 deltas with best-level deletes, crossing, gap, snapshots) and canonical-JSON equivalence were GREEN on the old code first and stay GREEN.
+  - GREEN: kraken-futures + live-gateway 48/48; `src/features/kraken-futures src/features/live-gateway src/features/paper-futures src/app` 274 passed, 3 known pre-existing failures; `pnpm typecheck` clean.
+  - Note: `canonicalJson` in `paper-futures/futures-canonical.ts` (outside this task's surface) has the same per-comparison `Array.from` key sort; fixing it there would drop the store-local `canonicalEvent`.
+
+
 ## Next step
 
-PS-02 (capture hot path: CPU 15–45%), then PS-03.
+- PS-02: implemented by a delegated writer and committed. The writer measured the CPU before and after. Still pending: a parent live spot check in `pnpm run dev`. Restart the capture child, which runs without `--watch`, confirm capture CPU is 10% or less, and confirm there are no `UNIQUE` errors in the capture log. Then check PS-02 off.
+- Open follow-up: `paper-futures/futures-canonical.ts` `canonicalJson` still uses a key sort that allocates per comparison, and it was outside the PS-02 surface. The store-local `canonicalEvent` duplicates the fix; consolidate them later.
+- Then PS-03, the verdict service.
+- Handoff (2026-10-06): the work moves to a cloud session. The 5 files that were already modified before the session are still uncommitted locally and not pushed: `futures_runtime.py`, `test_futures_strategy_cadence.py`, `futures-replay-driver.ts` and its test, and the protected `futures-runtime.test.ts`.

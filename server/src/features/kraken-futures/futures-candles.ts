@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import type { TradeEvent } from './futures-market.ts'
+import type { StoredCandleHead } from './futures-market-store.ts'
 
 interface CandleRevisionStore {
   saveCandleRevision(candle: {
@@ -19,6 +20,11 @@ interface CandleRevisionStore {
     tradeCount: number
     sourceHash: string
   }): void
+  candleHeadById?(candleId: string): StoredCandleHead | undefined
+  openCandleHeads?(
+    intervalMs: number,
+    sinceBucketStart: number,
+  ): StoredCandleHead[]
 }
 
 function integer(value: unknown, label: string): number {
@@ -77,6 +83,8 @@ export class FuturesCandleBuilder {
       volume: string
       count: number
       uids: string[]
+      /** Source hash of the revisions persisted before a restart, if resumed. */
+      baseHash?: string
       revision: number
       closed: boolean
       latestTime: number
@@ -131,7 +139,8 @@ export class FuturesCandleBuilder {
     for (const interval of this.intervals) {
       const bucket = Math.floor(trade.eventTime / interval) * interval
       const id = `${trade.productId}:${interval}:${bucket}`
-      const current = this.candles.get(id)
+      const current =
+        this.candles.get(id) ?? this.resume(this.store.candleHeadById?.(id))
       const closed = now >= bucket + interval
       const candle = current ?? {
         bucket,
@@ -177,6 +186,49 @@ export class FuturesCandleBuilder {
       this.seen.delete(this.seen.values().next().value!)
   }
 
+  /**
+   * Resumes candles left open by a previous process so a restart continues
+   * their revision numbering and aggregates and still closes them on time.
+   * Candles older than two intervals stay as stored.
+   */
+  restoreOpenCandles(now: number): void {
+    integer(now, 'candle clock')
+    if (!this.store.openCandleHeads) return
+    for (const interval of this.intervals) {
+      const since = Math.max(
+        0,
+        Math.floor(now / interval) * interval - 2 * interval,
+      )
+      for (const head of this.store.openCandleHeads(interval, since))
+        if (!this.candles.has(head.id)) this.resume(head)
+    }
+  }
+
+  /** Rebuilds in-memory candle state from its latest stored revision. */
+  private resume(head: StoredCandleHead | undefined) {
+    if (head === undefined) return undefined
+    const candle = {
+      bucket: head.bucketStart,
+      interval: head.intervalMs,
+      open: head.open,
+      high: head.high,
+      low: head.low,
+      close: head.close,
+      volume: head.volumeBtc,
+      count: head.tradeCount,
+      uids: [] as string[],
+      baseHash: head.sourceHash,
+      revision: head.revision,
+      closed: head.closed,
+      // Trade time/sequence of the last close are not stored: the last
+      // revision's receipt time bounds them for in-order live trades.
+      latestTime: head.knownAt,
+      latestSeq: -1,
+    }
+    this.candles.set(head.id, candle)
+    return candle
+  }
+
   advanceClock(now: number): void {
     integer(now, 'candle clock')
     for (const [id, candle] of this.candles) {
@@ -193,8 +245,13 @@ export class FuturesCandleBuilder {
     candle: NonNullable<ReturnType<typeof this.candles.get>>,
     knownAt: number,
   ): void {
+    // A resumed candle chains the hash persisted before the restart.
     const sourceHash = createHash('sha256')
-      .update(candle.uids.join('\n'))
+      .update(
+        candle.baseHash === undefined
+          ? candle.uids.join('\n')
+          : [candle.baseHash, ...candle.uids].join('\n'),
+      )
       .digest('hex')
     this.store.saveCandleRevision({
       id,

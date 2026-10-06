@@ -1,4 +1,4 @@
-import { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync, type StatementSync } from 'node:sqlite'
 import { createHash } from 'node:crypto'
 import type { HistoricalFundingResponse } from './historical-funding.ts'
 import { existsSync, mkdirSync } from 'node:fs'
@@ -21,8 +21,120 @@ function asRecord(value: unknown): RecordValue {
   return value as RecordValue
 }
 
+/** Latest stored state of a candle, used to resume it after a restart. */
+export interface StoredCandleHead {
+  readonly id: string
+  readonly intervalMs: number
+  readonly bucketStart: number
+  readonly revision: number
+  readonly knownAt: number
+  readonly closed: boolean
+  readonly open: string
+  readonly high: string
+  readonly low: string
+  readonly close: string
+  readonly volumeBtc: string
+  readonly tradeCount: number
+  readonly sourceHash: string
+}
+
+function candleHead(row: RecordValue): StoredCandleHead {
+  return {
+    id: String(row.candle_id),
+    intervalMs: Number(row.interval_ms),
+    bucketStart: Number(row.bucket_start),
+    revision: Number(row.revision),
+    knownAt: Number(row.known_at),
+    closed: Number(row.is_closed) === 1,
+    open: String(row.open_price),
+    high: String(row.high_price),
+    low: String(row.low_price),
+    close: String(row.close_price),
+    volumeBtc: String(row.volume_btc),
+    tradeCount: Number(row.trade_count),
+    sourceHash: String(row.source_hash),
+  }
+}
+
 function digest(value: unknown): string {
-  return createHash('sha256').update(canonicalJson(value), 'utf8').digest('hex')
+  return sha256(canonicalJson(value))
+}
+
+function sha256(text: string): string {
+  return createHash('sha256').update(text, 'utf8').digest('hex')
+}
+
+const SURROGATE = /[\ud800-\udfff]/
+
+function validateScalarText(text: string): void {
+  for (let index = 0; index < text.length; index += 1) {
+    const code = text.charCodeAt(index)
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const low = text.charCodeAt(index + 1)
+      if (!(low >= 0xdc00 && low <= 0xdfff))
+        throw new TypeError('Unpaired Unicode surrogate.')
+      index += 1
+    } else if (code >= 0xdc00 && code <= 0xdfff) {
+      throw new TypeError('Unpaired Unicode surrogate.')
+    }
+  }
+}
+
+function compareScalars(left: string, right: string): number {
+  const a = Array.from(left, (character) => character.codePointAt(0)!)
+  const b = Array.from(right, (character) => character.codePointAt(0)!)
+  for (let index = 0; index < Math.min(a.length, b.length); index += 1) {
+    if (a[index] !== b[index]) return a[index]! - b[index]!
+  }
+  return a.length - b.length
+}
+
+/**
+ * Output-identical to `canonicalJson` (RFC 8785-style code point key order,
+ * same validation errors) but sorts keys without per-comparison allocation:
+ * UTF-16 code unit order equals code point order unless a key has surrogates.
+ * Equivalence is covered by the store tests; the shared helper stays the
+ * contract for every other canonical consumer.
+ */
+function canonicalEvent(item: unknown): string {
+  if (typeof item === 'string') {
+    validateScalarText(item)
+    return JSON.stringify(item)
+  }
+  if (item === null || typeof item === 'boolean') return JSON.stringify(item)
+  if (typeof item === 'number') {
+    if (!Number.isFinite(item) || !Number.isSafeInteger(item))
+      throw new TypeError('Only safe integers are canonical numbers.')
+    return String(item)
+  }
+  if (Array.isArray(item)) {
+    let out = '['
+    for (let index = 0; index < item.length; index += 1)
+      out += (index === 0 ? '' : ',') + canonicalEvent(item[index])
+    return `${out}]`
+  }
+  if (typeof item === 'object' && item !== null) {
+    const record = item as Record<string, unknown>
+    const keys = Object.keys(record)
+    let surrogates = false
+    for (const key of keys) {
+      validateScalarText(key)
+      if (!surrogates && SURROGATE.test(key)) surrogates = true
+    }
+    if (surrogates) keys.sort(compareScalars)
+    else keys.sort()
+    let out = '{'
+    for (let index = 0; index < keys.length; index += 1) {
+      const key = keys[index]!
+      if (record[key] === undefined)
+        throw new TypeError('Undefined is not canonical.')
+      out +=
+        (index === 0 ? '' : ',') +
+        `${JSON.stringify(key)}:${canonicalEvent(record[key])}`
+    }
+    return `${out}}`
+  }
+  throw new TypeError('Unsupported canonical value.')
 }
 
 function time(value: unknown, name: string): number {
@@ -34,6 +146,7 @@ function time(value: unknown, name: string): number {
 /** Append-only public futures evidence store; callers must supply an isolated path. */
 export class FuturesMarketStore {
   private readonly db: DatabaseSync
+  private readonly statements = new Map<string, StatementSync>()
   readonly readOnly: boolean
 
   constructor(path: string, options: { readOnly?: boolean } = {}) {
@@ -165,6 +278,16 @@ export class FuturesMarketStore {
     `)
   }
 
+  /** Prepares each hot-path statement once per connection. */
+  private prepared(sql: string): StatementSync {
+    let statement = this.statements.get(sql)
+    if (!statement) {
+      statement = this.db.prepare(sql)
+      this.statements.set(sql, statement)
+    }
+    return statement
+  }
+
   /** Diagnostic: current connection `synchronous` level (1 = NORMAL). */
   synchronousLevel(): number {
     const row = this.db.prepare('PRAGMA synchronous').get() as {
@@ -174,6 +297,7 @@ export class FuturesMarketStore {
   }
 
   close(): void {
+    this.statements.clear()
     this.db.close()
   }
 
@@ -420,14 +544,20 @@ export class FuturesMarketStore {
             priceUsd: event.priceUsd,
           }
         : normalizedEvent
-    const contentHash = digest(feed === 'trade' ? content : normalizedEvent)
+    // Non-trade content is the normalized event itself: canonicalise it once
+    // and reuse the text for both the hash and the stored JSON.
+    let normalizedJson: string | undefined
+    let contentHash: string
+    if (feed === 'trade') contentHash = sha256(canonicalEvent(content))
+    else {
+      normalizedJson = canonicalEvent(normalizedEvent)
+      contentHash = sha256(normalizedJson)
+    }
     if (uid !== null) {
-      const existing = this.db
-        .prepare(
-          `SELECT content_hash FROM paper_futures_market_events
+      const existing = this.prepared(
+        `SELECT content_hash FROM paper_futures_market_events
         WHERE feed=? AND product_id=? AND uid=?`,
-        )
-        .get(feed, product, uid) as { content_hash: string } | undefined
+      ).get(feed, product, uid) as { content_hash: string } | undefined
       if (existing) {
         if (existing.content_hash !== contentHash)
           throw new Error('Trade UID payload conflict.')
@@ -438,11 +568,9 @@ export class FuturesMarketStore {
       uid === null
         ? `${feed}:${product}:${epoch}:${seq}:${contentHash}`
         : `${feed}:${product}:${uid}`
-    const existingEvent = this.db
-      .prepare(
-        'SELECT content_hash FROM paper_futures_market_events WHERE event_id=?',
-      )
-      .get(eventId) as { content_hash: string } | undefined
+    const existingEvent = this.prepared(
+      'SELECT content_hash FROM paper_futures_market_events WHERE event_id=?',
+    ).get(eventId) as { content_hash: string } | undefined
     if (existingEvent) {
       if (existingEvent.content_hash !== contentHash)
         throw new Error('Market event identity payload conflict.')
@@ -451,68 +579,62 @@ export class FuturesMarketStore {
     const rawJson =
       typeof event.rawJson === 'string'
         ? event.rawJson
-        : canonicalJson(event.raw)
+        : canonicalEvent(event.raw)
     if (Buffer.byteLength(rawJson, 'utf8') > 256_000)
       throw new RangeError(
         'Raw market evidence exceeds the configured size bound.',
       )
-    const normalizedJson = canonicalJson(normalizedEvent)
-    this.db.exec('BEGIN IMMEDIATE')
+    normalizedJson ??= canonicalEvent(normalizedEvent)
+    this.prepared('BEGIN IMMEDIATE').run()
     try {
-      this.db
-        .prepare(
-          `INSERT INTO paper_futures_market_events
+      this.prepared(
+        `INSERT INTO paper_futures_market_events
         (event_id,feed,product_id,epoch,seq,event_time,received_at,persisted_at,uid,raw_json,normalized_json,content_hash)
         VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
-        )
-        .run(
+      ).run(
+        eventId,
+        feed,
+        product,
+        epoch,
+        seq,
+        eventTime,
+        receivedAt,
+        persistedAt,
+        uid,
+        rawJson,
+        normalizedJson,
+        contentHash,
+      )
+      if (feed === 'book' && event.snapshot === true) {
+        this.prepared(
+          `INSERT INTO paper_futures_book_snapshots
+          (event_id,product_id,epoch,seq,event_time,received_at,bids_json,asks_json) VALUES(?,?,?,?,?,?,?,?)`,
+        ).run(
           eventId,
-          feed,
           product,
           epoch,
           seq,
           eventTime,
           receivedAt,
-          persistedAt,
-          uid,
-          rawJson,
-          normalizedJson,
-          contentHash,
+          canonicalEvent(event.bids),
+          canonicalEvent(event.asks),
         )
-      if (feed === 'book' && event.snapshot === true) {
-        this.db
-          .prepare(
-            `INSERT INTO paper_futures_book_snapshots
-          (event_id,product_id,epoch,seq,event_time,received_at,bids_json,asks_json) VALUES(?,?,?,?,?,?,?,?)`,
-          )
-          .run(
-            eventId,
-            product,
-            epoch,
-            seq,
-            eventTime,
-            receivedAt,
-            canonicalJson(event.bids),
-            canonicalJson(event.asks),
-          )
       }
       if (feed === 'ticker') {
-        this.db
-          .prepare(
-            `INSERT INTO paper_futures_ticker_snapshots
+        this.prepared(
+          `INSERT INTO paper_futures_ticker_snapshots
           (event_id,product_id,epoch,seq,event_time,received_at,payload_json) VALUES(?,?,?,?,?,?,?)`,
-          )
-          .run(
-            eventId,
-            product,
-            epoch,
-            seq,
-            eventTime,
-            receivedAt,
-            normalizedJson,
-          )
+        ).run(
+          eventId,
+          product,
+          epoch,
+          seq,
+          eventTime,
+          receivedAt,
+          normalizedJson,
+        )
       }
-      this.db.exec('COMMIT')
+      this.prepared('COMMIT').run()
       return 'inserted'
     } catch (error) {
       this.db.exec('ROLLBACK')
@@ -919,6 +1041,38 @@ export class FuturesMarketStore {
       .prepare('SELECT COUNT(*) AS count FROM paper_futures_market_events')
       .get() as { count: number }
     return Number(row.count)
+  }
+
+  /** Latest stored revision of one candle (index lookup), for restart restore. */
+  candleHeadById(candleId: string): StoredCandleHead | undefined {
+    const row = this.prepared(
+      `SELECT candle_id,interval_ms,bucket_start,revision,known_at,is_closed,
+        open_price,high_price,low_price,close_price,volume_btc,trade_count,source_hash
+       FROM paper_futures_candle_revisions WHERE candle_id=?
+       ORDER BY revision DESC LIMIT 1`,
+    ).get(candleId) as RecordValue | undefined
+    return row === undefined ? undefined : candleHead(row)
+  }
+
+  /** Latest revisions of candles still open from `sinceBucketStart` on. */
+  openCandleHeads(
+    intervalMs: number,
+    sinceBucketStart: number,
+  ): StoredCandleHead[] {
+    time(intervalMs, 'intervalMs')
+    time(sinceBucketStart, 'sinceBucketStart')
+    return (
+      this.prepared(
+        `SELECT candle_id,interval_ms,bucket_start,revision,known_at,is_closed,
+          open_price,high_price,low_price,close_price,volume_btc,trade_count,source_hash
+         FROM paper_futures_candle_revisions AS r
+         WHERE interval_ms=? AND bucket_start>=? AND is_closed=0
+           AND revision=(
+             SELECT MAX(m.revision) FROM paper_futures_candle_revisions AS m
+             WHERE m.candle_id=r.candle_id)
+         ORDER BY bucket_start`,
+      ).all(intervalMs, sinceBucketStart) as RecordValue[]
+    ).map(candleHead)
   }
 
   candleRevisions(): unknown[] {

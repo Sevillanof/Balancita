@@ -413,6 +413,18 @@ function compareDecimals(a: string, b: string): number {
   return 0
 }
 
+/** Best price of one book side in O(n) without sorting (1 = highest, -1 = lowest). */
+function scanBest(
+  levels: ReadonlyMap<string, string>,
+  direction: 1 | -1,
+): string | undefined {
+  let best: string | undefined
+  for (const price of levels.keys())
+    if (best === undefined || compareDecimals(price, best) * direction > 0)
+      best = price
+  return best
+}
+
 export function parseBookMessage(
   value: unknown,
   context: FeedContext,
@@ -574,6 +586,10 @@ export class KrakenFuturesMarketCollector {
   private bookResnapshotRequested = false
   private readonly bids = new Map<string, string>()
   private readonly asks = new Map<string, string>()
+  // Best levels are tracked incrementally so a delta never sorts or scans the
+  // book unless the best level itself was removed.
+  private bestBid: string | undefined
+  private bestAsk: string | undefined
   private lastBookSeq: number | null = null
   private lastBookAt: number | null = null
   private lastTickerAt: number | null = null
@@ -753,6 +769,7 @@ export class KrakenFuturesMarketCollector {
     this.lastBookSeq = null
     this.bids.clear()
     this.asks.clear()
+    this.bestBid = this.bestAsk = undefined
     this.seqs.clear()
     this.lastTickerAt = null
     this.lastTickerSuspended = true
@@ -871,6 +888,8 @@ export class KrakenFuturesMarketCollector {
         this.bids.set(entry.price, entry.quantity)
       for (const entry of event.asks ?? [])
         this.asks.set(entry.price, entry.quantity)
+      this.bestBid = scanBest(this.bids, 1)
+      this.bestAsk = scanBest(this.asks, -1)
       this.bookValid = this.bids.size > 0 && this.asks.size > 0
       this.bookSequenceContiguous = this.bookValid
       this.bookResnapshotRequested = false
@@ -926,12 +945,27 @@ export class KrakenFuturesMarketCollector {
         return
       }
       const levels = event.side === 'bid' ? this.bids : this.asks
-      if (event.quantity === '0') levels.delete(event.price!)
-      else levels.set(event.price!, event.quantity!)
-      const bestBid = [...this.bids.keys()].sort(
-        (a, b) => -compareDecimals(a, b),
-      )[0]
-      const bestAsk = [...this.asks.keys()].sort(compareDecimals)[0]
+      const isBid = event.side === 'bid'
+      const price = event.price!
+      if (event.quantity === '0') {
+        levels.delete(price)
+        if (price === (isBid ? this.bestBid : this.bestAsk)) {
+          if (isBid) this.bestBid = scanBest(this.bids, 1)
+          else this.bestAsk = scanBest(this.asks, -1)
+        }
+      } else {
+        levels.set(price, event.quantity!)
+        const best = isBid ? this.bestBid : this.bestAsk
+        if (
+          best === undefined ||
+          compareDecimals(price, best) * (isBid ? 1 : -1) > 0
+        ) {
+          if (isBid) this.bestBid = price
+          else this.bestAsk = price
+        }
+      }
+      const bestBid = this.bestBid
+      const bestAsk = this.bestAsk
       if (
         this.bids.size === 0 ||
         this.asks.size === 0 ||

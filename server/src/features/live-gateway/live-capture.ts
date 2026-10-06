@@ -46,6 +46,8 @@ export function createLiveCapture(options: LiveCaptureOptions) {
 
   const startCollecting = (): void => {
     const candles = new FuturesCandleBuilder(store)
+    // Resume candles a previous capture process left open on this database.
+    candles.restoreOpenCandles(clock())
     candleTimer = setInterval(() => {
       try {
         candles.advanceClock(clock())
