@@ -18,6 +18,7 @@ const optionalChildren = new Set([
   'live',
   'verdict',
   'paper',
+  'scores',
 ])
 // Refuse to start on a busy port: a stale dev stack would otherwise keep
 // serving the browser while the new child dies with EADDRINUSE.
@@ -35,7 +36,7 @@ if (python.command === undefined)
   process.stderr.write(`[dev] ${python.message}\n`)
 else
   process.stdout.write(
-    `[dev] Python for verdict/paper: ${[python.command, ...python.prefixArgs].join(' ')} (${python.version})\n`,
+    `[dev] Python for verdict/paper/scores: ${[python.command, ...python.prefixArgs].join(' ')} (${python.version})\n`,
   )
 const useGroups = process.platform !== 'win32'
 const children = devChildSpecs({
@@ -106,7 +107,7 @@ for (const { name, child, state } of children) {
       )
     if (optionalChildren.has(name)) {
       process.stderr.write(
-        `[dev] ${name} exited (${signal ?? code}); the other processes keep running. ${name === 'mock' ? 'The MOCK source' : name === 'capture' ? 'Live market capture (new candles)' : name === 'verdict' ? 'The verdict service (new verdicts)' : name === 'paper' ? 'Paper execution (new paper fills)' : 'The Real source'} will be unavailable until you restart pnpm run dev.\n`,
+        `[dev] ${name} exited (${signal ?? code}); the other processes keep running. ${name === 'mock' ? 'The MOCK source' : name === 'capture' ? 'Live market capture (new candles)' : name === 'verdict' ? 'The verdict service (new verdicts)' : name === 'paper' ? 'Paper execution (new paper fills)' : name === 'scores' ? 'The forecast scorer (new forecast scores)' : 'The Real source'} will be unavailable until you restart pnpm run dev.\n`,
       )
       return
     }

@@ -74,7 +74,7 @@ function probePython({ command, prefixArgs }, run) {
 }
 
 /**
- * Finds the Python for the verdict (C) and paper (D) services, once, before
+ * Finds the Python for the verdict (C), paper (D) and scores (E) services, once, before
  * spawning. `BALANCITA_PYTHON` (a single executable path or name) is honored
  * first and never falls back; otherwise `python3`, `python` and, on Windows,
  * `py -3`. Returns `{ command, prefixArgs, version }` or `{ message, failure }`, where
@@ -233,6 +233,8 @@ const CAPTURE_ARGS = ['--experimental-strip-types', 'src/app/capture-main.ts']
  * - verdict: Python verdict service C (market DB read-only -> verdicts DB, sole
  *   writer of the latter; its own `command` instead of node),
  * - paper: Python paper execution D (market + verdicts DBs read-only -> account
+ *   DB, sole writer of the latter),
+ * - scores: Python forecast scorer E (market + verdicts DBs read-only -> scores
  *   DB, sole writer of the latter).
  */
 export function devChildSpecs({
@@ -285,6 +287,7 @@ export function devChildSpecs({
   const marketDb = liveDb('futures-market.sqlite')
   const verdictsDb = liveDb('futures-verdicts.sqlite')
   const accountDb = liveDb('futures-paper-account.sqlite')
+  const scoresDb = liveDb('futures-forecast-scores.sqlite')
   return [
     ...common,
     {
@@ -351,6 +354,28 @@ export function devChildSpecs({
           verdictsDb,
           '--account-db',
           accountDb,
+        ],
+        env: {
+          ...env,
+          PYTHONPATH: [`${root}/python`, env.PYTHONPATH]
+            .filter(Boolean)
+            .join(delimiter),
+        },
+      },
+      {
+        name: 'scores',
+        command: python.command,
+        cwd: serverCwd,
+        args: [
+          ...python.prefixArgs,
+          '-m',
+          'balancita_engine.futures_forecast_scores',
+          '--market-db',
+          marketDb,
+          '--verdicts-db',
+          verdictsDb,
+          '--scores-db',
+          scoresDb,
         ],
         env: {
           ...env,

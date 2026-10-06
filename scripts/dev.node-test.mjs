@@ -21,10 +21,19 @@ describe('devChildSpecs', () => {
   })
   const byName = Object.fromEntries(specs.map((spec) => [spec.name, spec]))
 
-  it('starts vite, legacy server, mock API, live capture, live gateway, verdict service and paper execution', () => {
+  it('starts vite, legacy server, mock API, live capture, live gateway, verdict service, paper execution and forecast scorer', () => {
     assert.deepEqual(
       specs.map((spec) => spec.name),
-      ['vite', 'server', 'mock', 'capture', 'live', 'verdict', 'paper'],
+      [
+        'vite',
+        'server',
+        'mock',
+        'capture',
+        'live',
+        'verdict',
+        'paper',
+        'scores',
+      ],
     )
   })
 
@@ -116,6 +125,24 @@ describe('devChildSpecs', () => {
       './data/dev-live/futures-verdicts.sqlite',
       '--account-db',
       './data/dev-live/futures-paper-account.sqlite',
+    ])
+    assert.equal(env.PYTHONPATH, '/repo/python')
+    assert.equal(env.KEEP, 'yes')
+  })
+
+  it('runs the Python forecast scorer over the market and verdicts databases into its own scores database', () => {
+    const { command, args, cwd, env } = byName.scores
+    assert.equal(command, 'python3')
+    assert.equal(cwd, '/repo/server')
+    assert.deepEqual(args, [
+      '-m',
+      'balancita_engine.futures_forecast_scores',
+      '--market-db',
+      byName.capture.env.FUTURES_MARKET_DB_PATH,
+      '--verdicts-db',
+      './data/dev-live/futures-verdicts.sqlite',
+      '--scores-db',
+      './data/dev-live/futures-forecast-scores.sqlite',
     ])
     assert.equal(env.PYTHONPATH, '/repo/python')
     assert.equal(env.KEEP, 'yes')
@@ -263,14 +290,14 @@ describe('devChildSpecs with a resolved Python', () => {
   const base = { root, env: { KEEP: 'yes' }, allowedFlags: noFlags }
   const byName = (specs) => Object.fromEntries(specs.map((s) => [s.name, s]))
 
-  it('injects the command and its prefix args into verdict and paper', () => {
+  it('injects the command and its prefix args into verdict, paper and scores', () => {
     const specs = byName(
       devChildSpecs({
         ...base,
         python: { command: 'py', prefixArgs: ['-3'] },
       }),
     )
-    for (const name of ['verdict', 'paper']) {
+    for (const name of ['verdict', 'paper', 'scores']) {
       assert.equal(specs[name].command, 'py')
       assert.deepEqual(specs[name].args.slice(0, 3), [
         '-3',
@@ -282,7 +309,7 @@ describe('devChildSpecs with a resolved Python', () => {
     assert.equal(specs.live.env.BALANCITA_PYTHON_STATUS, 'available')
   })
 
-  it('without Python starts neither verdict nor paper and tells the gateway', () => {
+  it('without Python starts none of verdict, paper and scores and tells the gateway', () => {
     const specs = devChildSpecs({ ...base, python: null })
     assert.deepEqual(
       specs.map((spec) => spec.name),

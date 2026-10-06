@@ -239,6 +239,22 @@ Every sustained live run of the single process surfaced a new engine defect: the
   - Pre-existing, not addressed: `profitability-report.test.ts`; a `simulations-runner.test.ts` 180 s timeout (not baselined); `test_futures_canonical.py` 2 errors; the `futures-local-scenario.test.mjs` 5 s timeout; the gateway flake.
   - `pnpm run dev` end to end: live health running from `paper-execution-d`; the mock bootstrap answers; the legacy `/api/terminal` returns 404. Screenshots show no console errors.
 
+- 2026-10-06 PS-07a forecast scorer E (delegated writer, Sonnet; reviewed by the parent from its report). `python/balancita_engine/futures_forecast_scores.py` is a deterministic, replayable, single-writer scores DB with append-only tables. It is wired as the optional `scores` dev child.
+  - Every LONG/SHORT proposal per strategy, and the `selected` decision, is scored from the decision-bucket close using official 1 m candles:
+    - horizon returns at 15 m / 1 h / 4 h / 24 h, gross and net (12 bp round trip);
+    - a stop/target barrier race within 24 h, stop first on a same-candle touch;
+    - 30 m MFE/MAE;
+    - a backfill flag (lag above 15 s).
+  - Each part is written as soon as its candles exist.
+  - `forecast_score_report` and `--report` give per strategy/side/regime/hour/horizon: N, hit %, mean/median net bp, a 95% CI, profit factor, barrier win %, a buy & hold baseline and the inverse control.
+  - Evidence: 23 tests, RED on a missing module. 85 OK with the verdict and paper suites on Python 3.13 and 3.9. `scripts` 44/44. Mutations caught: the same-candle rule, a barrier scan past 24 h, net without cost.
+  - Real Kraken run: 1441 backfilled verdicts, 412 forecasts. Live equals a `--once` replay on all five tables.
+  - Caveats:
+    - c28 and `selected` duplicate other rows;
+    - overlapping windows make the CIs optimistic;
+    - a permanent candle gap leaves a barrier unresolved;
+    - only 3 live (non-backfill) forecasts so far.
+
 ## Next step
 
 - PS-04: news process N wired into C, with Gemini as veto/confidence stored per item. Or PS-05 first: paper execution D consuming fresh verdicts (`knowledge_lag_ms` below a threshold). The order is the user's call.

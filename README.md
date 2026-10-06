@@ -27,22 +27,23 @@ pnpm run dev
 Open <http://localhost:5173>. `pnpm run dev` starts seven processes, each with a
 prefixed log:
 
-| Process   | Port | What it is                                                                                                                                                                                                                                 |
-| --------- | ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `vite`    | 5173 | Web app and proxy (`/api` -> 8787, `/api-mock` -> 8788, `/api-live` -> 8789, rewritten to `/api`)                                                                                                                                          |
-| `server`  | 8787 | Legacy backend (Gemini, spot collectors); `FUTURES_MODE` is forced unset, so `.env` cannot change it                                                                                                                                       |
-| `mock`    | 8788 | Scripted MOCK futures API (`futures-local-terminal.mjs --api-only`); fresh temporary database per start                                                                                                                                    |
-| `capture` | -    | Kraken public WebSocket -> `server/data/dev-live/futures-market.sqlite` (sole writer; no HTTP, no engine, no account DB; per-event commits)                                                                                                |
-| `live`    | 8789 | Read-only gateway: serves `/api/terminal/*` by tailing that market DB by rowid; starts no collector and no engine (engine shown as off)                                                                                                    |
-| `verdict` | -    | Python verdict service C: reads the market DB read-only and writes entry verdicts to `server/data/dev-live/futures-verdicts.sqlite` (sole writer; needs Python 3.9+, see below)                                                            |
-| `paper`   | -    | Python paper execution D: reads the market and verdicts DBs read-only and writes the paper account (hash-chained events plus snapshots) to `server/data/dev-live/futures-paper-account.sqlite` (sole writer; needs Python 3.9+, see below) |
+| Process   | Port | What it is                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| --------- | ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `vite`    | 5173 | Web app and proxy (`/api` -> 8787, `/api-mock` -> 8788, `/api-live` -> 8789, rewritten to `/api`)                                                                                                                                                                                                                                                                                                                                                                                          |
+| `server`  | 8787 | Legacy backend (Gemini, spot collectors); `FUTURES_MODE` is forced unset, so `.env` cannot change it                                                                                                                                                                                                                                                                                                                                                                                       |
+| `mock`    | 8788 | Scripted MOCK futures API (`futures-local-terminal.mjs --api-only`); fresh temporary database per start                                                                                                                                                                                                                                                                                                                                                                                    |
+| `capture` | -    | Kraken public WebSocket -> `server/data/dev-live/futures-market.sqlite` (sole writer; no HTTP, no engine, no account DB; per-event commits)                                                                                                                                                                                                                                                                                                                                                |
+| `live`    | 8789 | Read-only gateway: serves `/api/terminal/*` by tailing that market DB by rowid; starts no collector and no engine (engine shown as off)                                                                                                                                                                                                                                                                                                                                                    |
+| `verdict` | -    | Python verdict service C: reads the market DB read-only and writes entry verdicts to `server/data/dev-live/futures-verdicts.sqlite` (sole writer; needs Python 3.9+, see below)                                                                                                                                                                                                                                                                                                            |
+| `paper`   | -    | Python paper execution D: reads the market and verdicts DBs read-only and writes the paper account (hash-chained events plus snapshots) to `server/data/dev-live/futures-paper-account.sqlite` (sole writer; needs Python 3.9+, see below)                                                                                                                                                                                                                                                 |
+| `scores`  | -    | Python forecast scorer E: reads the market and verdicts DBs read-only and scores every LONG/SHORT proposal and the selected decision against the later official candles (returns at 15m/1h/4h/24h gross and net of 12 bp round-trip cost, target/stop race, 30m excursions) into `server/data/dev-live/futures-forecast-scores.sqlite` (sole writer, append-only; needs Python 3.9+; `python -m balancita_engine.futures_forecast_scores --scores-db <db> --report` prints the aggregates) |
 
 `server/.env` is optional: the dev run adds `--env-file-if-exists=.env` only
 when the file exists (with `--watch`, Node crashes on a missing watched file).
 Create it if you need `GEMINI_API_KEY` or other settings; restart after
 creating it. `FUTURES_MODE` was retired: the server refuses to start if it is set
 to any non-empty value, so remove it from `.env` (live now runs as the separate
-`capture`, `live`, `verdict` and `paper` processes above).
+`capture`, `live`, `verdict`, `paper` and `scores` processes above).
 
 Before spawning anything `pnpm run dev` checks ports 5173, 8787, 8788 and 8789.
 If one is taken (usually a stale `pnpm run dev` from another checkout) it prints
@@ -67,7 +68,7 @@ stops the whole group, so no orphan keeps a port.
 
 ### Python requirement
 
-`verdict` and `paper` need Python 3.9+ whose `sqlite3` module links SQLite
+`verdict`, `paper` and `scores` need Python 3.9+ whose `sqlite3` module links SQLite
 3.37+ (the market, verdicts and account tables are `STRICT`); the standard
 library is enough. `pnpm run dev` looks for it once at startup: first the
 executable named in `BALANCITA_PYTHON` (no fallback if that one fails), else
@@ -78,7 +79,7 @@ Python from the Xcode Command Line Tools is 3.9 and may link an older SQLite;
 install Python from python.org or Homebrew in that case.
 
 If none qualifies, `dev` prints one `[dev]` line naming what it tried, does not
-start `verdict` and `paper`, and the terminal shows "Servicio de veredicto y
+start `verdict`, `paper` and `scores`, and the terminal shows "Servicio de veredicto y
 ejecución paper no disponibles" with the engine as unavailable
 (`python_unavailable`, or `python_sqlite_too_old`). The other processes keep
 running.
@@ -87,7 +88,7 @@ running.
 
 Without network access the `capture` process (and the Real source) cannot reach
 Kraken and report it; `vite`, `server` and `mock` keep running, so MOCK stays
-usable. A failed `mock`, `capture`, `live`, `verdict` or `paper` process is logged and does not stop
+usable. A failed `mock`, `capture`, `live`, `verdict`, `paper` or `scores` process is logged and does not stop
 the others. If `capture` stops, the `live` gateway keeps serving stored candles
 and reports the feed as stale; restarting `live` does not affect `capture`.
 Press Ctrl-C once to stop every process.
