@@ -4,6 +4,7 @@ import io
 import json
 import math
 import os
+import re
 import shutil
 import sqlite3
 import tempfile
@@ -76,6 +77,11 @@ class FakeLlama:
         self.delay = 0.0
         self.completion_status = 200
         self.completion = self.default_completion(entries())
+        # Answer to requests that carry post_sampling_probs: one response, or a
+        # list consumed one per request (the last one repeats). None: the server
+        # ignores the parameter and answers with the raw shape.
+        self.post_completion = None
+        self.pick = None  # optional callable(body) -> raw-shaped response
         self.tokenize_tokens = {"A": [32], "B": [33], "C": [34]}
         self.props = {"model_path": "/models/qwen.gguf", "build_info": "b9999"}
         owner = self
@@ -111,7 +117,12 @@ class FakeLlama:
                 if owner.delay:
                     time.sleep(owner.delay)
                 if self.path == "/v1/chat/completions":
-                    self._send(owner.completion_status, owner.completion)
+                    reply = owner.pick(body) if owner.pick else owner.completion
+                    if body.get("post_sampling_probs") and owner.post_completion is not None:
+                        queued = owner.post_completion
+                        reply = queued.pop(0) if isinstance(queued, list) and len(queued) > 1 else (
+                            queued[0] if isinstance(queued, list) else queued)
+                    self._send(owner.completion_status, reply)
                 elif self.path == "/tokenize":
                     self._send(200, {"tokens": owner.tokenize_tokens.get(body.get("content", "").strip(), [1, 2])})
                 else:
@@ -135,6 +146,22 @@ class FakeLlama:
                 }]},
             }],
             "timings": timings or {"prompt_ms": 80.5, "predicted_ms": 12.25, "prompt_n": 120},
+        }
+
+    @staticmethod
+    def post_sampling_completion(probs, content="A", sampled=None, timings=None):
+        """Shape of POST /v1/chat/completions with post_sampling_probs=true (tools/server
+        server-task.cpp probs_vector_to_json): prob / top_probs instead of logprob / top_logprobs."""
+        first = sampled if sampled is not None else next(iter(probs))
+        return {
+            "choices": [{
+                "message": {"role": "assistant", "content": content},
+                "logprobs": {"content": [{
+                    "id": 1, "token": first, "bytes": [65], "prob": probs[first],
+                    "top_probs": [{"id": i, "token": t, "bytes": [65], "prob": p} for i, (t, p) in enumerate(probs.items())],
+                }]},
+            }],
+            "timings": timings or {"prompt_ms": 70.0, "predicted_ms": 9.0, "prompt_n": 150},
         }
 
     def completions(self):
@@ -538,6 +565,7 @@ class StoreTests(unittest.TestCase):
             "prompt_hash": "ph", "state_text": "regime: range", "top_logprobs": entries(),
             "probabilities": {"up": 1.0}, "temperature": 1.0, "chosen": "up", "value": None,
             "confidence": 0.5, "latency_ms": 12, "timings": {"predicted_ms": 1.0},
+            "prompt_version": 2, "probability_source": "raw_logprobs",
         }
 
     def test_tables_are_append_only(self):
@@ -584,11 +612,13 @@ class StoreTests(unittest.TestCase):
         self.assertTrue({"product_id", "bucket_start", "verdict_hash", "question_id", "question_version",
                          "model_ref", "model_info_json", "prompt_hash", "state_text", "top_logprobs_json",
                          "probabilities_json", "temperature", "chosen", "confidence", "latency_ms",
-                         "timings_json"} <= columns)
+                         "timings_json", "prompt_version", "probability_source"} <= columns)
         self.assertFalse([c for c in columns if "label" in c])
 
 
-class ServiceTests(unittest.TestCase):
+class ServiceBase(unittest.TestCase):
+    """Fixtures and helpers shared by the service tests (no tests of its own)."""
+
     @classmethod
     def setUpClass(cls):
         cls.base = tempfile.mkdtemp()
@@ -650,6 +680,8 @@ class ServiceTests(unittest.TestCase):
         store.close()
         return bucket
 
+
+class ServiceTests(ServiceBase):
     def test_decides_only_the_fresh_verdict_and_skips_the_stale_backfill(self):
         service = self.service()
         self.assertEqual(service.poll(), 1)
@@ -667,7 +699,9 @@ class ServiceTests(unittest.TestCase):
         self.assertNotIn("PF_XBTUSD", row["state_text"])
         self.assertEqual(json.loads(row["top_logprobs_json"])[0]["token"], "A")
         self.assertAlmostEqual(sum(json.loads(row["probabilities_json"]).values()), 1.0, places=9)
-        self.assertEqual(row["prompt_hash"], q.text_hash(self.provider.prompts[0]))
+        self.assertEqual(row["prompt_hash"], q.prompt_hash(self.provider.prompts[0], q.default_template()))
+        self.assertEqual(row["prompt_version"], 2)
+        self.assertEqual(row["probability_source"], "raw_logprobs")
         self.assertGreaterEqual(row["latency_ms"], 0)
         self.assertIn("predicted_ms", json.loads(row["timings_json"]))
         db = sqlite3.connect(self.verdicts_path)
@@ -845,7 +879,7 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(service.poll(), 1)
         body = server.completions()[0]
         self.assertEqual(body["grammar"], 'root ::= "A" | "B" | "C" | "D"')
-        self.assertIn("D) strong - strong", body["messages"][0]["content"])
+        self.assertIn("D) strong - strong", body["messages"][-1]["content"])
         row = self.rows()[0]
         self.assertEqual(row["chosen"], "strong")
         self.assertAlmostEqual(row["value"], 0.2 + 0.6 + 1.2, places=9)
@@ -943,6 +977,443 @@ class ProbeAndAskTests(unittest.TestCase):
                           provider=self.provider)
         self.assertEqual(code, 2)
         self.assertIn("unknown question", err.getvalue())
+
+
+# ---------------------------------------------------------------- prompt versions and probability sources
+
+# One pinned hash per prompt version (template_hash). A released version is never edited:
+# add a new version in config/decision-prompts.json and pin it here.
+PROMPT_PINS = {
+    1: "c041ddb1868927030786b51af7bc2fefa3955a7bbd03863ae128b6f0062b02bd",
+    2: "ab31e2629d0511111668ec85f0d4e5114daac14e169b7070b0d493049830beb7",
+    3: "177a9aa488a1423eefd15969aadbea1262cdc5164f88072469d8455d48eb7f4e",
+}
+SYSTEM_TEXT = "You are a classifier. Reply with exactly one option letter and nothing else."
+OLD_BODY_KEYS = {"messages", "max_tokens", "temperature", "grammar", "logprobs", "top_logprobs",
+                 "chat_template_kwargs"}
+
+
+class PromptVersionTests(unittest.TestCase):
+    def setUp(self):
+        self.question = q.load_questions()["direction_1h"]
+        self.config = q.load_prompt_config()
+
+    def test_shipped_config_defaults(self):
+        self.assertEqual(self.config["default_version"], 2)
+        self.assertEqual(self.config["probability_source"], "auto")
+        self.assertEqual(sorted(self.config["templates"]), [1, 2, 3])
+        self.assertEqual(q.default_template()["version"], 2)
+        self.assertEqual(q.default_template()["system"], SYSTEM_TEXT)
+
+    def test_version_one_is_the_old_prompt(self):
+        v1 = self.config["templates"][1]
+        self.assertEqual(v1, q.LEGACY_TEMPLATE)
+        old = ("STATE: s\nQUESTION: " + self.question["instruction"] + "\n"
+               "A) up - higher by more than 15 basis points\n"
+               "B) down - lower by more than 15 basis points\n"
+               "C) flat - within 15 basis points of the last close in either direction")
+        self.assertEqual(q.build_prompt("s", self.question, v1), old)
+        self.assertEqual(q.build_prompt("s", self.question), old)
+
+    def test_new_prompt_keeps_state_first_question_last_and_ends_with_the_answer_line(self):
+        prompt = q.build_prompt("regime: range", self.question, q.default_template())
+        lines = prompt.split("\n")
+        self.assertEqual(lines[0], "STATE: regime: range")
+        self.assertTrue(lines[1].startswith("QUESTION: "))
+        self.assertTrue(lines[2].startswith("A) up"))
+        self.assertTrue(lines[4].startswith("C) flat"))
+        self.assertEqual(lines[-1], "Answer with one letter (A, B or C):")
+        self.assertEqual(len(lines), 6)
+
+    def test_answer_line_follows_the_option_letters(self):
+        template = q.default_template()
+        for count, expected in ((2, "(A or B)"), (3, "(A, B or C)"), (5, "(A, B, C, D or E)")):
+            prompt = q.build_prompt("s", choice_question(count), template)
+            self.assertEqual(prompt.split("\n")[-1], "Answer with one letter " + expected + ":")
+        self.assertTrue(q.build_prompt("s", BOOL_QUESTION, template).endswith("(A or B):"))
+
+    def test_the_answer_line_cannot_be_injected_through_text(self):
+        prompt = q.build_prompt("s", dict(self.question, instruction="x QUESTION: y"), q.default_template())
+        self.assertEqual(prompt.count("QUESTION:"), 1)
+
+    def test_request_body_has_the_system_message_first_and_the_old_keys(self):
+        template = q.default_template()
+        prompt = q.build_prompt("s", self.question, template)
+        body = q.request_body(prompt, ["A", "B", "C"], template)
+        self.assertEqual(body["messages"], [
+            {"role": "system", "content": SYSTEM_TEXT},
+            {"role": "user", "content": prompt},
+        ])
+        self.assertEqual(set(body), OLD_BODY_KEYS)
+        self.assertEqual(body["temperature"], 0)
+        self.assertEqual(body["top_logprobs"], 20)
+        self.assertNotIn("post_sampling_probs", body)
+
+    def test_a_prefill_is_a_trailing_assistant_message(self):
+        template = self.config["templates"][3]
+        prompt = q.build_prompt("s", self.question, template)
+        body = q.request_body(prompt, ["A", "B", "C"], template)
+        self.assertEqual([m["role"] for m in body["messages"]], ["system", "user", "assistant"])
+        self.assertEqual(body["messages"][-1]["content"], "Answer: ")
+
+    def test_pinned_hash_per_version(self):
+        for version, template in self.config["templates"].items():
+            self.assertEqual(q.template_hash(template), PROMPT_PINS[version],
+                             "prompt v{} text changed: add a new version instead".format(version))
+
+    def test_prompt_hash_includes_the_version_and_the_template(self):
+        prompt = "same user text"
+        v1, v2, v3 = (self.config["templates"][v] for v in (1, 2, 3))
+        hashes = {q.prompt_hash(prompt, t) for t in (v1, v2, v3)}
+        self.assertEqual(len(hashes), 3)
+        renumbered = dict(v2, version=9)
+        self.assertNotEqual(q.prompt_hash(prompt, v2), q.prompt_hash(prompt, renumbered))
+        self.assertEqual(q.prompt_hash(prompt, v2), q.prompt_hash(prompt, dict(v2)))
+
+    def test_template_validation(self):
+        q.validate_prompt_config({"default_version": 1, "probability_source": "raw_logprobs",
+                                  "versions": {"1": {"system": None, "answer_line": None, "prefill": None}}})
+        bad = [
+            {"default_version": 2, "probability_source": "auto", "versions": {"1": {}}},
+            {"default_version": 1, "probability_source": "weird", "versions": {"1": {}}},
+            {"default_version": 1, "probability_source": "auto", "versions": {"x": {}}},
+            {"default_version": 1, "probability_source": "auto", "versions": {"1": {"system": 3}}},
+        ]
+        for config in bad:
+            with self.assertRaises(ValueError, msg=str(config)):
+                q.validate_prompt_config(config)
+
+
+class SourceRequestTests(unittest.TestCase):
+    def test_post_sampling_body_samples_the_untruncated_distribution(self):
+        template = q.default_template()
+        prompt = "p"
+        body = q.request_body(prompt, ["A", "B", "C"], template, "post_sampling")
+        self.assertEqual(body, {
+            "messages": [{"role": "system", "content": SYSTEM_TEXT}, {"role": "user", "content": "p"}],
+            "max_tokens": 1,
+            "temperature": 1,
+            "top_k": 0,
+            "top_p": 1,
+            "min_p": 0,
+            "grammar": 'root ::= "A" | "B" | "C"',
+            "logprobs": True,
+            "top_logprobs": 20,
+            "post_sampling_probs": True,
+            "chat_template_kwargs": {"enable_thinking": False},
+        })
+
+    def test_raw_body_is_deterministic_and_has_no_post_sampling_flag(self):
+        body = q.request_body("p", ["A", "B"], q.default_template(), "raw_logprobs")
+        self.assertEqual(body["temperature"], 0)
+        self.assertNotIn("post_sampling_probs", body)
+        self.assertNotIn("top_k", body)
+
+    def test_unknown_source_is_rejected(self):
+        with self.assertRaises(ValueError):
+            q.request_body("p", ["A"], q.default_template(), "weird")
+
+
+class PostSamplingProviderTests(unittest.TestCase):
+    def setUp(self):
+        self.server = FakeLlama()
+        self.addCleanup(self.server.stop)
+        self.provider = q.LlamaCppProvider(self.server.url, model_ref="m", timeout=5, health_timeout=2)
+        self.template = q.default_template()
+
+    def complete(self, source="post_sampling"):
+        return self.provider.complete("prompt", ["A", "B", "C"], source=source, template=self.template)
+
+    def test_sends_post_sampling_probs_and_reads_top_probs_as_logprobs(self):
+        self.server.post_completion = FakeLlama.post_sampling_completion({"A": 0.7, "B": 0.2, "C": 0.1})
+        out = self.complete()
+        body = self.server.completions()[0]
+        self.assertIs(body["post_sampling_probs"], True)
+        self.assertEqual((body["temperature"], body["top_k"], body["top_p"], body["min_p"]), (1, 0, 1, 0))
+        self.assertEqual(out["source"], "post_sampling")
+        self.assertEqual([e["token"] for e in out["top_logprobs"]], ["A", "B", "C"])
+        self.assertAlmostEqual(out["top_logprobs"][0]["logprob"], math.log(0.7), places=12)
+        self.assertEqual(out["timings"]["predicted_ms"], 9.0)
+
+    def test_probabilities_come_from_the_returned_probs_not_from_the_sampled_token(self):
+        self.server.post_completion = FakeLlama.post_sampling_completion(
+            {"B": 0.1, "A": 0.8, "C": 0.1}, content="B", sampled="B")
+        out = self.complete()
+        result = q.convert(q.load_questions()["direction_1h"], out["top_logprobs"], 1.0, content=out["content"])
+        self.assertEqual(result["chosen"], "up")
+        self.assertAlmostEqual(result["probabilities"]["up"], 0.8, places=9)
+
+    def test_a_raw_shaped_answer_is_not_mistaken_for_post_sampling(self):
+        # A llama-server that ignores post_sampling_probs answers with top_logprobs.
+        with self.assertRaises(q.ModelResponseError) as caught:
+            self.complete()
+        self.assertEqual(caught.exception.kind, "post_sampling_unsupported")
+
+    def test_a_full_vocabulary_answer_without_all_letters_is_asked_again(self):
+        # When the unconstrained first draw happens to be allowed, llama-server returns the
+        # unmasked candidates (letters absent from the top n); the next draw is masked.
+        unmasked = FakeLlama.post_sampling_completion({"To": 0.9, "Based": 0.05, "A": 0.01}, sampled="A")
+        masked = FakeLlama.post_sampling_completion({"A": 0.6, "B": 0.3, "C": 0.1})
+        self.server.post_completion = [unmasked, masked]
+        out = self.complete()
+        self.assertEqual(len(self.server.completions()), 2)
+        self.assertEqual([e["token"] for e in out["top_logprobs"]], ["A", "B", "C"])
+
+    def test_gives_up_after_a_few_unmasked_answers(self):
+        self.server.post_completion = FakeLlama.post_sampling_completion({"To": 0.9, "A": 0.01})
+        with self.assertRaises(q.ModelResponseError) as caught:
+            self.complete()
+        self.assertEqual(caught.exception.kind, "post_sampling_unmasked")
+        self.assertEqual(len(self.server.completions()), q.POST_SAMPLING_ATTEMPTS)
+
+    def test_a_zero_probability_letter_is_just_absent(self):
+        self.server.post_completion = FakeLlama.post_sampling_completion({"A": 0.75, "B": 0.25})
+        out = self.complete()
+        result = q.convert(q.load_questions()["direction_1h"], out["top_logprobs"], 1.0)
+        self.assertEqual(result["missing"], ["C"])
+
+    def test_raw_source_still_reads_top_logprobs(self):
+        out = self.complete("raw_logprobs")
+        self.assertEqual(out["source"], "raw_logprobs")
+        self.assertNotIn("post_sampling_probs", self.server.completions()[0])
+
+
+class AutoSourceTests(ServiceBase):
+    """The service end to end against the fake llama-server."""
+
+    def setUp(self):
+        super().setUp()
+        self.server = FakeLlama()
+        self.addCleanup(self.server.stop)
+        self.llama = q.LlamaCppProvider(self.server.url, model_ref="m", timeout=5, health_timeout=2)
+        self.no_letters = FakeLlama.default_completion(top(To=-0.0049, Based=-5.35, Let=-6.0, We=-7.0), content="To")
+        self.post = FakeLlama.post_sampling_completion({"A": 0.5, "B": 0.3, "C": 0.2})
+
+    def run_service(self, **overrides):
+        service = self.service(provider=self.llama, **overrides)
+        self.assertEqual(service.poll(), 1)
+        return self.rows()[0]
+
+    def test_raw_with_all_letters_is_used_without_a_second_request(self):
+        row = self.run_service()
+        self.assertEqual(len(self.server.completions()), 1)
+        self.assertEqual(row["probability_source"], "raw_logprobs")
+        self.assertEqual(row["prompt_version"], 2)
+
+    def test_auto_reasks_with_post_sampling_when_letters_are_missing(self):
+        self.server.completion = self.no_letters
+        self.server.post_completion = self.post
+        row = self.run_service()
+        bodies = self.server.completions()
+        self.assertEqual(len(bodies), 2)
+        self.assertNotIn("post_sampling_probs", bodies[0])
+        self.assertIs(bodies[1]["post_sampling_probs"], True)
+        self.assertEqual(row["probability_source"], "post_sampling")
+        self.assertEqual(row["chosen"], "up")
+        self.assertAlmostEqual(json.loads(row["probabilities_json"])["up"], 0.5, places=9)
+        self.assertEqual(json.loads(row["top_logprobs_json"])[0]["token"], "A")
+
+    def test_auto_reasks_when_only_some_letters_are_missing(self):
+        self.server.completion = FakeLlama.default_completion(top(A=-0.2, B=-2.0, To=-3.0))
+        self.server.post_completion = self.post
+        row = self.run_service()
+        self.assertEqual(row["probability_source"], "post_sampling")
+        self.assertEqual(len(self.server.completions()), 2)
+
+    def test_auto_keeps_a_partial_raw_answer_when_post_sampling_is_unsupported(self):
+        self.server.completion = FakeLlama.default_completion(top(A=-0.2, B=-2.0, To=-3.0))
+        row = self.run_service()  # post_completion None: the server ignores the flag
+        self.assertEqual(row["probability_source"], "raw_logprobs")
+        self.assertEqual(len(self.server.completions()), 2)
+
+    def test_auto_without_letters_anywhere_is_an_error_row(self):
+        self.server.completion = self.no_letters
+        service = self.service(provider=self.llama)
+        self.assertEqual(service.poll(), 0)
+        self.assertEqual(self.rows(), [])
+        self.assertEqual(self.rows("paper_futures_llm_errors")[0]["kind"], "post_sampling_unsupported")
+
+    def test_explicit_raw_never_falls_back(self):
+        self.server.completion = self.no_letters
+        self.server.post_completion = self.post
+        service = self.service(provider=self.llama, probability_source="raw_logprobs")
+        self.assertEqual(service.poll(), 0)
+        self.assertEqual(len(self.server.completions()), 1)
+        self.assertEqual(self.rows("paper_futures_llm_errors")[0]["kind"], "no_letters")
+
+    def test_explicit_post_sampling_goes_straight_to_post_sampling(self):
+        self.server.post_completion = self.post
+        row = self.run_service(probability_source="post_sampling")
+        bodies = self.server.completions()
+        self.assertEqual(len(bodies), 1)
+        self.assertIs(bodies[0]["post_sampling_probs"], True)
+        self.assertEqual(row["probability_source"], "post_sampling")
+
+    def test_calibration_temperature_applies_on_top_of_post_sampling(self):
+        self.server.completion = self.no_letters
+        self.server.post_completion = self.post
+        self.calibration["temperatures"]["t_choice@1"] = 2.0
+        row = self.run_service()
+        raw = [math.sqrt(0.5), math.sqrt(0.3), math.sqrt(0.2)]
+        self.assertEqual(row["temperature"], 2.0)
+        self.assertAlmostEqual(json.loads(row["probabilities_json"])["up"], raw[0] / sum(raw), places=9)
+
+    def test_the_prompt_version_is_stored_and_hashed_with_the_decision(self):
+        templates = q.load_prompt_config()["templates"]
+        rows = []
+        for version in (1, 2):
+            self.decisions_path = os.path.join(self.dir, "decisions{}.sqlite".format(version))
+            self.server.requests.clear()
+            rows.append(self.run_service(template=templates[version]))
+            roles = [m["role"] for m in self.server.completions()[0]["messages"]]
+            self.assertEqual(roles, ["user"] if version == 1 else ["system", "user"])
+        self.assertEqual([r["prompt_version"] for r in rows], [1, 2])
+        self.assertNotEqual(rows[0]["prompt_hash"], rows[1]["prompt_hash"])
+
+    def test_the_service_refuses_a_non_loopback_provider(self):
+        for url in ("http://example.com:8088", "http://192.168.1.5:8088", "https://127.0.0.1:8088",
+                    "http://127.0.0.1.evil.com:8088", "file:///etc/passwd", "127.0.0.1:8088"):
+            with self.assertRaises(ValueError, msg=url):
+                q.LlamaCppProvider(url)
+        for url in ("http://127.0.0.1:8088", "http://localhost:9", "http://[::1]:8088/"):
+            q.LlamaCppProvider(url)
+
+    def test_the_cli_rejects_a_remote_llama_url(self):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            code = q.main(["--probe", "--llama-url", "http://example.com:8088"])
+        self.assertEqual(code, 2)
+        self.assertIn("loopback", err.getvalue())
+
+    def test_the_cli_validates_source_and_prompt_version(self):
+        for argv in (["--probe", "--probability-source", "weird"], ["--probe", "--prompt-version", "99"]):
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+                try:
+                    code = q.main(argv, provider=q.FakeProvider(entries=entries()))
+                except SystemExit as exit_:
+                    code = exit_.code
+            self.assertEqual(code, 2, argv)
+
+
+class ProbeSourcesTests(unittest.TestCase):
+    def setUp(self):
+        self.server = FakeLlama()
+        self.addCleanup(self.server.stop)
+        self.provider = q.LlamaCppProvider(self.server.url, model_ref="m", timeout=5, health_timeout=2)
+        self.no_letters = FakeLlama.default_completion(
+            top(To=-0.0049, Based=-5.35, Let=-6.0, We=-7.0, The=-8.0), content="To")
+        self.post = FakeLlama.post_sampling_completion({"A": 0.5, "B": 0.3, "C": 0.2})
+
+    def probe(self, **kwargs):
+        out = io.StringIO()
+        code = q.probe(self.provider, q.load_questions(), out=out, **kwargs)
+        return code, out.getvalue()
+
+    def test_the_user_case_raw_has_no_letters_but_post_sampling_does(self):
+        self.server.completion = self.no_letters
+        self.server.post_completion = self.post
+        code, text = self.probe()
+        self.assertEqual(code, 0)
+        self.assertIn("missing: A, B, C", text)
+        self.assertIn("raw_logprobs", text)
+        self.assertIn("post_sampling", text)
+        self.assertRegex(text, r"post_sampling\s+A B C \(3/3\)\s+up=0\.500 down=0\.300 flat=0\.200")
+        self.assertRegex(text, r"raw_logprobs\s+none \(0/3\)")
+        self.assertIn("service would use: post_sampling", text)
+        self.assertIn("RESULT: ok", text)
+        self.assertIn("prompt v2", text)
+
+    def test_both_sources_fine_uses_raw(self):
+        self.server.post_completion = self.post
+        code, text = self.probe()
+        self.assertEqual(code, 0)
+        self.assertRegex(text, r"raw_logprobs\s+A B C \(3/3\)")
+        self.assertIn("service would use: raw_logprobs", text)
+        self.assertIn("RESULT: ok", text)
+        self.assertEqual(len(self.server.completions()), 2)
+
+    def test_latency_is_reported_for_each_source(self):
+        self.server.post_completion = self.post
+        _, text = self.probe()
+        self.assertRegex(text, r"(?m)^raw_logprobs\s+A B C \(3/3\).*\s\d+\s*$")
+        self.assertRegex(text, r"(?m)^post_sampling\s+A B C \(3/3\).*\s\d+\s*$")
+        self.assertIn("latency_ms", text)
+
+    def test_neither_source_usable_is_a_failure(self):
+        self.server.completion = self.no_letters
+        code, text = self.probe()
+        self.assertEqual(code, 1)
+        self.assertIn("service would use: none", text)
+        self.assertIn("RESULT: 1 problem(s)", text)
+
+    def test_an_explicit_post_sampling_source_fails_even_if_raw_is_fine(self):
+        code, text = self.probe(source="post_sampling")
+        self.assertEqual(code, 1)
+        self.assertIn("service would use: none", text)
+
+    def test_an_explicit_raw_source_ignores_post_sampling(self):
+        self.server.completion = self.no_letters
+        self.server.post_completion = self.post
+        code, text = self.probe(source="raw_logprobs")
+        self.assertEqual(code, 1)
+        self.assertEqual(len(self.server.completions()), 1)
+        self.assertIn("service would use: none", text)
+
+    def test_partial_letters_are_reported_as_a_problem(self):
+        self.server.completion = FakeLlama.default_completion(top(A=-0.2, B=-2.0, zzz=-3.0))
+        code, text = self.probe()
+        self.assertEqual(code, 1)
+        self.assertIn("missing: C", text)
+        self.assertIn("degraded", text)
+
+    def test_post_sampling_error_is_shown_not_raised(self):
+        code, text = self.probe()
+        self.assertEqual(code, 0)
+        self.assertIn("post_sampling_unsupported", text)
+
+    def test_prompt_variants_compare_every_version_and_source(self):
+        self.server.completion = self.no_letters
+        self.server.post_completion = self.post
+        out = io.StringIO()
+        code = q.probe_prompt_variants(self.provider, q.load_questions(), out=out)
+        text = out.getvalue()
+        bodies = self.server.completions()
+        self.assertEqual(len(bodies), 6)  # 3 versions x 2 sources
+        self.assertEqual([m["role"] for m in bodies[0]["messages"]], ["user"])
+        self.assertEqual([m["role"] for m in bodies[2]["messages"]], ["system", "user"])
+        self.assertEqual([m["role"] for m in bodies[4]["messages"]], ["system", "user", "assistant"])
+        for version in ("v1", "v2", "v3"):
+            self.assertRegex(text, r"\b" + version + r"\b")
+        self.assertIn("(default prompt)", text)
+        self.assertRegex(text, r"RESULT: ")
+        self.assertEqual(code, 0)
+
+    def test_prompt_variants_show_when_the_new_prompt_fixes_raw(self):
+        no_letters, letters = self.no_letters, FakeLlama.default_completion(entries())
+        def pick(body):
+            return letters if body["messages"][0]["role"] == "system" else no_letters
+        self.server.pick = pick
+        self.server.post_completion = self.post
+        out = io.StringIO()
+        code = q.probe_prompt_variants(self.provider, q.load_questions(), out=out)
+        text = out.getvalue()
+        self.assertRegex(text, r"v1\s+raw_logprobs\s+none \(0/3\)")
+        self.assertRegex(text, r"v2\s+raw_logprobs\s+A B C \(3/3\)")
+        self.assertEqual(code, 0)
+
+    def test_prompt_variants_unreachable_server_exits_two(self):
+        self.provider = q.LlamaCppProvider("http://127.0.0.1:9", timeout=1, health_timeout=1)
+        out = io.StringIO()
+        self.assertEqual(q.probe_prompt_variants(self.provider, q.load_questions(), out=out), 2)
+
+    def test_cli_flag_runs_the_variants(self):
+        self.server.post_completion = self.post
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = q.main(["--probe-prompt-variants", "--llama-url", self.server.url])
+        self.assertEqual(code, 0)
+        self.assertIn("v3", out.getvalue())
 
 
 if __name__ == "__main__":

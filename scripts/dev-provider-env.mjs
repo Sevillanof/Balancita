@@ -125,7 +125,6 @@ function pythonStatus(python) {
 }
 
 export const DEFAULT_LLAMA_PORT = 8088
-export const DEFAULT_LLAMA_HF = 'unsloth/Qwen3.5-4B-GGUF:Q8_0'
 
 /** Port of the optional `llama-server` child (`LLAMA_PORT`, default 8088). */
 export function llamaPort(env) {
@@ -162,7 +161,8 @@ export function loadDevEnv({ root, env, read = readIfPresent }) {
   return { ...merged, ...env }
 }
 
-const QWEN_MODEL = /qwen3\.5[-_ ]?4b/i
+// Families in order of preference: Qwen3.5-4B first, then Qwen3-4B.
+const QWEN_MODELS = [/qwen3\.5[-_ ]?4b/i, /qwen3[-_ ]?4b/i]
 // Partial downloads never end in `.gguf` (`.part`, `.downloadInProgress`,
 // `.crdownload`, `.incomplete`), so requiring the extension excludes them.
 const QUANT_PREFERENCE = [/q8_0/i, /q6_k/i]
@@ -198,6 +198,9 @@ function modelSearchRoots({ env, home, platform }) {
   return [
     { dir: llamaCache, depth: 0 },
     { dir: join(hub, 'models--unsloth--Qwen3.5-4B-GGUF'), depth: 2 },
+    // HF hub layout: models--<org>--<repo>/snapshots/<commit>/<file>.gguf
+    { dir: join(hub, 'models--Qwen--Qwen3-4B-GGUF'), depth: 2 },
+    { dir: join(hub, 'models--unsloth--Qwen3-4B-GGUF'), depth: 2 },
     { dir: join(home, '.lmstudio/models'), depth: 2 },
     { dir: join(home, '.cache/lm-studio/models'), depth: 2 },
     { dir: join(home, 'models'), depth: 2 },
@@ -206,9 +209,9 @@ function modelSearchRoots({ env, home, platform }) {
 }
 
 /**
- * Looks for a local Qwen3.5-4B GGUF in the known cache and download
+ * Looks for a local Qwen3.5-4B or Qwen3-4B GGUF in the known cache and download
  * directories (bounded depth, never a full disk walk). Skips `mmproj` files,
- * partial downloads and empty files. Prefers Q8_0, then Q6_K, then any other
+ * partial downloads and empty files. Prefers Qwen3.5-4B over Qwen3-4B, then Q8_0, then Q6_K, then any other
  * quant; ties go to the earlier directory. Returns the path or `undefined`;
  * never throws.
  */
@@ -232,16 +235,14 @@ export function findQwenModel({
         if (depth > 0) walk(path, depth - 1, order)
         continue
       }
-      if (
-        !/\.gguf$/i.test(name) ||
-        !QWEN_MODEL.test(name) ||
-        /mmproj/i.test(name) ||
-        !fs.isFile(path)
-      )
+      if (!/\.gguf$/i.test(name) || /mmproj/i.test(name) || !fs.isFile(path))
         continue
+      const family = QWEN_MODELS.findIndex((re) => re.test(name))
+      if (family === -1) continue
       const quant = QUANT_PREFERENCE.findIndex((re) => re.test(name))
       candidates.push({
         path,
+        family,
         rank: quant === -1 ? QUANT_PREFERENCE.length : quant,
         order,
       })
@@ -252,16 +253,20 @@ export function findQwenModel({
   )
   candidates.sort(
     (a, b) =>
-      a.rank - b.rank || a.order - b.order || a.path.localeCompare(b.path),
+      a.family - b.family ||
+      a.rank - b.rank ||
+      a.order - b.order ||
+      a.path.localeCompare(b.path),
   )
   return candidates[0]?.path
 }
 
 /**
  * Model arguments for llama-server and the one `[dev]` line naming the
- * source: `LLAMA_MODEL_PATH` (-m), `LLAMA_HF` (-hf), else a discovered local
- * file (-m), else the default `-hf` download. `findModel` is injectable and
- * only called when neither variable is set.
+ * source: `LLAMA_MODEL_PATH` (-m), `LLAMA_HF` (-hf, only when the user sets
+ * it), else a discovered local file (-m). With none of them there are no
+ * `args` and nothing is ever downloaded: llm and q do not start.
+ * `findModel` is injectable and only called when neither variable is set.
  */
 export function resolveLlamaModel({ env, findModel = () => undefined }) {
   const modelPath = (env.LLAMA_MODEL_PATH ?? '').trim()
@@ -274,7 +279,7 @@ export function resolveLlamaModel({ env, findModel = () => undefined }) {
   if (hf)
     return {
       args: ['-hf', hf],
-      message: `[dev] llm model: -hf ${hf} (LLAMA_HF; llama-server downloads it on first use)`,
+      message: `[dev] llm model: -hf ${hf} (LLAMA_HF, set explicitly; llama-server runs with --offline so it only uses its local cache)`,
     }
   const found = findModel()
   if (found)
@@ -283,8 +288,9 @@ export function resolveLlamaModel({ env, findModel = () => undefined }) {
       message: `[dev] llm model: found ${found} (pin another with LLAMA_MODEL_PATH in .env.local)`,
     }
   return {
-    args: ['-hf', DEFAULT_LLAMA_HF],
-    message: `[dev] llm model: no local Qwen3.5-4B GGUF found; using -hf ${DEFAULT_LLAMA_HF} (llama-server reuses its cache or downloads it on first run)`,
+    args: undefined,
+    message:
+      '[dev] llm model: no local Qwen3.5-4B or Qwen3-4B GGUF found; llm and q will not start (nothing is downloaded). Set LLAMA_MODEL_PATH=/path/to/model.gguf in .env.local.',
   }
 }
 
@@ -527,6 +533,7 @@ export function devChildSpecs({
   function llmChildren() {
     const port = String(llamaPort(env))
     const model = resolveLlamaModel({ env, findModel }).args
+    if (!model) return []
     return [
       {
         name: 'llm',
@@ -534,6 +541,8 @@ export function devChildSpecs({
         cwd: root,
         args: [
           ...model,
+          // The model runs fully offline: never reach the network.
+          '--offline',
           '--host',
           '127.0.0.1',
           '--port',

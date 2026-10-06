@@ -1,0 +1,23 @@
+{
+  "version": "decision-prompts.v1",
+  "note": "Prompt templates and probability source for the LLM decisions (process Q). The prompt version is part of a decision's identity: it is stored with every decision and hashed into prompt_hash, and a hash per version is pinned in python/tests/test_futures_llm_decisions.py. Changing any text of a version requires a NEW version number (never edit a released one). Version 1 is the original prompt (no system message, no answer line) and is kept so --probe-prompt-variants can compare it. system: optional system message; answer_line: optional last line of the user message, {letters} becomes 'A, B or C'; prefill: optional assistant prefix the answer continues (llama-server continues a trailing assistant message). probability_source: raw_logprobs (logprobs before the grammar), post_sampling (probabilities after the sampler chain, i.e. over the grammar-allowed letters) or auto (raw first, post_sampling when an option letter is missing).",
+  "default_version": 2,
+  "probability_source": "auto",
+  "versions": {
+    "1": {
+      "system": null,
+      "answer_line": null,
+      "prefill": null
+    },
+    "2": {
+      "system": "You are a classifier. Reply with exactly one option letter and nothing else.",
+      "answer_line": "Answer with one letter ({letters}):",
+      "prefill": null
+    },
+    "3": {
+      "system": "You are a classifier. Reply with exactly one option letter and nothing else.",
+      "answer_line": "Answer with one letter ({letters}):",
+      "prefill": "Answer: "
+    }
+  }
+}

@@ -59,6 +59,8 @@ Qué verificar en la respuesta (`choices[0].logprobs.content[0].top_logprobs`):
 
 Si este paso no funciona, no avances.
 
+> Nota (implementación): los `logprobs` de llama-server se calculan ANTES de la gramática; si el modelo empieza con "To"/"Based", las letras quedan fuera del top 20. Se resuelve con un prompt versionado (system + línea final `Answer with one letter (...)`) y con `post_sampling_probs` como fuente alternativa (`auto`: raw primero, post_sampling si falta una letra). Ver `config/decision-prompts.json` y el README.
+
 ## Paso 5 — Definir cómo se convierten los logprobs en una decisión
 
 Esta es la lógica que vas a implementar. Son reglas, no código:

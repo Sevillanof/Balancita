@@ -42,7 +42,12 @@ const exitLabels = {
 // The optional model: never blocks startup, one [dev] line when it is skipped.
 const llama = resolveLlamaServer({ env })
 const python = resolvePython({ env })
-const llmEnabled = llama.command !== undefined && python.command !== undefined
+// Resolved once: no local model means no llm and no q (nothing is downloaded).
+const llmModel =
+  llama.command !== undefined && python.command !== undefined
+    ? resolveLlamaModel({ env, findModel: findQwenModel })
+    : undefined
+const llmEnabled = llmModel?.args !== undefined
 if (llama.command === undefined)
   process.stdout.write(`[dev] ${llama.message}\n`)
 else if (python.command === undefined)
@@ -71,12 +76,11 @@ else
   process.stdout.write(
     `[dev] Python for verdict/paper/scores: ${[python.command, ...python.prefixArgs].join(' ')} (${python.version})\n`,
   )
-// One search, one line: only when llm will really start.
+// One search, one line.
 let llmModelPath
-if (llmEnabled) {
-  const model = resolveLlamaModel({ env, findModel: findQwenModel })
-  llmModelPath = model.args[0] === '-m' ? model.args[1] : undefined
-  process.stdout.write(`${model.message}\n`)
+if (llmModel) {
+  llmModelPath = llmModel.args?.[0] === '-m' ? llmModel.args[1] : undefined
+  process.stdout.write(`${llmModel.message}\n`)
 }
 const useGroups = process.platform !== 'win32'
 const children = devChildSpecs({

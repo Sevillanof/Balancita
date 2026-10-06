@@ -539,6 +539,7 @@ describe('optional LLM decision children (llm and q)', () => {
     python: { command: 'python3', prefixArgs: [] },
   }
   const llm = { command: 'llama-server' }
+  const local = { LLAMA_MODEL_PATH: '/models/q.gguf' }
   const byName = (specs) => Object.fromEntries(specs.map((s) => [s.name, s]))
   const names = (specs) => specs.map((s) => s.name)
 
@@ -552,17 +553,25 @@ describe('optional LLM decision children (llm and q)', () => {
     assert.ok(!names(devChildSpecs({ ...base, env: {} })).includes('q'))
   })
 
-  it('starts llm and q after the other children when enabled', () => {
+  it('starts neither llm nor q when no local model is known (never downloads)', () => {
     const specs = devChildSpecs({ ...base, env: {}, llm })
+    assert.ok(!names(specs).includes('llm'))
+    assert.ok(!names(specs).includes('q'))
+    assert.ok(!specs.some((spec) => spec.args.includes('-hf')))
+  })
+
+  it('starts llm and q after the other children when enabled', () => {
+    const specs = devChildSpecs({ ...base, env: local, llm })
     assert.deepEqual(names(specs).slice(-2), ['llm', 'q'])
   })
 
-  it('runs llama-server on loopback with the guide flags and the default HF model', () => {
-    const { llm: spec } = byName(devChildSpecs({ ...base, env: {}, llm }))
+  it('runs llama-server offline on loopback with the guide flags', () => {
+    const { llm: spec } = byName(devChildSpecs({ ...base, env: local, llm }))
     assert.equal(spec.command, 'llama-server')
     assert.deepEqual(spec.args, [
-      '-hf',
-      'unsloth/Qwen3.5-4B-GGUF:Q8_0',
+      '-m',
+      '/models/q.gguf',
+      '--offline',
       '--host',
       '127.0.0.1',
       '--port',
@@ -587,23 +596,30 @@ describe('optional LLM decision children (llm and q)', () => {
     const { llm: spec } = byName(devChildSpecs({ ...base, env, llm }))
     assert.deepEqual(spec.args.slice(0, 2), ['-m', '/models/q.gguf'])
     assert.ok(!spec.args.includes('-hf'))
+    assert.ok(spec.args.includes('--offline'))
     assert.equal(spec.args[spec.args.indexOf('--port') + 1], '9001')
     assert.equal(spec.args[spec.args.indexOf('-c') + 1], '4096')
     assert.equal(spec.args[spec.args.indexOf('-np') + 1], '3')
     const hf = byName(
       devChildSpecs({ ...base, env: { LLAMA_HF: 'org/other:Q6_K' }, llm }),
     )
-    assert.deepEqual(hf.llm.args.slice(0, 2), ['-hf', 'org/other:Q6_K'])
+    assert.deepEqual(hf.llm.args.slice(0, 3), [
+      '-hf',
+      'org/other:Q6_K',
+      '--offline',
+    ])
   })
 
   it('never exposes a tools or agent flag nor binds beyond loopback', () => {
-    const { llm: spec } = byName(devChildSpecs({ ...base, env: {}, llm }))
+    const { llm: spec } = byName(devChildSpecs({ ...base, env: local, llm }))
     assert.equal(spec.args[spec.args.indexOf('--host') + 1], '127.0.0.1')
     assert.ok(!spec.args.some((a) => /tools|agent/.test(a)))
   })
 
   it('runs Python process Q over the market and verdicts databases into its own decisions database', () => {
-    const { q } = byName(devChildSpecs({ ...base, env: { KEEP: 'yes' }, llm }))
+    const { q } = byName(
+      devChildSpecs({ ...base, env: { ...local, KEEP: 'yes' }, llm }),
+    )
     assert.equal(q.command, 'python3')
     assert.equal(q.cwd, '/repo/server')
     assert.deepEqual(q.args, [
@@ -622,13 +638,13 @@ describe('optional LLM decision children (llm and q)', () => {
 
   it('hands q the llama port so it follows LLAMA_PORT', () => {
     const { q } = byName(
-      devChildSpecs({ ...base, env: { LLAMA_PORT: '9001' }, llm }),
+      devChildSpecs({ ...base, env: { ...local, LLAMA_PORT: '9001' }, llm }),
     )
     assert.equal(q.env.LLAMA_PORT, '9001')
   })
 
   it('starts neither llm nor q without Python', () => {
-    const specs = devChildSpecs({ ...base, env: {}, llm, python: null })
+    const specs = devChildSpecs({ ...base, env: local, llm, python: null })
     assert.ok(!names(specs).includes('llm'))
     assert.ok(!names(specs).includes('q'))
   })
@@ -813,14 +829,28 @@ describe('findQwenModel', () => {
     )
   })
 
-  it('ignores other models and sizes (Qwen3.5-14B is not 4B)', () => {
+  it('ignores other models and sizes (Qwen3.5-14B and Qwen3-14B are not 4B)', () => {
     assert.equal(
       mac({
         '/home/me/models/Qwen3.5-14B-Q8_0.gguf': true,
-        '/home/me/models/Qwen3-4B-Q8_0.gguf': true,
+        '/home/me/models/Qwen3-14B-Q8_0.gguf': true,
+        '/home/me/models/Qwen3-8B-Q8_0.gguf': true,
       }),
       undefined,
     )
+  })
+
+  it('finds Qwen3-4B in the Hugging Face hub snapshot layout', () => {
+    const path =
+      '/home/me/.cache/huggingface/hub/models--Qwen--Qwen3-4B-GGUF/snapshots/bc640142c66e1fdd12af0bd68f40445458f3869b/Qwen3-4B-Q8_0.gguf'
+    assert.equal(mac({ [path]: true }), path)
+  })
+
+  it('prefers Qwen3.5-4B over Qwen3-4B even with a worse quant', () => {
+    const q35 = '/home/me/Downloads/Qwen3.5-4B-Q6_K.gguf'
+    const q3 = '/home/me/models/Qwen3-4B-Q8_0.gguf'
+    assert.equal(mac({ [q35]: true, [q3]: true }), q35)
+    assert.equal(mac({ [q3]: true }), q3)
   })
 
   it('prefers Q8_0, then Q6_K, then any other match', () => {
@@ -915,10 +945,13 @@ describe('resolveLlamaModel', () => {
     assert.ok(!model.message.includes('\n'))
   })
 
-  it('falls back to the default -hf model when nothing is found', () => {
+  it('never falls back to a download when nothing is found', () => {
     const model = resolveLlamaModel({ env: {}, findModel: () => undefined })
-    assert.deepEqual(model.args, ['-hf', 'unsloth/Qwen3.5-4B-GGUF:Q8_0'])
-    assert.match(model.message, /-hf unsloth\/Qwen3\.5-4B-GGUF:Q8_0/)
+    assert.equal(model.args, undefined)
+    assert.match(model.message, /^\[dev\] /)
+    assert.match(model.message, /no local/)
+    assert.match(model.message, /LLAMA_MODEL_PATH/)
+    assert.ok(!model.message.includes('\n'))
   })
 
   it('treats blank env values as unset', () => {
@@ -946,7 +979,7 @@ describe('devChildSpecs model selection', () => {
     assert.deepEqual(args.slice(0, 2), ['-m', '/found/Qwen3.5-4B-Q8_0.gguf'])
   })
 
-  it('keeps LLAMA_MODEL_PATH first and falls back to -hf by default', () => {
+  it('keeps LLAMA_MODEL_PATH first and has no llm child (no -hf) without a model', () => {
     assert.deepEqual(
       specs({ LLAMA_MODEL_PATH: '/p.gguf' }, () => '/found.gguf').args.slice(
         0,
@@ -954,9 +987,6 @@ describe('devChildSpecs model selection', () => {
       ),
       ['-m', '/p.gguf'],
     )
-    assert.deepEqual(specs({}).args.slice(0, 2), [
-      '-hf',
-      'unsloth/Qwen3.5-4B-GGUF:Q8_0',
-    ])
+    assert.equal(specs({}), undefined)
   })
 })

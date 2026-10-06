@@ -94,40 +94,45 @@ start only when `DECISIONS_ENABLED` is not `0`, the `llama-server` binary is on
 `PATH` (`brew install llama.cpp`) and Python is available; otherwise `dev`
 prints one `[dev]` line and goes on. Ctrl-C stops `llm` with the rest.
 
-Plain `pnpm run dev` needs no extra typing for the model. When neither
-`LLAMA_MODEL_PATH` nor `LLAMA_HF` is set, `dev` looks for an already downloaded
-Qwen3.5-4B GGUF (`*qwen3.5-4b*.gguf`, any case; `mmproj` files and partial
-downloads are skipped) in the llama.cpp cache (`~/Library/Caches/llama.cpp` on
-macOS, `~/.cache/llama.cpp` on Linux, or `LLAMA_CACHE`), the Hugging Face hub
-cache (`unsloth/Qwen3.5-4B-GGUF`, under `HF_HOME`), LM Studio
-(`~/.lmstudio/models`, `~/.cache/lm-studio/models`), `~/models` and
-`~/Downloads`, a few levels deep at most. It prefers Q8_0, then Q6_K, then any
-other quant, and prints one line naming the choice, for example
-`[dev] llm model: found /Users/you/models/Qwen3.5-4B-Q8_0.gguf (...)`. If
-nothing is found it uses `-hf unsloth/Qwen3.5-4B-GGUF:Q8_0`, which reuses the
-llama.cpp cache if the model was fetched that way and otherwise downloads it
-(the `q` child logs `model unavailable` once while the model loads, then
-`model available again`).
+**The model runs fully offline.** `dev` never downloads a model: `llama-server`
+is always started with `--offline` and bound to `127.0.0.1`, and the Python
+provider refuses any `--llama-url` that is not loopback (`127.0.0.1`,
+`localhost`, `[::1]`).
+
+When neither `LLAMA_MODEL_PATH` nor `LLAMA_HF` is set, `dev` looks for an already
+downloaded Qwen3.5-4B or Qwen3-4B GGUF (`*qwen3.5-4b*.gguf` or `*qwen3-4b*.gguf`,
+any case; `mmproj` files and partial downloads are skipped) in the llama.cpp
+cache (`~/Library/Caches/llama.cpp` on macOS, `~/.cache/llama.cpp` on Linux, or
+`LLAMA_CACHE`), the Hugging Face hub cache (`models--unsloth--Qwen3.5-4B-GGUF`,
+`models--Qwen--Qwen3-4B-GGUF`, `models--unsloth--Qwen3-4B-GGUF`, under
+`HF_HOME`/`snapshots/<commit>/`), LM Studio (`~/.lmstudio/models`,
+`~/.cache/lm-studio/models`), `~/models` and `~/Downloads`, a few levels deep at
+most. Qwen3.5-4B wins over Qwen3-4B when both exist; then Q8_0, then Q6_K, then
+any other quant. It prints one line naming the choice, for example
+`[dev] llm model: found /Users/you/.cache/huggingface/hub/models--Qwen--Qwen3-4B-GGUF/snapshots/<commit>/Qwen3-4B-Q8_0.gguf (...)`.
+If nothing is found, `dev` prints one `[dev]` line saying so and does not start
+`llm` or `q`; set `LLAMA_MODEL_PATH` in `.env.local`. `-hf` is used only when you
+set `LLAMA_HF` yourself (with `--offline` it can only use the local cache).
 
 To pin the model, create `.env.local` (gitignored) in the repo root:
 
 ```bash
-LLAMA_MODEL_PATH=/path/to/Qwen3.5-4B-Q8_0.gguf
+LLAMA_MODEL_PATH=/path/to/Qwen3-4B-Q8_0.gguf
 ```
 
 `dev` loads `<repo>/.env.local` and then `<repo>/.env` for its children; real
 environment variables win over `.env.local`, which wins over `.env`. The
 variables:
 
-| Variable             | Default                        | Meaning                                    |
-| -------------------- | ------------------------------ | ------------------------------------------ |
-| `DECISIONS_ENABLED`  | on                             | `0` disables `llm` and `q`                 |
-| `LLAMA_MODEL_PATH`   | -                              | local `.gguf` (`-m`); wins over `LLAMA_HF` |
-| `LLAMA_HF`           | `unsloth/Qwen3.5-4B-GGUF:Q8_0` | Hugging Face model (`-hf`)                 |
-| `LLAMA_PORT`         | `8088`                         | loopback port (also checked for conflicts) |
-| `LLAMA_CTX`          | `8192`                         | context (`-c`)                             |
-| `LLAMA_PARALLEL`     | `2`                            | parallel slots (`-np`)                     |
-| `DECISIONS_PRODUCTS` | `PF_XBTUSD`                    | products Q decides, comma separated        |
+| Variable             | Default     | Meaning                                    |
+| -------------------- | ----------- | ------------------------------------------ |
+| `DECISIONS_ENABLED`  | on          | `0` disables `llm` and `q`                 |
+| `LLAMA_MODEL_PATH`   | -           | local `.gguf` (`-m`); wins over `LLAMA_HF` |
+| `LLAMA_HF`           | -           | explicit Hugging Face ref (`-hf`, offline) |
+| `LLAMA_PORT`         | `8088`      | loopback port (also checked for conflicts) |
+| `LLAMA_CTX`          | `8192`      | context (`-c`)                             |
+| `LLAMA_PARALLEL`     | `2`         | parallel slots (`-np`)                     |
+| `DECISIONS_PRODUCTS` | `PF_XBTUSD` | products Q decides, comma separated        |
 
 **First thing to run** (with `llama-server` up, by hand or via `pnpm run dev`):
 
@@ -135,17 +140,43 @@ variables:
 PYTHONPATH=python python3 -m balancita_engine.futures_llm_decisions --probe
 ```
 
-It sends one `direction_1h` request and prints whether `A`/`B`/`C` appear in
-`top_logprobs` (with their exact token strings, `"A"` or `" A"`), whether
-thinking leaked (`<think>`), the token count of each letter via `/tokenize`,
-the latency from `timings`, and the normalized probabilities. Exit code `0`
-means usable, `1` means a problem (do not continue; if thinking leaked, start
+It sends one `direction_1h` request through each of the two probability
+sources and prints them side by side: the raw `top_logprobs` (with the exact
+token strings, `"A"` or `" A"`), the `top_probs` after the grammar, whether
+thinking leaked (`<think>`), the token count of each letter via `/tokenize`, the
+latency of each source, and a table of letters present, probabilities and
+latency, followed by `service would use: ...` and a `RESULT:` line. Exit code
+`0` means usable, `1` means a problem (do not continue; if thinking leaked, start
 `llama-server` with `--reasoning off`), `2` means the model is not healthy.
+`--probe-prompt-variants` sends the same state with every prompt version in
+`config/decision-prompts.json` (1 = the old prompt, 2 = the default, 3 = v2 plus
+an assistant prefill `Answer: `) through both sources, to compare them on your
+machine. `--probability-source` and `--prompt-version` override the config.
 `--ask <question_id> [--product PF_X] --market-db ... --verdicts-db ...` asks one
 catalog question about the latest stored state and prints the probabilities,
 chosen option, confidence and latency without storing anything.
 
-Questions are data in `config/decision-questions.json`: id, version, type
+**Why two probability sources.** llama-server computes `logprobs` before the
+grammar, so a model whose natural first token is `To` or `Based` can push `A`,
+`B` and `C` out of the top 20. Two layers fix that, both data-driven in
+`config/decision-prompts.json`:
+
+1. A versioned prompt (`default_version`, now 2): a system message ("You are a
+   classifier. Reply with exactly one option letter and nothing else.") and a
+   final line `Answer with one letter (A, B or C):`, so the letter is the
+   natural first token. STATE stays first and QUESTION and the options keep the
+   `A) ... B) ...` format. The prompt version is stored with every decision and
+   hashed into `prompt_hash`; changing any text of a version needs a new version.
+2. `probability_source`: `raw_logprobs`, `post_sampling` or `auto` (default).
+   `post_sampling` sends `post_sampling_probs: true` with temperature 1, `top_k`
+   0, `top_p` 1 and `min_p` 0, so the grammar leaves only the option letters and
+   the returned `prob` values are the model's distribution over them. The decision
+   is the argmax of those probabilities, never the sampled token, and the
+   calibration temperature is applied on top in both sources. `auto` asks raw
+   first and re-asks with `post_sampling` when any option letter is missing. The
+   source used is stored per decision (`probability_source`).
+
+Questions are data in `config/decision-questions.json` (prompts in `config/decision-prompts.json`): id, version, type
 (`choice`, `bool` asked as `A) true B) false`, or `score` with a numeric value
 per option), instruction, options with descriptions and the STATE fields the
 question needs (named, normalized fields from one registry in
