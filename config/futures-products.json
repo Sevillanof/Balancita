@@ -1,0 +1,15 @@
+{
+  "version": "futures-products.v1",
+  "selected_on": "2026-10-06",
+  "basis": "Top 8 tradeable PF_* perpetuals by 24 h USD volume (tickers volumeQuote), PF_XBTUSD and PF_ETHUSD always included. tick_size is instruments[].tickSize. Pinned: change it by editing this file or setting FUTURES_PRODUCTS, never choose it at runtime, so replays stay deterministic.",
+  "products": [
+    { "product_id": "PF_XBTUSD", "tick_size": "1", "volume_quote_24h_usd": "283202822" },
+    { "product_id": "PF_ETHUSD", "tick_size": "0.1", "volume_quote_24h_usd": "66986344" },
+    { "product_id": "PF_SOLUSD", "tick_size": "0.01", "volume_quote_24h_usd": "39684012" },
+    { "product_id": "PF_ZECUSD", "tick_size": "0.01", "volume_quote_24h_usd": "33262620" },
+    { "product_id": "PF_XRPUSD", "tick_size": "0.0001", "volume_quote_24h_usd": "18578169" },
+    { "product_id": "PF_NEARUSD", "tick_size": "0.0001", "volume_quote_24h_usd": "17140863" },
+    { "product_id": "PF_HYPEUSD", "tick_size": "0.001", "volume_quote_24h_usd": "12504523" },
+    { "product_id": "PF_ADAUSD", "tick_size": "0.00001", "volume_quote_24h_usd": "10805742" }
+  ]
+}

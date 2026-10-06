@@ -5,6 +5,7 @@ import type { OfficialCandleResponse } from './official-candles.ts'
 import { existsSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { canonicalJson } from '../paper-futures/futures-canonical.ts'
+import { FUTURES_PRODUCT } from './futures-market.ts'
 
 type RecordValue = Record<string, unknown>
 type StoredRow = { normalized_json: string; received_sequence: number }
@@ -181,6 +182,14 @@ function time(value: unknown, name: string): number {
   return value
 }
 
+const OFFICIAL_PRODUCT = /^PF_[A-Z0-9]{2,20}$/
+
+function product(value: unknown): string {
+  if (typeof value !== 'string' || !OFFICIAL_PRODUCT.test(value))
+    throw new TypeError('Official candle product is invalid.')
+  return value
+}
+
 function officialRow(row: RecordValue): OfficialStoredCandle {
   return {
     intervalMs: Number(row.interval_ms),
@@ -228,7 +237,7 @@ export class FuturesMarketStore {
       // Tolerate the single writer holding a commit lock; never writes.
       this.db.exec('PRAGMA busy_timeout=2000;')
       const version = this.schemaVersion()
-      if (version !== 3 && version !== 4)
+      if (version !== 3 && version !== 4 && version !== 5)
         throw new Error(
           'Read-only futures market source schema is unsupported.',
         )
@@ -352,11 +361,95 @@ export class FuturesMarketStore {
         BEFORE DELETE ON paper_futures_official_candles BEGIN SELECT RAISE(ABORT, 'market evidence is immutable'); END;
       INSERT OR IGNORE INTO paper_futures_market_migrations VALUES(4, unixepoch('subsec') * 1000);
     `)
+    this.migrateOfficialCandlesToProducts()
   }
 
-  /** Read-only stores opened on a schema-3 file have no official candle tables. */
+  /**
+   * Migration 5: `product_id` joins the official candle tables and their keys.
+   *
+   * Schema 4 held PF_XBTUSD only. A primary key cannot be altered and the
+   * append-only triggers forbid UPDATE/DELETE, so the tables are rebuilt:
+   * copy every row, with its rowid and every value untouched, into new tables
+   * (existing rows become PF_XBTUSD), drop the old ones (DROP TABLE does not
+   * fire DELETE triggers; their triggers go with them), rename the new ones
+   * into place and recreate the triggers. It all runs in one IMMEDIATE
+   * transaction, so a crash leaves the old shape and readers see old or new,
+   * never a mix. Foreign keys are off only while rebuilding (the SQLite
+   * recommendation for table rebuilds) and `foreign_key_check` must be clean
+   * before it commits. Rowids are preserved because the gateway tails official
+   * candles by rowid. A file that already has `product_id` is not touched.
+   */
+  private migrateOfficialCandlesToProducts(): void {
+    const hasProduct = (this.db
+      .prepare(
+        "SELECT 1 FROM pragma_table_info('paper_futures_official_candles') WHERE name='product_id'",
+      )
+      .get() ?? undefined) as unknown
+    if (hasProduct === undefined) {
+      this.db.exec('PRAGMA foreign_keys=OFF')
+      try {
+        this.db.exec(`
+          BEGIN IMMEDIATE;
+          CREATE TABLE paper_futures_official_candle_responses_v5(
+            product_id TEXT NOT NULL, sha256 TEXT NOT NULL, interval_ms INTEGER NOT NULL,
+            from_ms INTEGER NOT NULL, to_ms INTEGER NOT NULL, received_at INTEGER NOT NULL,
+            raw_response TEXT NOT NULL, PRIMARY KEY(product_id, sha256)
+          ) STRICT;
+          INSERT INTO paper_futures_official_candle_responses_v5(rowid, product_id, sha256, interval_ms, from_ms, to_ms, received_at, raw_response)
+            SELECT rowid, '${FUTURES_PRODUCT}', sha256, interval_ms, from_ms, to_ms, received_at, raw_response
+            FROM paper_futures_official_candle_responses ORDER BY rowid;
+          CREATE TABLE paper_futures_official_candles_v5(
+            product_id TEXT NOT NULL, interval_ms INTEGER NOT NULL, bucket_start INTEGER NOT NULL,
+            revision_hash TEXT NOT NULL, known_at INTEGER NOT NULL, open_price TEXT NOT NULL,
+            high_price TEXT NOT NULL, low_price TEXT NOT NULL, close_price TEXT NOT NULL,
+            volume_btc TEXT NOT NULL, response_sha256 TEXT NOT NULL,
+            PRIMARY KEY(product_id, interval_ms, bucket_start, revision_hash),
+            FOREIGN KEY(product_id, response_sha256) REFERENCES paper_futures_official_candle_responses_v5(product_id, sha256)
+          ) STRICT;
+          INSERT INTO paper_futures_official_candles_v5(rowid, product_id, interval_ms, bucket_start, revision_hash, known_at,
+              open_price, high_price, low_price, close_price, volume_btc, response_sha256)
+            SELECT rowid, '${FUTURES_PRODUCT}', interval_ms, bucket_start, revision_hash, known_at,
+              open_price, high_price, low_price, close_price, volume_btc, response_sha256
+            FROM paper_futures_official_candles ORDER BY rowid;
+          DROP TABLE paper_futures_official_candles;
+          DROP TABLE paper_futures_official_candle_responses;
+          ALTER TABLE paper_futures_official_candle_responses_v5 RENAME TO paper_futures_official_candle_responses;
+          ALTER TABLE paper_futures_official_candles_v5 RENAME TO paper_futures_official_candles;
+          CREATE TRIGGER paper_futures_official_candle_responses_no_update
+            BEFORE UPDATE ON paper_futures_official_candle_responses BEGIN SELECT RAISE(ABORT, 'market evidence is immutable'); END;
+          CREATE TRIGGER paper_futures_official_candle_responses_no_delete
+            BEFORE DELETE ON paper_futures_official_candle_responses BEGIN SELECT RAISE(ABORT, 'market evidence is immutable'); END;
+          CREATE TRIGGER paper_futures_official_candles_no_update
+            BEFORE UPDATE ON paper_futures_official_candles BEGIN SELECT RAISE(ABORT, 'market evidence is immutable'); END;
+          CREATE TRIGGER paper_futures_official_candles_no_delete
+            BEFORE DELETE ON paper_futures_official_candles BEGIN SELECT RAISE(ABORT, 'market evidence is immutable'); END;
+        `)
+        const violations = this.db.prepare('PRAGMA foreign_key_check').all()
+        if (violations.length > 0)
+          throw new Error('Official candle migration broke a foreign key.')
+        this.db.exec(
+          "INSERT OR IGNORE INTO paper_futures_market_migrations VALUES(5, unixepoch('subsec') * 1000); COMMIT",
+        )
+      } catch (error) {
+        try {
+          this.db.exec('ROLLBACK')
+        } catch {
+          // no transaction was open
+        }
+        throw error
+      } finally {
+        this.db.exec('PRAGMA foreign_keys=ON')
+      }
+      return
+    }
+    this.db.exec(
+      "INSERT OR IGNORE INTO paper_futures_market_migrations VALUES(5, unixepoch('subsec') * 1000)",
+    )
+  }
+
+  /** Read-only stores on a schema-3/4 file have no per-product official candles (schema 4 has no product column). */
   private hasOfficialCandles(): boolean {
-    return this.schemaVersion() >= 4
+    return this.schemaVersion() >= 5
   }
 
   /** Prepares each hot-path statement once per connection. */
@@ -494,11 +587,13 @@ export class FuturesMarketStore {
     if (sha256(raw) !== response.sha256)
       throw new Error('Official candle response hash mismatch.')
     const receivedAt = time(response.receivedAtMs, 'official receivedAt')
+    const productId = product(response.productId)
     this.db.exec('BEGIN IMMEDIATE')
     try {
       this.prepared(
-        'INSERT OR IGNORE INTO paper_futures_official_candle_responses VALUES(?,?,?,?,?,?)',
+        'INSERT OR IGNORE INTO paper_futures_official_candle_responses VALUES(?,?,?,?,?,?,?)',
       ).run(
+        productId,
         response.sha256,
         time(response.intervalMs, 'official interval'),
         time(response.fromMs, 'official from'),
@@ -507,7 +602,7 @@ export class FuturesMarketStore {
         raw,
       )
       const insert = this.prepared(
-        'INSERT OR IGNORE INTO paper_futures_official_candles VALUES(?,?,?,?,?,?,?,?,?,?)',
+        'INSERT OR IGNORE INTO paper_futures_official_candles VALUES(?,?,?,?,?,?,?,?,?,?,?)',
       )
       let inserted = 0
       for (const candle of response.candles) {
@@ -523,6 +618,7 @@ export class FuturesMarketStore {
           volumeBtc: candle.volumeBtc,
         }
         const result = insert.run(
+          productId,
           candle.intervalMs,
           time(candle.bucketStart, 'official bucket'),
           digest(values),
@@ -544,16 +640,22 @@ export class FuturesMarketStore {
     }
   }
 
-  latestOfficialBucket(intervalMs: number): number | undefined {
+  latestOfficialBucket(
+    productId: string,
+    intervalMs: number,
+  ): number | undefined {
     if (!this.hasOfficialCandles()) return undefined
     const row = this.prepared(
-      'SELECT MAX(bucket_start) AS bucket FROM paper_futures_official_candles WHERE interval_ms=?',
-    ).get(time(intervalMs, 'official interval')) as { bucket: number | null }
+      'SELECT MAX(bucket_start) AS bucket FROM paper_futures_official_candles WHERE product_id=? AND interval_ms=?',
+    ).get(product(productId), time(intervalMs, 'official interval')) as {
+      bucket: number | null
+    }
     return row.bucket ?? undefined
   }
 
-  /** Latest `limit` official candles known by the cutoff, ascending. */
+  /** Latest `limit` official candles of a product known by the cutoff, ascending. */
   officialCandlesAsOf(
+    productId: string,
     intervalMs: number,
     knownAtCutoff: number,
     limit: number,
@@ -567,13 +669,14 @@ export class FuturesMarketStore {
            PARTITION BY bucket_start ORDER BY known_at, rowid
          ) AS revision_rank
          FROM paper_futures_official_candles
-         WHERE interval_ms=? AND known_at<=?
+         WHERE product_id=? AND interval_ms=? AND known_at<=?
        )
        SELECT * FROM (
          SELECT * FROM known WHERE revision_rank=1
          ORDER BY bucket_start DESC LIMIT ?
        ) ORDER BY bucket_start`,
     ).all(
+      product(productId),
       time(intervalMs, 'official interval'),
       time(knownAtCutoff, 'knownAtCutoff'),
       limit,
@@ -581,7 +684,7 @@ export class FuturesMarketStore {
     return rows.map(officialRow)
   }
 
-  /** Highest official-candle rowid (0 when none or on a schema-3 store). */
+  /** Highest official-candle rowid over all products (0 when none or on an old store). */
   maxOfficialRowid(): number {
     if (!this.hasOfficialCandles()) return 0
     const row = this.prepared(
@@ -591,11 +694,13 @@ export class FuturesMarketStore {
   }
 
   /**
-   * First-known official candles of one interval appended after a rowid
-   * cursor, ascending. A later changed revision of a known bucket is skipped,
-   * like `officialCandlesAsOf`. Bounded by rowid and the primary key.
+   * First-known official candles of one product and interval appended after a
+   * rowid cursor (global across products), ascending. A later changed revision
+   * of a known bucket is skipped, like `officialCandlesAsOf`. Bounded by rowid
+   * and the primary key.
    */
   officialCandlesAfter(
+    productId: string,
     rowid: number,
     intervalMs: number,
     limit = 500,
@@ -606,15 +711,21 @@ export class FuturesMarketStore {
     if (!this.hasOfficialCandles()) return []
     const rows = this.prepared(
       `SELECT o.rowid AS id, o.* FROM paper_futures_official_candles AS o
-       WHERE o.rowid>? AND o.interval_ms=?
+       WHERE o.rowid>? AND o.product_id=? AND o.interval_ms=?
          AND NOT EXISTS (
            SELECT 1 FROM paper_futures_official_candles AS earlier
-           WHERE earlier.interval_ms=o.interval_ms
+           WHERE earlier.product_id=o.product_id
+             AND earlier.interval_ms=o.interval_ms
              AND earlier.bucket_start=o.bucket_start
              AND earlier.rowid<o.rowid
          )
        ORDER BY o.rowid LIMIT ?`,
-    ).all(rowid, time(intervalMs, 'official interval'), limit) as RecordValue[]
+    ).all(
+      rowid,
+      product(productId),
+      time(intervalMs, 'official interval'),
+      limit,
+    ) as RecordValue[]
     return rows.map((row) => ({
       rowid: Number(row.id),
       candle: officialRow(row),
@@ -625,12 +736,17 @@ export class FuturesMarketStore {
    * Quality check of the observed capture against official candles: close
    * and volume of the final closed observed revision. Open/high/low follow
    * different conventions (Kraken opens at the previous close) and are not
-   * compared.
+   * compared. Observed candles exist for PF_XBTUSD only (WebSocket capture).
    */
   officialCandleQuality(
+    productId: string,
     intervalMs: number,
     sinceBucketStart = 0,
   ): OfficialCandleQuality {
+    if (product(productId) !== FUTURES_PRODUCT)
+      throw new RangeError(
+        `Observed candles exist for ${FUTURES_PRODUCT} only.`,
+      )
     const report: OfficialCandleQuality = {
       intervalMs,
       sinceBucketStart,
@@ -651,7 +767,7 @@ export class FuturesMarketStore {
                PARTITION BY bucket_start ORDER BY known_at, rowid
              ) AS revision_rank
            FROM paper_futures_official_candles
-           WHERE interval_ms=? AND bucket_start>=?
+           WHERE product_id=? AND interval_ms=? AND bucket_start>=?
          ), observed AS (
            SELECT bucket_start, close_price, volume_btc,
              ROW_NUMBER() OVER (
@@ -670,6 +786,7 @@ export class FuturesMarketStore {
          ORDER BY o.bucket_start`,
       )
       .all(
+        productId,
         intervalMs,
         sinceBucketStart,
         intervalMs,
@@ -1180,8 +1297,7 @@ export class FuturesMarketStore {
            ORDER BY rowid DESC LIMIT 1`,
         )
         .get(sourceWatermark, receivedCutoff) as
-        | { sequence: number; received_at: number }
-        | undefined
+        { sequence: number; received_at: number } | undefined
       const pendingCount = Number(pending.count)
       const firstSequence =
         pending.first_sequence === null ? null : Number(pending.first_sequence)

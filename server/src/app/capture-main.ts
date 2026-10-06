@@ -1,6 +1,7 @@
 import { FuturesMarketStore } from '../features/kraken-futures/futures-market-store.ts'
 import { createLiveCapture } from '../features/live-gateway/live-capture.ts'
 import type { FuturesSocket } from '../features/kraken-futures/futures-market.ts'
+import { resolveFuturesProducts } from '../features/kraken-futures/futures-products.ts'
 import { serverConfigFrom } from '../platform/config.ts'
 
 /** Public instrument catalog (no credentials); bounded by a 10 s timeout. */
@@ -27,6 +28,9 @@ async function main(): Promise<void> {
   if (typeof WebSocket === 'undefined')
     throw new Error('This Node runtime does not expose WebSocket.')
   // The sole writer of the live market database; no HTTP, engine or account DB.
+  // Pinned list (config/futures-products.json or FUTURES_PRODUCTS): the same
+  // one the Python services read, never chosen at runtime.
+  const products = resolveFuturesProducts(process.env)
   const store = new FuturesMarketStore(config.futuresMarketDbPath)
   const log = (line: string) =>
     process.stderr.write(`${new Date().toISOString()} [capture] ${line}\n`)
@@ -34,6 +38,7 @@ async function main(): Promise<void> {
     store,
     makeSocket: (url) => new WebSocket(url) as unknown as FuturesSocket,
     fetchCatalog: fetchPublicCatalog,
+    products,
     staleAfterMs: config.marketStaleAfterMs,
     reconnectMinMs: config.marketReconnectMinMs,
     reconnectMaxMs: config.marketReconnectMaxMs,
@@ -52,7 +57,11 @@ async function main(): Promise<void> {
   process.once('SIGINT', () => shutdown('SIGINT'))
   process.once('SIGTERM', () => shutdown('SIGTERM'))
   await capture.start()
-  log(`capturing into ${config.futuresMarketDbPath}`)
+  log(
+    `capturing into ${config.futuresMarketDbPath}; official candles for ${products
+      .map((item) => `${item.productId} (tick ${item.tickSize})`)
+      .join(', ')}`,
+  )
 }
 
 main().catch((error) => {

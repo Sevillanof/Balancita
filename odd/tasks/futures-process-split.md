@@ -255,6 +255,19 @@ Every sustained live run of the single process surfaced a new engine defect: the
     - a permanent candle gap leaves a barrier unresolved;
     - only 3 live (non-backfill) forecasts so far.
 
+- 2026-10-06 PS-07b multi-asset (delegated writer, Sonnet; reviewed by the parent from its report). Allowed by the ADR 0001 amendment.
+  - Pinned products are in `config/futures-products.json`, overridable with `FUTURES_PRODUCTS`: XBT, ETH, SOL, ZEC, XRP, NEAR, HYPE, ADA, each with its tick size.
+  - Market DB migration 5 adds `product_id` to the official candle tables and their primary keys. It rebuilds the tables in one transaction, preserving rowids, with the triggers recreated.
+  - Capture polls official 1 m / 5 m candles per product, 5 m first, with requests 250 ms apart (about 0.16 req/s). WebSocket capture and D stay BTC only.
+  - C and E run per product, with per-product regime chains and tick registry; config v2. The gateway and D filter on PF_XBTUSD.
+  - `futures_candles_export` writes aligned per-product CSVs for research.
+  - Evidence: Python 248 OK on 3.13 and 3.9; server 119; `scripts` 44/44; tsc clean; 8 mutations caught.
+  - Real run (15 min): 1454 verdicts per product. Live equals replay for C (11,632 verdicts) and E (all tables).
+  - Concerns:
+    - The verdicts DB grows about 140 MB per day for 8 products, because payloads carry every proposal and feature. Trim before long runs.
+    - Catch-up from empty takes about 4 min.
+    - The old verdicts and scores DBs must be deleted (config change).
+
 ## Next step
 
 - PS-04: news process N wired into C, with Gemini as veto/confidence stored per item. Or PS-05 first: paper execution D consuming fresh verdicts (`knowledge_lag_ms` below a threshold). The order is the user's call.

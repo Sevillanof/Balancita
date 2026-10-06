@@ -357,6 +357,25 @@ describe('paper engine follower', () => {
     expect(engine.poll()).toEqual([])
   })
 
+  it('maps PF_XBTUSD verdicts only, whatever other products share the verdicts DB', () => {
+    const dir = scratch()
+    const verdicts = new VerdictsDb(dir, closers)
+    const bucket = NOW - (NOW % 60_000)
+    verdicts.add(bucket - 60_000, 'LONG')
+    verdicts.add(bucket - 60_000, 'SHORT', {}, 'PF_ETHUSD')
+    const account = new AccountDb(dir, closers)
+    const engine = follower(account.path, verdicts.path)
+    const analyses = (engine.snapshotFields() as any).analyses
+    expect(analyses.map((item: any) => item.action)).toEqual(['LONG'])
+    // A later ETH verdict is not tailed; a later BTC one is.
+    verdicts.add(bucket, 'SHORT', {}, 'PF_ETHUSD')
+    expect(engine.poll()).toEqual([])
+    verdicts.add(bucket, 'WAIT')
+    const events = engine.poll()
+    expect(types(events)).toEqual(['analysis.completed'])
+    expect((events[0]!.data as any).analysis.action).toBe('WAIT')
+  })
+
   it('keeps only the latest 100 verdicts in the snapshot', () => {
     const dir = scratch()
     const verdicts = new VerdictsDb(dir, closers)

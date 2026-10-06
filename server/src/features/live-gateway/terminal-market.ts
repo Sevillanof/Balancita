@@ -1,3 +1,4 @@
+import { FUTURES_PRODUCT } from '../kraken-futures/futures-market.ts'
 import type {
   FuturesMarketStore,
   OfficialStoredCandle,
@@ -61,12 +62,13 @@ export function mergeClosedHistory(
     .map(([, row]) => row)
 }
 
-/** Closed 1m history of a store: official candles merged with observed ones. */
+/** Closed 1m PF_XBTUSD history of a store: official candles merged with observed ones. */
 export function closedHistoryRows(
   store: FuturesMarketStore,
 ): Record<string, unknown>[] {
   return mergeClosedHistory(
     store.officialCandlesAsOf(
+      FUTURES_PRODUCT,
       HISTORY_INTERVAL_MS,
       Number.MAX_SAFE_INTEGER,
       HISTORY_LIMIT,

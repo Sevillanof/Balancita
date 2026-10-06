@@ -11,9 +11,10 @@ CREATE TABLE paper_execution_events(seq INTEGER PRIMARY KEY, time_ms INTEGER NOT
 CREATE TABLE paper_execution_snapshots(seq INTEGER PRIMARY KEY, time_ms INTEGER NOT NULL, state_json TEXT NOT NULL,
   cursors_json TEXT NOT NULL, head_hash TEXT NOT NULL) STRICT;`
 const VERDICT_DDL = `
-CREATE TABLE paper_futures_verdicts(bucket_start INTEGER PRIMARY KEY, interval_ms INTEGER NOT NULL,
+CREATE TABLE paper_futures_verdicts(product_id TEXT NOT NULL, bucket_start INTEGER NOT NULL, interval_ms INTEGER NOT NULL,
   decision_known_at INTEGER NOT NULL, regime TEXT NOT NULL, action TEXT NOT NULL, reason_code TEXT NOT NULL,
-  verdict_hash TEXT NOT NULL, payload_json TEXT NOT NULL, written_at INTEGER NOT NULL) STRICT;`
+  verdict_hash TEXT NOT NULL, payload_json TEXT NOT NULL, written_at INTEGER NOT NULL,
+  PRIMARY KEY(product_id, bucket_start)) STRICT;`
 
 export const LONG_POSITION = {
   side: 'long',
@@ -113,7 +114,12 @@ export class VerdictsDb {
     this.db.exec(VERDICT_DDL)
     closers.push(() => this.db.close())
   }
-  add(bucket: number, action = 'LONG', extra: Record<string, unknown> = {}) {
+  add(
+    bucket: number,
+    action = 'LONG',
+    extra: Record<string, unknown> = {},
+    productId = 'PF_XBTUSD',
+  ) {
     const payload = {
       action,
       bucket_start_ms: bucket,
@@ -148,8 +154,9 @@ export class VerdictsDb {
       ...extra,
     }
     this.db
-      .prepare('INSERT INTO paper_futures_verdicts VALUES(?,?,?,?,?,?,?,?,?)')
+      .prepare('INSERT INTO paper_futures_verdicts VALUES(?,?,?,?,?,?,?,?,?,?)')
       .run(
+        productId,
         bucket,
         60_000,
         payload.decision_known_at_ms,

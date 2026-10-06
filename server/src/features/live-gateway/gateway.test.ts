@@ -85,6 +85,7 @@ function saveOfficial(
   indexes: number[],
   close = '90100',
   receivedAtMs = BASE + 100 * MINUTE,
+  productId = 'PF_XBTUSD',
 ): void {
   officialSerial += 1
   const candles = indexes.map((index) => ({
@@ -96,8 +97,9 @@ function saveOfficial(
     close,
     volumeBtc: '2.5',
   }))
-  const rawResponse = JSON.stringify({ officialSerial, candles })
+  const rawResponse = JSON.stringify({ officialSerial, productId, candles })
   store.appendOfficialCandles({
+    productId,
     intervalMs: MINUTE,
     fromMs: BASE,
     toMs: receivedAtMs,
@@ -110,7 +112,7 @@ function saveOfficial(
 
 function demoteToSchema3(path: string): void {
   const raw = new DatabaseSync(path)
-  raw.exec('DELETE FROM paper_futures_market_migrations WHERE version=4')
+  raw.exec('DELETE FROM paper_futures_market_migrations WHERE version>=4')
   raw.close()
 }
 
@@ -413,6 +415,54 @@ describe('live market gateway', () => {
       expect(bucket20.map((m) => (m.data as any).candle.close)).toEqual([
         '90111',
       ])
+    })
+    it('serves and streams PF_XBTUSD official candles only, whatever other products share the database', async () => {
+      const path = dbPath()
+      const writer = seedOfficialHistory(path)
+      closers.push(() => writer.close())
+      // Another product already in the file at start: same buckets, other prices.
+      saveOfficial(
+        writer,
+        Array.from({ length: 22 }, (_, index) => index),
+        '1234',
+        BASE + 100 * MINUTE,
+        'PF_ETHUSD',
+      )
+      const { app, port } = await start(path, { clock })
+      const body = (await app.inject('/api/terminal/bootstrap')).json() as any
+      const candles = body.terminal_market.candles as any[]
+      expect(candles).toHaveLength(22)
+      expect(candles.slice(0, 20).map((c) => c.close)).toEqual(
+        Array(20).fill('90100'),
+      )
+      expect(candles.some((c) => c.close === '1234')).toBe(false)
+
+      const client = connect(port)
+      await new Promise((resolve) => client.socket.once('open', resolve))
+      client.socket.send(
+        JSON.stringify({
+          schema_version: 1,
+          type: 'subscribe',
+          run_id: LIVE_RUN_ID,
+        }),
+      )
+      await client.next((m) => m.type === 'snapshot')
+      // A new ETH candle, then a BTC one: only the BTC one may be streamed.
+      saveOfficial(writer, [20], '1235', BASE + 101 * MINUTE, 'PF_ETHUSD')
+      saveOfficial(writer, [20], '90111', BASE + 102 * MINUTE)
+      await client.next(
+        (m) =>
+          m.type === 'market.updated' &&
+          (m.data as any).candle?.bucket_start_ms === BASE + 20 * MINUTE,
+      )
+      const closes = client.messages
+        .filter(
+          (m) =>
+            m.type === 'market.updated' &&
+            (m.data as any).candle?.bucket_start_ms === BASE + 20 * MINUTE,
+        )
+        .map((m) => (m.data as any).candle.close)
+      expect(closes).toEqual(['90111'])
     })
   })
 

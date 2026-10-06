@@ -1,5 +1,6 @@
 import { existsSync, statSync } from 'node:fs'
 import { DatabaseSync, type StatementSync } from 'node:sqlite'
+import { FUTURES_PRODUCT } from '../kraken-futures/futures-market.ts'
 import { addDecimal, isDecimal, unrealizedPnl } from './decimal-string.ts'
 
 type Row = Record<string, unknown>
@@ -274,8 +275,8 @@ export class PaperEngineFollower {
       const rows = prepare(
         handle,
         `SELECT payload_json FROM paper_futures_verdicts
-         ORDER BY bucket_start DESC LIMIT ${ANALYSES_KEPT}`,
-      ).all() as Array<{ payload_json: string }>
+         WHERE product_id=? ORDER BY bucket_start DESC LIMIT ${ANALYSES_KEPT}`,
+      ).all(FUTURES_PRODUCT) as Array<{ payload_json: string }>
       this.verdicts = handle
       this.analyses = []
       this.verdictCursor = -1
@@ -629,8 +630,10 @@ export class PaperEngineFollower {
         const rows = prepare(
           handle,
           `SELECT payload_json FROM paper_futures_verdicts
-           WHERE bucket_start > ? ORDER BY bucket_start LIMIT 200`,
-        ).all(this.verdictCursor) as Array<{ payload_json: string }>
+           WHERE product_id=? AND bucket_start > ? ORDER BY bucket_start LIMIT 200`,
+        ).all(FUTURES_PRODUCT, this.verdictCursor) as Array<{
+          payload_json: string
+        }>
         for (const row of rows) {
           const analysis = this.takeVerdict(row.payload_json)
           if (analysis)

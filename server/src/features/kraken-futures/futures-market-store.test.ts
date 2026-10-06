@@ -402,7 +402,7 @@ describe('FuturesMarketStore', () => {
       INSERT INTO market_observations VALUES('spot-fixture','untouched');`)
     fixture.close()
     const store = new FuturesMarketStore(path)
-    expect(store.schemaVersion()).toBe(4)
+    expect(store.schemaVersion()).toBe(5)
     store.append(event)
     store.close()
     const reopened = new DatabaseSync(path)
@@ -564,6 +564,7 @@ describe('FuturesMarketStore append hot path', () => {
 
 describe('FuturesMarketStore official candles', () => {
   const M = 60_000
+  const BTC = 'PF_XBTUSD'
   const T = 1_791_281_220_000
   const official = (
     bucketStart: number,
@@ -585,9 +586,11 @@ describe('FuturesMarketStore official candles', () => {
     receivedAtMs: number,
     candles: ReturnType<typeof official>[],
     intervalMs = M,
+    productId = 'PF_XBTUSD',
   ) => {
-    const rawResponse = JSON.stringify({ receivedAtMs, candles })
+    const rawResponse = JSON.stringify({ productId, receivedAtMs, candles })
     return {
+      productId,
       intervalMs,
       fromMs: T,
       toMs: receivedAtMs,
@@ -596,6 +599,73 @@ describe('FuturesMarketStore official candles', () => {
       sha256: createHash('sha256').update(rawResponse, 'utf8').digest('hex'),
       candles,
     }
+  }
+
+  /** Rewrites the official tables of a fresh file into their schema-4 shape (no product_id). */
+  function downgradeToSchema4(
+    path: string,
+    responses: ReadonlyArray<ReturnType<typeof response>>,
+  ): void {
+    const raw = new DatabaseSync(path)
+    raw.exec(`
+      DROP TABLE paper_futures_official_candles;
+      DROP TABLE paper_futures_official_candle_responses;
+      DELETE FROM paper_futures_market_migrations WHERE version=5;
+      CREATE TABLE paper_futures_official_candle_responses(
+        sha256 TEXT PRIMARY KEY, interval_ms INTEGER NOT NULL, from_ms INTEGER NOT NULL,
+        to_ms INTEGER NOT NULL, received_at INTEGER NOT NULL, raw_response TEXT NOT NULL
+      ) STRICT;
+      CREATE TABLE paper_futures_official_candles(
+        interval_ms INTEGER NOT NULL, bucket_start INTEGER NOT NULL, revision_hash TEXT NOT NULL,
+        known_at INTEGER NOT NULL, open_price TEXT NOT NULL, high_price TEXT NOT NULL,
+        low_price TEXT NOT NULL, close_price TEXT NOT NULL, volume_btc TEXT NOT NULL,
+        response_sha256 TEXT NOT NULL REFERENCES paper_futures_official_candle_responses(sha256),
+        PRIMARY KEY(interval_ms, bucket_start, revision_hash)
+      ) STRICT;
+      CREATE TRIGGER paper_futures_official_candle_responses_no_update
+        BEFORE UPDATE ON paper_futures_official_candle_responses BEGIN SELECT RAISE(ABORT, 'market evidence is immutable'); END;
+      CREATE TRIGGER paper_futures_official_candle_responses_no_delete
+        BEFORE DELETE ON paper_futures_official_candle_responses BEGIN SELECT RAISE(ABORT, 'market evidence is immutable'); END;
+      CREATE TRIGGER paper_futures_official_candles_no_update
+        BEFORE UPDATE ON paper_futures_official_candles BEGIN SELECT RAISE(ABORT, 'market evidence is immutable'); END;
+      CREATE TRIGGER paper_futures_official_candles_no_delete
+        BEFORE DELETE ON paper_futures_official_candles BEGIN SELECT RAISE(ABORT, 'market evidence is immutable'); END;
+    `)
+    let rowid = 100
+    for (const item of responses) {
+      raw
+        .prepare(
+          'INSERT OR IGNORE INTO paper_futures_official_candle_responses VALUES(?,?,?,?,?,?)',
+        )
+        .run(
+          item.sha256,
+          item.intervalMs,
+          item.fromMs,
+          item.toMs,
+          item.receivedAtMs,
+          item.rawResponse,
+        )
+      for (const candle of item.candles)
+        raw
+          .prepare(
+            'INSERT OR IGNORE INTO paper_futures_official_candles(rowid, interval_ms, bucket_start, revision_hash, known_at, open_price, high_price, low_price, close_price, volume_btc, response_sha256) VALUES(?,?,?,?,?,?,?,?,?,?,?)',
+          )
+          .run(
+            // Gaps in the rowids, as a long-running capture leaves them.
+            (rowid += 7),
+            candle.intervalMs,
+            candle.bucketStart,
+            createHash('sha256').update(JSON.stringify(candle)).digest('hex'),
+            item.receivedAtMs,
+            candle.open,
+            candle.high,
+            candle.low,
+            candle.close,
+            candle.volumeBtc,
+            item.sha256,
+          )
+    }
+    raw.close()
   }
 
   it('appends official candles idempotently and reads them as of a knowledge cutoff', () => {
@@ -612,13 +682,15 @@ describe('FuturesMarketStore official candles', () => {
         ]),
       ),
     ).toEqual({ inserted: 1 })
-    expect(store.latestOfficialBucket(M)).toBe(T + 2 * M)
-    expect(store.latestOfficialBucket(300_000)).toBeUndefined()
+    expect(store.latestOfficialBucket(BTC, M)).toBe(T + 2 * M)
+    expect(store.latestOfficialBucket(BTC, 300_000)).toBeUndefined()
 
     expect(
-      store.officialCandlesAsOf(M, T + 3 * M, 10).map((row) => row.bucketStart),
+      store
+        .officialCandlesAsOf(BTC, M, T + 3 * M, 10)
+        .map((row) => row.bucketStart),
     ).toEqual([T, T + M])
-    const all = store.officialCandlesAsOf(M, T + 4 * M, 10)
+    const all = store.officialCandlesAsOf(BTC, M, T + 4 * M, 10)
     expect(all.map((row) => row.bucketStart)).toEqual([T, T + M, T + 2 * M])
     expect(all[0]).toEqual({
       intervalMs: M,
@@ -634,7 +706,9 @@ describe('FuturesMarketStore official candles', () => {
       revisionHash: expect.stringMatching(/^[0-9a-f]{64}$/),
     })
     expect(
-      store.officialCandlesAsOf(M, T + 4 * M, 2).map((row) => row.bucketStart),
+      store
+        .officialCandlesAsOf(BTC, M, T + 4 * M, 2)
+        .map((row) => row.bucketStart),
     ).toEqual([T + M, T + 2 * M])
     store.close()
   })
@@ -645,11 +719,11 @@ describe('FuturesMarketStore official candles', () => {
     store.appendOfficialCandles(
       response(T + 5 * M, [official(T, { volumeBtc: '1.6' })]),
     )
-    const [row] = store.officialCandlesAsOf(M, T + 10 * M, 10)
+    const [row] = store.officialCandlesAsOf(BTC, M, T + 10 * M, 10)
     expect(row!.volumeBtc).toBe('1.5')
-    expect(store.officialCandleQuality(M).officialRevisionConflicts).toEqual([
-      T,
-    ])
+    expect(
+      store.officialCandleQuality(BTC, M).officialRevisionConflicts,
+    ).toEqual([T])
     store.close()
   })
 
@@ -698,15 +772,17 @@ describe('FuturesMarketStore official candles', () => {
         official(T + 2 * M),
       ]),
     )
-    const rows = store.officialCandlesAfter(cursor, M, 10)
+    const rows = store.officialCandlesAfter(BTC, cursor, M, 10)
     // The changed revision is not the first known one: only the new bucket.
     expect(rows.map((row) => row.candle.bucketStart)).toEqual([T + 2 * M])
     expect(rows[0]!.rowid).toBe(store.maxOfficialRowid())
     expect(
-      store.officialCandlesAfter(0, M, 10).map((r) => r.candle.bucketStart),
+      store
+        .officialCandlesAfter(BTC, 0, M, 10)
+        .map((r) => r.candle.bucketStart),
     ).toEqual([T, T + M, T + 2 * M])
-    expect(store.officialCandlesAfter(0, 300_000, 10)).toEqual([])
-    expect(() => store.officialCandlesAfter(0, M, 0)).toThrow(RangeError)
+    expect(store.officialCandlesAfter(BTC, 0, 300_000, 10)).toEqual([])
+    expect(() => store.officialCandlesAfter(BTC, 0, M, 0)).toThrow(RangeError)
     store.close()
   })
 
@@ -716,27 +792,236 @@ describe('FuturesMarketStore official candles', () => {
     writer.appendOfficialCandles(response(T + 3 * M, [official(T)]))
     writer.close()
     const raw = new DatabaseSync(path)
-    raw.exec('DELETE FROM paper_futures_market_migrations WHERE version=4')
+    raw.exec('DELETE FROM paper_futures_market_migrations WHERE version>=4')
     raw.close()
     const v3 = new FuturesMarketStore(path, { readOnly: true })
     expect(v3.maxOfficialRowid()).toBe(0)
-    expect(v3.officialCandlesAfter(0, M, 10)).toEqual([])
+    expect(v3.officialCandlesAfter(BTC, 0, M, 10)).toEqual([])
     v3.close()
   })
 
-  it('opens schema 3 and schema 4 databases read-only', () => {
+  it('opens schema 3, schema 4 and schema 5 databases read-only', () => {
     const path = dbPath()
     new FuturesMarketStore(path).close()
+    const v5 = new FuturesMarketStore(path, { readOnly: true })
+    expect(v5.schemaVersion()).toBe(5)
+    v5.close()
+    downgradeToSchema4(path, [])
     const v4 = new FuturesMarketStore(path, { readOnly: true })
     expect(v4.schemaVersion()).toBe(4)
+    // The schema-4 official tables have no product column: nothing is served
+    // until the writer migrates the file.
+    expect(v4.maxOfficialRowid()).toBe(0)
+    expect(v4.latestOfficialBucket(BTC, M)).toBeUndefined()
+    expect(v4.officialCandlesAsOf(BTC, M, T, 10)).toEqual([])
+    expect(v4.officialCandlesAfter(BTC, 0, M, 10)).toEqual([])
     v4.close()
     const raw = new DatabaseSync(path)
-    raw.exec('DELETE FROM paper_futures_market_migrations WHERE version=4')
+    raw.exec('DELETE FROM paper_futures_market_migrations WHERE version>=4')
     raw.close()
     const v3 = new FuturesMarketStore(path, { readOnly: true })
     expect(v3.schemaVersion()).toBe(3)
-    expect(v3.officialCandlesAsOf(M, T, 10)).toEqual([])
+    expect(v3.officialCandlesAsOf(BTC, M, T, 10)).toEqual([])
     v3.close()
+  })
+
+  it('keeps products apart: same bucket and values, separate keys, lookups and cursors', () => {
+    const store = new FuturesMarketStore(dbPath())
+    const btc = response(T + 3 * M, [official(T), official(T + M)])
+    const eth = response(
+      T + 3 * M,
+      [official(T), official(T + M)],
+      M,
+      'PF_ETHUSD',
+    )
+    expect(store.appendOfficialCandles(btc)).toEqual({ inserted: 2 })
+    // Identical values and bucket under another product are not a duplicate.
+    expect(store.appendOfficialCandles(eth)).toEqual({ inserted: 2 })
+    expect(store.appendOfficialCandles(eth)).toEqual({ inserted: 0 })
+    store.appendOfficialCandles(
+      response(T + 4 * M, [official(T + 2 * M)], M, 'PF_ETHUSD'),
+    )
+    expect(store.latestOfficialBucket(BTC, M)).toBe(T + M)
+    expect(store.latestOfficialBucket('PF_ETHUSD', M)).toBe(T + 2 * M)
+    expect(store.latestOfficialBucket('PF_SOLUSD', M)).toBeUndefined()
+    expect(
+      store
+        .officialCandlesAsOf('PF_ETHUSD', M, T + 9 * M, 10)
+        .map((row) => row.bucketStart),
+    ).toEqual([T, T + M, T + 2 * M])
+    expect(
+      store
+        .officialCandlesAsOf(BTC, M, T + 9 * M, 10)
+        .map((row) => row.bucketStart),
+    ).toEqual([T, T + M])
+    const ethRows = store.officialCandlesAfter('PF_ETHUSD', 0, M, 10)
+    expect(ethRows).toHaveLength(3)
+    expect(store.officialCandlesAfter(BTC, 0, M, 10)).toHaveLength(2)
+    // Cursors are global rowids: each product sees only its own rows after one.
+    expect(
+      store
+        .officialCandlesAfter(BTC, 1, M, 10)
+        .map((row) => row.candle.bucketStart),
+    ).toEqual([T + M])
+    expect(
+      store
+        .officialCandlesAfter('PF_ETHUSD', 4, M, 10)
+        .map((row) => row.candle.bucketStart),
+    ).toEqual([T + 2 * M])
+    expect(ethRows.map((row) => row.rowid)).toEqual([3, 4, 5])
+    expect(store.maxOfficialRowid()).toBe(5)
+    store.close()
+  })
+
+  it('rejects an official response for an invalid product or one of another product than its candles', () => {
+    const store = new FuturesMarketStore(dbPath())
+    expect(() =>
+      store.appendOfficialCandles({
+        ...response(T + 2 * M, [official(T)]),
+        productId: 'pf_xbtusd',
+      }),
+    ).toThrow(/product/i)
+    store.close()
+  })
+
+  it('refuses quality reports for a product with no observed candles', () => {
+    const store = new FuturesMarketStore(dbPath())
+    expect(() => store.officialCandleQuality('PF_ETHUSD', M)).toThrow(
+      /PF_XBTUSD/,
+    )
+    store.close()
+  })
+
+  describe('migration 5 (product_id)', () => {
+    const rowSet = (path: string, table: string) => {
+      const raw = new DatabaseSync(path)
+      const rows = raw
+        .prepare(`SELECT rowid AS id, * FROM ${table} ORDER BY rowid`)
+        .all()
+      raw.close()
+      return rows as Record<string, unknown>[]
+    }
+
+    it('rebuilds a schema-4 file: rows, rowids, hashes and links are kept, rows become PF_XBTUSD', () => {
+      const path = dbPath()
+      const seed = new FuturesMarketStore(path)
+      seed.close()
+      const first = response(T + 3 * M, [official(T), official(T + M)])
+      const second = response(T + 4 * M, [
+        official(T + M, { volumeBtc: '1.6' }),
+        official(T + 2 * M),
+      ])
+      downgradeToSchema4(path, [first, second])
+      const before = {
+        candles: rowSet(path, 'paper_futures_official_candles'),
+        responses: rowSet(path, 'paper_futures_official_candle_responses'),
+      }
+      expect(before.candles).toHaveLength(4)
+
+      const store = new FuturesMarketStore(path)
+      expect(store.schemaVersion()).toBe(5)
+      store.close()
+
+      const after = {
+        candles: rowSet(path, 'paper_futures_official_candles'),
+        responses: rowSet(path, 'paper_futures_official_candle_responses'),
+      }
+      const strip = (rows: Record<string, unknown>[]) =>
+        rows.map(({ product_id: product, ...rest }) => {
+          expect(product).toBe('PF_XBTUSD')
+          return rest
+        })
+      // Same rowids (the gateway cursors on them), same content, same order.
+      expect(strip(after.candles)).toEqual(before.candles)
+      expect(strip(after.responses)).toEqual(before.responses)
+
+      const raw = new DatabaseSync(path)
+      expect(raw.prepare('PRAGMA foreign_key_check').all()).toEqual([])
+      const keys = raw
+        .prepare(
+          "SELECT name FROM pragma_table_info('paper_futures_official_candles') WHERE pk>0 ORDER BY pk",
+        )
+        .all()
+        .map((row) => (row as { name: string }).name)
+      expect(keys).toEqual([
+        'product_id',
+        'interval_ms',
+        'bucket_start',
+        'revision_hash',
+      ])
+      const refs = raw
+        .prepare(
+          'SELECT "table" AS parent FROM pragma_foreign_key_list(\'paper_futures_official_candles\')',
+        )
+        .all()
+        .map((row) => (row as { parent: string }).parent)
+      expect(refs).toEqual([
+        'paper_futures_official_candle_responses',
+        'paper_futures_official_candle_responses',
+      ])
+      // Append-only triggers are back on the rebuilt tables.
+      for (const [table, column] of [
+        ['paper_futures_official_candles', 'known_at'],
+        ['paper_futures_official_candle_responses', 'received_at'],
+      ]) {
+        expect(() => raw.prepare(`DELETE FROM ${table}`).run()).toThrow(
+          /immutable/i,
+        )
+        expect(() =>
+          raw.prepare(`UPDATE ${table} SET ${column}=0`).run(),
+        ).toThrow(/immutable/i)
+      }
+      raw.close()
+
+      // The migrated file serves the old data as PF_XBTUSD and takes new products.
+      const again = new FuturesMarketStore(path)
+      expect(again.schemaVersion()).toBe(5)
+      expect(
+        again
+          .officialCandlesAsOf(BTC, M, T + 9 * M, 10)
+          .map((row) => row.bucketStart),
+      ).toEqual([T, T + M, T + 2 * M])
+      expect(
+        again.officialCandlesAsOf(BTC, M, T + 9 * M, 10)[1]!.volumeBtc,
+      ).toBe('1.5')
+      expect(again.latestOfficialBucket('PF_ETHUSD', M)).toBeUndefined()
+      expect(
+        again.appendOfficialCandles(
+          response(T + 3 * M, [official(T)], M, 'PF_ETHUSD'),
+        ),
+      ).toEqual({ inserted: 1 })
+      again.close()
+    })
+
+    it('is a no-op on an already migrated file', () => {
+      const path = dbPath()
+      const store = new FuturesMarketStore(path)
+      store.appendOfficialCandles(response(T + 3 * M, [official(T)]))
+      store.close()
+      const before = rowSet(path, 'paper_futures_official_candles')
+      new FuturesMarketStore(path).close()
+      new FuturesMarketStore(path).close()
+      expect(rowSet(path, 'paper_futures_official_candles')).toEqual(before)
+      const raw = new DatabaseSync(path)
+      expect(
+        raw
+          .prepare(
+            'SELECT COUNT(*) AS n FROM paper_futures_market_migrations WHERE version=5',
+          )
+          .get(),
+      ).toEqual({ n: 1 })
+      raw.close()
+    })
+
+    it('migrates an empty schema-4 file', () => {
+      const path = dbPath()
+      new FuturesMarketStore(path).close()
+      downgradeToSchema4(path, [])
+      const store = new FuturesMarketStore(path)
+      expect(store.schemaVersion()).toBe(5)
+      expect(store.maxOfficialRowid()).toBe(0)
+      store.close()
+    })
   })
 
   it('compares closed observed 60s candles with official close and volume', () => {
@@ -777,7 +1062,7 @@ describe('FuturesMarketStore official candles', () => {
         official(T + 3 * M, { volumeBtc: '0' }),
       ]),
     )
-    expect(store.officialCandleQuality(M, T)).toEqual({
+    expect(store.officialCandleQuality(BTC, M, T)).toEqual({
       intervalMs: M,
       sinceBucketStart: T,
       compared: 3,
@@ -787,7 +1072,7 @@ describe('FuturesMarketStore official candles', () => {
       observedMissing: [T + 3 * M],
       officialRevisionConflicts: [],
     })
-    expect(store.officialCandleQuality(M, T + M).compared).toBe(2)
+    expect(store.officialCandleQuality(BTC, M, T + M).compared).toBe(2)
     store.close()
   })
 })

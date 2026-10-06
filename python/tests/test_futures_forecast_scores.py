@@ -7,6 +7,7 @@ import tempfile
 import unittest
 from decimal import Decimal
 
+from balancita_engine.canonical import canonical_hash
 from balancita_engine.futures_forecast_scores import (
     SCORE_CONFIG,
     ForecastScoreService,
@@ -17,7 +18,7 @@ from balancita_engine.futures_forecast_scores import (
     summarize_net,
 )
 from balancita_engine.futures_verdicts import VERDICT_CONFIG, VerdictStore
-from test_futures_verdicts import MarketDb, official
+from test_futures_verdicts import BTC, ETH, OLD_OFFICIAL_DDL, SOL, MarketDb, official
 
 MINUTE = 60_000
 HOUR = 3_600_000
@@ -38,10 +39,11 @@ def proposal(strategy_id, action, stop=None, target=None):
     }
 
 
-def verdict(bucket, proposals, selected=None, regime="range", lag=3_000):
+def verdict(bucket, proposals, selected=None, regime="range", lag=3_000, product=BTC):
     selected = selected if selected is not None else {"action": "WAIT", "reason_code": "none"}
     return {
-        "schema_version": "futures-verdict.v1", "interval_ms": MINUTE, "bucket_start_ms": bucket,
+        "schema_version": "futures-verdict.v1", "product_id": product, "interval_ms": MINUTE,
+        "bucket_start_ms": bucket,
         "close_at_ms": bucket + MINUTE, "decision_known_at_ms": bucket + MINUTE + lag,
         "knowledge_lag_ms": lag, "regime": regime, "action": selected["action"],
         "reason_code": selected["reason_code"], "selected": selected, "proposals": proposals,
@@ -78,23 +80,24 @@ def rows(path, sql):
 
 
 TABLE_DUMPS = {
-    "verdicts": "SELECT bucket_start, verdict_hash, forecasts FROM paper_futures_forecast_verdicts ORDER BY 1",
+    "verdicts": ("SELECT product_id, bucket_start, verdict_hash, forecasts "
+                 "FROM paper_futures_forecast_verdicts ORDER BY 1, 2"),
     "forecasts": (
-        "SELECT bucket_start, source, strategy_id, side, regime, utc_hour, knowledge_lag_ms, backfill, "
-        "entry_price, proposed_stop, proposed_target, signal_key, verdict_hash "
-        "FROM paper_futures_forecasts ORDER BY 1, 2, 3"
+        "SELECT product_id, bucket_start, source, strategy_id, side, regime, utc_hour, knowledge_lag_ms, "
+        "backfill, entry_price, proposed_stop, proposed_target, signal_key, verdict_hash "
+        "FROM paper_futures_forecasts ORDER BY 1, 2, 3, 4"
     ),
     "returns": (
-        "SELECT bucket_start, source, strategy_id, horizon_min, gross_bp, net_bp, exit_bucket_start "
-        "FROM paper_futures_forecast_returns ORDER BY 1, 2, 3, 4"
+        "SELECT product_id, bucket_start, source, strategy_id, horizon_min, gross_bp, net_bp, exit_bucket_start "
+        "FROM paper_futures_forecast_returns ORDER BY 1, 2, 3, 4, 5"
     ),
     "barriers": (
-        "SELECT bucket_start, source, strategy_id, outcome, ambiguous, hit_after_ms "
-        "FROM paper_futures_forecast_barriers ORDER BY 1, 2, 3"
+        "SELECT product_id, bucket_start, source, strategy_id, outcome, ambiguous, hit_after_ms "
+        "FROM paper_futures_forecast_barriers ORDER BY 1, 2, 3, 4"
     ),
     "excursions": (
-        "SELECT bucket_start, source, strategy_id, window_min, mfe_bp, mae_bp "
-        "FROM paper_futures_forecast_excursions ORDER BY 1, 2, 3"
+        "SELECT product_id, bucket_start, source, strategy_id, window_min, mfe_bp, mae_bp "
+        "FROM paper_futures_forecast_excursions ORDER BY 1, 2, 3, 4"
     ),
 }
 
@@ -104,6 +107,8 @@ def dump(path):
 
 
 class Rig(unittest.TestCase):
+    PRODUCTS = [BTC]
+
     def setUp(self):
         self.dir = tempfile.mkdtemp(prefix="balancita-scores-")
         self.market = MarketDb(self.path("market.sqlite"))
@@ -111,7 +116,8 @@ class Rig(unittest.TestCase):
         self.store = ScoreStore(self.path("scores.sqlite"), SCORE_CONFIG)
         self.logs = []
         self.service = ForecastScoreService(
-            self.market.path, self.path("verdicts.sqlite"), self.store, log=self.logs.append
+            self.market.path, self.path("verdicts.sqlite"), self.store, log=self.logs.append,
+            products=self.PRODUCTS,
         )
 
     def tearDown(self):
@@ -126,23 +132,23 @@ class Rig(unittest.TestCase):
     def scores(self):
         return self.path("scores.sqlite")
 
-    def returns(self):
+    def returns(self, product=BTC):
         return {
             (row[0], row[1], row[2]): (row[3], row[4])
             for row in rows(
                 self.scores(),
                 "SELECT source, strategy_id, horizon_min, gross_bp, net_bp "
-                "FROM paper_futures_forecast_returns",
+                "FROM paper_futures_forecast_returns WHERE product_id='{}'".format(product),
             )
         }
 
-    def barriers(self):
+    def barriers(self, product=BTC):
         return {
             (row[0], row[1]): row[2:]
             for row in rows(
                 self.scores(),
                 "SELECT source, strategy_id, outcome, ambiguous, hit_after_ms "
-                "FROM paper_futures_forecast_barriers",
+                "FROM paper_futures_forecast_barriers WHERE product_id='{}'".format(product),
             )
         }
 
@@ -394,6 +400,8 @@ class AggregateTests(Rig):
 
 
 class ReplayTests(unittest.TestCase):
+    PRODUCTS = [BTC, ETH, SOL]
+
     def setUp(self):
         self.dir = tempfile.mkdtemp(prefix="balancita-scores-replay-")
 
@@ -403,8 +411,8 @@ class ReplayTests(unittest.TestCase):
     def path(self, name):
         return os.path.join(self.dir, name)
 
-    def walk(self, count):
-        state = 12345
+    def walk(self, count, seed=12345):
+        state = seed
         price = 100000
         out = []
         for minute in range(count):
@@ -419,32 +427,34 @@ class ReplayTests(unittest.TestCase):
             out.append({"close": str(price), "high": str(high), "low": str(low)})
         return out
 
-    def test_live_incremental_run_equals_a_full_replay(self):
+    def test_live_incremental_run_equals_a_full_replay_for_every_product(self):
         count = DAY + 80
-        walk = self.walk(count)
+        walks = {product: self.walk(count, seed=12345 + 777 * index)
+                 for index, product in enumerate(self.PRODUCTS)}
         # Entry price of verdict k is walk[k].close; levels are sized around it.
-        verdict_minutes = list(range(0, 60, 3))
         verdicts = {}
-        for index, minute in enumerate(verdict_minutes):
-            close = int(walk[minute]["close"])
-            long = index % 2 == 0
-            proposals = [
-                proposal(C27, "LONG" if long else "SHORT",
-                         stop=str(close - 150 if long else close + 150),
-                         target=str(close + 250 if long else close - 250)),
-                proposal(C25, "WAIT"),
-            ]
-            selected = proposals[0] if index % 4 != 3 else None
-            verdicts[minute] = verdict(ENTRY + minute * MINUTE, proposals, selected=selected,
-                                       regime=("trend", "range", "unknown")[index % 3],
-                                       lag=3_000 if index % 5 else 90_000)
+        for offset, product in enumerate(self.PRODUCTS):
+            for index, minute in enumerate(range(offset, 60, 3)):
+                close = int(walks[product][minute]["close"])
+                long = (index + offset) % 2 == 0
+                proposals = [
+                    proposal(C27, "LONG" if long else "SHORT",
+                             stop=str(close - 150 if long else close + 150),
+                             target=str(close + 250 if long else close - 250)),
+                    proposal(C25, "WAIT"),
+                ]
+                selected = proposals[0] if index % 4 != 3 else None
+                verdicts[(product, minute)] = verdict(
+                    ENTRY + minute * MINUTE, proposals, selected=selected,
+                    regime=("trend", "range", "unknown")[(index + offset) % 3],
+                    lag=3_000 if index % 5 else 90_000, product=product)
         market = MarketDb(self.path("market.sqlite"))
         verdict_store = VerdictStore(self.path("verdicts.sqlite"), VERDICT_CONFIG)
 
         def new_service():
             store = ScoreStore(self.path("live.sqlite"), SCORE_CONFIG)
             return store, ForecastScoreService(market.path, self.path("verdicts.sqlite"), store,
-                                               log=lambda line: None)
+                                               log=lambda line: None, products=self.PRODUCTS)
 
         store, service = new_service()
         for minute in range(count):
@@ -452,33 +462,123 @@ class ReplayTests(unittest.TestCase):
                 service.close()
                 store.close()
                 store, service = new_service()
-            market.insert([candle(ENTRY + minute * MINUTE, **walk[minute])])
-            if minute in verdicts:
-                verdict_store.append(verdicts[minute])
+            for product in self.PRODUCTS:
+                market.insert([candle(ENTRY + minute * MINUTE, **walks[product][minute])], product)
+                if (product, minute) in verdicts:
+                    verdict_store.append(verdicts[(product, minute)])
             service.poll()
         service.close()
         store.close()
         verdict_store.close()
 
         replay = ScoreStore(self.path("replay.sqlite"), SCORE_CONFIG)
-        process_available(market.path, self.path("verdicts.sqlite"), replay)
+        process_available(market.path, self.path("verdicts.sqlite"), replay, products=self.PRODUCTS)
         replay.close()
         again = ScoreStore(self.path("replay-2.sqlite"), SCORE_CONFIG)
-        process_available(market.path, self.path("verdicts.sqlite"), again)
+        process_available(market.path, self.path("verdicts.sqlite"), again, products=self.PRODUCTS)
         again.close()
 
         live_dump = dump(self.path("live.sqlite"))
         self.assertEqual(live_dump, dump(self.path("replay.sqlite")))
         self.assertEqual(live_dump, dump(self.path("replay-2.sqlite")))
-        self.assertEqual(len(live_dump["verdicts"]), len(verdict_minutes))
-        self.assertGreater(len(live_dump["returns"]), 80)
+        self.assertEqual(len(live_dump["verdicts"]), len(verdicts))
+        self.assertEqual({row[0] for row in live_dump["returns"]}, set(self.PRODUCTS))
+        self.assertGreater(len(live_dump["returns"]), 3 * 80)
         self.assertEqual(len(live_dump["excursions"]), len(live_dump["forecasts"]))
         self.assertEqual(len(live_dump["barriers"]), len(live_dump["forecasts"]))
-        self.assertGreaterEqual(len({row[3] for row in live_dump["barriers"]}), 2)
+        self.assertGreaterEqual(len({row[4] for row in live_dump["barriers"]}), 2)
         self.assertEqual(
             forecast_score_report(self.path("live.sqlite")),
             forecast_score_report(self.path("replay.sqlite")),
         )
+
+
+class MultiProductTests(Rig):
+    PRODUCTS = [BTC, ETH, SOL]
+
+    def two_products(self):
+        """BTC rises 10 bp at 15 m, ETH falls 30 bp at 15 m; both LONG from the same bucket."""
+        self.market.insert(series(16, overrides={15: {"close": "100100", "high": "100100"}}), BTC)
+        self.market.insert(series(16, overrides={15: {"close": "99700", "low": "99700"}}), ETH)
+        for product in (BTC, ETH):
+            self.verdicts.append(verdict(ENTRY, [proposal(C27, "LONG", stop="1", target="900000")],
+                                         product=product))
+        self.service.poll()
+
+    def test_each_product_is_scored_against_its_own_candles(self):
+        self.two_products()
+        self.assertEqual(self.returns(BTC)[("proposal", C27, 15)], ("10", "-2"))
+        self.assertEqual(self.returns(ETH)[("proposal", C27, 15)], ("-30", "-42"))
+        self.assertEqual(self.returns(SOL), {})
+        keys = [row[1] for row in rows(self.scores(), "PRAGMA table_info(paper_futures_forecasts)") if row[5]]
+        self.assertEqual(keys, ["product_id", "bucket_start", "source", "strategy_id"])
+
+    def test_another_products_data_never_changes_a_products_scores(self):
+        self.two_products()
+        solo_market = MarketDb(self.path("solo-market.sqlite"))
+        solo_market.insert(series(16, overrides={15: {"close": "100100", "high": "100100"}}), BTC)
+        solo_verdicts = VerdictStore(self.path("solo-verdicts.sqlite"), VERDICT_CONFIG)
+        solo_verdicts.append(verdict(ENTRY, [proposal(C27, "LONG", stop="1", target="900000")]))
+        solo_verdicts.close()
+        solo = ScoreStore(self.path("solo-scores.sqlite"), SCORE_CONFIG)
+        process_available(solo_market.path, self.path("solo-verdicts.sqlite"), solo, products=[BTC])
+        solo.close()
+        btc_only = {name: [row for row in table if row[0] == BTC]
+                    for name, table in dump(self.scores()).items()}
+        self.assertEqual(btc_only, dump(self.path("solo-scores.sqlite")))
+
+    def test_a_missing_entry_candle_of_one_product_does_not_block_the_others(self):
+        self.market.insert(series(16, overrides={15: {"close": "100100", "high": "100100"}}), BTC)
+        self.verdicts.append(verdict(ENTRY, [proposal(C27, "LONG", stop="1", target="900000")], product=ETH))
+        self.verdicts.append(verdict(ENTRY, [proposal(C27, "LONG", stop="1", target="900000")], product=BTC))
+        # ETH has a candle (so its probe passes) but not the verdict's entry bucket.
+        self.market.insert([candle(ENTRY + 1000 * MINUTE)], ETH)
+        self.service.poll()
+        self.assertIn(("proposal", C27, 15), self.returns(BTC))
+        self.assertEqual(self.returns(ETH), {})
+        self.assertTrue(any("PF_ETHUSD" in line and "missing" in line for line in self.logs), self.logs)
+        # Once the entry candle lands, ETH catches up.
+        self.market.insert(series(16, overrides={15: {"close": "99700", "low": "99700"}}), ETH)
+        self.service.poll()
+        self.assertEqual(self.returns(ETH)[("proposal", C27, 15)], ("-30", "-42"))
+
+    def test_report_groups_by_product_first_and_can_filter_one(self):
+        self.two_products()
+        report = forecast_score_report(self.scores())
+        self.assertEqual([row["product"] for row in report], [ETH, BTC] if ETH < BTC else [BTC, ETH])
+        self.assertEqual([row["product"] for row in report], sorted(row["product"] for row in report))
+        by = {row["product"]: row for row in report}
+        self.assertEqual(by[BTC]["model"]["mean_net_bp"], "-2")
+        self.assertEqual(by[ETH]["model"]["mean_net_bp"], "-42")
+        # Buy & hold and the inverse control are per product too.
+        self.assertEqual(by[ETH]["baseline"]["mean_net_bp"], "-42")
+        self.assertEqual(by[ETH]["inverse"]["mean_net_bp"], "18")
+        only = forecast_score_report(self.scores(), product=ETH)
+        self.assertEqual([row["product"] for row in only], [ETH])
+        self.assertEqual(forecast_score_report(self.scores(), product=SOL), [])
+
+    def test_report_cli_prints_the_product_column_and_filters(self):
+        self.two_products()
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(main(["--scores-db", self.scores(), "--report"]), 0)
+        text = out.getvalue()
+        self.assertIn("product", text.splitlines()[0])
+        self.assertIn(BTC, text)
+        self.assertIn(ETH, text)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(main(["--scores-db", self.scores(), "--report", "--product", ETH]), 0)
+        self.assertIn(ETH, out.getvalue())
+        self.assertNotIn(BTC, out.getvalue())
+
+    def test_a_market_db_still_in_the_single_product_shape_scores_nothing_yet(self):
+        old = MarketDb(self.path("old-market.sqlite"), ddl=OLD_OFFICIAL_DDL)
+        self.verdicts.append(verdict(ENTRY, [proposal(C27, "LONG", stop="1", target="900000")]))
+        service = ForecastScoreService(old.path, self.path("verdicts.sqlite"), self.store,
+                                       log=lambda line: None, products=[BTC])
+        self.assertEqual(service.poll(), 0)
+        service.close()
 
 
 class StoreTests(unittest.TestCase):
@@ -496,13 +596,13 @@ class StoreTests(unittest.TestCase):
         ScoreStore(path, SCORE_CONFIG).close()  # same config reopens
         raw = sqlite3.connect(path)
         with raw:
-            raw.execute("INSERT INTO paper_futures_forecast_verdicts VALUES(1,'h',0,0)")
+            raw.execute("INSERT INTO paper_futures_forecast_verdicts VALUES('PF_XBTUSD',1,'h',0,0)")
             raw.execute(
-                "INSERT INTO paper_futures_forecasts VALUES(1,'proposal','s','LONG','range',0,1,0,'1',NULL,NULL,NULL,'h',0)"
+                "INSERT INTO paper_futures_forecasts VALUES('PF_XBTUSD',1,'proposal','s','LONG','range',0,1,0,'1',NULL,NULL,NULL,'h',0)"
             )
-            raw.execute("INSERT INTO paper_futures_forecast_returns VALUES(1,'proposal','s',15,'1','1',2,0)")
-            raw.execute("INSERT INTO paper_futures_forecast_barriers VALUES(1,'proposal','s','neither',0,NULL,0)")
-            raw.execute("INSERT INTO paper_futures_forecast_excursions VALUES(1,'proposal','s',30,'0','0',0)")
+            raw.execute("INSERT INTO paper_futures_forecast_returns VALUES('PF_XBTUSD',1,'proposal','s',15,'1','1',2,0)")
+            raw.execute("INSERT INTO paper_futures_forecast_barriers VALUES('PF_XBTUSD',1,'proposal','s','neither',0,NULL,0)")
+            raw.execute("INSERT INTO paper_futures_forecast_excursions VALUES('PF_XBTUSD',1,'proposal','s',30,'0','0',0)")
         updates = {
             "paper_futures_forecast_meta": "SET value='x'",
             "paper_futures_forecast_verdicts": "SET written_at=1",
@@ -517,11 +617,32 @@ class StoreTests(unittest.TestCase):
                     raw.execute(statement)
         raw.close()
 
+    def test_refuses_a_single_product_scores_db_from_before_the_split_by_product_untouched(self):
+        path = os.path.join(self.dir, "old-scores.sqlite")
+        old_config = dict(SCORE_CONFIG, version="futures-forecast-scores-config.v1")
+        connection = sqlite3.connect(path)
+        connection.executescript(
+            """
+            CREATE TABLE paper_futures_forecast_meta(key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;
+            CREATE TABLE paper_futures_forecasts(bucket_start INTEGER NOT NULL, source TEXT NOT NULL,
+              strategy_id TEXT NOT NULL, PRIMARY KEY(bucket_start, source, strategy_id)) STRICT;
+            """
+        )
+        connection.execute("INSERT INTO paper_futures_forecast_meta VALUES('config_hash', ?)",
+                           (canonical_hash(old_config),))
+        connection.commit()
+        connection.close()
+        with self.assertRaisesRegex(ValueError, "different config"):
+            ScoreStore(path, SCORE_CONFIG)
+        names = [row[0] for row in rows(path, "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")]
+        self.assertEqual(names, ["paper_futures_forecast_meta", "paper_futures_forecasts"])
+
     def test_poll_never_raises_and_logs_a_missing_or_locked_database_once(self):
         logs = []
         store = ScoreStore(os.path.join(self.dir, "scores.sqlite"), SCORE_CONFIG)
         service = ForecastScoreService(os.path.join(self.dir, "none.sqlite"),
-                                       os.path.join(self.dir, "nov.sqlite"), store, log=logs.append)
+                                       os.path.join(self.dir, "nov.sqlite"), store, log=logs.append,
+                                       products=[BTC])
         self.assertEqual(service.poll(), 0)
         self.assertEqual(service.poll(), 0)
         self.assertEqual(len([line for line in logs if "unavailable" in line]), 1)
@@ -535,7 +656,7 @@ class StoreTests(unittest.TestCase):
         verdicts.append(verdict(ENTRY, [proposal(C27, "LONG", "1", "900000")]))
         store = ScoreStore(os.path.join(self.dir, "scores.sqlite"), SCORE_CONFIG)
         service = ForecastScoreService(market.path, os.path.join(self.dir, "verdicts.sqlite"), store,
-                                       log=lambda line: None)
+                                       log=lambda line: None, products=[BTC])
         self.assertGreater(service.poll(), 0)
         statements = []
         service.market.db.set_trace_callback(statements.append)
@@ -558,9 +679,9 @@ class StoreTests(unittest.TestCase):
         verdicts.append(verdict(ENTRY, [proposal(C27, "LONG", "1", "900000")]))
         store = ScoreStore(os.path.join(self.dir, "scores.sqlite"), SCORE_CONFIG)
         service = ForecastScoreService(market.path, os.path.join(self.dir, "verdicts.sqlite"), store,
-                                       log=lambda line: None)
+                                       log=lambda line: None, products=[BTC])
 
-        def locked():
+        def locked(product_id):
             raise sqlite3.OperationalError("database is locked")
 
         service.poll()

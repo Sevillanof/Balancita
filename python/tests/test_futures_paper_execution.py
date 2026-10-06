@@ -127,12 +127,12 @@ class VerdictsDb:
         self.path = path
         VerdictStore(path, VERDICT_CONFIG).close()
 
-    def add(self, bucket, written_at, payload):
+    def add(self, bucket, written_at, payload, product="PF_XBTUSD"):
         connection = sqlite3.connect(self.path)
         with connection:
             connection.execute(
-                "INSERT INTO paper_futures_verdicts VALUES(?,?,?,?,?,?,?,?,?)",
-                (bucket, MINUTE, payload["decision_known_at_ms"], payload["regime"], payload["action"],
+                "INSERT INTO paper_futures_verdicts VALUES(?,?,?,?,?,?,?,?,?,?)",
+                (product, bucket, MINUTE, payload["decision_known_at_ms"], payload["regime"], payload["action"],
                  "test", "hash{}".format(bucket), json.dumps(payload, sort_keys=True), written_at),
             )
         connection.close()
@@ -213,6 +213,21 @@ class EntryTests(Case):
         self.assertEqual(opened["stop"], "95001")
         self.assertEqual(opened["fee"], "0.09501045")
         self.assertEqual(events_of(self.path("account.sqlite"), "order_filled")[0]["time_ms"], written + 120)
+
+    def test_acts_on_pf_xbtusd_verdicts_only_when_other_products_share_the_verdicts_db(self):
+        written = BASE + SECOND
+        bucket = written - MINUTE - 3 * SECOND
+        bucket -= bucket % MINUTE
+        self.verdicts.add(bucket, written, verdict_payload(bucket))
+        # Other products' proposals before and after the BTC one: never considered or traded.
+        self.verdicts.add(bucket - MINUTE, written - MINUTE, verdict_payload(bucket - MINUTE), product="PF_ETHUSD")
+        self.verdicts.add(bucket, written, verdict_payload(bucket), product="PF_ETHUSD")
+        self.verdicts.add(bucket + MINUTE, written + MINUTE, verdict_payload(bucket + MINUTE), product="PF_SOLUSD")
+        self.market.tickers([(written + 150, "100010", "100011", "100010")])
+        self.replay()
+        considered = events_of(self.path("account.sqlite"), "verdict_considered")
+        self.assertEqual([body(item)["outcome"] for item in considered], ["entered"])
+        self.assertEqual(len(events_of(self.path("account.sqlite"), "order_filled")), 1)
 
     def test_short_fills_at_bid(self):
         bucket, written = self.long_entry(action="SHORT", stop="105001", target="99500",
@@ -707,7 +722,7 @@ class ReplayAndRestartTests(Case):
         for index, (written, ticks) in enumerate(steps):
             connection = sqlite3.connect(live_verdicts.path)
             with connection:
-                connection.execute("INSERT INTO paper_futures_verdicts VALUES(?,?,?,?,?,?,?,?,?)", rows[index])
+                connection.execute("INSERT INTO paper_futures_verdicts VALUES(?,?,?,?,?,?,?,?,?,?)", rows[index])
             connection.close()
             service.poll(now_ms=written + 2_500)
             live_market.tickers(ticks[:2])

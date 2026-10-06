@@ -1,11 +1,11 @@
 import { createHash } from 'node:crypto'
-import { FUTURES_PRODUCT } from './futures-market.ts'
 import {
   readBoundedBody,
   type HistoricalFundingFetch,
 } from './historical-funding.ts'
 
-const BASE_URL = `https://futures.kraken.com/api/charts/v1/trade/${FUTURES_PRODUCT}`
+const BASE_URL = 'https://futures.kraken.com/api/charts/v1/trade'
+const PRODUCT_ID = /^PF_[A-Z0-9]{2,20}$/
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 /** Kraken returns at most this many candles per request. */
 export const OFFICIAL_CANDLES_PER_REQUEST = 1_800
@@ -28,10 +28,12 @@ export type OfficialCandle = Readonly<{
   high: string
   low: string
   close: string
+  /** Base-asset volume (BTC for PF_XBTUSD); the name is kept for BTC-era readers. */
   volumeBtc: string
 }>
 
 export type OfficialCandleResponse = Readonly<{
+  productId: string
   intervalMs: number
   fromMs: number
   toMs: number
@@ -43,17 +45,20 @@ export type OfficialCandleResponse = Readonly<{
 }>
 
 export function officialCandlesUrl(
+  productId: string,
   intervalMs: number,
   fromMs: number,
   toMs: number,
 ): string {
+  if (!PRODUCT_ID.test(productId))
+    throw new TypeError('Official candle product is invalid.')
   const resolution = RESOLUTIONS[intervalMs]
   if (resolution === undefined)
     throw new RangeError('Unsupported official candle interval.')
   for (const value of [fromMs, toMs])
     if (!Number.isSafeInteger(value) || value < 0)
       throw new TypeError('Official candle range is invalid.')
-  return `${BASE_URL}/${resolution}?from=${Math.floor(fromMs / 1000)}&to=${Math.floor(toMs / 1000)}`
+  return `${BASE_URL}/${productId}/${resolution}?from=${Math.floor(fromMs / 1000)}&to=${Math.floor(toMs / 1000)}`
 }
 
 /**
@@ -64,6 +69,7 @@ export function officialCandlesUrl(
 export function parseOfficialCandles(
   raw: string,
   options: {
+    productId: string
     intervalMs: number
     fromMs: number
     toMs: number
@@ -71,9 +77,9 @@ export function parseOfficialCandles(
     settleMs?: number
   },
 ): OfficialCandleResponse {
-  const { intervalMs, fromMs, toMs, receivedAtMs } = options
+  const { productId, intervalMs, fromMs, toMs, receivedAtMs } = options
   const settleMs = options.settleMs ?? 2_000
-  officialCandlesUrl(intervalMs, fromMs, toMs)
+  officialCandlesUrl(productId, intervalMs, fromMs, toMs)
   if (!Number.isSafeInteger(receivedAtMs) || receivedAtMs < 0)
     throw new TypeError('Official candle receipt time is invalid.')
   if (Buffer.byteLength(raw, 'utf8') > MAX_RESPONSE_BYTES)
@@ -122,6 +128,7 @@ export function parseOfficialCandles(
   }
   candles.sort((a, b) => a.bucketStart - b.bucketStart)
   return {
+    productId,
     intervalMs,
     fromMs,
     toMs,
@@ -148,12 +155,13 @@ export function createOfficialCandlesClient(
   let closed = false
   return {
     async fetch(
+      productId: string,
       intervalMs: number,
       fromMs: number,
       toMs: number,
     ): Promise<OfficialCandleResponse> {
       if (closed) throw new Error('Official candle client is closed.')
-      const url = officialCandlesUrl(intervalMs, fromMs, toMs)
+      const url = officialCandlesUrl(productId, intervalMs, fromMs, toMs)
       const controller = new AbortController()
       controllers.add(controller)
       const timeout = setTimeout(() => controller.abort(), timeoutMs)
@@ -173,6 +181,7 @@ export function createOfficialCandlesClient(
         return parseOfficialCandles(
           new TextDecoder('utf-8', { fatal: true }).decode(bytes),
           {
+            productId,
             intervalMs,
             fromMs,
             toMs,

@@ -827,17 +827,24 @@ class _MarketReader(_Reader):
         ).fetchall()
 
 
+# Paper execution trades the BTC perpetual only; the verdicts DB also holds the
+# other PF_* products' verdict streams (research/forecasting), which D ignores.
+VERDICT_PRODUCT = "PF_XBTUSD"
+
+
 class _VerdictReader(_Reader):
     tables = ("paper_futures_verdicts",)
 
     def probe(self):
-        return self.db.execute("SELECT MAX(bucket_start) FROM paper_futures_verdicts").fetchone()[0]
+        return self.db.execute(
+            "SELECT MAX(bucket_start) FROM paper_futures_verdicts WHERE product_id=?", (VERDICT_PRODUCT,)
+        ).fetchone()[0]
 
     def fetch(self, after, upto, limit):
         return self.db.execute(
             "SELECT bucket_start, written_at, payload_json FROM paper_futures_verdicts "
-            "WHERE bucket_start>? AND bucket_start<=? ORDER BY bucket_start LIMIT ?",
-            (after, upto, limit),
+            "WHERE product_id=? AND bucket_start>? AND bucket_start<=? ORDER BY bucket_start LIMIT ?",
+            (VERDICT_PRODUCT, after, upto, limit),
         ).fetchall()
 
 

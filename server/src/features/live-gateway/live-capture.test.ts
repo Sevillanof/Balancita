@@ -268,6 +268,7 @@ describe('live capture process core', () => {
       },
       officialCandleLookbackMs: { 60_000: 5 * M, 300_000: 30 * M },
       officialPollMs: 5,
+      officialRequestGapMs: 0,
       log: () => undefined,
     })
     await capture.start()
@@ -279,7 +280,7 @@ describe('live capture process core', () => {
       { interval: '5m', from: now - 30 * M, to: now },
       { interval: '1m', from: now - 5 * M, to: now },
     ])
-    const lastMinute = store.latestOfficialBucket(M)!
+    const lastMinute = store.latestOfficialBucket('PF_XBTUSD', M)!
     // Settled closed candles only: the open minute is never stored.
     expect(lastMinute + M).toBeLessThanOrEqual(now)
     now += 2 * M
@@ -287,8 +288,10 @@ describe('live capture process core', () => {
     await capture.stop()
     const later = requests.filter((item) => item.interval === '1m').at(-1)!
     expect(later.from).toBe(lastMinute + M)
-    expect(store.latestOfficialBucket(M)).toBeGreaterThan(lastMinute)
-    expect(store.latestOfficialBucket(5 * M)).toBeDefined()
+    expect(store.latestOfficialBucket('PF_XBTUSD', M)).toBeGreaterThan(
+      lastMinute,
+    )
+    expect(store.latestOfficialBucket('PF_XBTUSD', 5 * M)).toBeDefined()
     store.close()
   })
 
@@ -317,6 +320,189 @@ describe('live capture process core', () => {
       lines.some((line) => line.includes('official candles unavailable')),
     ).toBe(true)
     store.close()
+  })
+
+  describe('several products', () => {
+    const M = 60_000
+    const T0 = 1_791_281_220_000
+    const productsOf = [
+      { productId: 'PF_XBTUSD', tickSize: '1' },
+      { productId: 'PF_ETHUSD', tickSize: '0.1' },
+      { productId: 'PF_SOLUSD', tickSize: '0.01' },
+    ]
+    function candleFetch(
+      requests: Array<{ product: string; interval: string; at: number }>,
+      failing: readonly string[] = [],
+    ) {
+      return async (input: string | URL | Request) => {
+        const url = new URL(String(input))
+        const [product, interval] = url.pathname.split('/').slice(-2) as [
+          string,
+          string,
+        ]
+        requests.push({ product, interval, at: performance.now() })
+        if (failing.includes(product))
+          return new Response('no', { status: 500 })
+        const from = Number(url.searchParams.get('from')) * 1000
+        const to = Number(url.searchParams.get('to')) * 1000
+        const step = interval === '1m' ? M : 5 * M
+        const candles = []
+        for (let time = Math.ceil(from / step) * step; time <= to; time += step)
+          candles.push({
+            time,
+            open: '100',
+            high: '101',
+            low: '99',
+            close: '100',
+            volume: '1',
+          })
+        return new Response(JSON.stringify({ candles, more_candles: false }))
+      }
+    }
+    function setup(
+      extra: Partial<Parameters<typeof createLiveCapture>[0]> = {},
+      failing: readonly string[] = [],
+    ) {
+      const dir = mkdtempSync(join(tmpdir(), 'balancita-capture-'))
+      dirs.push(dir)
+      const store = new FuturesMarketStore(join(dir, 'market.sqlite'))
+      const requests: Array<{ product: string; interval: string; at: number }> =
+        []
+      const lines: string[] = []
+      let now = T0 + 10 * M + 5_000
+      const capture = createLiveCapture({
+        store,
+        clock: () => now,
+        makeSocket: () => fakeSocket().socket,
+        fetchCatalog: async () => catalog,
+        fundingFetch: async () => {
+          throw new Error('offline')
+        },
+        products: productsOf,
+        officialCandlesFetch: candleFetch(requests, failing),
+        officialCandleLookbackMs: { 60_000: 5 * M, 300_000: 30 * M },
+        officialPollMs: 5,
+        officialRequestGapMs: 0,
+        log: (line) => lines.push(line),
+        ...extra,
+      })
+      return {
+        store,
+        capture,
+        requests,
+        lines,
+        advance: (ms: number) => {
+          now += ms
+        },
+        now: () => now,
+      }
+    }
+
+    it('backfills and polls every product, 5m before 1m, one product after another', async () => {
+      const { store, capture, requests, advance } = setup()
+      await capture.start()
+      await wait(40)
+      const firstRound = requests
+        .slice(0, 6)
+        .map((item) => `${item.product} ${item.interval}`)
+      expect(firstRound).toEqual([
+        'PF_XBTUSD 5m',
+        'PF_XBTUSD 1m',
+        'PF_ETHUSD 5m',
+        'PF_ETHUSD 1m',
+        'PF_SOLUSD 5m',
+        'PF_SOLUSD 1m',
+      ])
+      const lasts = productsOf.map(({ productId }) =>
+        store.latestOfficialBucket(productId, M),
+      )
+      for (const last of lasts) expect(last).toBeDefined()
+      expect(new Set(lasts).size).toBe(1)
+      advance(2 * M)
+      await wait(40)
+      await capture.stop()
+      for (const [index, { productId }] of productsOf.entries()) {
+        expect(store.latestOfficialBucket(productId, M)).toBeGreaterThan(
+          lasts[index]!,
+        )
+        expect(store.latestOfficialBucket(productId, 5 * M)).toBeDefined()
+        // Each product resumes from its own latest bucket.
+        const mine = requests.filter(
+          (item) => item.product === productId && item.interval === '1m',
+        )
+        expect(mine.length).toBeGreaterThanOrEqual(2)
+      }
+      store.close()
+    })
+
+    it('staggers requests by the configured gap', async () => {
+      const { store, capture, requests } = setup({ officialRequestGapMs: 20 })
+      await capture.start()
+      await wait(220)
+      await capture.stop()
+      expect(requests.length).toBeGreaterThanOrEqual(6)
+      for (let index = 1; index < Math.min(requests.length, 6); index += 1)
+        expect(requests[index]!.at - requests[index - 1]!.at).toBeGreaterThan(
+          17,
+        )
+      store.close()
+    })
+
+    it('does not let one failing product block the others, and names it in the log', async () => {
+      const { store, capture, lines } = setup({}, ['PF_ETHUSD'])
+      await capture.start()
+      await wait(40)
+      await capture.stop()
+      expect(store.latestOfficialBucket('PF_ETHUSD', M)).toBeUndefined()
+      expect(store.latestOfficialBucket('PF_SOLUSD', M)).toBeDefined()
+      expect(store.latestOfficialBucket('PF_XBTUSD', M)).toBeDefined()
+      expect(
+        lines.some(
+          (line) =>
+            line.includes('official candles unavailable') &&
+            line.includes('PF_ETHUSD'),
+        ),
+      ).toBe(true)
+      store.close()
+    })
+
+    it('stops promptly even while waiting between requests', async () => {
+      const { store, capture, requests } = setup({
+        officialRequestGapMs: 30_000,
+      })
+      await capture.start()
+      await wait(30)
+      const started = performance.now()
+      await capture.stop()
+      expect(performance.now() - started).toBeLessThan(1_000)
+      expect(requests.length).toBeLessThanOrEqual(2)
+      store.close()
+    })
+
+    it('logs pinned products that disagree with the live catalog', async () => {
+      const { store, capture, lines } = setup({
+        fetchCatalog: async () => ({
+          instruments: [
+            ...catalog.instruments,
+            {
+              symbol: 'PF_ETHUSD',
+              tickSize: 0.05,
+              tradeable: true,
+            },
+          ],
+        }),
+      })
+      await capture.start()
+      await wait(20)
+      await capture.stop()
+      expect(lines).toContain(
+        'catalog warning: PF_ETHUSD tick size 0.05 in the catalog differs from the pinned 0.1',
+      )
+      expect(lines).toContain(
+        'catalog warning: PF_SOLUSD is missing from the catalog',
+      )
+      store.close()
+    })
   })
 
   it('keeps retrying the catalog instead of exiting when it is unavailable', async () => {

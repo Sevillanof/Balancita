@@ -6,6 +6,7 @@ import {
 } from './official-candles.ts'
 
 const MINUTE = 60_000
+const BTC = 'PF_XBTUSD'
 const T0 = 1_791_281_220_000 // a minute boundary
 
 function body(candles: unknown[], more = false): string {
@@ -31,11 +32,16 @@ function candle(
 
 describe('official Kraken candles', () => {
   it('builds the public charts URL in seconds for 1m and 5m', () => {
-    expect(officialCandlesUrl(MINUTE, T0, T0 + 600_000)).toBe(
+    expect(officialCandlesUrl(BTC, MINUTE, T0, T0 + 600_000)).toBe(
       `https://futures.kraken.com/api/charts/v1/trade/PF_XBTUSD/1m?from=${T0 / 1000}&to=${(T0 + 600_000) / 1000}`,
     )
-    expect(officialCandlesUrl(300_000, T0, T0)).toContain('/PF_XBTUSD/5m?')
-    expect(() => officialCandlesUrl(900_000, T0, T0)).toThrow(/interval/)
+    expect(officialCandlesUrl(BTC, 300_000, T0, T0)).toContain('/PF_XBTUSD/5m?')
+    expect(officialCandlesUrl('PF_ETHUSD', MINUTE, T0, T0)).toContain(
+      '/trade/PF_ETHUSD/1m?',
+    )
+    expect(() => officialCandlesUrl(BTC, 900_000, T0, T0)).toThrow(/interval/)
+    for (const bad of ['', 'pf_ethusd', 'FI_XBTUSD_261225', 'PF_ETH/../x'])
+      expect(() => officialCandlesUrl(bad, MINUTE, T0, T0)).toThrow(/product/i)
   })
 
   it('keeps only settled closed candles and normalizes decimals', () => {
@@ -51,6 +57,7 @@ describe('official Kraken candles', () => {
       candle(T0 + 2 * MINUTE), // closes at T0+3m, not settled yet
     ])
     const parsed = parseOfficialCandles(raw, {
+      productId: 'PF_ETHUSD',
       intervalMs: MINUTE,
       fromMs: T0,
       toMs: T0 + 3 * MINUTE,
@@ -70,6 +77,7 @@ describe('official Kraken candles', () => {
       close: '85996',
       volumeBtc: '0.4893',
     })
+    expect(parsed.productId).toBe('PF_ETHUSD')
     expect(parsed.candles[1]!.volumeBtc).toBe('0')
     expect(parsed.rawResponse).toBe(raw)
     expect(parsed.sha256).toMatch(/^[0-9a-f]{64}$/)
@@ -78,6 +86,7 @@ describe('official Kraken candles', () => {
 
   it('rejects malformed, misaligned, duplicate or inconsistent candles', () => {
     const options = {
+      productId: BTC,
       intervalMs: MINUTE,
       fromMs: T0,
       toMs: T0 + 10 * MINUTE,
@@ -110,8 +119,16 @@ describe('official Kraken candles', () => {
         return new Response(body([candle(T0), candle(T0 + MINUTE)]))
       },
     })
-    const response = await client.fetch(MINUTE, T0, T0 + 5 * MINUTE)
-    expect(requests).toEqual([officialCandlesUrl(MINUTE, T0, T0 + 5 * MINUTE)])
+    const response = await client.fetch(
+      'PF_SOLUSD',
+      MINUTE,
+      T0,
+      T0 + 5 * MINUTE,
+    )
+    expect(requests).toEqual([
+      officialCandlesUrl('PF_SOLUSD', MINUTE, T0, T0 + 5 * MINUTE),
+    ])
+    expect(response.productId).toBe('PF_SOLUSD')
     expect(response.candles).toHaveLength(2)
     expect(response.receivedAtMs).toBe(T0 + 5 * MINUTE)
     expect(response.fromMs).toBe(T0)
@@ -121,6 +138,6 @@ describe('official Kraken candles', () => {
       clock: () => T0,
       fetch: async () => new Response('busy', { status: 429 }),
     })
-    await expect(failing.fetch(MINUTE, T0, T0)).rejects.toThrow(/HTTP 429/)
+    await expect(failing.fetch(BTC, MINUTE, T0, T0)).rejects.toThrow(/HTTP 429/)
   })
 })

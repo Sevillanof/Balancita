@@ -3,6 +3,7 @@ import {
   FuturesMarketStore,
   type OfficialStoredCandle,
 } from '../kraken-futures/futures-market-store.ts'
+import { FUTURES_PRODUCT } from '../kraken-futures/futures-market.ts'
 import { closedHistoryRows, toTerminalMarket } from './terminal-market.ts'
 
 export const CANDLE_INTERVAL_MS = 60_000
@@ -159,6 +160,7 @@ export class LiveMarketFollower {
       this.officialCursor = opened.maxOfficialRowid()
       this.officialBuckets.clear()
       for (const candle of opened.officialCandlesAsOf(
+        FUTURES_PRODUCT,
         CANDLE_INTERVAL_MS,
         Number.MAX_SAFE_INTEGER,
         OFFICIAL_BUCKETS_KEPT,
@@ -352,6 +354,7 @@ export class LiveMarketFollower {
         }
         for (let page = 0; page < MAX_PAGES; page += 1) {
           const rows = store.officialCandlesAfter(
+            FUTURES_PRODUCT,
             this.officialCursor,
             CANDLE_INTERVAL_MS,
             PAGE,
