@@ -235,8 +235,22 @@ function appliedDecisionTime(result: JsonRecord): number | undefined {
   return decisionTime
 }
 
+/** Last fully verified position of a run's append-only history. */
+interface VerifiedBoundary {
+  lastSeq: number
+  chainHead: string
+  stateVersion: number
+  maxWorkRowid: number
+  maxEventRowid: number
+  maxLedgerRowid: number
+  frozen: JsonRecord
+  operativeRun: boolean
+  latestCheckpointJson: string | undefined
+}
+
 export class FuturesStore {
   private readonly db: DatabaseSync
+  private readonly verifiedBoundaries = new Map<string, VerifiedBoundary>()
   private operativeIdentityStore: FuturesOperativeIdentityStore | undefined
   private terminalRetention = 10_000
   private readonly terminalListeners = new Set<
@@ -260,6 +274,10 @@ export class FuturesStore {
       CREATE TRIGGER IF NOT EXISTS paper_futures_records_no_delete BEFORE DELETE ON paper_futures_records BEGIN SELECT RAISE(ABORT,'append-only futures record'); END;
       CREATE TABLE IF NOT EXISTS paper_futures_applied(work_id TEXT PRIMARY KEY REFERENCES paper_futures_work(work_id), result_hash TEXT NOT NULL, receipt_json TEXT NOT NULL) STRICT;
       CREATE TABLE IF NOT EXISTS paper_futures_fill_ids(fill_id TEXT PRIMARY KEY, work_id TEXT NOT NULL REFERENCES paper_futures_work(work_id)) STRICT;
+      CREATE TRIGGER IF NOT EXISTS paper_futures_applied_no_update BEFORE UPDATE ON paper_futures_applied BEGIN SELECT RAISE(ABORT,'append-only futures applied receipt'); END;
+      CREATE TRIGGER IF NOT EXISTS paper_futures_applied_no_delete BEFORE DELETE ON paper_futures_applied BEGIN SELECT RAISE(ABORT,'append-only futures applied receipt'); END;
+      CREATE TRIGGER IF NOT EXISTS paper_futures_fill_ids_no_update BEFORE UPDATE ON paper_futures_fill_ids BEGIN SELECT RAISE(ABORT,'append-only futures fill id'); END;
+      CREATE TRIGGER IF NOT EXISTS paper_futures_fill_ids_no_delete BEFORE DELETE ON paper_futures_fill_ids BEGIN SELECT RAISE(ABORT,'append-only futures fill id'); END;
       CREATE TABLE IF NOT EXISTS paper_futures_events(event_id TEXT PRIMARY KEY, work_id TEXT NOT NULL REFERENCES paper_futures_work(work_id), payload_json TEXT NOT NULL) STRICT;
       CREATE TRIGGER IF NOT EXISTS paper_futures_events_no_update BEFORE UPDATE ON paper_futures_events BEGIN SELECT RAISE(ABORT,'append-only futures event'); END;
       CREATE TRIGGER IF NOT EXISTS paper_futures_events_no_delete BEFORE DELETE ON paper_futures_events BEGIN SELECT RAISE(ABORT,'append-only futures event'); END;
@@ -269,6 +287,8 @@ export class FuturesStore {
       CREATE TABLE IF NOT EXISTS paper_futures_projections(run_id TEXT PRIMARY KEY REFERENCES paper_futures_runs(run_id), state_json TEXT NOT NULL) STRICT;
       CREATE TABLE IF NOT EXISTS paper_futures_checkpoints(run_id TEXT PRIMARY KEY REFERENCES paper_futures_runs(run_id), state_version INTEGER NOT NULL, result_hash TEXT NOT NULL) STRICT;
       CREATE TABLE IF NOT EXISTS paper_futures_outbox(outbox_id TEXT PRIMARY KEY, run_id TEXT NOT NULL, work_id TEXT NOT NULL, payload_json TEXT NOT NULL) STRICT;
+      CREATE TRIGGER IF NOT EXISTS paper_futures_outbox_no_update BEFORE UPDATE ON paper_futures_outbox BEGIN SELECT RAISE(ABORT,'append-only futures outbox'); END;
+      CREATE TRIGGER IF NOT EXISTS paper_futures_outbox_no_delete BEFORE DELETE ON paper_futures_outbox BEGIN SELECT RAISE(ABORT,'append-only futures outbox'); END;
       CREATE TABLE IF NOT EXISTS paper_futures_commands(command_id TEXT PRIMARY KEY, payload_hash TEXT NOT NULL, acceptance_json TEXT NOT NULL) STRICT;
       CREATE TRIGGER IF NOT EXISTS paper_futures_commands_no_update BEFORE UPDATE ON paper_futures_commands BEGIN SELECT RAISE(ABORT,'immutable accepted command'); END;
       CREATE TRIGGER IF NOT EXISTS paper_futures_commands_no_delete BEFORE DELETE ON paper_futures_commands BEGIN SELECT RAISE(ABORT,'immutable accepted command'); END;
@@ -1791,7 +1811,7 @@ export class FuturesStore {
     workId: string,
     appliedStateVersion: number,
   ): { runtime_output: JsonRecord; ledger: JsonRecord } {
-    if (!this.verifyRun(runId))
+    if (!this.verifyRunHot(runId))
       throw new Error('Cannot restore runtime projection from an invalid run.')
     const row = this.db
       .prepare(
@@ -1852,7 +1872,7 @@ export class FuturesStore {
   }
 
   getRunProjection(runId: string): JsonRecord | undefined {
-    if (!this.verifyRun(runId))
+    if (!this.verifyRunHot(runId))
       throw new Error('Futures run checkpoint failed integrity verification.')
     const row = this.db
       .prepare(
@@ -2045,46 +2065,102 @@ export class FuturesStore {
     }
   }
 
+  /**
+   * Full audit of the whole run history (frozen identity, every work snapshot,
+   * the hash-chained records, events, ledger, identities and projection). Use
+   * it at store open / run restore and for explicit audits. A successful full
+   * audit establishes the in-memory boundary used by hot-path verification.
+   */
   verifyRun(runId: string): boolean {
+    return this.verifyAndRememberBoundary(runId, undefined)
+  }
+
+  /**
+   * Hot-path verification: with an established boundary only rows appended
+   * after it are verified (chain link from the boundary hash, per-row content
+   * checks, matching events/ledger/identity rows, then head and projection).
+   * History rows are append-only (SQLite triggers), so older rows cannot be
+   * changed through the application; out-of-band edits are caught by the full
+   * audit at the next open. Without a boundary this is a full verification.
+   */
+  private verifyRunHot(runId: string): boolean {
+    const prior = this.verifiedBoundaries.get(runId)
+    return this.verifyAndRememberBoundary(
+      runId,
+      prior && !prior.operativeRun && this.boundaryTailIntact(runId, prior)
+        ? prior
+        : undefined,
+    )
+  }
+
+  private verifyAndRememberBoundary(
+    runId: string,
+    prior: VerifiedBoundary | undefined,
+  ): boolean {
     try {
-      return this.verifyRunIntegrity(runId)
+      const next = this.verifyRunIntegrity(runId, prior)
+      if (!next) {
+        this.verifiedBoundaries.delete(runId)
+        return false
+      }
+      // Only committed state may become the boundary: inside an open
+      // transaction the rows could still be rolled back.
+      if (!this.db.isTransaction) this.verifiedBoundaries.set(runId, next)
+      return true
     } catch {
+      this.verifiedBoundaries.delete(runId)
       return false
     }
   }
 
-  private verifyRunIntegrity(runId: string): boolean {
+  private boundaryTailIntact(runId: string, boundary: VerifiedBoundary): boolean {
+    if (boundary.lastSeq === 0) return true
+    const tail = this.db
+      .prepare(
+        'SELECT record_hash FROM paper_futures_records WHERE run_id=? AND seq=?',
+      )
+      .get(runId, boundary.lastSeq) as { record_hash: string } | undefined
+    return tail?.record_hash === boundary.chainHead
+  }
+
+  private verifyRunIntegrity(
+    runId: string,
+    prior: VerifiedBoundary | undefined,
+  ): VerifiedBoundary | undefined {
     const run = this.db
       .prepare(
         'SELECT run_id,frozen_json,frozen_hash,state_version,head_hash FROM paper_futures_runs WHERE run_id=?',
       )
       .get(runId) as JsonRecord | undefined
-    if (!run) return false
+    if (!run) return undefined
     let frozen: JsonRecord
-    try {
-      frozen = JSON.parse(String(run.frozen_json)) as JsonRecord
-      if (
-        canonicalJson(frozen) !== run.frozen_json ||
-        canonicalHash(frozen) !== run.frozen_hash
-      )
-        return false
-      validateFrozenRun({
-        runId,
-        config: frozen.config,
-        seed: frozen.seed,
-        instrument: frozen.instrument,
-        costs: frozen.costs,
-        runtime: frozen.runtime,
-      })
-    } catch {
-      return false
+    if (prior) frozen = prior.frozen
+    else {
+      try {
+        frozen = JSON.parse(String(run.frozen_json)) as JsonRecord
+        if (
+          canonicalJson(frozen) !== run.frozen_json ||
+          canonicalHash(frozen) !== run.frozen_hash
+        )
+          return undefined
+        validateFrozenRun({
+          runId,
+          config: frozen.config,
+          seed: frozen.seed,
+          instrument: frozen.instrument,
+          costs: frozen.costs,
+          runtime: frozen.runtime,
+        })
+      } catch {
+        return undefined
+      }
     }
     const works = this.db
       .prepare(
-        'SELECT work_id,snapshot_json,snapshot_hash FROM paper_futures_work WHERE run_id=? ORDER BY rowid',
+        'SELECT rowid AS rid,snapshot_json,snapshot_hash FROM paper_futures_work WHERE run_id=? AND rowid>? ORDER BY rowid',
       )
-      .all(runId) as JsonRecord[]
-    const workIds = new Set<string>()
+      .all(runId, prior?.maxWorkRowid ?? 0) as JsonRecord[]
+    let maxWorkRowid = prior?.maxWorkRowid ?? 0
     try {
       for (const work of works) {
         const snapshot = JSON.parse(String(work.snapshot_json)) as unknown
@@ -2092,35 +2168,44 @@ export class FuturesStore {
           canonicalJson(snapshot) !== work.snapshot_json ||
           canonicalHash(snapshot) !== work.snapshot_hash
         )
-          return false
-        workIds.add(String(work.work_id))
+          return undefined
+        maxWorkRowid = Math.max(maxWorkRowid, Number(work.rid))
       }
     } catch {
-      return false
+      return undefined
     }
     const records = this.db
       .prepare(
-        'SELECT work_id,kind,payload_json,payload_hash,previous_hash,record_hash FROM paper_futures_records WHERE run_id=? ORDER BY seq',
+        'SELECT seq,work_id,kind,payload_json,payload_hash,previous_hash,record_hash FROM paper_futures_records WHERE run_id=? AND seq>? ORDER BY seq',
       )
-      .all(runId) as JsonRecord[]
-    let previous = '0'.repeat(64)
+      .all(runId, prior?.lastSeq ?? 0) as JsonRecord[]
+    let previous = prior?.chainHead ?? '0'.repeat(64)
+    let lastSeq = prior?.lastSeq ?? 0
     const expectedEvents = new Map<string, string>()
     const expectedRuntimeLedger = new Map<string, string>()
-    let expectedStateVersion = 0
-    let latestRuntimeCheckpoint: unknown
-    let hasRuntimeCheckpoint = false
-    const operativeRun = isOperativeRuntimeConfig(
-      isRecord(frozen.runtime) ? frozen.runtime.runtime_config : undefined,
-    )
+    let expectedStateVersion = prior?.stateVersion ?? 0
+    let latestCheckpointJson = prior?.latestCheckpointJson
+    const operativeRun = prior
+      ? prior.operativeRun
+      : isOperativeRuntimeConfig(
+          isRecord(frozen.runtime) ? frozen.runtime.runtime_config : undefined,
+        )
     const expectedIdentityBatches = new Map<string, string>()
     for (const row of records) {
-      if (!workIds.has(String(row.work_id))) return false
+      const work = this.db
+        .prepare(
+          'SELECT run_id,expected_version FROM paper_futures_work WHERE work_id=?',
+        )
+        .get(String(row.work_id)) as
+        | { run_id: string; expected_version: number }
+        | undefined
+      if (!work || work.run_id !== runId) return undefined
       let payload: unknown
       try {
         payload = JSON.parse(String(row.payload_json)) as unknown
-        if (canonicalJson(payload) !== row.payload_json) return false
+        if (canonicalJson(payload) !== row.payload_json) return undefined
       } catch {
-        return false
+        return undefined
       }
       const hash = canonicalHash(payload)
       const chain = createHash('sha256')
@@ -2131,7 +2216,7 @@ export class FuturesStore {
         previous !== row.previous_hash ||
         chain !== row.record_hash
       )
-        return false
+        return undefined
       if (row.kind === 'applied-result') {
         if (
           !isRecord(payload) ||
@@ -2139,18 +2224,12 @@ export class FuturesStore {
           payload.work_id !== row.work_id ||
           !Array.isArray(payload.events)
         )
-          return false
-        const work = this.db
-          .prepare(
-            'SELECT expected_version FROM paper_futures_work WHERE work_id=?',
-          )
-          .get(String(row.work_id)) as { expected_version: number } | undefined
+          return undefined
         if (
-          !work ||
           payload.applied_state_version !== work.expected_version + 1 ||
           payload.applied_state_version !== expectedStateVersion + 1
         )
-          return false
+          return undefined
         expectedStateVersion = payload.applied_state_version as number
         const { result_hash: ignoredHash, ...hashedResult } = payload
         void ignoredHash
@@ -2160,21 +2239,20 @@ export class FuturesStore {
             'SELECT result_hash FROM paper_futures_applied WHERE work_id=?',
           )
           .get(String(row.work_id)) as { result_hash: string } | undefined
-        if (!applied || applied.result_hash !== resultHash) return false
+        if (!applied || applied.result_hash !== resultHash) return undefined
         if (
           payload.schema_version === 'futures-runtime-work.v1' ||
           payload.schema_version === 'futures-runtime-work.v2' ||
           payload.schema_version === 'futures-runtime-work.v3'
         ) {
-          if (!('runtime' in frozen)) return false
+          if (!('runtime' in frozen)) return undefined
           validateRuntimeWork(
             payload,
             frozen,
             runId,
             Number(payload.applied_state_version),
           )
-          latestRuntimeCheckpoint = payload.runtime_checkpoint
-          hasRuntimeCheckpoint = true
+          latestCheckpointJson = canonicalJson(payload.runtime_checkpoint)
           expectedIdentityBatches.set(
             String(row.work_id),
             canonicalHash(
@@ -2188,7 +2266,7 @@ export class FuturesStore {
             !isRecord(payload.result) ||
             !Array.isArray(payload.result.events)
           )
-            return false
+            return undefined
           payload.result.events.forEach((event, index) => {
             expectedRuntimeLedger.set(
               `runtime:${String(row.work_id)}:${index}`,
@@ -2202,29 +2280,32 @@ export class FuturesStore {
             typeof event.id !== 'string' ||
             expectedEvents.has(event.id)
           )
-            return false
+            return undefined
           expectedEvents.set(event.id, canonicalJson(event))
         }
-      } else if (row.kind !== 'superseded') return false
+      } else if (row.kind !== 'superseded') return undefined
       previous = chain
+      lastSeq = Number(row.seq)
     }
     if (
       previous !== run.head_hash ||
       run.state_version !== expectedStateVersion
     )
-      return false
+      return undefined
     {
       // Exact identity history is verified in full and must match, batch for
       // batch, the identity updates carried by the hash-chained applied results.
+      // Operative runs never take the incremental path, so `prior` here only
+      // covers non-operative runs where this is a constant-cost emptiness proof.
       const identities = this.identities()
       const proof = identities.verifyRun(runId)
       const stored = identities.workBatchHashes(runId)
       if (!operativeRun) {
-        if (proof.records !== 0 || stored.size !== 0) return false
+        if (proof.records !== 0 || stored.size !== 0) return undefined
       } else {
-        if (stored.size !== expectedIdentityBatches.size) return false
+        if (stored.size !== expectedIdentityBatches.size) return undefined
         for (const [workId, hash] of expectedIdentityBatches)
-          if (stored.get(workId) !== hash) return false
+          if (stored.get(workId) !== hash) return undefined
       }
     }
     const projectionRow = this.db
@@ -2232,35 +2313,36 @@ export class FuturesStore {
         'SELECT state_json FROM paper_futures_projections WHERE run_id=?',
       )
       .get(runId) as { state_json: string } | undefined
-    if (!projectionRow) return false
+    if (!projectionRow) return undefined
     const projection = JSON.parse(projectionRow.state_json) as JsonRecord
     if (
       canonicalJson(projection) !== projectionRow.state_json ||
       projection.state_version !== expectedStateVersion
     )
-      return false
+      return undefined
     if (
-      hasRuntimeCheckpoint &&
-      canonicalJson(projection.checkpoint) !==
-        canonicalJson(latestRuntimeCheckpoint)
+      latestCheckpointJson !== undefined &&
+      canonicalJson(projection.checkpoint) !== latestCheckpointJson
     )
-      return false
+      return undefined
     const committedEvents = new Map(expectedEvents)
     const storedEvents = this.db
       .prepare(
-        'SELECT e.event_id,e.payload_json FROM paper_futures_events e JOIN paper_futures_work w ON w.work_id=e.work_id WHERE w.run_id=? ORDER BY e.rowid',
+        'SELECT e.rowid AS rid,e.event_id,e.payload_json FROM paper_futures_events e JOIN paper_futures_work w ON w.work_id=e.work_id WHERE w.run_id=? AND e.rowid>? ORDER BY e.rowid',
       )
-      .all(runId) as JsonRecord[]
-    if (storedEvents.length !== expectedEvents.size) return false
+      .all(runId, prior?.maxEventRowid ?? 0) as JsonRecord[]
+    if (storedEvents.length !== expectedEvents.size) return undefined
+    let maxEventRowid = prior?.maxEventRowid ?? 0
     for (const event of storedEvents) {
       if (
         typeof event.event_id !== 'string' ||
         expectedEvents.get(event.event_id) !== event.payload_json
       )
-        return false
+        return undefined
       expectedEvents.delete(event.event_id)
+      maxEventRowid = Math.max(maxEventRowid, Number(event.rid))
     }
-    if (expectedEvents.size !== 0) return false
+    if (expectedEvents.size !== 0) return undefined
     const expectedLedger = new Map<string, string>()
     for (const [eventId, payloadJson] of committedEvents) {
       const event = JSON.parse(payloadJson) as JsonRecord
@@ -2271,28 +2353,21 @@ export class FuturesStore {
     }
     const ledgerRows = this.db
       .prepare(
-        'SELECT l.work_id,l.event_id,l.payload_json FROM paper_futures_ledger l JOIN paper_futures_work w ON w.work_id=l.work_id WHERE w.run_id=? ORDER BY l.rowid',
+        'SELECT l.rowid AS rid,l.event_id,l.payload_json FROM paper_futures_ledger l JOIN paper_futures_work w ON w.work_id=l.work_id WHERE w.run_id=? AND l.rowid>? ORDER BY l.rowid',
       )
-      .all(runId) as JsonRecord[]
+      .all(runId, prior?.maxLedgerRowid ?? 0) as JsonRecord[]
     if (ledgerRows.length !== expectedLedger.size + expectedRuntimeLedger.size)
-      return false
+      return undefined
+    let maxLedgerRowid = prior?.maxLedgerRowid ?? 0
     for (const ledgerEvent of ledgerRows) {
       if (
         typeof ledgerEvent.event_id !== 'string' ||
-        typeof ledgerEvent.payload_json !== 'string'
-      )
-        return false
-      const work = this.db
-        .prepare('SELECT run_id FROM paper_futures_work WHERE work_id=?')
-        .get(String(ledgerEvent.work_id)) as { run_id: string } | undefined
-      if (
-        !work ||
-        work.run_id !== runId ||
+        typeof ledgerEvent.payload_json !== 'string' ||
         (expectedLedger.get(ledgerEvent.event_id) ??
           expectedRuntimeLedger.get(ledgerEvent.event_id)) !==
           ledgerEvent.payload_json
       )
-        return false
+        return undefined
       const payload = JSON.parse(ledgerEvent.payload_json) as JsonRecord
       if (expectedRuntimeLedger.has(ledgerEvent.event_id)) {
         validateLedgerAuditEvent(payload)
@@ -2303,11 +2378,24 @@ export class FuturesStore {
             String(payload.type),
           )
         )
-          return false
+          return undefined
         expectedLedger.delete(ledgerEvent.event_id)
       }
+      maxLedgerRowid = Math.max(maxLedgerRowid, Number(ledgerEvent.rid))
     }
-    return expectedLedger.size === 0 && expectedRuntimeLedger.size === 0
+    if (expectedLedger.size !== 0 || expectedRuntimeLedger.size !== 0)
+      return undefined
+    return {
+      lastSeq,
+      chainHead: previous,
+      stateVersion: expectedStateVersion,
+      maxWorkRowid,
+      maxEventRowid,
+      maxLedgerRowid,
+      frozen,
+      operativeRun,
+      latestCheckpointJson,
+    }
   }
 }
 
