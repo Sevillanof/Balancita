@@ -15,5 +15,5 @@ For the explicitly authorized, isolated Kraken Futures paper-futures feature
 perpetuals), `docs/adr/0001-isolated-paper-futures-accounting.md` overrides
 that skill's BTC-EUR-only and long/flat-only scope and authorizes analysing and
 improving C25-C28. It does not authorize real orders, private endpoints,
-credentials, or changes to spot/history. The ADR is immutable; amendments need
-explicit user authorization and an update of `scripts/adr-immutable.node-test.mjs`.
+credentials, or changes to spot/history. The ADR is immutable and read-only:
+consult it, never edit it, unless the user directly requests an amendment.

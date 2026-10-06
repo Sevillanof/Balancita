@@ -1,6 +1,6 @@
 # ADR 0001: Isolated paper-futures accounting
 
-**Status:** Accepted for the authorized paper-futures increment. Amended 2026-10-06 (see Amendment 2026-10-06). Immutable after that amendment: further changes need an explicit, user-authorized amendment, and `scripts/adr-immutable.node-test.mjs` pins this file's SHA-256.
+**Status:** Accepted for the authorized paper-futures increment. Amended 2026-10-06 (see Amendment 2026-10-06). Immutable and read-only: it is consulted, never edited, except for an amendment the user requests directly.
 
 ## Decision
 
@@ -49,6 +49,7 @@ Each process is the single writer of its own SQLite database; others open it rea
 - C, verdict service (Python): pure, replayable function over official candles; writes long, short or abstain verdicts on candle close to its own DB.
 - D, paper execution (Python): consumes fresh verdicts; fills at the ticker top of book as taker, capped by the displayed bid/ask size; hash-chained append-only account DB.
 - E, forecast scorer: scores stored predictions and decisions against realized outcomes; writes its own DB.
+- N, news: ingests public news, stores each item with its received time, and stores the LLM analysis of each item as timestamped features (for example a veto or confidence) in its own DB; C may consume these features, never the LLM directly.
 
 Determinism and replay equality are an invariant: a live run equals a replay of the same stored inputs. Market data capture is never dropped or lossily batched.
 
