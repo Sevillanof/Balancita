@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import ApprovedTerminalLayout from '../features/trading-view/presentation/ApprovedTerminalLayout.tsx'
 import ApprovedTradingHeader from '../features/trading-view/presentation/ApprovedTradingHeader.tsx'
 import ApprovedMarketRow from '../features/trading-view/presentation/ApprovedMarketRow.tsx'
@@ -246,8 +246,13 @@ function TerminalMarketChart({
 
 export default function FuturesTerminal({
   bootstrap,
+  apiBase = '/api',
+  sourceSwitch,
 }: {
   bootstrap: TerminalBootstrap
+  apiBase?: string
+  /** Data-source control owned by the entry; rendered inside the header. */
+  sourceSwitch?: ReactNode
 }) {
   const [state, setState] = useState<ViewState | null>(null)
   const [connected, setConnected] = useState(false)
@@ -273,7 +278,7 @@ export default function FuturesTerminal({
     const seen = new Set<string>()
     const openSocket = () => {
       if (cancelled) return
-      socket = new WebSocket(terminalWebSocketUrl())
+      socket = new WebSocket(terminalWebSocketUrl(apiBase))
       socketRef.current = socket
       socket.onopen = () => {
         setConnected(true)
@@ -335,8 +340,12 @@ export default function FuturesTerminal({
               market.schema_version === 'futures-terminal-market.v1'
                 ? market
                 : originalRun &&
-                    record(bootstrap.terminal_market).schema_version ===
-                      'mock-terminal-market.v1'
+                    [
+                      'mock-terminal-market.v1',
+                      'futures-terminal-market.v1',
+                    ].includes(
+                      String(record(bootstrap.terminal_market).schema_version),
+                    )
                   ? bootstrap.terminal_market
                   : null,
           })
@@ -424,7 +433,7 @@ export default function FuturesTerminal({
       socket?.close()
       socketRef.current = null
     }
-  }, [bootstrap])
+  }, [bootstrap, apiBase])
 
   const account = record(state?.account)
   const netValue = account.net_usd ?? account.net_complete
@@ -460,6 +469,11 @@ export default function FuturesTerminal({
       ? fills.map(record).filter((fill) => fill.order_id === selectedOrderId)
       : []
   const [displayClock, setDisplayClock] = useState(() => Date.now())
+  // The live gateway serves public candles/price while the decision engine is
+  // not running: show that state explicitly and render no engine-owned data.
+  const engineOff =
+    bootstrap.mode === 'paper_live' &&
+    (record(state?.engine).status ?? bootstrap.engine?.status) === 'off'
   const localDemo = bootstrap.source === 'local-protection.v1'
   const originalRunActive = activeRunId === bootstrap.active_run_id
   const localScenarioStatus = localDemo
@@ -519,6 +533,7 @@ export default function FuturesTerminal({
         ]}
         status={
           <>
+            {sourceSwitch}
             <span className="demo-shell__badge">
               {connected ? 'FLUJO CONECTADO' : 'SIN CONEXIÓN'}
             </span>
@@ -611,7 +626,7 @@ export default function FuturesTerminal({
                   </dd>
                 </dl>
                 <a
-                  href="/api/terminal/export"
+                  href={`${apiBase}/terminal/export`}
                   download="futures-replay-export.json"
                 >
                   Descargar exportación verificada del run
@@ -676,9 +691,11 @@ export default function FuturesTerminal({
                 </p>
                 <p>
                   Warm-up:{' '}
-                  {bootstrap.engine?.status === 'warming'
-                    ? 'el motor aún no ha recibido evidencia suficiente.'
-                    : 'el conteo de velas de calentamiento no está expuesto.'}
+                  {engineOff
+                    ? 'no aplica: el motor está apagado.'
+                    : bootstrap.engine?.status === 'warming'
+                      ? 'el motor aún no ha recibido evidencia suficiente.'
+                      : 'el conteo de velas de calentamiento no está expuesto.'}
                 </p>
               </section>
             )}
@@ -696,10 +713,12 @@ export default function FuturesTerminal({
                     selectedId={localDemo ? selectedId : ''}
                     onSelect={setSelectedAnalysisId}
                   />
-                  <p>
-                    Las cifras de cuenta y decisiones siguientes provienen del
-                    snapshot/eventos durables.
-                  </p>
+                  {!engineOff && (
+                    <p>
+                      Las cifras de cuenta y decisiones siguientes provienen del
+                      snapshot/eventos durables.
+                    </p>
+                  )}
                 </section>
               }
               decisions={
@@ -708,7 +727,13 @@ export default function FuturesTerminal({
                   aria-label="Decisiones del motor"
                 >
                   <h2>Análisis recientes</h2>
-                  {analyses.length ? (
+                  {engineOff ? (
+                    <p role="status">
+                      Motor de decisiones apagado. Solo se muestran velas y
+                      precio públicos de Kraken Futures; no hay análisis, cuenta
+                      ni operaciones simuladas.
+                    </p>
+                  ) : analyses.length ? (
                     analyses
                       .slice(-100)
                       .reverse()
@@ -910,196 +935,208 @@ export default function FuturesTerminal({
                 </section>
               }
             />
-            <section
-              className="connected-terminal__panel"
-              aria-label="Controles paper"
-            >
-              <h2>Controles simulados</h2>
-              {localDemo && (
-                <>
-                  <p>
-                    Pausar entradas bloquea solo nuevas entradas en esta
-                    ejecución MOCK; no detiene el motor, el mercado simulado, la
-                    protección ni los cierres.
-                  </p>
-                  <p>{entryStateLabel(entryRisk)}</p>
-                </>
-              )}
-              {(localDemo
-                ? (['paper.pause', 'paper.resume', 'paper.new_run'] as const)
-                : ([
-                    'paper.start',
-                    'paper.pause',
-                    'paper.resume',
-                    'paper.close',
-                    'paper.new_run',
-                  ] as const)
-              ).map((action) => (
-                <button
-                  key={action}
-                  type="button"
-                  className="demo-terminal__present"
-                  disabled={!connected || commandPending}
-                  onClick={() => {
-                    if (
-                      action === 'paper.new_run' &&
-                      !window.confirm(
-                        localDemo
-                          ? 'Crear una cuenta/run MOCK nueva que repite el escenario y conservar el historial anterior?'
-                          : 'Crear una cuenta/run nuevo y conservar el historial anterior?',
-                      )
-                    )
-                      return
-                    sendCommand(action)
-                  }}
+            {!engineOff && (
+              <>
+                <section
+                  className="connected-terminal__panel"
+                  aria-label="Controles paper"
                 >
-                  {
-                    (localDemo
-                      ? {
-                          'paper.start': 'Iniciar simulación',
-                          'paper.pause': 'Pausar entradas (MOCK)',
-                          'paper.resume': 'Reanudar entradas (MOCK)',
-                          'paper.close': 'Cerrar posición',
-                          'paper.new_run': 'Nueva cuenta/run (MOCK)',
-                        }
-                      : {
-                          'paper.start': 'Iniciar simulación',
-                          'paper.pause': 'Pausar entradas',
-                          'paper.resume': 'Reanudar entradas',
-                          'paper.close': 'Cerrar posición',
-                          'paper.new_run': 'Nueva cuenta/run',
-                        })[action]
-                  }
-                </button>
-              ))}
-              {commandPending && (
-                <span role="status">
-                  Comando enviado; aceptación no significa fill.
-                </span>
-              )}
-              {commandStatus && <p role="status">{commandStatus}</p>}
-            </section>
-            <details className="connected-terminal__metadata" open>
-              <summary>Cuenta y estado de riesgo</summary>
-              <section className="connected-terminal__panel">
-                <dl>
-                  <dt>Saldo USD</dt>
-                  <dd>{money(account.cash_usd)}</dd>
-                  <dt>Patrimonio USD</dt>
-                  <dd
-                    title={String(account.equity_usd ?? '')}
-                    data-value={String(account.equity_usd ?? '')}
-                  >
-                    {money(account.equity_usd, localDemo ? 5 : 2)}
-                  </dd>
+                  <h2>Controles simulados</h2>
                   {localDemo && (
                     <>
-                      <dt>PnL bruto realizado USD</dt>
-                      <dd
-                        title={String(account.realized_gross_usd ?? '')}
-                        data-value={String(account.realized_gross_usd ?? '')}
-                      >
-                        {money(account.realized_gross_usd, 5)}
-                      </dd>
+                      <p>
+                        Pausar entradas bloquea solo nuevas entradas en esta
+                        ejecución MOCK; no detiene el motor, el mercado
+                        simulado, la protección ni los cierres.
+                      </p>
+                      <p>{entryStateLabel(entryRisk)}</p>
                     </>
                   )}
-                  <dt>Fees USD</dt>
-                  <dd
-                    title={String(account.fees_usd ?? '')}
-                    data-value={String(account.fees_usd ?? '')}
-                  >
-                    {money(account.fees_usd, localDemo ? 5 : 2)}
-                  </dd>
-                  <dt>Funding pagado (USD)</dt>
-                  <dd>
-                    {account.funding_complete === true
-                      ? money(account.funding_paid_usd ?? account.funding_paid)
-                      : 'Incompleto · neto no disponible'}
-                  </dd>
-                  <dt>PnL neto</dt>
-                  <dd
-                    {...(localDemo && netValue != null
-                      ? {
-                          title: String(netValue),
-                          'data-value': String(netValue),
-                        }
-                      : {})}
-                  >
-                    {netValue == null
-                      ? account.funding_complete === true
-                        ? 'No disponible durante posición abierta'
-                        : 'Incompleto'
-                      : money(netValue, localDemo ? 5 : 2)}
-                  </dd>
-                  <dt>Posición</dt>
-                  <dd>
-                    {position.side
-                      ? `${String(position.side)} · ${quantity(position.quantity_btc)}`
-                      : localDemo
-                        ? `${quantity(position.quantity_btc ?? '0')} · Sin exposición`
-                        : 'Sin posición abierta'}
-                  </dd>
-                </dl>
-              </section>
-            </details>
-            <ApprovedPortfolioTables
-              label="CARTERA PAPER · USD / BTC"
-              title="Posiciones y operaciones"
-              ariaLabel="Posiciones paper"
-              open={{
-                title: 'Posición abierta',
-                columns: ['Dirección', 'Cantidad BTC', 'Entrada USD'],
-                emptyLabel: 'Sin posición abierta.',
-                rows: position.side
-                  ? [
+                  {(localDemo
+                    ? ([
+                        'paper.pause',
+                        'paper.resume',
+                        'paper.new_run',
+                      ] as const)
+                    : ([
+                        'paper.start',
+                        'paper.pause',
+                        'paper.resume',
+                        'paper.close',
+                        'paper.new_run',
+                      ] as const)
+                  ).map((action) => (
+                    <button
+                      key={action}
+                      type="button"
+                      className="demo-terminal__present"
+                      disabled={!connected || commandPending}
+                      onClick={() => {
+                        if (
+                          action === 'paper.new_run' &&
+                          !window.confirm(
+                            localDemo
+                              ? 'Crear una cuenta/run MOCK nueva que repite el escenario y conservar el historial anterior?'
+                              : 'Crear una cuenta/run nuevo y conservar el historial anterior?',
+                          )
+                        )
+                          return
+                        sendCommand(action)
+                      }}
+                    >
                       {
-                        id: String(state.run_id),
-                        cells: [
-                          String(position.side),
-                          quantity(position.quantity_btc),
-                          money(position.entry_price_usd_per_btc),
-                        ],
-                      },
-                    ]
-                  : [],
-              }}
-              closed={{
-                title: 'Órdenes y ejecuciones',
-                columns: ['Tipo', 'Estado', 'Referencia'],
-                emptyLabel: 'No hay órdenes registradas.',
-                rows: [
-                  ...orders.slice(-100).map((value, index) => {
-                    const order = record(value)
-                    return {
-                      id: String(order.order_id ?? index),
-                      cells: [
-                        String(
-                          order.side ??
-                            order.action ??
-                            order.order_type ??
-                            'Orden paper',
-                        ),
-                        reasonLabel(order.status ?? order.type),
-                        `${String(order.quantity_btc ?? 'Cantidad no disponible')} · ${String(order.order_id ?? 'ID no disponible')}`,
-                      ],
-                    }
-                  }),
-                  ...(Array.isArray(state.fills) ? state.fills : [])
-                    .slice(-100)
-                    .map((value, index) => {
-                      const fill = record(value)
-                      return {
-                        id: String(fill.fill_id ?? `fill-${index}`),
-                        cells: [
-                          `Ejecución ${String(fill.action ?? fill.side ?? 'paper')}`,
-                          `${quantity(fill.quantity_btc)} @ ${money(fill.price_usd_per_btc)}`,
-                          String(fill.fill_id ?? 'Fill registrado'),
-                        ],
+                        (localDemo
+                          ? {
+                              'paper.start': 'Iniciar simulación',
+                              'paper.pause': 'Pausar entradas (MOCK)',
+                              'paper.resume': 'Reanudar entradas (MOCK)',
+                              'paper.close': 'Cerrar posición',
+                              'paper.new_run': 'Nueva cuenta/run (MOCK)',
+                            }
+                          : {
+                              'paper.start': 'Iniciar simulación',
+                              'paper.pause': 'Pausar entradas',
+                              'paper.resume': 'Reanudar entradas',
+                              'paper.close': 'Cerrar posición',
+                              'paper.new_run': 'Nueva cuenta/run',
+                            })[action]
                       }
-                    }),
-                ],
-              }}
-            />
+                    </button>
+                  ))}
+                  {commandPending && (
+                    <span role="status">
+                      Comando enviado; aceptación no significa fill.
+                    </span>
+                  )}
+                  {commandStatus && <p role="status">{commandStatus}</p>}
+                </section>
+                <details className="connected-terminal__metadata" open>
+                  <summary>Cuenta y estado de riesgo</summary>
+                  <section className="connected-terminal__panel">
+                    <dl>
+                      <dt>Saldo USD</dt>
+                      <dd>{money(account.cash_usd)}</dd>
+                      <dt>Patrimonio USD</dt>
+                      <dd
+                        title={String(account.equity_usd ?? '')}
+                        data-value={String(account.equity_usd ?? '')}
+                      >
+                        {money(account.equity_usd, localDemo ? 5 : 2)}
+                      </dd>
+                      {localDemo && (
+                        <>
+                          <dt>PnL bruto realizado USD</dt>
+                          <dd
+                            title={String(account.realized_gross_usd ?? '')}
+                            data-value={String(
+                              account.realized_gross_usd ?? '',
+                            )}
+                          >
+                            {money(account.realized_gross_usd, 5)}
+                          </dd>
+                        </>
+                      )}
+                      <dt>Fees USD</dt>
+                      <dd
+                        title={String(account.fees_usd ?? '')}
+                        data-value={String(account.fees_usd ?? '')}
+                      >
+                        {money(account.fees_usd, localDemo ? 5 : 2)}
+                      </dd>
+                      <dt>Funding pagado (USD)</dt>
+                      <dd>
+                        {account.funding_complete === true
+                          ? money(
+                              account.funding_paid_usd ?? account.funding_paid,
+                            )
+                          : 'Incompleto · neto no disponible'}
+                      </dd>
+                      <dt>PnL neto</dt>
+                      <dd
+                        {...(localDemo && netValue != null
+                          ? {
+                              title: String(netValue),
+                              'data-value': String(netValue),
+                            }
+                          : {})}
+                      >
+                        {netValue == null
+                          ? account.funding_complete === true
+                            ? 'No disponible durante posición abierta'
+                            : 'Incompleto'
+                          : money(netValue, localDemo ? 5 : 2)}
+                      </dd>
+                      <dt>Posición</dt>
+                      <dd>
+                        {position.side
+                          ? `${String(position.side)} · ${quantity(position.quantity_btc)}`
+                          : localDemo
+                            ? `${quantity(position.quantity_btc ?? '0')} · Sin exposición`
+                            : 'Sin posición abierta'}
+                      </dd>
+                    </dl>
+                  </section>
+                </details>
+                <ApprovedPortfolioTables
+                  label="CARTERA PAPER · USD / BTC"
+                  title="Posiciones y operaciones"
+                  ariaLabel="Posiciones paper"
+                  open={{
+                    title: 'Posición abierta',
+                    columns: ['Dirección', 'Cantidad BTC', 'Entrada USD'],
+                    emptyLabel: 'Sin posición abierta.',
+                    rows: position.side
+                      ? [
+                          {
+                            id: String(state.run_id),
+                            cells: [
+                              String(position.side),
+                              quantity(position.quantity_btc),
+                              money(position.entry_price_usd_per_btc),
+                            ],
+                          },
+                        ]
+                      : [],
+                  }}
+                  closed={{
+                    title: 'Órdenes y ejecuciones',
+                    columns: ['Tipo', 'Estado', 'Referencia'],
+                    emptyLabel: 'No hay órdenes registradas.',
+                    rows: [
+                      ...orders.slice(-100).map((value, index) => {
+                        const order = record(value)
+                        return {
+                          id: String(order.order_id ?? index),
+                          cells: [
+                            String(
+                              order.side ??
+                                order.action ??
+                                order.order_type ??
+                                'Orden paper',
+                            ),
+                            reasonLabel(order.status ?? order.type),
+                            `${String(order.quantity_btc ?? 'Cantidad no disponible')} · ${String(order.order_id ?? 'ID no disponible')}`,
+                          ],
+                        }
+                      }),
+                      ...(Array.isArray(state.fills) ? state.fills : [])
+                        .slice(-100)
+                        .map((value, index) => {
+                          const fill = record(value)
+                          return {
+                            id: String(fill.fill_id ?? `fill-${index}`),
+                            cells: [
+                              `Ejecución ${String(fill.action ?? fill.side ?? 'paper')}`,
+                              `${quantity(fill.quantity_btc)} @ ${money(fill.price_usd_per_btc)}`,
+                              String(fill.fill_id ?? 'Fill registrado'),
+                            ],
+                          }
+                        }),
+                    ],
+                  }}
+                />
+              </>
+            )}
           </>
         )}
       </main>

@@ -1,52 +1,35 @@
 import { spawn } from 'node:child_process'
+import { mkdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
-import {
-  devEnvironment,
-  serverEnvironment,
-  serverNodeArgs,
-} from './dev-provider-env.mjs'
+import { devChildSpecs } from './dev-provider-env.mjs'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const children = [
-  {
-    name: 'vite',
-    cwd: root,
-    args: [resolve(root, 'node_modules/vite/bin/vite.js')],
-  },
-  {
-    name: 'server',
-    cwd: resolve(root, 'server'),
-    args: serverNodeArgs([
-      '--env-file-if-exists=.env',
-      '--experimental-strip-types',
-      '--watch',
-      'src/app/index.ts',
-    ]),
-  },
-].map(({ name, cwd, args }) => {
-  const child = spawn(process.execPath, args, {
-    cwd,
-    stdio: ['inherit', 'pipe', 'pipe'],
-    env:
-      name === 'vite'
-        ? devEnvironment(process.env)
-        : serverEnvironment(process.env),
-  })
-  for (const stream of ['stdout', 'stderr']) {
-    child[stream].on('data', (chunk) => {
-      for (const line of chunk.toString().split(/(?<=\n)/))
-        if (line) process[stream].write(`[${name}] ${line}`)
+// Optional backends: when one fails the others (and the app) keep running.
+const optionalChildren = new Set(['mock', 'capture', 'live'])
+mkdirSync(resolve(root, 'server/data/dev-live'), { recursive: true })
+const children = devChildSpecs({ root, env: process.env }).map(
+  ({ name, cwd, args, env }) => {
+    const child = spawn(process.execPath, args, {
+      cwd,
+      stdio: ['inherit', 'pipe', 'pipe'],
+      env,
     })
-  }
-  return { name, child }
-})
+    for (const stream of ['stdout', 'stderr']) {
+      child[stream].on('data', (chunk) => {
+        for (const line of chunk.toString().split(/(?<=\n)/))
+          if (line) process[stream].write(`[${name}] ${line}`)
+      })
+    }
+    return { name, child }
+  },
+)
 
 let shuttingDown = false
 function shutdown(signal, code = 0) {
   if (shuttingDown) return
   shuttingDown = true
-  process.stdout.write(`[dev] ${signal}: stopping Vite and server\n`)
+  process.stdout.write(`[dev] ${signal}: stopping all dev processes\n`)
   for (const { child } of children)
     if (child.exitCode === null) child.kill(signal)
   const force = setTimeout(() => {
@@ -74,9 +57,16 @@ for (const signal of ['SIGINT', 'SIGTERM'])
 for (const { name, child } of children) {
   child.on('error', (error) => {
     process.stderr.write(`[${name}] failed to start: ${error.message}\n`)
-    shutdown('SIGTERM', 1)
+    if (!optionalChildren.has(name)) shutdown('SIGTERM', 1)
   })
   child.on('exit', (code, signal) => {
-    if (!shuttingDown) shutdown(signal ?? 'SIGTERM', code ?? 1)
+    if (shuttingDown) return
+    if (optionalChildren.has(name)) {
+      process.stderr.write(
+        `[dev] ${name} exited (${signal ?? code}); the other processes keep running. ${name === 'mock' ? 'The MOCK source' : name === 'capture' ? 'Live market capture (new candles)' : 'The Real source'} will be unavailable until you restart pnpm run dev.\n`,
+      )
+      return
+    }
+    shutdown(signal ?? 'SIGTERM', code ?? 1)
   })
 }

@@ -76,9 +76,10 @@ class TestWebSocket {
   onclose: (() => void) | null = null
   onerror: (() => void) | null = null
   sent: string[] = []
+  readonly url: string
 
   constructor(url: string) {
-    void url
+    this.url = url
     TestWebSocket.instances.push(this)
   }
 
@@ -155,6 +156,30 @@ describe('FuturesTerminal local scenario presentation', () => {
     chartHarness.clickHandlers = []
     chartHarness.markerSets = []
     vi.unstubAllGlobals()
+  })
+
+  it('opens the stream on the selected API base and closes it on unmount', () => {
+    vi.stubGlobal('WebSocket', TestWebSocket)
+    const view = render(
+      <FuturesTerminal bootstrap={bootstrap} apiBase="/api-live" />,
+    )
+    const socket = TestWebSocket.instances[0]!
+    expect(socket.url).toBe(`ws://${location.host}/api-live/terminal/stream`)
+    view.unmount()
+    expect(socket.readyState).toBe(3)
+  })
+
+  it('renders the entry-owned source switch inside the terminal header', () => {
+    vi.stubGlobal('WebSocket', TestWebSocket)
+    render(
+      <FuturesTerminal
+        bootstrap={bootstrap}
+        sourceSwitch={<div data-testid="switch-slot" />}
+      />,
+    )
+    expect(
+      screen.getByTestId('switch-slot').closest('.demo-shell__status'),
+    ).not.toBeNull()
   })
 
   it('preserves backend reason-code copy', () => {
@@ -247,6 +272,197 @@ describe('FuturesTerminal local scenario presentation', () => {
     expect(screen.getByText(/Profundidad bid\/ask: no expuesta/)).toBeTruthy()
     expect(screen.getByText(/Financiación: desconocida/)).toBeTruthy()
     expect(screen.getByText('Incompleto')).toBeTruthy()
+  })
+
+  it('renders candles and the live price with the engine off, without fake account or analysis', async () => {
+    vi.stubGlobal('WebSocket', TerminalSocket)
+    render(
+      <FuturesTerminal
+        bootstrap={{
+          schema_version: 1,
+          mode: 'paper_live',
+          source: 'kraken-public-live-stream.v1',
+          active_run_id: 'live-market-view',
+          market: {
+            status: 'live',
+            last_received_at: 1_800_000_000_125,
+            funding: 'unknown',
+          },
+          engine: { status: 'off', reason: 'engine_not_running' },
+          terminal_market: {
+            schema_version: 'futures-terminal-market.v1',
+            as_of_ms: 1_800_000_000_000,
+            interval_ms: 60_000,
+            candles: [
+              {
+                time_ms: 1_799_999_940_000,
+                open: '99999',
+                high: '100010',
+                low: '99990',
+                close: '100001',
+                volume_btc: '0.5',
+                closed: true,
+              },
+            ],
+          },
+        }}
+      />,
+    )
+    await waitFor(() => expect(TerminalSocket.latest).toBeDefined())
+    const envelope = (
+      seq: number,
+      type: string,
+      data: Record<string, unknown>,
+    ): TerminalEnvelope => ({
+      schema_version: 1,
+      event_id: `evt-${seq}-${type}`,
+      stream_id: 'stream-1',
+      run_id: 'live-market-view',
+      seq,
+      type,
+      instrument_id: 'kraken-futures:PF_XBTUSD',
+      event_time: 1_800_000_000_000,
+      published_at: 1_800_000_000_125,
+      data,
+    })
+    TerminalSocket.latest!.publish(
+      envelope(10, 'snapshot', {
+        watermark: 10,
+        market: {
+          schema_version: 'futures-terminal-market.v1',
+          as_of_ms: 1_800_000_000_000,
+          interval_ms: 60_000,
+          candles: [
+            {
+              time_ms: 1_799_999_940_000,
+              open: '99999',
+              high: '100010',
+              low: '99990',
+              close: '100001',
+              volume_btc: '0.5',
+              closed: true,
+            },
+          ],
+        },
+        state: {
+          run_id: 'live-market-view',
+          state_version: 0,
+          engine: { status: 'off', reason: 'engine_not_running' },
+          market: {
+            feed: 'ticker',
+            event_time: 1_800_000_000_000,
+            received_at: 1_800_000_000_125,
+            normalized: { type: 'ticker', last: '100123.45' },
+          },
+        },
+      }),
+    )
+    expect(await screen.findByText(/100\.123,45/)).toBeTruthy()
+    expect(screen.getByText('Última vela cerrada')).toBeTruthy()
+    expect(screen.getByText(/Motor de decisiones apagado/)).toBeTruthy()
+    TerminalSocket.latest!.publish(
+      envelope(11, 'market.updated', {
+        candle: {
+          id: 'c',
+          interval_ms: 60_000,
+          bucket_start_ms: 1_800_000_000_000,
+          known_at_ms: 1_800_000_030_000,
+          close_at_ms: null,
+          closed: false,
+          coverage: 'observed_trades_only_no_gap_certification',
+          open: '100001',
+          high: '100200',
+          low: '100000',
+          close: '100150',
+          volume_btc: '0.2',
+          trade_count: 2,
+        },
+        feed: 'trade',
+        normalized: { type: 'trade', priceUsd: '100150' },
+        event_time: 1_800_000_030_000,
+        received_at: 1_800_000_030_100,
+        last_received_at: 1_800_000_030_100,
+        market_status: 'live',
+      }),
+    )
+    expect(await screen.findByText('Vela en formación')).toBeTruthy()
+    expect(screen.getByText(/100\.150/)).toBeTruthy()
+    // No fabricated engine state while the engine is off.
+    expect(screen.queryByText('Controles simulados')).toBeNull()
+    expect(screen.queryByText('Saldo USD')).toBeNull()
+    expect(screen.queryByText('Aún no hay análisis registrados.')).toBeNull()
+    expect(screen.queryByText('Posiciones y operaciones')).toBeNull()
+  })
+
+  it('keeps the live bootstrap candle history when the snapshot carries no market', async () => {
+    vi.stubGlobal('WebSocket', TerminalSocket)
+    render(
+      <FuturesTerminal
+        bootstrap={{
+          schema_version: 1,
+          mode: 'paper_live',
+          source: 'kraken-public-live-stream.v1',
+          active_run_id: 'live-run',
+          market: { status: 'live', funding: 'unknown' },
+          engine: { status: 'warming', funding: 'unresolved' },
+          terminal_market: {
+            schema_version: 'futures-terminal-market.v1',
+            as_of_ms: 1_800_000_000_000,
+            interval_ms: 60_000,
+            candles: [
+              {
+                time_ms: 1_799_999_940_000,
+                open: '99999',
+                high: '100010',
+                low: '99990',
+                close: '100001',
+                volume_btc: '0.5',
+                closed: true,
+              },
+            ],
+          },
+        }}
+      />,
+    )
+    await waitFor(() => expect(TerminalSocket.latest).toBeDefined())
+    const snapshot: TerminalEnvelope = {
+      schema_version: 1,
+      event_id: 'snapshot-1',
+      stream_id: 'stream-1',
+      run_id: 'live-run',
+      seq: 0,
+      type: 'snapshot',
+      instrument_id: 'kraken-futures:PF_XBTUSD',
+      event_time: 1_800_000_000_000,
+      published_at: 1_800_000_000_125,
+      data: {
+        watermark: 0,
+        state: {
+          run_id: 'live-run',
+          state_version: 0,
+          account: {
+            cash_usd: '10000',
+            equity_usd: '10000',
+            realized_gross_usd: '0',
+            fees_usd: '0',
+            funding_paid_usd: '0',
+            funding_complete: false,
+            net_usd: null,
+          },
+          position: null,
+          orders: [],
+          fills: [],
+          analyses: [],
+          ledger_events: [],
+        },
+      },
+    }
+    expect(parseTerminalEnvelope(snapshot)).not.toBeNull()
+    TerminalSocket.latest!.publish(snapshot)
+    expect(await screen.findByText('Incompleto')).toBeTruthy()
+    expect(
+      screen.queryByText('El snapshot no contiene velas BTC/USD verificables.'),
+    ).toBeNull()
   })
 
   it('renders backend status and exact account/order/position values with MOCK entry controls and no polling', async () => {

@@ -54,8 +54,12 @@ export class FuturesMarketStore {
     if (!this.readOnly)
       this.db.exec('PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;')
     if (path !== ':memory:' && !this.readOnly)
-      this.db.exec('PRAGMA journal_mode=WAL;')
+      // Every event keeps its own committed transaction; NORMAL in WAL mode
+      // avoids an fsync per commit (durable against app crashes).
+      this.db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;')
     if (this.readOnly) {
+      // Tolerate the single writer holding a commit lock; never writes.
+      this.db.exec('PRAGMA busy_timeout=2000;')
       if (this.schemaVersion() !== 3)
         throw new Error(
           'Read-only futures market source schema is unsupported.',
@@ -106,6 +110,8 @@ export class FuturesMarketStore {
         volume_btc TEXT NOT NULL, trade_count INTEGER NOT NULL, source_hash TEXT NOT NULL,
         PRIMARY KEY(candle_id, revision)
       ) STRICT;
+      CREATE INDEX IF NOT EXISTS paper_futures_candle_revisions_bucket
+        ON paper_futures_candle_revisions(interval_ms, bucket_start);
       INSERT OR IGNORE INTO paper_futures_market_migrations VALUES(2, unixepoch('subsec') * 1000);
       CREATE TABLE IF NOT EXISTS paper_futures_market_quality_policies (
         policy_version TEXT PRIMARY KEY, recorded_at INTEGER NOT NULL,
@@ -157,6 +163,14 @@ export class FuturesMarketStore {
       CREATE TRIGGER IF NOT EXISTS paper_futures_candle_revisions_no_delete
         BEFORE DELETE ON paper_futures_candle_revisions BEGIN SELECT RAISE(ABORT, 'market evidence is immutable'); END;
     `)
+  }
+
+  /** Diagnostic: current connection `synchronous` level (1 = NORMAL). */
+  synchronousLevel(): number {
+    const row = this.db.prepare('PRAGMA synchronous').get() as {
+      synchronous: number
+    }
+    return Number(row.synchronous)
   }
 
   close(): void {
@@ -795,6 +809,111 @@ export class FuturesMarketStore {
       : undefined
   }
 
+  /** Highest event rowid, or 0 when empty. Tail cursor for read-only followers. */
+  maxEventRowid(): number {
+    const row = this.db
+      .prepare('SELECT MAX(rowid) AS id FROM paper_futures_market_events')
+      .get() as { id: number | null }
+    return Number(row.id ?? 0)
+  }
+
+  /** Latest receipt time over every feed, or null when no event is stored. */
+  latestEventReceivedAt(): number | null {
+    const row = this.db
+      .prepare(
+        `SELECT received_at FROM paper_futures_market_events
+         ORDER BY rowid DESC LIMIT 1`,
+      )
+      .get() as { received_at: number } | undefined
+    return row ? Number(row.received_at) : null
+  }
+
+  /**
+   * Ticker and trade events appended after a rowid cursor, ascending. Book
+   * events are skipped on purpose: followers never need their payloads.
+   */
+  tickerTradeEventsAfter(
+    rowid: number,
+    limit = 500,
+  ): Array<{ rowid: number; event: Record<string, unknown> }> {
+    time(rowid, 'rowid')
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 5_000)
+      throw new RangeError('Tail limit must be between 1 and 5000.')
+    return (
+      this.db
+        .prepare(
+          `SELECT rowid AS id, normalized_json FROM paper_futures_market_events
+           WHERE rowid>? AND feed IN ('ticker','trade')
+           ORDER BY rowid LIMIT ?`,
+        )
+        .all(rowid, limit) as Array<{ id: number; normalized_json: string }>
+    ).map((row) => ({
+      rowid: Number(row.id),
+      event: JSON.parse(row.normalized_json) as Record<string, unknown>,
+    }))
+  }
+
+  /** Highest candle revision rowid, or 0 when empty. */
+  maxCandleRevisionRowid(): number {
+    const row = this.db
+      .prepare('SELECT MAX(rowid) AS id FROM paper_futures_candle_revisions')
+      .get() as { id: number | null }
+    return Number(row.id ?? 0)
+  }
+
+  /** Candle revisions of one interval appended after a rowid cursor, ascending. */
+  candleRevisionsAfter(
+    rowid: number,
+    intervalMs: number,
+    limit = 500,
+  ): Array<{ rowid: number; revision: Record<string, unknown> }> {
+    time(rowid, 'rowid')
+    if (!Number.isSafeInteger(intervalMs) || intervalMs < 1)
+      throw new RangeError('Candle interval must be a positive integer.')
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 5_000)
+      throw new RangeError('Tail limit must be between 1 and 5000.')
+    return (
+      this.db
+        .prepare(
+          `SELECT rowid AS id, candle_id,interval_ms,bucket_start,revision,known_at,
+             close_at,is_closed,coverage,open_price,high_price,low_price,
+             close_price,volume_btc,trade_count
+           FROM paper_futures_candle_revisions
+           WHERE rowid>? AND interval_ms=?
+           ORDER BY rowid LIMIT ?`,
+        )
+        .all(rowid, intervalMs, limit) as Array<Record<string, unknown>>
+    ).map((row) => {
+      const { id, ...revision } = row
+      return { rowid: Number(id), revision }
+    })
+  }
+
+  /** Newest stored revision (any state) of one interval, or undefined. */
+  latestCandleRevision(
+    intervalMs: number,
+  ): Record<string, unknown> | undefined {
+    return this.db
+      .prepare(
+        `SELECT candle_id,interval_ms,bucket_start,revision,known_at,close_at,
+           is_closed,coverage,open_price,high_price,low_price,close_price,
+           volume_btc,trade_count
+         FROM paper_futures_candle_revisions WHERE interval_ms=?
+         ORDER BY rowid DESC LIMIT 1`,
+      )
+      .get(intervalMs) as Record<string, unknown> | undefined
+  }
+
+  latestInstrumentMetadataHash(): string | null {
+    const row = this.db
+      .prepare(
+        `SELECT metadata_hash FROM paper_futures_instrument_versions
+         ORDER BY retrieved_at DESC LIMIT 1`,
+      )
+      .get() as { metadata_hash: string } | undefined
+    return row?.metadata_hash ?? null
+  }
+
   eventCount(): number {
     const row = this.db
       .prepare('SELECT COUNT(*) AS count FROM paper_futures_market_events')
@@ -831,6 +950,34 @@ export class FuturesMarketStore {
         knownAtCutoff,
         knownAtCutoff,
       ) as unknown[]
+  }
+
+  /**
+   * Most recent closed candles for one interval, latest closed revision per
+   * bucket, ascending by bucket start. Bounded and index-ordered.
+   */
+  closedCandlesTail(intervalMs: number, limit = 500): unknown[] {
+    if (!Number.isSafeInteger(intervalMs) || intervalMs < 1)
+      throw new RangeError('Candle interval must be a positive integer.')
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500)
+      throw new RangeError('Candle tail limit must be between 1 and 500.')
+    const rows = this.db
+      .prepare(
+        `SELECT candle_id,interval_ms,bucket_start,revision,known_at,close_at,
+           is_closed,coverage,open_price,high_price,low_price,close_price,
+           volume_btc,trade_count,source_hash
+         FROM paper_futures_candle_revisions AS c
+         WHERE interval_ms=? AND is_closed=1
+           AND revision=(
+             SELECT MAX(latest.revision)
+             FROM paper_futures_candle_revisions AS latest
+             WHERE latest.candle_id=c.candle_id AND latest.is_closed=1
+           )
+         ORDER BY bucket_start DESC
+         LIMIT ?`,
+      )
+      .all(intervalMs, limit) as unknown[]
+    return rows.reverse()
   }
 
   candlesTailAsOf(knownAtCutoff: number, limitPerInterval = 500): unknown[] {

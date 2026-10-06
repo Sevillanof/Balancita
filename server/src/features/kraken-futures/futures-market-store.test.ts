@@ -166,6 +166,37 @@ describe('FuturesMarketStore', () => {
     store.close()
   })
 
+  it('keeps candle revisions append-only (no UPDATE or DELETE)', () => {
+    const path = dbPath()
+    const store = new FuturesMarketStore(path)
+    store.saveCandleRevision({
+      id: 'PF_XBTUSD:60000:0',
+      intervalMs: 60_000,
+      bucketStart: 0,
+      revision: 1,
+      knownAt: 60_001,
+      closeAt: 60_000,
+      isClosed: true,
+      coverage: 'observed_trades_only_no_gap_certification',
+      open: '100',
+      high: '101',
+      low: '99',
+      close: '100',
+      volumeBtc: '1',
+      tradeCount: 1,
+      sourceHash: 'a'.repeat(64),
+    })
+    store.close()
+    const raw = new DatabaseSync(path)
+    expect(() =>
+      raw.prepare("UPDATE paper_futures_candle_revisions SET close_price='1'").run(),
+    ).toThrow(/immutable/i)
+    expect(() =>
+      raw.prepare('DELETE FROM paper_futures_candle_revisions').run(),
+    ).toThrow(/immutable/i)
+    raw.close()
+  })
+
   it('selects only closed candle revisions known by the cutoff', () => {
     const store = new FuturesMarketStore(dbPath())
     const revision = (revision: number, knownAt: number, isClosed: boolean) =>
@@ -290,6 +321,72 @@ describe('FuturesMarketStore', () => {
         .run(),
     ).toThrow(/immutable/i)
     raw.close()
+  })
+
+  it('uses WAL with synchronous NORMAL while keeping one transaction per event', () => {
+    const store = new FuturesMarketStore(dbPath())
+    expect(store.synchronousLevel()).toBe(1)
+    store.append(event)
+    store.append({ ...event, seq: 2, uid: 'trade-2' })
+    expect(store.eventCount()).toBe(2)
+    store.close()
+  })
+
+  it('returns the latest closed 60s revisions, bounded and ascending', () => {
+    const store = new FuturesMarketStore(dbPath())
+    const save = (
+      bucket: number,
+      revision: number,
+      isClosed: boolean,
+      intervalMs = 60_000,
+      close = '100',
+    ) =>
+      store.saveCandleRevision({
+        id: `PF_XBTUSD:${intervalMs}:${bucket}`,
+        intervalMs,
+        bucketStart: bucket,
+        revision,
+        knownAt: bucket + intervalMs + revision,
+        closeAt: bucket + intervalMs,
+        isClosed,
+        coverage: 'observed_trades_only_no_gap_certification',
+        open: '100',
+        high: '101',
+        low: '99',
+        close,
+        volumeBtc: '1',
+        tradeCount: 1,
+        sourceHash: 'a'.repeat(64),
+      })
+    for (let index = 0; index < 505; index += 1)
+      save(index * 60_000, 1, true)
+    save(505 * 60_000, 1, false)
+    save(10 * 60_000, 2, true, 60_000, '777')
+    save(0, 1, true, 300_000)
+    const tail = store.closedCandlesTail(60_000, 500) as {
+      bucket_start: number
+      close_price: string
+      revision: number
+      is_closed: number
+    }[]
+    expect(tail).toHaveLength(500)
+    expect(tail[0]!.bucket_start).toBe(5 * 60_000)
+    expect(tail.at(-1)!.bucket_start).toBe(504 * 60_000)
+    expect(tail.every((row) => row.is_closed === 1)).toBe(true)
+    const sorted = tail.map((row) => row.bucket_start)
+    expect(sorted).toEqual([...sorted].sort((a, b) => a - b))
+    const small = store.closedCandlesTail(60_000, 3) as typeof tail
+    expect(small.map((row) => row.bucket_start)).toEqual([
+      502 * 60_000,
+      503 * 60_000,
+      504 * 60_000,
+    ])
+    const revised = store.closedCandlesTail(60_000, 500) as typeof tail
+    expect(revised.find((row) => row.bucket_start === 10 * 60_000)).toMatchObject(
+      { revision: 2, close_price: '777' },
+    )
+    expect(() => store.closedCandlesTail(60_000, 501)).toThrow(RangeError)
+    store.close()
   })
 
   it('uses namespaced additive schema without changing legacy fixture tables or migration version', () => {

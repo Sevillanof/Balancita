@@ -18,23 +18,51 @@ pnpm install
 
 ## Development
 
-Start the Vite dev server:
+Start everything (MOCK and real data) with one command:
 
 ```bash
-pnpm dev
+pnpm run dev
 ```
 
-Open the printed local URL (default: <http://localhost:5173>). Vite automatically
-picks the next free port when 5173 is already in use.
+Open <http://localhost:5173>. `pnpm run dev` starts five processes, each with a
+prefixed log:
+
+| Process   | Port | What it is                                                                                                                                  |
+| --------- | ---- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `vite`    | 5173 | Web app and proxy (`/api` -> 8787, `/api-mock` -> 8788, `/api-live` -> 8789, rewritten to `/api`)                                           |
+| `server`  | 8787 | Legacy backend (Gemini, spot collectors); `FUTURES_MODE` is forced unset, so `.env` cannot change it                                        |
+| `mock`    | 8788 | Scripted MOCK futures API (`futures-local-terminal.mjs --api-only`); fresh temporary database per start                                     |
+| `capture` | -    | Kraken public WebSocket -> `server/data/dev-live/futures-market.sqlite` (sole writer; no HTTP, no engine, no account DB; per-event commits) |
+| `live`    | 8789 | Read-only gateway: serves `/api/terminal/*` by tailing that market DB by rowid; starts no collector and no engine (engine shown as off)     |
+
+### Switching between MOCK and real data
+
+- **Futures terminal** (`/terminal`): choose "MOCK" or "Real (paper, Kraken
+  público)" in the "Fuente de datos" switch. The choice is kept in
+  `?source=mock|live` and in local storage; the default is MOCK. Switching
+  remounts the terminal, so no stream state mixes. If the selected backend is
+  unreachable the page says so and names the source; it never falls back to the
+  other one. `?source=legacy` opens the previous terminal served by the legacy
+  backend.
+- **Spot dashboard** (`/`): choose "MOCK" or "Real (Kraken)". The
+  `VITE_MARKET_DATA_PROVIDER` variable (`mock` or `kraken`, default `kraken`)
+  only sets the initial choice. Switching recreates the provider and resets
+  quotes and subscriptions.
+
+### Offline behavior
+
+Without network access the `capture` process (and the Real source) cannot reach
+Kraken and report it; `vite`, `server` and `mock` keep running, so MOCK stays
+usable. A failed `mock`, `capture` or `live` process is logged and does not stop
+the others. If `capture` stops, the `live` gateway keeps serving stored candles
+and reports the feed as stale; restarting `live` does not affect `capture`.
+Press Ctrl-C once to stop every process.
+
+Rollback: `DEV_LIVE_SINGLE_PROCESS=1 pnpm run dev` runs the previous
+single-process `live` child (`FUTURES_MODE=paper_live`: collector, engine and
+HTTP together) instead of `capture` + gateway.
 
 ### Market data mode
-
-The default mode is deterministic mock data for BTC-EUR, TTWO, and SPCX. To use
-the Kraken read-only feed locally, start Vite with:
-
-```bash
-VITE_MARKET_DATA_PROVIDER=kraken pnpm dev
-```
 
 Kraken mode uses public, unauthenticated REST and WebSocket market-data
 endpoints and exposes only BTC-EUR. TTWO and SPCX remain mock-only. This mode is

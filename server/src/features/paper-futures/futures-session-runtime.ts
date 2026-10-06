@@ -15,6 +15,9 @@ import {
 import { randomUUID } from 'node:crypto'
 import type { FuturesMarketStore } from '../kraken-futures/futures-market-store.ts'
 import type { TerminalPaperCommand } from '../terminal-stream/terminal-stream.ts'
+import { toTerminalMarket } from '../live-gateway/terminal-market.ts'
+
+export { createLiveTerminalMarket } from '../live-gateway/terminal-market.ts'
 
 const instrument = {
   instrument_id: 'kraken-futures:PF_XBTUSD',
@@ -67,27 +70,9 @@ function createReplayTerminalMarket(
   source: FuturesMarketStore,
   receivedCutoff: number,
 ) {
-  const candles = (
-    source.candlesAsOf(receivedCutoff) as Record<string, unknown>[]
+  return toTerminalMarket(
+    source.candlesAsOf(receivedCutoff) as Record<string, unknown>[],
   )
-    .filter((candle) => Number(candle.interval_ms) === 60_000)
-    .slice(-500)
-    .map((candle) => ({
-      time_ms: candle.bucket_start,
-      open: candle.open_price,
-      high: candle.high_price,
-      low: candle.low_price,
-      close: candle.close_price,
-      volume_btc: candle.volume_btc,
-      closed: true as const,
-    }))
-  const last = candles.at(-1)
-  return {
-    schema_version: 'futures-terminal-market.v1' as const,
-    as_of_ms: last ? Number(last.time_ms) + 60_000 : 0,
-    interval_ms: 60_000,
-    candles,
-  }
 }
 
 export class FuturesSessionRuntime {
