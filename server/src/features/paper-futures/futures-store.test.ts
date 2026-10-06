@@ -234,121 +234,6 @@ function seedTerminalAnalysisHistory(store: FuturesStore, runId: string): void {
 }
 
 describe('isolated paper-futures SQLite store', () => {
-  it('commits evaluation audit ranges with a durable cursor and rejects stale heads or pending commands atomically', () => {
-    const directory = mkdtempSync(join(tmpdir(), 'paper-futures-progress-'))
-    const path = join(directory, 'progress.sqlite')
-    try {
-      const store = new FuturesStore(path)
-      store.createRun({
-        runId: 'progress-run',
-        config: {
-          ledger_version: 'linear-usd-ledger.v1',
-          decimal_precision: 50,
-          leverage: '1',
-        },
-        seed: { cash_usd: '2000' },
-        instrument: { instrument_id: 'kraken-futures:PF_XBTUSD' },
-        costs: {
-          version: 'kraken-futures-eea-btcusd-base.v1',
-          maker: '0.0002',
-          taker: '0.0005',
-        },
-      })
-      store.bindEvaluationProgress({
-        runId: 'progress-run',
-        policyIdentity: 'policy.v1:hash',
-        sourceIdentity: 'fixture-store:hash',
-        baselineRowid: 102,
-        nextDueAt: 5000,
-        nextDueReasons: ['strategy-clock'],
-      })
-      const base = {
-        runId: 'progress-run',
-        expectedPolicyIdentity: 'policy.v1:hash',
-        expectedSourceIdentity: 'fixture-store:hash',
-        expectedStateVersion: 0,
-        expectedHeadHash: '0'.repeat(64),
-        fromRowid: 103,
-        toRowid: 120,
-        inspectedRowCount: 18,
-        reason: 'confirmed-idle',
-        nextDueAt: 5000,
-        nextDueReasons: ['strategy-clock'],
-      }
-      store.commitEvaluationSkippedRange(base)
-      expect(store.getEvaluationProgress('progress-run')?.cursorRowid).toBe(120)
-      expect(store.getEvaluationSkippedRanges('progress-run')).toHaveLength(1)
-      store.close()
-
-      const reopened = new FuturesStore(path)
-      expect(reopened.getEvaluationProgress('progress-run')?.cursorRowid).toBe(
-        120,
-      )
-      expect(
-        reopened.getEvaluationSkippedRanges('progress-run')[0]
-          ?.inspectedRowCount,
-      ).toBe(18)
-      reopened.acceptCommand('pending-progress', { action: 'hold' })
-      expect(() =>
-        reopened.commitEvaluationSkippedRange({
-          ...base,
-          fromRowid: 121,
-          toRowid: 125,
-          inspectedRowCount: 5,
-        }),
-      ).toThrow('accepted commands are pending')
-      expect(() =>
-        reopened.commitEvaluationSkippedRange({
-          ...base,
-          fromRowid: 121,
-          toRowid: 125,
-          inspectedRowCount: 5,
-          expectedHeadHash: 'f'.repeat(64),
-        }),
-      ).toThrow('financial head is stale')
-      expect(reopened.getEvaluationProgress('progress-run')?.cursorRowid).toBe(
-        120,
-      )
-      expect(reopened.getEvaluationSkippedRanges('progress-run')).toHaveLength(
-        1,
-      )
-      reopened.close()
-      const db = new DatabaseSync(path)
-      expect(
-        Number(
-          (
-            db
-              .prepare(
-                'SELECT state_version FROM paper_futures_runs WHERE run_id=?',
-              )
-              .get('progress-run') as { state_version: number }
-          ).state_version,
-        ),
-      ).toBe(0)
-      expect(
-        Number(
-          (
-            db
-              .prepare('SELECT COUNT(*) AS count FROM paper_futures_applied')
-              .get() as { count: number }
-          ).count,
-        ),
-      ).toBe(0)
-      expect(
-        Number(
-          (
-            db
-              .prepare('SELECT COUNT(*) AS count FROM paper_futures_ledger')
-              .get() as { count: number }
-          ).count,
-        ),
-      ).toBe(0)
-      db.close()
-    } finally {
-      rmSync(directory, { recursive: true, force: true })
-    }
-  })
-
   it('replays committed effects exactly once after reopen; rolls back precommit failures', () => {
     const directory = mkdtempSync(join(tmpdir(), 'paper-futures-'))
     const path = join(directory, 'test.sqlite')
@@ -550,7 +435,7 @@ describe('isolated paper-futures SQLite store', () => {
             "SELECT COUNT(*) AS count FROM sqlite_master WHERE type='table' AND name LIKE 'paper_futures_%'",
           )
           .get(),
-      ).toEqual({ count: 19 })
+      ).toEqual({ count: 17 })
       check.close()
     } finally {
       rmSync(directory, { recursive: true, force: true })

@@ -7,17 +7,8 @@ import type { FuturesWorkerDiagnostic } from './futures-worker.ts'
 import { canonicalHash } from './futures-canonical.ts'
 import { FuturesStore } from './futures-store.ts'
 import type { FuturesWorkerRequest } from './futures-worker.ts'
-import {
-  compareEconomicSemantics,
-  FuturesReplayDriver,
-  type ReplayTimingObserver,
-} from './futures-replay-driver.ts'
 import { randomUUID } from 'node:crypto'
-import type { FuturesMarketStore } from '../kraken-futures/futures-market-store.ts'
 import type { TerminalPaperCommand } from '../terminal-stream/terminal-stream.ts'
-import { toTerminalMarket } from '../live-gateway/terminal-market.ts'
-
-export { createLiveTerminalMarket } from '../live-gateway/terminal-market.ts'
 
 const instrument = {
   instrument_id: 'kraken-futures:PF_XBTUSD',
@@ -66,52 +57,31 @@ const strategySelectionPolicy = {
   interval_ms: 5000,
 } as const
 
-function createReplayTerminalMarket(
-  source: FuturesMarketStore,
-  receivedCutoff: number,
-) {
-  return toTerminalMarket(
-    source.candlesAsOf(receivedCutoff) as Record<string, unknown>[],
-  )
-}
-
+/**
+ * Kept for the protected futures-runtime.test.ts; no production caller. Live
+ * and replay now run as separate processes (capture, gateway, verdicts C,
+ * paper D); this class only builds the durable paper_live/mock bindings and
+ * drives the due-work path that test exercises.
+ */
 export class FuturesSessionRuntime {
   readonly store: FuturesStore
   readonly runner: FuturesCommandRunner
   runId: string
-  private readonly mode: 'mock' | 'paper_live' | 'replay'
+  private readonly mode: 'mock' | 'paper_live'
   private runtimeConfig: typeof runtimeConfig & {
     funding_policy_version?: 'funding-separation.v1'
     strategy_selection_policy_version?: 'strategy-selection-cadence.v1'
     strategy_selection_interval_ms?: 5000
     market_context_policy_version?: 'market-context-transport.v1'
   }
-  private readonly replaySource?: FuturesMarketStore
-  private readonly replaySourceHash?: string
-  private readonly replaySourceFileHash?: string
-  private readonly replaySourceMetadataHash?: string
-  private readonly replaySourceQualityHash?: string
-  private readonly replayCutoffMs?: number
-  private readonly replayTimingObserver?: ReplayTimingObserver
-  private readonly drivers = new Map<string, Promise<FuturesReplayDriver>>()
   private readonly eventQueues = new Map<string, Promise<unknown>>()
-  private readonly mockTickTimers = new Map<
-    string,
-    ReturnType<typeof setTimeout>
-  >()
   private closed = false
 
   constructor(options: {
     dbPath: string
-    mode: 'mock' | 'paper_live' | 'replay'
-    replaySource?: FuturesMarketStore
-    replaySourceFileHash?: string
-    replaySourceMetadataHash?: string
-    replaySourceQualityHash?: string
-    replayCutoffMs?: number
+    mode: 'mock' | 'paper_live'
     observer?: FuturesSqlObserver
     workerObserver?: (event: FuturesWorkerDiagnostic) => void
-    replayTimingObserver?: ReplayTimingObserver
   }) {
     this.mode = options.mode
     this.runtimeConfig =
@@ -124,24 +94,6 @@ export class FuturesSessionRuntime {
             market_context_policy_version: 'market-context-transport.v1',
           }
         : runtimeConfig
-    if (options.mode === 'replay' && options.replaySource === undefined)
-      throw new Error('REPLAY requires a frozen futures market source.')
-    this.replaySource = options.replaySource
-    this.replaySourceFileHash = options.replaySourceFileHash
-    this.replaySourceMetadataHash = options.replaySourceMetadataHash
-    this.replaySourceQualityHash = options.replaySourceQualityHash
-    this.replayCutoffMs = options.replayCutoffMs
-    this.replayTimingObserver = options.replayTimingObserver
-    this.replaySourceHash = options.replaySource
-      ? canonicalHash({
-          events: options.replaySource.eventsAsOf(Number.MAX_SAFE_INTEGER),
-          candles: options.replaySource.candlesAsOf(Number.MAX_SAFE_INTEGER),
-          gaps: options.replaySource.gapsAsOf(Number.MAX_SAFE_INTEGER),
-          ...(options.replaySource.fundingSourceEvidence().length === 0
-            ? {}
-            : { funding: options.replaySource.fundingSourceEvidence() }),
-        })
-      : undefined
     this.store = new FuturesStore(options.dbPath)
     const primaryRunId = 'futures-session:primary'
     const existingBinding = this.store.getRuntimeBinding(primaryRunId)
@@ -166,21 +118,11 @@ export class FuturesSessionRuntime {
       },
       seed: {
         cash_usd: '10000',
-        seed:
-          options.mode === 'replay'
-            ? `frozen-market:${this.replaySourceHash}`
-            : 'mock-fixture-v1',
+        seed: 'mock-fixture-v1',
         source: options.mode,
         ...(options.mode === 'mock'
           ? { terminal_market: createTerminalMarketFixture() }
-          : options.mode === 'replay' && options.replaySource
-            ? {
-                terminal_market: createReplayTerminalMarket(
-                  options.replaySource,
-                  options.replayCutoffMs ?? Number.MAX_SAFE_INTEGER,
-                ),
-              }
-            : {}),
+          : {}),
       },
       instrument: { instrument_id: instrument.instrument_id },
       costs: {
@@ -204,35 +146,6 @@ export class FuturesSessionRuntime {
     })
   }
 
-  commandFactory = (command: TerminalPaperCommand): FuturesWorkerRequest => {
-    const decisionTime =
-      21_600_000 +
-      Number(this.store.getRunProjection(command.run_id)!.state_version) * 100
-    const action = command.action
-    const control =
-      action === 'paper.close' ||
-      action === 'paper.pause' ||
-      action === 'paper.resume'
-        ? { type: action, command_id: command.command_id }
-        : undefined
-    return {
-      request_id: command.command_id,
-      run_id: command.run_id,
-      work_id: command.command_id,
-      expected_state_version: command.expected_state_version,
-      payload: {
-        operation: 'futures_runtime.v3',
-        runtime_config: this.runtimeConfig,
-        instrument,
-        market_snapshot: this.initialMarketSnapshot(
-          decisionTime,
-          action === 'paper.start',
-        ),
-        ...(control ? { control } : {}),
-      },
-    }
-  }
-
   newRunFactory = (
     command: TerminalPaperCommand,
     childRunId: string,
@@ -251,10 +164,6 @@ export class FuturesSessionRuntime {
     }
   }
 
-  activateRun = (runId: string): void => {
-    this.runId = runId
-  }
-
   private initialMarketSnapshot(time: number, breakout: boolean) {
     if (this.mode === 'mock')
       return createMockMarketSnapshot(time, breakout, breakout)
@@ -264,59 +173,6 @@ export class FuturesSessionRuntime {
       decision_time_ms: time,
       cutoff_received_at_ms: time,
       events: [],
-    }
-  }
-
-  async start(): Promise<void> {
-    await this.restoreDriver(this.runId)
-    const pending = this.store.loadPendingCommands()
-    if (pending.length > 0) {
-      await this.runner.resumePending()
-      this.drivers.delete(this.runId)
-      await this.restoreDriver(this.runId)
-    }
-    if (this.mode === 'replay' && this.replaySource !== undefined) {
-      const driver = await this.restoreDriver(this.runId)
-      await driver.processMarketStore(
-        this.replaySource,
-        this.replayCutoffMs ?? Number.MAX_SAFE_INTEGER,
-        instrument as unknown as Record<string, unknown>,
-        undefined,
-        'replay',
-      )
-    }
-  }
-
-  async processMarketEvidence(
-    source: FuturesMarketStore,
-    receivedAt: number,
-    stopRequested?: () => boolean,
-  ): Promise<{
-    sourceWatermark: number
-    lastDurableWatermark: number
-    stopped: boolean
-    deferredSourceRows: number
-    durablePendingSourceRows: number
-    durablePendingFirstSequence: number | null
-    durablePendingLastSequence: number | null
-    checkpointStateVersion: number
-  }> {
-    if (this.mode !== 'paper_live' && this.mode !== 'replay')
-      throw new Error('Market evidence is not accepted in MOCK.')
-    const driver = await this.restoreDriver(this.runId)
-    const outcome = await driver.processMarketStore(
-      source,
-      receivedAt,
-      instrument as unknown as Record<string, unknown>,
-      undefined,
-      this.mode,
-      stopRequested,
-    )
-    return {
-      ...outcome,
-      checkpointStateVersion: Number(
-        this.store.getRunProjection(this.runId)?.state_version ?? 0,
-      ),
     }
   }
 
@@ -399,257 +255,6 @@ export class FuturesSessionRuntime {
     })
   }
 
-  getSourceProgressSnapshot(): {
-    inspectionPolicyBound: boolean
-    lastInspectedSourceSeq: number | null
-    lastFinancialSourceSeq: number | null
-    inspectedNoActionRangeCount: number | null
-    inspectedNoActionSourceRows: number | null
-  } {
-    const binding = this.store.getReplaySessionBinding(this.runId)
-    const manifest = binding?.manifest
-    if (!manifest || typeof manifest !== 'object')
-      return {
-        inspectionPolicyBound: false,
-        lastInspectedSourceSeq: null,
-        lastFinancialSourceSeq: this.store.getLastAppliedReplaySourceSequence(
-          this.runId,
-        ),
-        inspectedNoActionRangeCount: null,
-        inspectedNoActionSourceRows: null,
-      }
-    const replayManifest = manifest as Record<string, unknown>
-    const policy = replayManifest.admission_policy
-    const policyHash =
-      policy && typeof policy === 'object'
-        ? (policy as Record<string, unknown>).hash
-        : undefined
-    if (typeof policyHash !== 'string')
-      return {
-        inspectionPolicyBound: false,
-        lastInspectedSourceSeq: null,
-        lastFinancialSourceSeq: this.store.getLastAppliedReplaySourceSequence(
-          this.runId,
-        ),
-        inspectedNoActionRangeCount: null,
-        inspectedNoActionSourceRows: null,
-      }
-    const sourceIdentity = canonicalHash({
-      schema_version: 'futures-market-source-binding.v1',
-      source: replayManifest.source,
-      source_hash: replayManifest.source_hash,
-    })
-    const progress = this.store.getEvaluationProgress(this.runId)
-    const validProgress =
-      progress?.policyIdentity === policyHash &&
-      progress.sourceIdentity === sourceIdentity
-    const skippedRanges = validProgress
-      ? this.store.getEvaluationSkippedRanges(this.runId)
-      : []
-    const validRanges = skippedRanges.every(
-      (range) =>
-        range.policyIdentity === policyHash &&
-        range.sourceIdentity === sourceIdentity &&
-        Number.isSafeInteger(range.inspectedRowCount) &&
-        range.inspectedRowCount > 0,
-    )
-    return {
-      inspectionPolicyBound: true,
-      lastInspectedSourceSeq: validProgress ? progress.cursorRowid : null,
-      lastFinancialSourceSeq: this.store.getLastAppliedReplaySourceSequence(
-        this.runId,
-      ),
-      inspectedNoActionRangeCount:
-        validProgress && validRanges ? skippedRanges.length : null,
-      inspectedNoActionSourceRows:
-        validProgress && validRanges
-          ? skippedRanges.reduce(
-              (sum, range) => sum + range.inspectedRowCount,
-              0,
-            )
-          : null,
-    }
-  }
-
-  async exportReplayRun() {
-    if (this.mode !== 'replay' || this.replaySource === undefined)
-      throw new Error('Verified run export is available only for REPLAY.')
-    const activeDriver = await this.restoreDriver(this.runId)
-    const activeExport = activeDriver.exportRun()
-    const batchRunId = `${this.runId}:batch-verification:${randomUUID()}`
-    const terminalMarket = createReplayTerminalMarket(
-      this.replaySource,
-      this.replayCutoffMs ?? Number.MAX_SAFE_INTEGER,
-    )
-    const frozen = {
-      config: {
-        ledger_version: 'linear-usd-ledger.v1',
-        decimal_precision: 50,
-        leverage: '1',
-        mode: 'replay',
-        mode_config_hash: canonicalHash({
-          mode: 'replay',
-          runtimeConfig: this.runtimeConfig,
-        }),
-      },
-      seed: {
-        cash_usd: '10000',
-        seed: `frozen-market:${this.replaySourceHash}`,
-        source: 'replay',
-        terminal_market: terminalMarket,
-      },
-      instrument: { instrument_id: instrument.instrument_id },
-      costs: {
-        version: this.runtimeConfig.cost_version,
-        maker: this.runtimeConfig.maker_rate,
-        taker: this.runtimeConfig.taker_rate,
-      },
-      runtime: {
-        schema_version: 'futures-runtime-binding.v5',
-        runtime_config: this.runtimeConfig,
-        instrument_spec: instrument,
-        strategy_manifest: strategies,
-        strategy_config_hash: canonicalHash(strategies),
-        admission_policy: admissionPolicy,
-      },
-    }
-    this.store.createRun({ runId: batchRunId, ...frozen })
-    const batchExport = await FuturesReplayDriver.replayMarketStore({
-      runId: batchRunId,
-      manifest: this.replayManifest(),
-      store: this.replaySource,
-      receivedCutoff: this.replayCutoffMs ?? Number.MAX_SAFE_INTEGER,
-      instrument: instrument as unknown as Record<string, unknown>,
-      mode: 'replay',
-      durableStore: this.store,
-      observeTiming: this.replayTimingObserver,
-      apply: async (work) => {
-        const request: FuturesWorkerRequest = {
-          request_id: work.analysis_id,
-          run_id: batchRunId,
-          work_id: work.work_id,
-          expected_state_version: work.version,
-          payload: {
-            operation: 'futures_runtime.v3',
-            runtime_config: this.runtimeConfig,
-            instrument,
-            market_snapshot: work.input.payload.market_snapshot as Record<
-              string,
-              unknown
-            >,
-          },
-        }
-        const result = await this.runner.accept(request).result
-        return {
-          status: 'committed',
-          applied_state_version: Number(
-            this.store.getRunProjection(batchRunId)?.state_version,
-          ),
-          economic_projection: result,
-        }
-      },
-    })
-    const comparison = compareEconomicSemantics(activeExport, batchExport)
-    const verified =
-      this.store.verifyRun(this.runId) &&
-      this.store.verifyRun(batchRunId) &&
-      comparison.equal &&
-      activeExport.manifest.source_hash === this.replaySourceHash
-    return {
-      schema_version: 'futures-replay-export.v1',
-      verified,
-      run_id: this.runId,
-      source_hash: this.replaySourceHash,
-      source_file_hash: this.replaySourceFileHash,
-      manifest_hash: activeExport.manifest_hash,
-      semantic_hash: activeExport.semantic_hash,
-      comparison,
-      economic_export: activeExport,
-      batch_verification: batchExport,
-      ledger_export: this.store.exportRun(this.runId),
-    }
-  }
-
-  private restoreDriver(runId: string): Promise<FuturesReplayDriver> {
-    const existing = this.drivers.get(runId)
-    if (existing) return existing
-    const savedBinding = this.store.getReplaySessionBinding(runId)
-    const savedManifest = savedBinding?.manifest
-    const runtimeBinding = this.store.getRuntimeBinding(runId)
-    const admissionEnabled =
-      runtimeBinding?.schema_version === 'futures-runtime-binding.v5' &&
-      canonicalHash(runtimeBinding.admission_policy) ===
-        canonicalHash(admissionPolicy)
-    const manifest =
-      savedManifest && typeof savedManifest === 'object'
-        ? (savedManifest as ReturnType<FuturesSessionRuntime['replayManifest']>)
-        : this.replayManifest(admissionEnabled)
-    const binding = {
-      schema_version: 'futures-replay-session.v1',
-      run_id: runId,
-      manifest,
-      instrument_hash: canonicalHash(instrument),
-    }
-    this.store.bindReplaySession(runId, binding)
-    const replay = this.store.loadReplaySession(runId, binding)
-    const restoring = FuturesReplayDriver.resumeSession({
-      runId,
-      manifest,
-      durableStore: this.store,
-      observeTiming: this.replayTimingObserver,
-      admissionForSource:
-        manifest.admission_policy === undefined
-          ? undefined
-          : (id, sourceClock) =>
-              this.runner.readAdmissionState(
-                id,
-                admissionPolicyBody,
-                sourceClock,
-              ) as unknown as Record<string, unknown>,
-      instrument,
-      initialStateVersion:
-        replay.works.length > 0
-          ? 0
-          : Number(this.store.getRunProjection(runId)?.state_version ?? 0),
-      apply: async (work) => {
-        const savedRequest = work.input.payload.request
-        const request =
-          savedRequest && typeof savedRequest === 'object'
-            ? (savedRequest as FuturesWorkerRequest)
-            : {
-                request_id: work.analysis_id,
-                run_id: runId,
-                work_id: work.work_id,
-                expected_state_version: work.version,
-                payload: {
-                  operation: 'futures_runtime.v3' as const,
-                  runtime_config: this.runtimeConfig,
-                  instrument,
-                  market_snapshot: work.input.payload.market_snapshot as Record<
-                    string,
-                    unknown
-                  >,
-                },
-              }
-        const accepted = this.runner.accept(
-          request,
-          work.input.payload.terminal_command as
-            Parameters<FuturesCommandRunner['accept']>[1] | undefined,
-        )
-        const result = await accepted.result
-        return {
-          status: 'committed',
-          applied_state_version: Number(
-            this.store.getRunProjection(request.run_id)?.state_version,
-          ),
-          economic_projection: result,
-        }
-      },
-    })
-    this.drivers.set(runId, restoring)
-    return restoring
-  }
-
   commandExecutor = (
     request: FuturesWorkerRequest,
     metadata: {
@@ -661,42 +266,9 @@ export class FuturesSessionRuntime {
     },
   ) => {
     if (this.closed) throw new Error('Futures session runtime is closed.')
-    if (metadata.action === 'paper.new_run' || request.run_id.length === 0)
-      return this.runner.accept(request, metadata)
-    if (request.payload.operation !== 'futures_runtime.v3')
-      throw new Error('Futures session runtime requires risk protocol v3.')
-    const snapshot = request.payload.market_snapshot
-    const driverResult = this.enqueueEvent(request.run_id, async () => {
-      const driver = await this.restoreDriver(request.run_id)
-      return driver.processEvent({
-        sequence: metadata.expected_state_version + 1,
-        received_at_ms: Number(snapshot.decision_time_ms),
-        event_time_ms: Number(snapshot.decision_time_ms),
-        cycle_key: metadata.command_id,
-        payload: {
-          market_snapshot: snapshot,
-          request,
-          terminal_command: metadata,
-        },
-      })
-    })
-    if (
-      this.mode === 'mock' &&
-      (metadata.action === 'paper.start' || metadata.action === 'paper.close')
-    )
-      void driverResult.then(() => this.scheduleMockTick(request.run_id))
-    return {
-      acknowledgement: {
-        command_id: metadata.command_id,
-        status: 'accepted',
-      },
-      result: driverResult.then(() => {
-        const result = this.store.getCommandResult(metadata.command_id)
-        if (!result)
-          throw new Error('Replay driver completed without a worker result.')
-        return result
-      }),
-    }
+    if (metadata.action !== 'paper.new_run')
+      throw new Error('Futures session runtime only accepts paper.new_run.')
+    return this.runner.accept(request, metadata)
   }
 
   private enqueueEvent<T>(
@@ -714,124 +286,15 @@ export class FuturesSessionRuntime {
     return current
   }
 
-  private scheduleMockTick(runId: string): void {
-    if (this.mockTickTimers.has(runId)) return
-    const timer = setTimeout(() => {
-      this.mockTickTimers.delete(runId)
-      void this.enqueueEvent(runId, async () => {
-        const projection = this.store.getRunProjection(runId)
-        if (!projection) return
-        const stateVersion = Number(projection.state_version)
-        const time = 21_600_000 + (stateVersion + 1) * 100
-        const snapshot = createMockMarketSnapshot(time, false, false)
-        const events = snapshot.events as Record<string, unknown>[]
-        const scheduledBook = events.find(
-          (event) => event.type === 'book_snapshot',
-        )
-        if (!scheduledBook) return
-        scheduledBook.epoch = 'mock-runtime-clock.v1'
-        const request: FuturesWorkerRequest = {
-          request_id: randomUUID(),
-          run_id: runId,
-          work_id: randomUUID(),
-          expected_state_version: stateVersion,
-          payload: {
-            operation: 'futures_runtime.v3',
-            runtime_config: this.runtimeConfig,
-            instrument,
-            market_snapshot: snapshot,
-          },
-        }
-        const driver = await this.restoreDriver(runId)
-        await driver.processEvent({
-          sequence: stateVersion + 1,
-          received_at_ms: time,
-          event_time_ms: time,
-          cycle_key: `mock-runtime-clock.v1:${stateVersion}`,
-          payload: { market_snapshot: snapshot, request },
-        })
-      }).catch((error: unknown) => {
-        console.error('Deterministic MOCK clock event failed.', error)
-      })
-    }, 100)
-    this.mockTickTimers.set(runId, timer)
-  }
-
-  private replayManifest(admissionEnabled = true) {
-    const admission = admissionEnabled
-      ? { admission_policy: admissionPolicy }
-      : {}
-    if (this.mode === 'replay')
-      return {
-        schema_version: 'futures-replay-manifest.v1',
-        source: this.replaySource?.fundingSourceEvidence().length
-          ? 'frozen-kraken-futures-market.v2'
-          : 'frozen-kraken-futures-market.v1',
-        source_hash: this.replaySourceHash!,
-        config_hash: canonicalHash(this.runtimeConfig),
-        ...admission,
-        seed: `frozen-market:${this.replaySourceHash}`,
-        fidelity: this.replaySource?.fundingSourceEvidence().length
-          ? 'persisted-public-events-known-candles-explicit-funding.v2'
-          : 'persisted-public-futures-events-and-known-candles.v1',
-        runtime_version: this.runtimeConfig.version,
-        instrument_hash: canonicalHash(instrument),
-        ...(this.replaySourceFileHash === undefined
-          ? {}
-          : { source_file_hash: this.replaySourceFileHash }),
-        ...(this.replaySourceMetadataHash === undefined
-          ? {}
-          : { source_metadata_hash: this.replaySourceMetadataHash }),
-        ...(this.replaySourceQualityHash === undefined
-          ? {}
-          : { source_quality_hash: this.replaySourceQualityHash }),
-        ...(this.replayCutoffMs === undefined
-          ? {}
-          : { replay_cutoff_ms: this.replayCutoffMs }),
-      } as const
-    if (this.mode === 'paper_live')
-      return {
-        schema_version: 'futures-replay-manifest.v1',
-        source: 'kraken-public-live-stream.v2',
-        source_hash: canonicalHash({
-          mode: this.mode,
-          instrument,
-          funding_source: 'kraken-historical-funding-rates.v1',
-        }),
-        config_hash: canonicalHash(this.runtimeConfig),
-        ...admission,
-        seed: 'paper-live-session-v2',
-        fidelity:
-          'observed-public-trades-book-ticker-candles-explicit-funding.v2',
-        runtime_version: this.runtimeConfig.version,
-        instrument_hash: canonicalHash(instrument),
-      } as const
-    return {
-      schema_version: 'futures-replay-manifest.v1',
-      source: 'versioned-mock-fixture.v1',
-      source_hash: canonicalHash(
-        createMockMarketSnapshot(21_600_000, true, true),
-      ),
-      config_hash: canonicalHash(this.runtimeConfig),
-      ...admission,
-      seed: 'mock-fixture-v1',
-      fidelity: 'closed-ohlc-book-ticker-known-zero-funding.v1',
-      runtime_version: this.runtimeConfig.version,
-      instrument_hash: canonicalHash(instrument),
-    } as const
-  }
-
   async close(): Promise<void> {
     this.closed = true
-    this.mockTickTimers.forEach(clearTimeout)
-    this.mockTickTimers.clear()
     await Promise.allSettled([...this.eventQueues.values()])
     await this.runner.close()
     this.store.close()
   }
 }
 
-export function createMockMarketSnapshot(
+function createMockMarketSnapshot(
   time: number,
   breakout: boolean,
   includeKnownFunding = false,
