@@ -401,7 +401,7 @@ describe('FuturesMarketStore', () => {
       INSERT INTO market_observations VALUES('spot-fixture','untouched');`)
     fixture.close()
     const store = new FuturesMarketStore(path)
-    expect(store.schemaVersion()).toBe(3)
+    expect(store.schemaVersion()).toBe(4)
     store.append(event)
     store.close()
     const reopened = new DatabaseSync(path)
@@ -530,5 +530,195 @@ describe('FuturesMarketStore append hot path', () => {
     expect(() =>
       store.append({ ...base, seq: 2, rawJson: '{}', note: 'a\uDC00' }),
     ).toThrow(/surrogate/)
+  })
+})
+
+describe('FuturesMarketStore official candles', () => {
+  const M = 60_000
+  const T = 1_791_281_220_000
+  const official = (
+    bucketStart: number,
+    values: Partial<
+      Record<'open' | 'high' | 'low' | 'close' | 'volumeBtc', string>
+    > = {},
+    intervalMs = M,
+  ) => ({
+    intervalMs,
+    bucketStart,
+    open: '100',
+    high: '102',
+    low: '99',
+    close: '101',
+    volumeBtc: '1.5',
+    ...values,
+  })
+  const response = (
+    receivedAtMs: number,
+    candles: ReturnType<typeof official>[],
+    intervalMs = M,
+  ) => {
+    const rawResponse = JSON.stringify({ receivedAtMs, candles })
+    return {
+      intervalMs,
+      fromMs: T,
+      toMs: receivedAtMs,
+      receivedAtMs,
+      rawResponse,
+      sha256: createHash('sha256').update(rawResponse, 'utf8').digest('hex'),
+      candles,
+    }
+  }
+
+  it('appends official candles idempotently and reads them as of a knowledge cutoff', () => {
+    const store = new FuturesMarketStore(dbPath())
+    const first = response(T + 3 * M, [official(T), official(T + M)])
+    expect(store.appendOfficialCandles(first)).toEqual({ inserted: 2 })
+    expect(store.appendOfficialCandles(first)).toEqual({ inserted: 0 })
+    // A later response repeats a known candle and adds the next one.
+    expect(
+      store.appendOfficialCandles(
+        response(T + 4 * M, [
+          official(T + M),
+          official(T + 2 * M, { close: '100' }),
+        ]),
+      ),
+    ).toEqual({ inserted: 1 })
+    expect(store.latestOfficialBucket(M)).toBe(T + 2 * M)
+    expect(store.latestOfficialBucket(300_000)).toBeUndefined()
+
+    expect(
+      store.officialCandlesAsOf(M, T + 3 * M, 10).map((row) => row.bucketStart),
+    ).toEqual([T, T + M])
+    const all = store.officialCandlesAsOf(M, T + 4 * M, 10)
+    expect(all.map((row) => row.bucketStart)).toEqual([T, T + M, T + 2 * M])
+    expect(all[0]).toEqual({
+      intervalMs: M,
+      bucketStart: T,
+      closeAt: T + M,
+      knownAt: T + 3 * M,
+      open: '100',
+      high: '102',
+      low: '99',
+      close: '101',
+      volumeBtc: '1.5',
+      responseSha256: first.sha256,
+      revisionHash: expect.stringMatching(/^[0-9a-f]{64}$/),
+    })
+    expect(
+      store.officialCandlesAsOf(M, T + 4 * M, 2).map((row) => row.bucketStart),
+    ).toEqual([T + M, T + 2 * M])
+    store.close()
+  })
+
+  it('keeps a changed official candle as a new revision and reads the first known one', () => {
+    const store = new FuturesMarketStore(dbPath())
+    store.appendOfficialCandles(response(T + 2 * M, [official(T)]))
+    store.appendOfficialCandles(
+      response(T + 5 * M, [official(T, { volumeBtc: '1.6' })]),
+    )
+    const [row] = store.officialCandlesAsOf(M, T + 10 * M, 10)
+    expect(row!.volumeBtc).toBe('1.5')
+    expect(store.officialCandleQuality(M).officialRevisionConflicts).toEqual([
+      T,
+    ])
+    store.close()
+  })
+
+  it('rejects a response whose hash does not match its raw body', () => {
+    const store = new FuturesMarketStore(dbPath())
+    expect(() =>
+      store.appendOfficialCandles({
+        ...response(T + 2 * M, [official(T)]),
+        sha256: 'f'.repeat(64),
+      }),
+    ).toThrow(/hash/)
+    store.close()
+  })
+
+  it('guards official candle evidence against update and delete', () => {
+    const path = dbPath()
+    const store = new FuturesMarketStore(path)
+    store.appendOfficialCandles(response(T + 2 * M, [official(T)]))
+    store.close()
+    const raw = new DatabaseSync(path)
+    for (const [table, column] of [
+      ['paper_futures_official_candles', 'known_at'],
+      ['paper_futures_official_candle_responses', 'received_at'],
+    ]) {
+      expect(() => raw.prepare(`DELETE FROM ${table}`).run()).toThrow(
+        /immutable/i,
+      )
+      expect(() =>
+        raw.prepare(`UPDATE ${table} SET ${column}=0`).run(),
+      ).toThrow(/immutable/i)
+    }
+    raw.close()
+  })
+
+  it('opens schema 3 and schema 4 databases read-only', () => {
+    const path = dbPath()
+    new FuturesMarketStore(path).close()
+    const v4 = new FuturesMarketStore(path, { readOnly: true })
+    expect(v4.schemaVersion()).toBe(4)
+    v4.close()
+    const raw = new DatabaseSync(path)
+    raw.exec('DELETE FROM paper_futures_market_migrations WHERE version=4')
+    raw.close()
+    const v3 = new FuturesMarketStore(path, { readOnly: true })
+    expect(v3.schemaVersion()).toBe(3)
+    expect(v3.officialCandlesAsOf(M, T, 10)).toEqual([])
+    v3.close()
+  })
+
+  it('compares closed observed 60s candles with official close and volume', () => {
+    const store = new FuturesMarketStore(dbPath())
+    const observed = (
+      bucketStart: number,
+      close: string,
+      volumeBtc: string,
+      revision = 2,
+    ) =>
+      store.saveCandleRevision({
+        id: `PF_XBTUSD:60000:${bucketStart}`,
+        intervalMs: M,
+        bucketStart,
+        revision,
+        knownAt: bucketStart + M + 1,
+        closeAt: bucketStart + M,
+        isClosed: true,
+        coverage: 'observed_trades_only_no_gap_certification',
+        open: '100',
+        high: '102',
+        low: '99',
+        close,
+        volumeBtc,
+        tradeCount: 3,
+        sourceHash: 'a'.repeat(64),
+      })
+    observed(T, '101', '1.5') // match
+    observed(T + M, '101', '1.4992') // missed trades
+    observed(T + 2 * M, '100', '1.5') // close differs
+    // T + 3M: official only (observed missing)
+    observed(T + 5 * M, '101', '1.5') // observed only: not compared
+    store.appendOfficialCandles(
+      response(T + 5 * M, [
+        official(T),
+        official(T + M),
+        official(T + 2 * M),
+        official(T + 3 * M, { volumeBtc: '0' }),
+      ]),
+    )
+    expect(store.officialCandleQuality(M, T)).toEqual({
+      intervalMs: M,
+      sinceBucketStart: T,
+      compared: 3,
+      matched: 1,
+      closeMismatches: [T + 2 * M],
+      volumeMismatches: [T + M],
+      observedMissing: [T + 3 * M],
+      officialRevisionConflicts: [],
+    })
+    expect(store.officialCandleQuality(M, T + M).compared).toBe(2)
+    store.close()
   })
 })

@@ -156,7 +156,11 @@ export function createHistoricalFundingClient(
           throw new RangeError('Historical funding response exceeds 2 MiB.')
         if (!response.ok)
           throw new Error(`Historical funding HTTP ${response.status}.`)
-        const bytes = await readBoundedBody(response, MAX_RESPONSE_BYTES)
+        const bytes = await readBoundedBody(
+          response,
+          MAX_RESPONSE_BYTES,
+          'Historical funding response',
+        )
         if (bytes.byteLength > MAX_RESPONSE_BYTES)
           throw new RangeError('Historical funding response exceeds 2 MiB.')
         const responseReceivedAtMs = options.clock?.() ?? receivedAtMs
@@ -179,14 +183,17 @@ export function createHistoricalFundingClient(
   }
 }
 
-async function readBoundedBody(
+/** Reads a response body, aborting once it exceeds `limit` bytes. */
+export async function readBoundedBody(
   response: Response,
   limit: number,
+  label: string,
 ): Promise<Uint8Array> {
+  const tooLarge = () =>
+    new RangeError(`${label} exceeds ${limit / (1024 * 1024)} MiB.`)
   if (!response.body) {
     const bytes = new Uint8Array(await response.arrayBuffer())
-    if (bytes.byteLength > limit)
-      throw new RangeError('Historical funding response exceeds 2 MiB.')
+    if (bytes.byteLength > limit) throw tooLarge()
     return bytes
   }
   const reader = response.body.getReader()
@@ -199,7 +206,7 @@ async function readBoundedBody(
       size += value.byteLength
       if (size > limit) {
         await reader.cancel()
-        throw new RangeError('Historical funding response exceeds 2 MiB.')
+        throw tooLarge()
       }
       chunks.push(value)
     }

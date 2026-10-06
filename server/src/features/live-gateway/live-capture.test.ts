@@ -111,6 +111,91 @@ describe('live capture process core', () => {
     expect(lines.some((line) => line.includes('connecting'))).toBe(true)
   })
 
+  it('backfills and then polls official 1m and 5m candles incrementally', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'balancita-capture-'))
+    dirs.push(dir)
+    const store = new FuturesMarketStore(join(dir, 'market.sqlite'))
+    const M = 60_000
+    let now = 1_791_281_220_000 + 10 * M + 5_000
+    const requests: Array<{ interval: string; from: number; to: number }> = []
+    const capture = createLiveCapture({
+      store,
+      clock: () => now,
+      makeSocket: () => fakeSocket().socket,
+      fetchCatalog: async () => catalog,
+      fundingFetch: async () => {
+        throw new Error('offline')
+      },
+      officialCandlesFetch: async (input) => {
+        const url = new URL(String(input))
+        const interval = url.pathname.split('/').at(-1)!
+        const from = Number(url.searchParams.get('from')) * 1000
+        const to = Number(url.searchParams.get('to')) * 1000
+        requests.push({ interval, from, to })
+        const step = interval === '1m' ? M : 5 * M
+        const candles = []
+        for (let time = Math.ceil(from / step) * step; time <= to; time += step)
+          candles.push({
+            time,
+            open: '100',
+            high: '101',
+            low: '99',
+            close: '100',
+            volume: '1',
+          })
+        return new Response(JSON.stringify({ candles, more_candles: false }))
+      },
+      officialCandleLookbackMs: { 60_000: 5 * M, 300_000: 30 * M },
+      officialPollMs: 5,
+      log: () => undefined,
+    })
+    await capture.start()
+    await wait(30)
+    const backfill = requests.slice(0, 2)
+    expect(backfill).toEqual([
+      { interval: '1m', from: now - 5 * M, to: now },
+      { interval: '5m', from: now - 30 * M, to: now },
+    ])
+    const lastMinute = store.latestOfficialBucket(M)!
+    // Settled closed candles only: the open minute is never stored.
+    expect(lastMinute + M).toBeLessThanOrEqual(now)
+    now += 2 * M
+    await wait(40)
+    await capture.stop()
+    const later = requests.filter((item) => item.interval === '1m').at(-1)!
+    expect(later.from).toBe(lastMinute + M)
+    expect(store.latestOfficialBucket(M)).toBeGreaterThan(lastMinute)
+    expect(store.latestOfficialBucket(5 * M)).toBeDefined()
+    store.close()
+  })
+
+  it('keeps capturing when the official candle API fails', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'balancita-capture-'))
+    dirs.push(dir)
+    const store = new FuturesMarketStore(join(dir, 'market.sqlite'))
+    const lines: string[] = []
+    const capture = createLiveCapture({
+      store,
+      clock: () => 1_791_281_220_000,
+      makeSocket: () => fakeSocket().socket,
+      fetchCatalog: async () => catalog,
+      fundingFetch: async () => {
+        throw new Error('offline')
+      },
+      officialCandlesFetch: async () => new Response('down', { status: 503 }),
+      officialPollMs: 5,
+      log: (line) => lines.push(line),
+    })
+    await capture.start()
+    await wait(30)
+    expect(capture.collector?.status).not.toBe('stopped')
+    await capture.stop()
+    expect(
+      lines.some((line) => line.includes('official candles unavailable')),
+    ).toBe(true)
+    store.close()
+  })
+
   it('keeps retrying the catalog instead of exiting when it is unavailable', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'balancita-capture-'))
     dirs.push(dir)

@@ -10,6 +10,19 @@ import {
   createHistoricalFundingClient,
   type HistoricalFundingFetch,
 } from '../kraken-futures/historical-funding.ts'
+import {
+  createOfficialCandlesClient,
+  OFFICIAL_CANDLE_INTERVALS,
+  OFFICIAL_CANDLES_PER_REQUEST,
+} from '../kraken-futures/official-candles.ts'
+
+/** Backfill depth per interval: enough history for 5m indicator warm-up. */
+const OFFICIAL_LOOKBACK_MS: Readonly<Record<number, number>> = {
+  60_000: 24 * 3_600_000,
+  300_000: 3 * 24 * 3_600_000,
+}
+/** Poll this long after each minute boundary so the closed candle settled. */
+const OFFICIAL_POLL_OFFSET_MS = 3_000
 
 export interface LiveCaptureOptions {
   readonly store: FuturesMarketStore
@@ -23,6 +36,10 @@ export interface LiveCaptureOptions {
   readonly candleTickMs?: number
   readonly fundingPollMs?: number
   readonly catalogRetryMs?: number
+  readonly officialCandlesFetch?: HistoricalFundingFetch
+  readonly officialCandleLookbackMs?: Readonly<Record<number, number>>
+  /** Fixed poll period; by default polls 3 s after every minute boundary. */
+  readonly officialPollMs?: number
   readonly log?: (line: string) => void
 }
 
@@ -41,8 +58,50 @@ export function createLiveCapture(options: LiveCaptureOptions) {
   let catalogTimer: ReturnType<typeof setTimeout> | undefined
   let fundingClient:
     ReturnType<typeof createHistoricalFundingClient> | undefined
+  let officialTimer: ReturnType<typeof setTimeout> | undefined
+  let officialClient: ReturnType<typeof createOfficialCandlesClient> | undefined
   let stopped = true
   let fundingPoll: Promise<void> = Promise.resolve()
+  let officialPoll: Promise<void> = Promise.resolve()
+  const lookbacks = {
+    ...OFFICIAL_LOOKBACK_MS,
+    ...options.officialCandleLookbackMs,
+  }
+
+  // Official Kraken candles are the canonical series for verdicts: backfill
+  // on start, then fetch each newly closed bucket.
+  const pollOfficialCandles = async (): Promise<void> => {
+    for (const interval of OFFICIAL_CANDLE_INTERVALS) {
+      if (stopped || officialClient === undefined) return
+      const now = clock()
+      const latest = store.latestOfficialBucket(interval)
+      // The bucket after the latest stored one has not closed yet.
+      if (latest !== undefined && latest + 2 * interval > now) continue
+      const from = Math.max(
+        latest === undefined ? 0 : latest + interval,
+        now - (lookbacks[interval] ?? OFFICIAL_LOOKBACK_MS[interval]!),
+        now - OFFICIAL_CANDLES_PER_REQUEST * interval,
+      )
+      try {
+        store.appendOfficialCandles(
+          await officialClient.fetch(interval, from, now),
+        )
+      } catch (error) {
+        if (stopped) return
+        log(`official candles unavailable (${interval} ms): ${describe(error)}`)
+      }
+    }
+  }
+  const scheduleOfficialPoll = (): void => {
+    if (stopped) return
+    const now = clock()
+    const delay =
+      options.officialPollMs ??
+      60_000 - (now % 60_000) + OFFICIAL_POLL_OFFSET_MS
+    officialTimer = setTimeout(() => {
+      officialPoll = pollOfficialCandles().finally(scheduleOfficialPoll)
+    }, delay)
+  }
 
   const startCollecting = (): void => {
     const candles = new FuturesCandleBuilder(store)
@@ -91,6 +150,11 @@ export function createLiveCapture(options: LiveCaptureOptions) {
       onState: (state, reason) => log(`${state}${reason ? ` ${reason}` : ''}`),
     })
     collector.start()
+    officialClient = createOfficialCandlesClient({
+      fetch: options.officialCandlesFetch,
+      clock,
+    })
+    officialPoll = pollOfficialCandles().finally(scheduleOfficialPoll)
   }
 
   const attemptCatalog = async (): Promise<void> => {
@@ -136,10 +200,13 @@ export function createLiveCapture(options: LiveCaptureOptions) {
       if (catalogTimer !== undefined) clearTimeout(catalogTimer)
       if (candleTimer !== undefined) clearInterval(candleTimer)
       if (fundingTimer !== undefined) clearInterval(fundingTimer)
+      if (officialTimer !== undefined) clearTimeout(officialTimer)
       collector?.stop()
       fundingClient?.close()
-      catalogTimer = candleTimer = fundingTimer = undefined
+      officialClient?.close()
+      catalogTimer = candleTimer = fundingTimer = officialTimer = undefined
       await fundingPoll.catch(() => undefined)
+      await officialPoll.catch(() => undefined)
     },
     get collector(): KrakenFuturesMarketCollector | undefined {
       return collector

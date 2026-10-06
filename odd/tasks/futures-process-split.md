@@ -33,8 +33,9 @@ Every sustained live run of the single process surfaced a new engine defect: the
 ## Checklist
 
 - [x] PS-01 [M] Live candles without the engine: capture process A + gateway B; terminal works with the engine off; `pnpm run dev` runs A + B for live.
-- [ ] PS-02 [S] Capture hot-path leftovers (remaining book sorts) and trivial market DB restore.
-- [ ] PS-03 [M] Verdict service C: pure Python function over candles (strategies extracted), writes verdicts DB on candle close; double replay gives identical verdicts.
+- [x] PS-02 [S] Capture hot-path leftovers (remaining book sorts) and trivial market DB restore.
+- [x] PS-03a [M] Official Kraken candles as the canonical series: capture backfills and polls closed 1 m / 5 m candles from the public charts API into append-only market DB tables (raw response + hash, `known_at` for as-of reads); observed-vs-official quality report.
+- [ ] PS-03b [M] Verdict service C: pure Python function over official candles (C25-C28 entry proposals only; exits stay with D), regime chained in the verdicts DB, writes verdicts on candle close; double replay gives identical verdicts.
 - [ ] PS-04 [M] News process N wired into C (Gemini as veto/confidence, stored per item).
 - [ ] PS-05 [L] Paper execution D consumes verdicts; retire per-delta driver, market-context transport, operative bridge, `futuresSourceFailed` latch; fix funding-pause bug (`python/balancita_engine/futures_runtime.py:2393-2404`).
 - [ ] PS-06 [S] Process supervision + per-process health in UI.
@@ -73,9 +74,43 @@ Every sustained live run of the single process surfaced a new engine defect: the
     - Restart acceptance is met. CPU is just above the 10% target on this machine, which is slower than the local one where the writer measured 5-9%. The remaining cost is the mandated per-event commit.
 
 
+- 2026-10-06 PS-03 design (cloud session; user decisions):
+  - C emits entry proposals only (LONG/SHORT/WAIT/ABSTAIN, stop/target, features, conditions). Exits, owner and consumed-signal filtering stay with D, which owns position state.
+  - The regime hysteresis is chained in the verdicts DB. A full replay starts at `unknown` from the first candle.
+  - Finding: live candles could never feed `calculate_features`. The capture writes `coverage: observed_trades_only_no_gap_certification`, while the indicators require `complete`. A minute without trades has no candle, and the capture records no trade-feed gaps or disconnects. The old engine therefore never produced a live signal; only MOCK did.
+  - Evidence from observed vs official candles (same minutes, 2026-10-06):
+    - One observed minute missed 0.0008 BTC of volume, together with a trade `seq` jump of 3.
+    - Kraken's convention is open = previous close, with high/low including that open; observed candles open at the first trade. Open, high or low differed in 5 of 6 minutes; closes matched.
+    - Official closed candles were stable across fetches. They are gapless: 12 of 360 minutes were flat with zero volume. Up to 1800 candles per request; the last candle is the open one.
+  - Decision: official Kraken candles (`https://futures.kraken.com/api/charts/v1/trade/PF_XBTUSD/{1m,5m}`) are the canonical series for C, in vivo and for backtests. Observed candles stay for the low-latency chart and as a quality check. Connection-window certification is dropped. Trade `seq` jumps are not written to `paper_futures_data_gaps`, because `gapStatusAsOf` would halt the legacy engine; the volume comparison exposes missed trades instead.
+
+- 2026-10-06 PS-03a (cloud session, implemented in the parent).
+  - Design:
+    - `kraken-futures/official-candles.ts` builds the charts URL, validates responses and keeps settled closed candles only. A candle is settled when it closed at least 2 s before receipt. Values are normalized decimal strings. Validation rejects misaligned or duplicate buckets, non-decimal values and inconsistent OHLC. A bounded client handles timeout and HTTP errors.
+    - Market store migration 4 adds append-only `paper_futures_official_candle_responses` (raw body + sha256 + range + `received_at`) and `paper_futures_official_candles`, keyed by interval, bucket and revision hash, with `known_at`. Both have no-update and no-delete triggers.
+    - New store reads: `officialCandlesAsOf` returns the first-known revision per bucket by cutoff. `latestOfficialBucket` supports incremental polling. `officialCandleQuality` compares final observed closed candles with official ones on close and volume only, and lists observed-missing buckets and official revisions.
+    - The read-only gateway accepts schema 3 or 4.
+    - Capture backfills on start (1 m: 24 h, 5 m: 3 d, capped at 1800 per request). It then polls 3 s after each minute boundary from the latest stored bucket, skipping an interval whose next bucket has not closed. Failures are logged and never stop capture.
+    - `readBoundedBody` is now exported from `historical-funding.ts` with a label; the funding error text is unchanged.
+  - RED: `official-candles.test.ts` failed on a missing module. The 6 new store tests failed (`appendOfficialCandles` missing; schema 3 instead of 4). The 2 new capture tests failed (no requests; no failure log).
+  - GREEN:
+    - kraken-futures + live-gateway: 53/53. `gateway.test.ts` "streams a candle revision appended later by the writer" is a pre-existing timing flake; it failed 2 of 5 runs on unmodified code.
+    - `src/features/kraken-futures src/features/live-gateway src/features/paper-futures src/app`: 269 passed. The same 7 failures occur on unmodified code in this container, including the two suites that need the local-only `playwright-artifacts` fixtures.
+    - `pnpm typecheck` (server) and root `tsc -b` are clean.
+  - Live smoke (real Kraken, fresh market DB, 240 s):
+    - Backfill stored 1439 1 m and 863 5 m candles in one response each. Every minute at :03 one new 1 m candle was stored; the 5 m candle arrived on its boundary.
+    - No errors; capture CPU about 9.4%.
+    - Quality over the last 10 minutes: 4 compared, 3 matched exactly. The one volume mismatch is the partial first minute, as capture started at 10:38:34. Buckets before capture are reported as observed-missing.
+  - Follow-up (PS-06): surface `officialCandleQuality` and official-candle freshness in per-process health.
+
 ## Next step
 
-- PS-02: implemented by a delegated writer and committed. The writer measured the CPU before and after. Still pending: a parent live spot check in `pnpm run dev`. Restart the capture child, which runs without `--watch`, confirm capture CPU is 10% or less, and confirm there are no `UNIQUE` errors in the capture log. Then check PS-02 off.
+- PS-03b, the verdict service C (Python, stdlib `sqlite3` only):
+  - Read official 1 m / 5 m candles read-only from the market DB using `known_at` as-of semantics.
+  - Use a fixed-length indicator window, because EMA/RSI depend on their start point. Pin the window length in the verdict config.
+  - On each new closed 1 m candle, evaluate C25-C28 entry proposals with the flat-position path of `propose`. Chain the regime from the last verdict.
+  - Write the verdicts DB with input candle hashes.
+  - Test that a double replay gives identical verdicts.
+- In the cloud container, Node's `fetch` and `WebSocket` need `NODE_USE_ENV_PROXY=1` to reach Kraken; this does not apply locally.
 - Open follow-up: `paper-futures/futures-canonical.ts` `canonicalJson` still uses a key sort that allocates per comparison, and it was outside the PS-02 surface. The store-local `canonicalEvent` duplicates the fix; consolidate them later.
-- Then PS-03, the verdict service.
-- Handoff (2026-10-06): the work moves to a cloud session. The 5 files that were already modified before the session are still uncommitted locally and not pushed: `futures_runtime.py`, `test_futures_strategy_cadence.py`, `futures-replay-driver.ts` and its test, and the protected `futures-runtime.test.ts`.
+- Handoff (2026-10-06): the 5 files that were already modified before the cloud session are still uncommitted locally and not pushed: `futures_runtime.py`, `test_futures_strategy_cadence.py`, `futures-replay-driver.ts` and its test, and the protected `futures-runtime.test.ts`.

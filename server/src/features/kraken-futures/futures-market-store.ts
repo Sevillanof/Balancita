@@ -1,6 +1,7 @@
 import { DatabaseSync, type StatementSync } from 'node:sqlite'
 import { createHash } from 'node:crypto'
 import type { HistoricalFundingResponse } from './historical-funding.ts'
+import type { OfficialCandleResponse } from './official-candles.ts'
 import { existsSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { canonicalJson } from '../paper-futures/futures-canonical.ts'
@@ -36,6 +37,43 @@ export interface StoredCandleHead {
   readonly volumeBtc: string
   readonly tradeCount: number
   readonly sourceHash: string
+}
+
+/** First-known revision of an official Kraken candle. */
+export interface OfficialStoredCandle {
+  readonly intervalMs: number
+  readonly bucketStart: number
+  readonly closeAt: number
+  readonly knownAt: number
+  readonly open: string
+  readonly high: string
+  readonly low: string
+  readonly close: string
+  readonly volumeBtc: string
+  readonly responseSha256: string
+  readonly revisionHash: string
+}
+
+export interface OfficialCandleQuality {
+  readonly intervalMs: number
+  readonly sinceBucketStart: number
+  compared: number
+  matched: number
+  readonly closeMismatches: number[]
+  readonly volumeMismatches: number[]
+  /** Official buckets with no closed observed candle (capture down or quiet). */
+  readonly observedMissing: number[]
+  /** Buckets whose official values changed between fetches. */
+  readonly officialRevisionConflicts: number[]
+}
+
+function sameDecimal(left: string, right: string): boolean {
+  const normal = (value: string) => {
+    let text = value.replace(/^0+(?=\d)/, '')
+    if (text.includes('.')) text = text.replace(/0+$/, '').replace(/\.$/, '')
+    return text
+  }
+  return normal(left) === normal(right)
 }
 
 function candleHead(row: RecordValue): StoredCandleHead {
@@ -173,7 +211,8 @@ export class FuturesMarketStore {
     if (this.readOnly) {
       // Tolerate the single writer holding a commit lock; never writes.
       this.db.exec('PRAGMA busy_timeout=2000;')
-      if (this.schemaVersion() !== 3)
+      const version = this.schemaVersion()
+      if (version !== 3 && version !== 4)
         throw new Error(
           'Read-only futures market source schema is unsupported.',
         )
@@ -275,7 +314,32 @@ export class FuturesMarketStore {
         BEFORE UPDATE ON paper_futures_candle_revisions BEGIN SELECT RAISE(ABORT, 'market evidence is immutable'); END;
       CREATE TRIGGER IF NOT EXISTS paper_futures_candle_revisions_no_delete
         BEFORE DELETE ON paper_futures_candle_revisions BEGIN SELECT RAISE(ABORT, 'market evidence is immutable'); END;
+      CREATE TABLE IF NOT EXISTS paper_futures_official_candle_responses(
+        sha256 TEXT PRIMARY KEY, interval_ms INTEGER NOT NULL, from_ms INTEGER NOT NULL,
+        to_ms INTEGER NOT NULL, received_at INTEGER NOT NULL, raw_response TEXT NOT NULL
+      ) STRICT;
+      CREATE TABLE IF NOT EXISTS paper_futures_official_candles(
+        interval_ms INTEGER NOT NULL, bucket_start INTEGER NOT NULL, revision_hash TEXT NOT NULL,
+        known_at INTEGER NOT NULL, open_price TEXT NOT NULL, high_price TEXT NOT NULL,
+        low_price TEXT NOT NULL, close_price TEXT NOT NULL, volume_btc TEXT NOT NULL,
+        response_sha256 TEXT NOT NULL REFERENCES paper_futures_official_candle_responses(sha256),
+        PRIMARY KEY(interval_ms, bucket_start, revision_hash)
+      ) STRICT;
+      CREATE TRIGGER IF NOT EXISTS paper_futures_official_candle_responses_no_update
+        BEFORE UPDATE ON paper_futures_official_candle_responses BEGIN SELECT RAISE(ABORT, 'market evidence is immutable'); END;
+      CREATE TRIGGER IF NOT EXISTS paper_futures_official_candle_responses_no_delete
+        BEFORE DELETE ON paper_futures_official_candle_responses BEGIN SELECT RAISE(ABORT, 'market evidence is immutable'); END;
+      CREATE TRIGGER IF NOT EXISTS paper_futures_official_candles_no_update
+        BEFORE UPDATE ON paper_futures_official_candles BEGIN SELECT RAISE(ABORT, 'market evidence is immutable'); END;
+      CREATE TRIGGER IF NOT EXISTS paper_futures_official_candles_no_delete
+        BEFORE DELETE ON paper_futures_official_candles BEGIN SELECT RAISE(ABORT, 'market evidence is immutable'); END;
+      INSERT OR IGNORE INTO paper_futures_market_migrations VALUES(4, unixepoch('subsec') * 1000);
     `)
+  }
+
+  /** Read-only stores opened on a schema-3 file have no official candle tables. */
+  private hasOfficialCandles(): boolean {
+    return this.schemaVersion() >= 4
   }
 
   /** Prepares each hot-path statement once per connection. */
@@ -355,6 +419,197 @@ export class FuturesMarketStore {
       this.db.exec('ROLLBACK')
       throw error
     }
+  }
+
+  /**
+   * Stores one official charts response and its settled closed candles.
+   * A bucket whose values change later is kept as another revision; readers
+   * use the first revision known by their cutoff.
+   */
+  appendOfficialCandles(response: OfficialCandleResponse): {
+    inserted: number
+  } {
+    if (this.readOnly)
+      throw new Error('Cannot append to a read-only market store.')
+    const raw = response.rawResponse
+    if (sha256(raw) !== response.sha256)
+      throw new Error('Official candle response hash mismatch.')
+    const receivedAt = time(response.receivedAtMs, 'official receivedAt')
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      this.prepared(
+        'INSERT OR IGNORE INTO paper_futures_official_candle_responses VALUES(?,?,?,?,?,?)',
+      ).run(
+        response.sha256,
+        time(response.intervalMs, 'official interval'),
+        time(response.fromMs, 'official from'),
+        time(response.toMs, 'official to'),
+        receivedAt,
+        raw,
+      )
+      const insert = this.prepared(
+        'INSERT OR IGNORE INTO paper_futures_official_candles VALUES(?,?,?,?,?,?,?,?,?,?)',
+      )
+      let inserted = 0
+      for (const candle of response.candles) {
+        if (candle.intervalMs !== response.intervalMs)
+          throw new Error(
+            'Official candle interval does not match its response.',
+          )
+        const values = {
+          open: candle.open,
+          high: candle.high,
+          low: candle.low,
+          close: candle.close,
+          volumeBtc: candle.volumeBtc,
+        }
+        const result = insert.run(
+          candle.intervalMs,
+          time(candle.bucketStart, 'official bucket'),
+          digest(values),
+          receivedAt,
+          values.open,
+          values.high,
+          values.low,
+          values.close,
+          values.volumeBtc,
+          response.sha256,
+        )
+        inserted += Number(result.changes)
+      }
+      this.db.exec('COMMIT')
+      return { inserted }
+    } catch (error) {
+      this.db.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  latestOfficialBucket(intervalMs: number): number | undefined {
+    if (!this.hasOfficialCandles()) return undefined
+    const row = this.prepared(
+      'SELECT MAX(bucket_start) AS bucket FROM paper_futures_official_candles WHERE interval_ms=?',
+    ).get(time(intervalMs, 'official interval')) as { bucket: number | null }
+    return row.bucket ?? undefined
+  }
+
+  /** Latest `limit` official candles known by the cutoff, ascending. */
+  officialCandlesAsOf(
+    intervalMs: number,
+    knownAtCutoff: number,
+    limit: number,
+  ): OfficialStoredCandle[] {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 5_000)
+      throw new RangeError('Official candle limit must be between 1 and 5000.')
+    if (!this.hasOfficialCandles()) return []
+    const rows = this.prepared(
+      `WITH known AS (
+         SELECT *, ROW_NUMBER() OVER (
+           PARTITION BY bucket_start ORDER BY known_at, rowid
+         ) AS revision_rank
+         FROM paper_futures_official_candles
+         WHERE interval_ms=? AND known_at<=?
+       )
+       SELECT * FROM (
+         SELECT * FROM known WHERE revision_rank=1
+         ORDER BY bucket_start DESC LIMIT ?
+       ) ORDER BY bucket_start`,
+    ).all(
+      time(intervalMs, 'official interval'),
+      time(knownAtCutoff, 'knownAtCutoff'),
+      limit,
+    ) as RecordValue[]
+    return rows.map((row) => ({
+      intervalMs: Number(row.interval_ms),
+      bucketStart: Number(row.bucket_start),
+      closeAt: Number(row.bucket_start) + Number(row.interval_ms),
+      knownAt: Number(row.known_at),
+      open: String(row.open_price),
+      high: String(row.high_price),
+      low: String(row.low_price),
+      close: String(row.close_price),
+      volumeBtc: String(row.volume_btc),
+      responseSha256: String(row.response_sha256),
+      revisionHash: String(row.revision_hash),
+    }))
+  }
+
+  /**
+   * Quality check of the observed capture against official candles: close
+   * and volume of the final closed observed revision. Open/high/low follow
+   * different conventions (Kraken opens at the previous close) and are not
+   * compared.
+   */
+  officialCandleQuality(
+    intervalMs: number,
+    sinceBucketStart = 0,
+  ): OfficialCandleQuality {
+    const report: OfficialCandleQuality = {
+      intervalMs,
+      sinceBucketStart,
+      compared: 0,
+      matched: 0,
+      closeMismatches: [],
+      volumeMismatches: [],
+      observedMissing: [],
+      officialRevisionConflicts: [],
+    }
+    if (!this.hasOfficialCandles()) return report
+    const rows = this.db
+      .prepare(
+        `WITH official AS (
+           SELECT bucket_start, close_price, volume_btc,
+             COUNT(*) OVER (PARTITION BY bucket_start) AS revisions,
+             ROW_NUMBER() OVER (
+               PARTITION BY bucket_start ORDER BY known_at, rowid
+             ) AS revision_rank
+           FROM paper_futures_official_candles
+           WHERE interval_ms=? AND bucket_start>=?
+         ), observed AS (
+           SELECT bucket_start, close_price, volume_btc,
+             ROW_NUMBER() OVER (
+               PARTITION BY candle_id ORDER BY revision DESC
+             ) AS revision_rank
+           FROM paper_futures_candle_revisions
+           WHERE interval_ms=? AND bucket_start>=? AND is_closed=1
+         )
+         SELECT o.bucket_start, o.close_price AS official_close,
+           o.volume_btc AS official_volume, o.revisions,
+           b.close_price AS observed_close, b.volume_btc AS observed_volume
+         FROM official AS o
+         LEFT JOIN observed AS b
+           ON b.bucket_start=o.bucket_start AND b.revision_rank=1
+         WHERE o.revision_rank=1
+         ORDER BY o.bucket_start`,
+      )
+      .all(
+        intervalMs,
+        sinceBucketStart,
+        intervalMs,
+        sinceBucketStart,
+      ) as RecordValue[]
+    for (const row of rows) {
+      const bucket = Number(row.bucket_start)
+      if (Number(row.revisions) > 1)
+        report.officialRevisionConflicts.push(bucket)
+      if (row.observed_close === null) {
+        report.observedMissing.push(bucket)
+        continue
+      }
+      report.compared += 1
+      const closeSame = sameDecimal(
+        String(row.observed_close),
+        String(row.official_close),
+      )
+      const volumeSame = sameDecimal(
+        String(row.observed_volume),
+        String(row.official_volume),
+      )
+      if (!closeSame) report.closeMismatches.push(bucket)
+      if (!volumeSame) report.volumeMismatches.push(bucket)
+      if (closeSame && volumeSame) report.matched += 1
+    }
+    return report
   }
 
   fundingRecordsAsOf(knownAtCutoff: number): Record<string, unknown>[] {
