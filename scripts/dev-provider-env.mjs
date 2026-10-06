@@ -1,7 +1,9 @@
 import { spawnSync } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { createServer } from 'node:net'
-import { delimiter } from 'node:path'
+import { delimiter, join } from 'node:path'
+import { parseEnv } from 'node:util'
 
 export function devEnvironment(environment) {
   return {
@@ -131,6 +133,159 @@ export function llamaPort(env) {
   return Number.isInteger(port) && port > 0 && port < 65536
     ? port
     : DEFAULT_LLAMA_PORT
+}
+
+function readIfPresent(path) {
+  try {
+    return readFileSync(path, 'utf8')
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Environment for the dev children: `<root>/.env` < `<root>/.env.local` <
+ * real `env` (the real environment always wins). Missing or unreadable files
+ * are skipped; `read(path)` returns the text or `undefined` and is injectable.
+ */
+export function loadDevEnv({ root, env, read = readIfPresent }) {
+  const merged = {}
+  for (const name of ['.env', '.env.local']) {
+    const text = read(`${root}/${name}`)
+    if (text === undefined) continue
+    try {
+      Object.assign(merged, parseEnv(text))
+    } catch {
+      // a malformed file must not block startup
+    }
+  }
+  return { ...merged, ...env }
+}
+
+const QWEN_MODEL = /qwen3\.5[-_ ]?4b/i
+// Partial downloads never end in `.gguf` (`.part`, `.downloadInProgress`,
+// `.crdownload`, `.incomplete`), so requiring the extension excludes them.
+const QUANT_PREFERENCE = [/q8_0/i, /q6_k/i]
+
+function defaultModelFs() {
+  return {
+    readdir: (dir) =>
+      readdirSync(dir, { withFileTypes: true }).map((entry) => ({
+        name: entry.name,
+        // symlinks (Hugging Face snapshots) are resolved by `isFile`
+        directory: entry.isDirectory(),
+      })),
+    isFile: (path) => {
+      try {
+        const info = statSync(path)
+        return info.isFile() && info.size > 0
+      } catch {
+        return false
+      }
+    },
+  }
+}
+
+/** Known directories and how many directory levels below them to look. */
+function modelSearchRoots({ env, home, platform }) {
+  const hfHome = (env.HF_HOME ?? '').trim() || join(home, '.cache/huggingface')
+  const hub = (env.HF_HUB_CACHE ?? '').trim() || join(hfHome, 'hub')
+  const llamaCache =
+    (env.LLAMA_CACHE ?? '').trim() ||
+    (platform === 'darwin'
+      ? join(home, 'Library/Caches/llama.cpp')
+      : join(home, '.cache/llama.cpp'))
+  return [
+    { dir: llamaCache, depth: 0 },
+    { dir: join(hub, 'models--unsloth--Qwen3.5-4B-GGUF'), depth: 2 },
+    { dir: join(home, '.lmstudio/models'), depth: 2 },
+    { dir: join(home, '.cache/lm-studio/models'), depth: 2 },
+    { dir: join(home, 'models'), depth: 2 },
+    { dir: join(home, 'Downloads'), depth: 1 },
+  ]
+}
+
+/**
+ * Looks for a local Qwen3.5-4B GGUF in the known cache and download
+ * directories (bounded depth, never a full disk walk). Skips `mmproj` files,
+ * partial downloads and empty files. Prefers Q8_0, then Q6_K, then any other
+ * quant; ties go to the earlier directory. Returns the path or `undefined`;
+ * never throws.
+ */
+export function findQwenModel({
+  env = process.env,
+  home = homedir(),
+  platform = process.platform,
+  fs = defaultModelFs(),
+} = {}) {
+  const candidates = []
+  const walk = (dir, depth, order) => {
+    let entries
+    try {
+      entries = fs.readdir(dir)
+    } catch {
+      return
+    }
+    for (const { name, directory } of entries) {
+      const path = join(dir, name)
+      if (directory) {
+        if (depth > 0) walk(path, depth - 1, order)
+        continue
+      }
+      if (
+        !/\.gguf$/i.test(name) ||
+        !QWEN_MODEL.test(name) ||
+        /mmproj/i.test(name) ||
+        !fs.isFile(path)
+      )
+        continue
+      const quant = QUANT_PREFERENCE.findIndex((re) => re.test(name))
+      candidates.push({
+        path,
+        rank: quant === -1 ? QUANT_PREFERENCE.length : quant,
+        order,
+      })
+    }
+  }
+  modelSearchRoots({ env, home, platform }).forEach(({ dir, depth }, order) =>
+    walk(dir, depth, order),
+  )
+  candidates.sort(
+    (a, b) =>
+      a.rank - b.rank || a.order - b.order || a.path.localeCompare(b.path),
+  )
+  return candidates[0]?.path
+}
+
+/**
+ * Model arguments for llama-server and the one `[dev]` line naming the
+ * source: `LLAMA_MODEL_PATH` (-m), `LLAMA_HF` (-hf), else a discovered local
+ * file (-m), else the default `-hf` download. `findModel` is injectable and
+ * only called when neither variable is set.
+ */
+export function resolveLlamaModel({ env, findModel = () => undefined }) {
+  const modelPath = (env.LLAMA_MODEL_PATH ?? '').trim()
+  if (modelPath)
+    return {
+      args: ['-m', modelPath],
+      message: `[dev] llm model: ${modelPath} (LLAMA_MODEL_PATH)`,
+    }
+  const hf = (env.LLAMA_HF ?? '').trim()
+  if (hf)
+    return {
+      args: ['-hf', hf],
+      message: `[dev] llm model: -hf ${hf} (LLAMA_HF; llama-server downloads it on first use)`,
+    }
+  const found = findModel()
+  if (found)
+    return {
+      args: ['-m', found],
+      message: `[dev] llm model: found ${found} (pin another with LLAMA_MODEL_PATH in .env.local)`,
+    }
+  return {
+    args: ['-hf', DEFAULT_LLAMA_HF],
+    message: `[dev] llm model: no local Qwen3.5-4B GGUF found; using -hf ${DEFAULT_LLAMA_HF} (llama-server reuses its cache or downloads it on first run)`,
+  }
 }
 
 /**
@@ -293,6 +448,9 @@ export function devChildSpecs({
   exists = existsSync,
   // `{ command }` from `resolveLlamaServer`; absent/`null` leaves llm and q out.
   llm = null,
+  // Injectable local-model search (`findQwenModel`); none found by default so
+  // the function stays pure.
+  findModel = () => undefined,
 }) {
   const serverCwd = `${root}/server`
   const hasEnvFile = exists(`${serverCwd}/.env`)
@@ -368,10 +526,7 @@ export function devChildSpecs({
 
   function llmChildren() {
     const port = String(llamaPort(env))
-    const modelPath = (env.LLAMA_MODEL_PATH ?? '').trim()
-    const model = modelPath
-      ? ['-m', modelPath]
-      : ['-hf', (env.LLAMA_HF ?? '').trim() || DEFAULT_LLAMA_HF]
+    const model = resolveLlamaModel({ env, findModel }).args
     return [
       {
         name: 'llm',

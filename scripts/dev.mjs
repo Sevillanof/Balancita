@@ -5,14 +5,20 @@ import { dirname, resolve } from 'node:path'
 import {
   describeChildExit,
   devChildSpecs,
+  findQwenModel,
   llamaPort,
+  loadDevEnv,
   planStartup,
+  resolveLlamaModel,
   resolveLlamaServer,
   resolvePython,
   signalChild,
 } from './dev-provider-env.mjs'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+// <root>/.env.local and <root>/.env feed the dev children; the real
+// environment wins over both.
+const env = loadDevEnv({ root, env: process.env })
 // Optional backends: when one fails the others (and the app) keep running.
 const optionalChildren = new Set([
   'mock',
@@ -34,8 +40,8 @@ const exitLabels = {
   q: 'The LLM decision service (new LLM decisions)',
 }
 // The optional model: never blocks startup, one [dev] line when it is skipped.
-const llama = resolveLlamaServer({ env: process.env })
-const python = resolvePython({ env: process.env })
+const llama = resolveLlamaServer({ env })
+const python = resolvePython({ env })
 const llmEnabled = llama.command !== undefined && python.command !== undefined
 if (llama.command === undefined)
   process.stdout.write(`[dev] ${llama.message}\n`)
@@ -48,7 +54,7 @@ else if (python.command === undefined)
 // is only checked when that child will really start.
 const plan = await planStartup({
   extra: llmEnabled
-    ? [{ name: 'llm', port: llamaPort(process.env), host: '127.0.0.1' }]
+    ? [{ name: 'llm', port: llamaPort(env), host: '127.0.0.1' }]
     : [],
 })
 if (!plan.start) {
@@ -65,13 +71,21 @@ else
   process.stdout.write(
     `[dev] Python for verdict/paper/scores: ${[python.command, ...python.prefixArgs].join(' ')} (${python.version})\n`,
   )
+// One search, one line: only when llm will really start.
+let llmModelPath
+if (llmEnabled) {
+  const model = resolveLlamaModel({ env, findModel: findQwenModel })
+  llmModelPath = model.args[0] === '-m' ? model.args[1] : undefined
+  process.stdout.write(`${model.message}\n`)
+}
 const useGroups = process.platform !== 'win32'
 const children = devChildSpecs({
   root,
-  env: process.env,
+  env,
   python:
     python.command === undefined ? { unavailable: python.failure } : python,
   llm: llama,
+  findModel: () => llmModelPath,
 }).map(({ name, command, cwd, args, env }) => {
   const child = spawn(command ?? process.execPath, args, {
     cwd,

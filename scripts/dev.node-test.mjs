@@ -5,8 +5,11 @@ import {
   describeChildExit,
   devChildSpecs,
   devProxyConfig,
+  findQwenModel,
   llamaPort,
+  loadDevEnv,
   planStartup,
+  resolveLlamaModel,
   resolveLlamaServer,
   resolvePython,
   signalChild,
@@ -701,5 +704,259 @@ describe('port check includes llm only when enabled', () => {
     })
     assert.equal(plan.start, false)
     assert.match(plan.messages[0], /8088 \(llm\)/)
+  })
+})
+
+// Fake filesystem: `files` maps absolute paths to true (complete file) or false
+// (dangling symlink / empty). Directories are derived from the paths.
+function fakeFs(files) {
+  const paths = Object.keys(files)
+  return {
+    readdir(dir) {
+      const prefix = dir.endsWith('/') ? dir : `${dir}/`
+      const entries = new Map()
+      for (const path of paths) {
+        if (!path.startsWith(prefix)) continue
+        const [name, ...rest] = path.slice(prefix.length).split('/')
+        entries.set(name, rest.length > 0)
+      }
+      return [...entries].map(([name, directory]) => ({ name, directory }))
+    },
+    isFile: (path) => files[path] === true,
+  }
+}
+
+describe('loadDevEnv', () => {
+  const files = {
+    '/repo/.env': 'A=env\nB=env\nC=env\n# comment\n\nQUOTED="a b"\n',
+    '/repo/.env.local': "B=local\nC=local\nSINGLE='x y'\n",
+  }
+  const read = (path) => files[path]
+
+  it('lets process.env win over .env.local over .env', () => {
+    const env = loadDevEnv({ root: '/repo', env: { C: 'real' }, read })
+    assert.equal(env.A, 'env')
+    assert.equal(env.B, 'local')
+    assert.equal(env.C, 'real')
+  })
+
+  it('parses comments, blank lines and quotes', () => {
+    const env = loadDevEnv({ root: '/repo', env: {}, read })
+    assert.equal(env.QUOTED, 'a b')
+    assert.equal(env.SINGLE, 'x y')
+    assert.ok(!Object.keys(env).some((key) => key.startsWith('#')))
+  })
+
+  it('tolerates missing files and does not mutate its input', () => {
+    const input = { X: '1' }
+    const env = loadDevEnv({ root: '/repo', env: input, read: () => undefined })
+    assert.deepEqual(env, { X: '1' })
+    assert.deepEqual(input, { X: '1' })
+  })
+})
+
+describe('findQwenModel', () => {
+  const home = '/home/me'
+  const mac = (files, env = {}) =>
+    findQwenModel({ env, home, platform: 'darwin', fs: fakeFs(files) })
+  const llamaCache = '/home/me/Library/Caches/llama.cpp'
+
+  it('finds a llama.cpp cache download on macOS, case-insensitively', () => {
+    const path = `${llamaCache}/unsloth_Qwen3.5-4B-GGUF_QWEN3.5-4B-Q8_0.GGUF`
+    assert.equal(mac({ [path]: true }), path)
+  })
+
+  it('uses ~/.cache/llama.cpp on Linux and LLAMA_CACHE when set', () => {
+    const linux = '/home/me/.cache/llama.cpp/Qwen3.5-4B-Q8_0.gguf'
+    assert.equal(
+      findQwenModel({
+        env: {},
+        home,
+        platform: 'linux',
+        fs: fakeFs({ [linux]: true }),
+      }),
+      linux,
+    )
+    const custom = '/data/cache/Qwen3.5-4B-Q8_0.gguf'
+    assert.equal(
+      mac({ [custom]: true }, { LLAMA_CACHE: '/data/cache' }),
+      custom,
+    )
+  })
+
+  it('finds the Hugging Face hub snapshot and honors HF_HOME', () => {
+    const snap = 'hub/models--unsloth--Qwen3.5-4B-GGUF/snapshots/abc123'
+    const path = `/home/me/.cache/huggingface/${snap}/Qwen3.5-4B-Q8_0.gguf`
+    assert.equal(mac({ [path]: true }), path)
+    const moved = `/hf/${snap}/Qwen3.5-4B-Q8_0.gguf`
+    assert.equal(mac({ [moved]: true }, { HF_HOME: '/hf' }), moved)
+  })
+
+  it('finds LM Studio, ~/models and ~/Downloads', () => {
+    for (const path of [
+      '/home/me/.lmstudio/models/unsloth/Qwen3.5-4B-GGUF/Qwen3.5-4B-Q8_0.gguf',
+      '/home/me/.cache/lm-studio/models/unsloth/Qwen3.5-4B-GGUF/qwen3.5-4b-q8_0.gguf',
+      '/home/me/models/qwen3.5-4b-q8_0.gguf',
+      '/home/me/Downloads/Qwen3.5-4B-Q8_0.gguf',
+    ])
+      assert.equal(mac({ [path]: true }), path)
+  })
+
+  it('stays shallow: deep or unrelated directories are not searched', () => {
+    assert.equal(
+      mac({ '/home/me/Downloads/a/b/Qwen3.5-4B-Q8_0.gguf': true }),
+      undefined,
+    )
+    assert.equal(
+      mac({ '/home/me/Documents/Qwen3.5-4B-Q8_0.gguf': true }),
+      undefined,
+    )
+  })
+
+  it('ignores other models and sizes (Qwen3.5-14B is not 4B)', () => {
+    assert.equal(
+      mac({
+        '/home/me/models/Qwen3.5-14B-Q8_0.gguf': true,
+        '/home/me/models/Qwen3-4B-Q8_0.gguf': true,
+      }),
+      undefined,
+    )
+  })
+
+  it('prefers Q8_0, then Q6_K, then any other match', () => {
+    const dir = '/home/me/models'
+    const q4 = `${dir}/Qwen3.5-4B-Q4_K_M.gguf`
+    const q6 = `${dir}/Qwen3.5-4B-Q6_K.gguf`
+    const q8 = `${dir}/Qwen3.5-4B-Q8_0.gguf`
+    assert.equal(mac({ [q4]: true, [q6]: true, [q8]: true }), q8)
+    assert.equal(mac({ [q4]: true, [q6]: true }), q6)
+    assert.equal(mac({ [q4]: true }), q4)
+  })
+
+  it('prefers the better quant over an earlier location, then the earlier location', () => {
+    const cache = `${llamaCache}/Qwen3.5-4B-Q6_K.gguf`
+    const downloads = '/home/me/Downloads/Qwen3.5-4B-Q8_0.gguf'
+    assert.equal(mac({ [cache]: true, [downloads]: true }), downloads)
+    const models = '/home/me/models/Qwen3.5-4B-Q8_0.gguf'
+    assert.equal(mac({ [downloads]: true, [models]: true }), models)
+  })
+
+  it('excludes mmproj files', () => {
+    assert.equal(
+      mac({
+        '/home/me/models/mmproj-Qwen3.5-4B-Q8_0.gguf': true,
+        '/home/me/models/Qwen3.5-4B-F16-mmproj.gguf': true,
+      }),
+      undefined,
+    )
+  })
+
+  it('excludes incomplete and partial downloads', () => {
+    assert.equal(
+      mac({
+        [`${llamaCache}/Qwen3.5-4B-Q8_0.gguf.downloadInProgress`]: true,
+        '/home/me/Downloads/Qwen3.5-4B-Q8_0.gguf.part': true,
+        '/home/me/Downloads/Qwen3.5-4B-Q8_0.gguf.crdownload': true,
+        '/home/me/Downloads/Qwen3.5-4B-Q8_0.gguf.incomplete': true,
+        '/home/me/models/Qwen3.5-4B-Q8_0.gguf': false,
+      }),
+      undefined,
+    )
+  })
+
+  it('does not throw when the filesystem fails', () => {
+    const fs = {
+      readdir() {
+        throw new Error('EACCES')
+      },
+      isFile: () => true,
+    }
+    assert.equal(
+      findQwenModel({ env: {}, home, platform: 'darwin', fs }),
+      undefined,
+    )
+  })
+})
+
+describe('resolveLlamaModel', () => {
+  const never = () => assert.fail('must not search')
+
+  it('uses LLAMA_MODEL_PATH without searching', () => {
+    const model = resolveLlamaModel({
+      env: { LLAMA_MODEL_PATH: '/m/x.gguf', LLAMA_HF: 'a/b' },
+      findModel: never,
+    })
+    assert.deepEqual(model.args, ['-m', '/m/x.gguf'])
+    assert.match(model.message, /^\[dev\] /)
+    assert.match(model.message, /LLAMA_MODEL_PATH/)
+    assert.match(model.message, /\/m\/x\.gguf/)
+  })
+
+  it('uses LLAMA_HF without searching', () => {
+    const model = resolveLlamaModel({
+      env: { LLAMA_HF: 'a/b:Q4' },
+      findModel: never,
+    })
+    assert.deepEqual(model.args, ['-hf', 'a/b:Q4'])
+    assert.match(model.message, /LLAMA_HF/)
+  })
+
+  it('uses a discovered file and names it', () => {
+    const model = resolveLlamaModel({
+      env: {},
+      findModel: () => '/home/me/models/Qwen3.5-4B-Q8_0.gguf',
+    })
+    assert.deepEqual(model.args, ['-m', '/home/me/models/Qwen3.5-4B-Q8_0.gguf'])
+    assert.match(
+      model.message,
+      /found \/home\/me\/models\/Qwen3\.5-4B-Q8_0\.gguf/,
+    )
+    assert.match(model.message, /LLAMA_MODEL_PATH/)
+    assert.ok(!model.message.includes('\n'))
+  })
+
+  it('falls back to the default -hf model when nothing is found', () => {
+    const model = resolveLlamaModel({ env: {}, findModel: () => undefined })
+    assert.deepEqual(model.args, ['-hf', 'unsloth/Qwen3.5-4B-GGUF:Q8_0'])
+    assert.match(model.message, /-hf unsloth\/Qwen3\.5-4B-GGUF:Q8_0/)
+  })
+
+  it('treats blank env values as unset', () => {
+    const model = resolveLlamaModel({
+      env: { LLAMA_MODEL_PATH: ' ', LLAMA_HF: '' },
+      findModel: () => '/x/Qwen3.5-4B-Q8_0.gguf',
+    })
+    assert.deepEqual(model.args, ['-m', '/x/Qwen3.5-4B-Q8_0.gguf'])
+  })
+})
+
+describe('devChildSpecs model selection', () => {
+  const specs = (env, findModel) =>
+    devChildSpecs({
+      root,
+      env,
+      allowedFlags: noFlags,
+      python: { command: 'python3', prefixArgs: [] },
+      llm: { command: 'llama-server' },
+      findModel,
+    }).find((spec) => spec.name === 'llm')
+
+  it('passes -m with the discovered file', () => {
+    const { args } = specs({}, () => '/found/Qwen3.5-4B-Q8_0.gguf')
+    assert.deepEqual(args.slice(0, 2), ['-m', '/found/Qwen3.5-4B-Q8_0.gguf'])
+  })
+
+  it('keeps LLAMA_MODEL_PATH first and falls back to -hf by default', () => {
+    assert.deepEqual(
+      specs({ LLAMA_MODEL_PATH: '/p.gguf' }, () => '/found.gguf').args.slice(
+        0,
+        2,
+      ),
+      ['-m', '/p.gguf'],
+    )
+    assert.deepEqual(specs({}).args.slice(0, 2), [
+      '-hf',
+      'unsloth/Qwen3.5-4B-GGUF:Q8_0',
+    ])
   })
 })

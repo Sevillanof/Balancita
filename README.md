@@ -92,9 +92,32 @@ stores the answer probabilities in `server/data/dev-live/futures-llm-decisions.s
 (append-only, single writer). They are optional and never block startup: they
 start only when `DECISIONS_ENABLED` is not `0`, the `llama-server` binary is on
 `PATH` (`brew install llama.cpp`) and Python is available; otherwise `dev`
-prints one `[dev]` line and goes on. Ctrl-C stops `llm` with the rest. Settings
-are read from the environment `pnpm run dev` runs in (export them or prefix the
-command; `dev` does not load `.env` files itself):
+prints one `[dev]` line and goes on. Ctrl-C stops `llm` with the rest.
+
+Plain `pnpm run dev` needs no extra typing for the model. When neither
+`LLAMA_MODEL_PATH` nor `LLAMA_HF` is set, `dev` looks for an already downloaded
+Qwen3.5-4B GGUF (`*qwen3.5-4b*.gguf`, any case; `mmproj` files and partial
+downloads are skipped) in the llama.cpp cache (`~/Library/Caches/llama.cpp` on
+macOS, `~/.cache/llama.cpp` on Linux, or `LLAMA_CACHE`), the Hugging Face hub
+cache (`unsloth/Qwen3.5-4B-GGUF`, under `HF_HOME`), LM Studio
+(`~/.lmstudio/models`, `~/.cache/lm-studio/models`), `~/models` and
+`~/Downloads`, a few levels deep at most. It prefers Q8_0, then Q6_K, then any
+other quant, and prints one line naming the choice, for example
+`[dev] llm model: found /Users/you/models/Qwen3.5-4B-Q8_0.gguf (...)`. If
+nothing is found it uses `-hf unsloth/Qwen3.5-4B-GGUF:Q8_0`, which reuses the
+llama.cpp cache if the model was fetched that way and otherwise downloads it
+(the `q` child logs `model unavailable` once while the model loads, then
+`model available again`).
+
+To pin the model, create `.env.local` (gitignored) in the repo root:
+
+```bash
+LLAMA_MODEL_PATH=/path/to/Qwen3.5-4B-Q8_0.gguf
+```
+
+`dev` loads `<repo>/.env.local` and then `<repo>/.env` for its children; real
+environment variables win over `.env.local`, which wins over `.env`. The
+variables:
 
 | Variable             | Default                        | Meaning                                    |
 | -------------------- | ------------------------------ | ------------------------------------------ |
