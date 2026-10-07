@@ -19,6 +19,7 @@ import sqlite3
 import time
 
 from .canonical import canonical_hash
+from .futures_costs import MAKER_RATE, TAKER_RATE
 from .futures_indicators import FEATURE_SCHEMA_VERSION, calculate_features
 from .futures_products import is_product_id, resolve_products
 from .futures_strategies import (
@@ -44,8 +45,8 @@ VERDICT_CONFIG = {
     # is part of the verdict identity.
     "window_1m": 200,
     "window_5m": 200,
-    "maker_rate": "0.0002",
-    "taker_rate": "0.0005",
+    "maker_rate": MAKER_RATE,
+    "taker_rate": TAKER_RATE,
 }
 
 
@@ -126,7 +127,8 @@ def evaluate_verdict(one_minute, five_minute, *, previous_regime, config, candid
     regime = update_regime(previous_regime, trend.get("ema9"), trend.get("ema21"), trend.get("atr14"))
 
     age_ms = decision - close_cutoff
-    cost = {"maker_rate": config["maker_rate"], "taker_rate": config["taker_rate"]}
+    cost = {"maker_rate": config["maker_rate"], "taker_rate": config["taker_rate"],
+            "product_id": config.get("product_id")}
     proposals = [
         propose(
             strategy_id, features, previous=previous, trend=trend, regime=regime,

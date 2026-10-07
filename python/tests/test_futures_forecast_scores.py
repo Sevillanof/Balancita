@@ -172,15 +172,15 @@ class HorizonReturnTests(Rig):
             DAY + 1, overrides,
         )
         returns = self.returns()
-        # Round trip: 2 x 5 bp taker + 2 bp slippage proxy = 12 bp.
-        self.assertEqual(returns[("proposal", C27, 15)], ("10", "-2"))
-        self.assertEqual(returns[("proposal", C27, 60)], ("-10", "-22"))
-        self.assertEqual(returns[("proposal", C27, 240)], ("50", "38"))
-        self.assertEqual(returns[("proposal", C27, 1440)], ("-100", "-112"))
-        self.assertEqual(returns[("proposal", C25, 15)], ("-10", "-22"))
-        self.assertEqual(returns[("proposal", C25, 60)], ("10", "-2"))
-        self.assertEqual(returns[("proposal", C25, 240)], ("-50", "-62"))
-        self.assertEqual(returns[("proposal", C25, 1440)], ("100", "88"))
+        # Round trip: 2 x 5 bp taker + 2 x 0.06 bp XBT impact = 10.12 bp.
+        self.assertEqual(returns[("proposal", C27, 15)], ("10", "-0.12"))
+        self.assertEqual(returns[("proposal", C27, 60)], ("-10", "-20.12"))
+        self.assertEqual(returns[("proposal", C27, 240)], ("50", "39.88"))
+        self.assertEqual(returns[("proposal", C27, 1440)], ("-100", "-110.12"))
+        self.assertEqual(returns[("proposal", C25, 15)], ("-10", "-20.12"))
+        self.assertEqual(returns[("proposal", C25, 60)], ("10", "-0.12"))
+        self.assertEqual(returns[("proposal", C25, 240)], ("-50", "-60.12"))
+        self.assertEqual(returns[("proposal", C25, 1440)], ("100", "89.88"))
         entry = rows(self.scores(), "SELECT entry_price, side FROM paper_futures_forecasts "
                                     "WHERE strategy_id='{}'".format(C25))
         self.assertEqual(entry, [("100000", "SHORT")])
@@ -194,8 +194,8 @@ class HorizonReturnTests(Rig):
         sources = rows(self.scores(), "SELECT source, strategy_id, side FROM paper_futures_forecasts ORDER BY 1")
         self.assertEqual(sources, [("proposal", C27, "LONG"), ("selected", C27, "LONG")])
         returns = self.returns()
-        self.assertEqual(returns[("selected", C27, 15)], ("10", "-2"))
-        self.assertEqual(returns[("proposal", C27, 15)], ("10", "-2"))
+        self.assertEqual(returns[("selected", C27, 15)], ("10", "-0.12"))
+        self.assertEqual(returns[("proposal", C27, 15)], ("10", "-0.12"))
 
     def test_metadata_regime_hour_lag_and_backfill_flag(self):
         # Entry bucket 00:00 closes at 00:01 UTC; use a later hour for the second verdict.
@@ -305,8 +305,8 @@ class NoLookaheadTests(Rig):
         }
         self.scored([proposal(C27, "LONG", stop="1", target="900000")], DAY + 2, overrides)
         returns = self.returns()
-        self.assertEqual(returns[("proposal", C27, 15)], ("10", "-2"))
-        self.assertEqual(returns[("proposal", C27, 1440)], ("0", "-12"))
+        self.assertEqual(returns[("proposal", C27, 15)], ("10", "-0.12"))
+        self.assertEqual(returns[("proposal", C27, 1440)], ("0", "-10.12"))
         excursion = rows(self.scores(), "SELECT mfe_bp, mae_bp FROM paper_futures_forecast_excursions")
         self.assertEqual(excursion, [("10", "0")])
         self.assertEqual(self.barriers()[("proposal", C27)], ("neither", 0, None))
@@ -346,14 +346,14 @@ class AggregateTests(Rig):
         long_row = by[(C27, 15)]
         short_row = by[(C25, 15)]
         self.assertEqual(long_row["side"], "LONG")
-        self.assertEqual(long_row["model"]["mean_net_bp"], "-2")
+        self.assertEqual(long_row["model"]["mean_net_bp"], "-0.12")
         # Buy & hold over the same window: +10 gross, -12 cost.
-        self.assertEqual(long_row["baseline"]["mean_net_bp"], "-2")
-        self.assertEqual(long_row["inverse"]["mean_net_bp"], "-22")
-        self.assertEqual(short_row["model"]["mean_net_bp"], "-22")
+        self.assertEqual(long_row["baseline"]["mean_net_bp"], "-0.12")
+        self.assertEqual(long_row["inverse"]["mean_net_bp"], "-20.12")
+        self.assertEqual(short_row["model"]["mean_net_bp"], "-20.12")
         # Buy & hold ignores the side: still +10 gross for a SHORT forecast.
-        self.assertEqual(short_row["baseline"]["mean_net_bp"], "-2")
-        self.assertEqual(short_row["inverse"]["mean_net_bp"], "-2")
+        self.assertEqual(short_row["baseline"]["mean_net_bp"], "-0.12")
+        self.assertEqual(short_row["inverse"]["mean_net_bp"], "-0.12")
         self.assertEqual(long_row["model"]["n"], 1)
         self.assertEqual(long_row["model"]["hit_rate"], "0")
 
@@ -396,7 +396,7 @@ class AggregateTests(Rig):
         self.assertIn(C27, text)
         self.assertIn("LONG", text)
         self.assertIn("15m", text)
-        self.assertIn("-2", text)
+        self.assertIn("-0.12", text)
 
 
 class ReplayTests(unittest.TestCase):
@@ -507,8 +507,8 @@ class MultiProductTests(Rig):
 
     def test_each_product_is_scored_against_its_own_candles(self):
         self.two_products()
-        self.assertEqual(self.returns(BTC)[("proposal", C27, 15)], ("10", "-2"))
-        self.assertEqual(self.returns(ETH)[("proposal", C27, 15)], ("-30", "-42"))
+        self.assertEqual(self.returns(BTC)[("proposal", C27, 15)], ("10", "-0.12"))
+        self.assertEqual(self.returns(ETH)[("proposal", C27, 15)], ("-30", "-40.38"))
         self.assertEqual(self.returns(SOL), {})
         keys = [row[1] for row in rows(self.scores(), "PRAGMA table_info(paper_futures_forecasts)") if row[5]]
         self.assertEqual(keys, ["product_id", "bucket_start", "source", "strategy_id"])
@@ -540,7 +540,7 @@ class MultiProductTests(Rig):
         # Once the entry candle lands, ETH catches up.
         self.market.insert(series(16, overrides={15: {"close": "99700", "low": "99700"}}), ETH)
         self.service.poll()
-        self.assertEqual(self.returns(ETH)[("proposal", C27, 15)], ("-30", "-42"))
+        self.assertEqual(self.returns(ETH)[("proposal", C27, 15)], ("-30", "-40.38"))
 
     def test_report_groups_by_product_first_and_can_filter_one(self):
         self.two_products()
@@ -548,11 +548,11 @@ class MultiProductTests(Rig):
         self.assertEqual([row["product"] for row in report], [ETH, BTC] if ETH < BTC else [BTC, ETH])
         self.assertEqual([row["product"] for row in report], sorted(row["product"] for row in report))
         by = {row["product"]: row for row in report}
-        self.assertEqual(by[BTC]["model"]["mean_net_bp"], "-2")
-        self.assertEqual(by[ETH]["model"]["mean_net_bp"], "-42")
+        self.assertEqual(by[BTC]["model"]["mean_net_bp"], "-0.12")
+        self.assertEqual(by[ETH]["model"]["mean_net_bp"], "-40.38")
         # Buy & hold and the inverse control are per product too.
-        self.assertEqual(by[ETH]["baseline"]["mean_net_bp"], "-42")
-        self.assertEqual(by[ETH]["inverse"]["mean_net_bp"], "18")
+        self.assertEqual(by[ETH]["baseline"]["mean_net_bp"], "-40.38")
+        self.assertEqual(by[ETH]["inverse"]["mean_net_bp"], "19.62")
         only = forecast_score_report(self.scores(), product=ETH)
         self.assertEqual([row["product"] for row in only], [ETH])
         self.assertEqual(forecast_score_report(self.scores(), product=SOL), [])

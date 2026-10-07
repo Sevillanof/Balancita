@@ -25,7 +25,7 @@ ACTIVE = ("accepted", "partially_filled")
 LEGACY_GOLDEN = {
     "lab": "412d101091eca054a301e801afc1d78b482136168fc1b4086fdcfecce747eb5e",
     "risk_funding": "365cf4cd622003069a9f4d992d71e07c38081ff8d0d2a00a26135d34d224536a",
-    "risk_open": "7628868c9e990acf96ffb038786dbcf74bdd62a009b06ed8c7175705e798f260",
+    "risk_open": "db2dc4fa145065aee528ee8847f84c6d333b8f9349e22d7df1c72f46e33e1395",
 }
 
 

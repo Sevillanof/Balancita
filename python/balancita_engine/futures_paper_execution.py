@@ -38,6 +38,7 @@ from collections import deque
 from decimal import ROUND_FLOOR, Decimal, InvalidOperation, localcontext
 
 from .canonical import canonical_json, normalize_decimal
+from .futures_costs import MAKER_RATE, TAKER_RATE
 from .futures_ledger import FuturesLedger
 from .futures_strategies import C25_ID, C26_ID, C27_ID, C28_ID, propose
 
@@ -50,8 +51,8 @@ PAPER_EXECUTION_CONFIG = {
     "execution_latency_ms": 100,
     "max_entry_wait_ms": 5000,
     "max_spread_bps": "5",
-    "maker_rate": "0.0002",
-    "taker_rate": "0.0005",
+    "maker_rate": MAKER_RATE,
+    "taker_rate": TAKER_RATE,
     "daily_loss_fraction": "0.01",
     "time_stop_ms": 1_800_000,
     "max_verdict_lag_ms": 15_000,
