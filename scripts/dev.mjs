@@ -1,6 +1,12 @@
 import { spawn } from 'node:child_process'
 import { mkdirSync, writeFileSync } from 'node:fs'
-import { removeDevPid, sweepStale, writeDevPid } from './dev-stale.mjs'
+import {
+  mismatchedDb,
+  removeDevPid,
+  rotateDb,
+  sweepStale,
+  writeDevPid,
+} from './dev-stale.mjs'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
 import {
@@ -153,13 +159,14 @@ function launch(spec) {
     detached: useGroups,
     env,
   })
-  const state = { sawAddrInUse: false, sawLocked: false }
+  const state = { sawAddrInUse: false, sawLocked: false, staleDb: undefined }
   for (const stream of ['stdout', 'stderr']) {
     child[stream].on('data', (chunk) => {
       const text = chunk.toString()
       if (/EADDRINUSE|Address already in use/.test(text))
         state.sawAddrInUse = true
       if (/is already writing/i.test(text)) state.sawLocked = true
+      state.staleDb ??= mismatchedDb(text)
       for (const line of text.split(/(?<=\n)/))
         if (line && (verbose || !noise.some((re) => re.test(line))))
           process[stream].write(`[${name}] ${line}`)
@@ -229,6 +236,28 @@ function watch(entry) {
       process.stderr.write(
         `${describeChildExit({ name, code, signal, sawAddrInUse: true })}\n`,
       )
+    if (state.staleDb !== undefined && !health.rotated?.has(state.staleDb)) {
+      // Config changed since this DB was written: move it aside, start fresh.
+      const backup = rotateDb(liveDir, state.staleDb)
+      if (backup !== undefined) {
+        ;(health.rotated ??= new Set()).add(state.staleDb)
+        process.stdout.write(
+          `[dev] ${name}: ${state.staleDb}.sqlite was written with an older config; moved to ${backup} and starting a fresh one.\n`,
+        )
+        health.status = 'restarting'
+        writeHealth()
+        const next = launch(entry.spec)
+        entry.child = next.child
+        entry.state = next.state
+        health.restarts += 1
+        health.status = 'running'
+        health.since = Date.now()
+        health.startedAt = Date.now()
+        writeHealth()
+        watch(entry)
+        return
+      }
+    }
     if (optionalChildren.has(name)) {
       const uptimeMs = Date.now() - health.startedAt
       if (uptimeMs >= 60_000) health.streak = 0
