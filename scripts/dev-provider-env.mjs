@@ -712,6 +712,8 @@ export function devChildSpecs({
           strategiesDb,
           '--verdicts-db',
           verdictsDb,
+          '--market-db',
+          marketDb,
           '--port',
           String(STRATEGIES_PORT),
         ],
