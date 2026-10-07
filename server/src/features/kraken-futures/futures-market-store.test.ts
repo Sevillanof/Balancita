@@ -425,7 +425,7 @@ describe('FuturesMarketStore', () => {
       INSERT INTO market_observations VALUES('spot-fixture','untouched');`)
     fixture.close()
     const store = new FuturesMarketStore(path)
-    expect(store.schemaVersion()).toBe(5)
+    expect(store.schemaVersion()).toBe(6)
     store.append(event)
     store.close()
     const reopened = new DatabaseSync(path)
@@ -631,9 +631,11 @@ describe('FuturesMarketStore official candles', () => {
   ): void {
     const raw = new DatabaseSync(path)
     raw.exec(`
+      DROP TABLE paper_futures_analytics_points;
+      DROP TABLE paper_futures_analytics_responses;
       DROP TABLE paper_futures_official_candles;
       DROP TABLE paper_futures_official_candle_responses;
-      DELETE FROM paper_futures_market_migrations WHERE version=5;
+      DELETE FROM paper_futures_market_migrations WHERE version>=5;
       CREATE TABLE paper_futures_official_candle_responses(
         sha256 TEXT PRIMARY KEY, interval_ms INTEGER NOT NULL, from_ms INTEGER NOT NULL,
         to_ms INTEGER NOT NULL, received_at INTEGER NOT NULL, raw_response TEXT NOT NULL
@@ -823,11 +825,19 @@ describe('FuturesMarketStore official candles', () => {
     v3.close()
   })
 
-  it('opens schema 3, schema 4 and schema 5 databases read-only', () => {
+  it('opens schema 3 to schema 6 databases read-only', () => {
     const path = dbPath()
     new FuturesMarketStore(path).close()
+    const v6 = new FuturesMarketStore(path, { readOnly: true })
+    expect(v6.schemaVersion()).toBe(6)
+    v6.close()
+    const drop = new DatabaseSync(path)
+    drop.exec('DELETE FROM paper_futures_market_migrations WHERE version=6')
+    drop.close()
     const v5 = new FuturesMarketStore(path, { readOnly: true })
     expect(v5.schemaVersion()).toBe(5)
+    expect(v5.analyticsSince(BTC, 'cvd', M, 0, 10)).toEqual([])
+    expect(v5.latestAnalyticsBucket(BTC, 'cvd', M)).toBeUndefined()
     v5.close()
     downgradeToSchema4(path, [])
     const v4 = new FuturesMarketStore(path, { readOnly: true })
@@ -942,7 +952,7 @@ describe('FuturesMarketStore official candles', () => {
       expect(before.candles).toHaveLength(4)
 
       const store = new FuturesMarketStore(path)
-      expect(store.schemaVersion()).toBe(5)
+      expect(store.schemaVersion()).toBe(6)
       store.close()
 
       const after = {
@@ -998,7 +1008,7 @@ describe('FuturesMarketStore official candles', () => {
 
       // The migrated file serves the old data as PF_XBTUSD and takes new products.
       const again = new FuturesMarketStore(path)
-      expect(again.schemaVersion()).toBe(5)
+      expect(again.schemaVersion()).toBe(6)
       expect(
         again
           .officialCandlesAsOf(BTC, M, T + 9 * M, 10)
@@ -1041,7 +1051,7 @@ describe('FuturesMarketStore official candles', () => {
       new FuturesMarketStore(path).close()
       downgradeToSchema4(path, [])
       const store = new FuturesMarketStore(path)
-      expect(store.schemaVersion()).toBe(5)
+      expect(store.schemaVersion()).toBe(6)
       expect(store.maxOfficialRowid()).toBe(0)
       store.close()
     })

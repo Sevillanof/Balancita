@@ -42,6 +42,7 @@ Every sustained live run of the single process surfaced a new engine defect: the
 - [x] PS-05c [S] Fix the funding-pause overwrite in the legacy runtime (`python/balancita_engine/futures_runtime.py:2393-2404`), with a test. The legacy runtime is still used by the MOCK local terminal.
 - [x] PS-05d [L] Retire the legacy live engine once D is proven: per-delta driver, market-context transport, operative bridge, `futuresSourceFailed` latch, `FUTURES_MODE=mock/replay` in `app.ts`, and the `DEV_LIVE_SINGLE_PROCESS` rollback. The dev MOCK child, which uses the local terminal, stays.
 - [ ] PS-06 [S] Process supervision + per-process health in UI.
+- [x] PS-09 [M] Everything useful Kraken publishes, captured and on the terminal chart: public analytics (buy/sell aggressor volume, open interest, liquidations, long/short and top-trader positioning, order book depth and slippage, rolling volatility), official 15m/1h/4h/1d candles, the full ticker (24 h stats, mark/index/premium, bid/ask sizes, funding now and next); per-product order book depth for all pinned products (trading costs). Chart: timeframes, EMA/Bollinger/Donchian/VWAP, flow/OI/liquidations/long-short/RSI panes, entry/stop/target lines, exit markers.
 
 ## Acceptance (PS-01)
 
@@ -296,6 +297,12 @@ Every sustained live run of the single process surfaced a new engine defect: the
     - It runs as an optional dev child (`NEWS_ENABLED=0` turns it off).
   - Legacy Gemini news polling in the `server` child stays off by default and is not retired here.
   - The container egress proxy blocked every real feed, so the Mac must confirm which feeds work.
+
+- 2026-10-07 PS-09, market data for the chart (thread "Datos del gráfico de Terminal").
+  - Capture A also polls Kraken's public analytics (`/api/charts/v1/analytics/<product>/<metric>`) into market DB schema 6: `paper_futures_analytics_responses` (raw + hash) and `paper_futures_analytics_points` (flat values per bucket, a new revision only when values change; append-only triggers). PF_XBTUSD: 7 metrics at 1m (24 h backfill) and 1h (60 d); every pinned product: `orderbook` at 1m (best bid/ask, liquidity within 0.05-100 %, slippage for 1k-1M USD).
+  - Official candles add 15m/1h/4h/1d for PF_XBTUSD only (no verdict reads them).
+  - Gateway B: `GET /api/terminal/chart?interval_ms=` (official candles, the unpublished tail built from finer official candles and the live 1m, analytics folded into the buckets, latest depth) and `market.ticker_stats` from the raw ticker in bootstrap, snapshot and `market.updated`.
+  - Evidence: unit tests for parser, store, capture, gateway and chart model; live run against Kraken from the cloud with every series filled.
 
 ## Next step
 

@@ -39,7 +39,11 @@ describe('official Kraken candles', () => {
     expect(officialCandlesUrl('PF_ETHUSD', MINUTE, T0, T0)).toContain(
       '/trade/PF_ETHUSD/1m?',
     )
-    expect(() => officialCandlesUrl(BTC, 900_000, T0, T0)).toThrow(/interval/)
+    expect(officialCandlesUrl(BTC, 900_000, T0, T0)).toContain('/15m?')
+    expect(officialCandlesUrl(BTC, 3_600_000, T0, T0)).toContain('/1h?')
+    expect(officialCandlesUrl(BTC, 14_400_000, T0, T0)).toContain('/4h?')
+    expect(officialCandlesUrl(BTC, 86_400_000, T0, T0)).toContain('/1d?')
+    expect(() => officialCandlesUrl(BTC, 1_800_000, T0, T0)).toThrow(/interval/)
     for (const bad of ['', 'pf_ethusd', 'FI_XBTUSD_261225', 'PF_ETH/../x'])
       expect(() => officialCandlesUrl(bad, MINUTE, T0, T0)).toThrow(/product/i)
   })
