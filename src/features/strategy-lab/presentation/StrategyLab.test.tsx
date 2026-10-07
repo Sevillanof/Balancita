@@ -2,7 +2,7 @@ import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import StrategyLab from './StrategyLab.tsx'
-import { exampleStrategyApi } from '../infrastructure/example-strategy-api.ts'
+import { exampleStrategyApi } from '../testing/example-strategy-api.ts'
 import {
   syntheticCandles,
   type LabCandles,
@@ -323,5 +323,20 @@ describe('StrategyLab', () => {
       'GET /api-strategies/ranking?product=PF_XBTUSD&days=30',
     )
     expect(await screen.findByRole('alert')).toHaveTextContent('sin veredictos')
+  })
+})
+
+describe('StrategyLab without the registry', () => {
+  it('shows the error and no made-up strategies', async () => {
+    render(
+      <StrategyLab
+        loadCandles={() => Promise.resolve(market)}
+        connect={() => Promise.reject(new Error('El registro no respondió.'))}
+        loadQwen={() => Promise.resolve(null as never)}
+      />,
+    )
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      /El registro no respondió\. No se muestran datos de ejemplo/,
+    )
   })
 })

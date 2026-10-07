@@ -2,6 +2,8 @@
 
 from decimal import Decimal, InvalidOperation, ROUND_CEILING, ROUND_FLOOR, localcontext
 
+from .futures_costs import side_impact_bps
+
 
 C25_ID = "c25-pullback-perp-v1"
 C26_ID = "c26-reversion-perp-v1"
@@ -229,9 +231,10 @@ def propose(strategy_id, current, *, previous=None, trend=None, regime="unknown"
     result["target_distance"] = _text(abs(_decimal(target, "proposed target") - price))
     result["invalidation"] = invalidation
     if cost_config is not None:
-        maker = _decimal(cost_config.get("maker_rate"), "maker rate")
         taker = _decimal(cost_config.get("taker_rate"), "taker rate")
-        result["estimated_round_trip_cost_bps"] = _text((maker + taker) * Decimal("10000"))
+        # What D charges: taker on both legs plus the product's execution cost.
+        execution = 2 * side_impact_bps(cost_config.get("product_id"))
+        result["estimated_round_trip_cost_bps"] = _text(2 * taker * Decimal("10000") + execution)
     return result
 
 

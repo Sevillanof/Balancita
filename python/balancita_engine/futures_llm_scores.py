@@ -33,6 +33,7 @@ import sqlite3
 import sys
 from decimal import Decimal
 
+from .futures_costs import DEFAULT_PRODUCT, entry_fill, exit_fill, round_trip_cost_bps
 from .futures_strategy_backtest import (
     BOOK_CONFIG,
     ONE_MINUTE_MS,
@@ -82,7 +83,7 @@ def _close(verdict):
 def score_decisions(decisions, verdicts, *, book=BOOK_CONFIG, horizon_min=HORIZON_MIN):
     """One row per decision: ``point`` +1 / -1 (``None`` while pending) and the net bp it earned."""
     by_bucket = {v["bucket_start_ms"]: v for v in verdicts}
-    round_trip_bp = Decimal(book["taker_rate"]) * 2 * TEN_THOUSAND
+    round_trip_bp = round_trip_cost_bps(book.get("product_id", DEFAULT_PRODUCT))
     rows = []
     for decision in decisions:
         bucket, chosen = decision["bucket_start"], decision["chosen"]
@@ -113,6 +114,7 @@ def score_decisions(decisions, verdicts, *, book=BOOK_CONFIG, horizon_min=HORIZO
 def simulate_book(decisions, verdicts, *, book=BOOK_CONFIG, horizon_min=HORIZON_MIN):
     """Closed trades of Qwen's decisions in the backtest's book (same fields as the backtest trades)."""
     taker = Decimal(book["taker_rate"])
+    product = book.get("product_id", DEFAULT_PRODUCT)
     buffer_rate = Decimal(book["cost_buffer_rate"])
     risk_fraction = Decimal(book["risk_fraction"])
     max_notional = Decimal(book["max_notional_usd"])
@@ -141,6 +143,7 @@ def simulate_book(decisions, verdicts, *, book=BOOK_CONFIG, horizon_min=HORIZON_
                 elif bucket + ONE_MINUTE_MS - position["opened_at"] >= horizon_min * ONE_MINUTE_MS:
                     exit_price, reason = Decimal(close), "time_stop"
             if exit_price is not None:
+                exit_price = exit_fill(exit_price, position["side"], product, reason)
                 entry, quantity = position["entry"], position["quantity"]
                 gross = (exit_price - entry) * quantity if long else (entry - exit_price) * quantity
                 pnl = gross - (entry + exit_price) * quantity * taker
@@ -177,7 +180,7 @@ def simulate_book(decisions, verdicts, *, book=BOOK_CONFIG, horizon_min=HORIZON_
         if quantity <= 0:
             skipped.append({"bucket_ms": bucket, "side": side, "reason": "no_equity"})
             continue
-        position = {"side": side, "entry": entry, "stop": stop, "target": target, "quantity": quantity,
+        position = {"side": side, "entry": entry_fill(entry, side, product), "stop": stop, "target": target, "quantity": quantity,
                     "opened_bucket": bucket, "opened_at": bucket + ONE_MINUTE_MS}
     return trades, skipped
 

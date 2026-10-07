@@ -238,18 +238,19 @@ export function httpStrategyApi(
   }
 }
 
-/** The registry if it answers, else the in-browser example. */
+/** The registry if it answers; otherwise throws (no made-up data). */
 export async function connectStrategyApi(
   fetcher: typeof fetch = (...args) => fetch(...args),
-  fallback: () => Promise<StrategyApi>,
 ): Promise<StrategyApi> {
+  let detail = 'sin respuesta'
   try {
     const response = await fetcher(`${STRATEGIES_API_BASE}/health`)
     const body = (await response.json()) as { status?: string }
     if (response.ok && body.status === 'ok')
       return httpStrategyApi(STRATEGIES_API_BASE, fetcher)
+    detail = `estado ${response.status}`
   } catch {
-    // Not running: fall through to the example data.
+    // Not running.
   }
-  return fallback()
+  throw new Error(`El registro de estrategias no respondió (${detail}).`)
 }

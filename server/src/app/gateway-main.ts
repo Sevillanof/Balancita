@@ -49,6 +49,7 @@ async function main(): Promise<void> {
       process.env.BALANCITA_PYTHON_STATUS,
     ),
     qwenScores: qwenScoresFrom(process.env),
+    processHealthPath: process.env.DEV_HEALTH_FILE || undefined,
     staleAfterMs: config.marketStaleAfterMs,
     allowedOrigins: [
       config.corsOrigin,

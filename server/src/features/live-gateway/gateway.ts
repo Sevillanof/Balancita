@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { isIP } from 'node:net'
 import type { IncomingMessage } from 'node:http'
@@ -31,6 +32,8 @@ export interface LiveGatewayOptions {
   readonly engineUnavailableReason?: string
   /** Hits, misses and returns of Qwen's decisions. Absent: reported `off`. */
   readonly qwenScores?: QwenScores
+  /** JSON written by the dev supervisor with each process's health. */
+  readonly processHealthPath?: string
   readonly allowedOrigins?: readonly string[]
   readonly staleAfterMs?: number
   readonly pollMs?: number
@@ -218,6 +221,7 @@ export async function buildLiveGateway(
     process: 'live-gateway',
     capture: follower.status(),
     engine: engine.engineStatus(),
+    processes: readProcessHealth(options.processHealthPath),
   }))
   const qwenScores =
     options.qwenScores ?? qwenScoresOff('decisions_not_configured')
@@ -378,6 +382,16 @@ function isLoopback(address: string | undefined): boolean {
   const normalized = address.toLowerCase().replace(/^::ffff:/, '')
   if (normalized === '::1' || normalized === 'localhost') return true
   return isIP(normalized) === 4 && normalized.startsWith('127.')
+}
+
+/** The supervisor's health file, or null when absent or unreadable. */
+function readProcessHealth(path: string | undefined): unknown {
+  if (!path) return null
+  try {
+    return (JSON.parse(readFileSync(path, 'utf8')) as Row).processes ?? null
+  } catch {
+    return null
+  }
 }
 
 function reject(socket: Socket, status: number, reason: string): void {
