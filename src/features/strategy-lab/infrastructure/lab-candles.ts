@@ -2,7 +2,16 @@ import {
   loadTerminalBootstrap,
   terminalApiBase,
 } from '../../connected-trading/infrastructure/terminal-stream-client.ts'
-import type { LabCandle } from '../domain/indicators.ts'
+
+/** A closed 1m candle; `time` in seconds, like the terminal chart. */
+export type LabCandle = {
+  time: number
+  open: number
+  high: number
+  low: number
+  close: number
+  volume: number
+}
 
 export type LabCandleSource = 'live' | 'mock' | 'synthetic'
 

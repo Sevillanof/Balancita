@@ -1,0 +1,94 @@
+{
+  "schema": "balancita-strategy.v1",
+  "id": "c27-breakout-perp-v1",
+  "version": 1,
+  "name": "C27 Ruptura Donchian",
+  "description": "Entra cuando el cierre rompe el canal Donchian de 20 velas con volumen 1,25 veces la media previa.",
+  "params": {
+    "volume_multiplier": "1.25",
+    "stop_atr": "1.5",
+    "target_stop_ratio": "2"
+  },
+  "rules": {
+    "checks": [
+      {
+        "node": {
+          "available": "donchian_high_available",
+          "operand": "1m.donchian_high20"
+        }
+      },
+      {
+        "node": {
+          "available": "donchian_low_available",
+          "operand": "1m.donchian_low20"
+        }
+      },
+      {
+        "node": {
+          "available": "prior_volume_mean_available",
+          "operand": "1m.prior_volume_mean20"
+        }
+      },
+      {
+        "name": "long_break",
+        "node": {
+          "cmp": "close_breaks_prior_high",
+          "left": "1m.candidate_close",
+          "op": ">",
+          "right": "1m.donchian_high20"
+        }
+      },
+      {
+        "name": "short_break",
+        "node": {
+          "cmp": "close_breaks_prior_low",
+          "left": "1m.candidate_close",
+          "op": "<",
+          "right": "1m.donchian_low20"
+        }
+      },
+      {
+        "name": "volume_ok",
+        "node": {
+          "cmp": "volume_above_1_25_prior_mean",
+          "left": "1m.candidate_volume",
+          "op": ">",
+          "right": {
+            "mul": ["1m.prior_volume_mean20", "$volume_multiplier"]
+          }
+        }
+      }
+    ],
+    "sides": {
+      "LONG": {
+        "requires": ["long_break", "volume_ok"],
+        "reason": "c27_long_breakout",
+        "invalidation": "opposite_donchian_mid_cross@{1m.donchian_mid20}"
+      },
+      "SHORT": {
+        "requires": ["short_break", "volume_ok"],
+        "reason": "c27_short_breakout",
+        "invalidation": "opposite_donchian_mid_cross@{1m.donchian_mid20}"
+      }
+    },
+    "exit": {
+      "LONG": {
+        "cmp": "owner_close_crosses_frozen_donchian_mid",
+        "left": "1m.candidate_close",
+        "op": "<",
+        "right": "position.frozen_invalidation"
+      },
+      "SHORT": {
+        "cmp": "owner_close_crosses_frozen_donchian_mid",
+        "left": "1m.candidate_close",
+        "op": ">",
+        "right": "position.frozen_invalidation"
+      }
+    },
+    "risk": {
+      "stop_atr": "$stop_atr",
+      "target_stop_ratio": "$target_stop_ratio"
+    },
+    "horizon_minutes": 30
+  }
+}

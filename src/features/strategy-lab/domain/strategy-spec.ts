@@ -1,28 +1,54 @@
 /**
- * Front-side mirror of the declarative `balancita-strategy.v1` spec proposed
- * for PS-08a. The Python interpreter and the registry S own the canonical
- * shape; this module only keeps the Laboratorio editor and its in-browser
- * preview on the same vocabulary so swapping the data source is mechanical.
+ * Front-side types of `balancita-strategy.v1`, the spec the strategy registry
+ * S validates and runs (`futures_spec_strategy.py`). The registry is the
+ * authority: these helpers only read and patch a spec for the editor.
  */
 
 export const STRATEGY_SCHEMA = 'balancita-strategy.v1'
 
 export type Side = 'LONG' | 'SHORT'
 export type Comparator = '<' | '<=' | '>' | '>='
+export type Regime = 'unknown' | 'trend' | 'range'
 
-/** `left op right`, where an operand is a feature, a `$param` or a decimal. */
-export type Condition = {
-  left: string
+/** A feature (`1m.rsi14`), a `$param`, a decimal string or a product. */
+export type Operand = string | { mul: [Operand, Operand] }
+
+export type CmpNode = {
+  cmp: string
+  left: Operand
   op: Comparator
-  right: string
-  /** Optional `$param` or decimal the right operand is multiplied by. */
-  scale?: string
+  right: Operand
 }
 
-export type RuleNode =
-  Condition | { all: RuleNode[] } | { any: RuleNode[] } | { not: RuleNode }
+export type SpecNode =
+  | CmpNode
+  | { available: string; operand: Operand }
+  | { regime_in: Regime[]; code?: string }
+  | { not: SpecNode }
+  | { and: SpecNode[] }
+  | { all: SpecNode[] }
+  | { any: SpecNode[] }
 
-export type Regime = 'trend' | 'range'
+export type SideEntry = {
+  requires: string[]
+  reason: string
+  invalidation: string
+  target?: Operand
+  target_condition?: string
+}
+
+export type Rules = {
+  gates?: Array<{
+    require: 'previous' | 'trend'
+    reason: string
+    condition?: string
+  }>
+  checks: Array<{ name?: string; node: SpecNode }>
+  sides: Partial<Record<Side, SideEntry>>
+  exit: Record<Side, SpecNode>
+  risk: { stop_atr: string; target_stop_ratio: string }
+  horizon_minutes: number
+}
 
 export type StrategySpec = {
   schema: typeof STRATEGY_SCHEMA
@@ -30,17 +56,19 @@ export type StrategySpec = {
   version: number
   name: string
   description?: string
-  products: string[]
-  regime: Regime[]
   params: Record<string, string>
-  entry: Record<Side, RuleNode | null>
-  /** Exit rule per open side; stop and target always apply on top. */
-  exit: Record<Side, RuleNode | null>
-  risk: { stop_atr: string; target_atr: string }
-  horizon_minutes: number
-  /** C28-style adapter: delegates to another strategy per regime. */
-  delegate?: Partial<Record<Regime, string>>
+  kind?: 'rules' | 'regime_adapter'
+  rules?: Rules
+  branches?: Partial<Record<'trend' | 'range', { id: string; rules: Rules }>>
 }
+
+/** Where a set of rules lives: the spec itself or one adapter branch. */
+export type RulesScope = 'rules' | 'trend' | 'range'
+
+/** Index path from a check's node down to one comparison. */
+export type CmpPath = { check: number; steps: number[] }
+
+export type EditableCondition = { path: CmpPath; node: CmpNode }
 
 export const COMPARATORS: readonly Comparator[] = ['>', '>=', '<', '<=']
 
@@ -51,52 +79,82 @@ export const COMPARATOR_LABELS: Record<Comparator, string> = {
   '<=': '≤',
 }
 
-/** Closed operand vocabulary: the indicator catalog of futures_indicators.py. */
-export const FEATURE_LABELS: Record<string, string> = {
-  '1m.candidate_close': 'Cierre',
-  '1m.candidate_open': 'Apertura',
-  '1m.candidate_high': 'Máximo',
-  '1m.candidate_low': 'Mínimo',
-  '1m.ema9': 'EMA 9',
-  '1m.ema21': 'EMA 21',
-  '1m.sma50': 'SMA 50',
-  '1m.rsi14': 'RSI 14',
-  '1m.atr14': 'ATR 14',
-  '1m.bollinger_upper20': 'Bollinger sup. 20',
-  '1m.bollinger_mid20': 'Bollinger media 20',
-  '1m.bollinger_lower20': 'Bollinger inf. 20',
-  '1m.donchian_high20': 'Donchian máx. 20',
-  '1m.donchian_low20': 'Donchian mín. 20',
-  '1m.donchian_mid20': 'Donchian media 20',
-  '1m.volume': 'Volumen',
-  '1m.prior_volume_mean20': 'Volumen medio 20',
-  'prev.candidate_close': 'Vela previa · cierre',
-  'prev.candidate_high': 'Vela previa · máximo',
-  'prev.candidate_low': 'Vela previa · mínimo',
-  'prev.ema9': 'Vela previa · EMA 9',
-  'prev.ema21': 'Vela previa · EMA 21',
-  'prev.rsi14': 'Vela previa · RSI 14',
-  '5m.ema9': 'Tendencia 5m · EMA 9',
-  '5m.ema21': 'Tendencia 5m · EMA 21',
+const SCOPE_LABELS: Record<string, string> = {
+  '1m': '',
+  '1m_previous': 'Previa · ',
+  '5m': '5m · ',
+  position: 'Posición · ',
 }
 
-export const FEATURES = Object.keys(FEATURE_LABELS)
+const FIELD_LABELS: Record<string, string> = {
+  candidate_close: 'Cierre',
+  candidate_low: 'Mínimo',
+  candidate_high: 'Máximo',
+  candidate_volume: 'Volumen',
+  ema9: 'EMA 9',
+  ema21: 'EMA 21',
+  sma50: 'SMA 50',
+  rsi14: 'RSI 14',
+  atr14: 'ATR 14',
+  bollinger_lower20: 'Bollinger inf. 20',
+  bollinger_mid20: 'Bollinger media 20',
+  bollinger_upper20: 'Bollinger sup. 20',
+  bollinger_stddev20: 'Bollinger desvío 20',
+  donchian_high20: 'Donchian máx. 20',
+  donchian_low20: 'Donchian mín. 20',
+  donchian_mid20: 'Donchian media 20',
+  prior_volume_mean20: 'Volumen medio 20',
+  frozen_target: 'objetivo congelado',
+  frozen_invalidation: 'invalidación congelada',
+}
+
+/** Operands the editor offers: the registry's feature catalog per scope. */
+export const FEATURE_REFS: readonly string[] = [
+  '1m',
+  '1m_previous',
+  '5m',
+].flatMap((scope) =>
+  Object.keys(FIELD_LABELS)
+    .filter((field) => !field.startsWith('frozen_'))
+    .map((field) => `${scope}.${field}`),
+)
 
 const DECIMAL = /^-?\d+(?:\.\d+)?$/
-const PARAM = /^\$[a-z][a-z0-9_]*$/
 
-export function isCondition(node: RuleNode): node is Condition {
-  return 'left' in node
+export function isCmp(node: SpecNode): node is CmpNode {
+  return 'cmp' in node
 }
 
-export function operandLabel(operand: string, spec?: StrategySpec): string {
-  if (FEATURE_LABELS[operand]) return FEATURE_LABELS[operand]
-  if (PARAM.test(operand)) {
-    const value = spec?.params[operand.slice(1)]
+export function isDecimal(operand: Operand): operand is string {
+  return typeof operand === 'string' && DECIMAL.test(operand)
+}
+
+export function isParam(operand: Operand): operand is string {
+  return typeof operand === 'string' && operand.startsWith('$')
+}
+
+export function isFeature(operand: Operand): operand is string {
+  return typeof operand === 'string' && operand.includes('.')
+}
+
+export function featureLabel(ref: string): string {
+  const [scope = '', field = ''] = ref.split('.', 2)
+  return `${SCOPE_LABELS[scope] ?? `${scope} · `}${FIELD_LABELS[field] ?? field}`
+}
+
+export function operandLabel(
+  operand: Operand,
+  params: Record<string, string> = {},
+): string {
+  if (typeof operand !== 'string')
+    return operand.mul.map((factor) => operandLabel(factor, params)).join(' × ')
+  if (isParam(operand)) {
+    const value = params[operand.slice(1)]
     return value === undefined
       ? operand
       : `${operand} · ${formatDecimal(value)}`
   }
+  if (isFeature(operand)) return featureLabel(operand)
   return formatDecimal(operand)
 }
 
@@ -111,16 +169,21 @@ export function parseDecimalInput(value: string): string | null {
   return DECIMAL.test(normalized) ? normalized : null
 }
 
-/** Top-level conditions of a side, flattening a root `all`. */
-export function sideConditions(node: RuleNode | null): Condition[] {
-  if (node === null) return []
-  if (isCondition(node)) return [node]
-  if ('all' in node) return node.all.filter(isCondition)
-  return []
+/** Numbers typed as `35; 40; 45` for a parameter sweep, or null if invalid. */
+export function parseParamValues(text: string): string[] | null {
+  const parts = text
+    .split(';')
+    .map((part) => part.trim())
+    .filter((part) => part !== '')
+  if (parts.length === 0) return null
+  const values = parts.map(parseDecimalInput)
+  return values.every((value) => value !== null)
+    ? [...new Set(values as string[])]
+    : null
 }
 
 export function cloneSpec(spec: StrategySpec): StrategySpec {
-  return JSON.parse(JSON.stringify(spec)) as StrategySpec
+  return structuredClone(spec)
 }
 
 /** Strategy number from ids like `c25-pullback-perp-v1` or `c31-mine`. */
@@ -129,116 +192,116 @@ export function strategyNumber(id: string): number | null {
   return match ? Number(match[1]) : null
 }
 
-export function shortName(spec: StrategySpec): string {
-  const number = strategyNumber(spec.id)
-  return number === null ? spec.name : `C${number} · ${spec.name}`
+export function rulesScopes(spec: StrategySpec): RulesScope[] {
+  if (spec.kind === 'regime_adapter')
+    return (['trend', 'range'] as const).filter(
+      (regime) => spec.branches?.[regime],
+    )
+  return ['rules']
 }
 
-function validateNode(node: unknown, path: string, errors: string[]): void {
-  if (typeof node !== 'object' || node === null || Array.isArray(node)) {
-    errors.push(`${path}: debe ser una condición o un grupo`)
-    return
-  }
-  const value = node as Record<string, unknown>
-  if ('left' in value) {
-    for (const key of ['left', 'right'] as const) {
-      const operand = value[key]
-      if (
-        typeof operand !== 'string' ||
-        !(
-          FEATURE_LABELS[operand] ||
-          PARAM.test(operand) ||
-          DECIMAL.test(operand)
-        )
-      )
-        errors.push(`${path}.${key}: operando desconocido`)
-    }
-    if (!COMPARATORS.includes(value.op as Comparator))
-      errors.push(`${path}.op: comparador inválido`)
-    if (
-      value.scale !== undefined &&
-      !(
-        typeof value.scale === 'string' &&
-        (PARAM.test(value.scale) || DECIMAL.test(value.scale))
-      )
-    )
-      errors.push(`${path}.scale: debe ser un número o un $parámetro`)
-    return
-  }
-  if (Array.isArray(value.all) || Array.isArray(value.any)) {
-    const list = (value.all ?? value.any) as unknown[]
-    list.forEach((child, index) =>
-      validateNode(child, `${path}[${index}]`, errors),
-    )
-    return
-  }
-  if ('not' in value) {
-    validateNode(value.not, `${path}.not`, errors)
-    return
-  }
-  errors.push(`${path}: debe ser una condición o un grupo all/any/not`)
+export function rulesOf(
+  spec: StrategySpec,
+  scope: RulesScope,
+): Rules | undefined {
+  return scope === 'rules' ? spec.rules : spec.branches?.[scope]?.rules
 }
 
-/** Structural validation of an imported spec; returns readable errors. */
-export function validateSpec(value: unknown): {
+function collect(
+  node: SpecNode,
+  check: number,
+  steps: number[],
+  out: EditableCondition[],
+) {
+  if (isCmp(node)) {
+    out.push({ path: { check, steps }, node })
+    return
+  }
+  const children =
+    'and' in node
+      ? node.and
+      : 'all' in node
+        ? node.all
+        : 'any' in node
+          ? node.any
+          : null
+  children?.forEach((child, index) =>
+    collect(child, check, [...steps, index], out),
+  )
+}
+
+/** Comparisons behind the checks a side requires, in the order written. */
+export function sideConditions(
+  rules: Rules | undefined,
+  side: Side,
+): EditableCondition[] {
+  const entry = rules?.sides[side]
+  if (!rules || !entry) return []
+  const out: EditableCondition[] = []
+  rules.checks.forEach((check, index) => {
+    if (check.name === undefined || entry.requires.includes(check.name))
+      collect(check.node, index, [], out)
+  })
+  return out
+}
+
+/** Returns a copy of `spec` with the comparison at `path` patched. */
+export function patchCondition(
+  spec: StrategySpec,
+  scope: RulesScope,
+  path: CmpPath,
+  patch: Partial<Pick<CmpNode, 'left' | 'op' | 'right'>>,
+): StrategySpec {
+  const next = cloneSpec(spec)
+  const rules = rulesOf(next, scope)
+  const check = rules?.checks[path.check]
+  if (!check) return spec
+  let node: SpecNode = check.node
+  for (const step of path.steps) {
+    const children: SpecNode[] | undefined =
+      'and' in node
+        ? node.and
+        : 'all' in node
+          ? node.all
+          : 'any' in node
+            ? node.any
+            : undefined
+    if (!children?.[step]) return spec
+    node = children[step]
+  }
+  if (!isCmp(node)) return spec
+  Object.assign(node, patch)
+  return next
+}
+
+/** The decimal a risk value resolves to, through `$param` if it is one. */
+export function resolveValue(
+  value: string,
+  params: Record<string, string>,
+): string {
+  return isParam(value) ? (params[value.slice(1)] ?? value) : value
+}
+
+/** Parsed JSON or a readable error, for the import box. */
+export function parseSpecText(text: string): {
   spec: StrategySpec | null
-  errors: string[]
+  error: string | null
 } {
-  const errors: string[] = []
-  if (typeof value !== 'object' || value === null || Array.isArray(value))
-    return { spec: null, errors: ['El JSON debe ser un objeto.'] }
-  const spec = value as Record<string, unknown>
-  if (spec.schema !== STRATEGY_SCHEMA)
-    errors.push(`schema debe ser "${STRATEGY_SCHEMA}"`)
-  if (typeof spec.id !== 'string' || !/^c\d+-[a-z0-9-]+$/.test(spec.id))
-    errors.push('id debe tener la forma c29-nombre')
-  if (!Number.isSafeInteger(spec.version) || Number(spec.version) < 1)
-    errors.push('version debe ser un entero positivo')
-  if (typeof spec.name !== 'string' || spec.name.trim() === '')
-    errors.push('name es obligatorio')
-  const params = spec.params
-  if (
-    typeof params !== 'object' ||
-    params === null ||
-    Object.values(params).some(
-      (param) => typeof param !== 'string' || !DECIMAL.test(param),
-    )
-  )
-    errors.push('params debe mapear nombres a números decimales en texto')
-  const entry = spec.entry as Record<string, unknown> | undefined
-  if (typeof entry !== 'object' || entry === null)
-    errors.push('entry es obligatorio')
-  else
-    for (const side of ['LONG', 'SHORT'] as const)
-      if (entry[side] !== null && entry[side] !== undefined)
-        validateNode(entry[side], `entry.${side}`, errors)
-  const exit = spec.exit as Record<string, unknown> | undefined
-  if (typeof exit === 'object' && exit !== null)
-    for (const side of ['LONG', 'SHORT'] as const)
-      if (exit[side] !== null && exit[side] !== undefined)
-        validateNode(exit[side], `exit.${side}`, errors)
-  const risk = spec.risk as Record<string, unknown> | undefined
-  if (
-    typeof risk !== 'object' ||
-    risk === null ||
-    typeof risk.stop_atr !== 'string' ||
-    typeof risk.target_atr !== 'string' ||
-    !DECIMAL.test(risk.stop_atr) ||
-    !DECIMAL.test(risk.target_atr)
-  )
-    errors.push('risk.stop_atr y risk.target_atr son números decimales')
-  if (!Number.isSafeInteger(spec.horizon_minutes))
-    errors.push('horizon_minutes debe ser un entero')
-  if (errors.length > 0) return { spec: null, errors }
-  return {
-    spec: {
-      ...(spec as unknown as StrategySpec),
-      products: Array.isArray(spec.products)
-        ? (spec.products as string[])
-        : ['PF_XBTUSD'],
-      regime: Array.isArray(spec.regime) ? (spec.regime as Regime[]) : [],
-      exit: (exit ?? { LONG: null, SHORT: null }) as StrategySpec['exit'],
-    },
-    errors,
+  let value: unknown
+  try {
+    value = JSON.parse(text)
+  } catch {
+    return { spec: null, error: 'No es un JSON válido.' }
   }
+  if (typeof value !== 'object' || value === null || Array.isArray(value))
+    return { spec: null, error: 'El JSON debe ser un objeto.' }
+  const record = value as Record<string, unknown>
+  const spec = (
+    typeof record.spec === 'object' && record.spec !== null
+      ? record.spec
+      : record
+  ) as StrategySpec
+  if (spec.schema !== STRATEGY_SCHEMA)
+    return { spec: null, error: `schema debe ser "${STRATEGY_SCHEMA}".` }
+  return { spec, error: null }
 }

@@ -356,8 +356,11 @@ describe('dashboard Gemini boundary', () => {
         await screen.findByRole('heading', { name: 'Laboratorio' }),
       ).toBeInTheDocument()
       expect(
-        await screen.findByText(/Velas sintéticas · Terminal no respondió/),
+        await screen.findByText(
+          /Sin conexión con el registro de estrategias · datos de ejemplo sobre velas sintéticas/,
+        ),
       ).toBeInTheDocument()
+      expect(fetchMock).toHaveBeenCalledWith('/api-strategies/health')
       expect(fetchMock).toHaveBeenCalledWith(
         '/api-live/terminal/bootstrap',
         expect.anything(),

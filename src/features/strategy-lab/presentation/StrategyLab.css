@@ -467,7 +467,8 @@
 
 .strategy-lab__tabs {
   display: flex;
-  gap: 16px;
+  flex-wrap: wrap;
+  column-gap: 14px;
   border-bottom: 1px solid var(--lab-line);
 }
 
@@ -509,7 +510,7 @@
 
 .strategy-lab__rule {
   display: grid;
-  grid-template-columns: 10px minmax(0, 1fr) 52px minmax(0, 1fr) 28px;
+  grid-template-columns: 10px minmax(0, 1.2fr) 52px minmax(0, 1fr);
   gap: 6px;
   align-items: center;
   padding: 6px 0;
@@ -533,9 +534,45 @@
   font-family: 'IBM Plex Mono', ui-monospace, monospace;
 }
 
-.strategy-lab__num-input,
-.strategy-lab__scale {
-  grid-column: 4;
+.strategy-lab__num-input {
+  width: 100%;
+}
+
+.strategy-lab__param-chip {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 4px;
+}
+
+.strategy-lab__param-chip > span {
+  overflow: hidden;
+  max-width: 55%;
+  color: var(--demo-muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.strategy-lab__param-chip input {
+  flex: 1 1 0;
+}
+
+.strategy-lab__notice--warn {
+  border-color: oklch(0.55 0.1 80);
+  background: oklch(0.24 0.04 80);
+}
+
+.strategy-lab__errors p {
+  margin: 0 0 4px;
+}
+
+.strategy-lab__editor > * {
+  min-width: 0;
+}
+
+textarea.strategy-lab__json {
+  resize: vertical;
 }
 
 .strategy-lab__icon {
