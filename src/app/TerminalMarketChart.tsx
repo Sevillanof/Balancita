@@ -19,6 +19,7 @@ export default function TerminalMarketChart({
   apiBase,
   ticker,
   position,
+  positions,
   orders,
 }: {
   market: Record<string, unknown>
@@ -31,6 +32,7 @@ export default function TerminalMarketChart({
   apiBase: string
   ticker: TerminalTickerStats | null
   position: Record<string, unknown>
+  positions?: unknown[]
   orders: unknown[]
 }) {
   const candles: ApprovedTerminalCandle[] = Array.isArray(market.candles)
@@ -127,6 +129,7 @@ export default function TerminalMarketChart({
         live={mode === 'paper_live'}
         ticker={ticker}
         position={position}
+        positions={positions}
         orders={orders}
       />
     </>
