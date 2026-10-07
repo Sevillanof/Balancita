@@ -11,6 +11,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc -p tsconfig.json"
+    "market:prune": "node --experimental-strip-types src/features/kraken-futures/futures-market-prune-cli.ts",
   },
   "dependencies": {
     "@fastify/cors": "^11.3.0",
