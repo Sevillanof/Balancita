@@ -24,13 +24,12 @@ Start everything (MOCK and real data) with one command:
 pnpm run dev
 ```
 
-Open <http://localhost:5173>. `pnpm run dev` starts seven processes, each with a
+Open <http://localhost:5173>. `pnpm run dev` starts these processes, each with a
 prefixed log:
 
 | Process   | Port | What it is                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | --------- | ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `vite`    | 5173 | Web app and proxy (`/api` -> 8787, `/api-mock` -> 8788, `/api-live` -> 8789, rewritten to `/api`)                                                                                                                                                                                                                                                                                                                                                                                          |
-| `server`  | 8787 | Legacy backend (Gemini, spot collectors); `FUTURES_MODE` is forced unset, so `.env` cannot change it                                                                                                                                                                                                                                                                                                                                                                                       |
+| `vite`    | 5173 | Web app and proxy (`/api-mock` -> 8788, `/api-live` -> 8789, rewritten to `/api`)                                                                                                                                                                                                                                                                                                                                                                                                          |
 | `mock`    | 8788 | Scripted MOCK futures API (`futures-local-terminal.mjs --api-only`); fresh temporary database per start                                                                                                                                                                                                                                                                                                                                                                                    |
 | `capture` | -    | Kraken public WebSocket -> `server/data/dev-live/futures-market.sqlite` (sole writer; no HTTP, no engine, no account DB; per-event commits)                                                                                                                                                                                                                                                                                                                                                |
 | `live`    | 8789 | Read-only gateway: serves `/api/terminal/*` by tailing that market DB by rowid; starts no collector and no engine (engine shown as off)                                                                                                                                                                                                                                                                                                                                                    |
@@ -40,12 +39,13 @@ prefixed log:
 
 `server/.env` is optional: the dev run adds `--env-file-if-exists=.env` only
 when the file exists (with `--watch`, Node crashes on a missing watched file).
-Create it if you need `GEMINI_API_KEY` or other settings; restart after
-creating it. `FUTURES_MODE` was retired: the server refuses to start if it is set
-to any non-empty value, so remove it from `.env` (live now runs as the separate
-`capture`, `live`, `verdict`, `paper` and `scores` processes above).
+Create it if you need other settings; restart after creating it. `FUTURES_MODE`
+was retired: remove it from `.env` (live runs as the separate `capture`,
+`live`, `verdict`, `paper` and `scores` processes above). The spot BTC-EUR
+server on 8787 (`/`, `/historicos`, `/demo`, Gemini, spot collectors) was
+retired (SS-13); `/` now opens the futures terminal.
 
-Before spawning anything `pnpm run dev` checks ports 5173, 8787, 8788 and 8789.
+Before spawning anything `pnpm run dev` checks ports 5173, 8788 and 8789.
 If one is taken (usually a stale `pnpm run dev` from another checkout) it prints
 the port and the child and exits with code 1 without starting anything. Free
 the port with `lsof -ti tcp:<port> | xargs kill` (macOS/Linux) and retry. On
@@ -59,12 +59,7 @@ stops the whole group, so no orphan keeps a port.
   `?source=mock|live` and in local storage; the default is MOCK. Switching
   remounts the terminal, so no stream state mixes. If the selected backend is
   unreachable the page says so and names the source; it never falls back to the
-  other one. `?source=legacy` opens the previous terminal served by the legacy
-  backend.
-- **Spot dashboard** (`/`): choose "MOCK" or "Real (Kraken)". The
-  `VITE_MARKET_DATA_PROVIDER` variable (`mock` or `kraken`, default `kraken`)
-  only sets the initial choice. Switching recreates the provider and resets
-  quotes and subscriptions.
+  other one.
 
 ### Python requirement
 

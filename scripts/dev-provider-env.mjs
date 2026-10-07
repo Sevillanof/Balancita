@@ -315,10 +315,10 @@ export function resolveLlamaServer({ env, run = defaultRun }) {
   return { command: 'llama-server' }
 }
 
-export const DEV_PORTS = { vite: 5173, server: 8787, mock: 8788, live: 8789 }
+export const DEV_PORTS = { vite: 5173, mock: 8788, live: 8789 }
 // Strategy registry S (Python): checked only when its child runs.
 export const STRATEGIES_PORT = 8790
-// Hosts the children bind to: server, gateway and mock use 127.0.0.1 (HOST
+// Hosts the children bind to: gateway and mock use 127.0.0.1 (HOST
 // defaults to it); vite uses its default `localhost`. Vite HMR shares the
 // vite port, so there is no separate 24678 listener to check.
 const DEV_PORT_HOSTS = { vite: 'localhost' }
@@ -425,11 +425,6 @@ export function signalChild(
 // flag is therefore added only when the file exists (see `withEnvFile`).
 const ENV_FILE_FLAG = '--env-file-if-exists=.env'
 
-const SERVER_ARGS = [
-  '--experimental-strip-types',
-  '--watch',
-  'src/app/index.ts',
-]
 const GATEWAY_ARGS = [
   '--experimental-strip-types',
   '--watch',
@@ -440,7 +435,6 @@ const CAPTURE_ARGS = ['--experimental-strip-types', 'src/app/capture-main.ts']
 
 /**
  * Pure description of the `pnpm run dev` children:
- * - server: legacy services (FUTURES_MODE forced empty so `.env` cannot change it),
  * - mock: scripted MOCK futures API only,
  * - capture: Kraken public WS -> live market DB (sole writer, no HTTP/engine),
  * - live: read-only gateway on 8789 tailing that DB plus the paper account and
@@ -489,16 +483,6 @@ export function devChildSpecs({
       cwd: root,
       args: [`${root}/node_modules/vite/bin/vite.js`],
       env: devEnvironment(env),
-    },
-    {
-      name: 'server',
-      cwd: serverCwd,
-      args: nodeArgs(SERVER_ARGS),
-      env: {
-        ...serverEnvironment(env),
-        PORT: String(DEV_PORTS.server),
-        FUTURES_MODE: '',
-      },
     },
     {
       name: 'mock',
@@ -767,6 +751,5 @@ export function devProxyConfig() {
     '/api-live': prefixedBackend('/api-live', DEV_PORTS.live),
     // Strategy registry S: its routes already start with /api-strategies.
     '/api-strategies': { target: `http://127.0.0.1:${STRATEGIES_PORT}` },
-    '/api': { target: `http://127.0.0.1:${DEV_PORTS.server}`, ws: true },
   }
 }

@@ -27,12 +27,11 @@ describe('devChildSpecs', () => {
   })
   const byName = Object.fromEntries(specs.map((spec) => [spec.name, spec]))
 
-  it('starts vite, legacy server, mock API, live capture, live gateway, verdict service, paper execution, forecast scorer, strategy registry and news', () => {
+  it('starts vite, mock API, live capture, live gateway, verdict service, paper execution, forecast scorer, strategy registry and news', () => {
     assert.deepEqual(
       specs.map((spec) => spec.name),
       [
         'vite',
-        'server',
         'mock',
         'capture',
         'live',
@@ -43,14 +42,6 @@ describe('devChildSpecs', () => {
         'news',
       ],
     )
-  })
-
-  it('keeps the legacy server legacy even if the environment sets FUTURES_MODE', () => {
-    assert.equal(byName.server.env.FUTURES_MODE, '')
-    assert.equal(byName.server.env.PORT, '8787')
-    assert.equal(byName.server.env.BALANCITA_ROOT_DEV_SERVER, 'true')
-    assert.equal(byName.server.env.KEEP, 'yes')
-    assert.equal(byName.server.cwd, '/repo/server')
   })
 
   it('runs the scripted MOCK terminal API only on 8788', () => {
@@ -331,7 +322,7 @@ describe('devChildSpecs with a resolved Python', () => {
     const specs = devChildSpecs({ ...base, python: null })
     assert.deepEqual(
       specs.map((spec) => spec.name),
-      ['vite', 'server', 'mock', 'capture', 'live'],
+      ['vite', 'mock', 'capture', 'live'],
     )
     assert.equal(
       specs.find((spec) => spec.name === 'live').env.BALANCITA_PYTHON_STATUS,
@@ -361,7 +352,7 @@ describe('devChildSpecs with a resolved Python', () => {
     })
     assert.deepEqual(
       specs.map((spec) => spec.name),
-      ['vite', 'server', 'mock', 'capture', 'live'],
+      ['vite', 'mock', 'capture', 'live'],
     )
     assert.equal(
       specs.find((spec) => spec.name === 'live').env.BALANCITA_PYTHON_STATUS,
@@ -385,10 +376,8 @@ describe('devChildSpecs with a resolved Python', () => {
 describe('devProxyConfig', () => {
   const proxy = devProxyConfig()
 
-  it('keeps /api on the legacy server and proxies websockets', () => {
-    assert.equal(proxy['/api'].target, 'http://127.0.0.1:8787')
-    assert.equal(proxy['/api'].ws, true)
-    assert.equal(proxy['/api'].rewrite, undefined)
+  it('has no bare /api proxy (the spot server on 8787 was retired)', () => {
+    assert.equal(proxy['/api'], undefined)
   })
 
   it('routes /api-mock and /api-live to their backends with /api rewrite', () => {
@@ -405,20 +394,18 @@ describe('devProxyConfig', () => {
     }
   })
 
-  it('does not let /api swallow the prefixed routes', () => {
-    const keys = Object.keys(proxy)
-    assert.ok(keys.indexOf('/api-mock') < keys.indexOf('/api'))
-    assert.ok(keys.indexOf('/api-live') < keys.indexOf('/api'))
-    assert.ok(
-      proxy['/api'] &&
-        Object.keys(proxy).every((key) => key.startsWith('/api')),
-    )
+  it('only proxies the prefixed /api-* routes', () => {
+    assert.deepEqual(Object.keys(proxy), [
+      '/api-mock',
+      '/api-live',
+      '/api-strategies',
+    ])
   })
 })
 
 describe('server/.env is optional', () => {
   const flag = '--env-file-if-exists=.env'
-  const watched = ['server', 'capture', 'live']
+  const watched = ['capture', 'live']
   const specsWith = (exists, env = {}) =>
     devChildSpecs({ root, env, allowedFlags: noFlags, exists })
 
@@ -452,7 +439,6 @@ describe('port checks before startup', () => {
     assert.equal(result.ok, true)
     assert.deepEqual(calls, [
       [5173, 'localhost'],
-      [8787, '127.0.0.1'],
       [8788, '127.0.0.1'],
       [8789, '127.0.0.1'],
     ])
@@ -469,10 +455,10 @@ describe('port checks before startup', () => {
   })
 
   it('reports every conflict', async () => {
-    const result = await checkDevPorts({ probe: taken(5173, 8787) })
+    const result = await checkDevPorts({ probe: taken(5173, 8788) })
     assert.deepEqual(
       result.conflicts.map((c) => c.port),
-      [5173, 8787],
+      [5173, 8788],
     )
   })
 

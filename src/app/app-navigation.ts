@@ -2,7 +2,7 @@ import type { TradingNavigationItem } from '../features/trading-view/presentatio
 
 export type AppSection = 'terminal' | 'estrategias'
 
-/** One navigation for every dark-shell screen: Terminal, Estrategias, Spot. */
+/** One navigation for every dark-shell screen: Terminal and Estrategias. */
 export function appNavigation(current: AppSection): TradingNavigationItem[] {
   return [
     { href: '/terminal', label: 'Terminal', current: current === 'terminal' },
@@ -11,6 +11,5 @@ export function appNavigation(current: AppSection): TradingNavigationItem[] {
       label: 'Estrategias',
       current: current === 'estrategias',
     },
-    { href: '/', label: 'Spot' },
   ]
 }

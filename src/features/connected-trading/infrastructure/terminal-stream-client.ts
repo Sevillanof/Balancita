@@ -131,13 +131,11 @@ export function parseTerminalEnvelope(value: unknown): TerminalEnvelope | null {
   return value as unknown as TerminalEnvelope
 }
 
-/** Data source behind the terminal; `legacy` is the unmodified `/api` server. */
-export type TerminalSource = 'mock' | 'live' | 'legacy'
+/** Data source behind the terminal: the scripted MOCK API or the live gateway. */
+export type TerminalSource = 'mock' | 'live'
 
 export function terminalApiBase(source: TerminalSource): string {
-  if (source === 'mock') return '/api-mock'
-  if (source === 'live') return '/api-live'
-  return '/api'
+  return source === 'mock' ? '/api-mock' : '/api-live'
 }
 
 /** A hung backend must surface as an explicit error, never an endless spinner. */

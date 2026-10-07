@@ -1,7 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import './DemoShell.css'
 import './ConnectedTerminal.css'
-import ConnectedTerminal from './ConnectedTerminal.tsx'
 import FuturesTerminal from './FuturesTerminal.tsx'
 import {
   loadTerminalBootstrap,
@@ -14,11 +13,10 @@ const STORAGE_KEY = 'balancita.terminal.source'
 const SOURCE_LABELS: Record<TerminalSource, string> = {
   mock: 'MOCK',
   live: 'Real (paper, Kraken público)',
-  legacy: 'Servidor heredado (/api)',
 }
 
 function isSource(value: unknown): value is TerminalSource {
-  return value === 'mock' || value === 'live' || value === 'legacy'
+  return value === 'mock' || value === 'live'
 }
 
 function initialSource(): TerminalSource {
@@ -26,8 +24,7 @@ function initialSource(): TerminalSource {
   if (isSource(fromUrl)) return fromUrl
   try {
     const stored = window.localStorage.getItem(STORAGE_KEY)
-    // `legacy` is an explicit URL-only escape hatch, never remembered.
-    if (stored === 'mock' || stored === 'live') return stored
+    if (isSource(stored)) return stored
   } catch {
     // Storage can be unavailable; the default applies.
   }
@@ -38,7 +35,6 @@ function persistSource(source: TerminalSource) {
   const url = new URL(window.location.href)
   url.searchParams.set('source', source)
   window.history.replaceState(window.history.state, '', url)
-  if (source === 'legacy') return
   try {
     window.localStorage.setItem(STORAGE_KEY, source)
   } catch {
@@ -66,7 +62,6 @@ function SourceView({
         kind: 'ready'
         bootstrap: Awaited<ReturnType<typeof loadTerminalBootstrap>>
       }
-    | { kind: 'legacy' }
     | { kind: 'unavailable' }
   >({ kind: 'loading' })
   const apiBase = terminalApiBase(source)
@@ -76,22 +71,13 @@ function SourceView({
       .then((bootstrap) => {
         if (active) setState({ kind: 'ready', bootstrap })
       })
-      .catch((cause: unknown) => {
-        if (!active) return
-        const status =
-          typeof cause === 'object' && cause !== null && 'status' in cause
-            ? (cause as { status: unknown }).status
-            : null
-        // Only the explicit legacy source may render the legacy terminal.
-        setState({
-          kind:
-            source === 'legacy' && status === 404 ? 'legacy' : 'unavailable',
-        })
+      .catch(() => {
+        if (active) setState({ kind: 'unavailable' })
       })
     return () => {
       active = false
     }
-  }, [apiBase, source])
+  }, [apiBase])
   if (state.kind === 'ready')
     return (
       <FuturesTerminal
@@ -99,13 +85,6 @@ function SourceView({
         apiBase={apiBase}
         sourceSwitch={switchControl}
       />
-    )
-  if (state.kind === 'legacy')
-    return (
-      <>
-        <SwitchBar>{switchControl}</SwitchBar>
-        <ConnectedTerminal />
-      </>
     )
   if (state.kind === 'unavailable')
     return (
@@ -148,8 +127,7 @@ export default function TerminalEntry() {
   useEffect(() => {
     syncUrl(source)
   }, [source])
-  const options: TerminalSource[] =
-    source === 'legacy' ? ['mock', 'live', 'legacy'] : ['mock', 'live']
+  const options: TerminalSource[] = ['mock', 'live']
   const switchControl = (
     <>
       <div
