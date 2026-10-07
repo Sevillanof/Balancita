@@ -8,7 +8,7 @@ import unittest
 
 from balancita_engine import futures_llm_decisions as q
 from balancita_engine import futures_llm_scores as s
-from balancita_engine.futures_strategy_backtest import BOOK_CONFIG
+from balancita_engine.futures_costs import TAKER_RATE
 
 from test_futures_llm_decisions import Fixture
 from test_futures_verdicts import BTC
@@ -90,8 +90,10 @@ class BookTests(unittest.TestCase):
         quantity = float(trade["quantity"])
         # The market entry pays PF_XBTUSD's 0.06 bp of impact; the limit target fills at its level.
         entry = 10_000.06
-        expected = (10_030 - entry) * quantity - (entry + 10_030) * quantity * float(BOOK_CONFIG["taker_rate"])
+        expected = (10_030 - entry) * quantity - (entry + 10_030) * quantity * float(TAKER_RATE)
         self.assertAlmostEqual(trade["pnl_usd"], expected, places=3)
+        # Fixed 100 USD notional, like every strategy book.
+        self.assertAlmostEqual(quantity * entry, 100, places=3)
 
     def test_the_stop_wins_when_one_candle_touches_both(self):
         verdicts = path([10_000, 10_000], {1: {"high": 10_040, "low": 9_980}})
@@ -115,7 +117,7 @@ class BookTests(unittest.TestCase):
         verdicts = [verdict(0, 10_000, atr="0.1")] + path([10_000] * 5)[1:]
         trades, skipped = s.simulate_book([decision(0, "buy")], verdicts)
         self.assertEqual(trades, [])
-        self.assertEqual(skipped[0]["reason"], "target_does_not_clear_cost_buffer")
+        self.assertEqual(skipped[0]["reason"], "target_does_not_clear_cost")
 
     def test_the_trading_summary_has_the_backtest_shape(self):
         verdicts = path([10_000, 10_000, 10_000], {2: {"high": 10_031}})

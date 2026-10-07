@@ -41,6 +41,25 @@ def _verdicts(minutes=900, seed=7):
 
 
 VERDICTS = _verdicts()
+ONES, FIVES = _random_walk(random.Random(7), 900)
+MARKET_DDL = """
+CREATE TABLE paper_futures_official_candles(
+  product_id TEXT NOT NULL, interval_ms INTEGER NOT NULL, bucket_start INTEGER NOT NULL,
+  revision_hash TEXT NOT NULL, known_at INTEGER NOT NULL, open_price TEXT NOT NULL,
+  high_price TEXT NOT NULL, low_price TEXT NOT NULL, close_price TEXT NOT NULL,
+  volume_btc TEXT NOT NULL, response_sha256 TEXT NOT NULL);
+"""
+
+
+def _market_db(path):
+    db = sqlite3.connect(path)
+    db.executescript(MARKET_DDL)
+    for c in ONES + FIVES:
+        db.execute("INSERT INTO paper_futures_official_candles VALUES(?,?,?,?,?,?,?,?,?,?,?)", (
+            BTC, c["interval_ms"], c["bucket_start"], c["revision_hash"], c["known_at"],
+            c["open"], c["high"], c["low"], c["close"], c["volume_btc"], "x"))
+    db.commit()
+    db.close()
 
 
 class Clock:
@@ -115,7 +134,7 @@ class RegistryTests(unittest.TestCase):
             self.registry.set_state(C27_ID, saved["version"], "shadow")
         self.assertEqual(no_backtest.exception.code, "gate_failed")
         service = StrategyService(self.registry, None, {BTC: "1"})
-        service._verdicts = lambda product, days: VERDICTS
+        service._candles = lambda product, days: (None, ONES, FIVES)
         service.backtest(self.registry.version(C27_ID, saved["version"])["spec"], BTC, 30,
                          strategy_id=C27_ID, version=saved["version"])
         self.assertEqual(self.registry.set_state(C27_ID, saved["version"], "shadow")["state"], "shadow")
@@ -172,7 +191,7 @@ class TranslateTests(unittest.TestCase):
 
 class BacktestTests(unittest.TestCase):
     def test_book_reports_trades_returns_and_split(self):
-        result = run_backtest(SPECS[C27_ID], VERDICTS)
+        result = run_backtest(SPECS[C27_ID], ONES, FIVES)
         total = result["all"]
         self.assertGreater(total["trades"], 0)
         self.assertEqual(total["trades"], result["in_sample"]["trades"] + result["out_of_sample"]["trades"])
@@ -183,8 +202,24 @@ class BacktestTests(unittest.TestCase):
             self.assertLess(trade["entry_bucket_ms"], trade["exit_bucket_ms"])
             self.assertIn(trade["exit_reason"], ("stop", "target", "strategy_exit", "time_stop"))
 
+    def test_backtest_is_the_shared_simulator_with_a_fixed_100_usd_book(self):
+        from balancita_engine.futures_simulator import simulate
+
+        result = run_backtest(SPECS[C27_ID], ONES, FIVES)
+        book = simulate(SPECS[C27_ID], ONES, FIVES)
+        self.assertEqual([t["pnl_usd"] for t in result["trades"]], [t["pnl_usd"] for t in book.trades])
+        self.assertEqual(result["book"]["notional_usd"], "100")
+        for trade in result["trades"]:
+            self.assertEqual(trade["notional_usd"], "100")
+
+    def test_candles_before_the_start_only_warm_the_indicators_up(self):
+        start = ONES[500]["bucket_start"]
+        result = run_backtest(SPECS[C25_ID], ONES, FIVES, start_ms=start)
+        self.assertEqual(result["period"]["first_bucket_ms"], start)
+        self.assertTrue(all(t["entry_bucket_ms"] >= start for t in result["trades"]))
+
     def test_backtest_is_deterministic(self):
-        self.assertEqual(run_backtest(SPECS[C25_ID], VERDICTS), run_backtest(SPECS[C25_ID], VERDICTS))
+        self.assertEqual(run_backtest(SPECS[C25_ID], ONES, FIVES), run_backtest(SPECS[C25_ID], ONES, FIVES))
 
     def test_more_trials_lower_the_deflated_sharpe(self):
         values = [12.0, -5.0, 8.0, 3.0, -2.0, 9.0, 4.0, -1.0, 7.0, 6.0] * 4
@@ -205,7 +240,9 @@ class ApiTests(unittest.TestCase):
         store.close()
         cls.registry = StrategyRegistry(os.path.join(cls.dir, "strategies.sqlite"))
         cls.registry.seed(SPECS)
-        service = StrategyService(cls.registry, verdicts_db, {BTC: "1"})
+        market_db = os.path.join(cls.dir, "market.sqlite")
+        _market_db(market_db)
+        service = StrategyService(cls.registry, verdicts_db, {BTC: "1"}, market_db_path=market_db)
         cls.server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(service))
         cls.base = "http://127.0.0.1:{}/api-strategies".format(cls.server.server_address[1])
         threading.Thread(target=cls.server.serve_forever, daemon=True).start()
