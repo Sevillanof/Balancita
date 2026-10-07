@@ -167,6 +167,15 @@ class StoredDataTests(unittest.TestCase):
         for needle in ("Aciertos (+1):", "Fallos (-1):", "Puntaje:", "Acierto:", "Operando", "Resultado:"):
             self.assertIn(needle, text)
 
+    def test_cli_json_keeps_the_totals_and_trims_the_rows(self):
+        out = io.StringIO()
+        s.main(["--decisions-db", self.decisions_path, "--verdicts-db", self.fixture.verdicts_path,
+                "--products", BTC, "--json", "--max-rows", "5"], out=out)
+        result = json.loads(out.getvalue())[0]
+        self.assertEqual(len(result["rows"]), 5)
+        self.assertEqual(result["rows"][-1]["bucket_start"], self.buckets[-36])
+        self.assertEqual(result["decisions"]["decisions"], len(self.buckets) - 35)
+
     def test_a_product_without_decisions_reports_zero(self):
         result = s.product_report(self.decisions_path, self.fixture.verdicts_path, "PF_ETHUSD")
         self.assertEqual((result["decisions"]["decisions"], result["trading"]["trades"]), (0, 0))

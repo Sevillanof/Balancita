@@ -269,12 +269,18 @@ def main(argv=None, out=None):
     parser.add_argument("--version", type=int, help="question version (default: the newest stored)")
     parser.add_argument("--horizon-min", type=int, default=HORIZON_MIN)
     parser.add_argument("--json", action="store_true", help="the full report, with every decision and trade")
+    parser.add_argument("--max-rows", type=int, help="with --json: keep only the newest N decisions and trades")
     args = parser.parse_args(argv)
     if not args.decisions_db or not args.verdicts_db:
         parser.error("--decisions-db and --verdicts-db are required")
     products = [product for product, _ in resolve_products(args.products)]
     results = [product_report(args.decisions_db, args.verdicts_db, product, args.question, args.version,
                               args.horizon_min) for product in products]
+    if args.max_rows is not None:
+        keep = max(0, args.max_rows)
+        for result in results:
+            result["rows"] = result["rows"][-keep:] if keep else []
+            result["trades"] = result["trades"][-keep:] if keep else []
     if args.json:
         out.write(json.dumps(results, indent=2, sort_keys=True) + "\n")
     else:

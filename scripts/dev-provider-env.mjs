@@ -537,6 +537,19 @@ export function devChildSpecs({
         FUTURES_VERDICTS_DB_PATH: verdictsDb,
         FUTURES_PAPER_ACCOUNT_DB_PATH: accountDb,
         BALANCITA_PYTHON_STATUS: pythonStatus(python),
+        // Qwen's hits/misses/returns, computed read-only by Python on request.
+        FUTURES_DECISIONS_DB_PATH: decisionsDb,
+        ...(python?.command
+          ? {
+              BALANCITA_PYTHON_COMMAND: JSON.stringify([
+                python.command,
+                ...python.prefixArgs,
+              ]),
+              PYTHONPATH: [`${root}/python`, env.PYTHONPATH]
+                .filter(Boolean)
+                .join(delimiter),
+            }
+          : {}),
       },
     },
     ...(python?.command ? pythonChildren() : []),

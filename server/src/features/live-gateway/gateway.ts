@@ -6,6 +6,7 @@ import Fastify, { type FastifyInstance } from 'fastify'
 import WebSocket, { WebSocketServer } from 'ws'
 import { LiveMarketFollower } from './market-follower.ts'
 import { PaperEngineFollower } from './paper-engine-follower.ts'
+import { qwenScoresOff, type QwenScores } from './qwen-scores.ts'
 
 /** Synthetic stream id: the gateway has no engine run, only a market view. */
 export const LIVE_RUN_ID = 'live-market-view'
@@ -27,6 +28,8 @@ export interface LiveGatewayOptions {
   readonly verdictsDbPath?: string
   /** Reports the engine `unavailable` with this reason (e.g. no Python). */
   readonly engineUnavailableReason?: string
+  /** Hits, misses and returns of Qwen's decisions. Absent: reported `off`. */
+  readonly qwenScores?: QwenScores
   readonly allowedOrigins?: readonly string[]
   readonly staleAfterMs?: number
   readonly pollMs?: number
@@ -206,6 +209,17 @@ export async function buildLiveGateway(
     capture: follower.status(),
     engine: engine.engineStatus(),
   }))
+  const qwenScores =
+    options.qwenScores ?? qwenScoresOff('decisions_not_configured')
+  app.get<{ Querystring: { product?: string } }>(
+    '/api/qwen/scores',
+    async (request, reply) => {
+      const result = await qwenScores.report(request.query.product ?? '')
+      if (result.status === 'error' && result.reason === 'invalid_product')
+        return reply.code(400).send(result)
+      return result
+    },
+  )
   app.get(STREAM_PATH, async (_request, reply) =>
     reply.code(426).send({ error: { code: 'websocket_required' } }),
   )
