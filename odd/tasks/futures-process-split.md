@@ -49,6 +49,7 @@ Every sustained live run of the single process surfaced a new engine defect: the
 - [ ] PS-08e [S] Lifecycle draft -> shadow -> active, gated by the ADR evaluation (out of sample, deflated Sharpe, minimum trade count).
 - [ ] PS-08f [M] Import from Pine Script or freqtrade: an LLM translates the text into a draft spec that the user reviews; imported code never runs.
 - [ ] PS-08g [M] Every strategy also returns buy/hold/sell probabilities, like Q; Q sees all strategies' probabilities and answers buy, hold or sell, stored as a timestamped decision that D can consume. Owned by the "Qwen decide sobre estrategias" thread on top of the PS-08 spec contract.
+- [x] PS-09 [M] Everything useful Kraken publishes, captured and on the terminal chart: public analytics (buy/sell aggressor volume, open interest, liquidations, long/short and top-trader positioning, order book depth and slippage, rolling volatility), official 15m/1h/4h/1d candles, the full ticker (24 h stats, mark/index/premium, bid/ask sizes, funding now and next); per-product order book depth for all pinned products (trading costs). Chart: timeframes, EMA/Bollinger/Donchian/VWAP, flow/OI/liquidations/long-short/RSI panes, entry/stop/target lines, exit markers.
 
 ## Acceptance (PS-01)
 
@@ -323,6 +324,12 @@ Every sustained live run of the single process surfaced a new engine defect: the
   - Q: new STATE fields `strategy_signals` and `strategy_consensus`, and the catalog question `trade_action@1` (buy/hold/sell), stored like any Q decision. Q now asks two questions per fresh verdict.
   - Next: D consuming `trade_action` (Q3), and calibrating both the strategy scores and Q's answer with E's outcomes (Q2).
   - Scoring of Qwen's decisions (user request): `futures_llm_scores.py`, read-only over the decisions and verdicts DBs, writes nothing. Each decision is entered at its bucket close and judged 30 buckets later with the backtest's taker fee on both sides: buy/sell hit (+1) when their net return is positive, hold when neither would have been; misses (-1) counted separately; pending until the horizon closes. A trading book with the backtest's `BOOK_CONFIG`, sizing and cost buffer (stop 1.5 ATR, target 2x, time stop 30 min, opposite decision closes) gives the P&L, return and hit rate comparable with each strategy. CLI: `python -m balancita_engine.futures_llm_scores --decisions-db ... --verdicts-db ...` (`--json` for every decision and trade). If the strategies thread changes the backtest's cost model or hit definition, this module follows it.
+
+- 2026-10-07 PS-09, market data for the chart (thread "Datos del gráfico de Terminal").
+  - Capture A also polls Kraken's public analytics (`/api/charts/v1/analytics/<product>/<metric>`) into market DB schema 6: `paper_futures_analytics_responses` (raw + hash) and `paper_futures_analytics_points` (flat values per bucket, a new revision only when values change; append-only triggers). PF_XBTUSD: 7 metrics at 1m (24 h backfill) and 1h (60 d); every pinned product: `orderbook` at 1m (best bid/ask, liquidity within 0.05-100 %, slippage for 1k-1M USD).
+  - Official candles add 15m/1h/4h/1d for PF_XBTUSD only (no verdict reads them).
+  - Gateway B: `GET /api/terminal/chart?interval_ms=` (official candles, the unpublished tail built from finer official candles and the live 1m, analytics folded into the buckets, latest depth) and `market.ticker_stats` from the raw ticker in bootstrap, snapshot and `market.updated`.
+  - Evidence: unit tests for parser, store, capture, gateway and chart model; live run against Kraken from the cloud with every series filled.
 
 ## Next step
 

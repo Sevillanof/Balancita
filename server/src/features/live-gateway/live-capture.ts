@@ -20,12 +20,33 @@ import {
   OFFICIAL_CANDLE_INTERVALS,
   OFFICIAL_CANDLES_PER_REQUEST,
 } from '../kraken-futures/official-candles.ts'
+import {
+  ANALYTICS_POINTS_PER_REQUEST,
+  createAnalyticsClient,
+  type AnalyticsMetric,
+} from '../kraken-futures/market-analytics.ts'
 
 /** Backfill depth per interval: enough history for 5m indicator warm-up. */
 const OFFICIAL_LOOKBACK_MS: Readonly<Record<number, number>> = {
   60_000: 24 * 3_600_000,
   300_000: 3 * 24 * 3_600_000,
 }
+/** Chart-only timeframes: about 500 candles of history each. */
+const CHART_LOOKBACK_MS: Readonly<Record<number, number>> = {
+  900_000: 7 * 24 * 3_600_000,
+  3_600_000: 60 * 24 * 3_600_000,
+  14_400_000: 180 * 24 * 3_600_000,
+  86_400_000: 730 * 24 * 3_600_000,
+}
+/** Analytics history: one day of minutes, sixty days of hours. */
+const ANALYTICS_LOOKBACK_MS: Readonly<Record<number, number>> = {
+  60_000: 24 * 3_600_000,
+  3_600_000: 60 * 24 * 3_600_000,
+}
+/** Analytics buckets settle a few seconds after the minute: poll at :08. */
+const ANALYTICS_POLL_OFFSET_MS = 8_000
+/** At most this many `more` pages per series per poll (backfill catch-up). */
+const ANALYTICS_MAX_PAGES = 3
 /** Poll this long after each minute boundary so the closed candle settled. */
 const OFFICIAL_POLL_OFFSET_MS = 3_000
 /**
@@ -71,6 +92,29 @@ export interface LiveCaptureOptions {
   readonly officialCandleLookbackMs?: Readonly<Record<number, number>>
   /** Fixed poll period; by default polls 3 s after every minute boundary. */
   readonly officialPollMs?: number
+  /**
+   * Extra official timeframes captured for the terminal product only (chart
+   * use; no verdict reads them). Default: none.
+   */
+  readonly chartCandleIntervals?: readonly number[]
+  /**
+   * Public Kraken analytics series captured for the terminal product (order
+   * flow, open interest, liquidations, positioning, depth). Default: none.
+   */
+  readonly analytics?: {
+    /** Series of the terminal product (PF_XBTUSD). */
+    readonly metrics: readonly AnalyticsMetric[]
+    readonly intervals: readonly number[]
+    /**
+     * Series captured for every pinned product at 1m (e.g. `orderbook`: best
+     * bid/ask, depth bands and slippage, for per-product trading costs).
+     */
+    readonly allProductMetrics?: readonly AnalyticsMetric[]
+    readonly fetch?: HistoricalFundingFetch
+    /** Fixed poll period; by default 8 s after every minute boundary. */
+    readonly pollMs?: number
+    readonly lookbackMs?: Readonly<Record<number, number>>
+  }
   readonly log?: (line: string) => void
 }
 
@@ -91,6 +135,9 @@ export function createLiveCapture(options: LiveCaptureOptions) {
     ReturnType<typeof createHistoricalFundingClient> | undefined
   let officialTimer: ReturnType<typeof setTimeout> | undefined
   let officialClient: ReturnType<typeof createOfficialCandlesClient> | undefined
+  let analyticsTimer: ReturnType<typeof setTimeout> | undefined
+  let analyticsClient: ReturnType<typeof createAnalyticsClient> | undefined
+  let analyticsPoll: Promise<void> = Promise.resolve()
   let stopped = true
   let fundingPoll: Promise<void> = Promise.resolve()
   let officialPoll: Promise<void> = Promise.resolve()
@@ -114,47 +161,58 @@ export function createLiveCapture(options: LiveCaptureOptions) {
         })
   const lookbacks = {
     ...OFFICIAL_LOOKBACK_MS,
+    ...CHART_LOOKBACK_MS,
     ...options.officialCandleLookbackMs,
   }
+  // Verdict series for every product, then the chart-only timeframes of the
+  // terminal product (largest first: they are due least often).
+  const officialSeries = [
+    ...products.flatMap(({ productId }) =>
+      OFFICIAL_CANDLE_INTERVALS.map((interval) => ({ productId, interval })),
+    ),
+    ...(options.chartCandleIntervals ?? []).map((interval) => ({
+      productId: FUTURES_PRODUCT,
+      interval,
+    })),
+  ]
 
   // Official Kraken candles are the canonical series for verdicts: backfill
   // on start, then fetch each newly closed bucket.
   const pollOfficialCandles = async (): Promise<void> => {
     let requested = false
     // One product after another, 5m before 1m within each (OFFICIAL_CANDLE_INTERVALS).
-    for (const { productId } of products)
-      for (const interval of OFFICIAL_CANDLE_INTERVALS) {
-        if (stopped || officialClient === undefined) return
-        const due = (): number | undefined => {
-          const now = clock()
-          const latest = store.latestOfficialBucket(productId, interval)
-          // The bucket after the latest stored one has not closed yet.
-          if (latest !== undefined && latest + 2 * interval > now)
-            return undefined
-          return Math.max(
-            latest === undefined ? 0 : latest + interval,
-            now - (lookbacks[interval] ?? OFFICIAL_LOOKBACK_MS[interval]!),
-            now - OFFICIAL_CANDLES_PER_REQUEST * interval,
-          )
-        }
-        if (due() === undefined) continue
-        if (requested) await pause(requestGapMs)
-        if (stopped || officialClient === undefined) return
-        // Recomputed after the pause: the clock and the stored data moved on.
-        const from = due()
-        if (from === undefined) continue
-        requested = true
-        try {
-          store.appendOfficialCandles(
-            await officialClient.fetch(productId, interval, from, clock()),
-          )
-        } catch (error) {
-          if (stopped) return
-          log(
-            `official candles unavailable (${productId} ${interval} ms): ${describe(error)}`,
-          )
-        }
+    for (const { productId, interval } of officialSeries) {
+      if (stopped || officialClient === undefined) return
+      const due = (): number | undefined => {
+        const now = clock()
+        const latest = store.latestOfficialBucket(productId, interval)
+        // The bucket after the latest stored one has not closed yet.
+        if (latest !== undefined && latest + 2 * interval > now)
+          return undefined
+        return Math.max(
+          latest === undefined ? 0 : latest + interval,
+          now - (lookbacks[interval] ?? 500 * interval),
+          now - OFFICIAL_CANDLES_PER_REQUEST * interval,
+        )
       }
+      if (due() === undefined) continue
+      if (requested) await pause(requestGapMs)
+      if (stopped || officialClient === undefined) return
+      // Recomputed after the pause: the clock and the stored data moved on.
+      const from = due()
+      if (from === undefined) continue
+      requested = true
+      try {
+        store.appendOfficialCandles(
+          await officialClient.fetch(productId, interval, from, clock()),
+        )
+      } catch (error) {
+        if (stopped) return
+        log(
+          `official candles unavailable (${productId} ${interval} ms): ${describe(error)}`,
+        )
+      }
+    }
   }
   const scheduleOfficialPoll = (): void => {
     if (stopped) return
@@ -164,6 +222,94 @@ export function createLiveCapture(options: LiveCaptureOptions) {
       60_000 - (now % 60_000) + OFFICIAL_POLL_OFFSET_MS
     officialTimer = setTimeout(() => {
       officialPoll = pollOfficialCandles().finally(scheduleOfficialPoll)
+    }, delay)
+  }
+
+  // Public analytics of the terminal product: order flow, open interest,
+  // liquidations, positioning and depth. Same rules as official candles:
+  // backfill on start, then each newly settled bucket; failures only log.
+  const analytics = options.analytics
+  // Terminal product: every metric at every interval; then the per-product
+  // metrics (1m) of the other pinned products.
+  const analyticsSeries = analytics
+    ? [
+        ...analytics.intervals.flatMap((interval) =>
+          analytics.metrics.map((metric) => ({
+            productId: FUTURES_PRODUCT,
+            metric,
+            interval,
+          })),
+        ),
+        ...products
+          .filter(({ productId }) => productId !== FUTURES_PRODUCT)
+          .flatMap(({ productId }) =>
+            (analytics.allProductMetrics ?? []).map((metric) => ({
+              productId,
+              metric,
+              interval: 60_000,
+            })),
+          ),
+        ...(analytics.allProductMetrics ?? [])
+          .filter(
+            (metric) =>
+              !analytics.metrics.includes(metric) ||
+              !analytics.intervals.includes(60_000),
+          )
+          .map((metric) => ({
+            productId: FUTURES_PRODUCT,
+            metric,
+            interval: 60_000,
+          })),
+      ]
+    : []
+  const pollAnalytics = async (): Promise<void> => {
+    if (!analytics) return
+    let requested = false
+    for (const { productId, metric, interval } of analyticsSeries)
+      for (let page = 0; page < ANALYTICS_MAX_PAGES; page += 1) {
+        if (stopped || analyticsClient === undefined) return
+        const now = clock()
+        const latest = store.latestAnalyticsBucket(productId, metric, interval)
+        if (latest !== undefined && latest + 2 * interval > now) break
+        const from = Math.max(
+          latest === undefined ? 0 : latest + interval,
+          now -
+            (analytics.lookbackMs?.[interval] ??
+              ANALYTICS_LOOKBACK_MS[interval] ??
+              500 * interval),
+          now - ANALYTICS_POINTS_PER_REQUEST * interval,
+        )
+        if (requested) await pause(requestGapMs)
+        if (stopped || analyticsClient === undefined) return
+        requested = true
+        try {
+          const response = await analyticsClient.fetch(
+            productId,
+            metric,
+            interval,
+            from,
+          )
+          store.appendAnalytics(response)
+          // Kraken caps a response; fetch the next page only while it says so
+          // and this page actually moved the stored series forward.
+          const moved = store.latestAnalyticsBucket(productId, metric, interval)
+          if (!response.more || moved === undefined || moved === latest) break
+        } catch (error) {
+          if (stopped) return
+          log(
+            `analytics unavailable (${productId} ${metric} ${interval} ms): ${describe(error)}`,
+          )
+          break
+        }
+      }
+  }
+  const scheduleAnalyticsPoll = (): void => {
+    if (stopped || !analytics) return
+    const now = clock()
+    const delay =
+      analytics.pollMs ?? 60_000 - (now % 60_000) + ANALYTICS_POLL_OFFSET_MS
+    analyticsTimer = setTimeout(() => {
+      analyticsPoll = pollAnalytics().finally(scheduleAnalyticsPoll)
     }, delay)
   }
 
@@ -266,6 +412,10 @@ export function createLiveCapture(options: LiveCaptureOptions) {
       clock,
     })
     officialPoll = pollOfficialCandles().finally(scheduleOfficialPoll)
+    if (analytics) {
+      analyticsClient = createAnalyticsClient({ fetch: analytics.fetch, clock })
+      analyticsPoll = pollAnalytics().finally(scheduleAnalyticsPoll)
+    }
   }
 
   const attemptCatalog = async (): Promise<void> => {
@@ -314,13 +464,21 @@ export function createLiveCapture(options: LiveCaptureOptions) {
       if (candleTimer !== undefined) clearInterval(candleTimer)
       if (fundingTimer !== undefined) clearTimeout(fundingTimer)
       if (officialTimer !== undefined) clearTimeout(officialTimer)
+      if (analyticsTimer !== undefined) clearTimeout(analyticsTimer)
       for (const wake of [...sleepers]) wake()
       collector?.stop()
       fundingClient?.close()
       officialClient?.close()
-      catalogTimer = candleTimer = fundingTimer = officialTimer = undefined
+      analyticsClient?.close()
+      catalogTimer =
+        candleTimer =
+        fundingTimer =
+        officialTimer =
+        analyticsTimer =
+          undefined
       await fundingPoll.catch(() => undefined)
       await officialPoll.catch(() => undefined)
+      await analyticsPoll.catch(() => undefined)
     },
     get collector(): KrakenFuturesMarketCollector | undefined {
       return collector

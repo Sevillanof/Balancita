@@ -3,6 +3,7 @@ import {
   CandlestickSeries,
   ColorType,
   HistogramSeries,
+  LineSeries,
   createChart,
   createSeriesMarkers,
   type IChartApi,
@@ -36,6 +37,36 @@ export type ApprovedTerminalLevel = {
   target: number
 }
 
+/** A line drawn over the candles (indicator). Times in seconds. */
+export type ApprovedChartOverlay = {
+  id: string
+  color: string
+  points: readonly { time: number; value: number }[]
+  dashed?: boolean
+}
+
+/** A sub-pane under the candles: order flow, open interest, RSI… */
+export type ApprovedChartPane = {
+  id: string
+  series: readonly {
+    id: string
+    kind: 'line' | 'histogram'
+    color: string
+    points: readonly { time: number; value: number; color?: string }[]
+    /** Fixed decimals for the axis (default 2). */
+    precision?: number
+  }[]
+}
+
+/** Always-visible horizontal price line (entry, stop, target, mark). */
+export type ApprovedChartPriceLine = {
+  id: string
+  price: number
+  title: string
+  color: string
+  dashed?: boolean
+}
+
 type Props = {
   candles: readonly ApprovedTerminalCandle[]
   markers: readonly ApprovedTerminalMarker[]
@@ -47,7 +78,22 @@ type Props = {
   initialViewport?: 'approved-terminal'
   onSelect: (time: number, markerId?: string) => void
   ariaLabel?: string
+  /** Show the volume histogram under the candles (default true). */
+  showVolume?: boolean
+  overlays?: readonly ApprovedChartOverlay[]
+  panes?: readonly ApprovedChartPane[]
+  priceLines?: readonly ApprovedChartPriceLine[]
+  /**
+   * Scroll to the selected marker when the chart first renders (default true).
+   * False opens on the latest candles and only follows later selections.
+   */
+  focusOnMount?: boolean
 }
+
+const PANE_HEIGHT_PX = 110
+const NO_OVERLAYS: readonly ApprovedChartOverlay[] = []
+const NO_PANES: readonly ApprovedChartPane[] = []
+const NO_LINES: readonly ApprovedChartPriceLine[] = []
 
 function cssColor(name: string, fallback: string): string {
   if (typeof document === 'undefined') return fallback
@@ -150,6 +196,11 @@ export default function ApprovedTerminalChart({
   initialViewport,
   onSelect,
   ariaLabel,
+  showVolume = true,
+  overlays = NO_OVERLAYS,
+  panes = NO_PANES,
+  priceLines: fixedLines = NO_LINES,
+  focusOnMount = true,
 }: Props) {
   const container = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
@@ -159,6 +210,12 @@ export default function ApprovedTerminalChart({
     null,
   )
   const priceLines = useRef<
+    ReturnType<ISeriesApi<'Candlestick'>['createPriceLine']>[]
+  >([])
+  const overlaySeries = useRef(new Map<string, ISeriesApi<'Line'>>())
+  const paneSeries = useRef<ISeriesApi<'Line' | 'Histogram'>[]>([])
+  const paneKey = useRef('')
+  const fixedPriceLines = useRef<
     ReturnType<ISeriesApi<'Candlestick'>['createPriceLine']>[]
   >([])
   const fitted = useRef(false)
@@ -184,6 +241,7 @@ export default function ApprovedTerminalChart({
       amber: cssColor('--warning', '#d4aa62'),
       info: cssColor('--info', '#79a9bd'),
     }
+    const overlays = overlaySeries.current
     const chart = createChart(node, {
       autoSize: true,
       layout: {
@@ -300,6 +358,10 @@ export default function ApprovedTerminalChart({
       priceLines.current.forEach((line) => series.removePriceLine(line))
       priceLines.current = []
       chart.remove()
+      overlays.clear()
+      paneSeries.current = []
+      paneKey.current = ''
+      fixedPriceLines.current = []
       chartRef.current = null
       candleSeriesRef.current = null
       volumeRef.current = null
@@ -458,6 +520,10 @@ export default function ApprovedTerminalChart({
     const bucket = Math.floor(selected.time / intervalSeconds) * intervalSeconds
     const index = candles.findIndex((candle) => candle.time === bucket)
     const selectionKey = `${selectedId}:${intervalSeconds}:${bucket}`
+    if (!focusOnMount && focusedSelection.current === null) {
+      focusedSelection.current = selectionKey
+      return
+    }
     if (index >= 0 && focusedSelection.current !== selectionKey) {
       chartRef.current?.timeScale().setVisibleLogicalRange({
         from: Math.max(0, index - 30),
@@ -465,7 +531,133 @@ export default function ApprovedTerminalChart({
       })
       focusedSelection.current = selectionKey
     }
-  }, [markers, selectedId, intervalSeconds, candles, initialViewport])
+  }, [
+    markers,
+    selectedId,
+    intervalSeconds,
+    candles,
+    initialViewport,
+    focusOnMount,
+  ])
+
+  const volumeHidden = useRef(false)
+  useEffect(() => {
+    // Untouched while visible: only a hide (or the show after it) is applied.
+    if (showVolume && !volumeHidden.current) return
+    volumeRef.current?.applyOptions({ visible: showVolume })
+    volumeHidden.current = !showVolume
+  }, [showVolume, initialViewport, currency])
+
+  useEffect(() => {
+    const chart = chartRef.current
+    if (!chart) return
+    const live = overlaySeries.current
+    const wanted = new Set(overlays.map((overlay) => overlay.id))
+    for (const [id, series] of live)
+      if (!wanted.has(id)) {
+        chart.removeSeries(series)
+        live.delete(id)
+      }
+    for (const overlay of overlays) {
+      let series = live.get(overlay.id)
+      if (!series) {
+        series = chart.addSeries(LineSeries, {
+          lineWidth: 1,
+          priceLineVisible: false,
+          lastValueVisible: false,
+          crosshairMarkerVisible: false,
+        })
+        live.set(overlay.id, series)
+      }
+      series.applyOptions({
+        color: overlay.color,
+        lineStyle: overlay.dashed ? 2 : 0,
+      })
+      series.setData(
+        overlay.points.map((point) => ({
+          time: point.time as Time,
+          value: point.value,
+        })),
+      )
+    }
+  }, [overlays, initialViewport, currency])
+
+  useEffect(() => {
+    const chart = chartRef.current
+    if (!chart) return
+    // Rebuild the sub-panes only when their layout changes; otherwise update data.
+    const key = panes
+      .map(
+        (pane) =>
+          `${pane.id}:${pane.series.map((item) => `${item.id}/${item.kind}`).join(',')}`,
+      )
+      .join('|')
+    if (key !== paneKey.current) {
+      for (const series of paneSeries.current) chart.removeSeries(series)
+      paneSeries.current = []
+      for (let index = chart.panes().length - 1; index >= 1; index -= 1)
+        chart.removePane(index)
+      panes.forEach((pane, paneIndex) => {
+        for (const item of pane.series) {
+          const options = {
+            color: item.color,
+            priceLineVisible: false,
+            lastValueVisible: true,
+            priceFormat: {
+              type: 'price' as const,
+              precision: item.precision ?? 2,
+              minMove: 1 / 10 ** (item.precision ?? 2),
+            },
+          }
+          paneSeries.current.push(
+            item.kind === 'line'
+              ? chart.addSeries(
+                  LineSeries,
+                  { ...options, lineWidth: 1 },
+                  paneIndex + 1,
+                )
+              : chart.addSeries(HistogramSeries, options, paneIndex + 1),
+          )
+        }
+      })
+      // Sizes survive auto-resize as proportions: candles keep about 440 px
+      // and every sub-pane about PANE_HEIGHT_PX of the taller container.
+      chart
+        .panes()
+        .forEach((pane, index) =>
+          pane.setStretchFactor(index === 0 ? 440 / PANE_HEIGHT_PX : 1),
+        )
+      paneKey.current = key
+    }
+    let index = 0
+    for (const pane of panes)
+      for (const item of pane.series) {
+        paneSeries.current[index]?.setData(
+          item.points.map((point) => ({
+            time: point.time as Time,
+            value: point.value,
+            ...(point.color ? { color: point.color } : {}),
+          })),
+        )
+        index += 1
+      }
+  }, [panes, initialViewport, currency])
+
+  useEffect(() => {
+    const series = candleSeriesRef.current
+    if (!series) return
+    fixedPriceLines.current.forEach((line) => series.removePriceLine(line))
+    fixedPriceLines.current = fixedLines.map((line) =>
+      series.createPriceLine({
+        price: line.price,
+        color: line.color,
+        lineWidth: 1,
+        lineStyle: line.dashed ? 2 : 0,
+        axisLabelVisible: true,
+        title: line.title,
+      }),
+    )
+  }, [fixedLines, initialViewport, currency])
 
   return (
     <>
@@ -475,6 +667,13 @@ export default function ApprovedTerminalChart({
         data-candle-count={candles.length}
         data-marker-count={markers.length}
         className="demo-terminal__chart"
+        style={
+          panes.length > 0
+            ? {
+                height: `calc(var(--terminal-chart-height, 440px) + ${panes.length * PANE_HEIGHT_PX}px)`,
+              }
+            : undefined
+        }
         role="img"
         aria-label={
           ariaLabel ??

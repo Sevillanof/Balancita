@@ -5,6 +5,14 @@ import {
 } from '../kraken-futures/futures-market-store.ts'
 import { FUTURES_PRODUCT } from '../kraken-futures/futures-market.ts'
 import { closedHistoryRows, toTerminalMarket } from './terminal-market.ts'
+import {
+  chartCandles,
+  chartDepth,
+  chartFlow,
+  tickerStats,
+  type ChartCandle,
+  type TickerStats,
+} from './terminal-chart.ts'
 
 export const CANDLE_INTERVAL_MS = 60_000
 const PRICE_LOOKBACK_ROWS = 2_000
@@ -125,6 +133,7 @@ export class LiveMarketFollower {
   /** Recent buckets whose official candle was served: observed ones lose. */
   private readonly officialBuckets = new Set<number>()
   private latestPrice: PriceView | undefined
+  private latestTicker: TickerStats | null = null
   private latestCandle: CandleDto | undefined
   private lastStatusKey = ''
   private lastError: string | undefined
@@ -173,6 +182,12 @@ export class LiveMarketFollower {
       const lastEvent =
         recent.at(-1)?.event ?? opened.latestTickerAsOf(Number.MAX_SAFE_INTEGER)
       this.latestPrice = lastEvent ? toPrice(lastEvent) : undefined
+      const lastTicker = [...recent]
+        .reverse()
+        .find((row) => row.event.type === 'ticker')?.event
+      this.latestTicker = tickerStats(
+        lastTicker ?? opened.latestTickerAsOf(Number.MAX_SAFE_INTEGER) ?? {},
+      )
       const candle = opened.latestCandleRevision(CANDLE_INTERVAL_MS)
       this.latestCandle = candle ? toCandle(candle) : undefined
       this.store = opened
@@ -241,6 +256,7 @@ export class LiveMarketFollower {
             received_at: price.received_at,
           }
         : null,
+      ticker_stats: this.latestTicker,
       book_status: 'not_reported',
       book_quality: 'not_reported',
       source_guarantee: 'undocumented',
@@ -310,6 +326,48 @@ export class LiveMarketFollower {
     }
   }
 
+  /**
+   * Chart series of one timeframe: candles (official, then provisional ones
+   * built from finer data), Kraken analytics folded into the same buckets,
+   * the latest depth snapshot and the latest ticker stats.
+   */
+  terminalChart(intervalMs: number): Row {
+    const now = this.clock()
+    const store = this.open()
+    const empty = {
+      schema_version: 'futures-terminal-chart.v1',
+      product_id: FUTURES_PRODUCT,
+      interval_ms: intervalMs,
+      as_of_ms: now,
+      candles: [] as ChartCandle[],
+      flow: [],
+      depth: null,
+      ticker: this.latestTicker,
+    }
+    if (!store) return empty
+    try {
+      const minutes = this.terminalMarket().candles.map((candle) => ({
+        time_ms: Number(candle.time_ms),
+        open: String(candle.open),
+        high: String(candle.high),
+        low: String(candle.low),
+        close: String(candle.close),
+        volume_btc: String(candle.volume_btc),
+        closed: candle.closed,
+      }))
+      const candles = chartCandles(store, intervalMs, minutes, now)
+      return {
+        ...empty,
+        candles,
+        flow: chartFlow(store, intervalMs, candles[0]?.time_ms ?? now),
+        depth: chartDepth(store, now),
+      }
+    } catch (error) {
+      this.dropStore(error)
+      return empty
+    }
+  }
+
   metadataHash(): string | null {
     const store = this.open()
     try {
@@ -328,6 +386,7 @@ export class LiveMarketFollower {
     const store = this.open()
     const candles = new Map<number, CandleDto>()
     let priced = false
+    let tickered = false
     if (store) {
       try {
         for (let page = 0; page < MAX_PAGES; page += 1) {
@@ -376,6 +435,11 @@ export class LiveMarketFollower {
           if (rows.length === 0) break
           this.latestPrice = toPrice(rows.at(-1)!.event)
           priced = true
+          const ticker = rows.findLast((row) => row.event.type === 'ticker')
+          if (ticker) {
+            this.latestTicker = tickerStats(ticker.event)
+            tickered = true
+          }
           this.eventCursor = rows.at(-1)!.rowid
           if (rows.length < PAGE) break
         }
@@ -392,6 +456,7 @@ export class LiveMarketFollower {
       last_received_at: status.lastReceivedAt,
       market_status: status.status,
       reason: status.reason,
+      ...(tickered ? { ticker_stats: this.latestTicker } : {}),
     }
     const ordered = [...candles.values()].sort(
       (left, right) => left.bucket_start_ms - right.bucket_start_ms,
