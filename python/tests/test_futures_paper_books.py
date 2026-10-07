@@ -156,5 +156,41 @@ class IndependentBookTests(BooksCase):
         self.assertEqual(opened[key(C25)][0]["side"], "short")
 
 
+class FundingProductsTests(unittest.TestCase):
+    def test_funding_unit_per_product(self):
+        from balancita_engine.futures_instruments import funding_unit
+        self.assertEqual(funding_unit("PF_XBTUSD"), "USD/BTC/hour")
+        self.assertEqual(funding_unit("PF_ETHUSD"), "USD/ETH/hour")
+        with self.assertRaises(ValueError):
+            funding_unit("PF_X")
+
+    def test_each_product_has_its_own_funding_stream(self):
+        import sqlite3
+        import tempfile
+        from balancita_engine.futures_paper_execution import _FundingSource, _MarketReader
+        from test_futures_paper_execution import MARKET_DDL
+        products = [BTC, "PF_ETHUSD"]
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, "market.sqlite")
+            db = sqlite3.connect(path)
+            db.executescript(MARKET_DDL)
+            db.execute("ALTER TABLE paper_futures_funding_periods ADD COLUMN product_id TEXT NOT NULL DEFAULT 'PF_XBTUSD'")
+            for number, (product, unit) in enumerate([(BTC, "USD/BTC/hour"), ("PF_ETHUSD", "USD/ETH/hour")]):
+                db.execute("INSERT INTO paper_futures_funding_responses VALUES(?,?,?,?)", ("r%d" % number, 5, "t", "{}"))
+                db.execute("INSERT INTO paper_futures_funding_periods VALUES(?,?,?,?,?,?,?)",
+                           ("r%d" % number, 1000, 4600, "0.5", 5, unit, product))
+            db.commit()
+            db.close()
+            reader = _MarketReader(path, 1.0, products)
+            source = _FundingSource({}, products)
+            items = []
+            while source.peek(reader, None) is not None:
+                items.append(source.pop())
+            self.assertEqual([(i["product_id"], i["data"]["unit"]) for i in items],
+                             [(BTC, "USD/BTC/hour"), ("PF_ETHUSD", "USD/ETH/hour")])
+            resumed = _FundingSource(source.state(), products)
+            self.assertIsNone(resumed.peek(reader, None))
+
+
 if __name__ == "__main__":
     unittest.main()

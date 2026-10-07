@@ -1,14 +1,22 @@
 import { createHash } from 'node:crypto'
 
 const ENDPOINT =
-  'https://futures.kraken.com/derivatives/api/v3/historical-funding-rates?symbol=PF_XBTUSD'
+  'https://futures.kraken.com/derivatives/api/v3/historical-funding-rates?symbol='
+const BTC_SYMBOL = 'PF_XBTUSD'
+
+/** Quote per base unit per hour: `PF_XBTUSD` -> `USD/BTC/hour`, `PF_ETHUSD` -> `USD/ETH/hour`. */
+export function fundingUnit(symbol: string): string {
+  const match = /^PF_([A-Z0-9]{2,20}?)USD$/.exec(symbol)
+  if (!match) throw new TypeError(`Unsupported funding symbol ${symbol}.`)
+  return `USD/${match[1] === 'XBT' ? 'BTC' : match[1]}/hour`
+}
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 
 export type HistoricalFundingRecord = Readonly<{
   startMs: number
   endMs: number
   fundingRate: string
-  unit: 'USD/BTC/hour'
+  unit: string
   knownAtMs: number
   serverTime: string
   sha256: string
@@ -31,7 +39,9 @@ export type HistoricalFundingFetch = (
 export function parseHistoricalFundingResponse(
   raw: string,
   receivedAtMs: number,
+  symbol: string = BTC_SYMBOL,
 ): HistoricalFundingResponse {
+  const unit = fundingUnit(symbol)
   if (!Number.isSafeInteger(receivedAtMs) || receivedAtMs < 0)
     throw new TypeError('Funding received time is invalid.')
   if (Buffer.byteLength(raw, 'utf8') > MAX_RESPONSE_BYTES)
@@ -79,7 +89,7 @@ export function parseHistoricalFundingResponse(
       startMs,
       endMs: startMs + 3_600_000,
       fundingRate: exactDecimal(lexeme),
-      unit: 'USD/BTC/hour',
+      unit,
       knownAtMs: receivedAtMs,
       serverTime: body.serverTime,
       sha256,
@@ -138,17 +148,24 @@ export function createHistoricalFundingClient(
   const controllers = new Set<AbortController>()
   let closed = false
   return {
-    async fetch(receivedAtMs?: number): Promise<HistoricalFundingResponse> {
+    async fetch(
+      receivedAtMs?: number,
+      symbol: string = BTC_SYMBOL,
+    ): Promise<HistoricalFundingResponse> {
       if (closed) throw new Error('Historical funding client is closed.')
+      fundingUnit(symbol)
       const controller = new AbortController()
       controllers.add(controller)
       const timeout = setTimeout(() => controller.abort(), timeoutMs)
       try {
-        const response = await fetcher(ENDPOINT, {
-          method: 'GET',
-          headers: { accept: 'application/json' },
-          signal: controller.signal,
-        })
+        const response = await fetcher(
+          `${ENDPOINT}${encodeURIComponent(symbol)}`,
+          {
+            method: 'GET',
+            headers: { accept: 'application/json' },
+            signal: controller.signal,
+          },
+        )
         const declaredLength = Number(
           response.headers.get('content-length') ?? 0,
         )
@@ -169,6 +186,7 @@ export function createHistoricalFundingClient(
         return parseHistoricalFundingResponse(
           new TextDecoder('utf-8', { fatal: true }).decode(bytes),
           responseReceivedAtMs,
+          symbol,
         )
       } finally {
         clearTimeout(timeout)

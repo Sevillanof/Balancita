@@ -140,8 +140,7 @@ export function createLiveCapture(options: LiveCaptureOptions) {
   let fundingTimer: ReturnType<typeof setTimeout> | undefined
   let catalogTimer: ReturnType<typeof setTimeout> | undefined
   let fundingClient:
-    | ReturnType<typeof createHistoricalFundingClient>
-    | undefined
+    ReturnType<typeof createHistoricalFundingClient> | undefined
   let officialTimer: ReturnType<typeof setTimeout> | undefined
   let officialClient: ReturnType<typeof createOfficialCandlesClient> | undefined
   let analyticsTimer: ReturnType<typeof setTimeout> | undefined
@@ -390,6 +389,22 @@ export function createLiveCapture(options: LiveCaptureOptions) {
       } catch (error) {
         if (!(error instanceof Error && error.name === 'AbortError'))
           log(`funding unavailable: ${describe(error)}`)
+      }
+      // The other pinned perpetuals: each one is best effort and never blocks BTC.
+      for (const { productId } of products) {
+        if (productId === FUTURES_PRODUCT || stopped) continue
+        try {
+          const response = await fundingClient!.fetch(undefined, productId)
+          const { newPeriods } = store.appendNewFundingKnowledge(
+            response,
+            productId,
+          )
+          if (newPeriods > 0)
+            log(`funding ${productId} +${newPeriods} period(s)`)
+        } catch (error) {
+          if (!(error instanceof Error && error.name === 'AbortError'))
+            log(`funding ${productId} unavailable: ${describe(error)}`)
+        }
       }
     }
     let fundingRetries = 0

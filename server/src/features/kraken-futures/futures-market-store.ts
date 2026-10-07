@@ -165,7 +165,7 @@ export class FuturesMarketStore {
       // Tolerate the single writer holding a commit lock; never writes.
       this.db.exec('PRAGMA busy_timeout=2000;')
       const version = this.schemaVersion()
-      if (version < 3 || version > 6)
+      if (version < 3 || version > 7)
         throw new Error(
           'Read-only futures market source schema is unsupported.',
         )
@@ -314,6 +314,17 @@ export class FuturesMarketStore {
         BEFORE DELETE ON paper_futures_analytics_points BEGIN SELECT RAISE(ABORT, 'market evidence is immutable'); END;
       INSERT OR IGNORE INTO paper_futures_market_migrations VALUES(6, unixepoch('subsec') * 1000);
     `)
+    // Migration 7: funding history per product (existing rows are PF_XBTUSD).
+    const fundingColumns = this.db
+      .prepare('PRAGMA table_info(paper_futures_funding_periods)')
+      .all() as Array<{ name: string }>
+    if (!fundingColumns.some((column) => column.name === 'product_id'))
+      this.db.exec(
+        "ALTER TABLE paper_futures_funding_periods ADD COLUMN product_id TEXT NOT NULL DEFAULT 'PF_XBTUSD'",
+      )
+    this.db.exec(
+      "INSERT OR IGNORE INTO paper_futures_market_migrations VALUES(7, unixepoch('subsec') * 1000)",
+    )
   }
 
   /**
@@ -429,7 +440,7 @@ export class FuturesMarketStore {
 
   /** Stores every period of the response, even those already known. */
   appendFundingResponse(response: HistoricalFundingResponse): void {
-    this.writeFundingResponse(response, response.records)
+    this.writeFundingResponse(response, response.records, 'PF_XBTUSD')
   }
 
   /**
@@ -440,7 +451,10 @@ export class FuturesMarketStore {
    * with its own `known_at`. Readers still pick the first-known row per
    * `start_ms`, and new rows always get a higher rowid than every older one.
    */
-  appendNewFundingKnowledge(response: HistoricalFundingResponse): {
+  appendNewFundingKnowledge(
+    response: HistoricalFundingResponse,
+    productId: string = 'PF_XBTUSD',
+  ): {
     stored: boolean
     newPeriods: number
   } {
@@ -450,9 +464,9 @@ export class FuturesMarketStore {
     try {
       const rows = this.db
         .prepare(
-          'SELECT DISTINCT start_ms, funding_rate FROM paper_futures_funding_periods',
+          'SELECT DISTINCT start_ms, funding_rate FROM paper_futures_funding_periods WHERE product_id=?',
         )
-        .all() as Array<{ start_ms: number; funding_rate: string }>
+        .all(productId) as Array<{ start_ms: number; funding_rate: string }>
       for (const row of rows) known.add(`${row.start_ms}:${row.funding_rate}`)
     } catch (error) {
       if (!(error instanceof Error && error.message.includes('no such table')))
@@ -462,13 +476,14 @@ export class FuturesMarketStore {
       (record) => !known.has(`${record.startMs}:${record.fundingRate}`),
     )
     if (fresh.length === 0) return { stored: false, newPeriods: 0 }
-    this.writeFundingResponse(response, fresh)
+    this.writeFundingResponse(response, fresh, productId)
     return { stored: true, newPeriods: fresh.length }
   }
 
   private writeFundingResponse(
     response: HistoricalFundingResponse,
     records: HistoricalFundingResponse['records'],
+    productId: string,
   ): void {
     if (this.readOnly)
       throw new Error('Cannot append to a read-only market store.')
@@ -498,13 +513,13 @@ export class FuturesMarketStore {
           raw,
         )
       const insert = this.db.prepare(
-        'INSERT OR IGNORE INTO paper_futures_funding_periods VALUES(?,?,?,?,?,?)',
+        'INSERT OR IGNORE INTO paper_futures_funding_periods(response_sha256,start_ms,end_ms,funding_rate,known_at,unit,product_id) VALUES(?,?,?,?,?,?,?)',
       )
       for (const record of records) {
         if (
           record.sha256 !== hash ||
           record.knownAtMs !== response.receivedAtMs ||
-          record.unit !== 'USD/BTC/hour'
+          !/^USD\/[A-Z0-9]+\/hour$/.test(record.unit)
         )
           throw new Error(
             'Funding period provenance does not match its response.',
@@ -516,6 +531,7 @@ export class FuturesMarketStore {
           record.fundingRate,
           time(record.knownAtMs, 'funding knownAt'),
           record.unit,
+          productId,
         )
       }
       this.db.exec('COMMIT')
@@ -921,11 +937,15 @@ export class FuturesMarketStore {
           `SELECT p.start_ms AS startMs,p.end_ms AS endMs,p.funding_rate AS fundingRate,
       p.known_at AS knownAtMs,p.unit,r.server_time AS serverTime,r.sha256
       FROM paper_futures_funding_periods p JOIN paper_futures_funding_responses r ON r.sha256=p.response_sha256
-      WHERE p.known_at<=? ORDER BY p.start_ms,p.known_at,r.sha256`,
+      WHERE p.product_id='PF_XBTUSD' AND p.known_at<=? ORDER BY p.start_ms,p.known_at,r.sha256`,
         )
         .all(knownAtCutoff) as Record<string, unknown>[]
     } catch (error) {
-      if (error instanceof Error && error.message.includes('no such table'))
+      if (
+        error instanceof Error &&
+        (error.message.includes('no such table') ||
+          error.message.includes('no such column'))
+      )
         return []
       throw error
     }
@@ -963,11 +983,15 @@ export class FuturesMarketStore {
           `SELECT p.start_ms AS startMs,p.end_ms AS endMs,p.funding_rate AS fundingRate,
         p.known_at AS knownAtMs,p.unit,r.server_time AS serverTime,r.sha256
         FROM paper_futures_funding_periods p JOIN paper_futures_funding_responses r ON r.sha256=p.response_sha256
-        WHERE p.start_ms<=? AND p.end_ms>? AND p.known_at<=? ORDER BY p.known_at,r.sha256`,
+        WHERE p.product_id='PF_XBTUSD' AND p.start_ms<=? AND p.end_ms>? AND p.known_at<=? ORDER BY p.known_at,r.sha256`,
         )
         .all(at, at, knownAtCutoff) as Record<string, unknown>[]
     } catch (error) {
-      if (error instanceof Error && error.message.includes('no such table'))
+      if (
+        error instanceof Error &&
+        (error.message.includes('no such table') ||
+          error.message.includes('no such column'))
+      )
         return []
       throw error
     }
@@ -1201,8 +1225,7 @@ export class FuturesMarketStore {
           `SELECT content_hash FROM paper_futures_market_events
           WHERE event_id=? OR (feed=? AND product_id=? AND uid=?)`,
         ).get(eventId, feed, product, uid) as
-          | { content_hash: string }
-          | undefined
+          { content_hash: string } | undefined
         if (stored?.content_hash === contentHash) return 'duplicate'
       }
       throw error
@@ -1419,8 +1442,7 @@ export class FuturesMarketStore {
            ORDER BY rowid DESC LIMIT 1`,
         )
         .get(sourceWatermark, receivedCutoff) as
-        | { sequence: number; received_at: number }
-        | undefined
+        { sequence: number; received_at: number } | undefined
       const pendingCount = Number(pending.count)
       const firstSequence =
         pending.first_sequence === null ? null : Number(pending.first_sequence)

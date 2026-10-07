@@ -156,7 +156,7 @@ describe('Kraken futures analytics', () => {
 describe('FuturesMarketStore analytics', () => {
   it('stores only new knowledge and serves the latest revision per bucket', () => {
     const store = new FuturesMarketStore(dbPath())
-    expect(store.schemaVersion()).toBe(6)
+    expect(store.schemaVersion()).toBe(7)
     const first = parse(cvd(['1', '2'], ['1', '1']))
     expect(store.appendAnalytics(first)).toEqual({ inserted: 2 })
     // A re-fetch of the same history writes nothing.

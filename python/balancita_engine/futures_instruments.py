@@ -29,3 +29,11 @@ def lot_size(product_id):
 
 def lot_decimal(product_id):
     return Decimal(lot_size(product_id))
+
+
+def funding_unit(product_id):
+    """Unit of the product's funding rate: quote per base unit per hour (``PF_XBTUSD`` -> USD/BTC/hour)."""
+    if not (product_id.startswith("PF_") and product_id.endswith("USD") and len(product_id) > 6):
+        raise ValueError("no funding unit for {}".format(product_id))
+    base = product_id[3:-3]
+    return "USD/{}/hour".format("BTC" if base == "XBT" else base)

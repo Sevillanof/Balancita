@@ -425,7 +425,7 @@ describe('FuturesMarketStore', () => {
       INSERT INTO market_observations VALUES('spot-fixture','untouched');`)
     fixture.close()
     const store = new FuturesMarketStore(path)
-    expect(store.schemaVersion()).toBe(6)
+    expect(store.schemaVersion()).toBe(7)
     store.append(event)
     store.close()
     const reopened = new DatabaseSync(path)
@@ -825,14 +825,14 @@ describe('FuturesMarketStore official candles', () => {
     v3.close()
   })
 
-  it('opens schema 3 to schema 6 databases read-only', () => {
+  it('opens schema 3 to schema 7 databases read-only', () => {
     const path = dbPath()
     new FuturesMarketStore(path).close()
-    const v6 = new FuturesMarketStore(path, { readOnly: true })
-    expect(v6.schemaVersion()).toBe(6)
-    v6.close()
+    const v7 = new FuturesMarketStore(path, { readOnly: true })
+    expect(v7.schemaVersion()).toBe(7)
+    v7.close()
     const drop = new DatabaseSync(path)
-    drop.exec('DELETE FROM paper_futures_market_migrations WHERE version=6')
+    drop.exec('DELETE FROM paper_futures_market_migrations WHERE version>=6')
     drop.close()
     const v5 = new FuturesMarketStore(path, { readOnly: true })
     expect(v5.schemaVersion()).toBe(5)
@@ -952,7 +952,7 @@ describe('FuturesMarketStore official candles', () => {
       expect(before.candles).toHaveLength(4)
 
       const store = new FuturesMarketStore(path)
-      expect(store.schemaVersion()).toBe(6)
+      expect(store.schemaVersion()).toBe(7)
       store.close()
 
       const after = {
@@ -1008,7 +1008,7 @@ describe('FuturesMarketStore official candles', () => {
 
       // The migrated file serves the old data as PF_XBTUSD and takes new products.
       const again = new FuturesMarketStore(path)
-      expect(again.schemaVersion()).toBe(6)
+      expect(again.schemaVersion()).toBe(7)
       expect(
         again
           .officialCandlesAsOf(BTC, M, T + 9 * M, 10)
@@ -1051,7 +1051,7 @@ describe('FuturesMarketStore official candles', () => {
       new FuturesMarketStore(path).close()
       downgradeToSchema4(path, [])
       const store = new FuturesMarketStore(path)
-      expect(store.schemaVersion()).toBe(6)
+      expect(store.schemaVersion()).toBe(7)
       expect(store.maxOfficialRowid()).toBe(0)
       store.close()
     })

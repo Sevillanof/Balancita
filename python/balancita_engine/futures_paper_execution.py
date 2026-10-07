@@ -40,7 +40,7 @@ from decimal import ROUND_FLOOR, Decimal, InvalidOperation, localcontext
 from .canonical import canonical_json, normalize_decimal
 from .futures_costs import MAKER_RATE, TAKER_RATE
 from .futures_ledger import FuturesLedger
-from .futures_instruments import lot_size
+from .futures_instruments import funding_unit, lot_size
 from .futures_products import resolve_products
 from .futures_strategies import C25_ID, C26_ID, C27_ID, C28_ID, STRATEGY_IDS, propose
 
@@ -313,6 +313,7 @@ class PaperExecutionEngine:
         self.fixed_notional = Decimal(c["fixed_notional_usd"]) if c.get("fixed_notional_usd") else None
         # Funding history is captured for the BTC perpetual only; other products' books do not wait for it.
         self.require_funding = c.get("require_funding", True)
+        self.funding_unit = funding_unit(c["product_id"]) if c.get("product_id") else FUNDING_UNIT
         self.ledger = self._new_ledger()
         self.trade = None
         self.pending = None
@@ -672,6 +673,7 @@ class PaperExecutionEngine:
         self._emit("order_created", time_ms, {
             "order_id": order_id, "type": "exit", "side": "sell" if side == "long" else "buy",
             "reduce_only": True, "quantity": self.trade["quantity"], "eligible_at_ms": eligible,
+            "strategy_id": self.trade["strategy_id"],
         })
 
     # -- verdicts --------------------------------------------------------------
@@ -785,7 +787,7 @@ class PaperExecutionEngine:
 
     def _on_funding(self, time_ms, item):
         data = item["data"]
-        if data["unit"] != FUNDING_UNIT or _dec(data["rate"]) is None or data["end_ms"] <= data["start_ms"]:
+        if data["unit"] != self.funding_unit or _dec(data["rate"]) is None or data["end_ms"] <= data["start_ms"]:
             return
         self.funding_periods.append([data["start_ms"], data["end_ms"], _s(data["rate"]), time_ms])
         del self.funding_periods[:-FUNDING_PERIODS_KEPT]
@@ -891,8 +893,8 @@ class MultiBookEngine:
         }
 
     def process(self, item):
-        # Tickers and verdicts reach the books of their product; the funding history is the BTC perpetual's.
-        product = item.get("product_id", BTC_PRODUCT) if item["kind"] != "funding" else BTC_PRODUCT
+        # Tickers, verdicts and funding periods reach the books of their own product.
+        product = item.get("product_id", BTC_PRODUCT)
         for key, book in self.books.items():
             strategy_id, product_id = self.product_of[key]
             if product_id != product:
@@ -992,6 +994,19 @@ class _MarketReader(_Reader):
             "SELECT start_ms, end_ms, funding_rate, known_at, unit FROM paper_futures_funding_periods "
             "WHERE rowid>? AND rowid<=? AND start_ms>? ORDER BY start_ms, known_at, rowid",
             (after_rowid, upto_rowid, after_start),
+        ).fetchall()
+
+    def fetch_funding_products(self, after_rowid, upto_rowid):
+        # A market DB written before schema 7 holds the BTC perpetual's history only.
+        columns = [row[1] for row in self.db.execute("PRAGMA table_info(paper_futures_funding_periods)")]
+        if "product_id" not in columns:
+            return [row + (BTC_PRODUCT,) for row in self.fetch_funding(after_rowid, upto_rowid, -1)
+                    if BTC_PRODUCT in self.products]
+        return self.db.execute(
+            "SELECT start_ms, end_ms, funding_rate, known_at, unit, product_id FROM paper_futures_funding_periods "
+            "WHERE rowid>? AND rowid<=? AND product_id IN ({}) ORDER BY start_ms, known_at, rowid".format(
+                self._marks),
+            (after_rowid, upto_rowid, *self.products),
         ).fetchall()
 
 
@@ -1103,14 +1118,20 @@ class _VerdictSource(_Source):
 class _FundingSource(_Source):
     kind = "funding"
 
-    def __init__(self, cursor):
+    def __init__(self, cursor, products=None):
         super().__init__(cursor)
         self.rowid = cursor.get("rowid", 0)
         self.scan_rowid = self.rowid
+        # None: the legacy BTC-only stream (item id = period start). A list: every
+        # product's history, item id = start * 64 + index of the product in the list.
+        self.products = None if products is None else list(products)
 
     def refill(self, reader):
         upto = reader.probe_funding()
         if upto is None or upto <= self.scan_rowid:
+            return
+        if self.products is not None:
+            self._refill_products(reader, upto)
             return
         rows = reader.fetch_funding(self.rowid, upto, self.cursor)
         self.scan_rowid = upto
@@ -1122,6 +1143,27 @@ class _FundingSource(_Source):
             data = {"start_ms": start, "end_ms": end, "rate": rate, "known_at": known_at, "unit": unit}
             self.buffer.append({
                 "kind": "funding", "time": self._clamp(max(end, known_at)), "id": start, "data": data,
+            })
+        if not self.buffer:
+            self.rowid = upto
+
+    def _refill_products(self, reader, upto):
+        rows = reader.fetch_funding_products(self.rowid, upto)
+        self.scan_rowid = upto
+        seen = set()
+        found = []
+        for start, end, rate, known_at, unit, product_id in rows:
+            if (start, product_id) in seen:
+                continue  # the same period repeats across responses: first-known row wins
+            seen.add((start, product_id))
+            item_id = start * 64 + self.products.index(product_id)
+            if item_id > self.cursor:
+                found.append((item_id, start, end, rate, known_at, unit, product_id))
+        for item_id, start, end, rate, known_at, unit, product_id in sorted(found):
+            data = {"start_ms": start, "end_ms": end, "rate": rate, "known_at": known_at, "unit": unit}
+            self.buffer.append({
+                "kind": "funding", "time": self._clamp(max(end, known_at)), "id": item_id,
+                "data": data, "product_id": product_id,
             })
         if not self.buffer:
             self.rowid = upto
@@ -1166,7 +1208,8 @@ class PaperExecutionService:
             store.config, store, state=engine_state, snapshot_every_events=snapshot_every_events,
             snapshot_interval_ms=snapshot_interval_ms,
         )
-        self.funding = _FundingSource(cursors.get("funding", {}))
+        self.funding = _FundingSource(
+            cursors.get("funding", {}), self.products if store.config.get("books") else None)
         self.verdicts = _VerdictSource(cursors.get("verdicts", {}))
         self.tickers = _TickerSource(cursors.get("tickers", {}))
 
