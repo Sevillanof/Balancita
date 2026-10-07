@@ -444,6 +444,8 @@ export default function ApprovedTerminalChart({
     } else if (visibleRange) timeScale?.setVisibleLogicalRange(visibleRange)
   }, [candles, intervalSeconds, initialViewport])
 
+  // Markers depend on which buckets exist, not on the forming candle's price.
+  const bucketsKey = `${candles.length}:${candles[0]?.time}:${candles.at(-1)?.time}`
   useEffect(() => {
     const candleTimes = new Set(candles.map((candle) => candle.time))
     const markerColors = {
@@ -489,7 +491,8 @@ export default function ApprovedTerminalChart({
       marginsApplied.current = stacked
     }
     markerRef.current?.setMarkers(painted)
-  }, [candles, markers, selectedId, intervalSeconds, initialViewport])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bucketsKey, markers, selectedId, intervalSeconds, initialViewport])
 
   useEffect(() => {
     const series = candleSeriesRef.current

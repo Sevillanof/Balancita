@@ -11,7 +11,8 @@ import {
   terminalWebSocketUrl,
   type TerminalBootstrap,
 } from '../features/connected-trading/infrastructure/terminal-stream-client.ts'
-import { applyTerminalEvent } from '../features/connected-trading/infrastructure/terminal-state.ts'
+import { applyTerminalEvents } from '../features/connected-trading/infrastructure/terminal-state.ts'
+import { createTerminalBatcher } from '../features/connected-trading/infrastructure/terminal-batch.ts'
 import { projectTerminalQuote } from './terminal-market.ts'
 import TerminalDecisions from './TerminalDecisions.tsx'
 import type { DecisionRow } from './terminal-decisions.ts'
@@ -76,6 +77,10 @@ export default function FuturesTerminal({
     let lastSeq = 0
     let streamId: string | null = null
     const seen = new Set<string>()
+    // One view update per second for price ticks instead of one per event.
+    const batcher = createTerminalBatcher((events) =>
+      setState((previous) => applyTerminalEvents(previous, events)),
+    )
     const openSocket = () => {
       if (cancelled) return
       socket = new WebSocket(terminalWebSocketUrl(apiBase))
@@ -122,6 +127,7 @@ export default function FuturesTerminal({
             setActiveRunId(event.run_id)
             setSelectedAnalysisId(null)
           }
+          batcher.reset()
           const originalRun = event.run_id === bootstrap.active_run_id
           const watermark = event.data.watermark as number
           streamId = event.stream_id
@@ -154,6 +160,7 @@ export default function FuturesTerminal({
           return
         }
         if (event.type === 'resync.required') {
+          batcher.reset()
           lastSeq = 0
           streamId = null
           socket?.close()
@@ -199,6 +206,7 @@ export default function FuturesTerminal({
         if (event.seq <= lastSeq) return
         if (event.seq !== lastSeq + 1) {
           setError('Se detectó un salto en el flujo; resincronizando.')
+          batcher.reset()
           lastSeq = 0
           streamId = null
           socket?.close()
@@ -216,7 +224,7 @@ export default function FuturesTerminal({
           if (Number.isSafeInteger(appliedVersion))
             setCommandVersion(Number(appliedVersion))
         }
-        setState((previous) => applyTerminalEvent(previous, event))
+        batcher.push(event)
       }
       socket.onclose = () => {
         setConnected(false)
@@ -229,6 +237,7 @@ export default function FuturesTerminal({
     openSocket()
     return () => {
       cancelled = true
+      batcher.dispose()
       if (retryTimer !== undefined) clearTimeout(retryTimer)
       socket?.close()
       socketRef.current = null

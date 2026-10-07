@@ -1,3 +1,4 @@
+import { useMemo } from 'react'
 import type {
   ApprovedTerminalCandle,
   ApprovedTerminalMarker,
@@ -8,6 +9,24 @@ import type { TerminalBootstrap } from '../features/connected-trading/infrastruc
 import { strategyCode } from '../features/trading-view/domain/terminal-chart-model.ts'
 import { record } from '../shared/wire/decode.ts'
 import { analysisAction } from './terminal-labels.ts'
+
+/** Time of the last candle at or before `seconds` (the first one when none is). */
+function candleTimeAtOrBefore(
+  candles: readonly ApprovedTerminalCandle[],
+  seconds: number,
+): number {
+  let low = 0
+  let high = candles.length - 1
+  let found = 0
+  while (low <= high) {
+    const middle = (low + high) >> 1
+    if (candles[middle]!.time <= seconds) {
+      found = middle
+      low = middle + 1
+    } else high = middle - 1
+  }
+  return candles[found]!.time
+}
 
 export default function TerminalMarketChart({
   market,
@@ -35,29 +54,95 @@ export default function TerminalMarketChart({
   positions?: unknown[]
   orders: unknown[]
 }) {
-  const candles: ApprovedTerminalCandle[] = Array.isArray(market.candles)
-    ? market.candles.flatMap((value) => {
-        const candle = record(value)
-        const values = ['open', 'high', 'low', 'close', 'volume_btc'].map(
-          (key) => Number(candle[key]),
-        )
-        if (
-          !Number.isSafeInteger(candle.time_ms) ||
-          values.some((number) => !Number.isFinite(number))
-        )
-          return []
-        return [
-          {
-            time: Math.floor(Number(candle.time_ms) / 1000),
-            open: values[0]!,
-            high: values[1]!,
-            low: values[2]!,
-            close: values[3]!,
-            volume: values[4]!,
-          },
-        ]
-      })
-    : []
+  const marketCandles = market.candles
+  const candles = useMemo<ApprovedTerminalCandle[]>(
+    () =>
+      Array.isArray(marketCandles)
+        ? marketCandles.flatMap((value) => {
+            const candle = record(value)
+            const values = ['open', 'high', 'low', 'close', 'volume_btc'].map(
+              (key) => Number(candle[key]),
+            )
+            if (
+              !Number.isSafeInteger(candle.time_ms) ||
+              values.some((number) => !Number.isFinite(number))
+            )
+              return []
+            return [
+              {
+                time: Math.floor(Number(candle.time_ms) / 1000),
+                open: values[0]!,
+                high: values[1]!,
+                low: values[2]!,
+                close: values[3]!,
+                volume: values[4]!,
+              },
+            ]
+          })
+        : [],
+    [marketCandles],
+  )
+  // Markers only depend on which candle buckets exist, not on the live price
+  // of the forming one: a new array per tick would repaint every marker.
+  const bucketsKey = `${candles.length}:${candles[0]?.time}:${candles.at(-1)?.time}`
+  const markers = useMemo<ApprovedTerminalMarker[]>(
+    () =>
+      candles.length === 0
+        ? []
+        : analyses.flatMap((value) => {
+            const analysis = record(value)
+            const id = analysis.analysis_id
+            const time = analysis.decision_time_ms
+            if (
+              typeof id !== 'string' ||
+              id.length === 0 ||
+              !Number.isSafeInteger(time)
+            )
+              return []
+            const action = analysisAction(analysis)
+            if (entriesOnly && action !== 'LONG' && action !== 'SHORT')
+              return []
+            // Verdicts rebuilt from a backfill were not decisions taken at that time
+            // (paper execution ignores them too: max_verdict_lag_ms).
+            if (entriesOnly && Number(analysis.knowledge_lag_ms) > 15_000)
+              return []
+            // A verdict older than the chart has no candle: do not pile it on the first.
+            if (entriesOnly && Number(time) < candles[0]!.time * 1000) return []
+            const decisionSeconds = Math.floor(Number(time) / 1000)
+            const renderTime = candleTimeAtOrBefore(candles, decisionSeconds)
+            const direction =
+              action === 'LONG'
+                ? 'long'
+                : action === 'SHORT'
+                  ? 'short'
+                  : undefined
+            const selector = record(analysis.selector)
+            const strategyId =
+              selector.strategy_id ?? analysis.selected_strategy_id
+            const code = strategyCode(
+              typeof strategyId === 'string' ? strategyId : undefined,
+            )
+            return [
+              {
+                id,
+                time: renderTime,
+                type: direction ? 'entry' : 'discard',
+                ...(direction ? { direction } : {}),
+                label: direction
+                  ? code
+                    ? `${code} ${action}`
+                    : action
+                  : 'WAIT',
+                ...(direction && typeof strategyId === 'string'
+                  ? { strategyId }
+                  : {}),
+              },
+            ]
+          }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [analyses, bucketsKey, entriesOnly],
+  )
+
   if (
     !['mock-terminal-market.v1', 'futures-terminal-market.v1'].includes(
       String(market.schema_version),
@@ -65,47 +150,6 @@ export default function TerminalMarketChart({
     candles.length === 0
   )
     return <p>El snapshot no contiene velas BTC/USD verificables.</p>
-  const markers: ApprovedTerminalMarker[] = analyses.flatMap((value) => {
-    const analysis = record(value)
-    const id = analysis.analysis_id
-    const time = analysis.decision_time_ms
-    if (
-      typeof id !== 'string' ||
-      id.length === 0 ||
-      !Number.isSafeInteger(time)
-    )
-      return []
-    const action = analysisAction(analysis)
-    if (entriesOnly && action !== 'LONG' && action !== 'SHORT') return []
-    // Verdicts rebuilt from a backfill were not decisions taken at that time
-    // (paper execution ignores them too: max_verdict_lag_ms).
-    if (entriesOnly && Number(analysis.knowledge_lag_ms) > 15_000) return []
-    // A verdict older than the chart has no candle: do not pile it on the first.
-    if (entriesOnly && Number(time) < candles[0]!.time * 1000) return []
-    const decisionSeconds = Math.floor(Number(time) / 1000)
-    const renderTime = candles.reduce(
-      (latestTime, candle) =>
-        candle.time <= decisionSeconds ? candle.time : latestTime,
-      candles[0]!.time,
-    )
-    const direction =
-      action === 'LONG' ? 'long' : action === 'SHORT' ? 'short' : undefined
-    const selector = record(analysis.selector)
-    const strategyId = selector.strategy_id ?? analysis.selected_strategy_id
-    const code = strategyCode(
-      typeof strategyId === 'string' ? strategyId : undefined,
-    )
-    return [
-      {
-        id,
-        time: renderTime,
-        type: direction ? 'entry' : 'discard',
-        ...(direction ? { direction } : {}),
-        label: direction ? (code ? `${code} ${action}` : action) : 'WAIT',
-        ...(direction && typeof strategyId === 'string' ? { strategyId } : {}),
-      },
-    ]
-  })
   return (
     <>
       <p>

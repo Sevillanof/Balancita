@@ -90,3 +90,11 @@ export function applyTerminalEvent(
   }
   return state
 }
+
+/** Folds a batch of stream events, in order, into the view state. */
+export function applyTerminalEvents(
+  previous: TerminalState | null,
+  events: readonly TerminalEnvelope[],
+): TerminalState | null {
+  return events.reduce<TerminalState | null>(applyTerminalEvent, previous)
+}
