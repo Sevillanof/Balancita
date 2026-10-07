@@ -668,7 +668,6 @@ describe('FuturesTerminal local scenario presentation', () => {
 
   it('switches the displayed run to the isolated child after a new run', async () => {
     vi.stubGlobal('WebSocket', TestWebSocket)
-    vi.spyOn(window, 'confirm').mockReturnValue(true)
     render(<FuturesTerminal bootstrap={bootstrap} />)
     const socket = TestWebSocket.instances[0]!
     await act(async () => socket.open())
@@ -687,6 +686,9 @@ describe('FuturesTerminal local scenario presentation', () => {
     )
     await act(async () =>
       screen.getByRole('button', { name: 'Nueva cuenta/run (MOCK)' }).click(),
+    )
+    await act(async () =>
+      screen.getByRole('button', { name: 'Confirmar nueva cuenta' }).click(),
     )
     expect(JSON.parse(socket.sent.at(-1)!)).toMatchObject({
       action: 'paper.new_run',
@@ -986,7 +988,8 @@ describe('FuturesTerminal local scenario presentation', () => {
       screen.getAllByRole('button', {
         name: /^Seleccionar análisis analysis-/,
       }),
-    ).toHaveLength(5)
+    ).toHaveLength(2)
+    expect(screen.getByText(/WAIT ×3/)).toBeTruthy()
 
     for (const [index, analysis] of analyses.entries()) {
       await act(async () =>
@@ -1104,12 +1107,12 @@ describe('FuturesTerminal local scenario presentation', () => {
 
     await act(async () =>
       screen
-        .getByRole('button', { name: 'Seleccionar análisis analysis-3' })
+        .getByRole('button', { name: 'Seleccionar análisis analysis-1' })
         .click(),
     )
-    expect(selectedAnalysisId()).toBe('analysis-3')
+    expect(selectedAnalysisId()).toBe('analysis-1')
     await act(async () => chartHarness.clickHandlers.at(-1)?.({ time: 21_540 }))
-    expect(selectedAnalysisId()).toBe('analysis-4')
+    expect(selectedAnalysisId()).toBe('analysis-2')
   })
 
   it('snaps prehistory markers to the first candle and shows durable order_type', async () => {
@@ -1287,8 +1290,8 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
     expect(screen.getByText('Posiciones y operaciones')).toBeTruthy()
     expect(screen.getAllByText(/0\.0099 · o1/).length).toBeGreaterThan(0)
     expect(screen.getByText(/Ejecución buy/)).toBeTruthy()
-    expect(screen.getByText('Análisis recientes')).toBeTruthy()
-    expect(screen.getAllByText(/Hora:/).length).toBe(3)
+    expect(screen.getByText('Decisiones del motor')).toBeTruthy()
+    expect(screen.getByLabelText('Decisión seleccionada')).toBeTruthy()
     expect(screen.getByText(/Motor paper: en marcha/)).toBeTruthy()
     // The rejected order says why; the filled one is in Spanish.
     expect(
@@ -1405,7 +1408,7 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
     expect(await screen.findByText('long · 0.01 BTC')).toBeTruthy()
     expect(screen.getAllByText(/0\.01 · o9/).length).toBe(1)
     expect(screen.getByText(/Ejecución buy/)).toBeTruthy()
-    expect(screen.getAllByText(/Hora:/).length).toBe(1)
+    expect(screen.getByLabelText('Decisión seleccionada')).toBeTruthy()
     expect(screen.queryByText(/Se detectó un salto/)).toBeNull()
   })
 
