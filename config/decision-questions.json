@@ -34,6 +34,36 @@
       ]
     },
     {
+      "id": "trade_action",
+      "version": 1,
+      "type": "choice",
+      "instruction": "Each strategy in strategy_signals gives its probabilities to buy, hold or sell now, with its most likely action in parentheses, and strategy_consensus is their average. Weighing every strategy together with the normalized market state, which action is most likely to be right now?",
+      "options": [
+        {
+          "id": "buy",
+          "description": "open a long position now"
+        },
+        {
+          "id": "hold",
+          "description": "make no trade now"
+        },
+        {
+          "id": "sell",
+          "description": "open a short position now"
+        }
+      ],
+      "state_fields": [
+        "regime",
+        "returns_bp",
+        "dist_atr",
+        "rsi14",
+        "atr_bp",
+        "volume_rel",
+        "strategy_signals",
+        "strategy_consensus"
+      ]
+    },
+    {
       "id": "news_relevance_btc",
       "version": 1,
       "scope": "news",
