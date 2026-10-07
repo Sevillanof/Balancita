@@ -1,0 +1,31 @@
+scripts/dev.mjs
+  s_1851609b945d48::t_87bb3f462b80b3 6,23-25,69,95,102-103
+server/package.json
+  s_1851609b945d48::t_2f8ff029a2b4e2 13
+src/app/App.test.tsx
+  s_1851609b945d48::t_cf144a245ce888 1-2,5-6,8-9,12-13,15-20,22,24,26-27
+src/app/App.tsx
+  s_1851609b945d48::t_5d1915c90a998b 5-6,8,10
+src/app/TerminalEntry.tsx
+  s_1851609b945d48::t_b23141e36de73a 19,27,74-75,80,130
+src/app/app-navigation.ts
+  s_1851609b945d48::t_a0145ed4ef2a61 5
+src/features/connected-trading/infrastructure/terminal-stream-client.ts
+  s_1851609b945d48::t_69a04ab20ebd19 134-135,138
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "024836048bd111def3376524fa89832f8ac9da45",
+  "prompts": {},
+  "sessions": {
+    "s_1851609b945d48": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "763d789b-a009-4589-9307-f789259c3bf7",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
