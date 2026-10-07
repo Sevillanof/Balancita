@@ -610,6 +610,27 @@
   }
 }
 
+/* Phone: logo and menu on the first row, data source and badges full width below. */
+@media (max-width: 640px) {
+  .demo-shell__navigation {
+    order: 2;
+    width: auto;
+    margin-left: auto;
+  }
+
+  .demo-shell__status {
+    order: 3;
+    width: 100%;
+    flex-wrap: wrap;
+    padding-bottom: 8px;
+  }
+
+  .demo-shell__status .source-switch {
+    width: 100%;
+    max-width: 100%;
+  }
+}
+
 @media (max-width: 460px) {
   .demo-shell__header-inner {
     column-gap: 12px;
