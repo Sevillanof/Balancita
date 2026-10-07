@@ -87,8 +87,12 @@ export default function TerminalDecisions({
           )}
         </ul>
       )}
-      {selected}
-      {children}
+      {(selected || children) && (
+        <div className="connected-terminal__selected-wrap">
+          {selected}
+          {children}
+        </div>
+      )}
     </section>
   )
 }
