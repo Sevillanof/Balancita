@@ -45,18 +45,19 @@ flowchart LR
 
 ### Procesos de `pnpm dev`
 
-| Proceso      | Puerto | Qué es                                                                                                                           |
-| ------------ | ------ | -------------------------------------------------------------------------------------------------------------------------------- |
-| `vite`       | 5173   | App web y proxy (`/api-mock` → 8788, `/api-live` → 8789, `/api-strategies` → 8790)                                               |
-| `mock`       | 8788   | Fuente MOCK: mercado BTC determinista de 12 h, con C y D reales corriendo `--once` sobre él (sin comandos paper)                 |
-| `capture`    | -      | WebSocket y REST públicos de Kraken → `server/data/dev-live/futures-market.sqlite` (único escritor)                              |
-| `live`       | 8789   | Gateway de solo lectura: sirve `/api/terminal/*` leyendo el market DB; no arranca recolector ni motor                            |
-| `verdict`    | -      | **C**: lee el market DB y escribe veredictos de entrada (`futures-verdicts.sqlite`)                                              |
-| `paper`      | -      | **D**: un libro por estrategia y producto; fills con el ticker real; eventos con hash en cadena (`futures-paper-account.sqlite`) |
-| `scores`     | -      | **E**: puntúa cada propuesta contra las velas oficiales posteriores (`futures-forecast-scores.sqlite`)                           |
-| `strategies` | 8790   | Registro de estrategias **S**: validar, evaluar, backtest, versiones y ciclo de vida                                             |
-| `news`       | -      | **N**: RSS/Atom → `futures-news.sqlite`; con Qwen, relevancia y dirección por noticia                                            |
-| `llm` / `q`  | 8088   | `llama-server` local y servicio de decisiones **Q** (opcionales, nunca bloquean el arranque)                                     |
+| Proceso      | Puerto | Qué es                                                                                                                                                                    |
+| ------------ | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `vite`       | 5173   | App web y proxy (`/api-mock` → 8788, `/api-live` → 8789, `/api-strategies` → 8790)                                                                                        |
+| `mock`       | 8788   | Fuente MOCK: mercado BTC determinista de 12 h, con C y D reales corriendo `--once` sobre él (sin comandos paper)                                                          |
+| `capture`    | -      | WebSocket y REST públicos de Kraken → `server/data/dev-live/futures-market.sqlite` (único escritor)                                                                       |
+| `live`       | 8789   | Gateway de solo lectura: sirve `/api/terminal/*` leyendo el market DB; no arranca recolector ni motor                                                                     |
+| `verdict`    | -      | **C**: lee el market DB y escribe veredictos de entrada (`futures-verdicts.sqlite`)                                                                                       |
+| `paper`      | -      | **D**: un libro por estrategia y producto; fills con el ticker real; eventos con hash en cadena (`futures-paper-account.sqlite`)                                          |
+| `scores`     | -      | **E**: puntúa cada propuesta contra las velas oficiales posteriores (`futures-forecast-scores.sqlite`)                                                                    |
+| `forward`    | -      | Libro de paper hacia delante de las estrategias de `config/forward-strategies.json` (C30), cada 30 min (`server/data/dev-live/forward/`); Q y el registro leen su resumen |
+| `strategies` | 8790   | Registro de estrategias **S**: validar, evaluar, backtest, versiones y ciclo de vida                                                                                      |
+| `news`       | -      | **N**: RSS/Atom → `futures-news.sqlite`; con Qwen, relevancia y dirección por noticia                                                                                     |
+| `llm` / `q`  | 8088   | `llama-server` local y servicio de decisiones **Q** (opcionales, nunca bloquean el arranque)                                                                              |
 
 Un proceso opcional que cae se reinicia con _backoff_ (1 s hasta 30 s; se rinde tras 8 fallos rápidos o `EADDRINUSE`) y su estado se ve como chip en la Terminal.
 

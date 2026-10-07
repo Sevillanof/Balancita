@@ -38,6 +38,7 @@ describe('devChildSpecs', () => {
         'verdict',
         'paper',
         'scores',
+        'forward',
         'strategies',
         'news',
       ],
@@ -154,6 +155,27 @@ describe('devChildSpecs', () => {
     ])
     assert.equal(env.PYTHONPATH, '/repo/python')
     assert.equal(env.KEEP, 'yes')
+  })
+
+  it('runs the forward paper measurement over the market database into its own directory and tells Q and the registry where to read it', () => {
+    const { command, args, cwd, env } = byName.forward
+    assert.equal(command, 'python3')
+    assert.equal(cwd, '/repo/server')
+    assert.deepEqual(args, [
+      '-m',
+      'balancita_engine.futures_forward',
+      '--market-db',
+      byName.capture.env.FUTURES_MARKET_DB_PATH,
+      '--out',
+      './data/dev-live/forward',
+      '--loop-seconds',
+      '1800',
+    ])
+    assert.equal(env.PYTHONPATH, '/repo/python')
+    assert.equal(
+      byName.strategies.env.STRATEGY_FORWARD_PATH,
+      './data/dev-live/forward/forward-reliability.json',
+    )
   })
 
   it('keeps vite on the default provider environment', () => {

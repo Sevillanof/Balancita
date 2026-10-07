@@ -516,6 +516,9 @@ export function devChildSpecs({
   const decisionsDb = liveDb('futures-llm-decisions.sqlite')
   const newsDb = liveDb('futures-news.sqlite')
   const strategiesDb = liveDb('futures-strategies.sqlite')
+  // Forward paper measurement (C30): its DB and the summary Q and the registry read.
+  const forwardDir = liveDb('forward')
+  const forwardPath = `${forwardDir}/forward-reliability.json`
   const llmOn =
     Boolean(python?.command && llm?.command) &&
     (env.DECISIONS_ENABLED ?? '').trim() !== '0' &&
@@ -639,6 +642,7 @@ export function devChildSpecs({
         env: {
           ...env,
           LLAMA_PORT: port,
+          STRATEGY_FORWARD_PATH: forwardPath,
           PYTHONPATH: [`${root}/python`, env.PYTHONPATH]
             .filter(Boolean)
             .join(delimiter),
@@ -714,6 +718,30 @@ export function devChildSpecs({
         },
       },
       {
+        // Forward paper book of the strategies registered in config/forward-strategies.json (market DB
+        // read-only -> its own forward DB and summary, sole writer of both). Runs every 30 minutes.
+        name: 'forward',
+        command: python.command,
+        cwd: serverCwd,
+        args: [
+          ...python.prefixArgs,
+          '-m',
+          'balancita_engine.futures_forward',
+          '--market-db',
+          marketDb,
+          '--out',
+          forwardDir,
+          '--loop-seconds',
+          '1800',
+        ],
+        env: {
+          ...env,
+          PYTHONPATH: [`${root}/python`, env.PYTHONPATH]
+            .filter(Boolean)
+            .join(delimiter),
+        },
+      },
+      {
         name: 'strategies',
         command: python.command,
         cwd: serverCwd,
@@ -732,6 +760,7 @@ export function devChildSpecs({
         ],
         env: {
           ...env,
+          STRATEGY_FORWARD_PATH: forwardPath,
           PYTHONPATH: [`${root}/python`, env.PYTHONPATH]
             .filter(Boolean)
             .join(delimiter),

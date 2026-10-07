@@ -37,6 +37,7 @@ const optionalChildren = new Set([
   'verdict',
   'paper',
   'scores',
+  'forward',
   'strategies',
   'news',
   'llm',
@@ -48,6 +49,8 @@ const exitLabels = {
   verdict: 'The verdict service (new verdicts)',
   paper: 'Paper execution (new paper fills)',
   scores: 'The forecast scorer (new forecast scores)',
+  forward:
+    'The forward paper measurement (new forward trades of registered strategies)',
   strategies: 'The strategy registry (strategies page and backtests)',
   news: 'The news process (new news items and analyses)',
   llm: 'The llama-server model (new LLM decisions)',
