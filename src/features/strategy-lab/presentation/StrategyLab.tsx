@@ -51,8 +51,14 @@ import {
   loadQwenScores,
   type QwenScores,
 } from '../infrastructure/qwen-scores.ts'
-import { percent, price, signedPercent, signedUsd, utcTime } from '../../../shared/finance/format.ts'
+import {
+  percent,
+  signedPercent,
+  signedUsd,
+} from '../../../shared/finance/format.ts'
 import { QwenFocusHead, QwenSide } from './QwenPanels.tsx'
+import { JsonTab, TradesTable, VersionsTab } from './StrategyLabPanels.tsx'
+import { STATE_LABELS, type Dot } from './strategy-lab-labels.ts'
 import './StrategyLab.css'
 
 type Props = {
@@ -64,7 +70,6 @@ type Props = {
 type Tab = 'rules' | 'params' | 'risk' | 'json' | 'versions'
 type SaveMode = 'modify' | 'new'
 type ImportSource = 'json' | 'pine' | 'freqtrade'
-type Dot = StrategyState | 'preview' | 'reference' | 'qwen'
 
 type Row = {
   key: string
@@ -78,25 +83,10 @@ type Row = {
 }
 
 const PERIODS: readonly PeriodDays[] = [7, 30, 90]
-const STATE_LABELS: Record<Dot, string> = {
-  active: 'Activa en paper',
-  shadow: 'En sombra',
-  draft: 'Borrador',
-  retired: 'Retirada',
-  preview: 'Cambios sin guardar',
-  reference: 'Referencia',
-  qwen: 'Decisiones de Qwen',
-}
 const SOURCE_LABELS: Record<LabCandles['source'], string> = {
   live: 'velas reales de Terminal',
   mock: 'velas del fixture MOCK de Terminal',
   synthetic: 'velas sintéticas (Terminal no respondió)',
-}
-const EXIT_LABELS: Record<string, string> = {
-  stop: 'stop',
-  target: 'objetivo',
-  strategy_exit: 'regla de salida',
-  time_stop: 'tiempo',
 }
 const GATE_LABELS: Record<string, string> = {
   backtested: 'Tiene un backtest',
@@ -128,18 +118,6 @@ function shortName(name: string, id: string) {
 
 function errorText(error: unknown) {
   return error instanceof Error ? error.message : String(error)
-}
-
-function downloadJson(spec: StrategySpec) {
-  const blob = new Blob([`${JSON.stringify(spec, null, 2)}\n`], {
-    type: 'application/json',
-  })
-  const url = URL.createObjectURL(blob)
-  const link = document.createElement('a')
-  link.href = url
-  link.download = `${spec.id}.v${spec.version}.json`
-  link.click()
-  URL.revokeObjectURL(url)
 }
 
 export default function StrategyLab({
@@ -1281,84 +1259,16 @@ export default function StrategyLab({
             )}
 
             {tab === 'json' && draft && (
-              <div className="strategy-lab__tab-body">
-                <textarea
-                  aria-label="JSON de la estrategia"
-                  className="strategy-lab__json"
-                  value={jsonText ?? JSON.stringify(draft, null, 2)}
-                  onChange={(event) => setJsonText(event.target.value)}
-                  rows={16}
-                  spellCheck={false}
-                />
-                <div className="strategy-lab__row-actions">
-                  <button
-                    type="button"
-                    className="strategy-lab__button"
-                    disabled={jsonText === null}
-                    onClick={applyJson}
-                  >
-                    Aplicar JSON
-                  </button>
-                  <button
-                    type="button"
-                    className="strategy-lab__button strategy-lab__button--ghost"
-                    onClick={() => downloadJson(draft)}
-                  >
-                    Exportar JSON
-                  </button>
-                </div>
-              </div>
+              <JsonTab
+                draft={draft}
+                jsonText={jsonText}
+                onChange={setJsonText}
+                onApply={applyJson}
+              />
             )}
 
             {tab === 'versions' && detail && (
-              <div className="strategy-lab__tab-body">
-                <ul className="strategy-lab__versions">
-                  {detail.versions.map((entry) => (
-                    <li key={entry.version}>
-                      <b>v{entry.version}</b> · {STATE_LABELS[entry.state]}
-                      {entry.parent
-                        ? ` · de ${entry.parent.id} v${entry.parent.version}`
-                        : ''}
-                    </li>
-                  ))}
-                </ul>
-                <div className="strategy-lab__row-actions">
-                  {detail.state === 'draft' && (
-                    <button
-                      type="button"
-                      className="strategy-lab__button"
-                      disabled={busy}
-                      onClick={() => changeState('shadow')}
-                    >
-                      Pasar a sombra
-                    </button>
-                  )}
-                  {detail.state === 'shadow' && (
-                    <button
-                      type="button"
-                      className="strategy-lab__button strategy-lab__button--primary"
-                      disabled={busy}
-                      onClick={() => changeState('active')}
-                    >
-                      Activar
-                    </button>
-                  )}
-                  {detail.state !== 'retired' && (
-                    <button
-                      type="button"
-                      className="strategy-lab__button strategy-lab__button--ghost"
-                      disabled={busy}
-                      onClick={() => changeState('retired')}
-                    >
-                      Retirar
-                    </button>
-                  )}
-                </div>
-                <small className="strategy-lab__context">
-                  Activar pide pasar por sombra, 30 trades fuera de muestra,
-                  neto medio positivo y Sharpe deflactado ≥ 0,95.
-                </small>
-              </div>
+              <VersionsTab detail={detail} busy={busy} onState={changeState} />
             )}
 
             {dirty && (
@@ -1416,51 +1326,7 @@ export default function StrategyLab({
           </aside>
         )}
       </div>
-      {trades.length > 0 && (
-        <details className="strategy-lab__panel strategy-lab__trades">
-          <summary>Trades ({trades.length})</summary>
-          <div className="strategy-lab__table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Entrada UTC</th>
-                  <th>Lado</th>
-                  <th className="is-num">Precio</th>
-                  <th className="is-num">Salida</th>
-                  <th>Motivo</th>
-                  <th className="is-num">Neto</th>
-                </tr>
-              </thead>
-              <tbody>
-                {trades.map((trade, index) => (
-                  <tr key={index}>
-                    <td className="strategy-lab__num">
-                      {utcTime(trade.entry_time_ms / 1000)}
-                    </td>
-                    <td className={trade.side === 'LONG' ? 'is-up' : 'is-down'}>
-                      {trade.side === 'LONG' ? 'Largo' : 'Corto'}
-                    </td>
-                    <td className="strategy-lab__num is-num">
-                      {price(Number(trade.entry_price))}
-                    </td>
-                    <td className="strategy-lab__num is-num">
-                      {price(Number(trade.exit_price))}
-                    </td>
-                    <td>
-                      {EXIT_LABELS[trade.exit_reason] ?? trade.exit_reason}
-                    </td>
-                    <td
-                      className={`strategy-lab__num is-num ${trade.pnl_usd > 0 ? 'is-up' : 'is-down'}`}
-                    >
-                      {signedUsd(trade.pnl_usd)}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </details>
-      )}
+      <TradesTable trades={trades} />
     </div>
   )
 }
