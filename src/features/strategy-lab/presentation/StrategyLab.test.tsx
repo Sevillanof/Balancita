@@ -7,6 +7,7 @@ import {
   syntheticCandles,
   type LabCandles,
 } from '../infrastructure/lab-candles.ts'
+import type { QwenScores } from '../infrastructure/qwen-scores.ts'
 import {
   httpStrategyApi,
   type StrategyApi,
@@ -21,13 +22,68 @@ vi.mock('../../trading-view/presentation/ApprovedTerminalChart.tsx', () => ({
 const market: LabCandles = { source: 'live', candles: syntheticCandles() }
 const loadCandles = () => Promise.resolve(market)
 
+const qwenOff: QwenScores = {
+  status: 'off',
+  reason: 'decisions_or_verdicts_db_missing',
+  products: [],
+}
+
+const stats = (hits: number, misses: number) => ({
+  decisions: hits + misses,
+  scored: hits + misses,
+  pending: 0,
+  hits,
+  misses,
+  points: hits - misses,
+  hit_rate: hits + misses === 0 ? null : hits / (hits + misses),
+  mean_net_bp: 1,
+  total_net_bp: 10,
+})
+
+const qwenOn: QwenScores = {
+  status: 'ok',
+  products: [
+    {
+      product_id: 'PF_XBTUSD',
+      horizon_min: 30,
+      decisions: { ...stats(41, 54), decisions: 120, pending: 25 },
+      by_option: {
+        buy: stats(20, 30),
+        hold: stats(15, 10),
+        sell: stats(6, 14),
+      },
+      trading: {
+        trades: 12,
+        wins: 5,
+        hit_rate: 5 / 12,
+        pnl_usd: 123.4,
+        return_pct: 1.234,
+        max_drawdown: { pct: -0.5, at_ms: null },
+      },
+      rows: [
+        {
+          bucket_start: market.candles.at(-1)!.time * 1000,
+          chosen: 'buy',
+          confidence: 0.4,
+          status: 'scored',
+          point: 1,
+          net_bp: 8,
+        },
+      ],
+      trades: [],
+    },
+  ],
+}
+
 async function renderLab(
   api: StrategyApi = exampleStrategyApi(market.candles),
+  qwen: QwenScores = qwenOff,
 ) {
   render(
     <StrategyLab
       loadCandles={loadCandles}
       connect={() => Promise.resolve(api)}
+      loadQwen={() => Promise.resolve(qwen)}
     />,
   )
   await userEvent.click(
@@ -147,6 +203,31 @@ describe('StrategyLab', () => {
     expect(alert).toHaveTextContent('✗ Sharpe deflactado ≥ 0,95')
   })
 
+  it('ranks Qwen with its paper return and shows its +1/-1 score', async () => {
+    const user = userEvent.setup()
+    await renderLab(undefined, qwenOn)
+    expect(within(ranking()).getByText('+1,23 %')).toBeInTheDocument()
+    await user.click(within(ranking()).getByRole('button', { name: /^Qwen/ }))
+    expect(screen.getByText('41 de 95 decisiones')).toBeInTheDocument()
+    expect(screen.getByText('−13')).toBeInTheDocument()
+    expect(screen.getByText('40 % · 60 % · 30 %')).toBeInTheDocument()
+    const side = screen.getByRole('complementary', {
+      name: 'Decisiones de Qwen',
+    })
+    expect(within(side).getByText('Mantener')).toBeInTheDocument()
+    expect(within(side).getByText('+5')).toBeInTheDocument()
+  })
+
+  it('explains that Qwen has no decisions yet', async () => {
+    const user = userEvent.setup()
+    await renderLab()
+    expect(within(ranking()).getByText('sin decisiones')).toBeInTheDocument()
+    await user.click(within(ranking()).getByRole('button', { name: /^Qwen/ }))
+    expect(
+      screen.getByText(/Qwen todavía no guardó decisiones/),
+    ).toBeInTheDocument()
+  })
+
   it('rejects an import that is not a strategy', async () => {
     const user = userEvent.setup()
     await renderLab()
@@ -202,6 +283,7 @@ describe('StrategyLab', () => {
         connect={() =>
           Promise.resolve(httpStrategyApi('/api-strategies', fetcher))
         }
+        loadQwen={() => Promise.resolve(qwenOff)}
       />,
     )
     expect(await within(ranking()).findByText('55 % · 40')).toBeInTheDocument()

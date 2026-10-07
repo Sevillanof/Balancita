@@ -716,3 +716,34 @@ textarea.strategy-lab__json {
 .strategy-lab__trades .is-num {
   text-align: right;
 }
+
+.strategy-lab__dot--qwen {
+  background: var(--lab-info);
+}
+
+.strategy-lab__chip--qwen {
+  border-color: var(--lab-info);
+  color: var(--lab-info);
+}
+
+.strategy-lab__qwen-split {
+  font-size: 15px;
+  white-space: nowrap;
+}
+
+.strategy-lab__qwen-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.strategy-lab__qwen-table th,
+.strategy-lab__qwen-table td {
+  padding: 6px 4px;
+  border-top: 1px solid var(--lab-line);
+  text-align: left;
+}
+
+.strategy-lab__qwen-table .is-num {
+  text-align: right;
+}
