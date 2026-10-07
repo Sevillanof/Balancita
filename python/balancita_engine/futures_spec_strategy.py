@@ -12,6 +12,7 @@ the first failing child (like Python ``and``).
 
 import json
 import os
+import re
 from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR, localcontext
 
 from .canonical import canonical_hash
@@ -184,7 +185,7 @@ def _check_template(template, params, where):
 def validate_spec(spec):
     """Raise ``SpecError`` unless ``spec`` is a valid ``balancita-strategy.v1``."""
     _require(isinstance(spec, dict), "spec must be an object")
-    unknown = set(spec) - {"schema", "id", "version", "name", "description", "params", "kind", "rules", "branches"}
+    unknown = set(spec) - {"schema", "id", "version", "name", "description", "params", "kind", "rules", "branches", "indicators"}
     _require(not unknown, "unknown keys " + ", ".join(sorted(unknown)))
     _require(spec.get("schema") == SPEC_SCHEMA, "schema must be " + SPEC_SCHEMA)
     strategy_id = spec.get("id")
@@ -214,7 +215,50 @@ def validate_spec(spec):
             _check_rules(branch.get("rules"), params, "branches." + regime + ".rules")
     else:
         raise SpecError("kind must be rules or regime_adapter")
+    _check_indicators(spec)
     return spec
+
+
+_PERIOD_FEATURE = re.compile(
+    r"^(ema|sma|rsi|atr|bollinger_(?:mid|variance|stddev|lower|upper)|donchian_(?:high|low|mid)|prior_volume_mean)(\d+)$")
+_KIND_OF = {"ema": "ema", "sma": "sma", "rsi": "rsi", "atr": "atr", "prior_volume_mean": "donchian"}
+_DEFAULT_PERIODS = {"ema": (9, 21), "sma": (50,), "rsi": (14,), "atr": (14,), "bollinger": (20,), "donchian": (20,)}
+
+
+def declared_indicators(spec):
+    """The ``indicators`` block of a spec: kind -> periods, on top of the default set."""
+    block = spec.get("indicators", {})
+    _require(isinstance(block, dict), "indicators must be an object")
+    for kind, periods in block.items():
+        _require(kind in _DEFAULT_PERIODS, "unknown indicator kind " + str(kind))
+        _require(isinstance(periods, list) and 0 < len(periods) <= 8
+                 and all(isinstance(v, int) and not isinstance(v, bool) and 2 <= v <= 400 for v in periods),
+                 "indicators." + kind + " takes up to 8 integer periods from 2 to 400")
+    return block
+
+
+def _check_indicators(spec):
+    block = declared_indicators(spec)
+    allowed = {kind: set(values) | set(block.get(kind, ())) for kind, values in _DEFAULT_PERIODS.items()}
+
+    def walk(node):
+        if isinstance(node, str):
+            scope, _, field = node.partition(".")
+            match = _PERIOD_FEATURE.match(field) if scope in ("1m", "1m_previous", "5m") else None
+            if match:
+                name, period = match.group(1), int(match.group(2))
+                kind = _KIND_OF.get(name) or name.split("_")[0]
+                _require(period in allowed.get(kind, ()),
+                         "{} uses period {} that is not declared under indicators.{}".format(node, period, kind))
+        elif isinstance(node, dict):
+            for key, value in node.items():
+                if key != "indicators":
+                    walk(value)
+        elif isinstance(node, list):
+            for value in node:
+                walk(value)
+
+    walk({k: v for k, v in spec.items() if k in ("rules", "branches")})
 
 
 def spec_hash(spec):
