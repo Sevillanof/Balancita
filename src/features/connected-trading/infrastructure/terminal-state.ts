@@ -16,8 +16,11 @@ export function applyTerminalEvent(
     ].slice(-500)
     state.state_version = Number(state.state_version ?? 0) + 1
   } else if (event.type === 'account.updated') state.account = data.account
-  else if (event.type === 'position.updated') state.position = data.position
-  else if (event.type === 'order.updated') {
+  else if (event.type === 'position.updated') {
+    state.position = data.position
+    // One open position per independent book; absent from older gateways.
+    if (Array.isArray(data.positions)) state.positions = data.positions
+  } else if (event.type === 'order.updated') {
     const orders = Array.isArray(state.orders) ? state.orders : []
     const nextOrder = record(data.order)
     const orderId = nextOrder.order_id

@@ -72,6 +72,8 @@ export function exitMarkers(
 export function positionLines(
   position: Record<string, unknown>,
   colors: { entry: string; stop: string; target: string },
+  /** Several books draw their own lines: ids stay apart, titles name the strategy. */
+  book?: { id: string; code: string | null },
 ): ApprovedChartPriceLine[] {
   if (position.side !== 'long' && position.side !== 'short') return []
   const lines: ApprovedChartPriceLine[] = []
@@ -84,7 +86,13 @@ export function positionLines(
   ) => {
     const price = Number(value)
     if (value != null && Number.isFinite(price) && price > 0)
-      lines.push({ id, price, title, color, dashed })
+      lines.push({
+        id: book ? `${book.id}:${id}` : id,
+        price,
+        title: book?.code ? `${book.code} ${title}` : title,
+        color,
+        dashed,
+      })
   }
   add(
     'entry',
@@ -124,4 +132,20 @@ export function timeframeCandles(
     } else if (candle.time > tail.time) out.push(candle)
   }
   return out
+}
+
+/** Open positions of the BTC chart: the gateway list, else the single position. */
+export function chartPositions(
+  positions: readonly unknown[] | undefined,
+  position: Record<string, unknown>,
+  productId = 'PF_XBTUSD',
+): Record<string, unknown>[] {
+  const list = (positions ?? []).map(recordOf)
+  const own = list.filter(
+    (item) =>
+      (item.side === 'long' || item.side === 'short') &&
+      (item.product_id === undefined || item.product_id === productId),
+  )
+  if (positions !== undefined) return own
+  return position.side === 'long' || position.side === 'short' ? [position] : []
 }

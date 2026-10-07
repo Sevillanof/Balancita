@@ -238,6 +238,9 @@ export default function FuturesTerminal({
   const account = record(state?.account)
   const netValue = account.net_usd ?? account.net_complete
   const position = record(state?.position)
+  const positions = Array.isArray(state?.positions)
+    ? state.positions
+    : undefined
   const market = record(state?.terminal_market)
   const marketState = record(state?.market)
   const quote = projectTerminalQuote({
@@ -568,6 +571,7 @@ export default function FuturesTerminal({
                         null) as TerminalTickerStats | null
                     }
                     position={position}
+                    positions={positions}
                     orders={orders}
                   />
                   {!engineOff && (

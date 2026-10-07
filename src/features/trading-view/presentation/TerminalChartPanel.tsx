@@ -25,6 +25,7 @@ import {
   strategyCode,
   strategyMarkerColor,
   positionLines,
+  chartPositions,
   timeframeCandles,
 } from '../domain/terminal-chart-model.ts'
 import './terminal-chart-panel.css'
@@ -246,6 +247,7 @@ export default function TerminalChartPanel({
   live,
   ticker,
   position,
+  positions,
   orders,
   instrument = 'BTC/USD perpetuo',
 }: {
@@ -259,6 +261,8 @@ export default function TerminalChartPanel({
   live: boolean
   ticker: TerminalTickerStats | null
   position: Record<string, unknown>
+  /** One open position per strategy book (gateway `positions`). */
+  positions?: readonly unknown[]
   orders: readonly unknown[]
   instrument?: string
 }) {
@@ -317,12 +321,34 @@ export default function TerminalChartPanel({
   )
   const stats = ticker ?? remote?.ticker ?? null
   const mark = stats?.mark ?? null
+  const [hiddenStrategies, setHiddenStrategies] = useState<string[]>([])
   const lines = useMemo(() => {
-    const out = positionLines(position, {
-      entry: colors.info,
-      stop: colors.down,
-      target: colors.up,
-    })
+    const open = chartPositions(positions, position)
+    const out = open
+      .filter(
+        (item) =>
+          typeof item.strategy_id !== 'string' ||
+          !hiddenStrategies.includes(item.strategy_id),
+      )
+      .flatMap((item, index) => {
+        const strategyId =
+          typeof item.strategy_id === 'string' ? item.strategy_id : undefined
+        // Several books: each strategy draws its own lines in its own colour.
+        const own =
+          open.length > 1 ? strategyMarkerColor(strategyId) : undefined
+        return positionLines(
+          item,
+          own
+            ? { entry: own, stop: own, target: own }
+            : { entry: colors.info, stop: colors.down, target: colors.up },
+          open.length > 1
+            ? {
+                id: `${strategyId ?? 'book'}-${index}`,
+                code: strategyCode(strategyId),
+              }
+            : undefined,
+        )
+      })
     if (mark != null)
       out.push({
         id: 'mark',
@@ -332,8 +358,7 @@ export default function TerminalChartPanel({
         dashed: true,
       })
     return out
-  }, [position, mark, colors])
-  const [hiddenStrategies, setHiddenStrategies] = useState<string[]>([])
+  }, [positions, position, mark, colors, hiddenStrategies])
   const everyMarker = useMemo(
     () => [...markers, ...exitMarkers(orders)],
     [markers, orders],

@@ -157,3 +157,37 @@ describe('strategy markers', () => {
     })
   })
 })
+
+describe('lines per strategy book', () => {
+  const colors = { entry: 'a', stop: 'b', target: 'c' }
+  it('names and separates the lines of each book', async () => {
+    const { positionLines } = await import('./terminal-chart-model.ts')
+    const lines = positionLines(
+      {
+        side: 'long',
+        entry_price_usd_per_btc: '100',
+        stop: '90',
+        target: '120',
+      },
+      colors,
+      { id: 'c25-0', code: 'C25' },
+    )
+    expect(lines.map((line) => line.id)).toEqual([
+      'c25-0:entry',
+      'c25-0:stop',
+      'c25-0:target',
+    ])
+    expect(lines[1]!.title).toBe('C25 STOP')
+  })
+  it('uses the gateway list, BTC only, else the single position', async () => {
+    const { chartPositions } = await import('./terminal-chart-model.ts')
+    const btc = { side: 'long', product_id: 'PF_XBTUSD' }
+    const eth = { side: 'short', product_id: 'PF_ETHUSD' }
+    expect(chartPositions([btc, eth, { side: null }], {})).toEqual([btc])
+    expect(chartPositions([], { side: 'long' })).toEqual([])
+    expect(chartPositions(undefined, { side: 'long' })).toEqual([
+      { side: 'long' },
+    ])
+    expect(chartPositions(undefined, {})).toEqual([])
+  })
+})
