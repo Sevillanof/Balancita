@@ -36,6 +36,7 @@ export const ANALYSIS_RESULT_JSON_SCHEMA = {
       },
       required: ['lookbackCandles', 'averageTrueRangePercent', 'level'],
     },
+    disclaimer: { type: 'string' },
   },
   required: [
     'instrumentId',
