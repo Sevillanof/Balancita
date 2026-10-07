@@ -1,0 +1,72 @@
+# strategy-simulation
+
+## Objective
+
+Every strategy is simulated end to end and independently against the Terminal candles, for any pinned `PF_*` product and any date range the user picks, and reports its real return and its hit rate per decision against what actually happened. Live paper execution, the backtest, the forecast scorer and Qwen's score all come from the same simulator, so the same strategy reports the same numbers everywhere. Qwen can decide blind over historical candles without waiting for new ones.
+
+Source analysis (2026-10-07, on `main` @ 8ffeb42): https://claude.ai/code/artifact/01c4029c-2109-4bdc-aee1-5a7fb463f688 (sections "Simulación de estrategias", "Pedidos del 7 de octubre", "Diseño: qué falta para que funcione", "Opciones de mejora"). Cost input: `/mnt/project-files/analisis/costes-reales-kraken.md`.
+
+## Findings this plan fixes
+
+- D trades one shared book from `verdict["selected"]` (`python/balancita_engine/futures_paper_execution.py:697`, `select_proposal` in `futures_strategies.py`): opposite signals abstain and an open position blocks the other strategies.
+- Five simulators disagree on entry price, costs and hit definition: D (ticker bid/ask, taker 5 bp/side, funding), the Laboratorio backtest `futures_strategy_backtest.py` (candle close, no spread/funding, exact stops), E `futures_forecast_scores.py` (fixed 12 bp, 15m-24h horizons), `futures_llm_scores.py` (30 buckets), and the spot TS fast replay. Proposals declare `estimated_round_trip_cost_bps` = maker + taker (7 bp) while D pays taker twice.
+- The Laboratorio backtest rereads features stored in the verdicts DB (`load_verdict_rows`): indicator periods are frozen (EMA21, Donchian 20, RSI14), about one day of history exists, and 90 days would be ~1.5 GB of JSON per product (~12 KB per verdict).
+- Indicators are recomputed from scratch every minute in Decimal: `calculate_features` on 200 bars measured 4.6 ms, a full verdict ~20 ms, so 90 days of 1m is ~43 min per product and per period variant.
+- When the registry does not answer, the Laboratorio shows random made-up trades (`src/features/strategy-lab/infrastructure/example-strategy-api.ts`).
+- D, the gateway and the Terminal chart are BTC-only (`PF_XBTUSD` filter) although C, E, Q and official 1m/5m candles cover the 8 pinned products.
+- Q refuses historical buckets (`max_verdict_lag_ms` 15 s and `DEFAULT_MAX_AGE_MS` 120 s in `futures_llm_decisions.py`).
+
+## User decisions (2026-10-07, Fran)
+
+1. Only futures will be traded: the spot BTC-EUR stack is retired (server 8787, `/`, `/historicos`, `/demo`, TS simulations/replay/shadow runs, spot collectors).
+2. `server/src/features/paper-futures/futures-runtime.test.ts` is no longer protected: it tests only the legacy engine and is removed together with it (after SS-11, so MOCK keeps an engine).
+3. The Laboratorio moves to `/estrategias`, replacing `/historicos`: see and edit each strategy, its hits and real return, contrasted with what actually happened.
+4. Analysis and simulation cover all pinned products in `config/futures-products.json`, not only BTC.
+5. Wanted: run strategies with Qwen deciding blind over real historical candles in a user-chosen time range, then measure its hit rate.
+6. (09:40) Do first, before the rest: add/remove condition buttons in the Laboratorio, a product selector, and the move to `/estrategias` reachable from a menu (SS-19, SS-06).
+7. (09:40) Every strategy, C28 included, trades its own simulated book independently, long or short, with a fixed 100 USD notional per trade, so each one starts producing results, good or bad (SS-05).
+
+## Constraints
+
+- ADR 0001 (`docs/adr/0001-isolated-paper-futures-accounting.md`) still applies: paper only, no real orders, private endpoints or credentials. The ADR is read-only.
+- Single writer per SQLite file; append-only tables; deterministic replay (live run equals `--once` replay) must keep holding for C, D and E.
+- No new dependencies unless approved.
+- Each replay run writes its own DBs (market, verdicts, decisions, results) and never touches the live DBs.
+- Python tests: `PYTHONPATH=python:python/tests python3 -m unittest discover -s python/tests` from the repo root.
+
+## Delivery strategy
+
+`ask-on-risk`. One PR per item or small group, against `main`.
+
+## Checklist
+
+Fran's priority (decision 6): SS-19 and SS-06 go first. Then order matters: SS-01..SS-05 deliver the simulation; SS-06..SS-10 make it usable; SS-11..SS-15 are cleanup; SS-17..SS-20 finish the approved redesign and can run in parallel with SS-01..SS-04 (SS-17 chart stop/target lines wait for SS-05).
+
+- [ ] SS-01 [S] Single cost model per product, `python/balancita_engine/futures_costs.py`: real Kraken fees (maker 0.02 %, taker 0.05 %), spread and impact from the per-product `orderbook` analytics captured by PS-09, slippage on stop exits, real funding. D, the backtest, E and `futures_llm_scores.py` import it; delete the copied constants (`BOOK_CONFIG`, `SCORE_CONFIG` costs, `PAPER_EXECUTION_CONFIG.maker_rate`) and make `estimated_round_trip_cost_bps` match what D charges. Versioned by hash.
+- [ ] SS-02 [S] One definition of a hit, stored per decision: per trade (net P&L > 0 after SS-01 costs) and per decision (direction right at the strategy's own horizon, 30 min today). Each entry decision keeps its outcome against the later official candles. E and `futures_llm_scores.py` use it.
+- [ ] SS-03 [M] One simulator `simulate(spec, candles, costs)`: official 1m/5m candles in, incremental indicators (EMA, Wilder RSI/ATR, rolling Bollinger and Donchian; O(1) per bar) with the periods the spec declares, `propose_spec` for entry and exit, one independent book per strategy with D's sizing and risk rules. Streams candles; does not read stored verdict features. Parity test against today's `calculate_features` for the default periods. Target: 90 days of 1m for one product in seconds.
+- [ ] SS-04 [S] Long backfill of official 1m and 5m candles for every pinned product via the charts API `from`/`to` (1800 candles per request), into the market DB with `known_at`, resumable.
+- [ ] SS-05 [L] PS-08c on top of SS-03: D runs one book per active strategy (no `select_proposal`), each entry long or short with a fixed 100 USD notional (decision 7), C28 included with its own book, live fills still from the real ticker; per-strategy entries, exits, stop and target on the Terminal chart with a colour per strategy and a filter.
+- [ ] SS-06 [S] (priority) `/estrategias` replaces `/historicos`: move the Laboratorio route there, drop `/historicos` and link it from the Terminal header (the shared shell of SS-18 comes later); show per strategy the hits per decision and the real return against what happened (SS-02), and let the user pick the run (live or a replay from SS-08).
+- [ ] SS-07 [M] Product selector in Terminal and `/estrategias`; remove the `PF_XBTUSD` filter in the gateway; D trades every pinned product (one book per strategy and product).
+- [ ] SS-08 [L] Replay runs over a user-chosen product and date range: SS-04 backfill into a run market DB, C `--once` into a run verdicts DB, Q in a new replay mode that ignores freshness and writes to a run decisions DB, SS-03 for every strategy and for Qwen, results in a run DB. Started and listed from `/estrategias`, decisions drawn on that range's chart. Qwen state already excludes dates, absolute prices and the product name; keep it that way. Cache Qwen answers by state hash (temperature 0). Option to ask Qwen only when some strategy proposes an entry, or every 5 min. Replays run without news except where N already stored items.
+- [ ] SS-09 [S] Laboratorio without made-up data: when the registry fails, show the error and an empty state; delete `example-strategy-api.ts` and the copied spec fixtures in `src/features/strategy-lab/infrastructure/fixtures/` (read specs from the registry or import `config/strategies`).
+- [ ] SS-10 [S] Data retention: raw ticker/trade events kept a few days, official candles forever; verdict rows drop the full feature payload once SS-03 computes features itself.
+- [ ] SS-11 [M] MOCK as a replay of a recorded market DB run by C and D (copy of a capture A DB), replacing the legacy engine in `futures-local-terminal.ts`.
+- [ ] SS-12 [M] After SS-11: delete the legacy futures engine and its test: `futures-store.ts`, `futures-command-runner.ts`, `futures-worker.ts`, `futures-session-runtime.ts`, `futures-runtime.test.ts`, market-context transport and replay-session tables, `python/balancita_engine/futures_runtime.py`, `futures_worker.py`, `futures_operative_state.py`, `legacy_micro_strategy.py`, then `futures_strategies.propose` once C reads specs from the registry (PS-08b).
+- [ ] SS-13 [M] Retire the spot BTC-EUR stack: `server/src/app/app.ts` and the `server` dev child (8787), `market-data/` spot collectors and `market-store.ts`, `simulations/`, `replay/`, `shadow-runs/`, `observability/`, spot forecasts and Gemini analysis if nothing in futures uses them, and the front routes `/`, `/historicos`, `/demo` with their features. Reviewed before deleting (2026-10-07): `kraken-paper-ohlc-collector.ts`, `replay/backfill-importer.ts`, `kraken-futures/capture-market.ts` (superseded by capture A), `replay/__fixtures__/*`, `shadow-runs/shadow-fixtures.ts` go. KEEP `server/src/features/live-gateway/paper-engine-fixtures.ts`: `gateway-engine.test.ts` and `paper-engine-follower.test.ts` use it. Check each module's importers (including tests and `.js` import specifiers) before deleting.
+- [ ] SS-14 [S] PS-06: restart crashed dev children with backoff and show per-process health in the UI.
+- [ ] SS-15 [M] Front hygiene: a minimal router instead of `window.location.pathname` checks, one terminal, one decoder module per wire contract instead of the 7 copies of `record()`, split `StrategyLab.tsx` and `FuturesTerminal.tsx` into data hooks and panels.
+- [ ] SS-16 [S] Zero known red or flaky tests (`gateway.test.ts` timing, `simulations-runner.test.ts` timeout, `profitability-report.test.ts`; the spot ones go with SS-13), and split `futures-process-split.md` into the live plan and its log (its "Next step" is stale).
+- [ ] SS-17 [M] Terminal body in the approved design (canvas https://claude.ai/artifact/1fzguC832v1Eos6Z9YvAZb, board "Futuros · terminal"; review https://claude.ai/artifact/3kcKHJjZMjdBdMEPGQGvpQ findings 1, 2, 7): replace "Análisis recientes" (`FuturesTerminal.tsx:771`, 100 unstyled cards) with "Decisiones del motor" (fixed height equal to the chart, own scroll, consecutive WAITs grouped as "WAIT ×N · from–to", filter Todas · Señales, strategy per row, selected decision in a strip with short id and copy); replace the 8-line technical block (`FuturesTerminal.tsx:574-720`) with status chips Feed · Funding · Motor paper · Calentando N/50 and a "Detalle del feed" disclosure (the gateway must expose the warm-up count); price header with product name, 24 h change and one mode indicator; "Cuenta paper" as a short key/value card; "Posición abierta" with strategy and stop / target per row and no empty table header; "Reiniciar cuenta…" separated from "Pausar entradas" with in-page confirmation. Chart markers carry the strategy ("C27 LONG"), exits and a legend; per-strategy stop/target lines come with SS-05.
+- [ ] SS-18 [M] One shell for every route (canvas board "Sistema visual"): shared top bar with logo, Futuros · Estrategias (Cartera only if Fran wants it; Spot leaves the menu after SS-13), MOCK / Kraken real segmented control and the "Paper · sin órdenes reales" chip; one set of colour tokens from `DemoShell.css` replacing the 38 hex literals (26 distinct) in `src/app/*.css`; one es-ES number formatter in `src/shared/finance/format.ts` used by panels and chart axes. Below 640 px: logo and menu on the first row, data-source control full width on the second (review finding 6).
+- [ ] SS-19 [S] (priority) Laboratorio gaps against the canvas board "Laboratorio": "+ condición" and remove-condition controls in the Reglas tab (today only existing conditions are editable; adding one needs the JSON tab); product selector (today `PF_XBTUSD` is fixed at `StrategyLab.tsx:589` and the Qwen focus at `:277`); drop the `/historicos` link (`StrategyLab.tsx:835`). Real 7/30/90 d numbers depend on SS-01..SS-04.
+- [ ] SS-20 [S] Front design checks: a Playwright screenshot per route (Terminal live and MOCK, Estrategias) at 1440×900 and 390×844, asserting the decisions list has fixed height and the page does not grow with the number of verdicts.
+
+## Resolved questions
+
+- C28 (repeats C25/C26 trades): kept as an independent strategy with its own book (Fran, 2026-10-07 09:40).
+
+## Progress / evidence
+
+- 2026-10-07: plan written from the analysis thread (SS-17..SS-20 from the design review against `main`); nothing implemented yet.
