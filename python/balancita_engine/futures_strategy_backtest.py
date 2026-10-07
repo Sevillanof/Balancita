@@ -11,8 +11,9 @@ costs, capped by the max notional) and with D's cost-buffer rejection. One
 position at a time: entry at the decision close as taker; exit by stop or
 target (the stop wins when one candle touches both), by the strategy's own
 exit rule at the candle close, or by its horizon as a time stop. Fees are the
-taker rate on both sides. ASSUMPTION: no slippage, no funding and no
-displayed-size cap, so results are optimistic against D.
+taker rate on both sides, and every fill pays the product's execution cost
+from ``futures_costs`` (stops also a full spread). ASSUMPTION: no funding and no
+displayed-size cap, so results are still slightly optimistic against D.
 """
 
 import json
@@ -21,6 +22,7 @@ import sqlite3
 import statistics
 from decimal import Decimal
 
+from .futures_costs import DEFAULT_PRODUCT, TAKER_RATE, entry_fill, exit_fill, round_trip_cost_bps
 from .futures_paper_execution import COST_BUFFER_RATE, PAPER_EXECUTION_CONFIG
 from .futures_spec_strategy import propose_spec
 
@@ -30,8 +32,10 @@ MAX_ROWS = 200_000
 # D's own cost and sizing constants, imported so the backtest cannot drift from paper execution.
 BOOK_CONFIG = {
     key: PAPER_EXECUTION_CONFIG[key]
-    for key in ("initial_cash_usd", "max_notional_usd", "max_exposure_multiple", "risk_fraction", "taker_rate")
+    for key in ("initial_cash_usd", "max_notional_usd", "max_exposure_multiple", "risk_fraction")
 }
+BOOK_CONFIG["taker_rate"] = TAKER_RATE
+BOOK_CONFIG["product_id"] = DEFAULT_PRODUCT
 BOOK_CONFIG["cost_buffer_rate"] = str(COST_BUFFER_RATE)
 MIN_TRADES = 30
 
@@ -78,6 +82,7 @@ def _scope(verdict, tick_size):
 def simulate(spec, verdicts, *, tick_size="1", book=BOOK_CONFIG):
     """Closed trades and skipped signals of ``spec`` over ``verdicts`` (oldest first)."""
     taker = Decimal(book["taker_rate"])
+    product = book.get("product_id", DEFAULT_PRODUCT)
     buffer_rate = Decimal(book["cost_buffer_rate"])
     risk_fraction = Decimal(book["risk_fraction"])
     max_notional = Decimal(book["max_notional_usd"])
@@ -108,6 +113,7 @@ def simulate(spec, verdicts, *, tick_size="1", book=BOOK_CONFIG):
                 elif bucket + ONE_MINUTE_MS - position["opened_at"] >= position["horizon_ms"]:
                     exit_price, reason = Decimal(close), "time_stop"
             if exit_price is not None:
+                exit_price = exit_fill(exit_price, position["side"], product, reason)
                 entry, quantity = position["entry"], position["quantity"]
                 gross = (exit_price - entry) * quantity if long else (entry - exit_price) * quantity
                 fees = (entry + exit_price) * quantity * taker
@@ -131,7 +137,7 @@ def simulate(spec, verdicts, *, tick_size="1", book=BOOK_CONFIG):
         proposal = propose_spec(spec, current, **common)
         if proposal["action"] not in ("LONG", "SHORT"):
             continue
-        entry = Decimal(current["candidate_close"])
+        entry = entry_fill(Decimal(current["candidate_close"]), proposal["action"], product)
         stop, target = Decimal(proposal["proposed_stop"]), Decimal(proposal["proposed_target"])
         cost_per_unit = entry * (2 * taker + buffer_rate)
         if abs(target - entry) <= cost_per_unit + entry * buffer_rate:
@@ -247,7 +253,7 @@ def run_backtest(spec, verdicts, *, tick_size="1", book=BOOK_CONFIG, trial_sharp
     oos_values = [t["net_bp"] for t in out_sample]
     oos_sharpe = _sharpe(oos_values)
     # The same trades on the other side: the gross flips and the round trip is paid again.
-    round_trip_bp = float(Decimal(book["taker_rate"]) * 20_000)
+    round_trip_bp = float(round_trip_cost_bps(book.get("product_id", DEFAULT_PRODUCT)))
     inverse = [-t["net_bp"] - 2 * round_trip_bp for t in trades]
     buy_and_hold = _buy_and_hold_pct(verdicts)
     total = _summary(trades, initial_cash)

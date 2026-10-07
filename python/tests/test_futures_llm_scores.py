@@ -33,21 +33,21 @@ def decision(index, chosen, confidence=0.5):
 
 
 class PointTests(unittest.TestCase):
-    # 10 bp round trip (taker 5 bp on both sides), judged 30 buckets later.
+    # 10.12 bp round trip (taker 5 bp on both sides plus 2 x 0.06 bp impact), judged 30 buckets later.
     def score(self, chosen, exit_close, horizon=30):
         closes = [10_000] * horizon + [exit_close]
         return s.score_decisions([decision(0, chosen)], path(closes), horizon_min=horizon)[0]
 
     def test_buy_is_a_hit_only_when_the_move_clears_the_round_trip(self):
         self.assertEqual(self.score("buy", 10_020)["point"], 1)
-        self.assertEqual(self.score("buy", 10_020)["net_bp"], 10.0)
+        self.assertEqual(self.score("buy", 10_020)["net_bp"], 9.88)
         self.assertEqual(self.score("buy", 10_010)["point"], -1)
         self.assertEqual(self.score("buy", 9_900)["point"], -1)
 
     def test_sell_is_the_mirror(self):
         self.assertEqual(self.score("sell", 9_980)["point"], 1)
         self.assertEqual(self.score("sell", 10_050)["point"], -1)
-        self.assertEqual(self.score("sell", 10_050)["net_bp"], -60.0)
+        self.assertEqual(self.score("sell", 10_050)["net_bp"], -60.12)
 
     def test_hold_is_right_when_no_trade_would_have_paid(self):
         hit = self.score("hold", 10_005)
@@ -88,7 +88,9 @@ class BookTests(unittest.TestCase):
         trade = trades[0]
         self.assertEqual((trade["side"], trade["exit_reason"], trade["exit_price"]), ("LONG", "target", "10030.0"))
         quantity = float(trade["quantity"])
-        expected = 30 * quantity - (10_000 + 10_030) * quantity * float(BOOK_CONFIG["taker_rate"])
+        # The market entry pays PF_XBTUSD's 0.06 bp of impact; the limit target fills at its level.
+        entry = 10_000.06
+        expected = (10_030 - entry) * quantity - (entry + 10_030) * quantity * float(BOOK_CONFIG["taker_rate"])
         self.assertAlmostEqual(trade["pnl_usd"], expected, places=3)
 
     def test_the_stop_wins_when_one_candle_touches_both(self):

@@ -15,6 +15,7 @@ import os
 from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR, localcontext
 
 from .canonical import canonical_hash
+from .futures_costs import side_impact_bps
 from .futures_strategies import (
     _availability,
     _compare,
@@ -407,7 +408,8 @@ def propose_spec(spec, current, *, previous=None, trend=None, regime="unknown",
     result["target_distance"] = _text(abs(_decimal(target, "proposed target") - price))
     result["invalidation"] = invalidation
     if cost_config is not None:
-        maker = _decimal(cost_config.get("maker_rate"), "maker rate")
         taker = _decimal(cost_config.get("taker_rate"), "taker rate")
-        result["estimated_round_trip_cost_bps"] = _text((maker + taker) * Decimal("10000"))
+        # What D charges: taker on both legs plus the product's execution cost.
+        execution = 2 * side_impact_bps(cost_config.get("product_id"))
+        result["estimated_round_trip_cost_bps"] = _text(2 * taker * Decimal("10000") + execution)
     return result

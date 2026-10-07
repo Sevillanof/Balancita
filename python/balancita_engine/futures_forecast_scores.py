@@ -39,6 +39,7 @@ import time
 from decimal import ROUND_HALF_EVEN, Decimal
 
 from .canonical import canonical_hash, normalize_decimal
+from .futures_costs import COST_MODEL_VERSION, cost_model_hash, round_trip_cost_bps
 from .futures_products import resolve_products
 from .futures_verdicts import (
     ONE_MINUTE_MS,
@@ -48,14 +49,14 @@ from .futures_verdicts import (
 )
 
 SCORE_CONFIG = {
-    "version": "futures-forecast-scores-config.v2",
+    "version": "futures-forecast-scores-config.v3",
+    "cost_model": COST_MODEL_VERSION,
+    "cost_model_hash": cost_model_hash(),
     "verdict_schema": VERDICT_SCHEMA_VERSION,
     "entry_price": "decision_bucket_close",
     "horizons_min": [15, 60, 240, 1440],
     "barrier_horizon_min": 1440,
     "excursion_window_min": 30,
-    "taker_rate": "0.0005",
-    "slippage_rate": "0.0002",
     "max_verdict_lag_ms": 15_000,
     "same_candle_barrier": "stop_first",
 }
@@ -76,8 +77,9 @@ TABLES = (
 )
 
 
-def round_trip_cost_bp(config):
-    return (2 * Decimal(config["taker_rate"]) + Decimal(config["slippage_rate"])) * TEN_THOUSAND
+def round_trip_cost_bp(config, product_id=None):
+    """Round-trip cost of the shared per-product model (``config`` kept for call compatibility)."""
+    return round_trip_cost_bps(product_id)
 
 
 def _bp(value):
@@ -178,7 +180,6 @@ class ScoreStore:
         self.horizons = [int(h) for h in self.config["horizons_min"]]
         self.barrier_min = int(self.config["barrier_horizon_min"])
         self.excursion_min = int(self.config["excursion_window_min"])
-        self.cost_bp = round_trip_cost_bp(self.config)
 
     def last_verdict_bucket(self, product_id):
         row = self.db.execute(
@@ -541,7 +542,7 @@ class ForecastScoreService:
         store = self.store
         first_needed = min(key[0] for key in open_product) + ONE_MINUTE_MS
         cache = self._refresh_cache(product, first_needed, latest)
-        cost = store.cost_bp
+        cost = round_trip_cost_bp(store.config, product)
         returns, barriers, excursions = [], [], []
         for key, forecast in open_product.items():
             bucket, source, strategy = key
@@ -678,7 +679,6 @@ def forecast_score_report(scores_db_path, hour_bucket=24, live_only=False, produ
     try:
         config = json.loads(db.execute(
             "SELECT value FROM paper_futures_forecast_meta WHERE key='config_json'").fetchone()[0])
-        cost = round_trip_cost_bp(config)
         conditions, params = [], []
         if live_only:
             conditions.append("f.backfill=0")
@@ -697,6 +697,7 @@ def forecast_score_report(scores_db_path, hour_bucket=24, live_only=False, produ
         ):
             label = SOURCE_SELECTED if source == SOURCE_SELECTED else strategy
             gross = Decimal(gross)
+            cost = round_trip_cost_bp(config, product_id)
             long_gross = gross if side == "LONG" else -gross
             cell = returns.setdefault(
                 (product_id, label, side, regime, _hours_label(hour, size), horizon), ([], [], []))
