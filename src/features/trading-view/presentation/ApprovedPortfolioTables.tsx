@@ -34,26 +34,28 @@ function PortfolioTable({
       {rows.length === 0 && emptyLabel ? (
         <p role="status">{emptyLabel}</p>
       ) : null}
-      <div className="demo-terminal__table-scroll">
-        <table>
-          <thead>
-            <tr>
-              {columns.map((column) => (
-                <th key={column}>{column}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((row) => (
-              <tr key={row.id}>
-                {row.cells.map((cell, index) => (
-                  <td key={`${row.id}-${index}`}>{cell}</td>
+      {rows.length === 0 && emptyLabel ? null : (
+        <div className="demo-terminal__table-scroll">
+          <table>
+            <thead>
+              <tr>
+                {columns.map((column) => (
+                  <th key={column}>{column}</th>
                 ))}
               </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+            </thead>
+            <tbody>
+              {rows.map((row) => (
+                <tr key={row.id}>
+                  {row.cells.map((cell, index) => (
+                    <td key={`${row.id}-${index}`}>{cell}</td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   )
 }

@@ -18,10 +18,15 @@ import {
 import { applyTerminalEvent } from '../features/connected-trading/infrastructure/terminal-state.ts'
 import { projectTerminalQuote } from './terminal-market.ts'
 import { reasonLabel as baseReasonLabel } from './terminal-copy.ts'
+import TerminalDecisions from './TerminalDecisions.tsx'
+import type { DecisionRow } from './terminal-decisions.ts'
 import './DemoShell.css'
 import './ConnectedTerminal.css'
 
 type ViewState = Record<string, unknown>
+
+/** Closed 1 m candles the engine needs before it can decide. */
+const WARMUP_CANDLES = 50
 
 function reasonLabel(value: unknown): string {
   if (value === 'entries_paused')
@@ -140,6 +145,86 @@ function analysesNotice(status: unknown, reason: unknown): string | null {
   if (status === 'starting')
     return 'Esperando el primer veredicto: el servicio de veredicto emite uno al cerrar cada vela de 1 minuto.'
   return null
+}
+
+function shortTime(value: unknown): string {
+  if (!Number.isSafeInteger(value)) return '--:--'
+  return new Date(Number(value)).toISOString().slice(11, 16)
+}
+
+/** Selected decision strip: strategy, short id with copy, reason, proposals. */
+function SelectedDecision({
+  analysis,
+  id,
+  time,
+  reason,
+}: {
+  analysis: Record<string, unknown>
+  id: string
+  time: string
+  reason: string
+}) {
+  const selector = record(analysis.selector)
+  const proposals = Array.isArray(analysis.proposals) ? analysis.proposals : []
+  return (
+    <div
+      className="connected-terminal__selected"
+      aria-label="Decisión seleccionada"
+    >
+      <p>
+        <strong>{analysisAction(analysis)}</strong> ·{' '}
+        {strategyLabel(selector.strategy_id ?? analysis.selected_strategy_id)}
+      </p>
+      <p>{reason}</p>
+      <p>
+        <small>{time}</small>
+      </p>
+      <p>
+        <code className="connected-terminal__hash" title={id}>
+          {id ? id.slice(0, 12) : 'ID no disponible'}
+        </code>
+        <button
+          type="button"
+          className="demo-terminal__present"
+          aria-label={`Copiar ID completo ${id}`}
+          onClick={() => void navigator.clipboard?.writeText(id)}
+        >
+          Copiar ID
+        </button>
+      </p>
+      <details>
+        <summary>Propuestas y condiciones</summary>
+        {proposals.map((proposalValue, proposalIndex) => {
+          const proposal = record(proposalValue)
+          const conditions = Array.isArray(proposal.conditions)
+            ? proposal.conditions
+            : []
+          return (
+            <div key={String(proposal.strategy_id ?? proposalIndex)}>
+              <strong>{String(proposal.strategy_id ?? 'Estrategia')}</strong>
+              <p>
+                {String(proposal.action ?? 'WAIT')} ·{' '}
+                {reasonLabel(proposal.reason_code)}
+              </p>
+              {conditions.map((conditionValue, conditionIndex) => {
+                const condition = record(conditionValue)
+                return (
+                  <small key={String(condition.code ?? conditionIndex)}>
+                    {String(condition.code ?? 'Condición')}:{' '}
+                    {condition.passed === true
+                      ? 'cumplida'
+                      : condition.passed === false
+                        ? 'no cumplida'
+                        : 'no disponible'}
+                  </small>
+                )
+              })}
+            </div>
+          )
+        })}
+      </details>
+    </div>
+  )
 }
 
 function marketStatusLabel(value: unknown): string {
@@ -290,6 +375,7 @@ export default function FuturesTerminal({
   const [connected, setConnected] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [commandPending, setCommandPending] = useState(false)
+  const [confirmingReset, setConfirmingReset] = useState(false)
   const [commandStatus, setCommandStatus] = useState('')
   const [commandVersion, setCommandVersion] = useState(0)
   const [selectedAnalysisId, setSelectedAnalysisId] = useState<string | null>(
@@ -518,6 +604,39 @@ export default function FuturesTerminal({
   const gatewayEngineReason =
     record(state?.engine).reason ?? bootstrap.engine?.reason
   const showAnalysisTime = localDemo || gatewayEngine
+  const change24h = (
+    (marketState.ticker_stats ?? record(bootstrap.market).ticker_stats) as {
+      change_24h_pct?: unknown
+    } | null
+  )?.change_24h_pct
+  const feedStatus =
+    marketState.market_status ?? record(bootstrap.market).status
+  const feedTone =
+    feedStatus === 'live' ? 'ok' : feedStatus === 'degraded' ? 'warn' : 'bad'
+  const feedReason = marketState.reason ?? record(bootstrap.market).reason
+  const lastReceivedAt =
+    marketState.last_received_at ?? record(bootstrap.market).last_received_at
+  const fundingKnown =
+    record(bootstrap.market).funding === 'known_current_interval'
+  const warmupCandles = Array.isArray(market.candles)
+    ? market.candles.length
+    : 0
+  const decisionRows: DecisionRow[] = analyses
+    .slice(-100)
+    .reverse()
+    .map((item, index) => {
+      const analysis = record(item)
+      const selector = record(analysis.selector)
+      return {
+        id: String(analysis.analysis_id ?? index),
+        action: analysisAction(analysis),
+        strategy: strategyLabel(
+          selector.strategy_id ?? analysis.selected_strategy_id,
+        ).split(' · ')[0]!,
+        reason: analysisReason(analysis, localDemo),
+        time: shortTime(analysis.decision_time_ms),
+      }
+    })
   const originalRunActive = activeRunId === bootstrap.active_run_id
   const localScenarioStatus = localDemo
     ? String(
@@ -581,7 +700,7 @@ export default function FuturesTerminal({
         }
       />
       <div className="demo-shell__disclaimer">
-        {modeLabel}. Ninguna orden real ni conexión privada con Kraken.
+        Paper · sin órdenes reales ni conexión privada con Kraken
       </div>
       <main className="demo-shell__main connected-terminal__main">
         <div className="demo-shell__page-heading">
@@ -605,6 +724,15 @@ export default function FuturesTerminal({
             <div className="demo-terminal__quote">
               <strong>{money(displayedPrice)}</strong>
               <span>{quote.label}</span>
+              {typeof change24h === 'number' && (
+                <span data-tone={change24h >= 0 ? 'ok' : 'bad'}>
+                  {change24h >= 0 ? '+' : ''}
+                  {change24h.toLocaleString('es-ES', {
+                    maximumFractionDigits: 2,
+                  })}
+                  % 24 h
+                </span>
+              )}
               {bootstrap.mode === 'paper_live' && (
                 <small>
                   {quote.eventTime === null
@@ -648,73 +776,63 @@ export default function FuturesTerminal({
             {bootstrap.mode === 'paper_live' && (
               <section
                 className="connected-terminal__panel"
-                aria-label="Calidad del mercado público"
+                aria-label="Estado del sistema"
               >
-                <h2>Calidad del feed público</h2>
-                <p>
-                  Estado:{' '}
-                  {marketStatusLabel(
-                    marketState.market_status ??
-                      record(bootstrap.market).status,
+                <ul className="connected-terminal__chips">
+                  <li data-tone={feedTone}>
+                    Feed: {marketStatusLabel(feedStatus)}
+                  </li>
+                  <li data-tone={fundingKnown ? 'ok' : 'warn'}>
+                    Funding: {fundingKnown ? 'conocido' : 'desconocido'}
+                  </li>
+                  {gatewayEngine && !engineOff && (
+                    <li>
+                      Motor paper:{' '}
+                      {paperEngineLabel(
+                        gatewayEngineStatus,
+                        gatewayEngineReason,
+                      )}
+                    </li>
                   )}
-                </p>
-                <p>
-                  Última recepción:{' '}
-                  {Number.isSafeInteger(
-                    marketState.last_received_at ??
-                      record(bootstrap.market).last_received_at,
-                  )
-                    ? `${new Date(
-                        Number(
-                          marketState.last_received_at ??
-                            record(bootstrap.market).last_received_at,
-                        ),
-                      ).toLocaleString('es-ES', { timeZone: 'UTC' })} UTC`
-                    : 'Aún no hay datos recibidos'}
-                </p>
-                {typeof (
-                  marketState.reason ?? record(bootstrap.market).reason
-                ) === 'string' && (
+                  {!engineOff && warmupCandles < WARMUP_CANDLES && (
+                    <li data-tone="warn">
+                      Calentando {warmupCandles}/{WARMUP_CANDLES}
+                    </li>
+                  )}
+                </ul>
+                <details>
+                  <summary>Detalle del feed</summary>
                   <p>
-                    Detalle del feed:{' '}
+                    Última recepción:{' '}
+                    {Number.isSafeInteger(lastReceivedAt)
+                      ? `${new Date(Number(lastReceivedAt)).toLocaleString('es-ES', { timeZone: 'UTC' })} UTC`
+                      : 'Aún no hay datos recibidos'}
+                  </p>
+                  {typeof feedReason === 'string' && (
+                    <p>Motivo del estado: {feedReason}</p>
+                  )}
+                  <p>
+                    Integridad del libro:{' '}
                     {String(
-                      marketState.reason ?? record(bootstrap.market).reason,
+                      record(
+                        marketState.book_quality ??
+                          record(bootstrap.market).book_quality,
+                      ).book_sequence_integrity ??
+                        record(bootstrap.market).book_quality ??
+                        'No verificada',
                     )}
                   </p>
-                )}
-                <p>
-                  Integridad del libro:{' '}
-                  {String(
-                    record(
-                      marketState.book_quality ??
-                        record(bootstrap.market).book_quality,
-                    ).book_sequence_integrity ??
-                      record(bootstrap.market).book_quality ??
-                      'No verificada',
-                  )}
-                </p>
-                <p>Garantía de secuencia del proveedor: no documentada.</p>
-                <p>Profundidad bid/ask: no expuesta por el DTO de terminal.</p>
-                <p>
-                  Financiación:{' '}
-                  {record(bootstrap.market).funding === 'known_current_interval'
-                    ? 'cobertura del período actual disponible; tasa y límites del período no se exponen en esta API.'
-                    : 'desconocida; entradas bloqueadas y PnL neto incompleto.'}
-                </p>
-                {gatewayEngine && !engineOff && (
+                  <p>Garantía de secuencia del proveedor: no documentada.</p>
                   <p>
-                    Motor paper:{' '}
-                    {paperEngineLabel(gatewayEngineStatus, gatewayEngineReason)}
+                    Profundidad bid/ask: no expuesta por el DTO de terminal.
                   </p>
-                )}
-                <p>
-                  Warm-up:{' '}
-                  {engineOff
-                    ? 'no aplica: el motor está apagado.'
-                    : bootstrap.engine?.status === 'warming'
-                      ? 'el motor aún no ha recibido evidencia suficiente.'
-                      : 'el conteo de velas de calentamiento no está expuesto.'}
-                </p>
+                  <p>
+                    Financiación:{' '}
+                    {fundingKnown
+                      ? 'cobertura del período actual disponible; tasa y límites del período no se exponen en esta API.'
+                      : 'desconocida; entradas bloqueadas y PnL neto incompleto.'}
+                  </p>
+                </details>
               </section>
             )}
             <ApprovedTerminalLayout
@@ -749,148 +867,31 @@ export default function FuturesTerminal({
                 </section>
               }
               decisions={
-                <section
-                  className="demo-terminal__panel connected-terminal__decisions"
-                  aria-label="Decisiones del motor"
+                <TerminalDecisions
+                  rows={decisionRows}
+                  selectedId={selectedId}
+                  onSelect={setSelectedAnalysisId}
+                  notice={
+                    engineOff
+                      ? 'Motor de decisiones apagado. Solo se muestran velas y precio públicos de Kraken Futures; no hay análisis, cuenta ni operaciones simuladas.'
+                      : !analyses.length && gatewayEngine
+                        ? analysesNotice(
+                            gatewayEngineStatus,
+                            gatewayEngineReason,
+                          )
+                        : null
+                  }
+                  selected={
+                    selectedAnalysis && !engineOff ? (
+                      <SelectedDecision
+                        analysis={selectedAnalysis}
+                        id={selectedId}
+                        time={utcTime(selectedDecisionTime)}
+                        reason={analysisReason(selectedAnalysis, localDemo)}
+                      />
+                    ) : null
+                  }
                 >
-                  <h2>Análisis recientes</h2>
-                  {engineOff ? (
-                    <p role="status">
-                      Motor de decisiones apagado. Solo se muestran velas y
-                      precio públicos de Kraken Futures; no hay análisis, cuenta
-                      ni operaciones simuladas.
-                    </p>
-                  ) : !analyses.length &&
-                    gatewayEngine &&
-                    analysesNotice(gatewayEngineStatus, gatewayEngineReason) ? (
-                    <p role="status">
-                      {analysesNotice(gatewayEngineStatus, gatewayEngineReason)}
-                    </p>
-                  ) : analyses.length ? (
-                    analyses
-                      .slice(-100)
-                      .reverse()
-                      .map((item, index) => {
-                        const analysis = record(item)
-                        const selector = record(analysis.selector)
-                        const proposals = Array.isArray(analysis.proposals)
-                          ? analysis.proposals
-                          : []
-                        const analysisId = String(analysis.analysis_id ?? '')
-                        return (
-                          <article
-                            key={String(analysis.analysis_id ?? index)}
-                            aria-current={selectedId === analysisId}
-                          >
-                            {localDemo && (
-                              <button
-                                type="button"
-                                aria-pressed={selectedId === analysisId}
-                                aria-label={`Seleccionar análisis ${analysisId}`}
-                                onClick={() =>
-                                  setSelectedAnalysisId(analysisId)
-                                }
-                              >
-                                Seleccionar análisis
-                              </button>
-                            )}
-                            <strong>
-                              {localDemo
-                                ? analysisAction(analysis)
-                                : String(
-                                    selector.action ??
-                                      analysis.action ??
-                                      'Análisis',
-                                  )}
-                            </strong>
-                            <p>{analysisReason(analysis, localDemo)}</p>
-                            {showAnalysisTime && (
-                              <p>Hora: {utcTime(analysis.decision_time_ms)}</p>
-                            )}
-                            <p>
-                              Estrategia seleccionada:{' '}
-                              {strategyLabel(
-                                selector.strategy_id ??
-                                  analysis.selected_strategy_id,
-                              )}
-                            </p>
-                            <p>
-                              Versión del motor:{' '}
-                              {String(
-                                analysis.runtime_version ?? 'No disponible',
-                              )}
-                            </p>
-                            <button
-                              type="button"
-                              className="demo-terminal__present"
-                              aria-label={`Copiar ID completo ${analysisId}`}
-                              onClick={() =>
-                                void navigator.clipboard?.writeText(analysisId)
-                              }
-                            >
-                              Copiar ID de análisis
-                            </button>
-                            <code className="connected-terminal__hash">
-                              {analysisId || 'ID no disponible'}
-                            </code>
-                            <details>
-                              <summary>Propuestas y condiciones</summary>
-                              {proposals.map((proposalValue, proposalIndex) => {
-                                const proposal = record(proposalValue)
-                                const conditions = Array.isArray(
-                                  proposal.conditions,
-                                )
-                                  ? proposal.conditions
-                                  : []
-                                return (
-                                  <div
-                                    key={String(
-                                      proposal.strategy_id ?? proposalIndex,
-                                    )}
-                                  >
-                                    <strong>
-                                      {String(
-                                        proposal.strategy_id ?? 'Estrategia',
-                                      )}
-                                    </strong>
-                                    <p>
-                                      {String(proposal.action ?? 'WAIT')} ·{' '}
-                                      {reasonLabel(proposal.reason_code)}
-                                    </p>
-                                    {conditions.map(
-                                      (conditionValue, conditionIndex) => {
-                                        const condition = record(conditionValue)
-                                        return (
-                                          <small
-                                            key={String(
-                                              condition.code ?? conditionIndex,
-                                            )}
-                                          >
-                                            {String(
-                                              condition.code ?? 'Condición',
-                                            )}
-                                            :{' '}
-                                            {String(
-                                              condition.passed === true
-                                                ? 'cumplida'
-                                                : condition.passed === false
-                                                  ? 'no cumplida'
-                                                  : 'no disponible',
-                                            )}
-                                          </small>
-                                        )
-                                      },
-                                    )}
-                                  </div>
-                                )
-                              })}
-                            </details>
-                          </article>
-                        )
-                      })
-                  ) : (
-                    <p>Aún no hay análisis registrados.</p>
-                  )}
                   {localDemo && selectedAnalysis && (
                     <section aria-label="Análisis seleccionado">
                       <h3>Análisis seleccionado</h3>
@@ -965,7 +966,7 @@ export default function FuturesTerminal({
                       )}
                     </section>
                   )}
-                </section>
+                </TerminalDecisions>
               }
             />
             {!engineOff && (
@@ -1010,44 +1011,87 @@ export default function FuturesTerminal({
                           'paper.close',
                           'paper.new_run',
                         ] as const)
-                  ).map((action) => (
-                    <button
-                      key={action}
-                      type="button"
-                      className="demo-terminal__present"
-                      disabled={gatewayEngine || !connected || commandPending}
-                      onClick={() => {
-                        if (
-                          action === 'paper.new_run' &&
-                          !window.confirm(
-                            localDemo
-                              ? 'Crear una cuenta/run MOCK nueva que repite el escenario y conservar el historial anterior?'
-                              : 'Crear una cuenta/run nuevo y conservar el historial anterior?',
-                          )
-                        )
-                          return
-                        sendCommand(action)
-                      }}
-                    >
-                      {
-                        (localDemo
-                          ? {
-                              'paper.start': 'Iniciar simulación',
-                              'paper.pause': 'Pausar entradas (MOCK)',
-                              'paper.resume': 'Reanudar entradas (MOCK)',
-                              'paper.close': 'Cerrar posición',
-                              'paper.new_run': 'Nueva cuenta/run (MOCK)',
-                            }
-                          : {
-                              'paper.start': 'Iniciar simulación',
-                              'paper.pause': 'Pausar entradas',
-                              'paper.resume': 'Reanudar entradas',
-                              'paper.close': 'Cerrar posición',
-                              'paper.new_run': 'Nueva cuenta/run',
-                            })[action]
-                      }
-                    </button>
-                  ))}
+                  )
+                    .filter((action) => action !== 'paper.new_run')
+                    .map((action) => (
+                      <button
+                        key={action}
+                        type="button"
+                        className="demo-terminal__present"
+                        disabled={gatewayEngine || !connected || commandPending}
+                        onClick={() => {
+                          if (action === 'paper.new_run') {
+                            setConfirmingReset(true)
+                            return
+                          }
+                          sendCommand(action)
+                        }}
+                      >
+                        {
+                          (localDemo
+                            ? {
+                                'paper.start': 'Iniciar simulación',
+                                'paper.pause': 'Pausar entradas (MOCK)',
+                                'paper.resume': 'Reanudar entradas (MOCK)',
+                                'paper.close': 'Cerrar posición',
+                                'paper.new_run': 'Nueva cuenta/run (MOCK)',
+                              }
+                            : {
+                                'paper.start': 'Iniciar simulación',
+                                'paper.pause': 'Pausar entradas',
+                                'paper.resume': 'Reanudar entradas',
+                                'paper.close': 'Cerrar posición',
+                                'paper.new_run': 'Nueva cuenta/run',
+                              })[action]
+                        }
+                      </button>
+                    ))}
+                  <div
+                    className="connected-terminal__reset"
+                    role="group"
+                    aria-label="Reiniciar cuenta"
+                  >
+                    {confirmingReset ? (
+                      <>
+                        <p role="alert">
+                          {localDemo
+                            ? 'Se crea una cuenta/run MOCK nueva que repite el escenario; el historial anterior se conserva.'
+                            : 'Se crea una cuenta/run nuevo; el historial anterior se conserva.'}
+                        </p>
+                        <button
+                          type="button"
+                          className="demo-terminal__present"
+                          disabled={!connected || commandPending}
+                          onClick={() => {
+                            setConfirmingReset(false)
+                            sendCommand('paper.new_run')
+                          }}
+                        >
+                          Confirmar nueva cuenta
+                        </button>
+                        <button
+                          type="button"
+                          className="demo-terminal__present"
+                          onClick={() => setConfirmingReset(false)}
+                        >
+                          Cancelar
+                        </button>
+                      </>
+                    ) : (
+                      !gatewayEngine && (
+                        <button
+                          type="button"
+                          className="demo-terminal__present"
+                          disabled={!connected || commandPending}
+                          onClick={() => setConfirmingReset(true)}
+                        >
+                          {localDemo
+                            ? 'Nueva cuenta/run (MOCK)'
+                            : 'Nueva cuenta/run'}
+                        </button>
+                      )
+                    )}
+                  </div>
                   {commandPending && (
                     <span role="status">
                       Comando enviado; aceptación no significa fill.
@@ -1055,9 +1099,12 @@ export default function FuturesTerminal({
                   )}
                   {commandStatus && <p role="status">{commandStatus}</p>}
                 </section>
-                <details className="connected-terminal__metadata" open>
-                  <summary>Cuenta y estado de riesgo</summary>
-                  <section className="connected-terminal__panel">
+                <section
+                  className="connected-terminal__panel"
+                  aria-label="Cuenta paper"
+                >
+                  <h2>Cuenta paper</h2>
+                  <div>
                     <dl>
                       <dt>Saldo USD</dt>
                       <dd>{money(account.cash_usd)}</dd>
@@ -1120,24 +1167,36 @@ export default function FuturesTerminal({
                             : 'Sin posición abierta'}
                       </dd>
                     </dl>
-                  </section>
-                </details>
+                  </div>
+                </section>
                 <ApprovedPortfolioTables
                   label="CARTERA PAPER · USD / BTC"
                   title="Posiciones y operaciones"
                   ariaLabel="Posiciones paper"
                   open={{
                     title: 'Posición abierta',
-                    columns: ['Dirección', 'Cantidad BTC', 'Entrada USD'],
+                    columns: [
+                      'Estrategia',
+                      'Dirección',
+                      'Cantidad BTC',
+                      'Entrada USD',
+                      'Stop USD',
+                      'Objetivo USD',
+                    ],
                     emptyLabel: 'Sin posición abierta.',
                     rows: position.side
                       ? [
                           {
                             id: String(state.run_id),
                             cells: [
+                              strategyLabel(position.strategy_id).split(
+                                ' · ',
+                              )[0]!,
                               String(position.side),
                               quantity(position.quantity_btc),
                               money(position.entry_price_usd_per_btc),
+                              money(position.stop),
+                              money(position.target),
                             ],
                           },
                         ]

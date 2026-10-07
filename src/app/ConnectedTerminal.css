@@ -335,3 +335,108 @@
 .connected-terminal__decisions article p {
   margin: 4px 0;
 }
+
+/* Decisions list: fixed height, own scroll; the page never grows with verdicts. */
+.connected-terminal__decisions {
+  height: 560px;
+  max-height: none;
+  display: flex;
+  flex-direction: column;
+}
+
+.connected-terminal__decisions-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.connected-terminal__decisions-head button[aria-pressed='true'] {
+  font-weight: 700;
+}
+
+.connected-terminal__decision-list {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.connected-terminal__decision-list li {
+  padding: 6px 0;
+  border-top: 1px solid var(--demo-border, #303a3e);
+}
+
+.connected-terminal__decision-list li button {
+  display: grid;
+  grid-template-columns: 4.5rem 1fr auto;
+  gap: 2px 8px;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+}
+
+.connected-terminal__decision-list li button[aria-pressed='true'] {
+  outline: 1px solid currentColor;
+}
+
+.connected-terminal__decision-list small {
+  grid-column: 1 / -1;
+}
+
+.connected-terminal__wait-run {
+  opacity: 0.6;
+  font-size: 0.85em;
+}
+
+.connected-terminal__selected {
+  border-top: 2px solid var(--demo-border, #303a3e);
+  padding-top: 8px;
+  overflow-y: auto;
+  max-height: 45%;
+}
+
+@media (max-width: 640px) {
+  .connected-terminal__decisions {
+    height: 420px;
+  }
+}
+
+.connected-terminal__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 8px;
+  padding: 0;
+  list-style: none;
+}
+
+.connected-terminal__chips li {
+  padding: 2px 10px;
+  border: 1px solid var(--demo-border, #303a3e);
+  border-radius: 999px;
+}
+
+.connected-terminal__chips li[data-tone='ok'] {
+  border-color: #3fb27f;
+}
+
+.connected-terminal__chips li[data-tone='warn'] {
+  border-color: #d9a441;
+}
+
+.connected-terminal__chips li[data-tone='bad'] {
+  border-color: #d65c5c;
+}
+
+.connected-terminal__reset {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--demo-border, #303a3e);
+}
