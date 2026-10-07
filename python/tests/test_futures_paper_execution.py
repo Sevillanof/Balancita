@@ -182,7 +182,7 @@ class Case(unittest.TestCase):
         store.close()
         return count
 
-    def long_entry(self, written_at=BASE + SECOND, **overrides):
+    def long_entry(self, written_at=BASE + 4 * SECOND, **overrides):
         bucket = written_at - MINUTE - 3 * SECOND
         bucket -= bucket % MINUTE
         self.verdicts.add(bucket, written_at, verdict_payload(bucket, **overrides))
@@ -217,7 +217,7 @@ class EntryTests(Case):
         self.assertEqual(events_of(self.path("account.sqlite"), "order_filled")[0]["time_ms"], written + 120)
 
     def test_acts_on_pf_xbtusd_verdicts_only_when_other_products_share_the_verdicts_db(self):
-        written = BASE + SECOND
+        written = BASE + 4 * SECOND
         bucket = written - MINUTE - 3 * SECOND
         bucket -= bucket % MINUTE
         self.verdicts.add(bucket, written, verdict_payload(bucket))
@@ -287,6 +287,20 @@ class EntryTests(Case):
         self.assertEqual(considered["reason"], "verdict_stale")
         self.assertNotIn("order_created", self.kinds())
 
+    def test_fresh_verdict_written_late_is_skipped_with_a_reason(self):
+        # Fresh candles (3 s lag) but C wrote the verdict 20 s after it was known,
+        # as when it catches up after a start: the entry would fill far too late.
+        bucket = BASE - MINUTE
+        written = bucket + MINUTE + 3 * SECOND + 20 * SECOND
+        self.verdicts.add(bucket, written, verdict_payload(bucket))
+        self.market.tickers([(written + 150, "100010", "100011", "100010")])
+        self.replay()
+        considered = body(events_of(self.path("account.sqlite"), "verdict_considered")[0])
+        self.assertEqual(considered["outcome"], "skipped")
+        self.assertEqual(considered["reason"], "verdict_late")
+        self.assertEqual(considered["delivery_lag_ms"], 20 * SECOND)
+        self.assertNotIn("order_created", self.kinds())
+
     def test_wait_verdicts_are_not_reported(self):
         bucket = BASE - 2 * MINUTE
         self.verdicts.add(bucket, BASE, verdict_payload(bucket, action="WAIT"))
@@ -349,7 +363,7 @@ class EntryTests(Case):
     def test_ties_break_funding_before_verdict_before_ticker(self):
         # The funding period becomes known at the very millisecond the verdict is written.
         self.market = MarketDb(self.path("tie-market.sqlite"))
-        written = BASE + SECOND
+        written = BASE + 4 * SECOND
         self.market.funding(BASE - HOUR, BASE, "0", written)
         self.long_entry(written_at=written)
         self.market.tickers([(written + 100, "100010", "100011", "100010")])  # at eligible
@@ -561,8 +575,9 @@ class ExitTests(Case):
         next_day = (BASE // DAY + 1) * DAY
         self.market.funding(next_day - HOUR, next_day, "0", next_day + SECOND)
         self.market.tickers([(next_day + 10 * SECOND, "99000", "99001", "99000")])
-        reopened_bucket = BASE + 30 * MINUTE
-        self.verdicts.add(reopened_bucket, next_day + 20 * SECOND, verdict_payload(reopened_bucket, stop="98500"))
+        reopened_bucket = next_day - MINUTE
+        self.verdicts.add(reopened_bucket, next_day + 20 * SECOND,
+                          verdict_payload(reopened_bucket, stop="98500", lag=10 * SECOND))
         self.market.tickers([(next_day + 21 * SECOND, "99000", "99001", "99000")])
         self.replay(config=config)
         path = self.path("account.sqlite")
@@ -739,7 +754,7 @@ class ReplayAndRestartTests(Case):
         """Entry, stop, re-entry on a new signal, with funding, all in one input set."""
         steps = []
         for index in range(6):
-            written = BASE + index * 5 * MINUTE + SECOND
+            written = BASE + index * 5 * MINUTE + 4 * SECOND
             bucket = written - MINUTE - 3 * SECOND
             bucket -= bucket % MINUTE
             stop = "99900" if index % 2 == 0 else "99950"

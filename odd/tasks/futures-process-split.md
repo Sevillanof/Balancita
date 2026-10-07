@@ -42,6 +42,13 @@ Every sustained live run of the single process surfaced a new engine defect: the
 - [x] PS-05c [S] Fix the funding-pause overwrite in the legacy runtime (`python/balancita_engine/futures_runtime.py:2393-2404`), with a test. The legacy runtime is still used by the MOCK local terminal.
 - [x] PS-05d [L] Retire the legacy live engine once D is proven: per-delta driver, market-context transport, operative bridge, `futuresSourceFailed` latch, `FUTURES_MODE=mock/replay` in `app.ts`, and the `DEV_LIVE_SINGLE_PROCESS` rollback. The dev MOCK child, which uses the local terminal, stays.
 - [ ] PS-06 [S] Process supervision + per-process health in UI.
+- [x] PS-08a [M] Strategy spec `balancita-strategy.v1` (declarative JSON with `params`, no code) and its Python interpreter in C; C25-C28 rewritten as specs, with a parity test giving identical proposals over stored history.
+- [ ] PS-08b [M] Strategy registry S: own SQLite DB, single writer; append-only spec versions (canonical hash) and lifecycle events with `known_at`; C reads it read-only and records the active spec hashes in each verdict; JSON import/export.
+- [ ] PS-08c [L] Independent strategies: each active strategy has its own isolated paper book in D (position, fills, P&L); no cross-strategy selection; all are shown against the same terminal chart, with per-strategy markers. The backtest, D and the forecast scorer share one cost model and one definition of a hit, so the same strategy reports the same return everywhere.
+- [ ] PS-08d [L] Front: strategies page, rule and parameter editor, configurable indicator periods, walk-forward backtest with a trial counter. When confirming an edit the user chooses: a new version of the same strategy, or a new strategy with the changes that leaves the existing one as it is.
+- [ ] PS-08e [S] Lifecycle draft -> shadow -> active, gated by the ADR evaluation (out of sample, deflated Sharpe, minimum trade count).
+- [ ] PS-08f [M] Import from Pine Script or freqtrade: an LLM translates the text into a draft spec that the user reviews; imported code never runs.
+- [ ] PS-08g [M] Every strategy also returns buy/hold/sell probabilities, like Q; Q sees all strategies' probabilities and answers buy, hold or sell, stored as a timestamped decision that D can consume. Owned by the "Qwen decide sobre estrategias" thread on top of the PS-08 spec contract.
 - [x] PS-09 [M] Everything useful Kraken publishes, captured and on the terminal chart: public analytics (buy/sell aggressor volume, open interest, liquidations, long/short and top-trader positioning, order book depth and slippage, rolling volatility), official 15m/1h/4h/1d candles, the full ticker (24 h stats, mark/index/premium, bid/ask sizes, funding now and next); per-product order book depth for all pinned products (trading costs). Chart: timeframes, EMA/Bollinger/Donchian/VWAP, flow/OI/liquidations/long-short/RSI panes, entry/stop/target lines, exit markers.
 
 ## Acceptance (PS-01)
@@ -297,6 +304,26 @@ Every sustained live run of the single process surfaced a new engine defect: the
     - It runs as an optional dev child (`NEWS_ENABLED=0` turns it off).
   - Legacy Gemini news polling in the `server` child stays off by default and is not retired here.
   - The container egress proxy blocked every real feed, so the Mac must confirm which feeds work.
+- 2026-10-07 PS-08 design (cloud session; user decisions). Proposal: https://claude.ai/code/artifact/512673e3-f53b-4ec2-86e2-eec41cebd47f
+  - Strategies are created and imported from the front as declarative specs; C25-C28 can be modified and parameters varied (ADR 0001 amendment: modify or ship as C29+).
+  - Storage: a new process S, single writer of its own strategies DB.
+  - Each strategy is agnostic to the others (no shared selection) and is tested against the same terminal chart.
+  - On confirming a change the user picks: edit the same strategy (new version, same id) or create a new strategy and keep the existing one.
+  - Every version is frozen by hash, so replay keeps giving the same verdicts; every backtested variant counts as a trial for the deflated Sharpe.
+  - PS-08b/d need the command channel planned in PS-06.
+- 2026-10-07 PS-08a/b/e (cloud session).
+  - `futures_spec_strategy.py`: `balancita-strategy.v1` validator and interpreter; C25-C28 shipped as `config/strategies/*.json` with `params`. Parity tests: 6000 fuzzed entry/exit cases plus a replayed synthetic history give proposals identical to `propose` (`python/tests/test_futures_spec_strategy.py`).
+  - `futures_strategy_registry.py`: process S, single writer of `futures-strategies.sqlite` (append-only versions, lifecycle events, backtests); local API on 8790, proxied as `/api-strategies` (contract: `docs/strategy-registry-api.md`); `strategies` dev child.
+  - `futures_strategy_backtest.py`: replays a spec over C's stored verdicts as one independent book with D's sizing and cost-buffer rule; 70/30 walk-forward split; deflated Sharpe over every spec backtested.
+  - Promotion gates are enforced in S, but C and D do not read the registry yet: "active" only takes effect with PS-08c.
+  - The UI is built by the app-design thread against this API.
+  - PS-08f backend: `futures_strategy_translate.py` asks the local llama-server for a JSON draft (`/translate`); the answer is validated, never saved or executed. Not yet tried against a real model.
+- 2026-10-07 PS-08g strategy probabilities for Q (cloud session, "Qwen decide sobre estrategias" thread). Covered by the user's Qwen waiver noted in Q1; D does not consume it yet.
+  - `futures_strategy_signals.py` turns every proposal into buy/hold/sell from its spec's own checks (side score = mean of the required checks, leaves 1/0, `any` = max, `not` = 1 - x; buy = score²/3 + 2/3 if LONG, sell likewise, hold = the rest, renormalized). The argmax always equals the proposal; untradable proposals are hold = 1. It is a deterministic score, not a calibrated probability.
+  - No field was added to the spec schema, `propose_spec` or the verdict payload, so parity and verdict DBs are untouched. Q computes the signals from stored proposals with the shipped specs (`config/strategies`); once C records active spec hashes (PS-08b/c), Q should look the spec up by hash.
+  - Q: new STATE fields `strategy_signals` and `strategy_consensus`, and the catalog question `trade_action@1` (buy/hold/sell), stored like any Q decision. Q now asks two questions per fresh verdict.
+  - Next: D consuming `trade_action` (Q3), and calibrating both the strategy scores and Q's answer with E's outcomes (Q2).
+  - Scoring of Qwen's decisions (user request): `futures_llm_scores.py`, read-only over the decisions and verdicts DBs, writes nothing. Each decision is entered at its bucket close and judged 30 buckets later with the backtest's taker fee on both sides: buy/sell hit (+1) when their net return is positive, hold when neither would have been; misses (-1) counted separately; pending until the horizon closes. A trading book with the backtest's `BOOK_CONFIG`, sizing and cost buffer (stop 1.5 ATR, target 2x, time stop 30 min, opposite decision closes) gives the P&L, return and hit rate comparable with each strategy. CLI: `python -m balancita_engine.futures_llm_scores --decisions-db ... --verdicts-db ...` (`--json` for every decision and trade). If the strategies thread changes the backtest's cost model or hit definition, this module follows it.
 
 - 2026-10-07 PS-09, market data for the chart (thread "Datos del gráfico de Terminal").
   - Capture A also polls Kraken's public analytics (`/api/charts/v1/analytics/<product>/<metric>`) into market DB schema 6: `paper_futures_analytics_responses` (raw + hash) and `paper_futures_analytics_points` (flat values per bucket, a new revision only when values change; append-only triggers). PF_XBTUSD: 7 metrics at 1m (24 h backfill) and 1h (60 d); every pinned product: `orderbook` at 1m (best bid/ask, liquidity within 0.05-100 %, slippage for 1k-1M USD).

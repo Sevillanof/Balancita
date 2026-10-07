@@ -1,5 +1,6 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
+import { delimiter } from 'node:path'
 import {
   checkDevPorts,
   describeChildExit,
@@ -26,7 +27,7 @@ describe('devChildSpecs', () => {
   })
   const byName = Object.fromEntries(specs.map((spec) => [spec.name, spec]))
 
-  it('starts vite, legacy server, mock API, live capture, live gateway, verdict service, paper execution, forecast scorer and news', () => {
+  it('starts vite, legacy server, mock API, live capture, live gateway, verdict service, paper execution, forecast scorer, strategy registry and news', () => {
     assert.deepEqual(
       specs.map((spec) => spec.name),
       [
@@ -38,6 +39,7 @@ describe('devChildSpecs', () => {
         'verdict',
         'paper',
         'scores',
+        'strategies',
         'news',
       ],
     )
@@ -100,6 +102,16 @@ describe('devChildSpecs', () => {
       env.FUTURES_VERDICTS_DB_PATH,
       verdictArgs[verdictArgs.indexOf('--verdicts-db') + 1],
     )
+  })
+
+  it('gives the gateway the decisions database and the Python for Qwen scores', () => {
+    const { env } = byName.live
+    assert.match(
+      env.FUTURES_DECISIONS_DB_PATH,
+      /futures-llm-decisions\.sqlite$/,
+    )
+    assert.deepEqual(JSON.parse(env.BALANCITA_PYTHON_COMMAND), ['python3'])
+    assert.ok(env.PYTHONPATH.split(delimiter).includes('/repo/python'))
   })
 
   it('runs the Python verdict service over the capture market database', () => {
