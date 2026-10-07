@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { record } from '../../../shared/wire/decode.ts'
 
 /** Timeframes the chart offers, in ms. */
 export const CHART_TIMEFRAMES = [
@@ -67,11 +68,6 @@ export type TerminalChartData = {
   depth: ChartDepth | null
   ticker: TerminalTickerStats | null
 }
-
-const record = (value: unknown): Record<string, unknown> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {}
 
 /** Validates the gateway's `futures-terminal-chart.v1` body; null when unusable. */
 export function parseTerminalChart(value: unknown): TerminalChartData | null {

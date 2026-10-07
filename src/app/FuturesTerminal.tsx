@@ -23,6 +23,7 @@ import TerminalDecisions from './TerminalDecisions.tsx'
 import type { DecisionRow } from './terminal-decisions.ts'
 import './DemoShell.css'
 import './ConnectedTerminal.css'
+import { record } from '../shared/wire/decode.ts'
 
 type ViewState = Record<string, unknown>
 
@@ -33,12 +34,6 @@ function reasonLabel(value: unknown): string {
   if (value === 'entries_paused')
     return 'Entradas pausadas: el motor no abre nuevas posiciones'
   return baseReasonLabel(value)
-}
-
-function record(value: unknown): Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {}
 }
 
 function money(value: unknown, maximumFractionDigits = 2): string {
