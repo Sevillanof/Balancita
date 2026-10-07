@@ -5,7 +5,7 @@ import {
   sideConditions,
   type StrategySpec,
 } from '../domain/strategy-spec.ts'
-import type { LabCandle } from './lab-candles.ts'
+import type { LabCandle } from '../infrastructure/lab-candles.ts'
 import c25 from './fixtures/c25-pullback-perp-v1.json'
 import c26 from './fixtures/c26-reversion-perp-v1.json'
 import c27 from './fixtures/c27-breakout-perp-v1.json'
@@ -22,7 +22,7 @@ import {
   type StrategyEntry,
   type StrategyEvent,
   type StrategyState,
-} from './strategy-api.ts'
+} from '../infrastructure/strategy-api.ts'
 
 /** C25-C28 exactly as the registry seeds them from `config/strategies/`. */
 export const BUILTIN_SPECS = [c25, c26, c27, c28] as unknown as StrategySpec[]

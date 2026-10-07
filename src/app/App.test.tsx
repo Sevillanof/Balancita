@@ -357,7 +357,7 @@ describe('dashboard Gemini boundary', () => {
       ).toBeInTheDocument()
       expect(
         await screen.findByText(
-          /Sin conexión con el registro de estrategias · datos de ejemplo sobre velas sintéticas/,
+          /El registro de estrategias no respondió \(estado 503\)\. No se muestran datos de ejemplo/,
         ),
       ).toBeInTheDocument()
       expect(fetchMock).toHaveBeenCalledWith('/api-strategies/health')
