@@ -14,11 +14,13 @@ import sys
 import threading
 import time
 
-from .futures_simulator import Book, frames
-from .futures_spec_strategy import DEFAULT_SPEC_DIR, load_specs
+from .futures_simulator import DEFAULT_PERIODS, Book, frames, merge_periods
+from .futures_spec_strategy import DEFAULT_SPEC_DIR, declared_indicators, load_specs
 from .futures_verdicts import FIVE_MINUTES_MS, ONE_MINUTE_MS, _OfficialCandles
 
-WARMUP_MS = 300 * FIVE_MINUTES_MS  # enough history for the slowest indicators
+# Enough history for the slowest indicators: the log-volatility of C29/C30 is an exponential average over
+# 288 five-minute bars and needs about a week for its seed to stop mattering.
+WARMUP_MS = 2000 * FIVE_MINUTES_MS
 REPLAY_SCHEMA = "futures-replay.v1"
 
 _RUN_SCHEMA = """
@@ -60,7 +62,8 @@ def replay(specs, candles_1m, candles_5m, *, start_ms, product_id, tick_size="1"
     never shown to them), e.g. the blind Qwen replay.
     """
     books = [Book(spec, product_id=product_id, tick_size=tick_size, notional_usd=notional_usd) for spec in specs]
-    for frame in frames(candles_1m, candles_5m):
+    periods = merge_periods(DEFAULT_PERIODS, *(declared_indicators(spec) for spec in specs))
+    for frame in frames(candles_1m, candles_5m, periods):
         if frame[0] < start_ms:
             continue
         for book in books:

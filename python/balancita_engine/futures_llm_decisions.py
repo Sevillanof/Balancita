@@ -55,7 +55,7 @@ from decimal import ROUND_HALF_EVEN, Decimal, InvalidOperation
 
 from .futures_products import is_product_id
 from .futures_spec_strategy import load_specs
-from .futures_strategy_reliability import load_reliability, reliability_for
+from .futures_strategy_reliability import FORWARD_MIN_TRADES, effective_reliability, load_forward, load_reliability
 from .futures_strategy_signals import ACTIONS as SIGNAL_ACTIONS, consensus, verdict_signals
 from .futures_verdicts import (
     ONE_MINUTE_MS,
@@ -562,19 +562,24 @@ def _field_strategy_reliability(ctx):
     """What each strategy's own history says about it, pooled over products (the state never names one).
 
     A strategy whose spec changed since it was measured, or that was never measured, is ``unmeasured``.
+    One that is measured forward in paper shows ``fwd=<trades so far>/<needed>`` until the forward trades decide.
     """
     specs = default_specs() if ctx["specs"] is None else ctx["specs"]
     table = default_reliability() if ctx.get("reliability") is None else ctx["reliability"]
+    forward = load_forward() if ctx.get("forward") is None else ctx["forward"]
     parts = []
     for proposal in ctx["verdict"].get("proposals", []):
         strategy_id = sanitize_text(proposal.get("strategy_id", "?"))
-        entry = reliability_for(table, specs.get(proposal.get("strategy_id")))
-        if entry is None or entry.get("trades", 0) == 0:
+        entry = effective_reliability(table, forward, specs.get(proposal.get("strategy_id")))
+        if entry is None:
             parts.append("{} unmeasured".format(strategy_id))
-        else:
-            parts.append("{} {} hit={} net_bp={} trades={}".format(
-                strategy_id, sanitize_text(entry["verdict"]), _fmt(_dec(entry["hit_rate"]), 2),
-                _fmt(_dec(entry["mean_net_bp"]), 1), _count(entry["trades"])))
+            continue
+        text = "{} {} hit={} net_bp={} trades={}".format(
+            strategy_id, sanitize_text(entry["verdict"]), _fmt(_dec(entry["hit_rate"]), 2),
+            _fmt(_dec(entry["mean_net_bp"]), 1), _count(entry["trades"]))
+        if entry["forward_trades"] is not None and entry["source"] == "backtest":
+            text += " fwd={}/{}".format(entry["forward_trades"], FORWARD_MIN_TRADES)
+        parts.append(text)
     return "strategy_reliability: " + "; ".join(parts)
 
 
@@ -607,7 +612,7 @@ def default_specs():
     return _DEFAULT_SPECS[0]
 
 
-def build_state(verdict, candles, fields, specs=None, reliability=None):
+def build_state(verdict, candles, fields, specs=None, reliability=None, forward=None):
     """STATE text for one verdict from stored data only, in the order of ``fields``.
 
     ``specs`` (strategy id -> spec) feeds the strategy signal fields; the shipped specs by default.
@@ -619,7 +624,7 @@ def build_state(verdict, candles, fields, specs=None, reliability=None):
     features = (verdict.get("features") or {}).get("1m")
     if not isinstance(features, dict) or features.get("ready") is not True:
         raise StateError("verdict features are not ready (indicator warmup)")
-    ctx = {"verdict": verdict, "candles": candles, "specs": specs, "reliability": reliability}
+    ctx = {"verdict": verdict, "candles": candles, "specs": specs, "reliability": reliability, "forward": forward}
     return sanitize_text("\n".join(STATE_FIELDS[field](ctx) for field in fields))
 
 

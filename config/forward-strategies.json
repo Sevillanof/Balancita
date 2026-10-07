@@ -1,0 +1,13 @@
+{
+  "schema": "futures-forward-strategies.v1",
+  "note": "Strategies measured forward in paper. A strategy found by searching past data is promoted only by trades that happened after its start_ms; see docs/strategy-reliability.md.",
+  "min_forward_trades": 100,
+  "promote_t_stat": 1.64,
+  "strategies": {
+    "c30-momentum-12h-perp-v1": {
+      "start_ms": 1791397200000,
+      "registered": "2026-10-07T18:20:00Z",
+      "why": "Only candidate_edge of the 2026-10-07 research; its 12 h lookback was chosen after seeing the second 240-day range, so only new data can validate it."
+    }
+  }
+}

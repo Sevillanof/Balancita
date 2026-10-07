@@ -59,6 +59,12 @@ DEFLATED_MIN = 0.90
 TRIAL_SHARPE_SD = 0.11
 # How many configurations were looked at to arrive at each spec (1 = designed without a search).
 SELECTION_TRIALS = {"c29-momentum-perp-v1": 1000, "c30-momentum-12h-perp-v1": 1000}
+# Forward evidence (trades after a strategy's registered start in config/forward-strategies.json). A strategy
+# found by searching the past is promoted only by these: at least FORWARD_MIN_TRADES forward trades, then the
+# ordinary verdict thresholds applied to the forward trades alone (pre-registered, so no search correction).
+FORWARD_STRATEGIES_PATH = os.path.normpath(os.path.join(DEFAULT_SPEC_DIR, "..", "forward-strategies.json"))
+FORWARD_SCHEMA = "futures-strategy-forward.v1"
+FORWARD_MIN_TRADES = 100
 VERDICTS = ("insufficient_data", "negative_edge", "no_edge", "candidate_edge", "tentative_edge", "reliable_edge")
 
 
@@ -257,6 +263,40 @@ def reliability_for(table, spec):
         return None
     entry = (table.get("strategies") or {}).get(spec.get("id"))
     return entry if entry is not None and entry.get("spec_hash") == spec_hash(spec) else None
+
+
+def load_forward(path=None):
+    """The forward summary written by ``futures_forward`` (``None`` when missing or of another schema)."""
+    path = path or os.environ.get("STRATEGY_FORWARD_PATH")
+    if not path:
+        return None
+    try:
+        with open(path, encoding="utf-8") as handle:
+            table = json.load(handle)
+    except (FileNotFoundError, ValueError):
+        return None
+    return table if isinstance(table, dict) and table.get("schema") == FORWARD_SCHEMA else None
+
+
+def effective_reliability(table, forward, spec):
+    """What a decision should believe about ``spec``: ``None`` when never measured.
+
+    The backtest entry stands until the strategy has ``FORWARD_MIN_TRADES`` forward trades; from then on the
+    forward trades alone decide the verdict (a pre-registered strategy needs no search correction).
+    """
+    entry = reliability_for(table, spec)
+    if entry is None or entry.get("trades", 0) == 0:
+        return None
+    result = {key: entry.get(key) for key in ("verdict", "trades", "hit_rate", "mean_net_bp")}
+    result.update(source="backtest", forward_trades=None)
+    registered = ((forward or {}).get("strategies") or {}).get(spec.get("id"))
+    if registered is not None and registered.get("spec_hash") == spec_hash(spec):
+        summary = registered["summary"]
+        result["forward_trades"] = summary["trades"]
+        if summary["trades"] >= FORWARD_MIN_TRADES:
+            result.update(source="forward", verdict=summary["verdict"], trades=summary["trades"],
+                          hit_rate=summary["hit_rate"], mean_net_bp=summary["mean_net_bp"])
+    return result
 
 
 def charts_to_candles(rows):
