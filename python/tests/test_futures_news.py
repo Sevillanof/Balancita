@@ -378,7 +378,7 @@ class CatalogTests(unittest.TestCase):
     def test_q_never_sees_the_news_questions(self):
         self.assertNotIn(RELEVANCE, q.load_questions())
         self.assertNotIn(DIRECTION, q.load_questions())
-        self.assertEqual(sorted(q.load_questions(scope=None)), sorted([DIRECTION, RELEVANCE, "direction_1h", "trade_action"]))
+        self.assertEqual(sorted(q.load_questions(scope=None)), sorted([DIRECTION, RELEVANCE, "direction_1h", "exit_decision", "trade_action"]))
 
     def test_news_scope_validation(self):
         base = dict(q.load_questions(scope="news")[DIRECTION])

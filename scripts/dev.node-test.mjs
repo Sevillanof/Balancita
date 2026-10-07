@@ -582,8 +582,29 @@ describe('optional LLM decision children (llm and q)', () => {
 
   it('starts llm and q after the other children when enabled', () => {
     const specs = devChildSpecs({ ...base, env: local, llm })
-    assert.deepEqual(names(specs).slice(-2), ['llm', 'q'])
+    assert.deepEqual(names(specs).slice(-3), ['llm', 'q', 'qwenexit'])
     assert.ok(names(specs).indexOf('news') < names(specs).indexOf('llm'))
+  })
+
+  it('runs the Qwen exit book (C31) only with the local model, into its own directory', () => {
+    assert.ok(
+      !names(devChildSpecs({ ...base, env: {}, llm })).includes('qwenexit'),
+    )
+    const { qwenexit } = byName(devChildSpecs({ ...base, env: local, llm }))
+    assert.deepEqual(qwenexit.args.slice(0, 2), [
+      '-m',
+      'balancita_engine.futures_qwen_exit',
+    ])
+    assert.ok(qwenexit.args.includes('--market-db'))
+    assert.equal(
+      qwenexit.args[qwenexit.args.indexOf('--out') + 1],
+      './data/dev-live/qwen-exit',
+    )
+    assert.equal(
+      qwenexit.env.LLAMA_PORT,
+      byName(devChildSpecs({ ...base, env: local, llm })).q.env.LLAMA_PORT,
+    )
+    assert.equal(qwenexit.env.PYTHONPATH, '/repo/python')
   })
 
   it('runs llama-server offline on loopback with the guide flags', () => {
@@ -763,7 +784,12 @@ describe('optional news child (n)', () => {
 
   it('keeps news independent of llm and q: it starts before them and a stopped model does not matter', () => {
     const specs = devChildSpecs({ ...base, env: local, llm })
-    assert.deepEqual(names(specs).slice(-3), ['news', 'llm', 'q'])
+    assert.deepEqual(names(specs).slice(-4), [
+      'news',
+      'llm',
+      'q',
+      'qwenexit',
+    ])
   })
 
   it('never hands the news child a remote LLM setting', () => {
