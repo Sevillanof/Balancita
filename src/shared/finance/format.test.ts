@@ -7,7 +7,7 @@ import {
   utcDateTime,
 } from './format.ts'
 
-const plain = (text: string) => text.replace(/ /g, ' ')
+const plain = (text: string) => text.replace(/\u00a0/g, ' ')
 
 describe('es-ES finance formatting', () => {
   it('formats USD numbers and wire strings the same way', () => {
