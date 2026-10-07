@@ -40,7 +40,7 @@ from decimal import ROUND_FLOOR, Decimal, InvalidOperation, localcontext
 from .canonical import canonical_json, normalize_decimal
 from .futures_costs import MAKER_RATE, TAKER_RATE
 from .futures_ledger import FuturesLedger
-from .futures_strategies import C25_ID, C26_ID, C27_ID, C28_ID, propose
+from .futures_strategies import C25_ID, C26_ID, C27_ID, C28_ID, STRATEGY_IDS, propose
 
 PAPER_EXECUTION_CONFIG = {
     "version": "futures-paper-execution-config.v2",
@@ -61,8 +61,16 @@ PAPER_EXECUTION_CONFIG = {
     "min_qty": "0.0001",
     "max_funding_staleness_ms": 7_200_000,
 }
+# What the service runs live: one independent book per strategy, 100 USD per trade, long or short.
+BOOKS_EXECUTION_CONFIG = dict(
+    PAPER_EXECUTION_CONFIG,
+    version="futures-paper-execution-config.v3-books",
+    fixed_notional_usd="100",
+    books=list(STRATEGY_IDS),
+)
 
 GENESIS_HASH = "0" * 64
+
 DAY_MS = 86_400_000
 FUNDING_UNIT = "USD/BTC/hour"
 # Same constant `_risk_plan` uses for the round-trip slippage allowance and buffer.
@@ -291,6 +299,8 @@ class PaperExecutionEngine:
         self.lot = Decimal(c["lot_size"])
         self.min_qty = Decimal(c["min_qty"])
         self.max_staleness = c["max_funding_staleness_ms"]
+        # Independent-book mode (SS-05): a fixed notional per trade instead of risk sizing.
+        self.fixed_notional = Decimal(c["fixed_notional_usd"]) if c.get("fixed_notional_usd") else None
         self.ledger = self._new_ledger()
         self.trade = None
         self.pending = None
@@ -527,10 +537,13 @@ class PaperExecutionEngine:
             elif displayed is None or displayed <= 0:
                 reason = "displayed_size_unavailable"
             else:
-                equity = self._equity(entry)
-                by_risk = equity * self.risk_fraction / (abs(entry - stop) + cost_per_btc)
-                by_exposure = min(self.max_notional, equity * self.max_exposure) / entry
-                quantity = self._floor_lot(min(by_risk, by_exposure, displayed))
+                if self.fixed_notional is not None:
+                    quantity = self._floor_lot(min(self.fixed_notional / entry, displayed))
+                else:
+                    equity = self._equity(entry)
+                    by_risk = equity * self.risk_fraction / (abs(entry - stop) + cost_per_btc)
+                    by_exposure = min(self.max_notional, equity * self.max_exposure) / entry
+                    quantity = self._floor_lot(min(by_risk, by_exposure, displayed))
                 if quantity < self.min_qty:
                     reason = "quantity_below_minimum"
         if reason is None:
@@ -794,6 +807,90 @@ class PaperExecutionEngine:
         return amount
 
 
+# --------------------------------------------------------------------------- independent books
+
+MULTI_STATE_VERSION = "futures-paper-execution-books-state.v1"
+BOOK_NOTIONAL_USD = "100"
+
+
+class _BookSink:
+    """Tags every event of one book and forwards it to the shared, hash-chained store."""
+
+    def __init__(self, sink, book):
+        self.sink, self.book = sink, book
+
+    def emit(self, kind, time_ms, body):
+        self.sink.emit(kind, time_ms, dict(body, book=self.book))
+
+    def snapshot(self, *args):  # snapshots belong to the multi engine
+        raise AssertionError("a book never snapshots on its own")
+
+
+def _book_verdict(verdict, strategy_id):
+    """The verdict as one strategy sees it: its own proposal is the selection, never a shared pick."""
+    own = next((p for p in verdict.get("proposals") or [] if p.get("strategy_id") == strategy_id), None)
+    action = own.get("action") if own else None
+    if action in ("LONG", "SHORT"):
+        return dict(verdict, action=action, selected=own)
+    return dict(verdict, action="WAIT", selected=None)
+
+
+class MultiBookEngine:
+    """One independent paper book per strategy (SS-05): own position, ledger, latch and signals.
+
+    Same input items as ``PaperExecutionEngine``; tickers and funding reach every
+    book, a verdict reaches each book as that strategy's own proposal. Books are
+    processed in config order, so the shared event chain is deterministic.
+    """
+
+    def __init__(self, config, sink, state=None, snapshot_every_events=50, snapshot_interval_ms=300_000):
+        self.sink = sink
+        self.config = dict(config)
+        self.snapshot_every_events = snapshot_every_events
+        self.snapshot_interval_ms = snapshot_interval_ms
+        book_config = {k: v for k, v in self.config.items() if k != "books"}
+        saved = {}
+        if state is not None:
+            if state.get("version") != MULTI_STATE_VERSION:
+                raise ValueError("unsupported paper execution state version")
+            saved = state["books"]
+        self.books = {
+            strategy_id: PaperExecutionEngine(
+                book_config, _BookSink(sink, strategy_id), state=saved.get(strategy_id))
+            for strategy_id in self.config["books"]
+        }
+        self.events_since_snapshot = 0 if state is None else state["events_since_snapshot"]
+        self.last_snapshot_time = None if state is None else state["last_snapshot_time"]
+
+    def to_state(self):
+        return {
+            "version": MULTI_STATE_VERSION,
+            "books": {strategy_id: book.to_state() for strategy_id, book in self.books.items()},
+            "events_since_snapshot": self.events_since_snapshot,
+            "last_snapshot_time": self.last_snapshot_time,
+        }
+
+    def process(self, item):
+        for strategy_id, book in self.books.items():
+            if item["kind"] == "verdict":
+                book.process(dict(item, data=_book_verdict(item["data"], strategy_id)))
+            else:
+                book.process(item)
+        self.events_since_snapshot = sum(b.events_since_snapshot for b in self.books.values())
+
+    def after_item(self, time_ms, cursors):
+        if self.last_snapshot_time is None:
+            self.last_snapshot_time = time_ms
+            return
+        if (self.events_since_snapshot >= self.snapshot_every_events
+                or time_ms - self.last_snapshot_time >= self.snapshot_interval_ms):
+            for book in self.books.values():
+                book.events_since_snapshot = 0
+            self.events_since_snapshot = 0
+            self.last_snapshot_time = time_ms
+            self.sink.snapshot(time_ms, self.to_state(), cursors())
+
+
 # --------------------------------------------------------------------------- input DBs
 
 
@@ -1023,7 +1120,8 @@ class PaperExecutionService:
         self._unavailable = None
         self.processed_total = 0
         engine_state, cursors = store.restored if store.restored is not None else (None, {})
-        self.engine = PaperExecutionEngine(
+        engine_class = MultiBookEngine if store.config.get("books") else PaperExecutionEngine
+        self.engine = engine_class(
             store.config, store, state=engine_state, snapshot_every_events=snapshot_every_events,
             snapshot_interval_ms=snapshot_interval_ms,
         )
@@ -1134,7 +1232,7 @@ def process_available(market_db_path, verdicts_db_path, store, **service_kwargs)
 
 def run(market_db_path, verdicts_db_path, account_db_path, poll_seconds=1.0, log=print):
     """Long-running service loop."""
-    store = AccountStore(account_db_path, PAPER_EXECUTION_CONFIG)
+    store = AccountStore(account_db_path, BOOKS_EXECUTION_CONFIG)
     log("paper execution writing to {} (config {}, head seq {})".format(
         account_db_path, store.config_hash[:12], store.head_seq))
     service = PaperExecutionService(market_db_path, verdicts_db_path, store, log=log)
@@ -1159,7 +1257,7 @@ def main(argv=None):
     parser.add_argument("--poll-seconds", type=float, default=1.0)
     args = parser.parse_args(argv)
     if args.once:
-        store = AccountStore(args.account_db, PAPER_EXECUTION_CONFIG)
+        store = AccountStore(args.account_db, BOOKS_EXECUTION_CONFIG)
         try:
             count = process_available(args.market_db, args.verdicts_db, store)
             print("paper execution processed {} inputs, head seq {}".format(count, store.head_seq))

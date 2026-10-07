@@ -488,4 +488,47 @@ describe('paper engine follower', () => {
     engine.close()
     expect([digest(account.path), digest(verdicts.path)]).toEqual(before)
   })
+
+  it('sums independent books into one account and lists every open position', () => {
+    const dir = scratch()
+    const account = new AccountDb(dir, closers)
+    const flat = {
+      cash_usd: '10000',
+      realized_gross_usd: '0',
+      fees_usd: '0',
+      funding_paid_usd: '0',
+      funding_complete: true,
+      net_usd: '0',
+      position: null,
+    }
+    account.add('position_opened', NOW + 150, {
+      order_id: 'o1',
+      book: 'c25-pullback-perp-v1',
+      account: OPEN_ACCOUNT,
+    })
+    account.add('position_opened', NOW + 160, {
+      order_id: 'o1',
+      book: 'c26-reversion-perp-v1',
+      account: {
+        ...OPEN_ACCOUNT,
+        position: { ...LONG_POSITION, strategy_id: 'c26-reversion-perp-v1' },
+      },
+    })
+    account.add('position_closed', NOW + 170, {
+      book: 'c27-breakout-perp-v1',
+      account: flat,
+    })
+    const engine = follower(account.path, undefined, { mark: () => '100011' })
+    const fields = engine.snapshotFields() as any
+    expect(fields.positions.map((p: any) => p.strategy_id)).toEqual([
+      'c25-pullback-perp-v1',
+      'c26-reversion-perp-v1',
+    ])
+    expect(fields.positions.map((p: any) => p.book)).toEqual([
+      'c25-pullback-perp-v1',
+      'c26-reversion-perp-v1',
+    ])
+    expect(fields.account.cash_usd).toBe('29999.0098911')
+    expect(fields.account.fees_usd).toBe('0.9901089')
+  })
 })
