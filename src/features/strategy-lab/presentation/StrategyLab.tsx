@@ -32,7 +32,6 @@ import {
   type Side,
   type StrategySpec,
 } from '../domain/strategy-spec.ts'
-import { exampleStrategyApi } from '../infrastructure/example-strategy-api.ts'
 import {
   loadLabCandles,
   type LabCandles,
@@ -116,10 +115,8 @@ function defaultLoadQwen(product: string) {
   return loadQwenScores(undefined, product)
 }
 
-function defaultConnect(market: LabCandles): Promise<StrategyApi> {
-  return connectStrategyApi(undefined, async () =>
-    exampleStrategyApi(market.candles),
-  )
+function defaultConnect(): Promise<StrategyApi> {
+  return connectStrategyApi()
 }
 
 function shortName(name: string, id: string) {
@@ -152,6 +149,7 @@ export default function StrategyLab({
 }: Props) {
   const [market, setMarket] = useState<LabCandles | null>(null)
   const [api, setApi] = useState<StrategyApi | null>(null)
+  const [connectError, setConnectError] = useState<string | null>(null)
   const [days, setDays] = useState<PeriodDays>(30)
   const [reload, setReload] = useState(0)
   const [ranking, setRanking] = useState<Ranking | null>(null)
@@ -198,8 +196,12 @@ export default function StrategyLab({
     void loadCandles().then(async (loaded) => {
       if (!active) return
       setMarket(loaded)
-      const connected = await connect(loaded)
-      if (active) setApi(connected)
+      try {
+        const connected = await connect(loaded)
+        if (active) setApi(connected)
+      } catch (error) {
+        if (active) setConnectError(errorText(error))
+      }
     })
     return () => {
       active = false
@@ -588,11 +590,13 @@ export default function StrategyLab({
         <p className="strategy-lab__context">
           {!market
             ? 'Cargando las velas de Terminal…'
-            : !api
-              ? 'Conectando con el registro de estrategias…'
-              : example
-                ? `Sin conexión con el registro de estrategias · datos de ejemplo sobre ${SOURCE_LABELS[market.source]}`
-                : `Registro de estrategias · backtest sobre los veredictos de C (velas oficiales de Terminal) · ${product} · ${days} d`}
+            : connectError
+              ? 'Sin conexión con el registro de estrategias'
+              : !api
+                ? 'Conectando con el registro de estrategias…'
+                : example
+                  ? `Sin conexión con el registro de estrategias · datos de ejemplo sobre ${SOURCE_LABELS[market.source]}`
+                  : `Registro de estrategias · backtest sobre los veredictos de C (velas oficiales de Terminal) · ${product} · ${days} d`}
         </p>
         <div className="strategy-lab__toolbar-actions">
           <select
@@ -650,6 +654,16 @@ export default function StrategyLab({
         </div>
       </div>
 
+      {connectError && (
+        <p
+          role="alert"
+          className="strategy-lab__notice strategy-lab__notice--warn"
+        >
+          {connectError} No se muestran datos de ejemplo: con{' '}
+          <code>pnpm dev</code> y el registro corriendo se ven las estrategias y
+          sus backtests reales.
+        </p>
+      )}
       {example && (
         <p className="strategy-lab__notice strategy-lab__notice--warn">
           El registro de estrategias no respondió: ranking, trades y resultados
