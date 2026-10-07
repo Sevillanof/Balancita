@@ -530,6 +530,8 @@ def make_handler(service):
                 if len(parts) == 1:
                     return {"replays": service.replays.list()}
                 try:
+                    if len(parts) == 3 and parts[2] == "candles":
+                        return service.replays.candles(parts[1])
                     return service.replays.detail(parts[1])
                 except KeyError as error:
                     raise RegistryError("not_found", str(error), 404) from error

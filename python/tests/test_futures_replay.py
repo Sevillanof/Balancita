@@ -116,6 +116,9 @@ class ReplayTests(unittest.TestCase):
         detail = jobs.detail(started["id"])
         self.assertEqual({s["strategy_id"] for s in detail["summaries"]}, set(load_specs()))
         self.assertTrue(detail["qwen"]["decisions"])
+        chart = jobs.candles(started["id"])["candles"]
+        self.assertTrue(chart)
+        self.assertTrue(all(first <= c["time"] * 1000 < first + day for c in chart[:1]) or chart[0]["time"] * 1000 >= ONES[0]["bucket_start"])
         with self.assertRaises(ValueError):
             jobs.start("PF_NOPE", "2026-01-01", "2026-01-02")
         with self.assertRaises(KeyError):
