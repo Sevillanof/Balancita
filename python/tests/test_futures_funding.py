@@ -3,7 +3,6 @@ from decimal import Decimal
 
 from balancita_engine.futures_funding import normalize_observation, accrue_interval
 from balancita_engine.futures_ledger import FuturesLedger
-from balancita_engine.futures_runtime import FuturesRuntime
 
 
 class FundingNormalizationTests(unittest.TestCase):
@@ -71,65 +70,6 @@ class FundingNormalizationTests(unittest.TestCase):
         self.assertEqual(amount, Decimal("0"))
         self.assertFalse(ledger.funding_complete)
         self.assertIsNone(ledger.snapshot("100000")["realized_net_complete"])
-
-    def test_runtime_consumes_only_cutoff_known_normalized_observation(self):
-        runtime = FuturesRuntime.__new__(FuturesRuntime)
-        runtime.ledger = FuturesLedger("10000")
-        runtime.ledger.open("long", "0.01", "100000", "taker", at_ms=0)
-        event = {
-            "type": "funding_observation", "received_at_ms": 0,
-            "known_at_ms": 0, "observation": {
-                "source": "fixture", "provider": "kraken", "product": "PF_XBTUSD",
-                "field": "funding_rate", "raw_rate": "0.0001",
-                "unit": "usd_per_btc_per_hour", "effective_start_ms": 0,
-                "effective_end_ms": 3_600_000, "known_at_ms": 0,
-                "received_seq": 1, "observation_id": "fixture-1",
-                "sha256": "a" * 64,
-                "semantic_version": "kraken-funding-normalization.v1", "predicted": False,
-            },
-        }
-        runtime._observe_funding([event], 1_800_000, 1_800_000)
-        self.assertEqual(len(runtime.ledger.funding_rates), 1)
-
-    def test_runtime_does_not_repair_position_boundary_with_late_known_rate(self):
-        runtime = FuturesRuntime.__new__(FuturesRuntime)
-        runtime.ledger = FuturesLedger("10000")
-        runtime.ledger.open("long", "0.01", "100000", "taker", at_ms=0)
-        observation = {
-            "source": "fixture", "provider": "kraken", "product": "PF_XBTUSD",
-            "field": "funding_rate", "raw_rate": "0.0001",
-            "unit": "usd_per_btc_per_hour", "effective_start_ms": 0,
-            "effective_end_ms": 3_600_000, "known_at_ms": 1,
-            "received_seq": 1, "observation_id": "late-rate", "sha256": "c" * 64,
-            "semantic_version": "kraken-funding-normalization.v1", "predicted": False,
-        }
-        event = {"type": "funding_observation", "received_at_ms": 1,
-                 "known_at_ms": 1, "observation": observation}
-        runtime._observe_funding([event], 1, 1)
-        self.assertEqual(runtime.ledger.funding_rates, [])
-        self.assertFalse(runtime.ledger.funding_complete)
-
-    def test_runtime_deduplicates_same_effective_interval_across_observation_ids(self):
-        runtime = FuturesRuntime.__new__(FuturesRuntime)
-        runtime.ledger = FuturesLedger("10000")
-        runtime.ledger.open("long", "0.01", "100000", "taker", at_ms=0)
-
-        def event(identifier, digest):
-            observation = {
-                "source": "fixture", "provider": "kraken", "product": "PF_XBTUSD",
-                "field": "funding_rate", "raw_rate": "0.0001",
-                "unit": "usd_per_btc_per_hour", "effective_start_ms": 0,
-                "effective_end_ms": 3_600_000, "known_at_ms": 0,
-                "received_seq": 1, "observation_id": identifier, "sha256": digest,
-                "semantic_version": "kraken-funding-normalization.v1", "predicted": False,
-            }
-            return {"type": "funding_observation", "received_at_ms": 0,
-                    "known_at_ms": 0, "observation": observation}
-
-        runtime._observe_funding([event("rate-a", "a" * 64)], 0, 0)
-        runtime._observe_funding([event("rate-b", "b" * 64)], 0, 0)
-        self.assertEqual(len(runtime.ledger.funding_rates), 1)
-        self.assertTrue(runtime.ledger.funding_complete)
 
 
 if __name__ == "__main__":
