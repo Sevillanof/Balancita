@@ -762,4 +762,75 @@ describe('live capture process core', () => {
     ).toEqual({ 'ask.bestPrice': '100', 'bid.bestPrice': '99' })
     store.close()
   })
+
+  it('polls the REST tickers of the non-BTC pinned products into the market store', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'balancita-capture-'))
+    dirs.push(dir)
+    const store = new FuturesMarketStore(join(dir, 'market.sqlite'))
+    const now = 1_791_356_400_000 + 10_000
+    const capture = createLiveCapture({
+      store,
+      clock: () => now,
+      makeSocket: () => fakeSocket().socket,
+      fetchCatalog: async () => catalog,
+      fundingFetch: async () => {
+        throw new Error('offline')
+      },
+      products: [
+        { productId: 'PF_XBTUSD', tickSize: '1' },
+        { productId: 'PF_ETHUSD', tickSize: '0.1' },
+      ],
+      officialCandlesFetch: async () =>
+        new Response(JSON.stringify({ candles: [], more_candles: false })),
+      officialPollMs: 60_000,
+      officialRequestGapMs: 0,
+      tickerPollMs: 5,
+      tickerFetch: async () =>
+        new Response(
+          JSON.stringify({
+            result: 'success',
+            tickers: [
+              {
+                symbol: 'PF_XBTUSD',
+                bid: 1,
+                ask: 2,
+                markPrice: 1.5,
+                bidSize: 1,
+                askSize: 1,
+              },
+              {
+                symbol: 'PF_ETHUSD',
+                bid: 2577.7,
+                ask: 2577.8,
+                markPrice: 2577.36834692919,
+                bidSize: 2.097,
+                askSize: 1.818,
+                fundingRate: -0.005628493164,
+                suspended: false,
+              },
+            ],
+          }),
+        ),
+      log: () => undefined,
+    })
+    await capture.start()
+    await wait(40)
+    await capture.stop()
+    const rows = store['db']
+      .prepare(
+        "SELECT product_id, normalized_json FROM paper_futures_market_events WHERE feed='ticker'",
+      )
+      .all() as Array<{ product_id: string; normalized_json: string }>
+    expect(new Set(rows.map((r) => r.product_id))).toEqual(
+      new Set(['PF_ETHUSD']),
+    )
+    const event = JSON.parse(rows[0]!.normalized_json)
+    expect(event).toMatchObject({
+      bid: '2577.7',
+      ask: '2577.8',
+      mark: '2577.36834692919',
+      raw: { bid_size: '2.097', ask_size: '1.818' },
+    })
+    store.close()
+  })
 })

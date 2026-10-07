@@ -49,6 +49,8 @@ async function main(): Promise<void> {
     makeSocket: (url) => new WebSocket(url) as unknown as FuturesSocket,
     fetchCatalog: fetchPublicCatalog,
     products,
+    // Quote, sizes and funding of the other pinned products (paper execution trades them).
+    tickerPollMs: 1_000,
     // Terminal chart: 15m/1h/4h/1d candles and Kraken's public analytics.
     chartCandleIntervals: CHART_CANDLE_INTERVALS,
     // Order book depth and slippage of every pinned product: per-product costs.
