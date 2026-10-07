@@ -39,6 +39,7 @@ from .futures_spec_strategy import (
     validate_spec,
 )
 from .futures_strategy_backtest import MIN_TRADES, load_verdict_rows, run_backtest
+from .futures_strategy_translate import TranslationError, default_provider, translate
 
 REGISTRY_SCHEMA = "futures-strategy-registry.v1"
 STATES = ("draft", "shadow", "active", "retired")
@@ -361,8 +362,9 @@ class StrategyRegistry:
 class StrategyService:
     """What the API does: registry plus read-only verdicts, per product and period."""
 
-    def __init__(self, registry, verdicts_db_path, products):
+    def __init__(self, registry, verdicts_db_path, products, provider_factory=None):
         self.registry = registry
+        self.provider_factory = provider_factory or (lambda: default_provider(os.environ))
         self.verdicts_db_path = verdicts_db_path
         self.products = products
         self._cache = {}
@@ -438,6 +440,17 @@ class StrategyService:
         rows.sort(key=lambda r: (-(r["return_pct"] or 0), r["id"]))
         return {"product_id": product_id, "days": days, "buy_and_hold_pct": buy_and_hold,
                 "min_trades": MIN_TRADES, "verdicts_available": True, "strategies": rows}
+
+    def translate(self, text, source):
+        """A draft spec from Pine Script or freqtrade text; nothing is saved (PS-08f)."""
+        example = self.registry.version("c27-breakout-perp-v1")["spec"]
+        operands = [o["ref"] for o in schema_description()["operands"]]
+        try:
+            return translate(text, source, provider=self.provider_factory(), example_spec=example,
+                             operands=operands)
+        except TranslationError as error:
+            raise RegistryError(error.code, error.detail,
+                                503 if error.code in ("model_unavailable", "model_error") else 400) from error
 
     def evaluate_latest(self, spec, product_id):
         """The spec's proposal on the newest verdict: which conditions hold on the last candle."""
@@ -529,6 +542,8 @@ def make_handler(service):
             if parts == ["strategies"]:
                 return registry.save(body.get("spec") or {}, body.get("mode"), new_id=body.get("new_id"),
                                      new_name=body.get("new_name"))
+            if parts == ["translate"]:
+                return service.translate(body.get("text"), body.get("source", "auto"))
             if parts == ["import"]:
                 return registry.import_spec(body.get("spec", body))
             if parts == ["evaluate"]:

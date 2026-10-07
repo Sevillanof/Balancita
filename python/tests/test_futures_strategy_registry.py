@@ -128,6 +128,48 @@ class RegistryTests(unittest.TestCase):
         self.assertEqual(self.registry.active_specs(10**15)[C27_ID]["version"], 1)
 
 
+class FakeModel:
+    timeout = 1
+
+    def __init__(self, answer):
+        self.answer = answer
+        self.bodies = []
+
+    def _request(self, method, path, timeout, body=None):
+        self.bodies.append(body)
+        content = json.dumps(self.answer)
+        return 200, json.dumps({"choices": [{"message": {"content": content}}]}).encode()
+
+
+class TranslateTests(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.registry = StrategyRegistry(os.path.join(self.dir, "strategies.sqlite"))
+        self.registry.seed(SPECS)
+
+    def tearDown(self):
+        self.registry.close()
+        shutil.rmtree(self.dir)
+
+    def test_translation_returns_a_validated_draft_and_saves_nothing(self):
+        draft = copy.deepcopy(SPECS[C27_ID])
+        draft.update(id="x19-bband-rsi", name="BbandRsi")
+        model = FakeModel({"spec": draft, "untranslatable": ["ROI table"]})
+        service = StrategyService(self.registry, None, {BTC: "1"}, provider_factory=lambda: model)
+        result = service.translate("//@version=5\nstrategy('x')", "pine")
+        self.assertEqual((result["valid"], result["untranslatable"]), (True, ["ROI table"]))
+        self.assertEqual(model.bodies[0]["response_format"], {"type": "json_object"})
+        self.assertEqual(len(self.registry.list()), 4)
+
+    def test_invalid_answers_are_reported_not_raised(self):
+        service = StrategyService(self.registry, None, {BTC: "1"},
+                                  provider_factory=lambda: FakeModel({"spec": {"schema": "nope"}}))
+        result = service.translate("def populate_entry_trend(): pass", "freqtrade")
+        self.assertFalse(result["valid"])
+        with self.assertRaises(RegistryError):
+            service.translate("", "pine")
+
+
 class BacktestTests(unittest.TestCase):
     def test_book_reports_trades_returns_and_split(self):
         result = run_backtest(SPECS[C27_ID], VERDICTS)

@@ -315,6 +315,7 @@ Every sustained live run of the single process surfaced a new engine defect: the
   - `futures_strategy_backtest.py`: replays a spec over C's stored verdicts as one independent book with D's sizing and cost-buffer rule; 70/30 walk-forward split; deflated Sharpe over every spec backtested.
   - Promotion gates are enforced in S, but C and D do not read the registry yet: "active" only takes effect with PS-08c.
   - The UI is built by the app-design thread against this API.
+  - PS-08f backend: `futures_strategy_translate.py` asks the local llama-server for a JSON draft (`/translate`); the answer is validated, never saved or executed. Not yet tried against a real model.
 
 ## Next step
 
