@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest'
 import { FuturesMarketStore } from './futures-market-store.ts'
 import {
   createHistoricalFundingClient,
+  fundingUnit,
   historicalFundingAt,
   parseHistoricalFundingResponse,
 } from './historical-funding.ts'
@@ -29,6 +30,40 @@ describe('public historical Kraken futures funding', () => {
       fundingRate: '-0.075852351405',
       unit: 'USD/BTC/hour',
     })
+  })
+
+  it('keeps each product funding apart, in its own base unit', () => {
+    // Another symbol is another response body (same rates, another hash).
+    const eth = parseHistoricalFundingResponse(
+      `${capture} `,
+      receivedAt,
+      'PF_ETHUSD',
+    )
+    expect(eth.records.at(-1)?.unit).toBe('USD/ETH/hour')
+    expect(fundingUnit('PF_XBTUSD')).toBe('USD/BTC/hour')
+    expect(() => fundingUnit('PF_X')).toThrow()
+    const dir = mkdtempSync(join(tmpdir(), 'funding-products-'))
+    const store = new FuturesMarketStore(join(dir, 'market.sqlite'))
+    try {
+      const btc = parseHistoricalFundingResponse(capture, receivedAt)
+      expect(store.appendNewFundingKnowledge(btc).stored).toBe(true)
+      // Same rates under another product are new knowledge, not a duplicate.
+      expect(store.appendNewFundingKnowledge(eth, 'PF_ETHUSD').stored).toBe(
+        true,
+      )
+      expect(store.appendNewFundingKnowledge(eth, 'PF_ETHUSD').stored).toBe(
+        false,
+      )
+      // The BTC evidence readers never see the other product.
+      expect(
+        store
+          .fundingSourceEvidence()
+          .every((row) => row.unit === 'USD/BTC/hour'),
+      ).toBe(true)
+    } finally {
+      store.close()
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 
   it('does not make late-known or future periods available to an earlier decision', () => {

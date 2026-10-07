@@ -405,6 +405,9 @@ class ExitTests(Case):
         self.replay()
         triggered = body(events_of(self.path("account.sqlite"), "exit_triggered")[0])
         self.assertEqual(triggered["reason"], "protective_stop")
+        exit_order = [body(e) for e in events_of(self.path("account.sqlite"), "order_created")][-1]
+        self.assertEqual(exit_order["type"], "exit")
+        self.assertEqual(exit_order["strategy_id"], C25)
         fills = [body(e) for e in events_of(self.path("account.sqlite"), "order_filled")]
         self.assertEqual(fills[1]["side"], "sell")
         self.assertEqual(fills[1]["price"], "99870")
