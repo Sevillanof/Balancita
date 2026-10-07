@@ -16,7 +16,7 @@
   min-width: 0;
 }
 .terminal-chart__stats dt {
-  color: var(--muted-foreground, #8b969a);
+  color: var(--demo-muted);
   font-size: 0.7rem;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -28,10 +28,10 @@
   overflow-wrap: anywhere;
 }
 .terminal-chart__up {
-  color: var(--chart-up, #55c7a2);
+  color: var(--demo-up);
 }
 .terminal-chart__down {
-  color: var(--chart-down, #ee7777);
+  color: var(--demo-down);
 }
 .terminal-chart__toolbar {
   display: flex;
@@ -44,7 +44,7 @@
   display: inline-flex;
   gap: 2px;
   padding: 3px;
-  border: 1px solid var(--border, #252d31);
+  border: 1px solid var(--demo-border);
   border-radius: 8px;
 }
 .terminal-chart__seg button {
@@ -55,11 +55,11 @@
   border: 0;
   border-radius: 5px;
   background: transparent;
-  color: var(--muted-foreground, #8b969a);
+  color: var(--demo-muted);
   cursor: pointer;
 }
 .terminal-chart__seg button[aria-pressed='true'] {
-  background: var(--border, #252d31);
+  background: var(--demo-border);
   color: inherit;
 }
 .terminal-chart__toggles {
@@ -75,7 +75,7 @@
 .terminal-chart__toggles legend {
   float: left;
   margin-right: 0.25rem;
-  color: var(--muted-foreground, #8b969a);
+  color: var(--demo-muted);
   font-size: 0.7rem;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -96,7 +96,7 @@
 .terminal-chart__legend {
   margin: 0;
   padding: 0 0.75rem;
-  color: var(--muted-foreground, #8b969a);
+  color: var(--demo-muted);
   font-size: 0.75rem;
 }
 .terminal-chart__legend {
@@ -109,5 +109,5 @@
   place-items: center;
   height: var(--terminal-chart-height, 440px);
   margin: 0;
-  color: var(--muted-foreground, #8b969a);
+  color: var(--demo-muted);
 }
