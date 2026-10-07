@@ -375,6 +375,17 @@ export async function planStartup(options) {
 }
 
 /** Message for a child that exited while the stack is running. */
+/**
+ * Backoff before restarting an optional dev child: 1, 2, 4, ... 30 s. A child
+ * that stayed up for a minute starts the count again; after 8 quick failures
+ * in a row it is given up (`null`).
+ */
+export function restartDelayMs({ restarts, uptimeMs }) {
+  const attempt = uptimeMs >= 60_000 ? 0 : restarts
+  if (attempt >= 8) return null
+  return Math.min(30_000, 1_000 * 2 ** attempt)
+}
+
 export function describeChildExit({ name, code, signal, sawAddrInUse }) {
   const port = DEV_PORTS[name === 'vite' ? 'vite' : name]
   const base = `[dev] ${name} exited (${signal ?? code})`
@@ -537,6 +548,8 @@ export function devChildSpecs({
         FUTURES_VERDICTS_DB_PATH: verdictsDb,
         FUTURES_PAPER_ACCOUNT_DB_PATH: accountDb,
         BALANCITA_PYTHON_STATUS: pythonStatus(python),
+        // Per-process health written by the dev supervisor (scripts/dev.mjs).
+        DEV_HEALTH_FILE: `${serverCwd}/data/dev-live/dev-health.json`,
         // Qwen's hits/misses/returns, computed read-only by Python on request.
         FUTURES_DECISIONS_DB_PATH: decisionsDb,
         ...(python?.command

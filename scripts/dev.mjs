@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import { mkdirSync } from 'node:fs'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
 import {
@@ -12,6 +12,7 @@ import {
   resolveLlamaModel,
   resolveLlamaServer,
   resolvePython,
+  restartDelayMs,
   signalChild,
 } from './dev-provider-env.mjs'
 
@@ -87,14 +88,36 @@ if (llmModel) {
   process.stdout.write(`${llmModel.message}\n`)
 }
 const useGroups = process.platform !== 'win32'
-const children = devChildSpecs({
+const specs = devChildSpecs({
   root,
   env,
   python:
     python.command === undefined ? { unavailable: python.failure } : python,
   llm: llama,
   findModel: () => llmModelPath,
-}).map(({ name, command, cwd, args, env }) => {
+})
+const healthFile = resolve(root, 'server/data/dev-live/dev-health.json')
+const supervised = new Map()
+function writeHealth() {
+  const processes = {}
+  for (const [name, entry] of supervised)
+    processes[name] = {
+      status: entry.status,
+      restarts: entry.restarts,
+      since_ms: entry.since,
+      ...(entry.lastExit === undefined ? {} : { last_exit: entry.lastExit }),
+    }
+  try {
+    writeFileSync(
+      healthFile,
+      JSON.stringify({ updated_at_ms: Date.now(), processes }),
+    )
+  } catch {
+    // Health is informational: never stop the stack for it.
+  }
+}
+function launch(spec) {
+  const { name, command, cwd, args, env } = spec
   const child = spawn(command ?? process.execPath, args, {
     cwd,
     // POSIX: own process group so shutdown reaches grandchildren (no orphans);
@@ -112,8 +135,20 @@ const children = devChildSpecs({
         if (line) process[stream].write(`[${name}] ${line}`)
     })
   }
-  return { name, child, state }
+  return { name, child, state, spec }
+}
+const children = specs.map((spec) => {
+  const entry = launch(spec)
+  supervised.set(spec.name, {
+    status: 'running',
+    restarts: 0,
+    streak: 0,
+    since: Date.now(),
+    startedAt: Date.now(),
+  })
+  return entry
 })
+writeHealth()
 
 let shuttingDown = false
 function shutdown(signal, code = 0) {
@@ -144,23 +179,57 @@ function shutdown(signal, code = 0) {
 
 for (const signal of ['SIGINT', 'SIGTERM'])
   process.once(signal, () => shutdown(signal))
-for (const { name, child, state } of children) {
+function watch(entry) {
+  const { name, child, state } = entry
   child.on('error', (error) => {
     process.stderr.write(`[${name}] failed to start: ${error.message}\n`)
     if (!optionalChildren.has(name)) shutdown('SIGTERM', 1)
   })
   child.on('exit', (code, signal) => {
     if (shuttingDown) return
+    const health = supervised.get(name)
     if (state.sawAddrInUse)
       process.stderr.write(
         `${describeChildExit({ name, code, signal, sawAddrInUse: true })}\n`,
       )
     if (optionalChildren.has(name)) {
+      const uptimeMs = Date.now() - health.startedAt
+      if (uptimeMs >= 60_000) health.streak = 0
+      const delay = restartDelayMs({ restarts: health.streak, uptimeMs })
+      // A port held by a stale process will not free itself: do not loop.
+      if (delay === null || state.sawAddrInUse) {
+        health.status = 'down'
+        health.lastExit = signal ?? code
+        health.since = Date.now()
+        writeHealth()
+        process.stderr.write(
+          `[dev] ${name} exited (${signal ?? code}); the other processes keep running. ${exitLabels[name] ?? 'The Real source'} will be unavailable until you restart pnpm run dev.\n`,
+        )
+        return
+      }
+      health.status = 'restarting'
+      health.lastExit = signal ?? code
+      health.since = Date.now()
+      writeHealth()
       process.stderr.write(
-        `[dev] ${name} exited (${signal ?? code}); the other processes keep running. ${exitLabels[name] ?? 'The Real source'} will be unavailable until you restart pnpm run dev.\n`,
+        `[dev] ${name} exited (${signal ?? code}); restarting in ${Math.round(delay / 1000)} s.\n`,
       )
+      setTimeout(() => {
+        if (shuttingDown) return
+        const next = launch(entry.spec)
+        entry.child = next.child
+        entry.state = next.state
+        health.restarts += 1
+        health.streak += 1
+        health.status = 'running'
+        health.since = Date.now()
+        health.startedAt = Date.now()
+        writeHealth()
+        watch(entry)
+      }, delay)
       return
     }
     shutdown(signal ?? 'SIGTERM', code ?? 1)
   })
 }
+for (const entry of children) watch(entry)

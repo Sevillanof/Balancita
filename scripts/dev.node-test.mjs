@@ -1099,3 +1099,12 @@ describe('devChildSpecs model selection', () => {
     assert.equal(specs({}), undefined)
   })
 })
+
+it('restartDelayMs backs off, resets after a minute up and gives up after 8 quick failures', async () => {
+  const { restartDelayMs } = await import('./dev-provider-env.mjs')
+  assert.equal(restartDelayMs({ restarts: 0, uptimeMs: 1000 }), 1000)
+  assert.equal(restartDelayMs({ restarts: 3, uptimeMs: 1000 }), 8000)
+  assert.equal(restartDelayMs({ restarts: 6, uptimeMs: 1000 }), 30000)
+  assert.equal(restartDelayMs({ restarts: 8, uptimeMs: 1000 }), null)
+  assert.equal(restartDelayMs({ restarts: 8, uptimeMs: 61000 }), 1000)
+})
