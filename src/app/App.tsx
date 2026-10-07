@@ -20,6 +20,7 @@ import { resolveMarketDataProviderMode } from '../features/market-data/infrastru
 import './App.css'
 import DemoShell from './DemoShell.tsx'
 import HistoricalRuns from './HistoricalRuns.tsx'
+import LaboratoryPage from './LaboratoryPage.tsx'
 import TerminalEntry from './TerminalEntry.tsx'
 
 type AppProps = {
@@ -173,6 +174,7 @@ function SpotApp(props: AppProps) {
 export default function App(props: AppProps) {
   if (window.location.pathname === '/terminal') return <TerminalEntry />
   if (window.location.pathname === '/historicos') return <HistoricalRuns />
+  if (window.location.pathname === '/laboratorio') return <LaboratoryPage />
   if (
     window.location.pathname === '/demo' ||
     window.location.pathname.startsWith('/demo/')

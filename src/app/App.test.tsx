@@ -34,6 +34,14 @@ vi.mock('lightweight-charts', () => ({
   createChart: (...args: unknown[]) => mocks.createChart(...args),
 }))
 
+// The Laboratorio route renders the terminal chart, which has its own tests.
+vi.mock(
+  '../features/trading-view/presentation/ApprovedTerminalChart.tsx',
+  () => ({
+    default: () => <div data-testid="approved-terminal-chart" />,
+  }),
+)
+
 beforeEach(() => {
   vi.clearAllMocks()
   window.localStorage.clear()
@@ -326,6 +334,41 @@ describe('dashboard Gemini boundary', () => {
         screen.queryByRole('heading', { name: 'Terminal' }),
       ).not.toBeInTheDocument()
       expect(fetchMock).toHaveBeenCalledTimes(1)
+    } finally {
+      view.unmount()
+      vi.unstubAllGlobals()
+      window.history.pushState({}, '', priorPath)
+    }
+  })
+
+  it('routes /laboratorio to the strategy lab on the terminal candles', async () => {
+    const priorPath = window.location.pathname
+    window.history.pushState({}, '', '/laboratorio')
+    const fetchMock = vi.fn(async () => ({
+      ok: false,
+      status: 503,
+      json: async () => ({}),
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    const view = render(<App />)
+    try {
+      expect(
+        await screen.findByRole('heading', { name: 'Laboratorio' }),
+      ).toBeInTheDocument()
+      expect(
+        await screen.findByText(
+          /Sin conexión con el registro de estrategias · datos de ejemplo sobre velas sintéticas/,
+        ),
+      ).toBeInTheDocument()
+      expect(fetchMock).toHaveBeenCalledWith('/api-strategies/health')
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api-live/terminal/bootstrap',
+        expect.anything(),
+      )
+      expect(screen.getByRole('link', { name: 'Laboratorio' })).toHaveAttribute(
+        'aria-current',
+        'page',
+      )
     } finally {
       view.unmount()
       vi.unstubAllGlobals()

@@ -12,6 +12,7 @@ import PaperDecisionPanel from '../features/connected-trading/presentation/Paper
 import { paperDecisionReasonLabel } from '../features/connected-trading/presentation/decision-labels.ts'
 import ApprovedTerminalLayout from '../features/trading-view/presentation/ApprovedTerminalLayout.tsx'
 import ApprovedTradingHeader from '../features/trading-view/presentation/ApprovedTradingHeader.tsx'
+import { appNavigation } from './app-navigation.ts'
 import ApprovedMarketRow from '../features/trading-view/presentation/ApprovedMarketRow.tsx'
 import ApprovedChartToolbar from '../features/trading-view/presentation/ApprovedChartToolbar.tsx'
 import ApprovedPortfolioTables from '../features/trading-view/presentation/ApprovedPortfolioTables.tsx'
@@ -199,10 +200,7 @@ export default function ConnectedTerminal() {
       <ApprovedTradingHeader
         brandHref="/"
         brandLabel="Balancita, volver a la aplicación"
-        navigation={[
-          { href: '/terminal', label: 'Terminal', current: true },
-          { href: '/historicos', label: 'Pruebas históricas' },
-        ]}
+        navigation={appNavigation('terminal')}
         status={
           <>
             <span className="demo-shell__badge">

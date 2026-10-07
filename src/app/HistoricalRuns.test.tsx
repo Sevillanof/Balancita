@@ -100,16 +100,19 @@ describe('connected historical replay runs', () => {
       screen.getByRole('link', { name: 'Balancita, volver a la aplicación' }),
     ).toHaveAttribute('href', '/')
     expect(header.querySelector('.demo-shell__brand-mark svg')).not.toBeNull()
-    expect(
-      screen.getByRole('link', { name: 'Pruebas históricas' }),
-    ).toHaveAttribute('href', '/historicos')
+    expect(screen.getByRole('link', { name: 'Laboratorio' })).toHaveAttribute(
+      'href',
+      '/laboratorio',
+    )
     expect(screen.getByRole('link', { name: 'Terminal' })).toHaveAttribute(
       'href',
       '/terminal',
     )
-    expect(
-      screen.getByRole('link', { name: 'Pruebas históricas' }),
-    ).toHaveAttribute('aria-current', 'page')
+    // The spot replay history lives under the Laboratorio section.
+    expect(screen.getByRole('link', { name: 'Laboratorio' })).toHaveAttribute(
+      'aria-current',
+      'page',
+    )
   })
 
   it('places the connected form and selected result in the approved shared split', async () => {

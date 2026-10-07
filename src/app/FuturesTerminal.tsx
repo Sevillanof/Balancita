@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import ApprovedTerminalLayout from '../features/trading-view/presentation/ApprovedTerminalLayout.tsx'
 import ApprovedTradingHeader from '../features/trading-view/presentation/ApprovedTradingHeader.tsx'
+import { appNavigation } from './app-navigation.ts'
 import ApprovedMarketRow from '../features/trading-view/presentation/ApprovedMarketRow.tsx'
 import ApprovedPortfolioTables from '../features/trading-view/presentation/ApprovedPortfolioTables.tsx'
 import type {
@@ -567,10 +568,7 @@ export default function FuturesTerminal({
       <ApprovedTradingHeader
         brandHref="/"
         brandLabel="Balancita, volver a la aplicación"
-        navigation={[
-          { href: '/terminal', label: 'Terminal', current: true },
-          { href: '/historicos', label: 'Pruebas históricas' },
-        ]}
+        navigation={appNavigation('terminal')}
         status={
           <>
             {sourceSwitch}
@@ -752,7 +750,7 @@ export default function FuturesTerminal({
               }
               decisions={
                 <section
-                  className="demo-terminal__panel"
+                  className="demo-terminal__panel connected-terminal__decisions"
                   aria-label="Decisiones del motor"
                 >
                   <h2>Análisis recientes</h2>
