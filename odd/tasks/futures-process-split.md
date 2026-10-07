@@ -317,6 +317,11 @@ Every sustained live run of the single process surfaced a new engine defect: the
   - Promotion gates are enforced in S, but C and D do not read the registry yet: "active" only takes effect with PS-08c.
   - The UI is built by the app-design thread against this API.
   - PS-08f backend: `futures_strategy_translate.py` asks the local llama-server for a JSON draft (`/translate`); the answer is validated, never saved or executed. Not yet tried against a real model.
+- 2026-10-07 PS-08g strategy probabilities for Q (cloud session, "Qwen decide sobre estrategias" thread). Covered by the user's Qwen waiver noted in Q1; D does not consume it yet.
+  - `futures_strategy_signals.py` turns every proposal into buy/hold/sell from its spec's own checks (side score = mean of the required checks, leaves 1/0, `any` = max, `not` = 1 - x; buy = score²/3 + 2/3 if LONG, sell likewise, hold = the rest, renormalized). The argmax always equals the proposal; untradable proposals are hold = 1. It is a deterministic score, not a calibrated probability.
+  - No field was added to the spec schema, `propose_spec` or the verdict payload, so parity and verdict DBs are untouched. Q computes the signals from stored proposals with the shipped specs (`config/strategies`); once C records active spec hashes (PS-08b/c), Q should look the spec up by hash.
+  - Q: new STATE fields `strategy_signals` and `strategy_consensus`, and the catalog question `trade_action@1` (buy/hold/sell), stored like any Q decision. Q now asks two questions per fresh verdict.
+  - Next: D consuming `trade_action` (Q3), and calibrating both the strategy scores and Q's answer with E's outcomes (Q2).
 
 ## Next step
 

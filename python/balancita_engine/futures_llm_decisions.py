@@ -54,6 +54,8 @@ import urllib.request
 from decimal import ROUND_HALF_EVEN, Decimal, InvalidOperation
 
 from .futures_products import is_product_id
+from .futures_spec_strategy import load_specs
+from .futures_strategy_signals import ACTIONS as SIGNAL_ACTIONS, consensus, verdict_signals
 from .futures_verdicts import (
     ONE_MINUTE_MS,
     VERDICT_SCHEMA_VERSION,
@@ -520,6 +522,26 @@ def _field_proposals(ctx):
     )
 
 
+def _probabilities(values):
+    return " ".join("{}={}".format(name, _fmt(_dec(values[name]), 2)) for name in SIGNAL_ACTIONS)
+
+
+def _signals(ctx):
+    return verdict_signals(ctx["verdict"], default_specs() if ctx["specs"] is None else ctx["specs"])
+
+
+def _field_strategy_signals(ctx):
+    return "strategy_signals: " + "; ".join(
+        "{} {} ({})".format(sanitize_text(s["strategy_id"]), _probabilities(s), s["chosen"])
+        for s in _signals(ctx)
+    )
+
+
+def _field_strategy_consensus(ctx):
+    mean = consensus(_signals(ctx))
+    return "strategy_consensus: " + ("n/a" if mean is None else _probabilities(mean))
+
+
 # The single registry of STATE fields. To give the model a new input, add a
 # named function here that returns one normalized line (no dates, no absolute
 # prices, no product names) and test it; questions then list it by name.
@@ -533,18 +555,33 @@ STATE_FIELDS = {
     "atr_bp": _field_atr_bp,
     "volume_rel": _field_volume_rel,
     "proposals": _field_proposals,
+    "strategy_signals": _field_strategy_signals,
+    "strategy_consensus": _field_strategy_consensus,
 }
 
 
-def build_state(verdict, candles, fields):
-    """STATE text for one verdict from stored data only, in the order of ``fields``."""
+_DEFAULT_SPECS = []
+
+
+def default_specs():
+    """The shipped strategy specs (``config/strategies``), loaded once."""
+    if not _DEFAULT_SPECS:
+        _DEFAULT_SPECS.append(load_specs())
+    return _DEFAULT_SPECS[0]
+
+
+def build_state(verdict, candles, fields, specs=None):
+    """STATE text for one verdict from stored data only, in the order of ``fields``.
+
+    ``specs`` (strategy id -> spec) feeds the strategy signal fields; the shipped specs by default.
+    """
     unknown = [field for field in fields if field not in STATE_FIELDS]
     if unknown:
         raise ValueError("unknown state field(s): {}".format(", ".join(unknown)))
     features = (verdict.get("features") or {}).get("1m")
     if not isinstance(features, dict) or features.get("ready") is not True:
         raise StateError("verdict features are not ready (indicator warmup)")
-    ctx = {"verdict": verdict, "candles": candles}
+    ctx = {"verdict": verdict, "candles": candles, "specs": specs}
     return sanitize_text("\n".join(STATE_FIELDS[field](ctx) for field in fields))
 
 

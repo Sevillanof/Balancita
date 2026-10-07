@@ -25,6 +25,7 @@ START = 1_791_000_000_000 - (1_791_000_000_000 % 300_000)
 # version in config/decision-questions.json and add the new pin here.
 QUESTION_PINS = {
     "direction_1h@1": "871a574441420daa418d5f7368d7945e8e37a4d56d6b81763e37a80abdaccede",
+    "trade_action@1": "5b23984d5fa37ff049ecb5e40b9fb8f214ec97da258a3359b8455e321416cab4",
 }
 
 
@@ -437,6 +438,23 @@ class StateTests(unittest.TestCase):
                        "sma50=", "rsi14:", "bollinger_pos:", "donchian_pos:", "atr_bp:", "volume_rel:",
                        "proposals:", "c25-pullback-perp-v1="):
             self.assertIn(needle, text)
+
+    def test_strategy_signals_give_every_strategy_buy_hold_sell(self):
+        text = self.state(["strategy_signals", "strategy_consensus"])
+        lines = text.splitlines()
+        self.assertTrue(lines[0].startswith("strategy_signals: "))
+        votes = lines[0][len("strategy_signals: "):].split("; ")
+        self.assertEqual(len(votes), len(self.verdict["proposals"]))
+        for vote, proposal in zip(votes, self.verdict["proposals"]):
+            self.assertRegex(vote, r"^{} buy=\d\.\d\d hold=\d\.\d\d sell=\d\.\d\d \((buy|hold|sell)\)$".format(
+                re.escape(proposal["strategy_id"])))
+        self.assertRegex(lines[1], r"^strategy_consensus: buy=\d\.\d\d hold=\d\.\d\d sell=\d\.\d\d$")
+
+    def test_trade_action_reads_the_strategy_signals(self):
+        question = q.load_questions()["trade_action"]
+        self.assertEqual([o["id"] for o in question["options"]], ["buy", "hold", "sell"])
+        self.assertIn("strategy_signals", question["state_fields"])
+        self.assertIn("strategy_consensus", question["state_fields"])
 
     def test_return_is_in_bp_of_the_last_close(self):
         last, prev = int(self.candles[-1]["close"]), int(self.candles[-2]["close"])
