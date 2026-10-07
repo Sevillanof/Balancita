@@ -81,12 +81,12 @@ class RegistryTests(unittest.TestCase):
         self.registry.close()
         shutil.rmtree(self.dir)
 
-    def test_seed_registers_c25_to_c28_as_active_once(self):
+    def test_seed_registers_every_shipped_spec_as_active_once(self):
         self.registry.seed(SPECS)
         entries = {e["id"]: e for e in self.registry.list()}
-        self.assertEqual(set(entries), set(STRATEGY_IDS))
+        self.assertEqual(set(entries), set(SPECS))
         self.assertTrue(all(e["state"] == "active" and e["version"] == 1 for e in entries.values()))
-        self.assertEqual(set(self.registry.active_specs(0)), set(STRATEGY_IDS))
+        self.assertEqual(set(self.registry.active_specs(0)), set(SPECS))
 
     def test_modify_appends_a_version_and_keeps_the_previous_one_active(self):
         spec = copy.deepcopy(SPECS[C25_ID])
@@ -178,7 +178,7 @@ class TranslateTests(unittest.TestCase):
         result = service.translate("//@version=5\nstrategy('x')", "pine")
         self.assertEqual((result["valid"], result["untranslatable"]), (True, ["ROI table"]))
         self.assertEqual(model.bodies[0]["response_format"], {"type": "json_object"})
-        self.assertEqual(len(self.registry.list()), 4)
+        self.assertEqual(len(self.registry.list()), len(SPECS))
 
     def test_invalid_answers_are_reported_not_raised(self):
         service = StrategyService(self.registry, None, {BTC: "1"},
@@ -266,7 +266,7 @@ class ApiTests(unittest.TestCase):
     def test_ranking_backtest_evaluate_and_save(self):
         status, ranking = self.call("/ranking?product=PF_XBTUSD&days=7")
         self.assertEqual(status, 200)
-        self.assertEqual({r["id"] for r in ranking["strategies"]}, set(STRATEGY_IDS))
+        self.assertEqual({r["id"] for r in ranking["strategies"]}, set(SPECS))
         self.assertIsNotNone(ranking["buy_and_hold_pct"])
         status, backtest = self.call("/backtest", {"id": C27_ID, "product": BTC, "days": 7})
         self.assertEqual(status, 200)

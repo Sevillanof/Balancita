@@ -35,9 +35,9 @@
     },
     {
       "id": "trade_action",
-      "version": 1,
+      "version": 2,
       "type": "choice",
-      "instruction": "Each strategy in strategy_signals gives its probabilities to buy, hold or sell now, with its most likely action in parentheses, and strategy_consensus is their average. Weighing every strategy together with the normalized market state, which action is most likely to be right now?",
+      "instruction": "Each strategy in strategy_signals gives its probabilities to buy, hold or sell now, with its most likely action in parentheses, and strategy_consensus is their average. strategy_reliability is what each strategy's own history says about it after costs: negative_edge and no_edge mean its signals lost money or did not beat chance, so do not follow them; candidate_edge is positive so far but may be luck, so give it little weight; tentative_edge and reliable_edge deserve more; unmeasured means no history. Weighing the strategy signals by that reliability together with the normalized market state, which action is most likely to be right now? Choose hold unless a strategy with a measured edge is signalling a trade.",
       "options": [
         {
           "id": "buy",
@@ -60,7 +60,8 @@
         "atr_bp",
         "volume_rel",
         "strategy_signals",
-        "strategy_consensus"
+        "strategy_consensus",
+        "strategy_reliability"
       ]
     },
     {

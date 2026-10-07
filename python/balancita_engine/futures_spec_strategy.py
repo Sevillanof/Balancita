@@ -161,8 +161,16 @@ def _check_rules(rules, params, where):
     for side in SIDES:
         _check_node(exits[side], params, where + ".exit." + side)
     risk = rules.get("risk")
-    _require(isinstance(risk, dict) and set(risk) == {"stop_atr", "target_stop_ratio"},
-             where + ".risk takes stop_atr and target_stop_ratio")
+    _require(isinstance(risk, dict) and {"stop_atr", "target_stop_ratio"} <= set(risk)
+             and set(risk) <= {"stop_atr", "target_stop_ratio", "vol", "vol_minutes"},
+             where + ".risk takes stop_atr and target_stop_ratio, and optionally vol with vol_minutes")
+    _require(("vol" in risk) == ("vol_minutes" in risk), where + ".risk: vol and vol_minutes go together")
+    if "vol" in risk:
+        scope, _, field = str(risk["vol"]).partition(".")
+        _require(scope in ("1m", "5m") and _VOL_FEATURE.match(field),
+                 where + ".risk.vol must be a 1m or 5m logvol<period> feature")
+        _require(risk["vol_minutes"] == (1 if scope == "1m" else 5),
+                 where + ".risk.vol_minutes must be the minutes of the vol feature's series (1m: 1, 5m: 5)")
     for key in ("stop_atr", "target_stop_ratio"):
         _check_decimal(_param(risk[key], params), where + ".risk." + key)
         _require(_decimal(_param(risk[key], params), where + ".risk." + key) > 0,
@@ -170,6 +178,9 @@ def _check_rules(rules, params, where):
     horizon = rules.get("horizon_minutes")
     _require(isinstance(horizon, int) and not isinstance(horizon, bool) and 0 < horizon <= 1440,
              where + ".horizon_minutes must be 1-1440")
+
+
+_VOL_FEATURE = re.compile(r"^logvol\d+$")
 
 
 def _check_template(template, params, where):
@@ -220,9 +231,12 @@ def validate_spec(spec):
 
 
 _PERIOD_FEATURE = re.compile(
-    r"^(ema|sma|rsi|atr|bollinger_(?:mid|variance|stddev|lower|upper)|donchian_(?:high|low|mid)|prior_volume_mean)(\d+)$")
-_KIND_OF = {"ema": "ema", "sma": "sma", "rsi": "rsi", "atr": "atr", "prior_volume_mean": "donchian"}
-_DEFAULT_PERIODS = {"ema": (9, 21), "sma": (50,), "rsi": (14,), "atr": (14,), "bollinger": (20,), "donchian": (20,)}
+    r"^(ema|sma|rsi|atr|logret|logvol|bollinger_(?:mid|variance|stddev|lower|upper)|donchian_(?:high|low|mid)|prior_volume_mean)(\d+)$")
+_KIND_OF = {"ema": "ema", "sma": "sma", "rsi": "rsi", "atr": "atr", "prior_volume_mean": "donchian",
+            "logret": "logret", "logvol": "logvol"}
+# Log-scale kinds (logret, logvol) have no default period: a spec that reads them declares them.
+_DEFAULT_PERIODS = {"ema": (9, 21), "sma": (50,), "rsi": (14,), "atr": (14,), "bollinger": (20,), "donchian": (20,),
+                    "logret": (), "logvol": ()}
 
 
 def declared_indicators(spec):
@@ -418,7 +432,20 @@ def propose_spec(spec, current, *, previous=None, trend=None, regime="unknown",
             _availability(conditions, entry.get("target_condition", "frozen_target_available"), target)
             return proposal("ABSTAIN", "frozen_target_unavailable", conditions, age_ms)
     close = current.get("candidate_close")
-    atr = current.get("atr14")
+    risk = rules["risk"]
+    if "vol" in risk:
+        # Log-scale risk: one standard deviation of the horizon's move, price * sigma_bar * sqrt(bars in horizon).
+        bar_vol = _resolve(risk["vol"], scope, params)
+        if close is None or bar_vol is None:
+            conditions.append(_condition("log_volatility_and_close_available", False, "is", True, False))
+            return proposal("ABSTAIN", "protective_levels_unavailable", conditions, age_ms)
+        with localcontext() as ctx:
+            ctx.prec = 50
+            atr = _text(_decimal(bar_vol, "log volatility")
+                        * (Decimal(rules["horizon_minutes"]) / Decimal(risk["vol_minutes"])).sqrt()
+                        * _decimal(close, "close"))
+    else:
+        atr = current.get("atr14")
     if close is None or atr is None:
         conditions.append(_condition("atr_and_close_available", False, "is", True, False))
         return proposal("ABSTAIN", "protective_levels_unavailable", conditions, age_ms)

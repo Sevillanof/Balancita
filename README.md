@@ -13,7 +13,7 @@ Espacio de trading personal, local y **solo futuros perpetuos de Kraken (`PF_*`)
 
 - **Fuente de datos**: interruptor _MOCK_ / _Real (paper, Kraken público)_ (`?source=mock|live`, se recuerda en local). Si el backend elegido no responde, la página lo dice; nunca cae a la otra fuente.
 - **Productos**: los 8 de [`config/futures-products.json`](config/futures-products.json) (`PF_XBTUSD`, `PF_ETHUSD`, `PF_SOLUSD`, `PF_ZECUSD`, `PF_XRPUSD`, `PF_NEARUSD`, `PF_HYPEUSD`, `PF_ADAUSD`), fijados en el archivo para que los replays sean deterministas.
-- **Estrategias**: C25 pullback en tendencia, C26 reversión en rango, C27 ruptura Donchian y C28 adaptador por régimen ([`config/strategies/`](config/strategies)). Cada una opera **su propio libro**, largo o corto, con **100 USD fijos por operación**.
+- **Estrategias**: C25 pullback en tendencia, C26 reversión en rango, C27 ruptura Donchian, C28 adaptador por régimen y C29 momentum logarítmico lento ([`config/strategies/`](config/strategies)). Cada una opera **su propio libro**, largo o corto, con **100 USD fijos por operación**. Su fiabilidad medida con costes (C25-C28 pierden en los 8 productos, C29 es solo un candidato) está en [`docs/strategy-reliability.md`](docs/strategy-reliability.md).
 
 ## Arquitectura
 
@@ -182,13 +182,13 @@ Las preguntas de Q y sus _prompts_ son datos versionados (`config/decision-quest
 src/                 Front React: app/ (Terminal), features/strategy-lab, trading-view, shared/
 server/src/          app/ (capture, gateway, mock), features/ (kraken-futures, live-gateway, paper-futures, news), platform/
 python/balancita_engine/   C, D, E, Q, N, S, simulador, costes, indicadores, replay
-config/              Productos, estrategias C25-C28, preguntas y prompts de Q, fuentes de noticias
+config/              Productos, estrategias C25-C29 y su fiabilidad medida, preguntas y prompts de Q, fuentes de noticias
 docs/                Contratos de APIs, ADR 0001, roadmap
 odd/tasks/           Planes de trabajo (strategy-simulation.md es el vigente)
 doc/                 Guías y especificaciones de producto
 ```
 
-Documentación relacionada: [registro de estrategias](docs/strategy-registry-api.md) · [datos de mercado de Kraken Futures](docs/kraken-futures-market-data.md) · [scores de Qwen](docs/qwen-scores-api.md) · [plan de simulación](odd/tasks/strategy-simulation.md) · [`doc/personal-trading-app.md`](doc/personal-trading-app.md) (hoja de ruta; no se edita con herramientas).
+Documentación relacionada: [registro de estrategias](docs/strategy-registry-api.md) · [fiabilidad de las estrategias](docs/strategy-reliability.md) · [datos de mercado de Kraken Futures](docs/kraken-futures-market-data.md) · [scores de Qwen](docs/qwen-scores-api.md) · [plan de simulación](odd/tasks/strategy-simulation.md) · [`doc/personal-trading-app.md`](doc/personal-trading-app.md) (hoja de ruta; no se edita con herramientas).
 
 ## Atribución del gráfico
 

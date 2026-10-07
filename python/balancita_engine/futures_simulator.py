@@ -39,7 +39,9 @@ def _n(value):
 DEFAULT_PERIODS = {
     "ema": (9, 21), "sma": (50,), "rsi": (14,), "atr": (14,), "bollinger": (20,), "donchian": (20,),
 }
-PERIOD_KINDS = tuple(DEFAULT_PERIODS)
+# Log-scale features exist only when a spec declares them, so the default feature set is unchanged.
+LOG_KINDS = ("logret", "logvol")
+PERIOD_KINDS = tuple(DEFAULT_PERIODS) + LOG_KINDS
 # The regime chain reads these three on the 5m series whatever a spec declares.
 REGIME_PERIODS = {"ema": (9, 21), "atr": (14,)}
 
@@ -64,11 +66,18 @@ class IncrementalFeatures:
     With the default periods the output equals ``calculate_features`` over the
     whole history (same keys, same strings). Other periods use the same names
     with the period as suffix (``ema12``, ``rsi7``, ``bollinger_upper10``, ``donchian_mid55``).
+
+    Log-scale features, on demand and in bars of the series they are computed on:
+    ``logret<P>`` = ln(close / close P bars ago) and ``logvol<P>`` = the per-bar volatility,
+    the square root of the exponentially weighted mean of squared one-bar log returns
+    (span P, seeded with the first return, available after P returns). Dividing a
+    log return by ``logvol * sqrt(bars)`` gives a z-score that is comparable across products.
     """
 
     def __init__(self, periods=None):
         self.periods = merge_periods(DEFAULT_PERIODS if periods is None else periods)
         reach = max([p for values in self.periods.values() for p in values] + [MINIMUM_CANDLES])
+        reach = max([reach] + [p + 1 for p in self.periods.get("logret", ())])
         self.count = 0
         self.closes = deque(maxlen=reach)
         self.highs = deque(maxlen=reach + 1)
@@ -78,6 +87,7 @@ class IncrementalFeatures:
         self._atr = {p: [None, []] for p in self.periods.get("atr", ())}
         self._rsi = {p: [None, None, []] for p in self.periods.get("rsi", ())}
         self._prev_close = None
+        self._logvol = {p: [None, 0] for p in self.periods.get("logvol", ())}  # [ewma of r^2, returns seen]
 
     def update(self, candle):
         with localcontext() as context:
@@ -123,6 +133,13 @@ class IncrementalFeatures:
                 else:
                     state[0] = (state[0] * D(period - 1) + gain) / D(period)
                     state[1] = (state[1] * D(period - 1) + loss) / D(period)
+        log_return = None if self._prev_close is None else (close / self._prev_close).ln()
+        for period, state in self._logvol.items():
+            if log_return is not None:
+                square = log_return * log_return
+                alpha = D(2) / D(period + 1)
+                state[0] = square if state[0] is None else alpha * square + (D(1) - alpha) * state[0]
+                state[1] += 1
         self._prev_close = close
 
         out = {"schema_version": FEATURE_SCHEMA_VERSION, "ready": True, "reason_codes": [], "candidate_close": _n(close)}
@@ -132,6 +149,11 @@ class IncrementalFeatures:
         for period in self.periods.get("sma", ()):
             out["sma{}".format(period)] = _n(
                 sum(list(self.closes)[-period:], D(0)) / D(period) if len(self.closes) >= period else None)
+        closes = list(self.closes)
+        for period in self.periods.get("logret", ()):
+            out["logret{}".format(period)] = _n((close / closes[-1 - period]).ln() if len(closes) > period else None)
+        for period, state in self._logvol.items():
+            out["logvol{}".format(period)] = _n(state[0].sqrt() if state[1] >= period else None)
         for period, state in self._rsi.items():
             rsi = None
             if state[0] is not None:

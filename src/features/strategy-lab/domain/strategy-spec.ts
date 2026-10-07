@@ -46,7 +46,12 @@ export type Rules = {
   checks: Array<{ name?: string; node: SpecNode }>
   sides: Partial<Record<Side, SideEntry>>
   exit: Record<Side, SpecNode>
-  risk: { stop_atr: string; target_stop_ratio: string }
+  /**
+   * `stop_atr` and `target_stop_ratio` scale the 1m ATR(14) by default. With `vol`
+   * (a `logvol<period>` feature of the 1m or 5m series) and its series' `vol_minutes`,
+   * they scale one standard deviation of the horizon's move instead.
+   */
+  risk: { stop_atr: string; target_stop_ratio: string; vol?: string; vol_minutes?: number }
   horizon_minutes: number
 }
 
@@ -58,6 +63,8 @@ export type StrategySpec = {
   description?: string
   params: Record<string, string>
   kind?: 'rules' | 'regime_adapter'
+  /** Extra indicator periods the rules read (kind -> periods), on top of the default set. */
+  indicators?: Partial<Record<string, number[]>>
   rules?: Rules
   branches?: Partial<Record<'trend' | 'range', { id: string; rules: Rules }>>
 }

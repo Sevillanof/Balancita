@@ -39,6 +39,7 @@ from .futures_spec_strategy import (
     validate_spec,
 )
 from .futures_replay import load_range
+from .futures_strategy_reliability import load_reliability, reliability_for
 from .futures_strategy_backtest import MIN_TRADES, load_verdict_rows, run_backtest
 from .futures_strategy_translate import TranslationError, default_provider, translate
 
@@ -168,7 +169,16 @@ class StrategyRegistry:
             "active_version": self._active_version(row["strategy_id"]), "origin": row["origin"],
             "parent": None if row["parent_id"] is None else {"id": row["parent_id"], "version": row["parent_version"]},
             "created_at": row["created_at"],
+            "reliability": self._reliability(spec),
         }
+
+    @staticmethod
+    def _reliability(spec):
+        """What the stored reliability table says about exactly this spec, else ``None`` (never measured)."""
+        entry = reliability_for(load_reliability(), spec)
+        if entry is None:
+            return None
+        return {key: entry.get(key) for key in ("verdict", "trades", "hit_rate", "mean_net_bp", "t_stat")}
 
     def list(self):
         ids = [r[0] for r in self.db.execute(

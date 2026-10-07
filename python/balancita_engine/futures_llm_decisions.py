@@ -55,6 +55,7 @@ from decimal import ROUND_HALF_EVEN, Decimal, InvalidOperation
 
 from .futures_products import is_product_id
 from .futures_spec_strategy import load_specs
+from .futures_strategy_reliability import load_reliability, reliability_for
 from .futures_strategy_signals import ACTIONS as SIGNAL_ACTIONS, consensus, verdict_signals
 from .futures_verdicts import (
     ONE_MINUTE_MS,
@@ -542,6 +543,41 @@ def _field_strategy_consensus(ctx):
     return "strategy_consensus: " + ("n/a" if mean is None else _probabilities(mean))
 
 
+_DEFAULT_RELIABILITY = []
+
+
+def default_reliability():
+    """The stored reliability table (``config/strategy-reliability.json``), loaded once; ``None`` without one."""
+    if not _DEFAULT_RELIABILITY:
+        _DEFAULT_RELIABILITY.append(load_reliability())
+    return _DEFAULT_RELIABILITY[0]
+
+
+def _count(number):
+    """A trade count as the model should read it: exact below a thousand, then whole thousands (``114k``)."""
+    return str(number) if number < 1000 else "{}k".format(number // 1000)
+
+
+def _field_strategy_reliability(ctx):
+    """What each strategy's own history says about it, pooled over products (the state never names one).
+
+    A strategy whose spec changed since it was measured, or that was never measured, is ``unmeasured``.
+    """
+    specs = default_specs() if ctx["specs"] is None else ctx["specs"]
+    table = default_reliability() if ctx.get("reliability") is None else ctx["reliability"]
+    parts = []
+    for proposal in ctx["verdict"].get("proposals", []):
+        strategy_id = sanitize_text(proposal.get("strategy_id", "?"))
+        entry = reliability_for(table, specs.get(proposal.get("strategy_id")))
+        if entry is None or entry.get("trades", 0) == 0:
+            parts.append("{} unmeasured".format(strategy_id))
+        else:
+            parts.append("{} {} hit={} net_bp={} trades={}".format(
+                strategy_id, sanitize_text(entry["verdict"]), _fmt(_dec(entry["hit_rate"]), 2),
+                _fmt(_dec(entry["mean_net_bp"]), 1), _count(entry["trades"])))
+    return "strategy_reliability: " + "; ".join(parts)
+
+
 # The single registry of STATE fields. To give the model a new input, add a
 # named function here that returns one normalized line (no dates, no absolute
 # prices, no product names) and test it; questions then list it by name.
@@ -557,6 +593,7 @@ STATE_FIELDS = {
     "proposals": _field_proposals,
     "strategy_signals": _field_strategy_signals,
     "strategy_consensus": _field_strategy_consensus,
+    "strategy_reliability": _field_strategy_reliability,
 }
 
 
@@ -570,10 +607,11 @@ def default_specs():
     return _DEFAULT_SPECS[0]
 
 
-def build_state(verdict, candles, fields, specs=None):
+def build_state(verdict, candles, fields, specs=None, reliability=None):
     """STATE text for one verdict from stored data only, in the order of ``fields``.
 
     ``specs`` (strategy id -> spec) feeds the strategy signal fields; the shipped specs by default.
+    ``reliability`` is a reliability table (``futures_strategy_reliability``); the stored one by default.
     """
     unknown = [field for field in fields if field not in STATE_FIELDS]
     if unknown:
@@ -581,7 +619,7 @@ def build_state(verdict, candles, fields, specs=None):
     features = (verdict.get("features") or {}).get("1m")
     if not isinstance(features, dict) or features.get("ready") is not True:
         raise StateError("verdict features are not ready (indicator warmup)")
-    ctx = {"verdict": verdict, "candles": candles, "specs": specs}
+    ctx = {"verdict": verdict, "candles": candles, "specs": specs, "reliability": reliability}
     return sanitize_text("\n".join(STATE_FIELDS[field](ctx) for field in fields))
 
 

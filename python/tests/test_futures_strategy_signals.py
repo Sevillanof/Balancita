@@ -4,7 +4,7 @@ import random
 import unittest
 
 from balancita_engine.futures_spec_strategy import propose_spec
-from balancita_engine.futures_strategies import C25_ID, C26_ID, C27_ID, C28_ID
+from balancita_engine.futures_strategies import C25_ID, C26_ID, C27_ID, C28_ID, STRATEGY_IDS
 from balancita_engine.futures_strategy_signals import consensus, strategy_signal, verdict_signals
 
 from test_futures_spec_strategy import SPECS, _random_features
@@ -37,9 +37,17 @@ class SignalShapeTests(unittest.TestCase):
             self.assertEqual(max(("hold", "buy", "sell"), key=lambda n: signal[n]), expected)
             seen.add((strategy_id, expected))
         # The fuzz reaches entries on both sides for every strategy, not only hold.
-        for strategy_id in SPECS:
+        # C29 reads log features the fuzz does not generate; test_c29_votes_buy_when_it_fires covers it.
+        for strategy_id in STRATEGY_IDS:
             for vote in ("buy", "sell"):
                 self.assertIn((strategy_id, vote), seen)
+
+    def test_c29_votes_buy_when_it_fires(self):
+        features = {"ready": True, "candidate_close": "100", "atr14": "1", "candidate_bucket_start_ms": 1}
+        trend = {"ready": True, "logret72": "0.03", "logvol288": "0.0005"}
+        proposal = propose_spec(SPECS["c29-momentum-perp-v1"], features, previous=features, trend=trend, tick_size="0.01")
+        self.assertEqual(proposal["action"], "LONG")
+        self.assertEqual(strategy_signal(SPECS["c29-momentum-perp-v1"], proposal, "range")["chosen"], "buy")
 
     def test_signals_are_deterministic(self):
         rng = random.Random(3)

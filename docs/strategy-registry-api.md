@@ -9,7 +9,7 @@ Strategies are `balancita-strategy.v1` specs (`python/balancita_engine/futures_s
 | Route | Returns |
 |---|---|
 | `GET /api-strategies/schema` | Editor catalog: operands (`1m.rsi14`, `1m_previous.ema21`, `5m.ema9`, ...), comparators, node kinds, states, periods, gate thresholds. |
-| `GET /api-strategies/strategies` | Latest version of every strategy: `id`, `version`, `name`, `description`, `state`, `active_version`, `spec_hash`, `parent`, `origin`. |
+| `GET /api-strategies/strategies` | Latest version of every strategy: `id`, `version`, `name`, `description`, `state`, `active_version`, `spec_hash`, `parent`, `origin`, `reliability` (`verdict`, `trades`, `hit_rate`, `mean_net_bp`, `t_stat` from `config/strategy-reliability.json` for exactly this spec, or `null` when it was never measured). |
 | `GET /api-strategies/ranking?product=PF_XBTUSD&days=7\|30\|90` | Ranking rows (the list above plus `return_pct`, `pnl_usd`, `hit_rate`, `trades`, `wins`, `few_trades`, `deflated_sharpe_probability`), sorted by return, and `buy_and_hold_pct`. With no verdicts yet: `verdicts_available: false` and null metrics. |
 | `GET /api-strategies/strategies/:id?version=n` | One version with its `spec`, every `versions` entry and the lifecycle `events`. |
 | `GET /api-strategies/strategies/:id/export?version=n` | The spec JSON, for download. |
