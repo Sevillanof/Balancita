@@ -375,6 +375,9 @@ export default function FuturesTerminal({
   const [connected, setConnected] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [commandPending, setCommandPending] = useState(false)
+  const [processHealth, setProcessHealth] = useState<Record<string, unknown>>(
+    {},
+  )
   const [confirmingReset, setConfirmingReset] = useState(false)
   const [commandStatus, setCommandStatus] = useState('')
   const [commandVersion, setCommandVersion] = useState(0)
@@ -656,6 +659,28 @@ export default function FuturesTerminal({
     return () => clearInterval(timer)
   }, [bootstrap.mode, quote.receivedAt])
 
+  // Per-process health from the dev supervisor (live gateway only).
+  useEffect(() => {
+    if (bootstrap.mode !== 'paper_live') return
+    let cancelled = false
+    const load = () =>
+      fetch(`${apiBase}/health`)
+        .then((response) => response.json() as Promise<unknown>)
+        .then((body) => {
+          if (!cancelled) setProcessHealth(record(record(body).processes))
+        })
+        .catch(() => {})
+    void load()
+    const timer = setInterval(load, 10_000)
+    return () => {
+      cancelled = true
+      clearInterval(timer)
+    }
+  }, [bootstrap.mode, apiBase])
+  const downProcesses = Object.entries(processHealth).filter(
+    ([, value]) => record(value).status !== 'running',
+  )
+
   const sendCommand = (action: string) => {
     const socket = socketRef.current
     if (!socket || socket.readyState !== WebSocket.OPEN || !bootstrap || !state)
@@ -794,6 +819,14 @@ export default function FuturesTerminal({
                       )}
                     </li>
                   )}
+                  {downProcesses.map(([name, value]) => (
+                    <li key={name} data-tone="bad">
+                      Proceso {name}:{' '}
+                      {record(value).status === 'restarting'
+                        ? 'reiniciando'
+                        : 'caído'}
+                    </li>
+                  ))}
                   {!engineOff && warmupCandles < WARMUP_CANDLES && (
                     <li data-tone="warn">
                       Calentando {warmupCandles}/{WARMUP_CANDLES}

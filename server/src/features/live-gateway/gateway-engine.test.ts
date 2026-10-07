@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- loosely typed JSON assertions */
 import { createHash } from 'node:crypto'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { AddressInfo } from 'node:net'
@@ -225,6 +225,28 @@ describe('live gateway serving paper execution state', () => {
     expect(
       client.messages.find((m) => m.type === 'protocol.error')!.data.code,
     ).toBe('commands_unavailable')
+  })
+
+  it('serves the dev supervisor health file under /api/health', async () => {
+    const dir = scratch()
+    const processHealthPath = join(dir, 'dev-health.json')
+    writeFileSync(
+      processHealthPath,
+      JSON.stringify({
+        updated_at_ms: 1,
+        processes: { verdict: { status: 'restarting', restarts: 2 } },
+      }),
+    )
+    const { app } = await start({
+      marketDbPath: marketDb(dir),
+      processHealthPath,
+    })
+    const health = (await app.inject('/api/health')).json() as any
+    expect(health.processes.verdict).toMatchObject({ status: 'restarting' })
+    const absent = await start({ marketDbPath: marketDb(scratch()) })
+    expect(
+      ((await absent.app.inject('/api/health')).json() as any).processes,
+    ).toBeNull()
   })
 
   it('keeps the engine off when no account DB is configured', async () => {
