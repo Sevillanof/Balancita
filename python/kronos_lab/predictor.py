@@ -15,12 +15,11 @@ class KronosSmall:
             raise SystemExit("Set KRONOS_REPO (or --kronos-repo) to a clone of github.com/shiyu-coder/Kronos")
         sys.path.insert(0, repo)
         import pandas  # noqa: F401
-        import torch
         from model import Kronos, KronosPredictor, KronosTokenizer  # the Kronos repo's own package
 
-        device = device or ("cuda:0" if torch.cuda.is_available() else "cpu")
         tokenizer = KronosTokenizer.from_pretrained("NeoQuasar/Kronos-Tokenizer-base")
         model = Kronos.from_pretrained("NeoQuasar/Kronos-small")
+        # device=None lets Kronos pick cuda, then Apple mps, then cpu.
         self._predictor = KronosPredictor(model, tokenizer, device=device, max_context=512)
         self.samples, self.temperature, self.top_p = samples, temperature, top_p
         self.name = "Kronos-small/Tokenizer-base"

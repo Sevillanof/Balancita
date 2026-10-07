@@ -77,6 +77,21 @@ class KronosLabTests(unittest.TestCase):
             self.assertEqual(again, 0)  # nothing is decided or settled twice
             db.close()
 
+    def test_official_hours_keeps_only_closed_hours_in_lab_shape(self):
+        now = START + 3 * lab.HOUR_MS + 600_000  # 10 minutes into the 4th hour
+        calls = []
+
+        def fetch(url):
+            calls.append(url)
+            return [{"time": START + h * lab.HOUR_MS, "open": "1", "high": "2", "low": "0.5", "close": "1.5",
+                     "volume": "3"} for h in range(4)]
+
+        hours = lab.official_hours("PF_ETHUSD", START, now, fetch=fetch)
+        self.assertEqual([h["bucket_start"] for h in hours], [START + h * lab.HOUR_MS for h in range(3)])
+        self.assertEqual(hours[0], {"bucket_start": START, "open": 1.0, "high": 2.0, "low": 0.5, "close": 1.5,
+                                    "volume_btc": 3.0})
+        self.assertIn("/PF_ETHUSD/1h?", calls[0])
+
     def test_settle_charges_costs(self):
         ones, _ = _hours(10)
         c = lab.hourly(ones)

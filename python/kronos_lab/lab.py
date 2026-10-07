@@ -18,6 +18,7 @@ import os
 import sqlite3
 import statistics
 import time
+import urllib.request
 from decimal import Decimal
 
 from balancita_engine.futures_costs import entry_fill, exit_fill, fee_rate, round_trip_cost_bps
@@ -31,6 +32,7 @@ K = 2.0              # required |expected move| as a multiple of the round-trip 
 MIN_CONTEXT = 200    # hours of history required before predicting
 NOTIONAL = Decimal(100)
 STRATEGY_ID = "kronos-small-1h-h4-v1"
+CHARTS_URL = "https://futures.kraken.com/api/charts/v1/trade/{product}/1h?from={start}&to={end}"
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS decision(
@@ -59,6 +61,30 @@ def hourly(candles_1m):
             "high": max(float(c["high"]) for c in group), "low": min(float(c["low"]) for c in group),
             "volume_btc": sum(float(c["volume_btc"]) for c in group)})
     return out
+
+
+def _fetch_candles(url, retries=4):
+    for attempt in range(retries):
+        try:
+            with urllib.request.urlopen(url, timeout=30) as response:
+                return json.load(response)["candles"]
+        except Exception:  # network and rate-limit errors alike: back off and retry
+            if attempt == retries - 1:
+                raise
+            time.sleep(2 ** attempt)
+
+
+def official_hours(product_id, start_ms, now_ms, fetch=_fetch_candles):
+    """Closed official 1h trade candles from Kraken's public charts API (the market DB keeps only days of 1m)."""
+    out, cursor = {}, start_ms // 1000
+    while cursor < now_ms // 1000:
+        end = min(cursor + 1500 * 3600, now_ms // 1000)  # the API returns at most 2000 candles per call
+        for c in fetch(CHARTS_URL.format(product=product_id, start=cursor, end=end)):
+            if c["time"] + HOUR_MS <= now_ms:  # the current hour is still forming
+                out[c["time"]] = {"bucket_start": c["time"], "open": float(c["open"]), "high": float(c["high"]),
+                                  "low": float(c["low"]), "close": float(c["close"]), "volume_btc": float(c["volume"])}
+        cursor = end
+    return [out[k] for k in sorted(out)]
 
 
 def settle(product_id, side, candles, index):
@@ -127,7 +153,9 @@ def summary(db_path):
 
 def main(argv=None, predictor=None):
     parser = argparse.ArgumentParser(description="Run the isolated Kronos-small strategy on the market DB candles.")
-    parser.add_argument("--market-db", required=True)
+    parser.add_argument("--source", choices=("kraken", "market-db"), default="kraken",
+                        help="kraken: official 1h candles from the public charts API; market-db: 1h built from 1m")
+    parser.add_argument("--market-db", default=None, help="required with --source market-db")
     parser.add_argument("--out", required=True, help="directory for kronos.sqlite and kronos-summary.json")
     parser.add_argument("--mode", choices=("forward", "backtest"), default="forward")
     parser.add_argument("--days", type=float, default=30, help="backtest: how many past days to decide over")
@@ -136,6 +164,8 @@ def main(argv=None, predictor=None):
     parser.add_argument("--kronos-repo", default=None)
     parser.add_argument("--loop-seconds", type=float, default=0, help="forward: repeat every N seconds")
     args = parser.parse_args(argv)
+    if args.source == "market-db" and not args.market_db:
+        parser.error("--source market-db needs --market-db")
     os.makedirs(args.out, exist_ok=True)
     db_path = os.path.join(args.out, "kronos.sqlite")
     if predictor is None:
@@ -156,11 +186,20 @@ def main(argv=None, predictor=None):
         db.executescript(_SCHEMA)
         try:
             for product_id, _tick in resolve_products():
-                try:
-                    ones, _fives = load_range(args.market_db, product_id, first - MIN_CONTEXT * HOUR_MS, now)
-                except ValueError:
-                    continue
-                added = run_product(db, predictor, product_id, hourly(ones), mode=args.mode,
+                since = first - (MIN_CONTEXT + HORIZON) * HOUR_MS
+                if args.source == "kraken":
+                    try:
+                        candles = official_hours(product_id, since, now)
+                    except Exception as error:  # one product's outage must not stop the others
+                        print("{} skipped: {}".format(product_id, error), flush=True)
+                        continue
+                else:
+                    try:
+                        ones, _fives = load_range(args.market_db, product_id, since, now)
+                    except ValueError:
+                        continue
+                    candles = hourly(ones)
+                added = run_product(db, predictor, product_id, candles, mode=args.mode,
                                     first_decision_ms=first, stride=args.stride if args.mode == "backtest" else 1)
                 print("{} +{} trades".format(product_id, added), flush=True)
         finally:
