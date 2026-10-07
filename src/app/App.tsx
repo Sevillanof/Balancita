@@ -19,7 +19,6 @@ import GeminiControl from '../features/analysis/presentation/GeminiControl.tsx'
 import { resolveMarketDataProviderMode } from '../features/market-data/infrastructure/market-data-provider.ts'
 import './App.css'
 import DemoShell from './DemoShell.tsx'
-import HistoricalRuns from './HistoricalRuns.tsx'
 import LaboratoryPage from './LaboratoryPage.tsx'
 import TerminalEntry from './TerminalEntry.tsx'
 
@@ -173,8 +172,7 @@ function SpotApp(props: AppProps) {
 
 export default function App(props: AppProps) {
   if (window.location.pathname === '/terminal') return <TerminalEntry />
-  if (window.location.pathname === '/historicos') return <HistoricalRuns />
-  if (window.location.pathname === '/laboratorio') return <LaboratoryPage />
+  if (window.location.pathname === '/estrategias') return <LaboratoryPage />
   if (
     window.location.pathname === '/demo' ||
     window.location.pathname.startsWith('/demo/')

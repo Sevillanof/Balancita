@@ -141,7 +141,14 @@ describe('useSimulationsReport', () => {
       if (input.includes('/history/')) return Response.json(archived)
       if (input.endsWith('/history?limit=50')) {
         return Response.json({
-          reports: [{ id: archiveId, generatedAt: archived.generatedAt, datasetHash: archived.datasetHash, manifestHash: archived.manifestHash }],
+          reports: [
+            {
+              id: archiveId,
+              generatedAt: archived.generatedAt,
+              datasetHash: archived.datasetHash,
+              manifestHash: archived.manifestHash,
+            },
+          ],
         })
       }
       return Response.json(latest)
@@ -153,6 +160,8 @@ describe('useSimulationsReport', () => {
     await act(async () => result.current.selectHistory(''))
     await waitFor(() => expect(result.current.selectedHistoryId).toBeNull())
     await waitFor(() => expect(result.current.file?.generatedAt).toBe(2_000))
-    expect(requested).toContain('http://127.0.0.1:8787/api/intelligence/simulations')
+    expect(requested).toContain(
+      'http://127.0.0.1:8787/api/intelligence/simulations',
+    )
   })
 })

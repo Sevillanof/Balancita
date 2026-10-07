@@ -274,6 +274,94 @@ export function patchCondition(
   return next
 }
 
+function cmpCodes(rules: Rules): Set<string> {
+  const codes = new Set<string>()
+  const walk = (node: SpecNode) => {
+    if (isCmp(node)) codes.add(node.cmp)
+    else if ('and' in node) node.and.forEach(walk)
+    else if ('all' in node) node.all.forEach(walk)
+    else if ('any' in node) node.any.forEach(walk)
+    else if ('not' in node) walk(node.not)
+  }
+  rules.checks.forEach((check) => walk(check.node))
+  return codes
+}
+
+/** Returns a copy of `spec` with one new comparison required by `side`. */
+export function addCondition(
+  spec: StrategySpec,
+  scope: RulesScope,
+  side: Side,
+): StrategySpec {
+  const next = cloneSpec(spec)
+  const rules = rulesOf(next, scope)
+  const entry = rules?.sides[side]
+  if (!rules || !entry) return spec
+  const codes = cmpCodes(rules)
+  const names = new Set(rules.checks.map((check) => check.name))
+  let n = rules.checks.length + 1
+  while (codes.has(`custom_${n}`) || names.has(`custom_${n}`)) n += 1
+  const name = `custom_${n}`
+  rules.checks.push({
+    name,
+    node: {
+      cmp: name,
+      left: '1m.candidate_close',
+      op: '>',
+      right: '1m.ema21',
+    },
+  })
+  entry.requires.push(name)
+  return next
+}
+
+/** Returns a copy of `spec` without the comparison at `path` for `side`. */
+export function removeCondition(
+  spec: StrategySpec,
+  scope: RulesScope,
+  side: Side,
+  path: CmpPath,
+): StrategySpec {
+  const next = cloneSpec(spec)
+  const rules = rulesOf(next, scope)
+  const check = rules?.checks[path.check]
+  if (!rules || !check) return spec
+  if (path.steps.length === 0) {
+    const name = check.name
+    const entry = rules.sides[side]
+    if (name !== undefined && entry) {
+      entry.requires = entry.requires.filter((item) => item !== name)
+      const stillUsed = Object.values(rules.sides).some((other) =>
+        other?.requires.includes(name),
+      )
+      if (stillUsed) return next
+    }
+    rules.checks.splice(path.check, 1)
+    return next
+  }
+  let parent: SpecNode = check.node
+  for (const step of path.steps.slice(0, -1)) {
+    const children = childrenOf(parent)
+    if (!children?.[step]) return spec
+    parent = children[step]
+  }
+  const children = childrenOf(parent)
+  const last = path.steps[path.steps.length - 1]
+  if (!children || last === undefined || !children[last]) return spec
+  children.splice(last, 1)
+  return next
+}
+
+function childrenOf(node: SpecNode): SpecNode[] | undefined {
+  return 'and' in node
+    ? node.and
+    : 'all' in node
+      ? node.all
+      : 'any' in node
+        ? node.any
+        : undefined
+}
+
 /** The decimal a risk value resolves to, through `$param` if it is one. */
 export function resolveValue(
   value: string,
