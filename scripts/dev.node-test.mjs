@@ -44,14 +44,13 @@ describe('devChildSpecs', () => {
     )
   })
 
-  it('runs the scripted MOCK terminal API only on 8788', () => {
-    assert.deepEqual(byName.mock.args, [
-      '/repo/scripts/futures-local-terminal.mjs',
-      '--api-only',
-      '--api-port',
-      '8788',
-    ])
-    assert.equal(byName.mock.cwd, root)
+  it('runs the MOCK terminal on 8788 from a seeded market replayed by C and D, with no legacy engine', () => {
+    const { args, cwd, env } = byName.mock
+    assert.equal(cwd, '/repo/server')
+    assert.ok(args.includes('src/app/mock-main.ts'))
+    assert.equal(env.PORT, '8788')
+    assert.equal(env.MOCK_DATA_DIR, './data/dev-mock')
+    assert.deepEqual(JSON.parse(env.BALANCITA_PYTHON_COMMAND), ['python3'])
   })
 
   it('runs capture as the only writer of the live market database, without HTTP or engine', () => {

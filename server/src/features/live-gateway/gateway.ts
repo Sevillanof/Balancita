@@ -39,6 +39,8 @@ export interface LiveGatewayOptions {
   readonly pollMs?: number
   readonly heartbeatMs?: number
   readonly clock?: () => number
+  /** `mock`: the dev MOCK terminal serves a seeded copy of a market. */
+  readonly mode?: 'mock' | 'paper_live'
 }
 
 interface Envelope {
@@ -196,7 +198,7 @@ export async function buildLiveGateway(
     const hash = follower.metadataHash()
     return {
       schema_version: 1,
-      mode: 'paper_live',
+      mode: options.mode ?? 'paper_live',
       source: 'kraken-public-live-stream.v1',
       active_run_id: LIVE_RUN_ID,
       instrument_id: INSTRUMENT_ID,

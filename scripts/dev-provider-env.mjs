@@ -430,12 +430,14 @@ const GATEWAY_ARGS = [
   '--watch',
   'src/app/gateway-main.ts',
 ]
+// No --watch: the mock re-seeds its own DBs on start.
+const MOCK_ARGS = ['--experimental-strip-types', 'src/app/mock-main.ts']
 // No --watch: capture is the sole market-DB writer; never restart it on edits.
 const CAPTURE_ARGS = ['--experimental-strip-types', 'src/app/capture-main.ts']
 
 /**
  * Pure description of the `pnpm run dev` children:
- * - mock: scripted MOCK futures API only,
+ * - mock: seeded market replayed by C and D, served by the read-only gateway on 8788,
  * - capture: Kraken public WS -> live market DB (sole writer, no HTTP/engine),
  * - live: read-only gateway on 8789 tailing that DB plus the paper account and
  *   verdicts DBs (no collector, no engine),
@@ -485,15 +487,26 @@ export function devChildSpecs({
       env: devEnvironment(env),
     },
     {
+      // Seeded market replayed by the real C and D, served by the same read-only gateway.
       name: 'mock',
-      cwd: root,
-      args: [
-        `${root}/scripts/futures-local-terminal.mjs`,
-        '--api-only',
-        '--api-port',
-        String(DEV_PORTS.mock),
-      ],
-      env: { ...env },
+      cwd: serverCwd,
+      args: nodeArgs(MOCK_ARGS),
+      env: {
+        ...serverEnvironment(env),
+        PORT: String(DEV_PORTS.mock),
+        MOCK_DATA_DIR: './data/dev-mock',
+        ...(python?.command
+          ? {
+              BALANCITA_PYTHON_COMMAND: JSON.stringify([
+                python.command,
+                ...python.prefixArgs,
+              ]),
+              PYTHONPATH: [`${root}/python`, env.PYTHONPATH]
+                .filter(Boolean)
+                .join(delimiter),
+            }
+          : {}),
+      },
     },
   ]
   const marketDb = liveDb('futures-market.sqlite')
