@@ -1,0 +1,77 @@
+e2e/screens.pw.ts
+  s_1851609b945d48::t_69a38ee8107a72 1-149
+odd/tasks/futures-process-split.log.md
+  s_1851609b945d48::t_674e6d7f8873ac 1-276
+odd/tasks/futures-process-split.md
+  s_1851609b945d48::t_aa3635ae35c011 44,63,67-68,70
+odd/tasks/strategy-simulation.md
+  s_1851609b945d48::t_9315d7b9c14a34 45,53,59,61,65,73,76-79
+python/balancita_engine/futures_costs.py
+  s_1851609b945d48::t_2ba6adee58de6e 1-103
+python/balancita_engine/futures_forecast_scores.py
+  s_1851609b945d48::t_64354301a5e86d 42,52-54,80-82,545,700
+python/balancita_engine/futures_llm_scores.py
+  s_1851609b945d48::t_ed3fd6c797ccf8 36,86,117,146,183
+python/balancita_engine/futures_paper_execution.py
+  s_1851609b945d48::t_5321c2d1a72fbe 41,54-55
+python/balancita_engine/futures_spec_strategy.py
+  s_1851609b945d48::t_892809d67d6023 18,412-414
+python/balancita_engine/futures_strategies.py
+  s_1851609b945d48::t_e685a1232db176 5-6,235-237
+python/balancita_engine/futures_strategy_backtest.py
+  s_1851609b945d48::t_5cc14108d28e05 14-16,25,35,37-38,85,116,140,256
+python/balancita_engine/futures_verdicts.py
+  s_1851609b945d48::t_efd81026c30ade 22,48-49,130-131
+python/tests/test_futures_costs.py
+  s_1851609b945d48::t_fc0026f99953ae 1-35
+python/tests/test_futures_forecast_scores.py
+  s_1851609b945d48::t_088c6527005cc1 175-183,197-198,308-309,349,351-353,355-356,399,510-511,543,551-552,554-555
+python/tests/test_futures_llm_scores.py
+  s_1851609b945d48::t_154540e3f51d55 36,43,50,91-93
+python/tests/test_futures_runtime_operative.py
+  s_1851609b945d48::t_02a59039cbfc0c 28
+scripts/dev-provider-env.mjs
+  s_1851609b945d48::t_e35455b0045616 378-388,535-536
+scripts/dev.mjs
+  s_1851609b945d48::t_b9014190e4e6f3 2,15,91,98-120,138-149,151,182-183,190,196-213,215,217-229,235
+scripts/dev.node-test.mjs
+  s_1851609b945d48::t_ee90cf9dc5002f 1088-1096
+server/src/app/gateway-main.ts
+  s_1851609b945d48::t_1c15729cec5393 52
+server/src/features/live-gateway/gateway-engine.test.ts
+  s_1851609b945d48::t_73a25969040d10 3,230-251
+server/src/features/live-gateway/gateway.ts
+  s_1851609b945d48::t_9365c99b06679e 1,35-36,224,387-396
+src/app/ConnectedTerminal.css
+  s_1851609b945d48::t_4c17045bad1221 359-360,398-401
+src/app/FuturesTerminal.tsx
+  s_1851609b945d48::t_3011196175ddc7 378-380,662-683,822-829
+src/app/TerminalDecisions.tsx
+  s_1851609b945d48::t_2692be455e8132 90-95
+src/features/strategy-lab/infrastructure/strategy-api.ts
+  s_1851609b945d48::t_6100d1cfa7d884 241,245,251,253,255
+src/features/strategy-lab/presentation/StrategyLab.test.tsx
+  s_1851609b945d48::t_299646fab68e9e 5,328-342
+src/features/strategy-lab/presentation/StrategyLab.tsx
+  s_1851609b945d48::t_d063bbb8e427b1 118-119,152,199-204,593-599,657-666
+src/features/strategy-lab/testing/example-strategy-api.ts
+  s_1851609b945d48::t_8b04e668dfbc68 8,25
+src/features/trading-view/presentation/ApprovedTerminalChart.tsx
+  s_1851609b945d48::t_a6b2d7f2a5089f 151,183-189,191-192
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c8a5034cf11d81cad82795003e5b65d8acabd069",
+  "prompts": {},
+  "sessions": {
+    "s_1851609b945d48": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "763d789b-a009-4589-9307-f789259c3bf7",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
