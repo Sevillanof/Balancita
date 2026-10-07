@@ -16,7 +16,7 @@ export default function LaboratoryPage() {
       <ApprovedTradingHeader
         brandHref="/terminal"
         brandLabel="Balancita, ir a la terminal"
-        navigation={appNavigation('laboratorio')}
+        navigation={appNavigation('estrategias')}
         status={
           <span className="demo-shell__badge">PAPER · SIN ÓRDENES REALES</span>
         }

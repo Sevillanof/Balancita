@@ -5,7 +5,7 @@ import type { BacktestTrade } from './strategy-api.ts'
  * every decision +1 hit / -1 miss after its horizon, plus the same paper book
  * and costs as the strategy backtest.
  */
-export const QWEN_SCORES_URL = '/api-live/qwen/scores?product=PF_XBTUSD'
+export const QWEN_SCORES_URL = '/api-live/qwen/scores'
 
 export type QwenOption = 'buy' | 'hold' | 'sell'
 
@@ -56,9 +56,12 @@ export type QwenScores = {
 
 export async function loadQwenScores(
   fetcher: typeof fetch = (...args) => fetch(...args),
+  product = 'PF_XBTUSD',
 ): Promise<QwenScores> {
   try {
-    const response = await fetcher(QWEN_SCORES_URL)
+    const response = await fetcher(
+      `${QWEN_SCORES_URL}?product=${encodeURIComponent(product)}`,
+    )
     const body = (await response.json()) as Partial<QwenScores>
     if (!response.ok && body.status === undefined)
       return { status: 'off', reason: `HTTP ${response.status}`, products: [] }

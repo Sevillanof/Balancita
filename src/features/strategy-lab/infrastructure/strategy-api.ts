@@ -142,10 +142,10 @@ export class StrategyApiError extends Error {
 
 export interface StrategyApi {
   readonly mode: 'registry' | 'example'
-  ranking(days: PeriodDays): Promise<Ranking>
+  ranking(days: PeriodDays, product?: string): Promise<Ranking>
   detail(id: string, version?: number): Promise<StrategyDetail>
-  backtest(ref: SpecRef, days: PeriodDays): Promise<Backtest>
-  evaluate(ref: SpecRef): Promise<Evaluation>
+  backtest(ref: SpecRef, days: PeriodDays, product?: string): Promise<Backtest>
+  evaluate(ref: SpecRef, product?: string): Promise<Evaluation>
   save(
     spec: StrategySpec,
     mode: 'modify' | 'new',
@@ -169,7 +169,7 @@ export interface StrategyApi {
   ): Promise<StrategyEntry & { gates: Gate[] }>
 }
 
-const PRODUCT = 'PF_XBTUSD'
+export const DEFAULT_PRODUCT = 'PF_XBTUSD'
 
 export function httpStrategyApi(
   base = STRATEGIES_API_BASE,
@@ -203,16 +203,18 @@ export function httpStrategyApi(
     }
     return payload as T
   }
-  const product = { product: PRODUCT }
   return {
     mode: 'registry',
-    ranking: (days) => request(`/ranking?product=${PRODUCT}&days=${days}`),
+    ranking: (days, product = DEFAULT_PRODUCT) =>
+      request(`/ranking?product=${encodeURIComponent(product)}&days=${days}`),
     detail: (id, version) =>
       request(
         `/strategies/${encodeURIComponent(id)}${version ? `?version=${version}` : ''}`,
       ),
-    backtest: (ref, days) => request('/backtest', { ...ref, ...product, days }),
-    evaluate: (ref) => request('/evaluate', { ...ref, ...product }),
+    backtest: (ref, days, product = DEFAULT_PRODUCT) =>
+      request('/backtest', { ...ref, product, days }),
+    evaluate: (ref, product = DEFAULT_PRODUCT) =>
+      request('/evaluate', { ...ref, product }),
     save: (spec, mode, newName) =>
       request('/strategies', {
         spec,
