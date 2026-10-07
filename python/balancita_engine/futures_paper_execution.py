@@ -40,6 +40,8 @@ from decimal import ROUND_FLOOR, Decimal, InvalidOperation, localcontext
 from .canonical import canonical_json, normalize_decimal
 from .futures_costs import MAKER_RATE, TAKER_RATE
 from .futures_ledger import FuturesLedger
+from .futures_instruments import lot_size
+from .futures_products import resolve_products
 from .futures_strategies import C25_ID, C26_ID, C27_ID, C28_ID, STRATEGY_IDS, propose
 
 PAPER_EXECUTION_CONFIG = {
@@ -61,14 +63,22 @@ PAPER_EXECUTION_CONFIG = {
     "min_qty": "0.0001",
     "max_funding_staleness_ms": 7_200_000,
 }
-# What the service runs live: one independent book per strategy, 100 USD per trade, long or short.
-BOOKS_EXECUTION_CONFIG = dict(
-    PAPER_EXECUTION_CONFIG,
-    version="futures-paper-execution-config.v3-books",
-    fixed_notional_usd="100",
-    books=list(STRATEGY_IDS),
-)
 
+
+def books_execution_config(products=None):
+    """What the service runs live: one independent book per strategy and product, 100 USD per trade."""
+    ids = [product_id for product_id, _ in resolve_products(products)] if products is None or isinstance(
+        products, str) else list(products)
+    return dict(
+        PAPER_EXECUTION_CONFIG,
+        version="futures-paper-execution-config.v4-books",
+        fixed_notional_usd="100",
+        books=list(STRATEGY_IDS),
+        products=ids,
+    )
+
+
+BOOKS_EXECUTION_CONFIG = books_execution_config()
 GENESIS_HASH = "0" * 64
 
 DAY_MS = 86_400_000
@@ -301,6 +311,8 @@ class PaperExecutionEngine:
         self.max_staleness = c["max_funding_staleness_ms"]
         # Independent-book mode (SS-05): a fixed notional per trade instead of risk sizing.
         self.fixed_notional = Decimal(c["fixed_notional_usd"]) if c.get("fixed_notional_usd") else None
+        # Funding history is captured for the BTC perpetual only; other products' books do not wait for it.
+        self.require_funding = c.get("require_funding", True)
         self.ledger = self._new_ledger()
         self.trade = None
         self.pending = None
@@ -426,6 +438,8 @@ class PaperExecutionEngine:
                 "opened_at_ms": trade["opened_at_ms"], "stop": trade["stop"],
                 "target": trade["target"], "strategy_id": trade["strategy_id"],
             }
+            if self.config.get("product_id"):
+                position["product_id"] = self.config["product_id"]
         net = ledger.realized_gross - ledger.fees - ledger.funding_paid
         return {
             "cash_usd": _s(balance), "realized_gross_usd": _s(ledger.realized_gross),
@@ -451,8 +465,8 @@ class PaperExecutionEngine:
         causes = []
         if self._latched(time_ms):
             causes.append("daily_loss_latched")
-        if (self.latest_funding_end is None
-                or time_ms - self.latest_funding_end > self.max_staleness):
+        if self.require_funding and (self.latest_funding_end is None
+                                     or time_ms - self.latest_funding_end > self.max_staleness):
             causes.append("funding_unresolved")
         if self.pending is not None:
             causes.append("order_pending")
@@ -816,11 +830,11 @@ BOOK_NOTIONAL_USD = "100"
 class _BookSink:
     """Tags every event of one book and forwards it to the shared, hash-chained store."""
 
-    def __init__(self, sink, book):
-        self.sink, self.book = sink, book
+    def __init__(self, sink, book, product_id):
+        self.sink, self.book, self.product_id = sink, book, product_id
 
     def emit(self, kind, time_ms, body):
-        self.sink.emit(kind, time_ms, dict(body, book=self.book))
+        self.sink.emit(kind, time_ms, dict(body, book=self.book, product_id=self.product_id))
 
     def snapshot(self, *args):  # snapshots belong to the multi engine
         raise AssertionError("a book never snapshots on its own")
@@ -848,17 +862,23 @@ class MultiBookEngine:
         self.config = dict(config)
         self.snapshot_every_events = snapshot_every_events
         self.snapshot_interval_ms = snapshot_interval_ms
-        book_config = {k: v for k, v in self.config.items() if k != "books"}
+        shared = {k: v for k, v in self.config.items() if k not in ("books", "products")}
         saved = {}
         if state is not None:
             if state.get("version") != MULTI_STATE_VERSION:
                 raise ValueError("unsupported paper execution state version")
             saved = state["books"]
-        self.books = {
-            strategy_id: PaperExecutionEngine(
-                book_config, _BookSink(sink, strategy_id), state=saved.get(strategy_id))
-            for strategy_id in self.config["books"]
-        }
+        self.books = {}
+        self.product_of = {}
+        for product_id in self.config.get("products") or [BTC_PRODUCT]:
+            lot = lot_size(product_id)
+            for strategy_id in self.config["books"]:
+                key = "{}:{}".format(strategy_id, product_id)
+                book_config = dict(shared, lot_size=lot, min_qty=lot, product_id=product_id,
+                                   require_funding=product_id == BTC_PRODUCT)
+                self.books[key] = PaperExecutionEngine(
+                    book_config, _BookSink(sink, key, product_id), state=saved.get(key))
+                self.product_of[key] = (strategy_id, product_id)
         self.events_since_snapshot = 0 if state is None else state["events_since_snapshot"]
         self.last_snapshot_time = None if state is None else state["last_snapshot_time"]
 
@@ -871,7 +891,12 @@ class MultiBookEngine:
         }
 
     def process(self, item):
-        for strategy_id, book in self.books.items():
+        # Tickers and verdicts reach the books of their product; the funding history is the BTC perpetual's.
+        product = item.get("product_id", BTC_PRODUCT) if item["kind"] != "funding" else BTC_PRODUCT
+        for key, book in self.books.items():
+            strategy_id, product_id = self.product_of[key]
+            if product_id != product:
+                continue
             if item["kind"] == "verdict":
                 book.process(dict(item, data=_book_verdict(item["data"], strategy_id)))
             else:
@@ -934,17 +959,29 @@ class _Reader:
             pass
 
 
+# The legacy single-book engine trades the BTC perpetual only; the independent
+# books (SS-05/SS-07) trade every product in the config's `products`.
+VERDICT_PRODUCT = "PF_XBTUSD"
+BTC_PRODUCT = VERDICT_PRODUCT
+
+
 class _MarketReader(_Reader):
     tables = ("paper_futures_market_events", "paper_futures_funding_periods")
+
+    def __init__(self, path, timeout_s, products=(VERDICT_PRODUCT,)):
+        super().__init__(path, timeout_s)
+        self.products = tuple(products)
+        self._marks = ",".join("?" * len(self.products))
 
     def probe_ticker(self):
         return self.db.execute("SELECT MAX(rowid) FROM paper_futures_market_events").fetchone()[0]
 
     def fetch_tickers(self, after, upto, limit):
         return self.db.execute(
-            "SELECT rowid, received_at, normalized_json FROM paper_futures_market_events "
-            "WHERE rowid>? AND rowid<=? AND feed='ticker' ORDER BY rowid LIMIT ?",
-            (after, upto, limit),
+            "SELECT rowid, received_at, normalized_json, product_id FROM paper_futures_market_events "
+            "WHERE rowid>? AND rowid<=? AND feed='ticker' AND product_id IN ({}) ORDER BY rowid LIMIT ?".format(
+                self._marks),
+            (after, upto, *self.products, limit),
         ).fetchall()
 
     def probe_funding(self):
@@ -958,24 +995,25 @@ class _MarketReader(_Reader):
         ).fetchall()
 
 
-# Paper execution trades the BTC perpetual only; the verdicts DB also holds the
-# other PF_* products' verdict streams (research/forecasting), which D ignores.
-VERDICT_PRODUCT = "PF_XBTUSD"
-
-
 class _VerdictReader(_Reader):
     tables = ("paper_futures_verdicts",)
 
+    def __init__(self, path, timeout_s, products=(VERDICT_PRODUCT,)):
+        super().__init__(path, timeout_s)
+        self.products = tuple(products)
+        self._marks = ",".join("?" * len(self.products))
+
     def probe(self):
         return self.db.execute(
-            "SELECT MAX(bucket_start) FROM paper_futures_verdicts WHERE product_id=?", (VERDICT_PRODUCT,)
+            "SELECT MAX(rowid) FROM paper_futures_verdicts WHERE product_id IN ({})".format(self._marks),
+            self.products,
         ).fetchone()[0]
 
     def fetch(self, after, upto, limit):
         return self.db.execute(
-            "SELECT bucket_start, written_at, payload_json FROM paper_futures_verdicts "
-            "WHERE product_id=? AND bucket_start>? AND bucket_start<=? ORDER BY bucket_start LIMIT ?",
-            (VERDICT_PRODUCT, after, upto, limit),
+            "SELECT rowid, written_at, payload_json, product_id FROM paper_futures_verdicts "
+            "WHERE product_id IN ({}) AND rowid>? AND rowid<=? ORDER BY rowid LIMIT ?".format(self._marks),
+            (*self.products, after, upto, limit),
         ).fetchall()
 
 
@@ -1028,7 +1066,7 @@ class _TickerSource(_Source):
             return
         rows = reader.fetch_tickers(self.scan, upto, READ_BATCH)
         self.scan = rows[-1][0] if len(rows) == READ_BATCH else upto
-        for rowid, received_at, normalized in rows:
+        for rowid, received_at, normalized, product_id in rows:
             try:
                 parsed = _json(normalized)
                 raw = parsed.get("raw") or {}
@@ -1038,7 +1076,8 @@ class _TickerSource(_Source):
                 }
             except (ValueError, AttributeError):
                 data = {"bid": None, "ask": None, "mark": None, "bid_size": None, "ask_size": None}
-            self.buffer.append({"kind": "ticker", "time": self._clamp(received_at), "id": rowid, "data": data})
+            self.buffer.append({"kind": "ticker", "time": self._clamp(received_at), "id": rowid, "data": data,
+                                "product_id": product_id})
 
 
 class _VerdictSource(_Source):
@@ -1050,13 +1089,14 @@ class _VerdictSource(_Source):
             return
         rows = reader.fetch(self.scan, upto, 200)
         self.scan = rows[-1][0] if len(rows) == 200 else upto
-        for bucket_start, written_at, payload in rows:
+        for rowid, written_at, payload, product_id in rows:
             try:
                 data = _json(payload)
             except ValueError:
                 data = {"action": "WAIT"}
             self.buffer.append({
-                "kind": "verdict", "time": self._clamp(written_at), "id": bucket_start, "data": data,
+                "kind": "verdict", "time": self._clamp(written_at), "id": rowid, "data": data,
+                "product_id": product_id,
             })
 
 
@@ -1116,6 +1156,7 @@ class PaperExecutionService:
         self.busy_timeout_s = busy_timeout_s
         self.market = None
         self.verdict_reader = None
+        self.products = tuple(store.config.get("products") or (VERDICT_PRODUCT,))
         self._trace = None
         self._unavailable = None
         self.processed_total = 0
@@ -1164,10 +1205,10 @@ class PaperExecutionService:
         if self.verdict_reader is not None and self.verdict_reader.replaced():
             self._drop()
         if self.market is None:
-            self.market = _MarketReader(self.market_db_path, self.busy_timeout_s)
+            self.market = _MarketReader(self.market_db_path, self.busy_timeout_s, self.products)
             self.market.db.set_trace_callback(self._trace)
         if self.verdict_reader is None:
-            self.verdict_reader = _VerdictReader(self.verdicts_db_path, self.busy_timeout_s)
+            self.verdict_reader = _VerdictReader(self.verdicts_db_path, self.busy_timeout_s, self.products)
             self.verdict_reader.db.set_trace_callback(self._trace)
         for name, reader in (("market", self.market), ("verdicts", self.verdict_reader)):
             if not reader.available:

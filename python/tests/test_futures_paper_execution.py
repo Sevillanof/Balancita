@@ -54,7 +54,7 @@ class MarketDb:
         connection.executescript(MARKET_DDL)
         connection.close()
 
-    def tickers(self, rows):
+    def tickers(self, rows, product="PF_XBTUSD"):
         """rows: (received_at, bid, ask, mark[, bid_size, ask_size])."""
         connection = sqlite3.connect(self.path)
         with connection:
@@ -69,7 +69,7 @@ class MarketDb:
                 }
                 connection.execute(
                     "INSERT INTO paper_futures_market_events VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-                    ("e{}".format(self.count), "ticker", "PF_XBTUSD", 1, self.count, received_at - 20,
+                    ("e{}".format(self.count), "ticker", product, 1, self.count, received_at - 20,
                      received_at, received_at, None, "{}", json.dumps(normalized), "h{}".format(self.count)),
                 )
                 # Interleaved non-ticker rows must be ignored.

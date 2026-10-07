@@ -24,6 +24,13 @@ from test_futures_paper_execution import (  # noqa: E402
 )
 
 
+BTC = "PF_XBTUSD"
+
+
+def key(strategy, product=BTC):
+    return "{}:{}".format(strategy, product)
+
+
 def proposal(strategy, action, stop, target, bucket):
     return {
         "strategy_id": strategy, "action": action, "delegated_strategy_id": None,
@@ -33,14 +40,14 @@ def proposal(strategy, action, stop, target, bucket):
 
 
 class BooksCase(Case):
-    def add_verdict(self, proposals, written_at=BASE + 4 * SECOND):
+    def add_verdict(self, proposals, written_at=BASE + 4 * SECOND, product=BTC):
         bucket = written_at - MINUTE - 3 * SECOND
         bucket -= bucket % MINUTE
         payload = verdict_payload(bucket)
         payload["proposals"] = [proposal(s, a, st, tg, bucket) for s, a, st, tg in proposals]
         payload["action"] = "ABSTAIN"  # what the shared selection says when strategies disagree
         payload["selected"] = {"action": "ABSTAIN", "reason_code": "conflicting_signals"}
-        self.verdicts.add(bucket, written_at, payload)
+        self.verdicts.add(bucket, written_at, payload, product=product)
         return bucket, written_at
 
     def books_replay(self, name="books.sqlite"):
@@ -65,9 +72,9 @@ class IndependentBookTests(BooksCase):
         self.market.tickers([(written + 150, "100010", "100011", "100010", "100", "100")])
         self.books_replay()
         opened = self.by_book("position_opened")
-        self.assertEqual(set(opened), {C25, C26})
-        self.assertEqual(opened[C25][0]["side"], "long")
-        self.assertEqual(opened[C26][0]["side"], "short")
+        self.assertEqual(set(opened), {key(C25), key(C26)})
+        self.assertEqual(opened[key(C25)][0]["side"], "long")
+        self.assertEqual(opened[key(C26)][0]["side"], "short")
         for book, events in opened.items():
             notional = Decimal(events[0]["quantity"]) * Decimal(events[0]["entry_price"])
             self.assertLessEqual(notional, Decimal("100"), book)
@@ -84,16 +91,16 @@ class IndependentBookTests(BooksCase):
         ])
         self.books_replay()
         opened = self.by_book("position_opened")
-        self.assertEqual(len(opened[C25]), 1)
-        self.assertEqual(len(opened[C27]), 1)
-        skipped = [b for b in self.by_book("verdict_considered")[C25] if b["outcome"] == "skipped"]
+        self.assertEqual(len(opened[key(C25)]), 1)
+        self.assertEqual(len(opened[key(C27)]), 1)
+        skipped = [b for b in self.by_book("verdict_considered")[key(C25)] if b["outcome"] == "skipped"]
         self.assertEqual([b["reason"] for b in skipped], ["position_open"])
 
     def test_a_strategy_with_no_signal_never_trades(self):
         _, written = self.add_verdict([(C25, "LONG", "95001", "100500")])
         self.market.tickers([(written + 150, "100010", "100011", "100010", "100", "100")])
         self.books_replay()
-        self.assertEqual(set(self.by_book("position_opened")), {C25})
+        self.assertEqual(set(self.by_book("position_opened")), {key(C25)})
 
     def test_replay_is_deterministic_and_restart_resumes_the_same_chain(self):
         _, written = self.add_verdict([
@@ -106,7 +113,7 @@ class IndependentBookTests(BooksCase):
         # Running again on the same DB re-derives and matches every stored event.
         self.assertEqual(self.books_replay("a.sqlite"), first)
         books = {json.loads(r[2])["body"].get("book") for r in account_rows(self.path("a.sqlite"))}
-        self.assertEqual(books, {C25, C26})
+        self.assertEqual(books, {key(C25), key(C26)})
 
     def test_state_snapshots_restore_every_book(self):
         _, written = self.add_verdict([
@@ -119,10 +126,34 @@ class IndependentBookTests(BooksCase):
         self.assertGreater(store.snapshot_seq, 0)
         store.close()
         restored = AccountStore(self.path("snap.sqlite"), BOOKS_EXECUTION_CONFIG)
-        self.assertEqual(set(restored.restored[0]["books"]), {C25, C26, C27, "c28-adapter-perp-v1"})
+        self.assertEqual(len(restored.restored[0]["books"]), 4 * len(BOOKS_EXECUTION_CONFIG["products"]))
         process_available(self.market.path, self.verdicts.path, restored)
         self.assertEqual(restored.head_hash, plain)
         restored.close()
+
+    def test_every_pinned_product_has_its_own_books_and_lot(self):
+        _, written = self.add_verdict([(C25, "LONG", "1900", "2100")], product="PF_ETHUSD")
+        self.market.tickers([(written + 150, "2000.0", "2000.2", "2000.1", "50", "50")], product="PF_ETHUSD")
+        # A BTC tick right after must not fill the ETH book, and BTC books have no signal.
+        self.market.tickers([(written + 160, "100010", "100011", "100010", "100", "100")])
+        self.books_replay()
+        opened = self.by_book("position_opened")
+        self.assertEqual(set(opened), {key(C25, "PF_ETHUSD")})
+        quantity = Decimal(opened[key(C25, "PF_ETHUSD")][0]["quantity"])
+        self.assertEqual(quantity % Decimal("0.001"), 0)
+        self.assertEqual(opened[key(C25, "PF_ETHUSD")][0]["product_id"], "PF_ETHUSD")
+        self.assertLessEqual(quantity * Decimal("2000.2"), Decimal("100"))
+        self.assertGreater(quantity * Decimal("2000.2"), Decimal("97"))
+
+    def test_the_same_strategy_trades_two_products_independently(self):
+        _, written = self.add_verdict([(C25, "LONG", "1900", "2100")], product="PF_ETHUSD")
+        self.add_verdict([(C25, "SHORT", "105001", "99500")])
+        self.market.tickers([(written + 150, "2000.0", "2000.2", "2000.1", "50", "50")], product="PF_ETHUSD")
+        self.market.tickers([(written + 160, "100010", "100011", "100010", "100", "100")])
+        self.books_replay()
+        opened = self.by_book("position_opened")
+        self.assertEqual(opened[key(C25, "PF_ETHUSD")][0]["side"], "long")
+        self.assertEqual(opened[key(C25)][0]["side"], "short")
 
 
 if __name__ == "__main__":
