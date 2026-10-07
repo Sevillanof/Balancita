@@ -1,0 +1,111 @@
+{
+  "schema": "balancita-strategy.v1",
+  "id": "c30-momentum-12h-perp-v1",
+  "version": 1,
+  "name": "C30 Momentum logarítmico 12 h",
+  "description": "Variante de C29 con retorno logarítmico de 12 h (144 velas de 5 m) sobre 2,5 desviaciones de la volatilidad diaria. Registrada el 2026-10-07 para medirla hacia delante: sus parámetros se eligieron mirando datos ya usados.",
+  "params": {
+    "z_min": "2.5",
+    "sqrt_bars": "12",
+    "stop_atr": "2",
+    "target_stop_ratio": "1.5"
+  },
+  "indicators": {
+    "logret": [144],
+    "logvol": [288]
+  },
+  "rules": {
+    "gates": [
+      {
+        "require": "trend",
+        "reason": "trend_features_unavailable",
+        "condition": "trend_features_ready"
+      }
+    ],
+    "checks": [
+      {
+        "name": "long",
+        "node": {
+          "all": [
+            {
+              "available": "log_volatility_available",
+              "operand": "5m.logvol288"
+            },
+            {
+              "cmp": "log_return_12h_above_z_sigma",
+              "left": "5m.logret144",
+              "op": ">",
+              "right": {
+                "mul": [
+                  {
+                    "mul": ["5m.logvol288", "$z_min"]
+                  },
+                  "$sqrt_bars"
+                ]
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "short",
+        "node": {
+          "all": [
+            {
+              "available": "log_volatility_available",
+              "operand": "5m.logvol288"
+            },
+            {
+              "cmp": "log_return_12h_below_minus_z_sigma",
+              "left": {
+                "mul": ["5m.logret144", "-1"]
+              },
+              "op": ">",
+              "right": {
+                "mul": [
+                  {
+                    "mul": ["5m.logvol288", "$z_min"]
+                  },
+                  "$sqrt_bars"
+                ]
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "sides": {
+      "LONG": {
+        "requires": ["long"],
+        "reason": "c29_long_momentum",
+        "invalidation": "stop_or_24h_time_stop"
+      },
+      "SHORT": {
+        "requires": ["short"],
+        "reason": "c29_short_momentum",
+        "invalidation": "stop_or_24h_time_stop"
+      }
+    },
+    "exit": {
+      "LONG": {
+        "cmp": "no_rule_exit_stop_target_or_24h",
+        "left": "0",
+        "op": ">",
+        "right": "1"
+      },
+      "SHORT": {
+        "cmp": "no_rule_exit_stop_target_or_24h",
+        "left": "0",
+        "op": ">",
+        "right": "1"
+      }
+    },
+    "risk": {
+      "stop_atr": "$stop_atr",
+      "target_stop_ratio": "$target_stop_ratio",
+      "vol": "5m.logvol288",
+      "vol_minutes": 5
+    },
+    "horizon_minutes": 1440
+  }
+}

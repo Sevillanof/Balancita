@@ -18,6 +18,7 @@ from balancita_engine.futures_strategy_reliability import (
     summarize_trades,
     verdict_for,
     wilson_interval,
+    deflated_probability,
 )
 
 from test_futures_spec_strategy import FIVE, MINUTE, START, _official
@@ -201,8 +202,24 @@ class ReliabilityTests(unittest.TestCase):
         self.assertEqual(verdict_for(200, 20, 1.7, 2, 4), "no_edge")
         self.assertEqual(verdict_for(200, 20, 1.2, 4, 4), "candidate_edge")
         self.assertEqual(verdict_for(200, 20, 1.2, 2, 4), "no_edge")
+        self.assertEqual(verdict_for(200, 20, 0.8, 4, 4), "no_edge")
         self.assertEqual(verdict_for(200, 20, 3.0, 4, 4), "reliable_edge")
         self.assertEqual(verdict_for(99, 20, 3.0, 4, 4), "tentative_edge")
+
+    def test_searching_many_configurations_deflates_a_good_looking_result(self):
+        rng = random.Random(4)
+        values = [20 + rng.gauss(0, 150) for _ in range(300)]
+        alone = deflated_probability(values, 1)
+        searched = deflated_probability(values, 1000)
+        self.assertGreater(alone, 0.9)
+        self.assertLess(searched, alone)
+        self.assertLess(searched, 0.9)
+
+    def test_a_searched_spec_is_capped_at_candidate_until_it_survives_deflation(self):
+        self.assertEqual(verdict_for(300, 50, 3.0, 4, 4, deflated=0.5, trials=1000), "candidate_edge")
+        self.assertEqual(verdict_for(300, 50, 3.0, 4, 4, deflated=0.95, trials=1000), "reliable_edge")
+        self.assertEqual(verdict_for(300, 50, 3.0, 4, 4, deflated=0.5, trials=1), "reliable_edge")
+        self.assertEqual(verdict_for(300, 50, 3.0, 1, 4, deflated=0.99, trials=1000), "no_edge")
 
     def test_clustering_by_day_lowers_confidence_when_trades_share_a_day(self):
         independent = [_trade(30 if i % 2 else -10, i) for i in range(100)]
@@ -244,10 +261,12 @@ class ReliabilityTests(unittest.TestCase):
             self.assertEqual(table["strategies"][strategy_id]["verdict"], "negative_edge")
             self.assertLess(table["strategies"][strategy_id]["mean_net_bp"], 0)
 
-    def test_c29_is_never_presented_as_proven(self):
-        entry = load_reliability()["strategies"][C29]
-        self.assertNotEqual(entry["verdict"], "reliable_edge")
-        self.assertGreater(entry["mean_net_bp"], 0)
+    def test_searched_momentum_specs_are_never_presented_as_proven(self):
+        for strategy_id in (C29, "c30-momentum-12h-perp-v1"):
+            entry = load_reliability()["strategies"][strategy_id]
+            self.assertIn(entry["verdict"], ("no_edge", "candidate_edge"), strategy_id)
+            self.assertEqual(entry["selection_trials"], 1000)
+            self.assertIn("previous", entry["by_range"])
 
 
 class QwenReliabilityFieldTests(unittest.TestCase):

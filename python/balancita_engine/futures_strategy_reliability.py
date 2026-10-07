@@ -16,10 +16,16 @@ what happened, plus how much of it could be luck.
 
   ``insufficient_data``  fewer than ``MIN_TRADES`` trades;
   ``negative_edge``      mean below zero and t <= -1.64: it loses after costs;
-  ``no_edge``            no positive mean, or positive in too few folds to mean anything;
-  ``candidate_edge``     positive mean in at least three quarters of the folds, but t < 1.64: it may be luck;
+  ``no_edge``            no positive mean, positive in too few folds, or t < 1.0: indistinguishable from nothing;
+  ``candidate_edge``     positive mean in at least three quarters of the folds and 1.0 <= t < 1.64: it may well be luck;
   ``tentative_edge``     mean above zero, t >= 1.64 and at least three quarters of the folds positive;
   ``reliable_edge``      t >= 2.58, every fold positive and at least ``RELIABLE_TRADES`` trades.
+
+A spec found by searching many configurations (``SELECTION_TRIALS``) must also survive the
+deflated Sharpe ratio (Bailey and Lopez de Prado): the best of N tries is expected to look
+good by luck, so its per-trade Sharpe is compared with the best Sharpe N lucky tries would
+show, ``TRIAL_SHARPE_SD`` apart. If that probability is below ``DEFLATED_MIN`` the verdict is
+capped at ``candidate_edge``, whatever the t-statistic says.
 
 ``build_reliability`` runs the specs over each product's candles and the result is
 stored in ``config/strategy-reliability.json``; Qwen reads it through the
@@ -43,9 +49,16 @@ DEFAULT_PATH = os.path.normpath(os.path.join(DEFAULT_SPEC_DIR, "..", "strategy-r
 MIN_TRADES = 30
 RELIABLE_TRADES = 100
 FOLDS = 4
+T_CANDIDATE = 1.0
 T_TENTATIVE = 1.64
 T_RELIABLE = 2.58
 DAY_MS = 86_400_000
+DEFLATED_MIN = 0.90
+# Spread (standard deviation) of the per-trade Sharpe ratio across the configurations that were
+# tried; measured on the 2026-10-07 sweep as the spread of mean net bp divided by the per-trade deviation.
+TRIAL_SHARPE_SD = 0.11
+# How many configurations were looked at to arrive at each spec (1 = designed without a search).
+SELECTION_TRIALS = {"c29-momentum-perp-v1": 1000, "c30-momentum-12h-perp-v1": 1000}
 VERDICTS = ("insufficient_data", "negative_edge", "no_edge", "candidate_edge", "tentative_edge", "reliable_edge")
 
 
@@ -86,7 +99,31 @@ def _folds_positive(trades, first_ms, last_ms, folds=FOLDS):
     return sum(1 for g in judged if statistics.fmean(g) > 0), len(judged)
 
 
-def verdict_for(count, mean, t_stat, positive_folds, judged_folds):
+def deflated_probability(values, trials, *, trial_sd=TRIAL_SHARPE_SD):
+    """Probability that the per-trade Sharpe of ``values`` beats what the best of ``trials`` lucky tries shows."""
+    count = len(values)
+    if count < 3:
+        return None
+    mean = statistics.fmean(values)
+    deviation = statistics.pstdev(values)
+    if deviation == 0:
+        return None
+    sharpe = mean / deviation
+    normal = statistics.NormalDist()
+    benchmark = 0.0
+    if trials > 1:
+        gamma = 0.5772156649015329
+        benchmark = trial_sd * ((1 - gamma) * normal.inv_cdf(1 - 1 / trials)
+                                + gamma * normal.inv_cdf(1 - 1 / (trials * math.e)))
+    skew = statistics.fmean([((v - mean) / deviation) ** 3 for v in values])
+    kurtosis = statistics.fmean([((v - mean) / deviation) ** 4 for v in values])
+    denominator = 1 - skew * sharpe + (kurtosis - 1) / 4 * sharpe ** 2
+    if denominator <= 0:
+        return None
+    return normal.cdf((sharpe - benchmark) * math.sqrt(count - 1) / math.sqrt(denominator))
+
+
+def verdict_for(count, mean, t_stat, positive_folds, judged_folds, deflated=None, trials=1):
     if count < MIN_TRADES:
         return "insufficient_data"
     if t_stat is None:
@@ -95,22 +132,25 @@ def verdict_for(count, mean, t_stat, positive_folds, judged_folds):
         return "negative_edge"
     if mean <= 0:
         return "no_edge"
+    mostly_positive = bool(judged_folds and positive_folds >= math.ceil(judged_folds * 0.75))
+    if not mostly_positive or t_stat < T_CANDIDATE:
+        return "no_edge"
+    if trials > 1 and (deflated is None or deflated < DEFLATED_MIN):
+        return "candidate_edge"  # the best of many tries looks good by luck
     if (t_stat >= T_RELIABLE and count >= RELIABLE_TRADES
             and judged_folds >= FOLDS and positive_folds == judged_folds):
         return "reliable_edge"
-    mostly_positive = judged_folds and positive_folds >= math.ceil(judged_folds * 0.75)
-    if mostly_positive and t_stat >= T_TENTATIVE:
-        return "tentative_edge"
-    return "candidate_edge" if mostly_positive else "no_edge"
+    return "tentative_edge" if t_stat >= T_TENTATIVE else "candidate_edge"
 
 
-def summarize_trades(trades, *, first_ms=None, last_ms=None):
+def summarize_trades(trades, *, first_ms=None, last_ms=None, selection_trials=1):
     """Reliability figures over trades (dicts with ``net_bp``, ``pnl_usd``, ``entry_time_ms``)."""
     count = len(trades)
     if count == 0:
         return {"trades": 0, "wins": 0, "hit_rate": None, "hit_rate_ci95": [None, None], "mean_net_bp": None,
                 "median_net_bp": None, "t_stat": None, "folds_positive": 0, "folds_judged": 0,
-                "pnl_usd": 0.0, "verdict": "insufficient_data"}
+                "pnl_usd": 0.0, "selection_trials": selection_trials, "deflated_probability": None,
+                "verdict": "insufficient_data"}
     values = [t["net_bp"] for t in trades]
     wins = sum(1 for t in trades if t["pnl_usd"] > 0)
     low, high = wilson_interval(wins, count)
@@ -119,6 +159,7 @@ def summarize_trades(trades, *, first_ms=None, last_ms=None):
     first = first_ms if first_ms is not None else min(t["entry_time_ms"] for t in trades)
     last = last_ms if last_ms is not None else max(t["entry_time_ms"] for t in trades)
     positive, judged = _folds_positive(trades, first, last)
+    deflated = deflated_probability(values, selection_trials)
     return {
         "trades": count, "wins": wins, "hit_rate": round(wins / count, 4),
         "hit_rate_ci95": [round(low, 4), round(high, 4)],
@@ -126,7 +167,9 @@ def summarize_trades(trades, *, first_ms=None, last_ms=None):
         "t_stat": None if t_stat is None else round(t_stat, 2),
         "folds_positive": positive, "folds_judged": judged,
         "pnl_usd": round(sum(t["pnl_usd"] for t in trades), 2),
-        "verdict": verdict_for(count, mean, t_stat, positive, judged),
+        "selection_trials": selection_trials,
+        "deflated_probability": None if deflated is None else round(deflated, 4),
+        "verdict": verdict_for(count, mean, t_stat, positive, judged, deflated, selection_trials),
     }
 
 
@@ -147,7 +190,8 @@ def aggregate(specs, trades_by_strategy, *, first_ms, last_ms, products, warmup_
     for spec in specs:
         per_product = trades_by_strategy.get(spec["id"], {})
         pooled = [t for rows in per_product.values() for t in rows]
-        entry = summarize_trades(pooled, first_ms=first_ms, last_ms=last_ms)
+        entry = summarize_trades(pooled, first_ms=first_ms, last_ms=last_ms,
+                                 selection_trials=SELECTION_TRIALS.get(spec["id"], 1))
         entry["spec_hash"] = spec_hash(spec)
         entry["version"] = spec["version"]
         entry["by_product"] = {
@@ -162,7 +206,7 @@ def aggregate(specs, trades_by_strategy, *, first_ms, last_ms, products, warmup_
                    "products": sorted(products), "folds": FOLDS},
         "source": source,
         "thresholds": {"min_trades": MIN_TRADES, "reliable_trades": RELIABLE_TRADES,
-                       "t_tentative": T_TENTATIVE, "t_reliable": T_RELIABLE},
+                       "t_candidate": T_CANDIDATE, "t_tentative": T_TENTATIVE, "t_reliable": T_RELIABLE},
         "strategies": strategies,
     }
 

@@ -4,7 +4,7 @@
     "version": "kraken-futures-costs.v2"
   },
   "period": {
-    "first_bucket_ms": 1770916800000,
+    "first_bucket_ms": 1750182780000,
     "folds": 4,
     "last_bucket_ms": 1791393540000,
     "products": [
@@ -17,341 +17,549 @@
       "PF_XRPUSD",
       "PF_ZECUSD"
     ],
+    "ranges": {
+      "previous": {
+        "first_bucket_ms": 1750182780000,
+        "last_bucket_ms": 1770659520000
+      },
+      "recent": {
+        "first_bucket_ms": 1770916800000,
+        "last_bucket_ms": 1791393540000
+      }
+    },
     "warmup_ms": 259200000
   },
   "schema": "futures-strategy-reliability.v1",
-  "source": "Kraken Futures charts API, trade candles, 1m and 5m (240 days to 2026-10-07)",
+  "source": "Kraken Futures charts API, trade candles 1m and 5m; two 240-day ranges (2025-06-14..2026-02-09 and 2026-02-15..2026-10-07)",
   "strategies": {
     "c25-pullback-perp-v1": {
       "by_product": {
         "PF_ADAUSD": {
-          "hit_rate": 0.1942,
-          "mean_net_bp": -15.98,
-          "pnl_usd": -2011.59,
-          "trades": 12590
+          "hit_rate": 0.1936,
+          "mean_net_bp": -16.09,
+          "pnl_usd": -4382.42,
+          "trades": 27229
         },
         "PF_ETHUSD": {
-          "hit_rate": 0.1631,
-          "mean_net_bp": -10.84,
-          "pnl_usd": -1731.4,
-          "trades": 15969
+          "hit_rate": 0.1728,
+          "mean_net_bp": -10.55,
+          "pnl_usd": -3524.32,
+          "trades": 33406
         },
         "PF_HYPEUSD": {
-          "hit_rate": 0.2168,
-          "mean_net_bp": -13.38,
-          "pnl_usd": -1630.39,
-          "trades": 12185
+          "hit_rate": 0.2396,
+          "mean_net_bp": -13.31,
+          "pnl_usd": -2445.07,
+          "trades": 18369
         },
         "PF_NEARUSD": {
-          "hit_rate": 0.2082,
-          "mean_net_bp": -18.37,
-          "pnl_usd": -2240.63,
-          "trades": 12194
+          "hit_rate": 0.2123,
+          "mean_net_bp": -18.31,
+          "pnl_usd": -4220.17,
+          "trades": 23054
         },
         "PF_SOLUSD": {
-          "hit_rate": 0.1758,
-          "mean_net_bp": -11.09,
-          "pnl_usd": -1896.24,
-          "trades": 17101
+          "hit_rate": 0.1798,
+          "mean_net_bp": -11.14,
+          "pnl_usd": -4038.52,
+          "trades": 36259
         },
         "PF_XBTUSD": {
-          "hit_rate": 0.1641,
-          "mean_net_bp": -10.3,
-          "pnl_usd": -1383.21,
-          "trades": 13435
+          "hit_rate": 0.1685,
+          "mean_net_bp": -10.23,
+          "pnl_usd": -2545.02,
+          "trades": 24885
         },
         "PF_XRPUSD": {
-          "hit_rate": 0.172,
-          "mean_net_bp": -13.33,
-          "pnl_usd": -1709.92,
-          "trades": 12830
+          "hit_rate": 0.176,
+          "mean_net_bp": -13.38,
+          "pnl_usd": -3927.35,
+          "trades": 29346
         },
         "PF_ZECUSD": {
-          "hit_rate": 0.183,
-          "mean_net_bp": -16.03,
-          "pnl_usd": -2981.24,
-          "trades": 18594
+          "hit_rate": 0.1885,
+          "mean_net_bp": -16.52,
+          "pnl_usd": -5139.52,
+          "trades": 31104
         }
       },
+      "by_range": {
+        "previous": {
+          "folds_judged": 4,
+          "folds_positive": 0,
+          "hit_rate": 0.1933,
+          "mean_net_bp": -13.46,
+          "median_net_bp": -17.29,
+          "t_stat": -56.2,
+          "trades": 108754
+        },
+        "recent": {
+          "folds_judged": 4,
+          "folds_positive": 0,
+          "hit_rate": 0.1832,
+          "mean_net_bp": -13.56,
+          "median_net_bp": -17.03,
+          "t_stat": -138.97,
+          "trades": 114898
+        }
+      },
+      "deflated_probability": 0.0,
       "folds_judged": 4,
       "folds_positive": 0,
-      "hit_rate": 0.1832,
-      "hit_rate_ci95": [0.181, 0.1855],
-      "mean_net_bp": -13.56,
-      "median_net_bp": -17.03,
-      "pnl_usd": -15584.64,
+      "hit_rate": 0.1881,
+      "hit_rate_ci95": [0.1865, 0.1898],
+      "mean_net_bp": -13.51,
+      "median_net_bp": -17.11,
+      "pnl_usd": -30222.39,
+      "selection_trials": 1,
       "spec_hash": "f61f87676ca938c9deb2e966a05c4b0578e97133ffb151e372dfa26304b693fc",
-      "t_stat": -138.97,
-      "trades": 114898,
+      "t_stat": -106.67,
+      "trades": 223652,
       "verdict": "negative_edge",
       "version": 1,
-      "wins": 21051
+      "wins": 42077
     },
     "c26-reversion-perp-v1": {
       "by_product": {
         "PF_ADAUSD": {
-          "hit_rate": 0.2982,
-          "mean_net_bp": -16.18,
-          "pnl_usd": -162.77,
-          "trades": 1006
+          "hit_rate": 0.3115,
+          "mean_net_bp": -14.85,
+          "pnl_usd": -312.23,
+          "trades": 2103
         },
         "PF_ETHUSD": {
-          "hit_rate": 0.3339,
-          "mean_net_bp": -9.89,
-          "pnl_usd": -109.87,
-          "trades": 1111
+          "hit_rate": 0.323,
+          "mean_net_bp": -10.61,
+          "pnl_usd": -242.72,
+          "trades": 2288
         },
         "PF_HYPEUSD": {
-          "hit_rate": 0.3151,
-          "mean_net_bp": -12.89,
-          "pnl_usd": -122.68,
-          "trades": 952
+          "hit_rate": 0.2911,
+          "mean_net_bp": -14.45,
+          "pnl_usd": -214.51,
+          "trades": 1484
         },
         "PF_NEARUSD": {
-          "hit_rate": 0.2899,
-          "mean_net_bp": -20.03,
-          "pnl_usd": -196.86,
-          "trades": 983
+          "hit_rate": 0.2944,
+          "mean_net_bp": -18.78,
+          "pnl_usd": -342.54,
+          "trades": 1824
         },
         "PF_SOLUSD": {
-          "hit_rate": 0.3201,
-          "mean_net_bp": -10.79,
-          "pnl_usd": -116.97,
-          "trades": 1084
+          "hit_rate": 0.3195,
+          "mean_net_bp": -11.09,
+          "pnl_usd": -254.5,
+          "trades": 2294
         },
         "PF_XBTUSD": {
-          "hit_rate": 0.2864,
-          "mean_net_bp": -10.63,
-          "pnl_usd": -84.61,
-          "trades": 796
+          "hit_rate": 0.2937,
+          "mean_net_bp": -10.38,
+          "pnl_usd": -161.48,
+          "trades": 1556
         },
         "PF_XRPUSD": {
-          "hit_rate": 0.3041,
-          "mean_net_bp": -12.63,
-          "pnl_usd": -108.0,
-          "trades": 855
+          "hit_rate": 0.3099,
+          "mean_net_bp": -12.62,
+          "pnl_usd": -234.92,
+          "trades": 1862
         },
         "PF_ZECUSD": {
-          "hit_rate": 0.3228,
-          "mean_net_bp": -16.29,
-          "pnl_usd": -216.96,
-          "trades": 1332
+          "hit_rate": 0.3192,
+          "mean_net_bp": -18.05,
+          "pnl_usd": -409.43,
+          "trades": 2268
         }
       },
+      "by_range": {
+        "previous": {
+          "folds_judged": 4,
+          "folds_positive": 0,
+          "hit_rate": 0.3086,
+          "mean_net_bp": -13.94,
+          "median_net_bp": -21.08,
+          "t_stat": -30.89,
+          "trades": 7560
+        },
+        "recent": {
+          "folds_judged": 4,
+          "folds_positive": 0,
+          "hit_rate": 0.3105,
+          "mean_net_bp": -13.78,
+          "median_net_bp": -20.57,
+          "t_stat": -35.39,
+          "trades": 8119
+        }
+      },
+      "deflated_probability": 0.0,
       "folds_judged": 4,
       "folds_positive": 0,
-      "hit_rate": 0.3105,
-      "hit_rate_ci95": [0.3005, 0.3207],
-      "mean_net_bp": -13.78,
-      "median_net_bp": -20.57,
-      "pnl_usd": -1118.72,
+      "hit_rate": 0.3096,
+      "hit_rate_ci95": [0.3024, 0.3169],
+      "mean_net_bp": -13.86,
+      "median_net_bp": -20.81,
+      "pnl_usd": -2172.34,
+      "selection_trials": 1,
       "spec_hash": "a3c2f54faa1301e5a8171bab8afd26b4223ebbd2bc59795e7579d2a1d457ae57",
-      "t_stat": -35.39,
-      "trades": 8119,
+      "t_stat": -46.75,
+      "trades": 15679,
       "verdict": "negative_edge",
       "version": 1,
-      "wins": 2521
+      "wins": 4854
     },
     "c27-breakout-perp-v1": {
       "by_product": {
         "PF_ADAUSD": {
-          "hit_rate": 0.3269,
-          "mean_net_bp": -16.96,
-          "pnl_usd": -1547.85,
-          "trades": 9127
+          "hit_rate": 0.3312,
+          "mean_net_bp": -16.86,
+          "pnl_usd": -3220.52,
+          "trades": 19096
         },
         "PF_ETHUSD": {
-          "hit_rate": 0.3283,
-          "mean_net_bp": -10.43,
-          "pnl_usd": -967.27,
-          "trades": 9277
+          "hit_rate": 0.3288,
+          "mean_net_bp": -10.5,
+          "pnl_usd": -2155.01,
+          "trades": 20533
         },
         "PF_HYPEUSD": {
-          "hit_rate": 0.3335,
-          "mean_net_bp": -13.82,
-          "pnl_usd": -1517.74,
-          "trades": 10982
+          "hit_rate": 0.3518,
+          "mean_net_bp": -13.0,
+          "pnl_usd": -2838.44,
+          "trades": 21842
         },
         "PF_NEARUSD": {
-          "hit_rate": 0.3329,
-          "mean_net_bp": -20.11,
-          "pnl_usd": -1909.4,
-          "trades": 9493
+          "hit_rate": 0.3404,
+          "mean_net_bp": -19.5,
+          "pnl_usd": -3650.87,
+          "trades": 18720
         },
         "PF_SOLUSD": {
-          "hit_rate": 0.3243,
-          "mean_net_bp": -11.79,
-          "pnl_usd": -1165.74,
-          "trades": 9889
+          "hit_rate": 0.3284,
+          "mean_net_bp": -11.6,
+          "pnl_usd": -2508.49,
+          "trades": 21627
         },
         "PF_XBTUSD": {
-          "hit_rate": 0.315,
-          "mean_net_bp": -10.5,
-          "pnl_usd": -885.82,
-          "trades": 8438
+          "hit_rate": 0.3193,
+          "mean_net_bp": -10.46,
+          "pnl_usd": -1696.86,
+          "trades": 16219
         },
         "PF_XRPUSD": {
-          "hit_rate": 0.3326,
-          "mean_net_bp": -12.96,
-          "pnl_usd": -1009.81,
-          "trades": 7789
+          "hit_rate": 0.3287,
+          "mean_net_bp": -13.1,
+          "pnl_usd": -2367.26,
+          "trades": 18071
         },
         "PF_ZECUSD": {
-          "hit_rate": 0.3226,
-          "mean_net_bp": -17.16,
-          "pnl_usd": -2067.11,
-          "trades": 12049
+          "hit_rate": 0.3277,
+          "mean_net_bp": -17.67,
+          "pnl_usd": -3936.53,
+          "trades": 22283
         }
       },
+      "by_range": {
+        "previous": {
+          "folds_judged": 4,
+          "folds_positive": 0,
+          "hit_rate": 0.3376,
+          "mean_net_bp": -13.9,
+          "median_net_bp": -24.05,
+          "t_stat": -80.53,
+          "trades": 81347
+        },
+        "recent": {
+          "folds_judged": 4,
+          "folds_positive": 0,
+          "hit_rate": 0.327,
+          "mean_net_bp": -14.37,
+          "median_net_bp": -23.57,
+          "t_stat": -97.53,
+          "trades": 77044
+        }
+      },
+      "deflated_probability": 0.0,
       "folds_judged": 4,
       "folds_positive": 0,
-      "hit_rate": 0.327,
-      "hit_rate_ci95": [0.3237, 0.3304],
-      "mean_net_bp": -14.37,
-      "median_net_bp": -23.57,
-      "pnl_usd": -11070.75,
+      "hit_rate": 0.3324,
+      "hit_rate_ci95": [0.3301, 0.3348],
+      "mean_net_bp": -14.13,
+      "median_net_bp": -23.81,
+      "pnl_usd": -22373.97,
+      "selection_trials": 1,
       "spec_hash": "81fb82c817b5887daad3c972aeeb7d1bd5e36f268b295f0264463629dccee280",
-      "t_stat": -97.53,
-      "trades": 77044,
+      "t_stat": -123.47,
+      "trades": 158391,
       "verdict": "negative_edge",
       "version": 1,
-      "wins": 25196
+      "wins": 52655
     },
     "c28-adapter-perp-v1": {
       "by_product": {
         "PF_ADAUSD": {
-          "hit_rate": 0.2002,
+          "hit_rate": 0.2009,
           "mean_net_bp": -16.06,
-          "pnl_usd": -1637.45,
-          "trades": 10196
+          "pnl_usd": -3523.32,
+          "trades": 21943
         },
         "PF_ETHUSD": {
-          "hit_rate": 0.1763,
-          "mean_net_bp": -10.69,
-          "pnl_usd": -1283.18,
-          "trades": 12008
+          "hit_rate": 0.1832,
+          "mean_net_bp": -10.49,
+          "pnl_usd": -2629.85,
+          "trades": 25075
         },
         "PF_HYPEUSD": {
-          "hit_rate": 0.2194,
-          "mean_net_bp": -13.54,
-          "pnl_usd": -1376.55,
-          "trades": 10168
+          "hit_rate": 0.2417,
+          "mean_net_bp": -13.55,
+          "pnl_usd": -2148.42,
+          "trades": 15857
         },
         "PF_NEARUSD": {
-          "hit_rate": 0.2111,
-          "mean_net_bp": -18.73,
-          "pnl_usd": -1897.02,
-          "trades": 10128
+          "hit_rate": 0.2158,
+          "mean_net_bp": -18.54,
+          "pnl_usd": -3594.53,
+          "trades": 19383
         },
         "PF_SOLUSD": {
-          "hit_rate": 0.1808,
-          "mean_net_bp": -11.14,
-          "pnl_usd": -1437.93,
-          "trades": 12913
+          "hit_rate": 0.1859,
+          "mean_net_bp": -11.19,
+          "pnl_usd": -3081.55,
+          "trades": 27540
         },
         "PF_XBTUSD": {
-          "hit_rate": 0.17,
-          "mean_net_bp": -10.36,
-          "pnl_usd": -1076.69,
-          "trades": 10394
+          "hit_rate": 0.1737,
+          "mean_net_bp": -10.31,
+          "pnl_usd": -1985.66,
+          "trades": 19264
         },
         "PF_XRPUSD": {
-          "hit_rate": 0.1793,
-          "mean_net_bp": -13.34,
-          "pnl_usd": -1334.24,
-          "trades": 10005
+          "hit_rate": 0.1825,
+          "mean_net_bp": -13.41,
+          "pnl_usd": -2999.57,
+          "trades": 22361
         },
         "PF_ZECUSD": {
-          "hit_rate": 0.1919,
-          "mean_net_bp": -16.27,
-          "pnl_usd": -2311.23,
-          "trades": 14204
+          "hit_rate": 0.1959,
+          "mean_net_bp": -17.05,
+          "pnl_usd": -4043.22,
+          "trades": 23717
         }
       },
+      "by_range": {
+        "previous": {
+          "folds_judged": 4,
+          "folds_positive": 0,
+          "hit_rate": 0.2004,
+          "mean_net_bp": -13.69,
+          "median_net_bp": -17.54,
+          "t_stat": -47.34,
+          "trades": 85124
+        },
+        "recent": {
+          "folds_judged": 4,
+          "folds_positive": 0,
+          "hit_rate": 0.1905,
+          "mean_net_bp": -13.72,
+          "median_net_bp": -17.2,
+          "t_stat": -125.13,
+          "trades": 90016
+        }
+      },
+      "deflated_probability": 0.0,
       "folds_judged": 4,
       "folds_positive": 0,
-      "hit_rate": 0.1905,
-      "hit_rate_ci95": [0.188, 0.1931],
-      "mean_net_bp": -13.72,
-      "median_net_bp": -17.2,
-      "pnl_usd": -12354.3,
+      "hit_rate": 0.1953,
+      "hit_rate_ci95": [0.1935, 0.1972],
+      "mean_net_bp": -13.71,
+      "median_net_bp": -17.37,
+      "pnl_usd": -24006.14,
+      "selection_trials": 1,
       "spec_hash": "2b06c3ee07b6cf6d9552bde928a995dce21891e9d36ffd7eae53bca1e5439f2f",
-      "t_stat": -125.13,
-      "trades": 90016,
+      "t_stat": -90.62,
+      "trades": 175140,
       "verdict": "negative_edge",
       "version": 1,
-      "wins": 17149
+      "wins": 34209
     },
     "c29-momentum-perp-v1": {
       "by_product": {
         "PF_ADAUSD": {
-          "hit_rate": 0.4651,
-          "mean_net_bp": -6.95,
-          "pnl_usd": -2.99,
+          "hit_rate": 0.4948,
+          "mean_net_bp": 7.12,
+          "pnl_usd": 6.91,
+          "trades": 97
+        },
+        "PF_ETHUSD": {
+          "hit_rate": 0.46,
+          "mean_net_bp": 13.11,
+          "pnl_usd": 13.11,
+          "trades": 100
+        },
+        "PF_HYPEUSD": {
+          "hit_rate": 0.6066,
+          "mean_net_bp": 123.11,
+          "pnl_usd": 75.1,
+          "trades": 61
+        },
+        "PF_NEARUSD": {
+          "hit_rate": 0.5275,
+          "mean_net_bp": 23.45,
+          "pnl_usd": 21.34,
+          "trades": 91
+        },
+        "PF_SOLUSD": {
+          "hit_rate": 0.4792,
+          "mean_net_bp": -6.44,
+          "pnl_usd": -6.18,
+          "trades": 96
+        },
+        "PF_XBTUSD": {
+          "hit_rate": 0.4712,
+          "mean_net_bp": -12.31,
+          "pnl_usd": -12.8,
+          "trades": 104
+        },
+        "PF_XRPUSD": {
+          "hit_rate": 0.4731,
+          "mean_net_bp": -29.27,
+          "pnl_usd": -27.22,
+          "trades": 93
+        },
+        "PF_ZECUSD": {
+          "hit_rate": 0.5294,
+          "mean_net_bp": 122.75,
+          "pnl_usd": 104.34,
+          "trades": 85
+        }
+      },
+      "by_range": {
+        "previous": {
+          "folds_judged": 4,
+          "folds_positive": 2,
+          "hit_rate": 0.484,
+          "mean_net_bp": -2.38,
+          "median_net_bp": -9.5,
+          "t_stat": -0.07,
+          "trades": 405
+        },
+        "recent": {
+          "folds_judged": 4,
+          "folds_positive": 4,
+          "hit_rate": 0.5186,
+          "mean_net_bp": 57.22,
+          "median_net_bp": 6.53,
+          "t_stat": 1.38,
+          "trades": 322
+        }
+      },
+      "deflated_probability": 0.0,
+      "folds_judged": 4,
+      "folds_positive": 3,
+      "hit_rate": 0.4993,
+      "hit_rate_ci95": [0.4631, 0.5356],
+      "mean_net_bp": 24.02,
+      "median_net_bp": -0.29,
+      "pnl_usd": 174.59,
+      "selection_trials": 1000,
+      "spec_hash": "ca81f9ce070d1db8410e9a8b06688555d9c80e33fd6f6eab056f84d8d452f871",
+      "t_stat": 0.87,
+      "trades": 727,
+      "verdict": "no_edge",
+      "version": 1,
+      "wins": 363
+    },
+    "c30-momentum-12h-perp-v1": {
+      "by_product": {
+        "PF_ADAUSD": {
+          "hit_rate": 0.3953,
+          "mean_net_bp": -11.16,
+          "pnl_usd": -4.8,
           "trades": 43
         },
         "PF_ETHUSD": {
-          "hit_rate": 0.4545,
-          "mean_net_bp": 48.04,
-          "pnl_usd": 21.14,
-          "trades": 44
-        },
-        "PF_HYPEUSD": {
-          "hit_rate": 0.6552,
-          "mean_net_bp": 115.14,
-          "pnl_usd": 33.39,
-          "trades": 29
-        },
-        "PF_NEARUSD": {
-          "hit_rate": 0.5952,
-          "mean_net_bp": 87.73,
-          "pnl_usd": 36.85,
-          "trades": 42
-        },
-        "PF_SOLUSD": {
-          "hit_rate": 0.4615,
-          "mean_net_bp": -2.58,
-          "pnl_usd": -1.01,
+          "hit_rate": 0.4359,
+          "mean_net_bp": 36.76,
+          "pnl_usd": 14.34,
           "trades": 39
         },
+        "PF_HYPEUSD": {
+          "hit_rate": 0.7895,
+          "mean_net_bp": 382.68,
+          "pnl_usd": 72.71,
+          "trades": 19
+        },
+        "PF_NEARUSD": {
+          "hit_rate": 0.5333,
+          "mean_net_bp": 153.92,
+          "pnl_usd": 46.18,
+          "trades": 30
+        },
+        "PF_SOLUSD": {
+          "hit_rate": 0.6053,
+          "mean_net_bp": 68.37,
+          "pnl_usd": 25.98,
+          "trades": 38
+        },
         "PF_XBTUSD": {
-          "hit_rate": 0.5116,
-          "mean_net_bp": -0.25,
-          "pnl_usd": -0.11,
-          "trades": 43
+          "hit_rate": 0.45,
+          "mean_net_bp": 0.81,
+          "pnl_usd": 0.32,
+          "trades": 40
         },
         "PF_XRPUSD": {
-          "hit_rate": 0.5135,
-          "mean_net_bp": 36.56,
-          "pnl_usd": 13.53,
-          "trades": 37
+          "hit_rate": 0.3415,
+          "mean_net_bp": -152.27,
+          "pnl_usd": -62.43,
+          "trades": 41
         },
         "PF_ZECUSD": {
-          "hit_rate": 0.5333,
-          "mean_net_bp": 185.44,
-          "pnl_usd": 83.45,
-          "trades": 45
+          "hit_rate": 0.5526,
+          "mean_net_bp": 198.49,
+          "pnl_usd": 75.42,
+          "trades": 38
         }
       },
+      "by_range": {
+        "previous": {
+          "folds_judged": 4,
+          "folds_positive": 3,
+          "hit_rate": 0.5,
+          "mean_net_bp": 62.05,
+          "median_net_bp": -0.01,
+          "t_stat": 1.13,
+          "trades": 140
+        },
+        "recent": {
+          "folds_judged": 4,
+          "folds_positive": 2,
+          "hit_rate": 0.4797,
+          "mean_net_bp": 54.63,
+          "median_net_bp": -23.43,
+          "t_stat": 1.1,
+          "trades": 148
+        }
+      },
+      "deflated_probability": 0.0,
       "folds_judged": 4,
       "folds_positive": 4,
-      "hit_rate": 0.5186,
-      "hit_rate_ci95": [0.4642, 0.5727],
-      "mean_net_bp": 57.22,
-      "median_net_bp": 6.53,
-      "pnl_usd": 184.25,
-      "spec_hash": "ca81f9ce070d1db8410e9a8b06688555d9c80e33fd6f6eab056f84d8d452f871",
-      "t_stat": 1.38,
-      "trades": 322,
+      "hit_rate": 0.4896,
+      "hit_rate_ci95": [0.4324, 0.5471],
+      "mean_net_bp": 58.24,
+      "median_net_bp": -9.75,
+      "pnl_usd": 167.72,
+      "selection_trials": 1000,
+      "spec_hash": "29de8c4ff4d53cd477a1689508035455d402bd57aa6028390bd2a7e8f54da2e1",
+      "t_stat": 1.58,
+      "trades": 288,
       "verdict": "candidate_edge",
       "version": 1,
-      "wins": 167
+      "wins": 141
     }
   },
-  "table_hash": "2d732baff75b7b900c64ef2c907ead4c4743a95e2add078e5f511e0fe249017c",
+  "table_hash": "acf21f7b468f2d012781c0028e3cc54a3b6a4ca89800f21d1e0cee1498e3a00d",
   "thresholds": {
     "min_trades": 30,
     "reliable_trades": 100,
+    "t_candidate": 1.0,
     "t_reliable": 2.58,
     "t_tentative": 1.64
   }

@@ -26,7 +26,7 @@ class SignalShapeTests(unittest.TestCase):
         rng = random.Random(8)
         seen = set()
         for _ in range(6000):
-            strategy_id = rng.choice(sorted(SPECS))
+            strategy_id = rng.choice(sorted(STRATEGY_IDS))
             proposal, regime = _fuzz(rng, strategy_id)
             signal = strategy_signal(SPECS[strategy_id], proposal, regime)
             self.assertAlmostEqual(signal["buy"] + signal["hold"] + signal["sell"], 1.0, places=12)

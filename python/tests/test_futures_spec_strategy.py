@@ -72,9 +72,9 @@ def _random_walk(rng, minutes):
 
 
 class SpecValidationTests(unittest.TestCase):
-    def test_c25_to_c29_ship_as_valid_specs(self):
+    def test_c25_to_c30_ship_as_valid_specs(self):
         # C29 is a spec only: it needs 24 h of 5m history that live verdicts (200 bars) do not carry.
-        self.assertEqual(set(SPECS), set(STRATEGY_IDS) | {"c29-momentum-perp-v1"})
+        self.assertEqual(set(SPECS), set(STRATEGY_IDS) | {"c29-momentum-perp-v1", "c30-momentum-12h-perp-v1"})
         for spec in SPECS.values():
             validate_spec(spec)
             self.assertEqual(len(spec_hash(spec)), 64)
