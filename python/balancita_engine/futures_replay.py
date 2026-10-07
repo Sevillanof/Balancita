@@ -165,7 +165,7 @@ class ReplayJobs:
             specs = list(self.specs_provider().values())
             blind = None
             if job["qwen"] is not None:
-                blind = self.qwen_factory(specs, job["qwen"], tick_size)
+                blind = self.qwen_factory(specs, dict(job["qwen"], product_id=job["product_id"]), tick_size)
             run(self.market_db, self._path(job["id"]), job["product_id"], job["start_ms"], job["end_ms"],
                 specs, tick_size=tick_size, qwen=blind)
             job["status"] = "done"
@@ -246,12 +246,16 @@ def qwen_factory(cache_path=None, env=None):
         question_id = params.get("question", "trade_action")
         if question_id not in questions:
             raise ValueError("unknown question " + str(question_id))
+        question = questions[question_id]
+        if params.get("arm"):  # same decision, different context lines (futures_llm_lessons.ARMS)
+            from .futures_llm_lessons import question_arm
+            question = question_arm(question, params["arm"])
         prompts = llm.load_prompt_config()
         provider = llm.LlamaCppProvider(llm.llama_url(env), llm.model_ref(env))
-        return BlindQwen(provider, specs, questions[question_id], llm.load_calibration(),
+        return BlindQwen(provider, specs, question, llm.load_calibration(),
                          prompts["templates"][prompts["default_version"]], tick_size=tick_size,
                          trigger=params.get("trigger", "entry"), mode=prompts["probability_source"],
-                         cache=AnswerCache(cache_path))
+                         cache=AnswerCache(cache_path), product_id=params.get("product_id", "PF_XBTUSD"))
 
     return make
 
@@ -271,6 +275,9 @@ def main(argv=None):
     parser.add_argument("--qwen", metavar="QUESTION_ID", help="let Qwen decide blind (e.g. trade_action)")
     parser.add_argument("--qwen-trigger", choices=("entry", "5min", "all"), default="entry",
                         help="when to ask: some strategy proposes an entry, every 5 minutes, or every minute")
+    parser.add_argument("--qwen-arm", choices=("original", "context", "learning"),
+                        help="context lines of the question: original (as first defined), context "
+                             "(+ strategy reliability) or learning (+ Qwen's judged decisions); default: as shipped")
     parser.add_argument("--qwen-cache", help="SQLite file of cached answers shared between replays")
     parser.add_argument("--llama-url", help="default: http://127.0.0.1:$LLAMA_PORT")
     args = parser.parse_args(argv)
@@ -279,7 +286,8 @@ def main(argv=None):
     if args.qwen:
         env = dict(os.environ, **({"LLAMA_PORT": args.llama_url.rsplit(":", 1)[1]} if args.llama_url else {}))
         qwen = qwen_factory(args.qwen_cache, env)(
-            specs, {"question": args.qwen, "trigger": args.qwen_trigger}, "1")
+            specs, {"question": args.qwen, "trigger": args.qwen_trigger, "arm": args.qwen_arm,
+                    "product_id": args.product}, "1")
     summaries = run(args.market_db, args.out, args.product, _ms(args.start), _ms(args.end), specs, qwen=qwen)
     json.dump(summaries, sys.stdout, indent=2)
     print()

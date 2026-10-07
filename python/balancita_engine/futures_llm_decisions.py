@@ -53,6 +53,7 @@ import urllib.parse
 import urllib.request
 from decimal import ROUND_HALF_EVEN, Decimal, InvalidOperation
 
+from .futures_llm_lessons import WINDOW, Lessons
 from .futures_products import is_product_id
 from .futures_spec_strategy import load_specs
 from .futures_strategy_reliability import FORWARD_MIN_TRADES, effective_reliability, load_forward, load_reliability
@@ -583,6 +584,11 @@ def _field_strategy_reliability(ctx):
     return "strategy_reliability: " + "; ".join(parts)
 
 
+def _field_lessons(ctx):
+    """Qwen's own judged decisions (see ``futures_llm_lessons``); the caller renders them from stored data."""
+    return ctx.get("lessons") or "lessons: none yet"
+
+
 # The single registry of STATE fields. To give the model a new input, add a
 # named function here that returns one normalized line (no dates, no absolute
 # prices, no product names) and test it; questions then list it by name.
@@ -599,6 +605,7 @@ STATE_FIELDS = {
     "strategy_signals": _field_strategy_signals,
     "strategy_consensus": _field_strategy_consensus,
     "strategy_reliability": _field_strategy_reliability,
+    "lessons": _field_lessons,
 }
 
 
@@ -612,11 +619,12 @@ def default_specs():
     return _DEFAULT_SPECS[0]
 
 
-def build_state(verdict, candles, fields, specs=None, reliability=None, forward=None):
+def build_state(verdict, candles, fields, specs=None, reliability=None, forward=None, lessons=None):
     """STATE text for one verdict from stored data only, in the order of ``fields``.
 
     ``specs`` (strategy id -> spec) feeds the strategy signal fields; the shipped specs by default.
     ``reliability`` is a reliability table (``futures_strategy_reliability``); the stored one by default.
+    ``lessons`` is the text of ``Lessons.text`` for the ``lessons`` field.
     """
     unknown = [field for field in fields if field not in STATE_FIELDS]
     if unknown:
@@ -624,7 +632,8 @@ def build_state(verdict, candles, fields, specs=None, reliability=None, forward=
     features = (verdict.get("features") or {}).get("1m")
     if not isinstance(features, dict) or features.get("ready") is not True:
         raise StateError("verdict features are not ready (indicator warmup)")
-    ctx = {"verdict": verdict, "candles": candles, "specs": specs, "reliability": reliability, "forward": forward}
+    ctx = {"verdict": verdict, "candles": candles, "specs": specs, "reliability": reliability, "forward": forward,
+           "lessons": lessons}
     return sanitize_text("\n".join(STATE_FIELDS[field](ctx) for field in fields))
 
 
@@ -911,6 +920,15 @@ class DecisionStore:
         ).fetchone()
         return -1 if row[0] is None else row[0]
 
+    def recent(self, product_id, question_id, question_version, limit):
+        """``[(bucket_start, chosen, state_text)]`` of the latest decisions, oldest first."""
+        rows = self.db.execute(
+            "SELECT bucket_start, chosen, state_text FROM paper_futures_llm_decisions WHERE product_id=? "
+            "AND question_id=? AND question_version=? ORDER BY bucket_start DESC LIMIT ?",
+            (product_id, question_id, question_version, limit),
+        ).fetchall()
+        return rows[::-1]
+
     def append_decision(self, row):
         dump = lambda value: json.dumps(value, sort_keys=True, separators=(",", ":"))
         with self.db:
@@ -1012,14 +1030,16 @@ def ask_model(provider, prompt, letters, question, temperature, template, mode):
 
 
 def evaluate(provider, verdicts, market, product_id, bucket_start, question, calibration,
-             template=None, mode="auto"):
-    """Builds the state, asks the model and converts the answer. Stores nothing."""
+             template=None, mode="auto", lessons=None):
+    """Builds the state, asks the model and converts the answer. Stores nothing.
+
+    ``lessons`` is the rendered text of the model's own judged decisions (``futures_llm_lessons``)."""
     template = template or default_template()
     verdict = verdicts.payload(product_id, bucket_start)
     candles = market.window(
         product_id, ONE_MINUTE_MS, bucket_start + ONE_MINUTE_MS, verdict["decision_known_at_ms"], 61
     )
-    state = build_state(verdict, candles, question["state_fields"])
+    state = build_state(verdict, candles, question["state_fields"], lessons=lessons)
     prompt = build_prompt(state, question, template)
     temperature = temperature_for(calibration, question["id"], question["version"])
     answer = ask_model(provider, prompt, question_letters(question), question, temperature, template, mode)
@@ -1052,6 +1072,8 @@ class DecisionService:
         self.market = None
         self.verdicts = None
         self.cursors = {}
+        self._lessons = {}
+        self._missing_closes = set()
         self._identity = None
         self._model_up = None
         self._problem = None
@@ -1089,6 +1111,31 @@ class DecisionService:
             self.verdicts = _VerdictFeed(self.verdicts_db_path)
         if not self.market.available:
             raise sqlite3.OperationalError("market DB has no product-keyed candles yet")
+
+    def _lessons_for(self, product_id, question, bucket):
+        """The model's judged decisions known at ``bucket``, rendered; ``None`` if the question does not ask."""
+        if "lessons" not in question["state_fields"]:
+            return None
+        key = (product_id, question["id"], question["version"])
+        memory = self._lessons.get(key)
+        if memory is None:
+            memory = self._lessons[key] = Lessons(product_id)
+            for past_bucket, chosen, state_text in self.store.recent(
+                    product_id, question["id"], question["version"], 2 * WINDOW):
+                memory.record(past_bucket, chosen, state_text)
+        for needed in memory.needs(bucket):
+            if (key, needed) in self._missing_closes:
+                continue
+            try:
+                close = ((self.verdicts.payload(product_id, needed).get("features") or {}).get("1m") or {}).get(
+                    "candidate_close")
+            except sqlite3.OperationalError:
+                close = None
+            if close is None:
+                self._missing_closes.add((key, needed))
+            else:
+                memory.observe_close(needed, close)
+        return memory.text(bucket)
 
     # -- loop
     def poll(self):
@@ -1145,7 +1192,8 @@ class DecisionService:
                     "question_version": question["version"], "model_ref": model_ref}
             try:
                 done = evaluate(self.provider, self.verdicts, self.market, product_id, bucket, question,
-                                self.calibration, self.template, self.probability_source)
+                                self.calibration, self.template, self.probability_source,
+                                lessons=self._lessons_for(product_id, question, bucket))
             except ModelUnavailable as error:
                 self._model_down(str(error))
                 break
@@ -1165,6 +1213,9 @@ class DecisionService:
                 value=result["value"], confidence=result["confidence"], latency_ms=output.get("latency_ms", 0),
                 timings=output.get("timings", {}),
             ))
+            memory = self._lessons.get((product_id, question["id"], question["version"]))
+            if memory is not None:
+                memory.record(bucket, result["chosen"], done["state"])
             written += 1
         if written:
             self.log("decisions +{}".format(written))

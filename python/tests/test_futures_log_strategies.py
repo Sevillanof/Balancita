@@ -285,10 +285,10 @@ class QwenReliabilityFieldTests(unittest.TestCase):
         self.assertEqual(line, "strategy_reliability: c25-pullback-perp-v1 negative_edge hit=0.17 net_bp=-13.0 "
                                "trades=3k; {} unmeasured; made-up unmeasured".format(C29))
 
-    def test_the_trade_action_question_reads_it(self):
+    def test_the_trade_action_question_reads_it_as_context_only(self):
         question = q.load_questions()["trade_action"]
-        self.assertEqual(question["version"], 2)
         self.assertIn("strategy_reliability", question["state_fields"])
+        self.assertNotIn("strategy_reliability", question["instruction"])
 
 
 if __name__ == "__main__":

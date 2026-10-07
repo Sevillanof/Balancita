@@ -189,7 +189,7 @@ odd/tasks/           Planes de trabajo (strategy-simulation.md es el vigente)
 doc/                 Guías y especificaciones de producto
 ```
 
-Documentación relacionada: [registro de estrategias](docs/strategy-registry-api.md) · [fiabilidad de las estrategias](docs/strategy-reliability.md) · [datos de mercado de Kraken Futures](docs/kraken-futures-market-data.md) · [scores de Qwen](docs/qwen-scores-api.md) · [plan de simulación](odd/tasks/strategy-simulation.md) · [`doc/personal-trading-app.md`](doc/personal-trading-app.md) (hoja de ruta; no se edita con herramientas).
+Documentación relacionada: [registro de estrategias](docs/strategy-registry-api.md) · [fiabilidad de las estrategias](docs/strategy-reliability.md) · [datos de mercado de Kraken Futures](docs/kraken-futures-market-data.md) · [aprendizaje de Qwen](docs/qwen-lessons.md) · [scores de Qwen](docs/qwen-scores-api.md) · [plan de simulación](odd/tasks/strategy-simulation.md) · [`doc/personal-trading-app.md`](doc/personal-trading-app.md) (hoja de ruta; no se edita con herramientas).
 
 ## Atribución del gráfico
 

@@ -19,7 +19,7 @@ Una entrada está atada al hash del spec con el que se midió: si el spec cambia
 
 ## Quién la lee
 
-- **Qwen**: el campo de estado `strategy_reliability` (pregunta `trade_action` v2) le da, por estrategia, veredicto, acierto, bp netos medios y número de operaciones, agregados sobre todos los productos para que su estado siga sin nombrar el producto. La pregunta le dice que ignore `negative_edge` y `no_edge`, pese poco `candidate_edge` y elija `hold` salvo que una estrategia con ventaja medida señale una operación.
+- **Qwen**: el campo de estado `strategy_reliability` le da, por estrategia, veredicto, acierto, bp netos medios y número de operaciones, agregados sobre todos los productos para que su estado siga sin nombrar el producto. Es un dato más de contexto: la pregunta `trade_action` no dice qué hacer con él (ver [qwen-lessons.md](qwen-lessons.md)).
 - **Registro** (`GET /api-strategies/strategies`): campo `reliability` por estrategia.
 
 ## Cómo se refresca

@@ -21,6 +21,8 @@ from .futures_llm_decisions import (
     question_letters,
     temperature_for,
 )
+from .futures_costs import DEFAULT_PRODUCT
+from .futures_llm_lessons import Lessons
 from .futures_spec_strategy import propose_spec
 from .futures_verdicts import ONE_MINUTE_MS
 
@@ -65,7 +67,7 @@ class BlindQwen:
     """Frame observer: collects Qwen decisions and the verdict-like rows that score them."""
 
     def __init__(self, provider, specs, question, calibration, template, *, tick_size="1",
-                 trigger="entry", mode="auto", cache=None):
+                 trigger="entry", mode="auto", cache=None, product_id=DEFAULT_PRODUCT):
         if trigger not in TRIGGERS:
             raise ValueError("unknown Qwen trigger {!r}".format(trigger))
         self.provider, self.specs, self.question = provider, specs, question
@@ -74,6 +76,8 @@ class BlindQwen:
         self.letters = question_letters(question)
         self.model_ref = provider.identity().get("model_ref") or "unknown"
         self.window = collections.deque(maxlen=WINDOW)
+        # Qwen's own judged decisions, only when the question asks for them; fed with every frame's close.
+        self.lessons = Lessons(product_id) if "lessons" in question["state_fields"] else None
         self.verdicts, self.decisions, self.errors = [], [], []
         self._candles = {}
 
@@ -84,6 +88,8 @@ class BlindQwen:
         bucket, current, previous, trend, regime = frame
         candle = self._candles[bucket]
         self.window.append(candle)
+        if self.lessons is not None:
+            self.lessons.observe_close(bucket, candle["close"])
         proposals = [propose_spec(s, current, previous=previous, trend=trend, regime=regime,
                                   tick_size=self.tick_size) for s in self.specs]
         verdict = {"bucket_start_ms": bucket, "decision_known_at_ms": bucket + ONE_MINUTE_MS, "regime": regime,
@@ -93,7 +99,8 @@ class BlindQwen:
             return
         try:
             state = build_state(verdict, list(self.window), self.question["state_fields"],
-                                {s["id"]: s for s in self.specs})
+                                {s["id"]: s for s in self.specs},
+                                lessons=None if self.lessons is None else self.lessons.text(bucket))
         except StateError:
             return
         prompt = build_prompt(state, self.question, self.template)
@@ -110,4 +117,6 @@ class BlindQwen:
             answer = {"chosen": result["chosen"], "probabilities": result["probabilities"],
                       "confidence": result["confidence"], "source": done["source"]}
             self.cache.put(key, answer)
+        if self.lessons is not None:
+            self.lessons.record(bucket, answer["chosen"], state)
         self.decisions.append(dict(answer, bucket_start=bucket, state_text=state))

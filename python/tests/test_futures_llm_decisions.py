@@ -25,7 +25,7 @@ START = 1_791_000_000_000 - (1_791_000_000_000 % 300_000)
 # version in config/decision-questions.json and add the new pin here.
 QUESTION_PINS = {
     "direction_1h@1": "871a574441420daa418d5f7368d7945e8e37a4d56d6b81763e37a80abdaccede",
-    "trade_action@2": "60b371f9864c8967fceb6e1989bef1bf9bd6602cc86a50ba44b42cca47ddf819",
+    "trade_action@3": "56c3ab517f9d69da54ca15819e79796acca851f4ce4fdf6715c1f0215da1c138",
 }
 
 
