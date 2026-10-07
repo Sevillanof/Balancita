@@ -48,6 +48,7 @@ Every sustained live run of the single process surfaced a new engine defect: the
 - [ ] PS-08d [L] Front: strategies page, rule and parameter editor, configurable indicator periods, walk-forward backtest with a trial counter. When confirming an edit the user chooses: a new version of the same strategy, or a new strategy with the changes that leaves the existing one as it is.
 - [ ] PS-08e [S] Lifecycle draft -> shadow -> active, gated by the ADR evaluation (out of sample, deflated Sharpe, minimum trade count).
 - [ ] PS-08f [M] Import from Pine Script or freqtrade: an LLM translates the text into a draft spec that the user reviews; imported code never runs.
+- [ ] PS-08g [M] Every strategy also returns buy/hold/sell probabilities, like Q; Q sees all strategies' probabilities and answers buy, hold or sell, stored as a timestamped decision that D can consume. Owned by the "Qwen decide sobre estrategias" thread on top of the PS-08 spec contract.
 
 ## Acceptance (PS-01)
 
