@@ -319,3 +319,19 @@
     padding-inline: 16px;
   }
 }
+
+/* Up to 100 analyses: keep them in their own scroll instead of growing the page. */
+.connected-terminal__decisions {
+  max-height: 640px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.connected-terminal__decisions article {
+  padding: 10px 0;
+  border-top: 1px solid var(--demo-border, #303a3e);
+}
+
+.connected-terminal__decisions article p {
+  margin: 4px 0;
+}

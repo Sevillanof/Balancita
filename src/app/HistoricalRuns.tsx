@@ -4,6 +4,7 @@ import PriceChart from '../features/price-chart/presentation/PriceChart.tsx'
 import ReplayRunForm from './ReplayRunForm.tsx'
 import HistoricalWorkbench from '../features/trading-view/presentation/HistoricalWorkbench.tsx'
 import ApprovedTradingHeader from '../features/trading-view/presentation/ApprovedTradingHeader.tsx'
+import { appNavigation } from './app-navigation.ts'
 import {
   HistoricalMetricCards,
   HistoricalPanel,
@@ -294,10 +295,7 @@ export default function HistoricalRuns() {
       <ApprovedTradingHeader
         brandHref="/"
         brandLabel="Balancita, volver a la aplicación"
-        navigation={[
-          { href: '/terminal', label: 'Terminal' },
-          { href: '/historicos', label: 'Pruebas históricas', current: true },
-        ]}
+        navigation={appNavigation('laboratorio')}
         status={<span className="demo-shell__badge">HISTORIAL CONECTADO</span>}
       />
       <main className="demo-shell__main connected-terminal__main">

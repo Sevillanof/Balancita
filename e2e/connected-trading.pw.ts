@@ -578,8 +578,8 @@ test('terminal polling aborts on navigation and remounts with one active snapsho
   expect(initial.filter(({ aborted }) => !aborted)).toHaveLength(1)
   expect(initial.filter(({ aborted }) => aborted).length).toBeLessThanOrEqual(1)
 
-  await page.getByRole('link', { name: 'Pruebas históricas' }).click()
-  await expect(page).toHaveURL(/\/historicos$/)
+  await page.getByRole('link', { name: 'Laboratorio' }).click()
+  await expect(page).toHaveURL(/\/laboratorio$/)
   const beforeUnmountIdle = marketNetwork.length
   const afterUnmount = (await fetchTrace(page)).filter((entry) =>
     new URL(entry.url, 'http://127.0.0.1:5174').pathname.endsWith(endpoint),
@@ -1736,8 +1736,8 @@ test('connected terminal and saved native/Python runs remain usable at this view
     fullPage: true,
   })
 
-  await page.getByRole('link', { name: 'Pruebas históricas' }).click()
-  await expect(page).toHaveURL(/\/historicos$/)
+  await page.getByRole('link', { name: 'Laboratorio' }).click()
+  await expect(page).toHaveURL(/\/laboratorio$/)
   await expect(
     page.getByRole('heading', { name: 'Pruebas históricas' }),
   ).toBeVisible()
