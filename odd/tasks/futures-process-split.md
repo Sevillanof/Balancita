@@ -322,6 +322,7 @@ Every sustained live run of the single process surfaced a new engine defect: the
   - No field was added to the spec schema, `propose_spec` or the verdict payload, so parity and verdict DBs are untouched. Q computes the signals from stored proposals with the shipped specs (`config/strategies`); once C records active spec hashes (PS-08b/c), Q should look the spec up by hash.
   - Q: new STATE fields `strategy_signals` and `strategy_consensus`, and the catalog question `trade_action@1` (buy/hold/sell), stored like any Q decision. Q now asks two questions per fresh verdict.
   - Next: D consuming `trade_action` (Q3), and calibrating both the strategy scores and Q's answer with E's outcomes (Q2).
+  - Scoring of Qwen's decisions (user request): `futures_llm_scores.py`, read-only over the decisions and verdicts DBs, writes nothing. Each decision is entered at its bucket close and judged 30 buckets later with the backtest's taker fee on both sides: buy/sell hit (+1) when their net return is positive, hold when neither would have been; misses (-1) counted separately; pending until the horizon closes. A trading book with the backtest's `BOOK_CONFIG`, sizing and cost buffer (stop 1.5 ATR, target 2x, time stop 30 min, opposite decision closes) gives the P&L, return and hit rate comparable with each strategy. CLI: `python -m balancita_engine.futures_llm_scores --decisions-db ... --verdicts-db ...` (`--json` for every decision and trade). If the strategies thread changes the backtest's cost model or hit definition, this module follows it.
 
 ## Next step
 
