@@ -1075,7 +1075,16 @@ export class FuturesMarketStore {
     if (feed !== 'trade' && feed !== 'book' && feed !== 'ticker')
       throw new TypeError('Unknown futures market feed.')
     const product = event.productId
-    if (product !== 'PF_XBTUSD')
+    // Trades and books are captured for the BTC perpetual only; REST-polled
+    // tickers cover every pinned product.
+    if (
+      product !== 'PF_XBTUSD' &&
+      !(
+        feed === 'ticker' &&
+        typeof product === 'string' &&
+        /^PF_[A-Z0-9]{2,20}$/.test(product)
+      )
+    )
       throw new TypeError('Unexpected futures product.')
     const epoch = time(event.epoch, 'epoch')
     const seq = time(event.seq, 'seq')
@@ -1192,7 +1201,8 @@ export class FuturesMarketStore {
           `SELECT content_hash FROM paper_futures_market_events
           WHERE event_id=? OR (feed=? AND product_id=? AND uid=?)`,
         ).get(eventId, feed, product, uid) as
-          { content_hash: string } | undefined
+          | { content_hash: string }
+          | undefined
         if (stored?.content_hash === contentHash) return 'duplicate'
       }
       throw error
@@ -1409,7 +1419,8 @@ export class FuturesMarketStore {
            ORDER BY rowid DESC LIMIT 1`,
         )
         .get(sourceWatermark, receivedCutoff) as
-        { sequence: number; received_at: number } | undefined
+        | { sequence: number; received_at: number }
+        | undefined
       const pendingCount = Number(pending.count)
       const firstSequence =
         pending.first_sequence === null ? null : Number(pending.first_sequence)

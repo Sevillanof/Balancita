@@ -15,6 +15,7 @@ import {
   catalogProductWarnings,
   type FuturesProduct,
 } from '../kraken-futures/futures-products.ts'
+import { createTickerPollClient } from '../kraken-futures/ticker-poll.ts'
 import {
   createOfficialCandlesClient,
   OFFICIAL_CANDLE_INTERVALS,
@@ -82,6 +83,13 @@ export interface LiveCaptureOptions {
   readonly fundingPollMs?: number
   readonly catalogRetryMs?: number
   /**
+   * Ticker poll (REST, all pinned products except PF_XBTUSD, whose ticker comes
+   * from the WebSocket): quote, sizes and funding for paper execution.
+   * Off by default (`0`); the capture process polls every second.
+   */
+  readonly tickerPollMs?: number
+  readonly tickerFetch?: HistoricalFundingFetch
+  /**
    * Products whose official candles are captured (pinned config, never chosen
    * at runtime). The WebSocket feeds stay PF_XBTUSD only. Default: PF_XBTUSD.
    */
@@ -132,12 +140,16 @@ export function createLiveCapture(options: LiveCaptureOptions) {
   let fundingTimer: ReturnType<typeof setTimeout> | undefined
   let catalogTimer: ReturnType<typeof setTimeout> | undefined
   let fundingClient:
-    ReturnType<typeof createHistoricalFundingClient> | undefined
+    | ReturnType<typeof createHistoricalFundingClient>
+    | undefined
   let officialTimer: ReturnType<typeof setTimeout> | undefined
   let officialClient: ReturnType<typeof createOfficialCandlesClient> | undefined
   let analyticsTimer: ReturnType<typeof setTimeout> | undefined
   let analyticsClient: ReturnType<typeof createAnalyticsClient> | undefined
   let analyticsPoll: Promise<void> = Promise.resolve()
+  let tickerTimer: ReturnType<typeof setTimeout> | undefined
+  let tickerClient: ReturnType<typeof createTickerPollClient> | undefined
+  let tickerPoll: Promise<void> = Promise.resolve()
   let stopped = true
   let fundingPoll: Promise<void> = Promise.resolve()
   let officialPoll: Promise<void> = Promise.resolve()
@@ -313,6 +325,33 @@ export function createLiveCapture(options: LiveCaptureOptions) {
     }, delay)
   }
 
+  const tickerProducts = products
+    .map(({ productId }) => productId)
+    .filter((productId) => productId !== FUTURES_PRODUCT)
+  const tickerPeriodMs = options.tickerPollMs ?? 0
+  let lastTickerError: string | undefined
+  const pollTickers = async (): Promise<void> => {
+    if (stopped || tickerClient === undefined) return
+    try {
+      for (const event of await tickerClient.fetch(tickerProducts)) {
+        if (stopped) return
+        store.append(event)
+      }
+      lastTickerError = undefined
+    } catch (error) {
+      if (stopped) return
+      const text = describe(error)
+      if (text !== lastTickerError) log(`tickers unavailable: ${text}`)
+      lastTickerError = text
+    }
+  }
+  const scheduleTickerPoll = (): void => {
+    if (stopped || tickerPeriodMs <= 0) return
+    tickerTimer = setTimeout(() => {
+      tickerPoll = pollTickers().finally(scheduleTickerPoll)
+    }, tickerPeriodMs)
+  }
+
   const startCollecting = (): void => {
     // The terminal only draws 60 s candles; verdicts read the official series.
     const candles = new FuturesCandleBuilder(store, [
@@ -412,6 +451,13 @@ export function createLiveCapture(options: LiveCaptureOptions) {
       clock,
     })
     officialPoll = pollOfficialCandles().finally(scheduleOfficialPoll)
+    if (tickerProducts.length > 0 && tickerPeriodMs > 0) {
+      tickerClient = createTickerPollClient({
+        fetch: options.tickerFetch,
+        clock,
+      })
+      tickerPoll = pollTickers().finally(scheduleTickerPoll)
+    }
     if (analytics) {
       analyticsClient = createAnalyticsClient({ fetch: analytics.fetch, clock })
       analyticsPoll = pollAnalytics().finally(scheduleAnalyticsPoll)
@@ -465,20 +511,24 @@ export function createLiveCapture(options: LiveCaptureOptions) {
       if (fundingTimer !== undefined) clearTimeout(fundingTimer)
       if (officialTimer !== undefined) clearTimeout(officialTimer)
       if (analyticsTimer !== undefined) clearTimeout(analyticsTimer)
+      if (tickerTimer !== undefined) clearTimeout(tickerTimer)
       for (const wake of [...sleepers]) wake()
       collector?.stop()
       fundingClient?.close()
       officialClient?.close()
       analyticsClient?.close()
+      tickerClient?.close()
       catalogTimer =
         candleTimer =
         fundingTimer =
         officialTimer =
         analyticsTimer =
+        tickerTimer =
           undefined
       await fundingPoll.catch(() => undefined)
       await officialPoll.catch(() => undefined)
       await analyticsPoll.catch(() => undefined)
+      await tickerPoll.catch(() => undefined)
     },
     get collector(): KrakenFuturesMarketCollector | undefined {
       return collector
