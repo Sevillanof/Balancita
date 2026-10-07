@@ -32,6 +32,70 @@ class ParityTests(unittest.TestCase):
                     self.assertEqual(got[key], value, (index, key))
 
 
+class PeriodAndFundingTests(unittest.TestCase):
+    def test_declared_periods_match_the_reference_indicators(self):
+        from decimal import Decimal, localcontext
+        from balancita_engine.canonical import normalize_decimal
+        from balancita_engine.futures_indicators import _ema, _rsi, _wilder, _true_ranges
+
+        feature = IncrementalFeatures({"ema": [12], "rsi": [7], "atr": [10], "donchian": [10], "bollinger": [10], "sma": [30]})
+        closes, highs, lows, bars = [], [], [], []
+        got = None
+        for candle in ONES[:200]:
+            got = feature.update(candle)
+            closes.append(Decimal(candle["close"]))
+            highs.append(Decimal(candle["high"]))
+            lows.append(Decimal(candle["low"]))
+            bars.append(candle)
+        with localcontext() as context:
+            context.prec = 50
+            self.assertEqual(got["ema12"], normalize_decimal(str(_ema(closes, 12))))
+            self.assertEqual(got["rsi7"], normalize_decimal(str(_rsi(closes, 7))))
+            self.assertEqual(got["atr10"], normalize_decimal(str(_wilder(_true_ranges(bars, highs, lows, closes), 10))))
+            self.assertEqual(got["donchian_high10"], normalize_decimal(str(max(highs[-11:-1]))))
+            self.assertEqual(got["sma30"], normalize_decimal(str(sum(closes[-30:], Decimal(0)) / 30)))
+            self.assertIn("bollinger_upper10", got)
+        self.assertNotIn("ema9", got)
+
+    def test_a_spec_may_use_only_declared_periods(self):
+        import copy
+        from balancita_engine.futures_spec_strategy import SpecError, validate_spec
+
+        spec = copy.deepcopy(SPECS["c25-pullback-perp-v1"])
+        spec["rules"]["exit"]["LONG"]["right"] = "1m.ema12"
+        with self.assertRaises(SpecError):
+            validate_spec(spec)
+        spec["indicators"] = {"ema": [12]}
+        validate_spec(spec)
+
+    def test_a_spec_with_its_own_period_runs_in_the_simulator(self):
+        import copy
+
+        spec = copy.deepcopy(SPECS["c27-breakout-perp-v1"])
+        spec["id"] = "c27-ema12"
+        spec["indicators"] = {"ema": [12]}
+        books = simulate_many([spec, SPECS["c27-breakout-perp-v1"]], ONES, FIVES)
+        self.assertEqual(len(books), 2)  # the extra period is computed once and the book runs
+
+    def test_funding_is_paid_by_longs_and_received_by_shorts_on_positive_rates(self):
+        end = ONES[-1]["bucket_start"] + 60_000
+        funding = [(ONES[0]["bucket_start"], end, "0.0001")]  # 1 bp per hour
+        base = simulate_many(list(SPECS.values()), ONES, FIVES)
+        paid = simulate_many(list(SPECS.values()), ONES, FIVES, funding=funding)
+        checked = 0
+        for plain, with_funding in zip(base, paid):
+            for a, b in zip(plain.trades, with_funding.trades):
+                self.assertTrue(b["funding_complete"])
+                if a["side"] == "LONG":
+                    self.assertLess(b["pnl_usd"], a["pnl_usd"] + 1e-9)
+                else:
+                    self.assertGreater(b["pnl_usd"], a["pnl_usd"] - 1e-9)
+                checked += 1
+                break
+        self.assertGreater(checked, 0)
+        self.assertFalse(any(t["funding_complete"] for b in base for t in b.trades))
+
+
 class HitTests(unittest.TestCase):
     def test_definitions(self):
         self.assertTrue(trade_hit("0.01"))
