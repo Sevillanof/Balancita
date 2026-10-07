@@ -222,6 +222,7 @@ class Book:
         self.position = None
         self.trades, self.skipped, self.decisions = [], [], []
         self._open_decisions = []
+        self.bucket = None
 
     def on_frame(self, bucket, current, previous, trend, regime):
         # Decision outcomes are judged on the closes `horizon` minutes later.
@@ -237,13 +238,14 @@ class Book:
                 still.append(decision)
         self._open_decisions = still
         common = {"previous": previous, "trend": trend, "regime": regime, "tick_size": self.tick_size}
+        self.bucket = bucket
         if self.position is not None:
             self._manage(bucket, current, common)
             return
         if not current.get("ready"):
             return
-        proposal = propose_spec(self.spec, current, **common)
-        if proposal["action"] not in ("LONG", "SHORT"):
+        proposal = self._entry_proposal(current, common)
+        if proposal is None or proposal["action"] not in ("LONG", "SHORT"):
             return
         side = proposal["action"]
         reference = D(current["candidate_close"])
@@ -272,6 +274,16 @@ class Book:
             "quantity": self.notional / entry, "reason_code": proposal["reason_code"],
         }
 
+    def _entry_proposal(self, current, common):
+        return propose_spec(self.spec, current, **common)
+
+    def _rule_exit(self, position, current, common, close):
+        """The strategy's own exit at the candle close: ``(price, reason)`` or ``None``."""
+        proposal = propose_spec(
+            self.spec, current, position_side=position["side"], delegated_strategy_id=position["delegated"],
+            frozen_target=position["target_text"], frozen_invalidation=position["frozen_invalidation"], **common)
+        return (D(close), "strategy_exit") if proposal["action"] == "FLAT" else None
+
     def _manage(self, bucket, current, common):
         position = self.position
         long = position["side"] == "LONG"
@@ -284,11 +296,9 @@ class Book:
             elif (high >= position["target"]) if long else (low <= position["target"]):
                 exit_price, reason = position["target"], "target"
         if exit_price is None and close is not None:
-            proposal = propose_spec(
-                self.spec, current, position_side=position["side"], delegated_strategy_id=position["delegated"],
-                frozen_target=position["target_text"], frozen_invalidation=position["frozen_invalidation"], **common)
-            if proposal["action"] == "FLAT":
-                exit_price, reason = D(close), "strategy_exit"
+            rule = self._rule_exit(position, current, common, close)
+            if rule is not None:
+                exit_price, reason = rule
             elif bucket + ONE_MINUTE_MS - position["opened_at"] >= position["horizon_ms"]:
                 exit_price, reason = D(close), "time_stop"
         if exit_price is None:
@@ -355,3 +365,43 @@ def simulate_many(specs, candles_1m, candles_5m, *, product_id=DEFAULT_PRODUCT, 
 
 def simulate(spec, candles_1m, candles_5m, **kwargs):
     return simulate_many([spec], candles_1m, candles_5m, **kwargs)[0]
+
+
+class DecisionBook(Book):
+    """Qwen's buy / hold / sell answers traded in the same book, fills and costs as a strategy.
+
+    ``chosen`` maps a bucket to ``buy`` | ``hold`` | ``sell``. buy opens a long and sell a
+    short; the opposite answer closes at the candle close and hold keeps the position. The
+    protective levels are the shipped strategies' default plan: stop ``stop_atr`` ATR, target
+    ``target_ratio`` times the stop, time stop after ``horizon_min``.
+    """
+
+    STRATEGY_ID = "qwen-trade-action"
+
+    def __init__(self, chosen, *, horizon_min=30, stop_atr="1.5", target_ratio="2", **kwargs):
+        super().__init__({"id": self.STRATEGY_ID}, **kwargs)
+        self.chosen = chosen
+        self.horizon_min, self.stop_atr, self.target_ratio = horizon_min, D(stop_atr), D(target_ratio)
+
+    def _entry_proposal(self, current, common):
+        answer = self.chosen.get(self.bucket)
+        if answer not in ("buy", "sell"):
+            return None
+        side = "LONG" if answer == "buy" else "SHORT"
+        close, atr = current.get("candidate_close"), current.get("atr14")
+        if close is None or atr is None or D(atr) <= 0:
+            self.skipped.append({"bucket_ms": self.bucket, "side": side, "reason": "protective_levels_unavailable"})
+            return None
+        entry, distance = D(close), D(atr) * self.stop_atr
+        sign = 1 if side == "LONG" else -1
+        stop, target = entry - sign * distance, entry + sign * distance * self.target_ratio
+        if stop <= 0:
+            self.skipped.append({"bucket_ms": self.bucket, "side": side, "reason": "protective_levels_unavailable"})
+            return None
+        return {"action": side, "strategy_id": self.STRATEGY_ID, "proposed_stop": str(stop),
+                "proposed_target": str(target), "horizon_minutes": self.horizon_min,
+                "reason_code": "qwen_" + answer, "invalidation": None, "delegated_strategy_id": None}
+
+    def _rule_exit(self, position, current, common, close):
+        opposite = "sell" if position["side"] == "LONG" else "buy"
+        return (D(close), "opposite_decision") if self.chosen.get(self.bucket) == opposite else None

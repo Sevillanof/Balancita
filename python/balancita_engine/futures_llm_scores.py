@@ -16,16 +16,15 @@ strategy:
   round trip). Otherwise it is a miss (-1). Hits and misses are counted
   separately. A decision whose horizon has not closed yet is ``pending``.
 * The trading book: buy opens a long and sell a short, one position at a time,
-  sized like the backtest and D (risk fraction over the stop distance plus
-  costs, capped by the max notional) and with the same cost-buffer rejection.
-  The protective levels are the shipped strategies' default plan (stop
+  in the shared simulator (``futures_simulator.DecisionBook``): a fixed 100 USD
+  notional, the same fills and costs as every strategy. The protective levels are the shipped strategies' default plan (stop
   ``STOP_ATR`` ATR, target ``TARGET_STOP_RATIO`` times the stop, time stop
   ``HORIZON_MIN``); an opposite decision closes the position at the candle
   close, and hold keeps it. Its summary is the backtest's (trades, wins,
   hit rate, net bp, P&L, return, drawdown).
 
-ASSUMPTION, as in the backtest: entry at the decision close with no latency or
-slippage and no funding, so results are optimistic against D.
+ASSUMPTION, as in the backtest: entry at the decision close with no latency and
+no funding, so results are slightly optimistic against D.
 """
 
 import json
@@ -34,13 +33,15 @@ import sys
 from decimal import Decimal
 
 from .futures_hits import trade_hit
-from .futures_costs import DEFAULT_PRODUCT, entry_fill, exit_fill, round_trip_cost_bps
+from .futures_costs import DEFAULT_PRODUCT, round_trip_cost_bps
+from .futures_simulator import DEFAULT_NOTIONAL_USD, DecisionBook
 from .futures_strategy_backtest import (
     BOOK_CONFIG,
     ONE_MINUTE_MS,
     _max_drawdown,
     _round,
     _summary,
+    add_equity,
     load_verdict_rows,
 )
 
@@ -113,77 +114,16 @@ def score_decisions(decisions, verdicts, *, book=BOOK_CONFIG, horizon_min=HORIZO
 
 
 def simulate_book(decisions, verdicts, *, book=BOOK_CONFIG, horizon_min=HORIZON_MIN):
-    """Closed trades of Qwen's decisions in the backtest's book (same fields as the backtest trades)."""
-    taker = Decimal(book["taker_rate"])
-    product = book.get("product_id", DEFAULT_PRODUCT)
-    buffer_rate = Decimal(book["cost_buffer_rate"])
-    risk_fraction = Decimal(book["risk_fraction"])
-    max_notional = Decimal(book["max_notional_usd"])
-    exposure = Decimal(book["max_exposure_multiple"])
-    equity = Decimal(book["initial_cash_usd"])
-    chosen_at = {d["bucket_start"]: d["chosen"] for d in decisions}
-    trades, skipped = [], []
-    position = None
+    """Closed trades of Qwen's decisions in the shared simulator book (a strategy's fills, costs and sizing)."""
+    chosen = {d["bucket_start"]: d["chosen"] for d in decisions}
+    qwen = DecisionBook(chosen, horizon_min=horizon_min, stop_atr=STOP_ATR, target_ratio=TARGET_STOP_RATIO,
+                        product_id=book.get("product_id", DEFAULT_PRODUCT),
+                        notional_usd=book.get("notional_usd", DEFAULT_NOTIONAL_USD))
     for verdict in verdicts:
-        current = (verdict.get("features") or {}).get("1m") or {}
-        bucket = verdict["bucket_start_ms"]
-        chosen = chosen_at.get(bucket)
-        if position is not None:
-            low, high, close = (current.get(k) for k in ("candidate_low", "candidate_high", "candidate_close"))
-            exit_price, reason = None, None
-            long = position["side"] == "LONG"
-            if low is not None and high is not None:
-                low, high = Decimal(low), Decimal(high)
-                if (low <= position["stop"]) if long else (high >= position["stop"]):
-                    exit_price, reason = position["stop"], "stop"
-                elif (high >= position["target"]) if long else (low <= position["target"]):
-                    exit_price, reason = position["target"], "target"
-            if exit_price is None and close is not None:
-                if chosen == ("sell" if long else "buy"):
-                    exit_price, reason = Decimal(close), "opposite_decision"
-                elif bucket + ONE_MINUTE_MS - position["opened_at"] >= horizon_min * ONE_MINUTE_MS:
-                    exit_price, reason = Decimal(close), "time_stop"
-            if exit_price is not None:
-                exit_price = exit_fill(exit_price, position["side"], product, reason)
-                entry, quantity = position["entry"], position["quantity"]
-                gross = (exit_price - entry) * quantity if long else (entry - exit_price) * quantity
-                pnl = gross - (entry + exit_price) * quantity * taker
-                equity += pnl
-                trades.append({
-                    "side": position["side"], "entry_bucket_ms": position["opened_bucket"],
-                    "entry_time_ms": position["opened_at"], "entry_price": str(entry),
-                    "stop_price": str(position["stop"]), "target_price": str(position["target"]),
-                    "exit_bucket_ms": bucket, "exit_time_ms": bucket + ONE_MINUTE_MS,
-                    "exit_price": str(exit_price), "exit_reason": reason, "quantity": str(quantity),
-                    "net_bp": float(round(pnl / (entry * quantity) * 10_000, 4)),
-                    "pnl_usd": float(round(pnl, 4)), "equity_usd": float(round(equity, 4)),
-                })
-                position = None
-            continue
-        if chosen not in ("buy", "sell") or not current.get("ready"):
-            continue
-        side = "LONG" if chosen == "buy" else "SHORT"
-        close, atr = current.get("candidate_close"), current.get("atr14")
-        if close is None or atr is None or Decimal(atr) <= 0:
-            skipped.append({"bucket_ms": bucket, "side": side, "reason": "protective_levels_unavailable"})
-            continue
-        entry = Decimal(close)
-        distance = Decimal(atr) * STOP_ATR
-        stop = entry - distance if side == "LONG" else entry + distance
-        target = entry + distance * TARGET_STOP_RATIO if side == "LONG" else entry - distance * TARGET_STOP_RATIO
-        cost_per_unit = entry * (2 * taker + buffer_rate)
-        if stop <= 0 or abs(target - entry) <= cost_per_unit + entry * buffer_rate:
-            skipped.append({"bucket_ms": bucket, "side": side, "reason": "target_does_not_clear_cost_buffer"})
-            continue
-        by_risk = equity * risk_fraction / (abs(entry - stop) + cost_per_unit)
-        by_exposure = min(max_notional, equity * exposure) / entry
-        quantity = min(by_risk, by_exposure)
-        if quantity <= 0:
-            skipped.append({"bucket_ms": bucket, "side": side, "reason": "no_equity"})
-            continue
-        position = {"side": side, "entry": entry_fill(entry, side, product), "stop": stop, "target": target, "quantity": quantity,
-                    "opened_bucket": bucket, "opened_at": bucket + ONE_MINUTE_MS}
-    return trades, skipped
+        features = verdict.get("features") or {}
+        qwen.on_frame(verdict["bucket_start_ms"], features.get("1m") or {}, features.get("1m_previous"),
+                      features.get("5m"), verdict.get("regime", "unknown"))
+    return add_equity(qwen.trades, book["initial_cash_usd"]), qwen.skipped
 
 
 def _points(rows):

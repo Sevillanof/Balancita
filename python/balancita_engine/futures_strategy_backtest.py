@@ -1,19 +1,16 @@
-"""Walk-forward backtest of one strategy spec over stored verdicts.
+"""Walk-forward backtest of one strategy spec over official candles.
 
-The input is C's verdicts DB, read-only: every row already holds the closed-bar
-features (1m, previous 1m, 5m), the chained regime and the candle's close, high
-and low. Replaying a spec over those rows gives what the strategy would have
-proposed live, with no lookahead, and needs no market data of its own.
+The input is the product's official 1m and 5m candles. The run is the shared
+simulator (``futures_simulator``, SS-03): indicators are computed incrementally
+with the periods the spec declares, ``propose_spec`` decides entries and exits
+on closed bars only (no lookahead), and one independent book trades a fixed
+notional (100 USD) long or short, one position at a time, exactly like paper
+execution D. Every fill pays the shared cost model (``futures_costs``: taker
+fee, spread and impact; stops also a full spread). Candles before ``start_ms``
+only warm the indicators up.
 
-The simulation is one independent paper book per strategy and product, sized
-like paper execution D (risk fraction of equity over the stop distance plus
-costs, capped by the max notional) and with D's cost-buffer rejection. One
-position at a time: entry at the decision close as taker; exit by stop or
-target (the stop wins when one candle touches both), by the strategy's own
-exit rule at the candle close, or by its horizon as a time stop. Fees are the
-taker rate on both sides, and every fill pays the product's execution cost
-from ``futures_costs`` (stops also a full spread). ASSUMPTION: no funding and no
-displayed-size cap, so results are still slightly optimistic against D.
+Funding is charged only when ``funding`` periods are given; otherwise a trade
+reports ``funding_complete = false`` and the result is slightly optimistic.
 """
 
 import json
@@ -22,22 +19,21 @@ import sqlite3
 import statistics
 from decimal import Decimal
 
-from .futures_costs import DEFAULT_PRODUCT, TAKER_RATE, entry_fill, exit_fill, round_trip_cost_bps
-from .futures_paper_execution import COST_BUFFER_RATE, PAPER_EXECUTION_CONFIG
-from .futures_spec_strategy import propose_spec
+from .futures_costs import COST_MODEL_VERSION, DEFAULT_PRODUCT, round_trip_cost_bps
+from .futures_simulator import DEFAULT_NOTIONAL_USD, Book, frames, merge_periods, DEFAULT_PERIODS
+from .futures_spec_strategy import declared_indicators
 
 ONE_MINUTE_MS = 60_000
 IN_SAMPLE_SHARE = Decimal("0.7")
 MAX_ROWS = 200_000
-# D's own cost and sizing constants, imported so the backtest cannot drift from paper execution.
-BOOK_CONFIG = {
-    key: PAPER_EXECUTION_CONFIG[key]
-    for key in ("initial_cash_usd", "max_notional_usd", "max_exposure_multiple", "risk_fraction")
-}
-BOOK_CONFIG["taker_rate"] = TAKER_RATE
-BOOK_CONFIG["product_id"] = DEFAULT_PRODUCT
-BOOK_CONFIG["cost_buffer_rate"] = str(COST_BUFFER_RATE)
 MIN_TRADES = 30
+# The book every scorer shares: a fixed notional per trade, the initial cash being that notional.
+BOOK_CONFIG = {
+    "notional_usd": str(DEFAULT_NOTIONAL_USD),
+    "initial_cash_usd": str(DEFAULT_NOTIONAL_USD),
+    "product_id": DEFAULT_PRODUCT,
+    "cost_model": COST_MODEL_VERSION,
+}
 
 
 def load_verdict_rows(verdicts_db_path, product_id, start_ms=None, end_ms=None, limit=MAX_ROWS):
@@ -61,104 +57,24 @@ def load_verdict_rows(verdicts_db_path, product_id, start_ms=None, end_ms=None, 
     return [json.loads(row[0]) for row in rows]
 
 
-def _frozen_level(invalidation):
-    if isinstance(invalidation, str) and "@" in invalidation:
-        level = invalidation.rsplit("@", 1)[1]
-        try:
-            return level if Decimal(level).is_finite() else None
-        except ArithmeticError:
-            return None
-    return None
+def add_equity(trades, initial_cash):
+    """Running equity after each closed trade (``equity_usd``), in place."""
+    equity = float(initial_cash)
+    for trade in trades:
+        equity += trade["pnl_usd"]
+        trade["equity_usd"] = round(equity, 4)
+    return trades
 
 
-def _scope(verdict, tick_size):
-    features = verdict.get("features") or {}
-    return features.get("1m") or {}, {
-        "previous": features.get("1m_previous"), "trend": features.get("5m"),
-        "regime": verdict.get("regime", "unknown"), "tick_size": tick_size,
-    }
-
-
-def simulate(spec, verdicts, *, tick_size="1", book=BOOK_CONFIG):
-    """Closed trades and skipped signals of ``spec`` over ``verdicts`` (oldest first)."""
-    taker = Decimal(book["taker_rate"])
-    product = book.get("product_id", DEFAULT_PRODUCT)
-    buffer_rate = Decimal(book["cost_buffer_rate"])
-    risk_fraction = Decimal(book["risk_fraction"])
-    max_notional = Decimal(book["max_notional_usd"])
-    exposure = Decimal(book["max_exposure_multiple"])
-    equity = Decimal(book["initial_cash_usd"])
-    trades, skipped = [], []
-    position = None
-    for verdict in verdicts:
-        current, common = _scope(verdict, tick_size)
-        bucket = verdict["bucket_start_ms"]
-        if position is not None:
-            low, high, close = (current.get(k) for k in ("candidate_low", "candidate_high", "candidate_close"))
-            exit_price, reason = None, None
-            long = position["side"] == "LONG"
-            if low is not None and high is not None:
-                low, high = Decimal(low), Decimal(high)
-                if (low <= position["stop"]) if long else (high >= position["stop"]):
-                    exit_price, reason = position["stop"], "stop"
-                elif (high >= position["target"]) if long else (low <= position["target"]):
-                    exit_price, reason = position["target"], "target"
-            if exit_price is None and close is not None:
-                proposal = propose_spec(
-                    spec, current, position_side=position["side"],
-                    delegated_strategy_id=position["delegated"], frozen_target=position["target_text"],
-                    frozen_invalidation=position["frozen_invalidation"], **common)
-                if proposal["action"] == "FLAT":
-                    exit_price, reason = Decimal(close), "strategy_exit"
-                elif bucket + ONE_MINUTE_MS - position["opened_at"] >= position["horizon_ms"]:
-                    exit_price, reason = Decimal(close), "time_stop"
-            if exit_price is not None:
-                exit_price = exit_fill(exit_price, position["side"], product, reason)
-                entry, quantity = position["entry"], position["quantity"]
-                gross = (exit_price - entry) * quantity if long else (entry - exit_price) * quantity
-                fees = (entry + exit_price) * quantity * taker
-                pnl = gross - fees
-                equity += pnl
-                trades.append({
-                    "strategy_id": position["strategy_id"], "side": position["side"],
-                    "entry_bucket_ms": position["opened_bucket"], "entry_time_ms": position["opened_at"],
-                    "entry_price": str(entry), "stop_price": str(position["stop"]),
-                    "target_price": position["target_text"], "exit_bucket_ms": bucket,
-                    "exit_time_ms": bucket + ONE_MINUTE_MS, "exit_price": str(exit_price),
-                    "exit_reason": reason, "quantity": str(quantity),
-                    "net_bp": float(round(pnl / (entry * quantity) * 10_000, 4)),
-                    "pnl_usd": float(round(pnl, 4)), "equity_usd": float(round(equity, 4)),
-                    "reason_code": position["reason_code"],
-                })
-                position = None
-            continue
-        if not current.get("ready"):
-            continue
-        proposal = propose_spec(spec, current, **common)
-        if proposal["action"] not in ("LONG", "SHORT"):
-            continue
-        entry = entry_fill(Decimal(current["candidate_close"]), proposal["action"], product)
-        stop, target = Decimal(proposal["proposed_stop"]), Decimal(proposal["proposed_target"])
-        cost_per_unit = entry * (2 * taker + buffer_rate)
-        if abs(target - entry) <= cost_per_unit + entry * buffer_rate:
-            skipped.append({"bucket_ms": bucket, "side": proposal["action"],
-                            "reason": "target_does_not_clear_cost_buffer"})
-            continue
-        by_risk = equity * risk_fraction / (abs(entry - stop) + cost_per_unit)
-        by_exposure = min(max_notional, equity * exposure) / entry
-        quantity = min(by_risk, by_exposure)
-        if quantity <= 0:
-            skipped.append({"bucket_ms": bucket, "side": proposal["action"], "reason": "no_equity"})
-            continue
-        position = {
-            "strategy_id": proposal["strategy_id"], "side": proposal["action"], "entry": entry,
-            "stop": stop, "target": target, "target_text": proposal["proposed_target"],
-            "frozen_invalidation": _frozen_level(proposal.get("invalidation")),
-            "delegated": proposal.get("delegated_strategy_id"), "opened_bucket": bucket,
-            "opened_at": bucket + ONE_MINUTE_MS, "horizon_ms": proposal["horizon_minutes"] * ONE_MINUTE_MS,
-            "reason_code": proposal["reason_code"], "quantity": quantity,
-        }
-    return trades, skipped
+def simulate(spec, candles_1m, candles_5m, *, start_ms=None, product_id=DEFAULT_PRODUCT, tick_size="1",
+             notional_usd=DEFAULT_NOTIONAL_USD, funding=()):
+    """The spec's book over the candles: ``(trades, skipped)``; frames before ``start_ms`` only warm up."""
+    book = Book(spec, product_id=product_id, tick_size=tick_size, notional_usd=notional_usd, funding=funding)
+    periods = merge_periods(DEFAULT_PERIODS, declared_indicators(spec))
+    for frame in frames(candles_1m, candles_5m, periods):
+        if start_ms is None or frame[0] >= start_ms:
+            book.on_frame(*frame)
+    return book.trades, book.skipped
 
 
 def _sharpe(values):
@@ -231,20 +147,23 @@ def _max_drawdown(trades, initial_cash):
     return {"pct": _round(worst), "at_ms": at}
 
 
-def _buy_and_hold_pct(verdicts):
-    closes = [((v.get("features") or {}).get("1m") or {}).get("candidate_close") for v in verdicts]
-    closes = [Decimal(c) for c in closes if c is not None]
+def _buy_and_hold_pct(candles, start_ms):
+    closes = [Decimal(str(c["close"])) for c in candles if start_ms is None or c["bucket_start"] >= start_ms]
     if len(closes) < 2:
         return None
     return float(round((closes[-1] - closes[0]) / closes[0] * 100, 4))
 
 
-def run_backtest(spec, verdicts, *, tick_size="1", book=BOOK_CONFIG, trial_sharpes=()):
+def run_backtest(spec, candles_1m, candles_5m, *, start_ms=None, product_id=DEFAULT_PRODUCT, tick_size="1",
+                 notional_usd=DEFAULT_NOTIONAL_USD, funding=(), trial_sharpes=()):
     """Trades, the equity summary and the in-sample / out-of-sample split for one spec."""
-    initial_cash = float(book["initial_cash_usd"])
-    trades, skipped = simulate(spec, verdicts, tick_size=tick_size, book=book)
-    if verdicts:
-        first, last = verdicts[0]["bucket_start_ms"], verdicts[-1]["bucket_start_ms"]
+    initial_cash = float(notional_usd)
+    trades, skipped = simulate(spec, candles_1m, candles_5m, start_ms=start_ms, product_id=product_id,
+                               tick_size=tick_size, notional_usd=notional_usd, funding=funding)
+    add_equity(trades, initial_cash)
+    inside = [c["bucket_start"] for c in candles_1m if start_ms is None or c["bucket_start"] >= start_ms]
+    if inside:
+        first, last = inside[0], inside[-1]
         split = first + int((Decimal(last - first) * IN_SAMPLE_SHARE).to_integral_value())
     else:
         first = last = split = None
@@ -253,14 +172,15 @@ def run_backtest(spec, verdicts, *, tick_size="1", book=BOOK_CONFIG, trial_sharp
     oos_values = [t["net_bp"] for t in out_sample]
     oos_sharpe = _sharpe(oos_values)
     # The same trades on the other side: the gross flips and the round trip is paid again.
-    round_trip_bp = float(round_trip_cost_bps(book.get("product_id", DEFAULT_PRODUCT)))
+    round_trip_bp = float(round_trip_cost_bps(product_id))
     inverse = [-t["net_bp"] - 2 * round_trip_bp for t in trades]
-    buy_and_hold = _buy_and_hold_pct(verdicts)
+    buy_and_hold = _buy_and_hold_pct(candles_1m, start_ms)
     total = _summary(trades, initial_cash)
     return {
         "period": {"first_bucket_ms": first, "last_bucket_ms": last, "split_bucket_ms": split,
-                   "verdicts": len(verdicts)},
-        "book": dict(book),
+                   "candles": len(inside)},
+        "book": dict(BOOK_CONFIG, product_id=product_id, notional_usd=str(notional_usd),
+                     initial_cash_usd=str(notional_usd)),
         "all": total,
         "in_sample": _summary(in_sample, initial_cash),
         "out_of_sample": _summary(out_sample, initial_cash),

@@ -38,6 +38,7 @@ from .futures_spec_strategy import (
     spec_hash,
     validate_spec,
 )
+from .futures_replay import load_range
 from .futures_strategy_backtest import MIN_TRADES, load_verdict_rows, run_backtest
 from .futures_strategy_translate import TranslationError, default_provider, translate
 
@@ -362,8 +363,10 @@ class StrategyRegistry:
 class StrategyService:
     """What the API does: registry plus read-only verdicts, per product and period."""
 
-    def __init__(self, registry, verdicts_db_path, products, provider_factory=None, replays=None):
+    def __init__(self, registry, verdicts_db_path, products, provider_factory=None, replays=None,
+                 market_db_path=None):
         self.registry = registry
+        self.market_db_path = market_db_path
         self.replays = replays
         self.provider_factory = provider_factory or (lambda: default_provider(os.environ))
         self.verdicts_db_path = verdicts_db_path
@@ -376,39 +379,48 @@ class StrategyService:
             raise RegistryError("unknown_product", "unknown product " + str(product_id))
         return self.products[product_id]
 
-    def _verdicts(self, product_id, days):
+    def _candles(self, product_id, days):
+        """``(start_ms, candles_1m, candles_5m)`` of the last ``days`` days from the market DB (read-only).
+
+        The error code stays ``verdicts_unavailable``: the front already maps it to "no data yet".
+        """
         if days not in PERIOD_DAYS:
             raise RegistryError("invalid_period", "days must be one of 7, 30, 90")
-        if not self.verdicts_db_path or not os.path.exists(self.verdicts_db_path):
-            raise RegistryError("verdicts_unavailable", "no verdicts DB yet", 503)
-        db = sqlite3.connect("file:{}?mode=ro".format(self.verdicts_db_path), uri=True)
+        if not self.market_db_path or not os.path.exists(self.market_db_path):
+            raise RegistryError("verdicts_unavailable", "no market DB yet", 503)
+        db = sqlite3.connect("file:{}?mode=ro".format(self.market_db_path), uri=True)
         try:
-            last = db.execute("SELECT MAX(bucket_start) FROM paper_futures_verdicts WHERE product_id=?",
-                              (product_id,)).fetchone()[0]
+            last = db.execute(
+                "SELECT MAX(bucket_start) FROM paper_futures_official_candles WHERE product_id=? AND interval_ms=?",
+                (product_id, 60_000)).fetchone()[0]
         except sqlite3.OperationalError as error:
             raise RegistryError("verdicts_unavailable", str(error), 503) from error
         finally:
             db.close()
         if last is None:
-            return []
+            return None, [], []
         start = last + 60_000 - days * DAY_MS
         key = (product_id, start, last)
         if key not in self._cache:
-            self._cache = {key: load_verdict_rows(self.verdicts_db_path, product_id, start, last + 60_000)}
+            try:
+                ones, fives = load_range(self.market_db_path, product_id, start, last + 60_000)
+            except (ValueError, sqlite3.Error) as error:
+                raise RegistryError("verdicts_unavailable", str(error), 503) from error
+            self._cache = {key: (start, ones, fives)}
         return self._cache[key]
 
     def backtest(self, spec, product_id, days, *, strategy_id=None, version=None, record=True):
         tick = self._tick(product_id)
-        verdicts = self._verdicts(product_id, days)
+        start, ones, fives = self._candles(product_id, days)
         digest = spec_hash(spec)
-        key = (digest, product_id, days, verdicts[0]["bucket_start_ms"] if verdicts else None,
-               verdicts[-1]["bucket_start_ms"] if verdicts else None)
+        inside = [c["bucket_start"] for c in ones if start is None or c["bucket_start"] >= start]
+        key = (digest, product_id, days, inside[0] if inside else None, inside[-1] if inside else None)
         if key in self._results:
             return self._results[key]
-        result = run_backtest(spec, verdicts, tick_size=tick,
+        result = run_backtest(spec, ones, fives, start_ms=start, product_id=product_id, tick_size=tick,
                               trial_sharpes=self.registry.trial_sharpes(product_id, digest))
         result.update(spec_hash=digest, product_id=product_id, days=days)
-        if record and verdicts:
+        if record and inside:
             self.registry.record_backtest(digest, strategy_id or spec["id"], version, product_id, result)
         if len(self._results) > 500:
             self._results.clear()
@@ -419,7 +431,7 @@ class StrategyService:
         rows = []
         buy_and_hold = None
         try:
-            self._verdicts(product_id, days)
+            self._candles(product_id, days)
         except RegistryError as error:
             if error.code != "verdicts_unavailable":
                 raise
@@ -622,7 +634,7 @@ def main(argv=None):
         directory = args.replays_dir or os.path.join(os.path.dirname(os.path.abspath(args.strategies_db)), "replays")
         replays = ReplayJobs(args.market_db, directory, lambda: registry.active_specs(_now_ms()), products,
                              qwen_factory(os.path.join(directory, "qwen-cache.db")))
-    service = StrategyService(registry, args.verdicts_db, products, replays=replays)
+    service = StrategyService(registry, args.verdicts_db, products, replays=replays, market_db_path=args.market_db)
     server = ThreadingHTTPServer(("127.0.0.1", args.port), make_handler(service))
     print("[strategies] registry {} on http://127.0.0.1:{}".format(args.strategies_db, args.port), flush=True)
     try:
