@@ -22,6 +22,8 @@ import {
 } from '../infrastructure/terminal-chart-client.ts'
 import {
   exitMarkers,
+  strategyCode,
+  strategyMarkerColor,
   positionLines,
   timeframeCandles,
 } from '../domain/terminal-chart-model.ts'
@@ -331,9 +333,29 @@ export default function TerminalChartPanel({
       })
     return out
   }, [position, mark, colors])
-  const allMarkers = useMemo(
+  const [hiddenStrategies, setHiddenStrategies] = useState<string[]>([])
+  const everyMarker = useMemo(
     () => [...markers, ...exitMarkers(orders)],
     [markers, orders],
+  )
+  const strategyIds = useMemo(
+    () =>
+      [
+        ...new Set(
+          everyMarker.flatMap((marker) =>
+            marker.strategyId ? [marker.strategyId] : [],
+          ),
+        ),
+      ].sort(),
+    [everyMarker],
+  )
+  const allMarkers = useMemo(
+    () =>
+      everyMarker.filter(
+        (marker) =>
+          !marker.strategyId || !hiddenStrategies.includes(marker.strategyId),
+      ),
+    [everyMarker, hiddenStrategies],
   )
   const latestFlow = remote?.flow.at(-1)
   const depth = depthWithin(remote?.depth ?? null, 'liquidity01')
@@ -498,6 +520,32 @@ export default function TerminalChartPanel({
         </p>
       )}
 
+      {strategyIds.length > 0 && (
+        <div
+          className="terminal-chart__strategies"
+          role="group"
+          aria-label="Filtrar marcadores por estrategia"
+          style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}
+        >
+          {strategyIds.map((id) => {
+            const hidden = hiddenStrategies.includes(id)
+            return (
+              <button
+                key={id}
+                type="button"
+                aria-pressed={!hidden}
+                onClick={() => setHiddenStrategies((list) => toggle(list, id))}
+                style={{
+                  borderColor: strategyMarkerColor(id),
+                  opacity: hidden ? 0.45 : 1,
+                }}
+              >
+                {strategyCode(id) ?? id}
+              </button>
+            )
+          })}
+        </div>
+      )}
       {waiting ? (
         <p className="terminal-chart__loading" role="status">
           Cargando velas de {timeframeLabel}…

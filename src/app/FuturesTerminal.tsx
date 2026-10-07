@@ -24,6 +24,7 @@ import type { DecisionRow } from './terminal-decisions.ts'
 import './DemoShell.css'
 import './ConnectedTerminal.css'
 import { record } from '../shared/wire/decode.ts'
+import { strategyCode } from '../features/trading-view/domain/terminal-chart-model.ts'
 
 type ViewState = Record<string, unknown>
 
@@ -312,13 +313,19 @@ function TerminalMarketChart({
     )
     const direction =
       action === 'LONG' ? 'long' : action === 'SHORT' ? 'short' : undefined
+    const selector = record(analysis.selector)
+    const strategyId = selector.strategy_id ?? analysis.selected_strategy_id
+    const code = strategyCode(
+      typeof strategyId === 'string' ? strategyId : undefined,
+    )
     return [
       {
         id,
         time: renderTime,
         type: direction ? 'entry' : 'discard',
         ...(direction ? { direction } : {}),
-        label: direction ? action : 'WAIT',
+        label: direction ? (code ? `${code} ${action}` : action) : 'WAIT',
+        ...(direction && typeof strategyId === 'string' ? { strategyId } : {}),
       },
     ]
   })

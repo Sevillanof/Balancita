@@ -129,3 +129,31 @@ describe('terminal chart model', () => {
     expect(parsed.ticker).toEqual({ mark: 1 })
   })
 })
+
+describe('strategy markers', () => {
+  it('codes and colours a strategy id', async () => {
+    const { strategyCode, strategyMarkerColor } =
+      await import('./terminal-chart-model.ts')
+    expect(strategyCode('c27-breakout-perp-v1')).toBe('C27')
+    expect(strategyCode(null)).toBeNull()
+    expect(strategyMarkerColor('c25-pullback-perp-v1')).toBeTruthy()
+    expect(strategyMarkerColor('x')).toBeUndefined()
+  })
+  it('tags exit markers with the order strategy', async () => {
+    const { exitMarkers } = await import('./terminal-chart-model.ts')
+    const [marker] = exitMarkers([
+      {
+        state: 'filled',
+        reduce_only: true,
+        order_id: 'o1',
+        closed_at_ms: 5000,
+        reason_code: 'protective_stop',
+        strategy_id: 'c26-reversion-perp-v1',
+      },
+    ])
+    expect(marker).toMatchObject({
+      label: 'C26 STOP',
+      strategyId: 'c26-reversion-perp-v1',
+    })
+  })
+})
