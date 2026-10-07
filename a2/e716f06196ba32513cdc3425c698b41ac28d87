@@ -1,0 +1,19 @@
+odd/tasks/strategy-simulation.md
+  s_fdf3dfe0f27763::t_01c45edc420c60 56,101
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a2e716f06196ba32513cdc3425c698b41ac28d87",
+  "prompts": {},
+  "sessions": {
+    "s_fdf3dfe0f27763": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a6f5d8ee-2ca3-4713-a232-d817b2896ac0",
+        "model": "unknown"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
