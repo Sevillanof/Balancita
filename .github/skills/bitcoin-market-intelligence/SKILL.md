@@ -49,8 +49,7 @@ price forecasts; forecast history, backtesting, or evaluation.
 
 ## Execution Steps
 
-1. Read the three governing docs above; the roadmap may not exist yet during
-   BI-1 and is a forward local reference.
+1. Read the three governing docs above.
 2. Classify the request as quote, news, technical-analysis, forecast, or
    backtest/evaluation.
 3. Apply the matching Hard Rules and Decision Gate.

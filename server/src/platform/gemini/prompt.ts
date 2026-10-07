@@ -3,8 +3,8 @@ import type { AnalysisInputRequest } from '../../features/analysis/wire.ts'
 /**
  * Deterministic, text-only prompt that turns a wire analysis input into a
  * structured surveillance verdict. It never enables tools, grounding, files,
- * audio or images: the model only receives text and must answer with plain
- * JSON following the schema below.
+ * audio or images: the model only receives text; the response shape is
+ * enforced by the JSON schema the service sends as `responseJsonSchema`.
  */
 export function buildAnalysisPrompt(input: AnalysisInputRequest): string {
   const context = JSON.stringify(
@@ -25,21 +25,6 @@ export function buildAnalysisPrompt(input: AnalysisInputRequest): string {
     'Responde en español neutral y profesional. Evalúa la tendencia actual, la',
     'volatilidad ATR y el estado de cartera. La recomendación es informativa:',
     'nunca ejecuta órdenes ni llama a ningún proveedor de ejecución.',
-    '',
-    'Devuelve SOLO JSON válido con esta estructura exacta (sin Markdown ni prosa):',
-    '{',
-    '  "instrumentId": string,',
-    '  "classification": "watch" | "neutral" | "review",',
-    '  "recommendation": "buy" | "sell" | "hold",',
-    '  "reasons": string[],',
-    '  "warnings": string[],',
-    '  "volatility": {',
-    '    "lookbackCandles": number,',
-    '    "averageTrueRangePercent": number,',
-    '    "level": "low" | "moderate" | "high"',
-    '  }',
-    '  "disclaimer": string',
-    '}',
     '',
     'reasons debe explicar en español cómo la tendencia, la volatilidad y la',
     'cartera llevaron a la recomendación. warnings debe señalar datos faltantes,',

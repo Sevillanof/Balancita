@@ -18,13 +18,9 @@ describe('buildAnalysisPrompt', () => {
       candles: [],
       holding: null,
     })
-    expect(prompt).toMatch(/watch/)
-    expect(prompt).toMatch(/neutral/)
-    expect(prompt).toMatch(/review/)
-    expect(prompt).toMatch(/recommendation.*buy.*sell.*hold/s)
     expect(prompt.toLowerCase()).toMatch(/órdenes/)
     expect(prompt).toMatch(/español neutral/)
-    expect(prompt).toMatch(/"buy"|"sell"/)
+    expect(prompt).toMatch(/nunca puede ser "sell"/)
   })
 
   it('is deterministic for the same input', () => {
