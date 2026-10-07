@@ -33,6 +33,7 @@ import sqlite3
 import sys
 from decimal import Decimal
 
+from .futures_hits import trade_hit
 from .futures_costs import DEFAULT_PRODUCT, entry_fill, exit_fill, round_trip_cost_bps
 from .futures_strategy_backtest import (
     BOOK_CONFIG,
@@ -100,9 +101,9 @@ def score_decisions(decisions, verdicts, *, book=BOOK_CONFIG, horizon_min=HORIZO
             gross = (exit_price - entry) / entry * TEN_THOUSAND
             long_net, short_net = gross - round_trip_bp, -gross - round_trip_bp
             if chosen == "buy":
-                net, hit = long_net, long_net > 0
+                net, hit = long_net, trade_hit(long_net)
             elif chosen == "sell":
-                net, hit = short_net, short_net > 0
+                net, hit = short_net, trade_hit(short_net)
             else:
                 net, hit = Decimal(0), long_net <= 0 and short_net <= 0
             row.update(status="scored", point=1 if hit else -1,
