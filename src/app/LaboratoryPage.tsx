@@ -8,6 +8,7 @@ import './DemoShell.css'
 import './ConnectedTerminal.css'
 import ApprovedTradingHeader from '../features/trading-view/presentation/ApprovedTradingHeader.tsx'
 import StrategyLab from '../features/strategy-lab/presentation/StrategyLab.tsx'
+import ReplayPanel from '../features/strategy-lab/presentation/ReplayPanel.tsx'
 import { appNavigation } from './app-navigation.ts'
 
 export default function LaboratoryPage() {
@@ -23,6 +24,7 @@ export default function LaboratoryPage() {
       />
       <main className="demo-shell__main connected-terminal__main">
         <StrategyLab />
+        <ReplayPanel />
       </main>
     </div>
   )

@@ -196,6 +196,17 @@ class ReplayJobs:
                                 "qwen": meta.get("qwen"), "error": None, "summaries": summaries}
         return sorted(rows.values(), key=lambda r: r["id"], reverse=True)
 
+    def candles(self, run_id):
+        """The replay range's 1m candles (seconds, numbers) for its chart."""
+        meta, _ = self._meta(run_id) if os.path.exists(self._path(run_id)) else (None, None)
+        if meta is None:
+            raise KeyError("unknown replay " + run_id)
+        ones, _ = load_range(self.market_db, meta["product_id"], meta["start_ms"], meta["end_ms"])
+        return {"candles": [
+            {"time": c["bucket_start"] // 1000, "open": float(c["open"]), "high": float(c["high"]),
+             "low": float(c["low"]), "close": float(c["close"]), "volume": float(c["volume_btc"])}
+            for c in ones if meta["start_ms"] <= c["bucket_start"] < meta["end_ms"]]}
+
     def detail(self, run_id):
         if "/" in run_id or not os.path.exists(self._path(run_id)):
             job = self._jobs.get(run_id)
