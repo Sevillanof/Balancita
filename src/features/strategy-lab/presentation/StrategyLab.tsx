@@ -51,7 +51,7 @@ import {
   loadQwenScores,
   type QwenScores,
 } from '../infrastructure/qwen-scores.ts'
-import { percent, price, signedPercent, signedUsd, utcTime } from './format.ts'
+import { percent, price, signedPercent, signedUsd, utcTime } from '../../../shared/finance/format.ts'
 import { QwenFocusHead, QwenSide } from './QwenPanels.tsx'
 import './StrategyLab.css'
 

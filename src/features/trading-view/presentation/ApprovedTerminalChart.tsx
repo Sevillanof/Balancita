@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react'
+import { currency as formatCurrency } from '../../../shared/finance/format.ts'
 import {
   CandlestickSeries,
   ColorType,
@@ -315,13 +316,7 @@ export default function ApprovedTerminalChart({
           ? {
               type: 'custom',
               minMove: 0.01,
-              formatter: (price: number) =>
-                new Intl.NumberFormat('es-ES', {
-                  style: 'currency',
-                  currency,
-                  minimumFractionDigits: 2,
-                  maximumFractionDigits: 2,
-                }).format(price),
+              formatter: (price: number) => formatCurrency(price, currency),
             }
           : { type: 'price', precision: 2, minMove: 0.01 },
     })

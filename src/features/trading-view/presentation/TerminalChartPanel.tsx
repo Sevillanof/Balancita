@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { amount, compactUsd, usd } from '../../../shared/finance/format.ts'
 import ApprovedTerminalChart, {
   type ApprovedChartOverlay,
   type ApprovedChartPane,
@@ -81,31 +82,6 @@ const css = (name: string, fallback: string) =>
         .getPropertyValue(name)
         .trim() || fallback
 
-const usd = (value: number | null | undefined, digits = 2) =>
-  value == null
-    ? '—'
-    : new Intl.NumberFormat('es-ES', {
-        style: 'currency',
-        currency: 'USD',
-        minimumFractionDigits: digits,
-        maximumFractionDigits: digits,
-      }).format(value)
-const amount = (value: number | null | undefined, digits = 2) =>
-  value == null
-    ? '—'
-    : new Intl.NumberFormat('es-ES', {
-        minimumFractionDigits: digits,
-        maximumFractionDigits: digits,
-      }).format(value)
-const compactUsd = (value: number | null | undefined) =>
-  value == null
-    ? '—'
-    : new Intl.NumberFormat('es-ES', {
-        style: 'currency',
-        currency: 'USD',
-        notation: 'compact',
-        maximumFractionDigits: 1,
-      }).format(value)
 const percent = (value: number | null | undefined, digits = 2) =>
   value == null ? '—' : `${value > 0 ? '+' : ''}${amount(value, digits)} %`
 

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { usdFromString, utcDateTime } from '../shared/finance/format.ts'
 import ApprovedTerminalLayout from '../features/trading-view/presentation/ApprovedTerminalLayout.tsx'
 import ApprovedTradingHeader from '../features/trading-view/presentation/ApprovedTradingHeader.tsx'
 import { appNavigation } from './app-navigation.ts'
@@ -41,13 +42,7 @@ function record(value: unknown): Record<string, unknown> {
 }
 
 function money(value: unknown, maximumFractionDigits = 2): string {
-  if (typeof value !== 'string' || !/^-?\d+(?:\.\d+)?$/.test(value))
-    return 'No disponible'
-  return new Intl.NumberFormat('es-ES', {
-    style: 'currency',
-    currency: 'USD',
-    maximumFractionDigits,
-  }).format(Number(value))
+  return usdFromString(value, maximumFractionDigits) ?? 'No disponible'
 }
 
 function quantity(value: unknown): string {
@@ -58,7 +53,7 @@ function quantity(value: unknown): string {
 
 function utcTime(value: unknown): string {
   if (!Number.isSafeInteger(value)) return 'Hora no disponible'
-  return `${new Date(Number(value)).toLocaleString('es-ES', { timeZone: 'UTC' })} UTC`
+  return utcDateTime(Number(value))
 }
 
 function analysisAction(value: unknown): string {
@@ -762,11 +757,11 @@ export default function FuturesTerminal({
                 <small>
                   {quote.eventTime === null
                     ? 'Hora del evento no disponible'
-                    : `Evento ${new Date(quote.eventTime).toLocaleString('es-ES', { timeZone: 'UTC' })} UTC`}
+                    : `Evento ${utcDateTime(quote.eventTime)}`}
                   {' · '}
                   {quote.receivedAt === null
                     ? 'Recepción no disponible'
-                    : `recibido ${new Date(quote.receivedAt).toLocaleString('es-ES', { timeZone: 'UTC' })} UTC · hace ${Math.floor(Math.max(0, displayClock - quote.receivedAt) / 1_000)} s`}
+                    : `recibido ${utcDateTime(quote.receivedAt)} · hace ${Math.floor(Math.max(0, displayClock - quote.receivedAt) / 1_000)} s`}
                 </small>
               )}
             </div>
@@ -838,7 +833,7 @@ export default function FuturesTerminal({
                   <p>
                     Última recepción:{' '}
                     {Number.isSafeInteger(lastReceivedAt)
-                      ? `${new Date(Number(lastReceivedAt)).toLocaleString('es-ES', { timeZone: 'UTC' })} UTC`
+                      ? utcDateTime(Number(lastReceivedAt))
                       : 'Aún no hay datos recibidos'}
                   </p>
                   {typeof feedReason === 'string' && (
