@@ -29,6 +29,8 @@ export type ApprovedTerminalMarker = {
   direction?: 'long' | 'short' | 'flat'
   label: string
   positionId?: string | null
+  /** Strategy that took the decision; colours the marker and feeds the filter. */
+  strategyId?: string
   decisionStatus?: 'pending' | 'hold' | 'gate-rejected' | 'abstained'
 }
 
@@ -103,6 +105,8 @@ function cssColor(name: string, fallback: string): string {
     fallback
   )
 }
+
+import { strategyMarkerColor } from '../domain/terminal-chart-model.ts'
 
 function markerPresentation(
   marker: ApprovedTerminalMarker,
@@ -455,11 +459,12 @@ export default function ApprovedTerminalChart({
           Math.floor(marker.time / intervalSeconds) * intervalSeconds
         if (!candleTimes.has(bucket)) return []
         const appearance = markerPresentation(marker, markerColors)
+        const strategyColor = strategyMarkerColor(marker.strategyId)
         return [
           {
             time: bucket as Time,
             position: appearance.position,
-            color: appearance.color,
+            color: strategyColor ?? appearance.color,
             shape: appearance.shape,
             text: `${marker.label}${selectedId === marker.id ? ' ◀' : ''}`,
             id: marker.id,

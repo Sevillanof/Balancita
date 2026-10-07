@@ -12,6 +12,27 @@ const EXIT_LABELS: Record<string, string> = {
   daily_loss_limit: 'LÍMITE',
 }
 
+const STRATEGY_COLORS: Record<string, string> = {
+  c25: '#4fa3e0',
+  c26: '#c78be0',
+  c27: '#e0a04f',
+  c28: '#5fd0c0',
+}
+
+/** Short code of a strategy id: `c25-pullback-perp-v1` -> `C25`. */
+export function strategyCode(id: string | undefined | null): string | null {
+  const match = /^(c\d+)-/.exec(id ?? '')
+  return match ? match[1]!.toUpperCase() : null
+}
+
+/** Fixed colour per strategy, so its markers read the same everywhere. */
+export function strategyMarkerColor(
+  id: string | undefined | null,
+): string | undefined {
+  const code = strategyCode(id)
+  return code ? STRATEGY_COLORS[code.toLowerCase()] : undefined
+}
+
 const recordOf = (value: unknown): Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -31,12 +52,17 @@ export function exitMarkers(
       !Number.isSafeInteger(at)
     )
       return []
+    const strategyId =
+      typeof order.strategy_id === 'string' ? order.strategy_id : undefined
+    const code = strategyCode(strategyId)
+    const label = EXIT_LABELS[String(order.reason_code)] ?? 'SALIDA'
     return [
       {
         id: `exit:${order.order_id}`,
         time: Math.floor(at / 1000),
         type: 'exit' as const,
-        label: EXIT_LABELS[String(order.reason_code)] ?? 'SALIDA',
+        label: code ? `${code} ${label}` : label,
+        ...(strategyId ? { strategyId } : {}),
       },
     ]
   })
