@@ -42,7 +42,7 @@ Every sustained live run of the single process surfaced a new engine defect: the
 - [x] PS-05c [S] Fix the funding-pause overwrite in the legacy runtime (`python/balancita_engine/futures_runtime.py:2393-2404`), with a test. The legacy runtime is still used by the MOCK local terminal.
 - [x] PS-05d [L] Retire the legacy live engine once D is proven: per-delta driver, market-context transport, operative bridge, `futuresSourceFailed` latch, `FUTURES_MODE=mock/replay` in `app.ts`, and the `DEV_LIVE_SINGLE_PROCESS` rollback. The dev MOCK child, which uses the local terminal, stays.
 - [ ] PS-06 [S] Process supervision + per-process health in UI.
-- [ ] PS-08a [M] Strategy spec `balancita-strategy.v1` (declarative JSON with `params`, no code) and its Python interpreter in C; C25-C28 rewritten as specs, with a parity test giving identical proposals over stored history.
+- [x] PS-08a [M] Strategy spec `balancita-strategy.v1` (declarative JSON with `params`, no code) and its Python interpreter in C; C25-C28 rewritten as specs, with a parity test giving identical proposals over stored history.
 - [ ] PS-08b [M] Strategy registry S: own SQLite DB, single writer; append-only spec versions (canonical hash) and lifecycle events with `known_at`; C reads it read-only and records the active spec hashes in each verdict; JSON import/export.
 - [ ] PS-08c [L] Independent strategies: each active strategy has its own isolated paper book in D (position, fills, P&L); no cross-strategy selection; all are shown against the same terminal chart, with per-strategy markers.
 - [ ] PS-08d [L] Front: strategies page, rule and parameter editor, configurable indicator periods, walk-forward backtest with a trial counter. When confirming an edit the user chooses: a new version of the same strategy, or a new strategy with the changes that leaves the existing one as it is.
@@ -309,6 +309,12 @@ Every sustained live run of the single process surfaced a new engine defect: the
   - On confirming a change the user picks: edit the same strategy (new version, same id) or create a new strategy and keep the existing one.
   - Every version is frozen by hash, so replay keeps giving the same verdicts; every backtested variant counts as a trial for the deflated Sharpe.
   - PS-08b/d need the command channel planned in PS-06.
+- 2026-10-07 PS-08a/b/e (cloud session).
+  - `futures_spec_strategy.py`: `balancita-strategy.v1` validator and interpreter; C25-C28 shipped as `config/strategies/*.json` with `params`. Parity tests: 6000 fuzzed entry/exit cases plus a replayed synthetic history give proposals identical to `propose` (`python/tests/test_futures_spec_strategy.py`).
+  - `futures_strategy_registry.py`: process S, single writer of `futures-strategies.sqlite` (append-only versions, lifecycle events, backtests); local API on 8790, proxied as `/api-strategies` (contract: `docs/strategy-registry-api.md`); `strategies` dev child.
+  - `futures_strategy_backtest.py`: replays a spec over C's stored verdicts as one independent book with D's sizing and cost-buffer rule; 70/30 walk-forward split; deflated Sharpe over every spec backtested.
+  - Promotion gates are enforced in S, but C and D do not read the registry yet: "active" only takes effect with PS-08c.
+  - The UI is built by the app-design thread against this API.
 
 ## Next step
 

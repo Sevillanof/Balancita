@@ -26,7 +26,7 @@ describe('devChildSpecs', () => {
   })
   const byName = Object.fromEntries(specs.map((spec) => [spec.name, spec]))
 
-  it('starts vite, legacy server, mock API, live capture, live gateway, verdict service, paper execution, forecast scorer and news', () => {
+  it('starts vite, legacy server, mock API, live capture, live gateway, verdict service, paper execution, forecast scorer, strategy registry and news', () => {
     assert.deepEqual(
       specs.map((spec) => spec.name),
       [
@@ -38,6 +38,7 @@ describe('devChildSpecs', () => {
         'verdict',
         'paper',
         'scores',
+        'strategies',
         'news',
       ],
     )

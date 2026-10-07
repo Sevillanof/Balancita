@@ -316,6 +316,8 @@ export function resolveLlamaServer({ env, run = defaultRun }) {
 }
 
 export const DEV_PORTS = { vite: 5173, server: 8787, mock: 8788, live: 8789 }
+// Strategy registry S (Python): checked only when its child runs.
+export const STRATEGIES_PORT = 8790
 // Hosts the children bind to: server, gateway and mock use 127.0.0.1 (HOST
 // defaults to it); vite uses its default `localhost`. Vite HMR shares the
 // vite port, so there is no separate 24678 listener to check.
@@ -505,6 +507,7 @@ export function devChildSpecs({
   const scoresDb = liveDb('futures-forecast-scores.sqlite')
   const decisionsDb = liveDb('futures-llm-decisions.sqlite')
   const newsDb = liveDb('futures-news.sqlite')
+  const strategiesDb = liveDb('futures-strategies.sqlite')
   const llmOn =
     Boolean(python?.command && llm?.command) &&
     (env.DECISIONS_ENABLED ?? '').trim() !== '0' &&
@@ -687,6 +690,28 @@ export function devChildSpecs({
             .join(delimiter),
         },
       },
+      {
+        name: 'strategies',
+        command: python.command,
+        cwd: serverCwd,
+        args: [
+          ...python.prefixArgs,
+          '-m',
+          'balancita_engine.futures_strategy_registry',
+          '--strategies-db',
+          strategiesDb,
+          '--verdicts-db',
+          verdictsDb,
+          '--port',
+          String(STRATEGIES_PORT),
+        ],
+        env: {
+          ...env,
+          PYTHONPATH: [`${root}/python`, env.PYTHONPATH]
+            .filter(Boolean)
+            .join(delimiter),
+        },
+      },
     ]
   }
 }
@@ -714,6 +739,8 @@ export function devProxyConfig() {
   return {
     '/api-mock': prefixedBackend('/api-mock', DEV_PORTS.mock),
     '/api-live': prefixedBackend('/api-live', DEV_PORTS.live),
+    // Strategy registry S: its routes already start with /api-strategies.
+    '/api-strategies': { target: `http://127.0.0.1:${STRATEGIES_PORT}` },
     '/api': { target: `http://127.0.0.1:${DEV_PORTS.server}`, ws: true },
   }
 }
