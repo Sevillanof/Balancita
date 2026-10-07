@@ -1,5 +1,11 @@
 import { spawnSync } from 'node:child_process'
-import { readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import { join } from 'node:path'
 
 // Stale-instance sweep for `pnpm run dev`: before anything is spawned, find
@@ -160,4 +166,47 @@ export function removeDevPid(liveDir) {
   } catch {
     // informational only
   }
+}
+
+// A derived DB refused by its Python/Node service because the config changed
+// ("... DB was written with a different config; use a new DB"). The file is
+// renamed (never deleted) so the service can start a fresh one.
+const MISMATCHED_DB = [
+  [/verdicts DB was written with a different config/, 'futures-verdicts'],
+  [
+    /forecast scores DB was written with a different config/,
+    'futures-forecast-scores',
+  ],
+  [/account DB was written with a different config/, 'futures-paper-account'],
+  [
+    /LLM decisions DB was written with a different config/,
+    'futures-llm-decisions',
+  ],
+  [/news DB was written with a different config/, 'futures-news'],
+]
+
+/** Base file name (no extension) of the DB a log text says was refused. */
+export function mismatchedDb(text) {
+  return MISMATCHED_DB.find(([re]) => re.test(text))?.[1]
+}
+
+/**
+ * Renames `<base>.sqlite` (+ -wal/-shm) to `<base>.sqlite.old-<stamp>`.
+ * Returns the backup name, or undefined when there was nothing to rename.
+ */
+export function rotateDb(liveDir, base, now = new Date(), rename = renameSync) {
+  const stamp = now.toISOString().replaceAll(/[-:]/g, '').slice(0, 15)
+  let backup
+  for (const suffix of ['', '-wal', '-shm']) {
+    try {
+      rename(
+        join(liveDir, `${base}.sqlite${suffix}`),
+        join(liveDir, `${base}.sqlite.old-${stamp}${suffix}`),
+      )
+      if (suffix === '') backup = `${base}.sqlite.old-${stamp}`
+    } catch {
+      // missing file: nothing to move
+    }
+  }
+  return backup
 }

@@ -83,3 +83,25 @@ describe('sweepStale', () => {
     assert.equal(result.stopped.length, 0)
   })
 })
+
+describe('config-mismatch rotation', () => {
+  it('maps the refusal text to the DB and renames it with its WAL files', async () => {
+    const { mismatchedDb, rotateDb } = await import('./dev-stale.mjs')
+    assert.equal(
+      mismatchedDb(
+        'ValueError: forecast scores DB was written with a different config; use a new DB',
+      ),
+      'futures-forecast-scores',
+    )
+    assert.equal(mismatchedDb('some other error'), undefined)
+    const moves = []
+    const backup = rotateDb(
+      '/d',
+      'futures-verdicts',
+      new Date('2026-10-07T12:00:00Z'),
+      (from, to) => moves.push([from, to]),
+    )
+    assert.equal(backup, 'futures-verdicts.sqlite.old-20261007T120000')
+    assert.equal(moves.length, 3)
+  })
+})
