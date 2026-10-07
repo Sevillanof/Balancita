@@ -731,6 +731,25 @@ export class FuturesMarketStore {
     return row.bucket ?? undefined
   }
 
+  /** Distinct stored buckets with `fromBucket <= bucket_start <= toBucket` (any revision). */
+  countOfficialBuckets(
+    productId: string,
+    intervalMs: number,
+    fromBucket: number,
+    toBucket: number,
+  ): number {
+    if (!this.hasOfficialCandles()) return 0
+    const row = this.prepared(
+      'SELECT COUNT(DISTINCT bucket_start) AS n FROM paper_futures_official_candles WHERE product_id=? AND interval_ms=? AND bucket_start>=? AND bucket_start<=?',
+    ).get(
+      product(productId),
+      time(intervalMs, 'official interval'),
+      time(fromBucket, 'official from'),
+      time(toBucket, 'official to'),
+    ) as { n: number }
+    return row.n
+  }
+
   /** Latest `limit` official candles of a product known by the cutoff, ascending. */
   officialCandlesAsOf(
     productId: string,
