@@ -1,0 +1,113 @@
+.terminal-chart {
+  display: grid;
+  gap: 0.6rem;
+}
+.terminal-chart__stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(11.5rem, 1fr));
+  gap: 0.35rem 1rem;
+  margin: 0;
+  padding: 0 0.75rem;
+  font-size: 0.78rem;
+}
+.terminal-chart__stats > div {
+  display: grid;
+  gap: 0.1rem;
+  min-width: 0;
+}
+.terminal-chart__stats dt {
+  color: var(--muted-foreground, #8b969a);
+  font-size: 0.7rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.terminal-chart__stats dd {
+  margin: 0;
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.terminal-chart__up {
+  color: var(--chart-up, #55c7a2);
+}
+.terminal-chart__down {
+  color: var(--chart-down, #ee7777);
+}
+.terminal-chart__toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1rem;
+  padding: 0 0.75rem;
+}
+.terminal-chart__seg {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--border, #252d31);
+  border-radius: 8px;
+}
+.terminal-chart__seg button {
+  font: inherit;
+  font-size: 0.8rem;
+  min-height: 30px;
+  padding: 0 0.7rem;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted-foreground, #8b969a);
+  cursor: pointer;
+}
+.terminal-chart__seg button[aria-pressed='true'] {
+  background: var(--border, #252d31);
+  color: inherit;
+}
+.terminal-chart__toggles {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.75rem;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  font-size: 0.8rem;
+}
+.terminal-chart__toggles legend {
+  float: left;
+  margin-right: 0.25rem;
+  color: var(--muted-foreground, #8b969a);
+  font-size: 0.7rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.terminal-chart__toggles label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  min-height: 30px;
+  cursor: pointer;
+}
+.terminal-chart__swatch {
+  width: 10px;
+  height: 3px;
+  border-radius: 2px;
+}
+.terminal-chart__note,
+.terminal-chart__legend {
+  margin: 0;
+  padding: 0 0.75rem;
+  color: var(--muted-foreground, #8b969a);
+  font-size: 0.75rem;
+}
+.terminal-chart__legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1rem;
+}
+.terminal-chart__loading {
+  display: grid;
+  place-items: center;
+  height: var(--terminal-chart-height, 440px);
+  margin: 0;
+  color: var(--muted-foreground, #8b969a);
+}

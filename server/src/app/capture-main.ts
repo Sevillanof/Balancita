@@ -2,6 +2,11 @@ import { FuturesMarketStore } from '../features/kraken-futures/futures-market-st
 import { createLiveCapture } from '../features/live-gateway/live-capture.ts'
 import type { FuturesSocket } from '../features/kraken-futures/futures-market.ts'
 import { resolveFuturesProducts } from '../features/kraken-futures/futures-products.ts'
+import { CHART_CANDLE_INTERVALS } from '../features/kraken-futures/official-candles.ts'
+import {
+  ANALYTICS_INTERVALS,
+  ANALYTICS_METRICS,
+} from '../features/kraken-futures/market-analytics.ts'
 import { serverConfigFrom } from '../platform/config.ts'
 import { acquireWriterLock, WriterLockError } from '../platform/writer-lock.ts'
 
@@ -44,6 +49,14 @@ async function main(): Promise<void> {
     makeSocket: (url) => new WebSocket(url) as unknown as FuturesSocket,
     fetchCatalog: fetchPublicCatalog,
     products,
+    // Terminal chart: 15m/1h/4h/1d candles and Kraken's public analytics.
+    chartCandleIntervals: CHART_CANDLE_INTERVALS,
+    // Order book depth and slippage of every pinned product: per-product costs.
+    analytics: {
+      metrics: ANALYTICS_METRICS,
+      intervals: ANALYTICS_INTERVALS,
+      allProductMetrics: ['orderbook'],
+    },
     staleAfterMs: config.marketStaleAfterMs,
     reconnectMinMs: config.marketReconnectMinMs,
     reconnectMaxMs: config.marketReconnectMaxMs,

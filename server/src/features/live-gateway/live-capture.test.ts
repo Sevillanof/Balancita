@@ -583,4 +583,183 @@ describe('live capture process core', () => {
     expect(store.instrumentVersions()).toHaveLength(1)
     store.close()
   })
+
+  it('captures chart timeframes and public analytics for the terminal product only', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'balancita-capture-'))
+    dirs.push(dir)
+    const store = new FuturesMarketStore(join(dir, 'market.sqlite'))
+    const M = 60_000
+    const H = 60 * M
+    let now = 1_791_356_400_000 + 3 * H + 10_000
+    const candleRequests: string[] = []
+    const analyticsRequests: Array<{ path: string; since: number }> = []
+    const lines: string[] = []
+    const capture = createLiveCapture({
+      store,
+      clock: () => now,
+      makeSocket: () => fakeSocket().socket,
+      fetchCatalog: async () => catalog,
+      fundingFetch: async () => {
+        throw new Error('offline')
+      },
+      officialCandlesFetch: async (input) => {
+        const url = new URL(String(input))
+        const resolution = url.pathname.split('/').at(-1)!
+        candleRequests.push(`${url.pathname.split('/').at(-2)} ${resolution}`)
+        const step = { '1m': M, '5m': 5 * M, '1h': H }[resolution]!
+        const from = Number(url.searchParams.get('from')) * 1000
+        const to = Number(url.searchParams.get('to')) * 1000
+        const candles = []
+        for (let time = Math.ceil(from / step) * step; time <= to; time += step)
+          candles.push({
+            time,
+            open: '1',
+            high: '1',
+            low: '1',
+            close: '1',
+            volume: '1',
+          })
+        return new Response(JSON.stringify({ candles, more_candles: false }))
+      },
+      officialCandleLookbackMs: {
+        60_000: 5 * M,
+        300_000: 30 * M,
+        3_600_000: 3 * H,
+      },
+      chartCandleIntervals: [H],
+      officialPollMs: 5,
+      officialRequestGapMs: 0,
+      analytics: {
+        metrics: ['cvd', 'open-interest'],
+        intervals: [M],
+        lookbackMs: { 60_000: 3 * M },
+        pollMs: 5,
+        fetch: async (input) => {
+          const url = new URL(String(input))
+          const since = Number(url.searchParams.get('since')) * 1000
+          analyticsRequests.push({ path: url.pathname, since })
+          if (url.pathname.endsWith('/open-interest'))
+            return new Response('down', { status: 503 })
+          const timestamp: number[] = []
+          for (let time = Math.ceil(since / M) * M; time <= now; time += M)
+            timestamp.push(time / 1000)
+          return new Response(
+            JSON.stringify({
+              result: {
+                timestamp,
+                data: {
+                  buy_volume: timestamp.map(() => '1'),
+                  sell_volume: timestamp.map(() => '2'),
+                },
+                more: false,
+              },
+              errors: [],
+            }),
+          )
+        },
+      },
+      log: (line) => lines.push(line),
+    })
+    await capture.start()
+    await wait(40)
+    // Verdict series first, then the chart-only timeframe of PF_XBTUSD.
+    expect(candleRequests.slice(0, 3)).toEqual([
+      'PF_XBTUSD 5m',
+      'PF_XBTUSD 1m',
+      'PF_XBTUSD 1h',
+    ])
+    expect(store.latestOfficialBucket('PF_XBTUSD', H)).toBe(now - 10_000 - H)
+    const firstCvd = analyticsRequests.find((item) =>
+      item.path.endsWith('/cvd'),
+    )!
+    expect(firstCvd.path).toBe('/api/charts/v1/analytics/PF_XBTUSD/cvd')
+    expect(firstCvd.since).toBe(now - 3 * M)
+    const latest = store.latestAnalyticsBucket('PF_XBTUSD', 'cvd', M)!
+    // Settled buckets only: the minute still filling is never stored.
+    expect(latest + M).toBeLessThanOrEqual(now)
+    now += 2 * M
+    await wait(40)
+    await capture.stop()
+    const cvdSince = analyticsRequests
+      .filter((item) => item.path.endsWith('/cvd'))
+      .map((item) => item.since)
+    expect(cvdSince).toContain(latest + M)
+    expect(store.latestAnalyticsBucket('PF_XBTUSD', 'cvd', M)).toBeGreaterThan(
+      latest,
+    )
+    // A failing series only logs; the others keep going.
+    expect(store.latestAnalyticsBucket('PF_XBTUSD', 'open-interest', M)).toBe(
+      undefined,
+    )
+    expect(
+      lines.some((line) =>
+        line.includes('analytics unavailable (PF_XBTUSD open-interest'),
+      ),
+    ).toBe(true)
+    expect(
+      store.analyticsSince('PF_XBTUSD', 'cvd', M, 0, 10).at(-1)!.values,
+    ).toEqual({ buy_volume: '1', sell_volume: '2' })
+    store.close()
+  })
+
+  it('captures the order book series of every pinned product for trading costs', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'balancita-capture-'))
+    dirs.push(dir)
+    const store = new FuturesMarketStore(join(dir, 'market.sqlite'))
+    const M = 60_000
+    const now = 1_791_356_400_000 + 10_000
+    const paths: string[] = []
+    const capture = createLiveCapture({
+      store,
+      clock: () => now,
+      makeSocket: () => fakeSocket().socket,
+      fetchCatalog: async () => catalog,
+      fundingFetch: async () => {
+        throw new Error('offline')
+      },
+      products: [
+        { productId: 'PF_XBTUSD', tickSize: '1' },
+        { productId: 'PF_ETHUSD', tickSize: '0.1' },
+      ],
+      officialCandlesFetch: async () =>
+        new Response(JSON.stringify({ candles: [], more_candles: false })),
+      officialPollMs: 60_000,
+      officialRequestGapMs: 0,
+      analytics: {
+        metrics: ['cvd'],
+        intervals: [M],
+        allProductMetrics: ['orderbook'],
+        lookbackMs: { 60_000: 2 * M },
+        pollMs: 60_000,
+        fetch: async (input) => {
+          const url = new URL(String(input))
+          paths.push(url.pathname.replace('/api/charts/v1/analytics/', ''))
+          const since = Number(url.searchParams.get('since')) * 1000
+          const timestamp = [(Math.ceil(since / M) * M) / 1000]
+          const data = url.pathname.endsWith('/orderbook')
+            ? { bid: { bestPrice: ['99'] }, ask: { bestPrice: ['100'] } }
+            : { buy_volume: ['1'], sell_volume: ['1'] }
+          return new Response(
+            JSON.stringify({
+              result: { timestamp, data, more: false },
+              errors: [],
+            }),
+          )
+        },
+      },
+      log: () => undefined,
+    })
+    await capture.start()
+    await wait(40)
+    await capture.stop()
+    expect(paths).toEqual([
+      'PF_XBTUSD/cvd',
+      'PF_ETHUSD/orderbook',
+      'PF_XBTUSD/orderbook',
+    ])
+    expect(
+      store.analyticsSince('PF_ETHUSD', 'orderbook', M, 0, 10)[0]!.values,
+    ).toEqual({ 'ask.bestPrice': '100', 'bid.bestPrice': '99' })
+    store.close()
+  })
 })

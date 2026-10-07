@@ -34,6 +34,7 @@ vi.mock('lightweight-charts', () => {
     priceScale: () => priceScale,
     createPriceLine: () => ({}),
     removePriceLine() {},
+    applyOptions() {},
   }
   const timeScale = {
     getVisibleLogicalRange: () => null,
@@ -43,6 +44,9 @@ vi.mock('lightweight-charts', () => {
   }
   const chart = {
     addSeries: () => series,
+    removeSeries() {},
+    panes: () => [],
+    removePane() {},
     timeScale: () => timeScale,
     subscribeClick(handler: (parameter: ChartClickParameter) => void) {
       chartHarness.clickHandlers.push(handler)
@@ -58,6 +62,7 @@ vi.mock('lightweight-charts', () => {
     CandlestickSeries: 'candlestick',
     ColorType: { Solid: 'solid' },
     HistogramSeries: 'histogram',
+    LineSeries: 'line',
     createChart: () => chart,
     createSeriesMarkers: () => ({
       setMarkers(markers: Record<string, unknown>[]) {

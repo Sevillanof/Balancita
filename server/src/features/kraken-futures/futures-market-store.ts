@@ -2,6 +2,7 @@ import { DatabaseSync, type StatementSync } from 'node:sqlite'
 import { createHash } from 'node:crypto'
 import type { HistoricalFundingResponse } from './historical-funding.ts'
 import type { OfficialCandleResponse } from './official-candles.ts'
+import type { AnalyticsResponse } from './market-analytics.ts'
 import { existsSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { canonicalJson } from '../paper-futures/futures-canonical.ts'
@@ -164,7 +165,7 @@ export class FuturesMarketStore {
       // Tolerate the single writer holding a commit lock; never writes.
       this.db.exec('PRAGMA busy_timeout=2000;')
       const version = this.schemaVersion()
-      if (version !== 3 && version !== 4 && version !== 5)
+      if (version < 3 || version > 6)
         throw new Error(
           'Read-only futures market source schema is unsupported.',
         )
@@ -289,6 +290,30 @@ export class FuturesMarketStore {
       INSERT OR IGNORE INTO paper_futures_market_migrations VALUES(4, unixepoch('subsec') * 1000);
     `)
     this.migrateOfficialCandlesToProducts()
+    // Migration 6: public Kraken analytics (flow, open interest, positioning, depth).
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS paper_futures_analytics_responses(
+        product_id TEXT NOT NULL, sha256 TEXT NOT NULL, metric TEXT NOT NULL,
+        interval_ms INTEGER NOT NULL, from_ms INTEGER NOT NULL, received_at INTEGER NOT NULL,
+        raw_response TEXT NOT NULL, PRIMARY KEY(product_id, sha256)
+      ) STRICT;
+      CREATE TABLE IF NOT EXISTS paper_futures_analytics_points(
+        product_id TEXT NOT NULL, metric TEXT NOT NULL, interval_ms INTEGER NOT NULL,
+        bucket_start INTEGER NOT NULL, revision_hash TEXT NOT NULL, known_at INTEGER NOT NULL,
+        values_json TEXT NOT NULL, response_sha256 TEXT NOT NULL,
+        PRIMARY KEY(product_id, metric, interval_ms, bucket_start, revision_hash),
+        FOREIGN KEY(product_id, response_sha256) REFERENCES paper_futures_analytics_responses(product_id, sha256)
+      ) STRICT;
+      CREATE TRIGGER IF NOT EXISTS paper_futures_analytics_responses_no_update
+        BEFORE UPDATE ON paper_futures_analytics_responses BEGIN SELECT RAISE(ABORT, 'market evidence is immutable'); END;
+      CREATE TRIGGER IF NOT EXISTS paper_futures_analytics_responses_no_delete
+        BEFORE DELETE ON paper_futures_analytics_responses BEGIN SELECT RAISE(ABORT, 'market evidence is immutable'); END;
+      CREATE TRIGGER IF NOT EXISTS paper_futures_analytics_points_no_update
+        BEFORE UPDATE ON paper_futures_analytics_points BEGIN SELECT RAISE(ABORT, 'market evidence is immutable'); END;
+      CREATE TRIGGER IF NOT EXISTS paper_futures_analytics_points_no_delete
+        BEFORE DELETE ON paper_futures_analytics_points BEGIN SELECT RAISE(ABORT, 'market evidence is immutable'); END;
+      INSERT OR IGNORE INTO paper_futures_market_migrations VALUES(6, unixepoch('subsec') * 1000);
+    `)
   }
 
   /**
@@ -565,6 +590,132 @@ export class FuturesMarketStore {
       this.db.exec('ROLLBACK')
       throw error
     }
+  }
+
+  /**
+   * Stores an analytics response only when it adds knowledge: a bucket not
+   * stored yet, or a stored bucket whose values changed (kept as another
+   * revision). A re-fetch of known history writes nothing.
+   */
+  appendAnalytics(response: AnalyticsResponse): { inserted: number } {
+    if (this.readOnly)
+      throw new Error('Cannot append to a read-only market store.')
+    const raw = response.rawResponse
+    if (sha256(raw) !== response.sha256)
+      throw new Error('Analytics response hash mismatch.')
+    const productId = product(response.productId)
+    const receivedAt = time(response.receivedAtMs, 'analytics receivedAt')
+    const intervalMs = time(response.intervalMs, 'analytics interval')
+    if (!/^[a-z-]{1,40}$/.test(response.metric))
+      throw new TypeError('Analytics metric is invalid.')
+    const known = this.prepared(
+      `SELECT 1 FROM paper_futures_analytics_points
+       WHERE product_id=? AND metric=? AND interval_ms=? AND bucket_start=? AND revision_hash=?`,
+    )
+    const fresh = response.points.flatMap((point) => {
+      const valuesJson = canonicalJson(point.values)
+      const revision = sha256(valuesJson)
+      const bucket = time(point.bucketStart, 'analytics bucket')
+      return known.get(productId, response.metric, intervalMs, bucket, revision)
+        ? []
+        : [{ bucket, revision, valuesJson }]
+    })
+    if (fresh.length === 0) return { inserted: 0 }
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      this.prepared(
+        'INSERT OR IGNORE INTO paper_futures_analytics_responses VALUES(?,?,?,?,?,?,?)',
+      ).run(
+        productId,
+        response.sha256,
+        response.metric,
+        intervalMs,
+        time(response.fromMs, 'analytics from'),
+        receivedAt,
+        raw,
+      )
+      const insert = this.prepared(
+        'INSERT OR IGNORE INTO paper_futures_analytics_points VALUES(?,?,?,?,?,?,?,?)',
+      )
+      let inserted = 0
+      for (const point of fresh)
+        inserted += Number(
+          insert.run(
+            productId,
+            response.metric,
+            intervalMs,
+            point.bucket,
+            point.revision,
+            receivedAt,
+            point.valuesJson,
+            response.sha256,
+          ).changes,
+        )
+      this.db.exec('COMMIT')
+      return { inserted }
+    } catch (error) {
+      this.db.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  /** Newest stored analytics bucket of a series, or undefined. */
+  latestAnalyticsBucket(
+    productId: string,
+    metric: string,
+    intervalMs: number,
+  ): number | undefined {
+    if (this.schemaVersion() < 6) return undefined
+    const row = this.prepared(
+      `SELECT MAX(bucket_start) AS bucket FROM paper_futures_analytics_points
+       WHERE product_id=? AND metric=? AND interval_ms=?`,
+    ).get(
+      product(productId),
+      metric,
+      time(intervalMs, 'analytics interval'),
+    ) as {
+      bucket: number | null
+    }
+    return row.bucket ?? undefined
+  }
+
+  /**
+   * Latest-known values per bucket of one series with `bucket_start >= fromMs`,
+   * ascending, newest `limit` kept. Empty on a store without analytics.
+   */
+  analyticsSince(
+    productId: string,
+    metric: string,
+    intervalMs: number,
+    fromMs: number,
+    limit: number,
+  ): Array<{ bucketStart: number; values: Record<string, string> }> {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 5_000)
+      throw new RangeError('Analytics limit must be between 1 and 5000.')
+    if (this.schemaVersion() < 6) return []
+    const rows = this.prepared(
+      `WITH ranked AS (
+         SELECT bucket_start, values_json, ROW_NUMBER() OVER (
+           PARTITION BY bucket_start ORDER BY known_at DESC, rowid DESC
+         ) AS revision_rank
+         FROM paper_futures_analytics_points
+         WHERE product_id=? AND metric=? AND interval_ms=? AND bucket_start>=?
+       )
+       SELECT * FROM (
+         SELECT bucket_start, values_json FROM ranked WHERE revision_rank=1
+         ORDER BY bucket_start DESC LIMIT ?
+       ) ORDER BY bucket_start`,
+    ).all(
+      product(productId),
+      metric,
+      time(intervalMs, 'analytics interval'),
+      time(fromMs, 'analytics from'),
+      limit,
+    ) as Array<{ bucket_start: number; values_json: string }>
+    return rows.map((row) => ({
+      bucketStart: Number(row.bucket_start),
+      values: JSON.parse(row.values_json) as Record<string, string>,
+    }))
   }
 
   latestOfficialBucket(

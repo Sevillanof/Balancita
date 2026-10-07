@@ -1,0 +1,172 @@
+{
+  "schema": "balancita-strategy.v1",
+  "id": "c25-pullback-perp-v1",
+  "version": 1,
+  "name": "C25 Pullback en tendencia",
+  "description": "Entra a favor de la tendencia de 5 m cuando el precio de 1 m vuelve a la EMA21 y cruza la EMA9.",
+  "params": {
+    "rsi_long_min": "45",
+    "rsi_long_max": "65",
+    "rsi_short_min": "35",
+    "rsi_short_max": "55",
+    "stop_atr": "1.5",
+    "target_stop_ratio": "2"
+  },
+  "rules": {
+    "gates": [
+      {
+        "require": "previous",
+        "reason": "previous_bar_unavailable",
+        "condition": "previous_bar_available"
+      },
+      {
+        "require": "trend",
+        "reason": "trend_features_unavailable",
+        "condition": "trend_features_ready"
+      }
+    ],
+    "checks": [
+      {
+        "name": "long",
+        "node": {
+          "all": [
+            {
+              "cmp": "trend_ema9_above_ema21",
+              "left": "5m.ema9",
+              "op": ">",
+              "right": "5m.ema21"
+            },
+            {
+              "cmp": "trend_close_above_sma50",
+              "left": "5m.candidate_close",
+              "op": ">",
+              "right": "5m.sma50"
+            },
+            {
+              "cmp": "previous_low_touches_ema21",
+              "left": "1m_previous.candidate_low",
+              "op": "<=",
+              "right": "1m_previous.ema21"
+            },
+            {
+              "cmp": "previous_close_at_or_below_ema9",
+              "left": "1m_previous.candidate_close",
+              "op": "<=",
+              "right": "1m_previous.ema9"
+            },
+            {
+              "cmp": "current_close_crosses_above_ema9",
+              "left": "1m.candidate_close",
+              "op": ">",
+              "right": "1m.ema9"
+            },
+            {
+              "and": [
+                {
+                  "cmp": "rsi_in_long_band",
+                  "left": "1m.rsi14",
+                  "op": ">=",
+                  "right": "$rsi_long_min"
+                },
+                {
+                  "cmp": "rsi_at_most_65",
+                  "left": "1m.rsi14",
+                  "op": "<=",
+                  "right": "$rsi_long_max"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "name": "short",
+        "node": {
+          "all": [
+            {
+              "cmp": "trend_ema9_below_ema21",
+              "left": "5m.ema9",
+              "op": "<",
+              "right": "5m.ema21"
+            },
+            {
+              "cmp": "trend_close_below_sma50",
+              "left": "5m.candidate_close",
+              "op": "<",
+              "right": "5m.sma50"
+            },
+            {
+              "cmp": "previous_high_touches_ema21",
+              "left": "1m_previous.candidate_high",
+              "op": ">=",
+              "right": "1m_previous.ema21"
+            },
+            {
+              "cmp": "previous_close_at_or_above_ema9",
+              "left": "1m_previous.candidate_close",
+              "op": ">=",
+              "right": "1m_previous.ema9"
+            },
+            {
+              "cmp": "current_close_crosses_below_ema9",
+              "left": "1m.candidate_close",
+              "op": "<",
+              "right": "1m.ema9"
+            },
+            {
+              "and": [
+                {
+                  "cmp": "rsi_in_short_band",
+                  "left": "1m.rsi14",
+                  "op": ">=",
+                  "right": "$rsi_short_min"
+                },
+                {
+                  "cmp": "rsi_at_most_55",
+                  "left": "1m.rsi14",
+                  "op": "<=",
+                  "right": "$rsi_short_max"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    ],
+    "sides": {
+      "LONG": {
+        "requires": [
+          "long"
+        ],
+        "reason": "c25_long_pullback",
+        "invalidation": "close_below_ema21"
+      },
+      "SHORT": {
+        "requires": [
+          "short"
+        ],
+        "reason": "c25_short_pullback",
+        "invalidation": "close_above_ema21"
+      }
+    },
+    "exit": {
+      "LONG": {
+        "cmp": "owner_close_invalidates_ema21",
+        "left": "1m.candidate_close",
+        "op": "<",
+        "right": "1m.ema21"
+      },
+      "SHORT": {
+        "cmp": "owner_close_invalidates_ema21",
+        "left": "1m.candidate_close",
+        "op": ">",
+        "right": "1m.ema21"
+      }
+    },
+    "risk": {
+      "stop_atr": "$stop_atr",
+      "target_stop_ratio": "$target_stop_ratio"
+    },
+    "horizon_minutes": 30
+  }
+}

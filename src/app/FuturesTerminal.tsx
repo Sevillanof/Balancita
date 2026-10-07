@@ -3,10 +3,12 @@ import ApprovedTerminalLayout from '../features/trading-view/presentation/Approv
 import ApprovedTradingHeader from '../features/trading-view/presentation/ApprovedTradingHeader.tsx'
 import ApprovedMarketRow from '../features/trading-view/presentation/ApprovedMarketRow.tsx'
 import ApprovedPortfolioTables from '../features/trading-view/presentation/ApprovedPortfolioTables.tsx'
-import ApprovedTerminalChart, {
-  type ApprovedTerminalCandle,
-  type ApprovedTerminalMarker,
+import type {
+  ApprovedTerminalCandle,
+  ApprovedTerminalMarker,
 } from '../features/trading-view/presentation/ApprovedTerminalChart.tsx'
+import TerminalChartPanel from '../features/trading-view/presentation/TerminalChartPanel.tsx'
+import type { TerminalTickerStats } from '../features/trading-view/infrastructure/terminal-chart-client.ts'
 import {
   parseTerminalEnvelope,
   terminalWebSocketUrl,
@@ -162,6 +164,10 @@ function TerminalMarketChart({
   selectedId,
   entriesOnly = false,
   onSelect,
+  apiBase,
+  ticker,
+  position,
+  orders,
 }: {
   market: Record<string, unknown>
   mode: TerminalBootstrap['mode']
@@ -170,6 +176,10 @@ function TerminalMarketChart({
   /** Mark only LONG/SHORT verdicts: a WAIT every minute would bury the chart. */
   entriesOnly?: boolean
   onSelect: (analysisId: string) => void
+  apiBase: string
+  ticker: TerminalTickerStats | null
+  position: Record<string, unknown>
+  orders: unknown[]
 }) {
   const candles: ApprovedTerminalCandle[] = Array.isArray(market.candles)
     ? market.candles.flatMap((value) => {
@@ -236,7 +246,6 @@ function TerminalMarketChart({
       },
     ]
   })
-  const intervalSeconds = Number(market.interval_ms) / 1000
   return (
     <>
       <p>
@@ -251,33 +260,16 @@ function TerminalMarketChart({
             : 'Vela en formación'}
         </p>
       )}
-      <ApprovedTerminalChart
+      <TerminalChartPanel
         candles={candles}
         markers={markers}
         selectedId={selectedId}
-        intervalSeconds={intervalSeconds}
-        currency="USD"
-        instrument="BTC/USD perpetuo"
-        initialViewport="approved-terminal"
-        onSelect={(time, markerId) => {
-          if (markerId) {
-            onSelect(markerId)
-            return
-          }
-          if (!Number.isFinite(time) || !(intervalSeconds > 0)) return
-          const bucket = Math.floor(time / intervalSeconds) * intervalSeconds
-          const bucketMarkers = markers.filter(
-            (marker) =>
-              Math.floor(marker.time / intervalSeconds) * intervalSeconds ===
-              bucket,
-          )
-          if (bucketMarkers.length === 0) return
-          const current = bucketMarkers.findIndex(
-            (marker) => marker.id === selectedId,
-          )
-          const next = bucketMarkers[(current + 1) % bucketMarkers.length]
-          if (next) onSelect(next.id)
-        }}
+        onSelect={onSelect}
+        apiBase={apiBase}
+        live={mode === 'paper_live'}
+        ticker={ticker}
+        position={position}
+        orders={orders}
       />
     </>
   )
@@ -741,6 +733,14 @@ export default function FuturesTerminal({
                     selectedId={localDemo || gatewayEngine ? selectedId : ''}
                     entriesOnly={!localDemo}
                     onSelect={setSelectedAnalysisId}
+                    apiBase={apiBase}
+                    ticker={
+                      (marketState.ticker_stats ??
+                        record(bootstrap.market).ticker_stats ??
+                        null) as TerminalTickerStats | null
+                    }
+                    position={position}
+                    orders={orders}
                   />
                   {!engineOff && (
                     <p>

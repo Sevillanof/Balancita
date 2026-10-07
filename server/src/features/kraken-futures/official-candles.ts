@@ -12,9 +12,20 @@ export const OFFICIAL_CANDLES_PER_REQUEST = 1_800
 const RESOLUTIONS: Readonly<Record<number, string>> = {
   60_000: '1m',
   300_000: '5m',
+  900_000: '15m',
+  3_600_000: '1h',
+  14_400_000: '4h',
+  86_400_000: '1d',
 }
 // 5m first: on a 5-minute boundary the closed 5m candle must be known before the 1m candle that closes with it.
 export const OFFICIAL_CANDLE_INTERVALS = [300_000, 60_000] as const
+/**
+ * Extra timeframes captured for the terminal chart only (the terminal product);
+ * no verdict or strategy reads them.
+ */
+export const CHART_CANDLE_INTERVALS = [
+  86_400_000, 14_400_000, 3_600_000, 900_000,
+] as const
 
 /**
  * One closed official Kraken candle. Kraken's convention: open is the

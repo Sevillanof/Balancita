@@ -175,6 +175,35 @@ function connect(port: number): {
 }
 
 describe('live market gateway', () => {
+  it('serves Qwen scores and reports them off when not configured', async () => {
+    const path = dbPath()
+    const writer = seedWriter(path, 5)
+    closers.push(() => writer.close())
+    const off = await start(path)
+    expect((await off.app.inject('/api/qwen/scores')).json()).toEqual({
+      status: 'off',
+      reason: 'decisions_not_configured',
+    })
+    const asked: string[] = []
+    const on = await start(path, {
+      qwenScores: {
+        report: async (product = '') => {
+          asked.push(product)
+          return product === 'bad'
+            ? { status: 'error', reason: 'invalid_product' }
+            : { status: 'ok', generated_at: 1, products: [] }
+        },
+      },
+    })
+    const ok = await on.app.inject('/api/qwen/scores?product=PF_XBTUSD')
+    expect(ok.statusCode).toBe(200)
+    expect(ok.json()).toEqual({ status: 'ok', generated_at: 1, products: [] })
+    expect(
+      (await on.app.inject('/api/qwen/scores?product=bad')).statusCode,
+    ).toBe(400)
+    expect(asked).toEqual(['PF_XBTUSD', 'bad'])
+  })
+
   it('bootstraps closed candles written by another connection without writing', async () => {
     const path = dbPath()
     const writer = seedWriter(path, 5)

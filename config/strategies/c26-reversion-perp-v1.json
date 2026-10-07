@@ -1,0 +1,166 @@
+{
+  "schema": "balancita-strategy.v1",
+  "id": "c26-reversion-perp-v1",
+  "version": 1,
+  "name": "C26 Reversion en rango",
+  "description": "En regimen de rango, entra cuando el cierre vuelve dentro de las bandas de Bollinger con RSI cruzando 30/70.",
+  "params": {
+    "rsi_oversold": "30",
+    "rsi_overbought": "70",
+    "stop_atr": "1.5",
+    "target_stop_ratio": "2"
+  },
+  "rules": {
+    "gates": [
+      {
+        "require": "previous",
+        "reason": "previous_bar_unavailable"
+      }
+    ],
+    "checks": [
+      {
+        "name": "long",
+        "node": {
+          "all": [
+            {
+              "regime_in": [
+                "range"
+              ]
+            },
+            {
+              "cmp": "previous_close_below_lower_band",
+              "left": "1m_previous.candidate_close",
+              "op": "<",
+              "right": "1m_previous.bollinger_lower20"
+            },
+            {
+              "cmp": "current_close_back_inside_lower_band",
+              "left": "1m.candidate_close",
+              "op": ">=",
+              "right": "1m.bollinger_lower20"
+            },
+            {
+              "and": [
+                {
+                  "cmp": "rsi_crosses_above_30",
+                  "left": "1m.rsi14",
+                  "op": ">=",
+                  "right": "$rsi_oversold"
+                },
+                {
+                  "cmp": "previous_rsi_below_30",
+                  "left": "1m_previous.rsi14",
+                  "op": "<",
+                  "right": "$rsi_oversold"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "name": "short",
+        "node": {
+          "all": [
+            {
+              "regime_in": [
+                "range"
+              ]
+            },
+            {
+              "cmp": "previous_close_above_upper_band",
+              "left": "1m_previous.candidate_close",
+              "op": ">",
+              "right": "1m_previous.bollinger_upper20"
+            },
+            {
+              "cmp": "current_close_back_inside_upper_band",
+              "left": "1m.candidate_close",
+              "op": "<=",
+              "right": "1m.bollinger_upper20"
+            },
+            {
+              "and": [
+                {
+                  "cmp": "rsi_crosses_below_70",
+                  "left": "1m.rsi14",
+                  "op": "<=",
+                  "right": "$rsi_overbought"
+                },
+                {
+                  "cmp": "previous_rsi_above_70",
+                  "left": "1m_previous.rsi14",
+                  "op": ">",
+                  "right": "$rsi_overbought"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    ],
+    "sides": {
+      "LONG": {
+        "requires": [
+          "long"
+        ],
+        "reason": "c26_long_reversion",
+        "invalidation": "regime_invalid",
+        "target": "1m.bollinger_mid20",
+        "target_condition": "frozen_bollinger_mid_available"
+      },
+      "SHORT": {
+        "requires": [
+          "short"
+        ],
+        "reason": "c26_short_reversion",
+        "invalidation": "regime_invalid",
+        "target": "1m.bollinger_mid20",
+        "target_condition": "frozen_bollinger_mid_available"
+      }
+    },
+    "exit": {
+      "LONG": {
+        "any": [
+          {
+            "not": {
+              "regime_in": [
+                "range"
+              ],
+              "code": "owner_regime_is_range"
+            }
+          },
+          {
+            "cmp": "owner_close_reaches_frozen_middle",
+            "left": "1m.candidate_close",
+            "op": ">=",
+            "right": "position.frozen_target"
+          }
+        ]
+      },
+      "SHORT": {
+        "any": [
+          {
+            "not": {
+              "regime_in": [
+                "range"
+              ],
+              "code": "owner_regime_is_range"
+            }
+          },
+          {
+            "cmp": "owner_close_reaches_frozen_middle",
+            "left": "1m.candidate_close",
+            "op": "<=",
+            "right": "position.frozen_target"
+          }
+        ]
+      }
+    },
+    "risk": {
+      "stop_atr": "$stop_atr",
+      "target_stop_ratio": "$target_stop_ratio"
+    },
+    "horizon_minutes": 30
+  }
+}
