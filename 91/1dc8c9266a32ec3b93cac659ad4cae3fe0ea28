@@ -1,0 +1,23 @@
+odd/tasks/log-return-strategy-research.md
+  s_40f10b43d6c693::t_170b3b36ddeb7d 13-15,154-155,167-171,190-252
+python/balancita_engine/futures_strategy_experiments.py
+  s_40f10b43d6c693::t_2bd3e4d7494912 1-168
+python/tests/test_futures_strategy_experiments.py
+  s_40f10b43d6c693::t_4a783c1506ad3b 1-122
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "911dc8c9266a32ec3b93cac659ad4cae3fe0ea28",
+  "prompts": {},
+  "sessions": {
+    "s_40f10b43d6c693": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a11712-24f8-7610-8cb6-3172a2bb3d4b",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
