@@ -286,7 +286,9 @@ describe('live market gateway', () => {
       closed: false,
       close: '90042',
     })
-    expect(update.seq as number).toBe((snapshot.seq as number) + 1)
+    // The poller may publish the ticker before the candle revision, so the
+    // candle is the next event or a later one, never earlier than the snapshot.
+    expect(update.seq as number).toBeGreaterThan(snapshot.seq as number)
     const priced = await client.next(
       (m) => m.type === 'market.updated' && (m.data as any).feed === 'ticker',
     )
