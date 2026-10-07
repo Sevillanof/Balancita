@@ -372,7 +372,6 @@ export default function TradeScreen({
           onNewOrder={handleNewOrder}
         />
       )}
-
     </section>
   )
 }

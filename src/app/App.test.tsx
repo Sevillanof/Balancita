@@ -341,9 +341,9 @@ describe('dashboard Gemini boundary', () => {
     }
   })
 
-  it('routes /laboratorio to the strategy lab on the terminal candles', async () => {
+  it('routes /estrategias to the strategy lab on the terminal candles', async () => {
     const priorPath = window.location.pathname
-    window.history.pushState({}, '', '/laboratorio')
+    window.history.pushState({}, '', '/estrategias')
     const fetchMock = vi.fn(async () => ({
       ok: false,
       status: 503,
@@ -365,39 +365,10 @@ describe('dashboard Gemini boundary', () => {
         '/api-live/terminal/bootstrap',
         expect.anything(),
       )
-      expect(screen.getByRole('link', { name: 'Laboratorio' })).toHaveAttribute(
+      expect(screen.getByRole('link', { name: 'Estrategias' })).toHaveAttribute(
         'aria-current',
         'page',
       )
-    } finally {
-      view.unmount()
-      vi.unstubAllGlobals()
-      window.history.pushState({}, '', priorPath)
-    }
-  })
-
-  it('routes /historicos to the saved connected replay history without running a replay', async () => {
-    const priorPath = window.location.pathname
-    window.history.pushState({}, '', '/historicos')
-    const fetchMock = vi.fn(async () => ({
-      ok: true,
-      json: async () => ({ runs: [] }),
-    }))
-    vi.stubGlobal('fetch', fetchMock)
-    const view = render(<App />)
-    try {
-      expect(
-        await screen.findByRole('heading', { name: 'Pruebas históricas' }),
-      ).toBeInTheDocument()
-      expect(
-        await screen.findByText('No hay corridas guardadas.'),
-      ).toBeInTheDocument()
-      expect(fetchMock).toHaveBeenCalledTimes(1)
-      expect(fetchMock).toHaveBeenCalledWith(
-        '/api/replay/fast-run/history?limit=50',
-        expect.anything(),
-      )
-      expect(screen.queryByText('Balancita (BTC/EUR)')).not.toBeInTheDocument()
     } finally {
       view.unmount()
       vi.unstubAllGlobals()

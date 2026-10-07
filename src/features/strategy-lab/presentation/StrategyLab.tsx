@@ -1,3 +1,4 @@
+import { DEFAULT_LAB_PRODUCT, LAB_PRODUCTS } from '../domain/products.ts'
 import { useEffect, useMemo, useState } from 'react'
 import ApprovedTerminalChart, {
   type ApprovedTerminalMarker,
@@ -6,7 +7,9 @@ import {
   COMPARATOR_LABELS,
   COMPARATORS,
   FEATURE_REFS,
+  addCondition,
   cloneSpec,
+  removeCondition,
   featureLabel,
   formatDecimal,
   isDecimal,
@@ -56,7 +59,7 @@ import './StrategyLab.css'
 type Props = {
   loadCandles?: () => Promise<LabCandles>
   connect?: (candles: LabCandles) => Promise<StrategyApi>
-  loadQwen?: () => Promise<QwenScores>
+  loadQwen?: (product: string) => Promise<QwenScores>
 }
 
 type Tab = 'rules' | 'params' | 'risk' | 'json' | 'versions'
@@ -109,6 +112,10 @@ const SCOPE_LABELS: Record<RulesScope, string> = {
   range: 'En rango',
 }
 
+function defaultLoadQwen(product: string) {
+  return loadQwenScores(undefined, product)
+}
+
 function defaultConnect(market: LabCandles): Promise<StrategyApi> {
   return connectStrategyApi(undefined, async () =>
     exampleStrategyApi(market.candles),
@@ -141,7 +148,7 @@ function downloadJson(spec: StrategySpec) {
 export default function StrategyLab({
   loadCandles = loadLabCandles,
   connect = defaultConnect,
-  loadQwen = loadQwenScores,
+  loadQwen = defaultLoadQwen,
 }: Props) {
   const [market, setMarket] = useState<LabCandles | null>(null)
   const [api, setApi] = useState<StrategyApi | null>(null)
@@ -176,14 +183,15 @@ export default function StrategyLab({
   const [busy, setBusy] = useState(false)
   const [qwen, setQwen] = useState<QwenScores | null>(null)
   const [qwenFocus, setQwenFocus] = useState(false)
+  const [product, setProduct] = useState(DEFAULT_LAB_PRODUCT)
 
   useEffect(() => {
     let active = true
-    void loadQwen().then((loaded) => active && setQwen(loaded))
+    void loadQwen(product).then((loaded) => active && setQwen(loaded))
     return () => {
       active = false
     }
-  }, [loadQwen, reload])
+  }, [loadQwen, product, reload])
 
   useEffect(() => {
     let active = true
@@ -201,7 +209,7 @@ export default function StrategyLab({
   useEffect(() => {
     if (!api) return
     let active = true
-    api.ranking(days).then(
+    api.ranking(days, product).then(
       (loaded) => {
         if (!active) return
         setRanking(loaded)
@@ -212,7 +220,7 @@ export default function StrategyLab({
     return () => {
       active = false
     }
-  }, [api, days, reload])
+  }, [api, days, product, reload])
 
   useEffect(() => {
     if (!api || !selectedId) return
@@ -239,11 +247,11 @@ export default function StrategyLab({
     if (!api || !detail || !ranking?.verdicts_available) return
     let active = true
     const ref = { id: detail.id, version: detail.version }
-    api.backtest(ref, days).then(
+    api.backtest(ref, days, product).then(
       (result) => active && setSaved(result),
       (failure: unknown) => active && setError(errorText(failure)),
     )
-    api.evaluate(ref).then(
+    api.evaluate(ref, product).then(
       (evaluation) => {
         if (!active) return
         setDots(
@@ -260,7 +268,7 @@ export default function StrategyLab({
     return () => {
       active = false
     }
-  }, [api, detail, days, ranking?.verdicts_available])
+  }, [api, detail, days, product, ranking?.verdicts_available])
 
   const candles = useMemo(() => market?.candles ?? [], [market])
   const draftKey = draft ? JSON.stringify(draft) : ''
@@ -273,9 +281,7 @@ export default function StrategyLab({
   const conditions = sideConditions(rules, side)
   const draftLabel = draft ? shortName(draft.name, draft.id) : '—'
 
-  const qwenProduct = qwen?.products.find(
-    (product) => product.product_id === 'PF_XBTUSD',
-  )
+  const qwenProduct = qwen?.products.find((item) => item.product_id === product)
 
   const rows: Row[] = useMemo(() => {
     if (!ranking) return []
@@ -586,9 +592,23 @@ export default function StrategyLab({
               ? 'Conectando con el registro de estrategias…'
               : example
                 ? `Sin conexión con el registro de estrategias · datos de ejemplo sobre ${SOURCE_LABELS[market.source]}`
-                : `Registro de estrategias · backtest sobre los veredictos de C (velas oficiales de Terminal) · PF_XBTUSD · ${days} d`}
+                : `Registro de estrategias · backtest sobre los veredictos de C (velas oficiales de Terminal) · ${product} · ${days} d`}
         </p>
         <div className="strategy-lab__toolbar-actions">
+          <select
+            aria-label="Producto"
+            value={product}
+            onChange={(event) => {
+              setProduct(event.target.value)
+              setQwenFocus(false)
+            }}
+          >
+            {LAB_PRODUCTS.map((item) => (
+              <option key={item} value={item}>
+                {item}
+              </option>
+            ))}
+          </select>
           <div
             className="strategy-lab__seg"
             role="group"
@@ -832,9 +852,6 @@ export default function StrategyLab({
             </span>
             <span>gris = menos de {ranking?.min_trades ?? 30} trades</span>
           </div>
-          <a className="strategy-lab__legacy" href="/historicos">
-            Pruebas históricas spot (BTC-EUR)
-          </a>
         </section>
 
         <section
@@ -1107,13 +1124,28 @@ export default function StrategyLab({
                           `Condición ${index + 1}: contra`,
                           (right) => patch({ right }),
                         )}
+                        <button
+                          type="button"
+                          className="strategy-lab__button"
+                          aria-label={`Quitar condición ${index + 1}`}
+                          onClick={() =>
+                            update(removeCondition(draft, scope, side, path))
+                          }
+                        >
+                          ✕
+                        </button>
                       </li>
                     )
                   })}
                 </ul>
-                <small className="strategy-lab__context">
-                  Para agregar o quitar condiciones editá la pestaña JSON.
-                </small>
+                <button
+                  type="button"
+                  className="strategy-lab__button"
+                  disabled={!rules?.sides[side]}
+                  onClick={() => update(addCondition(draft, scope, side))}
+                >
+                  + condición
+                </button>
               </div>
             )}
 

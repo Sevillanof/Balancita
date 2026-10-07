@@ -120,6 +120,37 @@ describe('StrategyLab', () => {
     ).toBeInTheDocument()
   })
 
+  it('adds and removes conditions from the Reglas tab', async () => {
+    await renderLab()
+    const before = screen.getAllByLabelText(/Condición \d+: comparador/).length
+    await userEvent.click(screen.getByRole('button', { name: '+ condición' }))
+    expect(screen.getAllByLabelText(/Condición \d+: comparador/)).toHaveLength(
+      before + 1,
+    )
+    await userEvent.click(
+      screen.getByRole('button', { name: `Quitar condición ${before + 1}` }),
+    )
+    expect(screen.getAllByLabelText(/Condición \d+: comparador/)).toHaveLength(
+      before,
+    )
+  })
+
+  it('asks Qwen scores for the selected product', async () => {
+    const loadQwen = vi.fn(() => Promise.resolve(qwenOff))
+    render(
+      <StrategyLab
+        loadCandles={loadCandles}
+        connect={() => Promise.resolve(exampleStrategyApi(market.candles))}
+        loadQwen={loadQwen}
+      />,
+    )
+    await userEvent.selectOptions(
+      await screen.findByLabelText('Producto'),
+      'PF_ETHUSD',
+    )
+    expect(loadQwen).toHaveBeenLastCalledWith('PF_ETHUSD')
+  })
+
   it('creates one draft per value of a parameter sweep', async () => {
     const user = userEvent.setup()
     await renderLab()
