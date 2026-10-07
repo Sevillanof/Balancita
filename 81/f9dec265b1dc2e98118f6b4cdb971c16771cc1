@@ -1,0 +1,21 @@
+README.md
+  s_1851609b945d48::t_376a212f403ca3 27,42-46,48,62
+odd/tasks/strategy-simulation.md
+  s_1851609b945d48::t_4a0247c4a0bd92 57-58
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "81f9dec265b1dc2e98118f6b4cdb971c16771cc1",
+  "prompts": {},
+  "sessions": {
+    "s_1851609b945d48": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "763d789b-a009-4589-9307-f789259c3bf7",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
