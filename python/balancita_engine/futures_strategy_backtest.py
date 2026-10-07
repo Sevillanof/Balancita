@@ -21,20 +21,18 @@ import sqlite3
 import statistics
 from decimal import Decimal
 
+from .futures_paper_execution import COST_BUFFER_RATE, PAPER_EXECUTION_CONFIG
 from .futures_spec_strategy import propose_spec
 
 ONE_MINUTE_MS = 60_000
 IN_SAMPLE_SHARE = Decimal("0.7")
 MAX_ROWS = 200_000
-# Same values as PAPER_EXECUTION_CONFIG and COST_BUFFER_RATE in futures_paper_execution.
+# D's own cost and sizing constants, imported so the backtest cannot drift from paper execution.
 BOOK_CONFIG = {
-    "initial_cash_usd": "10000",
-    "max_notional_usd": "1000",
-    "max_exposure_multiple": "1",
-    "risk_fraction": "0.001",
-    "taker_rate": "0.0005",
-    "cost_buffer_rate": "0.0002",
+    key: PAPER_EXECUTION_CONFIG[key]
+    for key in ("initial_cash_usd", "max_notional_usd", "max_exposure_multiple", "risk_fraction", "taker_rate")
 }
+BOOK_CONFIG["cost_buffer_rate"] = str(COST_BUFFER_RATE)
 MIN_TRADES = 30
 
 
