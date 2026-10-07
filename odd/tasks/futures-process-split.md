@@ -42,6 +42,12 @@ Every sustained live run of the single process surfaced a new engine defect: the
 - [x] PS-05c [S] Fix the funding-pause overwrite in the legacy runtime (`python/balancita_engine/futures_runtime.py:2393-2404`), with a test. The legacy runtime is still used by the MOCK local terminal.
 - [x] PS-05d [L] Retire the legacy live engine once D is proven: per-delta driver, market-context transport, operative bridge, `futuresSourceFailed` latch, `FUTURES_MODE=mock/replay` in `app.ts`, and the `DEV_LIVE_SINGLE_PROCESS` rollback. The dev MOCK child, which uses the local terminal, stays.
 - [ ] PS-06 [S] Process supervision + per-process health in UI.
+- [ ] PS-08a [M] Strategy spec `balancita-strategy.v1` (declarative JSON with `params`, no code) and its Python interpreter in C; C25-C28 rewritten as specs, with a parity test giving identical proposals over stored history.
+- [ ] PS-08b [M] Strategy registry S: own SQLite DB, single writer; append-only spec versions (canonical hash) and lifecycle events with `known_at`; C reads it read-only and records the active spec hashes in each verdict; JSON import/export.
+- [ ] PS-08c [L] Independent strategies: each active strategy has its own isolated paper book in D (position, fills, P&L); no cross-strategy selection; all are shown against the same terminal chart, with per-strategy markers.
+- [ ] PS-08d [L] Front: strategies page, rule and parameter editor, configurable indicator periods, walk-forward backtest with a trial counter. When confirming an edit the user chooses: a new version of the same strategy, or a new strategy with the changes that leaves the existing one as it is.
+- [ ] PS-08e [S] Lifecycle draft -> shadow -> active, gated by the ADR evaluation (out of sample, deflated Sharpe, minimum trade count).
+- [ ] PS-08f [M] Import from Pine Script or freqtrade: an LLM translates the text into a draft spec that the user reviews; imported code never runs.
 
 ## Acceptance (PS-01)
 
@@ -296,6 +302,13 @@ Every sustained live run of the single process surfaced a new engine defect: the
     - It runs as an optional dev child (`NEWS_ENABLED=0` turns it off).
   - Legacy Gemini news polling in the `server` child stays off by default and is not retired here.
   - The container egress proxy blocked every real feed, so the Mac must confirm which feeds work.
+- 2026-10-07 PS-08 design (cloud session; user decisions). Proposal: https://claude.ai/code/artifact/512673e3-f53b-4ec2-86e2-eec41cebd47f
+  - Strategies are created and imported from the front as declarative specs; C25-C28 can be modified and parameters varied (ADR 0001 amendment: modify or ship as C29+).
+  - Storage: a new process S, single writer of its own strategies DB.
+  - Each strategy is agnostic to the others (no shared selection) and is tested against the same terminal chart.
+  - On confirming a change the user picks: edit the same strategy (new version, same id) or create a new strategy and keep the existing one.
+  - Every version is frozen by hash, so replay keeps giving the same verdicts; every backtested variant counts as a trial for the deflated Sharpe.
+  - PS-08b/d need the command channel planned in PS-06.
 
 ## Next step
 
