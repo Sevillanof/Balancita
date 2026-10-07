@@ -12,7 +12,7 @@ import {
 
 const capture = readFileSync(
   new URL(
-    '../../../../playwright-artifacts/futures-diagnostics/funding-current-20261003T225404Z/response.json',
+    './fixtures/historical-funding-PF_XBTUSD-20261003T225404Z.json',
     import.meta.url,
   ),
   'utf8',
@@ -124,7 +124,7 @@ describe('public historical Kraken futures funding', () => {
       const first = new FuturesMarketStore(path)
       first.appendFundingResponse(response)
       first.appendFundingResponse(response)
-      expect(first.fundingRecordsAsOf(receivedAt)).toHaveLength(8815)
+      expect(first.fundingRecordsAsOf(receivedAt)).toHaveLength(24)
       first.close()
       const reopened = new FuturesMarketStore(path)
       expect(reopened.fundingRecordsAsOf(receivedAt).at(-1)).toMatchObject({

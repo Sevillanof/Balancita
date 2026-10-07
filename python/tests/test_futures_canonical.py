@@ -4,10 +4,12 @@ from pathlib import Path
 
 from balancita_engine.canonical import canonical_json, canonical_hash, normalize_decimal
 
+FIXTURES = Path(__file__).resolve().parent.parent / "fixtures"
+
 
 class CanonicalTests(unittest.TestCase):
     def test_shared_vectors(self):
-        vectors = json.loads(Path("python/fixtures/futures-canonical-vectors.json").read_text())
+        vectors = json.loads((FIXTURES / "futures-canonical-vectors.json").read_text())
         for vector in vectors:
             self.assertEqual(canonical_json(vector["value"]), vector["canonical"])
             self.assertEqual(canonical_hash(vector["value"]), vector["sha256"])
@@ -19,10 +21,10 @@ class CanonicalTests(unittest.TestCase):
             normalize_decimal(1.0)
 
     def test_unpaired_surrogates_reject_and_valid_supplementary_text_hashes(self):
-        invalid = json.loads(Path("python/fixtures/futures-canonical-invalid.json").read_text())
+        invalid = json.loads((FIXTURES / "futures-canonical-invalid.json").read_text())
         with self.assertRaises(ValueError):
             canonical_json(invalid["unpaired"])
-        vectors = json.loads(Path("python/fixtures/futures-canonical-vectors.json").read_text())
+        vectors = json.loads((FIXTURES / "futures-canonical-vectors.json").read_text())
         supplementary = next(item for item in vectors if item["name"] == "unicode-order-and-supplementary")
         self.assertEqual(canonical_json(supplementary["value"]), supplementary["canonical"])
         self.assertEqual(canonical_hash(supplementary["value"]), supplementary["sha256"])

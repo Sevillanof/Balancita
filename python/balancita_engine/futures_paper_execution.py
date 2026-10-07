@@ -702,14 +702,21 @@ class PaperExecutionEngine:
             "strategy_id": selected.get("strategy_id"),
             "delegated_strategy_id": selected.get("delegated_strategy_id"),
             "signal_key": signal_key, "knowledge_lag_ms": verdict.get("knowledge_lag_ms"),
+            "delivery_lag_ms": (time_ms - verdict["decision_known_at_ms"]
+                                if isinstance(verdict.get("decision_known_at_ms"), int) else None),
             "causes": [],
         }
         lag = verdict.get("knowledge_lag_ms")
+        known_at = verdict.get("decision_known_at_ms")
         if (not isinstance(signal_key, str) or not isinstance(selected.get("strategy_id"), str)
                 or selected.get("proposed_stop") is None or selected.get("proposed_target") is None):
             reason = "verdict_malformed"
         elif not isinstance(lag, int) or lag > self.max_lag:
             reason = "verdict_stale"
+        elif not isinstance(known_at, int) or time_ms - known_at > self.max_lag:
+            # Fresh candles but written late (C catching up after a start): the
+            # entry would fill at a ticker long after the signal's close.
+            reason = "verdict_late"
         elif selected["strategy_id"] == C27_STRATEGY_ID and _frozen_level(selected.get("invalidation")) is None:
             reason = INVALIDATION_UNAVAILABLE
         elif signal_key in self._consumed_set:
