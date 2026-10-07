@@ -1,0 +1,27 @@
+README.md
+  s_1851609b945d48::t_57ed7d72b8971b 32
+odd/tasks/strategy-simulation.md
+  s_1851609b945d48::t_58b6f9efdfe82e 58
+scripts/dev-provider-env.mjs
+  s_1851609b945d48::t_641d7db4f6bdae 318,321
+scripts/dev.mjs
+  s_1851609b945d48::t_2324d15133ef2a 90,97
+scripts/dev.node-test.mjs
+  s_1851609b945d48::t_246a3f844d330d 30,325,355,379-380,397-402,408,458,461
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d8c22b0c936565edcab6022691012c4fbde80463",
+  "prompts": {},
+  "sessions": {
+    "s_1851609b945d48": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "763d789b-a009-4589-9307-f789259c3bf7",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
