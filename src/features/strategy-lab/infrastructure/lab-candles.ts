@@ -2,6 +2,7 @@ import {
   loadTerminalBootstrap,
   terminalApiBase,
 } from '../../connected-trading/infrastructure/terminal-stream-client.ts'
+import { record } from '../../../shared/wire/decode.ts'
 
 /** A closed 1m candle; `time` in seconds, like the terminal chart. */
 export type LabCandle = {
@@ -22,12 +23,6 @@ export type LabCandles = {
 
 /** Below this the indicators barely warm up, so the sample is not useful. */
 export const MIN_USEFUL_CANDLES = 60
-
-function record(value: unknown): Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {}
-}
 
 /** Closed candles of a terminal bootstrap's `terminal_market`, oldest first. */
 export function candlesFromBootstrap(bootstrap: unknown): LabCandle[] {

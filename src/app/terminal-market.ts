@@ -1,4 +1,5 @@
 import type { TerminalBootstrap } from '../features/connected-trading/infrastructure/terminal-stream-client.ts'
+import { record } from '../shared/wire/decode.ts'
 
 type RecordValue = Record<string, unknown>
 
@@ -61,10 +62,4 @@ function safeTime(value: unknown): number | null {
   return Number.isSafeInteger(value) && Number(value) >= 0
     ? Number(value)
     : null
-}
-
-function record(value: unknown): RecordValue {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-    ? (value as RecordValue)
-    : {}
 }

@@ -1,11 +1,7 @@
 import type { TerminalEnvelope } from './terminal-stream-client.ts'
+import { record } from '../../../shared/wire/decode.ts'
 
 type TerminalState = Record<string, unknown>
-
-const record = (value: unknown): Record<string, unknown> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {}
 
 export function applyTerminalEvent(
   previous: TerminalState | null,
