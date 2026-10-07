@@ -109,6 +109,13 @@ function parseJson(text: unknown): Row | null {
 
 type AccountBlock = Row
 
+/** Open positions of an account block (one per independent book). */
+function positionsOf(block: AccountBlock): Row[] {
+  if (Array.isArray(block.positions))
+    return block.positions.map((p) => record(p))
+  return block.position ? [record(block.position)] : []
+}
+
 /**
  * Read-only follower of paper execution D's account DB and the verdicts DB,
  * projected into the terminal's existing `paper-futures-terminal-state.v1`
@@ -131,6 +138,8 @@ export class PaperEngineFollower {
   private latestSnapshotTime: number | null = null
   private initialCash = '0'
   private block: AccountBlock | null = null
+  /** Latest account block per independent book (key '' for a single-book account). */
+  private readonly books = new Map<string, AccountBlock>()
   private orders = new Map<string, Row>()
   private pendingExitReasons = new Map<string, string>()
   private fills: Row[] = []
@@ -299,6 +308,7 @@ export class PaperEngineFollower {
     this.pendingExitReasons = new Map()
     this.fills = []
     this.block = null
+    this.books.clear()
     this.lastEquity = null
     this.lastEquityAt = Number.NEGATIVE_INFINITY
     const head = Number(
@@ -315,8 +325,15 @@ export class PaperEngineFollower {
       handle,
       "SELECT value FROM paper_execution_meta WHERE key='config_json'",
     ).get() as { value: string } | undefined
-    const initial = parseJson(meta?.value)?.initial_cash_usd
-    this.initialCash = isDecimal(initial) ? initial : '0'
+    const config = parseJson(meta?.value)
+    const initial = config?.initial_cash_usd
+    const bookCount = Array.isArray(config?.books) ? config.books.length : 1
+    this.initialCash = isDecimal(initial)
+      ? Array.from({ length: bookCount - 1 }).reduce<string>(
+          (total) => addDecimal(total, initial) ?? total,
+          initial,
+        )
+      : '0'
     const start = Math.max(0, head - TAIL_WINDOW)
     this.cursor = start
     this.lastEventTime = null
@@ -330,13 +347,23 @@ export class PaperEngineFollower {
       const found = prepare(
         handle,
         `SELECT payload_json FROM paper_execution_events
-         WHERE kind IN (${ACCOUNT_KINDS.map(() => '?').join(',')})
-         ORDER BY seq DESC LIMIT 1`,
-      ).get(...ACCOUNT_KINDS) as { payload_json: string } | undefined
-      const account = record(
-        record(parseJson(found?.payload_json)?.body).account,
-      )
-      if (Object.keys(account).length > 0) this.block = account
+         WHERE seq IN (
+           SELECT MAX(seq) FROM paper_execution_events
+           WHERE kind IN (${ACCOUNT_KINDS.map(() => '?').join(',')})
+           GROUP BY json_extract(payload_json, '$.body.book'))
+         ORDER BY seq`,
+      ).all(...ACCOUNT_KINDS) as { payload_json: string }[]
+      for (const row of found) {
+        const body = record(parseJson(row.payload_json)?.body)
+        const account = record(body.account)
+        if (Object.keys(account).length > 0) {
+          this.books.set(
+            typeof body.book === 'string' ? body.book : '',
+            account,
+          )
+          this.block = this.aggregate()
+        }
+      }
     }
     this.refreshSnapshotTime(handle)
     this.lastEquity = String(this.accountView().equity_usd)
@@ -377,16 +404,17 @@ export class PaperEngineFollower {
         funding_complete: true,
         net_usd: '0',
       }
-    const position = record(block.position)
-    const unrealized =
-      block.position && mark
-        ? unrealizedPnl(
-            position.side,
-            position.quantity_btc,
-            position.entry_price_usd_per_btc,
-            mark,
-          )
-        : null
+    let unrealized: string | null = null
+    if (mark)
+      for (const open of positionsOf(block)) {
+        const pnl = unrealizedPnl(
+          open.side,
+          open.quantity_btc,
+          open.entry_price_usd_per_btc,
+          mark,
+        )
+        unrealized = addDecimal(unrealized ?? '0', pnl ?? '0') ?? unrealized
+      }
     const equity =
       addDecimal(block.cash_usd, unrealized ?? '0') ?? String(block.cash_usd)
     return {
@@ -405,6 +433,40 @@ export class PaperEngineFollower {
     return position ? { ...record(position) } : null
   }
 
+  /** Every open position, one per independent book. */
+  private positionsView(): Row[] {
+    return this.block ? positionsOf(this.block).map((p) => ({ ...p })) : []
+  }
+
+  /** The one account the terminal shows: a single block as is, several summed. */
+  private aggregate(): AccountBlock | null {
+    const blocks = [...this.books.values()]
+    if (blocks.length === 0) return null
+    if (blocks.length === 1) {
+      const only = blocks[0]!
+      return { ...only, positions: positionsOf(only) }
+    }
+    const sum = (key: string): string => {
+      let total = '0'
+      for (const block of blocks)
+        total = addDecimal(total, String(block[key] ?? '0')) ?? total
+      return total
+    }
+    const positions = blocks.flatMap((block) => positionsOf(block))
+    return {
+      cash_usd: sum('cash_usd'),
+      realized_gross_usd: sum('realized_gross_usd'),
+      fees_usd: sum('fees_usd'),
+      funding_paid_usd: sum('funding_paid_usd'),
+      funding_complete: blocks.every((b) => b.funding_complete === true),
+      net_usd: blocks.some((b) => b.net_usd === null || b.net_usd === undefined)
+        ? null
+        : sum('net_usd'),
+      position: positions[0] ?? null,
+      positions,
+    }
+  }
+
   /** Engine-owned fields of the terminal state; empty while the engine is off. */
   snapshotFields(): Row {
     if (!this.reading) return {}
@@ -417,6 +479,7 @@ export class PaperEngineFollower {
       quantity_unit: 'BTC',
       account: this.accountView(),
       position: this.positionView(),
+      positions: this.positionsView(),
       orders: [...this.orders.values()].slice(-100),
       fills: this.fills.slice(-100),
       analyses: [...this.analyses],
@@ -537,15 +600,29 @@ export class PaperEngineFollower {
     }
     const account = record(body.account)
     if (ACCOUNT_KINDS.includes(kind) && Object.keys(account).length > 0)
-      this.applyAccount(account, sink, emit)
+      this.applyAccount(
+        account,
+        typeof body.book === 'string' ? body.book : '',
+        sink,
+        emit,
+      )
   }
 
   private applyAccount(
-    block: AccountBlock,
+    incoming: AccountBlock,
+    book: string,
     sink: EngineEvent[],
     emit: boolean,
   ): void {
     const previous = this.block
+    const own = incoming.position
+    this.books.set(
+      book,
+      own && book
+        ? { ...incoming, position: { ...record(own), book } }
+        : incoming,
+    )
+    const block = this.aggregate() as AccountBlock
     this.block = block
     if (!emit) return
     const positionChanged =
@@ -564,7 +641,10 @@ export class PaperEngineFollower {
     if (positionChanged)
       sink.push({
         type: 'position.updated',
-        data: { position: this.positionView() },
+        data: {
+          position: this.positionView(),
+          positions: this.positionsView(),
+        },
       })
   }
 
@@ -673,7 +753,7 @@ export class PaperEngineFollower {
   }
 
   private refreshEquity(events: EngineEvent[]): void {
-    if (!this.block?.position) return
+    if (!this.block || positionsOf(this.block).length === 0) return
     const now = this.clock()
     if (now - this.lastEquityAt < EQUITY_REFRESH_MS) return
     const account = this.accountView()
