@@ -1,8 +1,11 @@
 import { spawn } from 'node:child_process'
 import { mkdirSync, writeFileSync } from 'node:fs'
+import { removeDevPid, sweepStale, writeDevPid } from './dev-stale.mjs'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
 import {
+  DEV_PORTS,
+  STRATEGIES_PORT,
   describeChildExit,
   devChildSpecs,
   findQwenModel,
@@ -59,9 +62,25 @@ else if (python.command === undefined)
   process.stdout.write(
     '[dev] llm and q need Python as well, which was not found; they will not start.\n',
   )
-// Refuse to start on a busy port: a stale dev stack would otherwise keep
-// serving the browser while the new child dies with EADDRINUSE. The llm port
-// is only checked when that child will really start.
+const liveDir = resolve(root, 'server/data/dev-live')
+mkdirSync(liveDir, { recursive: true })
+// Leftovers of an earlier `pnpm run dev` in this checkout (ports, writer
+// locks) are stopped; a port held by anything else is reported and we exit.
+const sweepPorts = [
+  ...Object.entries(DEV_PORTS).map(([name, port]) => ({ name, port })),
+  ...(python.command === undefined
+    ? []
+    : [{ name: 'strategies', port: STRATEGIES_PORT }]),
+  ...(llmEnabled ? [{ name: 'llm', port: llamaPort(env) }] : []),
+]
+const sweep = await sweepStale({ root, ports: sweepPorts, liveDir })
+for (const line of sweep.stopped) process.stdout.write(`[dev] ${line}\n`)
+if (sweep.blockers.length > 0) {
+  for (const line of sweep.blockers) process.stderr.write(`[dev] ${line}\n`)
+  process.stderr.write('[dev] nothing was started.\n')
+  process.exit(1)
+}
+// Last check on the ports (also covers a holder that appeared meanwhile).
 const plan = await planStartup({
   extra: llmEnabled
     ? [{ name: 'llm', port: llamaPort(env), host: '127.0.0.1' }]
@@ -72,7 +91,7 @@ if (!plan.start) {
   process.stderr.write('[dev] nothing was started.\n')
   process.exit(plan.exitCode)
 }
-mkdirSync(resolve(root, 'server/data/dev-live'), { recursive: true })
+writeDevPid(liveDir)
 // Resolve Python once, before spawning: without it the verdict and paper
 // services are skipped and the gateway reports the engine as unavailable.
 if (python.command === undefined)
@@ -87,6 +106,13 @@ if (llmModel) {
   llmModelPath = llmModel.args?.[0] === '-m' ? llmModel.args[1] : undefined
   process.stdout.write(`${llmModel.message}\n`)
 }
+// Child output that never helps: Node's experimental-feature banner. Set
+// DEV_VERBOSE=1 to see everything.
+const noise = [
+  /ExperimentalWarning: SQLite is an experimental feature/,
+  /^\(Use `node --trace-warnings/,
+]
+const verbose = env.DEV_VERBOSE === '1'
 const useGroups = process.platform !== 'win32'
 const specs = devChildSpecs({
   root,
@@ -127,12 +153,16 @@ function launch(spec) {
     detached: useGroups,
     env,
   })
-  const state = { sawAddrInUse: false }
+  const state = { sawAddrInUse: false, sawLocked: false }
   for (const stream of ['stdout', 'stderr']) {
     child[stream].on('data', (chunk) => {
-      if (chunk.toString().includes('EADDRINUSE')) state.sawAddrInUse = true
-      for (const line of chunk.toString().split(/(?<=\n)/))
-        if (line) process[stream].write(`[${name}] ${line}`)
+      const text = chunk.toString()
+      if (/EADDRINUSE|Address already in use/.test(text))
+        state.sawAddrInUse = true
+      if (/is already writing/i.test(text)) state.sawLocked = true
+      for (const line of text.split(/(?<=\n)/))
+        if (line && (verbose || !noise.some((re) => re.test(line))))
+          process[stream].write(`[${name}] ${line}`)
     })
   }
   return { name, child, state, spec }
@@ -177,8 +207,15 @@ function shutdown(signal, code = 0) {
   })
 }
 
-for (const signal of ['SIGINT', 'SIGTERM'])
+for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'])
   process.once(signal, () => shutdown(signal))
+// Safety net: whatever ends this process, no child group outlives it.
+process.on('exit', () => {
+  removeDevPid(liveDir)
+  for (const { child } of children)
+    if (child.exitCode === null && child.signalCode === null)
+      signalChild(child, 'SIGKILL')
+})
 function watch(entry) {
   const { name, child, state } = entry
   child.on('error', (error) => {
@@ -197,7 +234,7 @@ function watch(entry) {
       if (uptimeMs >= 60_000) health.streak = 0
       const delay = restartDelayMs({ restarts: health.streak, uptimeMs })
       // A port held by a stale process will not free itself: do not loop.
-      if (delay === null || state.sawAddrInUse) {
+      if (delay === null || state.sawAddrInUse || state.sawLocked) {
         health.status = 'down'
         health.lastExit = signal ?? code
         health.since = Date.now()
