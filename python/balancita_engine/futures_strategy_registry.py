@@ -362,8 +362,9 @@ class StrategyRegistry:
 class StrategyService:
     """What the API does: registry plus read-only verdicts, per product and period."""
 
-    def __init__(self, registry, verdicts_db_path, products, provider_factory=None):
+    def __init__(self, registry, verdicts_db_path, products, provider_factory=None, replays=None):
         self.registry = registry
+        self.replays = replays
         self.provider_factory = provider_factory or (lambda: default_provider(os.environ))
         self.verdicts_db_path = verdicts_db_path
         self.products = products
@@ -523,6 +524,15 @@ def make_handler(service):
                 return schema_description()
             if method == "GET" and parts == ["strategies"]:
                 return {"strategies": registry.list()}
+            if method == "GET" and parts[:1] == ["replays"]:
+                if service.replays is None:
+                    raise RegistryError("replays_unavailable", "no market DB configured", 503)
+                if len(parts) == 1:
+                    return {"replays": service.replays.list()}
+                try:
+                    return service.replays.detail(parts[1])
+                except KeyError as error:
+                    raise RegistryError("not_found", str(error), 404) from error
             if method == "GET" and parts == ["ranking"]:
                 return service.ranking(product, days)
             if method == "GET" and len(parts) == 2 and parts[0] == "strategies":
@@ -542,6 +552,14 @@ def make_handler(service):
             if parts == ["strategies"]:
                 return registry.save(body.get("spec") or {}, body.get("mode"), new_id=body.get("new_id"),
                                      new_name=body.get("new_name"))
+            if parts == ["replays"]:
+                if service.replays is None:
+                    raise RegistryError("replays_unavailable", "no market DB configured", 503)
+                try:
+                    return service.replays.start(body.get("product", product), body.get("from"), body.get("to"),
+                                                 body.get("qwen"))
+                except (ValueError, TypeError) as error:
+                    raise RegistryError("invalid_replay", str(error)) from error
             if parts == ["translate"]:
                 return service.translate(body.get("text"), body.get("source", "auto"))
             if parts == ["import"]:
@@ -588,12 +606,21 @@ def main(argv=None):
     parser.add_argument("--strategies-db", required=True)
     parser.add_argument("--verdicts-db", help="C's verdicts DB, opened read-only for backtests")
     parser.add_argument("--specs-dir", default=DEFAULT_SPEC_DIR, help="shipped specs seeded once (C25-C28)")
+    parser.add_argument("--market-db", help="market DB (read-only) the historical replays read")
+    parser.add_argument("--replays-dir", help="where each replay run DB is written (default: next to the strategies DB)")
     parser.add_argument("--port", type=int, default=int(os.environ.get("STRATEGIES_PORT", DEFAULT_PORT)))
     args = parser.parse_args(argv)
     registry = StrategyRegistry(args.strategies_db)
     registry.seed(load_specs(args.specs_dir))
     products = dict(load_pinned_products())
-    service = StrategyService(registry, args.verdicts_db, products)
+    replays = None
+    if args.market_db:
+        from .futures_replay import ReplayJobs, qwen_factory
+
+        directory = args.replays_dir or os.path.join(os.path.dirname(os.path.abspath(args.strategies_db)), "replays")
+        replays = ReplayJobs(args.market_db, directory, lambda: registry.active_specs(_now_ms()), products,
+                             qwen_factory(os.path.join(directory, "qwen-cache.db")))
+    service = StrategyService(registry, args.verdicts_db, products, replays=replays)
     server = ThreadingHTTPServer(("127.0.0.1", args.port), make_handler(service))
     print("[strategies] registry {} on http://127.0.0.1:{}".format(args.strategies_db, args.port), flush=True)
     try:

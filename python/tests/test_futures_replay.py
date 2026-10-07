@@ -5,7 +5,9 @@ import tempfile
 import unittest
 
 from balancita_engine import futures_llm_decisions as llm
-from balancita_engine.futures_replay import run
+import time
+
+from balancita_engine.futures_replay import ReplayJobs, run
 from balancita_engine.futures_replay_qwen import AnswerCache, BlindQwen
 from balancita_engine.futures_simulator import simulate_many
 from balancita_engine.futures_spec_strategy import load_specs
@@ -91,6 +93,39 @@ class ReplayTests(unittest.TestCase):
             qwen=self._qwen(second, cache, "5min"))
         self.assertGreater(first.calls, 0)
         self.assertEqual(second.calls, 0)
+
+    def _wait(self, jobs, run_id):
+        for _ in range(600):
+            time.sleep(0.05)
+            row = [r for r in jobs.list() if r["id"] == run_id][0]
+            if row["status"] != "running":
+                return row
+        self.fail("replay did not finish")
+
+    def test_jobs_run_in_the_background_and_are_listed_with_their_detail(self):
+        day = 86_400_000
+        first = (ONES[0]["bucket_start"] // day + 1) * day  # the 1500 candles span a day boundary
+        iso = lambda ms: time.strftime("%Y-%m-%d", time.gmtime(ms // 1000))
+        provider = llm.FakeProvider()
+        jobs = ReplayJobs(self.market, os.path.join(self.dir.name, "runs"), lambda: load_specs(),
+                          {"PF_XBTUSD": "1"}, lambda specs, params, tick: self._qwen(provider, trigger=params["trigger"]))
+        started = jobs.start("PF_XBTUSD", iso(first - day), iso(first + day), {"trigger": "5min"})
+        self.assertEqual(started["status"], "running")
+        row = self._wait(jobs, started["id"])
+        self.assertEqual(row["status"], "done", row)
+        detail = jobs.detail(started["id"])
+        self.assertEqual({s["strategy_id"] for s in detail["summaries"]}, set(load_specs()))
+        self.assertTrue(detail["qwen"]["decisions"])
+        with self.assertRaises(ValueError):
+            jobs.start("PF_NOPE", "2026-01-01", "2026-01-02")
+        with self.assertRaises(KeyError):
+            jobs.detail("nope")
+
+    def test_a_replay_without_candles_fails_and_says_why(self):
+        jobs = ReplayJobs(self.market, os.path.join(self.dir.name, "runs"), lambda: load_specs(), {"PF_XBTUSD": "1"})
+        row = self._wait(jobs, jobs.start("PF_XBTUSD", "2001-01-01", "2001-01-02")["id"])
+        self.assertEqual(row["status"], "failed")
+        self.assertIn("no official candles", row["error"])
 
     def test_empty_range_is_refused(self):
         with self.assertRaises(ValueError):

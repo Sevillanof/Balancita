@@ -11,6 +11,7 @@ import json
 import os
 import sqlite3
 import sys
+import threading
 import time
 
 from .futures_simulator import Book, frames
@@ -72,6 +73,7 @@ def replay(specs, candles_1m, candles_5m, *, start_ms, product_id, tick_size="1"
 def write_run(path, meta, books, qwen=None):
     if os.path.exists(path):
         raise FileExistsError("replay run already exists: " + path)
+    final, path = path, path + ".partial"  # readers only ever see a finished run
     db = sqlite3.connect(path)
     try:
         db.executescript(_RUN_SCHEMA)
@@ -91,6 +93,7 @@ def write_run(path, meta, books, qwen=None):
         db.commit()
     finally:
         db.close()
+    os.replace(path, final)
 
 
 def qwen_report(blind):
@@ -127,6 +130,118 @@ def run(market_db, out_path, product_id, start_ms, end_ms, specs, tick_size="1",
     return [book.summary() for book in books]
 
 
+class ReplayJobs:
+    """Replays started from the API: one thread per run, one run DB per replay in ``directory``."""
+
+    def __init__(self, market_db, directory, specs_provider, products, qwen_factory=None, clock=time.time):
+        self.market_db, self.directory = market_db, directory
+        self.specs_provider, self.products = specs_provider, products
+        self.qwen_factory, self.clock = qwen_factory, clock
+        self._jobs, self._lock = {}, threading.Lock()
+        os.makedirs(directory, exist_ok=True)
+
+    def start(self, product_id, start, end, qwen=None):
+        if product_id not in self.products:
+            raise ValueError("unknown product " + str(product_id))
+        start_ms, end_ms = _ms(start), _ms(end)
+        if end_ms <= start_ms:
+            raise ValueError("replay range is empty")
+        if qwen is not None and self.qwen_factory is None:
+            raise ValueError("this server cannot ask Qwen")
+        run_id = "{}-{}-{}-{}".format(time.strftime("%Y%m%d%H%M%S", time.gmtime(self.clock())),
+                                      product_id, start, end)
+        job = {"id": run_id, "status": "running", "product_id": product_id, "start_ms": start_ms,
+               "end_ms": end_ms, "qwen": qwen, "error": None}
+        with self._lock:
+            self._jobs[run_id] = job
+        threading.Thread(target=self._work, args=(job, self.products[product_id]), daemon=True).start()
+        return self._public(job)
+
+    def _work(self, job, tick_size):
+        try:
+            specs = list(self.specs_provider().values())
+            blind = None
+            if job["qwen"] is not None:
+                blind = self.qwen_factory(specs, job["qwen"], tick_size)
+            run(self.market_db, self._path(job["id"]), job["product_id"], job["start_ms"], job["end_ms"],
+                specs, tick_size=tick_size, qwen=blind)
+            job["status"] = "done"
+        except Exception as error:  # a failed run is reported, never raised into the server
+            job["status"], job["error"] = "failed", "{}: {}".format(type(error).__name__, error)
+
+    def _path(self, run_id):
+        return os.path.join(self.directory, run_id + ".sqlite")
+
+    @staticmethod
+    def _public(job):
+        return {k: job[k] for k in ("id", "status", "product_id", "start_ms", "end_ms", "qwen", "error")}
+
+    def _meta(self, run_id):
+        db = sqlite3.connect("file:{}?mode=ro".format(self._path(run_id)), uri=True)
+        try:
+            meta = {k: json.loads(v) for k, v in db.execute("SELECT key, value FROM replay_run")}
+            summaries = [json.loads(r[0]) for r in db.execute("SELECT payload FROM replay_summary")]
+        finally:
+            db.close()
+        return meta, summaries
+
+    def list(self):
+        rows = {job["id"]: self._public(job) for job in self._jobs.values() if job["status"] != "done"}
+        for name in sorted(os.listdir(self.directory)):
+            if name.endswith(".sqlite"):
+                run_id = name[:-7]
+                meta, summaries = self._meta(run_id)
+                rows[run_id] = {"id": run_id, "status": "done", "product_id": meta["product_id"],
+                                "start_ms": meta["start_ms"], "end_ms": meta["end_ms"],
+                                "qwen": meta.get("qwen"), "error": None, "summaries": summaries}
+        return sorted(rows.values(), key=lambda r: r["id"], reverse=True)
+
+    def detail(self, run_id):
+        if "/" in run_id or not os.path.exists(self._path(run_id)):
+            job = self._jobs.get(run_id)
+            if job is None:
+                raise KeyError("unknown replay " + run_id)
+            return self._public(job)
+        meta, summaries = self._meta(run_id)
+        db = sqlite3.connect("file:{}?mode=ro".format(self._path(run_id)), uri=True)
+        try:
+            trades = [dict(json.loads(p), strategy_id=sid) for sid, p in db.execute(
+                "SELECT strategy_id, payload FROM replay_trade ORDER BY id")]
+            decisions = [dict(json.loads(p), strategy_id=sid) for sid, p in db.execute(
+                "SELECT strategy_id, payload FROM replay_decision ORDER BY id")]
+            qwen = None
+            if meta.get("qwen"):
+                qwen = {"decisions": [json.loads(r[0]) for r in db.execute(
+                            "SELECT payload FROM replay_qwen_decision ORDER BY id")],
+                        "report": json.loads(db.execute("SELECT payload FROM replay_qwen_report").fetchone()[0])}
+        finally:
+            db.close()
+        return {"id": run_id, "status": "done", "meta": meta, "summaries": summaries, "trades": trades,
+                "decisions": decisions, "qwen": qwen}
+
+
+def qwen_factory(cache_path=None, env=None):
+    """``(specs, params, tick_size) -> BlindQwen`` over the local llama.cpp server of the live process Q."""
+    env = os.environ if env is None else env
+
+    def make(specs, params, tick_size):
+        from . import futures_llm_decisions as llm
+        from .futures_replay_qwen import AnswerCache, BlindQwen
+
+        questions = llm.load_questions()
+        question_id = params.get("question", "trade_action")
+        if question_id not in questions:
+            raise ValueError("unknown question " + str(question_id))
+        prompts = llm.load_prompt_config()
+        provider = llm.LlamaCppProvider(llm.llama_url(env), llm.model_ref(env))
+        return BlindQwen(provider, specs, questions[question_id], llm.load_calibration(),
+                         prompts["templates"][prompts["default_version"]], tick_size=tick_size,
+                         trigger=params.get("trigger", "entry"), mode=prompts["probability_source"],
+                         cache=AnswerCache(cache_path))
+
+    return make
+
+
 def _ms(text):
     return int(time.mktime(time.strptime(text, "%Y-%m-%d")) - time.timezone) * 1000
 
@@ -148,17 +263,9 @@ def main(argv=None):
     specs = list(load_specs(args.specs_dir).values())
     qwen = None
     if args.qwen:
-        from . import futures_llm_decisions as llm
-        from .futures_replay_qwen import AnswerCache, BlindQwen
-
-        questions = llm.load_questions()
-        if args.qwen not in questions:
-            parser.error("unknown question {!r}; catalog: {}".format(args.qwen, ", ".join(sorted(questions))))
-        prompts = llm.load_prompt_config()
-        provider = llm.LlamaCppProvider(args.llama_url or llm.llama_url(os.environ), llm.model_ref(os.environ))
-        qwen = BlindQwen(provider, specs, questions[args.qwen], llm.load_calibration(),
-                         prompts["templates"][prompts["default_version"]], trigger=args.qwen_trigger,
-                         mode=prompts["probability_source"], cache=AnswerCache(args.qwen_cache))
+        env = dict(os.environ, **({"LLAMA_PORT": args.llama_url.rsplit(":", 1)[1]} if args.llama_url else {}))
+        qwen = qwen_factory(args.qwen_cache, env)(
+            specs, {"question": args.qwen, "trigger": args.qwen_trigger}, "1")
     summaries = run(args.market_db, args.out, args.product, _ms(args.start), _ms(args.end), specs, qwen=qwen)
     json.dump(summaries, sys.stdout, indent=2)
     print()
