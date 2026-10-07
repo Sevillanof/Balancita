@@ -1,0 +1,27 @@
+.gitignore
+  s_2e187168fcc8cc::t_3d7e4310c4c0c4 45
+python/kronos_lab/README.md
+  s_2e187168fcc8cc::t_b54e34403c0b36 6-7,11-14,21,24
+python/kronos_lab/lab.py
+  s_2e187168fcc8cc::t_8de991b7ebf8d6 21,35,66-89,156-158,167-168,189-202
+python/kronos_lab/predictor.py
+  s_2e187168fcc8cc::t_ab532fbfcc6a28 22
+python/tests/test_kronos_lab.py
+  s_2e187168fcc8cc::t_0f2e502f91a1db 80-94
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "40eb3a51442c7b3b642db480c8fc5d20ea1c7e28",
+  "prompts": {},
+  "sessions": {
+    "s_2e187168fcc8cc": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d34d1a88-557e-4788-b7f2-a0fd9248b0cd",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
