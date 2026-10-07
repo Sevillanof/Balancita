@@ -41,3 +41,20 @@ Cada ejemplo dice qué vio (régimen y consenso de las estrategias), qué eligi�
 | `learning` | lo anterior + `lessons` (lo que se entrega)                 | 3       |
 
 Con la caché de respuestas (`--qwen-cache`) cada brazo se calcula una vez. Se compara la tasa de +1 de cada brazo en los mismos rangos; la memoria no tiene parámetros ajustados, así que el único ajuste posible sería el diseño del texto, que está fijado antes de ejecutar, y los dos rangos de 240 días son disjuntos.
+
+## Qué se pudo medir sin el modelo
+
+No hay modelo local en el entorno donde se escribió esto, así que la comparación real de los tres brazos queda por ejecutar. Lo que sí se midió son los techos de la tasa de +1 con reglas sin parámetros ajustados, sobre BTC en dos rangos disjuntos de 240 días, en los mismos cuadros donde se le preguntaría a Qwen (`entry`: alguna estrategia propone operar; `5min`: cada cinco minutos). «Mayoría de lo reciente» elige la acción que fue la correcta con más frecuencia en las últimas 60 decisiones ya juzgadas, que es la información que lleva `lessons_right_action`.
+
+| Rango             | Cuadros | Siempre `hold` | Seguir el consenso | Mayoría de lo reciente |
+| ----------------- | ------- | -------------- | ------------------ | ---------------------- |
+| Reciente, `entry` | 46 130  | 37,3 %         | 37,4 %             | **40,6 %**             |
+| Reciente, `5min`  | 67 114  | 40,6 %         | 40,6 %             | **41,7 %**             |
+| Previo, `entry`   | 47 928  | 38,6 %         | 38,6 %             | **41,5 %**             |
+| Previo, `5min`    | 67 114  | 41,0 %         | 41,0 %             | **43,1 %**             |
+
+Lectura: en BTC a 30 minutos, tras costes, la acción correcta se reparte casi por tercios (compra 30 %, venta 30 %, `hold` 37 a 41 %), así que una regla fija ronda el 40 %. Usar el historial reciente suma entre 1 y 3 puntos en los cuatro casos, y en los dos rangos por separado, sin parámetros ajustados. Es el orden de magnitud del margen que tiene `lessons`: poco, pero consistente. Seguir el consenso de las estrategias no mejora siempre `hold`, coherente con que ninguna tiene ventaja. Qwen puede quedar por debajo o por encima de estas reglas; solo el replay con el modelo lo dice.
+
+Para correrlo con el modelo local levantado: `python -m balancita_engine.futures_replay --market-db … --from … --to … --qwen trade_action --qwen-arm original|context|learning --qwen-cache cache.sqlite --out run-<brazo>.sqlite`, una vez por brazo y por rango.
+
+Script: `analisis/research-estrategias-log/lessons_base.py`.
