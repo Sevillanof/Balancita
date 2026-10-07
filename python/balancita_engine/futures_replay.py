@@ -28,6 +28,11 @@ CREATE TABLE replay_decision(id INTEGER PRIMARY KEY, strategy_id TEXT NOT NULL, 
   payload TEXT NOT NULL) STRICT;
 """
 
+_QWEN_SCHEMA = """
+CREATE TABLE replay_qwen_decision(id INTEGER PRIMARY KEY, bucket_ms INTEGER NOT NULL, payload TEXT NOT NULL) STRICT;
+CREATE TABLE replay_qwen_report(id INTEGER PRIMARY KEY CHECK(id=1), payload TEXT NOT NULL) STRICT;
+"""
+
 
 def load_range(market_db_path, product_id, start_ms, end_ms):
     """Official 1m and 5m candles (first-known revision) from ``start_ms - warmup`` to ``end_ms``."""
@@ -46,18 +51,25 @@ def load_range(market_db_path, product_id, start_ms, end_ms):
         market.db.close()
 
 
-def replay(specs, candles_1m, candles_5m, *, start_ms, product_id, tick_size="1", notional_usd="100"):
-    """Books of every spec; warm-up candles feed indicators but never open positions."""
+def replay(specs, candles_1m, candles_5m, *, start_ms, product_id, tick_size="1", notional_usd="100",
+           observers=()):
+    """Books of every spec; warm-up candles feed indicators but never open positions.
+
+    ``observers`` are called with every frame inside the range (and the warm-up ones are
+    never shown to them), e.g. the blind Qwen replay.
+    """
     books = [Book(spec, product_id=product_id, tick_size=tick_size, notional_usd=notional_usd) for spec in specs]
     for frame in frames(candles_1m, candles_5m):
         if frame[0] < start_ms:
             continue
         for book in books:
             book.on_frame(*frame)
+        for observer in observers:
+            observer(frame)
     return books
 
 
-def write_run(path, meta, books):
+def write_run(path, meta, books, qwen=None):
     if os.path.exists(path):
         raise FileExistsError("replay run already exists: " + path)
     db = sqlite3.connect(path)
@@ -71,23 +83,47 @@ def write_run(path, meta, books):
                            [(sid, json.dumps(t)) for t in book.trades])
             db.executemany("INSERT INTO replay_decision(strategy_id, bucket_ms, payload) VALUES(?,?,?)",
                            [(sid, d["bucket_ms"], json.dumps(d)) for d in book.decisions])
+        if qwen is not None:
+            db.executescript(_QWEN_SCHEMA)
+            db.executemany("INSERT INTO replay_qwen_decision(bucket_ms, payload) VALUES(?,?)",
+                           [(d["bucket_start"], json.dumps(d, default=str)) for d in qwen["decisions"]])
+            db.execute("INSERT INTO replay_qwen_report VALUES(1,?)", (json.dumps(qwen["report"], default=str),))
         db.commit()
     finally:
         db.close()
 
 
-def run(market_db, out_path, product_id, start_ms, end_ms, specs, tick_size="1"):
+def qwen_report(blind):
+    """Points per decision and the trading book of Qwen's answers, as the live scorer computes them."""
+    from .futures_llm_scores import report
+
+    result = report(blind.decisions, blind.verdicts)
+    return {key: result[key] for key in ("horizon_min", "decisions", "by_option", "trading", "skipped")}
+
+
+def run(market_db, out_path, product_id, start_ms, end_ms, specs, tick_size="1", qwen=None):
+    """``qwen`` is an optional ``BlindQwen``; its decisions and scores go in the same run DB."""
     if end_ms <= start_ms:
         raise ValueError("replay range is empty")
     ones, fives = load_range(market_db, product_id, start_ms, end_ms)
     if not any(c["bucket_start"] >= start_ms for c in ones):
         raise ValueError("no official candles in the requested range")
-    books = replay(specs, ones, fives, start_ms=start_ms, product_id=product_id, tick_size=tick_size)
+    observers = ()
+    if qwen is not None:
+        qwen.feed_candles(ones)
+        observers = (qwen,)
+    books = replay(specs, ones, fives, start_ms=start_ms, product_id=product_id, tick_size=tick_size,
+                   observers=observers)
     meta = {
         "schema": REPLAY_SCHEMA, "product_id": product_id, "start_ms": start_ms, "end_ms": end_ms,
         "strategies": [s["id"] for s in specs], "candles_1m": len(ones), "created_ms": int(time.time() * 1000),
     }
-    write_run(out_path, meta, books)
+    extra = None
+    if qwen is not None:
+        meta["qwen"] = {"question": qwen.question["id"], "version": qwen.question["version"], "trigger": qwen.trigger,
+                        "model_ref": qwen.model_ref, "asked": qwen.cache.misses, "cached": qwen.cache.hits}
+        extra = {"decisions": qwen.decisions, "report": qwen_report(qwen)}
+    write_run(out_path, meta, books, extra)
     return [book.summary() for book in books]
 
 
@@ -103,9 +139,27 @@ def main(argv=None):
     parser.add_argument("--from", dest="start", required=True, help="UTC date YYYY-MM-DD (inclusive)")
     parser.add_argument("--to", dest="end", required=True, help="UTC date YYYY-MM-DD (exclusive)")
     parser.add_argument("--specs-dir", default=DEFAULT_SPEC_DIR)
+    parser.add_argument("--qwen", metavar="QUESTION_ID", help="let Qwen decide blind (e.g. trade_action)")
+    parser.add_argument("--qwen-trigger", choices=("entry", "5min", "all"), default="entry",
+                        help="when to ask: some strategy proposes an entry, every 5 minutes, or every minute")
+    parser.add_argument("--qwen-cache", help="SQLite file of cached answers shared between replays")
+    parser.add_argument("--llama-url", help="default: http://127.0.0.1:$LLAMA_PORT")
     args = parser.parse_args(argv)
     specs = list(load_specs(args.specs_dir).values())
-    summaries = run(args.market_db, args.out, args.product, _ms(args.start), _ms(args.end), specs)
+    qwen = None
+    if args.qwen:
+        from . import futures_llm_decisions as llm
+        from .futures_replay_qwen import AnswerCache, BlindQwen
+
+        questions = llm.load_questions()
+        if args.qwen not in questions:
+            parser.error("unknown question {!r}; catalog: {}".format(args.qwen, ", ".join(sorted(questions))))
+        prompts = llm.load_prompt_config()
+        provider = llm.LlamaCppProvider(args.llama_url or llm.llama_url(os.environ), llm.model_ref(os.environ))
+        qwen = BlindQwen(provider, specs, questions[args.qwen], llm.load_calibration(),
+                         prompts["templates"][prompts["default_version"]], trigger=args.qwen_trigger,
+                         mode=prompts["probability_source"], cache=AnswerCache(args.qwen_cache))
+    summaries = run(args.market_db, args.out, args.product, _ms(args.start), _ms(args.end), specs, qwen=qwen)
     json.dump(summaries, sys.stdout, indent=2)
     print()
 
