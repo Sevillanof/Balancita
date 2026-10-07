@@ -40,9 +40,6 @@ vi.mock('./FuturesTerminal.tsx', async () => {
     },
   }
 })
-vi.mock('./ConnectedTerminal.tsx', () => ({
-  default: () => <p>legacy terminal</p>,
-}))
 
 function bootstrapBody(mode: 'mock' | 'paper_live') {
   return {
@@ -176,17 +173,6 @@ describe('TerminalEntry source switch', () => {
     )
     render(<TerminalEntry />)
     expect(await screen.findByRole('alert')).toHaveTextContent('MOCK')
-  })
-
-  it('keeps the legacy terminal reachable only through ?source=legacy', async () => {
-    window.history.pushState({}, '', '/terminal?source=legacy')
-    const fetchMock = stubFetch(() => ({ status: 404 }))
-    render(<TerminalEntry />)
-    expect(await screen.findByText('legacy terminal')).toBeVisible()
-    expect(fetchMock).toHaveBeenCalledWith(
-      '/api/terminal/bootstrap',
-      expect.anything(),
-    )
   })
 
   it('reflects the applied source in the URL when /terminal has no query', async () => {

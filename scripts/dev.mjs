@@ -3,6 +3,7 @@ import { mkdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
 import {
+  DEV_PORTS,
   describeChildExit,
   devChildSpecs,
   findQwenModel,
@@ -19,6 +20,9 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 // <root>/.env.local and <root>/.env feed the dev children; the real
 // environment wins over both.
 const env = loadDevEnv({ root, env: process.env })
+// The spot BTC-EUR server (8787, src/app/index.ts) was retired (SS-13): its
+// child is neither spawned nor its port checked.
+const RETIRED_CHILDREN = new Set(['server'])
 // Optional backends: when one fails the others (and the app) keep running.
 const optionalChildren = new Set([
   'mock',
@@ -62,6 +66,7 @@ else if (python.command === undefined)
 // serving the browser while the new child dies with EADDRINUSE. The llm port
 // is only checked when that child will really start.
 const plan = await planStartup({
+  names: Object.keys(DEV_PORTS).filter((name) => !RETIRED_CHILDREN.has(name)),
   extra: llmEnabled
     ? [{ name: 'llm', port: llamaPort(env), host: '127.0.0.1' }]
     : [],
@@ -87,14 +92,15 @@ if (llmModel) {
   process.stdout.write(`${llmModel.message}\n`)
 }
 const useGroups = process.platform !== 'win32'
-const children = devChildSpecs({
+const childSpecs = devChildSpecs({
   root,
   env,
   python:
     python.command === undefined ? { unavailable: python.failure } : python,
   llm: llama,
   findModel: () => llmModelPath,
-}).map(({ name, command, cwd, args, env }) => {
+}).filter(({ name }) => !RETIRED_CHILDREN.has(name))
+const children = childSpecs.map(({ name, command, cwd, args, env }) => {
   const child = spawn(command ?? process.execPath, args, {
     cwd,
     // POSIX: own process group so shutdown reaches grandchildren (no orphans);

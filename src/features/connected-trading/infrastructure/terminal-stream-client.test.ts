@@ -12,7 +12,6 @@ describe('terminal API base selection', () => {
   it('maps each source to its proxy prefix', () => {
     expect(terminalApiBase('mock')).toBe('/api-mock')
     expect(terminalApiBase('live')).toBe('/api-live')
-    expect(terminalApiBase('legacy')).toBe('/api')
   })
 
   it('builds the websocket URL from the selected base and defaults to /api', () => {
