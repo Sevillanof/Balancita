@@ -46,6 +46,8 @@ export interface PaperEngineFollowerOptions {
    * reason and nothing is read.
    */
   readonly unavailableReason?: string
+  /** Pinned product this view follows: only its books and verdicts (default BTC). */
+  readonly productId?: string
   readonly clock?: () => number
   /** Latest market mark as a decimal string, for equity at the mark. */
   readonly markPrice?: () => string | null
@@ -109,6 +111,12 @@ function parseJson(text: unknown): Row | null {
 
 type AccountBlock = Row
 
+/** `PF_XBTUSD` -> BTC, `PF_ETHUSD` -> ETH. */
+function baseUnit(productId: string): string {
+  const base = /^PF_(.+)USD$/.exec(productId)?.[1] ?? 'BTC'
+  return base === 'XBT' ? 'BTC' : base
+}
+
 /** Open positions of an account block (one per independent book). */
 function positionsOf(block: AccountBlock): Row[] {
   if (Array.isArray(block.positions))
@@ -130,6 +138,7 @@ export class PaperEngineFollower {
   private readonly clock: () => number
   private readonly markPrice: () => string | null
   private readonly staleAfterMs: number
+  private readonly productId: string
   private account: Handle | undefined
   private verdicts: Handle | undefined
   private accountState: 'ready' | 'not_ready' | 'unreadable' = 'not_ready'
@@ -155,6 +164,7 @@ export class PaperEngineFollower {
 
   constructor(options: PaperEngineFollowerOptions) {
     this.forcedUnavailable = options.unavailableReason
+    this.productId = options.productId ?? FUTURES_PRODUCT
     this.accountPath = options.accountDbPath
     this.verdictsPath = options.verdictsDbPath
     this.clock = options.clock ?? Date.now
@@ -285,7 +295,7 @@ export class PaperEngineFollower {
         handle,
         `SELECT payload_json FROM paper_futures_verdicts
          WHERE product_id=? ORDER BY bucket_start DESC LIMIT ${ANALYSES_KEPT}`,
-      ).all(FUTURES_PRODUCT) as Array<{ payload_json: string }>
+      ).all(this.productId) as Array<{ payload_json: string }>
       this.verdicts = handle
       this.analyses = []
       this.verdictCursor = -1
@@ -356,6 +366,8 @@ export class PaperEngineFollower {
       for (const row of found) {
         const body = record(parseJson(row.payload_json)?.body)
         const account = record(body.account)
+        if (!this.ownsBook(typeof body.book === 'string' ? body.book : ''))
+          continue
         if (Object.keys(account).length > 0) {
           this.books.set(
             typeof body.book === 'string' ? body.book : '',
@@ -369,6 +381,12 @@ export class PaperEngineFollower {
     this.lastEquity = String(this.accountView().equity_usd)
     this.lastEquityAt = this.clock()
     if (this.everServed) this.pendingResync = true
+  }
+
+  /** Books are keyed `strategy:product`; a bare key is the single BTC book. */
+  private ownsBook(book: string): boolean {
+    const at = book.indexOf(':')
+    return (at < 0 ? FUTURES_PRODUCT : book.slice(at + 1)) === this.productId
   }
 
   private readEvents(handle: Handle): Row[] {
@@ -476,7 +494,8 @@ export class PaperEngineFollower {
     return {
       schema_version: 'paper-futures-terminal-state.v1',
       currency: 'USD',
-      quantity_unit: 'BTC',
+      // The wire fields keep their `_btc` names; the unit is the product's base.
+      quantity_unit: baseUnit(this.productId),
       account: this.accountView(),
       position: this.positionView(),
       positions: this.positionsView(),
@@ -517,6 +536,8 @@ export class PaperEngineFollower {
     const seq = Number(row.seq)
     this.lastEventTime = time
     const body = record(parseJson(row.payload_json)?.body)
+    // One view per product: events of another product's books are not ours.
+    if (!this.ownsBook(typeof body.book === 'string' ? body.book : '')) return
     const orderId = typeof body.order_id === 'string' ? body.order_id : null
     if (kind === 'exit_triggered' && orderId && typeof body.reason === 'string')
       this.pendingExitReasons.set(orderId, body.reason)
@@ -711,7 +732,7 @@ export class PaperEngineFollower {
           handle,
           `SELECT payload_json FROM paper_futures_verdicts
            WHERE product_id=? AND bucket_start > ? ORDER BY bucket_start LIMIT 200`,
-        ).all(FUTURES_PRODUCT, this.verdictCursor) as Array<{
+        ).all(this.productId, this.verdictCursor) as Array<{
           payload_json: string
         }>
         for (const row of rows) {

@@ -87,9 +87,12 @@ function toCandle(row: Row): CandleDto {
 }
 
 /** An official candle as the closed-candle update the client already reduces. */
-function toOfficialCandle(candle: OfficialStoredCandle): CandleDto {
+function toOfficialCandle(
+  candle: OfficialStoredCandle,
+  productId: string,
+): CandleDto {
   return {
-    id: `PF_XBTUSD:${candle.intervalMs}:${candle.bucketStart}`,
+    id: `${productId}:${candle.intervalMs}:${candle.bucketStart}`,
     interval_ms: candle.intervalMs,
     bucket_start_ms: candle.bucketStart,
     known_at_ms: Math.max(candle.knownAt, candle.closeAt),
@@ -126,6 +129,7 @@ export class LiveMarketFollower {
   private readonly dbPath: string
   private readonly clock: () => number
   private readonly staleAfterMs: number
+  readonly productId: string
   private store: FuturesMarketStore | undefined
   private eventCursor = 0
   private candleCursor = 0
@@ -140,12 +144,20 @@ export class LiveMarketFollower {
 
   constructor(options: {
     dbPath: string
+    /** Pinned `PF_*` product this view follows (default: the BTC perpetual). */
+    productId?: string
     clock?: () => number
     staleAfterMs?: number
   }) {
+    this.productId = options.productId ?? FUTURES_PRODUCT
     this.dbPath = options.dbPath
     this.clock = options.clock ?? Date.now
     this.staleAfterMs = options.staleAfterMs ?? 15_000
+  }
+
+  /** Only the BTC perpetual has observed (trade-built) candles. */
+  private get observed(): boolean {
+    return this.productId === FUTURES_PRODUCT
   }
 
   get lastFailure(): string | undefined {
@@ -165,11 +177,12 @@ export class LiveMarketFollower {
     try {
       opened = new FuturesMarketStore(this.dbPath, { readOnly: true })
       this.eventCursor = opened.maxEventRowid()
-      this.candleCursor = opened.maxCandleRevisionRowid()
+      // Observed candle revisions are built from the BTC trade feed only.
+      this.candleCursor = this.observed ? opened.maxCandleRevisionRowid() : 0
       this.officialCursor = opened.maxOfficialRowid()
       this.officialBuckets.clear()
       for (const candle of opened.officialCandlesAsOf(
-        FUTURES_PRODUCT,
+        this.productId,
         CANDLE_INTERVAL_MS,
         Number.MAX_SAFE_INTEGER,
         OFFICIAL_BUCKETS_KEPT,
@@ -178,17 +191,23 @@ export class LiveMarketFollower {
       const recent = opened.tickerTradeEventsAfter(
         Math.max(0, this.eventCursor - PRICE_LOOKBACK_ROWS),
         PRICE_LOOKBACK_ROWS,
+        this.productId,
       )
       const lastEvent =
-        recent.at(-1)?.event ?? opened.latestTickerAsOf(Number.MAX_SAFE_INTEGER)
+        recent.at(-1)?.event ??
+        opened.latestTickerAsOf(Number.MAX_SAFE_INTEGER, this.productId)
       this.latestPrice = lastEvent ? toPrice(lastEvent) : undefined
       const lastTicker = [...recent]
         .reverse()
         .find((row) => row.event.type === 'ticker')?.event
       this.latestTicker = tickerStats(
-        lastTicker ?? opened.latestTickerAsOf(Number.MAX_SAFE_INTEGER) ?? {},
+        lastTicker ??
+          opened.latestTickerAsOf(Number.MAX_SAFE_INTEGER, this.productId) ??
+          {},
       )
-      const candle = opened.latestCandleRevision(CANDLE_INTERVAL_MS)
+      const candle = this.observed
+        ? opened.latestCandleRevision(CANDLE_INTERVAL_MS)
+        : undefined
       this.latestCandle = candle ? toCandle(candle) : undefined
       this.store = opened
       this.lastError = undefined
@@ -291,7 +310,7 @@ export class LiveMarketFollower {
     if (!store) return toTerminalMarket([])
     let base: TerminalMarketView
     try {
-      base = toTerminalMarket(closedHistoryRows(store))
+      base = toTerminalMarket(closedHistoryRows(store, this.productId))
     } catch (error) {
       this.dropStore(error)
       return toTerminalMarket([])
@@ -336,7 +355,7 @@ export class LiveMarketFollower {
     const store = this.open()
     const empty = {
       schema_version: 'futures-terminal-chart.v1',
-      product_id: FUTURES_PRODUCT,
+      product_id: this.productId,
       interval_ms: intervalMs,
       as_of_ms: now,
       candles: [] as ChartCandle[],
@@ -355,12 +374,23 @@ export class LiveMarketFollower {
         volume_btc: String(candle.volume_btc),
         closed: candle.closed,
       }))
-      const candles = chartCandles(store, intervalMs, minutes, now)
+      const candles = chartCandles(
+        store,
+        intervalMs,
+        minutes,
+        now,
+        this.productId,
+      )
       return {
         ...empty,
         candles,
-        flow: chartFlow(store, intervalMs, candles[0]?.time_ms ?? now),
-        depth: chartDepth(store, now),
+        flow: chartFlow(
+          store,
+          intervalMs,
+          candles[0]?.time_ms ?? now,
+          this.productId,
+        ),
+        depth: chartDepth(store, now, this.productId),
       }
     } catch (error) {
       this.dropStore(error)
@@ -389,7 +419,7 @@ export class LiveMarketFollower {
     let tickered = false
     if (store) {
       try {
-        for (let page = 0; page < MAX_PAGES; page += 1) {
+        for (let page = 0; this.observed && page < MAX_PAGES; page += 1) {
           const rows = store.candleRevisionsAfter(
             this.candleCursor,
             CANDLE_INTERVAL_MS,
@@ -413,14 +443,14 @@ export class LiveMarketFollower {
         }
         for (let page = 0; page < MAX_PAGES; page += 1) {
           const rows = store.officialCandlesAfter(
-            FUTURES_PRODUCT,
+            this.productId,
             this.officialCursor,
             CANDLE_INTERVAL_MS,
             PAGE,
           )
           if (rows.length === 0) break
           for (const row of rows) {
-            const candle = toOfficialCandle(row.candle)
+            const candle = toOfficialCandle(row.candle, this.productId)
             this.officialBuckets.add(candle.bucket_start_ms)
             candles.set(candle.bucket_start_ms, candle)
           }
@@ -431,7 +461,11 @@ export class LiveMarketFollower {
           if (this.officialBuckets.size <= OFFICIAL_BUCKETS_KEPT) break
           else this.officialBuckets.delete(bucket)
         for (let page = 0; page < MAX_PAGES; page += 1) {
-          const rows = store.tickerTradeEventsAfter(this.eventCursor, PAGE)
+          const rows = store.tickerTradeEventsAfter(
+            this.eventCursor,
+            PAGE,
+            this.productId,
+          )
           if (rows.length === 0) break
           this.latestPrice = toPrice(rows.at(-1)!.event)
           priced = true

@@ -204,6 +204,64 @@ describe('live market gateway', () => {
     expect(asked).toEqual(['PF_XBTUSD', 'bad'])
   })
 
+  it('serves each pinned product its own view, with its own tickers and candles', async () => {
+    const path = dbPath()
+    const writer = seedWriter(path, 3)
+    closers.push(() => writer.close())
+    writer.append({
+      ...ticker(1, BASE + 3 * MINUTE + 2_000, '2500.5'),
+      productId: 'PF_ETHUSD',
+      epoch: 1_000_000,
+    })
+    saveOfficial(writer, [0, 1], '2499', BASE + 100 * MINUTE, 'PF_ETHUSD')
+    const { app, port } = await start(path, {
+      clock: () => BASE + 3 * MINUTE + 3_000,
+    })
+    const btc = (await app.inject('/api/terminal/bootstrap')).json() as any
+    const eth = (
+      await app.inject('/api/terminal/bootstrap?product=PF_ETHUSD')
+    ).json() as any
+    expect(btc.product_id).toBe('PF_XBTUSD')
+    expect(btc.market.latest_quote.last).toBe('90001.5')
+    expect(btc.products).toContain('PF_ETHUSD')
+    expect(eth).toMatchObject({
+      product_id: 'PF_ETHUSD',
+      instrument_id: 'kraken-futures:PF_ETHUSD',
+    })
+    expect(eth.market.latest_quote.last).toBe('2500.5')
+    expect(eth.terminal_market.candles.map((c: any) => c.close)).toEqual([
+      '2499',
+      '2499',
+    ])
+    const chart = (
+      await app.inject('/api/terminal/chart?product=PF_ETHUSD')
+    ).json() as any
+    expect(chart.product_id).toBe('PF_ETHUSD')
+    expect(
+      (await app.inject('/api/terminal/bootstrap?product=PF_NOPE')).statusCode,
+    ).toBe(400)
+    const stream = new WebSocket(
+      `ws://127.0.0.1:${port}/api/terminal/stream?product=PF_ETHUSD`,
+      { origin: 'http://localhost' },
+    )
+    closers.push(() => stream.close())
+    const snapshot = await new Promise<any>((resolve, reject) => {
+      stream.on('open', () =>
+        stream.send(
+          JSON.stringify({
+            schema_version: 1,
+            type: 'subscribe',
+            run_id: LIVE_RUN_ID,
+          }),
+        ),
+      )
+      stream.on('message', (raw) => resolve(JSON.parse(String(raw))))
+      stream.on('error', reject)
+    })
+    expect(snapshot.instrument_id).toBe('kraken-futures:PF_ETHUSD')
+    expect(snapshot.data.state.market.latest_quote.last).toBe('2500.5')
+  })
+
   it('bootstraps closed candles written by another connection without writing', async () => {
     const path = dbPath()
     const writer = seedWriter(path, 5)
