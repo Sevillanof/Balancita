@@ -35,6 +35,8 @@ export type QwenProduct = {
   horizon_min: number
   decisions: QwenDecisionStats
   by_option: Partial<Record<QwenOption, QwenDecisionStats>>
+  /** Hit rate of answering `hold` every time on the same scored decisions. */
+  baseline?: { always_hold_rate: number | null; scored: number }
   trading: {
     trades: number
     wins: number

@@ -66,3 +66,11 @@ python -m balancita_engine.futures_replay_compare --market-db market.sqlite run-
 ```
 
 Toma los buckets que respondieron todos los brazos, puntúa cada respuesta con la regla +1 de siempre y compara cada brazo con el primero: diferencia media de la tasa de +1, `p_value` por permutación de signos con días UTC enteros como unidad (las decisiones de un día comparten el movimiento del mercado) y la tasa de "siempre `hold`" sobre los mismos buckets, el piso que un brazo debe superar. No cambia la pregunta, la regla ni el prompt: solo mide. Falta ejecutarlo con el modelo real.
+
+## Replay: solo las estrategias que Qwen ve en vivo
+
+En el replay a ciegas el estado de Qwen lee únicamente las estrategias cuyos horizontes son de 30 minutos o menos (hoy C25 a C28), igual que en vivo. C29 y C30 mantienen posiciones de hasta 24 h y se juzgarían con una regla de 30 minutos que no es la suya. Los libros de todas las estrategias siguen corriendo y comparándose; la lista que leyó Qwen queda en la meta de la corrida (`qwen.strategies`).
+
+## Línea base "siempre hold"
+
+El informe de puntajes (API `/qwen/scores`, informe del replay y pantalla del Laboratorio) trae `baseline.always_hold_rate`: la tasa de +1 de responder `hold` siempre sobre las mismas decisiones puntuadas. Un acierto de Qwen solo cuenta como habilidad en la medida en que supere ese piso. Es un dato de reporte: no está en el prompt ni cambia la regla +1.

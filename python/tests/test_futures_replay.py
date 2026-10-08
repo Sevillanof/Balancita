@@ -80,6 +80,21 @@ class ReplayTests(unittest.TestCase):
         self.assertEqual(long.prompts[:len(short.prompts)], short.prompts)
         self.assertTrue(any("lessons_example" in p for p in short.prompts))
 
+    def test_qwen_reads_only_the_strategies_judged_on_its_own_30_minute_horizon(self):
+        provider = llm.FakeProvider()
+        qwen = self._qwen(provider, trigger="5min")
+        self.assertEqual({s["id"] for s in qwen.specs},
+                         {"c25-pullback-perp-v1", "c26-reversion-perp-v1", "c27-breakout-perp-v1",
+                          "c28-adapter-perp-v1"})
+        run(self.market, os.path.join(self.dir.name, "h.sqlite"), "PF_XBTUSD", ONES[300]["bucket_start"],
+            ONES[600]["bucket_start"], SPECS, qwen=qwen)
+        self.assertTrue(all("c29" not in p and "c30" not in p for p in provider.prompts))
+        db = sqlite3.connect(os.path.join(self.dir.name, "h.sqlite"))
+        books = [r[0] for r in db.execute("SELECT strategy_id FROM replay_summary")]
+        self.assertIn("c30-momentum-12h-perp-v1", books)  # the books still trade every strategy
+        report = db.execute("SELECT payload FROM replay_qwen_report").fetchone()[0]
+        self.assertIn("always_hold_rate", report)
+
     def test_reliability_measured_after_a_decision_is_never_shown_to_it(self):
         from balancita_engine.futures_spec_strategy import spec_hash
 

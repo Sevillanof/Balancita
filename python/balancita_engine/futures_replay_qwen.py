@@ -24,6 +24,7 @@ from .futures_llm_decisions import (
 )
 from .futures_costs import DEFAULT_PRODUCT
 from .futures_llm_lessons import Lessons
+from .futures_llm_scores import HORIZON_MIN
 from .futures_spec_strategy import propose_spec
 from .futures_strategy_reliability import RELIABILITY_SCHEMA
 from .futures_verdicts import ONE_MINUTE_MS
@@ -69,6 +70,25 @@ def _wanted(trigger, bucket, proposals):
 _NO_RELIABILITY = {"schema": RELIABILITY_SCHEMA, "strategies": {}}
 
 
+def _horizons(node):
+    """Every ``horizon_minutes`` a spec declares (a regime adapter has one per branch)."""
+    if isinstance(node, dict):
+        found = [node["horizon_minutes"]] if "horizon_minutes" in node else []
+        return found + [h for v in node.values() for h in _horizons(v)]
+    if isinstance(node, list):
+        return [h for v in node for h in _horizons(v)]
+    return []
+
+
+def live_comparable(specs):
+    """The specs Qwen's STATE may read in a replay: those judged on the same horizon as its own score.
+
+    Live, Qwen only sees C25-C28 (30 minutes). C29 and C30 hold for up to 24 h, so their votes would be
+    scored by a 30-minute rule they were never meant for and the replay would not match production.
+    """
+    return [s for s in specs if all(h <= HORIZON_MIN for h in _horizons(s))]
+
+
 class BlindQwen:
     """Frame observer: collects Qwen decisions and the verdict-like rows that score them.
 
@@ -82,7 +102,7 @@ class BlindQwen:
                  trigger="entry", mode="auto", cache=None, product_id=DEFAULT_PRODUCT, reliability=None):
         if trigger not in TRIGGERS:
             raise ValueError("unknown Qwen trigger {!r}".format(trigger))
-        self.provider, self.specs, self.question = provider, specs, question
+        self.provider, self.specs, self.question = provider, live_comparable(specs), question
         self.calibration, self.template, self.tick_size = calibration, template, tick_size
         self.trigger, self.mode, self.cache = trigger, mode, cache or AnswerCache()
         self.letters = question_letters(question)

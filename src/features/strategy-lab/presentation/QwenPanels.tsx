@@ -86,6 +86,12 @@ export function QwenFocusHead({
             <span className="strategy-lab__num">
               {product.decisions.hits} de {product.decisions.scored} decisiones
             </span>
+            {product.baseline?.always_hold_rate != null && (
+              <span className="strategy-lab__num">
+                Siempre «mantener»:{' '}
+                {percent(product.baseline.always_hold_rate * 100)}
+              </span>
+            )}
           </div>
           <div className="strategy-lab__kpi">
             <span className="strategy-lab__eyebrow">Puntaje</span>
