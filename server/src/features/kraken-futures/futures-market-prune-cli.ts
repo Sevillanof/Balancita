@@ -1,6 +1,7 @@
 import {
   DEFAULT_RETENTION_DAYS,
   pruneMarketEvents,
+  trimMarketDb,
   vacuumMarketDb,
 } from './futures-market-prune.ts'
 
@@ -20,6 +21,10 @@ console.log(
   `[market:prune] ${dbPath}: removed ${result.events} events (${result.bookSnapshots} book, ${result.tickerSnapshots} ticker snapshots) received before ${new Date(result.cutoffMs).toISOString()}`,
 )
 if (args.includes('--vacuum')) {
+  const trimmed = trimMarketDb(dbPath)
+  console.log(
+    `[market:prune] retention: ${trimmed.deleted} old events removed, ${trimmed.slimmed} compacted`,
+  )
   const { before, after } = vacuumMarketDb(dbPath)
   console.log(
     `[market:prune] vacuum: ${(before / 1048576).toFixed(0)} MB -> ${(after / 1048576).toFixed(0)} MB`,
