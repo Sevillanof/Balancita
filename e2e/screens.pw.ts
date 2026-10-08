@@ -46,7 +46,7 @@ async function openTerminal(page: Page, count: number) {
   routed.add(page)
   counts.set(page, count)
   if (first) await routeTerminal(page)
-  await page.goto('/terminal?source=mock')
+  await page.goto('/terminal')
   await expect(
     page.getByRole('region', { name: 'Decisiones del motor' }),
   ).toBeVisible()
@@ -56,10 +56,10 @@ const routed = new WeakSet<Page>()
 const counts = new WeakMap<Page, number>()
 
 async function routeTerminal(page: Page) {
-  await page.route('**/api-mock/terminal/bootstrap', (route) =>
+  await page.route('**/api-live/terminal/bootstrap', (route) =>
     route.fulfill({ json: bootstrap }),
   )
-  await page.routeWebSocket(/\/api-mock\/terminal\/stream/, (socket) => {
+  await page.routeWebSocket(/\/api-live\/terminal\/stream/, (socket) => {
     socket.onMessage(() => {
       socket.send(
         JSON.stringify({
@@ -145,5 +145,55 @@ test('estrategias without the registry shows the error and no example data', asy
     'No se muestran datos de ejemplo',
   )
   await shot(page, 'estrategias')
+  await noHorizontalScroll(page)
+})
+
+test('terminal live header shows the flow status and the usage chip', async ({
+  page,
+}) => {
+  await page.route('**/api-live/terminal/bootstrap', (route) =>
+    route.fulfill({
+      json: {
+        ...bootstrap,
+        mode: 'paper_live',
+        source: 'kraken-public-live-stream.v1',
+        engine: { status: 'off' },
+      },
+    }),
+  )
+  await page.route('**/api-live/health', (route) =>
+    route.fulfill({
+      json: {
+        processes: {
+          capture: { status: 'running' },
+          q: { status: 'restarting' },
+        },
+      },
+    }),
+  )
+  await page.route('**/api-live/system', (route) =>
+    route.fulfill({
+      json: {
+        cpu_pct: 37.4,
+        rss_mb: 1320,
+        cores: 8,
+        data_mb: 148.2,
+        qwen: {
+          running: true,
+          decisions: { total: 900, last_hour: 12, avg_latency_ms: 1100 },
+          exit_decisions: 40,
+        },
+        kronos: { running: true, trades: 7, decisions: 30 },
+      },
+    }),
+  )
+  await page.routeWebSocket(/\/api-live\/terminal\/stream/, () => {})
+  await page.goto('/terminal')
+  await expect(page.getByTestId('system-usage')).toContainText('CPU 37 %')
+  await expect(page.getByTestId('system-usage')).toContainText('DATOS 148 MB')
+  await expect(page.getByTestId('system-usage')).toContainText('QWEN 12/h')
+  await expect(page.getByTestId('system-usage')).toContainText('KRONOS 7 op.')
+  await expect(page.getByTestId('flow-status')).toHaveText('FLUJO DESCONECTADO')
+  await shot(page, 'terminal-flow')
   await noHorizontalScroll(page)
 })

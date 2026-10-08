@@ -151,6 +151,25 @@
   white-space: nowrap;
 }
 
+.demo-shell__badge[data-tone='ok'] {
+  border-color: color-mix(in oklab, var(--demo-ok) 55%, transparent);
+  color: var(--demo-ok);
+  background: color-mix(in oklab, var(--demo-ok) 12%, transparent);
+}
+
+.demo-shell__badge[data-tone='bad'] {
+  border-color: color-mix(in oklab, var(--demo-danger) 55%, transparent);
+  color: var(--demo-danger-text);
+  background: color-mix(in oklab, var(--demo-danger) 14%, transparent);
+}
+
+.demo-shell__badge--usage {
+  color: var(--demo-soft);
+  border-color: var(--demo-border-strong);
+  background: var(--demo-sunken);
+  font-weight: 500;
+}
+
 .demo-shell__existing-link {
   color: var(--demo-muted) !important;
   font-size: 11px;

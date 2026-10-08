@@ -9,6 +9,7 @@ import { LiveMarketFollower } from './market-follower.ts'
 import { PaperEngineFollower } from './paper-engine-follower.ts'
 import { qwenScoresOff, type QwenScores } from './qwen-scores.ts'
 import { CHART_INTERVALS_MS } from './terminal-chart.ts'
+import type { SystemUsage } from './system-usage.ts'
 
 /** Synthetic stream id: the gateway has no engine run, only a market view. */
 export const LIVE_RUN_ID = 'live-market-view'
@@ -34,6 +35,8 @@ export interface LiveGatewayOptions {
   readonly qwenScores?: QwenScores
   /** JSON written by the dev supervisor with each process's health. */
   readonly processHealthPath?: string
+  /** CPU, data size, Qwen and Kronos usage for `/api/system`. Absent: null report. */
+  readonly systemUsage?: SystemUsage
   readonly allowedOrigins?: readonly string[]
   readonly staleAfterMs?: number
   readonly pollMs?: number
@@ -225,6 +228,7 @@ export async function buildLiveGateway(
     engine: engine.engineStatus(),
     processes: readProcessHealth(options.processHealthPath),
   }))
+  app.get('/api/system', () => options.systemUsage?.report() ?? null)
   const qwenScores =
     options.qwenScores ?? qwenScoresOff('decisions_not_configured')
   app.get<{ Querystring: { product?: string } }>(

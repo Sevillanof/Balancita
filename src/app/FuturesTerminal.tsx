@@ -14,6 +14,8 @@ import {
 import { applyTerminalEvents } from '../features/connected-trading/infrastructure/terminal-state.ts'
 import { createTerminalBatcher } from '../features/connected-trading/infrastructure/terminal-batch.ts'
 import { projectTerminalQuote } from './terminal-market.ts'
+import SystemUsageChip from './SystemUsageChip.tsx'
+import { flowStatus } from './terminal-flow.ts'
 import TerminalDecisions from './TerminalDecisions.tsx'
 import type { DecisionRow } from './terminal-decisions.ts'
 import SelectedDecision from './SelectedDecision.tsx'
@@ -55,9 +57,11 @@ export default function FuturesTerminal({
   const [connected, setConnected] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [commandPending, setCommandPending] = useState(false)
-  const [processHealth, setProcessHealth] = useState<Record<string, unknown>>(
-    {},
-  )
+  // null: the health feed has not answered (yet) or is unreachable.
+  const [processHealth, setProcessHealth] = useState<Record<
+    string,
+    unknown
+  > | null>(null)
   const [confirmingReset, setConfirmingReset] = useState(false)
   const [commandStatus, setCommandStatus] = useState('')
   const [commandVersion, setCommandVersion] = useState(0)
@@ -360,7 +364,9 @@ export default function FuturesTerminal({
         .then((body) => {
           if (!cancelled) setProcessHealth(record(record(body).processes))
         })
-        .catch(() => {})
+        .catch(() => {
+          if (!cancelled) setProcessHealth(null)
+        })
     void load()
     const timer = setInterval(load, 10_000)
     return () => {
@@ -368,7 +374,15 @@ export default function FuturesTerminal({
       clearInterval(timer)
     }
   }, [bootstrap.mode, apiBase])
-  const downProcesses = Object.entries(processHealth).filter(
+  const flow = flowStatus({
+    connected,
+    processes: bootstrap.mode === 'paper_live' ? processHealth : {},
+    quoteAgeMs:
+      quote.receivedAt === null
+        ? null
+        : Math.max(0, displayClock - quote.receivedAt),
+  })
+  const downProcesses = Object.entries(processHealth ?? {}).filter(
     ([, value]) => record(value).status !== 'running',
   )
 
@@ -407,9 +421,17 @@ export default function FuturesTerminal({
         status={
           <>
             {sourceSwitch}
-            <span className="demo-shell__badge">
-              {connected ? 'FLUJO CONECTADO' : 'SIN CONEXIÓN'}
+            <span
+              className="demo-shell__badge"
+              data-testid="flow-status"
+              data-tone={flow.level}
+              title={flow.reasons.join('\n') || 'Todo corre con normalidad'}
+            >
+              {flow.label}
             </span>
+            {bootstrap.mode === 'paper_live' && (
+              <SystemUsageChip apiBase={apiBase} />
+            )}
             <span>{modeLabel}</span>
             {localScenarioStatus && <span>{localScenarioStatus}</span>}
           </>
