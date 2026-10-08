@@ -48,6 +48,7 @@ import {
   type StrategyState,
 } from '../infrastructure/strategy-api.ts'
 import {
+  loadKronosScores,
   loadQwenScores,
   type QwenScores,
 } from '../infrastructure/qwen-scores.ts'
@@ -59,13 +60,19 @@ import {
 import { QwenFocusHead, QwenSide } from './QwenPanels.tsx'
 import { JsonTab, TradesTable, VersionsTab } from './StrategyLabPanels.tsx'
 import { NewStrategyModal } from './NewStrategyModal.tsx'
-import { STATE_LABELS, type Dot } from './strategy-lab-labels.ts'
+import {
+  MODEL_TEXTS,
+  STATE_LABELS,
+  type Dot,
+  type ModelKey,
+} from './strategy-lab-labels.ts'
 import './StrategyLab.css'
 
 type Props = {
   loadCandles?: () => Promise<LabCandles>
   connect?: (candles: LabCandles) => Promise<StrategyApi>
   loadQwen?: (product: string) => Promise<QwenScores>
+  loadKronos?: (product: string) => Promise<QwenScores>
 }
 
 type Tab = 'rules' | 'params' | 'risk' | 'json' | 'versions'
@@ -106,6 +113,16 @@ function defaultLoadQwen(product: string) {
   return loadQwenScores(undefined, product)
 }
 
+function defaultLoadKronos(product: string) {
+  return loadKronosScores(undefined, product)
+}
+
+const MODELS: readonly ModelKey[] = ['qwen', 'kronos']
+
+function isModel(state: Dot): state is ModelKey {
+  return (MODELS as readonly Dot[]).includes(state)
+}
+
 function defaultConnect(): Promise<StrategyApi> {
   return connectStrategyApi()
 }
@@ -125,6 +142,7 @@ export default function StrategyLab({
   loadCandles = loadLabCandles,
   connect = defaultConnect,
   loadQwen = defaultLoadQwen,
+  loadKronos = defaultLoadKronos,
 }: Props) {
   const [market, setMarket] = useState<LabCandles | null>(null)
   const [api, setApi] = useState<StrategyApi | null>(null)
@@ -160,7 +178,9 @@ export default function StrategyLab({
   const [gates, setGates] = useState<Gate[]>([])
   const [busy, setBusy] = useState(false)
   const [qwen, setQwen] = useState<QwenScores | null>(null)
-  const [qwenFocus, setQwenFocus] = useState(false)
+  const [kronos, setKronos] = useState<QwenScores | null>(null)
+  /** Model shown in Qwen's format instead of a strategy, if any. */
+  const [focus, setFocus] = useState<ModelKey | null>(null)
   const [product, setProduct] = useState(DEFAULT_LAB_PRODUCT)
 
   useEffect(() => {
@@ -170,6 +190,14 @@ export default function StrategyLab({
       active = false
     }
   }, [loadQwen, product, reload])
+
+  useEffect(() => {
+    let active = true
+    void loadKronos(product).then((loaded) => active && setKronos(loaded))
+    return () => {
+      active = false
+    }
+  }, [loadKronos, product, reload])
 
   useEffect(() => {
     let active = true
@@ -264,6 +292,11 @@ export default function StrategyLab({
   const draftLabel = draft ? shortName(draft.name, draft.id) : '—'
 
   const qwenProduct = qwen?.products.find((item) => item.product_id === product)
+  const kronosProduct = kronos?.products.find(
+    (item) => item.product_id === product,
+  )
+  const modelScores = { qwen, kronos }
+  const modelProducts = { qwen: qwenProduct, kronos: kronosProduct }
 
   const rows: Row[] = useMemo(() => {
     if (!ranking) return []
@@ -288,16 +321,20 @@ export default function StrategyLab({
         trades: previewResult.all.trades,
         few: previewResult.all.trades < ranking.min_trades,
       })
-    list.push({
-      key: 'qwen',
-      id: null,
-      label: 'Qwen',
-      state: 'qwen',
-      returnPct: qwenProduct ? qwenProduct.trading.return_pct : null,
-      hitRate: qwenProduct ? qwenProduct.trading.hit_rate : null,
-      trades: qwenProduct?.trading.trades ?? 0,
-      few: (qwenProduct?.trading.trades ?? 0) < ranking.min_trades,
-    })
+    for (const [model, scored] of [
+      ['qwen', qwenProduct],
+      ['kronos', kronosProduct],
+    ] as const)
+      list.push({
+        key: model,
+        id: null,
+        label: MODEL_TEXTS[model].name,
+        state: model,
+        returnPct: scored ? scored.trading.return_pct : null,
+        hitRate: scored ? scored.trading.hit_rate : null,
+        trades: scored?.trading.trades ?? 0,
+        few: (scored?.trading.trades ?? 0) < ranking.min_trades,
+      })
     list.sort((a, b) => (b.returnPct ?? -Infinity) - (a.returnPct ?? -Infinity))
     if (ranking.buy_and_hold_pct !== null)
       list.push({
@@ -311,7 +348,7 @@ export default function StrategyLab({
         few: false,
       })
     return list
-  }, [ranking, previewResult, detail, qwenProduct])
+  }, [ranking, previewResult, detail, qwenProduct, kronosProduct])
 
   const bestReturn = Math.max(
     0.1,
@@ -320,8 +357,8 @@ export default function StrategyLab({
 
   const first = candles[0]?.time ?? 0
   const last = candles.at(-1)?.time ?? 0
-  const trades = qwenFocus
-    ? (qwenProduct?.trades ?? [])
+  const trades = focus
+    ? (modelProducts[focus]?.trades ?? [])
     : (result?.trades ?? [])
   const visible = trades.filter(
     (trade) =>
@@ -576,7 +613,7 @@ export default function StrategyLab({
             value={product}
             onChange={(event) => {
               setProduct(event.target.value)
-              setQwenFocus(false)
+              setFocus(null)
             }}
           >
             {LAB_PRODUCTS.map((item) => (
@@ -764,15 +801,12 @@ export default function StrategyLab({
           )}
           <ol className="strategy-lab__rank-list">
             {rows.map((row) => {
-              const current =
-                row.state === 'qwen'
-                  ? qwenFocus
-                  : !qwenFocus &&
-                    (row.state === 'preview'
-                      ? showPreview
-                      : row.id !== null &&
-                        row.id === selectedId &&
-                        !showPreview)
+              const current = isModel(row.state)
+                ? focus === row.state
+                : !focus &&
+                  (row.state === 'preview'
+                    ? showPreview
+                    : row.id !== null && row.id === selectedId && !showPreview)
               return (
                 <li key={row.key}>
                   <button
@@ -781,7 +815,7 @@ export default function StrategyLab({
                     aria-pressed={current}
                     disabled={row.state === 'reference'}
                     onClick={() => {
-                      setQwenFocus(row.state === 'qwen')
+                      setFocus(isModel(row.state) ? row.state : null)
                       if (row.state === 'preview') setShowPreview(true)
                       else if (row.id) {
                         setShowPreview(false)
@@ -816,7 +850,7 @@ export default function StrategyLab({
                     >
                       {row.state === 'reference'
                         ? 'referencia'
-                        : row.state === 'qwen' && !qwenProduct
+                        : isModel(row.state) && !modelProducts[row.state]
                           ? 'sin decisiones'
                           : row.hitRate === null
                             ? 'sin trades'
@@ -848,6 +882,10 @@ export default function StrategyLab({
               <span className="strategy-lab__dot strategy-lab__dot--qwen" />
               Qwen
             </span>
+            <span>
+              <span className="strategy-lab__dot strategy-lab__dot--kronos" />
+              Kronos
+            </span>
             <span>gris = menos de {ranking?.min_trades ?? 30} trades</span>
           </div>
         </section>
@@ -856,8 +894,12 @@ export default function StrategyLab({
           className="strategy-lab__panel strategy-lab__focus"
           aria-label="Resultado de la estrategia elegida"
         >
-          {qwenFocus ? (
-            <QwenFocusHead scores={qwen} product={qwenProduct} />
+          {focus ? (
+            <QwenFocusHead
+              scores={modelScores[focus]}
+              product={modelProducts[focus]}
+              model={focus}
+            />
           ) : (
             <>
               <div className="strategy-lab__panel-head">
@@ -988,8 +1030,8 @@ export default function StrategyLab({
           </div>
         </section>
 
-        {qwenFocus ? (
-          <QwenSide product={qwenProduct} />
+        {focus ? (
+          <QwenSide product={modelProducts[focus]} model={focus} />
         ) : (
           <aside
             className="strategy-lab__panel strategy-lab__editor"

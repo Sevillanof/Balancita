@@ -94,15 +94,60 @@ const qwenOn: QwenScores = {
   ],
 }
 
+const kronosProduct = qwenOn.products[0]!
+const kronosOn: QwenScores = {
+  status: 'ok',
+  products: [
+    {
+      ...kronosProduct,
+      horizon_min: 240,
+      decisions: { ...stats(1, 0), decisions: 3, pending: 1 },
+      by_option: { buy: stats(1, 0), hold: stats(0, 0), sell: stats(0, 0) },
+      baseline: undefined,
+      trading: {
+        trades: 1,
+        wins: 1,
+        hit_rate: 1,
+        pnl_usd: 0.4261,
+        return_pct: 0.4261,
+        max_drawdown: { pct: 0, at_ms: null },
+      },
+      rows: [],
+      trades: [
+        {
+          side: 'LONG',
+          entry_time_ms: market.candles.at(-5)!.time * 1000,
+          entry_price: '108.51',
+          exit_time_ms: market.candles.at(-1)!.time * 1000,
+          exit_price: '109.08',
+          exit_reason: 'time_stop',
+          net_bp: 42.6,
+          pnl_usd: 0.4261,
+        },
+      ],
+      open_position: {
+        side: 'SHORT',
+        entry_time_ms: 1_700_020_000_000,
+        entry_price: null,
+        mark_price: null,
+        net_bp: null,
+        pnl_usd: null,
+      },
+    },
+  ],
+}
+
 async function renderLab(
   api: StrategyApi = exampleStrategyApi(market.candles),
   qwen: QwenScores = qwenOff,
+  kronos: QwenScores = kronosOn,
 ) {
   render(
     <StrategyLab
       loadCandles={loadCandles}
       connect={() => Promise.resolve(api)}
       loadQwen={() => Promise.resolve(qwen)}
+      loadKronos={() => Promise.resolve(kronos)}
     />,
   )
   await userEvent.click(
@@ -284,6 +329,62 @@ describe('StrategyLab', () => {
     await user.click(within(ranking()).getByRole('button', { name: /^Qwen/ }))
     expect(
       screen.getByText(/Qwen todavía no guardó decisiones/),
+    ).toBeInTheDocument()
+  })
+
+  it('asks Kronos scores for the selected product', async () => {
+    const loadKronos = vi.fn(() => Promise.resolve(kronosOn))
+    render(
+      <StrategyLab
+        loadCandles={loadCandles}
+        connect={() => Promise.resolve(exampleStrategyApi(market.candles))}
+        loadQwen={() => Promise.resolve(qwenOff)}
+        loadKronos={loadKronos}
+      />,
+    )
+    await userEvent.selectOptions(
+      await screen.findByLabelText('Producto'),
+      'PF_ETHUSD',
+    )
+    expect(loadKronos).toHaveBeenLastCalledWith('PF_ETHUSD')
+  })
+
+  it('ranks Kronos with its paper return and shows its latest trades', async () => {
+    const user = userEvent.setup()
+    await renderLab()
+    expect(within(ranking()).getByText('+0,43 %')).toBeInTheDocument()
+    await user.click(within(ranking()).getByRole('button', { name: /^Kronos/ }))
+    expect(screen.getByRole('heading', { name: 'Kronos' })).toBeInTheDocument()
+    expect(screen.getByText('Predice con velas de 1 h')).toBeInTheDocument()
+    expect(
+      screen.getByText('Se mide hacia delante · 4 h por operación'),
+    ).toBeInTheDocument()
+    expect(screen.getByText('1 de 1 decisiones')).toBeInTheDocument()
+    expect(screen.queryByText(/Siempre «mantener»/)).not.toBeInTheDocument()
+    const side = screen.getByRole('complementary', {
+      name: 'Decisiones de Kronos',
+    })
+    const open = within(side).getByText('Abierta').closest('li')!
+    expect(open).toHaveTextContent('Venta')
+    expect(open).toHaveTextContent('entrada —')
+    const closed = within(side)
+      .getByText(/cierre 109,08/)
+      .closest('li')!
+    expect(closed).toHaveTextContent('entrada 108,51')
+    expect(closed).toHaveTextContent('+0,43 %')
+    expect(screen.getByTestId('lab-chart')).toHaveTextContent('2 marcas')
+  })
+
+  it('says Kronos has not closed any trade yet', async () => {
+    const user = userEvent.setup()
+    const product = kronosOn.products[0]!
+    await renderLab(undefined, qwenOff, {
+      ...kronosOn,
+      products: [{ ...product, trades: [], open_position: null }],
+    })
+    await user.click(within(ranking()).getByRole('button', { name: /^Kronos/ }))
+    expect(
+      screen.getByText('Kronos todavía no cerró ninguna operación.'),
     ).toBeInTheDocument()
   })
 

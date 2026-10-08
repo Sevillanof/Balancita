@@ -3,6 +3,7 @@
   --lab-up: oklch(0.79 0.12 170);
   --lab-down: oklch(0.71 0.14 30);
   --lab-info: oklch(0.76 0.09 255);
+  --lab-kronos: oklch(0.78 0.1 310);
   --lab-raised: oklch(0.21 0.01 204);
   --lab-line: oklch(0.25 0.01 204);
   display: grid;
@@ -724,6 +725,15 @@ textarea.strategy-lab__json {
 .strategy-lab__chip--qwen {
   border-color: var(--lab-info);
   color: var(--lab-info);
+}
+
+.strategy-lab__dot--kronos {
+  background: var(--lab-kronos);
+}
+
+.strategy-lab__chip--kronos {
+  border-color: var(--lab-kronos);
+  color: var(--lab-kronos);
 }
 
 .strategy-lab__qwen-split {
