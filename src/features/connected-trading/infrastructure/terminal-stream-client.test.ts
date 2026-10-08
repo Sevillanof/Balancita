@@ -209,3 +209,12 @@ describe('parseTerminalEnvelope', () => {
     expect(parseTerminalEnvelope(malformed)).toBeNull()
   })
 })
+
+describe('productQuery', () => {
+  it('is empty for the default product and encodes others', async () => {
+    const { productQuery } = await import('./terminal-stream-client.ts')
+    expect(productQuery()).toBe('')
+    expect(productQuery('PF_ETHUSD')).toBe('?product=PF_ETHUSD')
+    expect(productQuery('PF_ETHUSD', false)).toBe('&product=PF_ETHUSD')
+  })
+})

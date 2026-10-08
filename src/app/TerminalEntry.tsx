@@ -13,6 +13,7 @@ import {
 const SOURCE: TerminalSource = 'live'
 
 function SourceView({ source }: { source: TerminalSource }) {
+  const [product, setProduct] = useState<string | undefined>(undefined)
   const [state, setState] = useState<
     | { kind: 'loading' }
     | {
@@ -24,7 +25,7 @@ function SourceView({ source }: { source: TerminalSource }) {
   const apiBase = terminalApiBase(source)
   useEffect(() => {
     let active = true
-    void loadTerminalBootstrap(apiBase)
+    void loadTerminalBootstrap(apiBase, product)
       .then((bootstrap) => {
         if (active) setState({ kind: 'ready', bootstrap })
       })
@@ -34,9 +35,36 @@ function SourceView({ source }: { source: TerminalSource }) {
     return () => {
       active = false
     }
-  }, [apiBase])
-  if (state.kind === 'ready')
-    return <FuturesTerminal bootstrap={state.bootstrap} apiBase={apiBase} />
+  }, [apiBase, product])
+  if (state.kind === 'ready') {
+    const products = state.bootstrap.products ?? []
+    return (
+      <FuturesTerminal
+        key={product ?? 'default'}
+        bootstrap={state.bootstrap}
+        apiBase={apiBase}
+        product={product}
+        sourceSwitch={
+          products.length > 1 ? (
+            <select
+              aria-label="Producto"
+              value={product ?? products[0]}
+              onChange={(event) => {
+                setState({ kind: 'loading' })
+                setProduct(event.target.value)
+              }}
+            >
+              {products.map((id) => (
+                <option key={id} value={id}>
+                  {id}
+                </option>
+              ))}
+            </select>
+          ) : undefined
+        }
+      />
+    )
+  }
   if (state.kind === 'unavailable')
     return (
       <SwitchBar>
