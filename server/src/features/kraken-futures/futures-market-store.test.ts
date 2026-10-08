@@ -442,6 +442,36 @@ describe('FuturesMarketStore', () => {
     reopened.close()
   })
 
+  it('serves each product its own tickers (REST tickers of other products never reach the BTC readers)', () => {
+    const store = new FuturesMarketStore(dbPath())
+    const ticker = (productId: string, seq: number, last: string) => ({
+      type: 'ticker' as const,
+      productId,
+      epoch: productId === 'PF_XBTUSD' ? 1 : 1_000_000,
+      seq,
+      eventTime: 1000 + seq,
+      receivedAt: 1010 + seq,
+      persistedAt: 1010 + seq,
+      last,
+      suspended: false,
+      funding: { status: 'unknown' as const },
+      rawJson: '{}',
+    })
+    store.append(ticker('PF_XBTUSD', 1, '100'))
+    store.append(ticker('PF_ETHUSD', 1, '2500'))
+    store.append(ticker('PF_XBTUSD', 2, '101'))
+    store.append(ticker('PF_ETHUSD', 2, '2501'))
+    const last = (product?: string) =>
+      store.latestTickerAsOf(Number.MAX_SAFE_INTEGER, product)?.last
+    expect(last()).toBe('101')
+    expect(last('PF_ETHUSD')).toBe('2501')
+    const lasts = (product?: string) =>
+      store.tickerTradeEventsAfter(0, 10, product).map((row) => row.event.last)
+    expect(lasts()).toEqual(['100', '101'])
+    expect(lasts('PF_ETHUSD')).toEqual(['2500', '2501'])
+    store.close()
+  })
+
   it('no longer writes the redundant ticker snapshot table', () => {
     const path = dbPath()
     const store = new FuturesMarketStore(path)
