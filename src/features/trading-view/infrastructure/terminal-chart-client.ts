@@ -1,3 +1,4 @@
+import { productQuery } from '../../connected-trading/infrastructure/terminal-stream-client.ts'
 import { useEffect, useState } from 'react'
 import { record } from '../../../shared/wire/decode.ts'
 
@@ -148,6 +149,7 @@ export function useTerminalChart(
   intervalMs: number,
   enabled: boolean,
   refreshMs = 15_000,
+  product?: string,
 ): TerminalChartData | null {
   const [data, setData] = useState<TerminalChartData | null>(null)
   useEffect(() => {
@@ -159,7 +161,7 @@ export function useTerminalChart(
       controller = new AbortController()
       try {
         const response = await fetch(
-          `${apiBase}/terminal/chart?interval_ms=${intervalMs}`,
+          `${apiBase}/terminal/chart?interval_ms=${intervalMs}${productQuery(product, false)}`,
           { signal: controller.signal },
         )
         if (!response.ok) return
@@ -177,6 +179,6 @@ export function useTerminalChart(
       clearInterval(timer)
       controller?.abort()
     }
-  }, [apiBase, intervalMs, enabled, refreshMs])
+  }, [apiBase, intervalMs, enabled, refreshMs, product])
   return enabled && data?.intervalMs === intervalMs ? data : null
 }

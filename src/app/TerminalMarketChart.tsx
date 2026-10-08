@@ -36,6 +36,7 @@ export default function TerminalMarketChart({
   entriesOnly = false,
   onSelect,
   apiBase,
+  product,
   ticker,
   position,
   positions,
@@ -49,6 +50,7 @@ export default function TerminalMarketChart({
   entriesOnly?: boolean
   onSelect: (analysisId: string) => void
   apiBase: string
+  product?: string
   ticker: TerminalTickerStats | null
   position: Record<string, unknown>
   positions?: unknown[]
@@ -170,6 +172,7 @@ export default function TerminalMarketChart({
         selectedId={selectedId}
         onSelect={onSelect}
         apiBase={apiBase}
+        product={product}
         live={mode === 'paper_live'}
         ticker={ticker}
         position={position}

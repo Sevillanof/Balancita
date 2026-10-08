@@ -22,6 +22,8 @@ export type TerminalBootstrap = {
   terminal_market?: Record<string, unknown>
   source_manifest?: Record<string, unknown>
   engine?: Record<string, unknown>
+  /** Pinned products the gateway can serve (`?product=`). */
+  products?: string[]
 }
 
 export type MockTerminalMarket = {
@@ -141,8 +143,16 @@ export function terminalApiBase(source: TerminalSource): string {
 /** A hung backend must surface as an explicit error, never an endless spinner. */
 export const TERMINAL_BOOTSTRAP_TIMEOUT_MS = 8_000
 
+/** `?product=` suffix; empty for the default product (BTC). */
+export function productQuery(product?: string, first = true): string {
+  return product
+    ? `${first ? '?' : '&'}product=${encodeURIComponent(product)}`
+    : ''
+}
+
 export async function loadTerminalBootstrap(
   apiBase = '/api',
+  product?: string,
 ): Promise<TerminalBootstrap> {
   const controller = new AbortController()
   const timer = setTimeout(
@@ -150,7 +160,7 @@ export async function loadTerminalBootstrap(
     TERMINAL_BOOTSTRAP_TIMEOUT_MS,
   )
   try {
-    return await fetchTerminalBootstrap(apiBase, controller.signal)
+    return await fetchTerminalBootstrap(apiBase, controller.signal, product)
   } finally {
     clearTimeout(timer)
   }
@@ -159,11 +169,15 @@ export async function loadTerminalBootstrap(
 async function fetchTerminalBootstrap(
   apiBase: string,
   signal: AbortSignal,
+  product?: string,
 ): Promise<TerminalBootstrap> {
-  const response = await fetch(`${apiBase}/terminal/bootstrap`, {
-    headers: { accept: 'application/json' },
-    signal,
-  })
+  const response = await fetch(
+    `${apiBase}/terminal/bootstrap${productQuery(product)}`,
+    {
+      headers: { accept: 'application/json' },
+      signal,
+    },
+  )
   if (!response.ok) {
     const failure = new Error(`Terminal bootstrap failed (${response.status}).`)
     Object.assign(failure, { status: response.status })
@@ -181,7 +195,10 @@ async function fetchTerminalBootstrap(
   return value as unknown as TerminalBootstrap
 }
 
-export function terminalWebSocketUrl(apiBase = '/api'): string {
+export function terminalWebSocketUrl(
+  apiBase = '/api',
+  product?: string,
+): string {
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
-  return `${protocol}//${location.host}${apiBase}/terminal/stream`
+  return `${protocol}//${location.host}${apiBase}/terminal/stream${productQuery(product)}`
 }

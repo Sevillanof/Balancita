@@ -244,6 +244,7 @@ export default function TerminalChartPanel({
   selectedId,
   onSelect,
   apiBase,
+  product,
   live,
   ticker,
   position,
@@ -257,6 +258,7 @@ export default function TerminalChartPanel({
   selectedId: string
   onSelect: (markerId: string) => void
   apiBase: string
+  product?: string
   /** Real Kraken data behind the gateway: fetch analytics and timeframes. */
   live: boolean
   ticker: TerminalTickerStats | null
@@ -281,7 +283,13 @@ export default function TerminalChartPanel({
     const timer = setInterval(() => setNow(Date.now()), 1_000)
     return () => clearInterval(timer)
   }, [live])
-  const remote = useTerminalChart(apiBase, settings.intervalMs, live)
+  const remote = useTerminalChart(
+    apiBase,
+    settings.intervalMs,
+    live,
+    undefined,
+    product,
+  )
   const intervalSeconds = settings.intervalMs / 1000
   // Real data: wait for the server series instead of opening on the few
   // candles the 1m stream can fold (the view would stay on them).

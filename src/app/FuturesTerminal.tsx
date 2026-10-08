@@ -46,11 +46,14 @@ export default function FuturesTerminal({
   bootstrap,
   apiBase = '/api',
   sourceSwitch,
+  product,
 }: {
   bootstrap: TerminalBootstrap
   apiBase?: string
   /** Data-source control owned by the entry; rendered inside the header. */
   sourceSwitch?: ReactNode
+  /** Pinned product shown; undefined is the default (BTC). */
+  product?: string
 }) {
   const [state, setState] = useState<ViewState | null>(null)
   const [connected, setConnected] = useState(false)
@@ -86,7 +89,7 @@ export default function FuturesTerminal({
     )
     const openSocket = () => {
       if (cancelled) return
-      socket = new WebSocket(terminalWebSocketUrl(apiBase))
+      socket = new WebSocket(terminalWebSocketUrl(apiBase, product))
       socketRef.current = socket
       socket.onopen = () => {
         setConnected(true)
@@ -245,7 +248,7 @@ export default function FuturesTerminal({
       socket?.close()
       socketRef.current = null
     }
-  }, [bootstrap, apiBase])
+  }, [bootstrap, apiBase, product])
 
   const account = record(state?.account)
   const netValue = account.net_usd ?? account.net_complete
@@ -444,7 +447,9 @@ export default function FuturesTerminal({
               <p className="demo-shell__eyebrow">
                 {bootstrap.source === 'local-protection.v1'
                   ? 'MOCK · BTC/USD PERPETUO'
-                  : 'KRAKEN FUTURES · BTC/USD PERPETUO'}
+                  : product
+                    ? `KRAKEN FUTURES · ${product}`
+                    : 'KRAKEN FUTURES · BTC/USD PERPETUO'}
               </p>
               <h2>
                 Bitcoin <span>/ Dólar</span>
@@ -589,6 +594,7 @@ export default function FuturesTerminal({
                     entriesOnly={!localDemo}
                     onSelect={setSelectedAnalysisId}
                     apiBase={apiBase}
+                    product={product}
                     ticker={
                       (marketState.ticker_stats ??
                         record(bootstrap.market).ticker_stats ??
