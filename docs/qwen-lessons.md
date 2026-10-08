@@ -58,3 +58,11 @@ Lectura: en BTC a 30 minutos, tras costes, la acción correcta se reparte casi p
 Para correrlo con el modelo local levantado: `python -m balancita_engine.futures_replay --market-db … --from … --to … --qwen trade_action --qwen-arm original|context|learning --qwen-cache cache.sqlite --out run-<brazo>.sqlite`, una vez por brazo y por rango.
 
 Script: `analisis/research-estrategias-log/lessons_base.py`.
+
+## Comparar los brazos con una prueba pareada
+
+```
+python -m balancita_engine.futures_replay_compare --market-db market.sqlite run-original.sqlite run-context.sqlite run-learning.sqlite
+```
+
+Toma los buckets que respondieron todos los brazos, puntúa cada respuesta con la regla +1 de siempre y compara cada brazo con el primero: diferencia media de la tasa de +1, `p_value` por permutación de signos con días UTC enteros como unidad (las decisiones de un día comparten el movimiento del mercado) y la tasa de "siempre `hold`" sobre los mismos buckets, el piso que un brazo debe superar. No cambia la pregunta, la regla ni el prompt: solo mide. Falta ejecutarlo con el modelo real.
