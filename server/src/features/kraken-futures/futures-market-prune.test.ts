@@ -79,3 +79,68 @@ describe('pruneMarketEvents', () => {
     )
   })
 })
+
+describe('trimRawEvents', () => {
+  function ticker(seq: number, receivedAt: number) {
+    return {
+      type: 'ticker',
+      productId: 'PF_XBTUSD',
+      seq,
+      eventTime: receivedAt - 5,
+      receivedAt,
+      persistedAt: receivedAt + 5,
+      epoch: 1,
+      bid: '1',
+      ask: '2',
+      mark: '1.5',
+      raw: { bid_size: '1' },
+    }
+  }
+
+  it('drops old tickers and old trades, compacts middle-aged trades and keeps the guard', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'balancita-trim-'))
+    dirs.push(dir)
+    const store = new FuturesMarketStore(join(dir, 'market.sqlite'))
+    const H = 3_600_000
+    store.append(trade('t-old', NOW - 8 * DAY, 1))
+    store.append(trade('t-mid', NOW - 2 * DAY, 2))
+    store.append(ticker(4, NOW - 2 * DAY + 5))
+    store.append(trade('t-new', NOW - H, 3))
+    store.append(ticker(5, NOW - H + 5))
+    const result = store.trimRawEvents({
+      now: NOW,
+      tickerRetentionMs: 24 * H,
+      eventRetentionMs: 7 * DAY,
+      rawKeepMs: 24 * H,
+    })
+    expect(result.done).toBe(true)
+    expect(result.deleted).toBe(2)
+    expect(result.slimmed).toBe(1)
+    store.close()
+    const db = new DatabaseSync(join(dir, 'market.sqlite'))
+    const rows = db
+      .prepare(
+        "SELECT uid, feed, raw_json, json_type(normalized_json, '$.raw') AS has FROM paper_futures_market_events ORDER BY rowid",
+      )
+      .all() as {
+      uid: string | null
+      feed: string
+      raw_json: string
+      has: string | null
+    }[]
+    expect(rows.map((row) => row.uid ?? row.feed)).toEqual([
+      't-mid',
+      't-new',
+      'ticker',
+    ])
+    expect(rows[0]?.has).toBeNull()
+    expect(rows[0]?.raw_json).not.toBe('')
+    expect(() => db.exec('DELETE FROM paper_futures_market_events')).toThrow(
+      /immutable/,
+    )
+    expect(() =>
+      db.exec(`UPDATE paper_futures_market_events SET feed='x'`),
+    ).toThrow(/immutable/)
+    db.close()
+  })
+})

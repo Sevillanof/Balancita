@@ -438,6 +438,156 @@ export class FuturesMarketStore {
     this.db.close()
   }
 
+  private slimCursor = 0
+
+  /**
+   * Online retention for the capture process (the sole writer): tickers older
+   * than `tickerRetentionMs` and trades/books older than `eventRetentionMs` are
+   * deleted; once a trade/book is older than `rawKeepMs` the copies of the provider
+   * message inside `normalized_json` (`raw`, `rawJson`) are dropped: the same bytes
+   * stay whole in the `raw_json` column. Candles, funding, analytics
+   * and gaps are never touched. Work is bounded per call (`maxBatches` of 5 000
+   * rows) and `done` says whether it caught up. Each batch lifts the immutability
+   * triggers only inside its own transaction and restores them before commit.
+   * Freed pages are reused by new events, so the file stops growing; with
+   * `auto_vacuum=INCREMENTAL` (set by `market:prune --vacuum`) they are also
+   * returned to the OS.
+   */
+  trimRawEvents(
+    policy: {
+      now: number
+      tickerRetentionMs: number
+      eventRetentionMs: number
+      rawKeepMs: number
+    },
+    maxBatches = 20,
+  ): { deleted: number; slimmed: number; done: boolean } {
+    const BATCH = 5_000
+    const bound = (cutoff: number): number => {
+      // Rowids grow with received_at: bisect instead of scanning.
+      const range = this.db
+        .prepare(
+          'SELECT MIN(rowid) AS lo, MAX(rowid) AS hi FROM paper_futures_market_events',
+        )
+        .get() as { lo: number | null; hi: number | null }
+      if (range.lo === null || range.hi === null) return 0
+      let lo = Number(range.lo)
+      let hi = Number(range.hi)
+      const at = this.db.prepare(
+        'SELECT rowid AS id, received_at AS t FROM paper_futures_market_events WHERE rowid>=? ORDER BY rowid LIMIT 1',
+      )
+      while (lo < hi) {
+        const mid = Math.floor((lo + hi) / 2)
+        const row = at.get(mid) as { id: number; t: number } | undefined
+        if (!row || row.t >= cutoff) hi = mid
+        else lo = mid + 1
+      }
+      return lo - 1
+    }
+    const tickerBound = bound(policy.now - policy.tickerRetentionMs)
+    const eventBound = bound(policy.now - policy.eventRetentionMs)
+    const rawBound = bound(policy.now - policy.rawKeepMs)
+    const tables = [
+      'paper_futures_market_events',
+      'paper_futures_book_snapshots',
+    ]
+    const triggers = ['no_delete', 'no_update'].flatMap((kind) =>
+      tables.map((table) => {
+        const row = this.db
+          .prepare(
+            `SELECT sql FROM sqlite_master WHERE type='trigger' AND name=?`,
+          )
+          .get(`${table}_${kind}`) as { sql: string } | undefined
+        return { name: `${table}_${kind}`, sql: row?.sql }
+      }),
+    )
+    let deleted = 0
+    let slimmed = 0
+    let done = true
+    const inGuardlessTransaction = (work: () => void): void => {
+      this.db.exec('BEGIN IMMEDIATE')
+      try {
+        for (const { name, sql } of triggers)
+          if (sql) this.db.exec(`DROP TRIGGER ${name}`)
+        work()
+        for (const { sql } of triggers) if (sql) this.db.exec(sql)
+        this.db.exec('COMMIT')
+      } catch (error) {
+        try {
+          this.db.exec('ROLLBACK')
+        } catch {
+          // No open transaction.
+        }
+        throw error
+      }
+    }
+    let batches = 0
+    const deleteWhere = (condition: string, ...args: number[]): boolean => {
+      while (batches < maxBatches) {
+        batches += 1
+        let removed = 0
+        inGuardlessTransaction(() => {
+          const ids = `SELECT event_id FROM paper_futures_market_events WHERE ${condition} ORDER BY rowid LIMIT ${BATCH}`
+          this.db
+            .prepare(
+              `DELETE FROM paper_futures_book_snapshots WHERE event_id IN (${ids})`,
+            )
+            .run(...args)
+          removed = Number(
+            this.db
+              .prepare(
+                `DELETE FROM paper_futures_market_events WHERE rowid IN (SELECT rowid FROM paper_futures_market_events WHERE ${condition} ORDER BY rowid LIMIT ${BATCH})`,
+              )
+              .run(...args).changes,
+          )
+        })
+        deleted += removed
+        if (removed < BATCH) return true
+      }
+      return false
+    }
+    if (tickerBound > 0)
+      done = deleteWhere(`feed='ticker' AND rowid<=?`, tickerBound) && done
+    if (eventBound > 0 && done)
+      done = deleteWhere(`rowid<=?`, eventBound) && done
+    if (done && rawBound > 0) {
+      if (this.slimCursor === 0) {
+        const first = this.db
+          .prepare('SELECT MIN(rowid) AS id FROM paper_futures_market_events')
+          .get() as { id: number | null }
+        this.slimCursor = Math.max(0, Number(first.id ?? 1) - 1)
+      }
+      while (this.slimCursor < rawBound) {
+        if (batches >= maxBatches) {
+          done = false
+          break
+        }
+        batches += 1
+        const upTo = Math.min(this.slimCursor + BATCH, rawBound)
+        const from = this.slimCursor
+        inGuardlessTransaction(() => {
+          slimmed += Number(
+            this.db
+              .prepare(
+                `UPDATE paper_futures_market_events
+                 SET normalized_json=json_remove(normalized_json,'$.raw','$.rawJson')
+                 WHERE rowid>? AND rowid<=? AND feed<>'ticker'
+                   AND (json_type(normalized_json,'$.rawJson') IS NOT NULL
+                     OR json_type(normalized_json,'$.raw') IS NOT NULL)`,
+              )
+              .run(from, upTo).changes,
+          )
+        })
+        this.slimCursor = upTo
+      }
+    }
+    const mode = this.db.prepare('PRAGMA auto_vacuum').get() as {
+      auto_vacuum: number
+    }
+    if (mode.auto_vacuum === 2) this.db.exec('PRAGMA incremental_vacuum(4000)')
+    return { deleted, slimmed, done }
+  }
+
   /** Stores every period of the response, even those already known. */
   appendFundingResponse(response: HistoricalFundingResponse): void {
     this.writeFundingResponse(response, response.records, 'PF_XBTUSD')

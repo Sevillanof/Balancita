@@ -64,6 +64,32 @@ async function main(): Promise<void> {
     reconnectMaxMs: config.marketReconnectMaxMs,
     log,
   })
+  // Online retention (the capture is the sole writer): see trimRawEvents.
+  const HOUR = 3_600_000
+  const envNumber = (name: string, fallback: number): number => {
+    const value = Number(process.env[name])
+    return Number.isFinite(value) && value > 0 ? value : fallback
+  }
+  const retention = {
+    tickerRetentionMs: envNumber('FUTURES_TICKER_RETENTION_HOURS', 24) * HOUR,
+    eventRetentionMs: envNumber('FUTURES_EVENT_RETENTION_DAYS', 7) * 24 * HOUR,
+    rawKeepMs: envNumber('FUTURES_RAW_COPY_KEEP_HOURS', 24) * HOUR,
+  }
+  const trim = () => {
+    try {
+      const result = store.trimRawEvents({ now: Date.now(), ...retention })
+      if (result.deleted > 0 || result.slimmed > 0)
+        log(
+          `retention: ${result.deleted} old events removed, ${result.slimmed} compacted${result.done ? '' : ' (more pending)'}`,
+        )
+    } catch (error) {
+      log(
+        `retention failed: ${error instanceof Error ? error.message : String(error)}`,
+      )
+    }
+  }
+  const trimTimer = setInterval(trim, 120_000)
+  trimTimer.unref()
   let closing = false
   const shutdown = (signal: string) => {
     if (closing) return
@@ -80,6 +106,7 @@ async function main(): Promise<void> {
   process.once('SIGINT', () => shutdown('SIGINT'))
   process.once('SIGTERM', () => shutdown('SIGTERM'))
   await capture.start()
+  setTimeout(trim, 30_000).unref()
   log(
     `capturing into ${config.futuresMarketDbPath}; official candles for ${products
       .map((item) => `${item.productId} (tick ${item.tickSize})`)

@@ -10,6 +10,37 @@ const GUARDED = [
   'paper_futures_ticker_snapshots',
 ] as const
 
+/**
+ * Offline compaction: switches the file to `auto_vacuum=INCREMENTAL` (so the
+ * capture's retention can return freed pages) and rebuilds it. Needs the
+ * capture stopped and about the database size free on disk.
+ */
+export function vacuumMarketDb(dbPath: string): {
+  before: number
+  after: number
+} {
+  const lock = acquireWriterLock(dbPath)
+  const db = new DatabaseSync(dbPath)
+  try {
+    const size = () => {
+      const row = db
+        .prepare(
+          'SELECT page_count*page_size AS bytes FROM pragma_page_count, pragma_page_size',
+        )
+        .get() as { bytes: number }
+      return Number(row.bytes)
+    }
+    const before = size()
+    db.exec(
+      'PRAGMA wal_checkpoint(TRUNCATE); PRAGMA auto_vacuum=INCREMENTAL; VACUUM; PRAGMA wal_checkpoint(TRUNCATE);',
+    )
+    return { before, after: size() }
+  } finally {
+    db.close()
+    lock.release()
+  }
+}
+
 export interface PruneResult {
   readonly cutoffMs: number
   readonly events: number

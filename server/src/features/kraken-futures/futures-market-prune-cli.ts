@@ -1,9 +1,10 @@
 import {
   DEFAULT_RETENTION_DAYS,
   pruneMarketEvents,
+  vacuumMarketDb,
 } from './futures-market-prune.ts'
 
-// Usage: pnpm --dir server market:prune [--days 7] [--db path] (capture stopped)
+// Usage: pnpm --dir server market:prune [--days 7] [--db path] [--vacuum] (capture stopped)
 const args = process.argv.slice(2)
 const flag = (name: string) => {
   const index = args.indexOf(name)
@@ -18,3 +19,9 @@ const result = pruneMarketEvents(dbPath, { days })
 console.log(
   `[market:prune] ${dbPath}: removed ${result.events} events (${result.bookSnapshots} book, ${result.tickerSnapshots} ticker snapshots) received before ${new Date(result.cutoffMs).toISOString()}`,
 )
+if (args.includes('--vacuum')) {
+  const { before, after } = vacuumMarketDb(dbPath)
+  console.log(
+    `[market:prune] vacuum: ${(before / 1048576).toFixed(0)} MB -> ${(after / 1048576).toFixed(0)} MB`,
+  )
+}
