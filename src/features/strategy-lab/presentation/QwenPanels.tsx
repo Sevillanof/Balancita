@@ -11,6 +11,7 @@ import {
   signedUsd,
   utcTime,
 } from '../../../shared/finance/format.ts'
+import { MODEL_TEXTS, type ModelKey } from './strategy-lab-labels.ts'
 
 const OPTION_LABELS: Record<QwenOption, string> = {
   buy: 'Comprar',
@@ -20,7 +21,8 @@ const OPTION_LABELS: Record<QwenOption, string> = {
 const OPTIONS: readonly QwenOption[] = ['buy', 'hold', 'sell']
 const SIDE_LABELS = { LONG: 'Compra', SHORT: 'Venta' } as const
 
-function formatPrice(value: string) {
+function formatPrice(value: string | null) {
+  if (value === null) return '—'
   const parsed = Number(value)
   return Number.isFinite(parsed) ? price(parsed) : value
 }
@@ -44,41 +46,34 @@ function hitRate(stats: QwenDecisionStats | undefined) {
     : percent(stats.hit_rate * 100)
 }
 
-function qwenEmptyText(scores: QwenScores | null): string {
-  if (!scores) return 'Cargando el puntaje de Qwen…'
-  if (scores.status === 'off')
-    return scores.reason === 'decisions_or_verdicts_db_missing'
-      ? 'Qwen todavía no guardó decisiones: el puntaje aparece con la primera.'
-      : 'El puntaje de Qwen no está disponible: el gateway en vivo no respondió.'
-  if (scores.status === 'error')
-    return `No se pudo calcular el puntaje de Qwen${scores.reason ? ` (${scores.reason})` : ''}.`
-  return 'Qwen todavía no tiene decisiones para PF_XBTUSD.'
-}
-
-/** Head and KPIs of the focus panel when Qwen is the selected row. */
+/**
+ * Head and KPIs of the focus panel when a model scored in Qwen's format
+ * (Qwen by default, or Kronos) is the selected row.
+ */
 export function QwenFocusHead({
   scores,
   product,
+  model = 'qwen',
 }: {
   scores: QwenScores | null
   product: QwenProduct | undefined
+  model?: ModelKey
 }) {
+  const texts = MODEL_TEXTS[model]
   return (
     <>
       <div className="strategy-lab__panel-head">
-        <h2>Qwen</h2>
-        <span className="strategy-lab__chip strategy-lab__chip--qwen">
-          Decide sobre las estrategias
+        <h2>{texts.name}</h2>
+        <span className={`strategy-lab__chip strategy-lab__chip--${model}`}>
+          {texts.chip}
         </span>
         <span className="strategy-lab__context">
-          {product
-            ? `Cada decisión se juzga a ${product.horizon_min} min con comisiones · mismo book y costos que el backtest · todas las decisiones guardadas`
-            : ''}
+          {product ? texts.context(product.horizon_min) : ''}
         </span>
       </div>
       {!product ? (
         <p className="strategy-lab__empty" role="status">
-          {qwenEmptyText(scores)}
+          {texts.emptyText(scores)}
         </p>
       ) : (
         <div className="strategy-lab__kpis">
@@ -149,22 +144,26 @@ export function QwenFocusHead({
   )
 }
 
-/** Right column when Qwen is selected: breakdown and latest decisions. */
-export function QwenSide({ product }: { product: QwenProduct | undefined }) {
+/** Right column when the model is selected: breakdown and latest decisions. */
+export function QwenSide({
+  product,
+  model = 'qwen',
+}: {
+  product: QwenProduct | undefined
+  model?: ModelKey
+}) {
+  const texts = MODEL_TEXTS[model]
   const open = product?.open_position ?? null
   const closed = (product?.trades ?? []).slice(-12).reverse()
   return (
     <aside
       className="strategy-lab__panel strategy-lab__editor"
-      aria-label="Decisiones de Qwen"
+      aria-label={`Decisiones de ${texts.name}`}
     >
       <div className="strategy-lab__panel-head">
-        <h2>Decisiones de Qwen</h2>
+        <h2>Decisiones de {texts.name}</h2>
       </div>
-      <p className="strategy-lab__description">
-        Qwen elige comprar, mantener o vender mirando lo que proponen las
-        estrategias. Cada acierto suma +1 y cada fallo −1.
-      </p>
+      <p className="strategy-lab__description">{texts.description}</p>
       {product && (
         <>
           <table className="strategy-lab__qwen-table">
@@ -225,9 +224,7 @@ export function QwenSide({ product }: { product: QwenProduct | undefined }) {
                 {formatPrice(trade.exit_price)} · {returnText(trade.net_bp)}
               </li>
             ))}
-            {!open && closed.length === 0 && (
-              <li>Qwen todavía no abrió ninguna posición.</li>
-            )}
+            {!open && closed.length === 0 && <li>{texts.noTrades}</li>}
           </ul>
         </>
       )}

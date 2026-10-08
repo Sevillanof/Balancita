@@ -204,6 +204,35 @@ describe('live market gateway', () => {
     expect(asked).toEqual(['PF_XBTUSD', 'bad'])
   })
 
+  it('serves Kronos scores and reports them off when not configured', async () => {
+    const path = dbPath()
+    const writer = seedWriter(path, 5)
+    closers.push(() => writer.close())
+    const off = await start(path)
+    expect((await off.app.inject('/api/kronos/scores')).json()).toEqual({
+      status: 'off',
+      reason: 'kronos_not_configured',
+    })
+    const asked: string[] = []
+    const on = await start(path, {
+      kronosScores: {
+        report: async (product = '') => {
+          asked.push(product)
+          return product === 'bad'
+            ? { status: 'error', reason: 'invalid_product' }
+            : { status: 'ok', generated_at: 2, products: [] }
+        },
+      },
+    })
+    const ok = await on.app.inject('/api/kronos/scores?product=PF_ETHUSD')
+    expect(ok.statusCode).toBe(200)
+    expect(ok.json()).toEqual({ status: 'ok', generated_at: 2, products: [] })
+    expect(
+      (await on.app.inject('/api/kronos/scores?product=bad')).statusCode,
+    ).toBe(400)
+    expect(asked).toEqual(['PF_ETHUSD', 'bad'])
+  })
+
   it('serves each pinned product its own view, with its own tickers and candles', async () => {
     const path = dbPath()
     const writer = seedWriter(path, 3)

@@ -1,9 +1,11 @@
+import { dirname, join } from 'node:path'
 import { createSystemUsage } from '../features/live-gateway/system-usage.ts'
 import { buildLiveGateway } from '../features/live-gateway/gateway.ts'
 import {
   createQwenScores,
   qwenScoresOff,
 } from '../features/live-gateway/qwen-scores.ts'
+import { createKronosScores } from '../features/live-gateway/kronos-scores.ts'
 import { serverConfigFrom } from '../platform/config.ts'
 
 function pythonUnavailableReason(status: string | undefined) {
@@ -37,6 +39,18 @@ function qwenScoresFrom(env: NodeJS.ProcessEnv) {
   })
 }
 
+/** Kronos' DB sits next to its summary unless `KRONOS_DB_PATH` says otherwise. */
+function kronosScoresFrom(env: NodeJS.ProcessEnv) {
+  const dbPath =
+    env.KRONOS_DB_PATH?.trim() ||
+    (env.KRONOS_SUMMARY_PATH?.trim()
+      ? join(dirname(env.KRONOS_SUMMARY_PATH.trim()), 'kronos.sqlite')
+      : '')
+  return dbPath
+    ? createKronosScores({ dbPath })
+    : qwenScoresOff('kronos_not_configured')
+}
+
 async function main(): Promise<void> {
   const config = serverConfigFrom(process.env)
   // Read-only: opens the capture process's market DB, starts no collector/engine.
@@ -50,6 +64,7 @@ async function main(): Promise<void> {
       process.env.BALANCITA_PYTHON_STATUS,
     ),
     qwenScores: qwenScoresFrom(process.env),
+    kronosScores: kronosScoresFrom(process.env),
     processHealthPath: process.env.DEV_HEALTH_FILE || undefined,
     systemUsage: createSystemUsage({
       healthPath: process.env.DEV_HEALTH_FILE || undefined,

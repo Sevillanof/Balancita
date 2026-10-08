@@ -6,6 +6,8 @@ import type { BacktestTrade } from './strategy-api.ts'
  * and costs as the strategy backtest.
  */
 export const QWEN_SCORES_URL = '/api-live/qwen/scores'
+/** Kronos' forward paper decisions, served in the same shape. */
+export const KRONOS_SCORES_URL = '/api-live/kronos/scores'
 
 export type QwenOption = 'buy' | 'hold' | 'sell'
 
@@ -54,7 +56,8 @@ export type QwenProduct = {
 export type QwenOpenPosition = {
   side: 'LONG' | 'SHORT'
   entry_time_ms: number
-  entry_price: string
+  /** Null when the fill is not known yet (Kronos stores it on close). */
+  entry_price: string | null
   mark_price: string | null
   net_bp: number | null
   pnl_usd: number | null
@@ -67,13 +70,28 @@ export type QwenScores = {
   products: QwenProduct[]
 }
 
-export async function loadQwenScores(
+export function loadQwenScores(
   fetcher: typeof fetch = (...args) => fetch(...args),
   product = 'PF_XBTUSD',
 ): Promise<QwenScores> {
+  return loadScores(QWEN_SCORES_URL, fetcher, product)
+}
+
+export function loadKronosScores(
+  fetcher: typeof fetch = (...args) => fetch(...args),
+  product = 'PF_XBTUSD',
+): Promise<QwenScores> {
+  return loadScores(KRONOS_SCORES_URL, fetcher, product)
+}
+
+async function loadScores(
+  url: string,
+  fetcher: typeof fetch,
+  product: string,
+): Promise<QwenScores> {
   try {
     const response = await fetcher(
-      `${QWEN_SCORES_URL}?product=${encodeURIComponent(product)}`,
+      `${url}?product=${encodeURIComponent(product)}`,
     )
     const body = (await response.json()) as Partial<QwenScores>
     if (!response.ok && body.status === undefined)
