@@ -199,6 +199,14 @@ function shutdown(signal, code = 0) {
   process.stdout.write(`[dev] ${signal}: stopping all dev processes\n`)
   for (const { child } of children)
     if (child.exitCode === null) signalChild(child, signal)
+  // A child that ignores the first signal (a background shell sets SIGINT to
+  // ignored and children inherit it) gets SIGTERM, then SIGKILL: no group
+  // may outlive pnpm (an orphaned llama-server keeps the model in memory).
+  const term = setTimeout(() => {
+    for (const { child } of children)
+      if (child.exitCode === null) signalChild(child, 'SIGTERM')
+  }, 1500)
+  term.unref()
   const force = setTimeout(() => {
     for (const { child } of children)
       if (child.exitCode === null) signalChild(child, 'SIGKILL')
@@ -214,6 +222,7 @@ function shutdown(signal, code = 0) {
         }),
     ),
   ).then(() => {
+    clearTimeout(term)
     clearTimeout(force)
     process.exitCode = code
   })
@@ -224,9 +233,8 @@ for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'])
 // Safety net: whatever ends this process, no child group outlives it.
 process.on('exit', () => {
   removeDevPid(liveDir)
-  for (const { child } of children)
-    if (child.exitCode === null && child.signalCode === null)
-      signalChild(child, 'SIGKILL')
+  // Also when the group leader already exited: grandchildren may remain.
+  for (const { child } of children) signalChild(child, 'SIGKILL')
 })
 function watch(entry) {
   const { name, child, state } = entry

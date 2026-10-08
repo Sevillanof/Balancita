@@ -58,6 +58,9 @@ SUMMARY_SCHEMA = "futures-qwen-exit-summary.v1"
 CONFIG_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
                            "config", "qwen-exit.json")
 FIVE_MINUTES_MS = 5 * ONE_MINUTE_MS
+DEFAULT_MAX_ASKS = 30  # new model questions per pass: history is caught up a little at a time, the GPU stays cool
+DEFAULT_ASK_PAUSE_SECONDS = 1.0
+BACKLOG_LOOP_SECONDS = 300  # next pass while questions are still waiting
 JUDGE_MS = 30 * ONE_MINUTE_MS  # an exit decision is judged by the price this much later
 LIQUIDATION = D(1)  # adverse move, as a fraction of the entry fill, that wipes the 100 USD out
 # Mean |funding| per hour in bp (30 days, analisis/costes-reales-kraken.md), charged to either side.
@@ -162,6 +165,32 @@ class ExitLessons:
         return "\n".join(lines)
 
 
+class AskBudget:
+    """New model questions allowed per pass, so catching up on history never pins the GPU.
+
+    Answers already cached cost nothing. When the budget runs out ``spend`` raises ``ModelUnavailable``: the
+    pass keeps what it has and the next one (soon, see ``BACKLOG_LOOP_SECONDS``) continues from the cache.
+    ``pause_seconds`` leaves the GPU idle between two questions.
+    """
+
+    def __init__(self, limit, pause_seconds=0.0):
+        self.limit, self.pause_seconds, self.used = limit, pause_seconds, 0
+
+    def reset(self):
+        self.used = 0
+
+    @property
+    def exhausted(self):
+        return self.limit is not None and self.used >= self.limit
+
+    def spend(self):
+        if self.exhausted:
+            raise ModelUnavailable("question budget of this pass used ({}); the rest waits for the next one".format(self.limit))
+        if self.used and self.pause_seconds:
+            time.sleep(self.pause_seconds)
+        self.used += 1
+
+
 class QwenExitDecider:
     """Asks Qwen ``hold`` or ``close`` for one product; keeps its answers and its memory.
 
@@ -169,8 +198,9 @@ class QwenExitDecider:
     simply stays open and is asked again at the next check). A model that is down raises ``ModelUnavailable``.
     """
 
-    def __init__(self, provider, question, calibration, template, *, mode="auto", cache=None):
+    def __init__(self, provider, question, calibration, template, *, mode="auto", cache=None, budget=None):
         self.provider, self.question, self.calibration = provider, question, calibration
+        self.budget = budget  # AskBudget shared by every product: caps the new model questions of one pass
         self.template, self.mode, self.cache = template, mode, cache or AnswerCache()
         self.letters = question_letters(question)
         self.model_ref = provider.identity().get("model_ref") or "unknown"
@@ -205,6 +235,8 @@ class QwenExitDecider:
         key = hashlib.sha256("\n".join((self.model_ref, self.mode, str(self.question["version"]), prompt)).encode()).hexdigest()
         answer = self.cache.get(key)
         if answer is None:
+            if self.budget is not None:
+                self.budget.spend()
             temperature = temperature_for(self.calibration, self.question["id"], self.question["version"])
             try:
                 done = ask_model(self.provider, prompt, self.letters, self.question, temperature, self.template, self.mode)
@@ -432,7 +464,7 @@ def write_summary(db_path, config, out_path, now_ms=None):
     return body
 
 
-def default_decider_factory(cache_path, env=None):
+def default_decider_factory(cache_path, env=None, budget=None):
     """``product_id -> QwenExitDecider`` over the local llama.cpp server of the live process Q."""
     env = os.environ if env is None else env
     from . import futures_llm_decisions as llm
@@ -447,7 +479,7 @@ def default_decider_factory(cache_path, env=None):
 
     def make(product_id):
         return QwenExitDecider(provider, question, calibration, template, mode=prompts["probability_source"],
-                               cache=cache)
+                               cache=cache, budget=budget)
 
     return make
 
@@ -464,10 +496,13 @@ def main(argv=None):
     os.makedirs(args.out, exist_ok=True)
     env = dict(os.environ, **({"LLAMA_PORT": args.llama_url.rsplit(":", 1)[1]} if args.llama_url else {}))
     config, specs = load_config(args.config), load_specs(args.specs_dir)
-    factory = default_decider_factory(os.path.join(args.out, "answers.sqlite"), env)
+    budget = AskBudget(int(env.get("QWENEXIT_MAX_ASKS_PER_PASS") or DEFAULT_MAX_ASKS),
+                       float(env.get("QWENEXIT_ASK_PAUSE_SECONDS") or DEFAULT_ASK_PAUSE_SECONDS))
+    factory = default_decider_factory(os.path.join(args.out, "answers.sqlite"), env, budget)
     products = resolve_products()
     db_path, summary_path = os.path.join(args.out, "qwen-exit.sqlite"), os.path.join(args.out, "qwen-exit-summary.json")
     while True:
+        budget.reset()
         try:
             report = run_once(args.market_db, db_path, config, specs, products, factory)
             body = write_summary(db_path, config, summary_path)
@@ -479,7 +514,8 @@ def main(argv=None):
             print("Qwen is not available, trying again later: {}".format(error), flush=True)
         if not args.loop_seconds:
             return
-        time.sleep(args.loop_seconds)
+        # With questions still waiting (budget used up) come back soon, otherwise at the normal pace.
+        time.sleep(min(args.loop_seconds, BACKLOG_LOOP_SECONDS) if budget.exhausted else args.loop_seconds)
 
 
 if __name__ == "__main__":
