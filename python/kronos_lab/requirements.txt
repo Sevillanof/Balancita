@@ -1,0 +1,7 @@
+# Only for the real model. Not needed by the engine, the server or the tests.
+torch
+pandas
+numpy
+huggingface_hub
+safetensors
+einops
