@@ -33,6 +33,8 @@ export interface LiveGatewayOptions {
   readonly engineUnavailableReason?: string
   /** Hits, misses and returns of Qwen's decisions. Absent: reported `off`. */
   readonly qwenScores?: QwenScores
+  /** Kronos' forward paper decisions in Qwen's shape. Absent: reported `off`. */
+  readonly kronosScores?: QwenScores
   /** JSON written by the dev supervisor with each process's health. */
   readonly processHealthPath?: string
   /** CPU, data size, Qwen and Kronos usage for `/api/system`. Absent: null report. */
@@ -302,6 +304,17 @@ export async function buildLiveGateway(
     '/api/qwen/scores',
     async (request, reply) => {
       const result = await qwenScores.report(request.query.product ?? '')
+      if (result.status === 'error' && result.reason === 'invalid_product')
+        return reply.code(400).send(result)
+      return result
+    },
+  )
+  const kronosScores =
+    options.kronosScores ?? qwenScoresOff('kronos_not_configured')
+  app.get<{ Querystring: { product?: string } }>(
+    '/api/kronos/scores',
+    async (request, reply) => {
+      const result = await kronosScores.report(request.query.product ?? '')
       if (result.status === 'error' && result.reason === 'invalid_product')
         return reply.code(400).send(result)
       return result
