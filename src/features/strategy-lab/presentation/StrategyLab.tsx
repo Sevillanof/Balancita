@@ -9,6 +9,7 @@ import {
   FEATURE_REFS,
   addCondition,
   cloneSpec,
+  conditionSentence,
   removeCondition,
   featureLabel,
   formatDecimal,
@@ -161,6 +162,8 @@ export default function StrategyLab({
   const [showPreview, setShowPreview] = useState(false)
   const [dots, setDots] = useState<Map<string, boolean | null>>(new Map())
   const [tab, setTab] = useState<Tab>('rules')
+  // Rules read as sentences; the selectors appear only while editing.
+  const [editingRules, setEditingRules] = useState(false)
   const [scope, setScope] = useState<RulesScope>('rules')
   const [side, setSide] = useState<Side>('LONG')
   const [saveMode, setSaveMode] = useState<SaveMode>('modify')
@@ -349,6 +352,30 @@ export default function StrategyLab({
       })
     return list
   }, [ranking, previewResult, detail, qwenProduct, kronosProduct])
+
+  // Strategies that traded first, by return, then buy and hold as the bar to
+  // beat; the models (Qwen, Kronos) and the strategies with no trades yet go
+  // in their own groups so a 0 % with nothing behind it never ranks high.
+  const rankGroups = useMemo(() => {
+    const traded = rows.filter(
+      (row) =>
+        !isModel(row.state) &&
+        (row.state === 'reference' ||
+          (row.trades > 0 && row.returnPct !== null)),
+    )
+    const models = rows.filter((row) => isModel(row.state))
+    const idle = rows.filter(
+      (row) =>
+        !isModel(row.state) &&
+        row.state !== 'reference' &&
+        (row.trades === 0 || row.returnPct === null),
+    )
+    return [
+      { key: 'traded', title: null, rows: traded },
+      { key: 'models', title: 'Modelos', rows: models },
+      { key: 'idle', title: 'Sin trades todavía', rows: idle },
+    ].filter((group) => group.rows.length > 0)
+  }, [rows])
 
   const bestReturn = Math.max(
     0.1,
@@ -799,68 +826,81 @@ export default function StrategyLab({
           {rows.length === 0 && (
             <p className="strategy-lab__empty">Cargando estrategias…</p>
           )}
-          <ol className="strategy-lab__rank-list">
-            {rows.map((row) => {
-              const current = isModel(row.state)
-                ? focus === row.state
-                : !focus &&
-                  (row.state === 'preview'
-                    ? showPreview
-                    : row.id !== null && row.id === selectedId && !showPreview)
-              return (
-                <li key={row.key}>
-                  <button
-                    type="button"
-                    className={`strategy-lab__rank strategy-lab__rank--${row.state}`}
-                    aria-pressed={current}
-                    disabled={row.state === 'reference'}
-                    onClick={() => {
-                      setFocus(isModel(row.state) ? row.state : null)
-                      if (row.state === 'preview') setShowPreview(true)
-                      else if (row.id) {
-                        setShowPreview(false)
-                        if (row.id !== selectedId) select(row.id)
-                      }
-                    }}
-                  >
-                    <span
-                      className={`strategy-lab__dot strategy-lab__dot--${row.state}`}
-                      title={STATE_LABELS[row.state]}
-                    />
-                    <span className="strategy-lab__rank-name">{row.label}</span>
-                    <span
-                      className={`strategy-lab__num strategy-lab__rank-return ${(row.returnPct ?? 0) >= 0 ? 'is-up' : 'is-down'}`}
-                    >
-                      {row.returnPct === null
-                        ? '—'
-                        : signedPercent(row.returnPct, 2)}
-                    </span>
-                    <span className="strategy-lab__bar" aria-hidden="true">
-                      <span
-                        className={
-                          (row.returnPct ?? 0) >= 0 ? 'is-up' : 'is-down'
-                        }
-                        style={{
-                          width: `${Math.round((Math.abs(row.returnPct ?? 0) / bestReturn) * 100)}%`,
+          {rankGroups.map((group) => (
+            <div key={group.key} className="strategy-lab__rank-group">
+              {group.title && (
+                <h3 className="strategy-lab__rank-group-title">
+                  {group.title}
+                </h3>
+              )}
+              <ol className="strategy-lab__rank-list">
+                {group.rows.map((row) => {
+                  const current = isModel(row.state)
+                    ? focus === row.state
+                    : !focus &&
+                      (row.state === 'preview'
+                        ? showPreview
+                        : row.id !== null &&
+                          row.id === selectedId &&
+                          !showPreview)
+                  return (
+                    <li key={row.key}>
+                      <button
+                        type="button"
+                        className={`strategy-lab__rank strategy-lab__rank--${row.state}`}
+                        aria-pressed={current}
+                        disabled={row.state === 'reference'}
+                        onClick={() => {
+                          setFocus(isModel(row.state) ? row.state : null)
+                          if (row.state === 'preview') setShowPreview(true)
+                          else if (row.id) {
+                            setShowPreview(false)
+                            if (row.id !== selectedId) select(row.id)
+                          }
                         }}
-                      />
-                    </span>
-                    <span
-                      className={`strategy-lab__num strategy-lab__rank-hit${row.few ? ' is-few' : ''}`}
-                    >
-                      {row.state === 'reference'
-                        ? 'referencia'
-                        : isModel(row.state) && !modelProducts[row.state]
-                          ? 'sin decisiones'
-                          : row.hitRate === null
-                            ? 'sin trades'
-                            : `${percent(row.hitRate * 100)} · ${row.trades}`}
-                    </span>
-                  </button>
-                </li>
-              )
-            })}
-          </ol>
+                      >
+                        <span
+                          className={`strategy-lab__dot strategy-lab__dot--${row.state}`}
+                          title={STATE_LABELS[row.state]}
+                        />
+                        <span className="strategy-lab__rank-name">
+                          {row.label}
+                        </span>
+                        <span
+                          className={`strategy-lab__num strategy-lab__rank-return ${(row.returnPct ?? 0) >= 0 ? 'is-up' : 'is-down'}`}
+                        >
+                          {row.returnPct === null
+                            ? '—'
+                            : signedPercent(row.returnPct, 2)}
+                        </span>
+                        <span className="strategy-lab__bar" aria-hidden="true">
+                          <span
+                            className={
+                              (row.returnPct ?? 0) >= 0 ? 'is-up' : 'is-down'
+                            }
+                            style={{
+                              width: `${Math.round((Math.abs(row.returnPct ?? 0) / bestReturn) * 100)}%`,
+                            }}
+                          />
+                        </span>
+                        <span
+                          className={`strategy-lab__num strategy-lab__rank-hit${row.few ? ' is-few' : ''}`}
+                        >
+                          {row.state === 'reference'
+                            ? 'referencia'
+                            : isModel(row.state) && !modelProducts[row.state]
+                              ? 'sin decisiones'
+                              : row.hitRate === null
+                                ? 'sin trades'
+                                : `${percent(row.hitRate * 100)} · ${row.trades}`}
+                        </span>
+                      </button>
+                    </li>
+                  )
+                })}
+              </ol>
+            </div>
+          ))}
           <div className="strategy-lab__legend">
             <span>
               <span className="strategy-lab__dot strategy-lab__dot--active" />
@@ -1113,6 +1153,14 @@ export default function StrategyLab({
                   <span className="strategy-lab__context">
                     Entra si se cumplen todas · punto = última vela
                   </span>
+                  <button
+                    type="button"
+                    className="strategy-lab__button"
+                    aria-pressed={editingRules}
+                    onClick={() => setEditingRules((open) => !open)}
+                  >
+                    {editingRules ? 'Listo' : 'Editar reglas'}
+                  </button>
                 </div>
                 {conditions.length === 0 && (
                   <p className="strategy-lab__context">
@@ -1140,52 +1188,64 @@ export default function StrategyLab({
                                 : 'Sin datos todavía'
                           }
                         />
-                        {operandEditor(
-                          node.left,
-                          `Condición ${index + 1}: indicador`,
-                          (left) => patch({ left }),
+                        {!editingRules ? (
+                          <span className="strategy-lab__sentence">
+                            {conditionSentence(node, draft.params)}
+                          </span>
+                        ) : (
+                          <>
+                            {operandEditor(
+                              node.left,
+                              `Condición ${index + 1}: indicador`,
+                              (left) => patch({ left }),
+                            )}
+                            <select
+                              aria-label={`Condición ${index + 1}: comparador`}
+                              className="strategy-lab__op"
+                              value={node.op}
+                              onChange={(event) =>
+                                patch({ op: event.target.value as Comparator })
+                              }
+                            >
+                              {COMPARATORS.map((op) => (
+                                <option key={op} value={op}>
+                                  {COMPARATOR_LABELS[op]}
+                                </option>
+                              ))}
+                            </select>
+                            {operandEditor(
+                              node.right,
+                              `Condición ${index + 1}: contra`,
+                              (right) => patch({ right }),
+                            )}
+                            <button
+                              type="button"
+                              className="strategy-lab__button"
+                              aria-label={`Quitar condición ${index + 1}`}
+                              onClick={() =>
+                                update(
+                                  removeCondition(draft, scope, side, path),
+                                )
+                              }
+                            >
+                              ✕
+                            </button>
+                          </>
                         )}
-                        <select
-                          aria-label={`Condición ${index + 1}: comparador`}
-                          className="strategy-lab__op"
-                          value={node.op}
-                          onChange={(event) =>
-                            patch({ op: event.target.value as Comparator })
-                          }
-                        >
-                          {COMPARATORS.map((op) => (
-                            <option key={op} value={op}>
-                              {COMPARATOR_LABELS[op]}
-                            </option>
-                          ))}
-                        </select>
-                        {operandEditor(
-                          node.right,
-                          `Condición ${index + 1}: contra`,
-                          (right) => patch({ right }),
-                        )}
-                        <button
-                          type="button"
-                          className="strategy-lab__button"
-                          aria-label={`Quitar condición ${index + 1}`}
-                          onClick={() =>
-                            update(removeCondition(draft, scope, side, path))
-                          }
-                        >
-                          ✕
-                        </button>
                       </li>
                     )
                   })}
                 </ul>
-                <button
-                  type="button"
-                  className="strategy-lab__button"
-                  disabled={!rules?.sides[side]}
-                  onClick={() => update(addCondition(draft, scope, side))}
-                >
-                  + condición
-                </button>
+                {editingRules && (
+                  <button
+                    type="button"
+                    className="strategy-lab__button"
+                    disabled={!rules?.sides[side]}
+                    onClick={() => update(addCondition(draft, scope, side))}
+                  >
+                    + condición
+                  </button>
+                )}
               </div>
             )}
 

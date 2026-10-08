@@ -170,6 +170,94 @@ export function operandLabel(
   return formatDecimal(operand)
 }
 
+const BAR_MINUTES: Record<string, number> = {
+  '1m': 1,
+  '1m_previous': 1,
+  '5m': 5,
+}
+
+const SCOPE_SUFFIX: Record<string, string> = {
+  '1m': '',
+  '1m_previous': ' de la vela previa',
+  '5m': ' (5 m)',
+}
+
+/** `72` bars of 5 m → `6 h`; minutes below an hour, hours up to two days. */
+function barsDuration(bars: number, minutes: number): string {
+  const total = bars * minutes
+  if (total < 60) return `${total} min`
+  if (total <= 48 * 60 && total % 60 === 0) return `${total / 60} h`
+  if (total % 1440 === 0) return `${total / 1440} d`
+  return `${(total / 60).toLocaleString('es-ES', { maximumFractionDigits: 1 })} h`
+}
+
+/** A feature as a reader says it: `5m.logret72` → `Retorno 6 h`. */
+export function featurePhrase(ref: string): string {
+  const [scope = '', field = ''] = ref.split('.', 2)
+  const minutes = BAR_MINUTES[scope]
+  const windowed = /^(logret|logvol)(\d+)$/.exec(field)
+  if (windowed && minutes !== undefined)
+    return `${windowed[1] === 'logret' ? 'Retorno' : 'Volatilidad'} ${barsDuration(Number(windowed[2]), minutes)}`
+  const base = FIELD_LABELS[field] ?? field
+  if (scope === 'position') return `${base} de la posición`
+  return `${base}${SCOPE_SUFFIX[scope] ?? ` (${scope})`}`
+}
+
+function factors(operand: Operand): Operand[] {
+  return typeof operand === 'string'
+    ? [operand]
+    : operand.mul.flatMap((factor) => factors(factor))
+}
+
+/** Constants first, then features: `2,5 × Volatilidad 24 h`. */
+function productPhrase(
+  operand: Operand,
+  params: Record<string, string>,
+): { text: string; negative: boolean } {
+  let negative = false
+  const numbers: string[] = []
+  const features: string[] = []
+  for (const factor of factors(operand)) {
+    if (typeof factor !== 'string') continue
+    const value = factor.startsWith('$')
+      ? params[factor.slice(1)]
+      : DECIMAL.test(factor)
+        ? factor
+        : null
+    if (value === null) features.push(featurePhrase(factor))
+    else if (value === undefined) numbers.push(factor)
+    else if (Number(value) === -1) negative = !negative
+    else if (Number(value) !== 1)
+      numbers.push(
+        Number(value).toLocaleString('es-ES', { maximumFractionDigits: 2 }),
+      )
+  }
+  const parts = [...numbers, ...features]
+  return { text: parts.length > 0 ? parts.join(' × ') : '1', negative }
+}
+
+const FLIPPED: Record<Comparator, Comparator> = {
+  '>': '<',
+  '>=': '<=',
+  '<': '>',
+  '<=': '>=',
+}
+
+/**
+ * A condition as a sentence: `Retorno 6 h > 2,5 × 8,49 × Volatilidad 24 h`.
+ * A negated left side moves to the right (`−R > x` reads `R < −x`).
+ */
+export function conditionSentence(
+  node: Pick<CmpNode, 'left' | 'op' | 'right'>,
+  params: Record<string, string> = {},
+): string {
+  const left = productPhrase(node.left, params)
+  const right = productPhrase(node.right, params)
+  const op = left.negative ? FLIPPED[node.op] : node.op
+  const negateRight = left.negative !== right.negative
+  return `${left.text} ${COMPARATOR_LABELS[op]} ${negateRight ? '−' : ''}${right.text}`
+}
+
 /** `1.5` → `1,5` for display; specs always store dot decimals. */
 export function formatDecimal(value: string): string {
   return value.replace('.', ',')
