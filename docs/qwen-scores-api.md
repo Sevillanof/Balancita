@@ -59,3 +59,32 @@ Read-only. Served by the live gateway (`pnpm dev`: through Vite as `/api-live/qw
 ```
 
 Definitions: `python/balancita_engine/futures_llm_scores.py` (module docstring).
+
+## Kronos scores
+
+`GET /api/kronos/scores?product=PF_XBTUSD` (front: `/api-live/kronos/scores`) returns Kronos' forward paper
+decisions in the same response shape, so the Estrategias page shows Kronos with the Qwen panels.
+
+- **Source**: `kronos.sqlite` written by `python/kronos_lab` (`decision` and `trade` tables), opened read-only by
+  `server/src/features/live-gateway/kronos-scores.ts`. Path: `KRONOS_DB_PATH`, else `kronos.sqlite` next to
+  `KRONOS_SUMMARY_PATH`. A report is cached 15 s per product.
+- **Forward only**: rows with `mode = 'backtest'` are ignored.
+- **States**: `ok` as above; `off` with `kronos_db_missing` (no DB yet) or `kronos_not_configured` (no path);
+  `error` with `invalid_product` (HTTP 400) or `read_failed: …`. Without `product`, every product with forward
+  decisions is listed.
+
+Field mapping (Kronos-small on 1 h candles, 4 h horizon, 100 USD per trade, one position per product):
+
+- `horizon_min`: `240`.
+- `decisions.decisions`: forward decisions, including those with `side` NULL (no trade).
+- `decisions.scored` / `hits` / `misses`: closed trades / those with `net_bp > 0` / the rest;
+  `points = hits - misses`.
+- `decisions.pending`: traded decisions whose trade has not closed yet.
+- `by_option.buy` / `sell` / `hold`: the same stats for `LONG` / `SHORT` / NULL decisions (`hold` never scores).
+- `baseline`: absent.
+- `trading`: `trades`, `wins` (`pnl_usd > 0`), `hit_rate`, `pnl_usd`, `return_pct` (percent of a 100 USD book) and
+  `max_drawdown` of the running closed-trade equity.
+- `rows`: `[]`.
+- `trades`: closed trades oldest first; `entry`/`exit` become `entry_price`/`exit_price`, `exit_reason` is `time_stop`.
+- `open_position`: the latest traded decision without a trade while its 4 h are not over. `entry_price`,
+  `mark_price`, `net_bp` and `pnl_usd` are `null` because Kronos stores the fill only on close.
