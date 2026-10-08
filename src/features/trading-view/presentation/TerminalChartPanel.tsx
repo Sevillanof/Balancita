@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { productBase, productPair } from '../domain/product-label.ts'
 import { amount, compactUsd, usd } from '../../../shared/finance/format.ts'
 import ApprovedTerminalChart, {
   type ApprovedChartOverlay,
@@ -250,7 +251,7 @@ export default function TerminalChartPanel({
   position,
   positions,
   orders,
-  instrument = 'BTC/USD perpetuo',
+  instrument = `${productPair(product)} perpetuo`,
 }: {
   /** Live 1m candles from the terminal stream (seconds). */
   candles: readonly ApprovedTerminalCandle[]
@@ -422,14 +423,14 @@ export default function TerminalChartPanel({
         <div>
           <dt>Volumen 24 h</dt>
           <dd>
-            {amount(stats?.volume_24h_base, 1)} BTC ·{' '}
+            {amount(stats?.volume_24h_base, 1)} {productBase(product)} ·{' '}
             {compactUsd(stats?.volume_24h_quote)}
           </dd>
         </div>
         <div>
           <dt>Interés abierto</dt>
           <dd>
-            {amount(stats?.open_interest, 1)} BTC
+            {amount(stats?.open_interest, 1)} {productBase(product)}
             {stats?.open_interest != null && stats.mark != null
               ? ` · ${compactUsd(stats.open_interest * stats.mark)}`
               : ''}
@@ -467,7 +468,7 @@ export default function TerminalChartPanel({
           <dt>Profundidad ±0,1 %</dt>
           <dd>
             {depth
-              ? `${amount(depth.bid, 1)} / ${amount(depth.ask, 1)} BTC`
+              ? `${amount(depth.bid, 1)} / ${amount(depth.ask, 1)} ${productBase(product)}`
               : '—'}
           </dd>
         </div>

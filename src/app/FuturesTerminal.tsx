@@ -1,4 +1,8 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
+import {
+  productBase,
+  productPair,
+} from '../features/trading-view/domain/product-label.ts'
 import { utcDateTime } from '../shared/finance/format.ts'
 import ApprovedTerminalLayout from '../features/trading-view/presentation/ApprovedTerminalLayout.tsx'
 import ApprovedTradingHeader from '../features/trading-view/presentation/ApprovedTradingHeader.tsx'
@@ -452,7 +456,15 @@ export default function FuturesTerminal({
                     : 'KRAKEN FUTURES · BTC/USD PERPETUO'}
               </p>
               <h2>
-                Bitcoin <span>/ Dólar</span>
+                {product && productBase(product) !== 'BTC' ? (
+                  <>
+                    {productBase(product)} <span>/ Dólar</span>
+                  </>
+                ) : (
+                  <>
+                    Bitcoin <span>/ Dólar</span>
+                  </>
+                )}
               </h2>
             </div>
           }
@@ -583,9 +595,9 @@ export default function FuturesTerminal({
               chart={
                 <section
                   className="demo-terminal__panel"
-                  aria-label="Gráfico BTC/USD"
+                  aria-label={`Gráfico ${productPair(product)}`}
                 >
-                  <h2>BTC/USD perpetuo</h2>
+                  <h2>{productPair(product)} perpetuo</h2>
                   <TerminalMarketChart
                     market={market}
                     mode={bootstrap.mode}
@@ -916,7 +928,7 @@ export default function FuturesTerminal({
                   </div>
                 </section>
                 <ApprovedPortfolioTables
-                  label="CARTERA PAPER · USD / BTC"
+                  label={`CARTERA PAPER · USD / ${productBase(product)}`}
                   title="Posiciones y operaciones"
                   ariaLabel="Posiciones paper"
                   open={{
@@ -924,7 +936,7 @@ export default function FuturesTerminal({
                     columns: [
                       'Estrategia',
                       'Dirección',
-                      'Cantidad BTC',
+                      `Cantidad ${productBase(product)}`,
                       'Entrada USD',
                       'Stop USD',
                       'Objetivo USD',
