@@ -9,6 +9,7 @@ from balancita_engine import futures_llm_decisions as llm
 from balancita_engine.futures_qwen_exit import (
     CONFIG_PATH,
     JUDGE_MS,
+    AskBudget,
     STRATEGY_ID,
     ExitLessons,
     QwenExitDecider,
@@ -47,6 +48,19 @@ def answers(*, close_when=lambda prompt: False):
 
 def decider(provider, cache=None):
     return QwenExitDecider(provider, QUESTION, {"temperatures": {}}, TEMPLATE, mode="raw_logprobs", cache=cache)
+
+
+class AskBudgetTests(unittest.TestCase):
+    def test_it_allows_the_limit_then_stops_asking_until_reset(self):
+        budget = AskBudget(2)
+        budget.spend()
+        budget.spend()
+        self.assertTrue(budget.exhausted)
+        with self.assertRaises(llm.ModelUnavailable):
+            budget.spend()
+        budget.reset()
+        budget.spend()
+        self.assertFalse(budget.exhausted)
 
 
 class QuestionTests(unittest.TestCase):
