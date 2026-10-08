@@ -26,6 +26,7 @@ from .futures_costs import DEFAULT_PRODUCT
 from .futures_llm_lessons import Lessons
 from .futures_llm_scores import HORIZON_MIN
 from .futures_spec_strategy import propose_spec
+from .futures_strategy_signals import consensus, verdict_signals
 from .futures_strategy_reliability import RELIABILITY_SCHEMA
 from .futures_verdicts import ONE_MINUTE_MS
 
@@ -146,6 +147,15 @@ class BlindQwen:
                                 lessons=None if self.lessons is None else self.lessons.text(bucket))
         except StateError:
             return
+        answer = self._answer(state, verdict, bucket)
+        if answer is None:
+            return
+        if self.lessons is not None:
+            self.lessons.record(bucket, answer["chosen"], state)
+        self.decisions.append(dict(answer, bucket_start=bucket, state_text=state))
+
+    def _answer(self, state, verdict, bucket):
+        """The decision for this STATE: cached, else asked to the model; ``None`` when the model failed."""
         prompt = build_prompt(state, self.question, self.template)
         key = hashlib.sha256("\n".join((self.model_ref, self.mode, str(self.question["version"]), prompt)).encode()).hexdigest()
         answer = self.cache.get(key)
@@ -155,11 +165,34 @@ class BlindQwen:
                 done = ask_model(self.provider, prompt, self.letters, self.question, temperature, self.template, self.mode)
             except ModelResponseError as error:
                 self.errors.append({"bucket_start": bucket, "kind": error.kind})
-                return
+                return None
             result = done["result"]
             answer = {"chosen": result["chosen"], "probabilities": result["probabilities"],
                       "confidence": result["confidence"], "source": done["source"]}
             self.cache.put(key, answer)
-        if self.lessons is not None:
-            self.lessons.record(bucket, answer["chosen"], state)
-        self.decisions.append(dict(answer, bucket_start=bucket, state_text=state))
+        return answer
+
+
+class _RuleProvider:
+    """Stands in for the model of ``ConsensusRule``: nothing is ever asked."""
+
+    def identity(self):
+        return {"model_ref": "consensus-rule"}
+
+
+class ConsensusRule(BlindQwen):
+    """The reference arm: answers with the strategies' mean ``strategy_consensus``, no model involved.
+
+    Same frames, same trigger, same book and same +1 rule as ``BlindQwen``, so ``futures_replay_compare`` can
+    set it against Qwen's arms. The answer is the action with the largest mean probability; ties go to
+    ``hold``, like a strategy that does not propose a trade.
+    """
+
+    def __init__(self, specs, question, **kwargs):
+        super().__init__(_RuleProvider(), specs, question, {}, {}, **kwargs)
+
+    def _answer(self, state, verdict, bucket):
+        mean = consensus(verdict_signals(verdict, {s["id"]: s for s in self.specs})) or {"hold": 1.0}
+        chosen = max(("hold", "buy", "sell"), key=lambda name: mean.get(name, 0.0))
+        return {"chosen": chosen, "probabilities": {n: mean.get(n, 0.0) for n in ("buy", "hold", "sell")},
+                "confidence": mean.get(chosen, 0.0), "source": "consensus"}
