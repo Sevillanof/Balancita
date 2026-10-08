@@ -1656,16 +1656,17 @@ export class FuturesMarketStore {
 
   latestTickerAsOf(
     receivedCutoff: number,
+    productId: string = FUTURES_PRODUCT,
   ): Record<string, unknown> | undefined {
     time(receivedCutoff, 'receivedCutoff')
     const row = this.db
       .prepare(
         `SELECT normalized_json, rowid AS received_sequence
          FROM paper_futures_market_events
-         WHERE feed='ticker' AND received_at<=?
+         WHERE feed='ticker' AND product_id=? AND received_at<=?
          ORDER BY received_at DESC,rowid DESC LIMIT 1`,
       )
-      .get(receivedCutoff) as StoredRow | undefined
+      .get(product(productId), receivedCutoff) as StoredRow | undefined
     return row
       ? (withReceivedSequence(row) as Record<string, unknown>)
       : undefined
@@ -1697,6 +1698,7 @@ export class FuturesMarketStore {
   tickerTradeEventsAfter(
     rowid: number,
     limit = 500,
+    productId: string = FUTURES_PRODUCT,
   ): Array<{ rowid: number; event: Record<string, unknown> }> {
     time(rowid, 'rowid')
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 5_000)
@@ -1705,10 +1707,13 @@ export class FuturesMarketStore {
       this.db
         .prepare(
           `SELECT rowid AS id, normalized_json FROM paper_futures_market_events
-           WHERE rowid>? AND feed IN ('ticker','trade')
+           WHERE rowid>? AND feed IN ('ticker','trade') AND product_id=?
            ORDER BY rowid LIMIT ?`,
         )
-        .all(rowid, limit) as Array<{ id: number; normalized_json: string }>
+        .all(rowid, product(productId), limit) as Array<{
+        id: number
+        normalized_json: string
+      }>
     ).map((row) => ({
       rowid: Number(row.id),
       event: JSON.parse(row.normalized_json) as Record<string, unknown>,
