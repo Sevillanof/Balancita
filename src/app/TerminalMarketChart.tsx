@@ -151,7 +151,7 @@ export default function TerminalMarketChart({
     ) ||
     candles.length === 0
   )
-    return <p>El snapshot no contiene velas BTC/USD verificables.</p>
+    return <p>El snapshot no contiene velas verificables.</p>
   return (
     <>
       <p>
