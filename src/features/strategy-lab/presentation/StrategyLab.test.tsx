@@ -70,7 +70,26 @@ const qwenOn: QwenScores = {
           net_bp: 8,
         },
       ],
-      trades: [],
+      trades: [
+        {
+          side: 'SHORT',
+          entry_time_ms: 1_700_000_000_000,
+          entry_price: '60000',
+          exit_time_ms: 1_700_001_800_000,
+          exit_price: '59900',
+          exit_reason: 'time_stop',
+          net_bp: 12.5,
+          pnl_usd: 0.125,
+        },
+      ],
+      open_position: {
+        side: 'LONG',
+        entry_time_ms: 1_700_003_000_000,
+        entry_price: '60100',
+        mark_price: '60200',
+        net_bp: -3,
+        pnl_usd: -0.03,
+      },
     },
   ],
 }
@@ -247,6 +266,15 @@ describe('StrategyLab', () => {
     })
     expect(within(side).getByText('Mantener')).toBeInTheDocument()
     expect(within(side).getByText('+5')).toBeInTheDocument()
+    const open = within(side).getByText('Abierta').closest('li')!
+    expect(open).toHaveTextContent('entrada 60.100,00')
+    expect(open).toHaveTextContent('−0,03 %')
+    const closed = within(side)
+      .getByText(/cierre 59\.900,00/)
+      .closest('li')!
+    expect(closed).toHaveTextContent('Venta')
+    expect(closed).toHaveTextContent('+0,13 %')
+    expect(within(side).queryByText('pendiente')).not.toBeInTheDocument()
   })
 
   it('explains that Qwen has no decisions yet', async () => {

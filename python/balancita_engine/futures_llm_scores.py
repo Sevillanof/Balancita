@@ -115,6 +115,11 @@ def score_decisions(decisions, verdicts, *, book=BOOK_CONFIG, horizon_min=HORIZO
 
 def simulate_book(decisions, verdicts, *, book=BOOK_CONFIG, horizon_min=HORIZON_MIN):
     """Closed trades of Qwen's decisions in the shared simulator book (a strategy's fills, costs and sizing)."""
+    qwen = _run_book(decisions, verdicts, book, horizon_min)
+    return add_equity(qwen.trades, book["initial_cash_usd"]), qwen.skipped
+
+
+def _run_book(decisions, verdicts, book, horizon_min):
     chosen = {d["bucket_start"]: d["chosen"] for d in decisions}
     qwen = DecisionBook(chosen, horizon_min=horizon_min, stop_atr=STOP_ATR, target_ratio=TARGET_STOP_RATIO,
                         product_id=book.get("product_id", DEFAULT_PRODUCT),
@@ -123,7 +128,7 @@ def simulate_book(decisions, verdicts, *, book=BOOK_CONFIG, horizon_min=HORIZON_
         features = verdict.get("features") or {}
         qwen.on_frame(verdict["bucket_start_ms"], features.get("1m") or {}, features.get("1m_previous"),
                       features.get("5m"), verdict.get("regime", "unknown"))
-    return add_equity(qwen.trades, book["initial_cash_usd"]), qwen.skipped
+    return qwen
 
 
 def _points(rows):
@@ -156,7 +161,9 @@ def always_hold_baseline(rows, product_id=DEFAULT_PRODUCT):
 def report(decisions, verdicts, *, book=BOOK_CONFIG, horizon_min=HORIZON_MIN):
     """Points per decision (overall and per option) and the trading book summary."""
     rows = score_decisions(decisions, verdicts, book=book, horizon_min=horizon_min)
-    trades, skipped = simulate_book(decisions, verdicts, book=book, horizon_min=horizon_min)
+    qwen = _run_book(decisions, verdicts, book, horizon_min)
+    trades, skipped = add_equity(qwen.trades, book["initial_cash_usd"]), qwen.skipped
+    last_close = next((c for c in (_close(v) for v in reversed(verdicts)) if c is not None), None)
     initial_cash = float(book["initial_cash_usd"])
     return {
         "horizon_min": horizon_min,
@@ -168,6 +175,7 @@ def report(decisions, verdicts, *, book=BOOK_CONFIG, horizon_min=HORIZON_MIN):
         "skipped": {"count": len(skipped), "first": skipped[:20]},
         "rows": rows,
         "trades": trades,
+        "open_position": qwen.open_position(last_close),
     }
 
 

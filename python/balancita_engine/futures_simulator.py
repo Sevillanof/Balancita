@@ -338,6 +338,24 @@ class Book:
                                                   entry * quantity, long)
         return exit_price, gross - fees - funding, funding, funding_complete
 
+    def open_position(self, mark_price=None):
+        """The open position, valued net of costs at ``mark_price`` as if closed now, or ``None`` when flat."""
+        position = self.position
+        if position is None:
+            return None
+        view = {
+            "strategy_id": position["strategy_id"], "side": position["side"],
+            "entry_bucket_ms": position["opened_bucket"], "entry_time_ms": position["opened_at"],
+            "entry_price": str(position["entry"]), "stop_price": str(position["stop"]),
+            "target_price": position["target_text"], "notional_usd": str(self.notional),
+            "mark_price": None, "net_bp": None, "pnl_usd": None,
+        }
+        if mark_price is not None and self.bucket is not None:
+            _, pnl, _, _ = self._settle(self.bucket, D(mark_price), "mark")
+            view.update(mark_price=str(mark_price), net_bp=float(round(pnl / self.notional * 10_000, 4)),
+                        pnl_usd=float(round(pnl, 4)))
+        return view
+
     def _finish(self, bucket, exit_price, reason):
         """Closes the open position at ``exit_price`` (before the exit execution cost) and books the trade."""
         position = self.position
