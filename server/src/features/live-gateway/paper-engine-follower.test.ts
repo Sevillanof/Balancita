@@ -531,4 +531,49 @@ describe('paper engine follower', () => {
     expect(fields.account.cash_usd).toBe('29999.0098911')
     expect(fields.account.fees_usd).toBe('0.9901089')
   })
+
+  it('a product view only follows the books and verdicts of its product', () => {
+    const dir = scratch()
+    const account = new AccountDb(dir, closers)
+    const verdicts = new VerdictsDb(dir, closers)
+    account.add('position_opened', NOW + 150, {
+      order_id: 'o1',
+      book: 'c25-pullback-perp-v1:PF_XBTUSD',
+      account: OPEN_ACCOUNT,
+    })
+    account.add('position_opened', NOW + 160, {
+      order_id: 'o2',
+      book: 'c26-reversion-perp-v1:PF_ETHUSD',
+      account: {
+        ...OPEN_ACCOUNT,
+        position: { ...LONG_POSITION, strategy_id: 'c26-reversion-perp-v1' },
+      },
+    })
+    verdicts.add(NOW, 'LONG', {}, 'PF_XBTUSD')
+    verdicts.add(NOW + 60_000, 'WAIT', {}, 'PF_ETHUSD')
+    const view = (productId?: string) => {
+      const instance = new PaperEngineFollower({
+        accountDbPath: account.path,
+        verdictsDbPath: verdicts.path,
+        productId,
+        clock: () => NOW + 1_000,
+        markPrice: () => '100011',
+      })
+      closers.push(() => instance.close())
+      return instance.snapshotFields() as any
+    }
+    const btc = view()
+    const eth = view('PF_ETHUSD')
+    expect(btc.positions.map((p: any) => p.strategy_id)).toEqual([
+      'c25-pullback-perp-v1',
+    ])
+    expect(eth.positions.map((p: any) => p.strategy_id)).toEqual([
+      'c26-reversion-perp-v1',
+    ])
+    expect(btc.analyses).toHaveLength(1)
+    expect(eth.analyses).toHaveLength(1)
+    expect(eth.analyses[0].action).toBe('WAIT')
+    expect(eth.quantity_unit).toBe('ETH')
+    expect(btc.quantity_unit).toBe('BTC')
+  })
 })

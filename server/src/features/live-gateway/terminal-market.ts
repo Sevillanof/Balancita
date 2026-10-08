@@ -62,21 +62,25 @@ export function mergeClosedHistory(
     .map(([, row]) => row)
 }
 
-/** Closed 1m PF_XBTUSD history of a store: official candles merged with observed ones. */
+/** Closed 1m history of one product of a store: official candles merged with observed ones. */
 export function closedHistoryRows(
   store: FuturesMarketStore,
+  productId: string = FUTURES_PRODUCT,
 ): Record<string, unknown>[] {
   return mergeClosedHistory(
     store.officialCandlesAsOf(
-      FUTURES_PRODUCT,
+      productId,
       HISTORY_INTERVAL_MS,
       Number.MAX_SAFE_INTEGER,
       HISTORY_LIMIT,
     ),
-    store.closedCandlesTail(HISTORY_INTERVAL_MS, HISTORY_LIMIT) as Record<
-      string,
-      unknown
-    >[],
+    // Observed candles are built from the BTC trade feed only.
+    productId === FUTURES_PRODUCT
+      ? (store.closedCandlesTail(HISTORY_INTERVAL_MS, HISTORY_LIMIT) as Record<
+          string,
+          unknown
+        >[])
+      : [],
   )
 }
 
