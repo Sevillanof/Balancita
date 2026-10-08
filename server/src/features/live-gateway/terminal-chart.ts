@@ -158,14 +158,10 @@ function officialChartCandles(
   store: FuturesMarketStore,
   intervalMs: number,
   limit: number,
+  productId: string,
 ): ChartCandle[] {
   return store
-    .officialCandlesAsOf(
-      FUTURES_PRODUCT,
-      intervalMs,
-      Number.MAX_SAFE_INTEGER,
-      limit,
-    )
+    .officialCandlesAsOf(productId, intervalMs, Number.MAX_SAFE_INTEGER, limit)
     .map((candle) => ({
       time_ms: candle.bucketStart,
       open: candle.open,
@@ -187,9 +183,15 @@ export function chartCandles(
   intervalMs: number,
   minuteCandles: readonly ChartCandle[],
   now: number,
+  productId: string = FUTURES_PRODUCT,
 ): ChartCandle[] {
   if (intervalMs === MINUTE) return minuteCandles.slice(-CANDLES_SERVED)
-  const official = officialChartCandles(store, intervalMs, CANDLES_SERVED)
+  const official = officialChartCandles(
+    store,
+    intervalMs,
+    CANDLES_SERVED,
+    productId,
+  )
   let cursor =
     official.length > 0 ? official.at(-1)!.time_ms + intervalMs : undefined
   const finer: ChartCandle[] = []
@@ -198,7 +200,7 @@ export function chartCandles(
     if (cursor === undefined) break
     const wanted = Math.min(5_000, Math.ceil((now - cursor) / step) + 2)
     if (wanted < 1) break
-    const pieces = officialChartCandles(store, step, wanted).filter(
+    const pieces = officialChartCandles(store, step, wanted, productId).filter(
       (candle) => candle.time_ms >= cursor!,
     )
     // Only a contiguous run from the cursor is safe to fold in.
@@ -234,10 +236,11 @@ export function chartFlow(
   store: FuturesMarketStore,
   intervalMs: number,
   fromMs: number,
+  productId: string = FUTURES_PRODUCT,
 ): ChartFlow[] {
   const source = intervalMs <= 900_000 ? MINUTE : HOUR
   const read = (metric: string) =>
-    store.analyticsSince(FUTURES_PRODUCT, metric, source, fromMs, 5_000)
+    store.analyticsSince(productId, metric, source, fromMs, 5_000)
   const buckets = new Map<number, ChartFlow>()
   const at = (time: number): ChartFlow => {
     const bucket = Math.floor(time / intervalMs) * intervalMs
@@ -294,9 +297,10 @@ export function chartFlow(
 export function chartDepth(
   store: FuturesMarketStore,
   now: number,
+  productId: string = FUTURES_PRODUCT,
 ): { time_ms: number; bid: Row; ask: Row } | null {
   const point = store
-    .analyticsSince(FUTURES_PRODUCT, 'orderbook', MINUTE, now - HOUR, 5_000)
+    .analyticsSince(productId, 'orderbook', MINUTE, now - HOUR, 5_000)
     .at(-1)
   if (!point) return null
   const side = (name: 'bid' | 'ask') =>

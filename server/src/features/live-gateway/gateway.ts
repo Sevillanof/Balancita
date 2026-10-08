@@ -10,10 +10,10 @@ import { PaperEngineFollower } from './paper-engine-follower.ts'
 import { qwenScoresOff, type QwenScores } from './qwen-scores.ts'
 import { CHART_INTERVALS_MS } from './terminal-chart.ts'
 import type { SystemUsage } from './system-usage.ts'
+import { loadPinnedProducts } from '../kraken-futures/futures-products.ts'
 
 /** Synthetic stream id: the gateway has no engine run, only a market view. */
 export const LIVE_RUN_ID = 'live-market-view'
-const INSTRUMENT_ID = 'kraken-futures:PF_XBTUSD'
 const PRODUCT_ID = 'PF_XBTUSD'
 const STREAM_PATH = '/api/terminal/stream'
 const MAX_MESSAGE_BYTES = 64 * 1024
@@ -37,6 +37,8 @@ export interface LiveGatewayOptions {
   readonly processHealthPath?: string
   /** CPU, data size, Qwen and Kronos usage for `/api/system`. Absent: null report. */
   readonly systemUsage?: SystemUsage
+  /** Pinned products the Terminal may pick (default: the pinned list). */
+  readonly products?: readonly string[]
   readonly allowedOrigins?: readonly string[]
   readonly staleAfterMs?: number
   readonly pollMs?: number
@@ -71,23 +73,17 @@ interface Session {
  * paper execution D's account DB and C's verdicts DB. It starts no collector
  * and no engine and never writes. Terminal events live in memory only; resume
  * past the ring or across a restart falls back to a snapshot.
+ *
+ * Each pinned product has its own view (market follower, engine follower,
+ * sequence, ring and sessions), created on first use: the Terminal picks it
+ * with `?product=` (default PF_XBTUSD) on every request and on the stream.
  */
 export async function buildLiveGateway(
   options: LiveGatewayOptions,
 ): Promise<FastifyInstance> {
   const clock = options.clock ?? Date.now
-  const follower = new LiveMarketFollower({
-    dbPath: options.marketDbPath,
-    clock,
-    staleAfterMs: options.staleAfterMs,
-  })
-  const engine = new PaperEngineFollower({
-    accountDbPath: options.accountDbPath,
-    verdictsDbPath: options.verdictsDbPath,
-    unavailableReason: options.engineUnavailableReason,
-    clock,
-    markPrice: () => follower.markPrice(),
-  })
+  const products =
+    options.products ?? loadPinnedProducts().map((p) => p.productId)
   const allowedOrigins = new Set(
     options.allowedOrigins ?? [
       'http://localhost',
@@ -96,41 +92,96 @@ export async function buildLiveGateway(
     ],
   )
   const app = Fastify({ logger: false })
-  const streamId = randomUUID()
-  // Sequence base is the start time in ms: a restarted gateway always issues
-  // numbers above anything a previous process could have reached (events are
-  // far slower than 1000/s), so stale client cursors resolve to a resync.
-  let seq = clock()
-  const ring: Envelope[] = []
-  const sessions = new Set<Session>()
 
-  const envelope = (type: string, data: Row, at = clock()): Envelope => ({
+  /** Everything the gateway keeps for one product. */
+  interface View {
+    readonly productId: string
+    readonly instrumentId: string
+    readonly follower: LiveMarketFollower
+    readonly engine: PaperEngineFollower
+    readonly streamId: string
+    seq: number
+    readonly ring: Envelope[]
+    readonly sessions: Set<Session>
+  }
+
+  const views = new Map<string, View>()
+  const viewOf = (productId: string): View | undefined => {
+    const existing = views.get(productId)
+    if (existing) return existing
+    if (!products.includes(productId)) return undefined
+    const follower = new LiveMarketFollower({
+      dbPath: options.marketDbPath,
+      productId,
+      clock,
+      staleAfterMs: options.staleAfterMs,
+    })
+    const view: View = {
+      productId,
+      instrumentId: `kraken-futures:${productId}`,
+      follower,
+      engine: new PaperEngineFollower({
+        accountDbPath: options.accountDbPath,
+        verdictsDbPath: options.verdictsDbPath,
+        unavailableReason: options.engineUnavailableReason,
+        productId,
+        clock,
+        markPrice: () => follower.markPrice(),
+      }),
+      streamId: randomUUID(),
+      // Sequence base is the start time in ms: a restarted gateway always
+      // issues numbers above anything a previous process could have reached
+      // (events are far slower than 1000/s), so stale client cursors resolve
+      // to a resync.
+      seq: clock(),
+      ring: [],
+      sessions: new Set(),
+    }
+    views.set(productId, view)
+    return view
+  }
+  const defaultView = viewOf(PRODUCT_ID) as View
+  /** The product a request asks for; `null` when it is not a pinned one. */
+  const requested = (value: unknown): View | null =>
+    typeof value === 'string' && value.length > 0
+      ? (viewOf(value) ?? null)
+      : defaultView
+
+  const envelope = (
+    view: View,
+    type: string,
+    data: Row,
+    at = clock(),
+  ): Envelope => ({
     schema_version: 1,
     event_id: randomUUID(),
-    stream_id: streamId,
+    stream_id: view.streamId,
     run_id: LIVE_RUN_ID,
-    seq,
+    seq: view.seq,
     type,
-    instrument_id: INSTRUMENT_ID,
+    instrument_id: view.instrumentId,
     event_time: at,
     published_at: at,
     data,
   })
 
-  const send = (session: Session, message: Envelope): void => {
+  const send = (view: View, session: Session, message: Envelope): void => {
     if (session.closed || session.socket.readyState !== WebSocket.OPEN) return
     if (session.socket.bufferedAmount > MAX_BUFFERED_BYTES) {
-      closeForResync(session, 'backpressure')
+      closeForResync(view, session, 'backpressure')
       return
     }
     session.socket.send(JSON.stringify(message), { compress: false })
   }
 
-  function closeForResync(session: Session, reason: string): void {
+  function closeForResync(view: View, session: Session, reason: string): void {
     if (session.closed) return
-    send0(session, envelope('resync.required', { reason, last_seq: seq }))
+    send0(
+      session,
+      envelope(view, 'resync.required', { reason, last_seq: view.seq }),
+    )
     session.closed = true
-    sessions.delete(session)
+    view.sessions.delete(session)
     session.socket.close(1013, `resync:${reason}`)
   }
 
@@ -139,93 +190,109 @@ export async function buildLiveGateway(
       session.socket.send(JSON.stringify(message), { compress: false })
   }
 
-  const snapshot = (): Envelope =>
-    envelope('snapshot', {
-      watermark: seq,
+  const snapshot = (view: View): Envelope =>
+    envelope(view, 'snapshot', {
+      watermark: view.seq,
       state: {
         run_id: LIVE_RUN_ID,
         state_version: 0,
-        engine: engine.engineStatus(),
-        market: { ...follower.marketView(), ...follower.priceFields() },
-        ...engine.snapshotFields(),
+        engine: view.engine.engineStatus(),
+        market: {
+          ...view.follower.marketView(),
+          ...view.follower.priceFields(),
+        },
+        ...view.engine.snapshotFields(),
       },
-      market: follower.terminalMarket(),
+      market: view.follower.terminalMarket(),
     })
 
-  const publish = (data: Row, type = 'market.updated'): void => {
-    seq += 1
-    const event = envelope(type, data)
-    ring.push(event)
-    if (ring.length > RING_SIZE) ring.splice(0, ring.length - RING_SIZE)
-    for (const session of [...sessions])
-      if (session.subscribed) send(session, event)
+  const publish = (view: View, data: Row, type = 'market.updated'): void => {
+    view.seq += 1
+    const event = envelope(view, type, data)
+    view.ring.push(event)
+    if (view.ring.length > RING_SIZE)
+      view.ring.splice(0, view.ring.length - RING_SIZE)
+    for (const session of [...view.sessions])
+      if (session.subscribed) send(view, session, event)
   }
 
   // The engine view was rebuilt (account DB replaced or first seen after a
   // snapshot was served): every client resyncs from a fresh snapshot.
-  const resyncAll = (reason: string): void => {
-    for (const session of [...sessions])
-      if (session.subscribed) closeForResync(session, reason)
-    ring.length = 0
-    seq += 1
+  const resyncAll = (view: View, reason: string): void => {
+    for (const session of [...view.sessions])
+      if (session.subscribed) closeForResync(view, session, reason)
+    view.ring.length = 0
+    view.seq += 1
   }
 
   const poll = (): void => {
-    try {
-      for (const data of follower.poll()) publish(data)
-    } catch (error) {
-      console.error('[live-gateway] poll failed', error)
-    }
-    // After the market poll, so equity is marked to the newest price.
-    try {
-      for (const event of engine.poll())
-        if (event.type === 'resync.required')
-          resyncAll(String(event.data.reason))
-        else publish(event.data, event.type)
-    } catch (error) {
-      console.error('[live-gateway] engine poll failed', error)
+    for (const view of views.values()) {
+      try {
+        for (const data of view.follower.poll()) publish(view, data)
+      } catch (error) {
+        console.error('[live-gateway] poll failed', error)
+      }
+      // After the market poll, so equity is marked to the newest price.
+      try {
+        for (const event of view.engine.poll())
+          if (event.type === 'resync.required')
+            resyncAll(view, String(event.data.reason))
+          else publish(view, event.data, event.type)
+      } catch (error) {
+        console.error('[live-gateway] engine poll failed', error)
+      }
     }
   }
   const pollTimer = setInterval(poll, options.pollMs ?? 250)
   const heartbeatTimer = setInterval(() => {
-    for (const session of sessions) {
-      if (!session.subscribed || session.socket.readyState !== WebSocket.OPEN)
-        continue
-      send(session, envelope('heartbeat', { at: clock() }))
-      session.socket.ping()
-    }
+    for (const view of views.values())
+      for (const session of view.sessions) {
+        if (!session.subscribed || session.socket.readyState !== WebSocket.OPEN)
+          continue
+        send(view, session, envelope(view, 'heartbeat', { at: clock() }))
+        session.socket.ping()
+      }
   }, options.heartbeatMs ?? 15_000)
 
-  app.get('/api/terminal/bootstrap', () => {
-    const market = follower.marketView()
-    const hash = follower.metadataHash()
-    return {
-      schema_version: 1,
-      mode: options.mode ?? 'paper_live',
-      source: 'kraken-public-live-stream.v1',
-      active_run_id: LIVE_RUN_ID,
-      instrument_id: INSTRUMENT_ID,
-      product_id: PRODUCT_ID,
-      quote_currency: 'USD',
-      ...(hash ? { metadata_hash: hash } : {}),
-      terminal_market: follower.terminalMarket(),
-      market,
-      engine: engine.engineStatus(),
-    }
-  })
-  app.get<{ Querystring: { interval_ms?: string } }>(
+  const unknownProduct = { error: { code: 'unknown_product' } }
+  app.get<{ Querystring: { product?: string } }>(
+    '/api/terminal/bootstrap',
+    (request, reply) => {
+      const view = requested(request.query.product)
+      if (!view) return reply.code(400).send(unknownProduct)
+      const market = view.follower.marketView()
+      const hash = view.follower.metadataHash()
+      return {
+        schema_version: 1,
+        mode: options.mode ?? 'paper_live',
+        source: 'kraken-public-live-stream.v1',
+        active_run_id: LIVE_RUN_ID,
+        instrument_id: view.instrumentId,
+        product_id: view.productId,
+        products,
+        quote_currency: 'USD',
+        ...(hash ? { metadata_hash: hash } : {}),
+        terminal_market: view.follower.terminalMarket(),
+        market,
+        engine: view.engine.engineStatus(),
+      }
+    },
+  )
+  app.get<{ Querystring: { interval_ms?: string; product?: string } }>(
     '/api/terminal/chart',
     async (request, reply) => {
+      const view = requested(request.query.product)
+      if (!view) return reply.code(400).send(unknownProduct)
       const interval = Number(request.query.interval_ms ?? 60_000)
       if (!(CHART_INTERVALS_MS as readonly number[]).includes(interval))
         return reply.code(400).send({ error: { code: 'unsupported_interval' } })
-      return follower.terminalChart(interval)
+      return view.follower.terminalChart(interval)
     },
   )
   app.get('/api/health', () => ({
     process: 'live-gateway',
-    capture: follower.status(),
-    engine: engine.engineStatus(),
+    capture: defaultView.follower.status(),
+    engine: defaultView.engine.engineStatus(),
     processes: readProcessHealth(options.processHealthPath),
   }))
   app.get('/api/system', () => options.systemUsage?.report() ?? null)
@@ -256,13 +323,13 @@ export async function buildLiveGateway(
     socket: Socket,
     head: Buffer,
   ): void => {
-    let pathname: string
+    let url: URL
     try {
-      pathname = new URL(request.url ?? '/', 'http://localhost').pathname
+      url = new URL(request.url ?? '/', 'http://localhost')
     } catch {
       return reject(socket, 400, 'Bad Request')
     }
-    if (pathname !== STREAM_PATH) return
+    if (url.pathname !== STREAM_PATH) return
     if (closing) return reject(socket, 503, 'Service Unavailable')
     if (wss.clients.size >= MAX_CONNECTIONS)
       return reject(socket, 429, 'Too Many Requests')
@@ -271,114 +338,131 @@ export async function buildLiveGateway(
     const origin = request.headers.origin
     if (typeof origin !== 'string' || !allowedOrigins.has(origin))
       return reject(socket, 403, 'Forbidden')
+    const view = requested(url.searchParams.get('product') ?? undefined)
+    if (!view) return reject(socket, 404, 'Unknown Product')
     socket.on('error', () => undefined)
     wss.handleUpgrade(request, socket, head, (websocket) =>
-      wss.emit('connection', websocket, request),
+      wss.emit('connection', websocket, request, view),
     )
   }
   app.server.on('upgrade', onUpgrade)
 
-  const subscribe = (session: Session): void => {
+  const subscribe = (view: View, session: Session): void => {
     session.subscribed = true
-    send(session, snapshot())
+    send(view, session, snapshot(view))
   }
-  const control = (session: Session, type: string, data: Row): void =>
-    send0(session, envelope(type, data))
+  const control = (
+    view: View,
+    session: Session,
+    type: string,
+    data: Row,
+  ): void => send0(session, envelope(view, type, data))
 
-  const resume = (session: Session, lastSeq: number): void => {
-    if (lastSeq > seq) {
-      control(session, 'resync.required', {
+  const resume = (view: View, session: Session, lastSeq: number): void => {
+    if (lastSeq > view.seq) {
+      control(view, session, 'resync.required', {
         reason: 'future_cursor',
         last_seq: lastSeq,
       })
-      subscribe(session)
+      subscribe(view, session)
       return
     }
-    const oldest = ring[0]
-    if (lastSeq < seq && (!oldest || oldest.seq > lastSeq + 1)) {
-      control(session, 'resync.required', {
+    const oldest = view.ring[0]
+    if (lastSeq < view.seq && (!oldest || oldest.seq > lastSeq + 1)) {
+      control(view, session, 'resync.required', {
         reason: 'cursor_expired',
         last_seq: lastSeq,
       })
-      subscribe(session)
+      subscribe(view, session)
       return
     }
     session.subscribed = true
-    for (const event of ring) if (event.seq > lastSeq) send(session, event)
+    for (const event of view.ring)
+      if (event.seq > lastSeq) send(view, session, event)
   }
 
-  wss.on('connection', (socket) => {
-    const session: Session = { socket, subscribed: false, closed: false }
-    sessions.add(session)
-    socket.on('message', (raw) => {
-      let parsed: unknown
-      try {
-        parsed = JSON.parse(
-          (Array.isArray(raw)
-            ? Buffer.concat(raw)
-            : Buffer.from(raw as Buffer)
-          ).toString('utf8'),
+  wss.on(
+    'connection',
+    (socket: WebSocket, _request: IncomingMessage, view: View) => {
+      const session: Session = { socket, subscribed: false, closed: false }
+      view.sessions.add(session)
+      socket.on('message', (raw) => {
+        let parsed: unknown
+        try {
+          parsed = JSON.parse(
+            (Array.isArray(raw)
+              ? Buffer.concat(raw)
+              : Buffer.from(raw as Buffer)
+            ).toString('utf8'),
+          )
+        } catch {
+          control(view, session, 'protocol.error', { code: 'invalid_message' })
+          return
+        }
+        const message = parsed as Row
+        if (
+          typeof message !== 'object' ||
+          message === null ||
+          message.schema_version !== 1 ||
+          typeof message.type !== 'string'
+        ) {
+          control(view, session, 'protocol.error', { code: 'invalid_message' })
+          return
+        }
+        if (message.run_id !== LIVE_RUN_ID) {
+          control(view, session, 'protocol.error', { code: 'run_not_found' })
+          return
+        }
+        if (message.type === 'subscribe') subscribe(view, session)
+        else if (
+          message.type === 'resume' &&
+          Number.isSafeInteger(message.last_seq) &&
+          (message.last_seq as number) >= 0
         )
-      } catch {
-        control(session, 'protocol.error', { code: 'invalid_message' })
-        return
+          resume(view, session, message.last_seq as number)
+        else if (message.type === 'history.request')
+          control(view, session, 'history.page', {
+            events: [],
+            before_seq: message.before_seq ?? Number.MAX_SAFE_INTEGER,
+            next_before_seq: null,
+          })
+        else if (message.type === 'paper.command')
+          control(view, session, 'protocol.error', {
+            code: view.engine.enabled ? 'commands_unavailable' : 'engine_off',
+          })
+        else if (message.type === 'analysis.detail.request')
+          control(view, session, 'protocol.error', {
+            code: 'analysis_not_found',
+          })
+        else
+          control(view, session, 'protocol.error', { code: 'invalid_message' })
+      })
+      const drop = (): void => {
+        session.closed = true
+        view.sessions.delete(session)
       }
-      const message = parsed as Row
-      if (
-        typeof message !== 'object' ||
-        message === null ||
-        message.schema_version !== 1 ||
-        typeof message.type !== 'string'
-      ) {
-        control(session, 'protocol.error', { code: 'invalid_message' })
-        return
-      }
-      if (message.run_id !== LIVE_RUN_ID) {
-        control(session, 'protocol.error', { code: 'run_not_found' })
-        return
-      }
-      if (message.type === 'subscribe') subscribe(session)
-      else if (
-        message.type === 'resume' &&
-        Number.isSafeInteger(message.last_seq) &&
-        (message.last_seq as number) >= 0
-      )
-        resume(session, message.last_seq as number)
-      else if (message.type === 'history.request')
-        control(session, 'history.page', {
-          events: [],
-          before_seq: message.before_seq ?? Number.MAX_SAFE_INTEGER,
-          next_before_seq: null,
-        })
-      else if (message.type === 'paper.command')
-        control(session, 'protocol.error', {
-          code: engine.enabled ? 'commands_unavailable' : 'engine_off',
-        })
-      else if (message.type === 'analysis.detail.request')
-        control(session, 'protocol.error', { code: 'analysis_not_found' })
-      else control(session, 'protocol.error', { code: 'invalid_message' })
-    })
-    const drop = (): void => {
-      session.closed = true
-      sessions.delete(session)
-    }
-    socket.on('error', drop)
-    socket.on('close', drop)
-  })
+      socket.on('error', drop)
+      socket.on('close', drop)
+    },
+  )
 
   app.addHook('onClose', async () => {
     closing = true
     clearInterval(pollTimer)
     clearInterval(heartbeatTimer)
     app.server.removeListener('upgrade', onUpgrade)
-    for (const session of sessions) {
-      session.closed = true
-      session.socket.terminate()
+    for (const view of views.values()) {
+      for (const session of view.sessions) {
+        session.closed = true
+        session.socket.terminate()
+      }
+      view.sessions.clear()
     }
-    sessions.clear()
     await new Promise<void>((resolve) => wss.close(() => resolve()))
-    follower.close()
-    engine.close()
+    for (const view of views.values()) {
+      view.follower.close()
+      view.engine.close()
+    }
   })
   return app
 }
