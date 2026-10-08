@@ -437,7 +437,7 @@ const CAPTURE_ARGS = ['--experimental-strip-types', 'src/app/capture-main.ts']
 
 /**
  * Pure description of the `pnpm run dev` children:
- * - mock: seeded market replayed by C and D, served by the read-only gateway on 8788,
+ * - (the MOCK source is no longer started: the terminal always reads `live`),
  * - capture: Kraken public WS -> live market DB (sole writer, no HTTP/engine),
  * - live: read-only gateway on 8789 tailing that DB plus the paper account and
  *   verdicts DBs (no collector, no engine),
@@ -486,28 +486,6 @@ export function devChildSpecs({
       args: [`${root}/node_modules/vite/bin/vite.js`],
       env: devEnvironment(env),
     },
-    {
-      // Seeded market replayed by the real C and D, served by the same read-only gateway.
-      name: 'mock',
-      cwd: serverCwd,
-      args: nodeArgs(MOCK_ARGS),
-      env: {
-        ...serverEnvironment(env),
-        PORT: String(DEV_PORTS.mock),
-        MOCK_DATA_DIR: './data/dev-mock',
-        ...(python?.command
-          ? {
-              BALANCITA_PYTHON_COMMAND: JSON.stringify([
-                python.command,
-                ...python.prefixArgs,
-              ]),
-              PYTHONPATH: [`${root}/python`, env.PYTHONPATH]
-                .filter(Boolean)
-                .join(delimiter),
-            }
-          : {}),
-      },
-    },
   ]
   const marketDb = liveDb('futures-market.sqlite')
   const verdictsDb = liveDb('futures-verdicts.sqlite')
@@ -554,6 +532,12 @@ export function devChildSpecs({
         DEV_HEALTH_FILE: `${serverCwd}/data/dev-live/dev-health.json`,
         // Qwen's hits/misses/returns, computed read-only by Python on request.
         FUTURES_DECISIONS_DB_PATH: decisionsDb,
+        // `/api/system`: size of the saved data, C31's summary and the Kronos run.
+        DEV_DATA_DIR: `${serverCwd}/data/dev-live`,
+        QWEN_EXIT_SUMMARY_PATH: `${serverCwd}/data/dev-live/qwen-exit/qwen-exit-summary.json`,
+        KRONOS_SUMMARY_PATH:
+          (env.KRONOS_SUMMARY_PATH ?? '').trim() ||
+          `${serverCwd}/data/kronos/kronos-summary.json`,
         ...(python?.command
           ? {
               BALANCITA_PYTHON_COMMAND: JSON.stringify([

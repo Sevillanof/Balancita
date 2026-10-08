@@ -1,3 +1,4 @@
+import { createSystemUsage } from '../features/live-gateway/system-usage.ts'
 import { buildLiveGateway } from '../features/live-gateway/gateway.ts'
 import {
   createQwenScores,
@@ -50,6 +51,13 @@ async function main(): Promise<void> {
     ),
     qwenScores: qwenScoresFrom(process.env),
     processHealthPath: process.env.DEV_HEALTH_FILE || undefined,
+    systemUsage: createSystemUsage({
+      healthPath: process.env.DEV_HEALTH_FILE || undefined,
+      dataDir: process.env.DEV_DATA_DIR || undefined,
+      decisionsDbPath: process.env.FUTURES_DECISIONS_DB_PATH || undefined,
+      qwenExitSummaryPath: process.env.QWEN_EXIT_SUMMARY_PATH || undefined,
+      kronosSummaryPath: process.env.KRONOS_SUMMARY_PATH || undefined,
+    }),
     staleAfterMs: config.marketStaleAfterMs,
     allowedOrigins: [
       config.corsOrigin,

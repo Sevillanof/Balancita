@@ -27,12 +27,11 @@ describe('devChildSpecs', () => {
   })
   const byName = Object.fromEntries(specs.map((spec) => [spec.name, spec]))
 
-  it('starts vite, mock API, live capture, live gateway, verdict service, paper execution, forecast scorer, strategy registry and news', () => {
+  it('starts vite, live capture, live gateway, verdict service, paper execution, forecast scorer, strategy registry and news', () => {
     assert.deepEqual(
       specs.map((spec) => spec.name),
       [
         'vite',
-        'mock',
         'capture',
         'live',
         'verdict',
@@ -45,13 +44,8 @@ describe('devChildSpecs', () => {
     )
   })
 
-  it('runs the MOCK terminal on 8788 from a seeded market replayed by C and D, with no legacy engine', () => {
-    const { args, cwd, env } = byName.mock
-    assert.equal(cwd, '/repo/server')
-    assert.ok(args.includes('src/app/mock-main.ts'))
-    assert.equal(env.PORT, '8788')
-    assert.equal(env.MOCK_DATA_DIR, './data/dev-mock')
-    assert.deepEqual(JSON.parse(env.BALANCITA_PYTHON_COMMAND), ['python3'])
+  it('does not start the MOCK source: the terminal always reads the live gateway', () => {
+    assert.equal(byName.mock, undefined)
   })
 
   it('runs capture as the only writer of the live market database, without HTTP or engine', () => {
@@ -343,7 +337,7 @@ describe('devChildSpecs with a resolved Python', () => {
     const specs = devChildSpecs({ ...base, python: null })
     assert.deepEqual(
       specs.map((spec) => spec.name),
-      ['vite', 'mock', 'capture', 'live'],
+      ['vite', 'capture', 'live'],
     )
     assert.equal(
       specs.find((spec) => spec.name === 'live').env.BALANCITA_PYTHON_STATUS,
@@ -373,7 +367,7 @@ describe('devChildSpecs with a resolved Python', () => {
     })
     assert.deepEqual(
       specs.map((spec) => spec.name),
-      ['vite', 'mock', 'capture', 'live'],
+      ['vite', 'capture', 'live'],
     )
     assert.equal(
       specs.find((spec) => spec.name === 'live').env.BALANCITA_PYTHON_STATUS,
@@ -784,12 +778,7 @@ describe('optional news child (n)', () => {
 
   it('keeps news independent of llm and q: it starts before them and a stopped model does not matter', () => {
     const specs = devChildSpecs({ ...base, env: local, llm })
-    assert.deepEqual(names(specs).slice(-4), [
-      'news',
-      'llm',
-      'q',
-      'qwenexit',
-    ])
+    assert.deepEqual(names(specs).slice(-4), ['news', 'llm', 'q', 'qwenexit'])
   })
 
   it('never hands the news child a remote LLM setting', () => {

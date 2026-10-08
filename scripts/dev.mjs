@@ -24,6 +24,7 @@ import {
   restartDelayMs,
   signalChild,
 } from './dev-provider-env.mjs'
+import { readPs, summarizeResources } from './dev-resources.mjs'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 // <root>/.env.local and <root>/.env feed the dev children; the real
@@ -31,7 +32,6 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const env = loadDevEnv({ root, env: process.env })
 // Optional backends: when one fails the others (and the app) keep running.
 const optionalChildren = new Set([
-  'mock',
   'capture',
   'live',
   'verdict',
@@ -45,7 +45,6 @@ const optionalChildren = new Set([
   'qwenexit',
 ])
 const exitLabels = {
-  mock: 'The MOCK source',
   capture: 'Live market capture (new candles)',
   verdict: 'The verdict service (new verdicts)',
   paper: 'Paper execution (new paper fills)',
@@ -135,6 +134,8 @@ const specs = devChildSpecs({
 })
 const healthFile = resolve(root, 'server/data/dev-live/dev-health.json')
 const supervised = new Map()
+// CPU and memory per child, sampled below (POSIX only), for the terminal's usage chip.
+let resources = null
 function writeHealth() {
   const processes = {}
   for (const [name, entry] of supervised)
@@ -147,7 +148,11 @@ function writeHealth() {
   try {
     writeFileSync(
       healthFile,
-      JSON.stringify({ updated_at_ms: Date.now(), processes }),
+      JSON.stringify({
+        updated_at_ms: Date.now(),
+        processes,
+        ...(resources ? { resources } : {}),
+      }),
     )
   } catch {
     // Health is informational: never stop the stack for it.
@@ -191,6 +196,18 @@ const children = specs.map((spec) => {
   return entry
 })
 writeHealth()
+async function sampleResources() {
+  const groups = {}
+  for (const { name, child } of children)
+    if (child.exitCode === null && child.pid !== undefined)
+      groups[name] = child.pid
+  resources = summarizeResources({ rows: await readPs(), groups })
+  writeHealth()
+}
+if (useGroups) {
+  void sampleResources()
+  setInterval(() => void sampleResources(), 5_000).unref()
+}
 
 let shuttingDown = false
 function shutdown(signal, code = 0) {
