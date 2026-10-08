@@ -47,6 +47,17 @@ export type QwenProduct = {
   }
   rows: QwenRow[]
   trades: BacktestTrade[]
+  /** Position still open in Qwen's paper book, valued net of costs at the last close. */
+  open_position?: QwenOpenPosition | null
+}
+
+export type QwenOpenPosition = {
+  side: 'LONG' | 'SHORT'
+  entry_time_ms: number
+  entry_price: string
+  mark_price: string | null
+  net_bp: number | null
+  pnl_usd: number | null
 }
 
 export type QwenScores = {

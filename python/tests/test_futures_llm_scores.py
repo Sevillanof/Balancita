@@ -127,6 +127,23 @@ class BookTests(unittest.TestCase):
         self.assertEqual(trades, [])
         self.assertEqual(skipped[0]["reason"], "target_does_not_clear_cost")
 
+    def test_the_position_still_open_is_valued_net_of_costs_at_the_last_close(self):
+        verdicts = path([10_000, 10_000, 10_010])
+        result = s.report([decision(0, "buy")], verdicts)
+        self.assertEqual(result["trades"], [])
+        opened = result["open_position"]
+        self.assertEqual((opened["side"], opened["mark_price"]), ("LONG", "10010"))
+        self.assertAlmostEqual(opened["pnl_usd"], opened["net_bp"] / 100, places=2)
+        self.assertGreater(opened["net_bp"], -10)
+
+    def test_a_closed_position_is_not_reported_as_open(self):
+        verdicts = path([10_000, 10_002, 10_001, 9_995])
+        result = s.report([decision(0, "sell"), decision(2, "buy")], verdicts)
+        self.assertEqual(len(result["trades"]), 1)
+        self.assertIsNone(result["open_position"])
+        flat = s.report([decision(0, "buy")], path([10_000] * 40), horizon_min=30)
+        self.assertIsNone(flat["open_position"])
+
     def test_the_trading_summary_has_the_backtest_shape(self):
         verdicts = path([10_000, 10_000, 10_000], {2: {"high": 10_031}})
         trading = s.report([decision(0, "buy")], verdicts)["trading"]

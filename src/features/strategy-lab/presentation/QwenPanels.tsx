@@ -6,6 +6,7 @@ import type {
 } from '../infrastructure/qwen-scores.ts'
 import {
   percent,
+  price,
   signedPercent,
   signedUsd,
   utcTime,
@@ -17,6 +18,21 @@ const OPTION_LABELS: Record<QwenOption, string> = {
   sell: 'Vender',
 }
 const OPTIONS: readonly QwenOption[] = ['buy', 'hold', 'sell']
+const SIDE_LABELS = { LONG: 'Compra', SHORT: 'Venta' } as const
+
+function formatPrice(value: string) {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? price(parsed) : value
+}
+
+/** Net return on the notional (costs included), `+0,12 %`. */
+function returnText(netBp: number) {
+  return (
+    <b className={netBp >= 0 ? 'is-up' : 'is-down'}>
+      {signedPercent(netBp / 100, 2)}
+    </b>
+  )
+}
 
 function signed(value: number) {
   return value > 0 ? `+${value}` : value < 0 ? `−${Math.abs(value)}` : '0'
@@ -135,7 +151,8 @@ export function QwenFocusHead({
 
 /** Right column when Qwen is selected: breakdown and latest decisions. */
 export function QwenSide({ product }: { product: QwenProduct | undefined }) {
-  const latest = (product?.rows ?? []).slice(-12).reverse()
+  const open = product?.open_position ?? null
+  const closed = (product?.trades ?? []).slice(-12).reverse()
   return (
     <aside
       className="strategy-lab__panel strategy-lab__editor"
@@ -185,21 +202,32 @@ export function QwenSide({ product }: { product: QwenProduct | undefined }) {
           </table>
           <h3 className="strategy-lab__eyebrow">Últimas decisiones</h3>
           <ul className="strategy-lab__versions">
-            {latest.map((row) => (
-              <li key={row.bucket_start}>
+            {open && (
+              <li key="open">
+                <b>Abierta</b> · {SIDE_LABELS[open.side]} ·{' '}
                 <span className="strategy-lab__num">
-                  {utcTime(row.bucket_start / 1000)}
+                  {utcTime(open.entry_time_ms / 1000)}
                 </span>{' '}
-                · {OPTION_LABELS[row.chosen] ?? row.chosen} ·{' '}
-                {row.point === null ? (
-                  'pendiente'
-                ) : (
-                  <b className={row.point > 0 ? 'is-up' : 'is-down'}>
-                    {row.point > 0 ? '+1' : '−1'}
-                  </b>
+                · entrada {formatPrice(open.entry_price)}
+                {open.mark_price !== null && (
+                  <> · ahora {formatPrice(open.mark_price)}</>
                 )}
+                {open.net_bp !== null && <> · {returnText(open.net_bp)}</>}
+              </li>
+            )}
+            {closed.map((trade) => (
+              <li key={`${trade.entry_time_ms}-${trade.exit_time_ms}`}>
+                {SIDE_LABELS[trade.side]} ·{' '}
+                <span className="strategy-lab__num">
+                  {utcTime(trade.entry_time_ms / 1000)}
+                </span>{' '}
+                · entrada {formatPrice(trade.entry_price)} · cierre{' '}
+                {formatPrice(trade.exit_price)} · {returnText(trade.net_bp)}
               </li>
             ))}
+            {!open && closed.length === 0 && (
+              <li>Qwen todavía no abrió ninguna posición.</li>
+            )}
           </ul>
         </>
       )}

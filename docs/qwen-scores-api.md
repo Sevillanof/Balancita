@@ -48,7 +48,11 @@ Read-only. Served by the live gateway (`pnpm dev`: through Vite as `/api-live/qw
           "exit_price": "90060", "exit_reason": "target", // stop, target, opposite_decision, time_stop
           "quantity": "0.011", "net_bp": 5.67, "pnl_usd": 0.56, "equity_usd": 10000.56
         }
-      ]
+      ],
+      "open_position": {          // null when flat; valued net of costs at the last close
+        "side": "LONG", "entry_time_ms": 0, "entry_price": "90000", "mark_price": "90020",
+        "net_bp": 1.9, "pnl_usd": 0.02
+      }
     }
   ]
 }
