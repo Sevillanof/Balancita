@@ -10,6 +10,8 @@ import ApprovedTradingHeader from '../features/trading-view/presentation/Approve
 import StrategyLab from '../features/strategy-lab/presentation/StrategyLab.tsx'
 import ReplayPanel from '../features/strategy-lab/presentation/ReplayPanel.tsx'
 import { appNavigation } from './app-navigation.ts'
+import AppStatusChips from './AppStatusChips.tsx'
+import { terminalApiBase } from '../features/connected-trading/infrastructure/terminal-stream-client.ts'
 
 export default function LaboratoryPage() {
   return (
@@ -18,9 +20,7 @@ export default function LaboratoryPage() {
         brandHref="/terminal"
         brandLabel="Balancita, ir a la terminal"
         navigation={appNavigation('estrategias')}
-        status={
-          <span className="demo-shell__badge">PAPER · SIN ÓRDENES REALES</span>
-        }
+        status={<AppStatusChips apiBase={terminalApiBase('live')} />}
       />
       <main className="demo-shell__main connected-terminal__main">
         <StrategyLab />

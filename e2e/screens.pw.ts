@@ -141,6 +141,9 @@ test('estrategias without the registry shows the error and no example data', asy
     route.fulfill({ status: 503, json: {} }),
   )
   await page.goto('/estrategias')
+  // The same status chips as the terminal, even when the gateway is down.
+  await expect(page.getByTestId('flow-status')).toHaveText('FLUJO DESCONECTADO')
+  await expect(page.getByTestId('system-usage')).toBeVisible()
   await expect(page.getByRole('alert').first()).toContainText(
     'No se muestran datos de ejemplo',
   )
@@ -195,5 +198,39 @@ test('terminal live header shows the flow status and the usage chip', async ({
   await expect(page.getByTestId('system-usage')).toContainText('KRONOS 7 op.')
   await expect(page.getByTestId('flow-status')).toHaveText('FLUJO DESCONECTADO')
   await shot(page, 'terminal-flow')
+  await noHorizontalScroll(page)
+})
+
+test('estrategias shows the same chips as the terminal when the gateway is up', async ({
+  page,
+}) => {
+  await page.route('**/api-strategies/**', (route) =>
+    route.fulfill({ status: 503, json: {} }),
+  )
+  await page.route('**/api-live/health', (route) =>
+    route.fulfill({
+      json: {
+        processes: { capture: { status: 'running' } },
+        capture: { last_received_at: Date.now() - 2_000 },
+      },
+    }),
+  )
+  await page.route('**/api-live/system', (route) =>
+    route.fulfill({
+      json: {
+        cpu_pct: 15,
+        data_mb: 3419,
+        qwen: { running: true, decisions: { last_hour: 120 } },
+        kronos: { running: true, trades: 3 },
+      },
+    }),
+  )
+  await page.goto('/estrategias')
+  await expect(page.getByTestId('flow-status')).toHaveText('FLUJO CONECTADO')
+  await expect(page.getByTestId('system-usage')).toContainText(
+    'CPU 15 % · DATOS 3419 MB · QWEN 120/h · KRONOS 3 op.',
+  )
+  await expect(page.getByText('PAPER · KRAKEN')).toBeVisible()
+  await shot(page, 'estrategias-chips')
   await noHorizontalScroll(page)
 })

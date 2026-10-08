@@ -14,8 +14,7 @@ import {
 import { applyTerminalEvents } from '../features/connected-trading/infrastructure/terminal-state.ts'
 import { createTerminalBatcher } from '../features/connected-trading/infrastructure/terminal-batch.ts'
 import { projectTerminalQuote } from './terminal-market.ts'
-import SystemUsageChip from './SystemUsageChip.tsx'
-import { flowStatus } from './terminal-flow.ts'
+import AppStatusChips from './AppStatusChips.tsx'
 import TerminalDecisions from './TerminalDecisions.tsx'
 import type { DecisionRow } from './terminal-decisions.ts'
 import SelectedDecision from './SelectedDecision.tsx'
@@ -374,14 +373,14 @@ export default function FuturesTerminal({
       clearInterval(timer)
     }
   }, [bootstrap.mode, apiBase])
-  const flow = flowStatus({
+  const flowInputs = {
     connected,
     processes: bootstrap.mode === 'paper_live' ? processHealth : {},
     quoteAgeMs:
       quote.receivedAt === null
         ? null
         : Math.max(0, displayClock - quote.receivedAt),
-  })
+  }
   const downProcesses = Object.entries(processHealth ?? {}).filter(
     ([, value]) => record(value).status !== 'running',
   )
@@ -421,23 +420,12 @@ export default function FuturesTerminal({
         status={
           <>
             {sourceSwitch}
-            <span
-              className="demo-shell__badge"
-              data-testid="flow-status"
-              data-tone={flow.level}
-              title={flow.reasons.join('\n') || 'Todo corre con normalidad'}
-            >
-              {flow.label}
-            </span>
-            {bootstrap.mode === 'paper_live' && (
-              <SystemUsageChip apiBase={apiBase} />
-            )}
-            <span
-              className="demo-shell__badge demo-shell__badge--usage"
-              title="Precios reales de Kraken, operaciones simuladas (paper)"
-            >
-              {modeLabel}
-            </span>
+            <AppStatusChips
+              apiBase={apiBase}
+              override={flowInputs}
+              showUsage={bootstrap.mode === 'paper_live'}
+              modeLabel={modeLabel}
+            />
             {localScenarioStatus && <span>{localScenarioStatus}</span>}
           </>
         }
