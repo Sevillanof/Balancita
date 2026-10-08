@@ -1,4 +1,5 @@
 import { DatabaseSync } from 'node:sqlite'
+import { FuturesMarketStore } from './futures-market-store.ts'
 import { acquireWriterLock } from '../../platform/writer-lock.ts'
 
 export const DEFAULT_RETENTION_DAYS = 7
@@ -9,6 +10,36 @@ const GUARDED = [
   'paper_futures_book_snapshots',
   'paper_futures_ticker_snapshots',
 ] as const
+
+/**
+ * Offline version of the capture's online retention (tickers 24 h, trades 7
+ * days, duplicate raw copies dropped after 24 h), run to completion.
+ */
+export function trimMarketDb(dbPath: string, now = Date.now()) {
+  const lock = acquireWriterLock(dbPath)
+  const store = new FuturesMarketStore(dbPath)
+  try {
+    let deleted = 0
+    let slimmed = 0
+    for (;;) {
+      const result = store.trimRawEvents(
+        {
+          now,
+          tickerRetentionMs: 24 * 3_600_000,
+          eventRetentionMs: DEFAULT_RETENTION_DAYS * DAY_MS,
+          rawKeepMs: 24 * 3_600_000,
+        },
+        200,
+      )
+      deleted += result.deleted
+      slimmed += result.slimmed
+      if (result.done) return { deleted, slimmed }
+    }
+  } finally {
+    store.close()
+    lock.release()
+  }
+}
 
 /**
  * Offline compaction: switches the file to `auto_vacuum=INCREMENTAL` (so the
