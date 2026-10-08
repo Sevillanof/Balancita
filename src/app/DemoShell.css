@@ -616,6 +616,24 @@
   }
 }
 
+/* The status chips (flow, usage, source) need ~620px: below that width they
+   take a row of their own instead of overlapping the menu. */
+@media (max-width: 1080px) {
+  .demo-shell__header-inner {
+    flex-wrap: wrap;
+    gap: 8px 18px;
+  }
+
+  .demo-shell__status {
+    order: 3;
+    width: 100%;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    gap: 8px;
+    padding-bottom: 8px;
+  }
+}
+
 @media (max-width: 760px) {
   .demo-shell__header-inner {
     flex-wrap: wrap;
