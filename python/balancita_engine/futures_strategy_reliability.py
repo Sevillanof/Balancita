@@ -11,7 +11,7 @@ what happened, plus how much of it could be luck.
 * the mean's t-statistic with standard errors clustered by entry day (trades of
   different products on the same day share the market's move, so they are not
   independent);
-* the number of equal time folds in which the mean is positive;
+* the number of equal time folds in which the mean is positive (purged and embargoed, ``futures_purged``);
 * a verdict, deliberately hard to earn:
 
   ``insufficient_data``  fewer than ``MIN_TRADES`` trades;
@@ -41,6 +41,7 @@ import os
 import statistics
 
 from .futures_costs import COST_MODEL_VERSION, cost_model_hash
+from .futures_purged import purged_positive
 from .futures_simulator import DEFAULT_PERIODS, Book, frames, merge_periods
 from .futures_spec_strategy import DEFAULT_SPEC_DIR, declared_indicators, load_specs, spec_hash
 
@@ -93,16 +94,12 @@ def _clustered_t(trades):
 
 
 def _folds_positive(trades, first_ms, last_ms, folds=FOLDS):
-    """(folds with a positive mean, folds that had trades) over equal slices of the period."""
-    if first_ms is None or last_ms is None or last_ms <= first_ms:
-        return 0, 0
-    width = (last_ms - first_ms) / folds
-    groups = [[] for _ in range(folds)]
-    for trade in trades:
-        index = min(folds - 1, max(0, int((trade["entry_time_ms"] - first_ms) / width)))
-        groups[index].append(trade["net_bp"])
-    judged = [g for g in groups if g]
-    return sum(1 for g in judged if statistics.fmean(g) > 0), len(judged)
+    """(folds with a positive mean, folds that had trades) over equal slices of the period.
+
+    The slices are purged and embargoed (``futures_purged``): a trade that crosses a boundary counts in no
+    slice, and the start of every slice after the first is skipped for as long as the longest trade was held.
+    """
+    return purged_positive(trades, first_ms, last_ms, folds)
 
 
 def deflated_probability(values, trials, *, trial_sd=TRIAL_SHARPE_SD):

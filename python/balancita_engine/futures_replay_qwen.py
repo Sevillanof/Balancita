@@ -14,6 +14,7 @@ import sqlite3
 
 from .futures_llm_decisions import (
     StateError,
+    default_reliability,
     ModelResponseError,
     ask_model,
     build_prompt,
@@ -24,6 +25,7 @@ from .futures_llm_decisions import (
 from .futures_costs import DEFAULT_PRODUCT
 from .futures_llm_lessons import Lessons
 from .futures_spec_strategy import propose_spec
+from .futures_strategy_reliability import RELIABILITY_SCHEMA
 from .futures_verdicts import ONE_MINUTE_MS
 
 TRIGGERS = ("entry", "5min", "all")
@@ -63,11 +65,21 @@ def _wanted(trigger, bucket, proposals):
     return any(p.get("action") in ("LONG", "SHORT") for p in proposals)
 
 
+# What a decision may believe about a strategy whose measurement does not yet exist at its time.
+_NO_RELIABILITY = {"schema": RELIABILITY_SCHEMA, "strategies": {}}
+
+
 class BlindQwen:
-    """Frame observer: collects Qwen decisions and the verdict-like rows that score them."""
+    """Frame observer: collects Qwen decisions and the verdict-like rows that score them.
+
+    The ``strategy_reliability`` line of the STATE is as of the decision: the stored table (and the forward
+    summary) were measured on candles that include the replayed range, so showing them would hand the model the
+    outcome. A table is used only when everything it measured closed before the decision; otherwise every
+    strategy reads ``unmeasured``, as it would have on that day. ``reliability_hidden`` counts those decisions.
+    """
 
     def __init__(self, provider, specs, question, calibration, template, *, tick_size="1",
-                 trigger="entry", mode="auto", cache=None, product_id=DEFAULT_PRODUCT):
+                 trigger="entry", mode="auto", cache=None, product_id=DEFAULT_PRODUCT, reliability=None):
         if trigger not in TRIGGERS:
             raise ValueError("unknown Qwen trigger {!r}".format(trigger))
         self.provider, self.specs, self.question = provider, specs, question
@@ -80,6 +92,16 @@ class BlindQwen:
         self.lessons = Lessons(product_id) if "lessons" in question["state_fields"] else None
         self.verdicts, self.decisions, self.errors = [], [], []
         self._candles = {}
+        self.reliability = default_reliability() if reliability is None else reliability
+        self.reliability_hidden = 0
+
+    def _reliability_at(self, bucket):
+        """The reliability table a decision at ``bucket`` could have known, else an empty one."""
+        last = ((self.reliability or {}).get("period") or {}).get("last_bucket_ms")
+        if last is not None and last < bucket:
+            return self.reliability
+        self.reliability_hidden += 1
+        return _NO_RELIABILITY
 
     def feed_candles(self, candles_1m):
         self._candles = {c["bucket_start"]: c for c in candles_1m}
@@ -100,6 +122,7 @@ class BlindQwen:
         try:
             state = build_state(verdict, list(self.window), self.question["state_fields"],
                                 {s["id"]: s for s in self.specs},
+                                reliability=self._reliability_at(bucket), forward={},
                                 lessons=None if self.lessons is None else self.lessons.text(bucket))
         except StateError:
             return

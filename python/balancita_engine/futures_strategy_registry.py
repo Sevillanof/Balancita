@@ -18,6 +18,7 @@ The API binds to 127.0.0.1 only and is the strategies page's backend
 import argparse
 import copy
 import json
+import math
 import os
 import re
 import sqlite3
@@ -40,6 +41,7 @@ from .futures_spec_strategy import (
 )
 from .futures_replay import load_range
 from .futures_strategy_reliability import load_reliability, reliability_for
+from .futures_purged import cscv_pbo
 from .futures_strategy_backtest import MIN_TRADES, load_verdict_rows, run_backtest
 from .futures_strategy_translate import TranslationError, default_provider, translate
 
@@ -51,6 +53,9 @@ DEFAULT_PORT = 8790
 # Promotion gates (ADR 0001, Evaluation): out of sample, deflated Sharpe, minimum trade count.
 GATE_MIN_OOS_TRADES = MIN_TRADES
 GATE_MIN_DSR = 0.95
+# Purged blocks (futures_purged): the mean must be positive in most of the blocks that have trades.
+GATE_MIN_FOLDS = 3
+GATE_FOLDS_SHARE = 0.6
 FEATURE_CATALOG = (
     "candidate_close", "candidate_low", "candidate_high", "candidate_volume", "ema9", "ema21", "sma50",
     "rsi14", "atr14", "bollinger_lower20", "bollinger_mid20", "bollinger_upper20", "bollinger_stddev20",
@@ -321,12 +326,15 @@ class StrategyRegistry:
         """The checks a transition to ``state`` must pass (PS-08e)."""
         if state in ("retired", "draft") or (state == "shadow" and current == "active"):
             return []
-        backtest = self.latest_backtest(row["spec_hash"])
+        backtest = self.longest_backtest(row["spec_hash"])
         if state == "shadow":
             return [{"code": "backtested", "passed": backtest is not None, "value": backtest is not None,
                      "threshold": True}]
         oos = (backtest or {}).get("out_of_sample", {})
         dsr = (backtest or {}).get("deflated_sharpe_probability")
+        folds = (backtest or {}).get("purged_folds") or {}
+        judged, positive = folds.get("judged", 0), folds.get("positive", 0)
+        late = ((backtest or {}).get("stress") or {}).get("late_entry_mean_net_bp")
         return [
             {"code": "was_in_shadow", "passed": current == "shadow", "value": current, "threshold": "shadow"},
             {"code": "oos_trades", "passed": oos.get("trades", 0) >= GATE_MIN_OOS_TRADES,
@@ -335,6 +343,11 @@ class StrategyRegistry:
              "value": oos.get("mean_net_bp"), "threshold": 0},
             {"code": "deflated_sharpe", "passed": dsr is not None and dsr >= GATE_MIN_DSR,
              "value": dsr, "threshold": GATE_MIN_DSR},
+            {"code": "purged_folds_positive", "passed": judged >= GATE_MIN_FOLDS
+             and positive >= math.ceil(judged * GATE_FOLDS_SHARE),
+             "value": "{}/{}".format(positive, judged), "threshold": ">= {:.0%} of at least {} blocks".format(
+                 GATE_FOLDS_SHARE, GATE_MIN_FOLDS)},
+            {"code": "survives_late_entry", "passed": late is not None and late > 0, "value": late, "threshold": 0},
         ]
 
     # --- backtests ----------------------------------------------------------
@@ -356,6 +369,13 @@ class StrategyRegistry:
             params.append(product_id)
         row = self.db.execute(sql + " ORDER BY seq DESC LIMIT 1", params).fetchone()
         return None if row is None else json.loads(row[0])
+
+    def longest_backtest(self, digest):
+        """The backtest of the longest window: choosing the most flattering of 7, 30 and 90 days is not allowed."""
+        rows = self.db.execute("SELECT summary_json FROM strategy_backtests WHERE spec_hash=? ORDER BY seq",
+                               (digest,)).fetchall()
+        summaries = [json.loads(row[0]) for row in rows]
+        return max(reversed(summaries), key=lambda b: b.get("days") or 0, default=None) if summaries else None
 
     def record_backtest(self, digest, strategy_id, version, product_id, result):
         summary = {k: v for k, v in result.items() if k != "trades"}
@@ -457,10 +477,12 @@ class StrategyService:
                     "strategies": [dict(e, return_pct=None, pnl_usd=None, hit_rate=None, trades=0, wins=0,
                                         few_trades=True, deflated_sharpe_probability=None)
                                    for e in self.registry.list()]}
+        tried, period = {}, None
         for entry in self.registry.list():
             row = self.registry.version(entry["id"], entry["version"])
             result = self.backtest(row["spec"], product_id, days, strategy_id=entry["id"],
                                    version=entry["version"])
+            tried[entry["id"]], period = result["trades"], result["period"]
             buy_and_hold = result["buy_and_hold_pct"]
             total = result["all"]
             rows.append(dict(entry, return_pct=total["return_pct"], pnl_usd=total["pnl_usd"],
@@ -468,8 +490,10 @@ class StrategyService:
                              few_trades=total["trades"] < MIN_TRADES,
                              deflated_sharpe_probability=result["deflated_sharpe_probability"]))
         rows.sort(key=lambda r: (-(r["return_pct"] or 0), r["id"]))
+        overfitting = period and cscv_pbo(tried, period["first_bucket_ms"], period["last_bucket_ms"])
         return {"product_id": product_id, "days": days, "buy_and_hold_pct": buy_and_hold,
-                "min_trades": MIN_TRADES, "verdicts_available": True, "strategies": rows}
+                "min_trades": MIN_TRADES, "verdicts_available": True, "overfitting": overfitting,
+                "strategies": rows}
 
     def translate(self, text, source):
         """A draft spec from Pine Script or freqtrade text; nothing is saved (PS-08f)."""
