@@ -518,6 +518,8 @@ export function devChildSpecs({
   const strategiesDb = liveDb('futures-strategies.sqlite')
   // Forward paper measurement (C30): its DB and the summary Q and the registry read.
   const forwardDir = liveDb('forward')
+  // C31: Qwen decides when its open positions close (own DB and summary; needs the local model).
+  const qwenExitDir = liveDb('qwen-exit')
   const forwardPath = `${forwardDir}/forward-reliability.json`
   const llmOn =
     Boolean(python?.command && llm?.command) &&
@@ -643,6 +645,31 @@ export function devChildSpecs({
           ...env,
           LLAMA_PORT: port,
           STRATEGY_FORWARD_PATH: forwardPath,
+          PYTHONPATH: [`${root}/python`, env.PYTHONPATH]
+            .filter(Boolean)
+            .join(delimiter),
+        },
+      },
+      {
+        // C31: entries from the shipped specs, every exit decided by Qwen (market DB read-only -> its own
+        // DB and summary, sole writer of both). Asks the model only while a position is open.
+        name: 'qwenexit',
+        command: python.command,
+        cwd: serverCwd,
+        args: [
+          ...python.prefixArgs,
+          '-m',
+          'balancita_engine.futures_qwen_exit',
+          '--market-db',
+          marketDb,
+          '--out',
+          qwenExitDir,
+          '--loop-seconds',
+          '1800',
+        ],
+        env: {
+          ...env,
+          LLAMA_PORT: port,
           PYTHONPATH: [`${root}/python`, env.PYTHONPATH]
             .filter(Boolean)
             .join(delimiter),

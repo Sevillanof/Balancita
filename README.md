@@ -58,6 +58,7 @@ flowchart LR
 | `strategies` | 8790   | Registro de estrategias **S**: validar, evaluar, backtest, versiones y ciclo de vida                                                                                      |
 | `news`       | -      | **N**: RSS/Atom → `futures-news.sqlite`; con Qwen, relevancia y dirección por noticia                                                                                     |
 | `llm` / `q`  | 8088   | `llama-server` local y servicio de decisiones **Q** (opcionales, nunca bloquean el arranque)                                                                              |
+| `qwenexit`   | -      | **C31**: entradas de C25/C26/C27/C30 y salida decidida solo por Qwen, cada 30 min (`server/data/dev-live/qwen-exit/`); necesita el modelo local, ver `docs/qwen-exit.md`    |
 
 Un proceso opcional que cae se reinicia con _backoff_ (1 s hasta 30 s; se rinde tras 8 fallos rápidos o `EADDRINUSE`) y su estado se ve como chip en la Terminal.
 

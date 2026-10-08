@@ -323,15 +323,26 @@ class Book:
                 exit_price, reason = rule
             elif bucket + ONE_MINUTE_MS - position["opened_at"] >= position["horizon_ms"]:
                 exit_price, reason = D(close), "time_stop"
-        if exit_price is None:
-            return
+        if exit_price is not None:
+            self._finish(bucket, exit_price, reason)
+
+    def _settle(self, bucket, exit_price, reason):
+        """What closing the open position at ``exit_price`` would net, without booking it."""
+        position = self.position
+        long = position["side"] == "LONG"
         exit_price = exit_fill(exit_price, position["side"], self.product, reason)
         entry, quantity = position["entry"], position["quantity"]
         gross = (exit_price - entry) * quantity if long else (entry - exit_price) * quantity
         fees = (entry + exit_price) * quantity * fee_rate("taker")
         funding, funding_complete = self._funding(position["opened_at"], bucket + ONE_MINUTE_MS,
                                                   entry * quantity, long)
-        pnl = gross - fees - funding
+        return exit_price, gross - fees - funding, funding, funding_complete
+
+    def _finish(self, bucket, exit_price, reason):
+        """Closes the open position at ``exit_price`` (before the exit execution cost) and books the trade."""
+        position = self.position
+        exit_price, pnl, funding, funding_complete = self._settle(bucket, exit_price, reason)
+        entry, quantity = position["entry"], position["quantity"]
         decision = position["decision"]
         decision["trade_net_usd"] = float(round(pnl, 4))
         decision["trade_hit"] = trade_hit(pnl)

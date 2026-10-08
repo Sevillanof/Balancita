@@ -66,6 +66,33 @@
       ]
     },
     {
+      "id": "exit_decision",
+      "version": 1,
+      "scope": "exit",
+      "type": "choice",
+      "instruction": "You hold the open position described in position. It has no stop loss and no take profit: you alone decide when it ends, and whatever it is worth at the moment you close it becomes your realized gain or loss, after costs. Using the position, the normalized market state and exit_lessons, which is the better choice now?",
+      "options": [
+        {
+          "id": "hold",
+          "description": "keep the position open and decide again later"
+        },
+        {
+          "id": "close",
+          "description": "close the position now and realize its current result"
+        }
+      ],
+      "state_fields": [
+        "regime",
+        "returns_bp",
+        "dist_atr",
+        "rsi14",
+        "atr_bp",
+        "volume_rel",
+        "position",
+        "exit_lessons"
+      ]
+    },
+    {
       "id": "news_relevance_btc",
       "version": 1,
       "scope": "news",

@@ -42,6 +42,7 @@ const optionalChildren = new Set([
   'news',
   'llm',
   'q',
+  'qwenexit',
 ])
 const exitLabels = {
   mock: 'The MOCK source',
@@ -55,6 +56,7 @@ const exitLabels = {
   news: 'The news process (new news items and analyses)',
   llm: 'The llama-server model (new LLM decisions)',
   q: 'The LLM decision service (new LLM decisions)',
+  qwenexit: 'The Qwen exit book C31 (new trades closed by Qwen)',
 }
 // The optional model: never blocks startup, one [dev] line when it is skipped.
 const llama = resolveLlamaServer({ env })

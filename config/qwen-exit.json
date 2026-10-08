@@ -1,0 +1,14 @@
+{
+  "schema": "futures-qwen-exit.v1",
+  "note": "C31: entries from these shipped specs; Qwen decides every exit (exit_decision, scope exit) and owns the result. Paper, 100 USD per trade, no stop, target or time stop. See docs/qwen-exit.md.",
+  "strategy_id": "c31-qwen-exit-perp-v1",
+  "start_ms": 1791417600000,
+  "registered": "2026-10-08T00:00:00Z",
+  "notional_usd": "100",
+  "entry_specs": [
+    "c25-pullback-perp-v1",
+    "c26-reversion-perp-v1",
+    "c27-breakout-perp-v1",
+    "c30-momentum-12h-perp-v1"
+  ]
+}
