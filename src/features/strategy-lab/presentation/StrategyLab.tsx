@@ -58,6 +58,7 @@ import {
 } from '../../../shared/finance/format.ts'
 import { QwenFocusHead, QwenSide } from './QwenPanels.tsx'
 import { JsonTab, TradesTable, VersionsTab } from './StrategyLabPanels.tsx'
+import { NewStrategyModal } from './NewStrategyModal.tsx'
 import { STATE_LABELS, type Dot } from './strategy-lab-labels.ts'
 import './StrategyLab.css'
 
@@ -150,6 +151,7 @@ export default function StrategyLab({
   const [sweepText, setSweepText] = useState('')
   const [jsonText, setJsonText] = useState<string | null>(null)
   const [importing, setImporting] = useState(false)
+  const [creating, setCreating] = useState(false)
   const [importSource, setImportSource] = useState<ImportSource>('json')
   const [importText, setImportText] = useState('')
   const [importNotes, setImportNotes] = useState<string[]>([])
@@ -487,14 +489,6 @@ export default function StrategyLab({
     update(spec)
   }
 
-  const startNew = () => {
-    setSaveMode('new')
-    setNewName(draft ? `${draft.name} (copia)` : 'Nueva estrategia')
-    setNotice(
-      `Editá las reglas y guardá: se crea una estrategia nueva a partir de ${draftLabel}.`,
-    )
-  }
-
   const operandEditor = (
     operand: Operand,
     label: string,
@@ -624,14 +618,26 @@ export default function StrategyLab({
           <button
             type="button"
             className="strategy-lab__button strategy-lab__button--primary"
-            onClick={startNew}
-            disabled={!draft}
+            onClick={() => setCreating(true)}
           >
             Nueva estrategia
           </button>
         </div>
       </div>
 
+      {creating && (
+        <NewStrategyModal
+          api={api}
+          onClose={() => setCreating(false)}
+          onCreated={(entry) => {
+            setCreating(false)
+            refresh(
+              entry.id,
+              `Agregada ${shortName(entry.name, entry.id)} (${STATE_LABELS[entry.state].toLowerCase()}).`,
+            )
+          }}
+        />
+      )}
       {connectError && (
         <p
           role="alert"

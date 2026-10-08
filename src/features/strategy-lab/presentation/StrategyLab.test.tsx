@@ -259,6 +259,20 @@ describe('StrategyLab', () => {
     ).toBeInTheDocument()
   })
 
+  it('opens a modal from Nueva estrategia and rejects bad JSON', async () => {
+    const user = userEvent.setup()
+    await renderLab()
+    await user.click(screen.getByRole('button', { name: 'Nueva estrategia' }))
+    const dialog = screen.getByRole('dialog', { name: 'Nueva estrategia' })
+    await user.type(within(dialog).getByLabelText(/Pegá el JSON/), 'no es json')
+    await user.click(
+      within(dialog).getByRole('button', { name: 'Agregar estrategia' }),
+    )
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent(
+      'No es un JSON válido.',
+    )
+  })
+
   it('rejects an import that is not a strategy', async () => {
     const user = userEvent.setup()
     await renderLab()

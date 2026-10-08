@@ -157,7 +157,7 @@ export interface StrategyApi {
     param: string,
     values: string[],
   ): Promise<StrategyEntry[]>
-  importSpec(spec: StrategySpec): Promise<StrategyEntry>
+  importSpec(spec: StrategySpec, activate?: boolean): Promise<StrategyEntry>
   translate(
     text: string,
     source: 'pine' | 'freqtrade' | 'auto',
@@ -228,7 +228,8 @@ export function httpStrategyApi(
           { version, param, values },
         )
       ).created,
-    importSpec: (spec) => request('/import', { spec }),
+    importSpec: (spec, activate) =>
+      request('/import', { spec, ...(activate ? { activate: true } : {}) }),
     translate: (text, source) => request('/translate', { text, source }),
     setState: (id, version, state) =>
       request(`/strategies/${encodeURIComponent(id)}/state`, {

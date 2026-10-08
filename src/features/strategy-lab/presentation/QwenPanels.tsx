@@ -4,7 +4,12 @@ import type {
   QwenProduct,
   QwenScores,
 } from '../infrastructure/qwen-scores.ts'
-import { percent, signedPercent, signedUsd, utcTime } from '../../../shared/finance/format.ts'
+import {
+  percent,
+  signedPercent,
+  signedUsd,
+  utcTime,
+} from '../../../shared/finance/format.ts'
 
 const OPTION_LABELS: Record<QwenOption, string> = {
   buy: 'Comprar',
