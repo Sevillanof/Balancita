@@ -410,7 +410,7 @@ export default function FuturesTerminal({
     ? 'MOCK · mercado simulado'
     : bootstrap?.mode === 'mock'
       ? 'DATOS Y OPERACIONES SIMULADAS'
-      : 'MERCADO REAL · OPERACIONES SIMULADAS'
+      : 'PAPER · KRAKEN'
 
   return (
     <div className="demo-shell connected-terminal">
@@ -432,7 +432,12 @@ export default function FuturesTerminal({
             {bootstrap.mode === 'paper_live' && (
               <SystemUsageChip apiBase={apiBase} />
             )}
-            <span>{modeLabel}</span>
+            <span
+              className="demo-shell__badge demo-shell__badge--usage"
+              title="Precios reales de Kraken, operaciones simuladas (paper)"
+            >
+              {modeLabel}
+            </span>
             {localScenarioStatus && <span>{localScenarioStatus}</span>}
           </>
         }
