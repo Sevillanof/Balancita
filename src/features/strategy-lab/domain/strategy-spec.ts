@@ -391,7 +391,18 @@ export function parseSpecText(text: string): {
   try {
     value = JSON.parse(text)
   } catch {
-    return { spec: null, error: 'No es un JSON válido.' }
+    // Text copied from markdown or chat often carries `\_` and HTML entities.
+    const cleaned = text
+      .replace(/\\_/g, '_')
+      .replace(/&gt;/g, '>')
+      .replace(/&lt;/g, '<')
+      .replace(/&amp;/g, '&')
+    try {
+      value = JSON.parse(cleaned)
+    } catch (failure) {
+      const detail = failure instanceof Error ? ` ${failure.message}` : ''
+      return { spec: null, error: `No es un JSON válido.${detail}` }
+    }
   }
   if (typeof value !== 'object' || value === null || Array.isArray(value))
     return { spec: null, error: 'El JSON debe ser un objeto.' }
