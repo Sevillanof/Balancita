@@ -21,6 +21,7 @@ Read-only. Served by the live gateway (`pnpm dev`: through Vite as `/api-live/qw
         "mean_net_bp": -2.1, "total_net_bp": -199.5
       },
       "by_option": {              // same shape as "decisions", per answer
+      "baseline": { "always_hold_rate": 0.4, "scored": 120 },  // +1 rate of answering hold every time, the floor to beat
         "buy": { ... }, "hold": { ... }, "sell": { ... }
       },
       "trading": {                // same book and costs as the strategy backtest

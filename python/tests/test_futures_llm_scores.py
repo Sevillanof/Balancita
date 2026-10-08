@@ -55,6 +55,14 @@ class PointTests(unittest.TestCase):
         self.assertEqual(self.score("hold", 10_030)["point"], -1)
         self.assertEqual(self.score("hold", 9_970)["point"], -1)
 
+    def test_the_always_hold_baseline_is_the_share_of_moves_inside_the_round_trip(self):
+        rows = [self.score("buy", close) for close in (10_005, 10_030, 9_970, 10_002)]
+        baseline = s.always_hold_baseline(rows)
+        self.assertEqual((baseline["always_hold_rate"], baseline["scored"]), (0.5, 4))
+        self.assertEqual(s.always_hold_baseline([])["always_hold_rate"], None)
+        pending = s.score_decisions([decision(0, "buy")], path([10_000] * 10))
+        self.assertEqual(s.always_hold_baseline(pending)["scored"], 0)
+
     def test_a_decision_without_its_horizon_is_pending_not_scored(self):
         row = s.score_decisions([decision(0, "buy")], path([10_000] * 10))[0]
         self.assertEqual((row["status"], row["point"]), ("pending", None))

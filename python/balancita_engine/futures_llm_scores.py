@@ -140,6 +140,19 @@ def _points(rows):
     }
 
 
+def always_hold_baseline(rows, product_id=DEFAULT_PRODUCT):
+    """The +1 rate of answering ``hold`` every time on the scored rows: the floor a hit rate has to beat.
+
+    ``hold`` is right when neither side clears the round trip, that is when the move is within it.
+    """
+    scored = [r for r in rows if r["status"] == "scored"]
+    if not scored:
+        return {"always_hold_rate": None, "scored": 0}
+    limit = float(round_trip_cost_bps(product_id))
+    return {"always_hold_rate": _round(sum(1 for r in scored if abs(r["gross_bp"]) <= limit) / len(scored)),
+            "scored": len(scored)}
+
+
 def report(decisions, verdicts, *, book=BOOK_CONFIG, horizon_min=HORIZON_MIN):
     """Points per decision (overall and per option) and the trading book summary."""
     rows = score_decisions(decisions, verdicts, book=book, horizon_min=horizon_min)
@@ -150,6 +163,7 @@ def report(decisions, verdicts, *, book=BOOK_CONFIG, horizon_min=HORIZON_MIN):
         "book": dict(book),
         "decisions": _points(rows),
         "by_option": {action: _points([r for r in rows if r["chosen"] == action]) for action in ACTIONS},
+        "baseline": always_hold_baseline(rows, book.get("product_id", DEFAULT_PRODUCT)),
         "trading": dict(_summary(trades, initial_cash), max_drawdown=_max_drawdown(trades, initial_cash)),
         "skipped": {"count": len(skipped), "first": skipped[:20]},
         "rows": rows,
@@ -189,6 +203,9 @@ def format_report(result):
         lines.append("  {:<5} {:>4} evaluadas  +{} / -{}  acierto {}  neto medio {} bp".format(
             action, o["scored"], o["hits"], o["misses"], _pct(o["hit_rate"]),
             "n/a" if o["mean_net_bp"] is None else o["mean_net_bp"]))
+    base = result.get("baseline") or {}
+    if base.get("always_hold_rate") is not None:
+        lines.append("Línea base: responder siempre hold acierta {}".format(_pct(base["always_hold_rate"])))
     lines.append("Operando (mismo libro y costes que el backtest): {} operaciones, {} ganadoras, acierto {}".format(
         t["trades"], t["wins"], _pct(t["hit_rate"])))
     lines.append("  Resultado: {} USD ({}% sobre {} USD)   Neto medio: {} bp   Peor caída: {}%".format(
