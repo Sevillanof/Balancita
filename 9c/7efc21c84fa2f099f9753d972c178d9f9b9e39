@@ -1,0 +1,21 @@
+odd/tasks/kronos-as-qwen.md
+  s_7170c9fc9fc422::t_dcf847e7d97356 1-63
+docs/qwen-scores-api.md
+  s_7170c9fc9fc422::t_5e7ac4e9b5083d 62-90
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9c7efc21c84fa2f099f9753d972c178d9f9b9e39",
+  "prompts": {},
+  "sessions": {
+    "s_7170c9fc9fc422": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b78be01c-737f-4916-a238-4f9f2828e02c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
