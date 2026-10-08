@@ -127,7 +127,8 @@ def run(market_db, out_path, product_id, start_ms, end_ms, specs, tick_size="1",
     extra = None
     if qwen is not None:
         meta["qwen"] = {"question": qwen.question["id"], "version": qwen.question["version"], "trigger": qwen.trigger,
-                        "model_ref": qwen.model_ref, "asked": qwen.cache.misses, "cached": qwen.cache.hits}
+                        "model_ref": qwen.model_ref, "asked": qwen.cache.misses, "cached": qwen.cache.hits,
+                        "reliability_hidden": qwen.reliability_hidden}
         extra = {"decisions": qwen.decisions, "report": qwen_report(qwen)}
     write_run(out_path, meta, books, extra)
     return [book.summary() for book in books]

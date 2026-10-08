@@ -63,11 +63,42 @@ class ReplayTests(unittest.TestCase):
         self.assertTrue(buckets)
         self.assertTrue(all(start <= b < end for b in buckets))
 
-    def _qwen(self, provider, cache=None, trigger="entry"):
+    def _qwen(self, provider, cache=None, trigger="entry", reliability=None):
         prompts = llm.load_prompt_config()
         return BlindQwen(provider, SPECS, llm.load_questions()["trade_action"], llm.load_calibration(),
                          prompts["templates"][prompts["default_version"]], trigger=trigger,
-                         mode="raw_logprobs", cache=cache)
+                         mode="raw_logprobs", cache=cache, reliability=reliability)
+
+    def test_qwen_prompts_do_not_change_when_the_candles_after_a_decision_are_removed(self):
+        """The sentinel for the whole blind replay: state, lessons and reliability read nothing from the future."""
+        start = ONES[300]["bucket_start"]
+        short, long = llm.FakeProvider(), llm.FakeProvider()
+        for provider, end, name in ((short, ONES[900]["bucket_start"], "s"), (long, ONES[1400]["bucket_start"], "l")):
+            run(self.market, os.path.join(self.dir.name, name + ".sqlite"), "PF_XBTUSD", start, end, SPECS,
+                qwen=self._qwen(provider, trigger="5min"))
+        self.assertGreater(len(short.prompts), 50)
+        self.assertEqual(long.prompts[:len(short.prompts)], short.prompts)
+        self.assertTrue(any("lessons_example" in p for p in short.prompts))
+
+    def test_reliability_measured_after_a_decision_is_never_shown_to_it(self):
+        from balancita_engine.futures_spec_strategy import spec_hash
+
+        start, end = ONES[300]["bucket_start"], ONES[1000]["bucket_start"]
+
+        def table(last):
+            return {"schema": "futures-strategy-reliability.v1", "period": {"last_bucket_ms": last},
+                    "strategies": {s["id"]: {"spec_hash": spec_hash(s), "verdict": "reliable_edge", "trades": 500,
+                                             "hit_rate": 0.61, "mean_net_bp": 42.0} for s in SPECS}}
+
+        later, earlier = llm.FakeProvider(), llm.FakeProvider()
+        qwen = self._qwen(later, trigger="5min", reliability=table(end + 10 ** 9))
+        run(self.market, os.path.join(self.dir.name, "later.sqlite"), "PF_XBTUSD", start, end, SPECS, qwen=qwen)
+        self.assertTrue(later.prompts)
+        self.assertTrue(all("reliable_edge" not in p and "unmeasured" in p for p in later.prompts))
+        self.assertEqual(qwen.reliability_hidden, len(later.prompts))
+        run(self.market, os.path.join(self.dir.name, "earlier.sqlite"), "PF_XBTUSD", start, end, SPECS,
+            qwen=self._qwen(earlier, trigger="5min", reliability=table(start - 1)))
+        self.assertTrue(all("reliable_edge" in p for p in earlier.prompts))
 
     def test_blind_qwen_decides_from_a_state_without_dates_prices_or_product(self):
         provider = llm.FakeProvider()

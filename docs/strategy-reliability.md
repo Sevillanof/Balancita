@@ -4,7 +4,7 @@ Cada estrategia se juzga solo por las operaciones que toma el simulador único (
 
 ## Qué mide
 
-Por estrategia, con todos los productos juntos y por producto: operaciones, aciertos con su intervalo de Wilson al 95 %, ganancia neta media y mediana en bp después de costes, estadístico t con errores agrupados por día de entrada (las operaciones de distintos productos el mismo día comparten el movimiento del mercado), y en cuántos de 4 tramos de tiempo iguales la media es positiva.
+Por estrategia, con todos los productos juntos y por producto: operaciones, aciertos con su intervalo de Wilson al 95 %, ganancia neta media y mediana en bp después de costes, estadístico t con errores agrupados por día de entrada (las operaciones de distintos productos el mismo día comparten el movimiento del mercado), y en cuántos de 4 tramos de tiempo iguales la media es positiva (tramos purgados y con embargo, ver [validacion-sin-trampas.md](validacion-sin-trampas.md)).
 
 | Veredicto           | Significa                                                                 |
 | ------------------- | ------------------------------------------------------------------------- |

@@ -130,6 +130,27 @@ class RegistryTests(unittest.TestCase):
         draft["params"][key] = str(float(draft["params"][key]) + 1)
         self.assertEqual(self.registry.import_spec(draft)["state"], "draft")
 
+    def test_gates_read_the_longest_window_not_the_most_flattering_one(self):
+        def result(days, first):
+            return {"days": days, "period": {"first_bucket_ms": first, "last_bucket_ms": first + days},
+                    "oos_sharpe_per_trade": 0.1, "out_of_sample": {"trades": 99, "mean_net_bp": -5 if days == 90 else 30}}
+
+        for days, first in ((90, 1), (7, 1000)):  # the 7-day run is the later one and the better looking
+            self.registry.record_backtest("abc", C27_ID, 1, BTC, result(days, first))
+        self.assertEqual(self.registry.longest_backtest("abc")["days"], 90)
+        self.assertEqual(self.registry.latest_backtest("abc")["days"], 7)
+        self.assertIsNone(self.registry.longest_backtest("never-ran"))
+
+    def test_an_edge_that_dies_with_one_bar_of_delay_or_in_most_blocks_does_not_pass_the_gates(self):
+        row = self.registry.version(C27_ID)
+        backtest = {"days": 90, "period": {"first_bucket_ms": 1, "last_bucket_ms": 2}, "oos_sharpe_per_trade": 0.1,
+                    "deflated_sharpe_probability": 0.99, "out_of_sample": {"trades": 99, "mean_net_bp": 9},
+                    "purged_folds": {"judged": 5, "positive": 2}, "stress": {"late_entry_mean_net_bp": -3.0}}
+        self.registry.record_backtest(row["spec_hash"], C27_ID, 1, BTC, backtest)
+        gates = {g["code"]: g["passed"] for g in self.registry.gates(row, "active", "shadow")}
+        self.assertEqual((gates["purged_folds_positive"], gates["survives_late_entry"]), (False, False))
+        self.assertTrue(gates["oos_trades"] and gates["deflated_sharpe"])
+
     def test_variants_create_one_draft_per_value(self):
         created = self.registry.variants(C25_ID, None, "rsi_long_min", ["35", "40", "45"])
         self.assertEqual([c["name"] for c in created],
@@ -209,7 +230,8 @@ class BacktestTests(unittest.TestCase):
         result = run_backtest(SPECS[C27_ID], ONES, FIVES)
         total = result["all"]
         self.assertGreater(total["trades"], 0)
-        self.assertEqual(total["trades"], result["in_sample"]["trades"] + result["out_of_sample"]["trades"])
+        self.assertEqual(total["trades"], result["in_sample"]["trades"] + result["out_of_sample"]["trades"]
+                         + result["split_purge"]["dropped"])
         self.assertAlmostEqual(total["pnl_usd"], sum(t["pnl_usd"] for t in result["trades"]), places=2)
         self.assertIsNotNone(result["buy_and_hold_pct"])
         self.assertLessEqual(result["max_drawdown"]["pct"], 0)
@@ -283,6 +305,7 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual({r["id"] for r in ranking["strategies"]}, set(SPECS))
         self.assertIsNotNone(ranking["buy_and_hold_pct"])
+        self.assertIn("overfitting", ranking)  # None until two strategies have enough trades
         status, backtest = self.call("/backtest", {"id": C27_ID, "product": BTC, "days": 7})
         self.assertEqual(status, 200)
         self.assertEqual(backtest["spec_hash"], spec_hash(SPECS[C27_ID]))

@@ -20,6 +20,7 @@ import statistics
 from decimal import Decimal
 
 from .futures_costs import COST_MODEL_VERSION, DEFAULT_PRODUCT, round_trip_cost_bps
+from .futures_purged import embargo_ms, fold_summary, purged_folds, purged_split, stress
 from .futures_simulator import DEFAULT_NOTIONAL_USD, Book, frames, merge_periods, DEFAULT_PERIODS
 from .futures_spec_strategy import declared_indicators
 
@@ -167,8 +168,15 @@ def run_backtest(spec, candles_1m, candles_5m, *, start_ms=None, product_id=DEFA
         split = first + int((Decimal(last - first) * IN_SAMPLE_SHARE).to_integral_value())
     else:
         first = last = split = None
-    in_sample = [t for t in trades if split is not None and t["entry_bucket_ms"] < split]
-    out_sample = [t for t in trades if split is not None and t["entry_bucket_ms"] >= split]
+    # The cut is purged (a trade that crosses it is in neither side) and embargoed (the out-of-sample side starts
+    # one longest-hold after it); the old cut by entry time only is kept as ``out_of_sample_unpurged``.
+    if split is not None:
+        embargo = embargo_ms(trades, (last - first) * (1 - float(IN_SAMPLE_SHARE)))
+        in_sample, out_sample, dropped = purged_split(trades, split, embargo)
+        out_unpurged = [t for t in trades if t["entry_time_ms"] >= split]
+    else:
+        embargo, in_sample, out_sample, out_unpurged, dropped = 0, [], [], [], 0
+    blocks = purged_folds(trades, first, last)
     oos_values = [t["net_bp"] for t in out_sample]
     oos_sharpe = _sharpe(oos_values)
     # The same trades on the other side: the gross flips and the round trip is paid again.
@@ -184,6 +192,10 @@ def run_backtest(spec, candles_1m, candles_5m, *, start_ms=None, product_id=DEFA
         "all": total,
         "in_sample": _summary(in_sample, initial_cash),
         "out_of_sample": _summary(out_sample, initial_cash),
+        "out_of_sample_unpurged": _summary(out_unpurged, initial_cash),
+        "split_purge": {"embargo_ms": embargo, "dropped": dropped},
+        "purged_folds": dict(fold_summary(blocks), blocks=blocks),
+        "stress": stress(trades, candles_1m, product_id),
         "max_drawdown": _max_drawdown(trades, initial_cash),
         "buy_and_hold_pct": buy_and_hold,
         "vs_buy_and_hold_pts": None if buy_and_hold is None else _round(total["return_pct"] - buy_and_hold),
