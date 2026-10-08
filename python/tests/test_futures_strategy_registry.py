@@ -115,6 +115,21 @@ class RegistryTests(unittest.TestCase):
             self.registry.save(broken, "modify")
         self.assertEqual(invalid.exception.code, "invalid_spec")
 
+    def test_import_with_activate_runs_without_gates(self):
+        spec = copy.deepcopy(SPECS[C26_ID])
+        spec["id"] = "mine-1"
+        spec["name"] = "Mía"
+        key = next(iter(spec["params"]))
+        spec["params"][key] = str(float(spec["params"][key]) + 1)
+        entry = self.registry.import_spec(spec, activate=True)
+        self.assertEqual(entry["state"], "active")
+        self.assertIn(entry["id"], self.registry.active_specs(2**62))
+        draft = copy.deepcopy(spec)
+        draft["id"] = "mine-2"
+        draft["name"] = "Otra"
+        draft["params"][key] = str(float(draft["params"][key]) + 1)
+        self.assertEqual(self.registry.import_spec(draft)["state"], "draft")
+
     def test_variants_create_one_draft_per_value(self):
         created = self.registry.variants(C25_ID, None, "rsi_long_min", ["35", "40", "45"])
         self.assertEqual([c["name"] for c in created],

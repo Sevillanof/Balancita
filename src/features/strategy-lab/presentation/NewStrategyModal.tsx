@@ -20,6 +20,7 @@ export function NewStrategyModal({ api, onClose, onCreated }: Props) {
   const [text, setText] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [activate, setActivate] = useState(true)
   const area = useRef<HTMLTextAreaElement>(null)
 
   useEffect(() => {
@@ -38,7 +39,7 @@ export function NewStrategyModal({ api, onClose, onCreated }: Props) {
     setBusy(true)
     setError(null)
     try {
-      onCreated(await api.importSpec(spec))
+      onCreated(await api.importSpec(spec, activate))
     } catch (failure) {
       setError(describe(failure))
     } finally {
@@ -62,7 +63,7 @@ export function NewStrategyModal({ api, onClose, onCreated }: Props) {
         <h2 id="new-strategy-title">Nueva estrategia</h2>
         <label htmlFor="new-strategy-json" className="strategy-lab__context">
           Pegá el JSON de la estrategia (balancita-strategy.v1). Se agrega al
-          registro como borrador.
+          registro.
         </label>
         <textarea
           id="new-strategy-json"
@@ -76,6 +77,15 @@ export function NewStrategyModal({ api, onClose, onCreated }: Props) {
             setError(null)
           }}
         />
+        <label className="strategy-lab__context">
+          <input
+            type="checkbox"
+            checked={activate}
+            onChange={(event) => setActivate(event.target.checked)}
+          />{' '}
+          Operar en paper ya (100 USD por operación, sin pasar por las puertas
+          de promoción)
+        </label>
         {error && (
           <p
             role="alert"

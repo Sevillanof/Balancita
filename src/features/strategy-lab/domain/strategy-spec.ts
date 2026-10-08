@@ -51,7 +51,12 @@ export type Rules = {
    * (a `logvol<period>` feature of the 1m or 5m series) and its series' `vol_minutes`,
    * they scale one standard deviation of the horizon's move instead.
    */
-  risk: { stop_atr: string; target_stop_ratio: string; vol?: string; vol_minutes?: number }
+  risk: {
+    stop_atr: string
+    target_stop_ratio: string
+    vol?: string
+    vol_minutes?: number
+  }
   horizon_minutes: number
 }
 

@@ -265,11 +265,18 @@ class StrategyRegistry:
             suffix += 1
         return candidate
 
-    def import_spec(self, spec):
-        """An imported spec always lands as a new draft; a taken id gets a fresh one."""
+    def import_spec(self, spec, activate=False):
+        """An imported spec always lands as a new strategy; a taken id gets a fresh one.
+
+        It is a draft unless ``activate``: the owner's explicit choice to run it in
+        paper at once, without promotion gates (paper only, never real orders).
+        """
         spec = self._validated(spec)
         taken = self._version_row(spec["id"], None) is not None
-        return self.save(spec, "new", origin="import", new_id=None if taken else spec["id"])
+        entry = self.save(spec, "new", origin="import", new_id=None if taken else spec["id"])
+        if activate:
+            entry = self.set_state(entry["id"], entry["version"], "active", "manual_import", skip_gates=True)
+        return entry
 
     def variants(self, strategy_id, version, param, values, *, origin="variant"):
         """One new draft strategy per value of ``param``, each named after its value."""
@@ -290,13 +297,13 @@ class StrategyRegistry:
                                      new_name="{} · {} {}".format(spec["name"], param, variant["params"][param])))
         return created
 
-    def set_state(self, strategy_id, version, state, reason="manual"):
+    def set_state(self, strategy_id, version, state, reason="manual", skip_gates=False):
         if state not in STATES:
             raise RegistryError("invalid_state", "state must be one of " + ", ".join(STATES))
         with self.lock, self.db:
             row = self.version(strategy_id, version)
             current = self._state(strategy_id, row["version"])["state"]
-            gates = self.gates(row, state, current)
+            gates = [] if skip_gates else self.gates(row, state, current)
             if not all(gate["passed"] for gate in gates):
                 raise RegistryError("gate_failed", "the {} gate is not met".format(state), 409, {"gates": gates})
             now = self.clock()
@@ -587,7 +594,7 @@ def make_handler(service):
             if parts == ["translate"]:
                 return service.translate(body.get("text"), body.get("source", "auto"))
             if parts == ["import"]:
-                return registry.import_spec(body.get("spec", body))
+                return registry.import_spec(body.get("spec", body), activate=bool(body.get("activate")))
             if parts == ["evaluate"]:
                 spec = body.get("spec") or registry.version(body.get("id"), body.get("version"))["spec"]
                 return service.evaluate_latest(registry._validated(spec), body.get("product", product))

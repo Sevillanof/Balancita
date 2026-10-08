@@ -633,7 +633,7 @@ export default function StrategyLab({
             setCreating(false)
             refresh(
               entry.id,
-              `Agregada ${shortName(entry.name, entry.id)} como borrador.`,
+              `Agregada ${shortName(entry.name, entry.id)} (${STATE_LABELS[entry.state].toLowerCase()}).`,
             )
           }}
         />
