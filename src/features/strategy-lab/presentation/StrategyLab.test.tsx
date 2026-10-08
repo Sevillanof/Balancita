@@ -176,6 +176,11 @@ describe('StrategyLab', () => {
       'Comprar y mantener',
     ])
       expect(list.getByText(name)).toBeInTheDocument()
+    // Qwen and Kronos rank in their own group, after the strategies.
+    const models = list.getByRole('heading', { name: 'Modelos' })
+    expect(
+      within(models.parentElement!).getByRole('button', { name: /^Qwen/ }),
+    ).toBeInTheDocument()
     expect(screen.getByText('Rentabilidad')).toBeInTheDocument()
     expect(screen.getAllByText(/de \d+ trades/).length).toBeGreaterThan(0)
     expect(screen.getByTestId('lab-chart')).toBeInTheDocument()
@@ -184,8 +189,10 @@ describe('StrategyLab', () => {
     ).toBeInTheDocument()
   })
 
-  it('adds and removes conditions from the Reglas tab', async () => {
+  it('reads rules as sentences and edits them on demand', async () => {
     await renderLab()
+    expect(screen.queryByLabelText(/Condición \d+: comparador/)).toBeNull()
+    await userEvent.click(screen.getByRole('button', { name: 'Editar reglas' }))
     const before = screen.getAllByLabelText(/Condición \d+: comparador/).length
     await userEvent.click(screen.getByRole('button', { name: '+ condición' }))
     expect(screen.getAllByLabelText(/Condición \d+: comparador/)).toHaveLength(

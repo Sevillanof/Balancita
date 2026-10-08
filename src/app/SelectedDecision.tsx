@@ -32,21 +32,22 @@ export default function SelectedDecision({
       <p>
         <small>{time}</small>
       </p>
-      <p>
-        <code className="connected-terminal__hash" title={id}>
-          {id ? id.slice(0, 12) : 'ID no disponible'}
-        </code>
-        <button
-          type="button"
-          className="demo-terminal__present"
-          aria-label={`Copiar ID completo ${id}`}
-          onClick={() => void navigator.clipboard?.writeText(id)}
-        >
-          Copiar ID
-        </button>
-      </p>
       <details>
-        <summary>Propuestas y condiciones</summary>
+        <summary>Propuestas, condiciones e ID</summary>
+        <p>
+          <code className="connected-terminal__hash" title={id}>
+            {id ? id.slice(0, 12) : 'ID no disponible'}
+          </code>
+          <button
+            type="button"
+            className="demo-terminal__present"
+            aria-label={`Copiar ID completo ${id}`}
+            onClick={() => void navigator.clipboard?.writeText(id)}
+          >
+            Copiar ID
+          </button>
+        </p>
+
         {proposals.map((proposalValue, proposalIndex) => {
           const proposal = record(proposalValue)
           const conditions = Array.isArray(proposal.conditions)
