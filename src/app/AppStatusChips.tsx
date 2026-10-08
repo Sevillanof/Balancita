@@ -1,9 +1,15 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { record } from '../shared/wire/decode.ts'
 import SystemUsageChip from './SystemUsageChip.tsx'
-import { flowStatus } from './terminal-flow.ts'
+import { flowStatus, type FlowLevel } from './terminal-flow.ts'
 
 const HEALTH_POLL_MS = 10_000
+
+const SHORT_LABELS: Record<FlowLevel, string> = {
+  ok: 'En vivo',
+  warn: 'Con problemas',
+  bad: 'Sin conexión',
+}
 
 /** What the terminal already knows from its own WebSocket and quote. */
 export interface FlowOverride {
@@ -13,21 +19,25 @@ export interface FlowOverride {
 }
 
 /**
- * The status chips of the header, the same on every page: flow (conectado,
- * con problemas, desconectado), usage (CPU, data, Qwen, Kronos) and the
- * source. The terminal passes `override` with what its WebSocket reports;
- * other pages derive the flow from the gateway's health feed.
+ * The one status indicator of the header, the same on every page: a dot and
+ * a short word for the flow (en vivo, con problemas, sin conexión) and the
+ * PAPER mark. Clicking it opens the diagnosis: why the flow is not ok, usage
+ * (CPU, data, Qwen, Kronos), the source and whatever technical detail the
+ * page passes in `diagnosis`. The terminal passes `override` with what its
+ * WebSocket reports; other pages derive the flow from the gateway's health.
  */
 export default function AppStatusChips({
   apiBase,
   override,
   showUsage = true,
   modeLabel = 'PAPER · KRAKEN',
+  diagnosis,
 }: {
   apiBase: string
   override?: FlowOverride
   showUsage?: boolean
   modeLabel?: string
+  diagnosis?: ReactNode
 }) {
   const [health, setHealth] = useState<{
     reachable: boolean
@@ -74,23 +84,34 @@ export default function AppStatusChips({
         processes: health.processes,
         quoteAgeMs: health.quoteAgeMs,
       })
+  const paper = modeLabel.split(' · ')[0]
   return (
-    <>
-      <span
-        className="demo-shell__badge"
-        data-testid="flow-status"
-        data-tone={flow.level}
-        title={flow.reasons.join('\n') || 'Todo corre con normalidad'}
-      >
-        {flow.label}
-      </span>
-      {showUsage && <SystemUsageChip apiBase={apiBase} />}
-      <span
-        className="demo-shell__badge demo-shell__badge--usage"
-        title="Precios reales de Kraken, operaciones simuladas (paper)"
-      >
-        {modeLabel}
-      </span>
-    </>
+    <details className="app-status" data-tone={flow.level}>
+      <summary title="Estado y diagnóstico">
+        <span className="app-status__dot" aria-hidden="true" />
+        <span data-testid="flow-status" aria-label={flow.label}>
+          {SHORT_LABELS[flow.level]}
+        </span>
+        <span className="app-status__mode">{paper}</span>
+      </summary>
+      <div className="app-status__panel" aria-label="Diagnóstico">
+        <p className="app-status__title">{flow.label}</p>
+        {flow.reasons.length > 0 ? (
+          <ul>
+            {flow.reasons.map((reason) => (
+              <li key={reason}>{reason}</li>
+            ))}
+          </ul>
+        ) : (
+          <p>Todo corre con normalidad.</p>
+        )}
+        {showUsage && <SystemUsageChip apiBase={apiBase} />}
+        <p>
+          <strong>{modeLabel}</strong> · precios reales de Kraken, operaciones
+          simuladas, sin órdenes reales ni conexión privada.
+        </p>
+        {diagnosis}
+      </div>
+    </details>
   )
 }

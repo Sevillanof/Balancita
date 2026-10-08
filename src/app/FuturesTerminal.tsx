@@ -7,7 +7,6 @@ import { utcDateTime } from '../shared/finance/format.ts'
 import ApprovedTerminalLayout from '../features/trading-view/presentation/ApprovedTerminalLayout.tsx'
 import ApprovedTradingHeader from '../features/trading-view/presentation/ApprovedTradingHeader.tsx'
 import { appNavigation } from './app-navigation.ts'
-import ApprovedMarketRow from '../features/trading-view/presentation/ApprovedMarketRow.tsx'
 import ApprovedPortfolioTables from '../features/trading-view/presentation/ApprovedPortfolioTables.tsx'
 import type { TerminalTickerStats } from '../features/trading-view/infrastructure/terminal-chart-client.ts'
 import {
@@ -412,6 +411,125 @@ export default function FuturesTerminal({
     setCommandVersion((version) => version + 1)
   }
 
+  const eventTimes =
+    bootstrap.mode === 'paper_live'
+      ? `${
+          quote.eventTime === null
+            ? 'Hora del evento no disponible'
+            : `Evento ${utcDateTime(quote.eventTime)}`
+        } · ${
+          quote.receivedAt === null
+            ? 'Recepción no disponible'
+            : `recibido ${utcDateTime(quote.receivedAt)} · hace ${Math.floor(Math.max(0, displayClock - quote.receivedAt) / 1_000)} s`
+        }`
+      : null
+  const statusItems: Array<{ key: string; tone?: string; text: string }> =
+    !state || bootstrap.mode !== 'paper_live'
+      ? []
+      : [
+          {
+            key: 'feed',
+            tone: feedTone,
+            text: `Feed: ${marketStatusLabel(feedStatus)}`,
+          },
+          {
+            key: 'funding',
+            tone: fundingKnown ? 'ok' : 'warn',
+            text: `Funding: ${fundingKnown ? 'conocido' : 'desconocido'}`,
+          },
+          ...(gatewayEngine && !engineOff
+            ? [
+                {
+                  key: 'engine',
+                  tone:
+                    gatewayEngineStatus === 'running'
+                      ? 'ok'
+                      : ('warn' as string),
+                  text: `Motor paper: ${paperEngineLabel(gatewayEngineStatus, gatewayEngineReason)}`,
+                },
+              ]
+            : []),
+          ...downProcesses.map(([name, value]) => ({
+            key: `process-${name}`,
+            tone: 'bad',
+            text: `Proceso ${name}: ${record(value).status === 'restarting' ? 'reiniciando' : 'caído'}`,
+          })),
+          ...(!engineOff && warmupCandles < WARMUP_CANDLES
+            ? [
+                {
+                  key: 'warmup',
+                  tone: 'warn',
+                  text: `Calentando ${warmupCandles}/${WARMUP_CANDLES}`,
+                },
+              ]
+            : []),
+        ]
+  // Only what needs attention stays on the page; the rest is in the diagnosis.
+  const alerts = statusItems.filter(
+    (item) => item.tone === 'warn' || item.tone === 'bad',
+  )
+  const diagnosis = (
+    <details>
+      <summary>Detalle técnico</summary>
+      {eventTimes && <p>{eventTimes}</p>}
+      <p>{connected ? 'Eventos WebSocket recibidos' : 'Esperando WebSocket'}</p>
+      {bootstrap.mode === 'paper_live' && (
+        <p>
+          Mercado:{' '}
+          {marketStatusLabel(
+            marketState.market_status ?? record(bootstrap.market).status,
+          )}
+        </p>
+      )}
+      <p>Run: {activeRunId ?? 'cargando'}</p>
+      {statusItems.length > 0 && (
+        <ul className="connected-terminal__chips">
+          {statusItems.map((item) => (
+            <li key={item.key} data-tone={item.tone}>
+              {item.text}
+            </li>
+          ))}
+        </ul>
+      )}
+      {state && bootstrap.mode === 'paper_live' && (
+        <>
+          <p>
+            Última recepción:{' '}
+            {Number.isSafeInteger(lastReceivedAt)
+              ? utcDateTime(Number(lastReceivedAt))
+              : 'Aún no hay datos recibidos'}
+          </p>
+          {typeof feedReason === 'string' && (
+            <p>Motivo del estado: {feedReason}</p>
+          )}
+          <p>
+            Integridad del libro:{' '}
+            {String(
+              record(
+                marketState.book_quality ??
+                  record(bootstrap.market).book_quality,
+              ).book_sequence_integrity ??
+                record(bootstrap.market).book_quality ??
+                'No verificada',
+            )}
+          </p>
+          <p>
+            Financiación:{' '}
+            {fundingKnown
+              ? 'cobertura del período actual disponible.'
+              : 'desconocida; entradas bloqueadas y PnL neto incompleto.'}
+          </p>
+        </>
+      )}
+      {!engineOff && (
+        <p>
+          Las cifras de cuenta y decisiones provienen del snapshot/eventos
+          durables.
+        </p>
+      )}
+    </details>
+  )
+
   const modeLabel = localDemo
     ? 'MOCK · mercado simulado'
     : bootstrap?.mode === 'mock'
@@ -432,87 +550,67 @@ export default function FuturesTerminal({
               override={flowInputs}
               showUsage={bootstrap.mode === 'paper_live'}
               modeLabel={modeLabel}
+              diagnosis={diagnosis}
             />
             {localScenarioStatus && <span>{localScenarioStatus}</span>}
           </>
         }
       />
-      <div className="demo-shell__disclaimer">
-        Paper · sin órdenes reales ni conexión privada con Kraken
-      </div>
       <main className="demo-shell__main connected-terminal__main">
-        <div className="demo-shell__page-heading">
-          <p className="demo-shell__eyebrow">BALANCITA · PAPER FUTUROS</p>
-          <h1>Terminal</h1>
-        </div>
-        <ApprovedMarketRow
-          identity={
-            <div>
-              <p className="demo-shell__eyebrow">
-                {bootstrap.source === 'local-protection.v1'
-                  ? 'MOCK · BTC/USD PERPETUO'
-                  : product
-                    ? `KRAKEN FUTURES · ${product}`
-                    : 'KRAKEN FUTURES · BTC/USD PERPETUO'}
-              </p>
-              <h2>
-                {product && productBase(product) !== 'BTC' ? (
-                  <>
-                    {productBase(product)} <span>/ Dólar</span>
-                  </>
-                ) : (
-                  <>
-                    Bitcoin <span>/ Dólar</span>
-                  </>
-                )}
-              </h2>
-            </div>
-          }
-          quote={
-            <div className="demo-terminal__quote">
-              <strong>{money(displayedPrice)}</strong>
-              <span>{quote.label}</span>
-              {typeof change24h === 'number' && (
-                <span data-tone={change24h >= 0 ? 'ok' : 'bad'}>
-                  {change24h >= 0 ? '+' : ''}
-                  {change24h.toLocaleString('es-ES', {
-                    maximumFractionDigits: 2,
-                  })}
-                  % 24 h
-                </span>
-              )}
-              {bootstrap.mode === 'paper_live' && (
-                <small>
-                  {quote.eventTime === null
-                    ? 'Hora del evento no disponible'
-                    : `Evento ${utcDateTime(quote.eventTime)}`}
-                  {' · '}
-                  {quote.receivedAt === null
-                    ? 'Recepción no disponible'
-                    : `recibido ${utcDateTime(quote.receivedAt)} · hace ${Math.floor(Math.max(0, displayClock - quote.receivedAt) / 1_000)} s`}
-                </small>
-              )}
-            </div>
-          }
-          context={
-            <div>
+        <section
+          className="connected-terminal__strip"
+          aria-label={`Mercado ${productPair(product)}`}
+        >
+          <h1>
+            {product && productBase(product) !== 'BTC'
+              ? productBase(product)
+              : 'Bitcoin'}{' '}
+            <span>/ Dólar</span>
+            <small>
+              {bootstrap.source === 'local-protection.v1'
+                ? 'MOCK · perpetuo'
+                : `${product ?? 'PF_XBTUSD'} · perpetuo`}
+            </small>
+          </h1>
+          <strong className="connected-terminal__price">
+            {money(displayedPrice)}
+          </strong>
+          {typeof change24h === 'number' && (
+            <span
+              className="connected-terminal__change"
+              data-tone={change24h >= 0 ? 'ok' : 'bad'}
+            >
+              {change24h >= 0 ? '+' : ''}
+              {change24h.toLocaleString('es-ES', {
+                maximumFractionDigits: 2,
+              })}
+              % 24 h
+            </span>
+          )}
+          <span
+            className="connected-terminal__quote-label"
+            title={eventTimes ?? undefined}
+          >
+            <span>{quote.label}</span>
+            {bootstrap.mode === 'paper_live' && quote.receivedAt !== null && (
               <span>
-                {connected
-                  ? 'Eventos WebSocket recibidos'
-                  : 'Esperando WebSocket'}
+                {` · hace ${Math.floor(Math.max(0, displayClock - quote.receivedAt) / 1_000)} s`}
               </span>
-              {bootstrap.mode === 'paper_live' && (
-                <p>
-                  {marketStatusLabel(
-                    marketState.market_status ??
-                      record(bootstrap.market).status,
-                  )}
-                </p>
-              )}
-              <p>Run: {activeRunId ?? 'cargando'}</p>
-            </div>
-          }
-        />
+            )}
+          </span>
+          {alerts.length > 0 && (
+            <ul
+              className="connected-terminal__chips connected-terminal__alerts"
+              aria-label="Avisos"
+            >
+              {alerts.map((item) => (
+                <li key={item.key} data-tone={item.tone}>
+                  {item.text}
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
         {error && (
           <p role="alert">
             {error} No se sustituyen datos desconectados por mocks.
@@ -521,83 +619,12 @@ export default function FuturesTerminal({
         {!state && <p role="status">Conectando al runtime de futuros…</p>}
         {state && (
           <>
-            {bootstrap.mode === 'paper_live' && (
-              <section
-                className="connected-terminal__panel"
-                aria-label="Estado del sistema"
-              >
-                <ul className="connected-terminal__chips">
-                  <li data-tone={feedTone}>
-                    Feed: {marketStatusLabel(feedStatus)}
-                  </li>
-                  <li data-tone={fundingKnown ? 'ok' : 'warn'}>
-                    Funding: {fundingKnown ? 'conocido' : 'desconocido'}
-                  </li>
-                  {gatewayEngine && !engineOff && (
-                    <li>
-                      Motor paper:{' '}
-                      {paperEngineLabel(
-                        gatewayEngineStatus,
-                        gatewayEngineReason,
-                      )}
-                    </li>
-                  )}
-                  {downProcesses.map(([name, value]) => (
-                    <li key={name} data-tone="bad">
-                      Proceso {name}:{' '}
-                      {record(value).status === 'restarting'
-                        ? 'reiniciando'
-                        : 'caído'}
-                    </li>
-                  ))}
-                  {!engineOff && warmupCandles < WARMUP_CANDLES && (
-                    <li data-tone="warn">
-                      Calentando {warmupCandles}/{WARMUP_CANDLES}
-                    </li>
-                  )}
-                </ul>
-                <details>
-                  <summary>Detalle del feed</summary>
-                  <p>
-                    Última recepción:{' '}
-                    {Number.isSafeInteger(lastReceivedAt)
-                      ? utcDateTime(Number(lastReceivedAt))
-                      : 'Aún no hay datos recibidos'}
-                  </p>
-                  {typeof feedReason === 'string' && (
-                    <p>Motivo del estado: {feedReason}</p>
-                  )}
-                  <p>
-                    Integridad del libro:{' '}
-                    {String(
-                      record(
-                        marketState.book_quality ??
-                          record(bootstrap.market).book_quality,
-                      ).book_sequence_integrity ??
-                        record(bootstrap.market).book_quality ??
-                        'No verificada',
-                    )}
-                  </p>
-                  <p>Garantía de secuencia del proveedor: no documentada.</p>
-                  <p>
-                    Profundidad bid/ask: no expuesta por el DTO de terminal.
-                  </p>
-                  <p>
-                    Financiación:{' '}
-                    {fundingKnown
-                      ? 'cobertura del período actual disponible; tasa y límites del período no se exponen en esta API.'
-                      : 'desconocida; entradas bloqueadas y PnL neto incompleto.'}
-                  </p>
-                </details>
-              </section>
-            )}
             <ApprovedTerminalLayout
               chart={
                 <section
                   className="demo-terminal__panel"
                   aria-label={`Gráfico ${productPair(product)}`}
                 >
-                  <h2>{productPair(product)} perpetuo</h2>
                   <TerminalMarketChart
                     market={market}
                     mode={bootstrap.mode}

@@ -701,3 +701,99 @@
     font-size: 9px;
   }
 }
+
+/* One status indicator: dot + word + PAPER; the diagnosis opens below it. */
+.app-status {
+  position: relative;
+}
+
+.app-status > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  border: 1px solid var(--demo-border-strong);
+  border-radius: 999px;
+  color: var(--demo-text);
+  background: var(--demo-sunken);
+  font-size: 12px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.app-status > summary::-webkit-details-marker {
+  display: none;
+}
+
+.app-status__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--demo-caution);
+}
+
+.app-status[data-tone='ok'] .app-status__dot {
+  background: var(--demo-ok);
+}
+
+.app-status[data-tone='bad'] .app-status__dot {
+  background: var(--demo-danger);
+}
+
+.app-status__mode {
+  padding-left: 8px;
+  border-left: 1px solid var(--demo-border-strong);
+  color: var(--demo-warning-text);
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+}
+
+.app-status__panel {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 8px);
+  right: 0;
+  display: grid;
+  width: min(360px, calc(100vw - 32px));
+  gap: 8px;
+  padding: 14px;
+  border: 1px solid var(--demo-border-strong);
+  border-radius: 8px;
+  color: var(--demo-soft);
+  background: var(--demo-raised);
+  box-shadow: 0 12px 32px var(--demo-shadow);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.app-status__panel p,
+.app-status__panel ul {
+  margin: 0;
+}
+
+.app-status__panel ul {
+  padding-left: 16px;
+}
+
+.app-status__title {
+  color: var(--demo-text);
+  font-weight: 600;
+}
+
+.app-status__panel .demo-shell__badge {
+  justify-self: start;
+}
+
+.app-status__panel details summary {
+  color: var(--demo-text);
+  cursor: pointer;
+}
+
+@media (max-width: 720px) {
+  .app-status__panel {
+    right: auto;
+    left: 0;
+  }
+}

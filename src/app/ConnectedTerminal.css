@@ -441,3 +441,70 @@
   padding-top: 12px;
   border-top: 1px solid var(--demo-border);
 }
+
+/* One-line market strip above the chart: pair, price, 24 h change, age. */
+.connected-terminal__strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 20px;
+  margin: 0 0 14px;
+}
+
+.connected-terminal__strip h1 {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 600;
+}
+
+.connected-terminal__strip h1 > span {
+  color: var(--demo-muted);
+  font-weight: 500;
+}
+
+.connected-terminal__strip h1 small {
+  margin-left: 10px;
+  color: var(--demo-muted);
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+}
+
+.connected-terminal__price {
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 22px;
+  font-weight: 600;
+}
+
+.connected-terminal__change {
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 13px;
+}
+
+.connected-terminal__change[data-tone='ok'] {
+  color: var(--demo-up);
+}
+
+.connected-terminal__change[data-tone='bad'] {
+  color: var(--demo-down);
+}
+
+.connected-terminal__quote-label {
+  color: var(--demo-muted);
+  font-size: 12px;
+}
+
+.connected-terminal__alerts {
+  margin: 0;
+  font-size: 12px;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}

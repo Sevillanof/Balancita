@@ -274,7 +274,6 @@ describe('FuturesTerminal local scenario presentation', () => {
     expect(
       screen.getByText(/Evento .* UTC · recibido .* UTC · hace \d+ s/),
     ).toBeTruthy()
-    expect(screen.getByText(/Profundidad bid\/ask: no expuesta/)).toBeTruthy()
     expect(screen.getByText(/Financiación: desconocida/)).toBeTruthy()
     expect(screen.getByText('Incompleto')).toBeTruthy()
   })
@@ -1418,7 +1417,7 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
     ['unavailable', /Motor paper: no disponible/],
   ])('reports the %s engine without calling it off', async (status, label) => {
     await renderLive({ ...state, engine: { ...state.engine, status } })
-    expect(screen.getByText(label)).toBeTruthy()
+    expect(screen.getAllByText(label).length).toBeGreaterThan(0)
     expect(screen.queryByText(/Motor de decisiones apagado/)).toBeNull()
   })
 
@@ -1437,7 +1436,9 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
         /Servicio de veredicto y ejecución paper no disponibles: no se encontró Python 3\.9\+ \(configurá BALANCITA_PYTHON\)/,
       ),
     ).toBeTruthy()
-    expect(screen.getByText(/Motor paper: no disponible/)).toBeTruthy()
+    expect(
+      screen.getAllByText(/Motor paper: no disponible/).length,
+    ).toBeGreaterThan(0)
     expect(screen.queryByText('Aún no hay análisis registrados.')).toBeNull()
   })
 

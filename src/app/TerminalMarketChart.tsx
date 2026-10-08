@@ -154,13 +154,14 @@ export default function TerminalMarketChart({
     return <p>El snapshot no contiene velas verificables.</p>
   return (
     <>
-      <p>
-        {mode === 'paper_live'
-          ? 'Velas públicas de Kraken Futures · operaciones simuladas.'
-          : 'Velas cerradas del fixture determinista MOCK · actualización por WebSocket.'}
-      </p>
+      {mode !== 'paper_live' && (
+        <p>
+          Velas cerradas del fixture determinista MOCK · actualización por
+          WebSocket.
+        </p>
+      )}
       {market.candles instanceof Array && market.candles.length > 0 && (
-        <p role="status">
+        <p role="status" className="visually-hidden">
           {record(market.candles.at(-1)).closed === true
             ? 'Última vela cerrada'
             : 'Vela en formación'}
