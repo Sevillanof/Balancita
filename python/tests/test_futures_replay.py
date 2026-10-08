@@ -8,7 +8,7 @@ from balancita_engine import futures_llm_decisions as llm
 import time
 
 from balancita_engine.futures_replay import ReplayJobs, run
-from balancita_engine.futures_replay_qwen import AnswerCache, BlindQwen
+from balancita_engine.futures_replay_qwen import AnswerCache, BlindQwen, ConsensusRule
 from balancita_engine.futures_simulator import simulate_many
 from balancita_engine.futures_spec_strategy import load_specs
 
@@ -68,6 +68,21 @@ class ReplayTests(unittest.TestCase):
         return BlindQwen(provider, SPECS, llm.load_questions()["trade_action"], llm.load_calibration(),
                          prompts["templates"][prompts["default_version"]], trigger=trigger,
                          mode="raw_logprobs", cache=cache, reliability=reliability)
+
+    def test_the_consensus_rule_answers_the_largest_mean_probability_without_a_model(self):
+        from balancita_engine.futures_llm_lessons import question_arm
+
+        rule = ConsensusRule(SPECS, question_arm(llm.load_questions()["trade_action"], "original"), trigger="5min")
+        out = os.path.join(self.dir.name, "rule.sqlite")
+        run(self.market, out, "PF_XBTUSD", ONES[300]["bucket_start"], ONES[900]["bucket_start"], SPECS, qwen=rule)
+        self.assertTrue(rule.decisions)
+        self.assertEqual(rule.model_ref, "consensus-rule")
+        self.assertEqual((rule.cache.hits, rule.cache.misses), (0, 0))
+        for d in rule.decisions:
+            p = d["probabilities"]
+            self.assertEqual(d["source"], "consensus")
+            self.assertEqual(d["chosen"], max(("hold", "buy", "sell"), key=lambda n: p[n]))
+        self.assertIn(rule.decisions[0]["chosen"], ("buy", "hold", "sell"))
 
     def test_qwen_prompts_do_not_change_when_the_candles_after_a_decision_are_removed(self):
         """The sentinel for the whole blind replay: state, lessons and reliability read nothing from the future."""
