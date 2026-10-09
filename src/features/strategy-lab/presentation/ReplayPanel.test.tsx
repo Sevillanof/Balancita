@@ -121,4 +121,22 @@ describe('ReplayPanel', () => {
     render(<ReplayPanel api={api} />)
     expect(await screen.findByRole('alert')).toHaveTextContent('sin respuesta')
   })
+
+  it('asks the registry once when mounted with its default API', async () => {
+    const fetcher = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ replays: [run] }), {
+          headers: { 'Content-Type': 'application/json' },
+        }),
+    )
+    vi.stubGlobal('fetch', fetcher)
+    try {
+      render(<ReplayPanel />)
+      await screen.findByText(/PF_XBTUSD/)
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      expect(fetcher).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
 })

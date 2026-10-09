@@ -69,8 +69,12 @@ function markersFor(
     ])
 }
 
+// One instance for the whole module: a new default per render changes `api`
+// on every render, which re-runs the list effect and fetches in a loop.
+const DEFAULT_API = httpReplayApi()
+
 export default function ReplayPanel({
-  api = httpReplayApi(),
+  api = DEFAULT_API,
   pollMs = POLL_MS,
 }: {
   api?: ReplayApi
