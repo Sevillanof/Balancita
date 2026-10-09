@@ -56,7 +56,7 @@ export default function AppStatusChips({
         })
         .then((body) => {
           if (cancelled) return
-          const received = record(record(body).capture).last_received_at
+          const received = record(record(body).capture).lastReceivedAt
           setHealth({
             reachable: true,
             processes: record(record(body).processes),
