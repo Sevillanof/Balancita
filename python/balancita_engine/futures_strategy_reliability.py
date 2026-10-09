@@ -41,6 +41,7 @@ import os
 import statistics
 
 from .futures_costs import COST_MODEL_VERSION, cost_model_hash
+from .futures_portfolio_risk import portfolio_risk
 from .futures_purged import purged_positive
 from .futures_simulator import DEFAULT_PERIODS, Book, frames, merge_periods
 from .futures_spec_strategy import DEFAULT_SPEC_DIR, declared_indicators, load_specs, spec_hash
@@ -187,7 +188,7 @@ def run_books(specs, candles_1m, candles_5m, *, product_id, tick_size="1", start
     return books
 
 
-def aggregate(specs, trades_by_strategy, *, first_ms, last_ms, products, warmup_ms, source=None):
+def aggregate(specs, trades_by_strategy, *, first_ms, last_ms, products, warmup_ms, source=None, candles_by_product=None):
     """The reliability table from ``{strategy_id: {product: trades}}``."""
     strategies = {}
     for spec in specs:
@@ -211,6 +212,9 @@ def aggregate(specs, trades_by_strategy, *, first_ms, last_ms, products, warmup_
         "thresholds": {"min_trades": MIN_TRADES, "reliable_trades": RELIABLE_TRADES,
                        "t_candidate": T_CANDIDATE, "t_tentative": T_TENTATIVE, "t_reliable": T_RELIABLE},
         "strategies": strategies,
+        "portfolio_risk": portfolio_risk(
+            {sid: [t for rows in per.values() for t in rows] for sid, per in trades_by_strategy.items()},
+            first_ms, last_ms, candles_by_product=candles_by_product),
     }
 
 
@@ -235,7 +239,8 @@ def build_reliability(specs, candles_by_product, *, tick_sizes=None, warmup_ms=3
         for book in books:
             trades[book.spec["id"]][product] = book.trades
     return aggregate(specs, trades, first_ms=first, last_ms=last, products=candles_by_product,
-                     warmup_ms=warmup_ms, source=source)
+                     warmup_ms=warmup_ms, source=source,
+                     candles_by_product={p: pair[1] for p, pair in candles_by_product.items()})
 
 
 def table_hash(table):
