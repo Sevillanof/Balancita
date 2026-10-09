@@ -1,0 +1,21 @@
+src/app/AppStatusChips.test.tsx
+  s_aef00497843986::t_1b80bf8fb20091 1-33
+src/app/AppStatusChips.tsx
+  s_aef00497843986::t_9395d84b7812b5 59
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "68cd3c89d914ed382049ab122a0d7b9335901666",
+  "prompts": {},
+  "sessions": {
+    "s_aef00497843986": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7d3882e6-4533-4a29-baab-11b75d1174fa",
+        "model": "unknown"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
