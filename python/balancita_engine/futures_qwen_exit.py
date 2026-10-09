@@ -40,7 +40,7 @@ from .futures_llm_decisions import (
     ModelResponseError,
     ModelUnavailable,
     StateError,
-    ask_model,
+    ask_state,
     build_prompt,
     build_state,
     question_letters,
@@ -241,7 +241,7 @@ class QwenExitDecider:
                 self.budget.spend()
             temperature = temperature_for(self.calibration, self.question["id"], self.question["version"])
             try:
-                done = ask_model(self.provider, prompt, self.letters, self.question, temperature, self.template, self.mode)
+                done = ask_state(self.provider, state, self.question, temperature, self.template, self.mode)
             except ModelResponseError as error:
                 self.errors.append({"bucket_start": bucket, "kind": error.kind})
                 return None

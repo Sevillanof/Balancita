@@ -49,6 +49,24 @@ class CalibrateTests(unittest.TestCase):
         self.assertEqual(result["fit_decisions"] + result["validation_decisions"], 400)
         self.assertLess(result["fit_decisions"], result["validation_decisions"] * 3)
 
+    def test_the_grid_reaches_high_temperatures_and_always_includes_one(self):
+        values = k.grid()
+        self.assertEqual((values[0], values[-1]), (0.5, 50.0))
+        self.assertIn(1.0, values)
+        self.assertEqual(values, sorted(values))
+
+    def test_a_very_sharp_model_needs_more_than_the_old_limit_of_five(self):
+        sharp = {"buy": 0.998, "hold": 0.001, "sell": 0.001}
+        rows = []
+        for i in range(600):
+            right = ACTIONS[i % 3]
+            chosen = "buy"  # always says buy at 99.8 %, right a third of the time
+            rows.append({"status": "scored", "chosen": chosen, "probabilities": sharp, "temperature": 1.0,
+                         "gross_bp": {"buy": 25.0, "hold": 0.0, "sell": -25.0}[right]})
+        result = k.calibrate(rows, 10.0)
+        self.assertTrue(result["accepted"])
+        self.assertGreater(result["temperature"], 5.0)
+
     def test_write_keeps_the_other_entries(self):
         with tempfile.TemporaryDirectory() as folder:
             path = os.path.join(folder, "c.json")

@@ -125,7 +125,7 @@ class ReplayTests(unittest.TestCase):
         run(self.market, os.path.join(self.dir.name, "later.sqlite"), "PF_XBTUSD", start, end, SPECS, qwen=qwen)
         self.assertTrue(later.prompts)
         self.assertTrue(all("reliable_edge" not in p and "unmeasured" in p for p in later.prompts))
-        self.assertEqual(qwen.reliability_hidden, len(later.prompts))
+        self.assertEqual(qwen.reliability_hidden, len(later.prompts) // 3)  # 3 option orders per decision
         run(self.market, os.path.join(self.dir.name, "earlier.sqlite"), "PF_XBTUSD", start, end, SPECS,
             qwen=self._qwen(earlier, trigger="5min", reliability=table(start - 1)))
         self.assertTrue(all("reliable_edge" in p for p in earlier.prompts))
@@ -140,7 +140,7 @@ class ReplayTests(unittest.TestCase):
             self.assertNotIn("PF_XBTUSD", prompt)
             self.assertNotIn("2026", prompt)
         db = sqlite3.connect(out)
-        self.assertEqual(db.execute("SELECT COUNT(*) FROM replay_qwen_decision").fetchone()[0], len(provider.prompts))
+        self.assertEqual(db.execute("SELECT COUNT(*) FROM replay_qwen_decision").fetchone()[0], len(provider.prompts) // 3)
         self.assertEqual(db.execute("SELECT COUNT(*) FROM replay_qwen_report").fetchone()[0], 1)
 
     def test_a_second_replay_asks_the_model_nothing_new(self):
