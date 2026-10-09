@@ -6,6 +6,7 @@ from balancita_engine.futures_portfolio_risk import (
     DAY_MS,
     daily_close_returns,
     daily_returns,
+    exposure,
     pearson,
     portfolio_risk,
     product_correlation,
@@ -90,6 +91,36 @@ class ProductCorrelationTests(unittest.TestCase):
     def test_gaps_in_days_are_not_bridged(self):
         candles = [{"bucket_start": 0, "close": "1"}, {"bucket_start": 2 * DAY_MS, "close": "2"}]
         self.assertEqual(daily_close_returns(candles), {})
+
+
+def _pos(side, start_h, end_h, pnl=0.0, sid="s"):
+    hour = 3_600_000
+    return {"side": side, "entry_time_ms": start_h * hour, "exit_time_ms": end_h * hour, "pnl_usd": pnl,
+            "strategy_id": sid}
+
+
+class ExposureTests(unittest.TestCase):
+    def test_counts_open_and_net_positions(self):
+        trades = [_pos("LONG", 0, 4), _pos("LONG", 1, 3), _pos("SHORT", 2, 3)]
+        result = exposure(trades, 0, 2 * DAY_MS, caps=())
+        self.assertEqual(result["max_open_positions"], 3)
+        self.assertEqual(result["max_abs_net_positions"], 2)
+
+    def test_a_position_closed_at_t_does_not_count_for_one_opened_at_t(self):
+        result = exposure([_pos("LONG", 0, 2), _pos("LONG", 2, 4)], 0, DAY_MS, caps=())
+        self.assertEqual(result["max_open_positions"], 1)
+
+    def test_cap_skips_the_entry_that_would_exceed_it_and_keeps_opposite_ones(self):
+        trades = [_pos("LONG", 0, 10, 1.0, "a"), _pos("LONG", 1, 10, 1.0, "b"), _pos("LONG", 2, 10, -3.0, "c"),
+                  _pos("SHORT", 3, 10, 2.0, "d")]
+        result = exposure(trades, 0, DAY_MS, caps=(2,))
+        capped = result["caps"]["2"]
+        self.assertEqual((capped["trades"], capped["skipped"]), (3, 1))
+        self.assertAlmostEqual(capped["pnl_usd"], 4.0)
+        self.assertAlmostEqual(result["uncapped"]["pnl_usd"], 1.0)
+
+    def test_no_trades_is_none(self):
+        self.assertIsNone(exposure([], 0, DAY_MS))
 
 
 if __name__ == "__main__":

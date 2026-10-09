@@ -14,6 +14,11 @@ different products, be compared and combined:
   ``effective_bets`` = n^2 / sum of all pairwise correlations (n identical strategies count as 1)
   and ``diversification_ratio`` = mean strategy volatility / portfolio volatility.
 
+``exposure`` looks at the same trades over *time*: how many positions are open at once and how lopsided
+they are (longs minus shorts, 100 USD each). The books stay independent; ``caps`` only answers "what would
+the account have done if it refused any entry that pushes the net same-side count past N", so a limit can be
+judged before it is ever applied.
+
 Nothing here predicts anything: it only describes what the trades did.
 """
 
@@ -23,6 +28,7 @@ import statistics
 DAY_MS = 86_400_000
 DAYS_PER_YEAR = 365
 MIN_DAYS = 10
+DEFAULT_CAPS = (2, 3, 4, 6)
 
 
 def _day(ms):
@@ -129,4 +135,136 @@ def portfolio_risk(trades_by_strategy, first_ms, last_ms, *, notional=100.0, can
         result["portfolio_equal_weight"] = None
     if candles_by_product:
         result["product_correlation"] = product_correlation(candles_by_product)
+    timed = [t for rows in trades_by_strategy.values() for t in rows if "side" in t and "entry_time_ms" in t]
+    result["exposure"] = exposure(timed, first_ms, last_ms, notional=notional)
     return result
+
+
+def _book_stats(trades, first_ms, last_ms, notional):
+    values = daily_returns(trades, first_ms, last_ms, notional)
+    stats = series_stats(values)
+    stats["trades"] = len(trades)
+    stats["pnl_usd"] = _round(sum(float(t["pnl_usd"]) for t in trades))
+    return stats
+
+
+def exposure(trades, first_ms, last_ms, *, caps=DEFAULT_CAPS, notional=100.0):
+    """Open positions over time and what a net same-side cap would have done.
+
+    ``trades`` are every strategy's trades (``side``, ``entry_time_ms``, ``exit_time_ms``, ``pnl_usd``), all
+    products together. Net = open longs - open shorts. A capped run walks the entries in time order (ties by
+    strategy and product) and skips one that would make the net count exceed the cap in its own direction;
+    a skipped trade never opens, so it frees nothing and costs nothing.
+    """
+    if not trades or first_ms is None or last_ms is None:
+        return None
+    # Exits sort before entries at the same instant: a position closed at t is not open for one opened at t.
+    events = []
+    for trade in trades:
+        sign = 1 if trade["side"] == "LONG" else -1
+        events.append((int(trade["entry_time_ms"]), 1, sign))
+        events.append((int(trade["exit_time_ms"]), 0, -sign))
+    events.sort()
+    net = open_count = max_net = max_open = 0
+    last_t, span, abs_net_time, open_time = events[0][0], 0, 0, 0
+    for when, kind, delta in events:
+        dt = when - last_t
+        span += dt
+        abs_net_time += abs(net) * dt
+        open_time += open_count * dt
+        last_t = when
+        net += delta
+        open_count += 1 if kind else -1
+        max_net, max_open = max(max_net, abs(net)), max(max_open, open_count)
+    result = {
+        "max_open_positions": max_open,
+        "mean_open_positions": _round(open_time / span, 2) if span else None,
+        "max_abs_net_positions": max_net,
+        "mean_abs_net_positions": _round(abs_net_time / span, 2) if span else None,
+        "uncapped": _book_stats(trades, first_ms, last_ms, notional),
+        "caps": {},
+    }
+    for cap in caps:
+        kept, open_trades = [], []
+        for trade in sorted(trades, key=lambda t: (int(t["entry_time_ms"]), str(t.get("strategy_id")),
+                                                   str(t.get("product_id")))):
+            now = int(trade["entry_time_ms"])
+            open_trades = [t for t in open_trades if int(t["exit_time_ms"]) > now]
+            sign = 1 if trade["side"] == "LONG" else -1
+            current = sum(1 if t["side"] == "LONG" else -1 for t in open_trades)
+            if abs(current + sign) > cap and abs(current + sign) > abs(current):
+                continue
+            kept.append(trade)
+            open_trades.append(trade)
+        stats = _book_stats(kept, first_ms, last_ms, notional)
+        stats["skipped"] = len(trades) - len(kept)
+        result["caps"][str(cap)] = stats
+    return result
+
+
+def build_from_market(market_db, specs, products, *, days, end_ms=None):
+    """Replay every spec over each product's official candles and describe the account's risk.
+
+    ``products`` is ``[(product_id, tick_size)]``. Needs only the market DB (no chart JSON): the last ``days``
+    days before ``end_ms`` (default: the newest candle) are traded, the week before only warms indicators up.
+    """
+    from .futures_replay import load_range, replay
+
+    trades = {spec["id"]: [] for spec in specs}
+    fives_by_product, first, last = {}, None, None
+    for product_id, tick_size in products:
+        probe_end = end_ms if end_ms is not None else 2 ** 62
+        ones, fives = load_range(market_db, product_id, probe_end - days * DAY_MS if end_ms else 0, probe_end)
+        if not ones:
+            continue
+        stop = ones[-1]["bucket_start"]
+        start = max(ones[0]["bucket_start"], stop - days * DAY_MS)
+        books = replay(specs, ones, fives, start_ms=start, product_id=product_id, tick_size=tick_size)
+        for book in books:
+            trades[book.spec["id"]].extend(dict(t, product_id=product_id) for t in book.trades)
+        fives_by_product[product_id] = [c for c in fives if c["bucket_start"] >= start]
+        first = start if first is None else min(first, start)
+        last = stop if last is None else max(last, stop)
+    risk = portfolio_risk(trades, first, last, candles_by_product=fives_by_product)
+    return {"schema": "futures-portfolio-risk.v1", "days": days, "first_bucket_ms": first, "last_bucket_ms": last,
+            "products": sorted(fives_by_product), "risk": risk}
+
+
+def main(argv=None):
+    import argparse
+    import json
+    import os
+
+    from .futures_products import resolve_products
+    from .futures_spec_strategy import DEFAULT_SPEC_DIR, load_specs
+
+    parser = argparse.ArgumentParser(description="Risk of the whole account from the market DB's candles.")
+    parser.add_argument("--market-db", required=True)
+    parser.add_argument("--days", type=int, default=90)
+    parser.add_argument("--specs-dir", default=DEFAULT_SPEC_DIR)
+    parser.add_argument("--out", required=True)
+    args = parser.parse_args(argv)
+    body = build_from_market(args.market_db, list(load_specs(args.specs_dir).values()), resolve_products(),
+                             days=args.days)
+    temporary = args.out + ".partial"
+    with open(temporary, "w", encoding="utf-8") as handle:
+        json.dump(body, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+    os.replace(temporary, args.out)
+    risk = body["risk"] or {}
+    portfolio = risk.get("portfolio_equal_weight")
+    if portfolio:
+        print("portfolio: sharpe={sharpe_annual} vol={vol_annual_pct}% maxdd={max_drawdown_pct}% "
+              "effective_bets={effective_bets} diversification={diversification_ratio}".format(**portfolio))
+    exp = risk.get("exposure")
+    if exp:
+        print("exposure: max open={} max |net|={} mean |net|={}".format(
+            exp["max_open_positions"], exp["max_abs_net_positions"], exp["mean_abs_net_positions"]))
+        for cap, stats in exp["caps"].items():
+            print("  cap {}: trades={} skipped={} pnl={} sharpe={} maxdd={}%".format(
+                cap, stats["trades"], stats["skipped"], stats["pnl_usd"], stats["sharpe_annual"],
+                stats["max_drawdown_pct"]))
+
+
+if __name__ == "__main__":
+    main()
