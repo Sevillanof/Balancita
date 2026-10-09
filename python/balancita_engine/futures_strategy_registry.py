@@ -85,11 +85,64 @@ def _slug(text):
     return _SLUG.sub("-", str(text).lower()).strip("-")[:48] or "x"
 
 
+class _LockedDb:
+    """One SQLite connection shared by the HTTP threads, every call serialised.
+
+    The system SQLite of macOS segfaults when two threads touch one connection at once (a product
+    switch fires ranking, backtests and reads together), so reads are materialised under the lock.
+    """
+
+    def __init__(self, path):
+        self.lock = threading.RLock()
+        self._db = sqlite3.connect(path, check_same_thread=False)
+
+    def execute(self, sql, params=()):
+        with self.lock:
+            return iter_rows(self._db.execute(sql, params))
+
+    def executescript(self, script):
+        with self.lock:
+            return self._db.executescript(script)
+
+    def close(self):
+        with self.lock:
+            self._db.close()
+
+    def __enter__(self):
+        self.lock.acquire()
+        self._db.__enter__()
+        return self
+
+    def __exit__(self, *exc):
+        try:
+            return self._db.__exit__(*exc)
+        finally:
+            self.lock.release()
+
+
+class iter_rows(list):
+    """Rows already fetched, with the cursor's ``fetchone``/``fetchall``."""
+
+    def __init__(self, cursor):
+        super().__init__(cursor.fetchall())
+        self._at = 0
+
+    def fetchone(self):
+        if self._at >= len(self):
+            return None
+        self._at += 1
+        return self[self._at - 1]
+
+    def fetchall(self):
+        rest, self._at = self[self._at:], len(self)
+        return rest
+
+
 class StrategyRegistry:
     def __init__(self, path, *, clock=_now_ms):
         self.clock = clock
-        self.lock = threading.Lock()
-        self.db = sqlite3.connect(path, check_same_thread=False)
+        self.db = _LockedDb(path)
+        self.lock = self.db.lock
         self.db.executescript(
             """
             PRAGMA journal_mode=WAL;
