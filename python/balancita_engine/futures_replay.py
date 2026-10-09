@@ -129,6 +129,8 @@ def run(market_db, out_path, product_id, start_ms, end_ms, specs, tick_size="1",
         meta["qwen"] = {"question": qwen.question["id"], "version": qwen.question["version"], "trigger": qwen.trigger,
                         "model_ref": qwen.model_ref, "asked": qwen.cache.misses, "cached": qwen.cache.hits,
                         "reliability_hidden": qwen.reliability_hidden,
+                        "calm_skipped": qwen.calm_skipped,
+                        "calm_filter": qwen.calm is not None,
                         "perf": getattr(qwen.provider, "perf_summary", dict)(),
                         "strategies": [spec["id"] for spec in qwen.specs]}
         extra = {"decisions": qwen.decisions, "report": qwen_report(qwen)}
@@ -243,7 +245,7 @@ def qwen_factory(cache_path=None, env=None):
 
     def make(specs, params, tick_size):
         from . import futures_llm_decisions as llm
-        from .futures_replay_qwen import AnswerCache, BlindQwen, ConsensusRule
+        from .futures_replay_qwen import AnswerCache, BlindQwen, CalmFilter, ConsensusRule
 
         questions = llm.load_questions()
         question_id = params.get("question", "trade_action")
@@ -281,7 +283,7 @@ def qwen_factory(cache_path=None, env=None):
                          prompts["templates"][prompts["default_version"]], tick_size=tick_size,
                          trigger=params.get("trigger", "entry"), mode=prompts["probability_source"],
                          cache=AnswerCache(cache_path), product_id=params.get("product_id", "PF_XBTUSD"),
-                         funding=funding)
+                         funding=funding, calm=CalmFilter() if params.get("calm_skip") else None)
 
     return make
 
@@ -308,6 +310,9 @@ def main(argv=None):
     parser.add_argument("--qwen-funding", choices=("off", "on", "placebo", "contrarian", "follow"), default="off",
                         help="funding line (trade_action@5): off (as shipped, v4), on, placebo (the line from 7 days "
                              "earlier), or a model-free rule: contrarian (high funding sells, low buys) / follow")
+    parser.add_argument("--qwen-calm-skip", action="store_true",
+                        help="do not ask in the calmest third of volatility (percentile of the past only); "
+                             "those decisions are recorded as hold with source calm-skip")
     parser.add_argument("--qwen-pause-ms", type=int, default=0,
                         help="sleep after each model answer so the GPU can cool (same results, slower)")
     parser.add_argument("--qwen-cache", help="SQLite file of cached answers shared between replays")
@@ -319,7 +324,7 @@ def main(argv=None):
         env = dict(os.environ, **({"LLAMA_PORT": args.llama_url.rsplit(":", 1)[1]} if args.llama_url else {}))
         qwen = qwen_factory(args.qwen_cache, env)(
             specs, {"question": args.qwen, "trigger": args.qwen_trigger, "arm": args.qwen_arm, "funding": args.qwen_funding, "market_db": args.market_db,
-                    "product_id": args.product}, "1")
+                    "product_id": args.product, "calm_skip": args.qwen_calm_skip}, "1")
     if qwen is not None and hasattr(qwen.provider, "pause_s"):
         qwen.provider.pause_s = max(0, args.qwen_pause_ms) / 1000
     summaries = run(args.market_db, args.out, args.product, _ms(args.start), _ms(args.end), specs, qwen=qwen)

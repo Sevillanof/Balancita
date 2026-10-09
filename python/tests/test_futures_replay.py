@@ -1,5 +1,6 @@
 import os
 import random
+import json
 import sqlite3
 import tempfile
 import unittest
@@ -8,7 +9,7 @@ from balancita_engine import futures_llm_decisions as llm
 import time
 
 from balancita_engine.futures_replay import ReplayJobs, run
-from balancita_engine.futures_replay_qwen import AnswerCache, BlindQwen, ConsensusRule
+from balancita_engine.futures_replay_qwen import AnswerCache, BlindQwen, CalmFilter, ConsensusRule
 from balancita_engine.futures_simulator import simulate_many
 from balancita_engine.futures_spec_strategy import load_specs
 
@@ -68,6 +69,46 @@ class ReplayTests(unittest.TestCase):
         return BlindQwen(provider, SPECS, llm.load_questions()["trade_action"], llm.load_calibration(),
                          prompts["templates"][prompts["default_version"]], trigger=trigger,
                          mode="raw_logprobs", cache=cache, reliability=reliability)
+
+    def test_calm_filter_threshold_uses_only_the_past(self):
+        from decimal import Decimal
+
+        calm = CalmFilter(fraction=0.5, min_history=4)
+        for v in (5, 1, 4, 2):
+            self.assertFalse(calm.is_calm(Decimal(v)))  # not enough history yet
+            calm.add(Decimal(v))
+        self.assertTrue(calm.is_calm(Decimal(1)))  # the sorted past is 1,2,4,5: threshold 4
+        self.assertTrue(calm.is_calm(Decimal(4)))
+        self.assertFalse(calm.is_calm(Decimal(5)))
+        self.assertFalse(calm.is_calm(None))
+        with self.assertRaises(ValueError):
+            CalmFilter(fraction=1)
+
+    def test_calm_skip_is_off_by_default_and_skipped_decisions_are_marked_holds(self):
+        start, end = ONES[300]["bucket_start"], ONES[1400]["bucket_start"]
+        plain, filtered = llm.FakeProvider(), llm.FakeProvider()
+        base = self._qwen(plain, trigger="5min")
+        run(self.market, os.path.join(self.dir.name, "p.sqlite"), "PF_XBTUSD", start, end, SPECS, qwen=base)
+        self.assertEqual(base.calm_skipped, 0)
+        self.assertFalse(any(d.get("skipped") for d in base.decisions))
+        quiet = self._qwen(filtered, trigger="5min")
+        quiet.calm = CalmFilter(fraction=1 / 3, min_history=50)
+        run(self.market, os.path.join(self.dir.name, "f.sqlite"), "PF_XBTUSD", start, end, SPECS, qwen=quiet)
+        skipped = [d for d in quiet.decisions if d.get("skipped")]
+        self.assertTrue(skipped)
+        self.assertEqual(len(skipped), quiet.calm_skipped)
+        self.assertEqual(len(quiet.decisions), len(base.decisions))  # every wanted frame still has a decision
+        self.assertLess(filtered.calls, plain.calls)
+        for d in skipped:
+            self.assertEqual((d["chosen"], d["source"]), ("hold", "calm-skip"))
+        db = sqlite3.connect(os.path.join(self.dir.name, "f.sqlite"))
+        meta = json.loads(db.execute("SELECT value FROM replay_run WHERE key='qwen'").fetchone()[0])
+        self.assertEqual((meta["calm_skipped"], meta["calm_filter"]), (quiet.calm_skipped, True))
+        # asked decisions are the same as without the filter
+        asked = {d["bucket_start"]: d for d in quiet.decisions if not d.get("skipped")}
+        for d in base.decisions:
+            if d["bucket_start"] in asked:
+                self.assertEqual(d["probabilities"], asked[d["bucket_start"]]["probabilities"])
 
     def test_the_consensus_rule_answers_the_largest_mean_probability_without_a_model(self):
         from balancita_engine.futures_llm_lessons import question_arm
