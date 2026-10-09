@@ -12,6 +12,7 @@
     "test:watch": "vitest",
     "typecheck": "tsc -p tsconfig.json",
     "candles:backfill": "node --experimental-strip-types src/features/kraken-futures/official-candles-backfill-cli.ts",
+    "funding:backfill": "node --experimental-strip-types src/features/kraken-futures/funding-backfill-cli.ts",
     "market:prune": "node --experimental-strip-types src/features/kraken-futures/futures-market-prune-cli.ts"
   },
   "dependencies": {

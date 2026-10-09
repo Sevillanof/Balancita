@@ -249,6 +249,23 @@ def qwen_factory(cache_path=None, env=None):
         if question_id not in questions:
             raise ValueError("unknown question " + str(question_id))
         question = questions[question_id]
+        funding = None
+        mode = params.get("funding", "off")
+        if mode not in ("off", "on", "placebo", "contrarian", "follow"):
+            raise ValueError("unknown funding mode " + str(mode))
+        if mode != "off":
+            from .futures_funding_context import PLACEBO_SHIFT_MS, FundingContext, funding_question, load_periods
+            periods = load_periods(params["market_db"], params.get("product_id", "PF_XBTUSD"))
+            if not periods:
+                raise ValueError("market DB has no funding history for the product; run `pnpm --dir server funding:backfill --db ...`")
+            funding = FundingContext(periods, PLACEBO_SHIFT_MS if mode == "placebo" else 0)
+            question = funding_question(question)
+        if mode in ("contrarian", "follow"):
+            from .futures_llm_lessons import question_arm
+            from .futures_replay_qwen import FundingRule
+            return FundingRule(specs, question_arm(question, "original"), funding, mode, tick_size=tick_size,
+                               trigger=params.get("trigger", "entry"), cache=AnswerCache(cache_path),
+                               product_id=params.get("product_id", "PF_XBTUSD"))
         if params.get("arm") == "consensus":  # no model: the mean strategy consensus decides (reference arm)
             from .futures_llm_lessons import question_arm
             return ConsensusRule(specs, question_arm(question, "original"), tick_size=tick_size,
@@ -262,7 +279,8 @@ def qwen_factory(cache_path=None, env=None):
         return BlindQwen(provider, specs, question, llm.load_calibration(),
                          prompts["templates"][prompts["default_version"]], tick_size=tick_size,
                          trigger=params.get("trigger", "entry"), mode=prompts["probability_source"],
-                         cache=AnswerCache(cache_path), product_id=params.get("product_id", "PF_XBTUSD"))
+                         cache=AnswerCache(cache_path), product_id=params.get("product_id", "PF_XBTUSD"),
+                         funding=funding)
 
     return make
 
@@ -286,6 +304,9 @@ def main(argv=None):
                         help="context lines of the question: original (as first defined), context "
                              "(+ strategy reliability), learning (+ Qwen's judged decisions) or consensus (no model: the "
                              "mean strategy consensus decides, the reference arm); default: as shipped")
+    parser.add_argument("--qwen-funding", choices=("off", "on", "placebo", "contrarian", "follow"), default="off",
+                        help="funding line (trade_action@5): off (as shipped, v4), on, placebo (the line from 7 days "
+                             "earlier), or a model-free rule: contrarian (high funding sells, low buys) / follow")
     parser.add_argument("--qwen-cache", help="SQLite file of cached answers shared between replays")
     parser.add_argument("--llama-url", help="default: http://127.0.0.1:$LLAMA_PORT")
     args = parser.parse_args(argv)
@@ -294,7 +315,7 @@ def main(argv=None):
     if args.qwen:
         env = dict(os.environ, **({"LLAMA_PORT": args.llama_url.rsplit(":", 1)[1]} if args.llama_url else {}))
         qwen = qwen_factory(args.qwen_cache, env)(
-            specs, {"question": args.qwen, "trigger": args.qwen_trigger, "arm": args.qwen_arm,
+            specs, {"question": args.qwen, "trigger": args.qwen_trigger, "arm": args.qwen_arm, "funding": args.qwen_funding, "market_db": args.market_db,
                     "product_id": args.product}, "1")
     summaries = run(args.market_db, args.out, args.product, _ms(args.start), _ms(args.end), specs, qwen=qwen)
     json.dump(summaries, sys.stdout, indent=2)

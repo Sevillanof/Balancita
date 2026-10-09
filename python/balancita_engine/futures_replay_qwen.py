@@ -100,7 +100,8 @@ class BlindQwen:
     """
 
     def __init__(self, provider, specs, question, calibration, template, *, tick_size="1",
-                 trigger="entry", mode="auto", cache=None, product_id=DEFAULT_PRODUCT, reliability=None):
+                 trigger="entry", mode="auto", cache=None, product_id=DEFAULT_PRODUCT, reliability=None,
+                 funding=None):
         if trigger not in TRIGGERS:
             raise ValueError("unknown Qwen trigger {!r}".format(trigger))
         self.provider, self.specs, self.question = provider, live_comparable(specs), question
@@ -115,6 +116,7 @@ class BlindQwen:
         self._candles = {}
         self.reliability = default_reliability() if reliability is None else reliability
         self.reliability_hidden = 0
+        self.funding = funding  # a ``FundingContext`` when the question lists the funding field
 
     def _reliability_at(self, bucket):
         """The reliability table a decision at ``bucket`` could have known, else an empty one."""
@@ -144,7 +146,8 @@ class BlindQwen:
             state = build_state(verdict, list(self.window), self.question["state_fields"],
                                 {s["id"]: s for s in self.specs},
                                 reliability=self._reliability_at(bucket), forward={},
-                                lessons=None if self.lessons is None else self.lessons.text(bucket))
+                                lessons=None if self.lessons is None else self.lessons.text(bucket),
+                                funding=None if self.funding is None else self.funding.line(bucket + ONE_MINUTE_MS))
         except StateError:
             return
         answer = self._answer(state, verdict, bucket)
@@ -196,3 +199,23 @@ class ConsensusRule(BlindQwen):
         chosen = max(("hold", "buy", "sell"), key=lambda name: mean.get(name, 0.0))
         return {"chosen": chosen, "probabilities": {n: mean.get(n, 0.0) for n in ("buy", "hold", "sell")},
                 "confidence": mean.get(chosen, 0.0), "source": "consensus"}
+
+
+class FundingRule(BlindQwen):
+    """Reference arms without a model: act on the funding level alone (same frames, book and +1 rule).
+
+    ``contrarian``: high funding -> sell, low -> buy, otherwise hold. ``follow`` is the same with the sign inverted.
+    """
+
+    def __init__(self, specs, question, funding, mode, **kwargs):
+        if mode not in ("contrarian", "follow"):
+            raise ValueError("unknown funding rule {!r}".format(mode))
+        super().__init__(_RuleProvider(), specs, question, {}, {}, funding=funding, **kwargs)
+        self.mode = mode
+
+    def _answer(self, state, verdict, bucket):
+        level = self.funding.level(bucket + ONE_MINUTE_MS)
+        sign = {"high": -1, "low": 1}.get(level, 0) * (1 if self.mode == "contrarian" else -1)
+        chosen = {1: "buy", -1: "sell", 0: "hold"}[sign]
+        return {"chosen": chosen, "probabilities": {n: 1.0 if n == chosen else 0.0 for n in ("buy", "hold", "sell")},
+                "confidence": 1.0, "source": "funding-" + self.mode}
