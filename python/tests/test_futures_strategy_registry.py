@@ -326,3 +326,29 @@ class ApiTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SharedConnectionTests(unittest.TestCase):
+    def test_threads_reading_and_writing_one_registry_do_not_collide(self):
+        directory = tempfile.mkdtemp()
+        registry = StrategyRegistry(os.path.join(directory, "strategies.sqlite"), clock=Clock())
+        registry.seed(SPECS)
+        errors = []
+
+        def work():
+            try:
+                for _ in range(40):
+                    registry.list()
+                    registry.detail(C25_ID)
+                    registry.active_specs(10**15)
+            except Exception as error:  # pragma: no cover - the failure is the test
+                errors.append(error)
+
+        threads = [threading.Thread(target=work) for _ in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        registry.close()
+        shutil.rmtree(directory)
+        self.assertEqual(errors, [])
