@@ -102,7 +102,7 @@ class QuestionArmTests(unittest.TestCase):
         text = llm.load_questions()["trade_action"]["instruction"].lower()
         for phrase in ("choose hold", "do not follow", "negative_edge"):
             self.assertNotIn(phrase, text)
-        self.assertIn("trade_action@3", QUESTION_PINS)
+        self.assertIn("trade_action@4", QUESTION_PINS)
 
 
 class ReplayLearningTests(unittest.TestCase):
