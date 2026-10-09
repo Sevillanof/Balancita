@@ -24,11 +24,12 @@ from .futures_llm_scores import QUESTION_ID, HORIZON_MIN, product_report
 FIT_SHARE = 0.7
 MIN_PER_PART = 100
 MIN_GAIN = 0.002  # log-loss nats
-T_MIN, T_MAX, T_STEPS = 0.5, 5.0, 91
+T_MIN, T_MAX, T_STEPS = 0.5, 50.0, 121  # log-spaced: a model saying 99.8 % needs a T well above 5
 
 
 def grid():
-    return [round(T_MIN + (T_MAX - T_MIN) * i / (T_STEPS - 1), 4) for i in range(T_STEPS)]
+    ratio = (T_MAX / T_MIN) ** (1 / (T_STEPS - 1))
+    return sorted({round(T_MIN * ratio ** i, 4) for i in range(T_STEPS)} | {1.0})
 
 
 def rescale(probs, stored_t, new_t):
@@ -49,6 +50,37 @@ def log_loss(pairs, new_t):
 def fit(pairs):
     """``(best_t, log_loss at best_t)`` on ``pairs``."""
     return min(((t, log_loss(pairs, t)) for t in grid()), key=lambda item: (item[1], abs(item[0] - 1.0)))
+
+
+def rows_from_run(run_path, market_db_path):
+    """Scored rows of one replay run DB (``futures_replay``): the same shape as ``futures_llm_scores`` rows.
+
+    Replay answers were asked with the temperature of the calibration file at that time (1.0 unless
+    ``--stored-temperature`` says otherwise).
+    """
+    import sqlite3
+
+    from .futures_replay import load_range
+    from .futures_replay_compare import HORIZON_MIN as COMPARE_HORIZON, read_run
+    from .futures_verdicts import ONE_MINUTE_MS
+
+    meta, _ = read_run(run_path)
+    db = sqlite3.connect("file:{}?mode=ro".format(run_path), uri=True)
+    try:
+        decisions = [json.loads(payload) for (payload,) in db.execute(
+            "SELECT payload FROM replay_qwen_decision ORDER BY id")]
+    finally:
+        db.close()
+    ones, _ = load_range(market_db_path, meta["product_id"], meta["start_ms"],
+                         meta["end_ms"] + COMPARE_HORIZON * ONE_MINUTE_MS)
+    closes = {c["bucket_start"]: float(c["close"]) for c in ones}
+    rows = []
+    for d in sorted(decisions, key=lambda item: item["bucket_start"]):
+        entry, later = closes.get(d["bucket_start"]), closes.get(d["bucket_start"] + COMPARE_HORIZON * ONE_MINUTE_MS)
+        if entry and later and d.get("probabilities"):
+            rows.append({"status": "scored", "chosen": d["chosen"], "probabilities": d["probabilities"],
+                         "gross_bp": (later - entry) / entry * 10_000, "temperature": 1.0})
+    return rows, meta["product_id"]
 
 
 def calibrate(rows, round_trip_bp):
@@ -90,6 +122,8 @@ def main(argv=None, out=None):
     parser = argparse.ArgumentParser(description="Fit the trade_action calibration temperature by time")
     parser.add_argument("--decisions-db", default=os.environ.get("FUTURES_DECISIONS_DB_PATH"))
     parser.add_argument("--verdicts-db", default=os.environ.get("FUTURES_VERDICTS_DB_PATH"))
+    parser.add_argument("--run", help="fit on one replay run DB instead (needs --market-db)")
+    parser.add_argument("--market-db")
     parser.add_argument("--product", default=DEFAULT_PRODUCT)
     parser.add_argument("--question", default=QUESTION_ID)
     parser.add_argument("--version", type=int)
@@ -97,14 +131,24 @@ def main(argv=None, out=None):
     parser.add_argument("--calibration-file", default=CALIBRATION_PATH)
     parser.add_argument("--write", action="store_true", help="write T to the calibration file when accepted")
     args = parser.parse_args(argv)
-    if not args.decisions_db or not args.verdicts_db:
-        parser.error("--decisions-db and --verdicts-db are required")
-    report = product_report(args.decisions_db, args.verdicts_db, args.product, args.question, args.version,
-                            args.horizon_min)
-    result = calibrate(report["rows"], round_trip_cost_bps(args.product))
-    result.update(product_id=args.product, question_id=args.question, question_version=report["question_version"])
+    if args.run:
+        if not args.market_db:
+            parser.error("--run needs --market-db")
+        rows, product = rows_from_run(args.run, args.market_db)
+        version = args.version
+        if version is None:
+            from .futures_llm_decisions import load_questions
+            version = load_questions()[args.question]["version"]
+    else:
+        if not args.decisions_db or not args.verdicts_db:
+            parser.error("--decisions-db and --verdicts-db are required (or --run and --market-db)")
+        report = product_report(args.decisions_db, args.verdicts_db, args.product, args.question, args.version,
+                                args.horizon_min)
+        rows, product, version = report["rows"], args.product, report["question_version"]
+    result = calibrate(rows, round_trip_cost_bps(product))
+    result.update(product_id=product, question_id=args.question, question_version=version)
     if args.write and result["accepted"]:
-        write_temperature(args.calibration_file, args.question, report["question_version"], result["temperature"])
+        write_temperature(args.calibration_file, args.question, version, result["temperature"])
         result["written_to"] = args.calibration_file
     out.write(json.dumps(result, indent=2, sort_keys=True) + "\n")
     return 0
