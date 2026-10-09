@@ -7,10 +7,13 @@ of the live service do not apply. Answers are cached by prompt hash (the model
 runs at a fixed temperature), so replaying a range twice asks nothing new.
 """
 
+import bisect
 import collections
 import hashlib
 import json
 import sqlite3
+
+from decimal import Decimal, InvalidOperation
 
 from .futures_llm_decisions import (
     StateError,
@@ -33,6 +36,40 @@ from .futures_verdicts import ONE_MINUTE_MS
 TRIGGERS = ("entry", "5min", "all")
 WINDOW = 61  # candles the STATE fields read (returns up to 60 minutes back)
 FIVE_MINUTES_MS = 5 * ONE_MINUTE_MS
+CALM_SOURCE = "calm-skip"
+CALM_MIN_HISTORY = 500  # frames seen before the percentile means anything; until then nothing is skipped
+
+
+class CalmFilter:
+    """Skips the decisions taken while volatility (ATR / close) is in the lowest ``fraction`` of what was seen so far.
+
+    The threshold is the ``fraction`` quantile of the values of the frames BEFORE the decision (the current frame
+    is added afterwards), so it reads nothing from the future. A skipped decision is recorded as ``hold``.
+    """
+
+    def __init__(self, fraction=1 / 3, min_history=CALM_MIN_HISTORY):
+        if not 0 < fraction < 1:
+            raise ValueError("calm fraction must be between 0 and 1")
+        self.fraction, self.min_history = fraction, min_history
+        self.seen = []
+
+    @staticmethod
+    def volatility(candle, current):
+        try:
+            atr, close = Decimal(str(current.get("atr14"))), Decimal(str(candle["close"]))
+        except (InvalidOperation, ValueError, AttributeError, KeyError):
+            return None
+        return atr / close if atr.is_finite() and close > 0 else None
+
+    def is_calm(self, value):
+        """Whether ``value`` is calm against the history so far (does not add it)."""
+        if value is None or len(self.seen) < self.min_history:
+            return False
+        return value <= self.seen[int(len(self.seen) * self.fraction)]
+
+    def add(self, value):
+        if value is not None:
+            bisect.insort(self.seen, value)
 
 
 class AnswerCache:
@@ -101,7 +138,7 @@ class BlindQwen:
 
     def __init__(self, provider, specs, question, calibration, template, *, tick_size="1",
                  trigger="entry", mode="auto", cache=None, product_id=DEFAULT_PRODUCT, reliability=None,
-                 funding=None):
+                 funding=None, calm=None):
         if trigger not in TRIGGERS:
             raise ValueError("unknown Qwen trigger {!r}".format(trigger))
         self.provider, self.specs, self.question = provider, live_comparable(specs), question
@@ -117,6 +154,7 @@ class BlindQwen:
         self.reliability = default_reliability() if reliability is None else reliability
         self.reliability_hidden = 0
         self.funding = funding  # a ``FundingContext`` when the question lists the funding field
+        self.calm, self.calm_skipped = calm, 0  # optional ``CalmFilter``; off by default
 
     def _reliability_at(self, bucket):
         """The reliability table a decision at ``bucket`` could have known, else an empty one."""
@@ -140,7 +178,18 @@ class BlindQwen:
         verdict = {"bucket_start_ms": bucket, "decision_known_at_ms": bucket + ONE_MINUTE_MS, "regime": regime,
                    "features": {"1m": current, "5m": trend}, "proposals": proposals}
         self.verdicts.append(verdict)
+        calm = False
+        if self.calm is not None:
+            value = CalmFilter.volatility(candle, current)
+            calm = self.calm.is_calm(value)
+            self.calm.add(value)
         if not _wanted(self.trigger, bucket, proposals):
+            return
+        if calm:
+            self.calm_skipped += 1
+            self.decisions.append({"chosen": "hold", "probabilities": {"buy": 0.0, "hold": 1.0, "sell": 0.0},
+                                   "confidence": 1.0, "source": CALM_SOURCE, "skipped": True,
+                                   "bucket_start": bucket, "state_text": ""})
             return
         try:
             state = build_state(verdict, list(self.window), self.question["state_fields"],
