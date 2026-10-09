@@ -14,6 +14,7 @@ from balancita_engine.futures_qwen_exit import (
     ExitLessons,
     QwenExitDecider,
     check_interval_ms,
+    exit_calibration,
     load_config,
     run_once,
     write_summary,
@@ -270,6 +271,20 @@ class RunnerTests(unittest.TestCase):
         self.assertIn(PRODUCT, body["by_product"])
         self.assertEqual(body["exit_decisions"]["hold"], 0)
         self.assertGreater(body["exit_decisions"]["close"], 0)
+
+    def test_the_calibration_judges_each_answer_by_the_price_30_minutes_later(self):
+        self.run_with(llm.FakeProvider(entries=answers(close_when=lambda prompt: True)))
+        cal = exit_calibration(self.db, self.market, config(), now_ms=self.now)
+        self.assertGreater(cal["decisions"], 0)
+        self.assertEqual(set(cal["right_action_rates"]), {"hold", "close"})
+        self.assertAlmostEqual(cal["brier_uniform"], 0.5)
+        self.assertEqual(sum(b["decisions"] for b in cal["reliability"]), cal["decisions"])
+        self.assertEqual(cal["high_confidence"]["decisions"], cal["decisions"])  # scripted p(close) is about 0.95
+        body = write_summary(self.db, config(), os.path.join(self.dir.name, "s.json"), now_ms=self.now,
+                             market_db=self.market)
+        self.assertEqual(body["calibration"]["decisions"], cal["decisions"])
+        self.assertIsNone(write_summary(self.db, config(), os.path.join(self.dir.name, "t.json"),
+                                        now_ms=self.now)["calibration"])
 
 
 class ShippedConfigTests(unittest.TestCase):
