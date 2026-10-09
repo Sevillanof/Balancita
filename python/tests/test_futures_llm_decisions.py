@@ -453,6 +453,11 @@ class Fixture:
 
     def close(self):
         self.store.close()
+        # The writer is gone: leave the DB out of WAL so a read-only reader can open the copy
+        # (newer SQLite builds refuse mode=ro on a WAL file without -shm/-wal).
+        db = sqlite3.connect(self.verdicts_path)
+        db.execute("PRAGMA journal_mode=DELETE")
+        db.close()
 
 
 def latest_payload(fixture):
