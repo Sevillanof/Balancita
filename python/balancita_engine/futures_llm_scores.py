@@ -67,7 +67,7 @@ def load_decisions(decisions_db_path, product_id, question_id=QUESTION_ID, versi
                 (product_id, question_id),
             ).fetchone()[0]
         rows = db.execute(
-            "SELECT bucket_start, chosen, probabilities_json, confidence, written_at "
+            "SELECT bucket_start, chosen, probabilities_json, confidence, written_at, temperature "
             "FROM paper_futures_llm_decisions WHERE product_id=? AND question_id=? AND question_version=? "
             "ORDER BY bucket_start",
             (product_id, question_id, version),
@@ -75,7 +75,7 @@ def load_decisions(decisions_db_path, product_id, question_id=QUESTION_ID, versi
     finally:
         db.close()
     return [{"bucket_start": r[0], "chosen": r[1], "probabilities": json.loads(r[2]),
-             "confidence": r[3], "written_at": r[4]} for r in rows], version
+             "confidence": r[3], "written_at": r[4], "temperature": r[5]} for r in rows], version
 
 
 def _close(verdict):
@@ -91,7 +91,7 @@ def score_decisions(decisions, verdicts, *, book=BOOK_CONFIG, horizon_min=HORIZO
     for decision in decisions:
         bucket, chosen = decision["bucket_start"], decision["chosen"]
         row = {"bucket_start": bucket, "chosen": chosen, "confidence": decision["confidence"],
-               "probabilities": decision["probabilities"], "point": None, "net_bp": None,
+               "probabilities": decision["probabilities"], "temperature": decision.get("temperature", 1.0), "point": None, "net_bp": None,
                "gross_bp": None, "status": "pending"}
         entry_verdict = by_bucket.get(bucket)
         exit_verdict = by_bucket.get(bucket + horizon_min * ONE_MINUTE_MS)
