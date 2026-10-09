@@ -126,6 +126,12 @@ function pythonStatus(python) {
 
 export const DEFAULT_LLAMA_PORT = 8088
 
+/** `[flag, value]` when the environment sets a value, else nothing (the server default stays). */
+function optionalFlag(flag, value) {
+  const text = (value ?? '').trim()
+  return text ? [flag, text] : []
+}
+
 /** Port of the optional `llama-server` child (`LLAMA_PORT`, default 8088). */
 export function llamaPort(env) {
   const port = Number(env.LLAMA_PORT)
@@ -605,6 +611,9 @@ export function devChildSpecs({
           (env.LLAMA_CTX ?? '').trim() || '8192',
           '-np',
           (env.LLAMA_PARALLEL ?? '').trim() || '2',
+          // Opt-in server flags for prompt reuse between option orders (see futures_qwen_prefill_probe.py).
+          ...optionalFlag('-ub', env.LLAMA_UBATCH),
+          ...optionalFlag('--ctx-checkpoints', env.LLAMA_CTX_CHECKPOINTS),
           '--no-mmproj',
           '--no-webui',
         ],

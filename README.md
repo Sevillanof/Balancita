@@ -138,6 +138,8 @@ Sin red, `capture` y la fuente Real avisan; `vite`, `mock` y el resto siguen fun
 | `LLAMA_PORT`           | `8088`        | Puerto loopback                                             |
 | `LLAMA_CTX`            | `8192`        | Contexto                                                    |
 | `LLAMA_PARALLEL`       | `2`           | Slots paralelos                                             |
+| `LLAMA_UBATCH`         | (servidor)    | Opcional, `-ub`. Con modelos híbridos (Qwen3.5) decide dónde se guarda el punto de reuso del prompt; ver `futures_qwen_prefill_probe.py` |
+| `LLAMA_CTX_CHECKPOINTS`| (servidor)    | Opcional, `--ctx-checkpoints`                               |
 | `DECISIONS_PRODUCTS`   | `PF_XBTUSD`   | Productos que decide Q (separados por comas)                |
 | `NEWS_ENABLED`         | activo        | `0` desactiva `news`                                        |
 | `NEWS_EXTRA_RSS_FEEDS` | -             | Feeds extra `id\|label\|https url\|license`                 |
