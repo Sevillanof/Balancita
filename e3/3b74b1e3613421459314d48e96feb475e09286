@@ -1,0 +1,19 @@
+python/tests/test_futures_llm_decisions.py
+  s_c9608010dba540::t_8d64cfce779dda 456-460
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e33b74b1e3613421459314d48e96feb475e09286",
+  "prompts": {},
+  "sessions": {
+    "s_c9608010dba540": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "08dcf59e-c65b-49b4-a1e1-eca3f870189e",
+        "model": "unknown"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
