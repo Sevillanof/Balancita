@@ -27,6 +27,7 @@ QUESTION_PINS = {
     "direction_1h@1": "871a574441420daa418d5f7368d7945e8e37a4d56d6b81763e37a80abdaccede",
     "exit_decision@1": "65056b73f357e53b7f4e3c1ff8e37c7d8375e20752ce45b7f95eaf5f4f13596b",
     "trade_action@3": "56c3ab517f9d69da54ca15819e79796acca851f4ce4fdf6715c1f0215da1c138",
+    "trade_action@4": "d0c6f5ec5f10f4a51a4c329c8a8bfda6e95608d90a9a230ce8c25653f2a70e15",
 }
 
 
@@ -257,6 +258,65 @@ class ConversionTests(unittest.TestCase):
 
     def test_choice_has_no_value(self):
         self.assertIsNone(q.convert(choice_question(), entries(), 1.0)["value"])
+
+
+class OrderDebiasTests(unittest.TestCase):
+    """QC-04: the letters a model prefers must not decide; options are permuted and averaged."""
+
+    def setUp(self):
+        self.question = q.load_questions()["trade_action"]
+        self.template = q.default_template()
+
+    def test_trade_action_v4_is_v3_plus_cyclic_debias_and_v3_keeps_its_pin(self):
+        self.assertEqual((self.question["version"], self.question["order_debias"]), (4, "cyclic"))
+        v3 = {k: v for k, v in self.question.items() if k != "order_debias"}
+        v3["version"] = 3
+        self.assertEqual(q.question_hash(v3), QUESTION_PINS["trade_action@3"])
+
+    def test_cyclic_orders_put_every_option_on_every_letter_once(self):
+        orders = q.option_orders(self.question)
+        self.assertEqual(orders[0], [0, 1, 2])
+        for letter in range(3):
+            self.assertEqual(sorted(order[letter] for order in orders), [0, 1, 2])
+        self.assertEqual(len(q.option_orders(dict(self.question, order_debias="all"))), 6)
+        self.assertEqual(q.option_orders(choice_question()), [[0, 1, 2]])
+        self.assertEqual(q.option_orders(dict(BOOL_QUESTION, order_debias="cyclic")), [[0, 1]])
+        with self.assertRaises(ValueError):
+            q.validate_question(dict(choice_question(), order_debias="random"))
+
+    def _letter_biased(self, prompt, letters):
+        """A model that always says 'A' with p=0.9 and ignores what the options mean."""
+        return top(A=math.log(0.9), B=math.log(0.06), C=math.log(0.04))
+
+    def test_a_pure_letter_bias_averages_out_to_a_flat_decision(self):
+        provider = q.FakeProvider(entries=self._letter_biased)
+        done = q.ask_state(provider, "regime: range", self.question, 1.0, self.template, "raw_logprobs")
+        self.assertEqual(provider.calls, 3)
+        probs = done["result"]["probabilities"]
+        self.assertAlmostEqual(sum(probs.values()), 1.0)
+        for option in ("buy", "hold", "sell"):
+            self.assertAlmostEqual(probs[option], 1 / 3, places=6)
+        self.assertLess(done["result"]["confidence"], 1e-9)
+        self.assertEqual(len(done["output"]["timings"]["order_probabilities"]), 3)
+        # the prompt kept for the audit is the written order
+        self.assertTrue(done["prompt"].split("\n")[2].startswith("A) buy"))
+
+    def test_a_real_preference_survives_the_permutations(self):
+        def likes_sell(prompt, letters):
+            lines = [line for line in prompt.split("\n") if line[1:3] == ") "]
+            sell_letter = next(line[0] for line in lines if line[3:].startswith("sell"))
+            return top(**{l: math.log(0.8 if l == sell_letter else 0.1) for l in letters})
+        done = q.ask_state(q.FakeProvider(entries=likes_sell), "s", self.question, 1.0, self.template, "raw_logprobs")
+        self.assertEqual(done["result"]["chosen"], "sell")
+        self.assertAlmostEqual(done["result"]["probabilities"]["sell"], 0.8, places=6)
+
+    def test_questions_without_debias_ask_once_as_before(self):
+        provider = q.FakeProvider()
+        question = choice_question()
+        done = q.ask_state(provider, "s", question, 1.0, self.template, "raw_logprobs")
+        self.assertEqual(provider.calls, 1)
+        self.assertEqual(done["prompt"], q.build_prompt("s", question, self.template))
+        self.assertNotIn("order_probabilities", done["output"].get("timings", {}))
 
 
 class CatalogTests(unittest.TestCase):

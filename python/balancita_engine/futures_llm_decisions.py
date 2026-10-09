@@ -41,6 +41,7 @@ Design rules
 """
 
 import hashlib
+import itertools
 import json
 import math
 import os
@@ -164,6 +165,8 @@ def validate_question(question):
     scope = question.get("scope", "verdict")
     if scope not in QUESTION_SCOPES:
         raise ValueError("{}: scope must be one of {}".format(name, ", ".join(QUESTION_SCOPES)))
+    if question.get("order_debias", "none") not in ORDER_DEBIAS:
+        raise ValueError("{}: order_debias must be one of {}".format(name, ", ".join(ORDER_DEBIAS)))
     fields = question.get("state_fields")
     if scope == "news":
         if fields:
@@ -236,6 +239,33 @@ def question_options(question):
     if question["type"] == "bool":
         return [("true", None, None), ("false", None, None)]
     return [(o["id"], o["description"], o.get("value")) for o in question["options"]]
+
+
+ORDER_DEBIAS = ("none", "cyclic", "all")
+
+
+def option_orders(question):
+    """Option orders a question is asked in: ``[[index, ...], ...]``, the written order first.
+
+    Models prefer some letters whatever they stand for (guide step 10.1), so a question with
+    ``order_debias`` is asked with its options permuted and the probabilities per option are
+    averaged: ``cyclic`` rotates the list (each option meets each letter once), ``all`` tries
+    every permutation. Only ``choice`` and ``score`` questions can be permuted (bool is true/false).
+    """
+    mode = question.get("order_debias", "none")
+    count = len(question_options(question))
+    if mode == "none" or question["type"] == "bool" or count < 2:
+        return [list(range(count))]
+    if mode == "cyclic":
+        return [[(start + step) % count for step in range(count)] for start in range(count)]
+    return [list(order) for order in itertools.permutations(range(count))]
+
+
+def permuted(question, order):
+    if order == list(range(len(order))):
+        return question
+    options = question["options"]
+    return dict(question, options=[options[index] for index in order])
 
 
 def question_letters(question):
@@ -1043,6 +1073,45 @@ def ask_model(provider, prompt, letters, question, temperature, template, mode):
     return {"output": second, "result": second_result, "source": POST_SOURCE}
 
 
+def merge_orders(question, results):
+    """One decision from the answers to several option orders: the mean probability of each option."""
+    options = question_options(question)
+    probs = [sum(r["probabilities"][o[0]] for r in results) / len(results) for o in options]
+    entropy = -sum(p * math.log(p) for p in probs if p > 0)
+    chosen = max(range(len(probs)), key=lambda index: probs[index])
+    value = None
+    if question["type"] == "score":
+        value = sum(p * option[2] for p, option in zip(probs, options))
+    return dict(results[0], probabilities={o[0]: p for o, p in zip(options, probs)}, chosen=options[chosen][0],
+                confidence=min(1.0, max(0.0, 1.0 - entropy / math.log(len(probs)))), value=value,
+                missing=sorted(set().union(*[r["missing"] for r in results])))
+
+
+def ask_state(provider, state, question, temperature, template, mode):
+    """Builds the prompt(s) for a STATE and asks; returns ``{prompt, output, result, source}``.
+
+    Without ``order_debias`` this is ``build_prompt`` + ``ask_model``. With it the question is asked once per
+    option order and the probabilities per option are averaged (``merge_orders``); ``prompt`` and
+    ``top_logprobs`` are those of the written order and ``timings.order_probabilities`` keeps each order's answer.
+    """
+    orders = option_orders(question)
+    prompt = build_prompt(state, question, template)
+    answers = []
+    for order in orders:
+        variant = permuted(question, order)
+        text = prompt if variant is question else build_prompt(state, variant, template)
+        answers.append(ask_model(provider, text, question_letters(variant), variant, temperature, template, mode))
+    if len(answers) == 1:
+        return dict(answers[0], prompt=prompt)
+    output = dict(answers[0]["output"])
+    output["latency_ms"] = sum(a["output"].get("latency_ms") or 0 for a in answers)
+    output["timings"] = dict(output.get("timings") or {}, order_probabilities=[
+        {"order": [question_options(question)[i][0] for i in order], "probabilities": a["result"]["probabilities"]}
+        for order, a in zip(orders, answers)])
+    return {"prompt": prompt, "output": output, "result": merge_orders(question, [a["result"] for a in answers]),
+            "source": answers[0]["source"]}
+
+
 def evaluate(provider, verdicts, market, product_id, bucket_start, question, calibration,
              template=None, mode="auto", lessons=None):
     """Builds the state, asks the model and converts the answer. Stores nothing.
@@ -1054,10 +1123,9 @@ def evaluate(provider, verdicts, market, product_id, bucket_start, question, cal
         product_id, ONE_MINUTE_MS, bucket_start + ONE_MINUTE_MS, verdict["decision_known_at_ms"], 61
     )
     state = build_state(verdict, candles, question["state_fields"], lessons=lessons)
-    prompt = build_prompt(state, question, template)
     temperature = temperature_for(calibration, question["id"], question["version"])
-    answer = ask_model(provider, prompt, question_letters(question), question, temperature, template, mode)
-    return {"verdict": verdict, "state": state, "prompt": prompt, "output": answer["output"],
+    answer = ask_state(provider, state, question, temperature, template, mode)
+    return {"verdict": verdict, "state": state, "prompt": answer["prompt"], "output": answer["output"],
             "result": answer["result"], "source": answer["source"], "template": template}
 
 

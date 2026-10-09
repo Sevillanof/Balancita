@@ -35,8 +35,9 @@
     },
     {
       "id": "trade_action",
-      "version": 3,
+      "version": 4,
       "type": "choice",
+      "order_debias": "cyclic",
       "instruction": "Each strategy in strategy_signals gives its probabilities to buy, hold or sell now, with its most likely action in parentheses, and strategy_consensus is their average. Weighing every strategy together with the normalized market state, which action is most likely to be right now?",
       "options": [
         {

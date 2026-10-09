@@ -130,5 +130,7 @@ def question_arm(question, arm):
         raise ValueError("unknown arm {!r}".format(arm))
     shipped = question["state_fields"]
     arm_question = dict(question, state_fields=[f for f in shipped if f not in _EXTRA_FIELDS[arm]])
+    if arm == "original":
+        arm_question.pop("order_debias", None)  # as first defined: one fixed letter order
     arm_question["version"] = {"original": 1, "context": 2}.get(arm, question["version"])
     return arm_question

@@ -69,7 +69,7 @@ class QuestionTests(unittest.TestCase):
         self.assertNotIn("exit_decision", llm.load_questions())  # Q never asks it
         self.assertNotIn("exit_decision", llm.load_questions(scope="news"))
         shipped = llm.load_questions()["trade_action"]
-        self.assertEqual(shipped["version"], 3)
+        self.assertEqual(shipped["version"], 4)
         self.assertNotIn("position", shipped["state_fields"])
         self.assertNotIn("exit_lessons", shipped["state_fields"])
 
