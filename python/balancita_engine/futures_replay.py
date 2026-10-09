@@ -129,6 +129,7 @@ def run(market_db, out_path, product_id, start_ms, end_ms, specs, tick_size="1",
         meta["qwen"] = {"question": qwen.question["id"], "version": qwen.question["version"], "trigger": qwen.trigger,
                         "model_ref": qwen.model_ref, "asked": qwen.cache.misses, "cached": qwen.cache.hits,
                         "reliability_hidden": qwen.reliability_hidden,
+                        "perf": getattr(qwen.provider, "perf_summary", dict)(),
                         "strategies": [spec["id"] for spec in qwen.specs]}
         extra = {"decisions": qwen.decisions, "report": qwen_report(qwen)}
     write_run(out_path, meta, books, extra)
@@ -307,6 +308,8 @@ def main(argv=None):
     parser.add_argument("--qwen-funding", choices=("off", "on", "placebo", "contrarian", "follow"), default="off",
                         help="funding line (trade_action@5): off (as shipped, v4), on, placebo (the line from 7 days "
                              "earlier), or a model-free rule: contrarian (high funding sells, low buys) / follow")
+    parser.add_argument("--qwen-pause-ms", type=int, default=0,
+                        help="sleep after each model answer so the GPU can cool (same results, slower)")
     parser.add_argument("--qwen-cache", help="SQLite file of cached answers shared between replays")
     parser.add_argument("--llama-url", help="default: http://127.0.0.1:$LLAMA_PORT")
     args = parser.parse_args(argv)
@@ -317,6 +320,8 @@ def main(argv=None):
         qwen = qwen_factory(args.qwen_cache, env)(
             specs, {"question": args.qwen, "trigger": args.qwen_trigger, "arm": args.qwen_arm, "funding": args.qwen_funding, "market_db": args.market_db,
                     "product_id": args.product}, "1")
+    if qwen is not None and hasattr(qwen.provider, "pause_s"):
+        qwen.provider.pause_s = max(0, args.qwen_pause_ms) / 1000
     summaries = run(args.market_db, args.out, args.product, _ms(args.start), _ms(args.end), specs, qwen=qwen)
     json.dump(summaries, sys.stdout, indent=2)
     print()

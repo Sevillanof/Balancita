@@ -388,6 +388,7 @@ class PromptTests(unittest.TestCase):
             "logprobs": True,
             "top_logprobs": 20,
             "chat_template_kwargs": {"enable_thinking": False},
+            "cache_prompt": True,
         })
 
     def test_grammar_follows_the_number_of_options(self):
@@ -1074,7 +1075,7 @@ PROMPT_PINS = {
 }
 SYSTEM_TEXT = "You are a classifier. Reply with exactly one option letter and nothing else."
 OLD_BODY_KEYS = {"messages", "max_tokens", "temperature", "grammar", "logprobs", "top_logprobs",
-                 "chat_template_kwargs"}
+                 "chat_template_kwargs", "cache_prompt"}
 
 
 class PromptVersionTests(unittest.TestCase):
@@ -1185,6 +1186,7 @@ class SourceRequestTests(unittest.TestCase):
             "top_logprobs": 20,
             "post_sampling_probs": True,
             "chat_template_kwargs": {"enable_thinking": False},
+            "cache_prompt": True,
         })
 
     def test_raw_body_is_deterministic_and_has_no_post_sampling_flag(self):
@@ -1502,3 +1504,18 @@ class ProbeSourcesTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ProviderPerfTests(unittest.TestCase):
+    def test_timings_are_accumulated_and_the_cache_share_is_the_reused_part(self):
+        provider = q.LlamaCppProvider("http://127.0.0.1:9")
+        provider._account({"prompt_n": 40, "cache_n": 360, "prompt_ms": 20.0, "predicted_ms": 5.0}, 30)
+        provider._account({"prompt_n": 400, "prompt_ms": 150.0}, 160)
+        provider._account(None, 10)
+        summary = provider.perf_summary()
+        self.assertEqual((summary["queries"], summary["prompt_n"], summary["cache_n"]), (3, 440, 360))
+        self.assertEqual(summary["latency_ms"], 200)
+        self.assertEqual(summary["cache_share"], 0.45)
+
+    def test_without_answers_the_share_is_unknown(self):
+        self.assertIsNone(q.LlamaCppProvider("http://127.0.0.1:9").perf_summary()["cache_share"])

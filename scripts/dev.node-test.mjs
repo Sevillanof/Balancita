@@ -636,6 +636,12 @@ describe('optional LLM decision children (llm and q)', () => {
     assert.equal(spec.args[spec.args.indexOf('--port') + 1], '9001')
     assert.equal(spec.args[spec.args.indexOf('-c') + 1], '4096')
     assert.equal(spec.args[spec.args.indexOf('-np') + 1], '3')
+    const tuned = byName(
+      devChildSpecs({ ...base, env: { ...env, LLAMA_UBATCH: '64', LLAMA_CTX_CHECKPOINTS: '16' }, llm }),
+    ).llm.args
+    assert.equal(tuned[tuned.indexOf('-ub') + 1], '64')
+    assert.equal(tuned[tuned.indexOf('--ctx-checkpoints') + 1], '16')
+    assert.ok(!spec.args.includes('-ub'))
     const hf = byName(
       devChildSpecs({ ...base, env: { LLAMA_HF: 'org/other:Q6_K' }, llm }),
     )

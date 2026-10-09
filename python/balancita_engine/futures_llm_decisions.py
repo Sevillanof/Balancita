@@ -40,6 +40,7 @@ Design rules
 * Stdlib only (``urllib``), Python 3.9+.
 """
 
+import collections
 import hashlib
 import itertools
 import json
@@ -388,6 +389,9 @@ def request_body(prompt, letters, template=None, source=RAW_SOURCE):
         "logprobs": True,
         "top_logprobs": TOP_LOGPROBS,
         "chat_template_kwargs": {"enable_thinking": False},
+        # Explicit (older llama-server builds default to false): the option orders of one question share
+        # almost the whole prompt, so the server only has to process the tokens after the divergence.
+        "cache_prompt": True,
     }
     if source == POST_SOURCE:
         body.update({"temperature": 1, "top_k": 0, "top_p": 1, "min_p": 0, "post_sampling_probs": True})
@@ -762,6 +766,8 @@ class LlamaCppProvider:
         self.model_ref = model_ref
         self.timeout = timeout
         self.health_timeout = health_timeout
+        self.pause_s = 0.0  # sleep after each answer: lets the GPU cool during long replays, changes nothing else
+        self.perf = collections.Counter()  # queries, prompt tokens processed / reused, prompt and total ms
         # llama-server is local: never go through an HTTP(S)_PROXY from the environment.
         self._opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
@@ -844,6 +850,21 @@ class LlamaCppProvider:
             raise ModelResponseError("malformed_response", "top_probs has no positive probability")
         return entries
 
+    def _account(self, timings, latency_ms):
+        timings = timings if isinstance(timings, dict) else {}
+        self.perf["queries"] += 1
+        self.perf["latency_ms"] += latency_ms
+        for key in ("prompt_n", "cache_n", "prompt_ms", "predicted_ms"):
+            value = timings.get(key)
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                self.perf[key] += value
+
+    def perf_summary(self):
+        """Totals of this provider's answers; ``cache_share`` is the part of the prompt tokens the server reused."""
+        perf, seen = dict(self.perf), self.perf["prompt_n"] + self.perf["cache_n"]
+        perf["cache_share"] = round(self.perf["cache_n"] / seen, 4) if seen else None
+        return perf
+
     def complete(self, prompt, letters, source=RAW_SOURCE, template=None):
         started = time.monotonic()
         body = request_body(prompt, letters, template, source)
@@ -876,6 +897,9 @@ class LlamaCppProvider:
             )
         latency_ms = int((time.monotonic() - started) * 1000)
         timings = answer.get("timings")
+        self._account(timings, latency_ms)
+        if self.pause_s:
+            time.sleep(self.pause_s)
         try:
             content = (choice.get("message") or {}).get("content") or ""
         except AttributeError:
