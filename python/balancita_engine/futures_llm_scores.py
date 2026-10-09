@@ -33,6 +33,7 @@ import sys
 from decimal import Decimal
 
 from .futures_hits import trade_hit
+from .futures_llm_calibration import calibration_report, format_lines as calibration_lines
 from .futures_costs import DEFAULT_PRODUCT, round_trip_cost_bps
 from .futures_simulator import DEFAULT_NOTIONAL_USD, DecisionBook
 from .futures_strategy_backtest import (
@@ -171,6 +172,7 @@ def report(decisions, verdicts, *, book=BOOK_CONFIG, horizon_min=HORIZON_MIN):
         "decisions": _points(rows),
         "by_option": {action: _points([r for r in rows if r["chosen"] == action]) for action in ACTIONS},
         "baseline": always_hold_baseline(rows, book.get("product_id", DEFAULT_PRODUCT)),
+        "calibration": calibration_report(rows, round_trip_cost_bps(book.get("product_id", DEFAULT_PRODUCT))),
         "trading": dict(_summary(trades, initial_cash), max_drawdown=_max_drawdown(trades, initial_cash)),
         "skipped": {"count": len(skipped), "first": skipped[:20]},
         "rows": rows,
@@ -214,6 +216,8 @@ def format_report(result):
     base = result.get("baseline") or {}
     if base.get("always_hold_rate") is not None:
         lines.append("Línea base: responder siempre hold acierta {}".format(_pct(base["always_hold_rate"])))
+    if "calibration" in result:
+        lines.extend(calibration_lines(result["calibration"], _pct))
     lines.append("Operando (mismo libro y costes que el backtest): {} operaciones, {} ganadoras, acierto {}".format(
         t["trades"], t["wins"], _pct(t["hit_rate"])))
     lines.append("  Resultado: {} USD ({}% sobre {} USD)   Neto medio: {} bp   Peor caída: {}%".format(
