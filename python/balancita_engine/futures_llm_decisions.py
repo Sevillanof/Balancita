@@ -629,6 +629,11 @@ def _field_exit_lessons(ctx):
     return ctx.get("exit_lessons") or "exit_lessons: none yet"
 
 
+def _field_funding(ctx):
+    """One normalized funding line (``futures_funding_context``); no question of the shipped catalog lists it yet."""
+    return ctx.get("funding") or "funding: unknown"
+
+
 # The single registry of STATE fields. To give the model a new input, add a
 # named function here that returns one normalized line (no dates, no absolute
 # prices, no product names) and test it; questions then list it by name.
@@ -648,6 +653,7 @@ STATE_FIELDS = {
     "lessons": _field_lessons,
     "position": _field_position,
     "exit_lessons": _field_exit_lessons,
+    "funding": _field_funding,
 }
 
 
@@ -662,13 +668,14 @@ def default_specs():
 
 
 def build_state(verdict, candles, fields, specs=None, reliability=None, forward=None, lessons=None,
-                position=None, exit_lessons=None):
+                position=None, exit_lessons=None, funding=None):
     """STATE text for one verdict from stored data only, in the order of ``fields``.
 
     ``specs`` (strategy id -> spec) feeds the strategy signal fields; the shipped specs by default.
     ``reliability`` is a reliability table (``futures_strategy_reliability``); the stored one by default.
     ``lessons`` is the text of ``Lessons.text`` for the ``lessons`` field; ``position`` and
-    ``exit_lessons`` feed the exit question (``futures_qwen_exit``).
+    ``exit_lessons`` feed the exit question (``futures_qwen_exit``). ``funding`` is the rendered line of
+    ``futures_funding_context.FundingContext.line`` for the ``funding`` field.
     """
     unknown = [field for field in fields if field not in STATE_FIELDS]
     if unknown:
@@ -677,7 +684,7 @@ def build_state(verdict, candles, fields, specs=None, reliability=None, forward=
     if not isinstance(features, dict) or features.get("ready") is not True:
         raise StateError("verdict features are not ready (indicator warmup)")
     ctx = {"verdict": verdict, "candles": candles, "specs": specs, "reliability": reliability, "forward": forward,
-           "lessons": lessons, "position": position, "exit_lessons": exit_lessons}
+           "lessons": lessons, "position": position, "exit_lessons": exit_lessons, "funding": funding}
     return sanitize_text("\n".join(STATE_FIELDS[field](ctx) for field in fields))
 
 
