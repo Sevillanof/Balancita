@@ -43,5 +43,17 @@ class CalibrationTests(unittest.TestCase):
         self.assertEqual(c.calibration_report([], RT)["decisions"], 0)
 
 
+class TwoOptionTests(unittest.TestCase):
+    def test_hold_close_uses_the_same_measures_with_a_two_option_chance_level(self):
+        def r(chosen, p_hold):
+            return {"chosen": chosen, "probabilities": {"hold": p_hold, "close": 1 - p_hold}}
+        pairs = [(r("hold", 0.5), "hold"), (r("hold", 0.5), "close"), (r("close", 0.95), "hold")]
+        cal = c.calibration_from_pairs(pairs, ("hold", "close"))
+        self.assertAlmostEqual(cal["brier_uniform"], 0.5)
+        self.assertAlmostEqual(cal["log_loss_uniform"], math.log(2), places=3)
+        self.assertEqual(cal["high_confidence"]["wrong"], 1)
+        self.assertEqual(set(cal["right_action_rates"]), {"hold", "close"})
+
+
 if __name__ == "__main__":
     unittest.main()

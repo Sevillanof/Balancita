@@ -28,12 +28,14 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import sqlite3
 import time
 from decimal import Decimal
 
 from .futures_costs import fee_rate, side_impact_bps
 from .futures_hits import gross_bp
+from .futures_llm_calibration import calibration_from_pairs, format_lines as calibration_lines
 from .futures_llm_decisions import (
     ModelResponseError,
     ModelUnavailable,
@@ -250,7 +252,7 @@ class QwenExitDecider:
         self.lessons.record_decision(bucket, answer["chosen"], info["side"], info["entry"], info["gross_bp"],
                                      info["held_min"])
         self.records.append(dict(answer, bucket_start=bucket, held_min=info["held_min"], net_bp=info["net_bp"],
-                                 state_text=state))
+                                 side=info["side"], state_text=state))
         return answer["chosen"]
 
 
@@ -430,7 +432,49 @@ def _stats(trades):
     }
 
 
-def write_summary(db_path, config, out_path, now_ms=None):
+EXIT_ACTIONS = ("hold", "close")
+_SIDE_IN_TEXT = re.compile(r"position: side=(long|short)")
+
+
+def exit_calibration(db_path, market_db, config, now_ms=None):
+    """Is Qwen's stated probability for hold / close honest? Same measures as ``trade_action``.
+
+    Read-only. Each stored answer is judged like ``ExitLessons`` does: ``hold`` was right when the position
+    (side-adjusted) stood higher ``JUDGE_MS`` later than at the decision, otherwise ``close`` was; the exit
+    cost is paid whichever moment it closes, so it does not tilt the judgement. Decisions whose later close
+    is not known yet are left out. Changes nothing about the question or the rule that closes positions.
+    """
+    now = int(time.time() * 1000) if now_ms is None else now_ms
+    db = sqlite3.connect("file:{}?mode=ro".format(db_path), uri=True)
+    try:
+        stored = [(pid, json.loads(p)) for pid, p in db.execute(
+            "SELECT product_id, payload FROM qwen_exit_decision ORDER BY bucket_ms, product_id")]
+    finally:
+        db.close()
+    closes = {}
+    for pid in {pid for pid, _ in stored}:
+        try:
+            ones, _ = load_range(market_db, pid, config["start_ms"], now + ONE_MINUTE_MS)
+        except ValueError:
+            ones = []
+        closes[pid] = {c["bucket_start"]: c["close"] for c in ones}
+    pairs = []
+    for pid, record in stored:
+        probs = record.get("probabilities") or {}
+        side = record.get("side")
+        if side is None:
+            found = _SIDE_IN_TEXT.search(record.get("state_text") or "")
+            side = found and found.group(1).upper()
+        bucket = record["bucket_start"]
+        now_close, later_close = closes[pid].get(bucket), closes[pid].get(bucket + JUDGE_MS)
+        if not side or now_close is None or later_close is None or any(a not in probs for a in EXIT_ACTIONS):
+            continue
+        right = "hold" if gross_bp(side, now_close, later_close) > 0 else "close"
+        pairs.append((dict(record, probabilities=probs), right))
+    return calibration_from_pairs(pairs, EXIT_ACTIONS)
+
+
+def write_summary(db_path, config, out_path, now_ms=None, market_db=None):
     """``futures-qwen-exit-summary.v1`` JSON, written atomically."""
     now = int(time.time() * 1000) if now_ms is None else now_ms
     db = sqlite3.connect(db_path)
@@ -454,6 +498,7 @@ def write_summary(db_path, config, out_path, now_ms=None):
         "by_product": {p: _stats(t) for p, t in sorted(by_product.items())},
         "open_positions": opened, "open_net_bp": round(sum(o["net_bp"] for o in opened.values()), 2),
         "exit_decisions": decisions,
+        "calibration": None if market_db is None else exit_calibration(db_path, market_db, config, now),
         "note": "Qwen decides every exit; no stop, target or time stop. Open positions are valued at the last close.",
     }
     temporary = out_path + ".partial"
@@ -492,7 +537,13 @@ def main(argv=None):
     parser.add_argument("--config", default=CONFIG_PATH)
     parser.add_argument("--loop-seconds", type=float, default=0, help="repeat every N seconds (0: once)")
     parser.add_argument("--llama-url", help="default: http://127.0.0.1:$LLAMA_PORT")
+    parser.add_argument("--calibration", action="store_true",
+                        help="print the calibration of the stored hold / close answers and exit (no model needed)")
     args = parser.parse_args(argv)
+    if args.calibration:
+        cal = exit_calibration(os.path.join(args.out, "qwen-exit.sqlite"), args.market_db, load_config(args.config))
+        print("\n".join(calibration_lines(cal, lambda v: "n/a" if v is None else "{:.1f}%".format(100 * v))))
+        return
     os.makedirs(args.out, exist_ok=True)
     env = dict(os.environ, **({"LLAMA_PORT": args.llama_url.rsplit(":", 1)[1]} if args.llama_url else {}))
     config, specs = load_config(args.config), load_specs(args.specs_dir)
@@ -505,7 +556,7 @@ def main(argv=None):
         budget.reset()
         try:
             report = run_once(args.market_db, db_path, config, specs, products, factory)
-            body = write_summary(db_path, config, summary_path)
+            body = write_summary(db_path, config, summary_path, market_db=args.market_db)
             closed = body["closed"]
             print("{} closed={} mean_net_bp={} open={} asked={}".format(
                 STRATEGY_ID, closed["trades"], closed["mean_net_bp"], len(body["open_positions"]),

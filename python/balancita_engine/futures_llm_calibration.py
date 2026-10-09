@@ -43,33 +43,37 @@ def right_actions(rows, round_trip_bp):
     return pairs
 
 
-def _scores(pairs):
+def _scores(pairs, actions=ACTIONS):
     brier = loss = 0.0
-    counts = {a: 0 for a in ACTIONS}
+    counts = {a: 0 for a in actions}
     for row, right in pairs:
         probs = row["probabilities"]
         counts[right] += 1
-        brier += sum((float(probs[a]) - (1.0 if a == right else 0.0)) ** 2 for a in ACTIONS)
+        brier += sum((float(probs[a]) - (1.0 if a == right else 0.0)) ** 2 for a in actions)
         loss -= math.log(max(float(probs[right]), EPS))
     n = len(pairs)
-    base = {a: counts[a] / n for a in ACTIONS}
-    brier_base = sum((base[a] - (1.0 if a == right else 0.0)) ** 2 for _, right in pairs for a in ACTIONS) / n
+    base = {a: counts[a] / n for a in actions}
+    brier_base = sum((base[a] - (1.0 if a == right else 0.0)) ** 2 for _, right in pairs for a in actions) / n
     loss_base = -sum(math.log(max(base[right], EPS)) for _, right in pairs) / n
     return {
         "brier": _round(brier / n), "log_loss": _round(loss / n),
-        "brier_uniform": _round(2 / 3), "log_loss_uniform": _round(math.log(3)),
+        "brier_uniform": _round(1 - 1 / len(actions)), "log_loss_uniform": _round(math.log(len(actions))),
         "brier_base_rate": _round(brier_base), "log_loss_base_rate": _round(loss_base),
         "brier_skill": _round(1 - (brier / n) / brier_base) if brier_base > 0 else None,
-        "right_action_rates": {a: _round(base[a]) for a in ACTIONS},
+        "right_action_rates": {a: _round(base[a]) for a in actions},
     }
 
 
-def _reliability(pairs):
+def _top(row, actions):
+    return max(float(row["probabilities"][a]) for a in actions)
+
+
+def _reliability(pairs, actions=ACTIONS):
     bands = []
     ece = 0.0
     for low, high in BANDS:
-        members = [(max(float(r["probabilities"][a]) for a in ACTIONS), r["chosen"] == right)
-                   for r, right in pairs if low <= max(float(r["probabilities"][a]) for a in ACTIONS) < high]
+        members = [(_top(r, actions), r["chosen"] == right)
+                   for r, right in pairs if low <= _top(r, actions) < high]
         if not members:
             bands.append({"from": low, "to": min(high, 1.0), "decisions": 0, "claimed": None, "observed": None})
             continue
@@ -81,32 +85,40 @@ def _reliability(pairs):
     return bands, _round(ece)
 
 
-def _high_confidence(pairs):
-    members = [r["chosen"] == right for r, right in pairs
-               if max(float(r["probabilities"][a]) for a in ACTIONS) >= HIGH_P]
+def _high_confidence(pairs, actions=ACTIONS):
+    members = [r["chosen"] == right for r, right in pairs if _top(r, actions) >= HIGH_P]
     wrong = sum(1 for ok in members if not ok)
     return {"threshold": HIGH_P, "decisions": len(members), "wrong": wrong,
             "wrong_rate": _round(wrong / len(members)) if members else None}
 
 
-def _block(pairs):
+def _block(pairs, actions=ACTIONS):
     if not pairs:
         return {"decisions": 0}
-    bands, ece = _reliability(pairs)
+    bands, ece = _reliability(pairs, actions)
     block = {"decisions": len(pairs), "reliable_sample": len(pairs) >= MIN_SCORED,
              "accuracy": _round(sum(1 for r, right in pairs if r["chosen"] == right) / len(pairs))}
-    block.update(_scores(pairs))
-    block.update(reliability=bands, ece=ece, high_confidence=_high_confidence(pairs))
+    block.update(_scores(pairs, actions))
+    block.update(reliability=bands, ece=ece, high_confidence=_high_confidence(pairs, actions))
     return block
 
 
-def calibration_report(rows, round_trip_bp):
-    """Whole-range numbers plus the older and newer half (rows come oldest first)."""
-    pairs = right_actions(rows, float(round_trip_bp))
+def calibration_from_pairs(pairs, actions=ACTIONS):
+    """Whole-range numbers plus the older and newer half of ``[(row, right)]`` (oldest first).
+
+    Any question with a probability per option fits: ``actions`` names them (``buy/hold/sell`` for
+    ``trade_action``, ``hold/close`` for C31's ``exit_decision``) and each row carries ``chosen`` and
+    ``probabilities``; ``right`` is the option that turned out to be right.
+    """
     half = len(pairs) // 2
-    result = _block(pairs)
-    result["halves"] = {"older": _block(pairs[:half]), "newer": _block(pairs[half:])}
+    result = _block(pairs, actions)
+    result["halves"] = {"older": _block(pairs[:half], actions), "newer": _block(pairs[half:], actions)}
     return result
+
+
+def calibration_report(rows, round_trip_bp):
+    """``trade_action``: the right action is the one that cleared the round trip (rows oldest first)."""
+    return calibration_from_pairs(right_actions(rows, float(round_trip_bp)))
 
 
 def format_lines(cal, pct):
