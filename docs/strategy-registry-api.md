@@ -10,6 +10,7 @@ Strategies are `balancita-strategy.v1` specs (`python/balancita_engine/futures_s
 |---|---|
 | `GET /api-strategies/schema` | Editor catalog: operands (`1m.rsi14`, `1m_previous.ema21`, `5m.ema9`, ...), comparators, node kinds, states, periods, gate thresholds. |
 | `GET /api-strategies/strategies` | Latest version of every strategy: `id`, `version`, `name`, `description`, `state`, `active_version`, `spec_hash`, `parent`, `origin`, `reliability` (`verdict`, `trades`, `hit_rate`, `mean_net_bp`, `t_stat` from `config/strategy-reliability.json` for exactly this spec, or `null` when it was never measured). |
+| `GET /api-strategies/plans` | `{plans}`: el mismo plan de solo lectura para todas las estrategias (señal, entrada, stop/objetivo/tiempo, tamaño, productos, costes), incluidas C31 y Kronos (`futures_strategy_plan.py`). |
 | `GET /api-strategies/ranking?product=PF_XBTUSD&days=7\|30\|90` | Ranking rows (the list above plus `return_pct`, `pnl_usd`, `hit_rate`, `trades`, `wins`, `few_trades`, `deflated_sharpe_probability`), sorted by return, `buy_and_hold_pct` and `overfitting` (probability of backtest overfitting among the strategies with 30+ trades, `null` below two; see [validacion-sin-trampas.md](validacion-sin-trampas.md)). With no verdicts yet: `verdicts_available: false` and null metrics. |
 | `GET /api-strategies/strategies/:id?version=n` | One version with its `spec`, every `versions` entry and the lifecycle `events`. |
 | `GET /api-strategies/strategies/:id/export?version=n` | The spec JSON, for download. |
@@ -28,3 +29,5 @@ Strategies are `balancita-strategy.v1` specs (`python/balancita_engine/futures_s
 | `POST /api-strategies/strategies/:id/state` | `{version, state: draft \| shadow \| active \| retired}` | Lifecycle. Shadow needs a backtest; active needs shadow, 30+ out-of-sample trades, positive mean net bp and deflated Sharpe probability of at least 0.95. A refusal is 409 `gate_failed` with `gates[]`. |
 
 The backtest replays the spec over stored verdicts (same official candles as the Terminal) as one independent paper book per strategy: D's sizing and cost-buffer rule, taker fees, no slippage or funding. The first 70% of the period is in sample, the rest out of sample. Every distinct spec backtested counts as one trial.
+
+Las estrategias de `config/strategy-freeze.json` (C25-C31 y Kronos) se pueden editar como borrador o copiar a una nueva, pero activar una versión posterior a la v1 devuelve 409 `frozen` hasta las 100 operaciones forward. Cada entrada de `strategies` lleva `frozen`.

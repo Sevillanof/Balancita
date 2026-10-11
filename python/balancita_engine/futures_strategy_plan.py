@@ -19,6 +19,8 @@ PLAN_SCHEMA = "futures-strategy-plan.v1"
 KRONOS_ID = "kronos-small-1h-h4-v1"
 _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 QWEN_EXIT_CONFIG = os.path.join(_ROOT, "config", "qwen-exit.json")
+KRONOS_DESCRIPTOR = os.path.join(_ROOT, "config", "models", "kronos-small-1h-h4-v1.json")
+FREEZE_PATH = os.path.join(_ROOT, "config", "strategy-freeze.json")
 
 
 def _costs():
@@ -78,21 +80,29 @@ def qwen_exit_plan(config=None):
     }
 
 
-def kronos_plan(module=None):
-    """Kronos-small: the parameters fixed in ``kronos_lab.lab`` (imported lazily; it needs no weights to import)."""
-    if module is None:
-        from kronos_lab import lab as module
+def kronos_plan(descriptor=None):
+    """Kronos-small from its ``balancita-model.v1`` descriptor (``kronos_lab`` is never imported here)."""
+    if descriptor is None:
+        with open(KRONOS_DESCRIPTOR, encoding="utf-8") as handle:
+            descriptor = json.load(handle)
     return {
-        "schema": PLAN_SCHEMA, "id": module.STRATEGY_ID, "version": 1, "spec_hash": None,
-        "signal": {"type": "model", "model": "kronos-small", "candles": "1h", "context_candles": 400,
-                   "threshold_cost_multiple": module.K},
+        "schema": PLAN_SCHEMA, "id": descriptor["id"], "version": descriptor["version"], "spec_hash": None,
+        "signal": {"type": "model", "model": descriptor["model"], "candles": descriptor["candles"],
+                   "context_candles": descriptor["context_candles"],
+                   "threshold_cost_multiple": descriptor["threshold_cost_multiple"]},
         "params": {}, "indicators": {},
         "entry": {"sides": ["LONG", "SHORT"], "checks": ["mean_log_return_exceeds_k_round_trip_cost"]},
         "exit": {"stop_atr": None, "target_stop_ratio": None, "volatility": None,
-                 "time_minutes": module.HORIZON * 60, "rule": {"LONG": "time_stop", "SHORT": "time_stop"}},
-        "size": {"mode": "fixed_notional", "notional_usd": str(module.NOTIONAL)},
+                 "time_minutes": descriptor["horizon_minutes"],
+                 "rule": {"LONG": "time_stop", "SHORT": "time_stop"}},
+        "size": {"mode": "fixed_notional", "notional_usd": descriptor["notional_usd"]},
         "products": "all", "costs": _costs(),
     }
+
+
+def load_freeze(path=FREEZE_PATH):
+    with open(path, encoding="utf-8") as handle:
+        return json.load(handle)
 
 
 def all_plans(specs):

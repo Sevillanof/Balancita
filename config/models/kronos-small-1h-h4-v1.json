@@ -1,0 +1,13 @@
+{
+  "schema": "balancita-model.v1",
+  "id": "kronos-small-1h-h4-v1",
+  "version": 1,
+  "name": "Kronos small 1 h",
+  "model": "kronos-small",
+  "note": "Descriptor de solo lectura: python/kronos_lab/lab.py sigue usando sus constantes y un test comprueba que coinciden.",
+  "candles": "1h",
+  "context_candles": 400,
+  "threshold_cost_multiple": 2.0,
+  "horizon_minutes": 240,
+  "notional_usd": "100"
+}
