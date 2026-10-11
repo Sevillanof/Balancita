@@ -520,6 +520,8 @@ export function devChildSpecs({
   // C31: Qwen decides when its open positions close (own DB and summary; needs the local model).
   const qwenExitDir = liveDb('qwen-exit')
   const forwardPath = `${forwardDir}/forward-reliability.json`
+  // Funding carry counter (no orders): its state and summary; the registry serves and toggles them.
+  const carryDir = liveDb('carry')
   const llmOn =
     Boolean(python?.command && llm?.command) &&
     (env.DECISIONS_ENABLED ?? '').trim() !== '0' &&
@@ -757,6 +759,29 @@ export function devChildSpecs({
         },
       },
       {
+        // Funding carry counter (long spot + short perpetual, paper): public Kraken data, every hour.
+        name: 'carry',
+        command: python.command,
+        cwd: serverCwd,
+        args: [
+          ...python.prefixArgs,
+          '-m',
+          'balancita_engine.futures_carry',
+          '--state',
+          `${carryDir}/carry-state.json`,
+          '--out',
+          `${carryDir}/carry-summary.json`,
+          '--loop-seconds',
+          '3600',
+        ],
+        env: {
+          ...env,
+          PYTHONPATH: [`${root}/python`, env.PYTHONPATH]
+            .filter(Boolean)
+            .join(delimiter),
+        },
+      },
+      {
         name: 'strategies',
         command: python.command,
         cwd: serverCwd,
@@ -776,6 +801,7 @@ export function devChildSpecs({
         env: {
           ...env,
           STRATEGY_FORWARD_PATH: forwardPath,
+          CARRY_DIR: carryDir,
           PYTHONPATH: [`${root}/python`, env.PYTHONPATH]
             .filter(Boolean)
             .join(delimiter),

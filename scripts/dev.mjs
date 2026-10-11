@@ -39,6 +39,7 @@ const optionalChildren = new Set([
   'scores',
   'forward',
   'strategies',
+  'carry',
   'news',
   'llm',
   'q',
@@ -51,6 +52,7 @@ const exitLabels = {
   forward:
     'The forward paper measurement (new forward trades of registered strategies)',
   strategies: 'The strategy registry (strategies page and backtests)',
+  carry: 'The funding carry counter (new carry results)',
   news: 'The news process (new news items and analyses)',
   llm: 'The llama-server model (new LLM decisions)',
   q: 'The LLM decision service (new LLM decisions)',

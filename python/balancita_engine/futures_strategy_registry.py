@@ -28,6 +28,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
+from . import futures_carry
 from .futures_products import load_pinned_products
 from .futures_spec_strategy import (
     COMPARATORS,
@@ -661,6 +662,12 @@ def forward_candidates(db_path):
         db.close()
 
 
+def _carry_paths():
+    """(summary, state) of the funding carry counter; the dev supervisor sets both."""
+    base = os.environ.get("CARRY_DIR") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "server", "data", "carry")
+    return os.path.join(base, "carry-summary.json"), os.path.join(base, "carry-state.json")
+
+
 def make_handler(service):
     class Handler(BaseHTTPRequestHandler):
         server_version = "BalancitaStrategies/1"
@@ -701,6 +708,8 @@ def make_handler(service):
                 return schema_description()
             if method == "GET" and parts == ["strategies"]:
                 return {"strategies": registry.list()}
+            if method == "GET" and parts == ["carry"]:
+                return futures_carry.read_summary(*_carry_paths())
             if method == "GET" and parts == ["plans"]:
                 return {"plans": registry.plans()}
             if method == "GET" and parts[:1] == ["replays"]:
@@ -723,6 +732,12 @@ def make_handler(service):
             if method != "POST":
                 raise RegistryError("not_found", "no route", 404)
             body = self._body()
+            if parts == ["carry", "enabled"]:
+                if not isinstance(body.get("enabled"), bool):
+                    raise RegistryError("invalid_carry", "enabled must be true or false")
+                out_path, state_path = _carry_paths()
+                futures_carry.set_enabled(state_path, body["enabled"], int(time.time() * 1000))
+                return futures_carry.read_summary(out_path, state_path)
             if parts == ["validate"]:
                 spec = body.get("spec", body)
                 try:

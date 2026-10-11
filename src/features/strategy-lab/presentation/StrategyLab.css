@@ -798,3 +798,11 @@ textarea.strategy-lab__json {
 .strategy-lab__modal h2 {
   margin: 0;
 }
+
+.strategy-lab__carry {
+  margin-top: 1rem;
+  font-size: 0.85rem;
+}
+.strategy-lab__carry-label {
+  font-weight: 600;
+}

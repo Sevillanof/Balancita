@@ -60,6 +60,7 @@ import {
   signedUsd,
 } from '../../../shared/finance/format.ts'
 import { QwenFocusHead, QwenSide } from './QwenPanels.tsx'
+import CarryPanel from './CarryPanel.tsx'
 import {
   JsonTab,
   PlanTab,
@@ -957,6 +958,7 @@ export default function StrategyLab({
             </span>
             <span>gris = menos de {ranking?.min_trades ?? 30} trades</span>
           </div>
+          <CarryPanel />
         </section>
 
         <section
