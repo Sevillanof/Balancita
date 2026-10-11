@@ -1,5 +1,10 @@
+import json
+import os
+import sqlite3
+import tempfile
 import unittest
 from decimal import Decimal
+from unittest import mock
 
 from balancita_engine import futures_maker as m
 
@@ -81,6 +86,32 @@ class StudyTests(unittest.TestCase):
         out = m.study([trade(entry_time_ms=10_000_000, exit_time_ms=10_100_000)],
                       {"PF_X": tape((500, "100", "sell"), (900, "100", "buy"))})
         self.assertEqual((out["signals"], out["no_tape"]), (0, 1))
+
+
+class ReplaySignalsTests(unittest.TestCase):
+    def test_tape_ranges_and_replayed_signals_are_tagged_per_product_and_strategy(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "m.sqlite")
+            db = sqlite3.connect(path)
+            db.execute("CREATE TABLE paper_futures_market_events(event_id TEXT, feed TEXT, product_id TEXT,"
+                       " event_time INT, normalized_json TEXT)")
+            for i, (feed, product, t) in enumerate([("trade", "PF_XBTUSD", 10), ("trade", "PF_XBTUSD", 90),
+                                                    ("ticker", "PF_ETHUSD", 50)]):
+                db.execute("INSERT INTO paper_futures_market_events VALUES(?,?,?,?,?)",
+                           (str(i), feed, product, t, json.dumps({"priceUsd": "1", "side": "buy"})))
+            db.commit()
+            db.close()
+            self.assertEqual(m.tape_ranges(path), {"PF_XBTUSD": (10, 90)})
+
+            class Book:
+                trades = [{"entry_time_ms": 20, "exit_time_ms": 30}]
+
+            with mock.patch.object(m, "load_range", return_value=([], [])), \
+                    mock.patch.object(m, "replay", return_value=[Book(), Book()]) as fake:
+                trades = m.replay_trades(path, m.tape_ranges(path), {"b": {}, "a": {}})
+            self.assertEqual([(t["strategy_id"], t["product_id"]) for t in trades],
+                             [("a", "PF_XBTUSD"), ("b", "PF_XBTUSD")])
+            self.assertEqual(fake.call_args.kwargs["start_ms"], 10)
 
 
 if __name__ == "__main__":
