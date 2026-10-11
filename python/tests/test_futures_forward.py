@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from balancita_engine.futures_forward import LATE_KNOWN_MS, load_registration, main, run_forward, write_summary
+from balancita_engine.futures_forward import LATE_KNOWN_MS, effective_registration, load_registration, main, run_forward, write_summary
 from balancita_engine.futures_replay import replay
 from balancita_engine.futures_simulator import simulate_many
 from balancita_engine.futures_spec_strategy import load_specs, spec_hash
@@ -229,3 +229,43 @@ class EffectiveReliabilityTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class EffectiveRegistrationTests(unittest.TestCase):
+    def _registration(self):
+        return load_registration()
+
+    def _candidate(self, strategy_id, state="active", since=0, version=1):
+        return {"spec": SPECS[strategy_id], "version": version, "state": state, "active_since_ms": since}
+
+    def test_without_a_registry_nothing_changes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            registration = self._registration()
+            got, specs = effective_registration(os.path.join(directory, "f.sqlite"), registration, SPECS, None, 5)
+            self.assertEqual(got, registration)
+
+    def test_active_strategies_start_when_activated_and_c30_keeps_its_start(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "f.sqlite")
+            registration = self._registration()
+            candidates = {
+                C30: self._candidate(C30),
+                "c25-pullback-perp-v1": self._candidate("c25-pullback-perp-v1"),
+                "c29-momentum-perp-v1": self._candidate("c29-momentum-perp-v1"),
+                "c26-reversion-perp-v1": self._candidate("c26-reversion-perp-v1", since=900),
+            }
+            got, _ = effective_registration(path, registration, SPECS, candidates, 1_000)
+            self.assertEqual(got["strategies"][C30], registration["strategies"][C30])
+            self.assertNotIn("c25-pullback-perp-v1", got["strategies"])  # D's own books
+            self.assertEqual(got["strategies"]["c29-momentum-perp-v1"]["start_ms"], 1_000)
+            # First sight is written down once and never moves.
+            again, _ = effective_registration(path, registration, SPECS, candidates, 9_999)
+            self.assertEqual(again["strategies"]["c29-momentum-perp-v1"]["start_ms"], 1_000)
+
+    def test_switching_off_stops_new_trades_but_keeps_the_history(self):
+        with tempfile.TemporaryDirectory() as directory:
+            registration = self._registration()
+            got, _ = effective_registration(os.path.join(directory, "f.sqlite"), registration, SPECS,
+                                            {C30: self._candidate(C30, state="retired")}, 1_000)
+            self.assertNotIn(C30, got["strategies"])
+            self.assertIn(C30, registration["strategies"])

@@ -398,7 +398,7 @@ export function exampleStrategyApi(
         503,
       )
     },
-    async setState(id, version, state) {
+    async setState(id, version, state, paperNow) {
       const row = find(id, version)
       const gates: Gate[] =
         state === 'shadow'
@@ -426,7 +426,7 @@ export function exampleStrategyApi(
                 },
               ]
             : []
-      if (!gates.every((gate) => gate.passed))
+      if (!paperNow && !gates.every((gate) => gate.passed))
         throw new StrategyApiError(
           'gate_failed',
           `No se cumple el paso a ${state}.`,
@@ -435,6 +435,16 @@ export function exampleStrategyApi(
         )
       events.push({ id, version, state, reason: 'manual', known_at: now() })
       return { ...entry(row), gates }
+    },
+    async deleteStrategy(id, confirm) {
+      if (confirm !== id)
+        throw new StrategyApiError(
+          'confirmation_required',
+          'Escribí el id de la estrategia para borrarla.',
+          409,
+        )
+      for (let index = versions.length - 1; index >= 0; index -= 1)
+        if (versions[index].spec.id === id) versions.splice(index, 1)
     },
   }
 }

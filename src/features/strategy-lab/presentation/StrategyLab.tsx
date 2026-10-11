@@ -447,7 +447,7 @@ export default function StrategyLab({
     setError(null)
   }
 
-  const refresh = (id: string, message: string) => {
+  const refresh = (id: string | null, message: string) => {
     setSelectedId(id)
     setReload((value) => value + 1)
     setSaveMode('modify')
@@ -521,14 +521,24 @@ export default function StrategyLab({
       )
     })
 
-  const changeState = (state: StrategyState) =>
+  const changeState = (state: StrategyState, paperNow?: boolean) =>
     run(async () => {
       if (!api || !detail) return
-      await api.setState(detail.id, detail.version, state)
+      await api.setState(detail.id, detail.version, state, paperNow)
       refresh(
         detail.id,
         `${shortName(detail.name, detail.id)} pasó a ${STATE_LABELS[state].toLowerCase()}.`,
       )
+    })
+
+  const deleteStrategy = (confirm: string) =>
+    run(async () => {
+      if (!api || !detail) return
+      await api.deleteStrategy(detail.id, confirm)
+      setSelectedId(null)
+      setDetail(null)
+      setDraft(null)
+      refresh(null, `${shortName(detail.name, detail.id)} se borró.`)
     })
 
   const importSpec = () =>
@@ -1400,7 +1410,12 @@ export default function StrategyLab({
             )}
 
             {tab === 'versions' && detail && (
-              <VersionsTab detail={detail} busy={busy} onState={changeState} />
+              <VersionsTab
+                detail={detail}
+                busy={busy}
+                onState={changeState}
+                onDelete={deleteStrategy}
+              />
             )}
 
             {dirty && (

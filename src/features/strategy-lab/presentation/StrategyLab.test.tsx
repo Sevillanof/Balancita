@@ -288,21 +288,35 @@ describe('StrategyLab', () => {
     ).toBeInTheDocument()
   })
 
-  it('shows the gates a promotion fails', async () => {
+  it('switches a strategy off and on from the front without gates', async () => {
     const user = userEvent.setup()
     await renderLab()
     await user.click(screen.getByRole('tab', { name: 'Versiones' }))
-    await user.click(screen.getByRole('button', { name: 'Retirar' }))
-    await screen.findByText(/pasó a retirada/)
-    await user.click(screen.getByLabelText('Crear estrategia nueva'))
-    await user.click(screen.getByRole('button', { name: 'Guardar' }))
-    await screen.findByText(/Guardada como/)
-    await user.click(screen.getByRole('tab', { name: 'Versiones' }))
-    await user.click(screen.getByRole('button', { name: 'Pasar a sombra' }))
-    await screen.findByText(/pasó a en sombra/)
+    await user.click(screen.getByRole('button', { name: 'Desactivar' }))
+    await screen.findByText(/pasó a desactivada/)
     await user.click(screen.getByRole('button', { name: 'Activar' }))
-    const alert = await screen.findByRole('alert')
-    expect(alert).toHaveTextContent('✗ Sharpe deflactado ≥ 0,95')
+    await screen.findByText(/pasó a activa en paper/)
+  })
+
+  it('deletes a strategy only after two confirmations and its id', async () => {
+    const user = userEvent.setup()
+    await renderLab()
+    await user.click(screen.getByRole('tab', { name: 'Versiones' }))
+    await user.click(screen.getByRole('button', { name: 'Borrar' }))
+    await user.click(screen.getByRole('button', { name: 'Sí, continuar' }))
+    const finish = screen.getByRole('button', {
+      name: 'Borrar definitivamente',
+    })
+    expect(finish).toBeDisabled()
+    await user.type(
+      screen.getByLabelText('Escribí el id para confirmar'),
+      'c25-pullback-perp-v1',
+    )
+    await user.click(finish)
+    await screen.findByText(/se borró/)
+    expect(
+      within(ranking()).queryByText('C25 Pullback en tendencia'),
+    ).not.toBeInTheDocument()
   })
 
   it('ranks Qwen with its paper return and shows its +1/-1 score', async () => {

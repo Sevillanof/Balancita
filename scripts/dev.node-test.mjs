@@ -162,6 +162,8 @@ describe('devChildSpecs', () => {
       byName.capture.env.FUTURES_MARKET_DB_PATH,
       '--out',
       './data/dev-live/forward',
+      '--strategies-db',
+      byName.strategies.args[byName.strategies.args.indexOf('--strategies-db') + 1],
       '--loop-seconds',
       '1800',
     ])

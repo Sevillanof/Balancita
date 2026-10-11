@@ -187,11 +187,15 @@ export interface StrategyApi {
     text: string,
     source: 'pine' | 'freqtrade' | 'auto',
   ): Promise<Translation>
+  /** `paperNow` skips the promotion gates: paper only, never real orders. */
   setState(
     id: string,
     version: number,
     state: StrategyState,
+    paperNow?: boolean,
   ): Promise<StrategyEntry & { gates: Gate[] }>
+  /** Hides the strategy and stops it; its history stays. `confirm` is its id typed back. */
+  deleteStrategy(id: string, confirm: string): Promise<void>
 }
 
 export const DEFAULT_PRODUCT = 'PF_XBTUSD'
@@ -258,11 +262,17 @@ export function httpStrategyApi(
     importSpec: (spec, activate) =>
       request('/import', { spec, ...(activate ? { activate: true } : {}) }),
     translate: (text, source) => request('/translate', { text, source }),
-    setState: (id, version, state) =>
+    setState: (id, version, state, paperNow) =>
       request(`/strategies/${encodeURIComponent(id)}/state`, {
         version,
         state,
+        ...(paperNow ? { paper_now: true } : {}),
       }),
+    deleteStrategy: async (id, confirm) => {
+      await request(`/strategies/${encodeURIComponent(id)}/delete`, {
+        confirm,
+      })
+    },
   }
 }
 

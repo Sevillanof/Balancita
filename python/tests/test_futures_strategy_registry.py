@@ -16,6 +16,7 @@ from balancita_engine.futures_strategies import C25_ID, C26_ID, C27_ID, STRATEGY
 from balancita_engine.futures_strategy_backtest import deflated_sharpe, run_backtest
 from balancita_engine.futures_strategy_registry import (
     RegistryError,
+    forward_candidates,
     StrategyRegistry,
     StrategyService,
     make_handler,
@@ -74,7 +75,8 @@ class Clock:
 class RegistryTests(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.mkdtemp()
-        self.registry = StrategyRegistry(os.path.join(self.dir, "strategies.sqlite"), clock=Clock())
+        self.registry_path = os.path.join(self.dir, "strategies.sqlite")
+        self.registry = StrategyRegistry(self.registry_path, clock=Clock())
         self.registry.seed(SPECS)
 
     def tearDown(self):
@@ -106,6 +108,54 @@ class RegistryTests(unittest.TestCase):
             self.registry.set_state(C25_ID, 2, "active", skip_gates=True)
         self.assertEqual(raised.exception.code, "frozen")
         self.assertEqual(self.registry.active_specs(10**15)[C25_ID]["version"], 1)
+
+    def test_paper_now_activates_without_gates_and_retire_stops_it(self):
+        spec = copy.deepcopy(SPECS["c29-momentum-perp-v1"])
+        spec["params"]["z_min"] = "3"
+        saved = self.registry.save(spec, "new", new_name="Z3")
+        self.assertEqual(saved["state"], "draft")
+        on = self.registry.set_state(saved["id"], 1, "active", "paper_now", skip_gates=True)
+        self.assertEqual(on["state"], "active")
+        self.assertIn(saved["id"], self.registry.active_specs(10**15))
+        self.assertEqual(self.registry.set_state(saved["id"], 1, "retired")["state"], "retired")
+        self.assertNotIn(saved["id"], self.registry.active_specs(10**15))
+
+    def test_d_books_cannot_be_switched_off_or_deleted_yet(self):
+        with self.assertRaises(RegistryError) as raised:
+            self.registry.set_state(C25_ID, 1, "retired")
+        self.assertEqual(raised.exception.code, "in_paper_books")
+        with self.assertRaises(RegistryError) as deleted:
+            self.registry.delete(C25_ID, C25_ID)
+        self.assertEqual(deleted.exception.code, "in_paper_books")
+
+    def test_delete_needs_the_id_hides_it_and_keeps_history(self):
+        spec = copy.deepcopy(SPECS["c29-momentum-perp-v1"])
+        spec["params"]["z_min"] = "3.5"
+        saved = self.registry.save(spec, "new", new_name="Z35")
+        with self.assertRaises(RegistryError) as raised:
+            self.registry.delete(saved["id"], "otra")
+        self.assertEqual(raised.exception.code, "confirmation_required")
+        self.registry.set_state(saved["id"], 1, "active", skip_gates=True)
+        self.registry.delete(saved["id"], saved["id"])
+        self.assertNotIn(saved["id"], [e["id"] for e in self.registry.list()])
+        self.assertNotIn(saved["id"], self.registry.active_specs(10**15))
+        self.assertEqual(self.registry.version(saved["id"], 1)["spec"], self.registry.version(saved["id"])["spec"])
+        # The same rules can be created again after a delete.
+        again = self.registry.save(spec, "new", new_name="Z35 otra vez")
+        self.assertNotEqual(again["id"], saved["id"])
+
+    def test_forward_candidates_follow_the_registry_states(self):
+        spec = copy.deepcopy(SPECS["c29-momentum-perp-v1"])
+        spec["params"]["z_min"] = "3.2"
+        saved = self.registry.save(spec, "new", new_name="Z32")
+        self.registry.set_state(saved["id"], 1, "active", skip_gates=True)
+        found = forward_candidates(self.registry_path)
+        self.assertEqual(found[saved["id"]]["state"], "active")
+        self.assertGreater(found[saved["id"]]["active_since_ms"], 0)
+        self.assertEqual(found["c29-momentum-perp-v1"]["active_since_ms"], 0)
+        self.registry.set_state(saved["id"], 1, "retired")
+        self.assertEqual(forward_candidates(self.registry_path)[saved["id"]]["state"], "retired")
+        self.assertIsNone(forward_candidates(self.registry_path + ".missing"))
 
     def test_plans_cover_every_strategy_in_the_same_shape(self):
         plans = self.registry.plans()

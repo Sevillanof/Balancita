@@ -765,6 +765,8 @@ export function devChildSpecs({
           marketDb,
           '--out',
           forwardDir,
+          '--strategies-db',
+          strategiesDb,
           '--loop-seconds',
           '1800',
         ],
