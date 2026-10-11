@@ -29,6 +29,8 @@ async function fetchPublicCatalog(): Promise<unknown> {
   return response.json()
 }
 
+const HOUR_MS = 3_600_000
+
 async function main(): Promise<void> {
   const config = serverConfigFrom(process.env)
   if (typeof WebSocket === 'undefined')
@@ -59,6 +61,9 @@ async function main(): Promise<void> {
       intervals: ANALYTICS_INTERVALS,
       allProductMetrics: ['orderbook'],
     },
+    // After a stop the hole is fetched from the last stored bucket; this also repairs holes a
+    // longer stop left behind (the forward measurement replays these candles).
+    officialRepairMs: 10 * 24 * HOUR_MS,
     staleAfterMs: config.marketStaleAfterMs,
     reconnectMinMs: config.marketReconnectMinMs,
     reconnectMaxMs: config.marketReconnectMaxMs,

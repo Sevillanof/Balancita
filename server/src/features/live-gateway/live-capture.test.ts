@@ -346,6 +346,166 @@ describe('live capture process core', () => {
     store.close()
   })
 
+  it('fetches the whole hole after a long stop, beyond the lookback, and records the gap', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'balancita-capture-'))
+    dirs.push(dir)
+    const store = new FuturesMarketStore(join(dir, 'market.sqlite'))
+    const M = 60_000
+    const H = 60 * M
+    let now = 1_791_281_220_000 + 10 * M + 5_000
+    const run = async (repairMs?: number) => {
+      const capture = createLiveCapture({
+        store,
+        clock: () => now,
+        makeSocket: () => fakeSocket().socket,
+        fetchCatalog: async () => catalog,
+        fundingFetch: async () => {
+          throw new Error('offline')
+        },
+        officialCandlesFetch: async (input) => {
+          const url = new URL(String(input))
+          const interval = url.pathname.split('/').at(-1)!
+          const from = Number(url.searchParams.get('from')) * 1000
+          const to = Number(url.searchParams.get('to')) * 1000
+          const step = interval === '1m' ? M : 5 * M
+          const candles = []
+          for (
+            let time = Math.ceil(from / step) * step;
+            time <= to;
+            time += step
+          )
+            candles.push({
+              time,
+              open: '100',
+              high: '101',
+              low: '99',
+              close: '100',
+              volume: '1',
+            })
+          return new Response(JSON.stringify({ candles, more_candles: false }))
+        },
+        // A 24 h lookback is what used to leave the hole after a 39 h stop.
+        officialCandleLookbackMs: { 60_000: 24 * H, 300_000: 3 * 24 * H },
+        officialPollMs: 60_000,
+        officialRequestGapMs: 0,
+        officialRepairMs: repairMs,
+        log: () => undefined,
+      })
+      await capture.start()
+      await wait(200)
+      await capture.stop()
+    }
+    await run()
+    const before = store.latestOfficialBucket('PF_XBTUSD', M)!
+    now += 40 * H
+    await run()
+    const after = store.latestOfficialBucket('PF_XBTUSD', M)!
+    expect(after).toBeGreaterThan(before + 39 * H)
+    // No hole: every minute between the two runs is stored.
+    expect(store.countOfficialBuckets('PF_XBTUSD', M, before, after)).toBe(
+      (after - before) / M + 1,
+    )
+    const five = 5 * M
+    const lastFive = store.latestOfficialBucket('PF_XBTUSD', five)!
+    const firstFive = Math.ceil(before / five) * five
+    expect(
+      store.countOfficialBuckets('PF_XBTUSD', five, firstFive, lastFive),
+    ).toBe((lastFive - firstFive) / five + 1)
+    const gaps = store.gapsAsOf(now) as Array<{ feed: string; reason: string }>
+    expect(gaps.map((gap) => gap.feed)).toEqual(
+      expect.arrayContaining(['official_candles_1m', 'official_candles_5m']),
+    )
+    store.close()
+  })
+
+  it('repairs holes inside the stored series on start when asked to', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'balancita-capture-'))
+    dirs.push(dir)
+    const store = new FuturesMarketStore(join(dir, 'market.sqlite'))
+    const M = 60_000
+    const now = 1_791_281_220_000 + 10 * M + 5_000
+    const requests: string[] = []
+    const fetchCandles = async (input: string | URL | Request) => {
+      const url = new URL(String(input))
+      const interval = url.pathname.split('/').at(-1)!
+      const from = Number(url.searchParams.get('from')) * 1000
+      const to = Number(url.searchParams.get('to')) * 1000
+      requests.push(`${interval} ${from}`)
+      const step = interval === '1m' ? M : 5 * M
+      const candles = []
+      for (let time = Math.ceil(from / step) * step; time <= to; time += step)
+        if (!(time > now - 8 * M && time < now - 4 * M && interval === '1m'))
+          candles.push({
+            time,
+            open: '1',
+            high: '1',
+            low: '1',
+            close: '1',
+            volume: '1',
+          })
+      return new Response(JSON.stringify({ candles, more_candles: false }))
+    }
+    const first = createLiveCapture({
+      store,
+      clock: () => now,
+      makeSocket: () => fakeSocket().socket,
+      fetchCatalog: async () => catalog,
+      fundingFetch: async () => {
+        throw new Error('offline')
+      },
+      officialCandlesFetch: fetchCandles,
+      officialCandleLookbackMs: { 60_000: 30 * M, 300_000: 30 * M },
+      officialPollMs: 60_000,
+      officialRequestGapMs: 0,
+      log: () => undefined,
+    })
+    await first.start()
+    await wait(60)
+    await first.stop()
+    const countHole = () =>
+      store.countOfficialBuckets('PF_XBTUSD', M, now - 8 * M, now - 4 * M)
+    const holey = countHole()
+    expect(holey).toBeLessThan(5)
+    // The data source now has the candles (the first fetch was a partial answer).
+    const full = createLiveCapture({
+      store,
+      clock: () => now,
+      makeSocket: () => fakeSocket().socket,
+      fetchCatalog: async () => catalog,
+      fundingFetch: async () => {
+        throw new Error('offline')
+      },
+      officialCandlesFetch: async (input) => {
+        const url = new URL(String(input))
+        const interval = url.pathname.split('/').at(-1)!
+        const from = Number(url.searchParams.get('from')) * 1000
+        const to = Number(url.searchParams.get('to')) * 1000
+        const step = interval === '1m' ? M : 5 * M
+        const candles = []
+        for (let time = Math.ceil(from / step) * step; time <= to; time += step)
+          candles.push({
+            time,
+            open: '1',
+            high: '1',
+            low: '1',
+            close: '1',
+            volume: '1',
+          })
+        return new Response(JSON.stringify({ candles, more_candles: false }))
+      },
+      officialCandleLookbackMs: { 60_000: 30 * M, 300_000: 30 * M },
+      officialPollMs: 60_000,
+      officialRequestGapMs: 0,
+      officialRepairMs: 60 * M,
+      log: () => undefined,
+    })
+    await full.start()
+    await wait(150)
+    await full.stop()
+    expect(countHole()).toBeGreaterThan(holey)
+    store.close()
+  })
+
   it('keeps capturing when the official candle API fails', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'balancita-capture-'))
     dirs.push(dir)

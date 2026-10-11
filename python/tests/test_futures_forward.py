@@ -3,8 +3,9 @@ import os
 import sqlite3
 import tempfile
 import unittest
+from unittest import mock
 
-from balancita_engine.futures_forward import load_registration, run_forward, write_summary
+from balancita_engine.futures_forward import LATE_KNOWN_MS, load_registration, main, run_forward, write_summary
 from balancita_engine.futures_replay import replay
 from balancita_engine.futures_simulator import simulate_many
 from balancita_engine.futures_spec_strategy import load_specs, spec_hash
@@ -26,10 +27,18 @@ SPECS = load_specs()
 ONES, FIVES = _candles(_calm_then_surge())
 
 
-def _market(path, product="PF_XBTUSD"):
+def _market(path, product="PF_XBTUSD", hole=None, filled=True):
+    """Official candles of the surge. ``hole`` = (first, last) minute index the capture was down for: its candles
+    are either learned a day and a half later (``filled``: recovered from the public API) or missing."""
     db = sqlite3.connect(path)
     db.executescript(DDL)
+    first, last = hole if hole else (None, None)
+    late = START + (last + 1) * MINUTE + 40 * 3_600_000 if hole else None
     for c in ONES + FIVES:
+        inside = hole is not None and first * MINUTE <= c["bucket_start"] - START <= last * MINUTE
+        if inside and not filled:
+            continue
+        c = dict(c, known_at=late) if inside else c
         db.execute("INSERT INTO paper_futures_official_candles VALUES(?,?,?,?,?,?,?,?,?,?,?)", (
             product, c["interval_ms"], c["bucket_start"], c["revision_hash"], c["known_at"],
             c["open"], c["high"], c["low"], c["close"], c["volume_btc"], "x"))
@@ -44,6 +53,88 @@ class ReplayLogFeatureTests(unittest.TestCase):
         self.assertGreaterEqual(len(book.trades) + (1 if book.position else 0), 1)
         (want,) = simulate_many([SPECS[C30]], ONES, FIVES)
         self.assertEqual([t["entry_bucket_ms"] for t in book.trades], [t["entry_bucket_ms"] for t in want.trades])
+
+
+def _trades(db_path):
+    return [json.loads(payload) for (payload,) in sqlite3.connect(db_path).execute(
+        "SELECT payload FROM forward_trade ORDER BY entry_bucket_ms")]
+
+
+class RecoveryTests(unittest.TestCase):
+    """A capture hole filled afterwards from the public API must not change what the strategy did."""
+
+    PRODUCTS = [("PF_XBTUSD", "0.0001")]
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.registration = {"strategies": {C30: {"start_ms": START + 2000 * MINUTE}}, "min_forward_trades": 100}
+        clean = os.path.join(self.dir.name, "clean.sqlite")
+        _market(clean)
+        self.reference_db = os.path.join(self.dir.name, "clean-forward.sqlite")
+        run_forward(clean, self.reference_db, SPECS, self.registration, self.PRODUCTS)
+        self.reference = _trades(self.reference_db)
+        self.assertEqual(len(self.reference), 1)  # entry at minute 2349, time stop at 3789
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def _run(self, name, hole, filled=True):
+        market = os.path.join(self.dir.name, name + ".sqlite")
+        _market(market, hole=hole, filled=filled)
+        db = os.path.join(self.dir.name, name + "-forward.sqlite")
+        run_forward(market, db, SPECS, self.registration, self.PRODUCTS)
+        return market, db
+
+    def test_a_filled_hole_over_the_entry_gives_the_same_trades_labelled_recovered(self):
+        _, db = self._run("entry", (2300, 2500))
+        self.assertEqual(_trades(db), self.reference)
+        summary = write_summary(db, SPECS, self.registration, os.path.join(self.dir.name, "s.json"))["strategies"][C30]
+        self.assertEqual((summary["summary"]["trades"], summary["recovered_trades"]), (1, 1))
+        self.assertEqual(summary["summary_without_recovered"]["trades"], 0)
+        self.assertEqual((summary["missing_candles_1m"], summary["diverged_trades"]), (0, 0))
+
+    def test_a_filled_hole_over_the_exit_closes_the_position_the_same_way(self):
+        _, db = self._run("exit", (3700, 3900))
+        self.assertEqual(_trades(db), self.reference)
+        self.assertEqual(self.reference[0]["exit_reason"], "time_stop")
+        summary = write_summary(db, SPECS, self.registration, os.path.join(self.dir.name, "s.json"))["strategies"][C30]
+        self.assertEqual(summary["recovered_trades"], 1)
+
+    def test_a_hole_that_does_not_touch_the_trade_leaves_it_unlabelled(self):
+        _, db = self._run("elsewhere", (2050, 2100))
+        self.assertEqual(_trades(db), self.reference)
+        summary = write_summary(db, SPECS, self.registration, os.path.join(self.dir.name, "s.json"))["strategies"][C30]
+        self.assertEqual((summary["summary"]["trades"], summary["recovered_trades"]), (1, 0))
+
+    def test_candles_still_missing_are_reported_not_hidden(self):
+        _, db = self._run("open", (3700, 3900), filled=False)
+        summary = write_summary(db, SPECS, self.registration, os.path.join(self.dir.name, "s.json"))["strategies"][C30]
+        self.assertEqual(summary["missing_candles_1m"], 201)
+
+    def test_trades_stored_across_a_hole_are_flagged_once_it_is_filled_and_rebuild_fixes_them(self):
+        market, db = self._run("later", (3700, 3900), filled=False)
+        self.assertNotEqual(_trades(db), self.reference)  # the time stop could not happen on missing candles
+        filled = os.path.join(self.dir.name, "later-filled.sqlite")
+        _market(filled, hole=(3700, 3900))
+        run_forward(filled, db, SPECS, self.registration, self.PRODUCTS)
+        summary = write_summary(db, SPECS, self.registration, os.path.join(self.dir.name, "s.json"))["strategies"][C30]
+        self.assertGreaterEqual(summary["diverged_trades"], 1)
+        registration = os.path.join(self.dir.name, "registration.json")
+        with open(registration, "w", encoding="utf-8") as handle:
+            json.dump(dict(self.registration, schema="futures-forward-strategies.v1"), handle)
+        out = os.path.join(self.dir.name, "out")
+        os.makedirs(out)
+        os.replace(db, os.path.join(out, "forward.sqlite"))
+        with mock.patch("balancita_engine.futures_forward.resolve_products", return_value=self.PRODUCTS):
+            main(["--market-db", filled, "--out", out, "--registration", registration, "--rebuild"])
+        self.assertEqual(_trades(os.path.join(out, "forward.sqlite")), self.reference)
+        self.assertEqual(len([f for f in os.listdir(out) if ".before-rebuild-" in f]), 1)
+        with open(os.path.join(out, "forward-reliability.json"), encoding="utf-8") as handle:
+            self.assertEqual(json.load(handle)["strategies"][C30]["diverged_trades"], 0)
+
+    def test_a_candle_learned_within_the_normal_poll_delay_is_not_recovered(self):
+        self.assertGreater(LATE_KNOWN_MS, 60_000)
+        self.assertLessEqual(1_000, LATE_KNOWN_MS)
 
 
 class ForwardTests(unittest.TestCase):
