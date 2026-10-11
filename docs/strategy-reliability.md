@@ -62,6 +62,20 @@ Potencia: C30 hace unas 0,6 operaciones al día entre los 8 productos (288 en 48
 
 Es un libro de paper aparte, alimentado por la misma DB de mercado que los veredictos. No pasa por los veredictos en vivo ni por D: C30 necesita unas 24 h de velas de 5 m y una volatilidad exponencial cuya semilla deja de importar tras una semana, y la ventana fija de 200 velas de los veredictos (parte de su identidad y de su config) no sirve para eso.
 
+### Caídas de `pnpm dev`: los huecos no cambian el resultado
+
+Mientras la captura está parada no entra la señal de nadie, pero el seguimiento hacia delante no depende de haber estado despierto: recalcula todo desde las velas oficiales de la DB. Por eso la recuperación consiste en llenar las velas que faltan y repasarlas en orden, como un replay corto:
+
+- **Captura** (`capture-main`): al arrancar pide a Kraken (API pública de gráficos, sin credenciales) todas las velas de 1 m y 5 m desde la última guardada hasta ahora, por tramos de 1.800, sin el límite de profundidad que antes dejaba un hueco tras una caída de más de 24 h; cada vela se guarda con su hora real de conocimiento (`known_at`). Además repara huecos interiores de los últimos 10 días (solo pide las ventanas incompletas) y anota cada caída en `paper_futures_data_gaps` (feeds `official_candles_1m` y `official_candles_5m`).
+- **Entradas:** una señal en una vela cerrada del hueco abre al cierre de esa vela (la apertura de la siguiente) y con su hora, no con la de hoy.
+- **Salidas:** el stop y el objetivo se comprueban con el máximo y el mínimo de cada vela; si caen ambos en la misma, gana el stop (peor caso). La salida por tiempo cuenta desde la hora real de entrada. Una posición abierta al caer se cierra donde le tocó durante el hueco.
+- **Costes y funding:** los mismos del modelo por producto, con el funding de ese periodo.
+- **Etiqueta `recovered`:** una operación cuyo tramo de entrada a salida contiene una vela conocida más de 5 minutos después de cerrar se marca como recuperada. **Cuenta** para las 100 operaciones; `forward-reliability.json` trae `summary` (todas), `summary_without_recovered` y `recovered_trades` para reportar con y sin ellas.
+- **Control:** `missing_candles_1m` cuenta los minutos que siguen sin vela y `diverged_trades` las operaciones guardadas antes de llenar un hueco que ya no se reproducen con las velas actuales (no se reescriben; `--rebuild` guarda `forward.sqlite` aparte y lo recalcula).
+- **No se recupera** lo que depende de decisiones en vivo (C31 y Qwen) ni de datos que Kraken no sirve por rango: bid/ask del libro y trades de la captura. Kronos pide sus velas horarias a Kraken y ya no depende de la captura.
+
+Una operación recuperada es una prueba algo menos limpia que una vista en vivo (el resultado se conoce después), por eso lleva la etiqueta.
+
 ## Tendencia diaria
 
 Reglas estándar fijadas antes de mirar (sin barrido), sobre cierres diarios de futuros desde marzo de 2022 (1560 días útiles, 6 a 8 productos), largo y corto, costes de futuros y funding medio: ruptura Donchian de 50 días con salida a 20, cruce de medias 20/100 y signo del retorno a 90 días, con y sin tamaño por volatilidad. Cartera igual por producto: de +0,3 a +4,5 bp por día frente a +18 del buy and hold, Sharpe de -0,2 a 0,3, intervalos de bloques mensuales que cruzan cero y primera mitad negativa. No hay potencia: con un Sharpe verdadero de 0,2 harían falta del orden de cien años de datos para distinguirlo de cero; 4,3 años y un solo ciclo de mercado no bastan. Detalle en `analisis/estrategias-log-walkforward.md` (en la carpeta compartida del proyecto, no en el repo), sección 9.

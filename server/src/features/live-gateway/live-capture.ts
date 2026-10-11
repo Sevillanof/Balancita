@@ -16,6 +16,7 @@ import {
   type FuturesProduct,
 } from '../kraken-futures/futures-products.ts'
 import { createTickerPollClient } from '../kraken-futures/ticker-poll.ts'
+import { backfillOfficialCandles } from '../kraken-futures/official-candles-backfill.ts'
 import {
   createOfficialCandlesClient,
   OFFICIAL_CANDLE_INTERVALS,
@@ -50,6 +51,10 @@ const ANALYTICS_POLL_OFFSET_MS = 8_000
 const ANALYTICS_MAX_PAGES = 3
 /** Poll this long after each minute boundary so the closed candle settled. */
 const OFFICIAL_POLL_OFFSET_MS = 3_000
+/** Windows of candles one poll fetches per series while catching up after a stop. */
+const OFFICIAL_MAX_WINDOWS = 6
+/** A hole shorter than this is an ordinary missed poll, not a recorded gap. */
+const OFFICIAL_GAP_MIN_MS = 10 * 60_000
 /**
  * Pause between two official-candle requests. 8 products x 2 intervals is 16
  * requests a minute at most (about 3 a minute per product on average, since 5m
@@ -101,6 +106,11 @@ export interface LiveCaptureOptions {
   /** Fixed poll period; by default polls 3 s after every minute boundary. */
   readonly officialPollMs?: number
   /**
+   * On start, fill interior holes of the 1m/5m series over this span (0: off). Resumable and
+   * cheap when complete: windows already stored are skipped.
+   */
+  readonly officialRepairMs?: number
+  /**
    * Extra official timeframes captured for the terminal product only (chart
    * use; no verdict reads them). Default: none.
    */
@@ -140,7 +150,8 @@ export function createLiveCapture(options: LiveCaptureOptions) {
   let fundingTimer: ReturnType<typeof setTimeout> | undefined
   let catalogTimer: ReturnType<typeof setTimeout> | undefined
   let fundingClient:
-    ReturnType<typeof createHistoricalFundingClient> | undefined
+    | ReturnType<typeof createHistoricalFundingClient>
+    | undefined
   let officialTimer: ReturnType<typeof setTimeout> | undefined
   let officialClient: ReturnType<typeof createOfficialCandlesClient> | undefined
   let analyticsTimer: ReturnType<typeof setTimeout> | undefined
@@ -188,41 +199,119 @@ export function createLiveCapture(options: LiveCaptureOptions) {
   ]
 
   // Official Kraken candles are the canonical series for verdicts: backfill
-  // on start, then fetch each newly closed bucket.
+  // on start, then fetch each newly closed bucket. After a stop (the process
+  // down for hours) the whole hole is fetched, window by window, from the last
+  // stored bucket: a lookback only bounds an empty series.
+  let holesRepaired = (options.officialRepairMs ?? 0) <= 0
   const pollOfficialCandles = async (): Promise<void> => {
     let requested = false
     // One product after another, 5m before 1m within each (OFFICIAL_CANDLE_INTERVALS).
     for (const { productId, interval } of officialSeries) {
       if (stopped || officialClient === undefined) return
+      const window = OFFICIAL_CANDLES_PER_REQUEST * interval
       const due = (): number | undefined => {
         const now = clock()
         const latest = store.latestOfficialBucket(productId, interval)
         // The bucket after the latest stored one has not closed yet.
         if (latest !== undefined && latest + 2 * interval > now)
           return undefined
+        if (latest !== undefined) return latest + interval
         return Math.max(
-          latest === undefined ? 0 : latest + interval,
           now - (lookbacks[interval] ?? 500 * interval),
-          now - OFFICIAL_CANDLES_PER_REQUEST * interval,
+          now - window,
         )
       }
-      if (due() === undefined) continue
-      if (requested) await pause(requestGapMs)
-      if (stopped || officialClient === undefined) return
-      // Recomputed after the pause: the clock and the stored data moved on.
-      const from = due()
+      let from = due()
       if (from === undefined) continue
-      requested = true
-      try {
-        store.appendOfficialCandles(
-          await officialClient.fetch(productId, interval, from, clock()),
-        )
-      } catch (error) {
-        if (stopped) return
-        log(
-          `official candles unavailable (${productId} ${interval} ms): ${describe(error)}`,
-        )
+      const gapStart = store.latestOfficialBucket(productId, interval)
+      const gapFrom = gapStart === undefined ? undefined : from
+      let stored = 0
+      for (
+        let step = 0;
+        from !== undefined && step < OFFICIAL_MAX_WINDOWS;
+        step += 1
+      ) {
+        if (requested) await pause(requestGapMs)
+        if (stopped || officialClient === undefined) return
+        // Recomputed after the pause: the clock and the stored data moved on.
+        const now = clock()
+        const to = Math.min(from + window, now)
+        requested = true
+        try {
+          stored += store.appendOfficialCandles(
+            await officialClient.fetch(productId, interval, from, to),
+          ).inserted
+        } catch (error) {
+          if (stopped) return
+          log(
+            `official candles unavailable (${productId} ${interval} ms): ${describe(error)}`,
+          )
+          break
+        }
+        // Still behind by more than a window: continue from where this one ended
+        // (also past a window Kraken had nothing for).
+        const latest = store.latestOfficialBucket(productId, interval)
+        from =
+          to >= now || (latest !== undefined && latest + 2 * interval > now)
+            ? undefined
+            : Math.max(to, latest === undefined ? to : latest + interval)
       }
+      if (
+        gapFrom !== undefined &&
+        gapStart !== undefined &&
+        stored > 0 &&
+        clock() - gapFrom > Math.max(OFFICIAL_GAP_MIN_MS, 3 * interval)
+      ) {
+        const filledTo =
+          store.latestOfficialBucket(productId, interval) ?? gapFrom
+        log(
+          `official candles ${productId} ${interval / 60_000}m: filled ${stored} missing from ${new Date(gapFrom).toISOString()}`,
+        )
+        try {
+          store.appendGap({
+            feed: `official_candles_${interval / 60_000}m`,
+            productId,
+            epoch: 0,
+            expectedSeq: gapFrom,
+            actualSeq: filledTo,
+            detectedAt: clock(),
+            reason: `capture was down from ${new Date(gapFrom).toISOString()}; ${stored} candles recovered from the public charts API`,
+            policyVersion: 'official-candles-catchup.v1',
+          })
+        } catch (error) {
+          log(`could not record the candle gap: ${describe(error)}`)
+        }
+      }
+    }
+    if (!holesRepaired && officialClient !== undefined && !stopped) {
+      holesRepaired = true
+      const toMs = clock() - 2 * 60_000
+      const fromMs = toMs - (options.officialRepairMs ?? 0)
+      for (const { productId } of products)
+        for (const interval of OFFICIAL_CANDLE_INTERVALS) {
+          if (stopped) return
+          try {
+            const result = await backfillOfficialCandles({
+              store,
+              client: officialClient,
+              productId,
+              intervalMs: interval,
+              fromMs,
+              toMs,
+              requestGapMs,
+              pause,
+            })
+            if (result.inserted > 0)
+              log(
+                `official candles ${productId} ${interval / 60_000}m: repaired ${result.inserted} holes in the last ${Math.round((options.officialRepairMs ?? 0) / 86_400_000)} days`,
+              )
+          } catch (error) {
+            if (stopped) return
+            log(
+              `candle repair unavailable (${productId} ${interval} ms): ${describe(error)}`,
+            )
+          }
+        }
     }
   }
   const scheduleOfficialPoll = (): void => {
