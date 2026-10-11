@@ -15,9 +15,9 @@ Pedido de Fran (2026-10-09): saber cuán errado está Qwen al predecir y cómo a
 - [x] QC-02 [M] (hecho 2026-10-09, resultado en el registro) Ejecutar los 3 brazos (original, context, learning) con el modelo real, 7 días, `pnpm dev` parado, y compararlos con `futures_replay_compare` (¿ayuda `lessons`?).
 - [x] QC-03 [M] (código listo; falta correrlo con decisiones reales: `python -m balancita_engine.futures_llm_calibrate --decisions-db … --verdicts-db … [--write]`; acepta T solo con 100+ decisiones por parte y mejora de log-loss en validación) Ajustar la temperatura T de `trade_action` por tiempo (ajustar con lo viejo, validar con lo nuevo) y guardarla en `config/decision-calibration.json`. Hoy no existe el código de ajuste.
 - [x] QC-04 [M] (código listo, falta medir con el modelo real) Quitar el sesgo de letras: promediar la pregunta con el orden de opciones permutado (el sesgo está confirmado, `analisis/letras-permutadas/probe_letter_bias.py`). Nueva versión de la pregunta (`trade_action@4`).
-- [ ] QC-05 [S] Brazo A/B: operar solo cuando la confianza calibrada supere un umbral (depende de QC-03 y QC-04).
+- [~] QC-05 (cerrado 2026-10-11: no justificado, sin señal) [S] Brazo A/B: operar solo cuando la confianza calibrada supere un umbral (depende de QC-03 y QC-04).
 - [x] QC-06 [S] (código listo; falta correrlo con las decisiones reales de C31 en la Mac: `python -m balancita_engine.futures_qwen_exit --market-db … --out server/data/dev-live/qwen-exit --calibration`, y la clave `calibration` del summary JSON) Mismo informe de calibración para `exit_decision` (C31).
-- [ ] QC-07 [L] Reentrenar (LoRA sobre las decisiones etiquetadas). Solo si QC-01 a QC-05 muestran señal y hay cientos o miles de ejemplos. Riesgo de sobreajustar ruido.
+- [~] QC-07 (cerrado 2026-10-11: no justificado, sin señal) [L] Reentrenar (LoRA sobre las decisiones etiquetadas). Solo si QC-01 a QC-05 muestran señal y hay cientos o miles de ejemplos. Riesgo de sobreajustar ruido.
 
 ## Registro
 

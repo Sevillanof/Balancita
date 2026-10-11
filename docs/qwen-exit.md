@@ -28,7 +28,7 @@ exit_trades: your last 5 closed trades (net bp, minutes held, worst point): +14.
 
 1. **Sin stop, la cola no está acotada por la estrategia.** En una medición propia (90 días, 5 min, entradas aleatorias y de reversión) mantener hasta ganar acertaba el 96-99 % y aun así perdía de media entre 70 y 270 pb por operación, porque las pocas posiciones que no vuelven pierden mucho más que lo que ganan las demás. Qwen tiene que demostrar que corta antes; esta estrategia existe para medir eso.
 2. **Las posiciones son de 100 USD sin apalancamiento.** Un largo no puede perder más de 100 USD; un corto se liquida si el precio se duplica (`liquidation`). Es contabilidad, no gestión de riesgo. Con el margen real de Kraken (1-2 %) la liquidación llegaría mucho antes.
-3. **Funding conservador**: se cobra siempre a ambos lados al valor absoluto medio por hora de cada producto (`analisis/costes-reales-kraken.md`), nunca se recibe.
+3. **Funding conservador**: se cobra siempre a ambos lados al valor absoluto medio por hora de cada producto (`analisis/costes-reales-kraken.md`, en la carpeta compartida del proyecto, no en el repo), nunca se recibe.
 4. **El mismo modelo, la misma pregunta y la misma configuración**: el runner se niega a seguir sobre una base escrita con otro modelo, otra versión de la pregunta o otro conjunto de entradas. Para cambiar algo se usa un `--out` nuevo.
 
 ## Cómo se usa

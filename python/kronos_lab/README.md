@@ -6,13 +6,15 @@ prompts imports it, and it writes only to its own `kronos.sqlite`. Delete the fo
 Rule (fixed in `lab.py`, `kronos-small-1h-h4-v1`): closed official 1h trade candles, last 400 shown to
 Kronos-small, 8 sampled paths averaged by Kronos, ln-return of that mean path over 4 h; trade only if it exceeds 2x the product's round-trip
 cost (`futures_costs`), long or short, 100 USD at the next open, exit after 4 h, one position per product,
-taker fills. Funding is not modelled yet.
+taker fills. Funding is not charged in the lab itself; the funding series now exists (`futures_funding.py`, `funding:backfill`) and the summary should be read with that in mind.
 
 Candles come by default from Kraken Futures' public charts API (`--source kraken`, no credentials): the market DB
 keeps only about two days of 1m candles, far less than the 200 h of context required, so building hours from it
 (`--source market-db --market-db server/data/dev-live/futures-market.sqlite`) never reaches a first decision.
 
-## Run (needs the Kronos weights, so on a machine that can reach huggingface.co)
+Status 2026-10-11: forward since 2026-10-08 07:10 UTC, judged at about 100 trades together with C30 (53 trades, 54.7 % hit, +6.6 bp net, t=0.81, verdict `no_edge` at the last check). Not modified until then. See ADR 0001, Amendment 2026-10-11.
+
+## Run (needs the Kronos weights, downloaded once from huggingface.co; they run locally afterwards)
 
     git clone https://github.com/shiyu-coder/Kronos ~/Kronos        # MIT
     python3 -m venv .venv-kronos && .venv-kronos/bin/pip install -r python/kronos_lab/requirements.txt

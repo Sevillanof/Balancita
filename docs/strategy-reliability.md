@@ -52,7 +52,7 @@ Hoy solo las ejecutan el backtest, el replay y Qwen en replay: los veredictos en
 
 ## Medición hacia delante (paper)
 
-Una estrategia que se encontró buscando en datos pasados no se promueve con esos datos. `config/forward-strategies.json` registra cada una con una hora de inicio (hoy solo C30, desde 2026-10-07 18:20 UTC). `python -m balancita_engine.futures_forward --market-db <market.sqlite> --out <dir> [--loop-seconds 3600]` la repasa sobre las velas oficiales de la DB de mercado (calentando indicadores con la semana anterior), se queda solo con las decisiones desde el inicio y guarda sus operaciones en `forward.sqlite` (solo se añaden, nunca se reescriben; cada una lleva el hash del spec). Escribe además `forward-reliability.json`.
+Una estrategia que se encontró buscando en datos pasados no se promueve con esos datos. `config/forward-strategies.json` registra cada una con una hora de inicio (hoy solo C30, desde 2026-10-07 18:20 UTC; Kronos y C31 se miden aparte, ver `python/kronos_lab/README.md` y `docs/qwen-exit.md`). `python -m balancita_engine.futures_forward --market-db <market.sqlite> --out <dir> [--loop-seconds 3600]` la repasa sobre las velas oficiales de la DB de mercado (calentando indicadores con la semana anterior), se queda solo con las decisiones desde el inicio y guarda sus operaciones en `forward.sqlite` (solo se añaden, nunca se reescriben; cada una lleva el hash del spec). Escribe además `forward-reliability.json`.
 
 Para que Qwen y el registro lo vean, exportar `STRATEGY_FORWARD_PATH=<dir>/forward-reliability.json`.
 
@@ -64,4 +64,8 @@ Es un libro de paper aparte, alimentado por la misma DB de mercado que los vered
 
 ## Tendencia diaria
 
-Reglas estándar fijadas antes de mirar (sin barrido), sobre cierres diarios de futuros desde marzo de 2022 (1560 días útiles, 6 a 8 productos), largo y corto, costes de futuros y funding medio: ruptura Donchian de 50 días con salida a 20, cruce de medias 20/100 y signo del retorno a 90 días, con y sin tamaño por volatilidad. Cartera igual por producto: de +0,3 a +4,5 bp por día frente a +18 del buy and hold, Sharpe de -0,2 a 0,3, intervalos de bloques mensuales que cruzan cero y primera mitad negativa. No hay potencia: con un Sharpe verdadero de 0,2 harían falta del orden de cien años de datos para distinguirlo de cero; 4,3 años y un solo ciclo de mercado no bastan. Detalle en `analisis/estrategias-log-walkforward.md`, sección 9.
+Reglas estándar fijadas antes de mirar (sin barrido), sobre cierres diarios de futuros desde marzo de 2022 (1560 días útiles, 6 a 8 productos), largo y corto, costes de futuros y funding medio: ruptura Donchian de 50 días con salida a 20, cruce de medias 20/100 y signo del retorno a 90 días, con y sin tamaño por volatilidad. Cartera igual por producto: de +0,3 a +4,5 bp por día frente a +18 del buy and hold, Sharpe de -0,2 a 0,3, intervalos de bloques mensuales que cruzan cero y primera mitad negativa. No hay potencia: con un Sharpe verdadero de 0,2 harían falta del orden de cien años de datos para distinguirlo de cero; 4,3 años y un solo ciclo de mercado no bastan. Detalle en `analisis/estrategias-log-walkforward.md` (en la carpeta compartida del proyecto, no en el repo), sección 9.
+
+## Estado a 2026-10-11
+
+Ninguna regla de velas ni variante de Qwen ha mostrado ventaja neta tras costes. C25-C28 se dan por cerradas (ventaja bruta ≈ 0, pierden aproximadamente el coste). C29, C30, C31 y Kronos siguen en paper hasta 100 operaciones y no se modifican mientras tanto. La ejecución pasiva (maker) se simuló contra la cinta pública y no crea ventaja: queda archivada.

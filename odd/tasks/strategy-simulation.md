@@ -1,5 +1,7 @@
 # strategy-simulation
 
+> **Estado 2026-10-11:** plan vivo de simulación. Foco actual: C29, C30 y Kronos en paper hasta 100 operaciones (C25-C28 cerradas; maker archivado; ni reglas de velas ni Qwen han mostrado ventaja neta). Marco: ADR 0001, enmienda 2026-10-11.
+
 ## Objective
 
 Every strategy is simulated end to end and independently against the Terminal candles, for any pinned `PF_*` product and any date range the user picks, and reports its real return and its hit rate per decision against what actually happened. Live paper execution, the backtest, the forecast scorer and Qwen's score all come from the same simulator, so the same strategy reports the same numbers everywhere. Qwen can decide blind over historical candles without waiting for new ones.

@@ -1,30 +1,18 @@
 # Capturing public Kraken Futures market data
 
-The isolated FK-02 capture utility stores public `PF_XBTUSD` observations in a new SQLite database and exports their normalized event stream as JSONL. It does not connect to application startup, submit orders, use credentials, or access the spot market store.
+Estado a 2026-10-11. El proceso `capture` de `pnpm dev` (`server/src/app/capture-main.ts`) es el único escritor de la base de mercado (`server/data/dev-live/futures-market.sqlite`) y guarda los datos públicos de los 8 perpetuos de [`config/futures-products.json`](../config/futures-products.json): velas oficiales (canónicas), ticker, funding y velas observadas solo para el gráfico de baja latencia. Libro de órdenes y series agregadas (CVD, liquidez, OI) no se guardan: se consultan a Kraken por rango (`market-analytics.ts`). La captura de trades en vivo sigue solo en `PF_XBTUSD`. No usa credenciales ni endpoints privados.
 
-**Implementation slice:** `feat/kraken-futures-market`, based on `2143c174dd63fadfcbe5874c15b36420dd8d3bbf`, local tip `d3cfd461d768fccf1a3f807c8ebaf24a2be92556` (FK-02 remains pending parent functional check). FK-01 has its own observed functional evidence; native RDD review remains unavailable, and no approval is claimed. The planned next task is FK-03 durable Python worker/command protocol; it has not started.
-
-## Quick path
-
-Use a newly created temporary directory and an explicit capture mode. `mock` is offline fixture data; `paper_live` requests the current public catalog and opens the documented public market-data WebSocket for at most 30 seconds.
+Mantenimiento (con `pnpm dev` parado cuando se compacta):
 
 ```bash
-CAPTURE_DIR="$(mktemp -d -t balancita-futures-market)"
-DB="$CAPTURE_DIR/balancita-futures-market-capture.sqlite"
-EXPORT="$CAPTURE_DIR/balancita-futures-market-events.jsonl"
-
-# Deterministic offline fixture; stdout is JSONL and diagnostics go to stderr.
-node --experimental-strip-types server/src/features/kraken-futures/capture-market.ts \
-  --mode mock --db-path "$DB" --export "$EXPORT"
-
-# Optional public-only capture (1–30 seconds), using another new directory.
-LIVE_DIR="$(mktemp -d -t balancita-futures-market)"
-node --experimental-strip-types server/src/features/kraken-futures/capture-market.ts \
-  --mode paper_live --db-path "$LIVE_DIR/balancita-futures-market-capture.sqlite" \
-  --seconds 15 --export "$LIVE_DIR/balancita-futures-market-events.jsonl" > /dev/null
+pnpm --dir server candles:backfill --days 90            # velas oficiales
+pnpm --dir server funding:backfill --db <base>          # ~1 año de funding de los 8 perpetuos
+pnpm --dir server market:prune --vacuum                 # retención: tickers 24 h, trades 7 d
 ```
 
-The utility refuses a database/export path outside the OS temporary directory, any existing file, a missing mode, or an unknown mode. `paper_live` is a market-data mode only; it does not enable execution.
+`DEV_ONLY=vite,capture,live,forward,strategies pnpm dev` arranca solo esos procesos (captura y seguimiento forward, sin modelo ni libros paper).
+
+El mercado spot BTC-EUR está abandonado. El resto de este documento es el historial de la utilidad aislada FK-02 (octubre 2), que ya no existe como comando suelto (`capture-market.ts` se retiró).
 
 ## Data and safety boundaries
 
@@ -54,7 +42,7 @@ Catalog mismatch results in `metadata_invalid`; no silent fallback to an assumed
 
 This evidence validates public schemas and current product metadata only. Kraken does not document the book sequence as contiguous in the cited contract; a live collector must therefore not claim proof that every update was received. `live` describes fresh feed delivery, not executable-book completeness. No execution quality, account availability, or profitability is guaranteed. Native review and full product acceptance remain separate gates.
 
-## FK-02 verification evidence (2026-10-02)
+## FK-02 verification evidence (2026-10-02, histórico)
 
 - Offline mock capture used a new disposable SQLite file and JSONL path. It reopened the database, reported 3 persisted market events and 5 candle revisions, exported 3 lines, and produced identical reopened/stdout JSONL. Receipt metadata was `1,2,3`. Focused store tests verify that book sequence 100 followed by trade sequence 5 at the same receive time stays book-then-trade through reopen and duplicate snapshot delivery.
 - Public-only 15-second capture fetched the catalog (metadata hash `e7855ea161cf2665e7f4b622236bf8f51dd56234e00b17f62fb72b591ea2ec6f`) and connected to the public WSS. It recorded 14,070 events: 13,801 book, 90 ticker, 179 trade; 316 candle revisions; zero reported gaps, rejects, persistence errors, or sequence discontinuities. The ending ticker had bid `84041`, ask `84042`, mark `84038.93582037339`; funding was observed with rate `0.822371513004222` but provider units remained unresolved. The last stored book snapshot was received at 2026-10-02T19:18:29.204Z; final `bookValid` was false, so depth is not executable-eligible. This bounded capture proves public feed delivery only, not complete book fidelity.
