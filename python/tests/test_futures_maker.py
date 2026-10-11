@@ -81,6 +81,12 @@ class StudyTests(unittest.TestCase):
         self.assertLess(out["selection_bp"], 0)  # filled trades were the worse ones
         self.assertLess(out["skip_total_usd"], out["taker_total_usd"])
         self.assertTrue(out["verdict"].startswith("insufficient_data"))
+        self.assertIn("net_vs_random_bp", out)
+
+    def test_skipping_losers_is_not_a_maker_gain(self):
+        summary = {"filled": 100, "net_vs_random_bp": 0.9, "net_vs_random_se_bp": 3.0, "saving_bp": 3.4}
+        self.assertEqual(m.verdict(summary), "saving_eaten_by_selection")
+        self.assertEqual(m.verdict(dict(summary, net_vs_random_bp=8.0)), "maker_helps")
 
     def test_signals_outside_the_tape_are_not_counted(self):
         out = m.study([trade(entry_time_ms=10_000_000, exit_time_ms=10_100_000)],
