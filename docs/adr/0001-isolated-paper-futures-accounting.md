@@ -98,3 +98,18 @@ Besides A, B, C, D, E and N of Amendment 2026-10-06 there are: S (strategy regis
 ### Unchanged
 
 Canonical hashing, Decimal accounting, append-only hash-chained books, replay equality, no look-ahead and the Evaluation rules (walk-forward, deflated Sharpe, minimum trade count) remain in force.
+
+## Amendment 2026-10-11 (evening): one engine for every strategy
+
+Requested directly by the user (Fran) on 2026-10-11 ("el ADR vigente hay que actualizarlo"; "si operan en el otro motor, borralos, todo va a estar en el nuevo motor"). Where it conflicts with the text above, including the amendment of the same day, this one prevails. Everything remains paper only.
+
+### Supersedes
+
+- Process D (paper execution, `futures_paper_execution`) is retired: `pnpm dev` no longer starts it. Its account database (`futures-paper-account.sqlite`) is kept as read-only history. The "one independent book per strategy and product in D" of Amendment 2026-10-06 is now provided by the forward measurement (`futures_forward`), which runs the shared simulator (`futures_simulator`, one cost model per product, 100 USD per trade, long or short) over the official candles.
+- C25-C28 are deleted from the strategy registry at startup (`config/strategy-closed.json`, reason `closed_with_engine_d`); the history stays because the registry is append-only. Their specs remain in `config/strategies/` only because C31 uses them as entries.
+- "Active" in the registry now means "trades in paper": every active strategy is measured forward from the moment it was activated (shipped ones nobody switched on, such as C29, from the first run that saw them; C30 keeps its start in `config/forward-strategies.json`). Switching a strategy off or deleting it stops new trades and keeps its trades. The front can activate, deactivate and delete any strategy (deleting asks for two confirmations and the id).
+- Every new strategy runs in this engine. Qwen and Kronos are models, not rule strategies, and are kept apart (see the Qwen and Kronos section above).
+
+### Unchanged
+
+The verdict service (C) still computes the C25-C28 proposals because Qwen reads them as context. C29, C30, C31 and Kronos are not modified until 100 forward trades. Canonical hashing, Decimal accounting, append-only storage, replay equality, no look-ahead and the Evaluation rules remain in force.
