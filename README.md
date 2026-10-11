@@ -34,9 +34,9 @@ flowchart LR
     A -->|escribe| M[(market.sqlite<br/>trades, ticker, books,<br/>velas oficiales, funding)]
     M --> C[verdict C<br/>Python]
     C -->|escribe| V[(verdicts.sqlite)]
-    M --> D[paper D<br/>Python]
-    V --> D
-    D -->|escribe| P[(paper-account.sqlite<br/>eventos con hash en cadena)]
+    M --> F[forward<br/>Python]
+    R[(registro de estrategias)] --> F
+    F -->|escribe| P[(forward.sqlite<br/>operaciones de estrategias activas)]
     M --> E[scores E<br/>Python]
     V --> E
     E -->|escribe| S[(forecast-scores.sqlite)]
@@ -45,7 +45,7 @@ flowchart LR
     Q -->|escribe| L[(llm-decisions.sqlite)]
     N -->|escribe| NW[(news.sqlite)]
     REG[strategies<br/>registro S :8790] -.lee specs.-> C
-    M & V & P & S & L & NW --> G[live<br/>gateway :8789]
+    M & V & S & L & NW --> G[live<br/>gateway :8789]
     G --> W[Web React :5173<br/>Terminal + Estrategias]
     REG --> W
     MOCK[mock :8788<br/>mercado grabado] --> W
