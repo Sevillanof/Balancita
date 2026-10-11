@@ -83,3 +83,7 @@ Reglas estándar fijadas antes de mirar (sin barrido), sobre cierres diarios de 
 ## Estado a 2026-10-11
 
 Ninguna regla de velas ni variante de Qwen ha mostrado ventaja neta tras costes. C25-C28 se dan por cerradas (ventaja bruta ≈ 0, pierden aproximadamente el coste). C29, C30, C31 y Kronos siguen en paper hasta 100 operaciones y no se modifican mientras tanto. La ejecución pasiva (maker) se simuló contra la cinta pública y no crea ventaja: queda archivada.
+
+## Activa = opera
+
+Con `--strategies-db` (en `pnpm dev` ya va puesto), el seguimiento forward mide además toda estrategia **activa** en el registro, desde el momento en que se activó (para una de fábrica que nadie encendió, como C29, desde la primera vez que el runner la vio; se anota una vez y no se mueve). C30 conserva su inicio de `config/forward-strategies.json` y sigue mientras el registro la tenga activa. Desactivar o borrar una estrategia deja de añadirle operaciones; las ya guardadas permanecen. C25-C28 operan en los libros de D y no se miden aquí.

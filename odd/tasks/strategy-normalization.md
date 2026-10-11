@@ -27,3 +27,8 @@ Un plan explícito por estrategia (`futures_strategy_plan.py`): señal (`rules` 
 - **NS-04 (hecho para Kronos)**: descriptor `config/models/kronos-small-1h-h4-v1.json` con test contra las constantes de `lab.py`; C31 ya tiene `qwen-exit.json`. Descriptores de modelo `balancita-model.v1` en `config/models/` (Qwen, Kronos) con test de igualdad contra las constantes; sin reiniciar procesos.
 - NS-05: `propose` -> `propose_spec` en verdictos y D, solo si un replay real da el mismo `verdict_hash` y las mismas operaciones (incluidas salidas con niveles congelados, C27 sin nivel y `cost_config`).
 - NS-06: estado explícito `forward` con `start_ms` inmutable; migrar C30 copiando su entrada exacta y retirar el JSON manual al pasar el test. Coordinar con el hilo de recuperación de huecos (toca `futures_forward.py`).
+
+## Pedido de Fran (2026-10-11, tarde): activa = opera, borrar y un solo ecosistema
+
+- **NS-07 (hecho)**: "Activar" opera en paper (seguimiento forward desde la activación), "Desactivar" y "Borrar" (doble confirmación y escribir el id) desde la pestaña Versiones; borrar oculta y conserva el historial. C25-C28 siguen en los libros de D y no se pueden desactivar ni borrar hasta NS-05.
+- Qwen y Kronos van aparte de las estrategias de reglas (modelos, no specs).

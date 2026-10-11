@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import type { StrategySpec } from '../domain/strategy-spec.ts'
 import type {
   BacktestTrade,
@@ -66,11 +67,16 @@ export function VersionsTab({
   detail,
   busy,
   onState,
+  onDelete,
 }: {
   detail: StrategyDetail
   busy: boolean
-  onState: (state: StrategyState) => void
+  onState: (state: StrategyState, paperNow?: boolean) => void
+  onDelete: (confirm: string) => void
 }) {
+  const [step, setStep] = useState<0 | 1 | 2>(0)
+  const [typed, setTyped] = useState('')
+  const active = detail.state === 'active'
   return (
     <div className="strategy-lab__tab-body">
       <ul className="strategy-lab__versions">
@@ -84,40 +90,88 @@ export function VersionsTab({
         ))}
       </ul>
       <div className="strategy-lab__row-actions">
-        {detail.state === 'draft' && (
-          <button
-            type="button"
-            className="strategy-lab__button"
-            disabled={busy}
-            onClick={() => onState('shadow')}
-          >
-            Pasar a sombra
-          </button>
-        )}
-        {detail.state === 'shadow' && (
-          <button
-            type="button"
-            className="strategy-lab__button strategy-lab__button--primary"
-            disabled={busy}
-            onClick={() => onState('active')}
-          >
-            Activar
-          </button>
-        )}
-        {detail.state !== 'retired' && (
+        {active ? (
           <button
             type="button"
             className="strategy-lab__button strategy-lab__button--ghost"
             disabled={busy}
             onClick={() => onState('retired')}
           >
-            Retirar
+            Desactivar
+          </button>
+        ) : (
+          <button
+            type="button"
+            className="strategy-lab__button strategy-lab__button--primary"
+            disabled={busy}
+            onClick={() => onState('active', true)}
+          >
+            Activar
+          </button>
+        )}
+        {step === 0 && (
+          <button
+            type="button"
+            className="strategy-lab__button strategy-lab__button--ghost"
+            disabled={busy}
+            onClick={() => setStep(1)}
+          >
+            Borrar
           </button>
         )}
       </div>
+      {step === 1 && (
+        <div className="strategy-lab__row-actions" role="group">
+          <span>
+            ¿Borrar {detail.id}? Deja de operar y desaparece de las listas.
+          </span>
+          <button
+            type="button"
+            className="strategy-lab__button"
+            onClick={() => setStep(2)}
+          >
+            Sí, continuar
+          </button>
+          <button
+            type="button"
+            className="strategy-lab__button strategy-lab__button--ghost"
+            onClick={() => setStep(0)}
+          >
+            Cancelar
+          </button>
+        </div>
+      )}
+      {step === 2 && (
+        <div className="strategy-lab__row-actions" role="group">
+          <input
+            aria-label="Escribí el id para confirmar"
+            placeholder={detail.id}
+            value={typed}
+            onChange={(event) => setTyped(event.target.value)}
+          />
+          <button
+            type="button"
+            className="strategy-lab__button strategy-lab__button--primary"
+            disabled={busy || typed !== detail.id}
+            onClick={() => onDelete(typed)}
+          >
+            Borrar definitivamente
+          </button>
+          <button
+            type="button"
+            className="strategy-lab__button strategy-lab__button--ghost"
+            onClick={() => {
+              setStep(0)
+              setTyped('')
+            }}
+          >
+            Cancelar
+          </button>
+        </div>
+      )}
       <small className="strategy-lab__context">
-        Activar pide pasar por sombra, 30 trades fuera de muestra, neto medio
-        positivo y Sharpe deflactado ≥ 0,95.
+        Activa = opera en paper (100 USD por operación, sin dinero real). Al
+        desactivar o borrar deja de abrir operaciones; el historial se conserva.
       </small>
     </div>
   )

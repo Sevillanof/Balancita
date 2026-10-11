@@ -31,6 +31,7 @@ import sqlite3
 import time
 
 from .futures_products import resolve_products
+from .futures_strategies import STRATEGY_IDS
 from .futures_replay import load_range, replay
 from .futures_spec_strategy import DEFAULT_SPEC_DIR, load_specs, spec_hash
 from .futures_strategy_reliability import (
@@ -70,6 +71,48 @@ def load_registration(path=None):
     if body.get("schema") != "futures-forward-strategies.v1":
         raise ValueError("not a forward strategies file")
     return body
+
+
+def effective_registration(db_path, registration, specs, candidates, now_ms):
+    """What to measure now: the registered file plus every strategy switched on in the registry.
+
+    ``candidates`` is ``futures_strategy_registry.forward_candidates`` (``None``: no registry, the file alone).
+    C25-C28 trade in D's own books and are never measured here. A strategy of the registered file keeps its
+    ``start_ms`` and runs unless the registry says it is not active. Any other active strategy starts when it
+    was activated (a shipped one nobody ever switched on: the first time this runner saw it, written down once
+    and never moved). A strategy that is switched off or deleted adds no more trades; its history stays.
+    Returns ``(registration, specs)``; the inputs are not modified.
+    """
+    registered = dict(registration["strategies"])
+    specs = dict(specs)
+    if candidates is None:
+        return registration, specs
+    for strategy_id in list(registered):
+        if strategy_id in candidates and candidates[strategy_id]["state"] != "active":
+            del registered[strategy_id]
+    db = sqlite3.connect(db_path)
+    try:
+        db.executescript("CREATE TABLE IF NOT EXISTS forward_first_seen("
+                         "strategy_id TEXT NOT NULL, spec_hash TEXT NOT NULL, seen_ms INTEGER NOT NULL, "
+                         "PRIMARY KEY(strategy_id, spec_hash)) STRICT;")
+        for strategy_id, info in candidates.items():
+            if info["state"] != "active" or strategy_id in STRATEGY_IDS or strategy_id in registered:
+                continue
+            spec = info["spec"]
+            start = info["active_since_ms"] or 0
+            if start <= 0:
+                digest = spec_hash(spec)
+                with db:
+                    db.execute("INSERT OR IGNORE INTO forward_first_seen VALUES(?,?,?)",
+                               (strategy_id, digest, now_ms))
+                start = db.execute("SELECT seen_ms FROM forward_first_seen WHERE strategy_id=? AND spec_hash=?",
+                                   (strategy_id, digest)).fetchone()[0]
+            registered[strategy_id] = {"start_ms": start, "registered": "registry",
+                                       "why": "active in the strategy registry"}
+            specs[strategy_id] = spec
+    finally:
+        db.close()
+    return dict(registration, strategies=registered), specs
 
 
 def candle_coverage(ones, fives, start_ms, end_ms):
@@ -210,6 +253,8 @@ def main(argv=None):
     parser.add_argument("--out", required=True, help="directory for forward.sqlite and forward-reliability.json")
     parser.add_argument("--specs-dir", default=DEFAULT_SPEC_DIR)
     parser.add_argument("--registration", default=FORWARD_STRATEGIES_PATH)
+    parser.add_argument("--strategies-db", help="the strategy registry (read-only): every strategy active there "
+                                                "is measured too, from the moment it was switched on")
     parser.add_argument("--rebuild", action="store_true",
                         help="keep the current forward.sqlite aside and recompute every trade from the candles "
                              "now on disk (after a hole was filled)")
@@ -223,8 +268,15 @@ def main(argv=None):
     specs = load_specs(args.specs_dir)
     registration = load_registration(args.registration)
     products = resolve_products()
+    base_specs, base_registration = specs, registration
     while True:
-        added = run_forward(args.market_db, os.path.join(args.out, "forward.sqlite"), specs, registration, products)
+        db_path = os.path.join(args.out, "forward.sqlite")
+        if args.strategies_db:
+            from .futures_strategy_registry import forward_candidates
+            registration, specs = effective_registration(
+                db_path, base_registration, base_specs, forward_candidates(args.strategies_db),
+                int(time.time() * 1000))
+        added = run_forward(args.market_db, db_path, specs, registration, products)
         body = write_summary(os.path.join(args.out, "forward.sqlite"), specs, registration,
                              os.path.join(args.out, "forward-reliability.json"))
         for strategy_id, entry in body["strategies"].items():

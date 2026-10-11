@@ -40,6 +40,7 @@ from .futures_spec_strategy import (
     validate_spec,
 )
 from .futures_replay import load_range
+from .futures_strategies import STRATEGY_IDS
 from .futures_strategy_plan import all_plans, load_freeze
 from .futures_strategy_reliability import load_reliability, reliability_for
 from .futures_purged import cscv_pbo
@@ -243,7 +244,12 @@ class StrategyRegistry:
     def list(self):
         ids = [r[0] for r in self.db.execute(
             "SELECT strategy_id FROM strategy_versions GROUP BY strategy_id ORDER BY MIN(created_at), strategy_id")]
-        return [self._entry(self._version_row(strategy_id, None)) for strategy_id in ids]
+        return [self._entry(self._version_row(strategy_id, None)) for strategy_id in ids
+                if not self._deleted(strategy_id)]
+
+    def _deleted(self, strategy_id):
+        row = self._version_row(strategy_id, None)
+        return row is not None and self._state(strategy_id, row["version"])["state"] == "deleted"
 
     def detail(self, strategy_id, version=None):
         row = self.version(strategy_id, version)
@@ -278,7 +284,7 @@ class StrategyRegistry:
         rules = rules_hash(spec)
         for strategy_id, version, stored in self.db.execute(
                 "SELECT strategy_id, version, spec_json FROM strategy_versions"):
-            if rules_hash(json.loads(stored)) == rules:
+            if rules_hash(json.loads(stored)) == rules and not self._deleted(strategy_id):
                 raise RegistryError("duplicate_spec", "same rules and parameters as {} v{}".format(
                     strategy_id, version), 409, {"id": strategy_id, "version": version})
         self.db.execute("INSERT INTO strategy_versions VALUES(?,?,?,?,?,?,?,?)", (
@@ -371,6 +377,9 @@ class StrategyRegistry:
             gates = [] if skip_gates else self.gates(row, state, current)
             if not all(gate["passed"] for gate in gates):
                 raise RegistryError("gate_failed", "the {} gate is not met".format(state), 409, {"gates": gates})
+            if state == "retired" and strategy_id in STRATEGY_IDS and row["version"] == 1:
+                raise RegistryError("in_paper_books", "{} opera en los libros de D hasta que se unifique la "
+                                    "ejecución: no se puede desactivar aún".format(strategy_id), 409)
             freeze = load_freeze()
             if state == "active" and row["version"] > 1 and strategy_id in freeze["ids"]:
                 raise RegistryError("frozen", "{} no cambia hasta {} operaciones forward: crea una estrategia nueva"
@@ -385,6 +394,22 @@ class StrategyRegistry:
             self.db.execute("INSERT INTO strategy_events(strategy_id, version, state, reason, known_at) "
                             "VALUES(?,?,?,?,?)", (strategy_id, row["version"], state, reason, now))
             return dict(self._entry(row), gates=gates)
+
+    def delete(self, strategy_id, confirm):
+        """Hides a strategy from the lists and stops it; the append-only history stays. Needs the id typed back."""
+        if confirm != strategy_id:
+            raise RegistryError("confirmation_required", "escribe el id de la estrategia para borrarla", 409)
+        if strategy_id in STRATEGY_IDS:
+            raise RegistryError("in_paper_books", "{} opera en los libros de D hasta que se unifique la "
+                                "ejecución: no se puede borrar aún".format(strategy_id), 409)
+        with self.lock, self.db:
+            latest = self.version(strategy_id)
+            now = self.clock()
+            for (version,) in self.db.execute(
+                    "SELECT version FROM strategy_versions WHERE strategy_id=?", (strategy_id,)).fetchall():
+                self.db.execute("INSERT INTO strategy_events(strategy_id, version, state, reason, known_at) "
+                                "VALUES(?,?,?,?,?)", (strategy_id, version, "deleted", "manual_delete", now))
+            return {"id": strategy_id, "version": latest["version"], "state": "deleted"}
 
     def gates(self, row, state, current):
         """The checks a transition to ``state`` must pass (PS-08e)."""
@@ -601,6 +626,39 @@ def schema_description():
     }
 
 
+def forward_candidates(db_path):
+    """Every strategy of the registry for the forward runner, read-only.
+
+    ``{id: {spec, version, state, active_since_ms}}`` for the version that is active, else the newest one with
+    its own state. ``active_since_ms`` is when that activation began (0 for the shipped ones, which nobody
+    switched on). ``None`` when there is no registry to read.
+    """
+    if not db_path or not os.path.exists(db_path):
+        return None
+    db = sqlite3.connect("file:{}?mode=ro".format(db_path), uri=True)
+    try:
+        latest = {}
+        for strategy_id, version, state, known_at in db.execute(
+                "SELECT strategy_id, version, state, known_at FROM strategy_events ORDER BY seq"):
+            latest[(strategy_id, version)] = (state, known_at)
+        chosen = {}
+        for (strategy_id, version), (state, known_at) in sorted(latest.items(), key=lambda kv: kv[0][1]):
+            if state == "active" or (strategy_id not in chosen or chosen[strategy_id][1] != "active"):
+                chosen[strategy_id] = (version, state, known_at)
+        out = {}
+        for strategy_id, (version, state, known_at) in chosen.items():
+            row = db.execute("SELECT spec_json FROM strategy_versions WHERE strategy_id=? AND version=?",
+                             (strategy_id, version)).fetchone()
+            if row is not None:
+                out[strategy_id] = {"spec": json.loads(row[0]), "version": version, "state": state,
+                                    "active_since_ms": known_at}
+        return out
+    except sqlite3.Error:
+        return None
+    finally:
+        db.close()
+
+
 def make_handler(service):
     class Handler(BaseHTTPRequestHandler):
         server_version = "BalancitaStrategies/1"
@@ -702,7 +760,9 @@ def make_handler(service):
                                                      body.get("values"))}
             if len(parts) == 3 and parts[0] == "strategies" and parts[2] == "state":
                 return registry.set_state(parts[1], body.get("version"), body.get("state"),
-                                          body.get("reason") or "manual")
+                                          body.get("reason") or "manual", skip_gates=bool(body.get("paper_now")))
+            if len(parts) == 3 and parts[0] == "strategies" and parts[2] == "delete":
+                return registry.delete(parts[1], body.get("confirm"))
             raise RegistryError("not_found", "no route", 404)
 
         def _handle(self, method):
