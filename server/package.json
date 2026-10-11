@@ -1,9 +1,9 @@
 {
-  "name": "balancita-gemini-server",
+  "name": "balancita-server",
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "description": "Minimal Fastify gateway that keeps the Gemini API key out of the browser.",
+  "description": "Fastify read-only gateway and Kraken Futures capture for Balancita.",
   "engines": {
     "node": ">=22.12.0"
   },
