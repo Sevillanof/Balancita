@@ -37,6 +37,7 @@ describe('devChildSpecs', () => {
         'verdict',
         'scores',
         'forward',
+        'carry',
         'strategies',
         'news',
       ],
@@ -144,7 +145,9 @@ describe('devChildSpecs', () => {
       '--out',
       './data/dev-live/forward',
       '--strategies-db',
-      byName.strategies.args[byName.strategies.args.indexOf('--strategies-db') + 1],
+      byName.strategies.args[
+        byName.strategies.args.indexOf('--strategies-db') + 1
+      ],
       '--loop-seconds',
       '1800',
     ])
@@ -620,7 +623,11 @@ describe('optional LLM decision children (llm and q)', () => {
     assert.equal(spec.args[spec.args.indexOf('-c') + 1], '4096')
     assert.equal(spec.args[spec.args.indexOf('-np') + 1], '3')
     const tuned = byName(
-      devChildSpecs({ ...base, env: { ...env, LLAMA_UBATCH: '64', LLAMA_CTX_CHECKPOINTS: '16' }, llm }),
+      devChildSpecs({
+        ...base,
+        env: { ...env, LLAMA_UBATCH: '64', LLAMA_CTX_CHECKPOINTS: '16' },
+        llm,
+      }),
     ).llm.args
     assert.equal(tuned[tuned.indexOf('-ub') + 1], '64')
     assert.equal(tuned[tuned.indexOf('--ctx-checkpoints') + 1], '16')
