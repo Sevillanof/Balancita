@@ -462,6 +462,20 @@ const CAPTURE_ARGS = ['--experimental-strip-types', 'src/app/capture-main.ts']
  * - q (optional): Python LLM decisions Q (market + verdicts DBs read-only ->
  *   decisions DB, sole writer of the latter), started together with llm.
  */
+/**
+ * `DEV_ONLY=vite,capture,live,forward,strategies` runs just those children (comma separated names of
+ * `devChildSpecs`); unset or empty runs everything. Unknown names are ignored. Used to leave only the
+ * forward measurement and the capture it reads running, without the model, paper books or news.
+ */
+export function onlyChildSpecs(specs, env = {}) {
+  const wanted = (env.DEV_ONLY ?? '')
+    .split(',')
+    .map((name) => name.trim())
+    .filter(Boolean)
+  if (wanted.length === 0) return specs
+  return specs.filter((spec) => wanted.includes(spec.name))
+}
+
 export function devChildSpecs({
   root,
   env,
