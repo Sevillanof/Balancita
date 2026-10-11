@@ -21,6 +21,10 @@ The headline is not "fills are cheaper" but ``skip_total_usd`` against ``taker_t
 limit misses are the winners, the saving disappears. ``selection_bp`` shows that effect directly.
 
     python -m balancita_engine.futures_maker --market-db market.sqlite --forward-db forward.sqlite [--ttl-s 60]
+    python -m balancita_engine.futures_maker --market-db market.sqlite --replay   # signals from replaying the specs on the tape's own days
+
+``--replay`` is for when the forward book has too few trades: every shipped spec is replayed over the candles of the
+range each product's tape covers, so the sample is as large as the tape allows. Only products with a tape are studied.
 """
 
 import argparse
@@ -32,6 +36,9 @@ import sys
 from decimal import Decimal
 
 from .futures_costs import fee_rate
+from .futures_products import resolve_products
+from .futures_replay import load_range, replay
+from .futures_spec_strategy import DEFAULT_SPEC_DIR, load_specs
 
 TEN_THOUSAND = Decimal(10_000)
 DEFAULT_LATENCY_MS = 100
@@ -220,8 +227,39 @@ def _forward_trades(forward_db_path):
         db.close()
 
 
-def run(market_db, forward_db, *, ttl_ms, latency_ms, touch):
-    trades = _forward_trades(forward_db)
+def tape_ranges(market_db_path):
+    """``{product_id: (first_ms, last_ms)}`` of the trade tape, read only."""
+    db = sqlite3.connect("file:{}?mode=ro".format(market_db_path), uri=True)
+    try:
+        return {p: (lo, hi) for p, lo, hi in db.execute(
+            "SELECT product_id, MIN(event_time), MAX(event_time) FROM paper_futures_market_events "
+            "WHERE feed='trade' GROUP BY product_id")}
+    finally:
+        db.close()
+
+
+def replay_trades(market_db, ranges, specs):
+    """Trades of every spec replayed over the candles of each product's tape range (products without candles are skipped)."""
+    ticks = dict(resolve_products())
+    trades = []
+    for product_id, (lo, hi) in sorted(ranges.items()):
+        try:
+            ones, fives = load_range(market_db, product_id, lo, hi + 60_000)
+        except ValueError:
+            continue
+        ids = sorted(specs)
+        books = replay([specs[i] for i in ids], ones, fives, start_ms=lo, product_id=product_id,
+                       tick_size=ticks.get(product_id, "1"))
+        for strategy_id, book in zip(ids, books):
+            trades.extend(dict(t, product_id=product_id, strategy_id=strategy_id) for t in book.trades)
+    return trades
+
+
+def run(market_db, forward_db, *, ttl_ms, latency_ms, touch, replay_signals=False, specs_dir=DEFAULT_SPEC_DIR):
+    if replay_signals:
+        trades = replay_trades(market_db, tape_ranges(market_db), load_specs(specs_dir))
+    else:
+        trades = _forward_trades(forward_db)
     by_product = {}
     for t in trades:
         by_product.setdefault(t["product_id"], []).append(t)
@@ -237,13 +275,17 @@ def run(market_db, forward_db, *, ttl_ms, latency_ms, touch):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--market-db", required=True, help="capture DB with the trade tape (read only)")
-    parser.add_argument("--forward-db", required=True, help="forward DB (forward_trade table) with the signals")
+    parser.add_argument("--forward-db", help="forward DB (forward_trade table) with the signals")
+    parser.add_argument("--replay", action="store_true", help="signals from replaying the shipped specs over the tape's days")
+    parser.add_argument("--specs-dir", default=DEFAULT_SPEC_DIR)
     parser.add_argument("--ttl-s", type=float, default=DEFAULT_TTL_MS / 1000)
     parser.add_argument("--latency-ms", type=int, default=DEFAULT_LATENCY_MS)
     parser.add_argument("--touch", action="store_true", help="count trades exactly at the limit as fills (optimistic)")
     args = parser.parse_args(argv)
+    if not args.replay and not args.forward_db:
+        parser.error("give --forward-db or --replay")
     result = run(args.market_db, args.forward_db, ttl_ms=int(args.ttl_s * 1000), latency_ms=args.latency_ms,
-                 touch=args.touch)
+                 touch=args.touch, replay_signals=args.replay, specs_dir=args.specs_dir)
     json.dump(result, sys.stdout, indent=2, sort_keys=True)
     sys.stdout.write("\n")
 
