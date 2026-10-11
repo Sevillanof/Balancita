@@ -17,8 +17,9 @@ Rules, deliberately conservative (the tape is the only evidence, there is no boo
 * The exit is unchanged (taker, with its recorded exit price), so a filled trade is re-priced from the actual
   limit: gross from the limit price, maker fee on entry, taker fee on exit, the trade's own funding.
 
-The headline is not "fills are cheaper" but ``skip_total_usd`` against ``taker_total_usd``: if the trades the
-limit misses are the winners, the saving disappears. ``selection_bp`` shows that effect directly.
+The headline is not "fills are cheaper" nor ``skip_total_usd`` against ``taker_total_usd`` (skipping trades of a losing
+strategy always "wins"): it is ``net_vs_random_bp``, the maker's mean on its fills minus the taker's mean over all signals,
+i.e. what is left after adverse selection. ``selection_bp`` shows that effect directly.
 
     python -m balancita_engine.futures_maker --market-db market.sqlite --forward-db forward.sqlite [--ttl-s 60]
     python -m balancita_engine.futures_maker --market-db market.sqlite --replay   # signals from replaying the specs on the tape's own days
@@ -196,6 +197,11 @@ def study(trades, tapes, *, ttl_ms=DEFAULT_TTL_MS, latency_ms=DEFAULT_LATENCY_MS
         "selection_bp": (None if not filled or not missed else
                          _mean([r["taker_bp"] for r in filled]) - _mean([r["taker_bp"] for r in missed])),
         "markout_60s_bp": _mean([r["markout_bp"] for r in filled if r["markout_bp"] is not None]),
+        # The honest comparison: filling a *random* 35 % of the signals as a taker would earn the all-signals mean,
+        # so only the gap to that mean is the maker's doing; the rest is just skipping losers of a losing strategy.
+        "net_vs_random_bp": (_mean([r["maker_bp"] for r in filled]) - _mean([r["taker_bp"] for r in rows])
+                             if filled else None),
+        "net_vs_random_se_bp": _se([r["maker_bp"] for r in filled]),
         "taker_total_usd": sum(r["taker_usd"] for r in rows),
         "skip_total_usd": sum(r["maker_usd"] for r in filled),
         "touch_assumed": touch, "ttl_ms": ttl_ms, "latency_ms": latency_ms,
@@ -205,15 +211,20 @@ def study(trades, tapes, *, ttl_ms=DEFAULT_TTL_MS, latency_ms=DEFAULT_LATENCY_MS
 
 
 def verdict(summary):
-    """Plain words, never stronger than the sample allows."""
+    """Plain words, never stronger than the sample allows.
+
+    ``maker_helps`` needs the maker's fills to beat a random subset of the same signals taken as a taker
+    (``net_vs_random_bp``) by two standard errors; beating the taker's total only proves that skipping trades
+    helps a strategy that loses on average.
+    """
     n = summary["filled"]
     if n < MIN_FILLED_FOR_VERDICT:
         return "insufficient_data ({} fills, {} needed)".format(n, MIN_FILLED_FOR_VERDICT)
-    if summary["skip_total_usd"] > summary["taker_total_usd"] and summary["saving_bp"] and summary["saving_se_bp"] \
-            and summary["saving_bp"] > 2 * summary["saving_se_bp"]:
+    gain, se = summary["net_vs_random_bp"], summary["net_vs_random_se_bp"]
+    if gain is not None and se and gain > 2 * se:
         return "maker_helps"
-    if summary["saving_bp"] is not None and summary["saving_bp"] > 0 and summary["skip_total_usd"] <= summary["taker_total_usd"]:
-        return "saving_eaten_by_missed_fills"
+    if summary["saving_bp"] is not None and summary["saving_bp"] > 0:
+        return "saving_eaten_by_selection"
     return "no_gain"
 
 
