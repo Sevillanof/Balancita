@@ -40,7 +40,6 @@ from .futures_spec_strategy import (
     validate_spec,
 )
 from .futures_replay import load_range
-from .futures_strategies import STRATEGY_IDS
 from .futures_strategy_plan import all_plans, load_freeze
 from .futures_strategy_reliability import load_reliability, reliability_for
 from .futures_purged import cscv_pbo
@@ -52,6 +51,7 @@ STATES = ("draft", "shadow", "active", "retired")
 DAY_MS = 86_400_000
 PERIOD_DAYS = (7, 30, 90)
 DEFAULT_PORT = 8790
+CLOSED_PATH = os.path.join(os.path.dirname(DEFAULT_SPEC_DIR), "strategy-closed.json")
 # Promotion gates (ADR 0001, Evaluation): out of sample, deflated Sharpe, minimum trade count.
 GATE_MIN_OOS_TRADES = MIN_TRADES
 GATE_MIN_DSR = 0.95
@@ -187,6 +187,14 @@ class StrategyRegistry:
                 self._insert_version(spec, "builtin", None, None)
                 self.db.execute("INSERT INTO strategy_events(strategy_id, version, state, reason, known_at) "
                                 "VALUES(?,?,?,?,?)", (spec["id"], spec["version"], "active", "builtin", 0))
+
+    def apply_closed(self, path=None):
+        """Deletes the strategies ``config/strategy-closed.json`` lists (once; later starts find them deleted)."""
+        with open(path or CLOSED_PATH, encoding="utf-8") as handle:
+            closed = json.load(handle)
+        for strategy_id in closed["ids"]:
+            if self._version_row(strategy_id, None) is not None and not self._deleted(strategy_id):
+                self.delete(strategy_id, strategy_id, reason=closed.get("reason", "closed"))
 
     def _version_row(self, strategy_id, version):
         sql = ("SELECT strategy_id, version, spec_hash, spec_json, origin, parent_id, parent_version, created_at "
@@ -377,9 +385,6 @@ class StrategyRegistry:
             gates = [] if skip_gates else self.gates(row, state, current)
             if not all(gate["passed"] for gate in gates):
                 raise RegistryError("gate_failed", "the {} gate is not met".format(state), 409, {"gates": gates})
-            if state == "retired" and strategy_id in STRATEGY_IDS and row["version"] == 1:
-                raise RegistryError("in_paper_books", "{} opera en los libros de D hasta que se unifique la "
-                                    "ejecución: no se puede desactivar aún".format(strategy_id), 409)
             freeze = load_freeze()
             if state == "active" and row["version"] > 1 and strategy_id in freeze["ids"]:
                 raise RegistryError("frozen", "{} no cambia hasta {} operaciones forward: crea una estrategia nueva"
@@ -395,20 +400,17 @@ class StrategyRegistry:
                             "VALUES(?,?,?,?,?)", (strategy_id, row["version"], state, reason, now))
             return dict(self._entry(row), gates=gates)
 
-    def delete(self, strategy_id, confirm):
+    def delete(self, strategy_id, confirm, reason="manual_delete"):
         """Hides a strategy from the lists and stops it; the append-only history stays. Needs the id typed back."""
         if confirm != strategy_id:
             raise RegistryError("confirmation_required", "escribe el id de la estrategia para borrarla", 409)
-        if strategy_id in STRATEGY_IDS:
-            raise RegistryError("in_paper_books", "{} opera en los libros de D hasta que se unifique la "
-                                "ejecución: no se puede borrar aún".format(strategy_id), 409)
         with self.lock, self.db:
             latest = self.version(strategy_id)
             now = self.clock()
             for (version,) in self.db.execute(
                     "SELECT version FROM strategy_versions WHERE strategy_id=?", (strategy_id,)).fetchall():
                 self.db.execute("INSERT INTO strategy_events(strategy_id, version, state, reason, known_at) "
-                                "VALUES(?,?,?,?,?)", (strategy_id, version, "deleted", "manual_delete", now))
+                                "VALUES(?,?,?,?,?)", (strategy_id, version, "deleted", reason, now))
             return {"id": strategy_id, "version": latest["version"], "state": "deleted"}
 
     def gates(self, row, state, current):
@@ -793,6 +795,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     registry = StrategyRegistry(args.strategies_db)
     registry.seed(load_specs(args.specs_dir))
+    registry.apply_closed()
     products = dict(load_pinned_products())
     replays = None
     if args.market_db:

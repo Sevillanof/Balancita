@@ -31,7 +31,6 @@ import sqlite3
 import time
 
 from .futures_products import resolve_products
-from .futures_strategies import STRATEGY_IDS
 from .futures_replay import load_range, replay
 from .futures_spec_strategy import DEFAULT_SPEC_DIR, load_specs, spec_hash
 from .futures_strategy_reliability import (
@@ -96,7 +95,7 @@ def effective_registration(db_path, registration, specs, candidates, now_ms):
                          "strategy_id TEXT NOT NULL, spec_hash TEXT NOT NULL, seen_ms INTEGER NOT NULL, "
                          "PRIMARY KEY(strategy_id, spec_hash)) STRICT;")
         for strategy_id, info in candidates.items():
-            if info["state"] != "active" or strategy_id in STRATEGY_IDS or strategy_id in registered:
+            if info["state"] != "active" or strategy_id in registered:
                 continue
             spec = info["spec"]
             start = info["active_since_ms"] or 0

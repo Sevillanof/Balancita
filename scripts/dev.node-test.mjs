@@ -27,7 +27,7 @@ describe('devChildSpecs', () => {
   })
   const byName = Object.fromEntries(specs.map((spec) => [spec.name, spec]))
 
-  it('starts vite, live capture, live gateway, verdict service, paper execution, forecast scorer, strategy registry and news', () => {
+  it('starts vite, live capture, live gateway, verdict service, forecast scorer, strategy registry and news', () => {
     assert.deepEqual(
       specs.map((spec) => spec.name),
       [
@@ -35,7 +35,6 @@ describe('devChildSpecs', () => {
         'capture',
         'live',
         'verdict',
-        'paper',
         'scores',
         'forward',
         'strategies',
@@ -75,12 +74,12 @@ describe('devChildSpecs', () => {
     assert.equal(env.FUTURES_DB_PATH, undefined)
   })
 
-  it('points the gateway at the paper account and verdicts databases, the ones D and C write', () => {
+  it('keeps the old paper account readable as history and points the gateway at the verdicts database C writes', () => {
     const { env } = byName.live
-    const paperArgs = byName.paper.args
+    assert.equal(byName.paper, undefined)
     assert.equal(
       env.FUTURES_PAPER_ACCOUNT_DB_PATH,
-      paperArgs[paperArgs.indexOf('--account-db') + 1],
+      './data/dev-live/futures-paper-account.sqlite',
     )
     const verdictArgs = byName.verdict.args
     assert.equal(
@@ -110,24 +109,6 @@ describe('devChildSpecs', () => {
       byName.capture.env.FUTURES_MARKET_DB_PATH,
       '--verdicts-db',
       './data/dev-live/futures-verdicts.sqlite',
-    ])
-    assert.equal(env.PYTHONPATH, '/repo/python')
-    assert.equal(env.KEEP, 'yes')
-  })
-
-  it('runs Python paper execution over the market and verdicts databases', () => {
-    const { command, args, cwd, env } = byName.paper
-    assert.equal(command, 'python3')
-    assert.equal(cwd, '/repo/server')
-    assert.deepEqual(args, [
-      '-m',
-      'balancita_engine.futures_paper_execution',
-      '--market-db',
-      byName.capture.env.FUTURES_MARKET_DB_PATH,
-      '--verdicts-db',
-      './data/dev-live/futures-verdicts.sqlite',
-      '--account-db',
-      './data/dev-live/futures-paper-account.sqlite',
     ])
     assert.equal(env.PYTHONPATH, '/repo/python')
     assert.equal(env.KEEP, 'yes')
@@ -316,14 +297,14 @@ describe('devChildSpecs with a resolved Python', () => {
   const base = { root, env: { KEEP: 'yes' }, allowedFlags: noFlags }
   const byName = (specs) => Object.fromEntries(specs.map((s) => [s.name, s]))
 
-  it('injects the command and its prefix args into verdict, paper and scores', () => {
+  it('injects the command and its prefix args into verdict and scores', () => {
     const specs = byName(
       devChildSpecs({
         ...base,
         python: { command: 'py', prefixArgs: ['-3'] },
       }),
     )
-    for (const name of ['verdict', 'paper', 'scores']) {
+    for (const name of ['verdict', 'scores']) {
       assert.equal(specs[name].command, 'py')
       assert.deepEqual(specs[name].args.slice(0, 3), [
         '-3',
@@ -335,7 +316,7 @@ describe('devChildSpecs with a resolved Python', () => {
     assert.equal(specs.live.env.BALANCITA_PYTHON_STATUS, 'available')
   })
 
-  it('without Python starts none of verdict, paper and scores and tells the gateway', () => {
+  it('without Python starts none of verdict and scores and tells the gateway', () => {
     const specs = devChildSpecs({ ...base, python: null })
     assert.deepEqual(
       specs.map((spec) => spec.name),

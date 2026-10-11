@@ -36,7 +36,6 @@ const optionalChildren = new Set([
   'capture',
   'live',
   'verdict',
-  'paper',
   'scores',
   'forward',
   'strategies',
@@ -48,7 +47,6 @@ const optionalChildren = new Set([
 const exitLabels = {
   capture: 'Live market capture (new candles)',
   verdict: 'The verdict service (new verdicts)',
-  paper: 'Paper execution (new paper fills)',
   scores: 'The forecast scorer (new forecast scores)',
   forward:
     'The forward paper measurement (new forward trades of registered strategies)',
@@ -109,7 +107,7 @@ if (python.command === undefined)
   process.stderr.write(`[dev] ${python.message}\n`)
 else
   process.stdout.write(
-    `[dev] Python for verdict/paper/scores: ${[python.command, ...python.prefixArgs].join(' ')} (${python.version})\n`,
+    `[dev] Python for verdict/scores: ${[python.command, ...python.prefixArgs].join(' ')} (${python.version})\n`,
   )
 // One search, one line.
 let llmModelPath

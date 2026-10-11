@@ -256,7 +256,7 @@ class EffectiveRegistrationTests(unittest.TestCase):
             }
             got, _ = effective_registration(path, registration, SPECS, candidates, 1_000)
             self.assertEqual(got["strategies"][C30], registration["strategies"][C30])
-            self.assertNotIn("c25-pullback-perp-v1", got["strategies"])  # D's own books
+            self.assertIn("c25-pullback-perp-v1", got["strategies"])  # no old engine any more
             self.assertEqual(got["strategies"]["c29-momentum-perp-v1"]["start_ms"], 1_000)
             # First sight is written down once and never moves.
             again, _ = effective_registration(path, registration, SPECS, candidates, 9_999)
