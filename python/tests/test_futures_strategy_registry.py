@@ -120,13 +120,20 @@ class RegistryTests(unittest.TestCase):
         self.assertEqual(self.registry.set_state(saved["id"], 1, "retired")["state"], "retired")
         self.assertNotIn(saved["id"], self.registry.active_specs(10**15))
 
-    def test_d_books_cannot_be_switched_off_or_deleted_yet(self):
-        with self.assertRaises(RegistryError) as raised:
-            self.registry.set_state(C25_ID, 1, "retired")
-        self.assertEqual(raised.exception.code, "in_paper_books")
-        with self.assertRaises(RegistryError) as deleted:
-            self.registry.delete(C25_ID, C25_ID)
-        self.assertEqual(deleted.exception.code, "in_paper_books")
+    def test_apply_closed_deletes_what_ran_in_the_old_engine_once(self):
+        closed = {"C25-28": [C25_ID, "c26-reversion-perp-v1", "c27-breakout-perp-v1", "c28-adapter-perp-v1"]}
+        self.registry.apply_closed()
+        self.registry.apply_closed()
+        left = {e["id"] for e in self.registry.list()}
+        for strategy_id in closed["C25-28"]:
+            self.assertNotIn(strategy_id, left)
+            self.assertNotIn(strategy_id, self.registry.active_specs(10**15))
+        self.assertIn("c29-momentum-perp-v1", left)
+        # The spec and its history stay readable (C31 uses the specs as entries).
+        self.assertEqual(self.registry.version(C25_ID, 1)["spec"], SPECS[C25_ID])
+        events = [e for e in self.registry.detail(C25_ID, 1)["events"] if e["state"] == "deleted"]
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["reason"], "closed_with_engine_d")
 
     def test_delete_needs_the_id_hides_it_and_keeps_history(self):
         spec = copy.deepcopy(SPECS["c29-momentum-perp-v1"])

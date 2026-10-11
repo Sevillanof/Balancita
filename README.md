@@ -60,9 +60,9 @@ flowchart LR
 | `capture`    | -      | WebSocket y REST públicos de Kraken → `server/data/dev-live/futures-market.sqlite` (único escritor)                                                                       |
 | `live`       | 8789   | Gateway de solo lectura: sirve `/api/terminal/*` leyendo el market DB; no arranca recolector ni motor                                                                     |
 | `verdict`    | -      | **C**: lee el market DB y escribe veredictos de entrada (`futures-verdicts.sqlite`)                                                                                       |
-| `paper`      | -      | **D**: un libro por estrategia y producto; fills con el ticker real; eventos con hash en cadena (`futures-paper-account.sqlite`)                                          |
+| `paper`      | -      | Retirado (2026-10-11): D, el motor viejo, ya no corre; su `futures-paper-account.sqlite` queda como historial. Toda estrategia opera en el seguimiento forward (motor nuevo) |
 | `scores`     | -      | **E**: puntúa cada propuesta contra las velas oficiales posteriores (`futures-forecast-scores.sqlite`)                                                                    |
-| `forward`    | -      | Libro de paper hacia delante de las estrategias de `config/forward-strategies.json` (C30), cada 30 min (`server/data/dev-live/forward/`); Q y el registro leen su resumen |
+| `forward`    | -      | Libro de paper hacia delante de toda estrategia activa en el registro (y C30 de `config/forward-strategies.json`), cada 30 min (`server/data/dev-live/forward/`); Q y el registro leen su resumen |
 | `strategies` | 8790   | Registro de estrategias **S**: validar, evaluar, backtest, versiones y ciclo de vida                                                                                      |
 | `news`       | -      | **N**: RSS/Atom → `futures-news.sqlite`; con Qwen, relevancia y dirección por noticia                                                                                     |
 | `llm` / `q`  | 8088   | `llama-server` local y servicio de decisiones **Q** (opcionales, nunca bloquean el arranque)                                                                              |

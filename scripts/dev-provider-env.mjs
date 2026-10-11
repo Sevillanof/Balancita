@@ -509,6 +509,7 @@ export function devChildSpecs({
   ]
   const marketDb = liveDb('futures-market.sqlite')
   const verdictsDb = liveDb('futures-verdicts.sqlite')
+  // D (the old paper engine) no longer runs: its account database stays readable as history.
   const accountDb = liveDb('futures-paper-account.sqlite')
   const scoresDb = liveDb('futures-forecast-scores.sqlite')
   const decisionsDb = liveDb('futures-llm-decisions.sqlite')
@@ -699,28 +700,6 @@ export function devChildSpecs({
           marketDb,
           '--verdicts-db',
           verdictsDb,
-        ],
-        env: {
-          ...env,
-          PYTHONPATH: [`${root}/python`, env.PYTHONPATH]
-            .filter(Boolean)
-            .join(delimiter),
-        },
-      },
-      {
-        name: 'paper',
-        command: python.command,
-        cwd: serverCwd,
-        args: [
-          ...python.prefixArgs,
-          '-m',
-          'balancita_engine.futures_paper_execution',
-          '--market-db',
-          marketDb,
-          '--verdicts-db',
-          verdictsDb,
-          '--account-db',
-          accountDb,
         ],
         env: {
           ...env,
