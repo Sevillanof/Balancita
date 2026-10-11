@@ -24,6 +24,10 @@ i.e. what is left after adverse selection. ``selection_bp`` shows that effect di
     python -m balancita_engine.futures_maker --market-db market.sqlite --forward-db forward.sqlite [--ttl-s 60]
     python -m balancita_engine.futures_maker --market-db market.sqlite --replay   # signals from replaying the specs on the tape's own days
 
+``--api`` needs no captured tape at all: it replays the specs over the last ``--days`` of candles, draws ``--sample``
+signals per product at random and asks Kraken's public execution history (``futures_tape``) for the tape around each
+one, so all the perpetuos and weeks of signals can be studied without recording anything.
+
 ``--replay`` is for when the forward book has too few trades: every shipped spec is replayed over the candles of the
 range each product's tape covers, so the sample is as large as the tape allows. Only products with a tape are studied.
 """
@@ -34,6 +38,7 @@ import json
 import sqlite3
 import statistics
 import sys
+import time
 from decimal import Decimal
 
 from .futures_costs import fee_rate
@@ -51,8 +56,10 @@ MIN_FILLED_FOR_VERDICT = 30
 class Tape:
     """Trades of one product in time order: parallel arrays so lookups are bisections."""
 
-    def __init__(self, rows):
+    def __init__(self, rows, lo=None, hi=None):
+        """``lo``/``hi``: the range this tape was asked for (a fetched window); default, first and last trade."""
         rows = sorted(rows, key=lambda r: r[0])
+        self.lo, self.hi = lo, hi
         self.times = [r[0] for r in rows]
         self.prices = [Decimal(str(r[1])) for r in rows]
         self.sides = [r[2] for r in rows]  # taker side: "buy" lifts the ask, "sell" hits the bid
@@ -61,6 +68,8 @@ class Tape:
         return len(self.times)
 
     def covers(self, time_ms):
+        if self.lo is not None:
+            return self.lo <= time_ms <= self.hi
         return bool(self.times) and self.times[0] <= time_ms <= self.times[-1]
 
     def passive_touch(self, side, time_ms):
@@ -160,14 +169,16 @@ def _se(values):
 def study(trades, tapes, *, ttl_ms=DEFAULT_TTL_MS, latency_ms=DEFAULT_LATENCY_MS, touch=False):
     """Taker against maker-or-skip on the same signals.
 
-    ``trades`` are forward/replay trade dicts with ``product_id``; ``tapes`` maps product -> ``Tape``.
-    Trades whose signal time the tape does not cover are counted as ``no_tape`` and left out of every figure.
+    ``trades`` are forward/replay trade dicts with ``product_id``; ``tapes`` maps product -> ``Tape`` or is a
+    callable ``trade -> Tape`` (a window asked for that signal). Trades whose order window the tape does not cover
+    are counted as ``no_tape`` and left out of every figure.
     """
     rows, no_tape = [], 0
     for trade in trades:
-        tape = tapes.get(trade["product_id"])
+        tape = tapes(trade) if callable(tapes) else tapes.get(trade["product_id"])
         signal_ms = trade["entry_time_ms"]
-        if tape is None or not tape.covers(signal_ms) or not tape.covers(trade["exit_time_ms"]):
+        order_end = min(trade["exit_time_ms"], signal_ms + latency_ms + ttl_ms)
+        if tape is None or not tape.covers(signal_ms) or not tape.covers(order_end):
             no_tape += 1
             continue
         result = simulate_entry(trade["side"], signal_ms, trade.get("stop_price"), tape,
@@ -266,6 +277,69 @@ def replay_trades(market_db, ranges, specs):
     return trades
 
 
+TAPE_LOOKBACK_MS = 300_000
+DAY_MS = 86_400_000
+
+
+def window_for(trade, *, ttl_ms, latency_ms):
+    """The tape an order needs: a look-back for the passive touch, up to the end of its life, plus the markout."""
+    signal_ms = trade["entry_time_ms"]
+    end = min(trade["exit_time_ms"], signal_ms + latency_ms + ttl_ms)
+    return signal_ms - TAPE_LOOKBACK_MS, end + MARKOUT_MS
+
+
+def sample_trades(trades, per_product, seed=7):
+    """Up to ``per_product`` signals per product, drawn at random (so the sample is not biased toward any hour)."""
+    import random
+
+    rng = random.Random(seed)
+    by_product = {}
+    for t in trades:
+        by_product.setdefault(t["product_id"], []).append(t)
+    out = []
+    for product in sorted(by_product):
+        pool = sorted(by_product[product], key=lambda t: (t["entry_time_ms"], t["strategy_id"]))
+        out.extend(pool if len(pool) <= per_product else sorted(
+            rng.sample(pool, per_product), key=lambda t: t["entry_time_ms"]))
+    return out
+
+
+def run_api(candles_db, cache_path, *, days, per_product, ttl_ms, latency_ms, touch, specs_dir=DEFAULT_SPEC_DIR,
+            now_ms=None, products=None):
+    """Signals from replaying the specs over the last ``days`` of candles; tape asked from Kraken per signal."""
+    from .futures_tape import TapeCache
+
+    now_ms = now_ms if now_ms is not None else int(time.time() * 1000)
+    wanted = None if products is None else set(products)
+    ranges = {p: (now_ms - days * DAY_MS, now_ms) for p, _ in resolve_products() if wanted is None or p in wanted}
+    trades = [t for t in replay_trades(candles_db, ranges, load_specs(specs_dir))
+              if t["exit_time_ms"] < now_ms - 2 * MARKOUT_MS]
+    sampled = sample_trades(trades, per_product)
+    cache = TapeCache(cache_path)
+    try:
+        def tape_for(trade):
+            lo, hi = window_for(trade, ttl_ms=ttl_ms, latency_ms=latency_ms)
+            try:
+                return cache.window(trade["product_id"], lo, hi)
+            except Exception as error:  # a window that cannot be completed is left out, never guessed
+                sys.stderr.write("tape window skipped: {} {}\n".format(trade["product_id"], error))
+                return None
+
+        result = {"all": study(sampled, tape_for, ttl_ms=ttl_ms, latency_ms=latency_ms, touch=touch),
+                  "by_strategy": {}, "by_product": {}, "signals_replayed": len(trades), "signals_sampled": len(sampled),
+                  "requests": cache.requests}
+        for strategy in sorted({t["strategy_id"] for t in sampled}):
+            result["by_strategy"][strategy] = study([t for t in sampled if t["strategy_id"] == strategy], tape_for,
+                                                    ttl_ms=ttl_ms, latency_ms=latency_ms, touch=touch)
+        for product in sorted({t["product_id"] for t in sampled}):
+            result["by_product"][product] = study([t for t in sampled if t["product_id"] == product], tape_for,
+                                                  ttl_ms=ttl_ms, latency_ms=latency_ms, touch=touch)
+        result["requests"] = cache.requests
+        return result
+    finally:
+        cache.close()
+
+
 def run(market_db, forward_db, *, ttl_ms, latency_ms, touch, replay_signals=False, specs_dir=DEFAULT_SPEC_DIR):
     if replay_signals:
         trades = replay_trades(market_db, tape_ranges(market_db), load_specs(specs_dir))
@@ -289,12 +363,26 @@ def main(argv=None):
     parser.add_argument("--forward-db", help="forward DB (forward_trade table) with the signals")
     parser.add_argument("--replay", action="store_true", help="signals from replaying the shipped specs over the tape's days")
     parser.add_argument("--specs-dir", default=DEFAULT_SPEC_DIR)
+    parser.add_argument("--api", action="store_true", help="ask Kraken's public history for the tape around each signal "
+                        "(--market-db then only supplies the candles)")
+    parser.add_argument("--tape-cache", default="tape-cache.sqlite", help="SQLite file that keeps fetched tape windows")
+    parser.add_argument("--days", type=int, default=30, help="--api: how many days back to replay")
+    parser.add_argument("--sample", type=int, default=300, help="--api: signals drawn per product")
+    parser.add_argument("--products", help="--api: comma-separated subset, e.g. PF_SOLUSD,PF_ETHUSD")
     parser.add_argument("--ttl-s", type=float, default=DEFAULT_TTL_MS / 1000)
     parser.add_argument("--latency-ms", type=int, default=DEFAULT_LATENCY_MS)
     parser.add_argument("--touch", action="store_true", help="count trades exactly at the limit as fills (optimistic)")
     args = parser.parse_args(argv)
-    if not args.replay and not args.forward_db:
-        parser.error("give --forward-db or --replay")
+    if not args.api and not args.replay and not args.forward_db:
+        parser.error("give --forward-db, --replay or --api")
+    if args.api:
+        result = run_api(args.market_db, args.tape_cache, days=args.days, per_product=args.sample,
+                         ttl_ms=int(args.ttl_s * 1000), latency_ms=args.latency_ms, touch=args.touch,
+                         specs_dir=args.specs_dir,
+                         products=args.products.split(",") if args.products else None)
+        json.dump(result, sys.stdout, indent=2, sort_keys=True)
+        sys.stdout.write("\n")
+        return
     result = run(args.market_db, args.forward_db, ttl_ms=int(args.ttl_s * 1000), latency_ms=args.latency_ms,
                  touch=args.touch, replay_signals=args.replay, specs_dir=args.specs_dir)
     json.dump(result, sys.stdout, indent=2, sort_keys=True)
