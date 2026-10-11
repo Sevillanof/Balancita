@@ -12,7 +12,7 @@ Read-only. Served by the live gateway (`pnpm dev`: through Vite as `/api-live/qw
     {
       "product_id": "PF_XBTUSD",
       "question_id": "trade_action",
-      "question_version": 1,
+      "question_version": 4,          // current version in config/decision-questions.json; older decisions keep theirs
       "horizon_min": 30,
       "decisions": {              // every decision, +1 hit / -1 miss counted separately
         "decisions": 120, "scored": 95, "pending": 25,
@@ -88,3 +88,7 @@ Field mapping (Kronos-small on 1 h candles, 4 h horizon, 100 USD per trade, one 
 - `trades`: closed trades oldest first; `entry`/`exit` become `entry_price`/`exit_price`, `exit_reason` is `time_stop`.
 - `open_position`: the latest traded decision without a trade while its 4 h are not over. `entry_price`,
   `mark_price`, `net_bp` and `pnl_usd` are `null` because Kronos stores the fill only on close.
+
+## Qué NO cubre este contrato
+
+El libro de salida de C31 (`qwenexit`, ver `docs/qwen-exit.md`) tiene su propio resumen en `server/data/dev-live/qwen-exit/qwen-exit-summary.json` y no pasa por `/api/qwen/scores`. A 2026-10-11 estos scores miden aciertos de Qwen sin ventaja neta demostrada (ver `docs/qwen-lessons.md`).

@@ -14,6 +14,14 @@ Espacio de trading personal, local y **solo futuros perpetuos de Kraken (`PF_*`)
 - **Fuente de datos**: interruptor _MOCK_ / _Real (paper, Kraken público)_ (`?source=mock|live`, se recuerda en local). Si el backend elegido no responde, la página lo dice; nunca cae a la otra fuente.
 - **Productos**: los 8 de [`config/futures-products.json`](config/futures-products.json) (`PF_XBTUSD`, `PF_ETHUSD`, `PF_SOLUSD`, `PF_ZECUSD`, `PF_XRPUSD`, `PF_NEARUSD`, `PF_HYPEUSD`, `PF_ADAUSD`), fijados en el archivo para que los replays sean deterministas.
 - **Estrategias**: C25 pullback en tendencia, C26 reversión en rango, C27 ruptura Donchian, C28 adaptador por régimen, y C29 y C30 momentum logarítmico lento ([`config/strategies/`](config/strategies)). Cada una opera **su propio libro**, largo o corto, con **100 USD fijos por operación**. Su fiabilidad medida con costes (C25-C28 pierden en los 8 productos; C29 y C30 no tienen ventaja demostrada) está en [`docs/strategy-reliability.md`](docs/strategy-reliability.md).
+- **Otras dos que corren aparte**: **C31** (entrada por consenso C25/C26/C27/C30, Qwen decide cuándo cerrar; [`docs/qwen-exit.md`](docs/qwen-exit.md)) y **Kronos** (modelo de series temporales, velas de 1 h y horizonte de 4 h; [`python/kronos_lab`](python/kronos_lab/README.md)).
+
+## Estado (2026-10-11)
+
+- Ni las reglas de velas ni Qwen han mostrado ventaja neta tras costes. C25-C28 se dan por cerradas; C29, C30, C31 y Kronos siguen en paper hasta 100 operaciones y no se tocan mientras tanto.
+- La ejecución pasiva (maker) se simuló contra la cinta pública de Kraken y no crea ventaja: archivada.
+- Qwen decide solo en replays (brazo A/B) y como decisor de salida de C31; el reglamento está en la enmienda 2026-10-11 del [ADR 0001](docs/adr/0001-isolated-paper-futures-accounting.md).
+- `DEV_ONLY=vite,capture,live,forward,strategies pnpm dev` arranca solo los procesos que mide el seguimiento, sin modelo ni libros paper.
 
 ## Arquitectura
 
@@ -187,12 +195,13 @@ src/                 Front React: app/ (Terminal), features/strategy-lab, tradin
 server/src/          app/ (capture, gateway, mock), features/ (kraken-futures, live-gateway, paper-futures, news), platform/
 python/balancita_engine/   C, D, E, Q, N, S, simulador, costes, indicadores, replay
 config/              Productos, estrategias C25-C30 y su fiabilidad medida, preguntas y prompts de Q, fuentes de noticias
-docs/                Contratos de APIs, ADR 0001, roadmap
-odd/tasks/           Planes de trabajo (strategy-simulation.md es el vigente)
-doc/                 Guías y especificaciones de producto
+docs/                Contratos de APIs, ADR 0001, fiabilidad y validación
+docs/archive/        Historial cerrado (spot BTC-EUR, planes de futuros terminados); solo lectura
+odd/tasks/           Planes vivos (strategy-simulation.md, qwen-calibration.md, qwen-funding.md, kronos-as-qwen.md)
+odd/research/        Estudios cerrados de octubre 2026
 ```
 
-Documentación relacionada: [registro de estrategias](docs/strategy-registry-api.md) · [fiabilidad de las estrategias](docs/strategy-reliability.md) · [datos de mercado de Kraken Futures](docs/kraken-futures-market-data.md) · [aprendizaje de Qwen](docs/qwen-lessons.md) · [scores de Qwen](docs/qwen-scores-api.md) · [plan de simulación](odd/tasks/strategy-simulation.md) · [`doc/personal-trading-app.md`](doc/personal-trading-app.md) (hoja de ruta; no se edita con herramientas).
+Documentación relacionada: [registro de estrategias](docs/strategy-registry-api.md) · [fiabilidad de las estrategias](docs/strategy-reliability.md) · [datos de mercado de Kraken Futures](docs/kraken-futures-market-data.md) · [aprendizaje de Qwen](docs/qwen-lessons.md) · [scores de Qwen](docs/qwen-scores-api.md) · [plan de simulación](odd/tasks/strategy-simulation.md) · [historial archivado](docs/archive/README.md) (spot BTC-EUR y planes cerrados).
 
 ## Atribución del gráfico
 

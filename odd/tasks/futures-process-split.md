@@ -43,12 +43,12 @@ Every sustained live run of the single process surfaced a new engine defect: the
 - [x] PS-05d [L] Retire the legacy live engine once D is proven: per-delta driver, market-context transport, operative bridge, `futuresSourceFailed` latch, `FUTURES_MODE=mock/replay` in `app.ts`, and the `DEV_LIVE_SINGLE_PROCESS` rollback. The dev MOCK child, which uses the local terminal, stays.
 - [x] PS-06 [S] Process supervision + per-process health in UI.
 - [x] PS-08a [M] Strategy spec `balancita-strategy.v1` (declarative JSON with `params`, no code) and its Python interpreter in C; C25-C28 rewritten as specs, with a parity test giving identical proposals over stored history.
-- [ ] PS-08b [M] Strategy registry S: own SQLite DB, single writer; append-only spec versions (canonical hash) and lifecycle events with `known_at`; C reads it read-only and records the active spec hashes in each verdict; JSON import/export.
+- [~] PS-08b [M] Strategy registry S: own SQLite DB, single writer; append-only spec versions (canonical hash) and lifecycle events with `known_at`; C reads it read-only and records the active spec hashes in each verdict; JSON import/export.
 - [x] PS-08c [L] (engine and gateway; chart markers per strategy still open, see strategy-simulation.md SS-05) Independent strategies: each active strategy has its own isolated paper book in D (position, fills, P&L); no cross-strategy selection; all are shown against the same terminal chart, with per-strategy markers. The backtest, D and the forecast scorer share one cost model and one definition of a hit, so the same strategy reports the same return everywhere.
-- [ ] PS-08d [L] Front: strategies page, rule and parameter editor, configurable indicator periods, walk-forward backtest with a trial counter. When confirming an edit the user chooses: a new version of the same strategy, or a new strategy with the changes that leaves the existing one as it is.
-- [ ] PS-08e [S] Lifecycle draft -> shadow -> active, gated by the ADR evaluation (out of sample, deflated Sharpe, minimum trade count).
-- [ ] PS-08f [M] Import from Pine Script or freqtrade: an LLM translates the text into a draft spec that the user reviews; imported code never runs.
-- [ ] PS-08g [M] Every strategy also returns buy/hold/sell probabilities, like Q; Q sees all strategies' probabilities and answers buy, hold or sell, stored as a timestamped decision that D can consume. Owned by the "Qwen decide sobre estrategias" thread on top of the PS-08 spec contract.
+- [~] PS-08d [L] Front: strategies page, rule and parameter editor, configurable indicator periods, walk-forward backtest with a trial counter. When confirming an edit the user chooses: a new version of the same strategy, or a new strategy with the changes that leaves the existing one as it is.
+- [~] PS-08e [S] Lifecycle draft -> shadow -> active, gated by the ADR evaluation (out of sample, deflated Sharpe, minimum trade count).
+- [~] PS-08f [M] Import from Pine Script or freqtrade: an LLM translates the text into a draft spec that the user reviews; imported code never runs.
+- [~] PS-08g [M] Every strategy also returns buy/hold/sell probabilities, like Q; Q sees all strategies' probabilities and answers buy, hold or sell, stored as a timestamped decision that D can consume. Owned by the "Qwen decide sobre estrategias" thread on top of the PS-08 spec contract.
 - [x] PS-09 [M] Everything useful Kraken publishes, captured and on the terminal chart: public analytics (buy/sell aggressor volume, open interest, liquidations, long/short and top-trader positioning, order book depth and slippage, rolling volatility), official 15m/1h/4h/1d candles, the full ticker (24 h stats, mark/index/premium, bid/ask sizes, funding now and next); per-product order book depth for all pinned products (trading costs). Chart: timeframes, EMA/Bollinger/Donchian/VWAP, flow/OI/liquidations/long-short/RSI panes, entry/stop/target lines, exit markers.
 
 ## Acceptance (PS-01)
@@ -61,6 +61,10 @@ Every sustained live run of the single process surfaced a new engine defect: the
 ## Progress / evidence
 
 See [futures-process-split.log.md](futures-process-split.log.md).
+
+## Status 2026-10-11
+
+`[~]` = cerrada sin hacer o absorbida por otro plan (decisión del 2026-10-11): el registro S, el editor de estrategias y la importación de JSON ya existen en otra forma (`docs/strategy-registry-api.md`, `/estrategias`); PS-08e (ciclo draft→shadow→active) y PS-08f (importar Pine/freqtrade) no se harán mientras el foco sea C29/C30/Kronos hasta 100 operaciones; PS-08g (Qwen sobre probabilidades de estrategias) quedó cubierta por C31 y los replays. Este plan queda como referencia.
 
 ## Next step
 

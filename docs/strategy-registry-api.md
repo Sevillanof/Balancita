@@ -2,7 +2,7 @@
 
 The strategy registry S (`python/balancita_engine/futures_strategy_registry.py`) is the backend of the Laboratorio screen. In dev it runs as the `strategies` child on `127.0.0.1:8790`, and Vite proxies `/api-strategies` to it. It is the only writer of `futures-strategies.sqlite` and opens C's verdicts DB read-only.
 
-Strategies are `balancita-strategy.v1` specs (`python/balancita_engine/futures_spec_strategy.py`; C25-C28 ship in `config/strategies/`). Errors are `{"error": code, "detail": text}` with an HTTP status.
+Strategies are `balancita-strategy.v1` specs (`python/balancita_engine/futures_spec_strategy.py`; C25-C30 ship in `config/strategies/`; C31 and Kronos are not specs, see `docs/qwen-exit.md` and `python/kronos_lab/README.md`). Errors are `{"error": code, "detail": text}` with an HTTP status.
 
 ## Reads
 

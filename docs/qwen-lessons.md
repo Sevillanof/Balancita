@@ -44,7 +44,7 @@ Con la caché de respuestas (`--qwen-cache`) cada brazo se calcula una vez. Se c
 
 ## Qué se pudo medir sin el modelo
 
-No hay modelo local en el entorno donde se escribió esto, así que la comparación real de los tres brazos queda por ejecutar. Lo que sí se midió son los techos de la tasa de +1 con reglas sin parámetros ajustados, sobre BTC en dos rangos disjuntos de 240 días, en los mismos cuadros donde se le preguntaría a Qwen (`entry`: alguna estrategia propone operar; `5min`: cada cinco minutos). «Mayoría de lo reciente» elige la acción que fue la correcta con más frecuencia en las últimas 60 decisiones ya juzgadas, que es la información que lleva `lessons_right_action`.
+La comparación real de los tres brazos con el modelo local ya se hizo (`odd/tasks/qwen-calibration.md`, QC-02): acierto 48,5 % original, 47,6 % con contexto y 50,2 % con aprendizaje frente a 49,8 % de mantener (p=0,56), sin diferencia. Los «1-3 puntos» de abajo no son una ventaja. Lo que sí se midió son los techos de la tasa de +1 con reglas sin parámetros ajustados, sobre BTC en dos rangos disjuntos de 240 días, en los mismos cuadros donde se le preguntaría a Qwen (`entry`: alguna estrategia propone operar; `5min`: cada cinco minutos). «Mayoría de lo reciente» elige la acción que fue la correcta con más frecuencia en las últimas 60 decisiones ya juzgadas, que es la información que lleva `lessons_right_action`.
 
 | Rango             | Cuadros | Siempre `hold` | Seguir el consenso | Mayoría de lo reciente |
 | ----------------- | ------- | -------------- | ------------------ | ---------------------- |
@@ -57,7 +57,7 @@ Lectura: en BTC a 30 minutos, tras costes, la acción correcta se reparte casi p
 
 Para correrlo con el modelo local levantado: `python -m balancita_engine.futures_replay --market-db … --from … --to … --qwen trade_action --qwen-arm original|context|learning --qwen-cache cache.sqlite --out run-<brazo>.sqlite`, una vez por brazo y por rango.
 
-Script: `analisis/research-estrategias-log/lessons_base.py`.
+Script: `analisis/research-estrategias-log/lessons_base.py` (en la carpeta compartida del proyecto, no en el repo).
 
 ## Comparar los brazos con una prueba pareada
 

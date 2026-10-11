@@ -1,6 +1,6 @@
 # ADR 0001: Isolated paper-futures accounting
 
-**Status:** Accepted for the authorized paper-futures increment. Amended 2026-10-06 (see Amendment 2026-10-06). Immutable and read-only: it is consulted, never edited, except for an amendment the user requests directly.
+**Status:** Accepted for the authorized paper-futures increment. Amended 2026-10-06 and 2026-10-11 (see the amendments below). Immutable and read-only: it is consulted, never edited, except for an amendment the user requests directly.
 
 ## Decision
 
@@ -68,3 +68,33 @@ Fees follow the Kraken Futures base schedule: taker `0.0005` and maker `0.0002` 
 ### Retired
 
 The legacy single-process engine (PS-05d) is retired. Code kept only for the protected `futures-runtime.test.ts` is marked as having no production caller and must not gain one.
+
+## Amendment 2026-10-11: current scope, Qwen/Kronos exception and focus
+
+Requested directly by the user (Fran) on 2026-10-11. Where it conflicts with the text above, this amendment prevails. Everything remains paper only: no real orders, no private Kraken endpoints, no credentials.
+
+### Supersedes
+
+- "LLMs are not a deciding component" (Amendment 2026-10-06, Use of LLMs) is relaxed as set out under Qwen and Kronos below.
+- "Costs": the single frozen identity `kraken-futures-eea-btcusd-base.v1` is replaced by one cost model per product (`python/balancita_engine/futures_costs.py`, version `kraken-futures-costs.v2`): Kraken Futures level-1 fees (maker `0.0002`, taker `0.0005`) plus a measured spread/impact table for each of the 8 pinned products. Paper execution, backtest, replay and scorers share it.
+- "Instruments": the 8 products in `config/futures-products.json` are the set (`PF_XBTUSD`, `PF_ETHUSD`, `PF_SOLUSD`, `PF_ZECUSD`, `PF_XRPUSD`, `PF_NEARUSD`, `PF_HYPEUSD`, `PF_ADAUSD`). The legacy spot BTC-EUR product is abandoned; its code and plans are archived under `docs/archive/`.
+
+### Sizing and books
+
+Every strategy trades its own independent paper book, long or short, with a fixed 100 USD notional per trade (no compounding, no risk-based sizing). Funding is real and observed, never inferred.
+
+### Qwen and Kronos (exception to "LLMs do not decide")
+
+A local Qwen (llama-server, offline, constrained A/B/C answer with probabilities, no free-form reasoning) may decide in two places: (a) as an A/B arm in replays (`futures_replay_*`), and (b) as the exit decider of strategy C31 (entries from the C25/C26/C27/C30 consensus, Qwen decides hold/close; process `qwenexit`). Kronos-small (`python/kronos_lab`, 1h candles, 4 h horizon) runs as an isolated paper strategy. Rules: local weights only, no paid external LLM APIs; a decision on historical data proves nothing about skill, so only forward results count; a model never changes its own weights, it learns only through stored in-context lessons. Qwen's answer is always stored with its inputs so a run can be audited.
+
+### Evidence status (2026-10-11)
+
+No candle rule and no Qwen variant has shown net edge after costs (see `docs/strategy-reliability.md`, `docs/validacion-sin-trampas.md`, `odd/tasks/qwen-calibration.md`). Passive (maker) execution was simulated against the public trade tape and does not create edge; it is archived. C25-C28 are closed (gross edge about zero, they lose roughly the cost). C29, C30 and Kronos stay in paper until at least 100 forward trades, then are judged with the promotion rule in `config/forward-strategies.json`. C25-C31 and Kronos are not modified until then.
+
+### Processes
+
+Besides A, B, C, D, E and N of Amendment 2026-10-06 there are: S (strategy registry, port 8790), `forward` (forward paper book of C30), `qwenexit` (C31), `llm`/`q` (local Qwen decisions) and the isolated Kronos lab. `DEV_ONLY=name,name pnpm dev` runs only the named children (for example `vite,capture,live,forward,strategies`).
+
+### Unchanged
+
+Canonical hashing, Decimal accounting, append-only hash-chained books, replay equality, no look-ahead and the Evaluation rules (walk-forward, deflated Sharpe, minimum trade count) remain in force.
