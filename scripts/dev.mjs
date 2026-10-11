@@ -17,6 +17,7 @@ import {
   findQwenModel,
   llamaPort,
   loadDevEnv,
+  onlyChildSpecs,
   planStartup,
   resolveLlamaModel,
   resolveLlamaServer,
@@ -124,14 +125,17 @@ const noise = [
 ]
 const verbose = env.DEV_VERBOSE === '1'
 const useGroups = process.platform !== 'win32'
-const specs = devChildSpecs({
-  root,
+const specs = onlyChildSpecs(
+  devChildSpecs({
+    root,
+    env,
+    python:
+      python.command === undefined ? { unavailable: python.failure } : python,
+    llm: llama,
+    findModel: () => llmModelPath,
+  }),
   env,
-  python:
-    python.command === undefined ? { unavailable: python.failure } : python,
-  llm: llama,
-  findModel: () => llmModelPath,
-})
+)
 const healthFile = resolve(root, 'server/data/dev-live/dev-health.json')
 const supervised = new Map()
 // CPU and memory per child, sampled below (POSIX only), for the terminal's usage chip.

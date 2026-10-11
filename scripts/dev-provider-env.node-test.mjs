@@ -2,6 +2,7 @@ import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   devEnvironment,
+  onlyChildSpecs,
   serverEnvironment,
   serverNodeArgs,
 } from './dev-provider-env.mjs'
@@ -45,5 +46,21 @@ describe('serverEnvironment', () => {
       MARKET_COLLECTOR_ENABLED: 'false',
       BALANCITA_ROOT_DEV_SERVER: 'true',
     })
+  })
+})
+
+describe('onlyChildSpecs', () => {
+  const specs = [{ name: 'vite' }, { name: 'capture' }, { name: 'paper' }, { name: 'llm' }]
+
+  it('keeps everything when DEV_ONLY is unset or empty', () => {
+    assert.deepEqual(onlyChildSpecs(specs, {}), specs)
+    assert.deepEqual(onlyChildSpecs(specs, { DEV_ONLY: ' , ' }), specs)
+  })
+
+  it('keeps only the named children and ignores unknown names', () => {
+    assert.deepEqual(
+      onlyChildSpecs(specs, { DEV_ONLY: 'vite, capture,nope' }).map((s) => s.name),
+      ['vite', 'capture'],
+    )
   })
 })
