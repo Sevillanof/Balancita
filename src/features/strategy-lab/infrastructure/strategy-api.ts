@@ -106,6 +106,29 @@ export type Evaluation = {
   }
 }
 
+/** The same plan for every strategy (`futures_strategy_plan.py`), read-only. */
+export type StrategyPlan = {
+  id: string
+  version: number
+  signal: { type: string; model?: string }
+  entry: { sides: string[]; checks: Array<string | null> }
+  exit: {
+    stop_atr: string | null
+    target_stop_ratio: string | null
+    volatility: string | null
+    time_minutes: number | null
+    rule: Record<string, string>
+  }
+  size: { mode: string; notional_usd: string }
+  products: string
+  costs: { model: string; scope: string }
+  params: Record<string, string>
+  branches?: Record<
+    string,
+    Pick<StrategyPlan, 'entry' | 'exit'> & { id: string }
+  >
+}
+
 export type Gate = {
   code: string
   passed: boolean
@@ -144,6 +167,8 @@ export interface StrategyApi {
   readonly mode: 'registry' | 'example'
   ranking(days: PeriodDays, product?: string): Promise<Ranking>
   detail(id: string, version?: number): Promise<StrategyDetail>
+  /** Plans of every strategy by id; absent in the example API. */
+  plans?(): Promise<Record<string, StrategyPlan>>
   backtest(ref: SpecRef, days: PeriodDays, product?: string): Promise<Backtest>
   evaluate(ref: SpecRef, product?: string): Promise<Evaluation>
   save(
@@ -211,6 +236,8 @@ export function httpStrategyApi(
       request(
         `/strategies/${encodeURIComponent(id)}${version ? `?version=${version}` : ''}`,
       ),
+    plans: async () =>
+      (await request<{ plans: Record<string, StrategyPlan> }>('/plans')).plans,
     backtest: (ref, days, product = DEFAULT_PRODUCT) =>
       request('/backtest', { ...ref, product, days }),
     evaluate: (ref, product = DEFAULT_PRODUCT) =>

@@ -45,6 +45,7 @@ import {
   type PeriodDays,
   type Ranking,
   type StrategyApi,
+  type StrategyPlan,
   type StrategyDetail,
   type StrategyState,
 } from '../infrastructure/strategy-api.ts'
@@ -59,7 +60,12 @@ import {
   signedUsd,
 } from '../../../shared/finance/format.ts'
 import { QwenFocusHead, QwenSide } from './QwenPanels.tsx'
-import { JsonTab, TradesTable, VersionsTab } from './StrategyLabPanels.tsx'
+import {
+  JsonTab,
+  PlanTab,
+  TradesTable,
+  VersionsTab,
+} from './StrategyLabPanels.tsx'
 import { NewStrategyModal } from './NewStrategyModal.tsx'
 import {
   MODEL_TEXTS,
@@ -76,7 +82,7 @@ type Props = {
   loadKronos?: (product: string) => Promise<QwenScores>
 }
 
-type Tab = 'rules' | 'params' | 'risk' | 'json' | 'versions'
+type Tab = 'rules' | 'params' | 'risk' | 'plan' | 'json' | 'versions'
 type SaveMode = 'modify' | 'new'
 type ImportSource = 'json' | 'pine' | 'freqtrade'
 
@@ -152,6 +158,7 @@ export default function StrategyLab({
   const [reload, setReload] = useState(0)
   const [ranking, setRanking] = useState<Ranking | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [plans, setPlans] = useState<Record<string, StrategyPlan> | null>(null)
   const [detail, setDetail] = useState<StrategyDetail | null>(null)
   const [draft, setDraft] = useState<StrategySpec | null>(null)
   const [saved, setSaved] = useState<Backtest | null>(null)
@@ -234,6 +241,18 @@ export default function StrategyLab({
       active = false
     }
   }, [api, days, product, reload])
+
+  useEffect(() => {
+    if (!api?.plans || tab !== 'plan') return
+    let active = true
+    api.plans().then(
+      (loaded) => active && setPlans(loaded),
+      () => active && setPlans(null),
+    )
+    return () => {
+      active = false
+    }
+  }, [api, tab, selectedId, reload])
 
   useEffect(() => {
     if (!api || !selectedId) return
@@ -1096,6 +1115,7 @@ export default function StrategyLab({
                   ['rules', 'Reglas'],
                   ['params', 'Parámetros'],
                   ['risk', 'Riesgo'],
+                  ['plan', 'Plan'],
                   ['json', 'JSON'],
                   ['versions', 'Versiones'],
                 ] as const
@@ -1364,6 +1384,10 @@ export default function StrategyLab({
                   />
                 </label>
               </div>
+            )}
+
+            {tab === 'plan' && (
+              <PlanTab plan={plans?.[selectedId ?? ''] ?? null} />
             )}
 
             {tab === 'json' && draft && (

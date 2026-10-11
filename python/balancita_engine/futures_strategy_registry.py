@@ -40,6 +40,7 @@ from .futures_spec_strategy import (
     validate_spec,
 )
 from .futures_replay import load_range
+from .futures_strategy_plan import all_plans, load_freeze
 from .futures_strategy_reliability import load_reliability, reliability_for
 from .futures_purged import cscv_pbo
 from .futures_strategy_backtest import MIN_TRADES, load_verdict_rows, run_backtest
@@ -228,6 +229,7 @@ class StrategyRegistry:
             "parent": None if row["parent_id"] is None else {"id": row["parent_id"], "version": row["parent_version"]},
             "created_at": row["created_at"],
             "reliability": self._reliability(spec),
+            "frozen": row["strategy_id"] in load_freeze()["ids"],
         }
 
     @staticmethod
@@ -251,6 +253,11 @@ class StrategyRegistry:
             "SELECT version, state, reason, known_at FROM strategy_events WHERE strategy_id=? ORDER BY seq",
             (strategy_id,))]
         return dict(self._entry(row), spec=row["spec"], versions=versions, events=events)
+
+    def plans(self):
+        """The same plan for every strategy: latest version of each spec, plus C31 and Kronos."""
+        specs = {entry["id"]: self.version(entry["id"], entry["version"])["spec"] for entry in self.list()}
+        return all_plans(specs)
 
     def active_specs(self, as_of_ms):
         """Active spec per strategy as of ``as_of_ms`` (for C, PS-08c)."""
@@ -364,6 +371,10 @@ class StrategyRegistry:
             gates = [] if skip_gates else self.gates(row, state, current)
             if not all(gate["passed"] for gate in gates):
                 raise RegistryError("gate_failed", "the {} gate is not met".format(state), 409, {"gates": gates})
+            freeze = load_freeze()
+            if state == "active" and row["version"] > 1 and strategy_id in freeze["ids"]:
+                raise RegistryError("frozen", "{} no cambia hasta {} operaciones forward: crea una estrategia nueva"
+                                    .format(strategy_id, freeze["min_forward_trades"]), 409)
             now = self.clock()
             if state == "active":
                 previous = self._active_version(strategy_id)
@@ -630,6 +641,8 @@ def make_handler(service):
                 return schema_description()
             if method == "GET" and parts == ["strategies"]:
                 return {"strategies": registry.list()}
+            if method == "GET" and parts == ["plans"]:
+                return {"plans": registry.plans()}
             if method == "GET" and parts[:1] == ["replays"]:
                 if service.replays is None:
                     raise RegistryError("replays_unavailable", "no market DB configured", 503)

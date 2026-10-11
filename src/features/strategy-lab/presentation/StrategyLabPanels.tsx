@@ -1,6 +1,7 @@
 import type { StrategySpec } from '../domain/strategy-spec.ts'
 import type {
   BacktestTrade,
+  StrategyPlan,
   StrategyDetail,
   StrategyState,
 } from '../infrastructure/strategy-api.ts'
@@ -166,5 +167,66 @@ export function TradesTable({ trades }: { trades: BacktestTrade[] }) {
         </table>
       </div>
     </details>
+  )
+}
+
+const SIGNAL_LABELS: Record<string, string> = {
+  rules: 'Reglas',
+  regime_adapter: 'Adaptador por régimen',
+  model: 'Modelo',
+}
+
+function PlanBlock({ entry, exit }: Pick<StrategyPlan, 'entry' | 'exit'>) {
+  return (
+    <dl className="strategy-lab__plan">
+      <dt>Entrada</dt>
+      <dd>{entry.sides.join(' / ')}</dd>
+      <dt>Stop</dt>
+      <dd>
+        {exit.stop_atr ? `${exit.stop_atr} × ${exit.volatility}` : 'sin stop'}
+      </dd>
+      <dt>Objetivo</dt>
+      <dd>
+        {exit.target_stop_ratio
+          ? `${exit.target_stop_ratio} × el stop`
+          : 'sin objetivo'}
+      </dd>
+      <dt>Tiempo</dt>
+      <dd>{exit.time_minutes ? `${exit.time_minutes} min` : 'sin límite'}</dd>
+      <dt>Salida propia</dt>
+      <dd>{[...new Set(Object.values(exit.rule))].join(', ')}</dd>
+    </dl>
+  )
+}
+
+/** The common plan: the same fields for rules, regime adapters and models. */
+export function PlanTab({ plan }: { plan: StrategyPlan | null }) {
+  if (!plan) return <p className="strategy-lab__muted">Plan no disponible.</p>
+  return (
+    <div className="strategy-lab__tab-body">
+      <dl className="strategy-lab__plan">
+        <dt>Señal</dt>
+        <dd>
+          {SIGNAL_LABELS[plan.signal.type] ?? plan.signal.type}
+          {plan.signal.model ? ` · ${plan.signal.model}` : ''}
+        </dd>
+        <dt>Tamaño</dt>
+        <dd>{plan.size.notional_usd} USD fijos por operación</dd>
+        <dt>Productos</dt>
+        <dd>{plan.products === 'all' ? 'los 8 perpetuos' : plan.products}</dd>
+        <dt>Costes</dt>
+        <dd>{plan.costs.model}</dd>
+      </dl>
+      {plan.branches ? (
+        Object.entries(plan.branches).map(([regime, branch]) => (
+          <section key={regime}>
+            <h4>{regime === 'trend' ? 'En tendencia' : 'En rango'}</h4>
+            <PlanBlock entry={branch.entry} exit={branch.exit} />
+          </section>
+        ))
+      ) : (
+        <PlanBlock entry={plan.entry} exit={plan.exit} />
+      )}
+    </div>
   )
 }

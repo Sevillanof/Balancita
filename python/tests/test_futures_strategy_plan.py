@@ -62,8 +62,19 @@ class StrategyPlanTest(unittest.TestCase):
         self.assertEqual(plan["exit"]["stop_atr"], "2")
         self.assertEqual(plan["exit"]["volatility"], "5m.logvol288")
 
-    def test_models_match_their_constants(self):
-        self.assertEqual(kronos_plan()["exit"]["time_minutes"], 240)
+    def test_kronos_descriptor_matches_the_lab_constants(self):
+        from kronos_lab import lab
+        plan = kronos_plan()
+        self.assertEqual(plan["id"], lab.STRATEGY_ID)
+        self.assertEqual(plan["exit"]["time_minutes"], lab.HORIZON * 60)
+        self.assertEqual(plan["signal"]["threshold_cost_multiple"], lab.K)
+        self.assertEqual(plan["size"]["notional_usd"], str(lab.NOTIONAL))
+
+    def test_freeze_list_names_real_strategies(self):
+        from balancita_engine.futures_strategy_plan import load_freeze
+        self.assertEqual(set(load_freeze()["ids"]), set(all_plans(SPECS)))
+
+    def test_qwen_exit_plan(self):
         self.assertEqual(qwen_exit_plan()["signal"]["entry_specs"][0], "c25-pullback-perp-v1")
 
 

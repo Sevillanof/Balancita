@@ -97,6 +97,23 @@ class RegistryTests(unittest.TestCase):
         self.assertEqual(self.registry.version(C25_ID, 1)["spec"], SPECS[C25_ID])
         self.assertEqual(self.registry.active_specs(10**15)[C25_ID]["version"], 1)
 
+    def test_a_frozen_strategy_can_be_edited_but_a_later_version_is_not_activated(self):
+        spec = copy.deepcopy(SPECS[C25_ID])
+        spec["params"]["rsi_long_min"] = "40"
+        saved = self.registry.save(spec, "modify")
+        self.assertTrue(saved["frozen"])
+        with self.assertRaises(RegistryError) as raised:
+            self.registry.set_state(C25_ID, 2, "active", skip_gates=True)
+        self.assertEqual(raised.exception.code, "frozen")
+        self.assertEqual(self.registry.active_specs(10**15)[C25_ID]["version"], 1)
+
+    def test_plans_cover_every_strategy_in_the_same_shape(self):
+        plans = self.registry.plans()
+        for strategy_id in SPECS:
+            self.assertIn(strategy_id, plans)
+        self.assertIn("kronos-small-1h-h4-v1", plans)
+        self.assertIn("c31-qwen-exit-perp-v1", plans)
+
     def test_new_leaves_the_original_and_gets_a_c29_id(self):
         spec = copy.deepcopy(SPECS[C25_ID])
         spec["params"]["rsi_long_min"] = "40"

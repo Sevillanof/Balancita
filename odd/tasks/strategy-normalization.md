@@ -22,8 +22,8 @@ Un plan explícito por estrategia (`futures_strategy_plan.py`): señal (`rules` 
 ## Pasos
 
 - **NS-01 (hecho)**: `strategy_plan()` de solo lectura para specs, C31 y Kronos; tests: hashes de C25-C30 congelados, entrada no mutada, time stop = 30 min de D, mismos campos para todas.
-- NS-02: ver el plan en /estrategias igual para todas (endpoint del registro + panel).
-- NS-03: guarda "congelada hasta 100 operaciones" en el registro para C25-C31 y Kronos (solo "crear nueva").
-- NS-04: descriptores de modelo `balancita-model.v1` en `config/models/` (Qwen, Kronos) con test de igualdad contra las constantes; sin reiniciar procesos.
+- **NS-02 (hecho)**: `GET /api-strategies/plans` y pestaña "Plan" en /estrategias.
+- **NS-03 (hecho)**: `config/strategy-freeze.json`; editar como borrador sigue permitido, activar una versión > v1 de una congelada da 409 `frozen`.
+- **NS-04 (hecho para Kronos)**: descriptor `config/models/kronos-small-1h-h4-v1.json` con test contra las constantes de `lab.py`; C31 ya tiene `qwen-exit.json`. Descriptores de modelo `balancita-model.v1` en `config/models/` (Qwen, Kronos) con test de igualdad contra las constantes; sin reiniciar procesos.
 - NS-05: `propose` -> `propose_spec` en verdictos y D, solo si un replay real da el mismo `verdict_hash` y las mismas operaciones (incluidas salidas con niveles congelados, C27 sin nivel y `cost_config`).
 - NS-06: estado explícito `forward` con `start_ms` inmutable; migrar C30 copiando su entrada exacta y retirar el JSON manual al pasar el test. Coordinar con el hilo de recuperación de huecos (toca `futures_forward.py`).
