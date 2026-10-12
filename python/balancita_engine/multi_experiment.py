@@ -126,7 +126,7 @@ class FrameFeeder:
 class Experiment:
     def __init__(self, store, products, *, strategies=None, qwen=None, policy=None, experiment_id="exp1",
                  funding_contexts=None, funding_periods_by_product=None, start_ms=None, clock=None, arms=ARMS,
-                 tick_sizes=None, warmup_ms=None):
+                 tick_sizes=None, warmup_ms=None, shadow_quiet_cycles=None, keep_wait_signals=True):
         self.store, self.products = store, list(products)
         self.strategies = strategies or default_strategies()
         self.policy = policy or RiskPolicy()
@@ -146,13 +146,17 @@ class Experiment:
         self.already_processed, self.duplicate_events = 0, 0
         self.warmup_bars, self.first_cycle_ready = {}, {}
         self.gaps = []
+        # None: a shadow per candidate. N: a shadow only at the onset of a signal (no candidate of the same
+        # strategy/product/action in the previous N cycles), so a persistent condition is one opportunity, not N re-reads.
+        self.shadow_quiet, self.last_candidate = shadow_quiet_cycles, {}
+        self.keep_wait_signals = keep_wait_signals  # False: only candidate signals are stored (years of history)
         self.warmup_ms = required_warmup_ms(self.periods) if warmup_ms is None else int(warmup_ms)
         self.tick_sizes, self.funding_by_product = tick_sizes or {}, periods
         self.feeders = {}
 
     # ----------------------------------------------------------------- driving
 
-    def run(self, candles, include_table=True):
+    def run(self, candles, include_table=True, report=True):
         """``candles``: ``{product_id: (candles_1m, candles_5m)}`` official candles, oldest first."""
         feeders = {p: self.feeders.setdefault(p, FrameFeeder(self.periods)) for p in candles}
         streams = [self._stream(product, feeders[product], ones, fives)
@@ -162,7 +166,7 @@ class Experiment:
         for feeder in feeders.values():
             self.already_processed += feeder.skipped
             feeder.skipped = 0
-        return self.report(include_table)
+        return self.report(include_table) if report else None
 
     def _stream(self, product, feeder, ones, fives):
         """The product's frames tagged with the product. A named method, not a generator expression in a loop:
@@ -179,13 +183,16 @@ class Experiment:
             "checkpoint_version": CHECKPOINT_VERSION, "experiment_id": self.experiment_id, "start_ms": self.start_ms,
             "policy": self.policy.policy_hash(), "cost_model": cost_model_hash(), "arms": list(self.arms),
             "strategies": [[s.id, s.version] for s in self.strategies], "periods": self.periods,
-            "selectors": selectors, "products": self.products})
+            "selectors": selectors, "products": self.products,
+            **({} if self.shadow_quiet is None else {"shadow_quiet_cycles": self.shadow_quiet}),
+            **({} if self.keep_wait_signals else {"keep_wait_signals": False})})
 
     def _state(self):
         return {"books": self.executor.books, "issued": self.risk.issued, "consumed": self.risk.consumed,
                 "shadows": self.shadows, "last": self.last, "already_processed": self.already_processed,
                 "duplicate_events": self.duplicate_events, "warmup_bars": self.warmup_bars,
-                "first_cycle_ready": self.first_cycle_ready, "gaps": self.gaps, "cycles": self.cycles, "feeders": self.feeders}
+                "first_cycle_ready": self.first_cycle_ready, "gaps": self.gaps,
+                "last_candidate": self.last_candidate, "cycles": self.cycles, "feeders": self.feeders}
 
     def save_checkpoint(self):
         """Stores the complete state after a finished run, next to the decision log it is a cache of."""
@@ -218,6 +225,7 @@ class Experiment:
         self.already_processed, self.duplicate_events = state["already_processed"], state["duplicate_events"]
         self.warmup_bars, self.first_cycle_ready = state["warmup_bars"], state["first_cycle_ready"]
         self.gaps, self.cycles, self.feeders = state["gaps"], state["cycles"], state["feeders"]
+        self.last_candidate = state.get("last_candidate", {})
         self.executor.reattach_funding(list(self.executor.books.values()) + list(self.shadows.values()))
         return None
 
@@ -256,7 +264,8 @@ class Experiment:
         for strategy in self.strategies:
             context = SignalContext(product_id, cycle_ms, price, current, trend, regime, self._reliability(strategy.id))
             signal = validate_signal(strategy.evaluate(context))
-            self.store.put_signal(signal)
+            if self.keep_wait_signals or is_candidate(signal):
+                self.store.put_signal(signal)
             signals.append(signal)
         candidates = [s for s in signals if is_candidate(s)]
         if not candidates:
@@ -269,7 +278,12 @@ class Experiment:
                 "signal_id": signal["signal_id"], "product_id": product_id, "cycle_ms": cycle_ms,
                 "strategy_id": signal["strategy_id"], "strategy_version": signal["strategy_version"],
                 "action": signal["action"], "strength": signal["strength"], "reason": signal["reason"]})
-            self._open_shadow(signal, snapshot, bucket)
+            key = (signal["strategy_id"], product_id, signal["action"])
+            previous = self.last_candidate.get(key)
+            self.last_candidate[key] = cycle_ms
+            if (self.shadow_quiet is None or previous is None
+                    or cycle_ms - previous > self.shadow_quiet * FIVE_MINUTES_MS):
+                self._open_shadow(signal, snapshot, bucket)
         for arm in self.arms:
             units = ([(s["strategy_id"], [s]) for s in candidates] if arm == "A"
                      else [("combined" if arm == "B" else "qwen", signals)])
@@ -338,7 +352,9 @@ class Experiment:
                 complete = bool(trade["funding_complete"])
                 self.store.put_candidate_outcome(signal_id, {
                     "status": "closed", "net_complete": complete, "net_bp": trade["net_bp"] if complete else None,
-                    "partial_bp": trade["net_bp"], "exit_reason": trade["exit_reason"]})
+                    "partial_bp": trade["net_bp"], "exit_reason": trade["exit_reason"], "side": trade["side"],
+                    "entry_time_ms": trade["entry_time_ms"], "exit_time_ms": trade["exit_time_ms"],
+                    "net_usd": trade["pnl_usd"] if complete else None})
                 del self.shadows[signal_id]
 
     # ----------------------------------------------------------------- results
