@@ -1,0 +1,29 @@
+docs/multi-strategy.md
+  s_a1bf2e175b9967::t_f1dd7ab4e2cc15 45-51
+python/balancita_engine/futures_replay.py
+  s_a1bf2e175b9967::t_6f64207092c278 41-42,47
+python/balancita_engine/multi_experiment.py
+  s_a1bf2e175b9967::t_0bf41c215ef711 33,38,118-119,133,157-158,189-191,198,202,329,355,410-411,445-458,463,465,471-491,512,516-517,524-525,539-540
+python/balancita_engine/multi_model.py
+  s_a1bf2e175b9967::t_ef6e5e15d2949d 1-68
+python/balancita_engine/multi_select.py
+  s_a1bf2e175b9967::t_378bff88604855 141,160
+python/tests/test_multi_strategy.py
+  s_a1bf2e175b9967::t_1ba070109276e2 160,405,435-522
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "65641e71fb6c07661742c98a296b91b96a1cd6d0",
+  "prompts": {},
+  "sessions": {
+    "s_a1bf2e175b9967": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2f9cd751-f0b2-483e-8473-991c9321c73c",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
