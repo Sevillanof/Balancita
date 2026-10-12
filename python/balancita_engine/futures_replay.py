@@ -283,7 +283,7 @@ def qwen_factory(cache_path=None, env=None):
                          prompts["templates"][prompts["default_version"]], tick_size=tick_size,
                          trigger=params.get("trigger", "entry"), mode=prompts["probability_source"],
                          cache=AnswerCache(cache_path), product_id=params.get("product_id", "PF_XBTUSD"),
-                         funding=funding, calm=CalmFilter() if params.get("calm_skip") else None)
+                         funding=funding, calm=CalmFilter() if params.get("calm_skip", True) else None)
 
     return make
 
@@ -310,9 +310,10 @@ def main(argv=None):
     parser.add_argument("--qwen-funding", choices=("off", "on", "placebo", "contrarian", "follow"), default="off",
                         help="funding line (trade_action@5): off (as shipped, v4), on, placebo (the line from 7 days "
                              "earlier), or a model-free rule: contrarian (high funding sells, low buys) / follow")
-    parser.add_argument("--qwen-calm-skip", action="store_true",
-                        help="do not ask in the calmest third of volatility (percentile of the past only); "
-                             "those decisions are recorded as hold with source calm-skip")
+    parser.add_argument("--qwen-calm-skip", action=argparse.BooleanOptionalAction, default=True,
+                        help="do not ask in the calmest third of volatility (percentile of the past only); those "
+                             "decisions are recorded as hold with source calm-skip. On by default (saves ~34%% of "
+                             "the questions); --no-qwen-calm-skip asks every time, as runs before 2026-10-12 did")
     parser.add_argument("--qwen-pause-ms", type=int, default=0,
                         help="sleep after each model answer so the GPU can cool (same results, slower)")
     parser.add_argument("--qwen-cache", help="SQLite file of cached answers shared between replays")

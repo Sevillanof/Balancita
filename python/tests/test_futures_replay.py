@@ -110,6 +110,24 @@ class ReplayTests(unittest.TestCase):
             if d["bucket_start"] in asked:
                 self.assertEqual(d["probabilities"], asked[d["bucket_start"]]["probabilities"])
 
+    def test_the_replay_cli_has_calm_skip_on_by_default_and_a_flag_to_turn_it_off(self):
+        from unittest import mock
+
+        from balancita_engine import futures_replay
+
+        for extra, expected in (([], True), (["--qwen-calm-skip"], True), (["--no-qwen-calm-skip"], False)):
+            seen = {}
+
+            def factory(cache_path, env):
+                return lambda specs, params, tick: seen.update(params) or None
+
+            with mock.patch.object(futures_replay, "qwen_factory", factory), \
+                    mock.patch.object(futures_replay, "run", return_value=[]), \
+                    mock.patch("sys.stdout"):
+                futures_replay.main(["--market-db", "m", "--out", "o", "--from", "2026-01-01", "--to", "2026-01-02",
+                                     "--qwen", "trade_action"] + extra)
+            self.assertIs(seen["calm_skip"], expected, extra)
+
     def test_the_consensus_rule_answers_the_largest_mean_probability_without_a_model(self):
         from balancita_engine.futures_llm_lessons import question_arm
 

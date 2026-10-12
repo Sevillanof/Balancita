@@ -1055,6 +1055,13 @@ class _VerdictFeed:
             (product_id, after_bucket, VERDICT_BATCH),
         ).fetchall()
 
+    def recent_buckets(self, product_id, before_bucket, limit):
+        """The last ``limit`` buckets before ``before_bucket``, oldest first."""
+        rows = self.db.execute(
+            "SELECT bucket_start FROM paper_futures_verdicts WHERE product_id=? AND bucket_start<? "
+            "ORDER BY bucket_start DESC LIMIT ?", (product_id, before_bucket, limit)).fetchall()
+        return [r[0] for r in reversed(rows)]
+
     def latest_bucket(self, product_id):
         return self.db.execute(
             "SELECT MAX(bucket_start) FROM paper_futures_verdicts WHERE product_id=?", (product_id,)
@@ -1165,7 +1172,7 @@ class DecisionService:
 
     def __init__(self, market_db_path, verdicts_db_path, store, provider, questions, calibration,
                  products, log=print, clock=None, max_age_ms=DEFAULT_MAX_AGE_MS,
-                 template=None, probability_source=None):
+                 template=None, probability_source=None, calm_skip=False):
         self.market_db_path = market_db_path
         self.verdicts_db_path = verdicts_db_path
         self.store = store
@@ -1190,6 +1197,8 @@ class DecisionService:
         self._identity = None
         self._model_up = None
         self._problem = None
+        self.calm_skip, self.calm_skipped = calm_skip, 0
+        self._calm = {}
 
     # -- helpers
     def _problem_once(self, message):
@@ -1250,6 +1259,33 @@ class DecisionService:
                 memory.observe_close(needed, close)
         return memory.text(bucket)
 
+    def _is_calm(self, product_id, bucket):
+        """Whether the volatility of ``bucket`` (ATR / close) is in the calmest third of the past; adds it to the past.
+
+        Same rule as the replay (``CalmFilter``): the threshold reads only earlier buckets. A restart seeds the
+        past from the verdicts already stored, so the filter does not need hours of warm-up each time.
+        """
+        from .futures_replay_qwen import CALM_MIN_HISTORY, CalmFilter
+
+        calm = self._calm.get(product_id)
+        if calm is None:
+            calm = self._calm[product_id] = CalmFilter()
+            for past in self.verdicts.recent_buckets(product_id, bucket, 2 * CALM_MIN_HISTORY):
+                calm.add(self._volatility(product_id, past))
+        value = self._volatility(product_id, bucket)
+        answer = calm.is_calm(value)
+        calm.add(value)
+        return answer
+
+    def _volatility(self, product_id, bucket):
+        from .futures_replay_qwen import CalmFilter
+
+        try:
+            features = (self.verdicts.payload(product_id, bucket).get("features") or {}).get("1m") or {}
+        except sqlite3.OperationalError:
+            return None
+        return CalmFilter.volatility({"close": features.get("candidate_close")}, features)
+
     # -- loop
     def poll(self):
         """Decides the new fresh buckets; returns the number of decisions written."""
@@ -1300,7 +1336,14 @@ class DecisionService:
             self._identity = self.provider.identity()
         model_ref = self._identity.get("model_ref") or "unknown"
         written = 0
+        calm_at = {}
         for product_id, bucket, verdict_hash, question in work:
+            if self.calm_skip:
+                if (product_id, bucket) not in calm_at:
+                    calm_at[(product_id, bucket)] = self._is_calm(product_id, bucket)
+                if calm_at[(product_id, bucket)]:
+                    self.calm_skipped += 1  # nothing is stored: a calm bucket is simply not asked
+                    continue
             base = {"product_id": product_id, "bucket_start": bucket, "question_id": question["id"],
                     "question_version": question["version"], "model_ref": model_ref}
             try:
@@ -1655,6 +1698,9 @@ def main(argv=None, provider=None, questions=None, calibration=None):
     parser.add_argument("--llama-url", help="default: http://127.0.0.1:$LLAMA_PORT (8088)")
     parser.add_argument("--questions-file")
     parser.add_argument("--calibration-file")
+    parser.add_argument("--qwen-calm-skip", action=argparse.BooleanOptionalAction, default=True,
+                        help="do not ask in the calmest third of volatility (percentile of the past only); the bucket "
+                             "gets no decision. On by default; --no-qwen-calm-skip asks every bucket")
     parser.add_argument("--poll-seconds", type=float, default=1.0)
     parser.add_argument("--timeout-seconds", type=float, default=30.0, help="per model call")
     parser.add_argument("--max-age-seconds", type=float, default=DEFAULT_MAX_AGE_MS / 1000)
@@ -1696,14 +1742,14 @@ def main(argv=None, provider=None, questions=None, calibration=None):
     store = DecisionStore(args.decisions_db, DECISION_CONFIG)
     service = DecisionService(args.market_db, args.verdicts_db, store, provider, questions, calibration, products,
                               log=log, max_age_ms=int(args.max_age_seconds * 1000),
-                              template=template, probability_source=mode)
+                              template=template, probability_source=mode, calm_skip=args.qwen_calm_skip)
     try:
         if args.once:
             print("decisions written {}".format(service.poll()))
             return 0
         log("decisions writing to {} (config {}) for {}; {} question(s): {}; prompt v{}, probability_source={}".format(
             args.decisions_db, store.config_hash[:12], ", ".join(products), len(questions), ", ".join(sorted(questions)),
-            template["version"], mode))
+            template["version"], mode) + ("; calm-skip on" if args.qwen_calm_skip else ""))
         run(service, args.poll_seconds, log)
     except KeyboardInterrupt:
         pass

@@ -100,6 +100,9 @@ def main(argv=None):
     if any((m["product_id"], m["start_ms"], m["end_ms"]) != (meta["product_id"], meta["start_ms"], meta["end_ms"])
            for m, _ in runs):
         parser.error("the runs must cover the same product and range")
+    if len({bool((m.get("qwen") or {}).get("calm_filter")) for m, _ in runs}) > 1:
+        print("warning: some runs used calm-skip and others did not (calm-skip became the default on 2026-10-12); "
+              "their decisions are not comparable 1:1", file=sys.stderr)
     ones, _ = load_range(args.market_db, meta["product_id"], meta["start_ms"], meta["end_ms"] + HORIZON_MIN * ONE_MINUTE_MS)
     closes = {c["bucket_start"]: c["close"] for c in ones}
     pts = [points(chosen, closes, meta["product_id"]) for _, chosen in runs]
