@@ -269,3 +269,67 @@ class EffectiveRegistrationTests(unittest.TestCase):
                                             {C30: self._candidate(C30, state="retired")}, 1_000)
             self.assertNotIn(C30, got["strategies"])
             self.assertIn(C30, registration["strategies"])
+
+
+class TradeKeyMigrationTests(unittest.TestCase):
+    OLD = ("CREATE TABLE forward_trade(strategy_id TEXT NOT NULL, product_id TEXT NOT NULL, entry_bucket_ms INTEGER "
+           "NOT NULL, spec_hash TEXT NOT NULL, payload TEXT NOT NULL, "
+           "PRIMARY KEY(strategy_id, product_id, entry_bucket_ms)) STRICT;"
+           "CREATE TRIGGER forward_trade_no_update BEFORE UPDATE ON forward_trade "
+           "BEGIN SELECT RAISE(ABORT, 'forward trades are append-only'); END;")
+
+    def setUp(self):
+        from balancita_engine.futures_forward import _SCHEMA, migrate_trade_key
+        self.migrate, self.schema = migrate_trade_key, _SCHEMA
+        self.db = sqlite3.connect(":memory:")
+
+    def test_rows_survive_and_a_second_spec_at_the_same_bucket_is_kept(self):
+        self.db.executescript(self.OLD)
+        self.db.execute("INSERT INTO forward_trade VALUES('s','PF_XBTUSD',1000,'old','{\"a\":1}')")
+        self.assertEqual(self.migrate(self.db), 1)
+        self.db.executescript(self.schema)
+        self.db.execute("INSERT INTO forward_trade VALUES('s','PF_XBTUSD',1000,'new','{\"a\":2}')")
+        self.assertEqual(self.db.execute("SELECT spec_hash, payload FROM forward_trade ORDER BY spec_hash").fetchall(),
+                         [("new", '{"a":2}'), ("old", '{"a":1}')])
+        self.assertEqual(self.db.execute("SELECT rows_carried FROM forward_migration").fetchone()[0], 1)
+
+    def test_append_only_triggers_come_back_and_the_migration_runs_once(self):
+        self.db.executescript(self.OLD)
+        self.migrate(self.db)
+        self.db.executescript(self.schema)
+        self.assertIsNone(self.migrate(self.db))
+        self.db.execute("INSERT INTO forward_trade VALUES('s','p',1,'h','{}')")
+        with self.assertRaises(sqlite3.DatabaseError):
+            self.db.execute("UPDATE forward_trade SET payload='x'")
+        with self.assertRaises(sqlite3.DatabaseError):
+            self.db.execute("DELETE FROM forward_trade")
+
+    def test_a_fresh_database_needs_no_migration(self):
+        self.assertIsNone(self.migrate(self.db))
+        self.db.executescript(self.schema)
+        self.assertIsNone(self.migrate(self.db))
+
+
+class ForwardAuditTests(unittest.TestCase):
+    def test_audit_tells_not_measured_from_measured_without_signals(self):
+        from balancita_engine.futures_forward import _SCHEMA
+        from balancita_engine.futures_forward_audit import audit
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, "forward.sqlite")
+            db = sqlite3.connect(path)
+            db.executescript(_SCHEMA)
+            db.execute("INSERT INTO forward_status VALUES('a','PF_XBTUSD',?)", (json.dumps(
+                {"checked_ms": 5, "missing_1m": 2, "late_1m": 7, "diverged_trades": 0}),))
+            db.commit()
+            db.close()
+            specs = {"a": SPECS[C30], "b": SPECS[C30]}
+            registration = {"strategies": {"a": {"start_ms": 1}}}
+            candidates = {"b": {"state": "active", "spec": SPECS[C30], "version": 1, "active_since_ms": 1}}
+            report = audit(path, registration, specs, candidates, now_ms=10)["strategies"]
+            self.assertTrue(report["a"]["measured"])
+            self.assertEqual(report["a"]["trades"], 0)
+            self.assertIn("no entry was forced", report["a"]["note"])
+            self.assertEqual(report["a"]["late_1m_by_product"], {"PF_XBTUSD": 7})
+            self.assertFalse(report["b"]["measured"])
+            self.assertFalse(report["b"]["in_forward_file"])
+            self.assertIn("--strategies-db", report["b"]["note"])

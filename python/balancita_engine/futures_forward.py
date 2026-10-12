@@ -51,7 +51,7 @@ _CORE_KEYS = ("entry_price", "exit_bucket_ms", "exit_price", "exit_reason", "sid
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS forward_trade(
   strategy_id TEXT NOT NULL, product_id TEXT NOT NULL, entry_bucket_ms INTEGER NOT NULL,
-  spec_hash TEXT NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(strategy_id, product_id, entry_bucket_ms)) STRICT;
+  spec_hash TEXT NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(strategy_id, product_id, entry_bucket_ms, spec_hash)) STRICT;
 CREATE TABLE IF NOT EXISTS forward_open(
   strategy_id TEXT NOT NULL, product_id TEXT NOT NULL, spec_hash TEXT NOT NULL, payload TEXT,
   PRIMARY KEY(strategy_id, product_id)) STRICT;
@@ -66,6 +66,35 @@ CREATE TRIGGER IF NOT EXISTS forward_trade_no_update BEFORE UPDATE ON forward_tr
 CREATE TRIGGER IF NOT EXISTS forward_trade_no_delete BEFORE DELETE ON forward_trade
   BEGIN SELECT RAISE(ABORT, 'forward trades are append-only'); END;
 """
+
+
+def migrate_trade_key(db):
+    """Puts ``spec_hash`` in the primary key of ``forward_trade`` (databases created before it was).
+
+    With the old key a second spec stored at the same entry bucket was dropped by ``INSERT OR IGNORE`` without a
+    word, and the reader (which filters by ``spec_hash``) then saw a trade missing. The rows are copied as they are;
+    the migration is written in ``forward_migration`` and does nothing on a database that already has the key.
+    Returns the number of rows carried over, or ``None`` when no migration was needed.
+    """
+    columns = db.execute("PRAGMA table_info(forward_trade)").fetchall()
+    if not columns or any(name == "spec_hash" and pk for _, name, _, _, _, pk in columns):
+        return None
+    count = db.execute("SELECT COUNT(*) FROM forward_trade").fetchone()[0]
+    db.executescript("""
+BEGIN;
+CREATE TABLE forward_trade_new(
+  strategy_id TEXT NOT NULL, product_id TEXT NOT NULL, entry_bucket_ms INTEGER NOT NULL,
+  spec_hash TEXT NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(strategy_id, product_id, entry_bucket_ms, spec_hash)) STRICT;
+INSERT INTO forward_trade_new SELECT strategy_id, product_id, entry_bucket_ms, spec_hash, payload FROM forward_trade;
+DROP TABLE forward_trade;
+ALTER TABLE forward_trade_new RENAME TO forward_trade;
+CREATE TABLE IF NOT EXISTS forward_migration(
+  name TEXT NOT NULL PRIMARY KEY, rows_carried INTEGER NOT NULL, done_ms INTEGER NOT NULL) STRICT;
+COMMIT;""")
+    with db:
+        db.execute("INSERT OR IGNORE INTO forward_migration VALUES(?,?,?)",
+                   ("forward_trade-pk-with-spec_hash", count, int(time.time() * 1000)))
+    return count
 
 
 def load_registration(path=None):
@@ -149,6 +178,7 @@ def run_forward(market_db, db_path, specs, registration, products):
     Returns ``{(strategy_id, product_id): number of new trades}``.
     """
     db = sqlite3.connect(db_path)
+    migrate_trade_key(db)
     db.executescript(_SCHEMA)
     added = {}
     try:
@@ -218,7 +248,7 @@ def write_summary(db_path, specs, registration, out_path):
             recovered = {(product, bucket) for product, bucket in db.execute(
                 "SELECT product_id, entry_bucket_ms FROM forward_recovered WHERE strategy_id=?", (strategy_id,))}
             trades = [dict(json.loads(payload), product_id=product) for product, payload in rows]
-            reconciled = load_reconciled(db, strategy_id)
+            reconciled = load_reconciled(db, strategy_id, digest)
             for trade in trades:
                 trade["recovered"] = (trade["product_id"], trade["entry_bucket_ms"]) in recovered
                 row = reconciled.get((trade["product_id"], trade["entry_bucket_ms"]))
