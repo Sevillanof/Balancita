@@ -1,0 +1,21 @@
+docs/validacion-historica-multi.md
+  s_a1bf2e175b9967::t_91dabc36d6f6bd 32-34
+python/balancita_engine/multi_validation.py
+  s_a1bf2e175b9967::t_6b0c838c3ecb6a 24,38-48,57-58
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ae1be1a54f390f3ad09c7f86cc063834a041d796",
+  "prompts": {},
+  "sessions": {
+    "s_a1bf2e175b9967": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2f9cd751-f0b2-483e-8473-991c9321c73c",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
