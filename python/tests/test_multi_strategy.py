@@ -1,0 +1,295 @@
+"""PR 100: the nine acceptance criteria of the multi-strategy architecture, end to end, with a stubbed Qwen."""
+
+import hashlib
+import os
+import random
+import re
+import tempfile
+import unittest
+
+from balancita_engine.futures_funding_context import FundingContext
+from balancita_engine.futures_llm_decisions import FakeProvider
+from balancita_engine.multi_experiment import Experiment
+from balancita_engine.multi_risk import RiskEngine, RiskPolicy
+from balancita_engine.multi_select import DeterministicCombiner, QwenSelector
+from balancita_engine.multi_signals import (
+    BUY, SELL, WAIT, FIVE_MINUTES_MS, Strategy, default_strategies, make_signal, validate_signal,
+)
+from balancita_engine.multi_store import ConflictError, DecisionStore
+
+from test_futures_spec_strategy import START, _random_walk
+
+PRODUCT = "PF_XBTUSD"
+ROOT = os.path.join(os.path.dirname(__file__), "..", "..")
+HOUR = 3_600_000
+FUNDING = {PRODUCT: [(START - 20 * 86_400_000, START + 40 * 86_400_000, "0.00001")]}
+WALK = _random_walk(random.Random(11), 1500)
+
+
+class Scripted(Strategy):
+    """Emits BUY (or SELL) at the listed 5-minute cycle indices and WAIT otherwise."""
+
+    id, version, horizon_minutes, indicators = "mx-scripted-v1", 1, 120, {}
+
+    def __init__(self, cycles, action=BUY, strength="0.9"):
+        self.cycles, self.action, self.strength = set(cycles), action, strength
+
+    def decide(self, ctx):
+        from decimal import Decimal
+        index = (ctx.bucket_ms - START) // FIVE_MINUTES_MS
+        if index in self.cycles:
+            return self.action, Decimal(self.strength), {"scripted": "yes"}, "scripted"
+        return WAIT, Decimal(0), {}, "scripted_wait"
+
+
+def qwen_says(action, flip_after=None, flag=None):
+    """FakeProvider entries that always pick ``action`` (buy / wait / sell) whatever letter it sits behind."""
+    calls = {"n": 0}
+
+    def entries(prompt, letters):
+        calls["n"] += 1
+        if flip_after is not None and calls["n"] >= flip_after:
+            flag["down"] = True
+        names = dict((name, letter) for letter, name in re.findall(r"^([A-Z])\) (\w+)", prompt, re.M))
+        return [{"token": letter, "logprob": -0.01 if letter == names[action] else -6.0} for letter in letters]
+    return entries
+
+
+def selector(action, **kwargs):
+    return QwenSelector(FakeProvider(entries=qwen_says(action, **kwargs)))
+
+
+OPEN_STORES = []
+
+
+def tearDownModule():
+    for store in OPEN_STORES:
+        try:
+            store.close()
+        except Exception:
+            pass
+
+
+def run(strategies, qwen=None, policy=None, funding=FUNDING, store=None, experiment_id="t", candles=WALK, **kwargs):
+    store = store or DecisionStore()
+    OPEN_STORES.append(store)
+    experiment = Experiment(store, [PRODUCT], strategies=strategies, qwen=qwen, policy=policy, experiment_id=experiment_id,
+                            funding_periods_by_product=funding, **kwargs)
+    report = experiment.run({PRODUCT: candles})
+    return experiment, store, report
+
+
+def arm_trades(store, arm):
+    return [t for t in store.trades() if t["arm"] == arm]
+
+
+class AcceptanceTests(unittest.TestCase):
+    def test_1_no_strategy_signal_and_qwen_buy_does_not_trade(self):
+        provider = FakeProvider(entries=qwen_says("buy"))
+        experiment, store, report = run([Scripted([])], QwenSelector(provider))
+        self.assertEqual(store.trades(), [])
+        self.assertEqual(provider.calls, 0)  # no candidate: the model is not even asked
+        # And if it is asked anyway, a BUY with nothing behind it is a WAIT.
+        waiting = [make_signal(strategy_id="mx-x-v1", strategy_version=1, product_id=PRODUCT, bucket_ms=START,
+                               action=WAIT, strength=0, horizon_minutes=60, evidence={})]
+        chosen = QwenSelector(FakeProvider(entries=qwen_says("buy"))).select(PRODUCT, START, waiting)
+        self.assertEqual((chosen["action"], chosen["reason"]), (WAIT, "no_backing_signal"))
+        self.assertIsNone(chosen["signal_id"])
+        self.assertEqual(report["candidates"], 0)
+
+    def test_2_strategy_buy_and_qwen_wait_does_not_trade(self):
+        experiment, store, report = run([Scripted([60])], selector("wait"))
+        self.assertEqual(arm_trades(store, "C"), [])
+        self.assertTrue(arm_trades(store, "A") and arm_trades(store, "B"))  # the other arms did take it
+        row = report["candidate_table"][0]
+        self.assertEqual(row["arms"]["C"], "rejected_by_selector:qwen_wait")
+        self.assertEqual(report["selector_filters"]["C"]["rejected_candidates"], 1)
+        self.assertEqual(report["selector_filters"]["C"]["judged"], 1)  # its shadow outcome says what it would have earned
+
+    def test_3_qwen_buy_backed_but_risk_rejects(self):
+        policy = RiskPolicy(max_notional_global_usd="50")
+        experiment, store, report = run([Scripted([60])], selector("buy"), policy=policy)
+        self.assertEqual(store.trades(), [])
+        self.assertEqual(store.executions(), [])
+        reasons = [r["reasons"] for r in store.risk_outcomes().values()]
+        self.assertTrue(reasons and all("global_exposure_limit" in r for r in reasons))
+        self.assertEqual(report["candidate_table"][0]["arms"]["C"], "rejected_by_risk:global_exposure_limit")
+
+    def test_4_qwen_buy_and_risk_authorizes_the_executor_enters(self):
+        experiment, store, report = run([Scripted([60])], selector("buy"))
+        (trade,) = arm_trades(store, "C")
+        self.assertEqual((trade["side"], trade["notional_usd"]), ("LONG", "100"))
+        self.assertTrue(trade["meta"]["auth_id"] and trade["meta"]["signal_id"])
+        why = experiment.explain(trade["meta"]["decision_id"])
+        self.assertEqual(why["selection"]["reason"], "qwen_buy")
+        self.assertTrue(why["risk"]["authorized"])
+        self.assertEqual([e["kind"] for e in why["executions"]], ["entry", "exit"])
+        self.assertTrue(why["selection"]["detail"]["prompt_hash"])
+        # The executor refuses anything the risk engine did not issue.
+        self.assertEqual(experiment.executor.submit({"auth_id": "forged"}, 0, 0)["reason"], "unknown_authorization")
+
+    def test_5_open_position_is_managed_with_qwen_down(self):
+        flag = {"down": False}
+        provider = FakeProvider(entries=qwen_says("buy", flip_after=3, flag=flag))
+        real = provider.complete
+
+        def complete(*args, **kwargs):
+            if flag["down"]:
+                provider.healthy = False
+            return real(*args, **kwargs)
+
+        provider.complete = complete
+        experiment, store, report = run([Scripted([60, 62])], QwenSelector(provider))
+        (trade,) = arm_trades(store, "C")
+        self.assertIn(trade["exit_reason"], ("stop", "target", "time_stop"))
+        self.assertGreater(trade["exit_bucket_ms"], trade["entry_bucket_ms"])
+        second = [s for s in store.selections("C") if s["cycle_ms"] == START + 62 * FIVE_MINUTES_MS]
+        self.assertEqual(second[0]["reason"], "qwen_failure:ModelUnavailable")  # it was down, and nothing depended on it
+
+    def test_6_repeated_events_do_not_duplicate(self):
+        once, store_once, _ = run([Scripted([60, 90])], selector("buy"))
+        store = DecisionStore()
+        OPEN_STORES.append(store)
+        twice = Experiment(store, [PRODUCT], strategies=[Scripted([60, 90])], qwen=selector("buy"), experiment_id="t",
+                           funding_periods_by_product=FUNDING)
+        twice.run({PRODUCT: WALK})
+        again = twice.run({PRODUCT: WALK})  # every candle arrives a second time
+        self.assertEqual(twice.ledger_hash(), once.ledger_hash())
+        self.assertEqual(len(store.trades()), len(store_once.trades()))
+        self.assertGreaterEqual(again["duplicates_ignored"], len(WALK[0]))
+        # An authorization can be redeemed once only.
+        risk = RiskEngine()
+        verdict = risk.evaluate(
+            decision={"decision_id": "d", "arm": "C", "scope": "qwen", "product_id": PRODUCT, "action": BUY,
+                      "signal_id": "s"},
+            signals=[{"signal_id": "s", "action": BUY, "product_id": PRODUCT, "horizon_minutes": 60,
+                      "strategy_id": "x", "strategy_version": 1}],
+            snapshot={"price": "100000", "atr": "300", "ready": True, "data_close_ms": 10}, now_ms=20,
+            account={"open_notional_usd": "0", "product_open": False, "realized_usd": "0",
+                     "realized_today_usd": "0", "drawdown_usd": "0"})
+        self.assertTrue(verdict["authorized"])
+        risk.redeem(verdict["authorization"], 21)
+        with self.assertRaises(Exception) as caught:
+            risk.redeem(verdict["authorization"], 22)
+        self.assertEqual(str(caught.exception), "duplicate_authorization")
+        # The store refuses an id reused with other content.
+        with self.assertRaises(ConflictError):
+            store.put_selection(dict(store.selections()[0], reason="tampered"))
+
+    def test_7_replay_with_stored_decisions_gives_identical_accounting(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, "multi.sqlite")
+            first, store, _ = run([Scripted([60, 100, 140])], selector("buy"), store=DecisionStore(path))
+            expected, trades = first.ledger_hash(), len(store.trades())
+            self.assertGreater(trades, 0)
+            store.close()
+            provider = FakeProvider(entries=qwen_says("sell"))  # would answer differently, and must not be asked
+            replayed, store2, _ = run([Scripted([60, 100, 140])], QwenSelector(provider), store=DecisionStore(path))
+            self.assertEqual(provider.calls, 0)
+            self.assertEqual(replayed.ledger_hash(), expected)
+            self.assertEqual(len(store2.trades()), trades)
+
+    def test_8_missing_funding_or_costs_never_invent_a_complete_net(self):
+        experiment, store, report = run([Scripted([60])], selector("buy"), funding={})
+        trades = store.trades()
+        self.assertTrue(trades)
+        for trade in trades:
+            self.assertFalse(trade["net_complete"])
+            self.assertIsNone(trade["net_usd"])
+            self.assertIn("partial_usd", trade)
+        for arm in report["arms"].values():
+            if arm["trades"]:
+                self.assertIsNone(arm["net_pnl_usd"])
+                self.assertIsNotNone(arm["partial_pnl_usd"])
+        complete, store2, report2 = run([Scripted([60])], selector("buy"))
+        self.assertTrue(all(t["net_complete"] and t["net_usd"] is not None for t in store2.trades()))
+        # A product without a measured cost row is not traded at all.
+        experiment3 = Experiment(DecisionStore(), ["PF_FOOUSD"], strategies=[Scripted([60])], qwen=selector("buy"),
+                                 funding_periods_by_product=FUNDING)
+        experiment3.run({"PF_FOOUSD": WALK})
+        self.assertEqual(experiment3.store.trades(), [])
+        self.assertTrue(all("cost_data_missing" in r["reasons"] for r in experiment3.store.risk_outcomes().values()))
+
+    def test_9_protected_strategies_and_their_records_are_untouched(self):
+        pinned = {
+            "config/strategies/c25-pullback-perp-v1.json": "95ac63523926c07d30e240830a1c7cab2468888769ed0028a4032eea1f3552d3",
+            "config/strategies/c26-reversion-perp-v1.json": "262e691234910a03a4dbd9f79c08e078a18de050fd9e5eb9fbf16e972ced2bec",
+            "config/strategies/c27-breakout-perp-v1.json": "9df21fbe6207debbb3d868fc28b42d4c74aeef19ca82431e15a7a589f254da65",
+            "config/strategies/c28-adapter-perp-v1.json": "562b7b52f850fc6f7d1c30ff65f30a669fef6bb0b0ac2b4081541736a55e7271",
+            "config/strategies/c29-momentum-perp-v1.json": "998284cf51e317838a456fbbba789ee3c479a1471fcbb5f0b3dabadf95742628",
+            "config/strategies/c30-momentum-12h-perp-v1.json": "c4d2184134365c454d391dc5f7569eff445eff789634405e0e26066a851a75ec",
+            "config/forward-strategies.json": "8810a48327e18772ba2212733ab62c616e00addfaeb5035b1921a2c9ab939ab5",
+            "config/strategy-freeze.json": "13117739b4603f477ddca04ad9b72693dc19d3132a3d72f80a14acce9b1000b7",
+            "config/strategy-closed.json": "af82672287501abec6c114d8e00b37680b4471d06029828c6f64241a4ba389e8",
+        }
+        for relative, digest in pinned.items():
+            with open(os.path.join(ROOT, relative), "rb") as handle:
+                self.assertEqual(hashlib.sha256(handle.read()).hexdigest(), digest, relative)
+        # The experiment ids are new and live in no registry the forward runner reads.
+        ids = {s.id for s in default_strategies()}
+        self.assertEqual(ids, {"mx-funding-v1", "mx-momentum-v1", "mx-meanrev-v1"})
+        for name in os.listdir(os.path.join(ROOT, "config", "strategies")):
+            self.assertFalse(name.startswith("mx-"))
+        with open(os.path.join(ROOT, "config", "forward-strategies.json"), encoding="utf-8") as handle:
+            self.assertFalse(any(i in handle.read() for i in ids))
+
+
+class ComponentTests(unittest.TestCase):
+    def test_signal_contract_rejects_tampering_and_never_claims_calibration(self):
+        signal = make_signal(strategy_id="mx-a-v1", strategy_version=1, product_id=PRODUCT, bucket_ms=1, action=BUY,
+                             strength="0.8", horizon_minutes=60, evidence={"k": 1},
+                             reliability={"sample_size": 12, "hit_rate": "0.50"})
+        self.assertIs(validate_signal(signal)["calibrated"], False)
+        self.assertEqual(signal["scores"], {"BUY": "0.90", "SELL": "0.00", "WAIT": "0.10"})
+        with self.assertRaises(ValueError):
+            validate_signal(dict(signal, strength="0.1"))
+        with self.assertRaises(ValueError):
+            make_signal(strategy_id="x", strategy_version=1, product_id=PRODUCT, bucket_ms=1, action="HOLD",
+                        strength=0, horizon_minutes=1, evidence={})
+
+    def test_qwen_asks_three_rotations_one_letter_and_failures_are_wait(self):
+        buy = [make_signal(strategy_id="mx-a-v1", strategy_version=1, product_id=PRODUCT, bucket_ms=1, action=BUY,
+                           strength="0.8", horizon_minutes=60, evidence={})]
+        provider = FakeProvider(entries=qwen_says("buy"))
+        chosen = QwenSelector(provider).select(PRODUCT, 1, buy)
+        self.assertEqual((chosen["action"], chosen["signal_id"]), (BUY, buy[0]["signal_id"]))
+        self.assertEqual(provider.calls, 3)
+        self.assertEqual(len({p.split("A) ")[1].split("\n")[0] for p in provider.prompts}), 3)  # rotated options
+        down = FakeProvider(entries=qwen_says("buy"), healthy=False)
+        self.assertEqual(QwenSelector(down).select(PRODUCT, 1, buy)["reason"], "qwen_failure:ModelUnavailable")
+        garbage = FakeProvider(entries=[{"token": "Z", "logprob": -1.0}])
+        self.assertTrue(QwenSelector(garbage).select(PRODUCT, 1, buy)["reason"].startswith("qwen_failure"))
+        slow = FakeProvider(entries=qwen_says("buy"))
+        real = slow.complete
+        slow.complete = lambda *a, **k: dict(real(*a, **k), latency_ms=60_000)
+        self.assertEqual(QwenSelector(slow, timeout_ms=1_000).select(PRODUCT, 1, buy)["reason"], "qwen_timeout")
+
+    def test_combiner_needs_agreement(self):
+        def sig(sid, action, strength):
+            return make_signal(strategy_id=sid, strategy_version=1, product_id=PRODUCT, bucket_ms=1, action=action,
+                               strength=strength, horizon_minutes=60, evidence={})
+        combiner = DeterministicCombiner()
+        self.assertEqual(combiner.select(PRODUCT, 1, [sig("a", BUY, "0.9")])["reason"], "weak" if False else "combined_buy")
+        self.assertEqual(combiner.select(PRODUCT, 1, [sig("a", BUY, "0.4")])["reason"], "weak")
+        self.assertEqual(combiner.select(PRODUCT, 1, [sig("a", BUY, "0.9"), sig("b", SELL, "0.8")])["reason"], "contradiction")
+        both = combiner.select(PRODUCT, 1, [sig("a", BUY, "0.9"), sig("b", BUY, "0.5"), sig("c", SELL, "0.2")])
+        self.assertEqual(both["action"], BUY)
+
+    def test_the_three_experimental_strategies_run_the_whole_path(self):
+        rng = random.Random(5)
+        periods = [(START - 800 * HOUR + i * HOUR, rng.uniform(-0.0002, 0.0002)) for i in range(900)]
+        ones, fives = _random_walk(random.Random(3), 4000)
+        experiment = Experiment(DecisionStore(), [PRODUCT], qwen=selector("buy"), experiment_id="full",
+                                funding_contexts={PRODUCT: FundingContext(periods)})
+        report = experiment.run({PRODUCT: (ones, fives)})
+        self.assertEqual(report["schema"], "balancita-multi-report.v1")
+        self.assertIn("no edge asserted", report["verdict"])
+        self.assertGreater(experiment.cycles, 700)
+        seen = {s["strategy_id"] for s in experiment.store.signals()}
+        self.assertEqual(seen, {"mx-funding-v1", "mx-momentum-v1", "mx-meanrev-v1"})
+        for signal in experiment.store.signals():
+            validate_signal(signal)
+
+
+if __name__ == "__main__":
+    unittest.main()
