@@ -20,6 +20,7 @@ costs). Nothing here changes the question, the prompt or the decision rule.
 """
 
 import math
+import random
 
 from .futures_strategy_backtest import _round
 
@@ -116,9 +117,67 @@ def calibration_from_pairs(pairs, actions=ACTIONS):
     return result
 
 
+def _pearson(x, y):
+    n = len(x)
+    mx, my = sum(x) / n, sum(y) / n
+    sxx, syy = sum((a - mx) ** 2 for a in x), sum((b - my) ** 2 for b in y)
+    if sxx == 0 or syy == 0:
+        return 0.0
+    return sum((a - mx) * (b - my) for a, b in zip(x, y)) / math.sqrt(sxx * syy)
+
+
+def _ranks(values):
+    order = sorted(range(len(values)), key=lambda i: values[i])
+    ranks, i = [0.0] * len(values), 0
+    while i < len(order):
+        j = i
+        while j + 1 < len(order) and values[order[j + 1]] == values[order[i]]:
+            j += 1
+        for k in range(i, j + 1):
+            ranks[order[k]] = (i + j) / 2
+        i = j + 1
+    return ranks
+
+
+def information_coefficient(rows, block=60, boots=1000):
+    """IC: correlation of ``p(buy) - p(sell)`` with the gross return that followed (rows oldest first).
+
+    0 means no predictive information whatever the stated confidence. The 95 % interval resamples
+    contiguous blocks of ``block`` decisions (neighbours are alike) with a fixed seed.
+    """
+    pts = [(float(r["probabilities"]["buy"]) - float(r["probabilities"]["sell"]), float(r["gross_bp"]))
+           for r in rows if r.get("status") == "scored" and r.get("gross_bp") is not None
+           and all(a in (r.get("probabilities") or {}) for a in ("buy", "sell"))]
+    n = len(pts)
+    if n < MIN_SCORED:
+        return {"decisions": n, "reliable_sample": False}
+
+    def both(sample):
+        x, y = [p[0] for p in sample], [p[1] for p in sample]
+        return _pearson(x, y), _pearson(_ranks(x), _ranks(y))
+
+    pearson, spearman = both(pts)
+    rnd = random.Random(1)
+    starts = list(range(0, n, block))
+    draws = []
+    for _ in range(boots):
+        sample = []
+        for _ in starts:
+            s = rnd.choice(starts)
+            sample.extend(pts[s:s + block])
+        draws.append(both(sample))
+    out = {"decisions": n, "reliable_sample": True}
+    for name, value, idx in (("pearson", pearson, 0), ("spearman", spearman, 1)):
+        vals = sorted(d[idx] for d in draws)
+        out[name] = {"ic": _round(value), "low": _round(vals[int(0.025 * boots)]), "high": _round(vals[int(0.975 * boots)])}
+    return out
+
+
 def calibration_report(rows, round_trip_bp):
     """``trade_action``: the right action is the one that cleared the round trip (rows oldest first)."""
-    return calibration_from_pairs(right_actions(rows, float(round_trip_bp)))
+    result = calibration_from_pairs(right_actions(rows, float(round_trip_bp)))
+    result["ic"] = information_coefficient(rows)
+    return result
 
 
 def format_lines(cal, pct):
@@ -139,4 +198,11 @@ def format_lines(cal, pct):
     hc = cal["high_confidence"]
     lines.append("  Con p >= {}: {} decisiones, {} erradas ({}); ECE {}".format(
         hc["threshold"], hc["decisions"], hc["wrong"], pct(hc["wrong_rate"]), cal["ece"]))
+    ic = cal.get("ic")
+    if ic and ic.get("reliable_sample"):
+        sp = ic["spearman"]
+        lines.append("  IC (p compra - p venta contra retorno bruto): Spearman {} [IC95 {} a {}], Pearson {}; "
+                     "0 = sin información{}".format(
+                         sp["ic"], sp["low"], sp["high"], ic["pearson"]["ic"],
+                         "" if sp["low"] > 0 or sp["high"] < 0 else " (el intervalo incluye 0)"))
     return lines

@@ -12,6 +12,15 @@ def row(chosen, probs, gross, status="scored"):
 
 
 class CalibrationTests(unittest.TestCase):
+    def test_ic_is_positive_when_probability_tracks_the_return(self):
+        rows = [row("buy", (0.5 + 0.4 * k, 0.1, 0.4 - 0.4 * k), 30 * (2 * k - 1)) for k in
+                [i / 99 for i in range(100)]]
+        ic = c.calibration_report(rows, RT)["ic"]
+        self.assertGreater(ic["spearman"]["low"], 0.9)
+
+    def test_ic_needs_a_minimum_sample(self):
+        self.assertFalse(c.information_coefficient([row("buy", (0.6, 0.2, 0.2), 5)])["reliable_sample"])
+
     def test_right_action_follows_the_round_trip_rule(self):
         rows = [row("buy", (1, 0, 0), 25), row("sell", (0, 0, 1), -25), row("hold", (0, 1, 0), 4),
                 row("buy", (1, 0, 0), 1, status="pending")]
