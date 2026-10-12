@@ -22,6 +22,8 @@ En un perpetuo no hay vencimiento; cada hora los largos pagan a los cortos (o al
 - [ ] FC-05 Correr en la Mac (hace falta `pnpm dev` parado y el OK de Fran, el replay calienta la GPU).
 - [ ] FC-06 Si hay señal en FC-05: valorar poner v5 en el catálogo (activa funding en vivo, requiere leer funding en el servicio Q) y probarlo con el horizonte de C29/C30 (24 h), no a 30 min.
 
+- [x] FC-07 (2026-10-12, pedido de Fran) Estrategia lenta `c32-funding-contrarian-24h-perp-v1`: vende con funding en el 10 % más alto de los 30 días anteriores, compra con el 10 % más bajo, stop 2 sigmas diarias, objetivo 1,5x, 24 h; sin tocar Qwen. Nueva variable de 5m `5m.fundpct` (percentil 0-100, `frames(..., funding=)`), que `futures_replay.run` y `futures_forward` rellenan desde la base de mercado. Registrada en `config/forward-strategies.json` desde 2026-10-12 12:00 UTC (juicio con ~100 trades, comparar con C30). Para que opere en la Mac hay que correr una vez `pnpm --dir server funding:backfill` sobre la base de mercado de dev con `pnpm dev` parado (hacen falta 30 días de historia por producto); sin ellos `fundpct` no existe y C32 no opera. Los books en vivo (SS-05/07) no tienen `fundpct`, así que C32 solo se mide por el corredor forward. Nota: la captura guarda una respuesta de funding (~1 MB) cada hora; `load_periods` solo lee la más vieja y las dos más nuevas.
+
 ## Calor de la GPU en el replay
 
 El calor viene de Metal, no de la CPU. Propuesta: variable `QWEN_REPLAY_PAUSE_MS` (pausa entre preguntas) o `-ngl` menor en llama-server. Pendiente de elegir con Fran; no está implementado.

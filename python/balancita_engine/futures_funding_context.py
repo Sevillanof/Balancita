@@ -21,24 +21,31 @@ BTC_PRODUCT = "PF_XBTUSD"
 
 
 def load_periods(market_db_path, product_id):
-    """Sorted ``[(start_ms, relative_rate)]`` of a product from the market DB's stored Kraken responses (read-only)."""
+    """Sorted ``[(start_ms, relative_rate)]`` of a product from the market DB's stored Kraken responses (read-only).
+
+    Every response lists the last ~year, and capture stores a new one each hour, so reading all of them would cost
+    megabytes per hour of uptime: only the oldest (the backfill) and the two newest are parsed.
+    """
     db = sqlite3.connect("file:{}?mode=ro".format(market_db_path), uri=True)
     try:
         columns = [row[1] for row in db.execute("PRAGMA table_info(paper_futures_funding_periods)")]
         if not columns:
             return []
         if "product_id" in columns:
-            rows = db.execute(
-                "SELECT raw_response FROM paper_futures_funding_responses WHERE sha256 IN "
-                "(SELECT DISTINCT response_sha256 FROM paper_futures_funding_periods WHERE product_id=?) "
-                "ORDER BY received_at, rowid", (product_id,)).fetchall()
+            shas = [r[0] for r in db.execute(
+                "SELECT sha256 FROM paper_futures_funding_responses WHERE sha256 IN "
+                "(SELECT response_sha256 FROM paper_futures_funding_periods WHERE product_id=?) "
+                "ORDER BY received_at, rowid", (product_id,))]
         elif product_id == BTC_PRODUCT:  # a market DB written before schema 7 holds the BTC perpetual only
-            rows = db.execute("SELECT raw_response FROM paper_futures_funding_responses ORDER BY received_at, rowid").fetchall()
+            shas = [r[0] for r in db.execute("SELECT sha256 FROM paper_futures_funding_responses ORDER BY received_at, rowid")]
         else:
-            rows = []
+            shas = []
+        chosen = list(dict.fromkeys(shas[:1] + shas[-2:]))
+        raws = [db.execute("SELECT raw_response FROM paper_futures_funding_responses WHERE sha256=?", (sha,)).fetchone()[0]
+                for sha in chosen]
     finally:
         db.close()
-    return periods_from_responses(r[0] for r in rows)
+    return periods_from_responses(raws)
 
 
 def periods_from_responses(raw_responses):
@@ -97,3 +104,12 @@ def funding_question(question):
     fields = list(question["state_fields"])
     fields.insert(fields.index("lessons") if "lessons" in fields else len(fields), "funding")
     return dict(question, version=FUNDING_QUESTION_VERSION, state_fields=fields)
+
+
+def funding_for(market_db_path, product_id):
+    """The product's ``FundingContext`` from the market DB, or ``None`` when it holds no funding history."""
+    try:
+        periods = load_periods(market_db_path, product_id)
+    except sqlite3.Error:
+        return None
+    return FundingContext(periods) if periods else None

@@ -1,5 +1,6 @@
 import copy
 import json
+import os
 import math
 import random
 import tempfile
@@ -252,7 +253,11 @@ class ReliabilityTests(unittest.TestCase):
     def test_the_shipped_table_matches_the_shipped_specs(self):
         table = load_reliability()
         self.assertIsNotNone(table, "config/strategy-reliability.json must exist")
+        with open(os.path.join(os.path.dirname(__file__), "..", "..", "config", "forward-strategies.json")) as handle:
+            forward_only = {sid for sid, info in json.load(handle)["strategies"].items() if info.get("no_backtest")}
         for strategy_id, spec in SPECS.items():
+            if strategy_id in forward_only:  # its input (funding history) is too short to backtest; forward trades only
+                continue
             self.assertIsNotNone(reliability_for(table, spec), strategy_id + " has no measurement for its current spec")
 
     def test_losing_strategies_are_not_presented_as_having_an_edge(self):

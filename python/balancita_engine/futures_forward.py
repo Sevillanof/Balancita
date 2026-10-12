@@ -30,6 +30,7 @@ import os
 import sqlite3
 import time
 
+from .futures_funding_context import funding_for
 from .futures_products import resolve_products
 from .futures_replay import load_range, replay
 from .futures_spec_strategy import DEFAULT_SPEC_DIR, load_specs, spec_hash
@@ -160,7 +161,7 @@ def run_forward(market_db, db_path, specs, registration, products):
                 except ValueError:
                     continue
                 (book,) = replay([spec], ones, fives, start_ms=info["start_ms"], product_id=product_id,
-                                 tick_size=tick_size)
+                                 tick_size=tick_size, funding=funding_for(market_db, product_id))
                 late_ones, late_fives, missing = candle_coverage(ones, fives, info["start_ms"], now)
                 recovered = {t["entry_bucket_ms"] for t in book.trades if is_recovered(t, late_ones, late_fives)}
                 with db:
