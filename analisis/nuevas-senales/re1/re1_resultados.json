@@ -1,0 +1,575 @@
+{
+ "horizontes": {
+  "24": {
+   "C1_azar_equivalente": {
+    "bruto_medio_bp": -25.75,
+    "episodios_emparejados": 742,
+    "fraccion_sorteos_con_neto_ge_RE1": 0.01,
+    "neto_medio_bp": -38.79,
+    "p95_neto_bp": -9.46
+   },
+   "C2_espejo": {
+    "acierto_bruto": 0.462,
+    "bruto_medio_bp": -20.2,
+    "clusters": 262,
+    "coste_medio_bp": 13.04,
+    "episodios": 742,
+    "ic90_bruto_bp": [
+     -74.56,
+     32.64
+    ],
+    "neto_medio_bp": -33.24,
+    "por_producto": {
+     "PF_ADAUSD": {
+      "bruto_bp": 10.55,
+      "n": 91,
+      "neto_bp": -4.99
+     },
+     "PF_ETHUSD": {
+      "bruto_bp": -25.58,
+      "n": 105,
+      "neto_bp": -35.96
+     },
+     "PF_HYPEUSD": {
+      "bruto_bp": -12.1,
+      "n": 40,
+      "neto_bp": -25.06
+     },
+     "PF_NEARUSD": {
+      "bruto_bp": -60.28,
+      "n": 110,
+      "neto_bp": -77.38
+     },
+     "PF_SOLUSD": {
+      "bruto_bp": 49.43,
+      "n": 105,
+      "neto_bp": 38.59
+     },
+     "PF_XBTUSD": {
+      "bruto_bp": -50.31,
+      "n": 108,
+      "neto_bp": -60.43
+     },
+     "PF_XRPUSD": {
+      "bruto_bp": -37.25,
+      "n": 84,
+      "neto_bp": -50.33
+     },
+     "PF_ZECUSD": {
+      "bruto_bp": -28.03,
+      "n": 99,
+      "neto_bp": -42.61
+     }
+    },
+    "sigma_horizonte_bp": 425.6,
+    "tercios_neto_bp": [
+     -50.65,
+     -29.72,
+     -19.41
+    ],
+    "umbral_bruto_bp": 91.93,
+    "veredicto": "evidencia desfavorable"
+   },
+   "con_funding_ventana_2025-10_en_adelante": {
+    "acierto_bruto": 0.532,
+    "bruto_medio_bp": 9.13,
+    "clusters": 77,
+    "coste_medio_bp": 12.57,
+    "episodios": 218,
+    "ic90_bruto_bp": [
+     -94.36,
+     113.91
+    ],
+    "neto_medio_bp": -3.44,
+    "por_producto": {
+     "PF_ADAUSD": {
+      "bruto_bp": -4.23,
+      "n": 24,
+      "neto_bp": -16.37
+     },
+     "PF_ETHUSD": {
+      "bruto_bp": 10.46,
+      "n": 30,
+      "neto_bp": 0.56
+     },
+     "PF_HYPEUSD": {
+      "bruto_bp": -26.07,
+      "n": 26,
+      "neto_bp": -39.89
+     },
+     "PF_NEARUSD": {
+      "bruto_bp": 5.1,
+      "n": 26,
+      "neto_bp": -12.86
+     },
+     "PF_SOLUSD": {
+      "bruto_bp": 19.5,
+      "n": 30,
+      "neto_bp": 11.17
+     },
+     "PF_XBTUSD": {
+      "bruto_bp": 43.97,
+      "n": 37,
+      "neto_bp": 33.93
+     },
+     "PF_XRPUSD": {
+      "bruto_bp": 192.52,
+      "n": 27,
+      "neto_bp": 180.25
+     },
+     "PF_ZECUSD": {
+      "bruto_bp": -282.62,
+      "n": 18,
+      "neto_bp": -303.31
+     }
+    },
+    "sigma_horizonte_bp": 417.2,
+    "tercios_neto_bp": [
+     31.09,
+     111.3,
+     -148.67
+    ],
+    "umbral_bruto_bp": 155.19,
+    "veredicto": "evidencia insuficiente"
+   },
+   "episodios_crudos": {
+    "PF_ADAUSD": {
+     "episodios": 91,
+     "horas_extremas": 335
+    },
+    "PF_ETHUSD": {
+     "episodios": 105,
+     "horas_extremas": 315
+    },
+    "PF_HYPEUSD": {
+     "episodios": 40,
+     "horas_extremas": 106
+    },
+    "PF_NEARUSD": {
+     "episodios": 110,
+     "horas_extremas": 345
+    },
+    "PF_SOLUSD": {
+     "episodios": 105,
+     "horas_extremas": 323
+    },
+    "PF_XBTUSD": {
+     "episodios": 108,
+     "horas_extremas": 315
+    },
+    "PF_XRPUSD": {
+     "episodios": 84,
+     "horas_extremas": 335
+    },
+    "PF_ZECUSD": {
+     "episodios": 99,
+     "horas_extremas": 330
+    }
+   },
+   "principal": {
+    "acierto_bruto": 0.538,
+    "bruto_medio_bp": 20.2,
+    "clusters": 262,
+    "coste_medio_bp": 13.04,
+    "episodios": 742,
+    "ic90_bruto_bp": [
+     -32.64,
+     74.56
+    ],
+    "media_recortada_5pc_bp": 24.46,
+    "mediana_bruto_bp": 38.42,
+    "neto_medio_bp": 7.16,
+    "por_producto": {
+     "PF_ADAUSD": {
+      "bruto_bp": -10.55,
+      "n": 91,
+      "neto_bp": -26.09
+     },
+     "PF_ETHUSD": {
+      "bruto_bp": 25.58,
+      "n": 105,
+      "neto_bp": 15.2
+     },
+     "PF_HYPEUSD": {
+      "bruto_bp": 12.1,
+      "n": 40,
+      "neto_bp": -0.86
+     },
+     "PF_NEARUSD": {
+      "bruto_bp": 60.28,
+      "n": 110,
+      "neto_bp": 43.18
+     },
+     "PF_SOLUSD": {
+      "bruto_bp": -49.43,
+      "n": 105,
+      "neto_bp": -60.27
+     },
+     "PF_XBTUSD": {
+      "bruto_bp": 50.31,
+      "n": 108,
+      "neto_bp": 40.19
+     },
+     "PF_XRPUSD": {
+      "bruto_bp": 37.25,
+      "n": 84,
+      "neto_bp": 24.17
+     },
+     "PF_ZECUSD": {
+      "bruto_bp": 28.03,
+      "n": 99,
+      "neto_bp": 13.45
+     }
+    },
+    "sigma_horizonte_bp": 425.6,
+    "suma_10_mayores_bp": 22128.1,
+    "suma_total_bp": 14988.4,
+    "tercios_neto_bp": [
+     24.3,
+     3.5,
+     -6.27
+    ],
+    "umbral_bruto_bp": 91.93,
+    "veredicto": "ventaja no demostrada"
+   },
+   "sin_HYPE_ZEC": {
+    "acierto_bruto": 0.542,
+    "bruto_medio_bp": 19.45,
+    "clusters": 236,
+    "coste_medio_bp": 12.79,
+    "episodios": 603,
+    "ic90_bruto_bp": [
+     -32.04,
+     71.81
+    ],
+    "neto_medio_bp": 6.66,
+    "por_producto": {
+     "PF_ADAUSD": {
+      "bruto_bp": -10.55,
+      "n": 91,
+      "neto_bp": -26.09
+     },
+     "PF_ETHUSD": {
+      "bruto_bp": 25.58,
+      "n": 105,
+      "neto_bp": 15.2
+     },
+     "PF_NEARUSD": {
+      "bruto_bp": 60.28,
+      "n": 110,
+      "neto_bp": 43.18
+     },
+     "PF_SOLUSD": {
+      "bruto_bp": -49.43,
+      "n": 105,
+      "neto_bp": -60.27
+     },
+     "PF_XBTUSD": {
+      "bruto_bp": 50.31,
+      "n": 108,
+      "neto_bp": 40.19
+     },
+     "PF_XRPUSD": {
+      "bruto_bp": 37.25,
+      "n": 84,
+      "neto_bp": 24.17
+     }
+    },
+    "sigma_horizonte_bp": 396.4,
+    "tercios_neto_bp": [
+     16.47,
+     -6.15,
+     9.65
+    ],
+    "umbral_bruto_bp": 90.2,
+    "veredicto": "ventaja no demostrada"
+   }
+  },
+  "4": {
+   "C1_azar_equivalente": {
+    "bruto_medio_bp": -3.2,
+    "episodios_emparejados": 742,
+    "fraccion_sorteos_con_neto_ge_RE1": 0.755,
+    "neto_medio_bp": -16.24,
+    "p95_neto_bp": -5.33
+   },
+   "C2_espejo": {
+    "acierto_bruto": 0.508,
+    "bruto_medio_bp": 8.23,
+    "clusters": 262,
+    "coste_medio_bp": 13.04,
+    "episodios": 742,
+    "ic90_bruto_bp": [
+     -13.76,
+     29.32
+    ],
+    "neto_medio_bp": -4.81,
+    "por_producto": {
+     "PF_ADAUSD": {
+      "bruto_bp": -13.8,
+      "n": 91,
+      "neto_bp": -29.34
+     },
+     "PF_ETHUSD": {
+      "bruto_bp": 17.61,
+      "n": 105,
+      "neto_bp": 7.23
+     },
+     "PF_HYPEUSD": {
+      "bruto_bp": 0.43,
+      "n": 40,
+      "neto_bp": -12.53
+     },
+     "PF_NEARUSD": {
+      "bruto_bp": 13.53,
+      "n": 110,
+      "neto_bp": -3.57
+     },
+     "PF_SOLUSD": {
+      "bruto_bp": -7.5,
+      "n": 105,
+      "neto_bp": -18.34
+     },
+     "PF_XBTUSD": {
+      "bruto_bp": -5.86,
+      "n": 108,
+      "neto_bp": -15.98
+     },
+     "PF_XRPUSD": {
+      "bruto_bp": 15.08,
+      "n": 84,
+      "neto_bp": 2.0
+     },
+     "PF_ZECUSD": {
+      "bruto_bp": 42.02,
+      "n": 99,
+      "neto_bp": 27.44
+     }
+    },
+    "sigma_horizonte_bp": 176.7,
+    "tercios_neto_bp": [
+     -10.66,
+     -3.23,
+     -0.56
+    ],
+    "umbral_bruto_bp": 45.8,
+    "veredicto": "evidencia desfavorable"
+   },
+   "con_funding_ventana_2025-10_en_adelante": {
+    "acierto_bruto": 0.555,
+    "bruto_medio_bp": -12.47,
+    "clusters": 77,
+    "coste_medio_bp": 12.55,
+    "episodios": 218,
+    "ic90_bruto_bp": [
+     -47.64,
+     22.05
+    ],
+    "neto_medio_bp": -25.01,
+    "por_producto": {
+     "PF_ADAUSD": {
+      "bruto_bp": 46.85,
+      "n": 24,
+      "neto_bp": 33.52
+     },
+     "PF_ETHUSD": {
+      "bruto_bp": 42.84,
+      "n": 30,
+      "neto_bp": 32.45
+     },
+     "PF_HYPEUSD": {
+      "bruto_bp": -29.83,
+      "n": 26,
+      "neto_bp": -42.94
+     },
+     "PF_NEARUSD": {
+      "bruto_bp": -153.61,
+      "n": 26,
+      "neto_bp": -170.67
+     },
+     "PF_SOLUSD": {
+      "bruto_bp": -21.15,
+      "n": 30,
+      "neto_bp": -31.78
+     },
+     "PF_XBTUSD": {
+      "bruto_bp": 17.92,
+      "n": 37,
+      "neto_bp": 7.81
+     },
+     "PF_XRPUSD": {
+      "bruto_bp": 22.62,
+      "n": 27,
+      "neto_bp": 10.03
+     },
+     "PF_ZECUSD": {
+      "bruto_bp": -55.38,
+      "n": 18,
+      "neto_bp": -71.27
+     }
+    },
+    "sigma_horizonte_bp": 173.5,
+    "tercios_neto_bp": [
+     -22.65,
+     -30.06,
+     -22.4
+    ],
+    "umbral_bruto_bp": 71.85,
+    "veredicto": "evidencia insuficiente"
+   },
+   "episodios_crudos": {
+    "PF_ADAUSD": {
+     "episodios": 91,
+     "horas_extremas": 335
+    },
+    "PF_ETHUSD": {
+     "episodios": 105,
+     "horas_extremas": 315
+    },
+    "PF_HYPEUSD": {
+     "episodios": 40,
+     "horas_extremas": 106
+    },
+    "PF_NEARUSD": {
+     "episodios": 110,
+     "horas_extremas": 345
+    },
+    "PF_SOLUSD": {
+     "episodios": 105,
+     "horas_extremas": 323
+    },
+    "PF_XBTUSD": {
+     "episodios": 108,
+     "horas_extremas": 315
+    },
+    "PF_XRPUSD": {
+     "episodios": 84,
+     "horas_extremas": 335
+    },
+    "PF_ZECUSD": {
+     "episodios": 99,
+     "horas_extremas": 330
+    }
+   },
+   "principal": {
+    "acierto_bruto": 0.485,
+    "bruto_medio_bp": -8.23,
+    "clusters": 262,
+    "coste_medio_bp": 13.04,
+    "episodios": 742,
+    "ic90_bruto_bp": [
+     -29.32,
+     13.76
+    ],
+    "media_recortada_5pc_bp": -2.3,
+    "mediana_bruto_bp": -4.92,
+    "neto_medio_bp": -21.27,
+    "por_producto": {
+     "PF_ADAUSD": {
+      "bruto_bp": 13.8,
+      "n": 91,
+      "neto_bp": -1.74
+     },
+     "PF_ETHUSD": {
+      "bruto_bp": -17.61,
+      "n": 105,
+      "neto_bp": -27.99
+     },
+     "PF_HYPEUSD": {
+      "bruto_bp": -0.43,
+      "n": 40,
+      "neto_bp": -13.39
+     },
+     "PF_NEARUSD": {
+      "bruto_bp": -13.53,
+      "n": 110,
+      "neto_bp": -30.63
+     },
+     "PF_SOLUSD": {
+      "bruto_bp": 7.5,
+      "n": 105,
+      "neto_bp": -3.34
+     },
+     "PF_XBTUSD": {
+      "bruto_bp": 5.86,
+      "n": 108,
+      "neto_bp": -4.26
+     },
+     "PF_XRPUSD": {
+      "bruto_bp": -15.08,
+      "n": 84,
+      "neto_bp": -28.16
+     },
+     "PF_ZECUSD": {
+      "bruto_bp": -42.02,
+      "n": 99,
+      "neto_bp": -56.6
+     }
+    },
+    "sigma_horizonte_bp": 176.7,
+    "suma_10_mayores_bp": 9720.1,
+    "suma_total_bp": -6106.0,
+    "tercios_neto_bp": [
+     -15.68,
+     -22.99,
+     -25.12
+    ],
+    "umbral_bruto_bp": 45.8,
+    "veredicto": "evidencia desfavorable"
+   },
+   "sin_HYPE_ZEC": {
+    "acierto_bruto": 0.494,
+    "bruto_medio_bp": -3.2,
+    "clusters": 236,
+    "coste_medio_bp": 12.79,
+    "episodios": 603,
+    "ic90_bruto_bp": [
+     -25.81,
+     19.79
+    ],
+    "neto_medio_bp": -15.99,
+    "por_producto": {
+     "PF_ADAUSD": {
+      "bruto_bp": 13.8,
+      "n": 91,
+      "neto_bp": -1.74
+     },
+     "PF_ETHUSD": {
+      "bruto_bp": -17.61,
+      "n": 105,
+      "neto_bp": -27.99
+     },
+     "PF_NEARUSD": {
+      "bruto_bp": -13.53,
+      "n": 110,
+      "neto_bp": -30.63
+     },
+     "PF_SOLUSD": {
+      "bruto_bp": 7.5,
+      "n": 105,
+      "neto_bp": -3.34
+     },
+     "PF_XBTUSD": {
+      "bruto_bp": 5.86,
+      "n": 108,
+      "neto_bp": -4.26
+     },
+     "PF_XRPUSD": {
+      "bruto_bp": -15.08,
+      "n": 84,
+      "neto_bp": -28.16
+     }
+    },
+    "sigma_horizonte_bp": 162.6,
+    "tercios_neto_bp": [
+     -9.5,
+     -7.74,
+     -30.73
+    ],
+    "umbral_bruto_bp": 44.56,
+    "veredicto": "evidencia desfavorable"
+   }
+  }
+ },
+ "spec": "RE-1 v1"
+}

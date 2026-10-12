@@ -24,6 +24,18 @@
    "pruebas": 2,
    "resultado": "evidencia insuficiente: 49 clusters; bruto -52,9 pb (4 h) y -26,8 pb (24 h); datos en la Mac, rama local sin push",
    "nota": "corrida independiente y no coordinada; se cuenta como prueba aparte"
+  },
+  {
+   "id": "RE-1 v1",
+   "especificacion": "re1/re1_spec.json (congelada y subida antes de ejecutar)",
+   "datos": "2023-03 a 2026-08-01, 8 productos; historial contaminado por el descubrimiento (referencia R2 de FO-1)",
+   "horizontes_h": [
+    24,
+    4
+   ],
+   "pruebas": 2,
+   "resultado": "24 h: ventaja no demostrada (bruto +20,2 pb, neto +7,2 pb, IC90 bruto -33 a +75, umbral 92 pb, 262 clusters); 4 h: evidencia desfavorable (bruto -8,2 pb, neto -21,3 pb)",
+   "archivo": "re1/re1_resultados.json"
   }
  ],
  "sondeos_sin_retorno": [
@@ -79,7 +91,10 @@
   {
    "id": "R2",
    "descripcion": "referencia solo precio: contraria a los mayores movimientos de 4 h; bruto +28,7 pb (4 h) y +93,4 pb (24 h), 259 clusters",
-   "estado": "observacion post hoc de una referencia, NO es un resultado: el corte por ranking global usa toda la muestra y el solape con mx-meanrev (que fallo) no esta descartado. No usar para decidir sin un preregistro con umbral causal."
+   "estado": "observacion post hoc de una referencia, NO es un resultado: el corte por ranking global usa toda la muestra y el solape con mx-meanrev (que fallo) no esta descartado. No usar para decidir sin un preregistro con umbral causal.",
+   "seguimiento": "Probada como RE-1 con umbral causal: el bruto cayo de +93 pb a +20 pb a 24 h; el efecto observado era en gran parte de la seleccion."
   }
- ]
+ ],
+ "pruebas_acumuladas_re1": 2,
+ "pruebas_acumuladas_total_nuevas_senales": 6
 }
