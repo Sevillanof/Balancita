@@ -1,6 +1,6 @@
 # ADR 0001: Isolated paper-futures accounting
 
-**Status:** Accepted for the authorized paper-futures increment. Amended 2026-10-06 and 2026-10-11 (see the amendments below). Immutable and read-only: it is consulted, never edited, except for an amendment the user requests directly.
+**Status:** Accepted for the authorized paper-futures increment. Amended 2026-10-06, 2026-10-11 and 2026-10-12 (see the amendments below). Immutable and read-only: it is consulted, never edited, except for an amendment the user requests directly.
 
 ## Decision
 
@@ -113,3 +113,27 @@ Requested directly by the user (Fran) on 2026-10-11 ("el ADR vigente hay que act
 ### Unchanged
 
 The verdict service (C) still computes the C25-C28 proposals because Qwen reads them as context. C29, C30, C31 and Kronos are not modified until 100 forward trades. Canonical hashing, Decimal accounting, append-only storage, replay equality, no look-ahead and the Evaluation rules remain in force.
+
+## Amendment 2026-10-12: multi-strategy decisions with Qwen as opportunity selector
+
+Requested directly by the user (Fran) on 2026-10-12 as PR 100 ("Arquitectura de decisiones multiestrategia con Qwen y control de riesgo"), with the explicit instruction that widening Qwen's role needs an explicit amendment, not a silent change. Where it conflicts with the text above, including the Qwen and Kronos section, this amendment prevails for the `multi_*` modules only. Everything remains paper only: no real orders, no private endpoints, no credentials.
+
+### What Qwen may do now
+
+In the multi-strategy experiment (`python/balancita_engine/multi_experiment.py`) the local Qwen may **select entries**: every 5 minutes, per product, it receives the signals of the rule strategies and answers one letter (BUY / WAIT / SELL, constrained grammar, no thinking, option order rotated, probabilities averaged, same client as before). That is a third place where it decides, besides the replay A/B arm and the exit decider of C31.
+
+### Limits (enforced in code and tests)
+
+1. Qwen cannot create a trade without a strategy signal behind the same side (`no_backing_signal` becomes WAIT).
+2. It cannot change indicators, signals, protective levels or the fixed 100 USD notional.
+3. It cannot execute or modify open positions: stops, targets and time stops belong to the paper executor and run with Qwen down.
+4. Any failure, malformed answer or timeout is WAIT. Its answer is stored with its context, signals, versions, prompt hash and model.
+5. Every selection goes through a deterministic risk engine that issues a single-use authorization; the executor opens positions only by redeeming one. Rejections store their reasons.
+
+### Architecture
+
+One signal contract (`balancita-signal.v1`, BUY/SELL/WAIT scores that are **not** calibrated probabilities, strength, horizon, evidence, strategy id and version, record and sample size); risk engine (`multi_risk`); executor on the shared simulator `Book`, with the single per-product cost model (`multi_executor`: no second engine); durable decision log with idempotent ids (`multi_store`); three independent arms over the same data, costs, notional, risk policy and exit rules: A strategies, B deterministic combiner, C Qwen. Every candidate is stored, rejected ones included, with a shadow outcome. The accounting is a pure function of candles and stored selections, so a stored run replays identically without asking Qwen.
+
+### Unchanged
+
+C25-C31 and Kronos are not modified until 100 forward trades; the three experimental strategies (`mx-funding-v1`, `mx-momentum-v1`, `mx-meanrev-v1`) have new ids, live outside the strategy registry and `config/strategies/`, and exist to exercise the path, not because they are believed to earn money. There is no minimum number of trades per day. Funding is never inferred: a trade without funding history keeps its complete net P&L null. Historical validation (walk-forward, CPCV, Holm, DSR, PBO) and any forward freezing are later increments with criteria fixed before looking at results; 100 forward trades do not by themselves prove an edge. If Qwen does not beat the deterministic combiner after costs, the combiner stays.

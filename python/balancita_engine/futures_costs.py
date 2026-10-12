@@ -38,6 +38,11 @@ def _row(product_id):
     return _EXECUTION.get(product_id or DEFAULT_PRODUCT, _FALLBACK)
 
 
+def is_measured(product_id):
+    """True when the product has its own measured execution row (an unmeasured one is priced at the worst row)."""
+    return (product_id or DEFAULT_PRODUCT) in _EXECUTION
+
+
 def spread_bps(product_id):
     return Decimal(_row(product_id)[0])
 
