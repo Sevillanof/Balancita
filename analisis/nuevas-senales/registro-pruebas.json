@@ -36,6 +36,15 @@
    "pruebas": 2,
    "resultado": "24 h: ventaja no demostrada (bruto +20,2 pb, neto +7,2 pb, IC90 bruto -33 a +75, umbral 92 pb, 262 clusters); 4 h: evidencia desfavorable (bruto -8,2 pb, neto -21,3 pb)",
    "archivo": "re1/re1_resultados.json"
+  },
+  {
+   "id": "MR-1 v1",
+   "especificacion": "mr1/mr1_spec.json (congelada y subida antes de ejecutar)",
+   "datos": "2023-03 a 2026-08-01, universo dinamico de 8 productos (sesgo de supervivencia declarado)",
+   "horizontes": "semanal",
+   "pruebas": 1,
+   "resultado": "ventaja no demostrada: 173 semanas, bruto +154 pb/semana (IC90 -4 a +316), neto +127 pb, umbral 285 pb; IC de Spearman ~0 (t 0,57); supera el 98,5 % de selecciones aleatorias; sin HYPE y ZEC neto +90 pb",
+   "archivo": "mr1/mr1_resultados.json"
   }
  ],
  "sondeos_sin_retorno": [
@@ -96,5 +105,6 @@
   }
  ],
  "pruebas_acumuladas_re1": 2,
- "pruebas_acumuladas_total_nuevas_senales": 6
+ "pruebas_acumuladas_total_nuevas_senales": 7,
+ "pruebas_acumuladas_mr1": 1
 }

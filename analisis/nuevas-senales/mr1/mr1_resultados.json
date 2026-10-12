@@ -1,0 +1,134 @@
+{
+ "C1_seleccion_aleatoria": {
+  "bruto_medio_bp": -0.56,
+  "fraccion_sorteos_con_neto_ge_MR1": 0.015,
+  "neto_medio_bp": -26.72,
+  "p95_neto_bp": 94.52
+ },
+ "C3_espejo": {
+  "IC_spearman_medio": -0.0186,
+  "IC_spearman_t": -0.57,
+  "alfa_bruto_bp": -154.39,
+  "alfa_ic90_bp": [
+   -295.89,
+   -12.89
+  ],
+  "aporte_por_producto_bp": {
+   "PF_ADAUSD": -9512.0,
+   "PF_ETHUSD": -4342.0,
+   "PF_HYPEUSD": -3462.0,
+   "PF_NEARUSD": 7906.0,
+   "PF_SOLUSD": -12076.0,
+   "PF_XBTUSD": -207.0,
+   "PF_XRPUSD": 5742.0,
+   "PF_ZECUSD": -10710.0
+  },
+  "beta_mercado": 0.006,
+  "bruto_medio_bp": -154.11,
+  "coste_semanal_medio_bp": 27.21,
+  "drawdown_maximo_neto_bp": 38346.6,
+  "ic90_bruto_bp": [
+   -316.46,
+   3.57
+  ],
+  "neto_medio_bp": -181.32,
+  "neto_medio_con_costes_solo_en_cambios_bp": -169.31,
+  "peso_max_producto": 0.224,
+  "semanas": 173,
+  "semanas_positivas_neto": 0.428,
+  "sigma_semanal_bp": 1131.4,
+  "tercios_neto_bp": [
+   -144.33,
+   -185.42,
+   -213.11
+  ],
+  "umbral_bruto_bp": 285.28,
+  "veredicto": "evidencia desfavorable"
+ },
+ "funding_ventana_2025-10": {
+  "funding_medio_bp": -6.19,
+  "neto_medio_con_funding_bp": -9.77,
+  "neto_medio_sin_funding_bp": -15.96,
+  "semanas": 41,
+  "veredicto": "evidencia insuficiente"
+ },
+ "principal": {
+  "IC_spearman_medio": 0.0186,
+  "IC_spearman_t": 0.57,
+  "alfa_bruto_bp": 154.39,
+  "alfa_ic90_bp": [
+   12.89,
+   295.89
+  ],
+  "aporte_por_producto_bp": {
+   "PF_ADAUSD": 9512.0,
+   "PF_ETHUSD": 4342.0,
+   "PF_HYPEUSD": 3462.0,
+   "PF_NEARUSD": -7906.0,
+   "PF_SOLUSD": 12076.0,
+   "PF_XBTUSD": 207.0,
+   "PF_XRPUSD": -5742.0,
+   "PF_ZECUSD": 10710.0
+  },
+  "beta_mercado": -0.006,
+  "bruto_medio_bp": 154.11,
+  "coste_semanal_medio_bp": 27.21,
+  "drawdown_maximo_neto_bp": 10285.2,
+  "ic90_bruto_bp": [
+   -3.57,
+   316.46
+  ],
+  "neto_medio_bp": 126.9,
+  "neto_medio_con_costes_solo_en_cambios_bp": 148.04,
+  "peso_max_producto": 0.224,
+  "semanas": 173,
+  "semanas_positivas_neto": 0.532,
+  "sigma_semanal_bp": 1131.4,
+  "tercios_neto_bp": [
+   90.42,
+   130.27,
+   158.89
+  ],
+  "umbral_bruto_bp": 285.28,
+  "veredicto": "ventaja no demostrada"
+ },
+ "sin_HYPE_ZEC": {
+  "IC_spearman_medio": 0.0226,
+  "IC_spearman_t": 0.63,
+  "alfa_bruto_bp": 118.06,
+  "alfa_ic90_bp": [
+   1.12,
+   234.99
+  ],
+  "aporte_por_producto_bp": {
+   "PF_ADAUSD": 8448.0,
+   "PF_ETHUSD": 4829.0,
+   "PF_NEARUSD": 716.0,
+   "PF_SOLUSD": 14124.0,
+   "PF_XBTUSD": -1597.0,
+   "PF_XRPUSD": -6255.0
+  },
+  "beta_mercado": -0.043,
+  "bruto_medio_bp": 117.14,
+  "coste_semanal_medio_bp": 26.68,
+  "drawdown_maximo_neto_bp": 8605.5,
+  "ic90_bruto_bp": [
+   -0.26,
+   238.5
+  ],
+  "neto_medio_bp": 90.46,
+  "neto_medio_con_costes_solo_en_cambios_bp": 110.39,
+  "peso_max_producto": 0.393,
+  "semanas": 173,
+  "semanas_positivas_neto": 0.538,
+  "sigma_semanal_bp": 935.8,
+  "tercios_neto_bp": [
+   130.08,
+   124.06,
+   19.72
+  ],
+  "umbral_bruto_bp": 240.13,
+  "veredicto": "ventaja no demostrada"
+ },
+ "spec": "MR-1 v1"
+}
