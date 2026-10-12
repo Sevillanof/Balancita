@@ -106,6 +106,14 @@ def funding_question(question):
     return dict(question, version=FUNDING_QUESTION_VERSION, state_fields=fields)
 
 
+def funding_periods(context):
+    """``[(start_ms, end_ms, relative_rate_per_hour)]`` from a ``FundingContext`` for the simulator's books.
+
+    ``None`` (no history) gives ``[]``: the books then report ``funding_complete = false`` and an unknown funding.
+    """
+    return [] if context is None else [(s, s + HOUR_MS, r) for s, r in zip(context.starts, context.rates)]
+
+
 def funding_for(market_db_path, product_id):
     """The product's ``FundingContext`` from the market DB, or ``None`` when it holds no funding history."""
     try:

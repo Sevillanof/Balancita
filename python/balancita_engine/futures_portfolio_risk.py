@@ -208,6 +208,7 @@ def build_from_market(market_db, specs, products, *, days, end_ms=None):
     ``products`` is ``[(product_id, tick_size)]``. Needs only the market DB (no chart JSON): the last ``days``
     days before ``end_ms`` (default: the newest candle) are traded, the week before only warms indicators up.
     """
+    from .futures_funding_context import funding_for, funding_periods
     from .futures_replay import load_range, replay
 
     trades = {spec["id"]: [] for spec in specs}
@@ -219,7 +220,8 @@ def build_from_market(market_db, specs, products, *, days, end_ms=None):
             continue
         stop = ones[-1]["bucket_start"]
         start = max(ones[0]["bucket_start"], stop - days * DAY_MS)
-        books = replay(specs, ones, fives, start_ms=start, product_id=product_id, tick_size=tick_size)
+        books = replay(specs, ones, fives, start_ms=start, product_id=product_id, tick_size=tick_size,
+                       funding_periods=funding_periods(funding_for(market_db, product_id)))
         for book in books:
             trades[book.spec["id"]].extend(dict(t, product_id=product_id) for t in book.trades)
         fives_by_product[product_id] = [c for c in fives if c["bucket_start"] >= start]

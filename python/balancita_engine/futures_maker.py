@@ -42,6 +42,7 @@ import time
 from decimal import Decimal
 
 from .futures_costs import fee_rate
+from .futures_funding_context import funding_for, funding_periods
 from .futures_products import resolve_products
 from .futures_replay import load_range, replay
 from .futures_spec_strategy import DEFAULT_SPEC_DIR, load_specs
@@ -145,7 +146,7 @@ def maker_trade_net_bp(trade, limit, *, entry_kind="maker"):
     long = trade["side"] == "LONG"
     gross = (exit_price - limit) * quantity if long else (limit - exit_price) * quantity
     fees = limit * quantity * fee_rate(entry_kind) + exit_price * quantity * fee_rate("taker")
-    funding = Decimal(str(trade.get("funding_usd", 0)))
+    funding = Decimal(str(trade.get("funding_usd") or 0))  # unknown funding (None) is left out, not invented
     return (gross - fees - funding) / notional * TEN_THOUSAND
 
 
@@ -271,7 +272,7 @@ def replay_trades(market_db, ranges, specs):
             continue
         ids = sorted(specs)
         books = replay([specs[i] for i in ids], ones, fives, start_ms=lo, product_id=product_id,
-                       tick_size=ticks.get(product_id, "1"))
+                       tick_size=ticks.get(product_id, "1"), funding_periods=funding_periods(funding_for(market_db, product_id)))
         for strategy_id, book in zip(ids, books):
             trades.extend(dict(t, product_id=product_id, strategy_id=strategy_id) for t in book.trades)
     return trades

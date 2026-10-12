@@ -239,6 +239,22 @@ def _frozen_level(invalidation):
     return None
 
 
+
+def accrue_funding(periods, start_ms, end_ms, notional):
+    """``(rate x time x notional summed over the periods that overlap [start, end), milliseconds covered)``.
+
+    ``periods`` are ``(left_ms, right_ms, relative_rate_per_hour)``; the sign is the long side's (positive: pays).
+    Unknown time is *not* zero funding: callers compare the covered time with the holding time.
+    """
+    total, covered = D(0), 0
+    for left, right, rate in periods:
+        a, b = max(start_ms, left), min(end_ms, right)
+        if b <= a:
+            continue
+        covered += b - a
+        total += D(str(rate)) * D(b - a) / D(3_600_000) * notional
+    return total, covered
+
 class Book:
     """One independent paper book for one strategy: one position at a time, fixed notional."""
 
@@ -363,6 +379,25 @@ class Book:
                         pnl_usd=float(round(pnl, 4)))
         return view
 
+    def _funding_fields(self, position, bucket, funding, funding_complete):
+        """The trade's funding, never turning an unknown amount into zero.
+
+        ``funding_usd`` is ``None`` when no funding period covered any of the holding time; a partial sum is kept
+        but flagged ``funding_complete = False``; an observed zero is ``0.0`` with ``funding_complete = True``.
+        """
+        start, end = position["opened_at"], bucket + ONE_MINUTE_MS
+        _, covered = accrue_funding(self.funding, start, end, D(0))
+        covered = min(covered, end - start)
+        if funding_complete:
+            status = "complete"
+        elif covered > 0:
+            status = "partial"
+        else:
+            status = "unknown"
+        return {"funding_usd": float(round(funding, 6)) if status != "unknown" else None,
+                "funding_complete": funding_complete, "funding_status": status,
+                "funding_covered_ms": int(covered), "funding_held_ms": int(end - start)}
+
     def _finish(self, bucket, exit_price, reason):
         """Closes the open position at ``exit_price`` (before the exit execution cost) and books the trade."""
         position = self.position
@@ -379,19 +414,13 @@ class Book:
             "exit_reason": reason, "quantity": str(quantity), "notional_usd": str(self.notional),
             "net_bp": float(round(pnl / self.notional * 10_000, 4)), "pnl_usd": float(round(pnl, 4)),
             "hit": trade_hit(pnl), "reason_code": position["reason_code"],
-            "funding_usd": float(round(funding, 6)), "funding_complete": funding_complete,
+            **self._funding_fields(position, bucket, funding, funding_complete),
         })
         self.position = None
 
     def _funding(self, start_ms, end_ms, notional, long):
         """Funding paid (positive) or received over the holding period, and whether history covered it."""
-        total, covered = D(0), 0
-        for left, right, rate in self.funding:
-            a, b = max(start_ms, left), min(end_ms, right)
-            if b <= a:
-                continue
-            covered += b - a
-            total += rate * D(b - a) / D(3_600_000) * notional
+        total, covered = accrue_funding(self.funding, start_ms, end_ms, notional)
         complete = bool(self.funding) and covered >= end_ms - start_ms
         return (total if long else -total), complete
 

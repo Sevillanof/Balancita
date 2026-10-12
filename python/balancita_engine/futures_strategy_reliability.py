@@ -154,7 +154,8 @@ def summarize_trades(trades, *, first_ms=None, last_ms=None, selection_trials=1)
         return {"trades": 0, "wins": 0, "hit_rate": None, "hit_rate_ci95": [None, None], "mean_net_bp": None,
                 "median_net_bp": None, "t_stat": None, "folds_positive": 0, "folds_judged": 0,
                 "pnl_usd": 0.0, "selection_trials": selection_trials, "deflated_probability": None,
-                "verdict": "insufficient_data"}
+                "verdict": "insufficient_data", "funding_complete_trades": 0, "funding_incomplete_trades": 0,
+                "net_is_definitive": False, "mean_net_bp_funding_complete": None}
     values = [t["net_bp"] for t in trades]
     wins = sum(1 for t in trades if t["pnl_usd"] > 0)
     low, high = wilson_interval(wins, count)
@@ -164,7 +165,13 @@ def summarize_trades(trades, *, first_ms=None, last_ms=None, selection_trials=1)
     last = last_ms if last_ms is not None else max(t["entry_time_ms"] for t in trades)
     positive, judged = _folds_positive(trades, first, last)
     deflated = deflated_probability(values, selection_trials)
+    complete = [t for t in trades if t.get("funding_complete") is True]
     return {
+        # ``mean_net_bp`` / ``pnl_usd`` leave out the funding of a trade whose funding is unknown: they are the
+        # definitive net only when ``net_is_definitive`` (every trade's funding complete).
+        "funding_complete_trades": len(complete), "funding_incomplete_trades": count - len(complete),
+        "net_is_definitive": len(complete) == count,
+        "mean_net_bp_funding_complete": round(statistics.fmean(t["net_bp"] for t in complete), 2) if complete else None,
         "trades": count, "wins": wins, "hit_rate": round(wins / count, 4),
         "hit_rate_ci95": [round(low, 4), round(high, 4)],
         "mean_net_bp": round(mean, 2), "median_net_bp": round(statistics.median(values), 2),

@@ -87,3 +87,13 @@ Ninguna regla de velas ni variante de Qwen ha mostrado ventaja neta tras costes.
 ## Activa = opera
 
 Con `--strategies-db` (en `pnpm dev` ya va puesto), el seguimiento forward mide además toda estrategia **activa** en el registro, desde el momento en que se activó (para una de fábrica que nadie encendió, como C29, desde la primera vez que el runner la vio; se anota una vez y no se mueve). C30 conserva su inicio de `config/forward-strategies.json` y sigue mientras el registro la tenga activa. Desactivar o borrar una estrategia deja de añadirle operaciones; las ya guardadas permanecen. El motor viejo D ya no corre: no hay otro sitio donde operen estrategias.
+
+## Funding en el neto: desconocido no es cero (2026-10-12)
+
+Hasta esta corrección `replay()` no pasaba los periodos de funding al `Book` (el argumento `funding` solo alimenta la característica `fundpct`), así que todas las operaciones forward salían con `funding_usd = 0.0` y `funding_complete = false`: el neto no incluía funding y nadie podía distinguir un cero observado de un dato que faltaba.
+
+- **Libro:** cada operación lleva `funding_usd` (`null` si ningún periodo cubre el tiempo mantenido, una suma parcial si cubre parte, el valor completo si cubre todo), `funding_complete`, `funding_status` (`complete`, `partial` o `unknown`), `funding_covered_ms` y `funding_held_ms`. Un cero observado es `0.0` con `funding_complete = true`.
+- **Forward:** `run_forward` pasa los periodos al libro. `forward_trade` sigue siendo solo de añadir: una operación guardada sin funding conserva su payload original. Cuando los periodos en disco cubren **todo** el tiempo mantenido se agrega una fila en `forward_trade_funding` (versión `funding-reconcile.v1`, hash de los periodos usados, funding, pnl y neto resultantes). Si falta cualquier tramo, no se escribe nada y la operación sigue incompleta. Es idempotente y las filas no se pueden modificar ni borrar.
+- **Resumen:** `forward-reliability.json` usa la fila conciliada cuando existe y añade `funding_complete_trades`, `funding_incomplete_trades`, `net_is_definitive` y `mean_net_bp_funding_complete`. `mean_net_bp` y `pnl_usd` solo son el neto definitivo cuando `net_is_definitive` es `true`; si no, son parciales (sin el funding de las operaciones incompletas).
+- **Divergencias:** `net_bp` ya no cuenta para `diverged_trades`: completar el funding no es un hueco de velas.
+- **Backtests sin base de mercado** (`run_books`, `futures_strategy_backtest` sin `funding=`) siguen sin funding y ahora se muestran como no definitivos.
