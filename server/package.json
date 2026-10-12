@@ -14,6 +14,8 @@
     "candles:backfill": "node --experimental-strip-types src/features/kraken-futures/official-candles-backfill-cli.ts",
     "funding:backfill": "node --experimental-strip-types src/features/kraken-futures/funding-backfill-cli.ts",
     "quotes:archive": "node --experimental-strip-types src/features/kraken-futures/quote-archive-cli.ts",
+    "book:collect": "node --experimental-strip-types src/features/orderbook-collector/collector-main.ts",
+    "book:loadtest": "node --experimental-strip-types src/features/orderbook-collector/loadtest.ts",
     "market:prune": "node --experimental-strip-types src/features/kraken-futures/futures-market-prune-cli.ts"
   },
   "dependencies": {
