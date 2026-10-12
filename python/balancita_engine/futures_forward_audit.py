@@ -73,6 +73,7 @@ def audit(forward_db, registration, specs, candidates=None, market_db=None, now_
                 funding_reconciled_aside=sum(1 for k in keys if k in reconciled),
                 late_1m_by_product={p: s.get("late_1m") for p, s in statuses.items()},
                 missing_1m_by_product={p: s.get("missing_1m") for p, s in statuses.items()},
+                candle_lag_ms_by_product={p: s.get("candle_lag_ms") for p, s in statuses.items()},
                 diverged_trades=sum(s.get("diverged_trades", 0) for s in statuses.values()))
             entry["funding_unknown_trades"] = (
                 entry["trades"] - entry["funding_complete_in_original"] - entry["funding_reconciled_aside"])

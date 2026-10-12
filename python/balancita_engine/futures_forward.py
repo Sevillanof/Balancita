@@ -220,7 +220,11 @@ def run_forward(market_db, db_path, specs, registration, products):
                     db.execute("INSERT OR REPLACE INTO forward_status VALUES(?,?,?)", (
                         strategy_id, product_id, json.dumps({
                             "checked_ms": now, "missing_1m": missing, "late_1m": len(late_ones),
-                            "diverged_trades": diverged})))
+                            "diverged_trades": diverged,
+                            # How far behind "now" the newest stored 1m candle closed: a capture that stopped
+                            # leaves no holes inside the range, only a growing lag.
+                            "candle_lag_ms": (now - (max(c["bucket_start"] for c in ones) + ONE_MINUTE_MS))
+                            if ones else None})))
                     position = None if book.position is None else {
                         key: str(book.position[key]) for key in ("side", "entry", "stop", "target", "opened_at")}
                     db.execute("INSERT OR REPLACE INTO forward_open VALUES(?,?,?,?)",
@@ -272,6 +276,8 @@ def write_summary(db_path, specs, registration, out_path):
                     live_only, first_ms=info["start_ms"], last_ms=max(now, info["start_ms"] + 1)),
                 "missing_candles_1m": sum(st["missing_1m"] for st in statuses),
                 "diverged_trades": sum(st["diverged_trades"] for st in statuses),
+                "max_candle_lag_ms": max((st["candle_lag_ms"] for st in statuses
+                                          if st.get("candle_lag_ms") is not None), default=None),
                 "by_product": {p: {k: v for k, v in summarize_trades(t).items()
                                    if k in ("trades", "hit_rate", "mean_net_bp", "pnl_usd")}
                                for p, t in sorted(by_product.items())},
