@@ -12,6 +12,7 @@ contaminated and only show plumbing. Only ``mode=forward`` rows (hours that clos
 """
 
 import argparse
+import fcntl
 import json
 import math
 import os
@@ -41,9 +42,51 @@ CREATE TABLE IF NOT EXISTS decision(
 CREATE TABLE IF NOT EXISTS trade(
   product_id TEXT NOT NULL, decision_ms INTEGER NOT NULL, mode TEXT NOT NULL, payload TEXT NOT NULL,
   PRIMARY KEY(product_id, decision_ms)) STRICT;
+CREATE TABLE IF NOT EXISTS segment(
+  segment_id INTEGER PRIMARY KEY AUTOINCREMENT, start_ms INTEGER NOT NULL, kind TEXT NOT NULL, note TEXT,
+  created_ms INTEGER NOT NULL) STRICT;
+CREATE TABLE IF NOT EXISTS interruption(
+  interruption_id INTEGER PRIMARY KEY AUTOINCREMENT, from_ms INTEGER NOT NULL, to_ms INTEGER NOT NULL,
+  reason TEXT NOT NULL, recorded_ms INTEGER NOT NULL) STRICT;
+CREATE TABLE IF NOT EXISTS run_log(at_ms INTEGER PRIMARY KEY) STRICT;
+CREATE TRIGGER IF NOT EXISTS segment_no_update BEFORE UPDATE ON segment BEGIN SELECT RAISE(ABORT, 'append-only'); END;
+CREATE TRIGGER IF NOT EXISTS interruption_no_update BEFORE UPDATE ON interruption BEGIN SELECT RAISE(ABORT, 'append-only'); END;
 CREATE TRIGGER IF NOT EXISTS decision_no_update BEFORE UPDATE ON decision BEGIN SELECT RAISE(ABORT, 'append-only'); END;
 CREATE TRIGGER IF NOT EXISTS trade_no_update BEFORE UPDATE ON trade BEGIN SELECT RAISE(ABORT, 'append-only'); END;
 """
+
+
+# A run that was down longer than this did not see every closed hour: it resumes in a new segment.
+MAX_SILENCE_MS = 2 * HOUR_MS
+
+
+def plan_segments(db, original_start_ms, now_ms, max_silence_ms=MAX_SILENCE_MS):
+    """Keeps the experiment's original start and returns the first hour allowed to decide in the current segment.
+
+    The first call records segment 1 at ``original_start_ms``. If the last recorded activity (the last pass, else
+    the end of the last decision) is more than ``max_silence_ms`` before ``now_ms``, the silence is written as an
+    interruption and a ``resume`` segment starts at the first hour boundary after ``now_ms``: no decision is ever
+    made retroactively for the hours the process was not running. The earlier history is still loaded to warm the
+    model up, but it produces no trades.
+    """
+    with db:
+        if db.execute("SELECT COUNT(*) FROM segment").fetchone()[0] == 0:
+            db.execute("INSERT INTO segment(start_ms, kind, note, created_ms) VALUES(?,?,?,?)",
+                       (original_start_ms, "original", "registration of the experiment", now_ms))
+        last_run = db.execute("SELECT MAX(at_ms) FROM run_log").fetchone()[0]
+        last_decision = db.execute("SELECT MAX(decision_ms) FROM decision WHERE mode='forward'").fetchone()[0]
+        last_seen = last_run if last_run is not None else (
+            last_decision + HOUR_MS if last_decision is not None else None)
+        current = db.execute("SELECT MAX(start_ms) FROM segment").fetchone()[0]
+        if last_seen is not None and now_ms - last_seen > max_silence_ms:
+            resume = (now_ms // HOUR_MS + 1) * HOUR_MS
+            db.execute("INSERT INTO interruption(from_ms, to_ms, reason, recorded_ms) VALUES(?,?,?,?)",
+                       (last_seen, now_ms, "process not running (no clean stop recorded)", now_ms))
+            db.execute("INSERT INTO segment(start_ms, kind, note, created_ms) VALUES(?,?,?,?)",
+                       (resume, "resume", "first closed hour after the restart; no retroactive decisions", now_ms))
+            current = resume
+        db.execute("INSERT OR IGNORE INTO run_log VALUES(?)", (now_ms,))
+    return max(original_start_ms, current)
 
 
 def hourly(candles_1m):
@@ -106,12 +149,15 @@ def run_product(db, predictor, product_id, candles, *, mode, first_decision_ms, 
     busy_until, added = 0, 0
     for i in range(MIN_CONTEXT, len(candles)):
         decision_ms = candles[i - 1]["bucket_start"] + HOUR_MS  # candle i-1 just closed
-        if decision_ms < first_decision_ms or decision_ms < busy_until or (i % stride):
+        if i % stride:
             continue
-        if db.execute("SELECT 1 FROM decision WHERE product_id=? AND decision_ms=?", (product_id, decision_ms)).fetchone():
-            if db.execute("SELECT side FROM decision WHERE product_id=? AND decision_ms=?",
-                          (product_id, decision_ms)).fetchone()[0]:
+        existing = db.execute("SELECT side FROM decision WHERE product_id=? AND decision_ms=?",
+                              (product_id, decision_ms)).fetchone()
+        if existing is not None:  # decided before (even before this segment): keeps one position at a time
+            if existing[0]:
                 busy_until = decision_ms + HORIZON * HOUR_MS
+            continue
+        if decision_ms < first_decision_ms or decision_ms < busy_until:
             continue
         expected_bp = predictor.expected_log_return(candles[:i], HORIZON) * 10_000
         side = "LONG" if expected_bp > threshold else "SHORT" if expected_bp < -threshold else None
@@ -145,6 +191,14 @@ def summary(db_path):
                 s = summarize_trades(part)
                 out[mode]["by_product"][pid] = {k: s[k] for k in ("trades", "hit_rate", "mean_net_bp", "pnl_usd")}
             # Gross direction accuracy of all decisions (traded or not) is not stored: only traded ones are scored.
+        out["segments"] = [
+            {"start_ms": a, "kind": k, "note": n, "forward_trades": db.execute(
+                "SELECT COUNT(*) FROM trade WHERE mode='forward' AND decision_ms>=? AND decision_ms<COALESCE("
+                "(SELECT MIN(start_ms) FROM segment WHERE start_ms>?), 1e18)", (a, a)).fetchone()[0]}
+            for a, k, n in [(r[0], r[1], r[2]) for r in db.execute(
+                "SELECT start_ms, kind, note FROM segment ORDER BY segment_id")]]
+        out["interruptions"] = [{"from_ms": a, "to_ms": b, "reason": r} for a, b, r in db.execute(
+            "SELECT from_ms, to_ms, reason FROM interruption ORDER BY interruption_id")]
         out["decisions"] = db.execute("SELECT mode, COUNT(*), SUM(side IS NOT NULL) FROM decision GROUP BY mode").fetchall()
         return out
     finally:
@@ -172,6 +226,13 @@ def main(argv=None, predictor=None):
         from .predictor import KronosSmall
         predictor = KronosSmall(repo=args.kronos_repo, samples=args.samples)
     start_file = os.path.join(args.out, "forward-start-ms")
+    lock_handle = None
+    if args.mode == "forward":  # one writer at a time, however it was started (launchd, nohup, by hand)
+        lock_handle = open(os.path.join(args.out, "kronos.lock"), "w")
+        try:
+            fcntl.flock(lock_handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            raise SystemExit("another Kronos forward process holds {}; not starting".format(lock_handle.name))
     while True:
         now = int(time.time() * 1000)
         if args.mode == "forward":
@@ -179,12 +240,16 @@ def main(argv=None, predictor=None):
                 with open(start_file, "w", encoding="utf-8") as handle:
                     handle.write(str(now))
             with open(start_file, encoding="utf-8") as handle:
-                first = int(handle.read())
+                original_start = int(handle.read())
+            first = original_start  # replaced below by the current segment's start
         else:
             first = now - int(args.days * 86_400_000)
         db = sqlite3.connect(db_path)
         db.executescript(_SCHEMA)
         try:
+            if args.mode == "forward":
+                first = plan_segments(db, original_start, now)
+                print("segment starts {}".format(first), flush=True)
             for product_id, _tick in resolve_products():
                 since = first - (MIN_CONTEXT + HORIZON) * HOUR_MS
                 if args.source == "kraken":

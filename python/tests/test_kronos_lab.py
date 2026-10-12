@@ -103,3 +103,56 @@ class KronosLabTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ResumeSegmentTests(unittest.TestCase):
+    def _db(self, folder):
+        db = sqlite3.connect(os.path.join(folder, "k.sqlite"))
+        db.executescript(lab._SCHEMA)
+        return db
+
+    def test_a_long_silence_starts_a_new_segment_without_moving_the_original_start(self):
+        with tempfile.TemporaryDirectory() as d:
+            db = self._db(d)
+            original = START
+            self.assertEqual(lab.plan_segments(db, original, START + 1000), original)
+            # Passes every hour keep the segment.
+            for h in range(1, 5):
+                self.assertEqual(lab.plan_segments(db, original, START + h * lab.HOUR_MS), original)
+            now = START + 30 * lab.HOUR_MS + 600_000  # down for 26 h
+            resume = lab.plan_segments(db, original, now)
+            self.assertEqual(resume, START + 31 * lab.HOUR_MS)
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM interruption").fetchone()[0], 1)
+            self.assertEqual([r[0] for r in db.execute("SELECT kind FROM segment ORDER BY segment_id")], ["original", "resume"])
+            # A second pass in the same run does not open another interruption.
+            self.assertEqual(lab.plan_segments(db, original, now + 3_600_000), resume)
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM interruption").fetchone()[0], 1)
+            with self.assertRaises(sqlite3.DatabaseError):
+                db.execute("UPDATE segment SET start_ms=0")
+
+    def test_a_database_without_run_log_uses_its_last_decision(self):
+        with tempfile.TemporaryDirectory() as d:
+            db = self._db(d)
+            db.execute("INSERT INTO decision VALUES('PF_XBTUSD', ?, 'forward', 'm', 0, 1, NULL)", (START + 10 * lab.HOUR_MS,))
+            db.commit()
+            resume = lab.plan_segments(db, START, START + 40 * lab.HOUR_MS + 5)
+            self.assertEqual(resume, START + 41 * lab.HOUR_MS)
+
+    def test_no_decisions_are_made_for_the_hours_before_the_segment(self):
+        ones, series = _hours(400)
+        candles = lab.hourly(ones)
+        with tempfile.TemporaryDirectory() as d:
+            db = self._db(d)
+            segment_start = candles[300]["bucket_start"]
+            added = lab.run_product(db, Oracle(series), "PF_XBTUSD", candles, mode="forward", first_decision_ms=segment_start)
+            self.assertGreater(added, 0)
+            self.assertGreaterEqual(db.execute("SELECT MIN(decision_ms) FROM decision").fetchone()[0], segment_start)
+
+    def test_a_second_forward_process_does_not_start(self):
+        with tempfile.TemporaryDirectory() as d:
+            handle = open(os.path.join(d, "kronos.lock"), "w")
+            import fcntl
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            with self.assertRaises(SystemExit):
+                lab.main(["--out", d, "--mode", "forward"], predictor=object())
+            handle.close()
