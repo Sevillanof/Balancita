@@ -134,6 +134,16 @@ class QwenSelector:
         return {"action": chosen, "signal_id": backing["signal_id"], "reason": "qwen_" + chosen.lower(), "detail": detail}
 
 
+class StoredOnly:
+    """Stands in for a selector when a run is rebuilt from stored selections only (same identity, never decides)."""
+
+    def __init__(self, selector_id, version):
+        self.selector_id, self.version = selector_id, version
+
+    def select(self, product_id, cycle_ms, signals, context=None):
+        return _wait("not_stored")
+
+
 def _model(provider):
     try:
         return provider.identity().get("model_ref")

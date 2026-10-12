@@ -20,6 +20,8 @@ CREATE TABLE IF NOT EXISTS candidates(signal_id TEXT PRIMARY KEY, product_id TEX
   payload TEXT NOT NULL) STRICT;
 CREATE TABLE IF NOT EXISTS candidate_outcomes(signal_id TEXT PRIMARY KEY, payload TEXT NOT NULL) STRICT;
 CREATE TABLE IF NOT EXISTS executions(execution_id TEXT PRIMARY KEY, payload TEXT NOT NULL) STRICT;
+CREATE TABLE IF NOT EXISTS checkpoints(key TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, digest TEXT NOT NULL,
+  info TEXT NOT NULL, blob BLOB NOT NULL) STRICT;
 CREATE TABLE IF NOT EXISTS trades(trade_id TEXT PRIMARY KEY, arm TEXT NOT NULL, payload TEXT NOT NULL) STRICT;
 """
 
@@ -111,6 +113,25 @@ class DecisionStore:
         with self.lock:
             rows = self.db.execute("SELECT signal_id, payload FROM candidate_outcomes").fetchall()
         return {signal_id: json.loads(payload) for signal_id, payload in rows}
+
+    def has_candidate_outcome(self, signal_id):
+        with self.lock:
+            return self.db.execute("SELECT 1 FROM candidate_outcomes WHERE signal_id=?", (signal_id,)).fetchone() is not None
+
+    def put_checkpoint(self, key, fingerprint, digest, info, blob):
+        """The latest checkpoint of an experiment. Derived data (a cache of replaying the log), so it is replaced."""
+        with self.lock, self.db:
+            self.db.execute("INSERT OR REPLACE INTO checkpoints VALUES(?,?,?,?,?)",
+                            (key, fingerprint, digest, self._dump(info), blob))
+
+    def get_checkpoint(self, key):
+        with self.lock:
+            row = self.db.execute("SELECT fingerprint, digest, info, blob FROM checkpoints WHERE key=?", (key,)).fetchone()
+        return None if row is None else {"fingerprint": row[0], "digest": row[1], "info": json.loads(row[2]), "blob": row[3]}
+
+    def delete_checkpoint(self, key):
+        with self.lock, self.db:
+            self.db.execute("DELETE FROM checkpoints WHERE key=?", (key,))
 
     def put_execution(self, execution):
         return self._put("executions", "execution_id", execution["execution_id"], execution)
