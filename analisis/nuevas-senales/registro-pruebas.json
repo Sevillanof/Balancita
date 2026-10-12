@@ -1,0 +1,18 @@
+{
+  "fecha": "2026-10-12",
+  "nota": "Solo sondeos de disponibilidad, cobertura, huecos, revisiones y volatilidad. No se calculo ninguna relacion senal-retorno. Reservado: ultimos 60 dias; holdout no ejecutado.",
+  "configuraciones_evaluadas": [],
+  "sondeos_sin_retorno": [
+    {"id": "S1", "descripcion": "cobertura y huecos de open-interest, cvd, liquidation-volume, long-short-info, top-traders en 8 productos"},
+    {"id": "S2", "descripcion": "estabilidad de revisiones en 72 buckets de OI durante 75 s"},
+    {"id": "S3", "descripcion": "profundidad del historial de funding (tope ~8909 h desde 2025-10-06)"},
+    {"id": "S4", "descripcion": "volatilidad a 1h/4h/24h por producto (240 dias) para el movimiento minimo"},
+    {"id": "S5", "descripcion": "cobertura de OI y liquidaciones desde 2023-03 en 8 productos"}
+  ],
+  "candidatos_preregistrados": [
+    {"familia": "funding_oi", "id": "FO-1", "descripcion": "desarme: OI cae y liquidaciones altas, reversion a 4-24 h, entrada t+2 (solo OI+liquidaciones)", "estado": "no ejecutada"},
+    {"familia": "funding_oi", "id": "FO-2", "descripcion": "FO-1 condicionada a funding extremo", "estado": "no ejecutada"},
+    {"familia": "momentum_relativo", "id": "MR-1", "descripcion": "long/short cross-section semanal", "estado": "no ejecutada"},
+    {"familia": "order_flow", "id": "OF-1", "descripcion": "desbalance agresor extremo, entrada t+2, como filtro de FO", "estado": "no ejecutada"}
+  ]
+}
