@@ -1,0 +1,19 @@
+docs/fo1-preregistro.md
+  s_a1bf2e175b9967::t_d59d3d448f0704 1-35
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7ce58f3b5bbd427b1d4e494d49c4067b23466210",
+  "prompts": {},
+  "sessions": {
+    "s_a1bf2e175b9967": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2f9cd751-f0b2-483e-8473-991c9321c73c",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
