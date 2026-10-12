@@ -92,6 +92,7 @@ describe('archiveQuotes', () => {
       minIntervalMs: 1_000,
       gapMs: 60_000,
       ...opts,
+      now: 501_000,
     })
     expect(result.gaps).toBe(1)
     const db = new DatabaseSync(quotes)
@@ -134,5 +135,35 @@ describe('archiveQuotes', () => {
     })
     expect(result.stopped).toBe('low disk space')
     expect(result.stored).toBe(0)
+  })
+
+  it('flags a product that went silent while others keep coming, once', () => {
+    const { market, quotes } = setup([1_000])
+    const first = archiveQuotes({
+      marketDb: market,
+      quotesDb: quotes,
+      ...opts,
+      now: 1_000 + 600_000,
+      maxDays: 1000,
+    })
+    expect(first.silent).toEqual(['PF_ETHUSD'])
+    const again = archiveQuotes({
+      marketDb: market,
+      quotesDb: quotes,
+      ...opts,
+      now: 1_000 + 700_000,
+      maxDays: 1000,
+    })
+    expect(again.silent).toEqual(['PF_ETHUSD'])
+    expect(again.gaps).toBe(0)
+    const db = new DatabaseSync(quotes)
+    expect(
+      (
+        db.prepare('SELECT COUNT(*) AS n FROM quote_archive_gap').get() as {
+          n: number
+        }
+      ).n,
+    ).toBe(1)
+    db.close()
   })
 })

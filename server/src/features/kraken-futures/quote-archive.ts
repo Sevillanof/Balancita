@@ -38,6 +38,8 @@ export interface QuoteArchiveResult {
   readonly gaps: number
   readonly trimmed: number
   readonly stopped: string | null
+  /** Products whose newest stored quote is older than `gapMs` right now (a silence still going on). */
+  readonly silent: readonly string[]
 }
 
 const SCHEMA = `
@@ -259,7 +261,29 @@ export function archiveQuotes(
       )
       out.exec('PRAGMA wal_checkpoint(TRUNCATE); VACUUM')
     }
-    return { read, stored, gaps, trimmed, stopped }
+    // A silence still going on is flagged now, once per silence, instead of only when quotes come back.
+    const silent: string[] = []
+    for (const [product, at] of last) {
+      const flagged = state(`silent:${product}`)
+      if (now - at > gapMs) {
+        silent.push(product)
+        if (flagged !== String(at)) {
+          logGap(
+            product,
+            at,
+            now,
+            'silent now: no new quotes for this product (still open)',
+          )
+          gaps += 1
+          setState(`silent:${product}`, String(at))
+        }
+      } else if (flagged !== undefined) {
+        out
+          .prepare('DELETE FROM quote_archive_state WHERE key=?')
+          .run(`silent:${product}`)
+      }
+    }
+    return { read, stored, gaps, trimmed, stopped, silent }
   } finally {
     src.close()
     out.close()

@@ -30,6 +30,10 @@ const pass = () => {
   console.log(
     `[quotes:archive] ${new Date().toISOString()} ${JSON.stringify(result)}`,
   )
+  if (result.silent.length)
+    console.warn(
+      `[quotes:archive] WARNING no new quotes for: ${result.silent.join(', ')}`,
+    )
   return result
 }
 
