@@ -31,6 +31,7 @@ from decimal import Decimal
 from .futures_costs import cost_model_hash, is_measured, round_trip_cost_bps
 from .futures_funding_context import HOUR_MS, funding_for
 from .futures_products import resolve_products
+from .futures_indicators import MINIMUM_CANDLES
 from .futures_simulator import IncrementalFeatures
 from .futures_strategies import update_regime
 from .multi_executor import PaperExecutor
@@ -47,12 +48,38 @@ ARMS = ("A", "B", "C")
 D = Decimal
 
 
+RECURSIVE_SPANS, MIN_WARMUP_BARS = 12, 288
+
+
+def required_warmup_ms(periods):
+    """History before the first decided cycle that the declared indicators need, in ms of 5-minute bars.
+
+    Recursive indicators (EMA, RSI, ATR, the EWMA log-volatility) never forget their seed completely: an EMA keeps
+    (1-2/(n+1)) of it per bar, so ``RECURSIVE_SPANS`` times the period brings the difference under about 1e-10 (the
+    day-long floor does the same for Wilder's RSI/ATR at 14). Cold and continuous runs then agree on actions,
+    strengths and evidence to 6+ digits; bit-identical is impossible with a different seed; windows (Bollinger, Donchian, log returns, log-volatility, SMA) need their
+    length plus one. Never less than ``MIN_WARMUP_BARS`` (a day), which also lets the regime state settle.
+    """
+    bars = MINIMUM_CANDLES
+    for kind, values in periods.items():
+        for period in values:
+            bars = max(bars, (RECURSIVE_SPANS * period if kind in ("ema", "rsi", "atr", "logvol") else period + 1) + 2)
+    return max(bars, MIN_WARMUP_BARS) * FIVE_MINUTES_MS
+
+
+def indicator_keys(periods):
+    """Names of the 5-minute features the declared indicators produce (what must be non-null to be 'ready')."""
+    names = {"ema": "ema{}", "sma": "sma{}", "rsi": "rsi{}", "atr": "atr{}", "bollinger": "bollinger_upper{}",
+             "donchian": "donchian_high{}", "logret": "logret{}", "logvol": "logvol{}"}
+    return [names[kind].format(period) for kind, values in periods.items() if kind in names for period in values]
+
+
 def funding_periods(context):
     """``[(start_ms, end_ms, relative_rate_per_hour)]`` from a ``FundingContext`` for the simulator's books."""
     return [] if context is None else [(s, s + HOUR_MS, r) for s, r in zip(context.starts, context.rates)]
 
 
-CHECKPOINT_VERSION = 1
+CHECKPOINT_VERSION = 2
 
 
 class FrameFeeder:
@@ -99,7 +126,7 @@ class FrameFeeder:
 class Experiment:
     def __init__(self, store, products, *, strategies=None, qwen=None, policy=None, experiment_id="exp1",
                  funding_contexts=None, funding_periods_by_product=None, start_ms=None, clock=None, arms=ARMS,
-                 tick_sizes=None):
+                 tick_sizes=None, warmup_ms=None):
         self.store, self.products = store, list(products)
         self.strategies = strategies or default_strategies()
         self.policy = policy or RiskPolicy()
@@ -113,7 +140,13 @@ class Experiment:
         self.arms, self.experiment_id, self.start_ms = tuple(arms), experiment_id, start_ms
         self.clock = clock or (lambda cycle_ms: cycle_ms)
         self.periods = merged_indicators(self.strategies)
-        self.last, self.shadows, self.duplicates_ignored, self.cycles = {}, {}, 0, 0
+        self.last, self.shadows, self.cycles = {}, {}, 0
+        # already_processed: candles handed in again that an earlier pass consumed (expected after a reload);
+        # duplicate_events: a closed candle delivered twice to on_frame (a real duplicate, ignored).
+        self.already_processed, self.duplicate_events = 0, 0
+        self.warmup_bars, self.first_cycle_ready = {}, {}
+        self.gaps = []
+        self.warmup_ms = required_warmup_ms(self.periods) if warmup_ms is None else int(warmup_ms)
         self.tick_sizes, self.funding_by_product = tick_sizes or {}, periods
         self.feeders = {}
 
@@ -127,7 +160,7 @@ class Experiment:
         for product, frame in heapq.merge(*streams, key=lambda item: (item[1][0], item[0])):
             self.on_frame(product, frame)
         for feeder in feeders.values():
-            self.duplicates_ignored += feeder.skipped
+            self.already_processed += feeder.skipped
             feeder.skipped = 0
         return self.report(include_table)
 
@@ -141,8 +174,7 @@ class Experiment:
 
     def fingerprint(self):
         """What a checkpoint is only valid for: change any of it and the books must be rebuilt from scratch."""
-        selectors = {arm: None if sel is None else "{}@{}".format(sel.selector_id, sel.version)
-                     for arm, sel in sorted(self.selectors.items())}
+        selectors = {arm: None if sel is None else sel.identity_key() for arm, sel in sorted(self.selectors.items())}
         return stable_hash({
             "checkpoint_version": CHECKPOINT_VERSION, "experiment_id": self.experiment_id, "start_ms": self.start_ms,
             "policy": self.policy.policy_hash(), "cost_model": cost_model_hash(), "arms": list(self.arms),
@@ -151,8 +183,9 @@ class Experiment:
 
     def _state(self):
         return {"books": self.executor.books, "issued": self.risk.issued, "consumed": self.risk.consumed,
-                "shadows": self.shadows, "last": self.last, "duplicates_ignored": self.duplicates_ignored,
-                "cycles": self.cycles, "feeders": self.feeders}
+                "shadows": self.shadows, "last": self.last, "already_processed": self.already_processed,
+                "duplicate_events": self.duplicate_events, "warmup_bars": self.warmup_bars,
+                "first_cycle_ready": self.first_cycle_ready, "gaps": self.gaps, "cycles": self.cycles, "feeders": self.feeders}
 
     def save_checkpoint(self):
         """Stores the complete state after a finished run, next to the decision log it is a cache of."""
@@ -182,20 +215,28 @@ class Experiment:
         self.executor.books = state["books"]
         self.risk.issued, self.risk.consumed = state["issued"], state["consumed"]
         self.shadows, self.last = state["shadows"], state["last"]
-        self.duplicates_ignored, self.cycles, self.feeders = state["duplicates_ignored"], state["cycles"], state["feeders"]
+        self.already_processed, self.duplicate_events = state["already_processed"], state["duplicate_events"]
+        self.warmup_bars, self.first_cycle_ready = state["warmup_bars"], state["first_cycle_ready"]
+        self.gaps, self.cycles, self.feeders = state["gaps"], state["cycles"], state["feeders"]
         self.executor.reattach_funding(list(self.executor.books.values()) + list(self.shadows.values()))
         return None
 
     def on_frame(self, product_id, frame):
         bucket, current, _, trend, regime = frame
         if bucket <= self.last.get(product_id, -1):
-            self.duplicates_ignored += 1  # the same closed candle again: nothing happens twice
+            self.duplicate_events += 1  # the same closed candle again: nothing happens twice
             return
         self.last[product_id] = bucket
         on_cycle = ((bucket + ONE_MINUTE_MS) % FIVE_MINUTES_MS == 0 and trend is not None and trend.get("ready")
-                    and current.get("ready") and (self.start_ms is None or bucket >= self.start_ms))
+                    and current.get("ready") and (self.start_ms is None or bucket + ONE_MINUTE_MS >= self.start_ms))
         if on_cycle:
+            if product_id not in self.first_cycle_ready:
+                # Were the indicators warm on the very first decided cycle? (the cold-start check)
+                self.first_cycle_ready[product_id] = all(
+                    trend.get(key) is not None for key in indicator_keys(self.periods))
             self._cycle(product_id, bucket, current, trend, regime)
+        elif (bucket + ONE_MINUTE_MS) % FIVE_MINUTES_MS == 0 and trend is not None and product_id not in self.first_cycle_ready:
+            self.warmup_bars[product_id] = self.warmup_bars.get(product_id, 0) + 1  # 5m bars seen before the start
         self.executor.on_frame(product_id, frame)
         self._manage_shadows(product_id, frame)
 
@@ -237,7 +278,7 @@ class Experiment:
 
     def _decide(self, arm, scope, product_id, cycle_ms, bucket, signals, snapshot, market, data_close_ms):
         selector = self.selectors[arm]
-        identity = "{}@{}".format(selector.selector_id, selector.version) if selector else "none"
+        identity = selector.identity_key() if selector else "none"
         ids = sorted(s["signal_id"] for s in signals)
         decision_id = stable_hash([self.experiment_id, arm, scope, product_id, cycle_ms, ids, identity])[:24]
         selection = self.store.get_selection(decision_id)
@@ -320,7 +361,15 @@ class Experiment:
             "trades": [t for t in self.store.trades() if auth_id and t["meta"].get("auth_id") == auth_id]}
 
     def report(self, include_table=True):
-        return build_report(self.store, self.executor, self.duplicates_ignored, include_table)
+        report = build_report(self.store, self.executor, self.already_processed, self.duplicate_events, include_table)
+        report["data_gaps"] = list(self.gaps)
+        report["warmup"] = {"required_ms": self.warmup_ms, "products": {p: {"bars_5m_before_start": self.warmup_bars.get(p, 0),
+                                "indicators_ready_at_first_cycle": self.first_cycle_ready.get(p)}
+                            for p in self.products}}
+        qwen = self.selectors.get("C")
+        if qwen is not None and hasattr(qwen, "model_identity"):
+            report["qwen_model"] = qwen.model_identity()
+        return report
 
 
 def _arm_stats(trades, span_days):
@@ -346,7 +395,7 @@ def _arm_stats(trades, span_days):
     }
 
 
-def build_report(store, executor, duplicates_ignored=0, include_table=True):
+def build_report(store, executor, already_processed=0, duplicate_events=0, include_table=True):
     trades = store.trades()
     candidates = store.candidates()
     outcomes = store.candidate_outcomes()
@@ -401,7 +450,8 @@ def build_report(store, executor, duplicates_ignored=0, include_table=True):
         "schema": "balancita-multi-report.v1", "arms": arms, "candidates": len(candidates),
         "selector_filters": filters,
         "qwen_vs_combiner_mean_net_bp": None if b_bp is None or c_bp is None else round(c_bp - b_bp, 4),
-        "open_positions": len(executor.open_positions()), "duplicates_ignored": duplicates_ignored,
+        "open_positions": len(executor.open_positions()), "already_processed_candles": already_processed,
+        "duplicate_events": duplicate_events,
         "candidate_table": table if include_table else None,
         "shadow_note": "shadow outcomes ignore simultaneous positions and capital limits: not executable profitability",
         "verdict": "no edge asserted: raw comparison only; validation and forward freezing are later increments"}
@@ -420,7 +470,8 @@ def verify_against_rebuild(experiment, candles):
         original = experiment.selectors["C"]
         rebuilt = Experiment(
             fresh, experiment.products, strategies=experiment.strategies,
-            qwen=None if original is None else StoredOnly(original.selector_id, original.version),
+            qwen=None if original is None else StoredOnly(original.selector_id, original.version,
+                                                          getattr(original, "model_fingerprint", lambda: None)()),
             policy=experiment.policy, experiment_id=experiment.experiment_id,
             funding_contexts=experiment.funding_contexts, funding_periods_by_product=experiment.funding_by_product,
             start_ms=experiment.start_ms, clock=experiment.clock, arms=experiment.arms, tick_sizes=experiment.tick_sizes)
@@ -435,15 +486,59 @@ def verify_against_rebuild(experiment, candles):
         fresh.close()
 
 
-def _load(market_db, products, start_ms, now_ms):
-    from .futures_replay import load_range
+def load_candles(market_db, product_id, lo_1m, lo_5m, end_ms):
+    """Official 1m candles from ``lo_1m`` and 5m candles from ``lo_5m`` (first-known revision) up to ``end_ms``.
 
+    Unlike ``futures_replay.load_range`` this adds no hidden warm-up: the caller says exactly where to start.
+    """
+    from .futures_verdicts import _OfficialCandles
+
+    market = _OfficialCandles(market_db)
+    try:
+        if not market.available:
+            raise ValueError("market DB has no per-product official candles")
+        rows = [market._candles(market.db.execute(
+            market._ROWS_SQL.format(market._WINDOW_WHERE), (product_id, interval, max(0, lo), end_ms, 2 ** 62)
+        ).fetchall()) for interval, lo in ((ONE_MINUTE_MS, lo_1m), (FIVE_MINUTES_MS, lo_5m))]
+        return rows[0], rows[1]
+    finally:
+        market.db.close()
+
+
+def load_cold(market_db, products, start_ms, now_ms, warmup_ms):
+    """Everything from ``start_ms - warmup_ms``: the history the indicators need before the first decided cycle."""
     candles = {}
     for product_id, _ in products:
         try:
-            candles[product_id] = load_range(market_db, product_id, start_ms, now_ms + ONE_MINUTE_MS)
+            candles[product_id] = load_candles(market_db, product_id, start_ms - warmup_ms, start_ms - warmup_ms,
+                                               now_ms + ONE_MINUTE_MS)
         except ValueError:
             continue
+    return candles
+
+
+def load_incremental(experiment, market_db, products, now_ms):
+    """Per-product read cursor: only candles after what each product's feeder consumed (cold products: warm-up window).
+
+    A hole between the cursor and the first new candle is not silently bridged: it is recorded in
+    ``experiment.gaps`` and reported (the books keep running; ``--rebuild`` redoes them once the hole is filled).
+    """
+    candles = {}
+    for product_id, _ in products:
+        feeder = experiment.feeders.get(product_id)
+        if feeder is None or feeder.last_one < 0:
+            lo_1m = lo_5m = (experiment.start_ms or 0) - experiment.warmup_ms
+        else:
+            lo_1m, lo_5m = feeder.last_one + 1, feeder.last_five + 1
+        try:
+            ones, fives = load_candles(market_db, product_id, lo_1m, lo_5m, now_ms + ONE_MINUTE_MS)
+        except ValueError:
+            continue
+        if feeder is not None and feeder.last_one >= 0 and ones and ones[0]["bucket_start"] > feeder.last_one + ONE_MINUTE_MS:
+            gap = {"product_id": product_id, "from_ms": feeder.last_one + ONE_MINUTE_MS, "to_ms": ones[0]["bucket_start"]}
+            if gap not in experiment.gaps:
+                experiment.gaps.append(gap)
+        candles[product_id] = (ones, fives)
     return candles
 
 
@@ -462,6 +557,8 @@ def main(argv=None):
                         help="ignore the checkpoint and rebuild every book from the start (after a hole in the candles was filled)")
     parser.add_argument("--verify", action="store_true",
                         help="after the pass, rebuild from scratch in memory on the stored selections and require the same ledger")
+    parser.add_argument("--warmup-hours", type=float, default=None,
+                        help="tests only: override the warm-up computed from the indicator windows")
     parser.add_argument("--loop-seconds", type=float, default=0, help="repeat every N seconds (0: once); 300 is the cycle")
     args = parser.parse_args(argv)
     os.makedirs(args.out, exist_ok=True)
@@ -482,7 +579,7 @@ def main(argv=None):
         experiment = Experiment(
             store, [p for p, _ in products], qwen=qwen, experiment_id=args.experiment_id,
             funding_contexts=contexts, start_ms=start, clock=lambda cycle_ms: int(time.time() * 1000),
-            tick_sizes=dict(products))
+            tick_sizes=dict(products), warmup_ms=None if args.warmup_hours is None else args.warmup_hours * 3_600_000)
         resumed = False
         if args.rebuild:
             store.delete_checkpoint("experiment:" + args.experiment_id)
@@ -491,14 +588,13 @@ def main(argv=None):
             resumed = reason is None
             if reason not in (None, "no_checkpoint"):
                 print("multi: checkpoint not used ({}); rebuilding from the start".format(reason), flush=True)
-        from_ms = min(experiment.last.values()) if resumed and experiment.last else start
-        candles = _load(args.market_db, products, from_ms, now)
+        candles = load_incremental(experiment, args.market_db, products, now)
         report = experiment.run(candles, include_table=False)
         args.rebuild = False
         info = experiment.save_checkpoint()
         report = dict(report, checkpoint=dict(info, resumed=resumed))
         if args.verify:
-            full = _load(args.market_db, products, start, now)
+            full = load_cold(args.market_db, products, start, now, experiment.warmup_ms)
             report["verification"] = verify_against_rebuild(experiment, full)
             print("multi: verification {}".format("OK" if report["verification"]["equal"] else "DIFFERENT"), flush=True)
         path = os.path.join(args.out, "multi-report.json")

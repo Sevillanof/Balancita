@@ -10,11 +10,13 @@ action BUY / SELL / WAIT. A selection is only a proposal: the risk engine decide
   the actions backed by a strategy signal; any failure, malformed answer or timeout is WAIT.
 """
 
+import hashlib
+import os
 import time
 from decimal import Decimal
 
 from . import futures_llm_decisions as llm
-from .multi_signals import BUY, SELL, WAIT, is_candidate
+from .multi_signals import BUY, SELL, WAIT, is_candidate, stable_hash
 
 D = Decimal
 SELECT_QUESTION = {
@@ -41,7 +43,14 @@ def _strongest(signals, action):
     return max(pool, key=lambda s: (D(s["strength"]), s["strategy_id"])) if pool else None
 
 
-class StrategyDirect:
+class _Plain:
+    """Selectors without a model: the identity is just id@version."""
+
+    def identity_key(self):
+        return "{}@{}".format(self.selector_id, self.version)
+
+
+class StrategyDirect(_Plain):
     selector_id, version = "strategy-direct", 1
 
     def select(self, product_id, cycle_ms, signals, context=None):
@@ -52,7 +61,7 @@ class StrategyDirect:
                 "reason": "strategy_signal", "detail": {}}
 
 
-class DeterministicCombiner:
+class DeterministicCombiner(_Plain):
     """Net strength = sum of BUY strengths minus sum of SELL strengths; trade the side that clears the thresholds.
 
     The side needs a net strength of at least ``min_net`` and, when the other side also has signals, at least
@@ -131,6 +140,52 @@ class _Budget:
                 self.provider.timeout = previous
 
 
+_FILE_HASHES = {}
+
+
+def file_sha256(path):
+    """SHA-256 of a model file, cached per (path, size, mtime): hashing a multi-GB GGUF once per process is enough."""
+    stat = os.stat(path)
+    key = (path, stat.st_size, stat.st_mtime_ns)
+    if key not in _FILE_HASHES:
+        digest = hashlib.sha256()
+        with open(path, "rb") as handle:
+            for block in iter(lambda: handle.read(1 << 22), b""):
+                digest.update(block)
+        _FILE_HASHES[key] = digest.hexdigest()
+    return _FILE_HASHES[key]
+
+
+def served_model(provider, hash_file=file_sha256):
+    """What the model server really loaded: configured ref, GGUF path/size/sha256, alias and build (None = unknown)."""
+    try:
+        info = provider.identity() or {}
+    except Exception:
+        info = {}
+    props = info.get("props") or {}
+    path = props.get("model_path")
+    found = {"configured_ref": info.get("model_ref"), "model_path": path, "model_file": os.path.basename(path) if path else None,
+             "model_alias": props.get("model_alias"), "build_info": props.get("build_info"), "size_bytes": None, "sha256": None}
+    if path:
+        try:
+            found["size_bytes"] = os.stat(path).st_size
+            found["sha256"] = hash_file(path)
+        except OSError:
+            pass  # the server may run on another machine: the file is then not hashable from here
+    return found
+
+
+def model_fingerprint(found):
+    """Short stable id of the served model: the file hash when readable, else file name + size + alias + build, else
+    the configured ref marked unverified. Two different answers here never share stored decisions."""
+    if found.get("sha256"):
+        return "sha256:" + found["sha256"][:16]
+    if found.get("model_file"):
+        return "file:" + stable_hash([found["model_file"], found.get("size_bytes"), found.get("model_alias"),
+                                      found.get("build_info")])[:16]
+    return "unverified:" + str(found.get("configured_ref"))
+
+
 class QwenSelector:
     selector_id, version = "qwen-select", 1
 
@@ -142,10 +197,31 @@ class QwenSelector:
         self.template = template or config["templates"][config["default_version"]]
         self.mode = mode or config["probability_source"]
         self.temperature, self.timeout_ms = temperature, timeout_ms
+        self._served = None
+
+    def model_identity(self):
+        """The model as served when this selector was created or first used (cached; see ``select`` for changes)."""
+        if self._served is None:
+            self._served = served_model(self.provider)
+        return dict(self._served, fingerprint=model_fingerprint(self._served))
+
+    def model_fingerprint(self):
+        return model_fingerprint(self.model_identity())
+
+    def identity_key(self):
+        return "{}@{}:{}".format(self.selector_id, self.version, self.model_fingerprint())
+
+    def _known_hash(self, path):
+        """Re-checking the model each cycle must not re-hash gigabytes: reuse the hash while path/size/mtime match."""
+        return file_sha256(path)
 
     def select(self, product_id, cycle_ms, signals, context=None):
         candidates = [s for s in signals if is_candidate(s)]
         state = state_text(product_id, signals, context)
+        expected = self.model_fingerprint()
+        now_served = model_fingerprint(served_model(self.provider, hash_file=self._known_hash))
+        if now_served != expected:  # the server swapped its model under a running experiment: never mix the two
+            return _wait("model_changed", {"expected": expected, "served": now_served})
         try:
             budget = _Budget(self.provider, self.timeout_ms / 1000, self.clock)
             answer = llm.ask_state(budget, state, SELECT_QUESTION, self.temperature, self.template, self.mode)
@@ -156,7 +232,10 @@ class QwenSelector:
                 "question": "{}@{}".format(SELECT_QUESTION["id"], SELECT_QUESTION["version"]),
                 "prompt_version": self.template["version"], "prompt_hash": llm.prompt_hash(answer["prompt"], self.template),
                 "state": state, "probabilities": {k: "{:.4f}".format(v) for k, v in result["probabilities"].items()},
-                "source": answer["source"], "latency_ms": latency, "model": _model(self.provider),
+                "source": answer["source"], "latency_ms": latency, "model": self.model_identity(),
+                "order_probabilities": [
+                    {"order": o["order"], "probabilities": {k: "{:.4f}".format(v) for k, v in o["probabilities"].items()}}
+                    for o in (output.get("timings") or {}).get("order_probabilities", [])],
             }
         except QwenTimeout:
             return _wait("qwen_timeout", {"budget_ms": self.timeout_ms})
@@ -175,15 +254,15 @@ class QwenSelector:
 class StoredOnly:
     """Stands in for a selector when a run is rebuilt from stored selections only (same identity, never decides)."""
 
-    def __init__(self, selector_id, version):
-        self.selector_id, self.version = selector_id, version
+    def __init__(self, selector_id, version, fingerprint=None):
+        self.selector_id, self.version, self.fingerprint = selector_id, version, fingerprint
+
+    def model_fingerprint(self):
+        return self.fingerprint
+
+    def identity_key(self):
+        base = "{}@{}".format(self.selector_id, self.version)
+        return base if self.fingerprint is None else "{}:{}".format(base, self.fingerprint)
 
     def select(self, product_id, cycle_ms, signals, context=None):
         return _wait("not_stored")
-
-
-def _model(provider):
-    try:
-        return provider.identity().get("model_ref")
-    except Exception:
-        return None

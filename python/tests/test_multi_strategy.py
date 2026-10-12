@@ -157,7 +157,7 @@ class AcceptanceTests(unittest.TestCase):
         again = twice.run({PRODUCT: WALK})  # every candle arrives a second time
         self.assertEqual(twice.ledger_hash(), once.ledger_hash())
         self.assertEqual(len(store.trades()), len(store_once.trades()))
-        self.assertGreaterEqual(again["duplicates_ignored"], len(WALK[0]))
+        self.assertGreaterEqual(again["already_processed_candles"], len(WALK[0]))
         # An authorization can be redeemed once only.
         risk = RiskEngine()
         verdict = risk.evaluate(
@@ -402,7 +402,7 @@ class CheckpointTests(unittest.TestCase):
                 self.assertEqual({k: v["entry"] for k, v in second.executor.open_positions().items()},
                                  {k: v["entry"] for k, v in whole.executor.open_positions().items()})
                 self.assertEqual(second.report()["arms"], whole.report()["arms"])
-                self.assertGreaterEqual(second.duplicates_ignored, split)
+                self.assertGreaterEqual(second.already_processed, split)
                 self.assertIs(next(iter(second.executor.books.values())).funding,
                               second.executor.shared_funding(PRODUCT))
                 check = verify_against_rebuild(second, {PRODUCT: WALK})
