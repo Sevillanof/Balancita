@@ -45,6 +45,15 @@
    "pruebas": 1,
    "resultado": "ventaja no demostrada: 173 semanas, bruto +154 pb/semana (IC90 -4 a +316), neto +127 pb, umbral 285 pb; IC de Spearman ~0 (t 0,57); supera el 98,5 % de selecciones aleatorias; sin HYPE y ZEC neto +90 pb",
    "archivo": "mr1/mr1_resultados.json"
+  },
+  {
+   "id": "MR-1X v1 (prueba 8)",
+   "especificacion": "mr1x/mr1x_spec.json (congelada y subida antes de calcular retornos; auditoria sin retornos)",
+   "datos": "2023-03 a 2026-08-01, 477 PF_* con velas (293 no listados hoy), liquidez >=1M USD/dia",
+   "horizontes": "semanal",
+   "pruebas": 1,
+   "resultado": "ventaja no demostrada: 154 semanas, neto +57,9 pb/semana (originales en las mismas semanas +114,8), IC90 bruto -38 a +244, umbral 266; alfa IC90 -29 a +218; azar p 0,045 sin corregir y 0,36 con Bonferroni x8; sin top-3 aportantes -5,8 pb; liquidez >=5M -49,5 pb",
+   "archivo": "mr1x/mr1x_resultados.json"
   }
  ],
  "sondeos_sin_retorno": [
@@ -102,9 +111,13 @@
    "descripcion": "referencia solo precio: contraria a los mayores movimientos de 4 h; bruto +28,7 pb (4 h) y +93,4 pb (24 h), 259 clusters",
    "estado": "observacion post hoc de una referencia, NO es un resultado: el corte por ranking global usa toda la muestra y el solape con mx-meanrev (que fallo) no esta descartado. No usar para decidir sin un preregistro con umbral causal.",
    "seguimiento": "Probada como RE-1 con umbral causal: el bruto cayo de +93 pb a +20 pb a 24 h; el efecto observado era en gran parte de la seleccion."
+  },
+  {
+   "id": "RC-RE1",
+   "descripcion": "La sesion de la Mac inicio su propia version de RE-1 y una descarga parcial de velas PF_; las detuvo sin producir cifras y no cuentan como pruebas ejecutadas."
   }
  ],
  "pruebas_acumuladas_re1": 2,
- "pruebas_acumuladas_total_nuevas_senales": 7,
- "pruebas_acumuladas_mr1": 1
+ "pruebas_acumuladas_total_nuevas_senales": 8,
+ "pruebas_acumuladas_mr1": 2
 }
