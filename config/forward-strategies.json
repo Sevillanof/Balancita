@@ -8,6 +8,12 @@
       "start_ms": 1791397200000,
       "registered": "2026-10-07T18:20:00Z",
       "why": "Only candidate_edge of the 2026-10-07 research; its 12 h lookback was chosen after seeing the second 240-day range, so only new data can validate it."
+    },
+    "c32-funding-contrarian-24h-perp-v1": {
+      "start_ms": 1791806400000,
+      "registered": "2026-10-12T09:20:00Z",
+      "why": "Funding extremo como senal contraria a 24 h. El estudio de 1 ano (odd/tasks/qwen-funding.md) dio ~19 pb brutos a 24 h, debil y con solapamiento; solo los trades posteriores a start_ms cuentan. Revisar con ~100 trades.",
+      "no_backtest": true
     }
   }
 }

@@ -147,3 +147,44 @@ class FundingReplayTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FundingStrategyTests(unittest.TestCase):
+    """C32: the funding percentile as a 5m feature and the spec that trades it."""
+
+    def test_frames_add_fundpct_only_with_funding_and_without_lookahead(self):
+        from balancita_engine.futures_simulator import frames
+
+        first = ONES[0]["bucket_start"]
+        periods = [(first - 800 * H + i * H, 1e-5 + i * 1e-8) for i in range(1000)]
+        plain = [f for f in frames(ONES, FIVES)]
+        with_funding = [f for f in frames(ONES, FIVES, funding=fc.FundingContext(periods))]
+        self.assertEqual(len(plain), len(with_funding))
+        self.assertTrue(all("fundpct" not in f[3] for f in plain if f[3]))
+        seen = [f[3]["fundpct"] for f in with_funding if f[3] and "fundpct" in f[3]]
+        self.assertTrue(seen)
+        # A future spike in the funding changes nothing for earlier frames.
+        spiked = periods + [(first + 100 * H, 1.0)]
+        again = [f for f in frames(ONES, FIVES, funding=fc.FundingContext(spiked))]
+        cut = first + 90 * H
+        self.assertEqual([f[3].get("fundpct") for f in with_funding if f[3] and f[0] < cut],
+                         [f[3].get("fundpct") for f in again if f[3] and f[0] < cut])
+
+    def test_c32_sells_high_funding_buys_low_and_is_flat_without_funding(self):
+        from balancita_engine.futures_replay import replay
+        from balancita_engine.futures_spec_strategy import load_specs
+
+        spec = load_specs()["c32-funding-contrarian-24h-perp-v1"]
+        first, last = ONES[0]["bucket_start"], ONES[-1]["bucket_start"]
+        hours = (last - first) // H + 900
+        start = first - 800 * H
+        rising = fc.FundingContext([(start + i * H, 1e-5 + i * 1e-8) for i in range(hours)])  # always the top of its month
+        falling = fc.FundingContext([(start + i * H, 1e-5 - i * 1e-8) for i in range(hours)])
+        args = dict(start_ms=ONES[400]["bucket_start"], product_id="PF_XBTUSD")
+        (flat,) = replay([spec], ONES, FIVES, **args)
+        (short,) = replay([spec], ONES, FIVES, funding=rising, **args)
+        (long,) = replay([spec], ONES, FIVES, funding=falling, **args)
+        self.assertEqual(len(flat.trades) + (flat.position is not None), 0)
+        sides = lambda b: {t["side"] for t in b.trades} | ({b.position["side"]} if b.position else set())
+        self.assertEqual(sides(short), {"SHORT"})
+        self.assertEqual(sides(long), {"LONG"})

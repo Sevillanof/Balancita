@@ -1,0 +1,108 @@
+{
+  "schema": "balancita-strategy.v1",
+  "id": "c32-funding-contrarian-24h-perp-v1",
+  "version": 1,
+  "name": "C32 Funding contrario 24 h",
+  "description": "Contra el funding extremo: vende cuando el ultimo funding horario cerrado esta en el 10 % mas alto de los 30 dias anteriores (los largos pagan de mas) y compra cuando esta en el 10 % mas bajo. Stop de 2 sigmas diarias, objetivo o 24 h. Registrada el 2026-10-12 para medirla hacia delante: la regla se fijo antes de ver resultados, pero el estudio previo de 1 ano (odd/tasks/qwen-funding.md) ya la miraba.",
+  "params": {
+    "pct_high": "90",
+    "pct_low": "10",
+    "stop_atr": "2",
+    "target_stop_ratio": "1.5"
+  },
+  "indicators": {
+    "logvol": [
+      288
+    ]
+  },
+  "rules": {
+    "gates": [
+      {
+        "require": "trend",
+        "reason": "trend_features_unavailable",
+        "condition": "trend_features_ready"
+      }
+    ],
+    "checks": [
+      {
+        "name": "long",
+        "node": {
+          "all": [
+            {
+              "available": "funding_percentile_available",
+              "operand": "5m.fundpct"
+            },
+            {
+              "available": "log_volatility_available",
+              "operand": "5m.logvol288"
+            },
+            {
+              "cmp": "funding_percentile_at_or_below_low",
+              "left": "5m.fundpct",
+              "op": "<=",
+              "right": "$pct_low"
+            }
+          ]
+        }
+      },
+      {
+        "name": "short",
+        "node": {
+          "all": [
+            {
+              "available": "funding_percentile_available",
+              "operand": "5m.fundpct"
+            },
+            {
+              "available": "log_volatility_available",
+              "operand": "5m.logvol288"
+            },
+            {
+              "cmp": "funding_percentile_at_or_above_high",
+              "left": "5m.fundpct",
+              "op": ">=",
+              "right": "$pct_high"
+            }
+          ]
+        }
+      }
+    ],
+    "sides": {
+      "LONG": {
+        "requires": [
+          "long"
+        ],
+        "reason": "c32_long_funding_low",
+        "invalidation": "stop_or_24h_time_stop"
+      },
+      "SHORT": {
+        "requires": [
+          "short"
+        ],
+        "reason": "c32_short_funding_high",
+        "invalidation": "stop_or_24h_time_stop"
+      }
+    },
+    "exit": {
+      "LONG": {
+        "cmp": "no_rule_exit_stop_target_or_24h",
+        "left": "0",
+        "op": ">",
+        "right": "1"
+      },
+      "SHORT": {
+        "cmp": "no_rule_exit_stop_target_or_24h",
+        "left": "0",
+        "op": ">",
+        "right": "1"
+      }
+    },
+    "risk": {
+      "stop_atr": "$stop_atr",
+      "target_stop_ratio": "$target_stop_ratio",
+      "vol": "5m.logvol288",
+      "vol_minutes": 5
+    },
+    "horizon_minutes": 1440
+  }
+}

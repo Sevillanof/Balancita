@@ -199,11 +199,14 @@ class IncrementalFeatures:
         return out
 
 
-def frames(candles_1m, candles_5m, periods=None):
+def frames(candles_1m, candles_5m, periods=None, funding=None):
     """Per closed 1m bucket: (bucket_start, current, previous, trend, regime) with no lookahead.
 
     ``periods``: indicator periods to compute on both series (default set when None);
     the regime chain's EMA 9/21 and ATR 14 on 5m are always included.
+    ``funding``: a ``futures_funding_context.FundingContext``; each 5m bar then also carries ``fundpct``, the
+    percentile (0-100, one decimal) of the last closed funding period against the 30 days before it, as of the
+    bar's close. The key is absent while there is not 30 days of funding history.
     """
     periods = merge_periods(DEFAULT_PERIODS if periods is None else periods, REGIME_PERIODS)
     one, five = IncrementalFeatures(periods), IncrementalFeatures(periods)
@@ -215,6 +218,10 @@ def frames(candles_1m, candles_5m, periods=None):
         close_at = candle["bucket_start"] + ONE_MINUTE_MS
         while pending is not None and pending["bucket_start"] + FIVE_MINUTES_MS <= close_at:
             trend = five.update(pending)
+            if funding is not None:
+                found = funding.percentile(pending["bucket_start"] + FIVE_MINUTES_MS)
+                if found is not None:
+                    trend["fundpct"] = "{:.1f}".format(found[1])
             pending = next(fives, None)
         if trend is not None:
             regime = update_regime(regime, trend.get("ema9"), trend.get("ema21"), trend.get("atr14"))
