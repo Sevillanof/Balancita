@@ -92,3 +92,11 @@ Entre T0 y T2a puede archivarse **desde ya** el bid/ask que hoy se borra a las 2
 1. ¿Autorizás ejecutar la auditoría (T1) en la Mac, incluida la lectura de `server/data/dev-live` y de la base forward?
 2. ¿Dónde corre el colector? Por defecto en la Mac con `launchd` y `caffeinate`; los huecos por reposo quedan etiquetados.
 3. ¿Querés que archive el bid/ask antes de que exista el colector (cambio de retención mínimo)?
+
+## Trabajo futuro, no implementado (registrado 2026-10-12 a pedido de Fran)
+
+**Portafolio compartido de 1.000 USD** con tamaño de posición dinámico y límites de riesgo globales (hoy cada operación es de 100 USD fijos y cada estrategia lleva su libro). No se implementa ahora: exigiría tocar sizing y riesgo de las estrategias congeladas (C29-C32, Kronos) y no se toca antes de la revisión del 2026-12-07 ni de las 100 operaciones. Cuando se aborde irá como brazo aparte en paper, con ADR enmendado antes de implementarlo.
+
+## Orden de PRs acordado (2026-10-12)
+
+1 docs (#106) · 2 funding (#107) · 3 clave `spec_hash` y auditoría forward (#108) · 4 archivo de bid/ask (#109) · 5 colector BTC/ETH independiente · 6 medición de costes maker/taker · 7 reporte semanal reproducible.
