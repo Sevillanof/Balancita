@@ -1,0 +1,23 @@
+docs/fo1-preregistro.md
+  s_a1bf2e175b9967::t_9deb1237ae2d1b 36-38
+python/balancita_engine/fo1_study.py
+  s_a1bf2e175b9967::t_434a7c477e1171 1-434
+python/tests/test_fo1_study.py
+  s_a1bf2e175b9967::t_f023807d827c6e 1-123
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "54fd84991a7d006ce8d2dfd5fe6bfde6e3463db3",
+  "prompts": {},
+  "sessions": {
+    "s_a1bf2e175b9967": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2f9cd751-f0b2-483e-8473-991c9321c73c",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
