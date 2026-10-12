@@ -10,6 +10,7 @@ action BUY / SELL / WAIT. A selection is only a proposal: the risk engine decide
   the actions backed by a strategy signal; any failure, malformed answer or timeout is WAIT.
 """
 
+import time
 from decimal import Decimal
 
 from . import futures_llm_decisions as llm
@@ -98,11 +99,45 @@ def state_text(product_id, signals, context):
     return "; ".join(lines)
 
 
+class QwenTimeout(llm.ModelUnavailable):
+    """The time budget of one selection (all its rotated questions together) ran out."""
+
+
+class _Budget:
+    """Wraps a provider so the rotated questions of one selection share a single time budget.
+
+    Before each call the remaining budget is checked (none left: ``QwenTimeout``, the model is not asked again) and the
+    provider's own socket timeout is lowered to what remains, so a blocked request is interrupted at the deadline
+    instead of after its full per-request timeout.
+    """
+
+    def __init__(self, provider, budget_s, clock):
+        self.provider, self.budget_s, self.clock, self.started = provider, budget_s, clock, clock()
+
+    def __getattr__(self, name):
+        return getattr(self.provider, name)
+
+    def complete(self, *args, **kwargs):
+        remaining = self.budget_s - (self.clock() - self.started)
+        if remaining <= 0:
+            raise QwenTimeout("selection time budget exhausted")
+        previous = getattr(self.provider, "timeout", None)
+        if previous is not None:
+            self.provider.timeout = min(previous, remaining)
+        try:
+            return self.provider.complete(*args, **kwargs)
+        finally:
+            if previous is not None:
+                self.provider.timeout = previous
+
+
 class QwenSelector:
     selector_id, version = "qwen-select", 1
 
-    def __init__(self, provider, *, template=None, mode=None, temperature=1.0, timeout_ms=30_000):
-        self.provider = provider
+    def __init__(self, provider, *, template=None, mode=None, temperature=1.0, timeout_ms=30_000, clock=time.monotonic):
+        """``timeout_ms`` is the budget of the whole selection, not of one question: with 8 products it must stay
+        well under the 300 s cycle (8 x 30 s = 240 s in the worst case)."""
+        self.provider, self.clock = provider, clock
         config = llm.load_prompt_config()
         self.template = template or config["templates"][config["default_version"]]
         self.mode = mode or config["probability_source"]
@@ -112,7 +147,8 @@ class QwenSelector:
         candidates = [s for s in signals if is_candidate(s)]
         state = state_text(product_id, signals, context)
         try:
-            answer = llm.ask_state(self.provider, state, SELECT_QUESTION, self.temperature, self.template, self.mode)
+            budget = _Budget(self.provider, self.timeout_ms / 1000, self.clock)
+            answer = llm.ask_state(budget, state, SELECT_QUESTION, self.temperature, self.template, self.mode)
             result, output = answer["result"], answer["output"]
             chosen = _ACTION[result["chosen"]]
             latency = output.get("latency_ms") or 0
@@ -122,9 +158,11 @@ class QwenSelector:
                 "state": state, "probabilities": {k: "{:.4f}".format(v) for k, v in result["probabilities"].items()},
                 "source": answer["source"], "latency_ms": latency, "model": _model(self.provider),
             }
+        except QwenTimeout:
+            return _wait("qwen_timeout", {"budget_ms": self.timeout_ms})
         except Exception as error:  # a down, slow or malformed model must never become a trade
             return _wait("qwen_failure:" + type(error).__name__, {"error": str(error)[:200]})
-        if latency > self.timeout_ms:
+        if (self.clock() - budget.started) * 1000 > self.timeout_ms or latency > self.timeout_ms:
             return _wait("qwen_timeout", detail)
         if chosen == WAIT:
             return {"action": WAIT, "signal_id": None, "reason": "qwen_wait", "detail": detail}
