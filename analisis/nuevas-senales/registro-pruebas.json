@@ -1,0 +1,123 @@
+{
+ "fecha": "2026-10-12",
+ "nota": "Actualizado tras FO-1. Reservado: desde 2026-08-02 no se descargo ni uso nada; holdout no ejecutado.",
+ "configuraciones_evaluadas": [
+  {
+   "id": "FO-1 v1 (nube)",
+   "especificacion": "fo1/fo1_spec.json (congelada y subida antes de calcular retornos)",
+   "datos": "2023-03 a 2026-08-01, 8 productos",
+   "horizontes_h": [
+    4,
+    24
+   ],
+   "pruebas": 2,
+   "resultado": "evidencia desfavorable en ambos horizontes: bruto -3,3 pb (4 h) y +5,5 pb (24 h), neto -16,4 y -7,6 pb, 354 clusters; indistinguible del azar",
+   "archivo": "fo1/fo1_resultados.json"
+  },
+  {
+   "id": "FO-1 (Mac, sesion paralela)",
+   "especificacion": "OI caida >p95 de 720 h y liquidaciones >p99; clusters a 6 h; velas de 1 min; ventana desde 2026-02",
+   "horizontes_h": [
+    4,
+    24
+   ],
+   "pruebas": 2,
+   "resultado": "evidencia insuficiente: 49 clusters; bruto -52,9 pb (4 h) y -26,8 pb (24 h); datos en la Mac, rama local sin push",
+   "nota": "corrida independiente y no coordinada; se cuenta como prueba aparte"
+  },
+  {
+   "id": "RE-1 v1",
+   "especificacion": "re1/re1_spec.json (congelada y subida antes de ejecutar)",
+   "datos": "2023-03 a 2026-08-01, 8 productos; historial contaminado por el descubrimiento (referencia R2 de FO-1)",
+   "horizontes_h": [
+    24,
+    4
+   ],
+   "pruebas": 2,
+   "resultado": "24 h: ventaja no demostrada (bruto +20,2 pb, neto +7,2 pb, IC90 bruto -33 a +75, umbral 92 pb, 262 clusters); 4 h: evidencia desfavorable (bruto -8,2 pb, neto -21,3 pb)",
+   "archivo": "re1/re1_resultados.json"
+  },
+  {
+   "id": "MR-1 v1",
+   "especificacion": "mr1/mr1_spec.json (congelada y subida antes de ejecutar)",
+   "datos": "2023-03 a 2026-08-01, universo dinamico de 8 productos (sesgo de supervivencia declarado)",
+   "horizontes": "semanal",
+   "pruebas": 1,
+   "resultado": "ventaja no demostrada: 173 semanas, bruto +154 pb/semana (IC90 -4 a +316), neto +127 pb, umbral 285 pb; IC de Spearman ~0 (t 0,57); supera el 98,5 % de selecciones aleatorias; sin HYPE y ZEC neto +90 pb",
+   "archivo": "mr1/mr1_resultados.json"
+  },
+  {
+   "id": "MR-1X v1 (prueba 8)",
+   "especificacion": "mr1x/mr1x_spec.json (congelada y subida antes de calcular retornos; auditoria sin retornos)",
+   "datos": "2023-03 a 2026-08-01, 477 PF_* con velas (293 no listados hoy), liquidez >=1M USD/dia",
+   "horizontes": "semanal",
+   "pruebas": 1,
+   "resultado": "ventaja no demostrada: 154 semanas, neto +57,9 pb/semana (originales en las mismas semanas +114,8), IC90 bruto -38 a +244, umbral 266; alfa IC90 -29 a +218; azar p 0,045 sin corregir y 0,36 con Bonferroni x8; sin top-3 aportantes -5,8 pb; liquidez >=5M -49,5 pb",
+   "archivo": "mr1x/mr1x_resultados.json"
+  }
+ ],
+ "sondeos_sin_retorno": [
+  {
+   "id": "S1",
+   "descripcion": "cobertura y huecos de open-interest, cvd, liquidation-volume, long-short-info, top-traders en 8 productos"
+  },
+  {
+   "id": "S2",
+   "descripcion": "estabilidad de revisiones en 72 buckets de OI durante 75 s"
+  },
+  {
+   "id": "S3",
+   "descripcion": "profundidad del historial de funding (tope ~8909 h desde 2025-10-06)"
+  },
+  {
+   "id": "S4",
+   "descripcion": "volatilidad a 1h/4h/24h por producto (240 dias) para el movimiento minimo"
+  },
+  {
+   "id": "S5",
+   "descripcion": "cobertura de OI y liquidaciones desde 2023-03 en 8 productos"
+  }
+ ],
+ "candidatos_preregistrados": [
+  {
+   "familia": "funding_oi",
+   "id": "FO-1",
+   "descripcion": "desarme: OI cae y liquidaciones altas, reversion a 4-24 h, entrada t+2 (solo OI+liquidaciones)",
+   "estado": "ejecutada (2 corridas, ver configuraciones_evaluadas)"
+  },
+  {
+   "familia": "funding_oi",
+   "id": "FO-2",
+   "descripcion": "FO-1 condicionada a funding extremo",
+   "estado": "no ejecutada"
+  },
+  {
+   "familia": "momentum_relativo",
+   "id": "MR-1",
+   "descripcion": "long/short cross-section semanal",
+   "estado": "no ejecutada"
+  },
+  {
+   "familia": "order_flow",
+   "id": "OF-1",
+   "descripcion": "desbalance agresor extremo, entrada t+2, como filtro de FO",
+   "estado": "no ejecutada"
+  }
+ ],
+ "pruebas_acumuladas_fo1": 4,
+ "observaciones_no_preregistradas": [
+  {
+   "id": "R2",
+   "descripcion": "referencia solo precio: contraria a los mayores movimientos de 4 h; bruto +28,7 pb (4 h) y +93,4 pb (24 h), 259 clusters",
+   "estado": "observacion post hoc de una referencia, NO es un resultado: el corte por ranking global usa toda la muestra y el solape con mx-meanrev (que fallo) no esta descartado. No usar para decidir sin un preregistro con umbral causal.",
+   "seguimiento": "Probada como RE-1 con umbral causal: el bruto cayo de +93 pb a +20 pb a 24 h; el efecto observado era en gran parte de la seleccion."
+  },
+  {
+   "id": "RC-RE1",
+   "descripcion": "La sesion de la Mac inicio su propia version de RE-1 y una descarga parcial de velas PF_; las detuvo sin producir cifras y no cuentan como pruebas ejecutadas."
+  }
+ ],
+ "pruebas_acumuladas_re1": 2,
+ "pruebas_acumuladas_total_nuevas_senales": 8,
+ "pruebas_acumuladas_mr1": 2
+}
