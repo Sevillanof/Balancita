@@ -7,7 +7,7 @@ Solo paper. Se conservó la especificación MR-1 (28 días, lunes 00:00 UTC, lar
 ## Auditoría del universo
 - 692 símbolos de trade en el servicio de gráficos, 497 `PF_*`; 477 con velas de 1 h en la ventana (20 salieron después del corte). 204 están vivos hoy y 293 ya no figuran como instrumentos, con velas hasta distintas fechas (muchos con la última vela en 2025-03, 2025-11 o al corte). Huecos de velas: casi nulos (mediana 0, máximo 2).
 - Liquidez muy desigual: la mediana de volumen diario por símbolo es de unos 3.000 USD. Con el filtro de 1M USD/día quedan entre 8 y 45 productos por semana (mediana 25); los 8 originales superan 8,8M USD/día.
-- No hay bid/ask histórico: los costes de los 14 productos no medidos son una estimación por tramos de liquidez (17,1 y 24,2 pb de ida y vuelta, 40 pb de coste semanal medio con ambas patas) y son la mayor incertidumbre. Los retirados no tienen categoría ni funding, así que se incluyen sin clasificar y sin funding.
+- No hay bid/ask histórico: los costes de todos los productos fuera de los 8 originales son una estimación por tramos de liquidez (17,1 y 24,2 pb de ida y vuelta, 40 pb de coste semanal medio con ambas patas) y son la mayor incertidumbre. Los retirados no tienen categoría ni funding, así que se incluyen sin clasificar y sin funding.
 - Excluidos por no ser cripto: 14 instrumentos vivos con `tradfi` o categoría xStocks.
 
 ## Resultados (154 semanas con al menos 8 productos)
