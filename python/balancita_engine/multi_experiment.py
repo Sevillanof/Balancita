@@ -122,7 +122,7 @@ class Experiment:
     def run(self, candles, include_table=True):
         """``candles``: ``{product_id: (candles_1m, candles_5m)}`` official candles, oldest first."""
         feeders = {p: self.feeders.setdefault(p, FrameFeeder(self.periods)) for p in candles}
-        streams = [((product, frame) for frame in feeders[product].stream(ones, fives, self.funding_contexts.get(product)))
+        streams = [self._stream(product, feeders[product], ones, fives)
                    for product, (ones, fives) in candles.items()]
         for product, frame in heapq.merge(*streams, key=lambda item: (item[1][0], item[0])):
             self.on_frame(product, frame)
@@ -130,6 +130,12 @@ class Experiment:
             self.duplicates_ignored += feeder.skipped
             feeder.skipped = 0
         return self.report(include_table)
+
+    def _stream(self, product, feeder, ones, fives):
+        """The product's frames tagged with the product. A named method, not a generator expression in a loop:
+        those bind ``product`` late and would tag every frame with the last product."""
+        for frame in feeder.stream(ones, fives, self.funding_contexts.get(product)):
+            yield product, frame
 
     # ----------------------------------------------------------------- checkpoint
 
