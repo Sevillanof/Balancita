@@ -18,10 +18,10 @@ from .futures_simulator import accrue_funding
 METHOD_VERSION = "funding-reconcile.v1"
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS forward_trade_funding(
-  strategy_id TEXT NOT NULL, product_id TEXT NOT NULL, entry_bucket_ms INTEGER NOT NULL,
+  strategy_id TEXT NOT NULL, product_id TEXT NOT NULL, entry_bucket_ms INTEGER NOT NULL, spec_hash TEXT NOT NULL,
   method_version TEXT NOT NULL, funding_usd REAL NOT NULL, pnl_usd REAL NOT NULL, net_bp REAL NOT NULL,
   periods_sha256 TEXT NOT NULL, held_ms INTEGER NOT NULL, computed_ms INTEGER NOT NULL,
-  PRIMARY KEY(strategy_id, product_id, entry_bucket_ms, method_version)) STRICT;
+  PRIMARY KEY(strategy_id, product_id, entry_bucket_ms, spec_hash, method_version)) STRICT;
 CREATE TRIGGER IF NOT EXISTS forward_trade_funding_no_update BEFORE UPDATE ON forward_trade_funding
   BEGIN SELECT RAISE(ABORT, 'funding reconciliations are append-only'); END;
 CREATE TRIGGER IF NOT EXISTS forward_trade_funding_no_delete BEFORE DELETE ON forward_trade_funding
@@ -61,7 +61,7 @@ def reconcile(db, strategy_id, product_id, digest, periods, now_ms=None):
     rows = db.execute(
         "SELECT t.entry_bucket_ms, t.payload FROM forward_trade t WHERE t.strategy_id=? AND t.product_id=? AND t.spec_hash=? "
         "AND NOT EXISTS (SELECT 1 FROM forward_trade_funding f WHERE f.strategy_id=t.strategy_id AND f.product_id=t.product_id "
-        "AND f.entry_bucket_ms=t.entry_bucket_ms AND f.method_version=?)",
+        "AND f.entry_bucket_ms=t.entry_bucket_ms AND f.spec_hash=t.spec_hash AND f.method_version=?)",
         (strategy_id, product_id, digest, METHOD_VERSION)).fetchall()
     for bucket, payload in rows:
         trade = json.loads(payload)
@@ -72,18 +72,18 @@ def reconcile(db, strategy_id, product_id, digest, periods, now_ms=None):
             continue
         with db:
             added += db.execute(
-                "INSERT OR IGNORE INTO forward_trade_funding VALUES(?,?,?,?,?,?,?,?,?,?)",
-                (strategy_id, product_id, bucket, METHOD_VERSION, result["funding_usd"], result["pnl_usd"],
+                "INSERT OR IGNORE INTO forward_trade_funding VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                (strategy_id, product_id, bucket, digest, METHOD_VERSION, result["funding_usd"], result["pnl_usd"],
                  result["net_bp"], result["periods_sha256"], result["held_ms"], now_ms)).rowcount
     return added
 
 
-def load_reconciled(db, strategy_id):
+def load_reconciled(db, strategy_id, digest):
     """``{(product_id, entry_bucket_ms): row}`` of the reconciliations on file (empty when the table is absent)."""
     try:
         rows = db.execute(
             "SELECT product_id, entry_bucket_ms, funding_usd, pnl_usd, net_bp, method_version, periods_sha256 "
-            "FROM forward_trade_funding WHERE strategy_id=? ORDER BY method_version", (strategy_id,)).fetchall()
+            "FROM forward_trade_funding WHERE strategy_id=? AND spec_hash=? ORDER BY method_version", (strategy_id, digest)).fetchall()
     except sqlite3.OperationalError:
         return {}
     return {(p, b): {"funding_usd": f, "pnl_usd": u, "net_bp": n, "method_version": m, "periods_sha256": h}
