@@ -794,6 +794,27 @@ class ServiceTests(ServiceBase):
         db.close()
         self.assertEqual(row["verdict_hash"], vh)
 
+    def test_calm_skip_asks_nothing_and_stores_nothing_for_a_calm_bucket(self):
+        service = self.service(calm_skip=True)
+        service._is_calm = lambda product_id, bucket: True
+        self.assertEqual(service.poll(), 0)
+        self.assertEqual((self.provider.calls, service.calm_skipped, len(self.rows())), (0, 1, 0))
+
+    def test_calm_skip_still_asks_a_bucket_that_is_not_calm_and_is_off_by_default(self):
+        service = self.service(calm_skip=True)
+        service._is_calm = lambda product_id, bucket: False
+        self.assertEqual(service.poll(), 1)
+        self.assertEqual(self.provider.calls, 1)
+        self.assertFalse(q.DecisionService.__init__.__defaults__[-1])  # the class keeps asking unless told
+
+    def test_calm_filter_is_seeded_from_the_stored_verdicts(self):
+        service = self.service(calm_skip=True)
+        service._readers()
+        service._is_calm(BTC, service.verdicts.latest_bucket(BTC))
+        seen = service._calm[BTC].seen
+        self.assertGreater(len(seen), 50)
+        self.assertEqual(seen, sorted(seen))
+
     def test_second_poll_without_a_new_bucket_does_nothing(self):
         service = self.service()
         service.poll()

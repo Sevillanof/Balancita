@@ -55,7 +55,7 @@ La comparación real de los tres brazos con el modelo local ya se hizo (`odd/tas
 
 Lectura: en BTC a 30 minutos, tras costes, la acción correcta se reparte casi por tercios (compra 30 %, venta 30 %, `hold` 37 a 41 %), así que una regla fija ronda el 40 %. Usar el historial reciente suma entre 1 y 3 puntos en los cuatro casos, y en los dos rangos por separado, sin parámetros ajustados. Es el orden de magnitud del margen que tiene `lessons`: poco, pero consistente. Seguir el consenso de las estrategias no mejora siempre `hold`, coherente con que ninguna tiene ventaja. Qwen puede quedar por debajo o por encima de estas reglas; solo el replay con el modelo lo dice.
 
-Para correrlo con el modelo local levantado: `python -m balancita_engine.futures_replay --market-db … --from … --to … --qwen trade_action --qwen-arm original|context|learning --qwen-cache cache.sqlite --out run-<brazo>.sqlite`, una vez por brazo y por rango.
+Para correrlo con el modelo local levantado: `python -m balancita_engine.futures_replay --market-db … --from … --to … --qwen trade_action --qwen-arm original|context|learning --qwen-cache cache.sqlite --out run-<brazo>.sqlite`, una vez por brazo y por rango. Desde 2026-10-12 el replay no pregunta en el tercio más calmo de volatilidad (`--qwen-calm-skip`, encendido por defecto; `--no-qwen-calm-skip` pregunta siempre). Los resultados con y sin ese filtro no son comparables 1:1.
 
 Script: `analisis/research-estrategias-log/lessons_base.py` (en la carpeta compartida del proyecto, no en el repo).
 
