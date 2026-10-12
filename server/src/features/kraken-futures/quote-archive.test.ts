@@ -109,8 +109,8 @@ describe('archiveQuotes', () => {
     const result = archiveQuotes({
       marketDb: market,
       quotesDb: quotes,
-      maxDays: 1,
       ...opts,
+      maxDays: 1,
     })
     expect(result.trimmed).toBe(1)
     const db = new DatabaseSync(quotes)
