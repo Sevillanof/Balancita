@@ -1,0 +1,45 @@
+{
+  "id": "RE-1",
+  "version": 1,
+  "nombre": "Reversion Extrema de 4 Horas",
+  "fecha_congelada": "2026-10-12",
+  "estado": "congelada antes de calcular ningun retorno de RE-1",
+  "origen_y_contaminacion": "Hipotesis nacida de la referencia 'solo precio' (R2) de FO-1, que miro retornos de 2023-03 a 2026-08-01. Todo ese historial esta contaminado para CONFIRMAR RE-1: este experimento solo comprueba si una regla causal conserva el efecto, no es validacion independiente.",
+  "hipotesis": "Tras un movimiento de 4 h excepcionalmente grande, el precio corrige parte de el en las 24 h siguientes.",
+  "universo": ["PF_XBTUSD","PF_ETHUSD","PF_SOLUSD","PF_XRPUSD","PF_HYPEUSD","PF_ZECUSD","PF_ADAUSD","PF_NEARUSD"],
+  "datos": {
+    "velas": "mismas velas 1 h ya descargadas por fo1_data.py (apertura); 2023-03-01 a 2026-08-01",
+    "reservado": "desde 2026-08-02 no se usa nada; holdout no se ejecuta"
+  },
+  "senal": {
+    "r4": "ln(apertura[b+1h] / apertura[b-3h]) para el bucket b, es decir el retorno de las 4 velas cuyo ultimo cierre es b+1h",
+    "extremo": "|r4| >= percentil 99 de |r4| de los 90 dias previos (2160 valores anteriores a b, excluido b), por producto; minimo 1500 valores de historia",
+    "onset": "solo abre episodio si no hubo extremo del mismo producto en los 24 buckets anteriores",
+    "una_sola_configuracion": "percentil 99, ventana 90 d, retorno 4 h; no se prueban otros valores"
+  },
+  "disponibilidad": {
+    "conocido_desde": "b+1h (cierre de la ultima vela usada)",
+    "entrada": "apertura de la vela que empieza en b+2h",
+    "salida": "apertura de la vela que empieza en b+2h+H"
+  },
+  "direccion": "contraria al signo de r4 (r4>0 -> SHORT, r4<0 -> LONG)",
+  "horizontes_horas": {"principal": 24, "diagnostico": 4},
+  "costes": "futures_costs.round_trip_cost_bps por producto. Funding observado: solo existe desde 2025-10-06; el resultado principal no lo incluye y se informa una sensibilidad con funding en los episodios dentro de esa ventana (pago = lado * suma de relativeFundingRate de las horas mantenidas; el largo paga si es positivo).",
+  "unidad_independiente": "cluster: entradas de cualquier producto separadas menos de 24 h se encadenan",
+  "estadistico": "bruto medio por episodio con IC90 bootstrap por clusters (semilla 20261012, 5000 repeticiones); tambien mediana, media recortada al 5% y peso de los 10 mayores episodios; neto = bruto - coste",
+  "umbral_candidata": "limite inferior IC90 del bruto > coste medio + 3*sigma_horizonte/sqrt(N_clusters)",
+  "veredictos": {
+    "evidencia_insuficiente": "menos de 100 clusters",
+    "evidencia_desfavorable": "con >=100 clusters, neto medio negativo",
+    "ventaja_no_demostrada": "con >=100 clusters, neto medio positivo pero sin superar el umbral",
+    "candidata_prometedora": "supera el umbral; no validada, sigue contaminada por el descubrimiento"
+  },
+  "controles": {
+    "C1_azar_equivalente": "200 sorteos: por cada episodio, una entrada al azar del mismo producto, mismo trimestre calendario, mismo tercil de volatilidad (desv. tipica de los retornos horarios de las 168 h previas al corte b+1h, terciles por producto), mismo lado y mismo horizonte",
+    "C2_espejo": "mismos episodios con direccion de continuacion (diagnostico)"
+  },
+  "robustez": ["sin HYPE y ZEC", "tercios cronologicos", "signo por producto", "mediana y media recortada", "sensibilidad con funding"],
+  "pruebas_declaradas": 2,
+  "pruebas_nota": "una especificacion x 2 horizontes; control y robustez no son pruebas nuevas",
+  "prohibido": ["cambiar percentil, ventana o retorno tras ver resultados", "tocar desde 2026-08-02", "incorporar RE-1 al motor de operaciones", "modificar otras estrategias o Qwen"]
+}
