@@ -320,6 +320,51 @@ class ComponentTests(unittest.TestCase):
             validate_signal(signal)
 
 
+def scaled(candles, factor):
+    """The same candles at another price level (another product)."""
+    from decimal import Decimal
+    result = []
+    for candle in candles:
+        copy = dict(candle)
+        for key in ("open", "high", "low", "close"):
+            copy[key] = str(Decimal(candle[key]) * Decimal(factor))
+        result.append(copy)
+    return result
+
+
+class ManyProductsTests(unittest.TestCase):
+    def test_every_frame_keeps_its_own_product_and_prices(self):
+        # Regression: a generator expression in a loop bound `product` late and mixed all products into the last one.
+        eth = (scaled(WALK[0], "0.02"), scaled(WALK[1], "0.02"))
+        both = {PRODUCT: WALK, "PF_ETHUSD": eth}
+        store = DecisionStore()
+        OPEN_STORES.append(store)
+        experiment = Experiment(store, list(both), strategies=[Scripted([60, 100, 140])], qwen=selector("buy"),
+                                experiment_id="m", funding_periods_by_product={
+                                    PRODUCT: FUNDING[PRODUCT], "PF_ETHUSD": FUNDING[PRODUCT]})
+        experiment.run(both)
+        from decimal import Decimal
+        ranges = {p: (min(Decimal(c["low"]) for c in ones), max(Decimal(c["high"]) for c in ones))
+                  for p, (ones, _) in both.items()}
+        self.assertEqual({t["product_id"] for t in store.trades()}, set(both))
+        for trade in store.trades():
+            low, high = ranges[trade["product_id"]]
+            self.assertTrue(low * Decimal("0.99") <= Decimal(trade["entry_price"]) <= high * Decimal("1.01"), trade)
+        self.assertEqual({c["product_id"] for c in store.candidates()}, set(both))
+        for signal in store.signals():
+            low, high = ranges[signal["product_id"]]
+            if "close" in signal["evidence"]:
+                self.assertTrue(low <= Decimal(signal["evidence"]["close"]) <= high)
+        # A product's trades do not depend on the others being there.
+        alone = Experiment(DecisionStore(), ["PF_ETHUSD"], strategies=[Scripted([60, 100, 140])], qwen=selector("buy"),
+                           experiment_id="m", funding_periods_by_product={"PF_ETHUSD": FUNDING[PRODUCT]})
+        alone.run({"PF_ETHUSD": eth})
+        OPEN_STORES.append(alone.store)
+        key = lambda trades: sorted((t["arm"], t["entry_bucket_ms"], t["entry_price"], t["exit_price"], t["exit_reason"])
+                                    for t in trades)
+        self.assertEqual(key([t for t in store.trades() if t["product_id"] == "PF_ETHUSD"]), key(alone.store.trades()))
+
+
 class CheckpointTests(unittest.TestCase):
     CYCLES = [60, 100, 140, 200, 250]
 
