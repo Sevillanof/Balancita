@@ -333,3 +333,18 @@ class ForwardAuditTests(unittest.TestCase):
             self.assertFalse(report["b"]["measured"])
             self.assertFalse(report["b"]["in_forward_file"])
             self.assertIn("--strategies-db", report["b"]["note"])
+
+
+class CandleLagTests(unittest.TestCase):
+    def test_a_stopped_capture_shows_as_lag_not_as_missing_candles(self):
+        PRODUCTS = [("PF_XBTUSD", "0.0001")]
+        with tempfile.TemporaryDirectory() as folder:
+            market = os.path.join(folder, "m.sqlite")
+            _market(market)
+            registration = {"strategies": {C30: {"start_ms": START + 2000 * MINUTE}}, "min_forward_trades": 100}
+            run_forward(market, os.path.join(folder, "f.sqlite"), SPECS, registration, PRODUCTS)
+            (payload,) = sqlite3.connect(os.path.join(folder, "f.sqlite")).execute(
+                "SELECT payload FROM forward_status").fetchone()
+            status = json.loads(payload)
+            self.assertEqual(status["missing_1m"], 0)
+            self.assertGreater(status["candle_lag_ms"], 60 * MINUTE)

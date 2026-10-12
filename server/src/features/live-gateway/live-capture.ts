@@ -95,6 +95,12 @@ export interface LiveCaptureOptions {
   readonly tickerPollMs?: number
   readonly tickerFetch?: HistoricalFundingFetch
   /**
+   * A REST poll (tickers, official candles, analytics) that has not settled after this long is
+   * abandoned so the next one is scheduled (default: tickers 30 s, analytics 5 min, official
+   * candles 10 min). Without it one request that never settles stops its chain for good.
+   */
+  readonly pollDeadlineMs?: number
+  /**
    * Products whose official candles are captured (pinned config, never chosen
    * at runtime). The WebSocket feeds stay PF_XBTUSD only. Default: PF_XBTUSD.
    */
@@ -150,8 +156,7 @@ export function createLiveCapture(options: LiveCaptureOptions) {
   let fundingTimer: ReturnType<typeof setTimeout> | undefined
   let catalogTimer: ReturnType<typeof setTimeout> | undefined
   let fundingClient:
-    | ReturnType<typeof createHistoricalFundingClient>
-    | undefined
+    ReturnType<typeof createHistoricalFundingClient> | undefined
   let officialTimer: ReturnType<typeof setTimeout> | undefined
   let officialClient: ReturnType<typeof createOfficialCandlesClient> | undefined
   let analyticsTimer: ReturnType<typeof setTimeout> | undefined
@@ -314,6 +319,55 @@ export function createLiveCapture(options: LiveCaptureOptions) {
         }
     }
   }
+  // A poll that never settles must not stop its chain: after the deadline the chain re-arms (the
+  // stuck request is aborted through the client) and the stall is logged once per occurrence.
+  const settleWithin = (
+    work: Promise<void>,
+    deadlineMs: number,
+    label: string,
+    abort: () => void,
+  ): Promise<void> =>
+    new Promise<void>((resolve) => {
+      const timer = setTimeout(() => {
+        if (!stopped) log(`${label} poll stuck for ${deadlineMs} ms; re-arming`)
+        try {
+          abort()
+        } catch {
+          // The client is already closed.
+        }
+        resolve()
+      }, deadlineMs)
+      work
+        .then(
+          () => undefined,
+          () => undefined,
+        )
+        .finally(() => {
+          clearTimeout(timer)
+          resolve()
+        })
+    })
+  const guardedOfficial = (): Promise<void> =>
+    settleWithin(
+      pollOfficialCandles(),
+      options.pollDeadlineMs ?? 600_000,
+      'official candles',
+      () => officialClient?.close(),
+    )
+  const guardedTicker = (): Promise<void> =>
+    settleWithin(
+      pollTickers(),
+      options.pollDeadlineMs ?? 30_000,
+      'ticker',
+      () => tickerClient?.close(),
+    )
+  const guardedAnalytics = (): Promise<void> =>
+    settleWithin(
+      pollAnalytics(),
+      options.pollDeadlineMs ?? 300_000,
+      'analytics',
+      () => analyticsClient?.close(),
+    )
   const scheduleOfficialPoll = (): void => {
     if (stopped) return
     const now = clock()
@@ -321,7 +375,7 @@ export function createLiveCapture(options: LiveCaptureOptions) {
       options.officialPollMs ??
       60_000 - (now % 60_000) + OFFICIAL_POLL_OFFSET_MS
     officialTimer = setTimeout(() => {
-      officialPoll = pollOfficialCandles().finally(scheduleOfficialPoll)
+      officialPoll = guardedOfficial().finally(scheduleOfficialPoll)
     }, delay)
   }
 
@@ -409,7 +463,7 @@ export function createLiveCapture(options: LiveCaptureOptions) {
     const delay =
       analytics.pollMs ?? 60_000 - (now % 60_000) + ANALYTICS_POLL_OFFSET_MS
     analyticsTimer = setTimeout(() => {
-      analyticsPoll = pollAnalytics().finally(scheduleAnalyticsPoll)
+      analyticsPoll = guardedAnalytics().finally(scheduleAnalyticsPoll)
     }, delay)
   }
 
@@ -436,7 +490,7 @@ export function createLiveCapture(options: LiveCaptureOptions) {
   const scheduleTickerPoll = (): void => {
     if (stopped || tickerPeriodMs <= 0) return
     tickerTimer = setTimeout(() => {
-      tickerPoll = pollTickers().finally(scheduleTickerPoll)
+      tickerPoll = guardedTicker().finally(scheduleTickerPoll)
     }, tickerPeriodMs)
   }
 
@@ -554,17 +608,17 @@ export function createLiveCapture(options: LiveCaptureOptions) {
       fetch: options.officialCandlesFetch,
       clock,
     })
-    officialPoll = pollOfficialCandles().finally(scheduleOfficialPoll)
+    officialPoll = guardedOfficial().finally(scheduleOfficialPoll)
     if (tickerProducts.length > 0 && tickerPeriodMs > 0) {
       tickerClient = createTickerPollClient({
         fetch: options.tickerFetch,
         clock,
       })
-      tickerPoll = pollTickers().finally(scheduleTickerPoll)
+      tickerPoll = guardedTicker().finally(scheduleTickerPoll)
     }
     if (analytics) {
       analyticsClient = createAnalyticsClient({ fetch: analytics.fetch, clock })
-      analyticsPoll = pollAnalytics().finally(scheduleAnalyticsPoll)
+      analyticsPoll = guardedAnalytics().finally(scheduleAnalyticsPoll)
     }
   }
 

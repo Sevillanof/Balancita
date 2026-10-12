@@ -993,4 +993,66 @@ describe('live capture process core', () => {
     })
     store.close()
   })
+
+  it('keeps polling tickers after a request that never settles', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'balancita-capture-'))
+    dirs.push(dir)
+    const store = new FuturesMarketStore(join(dir, 'market.sqlite'))
+    const now = 1_791_356_400_000 + 10_000
+    const logs: string[] = []
+    let calls = 0
+    const capture = createLiveCapture({
+      store,
+      clock: () => now,
+      makeSocket: () => fakeSocket().socket,
+      fetchCatalog: async () => catalog,
+      fundingFetch: async () => {
+        throw new Error('offline')
+      },
+      products: [
+        { productId: 'PF_XBTUSD', tickSize: '1' },
+        { productId: 'PF_ETHUSD', tickSize: '0.1' },
+      ],
+      officialCandlesFetch: async () =>
+        new Response(JSON.stringify({ candles: [], more_candles: false })),
+      officialPollMs: 60_000,
+      officialRequestGapMs: 0,
+      tickerPollMs: 5,
+      pollDeadlineMs: 30,
+      // The first request ignores the abort signal and never answers, like a stalled socket.
+      tickerFetch: async () => {
+        calls += 1
+        if (calls === 1) return new Promise<Response>(() => undefined)
+        return new Response(
+          JSON.stringify({
+            result: 'success',
+            tickers: [
+              {
+                symbol: 'PF_ETHUSD',
+                bid: 2577.7,
+                ask: 2577.8,
+                markPrice: 2577.3,
+                bidSize: 1,
+                askSize: 1,
+              },
+            ],
+          }),
+        )
+      },
+      log: (line) => logs.push(line),
+    })
+    await capture.start()
+    await wait(200)
+    await capture.stop()
+    const count = (
+      store['db']
+        .prepare(
+          "SELECT COUNT(*) AS n FROM paper_futures_market_events WHERE feed='ticker'",
+        )
+        .get() as { n: number }
+    ).n
+    expect(count).toBeGreaterThan(0)
+    expect(logs.some((line) => line.includes('ticker poll stuck'))).toBe(true)
+    store.close()
+  })
 })
