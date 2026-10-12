@@ -32,6 +32,10 @@ class AuthorizedBook(Book):
     def arm(self, bucket, authorization):
         self.pending = (bucket, authorization)
 
+    def __getstate__(self):
+        # The funding table is shared and rebuilt from the market data on restore, never copied into a checkpoint.
+        return dict(self.__dict__, funding=None)
+
     def _entry_proposal(self, current, common):
         pending, self.pending = self.pending, None
         if pending is None or pending[0] != self.bucket:
@@ -56,12 +60,28 @@ class PaperExecutor:
         self.risk, self.store = risk, store
         self.notional, self.tick_sizes, self.funding = notional_usd, tick_sizes or {}, funding or {}
         self.books = {}
+        self._sorted_funding = {}
+
+    def shared_funding(self, product_id):
+        """One sorted funding table per product, shared by every book (and shadow) of that product."""
+        if product_id not in self._sorted_funding:
+            self._sorted_funding[product_id] = sorted(
+                (int(a), int(b), D(str(r))) for a, b, r in self.funding.get(product_id, ()))
+        return self._sorted_funding[product_id]
+
+    def new_book(self, key, notional_usd=None):
+        book = AuthorizedBook(key, product_id=key[2], tick_size=self.tick_sizes.get(key[2], "1"),
+                              notional_usd=notional_usd or self.notional)
+        book.funding = self.shared_funding(key[2])
+        return book
+
+    def reattach_funding(self, books):
+        for book in books:
+            book.funding = self.shared_funding(book.key[2])
 
     def book(self, key):
         if key not in self.books:
-            self.books[key] = AuthorizedBook(
-                key, product_id=key[2], tick_size=self.tick_sizes.get(key[2], "1"), notional_usd=self.notional,
-                funding=self.funding.get(key[2], ()))
+            self.books[key] = self.new_book(key)
         return self.books[key]
 
     def _scope_books(self, arm, scope):

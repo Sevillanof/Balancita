@@ -9,7 +9,8 @@ import unittest
 
 from balancita_engine.futures_funding_context import FundingContext
 from balancita_engine.futures_llm_decisions import FakeProvider
-from balancita_engine.multi_experiment import Experiment
+from balancita_engine.futures_simulator import frames
+from balancita_engine.multi_experiment import Experiment, FrameFeeder, verify_against_rebuild
 from balancita_engine.multi_risk import RiskEngine, RiskPolicy
 from balancita_engine.multi_select import DeterministicCombiner, QwenSelector
 from balancita_engine.multi_signals import (
@@ -289,6 +290,71 @@ class ComponentTests(unittest.TestCase):
         self.assertEqual(seen, {"mx-funding-v1", "mx-momentum-v1", "mx-meanrev-v1"})
         for signal in experiment.store.signals():
             validate_signal(signal)
+
+
+class CheckpointTests(unittest.TestCase):
+    CYCLES = [60, 100, 140, 200, 250]
+
+    def make(self, store, qwen=None, **kwargs):
+        OPEN_STORES.append(store)
+        return Experiment(store, [PRODUCT], strategies=[Scripted(self.CYCLES)], qwen=qwen or selector("buy"),
+                          experiment_id="t", funding_periods_by_product=FUNDING, **kwargs)
+
+    def test_feeder_yields_exactly_what_frames_yields(self):
+        from balancita_engine.multi_signals import merged_indicators
+        periods = merged_indicators([Scripted([])])
+        feeder = FrameFeeder(periods)
+        self.assertEqual(list(feeder.stream(*WALK)), list(frames(WALK[0], WALK[1], periods)))
+        self.assertEqual(list(feeder.stream(*WALK)), [])  # all consumed: a repeat yields nothing
+
+    def test_resuming_from_a_checkpoint_equals_rebuilding_from_scratch(self):
+        whole = self.make(DecisionStore())
+        whole.run({PRODUCT: WALK})
+        open_at_a_split = False
+        for split in (310, 330, 360, 700, 1000):
+            with tempfile.TemporaryDirectory() as folder:
+                path = os.path.join(folder, "multi.sqlite")
+                first = self.make(DecisionStore(path))
+                first.run({PRODUCT: (WALK[0][:split], WALK[1])})
+                open_at_a_split = open_at_a_split or bool(first.executor.open_positions())
+                first.save_checkpoint()
+                first.store.close()
+                # A restart: new process objects, same file; the candles overlap what was already consumed.
+                store = DecisionStore(path)
+                second = self.make(store)
+                self.assertIsNone(second.load_checkpoint())
+                second.run({PRODUCT: WALK})
+                self.assertEqual(second.ledger_hash(), whole.ledger_hash(), split)
+                self.assertEqual(second.cycles, whole.cycles)
+                self.assertEqual({k: v["entry"] for k, v in second.executor.open_positions().items()},
+                                 {k: v["entry"] for k, v in whole.executor.open_positions().items()})
+                self.assertEqual(second.report()["arms"], whole.report()["arms"])
+                self.assertGreaterEqual(second.duplicates_ignored, split)
+                self.assertIs(next(iter(second.executor.books.values())).funding,
+                              second.executor.shared_funding(PRODUCT))
+                check = verify_against_rebuild(second, {PRODUCT: WALK})
+                self.assertTrue(check["equal"], check)
+        self.assertTrue(open_at_a_split)  # at least one checkpoint was taken with a position open
+
+    def test_a_checkpoint_is_never_used_when_it_does_not_fit(self):
+        store = DecisionStore()
+        base = self.make(store)
+        self.assertEqual(base.load_checkpoint(), "no_checkpoint")
+        base.run({PRODUCT: (WALK[0][:400], WALK[1])})
+        base.save_checkpoint()
+        other = Experiment(store, [PRODUCT], strategies=[Scripted(self.CYCLES)], qwen=selector("buy"),
+                           experiment_id="t", policy=RiskPolicy(stop_atr_mult="3"), funding_periods_by_product=FUNDING)
+        self.assertEqual(other.load_checkpoint(), "configuration_changed")
+        self.assertEqual(other.last, {})
+        with store.lock, store.db:
+            store.db.execute("UPDATE checkpoints SET blob = ? ", (b"garbage",))
+        again = self.make(store)
+        self.assertEqual(again.load_checkpoint(), "corrupt_checkpoint")
+        # Falling back to a full rebuild gives the same ledger as never having had a checkpoint.
+        again.run({PRODUCT: WALK})
+        whole = self.make(DecisionStore())
+        whole.run({PRODUCT: WALK})
+        self.assertEqual(again.ledger_hash(), whole.ledger_hash())
 
 
 if __name__ == "__main__":

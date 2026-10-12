@@ -24,16 +24,18 @@ import argparse
 import heapq
 import json
 import os
+import pickle
 import time
 from decimal import Decimal
 
-from .futures_costs import is_measured, round_trip_cost_bps
+from .futures_costs import cost_model_hash, is_measured, round_trip_cost_bps
 from .futures_funding_context import HOUR_MS, funding_for
 from .futures_products import resolve_products
-from .futures_simulator import frames
-from .multi_executor import AuthorizedBook, PaperExecutor
+from .futures_simulator import IncrementalFeatures
+from .futures_strategies import update_regime
+from .multi_executor import PaperExecutor
 from .multi_risk import RiskEngine, RiskPolicy
-from .multi_select import DeterministicCombiner, QwenSelector, StrategyDirect
+from .multi_select import DeterministicCombiner, QwenSelector, StoredOnly, StrategyDirect
 from .multi_signals import (
     SELL, FIVE_MINUTES_MS, SignalContext, default_strategies, is_candidate, merged_indicators, stable_hash,
     validate_signal,
@@ -48,6 +50,50 @@ D = Decimal
 def funding_periods(context):
     """``[(start_ms, end_ms, relative_rate_per_hour)]`` from a ``FundingContext`` for the simulator's books."""
     return [] if context is None else [(s, s + HOUR_MS, r) for s, r in zip(context.starts, context.rates)]
+
+
+CHECKPOINT_VERSION = 1
+
+
+class FrameFeeder:
+    """``futures_simulator.frames`` with its state in plain attributes, so it can be saved and resumed.
+
+    Fed the same candles it yields exactly what ``frames`` yields (a test pins it). Candles already consumed
+    (1m at or before ``last_one``, 5m at or before ``last_five``) are skipped, so a resumed run may be given
+    overlapping candles and a repeated candle changes nothing.
+    """
+
+    def __init__(self, periods):
+        self.one, self.five = IncrementalFeatures(periods), IncrementalFeatures(periods)
+        self.trend = self.previous = None
+        self.regime = "unknown"
+        self.last_one = self.last_five = -1
+        self.skipped = 0
+
+    def stream(self, candles_1m, candles_5m, funding=None):
+        pending_fives = iter(c for c in candles_5m if c["bucket_start"] > self.last_five)
+        pending = next(pending_fives, None)
+        for candle in candles_1m:
+            if candle["bucket_start"] <= self.last_one:
+                self.skipped += 1
+                continue
+            current = self.one.update(candle)
+            close_at = candle["bucket_start"] + ONE_MINUTE_MS
+            while pending is not None and pending["bucket_start"] + FIVE_MINUTES_MS <= close_at:
+                self.trend = self.five.update(pending)
+                if funding is not None:
+                    found = funding.percentile(pending["bucket_start"] + FIVE_MINUTES_MS)
+                    if found is not None:
+                        self.trend["fundpct"] = "{:.1f}".format(found[1])
+                self.last_five = pending["bucket_start"]
+                pending = next(pending_fives, None)
+            if self.trend is not None:
+                self.regime = update_regime(self.regime, self.trend.get("ema9"), self.trend.get("ema21"),
+                                            self.trend.get("atr14"))
+            self.last_one = candle["bucket_start"]
+            frame = (candle["bucket_start"], current, self.previous, self.trend, self.regime)
+            self.previous = current
+            yield frame
 
 
 class Experiment:
@@ -69,16 +115,70 @@ class Experiment:
         self.periods = merged_indicators(self.strategies)
         self.last, self.shadows, self.duplicates_ignored, self.cycles = {}, {}, 0, 0
         self.tick_sizes, self.funding_by_product = tick_sizes or {}, periods
+        self.feeders = {}
 
     # ----------------------------------------------------------------- driving
 
-    def run(self, candles):
+    def run(self, candles, include_table=True):
         """``candles``: ``{product_id: (candles_1m, candles_5m)}`` official candles, oldest first."""
-        streams = [((product, frame) for frame in frames(ones, fives, self.periods, self.funding_contexts.get(product)))
+        feeders = {p: self.feeders.setdefault(p, FrameFeeder(self.periods)) for p in candles}
+        streams = [((product, frame) for frame in feeders[product].stream(ones, fives, self.funding_contexts.get(product)))
                    for product, (ones, fives) in candles.items()]
         for product, frame in heapq.merge(*streams, key=lambda item: (item[1][0], item[0])):
             self.on_frame(product, frame)
-        return self.report()
+        for feeder in feeders.values():
+            self.duplicates_ignored += feeder.skipped
+            feeder.skipped = 0
+        return self.report(include_table)
+
+    # ----------------------------------------------------------------- checkpoint
+
+    def fingerprint(self):
+        """What a checkpoint is only valid for: change any of it and the books must be rebuilt from scratch."""
+        selectors = {arm: None if sel is None else "{}@{}".format(sel.selector_id, sel.version)
+                     for arm, sel in sorted(self.selectors.items())}
+        return stable_hash({
+            "checkpoint_version": CHECKPOINT_VERSION, "experiment_id": self.experiment_id, "start_ms": self.start_ms,
+            "policy": self.policy.policy_hash(), "cost_model": cost_model_hash(), "arms": list(self.arms),
+            "strategies": [[s.id, s.version] for s in self.strategies], "periods": self.periods,
+            "selectors": selectors, "products": self.products})
+
+    def _state(self):
+        return {"books": self.executor.books, "issued": self.risk.issued, "consumed": self.risk.consumed,
+                "shadows": self.shadows, "last": self.last, "duplicates_ignored": self.duplicates_ignored,
+                "cycles": self.cycles, "feeders": self.feeders}
+
+    def save_checkpoint(self):
+        """Stores the complete state after a finished run, next to the decision log it is a cache of."""
+        blob = pickle.dumps(self._state(), protocol=4)
+        info = {"saved_ms": int(time.time() * 1000), "last_bucket_ms": max(self.last.values(), default=None),
+                "books": len(self.executor.books), "shadows": len(self.shadows), "bytes": len(blob)}
+        self.store.put_checkpoint("experiment:" + self.experiment_id, self.fingerprint(),
+                                  stable_hash(blob.hex()), info, blob)
+        return info
+
+    def load_checkpoint(self):
+        """Resumes from the stored checkpoint when it is intact and made for this very configuration.
+
+        Returns ``None`` when it was resumed, else the reason it was not (nothing is changed then).
+        """
+        row = self.store.get_checkpoint("experiment:" + self.experiment_id)
+        if row is None:
+            return "no_checkpoint"
+        if row["fingerprint"] != self.fingerprint():
+            return "configuration_changed"
+        if stable_hash(row["blob"].hex()) != row["digest"]:
+            return "corrupt_checkpoint"
+        try:
+            state = pickle.loads(row["blob"])  # our own file, written by save_checkpoint
+        except Exception:
+            return "unreadable_checkpoint"
+        self.executor.books = state["books"]
+        self.risk.issued, self.risk.consumed = state["issued"], state["consumed"]
+        self.shadows, self.last = state["shadows"], state["last"]
+        self.duplicates_ignored, self.cycles, self.feeders = state["duplicates_ignored"], state["cycles"], state["feeders"]
+        self.executor.reattach_funding(list(self.executor.books.values()) + list(self.shadows.values()))
+        return None
 
     def on_frame(self, product_id, frame):
         bucket, current, _, trend, regime = frame
@@ -167,7 +267,7 @@ class Experiment:
 
     def _open_shadow(self, signal, snapshot, bucket):
         signal_id, product_id = signal["signal_id"], signal["product_id"]
-        if signal_id in self.shadows or self.store.candidate_outcomes().get(signal_id):
+        if signal_id in self.shadows or self.store.has_candidate_outcome(signal_id):
             return
         side = "SHORT" if signal["action"] == SELL else "LONG"
         levels = self.risk.peek_levels(side, snapshot["price"], snapshot["atr"], signal["horizon_minutes"])
@@ -175,9 +275,7 @@ class Experiment:
             self.store.put_candidate_outcome(signal_id, {"status": "not_evaluable"})
             return
         stop, target, horizon = levels
-        book = AuthorizedBook(("S", signal_id, product_id), product_id=product_id,
-                              tick_size=self.tick_sizes.get(product_id, "1"), notional_usd=self.policy.notional_usd,
-                              funding=self.funding_by_product.get(product_id, ()))
+        book = self.executor.new_book(("S", signal_id, product_id), self.policy.notional_usd)
         book.arm(bucket, {"auth_id": "shadow:" + signal_id, "decision_id": "shadow", "signal_id": signal_id,
                           "strategy_id": signal["strategy_id"], "strategy_version": signal["strategy_version"],
                           "arm": "S", "scope": signal_id, "side": side, "stop": str(stop), "target": str(target),
@@ -215,8 +313,8 @@ class Experiment:
             "executions": [e for e in self.store.executions() if auth_id and e.get("auth_id") == auth_id],
             "trades": [t for t in self.store.trades() if auth_id and t["meta"].get("auth_id") == auth_id]}
 
-    def report(self):
-        return build_report(self.store, self.executor, self.duplicates_ignored)
+    def report(self, include_table=True):
+        return build_report(self.store, self.executor, self.duplicates_ignored, include_table)
 
 
 def _arm_stats(trades, span_days):
@@ -242,7 +340,7 @@ def _arm_stats(trades, span_days):
     }
 
 
-def build_report(store, executor, duplicates_ignored=0):
+def build_report(store, executor, duplicates_ignored=0, include_table=True):
     trades = store.trades()
     candidates = store.candidates()
     outcomes = store.candidate_outcomes()
@@ -298,21 +396,54 @@ def build_report(store, executor, duplicates_ignored=0):
         "selector_filters": filters,
         "qwen_vs_combiner_mean_net_bp": None if b_bp is None or c_bp is None else round(c_bp - b_bp, 4),
         "open_positions": len(executor.open_positions()), "duplicates_ignored": duplicates_ignored,
-        "candidate_table": table,
+        "candidate_table": table if include_table else None,
+        "shadow_note": "shadow outcomes ignore simultaneous positions and capital limits: not executable profitability",
         "verdict": "no edge asserted: raw comparison only; validation and forward freezing are later increments"}
+
+
+def verify_against_rebuild(experiment, candles):
+    """Rebuilds every book from scratch (in memory) on the stored selections and compares it with ``experiment``.
+
+    ``candles`` must be the complete history from the experiment's start. Equal ledger hashes and equal open
+    positions prove that resuming from a checkpoint gave the same result as replaying everything.
+    """
+    fresh = DecisionStore()
+    try:
+        for selection in experiment.store.selections():
+            fresh.put_selection(selection)
+        original = experiment.selectors["C"]
+        rebuilt = Experiment(
+            fresh, experiment.products, strategies=experiment.strategies,
+            qwen=None if original is None else StoredOnly(original.selector_id, original.version),
+            policy=experiment.policy, experiment_id=experiment.experiment_id,
+            funding_contexts=experiment.funding_contexts, funding_periods_by_product=experiment.funding_by_product,
+            start_ms=experiment.start_ms, clock=experiment.clock, arms=experiment.arms, tick_sizes=experiment.tick_sizes)
+        rebuilt.run(candles)
+        positions = lambda e: {str(k): str(v["entry"]) for k, v in sorted(e.executor.open_positions().items())}
+        result = {"resumed_ledger": experiment.ledger_hash(), "rebuilt_ledger": rebuilt.ledger_hash(),
+                  "trades": len(experiment.store.trades()), "rebuilt_trades": len(fresh.trades()),
+                  "open_positions_equal": positions(experiment) == positions(rebuilt)}
+        result["equal"] = (result["resumed_ledger"] == result["rebuilt_ledger"] and result["open_positions_equal"])
+        return result
+    finally:
+        fresh.close()
 
 
 def _load(market_db, products, start_ms, now_ms):
     from .futures_replay import load_range
 
-    candles, contexts = {}, {}
+    candles = {}
     for product_id, _ in products:
         try:
             candles[product_id] = load_range(market_db, product_id, start_ms, now_ms + ONE_MINUTE_MS)
         except ValueError:
             continue
-        contexts[product_id] = funding_for(market_db, product_id)
-    return candles, {p: c for p, c in contexts.items() if c is not None}
+    return candles
+
+
+def _load_funding(market_db, products):
+    contexts = {product_id: funding_for(market_db, product_id) for product_id, _ in products}
+    return {p: c for p, c in contexts.items() if c is not None}
 
 
 def main(argv=None):
@@ -321,6 +452,10 @@ def main(argv=None):
     parser.add_argument("--out", required=True, help="directory for multi.sqlite and multi-report.json")
     parser.add_argument("--experiment-id", default="exp1", help="a new id starts a fresh set of decisions")
     parser.add_argument("--qwen", choices=("off", "llama"), default="off")
+    parser.add_argument("--rebuild", action="store_true",
+                        help="ignore the checkpoint and rebuild every book from the start (after a hole in the candles was filled)")
+    parser.add_argument("--verify", action="store_true",
+                        help="after the pass, rebuild from scratch in memory on the stored selections and require the same ledger")
     parser.add_argument("--loop-seconds", type=float, default=0, help="repeat every N seconds (0: once); 300 is the cycle")
     args = parser.parse_args(argv)
     os.makedirs(args.out, exist_ok=True)
@@ -337,12 +472,29 @@ def main(argv=None):
         if start is None:
             start = now - now % FIVE_MINUTES_MS
             store.set_meta("start_ms:" + args.experiment_id, start)
-        candles, contexts = _load(args.market_db, products, start, now)
+        contexts = _load_funding(args.market_db, products)
         experiment = Experiment(
-            store, [p for p, _ in products if p in candles], qwen=qwen, experiment_id=args.experiment_id,
+            store, [p for p, _ in products], qwen=qwen, experiment_id=args.experiment_id,
             funding_contexts=contexts, start_ms=start, clock=lambda cycle_ms: int(time.time() * 1000),
             tick_sizes=dict(products))
-        report = experiment.run(candles)
+        resumed = False
+        if args.rebuild:
+            store.delete_checkpoint("experiment:" + args.experiment_id)
+        else:
+            reason = experiment.load_checkpoint()
+            resumed = reason is None
+            if reason not in (None, "no_checkpoint"):
+                print("multi: checkpoint not used ({}); rebuilding from the start".format(reason), flush=True)
+        from_ms = min(experiment.last.values()) if resumed and experiment.last else start
+        candles = _load(args.market_db, products, from_ms, now)
+        report = experiment.run(candles, include_table=False)
+        args.rebuild = False
+        info = experiment.save_checkpoint()
+        report = dict(report, checkpoint=dict(info, resumed=resumed))
+        if args.verify:
+            full = _load(args.market_db, products, start, now)
+            report["verification"] = verify_against_rebuild(experiment, full)
+            print("multi: verification {}".format("OK" if report["verification"]["equal"] else "DIFFERENT"), flush=True)
         path = os.path.join(args.out, "multi-report.json")
         with open(path + ".partial", "w", encoding="utf-8") as handle:
             json.dump({k: v for k, v in report.items() if k != "candidate_table"}, handle, indent=2, sort_keys=True)
