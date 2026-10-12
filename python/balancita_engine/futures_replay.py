@@ -14,7 +14,7 @@ import sys
 import threading
 import time
 
-from .futures_funding_context import funding_for
+from .futures_funding_context import funding_for, funding_periods
 from .futures_simulator import DEFAULT_PERIODS, Book, frames, merge_periods
 from .futures_spec_strategy import DEFAULT_SPEC_DIR, declared_indicators, load_specs
 from .futures_verdicts import FIVE_MINUTES_MS, ONE_MINUTE_MS, _OfficialCandles
@@ -56,13 +56,16 @@ def load_range(market_db_path, product_id, start_ms, end_ms):
 
 
 def replay(specs, candles_1m, candles_5m, *, start_ms, product_id, tick_size="1", notional_usd="100",
-           observers=(), funding=None):
+           observers=(), funding=None, funding_periods=()):
     """Books of every spec; warm-up candles feed indicators but never open positions.
 
     ``observers`` are called with every frame inside the range (and the warm-up ones are
-    never shown to them), e.g. the blind Qwen replay. ``funding`` feeds ``5m.fundpct`` (see ``frames``).
+    never shown to them), e.g. the blind Qwen replay. ``funding`` feeds ``5m.fundpct`` (see ``frames``);
+    it never reaches the books. ``funding_periods`` (``[(start_ms, end_ms, rate)]``) is what the books charge:
+    without it a trade reports an unknown funding (``funding_usd = None``, ``funding_complete = false``).
     """
-    books = [Book(spec, product_id=product_id, tick_size=tick_size, notional_usd=notional_usd) for spec in specs]
+    books = [Book(spec, product_id=product_id, tick_size=tick_size, notional_usd=notional_usd,
+                  funding=funding_periods) for spec in specs]
     periods = merge_periods(DEFAULT_PERIODS, *(declared_indicators(spec) for spec in specs))
     for frame in frames(candles_1m, candles_5m, periods, funding):
         if frame[0] < start_ms:
@@ -119,8 +122,9 @@ def run(market_db, out_path, product_id, start_ms, end_ms, specs, tick_size="1",
     if qwen is not None:
         qwen.feed_candles(ones)
         observers = (qwen,)
+    context = funding_for(market_db, product_id)
     books = replay(specs, ones, fives, start_ms=start_ms, product_id=product_id, tick_size=tick_size,
-                   observers=observers, funding=funding_for(market_db, product_id))
+                   observers=observers, funding=context, funding_periods=funding_periods(context))
     meta = {
         "schema": REPLAY_SCHEMA, "product_id": product_id, "start_ms": start_ms, "end_ms": end_ms,
         "strategies": [s["id"] for s in specs], "candles_1m": len(ones), "created_ms": int(time.time() * 1000),

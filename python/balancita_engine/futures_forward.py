@@ -30,7 +30,8 @@ import os
 import sqlite3
 import time
 
-from .futures_funding_context import funding_for
+from .futures_funding_context import funding_for, funding_periods
+from .futures_funding_reconcile import load_reconciled, reconcile
 from .futures_products import resolve_products
 from .futures_replay import load_range, replay
 from .futures_spec_strategy import DEFAULT_SPEC_DIR, load_specs, spec_hash
@@ -44,7 +45,9 @@ ONE_MINUTE_MS = 60_000
 FIVE_MINUTES_MS = 300_000
 # The live poll learns a candle seconds after it closes; later than this means the capture was down.
 LATE_KNOWN_MS = 5 * 60_000
-_CORE_KEYS = ("entry_price", "exit_bucket_ms", "exit_price", "exit_reason", "side", "net_bp")
+# What the candles decide. ``net_bp`` is left out: it also depends on the funding known when the trade was stored,
+# which is completed beside the original (futures_funding_reconcile), not by a hole in the candles.
+_CORE_KEYS = ("entry_price", "exit_bucket_ms", "exit_price", "exit_reason", "side")
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS forward_trade(
   strategy_id TEXT NOT NULL, product_id TEXT NOT NULL, entry_bucket_ms INTEGER NOT NULL,
@@ -160,8 +163,9 @@ def run_forward(market_db, db_path, specs, registration, products):
                     ones, fives = load_range(market_db, product_id, info["start_ms"], now + ONE_MINUTE_MS)
                 except ValueError:
                     continue
+                context = funding_for(market_db, product_id)
                 (book,) = replay([spec], ones, fives, start_ms=info["start_ms"], product_id=product_id,
-                                 tick_size=tick_size, funding=funding_for(market_db, product_id))
+                                 tick_size=tick_size, funding=context, funding_periods=funding_periods(context))
                 late_ones, late_fives, missing = candle_coverage(ones, fives, info["start_ms"], now)
                 recovered = {t["entry_bucket_ms"] for t in book.trades if is_recovered(t, late_ones, late_fives)}
                 with db:
@@ -191,6 +195,8 @@ def run_forward(market_db, db_path, specs, registration, products):
                         key: str(book.position[key]) for key in ("side", "entry", "stop", "target", "opened_at")}
                     db.execute("INSERT OR REPLACE INTO forward_open VALUES(?,?,?,?)",
                                (strategy_id, product_id, digest, json.dumps(position)))
+                # Trades stored while the funding history did not reach them are completed beside the original.
+                reconcile(db, strategy_id, product_id, digest, funding_periods(context))
     finally:
         db.close()
     return added
@@ -212,8 +218,13 @@ def write_summary(db_path, specs, registration, out_path):
             recovered = {(product, bucket) for product, bucket in db.execute(
                 "SELECT product_id, entry_bucket_ms FROM forward_recovered WHERE strategy_id=?", (strategy_id,))}
             trades = [dict(json.loads(payload), product_id=product) for product, payload in rows]
+            reconciled = load_reconciled(db, strategy_id)
             for trade in trades:
                 trade["recovered"] = (trade["product_id"], trade["entry_bucket_ms"]) in recovered
+                row = reconciled.get((trade["product_id"], trade["entry_bucket_ms"]))
+                if row is not None and not trade.get("funding_complete"):
+                    trade.update(funding_usd=row["funding_usd"], funding_complete=True, funding_status="complete",
+                                 pnl_usd=row["pnl_usd"], net_bp=row["net_bp"], funding_source=row["method_version"])
             live_only = [t for t in trades if not t["recovered"]]
             statuses = [json.loads(payload) for (payload,) in db.execute(
                 "SELECT payload FROM forward_status WHERE strategy_id=?", (strategy_id,))]

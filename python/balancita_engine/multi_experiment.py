@@ -29,7 +29,7 @@ import time
 from decimal import Decimal
 
 from .futures_costs import cost_model_hash, is_measured, round_trip_cost_bps
-from .futures_funding_context import HOUR_MS, funding_for
+from .futures_funding_context import HOUR_MS, funding_for, funding_periods  # noqa: F401  (re-exported)
 from .futures_products import resolve_products
 from .futures_indicators import MINIMUM_CANDLES
 from .futures_simulator import IncrementalFeatures
@@ -74,9 +74,6 @@ def indicator_keys(periods):
     return [names[kind].format(period) for kind, values in periods.items() if kind in names for period in values]
 
 
-def funding_periods(context):
-    """``[(start_ms, end_ms, relative_rate_per_hour)]`` from a ``FundingContext`` for the simulator's books."""
-    return [] if context is None else [(s, s + HOUR_MS, r) for s, r in zip(context.starts, context.rates)]
 
 
 CHECKPOINT_VERSION = 2
