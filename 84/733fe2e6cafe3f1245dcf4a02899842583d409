@@ -1,0 +1,21 @@
+python/balancita_engine/re1_study.py
+  s_a1bf2e175b9967::t_787ec2ea56dd54 1-329
+python/tests/test_re1_study.py
+  s_a1bf2e175b9967::t_a4f563483850dd 1-104
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "84733fe2e6cafe3f1245dcf4a02899842583d409",
+  "prompts": {},
+  "sessions": {
+    "s_a1bf2e175b9967": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2f9cd751-f0b2-483e-8473-991c9321c73c",
+        "model": "unknown"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
