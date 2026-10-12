@@ -1,0 +1,21 @@
+python/tests/test_multi_validation.py
+  s_a1bf2e175b9967::t_28308ac77e52a8 1-75
+python/balancita_engine/multi_validation.py
+  s_a1bf2e175b9967::t_591b513513288c 1-260
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c9b067eb4e8bc5762fc51d23ef100ea04e9de483",
+  "prompts": {},
+  "sessions": {
+    "s_a1bf2e175b9967": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2f9cd751-f0b2-483e-8473-991c9321c73c",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
