@@ -13,3 +13,11 @@ Proceso aparte del forward y de la captura: `pnpm --dir server book:collect`. Fe
 **En la Mac, sin activar todavía.** Plantilla `ops/launchd/com.balancita.book-collector.plist` (reemplazar `__REPO__` y `__DATA__`; `KeepAlive` solo ante salida con error, así la parada por poco disco no reinicia en bucle; `Nice` 10). `caffeinate` es opcional y condicionado a estar enchufado y a la temperatura: `caffeinate -i -w <pid>` solo mientras haya corriente; no está en el plist. Antes de dejarlo continuo hay que medir CPU, memoria y temperatura unas horas con `collector_stat` y `top`.
 
 No se calcula nada predictivo con estos datos antes de la revisión del 2026-12-07.
+
+## Limitaciones explícitas (Fran, 2026-10-12)
+
+Una fotografía de profundidad cada 5 s sirve para estudiar liquidez, spread y costes estimados. **No** permite reconstruir lo ocurrido entre fotografías (cancelaciones, órdenes que aparecen y desaparecen) y **no** permite demostrar que una orden maker se habría ejecutado: eso exigiría deltas y trades con prioridad de cola. Todo análisis futuro con estos datos debe declararlo.
+
+## Estado
+
+PR #111 aprobado solo para un piloto de varias horas en la Mac (CPU, RAM, temperatura, disco y huecos), sin `launchd`. Orden: auditoría y funding, piloto, validación de recursos, activación continua.
