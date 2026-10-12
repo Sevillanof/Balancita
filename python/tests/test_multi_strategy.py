@@ -265,6 +265,34 @@ class ComponentTests(unittest.TestCase):
         slow.complete = lambda *a, **k: dict(real(*a, **k), latency_ms=60_000)
         self.assertEqual(QwenSelector(slow, timeout_ms=1_000).select(PRODUCT, 1, buy)["reason"], "qwen_timeout")
 
+    def test_the_time_budget_covers_all_rotated_questions_and_cuts_the_socket_timeout(self):
+        buy = [make_signal(strategy_id="mx-a-v1", strategy_version=1, product_id=PRODUCT, bucket_ms=1, action=BUY,
+                           strength="0.8", horizon_minutes=60, evidence={})]
+        now = {"t": 0.0}
+        seen = []
+
+        def slow_provider(step):
+            provider = FakeProvider(entries=qwen_says("buy"))
+            provider.timeout = 30.0
+            real = provider.complete
+
+            def complete(*args, **kwargs):
+                seen.append(provider.timeout)
+                now["t"] += step
+                return real(*args, **kwargs)
+            provider.complete = complete
+            return provider
+
+        within = slow_provider(9)  # 3 x 9 s fits in 30 s
+        self.assertEqual(QwenSelector(within, clock=lambda: now["t"]).select(PRODUCT, 1, buy)["action"], BUY)
+        self.assertEqual(seen, [30.0, 21.0, 12.0])  # each request may only use what is left
+        self.assertEqual(within.timeout, 30.0)  # and the provider is left as it was
+        now["t"], seen[:] = 0.0, []
+        over = slow_provider(15)  # the third question would start at 30 s: never asked
+        chosen = QwenSelector(over, clock=lambda: now["t"]).select(PRODUCT, 1, buy)
+        self.assertEqual((chosen["action"], chosen["reason"]), (WAIT, "qwen_timeout"))
+        self.assertEqual(over.calls, 2)
+
     def test_combiner_needs_agreement(self):
         def sig(sid, action, strength):
             return make_signal(strategy_id=sid, strategy_version=1, product_id=PRODUCT, bucket_ms=1, action=action,
