@@ -705,6 +705,56 @@ class CoverageEvidence(Fin):
         self.assertIn("coverage_gap_missing_in_history", rules)
         self.assertNotIn("coverage_gap_missing_at_close", rules)
 
+    def ten_minute_silence(self, name):
+        path, r = self.opened(name)
+        r.run([self.f.quote(BTC, CYCLE + 10 * SEC, "100010"), self.f.quote(BTC, CYCLE + 10 * MIN, "100020")])
+        [gap] = r.coverage["gaps"]
+        self.assertEqual(gap["to_ms"] - gap["from_ms"], 10 * MIN - 10 * SEC)
+        self.assertAudit(r)
+        return path, r, gap
+
+    def test_a_gap_cut_down_to_one_second_is_detected(self):
+        path, r, gap = self.ten_minute_silence("cut")
+        gap["from_ms"], gap["to_ms"] = CYCLE + 5 * MIN, CYCLE + 5 * MIN + SEC       # it still overlaps the silence
+        rules = [v["rule"] for v in integrated_audit(r)["violations"]]
+        self.assertIn("coverage_gap_altered", rules)
+        self.assertIn("coverage_gap_missing_in_history", rules)
+
+    def test_several_gaps_that_together_cover_the_silence_are_accepted(self):
+        path, r, gap = self.ten_minute_silence("split")
+        middle = (gap["from_ms"] + gap["to_ms"]) // 2
+        r.coverage["gaps"][:] = [dict(gap, to_ms=middle), dict(gap, from_ms=middle)]
+        self.assertAudit(r)
+        r.coverage["gaps"][1]["from_ms"] = middle + 5 * MIN                           # a hole of five minutes between them
+        self.assertIn("coverage_gap_altered", [v["rule"] for v in integrated_audit(r)["violations"]])
+
+    def test_quotes_the_watch_ignored_are_not_evidence_and_do_not_hide_an_erased_gap(self):
+        path, r = self.opened("masked")
+        f = self.f
+        events = [f.quote(BTC, CYCLE + 10 * SEC, "100010")]
+        for k in range(1, 10):             # candle k covers minute k; a quote dated inside it then arrives: the watch ignores it
+            events.append(f.candle(BTC, CYCLE + k * MIN, 100010, 100100, 99900, 100010))
+            late = CYCLE + (k + 1) * MIN + 5 * SEC                                  # delivered after the candle, dated inside it
+            events.append(make_event("quote", {"product_id": BTC, "time_ms": CYCLE + k * MIN + 30 * SEC, "received_ms": late,
+                                               "bid": "100010", "ask": "100020"}, t_ms=late, source=SRC, stream="quotes",
+                                     source_offset=f.off("quotes")))
+        events.append(f.quote(BTC, CYCLE + 10 * MIN + 10 * SEC, "100020"))
+        r.run(events)
+        self.assertEqual(r.executor.watch.events_hash() is not None, True)
+        ignored = [e for e in r.executor.watch.events if e["kind"] == "quote_ignored" and e["reason"] == "covered_by_candle"]
+        self.assertEqual(len(ignored), 9)                                           # accepted by the runner, ignored by the watch
+        self.assertEqual(self.market(r)["quotes_watched"], 2)                       # and not counted as evidence
+        [gap] = [g for g in r.coverage["gaps"]]
+        self.assertEqual((gap["from_ms"], gap["to_ms"]), (CYCLE + 10 * SEC, CYCLE + 10 * MIN + 10 * SEC))
+        self.assertAudit(r)
+        # the journal is dense with quotes (one every minute): looking at it alone the gap would not be missing
+        r.coverage["gaps"][:] = []
+        result = integrated_audit(r)
+        rules = [v["rule"] for v in result["violations"]]
+        self.assertIn("coverage_gap_altered", rules)                                # the silence the watch saw is still recorded
+        self.assertNotIn("coverage_gap_missing_in_history", rules)                  # the journal alone could not have shown it
+        self.assertTrue(result["limitations"])                                      # and the limit is stated, not hidden
+
     def test_an_intermediate_gap_of_an_open_position_is_also_audited(self):
         path, r = self.opened("open")
         r.run([self.f.quote(BTC, CYCLE + 10 * SEC, "100010"), self.f.quote(BTC, CYCLE + 10 * MIN, "100020")])

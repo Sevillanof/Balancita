@@ -260,6 +260,21 @@ def observability(runner):
     }
 
 
+def uncovered(before, after, gaps, threshold):
+    """The stretches of ``[before, after]`` that no recorded gap covers and that last longer than the threshold. Short
+    leftovers are legitimate: a silence already recorded as an interruption is not counted twice."""
+    cursor, out = before, []
+    for gap in sorted(gaps, key=lambda g: (g["from_ms"], g["to_ms"])):
+        if gap["to_ms"] <= cursor or gap["from_ms"] >= after:
+            continue
+        if gap["from_ms"] - cursor > threshold:
+            out.append((cursor, gap["from_ms"]))
+        cursor = max(cursor, gap["to_ms"])
+    if after - cursor > threshold:
+        out.append((cursor, after))
+    return out
+
+
 def integrated_audit(runner):
     """Stage 7 validators over the integrated result plus the checks only the runner can make. Returns
     ``{"violations": [...], "checks": [...], "portfolio_audit": {...}}``; an empty ``violations`` is the pass."""
@@ -322,36 +337,48 @@ def integrated_audit(runner):
         if int(trade["exit_time_ms"]) - recorded > runner.config.coverage_gap_ms:
             violate("coverage_gap_missing_at_close", trade_id=trade["trade_id"])
     checks.append("coverage_history_against_journal")
-    # Durable evidence: every quote the runner accepted is in the journal. The silences between them are a lower bound of
-    # the silences between the quotes the watch accepted (a subset), so each one longer than the threshold must be
-    # recorded as a gap. This reads timestamps only; whether a quote was valid for the watch is not re-decided here.
+    threshold = runner.config.coverage_gap_ms
     quote_times = {}
     for entry in runner.journal.entries:
         if entry["kind"] == "event_accepted" and entry["data"]["event"]["kind"] == "quote":
             payload = entry["data"]["event"]["payload"]
-            quote_times.setdefault(payload["product_id"], []).append(int(payload["time_ms"]))
+            quote_times.setdefault(payload["product_id"], set()).add(int(payload["time_ms"]))
     spans = []
     for trade in p.trades:
-        spans.append((trade["intent_id"], trade["product_id"], int(trade["entry_time_ms"]), int(trade["exit_time_ms"]), True))
+        spans.append((trade["intent_id"], trade["product_id"], int(trade["entry_time_ms"]), int(trade["exit_time_ms"])))
     for product, book in p.positions.items():
-        spans.append((book.intent["intent_id"], product, int(book.position.get("entry_ms", book.position["opened_at"])), None, False))
-    threshold = runner.config.coverage_gap_ms
-    for intent_id, product, entry_ms, exit_ms, closed in spans:
+        spans.append((book.intent["intent_id"], product, int(book.position.get("entry_ms", book.position["opened_at"])), None))
+    for intent_id, product, entry_ms, exit_ms in spans:
         recorded = [g for g in runner.coverage["gaps"] if g["intent_id"] == intent_id]
         record = runner.coverage["watch"].get(intent_id, {})
-        if closed and record.get("quotes", 0) == 0 and not recorded:
+        if exit_ms is not None and record.get("quotes", 0) == 0 and not recorded:
             violate("closed_trade_unwatched_without_gap", intent_id=intent_id)
+        # (a) Silences between moments the watch accepted (kept by the runner): the gaps must cover them. Every moment must
+        #     be an accepted quote of the journal, so the list cannot invent evidence. Covering means no uncovered stretch
+        #     longer than the threshold: a gap cut from ten minutes to one second leaves nine minutes bare.
+        for before, after in record.get("silences", ()):
+            for end in (before, after):
+                if end not in (entry_ms, exit_ms) and end not in quote_times.get(product, ()):
+                    violate("coverage_evidence_not_in_journal", intent_id=intent_id, moment_ms=end)
+            for lo, hi in uncovered(before, after, recorded, threshold):
+                violate("coverage_gap_altered", intent_id=intent_id, silent_from_ms=lo, silent_to_ms=hi)
+        # (b) Lower bound from the journal alone: silences between accepted quotes (a superset of the watched ones) are
+        #     silences of the watch too. Weaker than (a) because a quote the watch ignored shortens them here.
         points = [entry_ms] + sorted(t for t in quote_times.get(product, ()) if t > entry_ms and (exit_ms is None or t <= exit_ms))
         if exit_ms is not None:
             points.append(exit_ms)
         for before, after in zip(points, points[1:]):
-            if after - before > threshold and not any(g["from_ms"] <= after and g["to_ms"] >= before for g in recorded):
-                violate("coverage_gap_missing_in_history", intent_id=intent_id, silent_from_ms=before, silent_to_ms=after)
+            if after - before > threshold:
+                for lo, hi in uncovered(before, after, recorded, threshold):
+                    violate("coverage_gap_missing_in_history", intent_id=intent_id, silent_from_ms=lo, silent_to_ms=hi)
     checks.append("fees_and_funding_recomputed")
     reported = sum((D(str(t["fees_usd"])) for t in p.trades), D(0))
     if D(p.snapshot()["fees_usd"]) != reported:
         violate("fees_total_mismatch")
     return {"violations": violations, "checks": checks, "portfolio_audit": {"violations": result["violations"]},
+            "limitations": ["the journal does not record which accepted quote the watch ignored: the audit cannot re-decide that "
+                            "without duplicating the execution rules; a silence erased together with its record in the runner "
+                            "state can be hidden by ignored quotes that fill it in the journal"],
             "passed": not violations}
 
 

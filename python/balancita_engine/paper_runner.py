@@ -457,7 +457,13 @@ class PaperRunner(object):
 
     def _watch_record(self, product, intent_id, entry_ms):
         return self.coverage["watch"].setdefault(intent_id, {"product_id": product, "entry_ms": entry_ms, "quotes": 0,
-                                                              "last_ms": entry_ms})
+                                                              "last_ms": entry_ms, "silences": []})
+
+    def _note_silence(self, record, since, now):
+        """Every silence longer than the threshold between two moments of watch evidence is kept by itself, apart from the
+        gap list: the audit later demands that the recorded gaps cover it."""
+        if now - since > self.config.coverage_gap_ms:
+            record["silences"].append([since, now])
 
     def _record_gap(self, product, intent_id, since, now):
         known = [g["to_ms"] for g in self.coverage["gaps"] if g["intent_id"] == intent_id]
@@ -479,6 +485,7 @@ class PaperRunner(object):
         record = self._watch_record(product, intent_id, entry_ms)
         if state is None or state["intent_id"] != intent_id or state["quotes"] <= record["quotes"]:
             return                               # ignored by the watch: it did not watch anything
+        self._note_silence(record, record["last_ms"], now)
         self._record_gap(product, intent_id, record["last_ms"], now)
         record["quotes"], record["last_ms"] = state["quotes"], now
 
@@ -516,6 +523,7 @@ class PaperRunner(object):
             if trade is not None:
                 record = self._watch_record(product, intent_id, entry_ms)
                 exit_ms = int(trade["exit_time_ms"])
+                self._note_silence(record, record["last_ms"], exit_ms)
                 self._record_gap(product, intent_id, record["last_ms"], exit_ms)
                 if record["quotes"] == 0 and not any(g["intent_id"] == intent_id for g in self.coverage["gaps"]):
                     # never watched by a single quote: living less than the threshold does not make it observed
