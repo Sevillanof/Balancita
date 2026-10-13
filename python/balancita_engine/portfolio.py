@@ -311,7 +311,11 @@ class Portfolio:
         reasons = []
         if self.last_decision_ms is not None and now_ms < self.last_decision_ms:
             reasons.append("retroactive_decision")
-        if bucket < self.last_bucket.get(product, bucket) or entry_bucket < self.last_bucket.get(product, entry_bucket):
+        # The minute the position would be opened on is the one that must not lie behind what was processed. Without
+        # ``entry_bucket_ms`` that is the signal's own minute (unchanged); with it, the signal's minute may already be
+        # behind (candles processed while the order waited) and only the real entry minute counts. Age and causality of
+        # the signal are checked below by ``future_data`` / ``stale_data`` and, upstream, by ``guard_entry``.
+        if entry_bucket < self.last_bucket.get(product, entry_bucket):
             reasons.append("retroactive_intent")
         if close_ms > now_ms or bucket + ONE_MINUTE_MS > now_ms:
             reasons.append("future_data")

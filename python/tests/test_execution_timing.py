@@ -13,7 +13,7 @@ from balancita_engine import signal_continuity as SC
 from balancita_engine.execution_timing import ExecutionPolicy, TimedExecutor, adverse_bps, executable_reference, parse_quote
 from balancita_engine.futures_costs import entry_fill
 from balancita_engine.multi_signals import make_signal
-from balancita_engine.portfolio import LONG, SHORT, Portfolio, PortfolioPolicy
+from balancita_engine.portfolio import LONG, SHORT, Portfolio, PortfolioError, PortfolioPolicy
 
 D = Decimal
 SEC = 1_000
@@ -358,6 +358,74 @@ class IdempotencyAndConcurrency(Env):
             self.tearDown()
             self.setUp()
         self.assertEqual(hashes[0], hashes[1])
+
+
+class DelayedExecutionAfterCandles(Env):
+    """Regression: a candle processed while the order waits must not make the (older) signal minute retroactive."""
+
+    def waiting_order(self, ex, **kw):
+        self.submit(ex, self.persist(**kw))
+        # the candle that closes at CYCLE + 60 s is fed while the order is still pending
+        ex.on_candle(PRODUCT, CYCLE, {"open": "100000", "high": "100050", "low": "99950", "close": "100010"})
+
+    def test_candle_processed_during_the_wait_does_not_block_a_valid_entry(self):
+        ex = self.executor()
+        self.waiting_order(ex)
+        [record] = ex.on_quote(quote(CYCLE + 61 * SEC, "100200", half_bps="0.01"))
+        self.assertEqual(record["status"], "opened", record.get("reasons"))
+        self.assertEqual(record["timeline"]["entry_bucket_ms"], CYCLE + MIN)
+        self.assertEqual(D(record["position_stop"]), D(98000))                      # original stop
+        self.assertTrue(D(record["notional_usd"]) < D(record["notional_at_reference_usd"]))   # sized from the quote
+        self.assertTrue(D("9.99") < D(record["planned_loss_usd"]) <= D(10))
+        # no retrospective evaluation: the candle already consumed is not replayed against the new position
+        self.assertEqual(ex.portfolio.trades, [])
+        self.assertEqual(ex.portfolio.last_bucket[PRODUCT], CYCLE + MIN)
+        with self.assertRaises(PortfolioError):
+            ex.on_candle(PRODUCT, CYCLE, {"open": "1", "high": "1", "low": "1", "close": "1"})
+
+    def test_the_new_position_is_only_managed_from_the_candle_after_the_entry_minute(self):
+        ex = self.executor()
+        self.waiting_order(ex)
+        ex.on_quote(quote(CYCLE + 61 * SEC, "100200", half_bps="0.01"))
+        # a candle that would have broken the stop, but belongs to the entry minute: refused, not applied
+        with self.assertRaises(PortfolioError):
+            ex.on_candle(PRODUCT, CYCLE + MIN, {"open": "1", "high": "1", "low": "1", "close": "1"})
+        self.assertIn(PRODUCT, ex.portfolio.positions)
+        closed = ex.on_candle(PRODUCT, CYCLE + 2 * MIN, {"open": "100200", "high": "100210", "low": "97900", "close": "98000"})
+        self.assertEqual([t["exit_reason"] for t in closed], ["stop"])
+
+    def test_entry_in_a_minute_already_processed_is_still_retroactive(self):
+        ex = self.executor()
+        self.submit(ex, self.persist())
+        ex.on_candle(PRODUCT, CYCLE + 5 * MIN, {"open": "100000", "high": "100000", "low": "100000", "close": "100000"})
+        # a quote whose entry bucket (CYCLE + 3 s -> bucket CYCLE) is behind the last processed candle can no longer open
+        ex.now_ms = None            # simulate a harness that lost its clock: the portfolio check must still hold
+        [record] = ex.on_quote(quote(CYCLE + 5 * SEC, "100100", half_bps="0.01"))
+        self.assertEqual((record["status"], record["reasons"]), ("rejected", ["retroactive_intent"]))
+        self.assertEqual(ex.portfolio.positions, {})
+
+    def test_intent_without_entry_bucket_keeps_the_old_check(self):
+        from balancita_engine.portfolio import make_intent
+        t0 = 1_700_000_040_000
+        p = Portfolio(roomy())
+        p.on_candle(PRODUCT, t0 + MIN, {"close": "100", "high": "100", "low": "100"})
+        old = make_intent(strategy_id="s", product_id=PRODUCT, side=LONG, strength="0.8", bucket_ms=t0, price="100",
+                          stop="98", target="103", horizon_minutes=60)
+        [record] = p.decide([old], t0 + 3 * MIN)
+        self.assertEqual((record["status"], record["reasons"]), ("rejected", ["retroactive_intent"]))
+
+    def test_quote_after_the_deadline_opens_nothing_even_with_a_valid_entry_minute(self):
+        ex = self.executor()
+        self.waiting_order(ex)
+        [record] = ex.on_quote(quote(CYCLE + 3 * SEC + 61 * SEC, "100200", half_bps="0.01"))
+        self.assertEqual(record["reasons"], ["no_quote_in_window"])
+        self.assertEqual(ex.portfolio.positions, {})
+
+    def test_expired_signal_still_cannot_execute_after_the_wait(self):
+        ex = self.executor()
+        result = self.submit(ex, self.persist(), decided=CYCLE + 5 * MIN + 1)
+        self.assertEqual(result["reasons"], ["signal_expired"])
+        self.assertEqual(ex.pending, {})
 
 
 class Isolation(unittest.TestCase):

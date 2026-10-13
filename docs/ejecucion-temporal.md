@@ -1,6 +1,6 @@
 # Ejecución paper temporalmente correcta (offline, aislada)
 
-Estado: `python/balancita_engine/execution_timing.py`, pruebas en `python/tests/test_execution_timing.py` (34 pruebas, datos sintéticos). **No está conectada al forward, a `capture`, a Kronos, a Qwen ni a ninguna base.** No toca C29-C32, ni los parámetros de riesgo aprobados (`PortfolioPolicy`), ni el holdout, ni el ADR 0001. Sin red, sin reloj de pared (todo tiempo entra como argumento), sin aleatoriedad. Solo paper.
+Estado: `python/balancita_engine/execution_timing.py`, pruebas en `python/tests/test_execution_timing.py` (40 pruebas, datos sintéticos). **No está conectada al forward, a `capture`, a Kronos, a Qwen ni a ninguna base.** No toca C29-C32, ni los parámetros de riesgo aprobados (`PortfolioPolicy`), ni el holdout, ni el ADR 0001. Sin red, sin reloj de pared (todo tiempo entra como argumento), sin aleatoriedad. Solo paper.
 
 ## Problema
 
@@ -36,7 +36,7 @@ Cada orden deja **un registro terminal** (`records`) con la línea de tiempo com
 
 ### Cambio en `portfolio.py`
 
-Una intención puede traer `entry_bucket_ms` (opcional; sin él, todo igual que antes: las 941 pruebas de Python pasan). Es el minuto en que se abre la posición cuando la entrada es posterior a la vela de la señal; `Portfolio` también rechaza (`retroactive_intent`) una entrada en un minuto anterior al último procesado del producto.
+Una intención puede traer `entry_bucket_ms` (opcional; sin él, todo igual que antes). Es el minuto en que se abre la posición cuando la entrada es posterior a la vela de la señal. `Portfolio._validate` compara con la última vela procesada del producto **el minuto real de entrada** cuando existe (`retroactive_intent` si ya quedó atrás); sin él compara el minuto de la señal, como antes. Así, una vela procesada mientras la orden espera no vuelve retroactiva a una señal que sigue vigente. La antigüedad y la causalidad de la señal siguen comprobándose (`guard_entry`, `future_data`, `stale_data`), y una señal vencida o una cotización fuera del plazo no abren nada. La posición recién abierta no evalúa velas anteriores a su minuto de entrada (la vela ya consumida se rechaza con `candle_not_newer`).
 
 ### Convenciones de tiempo
 
