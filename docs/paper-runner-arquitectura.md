@@ -1,6 +1,6 @@
 # Paper Runner (etapa 8): arquitectura
 
-Estado: **fase 8A** (diseño, contratos, coordinación mínima en memoria y primer replay determinista). Código: `python/balancita_engine/paper_runner.py`, pruebas: `python/tests/test_paper_runner.py`. Solo paper, sin red, sin reloj de pared, sin credenciales. **No está conectado al forward, `capture`, Kronos, Qwen, ninguna base ni flujo público.** No cambia las estrategias congeladas (C25-C31 y Kronos según `AGENTS.md`; C32 en observación), `PortfolioPolicy`, el ADR 0001 ni su enmienda pendiente de dimensionamiento dinámico (queda desactivado).
+Estado: **fase 8B** (durabilidad y recuperación; 8A ya fusionada en #140). Código: `python/balancita_engine/paper_runner.py`, `paper_runner_store.py`; pruebas: `python/tests/test_paper_runner.py`, `test_paper_runner_recovery.py`. Solo paper, sin red, sin reloj de pared, sin credenciales. **No está conectado al forward, `capture`, Kronos, Qwen, ninguna base ni flujo público.** No cambia las estrategias congeladas (C25-C31 y Kronos según `AGENTS.md`; C32 en observación), `PortfolioPolicy`, el ADR 0001 ni su enmienda pendiente de dimensionamiento dinámico (queda desactivado).
 
 ## 1. Qué es (y qué no)
 
@@ -49,7 +49,7 @@ Cada línea: `{seq, t_ms, kind, data, prev, hash}`, mismo formato que `SignalLog
 | `signals_persisted` | **entrada**                           | referencias a las señales que el ciclo escribió en `SignalLog` (`key`, `seq`, `entry_hash`)       | verifica contra `SignalLog`, no re-evalúa                                                  |
 | `decision`          | **entrada**                           | `signal_key`, `decided_ms`, `reference_price`, `atr`                                              | sí (`TimedExecutor.submit`)                                                                |
 | `event_rejected`    | informativa para el estado financiero | sobre + motivo (`duplicate`, `conflict`, `out_of_order`, `invalid`)                               | solo contadores y, en 8B, el `OffsetLedger` (un evento rechazado **sí** consume su offset) |
-| `checkpoint`        | control                               | `{upto_seq, journal_hash, digests}`                                                               | verifica                                                                                   |
+| `order_cancelled`   | **entrada** (8B)                      | cancelación explícita `runner_interrupted` con el intervalo no cubierto                           | sí (`TimedExecutor.cancel`)                                                                |
 | `recovery`          | control                               | qué se reanudó, qué se declaró no cubierto                                                        | no                                                                                         |
 
 Las **decisiones del runner** son entradas explícitas (con su propio `decided_ms`) y no un efecto implícito de la llegada de la señal. Esto es lo que permite distinguir A (señal persistida, decisión pendiente) de una decisión ya tomada, y evita que una recuperación "decida en el pasado": una obligación pendiente se decide con el reloj de la recuperación y `guard_entry` rechaza lo vencido.
@@ -168,3 +168,32 @@ Veredicto: el diseño es sólido; se cerraron estos huecos.
 - **8A (esta PR)**: este documento, contratos de evento y de journal, `RunnerJournal` en memoria, `PaperRunner` mínimo (ciclo → señal persistida → decisión → ejecutor temporal → cartera, con vigilancia por cotización cableada), reconstrucción por replay con digests iguales, pruebas de escenarios 1-6, 8, 18, 20 y de causalidad.
 - **8B**: journal en archivo (fsync, cola truncada, rechazo de corrupción), checkpoint verificable, `OffsetLedger`, recuperación en otro proceso, caídas A-C y G, equivalencia continua/interrumpida/otro proceso.
 - **8C**: funding, conciliación, disputas y reclasificación integrados; suspensiones a través de caídas; cobertura de mercado durante interrupciones; informe, auditoría independiente, demo y comparación continua vs recuperada.
+
+## 11. Implementación de 8B (durabilidad y recuperación)
+
+**Archivos de una corrida** (directorio): `runner-journal.jsonl` (verdad durable), `signals.jsonl` (`SignalLog`), `runner-checkpoint.json` (solo verificación; el `checkpoint` ya **no** es una entrada del journal) y `quarantine/` (copias de evidencia; nunca se borra nada).
+
+**Escritura.** Cada entrada se escribe con `fsync` antes de aplicarse. El checkpoint es atómico (temporal + `fsync` + `rename` + `fsync` del directorio). Puntos de falla inyectables: `before_journal`, `mid_journal` (escritura a medias), `after_journal`, `after_apply`, `before/mid/after_checkpoint`, más los del `SignalLog`.
+
+**Recuperación = replay + obligaciones.** El replay reproduce el estado financiero sin reevaluar estrategias ni escribir en `SignalLog`. Luego se pagan las obligaciones que dejó el proceso caído, siempre con el **reloj de recuperación** (nunca con una hora pasada):
+
+| Caso | Qué quedó a medias                                                      | Qué hace la recuperación                                                                                                                                                                       |
+| ---- | ----------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A    | ciclo aceptado sin `signals_persisted`, o señal sin decisión            | reevalúa/persiste y decide ahora; `guard_entry` rechaza lo vencido (`signal_expired`)                                                                                                          |
+| B    | decisión tomada, aún sin cotización                                     | la orden sigue pendiente; se cancela solo si su ventana quedó sin cobertura (D7)                                                                                                               |
+| C    | entrada ejecutada, checkpoint sin escribir                              | el replay reconstruye la posición; se escribe un checkpoint nuevo                                                                                                                              |
+| G    | checkpoint corrupto, incompatible, ausente o que el replay no reproduce | se rechaza (`corrupt_checkpoint`, `checkpoint_incompatible`, `checkpoint_missing`, `replay_diverged`) y se copia la evidencia; `bad_checkpoint="rebuild"` es una acción explícita del operador |
+
+Se rechaza también: journal con cadena rota (`journal_corrupt`), journal detrás del checkpoint, `SignalLog` ajeno o más corto, señal sin evento aceptado (`orphan_signal`, I14), configuración distinta (`config_incompatible`) y reloj de recuperación anterior al del journal (`recovery_clock_behind`). Una cola de línea incompleta se trunca y se informa (`tail_discarded_bytes`).
+
+**D3, comportamiento del motor.** El manifiesto incluye `engine_behavior`: huella de un escenario sintético fijo (un LONG que llega al objetivo y un SHORT que toca el stop) que pasa por `TimedExecutor` y `Portfolio`. Si cambia solo esa clave la recuperación se rechaza como `engine_behavior_changed` (no `config_incompatible`).
+
+**D7, `runner_interrupted`.** Para cada orden pendiente tras el replay: `desde = max(reloj del journal, earliest_fill_ms)`, `hasta = min(reloj de recuperación, deadline_ms)`. Si `hasta > desde`, se escribe `order_cancelled` (motivo `runner_interrupted`, con el intervalo) antes de cualquier decisión nueva. Sin esa petición `TimedExecutor` se comporta igual que antes (`no_quote_in_window`). Una recuperación al mismo instante del evento caído no cancela nada y produce el mismo estado que la corrida continua.
+
+**D8, `gap_declared`.** Evento manual y durable (operador, motivo, evidencia) que solo acepta rangos de offsets realmente faltantes. Deja avanzar el offset contiguo confirmable, pero el hueco sigue informado como `declared_gaps`; los eventos faltantes **no** pasan a ser "recuperados".
+
+**Offsets** por `(fuente, época)`: observado, procesado (rangos), contiguo confirmable, huecos y gaps declarados. Un evento rechazado consume su offset (salvo duplicado, conflicto, offset reutilizado por otro evento o época vieja). Un ciclo solo marca su offset al cerrar sus obligaciones (señales y todas sus decisiones escritas).
+
+**Equivalencia.** Corrida continua, con una o varias caídas y recuperada en otro proceso dan el mismo `financial_digest`, `accounting_digest` y `ledger_hash` (pruebas en `test_paper_runner_recovery.py`, incluido un crash real con `os._exit` y recuperación en un proceso nuevo). Con un reloj de recuperación posterior, la diferencia (señal vencida, orden cancelada) es la esperada y queda registrada.
+
+**Limitaciones de 8B (para 8C).** Sin eventos de funding, conciliación ni disputas (casos D, E, F); sin suspensiones persistidas ni cobertura de mercado por intervalo (I13); sin reporte final ni auditoría independiente integrada; las políticas de ejecución, vigilancia y recuperación siguen siendo hipótesis experimentales. Sin sizing dinámico ni cambios al ADR.

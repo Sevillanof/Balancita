@@ -428,6 +428,33 @@ class DelayedExecutionAfterCandles(Env):
         self.assertEqual(ex.pending, {})
 
 
+class Cancellation(Env):
+    """``cancel`` exists only on request (stage 8B, D7): without it nothing changes."""
+
+    def test_a_requested_cancellation_rejects_the_pending_order_with_its_reason_and_the_interval(self):
+        ex, entry = self.executor(), self.persist()
+        self.submit(ex, entry)
+        [intent_id] = list(ex.pending)
+        record = ex.cancel(intent_id, "runner_interrupted", CYCLE + 20 * SEC, uncovered_from_ms=CYCLE + 4 * SEC,
+                           uncovered_to_ms=CYCLE + 20 * SEC)
+        self.assertEqual((record["status"], record["reasons"]), ("rejected", ["runner_interrupted"]))
+        self.assertEqual((record["uncovered_from_ms"], len(ex.pending), len(self.opened(ex))), (CYCLE + 4 * SEC, 0, 0))
+        self.assertEqual(ex.on_quote(quote(CYCLE + 21 * SEC, "100000")), [])      # nothing left to fill
+        self.assertIsNone(ex.cancel(intent_id, "runner_interrupted", CYCLE + 30 * SEC))   # already terminal
+
+    def test_only_known_reasons_can_cancel(self):
+        ex, entry = self.executor(), self.persist()
+        self.submit(ex, entry)
+        with self.assertRaises(ValueError):
+            ex.cancel(list(ex.pending)[0], "because", CYCLE + 5 * SEC)
+
+    def test_without_a_request_an_order_still_expires_as_no_quote_in_window(self):
+        ex, entry = self.executor(), self.persist()
+        self.submit(ex, entry)
+        [record] = ex.advance(CYCLE + 3 * SEC + 61 * SEC)
+        self.assertEqual(record["reasons"], ["no_quote_in_window"])
+
+
 class Isolation(unittest.TestCase):
     def test_portfolio_without_entry_bucket_behaves_as_before(self):
         from balancita_engine.portfolio import make_intent
