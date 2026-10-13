@@ -64,7 +64,10 @@ REJECTION_REASONS = frozenset({
     "levels_unavailable",
     # the price
     "no_quote_in_window", "no_valid_quote_in_window", "executable_price_beyond_stop", "executable_price_beyond_target",
-    "adverse_move_consumed_stop_distance", "favorable_move_consumed_target_distance"})
+    "adverse_move_consumed_stop_distance", "favorable_move_consumed_target_distance",
+    # requested explicitly by the caller (stage 8B): the runner was down over part of the execution window
+    "runner_interrupted"})
+CANCEL_REASONS = frozenset({"runner_interrupted"})
 
 
 @dataclass(frozen=True)
@@ -231,6 +234,18 @@ class TimedExecutor:
             return []
         self._tick(now_ms)
         return self._expire(now_ms, None)
+
+    def cancel(self, intent_id, reason, now_ms, **extra):
+        """Cancels one pending order *on request* (stage 8B, ``runner_interrupted``). Nothing in this module calls it:
+        without a request an order is filled, rejected or expired exactly as before. Returns the terminal record, or
+        ``None`` when the order is not pending (already filled, rejected or unknown)."""
+        if reason not in CANCEL_REASONS:
+            raise ValueError("unknown cancel reason {!r}".format(reason))
+        order = self.pending.get(intent_id)
+        if order is None:
+            return None
+        self._tick(now_ms)
+        return self._reject(order, [reason], now_ms, **extra)["record"]
 
     def _orders(self, product):
         return sorted((o for o in self.pending.values() if o["product_id"] == product),
