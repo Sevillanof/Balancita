@@ -5,7 +5,7 @@ import {
 } from '../features/trading-view/domain/product-label.ts'
 import { utcDateTime } from '../shared/finance/format.ts'
 import ApprovedTerminalLayout from '../features/trading-view/presentation/ApprovedTerminalLayout.tsx'
-import ApprovedTradingHeader from '../features/trading-view/presentation/ApprovedTradingHeader.tsx'
+import { AppShell } from '../shared/mission-control/index.ts'
 import { appNavigation } from './app-navigation.ts'
 import ApprovedPortfolioTables from '../features/trading-view/presentation/ApprovedPortfolioTables.tsx'
 import type { TerminalTickerStats } from '../features/trading-view/infrastructure/terminal-chart-client.ts'
@@ -36,8 +36,6 @@ import {
   strategyLabel,
   utcTime,
 } from './terminal-labels.ts'
-import './DemoShell.css'
-import './ConnectedTerminal.css'
 import { record } from '../shared/wire/decode.ts'
 
 type ViewState = Record<string, unknown>
@@ -537,503 +535,487 @@ export default function FuturesTerminal({
       : 'PAPER · KRAKEN'
 
   return (
-    <div className="demo-shell connected-terminal">
-      <ApprovedTradingHeader
-        brandHref="/"
-        brandLabel="Balancita, volver a la aplicación"
-        navigation={appNavigation('terminal')}
-        status={
-          <>
-            {sourceSwitch}
-            <AppStatusChips
-              apiBase={apiBase}
-              override={flowInputs}
-              showUsage={bootstrap.mode === 'paper_live'}
-              modeLabel={modeLabel}
-              diagnosis={diagnosis}
-            />
-            {localScenarioStatus && <span>{localScenarioStatus}</span>}
-          </>
-        }
-      />
-      <main className="demo-shell__main connected-terminal__main">
-        <section
-          className="connected-terminal__strip"
-          aria-label={`Mercado ${productPair(product)}`}
+    <AppShell
+      brandHref="/"
+      brandLabel="Balancita, volver a la aplicación"
+      navigation={appNavigation('terminal')}
+      status={
+        <>
+          {sourceSwitch}
+          <AppStatusChips
+            apiBase={apiBase}
+            override={flowInputs}
+            showUsage={bootstrap.mode === 'paper_live'}
+            modeLabel={modeLabel}
+            diagnosis={diagnosis}
+          />
+          {localScenarioStatus && <span>{localScenarioStatus}</span>}
+        </>
+      }
+    >
+      <section
+        className="connected-terminal__strip"
+        aria-label={`Mercado ${productPair(product)}`}
+      >
+        <h1>
+          {product && productBase(product) !== 'BTC'
+            ? productBase(product)
+            : 'Bitcoin'}{' '}
+          <span>/ Dólar</span>
+          <small>
+            {bootstrap.source === 'local-protection.v1'
+              ? 'MOCK · perpetuo'
+              : `${product ?? 'PF_XBTUSD'} · perpetuo`}
+          </small>
+        </h1>
+        <strong className="connected-terminal__price">
+          {money(displayedPrice)}
+        </strong>
+        {typeof change24h === 'number' && (
+          <span
+            className="connected-terminal__change"
+            data-tone={change24h >= 0 ? 'ok' : 'bad'}
+          >
+            {change24h >= 0 ? '+' : ''}
+            {change24h.toLocaleString('es-ES', {
+              maximumFractionDigits: 2,
+            })}
+            % 24 h
+          </span>
+        )}
+        <span
+          className="connected-terminal__quote-label"
+          title={eventTimes ?? undefined}
         >
-          <h1>
-            {product && productBase(product) !== 'BTC'
-              ? productBase(product)
-              : 'Bitcoin'}{' '}
-            <span>/ Dólar</span>
-            <small>
-              {bootstrap.source === 'local-protection.v1'
-                ? 'MOCK · perpetuo'
-                : `${product ?? 'PF_XBTUSD'} · perpetuo`}
-            </small>
-          </h1>
-          <strong className="connected-terminal__price">
-            {money(displayedPrice)}
-          </strong>
-          {typeof change24h === 'number' && (
-            <span
-              className="connected-terminal__change"
-              data-tone={change24h >= 0 ? 'ok' : 'bad'}
-            >
-              {change24h >= 0 ? '+' : ''}
-              {change24h.toLocaleString('es-ES', {
-                maximumFractionDigits: 2,
-              })}
-              % 24 h
+          <span>{quote.label}</span>
+          {bootstrap.mode === 'paper_live' && quote.receivedAt !== null && (
+            <span>
+              {` · hace ${Math.floor(Math.max(0, displayClock - quote.receivedAt) / 1_000)} s`}
             </span>
           )}
-          <span
-            className="connected-terminal__quote-label"
-            title={eventTimes ?? undefined}
+        </span>
+        {alerts.length > 0 && (
+          <ul
+            className="connected-terminal__chips connected-terminal__alerts"
+            aria-label="Avisos"
           >
-            <span>{quote.label}</span>
-            {bootstrap.mode === 'paper_live' && quote.receivedAt !== null && (
-              <span>
-                {` · hace ${Math.floor(Math.max(0, displayClock - quote.receivedAt) / 1_000)} s`}
-              </span>
-            )}
-          </span>
-          {alerts.length > 0 && (
-            <ul
-              className="connected-terminal__chips connected-terminal__alerts"
-              aria-label="Avisos"
-            >
-              {alerts.map((item) => (
-                <li key={item.key} data-tone={item.tone}>
-                  {item.text}
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
-        {error && (
-          <p role="alert">
-            {error} No se sustituyen datos desconectados por mocks.
-          </p>
+            {alerts.map((item) => (
+              <li key={item.key} data-tone={item.tone}>
+                {item.text}
+              </li>
+            ))}
+          </ul>
         )}
-        {!state && <p role="status">Conectando al runtime de futuros…</p>}
-        {state && (
-          <>
-            <ApprovedTerminalLayout
-              chart={
-                <section
-                  className="demo-terminal__panel"
-                  aria-label={`Gráfico ${productPair(product)}`}
-                >
-                  <TerminalMarketChart
-                    market={market}
-                    mode={bootstrap.mode}
-                    analyses={localDemo || gatewayEngine ? analyses : []}
-                    selectedId={localDemo || gatewayEngine ? selectedId : ''}
-                    entriesOnly={!localDemo}
-                    onSelect={setSelectedAnalysisId}
-                    apiBase={apiBase}
-                    product={product}
-                    ticker={
-                      (marketState.ticker_stats ??
-                        record(bootstrap.market).ticker_stats ??
-                        null) as TerminalTickerStats | null
-                    }
-                    position={position}
-                    positions={positions}
-                    orders={orders}
-                  />
-                  {!engineOff && (
-                    <p>
-                      Las cifras de cuenta y decisiones siguientes provienen del
-                      snapshot/eventos durables.
-                    </p>
-                  )}
-                </section>
-              }
-              decisions={
-                <TerminalDecisions
-                  rows={decisionRows}
-                  selectedId={selectedId}
+      </section>
+      {error && (
+        <p role="alert">
+          {error} No se sustituyen datos desconectados por mocks.
+        </p>
+      )}
+      {!state && <p role="status">Conectando al runtime de futuros…</p>}
+      {state && (
+        <>
+          <ApprovedTerminalLayout
+            chart={
+              <section
+                className="demo-terminal__panel"
+                aria-label={`Gráfico ${productPair(product)}`}
+              >
+                <TerminalMarketChart
+                  market={market}
+                  mode={bootstrap.mode}
+                  analyses={localDemo || gatewayEngine ? analyses : []}
+                  selectedId={localDemo || gatewayEngine ? selectedId : ''}
+                  entriesOnly={!localDemo}
                   onSelect={setSelectedAnalysisId}
-                  notice={
-                    engineOff
-                      ? 'Motor de decisiones apagado. Solo se muestran velas y precio públicos de Kraken Futures; no hay análisis, cuenta ni operaciones simuladas.'
-                      : !analyses.length && gatewayEngine
-                        ? analysesNotice(
-                            gatewayEngineStatus,
-                            gatewayEngineReason,
-                          )
-                        : null
+                  apiBase={apiBase}
+                  product={product}
+                  ticker={
+                    (marketState.ticker_stats ??
+                      record(bootstrap.market).ticker_stats ??
+                      null) as TerminalTickerStats | null
                   }
-                  selected={
-                    selectedAnalysis && !engineOff ? (
-                      <SelectedDecision
-                        analysis={selectedAnalysis}
-                        id={selectedId}
-                        time={utcTime(selectedDecisionTime)}
-                        reason={analysisReason(selectedAnalysis, localDemo)}
-                      />
-                    ) : null
-                  }
-                >
-                  {localDemo && selectedAnalysis && (
-                    <section aria-label="Análisis seleccionado">
-                      <h3>Análisis seleccionado</h3>
-                      <dl>
-                        <dt>ID de análisis</dt>
-                        <dd>{selectedId || 'ID no disponible'}</dd>
-                        <dt>Hora</dt>
-                        <dd>{utcTime(selectedDecisionTime)}</dd>
-                        <dt>Motivo</dt>
-                        <dd>{analysisReason(selectedAnalysis, true)}</dd>
-                      </dl>
-                      {selectedOrder ? (
-                        <div>
-                          <h4>Efecto durable</h4>
-                          <dl>
-                            <dt>ID de orden</dt>
-                            <dd>{String(selectedOrder.order_id)}</dd>
-                            <dt>Tipo / dirección</dt>
-                            <dd>
-                              {String(
-                                selectedOrder.order_type ??
-                                  selectedOrder.type ??
-                                  'Tipo no disponible',
-                              )}{' '}
-                              ·{' '}
-                              {String(
-                                selectedOrder.side ?? 'Dirección no disponible',
-                              )}
-                            </dd>
-                            <dt>Estado</dt>
-                            <dd>
-                              {String(
-                                selectedOrder.state ??
-                                  selectedOrder.status ??
-                                  'Estado no disponible',
-                              )}
-                            </dd>
-                            <dt>Cantidad</dt>
-                            <dd>
-                              {quantity(
-                                selectedOrder.quantity_btc ??
-                                  selectedOrder.quantity,
-                              )}
-                            </dd>
-                            <dt>Motivo de la orden</dt>
-                            <dd>
-                              {String(
-                                selectedOrder.reason_code ??
-                                  selectedOrder.reason ??
-                                  'No disponible',
-                              )}
-                            </dd>
-                          </dl>
-                          <h4>Ejecuciones de la orden</h4>
-                          {selectedFills.length > 0 ? (
-                            <ul>
-                              {selectedFills.map((fill, index) => (
-                                <li key={String(fill.fill_id ?? index)}>
-                                  {String(fill.fill_id ?? 'Ejecución')} ·{' '}
-                                  {quantity(fill.quantity_btc)} @{' '}
-                                  {money(fill.price_usd_per_btc)} ·{' '}
-                                  {utcTime(fill.event_time_ms)}
-                                </li>
-                              ))}
-                            </ul>
-                          ) : (
-                            <p>Sin ejecuciones registradas para esta orden.</p>
-                          )}
-                        </div>
-                      ) : (
-                        <p>Sin efecto</p>
-                      )}
-                    </section>
-                  )}
-                </TerminalDecisions>
-              }
-            />
-            {!engineOff && (
-              <>
-                <section
-                  className="connected-terminal__panel"
-                  aria-label="Controles paper"
-                >
-                  <h2>Controles simulados</h2>
-                  {localDemo && (
-                    <>
-                      <p>
-                        Pausar entradas bloquea solo nuevas entradas en esta
-                        ejecución MOCK; no detiene el motor, el mercado
-                        simulado, la protección ni los cierres.
-                      </p>
-                      <p>{entryStateLabel(entryRisk)}</p>
-                    </>
-                  )}
-                  {gatewayEngine && (
+                  position={position}
+                  positions={positions}
+                  orders={orders}
+                />
+                {!engineOff && (
+                  <p>
+                    Las cifras de cuenta y decisiones siguientes provienen del
+                    snapshot/eventos durables.
+                  </p>
+                )}
+              </section>
+            }
+            decisions={
+              <TerminalDecisions
+                rows={decisionRows}
+                selectedId={selectedId}
+                onSelect={setSelectedAnalysisId}
+                notice={
+                  engineOff
+                    ? 'Motor de decisiones apagado. Solo se muestran velas y precio públicos de Kraken Futures; no hay análisis, cuenta ni operaciones simuladas.'
+                    : !analyses.length && gatewayEngine
+                      ? analysesNotice(gatewayEngineStatus, gatewayEngineReason)
+                      : null
+                }
+                selected={
+                  selectedAnalysis && !engineOff ? (
+                    <SelectedDecision
+                      analysis={selectedAnalysis}
+                      id={selectedId}
+                      time={utcTime(selectedDecisionTime)}
+                      reason={analysisReason(selectedAnalysis, localDemo)}
+                    />
+                  ) : null
+                }
+              >
+                {localDemo && selectedAnalysis && (
+                  <section aria-label="Análisis seleccionado">
+                    <h3>Análisis seleccionado</h3>
+                    <dl>
+                      <dt>ID de análisis</dt>
+                      <dd>{selectedId || 'ID no disponible'}</dd>
+                      <dt>Hora</dt>
+                      <dd>{utcTime(selectedDecisionTime)}</dd>
+                      <dt>Motivo</dt>
+                      <dd>{analysisReason(selectedAnalysis, true)}</dd>
+                    </dl>
+                    {selectedOrder ? (
+                      <div>
+                        <h4>Efecto durable</h4>
+                        <dl>
+                          <dt>ID de orden</dt>
+                          <dd>{String(selectedOrder.order_id)}</dd>
+                          <dt>Tipo / dirección</dt>
+                          <dd>
+                            {String(
+                              selectedOrder.order_type ??
+                                selectedOrder.type ??
+                                'Tipo no disponible',
+                            )}{' '}
+                            ·{' '}
+                            {String(
+                              selectedOrder.side ?? 'Dirección no disponible',
+                            )}
+                          </dd>
+                          <dt>Estado</dt>
+                          <dd>
+                            {String(
+                              selectedOrder.state ??
+                                selectedOrder.status ??
+                                'Estado no disponible',
+                            )}
+                          </dd>
+                          <dt>Cantidad</dt>
+                          <dd>
+                            {quantity(
+                              selectedOrder.quantity_btc ??
+                                selectedOrder.quantity,
+                            )}
+                          </dd>
+                          <dt>Motivo de la orden</dt>
+                          <dd>
+                            {String(
+                              selectedOrder.reason_code ??
+                                selectedOrder.reason ??
+                                'No disponible',
+                            )}
+                          </dd>
+                        </dl>
+                        <h4>Ejecuciones de la orden</h4>
+                        {selectedFills.length > 0 ? (
+                          <ul>
+                            {selectedFills.map((fill, index) => (
+                              <li key={String(fill.fill_id ?? index)}>
+                                {String(fill.fill_id ?? 'Ejecución')} ·{' '}
+                                {quantity(fill.quantity_btc)} @{' '}
+                                {money(fill.price_usd_per_btc)} ·{' '}
+                                {utcTime(fill.event_time_ms)}
+                              </li>
+                            ))}
+                          </ul>
+                        ) : (
+                          <p>Sin ejecuciones registradas para esta orden.</p>
+                        )}
+                      </div>
+                    ) : (
+                      <p>Sin efecto</p>
+                    )}
+                  </section>
+                )}
+              </TerminalDecisions>
+            }
+          />
+          {!engineOff && (
+            <>
+              <section
+                className="connected-terminal__panel"
+                aria-label="Controles paper"
+              >
+                <h2>Controles simulados</h2>
+                {localDemo && (
+                  <>
                     <p>
-                      Pausar, reanudar y cerrar llegarán en PS-06: por ahora el
-                      terminal live es de solo lectura.
+                      Pausar entradas bloquea solo nuevas entradas en esta
+                      ejecución MOCK; no detiene el motor, el mercado simulado,
+                      la protección ni los cierres.
                     </p>
-                  )}
-                  {(localDemo
-                    ? ([
+                    <p>{entryStateLabel(entryRisk)}</p>
+                  </>
+                )}
+                {gatewayEngine && (
+                  <p>
+                    Pausar, reanudar y cerrar llegarán en PS-06: por ahora el
+                    terminal live es de solo lectura.
+                  </p>
+                )}
+                {(localDemo
+                  ? (['paper.pause', 'paper.resume', 'paper.new_run'] as const)
+                  : gatewayEngine
+                    ? (['paper.pause', 'paper.resume', 'paper.close'] as const)
+                    : ([
+                        'paper.start',
                         'paper.pause',
                         'paper.resume',
+                        'paper.close',
                         'paper.new_run',
                       ] as const)
-                    : gatewayEngine
-                      ? ([
-                          'paper.pause',
-                          'paper.resume',
-                          'paper.close',
-                        ] as const)
-                      : ([
-                          'paper.start',
-                          'paper.pause',
-                          'paper.resume',
-                          'paper.close',
-                          'paper.new_run',
-                        ] as const)
-                  )
-                    .filter((action) => action !== 'paper.new_run')
-                    .map((action) => (
+                )
+                  .filter((action) => action !== 'paper.new_run')
+                  .map((action) => (
+                    <button
+                      key={action}
+                      type="button"
+                      className="demo-terminal__present"
+                      disabled={gatewayEngine || !connected || commandPending}
+                      onClick={() => {
+                        if (action === 'paper.new_run') {
+                          setConfirmingReset(true)
+                          return
+                        }
+                        sendCommand(action)
+                      }}
+                    >
+                      {
+                        (localDemo
+                          ? {
+                              'paper.start': 'Iniciar simulación',
+                              'paper.pause': 'Pausar entradas (MOCK)',
+                              'paper.resume': 'Reanudar entradas (MOCK)',
+                              'paper.close': 'Cerrar posición',
+                              'paper.new_run': 'Nueva cuenta/run (MOCK)',
+                            }
+                          : {
+                              'paper.start': 'Iniciar simulación',
+                              'paper.pause': 'Pausar entradas',
+                              'paper.resume': 'Reanudar entradas',
+                              'paper.close': 'Cerrar posición',
+                              'paper.new_run': 'Nueva cuenta/run',
+                            })[action]
+                      }
+                    </button>
+                  ))}
+                <div
+                  className="connected-terminal__reset"
+                  role="group"
+                  aria-label="Reiniciar cuenta"
+                >
+                  {confirmingReset ? (
+                    <>
+                      <p role="alert">
+                        {localDemo
+                          ? 'Se crea una cuenta/run MOCK nueva que repite el escenario; el historial anterior se conserva.'
+                          : 'Se crea una cuenta/run nuevo; el historial anterior se conserva.'}
+                      </p>
                       <button
-                        key={action}
                         type="button"
                         className="demo-terminal__present"
-                        disabled={gatewayEngine || !connected || commandPending}
+                        disabled={!connected || commandPending}
                         onClick={() => {
-                          if (action === 'paper.new_run') {
-                            setConfirmingReset(true)
-                            return
-                          }
-                          sendCommand(action)
+                          setConfirmingReset(false)
+                          sendCommand('paper.new_run')
                         }}
                       >
-                        {
-                          (localDemo
-                            ? {
-                                'paper.start': 'Iniciar simulación',
-                                'paper.pause': 'Pausar entradas (MOCK)',
-                                'paper.resume': 'Reanudar entradas (MOCK)',
-                                'paper.close': 'Cerrar posición',
-                                'paper.new_run': 'Nueva cuenta/run (MOCK)',
-                              }
-                            : {
-                                'paper.start': 'Iniciar simulación',
-                                'paper.pause': 'Pausar entradas',
-                                'paper.resume': 'Reanudar entradas',
-                                'paper.close': 'Cerrar posición',
-                                'paper.new_run': 'Nueva cuenta/run',
-                              })[action]
-                        }
+                        Confirmar nueva cuenta
                       </button>
-                    ))}
-                  <div
-                    className="connected-terminal__reset"
-                    role="group"
-                    aria-label="Reiniciar cuenta"
-                  >
-                    {confirmingReset ? (
-                      <>
-                        <p role="alert">
-                          {localDemo
-                            ? 'Se crea una cuenta/run MOCK nueva que repite el escenario; el historial anterior se conserva.'
-                            : 'Se crea una cuenta/run nuevo; el historial anterior se conserva.'}
-                        </p>
-                        <button
-                          type="button"
-                          className="demo-terminal__present"
-                          disabled={!connected || commandPending}
-                          onClick={() => {
-                            setConfirmingReset(false)
-                            sendCommand('paper.new_run')
-                          }}
-                        >
-                          Confirmar nueva cuenta
-                        </button>
-                        <button
-                          type="button"
-                          className="demo-terminal__present"
-                          onClick={() => setConfirmingReset(false)}
-                        >
-                          Cancelar
-                        </button>
-                      </>
-                    ) : (
-                      !gatewayEngine && (
-                        <button
-                          type="button"
-                          className="demo-terminal__present"
-                          disabled={!connected || commandPending}
-                          onClick={() => setConfirmingReset(true)}
-                        >
-                          {localDemo
-                            ? 'Nueva cuenta/run (MOCK)'
-                            : 'Nueva cuenta/run'}
-                        </button>
-                      )
-                    )}
-                  </div>
-                  {commandPending && (
-                    <span role="status">
-                      Comando enviado; aceptación no significa fill.
-                    </span>
+                      <button
+                        type="button"
+                        className="demo-terminal__present"
+                        onClick={() => setConfirmingReset(false)}
+                      >
+                        Cancelar
+                      </button>
+                    </>
+                  ) : (
+                    !gatewayEngine && (
+                      <button
+                        type="button"
+                        className="demo-terminal__present"
+                        disabled={!connected || commandPending}
+                        onClick={() => setConfirmingReset(true)}
+                      >
+                        {localDemo
+                          ? 'Nueva cuenta/run (MOCK)'
+                          : 'Nueva cuenta/run'}
+                      </button>
+                    )
                   )}
-                  {commandStatus && <p role="status">{commandStatus}</p>}
-                </section>
-                <section
-                  className="connected-terminal__panel"
-                  aria-label="Cuenta paper"
-                >
-                  <h2>Cuenta paper</h2>
-                  <div>
-                    <dl>
-                      <dt>Saldo USD</dt>
-                      <dd>{money(account.cash_usd)}</dd>
-                      <dt>Patrimonio USD</dt>
-                      <dd
-                        title={String(account.equity_usd ?? '')}
-                        data-value={String(account.equity_usd ?? '')}
-                      >
-                        {money(account.equity_usd, localDemo ? 5 : 2)}
-                      </dd>
-                      {showAnalysisTime && (
-                        <>
-                          <dt>PnL bruto realizado USD</dt>
-                          <dd
-                            title={String(account.realized_gross_usd ?? '')}
-                            data-value={String(
-                              account.realized_gross_usd ?? '',
-                            )}
-                          >
-                            {money(account.realized_gross_usd, 5)}
-                          </dd>
-                        </>
-                      )}
-                      <dt>Fees USD</dt>
-                      <dd
-                        title={String(account.fees_usd ?? '')}
-                        data-value={String(account.fees_usd ?? '')}
-                      >
-                        {money(account.fees_usd, localDemo ? 5 : 2)}
-                      </dd>
-                      <dt>Funding pagado (USD)</dt>
-                      <dd>
-                        {account.funding_complete === true
-                          ? money(
-                              account.funding_paid_usd ?? account.funding_paid,
-                            )
-                          : 'Incompleto · neto no disponible'}
-                      </dd>
-                      <dt>PnL neto</dt>
-                      <dd
-                        {...(localDemo && netValue != null
-                          ? {
-                              title: String(netValue),
-                              'data-value': String(netValue),
-                            }
-                          : {})}
-                      >
-                        {netValue == null
-                          ? account.funding_complete === true
-                            ? 'No disponible durante posición abierta'
-                            : 'Incompleto'
-                          : money(netValue, localDemo ? 5 : 2)}
-                      </dd>
-                      <dt>Posición</dt>
-                      <dd>
-                        {position.side
-                          ? `${String(position.side)} · ${quantity(position.quantity_btc)}`
-                          : localDemo
-                            ? `${quantity(position.quantity_btc ?? '0')} · Sin exposición`
-                            : 'Sin posición abierta'}
-                      </dd>
-                    </dl>
-                  </div>
-                </section>
-                <ApprovedPortfolioTables
-                  label={`CARTERA PAPER · USD / ${productBase(product)}`}
-                  title="Posiciones y operaciones"
-                  ariaLabel="Posiciones paper"
-                  open={{
-                    title: 'Posición abierta',
-                    columns: [
-                      'Estrategia',
-                      'Dirección',
-                      `Cantidad ${productBase(product)}`,
-                      'Entrada USD',
-                      'Stop USD',
-                      'Objetivo USD',
-                    ],
-                    emptyLabel: 'Sin posición abierta.',
-                    rows: position.side
-                      ? [
-                          {
-                            id: String(state.run_id),
-                            cells: [
-                              strategyLabel(position.strategy_id).split(
-                                ' · ',
-                              )[0]!,
-                              String(position.side),
-                              quantity(position.quantity_btc),
-                              money(position.entry_price_usd_per_btc),
-                              money(position.stop),
-                              money(position.target),
-                            ],
-                          },
-                        ]
-                      : [],
-                  }}
-                  closed={{
-                    title: 'Órdenes y ejecuciones',
-                    columns: ['Tipo', 'Estado', 'Referencia'],
-                    emptyLabel: 'No hay órdenes registradas.',
-                    rows: [
-                      ...orders.slice(-100).map((value, index) => {
-                        const order = record(value)
-                        return {
-                          id: String(order.order_id ?? index),
+                </div>
+                {commandPending && (
+                  <span role="status">
+                    Comando enviado; aceptación no significa fill.
+                  </span>
+                )}
+                {commandStatus && <p role="status">{commandStatus}</p>}
+              </section>
+              <section
+                className="connected-terminal__panel"
+                aria-label="Cuenta paper"
+              >
+                <h2>Cuenta paper</h2>
+                <div>
+                  <dl>
+                    <dt>Saldo USD</dt>
+                    <dd>{money(account.cash_usd)}</dd>
+                    <dt>Patrimonio USD</dt>
+                    <dd
+                      title={String(account.equity_usd ?? '')}
+                      data-value={String(account.equity_usd ?? '')}
+                    >
+                      {money(account.equity_usd, localDemo ? 5 : 2)}
+                    </dd>
+                    {showAnalysisTime && (
+                      <>
+                        <dt>PnL bruto realizado USD</dt>
+                        <dd
+                          title={String(account.realized_gross_usd ?? '')}
+                          data-value={String(account.realized_gross_usd ?? '')}
+                        >
+                          {money(account.realized_gross_usd, 5)}
+                        </dd>
+                      </>
+                    )}
+                    <dt>Fees USD</dt>
+                    <dd
+                      title={String(account.fees_usd ?? '')}
+                      data-value={String(account.fees_usd ?? '')}
+                    >
+                      {money(account.fees_usd, localDemo ? 5 : 2)}
+                    </dd>
+                    <dt>Funding pagado (USD)</dt>
+                    <dd>
+                      {account.funding_complete === true
+                        ? money(
+                            account.funding_paid_usd ?? account.funding_paid,
+                          )
+                        : 'Incompleto · neto no disponible'}
+                    </dd>
+                    <dt>PnL neto</dt>
+                    <dd
+                      {...(localDemo && netValue != null
+                        ? {
+                            title: String(netValue),
+                            'data-value': String(netValue),
+                          }
+                        : {})}
+                    >
+                      {netValue == null
+                        ? account.funding_complete === true
+                          ? 'No disponible durante posición abierta'
+                          : 'Incompleto'
+                        : money(netValue, localDemo ? 5 : 2)}
+                    </dd>
+                    <dt>Posición</dt>
+                    <dd>
+                      {position.side
+                        ? `${String(position.side)} · ${quantity(position.quantity_btc)}`
+                        : localDemo
+                          ? `${quantity(position.quantity_btc ?? '0')} · Sin exposición`
+                          : 'Sin posición abierta'}
+                    </dd>
+                  </dl>
+                </div>
+              </section>
+              <ApprovedPortfolioTables
+                label={`CARTERA PAPER · USD / ${productBase(product)}`}
+                title="Posiciones y operaciones"
+                ariaLabel="Posiciones paper"
+                open={{
+                  title: 'Posición abierta',
+                  columns: [
+                    'Estrategia',
+                    'Dirección',
+                    `Cantidad ${productBase(product)}`,
+                    'Entrada USD',
+                    'Stop USD',
+                    'Objetivo USD',
+                  ],
+                  emptyLabel: 'Sin posición abierta.',
+                  rows: position.side
+                    ? [
+                        {
+                          id: String(state.run_id),
                           cells: [
-                            String(
-                              order.side ??
-                                order.action ??
-                                order.order_type ??
-                                'Orden paper',
-                            ),
-                            reasonLabel(order.status ?? order.type),
-                            `${String(order.quantity_btc ?? 'Cantidad no disponible')} · ${String(order.order_id ?? 'ID no disponible')}${
-                              gatewayEngine &&
-                              typeof order.reason_code === 'string'
-                                ? ` · ${reasonLabel(order.reason_code)}`
-                                : ''
-                            }`,
+                            strategyLabel(position.strategy_id).split(
+                              ' · ',
+                            )[0]!,
+                            String(position.side),
+                            quantity(position.quantity_btc),
+                            money(position.entry_price_usd_per_btc),
+                            money(position.stop),
+                            money(position.target),
+                          ],
+                        },
+                      ]
+                    : [],
+                }}
+                closed={{
+                  title: 'Órdenes y ejecuciones',
+                  columns: ['Tipo', 'Estado', 'Referencia'],
+                  emptyLabel: 'No hay órdenes registradas.',
+                  rows: [
+                    ...orders.slice(-100).map((value, index) => {
+                      const order = record(value)
+                      return {
+                        id: String(order.order_id ?? index),
+                        cells: [
+                          String(
+                            order.side ??
+                              order.action ??
+                              order.order_type ??
+                              'Orden paper',
+                          ),
+                          reasonLabel(order.status ?? order.type),
+                          `${String(order.quantity_btc ?? 'Cantidad no disponible')} · ${String(order.order_id ?? 'ID no disponible')}${
+                            gatewayEngine &&
+                            typeof order.reason_code === 'string'
+                              ? ` · ${reasonLabel(order.reason_code)}`
+                              : ''
+                          }`,
+                        ],
+                      }
+                    }),
+                    ...(Array.isArray(state.fills) ? state.fills : [])
+                      .slice(-100)
+                      .map((value, index) => {
+                        const fill = record(value)
+                        return {
+                          id: String(fill.fill_id ?? `fill-${index}`),
+                          cells: [
+                            `Ejecución ${String(fill.action ?? fill.side ?? 'paper')}`,
+                            `${quantity(fill.quantity_btc)} @ ${money(fill.price_usd_per_btc)}`,
+                            String(fill.fill_id ?? 'Fill registrado'),
                           ],
                         }
                       }),
-                      ...(Array.isArray(state.fills) ? state.fills : [])
-                        .slice(-100)
-                        .map((value, index) => {
-                          const fill = record(value)
-                          return {
-                            id: String(fill.fill_id ?? `fill-${index}`),
-                            cells: [
-                              `Ejecución ${String(fill.action ?? fill.side ?? 'paper')}`,
-                              `${quantity(fill.quantity_btc)} @ ${money(fill.price_usd_per_btc)}`,
-                              String(fill.fill_id ?? 'Fill registrado'),
-                            ],
-                          }
-                        }),
-                    ],
-                  }}
-                />
-              </>
-            )}
-          </>
-        )}
-      </main>
-    </div>
+                  ],
+                }}
+              />
+            </>
+          )}
+        </>
+      )}
+    </AppShell>
   )
 }

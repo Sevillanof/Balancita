@@ -1,24 +1,26 @@
 import type { ReactNode } from 'react'
 
-export type TradingNavigationItem = {
+export type NavigationItem = {
   href: string
   label: string
   current?: boolean
 }
 
-type ApprovedTradingHeaderProps = {
+type TopBarProps = {
   brandHref: string
   brandLabel: string
-  navigation: readonly TradingNavigationItem[]
+  navigation: readonly NavigationItem[]
+  /** Right side of the bar: health, product, mode. */
   status: ReactNode
 }
 
-export default function ApprovedTradingHeader({
+/** The shared header of every screen: brand, navigation and status. */
+export default function TopBar({
   brandHref,
   brandLabel,
   navigation,
   status,
-}: ApprovedTradingHeaderProps) {
+}: TopBarProps) {
   return (
     <header
       className="demo-shell__header"
