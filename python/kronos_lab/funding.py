@@ -149,6 +149,9 @@ def write_json_atomic(path, body):
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Write Kronos' funding corrections next to, not into, kronos.sqlite.")
     parser.add_argument("--out", required=True, help="the Kronos output directory (kronos.sqlite is opened read-only)")
+    parser.add_argument("--write-dir", default=None,
+                        help="where kronos-funding.sqlite and kronos-funding-summary.json go; default: --out. "
+                             "Use a separate folder to leave the live Kronos directory without a single new file")
     parser.add_argument("--market-db", required=True, help="market DB holding the stored Kraken funding periods")
     parser.add_argument("--funding-db", default=None, help="default: <out>/kronos-funding.sqlite")
     args = parser.parse_args(argv)
@@ -157,13 +160,15 @@ def main(argv=None):
     periods = {}
     for product_id in sorted({t["product_id"] for t in trades}):
         periods[product_id] = funding_periods(funding_for(args.market_db, product_id))
-    funding_db = sqlite3.connect(args.funding_db or os.path.join(args.out, "kronos-funding.sqlite"))
+    write_dir = args.write_dir or args.out
+    os.makedirs(write_dir, exist_ok=True)
+    funding_db = sqlite3.connect(args.funding_db or os.path.join(write_dir, "kronos-funding.sqlite"))
     try:
         added = reconcile(trades, funding_db, periods)
         body = summarize(corrected(trades, funding_db))
     finally:
         funding_db.close()
-    write_json_atomic(os.path.join(args.out, "kronos-funding-summary.json"), dict(body, corrections_added=added))
+    write_json_atomic(os.path.join(write_dir, "kronos-funding-summary.json"), dict(body, corrections_added=added))
     group = body["forward_all"]
     print("corrections added: {}; forward trades {} (verified {}, pending {}); definitive: {}".format(
         added, group["trades"], group["funding_verified"], group["funding_pending"],

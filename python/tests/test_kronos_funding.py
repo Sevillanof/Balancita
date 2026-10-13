@@ -202,6 +202,22 @@ class KronosFundingTests(unittest.TestCase):
                 self.assertEqual(json.load(handle), {"v": 2})
             self.assertEqual(os.listdir(d), ["kronos-funding-summary.json"])
 
+    def test_write_dir_keeps_the_kronos_directory_free_of_new_files(self):
+        with tempfile.TemporaryDirectory() as d:
+            live, out = os.path.join(d, "live"), os.path.join(d, "funding")
+            os.makedirs(live)
+            fx = Fixture(live)
+            fx.add("PF_XBTUSD", T0, "LONG")
+            fx.db.commit()
+            fx.close()
+            before = digest(fx.path)
+            market = os.path.join(d, "market.sqlite")
+            sqlite3.connect(market).close()
+            funding.main(["--out", live, "--write-dir", out, "--market-db", market])
+            self.assertEqual(os.listdir(live), ["kronos.sqlite"])
+            self.assertEqual(sorted(os.listdir(out)), ["kronos-funding-summary.json", "kronos-funding.sqlite"])
+            self.assertEqual(digest(fx.path), before)
+
 
 if __name__ == "__main__":
     unittest.main()

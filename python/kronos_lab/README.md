@@ -38,4 +38,4 @@ forward's `forward_trade_funding`: unknown funding is never zero, a hole gives n
 `kronos-funding-summary.json` (written atomically) reports forward trades only, in three groups (all, without the positions held through a recorded interruption, and those apart), each with `before_funding` (stored nets), `after_funding_all` and `funding_verified_only`. While any trade of a group is pending its verdict reads `provisional_funding_pending`. It never touches `kronos.sqlite`, `kronos-summary.json`
 or the running process:
 
-    PYTHONPATH=python python3 -m kronos_lab.funding --out server/data/kronos --market-db <futures-market.sqlite>
+    PYTHONPATH=python python3 -m kronos_lab.funding --out server/data/kronos --write-dir <other folder> --market-db <futures-market.sqlite>
