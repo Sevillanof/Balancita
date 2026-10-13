@@ -199,3 +199,25 @@ Se rechaza también: journal con cadena rota (`journal_corrupt`), journal detrá
 **Equivalencia.** Corrida continua, con una o varias caídas y recuperada en otro proceso dan el mismo `financial_digest`, `accounting_digest` y `ledger_hash` (pruebas en `test_paper_runner_recovery.py`, incluido un crash real con `os._exit` y recuperación en un proceso nuevo). Con un reloj de recuperación posterior, la diferencia (señal vencida, orden cancelada) es la esperada y queda registrada.
 
 **Limitaciones de 8B (para 8C).** Sin eventos de funding, conciliación ni disputas (casos D, E, F); sin suspensiones persistidas ni cobertura de mercado por intervalo (I13); sin reporte final ni auditoría independiente integrada; las políticas de ejecución, vigilancia y recuperación siguen siendo hipótesis experimentales. Sin sizing dinámico ni cambios al ADR.
+
+## 12. Implementación de 8C (integración financiera y auditoría)
+
+**Eventos nuevos.** `funding` (períodos de funding de un producto) y `reconcile` (pedido explícito de conciliación). El journal pasa a `v3` y el reporte a `balancita-paper-runner-report.v2`. La integración reutiliza las reglas de la etapa 7 sin cambiarlas: períodos duplicados no hacen nada, los conflictos van a cuarentena y nunca se aplican, una disputa reclasifica la ganancia una sola vez y la conciliación es idempotente (recalcula desde los períodos y solo actúa cuando crece el tiempo cubierto).
+
+**Funding en dos pasos durables.** (1) `event_accepted` aplica `ingest_funding`; (2) una entrada `reconciliation` aplica `reconcile_funding(portfolio, now_ms)`. Si el proceso muere entre ambos, la recuperación paga la obligación `reconciliation_pending` con el reloj de recuperación, antes de cualquier ciclo o decisión nuevos. Una conciliación ya aplicada no se repite: no hay cierres, comisiones, ajustes ni reclasificaciones duplicados.
+
+**Caídas D, E y F.** D: tras un cierre. E: durante la conciliación. F: durante la reclasificación de un funding disputado (incluida una escritura a medias del evento contradictorio). Cada una se prueba con la matriz de puntos de falla y con procesos reales (`os._exit`).
+
+**Suspensiones.** Por pérdida diaria y por drawdown; se derivan del `capital_log` (función pura del estado), por lo tanto sobreviven a un reinicio. Solo bloquean entradas nuevas: cierres, funding y conciliación siguen siempre.
+
+**Cobertura de mercado.** `coverage = {last_quote, gaps}`. Hay dos tipos de hueco: `quote_gap` (silencio mayor a `coverage_gap_ms`, 120 s, con posición abierta; hipótesis experimental) y `runner_interrupted` (el intervalo en que el proceso estuvo caído, calculado en la recuperación). Una posición con un hueco que la toca, o sin cotización vigente, se informa con `stop_protection = "unobserved"`: nunca se declara protegida sin cotizaciones observadas.
+
+**Contrato de observabilidad.** Cuatro clases: _observed_ (eventos, offsets, cotizaciones), _simulated_ (órdenes, posiciones, resultados), _estimated_ (valores derivados) e _uncertain_ (funding incompleto o en cuarentena, cobertura, huecos). Alertas: `accounting_discrepancy`, `recovery_incomplete`, `funding_conflict`, `offset_holes`, `insufficient_market_data`, `funding_incomplete`, `entries_suspended`. `degraded` y `suspended_entries` son banderas derivadas; los estados del runner son CREATED, PROCESSING, RECOVERING, FINISHED y REFUSED.
+
+**Auditoría integrada.** `portfolio_audit.audit` más controles propios del runner: cadena del journal, una sola operación por orden abierta, eventos de capital contra ajustes y reclasificaciones, decisiones contra órdenes, orden causal, obligaciones cerradas al terminar y totales de comisiones.
+
+**Demo reproducible.** `python -m balancita_engine.paper_runner_demo compare DIR` corre una sesión sintética completa y la misma sesión con 4 muertes de proceso (`os._exit`) recuperadas cada vez en otro proceso, y compara hashes. `... informe FILE.md` escribe el informe; el último está en [paper-runner-8c-informe.md](paper-runner-8c-informe.md).
+
+**Garantías demostradas.** Batería de 23 escenarios determinista; matrices D/E/F; igualdad de `financial_digest`, `accounting_digest`, ledger, ajustes y reclasificaciones entre ejecución continua y recuperada; 0 violaciones contables; el auditor detecta daño inyectado.
+
+**Limitaciones pendientes.** Las políticas de ejecución, vigilancia, recuperación y `coverage_gap_ms` siguen siendo hipótesis experimentales. No hay resolución automática de disputas de funding. No hay feeds reales ni UI. `DEGRADED` y `STOPPED` existen solo como banderas derivadas. Sin sizing dinámico ni cambios al ADR; la enmienda de sizing dinámico sigue pendiente de Fran.

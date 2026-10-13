@@ -34,16 +34,17 @@ from .paper_runner_store import (
 )
 from .portfolio import PORTFOLIO_SCHEMA, Portfolio, PortfolioPolicy
 from .portfolio_audit import accounting_digest
+from .portfolio_funding import ingest_funding, reconcile_funding
 from .portfolio_watch import SCHEMA as WATCH_SCHEMA, WatchPolicy, parse_quote
 
 D = Decimal
-JOURNAL_SCHEMA = "balancita-paper-runner-journal.v2"
-REPORT_SCHEMA = "balancita-paper-runner-report.v1"
+JOURNAL_SCHEMA = "balancita-paper-runner-journal.v3"
+REPORT_SCHEMA = "balancita-paper-runner-report.v2"
 ONE_MINUTE_MS = 60_000
 GENESIS = "0" * 64
 
 # Event kinds the runner accepts from a source. ``reconstructed`` is evidence for the audit and never an order.
-EVENT_KINDS = ("cycle", "quote", "candle", "clock", "reconstructed", "gap_declared")
+EVENT_KINDS = ("cycle", "quote", "candle", "clock", "reconstructed", "gap_declared", "funding", "reconcile")
 CREATED, PROCESSING, RECOVERING, FINISHED, REFUSED = "CREATED", "PROCESSING", "RECOVERING", "FINISHED", "REFUSED"
 # 8C adds DEGRADED and STOPPED; SUSPENDED_ENTRIES is not a runner state but a flag derived from the portfolio (it only
 # blocks new entries).
@@ -74,6 +75,7 @@ class RunnerConfig:
     stop_policy: str = "level"
     funding: tuple = ()          # ((product, ((start_ms, end_ms, rate), ...)), ...) known when the run starts
     start_ms: int = 0
+    coverage_gap_ms: int = 120_000   # experimental hypothesis: longer without a quote while a position is open = unobserved
 
     def funding_map(self):
         return {product: [tuple(row) for row in rows] for product, rows in self.funding}
@@ -140,7 +142,7 @@ def manifest(config, log, strategies):
         "portfolio_policy": asdict(config.portfolio), "portfolio_policy_hash": config.portfolio.policy_hash(),
         "execution_policy": asdict(config.execution), "execution_policy_hash": config.execution.policy_hash(),
         "watch_policy": asdict(config.watch), "watch_policy_hash": config.watch.policy_hash(),
-        "stop_policy": config.stop_policy,
+        "stop_policy": config.stop_policy, "coverage_gap_ms": config.coverage_gap_ms,
         "risk_policy_hash": RiskPolicy().policy_hash(),      # stop/target levels (``multi_risk``), default policy
         "decimal_context": {"prec": getcontext().prec, "rounding": getcontext().rounding},
         "cost_model_version": COST_MODEL_VERSION, "cost_model_hash": cost_model_hash(),
@@ -266,6 +268,8 @@ class PaperRunner(object):
         self.open_cycles = {}        # event_id -> a cycle (or reconstructed) event whose signals/decisions are not all recorded
         self.decision_owner = {}     # signal key -> event_id of the cycle that must decide it
         self.cycles_seen = set()     # (product, cycle_ms) of every accepted cycle
+        self.open_funding = {}       # event_id -> funding/reconcile event whose reconciliation entry is not recorded yet
+        self.coverage = {"last_quote": {}, "gaps": []}     # market coverage while positions are open (observed facts)
         self.recoveries, self.last_recovery, self.last_checkpoint = 0, None, None
         self.replaying = False
         if entries is None:
@@ -399,6 +403,13 @@ class PaperRunner(object):
             if owner in self.open_cycles:
                 self.open_cycles[owner]["undecided"].discard(data["signal_key"])
                 self._maybe_close(owner)
+        elif kind == "reconciliation":
+            made = reconcile_funding(self.portfolio, data["now_ms"])
+            self._count("funding_adjustments", len(made))
+            self._count("reconciliations")
+            item = self.open_funding.pop(data["event_id"], None)
+            if item is not None and item["stream"] is not None:
+                self.offsets.process(*item["stream"])
         elif kind == "order_cancelled":
             record = self.executor.cancel(data["intent_id"], data["reason"], entry["t_ms"],
                                           uncovered_from_ms=data["uncovered_from_ms"], uncovered_to_ms=data["uncovered_to_ms"],
@@ -409,6 +420,7 @@ class PaperRunner(object):
             self.recoveries += 1
             self.last_recovery = {k: data[k] for k in ("recovery_ms", "journal_clock_ms", "uncovered_ms", "obligations",
                                                         "interrupted_orders", "open_positions", "tail_discarded_bytes")}
+            self.coverage["gaps"].extend(data.get("coverage_gaps", ()))
             self._count("recoveries")
 
     def _accepted(self, event, t_ms):
@@ -428,9 +440,26 @@ class PaperRunner(object):
                                                    "signals_persisted": False, "actionable": [], "undecided": set()}
             if kind == "cycle":
                 self.cycles_seen.add((payload["product_id"], int(payload["cycle_ms"])))
+        elif kind in ("funding", "reconcile"):
+            self.open_funding[event["event_id"]] = {"event": event, "stream": stream}
         elif stream is not None:
             self.offsets.process(stream[0], stream[1], stream[2])
         self._apply_market(event)
+
+    def _note_coverage(self, quote):
+        """A position is watched by quotes only while they keep arriving. A silence longer than ``coverage_gap_ms`` with
+        a position open is recorded as a fact (it is never filled in later and never read as protection)."""
+        product, now = quote["product_id"], int(quote["time_ms"])
+        book = self.portfolio.positions.get(product)
+        if book is not None and book.position is not None:
+            since = max(self.coverage["last_quote"].get(product, 0),
+                        int(book.position.get("entry_ms", book.position["opened_at"])))
+            known = [g["to_ms"] for g in self.coverage["gaps"] if g["intent_id"] == book.intent["intent_id"]]
+            since = max([since] + known)         # a silence already recorded (an interruption) is not counted twice
+            if now - since > self.config.coverage_gap_ms:
+                self.coverage["gaps"].append({"product_id": product, "from_ms": since, "to_ms": now, "kind": "quote_gap",
+                                              "intent_id": book.intent["intent_id"]})
+        self.coverage["last_quote"][product] = max(self.coverage["last_quote"].get(product, 0), now)
 
     @staticmethod
     def _stream_of(event):
@@ -448,7 +477,13 @@ class PaperRunner(object):
     def _apply_market(self, event):
         kind, payload = event["kind"], event["payload"]
         if kind == "quote":
+            self._note_coverage(payload)
             self.executor.on_quote(payload)
+        elif kind == "funding":
+            counts = ingest_funding(self.portfolio, payload["product_id"], payload["periods"], received_ms=event["t_ms"],
+                                    source=event["source"])
+            for name, number in counts.items():
+                self._count("funding_" + name, number)
         elif kind == "candle":
             product, bucket = payload["product_id"], int(payload["bucket_ms"])
             self.candle_digest[(product, bucket)] = stable_hash({k: str(payload["candle"][k]) for k in ("open", "high", "low", "close")})
@@ -491,6 +526,8 @@ class PaperRunner(object):
         self._record(event["t_ms"], "event_accepted", {"event": event})
         if results is not None:
             self._persist_and_decide(event, results, event["t_ms"])
+        if event["kind"] in ("funding", "reconcile"):
+            self._reconcile(event, event["t_ms"])
         return {"status": "accepted", "event_id": event["event_id"]}
 
     def _reject(self, t_ms, event, reason, status="rejected"):
@@ -554,6 +591,13 @@ class PaperRunner(object):
                     return "candle_not_closed"
             elif kind == "gap_declared":
                 return self._gap_check(payload)
+            elif kind == "funding":
+                periods = payload["periods"]
+                if not isinstance(payload["product_id"], str) or not isinstance(periods, list) \
+                        or any(not isinstance(p, (list, tuple)) for p in periods):
+                    return "invalid_event"
+            elif kind == "reconcile":
+                return None
         except (KeyError, TypeError, ValueError, InvalidOperation):
             return "invalid_event"
         return None
@@ -608,6 +652,12 @@ class PaperRunner(object):
         for key in actionable:
             self._decide(key, payload, t_ms)
 
+    def _reconcile(self, event, now_ms):
+        """Late funding is applied in two durable steps (the event, then its reconciliation), so a crash between them
+        leaves a visible obligation. ``reconcile_funding`` recomputes from the accepted periods and acts only when the
+        covered time grew: doing it twice, here or after a recovery, adjusts nothing twice."""
+        self._record(now_ms, "reconciliation", {"event_id": event["event_id"], "now_ms": int(now_ms)})
+
     def _decide(self, key, payload, t_ms):
         self._record(t_ms, "decision", {"signal_key": key, "decided_ms": t_ms,
                                         "reference_price": str(payload["price"]), "atr": str(payload["atr"])})
@@ -638,12 +688,17 @@ class PaperRunner(object):
             else:
                 obligations.extend({"event_id": event_id, "obligation": "decision_pending", "signal_key": k}
                                    for k in c["actionable"] if k in c["undecided"])
+        obligations.extend({"event_id": event_id, "obligation": "reconciliation_pending"}
+                           for event_id in sorted(self.open_funding))
         self._record(recovery_ms, "recovery", {
             "recovery_ms": recovery_ms, "journal_clock_ms": before, "uncovered_ms": recovery_ms - before,
             "tail_discarded_bytes": tail_discarded, "obligations": obligations, "interrupted_orders": interrupted,
-            "open_positions": sorted(self.portfolio.positions), "checkpoint_rebuilt": rebuilt_checkpoint})
+            "open_positions": sorted(self.portfolio.positions), "checkpoint_rebuilt": rebuilt_checkpoint,
+            "coverage_gaps": self._interruption_gaps(before, recovery_ms)})
         for item in interrupted:
             self._record(recovery_ms, "order_cancelled", dict(item, reason="runner_interrupted", recovery_ms=recovery_ms))
+        for event_id in sorted(self.open_funding):         # accounting first: nothing new is decided on stale capital
+            self._reconcile(self.open_funding[event_id]["event"], recovery_ms)
         for event_id, c in sorted(self.open_cycles.items(), key=lambda kv: (kv[1]["t_ms"], kv[0])):
             event = c["event"]
             if not c["signals_persisted"]:
@@ -655,6 +710,19 @@ class PaperRunner(object):
                 for key in [k for k in c["actionable"] if k in c["undecided"]]:
                     self._decide(key, event["payload"], recovery_ms)
         self.status = PROCESSING
+
+    def _interruption_gaps(self, before, recovery_ms):
+        """Every open position was unobserved while the process was down: no quote proves its stop was safe."""
+        if recovery_ms <= before:
+            return []
+        gaps = []
+        for product, book in sorted(self.portfolio.positions.items()):
+            since = max(before, self.coverage["last_quote"].get(product, 0),
+                        int(book.position.get("entry_ms", book.position["opened_at"])))
+            if recovery_ms > since:
+                gaps.append({"product_id": product, "from_ms": since, "to_ms": recovery_ms, "kind": "runner_interrupted",
+                             "intent_id": book.intent["intent_id"]})
+        return gaps
 
     @classmethod
     def create(cls, directory, config, strategies, *, evaluator=None):
@@ -774,6 +842,7 @@ class PaperRunner(object):
             "watch": self.executor.watch.events_hash() if self.executor.watch else None,
             "seen": sorted(self.seen.items()), "candles": sorted((list(k), v) for k, v in self.candle_digest.items()),
             "offsets": self.offsets.summary(), "open_cycles": sorted(self.open_cycles),
+            "open_funding": sorted(self.open_funding), "coverage": self.coverage,
             "stats": sorted(self.stats.items()), "clock": self.clock})
 
     def operational_digest(self):
@@ -800,18 +869,20 @@ class PaperRunner(object):
     def integrity(self):
         return {"last_checkpoint": None if self.last_checkpoint is None else {
                     k: self.last_checkpoint[k] for k in ("upto_seq", "journal_hash", "state_digest")},
-                "journal_entries": len(self.journal.entries), "unprocessed_events": len(self.open_cycles),
-                "open_cycles": sorted(self.open_cycles), "confirmable_offsets": self.offsets.confirmable(),
+                "journal_entries": len(self.journal.entries), "unprocessed_events": len(self.open_cycles) + len(self.open_funding),
+                "open_cycles": sorted(self.open_cycles), "open_funding": sorted(self.open_funding), "confirmable_offsets": self.offsets.confirmable(),
                 "offset_holes": self.offsets.holes_count(), "offsets": self.offsets.summary(),
                 "recoveries": self.recoveries, "last_recovery": self.last_recovery}
 
     def report(self):
-        return {"schema": REPORT_SCHEMA, "status": self.status, "clock_ms": self.clock,
-                "labels": {"orders": "observed", "portfolio": "simulated", "policies": "experimental"},
-                "orders": self.orders(), "portfolio": self.portfolio.snapshot(), "stats": dict(sorted(self.stats.items())),
-                "integrity": self.integrity(),
-                "journal": {"entries": len(self.journal.entries), "head": self.journal.head},
-                "state_digest": self.state_digest()}
+        """The versioned read contract (``paper_runner_report.observability``) plus the flat legacy keys of 8A/8B."""
+        from .paper_runner_report import observability      # imported late: the report reads the runner, never the reverse
+        out = observability(self)
+        out.update({"status": self.status, "clock_ms": self.clock, "orders": self.orders(),
+                    "portfolio": self.portfolio.snapshot(), "stats": dict(sorted(self.stats.items())),
+                    "integrity": self.integrity(), "journal": {"entries": len(self.journal.entries), "head": self.journal.head},
+                    "state_digest": self.state_digest()})
+        return out
 
 
 def _lock(directory):
