@@ -36,10 +36,10 @@ el cerrojo de escritura, así que no corre contra la base viva mientras `capture
 
 Base sintética de 40.000 tickers (filas pequeñas, solo para comprobar el banco):
 
-| Modo | Parada máxima del event loop | Pasos |
-|---|---|---|
-| legacy | 398 ms | 1 |
-| incremental | 80 a 90 ms | ~100 |
+| Modo        | Parada máxima del event loop | Pasos |
+| ----------- | ---------------------------- | ----- |
+| legacy      | 398 ms                       | 1     |
+| incremental | 80 a 90 ms                   | ~100  |
 
 **No está medido sobre la base real de 3,3 GB.** Esa medición es la que decide si basta con el trabajo por pasos. Si
 algún paso supera de forma sostenida los 100 ms con el lote mínimo, el siguiente paso es mover la retención a un
@@ -78,15 +78,15 @@ llegar a los tickers (el cursor persiste entre llamadas).
 Instantánea consistente (`VACUUM INTO`, 3,5 GB, 1,10 millones de eventos), copias
 idénticas por modo, shift de 2 min:
 
-| | Resultado |
-|---|---|
-| Paso más largo en régimen estacionario | 16–29 ms |
-| Arranque en frío (~900 pasos, un ciclo) | p50 5 ms, p99 47 ms, un paso de 102 ms |
-| Con ingesta concurrente (12 tickers/s + 4 trades/s) | p99 26 ms, máximo 82 ms, bloqueo máx. del monitor 83 ms |
-| Latencia de append durante la poda | p50 0,26 ms, máx. 11 ms |
-| Retención frente a entrada | 351–413 filas por ciclo de 2 min más recorte, frente a ~418 de entrada real |
-| Integridad | `quick_check` ok, triggers restaurados, velas, funding y analítica sin cambios |
-| `legacy` hasta done desde un proceso nuevo | 45 llamadas, paso más largo 293 ms |
+|                                                     | Resultado                                                                      |
+| --------------------------------------------------- | ------------------------------------------------------------------------------ |
+| Paso más largo en régimen estacionario              | 16–29 ms                                                                       |
+| Arranque en frío (~900 pasos, un ciclo)             | p50 5 ms, p99 47 ms, un paso de 102 ms                                         |
+| Con ingesta concurrente (12 tickers/s + 4 trades/s) | p99 26 ms, máximo 82 ms, bloqueo máx. del monitor 83 ms                        |
+| Latencia de append durante la poda                  | p50 0,26 ms, máx. 11 ms                                                        |
+| Retención frente a entrada                          | 351–413 filas por ciclo de 2 min más recorte, frente a ~418 de entrada real    |
+| Integridad                                          | `quick_check` ok, triggers restaurados, velas, funding y analítica sin cambios |
+| `legacy` hasta done desde un proceso nuevo          | 45 llamadas, paso más largo 293 ms                                             |
 
 Límites: el banco no reproduce los silencios reales de 7–47 s (en la copia el
 modo legacy bloquea ~1 s), así que la magnitud en vivo debe confirmarse con
