@@ -1,37 +1,97 @@
 /* Mission Control observability inside the Terminal: --mc-* tokens only. */
 .obs-health {
+  --obs-health-tone: var(--mc-text-2);
   display: inline-flex;
   align-items: center;
   gap: var(--mc-space-sm);
-  min-height: 30px;
+  min-height: 28px;
   padding: 0 var(--mc-space-md);
-  border: 1px solid var(--mc-border-strong);
-  border-radius: var(--mc-radius-lg);
+  border: 1px solid
+    color-mix(in oklab, var(--obs-health-tone) 25%, var(--mc-border));
+  border-radius: var(--mc-radius);
   color: var(--mc-text);
-  background: var(--mc-surface-2);
+  background: color-mix(
+    in oklab,
+    var(--obs-health-tone) 10%,
+    var(--mc-surface-1)
+  );
   font: inherit;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 500;
   white-space: nowrap;
   cursor: pointer;
 }
 .obs-health:hover {
-  background: var(--mc-surface-hover);
+  background: color-mix(
+    in oklab,
+    var(--obs-health-tone) 16%,
+    var(--mc-surface-1)
+  );
 }
+.obs-health[data-tone='ok'] {
+  --obs-health-tone: var(--mc-long);
+}
+.obs-health[data-tone='warning'] {
+  --obs-health-tone: var(--mc-warn);
+}
+.obs-health[data-tone='error'] {
+  --obs-health-tone: var(--mc-short);
+}
+/* The health beacon: a crisp 6 px square, as in the Stitch system. */
 .obs-health__dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--mc-text-2);
+  width: 6px;
+  height: 6px;
+  background: var(--obs-health-tone);
 }
-.obs-health[data-tone='ok'] .obs-health__dot {
-  background: var(--mc-long);
+.obs-health__flow,
+.obs-health__mode {
+  padding-left: var(--mc-space-sm);
+  border-left: 1px solid var(--mc-border-strong);
+  color: var(--mc-text-2);
 }
-.obs-health[data-tone='warning'] .obs-health__dot {
-  background: var(--mc-warn);
+.obs-health__flow[data-level='warn'] {
+  color: var(--mc-warn);
 }
-.obs-health[data-tone='error'] .obs-health__dot {
-  background: var(--mc-short);
+.obs-health__flow[data-level='bad'] {
+  color: var(--mc-short);
+}
+.obs-health__mode {
+  color: var(--mc-warn);
+  font-family: var(--mc-font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+}
+
+.obs-flow {
+  display: grid;
+  gap: var(--mc-space-sm);
+  margin-bottom: var(--mc-space-md);
+  padding: var(--mc-space-md) var(--mc-space-lg);
+  border: 1px solid var(--mc-border);
+  border-radius: var(--mc-radius);
+  color: var(--mc-text-2);
+  background: var(--mc-surface-2);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.obs-flow p,
+.obs-flow ul {
+  margin: 0;
+}
+.obs-flow ul {
+  padding-left: var(--mc-space-lg);
+}
+.obs-flow__title {
+  color: var(--mc-text);
+  font-weight: 600;
+}
+.obs-flow .demo-shell__badge {
+  justify-self: start;
+}
+.obs-flow details summary {
+  color: var(--mc-text);
+  cursor: pointer;
 }
 .obs-health:focus-visible,
 .obs-seg button:focus-visible,

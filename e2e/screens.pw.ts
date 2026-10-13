@@ -145,6 +145,7 @@ test('estrategias without the registry shows the error and no example data', asy
   await expect(page.getByTestId('flow-status')).toHaveText('Sin conexión')
   await page.getByTestId('flow-status').click()
   await expect(page.getByTestId('system-usage')).toBeVisible()
+  await page.keyboard.press('Escape')
   await expect(page.getByRole('alert').first()).toContainText(
     'No se muestran datos de ejemplo',
   )
