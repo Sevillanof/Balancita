@@ -37,6 +37,9 @@ import {
   utcTime,
 } from './terminal-labels.ts'
 import { record } from '../shared/wire/decode.ts'
+import HealthIndicator from '../features/observability/presentation/HealthIndicator.tsx'
+import { useHealth } from '../features/observability/presentation/useHealth.ts'
+import ObserverPanel from '../features/observability/presentation/ObserverPanel.tsx'
 
 /** Closed 1 m candles the engine needs before it can decide. */
 const WARMUP_CANDLES = 50
@@ -71,6 +74,8 @@ export default function FuturesTerminal({
     unknown
   > | null>(null)
   const [confirmingReset, setConfirmingReset] = useState(false)
+  const liveGateway = bootstrap.mode === 'paper_live'
+  const health = useHealth(liveGateway)
 
   const account = record(state?.account)
   const netValue = account.net_usd ?? account.net_complete
@@ -376,6 +381,9 @@ export default function FuturesTerminal({
             modeLabel={modeLabel}
             diagnosis={diagnosis}
           />
+          {bootstrap.mode === 'paper_live' && (
+            <HealthIndicator data={health.data} error={health.error} />
+          )}
           {localScenarioStatus && <span>{localScenarioStatus}</span>}
         </>
       }
@@ -436,39 +444,88 @@ export default function FuturesTerminal({
               </section>
             }
             decisions={
-              <TerminalDecisions
-                rows={decisionRows}
-                selectedId={selectedId}
-                onSelect={selectAnalysis}
-                notice={
-                  engineOff
-                    ? 'Motor de decisiones apagado. Solo se muestran velas y precio públicos de Kraken Futures; no hay análisis, cuenta ni operaciones simuladas.'
-                    : !analyses.length && gatewayEngine
-                      ? analysesNotice(gatewayEngineStatus, gatewayEngineReason)
-                      : null
-                }
-                selected={
-                  selectedAnalysis && !engineOff ? (
-                    <SelectedDecision
-                      analysis={selectedAnalysis}
-                      id={selectedId}
-                      time={utcTime(selectedDecisionTime)}
-                      reason={analysisReason(selectedAnalysis, localDemo)}
-                      notes={selectedNotes}
-                    />
-                  ) : null
-                }
-              >
-                {localDemo && selectedAnalysis && (
-                  <SelectedAnalysis
+              bootstrap.mode === 'paper_live' ? (
+                <ObserverPanel
+                  product={product ?? bootstrap.products?.[0] ?? null}
+                  health={health}
+                >
+                  <TerminalDecisions
+                    embedded={liveGateway}
+                    rows={decisionRows}
                     selectedId={selectedId}
-                    selectedDecisionTime={selectedDecisionTime}
-                    selectedAnalysis={selectedAnalysis}
-                    selectedOrder={selectedOrder}
-                    selectedFills={selectedFills}
-                  />
-                )}
-              </TerminalDecisions>
+                    onSelect={selectAnalysis}
+                    notice={
+                      engineOff
+                        ? 'Motor de decisiones apagado. Solo se muestran velas y precio públicos de Kraken Futures; no hay análisis, cuenta ni operaciones simuladas.'
+                        : !analyses.length && gatewayEngine
+                          ? analysesNotice(
+                              gatewayEngineStatus,
+                              gatewayEngineReason,
+                            )
+                          : null
+                    }
+                    selected={
+                      selectedAnalysis && !engineOff ? (
+                        <SelectedDecision
+                          analysis={selectedAnalysis}
+                          id={selectedId}
+                          time={utcTime(selectedDecisionTime)}
+                          reason={analysisReason(selectedAnalysis, localDemo)}
+                          notes={selectedNotes}
+                        />
+                      ) : null
+                    }
+                  >
+                    {localDemo && selectedAnalysis && (
+                      <SelectedAnalysis
+                        selectedId={selectedId}
+                        selectedDecisionTime={selectedDecisionTime}
+                        selectedAnalysis={selectedAnalysis}
+                        selectedOrder={selectedOrder}
+                        selectedFills={selectedFills}
+                      />
+                    )}
+                  </TerminalDecisions>
+                </ObserverPanel>
+              ) : (
+                <TerminalDecisions
+                  embedded={liveGateway}
+                  rows={decisionRows}
+                  selectedId={selectedId}
+                  onSelect={selectAnalysis}
+                  notice={
+                    engineOff
+                      ? 'Motor de decisiones apagado. Solo se muestran velas y precio públicos de Kraken Futures; no hay análisis, cuenta ni operaciones simuladas.'
+                      : !analyses.length && gatewayEngine
+                        ? analysesNotice(
+                            gatewayEngineStatus,
+                            gatewayEngineReason,
+                          )
+                        : null
+                  }
+                  selected={
+                    selectedAnalysis && !engineOff ? (
+                      <SelectedDecision
+                        analysis={selectedAnalysis}
+                        id={selectedId}
+                        time={utcTime(selectedDecisionTime)}
+                        reason={analysisReason(selectedAnalysis, localDemo)}
+                        notes={selectedNotes}
+                      />
+                    ) : null
+                  }
+                >
+                  {localDemo && selectedAnalysis && (
+                    <SelectedAnalysis
+                      selectedId={selectedId}
+                      selectedDecisionTime={selectedDecisionTime}
+                      selectedAnalysis={selectedAnalysis}
+                      selectedOrder={selectedOrder}
+                      selectedFills={selectedFills}
+                    />
+                  )}
+                </TerminalDecisions>
+              )
             }
           />
           {!engineOff && (

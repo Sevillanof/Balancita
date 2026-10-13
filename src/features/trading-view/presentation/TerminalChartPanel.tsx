@@ -53,8 +53,8 @@ type Settings = { intervalMs: number; overlays: Overlay[]; panes: Pane[] }
 const STORAGE_KEY = 'balancita.terminal-chart.v1'
 const DEFAULTS: Settings = {
   intervalMs: 60_000,
-  overlays: ['ema9', 'ema21'],
-  panes: ['flow', 'oi'],
+  overlays: ['ema21'],
+  panes: ['flow'],
 }
 
 function loadSettings(): Settings {
@@ -229,7 +229,11 @@ function flowPanes(
         ],
       })
   }
-  return panes
+  // A pane with no point at all is not drawn: an empty strip would read as
+  // «zero», not as «no data» (the legend says which ones are missing).
+  return panes.filter((pane) =>
+    pane.series.some((series) => series.points.length > 0),
+  )
 }
 
 function depthWithin(depth: ChartDepth | null, band: string) {
@@ -426,92 +430,6 @@ export default function TerminalChartPanel({
 
   return (
     <div className="terminal-chart">
-      <dl className="terminal-chart__stats" aria-label="Datos del mercado">
-        <div>
-          <dt>Cambio 24 h</dt>
-          <dd
-            className={
-              change == null
-                ? undefined
-                : change >= 0
-                  ? 'terminal-chart__up'
-                  : 'terminal-chart__down'
-            }
-          >
-            {percent(change)}
-          </dd>
-        </div>
-        <div>
-          <dt>Máx / mín 24 h</dt>
-          <dd>
-            {usd(stats?.high_24h, 0)} / {usd(stats?.low_24h, 0)}
-          </dd>
-        </div>
-        <div>
-          <dt>Volumen 24 h</dt>
-          <dd>
-            {amount(stats?.volume_24h_base, 1)} {productBase(product)} ·{' '}
-            {compactUsd(stats?.volume_24h_quote)}
-          </dd>
-        </div>
-        <div>
-          <dt>Interés abierto</dt>
-          <dd>
-            {amount(stats?.open_interest, 1)} {productBase(product)}
-            {stats?.open_interest != null && stats.mark != null
-              ? ` · ${compactUsd(stats.open_interest * stats.mark)}`
-              : ''}
-          </dd>
-        </div>
-        <div>
-          <dt>Funding (por hora)</dt>
-          <dd>
-            {stats?.relative_funding_rate == null
-              ? '—'
-              : percent(stats.relative_funding_rate * 100, 4)}
-            {' · próx. '}
-            {stats?.relative_funding_rate_prediction == null
-              ? '—'
-              : percent(stats.relative_funding_rate_prediction * 100, 4)}
-            {' en '}
-            {countdown(stats?.next_funding_time_ms, now)}
-          </dd>
-        </div>
-        <div>
-          <dt>Mark / índice</dt>
-          <dd>
-            {usd(stats?.mark)} / {usd(stats?.index)}
-          </dd>
-        </div>
-        <div>
-          <dt>Bid / ask</dt>
-          <dd>
-            {usd(stats?.bid, 0)} ({amount(stats?.bid_size, 3)}) /{' '}
-            {usd(stats?.ask, 0)} ({amount(stats?.ask_size, 3)}) · spread{' '}
-            {usd(stats?.spread)}
-          </dd>
-        </div>
-        <div>
-          <dt>Profundidad ±0,1 %</dt>
-          <dd>
-            {depth
-              ? `${amount(depth.bid, 1)} / ${amount(depth.ask, 1)} ${productBase(product)}`
-              : '—'}
-          </dd>
-        </div>
-        <div>
-          <dt>Cuentas en largo</dt>
-          <dd>
-            {latestFlow?.long_percent == null
-              ? '—'
-              : `${amount(latestFlow.long_percent, 1)} %`}
-            {latestFlow?.top_long_percent == null
-              ? ''
-              : ` · top 20 %: ${amount(latestFlow.top_long_percent, 1)} %`}
-          </dd>
-        </div>
-      </dl>
-
       <div className="terminal-chart__toolbar">
         <div
           className="terminal-chart__seg"
@@ -531,48 +449,146 @@ export default function TerminalChartPanel({
             </button>
           ))}
         </div>
-        <fieldset className="terminal-chart__toggles">
-          <legend>Indicadores</legend>
-          {OVERLAYS.map((item) => (
-            <label key={item.id}>
-              <input
-                type="checkbox"
-                checked={settings.overlays.includes(item.id)}
-                onChange={() =>
-                  setSettings((value) => ({
-                    ...value,
-                    overlays: toggle(value.overlays, item.id),
-                  }))
-                }
-              />
-              <span
-                className="terminal-chart__swatch"
-                style={{ background: item.color }}
-                aria-hidden="true"
-              />
-              {item.label}
-            </label>
-          ))}
-        </fieldset>
-        <fieldset className="terminal-chart__toggles">
-          <legend>Paneles</legend>
-          {PANES.map((item) => (
-            <label key={item.id}>
-              <input
-                type="checkbox"
-                checked={settings.panes.includes(item.id)}
-                disabled={item.live && !live}
-                onChange={() =>
-                  setSettings((value) => ({
-                    ...value,
-                    panes: toggle(value.panes, item.id),
-                  }))
-                }
-              />
-              {item.label}
-            </label>
-          ))}
-        </fieldset>
+        <details className="terminal-chart__tools">
+          <summary>Indicadores y paneles</summary>
+          <div className="terminal-chart__tools-body">
+            <fieldset className="terminal-chart__toggles">
+              <legend>Indicadores</legend>
+              {OVERLAYS.map((item) => (
+                <label key={item.id}>
+                  <input
+                    type="checkbox"
+                    checked={settings.overlays.includes(item.id)}
+                    onChange={() =>
+                      setSettings((value) => ({
+                        ...value,
+                        overlays: toggle(value.overlays, item.id),
+                      }))
+                    }
+                  />
+                  <span
+                    className="terminal-chart__swatch"
+                    style={{ background: item.color }}
+                    aria-hidden="true"
+                  />
+                  {item.label}
+                </label>
+              ))}
+            </fieldset>
+            <fieldset className="terminal-chart__toggles">
+              <legend>Paneles</legend>
+              {PANES.map((item) => (
+                <label key={item.id}>
+                  <input
+                    type="checkbox"
+                    checked={settings.panes.includes(item.id)}
+                    disabled={item.live && !live}
+                    onChange={() =>
+                      setSettings((value) => ({
+                        ...value,
+                        panes: toggle(value.panes, item.id),
+                      }))
+                    }
+                  />
+                  {item.label}
+                </label>
+              ))}
+            </fieldset>
+          </div>
+        </details>
+        <details className="terminal-chart__more">
+          <summary>Más datos del mercado</summary>
+          <dl
+            className="terminal-chart__stats"
+            aria-label="Más datos del mercado"
+          >
+            <div>
+              <dt>Máx / mín 24 h</dt>
+              <dd>
+                {usd(stats?.high_24h, 0)} / {usd(stats?.low_24h, 0)}
+              </dd>
+            </div>
+            <div>
+              <dt>Volumen 24 h</dt>
+              <dd>
+                {amount(stats?.volume_24h_base, 1)} {productBase(product)} ·{' '}
+                {compactUsd(stats?.volume_24h_quote)}
+              </dd>
+            </div>
+            <div>
+              <dt>Mark / índice</dt>
+              <dd>
+                {usd(stats?.mark)} / {usd(stats?.index)}
+              </dd>
+            </div>
+            <div>
+              <dt>Profundidad ±0,1 %</dt>
+              <dd>
+                {depth
+                  ? `${amount(depth.bid, 1)} / ${amount(depth.ask, 1)} ${productBase(product)}`
+                  : '—'}
+              </dd>
+            </div>
+            <div>
+              <dt>Cuentas en largo</dt>
+              <dd>
+                {latestFlow?.long_percent == null
+                  ? '—'
+                  : `${amount(latestFlow.long_percent, 1)} %`}
+                {latestFlow?.top_long_percent == null
+                  ? ''
+                  : ` · top 20 %: ${amount(latestFlow.top_long_percent, 1)} %`}
+              </dd>
+            </div>
+          </dl>
+        </details>
+        <dl className="terminal-chart__stats" aria-label="Datos del mercado">
+          <div>
+            <dt>Cambio 24 h</dt>
+            <dd
+              className={
+                change == null
+                  ? undefined
+                  : change >= 0
+                    ? 'terminal-chart__up'
+                    : 'terminal-chart__down'
+              }
+            >
+              {percent(change)}
+            </dd>
+          </div>
+          <div>
+            <dt>Funding (por hora)</dt>
+            <dd>
+              {stats?.relative_funding_rate == null
+                ? '—'
+                : percent(stats.relative_funding_rate * 100, 4)}
+              {' · próx. '}
+              {stats?.relative_funding_rate_prediction == null
+                ? '—'
+                : percent(stats.relative_funding_rate_prediction * 100, 4)}
+              {' en '}
+              {countdown(stats?.next_funding_time_ms, now)}
+            </dd>
+          </div>
+          <div>
+            <dt>Bid / ask</dt>
+            <dd>
+              {usd(stats?.bid, 0)} ({amount(stats?.bid_size, 3)}) /{' '}
+              {usd(stats?.ask, 0)} ({amount(stats?.ask_size, 3)}) · spread{' '}
+              {usd(stats?.spread)}
+            </dd>
+          </div>
+          <div>
+            <dt>Interés abierto</dt>
+            <dd>
+              {amount(stats?.open_interest, 1)} {productBase(product)}
+              {stats?.open_interest != null && stats.mark != null
+                ? ` · ${compactUsd(stats.open_interest * stats.mark)}`
+                : ''}
+            </dd>
+          </div>
+        </dl>
       </div>
       {!live && (
         <p className="terminal-chart__note">

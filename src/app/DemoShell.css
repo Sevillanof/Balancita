@@ -56,11 +56,11 @@
 .demo-shell__header-inner {
   display: flex;
   width: min(100%, 1800px);
-  min-height: 64px;
+  min-height: 52px;
   align-items: center;
-  gap: 32px;
+  gap: 28px;
   margin-inline: auto;
-  padding: 8px 28px;
+  padding: 4px 24px;
 }
 
 .demo-shell__brand {
@@ -192,7 +192,7 @@
 .demo-shell__main {
   width: min(100% - 56px, 1800px);
   margin-inline: auto;
-  padding-block: 28px 48px;
+  padding-block: 8px 48px;
 }
 
 .demo-shell__page-heading {
@@ -579,7 +579,12 @@
   .demo-terminal__chart,
   .demo-terminal__chart.chart__container,
   .terminal-chart__loading {
-    --terminal-chart-height: clamp(560px, 70vh, 820px);
+    /* The chart starts under one compact header, so it can take the rest of
+       the first screen. */
+    --terminal-chart-height: clamp(520px, calc(100vh - 270px), 840px);
+  }
+  .demo-terminal__grid {
+    grid-template-columns: minmax(0, 1fr) 380px;
   }
 }
 @media (min-width: 901px) and (max-width: 1199px) {
