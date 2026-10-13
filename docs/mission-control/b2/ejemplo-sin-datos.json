@@ -1,0 +1,52 @@
+{
+  "generated_at_ms": 1790000000000,
+  "cache_ttl_ms": 15000,
+  "window": "24h",
+  "from_ms": 1789913580000,
+  "to_ms": 1789999980000,
+  "product": null,
+  "evaluations": {
+    "state": "unavailable",
+    "evidence": {
+      "source": "paper_futures_verdicts",
+      "origin": "futures-verdicts.sqlite",
+      "state": "missing",
+      "detail": "file_not_found",
+      "rule": "filas de paper_futures_verdicts con bucket_start en [24h hasta el minuto en curso); una por producto y minuto si el servicio escribe sin pausas"
+    },
+    "detail": "file_not_found"
+  },
+  "signals": {
+    "state": "unavailable",
+    "evidence": {
+      "source": "paper_futures_verdicts",
+      "origin": "futures-verdicts.sqlite",
+      "state": "missing",
+      "detail": "file_not_found",
+      "rule": "filas de paper_futures_verdicts con bucket_start en [24h hasta el minuto en curso); una por producto y minuto si el servicio escribe sin pausas"
+    },
+    "detail": "file_not_found"
+  },
+  "discards": {
+    "state": "unavailable",
+    "evidence": {
+      "source": "paper_futures_verdicts",
+      "origin": "futures-verdicts.sqlite",
+      "state": "missing",
+      "detail": "file_not_found",
+      "rule": "filas de paper_futures_verdicts con bucket_start en [24h hasta el minuto en curso); una por producto y minuto si el servicio escribe sin pausas"
+    },
+    "detail": "file_not_found"
+  },
+  "operations": {
+    "state": "unavailable",
+    "evidence": {
+      "source": "forward_trade / forward_open / forward_status",
+      "origin": "forward.sqlite",
+      "state": "missing",
+      "detail": "file_not_found",
+      "rule": "última operación por clave (estrategia, producto); operaciones de la ventana por rango de entry_bucket_ms; posición abierta por clave"
+    },
+    "detail": "file_not_found"
+  }
+}
