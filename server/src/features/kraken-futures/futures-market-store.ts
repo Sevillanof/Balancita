@@ -439,6 +439,11 @@ export class FuturesMarketStore {
   }
 
   private slimCursor = 0
+  /** Last rowid already examined by the ticker pass (0 = not started). */
+  private tickerCursor = 0
+  private boundsCache:
+    | { at: number; key: string; ticker: number; event: number; raw: number }
+    | undefined
 
   /**
    * Online retention for the capture process (the sole writer): tickers older
@@ -486,11 +491,27 @@ export class FuturesMarketStore {
         if (!row || row.t >= cutoff) hi = mid
         else lo = mid + 1
       }
-      return lo - 1
+      // The loop leaves `lo` on the last row when every row is expired.
+      const last = at.get(lo) as { id: number; t: number } | undefined
+      return last && last.t < cutoff ? lo : lo - 1
     }
-    const tickerBound = bound(policy.now - policy.tickerRetentionMs)
-    const eventBound = bound(policy.now - policy.eventRetentionMs)
-    const rawBound = bound(policy.now - policy.rawKeepMs)
+    // Cutoffs only move forward, so a bound computed a few seconds ago is a safe
+    // (smaller) one: reuse it instead of re-bisecting on every small step.
+    const key = `${policy.tickerRetentionMs}:${policy.eventRetentionMs}:${policy.rawKeepMs}`
+    let cached = this.boundsCache
+    if (!cached || cached.key !== key || policy.now - cached.at > 5_000) {
+      cached = {
+        at: policy.now,
+        key,
+        ticker: bound(policy.now - policy.tickerRetentionMs),
+        event: bound(policy.now - policy.eventRetentionMs),
+        raw: bound(policy.now - policy.rawKeepMs),
+      }
+      this.boundsCache = cached
+    }
+    const tickerBound = cached.ticker
+    const eventBound = cached.event
+    const rawBound = cached.raw
     const tables = [
       'paper_futures_market_events',
       'paper_futures_book_snapshots',
@@ -557,8 +578,42 @@ export class FuturesMarketStore {
           .get(...args) === undefined
       )
     }
-    if (tickerBound > 0)
-      done = deleteWhere(`feed='ticker' AND rowid<=?`, tickerBound) && done
+    // Tickers are interleaved with the (longer-kept) trades. A `feed='ticker' ORDER BY
+    // rowid LIMIT n` query rescans every trade before the first ticker on each call
+    // (hundreds of thousands of rows, ~2 s), so walk the rowid range with a cursor
+    // instead: each step touches at most BATCH rowids.
+    const deleteTickers = (): boolean => {
+      if (this.tickerCursor === 0) {
+        const first = this.db
+          .prepare('SELECT MIN(rowid) AS id FROM paper_futures_market_events')
+          .get() as { id: number | null }
+        this.tickerCursor = Math.max(0, Number(first.id ?? 1) - 1)
+      }
+      while (this.tickerCursor < tickerBound) {
+        if (batches >= maxBatches) return false
+        batches += 1
+        const from = this.tickerCursor
+        const upTo = Math.min(from + BATCH, tickerBound)
+        const window = `feed='ticker' AND rowid>? AND rowid<=?`
+        inGuardlessTransaction(() => {
+          this.db
+            .prepare(
+              `DELETE FROM paper_futures_book_snapshots WHERE event_id IN (SELECT event_id FROM paper_futures_market_events WHERE ${window})`,
+            )
+            .run(from, upTo)
+          deleted += Number(
+            this.db
+              .prepare(
+                `DELETE FROM paper_futures_market_events WHERE ${window}`,
+              )
+              .run(from, upTo).changes,
+          )
+        })
+        this.tickerCursor = upTo
+      }
+      return true
+    }
+    if (tickerBound > 0) done = deleteTickers() && done
     if (eventBound > 0 && done)
       done = deleteWhere(`rowid<=?`, eventBound) && done
     if (done && rawBound > 0) {

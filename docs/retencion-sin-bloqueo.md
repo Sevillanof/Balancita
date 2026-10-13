@@ -51,3 +51,16 @@ Borra todo lo vencido en pasos pequeños y conserva lo reciente, con el guard de
 loop entre pasos; adapta el lote; respeta el presupuesto de tiempo; no se solapa; sigue ingiriendo filas nuevas
 mientras borra las viejas; el modo legacy; el medidor de loop; y los casos de `process_blocked` en el sondeo y en el
 vigilante del WebSocket.
+
+## Corrección tras medir sobre la base real (13-oct)
+
+La medición sobre una copia consistente de 3,5 GB mostró que el modo incremental
+inicial seguía bloqueando ~2 s por paso incluso con lote 50: la consulta
+`feed='ticker' ORDER BY rowid LIMIT n` recorría desde el rowid 1 unas 626 mil
+filas de trades antes del primer ticker, así que el coste era fijo por paso y no
+dependía del lote. Ahora la poda de tickers camina por ventanas de rowid con un
+cursor (`rowid>cursor AND rowid<=cursor+lote`), de modo que cada paso toca como
+máximo `lote` filas. Además los límites (bisección) se reutilizan 5 s y se corrigió
+que la última fila quedara sin borrar cuando todas estaban vencidas. En la copia,
+un prototipo equivalente dio pasos de p50 2,5 ms y máximo 6,5 ms (pendiente de
+confirmar con este código sobre la copia).

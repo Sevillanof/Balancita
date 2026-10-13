@@ -143,4 +143,50 @@ describe('trimRawEvents', () => {
     ).toThrow(/immutable/)
     db.close()
   })
+  it('trims tickers behind a long run of recent trades one small step at a time', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'balancita-trim-'))
+    dirs.push(dir)
+    const store = new FuturesMarketStore(join(dir, 'market.sqlite'))
+    const H = 3_600_000
+    // Recent trades first (the prefix a ticker scan used to rescan), then
+    // interleaved old and fresh tickers.
+    for (let i = 0; i < 300; i += 1)
+      store.append(trade(`t-${i}`, NOW - 3 * DAY + i, i + 1))
+    for (let i = 0; i < 40; i += 1) {
+      store.append(ticker(1_000 + i, NOW - 2 * DAY + i))
+      store.append(trade(`u-${i}`, NOW - 2 * DAY + 100 + i, 2_000 + i))
+    }
+    for (let i = 0; i < 10; i += 1) store.append(ticker(5_000 + i, NOW - H + i))
+    const policy = {
+      now: NOW,
+      tickerRetentionMs: 24 * H,
+      eventRetentionMs: 7 * DAY,
+      rawKeepMs: 7 * DAY,
+    }
+    let deleted = 0
+    let calls = 0
+    for (let done = false; !done && calls < 100; calls += 1) {
+      const result = store.trimRawEvents(policy, 1, { batchSize: 25 })
+      deleted += result.deleted
+      done = result.done
+    }
+    expect(calls).toBeGreaterThan(5)
+    expect(deleted).toBe(40)
+    expect(store.trimRawEvents(policy, 1, { batchSize: 25 })).toMatchObject({
+      deleted: 0,
+      done: true,
+    })
+    store.close()
+    const db = new DatabaseSync(join(dir, 'market.sqlite'))
+    const left = db
+      .prepare(
+        'SELECT feed, COUNT(*) AS n FROM paper_futures_market_events GROUP BY feed ORDER BY feed',
+      )
+      .all() as { feed: string; n: number }[]
+    expect(left).toEqual([
+      { feed: 'ticker', n: 10 },
+      { feed: 'trade', n: 340 },
+    ])
+    db.close()
+  })
 })
