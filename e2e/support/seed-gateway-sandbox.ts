@@ -8,8 +8,12 @@ import {
   PRODUCTS,
   sandbox,
   seedMarket,
-  seedVerdictRows,
 } from '../../server/src/features/live-gateway/observability-health-fixtures.ts'
+import {
+  C25,
+  seedSyntheticModelDecisions,
+  seedSyntheticVerdicts,
+} from '../../server/src/features/live-gateway/observability-decisions-fixtures.ts'
 
 const now = Date.now()
 const box = sandbox()
@@ -20,24 +24,37 @@ seedMarket(box.marketDb, {
   candleAgeMs: Object.fromEntries(PRODUCTS.map((p) => [p, 90_000])),
 })
 const bucket = now - (now % MINUTE) - MINUTE
-seedVerdictRows(
+// SYNTHETIC verdicts (engine payload shape, invented numbers): the page shows
+// them as example data. XBT has 120 minutes so the list needs a second page.
+seedSyntheticVerdicts(
   box.verdictsDb,
   PRODUCTS.flatMap((product) =>
-    Array.from({ length: 30 }, (_, i) => ({
-      product,
-      bucket: bucket - i * MINUTE,
-      action: product === 'PF_XBTUSD' && i === 5 ? 'LONG' : 'WAIT',
-      reason:
-        product === 'PF_XBTUSD' && i === 5
-          ? 'c25_long_pullback'
-          : 'no_directional_proposal',
-    })),
+    Array.from({ length: product === 'PF_XBTUSD' ? 120 : 30 }, (_, i) => {
+      const long = product === 'PF_XBTUSD' && i === 5
+      return {
+        product,
+        bucket: bucket - i * MINUTE,
+        action: long ? 'LONG' : 'WAIT',
+        reason: long ? 'c25_long_pullback' : 'no_directional_proposal',
+        ...(long ? { strategy: C25 } : {}),
+      }
+    }),
   ),
 )
+// One SYNTHETIC model row, for the minute of the synthetic LONG.
+seedSyntheticModelDecisions(box.decisionsDb, [
+  {
+    product: 'PF_XBTUSD',
+    bucket: bucket - 5 * MINUTE,
+    chosen: 'LONG',
+    confidence: 0.62,
+  },
+])
 console.log(
   JSON.stringify({
     dir: box.dir,
     FUTURES_MARKET_DB_PATH: box.marketDb,
     FUTURES_VERDICTS_DB_PATH: box.verdictsDb,
+    FUTURES_DECISIONS_DB_PATH: box.decisionsDb,
   }),
 )
