@@ -62,6 +62,11 @@ PYTHONPATH=python python3 -m balancita_engine.signal_continuity recover --dir $D
 ```
 `analisis/continuidad-senales-offline/` (`informe.md`, `resultados.json`) es la salida de la demo; una prueba la regenera y exige que coincida.
 
+## Limitaciones para la integración futura (decisión de Fran, 2026-10-13)
+
+- **`confirmed_source_offset` no es una confirmación acumulativa.** Es el mayor offset del origen que fue entregado al handler y reconocido, no necesariamente el último offset *contiguo*: si el origen tiene huecos (eventos perdidos), el valor salta por encima de ellos. No debe usarse como ack acumulativo hacia un productor real (que interpretaría «todo hasta N recibido») hasta resolver esa diferencia, por ejemplo con un offset contiguo aparte y la lista explícita de huecos (`source_offset_holes`).
+- **Las reconstrucciones son contrafactuales.** Sirven para auditoría y evaluación contrafactual; nunca son órdenes. `recovered_completely = true` significa únicamente que no quedan ciclos sin señal en el registro; **no** significa que las operaciones perdidas se hayan ejecutado ni que se pudieran haber ejecutado.
+
 ## Límites
 
 - Datos sintéticos; no demuestra ventaja de trading ni que el origen real entregue lo que aquí se simula.
