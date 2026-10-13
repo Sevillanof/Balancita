@@ -633,7 +633,7 @@ class Streams(Base):
     def test_stream_identity_survives_recovery_and_is_in_the_manifest(self):
         path, r = self.fresh()
         self.assertEqual(r.manifest["offset_identity"], "source|stream|epoch")
-        self.assertEqual(r.journal.entries[0]["data"]["manifest"]["journal_schema"], "balancita-paper-runner-journal.v2")
+        self.assertEqual(r.journal.entries[0]["data"]["manifest"]["journal_schema"], "balancita-paper-runner-journal.v3")
 
     def test_names_that_would_collide_in_the_canonical_form_are_invalid(self):
         path, r = self.fresh()
