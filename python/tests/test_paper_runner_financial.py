@@ -657,6 +657,66 @@ class CoverageEvidence(Fin):
         q3 = self.reopen(path2, q2.clock)
         self.assertEqual(json.dumps(q3.coverage, sort_keys=True), recorded)
 
+    def short_unwatched_trade(self, name, **kw):
+        """Opens at 12:00:06, receives no valid quote afterwards, the entry-minute candle cannot evaluate the stop, and the
+        next candle closes it at 12:02:00: 114 s, below the experimental 120 s threshold."""
+        path, r = self.start({"a": {(BTC, CYCLE): BUY}}, name=name, config=RunnerConfig(funding=(), start_ms=CYCLE - HOUR, **kw))
+        f = self.f
+        r.run([f.cycle(CYCLE + 2 * SEC, BTC), f.quote(BTC, CYCLE + 6 * SEC, "100010"),
+               f.candle(BTC, CYCLE, 100010, 100050, 99950, 100010), f.candle(BTC, CYCLE + MIN, 100010, 103500, 100000, 103400)])
+        self.assertEqual(r.portfolio.positions, {})
+        return path, r
+
+    def test_a_trade_that_was_never_watched_is_not_continuous_even_if_it_was_short(self):
+        path, r = self.short_unwatched_trade("short")
+        [trade] = r.portfolio.trades
+        self.assertEqual(trade["exit_time_ms"] - trade["entry_time_ms"] < r.config.coverage_gap_ms, True)
+        [row] = r.report()["sections"]["uncertain"]["data"]["closed_trade_coverage"]
+        self.assertEqual((row["stop_coverage"], row["quotes_watched"]), ("gaps_without_evidence", 0))
+        [gap] = row["gaps"]
+        self.assertEqual((gap["kind"], gap["evidence"]), ("no_watched_quotes", "candles_partial"))   # the entry minute has no candle
+        self.assertIn("closed_trade_coverage_incomplete", self.codes(r))
+        self.assertAudit(r)
+        # and replay / recovery rebuild exactly the same evidence
+        want = json.dumps(r.coverage, sort_keys=True)
+        r2 = self.reopen(path, r.clock)
+        self.assertEqual(json.dumps(r2.coverage, sort_keys=True), want)
+        self.assertEqual(r2.report()["sections"]["uncertain"]["data"]["closed_trade_coverage"][0]["stop_coverage"], "gaps_without_evidence")
+        # recorded as uncertainty only: another threshold, or none, changes neither P&L, capital nor decisions
+        _, twin = self.short_unwatched_trade("short2", coverage_gap_ms=10 ** 9)
+        self.assertEqual((accounting_digest(r.portfolio), r.portfolio.ledger_hash(), self.states(r)),
+                         (accounting_digest(twin.portfolio), twin.portfolio.ledger_hash(), self.states(twin)))
+        self.assertEqual(r.portfolio.capital_usd(), twin.portfolio.capital_usd())
+
+    def test_the_audit_detects_an_erased_intermediate_gap_even_when_the_last_quote_is_near_the_close(self):
+        path, r = self.opened("mid")
+        f = self.f
+        r.run([f.quote(BTC, CYCLE + 10 * SEC, "100010"), f.quote(BTC, CYCLE + 10 * MIN, "100020"),
+               f.candle(BTC, CYCLE + 10 * MIN, 100020, 103500, 100000, 103400)])
+        self.assertEqual(r.portfolio.positions, {})
+        [trade] = r.portfolio.trades
+        self.assertEqual(trade["exit_time_ms"], CYCLE + 11 * MIN)
+        [gap] = [g for g in r.coverage["gaps"]]
+        self.assertEqual((gap["from_ms"], gap["to_ms"]), (CYCLE + 10 * SEC, CYCLE + 10 * MIN))
+        self.assertAudit(r)
+        # the state still says the last quote was a minute before the close: only the journal can tell the silence existed
+        r.coverage["gaps"][:] = []
+        rules = [v["rule"] for v in integrated_audit(r)["violations"]]
+        self.assertIn("coverage_gap_missing_in_history", rules)
+        self.assertNotIn("coverage_gap_missing_at_close", rules)
+
+    def test_an_intermediate_gap_of_an_open_position_is_also_audited(self):
+        path, r = self.opened("open")
+        r.run([self.f.quote(BTC, CYCLE + 10 * SEC, "100010"), self.f.quote(BTC, CYCLE + 10 * MIN, "100020")])
+        self.assertAudit(r)
+        r.coverage["gaps"][:] = []
+        self.assertIn("coverage_gap_missing_in_history", [v["rule"] for v in integrated_audit(r)["violations"]])
+
+    def test_a_unwatched_trade_whose_gap_was_erased_is_detected(self):
+        path, r = self.short_unwatched_trade("erased")
+        r.coverage["gaps"][:] = []
+        self.assertIn("closed_trade_unwatched_without_gap", [v["rule"] for v in integrated_audit(r)["violations"]])
+
     def test_the_audit_notices_a_gap_that_was_erased(self):
         path, r = self.opened()
         self.close_by_candle(r)

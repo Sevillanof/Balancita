@@ -515,7 +515,12 @@ class PaperRunner(object):
             trade = next((t for t in self.portfolio.trades if t["intent_id"] == intent_id), None)
             if trade is not None:
                 record = self._watch_record(product, intent_id, entry_ms)
-                self._record_gap(product, intent_id, record["last_ms"], int(trade["exit_time_ms"]))
+                exit_ms = int(trade["exit_time_ms"])
+                self._record_gap(product, intent_id, record["last_ms"], exit_ms)
+                if record["quotes"] == 0 and not any(g["intent_id"] == intent_id for g in self.coverage["gaps"]):
+                    # never watched by a single quote: living less than the threshold does not make it observed
+                    self.coverage["gaps"].append({"product_id": product, "from_ms": entry_ms, "to_ms": exit_ms,
+                                                  "kind": "no_watched_quotes", "intent_id": intent_id})
 
     @staticmethod
     def _stream_of(event):

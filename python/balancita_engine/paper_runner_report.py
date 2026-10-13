@@ -153,7 +153,8 @@ def trade_coverage(runner):
         rows.append({"trade_id": trade["trade_id"], "intent_id": intent_id, "product_id": trade["product_id"],
                      "entry_time_ms": trade["entry_time_ms"], "exit_time_ms": trade["exit_time_ms"],
                      "exit_reason": trade["exit_reason"], "quotes_watched": record.get("quotes", 0), "gaps": gaps,
-                     "stop_coverage": "gaps_without_evidence" if uncovered else ("gaps_covered_by_candles" if gaps else "continuous")})
+                     "stop_coverage": "gaps_without_evidence" if uncovered else (
+                         "gaps_covered_by_candles" if gaps else ("continuous" if record.get("quotes", 0) else "insufficient_evidence"))})
     return rows
 
 
@@ -320,6 +321,32 @@ def integrated_audit(runner):
         recorded = max([record["last_ms"]] + [g["to_ms"] for g in runner.coverage["gaps"] if g["intent_id"] == trade["intent_id"]])
         if int(trade["exit_time_ms"]) - recorded > runner.config.coverage_gap_ms:
             violate("coverage_gap_missing_at_close", trade_id=trade["trade_id"])
+    checks.append("coverage_history_against_journal")
+    # Durable evidence: every quote the runner accepted is in the journal. The silences between them are a lower bound of
+    # the silences between the quotes the watch accepted (a subset), so each one longer than the threshold must be
+    # recorded as a gap. This reads timestamps only; whether a quote was valid for the watch is not re-decided here.
+    quote_times = {}
+    for entry in runner.journal.entries:
+        if entry["kind"] == "event_accepted" and entry["data"]["event"]["kind"] == "quote":
+            payload = entry["data"]["event"]["payload"]
+            quote_times.setdefault(payload["product_id"], []).append(int(payload["time_ms"]))
+    spans = []
+    for trade in p.trades:
+        spans.append((trade["intent_id"], trade["product_id"], int(trade["entry_time_ms"]), int(trade["exit_time_ms"]), True))
+    for product, book in p.positions.items():
+        spans.append((book.intent["intent_id"], product, int(book.position.get("entry_ms", book.position["opened_at"])), None, False))
+    threshold = runner.config.coverage_gap_ms
+    for intent_id, product, entry_ms, exit_ms, closed in spans:
+        recorded = [g for g in runner.coverage["gaps"] if g["intent_id"] == intent_id]
+        record = runner.coverage["watch"].get(intent_id, {})
+        if closed and record.get("quotes", 0) == 0 and not recorded:
+            violate("closed_trade_unwatched_without_gap", intent_id=intent_id)
+        points = [entry_ms] + sorted(t for t in quote_times.get(product, ()) if t > entry_ms and (exit_ms is None or t <= exit_ms))
+        if exit_ms is not None:
+            points.append(exit_ms)
+        for before, after in zip(points, points[1:]):
+            if after - before > threshold and not any(g["from_ms"] <= after and g["to_ms"] >= before for g in recorded):
+                violate("coverage_gap_missing_in_history", intent_id=intent_id, silent_from_ms=before, silent_to_ms=after)
     checks.append("fees_and_funding_recomputed")
     reported = sum((D(str(t["fees_usd"])) for t in p.trades), D(0))
     if D(p.snapshot()["fees_usd"]) != reported:
