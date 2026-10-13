@@ -40,6 +40,10 @@ DEFAULT_MARKOUTS_MS = (5_000, 10_000, 60_000)
 DEFAULT_MAX_GAP_MS = 15_000  # more silence than this between snapshots breaks continuity
 DEFAULT_CLUSTER_MS = 3_600_000
 MIN_CLUSTERS_FOR_VERDICT = 30
+# Both are *hypothetical execution scenarios*, not demonstrated fills nor calibrated fill probabilities.
+SCENARIOS = ("optimistic", "conservative")
+SCENARIO_NOTE = ("optimistic and conservative are hypothetical execution scenarios built from 5 s snapshots: neither is a "
+                 "demonstrated fill, a lower bound on real fills, or a calibrated fill probability")
 HOUR_MS = 3_600_000
 
 
@@ -181,6 +185,18 @@ def taker_report(snaps, sizes_usd=DEFAULT_SIZES_USD):
     return out
 
 
+def taker_curve(snaps, sizes_usd):
+    """Median one-side total cost (bp, fee included) for any list of notionals, per side: the lookup a sizing
+    module needs (e.g. 175, 340 or 620 USD). ``None`` where the book cannot absorb the size."""
+    out = {}
+    for size in sizes_usd:
+        out[size] = {}
+        for side in ("LONG", "SHORT"):
+            costs = [c["total_bp"] for c in (taker_cost(s, side, size) for s in snaps) if c is not None]
+            out[size][side] = statistics.median(costs) if costs else None
+    return out
+
+
 def spread_by_hour(snaps):
     """Quoted spread (bp) per UTC hour of the day: count, median, p90."""
     buckets = {}
@@ -311,46 +327,91 @@ def _snap_at(snaps, times, target_ms, tol_ms):
     return None
 
 
-def evaluate_orders(snaps, orders, size_usd, *, tape=None, ttl_ms=DEFAULT_TTL_MS, latency_ms=DEFAULT_LATENCY_MS,
+class Order:
+    """One intended entry. ``signal_ms``: when the decision was taken. ``ref``: index of the last snapshot at or
+    before the signal, the only price known at that moment (every cost is measured against its mid). ``exec``: index
+    of the first snapshot at or after ``signal_ms + latency``, where a market order walks the book or a limit is
+    posted. Between ``ref`` and ``exec`` the market may have moved: that wait is a cost, not hidden."""
+
+    __slots__ = ("signal_ms", "ref", "exec", "side")
+
+    def __init__(self, signal_ms, ref, exec_, side):
+        self.signal_ms, self.ref, self.exec, self.side = signal_ms, ref, exec_, side
+
+
+def as_order(snaps, order):
+    """``Order`` as is; a legacy ``(snapshot_index, side)`` decides and executes on that same snapshot."""
+    if isinstance(order, Order):
+        return order
+    index, side = order
+    return Order(snaps[index].t, index, index, side)
+
+
+def gap_overlaps(gaps, lo_ms, hi_ms):
+    """True when a logged collector gap (``(from_ms, to_ms, ...)``) touches ``[lo_ms, hi_ms]``."""
+    return any(g[1] >= lo_ms and g[0] <= hi_ms for g in gaps)
+
+
+def window_clean(snaps, times, gaps, lo_ms, hi_ms, max_gap_ms):
+    """Why ``[lo_ms, hi_ms]`` cannot be trusted, or ``None`` when it can: a logged gap, snapshots further apart than
+    ``max_gap_ms`` anywhere inside, or data that ends before ``hi_ms``."""
+    if gap_overlaps(gaps, lo_ms, hi_ms):
+        return "logged_gap"
+    i = max(0, bisect.bisect_right(times, lo_ms) - 1)
+    j = bisect.bisect_left(times, hi_ms)
+    if j >= len(snaps) or snaps[j].t - hi_ms > max_gap_ms:
+        return "data_ends"
+    return "snapshot_gap" if any(snaps[k + 1].t - snaps[k].t > max_gap_ms for k in range(i, j)) else None
+
+
+def evaluate_orders(snaps, orders, size_usd, *, tape=None, gaps=(), ttl_ms=DEFAULT_TTL_MS, latency_ms=DEFAULT_LATENCY_MS,
                     hold_ms=DEFAULT_HOLD_MS, markouts_ms=DEFAULT_MARKOUTS_MS, max_gap_ms=DEFAULT_MAX_GAP_MS,
                     maker_fee_bp=MAKER_FEE_BP, taker_fee_bp=TAKER_FEE_BP):
-    """Per-order economics of a limit entry against going to market at once, for each fill reading.
+    """Per-order economics of a limit entry against going to market at once, for each hypothetical fill scenario.
 
-    ``orders`` are ``(snapshot_index, side)``. Every figure is in bp of the signal-time mid and is *entry to
-    ``hold_ms`` later, before the exit* (the exit is the same taker exit in every policy, so it cancels in every
-    comparison). Policies: ``taker`` (market at once), ``skip`` (limit; unfilled = no trade, zero), ``chase``
-    (limit; unfilled = market at the end of the TTL, paying the drift it waited through).
+    ``orders``: ``Order`` (or legacy ``(snapshot_index, side)``). Every figure is in bp of the mid known at the
+    signal and is *entry to ``signal + hold_ms``, before the exit* (the exit is the same taker exit in every policy,
+    so it cancels in every comparison). Policies: ``taker`` (market at once), ``skip`` (limit; unfilled = no trade,
+    zero), ``chase`` (limit; unfilled = market at the end of the TTL, paying the drift it waited through).
+
+    An order is excluded, with the reason in ``excluded_reason``, when anything in its whole window (reference
+    snapshot to the later of the hold, the chase and the last markout) crosses a logged ``book_gap`` or a
+    stretch of snapshots further apart than ``max_gap_ms``, or when a needed price is missing.
     """
     times = [s.t for s in snaps]
     rows = []
-    for index, side in orders:
-        s0 = snaps[index]
-        sign = _sign(side)
-        mid_hold = _mid_at(snaps, times, s0.t + hold_ms, max_gap_ms)
-        taker = taker_cost(s0, side, size_usd, taker_fee_bp)
-        sim = simulate_limit(snaps, times, index, side, size_usd, tape=tape, ttl_ms=ttl_ms, latency_ms=latency_ms,
+    for raw in orders:
+        o = as_order(snaps, raw)
+        ref_snap, s0, sign = snaps[o.ref], snaps[o.exec], _sign(o.side)
+        base = {"t": ref_snap.t, "signal_ms": o.signal_ms, "side": o.side, "excluded": True}
+        end = max(o.signal_ms + hold_ms, s0.t + latency_ms + ttl_ms + max(markouts_ms, default=0))
+        reason = window_clean(snaps, times, gaps, ref_snap.t, end, max_gap_ms)
+        if reason is not None:
+            rows.append(dict(base, excluded_reason=reason))
+            continue
+        mid_hold = _mid_at(snaps, times, o.signal_ms + hold_ms, max_gap_ms)
+        taker = taker_cost(s0, o.side, size_usd, taker_fee_bp)
+        sim = simulate_limit(snaps, times, o.exec, o.side, size_usd, tape=tape, ttl_ms=ttl_ms, latency_ms=latency_ms,
                              max_gap_ms=max_gap_ms)
-        if mid_hold is None or taker is None or sim["status"] != "ok":
-            rows.append({"index": index, "t": s0.t, "side": side, "excluded": True})
-            continue
-        move = lambda price: sign * (mid_hold - price) / s0.mid * 1e4  # entry-to-hold gross move
-        taker_pnl = move(taker["price"]) - taker_fee_bp
         chase_snap = _snap_at(snaps, times, s0.t + latency_ms + ttl_ms, max_gap_ms)
-        chase = taker_cost(chase_snap, side, size_usd, taker_fee_bp) if chase_snap is not None else None
-        row = {"index": index, "t": s0.t, "side": side, "excluded": False, "taker_bp": taker_pnl,
-               "taker_entry_cost_bp": taker["total_bp"]}
-        if chase is None:
-            row["excluded"] = True
-            rows.append(row)
+        chase = taker_cost(chase_snap, o.side, size_usd, taker_fee_bp) if chase_snap is not None else None
+        if mid_hold is None or taker is None or chase is None or sim["status"] != "ok":
+            rows.append(dict(base, excluded_reason="missing_price"))
             continue
+        ref_mid = ref_snap.mid
+        move = lambda price: sign * (mid_hold - price) / ref_mid * 1e4  # known-at-signal mid to hold, gross
+        taker_pnl = move(taker["price"]) - taker_fee_bp
+        row = dict(base, excluded=False, taker_bp=taker_pnl,
+                   taker_entry_cost_bp=price_cost_bp(o.side, taker["price"], ref_mid) + taker_fee_bp,
+                   wait_bp=sign * (s0.mid - ref_mid) / ref_mid * 1e4)
         chase_pnl = move(chase["price"]) - taker_fee_bp
-        for reading in ("optimistic", "conservative"):
+        for reading in SCENARIOS:
             fill_ms = sim[reading]
             filled = fill_ms is not None
             maker_pnl = move(sim["limit"]) - maker_fee_bp if filled else None
             row[reading] = {
                 "filled": filled, "maker_bp": maker_pnl,
-                "entry_cost_bp": price_cost_bp(side, sim["limit"], s0.mid) + maker_fee_bp if filled else None,
+                "entry_cost_bp": price_cost_bp(o.side, sim["limit"], ref_mid) + maker_fee_bp if filled else None,
                 "skip_bp": maker_pnl if filled else 0.0,
                 "chase_bp": maker_pnl if filled else chase_pnl,
                 "markout_bp": {},
@@ -379,16 +440,22 @@ def clustered_mean(values, clusters):
 def summarize_orders(rows, *, cluster_ms=DEFAULT_CLUSTER_MS, markouts_ms=DEFAULT_MARKOUTS_MS):
     """Aggregate ``evaluate_orders`` rows per fill reading, with clustered standard errors."""
     ok = [r for r in rows if not r["excluded"]]
-    out = {"orders": len(rows), "excluded": len(rows) - len(ok), "taker_all_bp": None}
+    reasons = {}
+    for r in rows:
+        if r["excluded"]:
+            reasons[r.get("excluded_reason", "other")] = reasons.get(r.get("excluded_reason", "other"), 0) + 1
+    out = {"orders": len(rows), "excluded": len(rows) - len(ok), "excluded_reasons": reasons, "taker_all_bp": None,
+           "scenario_note": SCENARIO_NOTE}
     if not ok:
         return out
     cl = lambda rs: [r["t"] // cluster_ms for r in rs]
     all_taker = [r["taker_bp"] for r in ok]
     out["taker_all_bp"] = dict(zip(("mean", "se", "n", "clusters"), clustered_mean(all_taker, cl(ok))))
     out["taker_entry_cost_bp"] = statistics.fmean(r["taker_entry_cost_bp"] for r in ok)
-    for reading in ("optimistic", "conservative"):
+    out["wait_signal_to_execution_bp"] = statistics.fmean(r["wait_bp"] for r in ok)
+    for reading in SCENARIOS:
         filled = [r for r in ok if r[reading]["filled"]]
-        res = {"fill_rate": len(filled) / len(ok), "filled": len(filled)}
+        res = {"hypothetical_fill_rate": len(filled) / len(ok), "hypothetical_fills": len(filled)}
         mean_all = statistics.fmean(all_taker)
         if filled:
             saving = [r[reading]["maker_bp"] - r["taker_bp"] for r in filled]
@@ -462,20 +529,33 @@ def grid_orders(snaps, step_ms, sides=("LONG", "SHORT")):
     out, next_t = [], None
     for i, s in enumerate(snaps):
         if next_t is None or s.t >= next_t:
-            out.extend((i, side) for side in sides)
+            out.extend(Order(s.t, i, i, side) for side in sides)
             next_t = s.t + step_ms
     return out
 
 
-def signal_orders(snaps, signals):
-    """Map ``[{"time_ms", "side"}]`` to ``(snapshot_index, side)`` using the first snapshot at or after the signal."""
+def signal_orders(snaps, signals, *, latency_ms=DEFAULT_LATENCY_MS, max_ref_age_ms=DEFAULT_MAX_GAP_MS,
+                  max_gap_ms=DEFAULT_MAX_GAP_MS):
+    """``(orders, unevaluable)`` from ``[{"time_ms", "side"}]``.
+
+    The reference is the last snapshot *at or before* the signal (what was known when it was emitted, at most
+    ``max_ref_age_ms`` old); execution is the first snapshot at or after ``signal + latency``. A signal without a
+    recent reference, or without an execution snapshot within ``max_gap_ms``, is not evaluable and is counted, not
+    guessed."""
     times = [s.t for s in snaps]
-    out = []
+    orders, unevaluable = [], {"no_reference": 0, "no_execution_snapshot": 0}
     for sig in signals:
-        i = bisect.bisect_left(times, sig["time_ms"])
-        if i < len(snaps) and snaps[i].t - sig["time_ms"] <= DEFAULT_MAX_GAP_MS:
-            out.append((i, sig["side"]))
-    return out
+        t = sig["time_ms"]
+        r = bisect.bisect_right(times, t) - 1
+        if r < 0 or t - times[r] > max_ref_age_ms:
+            unevaluable["no_reference"] += 1
+            continue
+        e = bisect.bisect_left(times, t + latency_ms)
+        if e >= len(snaps) or snaps[e].t - (t + latency_ms) > max_gap_ms:
+            unevaluable["no_execution_snapshot"] += 1
+            continue
+        orders.append(Order(t, r, e, sig["side"]))
+    return orders, unevaluable
 
 
 def compare_with_cost_table(product_id, snaps, size_usd=1000.0):
@@ -509,8 +589,13 @@ def build_report(book_db_path, product_id, *, lo_ms=None, hi_ms=None, sizes_usd=
     gaps = load_gaps(book_db_path, product_id, lo_ms, hi_ms)
     if not snaps:
         return {"version": BOOK_COSTS_VERSION, "product_id": product_id, "snapshots": 0}
-    orders = signal_orders(snaps, signals) if signals is not None else grid_orders(snaps, step_ms)
-    rows = evaluate_orders(snaps, orders, order_size_usd, tape=tape, ttl_ms=ttl_ms, hold_ms=hold_ms)
+    if signals is not None:
+        orders, unevaluable = signal_orders(snaps, signals)
+    else:
+        orders, unevaluable = grid_orders(snaps, step_ms), {}
+    rows = evaluate_orders(snaps, orders, order_size_usd, tape=tape, gaps=gaps, ttl_ms=ttl_ms, hold_ms=hold_ms)
+    maker = summarize_orders(rows)
+    maker["unevaluable_signals"] = unevaluable
     return {
         "version": BOOK_COSTS_VERSION, "product_id": product_id, "range_ms": [snaps[0].t, snaps[-1].t],
         "parameters": {"order_size_usd": order_size_usd, "ttl_ms": ttl_ms, "hold_ms": hold_ms, "step_ms": step_ms,
@@ -520,8 +605,9 @@ def build_report(book_db_path, product_id, *, lo_ms=None, hi_ms=None, sizes_usd=
         "coverage": coverage_report(snaps, gaps, bad, snaps[0].t, snaps[-1].t),
         "observed": {"spread_by_hour_utc": spread_by_hour(snaps), "liquidity": liquidity_report(snaps)},
         "simulated_taker": taker_report(snaps, sizes_usd),
+        "taker_curve_bp": taker_curve(snaps, sizes_usd),
         "cost_table_check": compare_with_cost_table(product_id, snaps),
-        "estimated_maker": summarize_orders(rows),
+        "estimated_maker": maker,
     }
 
 
@@ -536,7 +622,7 @@ def render_markdown(report):
     lines = ["# Costes de ejecución {} ({})".format(report["product_id"], report["version"]), "",
              "Cobertura: {} snapshots ({} % de lo esperado a 5 s), {} cortes > 15 s, corte máximo {} s.".format(
                  c["snapshots"], _fmt(c["coverage"] * 100, 1), c["breaks_over_15s"], _fmt(c["longest_break_s"], 0)),
-             "Colocación: {}; fills: {}. Las ejecuciones maker son **hipotéticamente ejecutables**, no fills reales.".format(
+             "Colocación: {}; fills: {}. Las ejecuciones maker son **escenarios hipotéticos**, no fills reales.".format(
                  p["placement"], p["fills"]), "", "## Taker simulado (observado + determinista)",
              "| Tamaño | Lado | Medio spread | Impacto | Total con comisión (p50) | p90 | Sin cubrir |", "|---|---|---|---|---|---|---|"]
     for row in report["simulated_taker"].values():
@@ -549,20 +635,25 @@ def render_markdown(report):
         lines += ["", "Tabla estática de costes frente a lo medido (1.000 USD, un lado): tabla {} pb, medido {} pb, "
                   "diferencia {} pb (positivo = la tabla es optimista).".format(
                       _fmt(chk["table_side_impact_bp"]), _fmt(chk["measured_median_bp"]), _fmt(chk["gap_bp"]))]
-    lines += ["", "## Maker estimado (banda optimista / conservador)", "Órdenes: {} ({} excluidas por huecos o falta de datos). "
-              "Taker inmediato, media entrada→{} min: {} pb.".format(
-                  m["orders"], m["excluded"], p["hold_ms"] // 60_000, _fmt((m.get("taker_all_bp") or {}).get("mean"))),
-              "", "| Lectura | Relleno | Ahorro si se rellena | Selección | Neto vs azar | Limit y perseguir − taker | Veredicto |",
-              "|---|---|---|---|---|---|---|"]
-    for reading in ("optimistic", "conservative"):
+    lines += ["", "## Escenarios maker hipotéticos (optimista / conservador)",
+              "Ninguno es un fill demostrado, ni una cota inferior de fills reales, ni una probabilidad calibrada.",
+              "Órdenes: {} ({} excluidas: {}). Taker inmediato, media señal→{} min: {} pb; espera señal→ejecución: {} pb.".format(
+                  m["orders"], m["excluded"], m.get("excluded_reasons") or "ninguna", p["hold_ms"] // 60_000,
+                  _fmt((m.get("taker_all_bp") or {}).get("mean")), _fmt(m.get("wait_signal_to_execution_bp"))),
+              "Señales no evaluables: {}.".format(m.get("unevaluable_signals") or "n/a"),
+              "", "| Escenario | Relleno hipotético | Ahorro si se rellena | Selección | Neto vs azar | Límite y perseguir − taker | Grupos horarios | Veredicto |",
+              "|---|---|---|---|---|---|---|---|"]
+    for reading in SCENARIOS:
         r = m.get(reading)
         if r:
             sav = r.get("saving_filled_bp") or {}
             net = r.get("net_vs_random_bp") or {}
             ch = r["chase_minus_taker_bp"]
-            lines.append("| {} | {} % | {} | {} | {} ± {} | {} ± {} | {} |".format(
-                reading, _fmt(r["fill_rate"] * 100, 1), _fmt(sav.get("mean")), _fmt(r.get("selection_bp")),
-                _fmt(net.get("mean")), _fmt(net.get("se")), _fmt(ch["mean"]), _fmt(ch["se"]), r["verdict"]))
+            lines.append("| {} | {} % | {} | {} | {} ± {} | {} ± {} | {} | {} |".format(
+                reading, _fmt(r["hypothetical_fill_rate"] * 100, 1), _fmt(sav.get("mean")), _fmt(r.get("selection_bp")),
+                _fmt(net.get("mean")), _fmt(net.get("se")), _fmt(ch["mean"]), _fmt(ch["se"]), ch["clusters"],
+                r["verdict"]))
+    lines.append("Veredicto: exige al menos {} grupos horarios independientes.".format(MIN_CLUSTERS_FOR_VERDICT))
     return "\n".join(lines) + "\n"
 
 
@@ -573,6 +664,7 @@ def main(argv=None):
     ap.add_argument("--from-ms", type=int)
     ap.add_argument("--to-ms", type=int)
     ap.add_argument("--order-usd", type=float, default=100.0)
+    ap.add_argument("--sizes", default=",".join("{:g}".format(x) for x in DEFAULT_SIZES_USD), help="notionals in USD for the taker table, e.g. 100,175,340,620,1000")
     ap.add_argument("--ttl-s", type=float, default=DEFAULT_TTL_MS / 1000)
     ap.add_argument("--hold-min", type=float, default=DEFAULT_HOLD_MS / 60_000)
     ap.add_argument("--step-s", type=float, default=300)
@@ -584,6 +676,7 @@ def main(argv=None):
         with open(args.signals) as handle:
             signals = json.load(handle)
     report = build_report(args.book_db, args.product, lo_ms=args.from_ms, hi_ms=args.to_ms, order_size_usd=args.order_usd,
+                          sizes_usd=tuple(float(x) for x in args.sizes.split(",")),
                           ttl_ms=int(args.ttl_s * 1000), hold_ms=int(args.hold_min * 60_000), step_ms=int(args.step_s * 1000),
                           signals=signals)
     os.makedirs(args.out, exist_ok=True)

@@ -179,7 +179,7 @@ class StatsAndVerdictTests(unittest.TestCase):
         snaps = series(2000)
         orders = b.grid_orders(snaps, 60_000)
         s = b.summarize_orders(b.evaluate_orders(snaps, orders, 100.0, hold_ms=300_000))
-        self.assertEqual(s["conservative"]["fill_rate"], 0.0)
+        self.assertEqual(s["conservative"]["hypothetical_fill_rate"], 0.0)
         self.assertAlmostEqual(s["conservative"]["chase_minus_taker_bp"]["mean"], 0.0, places=6)
         self.assertNotEqual(s["conservative"]["verdict"], "maker_helps")
 
@@ -247,7 +247,7 @@ CREATE TABLE book_gap(gap_id INTEGER PRIMARY KEY AUTOINCREMENT, product_id TEXT,
             self.assertGreater(rep["coverage"]["coverage"], 0.9)
             json.dumps(rep, sort_keys=True)  # serializable
             md = b.render_markdown(rep)
-            self.assertIn("hipotéticamente ejecutables", md)
+            self.assertIn("escenarios hipotéticos", md)
             self.assertIn("Taker simulado", md)
             out = os.path.join(d, "out")
             self.assertEqual(b.main(["--book-db", path, "--out", out, "--step-s", "60", "--hold-min", "5"]), 0)
@@ -259,6 +259,112 @@ CREATE TABLE book_gap(gap_id INTEGER PRIMARY KEY AUTOINCREMENT, product_id TEXT,
             self.make_db(path, [])
             self.assertEqual(b.build_report(path, "PF_XBTUSD")["snapshots"], 0)
             self.assertIn("Sin snapshots", b.render_markdown(b.build_report(path, "PF_XBTUSD")))
+
+
+def flat_with_events(n, events):
+    """Flat 5 s series; ``events`` maps index -> snapshot override."""
+    out = series(n)
+    for i, snapshot in events.items():
+        out[i] = snapshot
+    return out
+
+
+class ReviewFixTests(unittest.TestCase):
+    def test_logged_gap_without_a_snapshot_hole_excludes_the_order(self):
+        snaps = series(400)  # continuous 5 s spacing: the 15 s check alone would pass
+        order = [(0, "LONG")]
+        ok = b.evaluate_orders(snaps, order, 100.0, hold_ms=600_000)
+        self.assertFalse(ok[0]["excluded"])
+        for gap in [(100_000, 100_001, "reset"), (590_000, 595_000, "late"), (0, 1, "at start")]:
+            rows = b.evaluate_orders(snaps, order, 100.0, gaps=[gap], hold_ms=600_000)
+            self.assertEqual((rows[0]["excluded"], rows[0]["excluded_reason"]), (True, "logged_gap"), gap)
+        far = b.evaluate_orders(snaps, order, 100.0, gaps=[(1_500_000, 1_600_000, "after")], hold_ms=600_000)
+        self.assertFalse(far[0]["excluded"])  # a gap after the whole window does not matter
+
+    def test_gap_in_the_hold_after_the_ttl_still_excludes(self):
+        snaps = series(400)
+        rows = b.evaluate_orders(snaps, [(0, "LONG")], 100.0, gaps=[(300_000, 310_000, "x")], ttl_ms=60_000, hold_ms=600_000)
+        self.assertEqual(rows[0]["excluded_reason"], "logged_gap")
+        self.assertEqual(b.summarize_orders(rows)["excluded_reasons"], {"logged_gap": 1})
+
+    def test_snapshot_hole_during_the_hold_excludes_even_if_the_ttl_was_clean(self):
+        snaps = [s for s in series(400) if not 200_000 < s.t < 260_000]
+        rows = b.evaluate_orders(snaps, [(0, "LONG")], 100.0, hold_ms=600_000)
+        self.assertEqual(rows[0]["excluded_reason"], "snapshot_gap")
+
+    def test_signal_reference_is_the_snapshot_before_and_execution_the_one_after(self):
+        snaps = flat_with_events(400, {1: snap(5_000, bid=100.0, ask=100.02)})
+        snaps[2] = snap(10_000, bid=100.5, ask=100.52)  # market jumps +50 bp between the signal and the next snapshot
+        orders, bad = b.signal_orders(snaps, [{"time_ms": 7_000, "side": "LONG"}])
+        o = orders[0]
+        self.assertEqual((o.ref, o.exec, bad), (1, 2, {"no_reference": 0, "no_execution_snapshot": 0}))
+        row = b.evaluate_orders(snaps, orders, 100.0, hold_ms=600_000)[0]
+        # the taker pays the post-jump ask against the pre-signal mid: the 50 bp wait is a cost, not hidden
+        self.assertGreater(row["wait_bp"], 40)
+        self.assertGreater(row["taker_entry_cost_bp"], 45)
+
+    def test_signal_without_recent_reference_or_execution_snapshot_is_counted_not_guessed(self):
+        snaps = series(100)
+        orders, bad = b.signal_orders(snaps, [{"time_ms": -5_000, "side": "LONG"}, {"time_ms": 100_000, "side": "LONG"}, {"time_ms": 495_000, "side": "LONG"},
+                                              {"time_ms": 10 ** 7, "side": "SHORT"}])
+        self.assertEqual(len(orders), 1)
+        self.assertEqual(bad, {"no_reference": 2, "no_execution_snapshot": 1})
+        stale = [snap(0), snap(60_000), snap(65_000)]
+        self.assertEqual(b.signal_orders(stale, [{"time_ms": 50_000, "side": "LONG"}])[1]["no_reference"], 1)
+
+    def test_cancellations_alone_are_an_optimistic_scenario_not_a_conservative_one(self):
+        snaps = flat_with_events(400, {3: snap(15_000, bid=99.98, ask=100.04)})  # bid level gone, ask never reached 100.0
+        row = b.evaluate_orders(snaps, [(0, "LONG")], 100.0, hold_ms=600_000)[0]
+        self.assertTrue(row["optimistic"]["filled"])
+        self.assertFalse(row["conservative"]["filled"])
+        summary = b.summarize_orders([row])
+        self.assertIn("hypothetical", " ".join(summary["optimistic"]))
+        self.assertIn("neither is a demonstrated fill", summary["scenario_note"])
+
+    def test_four_hours_of_five_minute_grid_is_48_orders_per_side_but_four_clusters(self):
+        # 4 h at 5 s; the price drifts hard in the maker's favour so the paired difference would "win" if allowed
+        snaps = [snap(i * 5_000, bid=100.0 - i * 0.001, ask=100.02 - i * 0.001) for i in range(2880)]
+        orders = b.grid_orders(snaps, 300_000, sides=("LONG",))
+        rows = b.evaluate_orders(snaps, orders, 100.0, hold_ms=300_000)
+        s = b.summarize_orders(rows)
+        for reading in ("optimistic", "conservative"):
+            paired = s[reading]["chase_minus_taker_bp"]
+            self.assertLessEqual(paired["clusters"], 4)
+            self.assertGreater(paired["n"], 40)
+            self.assertEqual(s[reading]["verdict"], "insufficient_data")
+            self.assertNotIn(s[reading]["verdict"], ("maker_helps", "maker_hurts"))
+
+    def test_arbitrary_notionals_and_monotone_cost(self):
+        snaps = series(20, ask_qty=1.0, bid_qty=1.0)
+        curve = b.taker_curve(snaps, (175.0, 340.0, 620.0, 1e9))
+        self.assertLessEqual(curve[175.0]["LONG"], curve[340.0]["LONG"])
+        self.assertLessEqual(curve[340.0]["LONG"], curve[620.0]["LONG"])
+        self.assertIsNone(curve[1e9]["SHORT"])
+        out = b.taker_report(snaps, (175.0, 340.0))
+        self.assertIn("175_LONG", out)
+        self.assertIn("340_SHORT", out)
+
+    def test_cli_accepts_custom_sizes(self):
+        with tempfile.TemporaryDirectory() as d:
+            helper = StoreRoundTripTests()
+            path = os.path.join(d, "book.sqlite")
+            helper.make_db(path, series(1500))
+            self.assertEqual(b.main(["--book-db", path, "--out", d, "--sizes", "175,340,620", "--step-s", "60", "--hold-min", "5"]), 0)
+            with open(os.path.join(d, "report.json")) as handle:
+                rep = json.load(handle)
+            self.assertEqual(sorted(rep["taker_curve_bp"]), ["175.0", "340.0", "620.0"])
+
+    def test_report_uses_book_gaps_from_the_database(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "book.sqlite")
+            StoreRoundTripTests().make_db(path, series(1500))
+            db = sqlite3.connect(path)
+            db.execute("DELETE FROM book_gap")
+            db.execute("INSERT INTO book_gap(product_id,from_ms,to_ms,reason,logged_ms) VALUES('PF_XBTUSD',3600000,3600001,'seq',0)")
+            db.commit()
+            db.close()
+            rep = b.build_report(path, "PF_XBTUSD", step_ms=60_000, hold_ms=300_000)
+            self.assertGreater(rep["estimated_maker"]["excluded_reasons"].get("logged_gap", 0), 0)
 
 
 if __name__ == "__main__":
