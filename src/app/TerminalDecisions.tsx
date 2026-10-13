@@ -24,11 +24,23 @@ export default function TerminalDecisions({
 }) {
   const [filter, setFilter] = useState<Filter>('all')
   const list = useRef<HTMLUListElement>(null)
-  // A decision picked on the chart scrolls its row into view in the list.
+  // A decision picked on the chart brings its row into view inside the list.
+  // Only the list's own scroll moves (never the page, so no jump on mobile),
+  // and not on the first render: loading the Terminal must not scroll anything.
+  const firstRun = useRef(true)
   useEffect(() => {
-    list.current
-      ?.querySelector('button[aria-pressed="true"]')
-      ?.scrollIntoView?.({ block: 'nearest' })
+    if (firstRun.current) {
+      firstRun.current = false
+      return
+    }
+    const box = list.current
+    const row = box?.querySelector<HTMLElement>('button[aria-pressed="true"]')
+    if (!box || !row) return
+    const boxRect = box.getBoundingClientRect()
+    const rowRect = row.getBoundingClientRect()
+    if (rowRect.top < boxRect.top) box.scrollTop -= boxRect.top - rowRect.top
+    else if (rowRect.bottom > boxRect.bottom)
+      box.scrollTop += rowRect.bottom - boxRect.bottom
   }, [selectedId])
   const visible =
     filter === 'signals' ? rows.filter((r) => r.action !== 'WAIT') : rows

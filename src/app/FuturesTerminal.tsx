@@ -96,6 +96,12 @@ export default function FuturesTerminal({
       .find((analysis) => analysis.analysis_id === selectedAnalysisId) ??
     (analyses.length > 0 ? record(analyses.at(-1)) : null)
   const selectedId = String(selectedAnalysis?.analysis_id ?? '')
+  // An id that is not one of this product's analyses never becomes the
+  // selection (a stale or foreign marker/row id would blank the detail).
+  const selectAnalysis = (id: string) => {
+    if (analyses.some((analysis) => record(analysis).analysis_id === id))
+      setSelectedAnalysisId(id)
+  }
   const selectedDecisionTime = selectedAnalysis?.decision_time_ms
   const selectedOrder =
     selectedAnalysis && Number.isSafeInteger(selectedDecisionTime)
@@ -406,7 +412,7 @@ export default function FuturesTerminal({
                   analyses={localDemo || gatewayEngine ? analyses : []}
                   selectedId={localDemo || gatewayEngine ? selectedId : ''}
                   entriesOnly={!localDemo}
-                  onSelect={setSelectedAnalysisId}
+                  onSelect={selectAnalysis}
                   apiBase={apiBase}
                   product={product}
                   ticker={
@@ -433,7 +439,7 @@ export default function FuturesTerminal({
               <TerminalDecisions
                 rows={decisionRows}
                 selectedId={selectedId}
-                onSelect={setSelectedAnalysisId}
+                onSelect={selectAnalysis}
                 notice={
                   engineOff
                     ? 'Motor de decisiones apagado. Solo se muestran velas y precio públicos de Kraken Futures; no hay análisis, cuenta ni operaciones simuladas.'

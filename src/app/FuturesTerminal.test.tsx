@@ -1549,9 +1549,87 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
 
     it('ignores a click on a marker that is not one of this product’s decisions', async () => {
       await renderLive()
+      await clickMarker('verdict-hash-2')
+      // A foreign id, an exit marker and a decision without marker (WAIT)
+      // leave the current selection untouched (no fallback to the newest).
       await clickMarker('verdict-of-another-product')
-      expect(marker('verdict-hash-3')?.text).toMatch(/◀/)
-      expect(detail().getByText('SHORT')).toBeTruthy()
+      await clickMarker('exit:order-1')
+      await clickMarker('verdict-hash-1')
+      expect(detail().getByText('LONG')).toBeTruthy()
+      expect(marker('verdict-hash-2')?.text).toMatch(/◀/)
+      expect(marker('verdict-hash-3')?.text).not.toMatch(/◀/)
+    })
+
+    describe('scroll of the selected row', () => {
+      afterEach(() => {
+        vi.restoreAllMocks()
+        delete (Element.prototype as Partial<Element>).scrollIntoView
+      })
+      const rect = (top: number, bottom: number) =>
+        ({
+          top,
+          bottom,
+          left: 0,
+          right: 0,
+          width: 0,
+          height: bottom - top,
+        }) as DOMRect
+      const spies = () => {
+        const pageScroll = vi.fn()
+        Element.prototype.scrollIntoView = pageScroll
+        const list = document.querySelector<HTMLElement>(
+          '.connected-terminal__decision-list',
+        )!
+        return { pageScroll, list }
+      }
+
+      it('does not scroll anything when the Terminal loads', async () => {
+        const pageScroll = vi.fn()
+        Element.prototype.scrollIntoView = pageScroll
+        const windowScroll = vi
+          .spyOn(window, 'scrollTo')
+          .mockImplementation(() => {})
+        await renderLive()
+        const list = document.querySelector<HTMLElement>(
+          '.connected-terminal__decision-list',
+        )!
+        expect(list.scrollTop).toBe(0)
+        expect(pageScroll).not.toHaveBeenCalled()
+        expect(windowScroll).not.toHaveBeenCalled()
+      })
+
+      it('moves only the list’s own scroll, never the page', async () => {
+        await renderLive()
+        const { pageScroll, list } = spies()
+        const windowScroll = vi
+          .spyOn(window, 'scrollTo')
+          .mockImplementation(() => {})
+        vi.spyOn(list, 'getBoundingClientRect').mockReturnValue(rect(100, 300))
+        // Row below the visible part of the list, then above it.
+        const row = () =>
+          screen.getByRole('button', {
+            name: 'Seleccionar análisis verdict-hash-2',
+          })
+        vi.spyOn(
+          HTMLElement.prototype,
+          'getBoundingClientRect',
+        ).mockImplementation(function (this: HTMLElement) {
+          return this === list ? rect(100, 300) : rect(340, 380)
+        })
+        await clickMarker('verdict-hash-2')
+        expect(row().getAttribute('aria-pressed')).toBe('true')
+        expect(list.scrollTop).toBe(80)
+        vi.spyOn(
+          HTMLElement.prototype,
+          'getBoundingClientRect',
+        ).mockImplementation(function (this: HTMLElement) {
+          return this === list ? rect(100, 300) : rect(60, 100)
+        })
+        await clickMarker('verdict-hash-3')
+        expect(list.scrollTop).toBe(40)
+        expect(pageScroll).not.toHaveBeenCalled()
+        expect(windowScroll).not.toHaveBeenCalled()
+      })
     })
 
     it('says a WAIT decision has no marker, and says nothing for an entry', async () => {
