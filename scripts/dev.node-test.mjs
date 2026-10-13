@@ -97,6 +97,11 @@ describe('devChildSpecs', () => {
       live.env.FUTURES_STRATEGIES_DB_PATH,
       strategies.args[strategies.args.indexOf('--strategies-db') + 1],
     )
+    assert.equal(
+      live.env.FUTURES_FORWARD_REGISTRATION_PATH,
+      '/repo/config/forward-strategies.json',
+    )
+    assert.equal(live.env.FUTURES_STRATEGY_SPECS_DIR, '/repo/config/strategies')
   })
 
   it('gives the gateway the decisions database and the Python for Qwen scores', () => {

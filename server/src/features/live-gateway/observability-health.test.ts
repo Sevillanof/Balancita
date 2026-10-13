@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any -- loosely typed JSON assertions */
 import { createHash } from 'node:crypto'
 import {
   mkdirSync,
@@ -8,6 +9,7 @@ import {
 } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it } from 'vitest'
 import { buildLiveGateway } from './gateway.ts'
 import {
@@ -25,6 +27,7 @@ import {
   seedMarket,
   seedStrategies,
   seedVerdicts,
+  writeForwardConfig,
   writeHealthFile,
   type Sandbox,
 } from './observability-health-fixtures.ts'
@@ -59,6 +62,8 @@ function optionsOf(b: Sandbox): ObservabilityHealthOptions {
     decisionsDbPath: b.decisionsDb,
     forwardDbPath: b.forwardDb,
     strategiesDbPath: b.strategiesDb,
+    forwardRegistrationPath: b.registration,
+    strategySpecsDir: b.specsDir,
     processHealthPath: b.healthFile,
     qwenExitSummaryPath: b.qwenExitSummary,
     kronosSummaryPath: b.kronosSummary,
@@ -91,6 +96,7 @@ function seedHealthy(b: Sandbox): void {
     ],
     NOW,
   )
+  writeForwardConfig(b, [], [])
   writeHealthFile(b.healthFile, NOW, {
     capture: 'running',
     live: 'running',
@@ -326,7 +332,7 @@ describe('observability health', () => {
     fresh(b.forwardDb)
     seedForward(b.forwardDb, {
       now: NOW,
-      strategies: ['C29'],
+      strategies: ['C29', 'C30'],
       checkedAgeMs: 60_000,
       diverged: 3,
       candleLagMs: 15 * 60_000,
@@ -382,10 +388,279 @@ describe('observability health', () => {
     )
     const report = createObservabilityHealth(optionsOf(b)).report()
     const strategies = component(report, 'strategies')
+    // The runner is running and C99 has been active for hours: no row at all
+    // is not «pending», it is a strategy nobody updates.
     expect(check(strategies, 'forward_coverage')).toMatchObject({
-      status: 'warning',
+      status: 'error',
     })
-    expect(check(strategies, 'forward_coverage').detail).toMatch(/C99/)
+    expect(check(strategies, 'forward_coverage').detail).toMatch(
+      /C99\/PF_XBTUSD \(sin estado\)/,
+    )
+  })
+
+  describe('freshness of each strategy/product pair', () => {
+    const stale = 3 * 3_600_000
+    const reseedForward = (
+      b: Sandbox,
+      pairs: Record<string, number | null>,
+    ) => {
+      fresh(b.forwardDb)
+      seedForward(b.forwardDb, {
+        now: NOW,
+        strategies: ['C29', 'C30'],
+        checkedAgeMs: 5 * 60_000,
+        pairs,
+      })
+    }
+
+    it('is not ok when only some pairs keep updating, and names the delayed ones', () => {
+      const b = box()
+      seedHealthy(b)
+      // C29 is current everywhere; C30 stopped on two products hours ago and
+      // has no row at all on a third. The newest row of the table is fresh.
+      reseedForward(b, {
+        'C30/PF_ETHUSD': stale,
+        'C30/PF_SOLUSD': stale,
+        'C30/PF_XRPUSD': null,
+      })
+      const report = createObservabilityHealth(optionsOf(b)).report()
+      const cycle = check(component(report, 'paper'), 'forward_cycle')
+      expect(cycle.status).toBe('error')
+      expect(cycle.value).toBe(stale)
+      expect(cycle.detail).toContain('C30/PF_ETHUSD (180 min)')
+      expect(cycle.detail).toContain('C30/PF_SOLUSD (180 min)')
+      expect(cycle.detail).toContain('C30/PF_XRPUSD (sin estado)')
+      expect(cycle.detail).not.toContain('C29/')
+      const items = component(report, 'paper').items as Record<string, any>[]
+      const pair = (s: string, p: string) =>
+        items.find((i) => i.strategy_id === s && i.product_id === p)
+      expect(pair('C29', 'PF_ETHUSD')).toMatchObject({ status: 'ok' })
+      expect(pair('C30', 'PF_ETHUSD')).toMatchObject({
+        status: 'error',
+        reason: 'process_active_output_stale',
+        age_ms: stale,
+      })
+      expect(pair('C30', 'PF_XRPUSD')).toMatchObject({
+        status: 'error',
+        reason: 'process_active_without_output',
+        checked_ms: null,
+      })
+      expect(items.at(-1)!.summary).toMatchObject({
+        expected_pairs: 16,
+        current_pairs: 13,
+      })
+      // Coverage per strategy: C29 whole, C30 only partly current.
+      const coverage = component(report, 'strategies')
+      expect(check(coverage, 'forward_coverage').status).toBe('warning')
+      const rows = coverage.items as Record<string, any>[]
+      expect(rows.find((r) => r.strategy_id === 'C29')).toMatchObject({
+        status: 'ok',
+        products_current: 8,
+      })
+      expect(rows.find((r) => r.strategy_id === 'C30')).toMatchObject({
+        status: 'warning',
+        products_current: 5,
+      })
+      expect(
+        rows
+          .find((r) => r.strategy_id === 'C30')!
+          .products_delayed.map((d: any) => d.product_id),
+      ).toEqual(['PF_ETHUSD', 'PF_SOLUSD', 'PF_XRPUSD'])
+      expect(report.overall.status).toBe('error')
+    })
+
+    it('does not accept a strategy whose rows are all old as covered because other strategies are fresh', () => {
+      const b = box()
+      seedHealthy(b)
+      reseedForward(
+        b,
+        Object.fromEntries(PRODUCTS.map((p) => [`C30/${p}`, stale])),
+      )
+      const report = createObservabilityHealth(optionsOf(b)).report()
+      const coverage = component(report, 'strategies')
+      expect(check(coverage, 'forward_coverage').status).toBe('error')
+      expect(
+        (coverage.items as Record<string, any>[]).find(
+          (r) => r.strategy_id === 'C30',
+        ),
+      ).toMatchObject({ status: 'error', products_current: 0 })
+    })
+
+    it('ignores rows of strategies that are no longer expected: a historical row proves nothing', () => {
+      const b = box()
+      seedHealthy(b)
+      // C28 was switched off: its stale rows stay in the forward DB.
+      fresh(b.strategiesDb)
+      seedStrategies(
+        b.strategiesDb,
+        [
+          { id: 'C29', state: 'active' },
+          { id: 'C30', state: 'active' },
+          { id: 'C28', state: 'retired' },
+        ],
+        NOW,
+      )
+      fresh(b.forwardDb)
+      seedForward(b.forwardDb, {
+        now: NOW,
+        strategies: ['C29', 'C30'],
+        checkedAgeMs: 5 * 60_000,
+      })
+      const old = new DatabaseSync(b.forwardDb)
+      old.exec(
+        `INSERT INTO forward_status SELECT 'C28', product_id, payload FROM forward_status WHERE strategy_id='C29'`,
+      )
+      old.close()
+      const report = createObservabilityHealth(optionsOf(b)).report()
+      expect(component(report, 'paper').status).toBe('ok')
+      const summary = (
+        component(report, 'paper').items as Record<string, any>[]
+      ).at(-1)!.summary
+      expect(summary).toMatchObject({
+        expected_pairs: 16,
+        rows_not_expected: 8,
+      })
+    })
+
+    it('does not mix up the strategy switched on a minute ago with one that stopped', () => {
+      const b = box()
+      seedHealthy(b)
+      fresh(b.strategiesDb)
+      seedStrategies(
+        b.strategiesDb,
+        [
+          { id: 'C29', state: 'active' },
+          { id: 'C30', state: 'active' },
+        ],
+        NOW,
+      )
+      const db = new DatabaseSync(b.strategiesDb)
+      db.exec(
+        `UPDATE strategy_events SET known_at=${NOW - 10 * 60_000} WHERE strategy_id='C30' AND state='active'`,
+      )
+      db.close()
+      fresh(b.forwardDb)
+      seedForward(b.forwardDb, {
+        now: NOW,
+        strategies: ['C29'],
+        checkedAgeMs: 60_000,
+      })
+      const report = createObservabilityHealth(optionsOf(b)).report()
+      const cycle = check(component(report, 'paper'), 'forward_cycle')
+      expect(cycle.status).toBe('warning')
+      const items = component(report, 'paper').items as Record<string, any>[]
+      expect(items.find((i) => i.strategy_id === 'C30')).toMatchObject({
+        status: 'warning',
+        reason: 'awaiting_first_cycle',
+      })
+    })
+
+    it('reports «Sin datos» when the expected pairs cannot be determined, even with fresh rows', () => {
+      const b = box()
+      seedHealthy(b)
+      for (const [name, options] of [
+        [
+          'registration file missing',
+          {
+            ...optionsOf(b),
+            forwardRegistrationPath: '/nonexistent/forward-strategies.json',
+          },
+        ],
+        [
+          'registry missing',
+          { ...optionsOf(b), strategiesDbPath: '/nonexistent/registry.sqlite' },
+        ],
+        [
+          'registration path not configured',
+          { ...optionsOf(b), forwardRegistrationPath: undefined },
+        ],
+      ] as const) {
+        const report = createObservabilityHealth(options).report()
+        expect(
+          check(component(report, 'paper'), 'forward_cycle').status,
+          name,
+        ).toBe('unknown')
+        expect(
+          check(component(report, 'paper'), 'forward_cycle').detail,
+        ).toMatch(/No se puede determinar/)
+        expect(
+          check(component(report, 'strategies'), 'forward_coverage').status,
+          name,
+        ).toBe('unknown')
+        expect(component(report, 'paper').status, name).toBe('unknown')
+      }
+    })
+
+    it('rebuilds the expected set like the runner: file strategies unless the registry switched them off, plus registry-active ones', () => {
+      const b = box()
+      seedHealthy(b)
+      // File: C30 (also active in the registry), C28 (retired in the registry),
+      // FILE1 (file only, with a spec) and NOSPEC (file only, no spec).
+      fresh(b.strategiesDb)
+      seedStrategies(
+        b.strategiesDb,
+        [
+          { id: 'C29', state: 'active' },
+          { id: 'C30', state: 'active' },
+          { id: 'C28', state: 'retired' },
+        ],
+        NOW,
+      )
+      writeForwardConfig(b, ['C30', 'C28', 'FILE1', 'NOSPEC'], ['FILE1'])
+      fresh(b.forwardDb)
+      seedForward(b.forwardDb, {
+        now: NOW,
+        strategies: ['C29', 'C30', 'FILE1'],
+        checkedAgeMs: 5 * 60_000,
+      })
+      const report = createObservabilityHealth(optionsOf(b)).report()
+      expect(component(report, 'paper').status).toBe('ok')
+      const ids = (
+        component(report, 'strategies').items as Record<string, any>[]
+      )
+        .filter((r) => r.strategy_id)
+        .map((r) => [r.strategy_id, r.source])
+      expect(ids).toEqual([
+        ['C30', 'archivo de registro forward'],
+        ['FILE1', 'archivo de registro forward'],
+        ['C29', 'registro'],
+      ])
+      expect(component(report, 'strategies').limitations.join(' ')).toMatch(
+        /NOSPEC.*omite/,
+      )
+    })
+
+    it('says unknown for a file-only strategy when the specs folder is not configured', () => {
+      const b = box()
+      seedHealthy(b)
+      writeForwardConfig(b, ['FILE1'], ['FILE1'])
+      const report = createObservabilityHealth({
+        ...optionsOf(b),
+        strategySpecsDir: undefined,
+      }).report()
+      expect(check(component(report, 'paper'), 'forward_cycle').status).toBe(
+        'unknown',
+      )
+      expect(check(component(report, 'paper'), 'forward_cycle').detail).toMatch(
+        /FILE1/,
+      )
+    })
+  })
+
+  it('never reads the trade history: the report is the same without forward_trade', () => {
+    const b = box()
+    seedHealthy(b)
+    const before = createObservabilityHealth(optionsOf(b)).report()
+    const db = new DatabaseSync(b.forwardDb)
+    db.exec('DROP TABLE forward_trade')
+    db.close()
+    const after = createObservabilityHealth(optionsOf(b)).report()
+    expect(after.components.map((c) => c.status)).toEqual(
+      before.components.map((c) => c.status),
+    )
+    expect(component(after, 'paper').items).toEqual(
+      component(before, 'paper').items,
+    )
   })
 
   it('does not trust a running optional experiment without a recent summary', () => {
@@ -589,6 +864,11 @@ describe('observability health', () => {
           strategies: ['C29', 'C30'],
           checkedAgeMs: 60_000,
           diverged: 3,
+          // C30 stopped updating on two products three hours ago.
+          pairs: {
+            'C30/PF_ETHUSD': 3 * 3_600_000,
+            'C30/PF_SOLUSD': 3 * 3_600_000,
+          },
         })
         return createObservabilityHealth(optionsOf(b)).report()
       },

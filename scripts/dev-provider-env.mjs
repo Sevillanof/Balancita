@@ -556,6 +556,9 @@ export function devChildSpecs({
         // `/api/observability/health` reads these read-only (forward's DB, the strategy registry).
         FUTURES_FORWARD_DB_PATH: `${forwardDir}/forward.sqlite`,
         FUTURES_STRATEGIES_DB_PATH: strategiesDb,
+        // Which strategies the forward must update: the same file and specs it reads.
+        FUTURES_FORWARD_REGISTRATION_PATH: `${root}/config/forward-strategies.json`,
+        FUTURES_STRATEGY_SPECS_DIR: `${root}/config/strategies`,
         // Qwen's hits/misses/returns, computed read-only by Python on request.
         FUTURES_DECISIONS_DB_PATH: decisionsDb,
         // `/api/system`: size of the saved data, C31's summary and the Kronos run.

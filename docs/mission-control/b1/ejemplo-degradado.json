@@ -4,10 +4,11 @@
   "cache_ms": 15000,
   "overall": {
     "status": "error",
-    "reason": "4 componente(s) con problemas y 1 sin verificar.",
+    "reason": "5 componente(s) con problemas y 1 sin verificar.",
     "failing": [
       "data",
       "processing",
+      "strategies",
       "decisions",
       "paper"
     ],
@@ -250,8 +251,8 @@
     {
       "id": "strategies",
       "label": "Estrategias",
-      "status": "ok",
-      "summary": "Todas las comprobaciones obligatorias tienen evidencia reciente.",
+      "status": "warning",
+      "summary": "Sin ciclo vigente: C30/PF_ETHUSD (180 min), C30/PF_SOLUSD (180 min).",
       "checks": [
         {
           "required": true,
@@ -265,11 +266,11 @@
         {
           "required": true,
           "id": "forward_coverage",
-          "label": "Forward con estado por estrategia activa",
-          "status": "ok",
-          "value": 2,
-          "rule": "warning si una estrategia activa no tiene estado forward (el forward la registra en su próximo ciclo)",
-          "detail": "Todas las estrategias activas tienen estado forward."
+          "label": "Forward vigente por estrategia activa",
+          "status": "warning",
+          "value": 14,
+          "rule": "por estrategia esperada: ok si todos sus productos tienen un ciclo forward vigente (≤ 45 min); warning si algunos no; error si ninguno. Una fila antigua no cuenta como actividad",
+          "detail": "Sin ciclo vigente: C30/PF_ETHUSD (180 min), C30/PF_SOLUSD (180 min)."
         },
         {
           "required": false,
@@ -292,13 +293,13 @@
       ],
       "evidence": [
         {
-          "source": "strategy_events (último estado por estrategia)",
+          "source": "strategy_events (estado por estrategia y versión)",
           "origin": "futures-strategies.sqlite",
           "last_updated_ms": 1789996400000,
           "state": "read"
         },
         {
-          "source": "forward_status (checked_ms)",
+          "source": "forward_status (checked_ms por estrategia y producto)",
           "origin": "forward.sqlite",
           "last_updated_ms": 1789999940000,
           "state": "read"
@@ -319,19 +320,34 @@
       "items": [
         {
           "strategy_id": "C29",
-          "version": 1,
-          "state": "active",
-          "forward_products": 8,
-          "last_forward_cycle_ms": 1789999940000,
-          "last_trade_entry_ms": null
+          "source": "registro",
+          "active_since_ms": 1789996400000,
+          "status": "ok",
+          "products_expected": 8,
+          "products_current": 8,
+          "products_delayed": []
         },
         {
           "strategy_id": "C30",
-          "version": 1,
-          "state": "active",
-          "forward_products": 8,
-          "last_forward_cycle_ms": 1789999940000,
-          "last_trade_entry_ms": null
+          "source": "registro",
+          "active_since_ms": 1789996400000,
+          "status": "warning",
+          "products_expected": 8,
+          "products_current": 6,
+          "products_delayed": [
+            {
+              "product_id": "PF_ETHUSD",
+              "status": "error",
+              "reason": "process_active_output_stale",
+              "age_ms": 10800000
+            },
+            {
+              "product_id": "PF_SOLUSD",
+              "status": "error",
+              "reason": "process_active_output_stale",
+              "age_ms": 10800000
+            }
+          ]
         },
         {
           "experiment": "qwen_exit_c31",
@@ -357,9 +373,10 @@
         }
       ],
       "limitations": [
-        "La última actividad verificable es el último ciclo forward y la última entrada registrada, no una señal en vivo.",
-        "Kronos no está en el supervisor: su proceso se conoce solo por el muestreo de recursos (POSIX).",
-        "No se sirve el estado individual de cada experimento: eso es B5."
+        "Las estrategias esperadas se reconstruyen con las mismas entradas que el forward (archivo de registro, estado del registro, specs y lista de productos); si alguna no se puede leer, el resultado es «Sin datos».",
+        "La lista de productos del forward se toma del mismo entorno que el gateway (FUTURES_PRODUCTS o la lista fijada).",
+        "La última operación por experimento no está en B1: es B2.",
+        "Kronos no está en el supervisor: su proceso se conoce solo por el muestreo de recursos (POSIX)."
       ]
     },
     {
@@ -509,17 +526,17 @@
     {
       "id": "paper",
       "label": "Ejecución paper",
-      "status": "warning",
-      "summary": "6 trade(s) divergente(s), 0 par(es) con vela retrasada.",
+      "status": "error",
+      "summary": "Pares retrasados: C30/PF_ETHUSD (180 min), C30/PF_SOLUSD (180 min) (motivo del peor: process_active_output_stale).",
       "checks": [
         {
           "required": true,
           "id": "forward_cycle",
-          "label": "Ciclo del forward",
-          "status": "ok",
-          "value": 60000,
-          "rule": "ok ≤ 45 min (1,5 ciclos de 30 min), warning ≤ 60 min; proceso activo sin ciclo reciente es error",
-          "detail": "El forward completó un ciclo reciente."
+          "label": "Ciclo del forward por estrategia y producto",
+          "status": "error",
+          "value": 10800000,
+          "rule": "por par estrategia/producto esperado: ok ≤ 45 min (1,5 ciclos de 30 min), warning ≤ 60 min; proceso activo sin ciclo reciente es error; el estado es el del peor par",
+          "detail": "Pares retrasados: C30/PF_ETHUSD (180 min), C30/PF_SOLUSD (180 min) (motivo del peor: process_active_output_stale)."
         },
         {
           "required": true,
@@ -527,23 +544,27 @@
           "label": "Anomalías registradas del forward",
           "status": "warning",
           "value": 6,
-          "rule": "warning si hay trades divergentes (necesitan --rebuild) o velas con retraso > 10 min; las entradas bloqueadas y los ciclos obsoletos se informan sin juzgar",
+          "rule": "warning si hay trades divergentes (necesitan --rebuild) o velas con retraso > 10 min, solo en pares esperados; los bloqueos y ciclos obsoletos se informan sin juzgar",
           "detail": "6 trade(s) divergente(s), 0 par(es) con vela retrasada."
         }
       ],
       "evidence": [
         {
-          "source": "forward_status (checked_ms)",
+          "source": "forward_status (checked_ms por estrategia y producto)",
           "origin": "forward.sqlite",
           "last_updated_ms": 1789999940000,
-          "state": "read"
+          "state": "read",
+          "detail": "última actualización = la del par más viejo"
         }
       ],
       "items": [
         {
           "strategy_id": "C29",
           "product_id": "PF_XBTUSD",
+          "status": "ok",
+          "reason": "producing",
           "checked_ms": 1789999940000,
+          "age_ms": 60000,
           "candle_lag_ms": 90000,
           "missing_1m": 0,
           "late_1m": 0,
@@ -554,7 +575,10 @@
         {
           "strategy_id": "C29",
           "product_id": "PF_ETHUSD",
+          "status": "ok",
+          "reason": "producing",
           "checked_ms": 1789999940000,
+          "age_ms": 60000,
           "candle_lag_ms": 90000,
           "missing_1m": 0,
           "late_1m": 0,
@@ -565,7 +589,10 @@
         {
           "strategy_id": "C29",
           "product_id": "PF_SOLUSD",
+          "status": "ok",
+          "reason": "producing",
           "checked_ms": 1789999940000,
+          "age_ms": 60000,
           "candle_lag_ms": 90000,
           "missing_1m": 0,
           "late_1m": 0,
@@ -576,7 +603,10 @@
         {
           "strategy_id": "C29",
           "product_id": "PF_XRPUSD",
+          "status": "ok",
+          "reason": "producing",
           "checked_ms": 1789999940000,
+          "age_ms": 60000,
           "candle_lag_ms": 90000,
           "missing_1m": 0,
           "late_1m": 0,
@@ -587,7 +617,10 @@
         {
           "strategy_id": "C29",
           "product_id": "PF_ADAUSD",
+          "status": "ok",
+          "reason": "producing",
           "checked_ms": 1789999940000,
+          "age_ms": 60000,
           "candle_lag_ms": 90000,
           "missing_1m": 0,
           "late_1m": 0,
@@ -598,7 +631,10 @@
         {
           "strategy_id": "C29",
           "product_id": "PF_DOGEUSD",
+          "status": "ok",
+          "reason": "producing",
           "checked_ms": 1789999940000,
+          "age_ms": 60000,
           "candle_lag_ms": 90000,
           "missing_1m": 0,
           "late_1m": 0,
@@ -609,7 +645,10 @@
         {
           "strategy_id": "C29",
           "product_id": "PF_LINKUSD",
+          "status": "ok",
+          "reason": "producing",
           "checked_ms": 1789999940000,
+          "age_ms": 60000,
           "candle_lag_ms": 90000,
           "missing_1m": 0,
           "late_1m": 0,
@@ -620,7 +659,10 @@
         {
           "strategy_id": "C29",
           "product_id": "PF_LTCUSD",
+          "status": "ok",
+          "reason": "producing",
           "checked_ms": 1789999940000,
+          "age_ms": 60000,
           "candle_lag_ms": 90000,
           "missing_1m": 0,
           "late_1m": 0,
@@ -631,7 +673,10 @@
         {
           "strategy_id": "C30",
           "product_id": "PF_XBTUSD",
+          "status": "ok",
+          "reason": "producing",
           "checked_ms": 1789999940000,
+          "age_ms": 60000,
           "candle_lag_ms": 90000,
           "missing_1m": 0,
           "late_1m": 0,
@@ -642,7 +687,10 @@
         {
           "strategy_id": "C30",
           "product_id": "PF_ETHUSD",
-          "checked_ms": 1789999940000,
+          "status": "error",
+          "reason": "process_active_output_stale",
+          "checked_ms": 1789989200000,
+          "age_ms": 10800000,
           "candle_lag_ms": 90000,
           "missing_1m": 0,
           "late_1m": 0,
@@ -653,7 +701,10 @@
         {
           "strategy_id": "C30",
           "product_id": "PF_SOLUSD",
-          "checked_ms": 1789999940000,
+          "status": "error",
+          "reason": "process_active_output_stale",
+          "checked_ms": 1789989200000,
+          "age_ms": 10800000,
           "candle_lag_ms": 90000,
           "missing_1m": 0,
           "late_1m": 0,
@@ -664,7 +715,10 @@
         {
           "strategy_id": "C30",
           "product_id": "PF_XRPUSD",
+          "status": "ok",
+          "reason": "producing",
           "checked_ms": 1789999940000,
+          "age_ms": 60000,
           "candle_lag_ms": 90000,
           "missing_1m": 0,
           "late_1m": 0,
@@ -675,7 +729,10 @@
         {
           "strategy_id": "C30",
           "product_id": "PF_ADAUSD",
+          "status": "ok",
+          "reason": "producing",
           "checked_ms": 1789999940000,
+          "age_ms": 60000,
           "candle_lag_ms": 90000,
           "missing_1m": 0,
           "late_1m": 0,
@@ -686,7 +743,10 @@
         {
           "strategy_id": "C30",
           "product_id": "PF_DOGEUSD",
+          "status": "ok",
+          "reason": "producing",
           "checked_ms": 1789999940000,
+          "age_ms": 60000,
           "candle_lag_ms": 90000,
           "missing_1m": 0,
           "late_1m": 0,
@@ -697,7 +757,10 @@
         {
           "strategy_id": "C30",
           "product_id": "PF_LINKUSD",
+          "status": "ok",
+          "reason": "producing",
           "checked_ms": 1789999940000,
+          "age_ms": 60000,
           "candle_lag_ms": 90000,
           "missing_1m": 0,
           "late_1m": 0,
@@ -708,7 +771,10 @@
         {
           "strategy_id": "C30",
           "product_id": "PF_LTCUSD",
+          "status": "ok",
+          "reason": "producing",
           "checked_ms": 1789999940000,
+          "age_ms": 60000,
           "candle_lag_ms": 90000,
           "missing_1m": 0,
           "late_1m": 0,
@@ -718,16 +784,19 @@
         },
         {
           "summary": {
-            "diverged": 6,
-            "blocked": 0,
-            "staleCycles": 0,
-            "lagging": 0,
-            "open_positions": 0
+            "expected_pairs": 16,
+            "current_pairs": 14,
+            "rows_not_expected": 0,
+            "open_positions": 0,
+            "diverged_trades": 6,
+            "blocked_stale_entries": 0,
+            "stale_cycles": 0
           }
         }
       ],
       "limitations": [
         "Solo describe el forward; el libro D está retirado y no se evalúa.",
+        "Las filas de pares que ya no se esperan (estrategia apagada) se cuentan aparte y no prueban actividad.",
         "No hay PnL no realizado ni posiciones abiertas por estrategia: falta B5.",
         "Los descartes del simulador (coste/protección) no se persisten (B4 pospuesto)."
       ]

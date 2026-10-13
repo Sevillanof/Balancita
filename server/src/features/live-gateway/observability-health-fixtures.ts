@@ -35,11 +35,14 @@ export interface Sandbox {
   readonly resilienceLog: string
   readonly qwenExitSummary: string
   readonly kronosSummary: string
+  readonly registration: string
+  readonly specsDir: string
 }
 
 export function sandbox(): Sandbox {
   const dir = mkdtempSync(join(tmpdir(), 'balancita-health-'))
   mkdirSync(join(dir, 'forward'))
+  mkdirSync(join(dir, 'specs'))
   return {
     dir,
     marketDb: join(dir, 'futures-market.sqlite'),
@@ -51,6 +54,8 @@ export function sandbox(): Sandbox {
     resilienceLog: join(dir, 'resilience.jsonl'),
     qwenExitSummary: join(dir, 'qwen-exit-summary.json'),
     kronosSummary: join(dir, 'kronos-summary.json'),
+    registration: join(dir, 'forward-strategies.json'),
+    specsDir: join(dir, 'specs'),
   }
 }
 
@@ -237,6 +242,12 @@ export interface ForwardSeed {
   readonly candleLagMs?: number
   readonly diverged?: number
   readonly trades?: number
+  /**
+   * Per `strategy/product`: the cycle age in ms, or null for no row at all.
+   * Pairs not listed use `checkedAgeMs`.
+   */
+  readonly pairs?: Readonly<Record<string, number | null>>
+  readonly products?: readonly string[]
 }
 
 export function seedForward(path: string, seed: ForwardSeed): void {
@@ -253,12 +264,17 @@ export function seedForward(path: string, seed: ForwardSeed): void {
   const trade = db.prepare('INSERT INTO forward_trade VALUES(?,?,?,?,?)')
   db.exec('BEGIN')
   for (const strategy of seed.strategies)
-    for (const [i, product] of PRODUCTS.entries()) {
+    for (const [i, product] of (seed.products ?? PRODUCTS).entries()) {
+      const age =
+        seed.pairs && `${strategy}/${product}` in seed.pairs
+          ? seed.pairs[`${strategy}/${product}`]!
+          : seed.checkedAgeMs
+      if (age === null) continue
       status.run(
         strategy,
         product,
         JSON.stringify({
-          checked_ms: seed.now - seed.checkedAgeMs,
+          checked_ms: seed.now - age,
           missing_1m: 0,
           late_1m: 0,
           diverged_trades: i === 0 ? (seed.diverged ?? 0) : 0,
@@ -330,4 +346,23 @@ export function writeHealthFile(
       ...extra,
     }),
   )
+}
+
+/** `forward-strategies.json` plus one spec file per id in `specs` (only the `id` matters here). */
+export function writeForwardConfig(
+  b: Sandbox,
+  registered: readonly string[],
+  specs: readonly string[],
+): void {
+  writeFileSync(
+    b.registration,
+    JSON.stringify({
+      schema: 'futures-forward-strategies.v1',
+      strategies: Object.fromEntries(
+        registered.map((id) => [id, { start_ms: 1 }]),
+      ),
+    }),
+  )
+  for (const id of specs)
+    writeFileSync(join(b.specsDir, `${id}.json`), JSON.stringify({ id }))
 }

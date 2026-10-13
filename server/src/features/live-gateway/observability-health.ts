@@ -1,5 +1,12 @@
-import { closeSync, openSync, readFileSync, readSync, statSync } from 'node:fs'
-import { basename } from 'node:path'
+import {
+  closeSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  readSync,
+  statSync,
+} from 'node:fs'
+import { basename, join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 
 /**
@@ -76,6 +83,12 @@ export interface ObservabilityHealthOptions {
   readonly decisionsDbPath?: string
   readonly forwardDbPath?: string
   readonly strategiesDbPath?: string
+  /** `config/forward-strategies.json`: what the forward runner measures besides the registry. */
+  readonly forwardRegistrationPath?: string
+  /** `config/strategies/`: the specs the forward can run for file-registered strategies. */
+  readonly strategySpecsDir?: string
+  /** Products the forward runner iterates (`FUTURES_PRODUCTS` or the pinned list); default: `products`. */
+  readonly forwardProducts?: readonly string[]
   readonly processHealthPath?: string
   readonly qwenExitSummaryPath?: string
   readonly kronosSummaryPath?: string
@@ -962,29 +975,36 @@ function decisionsComponent(
 
 // --- Estrategias y Ejecución paper -----------------------------------------
 
+interface ForwardRow {
+  readonly strategy: string
+  readonly product: string
+  readonly checkedMs: number | null
+  readonly candleLagMs: number | null
+  readonly missing1m: number
+  readonly late1m: number
+  readonly diverged: number
+  readonly blockedStale: number
+  readonly staleCycles: number
+}
+
 interface ForwardRead {
-  readonly rows: readonly {
-    strategy: string
-    product: string
-    checkedMs: number | null
-    candleLagMs: number | null
-    missing1m: number
-    late1m: number
-    diverged: number
-    blockedStale: number
-    staleCycles: number
-  }[]
-  readonly lastTrade: ReadonlyMap<string, number>
+  readonly rows: readonly ForwardRow[]
   readonly open: number
 }
 
+/**
+ * `forward_status` has one row per (strategy, product), rewritten every cycle,
+ * and `forward_open` one per pair: both are bounded by strategies × products,
+ * never by the trade history. `forward_trade` is deliberately not read here
+ * (last trade per experiment is B2).
+ */
 function readForward(options: ObservabilityHealthOptions): Opened<ForwardRead> {
   return withDb(options.forwardDbPath, (db) => {
     const rows = (
       db
         .prepare('SELECT strategy_id, product_id, payload FROM forward_status')
         .all() as Row[]
-    ).map((r) => {
+    ).map((r): ForwardRow => {
       let p: Row = {}
       try {
         p = rowOf(JSON.parse(String(r.payload)))
@@ -1003,42 +1023,219 @@ function readForward(options: ObservabilityHealthOptions): Opened<ForwardRead> {
         staleCycles: num(p.stale_cycles) ?? 0,
       }
     })
-    const lastTrade = new Map<string, number>()
-    for (const r of db
-      .prepare(
-        'SELECT strategy_id, MAX(entry_bucket_ms) AS last FROM forward_trade GROUP BY strategy_id',
-      )
-      .all() as Row[]) {
-      const last = num(r.last)
-      if (last !== null) lastTrade.set(String(r.strategy_id), last)
-    }
     const open = db.prepare('SELECT payload FROM forward_open').all() as Row[]
     return {
       rows,
-      lastTrade,
       open: open.filter((o) => o.payload !== null && o.payload !== 'null')
         .length,
     }
   })
 }
 
-function readRegistry(options: ObservabilityHealthOptions) {
+interface RegistryEntry {
+  readonly id: string
+  readonly version: number | null
+  readonly state: string
+  readonly at: number | null
+}
+
+/**
+ * The state the forward runner sees per strategy (mirror of
+ * `futures_strategy_registry.forward_candidates`): the active version if any,
+ * otherwise the newest version with its own state.
+ */
+function readRegistry(
+  options: ObservabilityHealthOptions,
+): Opened<RegistryEntry[]> {
   return withDb(options.strategiesDbPath, (db) => {
-    const states = db
+    const versions = db
       .prepare(
         `SELECT e.strategy_id AS id, e.version AS version, e.state AS state, e.known_at AS at
            FROM strategy_events e
-           JOIN (SELECT strategy_id, MAX(seq) AS seq FROM strategy_events GROUP BY strategy_id) m
-             ON m.seq = e.seq`,
+           JOIN (SELECT strategy_id, version, MAX(seq) AS seq FROM strategy_events GROUP BY strategy_id, version) m
+             ON m.seq = e.seq
+          ORDER BY e.version`,
       )
       .all() as Row[]
-    return states.map((s) => ({
-      id: String(s.id),
-      version: num(s.version),
-      state: String(s.state),
-      at: num(s.at),
-    }))
+    const chosen = new Map<string, RegistryEntry>()
+    for (const v of versions) {
+      const entry: RegistryEntry = {
+        id: String(v.id),
+        version: num(v.version),
+        state: String(v.state),
+        at: num(v.at),
+      }
+      const current = chosen.get(entry.id)
+      if (entry.state === 'active' || !current || current.state !== 'active')
+        chosen.set(entry.id, entry)
+    }
+    return [...chosen.values()]
   })
+}
+
+interface ExpectedStrategy {
+  readonly id: string
+  readonly source: 'registro' | 'archivo de registro forward'
+  /** When the registry switched it on (0/null: shipped or from the file). */
+  readonly activeSinceMs: number | null
+}
+
+type Expected =
+  | {
+      readonly state: 'known'
+      readonly strategies: readonly ExpectedStrategy[]
+      readonly products: readonly string[]
+      readonly notes: readonly string[]
+    }
+  | { readonly state: 'unknown'; readonly reason: string }
+
+/**
+ * Which (strategy, product) pairs the forward runner must be updating now,
+ * rebuilt from the same inputs as `futures_forward.effective_registration`:
+ * the registered file, minus the strategies the registry says are not active,
+ * plus every strategy the registry has active; every product of the forward's
+ * list (the runner has no per-strategy product filter). When any input cannot
+ * be read the set cannot be known, and that is reported, never assumed.
+ */
+function expectedPairs(
+  options: ObservabilityHealthOptions,
+  registry: Opened<RegistryEntry[]>,
+): Expected {
+  if (registry.state !== 'read')
+    return {
+      state: 'unknown',
+      reason: `registro de estrategias no disponible (${registry.detail})`,
+    }
+  const registration = readJson(options.forwardRegistrationPath)
+  const registered = rowOf(registration?.strategies)
+  if (!registration || !('strategies' in registration))
+    return {
+      state: 'unknown',
+      reason: 'archivo de estrategias del forward no disponible',
+    }
+  const products = options.forwardProducts ?? options.products
+  if (products.length === 0)
+    return { state: 'unknown', reason: 'lista de productos del forward vacía' }
+  const byId = new Map(registry.value.map((s) => [s.id, s]))
+  const notes: string[] = []
+  const strategies: ExpectedStrategy[] = []
+  let specIds: Set<string> | null = null
+  const specs = () => {
+    if (specIds) return specIds
+    specIds = new Set<string>()
+    for (const file of listJson(options.strategySpecsDir)) {
+      const id = readJson(file)?.id
+      if (typeof id === 'string') specIds.add(id)
+    }
+    return specIds
+  }
+  for (const id of Object.keys(registered)) {
+    const entry = byId.get(id)
+    if (entry && entry.state !== 'active') continue
+    if (!entry) {
+      // Only a spec in the specs folder can be run for a file-only strategy.
+      if (!options.strategySpecsDir)
+        return {
+          state: 'unknown',
+          reason: `no se puede comprobar la especificación de ${id} (carpeta de specs sin configurar)`,
+        }
+      if (!specs().has(id)) {
+        notes.push(
+          `${id} figura en el archivo pero no tiene especificación: el forward la omite`,
+        )
+        continue
+      }
+    }
+    strategies.push({
+      id,
+      source: 'archivo de registro forward',
+      activeSinceMs: entry?.at ?? null,
+    })
+  }
+  for (const entry of registry.value)
+    if (entry.state === 'active' && !(entry.id in registered))
+      strategies.push({
+        id: entry.id,
+        source: 'registro',
+        activeSinceMs: entry.at,
+      })
+  return { state: 'known', strategies, products, notes }
+}
+
+function listJson(dir: string | undefined): string[] {
+  if (!dir) return []
+  try {
+    return readdirSync(dir)
+      .filter((name) => name.endsWith('.json'))
+      .map((name) => join(dir, name))
+  } catch {
+    return []
+  }
+}
+
+interface PairResult {
+  readonly strategy: string
+  readonly product: string
+  readonly status: HealthStatus
+  readonly reason: string
+  readonly row: ForwardRow | undefined
+  readonly ageMs: number | null
+}
+
+/** Freshness of every expected pair on its own row of `forward_status`. */
+function pairResults(
+  expected: Extract<Expected, { state: 'known' }>,
+  forward: ForwardRead,
+  process: ProcessState,
+  now: number,
+): PairResult[] {
+  const rows = new Map(
+    forward.rows.map((r) => [`${r.strategy}\u0000${r.product}`, r]),
+  )
+  const out: PairResult[] = []
+  for (const strategy of expected.strategies)
+    for (const product of expected.products) {
+      const row = rows.get(`${strategy.id}\u0000${product}`)
+      const age = row?.checkedMs == null ? null : now - row.checkedMs
+      let { status, reason } = pairStatus(
+        process,
+        age,
+        FORWARD_OK_MS,
+        FORWARD_ERROR_MS,
+        false,
+      )
+      // A strategy switched on a moment ago has no row until the next cycle.
+      if (
+        row === undefined &&
+        strategy.activeSinceMs !== null &&
+        strategy.activeSinceMs > 0 &&
+        now - strategy.activeSinceMs <= FORWARD_OK_MS
+      ) {
+        status = 'warning'
+        reason = 'awaiting_first_cycle'
+      } else if (row === undefined && status === 'unknown') {
+        reason = 'no_row_and_no_process_info'
+      }
+      out.push({
+        strategy: strategy.id,
+        product,
+        status,
+        reason,
+        row,
+        ageMs: age,
+      })
+    }
+  return out
+}
+
+function describePairs(pairs: readonly PairResult[], limit = 8): string {
+  const late = pairs.filter((p) => p.status !== 'ok')
+  const shown = late.slice(0, limit).map((p) => {
+    const age =
+      p.ageMs === null ? 'sin estado' : `${Math.round(p.ageMs / MINUTE)} min`
+    return `${p.strategy}/${p.product} (${age})`
+  })
+  return `${shown.join(', ')}${late.length > limit ? ` y ${late.length - limit} más` : ''}`
 }
 
 function experimentRow(
@@ -1067,9 +1264,10 @@ function strategiesComponent(
   options: ObservabilityHealthOptions,
   c: Collected,
   forward: Opened<ForwardRead>,
+  registry: Opened<RegistryEntry[]>,
+  expected: Expected,
 ): HealthComponent {
   const { now } = c
-  const registry = readRegistry(options)
   const checks: HealthCheck[] = []
   const evidence: HealthEvidence[] = []
   const items: Record<string, unknown>[] = []
@@ -1086,7 +1284,7 @@ function strategiesComponent(
       : null
   evidence.push(
     evidenceOf(
-      'strategy_events (último estado por estrategia)',
+      'strategy_events (estado por estrategia y versión)',
       options.strategiesDbPath,
       registry,
       lastEvent,
@@ -1105,14 +1303,27 @@ function strategiesComponent(
           : `Registro no disponible (${registry.detail}).`,
     }),
   )
-  if (forward.state !== 'read') {
+  const coverageRule =
+    'por estrategia esperada: ok si todos sus productos tienen un ciclo forward vigente (≤ 45 min); warning si algunos no; error si ninguno. Una fila antigua no cuenta como actividad'
+  if (expected.state === 'unknown') {
     checks.push(
       check({
         id: 'forward_coverage',
-        label: 'Forward con estado por estrategia activa',
+        label: 'Forward vigente por estrategia activa',
         status: 'unknown',
         value: null,
-        rule: 'cada estrategia activa debe tener estado forward',
+        rule: coverageRule,
+        detail: `No se puede determinar qué estrategias debe actualizar el forward: ${expected.reason}.`,
+      }),
+    )
+  } else if (forward.state !== 'read') {
+    checks.push(
+      check({
+        id: 'forward_coverage',
+        label: 'Forward vigente por estrategia activa',
+        status: 'unknown',
+        value: null,
+        rule: coverageRule,
         detail: `Base del forward no disponible (${forward.detail}).`,
       }),
     )
@@ -1120,61 +1331,71 @@ function strategiesComponent(
       evidenceOf('forward_status', options.forwardDbPath, forward, null),
     )
   } else {
-    const byStrategy = new Map<string, (typeof forward.value.rows)[number][]>()
-    for (const row of forward.value.rows)
-      byStrategy.set(row.strategy, [
-        ...(byStrategy.get(row.strategy) ?? []),
-        row,
-      ])
-    const missing: string[] = []
-    for (const s of active) {
-      const rows = byStrategy.get(s.id) ?? []
-      const checked = rows.reduce<number | null>(
-        (a, r) => Math.max(a ?? 0, r.checkedMs ?? 0) || a,
-        null,
-      )
-      if (rows.length === 0) missing.push(s.id)
+    const pairs = pairResults(
+      expected,
+      forward.value,
+      processState(c, 'forward'),
+      now,
+    )
+    const statuses: HealthStatus[] = []
+    for (const strategy of expected.strategies) {
+      const own = pairs.filter((p) => p.strategy === strategy.id)
+      const fresh = own.filter((p) => p.status === 'ok').length
+      const unknown = own.some((p) => p.status === 'unknown')
+      const status: HealthStatus =
+        fresh === own.length
+          ? 'ok'
+          : unknown && fresh === 0
+            ? 'unknown'
+            : fresh === 0
+              ? 'error'
+              : unknown
+                ? 'unknown'
+                : 'warning'
+      statuses.push(status)
       items.push({
-        strategy_id: s.id,
-        version: s.version,
-        state: s.state,
-        forward_products: rows.length,
-        last_forward_cycle_ms: checked,
-        last_trade_entry_ms: forward.value.lastTrade.get(s.id) ?? null,
+        strategy_id: strategy.id,
+        source: strategy.source,
+        active_since_ms: strategy.activeSinceMs,
+        status,
+        products_expected: own.length,
+        products_current: fresh,
+        products_delayed: own
+          .filter((p) => p.status !== 'ok')
+          .map((p) => ({
+            product_id: p.product,
+            status: p.status,
+            reason: p.reason,
+            age_ms: p.ageMs,
+          })),
       })
     }
-    const status: HealthStatus =
-      registry.state !== 'read'
-        ? 'unknown'
-        : missing.length > 0
-          ? 'warning'
-          : 'ok'
+    const status =
+      expected.strategies.length === 0 ? 'unknown' : worst(statuses)
     checks.push(
       check({
         id: 'forward_coverage',
-        label: 'Forward con estado por estrategia activa',
+        label: 'Forward vigente por estrategia activa',
         status,
-        value:
-          registry.state === 'read' ? active.length - missing.length : null,
-        rule: 'warning si una estrategia activa no tiene estado forward (el forward la registra en su próximo ciclo)',
+        value: pairs.filter((p) => p.status === 'ok').length,
+        rule: coverageRule,
         detail:
-          status === 'ok'
-            ? 'Todas las estrategias activas tienen estado forward.'
-            : status === 'unknown'
-              ? 'Sin registro legible no se puede comprobar la cobertura.'
-              : `Sin estado forward: ${missing.join(', ')}.`,
+          expected.strategies.length === 0
+            ? 'Ninguna estrategia debe estar actualizándose: no hay nada que comprobar.'
+            : status === 'ok'
+              ? `Las ${expected.strategies.length} estrategia(s) tienen ciclo vigente en los ${expected.products.length} productos.`
+              : `Sin ciclo vigente: ${describePairs(pairs)}.`,
       }),
-    )
-    const lastCycle = forward.value.rows.reduce<number | null>(
-      (a, r) => Math.max(a ?? 0, r.checkedMs ?? 0) || a,
-      null,
     )
     evidence.push(
       evidenceOf(
-        'forward_status (checked_ms)',
+        'forward_status (checked_ms por estrategia y producto)',
         options.forwardDbPath,
         forward,
-        lastCycle,
+        forward.value.rows.reduce<number | null>(
+          (a, r) => Math.max(a ?? 0, r.checkedMs ?? 0) || a,
+          null,
+        ),
       ),
     )
   }
@@ -1241,9 +1462,11 @@ function strategiesComponent(
     checks,
     evidence,
     [
-      'La última actividad verificable es el último ciclo forward y la última entrada registrada, no una señal en vivo.',
+      'Las estrategias esperadas se reconstruyen con las mismas entradas que el forward (archivo de registro, estado del registro, specs y lista de productos); si alguna no se puede leer, el resultado es «Sin datos».',
+      'La lista de productos del forward se toma del mismo entorno que el gateway (FUTURES_PRODUCTS o la lista fijada).',
+      'La última operación por experimento no está en B1: es B2.',
       'Kronos no está en el supervisor: su proceso se conoce solo por el muestreo de recursos (POSIX).',
-      'No se sirve el estado individual de cada experimento: eso es B5.',
+      ...(expected.state === 'known' ? expected.notes : []),
     ],
     items,
   )
@@ -1253,20 +1476,22 @@ function paperComponent(
   options: ObservabilityHealthOptions,
   c: Collected,
   forward: Opened<ForwardRead>,
+  expected: Expected,
 ): HealthComponent {
   const { now } = c
   const forwardProcess = processState(c, 'forward')
   const checks: HealthCheck[] = []
   const evidence: HealthEvidence[] = []
   const items: Record<string, unknown>[] = []
+  const cycleRule = `por par estrategia/producto esperado: ok ≤ ${FORWARD_OK_MS / MINUTE} min (1,5 ciclos de ${FORWARD_LOOP_MS / MINUTE} min), warning ≤ ${FORWARD_ERROR_MS / MINUTE} min; proceso activo sin ciclo reciente es error; el estado es el del peor par`
   if (forward.state !== 'read') {
     checks.push(
       check({
         id: 'forward_cycle',
-        label: 'Ciclo del forward',
+        label: 'Ciclo del forward por estrategia y producto',
         status: forwardProcess === 'running' ? 'error' : 'unknown',
         value: null,
-        rule: `ok ≤ ${FORWARD_OK_MS / MINUTE} min, warning ≤ ${FORWARD_ERROR_MS / MINUTE} min (ciclo de ${FORWARD_LOOP_MS / MINUTE} min)`,
+        rule: cycleRule,
         detail:
           forwardProcess === 'running'
             ? 'El proceso forward corre pero su base no existe o no se puede leer.'
@@ -1281,78 +1506,110 @@ function paperComponent(
         null,
       ),
     )
-  } else {
-    const rows = forward.value.rows
-    const last = rows.reduce<number | null>(
-      (a, r) => Math.max(a ?? 0, r.checkedMs ?? 0) || a,
-      null,
-    )
-    const pair = pairStatus(
-      forwardProcess,
-      last === null ? null : now - last,
-      FORWARD_OK_MS,
-      FORWARD_ERROR_MS,
-      false,
-    )
+  } else if (expected.state === 'unknown') {
     checks.push(
       check({
         id: 'forward_cycle',
-        label: 'Ciclo del forward',
-        status: pair.status,
-        value: last === null ? null : now - last,
-        rule: `ok ≤ ${FORWARD_OK_MS / MINUTE} min (1,5 ciclos de ${FORWARD_LOOP_MS / MINUTE} min), warning ≤ ${FORWARD_ERROR_MS / MINUTE} min; proceso activo sin ciclo reciente es error`,
-        detail:
-          pair.reason === 'producing'
-            ? 'El forward completó un ciclo reciente.'
-            : `Proceso forward: ${forwardProcess}; motivo: ${pair.reason}.`,
+        label: 'Ciclo del forward por estrategia y producto',
+        status: 'unknown',
+        value: null,
+        rule: cycleRule,
+        detail: `No se puede determinar qué pares debe actualizar el forward: ${expected.reason}. Una fila existente no demuestra actividad actual.`,
       }),
     )
-    const sum = (pick: (r: (typeof rows)[number]) => number) =>
-      rows.reduce((a, r) => a + pick(r), 0)
-    const diverged = sum((r) => r.diverged)
-    const blocked = sum((r) => r.blockedStale)
-    const staleCycles = sum((r) => r.staleCycles)
-    const lagging = rows.filter(
-      (r) => (r.candleLagMs ?? 0) > LAG_WARN_MS,
-    ).length
-    const anomalies = { diverged, blocked, staleCycles, lagging }
-    const anomalous = diverged > 0 || lagging > 0
-    checks.push(
-      check({
-        id: 'forward_anomalies',
-        label: 'Anomalías registradas del forward',
-        status: rows.length === 0 ? 'unknown' : anomalous ? 'warning' : 'ok',
-        value: rows.length === 0 ? null : diverged + lagging,
-        rule: `warning si hay trades divergentes (necesitan --rebuild) o velas con retraso > ${LAG_WARN_MS / MINUTE} min; las entradas bloqueadas y los ciclos obsoletos se informan sin juzgar`,
-        detail:
-          rows.length === 0
-            ? 'El forward no tiene estados registrados.'
-            : anomalous
-              ? `${diverged} trade(s) divergente(s), ${lagging} par(es) con vela retrasada.`
-              : 'Sin divergencias ni retrasos de vela registrados.',
-      }),
-    )
-    for (const r of rows)
-      items.push({
-        strategy_id: r.strategy,
-        product_id: r.product,
-        checked_ms: r.checkedMs,
-        candle_lag_ms: r.candleLagMs,
-        missing_1m: r.missing1m,
-        late_1m: r.late1m,
-        diverged_trades: r.diverged,
-        blocked_stale_entries: r.blockedStale,
-        stale_cycles: r.staleCycles,
-      })
-    items.push({
-      summary: { ...anomalies, open_positions: forward.value.open },
-    })
     evidence.push(
       evidenceOf(
         'forward_status (checked_ms)',
         options.forwardDbPath,
         forward,
-        last,
+        forward.value.rows.reduce<number | null>(
+          (a, r) => Math.max(a ?? 0, r.checkedMs ?? 0) || a,
+          null,
+        ),
+      ),
+    )
+  } else {
+    const pairs = pairResults(expected, forward.value, forwardProcess, now)
+    const status =
+      pairs.length === 0 ? 'unknown' : worst(pairs.map((p) => p.status))
+    const ages = pairs
+      .map((p) => p.ageMs)
+      .filter((a): a is number => a !== null)
+    const lead = pairs.find((p) => p.status === status && status !== 'ok')
+    checks.push(
+      check({
+        id: 'forward_cycle',
+        label: 'Ciclo del forward por estrategia y producto',
+        status,
+        value: ages.length === 0 ? null : Math.max(...ages),
+        rule: cycleRule,
+        detail:
+          pairs.length === 0
+            ? 'Ningún par debe actualizarse: no hay nada que comprobar.'
+            : status === 'ok'
+              ? `Los ${pairs.length} pares esperados tienen un ciclo vigente.`
+              : `Pares retrasados: ${describePairs(pairs)}${lead ? ` (motivo del peor: ${lead.reason})` : ''}.`,
+      }),
+    )
+    const own = pairs.flatMap((p) => (p.row ? [p.row] : []))
+    const sum = (pick: (r: ForwardRow) => number) =>
+      own.reduce((a, r) => a + pick(r), 0)
+    const diverged = sum((r) => r.diverged)
+    const lagging = own.filter((r) => (r.candleLagMs ?? 0) > LAG_WARN_MS).length
+    const anomalous = diverged > 0 || lagging > 0
+    checks.push(
+      check({
+        id: 'forward_anomalies',
+        label: 'Anomalías registradas del forward',
+        status: own.length === 0 ? 'unknown' : anomalous ? 'warning' : 'ok',
+        value: own.length === 0 ? null : diverged + lagging,
+        rule: `warning si hay trades divergentes (necesitan --rebuild) o velas con retraso > ${LAG_WARN_MS / MINUTE} min, solo en pares esperados; los bloqueos y ciclos obsoletos se informan sin juzgar`,
+        detail:
+          own.length === 0
+            ? 'Los pares esperados no tienen estado registrado.'
+            : anomalous
+              ? `${diverged} trade(s) divergente(s), ${lagging} par(es) con vela retrasada.`
+              : 'Sin divergencias ni retrasos de vela registrados.',
+      }),
+    )
+    for (const p of pairs)
+      items.push({
+        strategy_id: p.strategy,
+        product_id: p.product,
+        status: p.status,
+        reason: p.reason,
+        checked_ms: p.row?.checkedMs ?? null,
+        age_ms: p.ageMs,
+        candle_lag_ms: p.row?.candleLagMs ?? null,
+        missing_1m: p.row?.missing1m ?? null,
+        late_1m: p.row?.late1m ?? null,
+        diverged_trades: p.row?.diverged ?? null,
+        blocked_stale_entries: p.row?.blockedStale ?? null,
+        stale_cycles: p.row?.staleCycles ?? null,
+      })
+    const expectedKeys = new Set(
+      pairs.map((p) => `${p.strategy}\u0000${p.product}`),
+    )
+    items.push({
+      summary: {
+        expected_pairs: pairs.length,
+        current_pairs: pairs.filter((p) => p.status === 'ok').length,
+        rows_not_expected: forward.value.rows.filter(
+          (r) => !expectedKeys.has(`${r.strategy}\u0000${r.product}`),
+        ).length,
+        open_positions: forward.value.open,
+        diverged_trades: diverged,
+        blocked_stale_entries: sum((r) => r.blockedStale),
+        stale_cycles: sum((r) => r.staleCycles),
+      },
+    })
+    evidence.push(
+      evidenceOf(
+        'forward_status (checked_ms por estrategia y producto)',
+        options.forwardDbPath,
+        forward,
+        ages.length === 0 ? null : now - Math.min(...ages),
+        'última actualización = la del par más viejo',
       ),
     )
   }
@@ -1363,6 +1620,7 @@ function paperComponent(
     evidence,
     [
       'Solo describe el forward; el libro D está retirado y no se evalúa.',
+      'Las filas de pares que ya no se esperan (estrategia apagada) se cuentan aparte y no prueban actividad.',
       'No hay PnL no realizado ni posiciones abiertas por estrategia: falta B5.',
       'Los descartes del simulador (coste/protección) no se persisten (B4 pospuesto).',
     ],
@@ -1441,13 +1699,15 @@ export function createObservabilityHealth(
       const collected = collectSupervisor(options, now)
       const verdicts = readVerdicts(options, now)
       const forward = readForward(options)
+      const registry = readRegistry(options)
+      const expected = expectedPairs(options, registry)
       const value = assemble(
         [
           dataComponent(options, collected),
           processingComponent(options, collected, verdicts),
-          strategiesComponent(options, collected, forward),
+          strategiesComponent(options, collected, forward, registry, expected),
           decisionsComponent(options, collected, verdicts),
-          paperComponent(options, collected, forward),
+          paperComponent(options, collected, forward, expected),
           riskComponent(),
         ],
         now,

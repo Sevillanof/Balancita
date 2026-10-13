@@ -177,11 +177,11 @@
         {
           "required": true,
           "id": "forward_coverage",
-          "label": "Forward con estado por estrategia activa",
+          "label": "Forward vigente por estrategia activa",
           "status": "unknown",
           "value": null,
-          "rule": "cada estrategia activa debe tener estado forward",
-          "detail": "Base del forward no disponible (source_not_configured)."
+          "rule": "por estrategia esperada: ok si todos sus productos tienen un ciclo forward vigente (≤ 45 min); warning si algunos no; error si ninguno. Una fila antigua no cuenta como actividad",
+          "detail": "No se puede determinar qué estrategias debe actualizar el forward: registro de estrategias no disponible (source_not_configured)."
         },
         {
           "required": false,
@@ -204,14 +204,7 @@
       ],
       "evidence": [
         {
-          "source": "strategy_events (último estado por estrategia)",
-          "origin": null,
-          "last_updated_ms": null,
-          "state": "missing",
-          "detail": "source_not_configured"
-        },
-        {
-          "source": "forward_status",
+          "source": "strategy_events (estado por estrategia y versión)",
           "origin": null,
           "last_updated_ms": null,
           "state": "missing",
@@ -255,9 +248,10 @@
         }
       ],
       "limitations": [
-        "La última actividad verificable es el último ciclo forward y la última entrada registrada, no una señal en vivo.",
-        "Kronos no está en el supervisor: su proceso se conoce solo por el muestreo de recursos (POSIX).",
-        "No se sirve el estado individual de cada experimento: eso es B5."
+        "Las estrategias esperadas se reconstruyen con las mismas entradas que el forward (archivo de registro, estado del registro, specs y lista de productos); si alguna no se puede leer, el resultado es «Sin datos».",
+        "La lista de productos del forward se toma del mismo entorno que el gateway (FUTURES_PRODUCTS o la lista fijada).",
+        "La última operación por experimento no está en B1: es B2.",
+        "Kronos no está en el supervisor: su proceso se conoce solo por el muestreo de recursos (POSIX)."
       ]
     },
     {
@@ -317,10 +311,10 @@
         {
           "required": true,
           "id": "forward_cycle",
-          "label": "Ciclo del forward",
+          "label": "Ciclo del forward por estrategia y producto",
           "status": "unknown",
           "value": null,
-          "rule": "ok ≤ 45 min, warning ≤ 60 min (ciclo de 30 min)",
+          "rule": "por par estrategia/producto esperado: ok ≤ 45 min (1,5 ciclos de 30 min), warning ≤ 60 min; proceso activo sin ciclo reciente es error; el estado es el del peor par",
           "detail": "Base del forward no disponible (source_not_configured)."
         }
       ],
@@ -336,6 +330,7 @@
       "items": [],
       "limitations": [
         "Solo describe el forward; el libro D está retirado y no se evalúa.",
+        "Las filas de pares que ya no se esperan (estrategia apagada) se cuentan aparte y no prueban actividad.",
         "No hay PnL no realizado ni posiciones abiertas por estrategia: falta B5.",
         "Los descartes del simulador (coste/protección) no se persisten (B4 pospuesto)."
       ]

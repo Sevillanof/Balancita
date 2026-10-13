@@ -11,6 +11,7 @@ import {
   seedMarket,
   seedStrategies,
   seedVerdicts,
+  writeForwardConfig,
   writeHealthFile,
 } from './observability-health-fixtures.ts'
 
@@ -58,6 +59,7 @@ seedStrategies(
   ],
   NOW,
 )
+writeForwardConfig(box, [], [])
 seedDecisions(box.decisionsDb, [60_000, 120_000], NOW)
 writeHealthFile(box.healthFile, NOW, {
   capture: 'running',
@@ -85,6 +87,8 @@ function measure(runs: number, between?: () => void) {
       decisionsDbPath: box.decisionsDb,
       forwardDbPath: box.forwardDb,
       strategiesDbPath: box.strategiesDb,
+      forwardRegistrationPath: box.registration,
+      strategySpecsDir: box.specsDir,
       processHealthPath: box.healthFile,
       clock: () => clock,
     })
@@ -144,6 +148,42 @@ row(
   }),
 )
 writer.close()
+
+// The trade history must not move the latency: grow forward_trade to ~480 000 rows.
+const history = new DatabaseSync(box.forwardDb)
+const before = (
+  history.prepare('SELECT COUNT(*) AS n FROM forward_trade').get() as {
+    n: number
+  }
+).n
+history.exec('BEGIN')
+const trade = history.prepare(
+  'INSERT OR IGNORE INTO forward_trade VALUES(?,?,?,?,?)',
+)
+for (const strategy of ['C29', 'C30', 'C32'])
+  for (const product of PRODUCTS)
+    for (let i = 0; i < 20_000; i += 1)
+      trade.run(
+        strategy,
+        product,
+        NOW - (i + 1000) * MINUTE,
+        'h',
+        '{"net_bp":1.5,"pnl_usd":0.01}',
+      )
+history.exec('COMMIT')
+const after = (
+  history.prepare('SELECT COUNT(*) AS n FROM forward_trade').get() as {
+    n: number
+  }
+).n
+history.close()
+console.log(`forward_trade grown from ${before} to ${after} rows`)
+row(
+  'uncached report (trade history x' +
+    Math.round(after / Math.max(before, 1)) +
+    ')',
+  measure(40),
+)
 console.log(
   `cache: one report per ${15} s at most, i.e. ≤ ${(3600 / 15).toFixed(0)} computations/hour regardless of clients; interval ${MINUTE / 1000} s verdict cadence`,
 )

@@ -53,6 +53,17 @@ function kronosScoresFrom(env: NodeJS.ProcessEnv) {
     : qwenScoresOff('kronos_not_configured')
 }
 
+/** Product ids the forward runner iterates: `FUTURES_PRODUCTS`, else the pinned list. */
+function forwardProducts(env: NodeJS.ProcessEnv): string[] {
+  const listed = (env.FUTURES_PRODUCTS ?? '')
+    .split(',')
+    .map((entry) => entry.trim().split(':')[0] ?? '')
+    .filter(Boolean)
+  return listed.length > 0
+    ? listed
+    : loadPinnedProducts().map((p) => p.productId)
+}
+
 async function main(): Promise<void> {
   const config = serverConfigFrom(process.env)
   // Read-only: opens the capture process's market DB, starts no collector/engine.
@@ -77,6 +88,11 @@ async function main(): Promise<void> {
       decisionsDbPath: process.env.FUTURES_DECISIONS_DB_PATH || undefined,
       forwardDbPath: process.env.FUTURES_FORWARD_DB_PATH || undefined,
       strategiesDbPath: process.env.FUTURES_STRATEGIES_DB_PATH || undefined,
+      forwardRegistrationPath:
+        process.env.FUTURES_FORWARD_REGISTRATION_PATH || undefined,
+      strategySpecsDir: process.env.FUTURES_STRATEGY_SPECS_DIR || undefined,
+      // The forward runner iterates FUTURES_PRODUCTS, else the pinned list.
+      forwardProducts: forwardProducts(process.env),
       processHealthPath: process.env.DEV_HEALTH_FILE || undefined,
       qwenExitSummaryPath: process.env.QWEN_EXIT_SUMMARY_PATH || undefined,
       kronosSummaryPath: process.env.KRONOS_SUMMARY_PATH || undefined,
