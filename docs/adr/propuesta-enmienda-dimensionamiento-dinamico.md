@@ -1,6 +1,6 @@
 # Propuesta de enmienda al ADR 0001: dimensionamiento dinámico de posiciones
 
-Estado: **PROPUESTA, no vigente.** No modifica `0001-isolated-paper-futures-accounting.md`, que es inmutable salvo pedido directo del usuario. Si Fran la aprueba, el texto de abajo se agrega al ADR como una enmienda más ("Amendment AAAA-MM-DD"). Mientras tanto no cambia el comportamiento de ningún experimento: C29-C32, Kronos y el experimento multi-estrategia siguen con 100 USD fijos.
+Estado: **PROPUESTA, no vigente.** Parámetros iniciales aprobados provisionalmente por Fran el 2026-10-13; el texto final se revisa antes de incorporarlo al ADR. No modifica `0001-isolated-paper-futures-accounting.md`, que es inmutable salvo pedido directo del usuario. Si Fran la aprueba, el texto de abajo se agrega al ADR como una enmienda más ("Amendment AAAA-MM-DD"). Mientras tanto no cambia el comportamiento de ningún experimento: C29-C32, Kronos y el experimento multi-estrategia siguen con 100 USD fijos.
 
 ## Texto propuesto
 
@@ -16,8 +16,10 @@ Requested directly by the user (Fran) on 2026-10-13 as PR #120. Where it conflic
 1. Planned loss above 30 % of the notional: the entry is rejected.
 2. Gross exposure at most 100 % of definitive capital (leverage 1x); exposure per product at most 50 %; net exposure at most 100 %.
 3. Sum of the planned losses of the open positions at most 2 % of definitive capital (equal to the daily loss limit).
-4. Daily loss limit 20 USD and maximum drawdown 60 USD suspend new entries; minimum notional 10 USD; at most 8 open positions.
-5. Positions are opened only from intents with valid, fresh data, once per intent id, and in time order.
+4. Daily loss limit 20 USD and maximum drawdown 60 USD suspend new entries; minimum notional 10 USD; at most 8 open positions. The losses realized during the day, plus the planned loss of the open positions, are deducted from the daily limit before admitting new planned risk (15 USD lost leaves about 5 USD). Only verified results offset losses in these limits.
+5. Positions are opened only from intents with valid, fresh data, once per intent id **and once per signal id** (a new intent carrying the same signal, with another price or ATR, is a duplicate), and in time order.
+6. The prototype opens at the reference price of the intent plus the modeled impact. Any connection to real data needs a separate decision on the first executable price after the signal; that is not covered by this amendment.
+7. `slippage_buffer_bps` is configurable; its initial value of zero is an optimistic hypothesis, to be replaced by measured stop slippage (never chosen with the reserved holdout).
 
 **Accounting.** The shared simulator `Book` and `futures_costs` stay the only accounting engine. Funding is never inferred: a trade without verified funding keeps its complete net P&L null; its gain is provisional and does not raise capital or the risk budget, its loss does reduce capital.
 
@@ -30,10 +32,10 @@ Requested directly by the user (Fran) on 2026-10-13 as PR #120. Where it conflic
 |---|---|
 | 100 USD fijos por operación | Nocional dinámico por presupuesto de riesgo (1 % del capital), sin tope absoluto |
 | Libros independientes por estrategia | Una cuenta de 1.000 USD compartida |
-| Riesgo = nocional fijo y límites de `multi_risk` | Riesgo planificado por operación, regla del 30 %, riesgo agregado abierto del 2 % |
+| Riesgo = nocional fijo y límites de `multi_risk` | Riesgo planificado por operación, regla del 30 %, riesgo agregado abierto del 2 %, pérdida diaria que descuenta del riesgo admisible |
 
 ## Qué NO cambia
 Solo paper, solo endpoints públicos, hashing canónico, Decimal, replay determinista, sin mirar el futuro, reglas de evaluación y congelamiento de C25-C31 y Kronos.
 
 ## Antes de conectarlo al forward (no está pedido)
-Decidir cómo conviven los libros independientes de C29-C32 con la cartera (mediciones separadas, sin mezclar), si la cartera lee las mismas velas oficiales, y cuándo aprobar los parámetros. Esa decisión es de Fran y llevaría otra enmienda.
+Definir el primer precio ejecutable posterior a la señal (hoy se usa el precio de la intención) y medir el deslizamiento real de los stops para fijar el buffer. Decidir cómo conviven los libros independientes de C29-C32 con la cartera (mediciones separadas, sin mezclar), si la cartera lee las mismas velas oficiales, y cuándo aprobar los parámetros. Esa decisión es de Fran y llevaría otra enmienda.

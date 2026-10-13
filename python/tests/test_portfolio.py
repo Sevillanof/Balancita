@@ -142,7 +142,7 @@ class AggregateLimits(unittest.TestCase):
         self.assertTrue(any(d["status"] == "rejected" for d in out))   # the 2 % open-risk budget binds
 
     def test_open_risk_budget_is_shared_and_the_weakest_is_cut_or_rejected(self):
-        p = Portfolio(roomy(max_open_risk_pct="0.025"))
+        p = Portfolio(roomy(max_open_risk_pct="0.025", daily_loss_limit_usd="1000"))
         out = p.decide([intent(prod, stop_pct="0.05", target_pct="0.1", strength=s) for prod, s in
                         (("PF_XBTUSD", "0.9"), ("PF_ETHUSD", "0.8"), ("PF_SOLUSD", "0.7"))], T0 + MIN)
         by = {d["product_id"]: d for d in out}
@@ -506,13 +506,13 @@ class ExtremeScenarios(unittest.TestCase):
             t = T0 + k * 10 * MIN
             [d] = p.decide([intent(t=t, stop_pct="0.02", target_pct="0.04", strategy="s%d" % k)], t + MIN)
             if d["status"] != "opened":
-                self.assertEqual(reasons(d), ["suspended_daily_loss"])
+                self.assertEqual(reasons(d), ["daily_loss_budget"])   # ~0.1 USD of room left: below the minimum size
                 break
             sizes.append(D(d["notional_usd"]))
             p.on_candle("PF_XBTUSD", t + MIN, candle("97", high="100", low="97"))
-        self.assertEqual(len(sizes), 3)                                  # 3 x ~10 USD > the 20 USD daily limit
-        self.assertTrue(sizes[0] > sizes[1] > sizes[2], sizes)
-        self.assertLess(p.capital_usd(), D(980))
+        self.assertEqual(len(sizes), 2)                                  # 2 x ~10 USD use the 20 USD of the day
+        self.assertTrue(sizes[0] > sizes[1], sizes)
+        self.assertLess(p.capital_usd(), D(985))
 
     def test_drawdown_suspends_even_on_a_new_day(self):
         p = Portfolio(PortfolioPolicy(daily_loss_limit_usd="1000", max_drawdown_usd="9", max_product_exposure_pct="1"))
@@ -543,6 +543,136 @@ class ExtremeScenarios(unittest.TestCase):
         self.assertLess(loss0, plan0 * D("1.5"))                          # ... but the error is the slippage, no more
         self.assertLessEqual(loss30, D("10.00") + D("0.001"))             # an explicit buffer covers it
         self.assertLess(plan30, plan0)                                    # at the price of a smaller position
+
+
+class DailyLossAndOpenRisk(unittest.TestCase):
+    def _lose_about(self, p, usd_planned_pct="0.015"):
+        p.decide([intent(stop_pct="0.02", target_pct="0.04", strategy="loser")], T0 + MIN)
+        [t] = p.on_candle("PF_XBTUSD", T0 + MIN, candle("97.9", high="100", low="97.9"))
+        return -D(str(t["pnl_usd"]))
+
+    def test_realized_losses_of_the_day_reduce_the_risk_that_can_be_added(self):
+        p = Portfolio(PortfolioPolicy(risk_per_trade="0.015", max_product_exposure_pct="1"))
+        lost = self._lose_about(p)
+        self.assertAlmostEqual(float(lost), 15.0, delta=0.05)
+        [d] = p.decide([intent("PF_ETHUSD", t=T0 + 2 * MIN, stop_pct="0.02", target_pct="0.04")], T0 + 3 * MIN)
+        self.assertEqual(d["status"], "opened")
+        self.assertIn("daily_loss_budget", d["limits_applied"])
+        # 15 USD lost + 20 USD of potential risk would have been 35 USD; only ~5 USD of risk is admitted.
+        self.assertAlmostEqual(float(d["planned_loss_usd"]), 5.0, delta=0.05)
+        self.assertLessEqual(lost + D(d["planned_loss_usd"]), D("20.00"))
+
+    def test_open_planned_risk_also_counts_against_the_daily_limit(self):
+        p = Portfolio(PortfolioPolicy(risk_per_trade="0.015", max_open_risk_pct="0.05", max_product_exposure_pct="1"))
+        out = p.decide([intent("PF_XBTUSD", stop_pct="0.02", strength="0.9"),
+                        intent("PF_ETHUSD", stop_pct="0.02", strength="0.8")], T0 + MIN)
+        by = {d["product_id"]: d for d in out}
+        self.assertAlmostEqual(float(by["PF_XBTUSD"]["planned_loss_usd"]), 15.0, delta=0.05)
+        self.assertAlmostEqual(float(by["PF_ETHUSD"]["planned_loss_usd"]), 5.0, delta=0.05)   # 20 - 15
+        self.assertLessEqual(D(p.snapshot()["open_risk_usd"]), D(20))
+
+    def test_the_limit_still_suspends_once_reached(self):
+        p = Portfolio(PortfolioPolicy(risk_per_trade="0.015", max_product_exposure_pct="1"))
+        p.decide([intent(stop_pct="0.02", target_pct="0.04", strategy="loser")], T0 + MIN)
+        worse = SlippageSensitivity._worse("150")                    # the stop fills worse than planned: limit exceeded
+        with mock.patch.object(futures_simulator, "exit_fill", worse):
+            p.on_candle("PF_XBTUSD", T0 + MIN, candle("97.9", high="100", low="97.9"))
+        self.assertLessEqual(p.realized_today_usd(T0 + 2 * MIN), D(-20))
+        [d] = p.decide([intent("PF_ETHUSD", t=T0 + 2 * MIN)], T0 + 3 * MIN)
+        self.assertEqual(reasons(d), ["suspended_daily_loss"])
+
+    def test_unverified_gains_do_not_offset_the_days_losses(self):
+        p = Portfolio(PortfolioPolicy(max_product_exposure_pct="1"))          # no funding history: results incomplete
+        p.decide([intent(strategy="g")], T0 + MIN)
+        p.on_candle("PF_XBTUSD", T0 + MIN, candle("104", high="104", low="100"))
+        self.assertGreater(p.provisional_gains_usd(), 0)
+        self.assertEqual(p.realized_today_usd(T0 + 2 * MIN), D(0))
+
+    def test_new_day_restores_the_daily_room(self):
+        p = Portfolio(PortfolioPolicy(risk_per_trade="0.015", max_product_exposure_pct="1"))
+        self._lose_about(p)
+        tomorrow = T0 + 86_400_000
+        [d] = p.decide([intent("PF_ETHUSD", t=tomorrow - MIN, stop_pct="0.02", target_pct="0.04")], tomorrow)
+        self.assertNotIn("daily_loss_budget", d["limits_applied"])
+
+
+class SignalIdentity(unittest.TestCase):
+    def _signal(self):
+        return make_signal(strategy_id="mx-momentum-v1", strategy_version=1, product_id="PF_XBTUSD", bucket_ms=T0,
+                           action=BUY, strength="0.7", horizon_minutes=120, evidence={})
+
+    def test_same_signal_cannot_execute_twice_with_a_new_price_or_atr(self):
+        p = Portfolio(roomy(), funding=FULL_FUNDING)
+        sig = self._signal()
+        first = intent_from_signal(sig, price="100", atr="1")
+        other_atr = intent_from_signal(sig, price="100", atr="1.4")
+        other_price = intent_from_signal(sig, price="100.2", atr="1")
+        self.assertEqual(len({first["intent_id"], other_atr["intent_id"], other_price["intent_id"]}), 3)
+        self.assertEqual(p.decide([first], T0 + MIN)[0]["status"], "opened")
+        self.assertEqual(reasons(p.decide([other_atr], T0 + MIN)[0]), ["duplicate_signal"])
+        p.on_candle("PF_XBTUSD", T0 + MIN, candle("97", high="100", low="97"))        # stopped out
+        self.assertEqual(p.snapshot()["open_positions"], 0)
+        self.assertIn("duplicate_signal", reasons(p.decide([other_price], T0 + 2 * MIN)[0]))
+        self.assertEqual(len(p.trades), 1)
+
+    def test_same_signal_twice_in_one_batch_opens_one(self):
+        p = Portfolio(roomy())
+        sig = self._signal()
+        out = p.decide([intent_from_signal(sig, price="100", atr="1"), intent_from_signal(sig, price="100", atr="2")],
+                       T0 + MIN)
+        self.assertEqual(sorted(d["status"] for d in out), ["opened", "rejected"])
+        self.assertEqual(p.snapshot()["open_positions"], 1)
+
+    def test_an_invalid_copy_does_not_consume_the_signal(self):
+        p = Portfolio(roomy())
+        sig = self._signal()
+        stale = intent_from_signal(sig, price="100", atr="1", data_close_ms=T0 - 30 * MIN)
+        fresh = intent_from_signal(sig, price="100", atr="2")
+        out = p.decide([stale, fresh], T0 + MIN)
+        self.assertEqual({d["intent_id"]: d["status"] for d in out}, {stale["intent_id"]: "rejected", fresh["intent_id"]: "opened"})
+
+
+class SlippageSensitivity(unittest.TestCase):
+    BUFFERS = ("0", "5", "10", "25", "50")
+
+    @staticmethod
+    def _worse(extra_bps):
+        extra = D(extra_bps) / D(10_000)
+
+        def worse_stop(price, side, product, reason="strategy_exit"):
+            filled = exit_fill(price, side, product, reason)
+            return filled * (1 - extra) if side == LONG else filled * (1 + extra)
+        return worse_stop
+
+    def test_bigger_buffer_means_smaller_positions_and_the_same_planned_risk(self):
+        sizes = []
+        for buffer in self.BUFFERS:
+            [d] = Portfolio(roomy(slippage_buffer_bps=buffer)).decide([intent(stop_pct="0.02")], T0 + MIN)
+            sizes.append(D(d["notional_usd"]))
+            self.assertAlmostEqual(float(d["planned_loss_usd"]), 10.0, delta=0.02)
+        self.assertEqual(sizes, sorted(sizes, reverse=True))
+        self.assertEqual(len(set(sizes)), len(sizes))
+
+    def test_realized_loss_when_the_real_slippage_matches_each_buffer(self):
+        for side in (LONG, SHORT):
+            for buffer in self.BUFFERS:
+                p = Portfolio(roomy(slippage_buffer_bps=buffer))
+                p.decide([intent("PF_ETHUSD", side=side, stop_pct="0.02", target_pct="0.04")], T0 + MIN)
+                low, high = ("97", "100") if side == LONG else ("100", "103")
+                with mock.patch.object(futures_simulator, "exit_fill", self._worse(buffer)):
+                    [t] = p.on_candle("PF_ETHUSD", T0 + MIN, candle("99", high=high, low=low))
+                self.assertLessEqual(-D(str(t["pnl_usd"])), D("10.00") + D("0.002"), (side, buffer))
+
+    def test_real_slippage_above_the_buffer_exceeds_the_budget_by_about_the_difference(self):
+        losses = {}
+        for buffer in ("0", "10", "25"):
+            p = Portfolio(roomy(slippage_buffer_bps=buffer))
+            [d] = p.decide([intent("PF_ETHUSD", stop_pct="0.02", target_pct="0.04")], T0 + MIN)
+            with mock.patch.object(futures_simulator, "exit_fill", self._worse("25")):
+                [t] = p.on_candle("PF_ETHUSD", T0 + MIN, candle("99", high="100", low="97"))
+            losses[buffer] = -D(str(t["pnl_usd"]))
+        self.assertTrue(losses["0"] > losses["10"] > D("10"), losses)       # buffer too small: over budget
+        self.assertLessEqual(losses["25"], D("10.002"))
 
 
 class Determinism(unittest.TestCase):

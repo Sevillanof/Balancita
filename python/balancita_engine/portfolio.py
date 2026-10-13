@@ -150,6 +150,7 @@ class Portfolio:
         self.decisions = []     # one record per processed intent: opened or rejected (with reasons)
         self.marks = {}         # product -> last close seen, for unrealized P&L
         self.opened_intents = set()
+        self.opened_signals = set()   # signal ids that already opened a position, whatever intent carried them
         self.last_decision_ms = None
         self.last_bucket = {}   # product -> last candle bucket consumed (entry or on_candle)
 
@@ -157,6 +158,11 @@ class Portfolio:
     @staticmethod
     def _pnl(trade):
         return D(str(trade["pnl_usd"]))
+
+    def _conservative_pnl(self, trade):
+        """Result used for loss limits: verified results as they are, unverified ones only when they lose."""
+        pnl = self._pnl(trade)
+        return pnl if trade["net_complete"] else min(D(0), pnl)
 
     def realized_usd(self):
         return sum((self._pnl(t) for t in self.trades), D(0))
@@ -195,13 +201,13 @@ class Portfolio:
     def drawdown_usd(self):
         peak = running = drawdown = D(0)
         for trade in self.trades:
-            running += self._pnl(trade)
+            running += self._conservative_pnl(trade)
             peak = max(peak, running)
             drawdown = max(drawdown, peak - running)
         return drawdown
 
     def realized_today_usd(self, now_ms):
-        return sum((self._pnl(t) for t in self.trades if t["exit_time_ms"] // DAY_MS == now_ms // DAY_MS), D(0))
+        return sum((self._conservative_pnl(t) for t in self.trades if t["exit_time_ms"] // DAY_MS == now_ms // DAY_MS), D(0))
 
     def unrealized_usd(self):
         total = D(0)
@@ -245,7 +251,12 @@ class Portfolio:
         loss_fraction = move / entry + fee_rate("taker") * (entry + stop_exit) / entry
         return {"entry": entry, "stop_exit": stop_exit, "loss_fraction": loss_fraction}
 
-    def _size(self, intent, plan):
+    def daily_risk_room_usd(self, now_ms):
+        """What the daily loss limit still leaves for planned losses: limit - losses realized today - open planned risk."""
+        lost_today = max(D(0), -self.realized_today_usd(now_ms))
+        return D(self.policy.daily_loss_limit_usd) - lost_today - self.open_risk_usd()
+
+    def _size(self, intent, plan, now_ms):
         """``(notional, limits_applied, reasons)`` against the capital and risk left right now."""
         p = self.policy
         capital = max(self.capital_usd(), D(0))
@@ -259,6 +270,7 @@ class Portfolio:
             "net_limit": D(p.max_net_exposure_pct) * capital - directional,
             "margin": self.available_usd() * D(p.leverage),
             "open_risk_limit": (D(p.max_open_risk_pct) * capital - self.open_risk_usd()) / loss,
+            "daily_loss_budget": self.daily_risk_room_usd(now_ms) / loss,
         }
         notional = min([wanted] + list(caps.values()))
         applied = sorted(name for name, cap in caps.items() if cap < wanted and cap <= notional)
@@ -273,7 +285,7 @@ class Portfolio:
     @staticmethod
     def _shortfall_reason(applied):
         for name, reason in (("margin", "insufficient_margin"), ("open_risk_limit", "open_risk_limit"),
-                             ("gross_limit", "global_exposure_limit"), ("net_limit", "net_exposure_limit"),
+                             ("daily_loss_budget", "daily_loss_budget"), ("gross_limit", "global_exposure_limit"), ("net_limit", "net_exposure_limit"),
                              ("product_limit", "product_exposure_limit")):
             if name in applied:
                 return reason
@@ -315,6 +327,8 @@ class Portfolio:
                 reasons.append("stop_loss_exceeds_notional_limit")
         if intent["intent_id"] in self.opened_intents:
             reasons.append("duplicate_intent")
+        elif intent.get("signal_id") is not None and intent["signal_id"] in self.opened_signals:
+            reasons.append("duplicate_signal")
         elif product in self.positions:
             reasons.append("position_already_open" if self.positions[product].position["side"] == side
                            else "opposite_position_open")
@@ -342,6 +356,15 @@ class Portfolio:
                 valid.append(intent)
         if self.last_decision_ms is None or now_ms > self.last_decision_ms:
             self.last_decision_ms = now_ms
+        by_signal, unique = {}, []
+        for intent in sorted(valid, key=lambda i: i["intent_id"]):    # one signal, one chance: the same signal id
+            sid = intent.get("signal_id")                             # in a new intent (other price/ATR) is a duplicate
+            if sid is not None and sid in by_signal:
+                rejected[intent["intent_id"]] = ["duplicate_signal"]
+                continue
+            by_signal[sid] = True
+            unique.append(intent)
+        valid = unique
         by_product = {}
         for intent in valid:
             by_product.setdefault(intent["product_id"], []).append(intent)
@@ -357,7 +380,7 @@ class Portfolio:
                 rejected[intent["intent_id"]] = ["duplicate_same_side"]
         for intent in sorted(survivors, key=lambda i: (-D(i["strength"]), i["product_id"], i["intent_id"])):
             plan = plans[intent["intent_id"]]
-            notional, applied, reasons = self._size(intent, plan)
+            notional, applied, reasons = self._size(intent, plan, now_ms)
             if reasons:
                 rejected[intent["intent_id"]] = reasons
                 continue
@@ -393,6 +416,8 @@ class Portfolio:
         open_before = self.open_risk_usd()
         self.positions[product] = book
         self.opened_intents.add(intent["intent_id"])
+        if intent.get("signal_id") is not None:
+            self.opened_signals.add(intent["signal_id"])
         self.last_bucket[product] = max(self.last_bucket.get(product, 0), intent["bucket_ms"])
         self.marks[product] = D(intent["price"])
         return self._record(
