@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { groupDecisions, type DecisionRow } from './terminal-decisions.ts'
 
 type Filter = 'all' | 'signals'
@@ -23,6 +23,13 @@ export default function TerminalDecisions({
   children?: ReactNode
 }) {
   const [filter, setFilter] = useState<Filter>('all')
+  const list = useRef<HTMLUListElement>(null)
+  // A decision picked on the chart scrolls its row into view in the list.
+  useEffect(() => {
+    list.current
+      ?.querySelector('button[aria-pressed="true"]')
+      ?.scrollIntoView?.({ block: 'nearest' })
+  }, [selectedId])
   const visible =
     filter === 'signals' ? rows.filter((r) => r.action !== 'WAIT') : rows
   const items = groupDecisions(visible)
@@ -58,7 +65,7 @@ export default function TerminalDecisions({
       ) : rows.length === 0 ? (
         <p>Aún no hay análisis registrados.</p>
       ) : (
-        <ul className="connected-terminal__decision-list">
+        <ul ref={list} className="connected-terminal__decision-list">
           {items.length === 0 && <li>No hay señales todavía.</li>}
           {items.map((item) =>
             item.kind === 'waits' ? (

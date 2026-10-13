@@ -8,6 +8,7 @@ import type { TerminalTickerStats } from '../features/trading-view/infrastructur
 import type { TerminalBootstrap } from '../features/connected-trading/infrastructure/terminal-stream-client.ts'
 import { strategyCode } from '../features/trading-view/domain/terminal-chart-model.ts'
 import { record } from '../shared/wire/decode.ts'
+import { markerGap } from './terminal-markers.ts'
 import { analysisAction } from './terminal-labels.ts'
 
 /** Time of the last candle at or before `seconds` (the first one when none is). */
@@ -103,15 +104,14 @@ export default function TerminalMarketChart({
               !Number.isSafeInteger(time)
             )
               return []
+            if (
+              markerGap(analysis, {
+                firstCandleMs: candles[0]!.time * 1000,
+                entriesOnly,
+              })
+            )
+              return []
             const action = analysisAction(analysis)
-            if (entriesOnly && action !== 'LONG' && action !== 'SHORT')
-              return []
-            // Verdicts rebuilt from a backfill were not decisions taken at that time
-            // (paper execution ignores them too: max_verdict_lag_ms).
-            if (entriesOnly && Number(analysis.knowledge_lag_ms) > 15_000)
-              return []
-            // A verdict older than the chart has no candle: do not pile it on the first.
-            if (entriesOnly && Number(time) < candles[0]!.time * 1000) return []
             const decisionSeconds = Math.floor(Number(time) / 1000)
             const renderTime = candleTimeAtOrBefore(candles, decisionSeconds)
             const direction =

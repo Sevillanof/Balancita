@@ -21,6 +21,7 @@ import AppStatusChips from './AppStatusChips.tsx'
 import TerminalDecisions from './TerminalDecisions.tsx'
 import type { DecisionRow } from './terminal-decisions.ts'
 import SelectedDecision from './SelectedDecision.tsx'
+import { markerGap, markerGapNote } from './terminal-markers.ts'
 import TerminalMarketChart from './TerminalMarketChart.tsx'
 import {
   analysesNotice,
@@ -158,6 +159,26 @@ export default function FuturesTerminal({
         time: shortTime(analysis.decision_time_ms),
       }
     })
+  // Where the selected decision stands on the chart and in the list: what it
+  // lacks is said, never filled in.
+  const firstCandle = (Array.isArray(market.candles) ? market.candles : [])
+    .map(record)
+    .find((candle) => Number.isSafeInteger(candle.time_ms))?.time_ms
+  const selectedNotes: string[] = []
+  if (selectedAnalysis && (localDemo || gatewayEngine)) {
+    const gap = markerGap(selectedAnalysis, {
+      firstCandleMs:
+        typeof firstCandle === 'number'
+          ? Math.floor(firstCandle / 1000) * 1000
+          : null,
+      entriesOnly: !localDemo,
+    })
+    if (gap) selectedNotes.push(markerGapNote(gap))
+    if (!decisionRows.some((row) => row.id === selectedId))
+      selectedNotes.push(
+        'Esta decisión no aparece en la lista: solo se muestran las últimas 100.',
+      )
+  }
   const originalRunActive = activeRunId === bootstrap.active_run_id
   const localScenarioStatus = localDemo
     ? String(
@@ -427,6 +448,7 @@ export default function FuturesTerminal({
                       id={selectedId}
                       time={utcTime(selectedDecisionTime)}
                       reason={analysisReason(selectedAnalysis, localDemo)}
+                      notes={selectedNotes}
                     />
                   ) : null
                 }

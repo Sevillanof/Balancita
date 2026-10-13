@@ -1505,6 +1505,109 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
     expect(await screen.findByText(/Motor paper: en marcha/)).toBeTruthy()
   })
 
+  describe('selection between chart, history and decisions (Fase 2.7)', () => {
+    const clickMarker = (id: string) =>
+      act(async () =>
+        chartHarness.clickHandlers.at(-1)?.({ hoveredObjectId: id }),
+      )
+    const pickRow = (id: string) =>
+      act(async () =>
+        screen
+          .getByRole('button', { name: `Seleccionar análisis ${id}` })
+          .click(),
+      )
+    const marker = (id: string) =>
+      chartHarness.markerSets.at(-1)?.find((item) => item.id === id)
+    const detail = () => within(screen.getByLabelText('Decisión seleccionada'))
+    const notes = () =>
+      screen.queryAllByTestId('decision-limit').map((n) => n.textContent)
+
+    it('opens the detail of the decision picked on the chart and highlights its row and marker', async () => {
+      await renderLive()
+      // Default: the newest decision, a SHORT.
+      expect(marker('verdict-hash-3')?.text).toMatch(/◀/)
+      await clickMarker('verdict-hash-2')
+      expect(detail().getByText('LONG')).toBeTruthy()
+      expect(
+        screen
+          .getByRole('button', { name: 'Seleccionar análisis verdict-hash-2' })
+          .getAttribute('aria-pressed'),
+      ).toBe('true')
+      expect(marker('verdict-hash-2')?.text).toMatch(/◀/)
+      expect(marker('verdict-hash-3')?.text).not.toMatch(/◀/)
+      expect(notes()).toEqual([])
+    })
+
+    it('highlights the right marker when a history row is picked', async () => {
+      await renderLive()
+      await clickMarker('verdict-hash-2')
+      await pickRow('verdict-hash-3')
+      expect(detail().getByText('SHORT')).toBeTruthy()
+      expect(marker('verdict-hash-3')?.text).toMatch(/◀/)
+      expect(marker('verdict-hash-2')?.text).not.toMatch(/◀/)
+    })
+
+    it('ignores a click on a marker that is not one of this product’s decisions', async () => {
+      await renderLive()
+      await clickMarker('verdict-of-another-product')
+      expect(marker('verdict-hash-3')?.text).toMatch(/◀/)
+      expect(detail().getByText('SHORT')).toBeTruthy()
+    })
+
+    it('says a WAIT decision has no marker, and says nothing for an entry', async () => {
+      await renderLive()
+      await pickRow('verdict-hash-1')
+      expect(marker('verdict-hash-1')).toBeUndefined()
+      expect(notes()).toEqual([
+        'Esta decisión no tiene marcador en el gráfico: solo las entradas LONG/SHORT se marcan.',
+      ])
+      await pickRow('verdict-hash-2')
+      expect(notes()).toEqual([])
+    })
+
+    it('says why rebuilt and out-of-period decisions have no marker', async () => {
+      await renderLive({
+        ...state,
+        analyses: [
+          {
+            ...analysis(2, 'LONG'),
+            analysis_id: 'verdict-old',
+            decision_time_ms: T0 - 3_600_000,
+          },
+          {
+            ...analysis(2, 'LONG'),
+            analysis_id: 'verdict-backfill',
+            knowledge_lag_ms: 3_600_000,
+          },
+          analysis(3, 'SHORT'),
+        ],
+      })
+      await pickRow('verdict-old')
+      expect(marker('verdict-old')).toBeUndefined()
+      expect(notes()).toEqual([
+        'Esta decisión no tiene marcador en el gráfico: ocurrió antes de las velas visibles.',
+      ])
+      await pickRow('verdict-backfill')
+      expect(marker('verdict-backfill')).toBeUndefined()
+      expect(notes()[0]).toMatch(/se reconstruyó a partir de un backfill/)
+    })
+
+    it('opens a decision older than the 100 listed and says it is not in the list', async () => {
+      const many = Array.from({ length: 101 }, (_, index) => ({
+        ...analysis(2, 'LONG'),
+        analysis_id: `verdict-${index}`,
+        decision_time_ms: T0 - 120_000 + index * 100,
+      }))
+      await renderLive({ ...state, analyses: many })
+      await clickMarker('verdict-0')
+      expect(detail().getByText('LONG')).toBeTruthy()
+      expect(marker('verdict-0')?.text).toMatch(/◀/)
+      expect(notes()).toEqual([
+        'Esta decisión no aparece en la lista: solo se muestran las últimas 100.',
+      ])
+    })
+  })
+
   describe('provenance and separation (Fase 2.4)', () => {
     const history = () =>
       within(screen.getByRole('group', { name: 'Historial del gateway' }))
