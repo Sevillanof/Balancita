@@ -90,6 +90,8 @@ Una misma `signal_id` no puede abrir dos posiciones aunque llegue en una intenci
 
 ## Momento y precio de ejecución (pendiente para integrar)
 
+> Resuelto en forma de prototipo aislado en [`ejecucion-temporal.md`](ejecucion-temporal.md) (`execution_timing.py`): señal persistida → decisión → primer precio ejecutable posterior → entrada, con el stop original. `Portfolio.decide` solo sigue abriendo al precio de referencia cuando se usa directamente, sin ese módulo.
+
 El prototipo **abre al precio de referencia de la intención** (cierre de la vela de la señal) más el impacto del modelo de costes. Eso es válido para un prototipo determinista, pero una integración con datos reales deberá distinguir tres cosas que hoy se confunden: el precio conocido al generar la señal, el momento en que la señal está disponible y el **primer precio ejecutable posterior**. Si el precio se mueve entre la señal y la ejecución, cambia la pérdida real hasta el stop y el tamaño calculado. No es un bloqueo para este PR aislado; sí lo es para conectarlo al forward, que no se toca.
 
 ## Slippage
