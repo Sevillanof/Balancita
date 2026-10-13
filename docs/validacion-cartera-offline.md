@@ -55,7 +55,7 @@ La tabla completa está en el informe. En resumen:
 
 - **Existe**: idempotencia de intenciones/señales y orden temporal en `Portfolio` (solo en memoria); checkpoints de libros del experimento multiestrategia (`multi_experiment`/`multi_store`); relleno de huecos de velas y reconciliación de funding en el forward.
 - **Nuevo, solo en este ejecutor offline**: idempotencia de eventos, checkpoint/restauración de `Portfolio`, escritura atómica, diario encadenado.
-- **Falta**: persistencia de `Portfolio` fuera de este ejecutor; un registro **durable de señales** (sin él, lo emitido durante una caída se pierde y el sistema no puede detectarlo: escenario `live_gap`); reclasificar una operación `net_complete=false` cuando llega el funding; el **primer precio ejecutable posterior a la señal**; huecos de precio sobre el stop (`Book` sale siempre al precio del stop).
+- **Falta**: persistencia de `Portfolio` fuera de este ejecutor; un registro **durable de señales** (prototipo offline en [continuidad-senales.md](continuidad-senales.md); sin él, lo emitido durante una caída se pierde y el sistema no puede detectarlo: escenario `live_gap`); reclasificar una operación `net_complete=false` cuando llega el funding; el **primer precio ejecutable posterior a la señal**; huecos de precio sobre el stop (`Book` sale siempre al precio del stop).
 
 `replay_log` demuestra que, **si** existiera ese registro durable, restaurar + reproducir desde el checkpoint da exactamente el mismo libro y estado que no haber caído. No demuestra que hoy exista.
 
