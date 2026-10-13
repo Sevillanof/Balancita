@@ -28,3 +28,14 @@ Status 2026-10-11: forward since 2026-10-08 07:10 UTC, judged at about 100 trade
 
 `kronos-summary.json` reports `forward` and `backtest` separately with the same reliability figures as the other
 strategies (hit rate with CI, mean net bp, t-stat, verdict). Only `forward` is evidence.
+
+## Funding (accounting correction, 2026-10-13)
+
+`kronos.sqlite` stays as written: its trades carry the taker fees but no funding. `kronos_lab/funding.py` opens it
+read-only and writes, for every trade whose whole holding time is covered by the stored Kraken funding periods, the
+funding and the net it implies into a separate, append-only `kronos-funding.sqlite` (same accounting as the
+forward's `forward_trade_funding`: unknown funding is never zero, a hole gives no row, the periods used are hashed).
+`kronos-funding-summary.json` (written atomically) reports forward trades only, in three groups (all, without the positions held through a recorded interruption, and those apart), each with `before_funding` (stored nets), `after_funding_all` and `funding_verified_only`. While any trade of a group is pending its verdict reads `provisional_funding_pending`. It never touches `kronos.sqlite`, `kronos-summary.json`
+or the running process:
+
+    PYTHONPATH=python python3 -m kronos_lab.funding --out server/data/kronos --write-dir <other folder> --market-db <futures-market.sqlite>
