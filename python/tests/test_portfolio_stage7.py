@@ -884,6 +884,125 @@ class TimedExecutorIntegration(unittest.TestCase):
         self.assertEqual(ex.portfolio.trades, [])        # quotes alone never close a position when watching is off
 
 
+class UnresolvedExecutionAndOpenDisputes(unittest.TestCase):
+    def unresolved_gain(self, policy=None):
+        pf = S.new_portfolio()
+        watch = QuoteWatch(pf, policy or WatchPolicy())
+        S.open_timed(pf, S.BTC, LONG, S.ENTRY)
+        watch.on_candle(S.BTC, S.NOON, S.candle(100000, 100050, 97700, 97900))        # range below the stop, no quotes
+        [trade] = watch.on_candle(S.BTC, S.NOON + S.MIN, S.candle(100500, 103500, 100400, 103200))
+        return pf, trade
+
+    def test_the_old_rule_would_have_made_the_uncertain_gain_definitive_capital(self):
+        pf, trade = self.unresolved_gain()
+        self.assertGreater(D(str(trade["pnl_usd"])), 0)
+        self.assertTrue(trade["net_complete"])                        # funding is complete: a different dimension
+        old_rule = D(str(trade["net_usd"])) if trade["net_complete"] else min(D(0), D(str(trade["pnl_usd"])))
+        self.assertGreater(old_rule, 0)                                # what contribution() used to add to the capital
+        self.assertEqual(pf.contribution(trade), 0)                    # what it adds now
+
+    def test_the_simulated_result_is_untouched_and_only_the_usable_amount_is_held_back(self):
+        pf, trade = self.unresolved_gain()
+        self.assertTrue(trade["execution_unresolved"])
+        self.assertEqual(pf.capital_usd(), D("1000"))
+        self.assertEqual(pf.risk_budget_usd(), D("10"))
+        self.assertEqual(pf.unresolved_execution_gains_usd(), D(str(trade["pnl_usd"])))
+        self.assertEqual(pf.provisional_gains_usd(), pf.unresolved_execution_gains_usd())
+        self.assertEqual(pf.equity_usd(), D("1000") + D(str(trade["pnl_usd"])))
+        self.assertEqual(rules(pf), [])
+
+    def test_an_unresolved_loss_is_still_booked_in_full(self):
+        pf = S.new_portfolio()
+        watch = QuoteWatch(pf, WatchPolicy())
+        S.open_timed(pf, S.BTC, LONG, S.ENTRY)
+        watch.on_candle(S.BTC, S.NOON, S.candle(100000, 100050, 97700, 97900))
+        [trade] = watch.on_candle(S.BTC, S.NOON + S.MIN, S.candle(97900, 98050, 97800, 98000))
+        self.assertLess(D(str(trade["pnl_usd"])), 0)
+        self.assertEqual(pf.contribution(trade), D(str(trade["pnl_usd"])))
+        self.assertEqual(pf.capital_usd(), D("1000") + D(str(trade["pnl_usd"])))
+
+    def test_funding_completion_does_not_release_an_unresolved_execution_gain(self):
+        pf = S.new_portfolio(funding={S.BTC: []})
+        watch = QuoteWatch(pf, WatchPolicy())
+        S.open_timed(pf, S.BTC, LONG, S.ENTRY)
+        watch.on_candle(S.BTC, S.NOON, S.candle(100000, 100050, 97700, 97900))
+        [trade] = watch.on_candle(S.BTC, S.NOON + S.MIN, S.candle(100500, 103500, 100400, 103200))
+        self.assertFalse(trade["net_complete"])
+        ingest_funding(pf, S.BTC, S.hourly(S.NOON - S.HOUR, 3, rate="0"), received_ms=S.NOON + 2 * S.HOUR)
+        [adjustment] = reconcile_funding(pf, S.NOON + 2 * S.HOUR)
+        self.assertEqual(adjustment["transition"], "provisional_to_definitive")    # the funding dimension is complete...
+        self.assertTrue(trade["net_complete"])
+        self.assertEqual(adjustment["delta_capital_usd"], "0")                       # ...the execution one is not
+        self.assertEqual(pf.capital_usd(), D("1000"))
+        self.assertEqual(rules(pf), [])
+
+    def test_the_audit_lists_the_economically_unresolved_result(self):
+        pf, trade = self.unresolved_gain()
+        [warning] = [w for w in audit(pf)["warnings"] if w["rule"] == "economically_unresolved_execution"]
+        self.assertEqual(warning["trade_id"], trade["trade_id"])
+        self.assertEqual(warning["counted_in_capital_usd"], "0")
+
+    def test_the_audit_catches_an_unresolved_gain_counted_as_capital(self):
+        pf, trade = self.unresolved_gain()
+        del trade["execution_unresolved"]                              # planted: the mark is lost, the gain would count
+        self.assertIn("unresolved_execution_not_marked", rules(pf))
+        trade["execution_unresolved"] = True
+        pf.review_flags[trade["trade_id"]].remove("entry_minute_unresolved")
+        self.assertIn("unresolved_execution_not_marked", rules(pf))
+
+    def test_resolved_windows_keep_the_old_behaviour(self):
+        pf = S.new_portfolio()
+        watch = QuoteWatch(pf, WatchPolicy())
+        S.open_timed(pf, S.BTC, LONG, S.ENTRY)
+        for k in range(1, 10):
+            watch.on_quote(S.quote(S.BTC, S.ENTRY + k * 5_000, 99900))
+        watch.on_candle(S.BTC, S.NOON, S.candle(100000, 100050, 97700, 97900))
+        [trade] = watch.on_candle(S.BTC, S.NOON + S.MIN, S.candle(100500, 103500, 100400, 103200))
+        self.assertNotIn("execution_unresolved", trade)
+        self.assertEqual(pf.contribution(trade), D(str(trade["net_usd"])))
+
+    def test_a_dispute_that_arrives_while_the_position_is_open_survives_the_close(self):
+        pf = S.new_portfolio(funding={S.BTC: S.hourly(S.T8 - S.HOUR, 3)})
+        pf.decide([S.intent(S.BTC, LONG, S.T8, target_pct="0.01")], S.T8)
+        pf.on_candle(S.BTC, S.T8, S.candle(100000, 100100, 99900, 100050))
+        counts = ingest_funding(pf, S.BTC, [(S.T8, S.T8 + S.HOUR, "0.01")], received_ms=S.T8 + 2 * S.HOUR)
+        self.assertEqual(counts["conflict"], 1)
+        self.assertIn(S.BTC, pf.positions)
+        self.assertEqual(pf.review_flags, {})                            # nothing closed yet: nothing to flag
+        [trade] = pf.on_candle(S.BTC, S.T8 + 3 * S.HOUR, S.candle(100500, 101500, 100400, 101200))
+        tid = trade["trade_id"]
+        self.assertIn("funding_conflict", pf.review_flags[tid])
+        self.assertEqual(pf.trade_details[tid]["notes"]["funding_conflict"], [[S.T8, S.T8 + S.HOUR, "0.01"]])
+        # the accepted data keeps being the only data used; nothing is resolved or overwritten
+        self.assertEqual(pf.funding[S.BTC], S.hourly(S.T8 - S.HOUR, 3) and sorted(pf.funding[S.BTC]))
+        self.assertNotIn(D("0.01"), [r for _, _, r in pf.funding[S.BTC]])
+        self.assertIn("funding_disputed", {w["rule"] for w in audit(pf)["warnings"]})
+        self.assertEqual(rules(pf), [])
+
+    def test_the_audit_catches_a_lost_dispute_flag(self):
+        pf = S.new_portfolio(funding={S.BTC: S.hourly(S.T8 - S.HOUR, 3)})
+        pf.decide([S.intent(S.BTC, LONG, S.T8, target_pct="0.01")], S.T8)
+        pf.on_candle(S.BTC, S.T8, S.candle(100000, 100100, 99900, 100050))
+        ingest_funding(pf, S.BTC, [(S.T8, S.T8 + S.HOUR, "0.01")], received_ms=S.T8 + 2 * S.HOUR)
+        [trade] = pf.on_candle(S.BTC, S.T8 + 3 * S.HOUR, S.candle(100500, 101500, 100400, 101200))
+        pf.review_flags[trade["trade_id"]].remove("funding_conflict")
+        self.assertIn("funding_dispute_lost", rules(pf))
+
+    def test_a_dispute_quarantined_before_the_entry_also_reaches_the_trade(self):
+        pf = S.new_portfolio(funding={S.BTC: S.hourly(S.T8 - 3 * S.HOUR, 4)})
+        ingest_funding(pf, S.BTC, [(S.T8, S.T8 + S.HOUR, "0.01")], received_ms=S.T8 + S.HOUR)
+        pf.decide([S.intent(S.BTC, LONG, S.T8 + 10 * S.MIN, target_pct="0.01")], S.T8 + 10 * S.MIN)
+        pf.on_candle(S.BTC, S.T8 + 10 * S.MIN, S.candle(100000, 100100, 99900, 100050))
+        [trade] = pf.on_candle(S.BTC, S.T8 + 40 * S.MIN, S.candle(100500, 101500, 100400, 101200))
+        self.assertIn("funding_conflict", pf.review_flags[trade["trade_id"]])
+
+    def test_the_new_scenarios_are_clean_and_reproducible(self):
+        for scenario in (S.unresolved_execution_gain, S.funding_dispute_on_open_position):
+            a, b = scenario(), scenario()
+            self.assertEqual(a["summary"]["audit"]["violations"], [])
+            self.assertEqual(a["summary"]["accounting_digest"], b["summary"]["accounting_digest"])
+
+
 class Reproducibility(unittest.TestCase):
     def test_same_scenarios_same_hashes(self):
         a, b = S.run_all(), S.run_all()
@@ -910,7 +1029,7 @@ class Reproducibility(unittest.TestCase):
     def test_every_scenario_passes_every_independent_check(self):
         results = S.run_all()
         self.assertEqual([r["id"] for r in results], sorted(r["id"] for r in results))
-        self.assertEqual(len(results), 13)
+        self.assertEqual(len(results), 15)
         for r in results:
             self.assertEqual(r["summary"]["audit"]["violations"], [], r["id"])
             self.assertGreater(r["summary"]["audit"]["checks"], 0)

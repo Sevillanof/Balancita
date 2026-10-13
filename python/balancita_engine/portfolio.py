@@ -185,7 +185,14 @@ class Portfolio:
     def _conservative_pnl(self, trade):
         """Result used for loss limits: verified results as they are, unverified ones only when they lose."""
         pnl = self._pnl(trade)
-        return pnl if trade["net_complete"] else min(D(0), pnl)
+        return pnl if self.reliable(trade) else min(D(0), pnl)
+
+    @staticmethod
+    def reliable(trade):
+        """Whether the simulated result may raise the definitive capital. Two independent dimensions: the funding is
+        complete (``net_complete``) and the execution is resolved (no ``execution_unresolved`` mark: the stop could
+        have been crossed in an entry minute no quote covered). Either one failing keeps a gain out of the capital."""
+        return bool(trade["net_complete"]) and not trade.get("execution_unresolved")
 
     def realized_usd(self):
         return sum((self._pnl(t) for t in self.trades), D(0))
@@ -194,11 +201,15 @@ class Portfolio:
         """Definitive capital: verified results plus losses of incomplete ones. Provisional gains are excluded."""
         total = D(self.policy.initial_equity_usd)
         for trade in self.trades:
-            total += D(str(trade["net_usd"])) if trade["net_complete"] else min(D(0), self._pnl(trade))
+            total += self.contribution(trade)
         return total
 
     def provisional_gains_usd(self):
-        return sum((max(D(0), self._pnl(t)) for t in self.trades if not t["net_complete"]), D(0))
+        return sum((max(D(0), self._pnl(t)) for t in self.trades if not self.reliable(t)), D(0))
+
+    def unresolved_execution_gains_usd(self):
+        """The part of ``provisional_gains_usd`` held back only because the execution is unresolved (not funding)."""
+        return sum((max(D(0), self._pnl(t)) for t in self.trades if t.get("execution_unresolved")), D(0))
 
     def equity_usd(self):
         """Everything realized, provisional gains included. Reporting only: nothing is sized from it."""
@@ -522,9 +533,10 @@ class Portfolio:
 
     @staticmethod
     def contribution(trade):
-        """What the trade adds to the definitive capital: verified results as they are, unverified ones only if they lose."""
+        """What the trade adds to the definitive capital: reliable results as they are, the others only if they lose.
+        The simulated result (``pnl_usd``) is never changed; only the amount considered reliable is."""
         pnl = D(str(trade["pnl_usd"]))
-        return D(str(trade["net_usd"])) if trade["net_complete"] else min(D(0), pnl)
+        return D(str(trade["net_usd"])) if Portfolio.reliable(trade) else min(D(0), pnl)
 
     def append_capital_event(self, kind, t_ms, trade_id, delta, **extra):
         """Appends to the hash-chained capital log; ``capital_before/after`` are the definitive capital around it."""
@@ -544,13 +556,21 @@ class Portfolio:
                       partial_usd=trade["pnl_usd"], fees_usd=float(round(fees, 6)),
                       planned_loss_usd=float(round(book.planned_loss_usd, 6)),
                       trade_id=stable_hash([product_id, trade["entry_bucket_ms"], book.intent["intent_id"]])[:24])
+        notes = self.position_notes.pop(book.intent["intent_id"], {})
+        if notes.get("entry_minute_unresolved"):
+            stored["execution_unresolved"] = True   # opt-in marker: absent in every legacy mode
+        disputed = [c for c in self.funding_conflicts.get(product_id, ())
+                    if min(int(c[1]), stored["exit_time_ms"]) > max(int(c[0]), stored["entry_time_ms"])]
+        if disputed:
+            notes["funding_conflict"] = [list(c) for c in disputed]
         self.trades.append(stored)
         self.trade_details[stored["trade_id"]] = {
             "as_closed": {k: stored[k] for k in self.CLOSED_FIELDS}, "fill": fill,
             "entry_reference_price": book.intent["price"],
-            "notes": self.position_notes.pop(book.intent["intent_id"], {})}
-        if self.trade_details[stored["trade_id"]]["notes"].get("entry_minute_unresolved"):
-            self.review_flags.setdefault(stored["trade_id"], []).append("entry_minute_unresolved")
+            "notes": notes}
+        for flag in ("entry_minute_unresolved", "funding_conflict"):
+            if notes.get(flag):
+                self.review_flags.setdefault(stored["trade_id"], []).append(flag)
         self.append_capital_event("trade_closed", stored["exit_time_ms"], stored["trade_id"], self.contribution(stored))
         return stored
 

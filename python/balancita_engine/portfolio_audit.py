@@ -178,8 +178,20 @@ def audit(portfolio):
         if per_trade.get(trade["trade_id"], D(0)) != p.contribution(trade):
             violate("capital_events_per_trade", trade_id=trade["trade_id"], events=per_trade.get(trade["trade_id"]),
                     contribution=p.contribution(trade))
-        if not trade["net_complete"] and D(str(trade["pnl_usd"])) > 0 and p.contribution(trade) != 0:
+        if not p.reliable(trade) and D(str(trade["pnl_usd"])) > 0 and p.contribution(trade) != 0:
             violate("provisional_gain_counted", trade_id=trade["trade_id"])
+        notes = p.trade_details[trade["trade_id"]]["notes"]
+        flags = p.review_flags.get(trade["trade_id"], ())
+        if bool(notes.get("entry_minute_unresolved")) != bool(trade.get("execution_unresolved")) \
+                or (trade.get("execution_unresolved") and "entry_minute_unresolved" not in flags):
+            violate("unresolved_execution_not_marked", trade_id=trade["trade_id"])
+        if notes.get("funding_conflict") and "funding_conflict" not in flags:
+            violate("funding_dispute_lost", trade_id=trade["trade_id"])
+        if trade.get("execution_unresolved"):
+            warnings.append({"rule": "economically_unresolved_execution", "trade_id": trade["trade_id"],
+                             "simulated_pnl_usd": str(trade["pnl_usd"]), "counted_in_capital_usd": str(p.contribution(trade))})
+        if notes.get("funding_conflict"):
+            warnings.append({"rule": "funding_disputed", "trade_id": trade["trade_id"], "periods": notes["funding_conflict"]})
     snapshot = p.snapshot()
     if D(snapshot["capital_definitive_usd"]) > D(snapshot["equity_usd"]) - D(snapshot["provisional_gains_usd"]) + D("0.000001"):
         violate("provisional_gains_never_spendable")

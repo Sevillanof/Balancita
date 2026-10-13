@@ -110,6 +110,11 @@ def ingest_funding(portfolio, product_id, periods, *, received_ms, source="feed"
                     flags = portfolio.review_flags.setdefault(trade["trade_id"], [])
                     if "funding_conflict" not in flags:
                         flags.append("funding_conflict")
+                    disputed = portfolio.trade_details[trade["trade_id"]]["notes"].setdefault("funding_conflict", [])
+                    if label not in disputed:
+                        disputed.append(label)
+            # An open position is not a trade yet: it picks the dispute up when it closes (Portfolio._store_trade
+            # compares its holding time with the quarantined periods), so the warning is never lost.
             continue
         known.append((start, end, rate))
         known.sort()

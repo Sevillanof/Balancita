@@ -513,9 +513,45 @@ def duplicates_and_disorder():
                   review_flags=dirty_pf.review_flags)
 
 
+def unresolved_execution_gain():
+    """A LONG opened mid-minute, no quote covering the entry window, the range of that minute below the stop, a later
+    target hit. The simulated gain is booked as is; it is not counted as capital the portfolio may size from."""
+    pf = new_portfolio()
+    watch = QuoteWatch(pf, WatchPolicy())
+    open_timed(pf, BTC, LONG, ENTRY)
+    watch.on_candle(BTC, NOON, candle(100000, 100050, 97700, 97900))            # the range touched the stop (98 000)
+    [trade] = watch.on_candle(BTC, NOON + MIN, candle(100500, 103500, 100400, 103200))   # the target (103 000) is hit
+    old_rule = D(str(trade["net_usd"])) if trade["net_complete"] else min(D(0), D(str(trade["pnl_usd"])))
+    return result("s14_ganancia_con_ejecucion_incierta", "Ganancia con ejecución incierta", pf, NOON + 3 * MIN,
+                  funding_complete=trade["funding_complete"], net_complete=trade["net_complete"],
+                  execution_unresolved=trade["execution_unresolved"], simulated_pnl_usd=str(trade["pnl_usd"]),
+                  counted_in_capital_usd=str(Portfolio.contribution(trade)),
+                  rule_before_this_fix_usd=str(old_rule), capital_usd=str(pf.capital_usd()),
+                  held_back_usd=str(pf.unresolved_execution_gains_usd()),
+                  review_flags=pf.review_flags[trade["trade_id"]],
+                  warnings=[w["rule"] for w in audit(pf)["warnings"]])
+
+
+def funding_dispute_on_open_position():
+    """A position stays open while one funding period is accepted and a contradictory one is quarantined, then closes."""
+    pf = new_portfolio(funding={BTC: hourly(T8 - HOUR, 3)})
+    pf.decide([intent(BTC, LONG, T8, target_pct="0.01")], T8)
+    pf.on_candle(BTC, T8, candle(100000, 100100, 99900, 100050))
+    conflict = ingest_funding(pf, BTC, [(T8, T8 + HOUR, "0.01")], received_ms=T8 + 2 * HOUR)
+    flags_while_open = dict(pf.review_flags)
+    [trade] = pf.on_candle(BTC, T8 + 3 * HOUR, candle(100500, 101500, 100400, 101200))
+    return result("s15_disputa_de_funding_con_posicion_abierta", "Disputa de funding con la posición abierta", pf,
+                  T8 + 4 * HOUR, conflict=conflict, flags_while_open=flags_while_open,
+                  review_flags=pf.review_flags[trade["trade_id"]],
+                  disputed_periods=pf.trade_details[trade["trade_id"]]["notes"]["funding_conflict"],
+                  quarantine=pf.funding_conflicts, funding_status=trade["funding_status"],
+                  funding_used_usd=str(trade["funding_usd"]))
+
+
 SCENARIOS = (gap_long, gap_short, stop_without_gap, entry_minute_spike, quotes_missing, loss_beyond_plan,
              daily_loss_suspension, drawdown_suspension, funding_late_complete, funding_received_twice,
-             funding_contradictory, restart_around_reconciliation, duplicates_and_disorder)
+             funding_contradictory, restart_around_reconciliation, duplicates_and_disorder,
+             unresolved_execution_gain, funding_dispute_on_open_position)
 
 
 # ------------------------------------------------------------------------------------------------ report
@@ -644,6 +680,20 @@ def build_report(results):
             "El mismo mercado entregado limpio y sucio (cotizaciones repetidas, antiguas, previas a la entrada, cruzadas, vela del minuto de entrada dos veces, "
             "cotización de un minuto ya cubierto por la vela): mismo libro {}, misma contabilidad {}, un solo cierre {}. Ignorados: {}.".format(
                 f["same_ledger_as_clean_run"], f["same_accounting_as_clean_run"], f["closed_once"], ", ".join(f["ignored"])), ""]
+
+    f = by_id["s14_ganancia_con_ejecucion_incierta"]["facts"]
+    out += ["## Incertidumbre de ejecución y capital utilizable", "",
+            "Un LONG entra a mitad de minuto sin cotizaciones que cubran la ventana y el rango de ese minuto toca el stop; después llega el objetivo. "
+            "El resultado simulado es **{} USD** y no se altera. La regla anterior habría sumado **{} USD** al capital definitivo; ahora aporta **{} USD** "
+            "(capital {} USD, {} USD retenidos). Es una dimensión distinta de la del funding: funding completo = {}, ejecución sin resolver = {}. "
+            "Avisos de la auditoría: {}.".format(f["simulated_pnl_usd"], f["rule_before_this_fix_usd"], f["counted_in_capital_usd"],
+                                                 f["capital_usd"], f["held_back_usd"], f["funding_complete"],
+                                                 f["execution_unresolved"], ", ".join(f["warnings"])), ""]
+    f = by_id["s15_disputa_de_funding_con_posicion_abierta"]["facts"]
+    out += ["## Disputa de funding con la posición abierta", "",
+            "Un período aceptado y otro contradictorio (cuarentena, nunca aplicado) llegan con la posición abierta; al cerrar, la operación conserva la marca "
+            "{} y los períodos en disputa {}. Estado del funding: {} ({} USD usados, solo el aceptado).".format(
+                f["review_flags"], f["disputed_periods"], f["funding_status"], f["funding_used_usd"]), ""]
 
     out += ["## Qué está demostrado y qué sigue siendo hipótesis", "",
             "**Demostrado (datos sintéticos, pruebas deterministas, mismos hashes en cada ejecución):**", "",

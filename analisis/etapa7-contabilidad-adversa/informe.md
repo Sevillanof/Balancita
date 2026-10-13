@@ -4,7 +4,7 @@ Datos 100 % sintéticos. Generado por `python -m balancita_engine.portfolio_stag
 
 ## Resumen
 
-13 escenarios, 105 comprobaciones contables independientes, **0 violaciones**.
+15 escenarios, 115 comprobaciones contables independientes, **0 violaciones**.
 
 | Escenario | Capital definitivo | Drawdown | Suspensión | Operaciones | Ajustes | Violaciones | ledger_hash | accounting_digest |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -18,9 +18,11 @@ Datos 100 % sintéticos. Generado por `python -m balancita_engine.portfolio_stag
 | s08_suspension_por_drawdown | 935.0119 | 64.9881 | drawdown | 4 | 0 | 0 | 8cd05c68c38c | a5a653d8ca45 |
 | s09_funding_tardio | 990.9160 | 10.4905 | - | 2 | 3 | 0 | ae7d210e95e9 | 02ae22772e37 |
 | s10_funding_recibido_dos_veces | 991.4066 | 9.9999 | - | 2 | 1 | 0 | 6a9baf73e572 | 157a2e43779c |
-| s11_funding_contradictorio | 990.0001 | 9.9999 | - | 2 | 0 | 0 | e7b85b240c27 | 5f9e90127134 |
+| s11_funding_contradictorio | 990.0001 | 9.9999 | - | 2 | 0 | 0 | e7b85b240c27 | feecb05043ca |
 | s12_reinicio_y_conciliacion | 990.9160 | 10.4905 | - | 2 | 2 | 0 | 2246a183e03a | c4fc027f8b87 |
-| s13_eventos_duplicados_y_desordenados | 989.0339 | 10.9661 | - | 1 | 0 | 0 | 2145e6b9c7ca | bcb4cb880aaa |
+| s13_eventos_duplicados_y_desordenados | 989.0339 | 10.9661 | - | 1 | 0 | 0 | f43ae5f74da3 | 9e3b1d988e5e |
+| s14_ganancia_con_ejecucion_incierta | 1000.0000 | 0.0000 | - | 1 | 0 | 0 | b2f15cebbc61 | a3f8df1b67bd |
+| s15_disputa_de_funding_con_posicion_abierta | 1000.0000 | 0.0000 | - | 1 | 0 | 0 | 896f78e30a63 | 3f2290230f51 |
 
 ## Pérdida planificada frente a realizada (stops)
 
@@ -114,6 +116,14 @@ Cuando las cotizaciones no alcanzan:
 ## Eventos duplicados y fuera de orden
 
 El mismo mercado entregado limpio y sucio (cotizaciones repetidas, antiguas, previas a la entrada, cruzadas, vela del minuto de entrada dos veces, cotización de un minuto ya cubierto por la vela): mismo libro True, misma contabilidad True, un solo cierre True. Ignorados: covered_by_candle, duplicate_entry_minute_candle_ignored, duplicate_or_out_of_order_quote, entry_minute_unresolved, invalid_quote, stop_closed_on_quote.
+
+## Incertidumbre de ejecución y capital utilizable
+
+Un LONG entra a mitad de minuto sin cotizaciones que cubran la ventana y el rango de ese minuto toca el stop; después llega el objetivo. El resultado simulado es **13.7904 USD** y no se altera. La regla anterior habría sumado **13.7904 USD** al capital definitivo; ahora aporta **0 USD** (capital 1000 USD, 13.7904 USD retenidos). Es una dimensión distinta de la del funding: funding completo = True, ejecución sin resolver = True. Avisos de la auditoría: economically_unresolved_execution.
+
+## Disputa de funding con la posición abierta
+
+Un período aceptado y otro contradictorio (cuarentena, nunca aplicado) llegan con la posición abierta; al cerrar, la operación conserva la marca ['funding_conflict'] y los períodos en disputa [[1700035200000, 1700038800000, '0.01']]. Estado del funding: partial (1.90352 USD usados, solo el aceptado).
 
 ## Qué está demostrado y qué sigue siendo hipótesis
 

@@ -41,7 +41,7 @@
    "ledger_hash": "6a9baf73e57278843b2084a83e868a8940eb2a31cb049f05d189d017cfae15c2"
   },
   "s11_funding_contradictorio": {
-   "accounting_digest": "5f9e90127134158b20bb11ea57025d141296dfeafecf6b2f9ee0fd36bda7ec8d",
+   "accounting_digest": "feecb05043ca36510b33099ceac2f76ab0bbdfdefc6cf75b0bbca44224f4501f",
    "ledger_hash": "e7b85b240c27e38a371cd53ad542b84019ec54a67825df86f101ae465278dcbc"
   },
   "s12_reinicio_y_conciliacion": {
@@ -49,8 +49,16 @@
    "ledger_hash": "2246a183e03a4f1dda7f5148e25f731c40352af4b4a744c37babf5a1b7f368a4"
   },
   "s13_eventos_duplicados_y_desordenados": {
-   "accounting_digest": "bcb4cb880aaaa8a38f6e211ef8be203c703c00307c0d766f9e30bff05f65511e",
-   "ledger_hash": "2145e6b9c7ca9b8a766672361e0241d5094095e098dc1289801f73d0e78b4073"
+   "accounting_digest": "9e3b1d988e5e2e0a2ec28c453deded22cf7e93ff3df796fd0a3e55dbe28a4e9d",
+   "ledger_hash": "f43ae5f74da3a2d2a1eb6dc9bf80718cc20a35f716e0e8a9b8675b96d193c734"
+  },
+  "s14_ganancia_con_ejecucion_incierta": {
+   "accounting_digest": "a3f8df1b67bdc277a9ba7c79a23108ca6a1d4be900729b1466b489a97716f635",
+   "ledger_hash": "b2f15cebbc613d0ddd0256df716351a53530d0557a5b23a7c0a4946e3b384eaf"
+  },
+  "s15_disputa_de_funding_con_posicion_abierta": {
+   "accounting_digest": "3f2290230f51622b8ff24bde96f815470771d6ecad97a11ad1c09ef383d1ce61",
+   "ledger_hash": "896f78e30a639ef085ff3cea78a95e3586746fc3466be7b462c434a0e631c8e9"
   }
  },
  "scenarios": [
@@ -2349,12 +2357,40 @@
     }
    ],
    "summary": {
-    "accounting_digest": "5f9e90127134158b20bb11ea57025d141296dfeafecf6b2f9ee0fd36bda7ec8d",
+    "accounting_digest": "feecb05043ca36510b33099ceac2f76ab0bbdfdefc6cf75b0bbca44224f4501f",
     "adjustments": 0,
     "audit": {
      "checks": 9,
      "violations": [],
-     "warnings": []
+     "warnings": [
+      {
+       "periods": [
+        [
+         1700035200000,
+         1700038800000,
+         "0.002"
+        ],
+        [
+         1700035200000,
+         1700038800000,
+         "0.004"
+        ]
+       ],
+       "rule": "funding_disputed",
+       "trade_id": "a7dad7f0ff8bb99b9fc0d2c4"
+      },
+      {
+       "periods": [
+        [
+         1700035200000,
+         1700038800000,
+         "0.01"
+        ]
+       ],
+       "rule": "funding_disputed",
+       "trade_id": "fed07c8f19dc1348591f7e5d"
+      }
+     ]
     },
     "capital_usd": "990.0001",
     "closed_trades": 2,
@@ -2593,7 +2629,7 @@
     ]
    },
    "id": "s13_eventos_duplicados_y_desordenados",
-   "ledger_hash": "2145e6b9c7ca9b8a766672361e0241d5094095e098dc1289801f73d0e78b4073",
+   "ledger_hash": "f43ae5f74da3a2d2a1eb6dc9bf80718cc20a35f716e0e8a9b8675b96d193c734",
    "planned_vs_realized": [
     {
      "basis": "quote_backed",
@@ -2612,12 +2648,19 @@
     }
    ],
    "summary": {
-    "accounting_digest": "bcb4cb880aaaa8a38f6e211ef8be203c703c00307c0d766f9e30bff05f65511e",
+    "accounting_digest": "9e3b1d988e5e2e0a2ec28c453deded22cf7e93ff3df796fd0a3e55dbe28a4e9d",
     "adjustments": 0,
     "audit": {
      "checks": 5,
      "violations": [],
-     "warnings": []
+     "warnings": [
+      {
+       "counted_in_capital_usd": "-10.9661",
+       "rule": "economically_unresolved_execution",
+       "simulated_pnl_usd": "-10.9661",
+       "trade_id": "9ce73a76c3c1addf0cfec6f4"
+      }
+     ]
     },
     "capital_usd": "989.0339",
     "closed_trades": 1,
@@ -2650,6 +2693,183 @@
      "side": "LONG",
      "stop_price": "98000.00",
      "trade_id": "9ce73a76c3c1addf0cfec6f4"
+    }
+   ]
+  },
+  {
+   "facts": {
+    "capital_usd": "1000",
+    "counted_in_capital_usd": "0",
+    "execution_unresolved": true,
+    "funding_complete": true,
+    "held_back_usd": "13.7904",
+    "net_complete": true,
+    "review_flags": [
+     "entry_minute_unresolved"
+    ],
+    "rule_before_this_fix_usd": "13.7904",
+    "simulated_pnl_usd": "13.7904",
+    "warnings": [
+     "economically_unresolved_execution"
+    ]
+   },
+   "id": "s14_ganancia_con_ejecucion_incierta",
+   "ledger_hash": "b2f15cebbc613d0ddd0256df716351a53530d0557a5b23a7c0a4946e3b384eaf",
+   "planned_vs_realized": [
+    {
+     "exit_reason": "target",
+     "net_complete": true,
+     "planned_loss_usd": "9.9999",
+     "pnl_net_usd": "13.7904",
+     "product_id": "PF_XBTUSD",
+     "side": "LONG",
+     "trade_id": "9ce73a76c3c1addf0cfec6f4"
+    }
+   ],
+   "summary": {
+    "accounting_digest": "a3f8df1b67bdc277a9ba7c79a23108ca6a1d4be900729b1466b489a97716f635",
+    "adjustments": 0,
+    "audit": {
+     "checks": 5,
+     "violations": [],
+     "warnings": [
+      {
+       "counted_in_capital_usd": "0",
+       "rule": "economically_unresolved_execution",
+       "simulated_pnl_usd": "13.7904",
+       "trade_id": "9ce73a76c3c1addf0cfec6f4"
+      }
+     ]
+    },
+    "capital_usd": "1000",
+    "closed_trades": 1,
+    "drawdown_usd": "0",
+    "equity_usd": "1013.7904",
+    "open_positions": 0,
+    "provisional_gains_usd": "13.7904",
+    "realized_today_usd": "0",
+    "risk_budget_usd": "10.00",
+    "suspension": {
+     "daily_loss": false,
+     "drawdown": false
+    }
+   },
+   "title": "Ganancia con ejecuci\u00f3n incierta",
+   "trades": [
+    {
+     "entry_price": "100000.600000",
+     "entry_time_ms": 1700049610000,
+     "exit_price": "103000.00",
+     "exit_reason": "target",
+     "exit_time_ms": 1700049720000,
+     "fees_usd": 0.483017,
+     "funding_status": "complete",
+     "funding_usd": 0.0,
+     "net_complete": true,
+     "planned_loss_usd": 9.999908,
+     "pnl_usd": 13.7904,
+     "product_id": "PF_XBTUSD",
+     "side": "LONG",
+     "stop_price": "98000.00",
+     "trade_id": "9ce73a76c3c1addf0cfec6f4"
+    }
+   ]
+  },
+  {
+   "facts": {
+    "conflict": {
+     "accepted": 0,
+     "conflict": 1,
+     "duplicate": 0,
+     "rejected": 0
+    },
+    "disputed_periods": [
+     [
+      1700035200000,
+      1700038800000,
+      "0.01"
+     ]
+    ],
+    "flags_while_open": {},
+    "funding_status": "partial",
+    "funding_used_usd": "1.90352",
+    "quarantine": {
+     "PF_XBTUSD": [
+      [
+       1700035200000,
+       1700038800000,
+       "0.01"
+      ]
+     ]
+    },
+    "review_flags": [
+     "funding_conflict"
+    ]
+   },
+   "id": "s15_disputa_de_funding_con_posicion_abierta",
+   "ledger_hash": "896f78e30a639ef085ff3cea78a95e3586746fc3466be7b462c434a0e631c8e9",
+   "planned_vs_realized": [
+    {
+     "exit_reason": "target",
+     "net_complete": false,
+     "planned_loss_usd": "9.9999",
+     "pnl_net_usd": "2.3741",
+     "product_id": "PF_XBTUSD",
+     "side": "LONG",
+     "trade_id": "fed07c8f19dc1348591f7e5d"
+    }
+   ],
+   "summary": {
+    "accounting_digest": "3f2290230f51622b8ff24bde96f815470771d6ecad97a11ad1c09ef383d1ce61",
+    "adjustments": 0,
+    "audit": {
+     "checks": 5,
+     "violations": [],
+     "warnings": [
+      {
+       "periods": [
+        [
+         1700035200000,
+         1700038800000,
+         "0.01"
+        ]
+       ],
+       "rule": "funding_disputed",
+       "trade_id": "fed07c8f19dc1348591f7e5d"
+      }
+     ]
+    },
+    "capital_usd": "1000",
+    "closed_trades": 1,
+    "drawdown_usd": "0",
+    "equity_usd": "1002.3741",
+    "open_positions": 0,
+    "provisional_gains_usd": "2.3741",
+    "realized_today_usd": "0",
+    "risk_budget_usd": "10.00",
+    "suspension": {
+     "daily_loss": false,
+     "drawdown": false
+    }
+   },
+   "title": "Disputa de funding con la posici\u00f3n abierta",
+   "trades": [
+    {
+     "entry_price": "100000.600000",
+     "entry_time_ms": 1700035200000,
+     "exit_price": "101000.00",
+     "exit_reason": "target",
+     "exit_time_ms": 1700046060000,
+     "fees_usd": 0.478258,
+     "funding_status": "partial",
+     "funding_usd": 1.90352,
+     "net_complete": false,
+     "planned_loss_usd": 9.999908,
+     "pnl_usd": 2.3741,
+     "product_id": "PF_XBTUSD",
+     "side": "LONG",
+     "stop_price": "98000.00",
+     "trade_id": "fed07c8f19dc1348591f7e5d"
     }
    ]
   }
