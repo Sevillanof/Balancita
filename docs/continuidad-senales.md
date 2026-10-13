@@ -6,14 +6,14 @@ Ataca el pendiente de [validación de la cartera offline](validacion-cartera-off
 
 ## Auditoría: qué había y qué se reutiliza
 
-| Pieza existente | Qué aporta | Qué falta para este problema |
-|---|---|---|
-| `multi_signals` (`make_signal`, `validate_signal`, `Strategy`, `SignalContext`) | contrato `balancita-signal.v1`, `signal_id` por contenido | no se guarda como secuencia; `signal_id` incluye la fiabilidad viva |
-| `futures_simulator.frames` / `multi_experiment.FrameFeeder` | características sin mirar el futuro (lote / incremental, igual salida) | — (se reutilizan tal cual: el original sale por el camino incremental, la reconstrucción por el de lote) |
-| `portfolio_offline.Journal` (#122) | JSONL con cadena de hashes y fsync por entrada | se borra al abrir; rechaza entera una cola cortada; es el diario de decisiones, no el de señales |
-| `portfolio_offline` checkpoint | restauración con digest | pickle; el estado de la cartera, no un offset de entrada |
-| `multi_store` / `Experiment.save_checkpoint` | `put_signal` idempotente en SQLite, checkpoint de libros | SQLite (base activa); sin offsets ni detección de huecos |
-| forward (#90) | relleno de huecos de velas y recuperación | no recupera señales de C31/Qwen; no distingue original de reconstruida en señales |
+| Pieza existente                                                                 | Qué aporta                                                             | Qué falta para este problema                                                                             |
+| ------------------------------------------------------------------------------- | ---------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `multi_signals` (`make_signal`, `validate_signal`, `Strategy`, `SignalContext`) | contrato `balancita-signal.v1`, `signal_id` por contenido              | no se guarda como secuencia; `signal_id` incluye la fiabilidad viva                                      |
+| `futures_simulator.frames` / `multi_experiment.FrameFeeder`                     | características sin mirar el futuro (lote / incremental, igual salida) | — (se reutilizan tal cual: el original sale por el camino incremental, la reconstrucción por el de lote) |
+| `portfolio_offline.Journal` (#122)                                              | JSONL con cadena de hashes y fsync por entrada                         | se borra al abrir; rechaza entera una cola cortada; es el diario de decisiones, no el de señales         |
+| `portfolio_offline` checkpoint                                                  | restauración con digest                                                | pickle; el estado de la cartera, no un offset de entrada                                                 |
+| `multi_store` / `Experiment.save_checkpoint`                                    | `put_signal` idempotente en SQLite, checkpoint de libros               | SQLite (base activa); sin offsets ni detección de huecos                                                 |
+| forward (#90)                                                                   | relleno de huecos de velas y recuperación                              | no recupera señales de C31/Qwen; no distingue original de reconstruida en señales                        |
 
 Decisión: JSONL con cadena de hashes y `fsync` por entrada, como #122 (la auditoría no justificó otra cosa). Es un módulo nuevo, no un segundo motor: `signal_continuity.py` solo usa las piezas de arriba.
 
@@ -41,14 +41,14 @@ Decisión: JSONL con cadena de hashes y `fsync` por entrada, como #122 (la audit
 
 Puntos de fallo (`arm`): `before_persist`, `mid_persist` (escritura a medias), `after_persist`, `before_ack`. En la CLI, el proceso muere con `os._exit(137)`, sin limpieza.
 
-| Caída | Resultado verificado |
-|---|---|
-| antes de persistir, sin reenvío | las señales perdidas se reconstruyen (idénticas a la referencia) y **ninguna** abre posición |
-| a mitad de persistir, con reenvío | cola cortada descartada; mismas posiciones abribles que sin caída |
-| después de persistir, con reenvío | ídem, sin duplicar efectos |
-| después de persistir, reinicio tardío | la señal original quedó durable pero vencida (`signal_expired`): no abre posición |
-| antes de confirmar, con reenvío | el handler repite, el efecto no se duplica |
-| eventos perdidos + duplicados | huecos de origen y de ciclos detectados; duplicados descartados |
+| Caída                                 | Resultado verificado                                                                         |
+| ------------------------------------- | -------------------------------------------------------------------------------------------- |
+| antes de persistir, sin reenvío       | las señales perdidas se reconstruyen (idénticas a la referencia) y **ninguna** abre posición |
+| a mitad de persistir, con reenvío     | cola cortada descartada; mismas posiciones abribles que sin caída                            |
+| después de persistir, con reenvío     | ídem, sin duplicar efectos                                                                   |
+| después de persistir, reinicio tardío | la señal original quedó durable pero vencida (`signal_expired`): no abre posición            |
+| antes de confirmar, con reenvío       | el handler repite, el efecto no se duplica                                                   |
+| eventos perdidos + duplicados         | huecos de origen y de ciclos detectados; duplicados descartados                              |
 
 ## Cómo se ejecuta
 
@@ -60,11 +60,12 @@ D=$(mktemp -d)
 PYTHONPATH=python python3 -m balancita_engine.signal_continuity produce --dir $D --stop 100 --crash after_persist:40   # muere con 137
 PYTHONPATH=python python3 -m balancita_engine.signal_continuity recover --dir $D      # restaura, detecta, reconstruye, escribe report.json
 ```
+
 `analisis/continuidad-senales-offline/` (`informe.md`, `resultados.json`) es la salida de la demo; una prueba la regenera y exige que coincida.
 
 ## Limitaciones para la integración futura (decisión de Fran, 2026-10-13)
 
-- **`confirmed_source_offset` no es una confirmación acumulativa.** Es el mayor offset del origen que fue entregado al handler y reconocido, no necesariamente el último offset *contiguo*: si el origen tiene huecos (eventos perdidos), el valor salta por encima de ellos. No debe usarse como ack acumulativo hacia un productor real (que interpretaría «todo hasta N recibido») hasta resolver esa diferencia, por ejemplo con un offset contiguo aparte y la lista explícita de huecos (`source_offset_holes`).
+- **`confirmed_source_offset` no es una confirmación acumulativa.** Es el mayor offset del origen que fue entregado al handler y reconocido, no necesariamente el último offset _contiguo_: si el origen tiene huecos (eventos perdidos), el valor salta por encima de ellos. No debe usarse como ack acumulativo hacia un productor real (que interpretaría «todo hasta N recibido») hasta resolver esa diferencia, por ejemplo con un offset contiguo aparte y la lista explícita de huecos (`source_offset_holes`).
 - **Las reconstrucciones son contrafactuales.** Sirven para auditoría y evaluación contrafactual; nunca son órdenes. `recovered_completely = true` significa únicamente que no quedan ciclos sin señal en el registro; **no** significa que las operaciones perdidas se hayan ejecutado ni que se pudieran haber ejecutado.
 
 ## Límites
