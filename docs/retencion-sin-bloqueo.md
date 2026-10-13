@@ -62,8 +62,7 @@ dependía del lote. Ahora la poda de tickers camina por ventanas de rowid con un
 cursor (`rowid>cursor AND rowid<=cursor+lote`), de modo que cada paso toca como
 máximo `lote` filas. Además los límites (bisección) se reutilizan 5 s y se corrigió
 que la última fila quedara sin borrar cuando todas estaban vencidas. En la copia,
-un prototipo equivalente dio pasos de p50 2,5 ms y máximo 6,5 ms (pendiente de
-confirmar con este código sobre la copia).
+un prototipo equivalente dio pasos de p50 2,5 ms y máximo 6,5 ms.
 
 Segunda medición (commit 19dd808, copia real): pasos típicos de 2 ms, pero el primero
 de cada ciclo tardaba 180–430 ms porque `bound()` pedía `MIN(rowid), MAX(rowid)` en la
@@ -73,3 +72,27 @@ cursor salta los rowids vacíos (el hueco de 2,2 millones de rowids borrados) co
 consulta O(log n) en lugar de recorrerlos en ventanas. El modo `legacy` conserva su
 tope de 20 lotes, de modo que sobre una base fría puede tardar varias llamadas en
 llegar a los tickers (el cursor persiste entre llamadas).
+
+## Resultados finales sobre la copia real (commit 73739c4)
+
+Instantánea consistente (`VACUUM INTO`, 3,5 GB, 1,10 millones de eventos), copias
+idénticas por modo, shift de 2 min:
+
+| | Resultado |
+|---|---|
+| Paso más largo en régimen estacionario | 16–29 ms |
+| Arranque en frío (~900 pasos, un ciclo) | p50 5 ms, p99 47 ms, un paso de 102 ms |
+| Con ingesta concurrente (12 tickers/s + 4 trades/s) | p99 26 ms, máximo 82 ms, bloqueo máx. del monitor 83 ms |
+| Latencia de append durante la poda | p50 0,26 ms, máx. 11 ms |
+| Retención frente a entrada | 351–413 filas por ciclo de 2 min más recorte, frente a ~418 de entrada real |
+| Integridad | `quick_check` ok, triggers restaurados, velas, funding y analítica sin cambios |
+| `legacy` hasta done desde un proceso nuevo | 45 llamadas, paso más largo 293 ms |
+
+Límites: el banco no reproduce los silencios reales de 7–47 s (en la copia el
+modo legacy bloquea ~1 s), así que la magnitud en vivo debe confirmarse con
+`retention.jsonl`, `eventloop.jsonl` y `resilience.jsonl`. Que la eliminación por
+ciclo quede ligeramente por debajo de la entrada no prueba acumulación (no todos
+los eventos nuevos están vencidos): hay que comprobar en vivo que el trabajo
+pendiente y el tamaño de la base se estabilizan. La copia no tenía el WAL ni la
+fragmentación de la base viva. `caffeinate -s` está verificado enchufado; no con
+batería ni con el equipo desatendido.
