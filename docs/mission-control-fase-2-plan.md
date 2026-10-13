@@ -1,6 +1,6 @@
 # Mission Control, Fase 2: Terminal (plan detallado)
 
-Estado: plan, sin código. Parte de `docs/mission-control-viabilidad.md` (§0.1 y Fase 2) y del
+Estado: plan aprobado por Fran el 2026-10-13 con los ajustes de §6; sin código. Parte de `docs/mission-control-viabilidad.md` (§0.1 y Fase 2) y del
 estado de `main` tras la Fase 1 (#132). Solo front: sin cambios en `server/`, `python/`, estrategias,
 contabilidad ni comportamiento del trader. Los backend B1-B6 no entran aquí.
 
@@ -91,8 +91,11 @@ testids. Sin tocar estilos más que lo necesario.
 que recibe origen y `known_at` ya existentes en los datos y los muestra; «No disponible» donde no existan.
 Se etiquetan como «Histórico» el equity, las posiciones y las órdenes de un run cerrado o del libro D, y
 la posición actual pasa a «No disponible» cuando la fuente no se puede verificar (mientras no exista
-forward vía B5). Test dedicado: datos del libro D o de un run anterior nunca se renderizan como actuales,
-y un producto/periodo distinto al seleccionado no filtra decisiones. **Decisión pendiente de Fran** (§6).
+forward vía B5). Criterios de aceptación: (a) datos del libro D o de un run anterior nunca se renderizan como actuales;
+(b) las decisiones de otros productos o períodos no contaminan el gráfico seleccionado: marcadores,
+líneas de entrada/stop/objetivo y selección se filtran por producto y ventana visibles, con test que
+mezcla decisiones de dos productos y de períodos distintos y comprueba que el gráfico solo recibe las
+del seleccionado; (c) ningún estado ni timestamp que el backend no proporcione.
 
 **2.5. Reorganización visual de la Terminal según Stitch.** Mayor protagonismo del gráfico y nueva
 disposición de los bloques; solo CSS y composición con los componentes del 2.3. Capturas antes/después
@@ -105,16 +108,26 @@ los datos mostrados, y sin explicaciones que no salgan de un campo real.
 **2.7. Selección gráfico↔historial.** Verificar que la selección por marcador y por fila ya sincroniza
 (`onSelect`, `selectedId`) y cerrar solo los huecos, con tests.
 
-Los PR 2.2 y 2.3 se pueden preparar en paralelo tras 2.1; 2.4 en adelante van en serie.
+Todos los PR van en serie. 2.2 y 2.3 se ejecutan de forma secuencial (ambos tocan `FuturesTerminal.tsx`): 2.3 parte de `main` con 2.2 ya integrado.
 
-## 6. Decisiones que necesito de Fran antes de 2.4
+## 6. Decisiones de Fran (2026-10-13), vinculantes para 2.4 y 2.3
 
-1. **Qué cuenta como posición «actual» mientras no exista el endpoint forward (B5).** Propuesta: la
-   posición y la cuenta del gateway se muestran siempre con la etiqueta de su origen («Run <id> · libro
-   paper del gateway · <known_at>»), nunca como «posición abierta del experimento», y el bloque «Posición
-   actual» queda «No disponible». ¿Va así o prefiere ocultar el bloque por completo hasta B5?
-2. **Controles simulados (pausar, nueva cuenta/run).** Actúan sobre el run del gateway, no sobre los
-   experimentos forward. Propuesta: se conservan tal cual, con una nota que lo aclare. ¿Conforme?
+1. **Posiciones y cuenta paper.** Se conserva la información del gateway, con origen, run y
+   antigüedad bien identificados. Los datos del libro D retirado se muestran como históricos, nunca
+   como posiciones actuales. Mientras no exista B5, el bloque de posiciones actuales dice «No
+   disponible» si no hay fuente verificable. La información antigua no se oculta: pasa a un apartado
+   secundario de historial o diagnóstico. No se inventan estados ni timestamps que el backend no da.
+2. **Controles simulados.** Misma funcionalidad, confirmaciones y restricciones, pero en una sección
+   secundaria llamada «Herramientas de simulación». Identifican claramente el run sobre el que actúan,
+   no controlan experimentos forward y no se presentan como controles generales del trader. Los
+   textos de los botones y regiones que usan los tests solo cambian en el PR que migra esos tests (2.3
+   o 2.5, según dónde se mueva la sección) y se declara en su descripción.
+3. **Implementación.** Se conservan los siete PR; 2.2 y 2.3 en secuencia; criterio de 2.4 corregido
+   como arriba.
+4. **2.1.** Primero verificar qué casos ya están cubiertos y no duplicar; PR pequeño solo de tests, sin
+   tocar código de producción. Sin merge automático y sin avanzar a 2.2 hasta que Fran revise 2.1.
+
+Prioridad absoluta: preservar el funcionamiento actual del trader.
 
 ## 7. Riesgos y mitigación
 
