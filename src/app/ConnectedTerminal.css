@@ -447,13 +447,13 @@
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
-  gap: 6px 20px;
-  margin: 0 0 14px;
+  gap: 2px 16px;
+  margin: 0 0 8px;
 }
 
 .connected-terminal__strip h1 {
   margin: 0;
-  font-size: 22px;
+  font-size: 18px;
   font-weight: 600;
 }
 
@@ -473,7 +473,7 @@
 
 .connected-terminal__price {
   font-family: 'IBM Plex Mono', ui-monospace, monospace;
-  font-size: 22px;
+  font-size: 18px;
   font-weight: 600;
 }
 
@@ -584,4 +584,16 @@
 }
 .connected-terminal__side .obs-activity {
   margin-bottom: 0;
+}
+.connected-terminal__decisions--embedded {
+  height: auto;
+  max-height: none;
+  overflow: visible;
+}
+.obs-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
 }

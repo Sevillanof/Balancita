@@ -46,16 +46,16 @@
   inset: 0;
   z-index: 50;
   display: flex;
-  align-items: flex-start;
-  justify-content: flex-end;
-  padding: 64px 24px 24px;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
   background: rgb(8 10 15 / 70%);
 }
 .obs-inspector {
   display: flex;
   flex-direction: column;
-  width: min(860px, 100%);
-  max-height: calc(100vh - 88px);
+  width: min(760px, 100%);
+  max-height: calc(100vh - 48px);
   border: 1px solid var(--mc-border-strong);
   border-radius: var(--mc-radius-lg);
   color: var(--mc-text);
@@ -217,28 +217,77 @@
   padding-left: 18px;
 }
 
-/* Activity panel (right column of the Terminal) */
-.obs-activity {
+/* Observer panel (the one right-hand column of the Terminal) */
+.obs-observer {
   display: flex;
   flex-direction: column;
-  margin-bottom: 1rem;
+  height: calc(var(--terminal-chart-height, 560px) + 60px);
+  min-height: 560px;
 }
-.obs-activity__head {
+@media (min-width: 901px) {
+  /* One column as tall as the screen: it keeps AHORA and ACTIVIDAD in view
+     and scrolls RESULTADOS and HISTORIAL inside, not the whole page. */
+  .obs-observer {
+    position: sticky;
+    top: 8px;
+    align-self: start;
+    height: calc(100vh - 160px);
+    min-height: 480px;
+  }
+}
+.obs-observer__head {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--mc-space-sm);
+  padding: var(--mc-space-sm) var(--mc-space-md);
+  border-bottom: 1px solid var(--mc-border);
+}
+.obs-observer__head h2 {
+  margin: 0;
+  font-size: 0.95rem;
+}
+.obs-now {
+  flex: none;
+  padding: var(--mc-space-md);
+  border-bottom: 1px solid var(--mc-border-strong);
+  background: var(--mc-surface-2);
+}
+.obs-now .obs-card__label {
+  color: var(--mc-warn);
+}
+.obs-facts {
+  display: grid;
+  gap: var(--mc-space-xs);
+  margin: var(--mc-space-sm) 0 0;
+  font-size: 12px;
+}
+.obs-facts > div {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--mc-space-sm);
-  padding: var(--mc-space-md);
-  border-bottom: 1px solid var(--mc-border);
 }
-.obs-activity__head h2 {
+.obs-facts dt {
+  color: var(--mc-text-2);
+}
+.obs-facts dd {
   margin: 0;
-  font-size: 1rem;
+  text-align: right;
 }
-.obs-activity__body {
+.obs-observer__body {
   display: grid;
+  flex: 1 1 auto;
+  align-content: start;
   gap: var(--mc-space-sm);
+  min-height: 0;
   padding: var(--mc-space-md);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.obs-history .connected-terminal__decision-list {
+  max-height: 260px;
 }
 .obs-seg {
   display: inline-flex;
@@ -346,6 +395,11 @@
 .obs-exps span {
   color: var(--mc-text-2);
   text-align: right;
+}
+.obs-exps small {
+  display: block;
+  color: var(--mc-text-3);
+  font-size: 11px;
 }
 .obs-details--panel {
   margin: 0;

@@ -21,6 +21,7 @@ export type ReportState<T> = {
  */
 export function useReport<T>(
   load: (signal: AbortSignal) => Promise<T>,
+  enabled = true,
 ): ReportState<T> {
   const [data, setData] = useState<T | null>(null)
   const [receivedAt, setReceivedAt] = useState<number | null>(null)
@@ -30,6 +31,7 @@ export function useReport<T>(
   const controller = useRef<AbortController | null>(null)
 
   useEffect(() => {
+    if (!enabled) return
     let active = true
     const run = () => {
       controller.current?.abort()
@@ -60,7 +62,7 @@ export function useReport<T>(
       clearInterval(timer)
       controller.current?.abort()
     }
-  }, [load, tick])
+  }, [load, tick, enabled])
 
   const reload = useCallback(() => setTick((n) => n + 1), [])
   return { data, receivedAt, loading, error, reload }

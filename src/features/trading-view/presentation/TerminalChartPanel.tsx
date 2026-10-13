@@ -442,28 +442,6 @@ export default function TerminalChartPanel({
           </dd>
         </div>
         <div>
-          <dt>Máx / mín 24 h</dt>
-          <dd>
-            {usd(stats?.high_24h, 0)} / {usd(stats?.low_24h, 0)}
-          </dd>
-        </div>
-        <div>
-          <dt>Volumen 24 h</dt>
-          <dd>
-            {amount(stats?.volume_24h_base, 1)} {productBase(product)} ·{' '}
-            {compactUsd(stats?.volume_24h_quote)}
-          </dd>
-        </div>
-        <div>
-          <dt>Interés abierto</dt>
-          <dd>
-            {amount(stats?.open_interest, 1)} {productBase(product)}
-            {stats?.open_interest != null && stats.mark != null
-              ? ` · ${compactUsd(stats.open_interest * stats.mark)}`
-              : ''}
-          </dd>
-        </div>
-        <div>
           <dt>Funding (por hora)</dt>
           <dd>
             {stats?.relative_funding_rate == null
@@ -478,12 +456,6 @@ export default function TerminalChartPanel({
           </dd>
         </div>
         <div>
-          <dt>Mark / índice</dt>
-          <dd>
-            {usd(stats?.mark)} / {usd(stats?.index)}
-          </dd>
-        </div>
-        <div>
           <dt>Bid / ask</dt>
           <dd>
             {usd(stats?.bid, 0)} ({amount(stats?.bid_size, 3)}) /{' '}
@@ -492,22 +464,12 @@ export default function TerminalChartPanel({
           </dd>
         </div>
         <div>
-          <dt>Profundidad ±0,1 %</dt>
+          <dt>Interés abierto</dt>
           <dd>
-            {depth
-              ? `${amount(depth.bid, 1)} / ${amount(depth.ask, 1)} ${productBase(product)}`
-              : '—'}
-          </dd>
-        </div>
-        <div>
-          <dt>Cuentas en largo</dt>
-          <dd>
-            {latestFlow?.long_percent == null
-              ? '—'
-              : `${amount(latestFlow.long_percent, 1)} %`}
-            {latestFlow?.top_long_percent == null
-              ? ''
-              : ` · top 20 %: ${amount(latestFlow.top_long_percent, 1)} %`}
+            {amount(stats?.open_interest, 1)} {productBase(product)}
+            {stats?.open_interest != null && stats.mark != null
+              ? ` · ${compactUsd(stats.open_interest * stats.mark)}`
+              : ''}
           </dd>
         </div>
       </dl>
@@ -531,48 +493,99 @@ export default function TerminalChartPanel({
             </button>
           ))}
         </div>
-        <fieldset className="terminal-chart__toggles">
-          <legend>Indicadores</legend>
-          {OVERLAYS.map((item) => (
-            <label key={item.id}>
-              <input
-                type="checkbox"
-                checked={settings.overlays.includes(item.id)}
-                onChange={() =>
-                  setSettings((value) => ({
-                    ...value,
-                    overlays: toggle(value.overlays, item.id),
-                  }))
-                }
-              />
-              <span
-                className="terminal-chart__swatch"
-                style={{ background: item.color }}
-                aria-hidden="true"
-              />
-              {item.label}
-            </label>
-          ))}
-        </fieldset>
-        <fieldset className="terminal-chart__toggles">
-          <legend>Paneles</legend>
-          {PANES.map((item) => (
-            <label key={item.id}>
-              <input
-                type="checkbox"
-                checked={settings.panes.includes(item.id)}
-                disabled={item.live && !live}
-                onChange={() =>
-                  setSettings((value) => ({
-                    ...value,
-                    panes: toggle(value.panes, item.id),
-                  }))
-                }
-              />
-              {item.label}
-            </label>
-          ))}
-        </fieldset>
+        <details className="terminal-chart__tools">
+          <summary>Indicadores y paneles</summary>
+          <div className="terminal-chart__tools-body">
+            <fieldset className="terminal-chart__toggles">
+              <legend>Indicadores</legend>
+              {OVERLAYS.map((item) => (
+                <label key={item.id}>
+                  <input
+                    type="checkbox"
+                    checked={settings.overlays.includes(item.id)}
+                    onChange={() =>
+                      setSettings((value) => ({
+                        ...value,
+                        overlays: toggle(value.overlays, item.id),
+                      }))
+                    }
+                  />
+                  <span
+                    className="terminal-chart__swatch"
+                    style={{ background: item.color }}
+                    aria-hidden="true"
+                  />
+                  {item.label}
+                </label>
+              ))}
+            </fieldset>
+            <fieldset className="terminal-chart__toggles">
+              <legend>Paneles</legend>
+              {PANES.map((item) => (
+                <label key={item.id}>
+                  <input
+                    type="checkbox"
+                    checked={settings.panes.includes(item.id)}
+                    disabled={item.live && !live}
+                    onChange={() =>
+                      setSettings((value) => ({
+                        ...value,
+                        panes: toggle(value.panes, item.id),
+                      }))
+                    }
+                  />
+                  {item.label}
+                </label>
+              ))}
+            </fieldset>
+          </div>
+        </details>
+        <details className="terminal-chart__more">
+          <summary>Más datos del mercado</summary>
+          <dl
+            className="terminal-chart__stats"
+            aria-label="Más datos del mercado"
+          >
+            <div>
+              <dt>Máx / mín 24 h</dt>
+              <dd>
+                {usd(stats?.high_24h, 0)} / {usd(stats?.low_24h, 0)}
+              </dd>
+            </div>
+            <div>
+              <dt>Volumen 24 h</dt>
+              <dd>
+                {amount(stats?.volume_24h_base, 1)} {productBase(product)} ·{' '}
+                {compactUsd(stats?.volume_24h_quote)}
+              </dd>
+            </div>
+            <div>
+              <dt>Mark / índice</dt>
+              <dd>
+                {usd(stats?.mark)} / {usd(stats?.index)}
+              </dd>
+            </div>
+            <div>
+              <dt>Profundidad ±0,1 %</dt>
+              <dd>
+                {depth
+                  ? `${amount(depth.bid, 1)} / ${amount(depth.ask, 1)} ${productBase(product)}`
+                  : '—'}
+              </dd>
+            </div>
+            <div>
+              <dt>Cuentas en largo</dt>
+              <dd>
+                {latestFlow?.long_percent == null
+                  ? '—'
+                  : `${amount(latestFlow.long_percent, 1)} %`}
+                {latestFlow?.top_long_percent == null
+                  ? ''
+                  : ` · top 20 %: ${amount(latestFlow.top_long_percent, 1)} %`}
+              </dd>
+            </div>
+          </dl>
+        </details>
       </div>
       {!live && (
         <p className="terminal-chart__note">

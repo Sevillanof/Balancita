@@ -2,11 +2,9 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import './observability.css'
 import { StatusPill, DataState } from '../../../shared/mission-control/index.ts'
 import {
-  fetchHealth,
   type HealthComponent,
   type HealthReport,
 } from '../infrastructure/observability-api.ts'
-import { useReport } from '../infrastructure/useReport.ts'
 import { LABEL, TONE, componentOrder } from './health-view.ts'
 import { momentLabel } from './format.ts'
 
@@ -197,14 +195,14 @@ function Inspector({
   )
 }
 
+export type HealthRead = { data: HealthReport | null; error: string | null }
+
 /**
  * Header control: the global health read of B1 at a glance, with the
  * inspector behind it. Without a read it says «Salud: sin datos», never
  * healthy.
  */
-export default function HealthIndicator() {
-  const load = useCallback((signal: AbortSignal) => fetchHealth(signal), [])
-  const { data, error } = useReport(load)
+export default function HealthIndicator({ data, error }: HealthRead) {
   const [open, setOpen] = useState(false)
   const close = useCallback(() => setOpen(false), [])
   let tone: keyof typeof LABEL | 'none' = 'none'

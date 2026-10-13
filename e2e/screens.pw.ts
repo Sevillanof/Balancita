@@ -319,6 +319,8 @@ test('terminal chart with two sub-panes takes the available height', async ({
   await page.goto('/terminal')
   const chart = page.getByTestId('approved-chart-renderer')
   await expect(chart).toBeVisible()
+  // The indicator and pane controls are folded behind one line.
+  await page.getByText('Indicadores y paneles').click()
   await expect(
     page.getByRole('checkbox', { name: 'Compra/venta' }),
   ).toBeChecked()
@@ -328,7 +330,7 @@ test('terminal chart with two sub-panes takes the available height', async ({
   const { width, height } = page.viewportSize()!
   const base =
     width >= 1200
-      ? Math.min(820, Math.max(560, height * 0.7))
+      ? Math.min(840, Math.max(520, height - 270))
       : width >= 901
         ? 500
         : 440

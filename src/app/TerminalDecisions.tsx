@@ -11,6 +11,7 @@ export default function TerminalDecisions({
   notice,
   selected,
   children,
+  embedded = false,
 }: {
   rows: DecisionRow[]
   selectedId: string
@@ -21,6 +22,8 @@ export default function TerminalDecisions({
   selected?: ReactNode
   /** Extra detail below the strip (durable effects of the selection). */
   children?: ReactNode
+  /** Inside the observer panel: no frame of its own, «Historial» heading. */
+  embedded?: boolean
 }) {
   const [filter, setFilter] = useState<Filter>('all')
   const list = useRef<HTMLUListElement>(null)
@@ -47,11 +50,19 @@ export default function TerminalDecisions({
   const items = groupDecisions(visible)
   return (
     <section
-      className="demo-terminal__panel connected-terminal__decisions"
+      className={
+        embedded
+          ? 'connected-terminal__decisions connected-terminal__decisions--embedded'
+          : 'demo-terminal__panel connected-terminal__decisions'
+      }
       aria-label="Decisiones del motor"
     >
       <div className="connected-terminal__decisions-head">
-        <h2>Decisiones del motor</h2>
+        {embedded ? (
+          <h3 className="obs-sr">Decisiones del motor</h3>
+        ) : (
+          <h2>Decisiones del motor</h2>
+        )}
         {!notice && rows.length > 0 && (
           <div role="group" aria-label="Filtro de decisiones">
             {(

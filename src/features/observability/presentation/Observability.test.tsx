@@ -7,8 +7,9 @@ import healthHealthy from '../../../../docs/mission-control/b1/ejemplo-saludable
 import activityBusy from '../../../../docs/mission-control/b2/ejemplo-con-actividad.json'
 import activityNoData from '../../../../docs/mission-control/b2/ejemplo-sin-datos.json'
 import activityQuiet from '../../../../docs/mission-control/b2/ejemplo-sin-actividad.json'
-import ActivityPanel from './ActivityPanel.tsx'
 import HealthIndicator from './HealthIndicator.tsx'
+import { useHealth } from './useHealth.ts'
+import ObserverPanel from './ObserverPanel.tsx'
 
 /**
  * The fixtures are the documented examples the backend tests generate from its
@@ -45,10 +46,32 @@ function serve(routes: {
 
 afterEach(() => vi.unstubAllGlobals())
 
+/** The indicator as the Terminal mounts it: fed by the shared B1 read. */
+function Indicator() {
+  const health = useHealth()
+  return <HealthIndicator data={health.data} error={health.error} />
+}
+
+/** The observer panel with its own B1 read, as the Terminal gives it. */
+function Observer({
+  product = 'PF_XBTUSD',
+  children,
+}: {
+  product?: string | null
+  children?: React.ReactNode
+}) {
+  const health = useHealth()
+  return (
+    <ObserverPanel product={product} health={health}>
+      {children}
+    </ObserverPanel>
+  )
+}
+
 describe('HealthIndicator (header)', () => {
   it('is never «correcta» while a component is unverified', async () => {
     serve({ health: () => json(healthHealthy) })
-    render(<HealthIndicator />)
+    render(<Indicator />)
     const button = await screen.findByTestId('health-indicator')
     await waitFor(() => expect(button).toHaveTextContent('1 sin verificar'))
     expect(button).toHaveTextContent('5/6')
@@ -58,7 +81,7 @@ describe('HealthIndicator (header)', () => {
 
   it('says «sin datos» when the gateway does not answer, never healthy', async () => {
     serve({ health: () => json({}, 503) })
-    render(<HealthIndicator />)
+    render(<Indicator />)
     const button = screen.getByTestId('health-indicator')
     await waitFor(() => expect(button).toHaveAttribute('title'))
     expect(button).toHaveTextContent('Salud: sin datos')
@@ -71,7 +94,7 @@ describe('HealthIndicator (header)', () => {
 
   it('opens the inspector with problems first and the technical detail folded', async () => {
     serve({ health: () => json(healthDegraded) })
-    render(<HealthIndicator />)
+    render(<Indicator />)
     const button = await screen.findByTestId('health-indicator')
     await waitFor(() => expect(button).toHaveTextContent('5 con problemas'))
     await userEvent.click(button)
@@ -99,7 +122,7 @@ describe('HealthIndicator (header)', () => {
 
   it('shows every limitation the backend lists inside the folded detail', async () => {
     serve({ health: () => json(healthHealthy) })
-    render(<HealthIndicator />)
+    render(<Indicator />)
     await userEvent.click(await screen.findByTestId('health-indicator'))
     await screen.findByTestId('health-risk')
     for (const component of healthHealthy.components)
@@ -113,7 +136,7 @@ describe('HealthIndicator (header)', () => {
 
   it('closes with Escape and with the close button', async () => {
     serve({ health: () => json(healthHealthy) })
-    render(<HealthIndicator />)
+    render(<Indicator />)
     await userEvent.click(await screen.findByTestId('health-indicator'))
     await screen.findByRole('dialog')
     await userEvent.keyboard('{Escape}')
@@ -130,7 +153,7 @@ describe('HealthIndicator (header)', () => {
     })
     vi.useFakeTimers({ shouldAdvanceTime: true })
     try {
-      render(<HealthIndicator />)
+      render(<Indicator />)
       const button = await screen.findByTestId('health-indicator')
       await waitFor(() => expect(button).toHaveTextContent('5 con problemas'))
       fail = true
@@ -143,19 +166,41 @@ describe('HealthIndicator (header)', () => {
   })
 })
 
-describe('ActivityPanel (right column)', () => {
+describe('ObserverPanel (right column)', () => {
   const quiet = () => json(activityQuiet)
 
-  it('does not present a quiet window as a failure', async () => {
+  it('never deduces the last decision from an aggregate', async () => {
     serve({ activity: quiet })
-    render(<ActivityPanel product="PF_XBTUSD" />)
-    expect(await screen.findByTestId('engine-state')).toHaveTextContent(
-      'Esperando: sin señales en la ventana',
+    render(<Observer />)
+    const now = await screen.findByTestId('observer-now')
+    expect(screen.getByTestId('last-decision')).toHaveTextContent(
+      'Última decisión: No disponible',
     )
-    expect(screen.getByTestId('stored-total')).toHaveTextContent('0')
+    // No «Esperando» just because there are no directional proposals.
+    expect(screen.queryByText(/Esperando/)).toBeNull()
+    expect(now).toHaveTextContent('Fuente de decisiones (B1)')
     expect(screen.queryByText('Error')).toBeNull()
+  })
+
+  it('shows what B1 says about the decisions source, apart from the trading figures', async () => {
+    serve({ health: () => json(healthDegraded), activity: quiet })
+    render(<Observer />)
+    const now = await screen.findByTestId('observer-now')
+    await waitFor(() => expect(now).toHaveTextContent('Error'))
+    expect(screen.getByTestId('last-decision')).toHaveTextContent(
+      'No disponible',
+    )
+  })
+
+  it('separates evaluations, proposals and stored operations', async () => {
+    serve({ activity: quiet })
+    render(<Observer />)
+    await screen.findByTestId('activity-discards')
+    expect(screen.getByText('Evaluaciones')).toBeInTheDocument()
+    expect(screen.getByText('Propuestas direccionales')).toBeInTheDocument()
+    expect(screen.getByTestId('stored-total')).toHaveTextContent('0')
     expect(
-      screen.getByText(/Una señal no es una operación/),
+      screen.getByText(/Una propuesta no es una operación/),
     ).toBeInTheDocument()
     expect(
       screen.getByText(/Posiciones actuales: No disponible/),
@@ -164,10 +209,14 @@ describe('ActivityPanel (right column)', () => {
 
   it('reads this product and the 3 h window, and asks 24 h on demand', async () => {
     const calls = serve({ activity: quiet })
-    render(<ActivityPanel product="PF_XBTUSD" />)
-    await screen.findByTestId('engine-state')
-    expect(calls.at(-1)).toContain('window=3h')
-    expect(calls.at(-1)).toContain('product=PF_XBTUSD')
+    render(<Observer />)
+    await screen.findByTestId('activity-discards')
+    expect(calls.filter((c) => c.includes('/activity')).at(-1)).toContain(
+      'window=3h',
+    )
+    expect(calls.filter((c) => c.includes('/activity')).at(-1)).toContain(
+      'product=PF_XBTUSD',
+    )
     const q = clone(activityQuiet) as any
     q.window = '24h'
     serve({ activity: () => json(q) })
@@ -182,25 +231,23 @@ describe('ActivityPanel (right column)', () => {
 
   it('lists the reasons as the engine wrote them, counts included', async () => {
     serve({ activity: quiet })
-    render(<ActivityPanel product="PF_XBTUSD" />)
+    render(<Observer />)
     const list = await screen.findByTestId('activity-discards')
     const first = activityQuiet.discards.by_reason[0] as any
     expect(within(list).getByText(first.reason_code)).toBeInTheDocument()
     expect(list).toHaveTextContent(`${first.count}×`)
   })
 
-  it('counts stored operations, not signals, and does not call a record a position', async () => {
+  it('gives each experiment its own cycle, never one timestamp for all', async () => {
     const busy = clone(activityBusy) as any
     busy.product = 'PF_XBTUSD'
     serve({ activity: () => json(busy) })
-    render(<ActivityPanel product="PF_XBTUSD" />)
-    await screen.findByTestId('engine-state')
-    // The example has 1 stored operation (C29) and 1 signal: they are separate.
+    render(<Observer />)
+    const exps = await screen.findByTestId('activity-experiments')
     expect(screen.getByTestId('stored-total')).toHaveTextContent('1')
-    expect(screen.getByTestId('engine-state')).toHaveTextContent('1 señal')
-    const exps = screen.getByTestId('activity-experiments')
-    expect(exps).toHaveTextContent('C29')
-    expect(exps).toHaveTextContent('C30')
+    for (const id of ['C29', 'C30']) expect(exps).toHaveTextContent(id)
+    expect(within(exps).getAllByText(/Último ciclo propio/)).toHaveLength(2)
+    expect(screen.queryByText(/Último ciclo del forward/)).toBeNull()
     expect(screen.queryByText(/posición abierta/i)).toBeNull()
   })
 
@@ -209,27 +256,30 @@ describe('ActivityPanel (right column)', () => {
     down.window = '3h'
     down.product = 'PF_XBTUSD'
     serve({ activity: () => json(down) })
-    render(<ActivityPanel product="PF_XBTUSD" />)
-    expect(
-      await screen.findByText('Sin lectura de veredictos.'),
-    ).toBeInTheDocument()
-    expect(screen.getByTestId('stored-total')).toHaveTextContent('Sin datos')
+    render(<Observer />)
+    expect(await screen.findByTestId('stored-total')).toHaveTextContent(
+      'Sin datos',
+    )
     expect(screen.getAllByText('No disponible').length).toBeGreaterThan(0)
   })
 
   it('shows an error and no earlier value as current when the read fails', async () => {
     serve({ activity: () => json({}, 503) })
-    render(<ActivityPanel product="PF_XBTUSD" />)
+    render(<Observer />)
     expect(
       await screen.findByText('No se pudo leer la actividad'),
     ).toBeInTheDocument()
-    expect(screen.queryByTestId('engine-state')).toBeNull()
+    expect(screen.queryByTestId('activity-discards')).toBeNull()
   })
 
-  it('leaves the timeline as «Requiere B3» instead of filling it', async () => {
+  it('keeps the terminal decisions list inside it as the history', async () => {
     serve({ activity: quiet })
-    render(<ActivityPanel product="PF_XBTUSD" />)
-    await screen.findByTestId('engine-state')
-    expect(screen.getByText('Requiere B3')).toBeInTheDocument()
+    render(
+      <Observer>
+        <p>lista de decisiones del terminal</p>
+      </Observer>,
+    )
+    const history = await screen.findByRole('region', { name: 'Historial' })
+    expect(history).toHaveTextContent('lista de decisiones del terminal')
   })
 })

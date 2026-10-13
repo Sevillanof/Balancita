@@ -155,3 +155,72 @@
     white-space: nowrap;
   }
 }
+
+/* Mission Control 3.3: the chart is the protagonist. The four figures that
+   frame a decision sit in one strip; the rest of the same data and the
+   indicator and panel controls fold behind one line each. Nothing removed. */
+.terminal-chart {
+  gap: 0.4rem;
+}
+@media (min-width: 901px) {
+  .terminal-chart__stats {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    padding: 0.5rem 0.75rem 0;
+  }
+  .terminal-chart__stats > div {
+    flex: 1 1 11rem;
+    padding: 0.3rem 0.6rem;
+  }
+}
+.terminal-chart__more,
+.terminal-chart__tools {
+  font-size: 0.78rem;
+}
+.terminal-chart__more {
+  position: relative;
+}
+.terminal-chart__more > summary,
+.terminal-chart__tools > summary {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  padding: 0 0.7rem;
+  border: 1px solid var(--demo-border);
+  border-radius: 8px;
+  color: var(--demo-muted);
+  cursor: pointer;
+}
+.terminal-chart__more[open] > .terminal-chart__stats {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 4px);
+  left: 0;
+  width: min(46rem, 80vw);
+  padding: 0.6rem;
+  border: 1px solid var(--demo-border);
+  border-radius: 0.5rem;
+  background: var(--demo-card);
+  box-shadow: 0 8px 24px -4px rgb(0 0 0 / 60%);
+}
+.terminal-chart__tools {
+  position: relative;
+}
+.terminal-chart__tools-body {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 4px);
+  left: 0;
+  display: grid;
+  gap: 0.5rem;
+  min-width: 22rem;
+  padding: 0.75rem;
+  border: 1px solid var(--demo-border);
+  border-radius: 0.5rem;
+  background: var(--demo-card);
+  box-shadow: 0 8px 24px -4px rgb(0 0 0 / 60%);
+}
+.terminal-chart__legend {
+  padding-top: 0;
+}

@@ -124,7 +124,26 @@ async function shot(page: Page, name: string) {
   })
 }
 
-test('terminal shows health in the header and the engine activity beside the chart', async ({
+/** Desktop layout contract: big chart, AHORA visible without scrolling. */
+async function expectChartProtagonist(page: Page) {
+  const viewport = page.viewportSize()!
+  if (viewport.width <= 900) return
+  const chart = await page
+    .getByRole('region', { name: /Gráfico/ })
+    .boundingBox()
+  const side = await page.getByTestId('activity-panel').boundingBox()
+  expect(chart!.width).toBeGreaterThan(side!.width * 1.8)
+  // Large useful area: the chart is not pushed down by rows of cards.
+  expect(chart!.y).toBeLessThan(viewport.height * 0.35)
+  const canvas = await page.locator('canvas').first().boundingBox()
+  expect(canvas!.height).toBeGreaterThanOrEqual(viewport.height * 0.5)
+  // AHORA is inside the first screen.
+  const now = await page.getByTestId('observer-now').boundingBox()
+  expect(now!.y + now!.height).toBeLessThanOrEqual(viewport.height)
+  expect(now!.y).toBeGreaterThanOrEqual(0)
+}
+
+test('waiting state: health in the header, one observer column, chart protagonist', async ({
   page,
 }) => {
   const quiet = example('b2/ejemplo-sin-actividad.json')
@@ -132,26 +151,54 @@ test('terminal shows health in the header and the engine activity beside the cha
   await expect(page.getByTestId('health-indicator')).toContainText(
     '5 con problemas',
   )
-  await expect(page.getByTestId('engine-state')).toContainText(
-    'Esperando: sin señales en la ventana',
+  // No source gives the last decision: it is not deduced from the totals.
+  await expect(page.getByTestId('last-decision')).toContainText('No disponible')
+  await expect(page.getByTestId('activity-panel')).not.toContainText(
+    'Esperando',
   )
   await expect(page.getByTestId('stored-total')).toHaveText('0')
-  // The chart stays the protagonist: it is wider than the right column (desktop).
-  const chart = await page
-    .getByRole('region', { name: /Gráfico/ })
-    .boundingBox()
-  const side = await page.getByTestId('activity-panel').boundingBox()
-  if (page.viewportSize()!.width > 900)
-    expect(chart!.width).toBeGreaterThan(side!.width * 1.8)
+  await expectChartProtagonist(page)
   await shot(page, 'espera-3h')
+})
 
+test('a registered directional signal is a proposal, not an operation', async ({
+  page,
+}) => {
+  // Fixture: B2 example with activity (synthetic data, not a live read).
+  await openTerminal(
+    page,
+    example('b1/ejemplo-degradado.json'),
+    example('b2/ejemplo-con-actividad.json'),
+  )
+  const panel = page.getByTestId('activity-panel')
+  await expect(panel).toContainText('Propuestas direccionales')
+  await expect(page.getByTestId('last-proposal')).toContainText(
+    'LONG · c25_long_pullback',
+  )
+  await expect(panel).toContainText('No son operaciones')
+  await expectChartProtagonist(page)
+  await shot(page, 'con-senal')
+})
+
+test('health inspector is centered, fits the viewport and scrolls inside', async ({
+  page,
+}) => {
+  await openTerminal(
+    page,
+    example('b1/ejemplo-degradado.json'),
+    example('b2/ejemplo-sin-actividad.json'),
+  )
   await page.getByTestId('health-indicator').click()
   const dialog = page.getByRole('dialog', { name: 'Salud del sistema' })
   await expect(dialog).toBeVisible()
-  // It fits the 900 px viewport and scrolls inside, header and footer fixed.
   const box = await dialog.boundingBox()
   const viewport = page.viewportSize()!
+  expect(box!.y).toBeGreaterThanOrEqual(0)
   expect(box!.y + box!.height).toBeLessThanOrEqual(viewport.height)
+  if (viewport.width > 900) {
+    const center = box!.x + box!.width / 2
+    expect(Math.abs(center - viewport.width / 2)).toBeLessThan(8)
+  }
   await shot(page, 'inspector-salud')
 })
 
