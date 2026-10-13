@@ -3,6 +3,11 @@
 Fecha: 2026-10-13. Commit base: `bd619c3` (`main`, #122). Rama: `claude/mission-control-fase-0`.
 Solo se midió; no se corrigió nada ni se modificó código funcional.
 
+> **Estado posterior (2026-10-13):** P1, P2 y P3 de este informe se resolvieron en #129,
+> #126 y #127 (con `config/`, `analisis/` y el fixture histórico de funding excluidos de
+> Prettier), y #128 añadió CI con cinco jobs, todos en verde sobre `main`. El resto del
+> documento se conserva como la medición original.
+
 ## 1. Entorno de la medición
 
 - Contenedor cloud aislado (Linux, 4 núcleos, Node 22.22.0, pnpm 10.28.0, Python 3.13.16).
@@ -17,19 +22,20 @@ Solo se midió; no se corrigió nada ni se modificó código funcional.
 
 ## 2. Resultados
 
-| Comprobación | Comando | Resultado | Duración |
-|---|---|---|---|
-| TypeScript (front) | `pnpm typecheck` | Pasa | 7 s |
-| TypeScript (servidor) | `pnpm typecheck:server` | Pasa | 4 s |
-| ESLint | `pnpm lint` | Pasa | 11 s |
-| Prettier | `pnpm format:check` | **Falla**: 54 archivos | 8 s |
-| Vitest front | `pnpm test` | Pasa: 20 archivos, 111 tests | 15 s |
-| Vitest servidor | `pnpm test:server` | Pasa: 30 archivos, 242 tests | 8 s |
-| Python (unittest) | `PYTHONPATH=python python3 -m unittest discover -s python/tests` | **Falla**: 872 tests, 3 errores | 353 s |
-| Build | `pnpm build` | Pasa | 10 s |
-| Playwright e2e | `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/opt/pw-browsers/chromium pnpm test:e2e` | **Falla**: 9 pasan, 3 fallan | 32 s |
+| Comprobación          | Comando                                                                       | Resultado                       | Duración |
+| --------------------- | ----------------------------------------------------------------------------- | ------------------------------- | -------- |
+| TypeScript (front)    | `pnpm typecheck`                                                              | Pasa                            | 7 s      |
+| TypeScript (servidor) | `pnpm typecheck:server`                                                       | Pasa                            | 4 s      |
+| ESLint                | `pnpm lint`                                                                   | Pasa                            | 11 s     |
+| Prettier              | `pnpm format:check`                                                           | **Falla**: 54 archivos          | 8 s      |
+| Vitest front          | `pnpm test`                                                                   | Pasa: 20 archivos, 111 tests    | 15 s     |
+| Vitest servidor       | `pnpm test:server`                                                            | Pasa: 30 archivos, 242 tests    | 8 s      |
+| Python (unittest)     | `PYTHONPATH=python python3 -m unittest discover -s python/tests`              | **Falla**: 872 tests, 3 errores | 353 s    |
+| Build                 | `pnpm build`                                                                  | Pasa                            | 10 s     |
+| Playwright e2e        | `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/opt/pw-browsers/chromium pnpm test:e2e` | **Falla**: 9 pasan, 3 fallan    | 32 s     |
 
 Notas de ejecución:
+
 - Playwright necesita el Chromium ya instalado en el contenedor; sin esa variable el
   navegador no se encuentra. No se descargó ninguno.
 - El primer intento de Python usó `-I` (modo aislado) por error mío: ignora `PYTHONPATH` y
@@ -43,12 +49,13 @@ Notas de ejecución:
 
 **P1. Python: 3 errores en `test_futures_news.py`.** Fixtures inexistentes:
 `server/src/features/news/__fixtures__/fed.rss` (y el fixture SEC/Atom) no están en el repo.
+
 - `FeedParsingTests.test_atom_entries_use_the_alternate_link_and_updated`
 - `FeedParsingTests.test_real_world_rss_fixtures`
 - `IngestTests.test_the_real_sec_fixture_dedupes_a_relative_and_an_absolute_link`
-Causa: la memoria del proyecto ya lo registra como conocido (fixtures borrados en #86). No es
-del entorno ni de Mission Control. Afecta al módulo de noticias, que no interviene en el stack
-de las pantallas nuevas.
+  Causa: la memoria del proyecto ya lo registra como conocido (fixtures borrados en #86). No es
+  del entorno ni de Mission Control. Afecta al módulo de noticias, que no interviene en el stack
+  de las pantallas nuevas.
 
 **P2. e2e: `estrategias shows the same chips as the terminal when the gateway is up`
 (`e2e/screens.pw.ts:207`), falla en los 3 viewports.** El test simula `/api-live/health` con
