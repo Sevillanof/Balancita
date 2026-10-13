@@ -1,3 +1,4 @@
+import { freshConnectionFetch } from './fresh-fetch.ts'
 import { createHash } from 'node:crypto'
 import {
   readBoundedBody,
@@ -168,6 +169,9 @@ export function createOfficialCandlesClient(
   const clock = options.clock ?? Date.now
   const fetcher =
     options.fetch ?? ((input, init) => globalThis.fetch(input, init))
+  // After a failure the pooled connections are not trusted: requests go through a transport that opens
+  // its own connection. An injected fetch (tests) is used in both modes.
+  const freshFetcher = options.fetch ?? freshConnectionFetch
   const controllers = new Set<AbortController>()
   // See createTickerPollClient: new connections after a failure, until a request succeeds.
   let renew = false
@@ -185,13 +189,12 @@ export function createOfficialCandlesClient(
       controllers.add(controller)
       const timeout = setTimeout(() => controller.abort(), timeoutMs)
       try {
-        const response = await fetcher(url, {
+        const fresh = renew || options.freshConnections?.() === true
+        const response = await (fresh ? freshFetcher : fetcher)(url, {
           method: 'GET',
           headers: {
             accept: 'application/json',
-            ...(renew || options.freshConnections?.() === true
-              ? { connection: 'close' }
-              : {}),
+            ...(fresh ? { connection: 'close' } : {}),
           },
           signal: controller.signal,
         })

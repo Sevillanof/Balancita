@@ -580,6 +580,11 @@ export interface FuturesCollectorOptions {
   readonly reconnectMaxMs?: number
   /** No frame of any kind (heartbeats included) for this long on an open socket: drop it and reconnect. */
   readonly silenceMs?: number
+  /**
+   * Heartbeats prove the link, not the subscription: no ticker (or book) data for this long on an open
+   * socket also drops it (default 45 s). Trades are not used, they have legitimate quiet periods.
+   */
+  readonly dataSilenceMs?: number
   /** The socket did not open within this long: abandon it and reconnect. */
   readonly connectTimeoutMs?: number
   /** How often the watchdog looks; it runs on its own timer, so total silence is still caught. */
@@ -602,6 +607,7 @@ export class KrakenFuturesMarketCollector {
   private watchdogTimer: ReturnType<typeof setTimeout> | null = null
   private connectStartedAt = 0
   private lastActivityAt = 0
+  private lastDataAt = 0
   private opened = false
   private pendingRecovery: { reason: string; at: number } | null = null
   private state: MarketStatus = 'stopped'
@@ -636,6 +642,7 @@ export class KrakenFuturesMarketCollector {
     min: number
     max: number
     silence: number
+    dataSilence: number
     connect: number
     watchdog: number
   }
@@ -647,6 +654,7 @@ export class KrakenFuturesMarketCollector {
       min: options.reconnectMinMs ?? 500,
       max: Math.min(options.reconnectMaxMs ?? 30_000, 30_000),
       silence: options.silenceMs ?? 30_000,
+      dataSilence: options.dataSilenceMs ?? 45_000,
       connect: options.connectTimeoutMs ?? 15_000,
       watchdog: options.watchdogIntervalMs ?? 5_000,
     }
@@ -655,6 +663,7 @@ export class KrakenFuturesMarketCollector {
       this.limits.max < this.limits.min ||
       this.limits.stale < 1 ||
       this.limits.silence < 1 ||
+      this.limits.dataSilence < 1 ||
       this.limits.connect < 1 ||
       this.limits.watchdog < 1
     )
@@ -855,6 +864,8 @@ export class KrakenFuturesMarketCollector {
       return this.reconnect('connect_timeout')
     if (this.opened && now - this.lastActivityAt > this.limits.silence)
       return this.reconnect('silent_socket')
+    if (this.opened && now - this.lastDataAt > this.limits.dataSilence)
+      return this.reconnect('feed_silent')
     this.armWatchdog()
   }
 
@@ -880,7 +891,10 @@ export class KrakenFuturesMarketCollector {
     this.lastTickerMarkAvailable = false
     this.setState('connecting')
     this.opened = false
-    this.connectStartedAt = this.lastActivityAt = this.options.clock()
+    this.connectStartedAt =
+      this.lastActivityAt =
+      this.lastDataAt =
+        this.options.clock()
     this.armWatchdog()
     try {
       const socket = this.options.makeSocket(this.options.url ?? FUTURES_WS_URL)
@@ -888,7 +902,7 @@ export class KrakenFuturesMarketCollector {
       socket.onopen = () => {
         if (this.stopped || this.socket !== socket) return
         this.opened = true
-        this.lastActivityAt = this.options.clock()
+        this.lastActivityAt = this.lastDataAt = this.options.clock()
         this.setState('syncing')
         for (const message of marketSubscriptions(
           this.bookEnabled ? undefined : ['trade', 'ticker'],
@@ -1158,6 +1172,7 @@ export class KrakenFuturesMarketCollector {
     }
     this.seqs.set(event.type, event.seq)
     this.lastReceivedAt = receivedAt
+    if (event.type !== 'trade') this.lastDataAt = receivedAt
     this.lastClockSkewMs = receivedAt - event.eventTime
     if (event.type === 'ticker') {
       this.lastTickerAt = receivedAt

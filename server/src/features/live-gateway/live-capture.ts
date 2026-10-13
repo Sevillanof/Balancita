@@ -149,6 +149,7 @@ export interface LiveCaptureOptions {
   readonly resilienceLogFile?: string
   /** WebSocket watchdog: silence on an open socket, and time allowed to connect (defaults 30 s / 15 s). */
   readonly silenceMs?: number
+  readonly dataSilenceMs?: number
   readonly connectTimeoutMs?: number
   readonly watchdogIntervalMs?: number
   /** A general incident replaces the WebSocket only if it has delivered nothing for this long (default 10 s). */
@@ -671,6 +672,7 @@ export function createLiveCapture(options: LiveCaptureOptions) {
       reconnectMinMs: options.reconnectMinMs,
       reconnectMaxMs: options.reconnectMaxMs,
       silenceMs: options.silenceMs,
+      dataSilenceMs: options.dataSilenceMs,
       connectTimeoutMs: options.connectTimeoutMs,
       watchdogIntervalMs: options.watchdogIntervalMs,
       onResilience: (event) =>

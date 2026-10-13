@@ -27,7 +27,7 @@ SPECS = load_specs()
 ONES, FIVES = _candles(_calm_then_surge())
 
 
-def _market(path, product="PF_XBTUSD", hole=None, filled=True):
+def _market(path, product="PF_XBTUSD", hole=None, filled=True, no_fives=None):
     """Official candles of the surge. ``hole`` = (first, last) minute index the capture was down for: its candles
     are either learned a day and a half later (``filled``: recovered from the public API) or missing."""
     db = sqlite3.connect(path)
@@ -37,6 +37,8 @@ def _market(path, product="PF_XBTUSD", hole=None, filled=True):
     for c in ONES + FIVES:
         inside = hole is not None and first * MINUTE <= c["bucket_start"] - START <= last * MINUTE
         if inside and not filled:
+            continue
+        if no_fives and c["interval_ms"] == 300_000 and no_fives[0] * MINUTE <= c["bucket_start"] - START <= no_fives[1] * MINUTE:
             continue
         c = dict(c, known_at=late) if inside else c
         db.execute("INSERT INTO paper_futures_official_candles VALUES(?,?,?,?,?,?,?,?,?,?,?)", (
@@ -168,11 +170,39 @@ class StaleGateTests(unittest.TestCase):
         _, db = self._run("exit-late", (3700, 3900))
         self.assertEqual(_trades(db), self.reference)
 
+    def test_a_missing_5m_candle_blocks_entries_even_while_1m_candles_are_fresh(self):
+        ones = [{"bucket_start": i * MINUTE, "close_at": (i + 1) * MINUTE, "known_at": (i + 1) * MINUTE + 1_000}
+                for i in range(60)]
+        fives = [{"bucket_start": i * 5 * MINUTE, "close_at": (i + 1) * 5 * MINUTE,
+                  "known_at": (i + 1) * 5 * MINUTE + 1_000} for i in range(-1, 12) if i not in (4, 5)]
+        gate = make_entry_gate(ones, fives, 0)
+        # The 1m series is complete and on time; only the 5m candles at 20-24 and 25-29 never arrived, so every
+        # frame that would still use the indicators of the 5m candle before them is closed.
+        self.assertEqual([i for i in range(60) if gate(i * MINUTE)], list(range(24, 34)))
+
+    def test_a_shut_gate_turns_a_would_be_entry_into_a_blocked_signal_and_opens_nothing(self):
+        from balancita_engine.futures_simulator import Book
+        book = Book(SPECS[C30], product_id="PF_XBTUSD", tick_size="0.0001")
+        book.entry_gate = lambda bucket: True
+        book._entry_proposal = lambda current, common: {"action": "LONG"}
+        book.on_frame(5 * MINUTE, {"ready": True, "candidate_close": "100"}, None, None, "unknown")
+        book._entry_proposal = lambda current, common: {"action": "WAIT"}
+        book.on_frame(6 * MINUTE, {"ready": True, "candidate_close": "100"}, None, None, "unknown")
+        self.assertEqual((book.stale_cycles, book.blocked, book.position, book.decisions), (2, [5 * MINUTE], None, []))
+
+    def test_stale_cycles_are_counted_apart_from_the_entries_actually_blocked(self):
+        # Late candles far from any signal: the gate is shut for many cycles but no entry was refused.
+        _, db = self._run("quiet", (2050, 2100))
+        summary = write_summary(db, SPECS, self.registration, os.path.join(self.dir.name, "s.json"))["strategies"][C30]
+        self.assertGreater(summary["stale_cycles"], 0)
+        self.assertEqual(summary["blocked_stale_entries"], 0)
+        self.assertEqual(_trades(db), self.reference)
+
     def test_the_gate_blocks_only_stale_candles_and_admits_entries_again_once_data_is_fresh(self):
         ones = [{"bucket_start": i * MINUTE, "close_at": (i + 1) * MINUTE,
                  "known_at": (i + 1) * MINUTE + (10 * MINUTE if 10 <= i < 20 else 1_000)} for i in range(40)]
         fives = [{"bucket_start": i * 5 * MINUTE, "close_at": (i + 1) * 5 * MINUTE,
-                  "known_at": (i + 1) * 5 * MINUTE + 1_000} for i in range(8)]
+                  "known_at": (i + 1) * 5 * MINUTE + 1_000} for i in range(-1, 8)]
         gate = make_entry_gate(ones, fives, 0)
         self.assertEqual([i for i in range(40) if gate(i * MINUTE)], list(range(10, 20)))
         self.assertGreater(10 * MINUTE, STALE_ENTRY_MS)

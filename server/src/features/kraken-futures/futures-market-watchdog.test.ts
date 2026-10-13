@@ -5,7 +5,13 @@ import {
 } from './futures-market.ts'
 
 /** Manual clock and timers so a "silent" socket can be left silent for minutes in a millisecond. */
-function rig(options: { silenceMs?: number; connectTimeoutMs?: number } = {}) {
+function rig(
+  options: {
+    silenceMs?: number
+    dataSilenceMs?: number
+    connectTimeoutMs?: number
+  } = {},
+) {
   let now = 1_000_000
   let next = 1
   const timers = new Map<number, { at: number; fn: () => void }>()
@@ -44,6 +50,7 @@ function rig(options: { silenceMs?: number; connectTimeoutMs?: number } = {}) {
     reconnectMinMs: 500,
     watchdogIntervalMs: 1_000,
     silenceMs: options.silenceMs ?? 10_000,
+    dataSilenceMs: options.dataSilenceMs ?? 600_000,
     connectTimeoutMs: options.connectTimeoutMs ?? 5_000,
     onResilience: (event) => events.push(event),
   })
@@ -64,6 +71,19 @@ function rig(options: { silenceMs?: number; connectTimeoutMs?: number } = {}) {
 }
 
 const heartbeat = JSON.stringify({ feed: 'heartbeat', time: 1 })
+const ticker = (seq: number) =>
+  JSON.stringify({
+    feed: 'ticker',
+    product_id: 'PF_XBTUSD',
+    time: 1_000_000 + seq,
+    seq,
+    bid: 90000,
+    ask: 90001,
+    last: 90000.5,
+    markPrice: 90000,
+    index: 89999,
+    suspended: false,
+  })
 
 describe('websocket watchdog', () => {
   it('reconnects a socket that opened and then went silent without ever closing', () => {
@@ -101,16 +121,50 @@ describe('websocket watchdog', () => {
     expect(sockets).toHaveLength(2)
   })
 
-  it('does not reconnect while any frame, heartbeats included, keeps arriving', () => {
-    const { collector, sockets, events, advance } = rig()
+  it('does not reconnect while heartbeats and market data keep arriving', () => {
+    const { collector, sockets, events, advance } = rig({
+      dataSilenceMs: 20_000,
+    })
     collector.start()
     sockets[0]!.onopen!()
     for (let i = 0; i < 30; i += 1) {
       advance(5_000)
       sockets[0]!.onmessage!({ data: heartbeat })
+      sockets[0]!.onmessage!({ data: ticker(i + 1) })
     }
     expect(events).toHaveLength(0)
     expect(sockets).toHaveLength(1)
+  })
+
+  it('reconnects when only heartbeats arrive and the subscription stops delivering data', () => {
+    const { collector, sockets, events, advance } = rig({
+      dataSilenceMs: 20_000,
+    })
+    collector.start()
+    sockets[0]!.onopen!()
+    sockets[0]!.onmessage!({ data: ticker(1) })
+    for (let i = 0; i < 8; i += 1) {
+      advance(5_000)
+      sockets[0]!.onmessage!({ data: heartbeat })
+    }
+    expect(events[0]).toMatchObject({
+      reason: 'feed_silent',
+      result: 'recovering',
+    })
+    expect(sockets[0]!.closed).toBe(true)
+  })
+
+  it('quiet trades are not a reason to reconnect while the ticker flows', () => {
+    const { collector, sockets, events, advance } = rig({
+      dataSilenceMs: 20_000,
+    })
+    collector.start()
+    sockets[0]!.onopen!()
+    for (let i = 0; i < 40; i += 1) {
+      advance(5_000)
+      sockets[0]!.onmessage!({ data: ticker(i + 1) })
+    }
+    expect(events).toHaveLength(0)
   })
 
   it('reports the recovery when the new socket delivers its first frame', () => {

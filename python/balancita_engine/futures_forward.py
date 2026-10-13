@@ -189,20 +189,21 @@ def stale_gate_from(db, now_ms):
 
 
 def make_entry_gate(ones, fives, gate_from_ms):
-    """``gate(bucket) -> True`` when the data a new entry would rest on was learned too late to be live.
+    """``gate(bucket) -> True`` when the data a new entry would rest on is stale or missing.
 
-    The candle that closes the bucket and the latest closed 5m candle must each have been known within
-    ``STALE_ENTRY_MS`` of closing (their first ``known_at``, not the candle's own time). Buckets before
-    ``gate_from_ms`` are never blocked.
+    The 1m candle of the bucket and the latest closed 5m candle must both *exist* and each have been known within
+    ``STALE_ENTRY_MS`` of closing (their first ``known_at``, not the candle's own time). A missing 5m candle blocks
+    the entry even when 1m candles keep arriving: the simulator would otherwise carry the last 5m indicators
+    forward. Buckets before ``gate_from_ms`` are never blocked.
     """
-    stale_ones = {c["bucket_start"] for c in ones if c["known_at"] - c["close_at"] > STALE_ENTRY_MS}
-    stale_fives = {c["bucket_start"] for c in fives if c["known_at"] - c["close_at"] > STALE_ENTRY_MS}
+    fresh_ones = {c["bucket_start"] for c in ones if c["known_at"] - c["close_at"] <= STALE_ENTRY_MS}
+    fresh_fives = {c["bucket_start"] for c in fives if c["known_at"] - c["close_at"] <= STALE_ENTRY_MS}
 
     def gate(bucket):
         if bucket < gate_from_ms:
             return False
         latest_five = ((bucket + ONE_MINUTE_MS) // FIVE_MINUTES_MS) * FIVE_MINUTES_MS - FIVE_MINUTES_MS
-        return bucket in stale_ones or latest_five in stale_fives
+        return bucket not in fresh_ones or latest_five not in fresh_fives
     return gate
 
 
@@ -259,6 +260,7 @@ def run_forward(market_db, db_path, specs, registration, products):
                         strategy_id, product_id, json.dumps({
                             "checked_ms": now, "missing_1m": missing, "late_1m": len(late_ones),
                             "diverged_trades": diverged, "blocked_stale_entries": len(book.blocked),
+                            "stale_cycles": book.stale_cycles,
                             # How far behind "now" the newest stored 1m candle closed: a capture that stopped
                             # leaves no holes inside the range, only a growing lag.
                             "candle_lag_ms": (now - (max(c["bucket_start"] for c in ones) + ONE_MINUTE_MS))
@@ -315,6 +317,7 @@ def write_summary(db_path, specs, registration, out_path):
                 "missing_candles_1m": sum(st["missing_1m"] for st in statuses),
                 "diverged_trades": sum(st["diverged_trades"] for st in statuses),
                 "blocked_stale_entries": sum(st.get("blocked_stale_entries", 0) for st in statuses),
+                "stale_cycles": sum(st.get("stale_cycles", 0) for st in statuses),
                 "max_candle_lag_ms": max((st["candle_lag_ms"] for st in statuses
                                           if st.get("candle_lag_ms") is not None), default=None),
                 "by_product": {p: {k: v for k, v in summarize_trades(t).items()
