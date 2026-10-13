@@ -11,13 +11,13 @@ const NOW = 1_790_000_000_000
 const STEP = 300_000
 
 /** Example candles (a deterministic wave): only the chart's layout is under test. */
-function candles() {
+function candles(step = STEP) {
   let close = 100_000
   return Array.from({ length: 140 }, (_, i) => {
     const open = close
     close = open + Math.sin(i / 3) * 40 + Math.cos(i / 7) * 25
     return {
-      time_ms: NOW - (140 - i) * STEP,
+      time_ms: NOW - (140 - i) * step,
       open: String(open),
       high: String(Math.max(open, close) + 30),
       low: String(Math.min(open, close) - 30),
@@ -29,7 +29,8 @@ function candles() {
 }
 
 async function openTerminal(page: Page, health: unknown, activity: unknown) {
-  const series = candles()
+  // The selected timeframe is 1 m: the example candles are 1 m apart too.
+  const series = candles(60_000)
   const bootstrap = {
     schema_version: 1,
     mode: 'paper_live',
@@ -62,7 +63,11 @@ async function openTerminal(page: Page, health: unknown, activity: unknown) {
         interval_ms: Number(
           new URL(route.request().url()).searchParams.get('interval_ms'),
         ),
-        candles: series,
+        candles: candles(
+          Number(
+            new URL(route.request().url()).searchParams.get('interval_ms'),
+          ),
+        ),
         flow: [],
       },
     }),
@@ -148,7 +153,7 @@ async function labelFixture(page: Page) {
     tag.textContent =
       'DATOS DE EJEMPLO · fixture sintético, no son cotizaciones'
     tag.style.cssText =
-      'position:fixed;left:50%;bottom:8px;transform:translateX(-50%);z-index:99999;padding:4px 12px;border:1px solid #f5a524;border-radius:6px;background:#1a1405;color:#f5a524;font:600 12px sans-serif;letter-spacing:.06em'
+      'position:fixed;right:16px;bottom:8px;z-index:99999;padding:4px 12px;border:1px solid #f5a524;border-radius:6px;background:#1a1405;color:#f5a524;font:600 12px sans-serif;letter-spacing:.06em'
     document.body.appendChild(tag)
   })
 }

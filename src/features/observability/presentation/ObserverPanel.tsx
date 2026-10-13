@@ -60,6 +60,7 @@ function Now({
       <p className="obs-card__big" data-testid="last-decision">
         Última decisión: <span className="obs-na">No disponible</span>
         <span className="obs-card__pill">
+          <span className="obs-card__pill-label">Salud de la fuente</span>
           {decisions ? (
             <StatusPill tone={TONE[decisions.status]}>
               {LABEL[decisions.status]}
