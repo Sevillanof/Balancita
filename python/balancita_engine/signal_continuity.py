@@ -22,6 +22,7 @@ signal contract and the feature pipeline are ``multi_signals`` and ``futures_sim
 """
 
 import argparse
+import functools
 import hashlib
 import inspect
 import json
@@ -30,6 +31,7 @@ import sys
 import tempfile
 from decimal import Decimal
 
+from . import futures_funding_context, futures_indicators, futures_simulator, futures_strategies, multi_signals
 from .futures_simulator import frames
 from .multi_experiment import FrameFeeder
 from .multi_signals import (
@@ -106,6 +108,36 @@ def code_hash(strategy):
                         "indicators": strategy.indicators, "class": type(strategy).__qualname__,
                         "constants": {k: str(v) for k, v in sorted(vars(type(strategy)).items())
                                       if k.isupper()}, "params": params, "source": source})
+
+
+def _source(obj):
+    try:
+        return inspect.getsource(obj)
+    except (OSError, TypeError):
+        return repr(obj)
+
+
+@functools.lru_cache(maxsize=1)
+def pipeline_hash():
+    """Hash of everything outside the strategy class that decides what a stored signal means: the feature pipeline
+    (indicators, incremental features, regime chain, funding percentile), the signal contract and the way this module
+    builds inputs, keys and decision hashes. Freezing it next to ``code_hash`` makes a reconstruction fail closed when
+    any of it changed; it is deliberately narrower than 'whole modules' so unrelated edits do not block recovery."""
+    me = sys.modules[__name__]
+    sim = futures_simulator
+    parts = {
+        "indicators": _source(futures_indicators),
+        "simulator": [_source(sim.IncrementalFeatures), _source(sim.frames), _source(sim.merge_periods), _source(sim._n),
+                      repr(sim.DEFAULT_PERIODS), repr(sim.REGIME_PERIODS), repr(sim.LOG_KINDS)],
+        "regime": _source(futures_strategies.update_regime),
+        "funding_percentile": _source(futures_funding_context.FundingContext),
+        "contract": [_source(f) for f in (multi_signals.make_signal, multi_signals.validate_signal, multi_signals.Strategy,
+                                          multi_signals.SignalContext, multi_signals.stable_hash, multi_signals._two,
+                                          multi_signals._dec, multi_signals._clip)],
+        "this_module": [_source(f) for f in (me.context_inputs, me.context_from_inputs, me.evaluate_cycle, me.on_cycle,
+                                             me.signal_key, me.decision_hash, me._plain)],
+    }
+    return stable_hash(["pipeline.v1", parts])
 
 
 def signal_key(strategy_id, strategy_version, product_id, bucket_ms):
@@ -211,7 +243,7 @@ class SignalLog:
         self.head = entry["hash"]
         data, kind = entry["data"], entry["kind"]
         if kind == "strategy_frozen":
-            self.frozen[(data["strategy_id"], data["strategy_version"])] = data["code_hash"]
+            self.frozen[(data["strategy_id"], data["strategy_version"])] = (data["code_hash"], data["pipeline_hash"])
         elif kind == "signal":
             if "source_offset" in data:
                 self.max_source_offset = max(data["source_offset"], self.max_source_offset or 0)
@@ -255,14 +287,15 @@ class SignalLog:
     def freeze_strategy(self, strategy, t_ms):
         """Registers (idempotently) the exact behaviour of a strategy version. The same version with different code
         is refused: a new behaviour needs a new version."""
-        fingerprint = code_hash(strategy)
+        fingerprint = (code_hash(strategy), pipeline_hash())
         known = self.frozen.get((strategy.id, strategy.version))
         if known == fingerprint:
             return None
         if known is not None:
-            raise ContinuityError("code_changed_same_version", "{} v{}".format(strategy.id, strategy.version))
+            raise ContinuityError("code_changed_same_version" if known[0] != fingerprint[0] else "pipeline_changed",
+                                  "{} v{}".format(strategy.id, strategy.version))
         return self.append("strategy_frozen", {"strategy_id": strategy.id, "strategy_version": strategy.version,
-                                               "code_hash": fingerprint}, t_ms)
+                                               "code_hash": fingerprint[0], "pipeline_hash": fingerprint[1]}, t_ms)
 
     def ingest(self, signal, inputs, t_ms, *, origin="original", source_offset=None, reconstruction=None):
         """Persists a signal. Returns ``{"status", "key", "seq"}`` with status ``persisted`` | ``duplicate`` |
@@ -295,7 +328,8 @@ class SignalLog:
             supersedes = seq   # a late original replaces a reconstruction as the entry that counts
         executable = origin == "original"
         data = {"key": key, "origin": origin, "signal": signal, "decision_hash": decided,
-                "inputs": inputs, "inputs_hash": stable_hash(inputs), "code_hash": fingerprint,
+                "inputs": inputs, "inputs_hash": stable_hash(inputs), "code_hash": fingerprint[0],
+                "pipeline_hash": fingerprint[1],
                 "product_id": signal["product_id"], "cycle_ms": signal["bucket_ms"], "generated_ms": int(t_ms),
                 "valid_until_ms": signal["bucket_ms"] + MAX_EXECUTABLE_AGE_MS if executable else None,
                 "executable": executable,
@@ -388,8 +422,11 @@ def check_frozen(log, strategies):
                 raise ContinuityError("version_incompatible", "{} v{} given, frozen versions in the log: {}".format(
                     strategy.id, strategy.version, others))
             raise ContinuityError("strategy_not_frozen", "{} v{}".format(strategy.id, strategy.version))
-        if known != code_hash(strategy):
+        if known[0] != code_hash(strategy):
             raise ContinuityError("code_changed_same_version", "{} v{}".format(strategy.id, strategy.version))
+        if known[1] != pipeline_hash():
+            raise ContinuityError("pipeline_changed", "feature pipeline or signal contract differs from the frozen one "
+                                                      "({} v{})".format(strategy.id, strategy.version))
 
 
 def check_candles(candles_1m, candles_5m, last_cycle_ms):
@@ -415,19 +452,19 @@ def reconstruct(log, strategies, product_id, candles_1m, candles_5m, gaps, gener
     if not mine:
         return {"persisted": 0, "skipped_warmup": 0, "already_present": 0, "candles_hash": None}
     candles_hash = check_candles(candles_1m, candles_5m, max(g["to_ms"] for g in mine))
-    wanted = {(g["strategy_id"], g["strategy_version"]): set(range(g["from_ms"], g["to_ms"] + 1, FIVE_MINUTES_MS))
-              for g in mine}
+    wanted = {}
+    for g in mine:   # several separate gaps of the same strategy version accumulate, none replaces another
+        wanted.setdefault((g["strategy_id"], g["strategy_version"]), set()).update(
+            range(g["from_ms"], g["to_ms"] + 1, FIVE_MINUTES_MS))
     by_id = {(s.id, s.version): s for s in strategies}
     cycles = sorted(set().union(*wanted.values()))
-    stats = {"persisted": 0, "skipped_warmup": 0, "already_present": 0, "candles_hash": candles_hash}
-    seen = set()
+    stats = {"persisted": 0, "skipped_warmup": 0, "already_present": 0, "candles_hash": candles_hash, "failed": 0}
+    ready = set()
     for frame in frames(candles_1m, candles_5m, merged_indicators(strategies), funding):
         cycle_ms = frame[0] + ONE_MINUTE_MS
-        if cycle_ms not in cycles:
+        if cycle_ms not in cycles or not on_cycle(frame):
             continue
-        seen.add(cycle_ms)
-        if not on_cycle(frame):
-            continue
+        ready.add(cycle_ms)
         for strategy in strategies:
             if cycle_ms not in wanted.get((strategy.id, strategy.version), ()):
                 continue
@@ -436,7 +473,19 @@ def reconstruct(log, strategies, product_id, candles_1m, candles_5m, gaps, gener
                 "candles_hash": candles_hash, "source_candle_5m_start_ms": cycle_ms - FIVE_MINUTES_MS,
                 "source_candle_1m_start_ms": frame[0], "rebuilt_at_ms": int(generated_ms)})
             stats["already_present" if receipt["status"] == "already_present" else "persisted"] += 1
-    stats["skipped_warmup"] = sum(len(c) for c in wanted.values()) - stats["persisted"] - stats["already_present"]
+    # A cycle that could not be rebuilt is not "recovered": say so durably, once per cycle.
+    known = {e["data"]["failure_id"] for e in log.entries if e["kind"] == "reconstruction_failed"}
+    for (strategy_id, version), cycles_wanted in sorted(wanted.items()):
+        for cycle_ms in sorted(cycles_wanted - ready):
+            failure_id = stable_hash(["reconstruction-failed", strategy_id, version, product_id, cycle_ms])[:24]
+            if failure_id not in known and log.canonical.get(signal_key(strategy_id, version, product_id, cycle_ms)) is None:
+                log.append("reconstruction_failed", {"failure_id": failure_id, "strategy_id": strategy_id,
+                                                     "strategy_version": version, "product_id": product_id, "cycle_ms": cycle_ms,
+                                                     "reason": "indicators_not_ready_or_cycle_not_in_candles",
+                                                     "candles_hash": candles_hash}, generated_ms)
+                known.add(failure_id)
+                stats["failed"] += 1
+    stats["skipped_warmup"] = sum(len(c - ready) for c in wanted.values())
     return stats
 
 
@@ -445,7 +494,8 @@ def verify_log(log, strategies):
     re-evaluating the stored inputs gives the stored decision."""
     by_id = {(s.id, s.version): s for s in strategies}
     report = {"chain_intact": log.verify() is None, "head": log.head, "entries": len(log.entries), "signals": 0,
-              "originals": 0, "reconstructed": 0, "bad_hashes": [], "not_reproducible": [], "not_checked": 0}
+              "originals": 0, "reconstructed": 0, "bad_hashes": [], "not_reproducible": [], "reproduced": 0,
+              "not_checked": 0, "not_checked_seqs": []}
     for entry in log.signals(canonical_only=False):
         data, report["signals"] = entry["data"], report["signals"] + 1
         report["originals" if data["origin"] == "original" else "reconstructed"] += 1
@@ -460,24 +510,40 @@ def verify_log(log, strategies):
             report["bad_hashes"].append(entry["seq"])
             continue
         strategy = by_id.get((signal["strategy_id"], signal["strategy_version"]))
-        if strategy is None or code_hash(strategy) != data["code_hash"]:
-            report["not_checked"] += 1
+        if strategy is None or (code_hash(strategy), pipeline_hash()) != (data["code_hash"], data["pipeline_hash"]):
+            report["not_checked"] += 1   # integrity holds, but nobody proved the decision can be re-derived
+            report["not_checked_seqs"].append(entry["seq"])
             continue
         again = strategy.evaluate(context_from_inputs(signal["product_id"], signal["bucket_ms"], data["inputs"]))
         if decision_hash(again) != data["decision_hash"]:
             report["not_reproducible"].append(entry["seq"])
-    report["ok"] = report["chain_intact"] and not report["bad_hashes"] and not report["not_reproducible"]
+        else:
+            report["reproduced"] += 1
+    # Two separate claims. integrity_ok: the file and every hash are intact. reproducibility_proven: every signal was
+    # re-derived from its stored inputs with the frozen code (none skipped, none different). ``ok`` keeps meaning "no
+    # evidence of damage"; only ``reproducibility_proven`` says the decisions were actually re-checked.
+    report["integrity_ok"] = report["chain_intact"] and not report["bad_hashes"]
+    report["ok"] = report["integrity_ok"] and not report["not_reproducible"]
+    report["reproducibility_proven"] = report["ok"] and report["not_checked"] == 0 and report["signals"] > 0
     return report
 
 
 # ------------------------------------------------------------------------------------------------ entry guard
 def guard_entry(entry, now_ms):
     """The single question a future executor must ask before opening a position from a logged signal. Returns the
-    entry when it may be used; raises ``RetroactiveEntryError`` for reconstructed signals and for originals whose
-    validity window has passed."""
+    entry when it may be used; raises ``RetroactiveEntryError`` for reconstructed signals, for originals whose
+    validity window has passed, and for causality violations: the candle has not closed at ``now_ms``, the signal was
+    generated after ``now_ms`` (it did not exist yet) or before its candle closed (it cannot have seen that candle)."""
     data = entry["data"]
     if data["origin"] != "original" or not data["executable"]:
         raise RetroactiveEntryError("reconstructed_signal", "seq {} is evidence, not an order".format(entry["seq"]))
+    if now_ms < data["cycle_ms"]:
+        raise RetroactiveEntryError("candle_not_closed", "seq {}: now {} < candle close {}".format(entry["seq"], now_ms, data["cycle_ms"]))
+    if data["generated_ms"] > now_ms:
+        raise RetroactiveEntryError("generated_after_evaluation", "seq {}: generated {} > now {}".format(entry["seq"], data["generated_ms"], now_ms))
+    if data["generated_ms"] < data["cycle_ms"]:
+        raise RetroactiveEntryError("generated_before_candle_close", "seq {}: generated {} < candle close {}".format(
+            entry["seq"], data["generated_ms"], data["cycle_ms"]))
     if now_ms > data["valid_until_ms"]:
         raise RetroactiveEntryError("signal_expired", "seq {}: now {} > valid until {}".format(entry["seq"], now_ms, data["valid_until_ms"]))
     return entry
@@ -532,13 +598,13 @@ class Consumer:
     def __init__(self, log, directory, handler, clock):
         self.log, self.directory, self.handler, self.clock = log, directory, handler, clock
         self.path = os.path.join(directory, CHECKPOINT_FILE)
-        self.committed_seq, self.processed = 0, 0
+        self.committed_seq, self.processed, self.confirmed_offset = 0, 0, None
 
     # ---- checkpoint file
     def _body(self, seq):
         entry = self.log.entries[seq - 1]
         return {"schema": CHECKPOINT_SCHEMA, "committed_seq": seq, "log_hash_at_seq": entry["hash"],
-                "log_start_hash": self.log.entries[0]["hash"], "source_offset": self.log.max_source_offset}
+                "log_start_hash": self.log.entries[0]["hash"], "confirmed_source_offset": self.confirmed_offset}
 
     def commit(self, seq):
         body = self._body(seq)
@@ -578,6 +644,8 @@ class Consumer:
             raise ContinuityError("corrupt_checkpoint", str(error)) from error
         if body.get("schema") != CHECKPOINT_SCHEMA:
             raise ContinuityError("checkpoint_incompatible", str(body.get("schema")))
+        if "confirmed_source_offset" not in body:
+            raise ContinuityError("checkpoint_incompatible", "no confirmed offset")
         seq = body["committed_seq"]
         if not isinstance(seq, int) or seq < 1:
             raise ContinuityError("corrupt_checkpoint", "bad offset")
@@ -586,11 +654,13 @@ class Consumer:
         if self.log.entries[seq - 1]["hash"] != body["log_hash_at_seq"] or self.log.entries[0]["hash"] != body["log_start_hash"]:
             raise ContinuityError("log_mismatch", "checkpoint does not belong to this log")
         self.committed_seq = seq
+        self.confirmed_offset = body["confirmed_source_offset"]
 
     def rebuild_checkpoint(self, t_ms):
         """Explicit operator action after ``corrupt_checkpoint``: forget the offset and reprocess from the start.
         Safe only because handlers are idempotent; the decision is written in the log."""
         self.log.append("checkpoint_rebuilt", {"reason": "operator", "from_seq": 1}, t_ms)
+        self.confirmed_offset = None
         self.commit(1)
 
     # ---- processing
@@ -604,6 +674,9 @@ class Consumer:
                 executable, reason = entry_status(entry, now)
                 self.handler(Delivery(entry, executable, reason, now))
                 _hit("before_ack")
+                offset = entry["data"].get("source_offset")
+                if offset is not None:   # confirmed = delivered AND acknowledged, never merely persisted
+                    self.confirmed_offset = max(offset, self.confirmed_offset or 0)
                 done += 1
             self.commit(entry["seq"])
         self.processed += done
@@ -752,10 +825,12 @@ def cmd_recover(args):
         record_gaps(consumer.log, gaps, now)
         stats = reconstruct(consumer.log, strategies, DEMO_PRODUCT, ones, fives, gaps, now)
         replayed += consumer.run()
+        remaining = detect_gaps(consumer.log, strategies, [DEMO_PRODUCT], until, from_ms=first)
     except ContinuityError as error:
         sys.stderr.write("RECOVERY_REFUSED {}\n".format(error.reason))
         return 3
-    result = {"replayed": replayed, "gaps": gaps, "reconstruction": stats, "source_offset_holes": source_offset_holes(consumer.log),
+    result = {"replayed": replayed, "gaps": gaps, "unrecovered_gaps": remaining, "recovered_completely": not remaining,
+              "confirmed_source_offset": consumer.confirmed_offset, "reconstruction": stats, "source_offset_holes": source_offset_holes(consumer.log),
               "verify": verify_log(consumer.log, strategies), "log_head": consumer.log.head,
               "committed_seq": consumer.committed_seq, "tail_discarded_bytes": consumer.log.tail_discarded}
     write_atomic(os.path.join(args.dir, "report.json"), json.dumps(result, sort_keys=True, indent=1))

@@ -6,6 +6,7 @@ import os
 import shutil
 import tempfile
 import unittest
+from unittest import mock
 
 from balancita_engine import signal_continuity as SC, signal_continuity_demo as demo
 from balancita_engine.multi_signals import make_signal
@@ -115,8 +116,9 @@ class LogTests(unittest.TestCase):
 
 
 class GuardTests(unittest.TestCase):
-    def entry(self, origin, executable, valid_until=T0 + MS):
-        return {"seq": 5, "data": {"origin": origin, "executable": executable, "valid_until_ms": valid_until}}
+    def entry(self, origin, executable, valid_until=T0 + MS, cycle=T0, generated=T0 + 1000):
+        return {"seq": 5, "data": {"origin": origin, "executable": executable, "valid_until_ms": valid_until,
+                                   "cycle_ms": cycle, "generated_ms": generated}}
 
     def test_reconstructed_is_never_executable(self):
         for now in (0, T0, T0 + 10 ** 9):
@@ -126,6 +128,14 @@ class GuardTests(unittest.TestCase):
     def test_original_is_executable_only_inside_its_window(self):
         self.assertEqual(SC.entry_status(self.entry("original", True), T0 + MS), (True, None))
         self.assertEqual(SC.entry_status(self.entry("original", True), T0 + MS + 1), (False, "signal_expired"))
+
+    def test_causality_is_enforced(self):
+        entry = self.entry("original", True, cycle=T0 + 10 * MS, valid_until=T0 + 11 * MS, generated=T0 + 10 * MS + 1000)
+        self.assertEqual(SC.entry_status(entry, T0 + 10 * MS + 1000), (True, None))
+        self.assertEqual(SC.entry_status(entry, T0 + 10 * MS - 1), (False, "candle_not_closed"))
+        self.assertEqual(SC.entry_status(entry, T0 + 10 * MS + 999), (False, "generated_after_evaluation"))
+        early = self.entry("original", True, cycle=T0 + 10 * MS, valid_until=T0 + 11 * MS, generated=T0 + 10 * MS - 1)
+        self.assertEqual(SC.entry_status(early, T0 + 10 * MS + 1000), (False, "generated_before_candle_close"))
 
     def test_a_forged_executable_flag_does_not_help_a_reconstruction(self):
         with self.assertRaises(SC.RetroactiveEntryError):
@@ -149,21 +159,33 @@ class ConsumerTests(unittest.TestCase):
     def test_offset_moves_only_after_the_handler_and_a_crash_redelivers_once(self):
         consumer = self.start()
         for n in range(3):
-            consumer.log.ingest(one_signal(cycle=T0 + (100 + n) * MS), {}, T0)
+            consumer.log.ingest(one_signal(cycle=T0 + (100 + n) * MS), {}, T0 + (100 + n) * MS + 1000, source_offset=n + 1)
         SC.arm("before_ack", 2)
         with self.assertRaises(SC.SimulatedCrash):
             consumer.run()
         self.assertEqual(len(self.seen), 2)               # the handler ran for the second one...
+        self.assertEqual(consumer.confirmed_offset, 1)    # ...but only the first was acknowledged; 3 are persisted
         restarted = self.start()
         self.assertEqual(restarted.run(), 2)              # ...and it comes again, plus the third; the first does not
         self.assertEqual([d.key for d in self.seen].count(self.seen[0].key), 1)
         self.assertEqual(len(self.seen), 4)
+        self.assertEqual(restarted.confirmed_offset, 3)
         self.assertEqual(restarted.run(), 0)
+
+    def test_checkpoint_offset_is_what_was_acknowledged_not_what_was_seen(self):
+        consumer = self.start()
+        for n in range(3):
+            consumer.log.ingest(one_signal(cycle=T0 + (100 + n) * MS), {}, T0 + (100 + n) * MS + 1000, source_offset=n + 1)
+        consumer.run(limit=1)
+        with open(consumer.path, encoding="utf-8") as handle:
+            stored = json.load(handle)
+        self.assertEqual((stored["confirmed_source_offset"], consumer.log.max_source_offset), (1, 3))
+        self.assertEqual(self.start().confirmed_offset, 1)
 
     def test_expired_and_reconstructed_deliveries_cannot_open_positions(self):
         consumer = self.start(now=T0 + 500 * MS)
-        consumer.log.ingest(one_signal(cycle=T0 + 100 * MS), {}, T0)
-        consumer.log.ingest(one_signal(cycle=T0 + 101 * MS), {}, T0, origin="reconstructed")
+        consumer.log.ingest(one_signal(cycle=T0 + 100 * MS), {}, T0 + 100 * MS + 1000)
+        consumer.log.ingest(one_signal(cycle=T0 + 101 * MS), {}, T0 + 400 * MS, origin="reconstructed")
         consumer.run()
         self.assertEqual([(d.executable, d.reason) for d in self.seen], [(False, "signal_expired"), (False, "reconstructed_signal")])
         for delivery in self.seen:
@@ -228,6 +250,49 @@ class ReconstructionTests(unittest.TestCase):
         self.assertEqual({d["decision_hash"] for d in rebuilt}, live)
         self.assertEqual(self.gaps(), [])
         self.assertTrue(SC.verify_log(self.log, self.strategies)["ok"])
+
+    def test_several_separate_gaps_are_all_rebuilt(self):
+        skip = set(range(10, 13)) | {30} | set(range(50, 52))
+        self.feed(skip=skip)
+        gaps = self.gaps()
+        self.assertEqual(len([g for g in gaps if g["strategy_id"] == self.strategies[0].id]), 3)
+        stats = SC.reconstruct(self.log, self.strategies, SC.DEMO_PRODUCT, self.ones, self.fives, gaps, 99)
+        self.assertEqual((stats["persisted"], stats["failed"]), (len(skip) * len(self.strategies), 0))
+        self.assertEqual(self.gaps(), [])
+        live = {SC.decision_hash(s) for index in skip for s, _ in self.live[index][1]}
+        self.assertEqual({e["data"]["decision_hash"] for e in self.log.signals() if e["data"]["origin"] == "reconstructed"}, live)
+
+    def test_a_cycle_that_cannot_be_rebuilt_is_recorded_and_stays_a_gap(self):
+        gap = {"strategy_id": self.strategies[0].id, "strategy_version": 1, "product_id": SC.DEMO_PRODUCT,
+               "from_ms": T0 + MS, "to_ms": T0 + 2 * MS, "cycles": 2}   # before any indicator is ready
+        stats = SC.reconstruct(self.log, self.strategies, SC.DEMO_PRODUCT, self.ones, self.fives, [gap], 5)
+        self.assertEqual((stats["persisted"], stats["failed"], stats["skipped_warmup"]), (0, 2, 2))
+        self.assertEqual(sum(1 for e in self.log.entries if e["kind"] == "reconstruction_failed"), 2)
+        SC.reconstruct(self.log, self.strategies, SC.DEMO_PRODUCT, self.ones, self.fives, [gap], 6)
+        self.assertEqual(sum(1 for e in self.log.entries if e["kind"] == "reconstruction_failed"), 2)   # once per cycle
+        self.assertEqual(len(list(self.log.signals())), 0)
+
+    def test_changed_pipeline_is_refused_like_changed_strategy_code(self):
+        self.feed(skip={12})
+        with mock.patch.object(SC, "pipeline_hash", return_value="another-pipeline"):
+            with self.assertRaises(SC.ContinuityError) as caught:
+                SC.reconstruct(self.log, self.strategies, SC.DEMO_PRODUCT, self.ones, self.fives, self.gaps(), 5)
+            self.assertEqual(caught.exception.reason, "pipeline_changed")
+            with self.assertRaises(SC.ContinuityError) as frozen:
+                self.log.freeze_strategy(self.strategies[0], 5)
+            self.assertEqual(frozen.exception.reason, "pipeline_changed")
+        self.assertEqual(SC.pipeline_hash(), SC.pipeline_hash())
+
+    def test_verify_separates_integrity_from_proven_reproducibility(self):
+        self.feed()
+        full = SC.verify_log(self.log, self.strategies)
+        self.assertEqual((full["integrity_ok"], full["reproducibility_proven"], full["reproduced"]), (True, True, full["signals"]))
+        blind = SC.verify_log(self.log, [])
+        self.assertEqual((blind["integrity_ok"], blind["ok"], blind["reproducibility_proven"], blind["reproduced"]),
+                         (True, True, False, 0))
+        self.assertEqual(blind["not_checked"], blind["signals"])
+        with mock.patch.object(SC, "pipeline_hash", return_value="other"):
+            self.assertFalse(SC.verify_log(self.log, self.strategies)["reproducibility_proven"])
 
     def test_reconstruction_is_deterministic(self):
         hashes = []
@@ -300,6 +365,8 @@ class TwoProcessTests(unittest.TestCase):
                 self.assertGreater(r["senales_reconstruidas"], 0)
                 self.assertEqual((r["decisiones_distintas_de_la_referencia"], r["reconstruidas_que_abririan_posicion"], r["efectos_duplicados"]), (0, 0, 0))
                 self.assertTrue(r["verificacion_ok"])
+                self.assertTrue(r["recuperado_por_completo"])
+                self.assertEqual(r["senales_originales"] + r["senales_reconstruidas"], self.results["referencia_sin_caidas"]["senales"])
         late = self.results["caida_despues_de_persistir_reinicio_tardio"]
         self.assertEqual((late["originales_vencidas_sin_posicion"], late["motivos"]), (1, ["signal_expired"]))
 

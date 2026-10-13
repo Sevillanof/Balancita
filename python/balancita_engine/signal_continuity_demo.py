@@ -77,7 +77,7 @@ def scenarios(base):
     ref_report = report(ref)
     out["referencia_sin_caidas"] = {
         "senales": len(ref_decisions), "podian_abrir_posicion": len(ref_open), "huecos": len(ref_report["gaps"]),
-        "verificacion_ok": ref_report["verify"]["ok"], "cabeza_del_registro": ref_report["log_head"]}
+        "verificacion_ok": ref_report["verify"]["reproducibility_proven"], "recuperado_por_completo": ref_report["recovered_completely"], "cabeza_del_registro": ref_report["log_head"]}
 
     def compare(name, directory, *, same_openings):
         now = decisions(directory)
@@ -90,7 +90,9 @@ def scenarios(base):
             "mismas_posiciones_abribles_que_la_referencia": would_open(directory) == ref_open if same_openings else None,
             "reconstruidas_que_abririan_posicion": sum(1 for e in effects(directory) if e["kind"] == "would_open" and e["origin"] == "reconstructed"),
             "efectos_duplicados": len(effects(directory)) - len({e["key"] for e in effects(directory)}),
-            "verificacion_ok": report(directory)["verify"]["ok"]}
+            "verificacion_ok": report(directory)["verify"]["reproducibility_proven"],
+            "recuperado_por_completo": report(directory)["recovered_completely"],
+            "offset_confirmado": report(directory)["confirmed_source_offset"]}
 
     # 1. a crash before anything was persisted: that signal and everything after it never existed in the log
     d = fresh("antes_de_persistir")

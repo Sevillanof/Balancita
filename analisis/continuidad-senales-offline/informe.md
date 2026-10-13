@@ -5,7 +5,7 @@ Generada por `python -m balancita_engine.signal_continuity_demo`. Cada escenario
 ## Referencia (sin caídas)
 
 - 502 señales registradas, 145 podían abrir posición, 0 huecos, verificación ok: True.
-- Cabeza de la cadena: `c6c71da37e6d8a9a70b2a3ea6f4d675c5274e553d88ba67a4a2431212b325572`.
+- Cabeza de la cadena: `54535598536662f85709352d1baa933a25b048e60c6e5589e1585cf738505157`.
 
 ## caida antes de persistir sin reenvio
 
@@ -17,6 +17,8 @@ Generada por `python -m balancita_engine.signal_continuity_demo`. Cada escenario
 - reconstruidas que abririan posicion: 0
 - efectos duplicados: 0
 - verificacion ok: True
+- recuperado por completo: True
+- offset confirmado: 39
 - codigo de salida primer proceso: 137
 
 ## caida a mitad de persistir con reenvio
@@ -29,8 +31,10 @@ Generada por `python -m balancita_engine.signal_continuity_demo`. Cada escenario
 - reconstruidas que abririan posicion: 0
 - efectos duplicados: 0
 - verificacion ok: True
+- recuperado por completo: True
+- offset confirmado: 502
 - codigo de salida primer proceso: 137
-- bytes de cola descartados: 1754
+- bytes de cola descartados: 1795
 
 ## caida despues de persistir con reenvio
 
@@ -42,6 +46,8 @@ Generada por `python -m balancita_engine.signal_continuity_demo`. Cada escenario
 - reconstruidas que abririan posicion: 0
 - efectos duplicados: 0
 - verificacion ok: True
+- recuperado por completo: True
+- offset confirmado: 502
 - codigo de salida primer proceso: 137
 
 ## caida despues de persistir reinicio tardio
@@ -54,6 +60,8 @@ Generada por `python -m balancita_engine.signal_continuity_demo`. Cada escenario
 - reconstruidas que abririan posicion: 0
 - efectos duplicados: 0
 - verificacion ok: True
+- recuperado por completo: True
+- offset confirmado: 56
 - originales vencidas sin posicion: 1
 - motivos: ['signal_expired']
 
@@ -67,18 +75,22 @@ Generada por `python -m balancita_engine.signal_continuity_demo`. Cada escenario
 - reconstruidas que abririan posicion: 0
 - efectos duplicados: 0
 - verificacion ok: True
+- recuperado por completo: True
+- offset confirmado: 502
 - codigo de salida primer proceso: 137
 
 ## eventos perdidos y duplicados
 
 - senales originales: 236
-- senales reconstruidas: 262
+- senales reconstruidas: 266
 - decisiones distintas de la referencia: 0
 - posiciones abribles: 59
 - mismas posiciones abribles que la referencia: None
 - reconstruidas que abririan posicion: 0
 - efectos duplicados: 0
 - verificacion ok: True
+- recuperado por completo: True
+- offset confirmado: 240
 - huecos en la numeracion de origen: [[7, 9], [60, 60]]
 - huecos de ciclos: 5
 
