@@ -238,3 +238,103 @@ test('estrategias shows the same chips as the terminal when the gateway is up', 
   await shot(page, 'estrategias-chips')
   await noHorizontalScroll(page)
 })
+
+/*
+ * Chart height with sub-panes. SYNTHETIC FIXTURE, not market data: it only
+ * gives the chart some candles and flow points so its geometry can be
+ * measured in live mode (flow and open-interest panes need live data).
+ */
+test('terminal chart with two sub-panes takes the available height', async ({
+  page,
+}) => {
+  const interval = 60_000
+  const end = 1_800_000_000_000
+  const candles = Array.from({ length: 120 }, (_, index) => {
+    const open = 100_000 + Math.sin(index / 6) * 200
+    return {
+      time_ms: end - (120 - index) * interval,
+      open: String(open),
+      high: String(open + 60),
+      low: String(open - 60),
+      close: String(open + Math.cos(index / 5) * 40),
+      volume_btc: '1.5',
+      closed: true,
+    }
+  })
+  const liveMarket = {
+    schema_version: 'futures-terminal-market.v1',
+    as_of_ms: end,
+    interval_ms: interval,
+    candles,
+  }
+  const liveBootstrap = {
+    schema_version: 1,
+    mode: 'paper_live',
+    source: 'kraken-public-live-stream.v1',
+    active_run_id: 'live-market-view',
+    market: { status: 'live', last_received_at: end, funding: 'unknown' },
+    engine: { status: 'off', reason: 'fixture', commands: 'unavailable' },
+    terminal_market: liveMarket,
+  }
+  await page.route('**/api-live/terminal/bootstrap', (route) =>
+    route.fulfill({ json: liveBootstrap }),
+  )
+  await page.route('**/api-live/terminal/chart**', (route) =>
+    route.fulfill({
+      json: {
+        schema_version: 'futures-terminal-chart.v1',
+        interval_ms: interval,
+        candles,
+        flow: candles.map((candle, index) => ({
+          time_ms: candle.time_ms,
+          buy_volume: 1 + (index % 5),
+          sell_volume: 1 + (index % 3),
+          open_interest: 1_000 + index,
+        })),
+      },
+    }),
+  )
+  await page.routeWebSocket(/\/api-live\/terminal\/stream/, (socket) => {
+    socket.onMessage(() => {
+      socket.send(
+        JSON.stringify({
+          schema_version: 1,
+          event_id: 'event-1',
+          stream_id: 'stream-1',
+          run_id: 'live-market-view',
+          seq: 0,
+          type: 'snapshot',
+          instrument_id: 'kraken-futures:PF_XBTUSD',
+          event_time: end,
+          published_at: end,
+          data: {
+            watermark: 0,
+            market: liveMarket,
+            state: { run_id: 'live-market-view', state_version: 0 },
+          },
+        }),
+      )
+    })
+  })
+  await page.goto('/terminal')
+  const chart = page.getByTestId('approved-chart-renderer')
+  await expect(chart).toBeVisible()
+  await expect(
+    page.getByRole('checkbox', { name: 'Compra/venta' }),
+  ).toBeChecked()
+  await expect(
+    page.getByRole('checkbox', { name: 'Interés abierto' }),
+  ).toBeChecked()
+  const { width, height } = page.viewportSize()!
+  const base =
+    width >= 1200
+      ? Math.min(820, Math.max(560, height * 0.7))
+      : width >= 901
+        ? 500
+        : 440
+  // Price area plus 110 px for each of the two sub-panes.
+  const box = await chart.boundingBox()
+  expect(Math.abs(box!.height - (base + 2 * 110))).toBeLessThanOrEqual(1)
+  await noHorizontalScroll(page)
+  await shot(page, 'terminal-live-subpanes-fixture')
+})
