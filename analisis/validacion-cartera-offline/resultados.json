@@ -1,0 +1,361 @@
+{
+ "cost_model_hash": "af5187f6c6a18826fb05c6d747045032618e8061a1766600fd72c1c2e852b0f9",
+ "policy_hash": "8c22a0c0143c697c",
+ "results_hash": "58e6c1a41f6b9f698467d44c410b6269b8e64ab83b6f0ee6baa2ee842c19fbc3",
+ "scenarios": [
+  {
+   "capital_definitive_usd": "1013.9263",
+   "checks": 16,
+   "description": "Cinco productos, tres estrategias, LONG y SHORT a la vez; los l\u00edmites recortan o rechazan lo que sobra.",
+   "equity_usd": "1013.9263",
+   "events": 658,
+   "feed_hash": "4402109835fa2bfe49c12fc433eb61c193400cd548b64432eb18996bd3bef8f3",
+   "journal_chain_intact": true,
+   "journal_entries": 29,
+   "journal_hash": "36724f84cf71eec6a07f102b5eebd39e3c3d349894c4e3cb51349d23d85d12cc",
+   "ledger_hash": "4d544daf3d6a69f002b87d8da584d84b6393289e6300078062374a0bb4877209",
+   "name": "s1_posiciones_simultaneas",
+   "opened": 4,
+   "provisional": {
+    "funding_status": [],
+    "gains_excluded_from_capital_usd": "0",
+    "losses_included_in_capital_usd": "0",
+    "open_positions": 0,
+    "open_unrealized_usd": "0",
+    "partial_usd": "0",
+    "trades": 0
+   },
+   "rejected": 3,
+   "rejection_reasons": {
+    "contradictory_signals": 2,
+    "insufficient_margin": 1
+   },
+   "restart": null,
+   "scenario_hash": "50e3b6b81099adb01d3bb495dce62271aa1c117d027c0548e4d150567c095cec",
+   "state_digest": "266740fcd0ec0c38ffe74141aca2ec4f51eddf4b242c75d60e7b62d0bad9bcef",
+   "stats": {
+    "candles_applied": 650,
+    "decisions_opened": 4,
+    "decisions_rejected": 3,
+    "intents_built": 7,
+    "intents_not_built": 1,
+    "positions_closed": 4,
+    "rejected:contradictory_signals": 2,
+    "rejected:insufficient_margin": 1,
+    "signals_received": 8
+   },
+   "time_order_ok": true,
+   "verified": {
+    "fees_usd": "1.500710",
+    "funding_usd": "-0.007350",
+    "net_usd": "13.9263",
+    "trades": 4
+   },
+   "violations": []
+  },
+  {
+   "capital_definitive_usd": "980.0009",
+   "checks": 14,
+   "description": "Cuatro stops seguidos: el capital baja, el presupuesto de 1 % baja con \u00e9l y la p\u00e9rdida diaria suspende nuevas entradas.",
+   "equity_usd": "980.0009",
+   "events": 805,
+   "feed_hash": "9f4f137d4020daecab78fdb36b10791e4b22dc83eea30300e9c33a7deb9bee00",
+   "journal_chain_intact": true,
+   "journal_entries": 21,
+   "journal_hash": "9053dcca6f8c4cccf788d3ec9f1625d0d255696673a8cc088e883d37fb689f3d",
+   "ledger_hash": "681bfc013771ac8def9aee11cf745db7e09b54c83905bcfb9b701795bb86e67a",
+   "name": "s2_perdidas_consecutivas",
+   "opened": 4,
+   "provisional": {
+    "funding_status": [],
+    "gains_excluded_from_capital_usd": "0",
+    "losses_included_in_capital_usd": "0",
+    "open_positions": 0,
+    "open_unrealized_usd": "0",
+    "partial_usd": "0",
+    "trades": 0
+   },
+   "rejected": 1,
+   "rejection_reasons": {
+    "daily_loss_budget": 1
+   },
+   "restart": null,
+   "scenario_hash": "a2f241b4d273342feed3cc0460e51916c2e9435a389768ddee76d1cce4195495",
+   "state_digest": "f73b0f824ff389ba853f9130ca6c927a6b60e8b047dd74f1948a92add6d47a0f",
+   "stats": {
+    "candles_applied": 800,
+    "decisions_opened": 4,
+    "decisions_rejected": 1,
+    "intents_built": 5,
+    "positions_closed": 4,
+    "rejected:daily_loss_budget": 1,
+    "signals_received": 5
+   },
+   "time_order_ok": true,
+   "verified": {
+    "fees_usd": "1.460990",
+    "funding_usd": "0.002914",
+    "net_usd": "-19.9991",
+    "trades": 4
+   },
+   "violations": []
+  },
+  {
+   "capital_definitive_usd": "1003.1766",
+   "checks": 12,
+   "description": "Eventos repetidos, versiones contradictorias de una se\u00f1al, se\u00f1al vencida y falsificada, vela duplicada, conflictiva, tard\u00eda y faltante.",
+   "equity_usd": "1003.1766",
+   "events": 372,
+   "feed_hash": "d626bcc92c062e0c73a932ea34c1e0ee52bac9770babe57a08e8ef3be328aab1",
+   "journal_chain_intact": true,
+   "journal_entries": 32,
+   "journal_hash": "8228313c27c526cd62a7647712cb01d7d4f509fc9a8f24b5cd4a9819cb241faa",
+   "ledger_hash": "5ef6ee718d069f9097b23c9196dcc4bd6b9d5bcdb1684796b13a9d9bdb3ac103",
+   "name": "s3_duplicados_y_orden",
+   "opened": 2,
+   "provisional": {
+    "funding_status": [],
+    "gains_excluded_from_capital_usd": "0",
+    "losses_included_in_capital_usd": "0",
+    "open_positions": 0,
+    "open_unrealized_usd": "0",
+    "partial_usd": "0",
+    "trades": 0
+   },
+   "rejected": 5,
+   "rejection_reasons": {
+    "duplicate_intent": 1,
+    "duplicate_signal": 1,
+    "inconsistent_signal": 2,
+    "position_already_open": 1,
+    "retroactive_intent": 3,
+    "stale_data": 1
+   },
+   "restart": null,
+   "scenario_hash": "b58a7744622061c2d94ad3423c83efa6d8c54f6723a715ee0ec20341cc7dd4bf",
+   "state_digest": "fd37902bd01779598a978eb8301c2b05318564618379d6f618e368ade4a23438",
+   "stats": {
+    "candles_applied": 359,
+    "conflicting_candles_rejected": 1,
+    "decisions_opened": 2,
+    "decisions_rejected": 5,
+    "duplicate_candles_ignored": 1,
+    "duplicate_events_ignored": 2,
+    "intents_built": 7,
+    "late_candles_refused": 1,
+    "positions_closed": 2,
+    "rejected:duplicate_intent": 1,
+    "rejected:duplicate_signal": 1,
+    "rejected:inconsistent_signal": 2,
+    "rejected:position_already_open": 1,
+    "rejected:retroactive_intent": 3,
+    "rejected:stale_data": 1,
+    "signals_invalid": 1,
+    "signals_received": 8
+   },
+   "time_order_ok": true,
+   "verified": {
+    "fees_usd": "0.930111",
+    "funding_usd": "0.016394",
+    "net_usd": "3.1766",
+    "trades": 2
+   },
+   "violations": []
+  },
+  {
+   "capital_definitive_usd": "1000.3985",
+   "checks": 13,
+   "description": "Funding completo, parcial y ausente en tres operaciones: lo verificado se separa de lo provisional.",
+   "equity_usd": "1028.3022",
+   "events": 724,
+   "feed_hash": "f5cfd24792dbe26fa6aae73d93b04b8e07049710fe5e5f0a93253437825b82ce",
+   "journal_chain_intact": true,
+   "journal_entries": 18,
+   "journal_hash": "7a87119b71eed82666c4d5bf55b233b902b7c71ecc0d051b6b7518aab2546dea",
+   "ledger_hash": "44b94b6e45877568b3626c595460c98ef466e5fd9a3ea4002a31aa675c34b9e3",
+   "name": "s4_funding_incompleto",
+   "opened": 4,
+   "provisional": {
+    "funding_status": [
+     "partial",
+     "unknown"
+    ],
+    "gains_excluded_from_capital_usd": "27.9037",
+    "losses_included_in_capital_usd": "-2.8438",
+    "open_positions": 0,
+    "open_unrealized_usd": "0",
+    "partial_usd": "25.0599",
+    "trades": 3
+   },
+   "rejected": 0,
+   "rejection_reasons": {},
+   "restart": null,
+   "scenario_hash": "3e1874d3bc3e1ad5b645e9976386113a6d1ce3d9ac15e084631026c49610662a",
+   "state_digest": "f063a530858245328f79b00d5191c0d43a9e683d7fc734f020fc927e231b03b1",
+   "stats": {
+    "candles_applied": 720,
+    "decisions_opened": 4,
+    "intents_built": 4,
+    "positions_closed": 4,
+    "signals_received": 4
+   },
+   "time_order_ok": true,
+   "verified": {
+    "fees_usd": "0.501874",
+    "funding_usd": "0.003",
+    "net_usd": "3.2423",
+    "trades": 1
+   },
+   "violations": []
+  },
+  {
+   "capital_definitive_usd": "996.0993",
+   "checks": 34,
+   "description": "Varias posiciones a la vez, p\u00e9rdidas seguidas, funding incompleto, se\u00f1ales y eventos duplicados, se\u00f1al vencida y un reinicio desde un checkpoint persistido (replay_log).",
+   "equity_usd": "996.0993",
+   "events": 2116,
+   "feed_hash": "718b0cc7d3701eef31632d0c6923909e7ee138c5c9fc6bfd2a73610d2f6686d6",
+   "journal_chain_intact": true,
+   "journal_entries": 73,
+   "journal_hash": "6d96b7c2854fbb89ed9bd70b6682c5e2fa785a89cfb1fa41b24ce5abda628b68",
+   "ledger_hash": "587cfc4e03dfb40726dda72d4ecca304e4de20c5bf2610f30e522fd4ecc17858",
+   "name": "s5_integral_reinicio_replay_log",
+   "opened": 9,
+   "provisional": {
+    "funding_status": [
+     "partial"
+    ],
+    "gains_excluded_from_capital_usd": "0",
+    "losses_included_in_capital_usd": "-8.6231",
+    "open_positions": 0,
+    "open_unrealized_usd": "0",
+    "partial_usd": "-8.6231",
+    "trades": 1
+   },
+   "rejected": 6,
+   "rejection_reasons": {
+    "contradictory_signals": 2,
+    "duplicate_intent": 1,
+    "duplicate_signal": 1,
+    "insufficient_margin": 1,
+    "retroactive_intent": 3,
+    "stale_data": 1
+   },
+   "restart": {
+    "checkpoint_arrival_ms": 1791238500000,
+    "crash_after_min": 163,
+    "equivalent_ledger": true,
+    "equivalent_state": true,
+    "journal_entries_before_crash": 45,
+    "lost_signal_events": [],
+    "mode": "replay_log",
+    "reference_capital_usd": "996.0993",
+    "reference_closed_trades": 9,
+    "reference_ledger_hash": "587cfc4e03dfb40726dda72d4ecca304e4de20c5bf2610f30e522fd4ecc17858",
+    "reference_state_digest": "a6e745893dc5fd94f7eb3869d25df93412d937c060978e160b1fd3c5dd0bac3a",
+    "restart_at_min": 172
+   },
+   "scenario_hash": "74984ca8430ac0a4dfcfa9bb9834daf83a476e16ea48cf25c2f9009a6a02ffba",
+   "state_digest": "a6e745893dc5fd94f7eb3869d25df93412d937c060978e160b1fd3c5dd0bac3a",
+   "stats": {
+    "candles_applied": 2100,
+    "decisions_opened": 9,
+    "decisions_rejected": 6,
+    "duplicate_events_ignored": 41,
+    "intents_built": 15,
+    "positions_closed": 9,
+    "rejected:contradictory_signals": 2,
+    "rejected:duplicate_intent": 1,
+    "rejected:duplicate_signal": 1,
+    "rejected:insufficient_margin": 1,
+    "rejected:retroactive_intent": 3,
+    "rejected:stale_data": 1,
+    "signals_received": 15
+   },
+   "time_order_ok": true,
+   "verified": {
+    "fees_usd": "3.170305",
+    "funding_usd": "0.001423",
+    "net_usd": "4.7224",
+    "trades": 8
+   },
+   "violations": []
+  },
+  {
+   "capital_definitive_usd": "1006.0243",
+   "checks": 31,
+   "description": "Varias posiciones a la vez, p\u00e9rdidas seguidas, funding incompleto, se\u00f1ales y eventos duplicados, se\u00f1al vencida y un reinicio desde un checkpoint persistido (live_gap).",
+   "equity_usd": "1006.0243",
+   "events": 2116,
+   "feed_hash": "718b0cc7d3701eef31632d0c6923909e7ee138c5c9fc6bfd2a73610d2f6686d6",
+   "journal_chain_intact": true,
+   "journal_entries": 70,
+   "journal_hash": "0355e20853453459a21f45e3206dfa240acc18fe8fa6b20e9db10a3dac44164d",
+   "ledger_hash": "ed03a2ab569d07e9b6dbac07b44acd9ae51da886aaccf37efd7832b566f3d6e0",
+   "name": "s5_integral_reinicio_live_gap",
+   "opened": 8,
+   "provisional": {
+    "funding_status": [
+     "partial"
+    ],
+    "gains_excluded_from_capital_usd": "0",
+    "losses_included_in_capital_usd": "-8.6231",
+    "open_positions": 0,
+    "open_unrealized_usd": "0",
+    "partial_usd": "-8.6231",
+    "trades": 1
+   },
+   "rejected": 6,
+   "rejection_reasons": {
+    "contradictory_signals": 2,
+    "duplicate_intent": 1,
+    "duplicate_signal": 1,
+    "insufficient_margin": 1,
+    "retroactive_intent": 3,
+    "stale_data": 1
+   },
+   "restart": {
+    "checkpoint_arrival_ms": 1791238500000,
+    "crash_after_min": 163,
+    "equivalent_ledger": false,
+    "equivalent_state": false,
+    "journal_entries_before_crash": 45,
+    "lost_signal_events": [
+     "signal:ce19b6cf8bdc61042dd49e4f:1"
+    ],
+    "mode": "live_gap",
+    "reference_capital_usd": "996.0993",
+    "reference_closed_trades": 9,
+    "reference_ledger_hash": "587cfc4e03dfb40726dda72d4ecca304e4de20c5bf2610f30e522fd4ecc17858",
+    "reference_state_digest": "a6e745893dc5fd94f7eb3869d25df93412d937c060978e160b1fd3c5dd0bac3a",
+    "restart_at_min": 172
+   },
+   "scenario_hash": "156f2a3c32da7c192d4f052e13d5056417def59bdd6a9d8580003050da528f94",
+   "state_digest": "1adecf6c84088780fdd0770c07c4397879d5a6bf5c698dc638c1b3e05c4a455f",
+   "stats": {
+    "candles_applied": 2100,
+    "decisions_opened": 8,
+    "decisions_rejected": 6,
+    "duplicate_events_ignored": 41,
+    "intents_built": 14,
+    "positions_closed": 8,
+    "rejected:contradictory_signals": 2,
+    "rejected:duplicate_intent": 1,
+    "rejected:duplicate_signal": 1,
+    "rejected:insufficient_margin": 1,
+    "rejected:retroactive_intent": 3,
+    "rejected:stale_data": 1,
+    "signals_received": 14
+   },
+   "time_order_ok": true,
+   "verified": {
+    "fees_usd": "2.784038",
+    "funding_usd": "0.003950",
+    "net_usd": "14.6474",
+    "trades": 7
+   },
+   "violations": []
+  }
+ ],
+ "schema": "balancita-portfolio-offline-results.v1"
+}
