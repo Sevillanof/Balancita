@@ -397,7 +397,7 @@ describe('FuturesTerminal local scenario presentation', () => {
     expect(await screen.findByText('Vela en formación')).toBeTruthy()
     expect(screen.getByText(/100\.150/)).toBeTruthy()
     // No fabricated engine state while the engine is off.
-    expect(screen.queryByText('Controles simulados')).toBeNull()
+    expect(screen.queryByText('Herramientas de simulación')).toBeNull()
     expect(screen.queryByText('Saldo USD')).toBeNull()
     expect(screen.queryByText('Aún no hay análisis registrados.')).toBeNull()
     expect(screen.queryByText('Posiciones y operaciones')).toBeNull()
@@ -580,7 +580,7 @@ describe('FuturesTerminal local scenario presentation', () => {
     expect(
       [...values].map((item) => item.getAttribute('data-value')),
     ).toContain('0.49986')
-    expect(screen.getByText('Controles simulados')).toBeTruthy()
+    expect(screen.getByText('Herramientas de simulación')).toBeTruthy()
     expect(screen.getByText(/no detiene el motor/)).toBeTruthy()
     for (const name of [
       'Pausar entradas (MOCK)',
@@ -1589,6 +1589,36 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
       expect(history().queryByText(/foreign-order/)).toBeNull()
       expect(screen.queryByText(/verdict-hash-9/)).toBeNull()
       expect(screen.getByText(/10\.000,49/)).toBeTruthy()
+    })
+
+    it('puts the tools in a secondary row below the chart, naming the run they act on', async () => {
+      await renderLive()
+      const secondary = screen.getByTestId('terminal-secondary')
+      const layout = screen.getByTestId('approved-terminal-layout')
+      expect(
+        layout.compareDocumentPosition(secondary) &
+          Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy()
+      const tools = within(
+        within(secondary).getByRole('region', {
+          name: 'Herramientas de simulación',
+        }),
+      )
+      expect(tools.getByText('live-market-view')).toBeTruthy()
+      expect(
+        tools.getByText(/no controlan los experimentos forward/),
+      ).toBeTruthy()
+      // The current-position block comes before the tools.
+      const position = within(secondary).getByRole('region', {
+        name: 'Posición actual',
+      })
+      expect(
+        position.compareDocumentPosition(
+          within(secondary).getByRole('region', {
+            name: 'Herramientas de simulación',
+          }),
+        ) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy()
     })
 
     it('collapses the history at first and keeps its provenance once expanded', async () => {

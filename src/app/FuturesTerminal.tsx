@@ -444,121 +444,129 @@ export default function FuturesTerminal({
             }
           />
           {!engineOff && (
-            <>
-              <SimulatedControls
-                localDemo={localDemo}
-                gatewayEngine={gatewayEngine}
-                entryRisk={entryRisk}
-                connected={connected}
-                commandPending={commandPending}
-                commandStatus={commandStatus}
-                confirmingReset={confirmingReset}
-                setConfirmingReset={setConfirmingReset}
-                sendCommand={sendCommand}
-              />
-              {gatewayEngine && (
-                <section
-                  className="connected-terminal__panel"
-                  aria-label="Posición actual"
-                >
-                  <h2>Posición actual</h2>
-                  <DataState
-                    kind="unavailable"
-                    title="Posición actual: No disponible"
-                    detail="Todavía no hay una fuente verificable de las posiciones de los experimentos forward (endpoint B5 pendiente). No significa «Sin posición abierta». Lo que sigue es historial del libro D."
+            <div
+              className="mc-terminal__secondary"
+              data-testid="terminal-secondary"
+            >
+              <div className="mc-terminal__secondary-main">
+                {gatewayEngine && (
+                  <section
+                    className="connected-terminal__panel"
+                    aria-label="Posición actual"
+                  >
+                    <h2>Posición actual</h2>
+                    <DataState
+                      kind="unavailable"
+                      title="Posición actual: No disponible"
+                      detail="Todavía no hay una fuente verificable de las posiciones de los experimentos forward (endpoint B5 pendiente). No significa «Sin posición abierta». Lo que sigue es historial del libro D."
+                    />
+                  </section>
+                )}
+                <GatewayHistory enabled={gatewayEngine} runId={activeRunId}>
+                  <PaperAccountPanel
+                    account={account}
+                    netValue={netValue}
+                    position={position}
+                    localDemo={localDemo}
+                    showAnalysisTime={showAnalysisTime}
+                    historical={gatewayEngine}
                   />
-                </section>
-              )}
-              <GatewayHistory enabled={gatewayEngine} runId={activeRunId}>
-                <PaperAccountPanel
-                  account={account}
-                  netValue={netValue}
-                  position={position}
-                  localDemo={localDemo}
-                  showAnalysisTime={showAnalysisTime}
-                  historical={gatewayEngine}
-                />
-                <ApprovedPortfolioTables
-                  label={`CARTERA PAPER · USD / ${productBase(product)}`}
-                  title="Posiciones y operaciones"
-                  ariaLabel="Posiciones paper"
-                  open={{
-                    title: gatewayEngine
-                      ? 'Posición registrada en el libro D'
-                      : 'Posición abierta',
-                    columns: [
-                      'Estrategia',
-                      'Dirección',
-                      `Cantidad ${productBase(product)}`,
-                      'Entrada USD',
-                      'Stop USD',
-                      'Objetivo USD',
-                    ],
-                    emptyLabel: gatewayEngine
-                      ? 'Sin posición abierta en el libro D.'
-                      : 'Sin posición abierta.',
-                    rows: position.side
-                      ? [
-                          {
-                            id: String(state.run_id),
-                            cells: [
-                              strategyLabel(position.strategy_id).split(
-                                ' · ',
-                              )[0]!,
-                              String(position.side),
-                              quantity(position.quantity_btc),
-                              money(position.entry_price_usd_per_btc),
-                              money(position.stop),
-                              money(position.target),
-                            ],
-                          },
-                        ]
-                      : [],
-                  }}
-                  closed={{
-                    title: 'Órdenes y ejecuciones',
-                    columns: ['Tipo', 'Estado', 'Referencia'],
-                    emptyLabel: 'No hay órdenes registradas.',
-                    rows: [
-                      ...orders.slice(-100).map((value, index) => {
-                        const order = record(value)
-                        return {
-                          id: String(order.order_id ?? index),
-                          cells: [
-                            String(
-                              order.side ??
-                                order.action ??
-                                order.order_type ??
-                                'Orden paper',
-                            ),
-                            reasonLabel(order.status ?? order.type),
-                            `${String(order.quantity_btc ?? 'Cantidad no disponible')} · ${String(order.order_id ?? 'ID no disponible')}${
-                              gatewayEngine &&
-                              typeof order.reason_code === 'string'
-                                ? ` · ${reasonLabel(order.reason_code)}`
-                                : ''
-                            }`,
-                          ],
-                        }
-                      }),
-                      ...(Array.isArray(state.fills) ? state.fills : [])
-                        .slice(-100)
-                        .map((value, index) => {
-                          const fill = record(value)
+                  <ApprovedPortfolioTables
+                    label={`CARTERA PAPER · USD / ${productBase(product)}`}
+                    title="Posiciones y operaciones"
+                    ariaLabel="Posiciones paper"
+                    open={{
+                      title: gatewayEngine
+                        ? 'Posición registrada en el libro D'
+                        : 'Posición abierta',
+                      columns: [
+                        'Estrategia',
+                        'Dirección',
+                        `Cantidad ${productBase(product)}`,
+                        'Entrada USD',
+                        'Stop USD',
+                        'Objetivo USD',
+                      ],
+                      emptyLabel: gatewayEngine
+                        ? 'Sin posición abierta en el libro D.'
+                        : 'Sin posición abierta.',
+                      rows: position.side
+                        ? [
+                            {
+                              id: String(state.run_id),
+                              cells: [
+                                strategyLabel(position.strategy_id).split(
+                                  ' · ',
+                                )[0]!,
+                                String(position.side),
+                                quantity(position.quantity_btc),
+                                money(position.entry_price_usd_per_btc),
+                                money(position.stop),
+                                money(position.target),
+                              ],
+                            },
+                          ]
+                        : [],
+                    }}
+                    closed={{
+                      title: 'Órdenes y ejecuciones',
+                      columns: ['Tipo', 'Estado', 'Referencia'],
+                      emptyLabel: 'No hay órdenes registradas.',
+                      rows: [
+                        ...orders.slice(-100).map((value, index) => {
+                          const order = record(value)
                           return {
-                            id: String(fill.fill_id ?? `fill-${index}`),
+                            id: String(order.order_id ?? index),
                             cells: [
-                              `Ejecución ${String(fill.action ?? fill.side ?? 'paper')}`,
-                              `${quantity(fill.quantity_btc)} @ ${money(fill.price_usd_per_btc)}`,
-                              String(fill.fill_id ?? 'Fill registrado'),
+                              String(
+                                order.side ??
+                                  order.action ??
+                                  order.order_type ??
+                                  'Orden paper',
+                              ),
+                              reasonLabel(order.status ?? order.type),
+                              `${String(order.quantity_btc ?? 'Cantidad no disponible')} · ${String(order.order_id ?? 'ID no disponible')}${
+                                gatewayEngine &&
+                                typeof order.reason_code === 'string'
+                                  ? ` · ${reasonLabel(order.reason_code)}`
+                                  : ''
+                              }`,
                             ],
                           }
                         }),
-                    ],
-                  }}
+                        ...(Array.isArray(state.fills) ? state.fills : [])
+                          .slice(-100)
+                          .map((value, index) => {
+                            const fill = record(value)
+                            return {
+                              id: String(fill.fill_id ?? `fill-${index}`),
+                              cells: [
+                                `Ejecución ${String(fill.action ?? fill.side ?? 'paper')}`,
+                                `${quantity(fill.quantity_btc)} @ ${money(fill.price_usd_per_btc)}`,
+                                String(fill.fill_id ?? 'Fill registrado'),
+                              ],
+                            }
+                          }),
+                      ],
+                    }}
+                  />
+                </GatewayHistory>
+              </div>
+              <div className="mc-terminal__secondary-tools">
+                <SimulatedControls
+                  localDemo={localDemo}
+                  gatewayEngine={gatewayEngine}
+                  entryRisk={entryRisk}
+                  connected={connected}
+                  commandPending={commandPending}
+                  commandStatus={commandStatus}
+                  confirmingReset={confirmingReset}
+                  setConfirmingReset={setConfirmingReset}
+                  sendCommand={sendCommand}
+                  runId={activeRunId}
                 />
-              </GatewayHistory>
-            </>
+              </div>
+            </div>
           )}
         </>
       )}

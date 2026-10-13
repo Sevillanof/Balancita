@@ -574,7 +574,7 @@
 @media (min-width: 1200px) {
   .demo-terminal__chart,
   .demo-terminal__chart.chart__container {
-    height: 560px;
+    height: clamp(560px, 70vh, 820px);
   }
 }
 @media (min-width: 901px) and (max-width: 1199px) {

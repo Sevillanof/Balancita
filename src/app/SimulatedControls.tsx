@@ -10,6 +10,7 @@ export default function SimulatedControls({
   confirmingReset,
   setConfirmingReset,
   sendCommand,
+  runId,
 }: {
   localDemo: boolean
   gatewayEngine: boolean
@@ -20,10 +21,19 @@ export default function SimulatedControls({
   confirmingReset: boolean
   setConfirmingReset: (value: boolean) => void
   sendCommand: (action: string) => void
+  /** Run the controls act on, as the stream reports it. */
+  runId?: string | null
 }) {
   return (
-    <section className="connected-terminal__panel" aria-label="Controles paper">
-      <h2>Controles simulados</h2>
+    <section
+      className="connected-terminal__panel"
+      aria-label="Herramientas de simulación"
+    >
+      <h2>Herramientas de simulación</h2>
+      <p>
+        Actúan solo sobre el run {runId ? <code>{runId}</code> : 'activo'}; no
+        controlan los experimentos forward.
+      </p>
       {localDemo && (
         <>
           <p>
