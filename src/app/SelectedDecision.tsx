@@ -11,11 +11,14 @@ export default function SelectedDecision({
   id,
   time,
   reason,
+  notes = [],
 }: {
   analysis: Record<string, unknown>
   id: string
   time: string
   reason: string
+  /** What this decision lacks on the chart or in the list. */
+  notes?: string[]
 }) {
   const selector = record(analysis.selector)
   const proposals = Array.isArray(analysis.proposals) ? analysis.proposals : []
@@ -31,6 +34,11 @@ export default function SelectedDecision({
         · {strategyLabel(selector.strategy_id ?? analysis.selected_strategy_id)}
       </p>
       <p>{reason}</p>
+      {notes.map((note) => (
+        <p key={note} role="status" data-testid="decision-limit">
+          <small>{note}</small>
+        </p>
+      ))}
       <p>
         <small>{time}</small>
       </p>

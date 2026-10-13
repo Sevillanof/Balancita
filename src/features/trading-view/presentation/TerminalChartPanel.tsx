@@ -628,7 +628,10 @@ export default function TerminalChartPanel({
           priceLines={lines}
           onSelect={(time, markerId) => {
             if (markerId) {
-              if (!markerId.startsWith('exit:')) onSelect(markerId)
+              // Only ids of this chart's decision markers reach the selection
+              // (exit markers and foreign ids are ignored).
+              if (markers.some((marker) => marker.id === markerId))
+                onSelect(markerId)
               return
             }
             if (!Number.isFinite(time)) return

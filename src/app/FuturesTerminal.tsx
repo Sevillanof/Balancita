@@ -21,6 +21,7 @@ import AppStatusChips from './AppStatusChips.tsx'
 import TerminalDecisions from './TerminalDecisions.tsx'
 import type { DecisionRow } from './terminal-decisions.ts'
 import SelectedDecision from './SelectedDecision.tsx'
+import { markerGap, markerGapNote } from './terminal-markers.ts'
 import TerminalMarketChart from './TerminalMarketChart.tsx'
 import {
   analysesNotice,
@@ -95,6 +96,12 @@ export default function FuturesTerminal({
       .find((analysis) => analysis.analysis_id === selectedAnalysisId) ??
     (analyses.length > 0 ? record(analyses.at(-1)) : null)
   const selectedId = String(selectedAnalysis?.analysis_id ?? '')
+  // An id that is not one of this product's analyses never becomes the
+  // selection (a stale or foreign marker/row id would blank the detail).
+  const selectAnalysis = (id: string) => {
+    if (analyses.some((analysis) => record(analysis).analysis_id === id))
+      setSelectedAnalysisId(id)
+  }
   const selectedDecisionTime = selectedAnalysis?.decision_time_ms
   const selectedOrder =
     selectedAnalysis && Number.isSafeInteger(selectedDecisionTime)
@@ -158,6 +165,26 @@ export default function FuturesTerminal({
         time: shortTime(analysis.decision_time_ms),
       }
     })
+  // Where the selected decision stands on the chart and in the list: what it
+  // lacks is said, never filled in.
+  const firstCandle = (Array.isArray(market.candles) ? market.candles : [])
+    .map(record)
+    .find((candle) => Number.isSafeInteger(candle.time_ms))?.time_ms
+  const selectedNotes: string[] = []
+  if (selectedAnalysis && (localDemo || gatewayEngine)) {
+    const gap = markerGap(selectedAnalysis, {
+      firstCandleMs:
+        typeof firstCandle === 'number'
+          ? Math.floor(firstCandle / 1000) * 1000
+          : null,
+      entriesOnly: !localDemo,
+    })
+    if (gap) selectedNotes.push(markerGapNote(gap))
+    if (!decisionRows.some((row) => row.id === selectedId))
+      selectedNotes.push(
+        'Esta decisión no aparece en la lista: solo se muestran las últimas 100.',
+      )
+  }
   const originalRunActive = activeRunId === bootstrap.active_run_id
   const localScenarioStatus = localDemo
     ? String(
@@ -385,7 +412,7 @@ export default function FuturesTerminal({
                   analyses={localDemo || gatewayEngine ? analyses : []}
                   selectedId={localDemo || gatewayEngine ? selectedId : ''}
                   entriesOnly={!localDemo}
-                  onSelect={setSelectedAnalysisId}
+                  onSelect={selectAnalysis}
                   apiBase={apiBase}
                   product={product}
                   ticker={
@@ -412,7 +439,7 @@ export default function FuturesTerminal({
               <TerminalDecisions
                 rows={decisionRows}
                 selectedId={selectedId}
-                onSelect={setSelectedAnalysisId}
+                onSelect={selectAnalysis}
                 notice={
                   engineOff
                     ? 'Motor de decisiones apagado. Solo se muestran velas y precio públicos de Kraken Futures; no hay análisis, cuenta ni operaciones simuladas.'
@@ -427,6 +454,7 @@ export default function FuturesTerminal({
                       id={selectedId}
                       time={utcTime(selectedDecisionTime)}
                       reason={analysisReason(selectedAnalysis, localDemo)}
+                      notes={selectedNotes}
                     />
                   ) : null
                 }
