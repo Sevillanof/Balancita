@@ -29,7 +29,7 @@ from .futures_costs import COST_MODEL_VERSION, cost_model_hash
 from .multi_risk import RiskPolicy
 from .multi_signals import BUY, SELL, make_signal, stable_hash, validate_signal
 from .paper_runner_store import (
-    CHECKPOINT_FILE, JOURNAL_FILE, SIGNALS_FILE, FileRunnerJournal, OffsetLedger, StoreError, hit, quarantine,
+    CHECKPOINT_FILE, JOURNAL_FILE, SIGNALS_FILE, DirectoryLock, FileRunnerJournal, OffsetLedger, StoreError, hit, quarantine,
     read_checkpoint, write_checkpoint,
 )
 from .portfolio import PORTFOLIO_SCHEMA, Portfolio, PortfolioPolicy
@@ -37,7 +37,7 @@ from .portfolio_audit import accounting_digest
 from .portfolio_watch import SCHEMA as WATCH_SCHEMA, WatchPolicy, parse_quote
 
 D = Decimal
-JOURNAL_SCHEMA = "balancita-paper-runner-journal.v1"
+JOURNAL_SCHEMA = "balancita-paper-runner-journal.v2"
 REPORT_SCHEMA = "balancita-paper-runner-report.v1"
 ONE_MINUTE_MS = 60_000
 GENESIS = "0" * 64
@@ -108,6 +108,25 @@ def engine_behavior():
     return {"version": ENGINE_BEHAVIOR_VERSION, "fingerprint": fingerprint}
 
 
+BUILD_IDENTITY_VERSION = "balancita-paper-build.1"
+# The modules whose code decides money, fills, costs, funding, risk levels or signals. Their bytes (line endings
+# normalised) are the build identity: a journal is only replayed by the code that wrote it.
+BUILD_MODULES = ("execution_timing", "futures_costs", "futures_simulator", "multi_risk", "multi_signals", "portfolio",
+                 "portfolio_audit", "portfolio_funding", "portfolio_watch", "signal_continuity")
+
+
+@functools.lru_cache(maxsize=1)
+def build_identity():
+    """Versioned identity of the financial code (decision D3, second layer). It complements ``engine_behavior``: the
+    synthetic scenarios only see the paths they exercise, the build identity sees *any* change in these modules."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    modules = {}
+    for name in BUILD_MODULES:
+        with open(os.path.join(here, name + ".py"), "rb") as handle:
+            modules[name] = stable_hash(handle.read().replace(b"\r\n", b"\n").decode("utf-8"))[:16]
+    return {"version": BUILD_IDENTITY_VERSION, "modules": modules, "digest": stable_hash(modules)[:16]}
+
+
 def manifest(config, log, strategies):
     """What a recovery must find unchanged. Any difference is a refusal, never a silent continuation."""
     frozen = {}
@@ -127,19 +146,21 @@ def manifest(config, log, strategies):
         "cost_model_version": COST_MODEL_VERSION, "cost_model_hash": cost_model_hash(),
         "funding_hash": stable_hash([[p, [[a, b, str(r)] for a, b, r in rows]] for p, rows in config.funding]),
         "engine_behavior": engine_behavior(),
+        "build_identity": build_identity(),
+        "offset_identity": "source|stream|epoch",
         "policy_status": "execution, watch and gap policies are experimental hypotheses, not validated values",
     }
 
 
 # ------------------------------------------------------------------------------------------------ events
-def make_event(kind, payload, *, t_ms, source="synthetic", source_offset=None, source_epoch=0, event_id=None):
+def make_event(kind, payload, *, t_ms, source="synthetic", stream="main", source_offset=None, source_epoch=0, event_id=None):
     """The envelope every source uses. ``t_ms`` is the arrival time; ``event_id`` identifies the event for
     de-duplication (default: a hash of what it says and where it came from)."""
     if kind not in EVENT_KINDS:
         raise ValueError("unknown event kind {!r}".format(kind))
-    event = {"kind": kind, "t_ms": int(t_ms), "source": source, "source_offset": source_offset,
+    event = {"kind": kind, "t_ms": int(t_ms), "source": source, "stream": stream, "source_offset": source_offset,
              "source_epoch": source_epoch, "payload": payload}
-    event["event_id"] = event_id or stable_hash(["event.v1", kind, source, source_epoch, source_offset, int(t_ms), payload])[:24]
+    event["event_id"] = event_id or stable_hash(["event.v2", kind, source, stream, source_epoch, source_offset, int(t_ms), payload])[:24]
     return event
 
 
@@ -152,11 +173,17 @@ def _check_event(event):
         return "invalid_event"
     offset = event.get("source_offset")
     epoch = event.get("source_epoch", 0)
-    if not isinstance(event.get("source"), str) or (offset is not None and (not isinstance(offset, int) or isinstance(offset, bool))):
+    if not _valid_name(event.get("source")) or not _valid_name(event.get("stream")) \
+            or (offset is not None and (not isinstance(offset, int) or isinstance(offset, bool))):
         return "invalid_event"
     if not isinstance(epoch, int) or isinstance(epoch, bool) or epoch < 0:
         return "invalid_event"
     return None
+
+
+def _valid_name(name):
+    """A source or stream name: a non-empty string without the characters the canonical identity uses as separators."""
+    return isinstance(name, str) and bool(name) and "|" not in name and "#" not in name
 
 
 def valid_candle(candle):
@@ -225,6 +252,7 @@ class PaperRunner(object):
         self.config, self.strategies, self.log = config, list(strategies), log
         self.evaluator = evaluator or minimal_evaluator
         self.directory = directory
+        self.lock = None
         self.portfolio = Portfolio(config.portfolio, funding=config.funding_map(), stop_policy=config.stop_policy)
         self.executor = TimedExecutor(self.portfolio, config.execution, watch=config.watch)
         self.status, self.clock = CREATED, None
@@ -273,8 +301,13 @@ class PaperRunner(object):
         stored = entries[0]["data"]["manifest"]
         if entries[0]["data"]["manifest_hash"] != stable_hash(self.manifest):
             diff = _manifest_diff(stored, self.manifest)
-            self._refuse("engine_behavior_changed" if diff == ["engine_behavior"] else "config_incompatible",
-                         "differs in: " + ", ".join(diff))
+            if "build_identity" in diff:
+                reason = "build_incompatible"
+            elif diff == ["engine_behavior"]:
+                reason = "engine_behavior_changed"
+            else:
+                reason = "config_incompatible"
+            self._refuse(reason, "differs in: " + ", ".join(diff))
         ended = [e["seq"] for e in entries if e["kind"] == "run_end"]
         if ended and ended[0] != len(entries):
             self._refuse("journal_incompatible", "entries after run_end (seq {})".format(ended[0]))
@@ -285,7 +318,8 @@ class PaperRunner(object):
             if entries[at - 1]["hash"] != checkpoint["journal_hash"] or entries[0]["hash"] != checkpoint.get("journal_start_hash", entries[0]["hash"]):
                 self._refuse("checkpoint_mismatch", "the checkpoint does not belong to this journal")
             if checkpoint["manifest_hash"] != entries[0]["data"]["manifest_hash"] or \
-                    checkpoint["engine_behavior_id"] != engine_behavior_id():
+                    checkpoint["engine_behavior_id"] != engine_behavior_id() or \
+                    checkpoint.get("build_identity") != build_identity()["digest"]:
                 self._refuse("checkpoint_incompatible", "manifest or engine behaviour differ")
         self.journal = journal if journal is not None else RunnerJournal(entries)
         self.replaying = True
@@ -331,9 +365,9 @@ class PaperRunner(object):
             self._count("events_rejected")
             self._count("rejected:" + data["reason"])
             if data.get("mark_offset"):
-                source, epoch, offset = data["source"], data["source_epoch"], data["source_offset"]
-                self.offsets.observe(source, epoch, offset, data["event_id"])
-                self.offsets.process(source, epoch, offset)
+                line, epoch, offset = (data["source"], data["stream"]), data["source_epoch"], data["source_offset"]
+                self.offsets.observe(line, epoch, offset, data["event_id"])
+                self.offsets.process(line, epoch, offset)
         elif kind == "signals_persisted":
             for ref in data["refs"]:
                 stored = self.log.entries[ref["seq"] - 1] if ref["seq"] <= len(self.log.entries) else None
@@ -380,7 +414,7 @@ class PaperRunner(object):
         if stream is not None:
             self.offsets.observe(stream[0], stream[1], stream[2], event["event_id"])
         if kind == "gap_declared":
-            self.offsets.declare(payload["source"], payload["epoch"], payload["from_offset"], payload["to_offset"],
+            self.offsets.declare((payload["source"], payload["stream"]), payload["epoch"], payload["from_offset"], payload["to_offset"],
                                  payload["reason"], payload["evidence"], payload["operator"], event["t_ms"])
             self._count("gaps_declared")
         if kind in ("cycle", "reconstructed"):
@@ -395,7 +429,7 @@ class PaperRunner(object):
     @staticmethod
     def _stream_of(event):
         offset = event.get("source_offset")
-        return None if offset is None else (event["source"], event.get("source_epoch", 0), offset)
+        return None if offset is None else ((event["source"], event["stream"]), event.get("source_epoch", 0), offset)
 
     def _maybe_close(self, event_id):
         """A cycle is processed (its offset may be confirmed) only when its signals and all its decisions are recorded."""
@@ -457,13 +491,16 @@ class PaperRunner(object):
         offset = event.get("source_offset") if valid else None
         offset = offset if isinstance(offset, int) and not isinstance(offset, bool) else None
         source = event.get("source") if valid else None
+        stream = event.get("stream") if valid else None
         epoch = event.get("source_epoch", 0) if valid else 0
-        mark = (reason in _MARKS_OFFSET and offset is not None and isinstance(source, str) and isinstance(epoch, int)
-                and not isinstance(epoch, bool) and epoch >= 0 and not self.offsets.stale_epoch(source, epoch)
-                and not self.offsets.reused(source, epoch, offset, event.get("event_id")))
+        line = (source, stream)
+        mark = (reason in _MARKS_OFFSET and offset is not None and _valid_name(source) and _valid_name(stream)
+                and isinstance(epoch, int) and not isinstance(epoch, bool) and epoch >= 0
+                and not self.offsets.stale_epoch(line, epoch)
+                and not self.offsets.reused(line, epoch, offset, event.get("event_id")))
         self._record(t_ms, "event_rejected", {"event_id": event.get("event_id") if valid else None,
                                               "kind": event.get("kind") if valid else None, "reason": reason,
-                                              "event_hash": stable_hash(event), "source": source, "source_offset": offset,
+                                              "event_hash": stable_hash(event), "source": source, "stream": stream, "source_offset": offset,
                                               "source_epoch": epoch, "mark_offset": mark})
         return {"status": status, "reason": reason, "event_id": event.get("event_id") if valid else None}
 
@@ -515,13 +552,14 @@ class PaperRunner(object):
         return None
 
     def _gap_check(self, payload):
-        source, epoch, lo, hi = payload["source"], payload["epoch"], payload["from_offset"], payload["to_offset"]
+        source, stream, epoch, lo, hi = (payload["source"], payload["stream"], payload["epoch"], payload["from_offset"],
+                                         payload["to_offset"])
         texts = (payload["reason"], payload["evidence"], payload["operator"])
         ints = (epoch, lo, hi)
-        if not isinstance(source, str) or any(not isinstance(x, str) or not x.strip() for x in texts) \
+        if not _valid_name(source) or not _valid_name(stream) or any(not isinstance(x, str) or not x.strip() for x in texts) \
                 or any(not isinstance(x, int) or isinstance(x, bool) for x in ints) or lo > hi or epoch < 0:
             return "invalid_event"
-        if not any(a <= lo and hi <= b for a, b in self.offsets.missing(source, epoch)):
+        if not any(a <= lo and hi <= b for a, b in self.offsets.missing((source, stream), epoch)):
             return "gap_not_a_hole"      # only offsets that are really missing can be declared, never processed ones
         return None
 
@@ -614,11 +652,16 @@ class PaperRunner(object):
     @classmethod
     def create(cls, directory, config, strategies, *, evaluator=None):
         """A new durable run in an empty ``directory``: signal log, journal and a first checkpoint."""
-        os.makedirs(directory, exist_ok=True)
-        log = SC.SignalLog.create(os.path.join(directory, SIGNALS_FILE), config.start_ms)
-        journal = FileRunnerJournal.create(os.path.join(directory, JOURNAL_FILE))
-        runner = cls(config, strategies, log, journal=journal, evaluator=evaluator, directory=directory)
-        runner.checkpoint()
+        lock = _lock(directory)
+        try:
+            log = SC.SignalLog.create(os.path.join(directory, SIGNALS_FILE), config.start_ms)
+            journal = FileRunnerJournal.create(os.path.join(directory, JOURNAL_FILE))
+            runner = cls(config, strategies, log, journal=journal, evaluator=evaluator, directory=directory)
+            runner.lock = lock
+            runner.checkpoint()
+        except BaseException:
+            lock.release()
+            raise
         return runner
 
     @classmethod
@@ -628,6 +671,18 @@ class PaperRunner(object):
         the replay does not reproduce, and signals no accepted event explains. ``bad_checkpoint="rebuild"`` is the
         explicit operator action after a damaged checkpoint: the file is kept as evidence, the journal replayed in full
         and a new checkpoint written."""
+        if not os.path.isdir(directory):
+            raise RunnerError("journal_missing", directory)
+        lock = _lock(directory)         # before reading anything: a second opener must not touch a single byte
+        try:
+            runner = cls._recover_dir(directory, config, strategies, recovery_ms, evaluator, bad_checkpoint, lock)
+        except BaseException:
+            lock.release()
+            raise
+        return runner
+
+    @classmethod
+    def _recover_dir(cls, directory, config, strategies, recovery_ms, evaluator, bad_checkpoint, lock):
         paths = {name: os.path.join(directory, name) for name in (JOURNAL_FILE, CHECKPOINT_FILE, SIGNALS_FILE)}
         try:
             journal = FileRunnerJournal.load(paths[JOURNAL_FILE])
@@ -649,10 +704,17 @@ class PaperRunner(object):
             raise RunnerError("checkpoint_missing", "the journal has entries but no checkpoint")
         runner = cls(config, strategies, log, entries=journal.entries, journal=journal, evaluator=evaluator,
                      directory=directory, checkpoint=checkpoint)
+        runner.lock = lock
         if runner.status != FINISHED:
             runner._begin_recovery(recovery_ms, journal.tail_discarded, rebuilt)
             runner.checkpoint()
         return runner
+
+    def close(self):
+        """Releases the single-writer lock. The process dying does the same; this is for orderly shutdowns and tests."""
+        if self.lock is not None:
+            self.lock.release()
+            self.lock = None
 
     # ---- checkpoint ------------------------------------------------------------------------------------------
     def checkpoint(self):
@@ -661,7 +723,7 @@ class PaperRunner(object):
             raise RunnerError("no_directory", "this runner is not durable")
         entries = self.journal.entries
         body = {"upto_seq": len(entries), "journal_hash": self.journal.head, "journal_start_hash": entries[0]["hash"],
-                "manifest_hash": entries[0]["data"]["manifest_hash"], "engine_behavior_id": engine_behavior_id(),
+                "manifest_hash": entries[0]["data"]["manifest_hash"], "engine_behavior_id": engine_behavior_id(), "build_identity": build_identity()["digest"],
                 "state_digest": self.state_digest(), "financial_digest": self.financial_digest(),
                 "confirmable_offsets": self.offsets.confirmable(), "signal_log_entries": len(self.log.entries),
                 "signal_log_hash": self.log.head}
@@ -674,9 +736,9 @@ class PaperRunner(object):
         """Feeds a whole source in order. Returns the per-event results."""
         return [self.handle(event) for event in events]
 
-    def declare_gap(self, source, epoch, from_offset, to_offset, *, reason, evidence, operator, t_ms):
+    def declare_gap(self, source, stream, epoch, from_offset, to_offset, *, reason, evidence, operator, t_ms):
         """The operator's durable statement that a range of offsets will not arrive (decision D8)."""
-        return self.handle(make_event("gap_declared", {"source": source, "epoch": epoch, "from_offset": from_offset,
+        return self.handle(make_event("gap_declared", {"source": source, "stream": stream, "epoch": epoch, "from_offset": from_offset,
                                                        "to_offset": to_offset, "reason": reason, "evidence": evidence,
                                                        "operator": operator}, t_ms=t_ms, source="operator"))
 
@@ -738,6 +800,13 @@ class PaperRunner(object):
                 "integrity": self.integrity(),
                 "journal": {"entries": len(self.journal.entries), "head": self.journal.head},
                 "state_digest": self.state_digest()}
+
+
+def _lock(directory):
+    try:
+        return DirectoryLock(directory)
+    except StoreError as error:
+        raise RunnerError(error.reason, str(error))
 
 
 def engine_behavior_id():

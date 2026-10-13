@@ -7,7 +7,7 @@
   the directory) *after* the journal entries it describes are durable. It holds no financial state, only the position
   in the journal and the digests a replay must reproduce. A damaged checkpoint is moved aside (never deleted, never
   overwritten) so the evidence is kept.
-* ``OffsetLedger``: for every ``(source, epoch)`` stream, which offsets were observed, which were processed, the
+* ``OffsetLedger``: for every ``(source, stream, epoch)`` identity (the first argument of every method is the ``(source, stream)`` pair), which offsets were observed, which were processed, the
   highest *contiguous* confirmed offset and the holes. A hole stays a hole until the event arrives or an operator
   declares it (``gap_declared``); a declared gap lets the confirmed offset advance but is never counted as recovered.
 * Fault injection (``arm``) to cut the power at precise points, plus the stage 5 faults of ``SignalLog``.
@@ -15,6 +15,7 @@
 No wall clock, no network, no randomness, no credentials; not connected to anything active.
 """
 
+import fcntl
 import json
 import os
 import shutil
@@ -26,7 +27,8 @@ JOURNAL_FILE = "runner-journal.jsonl"
 CHECKPOINT_FILE = "runner-checkpoint.json"
 SIGNALS_FILE = "signals.jsonl"
 QUARANTINE_DIR = "quarantine"
-CHECKPOINT_SCHEMA = "balancita-paper-runner-checkpoint.v1"
+CHECKPOINT_SCHEMA = "balancita-paper-runner-checkpoint.v2"
+LOCK_FILE = "runner.lock"
 GENESIS = "0" * 64
 
 
@@ -210,8 +212,35 @@ def _merge(ranges):
     return out
 
 
+# ------------------------------------------------------------------------------------------------ single writer
+class DirectoryLock(object):
+    """Exclusive, non-blocking ``flock`` on ``<dir>/runner.lock`` for the whole life of a runner. The kernel drops it when
+    the process dies (even abruptly), so a crash never leaves a stale lock. A second opener fails with ``directory_locked``
+    *before* it reads, truncates, quarantines or appends anything."""
+
+    def __init__(self, directory):
+        os.makedirs(directory, exist_ok=True)
+        self.path = os.path.join(directory, LOCK_FILE)
+        self.handle = open(self.path, "a+b")
+        try:
+            fcntl.flock(self.handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except (IOError, OSError):
+            self.handle.close()
+            self.handle = None
+            raise StoreError("directory_locked", "another process (or runner) writes in " + directory)
+
+    def release(self):
+        if self.handle is not None:
+            self.handle.close()          # closing the descriptor releases the flock
+            self.handle = None
+
+
+def _label(line, epoch):
+    return "{}|{}#{}".format(line[0], line[1], epoch)
+
+
 class OffsetLedger(object):
-    """Per ``(source, epoch)``: what was observed, what was processed, what is confirmed and what is missing.
+    """Per ``(source, stream, epoch)``: what was observed, what was processed, what is confirmed and what is missing.
 
     * observed: the highest offset seen at all (it says nothing about continuity);
     * processed: offsets whose event is durably in the journal (accepted or rejected) and whose obligations are closed;
@@ -220,45 +249,45 @@ class OffsetLedger(object):
     * holes: offsets between the first and the highest observed that are neither processed nor declared;
     * declared gaps: an operator's durable statement that a range will not arrive. They let ``contiguous`` advance;
       they never make the missing events "recovered" and are always reported separately.
-    A source that restarts its numbering must say so with a higher ``epoch``; an older one is refused."""
+    A stream that restarts its numbering must say so with a higher ``epoch``; an older one is refused."""
 
     def __init__(self):
         self.streams = {}
         self.max_epoch = {}
-        self.owners = {}      # (source, epoch, offset) -> event_id that took the offset
+        self.owners = {}      # (line, epoch, offset) -> event_id that took the offset
 
-    def _stream(self, source, epoch):
-        return self.streams.setdefault((source, epoch), {"base": None, "observed": None, "processed": [], "declared": []})
+    def _stream(self, line, epoch):
+        return self.streams.setdefault((line, epoch), {"base": None, "observed": None, "processed": [], "declared": []})
 
-    def stale_epoch(self, source, epoch):
-        return epoch < self.max_epoch.get(source, epoch)
+    def stale_epoch(self, line, epoch):
+        return epoch < self.max_epoch.get(line, epoch)
 
-    def reused(self, source, epoch, offset, event_id):
-        owner = self.owners.get((source, epoch, offset))
+    def reused(self, line, epoch, offset, event_id):
+        owner = self.owners.get((line, epoch, offset))
         return owner is not None and owner != event_id
 
-    def observe(self, source, epoch, offset, event_id):
-        self.max_epoch[source] = max(epoch, self.max_epoch.get(source, epoch))
-        stream = self._stream(source, epoch)
+    def observe(self, line, epoch, offset, event_id):
+        self.max_epoch[line] = max(epoch, self.max_epoch.get(line, epoch))
+        stream = self._stream(line, epoch)
         stream["base"] = offset if stream["base"] is None else min(stream["base"], offset)
         stream["observed"] = offset if stream["observed"] is None else max(stream["observed"], offset)
-        self.owners.setdefault((source, epoch, offset), event_id)
+        self.owners.setdefault((line, epoch, offset), event_id)
 
-    def process(self, source, epoch, offset):
-        stream = self._stream(source, epoch)
+    def process(self, line, epoch, offset):
+        stream = self._stream(line, epoch)
         stream["processed"] = _merge(stream["processed"] + [[offset, offset]])
 
-    def declare(self, source, epoch, lo, hi, reason, evidence, operator, t_ms):
-        stream = self._stream(source, epoch)
+    def declare(self, line, epoch, lo, hi, reason, evidence, operator, t_ms):
+        stream = self._stream(line, epoch)
         stream["declared"].append({"from": lo, "to": hi, "reason": reason, "evidence": evidence, "operator": operator,
                                    "t_ms": t_ms})
 
     def _covered(self, stream):
         return _merge(stream["processed"] + [[g["from"], g["to"]] for g in stream["declared"]])
 
-    def missing(self, source, epoch):
+    def missing(self, line, epoch):
         """Ranges between the first and the highest observed offset that are neither processed nor declared."""
-        stream = self.streams.get((source, epoch))
+        stream = self.streams.get((line, epoch))
         if not stream or stream["base"] is None:
             return []
         out, cursor = [], stream["base"]
@@ -272,8 +301,8 @@ class OffsetLedger(object):
             out.append([cursor, stream["observed"]])
         return [r for r in out if r[0] <= r[1]]
 
-    def contiguous(self, source, epoch):
-        stream = self.streams.get((source, epoch))
+    def contiguous(self, line, epoch):
+        stream = self.streams.get((line, epoch))
         if not stream or stream["base"] is None:
             return None
         for lo, hi in self._covered(stream):
@@ -282,16 +311,16 @@ class OffsetLedger(object):
         return None
 
     def confirmable(self):
-        """What may be acknowledged to each producer: ``{"source#epoch": highest contiguous offset}``."""
-        return {"{}#{}".format(s, e): self.contiguous(s, e) for (s, e) in sorted(self.streams)}
+        """What may be acknowledged to each producer: ``{"source|stream#epoch": highest contiguous offset}``."""
+        return {_label(s, e): self.contiguous(s, e) for (s, e) in sorted(self.streams)}
 
     def summary(self):
         out = {}
-        for (source, epoch) in sorted(self.streams):
-            stream = self.streams[(source, epoch)]
-            out["{}#{}".format(source, epoch)] = {
+        for (line, epoch) in sorted(self.streams):
+            stream = self.streams[(line, epoch)]
+            out[_label(line, epoch)] = {
                 "first": stream["base"], "observed": stream["observed"], "processed": stream["processed"],
-                "contiguous": self.contiguous(source, epoch), "holes": self.missing(source, epoch),
+                "contiguous": self.contiguous(line, epoch), "holes": self.missing(line, epoch),
                 "declared_gaps": stream["declared"]}
         return out
 

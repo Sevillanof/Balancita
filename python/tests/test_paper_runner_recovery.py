@@ -81,17 +81,32 @@ def strategies():
 
 class Base(unittest.TestCase):
     def setUp(self):
+        for r in getattr(self, "live", ()):
+            r.close()
         self.dir = tempfile.mkdtemp()
+        self.live = []
         self.addCleanup(shutil.rmtree, self.dir, True)
+        self.addCleanup(self.die)
         ST.disarm()
         self.addCleanup(ST.disarm)
 
     def fresh(self, name="run"):
         path = os.path.join(self.dir, name)
-        return path, PaperRunner.create(path, cfg(), strategies())
+        r = PaperRunner.create(path, cfg(), strategies())
+        self.live.append(r)
+        return path, r
 
-    def recover(self, path, recovery_ms, **kw):
-        return PaperRunner.recover(path, cfg(), strategies(), recovery_ms, **kw)
+    def die(self):
+        """The simulated crash of every runner this test opened: the dying process releases its lock."""
+        for r in self.live:
+            r.close()
+        del self.live[:]
+
+    def recover(self, path, recovery_ms, config=None, **kw):
+        self.die()
+        r = PaperRunner.recover(path, config or cfg(), strategies(), recovery_ms, **kw)
+        self.live.append(r)
+        return r
 
     def fingerprint(self, r):
         return (r.financial_digest(), r.portfolio.ledger_hash() if hasattr(r.portfolio, "ledger_hash") else None,
@@ -130,7 +145,7 @@ class Base(unittest.TestCase):
 class Store(Base):
     def test_create_writes_journal_signals_and_a_checkpoint(self):
         path, r = self.fresh()
-        self.assertEqual(sorted(os.listdir(path)), [ST.CHECKPOINT_FILE, ST.JOURNAL_FILE, ST.SIGNALS_FILE])
+        self.assertEqual(sorted(os.listdir(path)), sorted([ST.CHECKPOINT_FILE, ST.LOCK_FILE, ST.JOURNAL_FILE, ST.SIGNALS_FILE]))
         self.assertEqual(ST.read_checkpoint(os.path.join(path, ST.CHECKPOINT_FILE))["upto_seq"], 1)
 
     def test_a_clean_run_recovers_to_the_same_state(self):
@@ -263,43 +278,55 @@ class CheckpointDamage(Base):
             self.recover(path, r.clock + 1)
 
 
+LINE = ("s", "q")
+
+
 class Offsets(unittest.TestCase):
     def led(self, *offsets, **kw):
         ledger = OffsetLedger()
         for o in offsets:
-            ledger.observe("s", 0, o, "e{}".format(o))
-            ledger.process("s", 0, o)
+            ledger.observe(LINE, 0, o, "e{}".format(o))
+            ledger.process(LINE, 0, o)
         return ledger
 
     def test_observed_is_not_contiguous(self):
         ledger = self.led(1, 2, 3, 6)
-        self.assertEqual(ledger.contiguous("s", 0), 3)
-        self.assertEqual(ledger.summary()["s#0"]["observed"], 6)
-        self.assertEqual(ledger.missing("s", 0), [[4, 5]])
+        self.assertEqual(ledger.contiguous(LINE, 0), 3)
+        self.assertEqual(ledger.summary()["s|q#0"]["observed"], 6)
+        self.assertEqual(ledger.missing(LINE, 0), [[4, 5]])
         self.assertEqual(ledger.holes_count(), 1)
 
     def test_the_hole_closes_when_the_offsets_arrive(self):
         ledger = self.led(1, 2, 3, 6)
         for o in (5, 4):
-            ledger.observe("s", 0, o, "e{}".format(o))
-            ledger.process("s", 0, o)
-        self.assertEqual(ledger.contiguous("s", 0), 6)
+            ledger.observe(LINE, 0, o, "e{}".format(o))
+            ledger.process(LINE, 0, o)
+        self.assertEqual(ledger.contiguous(LINE, 0), 6)
         self.assertEqual(ledger.holes_count(), 0)
 
     def test_a_declared_gap_lets_contiguous_advance_but_stays_reported(self):
         ledger = self.led(1, 2, 3, 6)
-        ledger.declare("s", 0, 4, 5, "feed outage", "ticket 12", "fran", 1)
-        self.assertEqual(ledger.contiguous("s", 0), 6)
+        ledger.declare(LINE, 0, 4, 5, "feed outage", "ticket 12", "fran", 1)
+        self.assertEqual(ledger.contiguous(LINE, 0), 6)
         self.assertEqual(ledger.holes_count(), 0)
-        self.assertEqual(len(ledger.summary()["s#0"]["declared_gaps"]), 1)
+        self.assertEqual(len(ledger.summary()["s|q#0"]["declared_gaps"]), 1)
+
+    def test_the_same_offset_in_two_streams_is_two_different_things(self):
+        ledger = self.led(1, 2)
+        ledger.observe(("s", "other"), 0, 1, "x1")
+        ledger.process(("s", "other"), 0, 1)
+        self.assertFalse(ledger.reused(("s", "other"), 0, 1, "x1"))
+        self.assertTrue(ledger.reused(LINE, 0, 1, "x1"))
+        self.assertEqual(ledger.confirmable(), {"s|q#0": 2, "s|other#0": 1})
+        self.assertEqual(ledger.contiguous(("t", "q"), 0), None)
 
     def test_stale_epoch_and_offset_reuse(self):
         ledger = self.led(1, 2)
-        ledger.observe("s", 1, 1, "n1")
-        self.assertTrue(ledger.stale_epoch("s", 0))
-        self.assertFalse(ledger.stale_epoch("s", 1))
-        self.assertTrue(ledger.reused("s", 1, 1, "other"))
-        self.assertFalse(ledger.reused("s", 1, 1, "n1"))
+        ledger.observe(LINE, 1, 1, "n1")
+        self.assertTrue(ledger.stale_epoch(LINE, 0))
+        self.assertFalse(ledger.stale_epoch(LINE, 1))
+        self.assertTrue(ledger.reused(LINE, 1, 1, "other"))
+        self.assertFalse(ledger.reused(LINE, 1, 1, "n1"))
 
 
 class OffsetsInTheRunner(Base):
@@ -308,19 +335,19 @@ class OffsetsInTheRunner(Base):
         events = session()
         r.run([events[0], events[1], events[3]])      # offsets 1, 2 and 4: 3 is missing
         self.assertEqual(r.integrity()["offset_holes"], 1)
-        self.assertEqual(r.integrity()["confirmable_offsets"][SRC + "#0"], 2)
-        out = r.declare_gap(SRC, 0, 3, 3, reason="feed outage", evidence="ticket 12", operator="fran", t_ms=CYCLE + 7 * SEC)
+        self.assertEqual(r.integrity()["confirmable_offsets"][SRC + "|main#0"], 2)
+        out = r.declare_gap(SRC, "main", 0, 3, 3, reason="feed outage", evidence="ticket 12", operator="fran", t_ms=CYCLE + 7 * SEC)
         self.assertEqual(out["status"], "accepted")
-        self.assertEqual(r.integrity()["confirmable_offsets"][SRC + "#0"], 4)
-        self.assertEqual(r.integrity()["offsets"][SRC + "#0"]["declared_gaps"][0]["reason"], "feed outage")
+        self.assertEqual(r.integrity()["confirmable_offsets"][SRC + "|main#0"], 4)
+        self.assertEqual(r.integrity()["offsets"][SRC + "|main#0"]["declared_gaps"][0]["reason"], "feed outage")
         r2 = self.recover(path, CYCLE + 8 * SEC)
-        self.assertEqual(r2.integrity()["confirmable_offsets"][SRC + "#0"], 4)
+        self.assertEqual(r2.integrity()["confirmable_offsets"][SRC + "|main#0"], 4)
         self.assertEqual(r2.integrity()["offsets"], r.integrity()["offsets"])
 
     def test_a_gap_over_offsets_already_processed_is_refused(self):
         path, r = self.fresh()
         r.run(session()[:3])
-        out = r.declare_gap(SRC, 0, 1, 2, reason="x", evidence="y", operator="fran", t_ms=CYCLE + 7 * SEC)
+        out = r.declare_gap(SRC, "main", 0, 1, 2, reason="x", evidence="y", operator="fran", t_ms=CYCLE + 7 * SEC)
         self.assertEqual((out["status"], out["reason"]), ("rejected", "gap_not_a_hole"))
 
     def test_a_rejected_event_consumes_its_offset_but_a_duplicate_does_not(self):
@@ -330,7 +357,7 @@ class OffsetsInTheRunner(Base):
         bad = quote(BTC, CYCLE + 4 * SEC, "100000", 3)
         bad["payload"]["bid"] = "-1"
         self.assertEqual(r.handle(bad)["reason"], "invalid_quote")
-        self.assertEqual(r.integrity()["confirmable_offsets"][SRC + "#0"], 3)
+        self.assertEqual(r.integrity()["confirmable_offsets"][SRC + "|main#0"], 3)
         self.assertEqual(r.handle(events[1])["status"], "duplicate")
         self.assertEqual(r.integrity()["offset_holes"], 0)
 
@@ -527,7 +554,7 @@ class Compatibility(Base):
         r.run(session())
         other = cfg(portfolio=PortfolioPolicy(**dict(vars(PortfolioPolicy()), **{})), stop_policy="close")
         with self.assertRaises(RunnerError) as caught:
-            PaperRunner.recover(path, other, strategies(), r.clock + 1)
+            self.recover(path, r.clock + 1, config=other)
         self.assertEqual(caught.exception.reason, "config_incompatible")
 
     def test_a_change_of_engine_behaviour_alone_is_named_as_such(self):
@@ -560,6 +587,217 @@ class Compatibility(Base):
         with self.assertRaises(RunnerError) as caught:
             self.recover(path, r.clock + 1)
         self.assertEqual(caught.exception.reason, "orphan_signal")
+
+
+class Streams(Base):
+    """Offsets belong to ``(source, stream, epoch)``: the same number in two streams is two different things."""
+
+    @staticmethod
+    def on(stream, event, offset):
+        event = dict(event, stream=stream, source_offset=offset)
+        event["event_id"] = make_event(event["kind"], event["payload"], t_ms=event["t_ms"], source=SRC, stream=stream,
+                                       source_offset=offset)["event_id"]
+        return event
+
+    def test_quotes_and_candles_can_both_use_offset_one(self):
+        path, r = self.fresh()
+        ev = session()
+        out = r.run([self.on("quotes", ev[2], 1), self.on("quotes", ev[3], 2), self.on("candles", ev[4], 1)])
+        self.assertEqual([x["status"] for x in out], ["accepted"] * 3)
+        confirm = r.integrity()["confirmable_offsets"]
+        self.assertEqual((confirm[SRC + "|quotes#0"], confirm[SRC + "|candles#0"]), (2, 1))
+
+    def test_contiguity_is_computed_per_stream(self):
+        path, r = self.fresh()
+        ev = session()
+        r.run([self.on("quotes", ev[2], 1), self.on("quotes", ev[3], 3), self.on("candles", ev[0], 1)])
+        summary = r.integrity()["offsets"]
+        self.assertEqual(summary[SRC + "|quotes#0"]["contiguous"], 1)
+        self.assertEqual(summary[SRC + "|quotes#0"]["holes"], [[2, 2]])
+        self.assertEqual(summary[SRC + "|candles#0"]["holes"], [])
+        self.assertEqual(r.integrity()["offset_holes"], 1)
+
+    def test_a_gap_in_one_stream_does_not_close_the_hole_of_another(self):
+        path, r = self.fresh()
+        ev = session()
+        r.run([self.on("quotes", ev[2], 1), self.on("quotes", ev[3], 3), self.on("candles", ev[0], 1),
+               self.on("candles", ev[1], 3)])
+        out = r.declare_gap(SRC, "quotes", 0, 2, 2, reason="outage", evidence="t1", operator="fran", t_ms=CYCLE + 7 * SEC)
+        self.assertEqual(out["status"], "accepted")
+        summary = r.integrity()["offsets"]
+        self.assertEqual(summary[SRC + "|quotes#0"]["contiguous"], 3)
+        self.assertEqual(summary[SRC + "|candles#0"]["holes"], [[2, 2]])
+        r2 = self.recover(path, CYCLE + 8 * SEC)
+        self.assertEqual(r2.integrity()["offsets"], summary)
+
+    def test_stream_identity_survives_recovery_and_is_in_the_manifest(self):
+        path, r = self.fresh()
+        self.assertEqual(r.manifest["offset_identity"], "source|stream|epoch")
+        self.assertEqual(r.journal.entries[0]["data"]["manifest"]["journal_schema"], "balancita-paper-runner-journal.v2")
+
+    def test_names_that_would_collide_in_the_canonical_form_are_invalid(self):
+        path, r = self.fresh()
+        ev = session()[2]
+        for field, bad in (("source", "a|b"), ("stream", "x#1"), ("stream", "")):
+            with self.subTest(field=field, bad=bad):
+                self.assertEqual(r.handle(dict(ev, **{field: bad}))["reason"], "invalid_event")
+
+
+class SingleWriter(Base):
+    """One writer per run directory; the kernel drops the lock when a process dies, however abruptly."""
+
+    HOLDER = """
+import sys, time
+sys.path.insert(0, {py!r})
+sys.path.insert(0, {tests!r})
+import test_paper_runner_recovery as T
+from balancita_engine.paper_runner import PaperRunner
+path, mode = sys.argv[1:3]
+r = PaperRunner.create(path, T.cfg(), T.strategies()) if mode == "create" else PaperRunner.recover(path, T.cfg(), T.strategies(), int(sys.argv[3]))
+r.run(T.session()[:3])
+print("ready", flush=True)
+time.sleep(120)
+"""
+    OPENER = """
+import sys, json
+sys.path.insert(0, {py!r})
+sys.path.insert(0, {tests!r})
+import test_paper_runner_recovery as T
+from balancita_engine.paper_runner import PaperRunner, RunnerError
+try:
+    PaperRunner.recover(sys.argv[1], T.cfg(), T.strategies(), int(sys.argv[2]))
+    print(json.dumps({{"ok": True}}))
+except RunnerError as error:
+    print(json.dumps({{"ok": False, "reason": error.reason}}))
+"""
+
+    def where(self):
+        return (os.path.dirname(os.path.dirname(os.path.abspath(ST.__file__))), os.path.dirname(os.path.abspath(__file__)))
+
+    def start(self, code, *args):
+        py, tests = self.where()
+        proc = subprocess.Popen([sys.executable, "-c", code.format(py=py, tests=tests)] + list(args), stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, text=True)
+        self.addCleanup(lambda: proc.poll() is None and proc.kill())
+        self.addCleanup(lambda: [proc.stdout.close(), proc.stderr.close()])
+        return proc
+
+    def holder(self, path, mode="create", *args):
+        proc = self.start(self.HOLDER, path, mode, *args)
+        self.assertEqual(proc.stdout.readline().strip(), "ready", proc.stderr.read() if proc.poll() is not None else "")
+        return proc
+
+    def open_elsewhere(self, path, at):
+        proc = self.start(self.OPENER, path, str(at))
+        out, err = proc.communicate(timeout=60)
+        self.assertEqual(proc.returncode, 0, err)
+        return json.loads(out.strip().splitlines()[-1])
+
+    def snapshot(self, path):
+        return {n: slurp(os.path.join(path, n)) for n in (ST.JOURNAL_FILE, ST.SIGNALS_FILE, ST.CHECKPOINT_FILE)}
+
+    def test_a_second_open_in_the_same_process_fails_without_touching_anything(self):
+        path, r = self.fresh()
+        r.run(session()[:3])
+        before = self.snapshot(path)
+        with self.assertRaises(RunnerError) as caught:
+            PaperRunner.recover(path, cfg(), strategies(), r.clock + 1)
+        self.assertEqual(caught.exception.reason, "directory_locked")
+        with self.assertRaises(RunnerError) as caught:
+            PaperRunner.create(path, cfg(), strategies())
+        self.assertEqual(caught.exception.reason, "directory_locked")
+        self.assertEqual(self.snapshot(path), before)
+
+    def test_another_process_cannot_open_a_directory_that_a_live_process_holds(self):
+        path = os.path.join(self.dir, "held")
+        proc = self.holder(path)
+        before = self.snapshot(path)
+        self.assertEqual(self.open_elsewhere(path, CYCLE + HOUR), {"ok": False, "reason": "directory_locked"})
+        self.assertEqual(self.snapshot(path), before, "the refused opener wrote or truncated nothing")
+        proc.kill()
+        proc.wait()
+
+    def test_a_torn_tail_is_not_cut_by_a_refused_opener(self):
+        path = os.path.join(self.dir, "torn")
+        proc = self.holder(path)
+        with open(os.path.join(path, ST.JOURNAL_FILE), "ab") as handle:
+            handle.write(b'{"half":')
+        before = self.snapshot(path)
+        self.assertEqual(self.open_elsewhere(path, CYCLE + HOUR)["reason"], "directory_locked")
+        self.assertEqual(self.snapshot(path), before)
+        proc.kill()
+        proc.wait()
+
+    def test_abrupt_death_frees_the_lock_and_the_run_recovers(self):
+        path = os.path.join(self.dir, "died")
+        proc = self.holder(path)
+        proc.kill()                 # SIGKILL: no finalizers, no orderly release
+        proc.wait()
+        self.assertEqual(self.open_elsewhere(path, session()[2]["t_ms"]), {"ok": True})
+        r = self.recover(path, session()[2]["t_ms"])
+        r.run(session())
+        self.assertEqual(self.fingerprint(r), self.fingerprint(self.continuous(session())))
+
+    def test_after_an_orderly_close_the_next_opener_succeeds(self):
+        path, r = self.fresh()
+        r.run(session()[:3])
+        r.close()
+        r2 = self.recover(path, session()[2]["t_ms"])
+        self.assertEqual(r2.status, PROCESSING)
+
+    def test_a_refused_recovery_does_not_leave_the_directory_locked(self):
+        path, r = self.fresh()
+        r.run(session())
+        self.die()
+        with self.assertRaises(RunnerError):
+            PaperRunner.recover(path, cfg(), strategies(), CYCLE)          # clock behind: refused
+        again = self.recover(path, r.clock + 1)
+        self.assertEqual(again.status, PROCESSING)
+
+
+class BuildIdentity(Base):
+    def test_the_build_identity_covers_the_financial_modules_and_is_stable(self):
+        from balancita_engine.paper_runner import BUILD_MODULES, build_identity
+        identity = build_identity()
+        self.assertEqual(sorted(identity["modules"]), sorted(BUILD_MODULES))
+        self.assertEqual(identity, build_identity())
+        path, r = self.fresh()
+        self.assertEqual(r.manifest["build_identity"], identity)
+
+    def test_another_build_is_refused_even_if_the_synthetic_scenarios_agree(self):
+        from balancita_engine import paper_runner as PR
+        path, r = self.fresh()
+        r.run(session())
+        original = PR.build_identity
+        changed = json.loads(json.dumps(original()))
+        changed["modules"]["futures_costs"] = "0" * 16
+        changed["digest"] = "f" * 16
+        PR.build_identity = lambda: changed
+        try:
+            self.assertEqual(PR.engine_behavior(), engine_behavior())       # the scenarios see nothing
+            with self.assertRaises(RunnerError) as caught:
+                self.recover(path, r.clock + 1)
+        finally:
+            PR.build_identity = original
+        self.assertEqual(caught.exception.reason, "build_incompatible")
+        self.assertIn("build_identity", str(caught.exception))
+        self.recover(path, r.clock + 1)                                      # and the right build still recovers
+
+    def test_a_checkpoint_of_another_build_is_refused(self):
+        path, r = self.fresh()
+        r.run(session())
+        r.checkpoint()
+        self.die()
+        cp = os.path.join(path, ST.CHECKPOINT_FILE)
+        body = json.loads(slurp(cp))
+        body["build_identity"] = "0" * 16
+        body.pop("digest")
+        body["digest"] = stable_hash(body)
+        spit(cp, json.dumps(body))
+        with self.assertRaises(RunnerError) as caught:
+            self.recover(path, r.clock + 1)
+        self.assertEqual(caught.exception.reason, "checkpoint_incompatible")
+
 
 
 class CrossProcess(Base):
