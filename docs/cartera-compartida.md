@@ -97,3 +97,6 @@ p.on_candle("PF_XBTUSD", bucket_ms, {"high": ..., "low": ..., "close": ...})   #
 p.decide([intent_from_signal(signal, price=..., atr=...)], now_ms)             # luego las entradas
 p.snapshot()
 ```
+
+## Validación integral offline
+`python/balancita_engine/portfolio_offline.py` ejecuta esta cartera con velas y señales sintéticas, un diario encadenado por hash, comprobaciones independientes de límites y contabilidad, y un reinicio desde un checkpoint persistido. Diseño, límites y capacidades de recuperación (existentes y faltantes): [`validacion-cartera-offline.md`](validacion-cartera-offline.md). Resultados: `analisis/validacion-cartera-offline/informe.md`.

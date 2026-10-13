@@ -25,7 +25,7 @@ Requested directly by the user (Fran) on 2026-10-13 as PR #120. Where it conflic
 
 **The planned loss is a model figure, not a guarantee** of the maximum real loss (funding, gaps and slippage beyond the model can exceed it).
 
-**Unchanged.** C25-C31 and Kronos are not modified until 100 forward trades; the strategy parameters stay frozen; the module is not connected to the forward, to `capture` or to any active database until the user asks for it and a further amendment or decision says so. 100 forward trades do not by themselves prove an edge.
+**Unchanged.** C29-C32 and Kronos are not modified until 100 forward trades; the strategy parameters stay frozen; the module is not connected to the forward, to `capture` or to any active database until the user asks for it and a further amendment or decision says so. 100 forward trades do not by themselves prove an edge.
 
 ## Qué cambia respecto del ADR vigente
 | ADR vigente | Esta propuesta (solo `portfolio.py`) |
@@ -35,7 +35,7 @@ Requested directly by the user (Fran) on 2026-10-13 as PR #120. Where it conflic
 | Riesgo = nocional fijo y límites de `multi_risk` | Riesgo planificado por operación, regla del 30 %, riesgo agregado abierto del 2 %, pérdida diaria que descuenta del riesgo admisible |
 
 ## Qué NO cambia
-Solo paper, solo endpoints públicos, hashing canónico, Decimal, replay determinista, sin mirar el futuro, reglas de evaluación y congelamiento de C25-C31 y Kronos.
+Solo paper, solo endpoints públicos, hashing canónico, Decimal, replay determinista, sin mirar el futuro, reglas de evaluación y congelamiento de C29-C32 y Kronos.
 
 ## Antes de conectarlo al forward (no está pedido)
 Definir el primer precio ejecutable posterior a la señal (hoy se usa el precio de la intención) y medir el deslizamiento real de los stops para fijar el buffer. Decidir cómo conviven los libros independientes de C29-C32 con la cartera (mediciones separadas, sin mezclar), si la cartera lee las mismas velas oficiales, y cuándo aprobar los parámetros. Esa decisión es de Fran y llevaría otra enmienda.
