@@ -21,7 +21,6 @@ export default function GatewayHistory({
     <details
       className="connected-terminal__panel"
       aria-label="Historial del gateway"
-      open
     >
       <summary>
         Historial del gateway · libro D retirado{' '}

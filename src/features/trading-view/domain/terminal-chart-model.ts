@@ -41,6 +41,13 @@ const recordOf = (value: unknown): Record<string, unknown> =>
 /** Filled reduce-only orders of paper execution D, as exit markers. */
 export function exitMarkers(
   orders: readonly unknown[],
+  options: {
+    /** Visible period in seconds: exits outside it are not drawn. */
+    from?: number
+    to?: number
+    /** Names the source of the exits, e.g. «Histórico · Gateway D». */
+    prefix?: string
+  } = {},
 ): ApprovedTerminalMarker[] {
   return orders.flatMap((value) => {
     const order = recordOf(value)
@@ -52,16 +59,23 @@ export function exitMarkers(
       !Number.isSafeInteger(at)
     )
       return []
+    const time = Math.floor(at / 1000)
+    if (
+      (options.from !== undefined && time < options.from) ||
+      (options.to !== undefined && time > options.to)
+    )
+      return []
     const strategyId =
       typeof order.strategy_id === 'string' ? order.strategy_id : undefined
     const code = strategyCode(strategyId)
     const label = EXIT_LABELS[String(order.reason_code)] ?? 'SALIDA'
+    const text = code ? `${code} ${label}` : label
     return [
       {
         id: `exit:${order.order_id}`,
-        time: Math.floor(at / 1000),
+        time,
         type: 'exit' as const,
-        label: code ? `${code} ${label}` : label,
+        label: options.prefix ? `${options.prefix} · ${text}` : text,
         ...(strategyId ? { strategyId } : {}),
       },
     ]
@@ -134,7 +148,13 @@ export function timeframeCandles(
   return out
 }
 
-/** Open positions of the BTC chart: the gateway list, else the single position. */
+/**
+ * Open positions of the chart's product: the gateway list, else the single
+ * position. Orders and fills carry no product id: they are isolated by the
+ * gateway, whose follower serves one product per stream and drops the events
+ * of other books (paper-engine-follower `ownsBook`, covered by its tests).
+ * Position rows that do carry `product_id` are filtered here as well.
+ */
 export function chartPositions(
   positions: readonly unknown[] | undefined,
   position: Record<string, unknown>,

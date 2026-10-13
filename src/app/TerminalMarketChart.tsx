@@ -41,6 +41,7 @@ export default function TerminalMarketChart({
   position,
   positions,
   orders,
+  historicalLabel,
 }: {
   market: Record<string, unknown>
   mode: TerminalBootstrap['mode']
@@ -55,6 +56,7 @@ export default function TerminalMarketChart({
   position: Record<string, unknown>
   positions?: unknown[]
   orders: unknown[]
+  historicalLabel?: string
 }) {
   const marketCandles = market.candles
   const candles = useMemo<ApprovedTerminalCandle[]>(
@@ -179,6 +181,7 @@ export default function TerminalMarketChart({
         position={position}
         positions={positions}
         orders={orders}
+        historicalLabel={historicalLabel}
       />
     </>
   )

@@ -396,6 +396,9 @@ export default function FuturesTerminal({
                   position={position}
                   positions={positions}
                   orders={orders}
+                  historicalLabel={
+                    gatewayEngine ? 'Histórico · Gateway D' : undefined
+                  }
                 />
                 {!engineOff && (
                   <p>
