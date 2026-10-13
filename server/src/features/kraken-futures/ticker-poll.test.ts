@@ -62,3 +62,41 @@ describe('REST ticker poll', () => {
     ).toThrow()
   })
 })
+
+describe('ticker poll connection renewal', () => {
+  it('asks for a new connection after a failure and stops once a request succeeds', async () => {
+    const headers: unknown[] = []
+    let fail = true
+    const failures: string[] = []
+    let recovered = 0
+    const client = createTickerPollClient({
+      fetch: async (_url, init) => {
+        headers.push((init?.headers as Record<string, string>).connection)
+        if (fail) throw new Error('socket hang up')
+        return new Response(JSON.stringify({ result: 'success', tickers: [] }))
+      },
+      onFailure: (reason) => failures.push(reason),
+      onRecovered: () => (recovered += 1),
+    })
+    await expect(client.fetch(['PF_ETHUSD'])).rejects.toThrow()
+    fail = false
+    await client.fetch(['PF_ETHUSD'])
+    await client.fetch(['PF_ETHUSD'])
+    expect(headers).toEqual([undefined, 'close', undefined])
+    expect(failures).toEqual(['socket hang up'])
+    expect(recovered).toBe(1)
+  })
+
+  it('also renews while the capture reports a general connectivity problem', async () => {
+    const headers: unknown[] = []
+    const client = createTickerPollClient({
+      fetch: async (_url, init) => {
+        headers.push((init?.headers as Record<string, string>).connection)
+        return new Response(JSON.stringify({ result: 'success', tickers: [] }))
+      },
+      freshConnections: () => true,
+    })
+    await client.fetch(['PF_ETHUSD'])
+    expect(headers).toEqual(['close'])
+  })
+})

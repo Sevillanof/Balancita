@@ -116,6 +116,12 @@ export function createTickerPollClient(
     fetch?: HistoricalFundingFetch
     clock?: () => number
     timeoutMs?: number
+    /** True while pooled connections may be dead (several sources failed together). */
+    freshConnections?: () => boolean
+    /** Called when a request fails or times out. */
+    onFailure?: (reason: string) => void
+    /** Called by the first request that succeeds after a failure. */
+    onRecovered?: () => void
   } = {},
 ) {
   const clock = options.clock ?? Date.now
@@ -123,6 +129,9 @@ export function createTickerPollClient(
     options.fetch ?? ((input, init) => globalThis.fetch(input, init))
   const timeoutMs = options.timeoutMs ?? 5_000
   const controllers = new Set<AbortController>()
+  // After a failure the next requests ask for a new connection (`connection: close`) until one succeeds,
+  // so a pooled socket that died with a network change is not reused.
+  let renew = false
   return {
     async fetch(products: readonly string[]): Promise<RestTickerEvent[]> {
       const controller = new AbortController()
@@ -131,7 +140,12 @@ export function createTickerPollClient(
       try {
         const response = await fetcher(URL, {
           method: 'GET',
-          headers: { accept: 'application/json' },
+          headers: {
+            accept: 'application/json',
+            ...(renew || options.freshConnections?.() === true
+              ? { connection: 'close' }
+              : {}),
+          },
           signal: controller.signal,
         })
         if (!response.ok)
@@ -141,13 +155,22 @@ export function createTickerPollClient(
           MAX_RESPONSE_BYTES,
           'REST tickers response',
         )
-        return parseRestTickers(
+        const parsed = parseRestTickers(
           new TextDecoder('utf-8', { fatal: true }).decode(bytes),
           {
             products,
             receivedAtMs: clock(),
           },
         )
+        if (renew) options.onRecovered?.()
+        renew = false
+        return parsed
+      } catch (error) {
+        renew = true
+        options.onFailure?.(
+          error instanceof Error ? error.message : 'request_failed',
+        )
+        throw error
       } finally {
         clearTimeout(timeout)
         controllers.delete(controller)

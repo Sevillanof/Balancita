@@ -1,4 +1,5 @@
 import { FuturesMarketStore } from '../features/kraken-futures/futures-market-store.ts'
+import { dirname, join } from 'node:path'
 import { createLiveCapture } from '../features/live-gateway/live-capture.ts'
 import type { FuturesSocket } from '../features/kraken-futures/futures-market.ts'
 import { resolveFuturesProducts } from '../features/kraken-futures/futures-products.ts'
@@ -67,6 +68,11 @@ async function main(): Promise<void> {
     staleAfterMs: config.marketStaleAfterMs,
     reconnectMinMs: config.marketReconnectMinMs,
     reconnectMaxMs: config.marketReconnectMaxMs,
+    // Connection incidents and recoveries (reason, source, time, result), one JSON per line.
+    resilienceLogFile: join(
+      dirname(config.futuresMarketDbPath),
+      'resilience.jsonl',
+    ),
     log,
   })
   // Online retention (the capture is the sole writer): see trimRawEvents.

@@ -45,6 +45,10 @@ ONE_MINUTE_MS = 60_000
 FIVE_MINUTES_MS = 300_000
 # The live poll learns a candle seconds after it closes; later than this means the capture was down.
 LATE_KNOWN_MS = 5 * 60_000
+# A candle learned more than this after it closed is not a live view of the market: no new entry is opened on it
+# (positions already open are still managed). Applies from the moment the gate was first switched on, see
+# ``stale_gate_from``; trades stored before it keep the old rule and the ``recovered`` label.
+STALE_ENTRY_MS = 3 * 60_000
 # What the candles decide. ``net_bp`` is left out: it also depends on the funding known when the trade was stored,
 # which is completed beside the original (futures_funding_reconcile), not by a hole in the candles.
 _CORE_KEYS = ("entry_price", "exit_bucket_ms", "exit_price", "exit_reason", "side")
@@ -58,6 +62,11 @@ CREATE TABLE IF NOT EXISTS forward_open(
 CREATE TABLE IF NOT EXISTS forward_recovered(
   strategy_id TEXT NOT NULL, product_id TEXT NOT NULL, entry_bucket_ms INTEGER NOT NULL,
   PRIMARY KEY(strategy_id, product_id, entry_bucket_ms)) STRICT;
+CREATE TABLE IF NOT EXISTS forward_policy(
+  name TEXT NOT NULL PRIMARY KEY, value INTEGER NOT NULL) STRICT;
+CREATE TABLE IF NOT EXISTS forward_blocked(
+  strategy_id TEXT NOT NULL, product_id TEXT NOT NULL, bucket_ms INTEGER NOT NULL, spec_hash TEXT NOT NULL,
+  PRIMARY KEY(strategy_id, product_id, bucket_ms, spec_hash)) STRICT;
 CREATE TABLE IF NOT EXISTS forward_status(
   strategy_id TEXT NOT NULL, product_id TEXT NOT NULL, payload TEXT NOT NULL,
   PRIMARY KEY(strategy_id, product_id)) STRICT;
@@ -172,6 +181,31 @@ def is_recovered(trade, late_ones, late_fives):
     return any(first - FIVE_MINUTES_MS < bucket <= last for bucket in late_fives)
 
 
+def stale_gate_from(db, now_ms):
+    """When the stale-data entry gate first applied (written once, never moved)."""
+    with db:
+        db.execute("INSERT OR IGNORE INTO forward_policy VALUES('stale_gate_from_ms', ?)", (now_ms,))
+    return db.execute("SELECT value FROM forward_policy WHERE name='stale_gate_from_ms'").fetchone()[0]
+
+
+def make_entry_gate(ones, fives, gate_from_ms):
+    """``gate(bucket) -> True`` when the data a new entry would rest on was learned too late to be live.
+
+    The candle that closes the bucket and the latest closed 5m candle must each have been known within
+    ``STALE_ENTRY_MS`` of closing (their first ``known_at``, not the candle's own time). Buckets before
+    ``gate_from_ms`` are never blocked.
+    """
+    stale_ones = {c["bucket_start"] for c in ones if c["known_at"] - c["close_at"] > STALE_ENTRY_MS}
+    stale_fives = {c["bucket_start"] for c in fives if c["known_at"] - c["close_at"] > STALE_ENTRY_MS}
+
+    def gate(bucket):
+        if bucket < gate_from_ms:
+            return False
+        latest_five = ((bucket + ONE_MINUTE_MS) // FIVE_MINUTES_MS) * FIVE_MINUTES_MS - FIVE_MINUTES_MS
+        return bucket in stale_ones or latest_five in stale_fives
+    return gate
+
+
 def run_forward(market_db, db_path, specs, registration, products):
     """Replays every registered spec over every product and stores the trades closed since its start.
 
@@ -183,6 +217,7 @@ def run_forward(market_db, db_path, specs, registration, products):
     added = {}
     try:
         now = int(time.time() * 1000)
+        gate_from = stale_gate_from(db, now)
         for strategy_id, info in registration["strategies"].items():
             spec = specs.get(strategy_id)
             if spec is None:
@@ -195,7 +230,8 @@ def run_forward(market_db, db_path, specs, registration, products):
                     continue
                 context = funding_for(market_db, product_id)
                 (book,) = replay([spec], ones, fives, start_ms=info["start_ms"], product_id=product_id,
-                                 tick_size=tick_size, funding=context, funding_periods=funding_periods(context))
+                                 tick_size=tick_size, funding=context, funding_periods=funding_periods(context),
+                                 entry_gate=make_entry_gate(ones, fives, gate_from))
                 late_ones, late_fives, missing = candle_coverage(ones, fives, info["start_ms"], now)
                 recovered = {t["entry_bucket_ms"] for t in book.trades if is_recovered(t, late_ones, late_fives)}
                 with db:
@@ -213,6 +249,8 @@ def run_forward(market_db, db_path, specs, registration, products):
                     # across a hole): never rewritten, only counted, so ``--rebuild`` can recompute them.
                     diverged = sum(1 for bucket, old in stored.items() if bucket not in by_entry or any(
                         old.get(key) != by_entry[bucket].get(key) for key in _CORE_KEYS))
+                    db.executemany("INSERT OR IGNORE INTO forward_blocked VALUES(?,?,?,?)",
+                                   [(strategy_id, product_id, bucket, digest) for bucket in book.blocked])
                     db.execute("DELETE FROM forward_recovered WHERE strategy_id=? AND product_id=?",
                                (strategy_id, product_id))
                     db.executemany("INSERT INTO forward_recovered VALUES(?,?,?)",
@@ -220,7 +258,7 @@ def run_forward(market_db, db_path, specs, registration, products):
                     db.execute("INSERT OR REPLACE INTO forward_status VALUES(?,?,?)", (
                         strategy_id, product_id, json.dumps({
                             "checked_ms": now, "missing_1m": missing, "late_1m": len(late_ones),
-                            "diverged_trades": diverged,
+                            "diverged_trades": diverged, "blocked_stale_entries": len(book.blocked),
                             # How far behind "now" the newest stored 1m candle closed: a capture that stopped
                             # leaves no holes inside the range, only a growing lag.
                             "candle_lag_ms": (now - (max(c["bucket_start"] for c in ones) + ONE_MINUTE_MS))
@@ -276,6 +314,7 @@ def write_summary(db_path, specs, registration, out_path):
                     live_only, first_ms=info["start_ms"], last_ms=max(now, info["start_ms"] + 1)),
                 "missing_candles_1m": sum(st["missing_1m"] for st in statuses),
                 "diverged_trades": sum(st["diverged_trades"] for st in statuses),
+                "blocked_stale_entries": sum(st.get("blocked_stale_entries", 0) for st in statuses),
                 "max_candle_lag_ms": max((st["candle_lag_ms"] for st in statuses
                                           if st.get("candle_lag_ms") is not None), default=None),
                 "by_product": {p: {k: v for k, v in summarize_trades(t).items()

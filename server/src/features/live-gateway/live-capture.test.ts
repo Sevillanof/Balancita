@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
@@ -1095,5 +1095,241 @@ describe('live capture process core', () => {
       true,
     )
     store.close()
+  })
+
+  describe('connectivity change', () => {
+    /** Frames keep flowing and REST answers until `broken` is set: the route changed under open sockets. */
+    function network() {
+      const state = { socketSilent: false, restBroken: false }
+      const sockets: FuturesSocket[] = []
+      const connectionHeaders: (string | undefined)[] = []
+      let seq = 0
+      const feeder = setInterval(() => {
+        const socket = sockets[sockets.length - 1]
+        if (state.socketSilent || !socket) return
+        seq += 1
+        socket.onmessage?.({
+          data: JSON.stringify({
+            feed: 'ticker',
+            product_id: 'PF_XBTUSD',
+            time: Date.now(),
+            seq,
+            bid: 90000,
+            ask: 90001,
+            last: 90000.5,
+            markPrice: 90000,
+            index: 89999,
+            suspended: false,
+          }),
+        })
+      }, 5)
+      const rest = (body: string) => (_url: string, init?: RequestInit) => {
+        connectionHeaders.push(
+          (init?.headers as Record<string, string> | undefined)?.connection,
+        )
+        if (!state.restBroken) return Promise.resolve(new Response(body))
+        // A pooled socket that died with the route: nothing answers until the request is aborted.
+        return new Promise<Response>((_, reject) =>
+          init?.signal?.addEventListener('abort', () =>
+            reject(new DOMException('aborted', 'AbortError')),
+          ),
+        )
+      }
+      return {
+        state,
+        cut: (on: boolean) => {
+          state.socketSilent = on
+          state.restBroken = on
+        },
+        sockets,
+        connectionHeaders,
+        stop: () => clearInterval(feeder),
+        makeSocket: () => {
+          const { socket } = fakeSocket()
+          sockets.push(socket)
+          setTimeout(() => socket.onopen?.(), 1)
+          return socket
+        },
+        tickerFetch: rest(
+          JSON.stringify({
+            result: 'success',
+            tickers: [
+              {
+                symbol: 'PF_ETHUSD',
+                bid: 2577.7,
+                ask: 2577.8,
+                markPrice: 2577.3,
+                bidSize: 1,
+                askSize: 1,
+              },
+            ],
+          }),
+        ),
+        officialFetch: rest(
+          JSON.stringify({ candles: [], more_candles: false }),
+        ),
+      }
+    }
+
+    async function run(extra: {
+      silenceMs: number
+      generalIdleMs?: number
+      withAnalytics?: boolean
+    }) {
+      const dir = mkdtempSync(join(tmpdir(), 'balancita-capture-'))
+      dirs.push(dir)
+      const logFile = join(dir, 'resilience.jsonl')
+      const store = new FuturesMarketStore(join(dir, 'market.sqlite'))
+      const net = network()
+      const logs: string[] = []
+      const capture = createLiveCapture({
+        store,
+        makeSocket: net.makeSocket,
+        fetchCatalog: async () => catalog,
+        fundingFetch: async () => {
+          throw new Error('offline')
+        },
+        products: [
+          { productId: 'PF_XBTUSD', tickSize: '1' },
+          { productId: 'PF_ETHUSD', tickSize: '0.1' },
+        ],
+        officialCandlesFetch: net.officialFetch,
+        tickerFetch: net.tickerFetch,
+        officialPollMs: 15,
+        officialRequestGapMs: 0,
+        tickerPollMs: 5,
+        pollDeadlineMs: 40,
+        connectTimeoutMs: 50,
+        watchdogIntervalMs: 10,
+        reconnectMinMs: 5,
+        reconnectMaxMs: 20,
+        resilienceLogFile: logFile,
+        log: (line) => logs.push(line),
+        silenceMs: extra.silenceMs,
+        generalIdleMs: extra.generalIdleMs,
+        // A third REST source: tickers, candles and analytics hanging together is a general failure.
+        ...(extra.withAnalytics
+          ? {
+              analytics: {
+                metrics: ['open-interest' as const],
+                intervals: [60_000],
+                pollMs: 15,
+                fetch: (_url: string, init?: RequestInit) =>
+                  net.state.restBroken
+                    ? new Promise<Response>((_, reject) =>
+                        init?.signal?.addEventListener('abort', () =>
+                          reject(new DOMException('aborted', 'AbortError')),
+                        ),
+                      )
+                    : Promise.reject(new Error('analytics offline')),
+              },
+            }
+          : {}),
+      })
+      await capture.start()
+      const events = () =>
+        existsSync(logFile)
+          ? readFileSync(logFile, 'utf8')
+              .trim()
+              .split('\n')
+              .filter(Boolean)
+              .map(
+                (line) =>
+                  JSON.parse(line) as {
+                    component: string
+                    reason: string
+                    result: string
+                  },
+              )
+          : []
+      return { capture, store, net, logs, events }
+    }
+
+    it('detects a silent socket and hung REST, recovers by itself and keeps capturing', async () => {
+      const { capture, store, net, logs, events } = await run({
+        silenceMs: 80,
+      })
+      await wait(150)
+      expect(events().filter((e) => e.result === 'recovering')).toEqual([])
+      const before = store.eventCount()
+      expect(before).toBeGreaterThan(0)
+
+      net.cut(true) // route change: socket silent, REST hangs
+      await wait(500)
+      const during = events()
+      expect(
+        during.some(
+          (e) => e.component === 'websocket' && e.reason === 'silent_socket',
+        ),
+      ).toBe(true)
+      expect(
+        during.some(
+          (e) => e.component === 'rest-tickers' && e.result === 'recovering',
+        ),
+      ).toBe(true)
+      expect(
+        during.some(
+          (e) => e.component === 'rest-candles' && e.result === 'recovering',
+        ),
+      ).toBe(true)
+      expect(net.sockets.length).toBeGreaterThan(1)
+      expect(capture.health.general()).toBe(true)
+
+      net.cut(false) // new route works again; nobody restarts anything
+      await wait(400)
+      const after = events()
+      for (const component of ['websocket', 'rest-tickers', 'rest-candles'])
+        expect(
+          after.some(
+            (e) => e.component === component && e.result === 'recovered',
+          ),
+        ).toBe(true)
+      // Requests after a failure ask for new connections instead of reusing a pooled one.
+      expect(net.connectionHeaders).toContain('close')
+      expect(store.eventCount()).toBeGreaterThan(before)
+      // The aborted official poll must not have closed its client for good.
+      expect(logs.some((line) => line.includes('is closed'))).toBe(false)
+      await capture.stop()
+      net.stop()
+      store.close()
+    })
+
+    it('replaces a healthy-looking but silent socket when several sources fail together', async () => {
+      // The socket watchdog is far away: only the general incident can replace the socket here.
+      const { capture, store, net, events } = await run({
+        silenceMs: 600_000,
+        generalIdleMs: 30,
+        withAnalytics: true,
+      })
+      await wait(150)
+      net.cut(true)
+      await wait(500)
+      const reconnects = events().filter(
+        (e) => e.component === 'websocket' && e.reason === 'general_incident',
+      )
+      expect(reconnects.length).toBeGreaterThanOrEqual(1)
+      expect(net.sockets.length).toBeGreaterThan(1)
+      await capture.stop()
+      net.stop()
+      store.close()
+    })
+
+    it('leaves a healthy socket alone when only REST fails', async () => {
+      const { capture, store, net, events } = await run({
+        silenceMs: 600_000,
+        generalIdleMs: 30,
+        withAnalytics: true,
+      })
+      await wait(150)
+      const sockets = net.sockets.length
+      net.state.restBroken = true // the socket keeps receiving frames
+      await wait(400)
+      expect(events().some((e) => e.component === 'rest-tickers')).toBe(true)
+      expect(net.sockets.length).toBe(sockets)
+      expect(events().filter((e) => e.component === 'websocket')).toEqual([])
+      await capture.stop()
+      net.stop()
+      store.close()
+    })
   })
 })

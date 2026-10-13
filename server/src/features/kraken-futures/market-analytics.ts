@@ -228,6 +228,11 @@ export function createAnalyticsClient(
         controllers.delete(controller)
       }
     },
+    /** Aborts the requests in flight; the client stays usable (a stuck poll must not end the capture). */
+    abortInFlight(): void {
+      for (const controller of controllers) controller.abort()
+      controllers.clear()
+    },
     close(): void {
       closed = true
       for (const controller of controllers) controller.abort()

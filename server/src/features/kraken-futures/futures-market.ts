@@ -254,9 +254,7 @@ interface MarketEnvelope {
     /** `null` and `not_observed`: the book feed was never subscribed to. */
     readonly book_valid: boolean | null
     readonly book_sequence_integrity:
-      | 'observed_contiguous'
-      | 'invalid_or_unproven'
-      | 'not_observed'
+      'observed_contiguous' | 'invalid_or_unproven' | 'not_observed'
   }
 }
 
@@ -580,6 +578,18 @@ export interface FuturesCollectorOptions {
   readonly staleAfterMs?: number
   readonly reconnectMinMs?: number
   readonly reconnectMaxMs?: number
+  /** No frame of any kind (heartbeats included) for this long on an open socket: drop it and reconnect. */
+  readonly silenceMs?: number
+  /** The socket did not open within this long: abandon it and reconnect. */
+  readonly connectTimeoutMs?: number
+  /** How often the watchdog looks; it runs on its own timer, so total silence is still caught. */
+  readonly watchdogIntervalMs?: number
+  readonly onResilience?: (event: {
+    readonly reason: string
+    readonly action: string
+    readonly result: 'recovering' | 'recovered'
+    readonly detail?: string
+  }) => void
   readonly onState?: (state: MarketStatus, reason?: string) => void
 }
 
@@ -589,6 +599,11 @@ export class KrakenFuturesMarketCollector {
   private socket: FuturesSocket | null = null
   private timer: ReturnType<typeof setTimeout> | null = null
   private freshnessTimer: ReturnType<typeof setTimeout> | null = null
+  private watchdogTimer: ReturnType<typeof setTimeout> | null = null
+  private connectStartedAt = 0
+  private lastActivityAt = 0
+  private opened = false
+  private pendingRecovery: { reason: string; at: number } | null = null
   private state: MarketStatus = 'stopped'
   private epoch = 0
   private reconnectAttempt = 0
@@ -616,7 +631,14 @@ export class KrakenFuturesMarketCollector {
   private stateReason: string | undefined
   private readonly seqs = new Map<MarketFeed, number>()
   private readonly tradeIds = new Set<string>()
-  private readonly limits: { stale: number; min: number; max: number }
+  private readonly limits: {
+    stale: number
+    min: number
+    max: number
+    silence: number
+    connect: number
+    watchdog: number
+  }
 
   constructor(options: FuturesCollectorOptions) {
     this.options = options
@@ -624,11 +646,17 @@ export class KrakenFuturesMarketCollector {
       stale: options.staleAfterMs ?? 3_000,
       min: options.reconnectMinMs ?? 500,
       max: Math.min(options.reconnectMaxMs ?? 30_000, 30_000),
+      silence: options.silenceMs ?? 30_000,
+      connect: options.connectTimeoutMs ?? 15_000,
+      watchdog: options.watchdogIntervalMs ?? 5_000,
     }
     if (
       this.limits.min < 1 ||
       this.limits.max < this.limits.min ||
-      this.limits.stale < 1
+      this.limits.stale < 1 ||
+      this.limits.silence < 1 ||
+      this.limits.connect < 1 ||
+      this.limits.watchdog < 1
     )
       throw new RangeError('Invalid futures collector timing bounds.')
   }
@@ -740,6 +768,7 @@ export class KrakenFuturesMarketCollector {
     if (this.timer !== null) this.options.clearTimeout(this.timer)
     if (this.freshnessTimer !== null)
       this.options.clearTimeout(this.freshnessTimer)
+    this.clearWatchdog()
     this.timer = null
     this.freshnessTimer = null
     const socket = this.socket
@@ -778,6 +807,57 @@ export class KrakenFuturesMarketCollector {
     return this.state
   }
 
+  /**
+   * Drops the current socket and opens a new one with the usual backoff. Used by the watchdog and by
+   * the capture when several sources fail together. Safe on a dead socket: it never waits for a close
+   * event. A no-op when stopped or when a reconnect is already scheduled.
+   */
+  reconnect(reason: string): void {
+    if (this.stopped || this.timer !== null) return
+    const socket = this.socket
+    this.socket = null
+    this.bookValid = false
+    this.clearWatchdog()
+    this.pendingRecovery = { reason, at: this.options.clock() }
+    try {
+      socket?.close()
+    } catch {
+      // Already dead: that is the reason we are here.
+    }
+    this.setState('disconnected', reason)
+    this.options.onResilience?.({
+      reason,
+      action: 'reconnect_websocket',
+      result: 'recovering',
+    })
+    this.scheduleReconnect()
+  }
+
+  private clearWatchdog(): void {
+    if (this.watchdogTimer !== null)
+      this.options.clearTimeout(this.watchdogTimer)
+    this.watchdogTimer = null
+  }
+
+  private armWatchdog(): void {
+    this.clearWatchdog()
+    if (this.stopped) return
+    this.watchdogTimer = this.options.setTimeout(() => {
+      this.watchdogTimer = null
+      this.watchdog()
+    }, this.limits.watchdog)
+  }
+
+  private watchdog(): void {
+    if (this.stopped || this.socket === null) return
+    const now = this.options.clock()
+    if (!this.opened && now - this.connectStartedAt > this.limits.connect)
+      return this.reconnect('connect_timeout')
+    if (this.opened && now - this.lastActivityAt > this.limits.silence)
+      return this.reconnect('silent_socket')
+    this.armWatchdog()
+  }
+
   private setState(state: MarketStatus, reason?: string): void {
     if (this.state === state && this.stateReason === reason) return
     this.state = state
@@ -799,11 +879,16 @@ export class KrakenFuturesMarketCollector {
     this.lastTickerSuspended = true
     this.lastTickerMarkAvailable = false
     this.setState('connecting')
+    this.opened = false
+    this.connectStartedAt = this.lastActivityAt = this.options.clock()
+    this.armWatchdog()
     try {
       const socket = this.options.makeSocket(this.options.url ?? FUTURES_WS_URL)
       this.socket = socket
       socket.onopen = () => {
         if (this.stopped || this.socket !== socket) return
+        this.opened = true
+        this.lastActivityAt = this.options.clock()
         this.setState('syncing')
         for (const message of marketSubscriptions(
           this.bookEnabled ? undefined : ['trade', 'ticker'],
@@ -812,6 +897,18 @@ export class KrakenFuturesMarketCollector {
       }
       socket.onmessage = ({ data }) => {
         if (this.stopped || this.socket !== socket) return
+        // Any frame proves the link is alive, heartbeats and info included.
+        this.lastActivityAt = this.options.clock()
+        if (this.pendingRecovery !== null) {
+          const { reason, at } = this.pendingRecovery
+          this.pendingRecovery = null
+          this.options.onResilience?.({
+            reason,
+            action: 'reconnect_websocket',
+            result: 'recovered',
+            detail: `${this.lastActivityAt - at} ms`,
+          })
+        }
         try {
           this.accept(data)
         } catch (error) {
@@ -1098,6 +1195,7 @@ export class KrakenFuturesMarketCollector {
       if (this.timer !== null) this.options.clearTimeout(this.timer)
       if (this.freshnessTimer !== null)
         this.options.clearTimeout(this.freshnessTimer)
+      this.clearWatchdog()
       this.timer = null
       this.freshnessTimer = null
       this.socket?.close()

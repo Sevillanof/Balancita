@@ -56,16 +56,19 @@ def load_range(market_db_path, product_id, start_ms, end_ms):
 
 
 def replay(specs, candles_1m, candles_5m, *, start_ms, product_id, tick_size="1", notional_usd="100",
-           observers=(), funding=None, funding_periods=()):
+           observers=(), funding=None, funding_periods=(), entry_gate=None):
     """Books of every spec; warm-up candles feed indicators but never open positions.
 
     ``observers`` are called with every frame inside the range (and the warm-up ones are
     never shown to them), e.g. the blind Qwen replay. ``funding`` feeds ``5m.fundpct`` (see ``frames``);
     it never reaches the books. ``funding_periods`` (``[(start_ms, end_ms, rate)]``) is what the books charge:
     without it a trade reports an unknown funding (``funding_usd = None``, ``funding_complete = false``).
+    ``entry_gate(bucket) -> bool`` blocks new entries on a candle (stale data); open positions are still managed.
     """
     books = [Book(spec, product_id=product_id, tick_size=tick_size, notional_usd=notional_usd,
                   funding=funding_periods) for spec in specs]
+    for book in books:
+        book.entry_gate = entry_gate
     periods = merge_periods(DEFAULT_PERIODS, *(declared_indicators(spec) for spec in specs))
     for frame in frames(candles_1m, candles_5m, periods, funding):
         if frame[0] < start_ms:
