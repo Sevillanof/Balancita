@@ -6,8 +6,8 @@ import { record, type JsonRecord } from '../../../shared/wire/decode.ts'
  * said and nothing else: no value is computed, defaulted to «healthy» or
  * filled in. A shape that does not match is an error, never a guess.
  */
-export const HEALTH_URL = '/api-live/api/observability/health'
-export const ACTIVITY_URL = '/api-live/api/observability/activity'
+export const HEALTH_URL = '/api-live/observability/health'
+export const ACTIVITY_URL = '/api-live/observability/activity'
 
 export type HealthStatus = 'ok' | 'warning' | 'error' | 'unknown'
 export type ActivityWindow = '3h' | '24h'
