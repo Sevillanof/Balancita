@@ -78,22 +78,83 @@ def decisions(runner):
     return rows
 
 
+MINUTE_MS = 60_000
+
+
+def classify_gap(gap, ranges):
+    """Does valid candle evidence cover a silence? ``candles_cover`` (every minute touching it was processed after the
+    entry minute), ``candles_partial`` or ``no_market_evidence``. Candles are evidence of their own kind: they evaluate the
+    stop through high and low, but they say nothing about the quotes that were missing."""
+    lo = gap["from_ms"] // MINUTE_MS * MINUTE_MS
+    hi = -(-gap["to_ms"] // MINUTE_MS) * MINUTE_MS
+    covered = sum(max(0, min(hi, b) - max(lo, a)) for a, b in ranges)
+    if covered >= hi - lo:
+        return "candles_cover"
+    return "candles_partial" if covered > 0 else "no_market_evidence"
+
+
+def _gaps_of(runner, intent_id, tail=None):
+    ranges = runner.coverage["candles"].get(intent_id, [])
+    gaps = [dict(g) for g in runner.coverage["gaps"] if g["intent_id"] == intent_id]
+    if tail is not None:
+        gaps.append(tail)
+    for gap in gaps:
+        gap["evidence"] = classify_gap(gap, ranges)
+    return gaps
+
+
 def protection(runner):
-    """Per open position: was the stop observed? ``unobserved`` whenever a recorded gap overlaps its life or quotes stopped
-    arriving; it is never inferred from the absence of a complaint."""
+    """Per open position, was the stop watched? Only evidence counts: a quote that ``QuoteWatch`` accepted after the entry,
+    or a processed candle. The quote that opened the position proves nothing about what came after.
+
+    * ``observed``: at least one watched quote after the entry and no uncovered silence;
+    * ``observed_by_candles``: no uncovered silence, but only because processed candles cover it;
+    * ``not_yet_observed``: nothing watched it yet and the experimental silence threshold has not passed;
+    * ``unobserved``: a recorded or current silence that no candle covers."""
     out = []
     clock = runner.clock if runner.clock is not None else 0
     gap_ms = runner.config.coverage_gap_ms
     for product, book in sorted(runner.portfolio.positions.items()):
+        intent_id = book.intent["intent_id"]
         entry = int(book.position.get("entry_ms", book.position["opened_at"]))
-        gaps = [g for g in runner.coverage["gaps"] if g["intent_id"] == book.intent["intent_id"]]
-        last = max(runner.coverage["last_quote"].get(product, 0), entry)
-        silent = clock - last > gap_ms
-        out.append({"product_id": product, "intent_id": book.intent["intent_id"], "entry_ms": entry,
+        record = runner.coverage["watch"].get(intent_id, {})
+        last = max(record.get("last_ms", entry), entry)
+        known = [g["to_ms"] for g in runner.coverage["gaps"] if g["intent_id"] == intent_id]
+        since = max([last] + known)
+        tail = {"product_id": product, "from_ms": since, "to_ms": clock, "kind": "silent_now", "intent_id": intent_id} \
+            if clock - since > gap_ms else None
+        gaps = _gaps_of(runner, intent_id, tail)
+        uncovered = [g for g in gaps if g["evidence"] != "candles_cover"]
+        quotes = record.get("quotes", 0)
+        if uncovered:
+            state = "unobserved"
+        elif gaps:
+            state = "observed_by_candles"
+        elif quotes > 0:
+            state = "observed"
+        else:
+            state = "not_yet_observed"
+        out.append({"product_id": product, "intent_id": intent_id, "entry_ms": entry, "quotes_watched": quotes,
+                    "last_watched_ms": record.get("last_ms") if quotes else None,
                     "last_quote_ms": runner.coverage["last_quote"].get(product),
-                    "stop_protection": "unobserved" if (gaps or silent) else "observed",
-                    "gaps": gaps, "silent_now_ms": clock - last if silent else 0})
+                    "stop_protection": state, "gaps": gaps, "silent_now_ms": clock - since if tail else 0,
+                    "candle_ranges": [list(r) for r in runner.coverage["candles"].get(intent_id, [])]})
     return out
+
+
+def trade_coverage(runner):
+    """Per closed trade: the market evidence its stop had during its life. Closing never erases a gap."""
+    rows = []
+    for trade in runner.portfolio.trades:
+        intent_id = trade["intent_id"]
+        record = runner.coverage["watch"].get(intent_id, {})
+        gaps = _gaps_of(runner, intent_id)
+        uncovered = [g for g in gaps if g["evidence"] != "candles_cover"]
+        rows.append({"trade_id": trade["trade_id"], "intent_id": intent_id, "product_id": trade["product_id"],
+                     "entry_time_ms": trade["entry_time_ms"], "exit_time_ms": trade["exit_time_ms"],
+                     "exit_reason": trade["exit_reason"], "quotes_watched": record.get("quotes", 0), "gaps": gaps,
+                     "stop_coverage": "gaps_without_evidence" if uncovered else ("gaps_covered_by_candles" if gaps else "continuous")})
+    return rows
 
 
 def alerts(runner, audit_result=None):
@@ -112,10 +173,19 @@ def alerts(runner, audit_result=None):
     holes = runner.offsets.holes_count()
     if holes:
         out.append({"code": "offset_holes", "severity": "warning", "detail": {"holes": holes}})
-    unobserved = [x for x in protection(runner) if x["stop_protection"] == "unobserved"]
+    watching = protection(runner)
+    unobserved = [x for x in watching if x["stop_protection"] == "unobserved"]
     if unobserved:
         out.append({"code": "insufficient_market_data", "severity": "warning",
                     "detail": {"positions": [x["product_id"] for x in unobserved]}})
+    waiting = [x for x in watching if x["stop_protection"] == "not_yet_observed"]
+    if waiting:
+        out.append({"code": "stop_not_yet_observed", "severity": "info",
+                    "detail": {"positions": [x["product_id"] for x in waiting]}})
+    affected = [t for t in trade_coverage(runner) if t["stop_coverage"] == "gaps_without_evidence"]
+    if affected:
+        out.append({"code": "closed_trade_coverage_incomplete", "severity": "warning",
+                    "detail": {"trades": [t["trade_id"] for t in affected]}})
     if any(not t["funding_complete"] for t in p.trades):
         out.append({"code": "funding_incomplete", "severity": "info", "detail": {
             "trades": [t["trade_id"] for t in p.trades if not t["funding_complete"]]}})
@@ -151,6 +221,8 @@ def observability(runner):
                            for o in runner.orders()],
                 "integrity": runner.integrity(),
                 "coverage": {"last_quote_ms": dict(sorted(runner.coverage["last_quote"].items())),
+                             "watched_quotes": {k: v["quotes"] for k, v in sorted(runner.coverage["watch"].items())},
+                             "candle_ranges": {k: [list(r) for r in v] for k, v in sorted(runner.coverage["candles"].items())},
                              "gaps": list(runner.coverage["gaps"])},
                 "journal": {"entries": len(runner.journal.entries), "head": runner.journal.head}}},
             "simulated": {"class": "simulated", "data": {
@@ -175,6 +247,7 @@ def observability(runner):
                               "cancelled_for_lack_of_coverage": [o["intent_id"] for o in runner.orders()
                                                                  if o["state"] == "cancelled"]},
                 "market_coverage": watch,
+                "closed_trade_coverage": trade_coverage(runner),
                 "offsets": {"holes": runner.offsets.holes_count(),
                             "declared_gaps": {k: v["declared_gaps"] for k, v in runner.offsets.summary().items()
                                               if v["declared_gaps"]}},
@@ -234,6 +307,19 @@ def integrated_audit(runner):
     checks.append("obligations_closed")
     if runner.status == "FINISHED" and (runner.open_cycles or runner.open_funding):
         violate("finished_with_open_obligations")
+    checks.append("coverage_history")
+    known_intents = set(trade_intents) | set(open_intents) | {r["intent_id"] for r in opened}
+    for gap in runner.coverage["gaps"]:
+        if gap["intent_id"] not in known_intents:
+            violate("coverage_gap_of_unknown_position", intent_id=gap["intent_id"])
+    for trade in p.trades:             # a silence that ended with the close must have been recorded when it closed
+        record = runner.coverage["watch"].get(trade["intent_id"])
+        if record is None:
+            violate("closed_trade_without_coverage_record", trade_id=trade["trade_id"])
+            continue
+        recorded = max([record["last_ms"]] + [g["to_ms"] for g in runner.coverage["gaps"] if g["intent_id"] == trade["intent_id"]])
+        if int(trade["exit_time_ms"]) - recorded > runner.config.coverage_gap_ms:
+            violate("coverage_gap_missing_at_close", trade_id=trade["trade_id"])
     checks.append("fees_and_funding_recomputed")
     reported = sum((D(str(t["fees_usd"])) for t in p.trades), D(0))
     if D(p.snapshot()["fees_usd"]) != reported:

@@ -65,6 +65,7 @@ Eventos rechazados por el runner: duplicate_event (2)
 - `funding_conflict` (warning): {"periods": [[1791026400000, 1791033600000, "0.0002"]], "product_id": "PF_XBTUSD"}
 - `offset_holes` (warning): {"holes": 1}
 - `insufficient_market_data` (warning): {"positions": ["PF_SOLUSD"]}
+- `closed_trade_coverage_incomplete` (warning): {"trades": ["7dba728a09f22cafe9141ced"]}
 
 Funding en cuarentena: {"PF_XBTUSD": [[1791026400000, 1791033600000, "0.0002"]]}
 Posiciones abiertas y vigilancia de su stop: PF_SOLUSD unobserved

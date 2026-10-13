@@ -520,6 +520,156 @@ class Crashes(Fin):
         self.assertEqual(r.report()["sections"]["uncertain"]["data"]["market_coverage"][0]["stop_protection"], "unobserved")
 
 
+# ------------------------------------------------------------------------------------------------ coverage evidence
+class CoverageEvidence(Fin):
+    """The stop of a position is "observed" only through evidence that arrived after the entry: a quote that QuoteWatch
+    accepted, or a candle after the entry minute. Gaps stay auditable after the position closes."""
+
+    def opened(self, name="ev"):
+        path, r = self.start({"a": {(BTC, CYCLE): BUY}}, name=name, config=RunnerConfig(funding=(), start_ms=CYCLE - HOUR))
+        r.run([self.f.cycle(CYCLE + 2 * SEC, BTC), self.f.quote(BTC, CYCLE + 6 * SEC, "100010")])
+        self.assertEqual(list(r.portfolio.positions), [BTC])
+        return path, r
+
+    @staticmethod
+    def market(r):
+        return r.report()["sections"]["uncertain"]["data"]["market_coverage"][0]
+
+    @staticmethod
+    def codes(r):
+        return [a["code"] for a in r.report()["alerts"]]
+
+    def test_a_freshly_opened_position_is_not_observed(self):
+        path, r = self.opened()
+        self.assertEqual(self.market(r)["stop_protection"], "not_yet_observed")      # the opening quote proves nothing later
+        self.assertEqual(self.market(r)["quotes_watched"], 0)
+        self.assertIn("stop_not_yet_observed", self.codes(r))
+        self.assertNotIn("insufficient_market_data", self.codes(r))
+
+    def test_valid_later_quotes_observe_the_stop(self):
+        path, r = self.opened()
+        r.run([self.f.quote(BTC, CYCLE + 20 * SEC, "100020"), self.f.quote(BTC, CYCLE + 40 * SEC, "100030")])
+        self.assertEqual((self.market(r)["stop_protection"], self.market(r)["quotes_watched"]), ("observed", 2))
+        self.assertEqual(self.market(r)["last_watched_ms"], CYCLE + 40 * SEC)
+        self.assertNotIn("stop_not_yet_observed", self.codes(r))
+
+    def test_ignored_quotes_do_not_prove_anything(self):
+        path, r = self.opened()
+        f = self.f
+        # accepted by the runner (it arrives in order) but not by the executor: its quote time repeats the opening quote's
+        stale = make_event("quote", {"product_id": BTC, "time_ms": CYCLE + 6 * SEC, "received_ms": CYCLE + 30 * SEC,
+                                     "bid": "100000", "ask": "100020"}, t_ms=CYCLE + 30 * SEC, source=SRC, stream="quotes",
+                           source_offset=f.off("quotes"))
+        self.assertEqual(r.handle(stale)["status"], "accepted")
+        self.assertEqual(self.market(r)["quotes_watched"], 0)
+        self.assertEqual(self.market(r)["stop_protection"], "not_yet_observed")
+        # a valid quote and then one that arrives out of order (older quote time): only the first counts
+        r.run([f.quote(BTC, CYCLE + 50 * SEC, "100020")])
+        late = make_event("quote", {"product_id": BTC, "time_ms": CYCLE + 20 * SEC, "received_ms": CYCLE + 60 * SEC,
+                                    "bid": "100000", "ask": "100020"}, t_ms=CYCLE + 60 * SEC, source=SRC, stream="quotes",
+                          source_offset=f.off("quotes"))
+        r.handle(late)
+        self.assertEqual((self.market(r)["quotes_watched"], self.market(r)["last_watched_ms"]), (1, CYCLE + 50 * SEC))
+        # an invalid quote is not evidence either
+        bad = make_event("quote", {"product_id": BTC, "time_ms": CYCLE + 70 * SEC, "received_ms": CYCLE + 70 * SEC,
+                                   "bid": "100020", "ask": "100000"}, t_ms=CYCLE + 70 * SEC, source=SRC, stream="quotes",
+                         source_offset=f.off("quotes"))
+        r.handle(bad)
+        self.assertEqual(self.market(r)["quotes_watched"], 1)
+        self.assertEqual(r.coverage["last_quote"][BTC] >= CYCLE + 50 * SEC, True)
+
+    def test_a_silence_above_the_experimental_threshold_is_unobserved(self):
+        path, r = self.opened()
+        r.run([self.f.quote(BTC, CYCLE + 10 * SEC, "100010"), self.f.quote(BTC, CYCLE + 10 * MIN, "100020")])
+        [gap] = r.coverage["gaps"]
+        self.assertEqual((gap["kind"], gap["from_ms"], gap["to_ms"]), ("quote_gap", CYCLE + 10 * SEC, CYCLE + 10 * MIN))
+        self.assertEqual(self.market(r)["stop_protection"], "unobserved")
+        self.assertEqual(self.market(r)["gaps"][0]["evidence"], "no_market_evidence")
+        self.assertIn("insufficient_market_data", self.codes(r))
+
+    def test_silence_right_now_is_unobserved_without_a_later_quote(self):
+        path, r = self.opened()
+        r.run([self.f.quote(BTC, CYCLE + 10 * SEC, "100010"), self.f.cycle(CYCLE + 10 * MIN, ETH, at=CYCLE + 10 * MIN)])
+        self.assertEqual(self.market(r)["stop_protection"], "unobserved")
+        self.assertEqual(self.market(r)["gaps"][0]["kind"], "silent_now")
+
+    def close_by_candle(self, r, quiet_quote=True):
+        f = self.f
+        if quiet_quote:
+            r.run([f.quote(BTC, CYCLE + 10 * SEC, "100010")])
+        r.run([f.candle(BTC, CYCLE + MIN, 100010, 100100, 99900, 100010), f.candle(BTC, CYCLE + 2 * MIN, 100010, 103500, 100000, 103400)])
+        self.assertEqual(r.portfolio.positions, {})
+
+    def test_closing_by_candle_after_a_silence_keeps_the_warning(self):
+        path, r = self.opened()
+        self.close_by_candle(r)
+        [row] = r.report()["sections"]["uncertain"]["data"]["closed_trade_coverage"]
+        self.assertEqual(row["stop_coverage"], "gaps_without_evidence")
+        [gap] = row["gaps"]
+        self.assertEqual((gap["from_ms"], gap["to_ms"], gap["evidence"]), (CYCLE + 10 * SEC, CYCLE + 3 * MIN, "candles_partial"))
+        report = r.report()
+        self.assertIn("closed_trade_coverage_incomplete", self.codes(r))
+        self.assertTrue(report["state"]["degraded"])
+        self.assertEqual(report["sections"]["uncertain"]["data"]["market_coverage"], [])
+        self.assertAudit(r)
+
+    def test_valid_candles_covering_the_interval_are_told_apart_from_missing_evidence(self):
+        path, r = self.opened()
+        f = self.f
+        r.run([f.quote(BTC, CYCLE + 70 * SEC, "100010"),
+               f.candle(BTC, CYCLE + MIN, 100010, 100100, 99900, 100010), f.candle(BTC, CYCLE + 2 * MIN, 100010, 100100, 99900, 100010),
+               f.candle(BTC, CYCLE + 3 * MIN, 100010, 100100, 99900, 100010), f.candle(BTC, CYCLE + 4 * MIN, 100010, 103500, 100000, 103400)])
+        self.assertEqual(r.portfolio.positions, {})
+        [row] = r.report()["sections"]["uncertain"]["data"]["closed_trade_coverage"]
+        self.assertEqual(row["stop_coverage"], "gaps_covered_by_candles")
+        self.assertEqual(row["gaps"][0]["evidence"], "candles_cover")
+        self.assertNotIn("closed_trade_coverage_incomplete", self.codes(r))
+        self.assertAudit(r)
+
+    def test_a_recovery_with_an_open_position_keeps_the_gap_and_a_later_close_does_not_erase_it(self):
+        path, r = self.opened()
+        r.run([self.f.quote(BTC, CYCLE + 10 * SEC, "100010")])
+        r2 = self.reopen(path, CYCLE + 20 * MIN)
+        [gap] = r2.coverage["gaps"]
+        self.assertEqual((gap["kind"], gap["from_ms"], gap["to_ms"]), ("runner_interrupted", CYCLE + 10 * SEC, CYCLE + 20 * MIN))
+        self.assertEqual(self.market(r2)["stop_protection"], "unobserved")
+        r2.run([self.f.candle(BTC, CYCLE + 20 * MIN + MIN, 100010, 103500, 100000, 103400)])
+        self.assertEqual(r2.portfolio.positions, {})
+        [row] = r2.report()["sections"]["uncertain"]["data"]["closed_trade_coverage"]
+        self.assertEqual(row["stop_coverage"], "gaps_without_evidence")
+        self.assertEqual(row["gaps"][0]["kind"], "runner_interrupted")
+        self.assertIn("closed_trade_coverage_incomplete", self.codes(r2))
+        self.assertAudit(r2)
+
+    def test_replay_and_recovery_give_the_same_historical_coverage(self):
+        path, r = self.opened()
+        self.close_by_candle(r)
+        want = (json.dumps(r.coverage, sort_keys=True), r.financial_digest(), r.report()["sections"]["uncertain"]["data"]["closed_trade_coverage"])
+        r2 = self.reopen(path, r.clock)                          # same clock: nothing new to record
+        self.assertEqual(json.dumps(r2.coverage, sort_keys=True), want[0])
+        self.assertEqual(r2.financial_digest(), want[1])
+        self.assertEqual(r2.report()["sections"]["uncertain"]["data"]["closed_trade_coverage"], want[2])
+        # and after an interruption with the position open: replaying the journal again gives what was recorded then
+        path2, q = self.opened("ev2")
+        q.run([self.f.quote(BTC, CYCLE + 10 * SEC, "100010")])
+        q2 = self.reopen(path2, CYCLE + 20 * MIN)
+        recorded = json.dumps(q2.coverage, sort_keys=True)
+        q3 = self.reopen(path2, q2.clock)
+        self.assertEqual(json.dumps(q3.coverage, sort_keys=True), recorded)
+
+    def test_the_audit_notices_a_gap_that_was_erased(self):
+        path, r = self.opened()
+        self.close_by_candle(r)
+        self.assertAudit(r)
+        damaged = copy.deepcopy(r.coverage["gaps"])
+        r.coverage["gaps"][:] = []
+        rules = [v["rule"] for v in integrated_audit(r)["violations"]]
+        self.assertIn("coverage_gap_missing_at_close", rules)
+        r.coverage["gaps"][:] = damaged
+        r.coverage["gaps"].append({"product_id": ETH, "from_ms": 1, "to_ms": 2, "kind": "quote_gap", "intent_id": "ghost"})
+        self.assertIn("coverage_gap_of_unknown_position", [v["rule"] for v in integrated_audit(r)["violations"]])
+
+
 # ------------------------------------------------------------------------------------------------ contract and audit
 class Contract(Fin):
     def finished(self):

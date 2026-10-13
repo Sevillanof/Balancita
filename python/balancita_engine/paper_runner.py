@@ -269,7 +269,7 @@ class PaperRunner(object):
         self.decision_owner = {}     # signal key -> event_id of the cycle that must decide it
         self.cycles_seen = set()     # (product, cycle_ms) of every accepted cycle
         self.open_funding = {}       # event_id -> funding/reconcile event whose reconciliation entry is not recorded yet
-        self.coverage = {"last_quote": {}, "gaps": []}     # market coverage while positions are open (observed facts)
+        self.coverage = {"last_quote": {}, "watch": {}, "candles": {}, "gaps": []}     # market coverage while positions are open (observed facts)
         self.recoveries, self.last_recovery, self.last_checkpoint = 0, None, None
         self.replaying = False
         if entries is None:
@@ -446,20 +446,76 @@ class PaperRunner(object):
             self.offsets.process(stream[0], stream[1], stream[2])
         self._apply_market(event)
 
-    def _note_coverage(self, quote):
-        """A position is watched by quotes only while they keep arriving. A silence longer than ``coverage_gap_ms`` with
-        a position open is recorded as a fact (it is never filled in later and never read as protection)."""
+    def _open_snapshot(self):
+        """Who is open right now: ``product -> (intent_id, entry_ms, entry_bucket_ms)``."""
+        out = {}
+        for product, book in self.portfolio.positions.items():
+            if book.position is not None:
+                out[product] = (book.intent["intent_id"], int(book.position.get("entry_ms", book.position["opened_at"])),
+                                int(book.position.get("opened_bucket", 0)))
+        return out
+
+    def _watch_record(self, product, intent_id, entry_ms):
+        return self.coverage["watch"].setdefault(intent_id, {"product_id": product, "entry_ms": entry_ms, "quotes": 0,
+                                                              "last_ms": entry_ms})
+
+    def _record_gap(self, product, intent_id, since, now):
+        known = [g["to_ms"] for g in self.coverage["gaps"] if g["intent_id"] == intent_id]
+        since = max([since] + known)             # a silence already recorded (an interruption) is not counted twice
+        if now - since > self.config.coverage_gap_ms:
+            self.coverage["gaps"].append({"product_id": product, "from_ms": since, "to_ms": now, "kind": "quote_gap",
+                                          "intent_id": intent_id})
+
+    def _note_quote(self, quote, before):
+        """A quote is evidence that a stop was watched only if ``QuoteWatch`` accepted it for that position (after the
+        entry, in order, not covered by a candle). Whatever the watch ignored proves nothing. A silence longer than
+        ``coverage_gap_ms`` between two evidenced moments is recorded as a fact and never filled in later."""
         product, now = quote["product_id"], int(quote["time_ms"])
-        book = self.portfolio.positions.get(product)
-        if book is not None and book.position is not None:
-            since = max(self.coverage["last_quote"].get(product, 0),
-                        int(book.position.get("entry_ms", book.position["opened_at"])))
-            known = [g["to_ms"] for g in self.coverage["gaps"] if g["intent_id"] == book.intent["intent_id"]]
-            since = max([since] + known)         # a silence already recorded (an interruption) is not counted twice
-            if now - since > self.config.coverage_gap_ms:
-                self.coverage["gaps"].append({"product_id": product, "from_ms": since, "to_ms": now, "kind": "quote_gap",
-                                              "intent_id": book.intent["intent_id"]})
         self.coverage["last_quote"][product] = max(self.coverage["last_quote"].get(product, 0), now)
+        if product not in before or self.executor.watch is None:
+            return
+        intent_id, entry_ms, _ = before[product]
+        state = self.executor.watch.state.get(product)
+        record = self._watch_record(product, intent_id, entry_ms)
+        if state is None or state["intent_id"] != intent_id or state["quotes"] <= record["quotes"]:
+            return                               # ignored by the watch: it did not watch anything
+        self._record_gap(product, intent_id, record["last_ms"], now)
+        record["quotes"], record["last_ms"] = state["quotes"], now
+
+    def _note_candle(self, product, bucket, before):
+        """A processed candle after the entry minute covers [bucket, bucket + 1 min]; it is evidence of its own kind."""
+        if product not in before:
+            return
+        intent_id, _, entry_bucket = before[product]
+        if bucket < entry_bucket + 60_000:
+            return                               # the entry minute never evaluates the stop
+        ranges = self.coverage["candles"].setdefault(intent_id, [])
+        if ranges and ranges[-1][1] == bucket:
+            ranges[-1][1] = bucket + 60_000
+        elif not ranges or bucket >= ranges[-1][1]:
+            ranges.append([bucket, bucket + 60_000])
+        else:
+            ranges.append([bucket, bucket + 60_000])
+            ranges.sort()
+            merged = [ranges[0]]
+            for lo, hi in ranges[1:]:
+                if lo <= merged[-1][1]:
+                    merged[-1][1] = max(merged[-1][1], hi)
+                else:
+                    merged.append([lo, hi])
+            self.coverage["candles"][intent_id] = merged
+
+    def _settle_closed(self, before):
+        """A position that closed keeps its coverage history: the silence between the last evidence and the close is
+        recorded now, so closing never erases the warning."""
+        after = self._open_snapshot()
+        for product, (intent_id, entry_ms, _) in before.items():
+            if after.get(product, (None,))[0] == intent_id:
+                continue
+            trade = next((t for t in self.portfolio.trades if t["intent_id"] == intent_id), None)
+            if trade is not None:
+                record = self._watch_record(product, intent_id, entry_ms)
+                self._record_gap(product, intent_id, record["last_ms"], int(trade["exit_time_ms"]))
 
     @staticmethod
     def _stream_of(event):
@@ -477,8 +533,10 @@ class PaperRunner(object):
     def _apply_market(self, event):
         kind, payload = event["kind"], event["payload"]
         if kind == "quote":
-            self._note_coverage(payload)
+            before = self._open_snapshot()
             self.executor.on_quote(payload)
+            self._note_quote(payload, before)
+            self._settle_closed(before)
         elif kind == "funding":
             counts = ingest_funding(self.portfolio, payload["product_id"], payload["periods"], received_ms=event["t_ms"],
                                     source=event["source"])
@@ -487,9 +545,14 @@ class PaperRunner(object):
         elif kind == "candle":
             product, bucket = payload["product_id"], int(payload["bucket_ms"])
             self.candle_digest[(product, bucket)] = stable_hash({k: str(payload["candle"][k]) for k in ("open", "high", "low", "close")})
+            before = self._open_snapshot()
             self.executor.on_candle(product, bucket, payload["candle"])
+            self._note_candle(product, bucket, before)
+            self._settle_closed(before)
         elif kind == "clock":
+            before = self._open_snapshot()
             self.executor.advance(event["t_ms"])
+            self._settle_closed(before)
 
     # ---- the single entry point for a source -----------------------------------------------------------------
     def handle(self, event):
@@ -717,8 +780,10 @@ class PaperRunner(object):
             return []
         gaps = []
         for product, book in sorted(self.portfolio.positions.items()):
-            since = max(before, self.coverage["last_quote"].get(product, 0),
-                        int(book.position.get("entry_ms", book.position["opened_at"])))
+            entry = int(book.position.get("entry_ms", book.position["opened_at"]))
+            watched = self.coverage["watch"].get(book.intent["intent_id"], {}).get("last_ms", entry)
+            known = [g["to_ms"] for g in self.coverage["gaps"] if g["intent_id"] == book.intent["intent_id"]]
+            since = max([watched, entry] + known)    # from the last evidence, not from the last journal entry
             if recovery_ms > since:
                 gaps.append({"product_id": product, "from_ms": since, "to_ms": recovery_ms, "kind": "runner_interrupted",
                              "intent_id": book.intent["intent_id"]})
