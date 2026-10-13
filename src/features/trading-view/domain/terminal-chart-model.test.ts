@@ -190,4 +190,34 @@ describe('lines per strategy book', () => {
     ])
     expect(chartPositions(undefined, {})).toEqual([])
   })
+  it('keeps the positions of the product asked, not only BTC', async () => {
+    const { chartPositions } = await import('./terminal-chart-model.ts')
+    const btc = { side: 'long', product_id: 'PF_XBTUSD' }
+    const eth = { side: 'short', product_id: 'PF_ETHUSD' }
+    expect(chartPositions([btc, eth], {}, 'PF_ETHUSD')).toEqual([eth])
+    expect(chartPositions([btc, eth], {}, 'PF_SOLUSD')).toEqual([])
+  })
+  it('limits exit markers to the visible period and names their source', async () => {
+    const { exitMarkers } = await import('./terminal-chart-model.ts')
+    const order = (id: string, closed_at_ms: number) => ({
+      order_id: id,
+      state: 'filled',
+      reduce_only: true,
+      reason_code: 'profit_target',
+      closed_at_ms,
+    })
+    const orders = [
+      order('early', 9_000),
+      order('inside', 20_000),
+      order('late', 40_000),
+    ]
+    expect(exitMarkers(orders).map((m) => m.id)).toHaveLength(3)
+    const bounded = exitMarkers(orders, {
+      from: 10,
+      to: 30,
+      prefix: 'Histórico · Gateway D',
+    })
+    expect(bounded.map((m) => m.id)).toEqual(['exit:inside'])
+    expect(bounded[0]!.label).toBe('Histórico · Gateway D · OBJETIVO')
+  })
 })

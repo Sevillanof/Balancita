@@ -1,6 +1,13 @@
 import { render, screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
-import { DataState, Metric, Panel, StatusPill, TopBar } from './index.ts'
+import {
+  DataProvenance,
+  DataState,
+  Metric,
+  Panel,
+  StatusPill,
+  TopBar,
+} from './index.ts'
 
 describe('Mission Control components', () => {
   it('Panel renders title, eyebrow, actions and body', () => {
@@ -72,5 +79,27 @@ describe('Mission Control components', () => {
         .getAttribute('aria-current'),
     ).toBeNull()
     expect(screen.getByText('estado')).toBeTruthy()
+  })
+
+  it('DataProvenance keeps event time and last received apart and never invents either', () => {
+    const { rerender } = render(<DataProvenance />)
+    expect(screen.getAllByText('No disponible')).toHaveLength(5)
+    rerender(
+      <DataProvenance
+        origin="Kraken"
+        experiment="C29"
+        runId="run-7"
+        eventTime={1_800_000_000_000}
+        receivedAt={1_800_000_005_000}
+        now={1_800_000_009_000}
+      />,
+    )
+    expect(screen.queryByText('No disponible')).toBeNull()
+    expect(screen.getByText('run-7')).toBeTruthy()
+    expect(screen.getByText(/hace 4 s/)).toBeTruthy()
+    // Only the received time is given: the event time stays unavailable.
+    rerender(<DataProvenance origin="Kraken" receivedAt={1_800_000_005_000} />)
+    expect(screen.getAllByText('No disponible')).toHaveLength(3)
+    expect(screen.queryByText(/hace/)).toBeNull()
   })
 })

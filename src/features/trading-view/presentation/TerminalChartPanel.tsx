@@ -251,6 +251,7 @@ export default function TerminalChartPanel({
   position,
   positions,
   orders,
+  historicalLabel,
   instrument = `${productPair(product)} perpetuo`,
 }: {
   /** Live 1m candles from the terminal stream (seconds). */
@@ -267,6 +268,8 @@ export default function TerminalChartPanel({
   /** One open position per strategy book (gateway `positions`). */
   positions?: readonly unknown[]
   orders: readonly unknown[]
+  /** Positions and exits come from a retired book: every one carries this label. */
+  historicalLabel?: string
   instrument?: string
 }) {
   const [settings, setSettings] = useState<Settings>(loadSettings)
@@ -332,7 +335,7 @@ export default function TerminalChartPanel({
   const mark = stats?.mark ?? null
   const [hiddenStrategies, setHiddenStrategies] = useState<string[]>([])
   const lines = useMemo(() => {
-    const open = chartPositions(positions, position)
+    const open = chartPositions(positions, position, product ?? 'PF_XBTUSD')
     const out = open
       .filter(
         (item) =>
@@ -356,6 +359,10 @@ export default function TerminalChartPanel({
                 code: strategyCode(strategyId),
               }
             : undefined,
+        ).map((line) =>
+          historicalLabel
+            ? { ...line, title: `${historicalLabel} · ${line.title}` }
+            : line,
         )
       })
     if (mark != null)
@@ -367,10 +374,30 @@ export default function TerminalChartPanel({
         dashed: true,
       })
     return out
-  }, [positions, position, mark, colors, hiddenStrategies])
+  }, [
+    positions,
+    position,
+    product,
+    mark,
+    colors,
+    hiddenStrategies,
+    historicalLabel,
+  ])
   const everyMarker = useMemo(
-    () => [...markers, ...exitMarkers(orders)],
-    [markers, orders],
+    () => [
+      ...markers,
+      ...exitMarkers(orders, {
+        // Only exits inside the candles on screen: none from another period.
+        ...(shown.length > 0
+          ? {
+              from: shown[0]!.time,
+              to: shown.at(-1)!.time + intervalSeconds,
+            }
+          : {}),
+        ...(historicalLabel ? { prefix: historicalLabel } : {}),
+      }),
+    ],
+    [markers, orders, shown, intervalSeconds, historicalLabel],
   )
   const strategyIds = useMemo(
     () =>
