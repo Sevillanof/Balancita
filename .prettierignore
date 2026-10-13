@@ -2,5 +2,6 @@ node_modules
 dist
 pnpm-lock.yaml
 coverage
-docconfig
+doc
+config
 analisis
