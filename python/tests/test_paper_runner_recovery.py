@@ -745,6 +745,36 @@ except RunnerError as error:
         r2 = self.recover(path, session()[2]["t_ms"])
         self.assertEqual(r2.status, PROCESSING)
 
+    def test_a_closed_instance_can_never_write_again_while_another_owns_the_directory(self):
+        path, a = self.fresh()
+        events = session()
+        a.run(events[:3])
+        a.close()
+        a.close()                                       # idempotent
+        b = self.recover(path, events[2]["t_ms"])
+        after_recovery = self.snapshot(path)
+        attempts = (lambda: a.handle(events[3]), lambda: a.run(events[3:5]), lambda: a.finish(), lambda: a.checkpoint(),
+                    lambda: a.declare_gap(SRC, "main", 0, 40, 41, reason="x", evidence="y", operator="fran", t_ms=CYCLE + 9 * SEC),
+                    lambda: a.handle(events[0]))                  # not even a duplicate is journaled
+        for attempt in attempts:
+            with self.assertRaises(RunnerError) as caught:
+                attempt()
+            self.assertEqual(caught.exception.reason, "runner_closed")
+        self.assertEqual(self.snapshot(path), after_recovery, "no byte changed")
+        self.assertEqual(a.status, PROCESSING)
+        a.report()                                      # reading still works
+        b.run(events)                                   # B carries on normally
+        self.assertEqual(self.fingerprint(b), self.fingerprint(self.continuous(events)))
+        self.assertEqual(self.recover(path, b.clock + 1).financial_digest(), b.financial_digest())
+
+    def test_close_does_not_disable_an_in_memory_runner(self):
+        from balancita_engine.paper_runner import PaperRunner as P
+        log = SC.SignalLog.create(os.path.join(self.dir, "mem-signals.jsonl"), cfg().start_ms)
+        r = P(cfg(), strategies(), log)
+        r.close()
+        r.close()
+        self.assertEqual(r.handle(session()[0])["status"], "accepted")
+
     def test_a_refused_recovery_does_not_leave_the_directory_locked(self):
         path, r = self.fresh()
         r.run(session())

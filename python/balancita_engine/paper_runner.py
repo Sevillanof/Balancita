@@ -253,6 +253,7 @@ class PaperRunner(object):
         self.evaluator = evaluator or minimal_evaluator
         self.directory = directory
         self.lock = None
+        self.closed = False         # a durable runner that released its lock never writes again
         self.portfolio = Portfolio(config.portfolio, funding=config.funding_map(), stop_policy=config.stop_policy)
         self.executor = TimedExecutor(self.portfolio, config.execution, watch=config.watch)
         self.status, self.clock = CREATED, None
@@ -280,8 +281,13 @@ class PaperRunner(object):
     def _count(self, name, n=1):
         self.stats[name] = self.stats.get(name, 0) + n
 
+    def _guard_open(self):
+        if self.closed:
+            raise RunnerError("runner_closed", "this instance released the single-writer lock and can no longer write")
+
     def _record(self, t_ms, kind, data):
         """Write-ahead: the entry is in the journal before any effect of it exists."""
+        self._guard_open()
         entry = self.journal.add(t_ms, kind, data)
         self._apply(entry)
         hit("after_apply", kind)
@@ -455,6 +461,7 @@ class PaperRunner(object):
         """Validates, orders and de-duplicates one event, records it and applies it. Returns ``{"status", ...}`` with
         status ``accepted`` | ``duplicate`` | ``conflict`` | ``rejected``. An event that is not accepted is journaled as
         ``event_rejected`` and changes no financial state."""
+        self._guard_open()
         if self.status != PROCESSING:
             raise RunnerError("not_processing", self.status)
         why = _check_event(event)
@@ -711,14 +718,18 @@ class PaperRunner(object):
         return runner
 
     def close(self):
-        """Releases the single-writer lock. The process dying does the same; this is for orderly shutdowns and tests."""
+        """Releases the single-writer lock. The process dying does the same; this is for orderly shutdowns and tests.
+        Idempotent. A durable instance is disabled for writing for good (another process may now own the directory);
+        reading (``report``, digests) still works. An in-memory runner has no lock and is not affected."""
         if self.lock is not None:
+            self.closed = True
             self.lock.release()
             self.lock = None
 
     # ---- checkpoint ------------------------------------------------------------------------------------------
     def checkpoint(self):
         """Writes the verification checkpoint for everything durable so far (the journal entries are already on disk)."""
+        self._guard_open()
         if self.directory is None:
             raise RunnerError("no_directory", "this runner is not durable")
         entries = self.journal.entries
@@ -744,6 +755,7 @@ class PaperRunner(object):
 
     def finish(self, t_ms=None):
         """Ends the session durably: ``run_end`` is replayed, so a recovered session stays ``FINISHED``."""
+        self._guard_open()
         if self.status != PROCESSING:
             raise RunnerError("not_processing", self.status)
         self._record(self.clock if t_ms is None else t_ms, "run_end", {"state_digest": self.state_digest()})
