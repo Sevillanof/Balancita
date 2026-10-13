@@ -72,10 +72,10 @@ async function openTerminal(page: Page, health: unknown, activity: unknown) {
       },
     }),
   )
-  await page.route('**/api-live/api/observability/health', (route) =>
+  await page.route('**/api-live/observability/health', (route) =>
     route.fulfill({ json: health }),
   )
-  await page.route('**/api-live/api/observability/activity**', (route) => {
+  await page.route('**/api-live/observability/activity**', (route) => {
     // The gateway echoes the window and product it was asked for.
     const query = new URL(route.request().url()).searchParams
     route.fulfill({
