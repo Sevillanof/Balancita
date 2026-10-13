@@ -71,6 +71,7 @@ import {
 } from './StrategyLabPanels.tsx'
 import { NewStrategyModal } from './NewStrategyModal.tsx'
 import InventoryView from './InventoryView.tsx'
+import ComparisonView from './ComparisonView.tsx'
 import StrategyViewTabs from './StrategyViewTabs.tsx'
 import './InventoryView.css'
 import {
@@ -90,7 +91,7 @@ type Props = {
   initialView?: StrategyView
 }
 
-type StrategyView = 'inventory' | 'lab'
+type StrategyView = 'inventory' | 'lab' | 'comparison'
 const VIEW_TABS = [
   { id: 'inventory', label: 'Inventario de modelos' },
   { id: 'lab', label: 'Laboratorio' },
@@ -705,7 +706,7 @@ export default function StrategyLab({
     <div className="strategy-lab">
       <StrategyViewTabs
         tabs={VIEW_TABS}
-        current={view}
+        current={view === 'comparison' ? 'inventory' : view}
         onChange={setView}
         trailing={
           inventory && (
@@ -737,6 +738,16 @@ export default function StrategyLab({
           reload={reload}
           onOpen={openFromInventory}
           onLoaded={setInventory}
+          onCompare={() => setView('comparison')}
+        />
+      )}
+      {view === 'comparison' && (
+        <ComparisonView
+          api={api}
+          connectError={connectError}
+          reload={reload}
+          onOpen={openFromInventory}
+          onBack={() => setView('inventory')}
         />
       )}
       {view === 'lab' && (
