@@ -10,13 +10,13 @@ Every sustained live run of the single process surfaced a new engine defect: the
 
 ## Target (approved 2026-10-06)
 
-| Process | Role | Writes |
-|---|---|---|
-| A capture | Kraken WS → raw events + candles | market DB |
-| B gateway | HTTP + browser WS; opens other DBs read-only, tails rows | nothing |
-| N news | news ingestion + stored Gemini analysis | news DB |
-| C verdict (Python) | candles + news → long/short/abstain on candle close; pure, replayable | verdicts DB |
-| D paper execution | verdicts → risk, fills, ledger, hash chain | engine account DB |
+| Process            | Role                                                                  | Writes            |
+| ------------------ | --------------------------------------------------------------------- | ----------------- |
+| A capture          | Kraken WS → raw events + candles                                      | market DB         |
+| B gateway          | HTTP + browser WS; opens other DBs read-only, tails rows              | nothing           |
+| N news             | news ingestion + stored Gemini analysis                               | news DB           |
+| C verdict (Python) | candles + news → long/short/abstain on candle close; pure, replayable | verdicts DB       |
+| D paper execution  | verdicts → risk, fills, ledger, hash chain                            | engine account DB |
 
 ## Constraints
 

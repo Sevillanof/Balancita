@@ -53,13 +53,22 @@ export async function backfillOfficialCandles(options: {
       last,
     )
     const expected = (end - start) / intervalMs + 1
-    if (store.countOfficialBuckets(productId, intervalMs, start, end) >= expected) {
+    if (
+      store.countOfficialBuckets(productId, intervalMs, start, end) >= expected
+    ) {
       skippedWindows += 1
       continue
     }
     if (requests > 0 && gap > 0)
-      await (options.pause ?? ((ms) => new Promise((r) => setTimeout(r, ms))))(gap)
-    const response = await client.fetch(productId, intervalMs, start, end + intervalMs)
+      await (options.pause ?? ((ms) => new Promise((r) => setTimeout(r, ms))))(
+        gap,
+      )
+    const response = await client.fetch(
+      productId,
+      intervalMs,
+      start,
+      end + intervalMs,
+    )
     requests += 1
     inserted += store.appendOfficialCandles(response).inserted
     options.onProgress?.(

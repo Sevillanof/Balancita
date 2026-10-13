@@ -4,11 +4,11 @@ Every 5 minutes, for each of the 8 products, strategies emit `balancita-signal.v
 independent paper books of the shared simulator (same candles, per-product costs, 100 USD notional, risk policy and
 exit rules). Governing decision: ADR 0001, amendment 2026-10-12.
 
-| Arm | Chooses | Book key |
-|---|---|---|
-| A | each strategy trades its own signals | `(A, strategy, product)` |
-| B | deterministic combiner (net strength ≥ 0.6, 2× dominance) | `(B, combined, product)` |
-| C | Qwen picks BUY / WAIT / SELL, only among sides a signal backs | `(C, qwen, product)` |
+| Arm | Chooses                                                       | Book key                 |
+| --- | ------------------------------------------------------------- | ------------------------ |
+| A   | each strategy trades its own signals                          | `(A, strategy, product)` |
+| B   | deterministic combiner (net strength ≥ 0.6, 2× dominance)     | `(B, combined, product)` |
+| C   | Qwen picks BUY / WAIT / SELL, only among sides a signal backs | `(C, qwen, product)`     |
 
 Flow: strategies → selector → **risk engine** (authorizes or rejects with reasons) → **executor** (opens only by
 redeeming a single-use authorization) → `Book` manages stop / target / time stop without Qwen.
