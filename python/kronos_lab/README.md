@@ -35,8 +35,7 @@ strategies (hit rate with CI, mean net bp, t-stat, verdict). Only `forward` is e
 read-only and writes, for every trade whose whole holding time is covered by the stored Kraken funding periods, the
 funding and the net it implies into a separate, append-only `kronos-funding.sqlite` (same accounting as the
 forward's `forward_trade_funding`: unknown funding is never zero, a hole gives no row, the periods used are hashed).
-`kronos-funding-summary.json` reports forward trades only, with `net_is_definitive`, the pending trades, and the
-positions held through a recorded interruption apart. It never touches `kronos.sqlite`, `kronos-summary.json`
+`kronos-funding-summary.json` (written atomically) reports forward trades only, in three groups (all, without the positions held through a recorded interruption, and those apart), each with `before_funding` (stored nets), `after_funding_all` and `funding_verified_only`. While any trade of a group is pending its verdict reads `provisional_funding_pending`. It never touches `kronos.sqlite`, `kronos-summary.json`
 or the running process:
 
     PYTHONPATH=python python3 -m kronos_lab.funding --out server/data/kronos --market-db <futures-market.sqlite>

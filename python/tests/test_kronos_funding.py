@@ -78,16 +78,18 @@ class KronosFundingTests(unittest.TestCase):
             self.assertEqual(funding.reconcile(trades, side, {"PF_XBTUSD": partial}), 0)
             self.assertEqual(funding.reconcile(trades, side, {}), 0)
             pending = funding.summarize(funding.corrected(trades, side))
-            self.assertFalse(pending["forward"]["net_is_definitive"])
-            self.assertEqual(pending["funding_pending"], [["PF_XBTUSD", T0]])
-            self.assertEqual(pending["forward"]["mean_net_bp"], -12.0)  # funding-free net, flagged not definitive
+            self.assertFalse(pending["forward_all"]["after_funding_all"]["net_is_definitive"])
+            self.assertEqual(pending["forward_all"]["pending_keys"], [["PF_XBTUSD", T0]])
+            self.assertEqual(pending["forward_all"]["after_funding_all"]["mean_net_bp"], -12.0)  # funding-free, flagged
             full = hourly([1e-4] * 4)
             self.assertEqual(funding.reconcile(trades, side, {"PF_XBTUSD": full}, now_ms=1), 1)
             self.assertEqual(funding.reconcile(trades, side, {"PF_XBTUSD": full}, now_ms=2), 0)  # idempotent
             done = funding.summarize(funding.corrected(trades, side))
-            self.assertTrue(done["forward"]["net_is_definitive"])
-            self.assertEqual(done["funding_pending"], [])
-            self.assertAlmostEqual(done["forward"]["mean_net_bp"], -12.0 - 4.0, places=2)  # 4 h x 1e-4 = 4 bp
+            self.assertTrue(done["forward_all"]["after_funding_all"]["verdict_definitive"])
+            self.assertEqual(done["forward_all"]["pending_keys"], [])
+            self.assertAlmostEqual(done["forward_all"]["after_funding_all"]["mean_net_bp"], -12.0 - 4.0, places=2)  # 4 h x 1e-4
+            self.assertAlmostEqual(done["forward_all"]["before_funding"]["mean_net_bp"], -12.0, places=2)
+            self.assertAlmostEqual(done["forward_all"]["mean_funding_bp_verified"], -4.0, places=2)
             side.close()
 
     def test_corrections_are_append_only_and_versioned(self):
@@ -138,8 +140,8 @@ class KronosFundingTests(unittest.TestCase):
             rates = hourly([1e-4] * 60)
             funding.reconcile(trades, side, {p: rates for p in ("PF_XBTUSD", "PF_ETHUSD")})
             out = funding.summarize(funding.corrected(trades, side))
-            self.assertEqual(out["forward"]["trades"], 3)  # the backtest row is not evidence
-            self.assertEqual(out["interruption_crossers"]["keys"], [["PF_ETHUSD", T0 + 20 * H]])
+            self.assertEqual(out["forward_all"]["trades"], 3)  # the backtest row is not evidence
+            self.assertEqual(out["interruption_crossers"]["trades"], 1)
             self.assertEqual(out["forward_without_interruption_crossers"]["trades"], 2)
             side.close()
 
@@ -158,7 +160,47 @@ class KronosFundingTests(unittest.TestCase):
             with open(os.path.join(d, "kronos-funding-summary.json")) as handle:
                 body = json.load(handle)
             self.assertEqual(body["corrections_added"], 0)
-            self.assertFalse(body["forward"]["net_is_definitive"])
+            self.assertEqual(body["forward_all"]["after_funding_all"]["verdict"], "provisional_funding_pending")
+
+    def test_no_global_verdict_is_definitive_while_any_trade_is_pending(self):
+        with tempfile.TemporaryDirectory() as d:
+            fx = Fixture(d)
+            for i in range(3):
+                fx.add("PF_XBTUSD", T0 + i * 5 * H, "LONG")
+            fx.db.commit()
+            fx.close()
+            trades = funding.read_trades(fx.path)
+            side = sqlite3.connect(os.path.join(d, "f.sqlite"))
+            funding.reconcile(trades, side, {"PF_XBTUSD": hourly([1e-4] * 9)})  # covers the first trade only (T0..T0+4h)
+            out = funding.summarize(funding.corrected(trades, side))["forward_all"]
+            self.assertEqual((out["funding_verified"], out["funding_pending"]), (2, 1))  # the trade at T0+5h ends T0+9h: covered
+            for view in ("before_funding", "after_funding_all"):
+                self.assertFalse(out[view]["verdict_definitive"])
+                self.assertEqual(out[view]["verdict"], "provisional_funding_pending")
+                self.assertIn("verdict_raw", out[view])
+            only = out["funding_verified_only"]  # verified trades alone are a complete group, judged on their own
+            self.assertTrue(only["verdict_definitive"])
+            self.assertEqual(only["trades"], 2)
+            side.close()
+
+    def test_summary_is_written_atomically_and_a_failure_keeps_the_previous_file(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "kronos-funding-summary.json")
+            funding.write_json_atomic(path, {"v": 1})
+            old = json.dumps({"v": 1}, indent=2, sort_keys=True)
+
+            class Boom:
+                pass
+
+            with self.assertRaises(TypeError):
+                funding.write_json_atomic(path, {"v": Boom()})  # not serialisable: fails half-way
+            with open(path) as handle:
+                self.assertEqual(handle.read(), old)
+            self.assertEqual(os.listdir(d), ["kronos-funding-summary.json"])  # no temp file left behind
+            funding.write_json_atomic(path, {"v": 2})
+            with open(path) as handle:
+                self.assertEqual(json.load(handle), {"v": 2})
+            self.assertEqual(os.listdir(d), ["kronos-funding-summary.json"])
 
 
 if __name__ == "__main__":

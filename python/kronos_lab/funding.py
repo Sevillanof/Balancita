@@ -89,26 +89,61 @@ def corrected(trades, funding_db):
     out = []
     for trade in trades:
         row = rows.get((trade["product_id"], trade["decision_ms"]))
-        item = dict(trade)
+        item = dict(trade, net_bp_before=trade["net_bp"], pnl_usd_before=trade["pnl_usd"])
         if row is not None:
             item.update(funding_usd=row[0], pnl_usd=row[1], net_bp=row[2], funding_complete=True)
         out.append(item)
     return out
 
 
+def _gated(stats):
+    """No verdict is definitive while any trade of the group lacks verified funding: the raw one is kept apart."""
+    if stats["net_is_definitive"]:
+        return dict(stats, verdict_definitive=True)
+    return dict(stats, verdict_definitive=False, verdict_raw=stats["verdict"], verdict="provisional_funding_pending")
+
+
+def _group(trades):
+    """One group, three views: the stored funding-free net (before), the verified-funding trades alone, and the mix."""
+    verified = [t for t in trades if t["funding_complete"]]
+    before = [dict(t, net_bp=t["net_bp_before"], pnl_usd=t["pnl_usd_before"], funding_complete=False) for t in trades]
+    return {
+        "before_funding": _gated(summarize_trades(before)),                  # the stored nets, as Kronos wrote them
+        "after_funding_all": _gated(summarize_trades(trades)),               # verified funding where it exists, else stored
+        "funding_verified_only": _gated(summarize_trades(verified)),         # only trades whose funding is verified
+        "trades": len(trades), "funding_verified": len(verified), "funding_pending": len(trades) - len(verified),
+        "pending_keys": [[t["product_id"], t["decision_ms"]] for t in trades if not t["funding_complete"]],
+        "mean_funding_bp_verified": round(sum(t["net_bp"] - t["net_bp_before"] for t in verified) / len(verified), 3)
+        if verified else None}
+
+
 def summarize(trades):
-    """Forward evidence only. ``live`` leaves out positions held through a recorded interruption (reported apart)."""
+    """Forward evidence only (backtest rows are contaminated). Positions held through a recorded interruption are a
+    group of their own, and the totals are given with and without them."""
     forward = [t for t in trades if t["mode"] == "forward"]
     crossing = [t for t in forward if t["crosses_interruption"]]
     return {
         "method_version": METHOD_VERSION,
-        "forward": summarize_trades(forward),
-        "forward_without_interruption_crossers": summarize_trades([t for t in forward if not t["crosses_interruption"]]),
-        "interruption_crossers": {"trades": len(crossing), "keys": [[t["product_id"], t["decision_ms"]] for t in crossing],
-                                  "summary": summarize_trades(crossing)},
-        "funding_pending": [[t["product_id"], t["decision_ms"]] for t in forward if not t["funding_complete"]],
+        "forward_all": _group(forward),
+        "forward_without_interruption_crossers": _group([t for t in forward if not t["crosses_interruption"]]),
+        "interruption_crossers": _group(crossing),
         "backtest_note": "mode=backtest rows are contaminated and are not summarised here",
     }
+
+
+def write_json_atomic(path, body):
+    """Writes the whole file or leaves the previous one: temp file in the same folder, fsync, then rename."""
+    temp = "{}.tmp-{}".format(path, os.getpid())
+    try:
+        with open(temp, "w", encoding="utf-8") as handle:
+            json.dump(body, handle, indent=2, sort_keys=True)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp, path)
+    except BaseException:
+        if os.path.exists(temp):
+            os.unlink(temp)
+        raise
 
 
 def main(argv=None):
@@ -128,10 +163,11 @@ def main(argv=None):
         body = summarize(corrected(trades, funding_db))
     finally:
         funding_db.close()
-    with open(os.path.join(args.out, "kronos-funding-summary.json"), "w", encoding="utf-8") as handle:
-        json.dump(dict(body, corrections_added=added), handle, indent=2, sort_keys=True)
-    print("corrections added: {}; pending: {}; net definitive: {}".format(
-        added, len(body["funding_pending"]), body["forward"]["net_is_definitive"]), flush=True)
+    write_json_atomic(os.path.join(args.out, "kronos-funding-summary.json"), dict(body, corrections_added=added))
+    group = body["forward_all"]
+    print("corrections added: {}; forward trades {} (verified {}, pending {}); definitive: {}".format(
+        added, group["trades"], group["funding_verified"], group["funding_pending"],
+        group["after_funding_all"]["verdict_definitive"]), flush=True)
 
 
 if __name__ == "__main__":
