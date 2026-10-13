@@ -22,6 +22,38 @@ fijos por operación, un modelo de costes por producto, sin órdenes reales).
   añadir un **gateway de solo lectura** nuevo para observabilidad, sin tocar los
   procesos que escriben.
 
+## 0.1 Decisiones de Fran (2026-10-13, PR #123)
+
+Estas decisiones prevalecen sobre cualquier propuesta del resto del documento.
+
+1. **Backend.** Aprobados B1-B3 y B5-B6 solo como endpoints de **solo lectura**,
+   implementados de forma incremental, con consultas acotadas, pruebas de rendimiento y sin
+   carga significativa sobre el pipeline actual. **B4 se pospone**: se aborda en un PR
+   independiente, después de completar la primera versión de la investigación de decisiones,
+   priorizando la persistencia de descartes del forward y de fallos de Qwen. Su
+   implementación no debe bloquear el procesamiento del trader.
+2. **Experimentos.** Incluir Forward C29/C30/C32, Qwen, Kronos, C31 y carry; incluir A/B/C
+   cuando existan datos consultables. Distinguir claramente **activos, detenidos e
+   históricos**. No inventar carteras ni curvas de equity. No comparar directamente
+   resultados con unidades o metodologías incompatibles.
+3. **Posiciones paper.** Solo posiciones actuales **del experimento seleccionado** y de una
+   fuente verificable. El libro D retirado es histórico. Si no se puede determinar si hay una
+   posición abierta, mostrar **«No disponible»**; nunca asumir que no hay posiciones.
+4. **Limpieza.** Eliminar Replay solo tras comprobar que no tiene dependencias funcionales.
+   Retirar las velas sintéticas de cualquier evaluación operativa. Los mocks se conservan
+   solo para tests y demos identificadas. Cada limpieza va en un **PR independiente**.
+5. **Fase 2.** Prohibido mostrar posiciones o equity históricos del libro D como actuales. El
+   Terminal distingue origen, experimento y frescura de cada dato.
+6. **Salud.** Un componente sin información suficiente se muestra «Sin datos»; la ausencia de
+   errores no equivale a funcionamiento correcto. El estado global refleja degradaciones y
+   comprobaciones no disponibles.
+7. **Implementación.** Fases pequeñas, verificables y en PRs independientes. Primero ejecutar
+   y documentar la línea base de tests. No se modifican estrategias, lógica de decisiones,
+   contabilidad ni comportamiento del trader para adaptarlos al diseño.
+
+Pendiente de orden explícita: no se implementa backend ni se hace merge automático. Se
+puede empezar la Fase 0 y la Fase 1.
+
 ## 1. Estado actual (resumen verificado)
 
 Frontend (`src/`, React 19, Vite 8, React Compiler, `lightweight-charts` 5.2):
@@ -179,8 +211,15 @@ experimentos, tarjetas por experimento sin cartera consolidada.
 
 ### 3.6 Cambios de backend necesarios
 
-Principio: **solo lectura, aditivos y sin tocar procesos de escritura**. Se justifican
-antes de implementarlos (cada uno requiere visto bueno de Fran).
+Principio: **solo lectura, aditivos y sin tocar procesos de escritura**.
+Estado tras la revisión de Fran (2026-10-13): **B1-B3 y B5-B6 aprobados** (solo lectura,
+incrementales, consultas acotadas por ventana, prueba de rendimiento contra una copia de la
+base antes de activarlos, caché corta como en `scores`, conexión `readonly`; criterio de
+aceptación: sin aumento medible de latencia de captura/forward). **B4 pospuesto** (PR
+independiente, después de la primera versión de la investigación; primero descartes del
+forward y fallos de Qwen; no puede bloquear el procesamiento del trader). Hasta entonces la
+UI muestra «no registrado» donde el dato no se persiste. Nada de esto se implementa en la
+fase de auditoría.
 
 B1. `GET /api/observability/health` en el gateway (solo lectura): estado de los seis
 componentes calculado con reglas documentadas a partir de datos reales.
@@ -258,65 +297,85 @@ Estrategias/Experimentos
 - Comparación: tarjetas independientes, sin suma. Curvas de equity solo donde exista serie real (Qwen, Kronos); el resto "pendiente".
 - Veredicto estadístico: usar `reliability.verdict` y campos de DSR/overfitting del ranking. No usar el umbral por número de operaciones.
 
-## 5. Plan por fases
+## 5. Plan por fases (ajustado a las decisiones de §0.1)
 
-Convenciones: rama `claude/project-thread-vinibq` y derivadas por fase; un PR pequeño por
-fase (o sub-fase); sin merge sin revisión de Fran; antes de cada PR: `pnpm typecheck`,
-`pnpm lint`, `pnpm test`, y `pnpm test:server` si se tocó servidor.
+Convenciones: rama por fase derivada de `main`, un PR pequeño por fase o sub-fase, sin merge
+automático (lo decide Fran). Antes de cada PR: `pnpm typecheck`, `pnpm lint`, `pnpm test`,
+`pnpm test:e2e` si hay cambios de pantalla, y `pnpm test:server` si se tocó servidor. Ningún
+PR modifica estrategias, lógica de decisiones, contabilidad ni comportamiento del trader.
 
-### Fase 0: línea base (sin código)
-- `pnpm install`, ejecutar typecheck/lint/test/e2e y registrar el resultado.
-- Decidir con Fran: nombre de tokens, qué hacer con el código muerto (Replay) y con las velas sintéticas.
-- Aceptación: línea base documentada; los fallos previos conocidos (p. ej. tests de noticias) listados, no corregidos aquí.
+### Fase 0: línea base (sin cambios de producto)
+- `pnpm install` y ejecución de typecheck, lint, tests unitarios, tests de servidor, Python
+  (`PYTHONPATH=python python3 -m unittest discover -s python/tests`) y e2e.
+- Documentar el resultado en `docs/mission-control-linea-base.md`: versión, comandos, qué pasa,
+  qué falla y por qué (fallos previos conocidos: fixtures de noticias, archivos Vitest que no
+  cargan ws/fastify en la nube). No se corrigen aquí.
+- Aceptación: línea base reproducible; cada fallo previo catalogado como previo.
 
 ### Fase 1: fundamentos visuales (solo front)
-- Tokens únicos (`--mc-*`) desde `DESIGN.md`; tipografía; componentes: `AppShell`, `TopBar`,
-  `Panel`, `Metric`, `StatusPill`, `DataState` (loading/error/vacío/no disponible).
-- Navegación Terminal/Estrategias, ruta `/terminal` explícita (hoy es el caso por defecto).
-- Adaptar sin perder funciones: las pantallas actuales se montan en el shell nuevo.
-- Dependencias: Fase 0. Riesgo: bajo.
-- Aceptación: todas las funciones actuales operativas; e2e en 3 viewports verdes; capturas
-  antes/después; ningún cambio en `server/` ni `python/`.
+- Tokens únicos (`--mc-*`) desde `DESIGN.md`; componentes: `AppShell`, `TopBar`, `Panel`,
+  `Metric`, `StatusPill`, `DataState` (cargando / error / vacío / «No disponible» / «Sin datos»).
+- Navegación Terminal/Estrategias y ruta `/terminal` explícita.
+- Pantallas actuales montadas en el shell nuevo sin perder funciones.
+- Aceptación: funciones actuales intactas; e2e en 3 viewports; capturas antes/después; cero
+  cambios en `server/` y `python/`.
+- Limpiezas, **cada una en su PR independiente** (no mezcladas con Fase 1):
+  - L1: eliminar Replay (`ReplayPanel`, `replay-api`, su test) solo tras comprobar que nada lo usa
+    funcionalmente (búsqueda de imports y rutas, e2e, API `/replays` sigue existiendo en backend).
+  - L2: retirar velas sintéticas de `lab-candles.ts` de cualquier evaluación operativa.
+  - L3: restos de la fuente mock en `TerminalEntry`; los mocks quedan solo para tests y demos
+    identificadas con etiqueta visible.
 
 ### Fase 2: Terminal
 - Extraer `useTerminalStream` y componentes de presentación sin cambiar el protocolo.
-- Layout con gráfico protagonista, panel de estado y tabla de historial; reconstruir la vista
-  base con posición abierta a partir de `positionLines` y la cuenta publicada.
-- Selección bidireccional gráfico↔historial (ya existe `onSelect`; añadir selección desde la tabla y scroll/foco al marcador).
-- Dependencias: Fase 1. Aceptación: tests de caracterización del WS intactos; la decisión
-  seleccionada pertenece al producto y periodo mostrados; estados de carga/error/sin datos.
+- Cada bloque muestra **origen, experimento y frescura** (`known_at`) del dato.
+- **Posición paper**: solo del experimento seleccionado y de fuente verificable. Equity,
+  posiciones y órdenes del libro D se etiquetan «Histórico» y nunca se muestran como actuales.
+  Si no se puede determinar si hay posición abierta: «No disponible» (jamás «sin posición» por defecto).
+- Vista base reconstruida a partir de las posiciones verificables; mientras no exista fuente
+  (forward vía B5), la posición actual aparece «No disponible».
+- Selección gráfico↔historial.
+- Aceptación: tests de caracterización del WS intactos; las decisiones corresponden al producto
+  y período mostrados; test que prueba que datos de D no se presentan como actuales.
 
 ### Fase 3: observabilidad
-- Backend B1+B2 (+B6 `data_gaps`), solo lectura, con tests y pruebas de carga contra una copia de la base.
-- Front: indicador global, desplegable con seis componentes, "sin datos" real, bloque de
-  espera prolongada con los contadores y motivos.
-- Dependencias: aprobación de B1/B2 por Fran. Aceptación: con captura detenida el
-  indicador pasa a advertencia/error aunque el WS siga abierto; sin operaciones y con
-  verdicts frescos se muestra "operación normal"; no hay cifras de latencia inventadas.
+- Backend B1+B2 (+B6) de solo lectura con pruebas de rendimiento; front con el indicador global.
+- Reglas: componente sin información suficiente = «Sin datos»; ausencia de errores no es salud;
+  el estado global refleja degradaciones y comprobaciones no disponibles (peor estado entre componentes;
+  «Sin datos» degrada el global). Riesgo arranca como «Sin datos».
+- Espera prolongada: tiempo desde la última operación, evaluaciones, señales, descartes con motivo;
+  ausencia de operaciones no es error.
+- Aceptación: captura detenida con WS abierto ⇒ advertencia/error; sin cifras de latencia inventadas.
 
 ### Fase 4: investigación
-- Backend B3 (y B4 opcional). Front: panel por etapas, etapas no disponibles, evaluación
-  posterior separada.
-- Aceptación: cada etapa muestra origen y `known_at`; ninguna explicación redactada que no
-  salga de un campo del backend; navegación decisión→gráfico y gráfico→decisión.
+- Backend B3 de solo lectura. Panel por etapas con las etapas que intervienen; no disponibles marcadas;
+  evaluación posterior separada de lo conocido al decidir.
+- Aceptación: cada etapa con origen y `known_at`; sin explicaciones que no salgan de un campo.
+- Cierre de esta fase habilita B4 (PR aparte).
 
 ### Fase 5: estrategias
-- Listado, detalle, rendimiento, actividad e historial/backtest sobre el registro actual;
-  dividir `StrategyLab.tsx` conservando editor, importar, variantes, estados, versiones, Qwen, Kronos y carry.
-- Aceptación: tests actuales de Lab siguen verdes; backtest/OOS/paper rotulados por separado;
-  sin velas sintéticas.
+- Listado, detalle, rendimiento, actividad, historial y backtest. Dividir `StrategyLab.tsx`
+  conservando editor, importar, variantes, estados, versiones, Qwen, Kronos y carry.
+- Aceptación: tests de Lab verdes; backtest, fuera de muestra y paper rotulados por separado;
+  veredicto estadístico según `reliability.verdict` y DSR, no por número de operaciones.
 
 ### Fase 6: experimentos
-- Backend B5. Front: tarjetas independientes, curvas de equity solo con series reales,
-  matriz de atribución solo si existe dato, enlaces a Terminal.
-- Aceptación: ningún total consolidado; cada cifra con su origen; navegación Estrategias↔Terminal conservando producto y experimento.
+- Backend B5. Tarjetas por experimento: Forward C29/C30/C32, Qwen, Kronos, C31, carry; A/B/C cuando
+  existan datos consultables. Agrupadas por **activos / detenidos / históricos**.
+- Sin carteras ni curvas de equity inventadas: solo series reales (Qwen y Kronos hoy). Sin
+  comparación directa de métricas con unidades o metodología incompatibles (p. ej. carry en USD sobre
+  capital frente a pb por operación): se muestran lado a lado con sus unidades y una nota.
+- Aceptación: ningún total consolidado; cada cifra con origen; navegación Estrategias↔Terminal
+  conservando producto y experimento.
 
-## 6. Decisiones que necesitan a Fran
+### Orden y dependencias
+Fase 0 → Fase 1 → (L1, L2, L3 en paralelo, PRs separados) → Fase 2 → Fase 3 → Fase 4 → B4 (PR aparte) →
+Fase 5 → Fase 6. Fases 5 y 6 pueden adelantarse a 3-4 si Fran lo prefiere; solo dependen de la Fase 1.
 
-1. ¿Aprobar B1-B3, B5-B6 (solo lectura)? B4 (nuevas tablas de descartes) ¿ahora, después o nunca?
-2. Experimentos que mostrará la pantalla de comparación: forward (C29, C30, C32), Qwen, Kronos, C31, carry y los brazos A/B/C (estos hoy fuera del stack dev).
-3. Qué es "posición paper actual" del Terminal mientras el libro D esté retirado: forward por estrategia.
-4. Eliminar o cablear Replay; quitar velas sintéticas y restos de mock.
+## 6. Decisiones de Fran (resueltas)
+
+Ver §0.1. Quedan abiertas solo cuestiones de detalle de implementación, que se tratarán en el PR
+de cada fase: nombre exacto de los tokens, y qué datos de experimentos A/B/C son consultables.
 
 ## 7. Fuera de alcance
 
