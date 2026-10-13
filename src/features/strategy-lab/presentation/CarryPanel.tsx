@@ -22,15 +22,31 @@ export default function CarryPanel({
   setEnabled = defaultSet,
 }: Props) {
   const [summary, setSummary] = useState<CarrySummary | null>(null)
+  const [loaded, setLoaded] = useState(false)
   const [busy, setBusy] = useState(false)
   useEffect(() => {
     let active = true
-    void load().then((loaded) => active && setSummary(loaded))
+    void load().then((result) => {
+      if (!active) return
+      setSummary(result)
+      setLoaded(true)
+    })
     return () => {
       active = false
     }
   }, [load])
-  if (!summary) return null
+  if (!summary)
+    return loaded ? (
+      <section
+        className="strategy-lab__panel strategy-lab__carry"
+        aria-label="Carry de funding"
+      >
+        <p data-testid="carry-unavailable">
+          Carry de funding no disponible: el registro no devolvió su resumen. No
+          hay datos que mostrar.
+        </p>
+      </section>
+    ) : null
   const totals = summary.totals
   const toggle = async () => {
     setBusy(true)

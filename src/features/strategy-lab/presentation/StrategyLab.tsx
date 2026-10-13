@@ -78,7 +78,7 @@ import './StrategyLab.css'
 
 type Props = {
   loadCandles?: () => Promise<LabCandles>
-  connect?: (candles: LabCandles) => Promise<StrategyApi>
+  connect?: (candles: LabCandles | null) => Promise<StrategyApi>
   loadQwen?: (product: string) => Promise<QwenScores>
   loadKronos?: (product: string) => Promise<QwenScores>
 }
@@ -101,8 +101,6 @@ type Row = {
 const PERIODS: readonly PeriodDays[] = [7, 30, 90]
 const SOURCE_LABELS: Record<LabCandles['source'], string> = {
   live: 'velas reales de Terminal',
-  mock: 'velas del fixture MOCK de Terminal',
-  synthetic: 'velas sintéticas (Terminal no respondió)',
 }
 const GATE_LABELS: Record<string, string> = {
   backtested: 'Tiene un backtest',
@@ -155,6 +153,7 @@ export default function StrategyLab({
   const [market, setMarket] = useState<LabCandles | null>(null)
   const [api, setApi] = useState<StrategyApi | null>(null)
   const [connectError, setConnectError] = useState<string | null>(null)
+  const [marketError, setMarketError] = useState<string | null>(null)
   const [days, setDays] = useState<PeriodDays>(30)
   const [reload, setReload] = useState(0)
   const [ranking, setRanking] = useState<Ranking | null>(null)
@@ -212,16 +211,24 @@ export default function StrategyLab({
 
   useEffect(() => {
     let active = true
-    void loadCandles().then(async (loaded) => {
+    void (async () => {
+      let loaded: LabCandles | null = null
+      try {
+        loaded = await loadCandles()
+      } catch (error) {
+        // No invented candles: the chart says the Terminal did not answer and
+        // the registry (which does not need them) still connects.
+        if (active) setMarketError(errorText(error))
+      }
       if (!active) return
-      setMarket(loaded)
+      if (loaded) setMarket(loaded)
       try {
         const connected = await connect(loaded)
         if (active) setApi(connected)
       } catch (error) {
         if (active) setConnectError(errorText(error))
       }
-    })
+    })()
     return () => {
       active = false
     }
@@ -654,14 +661,14 @@ export default function StrategyLab({
       <div className="strategy-lab__toolbar">
         <h1>Laboratorio</h1>
         <p className="strategy-lab__context">
-          {!market
-            ? 'Cargando las velas de Terminal…'
-            : connectError
-              ? 'Sin conexión con el registro de estrategias'
+          {connectError
+            ? 'Registro de estrategias no disponible: servicio sin iniciar'
+            : !market && !marketError
+              ? 'Cargando las velas de Terminal…'
               : !api
                 ? 'Conectando con el registro de estrategias…'
                 : example
-                  ? `Sin conexión con el registro de estrategias · datos de ejemplo sobre ${SOURCE_LABELS[market.source]}`
+                  ? `Sin conexión con el registro de estrategias · datos de ejemplo sobre ${market ? SOURCE_LABELS[market.source] : 'velas no disponibles'}`
                   : `Registro de estrategias · backtest sobre los veredictos de C (velas oficiales de Terminal) · ${product} · ${days} d`}
         </p>
         <div className="strategy-lab__toolbar-actions">
@@ -739,7 +746,8 @@ export default function StrategyLab({
         >
           {connectError} No se muestran datos de ejemplo: con{' '}
           <code>pnpm dev</code> y el registro corriendo se ven las estrategias y
-          sus backtests reales.
+          sus backtests reales. Las estrategias, los backtests y el Carry no se
+          piden hasta que el servicio responda.
         </p>
       )}
       {example && (
@@ -958,7 +966,7 @@ export default function StrategyLab({
             </span>
             <span>gris = menos de {ranking?.min_trades ?? 30} trades</span>
           </div>
-          <CarryPanel />
+          {api && <CarryPanel />}
         </section>
 
         <section
@@ -1078,7 +1086,9 @@ export default function StrategyLab({
               />
             ) : (
               <p className="strategy-lab__empty">
-                Cargando las velas de Terminal…
+                {marketError
+                  ? `Velas de Terminal no disponibles: ${marketError} No se dibujan velas de ejemplo.`
+                  : 'Cargando las velas de Terminal…'}
               </p>
             )}
           </div>

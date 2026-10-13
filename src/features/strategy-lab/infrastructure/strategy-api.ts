@@ -290,5 +290,7 @@ export async function connectStrategyApi(
   } catch {
     // Not running.
   }
-  throw new Error(`El registro de estrategias no respondió (${detail}).`)
+  throw new Error(
+    `Registro de estrategias no disponible: servicio sin iniciar o sin respuesta (${detail}).`,
+  )
 }
