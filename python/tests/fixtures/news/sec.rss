@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>SEC Press Releases</title>
+    <link>https://www.sec.gov/news/pressreleases</link>
+    <item>
+      <title>SEC announces Bitcoin and EUR market structure roundtable</title>
+      <link>/newsroom/press-releases/2026-1-sec-bitcoin-eur-roundtable</link>
+      <guid isPermaLink="true">sec-2026-1</guid>
+      <pubDate>Mon, 21 Sep 2026 12:00:00 -0400</pubDate>
+      <category>Market Structure</category>
+      <description><![CDATA[This long article body must never be persisted as news evidence.]]></description>
+      <dc:creator>SEC</dc:creator>
+    </item>
+    <item>
+      <title>SEC announces Bitcoin and EUR market structure roundtable</title>
+      <link>https://www.sec.gov/newsroom/press-releases/2026-1-sec-bitcoin-eur-roundtable</link>
+      <guid>sec-2026-1</guid>
+      <pubDate>Mon, 21 Sep 2026 12:00:00 -0400</pubDate>
+      <category>Market Structure</category>
+    </item>
+  </channel>
+</rss>

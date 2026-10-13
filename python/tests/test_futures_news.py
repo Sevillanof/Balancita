@@ -19,7 +19,7 @@ NOW = 1_791_000_000_000
 MINUTE = 60_000
 HOUR = 60 * MINUTE
 FIXTURES = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "..", "..", "server", "src", "features", "news", "__fixtures__"
+    os.path.dirname(os.path.abspath(__file__)), "fixtures", "news"
 )
 
 # One pinned hash per news question id@version, like Q's catalog pins: changing a
