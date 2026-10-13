@@ -1,64 +1,72 @@
 {
  "hashes": {
   "s01_gap_long": {
-   "accounting_digest": "8d61abb0ff925e3ed41ed72c577cc07717c03c07ffc94effdeed1e17f8887441",
+   "accounting_digest": "f53996e566455babb712bcb59a44ac4af537da5c006bc59f615f44dd000795af",
    "ledger_hash": "48b3d4962ae83b5c10f954bcfd04638c841d083b57d3ab8489ab6f38195ccbf7"
   },
   "s02_gap_short": {
-   "accounting_digest": "1658fa4421e3b6bd2e2f76c26e31c80db1ab41f1961f0afee8601bec2f877a24",
+   "accounting_digest": "1cfccd370401d010df726063752f8ae1abee5feddc3781ccc02050ba3e369ec6",
    "ledger_hash": "77a04e314975212b6d58f093013f721729d65bf84f7f99d80cdf698027a1a4b3"
   },
   "s03_stop_sin_gap": {
-   "accounting_digest": "a1bab1b84635f995c87022f360ec2856f5b7568e5089c9020c56969943e1ef9e",
+   "accounting_digest": "cad34b6ec349fdbd92f8c1404ca073d18ec3a5f4f33adbf0b5a99515f629f0ae",
    "ledger_hash": "913356181eb5c590a592c1d2159d8a450eaab817e4ffb40240ac9fb334fe81ae"
   },
   "s04_minuto_de_entrada": {
-   "accounting_digest": "b826c41ee69aab8942d302c6256b32be3b347afa61b0cc498a8329a611b6ec53",
+   "accounting_digest": "54b0b5a7aa89c340fca4042842467a80ab24a5b1cb7f716fc3f0b34e60005803",
    "ledger_hash": "7f862f9775cd343551b2f3fd6d96ee4f3ba24de610f5c8b88ff708e1243fc887"
   },
   "s05_cotizaciones_insuficientes": {
-   "accounting_digest": "c1091b44340d1f24ba6e3abca1511a49f4fb3e64653c8bbbaf03fb453ca3e44e",
+   "accounting_digest": "fb77c8fe25b25cc72b8fbbf430c8d62a9413bf4b0ce66ebe1ffa86a02a553f92",
    "ledger_hash": "48cbee14aa0a27cf13d6364707b5f9a1c9898133111ce0a8a6a047cacee6bedb"
   },
   "s06_perdida_superior_a_la_planificada": {
-   "accounting_digest": "ed06fa0db9ba8a26ed826837150a9f64c4c97360a04df08785a92420c2a1da11",
+   "accounting_digest": "7690ec94bcbd4cff5a0841af19dbc8c91c75f9abc60953176c20f62ef98a97e1",
    "ledger_hash": "32db6a13bbdcadbdca0d12a8dd7edf6d973130105b0397fb0cabf33dfdd2c484"
   },
   "s07_suspension_por_perdida_diaria": {
-   "accounting_digest": "b808b33ea740afceb34e3979d59c0ec00ff36ebbd5eac60c8ad54cfd5f13e70f",
+   "accounting_digest": "7d59c87549cb9385ceeb555ad60d23390a7c71319a0985fc65314e2b33d0c092",
    "ledger_hash": "e4808734c9b16b4506885cb6e1a2f2b0c1e482dca5c2b3c63902c213c66a960f"
   },
   "s08_suspension_por_drawdown": {
-   "accounting_digest": "a5a653d8ca459118a978cecb479f3f9f9c59f341b1050d7677f26d3aa45df05d",
+   "accounting_digest": "0ee78caad817583659a0402d366883a1a7a9ca7d5610b51df7bc3300e03c396b",
    "ledger_hash": "8cd05c68c38c195852bb6936911b5ac2eb50f93655c9ec17e296e13e63b5fef3"
   },
   "s09_funding_tardio": {
-   "accounting_digest": "02ae22772e371b5fb4032bc219ed4b5908737bf19281abe54757671396f75be1",
+   "accounting_digest": "854471c3d864572d33edd92bb95169a30defa42a8a2d6096ba1521defd28970a",
    "ledger_hash": "ae7d210e95e9cc50d5e181181e84198250327e7b5551c2f1d4f53e24be099d26"
   },
   "s10_funding_recibido_dos_veces": {
-   "accounting_digest": "157a2e43779cc38865bd1d38979e0f85b9ce3f303f02a4c6988687fe9d29bc29",
+   "accounting_digest": "c3e449cf47393613861db9d7f1b96f613058a245a5c64b7e4fa2e45fe5dd052f",
    "ledger_hash": "6a9baf73e57278843b2084a83e868a8940eb2a31cb049f05d189d017cfae15c2"
   },
   "s11_funding_contradictorio": {
-   "accounting_digest": "feecb05043ca36510b33099ceac2f76ab0bbdfdefc6cf75b0bbca44224f4501f",
+   "accounting_digest": "eb44c9438f1d0a5e7a2d65f397ba2c328934183f9c155df8e7ba3c0060db50d0",
    "ledger_hash": "e7b85b240c27e38a371cd53ad542b84019ec54a67825df86f101ae465278dcbc"
   },
   "s12_reinicio_y_conciliacion": {
-   "accounting_digest": "c4fc027f8b877615b2bfa671e7aa8f4218dbc289c6464a4e8469bc27c093c8e4",
+   "accounting_digest": "91005ce509a7a703d15547e6291e8de1a50c7aa26bbb7c97d155791cddf41839",
    "ledger_hash": "2246a183e03a4f1dda7f5148e25f731c40352af4b4a744c37babf5a1b7f368a4"
   },
   "s13_eventos_duplicados_y_desordenados": {
-   "accounting_digest": "9e3b1d988e5e2e0a2ec28c453deded22cf7e93ff3df796fd0a3e55dbe28a4e9d",
+   "accounting_digest": "881f4353d3cb06433002cdd3f5f0cea647aa4e82642df949fffd0e20426fecc6",
    "ledger_hash": "f43ae5f74da3a2d2a1eb6dc9bf80718cc20a35f716e0e8a9b8675b96d193c734"
   },
   "s14_ganancia_con_ejecucion_incierta": {
-   "accounting_digest": "a3f8df1b67bdc277a9ba7c79a23108ca6a1d4be900729b1466b489a97716f635",
+   "accounting_digest": "aaace5d05195c3ce1181bef2f6501296eaa9662e054ec314c7c081e308831349",
    "ledger_hash": "b2f15cebbc613d0ddd0256df716351a53530d0557a5b23a7c0a4946e3b384eaf"
   },
   "s15_disputa_de_funding_con_posicion_abierta": {
-   "accounting_digest": "3f2290230f51622b8ff24bde96f815470771d6ecad97a11ad1c09ef383d1ce61",
+   "accounting_digest": "1483baaf91da2867f2d6a86e86325cbd4d575ed428f54b5c4370e0aaef5df9fd",
    "ledger_hash": "896f78e30a639ef085ff3cea78a95e3586746fc3466be7b462c434a0e631c8e9"
+  },
+  "s16_disputa_antes_del_cierre": {
+   "accounting_digest": "331473ea7d640104ad7153132e750e312044514e1dda4bd81024c01bbb05aaef",
+   "ledger_hash": "26e97c8c3265f0df3f01d97e4cc747759238b4afe034e95c10ff0898ad0485db"
+  },
+  "s17_disputa_despues_del_cierre": {
+   "accounting_digest": "1c983058b522b3852f54b36c192c5bc249ae09d7c190709815640657d5a26c11",
+   "ledger_hash": "31839345f631e26f1c1900e6688b264d7dd8af4364fc689576f3a1d4bbf10e37"
   }
  },
  "scenarios": [
@@ -203,7 +211,7 @@
     }
    ],
    "summary": {
-    "accounting_digest": "8d61abb0ff925e3ed41ed72c577cc07717c03c07ffc94effdeed1e17f8887441",
+    "accounting_digest": "f53996e566455babb712bcb59a44ac4af537da5c006bc59f615f44dd000795af",
     "adjustments": 0,
     "audit": {
      "checks": 5,
@@ -385,7 +393,7 @@
     }
    ],
    "summary": {
-    "accounting_digest": "1658fa4421e3b6bd2e2f76c26e31c80db1ab41f1961f0afee8601bec2f877a24",
+    "accounting_digest": "1cfccd370401d010df726063752f8ae1abee5feddc3781ccc02050ba3e369ec6",
     "adjustments": 0,
     "audit": {
      "checks": 5,
@@ -486,7 +494,7 @@
     }
    ],
    "summary": {
-    "accounting_digest": "a1bab1b84635f995c87022f360ec2856f5b7568e5089c9020c56969943e1ef9e",
+    "accounting_digest": "cad34b6ec349fdbd92f8c1404ca073d18ec3a5f4f33adbf0b5a99515f629f0ae",
     "adjustments": 0,
     "audit": {
      "checks": 5,
@@ -691,7 +699,7 @@
     }
    ],
    "summary": {
-    "accounting_digest": "b826c41ee69aab8942d302c6256b32be3b347afa61b0cc498a8329a611b6ec53",
+    "accounting_digest": "54b0b5a7aa89c340fca4042842467a80ab24a5b1cb7f716fc3f0b34e60005803",
     "adjustments": 0,
     "audit": {
      "checks": 5,
@@ -1250,7 +1258,7 @@
     }
    ],
    "summary": {
-    "accounting_digest": "c1091b44340d1f24ba6e3abca1511a49f4fb3e64653c8bbbaf03fb453ca3e44e",
+    "accounting_digest": "fb77c8fe25b25cc72b8fbbf430c8d62a9413bf4b0ce66ebe1ffa86a02a553f92",
     "adjustments": 0,
     "audit": {
      "checks": 5,
@@ -1348,7 +1356,7 @@
     }
    ],
    "summary": {
-    "accounting_digest": "ed06fa0db9ba8a26ed826837150a9f64c4c97360a04df08785a92420c2a1da11",
+    "accounting_digest": "7690ec94bcbd4cff5a0841af19dbc8c91c75f9abc60953176c20f62ef98a97e1",
     "adjustments": 0,
     "audit": {
      "checks": 6,
@@ -1452,7 +1460,7 @@
     }
    ],
    "summary": {
-    "accounting_digest": "b808b33ea740afceb34e3979d59c0ec00ff36ebbd5eac60c8ad54cfd5f13e70f",
+    "accounting_digest": "7d59c87549cb9385ceeb555ad60d23390a7c71319a0985fc65314e2b33d0c092",
     "adjustments": 0,
     "audit": {
      "checks": 10,
@@ -1627,7 +1635,7 @@
     }
    ],
    "summary": {
-    "accounting_digest": "a5a653d8ca459118a978cecb479f3f9f9c59f341b1050d7677f26d3aa45df05d",
+    "accounting_digest": "0ee78caad817583659a0402d366883a1a7a9ca7d5610b51df7bc3300e03c396b",
     "adjustments": 0,
     "audit": {
      "checks": 17,
@@ -2016,7 +2024,7 @@
     ],
     "stages": [
      {
-      "accounting_digest": "e6cf46cb7644ace59c6ed0f84f07bbc8c6bf485556e615cc9dfe6ac950c58564",
+      "accounting_digest": "788a1bcc3ff366c81d772a030ee3d5a6ff844df973beb96afcc3a12bd1b6f396",
       "adjustments": 0,
       "capital_usd": "990.0001",
       "closed_trades": 2,
@@ -2033,7 +2041,7 @@
       }
      },
      {
-      "accounting_digest": "32eeaaaff61f06060eab24a10648270af05b00485c58b6401577d9b187470bdc",
+      "accounting_digest": "ab9fef5fdc86c8e72875b3b959684542e85768a177dff5bb2db26b7587cdd098",
       "adjustments": 1,
       "capital_usd": "990.0001",
       "closed_trades": 2,
@@ -2050,7 +2058,7 @@
       }
      },
      {
-      "accounting_digest": "02ae22772e371b5fb4032bc219ed4b5908737bf19281abe54757671396f75be1",
+      "accounting_digest": "854471c3d864572d33edd92bb95169a30defa42a8a2d6096ba1521defd28970a",
       "adjustments": 3,
       "capital_usd": "990.9160",
       "closed_trades": 2,
@@ -2097,7 +2105,7 @@
     }
    ],
    "summary": {
-    "accounting_digest": "02ae22772e371b5fb4032bc219ed4b5908737bf19281abe54757671396f75be1",
+    "accounting_digest": "854471c3d864572d33edd92bb95169a30defa42a8a2d6096ba1521defd28970a",
     "adjustments": 3,
     "audit": {
      "checks": 12,
@@ -2210,7 +2218,7 @@
     }
    ],
    "summary": {
-    "accounting_digest": "157a2e43779cc38865bd1d38979e0f85b9ce3f303f02a4c6988687fe9d29bc29",
+    "accounting_digest": "c3e449cf47393613861db9d7f1b96f613058a245a5c64b7e4fa2e45fe5dd052f",
     "adjustments": 1,
     "audit": {
      "checks": 10,
@@ -2357,13 +2365,14 @@
     }
    ],
    "summary": {
-    "accounting_digest": "feecb05043ca36510b33099ceac2f76ab0bbdfdefc6cf75b0bbca44224f4501f",
+    "accounting_digest": "eb44c9438f1d0a5e7a2d65f397ba2c328934183f9c155df8e7ba3c0060db50d0",
     "adjustments": 0,
     "audit": {
-     "checks": 9,
+     "checks": 11,
      "violations": [],
      "warnings": [
       {
+       "counted_in_capital_usd": "-9.9999",
        "periods": [
         [
          1700035200000,
@@ -2377,9 +2386,11 @@
         ]
        ],
        "rule": "funding_disputed",
+       "simulated_pnl_usd": "-9.9999",
        "trade_id": "a7dad7f0ff8bb99b9fc0d2c4"
       },
       {
+       "counted_in_capital_usd": "0",
        "periods": [
         [
          1700035200000,
@@ -2388,6 +2399,7 @@
         ]
        ],
        "rule": "funding_disputed",
+       "simulated_pnl_usd": "3.3259",
        "trade_id": "fed07c8f19dc1348591f7e5d"
       }
      ]
@@ -2450,9 +2462,9 @@
     "checkpoint_before_reconciliation_still_provisional": 2,
     "equal_after": true,
     "equal_before": true,
-    "restart_after_digest": "c4fc027f8b877615b2bfa671e7aa8f4218dbc289c6464a4e8469bc27c093c8e4",
-    "restart_before_digest": "c4fc027f8b877615b2bfa671e7aa8f4218dbc289c6464a4e8469bc27c093c8e4",
-    "uninterrupted_digest": "c4fc027f8b877615b2bfa671e7aa8f4218dbc289c6464a4e8469bc27c093c8e4"
+    "restart_after_digest": "91005ce509a7a703d15547e6291e8de1a50c7aa26bbb7c97d155791cddf41839",
+    "restart_before_digest": "91005ce509a7a703d15547e6291e8de1a50c7aa26bbb7c97d155791cddf41839",
+    "uninterrupted_digest": "91005ce509a7a703d15547e6291e8de1a50c7aa26bbb7c97d155791cddf41839"
    },
    "id": "s12_reinicio_y_conciliacion",
    "ledger_hash": "2246a183e03a4f1dda7f5148e25f731c40352af4b4a744c37babf5a1b7f368a4",
@@ -2483,7 +2495,7 @@
     }
    ],
    "summary": {
-    "accounting_digest": "c4fc027f8b877615b2bfa671e7aa8f4218dbc289c6464a4e8469bc27c093c8e4",
+    "accounting_digest": "91005ce509a7a703d15547e6291e8de1a50c7aa26bbb7c97d155791cddf41839",
     "adjustments": 2,
     "audit": {
      "checks": 11,
@@ -2648,7 +2660,7 @@
     }
    ],
    "summary": {
-    "accounting_digest": "9e3b1d988e5e2e0a2ec28c453deded22cf7e93ff3df796fd0a3e55dbe28a4e9d",
+    "accounting_digest": "881f4353d3cb06433002cdd3f5f0cea647aa4e82642df949fffd0e20426fecc6",
     "adjustments": 0,
     "audit": {
      "checks": 5,
@@ -2727,7 +2739,7 @@
     }
    ],
    "summary": {
-    "accounting_digest": "a3f8df1b67bdc277a9ba7c79a23108ca6a1d4be900729b1466b489a97716f635",
+    "accounting_digest": "aaace5d05195c3ce1181bef2f6501296eaa9662e054ec314c7c081e308831349",
     "adjustments": 0,
     "audit": {
      "checks": 5,
@@ -2820,13 +2832,14 @@
     }
    ],
    "summary": {
-    "accounting_digest": "3f2290230f51622b8ff24bde96f815470771d6ecad97a11ad1c09ef383d1ce61",
+    "accounting_digest": "1483baaf91da2867f2d6a86e86325cbd4d575ed428f54b5c4370e0aaef5df9fd",
     "adjustments": 0,
     "audit": {
      "checks": 5,
      "violations": [],
      "warnings": [
       {
+       "counted_in_capital_usd": "0",
        "periods": [
         [
          1700035200000,
@@ -2835,6 +2848,7 @@
         ]
        ],
        "rule": "funding_disputed",
+       "simulated_pnl_usd": "2.3741",
        "trade_id": "fed07c8f19dc1348591f7e5d"
       }
      ]
@@ -2866,6 +2880,222 @@
      "net_complete": false,
      "planned_loss_usd": 9.999908,
      "pnl_usd": 2.3741,
+     "product_id": "PF_XBTUSD",
+     "side": "LONG",
+     "stop_price": "98000.00",
+     "trade_id": "fed07c8f19dc1348591f7e5d"
+    }
+   ]
+  },
+  {
+   "facts": {
+    "capital_usd": "1000",
+    "counted_in_capital_usd": "0",
+    "disputes": {
+     "fed07c8f19dc1348591f7e5d": [
+      [
+       1700038800000,
+       1700042400000,
+       "0.01"
+      ]
+     ]
+    },
+    "funding_status": "complete",
+    "held_back_usd": "1.4065",
+    "intake": {
+     "accepted": 0,
+     "conflict": 1,
+     "duplicate": 0,
+     "rejected": 0
+    },
+    "net_complete": true,
+    "reclassifications": 0,
+    "review_flags": [
+     "funding_conflict"
+    ],
+    "simulated_pnl_usd": "1.4065"
+   },
+   "id": "s16_disputa_antes_del_cierre",
+   "ledger_hash": "26e97c8c3265f0df3f01d97e4cc747759238b4afe034e95c10ff0898ad0485db",
+   "planned_vs_realized": [
+    {
+     "exit_reason": "target",
+     "net_complete": true,
+     "planned_loss_usd": "9.9999",
+     "pnl_net_usd": "1.4065",
+     "product_id": "PF_XBTUSD",
+     "side": "LONG",
+     "trade_id": "fed07c8f19dc1348591f7e5d"
+    }
+   ],
+   "summary": {
+    "accounting_digest": "331473ea7d640104ad7153132e750e312044514e1dda4bd81024c01bbb05aaef",
+    "adjustments": 0,
+    "audit": {
+     "checks": 5,
+     "violations": [],
+     "warnings": [
+      {
+       "counted_in_capital_usd": "0",
+       "periods": [
+        [
+         1700038800000,
+         1700042400000,
+         "0.01"
+        ]
+       ],
+       "rule": "funding_disputed",
+       "simulated_pnl_usd": "1.4065",
+       "trade_id": "fed07c8f19dc1348591f7e5d"
+      }
+     ]
+    },
+    "capital_usd": "1000",
+    "closed_trades": 1,
+    "drawdown_usd": "0",
+    "equity_usd": "1001.4065",
+    "open_positions": 0,
+    "provisional_gains_usd": "1.4065",
+    "realized_today_usd": "0",
+    "risk_budget_usd": "10.00",
+    "suspension": {
+     "daily_loss": false,
+     "drawdown": false
+    }
+   },
+   "title": "Disputa de funding antes del cierre",
+   "trades": [
+    {
+     "entry_price": "100000.600000",
+     "entry_time_ms": 1700035200000,
+     "exit_price": "101000.00",
+     "exit_reason": "target",
+     "exit_time_ms": 1700046060000,
+     "fees_usd": 0.478258,
+     "funding_status": "complete",
+     "funding_usd": 2.871143,
+     "net_complete": true,
+     "planned_loss_usd": 9.999908,
+     "pnl_usd": 1.4065,
+     "product_id": "PF_XBTUSD",
+     "side": "LONG",
+     "stop_price": "98000.00",
+     "trade_id": "fed07c8f19dc1348591f7e5d"
+    }
+   ]
+  },
+  {
+   "facts": {
+    "as_closed_untouched": true,
+    "capital_after_dispute": "1000",
+    "capital_at_close": "1001.4065",
+    "capital_log_kinds": [
+     "trade_closed",
+     "funding_dispute_reclassified"
+    ],
+    "closing_untouched": true,
+    "disputes": {
+     "fed07c8f19dc1348591f7e5d": [
+      [
+       1700038800000,
+       1700042400000,
+       "0.01"
+      ]
+     ]
+    },
+    "intake": {
+     "accepted": 0,
+     "conflict": 1,
+     "duplicate": 0,
+     "rejected": 0
+    },
+    "reclassification": {
+     "at_ms": 1700049600000,
+     "capital_after_usd": "1000",
+     "capital_before_usd": "1001.4065",
+     "counted_after_usd": "0",
+     "counted_before_usd": "1.4065",
+     "decisions_not_revised": [
+      "516269d4aa886187bd1f2208"
+     ],
+     "delta_capital_usd": "-1.4065",
+     "drawdown_after_usd": "1.4065",
+     "drawdown_before_usd": "0",
+     "risk_budget_after_usd": "10.00",
+     "risk_budget_before_usd": "10.014065"
+    },
+    "reclassifications": 1,
+    "reconcile_adjustments": 0,
+    "repeated_digest_unchanged": true,
+    "repeated_intake": {
+     "accepted": 0,
+     "conflict": 1,
+     "duplicate": 0,
+     "rejected": 0
+    }
+   },
+   "id": "s17_disputa_despues_del_cierre",
+   "ledger_hash": "31839345f631e26f1c1900e6688b264d7dd8af4364fc689576f3a1d4bbf10e37",
+   "planned_vs_realized": [
+    {
+     "exit_reason": "target",
+     "net_complete": true,
+     "planned_loss_usd": "9.9999",
+     "pnl_net_usd": "1.4065",
+     "product_id": "PF_XBTUSD",
+     "side": "LONG",
+     "trade_id": "fed07c8f19dc1348591f7e5d"
+    }
+   ],
+   "summary": {
+    "accounting_digest": "1c983058b522b3852f54b36c192c5bc249ae09d7c190709815640657d5a26c11",
+    "adjustments": 0,
+    "audit": {
+     "checks": 7,
+     "violations": [],
+     "warnings": [
+      {
+       "counted_in_capital_usd": "0",
+       "periods": [
+        [
+         1700038800000,
+         1700042400000,
+         "0.01"
+        ]
+       ],
+       "rule": "funding_disputed",
+       "simulated_pnl_usd": "1.4065",
+       "trade_id": "fed07c8f19dc1348591f7e5d"
+      }
+     ]
+    },
+    "capital_usd": "1000",
+    "closed_trades": 1,
+    "drawdown_usd": "1.4065",
+    "equity_usd": "1001.4065",
+    "open_positions": 1,
+    "provisional_gains_usd": "1.4065",
+    "realized_today_usd": "0.0000",
+    "risk_budget_usd": "10.00",
+    "suspension": {
+     "daily_loss": false,
+     "drawdown": false
+    }
+   },
+   "title": "Disputa de funding despu\u00e9s del cierre",
+   "trades": [
+    {
+     "entry_price": "100000.600000",
+     "entry_time_ms": 1700035200000,
+     "exit_price": "101000.00",
+     "exit_reason": "target",
+     "exit_time_ms": 1700046060000,
+     "fees_usd": 0.478258,
+     "funding_status": "complete",
+     "funding_usd": 2.871143,
+     "net_complete": true,
+     "planned_loss_usd": 9.999908,
+     "pnl_usd": 1.4065,
      "product_id": "PF_XBTUSD",
      "side": "LONG",
      "stop_price": "98000.00",

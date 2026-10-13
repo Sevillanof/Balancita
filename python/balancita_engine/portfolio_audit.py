@@ -187,16 +187,38 @@ def audit(portfolio):
             violate("unresolved_execution_not_marked", trade_id=trade["trade_id"])
         if notes.get("funding_conflict") and "funding_conflict" not in flags:
             violate("funding_dispute_lost", trade_id=trade["trade_id"])
+        # the dispute is checked against the quarantined periods themselves, not against the marks it left behind
+        overlapping = sorted([list(c) for c in p.funding_conflicts.get(trade["product_id"], ())
+                              if min(int(c[1]), int(trade["exit_time_ms"])) > max(int(c[0]), int(trade["entry_time_ms"]))])
+        recorded = sorted(p.funding_disputes.get(trade["trade_id"], ()))
+        if overlapping and trade["trade_id"] not in p.funding_disputes:
+            violate("funding_dispute_omitted", trade_id=trade["trade_id"], quarantined=overlapping)
+        elif overlapping != recorded:
+            violate("funding_dispute_mismatch", trade_id=trade["trade_id"], quarantined=overlapping, recorded=recorded)
+        if overlapping and (p.contribution(trade) > min(D(0), D(str(trade["pnl_usd"])))):
+            violate("disputed_gain_counted", trade_id=trade["trade_id"])
         if trade.get("execution_unresolved"):
             warnings.append({"rule": "economically_unresolved_execution", "trade_id": trade["trade_id"],
                              "simulated_pnl_usd": str(trade["pnl_usd"]), "counted_in_capital_usd": str(p.contribution(trade))})
         if notes.get("funding_conflict"):
-            warnings.append({"rule": "funding_disputed", "trade_id": trade["trade_id"], "periods": notes["funding_conflict"]})
+            warnings.append({"rule": "funding_disputed", "trade_id": trade["trade_id"], "periods": notes["funding_conflict"],
+                             "simulated_pnl_usd": str(trade["pnl_usd"]), "counted_in_capital_usd": str(p.contribution(trade))})
     snapshot = p.snapshot()
     if D(snapshot["capital_definitive_usd"]) > D(snapshot["equity_usd"]) - D(snapshot["provisional_gains_usd"]) + D("0.000001"):
         violate("provisional_gains_never_spendable")
 
     # ---- adjustments and funding ------------------------------------------------------------------------------
+    broken = _chain_ok(p.reclassifications)
+    if broken is not None:
+        violate("reclassification_chain", seq=broken)
+    for record in p.reclassifications:
+        checks += 1
+        events = [e for e in p.capital_log if e["trade_id"] == record["trade_id"] and e["kind"] == "funding_dispute_reclassified"]
+        delta = D(record["delta_capital_usd"])
+        if (len(events) != 1 or D(events[0]["delta_usd"]) != delta or events[0]["t_ms"] != record["at_ms"]) if delta != 0 else bool(events):
+            violate("reclassification_without_capital_event", trade_id=record["trade_id"], seq=record["seq"])
+        if D(record["capital_after_usd"]) - D(record["capital_before_usd"]) != delta:
+            violate("reclassification_delta", trade_id=record["trade_id"], seq=record["seq"])
     broken = _chain_ok(p.adjustments)
     if broken is not None:
         violate("adjustment_chain", seq=broken)
@@ -357,7 +379,8 @@ def accounting_digest(portfolio):
     return stable_hash({
         "trades": p.trades, "capital_log": p.capital_log, "adjustments": p.adjustments,
         "funding": {k: [[a, b, str(r)] for a, b, r in v] for k, v in sorted(p.funding.items())},
-        "conflicts": p.funding_conflicts, "flags": p.review_flags,
+        "conflicts": p.funding_conflicts, "flags": p.review_flags, "disputes": p.funding_disputes,
+        "reclassifications": p.reclassifications,
         "details": {k: p.trade_details[k] for k in sorted(p.trade_details)}, "decisions": p.decisions})
 
 

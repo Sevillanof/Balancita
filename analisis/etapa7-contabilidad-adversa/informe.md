@@ -4,25 +4,27 @@ Datos 100 % sintéticos. Generado por `python -m balancita_engine.portfolio_stag
 
 ## Resumen
 
-15 escenarios, 115 comprobaciones contables independientes, **0 violaciones**.
+17 escenarios, 129 comprobaciones contables independientes, **0 violaciones**.
 
 | Escenario | Capital definitivo | Drawdown | Suspensión | Operaciones | Ajustes | Violaciones | ledger_hash | accounting_digest |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| s01_gap_long | 985.0060 | 14.9940 | - | 1 | 0 | 0 | 48b3d4962ae8 | 8d61abb0ff92 |
-| s02_gap_short | 985.0059 | 14.9941 | - | 1 | 0 | 0 | 77a04e314975 | 1658fa4421e3 |
-| s03_stop_sin_gap | 990.0001 | 9.9999 | - | 1 | 0 | 0 | 913356181eb5 | a1bab1b84635 |
-| s04_minuto_de_entrada | 989.0339 | 10.9661 | - | 1 | 0 | 0 | 7f862f9775cd | b826c41ee69a |
-| s05_cotizaciones_insuficientes | 989.0488 | 10.9512 | - | 1 | 0 | 0 | 48cbee14aa0a | c1091b44340d |
-| s06_perdida_superior_a_la_planificada | 985.0060 | 14.9940 | - | 1 | 0 | 0 | 32db6a13bbdc | ed06fa0db9ba |
-| s07_suspension_por_perdida_diaria | 969.0607 | 30.9393 | - | 2 | 0 | 0 | e4808734c9b1 | b808b33ea740 |
-| s08_suspension_por_drawdown | 935.0119 | 64.9881 | drawdown | 4 | 0 | 0 | 8cd05c68c38c | a5a653d8ca45 |
-| s09_funding_tardio | 990.9160 | 10.4905 | - | 2 | 3 | 0 | ae7d210e95e9 | 02ae22772e37 |
-| s10_funding_recibido_dos_veces | 991.4066 | 9.9999 | - | 2 | 1 | 0 | 6a9baf73e572 | 157a2e43779c |
-| s11_funding_contradictorio | 990.0001 | 9.9999 | - | 2 | 0 | 0 | e7b85b240c27 | feecb05043ca |
-| s12_reinicio_y_conciliacion | 990.9160 | 10.4905 | - | 2 | 2 | 0 | 2246a183e03a | c4fc027f8b87 |
-| s13_eventos_duplicados_y_desordenados | 989.0339 | 10.9661 | - | 1 | 0 | 0 | f43ae5f74da3 | 9e3b1d988e5e |
-| s14_ganancia_con_ejecucion_incierta | 1000.0000 | 0.0000 | - | 1 | 0 | 0 | b2f15cebbc61 | a3f8df1b67bd |
-| s15_disputa_de_funding_con_posicion_abierta | 1000.0000 | 0.0000 | - | 1 | 0 | 0 | 896f78e30a63 | 3f2290230f51 |
+| s01_gap_long | 985.0060 | 14.9940 | - | 1 | 0 | 0 | 48b3d4962ae8 | f53996e56645 |
+| s02_gap_short | 985.0059 | 14.9941 | - | 1 | 0 | 0 | 77a04e314975 | 1cfccd370401 |
+| s03_stop_sin_gap | 990.0001 | 9.9999 | - | 1 | 0 | 0 | 913356181eb5 | cad34b6ec349 |
+| s04_minuto_de_entrada | 989.0339 | 10.9661 | - | 1 | 0 | 0 | 7f862f9775cd | 54b0b5a7aa89 |
+| s05_cotizaciones_insuficientes | 989.0488 | 10.9512 | - | 1 | 0 | 0 | 48cbee14aa0a | fb77c8fe25b2 |
+| s06_perdida_superior_a_la_planificada | 985.0060 | 14.9940 | - | 1 | 0 | 0 | 32db6a13bbdc | 7690ec94bcbd |
+| s07_suspension_por_perdida_diaria | 969.0607 | 30.9393 | - | 2 | 0 | 0 | e4808734c9b1 | 7d59c87549cb |
+| s08_suspension_por_drawdown | 935.0119 | 64.9881 | drawdown | 4 | 0 | 0 | 8cd05c68c38c | 0ee78caad817 |
+| s09_funding_tardio | 990.9160 | 10.4905 | - | 2 | 3 | 0 | ae7d210e95e9 | 854471c3d864 |
+| s10_funding_recibido_dos_veces | 991.4066 | 9.9999 | - | 2 | 1 | 0 | 6a9baf73e572 | c3e449cf4739 |
+| s11_funding_contradictorio | 990.0001 | 9.9999 | - | 2 | 0 | 0 | e7b85b240c27 | eb44c9438f1d |
+| s12_reinicio_y_conciliacion | 990.9160 | 10.4905 | - | 2 | 2 | 0 | 2246a183e03a | 91005ce509a7 |
+| s13_eventos_duplicados_y_desordenados | 989.0339 | 10.9661 | - | 1 | 0 | 0 | f43ae5f74da3 | 881f4353d3cb |
+| s14_ganancia_con_ejecucion_incierta | 1000.0000 | 0.0000 | - | 1 | 0 | 0 | b2f15cebbc61 | aaace5d05195 |
+| s15_disputa_de_funding_con_posicion_abierta | 1000.0000 | 0.0000 | - | 1 | 0 | 0 | 896f78e30a63 | 1483baaf91da |
+| s16_disputa_antes_del_cierre | 1000.0000 | 0.0000 | - | 1 | 0 | 0 | 26e97c8c3265 | 331473ea7d64 |
+| s17_disputa_despues_del_cierre | 1000.0000 | 1.4065 | - | 1 | 0 | 0 | 31839345f631 | 1c983058b522 |
 
 ## Pérdida planificada frente a realizada (stops)
 
@@ -124,6 +126,11 @@ Un LONG entra a mitad de minuto sin cotizaciones que cubran la ventana y el rang
 ## Disputa de funding con la posición abierta
 
 Un período aceptado y otro contradictorio (cuarentena, nunca aplicado) llegan con la posición abierta; al cerrar, la operación conserva la marca ['funding_conflict'] y los períodos en disputa [[1700035200000, 1700038800000, '0.01']]. Estado del funding: partial (1.90352 USD usados, solo el aceptado).
+
+## Funding disputado con cobertura completa
+
+La disputa es una dimensión independiente de `net_complete` y de la ejecución. **A (antes del cierre):** funding aceptado completo (complete), un período contradictorio en cuarentena con la posición abierta, cierre con ganancia 1.4065 USD: aporta **0 USD** al capital (1.4065 USD retenidos, capital 1000 USD).
+**B (después del cierre):** la ganancia entra al capital (1001.4065 USD) y al llegar la contradicción se registra una reclasificación en el momento en que se conoce: aportaba 1.4065 y ahora 0 (Δ -1.4065 USD), capital 1001.4065 -> 1000, presupuesto de riesgo 10.014065 -> 10.00, drawdown 0 -> 1.4065. Cierre intacto: True; estado `as_closed` intacto: True; repetir la entrega deja el digest igual: True; reclasificaciones tras repetir: 1; decisiones no revisadas: 1.
 
 ## Qué está demostrado y qué sigue siendo hipótesis
 

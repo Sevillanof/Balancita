@@ -1003,6 +1003,181 @@ class UnresolvedExecutionAndOpenDisputes(unittest.TestCase):
             self.assertEqual(a["summary"]["accounting_digest"], b["summary"]["accounting_digest"])
 
 
+class DisputedFundingAsADimension(unittest.TestCase):
+    """Funding disputed is independent of ``net_complete`` and of ``execution_unresolved``."""
+
+    @staticmethod
+    def gain_open():
+        pf = S.new_portfolio(funding={S.BTC: S.hourly(S.T8 - S.HOUR, 5)})
+        pf.decide([S.intent(S.BTC, LONG, S.T8, target_pct="0.01")], S.T8)
+        pf.on_candle(S.BTC, S.T8, S.candle(100000, 100100, 99900, 100050))
+        return pf
+
+    @staticmethod
+    def close_gain(pf):
+        [trade] = pf.on_candle(S.BTC, S.T8 + 3 * S.HOUR, S.candle(100500, 101500, 100400, 101200))
+        return trade
+
+    CONFLICT = [(S.T8 + S.HOUR, S.T8 + 2 * S.HOUR, "0.01")]
+
+    def test_a_reproduction_complete_funding_and_a_dispute_used_to_raise_the_capital(self):
+        pf = self.gain_open()
+        ingest_funding(pf, S.BTC, self.CONFLICT, received_ms=S.T8 + 2 * S.HOUR)
+        trade = self.close_gain(pf)
+        self.assertTrue(trade["net_complete"] and trade["funding_complete"])
+        self.assertNotIn("execution_unresolved", trade)
+        previous_rule = bool(trade["net_complete"]) and not trade.get("execution_unresolved")
+        self.assertTrue(previous_rule)                                 # stage 7 as reviewed: the gain would have counted
+        self.assertGreater(D(str(trade["net_usd"])), 0)
+        self.assertEqual(pf.contribution(trade), 0)                    # now: not while the dispute is open
+        self.assertEqual(pf.capital_usd(), D("1000"))
+        self.assertEqual(pf.disputed_funding_gains_usd(), D(str(trade["pnl_usd"])))
+        self.assertEqual(rules(pf), [])
+
+    def test_a_keeps_the_simulated_result_the_accepted_periods_and_resolves_nothing(self):
+        clean = self.gain_open()
+        clean_trade = self.close_gain(clean)
+        pf = self.gain_open()
+        accepted = list(pf.funding[S.BTC])
+        ingest_funding(pf, S.BTC, self.CONFLICT, received_ms=S.T8 + 2 * S.HOUR)
+        trade = self.close_gain(pf)
+        for key in ("pnl_usd", "net_usd", "funding_usd", "exit_price", "funding_status"):
+            self.assertEqual(trade[key], clean_trade[key])
+        self.assertEqual(pf.funding[S.BTC], accepted)
+        self.assertEqual(pf.funding_conflicts[S.BTC], [[S.T8 + S.HOUR, S.T8 + 2 * S.HOUR, "0.01"]])
+        self.assertEqual(pf.reclassifications, [])                     # known before the close: nothing to reclassify
+
+    def test_b_the_gain_enters_and_the_dispute_reclassifies_it_when_it_becomes_known(self):
+        pf = self.gain_open()
+        trade = self.close_gain(pf)
+        pf.decide([S.intent(S.SOL, LONG, S.T8 + 3 * S.HOUR + 2 * S.MIN)], S.T8 + 3 * S.HOUR + 2 * S.MIN)
+        gain = D(str(trade["pnl_usd"]))
+        self.assertEqual(pf.capital_usd(), D("1000") + gain)
+        original, closed = dict(trade), dict(pf.trade_details[trade["trade_id"]]["as_closed"])
+        log_before = copy.deepcopy(pf.capital_log)
+        decisions = copy.deepcopy(pf.decisions)
+        ingest_funding(pf, S.BTC, self.CONFLICT, received_ms=S.T8 + 4 * S.HOUR)
+        self.assertEqual(pf.capital_usd(), D("1000"))
+        [record] = pf.reclassifications
+        self.assertEqual((record["at_ms"], D(record["delta_capital_usd"])), (S.T8 + 4 * S.HOUR, -gain))
+        self.assertEqual(D(record["risk_budget_before_usd"]), (D("1000") + gain) * D("0.01"))
+        self.assertEqual(D(record["risk_budget_after_usd"]), D("10"))
+        self.assertEqual(D(record["drawdown_after_usd"]), gain)         # counted at the moment it became known
+        self.assertEqual(pf.capital_log[:len(log_before)], log_before)  # append-only: the past is not rewritten
+        self.assertEqual(pf.capital_log[-1]["kind"], "funding_dispute_reclassified")
+        self.assertEqual(pf.capital_log[-1]["t_ms"], S.T8 + 4 * S.HOUR)
+        self.assertEqual(trade, original)                               # the closing is not rewritten
+        self.assertEqual(pf.trade_details[trade["trade_id"]]["as_closed"], closed)
+        self.assertEqual(pf.decisions, decisions)                       # nor are decisions already taken
+        self.assertEqual(record["decisions_not_revised"], [d["decision_id"] for d in decisions if d["status"] == "opened"
+                                                          and d["decided_ms"] >= trade["exit_time_ms"]])
+        self.assertEqual(rules(pf), [])
+
+    def test_b_is_idempotent_for_the_same_delivery_the_reconciliation_and_a_restart(self):
+        pf = self.gain_open()
+        self.close_gain(pf)
+        ingest_funding(pf, S.BTC, self.CONFLICT, received_ms=S.T8 + 4 * S.HOUR)
+        digest, capital = accounting_digest(pf), pf.capital_usd()
+        ingest_funding(pf, S.BTC, self.CONFLICT, received_ms=S.T8 + 4 * S.HOUR + S.MIN)
+        reconcile_funding(pf, S.T8 + 5 * S.HOUR)
+        reconcile_funding(pf, S.T8 + 5 * S.HOUR)
+        self.assertEqual((len(pf.reclassifications), len(pf.capital_log)), (1, 2))
+        self.assertEqual((accounting_digest(pf), pf.capital_usd()), (digest, capital))
+        restarted = pickle.loads(pickle.dumps(pf))
+        ingest_funding(restarted, S.BTC, self.CONFLICT, received_ms=S.T8 + 6 * S.HOUR)
+        self.assertEqual(accounting_digest(restarted), digest)
+        self.assertEqual(rules(restarted), [])
+
+    def test_a_second_disputed_period_is_listed_without_a_second_reclassification(self):
+        pf = self.gain_open()
+        self.close_gain(pf)
+        ingest_funding(pf, S.BTC, self.CONFLICT, received_ms=S.T8 + 4 * S.HOUR)
+        ingest_funding(pf, S.BTC, [(S.T8 + 2 * S.HOUR, S.T8 + 3 * S.HOUR, "0.05")], received_ms=S.T8 + 4 * S.HOUR)
+        ingest_funding(pf, S.BTC, [(S.T8 + 2 * S.HOUR, S.T8 + 3 * S.HOUR, "0.05")], received_ms=S.T8 + 4 * S.HOUR)
+        self.assertEqual(len(pf.reclassifications), 1)
+        [periods] = pf.funding_disputes.values()
+        self.assertEqual(len(periods), 2)
+        self.assertEqual(rules(pf), [])
+
+    def test_losses_are_booked_whole_and_a_disputed_loss_needs_no_reclassification_of_capital(self):
+        pf = S.new_portfolio(funding={S.BTC: S.hourly(S.T8 - S.HOUR, 5)})
+        pf.decide([S.intent(S.BTC, LONG, S.T8)], S.T8)
+        pf.on_candle(S.BTC, S.T8, S.candle(100000, 100100, 99900, 100050))
+        [trade] = pf.on_candle(S.BTC, S.T8 + 30 * S.MIN, S.candle(97900, 98050, 97500, 97600))
+        loss = D(str(trade["pnl_usd"]))
+        self.assertLess(loss, 0)
+        ingest_funding(pf, S.BTC, [(S.T8, S.T8 + S.HOUR, "0.01")], received_ms=S.T8 + 2 * S.HOUR)
+        self.assertEqual(pf.capital_usd(), D("1000") + loss)
+        self.assertEqual(pf.contribution(trade), loss)
+        [record] = pf.reclassifications
+        self.assertEqual(D(record["delta_capital_usd"]), 0)
+        self.assertEqual([e["kind"] for e in pf.capital_log], ["trade_closed"])
+        self.assertEqual(rules(pf), [])
+
+    def test_the_three_dimensions_are_independent(self):
+        pf = self.gain_open()
+        trade = self.close_gain(pf)
+        pf.funding_disputes[trade["trade_id"]] = [[0, 1, "0"]]
+        self.assertTrue(trade["net_complete"])
+        self.assertFalse(pf.reliable(trade))
+        del pf.funding_disputes[trade["trade_id"]]
+        self.assertTrue(pf.reliable(trade))
+        trade["execution_unresolved"] = True
+        self.assertFalse(pf.reliable(trade))
+        self.assertTrue(trade["net_complete"])
+
+    def test_a_suspension_never_blocks_the_dispute_the_reclassification_or_the_close(self):
+        funding = {S.BTC: S.hourly(S.T10 - S.HOUR, 6), S.ETH: [(S.DAY0 - 6 * S.HOUR, S.DAY0 + 30 * S.DAY, "0")]}
+        pf = S.new_portfolio(funding=funding)
+        pf.decide([S.intent(S.BTC, LONG, S.T10, target_pct="0.01"), S.intent(S.ETH, LONG, S.T10, strategy="s7e")], S.T10)
+        pf.on_candle(S.BTC, S.T10, S.candle(100000, 100100, 99900, 100050))
+        pf.on_candle(S.ETH, S.T10, S.candle(3500, 3510, 3440, 3450))
+        pf.on_candle(S.ETH, S.T10 + S.MIN, S.candle(3300, 3320, 3280, 3300))
+        t2 = S.T10 + 5 * S.MIN
+        pf.decide([S.intent(S.ETH, LONG, t2, strategy="s7e2")], t2)
+        pf.on_candle(S.ETH, t2, S.candle(3500, 3510, 3440, 3450))
+        pf.on_candle(S.ETH, t2 + S.MIN, S.candle(3300, 3320, 3280, 3300))
+        self.assertTrue(pf.suspension_state(t2 + 2 * S.MIN)["daily_loss"])
+        [trade] = pf.on_candle(S.BTC, S.T10 + 3 * S.HOUR, S.candle(100500, 101500, 100400, 101200))   # a close while suspended
+        before = pf.capital_usd()
+        ingest_funding(pf, S.BTC, [(S.T10 + S.HOUR, S.T10 + 2 * S.HOUR, "0.01")], received_ms=S.T10 + 4 * S.HOUR)
+        self.assertEqual(before - pf.capital_usd(), D(str(trade["pnl_usd"])) if D(str(trade["pnl_usd"])) > 0 else D(0))
+        [record] = pf.reclassifications
+        self.assertEqual(record["trade_id"], trade["trade_id"])
+        self.assertEqual(rules(pf), [])
+
+    def test_the_audit_compares_with_the_quarantine_not_only_with_the_marks(self):
+        pf = self.gain_open()
+        trade = self.close_gain(pf)
+        ingest_funding(pf, S.BTC, self.CONFLICT, received_ms=S.T8 + 4 * S.HOUR)
+        self.assertEqual(rules(pf), [])
+        # planted: every trace of the dispute on the trade is erased, the quarantine still holds the period
+        del pf.funding_disputes[trade["trade_id"]]
+        pf.review_flags.pop(trade["trade_id"])
+        pf.trade_details[trade["trade_id"]]["notes"].pop("funding_conflict")
+        found = rules(pf)
+        self.assertIn("funding_dispute_omitted", found)
+        self.assertIn("disputed_gain_counted", found)
+
+    def test_the_audit_catches_a_dispute_without_support_and_a_reclassification_without_a_capital_event(self):
+        pf = self.gain_open()
+        trade = self.close_gain(pf)
+        ingest_funding(pf, S.BTC, self.CONFLICT, received_ms=S.T8 + 4 * S.HOUR)
+        broken = pickle.loads(pickle.dumps(pf))
+        broken.reclassifications[0]["delta_capital_usd"] = "-1"
+        self.assertTrue({"reclassification_chain", "reclassification_without_capital_event"} & set(rules(broken)))
+        pf.funding_conflicts[S.BTC] = []
+        self.assertIn("funding_dispute_mismatch", rules(pf))
+        del trade
+
+    def test_the_new_scenarios_are_clean_and_reproducible(self):
+        for scenario in (S.dispute_before_close, S.dispute_after_close):
+            a, b = scenario(), scenario()
+            self.assertEqual(a["summary"]["audit"]["violations"], [])
+            self.assertEqual((a["ledger_hash"], a["summary"]["accounting_digest"]),
+                             (b["ledger_hash"], b["summary"]["accounting_digest"]))
+
+
 class Reproducibility(unittest.TestCase):
     def test_same_scenarios_same_hashes(self):
         a, b = S.run_all(), S.run_all()
@@ -1029,7 +1204,7 @@ class Reproducibility(unittest.TestCase):
     def test_every_scenario_passes_every_independent_check(self):
         results = S.run_all()
         self.assertEqual([r["id"] for r in results], sorted(r["id"] for r in results))
-        self.assertEqual(len(results), 15)
+        self.assertEqual(len(results), 17)
         for r in results:
             self.assertEqual(r["summary"]["audit"]["violations"], [], r["id"])
             self.assertGreater(r["summary"]["audit"]["checks"], 0)

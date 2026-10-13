@@ -165,6 +165,8 @@ class Portfolio:
         self.funding_log = []         # append-only, hash-chained: funding periods accepted, duplicated, conflicting, rejected
         self.funding_conflicts = {}   # product -> quarantined periods that contradict accepted ones (never applied)
         self.review_flags = {}        # trade_id -> reasons a person should look at the trade
+        self.funding_disputes = {}    # trade_id -> quarantined funding periods that overlap the trade (never auto-resolved)
+        self.reclassifications = []   # append-only, hash-chained: results moved out of the usable capital when a dispute became known
         self.position_notes = {}      # intent_id -> notes recorded while the position was open (entry window, ...)
         self.funding = {p: sorted((int(a), int(b), D(str(r))) for a, b, r in rows) for p, rows in (funding or {}).items()}
         self.tick_sizes = tick_sizes or {}
@@ -187,12 +189,14 @@ class Portfolio:
         pnl = self._pnl(trade)
         return pnl if self.reliable(trade) else min(D(0), pnl)
 
-    @staticmethod
-    def reliable(trade):
-        """Whether the simulated result may raise the definitive capital. Two independent dimensions: the funding is
-        complete (``net_complete``) and the execution is resolved (no ``execution_unresolved`` mark: the stop could
-        have been crossed in an entry minute no quote covered). Either one failing keeps a gain out of the capital."""
-        return bool(trade["net_complete"]) and not trade.get("execution_unresolved")
+    def reliable(self, trade):
+        """Whether the simulated result may raise the definitive capital. Three independent dimensions: the funding is
+        complete (``net_complete``), the execution is resolved (no ``execution_unresolved`` mark: the stop could have
+        been crossed in an entry minute no quote covered) and the funding is not disputed (a quarantined period
+        contradicts the accepted ones over the holding time, ``funding_disputes``). Any one failing keeps a gain out
+        of the capital; losses always count."""
+        return (bool(trade["net_complete"]) and not trade.get("execution_unresolved")
+                and trade["trade_id"] not in self.funding_disputes)
 
     def realized_usd(self):
         return sum((self._pnl(t) for t in self.trades), D(0))
@@ -206,6 +210,10 @@ class Portfolio:
 
     def provisional_gains_usd(self):
         return sum((max(D(0), self._pnl(t)) for t in self.trades if not self.reliable(t)), D(0))
+
+    def disputed_funding_gains_usd(self):
+        """Gains held back because their funding is disputed (whatever else holds them back)."""
+        return sum((max(D(0), self._pnl(t)) for t in self.trades if t["trade_id"] in self.funding_disputes), D(0))
 
     def unresolved_execution_gains_usd(self):
         """The part of ``provisional_gains_usd`` held back only because the execution is unresolved (not funding)."""
@@ -531,12 +539,11 @@ class Portfolio:
     CLOSED_FIELDS = ("pnl_usd", "net_bp", "hit", "funding_usd", "funding_complete", "funding_status",
                      "funding_covered_ms", "net_complete", "net_usd", "partial_usd")
 
-    @staticmethod
-    def contribution(trade):
+    def contribution(self, trade):
         """What the trade adds to the definitive capital: reliable results as they are, the others only if they lose.
         The simulated result (``pnl_usd``) is never changed; only the amount considered reliable is."""
         pnl = D(str(trade["pnl_usd"]))
-        return D(str(trade["net_usd"])) if Portfolio.reliable(trade) else min(D(0), pnl)
+        return D(str(trade["net_usd"])) if self.reliable(trade) else min(D(0), pnl)
 
     def append_capital_event(self, kind, t_ms, trade_id, delta, **extra):
         """Appends to the hash-chained capital log; ``capital_before/after`` are the definitive capital around it."""
@@ -563,6 +570,8 @@ class Portfolio:
                     if min(int(c[1]), stored["exit_time_ms"]) > max(int(c[0]), stored["entry_time_ms"])]
         if disputed:
             notes["funding_conflict"] = [list(c) for c in disputed]
+        if disputed:
+            self.funding_disputes[stored["trade_id"]] = [list(c) for c in disputed]   # known before the close
         self.trades.append(stored)
         self.trade_details[stored["trade_id"]] = {
             "as_closed": {k: stored[k] for k in self.CLOSED_FIELDS}, "fill": fill,
@@ -573,6 +582,45 @@ class Portfolio:
                 self.review_flags.setdefault(stored["trade_id"], []).append(flag)
         self.append_capital_event("trade_closed", stored["exit_time_ms"], stored["trade_id"], self.contribution(stored))
         return stored
+
+    def dispute_funding(self, trade, periods, now_ms):
+        """A funding period that contradicts the accepted ones overlaps a trade that already closed. Records the dispute
+        and, if the trade had a gain in the usable capital, an explicit reclassification at ``now_ms`` (the moment it
+        became known): a ``capital_log`` event and a ``reclassifications`` record. The closing, the accepted periods and
+        the decisions already taken are not touched. Idempotent: a period already recorded changes nothing."""
+        tid = trade["trade_id"]
+        known = self.funding_disputes.get(tid)
+        fresh = [list(c) for c in periods if known is None or list(c) not in known]
+        if not fresh:
+            return None
+        before = self.contribution(trade)
+        risk_before, dd_before = self.risk_budget_usd(), self.drawdown_usd()
+        first = known is None
+        self.funding_disputes[tid] = (known or []) + fresh
+        self.trade_details[tid]["notes"]["funding_conflict"] = list(self.funding_disputes[tid])
+        flags = self.review_flags.setdefault(tid, [])
+        if "funding_conflict" not in flags:
+            flags.append("funding_conflict")
+        delta = self.contribution(trade) - before
+        if not first:
+            return None   # more disputed periods for a trade already disputed: listed, nothing left to reclassify
+        capital_after = self.capital_usd()
+        if delta != 0:
+            self.append_capital_event("funding_dispute_reclassified", now_ms, tid, delta)
+        later = [d["decision_id"] for d in self.decisions
+                 if d["status"] == "opened" and d["decided_ms"] >= trade["exit_time_ms"] and d["decided_ms"] <= now_ms]
+        record = {"seq": len(self.reclassifications) + 1, "trade_id": tid, "product_id": trade["product_id"],
+                  "at_ms": int(now_ms), "kind": "funding_dispute", "periods": list(self.funding_disputes[tid]),
+                  "simulated_pnl_usd": str(trade["pnl_usd"]), "counted_before_usd": str(before),
+                  "counted_after_usd": str(self.contribution(trade)), "delta_capital_usd": str(delta),
+                  "capital_before_usd": str(capital_after - delta), "capital_after_usd": str(capital_after),
+                  "risk_budget_before_usd": str(risk_before), "risk_budget_after_usd": str(self.risk_budget_usd()),
+                  "drawdown_before_usd": str(dd_before), "drawdown_after_usd": str(self.drawdown_usd()),
+                  "decisions_not_revised": later,
+                  "prev": self.reclassifications[-1]["hash"] if self.reclassifications else "0" * 64}
+        record["hash"] = stable_hash(record)
+        self.reclassifications.append(record)
+        return record
 
     def ledger_hash(self):
         """Same candles and intents give the same hash: decisions and trades, nothing time-of-day dependent."""

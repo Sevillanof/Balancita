@@ -525,7 +525,7 @@ def unresolved_execution_gain():
     return result("s14_ganancia_con_ejecucion_incierta", "Ganancia con ejecución incierta", pf, NOON + 3 * MIN,
                   funding_complete=trade["funding_complete"], net_complete=trade["net_complete"],
                   execution_unresolved=trade["execution_unresolved"], simulated_pnl_usd=str(trade["pnl_usd"]),
-                  counted_in_capital_usd=str(Portfolio.contribution(trade)),
+                  counted_in_capital_usd=str(pf.contribution(trade)),
                   rule_before_this_fix_usd=str(old_rule), capital_usd=str(pf.capital_usd()),
                   held_back_usd=str(pf.unresolved_execution_gains_usd()),
                   review_flags=pf.review_flags[trade["trade_id"]],
@@ -548,10 +548,60 @@ def funding_dispute_on_open_position():
                   funding_used_usd=str(trade["funding_usd"]))
 
 
+def _complete_gain_portfolio(received_conflict_after_close):
+    """A BTC LONG whose accepted funding covers its whole holding time, closed at the target with a gain."""
+    pf = new_portfolio(funding={BTC: hourly(T8 - HOUR, 5)})
+    pf.decide([intent(BTC, LONG, T8, target_pct="0.01")], T8)
+    pf.on_candle(BTC, T8, candle(100000, 100100, 99900, 100050))
+    return pf
+
+
+def dispute_before_close():
+    """Case A: complete accepted funding, a contradictory period arrives while the position is open, the trade closes
+    with a gain. Simulated result intact; the gain never raises the usable capital while the dispute is unresolved."""
+    pf = _complete_gain_portfolio(False)
+    counts = ingest_funding(pf, BTC, [(T8 + HOUR, T8 + 2 * HOUR, "0.01")], received_ms=T8 + 2 * HOUR)
+    [trade] = pf.on_candle(BTC, T8 + 3 * HOUR, candle(100500, 101500, 100400, 101200))
+    return result("s16_disputa_antes_del_cierre", "Disputa de funding antes del cierre", pf, T8 + 4 * HOUR,
+                  intake=counts, net_complete=trade["net_complete"], funding_status=trade["funding_status"],
+                  simulated_pnl_usd=str(trade["pnl_usd"]), counted_in_capital_usd=str(pf.contribution(trade)),
+                  capital_usd=str(pf.capital_usd()), held_back_usd=str(pf.disputed_funding_gains_usd()),
+                  disputes=pf.funding_disputes, review_flags=pf.review_flags[trade["trade_id"]],
+                  reclassifications=len(pf.reclassifications))
+
+
+def dispute_after_close():
+    """Case B: the gain closes with apparently complete funding and enters the capital; contradictory information
+    arrives afterwards. An explicit reclassification takes the gain out of the usable capital at that moment."""
+    pf = _complete_gain_portfolio(True)
+    [trade] = pf.on_candle(BTC, T8 + 3 * HOUR, candle(100500, 101500, 100400, 101200))
+    capital_at_close = pf.capital_usd()
+    pf.decide([intent(SOL, LONG, T8 + 3 * HOUR + 2 * MIN)], T8 + 3 * HOUR + 2 * MIN)    # sized on the capital with the gain
+    original = dict(trade)
+    closed_state = dict(pf.trade_details[trade["trade_id"]]["as_closed"])
+    counts = ingest_funding(pf, BTC, [(T8 + HOUR, T8 + 2 * HOUR, "0.01")], received_ms=T8 + 4 * HOUR)
+    digest = accounting_digest(pf)
+    again = ingest_funding(pf, BTC, [(T8 + HOUR, T8 + 2 * HOUR, "0.01")], received_ms=T8 + 4 * HOUR + MIN)
+    made = reconcile_funding(pf, T8 + 5 * HOUR)
+    [record] = pf.reclassifications
+    return result("s17_disputa_despues_del_cierre", "Disputa de funding después del cierre", pf, T8 + 5 * HOUR,
+                  intake=counts, repeated_intake=again, capital_at_close=str(capital_at_close),
+                  capital_after_dispute=str(pf.capital_usd()), reclassification={k: record[k] for k in (
+                      "at_ms", "counted_before_usd", "counted_after_usd", "delta_capital_usd", "capital_before_usd",
+                      "capital_after_usd", "risk_budget_before_usd", "risk_budget_after_usd", "drawdown_before_usd",
+                      "drawdown_after_usd", "decisions_not_revised")},
+                  closing_untouched=all(trade[k] == original[k] for k in original),
+                  as_closed_untouched=pf.trade_details[trade["trade_id"]]["as_closed"] == closed_state,
+                  repeated_digest_unchanged=digest == accounting_digest(pf), reconcile_adjustments=len(made),
+                  reclassifications=len(pf.reclassifications), capital_log_kinds=[e["kind"] for e in pf.capital_log],
+                  disputes=pf.funding_disputes)
+
+
 SCENARIOS = (gap_long, gap_short, stop_without_gap, entry_minute_spike, quotes_missing, loss_beyond_plan,
              daily_loss_suspension, drawdown_suspension, funding_late_complete, funding_received_twice,
              funding_contradictory, restart_around_reconciliation, duplicates_and_disorder,
-             unresolved_execution_gain, funding_dispute_on_open_position)
+             unresolved_execution_gain, funding_dispute_on_open_position, dispute_before_close,
+             dispute_after_close)
 
 
 # ------------------------------------------------------------------------------------------------ report
@@ -694,6 +744,20 @@ def build_report(results):
             "Un período aceptado y otro contradictorio (cuarentena, nunca aplicado) llegan con la posición abierta; al cerrar, la operación conserva la marca "
             "{} y los períodos en disputa {}. Estado del funding: {} ({} USD usados, solo el aceptado).".format(
                 f["review_flags"], f["disputed_periods"], f["funding_status"], f["funding_used_usd"]), ""]
+
+    f = by_id["s16_disputa_antes_del_cierre"]["facts"]
+    out += ["## Funding disputado con cobertura completa", "",
+            "La disputa es una dimensión independiente de `net_complete` y de la ejecución. **A (antes del cierre):** funding aceptado completo ({}), un período "
+            "contradictorio en cuarentena con la posición abierta, cierre con ganancia {} USD: aporta **{} USD** al capital ({} USD retenidos, capital {} USD).".format(
+                f["funding_status"], f["simulated_pnl_usd"], f["counted_in_capital_usd"], f["held_back_usd"], f["capital_usd"])]
+    f = by_id["s17_disputa_despues_del_cierre"]["facts"]
+    r = f["reclassification"]
+    out += ["**B (después del cierre):** la ganancia entra al capital ({} USD) y al llegar la contradicción se registra una reclasificación en el momento en que se conoce: "
+            "aportaba {} y ahora {} (Δ {} USD), capital {} -> {}, presupuesto de riesgo {} -> {}, drawdown {} -> {}. Cierre intacto: {}; estado `as_closed` intacto: {}; "
+            "repetir la entrega deja el digest igual: {}; reclasificaciones tras repetir: {}; decisiones no revisadas: {}.".format(
+                f["capital_at_close"], r["counted_before_usd"], r["counted_after_usd"], r["delta_capital_usd"], r["capital_before_usd"], r["capital_after_usd"],
+                r["risk_budget_before_usd"], r["risk_budget_after_usd"], r["drawdown_before_usd"], r["drawdown_after_usd"], f["closing_untouched"],
+                f["as_closed_untouched"], f["repeated_digest_unchanged"], f["reclassifications"], len(r["decisions_not_revised"])), ""]
 
     out += ["## Qué está demostrado y qué sigue siendo hipótesis", "",
             "**Demostrado (datos sintéticos, pruebas deterministas, mismos hashes en cada ejecución):**", "",

@@ -19,11 +19,11 @@ Objetivo: que la cartera compartida represente y contabilice bien una pérdida m
 ## Piezas
 
 - `futures_simulator.Book`: parámetro `stop_policy`, método `close_on_quote` (cierre a un precio demostrado por una cotización), lista paralela `fills` (precio de referencia y evidencia de cada salida) y `entry_ms` opcional en la posición (el funding corre desde la entrada real). Con los valores por defecto los resultados son idénticos; una prueba lo compara con `simulate`.
-- `portfolio.Portfolio`: `stop_policy`, `close_on_quote`, `capital_log` (cada cambio del capital definitivo, encadenado por hash), `trade_details` (referencias y estado «al cerrar» de cada operación), `suspension_state`, y los registros `adjustments`, `funding_log`, `funding_conflicts`, `review_flags`. El drawdown y el resultado diario se leen del `capital_log`; sin conciliaciones dan exactamente lo de antes.
+- `portfolio.Portfolio`: `stop_policy`, `close_on_quote`, `capital_log` (cada cambio del capital definitivo, encadenado por hash), `trade_details` (referencias y estado «al cerrar» de cada operación), `suspension_state`, y los registros `adjustments`, `reclassifications`, `funding_log`, `funding_conflicts`, `funding_disputes`, `review_flags`. El drawdown y el resultado diario se leen del `capital_log`; sin conciliaciones dan exactamente lo de antes.
 - `portfolio_watch`: vigilancia con cotizaciones (abajo).
 - `portfolio_funding`: `ingest_funding` y `reconcile_funding`.
 - `portfolio_audit`: `audit`, `trade_reconstruction`, `planned_vs_realized`, `accounting_digest`, `intake_digest`.
-- `portfolio_stage7`: 13 escenarios sintéticos y el generador del informe (`analisis/etapa7-contabilidad-adversa/`).
+- `portfolio_stage7`: 17 escenarios sintéticos y el generador del informe (`analisis/etapa7-contabilidad-adversa/`).
 
 ## Stops ante gaps
 
@@ -65,7 +65,25 @@ La pérdida planificada es una cifra del modelo, no una cota. Con un gap la pér
 
 `reconcile_funding(portfolio, now_ms)` recorre las operaciones cerradas con funding incompleto y **recalcula** su funding desde los periodos aceptados (nunca acumula, así que no puede aplicarse dos veces). Solo actúa si el tiempo cubierto creció. Cada cambio es un `adjustment` encadenado por hash con el estado antes y después, la cobertura (`partial`/`complete`), la transición (`provisional_more_covered`, `provisional_to_definitive`), capital, presupuesto de riesgo y drawdown antes y después, el hash de los periodos usados y las decisiones tomadas entre el cierre y la conciliación (`decisions_not_revised`: no se revisan, solo se listan). La regla anterior se conserva: una ganancia provisional nunca aumenta el capital disponible; una pérdida provisional siempre lo reduce.
 
-Decisión de diseño que Fran debe confirmar: el efecto de una conciliación se anota en el día UTC y en el punto del drawdown **en que se conoce**, no se reescribe el pasado. Por eso la pérdida diaria y el drawdown no cambian retroactivamente por un dato tardío, y una conciliación que profundiza una pérdida puede activar una suspensión hacia adelante. `OfflineExecutor` (#122) recalcula el drawdown desde las operaciones por su día de salida; si algún día se usan conciliaciones con ese ejecutor, esa comprobación deberá leer el `capital_log`.
+Decisión aprobada por Fran (2026-10-13): el efecto de una conciliación se anota en el día UTC y en el punto del drawdown **en que se conoce**, no se reescribe el pasado. Por eso la pérdida diaria y el drawdown no cambian retroactivamente por un dato tardío, y una conciliación que profundiza una pérdida puede activar una suspensión hacia adelante. `OfflineExecutor` (#122) recalcula el drawdown desde las operaciones por su día de salida; si algún día se usan conciliaciones con ese ejecutor, esa comprobación deberá leer el `capital_log`.
+
+## Capital utilizable: tres dimensiones independientes
+
+El resultado simulado de una operación (`pnl_usd`, precio de salida, cierre) nunca se altera por incertidumbre. Lo que cambia es la parte considerada fiable para nuevas decisiones (`Portfolio.contribution`). Una ganancia solo aumenta el capital definitivo si cumple **las tres** condiciones, independientes entre sí (`Portfolio.reliable`); una pérdida siempre se contabiliza entera:
+
+| Dimensión            | Dónde se ve                                                           | Cuándo retiene la ganancia                                                                                                      |
+| -------------------- | --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| Cobertura de funding | `net_complete`                                                        | el funding aceptado no cubre toda la tenencia                                                                                   |
+| Ejecución            | `execution_unresolved` (solo con `QuoteWatch`)                        | el rango del minuto de entrada tocó el stop y ninguna cotización cubrió la ventana                                              |
+| Disputa de funding   | `funding_disputes` (trade_id → periodos en cuarentena que se solapan) | un periodo contradictorio en cuarentena se solapa con la tenencia; mientras exista, nada lo resuelve (no hay política aprobada) |
+
+Completar una dimensión no libera las otras: una conciliación que pasa a `provisional_to_definitive` no mueve el capital si la ejecución sigue sin resolver o el funding sigue disputado.
+
+**Disputa antes del cierre (A).** Una posición con funding aceptado que cubre toda su tenencia recibe un periodo contradictorio; queda en cuarentena. Al cerrar con ganancia, `Portfolio` compara la tenencia con la cuarentena y la operación nace disputada: el resultado simulado queda intacto y aporta 0 al capital.
+
+**Disputa después del cierre (B).** La ganancia ya entró al capital. Al llegar la contradicción, `Portfolio.dispute_funding` anota en el momento en que se conoce un evento `funding_dispute_reclassified` en el `capital_log` y un registro encadenado en `reclassifications` (resultado simulado, aporte antes y después, capital, presupuesto de riesgo y drawdown antes y después, decisiones posteriores no revisadas). No se reescribe el cierre ni `as_closed`, ni los periodos aceptados, ni las decisiones; el eventual drawdown se registra en el punto en que se conoce (misma regla de las conciliaciones). Es idempotente: repetir la entrega o la conciliación, o reiniciar desde un checkpoint, no crea otra reclasificación; un segundo periodo disputado del mismo trade se lista sin reclasificar de nuevo. Una pérdida disputada se anota (reclasificación con delta 0, sin evento de capital). Ni una suspensión ni nada del estado de la cuenta bloquean la disputa.
+
+La auditoría compara con los periodos en cuarentena, no solo con las marcas: `funding_dispute_omitted` (periodo en cuarentena solapado sin disputa registrada), `funding_dispute_mismatch`, `disputed_gain_counted`, `reclassification_chain` y `reclassification_without_capital_event`; avisos `funding_disputed` y `economically_unresolved_execution` listan los resultados económicamente no resueltos.
 
 ## Contabilidad verificable
 
@@ -88,7 +106,7 @@ El informe y `resultados.json` no llevan fecha ni nada del entorno; una prueba l
 - Todo es sintético. Que `gap_open` o `gap_worst` reflejen lo que habría pasado en Kraken **no está medido**: son estimaciones desde velas. Los 10 s de hueco máximo, la política `flag`/`stop` y el coste del modelo en un gap son hipótesis iniciales, no valores medidos ni aprobados.
 - El stop se ejecuta en la primera cotización que lo cruza, sin latencia propia ni profundidad de libro; el objetivo y el stop por tiempo siguen dependiendo de velas. Entre una cotización que no cruza y la vela siguiente puede haber un cruce no observado.
 - Los eventos deben llegar en orden. Una cotización tardía de un minuto ya cubierto se ignora (no se reordena).
-- Una versión contradictoria del funding se pone en cuarentena para siempre: no hay aún un procedimiento para que una persona la resuelva.
+- Una versión contradictoria del funding se pone en cuarentena para siempre: no hay aún un procedimiento aprobado para que una persona la resuelva, y mientras tanto las ganancias afectadas siguen retenidas (igual que las de ejecución sin resolver: tampoco hay mecanismo para resolverlas después). Retener es una política conservadora de esta etapa, no una medición.
 - El día UTC de una conciliación es el del conocimiento del dato (ver arriba). Las posiciones abiertas reciben el funding aceptado antes de cerrar, pero no se re-dimensionan.
 - Los checkpoints de prueba usan `pickle` como el resto del prototipo; no es persistencia de producción.
 - Sigue valiendo que un `Portfolio` con producto sin fila de costes medida nunca llega a resultado definitivo.
