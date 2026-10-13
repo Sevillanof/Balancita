@@ -39,8 +39,10 @@ test.beforeAll(async ({}, info) => {
       HOST: '127.0.0.1',
       PORT: String(LIVE_PORT),
     },
-    stdio: 'ignore',
+    stdio: ['ignore', 'ignore', 'pipe'],
   })
+  let stderr = ''
+  gateway.stderr?.on('data', (chunk) => (stderr += String(chunk)))
   const deadline = Date.now() + 20_000
   for (;;) {
     try {
@@ -48,7 +50,8 @@ test.beforeAll(async ({}, info) => {
     } catch {
       // not listening yet
     }
-    if (Date.now() > deadline) throw new Error('the gateway did not start')
+    if (Date.now() > deadline)
+      throw new Error(`the gateway did not start: ${stderr.slice(-800)}`)
     await new Promise((resolve) => setTimeout(resolve, 250))
   }
 })
