@@ -51,6 +51,7 @@ PORTFOLIO_SCHEMA = "balancita-portfolio.v2"
 LONG, SHORT = "LONG", "SHORT"
 TEN_THOUSAND = Decimal(10_000)
 CENT = Decimal("0.01")
+SIGNAL_FIELDS = ("product_id", "side", "bucket_ms", "price", "stop", "target", "horizon_minutes")
 
 
 class PortfolioError(Exception):
@@ -356,14 +357,25 @@ class Portfolio:
                 valid.append(intent)
         if self.last_decision_ms is None or now_ms > self.last_decision_ms:
             self.last_decision_ms = now_ms
+        # One signal, one chance. Valid copies of the same ``signal_id`` that disagree on direction, price, levels or
+        # horizon are inconsistent: all are rejected, because nothing here says which version is the right one (and
+        # a hash must not decide). Copies that agree on those fields are one proposal seen twice: the earliest
+        # observation is kept.
         by_signal, unique = {}, []
-        for intent in sorted(valid, key=lambda i: i["intent_id"]):    # one signal, one chance: the same signal id
-            sid = intent.get("signal_id")                             # in a new intent (other price/ATR) is a duplicate
-            if sid is not None and sid in by_signal:
-                rejected[intent["intent_id"]] = ["duplicate_signal"]
+        for intent in valid:
+            if intent.get("signal_id") is None:
+                unique.append(intent)
+            else:
+                by_signal.setdefault(intent["signal_id"], []).append(intent)
+        for sid in sorted(by_signal):
+            copies = sorted(by_signal[sid], key=lambda i: (i["data_close_ms"], i["intent_id"]))
+            if len({tuple(i[k] for k in SIGNAL_FIELDS) for i in copies}) > 1:
+                for intent in copies:
+                    rejected[intent["intent_id"]] = ["inconsistent_signal"]
                 continue
-            by_signal[sid] = True
-            unique.append(intent)
+            unique.append(copies[0])
+            for intent in copies[1:]:
+                rejected[intent["intent_id"]] = ["duplicate_signal"]
         valid = unique
         by_product = {}
         for intent in valid:

@@ -615,13 +615,50 @@ class SignalIdentity(unittest.TestCase):
         self.assertIn("duplicate_signal", reasons(p.decide([other_price], T0 + 2 * MIN)[0]))
         self.assertEqual(len(p.trades), 1)
 
-    def test_same_signal_twice_in_one_batch_opens_one(self):
+    def test_same_proposal_seen_twice_in_one_batch_opens_one(self):
         p = Portfolio(roomy())
         sig = self._signal()
-        out = p.decide([intent_from_signal(sig, price="100", atr="1"), intent_from_signal(sig, price="100", atr="2")],
-                       T0 + MIN)
-        self.assertEqual(sorted(d["status"] for d in out), ["opened", "rejected"])
-        self.assertEqual(p.snapshot()["open_positions"], 1)
+        early = intent_from_signal(sig, price="100", atr="1", data_close_ms=T0 + MIN)
+        late = intent_from_signal(sig, price="100", atr="1", data_close_ms=T0 + 2 * MIN)
+        self.assertNotEqual(early["intent_id"], late["intent_id"])
+        for batch in ([early, late], [late, early]):
+            q = Portfolio(roomy())
+            out = q.decide(batch, T0 + 3 * MIN)
+            by = {d["intent_id"]: d for d in out}
+            self.assertEqual(by[early["intent_id"]]["status"], "opened")           # the earliest observation
+            self.assertEqual(reasons(by[late["intent_id"]]), ["duplicate_signal"])
+            self.assertEqual(q.snapshot()["open_positions"], 1)
+
+    def test_contradictory_versions_of_one_signal_are_all_rejected(self):
+        sig = self._signal()
+        versions = {
+            "atr": [intent_from_signal(sig, price="100", atr="1"), intent_from_signal(sig, price="100", atr="1.6")],
+            "price": [intent_from_signal(sig, price="100", atr="1"), intent_from_signal(sig, price="100.3", atr="1")],
+            "direction": [intent_from_signal(sig, price="100", atr="1"),
+                          dict(intent(side=SHORT), signal_id=sig["signal_id"], bucket_ms=T0)],
+        }
+        for name, pair in versions.items():
+            hashes = set()
+            for batch in (pair, list(reversed(pair))):
+                p = Portfolio(roomy())
+                out = p.decide(batch, T0 + MIN)
+                self.assertEqual([reasons(d) for d in out], [["inconsistent_signal"]] * 2, name)
+                self.assertEqual(p.snapshot()["open_positions"], 0, name)
+                hashes.add(p.ledger_hash())
+            self.assertEqual(len(hashes), 1, name)                                # input order changes nothing
+
+    def test_a_rejected_inconsistent_pair_does_not_consume_the_signal(self):
+        p = Portfolio(roomy())
+        sig = self._signal()
+        p.decide([intent_from_signal(sig, price="100", atr="1"), intent_from_signal(sig, price="100", atr="2")], T0 + MIN)
+        [d] = p.decide([intent_from_signal(sig, price="100", atr="1")], T0 + MIN)
+        self.assertEqual(d["status"], "opened")
+
+    def test_intents_without_signal_id_are_not_grouped(self):
+        p = Portfolio(roomy(daily_loss_limit_usd="1000"))
+        out = p.decide([intent("PF_XBTUSD", strategy="a"), intent("PF_ETHUSD", strategy="b"),
+                        intent("PF_SOLUSD", strategy="c")], T0 + MIN)
+        self.assertEqual([d["status"] for d in out], ["opened"] * 3)
 
     def test_an_invalid_copy_does_not_consume_the_signal(self):
         p = Portfolio(roomy())

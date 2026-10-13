@@ -17,7 +17,7 @@ Requested directly by the user (Fran) on 2026-10-13 as PR #120. Where it conflic
 2. Gross exposure at most 100 % of definitive capital (leverage 1x); exposure per product at most 50 %; net exposure at most 100 %.
 3. Sum of the planned losses of the open positions at most 2 % of definitive capital (equal to the daily loss limit).
 4. Daily loss limit 20 USD and maximum drawdown 60 USD suspend new entries; minimum notional 10 USD; at most 8 open positions. The losses realized during the day, plus the planned loss of the open positions, are deducted from the daily limit before admitting new planned risk (15 USD lost leaves about 5 USD). Only verified results offset losses in these limits.
-5. Positions are opened only from intents with valid, fresh data, once per intent id **and once per signal id** (a new intent carrying the same signal, with another price or ATR, is a duplicate), and in time order.
+5. Positions are opened only from intents with valid, fresh data, once per intent id **and once per signal id** (a new intent carrying the same signal, with another price or ATR, is a duplicate; valid copies of one signal that disagree on direction, price, levels or horizon are all rejected as inconsistent, never resolved by hash order), and in time order.
 6. The prototype opens at the reference price of the intent plus the modeled impact. Any connection to real data needs a separate decision on the first executable price after the signal; that is not covered by this amendment.
 7. `slippage_buffer_bps` is configurable; its initial value of zero is an optimistic hypothesis, to be replaced by measured stop slippage (never chosen with the reserved holdout).
 

@@ -77,6 +77,8 @@ Cada intención deja un registro: `status` (`opened`/`rejected`), `reasons`, `no
 ## Identidad de señales
 Una misma `signal_id` no puede abrir dos posiciones aunque llegue en una intención nueva con otro precio o ATR (el `intent_id` cambia, el `signal_id` no): `duplicate_signal`, con la posición abierta o ya cerrada, y dentro del mismo lote (queda una sola). Una copia inválida (por ejemplo obsoleta) no consume la señal.
 
+**Versiones contradictorias de una misma señal.** Si dos intenciones válidas comparten `signal_id` pero difieren en producto, dirección, vela, precio, stop, objetivo u horizonte (por ejemplo otro ATR), se rechazan **todas** con `inconsistent_signal`: nada en el sistema dice cuál versión es la correcta y el hash del `intent_id` no debe decidirlo. El resultado no depende del orden de entrada y la señal no se consume, así que una versión única y limpia puede abrir después. Si coinciden en esos campos y solo difieren en metadatos (por ejemplo `data_close_ms`), es la misma propuesta vista dos veces: se conserva la observación más temprana y la otra queda `duplicate_signal`.
+
 ## Momento y precio de ejecución (pendiente para integrar)
 El prototipo **abre al precio de referencia de la intención** (cierre de la vela de la señal) más el impacto del modelo de costes. Eso es válido para un prototipo determinista, pero una integración con datos reales deberá distinguir tres cosas que hoy se confunden: el precio conocido al generar la señal, el momento en que la señal está disponible y el **primer precio ejecutable posterior**. Si el precio se mueve entre la señal y la ejecución, cambia la pérdida real hasta el stop y el tamaño calculado. No es un bloqueo para este PR aislado; sí lo es para conectarlo al forward, que no se toca.
 
