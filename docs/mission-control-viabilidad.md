@@ -57,6 +57,7 @@ puede empezar la Fase 0 y la Fase 1.
 ## 1. Estado actual (resumen verificado)
 
 Frontend (`src/`, React 19, Vite 8, React Compiler, `lightweight-charts` 5.2):
+
 - Sin router: `App.tsx` enruta por `window.location.pathname`; `/estrategias` es el
   Laboratorio y cualquier otra ruta cae en Terminal.
 - Estilos en CSS plano con tres sistemas de tokens: `--color-*` (`shared/styles/ui.css`),
@@ -80,6 +81,7 @@ Frontend (`src/`, React 19, Vite 8, React Compiler, `lightweight-charts` 5.2):
   paso de la Fase 1 es fijar la línea base con `pnpm install && pnpm typecheck && pnpm lint && pnpm test`.
 
 Backend (Fastify 5 + motor Python por subproceso, SQLite):
+
 - Gateway `/api-live` (8789): `terminal/bootstrap`, `terminal/chart`, `health`, `system`,
   `qwen/scores`, `kronos/scores`, y WS `terminal/stream` con `snapshot`, `market.updated`,
   `analysis.completed`, `account/position/order/fill`, `engine.status`, `heartbeat`, `resync.required`.
@@ -103,6 +105,7 @@ mismo layout (cabecera, gráfico protagonista, panel derecho, tabla inferior) us
 `positionLines` y la cuenta/posición reales; se hace en Fase 2, no ahora.
 
 Contenido de las maquetas que NO tiene respaldo real y no debe implementarse:
+
 - Latencias y frecuencias: RTT 1,1 ms, "100 Hz", ciclo 0,14 ms, "14 ms" por ciclo, latencia
   de auditoría, heartbeat <0,04 ms, "Rust/WASM", "L2 WebSocket".
 - Capital: "10.000 USDT base", AUM 250.000 USD, "Capital protegido", "Ahorro simulado
@@ -146,17 +149,17 @@ experimentos, tarjetas por experimento sin cartera consolidada.
 
 ### 3.2 Existe parcialmente
 
-| Funcionalidad | Qué hay | Qué falta |
-|---|---|---|
-| Salud global | `health.capture` (live/stale/unavailable + `lastReceivedAt`), `health.processes` (running/restarting/down), `system` (CPU/RSS, Qwen y Kronos) | Salud por componente con criterio explícito; frescura por feed; Kronos, libro y quote archive no están en `processes` |
-| Datos | Última recepción de ticker, `known_at` de velas | `data_gaps` y diagnósticos `resilience/retention/eventloop.jsonl` solo en disco |
-| Procesamiento | Estado de procesos, conteo de decisiones Qwen (total, última hora, latencia media) | Conteo de verdicts por ciclo; sin heartbeat de procesos en BD |
-| Estrategias | Estado y fiabilidad por estrategia | `forward_status` (lag, velas perdidas, ciclos obsoletos) se sobrescribe cada pasada y no se sirve |
-| Decisiones | Verdict C inmutable por producto y minuto con acción, `reason_code` y propuestas; decisiones Q con probabilidades; Kronos con `side NULL` | Descartes de forward (`skipped` del simulador, p. ej. `target_does_not_clear_cost`) no se persisten; Q no registra el fallo de modelo |
-| Ejecución paper | Trades inmutables de forward (entrada, salida, motivo, `net_bp`, `pnl_usd`, funding), Qwen `open_position` | Sin endpoint para forward/C31; posición abierta sin PnL no realizado salvo Qwen |
-| Riesgo | Gates 409 al activar estrategias; stale gate del forward | No hay motor de riesgo en el stack dev (solo `multi_risk.py`, fuera del dev) ni API de exposición/margen/pérdida diaria |
-| Evaluación posterior | `forecasts` con retornos a 15/60/240/1440 min, barreras y MFE/MAE; Q a 30 min calculado al leer; replay con `outcome_close` | Sin endpoint para forecasts; sin retorno posterior de verdicts C que no pasan por forecasts |
-| Costes | Un modelo por producto en `futures_costs.py`; fees y spread en Qwen scores | Sin endpoint de costes por producto |
+| Funcionalidad        | Qué hay                                                                                                                                       | Qué falta                                                                                                                             |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| Salud global         | `health.capture` (live/stale/unavailable + `lastReceivedAt`), `health.processes` (running/restarting/down), `system` (CPU/RSS, Qwen y Kronos) | Salud por componente con criterio explícito; frescura por feed; Kronos, libro y quote archive no están en `processes`                 |
+| Datos                | Última recepción de ticker, `known_at` de velas                                                                                               | `data_gaps` y diagnósticos `resilience/retention/eventloop.jsonl` solo en disco                                                       |
+| Procesamiento        | Estado de procesos, conteo de decisiones Qwen (total, última hora, latencia media)                                                            | Conteo de verdicts por ciclo; sin heartbeat de procesos en BD                                                                         |
+| Estrategias          | Estado y fiabilidad por estrategia                                                                                                            | `forward_status` (lag, velas perdidas, ciclos obsoletos) se sobrescribe cada pasada y no se sirve                                     |
+| Decisiones           | Verdict C inmutable por producto y minuto con acción, `reason_code` y propuestas; decisiones Q con probabilidades; Kronos con `side NULL`     | Descartes de forward (`skipped` del simulador, p. ej. `target_does_not_clear_cost`) no se persisten; Q no registra el fallo de modelo |
+| Ejecución paper      | Trades inmutables de forward (entrada, salida, motivo, `net_bp`, `pnl_usd`, funding), Qwen `open_position`                                    | Sin endpoint para forward/C31; posición abierta sin PnL no realizado salvo Qwen                                                       |
+| Riesgo               | Gates 409 al activar estrategias; stale gate del forward                                                                                      | No hay motor de riesgo en el stack dev (solo `multi_risk.py`, fuera del dev) ni API de exposición/margen/pérdida diaria               |
+| Evaluación posterior | `forecasts` con retornos a 15/60/240/1440 min, barreras y MFE/MAE; Q a 30 min calculado al leer; replay con `outcome_close`                   | Sin endpoint para forecasts; sin retorno posterior de verdicts C que no pasan por forecasts                                           |
+| Costes               | Un modelo por producto en `futures_costs.py`; fees y spread en Qwen scores                                                                    | Sin endpoint de costes por producto                                                                                                   |
 
 ### 3.3 Información que el backend todavía no proporciona
 
@@ -223,6 +226,7 @@ fase de auditoría.
 
 B1. `GET /api/observability/health` en el gateway (solo lectura): estado de los seis
 componentes calculado con reglas documentadas a partir de datos reales.
+
 - Datos: `capture.status` + antigüedad de ticker y de la última vela cerrada + `data_gaps` recientes.
 - Procesamiento: procesos del supervisor + conteo de verdicts del último ciclo esperado.
 - Estrategias: estados del registro + `forward_status` actual.
@@ -256,23 +260,24 @@ SQLite en modo solo lectura (WAL), igual que el gateway actual.
 
 ### 3.7 Riesgos para el funcionamiento actual
 
-| Riesgo | Mitigación |
-|---|---|
-| Carga de lectura sobre SQLite compartido (verdicts por minuto, 8 productos) | Conexión `readonly`, consultas acotadas por ventana, caché de 15 s como en `scores`, índices ya existentes; medir antes de activar |
-| Memoria/CPU de la Mac (historial de problemas) | No añadir procesos; el gateway ya corre. Sin polling nuevo agresivo; reutilizar WS |
-| Rediseño de `FuturesTerminal` rompe el WS (seq, resync, batcher) | Extraer sin cambiar la lógica; mover primero tests de caracterización; no tocar `terminal-state`/`terminal-stream-client` en Fase 1-2 |
-| Mostrar verde por omisión | Estados "sin datos" explícitos; criterios por componente documentados y con tests |
-| Datos de D histórico mostrados como actuales | Etiquetar origen y `known_at`; Fase 2 decide qué se muestra como "posición paper" real |
-| Mezcla de experimentos | Contratos con `experiment_id`; vistas siempre filtradas; test que verifica que un resultado pertenece al experimento seleccionado |
-| Interpretar `reason_code` mal | Diccionario único en front con cobertura de todos los códigos del backend; código desconocido se muestra literal |
-| Cambios de contrato | Solo endpoints nuevos; los existentes no cambian |
-| Cálculos financieros en la UI | Prohibido; formateo solamente |
-| Sin CI en el repo | La línea base local de la Fase 0 y checklist por PR |
-| Capital/estados en Stitch contradicen el ADR | No se copia ninguna cifra; ver §2 |
+| Riesgo                                                                      | Mitigación                                                                                                                            |
+| --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| Carga de lectura sobre SQLite compartido (verdicts por minuto, 8 productos) | Conexión `readonly`, consultas acotadas por ventana, caché de 15 s como en `scores`, índices ya existentes; medir antes de activar    |
+| Memoria/CPU de la Mac (historial de problemas)                              | No añadir procesos; el gateway ya corre. Sin polling nuevo agresivo; reutilizar WS                                                    |
+| Rediseño de `FuturesTerminal` rompe el WS (seq, resync, batcher)            | Extraer sin cambiar la lógica; mover primero tests de caracterización; no tocar `terminal-state`/`terminal-stream-client` en Fase 1-2 |
+| Mostrar verde por omisión                                                   | Estados "sin datos" explícitos; criterios por componente documentados y con tests                                                     |
+| Datos de D histórico mostrados como actuales                                | Etiquetar origen y `known_at`; Fase 2 decide qué se muestra como "posición paper" real                                                |
+| Mezcla de experimentos                                                      | Contratos con `experiment_id`; vistas siempre filtradas; test que verifica que un resultado pertenece al experimento seleccionado     |
+| Interpretar `reason_code` mal                                               | Diccionario único en front con cobertura de todos los códigos del backend; código desconocido se muestra literal                      |
+| Cambios de contrato                                                         | Solo endpoints nuevos; los existentes no cambian                                                                                      |
+| Cálculos financieros en la UI                                               | Prohibido; formateo solamente                                                                                                         |
+| Sin CI en el repo                                                           | La línea base local de la Fase 0 y checklist por PR                                                                                   |
+| Capital/estados en Stitch contradicen el ADR                                | No se copia ninguna cifra; ver §2                                                                                                     |
 
 ## 4. Mapa de datos por pantalla
 
 Terminal
+
 - Gráfico: `terminal/chart` + WS `market.updated`. Marcadores de verdict C vía
   `analysis.completed`; salidas vía órdenes reduce-only (D histórico) hasta que B3 aporte
   trades de forward.
@@ -283,6 +288,7 @@ Terminal
 - Salud: B1. Espera prolongada: B2.
 
 Investigación (etapas)
+
 1. Mercado: precios y `known_at` de la vela; datos de libro solo si el colector está activo (si no, "no disponible").
 2. Estrategias: `proposals[]` del verdict C con condiciones.
 3. Combinador/modelo: decisión Q (opción, probabilidades) o selección multi; "no corresponde" si no interviene.
@@ -292,6 +298,7 @@ Investigación (etapas)
 7. Evaluación posterior: `forecasts` (15/60/240/1440 min, barreras, MFE/MAE), etiquetada como retrospectiva.
 
 Estrategias/Experimentos
+
 - Lista y detalle: registro S. Backtest/OOS: `/backtest`. Paper: forward (B5).
 - Costes: backtest y trades incluyen fees y funding; no se recalcula nada.
 - Comparación: tarjetas independientes, sin suma. Curvas de equity solo donde exista serie real (Qwen, Kronos); el resto "pendiente".
@@ -305,6 +312,7 @@ automático (lo decide Fran). Antes de cada PR: `pnpm typecheck`, `pnpm lint`, `
 PR modifica estrategias, lógica de decisiones, contabilidad ni comportamiento del trader.
 
 ### Fase 0: línea base (sin cambios de producto)
+
 - `pnpm install` y ejecución de typecheck, lint, tests unitarios, tests de servidor, Python
   (`PYTHONPATH=python python3 -m unittest discover -s python/tests`) y e2e.
 - Documentar el resultado en `docs/mission-control-linea-base.md`: versión, comandos, qué pasa,
@@ -313,6 +321,7 @@ PR modifica estrategias, lógica de decisiones, contabilidad ni comportamiento d
 - Aceptación: línea base reproducible; cada fallo previo catalogado como previo.
 
 ### Fase 1: fundamentos visuales (solo front)
+
 - Tokens únicos (`--mc-*`) desde `DESIGN.md`; componentes: `AppShell`, `TopBar`, `Panel`,
   `Metric`, `StatusPill`, `DataState` (cargando / error / vacío / «No disponible» / «Sin datos»).
 - Navegación Terminal/Estrategias y ruta `/terminal` explícita.
@@ -327,6 +336,7 @@ PR modifica estrategias, lógica de decisiones, contabilidad ni comportamiento d
     identificadas con etiqueta visible.
 
 ### Fase 2: Terminal
+
 - Extraer `useTerminalStream` y componentes de presentación sin cambiar el protocolo.
 - Cada bloque muestra **origen, experimento y frescura** (`known_at`) del dato.
 - **Posición paper**: solo del experimento seleccionado y de fuente verificable. Equity,
@@ -339,6 +349,7 @@ PR modifica estrategias, lógica de decisiones, contabilidad ni comportamiento d
   y período mostrados; test que prueba que datos de D no se presentan como actuales.
 
 ### Fase 3: observabilidad
+
 - Backend B1+B2 (+B6) de solo lectura con pruebas de rendimiento; front con el indicador global.
 - Reglas: componente sin información suficiente = «Sin datos»; ausencia de errores no es salud;
   el estado global refleja degradaciones y comprobaciones no disponibles (peor estado entre componentes;
@@ -348,18 +359,21 @@ PR modifica estrategias, lógica de decisiones, contabilidad ni comportamiento d
 - Aceptación: captura detenida con WS abierto ⇒ advertencia/error; sin cifras de latencia inventadas.
 
 ### Fase 4: investigación
+
 - Backend B3 de solo lectura. Panel por etapas con las etapas que intervienen; no disponibles marcadas;
   evaluación posterior separada de lo conocido al decidir.
 - Aceptación: cada etapa con origen y `known_at`; sin explicaciones que no salgan de un campo.
 - Cierre de esta fase habilita B4 (PR aparte).
 
 ### Fase 5: estrategias
+
 - Listado, detalle, rendimiento, actividad, historial y backtest. Dividir `StrategyLab.tsx`
   conservando editor, importar, variantes, estados, versiones, Qwen, Kronos y carry.
 - Aceptación: tests de Lab verdes; backtest, fuera de muestra y paper rotulados por separado;
   veredicto estadístico según `reliability.verdict` y DSR, no por número de operaciones.
 
 ### Fase 6: experimentos
+
 - Backend B5. Tarjetas por experimento: Forward C29/C30/C32, Qwen, Kronos, C31, carry; A/B/C cuando
   existan datos consultables. Agrupadas por **activos / detenidos / históricos**.
 - Sin carteras ni curvas de equity inventadas: solo series reales (Qwen y Kronos hoy). Sin
@@ -369,6 +383,7 @@ PR modifica estrategias, lógica de decisiones, contabilidad ni comportamiento d
   conservando producto y experimento.
 
 ### Orden y dependencias
+
 Fase 0 → Fase 1 → (L1, L2, L3 en paralelo, PRs separados) → Fase 2 → Fase 3 → Fase 4 → B4 (PR aparte) →
 Fase 5 → Fase 6. Fases 5 y 6 pueden adelantarse a 3-4 si Fran lo prefiere; solo dependen de la Fase 1.
 
