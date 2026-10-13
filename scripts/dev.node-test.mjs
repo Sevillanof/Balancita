@@ -89,6 +89,21 @@ describe('devChildSpecs', () => {
     )
   })
 
+  it('gives the gateway the forward and registry databases for the health report', () => {
+    const { live, forward, strategies } = byName
+    const out = forward.args[forward.args.indexOf('--out') + 1]
+    assert.equal(live.env.FUTURES_FORWARD_DB_PATH, `${out}/forward.sqlite`)
+    assert.equal(
+      live.env.FUTURES_STRATEGIES_DB_PATH,
+      strategies.args[strategies.args.indexOf('--strategies-db') + 1],
+    )
+    assert.equal(
+      live.env.FUTURES_FORWARD_REGISTRATION_PATH,
+      '/repo/config/forward-strategies.json',
+    )
+    assert.equal(live.env.FUTURES_STRATEGY_SPECS_DIR, '/repo/config/strategies')
+  })
+
   it('gives the gateway the decisions database and the Python for Qwen scores', () => {
     const { env } = byName.live
     assert.match(

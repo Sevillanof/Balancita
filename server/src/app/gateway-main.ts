@@ -6,6 +6,8 @@ import {
   qwenScoresOff,
 } from '../features/live-gateway/qwen-scores.ts'
 import { createKronosScores } from '../features/live-gateway/kronos-scores.ts'
+import { createObservabilityHealth } from '../features/live-gateway/observability-health.ts'
+import { loadPinnedProducts } from '../features/kraken-futures/futures-products.ts'
 import { serverConfigFrom } from '../platform/config.ts'
 
 function pythonUnavailableReason(status: string | undefined) {
@@ -51,6 +53,17 @@ function kronosScoresFrom(env: NodeJS.ProcessEnv) {
     : qwenScoresOff('kronos_not_configured')
 }
 
+/** Product ids the forward runner iterates: `FUTURES_PRODUCTS`, else the pinned list. */
+function forwardProducts(env: NodeJS.ProcessEnv): string[] {
+  const listed = (env.FUTURES_PRODUCTS ?? '')
+    .split(',')
+    .map((entry) => entry.trim().split(':')[0] ?? '')
+    .filter(Boolean)
+  return listed.length > 0
+    ? listed
+    : loadPinnedProducts().map((p) => p.productId)
+}
+
 async function main(): Promise<void> {
   const config = serverConfigFrom(process.env)
   // Read-only: opens the capture process's market DB, starts no collector/engine.
@@ -66,6 +79,29 @@ async function main(): Promise<void> {
     qwenScores: qwenScoresFrom(process.env),
     kronosScores: kronosScoresFrom(process.env),
     processHealthPath: process.env.DEV_HEALTH_FILE || undefined,
+    // Read-only health of six components: every source is optional and a
+    // missing one is reported as «Sin datos», never as healthy.
+    observabilityHealth: createObservabilityHealth({
+      products: loadPinnedProducts().map((p) => p.productId),
+      marketDbPath: config.futuresMarketDbPath,
+      verdictsDbPath: process.env.FUTURES_VERDICTS_DB_PATH || undefined,
+      decisionsDbPath: process.env.FUTURES_DECISIONS_DB_PATH || undefined,
+      forwardDbPath: process.env.FUTURES_FORWARD_DB_PATH || undefined,
+      strategiesDbPath: process.env.FUTURES_STRATEGIES_DB_PATH || undefined,
+      forwardRegistrationPath:
+        process.env.FUTURES_FORWARD_REGISTRATION_PATH || undefined,
+      strategySpecsDir: process.env.FUTURES_STRATEGY_SPECS_DIR || undefined,
+      // The forward runner iterates FUTURES_PRODUCTS, else the pinned list.
+      forwardProducts: forwardProducts(process.env),
+      processHealthPath: process.env.DEV_HEALTH_FILE || undefined,
+      qwenExitSummaryPath: process.env.QWEN_EXIT_SUMMARY_PATH || undefined,
+      kronosSummaryPath: process.env.KRONOS_SUMMARY_PATH || undefined,
+      resilienceLogPath: join(
+        dirname(config.futuresMarketDbPath),
+        'resilience.jsonl',
+      ),
+      staleAfterMs: config.marketStaleAfterMs,
+    }),
     systemUsage: createSystemUsage({
       healthPath: process.env.DEV_HEALTH_FILE || undefined,
       dataDir: process.env.DEV_DATA_DIR || undefined,
