@@ -1,11 +1,11 @@
 /* Laboratorio: ranking · chart · editor on one screen, on the demo-shell tokens. */
 .strategy-lab {
-  --lab-up: oklch(0.79 0.12 170);
-  --lab-down: oklch(0.71 0.14 30);
-  --lab-info: oklch(0.76 0.09 255);
+  --lab-up: var(--mc-long);
+  --lab-down: var(--mc-short);
+  --lab-info: var(--mc-info);
   --lab-kronos: oklch(0.78 0.1 310);
-  --lab-raised: oklch(0.21 0.01 204);
-  --lab-line: oklch(0.25 0.01 204);
+  --lab-raised: var(--mc-surface-2);
+  --lab-line: var(--mc-border);
   display: grid;
   gap: 16px;
   font-size: 14px;

@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react'
+import '../shared/mission-control/mission-control.css'
 import './DemoShell.css'
 import './ConnectedTerminal.css'
 import FuturesTerminal from './FuturesTerminal.tsx'
