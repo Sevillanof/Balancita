@@ -34,6 +34,8 @@ Resolution of simultaneous intents (deterministic, independent of input order):
   2. Among the valid ones, same product and same side: the strongest wins (strength only breaks the tie, it does not
      size); the rest are ``duplicate_same_side``. Opposite sides in one product: all ``contradictory_signals``.
   3. Survivors are allocated one by one by (strength desc, product, intent id) against the capital the previous ones left.
+An intent may carry ``entry_bucket_ms`` (default: ``bucket_ms``): the 1-minute bucket the position is opened on when the
+entry happens later than the signal's candle (``execution_timing``). The position never sees that bucket's candle.
 Time only moves forward: a decision older than the last one, an intent from a candle before the product's last
 processed candle, a candle that is not newer than the last one, or data closing after ``now`` are refused.
 """
@@ -300,6 +302,7 @@ class Portfolio:
             price, stop, target = D(intent["price"]), D(intent["stop"]), D(intent["target"])
             strength, bucket, close_ms = D(intent["strength"]), int(intent["bucket_ms"]), int(intent["data_close_ms"])
             horizon = int(intent["horizon_minutes"])
+            entry_bucket = int(intent.get("entry_bucket_ms", bucket))
             finite = all(v.is_finite() for v in (price, stop, target, strength))
         except (KeyError, TypeError, ValueError, InvalidOperation):
             return ["invalid_intent"], None
@@ -308,7 +311,11 @@ class Portfolio:
         reasons = []
         if self.last_decision_ms is not None and now_ms < self.last_decision_ms:
             reasons.append("retroactive_decision")
-        if bucket < self.last_bucket.get(product, bucket):
+        # The minute the position would be opened on is the one that must not lie behind what was processed. Without
+        # ``entry_bucket_ms`` that is the signal's own minute (unchanged); with it, the signal's minute may already be
+        # behind (candles processed while the order waited) and only the real entry minute counts. Age and causality of
+        # the signal are checked below by ``future_data`` / ``stale_data`` and, upstream, by ``guard_entry``.
+        if entry_bucket < self.last_bucket.get(product, entry_bucket):
             reasons.append("retroactive_intent")
         if close_ms > now_ms or bucket + ONE_MINUTE_MS > now_ms:
             reasons.append("future_data")
@@ -419,7 +426,8 @@ class Portfolio:
         product = intent["product_id"]
         budget = self.risk_budget_usd()
         book = PositionBook(intent, str(notional), self.tick_sizes.get(product, "1"), self.funding.get(product, ()))
-        book.on_frame(intent["bucket_ms"], _frame({"close": intent["price"], "high": intent["price"],
+        entry_bucket = int(intent.get("entry_bucket_ms", intent["bucket_ms"]))
+        book.on_frame(entry_bucket, _frame({"close": intent["price"], "high": intent["price"],
                                                    "low": intent["price"]}), None, None, None)
         if book.position is None:  # the shared simulator refused the entry
             return self._record(intent, now_ms, "rejected", plan, reasons=["target_does_not_clear_cost"])
@@ -430,7 +438,7 @@ class Portfolio:
         self.opened_intents.add(intent["intent_id"])
         if intent.get("signal_id") is not None:
             self.opened_signals.add(intent["signal_id"])
-        self.last_bucket[product] = max(self.last_bucket.get(product, 0), intent["bucket_ms"])
+        self.last_bucket[product] = max(self.last_bucket.get(product, 0), entry_bucket)
         self.marks[product] = D(intent["price"])
         return self._record(
             intent, now_ms, "opened", plan, notional_usd=str(notional), entry_price=str(book.position["entry"]),
