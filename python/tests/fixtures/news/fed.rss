@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Federal Reserve Press Releases</title>
+    <item>
+      <title>Federal Reserve issues FOMC statement</title>
+      <link>https://www.federalreserve.gov/newsevents/pressreleases/monetary20260916a.htm</link>
+      <guid>monetary20260916a</guid>
+      <pubDate>Wed, 16 Sep 2026 18:00:00 GMT</pubDate>
+      <description>Macro news without Bitcoin or EUR context is not Bitcoin-specific.</description>
+      <category>Monetary Policy</category>
+    </item>
+  </channel>
+</rss>

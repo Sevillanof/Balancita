@@ -49,7 +49,9 @@ export function mockBars(endMs: number, minutes: number): Bar[] {
 }
 
 function aggregate(bars: Bar[], start: number): Bar {
-  const group = bars.filter((bar) => bar.start >= start && bar.start < start + FIVE_MINUTES)
+  const group = bars.filter(
+    (bar) => bar.start >= start && bar.start < start + FIVE_MINUTES,
+  )
   return {
     start,
     open: group[0]!.open,
@@ -65,7 +67,10 @@ function aggregate(bars: Bar[], start: number): Bar {
  * candles with the live process's `known_at` timing, and one ticker per
  * minute. Same shapes as capture A writes, so C and D can run over it unchanged.
  */
-export function seedMockMarket(path: string, options: MockMarketOptions): { bars: number; lastBucket: number } {
+export function seedMockMarket(
+  path: string,
+  options: MockMarketOptions,
+): { bars: number; lastBucket: number } {
   const bars = mockBars(options.endMs, options.minutes ?? 720)
   const store = new FuturesMarketStore(path)
   try {
@@ -83,7 +88,11 @@ export function seedMockMarket(path: string, options: MockMarketOptions): { bars
           volumeBtc: bar.volume.toFixed(2),
         },
       ]
-      const rawResponse = JSON.stringify({ mock: serial, productId: PRODUCT, candles })
+      const rawResponse = JSON.stringify({
+        mock: serial,
+        productId: PRODUCT,
+        candles,
+      })
       store.appendOfficialCandles({
         productId: PRODUCT,
         intervalMs,
@@ -116,7 +125,14 @@ export function seedMockMarket(path: string, options: MockMarketOptions): { bars
       })
       official(MINUTE, bar, closeAt + 5_000)
       if ((bar.start + MINUTE) % FIVE_MINUTES === 0)
-        official(FIVE_MINUTES, aggregate(bars.slice(0, index + 1), bar.start + MINUTE - FIVE_MINUTES), closeAt + 5_000)
+        official(
+          FIVE_MINUTES,
+          aggregate(
+            bars.slice(0, index + 1),
+            bar.start + MINUTE - FIVE_MINUTES,
+          ),
+          closeAt + 5_000,
+        )
       const received = closeAt + 2_000
       store.append({
         type: 'ticker',

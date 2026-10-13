@@ -54,11 +54,7 @@ export function serverConfigFrom(
   return {
     host: stringValue(env, 'HOST', '127.0.0.1'),
     port: positiveInt(env, 'PORT', 8787),
-    corsOrigin: stringValue(
-      env,
-      'CORS_ORIGIN',
-      'http://localhost:5173',
-    ),
+    corsOrigin: stringValue(env, 'CORS_ORIGIN', 'http://localhost:5173'),
     marketStaleAfterMs: positiveInt(env, 'MARKET_STALE_AFTER_MS', 15_000),
     marketReconnectMinMs,
     marketReconnectMaxMs,

@@ -17,15 +17,17 @@ const dbPath =
   './data/dev-live/futures-market.sqlite'
 const days = Number(flag('--days') ?? 90)
 const toMs = flag('--to') ? Date.parse(flag('--to')!) : Date.now() - 120_000
-const fromMs = flag('--from') ? Date.parse(flag('--from')!) : toMs - days * 86_400_000
+const fromMs = flag('--from')
+  ? Date.parse(flag('--from')!)
+  : toMs - days * 86_400_000
 const pinned = JSON.parse(
   readFileSync(
     new URL('../../../../config/futures-products.json', import.meta.url),
     'utf8',
   ),
 ) as { products: { product_id: string }[] }
-const products = (flag('--products')?.split(',') ??
-  pinned.products.map((p) => p.product_id))
+const products =
+  flag('--products')?.split(',') ?? pinned.products.map((p) => p.product_id)
 const store = new FuturesMarketStore(dbPath)
 const client = createOfficialCandlesClient({ timeoutMs: 30_000 })
 try {
