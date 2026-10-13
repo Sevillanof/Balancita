@@ -47,7 +47,11 @@ export interface ProductEvaluations {
   readonly count: number
   /** Minutes the window spans: what a continuous writer would have produced. */
   readonly expected: number
-  /** `expected - count`, never negative: minutes without a verdict row. */
+  /**
+   * `expected - count`, never negative: the difference from the nominal
+   * cadence of one verdict per minute. It is not a health diagnosis: the
+   * verdict process may not be launched on purpose (`DEV_ONLY`); B1 decides health.
+   */
   readonly missing: number
   readonly first_bucket_ms: number | null
   readonly last_bucket_ms: number | null
@@ -74,8 +78,17 @@ export interface ExperimentActivity {
   /** The forward must be updating it now (registry/file); null: undetermined. */
   readonly expected_active: boolean | null
   readonly trades_in_window: number
-  /** Positions open at this moment (forward_open payload present). */
-  readonly open_positions: number
+  /**
+   * `forward_open` records with a payload: what the forward last stored, NOT a
+   * verified current position. Read it together with `last_cycle_ms`: if the
+   * forward is stopped these records are history. Verified positions are B5.
+   */
+  readonly open_records: number
+  /**
+   * Newest `checked_ms` of the forward's cycle for this experiment in scope
+   * (ms epoch); null: the forward has no cycle row for it.
+   */
+  readonly last_cycle_ms: number | null
   readonly last_trade: {
     readonly product: string
     readonly side: string | null
@@ -106,18 +119,27 @@ export interface ObservabilityActivityReport {
     readonly by_product: readonly ProductEvaluations[]
   }>
   readonly signals: Section<{
+    readonly total: number
     readonly long: number
     readonly short: number
   }>
   readonly discards: Section<{
+    /** Over ALL reasons, not just the listed ones. */
     readonly total: number
     readonly by_reason: readonly ReasonCount[]
+    /** Distinct (action, reason_code) pairs found in the window. */
+    readonly distinct_reasons: number
+    /** `by_reason` was cut to the most frequent ones; `total` still counts all. */
+    readonly truncated: boolean
+    /** Discards that belong to reasons left out of `by_reason`. */
+    readonly omitted_count: number
     /** Discards the system does not persist today (B4), so cannot be counted. */
     readonly not_recorded: readonly string[]
   }>
   readonly operations: Section<{
     readonly pair_source: 'registro del forward' | 'estado del forward'
     readonly experiments: readonly ExperimentActivity[]
+    readonly notes: readonly string[]
   }>
 }
 
@@ -139,7 +161,8 @@ export interface ObservabilityActivity {
 }
 
 export function isActivityWindow(value: unknown): value is ActivityWindow {
-  return typeof value === 'string' && value in ACTIVITY_WINDOWS
+  // Own keys only: `toString`, `constructor` or `__proto__` are `in` any object.
+  return typeof value === 'string' && Object.hasOwn(ACTIVITY_WINDOWS, value)
 }
 
 function evidenceOf(
@@ -252,12 +275,12 @@ function readVerdicts(
     }
     return {
       byProduct,
-      reasons: [...reasons.values()]
-        .sort(
-          (a, b) =>
-            b.count - a.count || a.reason_code.localeCompare(b.reason_code),
-        )
-        .slice(0, MAX_REASONS),
+      reasons: [...reasons.values()].sort(
+        (a, b) =>
+          b.count - a.count ||
+          a.reason_code.localeCompare(b.reason_code) ||
+          a.action.localeCompare(b.action),
+      ),
     }
   })
 }
@@ -344,6 +367,9 @@ function readOperations(
         WHERE strategy_id = ? AND product_id = ?
           AND entry_bucket_ms >= ? AND entry_bucket_ms < ?`,
     )
+    const cycleRow = db.prepare(
+      'SELECT payload FROM forward_status WHERE strategy_id = ? AND product_id = ?',
+    )
     const openRow = db.prepare(
       'SELECT payload FROM forward_open WHERE strategy_id = ? AND product_id = ?',
     )
@@ -351,10 +377,15 @@ function readOperations(
     for (const strategy of set.strategies) {
       let trades = 0
       let open = 0
+      let cycle: number | null = null
       let last: ExperimentActivity['last_trade'] = null
       for (const product of set.products) {
         trades +=
           num(rowOf(inWindow.get(strategy.id, product, fromMs, toMs)).n) ?? 0
+        const c = cycleRow.get(strategy.id, product) as Row | undefined
+        const checked = c ? num(parseTrade(c.payload).checked_ms) : null
+        if (checked !== null && (cycle === null || checked > cycle))
+          cycle = checked
         const o = openRow.get(strategy.id, product) as Row | undefined
         if (o && o.payload !== null && o.payload !== 'null') open += 1
         const row = newest.get(strategy.id, product) as Row | undefined
@@ -379,7 +410,8 @@ function readOperations(
         experiment_id: strategy.id,
         expected_active: strategy.expected,
         trades_in_window: trades,
-        open_positions: open,
+        open_records: open,
+        last_cycle_ms: cycle,
         last_trade: last,
       })
     }
@@ -446,7 +478,10 @@ export function createObservabilityActivity(
           verdicts.state === 'read'
             ? {
                 state: 'ok',
-                evidence: verdictEvidence,
+                evidence: {
+                  ...verdictEvidence,
+                  rule: `${verdictRule}; missing = diferencia con la cadencia nominal (1 por minuto), no un diagnóstico de salud: si verdict no está lanzado (DEV_ONLY) esos minutos no son un fallo; la salud la determina B1`,
+                },
                 total: verdicts.value.byProduct.reduce(
                   (a, p) => a + p.count,
                   0,
@@ -462,6 +497,10 @@ export function createObservabilityActivity(
                   ...verdictEvidence,
                   rule: 'veredictos cuya acción seleccionada es LONG o SHORT (propuesta direccional)',
                 },
+                total: verdicts.value.byProduct.reduce(
+                  (a, p) => a + p.long + p.short,
+                  0,
+                ),
                 long: verdicts.value.byProduct.reduce((a, p) => a + p.long, 0),
                 short: verdicts.value.byProduct.reduce(
                   (a, p) => a + p.short,
@@ -478,7 +517,12 @@ export function createObservabilityActivity(
                   rule: 'veredictos cuya acción es WAIT o ABSTAIN, agrupados por reason_code',
                 },
                 total: verdicts.value.reasons.reduce((a, r) => a + r.count, 0),
-                by_reason: verdicts.value.reasons,
+                by_reason: verdicts.value.reasons.slice(0, MAX_REASONS),
+                distinct_reasons: verdicts.value.reasons.length,
+                truncated: verdicts.value.reasons.length > MAX_REASONS,
+                omitted_count: verdicts.value.reasons
+                  .slice(MAX_REASONS)
+                  .reduce((a, r) => a + r.count, 0),
                 not_recorded: [
                   'entradas bloqueadas o descartadas por el forward (solo su recuento acumulado en forward_status)',
                   'fallos y esperas de Qwen',
@@ -492,6 +536,10 @@ export function createObservabilityActivity(
                 evidence: opsEvidence,
                 pair_source: operations.value.set.source,
                 experiments: operations.value.experiments,
+                notes: [
+                  'open_records son los registros de forward_open, no posiciones actuales verificadas: léelos junto con last_cycle_ms (con el forward detenido son historia)',
+                  'las operaciones son las que el forward ya cerró o almacenó; ninguna propuesta cuenta como ejecutada',
+                ],
               }
             : (unavailable(opsEvidence, operations.detail) as Section<never>),
       }

@@ -14,6 +14,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { buildLiveGateway } from './gateway.ts'
 import {
   createObservabilityActivity,
+  isActivityWindow,
   type ObservabilityActivityOptions,
   type ObservabilityActivityReport,
 } from './observability-activity.ts'
@@ -268,6 +269,97 @@ describe('observability activity', () => {
     })
   })
 
+  describe('window validation', () => {
+    it('accepts only its own keys', () => {
+      expect(isActivityWindow('3h')).toBe(true)
+      expect(isActivityWindow('24h')).toBe(true)
+      for (const bad of [
+        'toString',
+        'constructor',
+        '__proto__',
+        'hasOwnProperty',
+        'valueOf',
+        '',
+        '7d',
+        undefined,
+        ['3h'],
+        3,
+      ])
+        expect(isActivityWindow(bad)).toBe(false)
+    })
+  })
+
+  describe('discard totals', () => {
+    it('totals every reason and says when the list was cut', () => {
+      const b = box()
+      // 70 distinct reasons: reason r<i> appears (i % 3) + 1 times, spread over products.
+      const rows: VerdictRow[] = []
+      let minute = 0
+      for (let r = 0; r < 70; r += 1)
+        for (let k = 0; k < (r % 3) + 1; k += 1) {
+          rows.push({
+            product: PRODUCTS[minute % PRODUCTS.length]!,
+            bucket: TO - (Math.floor(minute / PRODUCTS.length) + 1) * MINUTE,
+            action: r % 2 ? 'ABSTAIN' : 'WAIT',
+            reason: `reason_${String(r).padStart(2, '0')}`,
+          })
+          minute += 1
+        }
+      rows.push({
+        product: 'PF_XBTUSD',
+        bucket: TO - 100 * MINUTE,
+        action: 'LONG',
+        reason: 'c25_long_pullback',
+      })
+      seedVerdictRows(b.verdictsDb, rows)
+      const r = report(b)
+      const discards = r.discards as any
+      const expectedDiscards = rows.length - 1
+      expect(discards.by_reason).toHaveLength(50)
+      expect(discards.distinct_reasons).toBe(70)
+      expect(discards.truncated).toBe(true)
+      expect(discards.total).toBe(expectedDiscards)
+      const listed = discards.by_reason.reduce(
+        (a: number, x: any) => a + x.count,
+        0,
+      )
+      expect(discards.omitted_count).toBe(expectedDiscards - listed)
+      expect(discards.omitted_count).toBeGreaterThan(0)
+      // evaluations = signals + discards, whatever the list shows.
+      expect((r.evaluations as any).total).toBe(rows.length)
+      expect((r.signals as any).total).toBe(1)
+      expect((r.evaluations as any).total).toBe(
+        (r.signals as any).total + discards.total,
+      )
+      // The most frequent reasons come first, ties by code.
+      const counts = discards.by_reason.map((x: any) => x.count)
+      expect(counts).toEqual([...counts].sort((a, b) => b - a))
+    })
+
+    it('does not flag truncation when everything fits', () => {
+      const b = box()
+      seedVerdictRows(b.verdictsDb, continuous(['PF_XBTUSD'], 5))
+      const discards = report(b).discards as any
+      expect([
+        discards.truncated,
+        discards.omitted_count,
+        discards.distinct_reasons,
+      ]).toEqual([false, 0, 1])
+    })
+  })
+
+  describe('missing minutes', () => {
+    it('is described as the difference from the nominal cadence, not as health', () => {
+      const b = box()
+      seedVerdictRows(b.verdictsDb, continuous(['PF_XBTUSD'], 10))
+      const rule = (report(b).evaluations as any).evidence.rule as string
+      expect(rule).toMatch(/cadencia nominal/)
+      expect(rule).toMatch(/no un diagnóstico de salud/)
+      expect(rule).toMatch(/DEV_ONLY/)
+      expect(rule).toMatch(/B1/)
+    })
+  })
+
   describe('last operation per experiment (forward)', () => {
     it('reports the newest trade across products, the window count and open positions', () => {
       const b = box()
@@ -347,8 +439,64 @@ describe('observability activity', () => {
       const c29 = (report(b).operations as any).experiments.find(
         (e: any) => e.experiment_id === 'C29',
       )
-      expect(c29.open_positions).toBe(2)
+      expect(c29.open_records).toBe(2)
       expect(c29.expected_active).toBe(true)
+    })
+
+    it('a stopped forward keeps its records but they are not presented as current', () => {
+      const b = box()
+      const stoppedFor = 3 * 24 * HOUR
+      seedForward(b.forwardDb, {
+        now: NOW,
+        strategies: ['C29', 'C30'],
+        checkedAgeMs: stoppedFor,
+      })
+      seedStrategies(
+        b.strategiesDb,
+        [
+          { id: 'C29', state: 'active' },
+          { id: 'C30', state: 'active' },
+        ],
+        NOW,
+      )
+      writeForwardConfig(b, [], [])
+      openPositions(b, 'C29', ['PF_ETHUSD', 'PF_SOLUSD'])
+      const ops = report(b, '24h').operations as any
+      const c29 = ops.experiments.find((e: any) => e.experiment_id === 'C29')
+      expect(c29.open_records).toBe(2)
+      expect(c29.last_cycle_ms).toBe(NOW - stoppedFor)
+      expect(NOW - c29.last_cycle_ms).toBeGreaterThan(24 * HOUR)
+      expect(c29).not.toHaveProperty('open_positions')
+      expect(ops.notes.join(' ')).toMatch(/no posiciones actuales verificadas/)
+      expect(ops.notes.join(' ')).toMatch(/last_cycle_ms/)
+      const c30 = ops.experiments.find((e: any) => e.experiment_id === 'C30')
+      expect(c30.open_records).toBe(0)
+    })
+
+    it('has no last cycle when the forward holds no cycle row for the experiment', () => {
+      const b = box()
+      seedForward(b.forwardDb, {
+        now: NOW,
+        strategies: ['C29', 'C30'],
+        checkedAgeMs: MINUTE,
+        pairs: Object.fromEntries(PRODUCTS.map((p) => [`C30/${p}`, null])),
+      })
+      seedStrategies(
+        b.strategiesDb,
+        [
+          { id: 'C29', state: 'active' },
+          { id: 'C30', state: 'active' },
+        ],
+        NOW,
+      )
+      writeForwardConfig(b, [], [])
+      const ops = report(b).operations as any
+      expect(
+        ops.experiments.map((e: any) => [e.experiment_id, e.last_cycle_ms]),
+      ).toEqual([
+        ['C29', NOW - MINUTE],
+        ['C30', null],
+      ])
     })
 
     it('restricts the trades and positions to the product asked for', () => {
@@ -364,7 +512,7 @@ describe('observability activity', () => {
       ).experiments.find((e: any) => e.experiment_id === 'C29')
       expect(c29.trades_in_window).toBe(1)
       expect(c29.last_trade.product).toBe('PF_ETHUSD')
-      expect(c29.open_positions).toBe(1)
+      expect(c29.open_records).toBe(1)
     })
 
     it('does not depend on how long the trade history is', () => {
@@ -537,7 +685,13 @@ describe('observability activity', () => {
     it.each([
       ['', 'invalid_window'],
       ['?window=7d', 'invalid_window'],
+      ['?window=toString', 'invalid_window'],
+      ['?window=constructor', 'invalid_window'],
+      ['?window=__proto__', 'invalid_window'],
+      ['?window=hasOwnProperty', 'invalid_window'],
+      ['?window=3h&window=24h', 'invalid_window'],
       ['?window=3h&product=PF_NOPE', 'invalid_product'],
+      ['?window=3h&product=toString', 'invalid_product'],
     ])('answers 400 to %s', async (query, code) => {
       const b = box()
       const server = await app(b)

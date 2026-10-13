@@ -11,7 +11,7 @@
       "source": "paper_futures_verdicts",
       "origin": "futures-verdicts.sqlite",
       "state": "read",
-      "rule": "filas de paper_futures_verdicts con bucket_start en [3h hasta el minuto en curso); una por producto y minuto si el servicio escribe sin pausas"
+      "rule": "filas de paper_futures_verdicts con bucket_start en [3h hasta el minuto en curso); una por producto y minuto si el servicio escribe sin pausas; missing = diferencia con la cadencia nominal (1 por minuto), no un diagnóstico de salud: si verdict no está lanzado (DEV_ONLY) esos minutos no son un fallo; la salud la determina B1"
     },
     "total": 360,
     "by_product": [
@@ -125,6 +125,7 @@
       "state": "read",
       "rule": "veredictos cuya acción seleccionada es LONG o SHORT (propuesta direccional)"
     },
+    "total": 1,
     "long": 1,
     "short": 0
   },
@@ -149,6 +150,9 @@
         "count": 24
       }
     ],
+    "distinct_reasons": 2,
+    "truncated": false,
+    "omitted_count": 0,
     "not_recorded": [
       "entradas bloqueadas o descartadas por el forward (solo su recuento acumulado en forward_status)",
       "fallos y esperas de Qwen"
@@ -168,7 +172,8 @@
         "experiment_id": "C29",
         "expected_active": true,
         "trades_in_window": 1,
-        "open_positions": 1,
+        "open_records": 1,
+        "last_cycle_ms": 1789999700000,
         "last_trade": {
           "product": "PF_XBTUSD",
           "side": "LONG",
@@ -181,7 +186,8 @@
         "experiment_id": "C30",
         "expected_active": true,
         "trades_in_window": 0,
-        "open_positions": 0,
+        "open_records": 0,
+        "last_cycle_ms": 1789999700000,
         "last_trade": {
           "product": "PF_ETHUSD",
           "side": "SHORT",
@@ -190,6 +196,10 @@
           "exit_reason": "stop"
         }
       }
+    ],
+    "notes": [
+      "open_records son los registros de forward_open, no posiciones actuales verificadas: léelos junto con last_cycle_ms (con el forward detenido son historia)",
+      "las operaciones son las que el forward ya cerró o almacenó; ninguna propuesta cuenta como ejecutada"
     ]
   }
 }

@@ -13,7 +13,8 @@ Medición: `observability-activity-bench.ts`. Ejemplos (generados por las prueba
 
 `GET /api/observability/activity?window=3h|24h[&product=PF_XBTUSD]`
 
-- `window` es obligatorio: `3h` o `24h`. Otro valor o ausente: `400 {"error":{"code":"invalid_window"}}`.
+- `window` es obligatorio y solo acepta las claves propias `3h` y `24h` (también rechaza `toString`, `constructor`, `__proto__`
+  o un parámetro repetido). Otro valor o ausente: `400 {"error":{"code":"invalid_window"}}`.
 - `product` es opcional y debe estar en la lista de productos del gateway. Otro valor: `400 {"error":{"code":"invalid_product"}}`.
 - Sin `product` se agregan los 8 productos.
 
@@ -35,8 +36,12 @@ Medición: `observability-activity-bench.ts`. Ejemplos (generados por las prueba
 
 `to_ms` es el inicio del minuto en curso (límite superior **excluido**: ese veredicto aún no está cerrado) y
 `from_ms = to_ms - window`. Un veredicto cuenta si su `bucket_start` está en `[from_ms, to_ms)`. Cada producto debería tener
-un veredicto por minuto: `expected` = minutos de la ventana (180 o 1440), `missing = max(0, expected - count)`. Es el hueco
-real de evaluaciones, no una estimación; los veredictos reconstruidos de un respaldo cuentan por su `bucket_start`.
+un veredicto por minuto: `expected` = minutos de la ventana (180 o 1440), `missing = max(0, expected - count)`.
+
+**`missing` es la diferencia con la cadencia nominal de veredictos (uno por producto y minuto), no un diagnóstico de salud.**
+Si el proceso `verdict` no se lanzó a propósito (p. ej. `DEV_ONLY=vite,capture,live,forward,strategies`), esos minutos sin
+evaluaciones no son un fallo del sistema; quien determina la salud es B1. La regla de la sección lo repite en
+`evaluations.evidence.rule`. Los veredictos reconstruidos de un respaldo cuentan por su `bucket_start`.
 
 ## Contrato
 
@@ -60,10 +65,14 @@ real de evaluaciones, no una estimación; los veredictos reconstruidos de un res
       "last_signal": { "bucket_ms": 0, "action": "LONG", "reason_code": "c25_long_pullback" } // o null
     }]
   },
-  "signals":  { "state": "ok", "evidence": {...}, "long": 1, "short": 0 },
+  "signals":  { "state": "ok", "evidence": {...}, "total": 1, "long": 1, "short": 0 },
   "discards": {
-    "state": "ok", "evidence": {...}, "total": 359,
+    "state": "ok", "evidence": {...},
+    "total": 359,                       // sobre TODOS los motivos
     "by_reason": [{ "reason_code": "no_directional_proposal", "action": "WAIT", "count": 333 }],
+    "distinct_reasons": 3,              // pares (action, reason_code) distintos de la ventana
+    "truncated": false,                 // by_reason se cortó a los 50 más frecuentes
+    "omitted_count": 0,                 // descartes de los motivos que quedaron fuera de by_reason
     "not_recorded": ["..."]
   },
   "operations": {
@@ -73,9 +82,11 @@ real de evaluaciones, no una estimación; los veredictos reconstruidos de un res
       "experiment_id": "C29",
       "expected_active": true,          // false: lo vio el forward pero ya no se exige; null: no se pudo determinar
       "trades_in_window": 1,
-      "open_positions": 1,
+      "open_records": 1,                // registros de forward_open: NO son posiciones actuales verificadas
+      "last_cycle_ms": 0,               // último ciclo del forward para el experimento (null: sin fila de ciclo)
       "last_trade": { "product": "PF_XBTUSD", "side": "LONG", "entry_bucket_ms": 0, "exit_bucket_ms": 0, "exit_reason": "target" } // o null
-    }]
+    }],
+    "notes": ["..."]                    // avisos de lectura (open_records, operaciones propuestas vs almacenadas)
   }
 }
 ```
@@ -84,11 +95,16 @@ real de evaluaciones, no una estimación; los veredictos reconstruidos de un res
 - **Señales**: veredictos cuya acción seleccionada es `LONG` o `SHORT` (propuesta direccional). `last_signal` es la más reciente
   de la ventana.
 - **Descartes**: veredictos `WAIT` o `ABSTAIN`, agrupados por `(action, reason_code)`, de mayor a menor (máximo 50 códigos).
-  Evaluaciones = señales + descartes.
+  `total` se calcula sobre todos los motivos **antes** de limitar la lista: `truncated`, `distinct_reasons` y `omitted_count`
+  dicen cuánto quedó fuera. Siempre: `evaluations.total = signals.total + discards.total`.
 - **Operaciones**: por experimento (cada estrategia del forward es independiente, nada se suma entre ellos). `last_trade` es
   la última operación **de toda la historia** (puede ser anterior a la ventana: así se distingue «hace tiempo que no opera»
-  de «nunca operó», que es `null`); `trades_in_window` cuenta entradas dentro de la ventana; `open_positions` son huecos de
-  `forward_open` con posición. Los campos del trade se copian del payload del forward sin calcular nada (contabilidad
+  de «nunca operó», que es `null`); `trades_in_window` cuenta entradas dentro de la ventana; `open_records` son los registros de
+  `forward_open` con contenido: **lo último que el forward guardó, no una posición actual verificada**. Con el forward detenido
+  siguen ahí y son historia. Se leen junto con `last_cycle_ms` (el `checked_ms` más reciente del ciclo del forward para el
+  experimento en el alcance pedido; `null` si no hay fila de ciclo). Presentar posiciones actuales verificadas corresponde
+  a B5; B2 no debe usarse para eso. Ninguna operación propuesta cuenta como ejecutada: solo se informan las que el forward
+  almacenó. Los campos del trade se copian del payload del forward sin calcular nada (contabilidad
   intacta); un payload ilegible deja `side/exit_*` en `null` en lugar de fallar.
 - **Qué experimentos**: los que el forward debe actualizar ahora, reconstruidos igual que en B1 (archivo de registro, estado del
   registro, specs y productos), más los que el forward tiene en `forward_status` pero ya no se exigen (`expected_active: false`).
@@ -115,11 +131,12 @@ Informe sin caché, 60 repeticiones, Linux, caché de páginas caliente.
 
 | Historial de veredictos | 3 h p50 / p95 | 24 h p50 / p95 | Lecturas fallidas |
 | ----------------------- | ------------- | -------------- | ----------------- |
-| 2 días (102 MB)         | 3,4 / 4,6 ms  | 10,5 / 14,5 ms | 0                 |
-| 14 días (717 MB)        | 2,7 / 3,7 ms  | 10,9 / 15,9 ms | 0                 |
+| 2 días (102 MB)         | 2,6 / 3,7 ms  | 10,3 / 14,8 ms | 0                 |
+| 14 días (717 MB)        | 2,6 / 3,4 ms  | 10,2 / 11,2 ms | 0                 |
 | 28 días (1 433 MB)      | 2,6 / 3,3 ms  | 12,6 / 17,1 ms | 0                 |
 
-Con un escritor insertando veredictos entre lecturas (WAL, 14 días): 24 h p50 10,6 / p95 16,0 ms, 0 lecturas fallidas. La
+(Segunda tanda, tras los ajustes de revisión, para 2 y 14 días; 28 días es de la primera tanda: sin cambios de consulta.)
+Con un escritor insertando veredictos entre lecturas (WAL, 14 días): 24 h p50 10,2 / p95 11,8 ms, 0 lecturas fallidas. La
 latencia depende de la ventana, no del historial (14× más historial: mismo orden), y no del historial de trades (480 384 filas).
 
 ## Límites conocidos
