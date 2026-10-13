@@ -13,44 +13,44 @@ evento de entrada ──► validar/deduplicar ──► journal (write-ahead) �
 
 ### Componentes reutilizados (y quién manda en qué)
 
-| Responsabilidad | Componente (sin cambios) | Qué hace el runner con él |
-| --- | --- | --- |
-| Estrategias y contrato de señal | `multi_signals`, `signal_continuity.evaluate_cycle` | llama a `evaluate_cycle` con las estrategias congeladas y guarda con `SignalLog.ingest` |
-| Registro durable de señales, `guard_entry`, reconstrucción | `signal_continuity.SignalLog` | única fuente de verdad de las señales; el runner solo guarda referencias (`key`, `seq`, hash) |
-| Orden causal, ventana de ejecución, precio ejecutable | `execution_timing.TimedExecutor` | `submit` / `on_quote` / `advance` / `on_candle`; no se reimplementa ningún chequeo |
-| Cartera única, dimensionamiento, límites, suspensiones | `portfolio.Portfolio` + `PortfolioPolicy` | una sola instancia; el runner no lee ni escribe sus parámetros |
-| Vigilancia por cotización | `portfolio_watch.QuoteWatch` (vía `TimedExecutor(watch=...)`) | cableado; un cierre por cotización no se repite al llegar la vela |
-| Motor de posiciones, salidas, P&L | `futures_simulator.Book` (vía `Portfolio`) | nada directo |
-| Comisiones y costes | `futures_costs` | nada directo |
-| Funding tardío, conciliación, disputas, reclasificación | `portfolio_funding`, `Portfolio.dispute_funding` | 8C: eventos `funding` y `reconcile` |
-| Auditoría contable independiente | `portfolio_audit.audit` / `accounting_digest` | 8C: se ejecuta sobre el resultado integrado |
+| Responsabilidad                                            | Componente (sin cambios)                                      | Qué hace el runner con él                                                                     |
+| ---------------------------------------------------------- | ------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| Estrategias y contrato de señal                            | `multi_signals`, `signal_continuity.evaluate_cycle`           | llama a `evaluate_cycle` con las estrategias congeladas y guarda con `SignalLog.ingest`       |
+| Registro durable de señales, `guard_entry`, reconstrucción | `signal_continuity.SignalLog`                                 | única fuente de verdad de las señales; el runner solo guarda referencias (`key`, `seq`, hash) |
+| Orden causal, ventana de ejecución, precio ejecutable      | `execution_timing.TimedExecutor`                              | `submit` / `on_quote` / `advance` / `on_candle`; no se reimplementa ningún chequeo            |
+| Cartera única, dimensionamiento, límites, suspensiones     | `portfolio.Portfolio` + `PortfolioPolicy`                     | una sola instancia; el runner no lee ni escribe sus parámetros                                |
+| Vigilancia por cotización                                  | `portfolio_watch.QuoteWatch` (vía `TimedExecutor(watch=...)`) | cableado; un cierre por cotización no se repite al llegar la vela                             |
+| Motor de posiciones, salidas, P&L                          | `futures_simulator.Book` (vía `Portfolio`)                    | nada directo                                                                                  |
+| Comisiones y costes                                        | `futures_costs`                                               | nada directo                                                                                  |
+| Funding tardío, conciliación, disputas, reclasificación    | `portfolio_funding`, `Portfolio.dispute_funding`              | 8C: eventos `funding` y `reconcile`                                                           |
+| Auditoría contable independiente                           | `portfolio_audit.audit` / `accounting_digest`                 | 8C: se ejecuta sobre el resultado integrado                                                   |
 
 Lo **único nuevo**: sobre, orden y deduplicación de eventos, journal del runner, máquina de estados, huella de configuración, contrato de lectura. Nada de eso decide una operación.
 
 ## 2. Modelo de durabilidad: journal de entradas + replay determinista
 
-Decisión central (consultada con el asesor; ver §8): **la verdad durable es un journal append-only y encadenado por hash de las *entradas* del runner, no un volcado del estado.** El estado financiero (`Portfolio`, `Book`, `TimedExecutor`, `QuoteWatch`) es una función pura del journal. Recuperar = construir componentes nuevos y re-aplicar el journal; el checkpoint no guarda estado, guarda **resúmenes verificables** (hash del journal en la posición N + digests contables) que el replay debe reproducir.
+Decisión central (consultada con el asesor; ver §8): **la verdad durable es un journal append-only y encadenado por hash de las _entradas_ del runner, no un volcado del estado.** El estado financiero (`Portfolio`, `Book`, `TimedExecutor`, `QuoteWatch`) es una función pura del journal. Recuperar = construir componentes nuevos y re-aplicar el journal; el checkpoint no guarda estado, guarda **resúmenes verificables** (hash del journal en la posición N + digests contables) que el replay debe reproducir.
 
 Por qué así:
 
-* Los `Book` y el `Portfolio` guardan estructuras (`Decimal`, objetos, deques) que no tienen formato versionado y la alternativa existente es `pickle`, prohibido como formato de producción. Serializar el estado exigiría tocar módulos de las etapas 5-7. El replay no toca ninguno.
-* "Un checkpoint nunca declara procesado un evento cuyos efectos no son recuperables" se cumple por construcción: los efectos **son** una función del journal, y el checkpoint se escribe después de que la entrada esté en disco.
-* La prueba de equivalencia pedida (continua = interrumpida = en otro proceso) es la propiedad básica del diseño, no un añadido.
-* Costo: el replay es O(n) en eventos. Aceptable para esta etapa (sesiones paper offline). Si más adelante hace falta, un snapshot versionado se añade como optimización verificable contra el replay, no como fuente de verdad.
+- Los `Book` y el `Portfolio` guardan estructuras (`Decimal`, objetos, deques) que no tienen formato versionado y la alternativa existente es `pickle`, prohibido como formato de producción. Serializar el estado exigiría tocar módulos de las etapas 5-7. El replay no toca ninguno.
+- "Un checkpoint nunca declara procesado un evento cuyos efectos no son recuperables" se cumple por construcción: los efectos **son** una función del journal, y el checkpoint se escribe después de que la entrada esté en disco.
+- La prueba de equivalencia pedida (continua = interrumpida = en otro proceso) es la propiedad básica del diseño, no un añadido.
+- Costo: el replay es O(n) en eventos. Aceptable para esta etapa (sesiones paper offline). Si más adelante hace falta, un snapshot versionado se añade como optimización verificable contra el replay, no como fuente de verdad.
 
 ### Tipos de entrada del journal (contrato `balancita-paper-runner-journal.v1`)
 
 Cada línea: `{seq, t_ms, kind, data, prev, hash}`, mismo formato que `SignalLog` / `Journal` (hash encadenado, `fsync` antes de contar como escrita, cola truncada = escritura incompleta, cualquier otro daño = rechazo).
 
-| `kind` | Clase | Contenido | Se re-aplica en replay |
-| --- | --- | --- | --- |
-| `run_start` | control | manifiesto de configuración (§5) | verifica |
-| `event_accepted` | **entrada** | sobre del evento (`cycle`, `quote`, `candle`, `funding`, `reconcile`, `clock`) tal como se aplicó | sí |
-| `signals_persisted` | **entrada** | referencias a las señales que el ciclo escribió en `SignalLog` (`key`, `seq`, `entry_hash`) | verifica contra `SignalLog`, no re-evalúa |
-| `decision` | **entrada** | `signal_key`, `decided_ms`, `reference_price`, `atr` | sí (`TimedExecutor.submit`) |
-| `event_rejected` | informativa para el estado financiero | sobre + motivo (`duplicate`, `conflict`, `out_of_order`, `invalid`) | solo contadores y, en 8B, el `OffsetLedger` (un evento rechazado **sí** consume su offset) |
-| `checkpoint` | control | `{upto_seq, journal_hash, digests}` | verifica |
-| `recovery` | control | qué se reanudó, qué se declaró no cubierto | no |
+| `kind`              | Clase                                 | Contenido                                                                                         | Se re-aplica en replay                                                                     |
+| ------------------- | ------------------------------------- | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `run_start`         | control                               | manifiesto de configuración (§5)                                                                  | verifica                                                                                   |
+| `event_accepted`    | **entrada**                           | sobre del evento (`cycle`, `quote`, `candle`, `funding`, `reconcile`, `clock`) tal como se aplicó | sí                                                                                         |
+| `signals_persisted` | **entrada**                           | referencias a las señales que el ciclo escribió en `SignalLog` (`key`, `seq`, `entry_hash`)       | verifica contra `SignalLog`, no re-evalúa                                                  |
+| `decision`          | **entrada**                           | `signal_key`, `decided_ms`, `reference_price`, `atr`                                              | sí (`TimedExecutor.submit`)                                                                |
+| `event_rejected`    | informativa para el estado financiero | sobre + motivo (`duplicate`, `conflict`, `out_of_order`, `invalid`)                               | solo contadores y, en 8B, el `OffsetLedger` (un evento rechazado **sí** consume su offset) |
+| `checkpoint`        | control                               | `{upto_seq, journal_hash, digests}`                                                               | verifica                                                                                   |
+| `recovery`          | control                               | qué se reanudó, qué se declaró no cubierto                                                        | no                                                                                         |
 
 Las **decisiones del runner** son entradas explícitas (con su propio `decided_ms`) y no un efecto implícito de la llegada de la señal. Esto es lo que permite distinguir A (señal persistida, decisión pendiente) de una decisión ya tomada, y evita que una recuperación "decida en el pasado": una obligación pendiente se decide con el reloj de la recuperación y `guard_entry` rechaza lo vencido.
 
@@ -75,7 +75,7 @@ CREATED ─► PROCESSING ─► FINISHED
           DEGRADED          (datos insuficientes, hueco sin evidencia, conflicto de funding abierto)
               │
  crash ─► RECOVERING ─► PROCESSING | REFUSED   (checkpoint/journal corrupto, config incompatible)
-              
+
 STOPPED: parada ordenada (sin pérdida de obligaciones)
 ```
 
@@ -95,21 +95,21 @@ Se corresponde 1:1 con los registros de `TimedExecutor` (`pending`, `opened`, `r
 
 ## 4. Invariantes (cada una tiene prueba)
 
-| # | Invariante | Dónde se garantiza | Cobertura 8A |
-| --- | --- | --- | --- |
-| I1 | `candle_close ≤ generated ≤ persisted ≤ decided ≤ execution_eligible ≤ entry` | `guard_entry` + `TimedExecutor` | sí |
-| I2 | señal reconstruida nunca abre; señal vencida nunca abre | `guard_entry` | sí |
-| I3 | el precio de referencia no sustituye a una cotización ejecutable; sin cotización válida en ventana → rechazo | `TimedExecutor` | sí |
-| I4 | una cotización posterior no mejora una decisión anterior (la primera cotización usable manda) | `TimedExecutor` | sí |
-| I5 | evento duplicado (mismo `event_id` y contenido) se ignora y se cuenta; mismo `event_id` con contenido distinto es conflicto y nunca reemplaza al primero | runner | sí |
-| I6 | evento fuera de orden (llegada anterior al reloj del runner) se rechaza, no se reordena | runner (política explícita) | sí |
-| I7 | un cierre por cotización no se repite al llegar la vela; un solo cierre | `QuoteWatch` | sí |
-| I8 | un capital no se reserva dos veces: la reserva ocurre solo en `Portfolio.decide` al ejecutar, y es secuencial | `Portfolio` | sí |
-| I9 | misma secuencia de eventos válidos ⇒ mismo `accounting_digest` y mismo hash de journal | replay | sí (en memoria); 8B entre procesos |
-| I10 | un checkpoint no declara procesado un evento no durable | orden de escritura | 8B |
-| I11 | `source_offset` confirmado solo si es contiguo; huecos explícitos | `OffsetLedger` | 8B |
-| I12 | una suspensión no bloquea cierres, vigilancia, funding, conciliación, recuperación ni auditoría | `Portfolio` | 8C |
-| I13 | una posición abierta durante una interrupción declara la falta de cobertura de mercado; nunca "protegida" sin cotizaciones que lo demuestren | runner (`coverage_gap`) | 8C |
+| #   | Invariante                                                                                                                                               | Dónde se garantiza              | Cobertura 8A                       |
+| --- | -------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------- | ---------------------------------- |
+| I1  | `candle_close ≤ generated ≤ persisted ≤ decided ≤ execution_eligible ≤ entry`                                                                            | `guard_entry` + `TimedExecutor` | sí                                 |
+| I2  | señal reconstruida nunca abre; señal vencida nunca abre                                                                                                  | `guard_entry`                   | sí                                 |
+| I3  | el precio de referencia no sustituye a una cotización ejecutable; sin cotización válida en ventana → rechazo                                             | `TimedExecutor`                 | sí                                 |
+| I4  | una cotización posterior no mejora una decisión anterior (la primera cotización usable manda)                                                            | `TimedExecutor`                 | sí                                 |
+| I5  | evento duplicado (mismo `event_id` y contenido) se ignora y se cuenta; mismo `event_id` con contenido distinto es conflicto y nunca reemplaza al primero | runner                          | sí                                 |
+| I6  | evento fuera de orden (llegada anterior al reloj del runner) se rechaza, no se reordena                                                                  | runner (política explícita)     | sí                                 |
+| I7  | un cierre por cotización no se repite al llegar la vela; un solo cierre                                                                                  | `QuoteWatch`                    | sí                                 |
+| I8  | un capital no se reserva dos veces: la reserva ocurre solo en `Portfolio.decide` al ejecutar, y es secuencial                                            | `Portfolio`                     | sí                                 |
+| I9  | misma secuencia de eventos válidos ⇒ mismo `accounting_digest` y mismo hash de journal                                                                   | replay                          | sí (en memoria); 8B entre procesos |
+| I10 | un checkpoint no declara procesado un evento no durable                                                                                                  | orden de escritura              | 8B                                 |
+| I11 | `source_offset` confirmado solo si es contiguo; huecos explícitos                                                                                        | `OffsetLedger`                  | 8B                                 |
+| I12 | una suspensión no bloquea cierres, vigilancia, funding, conciliación, recuperación ni auditoría                                                          | `Portfolio`                     | 8C                                 |
+| I13 | una posición abierta durante una interrupción declara la falta de cobertura de mercado; nunca "protegida" sin cotizaciones que lo demuestren             | runner (`coverage_gap`)         | 8C                                 |
 
 ## 5. Huella de configuración (manifiesto)
 
@@ -135,36 +135,36 @@ No se incluye el código fuente de cada módulo: cualquier corrección de códig
 
 ## 8. Decisiones que requieren autorización de Fran
 
-| # | Decisión | Propuesta por defecto (activa hasta que Fran diga otra cosa) |
-| --- | --- | --- |
-| D1 | Entregar por fases (8A, 8B, 8C) como tres PR en borrador, cada una revisada antes de la siguiente | sí |
-| D2 | Durabilidad por journal de entradas + replay, **sin** snapshot serializado del estado | sí; evita `pickle` y no toca etapas 5-7 |
-| D3 | Qué cuenta como "configuración incompatible": manifiesto de políticas/esquemas/estrategias (no código de módulos). Un cambio de código de motor que altere resultados se detecta por digest, no por hash de fuente | sí |
-| D4 | Obligaciones pendientes tras una caída: el runner **no** reinterpreta el tiempo; decide con el reloj de la recuperación y las señales vencidas se rechazan (`signal_expired`), sin ventana nueva; la recuperación nunca re-ingesta con un `t_ms` pasado | sí |
-| D5 | Sin dimensionamiento dinámico (enmienda pendiente): tamaño = el de `Portfolio` con `PortfolioPolicy` | sí, desactivado |
-| D6 | Disputas de funding: solo cuarentena y reclasificación existentes; ningún procedimiento automático de resolución | sí |
-| D7 | Órdenes pendientes que cruzan una caída (hueco E): (a) aceptar el sesgo y marcarlo, o (b) añadir a `TimedExecutor` un motivo `runner_interrupted`/cancelación (toca la etapa 6) | (a) en 8B, marcando el riesgo; (b) solo si Fran lo aprueba |
-| D8 | Procedimiento manual para un hueco de offset permanente | `gap_declared` explícito de un operador, nunca automático |
+| #   | Decisión                                                                                                                                                                                                                                                | Propuesta por defecto (activa hasta que Fran diga otra cosa) |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| D1  | Entregar por fases (8A, 8B, 8C) como tres PR en borrador, cada una revisada antes de la siguiente                                                                                                                                                       | sí                                                           |
+| D2  | Durabilidad por journal de entradas + replay, **sin** snapshot serializado del estado                                                                                                                                                                   | sí; evita `pickle` y no toca etapas 5-7                      |
+| D3  | Qué cuenta como "configuración incompatible": manifiesto de políticas/esquemas/estrategias (no código de módulos). Un cambio de código de motor que altere resultados se detecta por digest, no por hash de fuente                                      | sí                                                           |
+| D4  | Obligaciones pendientes tras una caída: el runner **no** reinterpreta el tiempo; decide con el reloj de la recuperación y las señales vencidas se rechazan (`signal_expired`), sin ventana nueva; la recuperación nunca re-ingesta con un `t_ms` pasado | sí                                                           |
+| D5  | Sin dimensionamiento dinámico (enmienda pendiente): tamaño = el de `Portfolio` con `PortfolioPolicy`                                                                                                                                                    | sí, desactivado                                              |
+| D6  | Disputas de funding: solo cuarentena y reclasificación existentes; ningún procedimiento automático de resolución                                                                                                                                        | sí                                                           |
+| D7  | Órdenes pendientes que cruzan una caída (hueco E): (a) aceptar el sesgo y marcarlo, o (b) añadir a `TimedExecutor` un motivo `runner_interrupted`/cancelación (toca la etapa 6)                                                                         | (a) en 8B, marcando el riesgo; (b) solo si Fran lo aprueba   |
+| D8  | Procedimiento manual para un hueco de offset permanente                                                                                                                                                                                                 | `gap_declared` explícito de un operador, nunca automático    |
 
 ## 9. Revisión del asesor (Opus) y cómo se resolvió
 
 Veredicto: el diseño es sólido; se cerraron estos huecos.
 
-| Hueco | Resolución |
-| --- | --- |
-| A. "Píldora venenosa": una entrada ya escrita cuya aplicación lanza deja el runner en `REFUSED` para siempre | **Se valida por completo antes de escribir en el journal** (`_market_check`: campos, Decimal, velas cerradas/duplicadas/atrasadas). Regla: `_apply` no debe lanzar sobre una entrada que pasó la validación; si lo hiciera es un defecto, no un estado recuperable (prueba: `test_malformed_events_are_rejected_and_journaled`) |
-| B. Entradas fuera del journal (`funding`, `tick_sizes`, `risk_policy`) | `funding_hash` y `risk_policy_hash` entran al manifiesto; `tick_sizes` no se usa. Funding nuevo llega como evento en 8C |
-| C. Contexto `Decimal` global | `prec` y `rounding` en el manifiesto: una recuperación con otro contexto se rechaza |
-| D. Persistencia retroactiva: re-ingerir una señal con el `t_ms` original la haría parecer persistida en el pasado | **Regla**: en replay el `SignalLog` es de solo lectura (`_signals` solo corre en el camino vivo). Toda re-ingesta de una obligación usa el reloj de la recuperación |
-| E. Orden pendiente que cruza una caída: si la recuperación llega después del `deadline`, `_expire` la culpa al mercado (`no_quote_in_window`); si llega antes, usa la primera cotización posterior aunque hubo cotizaciones no observadas | `TimedExecutor` no tiene motivo `runner_interrupted` ni cancelación. Resolverlo toca la etapa 6. **Decisión D7 (Fran)** |
-| F. `seq` de un conflicto de `SignalLog` | `signals_persisted` referencia solo la línea canónica de `kind=signal` (`persisted`/`duplicate`/`already_present`); un `conflict` no genera referencia ni decisión |
-| Caso A son tres sub-estados | (1) `event_accepted(cycle)` sin señal en `SignalLog`; (2) señal en `SignalLog` sin `signals_persisted`; (3) `signals_persisted` sin `decision`. 8B los detecta y resuelve cada uno con el reloj de la recuperación |
-| Invariante nueva I14 | toda señal original del `SignalLog` tiene un `event_accepted(cycle)` previo; si no, es una escritura huérfana y se rechaza la recuperación |
-| Bases de tiempo | velas: `bucket + 60 s`; cotizaciones: `received_ms`; decisiones: `decided_ms`. I6 usa el reloj de llegada (`t_ms`) del sobre, el mismo que ve el ejecutor (`_tick`); una vela con `bucket + 60 s > t_ms` se rechaza (`candle_not_closed`) |
-| Offsets (8B) | alcance por `(fuente, stream)`; `epoch` si la fuente reinicia numeración; "procesado" = `event_accepted` o `event_rejected` durable; el cierre señal→decisión es una obligación aparte; un hueco permanente exige una entrada durable `gap_declared` con evidencia (D8); `event_id` manda en la deduplicación, el offset en la continuidad |
+| Hueco                                                                                                                                                                                                                                     | Resolución                                                                                                                                                                                                                                                                                                                                 |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| A. "Píldora venenosa": una entrada ya escrita cuya aplicación lanza deja el runner en `REFUSED` para siempre                                                                                                                              | **Se valida por completo antes de escribir en el journal** (`_market_check`: campos, Decimal, velas cerradas/duplicadas/atrasadas). Regla: `_apply` no debe lanzar sobre una entrada que pasó la validación; si lo hiciera es un defecto, no un estado recuperable (prueba: `test_malformed_events_are_rejected_and_journaled`)            |
+| B. Entradas fuera del journal (`funding`, `tick_sizes`, `risk_policy`)                                                                                                                                                                    | `funding_hash` y `risk_policy_hash` entran al manifiesto; `tick_sizes` no se usa. Funding nuevo llega como evento en 8C                                                                                                                                                                                                                    |
+| C. Contexto `Decimal` global                                                                                                                                                                                                              | `prec` y `rounding` en el manifiesto: una recuperación con otro contexto se rechaza                                                                                                                                                                                                                                                        |
+| D. Persistencia retroactiva: re-ingerir una señal con el `t_ms` original la haría parecer persistida en el pasado                                                                                                                         | **Regla**: en replay el `SignalLog` es de solo lectura (`_signals` solo corre en el camino vivo). Toda re-ingesta de una obligación usa el reloj de la recuperación                                                                                                                                                                        |
+| E. Orden pendiente que cruza una caída: si la recuperación llega después del `deadline`, `_expire` la culpa al mercado (`no_quote_in_window`); si llega antes, usa la primera cotización posterior aunque hubo cotizaciones no observadas | `TimedExecutor` no tiene motivo `runner_interrupted` ni cancelación. Resolverlo toca la etapa 6. **Decisión D7 (Fran)**                                                                                                                                                                                                                    |
+| F. `seq` de un conflicto de `SignalLog`                                                                                                                                                                                                   | `signals_persisted` referencia solo la línea canónica de `kind=signal` (`persisted`/`duplicate`/`already_present`); un `conflict` no genera referencia ni decisión                                                                                                                                                                         |
+| Caso A son tres sub-estados                                                                                                                                                                                                               | (1) `event_accepted(cycle)` sin señal en `SignalLog`; (2) señal en `SignalLog` sin `signals_persisted`; (3) `signals_persisted` sin `decision`. 8B los detecta y resuelve cada uno con el reloj de la recuperación                                                                                                                         |
+| Invariante nueva I14                                                                                                                                                                                                                      | toda señal original del `SignalLog` tiene un `event_accepted(cycle)` previo; si no, es una escritura huérfana y se rechaza la recuperación                                                                                                                                                                                                 |
+| Bases de tiempo                                                                                                                                                                                                                           | velas: `bucket + 60 s`; cotizaciones: `received_ms`; decisiones: `decided_ms`. I6 usa el reloj de llegada (`t_ms`) del sobre, el mismo que ve el ejecutor (`_tick`); una vela con `bucket + 60 s > t_ms` se rechaza (`candle_not_closed`)                                                                                                  |
+| Offsets (8B)                                                                                                                                                                                                                              | alcance por `(fuente, stream)`; `epoch` si la fuente reinicia numeración; "procesado" = `event_accepted` o `event_rejected` durable; el cierre señal→decisión es una obligación aparte; un hueco permanente exige una entrada durable `gap_declared` con evidencia (D8); `event_id` manda en la deduplicación, el offset en la continuidad |
 
 ## 10. Plan por fase
 
-* **8A (esta PR)**: este documento, contratos de evento y de journal, `RunnerJournal` en memoria, `PaperRunner` mínimo (ciclo → señal persistida → decisión → ejecutor temporal → cartera, con vigilancia por cotización cableada), reconstrucción por replay con digests iguales, pruebas de escenarios 1-6, 8, 18, 20 y de causalidad.
-* **8B**: journal en archivo (fsync, cola truncada, rechazo de corrupción), checkpoint verificable, `OffsetLedger`, recuperación en otro proceso, caídas A-C y G, equivalencia continua/interrumpida/otro proceso.
-* **8C**: funding, conciliación, disputas y reclasificación integrados; suspensiones a través de caídas; cobertura de mercado durante interrupciones; informe, auditoría independiente, demo y comparación continua vs recuperada.
+- **8A (esta PR)**: este documento, contratos de evento y de journal, `RunnerJournal` en memoria, `PaperRunner` mínimo (ciclo → señal persistida → decisión → ejecutor temporal → cartera, con vigilancia por cotización cableada), reconstrucción por replay con digests iguales, pruebas de escenarios 1-6, 8, 18, 20 y de causalidad.
+- **8B**: journal en archivo (fsync, cola truncada, rechazo de corrupción), checkpoint verificable, `OffsetLedger`, recuperación en otro proceso, caídas A-C y G, equivalencia continua/interrumpida/otro proceso.
+- **8C**: funding, conciliación, disputas y reclasificación integrados; suspensiones a través de caídas; cobertura de mercado durante interrupciones; informe, auditoría independiente, demo y comparación continua vs recuperada.
