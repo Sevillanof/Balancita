@@ -255,11 +255,29 @@ def accrue_funding(periods, start_ms, end_ms, notional):
         total += D(str(rate)) * D(b - a) / D(3_600_000) * notional
     return total, covered
 
+# How a stop that the market crossed is priced. ``level`` (default, the behaviour of every earlier experiment): the
+# stop executes at its own level, plus the modelled impact. ``gap_open``: when the candle *opened* beyond the stop the
+# stop could not execute at its level, so the reference is the candle open (never better than the stop). ``gap_worst``:
+# any touch of the stop is priced at the far end of the candle (low for a LONG, high for a SHORT), a pessimistic bound.
+# Both gap policies are estimates from OHLC (``stop_exit.evidence`` says so); only a quote makes the price demonstrable.
+# ``gap_open`` on a candle without an open falls back to the ``gap_worst`` bound: never an optimistic invention.
+STOP_POLICIES = ("level", "gap_open", "gap_worst")
+
+
+def _worse(side, a, b):
+    """The price that is worse for a position on ``side`` when it is *sold* (LONG: lower) or *bought back* (SHORT: higher)."""
+    return min(a, b) if side == "LONG" else max(a, b)
+
+
 class Book:
     """One independent paper book for one strategy: one position at a time, fixed notional."""
 
     def __init__(self, spec, *, product_id=DEFAULT_PRODUCT, tick_size="1", notional_usd=DEFAULT_NOTIONAL_USD,
-                 funding=()):
+                 funding=(), stop_policy="level"):
+        if stop_policy not in STOP_POLICIES:
+            raise ValueError("stop_policy must be one of {}".format(STOP_POLICIES))
+        self.stop_policy = stop_policy
+        self.fills = []   # one record per closed trade, parallel to ``trades``: reference price before the exit cost, evidence
         self.spec, self.product, self.tick_size = spec, product_id, tick_size
         # (start_ms, end_ms, relative rate per hour); a positive rate is paid by longs.
         self.funding = sorted((int(a), int(b), D(str(r))) for a, b, r in funding)
@@ -349,7 +367,7 @@ class Book:
         if low is not None and high is not None:
             low, high = D(low), D(high)
             if (low <= position["stop"]) if long else (high >= position["stop"]):
-                exit_price, reason = position["stop"], "stop"
+                exit_price, reason = self._stop_reference(position, current, low, high), "stop"
             elif (high >= position["target"]) if long else (low <= position["target"]):
                 exit_price, reason = position["target"], "target"
         if exit_price is None and close is not None:
@@ -361,15 +379,44 @@ class Book:
         if exit_price is not None:
             self._finish(bucket, exit_price, reason)
 
-    def _settle(self, bucket, exit_price, reason):
-        """What closing the open position at ``exit_price`` would net, without booking it."""
+    def _stop_reference(self, position, current, low, high):
+        """Reference price of a stop the candle crossed, before the modelled exit cost. Never better than the stop."""
+        stop, long = position["stop"], position["side"] == "LONG"
+        evidence = "stop_level"
+        price = stop
+        if self.stop_policy == "gap_worst":
+            price, evidence = _worse(position["side"], stop, low if long else high), "ohlc_worst_bound"
+        elif self.stop_policy == "gap_open":
+            opened = current.get("candidate_open")
+            if opened is None:   # no open to show where the market was: assume the far end of the candle, never the stop
+                price, evidence = _worse(position["side"], stop, low if long else high), "ohlc_worst_bound_open_unavailable"
+            elif (D(opened) <= stop) if long else (D(opened) >= stop):
+                price, evidence = D(opened), "ohlc_open_gap"
+            else:
+                evidence = "ohlc_stop_level"
+        self._pending_evidence = evidence if self.stop_policy != "level" else None
+        return price
+
+    _pending_evidence = None
+
+    def _entry_start_ms(self, position):
+        """Funding runs from the real entry when it is known (``entry_ms``), else from the opening minute."""
+        return position.get("entry_ms", position["opened_at"])
+
+    def _settle(self, bucket, exit_price, reason, end_ms=None, executable=None):
+        """What closing the open position at ``exit_price`` would net, without booking it.
+
+        ``executable``: an exit price already demonstrated by a quote; it is used as is (no further model cost).
+        ``end_ms``: the exit instant when it is not the close of ``bucket``.
+        """
         position = self.position
         long = position["side"] == "LONG"
-        exit_price = exit_fill(exit_price, position["side"], self.product, reason)
+        exit_price = executable if executable is not None else exit_fill(exit_price, position["side"], self.product, reason)
         entry, quantity = position["entry"], position["quantity"]
         gross = (exit_price - entry) * quantity if long else (entry - exit_price) * quantity
         fees = (entry + exit_price) * quantity * fee_rate("taker")
-        funding, funding_complete = self._funding(position["opened_at"], bucket + ONE_MINUTE_MS,
+        funding, funding_complete = self._funding(self._entry_start_ms(position),
+                                                  bucket + ONE_MINUTE_MS if end_ms is None else end_ms,
                                                   entry * quantity, long)
         return exit_price, gross - fees - funding, funding, funding_complete
 
@@ -391,13 +438,13 @@ class Book:
                         pnl_usd=float(round(pnl, 4)))
         return view
 
-    def _funding_fields(self, position, bucket, funding, funding_complete):
+    def _funding_fields(self, position, bucket, funding, funding_complete, end_ms=None):
         """The trade's funding, never turning an unknown amount into zero.
 
         ``funding_usd`` is ``None`` when no funding period covered any of the holding time; a partial sum is kept
         but flagged ``funding_complete = False``; an observed zero is ``0.0`` with ``funding_complete = True``.
         """
-        start, end = position["opened_at"], bucket + ONE_MINUTE_MS
+        start, end = self._entry_start_ms(position), bucket + ONE_MINUTE_MS if end_ms is None else end_ms
         _, covered = accrue_funding(self.funding, start, end, D(0))
         covered = min(covered, end - start)
         if funding_complete:
@@ -410,24 +457,52 @@ class Book:
                 "funding_complete": funding_complete, "funding_status": status,
                 "funding_covered_ms": int(covered), "funding_held_ms": int(end - start)}
 
-    def _finish(self, bucket, exit_price, reason):
+    def close_on_quote(self, time_ms, reference_price, reason, executable_price, evidence, details=None):
+        """Closes the open position at a price a quote demonstrated (``executable_price``, used as is) at ``time_ms``.
+
+        Used by ``portfolio_watch``: the stop crossed by a bid/ask between candles. The trade is booked exactly like
+        one closed on a candle (same fees, funding and accounting), with the exit instant being ``time_ms``.
+        """
+        if self.position is None:
+            raise ValueError("no open position")
+        self._finish(time_ms // ONE_MINUTE_MS * ONE_MINUTE_MS, reference_price, reason, end_ms=time_ms,
+                     executable=executable_price, evidence=evidence, details=details)
+
+    def _finish(self, bucket, exit_price, reason, end_ms=None, executable=None, evidence=None, details=None):
         """Closes the open position at ``exit_price`` (before the exit execution cost) and books the trade."""
         position = self.position
-        exit_price, pnl, funding, funding_complete = self._settle(bucket, exit_price, reason)
+        reference = exit_price
+        evidence = evidence or (self._pending_evidence if reason == "stop" else None)
+        self._pending_evidence = None
+        exit_price, pnl, funding, funding_complete = self._settle(bucket, exit_price, reason, end_ms, executable)
         entry, quantity = position["entry"], position["quantity"]
+        end_ms = bucket + ONE_MINUTE_MS if end_ms is None else end_ms
         decision = position["decision"]
         decision["trade_net_usd"] = float(round(pnl, 4))
         decision["trade_hit"] = trade_hit(pnl)
-        self.trades.append({
+        trade = {
             "strategy_id": position["strategy_id"], "side": position["side"],
-            "entry_bucket_ms": position["opened_bucket"], "entry_time_ms": position["opened_at"],
+            "entry_bucket_ms": position["opened_bucket"], "entry_time_ms": self._entry_start_ms(position),
             "entry_price": str(entry), "stop_price": str(position["stop"]), "target_price": position["target_text"],
-            "exit_bucket_ms": bucket, "exit_time_ms": bucket + ONE_MINUTE_MS, "exit_price": str(exit_price),
+            "exit_bucket_ms": bucket, "exit_time_ms": end_ms, "exit_price": str(exit_price),
             "exit_reason": reason, "quantity": str(quantity), "notional_usd": str(self.notional),
             "net_bp": float(round(pnl / self.notional * 10_000, 4)), "pnl_usd": float(round(pnl, 4)),
             "hit": trade_hit(pnl), "reason_code": position["reason_code"],
-            **self._funding_fields(position, bucket, funding, funding_complete),
-        })
+            **self._funding_fields(position, bucket, funding, funding_complete, end_ms),
+        }
+        if reason == "stop" and evidence is not None:
+            # Only in the opt-in modes: the stop level, the price the market allowed and what that cost, with its evidence.
+            stop, long = position["stop"], position["side"] == "LONG"
+            gap = (stop - reference) / stop * 10_000 if long else (reference - stop) / stop * 10_000
+            total = (stop - exit_price) / stop * 10_000 if long else (exit_price - stop) / stop * 10_000
+            trade["stop_exit"] = {
+                "stop_level": str(stop), "reference_price": str(reference), "executable_price": str(exit_price),
+                "gap_bps": str(round(max(gap, D(0)), 4)), "slippage_bps": str(round(total, 4)),
+                "evidence": evidence, "quote_backed": evidence.startswith("quote"),
+                "estimated": not evidence.startswith("quote"), **(details or {})}
+        self.trades.append(trade)
+        self.fills.append({"reference_price": str(reference), "executable_price": str(exit_price), "evidence": evidence,
+                           "reason": reason, "exit_time_ms": end_ms})
         self.position = None
 
     def _funding(self, start_ms, end_ms, notional, long):
@@ -452,10 +527,11 @@ class Book:
 
 
 def simulate_many(specs, candles_1m, candles_5m, *, product_id=DEFAULT_PRODUCT, tick_size="1",
-                  notional_usd=DEFAULT_NOTIONAL_USD, funding=()):
+                  notional_usd=DEFAULT_NOTIONAL_USD, funding=(), stop_policy="level"):
     """Run every spec on its own book over one candle stream; indicators are computed once."""
     periods = merge_periods(DEFAULT_PERIODS, *(declared_indicators(spec) for spec in specs))
-    books = [Book(spec, product_id=product_id, tick_size=tick_size, notional_usd=notional_usd, funding=funding) for spec in specs]
+    books = [Book(spec, product_id=product_id, tick_size=tick_size, notional_usd=notional_usd, funding=funding,
+                  stop_policy=stop_policy) for spec in specs]
     for frame in frames(candles_1m, candles_5m, periods):
         for book in books:
             book.on_frame(*frame)

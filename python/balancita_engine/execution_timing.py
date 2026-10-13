@@ -31,7 +31,9 @@ only used when it is worse than the model. Costs, fees, funding, exits and capit
 Entry time is the moment the quote was received. The shared ``Book`` works on 1-minute candles: the position is opened
 on the bucket that makes ``opened_at`` the first minute boundary at or after the entry and never sees the candle of
 the entry minute. The part of that minute after the entry is therefore not watched for the stop (at most 59.999 s,
-and zero when the entry is on a boundary). That is a stated limitation, not a hidden assumption.
+and zero when the entry is on a boundary). That is a stated limitation, not a hidden assumption. Since stage 7 it can be
+covered: ``TimedExecutor(..., watch=WatchPolicy())`` forwards every later quote to ``portfolio_watch.QuoteWatch``
+(docs/contabilidad-condiciones-adversas.md); without ``watch`` nothing changes.
 
 Conventions: ``signal.bucket_ms`` in the durable log is the *close* of the candle the signal used (``cycle_ms``);
 ``Portfolio`` intents use the *start* of the last 1-minute candle, so the conversion is ``bucket = close - 60 s``.
@@ -42,11 +44,12 @@ parameters (those stay in ``PortfolioPolicy``).
 """
 
 from dataclasses import asdict, dataclass
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 
 from .futures_costs import COST_MODEL_VERSION, entry_fill, side_impact_bps
 from .multi_signals import BUY, SELL, stable_hash
 from .portfolio import LONG, SHORT, Portfolio, intent_from_signal
+from .portfolio_watch import QuoteWatch, parse_quote  # noqa: F401  (parse_quote moved there; kept importable from here)
 from .signal_continuity import RetroactiveEntryError, guard_entry
 
 D = Decimal
@@ -78,22 +81,6 @@ class ExecutionPolicy:
         return stable_hash(dict(asdict(self), cost_model=COST_MODEL_VERSION, schema=SCHEMA))[:16]
 
 
-def parse_quote(quote):
-    """Validated quote with Decimals, or ``ValueError(reason)``. ``received_ms`` defaults to ``time_ms``."""
-    try:
-        bid, ask = D(str(quote["bid"])), D(str(quote["ask"]))
-        time_ms = int(quote["time_ms"])
-        received_ms = int(quote.get("received_ms", time_ms))
-        product = quote["product_id"]
-    except (KeyError, TypeError, ValueError, InvalidOperation):
-        raise ValueError("invalid_quote")
-    if not (bid.is_finite() and ask.is_finite()) or bid <= 0 or ask <= 0 or ask < bid or received_ms < time_ms:
-        raise ValueError("invalid_quote")
-    mid = (bid + ask) / 2
-    return {"product_id": product, "time_ms": time_ms, "received_ms": received_ms, "bid": bid, "ask": ask, "mid": mid,
-            "spread_bps": (ask - bid) / mid * TEN_THOUSAND}
-
-
 def executable_reference(side, product_id, quote):
     """Reference price to hand to the shared simulator so that its entry is the model's ``entry_fill`` of the mid,
     never better than the visible touch (the ask for LONG, the bid for SHORT)."""
@@ -114,9 +101,12 @@ class TimedExecutor:
     """Event-driven: ``submit`` (decision), ``on_quote`` (market), ``advance`` (clock), ``on_candle`` (positions).
     Events must arrive in time order; one that does not is refused, never reordered."""
 
-    def __init__(self, portfolio=None, policy=None):
+    def __init__(self, portfolio=None, policy=None, watch=None):
+        """``watch``: a ``portfolio_watch.WatchPolicy`` to watch open positions with the quotes that arrive after the
+        entry (stage 7). ``None`` (default) keeps the earlier behaviour exactly: positions see candles only."""
         self.portfolio = portfolio or Portfolio()
         self.policy = policy or ExecutionPolicy()
+        self.watch = None if watch is None else QuoteWatch(self.portfolio, watch)
         self.pending = {}         # intent_id -> order waiting for a usable quote
         self.records = []         # one terminal record per order: opened or rejected, with the whole timeline
         self.events = []          # order_accepted / order_duplicate / quote_ignored, in arrival order
@@ -231,6 +221,8 @@ class TimedExecutor:
                 ready.append(outcome)
         if ready:
             done.extend(self._fill(ready, q))
+        if self.watch is not None:
+            self.watch.on_quote(quote)   # positions are watched with every quote that arrived after their entry
         return done
 
     def advance(self, now_ms):
@@ -293,6 +285,8 @@ class TimedExecutor:
         by_id, intents = {}, []
         for order, fill_ref in ready:
             executable = dict(order["intent"], price=str(fill_ref), entry_bucket_ms=entry_bucket)
+            if self.watch is not None:
+                executable["entry_ms"] = entry_ms
             order["timeline"].update(entry_ms=entry_ms, entry_bucket_ms=entry_bucket, opened_at_ms=entry_bucket + ONE_MINUTE_MS)
             order["loss_fraction_at_reference"] = str(self.portfolio.plan(order["intent"])["loss_fraction"])
             by_id[order["intent"]["intent_id"]] = order
@@ -354,6 +348,8 @@ class TimedExecutor:
     def on_candle(self, product_id, bucket_ms, candle):
         """Closed 1-minute candle for the positions, through the shared portfolio (stop/target/time stop)."""
         self._tick(bucket_ms + ONE_MINUTE_MS)
+        if self.watch is not None:
+            return self.watch.on_candle(product_id, bucket_ms, candle)
         return self.portfolio.on_candle(product_id, bucket_ms, candle)
 
     def ledger_hash(self):

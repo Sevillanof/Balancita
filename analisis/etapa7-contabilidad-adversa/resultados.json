@@ -1,0 +1,2658 @@
+{
+ "hashes": {
+  "s01_gap_long": {
+   "accounting_digest": "8d61abb0ff925e3ed41ed72c577cc07717c03c07ffc94effdeed1e17f8887441",
+   "ledger_hash": "48b3d4962ae83b5c10f954bcfd04638c841d083b57d3ab8489ab6f38195ccbf7"
+  },
+  "s02_gap_short": {
+   "accounting_digest": "1658fa4421e3b6bd2e2f76c26e31c80db1ab41f1961f0afee8601bec2f877a24",
+   "ledger_hash": "77a04e314975212b6d58f093013f721729d65bf84f7f99d80cdf698027a1a4b3"
+  },
+  "s03_stop_sin_gap": {
+   "accounting_digest": "a1bab1b84635f995c87022f360ec2856f5b7568e5089c9020c56969943e1ef9e",
+   "ledger_hash": "913356181eb5c590a592c1d2159d8a450eaab817e4ffb40240ac9fb334fe81ae"
+  },
+  "s04_minuto_de_entrada": {
+   "accounting_digest": "b826c41ee69aab8942d302c6256b32be3b347afa61b0cc498a8329a611b6ec53",
+   "ledger_hash": "7f862f9775cd343551b2f3fd6d96ee4f3ba24de610f5c8b88ff708e1243fc887"
+  },
+  "s05_cotizaciones_insuficientes": {
+   "accounting_digest": "c1091b44340d1f24ba6e3abca1511a49f4fb3e64653c8bbbaf03fb453ca3e44e",
+   "ledger_hash": "48cbee14aa0a27cf13d6364707b5f9a1c9898133111ce0a8a6a047cacee6bedb"
+  },
+  "s06_perdida_superior_a_la_planificada": {
+   "accounting_digest": "ed06fa0db9ba8a26ed826837150a9f64c4c97360a04df08785a92420c2a1da11",
+   "ledger_hash": "32db6a13bbdcadbdca0d12a8dd7edf6d973130105b0397fb0cabf33dfdd2c484"
+  },
+  "s07_suspension_por_perdida_diaria": {
+   "accounting_digest": "b808b33ea740afceb34e3979d59c0ec00ff36ebbd5eac60c8ad54cfd5f13e70f",
+   "ledger_hash": "e4808734c9b16b4506885cb6e1a2f2b0c1e482dca5c2b3c63902c213c66a960f"
+  },
+  "s08_suspension_por_drawdown": {
+   "accounting_digest": "a5a653d8ca459118a978cecb479f3f9f9c59f341b1050d7677f26d3aa45df05d",
+   "ledger_hash": "8cd05c68c38c195852bb6936911b5ac2eb50f93655c9ec17e296e13e63b5fef3"
+  },
+  "s09_funding_tardio": {
+   "accounting_digest": "02ae22772e371b5fb4032bc219ed4b5908737bf19281abe54757671396f75be1",
+   "ledger_hash": "ae7d210e95e9cc50d5e181181e84198250327e7b5551c2f1d4f53e24be099d26"
+  },
+  "s10_funding_recibido_dos_veces": {
+   "accounting_digest": "157a2e43779cc38865bd1d38979e0f85b9ce3f303f02a4c6988687fe9d29bc29",
+   "ledger_hash": "6a9baf73e57278843b2084a83e868a8940eb2a31cb049f05d189d017cfae15c2"
+  },
+  "s11_funding_contradictorio": {
+   "accounting_digest": "5f9e90127134158b20bb11ea57025d141296dfeafecf6b2f9ee0fd36bda7ec8d",
+   "ledger_hash": "e7b85b240c27e38a371cd53ad542b84019ec54a67825df86f101ae465278dcbc"
+  },
+  "s12_reinicio_y_conciliacion": {
+   "accounting_digest": "c4fc027f8b877615b2bfa671e7aa8f4218dbc289c6464a4e8469bc27c093c8e4",
+   "ledger_hash": "2246a183e03a4f1dda7f5148e25f731c40352af4b4a744c37babf5a1b7f368a4"
+  },
+  "s13_eventos_duplicados_y_desordenados": {
+   "accounting_digest": "bcb4cb880aaaa8a38f6e211ef8be203c703c00307c0d766f9e30bff05f65511e",
+   "ledger_hash": "2145e6b9c7ca9b8a766672361e0241d5094095e098dc1289801f73d0e78b4073"
+  }
+ },
+ "scenarios": [
+  {
+   "facts": {
+    "by_policy": {
+     "gap_open": {
+      "exit_price": "96948.254900",
+      "pnl_usd": "-14.994",
+      "stop_exit": {
+       "estimated": true,
+       "evidence": "ohlc_open_gap",
+       "executable_price": "96948.254900",
+       "gap_bps": "107.1429",
+       "quote_backed": false,
+       "reference_price": "96950",
+       "slippage_bps": "107.3209",
+       "stop_level": "98000.00"
+      }
+     },
+     "gap_worst": {
+      "exit_price": "96798.257600",
+      "pnl_usd": "-15.7075",
+      "stop_exit": {
+       "estimated": true,
+       "evidence": "ohlc_worst_bound",
+       "executable_price": "96798.257600",
+       "gap_bps": "122.4490",
+       "quote_backed": false,
+       "reference_price": "96800",
+       "slippage_bps": "122.6268",
+       "stop_level": "98000.00"
+      }
+     },
+     "level": {
+      "exit_price": "97998.23600000",
+      "pnl_usd": "-9.9999",
+      "stop_exit": null
+     }
+    },
+    "planned_loss_usd": 9.999908,
+    "realized_loss_usd": "14.994",
+    "reconstruction": {
+     "adjustments": [],
+     "as_closed": {
+      "funding_complete": true,
+      "funding_covered_ms": 120000,
+      "funding_status": "complete",
+      "funding_usd": 0.0,
+      "hit": false,
+      "net_bp": -315.0801,
+      "net_complete": true,
+      "net_usd": -14.994,
+      "partial_usd": -14.994,
+      "pnl_usd": -14.994
+     },
+     "capital": {
+      "after_usd": "985.006",
+      "before_usd": "1000.000",
+      "events": [
+       {
+        "after_usd": "985.006",
+        "before_usd": "1000.000",
+        "delta_usd": "-14.994",
+        "kind": "trade_closed",
+        "t_ms": 1700042520000
+       }
+      ]
+     },
+     "entry": {
+      "cost_usd": "0.002855262868422789463263220421",
+      "price": "100000.600000",
+      "reference_price": "100000",
+      "time_ms": 1700042400000
+     },
+     "entry_window": null,
+     "exit": {
+      "basis": "estimated_from_candles",
+      "cost_usd": "0.008304532052807683153901076594",
+      "evidence": "ohlc_open_gap",
+      "price": "96948.254900",
+      "reason": "stop",
+      "reference_price": "96950",
+      "time_ms": 1700042520000
+     },
+     "intent_id": "897c43388360b6aa3d10454f",
+     "levels": {
+      "stop": "98000.00",
+      "target": "103000.00"
+     },
+     "plan": {
+      "planned_loss_usd": "9.999908",
+      "planned_stop_exit_price": "97998.23600000"
+     },
+     "product_id": "PF_XBTUSD",
+     "result": {
+      "fees_usd": "0.4686172936452981282112307326",
+      "funding_covered_ms": 120000,
+      "funding_held_ms": 120000,
+      "funding_status": "complete",
+      "funding_usd": "0.0",
+      "modelled_impact_bps": "0.06",
+      "modelled_spread_bps": "0.12",
+      "net_complete": true,
+      "pnl_gross_usd": "-14.52541270940374357753853477",
+      "pnl_net_usd": "-14.994",
+      "realized_loss_usd": "14.994"
+     },
+     "review_flags": [],
+     "side": "LONG",
+     "stop_exit": {
+      "estimated": true,
+      "evidence": "ohlc_open_gap",
+      "executable_price": "96948.254900",
+      "gap_bps": "107.1429",
+      "quote_backed": false,
+      "reference_price": "96950",
+      "slippage_bps": "107.3209",
+      "stop_level": "98000.00"
+     },
+     "strategy_id": "s7",
+     "trade_id": "556c91023dafac3670383a5a"
+    }
+   },
+   "id": "s01_gap_long",
+   "ledger_hash": "48b3d4962ae83b5c10f954bcfd04638c841d083b57d3ab8489ab6f38195ccbf7",
+   "planned_vs_realized": [
+    {
+     "basis": "estimated_from_candles",
+     "excess_usd": "4.9941",
+     "exit_reason": "stop",
+     "fee_effect_usd": "-0.0025",
+     "funding_usd": "0.0000",
+     "net_complete": true,
+     "planned_loss_usd": "9.9999",
+     "pnl_net_usd": "-14.9940",
+     "price_effect_usd": "4.9966",
+     "product_id": "PF_XBTUSD",
+     "realized_loss_usd": "14.9940",
+     "side": "LONG",
+     "trade_id": "556c91023dafac3670383a5a"
+    }
+   ],
+   "summary": {
+    "accounting_digest": "8d61abb0ff925e3ed41ed72c577cc07717c03c07ffc94effdeed1e17f8887441",
+    "adjustments": 0,
+    "audit": {
+     "checks": 5,
+     "violations": [],
+     "warnings": []
+    },
+    "capital_usd": "985.006",
+    "closed_trades": 1,
+    "drawdown_usd": "14.994",
+    "equity_usd": "985.006",
+    "open_positions": 0,
+    "provisional_gains_usd": "0",
+    "realized_today_usd": "-14.994",
+    "risk_budget_usd": "9.85006",
+    "suspension": {
+     "daily_loss": false,
+     "drawdown": false
+    }
+   },
+   "title": "LONG que atraviesa su stop con un gap",
+   "trades": [
+    {
+     "entry_price": "100000.600000",
+     "entry_time_ms": 1700042400000,
+     "exit_price": "96948.254900",
+     "exit_reason": "stop",
+     "exit_time_ms": 1700042520000,
+     "fees_usd": 0.468617,
+     "funding_status": "complete",
+     "funding_usd": 0.0,
+     "net_complete": true,
+     "planned_loss_usd": 9.999908,
+     "pnl_usd": -14.994,
+     "product_id": "PF_XBTUSD",
+     "side": "LONG",
+     "stop_price": "98000.00",
+     "trade_id": "556c91023dafac3670383a5a"
+    }
+   ]
+  },
+  {
+   "facts": {
+    "by_policy": {
+     "gap_open": {
+      "exit_price": "103051.854900",
+      "pnl_usd": "-14.9941",
+      "stop_exit": {
+       "estimated": true,
+       "evidence": "ohlc_open_gap",
+       "executable_price": "103051.854900",
+       "gap_bps": "102.9412",
+       "quote_backed": false,
+       "reference_price": "103050",
+       "slippage_bps": "103.1230",
+       "stop_level": "102000.00"
+      }
+     },
+     "gap_worst": {
+      "exit_price": "103201.857600",
+      "pnl_usd": "-15.7076",
+      "stop_exit": {
+       "estimated": true,
+       "evidence": "ohlc_worst_bound",
+       "executable_price": "103201.857600",
+       "gap_bps": "117.6471",
+       "quote_backed": false,
+       "reference_price": "103200",
+       "slippage_bps": "117.8292",
+       "stop_level": "102000.00"
+      }
+     },
+     "level": {
+      "exit_price": "102001.83600000",
+      "pnl_usd": "-9.9998",
+      "stop_exit": null
+     }
+    },
+    "planned_loss_usd": 9.999798,
+    "realized_loss_usd": "14.9941",
+    "reconstruction": {
+     "adjustments": [],
+     "as_closed": {
+      "funding_complete": true,
+      "funding_covered_ms": 120000,
+      "funding_status": "complete",
+      "funding_usd": 0.0,
+      "hit": false,
+      "net_bp": -315.3999,
+      "net_complete": true,
+      "net_usd": -14.9941,
+      "partial_usd": -14.9941,
+      "pnl_usd": -14.9941
+     },
+     "capital": {
+      "after_usd": "985.0059",
+      "before_usd": "1000.0000",
+      "events": [
+       {
+        "after_usd": "985.0059",
+        "before_usd": "1000.0000",
+        "delta_usd": "-14.9941",
+        "kind": "trade_closed",
+        "t_ms": 1700042520000
+       }
+      ]
+     },
+     "entry": {
+      "cost_usd": "0.002852417114502687016122096733",
+      "price": "99999.400000",
+      "reference_price": "100000",
+      "time_ms": 1700042400000
+     },
+     "entry_window": null,
+     "exit": {
+      "basis": "estimated_from_candles",
+      "cost_usd": "0.008818247509485056910341462049",
+      "evidence": "ohlc_open_gap",
+      "price": "103051.854900",
+      "reason": "stop",
+      "reference_price": "103050",
+      "time_ms": 1700042520000
+     },
+     "intent_id": "3bfad8f0b544d692e87993de",
+     "levels": {
+      "stop": "102000.00",
+      "target": "97000.00"
+     },
+     "plan": {
+      "planned_loss_usd": "9.999798",
+      "planned_stop_exit_price": "102001.83600000"
+     },
+     "product_id": "PF_XBTUSD",
+     "result": {
+      "fees_usd": "0.4826557288316729900379402276",
+      "funding_covered_ms": 120000,
+      "funding_held_ms": 120000,
+      "funding_status": "complete",
+      "funding_usd": "0.0",
+      "modelled_impact_bps": "0.06",
+      "modelled_spread_bps": "0.12",
+      "net_complete": true,
+      "pnl_gross_usd": "-14.51145766334598007588045528",
+      "pnl_net_usd": "-14.9941",
+      "realized_loss_usd": "14.9941"
+     },
+     "review_flags": [],
+     "side": "SHORT",
+     "stop_exit": {
+      "estimated": true,
+      "evidence": "ohlc_open_gap",
+      "executable_price": "103051.854900",
+      "gap_bps": "102.9412",
+      "quote_backed": false,
+      "reference_price": "103050",
+      "slippage_bps": "103.1230",
+      "stop_level": "102000.00"
+     },
+     "strategy_id": "s7",
+     "trade_id": "708a781c0f51215e0bb30b92"
+    }
+   },
+   "id": "s02_gap_short",
+   "ledger_hash": "77a04e314975212b6d58f093013f721729d65bf84f7f99d80cdf698027a1a4b3",
+   "planned_vs_realized": [
+    {
+     "basis": "estimated_from_candles",
+     "excess_usd": "4.9943",
+     "exit_reason": "stop",
+     "fee_effect_usd": "0.0025",
+     "funding_usd": "0.0000",
+     "net_complete": true,
+     "planned_loss_usd": "9.9998",
+     "pnl_net_usd": "-14.9941",
+     "price_effect_usd": "4.9918",
+     "product_id": "PF_XBTUSD",
+     "realized_loss_usd": "14.9941",
+     "side": "SHORT",
+     "trade_id": "708a781c0f51215e0bb30b92"
+    }
+   ],
+   "summary": {
+    "accounting_digest": "1658fa4421e3b6bd2e2f76c26e31c80db1ab41f1961f0afee8601bec2f877a24",
+    "adjustments": 0,
+    "audit": {
+     "checks": 5,
+     "violations": [],
+     "warnings": []
+    },
+    "capital_usd": "985.0059",
+    "closed_trades": 1,
+    "drawdown_usd": "14.9941",
+    "equity_usd": "985.0059",
+    "open_positions": 0,
+    "provisional_gains_usd": "0",
+    "realized_today_usd": "-14.9941",
+    "risk_budget_usd": "9.850059",
+    "suspension": {
+     "daily_loss": false,
+     "drawdown": false
+    }
+   },
+   "title": "SHORT que atraviesa su stop con un gap",
+   "trades": [
+    {
+     "entry_price": "99999.400000",
+     "entry_time_ms": 1700042400000,
+     "exit_price": "103051.854900",
+     "exit_reason": "stop",
+     "exit_time_ms": 1700042520000,
+     "fees_usd": 0.482656,
+     "funding_status": "complete",
+     "funding_usd": 0.0,
+     "net_complete": true,
+     "planned_loss_usd": 9.999798,
+     "pnl_usd": -14.9941,
+     "product_id": "PF_XBTUSD",
+     "side": "SHORT",
+     "stop_price": "102000.00",
+     "trade_id": "708a781c0f51215e0bb30b92"
+    }
+   ]
+  },
+  {
+   "facts": {
+    "by_policy": {
+     "gap_open": {
+      "exit_price": "97998.23600000",
+      "pnl_usd": "-9.9999",
+      "stop_exit": {
+       "estimated": true,
+       "evidence": "ohlc_stop_level",
+       "executable_price": "97998.23600000",
+       "gap_bps": "0.0000",
+       "quote_backed": false,
+       "reference_price": "98000.00",
+       "slippage_bps": "0.1800",
+       "stop_level": "98000.00"
+      }
+     },
+     "gap_worst": {
+      "exit_price": "97898.237800",
+      "pnl_usd": "-10.4755",
+      "stop_exit": {
+       "estimated": true,
+       "evidence": "ohlc_worst_bound",
+       "executable_price": "97898.237800",
+       "gap_bps": "10.2041",
+       "quote_backed": false,
+       "reference_price": "97900",
+       "slippage_bps": "10.3839",
+       "stop_level": "98000.00"
+      }
+     },
+     "level": {
+      "exit_price": "97998.23600000",
+      "pnl_usd": "-9.9999",
+      "stop_exit": null
+     }
+    },
+    "planned_loss_usd": 9.999908,
+    "realized_loss_usd": "9.9999"
+   },
+   "id": "s03_stop_sin_gap",
+   "ledger_hash": "913356181eb5c590a592c1d2159d8a450eaab817e4ffb40240ac9fb334fe81ae",
+   "planned_vs_realized": [
+    {
+     "basis": "modelled_at_stop_level",
+     "excess_usd": "-0.0000",
+     "exit_reason": "stop",
+     "fee_effect_usd": "0.0000",
+     "funding_usd": "0.0000",
+     "net_complete": true,
+     "planned_loss_usd": "9.9999",
+     "pnl_net_usd": "-9.9999",
+     "price_effect_usd": "0.0000",
+     "product_id": "PF_XBTUSD",
+     "realized_loss_usd": "9.9999",
+     "side": "LONG",
+     "trade_id": "556c91023dafac3670383a5a"
+    }
+   ],
+   "summary": {
+    "accounting_digest": "a1bab1b84635f995c87022f360ec2856f5b7568e5089c9020c56969943e1ef9e",
+    "adjustments": 0,
+    "audit": {
+     "checks": 5,
+     "violations": [],
+     "warnings": []
+    },
+    "capital_usd": "990.0001",
+    "closed_trades": 1,
+    "drawdown_usd": "9.9999",
+    "equity_usd": "990.0001",
+    "open_positions": 0,
+    "provisional_gains_usd": "0",
+    "realized_today_usd": "-9.9999",
+    "risk_budget_usd": "9.900001",
+    "suspension": {
+     "daily_loss": false,
+     "drawdown": false
+    }
+   },
+   "title": "Stop alcanzado sin gap",
+   "trades": [
+    {
+     "entry_price": "100000.600000",
+     "entry_time_ms": 1700042400000,
+     "exit_price": "97998.23600000",
+     "exit_reason": "stop",
+     "exit_time_ms": 1700042520000,
+     "fees_usd": 0.471116,
+     "funding_status": "complete",
+     "funding_usd": 0.0,
+     "net_complete": true,
+     "planned_loss_usd": 9.999908,
+     "pnl_usd": -9.9999,
+     "product_id": "PF_XBTUSD",
+     "side": "LONG",
+     "stop_price": "98000.00",
+     "trade_id": "556c91023dafac3670383a5a"
+    }
+   ]
+  },
+  {
+   "facts": {
+    "control_without_quotes": {
+     "evidence": "ohlc_open_gap",
+     "exit_price": "97498.245000",
+     "exit_time_ms": 1700049720000,
+     "loss_usd": "12.3781"
+    },
+    "entry_to_exit_seconds": 15,
+    "events": [
+     [
+      "quote_12:00:15",
+      []
+     ],
+     [
+      "quote_12:00:25_breach",
+      [
+       "9ce73a76c3c1addf0cfec6f4"
+      ]
+     ],
+     [
+      "candle_12:00",
+      0
+     ],
+     [
+      "candle_12:01",
+      0
+     ]
+    ],
+    "exit_price": "97795.11000",
+    "exit_time_ms": 1700049625000,
+    "loss_usd": "10.9661",
+    "quote_backed": true,
+    "reconstruction": {
+     "adjustments": [],
+     "as_closed": {
+      "funding_complete": true,
+      "funding_covered_ms": 15000,
+      "funding_status": "complete",
+      "funding_usd": 0.0,
+      "hit": false,
+      "net_bp": -230.4374,
+      "net_complete": true,
+      "net_usd": -10.9661,
+      "partial_usd": -10.9661,
+      "pnl_usd": -10.9661
+     },
+     "capital": {
+      "after_usd": "989.0339",
+      "before_usd": "1000.0000",
+      "events": [
+       {
+        "after_usd": "989.0339",
+        "before_usd": "1000.0000",
+        "delta_usd": "-10.9661",
+        "kind": "trade_closed",
+        "t_ms": 1700049625000
+       }
+      ]
+     },
+     "entry": {
+      "cost_usd": "0.002855262868422789463263220421",
+      "price": "100000.600000",
+      "reference_price": "100000",
+      "time_ms": 1700049610000
+     },
+     "entry_window": {
+      "candle_range_touched_stop": null,
+      "closed_in_window": true,
+      "coverage": "partially_watched",
+      "entry_ms": 1700049610000,
+      "max_gap_ms": 35000,
+      "opened_at_ms": 1700049660000,
+      "quotes_watched": 2,
+      "unresolved": false,
+      "window_ms": 50000
+     },
+     "exit": {
+      "basis": "quote_backed",
+      "cost_usd": "0.02327039237764573412559524643",
+      "evidence": "quote_breach",
+      "price": "97795.11000",
+      "reason": "stop",
+      "reference_price": "97800.00000",
+      "time_ms": 1700049625000
+     },
+     "intent_id": "9e8165bb84afd6ede86ffd3a",
+     "levels": {
+      "stop": "98000.00",
+      "target": "103000.00"
+     },
+     "plan": {
+      "planned_loss_usd": "9.999908",
+      "planned_stop_exit_price": "97998.23600000"
+     },
+     "product_id": "PF_XBTUSD",
+     "result": {
+      "fees_usd": "0.4706322885802685183888896667",
+      "funding_covered_ms": 15000,
+      "funding_held_ms": 15000,
+      "funding_status": "complete",
+      "funding_usd": "0.0",
+      "modelled_impact_bps": "0.06",
+      "modelled_spread_bps": "0.12",
+      "net_complete": true,
+      "pnl_gross_usd": "-10.49542283946296322222066668",
+      "pnl_net_usd": "-10.9661",
+      "realized_loss_usd": "10.9661"
+     },
+     "review_flags": [],
+     "side": "LONG",
+     "stop_exit": {
+      "ask": "97804.89000",
+      "bid": "97795.11000",
+      "estimated": false,
+      "evidence": "quote_breach",
+      "executable_price": "97795.11000",
+      "gap_bps": "20.4082",
+      "quote_backed": true,
+      "quote_received_ms": 1700049625000,
+      "quote_time_ms": 1700049625000,
+      "reference_price": "97800.00000",
+      "slippage_bps": "20.9071",
+      "spread_bps": "1.000000",
+      "stop_level": "98000.00",
+      "trigger": "bid<=stop"
+     },
+     "strategy_id": "s7",
+     "trade_id": "9ce73a76c3c1addf0cfec6f4"
+    },
+    "watch_events": [
+     {
+      "kind": "stop_closed_on_quote",
+      "product_id": "PF_XBTUSD",
+      "time_ms": 1700049625000,
+      "trade_id": "9ce73a76c3c1addf0cfec6f4"
+     },
+     {
+      "bucket_ms": 1700049600000,
+      "kind": "entry_minute_candle_after_close",
+      "product_id": "PF_XBTUSD"
+     }
+    ]
+   },
+   "id": "s04_minuto_de_entrada",
+   "ledger_hash": "7f862f9775cd343551b2f3fd6d96ee4f3ba24de610f5c8b88ff708e1243fc887",
+   "planned_vs_realized": [
+    {
+     "basis": "quote_backed",
+     "excess_usd": "0.9662",
+     "exit_reason": "stop",
+     "fee_effect_usd": "-0.0005",
+     "funding_usd": "0.0000",
+     "net_complete": true,
+     "planned_loss_usd": "9.9999",
+     "pnl_net_usd": "-10.9661",
+     "price_effect_usd": "0.9666",
+     "product_id": "PF_XBTUSD",
+     "realized_loss_usd": "10.9661",
+     "side": "LONG",
+     "trade_id": "9ce73a76c3c1addf0cfec6f4"
+    }
+   ],
+   "summary": {
+    "accounting_digest": "b826c41ee69aab8942d302c6256b32be3b347afa61b0cc498a8329a611b6ec53",
+    "adjustments": 0,
+    "audit": {
+     "checks": 5,
+     "violations": [],
+     "warnings": []
+    },
+    "capital_usd": "989.0339",
+    "closed_trades": 1,
+    "drawdown_usd": "10.9661",
+    "equity_usd": "989.0339",
+    "open_positions": 0,
+    "provisional_gains_usd": "0",
+    "realized_today_usd": "-10.9661",
+    "risk_budget_usd": "9.890339",
+    "suspension": {
+     "daily_loss": false,
+     "drawdown": false
+    }
+   },
+   "title": "Movimiento brusco durante el minuto de entrada",
+   "trades": [
+    {
+     "entry_price": "100000.600000",
+     "entry_time_ms": 1700049610000,
+     "exit_price": "97795.11000",
+     "exit_reason": "stop",
+     "exit_time_ms": 1700049625000,
+     "fees_usd": 0.470632,
+     "funding_status": "complete",
+     "funding_usd": 0.0,
+     "net_complete": true,
+     "planned_loss_usd": 9.999908,
+     "pnl_usd": -10.9661,
+     "product_id": "PF_XBTUSD",
+     "side": "LONG",
+     "stop_price": "98000.00",
+     "trade_id": "9ce73a76c3c1addf0cfec6f4"
+    }
+   ]
+  },
+  {
+   "facts": {
+    "cases": {
+     "cobertura_completa_sin_ruptura": {
+      "audit_violations": 0,
+      "closed": false,
+      "entry_window": null,
+      "estimated": null,
+      "evidence": null,
+      "exit_price": null,
+      "exit_reason": null,
+      "exit_time_ms": null,
+      "loss_usd": null,
+      "open_position_notes": {
+       "9e8165bb84afd6ede86ffd3a": {
+        "entry_window": {
+         "candle_range_touched_stop": true,
+         "coverage": "watched",
+         "entry_ms": 1700049610000,
+         "max_gap_ms": 5000,
+         "opened_at_ms": 1700049660000,
+         "quotes_watched": 9,
+         "unresolved": false,
+         "window_ms": 50000
+        }
+       }
+      },
+      "policy": "flag",
+      "reconstruction": null,
+      "review_flags": []
+     },
+     "sin_cotizaciones_flag": {
+      "audit_violations": 0,
+      "closed": true,
+      "entry_window": {
+       "candle_range_touched_stop": true,
+       "coverage": "unwatched",
+       "entry_ms": 1700049610000,
+       "max_gap_ms": 50000,
+       "opened_at_ms": 1700049660000,
+       "quotes_watched": 0,
+       "unresolved": true,
+       "window_ms": 50000
+      },
+      "estimated": true,
+      "evidence": "ohlc_open_gap",
+      "exit_price": "97898.237800",
+      "exit_reason": "stop",
+      "exit_time_ms": 1700049720000,
+      "loss_usd": "10.4755",
+      "open_position_notes": {},
+      "policy": "flag",
+      "reconstruction": {
+       "adjustments": [],
+       "as_closed": {
+        "funding_complete": true,
+        "funding_covered_ms": 110000,
+        "funding_status": "complete",
+        "funding_usd": 0.0,
+        "hit": false,
+        "net_bp": -220.1298,
+        "net_complete": true,
+        "net_usd": -10.4755,
+        "partial_usd": -10.4755,
+        "pnl_usd": -10.4755
+       },
+       "capital": {
+        "after_usd": "989.5245",
+        "before_usd": "1000.0000",
+        "events": [
+         {
+          "after_usd": "989.5245",
+          "before_usd": "1000.0000",
+          "delta_usd": "-10.4755",
+          "kind": "trade_closed",
+          "t_ms": 1700049720000
+         }
+        ]
+       },
+       "entry": {
+        "cost_usd": "0.002855262868422789463263220421",
+        "price": "100000.600000",
+        "reference_price": "100000",
+        "time_ms": 1700049610000
+       },
+       "entry_window": {
+        "candle_range_touched_stop": true,
+        "coverage": "unwatched",
+        "entry_ms": 1700049610000,
+        "max_gap_ms": 50000,
+        "opened_at_ms": 1700049660000,
+        "quotes_watched": 0,
+        "unresolved": true,
+        "window_ms": 50000
+       },
+       "exit": {
+        "basis": "estimated_from_candles",
+        "cost_usd": "0.008385907044557732653604078376",
+        "evidence": "ohlc_open_gap",
+        "price": "97898.237800",
+        "reason": "stop",
+        "reference_price": "97900",
+        "time_ms": 1700049720000
+       },
+       "intent_id": "9e8165bb84afd6ede86ffd3a",
+       "levels": {
+        "stop": "98000.00",
+        "target": "103000.00"
+       },
+       "plan": {
+        "planned_loss_usd": "9.999908",
+        "planned_stop_exit_price": "97998.23600000"
+       },
+       "product_id": "PF_XBTUSD",
+       "result": {
+        "fees_usd": "0.4708776693953036281782309306",
+        "funding_covered_ms": 110000,
+        "funding_held_ms": 110000,
+        "funding_status": "complete",
+        "funding_usd": "0.0",
+        "modelled_impact_bps": "0.06",
+        "modelled_spread_bps": "0.12",
+        "net_complete": true,
+        "pnl_gross_usd": "-10.00466120939274364353813877",
+        "pnl_net_usd": "-10.4755",
+        "realized_loss_usd": "10.4755"
+       },
+       "review_flags": [
+        "entry_minute_unresolved"
+       ],
+       "side": "LONG",
+       "stop_exit": {
+        "estimated": true,
+        "evidence": "ohlc_open_gap",
+        "executable_price": "97898.237800",
+        "gap_bps": "10.2041",
+        "quote_backed": false,
+        "reference_price": "97900",
+        "slippage_bps": "10.3839",
+        "stop_level": "98000.00"
+       },
+       "strategy_id": "s7",
+       "trade_id": "9ce73a76c3c1addf0cfec6f4"
+      },
+      "review_flags": [
+       "entry_minute_unresolved"
+      ]
+     },
+     "sin_cotizaciones_stop": {
+      "audit_violations": 0,
+      "closed": true,
+      "entry_window": {
+       "candle_range_touched_stop": true,
+       "coverage": "unwatched",
+       "entry_ms": 1700049610000,
+       "max_gap_ms": 50000,
+       "opened_at_ms": 1700049660000,
+       "quotes_watched": 0,
+       "unresolved": true,
+       "window_ms": 50000
+      },
+      "estimated": true,
+      "evidence": "assumed_stop_entry_minute",
+      "exit_price": "97998.23600000",
+      "exit_reason": "stop",
+      "exit_time_ms": 1700049660000,
+      "loss_usd": "9.9999",
+      "open_position_notes": {},
+      "policy": "stop",
+      "reconstruction": {
+       "adjustments": [],
+       "as_closed": {
+        "funding_complete": true,
+        "funding_covered_ms": 50000,
+        "funding_status": "complete",
+        "funding_usd": 0.0,
+        "hit": false,
+        "net_bp": -210.1351,
+        "net_complete": true,
+        "net_usd": -9.9999,
+        "partial_usd": -9.9999,
+        "pnl_usd": -9.9999
+       },
+       "capital": {
+        "after_usd": "990.0001",
+        "before_usd": "1000.0000",
+        "events": [
+         {
+          "after_usd": "990.0001",
+          "before_usd": "1000.0000",
+          "delta_usd": "-9.9999",
+          "kind": "trade_closed",
+          "t_ms": 1700049660000
+         }
+        ]
+       },
+       "entry": {
+        "cost_usd": "0.002855262868422789463263220421",
+        "price": "100000.600000",
+        "reference_price": "100000",
+        "time_ms": 1700049610000
+       },
+       "entry_window": {
+        "candle_range_touched_stop": true,
+        "coverage": "unwatched",
+        "entry_ms": 1700049610000,
+        "max_gap_ms": 50000,
+        "opened_at_ms": 1700049660000,
+        "quotes_watched": 0,
+        "unresolved": true,
+        "window_ms": 50000
+       },
+       "exit": {
+        "basis": "estimated_assumed_stop",
+        "cost_usd": "0.008394472833163001021993868037",
+        "evidence": "assumed_stop_entry_minute",
+        "price": "97998.23600000",
+        "reason": "stop",
+        "reference_price": "98000.00",
+        "time_ms": 1700049660000
+       },
+       "intent_id": "9e8165bb84afd6ede86ffd3a",
+       "levels": {
+        "stop": "98000.00",
+        "target": "103000.00"
+       },
+       "plan": {
+        "planned_loss_usd": "9.999908",
+        "planned_stop_exit_price": "97998.23600000"
+       },
+       "product_id": "PF_XBTUSD",
+       "result": {
+        "fees_usd": "0.4711156036847778913326520041",
+        "funding_covered_ms": 50000,
+        "funding_held_ms": 50000,
+        "funding_status": "complete",
+        "funding_usd": "0.0",
+        "modelled_impact_bps": "0.06",
+        "modelled_spread_bps": "0.12",
+        "net_complete": true,
+        "pnl_gross_usd": "-9.528792630444217334695991824",
+        "pnl_net_usd": "-9.9999",
+        "realized_loss_usd": "9.9999"
+       },
+       "review_flags": [
+        "entry_minute_unresolved"
+       ],
+       "side": "LONG",
+       "stop_exit": {
+        "assumption": "the range of the entry minute touched the stop and no quote covered the window: closed at the stop",
+        "estimated": true,
+        "evidence": "assumed_stop_entry_minute",
+        "executable_price": "97998.23600000",
+        "gap_bps": "0.0000",
+        "quote_backed": false,
+        "reference_price": "98000.00",
+        "slippage_bps": "0.1800",
+        "stop_level": "98000.00"
+       },
+       "strategy_id": "s7",
+       "trade_id": "9ce73a76c3c1addf0cfec6f4"
+      },
+      "review_flags": [
+       "entry_minute_unresolved"
+      ]
+     },
+     "una_cotizacion_flag": {
+      "audit_violations": 0,
+      "closed": true,
+      "entry_window": {
+       "candle_range_touched_stop": true,
+       "coverage": "partially_watched",
+       "entry_ms": 1700049610000,
+       "max_gap_ms": 48000,
+       "opened_at_ms": 1700049660000,
+       "quotes_watched": 1,
+       "unresolved": true,
+       "window_ms": 50000
+      },
+      "estimated": true,
+      "evidence": "ohlc_open_gap",
+      "exit_price": "97898.237800",
+      "exit_reason": "stop",
+      "exit_time_ms": 1700049720000,
+      "loss_usd": "10.4755",
+      "open_position_notes": {},
+      "policy": "flag",
+      "reconstruction": {
+       "adjustments": [],
+       "as_closed": {
+        "funding_complete": true,
+        "funding_covered_ms": 110000,
+        "funding_status": "complete",
+        "funding_usd": 0.0,
+        "hit": false,
+        "net_bp": -220.1298,
+        "net_complete": true,
+        "net_usd": -10.4755,
+        "partial_usd": -10.4755,
+        "pnl_usd": -10.4755
+       },
+       "capital": {
+        "after_usd": "989.5245",
+        "before_usd": "1000.0000",
+        "events": [
+         {
+          "after_usd": "989.5245",
+          "before_usd": "1000.0000",
+          "delta_usd": "-10.4755",
+          "kind": "trade_closed",
+          "t_ms": 1700049720000
+         }
+        ]
+       },
+       "entry": {
+        "cost_usd": "0.002855262868422789463263220421",
+        "price": "100000.600000",
+        "reference_price": "100000",
+        "time_ms": 1700049610000
+       },
+       "entry_window": {
+        "candle_range_touched_stop": true,
+        "coverage": "partially_watched",
+        "entry_ms": 1700049610000,
+        "max_gap_ms": 48000,
+        "opened_at_ms": 1700049660000,
+        "quotes_watched": 1,
+        "unresolved": true,
+        "window_ms": 50000
+       },
+       "exit": {
+        "basis": "estimated_from_candles",
+        "cost_usd": "0.008385907044557732653604078376",
+        "evidence": "ohlc_open_gap",
+        "price": "97898.237800",
+        "reason": "stop",
+        "reference_price": "97900",
+        "time_ms": 1700049720000
+       },
+       "intent_id": "9e8165bb84afd6ede86ffd3a",
+       "levels": {
+        "stop": "98000.00",
+        "target": "103000.00"
+       },
+       "plan": {
+        "planned_loss_usd": "9.999908",
+        "planned_stop_exit_price": "97998.23600000"
+       },
+       "product_id": "PF_XBTUSD",
+       "result": {
+        "fees_usd": "0.4708776693953036281782309306",
+        "funding_covered_ms": 110000,
+        "funding_held_ms": 110000,
+        "funding_status": "complete",
+        "funding_usd": "0.0",
+        "modelled_impact_bps": "0.06",
+        "modelled_spread_bps": "0.12",
+        "net_complete": true,
+        "pnl_gross_usd": "-10.00466120939274364353813877",
+        "pnl_net_usd": "-10.4755",
+        "realized_loss_usd": "10.4755"
+       },
+       "review_flags": [
+        "entry_minute_unresolved"
+       ],
+       "side": "LONG",
+       "stop_exit": {
+        "estimated": true,
+        "evidence": "ohlc_open_gap",
+        "executable_price": "97898.237800",
+        "gap_bps": "10.2041",
+        "quote_backed": false,
+        "reference_price": "97900",
+        "slippage_bps": "10.3839",
+        "stop_level": "98000.00"
+       },
+       "strategy_id": "s7",
+       "trade_id": "9ce73a76c3c1addf0cfec6f4"
+      },
+      "review_flags": [
+       "entry_minute_unresolved"
+      ]
+     },
+     "vela_sin_apertura": {
+      "audit_violations": 0,
+      "closed": true,
+      "entry_window": {
+       "candle_range_touched_stop": false,
+       "coverage": "unwatched",
+       "entry_ms": 1700049610000,
+       "max_gap_ms": 50000,
+       "opened_at_ms": 1700049660000,
+       "quotes_watched": 0,
+       "unresolved": false,
+       "window_ms": 50000
+      },
+      "estimated": true,
+      "evidence": "ohlc_worst_bound_open_unavailable",
+      "exit_price": "97798.239600",
+      "exit_reason": "stop",
+      "exit_time_ms": 1700049720000,
+      "loss_usd": "10.9512",
+      "open_position_notes": {},
+      "policy": "flag",
+      "reconstruction": {
+       "adjustments": [],
+       "as_closed": {
+        "funding_complete": true,
+        "funding_covered_ms": 110000,
+        "funding_status": "complete",
+        "funding_usd": 0.0,
+        "hit": false,
+        "net_bp": -230.1246,
+        "net_complete": true,
+        "net_usd": -10.9512,
+        "partial_usd": -10.9512,
+        "pnl_usd": -10.9512
+       },
+       "capital": {
+        "after_usd": "989.0488",
+        "before_usd": "1000.0000",
+        "events": [
+         {
+          "after_usd": "989.0488",
+          "before_usd": "1000.0000",
+          "delta_usd": "-10.9512",
+          "kind": "trade_closed",
+          "t_ms": 1700049720000
+         }
+        ]
+       },
+       "entry": {
+        "cost_usd": "0.002855262868422789463263220421",
+        "price": "100000.600000",
+        "reference_price": "100000",
+        "time_ms": 1700049610000
+       },
+       "entry_window": {
+        "candle_range_touched_stop": false,
+        "coverage": "unwatched",
+        "entry_ms": 1700049610000,
+        "max_gap_ms": 50000,
+        "opened_at_ms": 1700049660000,
+        "quotes_watched": 0,
+        "unresolved": false,
+        "window_ms": 50000
+       },
+       "exit": {
+        "basis": "estimated_from_candles",
+        "cost_usd": "0.008377341255952464285214288715",
+        "evidence": "ohlc_worst_bound_open_unavailable",
+        "price": "97798.239600",
+        "reason": "stop",
+        "reference_price": "97800",
+        "time_ms": 1700049720000
+       },
+       "intent_id": "9e8165bb84afd6ede86ffd3a",
+       "levels": {
+        "stop": "98000.00",
+        "target": "103000.00"
+       },
+       "plan": {
+        "planned_loss_usd": "9.999908",
+        "planned_stop_exit_price": "97998.23600000"
+       },
+       "product_id": "PF_XBTUSD",
+       "result": {
+        "fees_usd": "0.4706397351058293650238098572",
+        "funding_covered_ms": 110000,
+        "funding_held_ms": 110000,
+        "funding_status": "complete",
+        "funding_usd": "0.0",
+        "modelled_impact_bps": "0.06",
+        "modelled_spread_bps": "0.12",
+        "net_complete": true,
+        "pnl_gross_usd": "-10.48052978834126995238028572",
+        "pnl_net_usd": "-10.9512",
+        "realized_loss_usd": "10.9512"
+       },
+       "review_flags": [],
+       "side": "LONG",
+       "stop_exit": {
+        "estimated": true,
+        "evidence": "ohlc_worst_bound_open_unavailable",
+        "executable_price": "97798.239600",
+        "gap_bps": "20.4082",
+        "quote_backed": false,
+        "reference_price": "97800",
+        "slippage_bps": "20.5878",
+        "stop_level": "98000.00"
+       },
+       "strategy_id": "s7",
+       "trade_id": "9ce73a76c3c1addf0cfec6f4"
+      },
+      "review_flags": []
+     }
+    }
+   },
+   "id": "s05_cotizaciones_insuficientes",
+   "ledger_hash": "48cbee14aa0a27cf13d6364707b5f9a1c9898133111ce0a8a6a047cacee6bedb",
+   "planned_vs_realized": [
+    {
+     "basis": "estimated_from_candles",
+     "excess_usd": "0.9513",
+     "exit_reason": "stop",
+     "fee_effect_usd": "-0.0005",
+     "funding_usd": "0.0000",
+     "net_complete": true,
+     "planned_loss_usd": "9.9999",
+     "pnl_net_usd": "-10.9512",
+     "price_effect_usd": "0.9517",
+     "product_id": "PF_XBTUSD",
+     "realized_loss_usd": "10.9512",
+     "side": "LONG",
+     "trade_id": "9ce73a76c3c1addf0cfec6f4"
+    }
+   ],
+   "summary": {
+    "accounting_digest": "c1091b44340d1f24ba6e3abca1511a49f4fb3e64653c8bbbaf03fb453ca3e44e",
+    "adjustments": 0,
+    "audit": {
+     "checks": 5,
+     "violations": [],
+     "warnings": []
+    },
+    "capital_usd": "989.0488",
+    "closed_trades": 1,
+    "drawdown_usd": "10.9512",
+    "equity_usd": "989.0488",
+    "open_positions": 0,
+    "provisional_gains_usd": "0",
+    "realized_today_usd": "-10.9512",
+    "risk_budget_usd": "9.890488",
+    "suspension": {
+     "daily_loss": false,
+     "drawdown": false
+    }
+   },
+   "title": "Cotizaciones ausentes o insuficientes",
+   "trades": [
+    {
+     "entry_price": "100000.600000",
+     "entry_time_ms": 1700049610000,
+     "exit_price": "97798.239600",
+     "exit_reason": "stop",
+     "exit_time_ms": 1700049720000,
+     "fees_usd": 0.47064,
+     "funding_status": "complete",
+     "funding_usd": 0.0,
+     "net_complete": true,
+     "planned_loss_usd": 9.999908,
+     "pnl_usd": -10.9512,
+     "product_id": "PF_XBTUSD",
+     "side": "LONG",
+     "stop_price": "98000.00",
+     "trade_id": "9ce73a76c3c1addf0cfec6f4"
+    }
+   ]
+  },
+  {
+   "facts": {
+    "after_loss": {
+     "capital": "985.006",
+     "drawdown": "14.994",
+     "risk_budget": "9.85006"
+    },
+    "before_loss": {
+     "capital": "1000",
+     "risk_budget": "10.00"
+    },
+    "capital_log": [
+     {
+      "capital_after_usd": "985.006",
+      "capital_before_usd": "1000.000",
+      "delta_usd": "-14.994",
+      "hash": "fb843544dbc7dc9c90fccacd224dc129d631730175012b94d068e62656a88ea5",
+      "kind": "trade_closed",
+      "prev": "0000000000000000000000000000000000000000000000000000000000000000",
+      "seq": 1,
+      "t_ms": 1700042520000,
+      "trade_id": "556c91023dafac3670383a5a"
+     }
+    ],
+    "excess_usd": "4.994092",
+    "next_trade": {
+     "capital_definitive_usd": "985.006",
+     "limits_applied": [
+      "daily_loss_budget"
+     ],
+     "planned_loss_usd": "5.005964485785270079868482499",
+     "risk_budget_used_usd": "9.85006",
+     "status": "opened"
+    },
+    "planned_loss_usd": 9.999908,
+    "realized_loss_usd": "14.994"
+   },
+   "id": "s06_perdida_superior_a_la_planificada",
+   "ledger_hash": "32db6a13bbdcadbdca0d12a8dd7edf6d973130105b0397fb0cabf33dfdd2c484",
+   "planned_vs_realized": [
+    {
+     "basis": "estimated_from_candles",
+     "excess_usd": "4.9941",
+     "exit_reason": "stop",
+     "fee_effect_usd": "-0.0025",
+     "funding_usd": "0.0000",
+     "net_complete": true,
+     "planned_loss_usd": "9.9999",
+     "pnl_net_usd": "-14.9940",
+     "price_effect_usd": "4.9966",
+     "product_id": "PF_XBTUSD",
+     "realized_loss_usd": "14.9940",
+     "side": "LONG",
+     "trade_id": "556c91023dafac3670383a5a"
+    }
+   ],
+   "summary": {
+    "accounting_digest": "ed06fa0db9ba8a26ed826837150a9f64c4c97360a04df08785a92420c2a1da11",
+    "adjustments": 0,
+    "audit": {
+     "checks": 6,
+     "violations": [],
+     "warnings": []
+    },
+    "capital_usd": "985.006",
+    "closed_trades": 1,
+    "drawdown_usd": "14.994",
+    "equity_usd": "985.006",
+    "open_positions": 1,
+    "provisional_gains_usd": "0",
+    "realized_today_usd": "-14.994",
+    "risk_budget_usd": "9.85006",
+    "suspension": {
+     "daily_loss": false,
+     "drawdown": false
+    }
+   },
+   "title": "P\u00e9rdida superior a la planificada",
+   "trades": [
+    {
+     "entry_price": "100000.600000",
+     "entry_time_ms": 1700042400000,
+     "exit_price": "96948.254900",
+     "exit_reason": "stop",
+     "exit_time_ms": 1700042520000,
+     "fees_usd": 0.468617,
+     "funding_status": "complete",
+     "funding_usd": 0.0,
+     "net_complete": true,
+     "planned_loss_usd": 9.999908,
+     "pnl_usd": -14.994,
+     "product_id": "PF_XBTUSD",
+     "side": "LONG",
+     "stop_price": "98000.00",
+     "trade_id": "556c91023dafac3670383a5a"
+    }
+   ]
+  },
+  {
+   "facts": {
+    "close_while_suspended": "stop",
+    "first_loss": {
+     "planned": 9.999908,
+     "realized": "20.9394"
+    },
+    "next_utc_day": "opened",
+    "realized_today_usd_at_suspension": "-30.9393",
+    "rejected_again": [
+     "suspended_daily_loss"
+    ],
+    "rejected_while_suspended": [
+     "suspended_daily_loss"
+    ],
+    "second_loss": {
+     "planned": 9.999922,
+     "realized": "9.9999"
+    },
+    "suspension_after_gap": {
+     "daily_loss": true,
+     "drawdown": false
+    },
+    "suspension_after_second": {
+     "daily_loss": true,
+     "drawdown": false
+    }
+   },
+   "id": "s07_suspension_por_perdida_diaria",
+   "ledger_hash": "e4808734c9b16b4506885cb6e1a2f2b0c1e482dca5c2b3c63902c213c66a960f",
+   "planned_vs_realized": [
+    {
+     "basis": "estimated_from_candles",
+     "excess_usd": "10.9395",
+     "exit_reason": "stop",
+     "fee_effect_usd": "-0.0055",
+     "funding_usd": "0.0000",
+     "net_complete": true,
+     "planned_loss_usd": "9.9999",
+     "pnl_net_usd": "-20.9394",
+     "price_effect_usd": "10.9450",
+     "product_id": "PF_XBTUSD",
+     "realized_loss_usd": "20.9394",
+     "side": "LONG",
+     "trade_id": "556c91023dafac3670383a5a"
+    },
+    {
+     "basis": "modelled_at_stop_level",
+     "excess_usd": "-0.0000",
+     "exit_reason": "stop",
+     "fee_effect_usd": "0.0000",
+     "funding_usd": "0.0000",
+     "net_complete": true,
+     "planned_loss_usd": "9.9999",
+     "pnl_net_usd": "-9.9999",
+     "price_effect_usd": "0.0000",
+     "product_id": "PF_ETHUSD",
+     "realized_loss_usd": "9.9999",
+     "side": "LONG",
+     "trade_id": "6713f2b11a799b668fbadf0c"
+    }
+   ],
+   "summary": {
+    "accounting_digest": "b808b33ea740afceb34e3979d59c0ec00ff36ebbd5eac60c8ad54cfd5f13e70f",
+    "adjustments": 0,
+    "audit": {
+     "checks": 10,
+     "violations": [],
+     "warnings": []
+    },
+    "capital_usd": "969.0607",
+    "closed_trades": 2,
+    "drawdown_usd": "30.9393",
+    "equity_usd": "969.0607",
+    "open_positions": 1,
+    "provisional_gains_usd": "0",
+    "realized_today_usd": "0",
+    "risk_budget_usd": "9.690607",
+    "suspension": {
+     "daily_loss": false,
+     "drawdown": false
+    }
+   },
+   "title": "Suspensi\u00f3n por p\u00e9rdida diaria",
+   "trades": [
+    {
+     "entry_price": "100000.600000",
+     "entry_time_ms": 1700042400000,
+     "exit_price": "95698.277400",
+     "exit_reason": "stop",
+     "exit_time_ms": 1700042520000,
+     "fees_usd": 0.465643,
+     "funding_status": "complete",
+     "funding_usd": 0.0,
+     "net_complete": true,
+     "planned_loss_usd": 9.999908,
+     "pnl_usd": -20.9394,
+     "product_id": "PF_XBTUSD",
+     "side": "LONG",
+     "stop_price": "98000.00",
+     "trade_id": "556c91023dafac3670383a5a"
+    },
+    {
+     "entry_price": "3500.066500",
+     "entry_time_ms": 1700042400000,
+     "exit_price": "3429.80449000",
+     "exit_reason": "stop",
+     "exit_time_ms": 1700042640000,
+     "fees_usd": 0.469965,
+     "funding_status": "complete",
+     "funding_usd": 0.0,
+     "net_complete": true,
+     "planned_loss_usd": 9.999922,
+     "pnl_usd": -9.9999,
+     "product_id": "PF_ETHUSD",
+     "side": "LONG",
+     "stop_price": "3430.00",
+     "trade_id": "6713f2b11a799b668fbadf0c"
+    }
+   ]
+  },
+  {
+   "facts": {
+    "days": [
+     {
+      "day": 1,
+      "drawdown": "16.6587",
+      "planned": 9.999908,
+      "realized": "16.6587",
+      "suspension": {
+       "daily_loss": false,
+       "drawdown": false
+      }
+     },
+     {
+      "day": 2,
+      "drawdown": "33.0398",
+      "planned": 9.833271,
+      "realized": "16.3811",
+      "suspension": {
+       "daily_loss": false,
+       "drawdown": false
+      }
+     },
+     {
+      "day": 3,
+      "drawdown": "49.1482",
+      "planned": 9.669576,
+      "realized": "16.1084",
+      "suspension": {
+       "daily_loss": false,
+       "drawdown": false
+      }
+     },
+     {
+      "day": 4,
+      "drawdown": "64.9881",
+      "planned": 9.508402,
+      "realized": "15.8399",
+      "suspension": {
+       "daily_loss": false,
+       "drawdown": true
+      }
+     }
+    ],
+    "rejected": [
+     "suspended_drawdown"
+    ],
+    "suspension": {
+     "daily_loss": false,
+     "drawdown": true
+    }
+   },
+   "id": "s08_suspension_por_drawdown",
+   "ledger_hash": "8cd05c68c38c195852bb6936911b5ac2eb50f93655c9ec17e296e13e63b5fef3",
+   "planned_vs_realized": [
+    {
+     "basis": "estimated_from_candles",
+     "excess_usd": "6.6588",
+     "exit_reason": "stop",
+     "fee_effect_usd": "-0.0033",
+     "funding_usd": "0.0000",
+     "net_complete": true,
+     "planned_loss_usd": "9.9999",
+     "pnl_net_usd": "-16.6587",
+     "price_effect_usd": "6.6622",
+     "product_id": "PF_XBTUSD",
+     "realized_loss_usd": "16.6587",
+     "side": "LONG",
+     "trade_id": "556c91023dafac3670383a5a"
+    },
+    {
+     "basis": "estimated_from_candles",
+     "excess_usd": "6.5478",
+     "exit_reason": "stop",
+     "fee_effect_usd": "-0.0033",
+     "funding_usd": "0.0000",
+     "net_complete": true,
+     "planned_loss_usd": "9.8333",
+     "pnl_net_usd": "-16.3811",
+     "price_effect_usd": "6.5511",
+     "product_id": "PF_XBTUSD",
+     "realized_loss_usd": "16.3811",
+     "side": "LONG",
+     "trade_id": "50ef345f225b0fd36d87d1e4"
+    },
+    {
+     "basis": "estimated_from_candles",
+     "excess_usd": "6.4388",
+     "exit_reason": "stop",
+     "fee_effect_usd": "-0.0032",
+     "funding_usd": "0.0000",
+     "net_complete": true,
+     "planned_loss_usd": "9.6696",
+     "pnl_net_usd": "-16.1084",
+     "price_effect_usd": "6.4421",
+     "product_id": "PF_XBTUSD",
+     "realized_loss_usd": "16.1084",
+     "side": "LONG",
+     "trade_id": "61f5ab909732b9d261190708"
+    },
+    {
+     "basis": "estimated_from_candles",
+     "excess_usd": "6.3315",
+     "exit_reason": "stop",
+     "fee_effect_usd": "-0.0032",
+     "funding_usd": "0.0000",
+     "net_complete": true,
+     "planned_loss_usd": "9.5084",
+     "pnl_net_usd": "-15.8399",
+     "price_effect_usd": "6.3347",
+     "product_id": "PF_XBTUSD",
+     "realized_loss_usd": "15.8399",
+     "side": "LONG",
+     "trade_id": "3d9ac01d559428d4d545d419"
+    }
+   ],
+   "summary": {
+    "accounting_digest": "a5a653d8ca459118a978cecb479f3f9f9c59f341b1050d7677f26d3aa45df05d",
+    "adjustments": 0,
+    "audit": {
+     "checks": 17,
+     "violations": [],
+     "warnings": []
+    },
+    "capital_usd": "935.0119",
+    "closed_trades": 4,
+    "drawdown_usd": "64.9881",
+    "equity_usd": "935.0119",
+    "open_positions": 0,
+    "provisional_gains_usd": "0",
+    "realized_today_usd": "0",
+    "risk_budget_usd": "9.350119",
+    "suspension": {
+     "daily_loss": false,
+     "drawdown": true
+    }
+   },
+   "title": "Suspensi\u00f3n por drawdown",
+   "trades": [
+    {
+     "entry_price": "100000.600000",
+     "entry_time_ms": 1700042400000,
+     "exit_price": "96598.261200",
+     "exit_reason": "stop",
+     "exit_time_ms": 1700042520000,
+     "fees_usd": 0.467785,
+     "funding_status": "complete",
+     "funding_usd": 0.0,
+     "net_complete": true,
+     "planned_loss_usd": 9.999908,
+     "pnl_usd": -16.6587,
+     "product_id": "PF_XBTUSD",
+     "side": "LONG",
+     "stop_price": "98000.00",
+     "trade_id": "556c91023dafac3670383a5a"
+    },
+    {
+     "entry_price": "100000.600000",
+     "entry_time_ms": 1700128800000,
+     "exit_price": "96598.261200",
+     "exit_reason": "stop",
+     "exit_time_ms": 1700128920000,
+     "fees_usd": 0.459989,
+     "funding_status": "complete",
+     "funding_usd": 0.0,
+     "net_complete": true,
+     "planned_loss_usd": 9.833271,
+     "pnl_usd": -16.3811,
+     "product_id": "PF_XBTUSD",
+     "side": "LONG",
+     "stop_price": "98000.00",
+     "trade_id": "50ef345f225b0fd36d87d1e4"
+    },
+    {
+     "entry_price": "100000.600000",
+     "entry_time_ms": 1700215200000,
+     "exit_price": "96598.261200",
+     "exit_reason": "stop",
+     "exit_time_ms": 1700215320000,
+     "fees_usd": 0.452332,
+     "funding_status": "complete",
+     "funding_usd": 0.0,
+     "net_complete": true,
+     "planned_loss_usd": 9.669576,
+     "pnl_usd": -16.1084,
+     "product_id": "PF_XBTUSD",
+     "side": "LONG",
+     "stop_price": "98000.00",
+     "trade_id": "61f5ab909732b9d261190708"
+    },
+    {
+     "entry_price": "100000.600000",
+     "entry_time_ms": 1700301600000,
+     "exit_price": "96598.261200",
+     "exit_reason": "stop",
+     "exit_time_ms": 1700301720000,
+     "fees_usd": 0.444792,
+     "funding_status": "complete",
+     "funding_usd": 0.0,
+     "net_complete": true,
+     "planned_loss_usd": 9.508402,
+     "pnl_usd": -15.8399,
+     "product_id": "PF_XBTUSD",
+     "side": "LONG",
+     "stop_price": "98000.00",
+     "trade_id": "3d9ac01d559428d4d545d419"
+    }
+   ]
+  },
+  {
+   "facts": {
+    "decision_taken_before_reconciliation": {
+     "capital_used_usd": "990.0001",
+     "decision_id": "155e286ed9940ff28b498bb4",
+     "planned_loss_usd": "9.899906668814709782189148056"
+    },
+    "digest_unchanged_by_repetition": true,
+    "first_reconciliation": [
+     {
+      "capital_after_usd": "990.0001",
+      "capital_before_usd": "990.0001",
+      "coverage": {
+       "covered_ms": 7200000,
+       "held_ms": 10860000,
+       "previous_covered_ms": 3600000,
+       "status": "partial"
+      },
+      "decisions_not_revised": [
+       "155e286ed9940ff28b498bb4"
+      ],
+      "delta_capital_usd": "0",
+      "delta_pnl_usd": "-0.9518",
+      "drawdown_after_usd": "9.9999",
+      "drawdown_before_usd": "9.9999",
+      "risk_budget_after_usd": "9.900001",
+      "risk_budget_before_usd": "9.900001",
+      "seq": 1,
+      "trade_id": "fed07c8f19dc1348591f7e5d",
+      "transition": "provisional_more_covered"
+     }
+    ],
+    "gain_net_complete": false,
+    "gain_status": "partial",
+    "intake_log_records_the_repetition": true,
+    "loss_net_complete": false,
+    "loss_status": "unknown",
+    "reconstruction_gain": {
+     "adjustments": [
+      {
+       "at_ms": 1700046300000,
+       "delta_pnl_usd": "-0.9518",
+       "periods_sha256": "c46fe438c865d8dab62b293b99cafc60e3e3fb8000427dfe2a2182ad22e37216",
+       "seq": 1,
+       "transition": "provisional_more_covered"
+      },
+      {
+       "at_ms": 1700049900000,
+       "delta_pnl_usd": "-0.9676",
+       "periods_sha256": "06937d2605d52fa2e71b70469aae7e8de45330575e9c13bc0d95694572f67f51",
+       "seq": 3,
+       "transition": "provisional_to_definitive"
+      }
+     ],
+     "as_closed": {
+      "funding_complete": false,
+      "funding_covered_ms": 3600000,
+      "funding_status": "partial",
+      "funding_usd": 0.95176,
+      "hit": true,
+      "net_bp": 69.8894,
+      "net_complete": false,
+      "net_usd": null,
+      "partial_usd": 3.3259,
+      "pnl_usd": 3.3259
+     },
+     "capital": {
+      "after_usd": "990.0001",
+      "before_usd": "990.0001",
+      "events": [
+       {
+        "after_usd": "990.0001",
+        "before_usd": "990.0001",
+        "delta_usd": "0",
+        "kind": "trade_closed",
+        "t_ms": 1700046060000
+       },
+       {
+        "after_usd": "990.0001",
+        "before_usd": "990.0001",
+        "delta_usd": "0",
+        "kind": "funding_reconciled",
+        "t_ms": 1700046300000
+       },
+       {
+        "after_usd": "990.9160",
+        "before_usd": "989.5095",
+        "delta_usd": "1.4065",
+        "kind": "funding_reconciled",
+        "t_ms": 1700049900000
+       }
+      ]
+     },
+     "entry": {
+      "cost_usd": "0.002855262868422789463263220421",
+      "price": "100000.600000",
+      "reference_price": "100000",
+      "time_ms": 1700035200000
+     },
+     "entry_window": null,
+     "exit": {
+      "basis": "not_a_stop",
+      "cost_usd": "0E-32",
+      "evidence": null,
+      "price": "101000.00",
+      "reason": "target",
+      "reference_price": "101000.00",
+      "time_ms": 1700046060000
+     },
+     "intent_id": "7355e9d3cd051d70ac2cb1b0",
+     "levels": {
+      "stop": "98000.00",
+      "target": "101000.00"
+     },
+     "plan": {
+      "planned_loss_usd": "9.999908",
+      "planned_stop_exit_price": "97998.23600000"
+     },
+     "product_id": "PF_XBTUSD",
+     "result": {
+      "fees_usd": "0.4782579580922514464913210521",
+      "funding_covered_ms": 10860000,
+      "funding_held_ms": 10860000,
+      "funding_status": "complete",
+      "funding_usd": "2.871143",
+      "modelled_impact_bps": "0.06",
+      "modelled_spread_bps": "0.12",
+      "net_complete": true,
+      "pnl_gross_usd": "4.755916184502892982642104148",
+      "pnl_net_usd": "1.4065",
+      "realized_loss_usd": "0"
+     },
+     "review_flags": [],
+     "side": "LONG",
+     "stop_exit": null,
+     "strategy_id": "s7",
+     "trade_id": "fed07c8f19dc1348591f7e5d"
+    },
+    "reconstruction_loss": {
+     "adjustments": [
+      {
+       "at_ms": 1700049900000,
+       "delta_pnl_usd": "-0.4906",
+       "periods_sha256": "94e99fc53feba39e1e6029ed87e3d3f7e103fcaa4fb183efef7c88f5a7103641",
+       "seq": 2,
+       "transition": "provisional_to_definitive"
+      }
+     ],
+     "as_closed": {
+      "funding_complete": false,
+      "funding_covered_ms": 0,
+      "funding_status": "unknown",
+      "funding_usd": null,
+      "hit": false,
+      "net_bp": -210.6444,
+      "net_complete": false,
+      "net_usd": null,
+      "partial_usd": -9.9999,
+      "pnl_usd": -9.9999
+     },
+     "capital": {
+      "after_usd": "990.0001",
+      "before_usd": "1000.0000",
+      "events": [
+       {
+        "after_usd": "990.0001",
+        "before_usd": "1000.0000",
+        "delta_usd": "-9.9999",
+        "kind": "trade_closed",
+        "t_ms": 1700037060000
+       },
+       {
+        "after_usd": "989.5095",
+        "before_usd": "990.0001",
+        "delta_usd": "-0.4906",
+        "kind": "funding_reconciled",
+        "t_ms": 1700049900000
+       }
+      ]
+     },
+     "entry": {
+      "cost_usd": "0.009019698625726111203887126144",
+      "price": "3500.066500",
+      "reference_price": "3500",
+      "time_ms": 1700035200000
+     },
+     "entry_window": null,
+     "exit": {
+      "basis": "modelled_at_stop_level",
+      "cost_usd": "0.02651791395963476693942815086",
+      "evidence": "ohlc_stop_level",
+      "price": "3429.80449000",
+      "reason": "stop",
+      "reference_price": "3430.00",
+      "time_ms": 1700037060000
+     },
+     "intent_id": "deb63833297bf85a61dbf1ad",
+     "levels": {
+      "stop": "3430.00",
+      "target": "3605.00"
+     },
+     "plan": {
+      "planned_loss_usd": "9.999922",
+      "planned_stop_exit_price": "3429.80449000"
+     },
+     "product_id": "PF_ETHUSD",
+     "result": {
+      "fees_usd": "0.4699650213906935768220403812",
+      "funding_covered_ms": 1860000,
+      "funding_held_ms": 1860000,
+      "funding_status": "complete",
+      "funding_usd": "0.490554",
+      "modelled_impact_bps": "0.19",
+      "modelled_spread_bps": "0.38",
+      "net_complete": true,
+      "pnl_gross_usd": "-9.529957218612846355919237534",
+      "pnl_net_usd": "-10.4905",
+      "realized_loss_usd": "10.4905"
+     },
+     "review_flags": [],
+     "side": "LONG",
+     "stop_exit": {
+      "estimated": true,
+      "evidence": "ohlc_stop_level",
+      "executable_price": "3429.80449000",
+      "gap_bps": "0.0000",
+      "quote_backed": false,
+      "reference_price": "3430.00",
+      "slippage_bps": "0.5700",
+      "stop_level": "3430.00"
+     },
+     "strategy_id": "s7e",
+     "trade_id": "a7dad7f0ff8bb99b9fc0d2c4"
+    },
+    "repeat_reconciliation": 0,
+    "repeated_delivery": {
+     "btc": {
+      "accepted": 0,
+      "conflict": 0,
+      "duplicate": 5,
+      "rejected": 0
+     },
+     "eth": {
+      "accepted": 0,
+      "conflict": 0,
+      "duplicate": 3,
+      "rejected": 0
+     }
+    },
+    "second_reconciliation": [
+     {
+      "capital_after_usd": "989.5095",
+      "capital_before_usd": "990.0001",
+      "coverage": {
+       "covered_ms": 1860000,
+       "held_ms": 1860000,
+       "previous_covered_ms": 0,
+       "status": "complete"
+      },
+      "decisions_not_revised": [
+       "155e286ed9940ff28b498bb4"
+      ],
+      "delta_capital_usd": "-0.4906",
+      "delta_pnl_usd": "-0.4906",
+      "drawdown_after_usd": "10.4905",
+      "drawdown_before_usd": "9.9999",
+      "risk_budget_after_usd": "9.895095",
+      "risk_budget_before_usd": "9.900001",
+      "seq": 2,
+      "trade_id": "a7dad7f0ff8bb99b9fc0d2c4",
+      "transition": "provisional_to_definitive"
+     },
+     {
+      "capital_after_usd": "990.9160",
+      "capital_before_usd": "989.5095",
+      "coverage": {
+       "covered_ms": 10860000,
+       "held_ms": 10860000,
+       "previous_covered_ms": 7200000,
+       "status": "complete"
+      },
+      "decisions_not_revised": [
+       "155e286ed9940ff28b498bb4"
+      ],
+      "delta_capital_usd": "1.4065",
+      "delta_pnl_usd": "-0.9676",
+      "drawdown_after_usd": "10.4905",
+      "drawdown_before_usd": "10.4905",
+      "risk_budget_after_usd": "9.909160",
+      "risk_budget_before_usd": "9.895095",
+      "seq": 3,
+      "trade_id": "fed07c8f19dc1348591f7e5d",
+      "transition": "provisional_to_definitive"
+     }
+    ],
+    "stages": [
+     {
+      "accounting_digest": "e6cf46cb7644ace59c6ed0f84f07bbc8c6bf485556e615cc9dfe6ac950c58564",
+      "adjustments": 0,
+      "capital_usd": "990.0001",
+      "closed_trades": 2,
+      "drawdown_usd": "9.9999",
+      "equity_usd": "993.3260",
+      "open_positions": 1,
+      "provisional_gains_usd": "3.3259",
+      "realized_today_usd": "-9.9999",
+      "risk_budget_usd": "9.900001",
+      "stage": "cerradas_con_funding_incompleto",
+      "suspension": {
+       "daily_loss": false,
+       "drawdown": false
+      }
+     },
+     {
+      "accounting_digest": "32eeaaaff61f06060eab24a10648270af05b00485c58b6401577d9b187470bdc",
+      "adjustments": 1,
+      "capital_usd": "990.0001",
+      "closed_trades": 2,
+      "drawdown_usd": "9.9999",
+      "equity_usd": "992.3742",
+      "open_positions": 1,
+      "provisional_gains_usd": "2.3741",
+      "realized_today_usd": "-9.9999",
+      "risk_budget_usd": "9.900001",
+      "stage": "btc_cobertura_parcial",
+      "suspension": {
+       "daily_loss": false,
+       "drawdown": false
+      }
+     },
+     {
+      "accounting_digest": "02ae22772e371b5fb4032bc219ed4b5908737bf19281abe54757671396f75be1",
+      "adjustments": 3,
+      "capital_usd": "990.9160",
+      "closed_trades": 2,
+      "drawdown_usd": "10.4905",
+      "equity_usd": "990.9160",
+      "open_positions": 1,
+      "provisional_gains_usd": "0",
+      "realized_today_usd": "-9.0840",
+      "risk_budget_usd": "9.909160",
+      "stage": "btc_y_eth_completos",
+      "suspension": {
+       "daily_loss": false,
+       "drawdown": false
+      }
+     }
+    ]
+   },
+   "id": "s09_funding_tardio",
+   "ledger_hash": "ae7d210e95e9cc50d5e181181e84198250327e7b5551c2f1d4f53e24be099d26",
+   "planned_vs_realized": [
+    {
+     "basis": "modelled_at_stop_level",
+     "excess_usd": "0.4906",
+     "exit_reason": "stop",
+     "fee_effect_usd": "0.0000",
+     "funding_usd": "0.4906",
+     "net_complete": true,
+     "planned_loss_usd": "9.9999",
+     "pnl_net_usd": "-10.4905",
+     "price_effect_usd": "0.0000",
+     "product_id": "PF_ETHUSD",
+     "realized_loss_usd": "10.4905",
+     "side": "LONG",
+     "trade_id": "a7dad7f0ff8bb99b9fc0d2c4"
+    },
+    {
+     "exit_reason": "target",
+     "net_complete": true,
+     "planned_loss_usd": "9.9999",
+     "pnl_net_usd": "1.4065",
+     "product_id": "PF_XBTUSD",
+     "side": "LONG",
+     "trade_id": "fed07c8f19dc1348591f7e5d"
+    }
+   ],
+   "summary": {
+    "accounting_digest": "02ae22772e371b5fb4032bc219ed4b5908737bf19281abe54757671396f75be1",
+    "adjustments": 3,
+    "audit": {
+     "checks": 12,
+     "violations": [],
+     "warnings": []
+    },
+    "capital_usd": "990.9160",
+    "closed_trades": 2,
+    "drawdown_usd": "10.4905",
+    "equity_usd": "990.9160",
+    "open_positions": 1,
+    "provisional_gains_usd": "0",
+    "realized_today_usd": "-9.0840",
+    "risk_budget_usd": "9.909160",
+    "suspension": {
+     "daily_loss": false,
+     "drawdown": false
+    }
+   },
+   "title": "Funding incompleto que se completa despu\u00e9s",
+   "trades": [
+    {
+     "entry_price": "3500.066500",
+     "entry_time_ms": 1700035200000,
+     "exit_price": "3429.80449000",
+     "exit_reason": "stop",
+     "exit_time_ms": 1700037060000,
+     "fees_usd": 0.469965,
+     "funding_status": "complete",
+     "funding_usd": 0.490554,
+     "net_complete": true,
+     "planned_loss_usd": 9.999922,
+     "pnl_usd": -10.4905,
+     "product_id": "PF_ETHUSD",
+     "side": "LONG",
+     "stop_price": "3430.00",
+     "trade_id": "a7dad7f0ff8bb99b9fc0d2c4"
+    },
+    {
+     "entry_price": "100000.600000",
+     "entry_time_ms": 1700035200000,
+     "exit_price": "101000.00",
+     "exit_reason": "target",
+     "exit_time_ms": 1700046060000,
+     "fees_usd": 0.478258,
+     "funding_status": "complete",
+     "funding_usd": 2.871143,
+     "net_complete": true,
+     "planned_loss_usd": 9.999908,
+     "pnl_usd": 1.4065,
+     "product_id": "PF_XBTUSD",
+     "side": "LONG",
+     "stop_price": "98000.00",
+     "trade_id": "fed07c8f19dc1348591f7e5d"
+    }
+   ]
+  },
+  {
+   "facts": {
+    "adjustments_made": 1,
+    "adjustments_on_repetition": 0,
+    "digest_unchanged_by_repetition": true,
+    "duplicated_inside_one_batch": {
+     "accepted": 0,
+     "conflict": 0,
+     "duplicate": 6,
+     "rejected": 0
+    },
+    "expected_single_funding_usd": "2.871143",
+    "first": {
+     "accepted": 3,
+     "conflict": 0,
+     "duplicate": 0,
+     "rejected": 0
+    },
+    "funding_applied_usd": "2.871143",
+    "second": {
+     "accepted": 0,
+     "conflict": 0,
+     "duplicate": 3,
+     "rejected": 0
+    }
+   },
+   "id": "s10_funding_recibido_dos_veces",
+   "ledger_hash": "6a9baf73e57278843b2084a83e868a8940eb2a31cb049f05d189d017cfae15c2",
+   "planned_vs_realized": [
+    {
+     "basis": "modelled_at_stop_level",
+     "excess_usd": "-0.0000",
+     "exit_reason": "stop",
+     "fee_effect_usd": "0.0000",
+     "funding_usd": "0.0000",
+     "net_complete": false,
+     "planned_loss_usd": "9.9999",
+     "pnl_net_usd": "-9.9999",
+     "price_effect_usd": "0.0000",
+     "product_id": "PF_ETHUSD",
+     "realized_loss_usd": "9.9999",
+     "side": "LONG",
+     "trade_id": "a7dad7f0ff8bb99b9fc0d2c4"
+    },
+    {
+     "exit_reason": "target",
+     "net_complete": true,
+     "planned_loss_usd": "9.9999",
+     "pnl_net_usd": "1.4065",
+     "product_id": "PF_XBTUSD",
+     "side": "LONG",
+     "trade_id": "fed07c8f19dc1348591f7e5d"
+    }
+   ],
+   "summary": {
+    "accounting_digest": "157a2e43779cc38865bd1d38979e0f85b9ce3f303f02a4c6988687fe9d29bc29",
+    "adjustments": 1,
+    "audit": {
+     "checks": 10,
+     "violations": [],
+     "warnings": []
+    },
+    "capital_usd": "991.4066",
+    "closed_trades": 2,
+    "drawdown_usd": "9.9999",
+    "equity_usd": "991.4066",
+    "open_positions": 0,
+    "provisional_gains_usd": "0",
+    "realized_today_usd": "-8.5934",
+    "risk_budget_usd": "9.914066",
+    "suspension": {
+     "daily_loss": false,
+     "drawdown": false
+    }
+   },
+   "title": "Funding recibido dos veces",
+   "trades": [
+    {
+     "entry_price": "3500.066500",
+     "entry_time_ms": 1700035200000,
+     "exit_price": "3429.80449000",
+     "exit_reason": "stop",
+     "exit_time_ms": 1700037060000,
+     "fees_usd": 0.469965,
+     "funding_status": "unknown",
+     "funding_usd": null,
+     "net_complete": false,
+     "planned_loss_usd": 9.999922,
+     "pnl_usd": -9.9999,
+     "product_id": "PF_ETHUSD",
+     "side": "LONG",
+     "stop_price": "3430.00",
+     "trade_id": "a7dad7f0ff8bb99b9fc0d2c4"
+    },
+    {
+     "entry_price": "100000.600000",
+     "entry_time_ms": 1700035200000,
+     "exit_price": "101000.00",
+     "exit_reason": "target",
+     "exit_time_ms": 1700046060000,
+     "fees_usd": 0.478258,
+     "funding_status": "complete",
+     "funding_usd": 2.871143,
+     "net_complete": true,
+     "planned_loss_usd": 9.999908,
+     "pnl_usd": 1.4065,
+     "product_id": "PF_XBTUSD",
+     "side": "LONG",
+     "stop_price": "98000.00",
+     "trade_id": "fed07c8f19dc1348591f7e5d"
+    }
+   ]
+  },
+  {
+   "facts": {
+    "adjustments_after_correction": 0,
+    "adjustments_after_later": 0,
+    "adjustments_after_versions": 0,
+    "capital_after_correction": "990.0001",
+    "capital_before_correction": "990.0001",
+    "clean_package_unused": 3,
+    "correction_of_accepted": {
+     "accepted": 0,
+     "conflict": 1,
+     "duplicate": 0,
+     "rejected": 0
+    },
+    "later_delivery": {
+     "accepted": 0,
+     "conflict": 1,
+     "duplicate": 0,
+     "rejected": 0
+    },
+    "quarantine": {
+     "PF_ETHUSD": [
+      [
+       1700035200000,
+       1700038800000,
+       "0.002"
+      ],
+      [
+       1700035200000,
+       1700038800000,
+       "0.004"
+      ]
+     ],
+     "PF_XBTUSD": [
+      [
+       1700035200000,
+       1700038800000,
+       "0.01"
+      ]
+     ]
+    },
+    "review_flags": {
+     "a7dad7f0ff8bb99b9fc0d2c4": [
+      "funding_conflict"
+     ],
+     "fed07c8f19dc1348591f7e5d": [
+      "funding_conflict"
+     ]
+    },
+    "trades_unchanged_by_correction": [
+     null,
+     0.95176
+    ],
+    "two_versions_same_hour": {
+     "accepted": 0,
+     "conflict": 2,
+     "duplicate": 0,
+     "rejected": 0
+    }
+   },
+   "id": "s11_funding_contradictorio",
+   "ledger_hash": "e7b85b240c27e38a371cd53ad542b84019ec54a67825df86f101ae465278dcbc",
+   "planned_vs_realized": [
+    {
+     "basis": "modelled_at_stop_level",
+     "excess_usd": "-0.0000",
+     "exit_reason": "stop",
+     "fee_effect_usd": "0.0000",
+     "funding_usd": "0.0000",
+     "net_complete": false,
+     "planned_loss_usd": "9.9999",
+     "pnl_net_usd": "-9.9999",
+     "price_effect_usd": "0.0000",
+     "product_id": "PF_ETHUSD",
+     "realized_loss_usd": "9.9999",
+     "side": "LONG",
+     "trade_id": "a7dad7f0ff8bb99b9fc0d2c4"
+    },
+    {
+     "exit_reason": "target",
+     "net_complete": false,
+     "planned_loss_usd": "9.9999",
+     "pnl_net_usd": "3.3259",
+     "product_id": "PF_XBTUSD",
+     "side": "LONG",
+     "trade_id": "fed07c8f19dc1348591f7e5d"
+    }
+   ],
+   "summary": {
+    "accounting_digest": "5f9e90127134158b20bb11ea57025d141296dfeafecf6b2f9ee0fd36bda7ec8d",
+    "adjustments": 0,
+    "audit": {
+     "checks": 9,
+     "violations": [],
+     "warnings": []
+    },
+    "capital_usd": "990.0001",
+    "closed_trades": 2,
+    "drawdown_usd": "9.9999",
+    "equity_usd": "993.3260",
+    "open_positions": 0,
+    "provisional_gains_usd": "3.3259",
+    "realized_today_usd": "-9.9999",
+    "risk_budget_usd": "9.900001",
+    "suspension": {
+     "daily_loss": false,
+     "drawdown": false
+    }
+   },
+   "title": "Funding corregido con datos contradictorios",
+   "trades": [
+    {
+     "entry_price": "3500.066500",
+     "entry_time_ms": 1700035200000,
+     "exit_price": "3429.80449000",
+     "exit_reason": "stop",
+     "exit_time_ms": 1700037060000,
+     "fees_usd": 0.469965,
+     "funding_status": "unknown",
+     "funding_usd": null,
+     "net_complete": false,
+     "planned_loss_usd": 9.999922,
+     "pnl_usd": -9.9999,
+     "product_id": "PF_ETHUSD",
+     "side": "LONG",
+     "stop_price": "3430.00",
+     "trade_id": "a7dad7f0ff8bb99b9fc0d2c4"
+    },
+    {
+     "entry_price": "100000.600000",
+     "entry_time_ms": 1700035200000,
+     "exit_price": "101000.00",
+     "exit_reason": "target",
+     "exit_time_ms": 1700046060000,
+     "fees_usd": 0.478258,
+     "funding_status": "partial",
+     "funding_usd": 0.95176,
+     "net_complete": false,
+     "planned_loss_usd": 9.999908,
+     "pnl_usd": 3.3259,
+     "product_id": "PF_XBTUSD",
+     "side": "LONG",
+     "stop_price": "98000.00",
+     "trade_id": "fed07c8f19dc1348591f7e5d"
+    }
+   ]
+  },
+  {
+   "facts": {
+    "adjustments_on_repetition": 0,
+    "checkpoint_before_is_a_new_object": true,
+    "checkpoint_before_reconciliation_still_provisional": 2,
+    "equal_after": true,
+    "equal_before": true,
+    "restart_after_digest": "c4fc027f8b877615b2bfa671e7aa8f4218dbc289c6464a4e8469bc27c093c8e4",
+    "restart_before_digest": "c4fc027f8b877615b2bfa671e7aa8f4218dbc289c6464a4e8469bc27c093c8e4",
+    "uninterrupted_digest": "c4fc027f8b877615b2bfa671e7aa8f4218dbc289c6464a4e8469bc27c093c8e4"
+   },
+   "id": "s12_reinicio_y_conciliacion",
+   "ledger_hash": "2246a183e03a4f1dda7f5148e25f731c40352af4b4a744c37babf5a1b7f368a4",
+   "planned_vs_realized": [
+    {
+     "basis": "modelled_at_stop_level",
+     "excess_usd": "0.4906",
+     "exit_reason": "stop",
+     "fee_effect_usd": "0.0000",
+     "funding_usd": "0.4906",
+     "net_complete": true,
+     "planned_loss_usd": "9.9999",
+     "pnl_net_usd": "-10.4905",
+     "price_effect_usd": "0.0000",
+     "product_id": "PF_ETHUSD",
+     "realized_loss_usd": "10.4905",
+     "side": "LONG",
+     "trade_id": "a7dad7f0ff8bb99b9fc0d2c4"
+    },
+    {
+     "exit_reason": "target",
+     "net_complete": true,
+     "planned_loss_usd": "9.9999",
+     "pnl_net_usd": "1.4065",
+     "product_id": "PF_XBTUSD",
+     "side": "LONG",
+     "trade_id": "fed07c8f19dc1348591f7e5d"
+    }
+   ],
+   "summary": {
+    "accounting_digest": "c4fc027f8b877615b2bfa671e7aa8f4218dbc289c6464a4e8469bc27c093c8e4",
+    "adjustments": 2,
+    "audit": {
+     "checks": 11,
+     "violations": [],
+     "warnings": []
+    },
+    "capital_usd": "990.9160",
+    "closed_trades": 2,
+    "drawdown_usd": "10.4905",
+    "equity_usd": "990.9160",
+    "open_positions": 0,
+    "provisional_gains_usd": "0",
+    "realized_today_usd": "-9.0840",
+    "risk_budget_usd": "9.909160",
+    "suspension": {
+     "daily_loss": false,
+     "drawdown": false
+    }
+   },
+   "title": "Reinicio antes y despu\u00e9s de una conciliaci\u00f3n",
+   "trades": [
+    {
+     "entry_price": "3500.066500",
+     "entry_time_ms": 1700035200000,
+     "exit_price": "3429.80449000",
+     "exit_reason": "stop",
+     "exit_time_ms": 1700037060000,
+     "fees_usd": 0.469965,
+     "funding_status": "complete",
+     "funding_usd": 0.490554,
+     "net_complete": true,
+     "planned_loss_usd": 9.999922,
+     "pnl_usd": -10.4905,
+     "product_id": "PF_ETHUSD",
+     "side": "LONG",
+     "stop_price": "3430.00",
+     "trade_id": "a7dad7f0ff8bb99b9fc0d2c4"
+    },
+    {
+     "entry_price": "100000.600000",
+     "entry_time_ms": 1700035200000,
+     "exit_price": "101000.00",
+     "exit_reason": "target",
+     "exit_time_ms": 1700046060000,
+     "fees_usd": 0.478258,
+     "funding_status": "complete",
+     "funding_usd": 2.871143,
+     "net_complete": true,
+     "planned_loss_usd": 9.999908,
+     "pnl_usd": 1.4065,
+     "product_id": "PF_XBTUSD",
+     "side": "LONG",
+     "stop_price": "98000.00",
+     "trade_id": "fed07c8f19dc1348591f7e5d"
+    }
+   ]
+  },
+  {
+   "facts": {
+    "closed_once": true,
+    "duplicate_intent": [
+     "retroactive_intent",
+     "duplicate_intent"
+    ],
+    "exit_evidence": "quote_breach",
+    "exit_time_ms": 1700049680000,
+    "ignored": [
+     "covered_by_candle",
+     "duplicate_entry_minute_candle_ignored",
+     "duplicate_or_out_of_order_quote",
+     "entry_minute_unresolved",
+     "invalid_quote",
+     "stop_closed_on_quote"
+    ],
+    "review_flags": {
+     "9ce73a76c3c1addf0cfec6f4": [
+      "entry_minute_unresolved"
+     ]
+    },
+    "same_accounting_as_clean_run": true,
+    "same_ledger_as_clean_run": true,
+    "trades_clean": 1,
+    "trades_dirty": 1,
+    "watch_events": [
+     {
+      "kind": "quote_ignored",
+      "product_id": "PF_XBTUSD",
+      "reason": "duplicate_or_out_of_order_quote",
+      "time_ms": 1700049615000
+     },
+     {
+      "kind": "quote_ignored",
+      "product_id": "PF_XBTUSD",
+      "reason": "duplicate_or_out_of_order_quote",
+      "time_ms": 1700049612000
+     },
+     {
+      "kind": "quote_ignored",
+      "product_id": "PF_XBTUSD",
+      "reason": "duplicate_or_out_of_order_quote",
+      "time_ms": 1700049610000
+     },
+     {
+      "kind": "quote_ignored",
+      "quote_hash": "81affb5b0a005f33ffa999b710de6facc806d769f58397c3a685a9bb71c2eae0",
+      "reason": "invalid_quote"
+     },
+     {
+      "intent_id": "9e8165bb84afd6ede86ffd3a",
+      "kind": "entry_minute_unresolved",
+      "policy": "flag",
+      "product_id": "PF_XBTUSD"
+     },
+     {
+      "bucket_ms": 1700049600000,
+      "kind": "duplicate_entry_minute_candle_ignored",
+      "product_id": "PF_XBTUSD"
+     },
+     {
+      "kind": "quote_ignored",
+      "product_id": "PF_XBTUSD",
+      "reason": "covered_by_candle",
+      "time_ms": 1700049650000
+     },
+     {
+      "kind": "stop_closed_on_quote",
+      "product_id": "PF_XBTUSD",
+      "time_ms": 1700049680000,
+      "trade_id": "9ce73a76c3c1addf0cfec6f4"
+     },
+     {
+      "kind": "quote_ignored",
+      "product_id": "PF_XBTUSD",
+      "reason": "duplicate_or_out_of_order_quote",
+      "time_ms": 1700049680000
+     },
+     {
+      "kind": "quote_ignored",
+      "product_id": "PF_XBTUSD",
+      "reason": "duplicate_or_out_of_order_quote",
+      "time_ms": 1700049670000
+     }
+    ]
+   },
+   "id": "s13_eventos_duplicados_y_desordenados",
+   "ledger_hash": "2145e6b9c7ca9b8a766672361e0241d5094095e098dc1289801f73d0e78b4073",
+   "planned_vs_realized": [
+    {
+     "basis": "quote_backed",
+     "excess_usd": "0.9662",
+     "exit_reason": "stop",
+     "fee_effect_usd": "-0.0005",
+     "funding_usd": "0.0000",
+     "net_complete": true,
+     "planned_loss_usd": "9.9999",
+     "pnl_net_usd": "-10.9661",
+     "price_effect_usd": "0.9666",
+     "product_id": "PF_XBTUSD",
+     "realized_loss_usd": "10.9661",
+     "side": "LONG",
+     "trade_id": "9ce73a76c3c1addf0cfec6f4"
+    }
+   ],
+   "summary": {
+    "accounting_digest": "bcb4cb880aaaa8a38f6e211ef8be203c703c00307c0d766f9e30bff05f65511e",
+    "adjustments": 0,
+    "audit": {
+     "checks": 5,
+     "violations": [],
+     "warnings": []
+    },
+    "capital_usd": "989.0339",
+    "closed_trades": 1,
+    "drawdown_usd": "10.9661",
+    "equity_usd": "989.0339",
+    "open_positions": 0,
+    "provisional_gains_usd": "0",
+    "realized_today_usd": "-10.9661",
+    "risk_budget_usd": "9.890339",
+    "suspension": {
+     "daily_loss": false,
+     "drawdown": false
+    }
+   },
+   "title": "Eventos duplicados o fuera de orden",
+   "trades": [
+    {
+     "entry_price": "100000.600000",
+     "entry_time_ms": 1700049610000,
+     "exit_price": "97795.11000",
+     "exit_reason": "stop",
+     "exit_time_ms": 1700049680000,
+     "fees_usd": 0.470632,
+     "funding_status": "complete",
+     "funding_usd": 0.0,
+     "net_complete": true,
+     "planned_loss_usd": 9.999908,
+     "pnl_usd": -10.9661,
+     "product_id": "PF_XBTUSD",
+     "side": "LONG",
+     "stop_price": "98000.00",
+     "trade_id": "9ce73a76c3c1addf0cfec6f4"
+    }
+   ]
+  }
+ ],
+ "schema": "balancita-stage7.v1"
+}

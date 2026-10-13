@@ -36,6 +36,11 @@ Resolution of simultaneous intents (deterministic, independent of input order):
   3. Survivors are allocated one by one by (strength desc, product, intent id) against the capital the previous ones left.
 An intent may carry ``entry_bucket_ms`` (default: ``bucket_ms``): the 1-minute bucket the position is opened on when the
 entry happens later than the signal's candle (``execution_timing``). The position never sees that bucket's candle.
+Stage 7 (docs/contabilidad-condiciones-adversas.md) adds, all opt-in or additive and without changing any earlier result:
+``stop_policy`` (how a stop the market gapped through is priced; ``level`` is the earlier behaviour), ``close_on_quote``
+(used by ``portfolio_watch``), an append-only ``capital_log`` from which the drawdown and the daily result are read,
+``suspension_state``, and the ``adjustments`` that ``portfolio_funding`` writes when late funding arrives. A planned loss
+is a model figure, not a bound: a gap can lose more, and the loss is booked whole.
 Time only moves forward: a decision older than the last one, an intent from a candle before the product's last
 processed candle, a candle that is not newer than the last one, or data closing after ``now`` are refused.
 """
@@ -118,9 +123,9 @@ class PositionBook(Book):
     """A shared-simulator book for one portfolio position: enters on an armed proposal, exits only by stop,
     target or time stop (the exits every arm uses)."""
 
-    def __init__(self, intent, notional_usd, tick_size, funding):
+    def __init__(self, intent, notional_usd, tick_size, funding, stop_policy="level"):
         super().__init__({"id": intent["strategy_id"]}, product_id=intent["product_id"], tick_size=tick_size,
-                         notional_usd=notional_usd, funding=funding)
+                         notional_usd=notional_usd, funding=funding, stop_policy=stop_policy)
         self.intent, self.recorded, self.planned_loss_usd = intent, 0, D(0)
         self._armed = True
 
@@ -138,14 +143,29 @@ class PositionBook(Book):
 
 
 def _frame(candle):
-    return {"ready": True, "candidate_close": str(candle["close"]), "candidate_high": str(candle["high"]),
-            "candidate_low": str(candle["low"])}
+    frame = {"ready": True, "candidate_close": str(candle["close"]), "candidate_high": str(candle["high"]),
+             "candidate_low": str(candle["low"])}
+    if candle.get("open") is not None:   # read only by the opt-in gap policies of ``Book``
+        frame["candidate_open"] = str(candle["open"])
+    return frame
 
 
 class Portfolio:
-    def __init__(self, policy=None, *, funding=None, tick_sizes=None):
-        """``funding``: product -> iterable of ``(start_ms, end_ms, relative_rate_per_hour)`` (positive: longs pay)."""
+    def __init__(self, policy=None, *, funding=None, tick_sizes=None, stop_policy="level"):
+        """``funding``: product -> iterable of ``(start_ms, end_ms, relative_rate_per_hour)`` (positive: longs pay).
+
+        ``stop_policy``: how a stop the market crossed is priced (``futures_simulator.STOP_POLICIES``). ``level``, the
+        default, is the behaviour of every earlier result: the stop executes at its level plus the modelled cost."""
         self.policy = policy or PortfolioPolicy()
+        self.stop_policy = stop_policy
+        # Accounting history (stage 7). Nothing here enters ``ledger_hash``; ``accounting_digest`` covers it.
+        self.capital_log = []         # append-only, hash-chained: every change of the definitive capital, in order
+        self.trade_details = {}       # trade_id -> what is needed to rebuild the trade (references, as-closed state, notes)
+        self.adjustments = []         # append-only, hash-chained: late funding reconciliations
+        self.funding_log = []         # append-only, hash-chained: funding periods accepted, duplicated, conflicting, rejected
+        self.funding_conflicts = {}   # product -> quarantined periods that contradict accepted ones (never applied)
+        self.review_flags = {}        # trade_id -> reasons a person should look at the trade
+        self.position_notes = {}      # intent_id -> notes recorded while the position was open (entry window, ...)
         self.funding = {p: sorted((int(a), int(b), D(str(r))) for a, b, r in rows) for p, rows in (funding or {}).items()}
         self.tick_sizes = tick_sizes or {}
         self.positions = {}     # product -> PositionBook (at most one open position per product)
@@ -202,15 +222,24 @@ class Portfolio:
         return long, short
 
     def drawdown_usd(self):
+        """Largest fall of the cumulative conservative result, in the order the changes became known (the capital log:
+        closes and, later, funding reconciliations). The curve of the past is never rewritten by a late correction."""
         peak = running = drawdown = D(0)
-        for trade in self.trades:
-            running += self._conservative_pnl(trade)
+        for event in self.capital_log:
+            running += D(event["delta_usd"])
             peak = max(peak, running)
             drawdown = max(drawdown, peak - running)
         return drawdown
 
     def realized_today_usd(self, now_ms):
-        return sum((self._conservative_pnl(t) for t in self.trades if t["exit_time_ms"] // DAY_MS == now_ms // DAY_MS), D(0))
+        """Conservative result of the UTC day of ``now_ms``: trades closed that day and corrections learned that day."""
+        return sum((D(e["delta_usd"]) for e in self.capital_log if e["t_ms"] // DAY_MS == now_ms // DAY_MS), D(0))
+
+    def suspension_state(self, now_ms):
+        """Which suspensions are active now. A suspension only stops *new entries*: closes, accounting and
+        reconciliations never look at it."""
+        return {"daily_loss": self.realized_today_usd(now_ms) <= -D(self.policy.daily_loss_limit_usd),
+                "drawdown": self.drawdown_usd() >= D(self.policy.max_drawdown_usd)}
 
     def unrealized_usd(self):
         total = D(0)
@@ -340,9 +369,10 @@ class Portfolio:
         elif product in self.positions:
             reasons.append("position_already_open" if self.positions[product].position["side"] == side
                            else "opposite_position_open")
-        if self.realized_today_usd(now_ms) <= -D(self.policy.daily_loss_limit_usd):
+        suspended = self.suspension_state(now_ms)
+        if suspended["daily_loss"]:
             reasons.append("suspended_daily_loss")
-        if self.drawdown_usd() >= D(self.policy.max_drawdown_usd):
+        if suspended["drawdown"]:
             reasons.append("suspended_drawdown")
         return reasons, plan
 
@@ -425,12 +455,15 @@ class Portfolio:
     def _open(self, intent, plan, notional, applied, now_ms):
         product = intent["product_id"]
         budget = self.risk_budget_usd()
-        book = PositionBook(intent, str(notional), self.tick_sizes.get(product, "1"), self.funding.get(product, ()))
+        book = PositionBook(intent, str(notional), self.tick_sizes.get(product, "1"), self.funding.get(product, ()),
+                            self.stop_policy)
         entry_bucket = int(intent.get("entry_bucket_ms", intent["bucket_ms"]))
         book.on_frame(entry_bucket, _frame({"close": intent["price"], "high": intent["price"],
                                                    "low": intent["price"]}), None, None, None)
         if book.position is None:  # the shared simulator refused the entry
             return self._record(intent, now_ms, "rejected", plan, reasons=["target_does_not_clear_cost"])
+        if intent.get("entry_ms") is not None:   # the real entry instant (``execution_timing`` with quote watching)
+            book.position["entry_ms"] = int(intent["entry_ms"])
         planned = notional * plan["loss_fraction"]
         book.planned_loss_usd = planned
         open_before = self.open_risk_usd()
@@ -461,15 +494,49 @@ class Portfolio:
         if book is None:
             return closed
         book.on_frame(bucket_ms, _frame(candle), None, None, None)
+        return self._collect(product_id, book)
+
+    def _collect(self, product_id, book):
+        """Books the trades ``book`` has closed since the last call and drops the book once it is flat."""
+        closed = []
         while book.recorded < len(book.trades):
             trade = book.trades[book.recorded]
+            fill = book.fills[book.recorded]
             book.recorded += 1
-            closed.append(self._store_trade(product_id, book, trade))
+            closed.append(self._store_trade(product_id, book, trade, fill))
         if book.position is None:
             del self.positions[product_id]
         return closed
 
-    def _store_trade(self, product_id, book, trade):
+    def close_on_quote(self, product_id, time_ms, reference_price, executable_price, evidence, details=None):
+        """Closes the open position of ``product_id`` at a price a quote demonstrated (see ``portfolio_watch``).
+        Allowed in any state of the account: a suspension never stops a close."""
+        book = self.positions[product_id]
+        book.close_on_quote(time_ms, reference_price, "stop", executable_price, evidence, details)
+        self.marks[product_id] = D(str(executable_price))
+        return self._collect(product_id, book)[0]
+
+    # ---- accounting history ----------------------------------------------------------------------------------
+    CLOSED_FIELDS = ("pnl_usd", "net_bp", "hit", "funding_usd", "funding_complete", "funding_status",
+                     "funding_covered_ms", "net_complete", "net_usd", "partial_usd")
+
+    @staticmethod
+    def contribution(trade):
+        """What the trade adds to the definitive capital: verified results as they are, unverified ones only if they lose."""
+        pnl = D(str(trade["pnl_usd"]))
+        return D(str(trade["net_usd"])) if trade["net_complete"] else min(D(0), pnl)
+
+    def append_capital_event(self, kind, t_ms, trade_id, delta, **extra):
+        """Appends to the hash-chained capital log; ``capital_before/after`` are the definitive capital around it."""
+        before = self.capital_usd() - D(delta)   # the trade state already carries the change
+        entry = {"seq": len(self.capital_log) + 1, "kind": kind, "t_ms": int(t_ms), "trade_id": trade_id,
+                 "delta_usd": str(delta), "capital_before_usd": str(before), "capital_after_usd": str(before + D(delta)),
+                 "prev": self.capital_log[-1]["hash"] if self.capital_log else "0" * 64, **extra}
+        entry["hash"] = stable_hash(entry)
+        self.capital_log.append(entry)
+        return entry
+
+    def _store_trade(self, product_id, book, trade, fill=None):
         complete = bool(trade["funding_complete"]) and is_measured(product_id)
         fees = (D(trade["entry_price"]) + D(trade["exit_price"])) * D(trade["quantity"]) * fee_rate("taker")
         stored = dict(trade, product_id=product_id, intent_id=book.intent["intent_id"],
@@ -478,6 +545,13 @@ class Portfolio:
                       planned_loss_usd=float(round(book.planned_loss_usd, 6)),
                       trade_id=stable_hash([product_id, trade["entry_bucket_ms"], book.intent["intent_id"]])[:24])
         self.trades.append(stored)
+        self.trade_details[stored["trade_id"]] = {
+            "as_closed": {k: stored[k] for k in self.CLOSED_FIELDS}, "fill": fill,
+            "entry_reference_price": book.intent["price"],
+            "notes": self.position_notes.pop(book.intent["intent_id"], {})}
+        if self.trade_details[stored["trade_id"]]["notes"].get("entry_minute_unresolved"):
+            self.review_flags.setdefault(stored["trade_id"], []).append("entry_minute_unresolved")
+        self.append_capital_event("trade_closed", stored["exit_time_ms"], stored["trade_id"], self.contribution(stored))
         return stored
 
     def ledger_hash(self):

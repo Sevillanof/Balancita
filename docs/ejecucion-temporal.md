@@ -54,8 +54,8 @@ PYTHONPATH=python python3 -m unittest python/tests/test_execution_timing.py
 ## Límites declarados
 
 - Las cotizaciones y la latencia son sintéticas. Que `latency_ms` (1 s), el plazo (60 s), la edad máxima (5 s), el spread máximo (30 pb) y las dos fracciones (0,5) sean razonables **no está medido**: son hipótesis iniciales, no valores optimizados ni aprobados. No son parámetros de riesgo aprobados.
-- Ventana sin vigilar: entre `entry_ms` y el siguiente minuto (hasta 59,999 s; cero si la entrada cae en límite de minuto) el stop no se evalúa, porque el `Book` solo ve velas cerradas. Una versión conectada debería vigilar con las cotizaciones de ese tramo.
-- El stop sale siempre al precio del stop con el impacto del modelo (sin huecos de precio), como antes.
+- Ventana sin vigilar: entre `entry_ms` y el siguiente minuto (hasta 59,999 s; cero si la entrada cae en límite de minuto) el stop no se evalúa, porque el `Book` solo ve velas cerradas. Una versión conectada debería vigilar con las cotizaciones de ese tramo. La etapa 7 lo resuelve de forma opcional y aislada (`TimedExecutor(watch=...)`, [contabilidad-condiciones-adversas.md](contabilidad-condiciones-adversas.md)); sin esa opción el límite sigue igual.
+- El stop sale por defecto al precio del stop con el impacto del modelo (sin huecos de precio), como antes; la opción `stop_policy` de la etapa 7 lo cambia sin tocar el comportamiento predeterminado.
 - Las órdenes de productos distintos se deciden con cada cotización, no en un lote global: se pierde la prioridad por fuerza entre productos que tenía un lote simultáneo. Es lo realista, pero cambia la asignación de capital frente al prototipo.
 - Una cotización que llega fuera de orden de tiempo de recepción se ignora; no hay reordenamiento.
 
