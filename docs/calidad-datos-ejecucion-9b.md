@@ -59,18 +59,19 @@ Esquema: `balancita-data-quality.v1`. Tiempos en ms epoch.
 
 Sondeo único del 2026-10-13 (GET público `orderbook`, 3 lecturas por producto con 1 s de separación; script en `etapa-9b/sondeos/`). Es una foto, no una distribución: sirve para ver el orden de magnitud y probar las utilidades.
 
-| Producto | Spread modelo (pb) | Spread libro (pb) | Impacto modelo (pb, 1 000 USD) | Impacto libro 100 USD (pb) |
-|---|---|---|---|---|
-| PF_XBTUSD | 0,12 | 0,12 | 0,06 | 0,06 |
-| PF_ETHUSD | 0,38 | 0,40 | 0,19 | 0,20 |
-| PF_SOLUSD | 0,84 | 0,93–1,87 | 0,42 | 0,47–0,93 |
-| PF_XRPUSD | 0,68 | 0,73 | 1,54 | 0,37 |
-| PF_HYPEUSD | 1,49 | 3,92–4,16 | 1,48 | 1,96–2,08 |
-| PF_ZECUSD | 3,28 | 1,39–1,72 | 2,29 | 0,70–0,86 |
-| PF_ADAUSD | 3,10 | 3,81 | 2,77 | 1,90 |
-| PF_NEARUSD | 5,41 | 4,15 | 3,55 | 2,07 |
+| Producto   | Spread modelo (pb) | Spread libro (pb) | Impacto modelo (pb, 1 000 USD) | Impacto libro 100 USD (pb) |
+| ---------- | ------------------ | ----------------- | ------------------------------ | -------------------------- |
+| PF_XBTUSD  | 0,12               | 0,12              | 0,06                           | 0,06                       |
+| PF_ETHUSD  | 0,38               | 0,40              | 0,19                           | 0,20                       |
+| PF_SOLUSD  | 0,84               | 0,93–1,87         | 0,42                           | 0,47–0,93                  |
+| PF_XRPUSD  | 0,68               | 0,73              | 1,54                           | 0,37                       |
+| PF_HYPEUSD | 1,49               | 3,92–4,16         | 1,48                           | 1,96–2,08                  |
+| PF_ZECUSD  | 3,28               | 1,39–1,72         | 2,29                           | 0,70–0,86                  |
+| PF_ADAUSD  | 3,10               | 3,81              | 2,77                           | 1,90                       |
+| PF_NEARUSD | 5,41               | 4,15              | 3,55                           | 2,07                       |
 
 Lecturas (todas provisionales):
+
 - A 100 USD el libro visible no es el límite: el impacto es la mitad del spread (el toque). La tabla del modelo se midió para ~1 000 USD; con 100 USD fijos por operación (ADR 0001) el modelo es conservador en XRP, ZEC, ADA y NEAR.
 - **HYPE** sale optimista en el modelo en este instante (impacto ≈ 2,0 pb contra 1,48 y spread ≈ 4 contra 1,49). Un instante no basta; es el primer candidato a vigilar.
 - La mediana modelada vale por una distribución: hace falta muestrear el spread durante días y por franja horaria antes de tocar la tabla.
@@ -81,6 +82,7 @@ Hechas (en este PR, `test_data_quality.py`, 22 pruebas, sintéticas):
 percentil nearest-rank y regla de tres; latencia con marcas faltantes y negativas; silencios (estricto `>`, extremos, ventana vacía, duplicados, fuera de ventana, monotonía de la sensibilidad); las cuatro clases de cobertura y el caso "corta sin evidencia"; spread con inválidos y repeticiones; recorrido del libro y falta de profundidad; residuo del modelo y exclusión de fills modelados; el umbral nunca se aprueba; pureza del módulo (sin `time`, `socket`, `sqlite3`, `random`, ni dependencia de `paper_runner`/`portfolio`).
 
 Propuestas (dependen de 9A o de datos aún inexistentes):
+
 1. **Paridad con el runner.** Con el runner integrado, generar sesiones sintéticas y exigir que `stop_watch_coverage` coincida con `closed_trade_coverage`. Una discrepancia es un defecto en uno de los dos.
 2. **Latencia inyectada.** Reproducir cotizaciones con latencias conocidas y comprobar que los percentiles las recuperan y que `ExecutionPolicy.max_quote_age_ms` (5 s) rechaza lo esperado.
 3. **Propiedad:** cualquier permutación de entrada de `quote_gaps` da el mismo resultado; añadir una cotización nunca aumenta `silent_ms`.
@@ -89,14 +91,14 @@ Propuestas (dependen de 9A o de datos aún inexistentes):
 
 ## 5. Plan de medición (por fases, todo solo lectura y sin procesos persistentes nuevos)
 
-| Fase | Qué se mide | Fuente | Condición |
-|---|---|---|---|
-| M0 (hecha) | utilidades + foto del libro | repo + API pública | este PR |
-| M1 | silencios y cobertura del archivo de cotizaciones | `quote_snapshot`, `quote_archive_gap` | autorización de Fran para leer la Mac: hoy el archivo (≈ 2026-10-12 en adelante) está fuera del rango autorizado |
-| M2 | latencia de recepción real | `paper_futures_market_events` (24 h) o `event_time` en el archivo | decisión D1 (cambio en `quote-archive.ts`, fuera de esta etapa) |
-| M3 | spread/impacto por hora y producto durante ≥ 14 días | archivo + libro BTC/ETH del colector | colector del libro ya existe, **sin activar**; no lo activo |
-| M4 | residuo modelo vs observado | fills con cotización capturada | requiere operaciones reales de papel con cotización archivada |
-| M5 | evidencia del umbral | `gap_stop_exposure` sobre M1 + velas de 1 m | ≥ 299 silencios por encima del umbral candidato (regla de tres al 1 %) |
+| Fase       | Qué se mide                                          | Fuente                                                            | Condición                                                                                                        |
+| ---------- | ---------------------------------------------------- | ----------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| M0 (hecha) | utilidades + foto del libro                          | repo + API pública                                                | este PR                                                                                                          |
+| M1         | silencios y cobertura del archivo de cotizaciones    | `quote_snapshot`, `quote_archive_gap`                             | autorización de Fran para leer la Mac: hoy el archivo (≈ 2026-10-12 en adelante) está fuera del rango autorizado |
+| M2         | latencia de recepción real                           | `paper_futures_market_events` (24 h) o `event_time` en el archivo | decisión D1 (cambio en `quote-archive.ts`, fuera de esta etapa)                                                  |
+| M3         | spread/impacto por hora y producto durante ≥ 14 días | archivo + libro BTC/ETH del colector                              | colector del libro ya existe, **sin activar**; no lo activo                                                      |
+| M4         | residuo modelo vs observado                          | fills con cotización capturada                                    | requiere operaciones reales de papel con cotización archivada                                                    |
+| M5         | evidencia del umbral                                 | `gap_stop_exposure` sobre M1 + velas de 1 m                       | ≥ 299 silencios por encima del umbral candidato (regla de tres al 1 %)                                           |
 
 Qué falta para **validar** (no aprobar) 120 s: (a) el archivo de cotizaciones con suficientes posiciones-hora para ver silencios reales por producto y hora; (b) para cada silencio superior al umbral, si una vela de 1 m tocó el stop (`possible_breach`), con la tasa de brechas acotada por la regla de tres; (c) distribución de silencios por causa (WS, REST, VPN, Mac dormida) para distinguir pérdida de datos de mercado quieto — `PF_NEARUSD` o `PF_ZECUSD` pueden pasar más de 120 s sin cambio de cotización sin que falle nada; (d) sensibilidad: cuánto cambia el tiempo "no observado" entre 60, 120 y 300 s. Con los datos de hoy (≈ un día de archivo y nada leído) la respuesta es `insufficient_evidence`.
 
