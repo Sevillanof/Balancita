@@ -214,7 +214,7 @@ test('estrategias shows the same chips as the terminal when the gateway is up', 
     route.fulfill({
       json: {
         processes: { capture: { status: 'running' } },
-        capture: { last_received_at: Date.now() - 2_000 },
+        capture: { lastReceivedAt: Date.now() - 2_000 },
       },
     }),
   )
