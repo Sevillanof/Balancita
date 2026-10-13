@@ -474,12 +474,19 @@ export class FuturesMarketStore {
     const BATCH = Math.max(1, Math.floor(options.batchSize ?? 5_000))
     const bound = (cutoff: number): number => {
       // Rowids grow with received_at: bisect instead of scanning.
-      const range = this.db
+      // Separate statements: MIN and MAX together force a full table scan.
+      const first = this.db
         .prepare(
-          'SELECT MIN(rowid) AS lo, MAX(rowid) AS hi FROM paper_futures_market_events',
+          'SELECT rowid AS id FROM paper_futures_market_events ORDER BY rowid LIMIT 1',
         )
-        .get() as { lo: number | null; hi: number | null }
-      if (range.lo === null || range.hi === null) return 0
+        .get() as { id: number } | undefined
+      const lastRow = this.db
+        .prepare(
+          'SELECT rowid AS id FROM paper_futures_market_events ORDER BY rowid DESC LIMIT 1',
+        )
+        .get() as { id: number } | undefined
+      if (!first || !lastRow) return 0
+      const range = { lo: first.id, hi: lastRow.id }
       let lo = Number(range.lo)
       let hi = Number(range.hi)
       const at = this.db.prepare(
@@ -592,7 +599,17 @@ export class FuturesMarketStore {
       while (this.tickerCursor < tickerBound) {
         if (batches >= maxBatches) return false
         batches += 1
-        const from = this.tickerCursor
+        // Jump over runs of deleted (empty) rowids in O(log n).
+        const next = this.db
+          .prepare(
+            'SELECT rowid AS id FROM paper_futures_market_events WHERE rowid>? ORDER BY rowid LIMIT 1',
+          )
+          .get(this.tickerCursor) as { id: number } | undefined
+        if (!next || next.id > tickerBound) {
+          this.tickerCursor = tickerBound
+          break
+        }
+        const from = Math.max(this.tickerCursor, next.id - 1)
         const upTo = Math.min(from + BATCH, tickerBound)
         const window = `feed='ticker' AND rowid>? AND rowid<=?`
         inGuardlessTransaction(() => {

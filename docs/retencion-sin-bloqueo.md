@@ -64,3 +64,12 @@ máximo `lote` filas. Además los límites (bisección) se reutilizan 5 s y se c
 que la última fila quedara sin borrar cuando todas estaban vencidas. En la copia,
 un prototipo equivalente dio pasos de p50 2,5 ms y máximo 6,5 ms (pendiente de
 confirmar con este código sobre la copia).
+
+Segunda medición (commit 19dd808, copia real): pasos típicos de 2 ms, pero el primero
+de cada ciclo tardaba 180–430 ms porque `bound()` pedía `MIN(rowid), MAX(rowid)` en la
+misma consulta (recorre toda la tabla; con un solo agregado es O(log n)) y lo hacía
+tres veces. Ahora son dos consultas `ORDER BY rowid LIMIT 1` / `DESC LIMIT 1`, y el
+cursor salta los rowids vacíos (el hueco de 2,2 millones de rowids borrados) con una
+consulta O(log n) en lugar de recorrerlos en ventanas. El modo `legacy` conserva su
+tope de 20 lotes, de modo que sobre una base fría puede tardar varias llamadas en
+llegar a los tickers (el cursor persiste entre llamadas).
