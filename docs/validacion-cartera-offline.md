@@ -15,14 +15,22 @@ Un ejecutor determinista que procesa **cronológicamente** velas de 1 minuto y s
 No hay otro motor ni otra contabilidad. Lo nuevo es lo que una integración necesita alrededor:
 
 1. **Orden e idempotencia de eventos**: por minuto, primero las velas (liberan capital) y luego las señales. Un evento ya visto (`event_id`) se descarta; una vela repetida se ignora; una vela con otro contenido para el mismo minuto se rechaza (gana la primera); una vela anterior a la última se rechaza; un hueco de velas queda anotado. La idempotencia de intenciones y señales sigue siendo la de `Portfolio`.
-2. **Diario** (`Journal`): una entrada por hecho (señal recibida, intención construida, decisión con motivos, tamaño, límites aplicados, precio de entrada, stop, objetivo, cierre con bruto/comisiones/funding/impacto de entrada, estado del capital antes y después). Cada entrada lleva el hash de la anterior; `verify()` detecta cualquier edición.
+2. **Diario** (en memoria o en archivo) (`Journal`): una entrada por hecho (señal recibida, intención construida, decisión con motivos, tamaño, límites aplicados, precio de entrada, stop, objetivo, cierre con bruto/comisiones/funding/impacto de entrada, estado del capital antes y después). Cada entrada lleva el hash de la anterior; `verify()` detecta cualquier edición.
 3. **Comprobaciones independientes** (`_check_*`): recalculan desde operaciones y posiciones crudas el riesgo por operación (1 %), el riesgo agregado (2 %), la exposición bruta/neta/por producto, el margen, la regla del 30 %, el nocional mínimo, el máximo de posiciones, la pérdida diaria y el drawdown como suspensión, la identidad `bruto − comisiones − funding = P&L`, que un stop pierda lo planificado, y que el capital definitivo nunca cuente ganancias provisionales. Hay pruebas que rompen la cartera a propósito para demostrar que el comprobador salta.
 4. **Checkpoint y reinicio**: `checkpoint()` guarda el estado con digest, huella de configuración (escenario, política, modelo de costes), vínculo con el diario y digest canónico del estado. `restore()` construye un ejecutor **nuevo** o falla (`no_checkpoint`, `corrupt_checkpoint`, `configuration_changed`, `journal_mismatch`, `journal_chain_broken`, `unreadable_checkpoint`, `state_mismatch`). No existe un camino «si no hay estado, empezar de nuevo».
+
+## Recuperación entre dos procesos (tres niveles, por separado)
+1. **Desde checkpoint persistido** — demostrado: `portfolio_two_process first` escribe checkpoint y diario y termina; `second`, un intérprete nuevo, restaura solo desde esos archivos y completa el escenario con libro, capital, estado, posiciones y hashes iguales a una ejecución ininterrumpida.
+2. **Del diario desde disco** — demostrado: `Journal` escribe JSONL con fsync por entrada; `Journal.load` verifica la cadena y que el diario pertenece al escenario. Ausente, vacío, alterado, con basura, con la cola cortada, reordenado, truncado o ajeno: el segundo proceso termina con código 3, motivo explícito y sin escribir resultado.
+3. **Reproducción de señales desde una fuente durable** — **pendiente para el forward**. En la prueba ambos procesos reconstruyen las entradas desde la definición del escenario (un sustituto). `live_gap` conserva el contraste: si las señales de la caída no existen, el resultado difiere.
+
+No es un sistema de persistencia de producción: no decide dónde viven los archivos ni quién los escribe, y un diario con la cola cortada se rechaza entero en vez de repararse.
 
 ## Cómo se ejecuta
 ```
 PYTHONPATH=python python3 -m balancita_engine.portfolio_report --out analisis/validacion-cartera-offline
 PYTHONPATH=python python3 -m unittest python/tests/test_portfolio_offline.py
+PYTHONPATH=python python3 -m balancita_engine.portfolio_two_process first|second --scenario s5_integral_reinicio_replay_log --dir /tmp/x   # dos procesos, a mano
 ```
 Los archivos generados (`informe.md`, `resultados.json`, `journals/*.jsonl`) no llevan fecha ni nada dependiente del entorno; una prueba regenera todo y exige que coincida con lo versionado. Si cambian a propósito los costes o la cartera, hay que regenerar y revisar la diferencia.
 

@@ -17,6 +17,7 @@ No wall clock, no network, no database, no credentials and no randomness: the sa
 It is not connected to the forward, ``capture``, Kronos, Qwen or any active database.
 """
 
+import json
 import os
 import pickle
 import tempfile
@@ -61,13 +62,18 @@ def approved_policy():
 class Journal:
     """Append-only chronological log; every entry carries the hash of the previous one.
 
-    It models a durable file: it survives the executor that wrote it. ``epoch`` grows by one on every restore, so the
-    entries written after a checkpoint and before a crash (whose effects the restore discards) stay readable but are
-    distinguishable from the ones that count.
+    With ``path`` every entry is appended to a JSON-lines file and fsynced, so the journal survives the process that
+    wrote it; ``Journal.load`` reads it back and refuses (``RecoveryError``) a missing, corrupt or foreign file.
+    Without ``path`` it is in memory only. ``epoch`` grows by one on every restore, so the entries written after a
+    checkpoint and before a crash (whose effects the restore discards) stay readable but are distinguishable from the
+    ones that count.
     """
 
-    def __init__(self):
-        self.entries, self.head, self.epoch = [], GENESIS, 0
+    def __init__(self, path=None):
+        self.entries, self.head, self.epoch, self.path = [], GENESIS, 0, path
+        if path:
+            with open(path, "w", encoding="utf-8"):  # a new journal starts an empty file
+                pass
 
     def add(self, t_ms, kind, data):
         body = {"seq": len(self.entries) + 1, "epoch": self.epoch, "t_ms": int(t_ms), "kind": kind,
@@ -75,6 +81,11 @@ class Journal:
         body["hash"] = stable_hash(body)
         self.entries.append(body)
         self.head = body["hash"]
+        if self.path:
+            with open(self.path, "a", encoding="utf-8") as handle:
+                handle.write(json.dumps(body, sort_keys=True, separators=(",", ":")) + "\n")
+                handle.flush()
+                os.fsync(handle.fileno())
         return body
 
     def verify(self):
@@ -87,10 +98,37 @@ class Journal:
             prev = entry["hash"]
         return None
 
+    @classmethod
+    def load(cls, path, scenario=None):
+        """The journal persisted at ``path``, ready to be appended to. Nothing is repaired or skipped."""
+        if not os.path.exists(path) or os.path.getsize(path) == 0:
+            raise RecoveryError("journal_missing", path)
+        journal = cls.__new__(cls)
+        journal.entries, journal.path = [], path
+        try:
+            with open(path, encoding="utf-8") as handle:
+                for number, line in enumerate(handle, start=1):
+                    entry = json.loads(line)
+                    if not isinstance(entry, dict) or entry.get("seq") != number or "hash" not in entry:
+                        raise ValueError("line {} is not journal entry {}".format(number, number))
+                    journal.entries.append(entry)
+        except (ValueError, UnicodeDecodeError) as error:
+            raise RecoveryError("journal_corrupt", str(error)) from error
+        broken = journal.verify()
+        if broken is not None:
+            raise RecoveryError("journal_corrupt", "hash chain broken at entry {}".format(broken))
+        journal.head = journal.entries[-1]["hash"]
+        journal.epoch = journal.entries[-1]["epoch"]
+        first = journal.entries[0]
+        if first["kind"] != "scenario_start":
+            raise RecoveryError("journal_incompatible", "does not start with scenario_start")
+        if scenario is not None and first["data"].get("scenario_hash") != scenario["scenario_hash"]:
+            raise RecoveryError("journal_incompatible", "written for another scenario")
+        return journal
+
 
 def _plain(value):
     """Freezes a value into plain JSON types (Decimals as strings) so hashes never depend on object identity."""
-    import json
     return json.loads(json.dumps(value, sort_keys=True, default=str))
 
 
@@ -431,6 +469,8 @@ class OfflineExecutor:
         """
         if checkpoint is None:
             raise RecoveryError("no_checkpoint", "nothing persisted; replaying from the start is not a recovery")
+        if journal is None:
+            raise RecoveryError("journal_missing", "a checkpoint without its journal cannot be audited or continued")
         executor = cls(scenario, journal)
         if checkpoint.get("fingerprint") != executor.fingerprint():
             raise RecoveryError("configuration_changed")
@@ -504,59 +544,53 @@ def _groups(events):
     return out
 
 
-def run_scenario(scenario, *, checkpoint_dir=None, tamper=None):
-    """Runs a scenario end to end. With ``scenario["restart"]`` it crashes, builds a *new* executor from the persisted
-    checkpoint and continues; the result says whether that equals an uninterrupted run (and why not, if it does not).
-
-    ``tamper(checkpoint)`` lets a test damage the persisted checkpoint before the restart.
-    """
-    restart = scenario.get("restart")
-    journal = Journal()
+def begin(scenario, journal):
+    """A fresh executor whose journal opens with the scenario it belongs to."""
     executor = OfflineExecutor(scenario, journal)
     executor._log(scenario["start_ms"], "scenario_start", name=scenario["name"], scenario_hash=scenario["scenario_hash"],
                   policy_hash=executor.policy.policy_hash(), cost_model=cost_model_hash(), events=len(scenario["events"]),
                   products=sorted(scenario["products"]))
-    groups = _groups(scenario["events"])
-    result = {"name": scenario["name"], "scenario_hash": scenario["scenario_hash"], "restart": None}
-    if not restart:
-        for arrival, batch in groups:
-            executor.process(arrival, batch)
-        return _finish(executor, result, groups)
+    return executor
 
-    every = restart["checkpoint_every_min"] * ONE_MINUTE_MS
-    crash_ms = scenario["start_ms"] + restart["crash_after_min"] * ONE_MINUTE_MS
-    restart_ms = scenario["start_ms"] + restart["restart_at_min"] * ONE_MINUTE_MS
-    disk = os.path.join(checkpoint_dir, "{}.ckpt".format(scenario["name"])) if checkpoint_dir else None
-    memory_disk, last_saved = {}, scenario["start_ms"]
-    index = 0
-    while index < len(groups) and groups[index][0] <= crash_ms:
-        arrival, batch = groups[index]
+
+def _crash_minute(scenario):
+    return scenario["start_ms"] + scenario["restart"]["crash_after_min"] * ONE_MINUTE_MS
+
+
+def first_process(scenario, executor, groups, save_checkpoint):
+    """Everything the process that dies does: it runs until the crash minute, saving a checkpoint every so often
+    through ``save_checkpoint(checkpoint)`` (memory or file), then writes the last note and is gone."""
+    restart = scenario["restart"]
+    every, crash_ms, last_saved = restart["checkpoint_every_min"] * ONE_MINUTE_MS, _crash_minute(scenario), scenario["start_ms"]
+    for arrival, batch in groups:
+        if arrival > crash_ms:
+            break
         executor.process(arrival, batch)
-        index += 1
         if arrival - last_saved >= every:
             ckpt = executor.checkpoint()
+            # the image is taken first, so its journal_seq does not include the note below
             executor._log(arrival, "checkpoint_saved", arrival_ms=ckpt["arrival_ms"], state_digest=ckpt["state_digest"],
                           journal_seq=ckpt["journal_seq"])
-            # the entry above is written after the image (its journal_seq excludes itself)
-            if disk:
-                write_checkpoint(disk, ckpt)
-            else:
-                memory_disk["ckpt"] = ckpt
+            save_checkpoint(ckpt)
             last_saved = arrival
-    crash_entry_seq = len(journal.entries)
     executor._log(crash_ms, "simulation_note", note="process killed here; memory is lost, journal and checkpoint file survive")
-    del executor
-    stored = read_checkpoint(disk) if disk else memory_disk.get("ckpt")
-    if tamper is not None and stored is not None:
-        stored = tamper(stored)
-    executor = OfflineExecutor.restore(scenario, journal, stored, restart_ms=restart_ms)  # may raise RecoveryError: no silent fallback
-    mode = restart["mode"]
-    lost = []
-    pending = [g for g in groups[index:]]
-    # events that were processed after the checkpoint but before the crash are not in the restored state
-    redo = [g for g in groups[:index] if g[0] > stored["arrival_ms"]]
+    return len(executor.journal.entries)
+
+
+def second_process(scenario, journal, stored, groups):
+    """Everything the new process does: restore from what survived (or fail), catch up, and finish the scenario.
+    Returns ``(executor, info)``."""
+    restart = scenario["restart"]
+    crash_ms = _crash_minute(scenario)
+    restart_ms = scenario["start_ms"] + restart["restart_at_min"] * ONE_MINUTE_MS
+    executor = OfflineExecutor.restore(scenario, journal, stored, restart_ms=restart_ms)  # no silent fallback
+    mode, lost = restart["mode"], []
+    before = [g for g in groups if g[0] <= crash_ms]
+    pending = [g for g in groups if g[0] > crash_ms]
+    # events processed after the checkpoint but before the crash are not in the restored state
+    redo = [g for g in before if g[0] > stored["arrival_ms"]]
     overlap_from = stored["arrival_ms"] - restart.get("overlap_min", 0) * ONE_MINUTE_MS
-    redelivered = [g for g in groups[:index] if overlap_from < g[0] <= stored["arrival_ms"]]
+    redelivered = [g for g in before if overlap_from < g[0] <= stored["arrival_ms"]]
     executor.replay = True
     executor.catching_up = True
     if mode == "replay_log":
@@ -577,19 +611,52 @@ def run_scenario(scenario, *, checkpoint_dir=None, tamper=None):
     executor.replay = False
     for arrival, batch in [g for g in pending if g[0] > restart_ms]:
         executor.process(arrival, batch)
-    result["restart"] = {"mode": mode, "checkpoint_arrival_ms": stored["arrival_ms"], "crash_after_min": restart["crash_after_min"],
-                         "restart_at_min": restart["restart_at_min"], "journal_entries_before_crash": crash_entry_seq,
-                         "restored_from": "file" if disk else "memory", "lost_signal_events": sorted(lost)}
-    done = _finish(executor, result, groups)
+    info = {"mode": mode, "checkpoint_arrival_ms": stored["arrival_ms"], "crash_after_min": restart["crash_after_min"],
+            "restart_at_min": restart["restart_at_min"], "lost_signal_events": sorted(lost)}
+    return executor, info
+
+
+def compare_with_uninterrupted(scenario, done):
+    """Fills ``done["restart"]`` with the comparison against a run that never crashed."""
     reference = run_scenario(dict(scenario, restart=None))
     done["restart"].update(
         equivalent_ledger=done["ledger_hash"] == reference["ledger_hash"],
         equivalent_state=done["state_digest"] == reference["state_digest"],
+        equivalent_feed=done["feed_hash"] == reference["feed_hash"],
         reference_ledger_hash=reference["ledger_hash"], reference_state_digest=reference["state_digest"],
         reference_capital_usd=reference["snapshot"]["capital_definitive_usd"],
         reference_closed_trades=reference["snapshot"]["closed_trades"])
     done["reference"] = reference
     return done
+
+
+def run_scenario(scenario, *, checkpoint_dir=None, tamper=None):
+    """Runs a scenario end to end inside ONE Python process. With ``scenario["restart"]`` it crashes (the executor is
+    discarded), builds a *new* executor from the persisted checkpoint and continues. For a restart across two real
+    processes, with the journal on disk too, see ``portfolio_two_process``.
+
+    ``tamper(checkpoint)`` lets a test damage the persisted checkpoint before the restart.
+    """
+    restart = scenario.get("restart")
+    journal = Journal()
+    executor = begin(scenario, journal)
+    groups = _groups(scenario["events"])
+    result = {"name": scenario["name"], "scenario_hash": scenario["scenario_hash"], "restart": None}
+    if not restart:
+        for arrival, batch in groups:
+            executor.process(arrival, batch)
+        return _finish(executor, result, groups)
+    disk = os.path.join(checkpoint_dir, "{}.ckpt".format(scenario["name"])) if checkpoint_dir else None
+    memory_disk = {}
+    save = (lambda ckpt: write_checkpoint(disk, ckpt)) if disk else (lambda ckpt: memory_disk.update(ckpt=ckpt))
+    crash_entry_seq = first_process(scenario, executor, groups, save)
+    del executor
+    stored = read_checkpoint(disk) if disk else memory_disk.get("ckpt")
+    if tamper is not None and stored is not None:
+        stored = tamper(stored)
+    executor, info = second_process(scenario, journal, stored, groups)
+    result["restart"] = dict(info, journal_entries_before_crash=crash_entry_seq, restored_from="file" if disk else "memory")
+    return compare_with_uninterrupted(scenario, _finish(executor, result, groups))
 
 
 def _finish(executor, result, groups):

@@ -1,7 +1,99 @@
 {
  "cost_model_hash": "af5187f6c6a18826fb05c6d747045032618e8061a1766600fd72c1c2e852b0f9",
  "policy_hash": "8c22a0c0143c697c",
- "results_hash": "58e6c1a41f6b9f698467d44c410b6269b8e64ab83b6f0ee6baa2ee842c19fbc3",
+ "recuperacion_dos_procesos": {
+  "modes": {
+   "live_gap": {
+    "capital_definitive_usd": "1006.0243",
+    "capital_equal": false,
+    "closed_trades": 8,
+    "equivalent_feed": true,
+    "equivalent_ledger": false,
+    "equivalent_state": false,
+    "journal_equals_single_process": true,
+    "journal_hash": "0355e20853453459a21f45e3206dfa240acc18fe8fa6b20e9db10a3dac44164d",
+    "journal_on_disk_verifies": true,
+    "ledger_hash": "ed03a2ab569d07e9b6dbac07b44acd9ae51da886aaccf37efd7832b566f3d6e0",
+    "lost_signal_events": [
+     "signal:ce19b6cf8bdc61042dd49e4f:1"
+    ],
+    "positions_equal": true,
+    "reference_capital_usd": "996.0993",
+    "reference_closed_trades": 9,
+    "reference_ledger_hash": "587cfc4e03dfb40726dda72d4ecca304e4de20c5bf2610f30e522fd4ecc17858"
+   },
+   "replay_log": {
+    "capital_definitive_usd": "996.0993",
+    "capital_equal": true,
+    "closed_trades": 9,
+    "equivalent_feed": true,
+    "equivalent_ledger": true,
+    "equivalent_state": true,
+    "journal_equals_single_process": true,
+    "journal_hash": "6d96b7c2854fbb89ed9bd70b6682c5e2fa785a89cfb1fa41b24ce5abda628b68",
+    "journal_on_disk_verifies": true,
+    "ledger_hash": "587cfc4e03dfb40726dda72d4ecca304e4de20c5bf2610f30e522fd4ecc17858",
+    "lost_signal_events": [],
+    "positions_equal": true,
+    "reference_capital_usd": "996.0993",
+    "reference_closed_trades": 9,
+    "reference_ledger_hash": "587cfc4e03dfb40726dda72d4ecca304e4de20c5bf2610f30e522fd4ecc17858"
+   }
+  },
+  "refusals": {
+   "checkpoint_alterado": [
+    3,
+    "corrupt_checkpoint",
+    false
+   ],
+   "checkpoint_ausente": [
+    3,
+    "no_checkpoint",
+    false
+   ],
+   "diario_ausente": [
+    3,
+    "journal_missing",
+    false
+   ],
+   "diario_con_cola_cortada": [
+    3,
+    "journal_corrupt",
+    false
+   ],
+   "diario_con_entrada_alterada": [
+    3,
+    "journal_corrupt",
+    false
+   ],
+   "diario_con_linea_basura": [
+    3,
+    "journal_corrupt",
+    false
+   ],
+   "diario_de_otro_escenario": [
+    3,
+    "journal_incompatible",
+    false
+   ],
+   "diario_reordenado": [
+    3,
+    "journal_corrupt",
+    false
+   ],
+   "diario_truncado_valido": [
+    3,
+    "journal_mismatch",
+    false
+   ],
+   "diario_vacio": [
+    3,
+    "journal_missing",
+    false
+   ]
+  }
+ },
+ "results_hash": "a8b49e83bb740a2ad393e785bcc9f85e31b4f7c8b24067cb8fd98eb310e225f8",
  "scenarios": [
   {
    "capital_definitive_usd": "1013.9263",
@@ -244,9 +336,10 @@
    "restart": {
     "checkpoint_arrival_ms": 1791238500000,
     "crash_after_min": 163,
+    "equivalent_feed": true,
     "equivalent_ledger": true,
     "equivalent_state": true,
-    "journal_entries_before_crash": 45,
+    "journal_entries_before_crash": 46,
     "lost_signal_events": [],
     "mode": "replay_log",
     "reference_capital_usd": "996.0993",
@@ -317,9 +410,10 @@
    "restart": {
     "checkpoint_arrival_ms": 1791238500000,
     "crash_after_min": 163,
+    "equivalent_feed": true,
     "equivalent_ledger": false,
     "equivalent_state": false,
-    "journal_entries_before_crash": 45,
+    "journal_entries_before_crash": 46,
     "lost_signal_events": [
      "signal:ce19b6cf8bdc61042dd49e4f:1"
     ],

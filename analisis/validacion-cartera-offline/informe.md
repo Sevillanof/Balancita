@@ -30,11 +30,11 @@ El funding no se infiere: una operación sin cobertura queda con `funding_usd = 
 | Idempotencia de intenciones y señales (`intent_id`, `signal_id`, lotes) | existe | `portfolio.py`; vive solo en memoria: se pierde al reiniciar si no se restaura estado |
 | Orden temporal (decisión retroactiva, vela no más nueva, datos del futuro) | existe | `portfolio.py`; también en memoria |
 | Idempotencia de **eventos** (misma vela o señal entregada dos veces, vela conflictiva o tardía) | nuevo, solo en el ejecutor offline | `portfolio_offline.py`; no existe en el forward para la cartera |
-| Checkpoint con digest, huella de configuración y vínculo con el diario | nuevo, solo en el ejecutor offline | Mismo patrón que `multi_experiment` (pickle + digest + fingerprint); `Portfolio` no tiene guardado propio |
-| Restauración del estado de la cartera en un proceso nuevo | nuevo, probado en simulación | No hay persistencia de `Portfolio` en el forward ni en ninguna base |
-| Escritura durable del checkpoint (temporal + fsync + rename) | nuevo, probado con archivo temporal | Falta decidir dónde vive en producción y quién lo escribe |
-| Reproducción de entradas desde un registro durable de eventos | **falta** | Las velas sí se guardan (`capture`); las **señales** no tienen registro durable para la cartera |
-| Recuperar señales generadas mientras el proceso estaba caído | **falta** | Se pierden (escenario `live_gap`); el sistema ni siquiera puede detectar que faltan |
+| **1. Recuperación desde checkpoint persistido** (digest, huella de configuración, digest canónico del estado) | nuevo, **demostrado entre dos procesos Python** | `portfolio_offline` + `portfolio_two_process`. Mismo patrón que `multi_experiment` (pickle + digest + fingerprint). `Portfolio` no tiene guardado propio ni hay persistencia en el forward |
+| **2. Recuperación del diario desde disco** (JSONL, fsync por entrada, cadena de hashes) | nuevo, **demostrado entre dos procesos Python** | Ausente, vacío, alterado, con basura, con la cola cortada, reordenado, truncado o de otro escenario: rechazado (ver matriz). Falta decidir dónde vive y quién lo escribe en producción |
+| Escritura atómica del checkpoint (temporal + fsync + rename) | nuevo, probado con archivo temporal | Sin probar corrupción parcial más allá del digest |
+| **3. Reproducción de señales desde una fuente durable** | **pendiente para el forward** | Las velas sí se guardan (`capture`); las **señales** no tienen registro durable para la cartera. En la prueba de dos procesos las entradas se reconstruyen desde la definición del escenario: es un sustituto, no una fuente real |
+| Recuperar señales generadas mientras el proceso estaba caído | **falta** (consecuencia del punto 3) | Se pierden (escenario `live_gap`, también entre dos procesos); el sistema ni siquiera puede detectar que faltan |
 | Recuperar velas perdidas durante la caída | existe en el forward (`futures_forward`: relleno de huecos, etiqueta `recovered`) | No está conectado a la cartera; aquí se simula con velas reentregadas en orden |
 | Checkpoint/restauración de libros del experimento multiestrategia (100 USD fijos) | existe | `multi_experiment` + `multi_store`; no cubre `Portfolio` |
 | Reconciliar funding de una operación ya cerrada cuando llega tarde | existe para el forward (`futures_funding_reconcile`) | **Falta** para la cartera: una operación `net_complete=false` queda así y no se reclasifica ni reabre el capital definitivo |
@@ -42,7 +42,33 @@ El funding no se infiere: una operación sin cobertura queda con `funding_usd = 
 | Huecos de precio sobre el stop | **falta** en el simulador | `Book` sale siempre al precio del stop; un hueco no empeora la pérdida modelada |
 | Verificación independiente de límites y de la contabilidad | nuevo | `portfolio_offline._check_*` recalcula desde operaciones y posiciones crudas |
 
-**Un reinicio solo cuenta como recuperación si se restaura un estado persistido.** Volver a ejecutar el escenario desde el principio no lo es: `OfflineExecutor.restore` falla con `no_checkpoint` si no hay checkpoint, con `corrupt_checkpoint` si el digest no coincide, con `configuration_changed` si cambió el escenario, la política o el modelo de costes, con `journal_mismatch` si el diario no contiene la posición del checkpoint y con `state_mismatch` si el estado restaurado no produce el mismo digest canónico. No hay camino de vuelta a «empezar de nuevo» sin avisar.
+**Un reinicio solo cuenta como recuperación si se restaura un estado persistido.** Volver a ejecutar el escenario desde el principio no lo es. `OfflineExecutor.restore` y `Journal.load` fallan, sin alternativa silenciosa, con `no_checkpoint`, `corrupt_checkpoint`, `configuration_changed`, `journal_missing`, `journal_corrupt`, `journal_incompatible`, `journal_mismatch`, `journal_chain_broken` o `state_mismatch`.
+
+### Prueba entre dos procesos Python independientes
+
+El primer proceso escribe checkpoint y diario en disco y termina por completo. El segundo, un intérprete nuevo, recupera ambos desde disco, restaura, se pone al día y completa el escenario; no comparte memoria con el primero. Se compara con una ejecución ininterrumpida.
+
+| Modo | Libro igual | Estado igual | Velas igual | Posiciones iguales | Capital igual | Diario igual a 1 proceso | Diario en disco verifica |
+|---|---|---|---|---|---|---|---|
+| replay_log | sí | sí | sí | sí | sí | sí | sí |
+| live_gap | NO | NO | sí | sí | NO | sí | sí |
+
+`replay_log` es equivalente porque las entradas se vuelven a entregar completas. `live_gap` **debe seguir difiriendo**: las señales emitidas durante la caída no existen para el proceso nuevo, y que difiera es lo que demuestra que perderlas cambia el resultado. Al final de estos escenarios no queda ninguna posición abierta, así que «posiciones iguales» es trivial al cierre; que el checkpoint se tomó con una posición abierta y la restauración la reproduce exactamente lo comprueba `test_the_checkpoint_was_taken_with_a_position_open`.
+
+**Rechazos: ningún archivo ausente, corrupto o ajeno se recupera en silencio.** Cada caso es un proceso nuevo sobre archivos saboteados; ninguno escribió resultado.
+
+| Caso | Qué se estropeó | Motivo del rechazo | Rechazado sin resultado |
+|---|---|---|---|
+| diario_ausente | el archivo del diario no existe | journal_missing | sí |
+| diario_vacio | el archivo existe pero está vacío | journal_missing | sí |
+| diario_con_entrada_alterada | una entrada editada (la cadena de hashes ya no cierra) | journal_corrupt | sí |
+| diario_con_linea_basura | una línea que no es JSON | journal_corrupt | sí |
+| diario_con_cola_cortada | la última línea cortada a la mitad (escritura interrumpida) | journal_corrupt | sí |
+| diario_reordenado | dos entradas intercambiadas | journal_corrupt | sí |
+| diario_truncado_valido | prefijo válido de la cadena, más corto que la posición del checkpoint | journal_mismatch | sí |
+| diario_de_otro_escenario | diario válido pero escrito para otro escenario | journal_incompatible | sí |
+| checkpoint_ausente | no hay checkpoint | no_checkpoint | sí |
+| checkpoint_alterado | un byte del checkpoint cambiado | corrupt_checkpoint | sí |
 
 ## s1_posiciones_simultaneas
 
@@ -327,6 +353,7 @@ Cada escenario se ejecuta dos veces dentro del generador y el diario, el libro y
 1. **Precio de entrada**: el módulo abre al precio de la intención (cierre de la vela de la señal) más el impacto del modelo de costes. Conectarlo al forward exigirá el primer precio ejecutable posterior a la señal; **no está resuelto**.
 2. **Stops sin huecos**: el simulador sale siempre al precio del stop; la pérdida de un stop coincide con la planificada (comprobado) porque el modelo no incluye huecos ni deslizamiento extra (`slippage_buffer_bps` = 0).
 3. **Velas y funding sintéticos**: demuestran que la mecánica cuadra, no que haya ventaja.
-4. **Un solo reinicio por escenario** y el checkpoint es un `pickle` de nuestro propio archivo (misma práctica que `multi_experiment`); no se probó corrupción parcial ni escritura interrumpida más allá del digest.
-5. **Pérdida diaria**: con la regla de admisión actual (límite diario menos pérdidas del día menos riesgo abierto) la suma pérdida realizada + riesgo planificado no supera 20 USD; `suspended_daily_loss` solo aparece si una pérdida real supera la planificada (funding, huecos). Está cubierta por `test_portfolio.py`.
+4. **Un solo reinicio por escenario.** El checkpoint es un `pickle` de nuestro propio archivo (misma práctica que `multi_experiment`). Un diario con la cola cortada se **rechaza** entero; no se intenta reparar ni descartar la última línea (decisión pendiente si se llevara a producción). No se probó un corte en mitad de la escritura del checkpoint más allá de que el renombrado es atómico.
+5. **La fuente de entradas de la prueba entre procesos es un sustituto**: ambos procesos reconstruyen velas y señales desde la definición del escenario. Eso prueba la recuperación del estado y del diario, no que exista una fuente durable de señales (punto 3, pendiente para el forward).
+6. **Pérdida diaria**: con la regla de admisión actual (límite diario menos pérdidas del día menos riesgo abierto) la suma pérdida realizada + riesgo planificado no supera 20 USD; `suspended_daily_loss` solo aparece si una pérdida real supera la planificada (funding, huecos). Está cubierta por `test_portfolio.py`.
 

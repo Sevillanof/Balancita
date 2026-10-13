@@ -13,6 +13,7 @@ from unittest import mock
 
 from balancita_engine import portfolio_offline, portfolio_report, portfolio_scenarios as S
 from balancita_engine.portfolio import Portfolio, PortfolioPolicy
+from balancita_engine import portfolio_two_process as TP
 from balancita_engine.portfolio_offline import (
     Journal, OfflineExecutor, RecoveryError, _groups, read_checkpoint, run_scenario, write_checkpoint,
 )
@@ -351,6 +352,91 @@ class Restart(unittest.TestCase):
                 handle.write(b"garbage")
             with self.assertRaises(RecoveryError):
                 read_checkpoint(path)
+
+
+class TwoProcesses(unittest.TestCase):
+    """The first Python process writes a checkpoint and a journal to disk and ends; a second, independent one recovers
+    both from disk and finishes. Nothing is shared except the files."""
+
+    NAME = "s5_integral_reinicio_replay_log"
+
+    def test_second_process_recovers_from_disk_and_equals_an_uninterrupted_run(self):
+        scenario = S.s5_integral("replay_log")
+        reference = run_scenario(dict(scenario, restart=None))
+        single_process = run_scenario(scenario)
+        with tempfile.TemporaryDirectory() as directory:
+            two, result = TP.run_two_process(self.NAME, directory)
+            self.assertEqual(two.returncode, 0, two.stderr)
+            files = sorted(os.listdir(directory))
+            self.assertEqual(files, [TP.CHECKPOINT, TP.JOURNAL, TP.RESULT])
+            on_disk = Journal.load(os.path.join(directory, TP.JOURNAL), scenario)
+        # book, capital, state, open positions and hashes all equal the uninterrupted run
+        self.assertEqual(result["ledger_hash"], reference["ledger_hash"])
+        self.assertEqual(result["state_digest"], reference["state_digest"])
+        self.assertEqual(result["feed_hash"], reference["feed_hash"])
+        self.assertEqual(result["capital_definitive_usd"], reference["snapshot"]["capital_definitive_usd"])
+        self.assertEqual(result["closed_trades"], reference["snapshot"]["closed_trades"])
+        self.assertEqual(result["positions"], TP.positions(reference["executor"]))
+        self.assertEqual({k: v for k, v in result["snapshot"].items()}, reference["snapshot"])
+        self.assertTrue(result["restart"]["equivalent_ledger"] and result["restart"]["equivalent_state"])
+        self.assertEqual(result["violations"], [])
+        # the journal written by two processes is the one a single process writes, and what is on disk verifies
+        self.assertEqual(result["journal_hash"], single_process["journal_hash"])
+        self.assertEqual(on_disk.head, result["journal_hash"])
+        self.assertEqual(on_disk.epoch, 1)
+        self.assertEqual(len(kinds({"journal": on_disk}, "restart")), 1)
+
+    def test_the_checkpoint_was_taken_with_a_position_open(self):
+        scenario = S.s5_integral("replay_log")
+        with tempfile.TemporaryDirectory() as directory:
+            TP.run_python("first", self.NAME, directory)
+            ckpt = read_checkpoint(os.path.join(directory, TP.CHECKPOINT))
+            executor = OfflineExecutor.restore(scenario, Journal.load(os.path.join(directory, TP.JOURNAL), scenario), ckpt)
+        self.assertTrue(executor.portfolio.positions)
+        self.assertEqual(executor.state_digest(), ckpt["state_digest"])
+
+    def test_losing_signals_still_changes_the_result_across_processes(self):
+        reference = run_scenario(dict(S.s5_integral("live_gap"), restart=None))
+        with tempfile.TemporaryDirectory() as directory:
+            two, result = TP.run_two_process("s5_integral_reinicio_live_gap", directory)
+        self.assertEqual(two.returncode, 0, two.stderr)
+        self.assertFalse(result["restart"]["equivalent_ledger"])
+        self.assertFalse(result["restart"]["equivalent_state"])
+        self.assertEqual(len(result["restart"]["lost_signal_events"]), 1)
+        self.assertNotEqual(result["capital_definitive_usd"], reference["snapshot"]["capital_definitive_usd"])
+        self.assertLess(result["closed_trades"], reference["snapshot"]["closed_trades"])
+
+    def test_a_missing_corrupt_or_foreign_journal_or_checkpoint_is_refused_not_worked_around(self):
+        expected = {
+            "diario_ausente": "journal_missing", "diario_vacio": "journal_missing",
+            "diario_con_entrada_alterada": "journal_corrupt", "diario_con_linea_basura": "journal_corrupt",
+            "diario_con_cola_cortada": "journal_corrupt", "diario_reordenado": "journal_corrupt",
+            "diario_truncado_valido": "journal_mismatch", "diario_de_otro_escenario": "journal_incompatible",
+            "checkpoint_ausente": "no_checkpoint", "checkpoint_alterado": "corrupt_checkpoint"}
+        with tempfile.TemporaryDirectory() as base:
+            matrix = TP.refusal_matrix(self.NAME, "s1_posiciones_simultaneas", base)
+        self.assertEqual({k: v[1] for k, v in matrix.items()}, expected)
+        for case, (code, reason, wrote_result) in matrix.items():
+            self.assertEqual(code, 3, case)
+            self.assertFalse(wrote_result, "{} must not produce a result".format(case))
+
+    def test_journal_loading_in_process(self):
+        scenario = S.s1_simultaneous()
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "j.jsonl")
+            with self.assertRaises(RecoveryError) as ctx:
+                Journal.load(path)
+            self.assertEqual(ctx.exception.reason, "journal_missing")
+            journal = Journal(path)
+            executor = portfolio_offline.begin(scenario, journal)
+            executor.process(*_groups(scenario["events"])[5])
+            loaded = Journal.load(path, scenario)
+            self.assertEqual((loaded.head, len(loaded.entries)), (journal.head, len(journal.entries)))
+            loaded.add(0, "x", {})  # a loaded journal keeps appending to the same file
+            self.assertEqual(Journal.load(path).head, loaded.head)
+        with self.assertRaises(RecoveryError) as ctx:
+            OfflineExecutor.restore(scenario, None, {"fingerprint": "x"})
+        self.assertEqual(ctx.exception.reason, "journal_missing")
 
 
 class Isolation(unittest.TestCase):
