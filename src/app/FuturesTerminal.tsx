@@ -37,6 +37,8 @@ import {
   utcTime,
 } from './terminal-labels.ts'
 import { record } from '../shared/wire/decode.ts'
+import HealthIndicator from '../features/observability/presentation/HealthIndicator.tsx'
+import ActivityPanel from '../features/observability/presentation/ActivityPanel.tsx'
 
 /** Closed 1 m candles the engine needs before it can decide. */
 const WARMUP_CANDLES = 50
@@ -376,6 +378,7 @@ export default function FuturesTerminal({
             modeLabel={modeLabel}
             diagnosis={diagnosis}
           />
+          {bootstrap.mode === 'paper_live' && <HealthIndicator />}
           {localScenarioStatus && <span>{localScenarioStatus}</span>}
         </>
       }
@@ -436,39 +439,49 @@ export default function FuturesTerminal({
               </section>
             }
             decisions={
-              <TerminalDecisions
-                rows={decisionRows}
-                selectedId={selectedId}
-                onSelect={selectAnalysis}
-                notice={
-                  engineOff
-                    ? 'Motor de decisiones apagado. Solo se muestran velas y precio públicos de Kraken Futures; no hay análisis, cuenta ni operaciones simuladas.'
-                    : !analyses.length && gatewayEngine
-                      ? analysesNotice(gatewayEngineStatus, gatewayEngineReason)
-                      : null
-                }
-                selected={
-                  selectedAnalysis && !engineOff ? (
-                    <SelectedDecision
-                      analysis={selectedAnalysis}
-                      id={selectedId}
-                      time={utcTime(selectedDecisionTime)}
-                      reason={analysisReason(selectedAnalysis, localDemo)}
-                      notes={selectedNotes}
-                    />
-                  ) : null
-                }
-              >
-                {localDemo && selectedAnalysis && (
-                  <SelectedAnalysis
-                    selectedId={selectedId}
-                    selectedDecisionTime={selectedDecisionTime}
-                    selectedAnalysis={selectedAnalysis}
-                    selectedOrder={selectedOrder}
-                    selectedFills={selectedFills}
+              <div className="connected-terminal__side">
+                {bootstrap.mode === 'paper_live' && (
+                  <ActivityPanel
+                    product={product ?? bootstrap.products?.[0] ?? null}
                   />
                 )}
-              </TerminalDecisions>
+                <TerminalDecisions
+                  rows={decisionRows}
+                  selectedId={selectedId}
+                  onSelect={selectAnalysis}
+                  notice={
+                    engineOff
+                      ? 'Motor de decisiones apagado. Solo se muestran velas y precio públicos de Kraken Futures; no hay análisis, cuenta ni operaciones simuladas.'
+                      : !analyses.length && gatewayEngine
+                        ? analysesNotice(
+                            gatewayEngineStatus,
+                            gatewayEngineReason,
+                          )
+                        : null
+                  }
+                  selected={
+                    selectedAnalysis && !engineOff ? (
+                      <SelectedDecision
+                        analysis={selectedAnalysis}
+                        id={selectedId}
+                        time={utcTime(selectedDecisionTime)}
+                        reason={analysisReason(selectedAnalysis, localDemo)}
+                        notes={selectedNotes}
+                      />
+                    ) : null
+                  }
+                >
+                  {localDemo && selectedAnalysis && (
+                    <SelectedAnalysis
+                      selectedId={selectedId}
+                      selectedDecisionTime={selectedDecisionTime}
+                      selectedAnalysis={selectedAnalysis}
+                      selectedOrder={selectedOrder}
+                      selectedFills={selectedFills}
+                    />
+                  )}
+                </TerminalDecisions>
+              </div>
             }
           />
           {!engineOff && (

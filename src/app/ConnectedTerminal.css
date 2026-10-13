@@ -574,3 +574,14 @@
 .connected-terminal__decisions:not(:has(.connected-terminal__decision-list)) {
   height: auto;
 }
+
+/* Right column: activity of the engine above the decisions list. */
+.connected-terminal__side {
+  display: grid;
+  gap: 1rem;
+  min-width: 0;
+  align-content: start;
+}
+.connected-terminal__side .obs-activity {
+  margin-bottom: 0;
+}
