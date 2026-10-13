@@ -21,7 +21,7 @@ const WINDOW_LABELS: Record<ActivityWindow, string> = {
   '3h': '3 h',
   '24h': '24 h',
 }
-const TOP_REASONS = 5
+const TOP_REASONS = 3
 
 function Unavailable({ section }: { section: Section<object> }) {
   if (section.state !== 'unavailable') return null
@@ -53,38 +53,46 @@ function Now({
           (p) => p.product === report.product,
         ) ?? null)
       : null
+  const windowLabel = report ? WINDOW_LABELS[report.window] : null
   return (
     <section className="obs-now" aria-label="Ahora" data-testid="observer-now">
       <p className="obs-card__label">Ahora</p>
       <p className="obs-card__big" data-testid="last-decision">
         Última decisión: <span className="obs-na">No disponible</span>
+        <span className="obs-card__pill">
+          {decisions ? (
+            <StatusPill tone={TONE[decisions.status]}>
+              {LABEL[decisions.status]}
+            </StatusPill>
+          ) : (
+            <span className="obs-na">Sin datos</span>
+          )}
+        </span>
       </p>
-      <p className="obs-note">
-        Ninguna fuente verificable entrega la última decisión individual de este
-        producto (llegará con B3). El historial de abajo es el del terminal.
-      </p>
-      <dl className="obs-facts">
-        <div>
-          <dt>Fuente de decisiones (B1)</dt>
-          <dd>
-            {decisions ? (
-              <StatusPill tone={TONE[decisions.status]}>
-                {LABEL[decisions.status]}
-              </StatusPill>
-            ) : (
-              <span className="obs-na">Sin datos</span>
-            )}
-          </dd>
-        </div>
-        <div>
-          <dt>Última evaluación registrada</dt>
-          <dd>
-            {report && mine?.lastBucketMs != null
-              ? momentLabel(mine.lastBucketMs, report.generatedAtMs)
-              : 'Sin datos'}
-          </dd>
-        </div>
-      </dl>
+      {report && mine && report.signals.state === 'ok' && (
+        <p className="obs-summary" data-testid="window-summary">
+          Últimas {windowLabel} · {mine.count}{' '}
+          {mine.count === 1 ? 'evaluación' : 'evaluaciones'} ·{' '}
+          {report.signals.total}{' '}
+          {report.signals.total === 1
+            ? 'propuesta direccional'
+            : 'propuestas direccionales'}
+        </p>
+      )}
+      <details className="obs-details obs-details--inline">
+        <summary>Qué fuentes respaldan esto</summary>
+        <p className="obs-note">
+          Ninguna fuente verificable entrega la última decisión individual de
+          este producto (llegará con B3). El estado es el de la fuente de
+          decisiones según B1 (Fuente de decisiones (B1)).
+        </p>
+        <p className="obs-note">
+          Última evaluación registrada:{' '}
+          {report && mine?.lastBucketMs != null
+            ? momentLabel(mine.lastBucketMs, report.generatedAtMs)
+            : 'Sin datos'}
+        </p>
+      </details>
     </section>
   )
 }
@@ -113,7 +121,7 @@ function Activity({ report }: { report: ActivityReport }) {
           }
           hint={
             mine
-              ? `${mine.missing} min sin veredicto frente a 1 por minuto`
+              ? `${mine.missing} min sin veredicto de 1 por minuto`
               : undefined
           }
         />
@@ -122,17 +130,16 @@ function Activity({ report }: { report: ActivityReport }) {
           value={signals.state === 'ok' ? signals.total : 'Sin datos'}
           hint={
             signals.state === 'ok'
-              ? `${signals.long} largo · ${signals.short} corto. No son operaciones.`
+              ? `${signals.long} largo · ${signals.short} corto · no son operaciones`
               : undefined
           }
         />
       </div>
       {mine?.lastSignal && (
         <p className="obs-note" data-testid="last-proposal">
-          Última propuesta direccional: {mine.lastSignal.action} ·{' '}
+          Última propuesta: {mine.lastSignal.action} ·{' '}
           {mine.lastSignal.reasonCode} ·{' '}
-          {momentLabel(mine.lastSignal.bucketMs, report.generatedAtMs)}. Es una
-          propuesta del motor, no una operación ejecutada.
+          {momentLabel(mine.lastSignal.bucketMs, report.generatedAtMs)}
         </p>
       )}
       <p className="obs-card__label obs-card__label--sub">
@@ -186,8 +193,8 @@ function Results({ report }: { report: ActivityReport }) {
         <>
           {stored === 0 && (
             <p className="obs-note">
-              Ningún experimento almacenó una entrada en la ventana. Una
-              propuesta no es una operación.
+              Sin entradas almacenadas en la ventana. Una propuesta no es una
+              operación.
             </p>
           )}
           <ul className="obs-exps" data-testid="activity-experiments">
@@ -206,11 +213,6 @@ function Results({ report }: { report: ActivityReport }) {
               </li>
             ))}
           </ul>
-          <p className="obs-note">
-            Cada experimento tiene su propio ciclo: uno al día no prueba que los
-            demás lo estén. Posiciones actuales: No disponible (B5); los
-            registros abiertos del forward no son posiciones verificadas.
-          </p>
         </>
       )}
     </section>
@@ -298,6 +300,14 @@ export default function ObserverPanel({
             <li>
               Los minutos sin veredicto son la diferencia con la cadencia
               nominal de uno por minuto, no un diagnóstico de salud.
+            </li>
+            <li>
+              Cada experimento tiene su propio ciclo: uno al día no prueba que
+              los demás lo estén.
+            </li>
+            <li>
+              Posiciones actuales: No disponible (B5); los registros abiertos
+              del forward no son posiciones verificadas.
             </li>
             {current?.discards.state === 'ok' &&
               current.discards.notRecorded.map((text) => (

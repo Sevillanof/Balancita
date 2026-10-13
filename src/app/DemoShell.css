@@ -56,11 +56,11 @@
 .demo-shell__header-inner {
   display: flex;
   width: min(100%, 1800px);
-  min-height: 64px;
+  min-height: 52px;
   align-items: center;
-  gap: 32px;
+  gap: 28px;
   margin-inline: auto;
-  padding: 8px 28px;
+  padding: 4px 24px;
 }
 
 .demo-shell__brand {
@@ -192,7 +192,7 @@
 .demo-shell__main {
   width: min(100% - 56px, 1800px);
   margin-inline: auto;
-  padding-block: 12px 48px;
+  padding-block: 8px 48px;
 }
 
 .demo-shell__page-heading {

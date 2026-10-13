@@ -448,7 +448,7 @@
   flex-wrap: wrap;
   align-items: baseline;
   gap: 2px 16px;
-  margin: 0 0 8px;
+  margin: 0 0 6px;
 }
 
 .connected-terminal__strip h1 {

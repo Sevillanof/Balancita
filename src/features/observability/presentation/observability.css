@@ -410,3 +410,95 @@
     padding: 56px 8px 8px;
   }
 }
+
+/* Refinement: the column reads at a glance; explanations fold. */
+.obs-now {
+  padding: var(--mc-space-sm) var(--mc-space-md);
+}
+.obs-now .obs-card__label {
+  margin-bottom: 2px;
+}
+.obs-card__big {
+  display: flex;
+  align-items: center;
+  gap: var(--mc-space-sm);
+  font-size: 14px;
+}
+.obs-card__pill {
+  margin-left: auto;
+}
+.obs-summary {
+  margin: 2px 0 0;
+  color: var(--mc-text);
+  font-size: 12.5px;
+}
+.obs-details--inline {
+  margin: 4px 0 0;
+  font-size: 11.5px;
+}
+.obs-details--inline summary {
+  color: var(--mc-text-3);
+  cursor: pointer;
+}
+.obs-observer__body {
+  gap: 6px;
+  padding: var(--mc-space-sm);
+}
+.obs-card {
+  padding: 8px var(--mc-space-sm);
+}
+.obs-card__label {
+  margin-bottom: 6px;
+}
+.obs-card__label--sub {
+  margin-top: 8px;
+}
+.obs-metrics .mc-metric__value,
+.obs-metrics strong {
+  font-size: 1.15rem;
+}
+.obs-reasons li,
+.obs-exps li {
+  padding: 3px var(--mc-space-sm);
+}
+
+/* Refinement: healthy parts are one dense line; incidents carry the weight. */
+.obs-row[data-status='ok'] {
+  display: grid;
+  grid-template-columns: 19rem minmax(0, 1fr);
+  align-items: center;
+  gap: 0 var(--mc-space-md);
+  padding: 6px var(--mc-space-md);
+}
+.obs-row[data-status='ok'] .obs-row__summary {
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+.obs-row[data-status='ok'] .obs-details {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: 11px;
+}
+.obs-row[data-status='ok'] .obs-details summary {
+  color: var(--mc-text-3);
+}
+.obs-row[data-status='warning'],
+.obs-row[data-status='error'] {
+  border-left-width: 3px;
+  background: color-mix(in srgb, var(--mc-warn) 6%, var(--mc-surface-2));
+}
+.obs-row[data-status='error'] {
+  background: color-mix(in srgb, var(--mc-short) 7%, var(--mc-surface-2));
+}
+.obs-row[data-status='warning'] .obs-row__summary,
+.obs-row[data-status='error'] .obs-row__summary {
+  color: var(--mc-text);
+  font-size: 13px;
+}
+.obs-row[data-status='ok'] .obs-row__title {
+  font-size: 12px;
+  white-space: nowrap;
+}

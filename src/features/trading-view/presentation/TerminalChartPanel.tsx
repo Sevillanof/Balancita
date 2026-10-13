@@ -53,8 +53,8 @@ type Settings = { intervalMs: number; overlays: Overlay[]; panes: Pane[] }
 const STORAGE_KEY = 'balancita.terminal-chart.v1'
 const DEFAULTS: Settings = {
   intervalMs: 60_000,
-  overlays: ['ema9', 'ema21'],
-  panes: ['flow', 'oi'],
+  overlays: ['ema21'],
+  panes: ['flow'],
 }
 
 function loadSettings(): Settings {
@@ -229,7 +229,11 @@ function flowPanes(
         ],
       })
   }
-  return panes
+  // A pane with no point at all is not drawn: an empty strip would read as
+  // «zero», not as «no data» (the legend says which ones are missing).
+  return panes.filter((pane) =>
+    pane.series.some((series) => series.points.length > 0),
+  )
 }
 
 function depthWithin(depth: ChartDepth | null, band: string) {
@@ -426,54 +430,6 @@ export default function TerminalChartPanel({
 
   return (
     <div className="terminal-chart">
-      <dl className="terminal-chart__stats" aria-label="Datos del mercado">
-        <div>
-          <dt>Cambio 24 h</dt>
-          <dd
-            className={
-              change == null
-                ? undefined
-                : change >= 0
-                  ? 'terminal-chart__up'
-                  : 'terminal-chart__down'
-            }
-          >
-            {percent(change)}
-          </dd>
-        </div>
-        <div>
-          <dt>Funding (por hora)</dt>
-          <dd>
-            {stats?.relative_funding_rate == null
-              ? '—'
-              : percent(stats.relative_funding_rate * 100, 4)}
-            {' · próx. '}
-            {stats?.relative_funding_rate_prediction == null
-              ? '—'
-              : percent(stats.relative_funding_rate_prediction * 100, 4)}
-            {' en '}
-            {countdown(stats?.next_funding_time_ms, now)}
-          </dd>
-        </div>
-        <div>
-          <dt>Bid / ask</dt>
-          <dd>
-            {usd(stats?.bid, 0)} ({amount(stats?.bid_size, 3)}) /{' '}
-            {usd(stats?.ask, 0)} ({amount(stats?.ask_size, 3)}) · spread{' '}
-            {usd(stats?.spread)}
-          </dd>
-        </div>
-        <div>
-          <dt>Interés abierto</dt>
-          <dd>
-            {amount(stats?.open_interest, 1)} {productBase(product)}
-            {stats?.open_interest != null && stats.mark != null
-              ? ` · ${compactUsd(stats.open_interest * stats.mark)}`
-              : ''}
-          </dd>
-        </div>
-      </dl>
-
       <div className="terminal-chart__toolbar">
         <div
           className="terminal-chart__seg"
@@ -586,6 +542,53 @@ export default function TerminalChartPanel({
             </div>
           </dl>
         </details>
+        <dl className="terminal-chart__stats" aria-label="Datos del mercado">
+          <div>
+            <dt>Cambio 24 h</dt>
+            <dd
+              className={
+                change == null
+                  ? undefined
+                  : change >= 0
+                    ? 'terminal-chart__up'
+                    : 'terminal-chart__down'
+              }
+            >
+              {percent(change)}
+            </dd>
+          </div>
+          <div>
+            <dt>Funding (por hora)</dt>
+            <dd>
+              {stats?.relative_funding_rate == null
+                ? '—'
+                : percent(stats.relative_funding_rate * 100, 4)}
+              {' · próx. '}
+              {stats?.relative_funding_rate_prediction == null
+                ? '—'
+                : percent(stats.relative_funding_rate_prediction * 100, 4)}
+              {' en '}
+              {countdown(stats?.next_funding_time_ms, now)}
+            </dd>
+          </div>
+          <div>
+            <dt>Bid / ask</dt>
+            <dd>
+              {usd(stats?.bid, 0)} ({amount(stats?.bid_size, 3)}) /{' '}
+              {usd(stats?.ask, 0)} ({amount(stats?.ask_size, 3)}) · spread{' '}
+              {usd(stats?.spread)}
+            </dd>
+          </div>
+          <div>
+            <dt>Interés abierto</dt>
+            <dd>
+              {amount(stats?.open_interest, 1)} {productBase(product)}
+              {stats?.open_interest != null && stats.mark != null
+                ? ` · ${compactUsd(stats.open_interest * stats.mark)}`
+                : ''}
+            </dd>
+          </div>
+        </dl>
       </div>
       {!live && (
         <p className="terminal-chart__note">

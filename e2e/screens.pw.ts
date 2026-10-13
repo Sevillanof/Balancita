@@ -324,9 +324,8 @@ test('terminal chart with two sub-panes takes the available height', async ({
   await expect(
     page.getByRole('checkbox', { name: 'Compra/venta' }),
   ).toBeChecked()
-  await expect(
-    page.getByRole('checkbox', { name: 'Interés abierto' }),
-  ).toBeChecked()
+  // Open interest is not a default pane any more: the test turns it on.
+  await page.getByRole('checkbox', { name: 'Interés abierto' }).check()
   const { width, height } = page.viewportSize()!
   const base =
     width >= 1200

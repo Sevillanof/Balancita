@@ -224,3 +224,61 @@
 .terminal-chart__legend {
   padding-top: 0;
 }
+
+/* Mission Control 3.3 (refinement): the four figures that frame a decision
+   share the toolbar's line, as plain text, so the candles start right under
+   the controls. */
+@media (min-width: 901px) {
+  .terminal-chart__toolbar > .terminal-chart__stats {
+    display: flex;
+    order: 2;
+    flex: 1 0 100%;
+    flex-wrap: nowrap;
+    justify-content: flex-start;
+    gap: 0 1.4rem;
+    min-width: 0;
+    padding: 0;
+    font-size: 0.72rem;
+  }
+  .terminal-chart__toolbar > .terminal-chart__stats > div {
+    flex: 0 1 auto;
+    padding: 0;
+    border: 0;
+    background: none;
+    white-space: nowrap;
+  }
+  .terminal-chart__toolbar > .terminal-chart__stats dt {
+    font-size: 0.62rem;
+  }
+  .terminal-chart__toolbar {
+    flex-wrap: wrap;
+    gap: 0.25rem 0.75rem;
+    padding: 0 0.5rem;
+  }
+  .terminal-chart__toolbar summary,
+  .terminal-chart__seg button {
+    white-space: nowrap;
+  }
+}
+
+@media (min-width: 901px) {
+  .terminal-chart {
+    gap: 0.2rem;
+  }
+  .terminal-chart__toolbar > .terminal-chart__stats {
+    padding: 0;
+    font-size: 0.7rem;
+  }
+  .terminal-chart__toolbar > .terminal-chart__stats > div {
+    display: flex;
+    align-items: baseline;
+    gap: 0.4rem;
+  }
+  .terminal-chart__toolbar summary,
+  .terminal-chart__seg button {
+    min-height: 26px;
+  }
+  .terminal-chart__seg {
+    padding: 2px;
+  }
+}

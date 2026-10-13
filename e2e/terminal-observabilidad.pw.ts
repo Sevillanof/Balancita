@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { expect, test, type Page } from '@playwright/test'
 
@@ -114,7 +114,47 @@ async function openTerminal(page: Page, health: unknown, activity: unknown) {
   await expect(page.getByTestId('activity-panel')).toBeVisible()
 }
 
+/** One anomaly among healthy parts, like the Stitch scenario (synthetic). */
+function oneAnomaly() {
+  const health = example('b1/ejemplo-degradado.json')
+  const components = health.components.map((c: { id: string }) =>
+    c.id === 'risk'
+      ? c
+      : c.id === 'strategies'
+        ? c
+        : {
+            ...c,
+            status: 'ok',
+            summary: 'Fixture sintético: sin hallazgos.',
+            evidence: [],
+          },
+  )
+  return {
+    ...health,
+    overall: {
+      status: 'warning',
+      reason: '1 componente(s) con problemas y 1 sin verificar.',
+      failing: ['strategies'],
+      unverified: ['risk'],
+    },
+    components,
+  }
+}
+
+/** Every fixture capture says so on its face. */
+async function labelFixture(page: Page) {
+  await page.evaluate(() => {
+    const tag = document.createElement('div')
+    tag.textContent =
+      'DATOS DE EJEMPLO · fixture sintético, no son cotizaciones'
+    tag.style.cssText =
+      'position:fixed;left:50%;bottom:8px;transform:translateX(-50%);z-index:99999;padding:4px 12px;border:1px solid #f5a524;border-radius:6px;background:#1a1405;color:#f5a524;font:600 12px sans-serif;letter-spacing:.06em'
+    document.body.appendChild(tag)
+  })
+}
+
 async function shot(page: Page, name: string) {
+  await labelFixture(page)
   mkdirSync('playwright-artifacts/terminal-observabilidad', { recursive: true })
   await page.screenshot({
     path: join(
@@ -122,6 +162,39 @@ async function shot(page: Page, name: string) {
       `${test.info().project.name}-${name}.png`,
     ),
   })
+}
+
+/** Positions that go into the Stitch comparison (px, viewport coordinates). */
+async function measure(page: Page) {
+  const box = async (sel: string) => {
+    const b = await page.locator(sel).first().boundingBox()
+    return (
+      b && {
+        x: Math.round(b.x),
+        y: Math.round(b.y),
+        w: Math.round(b.width),
+        h: Math.round(b.height),
+      }
+    )
+  }
+  const out = {
+    viewport: page.viewportSize(),
+    header: await box('header'),
+    chart_canvas: await box('canvas'),
+    observer: await box('[data-testid="activity-panel"]'),
+    ahora: await box('[data-testid="observer-now"]'),
+    actividad: await box('[aria-label="Actividad de la ventana"]'),
+    resultados: await box('[aria-label="Operaciones almacenadas"]'),
+    historial: await box('[aria-label="Historial"]'),
+  }
+  mkdirSync('playwright-artifacts/terminal-observabilidad', { recursive: true })
+  writeFileSync(
+    join(
+      'playwright-artifacts/terminal-observabilidad',
+      `${test.info().project.name}-posiciones.json`,
+    ),
+    JSON.stringify(out, null, 2),
+  )
 }
 
 /** Desktop layout contract: big chart, AHORA visible without scrolling. */
@@ -134,8 +207,9 @@ async function expectChartProtagonist(page: Page) {
   const side = await page.getByTestId('activity-panel').boundingBox()
   expect(chart!.width).toBeGreaterThan(side!.width * 1.8)
   // Large useful area: the chart is not pushed down by rows of cards.
-  expect(chart!.y).toBeLessThan(viewport.height * 0.35)
   const canvas = await page.locator('canvas').first().boundingBox()
+  // Stitch starts its chart around 145 px; allow up to 175.
+  expect(canvas!.y).toBeLessThanOrEqual(175)
   expect(canvas!.height).toBeGreaterThanOrEqual(viewport.height * 0.5)
   // AHORA is inside the first screen.
   const now = await page.getByTestId('observer-now').boundingBox()
@@ -151,6 +225,9 @@ test('waiting state: health in the header, one observer column, chart protagonis
   await expect(page.getByTestId('health-indicator')).toContainText(
     '5 con problemas',
   )
+  await expect(page.getByTestId('window-summary')).toContainText(
+    '180 evaluaciones · 0 propuestas direccionales',
+  )
   // No source gives the last decision: it is not deduced from the totals.
   await expect(page.getByTestId('last-decision')).toContainText('No disponible')
   await expect(page.getByTestId('activity-panel')).not.toContainText(
@@ -158,6 +235,7 @@ test('waiting state: health in the header, one observer column, chart protagonis
   )
   await expect(page.getByTestId('stored-total')).toHaveText('0')
   await expectChartProtagonist(page)
+  await measure(page)
   await shot(page, 'espera-3h')
 })
 
@@ -175,7 +253,7 @@ test('a registered directional signal is a proposal, not an operation', async ({
   await expect(page.getByTestId('last-proposal')).toContainText(
     'LONG · c25_long_pullback',
   )
-  await expect(panel).toContainText('No son operaciones')
+  await expect(panel).toContainText('no son operaciones')
   await expectChartProtagonist(page)
   await shot(page, 'con-senal')
 })
@@ -185,7 +263,7 @@ test('health inspector is centered, fits the viewport and scrolls inside', async
 }) => {
   await openTerminal(
     page,
-    example('b1/ejemplo-degradado.json'),
+    oneAnomaly(),
     example('b2/ejemplo-sin-actividad.json'),
   )
   await page.getByTestId('health-indicator').click()
