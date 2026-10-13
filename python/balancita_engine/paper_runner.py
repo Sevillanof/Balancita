@@ -44,7 +44,10 @@ ONE_MINUTE_MS = 60_000
 GENESIS = "0" * 64
 
 # Event kinds the runner accepts from a source. ``reconstructed`` is evidence for the audit and never an order.
-EVENT_KINDS = ("cycle", "quote", "candle", "clock", "reconstructed", "gap_declared", "funding", "reconcile")
+EVENT_KINDS = ("cycle", "quote", "candle", "clock", "reconstructed", "gap_declared", "funding", "reconcile", "modelled_price")
+# ``execution_mode``: "quotes" (stages 8A-8C: orders fill on observed quotes) or "modelled" (stage 9A replay: orders fill on a
+# price the replay driver models from candles, delivered as ``modelled_price``; observed quotes are refused in this mode).
+EXECUTION_MODES = ("quotes", "modelled")
 CREATED, PROCESSING, RECOVERING, FINISHED, REFUSED = "CREATED", "PROCESSING", "RECOVERING", "FINISHED", "REFUSED"
 # 8C adds DEGRADED and STOPPED; SUSPENDED_ENTRIES is not a runner state but a flag derived from the portfolio (it only
 # blocks new entries).
@@ -76,6 +79,7 @@ class RunnerConfig:
     funding: tuple = ()          # ((product, ((start_ms, end_ms, rate), ...)), ...) known when the run starts
     start_ms: int = 0
     coverage_gap_ms: int = 120_000   # experimental hypothesis: longer without a quote while a position is open = unobserved
+    execution_mode: str = "quotes"
 
     def funding_map(self):
         return {product: [tuple(row) for row in rows] for product, rows in self.funding}
@@ -150,6 +154,7 @@ def manifest(config, log, strategies):
         "engine_behavior": engine_behavior(),
         "build_identity": build_identity(),
         "offset_identity": "source|stream|epoch",
+        **({"execution_mode": config.execution_mode} if config.execution_mode != "quotes" else {}),
         "policy_status": "execution, watch and gap policies are experimental hypotheses, not validated values",
     }
 
@@ -257,7 +262,13 @@ class PaperRunner(object):
         self.lock = None
         self.closed = False         # a durable runner that released its lock never writes again
         self.portfolio = Portfolio(config.portfolio, funding=config.funding_map(), stop_policy=config.stop_policy)
-        self.executor = TimedExecutor(self.portfolio, config.execution, watch=config.watch)
+        if config.execution_mode not in EXECUTION_MODES:
+            raise RunnerError("invalid_execution_mode", repr(config.execution_mode))
+        if config.execution_mode == "modelled":
+            from .replay_execution import ModelledExecutor      # imported late: the replay layer reads the runner, never the reverse
+            self.executor = ModelledExecutor(self.portfolio, config.execution)
+        else:
+            self.executor = TimedExecutor(self.portfolio, config.execution, watch=config.watch)
         self.status, self.clock = CREATED, None
         self.seen = {}               # event_id -> digest of its payload (accepted events only)
         self.candle_digest = {}      # (product, bucket) -> digest of the first candle accepted
@@ -550,6 +561,10 @@ class PaperRunner(object):
             self.executor.on_quote(payload)
             self._note_quote(payload, before)
             self._settle_closed(before)
+        elif kind == "modelled_price":
+            before = self._open_snapshot()
+            self.executor.on_modelled_price(dict(payload, time_ms=event["t_ms"]))
+            self._settle_closed(before)
         elif kind == "funding":
             counts = ingest_funding(self.portfolio, payload["product_id"], payload["periods"], received_ms=event["t_ms"],
                                     source=event["source"])
@@ -630,10 +645,19 @@ class PaperRunner(object):
         kind, payload, t_ms = event["kind"], event["payload"], event["t_ms"]
         try:
             if kind == "quote":
+                if self.config.execution_mode == "modelled":
+                    return "quote_not_allowed_in_modelled_mode"     # no observed or synthetic quote reaches the watch in a replay
                 try:
                     parse_quote(payload)
                 except ValueError:
                     return "invalid_quote"
+            elif kind == "modelled_price":
+                if self.config.execution_mode != "modelled":
+                    return "invalid_event"
+                if not isinstance(payload["product_id"], str) or not isinstance(payload["source"], str) \
+                        or not isinstance(payload["scenario"], str) or not D(str(payload["price"])).is_finite() \
+                        or D(str(payload["price"])) <= 0:
+                    return "invalid_event"
             elif kind == "candle":
                 product, bucket = payload["product_id"], payload["bucket_ms"]
                 if not isinstance(product, str) or not isinstance(bucket, int) or isinstance(bucket, bool):
@@ -647,7 +671,7 @@ class PaperRunner(object):
                 if seen is not None:
                     return "duplicate_candle" if seen == digest else "conflicting_candle"
                 last = self.portfolio.last_bucket.get(product)
-                if last is not None and bucket <= last:
+                if last is not None and bucket <= last and not self._entry_minute_candle(product, bucket):
                     return "late_candle"
             elif kind == "cycle":
                 cycle_ms = payload["cycle_ms"]
@@ -677,6 +701,12 @@ class PaperRunner(object):
         except (KeyError, TypeError, ValueError, InvalidOperation):
             return "invalid_event"
         return None
+
+    def _entry_minute_candle(self, product, bucket):
+        """True for the candle of the minute a modelled order entered on: the replay executor resolves that minute (the
+        portfolio never shows a position the candle it entered on), so the runner must let the candle through once."""
+        accepts = getattr(self.executor, "accepts_entry_minute_candle", None)
+        return bool(accepts and accepts(product, bucket))
 
     def _gap_check(self, payload):
         source, stream, epoch, lo, hi = (payload["source"], payload["stream"], payload["epoch"], payload["from_offset"],
