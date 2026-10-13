@@ -553,6 +553,9 @@ export function devChildSpecs({
         BALANCITA_PYTHON_STATUS: pythonStatus(python),
         // Per-process health written by the dev supervisor (scripts/dev.mjs).
         DEV_HEALTH_FILE: `${serverCwd}/data/dev-live/dev-health.json`,
+        // `/api/observability/health` reads these read-only (forward's DB, the strategy registry).
+        FUTURES_FORWARD_DB_PATH: `${forwardDir}/forward.sqlite`,
+        FUTURES_STRATEGIES_DB_PATH: strategiesDb,
         // Qwen's hits/misses/returns, computed read-only by Python on request.
         FUTURES_DECISIONS_DB_PATH: decisionsDb,
         // `/api/system`: size of the saved data, C31's summary and the Kronos run.

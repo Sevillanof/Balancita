@@ -227,6 +227,8 @@ fase de auditoría.
 B1. `GET /api/observability/health` en el gateway (solo lectura): estado de los seis
 componentes calculado con reglas documentadas a partir de datos reales.
 
+_Implementado (Fase 3.1, PR independiente): contrato, umbrales y mediciones en [`observabilidad-salud-api.md`](observabilidad-salud-api.md)._
+
 - Datos: `capture.status` + antigüedad de ticker y de la última vela cerrada + `data_gaps` recientes.
 - Procesamiento: procesos del supervisor + conteo de verdicts del último ciclo esperado.
 - Estrategias: estados del registro + `forward_status` actual.
