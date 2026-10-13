@@ -103,7 +103,7 @@ export interface ObservabilityHealth {
   report(): ObservabilityHealthReport
 }
 
-type Row = Record<string, unknown>
+export type Row = Record<string, unknown>
 type ProcessState = 'running' | 'restarting' | 'down' | 'absent' | 'unknown'
 
 // Cadences these thresholds come from (see docs/observabilidad-salud-api.md).
@@ -156,11 +156,11 @@ function worst(statuses: readonly HealthStatus[]): HealthStatus {
   )
 }
 
-function num(value: unknown): number | null {
+export function num(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null
 }
 
-function rowOf(value: unknown): Row {
+export function rowOf(value: unknown): Row {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? (value as Row)
     : {}
@@ -185,12 +185,12 @@ function readJson(path: string | undefined): Row | null {
   }
 }
 
-type Opened<T> =
+export type Opened<T> =
   | { readonly state: 'read'; readonly value: T }
   | { readonly state: 'missing' | 'unreadable'; readonly detail: string }
 
 /** One short-lived read-only connection: opened, queried and closed here. */
-function withDb<T>(
+export function withDb<T>(
   path: string | undefined,
   read: (db: DatabaseSync) => T,
 ): Opened<T> {
@@ -1032,7 +1032,7 @@ function readForward(options: ObservabilityHealthOptions): Opened<ForwardRead> {
   })
 }
 
-interface RegistryEntry {
+export interface RegistryEntry {
   readonly id: string
   readonly version: number | null
   readonly state: string
@@ -1044,7 +1044,7 @@ interface RegistryEntry {
  * `futures_strategy_registry.forward_candidates`): the active version if any,
  * otherwise the newest version with its own state.
  */
-function readRegistry(
+export function readRegistry(
   options: ObservabilityHealthOptions,
 ): Opened<RegistryEntry[]> {
   return withDb(options.strategiesDbPath, (db) => {
@@ -1073,14 +1073,14 @@ function readRegistry(
   })
 }
 
-interface ExpectedStrategy {
+export interface ExpectedStrategy {
   readonly id: string
   readonly source: 'registro' | 'archivo de registro forward'
   /** When the registry switched it on (0/null: shipped or from the file). */
   readonly activeSinceMs: number | null
 }
 
-type Expected =
+export type Expected =
   | {
       readonly state: 'known'
       readonly strategies: readonly ExpectedStrategy[]
@@ -1097,7 +1097,7 @@ type Expected =
  * list (the runner has no per-strategy product filter). When any input cannot
  * be read the set cannot be known, and that is reported, never assumed.
  */
-function expectedPairs(
+export function expectedPairs(
   options: ObservabilityHealthOptions,
   registry: Opened<RegistryEntry[]>,
 ): Expected {

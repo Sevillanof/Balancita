@@ -7,6 +7,7 @@ import {
 } from '../features/live-gateway/qwen-scores.ts'
 import { createKronosScores } from '../features/live-gateway/kronos-scores.ts'
 import { createObservabilityHealth } from '../features/live-gateway/observability-health.ts'
+import { createObservabilityActivity } from '../features/live-gateway/observability-activity.ts'
 import { loadPinnedProducts } from '../features/kraken-futures/futures-products.ts'
 import { serverConfigFrom } from '../platform/config.ts'
 
@@ -101,6 +102,17 @@ async function main(): Promise<void> {
         'resilience.jsonl',
       ),
       staleAfterMs: config.marketStaleAfterMs,
+    }),
+    // Same read-only sources as the health report, counted over 3 h / 24 h.
+    observabilityActivity: createObservabilityActivity({
+      products: loadPinnedProducts().map((p) => p.productId),
+      verdictsDbPath: process.env.FUTURES_VERDICTS_DB_PATH || undefined,
+      forwardDbPath: process.env.FUTURES_FORWARD_DB_PATH || undefined,
+      strategiesDbPath: process.env.FUTURES_STRATEGIES_DB_PATH || undefined,
+      forwardRegistrationPath:
+        process.env.FUTURES_FORWARD_REGISTRATION_PATH || undefined,
+      strategySpecsDir: process.env.FUTURES_STRATEGY_SPECS_DIR || undefined,
+      forwardProducts: forwardProducts(process.env),
     }),
     systemUsage: createSystemUsage({
       healthPath: process.env.DEV_HEALTH_FILE || undefined,

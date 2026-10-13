@@ -236,6 +236,8 @@ _Implementado (Fase 3.1, PR independiente): contrato, umbrales y mediciones en [
 - Ejecución paper: último ciclo de forward, `diverged_trades`, bloqueos por vela tardía.
 - Riesgo: "sin datos" mientras no exista fuente (no verde por omisión).
 
+_Implementado (Fase 3.2, PR independiente, sin UI): contrato y mediciones en [`observabilidad-actividad-api.md`](observabilidad-actividad-api.md)._
+
 B2. `GET /api/observability/activity?window=3h|24h&product=` : evaluaciones (filas de
 verdict por producto/minuto), señales con propuesta direccional, descartes agrupados por
 `reason_code`, última operación por experimento. Agregación pura sobre tablas existentes.

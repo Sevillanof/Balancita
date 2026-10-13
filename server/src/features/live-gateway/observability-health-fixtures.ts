@@ -366,3 +366,85 @@ export function writeForwardConfig(
   for (const id of specs)
     writeFileSync(join(b.specsDir, `${id}.json`), JSON.stringify({ id }))
 }
+
+export interface VerdictRow {
+  readonly product: string
+  readonly bucket: number
+  readonly action: string
+  readonly reason: string
+}
+
+/** Verdict rows with a chosen action and reason (payload left empty: B2 never reads it). */
+export function seedVerdictRows(
+  path: string,
+  rows: readonly VerdictRow[],
+  /** Size of each stored payload in bytes (real verdicts carry several KB). */
+  payloadBytes = 2,
+): void {
+  const db = open(path)
+  db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=OFF')
+  db.exec(`CREATE TABLE IF NOT EXISTS paper_futures_verdicts(
+    product_id TEXT NOT NULL, bucket_start INTEGER NOT NULL, interval_ms INTEGER NOT NULL,
+    decision_known_at INTEGER NOT NULL, regime TEXT NOT NULL,
+    action TEXT NOT NULL, reason_code TEXT NOT NULL,
+    verdict_hash TEXT NOT NULL, payload_json TEXT NOT NULL,
+    written_at INTEGER NOT NULL,
+    PRIMARY KEY(product_id, bucket_start)) STRICT`)
+  const insert = db.prepare(
+    'INSERT INTO paper_futures_verdicts VALUES(?,?,?,?,?,?,?,?,?,?)',
+  )
+  db.exec('BEGIN')
+  for (const r of rows)
+    insert.run(
+      r.product,
+      r.bucket,
+      MINUTE,
+      r.bucket + MINUTE + 3000,
+      'range',
+      r.action,
+      r.reason,
+      `v${r.product}${r.bucket}`,
+      payloadBytes <= 2 ? '{}' : `"${'x'.repeat(payloadBytes - 2)}"`,
+      r.bucket + MINUTE + 4000,
+    )
+  db.exec('COMMIT')
+  db.close()
+}
+
+export interface TradeRow {
+  readonly strategy: string
+  readonly product: string
+  readonly entry: number
+  readonly side?: string
+  readonly exit?: number
+  readonly reason?: string
+  /** Stored payload verbatim (to test one that does not parse). */
+  readonly raw?: string
+}
+
+export function seedForwardTrades(
+  path: string,
+  trades: readonly TradeRow[],
+): void {
+  const db = open(path)
+  db.exec(`CREATE TABLE IF NOT EXISTS forward_trade(strategy_id TEXT NOT NULL, product_id TEXT NOT NULL, entry_bucket_ms INTEGER NOT NULL,
+    spec_hash TEXT NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(strategy_id, product_id, entry_bucket_ms, spec_hash)) STRICT`)
+  const insert = db.prepare('INSERT INTO forward_trade VALUES(?,?,?,?,?)')
+  db.exec('BEGIN')
+  for (const t of trades)
+    insert.run(
+      t.strategy,
+      t.product,
+      t.entry,
+      'h',
+      t.raw ??
+        JSON.stringify({
+          side: t.side ?? 'LONG',
+          entry_bucket_ms: t.entry,
+          exit_bucket_ms: t.exit ?? t.entry + 3_600_000,
+          exit_reason: t.reason ?? 'time',
+        }),
+    )
+  db.exec('COMMIT')
+  db.close()
+}

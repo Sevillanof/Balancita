@@ -14,6 +14,11 @@ import {
   createObservabilityHealth,
   type ObservabilityHealth,
 } from './observability-health.ts'
+import {
+  createObservabilityActivity,
+  isActivityWindow,
+  type ObservabilityActivity,
+} from './observability-activity.ts'
 import { loadPinnedProducts } from '../kraken-futures/futures-products.ts'
 
 /** Synthetic stream id: the gateway has no engine run, only a market view. */
@@ -45,6 +50,7 @@ export interface LiveGatewayOptions {
   readonly systemUsage?: SystemUsage
   /** Read-only health of six components (B1). Absent: built from the paths above. */
   readonly observabilityHealth?: ObservabilityHealth
+  readonly observabilityActivity?: ObservabilityActivity
   /** Pinned products the Terminal may pick (default: the pinned list). */
   readonly products?: readonly string[]
   readonly allowedOrigins?: readonly string[]
@@ -315,6 +321,24 @@ export async function buildLiveGateway(
       clock,
     })
   app.get('/api/observability/health', () => observabilityHealth.report())
+  const observabilityActivity =
+    options.observabilityActivity ??
+    createObservabilityActivity({
+      products,
+      verdictsDbPath: options.verdictsDbPath,
+      clock,
+    })
+  app.get<{ Querystring: { window?: string; product?: string } }>(
+    '/api/observability/activity',
+    (request, reply) => {
+      const { window, product } = request.query
+      if (!isActivityWindow(window))
+        return reply.code(400).send({ error: { code: 'invalid_window' } })
+      if (product !== undefined && !products.includes(product))
+        return reply.code(400).send({ error: { code: 'invalid_product' } })
+      return observabilityActivity.report(window, product)
+    },
+  )
   const qwenScores =
     options.qwenScores ?? qwenScoresOff('decisions_not_configured')
   app.get<{ Querystring: { product?: string } }>(

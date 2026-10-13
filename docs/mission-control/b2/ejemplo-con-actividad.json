@@ -1,0 +1,195 @@
+{
+  "generated_at_ms": 1790000000000,
+  "cache_ttl_ms": 15000,
+  "window": "3h",
+  "from_ms": 1789989180000,
+  "to_ms": 1789999980000,
+  "product": null,
+  "evaluations": {
+    "state": "ok",
+    "evidence": {
+      "source": "paper_futures_verdicts",
+      "origin": "futures-verdicts.sqlite",
+      "state": "read",
+      "rule": "filas de paper_futures_verdicts con bucket_start en [3h hasta el minuto en curso); una por producto y minuto si el servicio escribe sin pausas"
+    },
+    "total": 360,
+    "by_product": [
+      {
+        "product": "PF_XBTUSD",
+        "count": 180,
+        "expected": 180,
+        "missing": 0,
+        "first_bucket_ms": 1789989180000,
+        "last_bucket_ms": 1789999920000,
+        "last_known_at_ms": 1789999983000,
+        "long": 1,
+        "short": 0,
+        "last_signal": {
+          "bucket_ms": 1789997520000,
+          "action": "LONG",
+          "reason_code": "c25_long_pullback"
+        }
+      },
+      {
+        "product": "PF_ETHUSD",
+        "count": 180,
+        "expected": 180,
+        "missing": 0,
+        "first_bucket_ms": 1789989180000,
+        "last_bucket_ms": 1789999920000,
+        "last_known_at_ms": 1789999983000,
+        "long": 0,
+        "short": 0,
+        "last_signal": null
+      },
+      {
+        "product": "PF_SOLUSD",
+        "count": 0,
+        "expected": 180,
+        "missing": 180,
+        "first_bucket_ms": null,
+        "last_bucket_ms": null,
+        "last_known_at_ms": null,
+        "long": 0,
+        "short": 0,
+        "last_signal": null
+      },
+      {
+        "product": "PF_XRPUSD",
+        "count": 0,
+        "expected": 180,
+        "missing": 180,
+        "first_bucket_ms": null,
+        "last_bucket_ms": null,
+        "last_known_at_ms": null,
+        "long": 0,
+        "short": 0,
+        "last_signal": null
+      },
+      {
+        "product": "PF_ADAUSD",
+        "count": 0,
+        "expected": 180,
+        "missing": 180,
+        "first_bucket_ms": null,
+        "last_bucket_ms": null,
+        "last_known_at_ms": null,
+        "long": 0,
+        "short": 0,
+        "last_signal": null
+      },
+      {
+        "product": "PF_DOGEUSD",
+        "count": 0,
+        "expected": 180,
+        "missing": 180,
+        "first_bucket_ms": null,
+        "last_bucket_ms": null,
+        "last_known_at_ms": null,
+        "long": 0,
+        "short": 0,
+        "last_signal": null
+      },
+      {
+        "product": "PF_LINKUSD",
+        "count": 0,
+        "expected": 180,
+        "missing": 180,
+        "first_bucket_ms": null,
+        "last_bucket_ms": null,
+        "last_known_at_ms": null,
+        "long": 0,
+        "short": 0,
+        "last_signal": null
+      },
+      {
+        "product": "PF_LTCUSD",
+        "count": 0,
+        "expected": 180,
+        "missing": 180,
+        "first_bucket_ms": null,
+        "last_bucket_ms": null,
+        "last_known_at_ms": null,
+        "long": 0,
+        "short": 0,
+        "last_signal": null
+      }
+    ]
+  },
+  "signals": {
+    "state": "ok",
+    "evidence": {
+      "source": "paper_futures_verdicts",
+      "origin": "futures-verdicts.sqlite",
+      "state": "read",
+      "rule": "veredictos cuya acción seleccionada es LONG o SHORT (propuesta direccional)"
+    },
+    "long": 1,
+    "short": 0
+  },
+  "discards": {
+    "state": "ok",
+    "evidence": {
+      "source": "paper_futures_verdicts",
+      "origin": "futures-verdicts.sqlite",
+      "state": "read",
+      "rule": "veredictos cuya acción es WAIT o ABSTAIN, agrupados por reason_code"
+    },
+    "total": 359,
+    "by_reason": [
+      {
+        "reason_code": "no_directional_proposal",
+        "action": "WAIT",
+        "count": 335
+      },
+      {
+        "reason_code": "conflicting_signals",
+        "action": "ABSTAIN",
+        "count": 24
+      }
+    ],
+    "not_recorded": [
+      "entradas bloqueadas o descartadas por el forward (solo su recuento acumulado en forward_status)",
+      "fallos y esperas de Qwen"
+    ]
+  },
+  "operations": {
+    "state": "ok",
+    "evidence": {
+      "source": "forward_trade / forward_open / forward_status",
+      "origin": "forward.sqlite",
+      "state": "read",
+      "rule": "última operación por clave (estrategia, producto); operaciones de la ventana por rango de entry_bucket_ms; posición abierta por clave"
+    },
+    "pair_source": "registro del forward",
+    "experiments": [
+      {
+        "experiment_id": "C29",
+        "expected_active": true,
+        "trades_in_window": 1,
+        "open_positions": 1,
+        "last_trade": {
+          "product": "PF_XBTUSD",
+          "side": "LONG",
+          "entry_bucket_ms": 1789992780000,
+          "exit_bucket_ms": 1789996380000,
+          "exit_reason": "target"
+        }
+      },
+      {
+        "experiment_id": "C30",
+        "expected_active": true,
+        "trades_in_window": 0,
+        "open_positions": 0,
+        "last_trade": {
+          "product": "PF_ETHUSD",
+          "side": "SHORT",
+          "entry_bucket_ms": 1789891980000,
+          "exit_bucket_ms": 1789895580000,
+          "exit_reason": "stop"
+        }
+      }
+    ]
+  }
+}
