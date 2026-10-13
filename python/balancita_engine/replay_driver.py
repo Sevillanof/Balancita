@@ -435,11 +435,13 @@ def main(argv=None):
     parser.add_argument("--scenario", default="S1", choices=SCENARIOS)
     parser.add_argument("--strategies", default="", help="comma-separated strategy ids; empty = all native")
     parser.add_argument("--out", required=True)
+    parser.add_argument("--load-start", default="", help="YYYY-MM-DD (UTC): first candle read (warm-up); default 21 days before")
     parser.add_argument("--allow-gaps", action="store_true")
     args = parser.parse_args(argv)
     config = ReplayConfig(products=tuple(args.products.split(",")), decision_start_ms=_ms(args.decision_start),
                           decision_end_ms=_ms(args.decision_end), scenario=args.scenario,
-                          strategy_ids=tuple(x for x in args.strategies.split(",") if x), allow_gaps=args.allow_gaps)
+                          strategy_ids=tuple(x for x in args.strategies.split(",") if x), allow_gaps=args.allow_gaps,
+                          load_start_ms=_ms(args.load_start) if args.load_start else 0)
     try:
         results = run_replay(args.candles_db, args.funding_db, config, args.out)
     except (ReplayError, RD.RangeGateError, RD.DataError) as error:
