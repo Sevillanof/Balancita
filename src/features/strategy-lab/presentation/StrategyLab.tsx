@@ -71,6 +71,7 @@ import {
 } from './StrategyLabPanels.tsx'
 import { NewStrategyModal } from './NewStrategyModal.tsx'
 import InventoryView from './InventoryView.tsx'
+import StrategyDetailView, { type LoadActivity } from './StrategyDetailView.tsx'
 import StrategyViewTabs from './StrategyViewTabs.tsx'
 import './InventoryView.css'
 import {
@@ -88,9 +89,11 @@ type Props = {
   loadKronos?: (product: string) => Promise<QwenScores>
   /** The default view is the inventory; the laboratory keeps every existing action. */
   initialView?: StrategyView
+  /** B2 activity reader for the detail view (tests inject it). */
+  loadActivity?: LoadActivity
 }
 
-type StrategyView = 'inventory' | 'lab'
+type StrategyView = 'inventory' | 'lab' | 'detail'
 const VIEW_TABS = [
   { id: 'inventory', label: 'Inventario de modelos' },
   { id: 'lab', label: 'Laboratorio' },
@@ -163,11 +166,13 @@ export default function StrategyLab({
   loadQwen = defaultLoadQwen,
   loadKronos = defaultLoadKronos,
   initialView = 'inventory',
+  loadActivity,
 }: Props) {
   const [view, setView] = useState<StrategyView>(initialView)
   // «Ver contador» del inventario: lleva al contador de Carry dentro del laboratorio.
   const [carryRequest, setCarryRequest] = useState(0)
   const carryRef = useRef<HTMLDivElement>(null)
+  const [detailRow, setDetailRow] = useState<InventoryStrategy | null>(null)
   const [inventory, setInventory] = useState<Inventory | null>(null)
   const [market, setMarket] = useState<LabCandles | null>(null)
   const [api, setApi] = useState<StrategyApi | null>(null)
@@ -482,7 +487,7 @@ export default function StrategyLab({
     setError(null)
   }
 
-  const openFromInventory = (row: InventoryStrategy) => {
+  const openInLab = (row: InventoryStrategy) => {
     setView('lab')
     setNotice(null)
     setError(null)
@@ -493,6 +498,15 @@ export default function StrategyLab({
       setShowPreview(false)
       if (row.id !== selectedId) select(row.id)
     }
+  }
+
+  const openFromInventory = (row: InventoryStrategy) => {
+    if (row.kind === 'rules' && api?.detail && inventory) {
+      setDetailRow(row)
+      setView('detail')
+      return
+    }
+    openInLab(row)
   }
 
   const refresh = (id: string | null, message: string) => {
@@ -700,7 +714,7 @@ export default function StrategyLab({
     <div className="strategy-lab">
       <StrategyViewTabs
         tabs={VIEW_TABS}
-        current={view}
+        current={view === 'detail' ? 'inventory' : view}
         onChange={setView}
         trailing={
           inventory && (
@@ -732,6 +746,16 @@ export default function StrategyLab({
           reload={reload}
           onOpen={openFromInventory}
           onLoaded={setInventory}
+        />
+      )}
+      {view === 'detail' && detailRow && api && inventory && (
+        <StrategyDetailView
+          api={api}
+          row={detailRow}
+          inventory={inventory}
+          loadActivity={loadActivity}
+          onBack={() => setView('inventory')}
+          onOpenLab={() => openInLab(detailRow)}
         />
       )}
       {view === 'lab' && (
