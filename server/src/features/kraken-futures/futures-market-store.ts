@@ -446,8 +446,11 @@ export class FuturesMarketStore {
    * deleted; once a trade/book is older than `rawKeepMs` the copies of the provider
    * message inside `normalized_json` (`raw`, `rawJson`) are dropped: the same bytes
    * stay whole in the `raw_json` column. Candles, funding, analytics
-   * and gaps are never touched. Work is bounded per call (`maxBatches` of 5 000
-   * rows) and `done` says whether it caught up. Each batch lifts the immutability
+   * and gaps are never touched. Work is bounded per call (`maxBatches` of
+   * `batchSize` rows, 5 000 by default) and `done` says whether it caught up. The
+   * database is synchronous: the capture's event loop is blocked for as long as a
+   * call runs, so the capture calls it with small batches and yields in between
+   * (see retention-runner.ts). Each batch lifts the immutability
    * triggers only inside its own transaction and restores them before commit.
    * Freed pages are reused by new events, so the file stops growing; with
    * `auto_vacuum=INCREMENTAL` (set by `market:prune --vacuum`) they are also
@@ -461,8 +464,9 @@ export class FuturesMarketStore {
       rawKeepMs: number
     },
     maxBatches = 20,
-  ): { deleted: number; slimmed: number; done: boolean } {
-    const BATCH = 5_000
+    options: { batchSize?: number; vacuumPages?: number } = {},
+  ): { deleted: number; slimmed: number; done: boolean; batches: number } {
+    const BATCH = Math.max(1, Math.floor(options.batchSize ?? 5_000))
     const bound = (cutoff: number): number => {
       // Rowids grow with received_at: bisect instead of scanning.
       const range = this.db
@@ -544,7 +548,14 @@ export class FuturesMarketStore {
         deleted += removed
         if (removed < BATCH) return true
       }
-      return false
+      // Out of batches for this call: caught up only if nothing matching is left.
+      return (
+        this.db
+          .prepare(
+            `SELECT 1 FROM paper_futures_market_events WHERE ${condition} LIMIT 1`,
+          )
+          .get(...args) === undefined
+      )
     }
     if (tickerBound > 0)
       done = deleteWhere(`feed='ticker' AND rowid<=?`, tickerBound) && done
@@ -584,8 +595,10 @@ export class FuturesMarketStore {
     const mode = this.db.prepare('PRAGMA auto_vacuum').get() as {
       auto_vacuum: number
     }
-    if (mode.auto_vacuum === 2) this.db.exec('PRAGMA incremental_vacuum(4000)')
-    return { deleted, slimmed, done }
+    const vacuumPages = Math.floor(options.vacuumPages ?? 4_000)
+    if (mode.auto_vacuum === 2 && vacuumPages > 0)
+      this.db.exec(`PRAGMA incremental_vacuum(${vacuumPages})`)
+    return { deleted, slimmed, done, batches }
   }
 
   /** Stores every period of the response, even those already known. */

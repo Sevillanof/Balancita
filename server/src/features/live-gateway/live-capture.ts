@@ -64,6 +64,8 @@ const OFFICIAL_GAP_MIN_MS = 10 * 60_000
  */
 const OFFICIAL_REQUEST_GAP_MS = 250
 const HOUR_MS = 3_600_000
+/** A timer this late means the process itself was not running (blocked or asleep). */
+const BLOCKED_PROCESS_MS = 2_000
 const CAPTURE_CANDLE_INTERVAL_MS = 60_000
 /**
  * Kraken lists the funding period starting at hh:00 (hourly cadence) at or
@@ -154,6 +156,8 @@ export interface LiveCaptureOptions {
   readonly watchdogIntervalMs?: number
   /** A general incident replaces the WebSocket only if it has delivered nothing for this long (default 10 s). */
   readonly generalIdleMs?: number
+  /** A deadline timer this late means the process was blocked or asleep, not the network (default 2 s). */
+  readonly blockedProcessMs?: number
 }
 
 /**
@@ -398,7 +402,34 @@ export function createLiveCapture(options: LiveCaptureOptions) {
     abort: () => void,
   ): Promise<void> =>
     new Promise<void>((resolve) => {
-      const timer = setTimeout(() => {
+      const startedAt = Date.now()
+      let extended = false
+      const onDeadline = (): void => {
+        // A timer that fires far later than asked means this process was not running (blocked by a
+        // synchronous call, or the machine slept), not that the request hung: the request gets one more
+        // full period before it is called stuck, and nothing is counted as a network incident.
+        const lateBy = Date.now() - startedAt - deadlineMs
+        if (
+          !extended &&
+          lateBy > (options.blockedProcessMs ?? BLOCKED_PROCESS_MS)
+        ) {
+          extended = true
+          if (!stopped) {
+            log(
+              `${label} poll deadline ran ${lateBy} ms late; process was blocked, not the network`,
+            )
+            health.report({
+              component,
+              product: null,
+              reason: 'process_blocked',
+              action: 'extend_deadline',
+              result: 'info',
+              detail: `${lateBy} ms late`,
+            })
+          }
+          timer = setTimeout(onDeadline, deadlineMs)
+          return
+        }
         if (!stopped) {
           log(`${label} poll stuck for ${deadlineMs} ms; re-arming`)
           note({
@@ -416,7 +447,8 @@ export function createLiveCapture(options: LiveCaptureOptions) {
           // The client is already closed.
         }
         resolve()
-      }, deadlineMs)
+      }
+      let timer = setTimeout(onDeadline, deadlineMs)
       work
         .then(
           () => undefined,

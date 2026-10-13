@@ -54,6 +54,10 @@ function rig(
     connectTimeoutMs: options.connectTimeoutMs ?? 5_000,
     onResilience: (event) => events.push(event),
   })
+  /** The process does not run for `ms` (blocked, or the machine sleeps): the clock moves, no timer fires. */
+  const freeze = (ms: number) => {
+    now += ms
+  }
   const advance = (ms: number) => {
     const end = now + ms
     for (;;) {
@@ -67,7 +71,7 @@ function rig(
     }
     now = end
   }
-  return { collector, sockets, events, advance }
+  return { collector, sockets, events, advance, freeze }
 }
 
 const heartbeat = JSON.stringify({ feed: 'heartbeat', time: 1 })
@@ -185,6 +189,38 @@ describe('websocket watchdog', () => {
     collector.reconnect('general_incident')
     collector.reconnect('general_incident')
     expect(events).toHaveLength(1)
+  })
+
+  it('does not judge silence right after the process itself was not running', () => {
+    const { collector, sockets, events, advance, freeze } = rig({
+      dataSilenceMs: 20_000,
+    })
+    collector.start()
+    sockets[0]!.onopen!()
+    sockets[0]!.onmessage!({ data: ticker(1) })
+    freeze(32_000) // a 32 s synchronous call: frames wait in the socket buffer
+    advance(0) // the late watchdog check runs
+    expect(events.map((e) => e.reason)).toEqual(['process_blocked'])
+    expect(sockets[0]!.closed).toBe(false)
+    sockets[0]!.onmessage!({ data: ticker(2) }) // the queued frames are delivered
+    advance(5_000)
+    sockets[0]!.onmessage!({ data: ticker(3) })
+    advance(5_000)
+    expect(events.filter((e) => e.result === 'recovering')).toEqual([])
+    expect(sockets).toHaveLength(1)
+  })
+
+  it('still reconnects when the socket is really silent after the process resumed', () => {
+    const { collector, sockets, events, advance, freeze } = rig({
+      dataSilenceMs: 20_000,
+    })
+    collector.start()
+    sockets[0]!.onopen!()
+    sockets[0]!.onmessage!({ data: ticker(1) })
+    freeze(32_000)
+    advance(0)
+    advance(30_000) // nothing arrives after resuming
+    expect(events.some((e) => e.result === 'recovering')).toBe(true)
   })
 
   it('stops watching once the collector is stopped', () => {
