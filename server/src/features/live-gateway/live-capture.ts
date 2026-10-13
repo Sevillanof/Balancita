@@ -1,3 +1,4 @@
+import { ConnectionHealth, type ResilienceEvent } from './connection-health.ts'
 import {
   FUTURES_PRODUCT,
   KrakenFuturesMarketCollector,
@@ -142,6 +143,17 @@ export interface LiveCaptureOptions {
     readonly lookbackMs?: Readonly<Record<number, number>>
   }
   readonly log?: (line: string) => void
+  /** Shared incident record; by default one is created with `resilienceLogFile`. */
+  readonly health?: ConnectionHealth
+  /** JSON-lines log of connection incidents and recoveries (reason, source, time, result). */
+  readonly resilienceLogFile?: string
+  /** WebSocket watchdog: silence on an open socket, and time allowed to connect (defaults 30 s / 15 s). */
+  readonly silenceMs?: number
+  readonly dataSilenceMs?: number
+  readonly connectTimeoutMs?: number
+  readonly watchdogIntervalMs?: number
+  /** A general incident replaces the WebSocket only if it has delivered nothing for this long (default 10 s). */
+  readonly generalIdleMs?: number
 }
 
 /**
@@ -153,6 +165,33 @@ export function createLiveCapture(options: LiveCaptureOptions) {
   const clock = options.clock ?? Date.now
   const log = options.log ?? (() => undefined)
   const { store } = options
+  const health =
+    options.health ??
+    new ConnectionHealth({
+      clock,
+      log,
+      logFile: options.resilienceLogFile,
+      // Three independent sources failing inside a minute is a connectivity problem, not one slow product.
+      generalThreshold: 3,
+    })
+  /**
+   * Records an incident. When it makes the failure general and the WebSocket is silent too, that
+   * socket is replaced at once (rate limited); a healthy WebSocket is never touched, and neither is
+   * any other connection: each REST client recovers by itself with a new connection.
+   */
+  const note = (event: Omit<ResilienceEvent, 'at'>): void => {
+    health.report(event)
+    if (event.component === 'websocket' || !health.general()) return
+    const age = collector?.metrics.tickerAgeMs
+    if (
+      collector !== undefined &&
+      (age === null ||
+        age === undefined ||
+        age > (options.generalIdleMs ?? 10_000)) &&
+      health.allowRecovery('websocket-general')
+    )
+      collector.reconnect('general_incident')
+  }
   let collector: KrakenFuturesMarketCollector | undefined
   let candleTimer: ReturnType<typeof setInterval> | undefined
   let fundingTimer: ReturnType<typeof setTimeout> | undefined
@@ -355,11 +394,22 @@ export function createLiveCapture(options: LiveCaptureOptions) {
     work: Promise<void>,
     deadlineMs: number,
     label: string,
+    component: string,
     abort: () => void,
   ): Promise<void> =>
     new Promise<void>((resolve) => {
       const timer = setTimeout(() => {
-        if (!stopped) log(`${label} poll stuck for ${deadlineMs} ms; re-arming`)
+        if (!stopped) {
+          log(`${label} poll stuck for ${deadlineMs} ms; re-arming`)
+          note({
+            component,
+            product: null,
+            reason: 'poll_stuck',
+            action: 'abort_and_rearm',
+            result: 'recovering',
+            detail: `${deadlineMs} ms`,
+          })
+        }
         try {
           abort()
         } catch {
@@ -384,13 +434,15 @@ export function createLiveCapture(options: LiveCaptureOptions) {
       pollOfficialCandles(),
       options.pollDeadlineMs ?? (officialPolls++ === 0 ? 600_000 : 90_000),
       'official candles',
-      () => officialClient?.close(),
+      'rest-candles',
+      () => officialClient?.abortInFlight(),
     )
   const guardedTicker = (): Promise<void> =>
     settleWithin(
       pollTickers(),
       options.pollDeadlineMs ?? 30_000,
       'ticker',
+      'rest-tickers',
       () => tickerClient?.close(),
     )
   const guardedAnalytics = (): Promise<void> =>
@@ -398,7 +450,8 @@ export function createLiveCapture(options: LiveCaptureOptions) {
       pollAnalytics(),
       options.pollDeadlineMs ?? 300_000,
       'analytics',
-      () => analyticsClient?.close(),
+      'rest-analytics',
+      () => analyticsClient?.abortInFlight(),
     )
   const scheduleOfficialPoll = (): void => {
     if (stopped) return
@@ -618,6 +671,16 @@ export function createLiveCapture(options: LiveCaptureOptions) {
       staleAfterMs: options.staleAfterMs,
       reconnectMinMs: options.reconnectMinMs,
       reconnectMaxMs: options.reconnectMaxMs,
+      silenceMs: options.silenceMs,
+      dataSilenceMs: options.dataSilenceMs,
+      connectTimeoutMs: options.connectTimeoutMs,
+      watchdogIntervalMs: options.watchdogIntervalMs,
+      onResilience: (event) =>
+        note({
+          component: 'websocket',
+          product: FUTURES_PRODUCT,
+          ...event,
+        }),
       // Every event is its own committed transaction: never batched or dropped.
       persist: (event) => {
         const inserted = store.append(event)
@@ -639,12 +702,46 @@ export function createLiveCapture(options: LiveCaptureOptions) {
     officialClient = createOfficialCandlesClient({
       fetch: options.officialCandlesFetch,
       clock,
+      freshConnections: () => health.freshConnections(),
+      onRecovered: (productId) =>
+        note({
+          component: 'rest-candles',
+          product: productId,
+          reason: 'request_ok',
+          action: 'new_connection_next_request',
+          result: 'recovered',
+        }),
+      onFailure: (reason, productId) =>
+        note({
+          component: 'rest-candles',
+          product: productId,
+          reason,
+          action: 'new_connection_next_request',
+          result: 'recovering',
+        }),
     })
     officialPoll = guardedOfficial().finally(scheduleOfficialPoll)
     if (tickerProducts.length > 0 && tickerPeriodMs > 0) {
       tickerClient = createTickerPollClient({
         fetch: options.tickerFetch,
         clock,
+        freshConnections: () => health.freshConnections(),
+        onRecovered: () =>
+          note({
+            component: 'rest-tickers',
+            product: null,
+            reason: 'request_ok',
+            action: 'new_connection_next_request',
+            result: 'recovered',
+          }),
+        onFailure: (reason) =>
+          note({
+            component: 'rest-tickers',
+            product: null,
+            reason,
+            action: 'new_connection_next_request',
+            result: 'recovering',
+          }),
       })
       tickerPoll = guardedTicker().finally(scheduleTickerPoll)
     }
@@ -722,6 +819,9 @@ export function createLiveCapture(options: LiveCaptureOptions) {
     },
     get collector(): KrakenFuturesMarketCollector | undefined {
       return collector
+    },
+    get health(): ConnectionHealth {
+      return health
     },
   }
 }

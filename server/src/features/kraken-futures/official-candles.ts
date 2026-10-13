@@ -1,3 +1,4 @@
+import { freshConnectionFetch } from './fresh-fetch.ts'
 import { createHash } from 'node:crypto'
 import {
   readBoundedBody,
@@ -156,13 +157,24 @@ export function createOfficialCandlesClient(
     clock?: () => number
     timeoutMs?: number
     settleMs?: number
+    /** True while pooled connections may be dead (several sources failed together). */
+    freshConnections?: () => boolean
+    /** Called when a request fails or times out. */
+    onFailure?: (reason: string, productId: string) => void
+    /** Called by the first request that succeeds after a failure. */
+    onRecovered?: (productId: string) => void
   } = {},
 ) {
   const timeoutMs = options.timeoutMs ?? 10_000
   const clock = options.clock ?? Date.now
   const fetcher =
     options.fetch ?? ((input, init) => globalThis.fetch(input, init))
+  // After a failure the pooled connections are not trusted: requests go through a transport that opens
+  // its own connection. An injected fetch (tests) is used in both modes.
+  const freshFetcher = options.fetch ?? freshConnectionFetch
   const controllers = new Set<AbortController>()
+  // See createTickerPollClient: new connections after a failure, until a request succeeds.
+  let renew = false
   let closed = false
   return {
     async fetch(
@@ -177,9 +189,13 @@ export function createOfficialCandlesClient(
       controllers.add(controller)
       const timeout = setTimeout(() => controller.abort(), timeoutMs)
       try {
-        const response = await fetcher(url, {
+        const fresh = renew || options.freshConnections?.() === true
+        const response = await (fresh ? freshFetcher : fetcher)(url, {
           method: 'GET',
-          headers: { accept: 'application/json' },
+          headers: {
+            accept: 'application/json',
+            ...(fresh ? { connection: 'close' } : {}),
+          },
           signal: controller.signal,
         })
         if (!response.ok)
@@ -189,7 +205,7 @@ export function createOfficialCandlesClient(
           MAX_RESPONSE_BYTES,
           'Official candle response',
         )
-        return parseOfficialCandles(
+        const parsed = parseOfficialCandles(
           new TextDecoder('utf-8', { fatal: true }).decode(bytes),
           {
             productId,
@@ -200,10 +216,25 @@ export function createOfficialCandlesClient(
             settleMs: options.settleMs,
           },
         )
+        if (renew) options.onRecovered?.(productId)
+        renew = false
+        return parsed
+      } catch (error) {
+        renew = true
+        options.onFailure?.(
+          error instanceof Error ? error.message : 'request_failed',
+          productId,
+        )
+        throw error
       } finally {
         clearTimeout(timeout)
         controllers.delete(controller)
       }
+    },
+    /** Aborts the requests in flight; the client stays usable (a stuck poll must not end the capture). */
+    abortInFlight(): void {
+      for (const controller of controllers) controller.abort()
+      controllers.clear()
     },
     close(): void {
       closed = true

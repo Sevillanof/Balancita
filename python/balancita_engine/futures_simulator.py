@@ -268,6 +268,12 @@ class Book:
         self.trades, self.skipped, self.decisions = [], [], []
         self._open_decisions = []
         self.bucket = None
+        # ``entry_gate(bucket) -> bool``: True when new entries are not allowed on this candle (stale data).
+        # Open positions are managed regardless; a blocked candle opens nothing and leaves no decision.
+        self.entry_gate = None
+        # Candles where the gate was shut (stale cycles), and those on which the strategy would have entered.
+        self.stale_cycles = 0
+        self.blocked = []
 
     def on_frame(self, bucket, current, previous, trend, regime):
         # Decision outcomes are judged on the closes `horizon` minutes later.
@@ -288,6 +294,12 @@ class Book:
             self._manage(bucket, current, common)
             return
         if not current.get("ready"):
+            return
+        if self.entry_gate is not None and self.entry_gate(bucket):
+            self.stale_cycles += 1
+            blocked = self._entry_proposal(current, common)
+            if blocked is not None and blocked["action"] in ("LONG", "SHORT"):
+                self.blocked.append(bucket)
             return
         proposal = self._entry_proposal(current, common)
         if proposal is None or proposal["action"] not in ("LONG", "SHORT"):
