@@ -10,6 +10,7 @@ import activityQuiet from '../../../../docs/mission-control/b2/ejemplo-sin-activ
 import HealthIndicator from './HealthIndicator.tsx'
 import { useHealth } from './useHealth.ts'
 import ObserverPanel from './ObserverPanel.tsx'
+import type { LatestDecision } from './latest-decision.ts'
 
 /**
  * The fixtures are the documented examples the backend tests generate from its
@@ -55,14 +56,21 @@ function Indicator() {
 /** The observer panel with its own B1 read, as the Terminal gives it. */
 function Observer({
   product = 'PF_XBTUSD',
+  latest = null,
   children,
 }: {
   product?: string | null
+  latest?: LatestDecision | null
   children?: React.ReactNode
 }) {
   const health = useHealth()
   return (
-    <ObserverPanel product={product} health={health}>
+    <ObserverPanel
+      product={product}
+      health={health}
+      latest={latest}
+      nowMs={1_791_000_240_000}
+    >
       {children}
     </ObserverPanel>
   )
@@ -180,6 +188,56 @@ describe('ObserverPanel (right column)', () => {
     expect(screen.queryByText(/Esperando/)).toBeNull()
     expect(now).toHaveTextContent('Fuente de decisiones (B1)')
     expect(screen.queryByText('Error')).toBeNull()
+  })
+
+  it('shows the last decision only from a real stream analysis, with its source', async () => {
+    serve({ activity: quiet })
+    render(
+      <Observer
+        latest={{
+          action: 'WAIT',
+          reasonCode: 'no_directional_proposal',
+          regime: 'range',
+          decisionTimeMs: 1_791_000_120_000,
+          bucketStartMs: 1_791_000_060_000,
+        }}
+      />,
+    )
+    await screen.findByTestId('observer-now')
+    expect(screen.getByTestId('now-action')).toHaveTextContent('Espera')
+    const detail = screen.getByTestId('now-detail')
+    expect(detail).toHaveTextContent('no_directional_proposal')
+    expect(detail).toHaveTextContent('Régimen range')
+    expect(detail).toHaveTextContent('hace 2 min')
+    expect(screen.getByTestId('now-source')).toHaveTextContent(
+      'análisis del motor recibido por el stream',
+    )
+    // Waiting is not an error and not a proposal.
+    expect(screen.getByTestId('observer-now')).not.toHaveTextContent(
+      'propuesta, no operación',
+    )
+  })
+
+  it('labels a LONG or SHORT as a proposal, never as an operation', async () => {
+    serve({ activity: quiet })
+    render(
+      <Observer
+        latest={{
+          action: 'SHORT',
+          reasonCode: 'c26_short_reversion',
+          regime: null,
+          decisionTimeMs: 1_791_000_120_000,
+          bucketStartMs: null,
+        }}
+      />,
+    )
+    await screen.findByTestId('observer-now')
+    expect(screen.getByTestId('last-decision')).toHaveTextContent(
+      'SHORT propuesta, no operación',
+    )
+    expect(screen.getByTestId('now-detail')).toHaveTextContent(
+      'Régimen No disponible',
+    )
   })
 
   it('shows what B1 says about the decisions source, apart from the trading figures', async () => {

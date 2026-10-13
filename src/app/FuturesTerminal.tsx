@@ -38,6 +38,7 @@ import {
 } from './terminal-labels.ts'
 import { record } from '../shared/wire/decode.ts'
 import { useHealth } from '../features/observability/presentation/useHealth.ts'
+import { latestDecision } from '../features/observability/presentation/latest-decision.ts'
 import ObserverPanel from '../features/observability/presentation/ObserverPanel.tsx'
 
 /** Closed 1 m candles the engine needs before it can decide. */
@@ -445,6 +446,12 @@ export default function FuturesTerminal({
                 <ObserverPanel
                   product={product ?? bootstrap.products?.[0] ?? null}
                   health={health}
+                  latest={
+                    gatewayEngine && !engineOff
+                      ? latestDecision(analyses)
+                      : null
+                  }
+                  nowMs={displayClock}
                 >
                   <TerminalDecisions
                     embedded={liveGateway}

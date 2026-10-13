@@ -237,6 +237,8 @@ export default function ApprovedTerminalChart({
   const renderedCandles = useRef<readonly ApprovedTerminalCandle[] | null>(null)
   const renderedInterval = useRef<number | null>(null)
   const propsRef = useRef({ candles, markers, intervalSeconds, onSelect })
+  const publishRef = useRef<(() => void) | null>(null)
+  const paintedRef = useRef<readonly SeriesMarker<Time>[]>([])
 
   useEffect(() => {
     propsRef.current = { candles, markers, intervalSeconds, onSelect }
@@ -356,11 +358,47 @@ export default function ApprovedTerminalChart({
       }
     }
     chart.subscribeClick(handleClick)
+    // Where each painted marker sits (container pixels). The canvas has no DOM
+    // per marker, so this is what lets the browser tests (and anyone
+    // inspecting the page) find and click a marker without guessing.
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const publishPositions = () => {
+      timer = null
+      const byTime = new Map(
+        propsRef.current.candles.map((candle) => [candle.time, candle]),
+      )
+      const positions = paintedRef.current.flatMap((marker) => {
+        const candle = byTime.get(Number(marker.time))
+        const x = chart.timeScale().timeToCoordinate(marker.time)
+        const y = candle
+          ? series.priceToCoordinate(
+              marker.position === 'aboveBar' ? candle.high : candle.low,
+            )
+          : null
+        if (x === null || y === null) return []
+        return [
+          {
+            id: marker.id,
+            x: Math.round(x),
+            y: Math.round(y) + (marker.position === 'aboveBar' ? -12 : 12),
+          },
+        ]
+      })
+      node.dataset.markerPositions = JSON.stringify(positions)
+    }
+    const schedulePositions = () => {
+      if (timer === null) timer = setTimeout(publishPositions, 30)
+    }
+    publishRef.current = schedulePositions
+    chart.timeScale().subscribeVisibleLogicalRangeChange(schedulePositions)
     chartRef.current = chart
     candleSeriesRef.current = series
     volumeRef.current = volume
     markerRef.current = markerApi
     return () => {
+      chart.timeScale().unsubscribeVisibleLogicalRangeChange(schedulePositions)
+      publishRef.current = null
+      if (timer !== null) clearTimeout(timer)
       chart.unsubscribeClick(handleClick)
       priceLines.current.forEach((line) => series.removePriceLine(line))
       priceLines.current = []
@@ -491,6 +529,8 @@ export default function ApprovedTerminalChart({
       marginsApplied.current = stacked
     }
     markerRef.current?.setMarkers(painted)
+    paintedRef.current = painted
+    publishRef.current?.()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bucketsKey, markers, selectedId, intervalSeconds, initialViewport])
 
@@ -677,6 +717,7 @@ export default function ApprovedTerminalChart({
         data-testid="approved-chart-renderer"
         data-candle-count={candles.length}
         data-marker-count={markers.length}
+        data-selected-marker={selectedId}
         className="demo-terminal__chart"
         style={
           panes.length > 0

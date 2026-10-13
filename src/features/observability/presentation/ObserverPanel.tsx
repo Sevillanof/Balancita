@@ -13,9 +13,11 @@ import {
   type Section,
 } from '../infrastructure/observability-api.ts'
 import { useReport } from '../infrastructure/useReport.ts'
-import { momentLabel, shortProduct, sideLabel } from './format.ts'
+import { utcDateTime } from '../../../shared/finance/format.ts'
+import { duration, momentLabel, shortProduct, sideLabel } from './format.ts'
 import { LABEL, TONE } from './health-view.ts'
 import type { HealthRead } from './HealthIndicator.tsx'
+import type { LatestDecision } from './latest-decision.ts'
 
 const WINDOW_LABELS: Record<ActivityWindow, string> = {
   '3h': '3 h',
@@ -33,18 +35,27 @@ function Unavailable({ section }: { section: Section<object> }) {
   )
 }
 
+function decisionLabel(action: string): string {
+  return action === 'WAIT' ? 'Espera' : action
+}
+
 /**
- * AHORA: what is known about the engine at this moment. B2 gives aggregates,
- * not the last individual decision, so that line says «No disponible» and the
- * panel shows only what can be checked: how fresh the evaluations are and
- * what B1 says about the decisions source.
+ * AHORA: what is known about the engine at this moment. The last decision is
+ * shown only when it comes from a real analysis the Terminal stream delivered
+ * for this product (`latest`); B2 gives aggregates, never an individual
+ * decision, so without an analysis the line says «No disponible». The health
+ * of the decisions source (B1) is a separate fact.
  */
 function Now({
   report,
   health,
+  latest,
+  nowMs,
 }: {
   report: ActivityReport | null
   health: HealthRead
+  latest: LatestDecision | null
+  nowMs: number
 }) {
   const decisions = health.data?.components.find((c) => c.id === 'decisions')
   const mine =
@@ -58,7 +69,19 @@ function Now({
     <section className="obs-now" aria-label="Ahora" data-testid="observer-now">
       <p className="obs-card__label">Ahora</p>
       <p className="obs-card__big" data-testid="last-decision">
-        Última decisión: <span className="obs-na">No disponible</span>
+        Última decisión:{' '}
+        {latest ? (
+          <>
+            <strong data-action={latest.action} data-testid="now-action">
+              {decisionLabel(latest.action)}
+            </strong>
+            {latest.action === 'LONG' || latest.action === 'SHORT' ? (
+              <small className="obs-now__kind"> propuesta, no operación</small>
+            ) : null}
+          </>
+        ) : (
+          <span className="obs-na">No disponible</span>
+        )}
         <span className="obs-card__pill">
           <span className="obs-card__pill-label">Salud de la fuente</span>
           {decisions ? (
@@ -70,6 +93,22 @@ function Now({
           )}
         </span>
       </p>
+      {latest && (
+        <p className="obs-summary" data-testid="now-detail">
+          {latest.reasonCode ? <code>{latest.reasonCode}</code> : 'Sin motivo'}
+          {' · '}Régimen {latest.regime ?? 'No disponible'}
+          {' · '}
+          {utcDateTime(latest.decisionTimeMs)} · hace{' '}
+          {duration(nowMs - latest.decisionTimeMs)}
+          <small className="obs-now__source" data-testid="now-source">
+            {' '}
+            Fuente: análisis del motor recibido por el stream de la Terminal
+            {latest.action === 'WAIT'
+              ? '. Esperar no es un error: ninguna estrategia propuso entrar.'
+              : '.'}
+          </small>
+        </p>
+      )}
       {report && mine && report.signals.state === 'ok' && (
         <p className="obs-summary" data-testid="window-summary">
           Últimas {windowLabel} · {mine.count}{' '}
@@ -83,9 +122,11 @@ function Now({
       <details className="obs-details obs-details--inline">
         <summary>Qué fuentes respaldan esto</summary>
         <p className="obs-note">
-          Ninguna fuente verificable entrega la última decisión individual de
-          este producto (llegará con B3). El estado es el de la fuente de
-          decisiones según B1 (Fuente de decisiones (B1)).
+          {latest
+            ? 'La última decisión es la del último análisis del motor recibido por el stream de este producto; los agregados de B2 no se usan para deducirla. '
+            : 'Ninguna fuente verificable entrega la última decisión individual de este producto (llegará con B3). '}
+          El estado es el de la fuente de decisiones según B1 (Fuente de
+          decisiones (B1)).
         </p>
         <p className="obs-note">
           Última evaluación registrada:{' '}
@@ -228,10 +269,16 @@ function Results({ report }: { report: ActivityReport }) {
 export default function ObserverPanel({
   product,
   health,
+  latest = null,
+  nowMs,
   children,
 }: {
   product: string | null
   health: HealthRead
+  /** Last real analysis of the stream for this product, or null. */
+  latest?: LatestDecision | null
+  /** Clock the decision's age is measured against. */
+  nowMs: number
   /** The decisions history the Terminal already renders. */
   children?: ReactNode
 }) {
@@ -266,7 +313,7 @@ export default function ObserverPanel({
           ))}
         </div>
       </div>
-      <Now report={current} health={health} />
+      <Now report={current} health={health} latest={latest} nowMs={nowMs} />
       <div className="obs-observer__body">
         {error !== null && (
           <DataState

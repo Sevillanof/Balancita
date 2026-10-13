@@ -33,6 +33,7 @@ vi.mock('lightweight-charts', () => {
   const series = {
     setData() {},
     update() {},
+    priceToCoordinate: () => null,
     priceScale: () => priceScale,
     createPriceLine: (options: Record<string, unknown>) => {
       chartHarness.priceLines.push(options)
@@ -46,6 +47,9 @@ vi.mock('lightweight-charts', () => {
     setVisibleLogicalRange() {},
     fitContent() {},
     scrollToRealTime() {},
+    subscribeVisibleLogicalRangeChange() {},
+    unsubscribeVisibleLogicalRangeChange() {},
+    timeToCoordinate: () => null,
   }
   const chart = {
     addSeries: () => series,
