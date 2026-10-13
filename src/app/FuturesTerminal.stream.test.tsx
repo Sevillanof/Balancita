@@ -212,32 +212,53 @@ describe('FuturesTerminal WebSocket protocol (characterization)', () => {
     expect(screen.queryByText(/Se detectó un salto/)).toBeNull()
   })
 
-  it('ignores events already applied by seq or by event_id, without error or reconnect', async () => {
+  it('ignores an event whose seq was already applied, even with a new event_id', async () => {
     const socket = await mountConnected()
     await act(async () => socket.receive(orderAt(1, 'o1')))
     await act(async () => socket.receive(orderAt(2, 'o2')))
 
-    // Replay of an older seq with a new event_id: dropped by seq.
+    // Older seq, never-seen id: only the seq check can drop it.
     await act(async () =>
       socket.receive(orderAt(1, 'oStale', 'event-replayed-1')),
     )
-    // Same event_id as one already applied: dropped by id.
-    await act(async () => socket.receive(orderAt(3, 'oDupe', 'event-RUN-1')))
-    // The id of seq 2 repeated on a new seq.
     await act(async () =>
-      socket.receive(orderAt(3, 'oSameId', `event-${RUN}-2-order.updated`)),
+      socket.receive(orderAt(2, 'oStale2', 'event-replayed-2')),
     )
 
     expect(screen.queryByText(/oStale/)).toBeNull()
+    expect(screen.queryByText(/Se detectó un salto/)).toBeNull()
+    expect(socket.readyState).toBe(1)
+    expect(FakeSocket.instances).toHaveLength(1)
+
+    // The sequence did not move: seq 3 is still the next event.
+    await act(async () => socket.receive(orderAt(3, 'o3')))
+    expect(screen.getAllByText(/0\.01 · o3/).length).toBeGreaterThan(0)
+  })
+
+  it('ignores a repeated event_id even when its seq is the next expected one', async () => {
+    const socket = await mountConnected()
+    await act(async () => socket.receive(orderAt(1, 'o1')))
+    await act(async () => socket.receive(orderAt(2, 'o2')))
+
+    // seq 3 is exactly lastSeq + 1, so the seq check would accept it; only the
+    // id of the already-applied seq 2 makes it be dropped.
+    await act(async () =>
+      socket.receive(orderAt(3, 'oSameId', `event-${RUN}-2-order.updated`)),
+    )
     expect(screen.queryByText(/oSameId/)).toBeNull()
     expect(screen.queryByText(/Se detectó un salto/)).toBeNull()
     expect(socket.readyState).toBe(1)
     expect(FakeSocket.instances).toHaveLength(1)
 
-    // 'event-RUN-1' was never applied, so seq 3 with that id is a fresh event.
-    expect(screen.getAllByText(/0\.01 · oDupe/).length).toBeGreaterThan(0)
+    // Dropping it by id does not advance the sequence: a new id at seq 3
+    // is accepted without a gap.
+    await act(async () => socket.receive(orderAt(3, 'o3')))
+    expect(screen.getAllByText(/0\.01 · o3/).length).toBeGreaterThan(0)
+    expect(screen.queryByText(/Se detectó un salto/)).toBeNull()
   })
 
+  // Documented risk (docs/mission-control-fase-2-plan.md §8): this pins current
+  // behavior, not a guarantee. A stale engine.status can overwrite a newer one.
   it('applies engine.status of the active run before the seq check, even when its seq is stale', async () => {
     const socket = await mountConnected()
     await act(async () => socket.receive(orderAt(1, 'o1')))

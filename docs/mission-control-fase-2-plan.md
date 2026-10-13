@@ -139,3 +139,22 @@ Prioridad absoluta: preservar el funcionamiento actual del trader.
 | Presentar histórico como actual                        | 2.4 con test de no-regresión; «No disponible» por defecto                    |
 | Rediseño que oculte funciones (controles, diagnóstico) | Checklist de funciones de la Terminal en la descripción de 2.5               |
 | Peso de `FuturesTerminal.test.tsx` (1530 líneas)       | No se reescribe; solo se añaden tests nuevos o se mueven junto a lo extraído |
+
+## 8. Riesgo registrado en 2.1: `engine.status` se aplica antes de comprobar `seq`
+
+Hallazgo de la caracterización (`FuturesTerminal.stream.test.tsx`, prueba «applies engine.status…»). En
+`FuturesTerminal.tsx`, un `engine.status` del run activo se fusiona en el estado **antes** de la
+comprobación `event.seq <= lastSeq`. Sólo lo frena antes el filtro por `event_id` ya visto.
+
+- **Efecto:** un `engine.status` con `seq` obsoleto y un `event_id` no visto (o ya olvidado, porque el
+  conjunto `seen` se vacía al pasar de 2000 ids y en cada snapshot) puede sobrescribir un estado más
+  reciente del motor. Con un `seq` con salto también se aplica antes de que se dispare el resync.
+- **Lo que sí se sabe:** el seguidor del gateway (`paper-engine-follower.ts`, `poll()`) emite `engine.status`
+  al final de cada ciclo y sólo cuando cambia su clave de estado; no se ha visto que reenvíe estados
+  antiguos con otro `event_id`. Un snapshot posterior reemplaza el estado.
+- **Pendiente de determinar:** si el orden actual es intencionado (p. ej. para que el estado del motor
+  llegue aunque el flujo esté en resync) y qué garantiza el protocolo sobre unicidad de `event_id` y
+  monotonía de `seq` en `engine.status`, incluida la reproducción tras `resume`.
+- **Decisión de Fran (2026-10-13):** no se corrige ahora. Las pruebas de 2.1 fijan el comportamiento actual;
+  2.2 lo conserva tal cual. Cualquier cambio irá en un PR independiente tras responder las preguntas
+  anteriores.
