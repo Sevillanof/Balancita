@@ -23,10 +23,10 @@ from . import signal_continuity as SC
 from .execution_timing import SCHEMA as EXECUTION_SCHEMA, ExecutionPolicy, TimedExecutor
 from .futures_costs import COST_MODEL_VERSION, cost_model_hash
 from .multi_risk import RiskPolicy
-from .multi_signals import BUY, SELL, stable_hash
+from .multi_signals import BUY, SELL, stable_hash, validate_signal
 from .portfolio import PORTFOLIO_SCHEMA, Portfolio, PortfolioPolicy
 from .portfolio_audit import accounting_digest
-from .portfolio_watch import SCHEMA as WATCH_SCHEMA, WatchPolicy
+from .portfolio_watch import SCHEMA as WATCH_SCHEMA, WatchPolicy, parse_quote
 
 D = Decimal
 JOURNAL_SCHEMA = "balancita-paper-runner-journal.v1"
@@ -106,7 +106,22 @@ def _check_event(event):
         return "invalid_event"
     if not isinstance(event.get("payload"), dict) or not isinstance(event.get("event_id"), str):
         return "invalid_event"
+    offset = event.get("source_offset")
+    if not isinstance(event.get("source"), str) or (offset is not None and (not isinstance(offset, int) or isinstance(offset, bool))):
+        return "invalid_event"
     return None
+
+
+def valid_candle(candle):
+    """A closed OHLC candle: four finite positive Decimals with ``low <= open, close <= high``. ``Portfolio`` reads these
+    four fields, so anything else must never reach the journal."""
+    try:
+        o, h, l, c = (D(str(candle[k])) for k in ("open", "high", "low", "close"))   # noqa: E741
+    except (KeyError, TypeError, ValueError, InvalidOperation):
+        return False
+    if not all(x.is_finite() and x > 0 for x in (o, h, l, c)):
+        return False
+    return l <= min(o, c) and h >= max(o, c)
 
 
 class RunnerJournal:
@@ -192,6 +207,10 @@ class PaperRunner:
         if entries[0]["data"]["manifest_hash"] != stable_hash(self.manifest):
             self.status = REFUSED
             raise RunnerError("config_incompatible", "the configuration differs from the one the journal was written with")
+        ended = [e["seq"] for e in entries if e["kind"] == "run_end"]
+        if ended and ended[0] != len(entries):
+            self.status = REFUSED
+            raise RunnerError("journal_incompatible", "entries after run_end (seq {})".format(ended[0]))
         self.journal, self.replaying = RunnerJournal(), True
         for entry in entries:
             self.journal.entries.append(entry)
@@ -204,6 +223,8 @@ class PaperRunner:
         kind, data = entry["kind"], entry["data"]
         if kind == "run_start":
             self.status = PROCESSING
+        elif kind == "run_end":
+            self.status = FINISHED
         elif kind == "event_accepted":
             event = data["event"]
             self.seen[event["event_id"]] = stable_hash(event["payload"])
@@ -234,7 +255,7 @@ class PaperRunner:
             self.executor.on_quote(payload)
         elif kind == "candle":
             product, bucket = payload["product_id"], int(payload["bucket_ms"])
-            self.candle_digest[(product, bucket)] = stable_hash(payload["candle"])
+            self.candle_digest[(product, bucket)] = stable_hash({k: str(payload["candle"][k]) for k in ("open", "high", "low", "close")})
             self.executor.on_candle(product, bucket, payload["candle"])
         elif kind == "clock":
             self.executor.advance(event["t_ms"])
@@ -259,9 +280,14 @@ class PaperRunner:
         why = self._market_check(event)
         if why is not None:
             return self._reject(event["t_ms"], event, why)
-        self._record(event["t_ms"], "event_accepted", {"event": event})
+        results = None
         if event["kind"] in ("cycle", "reconstructed"):
-            self._signals(event)
+            results = self._evaluate(event)
+            if isinstance(results, str):
+                return self._reject(event["t_ms"], event, results)
+        self._record(event["t_ms"], "event_accepted", {"event": event})
+        if results is not None:
+            self._signals(event, results)
         return {"status": "accepted", "event_id": event["event_id"]}
 
     def _reject(self, t_ms, event, reason, status="rejected"):
@@ -271,43 +297,71 @@ class PaperRunner:
         return {"status": status, "reason": reason, "event_id": ident}
 
     def _market_check(self, event):
+        """Everything that could make applying the event fail is decided here, before the journal: an accepted entry
+        that cannot be applied would poison every replay."""
         kind, payload, t_ms = event["kind"], event["payload"], event["t_ms"]
         try:
-            if kind == "candle":
-                product, bucket = payload["product_id"], int(payload["bucket_ms"])
-                if bucket + ONE_MINUTE_MS > t_ms:
-                    return "candle_not_closed"
-                digest = stable_hash(payload["candle"])
+            if kind == "quote":
+                try:
+                    parse_quote(payload)
+                except ValueError:
+                    return "invalid_quote"
+            elif kind == "candle":
+                product, bucket = payload["product_id"], payload["bucket_ms"]
+                if not isinstance(product, str) or not isinstance(bucket, int) or isinstance(bucket, bool):
+                    return "invalid_event"
+                if not valid_candle(payload["candle"]):
+                    return "invalid_candle"
+                if bucket % ONE_MINUTE_MS or bucket + ONE_MINUTE_MS > t_ms:
+                    return "candle_not_closed" if bucket % ONE_MINUTE_MS == 0 else "invalid_event"
+                digest = stable_hash({k: str(payload["candle"][k]) for k in ("open", "high", "low", "close")})
                 seen = self.candle_digest.get((product, bucket))
                 if seen is not None:
                     return "duplicate_candle" if seen == digest else "conflicting_candle"
                 last = self.portfolio.last_bucket.get(product)
                 if last is not None and bucket <= last:
                     return "late_candle"
-            elif kind in ("cycle", "reconstructed"):
-                cycle_ms = int(payload["cycle_ms"] if kind == "cycle" else payload["signal"]["bucket_ms"])
+            elif kind == "cycle":
+                cycle_ms = payload["cycle_ms"]
+                if not isinstance(payload["product_id"], str) or not isinstance(cycle_ms, int) or isinstance(cycle_ms, bool):
+                    return "invalid_event"
                 if t_ms < cycle_ms:
                     return "candle_not_closed"
-                if kind == "cycle":      # validated *before* the journal: an entry that cannot be applied would poison every replay
-                    for field_name in ("price", "atr"):
-                        if not isinstance(payload[field_name], str) or D(payload[field_name]) <= 0:
-                            return "invalid_event"
-                    if not isinstance(payload["product_id"], str):
+                for field_name in ("price", "atr"):
+                    if not isinstance(payload[field_name], str) or not D(payload[field_name]).is_finite() \
+                            or D(payload[field_name]) <= 0:
                         return "invalid_event"
+            elif kind == "reconstructed":
+                signal = validate_signal(payload["signal"])
+                if not isinstance(payload["inputs"], dict) or (signal["strategy_id"], signal["strategy_version"]) not in self.log.frozen:
+                    return "invalid_event"
+                if t_ms < signal["bucket_ms"]:
+                    return "candle_not_closed"
         except (KeyError, TypeError, ValueError, InvalidOperation):
             return "invalid_event"
         return None
 
     # ---- signals and decisions -------------------------------------------------------------------------------
-    def _signals(self, event):
+    def _evaluate(self, event):
+        """The strategies' answer for a cycle (or the reconstructed signal), checked *before* the event is journaled.
+        A string is a rejection reason. Evaluation is not part of replay: replay reads the persisted signals."""
+        payload = event["payload"]
+        if event["kind"] == "reconstructed":
+            return [(payload["signal"], payload["inputs"])]
+        try:
+            results = list(self.evaluator(self.strategies, payload))
+            for signal, inputs in results:
+                validate_signal(signal)
+                if (signal["strategy_id"], signal["strategy_version"]) not in self.log.frozen or not isinstance(inputs, dict):
+                    return "evaluation_failed"
+        except Exception:    # a strategy that raises or answers badly rejects the event; it never reaches the journal
+            return "evaluation_failed"
+        return results
+
+    def _signals(self, event, results):
         payload, t_ms = event["payload"], event["t_ms"]
         offset = event.get("source_offset")
-        if event["kind"] == "reconstructed":
-            results = [(payload["signal"], payload["inputs"])]
-            origin = "reconstructed"
-        else:
-            results = self.evaluator(self.strategies, payload)
-            origin = "original"
+        origin = "reconstructed" if event["kind"] == "reconstructed" else "original"
         refs, actionable = [], []
         for signal, inputs in results:
             receipt = self.log.ingest(signal, inputs, t_ms, origin=origin, source_offset=offset)
@@ -329,7 +383,9 @@ class PaperRunner:
         return [self.handle(event) for event in events]
 
     def finish(self, t_ms=None):
-        self.status = FINISHED
+        """Ends the session durably: ``run_end`` is replayed, so a recovered session stays ``FINISHED``."""
+        if self.status != PROCESSING:
+            raise RunnerError("not_processing", self.status)
         self._record(self.clock if t_ms is None else t_ms, "run_end", {"state_digest": self.state_digest()})
 
     def state_digest(self):
@@ -340,6 +396,11 @@ class PaperRunner:
             "pending": sorted((i, o["timeline"]) for i, o in self.executor.pending.items()),
             "seen": sorted(self.seen.items()), "candles": sorted((list(k), v) for k, v in self.candle_digest.items()),
             "stats": sorted(self.stats.items()), "clock": self.clock})
+
+    def operational_digest(self):
+        """The operational state (what the runner will accept next), apart from the financial one."""
+        return stable_hash({"status": self.status, "clock": self.clock, "journal_head": self.journal.head,
+                            "entries": len(self.journal.entries), "stats": sorted(self.stats.items())})
 
     def orders(self):
         """One row per order, with its state and the reason when it was refused (``observed`` facts of the executor)."""

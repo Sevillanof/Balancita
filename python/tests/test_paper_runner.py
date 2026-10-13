@@ -12,7 +12,7 @@ from balancita_engine import signal_continuity as SC
 from balancita_engine.futures_costs import cost_model_hash
 from balancita_engine.multi_signals import make_signal
 from balancita_engine.paper_runner import (
-    FINISHED, PROCESSING, PaperRunner, RunnerConfig, RunnerError, RunnerJournal, make_event,
+    FINISHED, PaperRunner, RunnerConfig, RunnerError, RunnerJournal, make_event,
 )
 from balancita_engine.portfolio import PortfolioPolicy
 from balancita_engine.portfolio_audit import audit
@@ -250,6 +250,135 @@ class StopBetweenCandles(Rig):
         self.assertEqual(audit(r.portfolio)["violations"], [])
 
 
+class Validation(Rig):
+    """Whatever could fail while applying an event is refused before it reaches the journal, so the journal stays
+    replayable and the financial state is untouched."""
+
+    def assertUntouched(self, r, bad_events, reason=None):
+        before = (r.portfolio.ledger_hash(), r.executor.ledger_hash(), len(r.log.entries), r.clock)
+        accepted_before = r.stats.get("events_accepted", 0)
+        for event in bad_events:
+            result = r.handle(event)
+            self.assertEqual(result["status"], "rejected", event)
+            if reason:
+                self.assertEqual(result["reason"], reason, event)
+        self.assertEqual((r.portfolio.ledger_hash(), r.executor.ledger_hash(), len(r.log.entries), r.clock), before)
+        self.assertEqual(r.stats.get("events_accepted", 0), accepted_before)
+        again = self.replay(r)                                        # the journal with the rejections is still reproducible
+        self.assertEqual((again.state_digest(), again.operational_digest()), (r.state_digest(), r.operational_digest()))
+
+    def test_malformed_candles_never_become_accepted_entries(self):
+        r = self.runner()
+        t = CYCLE + 2 * MIN
+        base = {"product_id": BTC, "bucket_ms": CYCLE}
+        bad = [make_event("candle", dict(base, candle=c), t_ms=t, event_id="c{}".format(i)) for i, c in enumerate([
+            {"open": "1", "high": "2", "low": "1"},                              # incomplete OHLC
+            {"open": "1", "high": "2", "low": "1", "close": "abc"},              # not a number
+            {"open": "1", "high": "NaN", "low": "1", "close": "1"},              # not finite
+            {"open": "1", "high": "1", "low": "2", "close": "1"},                # high below low
+            {"open": "3", "high": "2", "low": "1", "close": "2"},                # open outside the range
+            {"open": "0", "high": "2", "low": "0", "close": "1"},                # non-positive price
+            "not a dict", None])]
+        self.assertUntouched(r, bad, "invalid_candle")
+        self.assertUntouched(r, [make_event("candle", {"product_id": BTC, "bucket_ms": CYCLE + 7, "candle": {
+            "open": "1", "high": "2", "low": "1", "close": "2"}}, t_ms=t),
+            make_event("candle", {"product_id": 5, "bucket_ms": CYCLE, "candle": {"open": "1", "high": "2", "low": "1", "close": "2"}}, t_ms=t),
+            make_event("candle", {"product_id": BTC}, t_ms=t, event_id="no-candle")])
+        r.run([candle(BTC, CYCLE, 1, 2, 1, 2)])                                  # a valid one is still accepted afterwards
+        self.assertEqual(r.portfolio.marks[BTC], D("2"))
+
+    def test_malformed_reconstructed_events_are_rejected_before_the_journal(self):
+        r = self.runner()
+        s = self.strategies[0]
+        good = make_signal(strategy_id=s.id, strategy_version=s.version, product_id=BTC, bucket_ms=CYCLE, action="BUY",
+                           strength="0.8", horizon_minutes=60, evidence={"x": "1"})
+        unfrozen = make_signal(strategy_id="never-frozen", strategy_version=1, product_id=BTC, bucket_ms=CYCLE, action="BUY",
+                               strength="0.8", horizon_minutes=60, evidence={"x": "1"})
+        tampered = dict(good, strength="0.9")
+        t = CYCLE + HOUR
+        bad = [make_event("reconstructed", payload, t_ms=t, event_id="r{}".format(i)) for i, payload in enumerate([
+            {"signal": good},                                                    # no inputs
+            {"signal": good, "inputs": "not a dict"},
+            {"signal": tampered, "inputs": {}},                                  # signal_id no longer matches
+            {"signal": unfrozen, "inputs": {}},                                  # strategy never frozen in the log
+            {"signal": {"schema": "x"}, "inputs": {}},
+            {"signal": None, "inputs": {}}])]
+        self.assertUntouched(r, bad, "invalid_event")
+        self.assertEqual(r.handle(make_event("reconstructed", {"signal": good, "inputs": {}}, t_ms=CYCLE - SEC))["reason"],
+                         "candle_not_closed")
+
+    def test_malformed_cycles_quotes_and_envelopes_are_rejected_before_the_journal(self):
+        r = self.runner({"scripted-a": {(BTC, CYCLE): self.call("BUY")}})
+        t = CYCLE + 2 * SEC
+        bad_cycles = [make_event("cycle", payload, t_ms=t, event_id="y{}".format(i)) for i, payload in enumerate([
+            {"product_id": BTC, "cycle_ms": CYCLE, "price": 100000, "atr": "1000"},   # a float/int is not a Decimal string
+            {"product_id": BTC, "cycle_ms": CYCLE, "price": "100000", "atr": "0"},
+            {"product_id": BTC, "cycle_ms": CYCLE, "price": "NaN", "atr": "1"},
+            {"product_id": BTC, "cycle_ms": "x", "price": "1", "atr": "1"},
+            {"product_id": BTC, "price": "1", "atr": "1"}])]
+        self.assertUntouched(r, bad_cycles, "invalid_event")
+        bad_quotes = [make_event("quote", payload, t_ms=t, event_id="q{}".format(i)) for i, payload in enumerate([
+            {"product_id": BTC, "time_ms": t, "bid": "2", "ask": "1"},                # crossed
+            {"product_id": BTC, "time_ms": t, "bid": "x", "ask": "1"},
+            {"product_id": BTC}])]
+        self.assertUntouched(r, bad_quotes, "invalid_quote")
+        self.assertUntouched(r, [dict(cycle(t, BTC), source=5), dict(cycle(t, BTC), source_offset="3")], "invalid_event")
+
+    def test_a_strategy_that_fails_rejects_the_event_instead_of_poisoning_the_journal(self):
+        def broken(strategies, payload):
+            raise RuntimeError("boom")
+        r = self.runner(evaluator=broken)
+        self.assertUntouched(r, [cycle(CYCLE + 2 * SEC, BTC)], "evaluation_failed")
+
+    def test_a_good_session_with_many_rejections_replays_to_the_same_state(self):
+        r = self.runner({"scripted-a": {(BTC, CYCLE): self.call("BUY")}})
+        r.run([cycle(CYCLE + 2 * SEC, BTC), make_event("candle", {"product_id": BTC, "bucket_ms": CYCLE, "candle": {"open": "1"}},
+                                                      t_ms=CYCLE + MIN), quote(BTC, CYCLE + 5 * SEC, "100010"),
+               candle(BTC, CYCLE, 100000, 100100, 99900, 100010)])
+        again = self.replay(r)
+        self.assertEqual((again.state_digest(), again.operational_digest()), (r.state_digest(), r.operational_digest()))
+
+
+class Finished(Rig):
+    def finished(self):
+        r = self.runner({"scripted-a": {(BTC, CYCLE): self.call("BUY")}})
+        r.run([cycle(CYCLE + 2 * SEC, BTC), quote(BTC, CYCLE + 5 * SEC, "100010")])
+        r.finish()
+        return r
+
+    def test_a_finished_session_recovers_as_finished_and_accepts_nothing(self):
+        live = self.finished()
+        again = self.replay(live)
+        self.assertEqual((live.status, again.status), (FINISHED, FINISHED))
+        self.assertEqual(again.operational_digest(), live.operational_digest())
+        self.assertEqual(again.state_digest(), live.state_digest())
+        for runner in (live, again):
+            with self.assertRaises(RunnerError) as caught:
+                runner.handle(quote(BTC, CYCLE + 9 * SEC, "100000"))
+            self.assertEqual(caught.exception.reason, "not_processing")
+            with self.assertRaises(RunnerError):
+                runner.finish()
+        self.assertEqual(len(again.journal.entries), len(live.journal.entries))      # nothing was written by the refusals
+
+    def test_an_unfinished_session_recovers_as_processing_and_continues(self):
+        r = self.runner({"scripted-a": {(BTC, CYCLE): self.call("BUY")}})
+        r.run([cycle(CYCLE + 2 * SEC, BTC)])
+        again = self.replay(r)
+        self.assertEqual(again.operational_digest(), r.operational_digest())
+        again.run([quote(BTC, CYCLE + 5 * SEC, "100010")])
+        r.run([quote(BTC, CYCLE + 5 * SEC, "100010")])
+        self.assertEqual(again.state_digest(), r.state_digest())
+
+    def test_entries_after_run_end_are_refused(self):
+        live = self.finished()
+        entries = copy.deepcopy(live.journal.entries)
+        extra = RunnerJournal(entries)
+        extra.add(CYCLE + 20 * SEC, "event_rejected", {"event_id": "x", "kind": "quote", "reason": "invalid_event", "event_hash": "0"})
+        with self.assertRaises(RunnerError) as caught:
+            PaperRunner(self.config, self.strategies, self.log, entries=extra.entries)
+        self.assertEqual(caught.exception.reason, "journal_incompatible")
+
+
 class Replay(Rig):
     SCRIPT = {"scripted-a": {(BTC, CYCLE): {"action": "BUY", "strength": "0.8"}, (ETH, CYCLE): {"action": "SELL", "strength": "0.7"}}}
 
@@ -277,7 +406,6 @@ class Replay(Rig):
         live = self.session()
         recorded = live.journal.entries[-1]["data"]["state_digest"]
         again = self.replay(live)
-        again.status = PROCESSING
         self.assertEqual(again.state_digest(), recorded)
 
     def test_replay_does_not_evaluate_the_strategies_again(self):
