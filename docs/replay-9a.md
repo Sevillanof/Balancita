@@ -4,12 +4,12 @@ Prueba de integración y reproducibilidad del motor existente contra velas y fun
 
 ## Qué hay
 
-| Módulo | Qué hace |
-| --- | --- |
-| `replay_data.py` | Puerta de datos: `mode=ro`, `PRAGMA query_only=ON`, rango fijo `2025-10-13 <= t < 2026-08-02` (el periodo reservado no se lee), consultas acotadas, verificación de series |
-| `replay_execution.py` | `ModelledExecutor`: llena órdenes con un precio de vela fechado en el instante del fill; nunca crea `QuoteWatch` ni cotizaciones |
-| `replay_driver.py` | Genera los eventos (velas, funding, ciclos, precios modelados), corre el `PaperRunner` en `execution_mode="modelled"` y escribe `results.json` una sola vez |
-| `paper_runner.py` | Solo agrega `execution_mode` (por defecto `quotes`, idéntico a 8A-8C), el evento `modelled_price` y el rechazo de `quote` en modo modelado |
+| Módulo                | Qué hace                                                                                                                                                                   |
+| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `replay_data.py`      | Puerta de datos: `mode=ro`, `PRAGMA query_only=ON`, rango fijo `2025-10-13 <= t < 2026-08-02` (el periodo reservado no se lee), consultas acotadas, verificación de series |
+| `replay_execution.py` | `ModelledExecutor`: llena órdenes con un precio de vela fechado en el instante del fill; nunca crea `QuoteWatch` ni cotizaciones                                           |
+| `replay_driver.py`    | Genera los eventos (velas, funding, ciclos, precios modelados), corre el `PaperRunner` en `execution_mode="modelled"` y escribe `results.json` una sola vez                |
+| `paper_runner.py`     | Solo agrega `execution_mode` (por defecto `quotes`, idéntico a 8A-8C), el evento `modelled_price` y el rechazo de `quote` en modo modelado                                 |
 
 No hay segundo motor: decisión, tamaño, costes, funding y contabilidad son `Portfolio`, `Book` y `futures_costs`, sin cambios.
 
