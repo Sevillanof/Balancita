@@ -1591,6 +1591,17 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
       expect(screen.getByText(/10\.000,49/)).toBeTruthy()
     })
 
+    it('marks each decision with its action so the list can colour it', async () => {
+      await renderLive()
+      const list = screen.getByRole('region', { name: 'Decisiones del motor' })
+      for (const action of ['LONG', 'SHORT'])
+        expect(
+          within(list)
+            .getAllByText(action)
+            .some((node) => node.getAttribute('data-action') === action),
+        ).toBe(true)
+    })
+
     it('puts the tools in a secondary row below the chart, naming the run they act on', async () => {
       await renderLive()
       const secondary = screen.getByTestId('terminal-secondary')

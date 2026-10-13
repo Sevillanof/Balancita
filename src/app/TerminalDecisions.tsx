@@ -77,7 +77,9 @@ export default function TerminalDecisions({
                   aria-label={`Seleccionar análisis ${item.row.id}`}
                   onClick={() => onSelect(item.row.id)}
                 >
-                  <strong>{item.row.action}</strong>
+                  <strong data-action={item.row.action}>
+                    {item.row.action}
+                  </strong>
                   <span>{item.row.strategy}</span>
                   <time>{item.row.time}</time>
                   <small>{item.row.reason}</small>

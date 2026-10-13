@@ -335,6 +335,8 @@ test('terminal chart with two sub-panes takes the available height', async ({
   // Price area plus 110 px for each of the two sub-panes.
   const box = await chart.boundingBox()
   expect(Math.abs(box!.height - (base + 2 * 110))).toBeLessThanOrEqual(1)
+  // Compact metrics: on a phone the chart starts well inside the first screen.
+  if (width <= 600) expect(box!.y).toBeLessThan(height * 0.55)
   await noHorizontalScroll(page)
   await shot(page, 'terminal-live-subpanes-fixture')
 })

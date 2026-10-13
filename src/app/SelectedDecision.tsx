@@ -25,8 +25,10 @@ export default function SelectedDecision({
       aria-label="Decisión seleccionada"
     >
       <p>
-        <strong>{analysisAction(analysis)}</strong> ·{' '}
-        {strategyLabel(selector.strategy_id ?? analysis.selected_strategy_id)}
+        <strong data-action={analysisAction(analysis)}>
+          {analysisAction(analysis)}
+        </strong>{' '}
+        · {strategyLabel(selector.strategy_id ?? analysis.selected_strategy_id)}
       </p>
       <p>{reason}</p>
       <p>
