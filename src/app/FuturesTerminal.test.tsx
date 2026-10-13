@@ -1325,14 +1325,15 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
         ...state.analyses,
       ],
     })
-    // The chart paints its markers in an effect, after the account renders.
-    await waitFor(() => expect(chartHarness.markerSets.at(-1)).toBeDefined())
-    const markers = chartHarness.markerSets.at(-1)!
+    // The chart paints its markers in an effect, after the account renders:
+    // wait for exactly the expected set, not merely for some set to exist.
     // WAIT verdicts (one per minute) would only clutter the chart.
-    expect(markers.map((marker) => marker.id)).toEqual([
-      'verdict-hash-2',
-      'verdict-hash-3',
-    ])
+    await waitFor(() =>
+      expect(
+        chartHarness.markerSets.at(-1)?.map((marker) => marker.id),
+      ).toEqual(['verdict-hash-2', 'verdict-hash-3']),
+    )
+    const markers = chartHarness.markerSets.at(-1)!
     expect(markers.map((marker) => marker.shape)).toEqual([
       'arrowUp',
       'arrowDown',
