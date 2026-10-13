@@ -144,6 +144,7 @@ async function renderLab(
 ) {
   render(
     <StrategyLab
+      initialView="lab"
       loadCandles={loadCandles}
       connect={() => Promise.resolve(api)}
       loadQwen={() => Promise.resolve(qwen)}
@@ -210,6 +211,7 @@ describe('StrategyLab', () => {
     const loadQwen = vi.fn(() => Promise.resolve(qwenOff))
     render(
       <StrategyLab
+        initialView="lab"
         loadCandles={loadCandles}
         connect={() => Promise.resolve(exampleStrategyApi(market.candles))}
         loadQwen={loadQwen}
@@ -357,6 +359,7 @@ describe('StrategyLab', () => {
     const loadKronos = vi.fn(() => Promise.resolve(kronosOn))
     render(
       <StrategyLab
+        initialView="lab"
         loadCandles={loadCandles}
         connect={() => Promise.resolve(exampleStrategyApi(market.candles))}
         loadQwen={() => Promise.resolve(qwenOff)}
@@ -474,6 +477,7 @@ describe('StrategyLab', () => {
     )
     render(
       <StrategyLab
+        initialView="lab"
         loadCandles={loadCandles}
         connect={() =>
           Promise.resolve(httpStrategyApi('/api-strategies', fetcher))
@@ -494,6 +498,7 @@ describe('StrategyLab without the registry', () => {
   it('shows the error and no made-up strategies', async () => {
     render(
       <StrategyLab
+        initialView="lab"
         loadCandles={() => Promise.resolve(market)}
         connect={() => Promise.reject(new Error('El registro no respondió.'))}
         loadQwen={() => Promise.resolve(null as never)}
