@@ -345,8 +345,12 @@
   color: var(--demo-accent);
 }
 .demo-terminal__chart {
+  /* One source for the chart height: ApprovedTerminalChart adds its sub-panes
+     to this variable inline, so the breakpoints below set the variable and
+     not `height`, which that inline style would override. */
+  --terminal-chart-height: 440px;
   width: 100%;
-  height: 440px;
+  height: var(--terminal-chart-height);
 }
 .demo-terminal__chart.chart__container {
   margin-top: 0;
@@ -573,14 +577,16 @@
 
 @media (min-width: 1200px) {
   .demo-terminal__chart,
-  .demo-terminal__chart.chart__container {
-    height: 560px;
+  .demo-terminal__chart.chart__container,
+  .terminal-chart__loading {
+    --terminal-chart-height: clamp(560px, 70vh, 820px);
   }
 }
 @media (min-width: 901px) and (max-width: 1199px) {
   .demo-terminal__chart,
-  .demo-terminal__chart.chart__container {
-    height: 500px;
+  .demo-terminal__chart.chart__container,
+  .terminal-chart__loading {
+    --terminal-chart-height: 500px;
   }
 }
 @media (max-width: 900px) {
@@ -602,8 +608,9 @@
     width: 100%;
   }
   .demo-terminal__chart,
-  .demo-terminal__chart.chart__container {
-    height: 440px;
+  .demo-terminal__chart.chart__container,
+  .terminal-chart__loading {
+    --terminal-chart-height: 440px;
   }
   .demo-terminal__legend small {
     width: 100%;
