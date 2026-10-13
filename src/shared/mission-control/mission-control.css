@@ -205,3 +205,29 @@
 .mc-datastate[data-kind='error'] .mc-datastate__title {
   color: var(--mc-short);
 }
+
+.mc-provenance {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 20px;
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--mc-text-2);
+}
+
+.mc-provenance > div {
+  display: flex;
+  gap: 6px;
+}
+
+.mc-provenance dt::after {
+  content: ':';
+}
+
+.mc-provenance dd {
+  margin: 0;
+}
+
+.mc-provenance > [data-known='false'] dd {
+  font-style: italic;
+}

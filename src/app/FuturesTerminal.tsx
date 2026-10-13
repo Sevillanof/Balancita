@@ -5,7 +5,8 @@ import {
 } from '../features/trading-view/domain/product-label.ts'
 import { utcDateTime } from '../shared/finance/format.ts'
 import ApprovedTerminalLayout from '../features/trading-view/presentation/ApprovedTerminalLayout.tsx'
-import { AppShell } from '../shared/mission-control/index.ts'
+import { AppShell, DataState } from '../shared/mission-control/index.ts'
+import GatewayHistory from './GatewayHistory.tsx'
 import MarketStrip from './MarketStrip.tsx'
 import PaperAccountPanel from './PaperAccountPanel.tsx'
 import SelectedAnalysis from './SelectedAnalysis.tsx'
@@ -452,88 +453,108 @@ export default function FuturesTerminal({
                 setConfirmingReset={setConfirmingReset}
                 sendCommand={sendCommand}
               />
-              <PaperAccountPanel
-                account={account}
-                netValue={netValue}
-                position={position}
-                localDemo={localDemo}
-                showAnalysisTime={showAnalysisTime}
-              />
-              <ApprovedPortfolioTables
-                label={`CARTERA PAPER · USD / ${productBase(product)}`}
-                title="Posiciones y operaciones"
-                ariaLabel="Posiciones paper"
-                open={{
-                  title: 'Posición abierta',
-                  columns: [
-                    'Estrategia',
-                    'Dirección',
-                    `Cantidad ${productBase(product)}`,
-                    'Entrada USD',
-                    'Stop USD',
-                    'Objetivo USD',
-                  ],
-                  emptyLabel: 'Sin posición abierta.',
-                  rows: position.side
-                    ? [
-                        {
-                          id: String(state.run_id),
-                          cells: [
-                            strategyLabel(position.strategy_id).split(
-                              ' · ',
-                            )[0]!,
-                            String(position.side),
-                            quantity(position.quantity_btc),
-                            money(position.entry_price_usd_per_btc),
-                            money(position.stop),
-                            money(position.target),
-                          ],
-                        },
-                      ]
-                    : [],
-                }}
-                closed={{
-                  title: 'Órdenes y ejecuciones',
-                  columns: ['Tipo', 'Estado', 'Referencia'],
-                  emptyLabel: 'No hay órdenes registradas.',
-                  rows: [
-                    ...orders.slice(-100).map((value, index) => {
-                      const order = record(value)
-                      return {
-                        id: String(order.order_id ?? index),
-                        cells: [
-                          String(
-                            order.side ??
-                              order.action ??
-                              order.order_type ??
-                              'Orden paper',
-                          ),
-                          reasonLabel(order.status ?? order.type),
-                          `${String(order.quantity_btc ?? 'Cantidad no disponible')} · ${String(order.order_id ?? 'ID no disponible')}${
-                            gatewayEngine &&
-                            typeof order.reason_code === 'string'
-                              ? ` · ${reasonLabel(order.reason_code)}`
-                              : ''
-                          }`,
-                        ],
-                      }
-                    }),
-                    ...(Array.isArray(state.fills) ? state.fills : [])
-                      .slice(-100)
-                      .map((value, index) => {
-                        const fill = record(value)
+              {gatewayEngine && (
+                <section
+                  className="connected-terminal__panel"
+                  aria-label="Posición actual"
+                >
+                  <h2>Posición actual</h2>
+                  <DataState
+                    kind="unavailable"
+                    title="Posición actual: No disponible"
+                    detail="Todavía no hay una fuente verificable de las posiciones de los experimentos forward (endpoint B5 pendiente). No significa «Sin posición abierta». Lo que sigue es historial del libro D."
+                  />
+                </section>
+              )}
+              <GatewayHistory enabled={gatewayEngine} runId={activeRunId}>
+                <PaperAccountPanel
+                  account={account}
+                  netValue={netValue}
+                  position={position}
+                  localDemo={localDemo}
+                  showAnalysisTime={showAnalysisTime}
+                  historical={gatewayEngine}
+                />
+                <ApprovedPortfolioTables
+                  label={`CARTERA PAPER · USD / ${productBase(product)}`}
+                  title="Posiciones y operaciones"
+                  ariaLabel="Posiciones paper"
+                  open={{
+                    title: gatewayEngine
+                      ? 'Posición registrada en el libro D'
+                      : 'Posición abierta',
+                    columns: [
+                      'Estrategia',
+                      'Dirección',
+                      `Cantidad ${productBase(product)}`,
+                      'Entrada USD',
+                      'Stop USD',
+                      'Objetivo USD',
+                    ],
+                    emptyLabel: gatewayEngine
+                      ? 'Sin posición abierta en el libro D.'
+                      : 'Sin posición abierta.',
+                    rows: position.side
+                      ? [
+                          {
+                            id: String(state.run_id),
+                            cells: [
+                              strategyLabel(position.strategy_id).split(
+                                ' · ',
+                              )[0]!,
+                              String(position.side),
+                              quantity(position.quantity_btc),
+                              money(position.entry_price_usd_per_btc),
+                              money(position.stop),
+                              money(position.target),
+                            ],
+                          },
+                        ]
+                      : [],
+                  }}
+                  closed={{
+                    title: 'Órdenes y ejecuciones',
+                    columns: ['Tipo', 'Estado', 'Referencia'],
+                    emptyLabel: 'No hay órdenes registradas.',
+                    rows: [
+                      ...orders.slice(-100).map((value, index) => {
+                        const order = record(value)
                         return {
-                          id: String(fill.fill_id ?? `fill-${index}`),
+                          id: String(order.order_id ?? index),
                           cells: [
-                            `Ejecución ${String(fill.action ?? fill.side ?? 'paper')}`,
-                            `${quantity(fill.quantity_btc)} @ ${money(fill.price_usd_per_btc)}`,
-                            String(fill.fill_id ?? 'Fill registrado'),
+                            String(
+                              order.side ??
+                                order.action ??
+                                order.order_type ??
+                                'Orden paper',
+                            ),
+                            reasonLabel(order.status ?? order.type),
+                            `${String(order.quantity_btc ?? 'Cantidad no disponible')} · ${String(order.order_id ?? 'ID no disponible')}${
+                              gatewayEngine &&
+                              typeof order.reason_code === 'string'
+                                ? ` · ${reasonLabel(order.reason_code)}`
+                                : ''
+                            }`,
                           ],
                         }
                       }),
-                  ],
-                }}
-              />
+                      ...(Array.isArray(state.fills) ? state.fills : [])
+                        .slice(-100)
+                        .map((value, index) => {
+                          const fill = record(value)
+                          return {
+                            id: String(fill.fill_id ?? `fill-${index}`),
+                            cells: [
+                              `Ejecución ${String(fill.action ?? fill.side ?? 'paper')}`,
+                              `${quantity(fill.quantity_btc)} @ ${money(fill.price_usd_per_btc)}`,
+                              String(fill.fill_id ?? 'Fill registrado'),
+                            ],
+                          }
+                        }),
+                    ],
+                  }}
+                />
+              </GatewayHistory>
             </>
           )}
         </>

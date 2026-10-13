@@ -1495,6 +1495,126 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
     })
     expect(await screen.findByText(/Motor paper: en marcha/)).toBeTruthy()
   })
+
+  describe('provenance and separation (Fase 2.4)', () => {
+    const history = () =>
+      within(screen.getByRole('group', { name: 'Historial del gateway' }))
+    const current = () =>
+      within(screen.getByRole('region', { name: 'Posición actual' }))
+
+    it('shows the current position as «No disponible» and keeps D-book data only inside the labelled history', async () => {
+      await renderLive()
+      expect(current().getByText('Posición actual: No disponible')).toBeTruthy()
+      // The D-book position, account and orders live in the history section.
+      expect(history().getByText('Histórico')).toBeTruthy()
+      expect(history().getByText('long · 0.0099 BTC')).toBeTruthy()
+      expect(history().getByText('Saldo USD')).toBeTruthy()
+      expect(history().getByText('Posiciones y operaciones')).toBeTruthy()
+      // ...and never inside the current-position block.
+      expect(current().queryByText(/long/)).toBeNull()
+      expect(current().queryByText('Saldo USD')).toBeNull()
+    })
+
+    it('does not confuse «No disponible» with «Sin posición abierta»', async () => {
+      await renderLive({ ...state, position: null })
+      expect(current().getByText('Posición actual: No disponible')).toBeTruthy()
+      expect(current().queryByText(/^Sin posición abierta/)).toBeNull()
+      // The empty D book is stated as such, inside the history only.
+      expect(
+        history().getAllByText(/Sin posición abierta en el libro D/).length,
+      ).toBeGreaterThan(0)
+      expect(screen.queryByText('Sin posición abierta')).toBeNull()
+      expect(screen.queryByText('Sin posición abierta.')).toBeNull()
+    })
+
+    it('states origin and run, and never invents the times or the experiment', async () => {
+      await renderLive()
+      const provenance = within(
+        screen.getByRole('group', { name: 'Historial del gateway' }),
+      ).getByLabelText('Procedencia de los datos')
+      const rows = Object.fromEntries(
+        [...provenance.querySelectorAll('div')].map((row) => [
+          row.querySelector('dt')!.textContent,
+          row.querySelector('dd')!.textContent,
+        ]),
+      )
+      expect(rows).toEqual({
+        Origen: 'Gateway · libro D retirado (lectura)',
+        Experimento: 'No disponible',
+        Run: 'live-market-view',
+        'Hora del evento': 'No disponible',
+        'Última actualización recibida': 'No disponible',
+      })
+    })
+
+    it('ignores account, position, order and verdict events of another run', async () => {
+      await renderLive()
+      const socket = TerminalSocket.latest!
+      const foreign = (seq: number, type: string, data: object) =>
+        envelope(
+          type,
+          seq,
+          data as Record<string, unknown>,
+          T0 + seq,
+          'other-run',
+        )
+      await act(async () => {
+        socket.publish(
+          foreign(1, 'account.updated', {
+            account: { cash_usd: '1', equity_usd: '2', fees_usd: '3' },
+          }),
+        )
+        socket.publish(
+          foreign(2, 'position.updated', {
+            position: { side: 'short', quantity_btc: '9' },
+          }),
+        )
+        socket.publish(
+          foreign(3, 'order.updated', {
+            order: { order_id: 'foreign-order', side: 'sell' },
+          }),
+        )
+        socket.publish(
+          foreign(4, 'analysis.completed', { analysis: analysis(9, 'SHORT') }),
+        )
+      })
+      expect(history().getByText('long · 0.0099 BTC')).toBeTruthy()
+      expect(history().queryByText(/short/)).toBeNull()
+      expect(history().queryByText(/foreign-order/)).toBeNull()
+      expect(screen.queryByText(/verdict-hash-9/)).toBeNull()
+      expect(screen.getByText(/10\.000,49/)).toBeTruthy()
+    })
+
+    it('subscribes to the product shown, so no other product reaches the panels', async () => {
+      const urls: string[] = []
+      class UrlSocket extends TerminalSocket {
+        constructor(url: string) {
+          super()
+          urls.push(url)
+        }
+      }
+      vi.stubGlobal('WebSocket', UrlSocket)
+      render(
+        <FuturesTerminal bootstrap={liveBootstrap()} product="PF_ETHUSD" />,
+      )
+      await waitFor(() => expect(TerminalSocket.latest).toBeDefined())
+      expect(urls).toHaveLength(1)
+      expect(urls[0]).toContain('PF_ETHUSD')
+      expect(urls[0]).not.toContain('PF_XBTUSD')
+    })
+
+    it('shows no gateway history or current-position block in the local MOCK simulation', async () => {
+      vi.stubGlobal('WebSocket', TestWebSocket)
+      render(<FuturesTerminal bootstrap={bootstrap} />)
+      await screen
+        .findByText('Saldo USD', {}, { timeout: 2_000 })
+        .catch(() => undefined)
+      expect(
+        screen.queryByRole('group', { name: 'Historial del gateway' }),
+      ).toBeNull()
+      expect(screen.queryByText('Posición actual: No disponible')).toBeNull()
+    })
+  })
 })
 
 function record(value: unknown): Record<string, unknown> {
