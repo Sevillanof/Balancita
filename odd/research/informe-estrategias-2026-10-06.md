@@ -17,11 +17,11 @@ Rama `feat/futures-process-split`. Solo análisis en scratch; no se modificó c�
 
 **Datos** (API pública `charts/v1/trade/PF_XBTUSD`, vela abierta descartada, sin huecos):
 
-| Intervalo | Velas | Rango (UTC) |
-|---|---|---|
-| 1 m | 259 200 | 2026-04-09 -> 2026-10-06 15:21 |
-| 5 m / 15 m / 1 h | 51 840 / 17 280 / 4 320 | idéntico (180 días) |
-| Funding horario | 8 760 | `historicalfundingrates` (1 año) |
+| Intervalo        | Velas                   | Rango (UTC)                      |
+| ---------------- | ----------------------- | -------------------------------- |
+| 1 m              | 259 200                 | 2026-04-09 -> 2026-10-06 15:21   |
+| 5 m / 15 m / 1 h | 51 840 / 17 280 / 4 320 | idéntico (180 días)              |
+| Funding horario  | 8 760                   | `historicalfundingrates` (1 año) |
 
 Ventana principal: **últimos 90 días** (2026-07-08 -> 2026-10-06). Los primeros 90 días se usan como submuestra de estabilidad y para los pliegues walk-forward. Precio: 57,8k-87,4k USD; inicio ~71,4k, fin ~86,5k.
 
@@ -29,17 +29,17 @@ Ventana principal: **últimos 90 días** (2026-07-08 -> 2026-10-06). Los primero
 
 **Modelo de relleno (réplica de D en velas, `sim.py`):**
 
-| Elemento | Supuesto |
-|---|---|
-| Entrada | Apertura de la vela 1 m siguiente a la señal, más/menos slippage |
-| Slippage (por lado, conservador) | 1 tick (1 USD) + 0,5 bp del precio ≈ 5,3 USD ≈ 0,6 bp; ida y vuelta ≈ 1,2 bp |
-| Stop / objetivo | Máximos/mínimos 1 m; si ambos en la misma vela, **stop primero**; hueco a través del stop llena en la apertura |
-| Salida por `propose` | En cada cierre 1 m posterior a la entrada, con las características de C; relleno en la apertura siguiente |
-| Time stop | 30 min (`time_stop_ms` de D) |
-| Tamaño | Regla de D: riesgo 0,1 % de 10 000, tope 1000 USD nocional (siempre domina el tope; 1 bp ≈ 0,10 USD) |
-| Comisiones | Config del repo: taker 0,0005, maker 0,0002 por lado |
-| Regla de buffer de D | `|target - entry| > entry·(2·taker + 0,0002) + entry·0,0002` = 14 bp |
-| Funding | Ignorado en C25-C28 (tenencia <= 30 min, igual que D); incluido en C29-C34 (prorrateo horario, marca de tiempo = inicio de hora) |
+| Elemento                         | Supuesto                                                                                                                         |
+| -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| Entrada                          | Apertura de la vela 1 m siguiente a la señal, más/menos slippage                                                                 |
+| Slippage (por lado, conservador) | 1 tick (1 USD) + 0,5 bp del precio ≈ 5,3 USD ≈ 0,6 bp; ida y vuelta ≈ 1,2 bp                                                     |
+| Stop / objetivo                  | Máximos/mínimos 1 m; si ambos en la misma vela, **stop primero**; hueco a través del stop llena en la apertura                   |
+| Salida por `propose`             | En cada cierre 1 m posterior a la entrada, con las características de C; relleno en la apertura siguiente                        |
+| Time stop                        | 30 min (`time_stop_ms` de D)                                                                                                     |
+| Tamaño                           | Regla de D: riesgo 0,1 % de 10 000, tope 1000 USD nocional (siempre domina el tope; 1 bp ≈ 0,10 USD)                             |
+| Comisiones                       | Config del repo: taker 0,0005, maker 0,0002 por lado                                                                             |
+| Regla de buffer de D             | `                                                                                                                                | target - entry | > entry·(2·taker + 0,0002) + entry·0,0002` = 14 bp |
+| Funding                          | Ignorado en C25-C28 (tenencia <= 30 min, igual que D); incluido en C29-C34 (prorrateo horario, marca de tiempo = inicio de hora) |
 
 Sin límite de pérdida diaria en la simulación: los USD absolutos de abajo sobreestiman la pérdida que D permitiría (cierre diario al -1 %); la métrica comparable es bp por operación. Una operación a la vez por estrategia, sin solapes, igual que D.
 
@@ -47,28 +47,28 @@ Sin límite de pérdida diaria en la simulación: los USD absolutos de abajo sob
 
 ### 3.1 Señales y regla de buffer
 
-| | C25 | C26 | C27 | C28 |
-|---|---|---|---|---|
-| Señales/día (90 d / 180 d) | 86,3 / 88,0 | 6,1 / 6,3 | 83,3 / 82,9 | 65,8 / 67,1 |
-| Superan buffer D (90 d / 180 d) | 41,5 % / 47,1 % | 32,1 % / 36,5 % | 44,4 % / 51,6 % | 43,1 % / 49,2 % |
-| Objetivo USD p10 / p50 / p90 | 32 / 89 / 200 | 18 / 72 / 180 | 30 / 92 / 213 | 31 / 91 / 209 |
-| Stop USD p10 / p50 / p90 | 22 / 52 / 107 | 21 / 53 / 113 | 22 / 53 / 114 | 23 / 54 / 114 |
-| ATR14 1 m USD p10 / p50 / p90 | 11,8 / 31,1 / 68,0 | 10,4 / 32,0 / 71,6 | 11,2 / 32,0 / 72,4 | 12,0 / 32,4 / 72,4 |
-| Objetivo en ATR p10 / p50 / p90 | 2,66 / 2,87 / 2,94 | 1,19 / 2,37 / 3,39 | 2,65 / 2,87 / 2,94 | 2,56 / 2,87 / 2,94 |
-| Stop en ATR p50 | 1,66 | 1,66 | 1,66 | 1,66 |
-| Umbral de coste mediano (USD) | 107 | 107 | 106 | 106 |
+|                                   | C25                | C26                | C27                | C28                |
+| --------------------------------- | ------------------ | ------------------ | ------------------ | ------------------ |
+| Señales/día (90 d / 180 d)        | 86,3 / 88,0        | 6,1 / 6,3          | 83,3 / 82,9        | 65,8 / 67,1        |
+| Superan buffer D (90 d / 180 d)   | 41,5 % / 47,1 %    | 32,1 % / 36,5 %    | 44,4 % / 51,6 %    | 43,1 % / 49,2 %    |
+| Objetivo USD p10 / p50 / p90      | 32 / 89 / 200      | 18 / 72 / 180      | 30 / 92 / 213      | 31 / 91 / 209      |
+| Stop USD p10 / p50 / p90          | 22 / 52 / 107      | 21 / 53 / 113      | 22 / 53 / 114      | 23 / 54 / 114      |
+| ATR14 1 m USD p10 / p50 / p90     | 11,8 / 31,1 / 68,0 | 10,4 / 32,0 / 71,6 | 11,2 / 32,0 / 72,4 | 12,0 / 32,4 / 72,4 |
+| Objetivo en ATR p10 / p50 / p90   | 2,66 / 2,87 / 2,94 | 1,19 / 2,37 / 3,39 | 2,65 / 2,87 / 2,94 | 2,56 / 2,87 / 2,94 |
+| Stop en ATR p50                   | 1,66               | 1,66               | 1,66               | 1,66               |
+| Umbral de coste mediano (USD)     | 107                | 107                | 106                | 106                |
 | Objetivo / umbral p10 / p50 / p90 | 0,33 / 0,89 / 1,90 | 0,18 / 0,71 / 1,66 | 0,31 / 0,92 / 2,00 | 0,33 / 0,90 / 1,98 |
 
 Notas: distancias medidas desde el relleno hipotético (apertura siguiente + slippage), por eso el objetivo mide ~2,87 ATR y no 3,0 y el stop ~1,66 ATR. Un objetivo de 3 ATR solo supera 14 bp si ATR1m > ~0,047 % del precio (~40 USD a 86k): ocurre en el 44,5 % de los minutos de los últimos 90 días (50,5 % en 180 días). Stop mediano 52 USD ≈ 6 bp frente a 14 bp de coste de ida y vuelta + buffer: el coste es ~2 veces la distancia al stop.
 
 ### 3.2 Simulación de D sin buffer (taker/taker, con slippage)
 
-| | n | Win | Bruto bp | Neto bp | PF | Neto USD | Max DD USD |
-|---|---|---|---|---|---|---|---|
-| C25 | 7467 | 10 % | -1,36 | -11,36 | 0,07 | -8449 | 8449 |
-| C26 | 541 | 14 % | -0,97 | -10,97 | 0,11 | -591 | 591 |
-| C27 | 5317 | 19 % | -1,13 | -11,13 | 0,14 | -5895 | 5895 |
-| C28 | 5718 | 10 % | -1,36 | -11,36 | 0,07 | -6471 | 6471 |
+|     | n    | Win  | Bruto bp | Neto bp | PF   | Neto USD | Max DD USD |
+| --- | ---- | ---- | -------- | ------- | ---- | -------- | ---------- |
+| C25 | 7467 | 10 % | -1,36    | -11,36  | 0,07 | -8449    | 8449       |
+| C26 | 541  | 14 % | -0,97    | -10,97  | 0,11 | -591     | 591        |
+| C27 | 5317 | 19 % | -1,13    | -11,13  | 0,14 | -5895    | 5895       |
+| C28 | 5718 | 10 % | -1,36    | -11,36  | 0,07 | -6471    | 6471       |
 
 La curva de capital es prácticamente monótona descendente (DD = pérdida total). Con la regla de buffer de D aplicada (operaciones que D sí abriría): C25 n=3057 neto -11,27 bp; C26 n=173 -9,51; C27 n=2315 -11,16; C28 n=2426 -11,30. El buffer no selecciona ganadoras (bruto -1,3 / +0,5 / -1,2 / -1,3 bp).
 
@@ -76,38 +76,38 @@ Motivos de salida (sin buffer, 90 d): C25 `strategy_exit` 5071, stop 1089, targe
 
 ### 3.3 Escenarios de comisión (neto bp por operación, sin buffer)
 
-| Escenario | C25 | C26 | C27 | C28 |
-|---|---|---|---|---|
-| taker/taker (5+5 bp) | -11,36 | -10,97 | -11,13 | -11,36 |
-| maker entrada / taker salida (2+5 bp) | -7,72 | -7,33 | -7,49 | -7,72 |
-| maker/maker (2+2 bp) | -4,08 | -3,69 | -3,85 | -4,08 |
-| PF taker/taker -> maker/maker | 0,07 -> 0,31 | 0,11 -> 0,44 | 0,14 -> 0,49 | 0,07 -> 0,32 |
+| Escenario                             | C25          | C26          | C27          | C28          |
+| ------------------------------------- | ------------ | ------------ | ------------ | ------------ |
+| taker/taker (5+5 bp)                  | -11,36       | -10,97       | -11,13       | -11,36       |
+| maker entrada / taker salida (2+5 bp) | -7,72        | -7,33        | -7,49        | -7,72        |
+| maker/maker (2+2 bp)                  | -4,08        | -3,69        | -3,85        | -4,08        |
+| PF taker/taker -> maker/maker         | 0,07 -> 0,31 | 0,11 -> 0,44 | 0,14 -> 0,49 | 0,07 -> 0,32 |
 
 Los escenarios maker son optimistas: asumen relleno seguro y sin slippage en las patas maker (sin modelo de cola ni de selección adversa). Aun así todos pierden.
 
 ### 3.4 Comisión de equilibrio (por lado, taker/taker simétrico)
 
-| | Bruto tras slippage (bp/op) | Break-even/lado con slippage | Bruto sin slippage | Break-even/lado sin slippage |
-|---|---|---|---|---|
-| C25 | -1,36 | -0,68 bp | -0,08 | -0,04 bp |
-| C26 | -0,97 | -0,48 bp | +0,31 | +0,15 bp |
-| C27 | -1,13 | -0,56 bp | +0,15 | +0,08 bp |
-| C28 | -1,36 | -0,68 bp | -0,08 | -0,04 bp |
+|     | Bruto tras slippage (bp/op) | Break-even/lado con slippage | Bruto sin slippage | Break-even/lado sin slippage |
+| --- | --------------------------- | ---------------------------- | ------------------ | ---------------------------- |
+| C25 | -1,36                       | -0,68 bp                     | -0,08              | -0,04 bp                     |
+| C26 | -0,97                       | -0,48 bp                     | +0,31              | +0,15 bp                     |
+| C27 | -1,13                       | -0,56 bp                     | +0,15              | +0,08 bp                     |
+| C28 | -1,36                       | -0,68 bp                     | -0,08              | -0,04 bp                     |
 
 Comparación: comisión real 5 bp/lado. Break-even <= 0,15 bp: ninguna estructura de comisiones realista (el menor nivel práctico es maker 2 bp) lo cubre. En 180 días: -0,68 / -0,86 / -0,61 / -0,73 bp con slippage.
 
 ### 3.5 Por régimen, mes y mitad (neto bp, taker/taker, n entre paréntesis)
 
-| | C25 | C26 | C27 | C28 |
-|---|---|---|---|---|
-| Régimen trend | -11,41 (5170) | n/a | -11,39 (3133) | -11,40 (5177) |
-| Régimen range | -11,24 (2297) | -10,97 (541) | -10,75 (2184) | -10,97 (541) |
-| 2026-07 (parcial) | -11,42 (1835) | -10,55 (135) | -11,33 (1362) | -11,48 (1449) |
-| 2026-08 | -11,14 (2589) | -10,87 (191) | -11,01 (1934) | -11,15 (2028) |
-| 2026-09 | -11,60 (2565) | -11,32 (178) | -10,99 (1710) | -11,53 (1889) |
-| 2026-10 (parcial) | -11,03 (478) | -11,31 (37) | -11,73 (311) | -11,19 (352) |
-| Lado LONG / SHORT | -11,45 / -11,25 | -10,29 / -11,59 | -10,80 / -11,47 | -11,39 / -11,32 |
-| 6 bloques de 30 d (180 d), rango neto | -11,0 a -11,6 | -10,7 a -12,8 | -10,9 a -11,7 | -11,1 a -11,7 |
+|                                       | C25             | C26             | C27             | C28             |
+| ------------------------------------- | --------------- | --------------- | --------------- | --------------- |
+| Régimen trend                         | -11,41 (5170)   | n/a             | -11,39 (3133)   | -11,40 (5177)   |
+| Régimen range                         | -11,24 (2297)   | -10,97 (541)    | -10,75 (2184)   | -10,97 (541)    |
+| 2026-07 (parcial)                     | -11,42 (1835)   | -10,55 (135)    | -11,33 (1362)   | -11,48 (1449)   |
+| 2026-08                               | -11,14 (2589)   | -10,87 (191)    | -11,01 (1934)   | -11,15 (2028)   |
+| 2026-09                               | -11,60 (2565)   | -11,32 (178)    | -10,99 (1710)   | -11,53 (1889)   |
+| 2026-10 (parcial)                     | -11,03 (478)    | -11,31 (37)     | -11,73 (311)    | -11,19 (352)    |
+| Lado LONG / SHORT                     | -11,45 / -11,25 | -10,29 / -11,59 | -10,80 / -11,47 | -11,39 / -11,32 |
+| 6 bloques de 30 d (180 d), rango neto | -11,0 a -11,6   | -10,7 a -12,8   | -10,9 a -11,7   | -11,1 a -11,7   |
 
 Conclusión: resultado uniforme; no hay régimen ni periodo donde algún C25-C28 tenga ventaja bruta.
 
@@ -123,39 +123,39 @@ Conclusión: resultado uniforme; no hay régimen ni periodo donde algún C25-C28
 
 ### 4.1 Nuevos candidatos (C29+)
 
-| Id | Descripción | OOS n | Neto bp | IC95 % | Bruto bp | Win | PF | t | Último pliegue (n, neto) |
-|---|---|---|---|---|---|---|---|---|---|
-| C29 | Pullback 15 m (misma lógica C25) + tendencia 1 h (EMA9>EMA21, cierre>SMA50); stop/target 1,5-2 / 3-4 ATR 15 m; time stop 4-12 h; k=1,5 | 266 | -4,4 | [-13,3; +5,5] | +5,6 | 39 % | 0,88 | -0,93 | 58, -15,1 |
-| C29m | C29 con entrada limit post-only (espera 10 min, relleno si el mínimo/máximo cruza 1 tick) y objetivo maker | 254 | -0,6 | [-10,2; +9,3] | +5,5 | 39 % | 0,98 | -0,12 | 55, -10,7 |
-| C30 | Ruptura Donchian20 + volumen>1,25x en 15 m + tendencia 1 h | 282 | -6,9 | [-14,3; +0,6] | +3,1 | 37 % | 0,79 | -1,76 | 67, -11,2 |
-| C31 | 1 h: ruptura Donchian 24/48/96, stop chandelier 3-4,5 ATR 1 h, tenencia hasta 7 d | 69 | -32,0 | [-72,6; +13,3] | -22,2 | 32 % | 0,61 | -1,43 | 13, -25,1 |
-| C32 | Reversión 15 m (banda Bollinger + RSI) en régimen range de 1 h, objetivo = media BB | 83 | -11,3 | [-23,5; +0,6] | -1,3 | 46 % | 0,60 | -1,87 | 19, -17,1 |
-| C33 | Contrarian de funding (cuantil móvil pasado q=0,90-0,98), mantener 8-24 h, stop 3 ATR 1 h | 72 | -15,6 | [-53,7; +23,9] | -6,4 | 46 % | 0,78 | -0,77 | 18, -47,3 |
-| C34 | Pullback 5 m + tendencia 1 h (el ejemplo "mismos setups en 5 m") | 816 | -11,6 | [-14,5; -8,7] | -1,6 | 35 % | 0,53 | -7,73 | 237, -11,3 |
+| Id   | Descripción                                                                                                                            | OOS n | Neto bp | IC95 %         | Bruto bp | Win  | PF   | t     | Último pliegue (n, neto) |
+| ---- | -------------------------------------------------------------------------------------------------------------------------------------- | ----- | ------- | -------------- | -------- | ---- | ---- | ----- | ------------------------ |
+| C29  | Pullback 15 m (misma lógica C25) + tendencia 1 h (EMA9>EMA21, cierre>SMA50); stop/target 1,5-2 / 3-4 ATR 15 m; time stop 4-12 h; k=1,5 | 266   | -4,4    | [-13,3; +5,5]  | +5,6     | 39 % | 0,88 | -0,93 | 58, -15,1                |
+| C29m | C29 con entrada limit post-only (espera 10 min, relleno si el mínimo/máximo cruza 1 tick) y objetivo maker                             | 254   | -0,6    | [-10,2; +9,3]  | +5,5     | 39 % | 0,98 | -0,12 | 55, -10,7                |
+| C30  | Ruptura Donchian20 + volumen>1,25x en 15 m + tendencia 1 h                                                                             | 282   | -6,9    | [-14,3; +0,6]  | +3,1     | 37 % | 0,79 | -1,76 | 67, -11,2                |
+| C31  | 1 h: ruptura Donchian 24/48/96, stop chandelier 3-4,5 ATR 1 h, tenencia hasta 7 d                                                      | 69    | -32,0   | [-72,6; +13,3] | -22,2    | 32 % | 0,61 | -1,43 | 13, -25,1                |
+| C32  | Reversión 15 m (banda Bollinger + RSI) en régimen range de 1 h, objetivo = media BB                                                    | 83    | -11,3   | [-23,5; +0,6]  | -1,3     | 46 % | 0,60 | -1,87 | 19, -17,1                |
+| C33  | Contrarian de funding (cuantil móvil pasado q=0,90-0,98), mantener 8-24 h, stop 3 ATR 1 h                                              | 72    | -15,6   | [-53,7; +23,9] | -6,4     | 46 % | 0,78 | -0,77 | 18, -47,3                |
+| C34  | Pullback 5 m + tendencia 1 h (el ejemplo "mismos setups en 5 m")                                                                       | 816   | -11,6   | [-14,5; -8,7]  | -1,6     | 35 % | 0,53 | -7,73 | 237, -11,3               |
 
 Ninguno es positivo OOS. Los únicos con IC que incluye 0 con holgura son C29, C29m, C31 y C33, pero por falta de potencia (desviación por operación ≈ 80 bp para 15 m; con n≈250 el error estándar es ≈5 bp) y no por evidencia de ventaja.
 
 ### 4.2 Robustez
 
-| Id | Neto bp por pliegue de prueba (1->4) | Sensibilidad: red (n comb.) neto min / mediana / max | Combinaciones positivas | Lado LONG / SHORT (neto, n) |
-|---|---|---|---|---|
-| C29 | -2,9 / -2,9 / +2,0 / -15,1 | 6: -11,4 / -7,8 / -4,4 | 0 | +2,8 (145) / -13,1 (121) |
-| C29m | -2,8 / +1,2 / +9,4 / -10,7 | 6: -7,2 / -4,6 / -0,6 | 0 | +6,3 (137) / -8,7 (117) |
-| C30 | -8,4 / -16,5 / +7,9 / -11,2 | 6: -11,1 / -8,6 / -5,1 | 0 | -2,4 (164) / -13,1 (118) |
-| C31 | -100,8 / -37,0 / +14,6 / -25,1 | 6: -67,1 / -37,0 / -19,0 | 0 | +7,0 (35) / -72,2 (34) |
-| C32 | -17,2 / -6,6 / -7,1 / -17,1 | 4: -12,0 / -10,2 / -8,1 | 0 | -10,6 (34) / -11,8 (49) |
-| C33 | -43,3 / -19,0 / +31,9 / -47,3 | 6: -26,4 / -13,4 / +1,3 | 1 de 6 (n=37-152) | +17,8 (33) / -43,8 (39) |
-| C34 | -12,4 / -12,0 / -11,0 / -11,3 | 6: -11,6 / -11,3 / -11,0 | 0 | -10,1 (456) / -13,6 (360) |
+| Id   | Neto bp por pliegue de prueba (1->4) | Sensibilidad: red (n comb.) neto min / mediana / max | Combinaciones positivas | Lado LONG / SHORT (neto, n) |
+| ---- | ------------------------------------ | ---------------------------------------------------- | ----------------------- | --------------------------- |
+| C29  | -2,9 / -2,9 / +2,0 / -15,1           | 6: -11,4 / -7,8 / -4,4                               | 0                       | +2,8 (145) / -13,1 (121)    |
+| C29m | -2,8 / +1,2 / +9,4 / -10,7           | 6: -7,2 / -4,6 / -0,6                                | 0                       | +6,3 (137) / -8,7 (117)     |
+| C30  | -8,4 / -16,5 / +7,9 / -11,2          | 6: -11,1 / -8,6 / -5,1                               | 0                       | -2,4 (164) / -13,1 (118)    |
+| C31  | -100,8 / -37,0 / +14,6 / -25,1       | 6: -67,1 / -37,0 / -19,0                             | 0                       | +7,0 (35) / -72,2 (34)      |
+| C32  | -17,2 / -6,6 / -7,1 / -17,1          | 4: -12,0 / -10,2 / -8,1                              | 0                       | -10,6 (34) / -11,8 (49)     |
+| C33  | -43,3 / -19,0 / +31,9 / -47,3        | 6: -26,4 / -13,4 / +1,3                              | 1 de 6 (n=37-152)       | +17,8 (33) / -43,8 (39)     |
+| C34  | -12,4 / -12,0 / -11,0 / -11,3        | 6: -11,6 / -11,3 / -11,0                             | 0                       | -10,1 (456) / -13,6 (360)   |
 
 Estabilidad: el signo de C29/C29m/C30/C31/C33 cambia de pliegue a pliegue (ruido, no régimen persistente); todos pierden en el último pliegue. C29 eligió siempre los mismos parámetros (2 ATR stop, 4 ATR objetivo, 12 h) en los 4 pliegues, lo que es estabilidad de selección, pero la sensibilidad muestra que las 6 combinaciones son negativas, con mejor resultado en los parámetros de objetivo/stop más amplios (menor ratio coste/distancia).
 
 **Prueba de dirección (180 d, bruto bp tras slippage, parámetros fijos 2/4 ATR, no OOS; EE = error estándar):**
 
-| Id | Señal | Invertida | Siempre largo | Siempre corto |
-|---|---|---|---|---|
-| C29 (n≈400) | +7,3 (EE 4,1) | -4,5 | -0,9 | +2,9 |
-| C30 (n≈400) | +0,7 (EE 4,4) | -0,4 | +2,0 | -1,6 |
-| C34 (n≈1200) | +0,6 (EE 1,3) | -0,8 | -0,9 | +0,7 |
+| Id           | Señal         | Invertida | Siempre largo | Siempre corto |
+| ------------ | ------------- | --------- | ------------- | ------------- |
+| C29 (n≈400)  | +7,3 (EE 4,1) | -4,5      | -0,9          | +2,9          |
+| C30 (n≈400)  | +0,7 (EE 4,4) | -0,4      | +2,0          | -1,6          |
+| C34 (n≈1200) | +0,6 (EE 1,3) | -0,8      | -0,9          | +0,7          |
 
 La dirección del pullback 15 m aporta ~12 bp frente a invertirla (≈1,7 EE; no concluyente). C30 y C34 no distinguen señal de azar.
 
@@ -163,12 +163,12 @@ La dirección del pullback 15 m aporta ~12 bp frente a invertirla (≈1,7 EE; no
 
 Cambios probados: sin salida por EMA21/invalidación, stop/target {1,5/3; 2/4; 3/6} ATR 1 m, time stop {30, 120, 360} min, filtro de volatilidad k {0, 1,2} (objetivo >= 1,2 x 14 bp); C26 conserva el objetivo en la media Bollinger.
 
-| Id | OOS n | Neto bp | IC95 % | Bruto bp | Win | PF | Neto por pliegue | Red neto min / mediana / max | Último pliegue |
-|---|---|---|---|---|---|---|---|---|---|
-| C25' | 1989 | -11,0 | [-12,1; -9,9] | -1,0 | 35 % | 0,38 | -11,4 / -11,3 / -9,6 / -11,7 | -11,7 / -11,3 / -10,6 | n=507, -11,7 |
-| C26' | 321 | -11,3 | [-13,6; -9,0] | -1,3 | 34 % | 0,26 | -11,8 / -10,6 / -14,7 / -5,9 | -11,5 / -11,0 / -9,9 | n=45, -5,9 |
-| C27' | 2978 | -11,1 | [-12,1; -10,2] | -1,1 | 33 % | 0,40 | -10,7 / -12,0 / -10,6 / -11,3 | -11,4 / -11,0 / -10,8 | n=633, -11,3 |
-| C28' | 1801 | -11,1 | [-12,4; -9,8] | -1,1 | 33 % | 0,41 | -12,4 / -11,8 / -10,7 / -9,4 | -11,4 / -11,2 / -10,6 | n=447, -9,4 |
+| Id   | OOS n | Neto bp | IC95 %         | Bruto bp | Win  | PF   | Neto por pliegue              | Red neto min / mediana / max | Último pliegue |
+| ---- | ----- | ------- | -------------- | -------- | ---- | ---- | ----------------------------- | ---------------------------- | -------------- |
+| C25' | 1989  | -11,0   | [-12,1; -9,9]  | -1,0     | 35 % | 0,38 | -11,4 / -11,3 / -9,6 / -11,7  | -11,7 / -11,3 / -10,6        | n=507, -11,7   |
+| C26' | 321   | -11,3   | [-13,6; -9,0]  | -1,3     | 34 % | 0,26 | -11,8 / -10,6 / -14,7 / -5,9  | -11,5 / -11,0 / -9,9         | n=45, -5,9     |
+| C27' | 2978  | -11,1   | [-12,1; -10,2] | -1,1     | 33 % | 0,40 | -10,7 / -12,0 / -10,6 / -11,3 | -11,4 / -11,0 / -10,8        | n=633, -11,3   |
+| C28' | 1801  | -11,1   | [-12,4; -9,8]  | -1,1     | 33 % | 0,41 | -12,4 / -11,8 / -10,7 / -9,4  | -11,4 / -11,2 / -10,6        | n=447, -9,4    |
 
 Ninguna de las 72 combinaciones es positiva. Subir el win rate (10 % -> 33-35 %) con stops/objetivos más anchos o sin salida EMA no cambia el bruto (~-1 bp): el coste fijo de 11 bp domina cualquier cambio de salida. Con n grande el resultado es estadísticamente claro: **no hay ventaja que recuperar en estas entradas a 1 m.**
 
@@ -176,14 +176,14 @@ Ninguna de las 72 combinaciones es positiva. Subir el win rate (10 % -> 33-35 %)
 
 ## 5. Recomendaciones (en orden)
 
-| # | Recomendación | Evidencia | Reemplazar o id nuevo |
-|---|---|---|---|
-| 1 | No aumentar exposición ni afinar C25-C28; mantenerlos como controles congelados (o pausarlos). No relajar el buffer de coste para "dejar entrar" operaciones. | Bruto -1 a -1,7 bp; 0 de 72 variantes OOS positivas; el buffer no selecciona ganadoras. | Dejarlos como están (ADR: histórico). |
-| 2 | Corregir el defecto de `donchian_mid20` (C27 sin salida por invalidación) y evitar entradas ya invalidadas (C25) solo si se mantienen como control. No cambia la rentabilidad. | Sección 3.6. | Cambio de esquema de características (`c27-features.v2`) + `VERDICT_CONFIG` nuevo = nuevo hash y DB de verdictos; en la práctica C25b/C27b como ids nuevos para no mezclar series. |
-| 3 | **C29m** como experimento paper: pullback 15 m + tendencia 1 h, entrada post-only, objetivo maker, stop taker, stop 2 ATR / objetivo 4 ATR (15 m), time stop 12 h, filtro k=1,5. Criterio de parada: <= 0 bp neto tras 150 operaciones o fill rate maker < 70 %. | OOS -0,6 bp, IC [-10,2; +9,3], n=254; bruto +5,5 bp; mejor del conjunto, sin evidencia suficiente. | **Id nuevo (C29).** No es reemplazo de C25 (otra marco temporal y otro modo de ejecución). |
-| 4 | Capturar datos que permitan modelar maker: ticker/L1 con tamaños, trades, tasa de relleno de limit orders. | Todos los escenarios maker de este informe son optimistas. | Infraestructura (C/capture), sin id. |
-| 5 | Descartar C30, C31, C32, C33, C34 en su forma actual; repetir C31/C33 solo con >= 2 años de historia. | OOS negativos; n=69-83 (C31/C32/C33) insuficientes. | Ninguno. |
-| 6 | Si el nivel de comisión de la cuenta real pudiera bajar (rebates maker, tier), recalcular: C29 necesita comisión total <= ~5,5 bp ida y vuelta con relleno garantizado. | Bruto C29 +5,5 bp. | n/a. |
+| #   | Recomendación                                                                                                                                                                                                                                                    | Evidencia                                                                                          | Reemplazar o id nuevo                                                                                                                                                              |
+| --- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | No aumentar exposición ni afinar C25-C28; mantenerlos como controles congelados (o pausarlos). No relajar el buffer de coste para "dejar entrar" operaciones.                                                                                                    | Bruto -1 a -1,7 bp; 0 de 72 variantes OOS positivas; el buffer no selecciona ganadoras.            | Dejarlos como están (ADR: histórico).                                                                                                                                              |
+| 2   | Corregir el defecto de `donchian_mid20` (C27 sin salida por invalidación) y evitar entradas ya invalidadas (C25) solo si se mantienen como control. No cambia la rentabilidad.                                                                                   | Sección 3.6.                                                                                       | Cambio de esquema de características (`c27-features.v2`) + `VERDICT_CONFIG` nuevo = nuevo hash y DB de verdictos; en la práctica C25b/C27b como ids nuevos para no mezclar series. |
+| 3   | **C29m** como experimento paper: pullback 15 m + tendencia 1 h, entrada post-only, objetivo maker, stop taker, stop 2 ATR / objetivo 4 ATR (15 m), time stop 12 h, filtro k=1,5. Criterio de parada: <= 0 bp neto tras 150 operaciones o fill rate maker < 70 %. | OOS -0,6 bp, IC [-10,2; +9,3], n=254; bruto +5,5 bp; mejor del conjunto, sin evidencia suficiente. | **Id nuevo (C29).** No es reemplazo de C25 (otra marco temporal y otro modo de ejecución).                                                                                         |
+| 4   | Capturar datos que permitan modelar maker: ticker/L1 con tamaños, trades, tasa de relleno de limit orders.                                                                                                                                                       | Todos los escenarios maker de este informe son optimistas.                                         | Infraestructura (C/capture), sin id.                                                                                                                                               |
+| 5   | Descartar C30, C31, C32, C33, C34 en su forma actual; repetir C31/C33 solo con >= 2 años de historia.                                                                                                                                                            | OOS negativos; n=69-83 (C31/C32/C33) insuficientes.                                                | Ninguno.                                                                                                                                                                           |
+| 6   | Si el nivel de comisión de la cuenta real pudiera bajar (rebates maker, tier), recalcular: C29 necesita comisión total <= ~5,5 bp ida y vuelta con relleno garantizado.                                                                                          | Bruto C29 +5,5 bp.                                                                                 | n/a.                                                                                                                                                                               |
 
 **Qué haría falta para implementar C29m como C29 en C (verdictos) y D (ejecución):**
 

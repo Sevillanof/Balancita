@@ -50,7 +50,12 @@ describe('serverEnvironment', () => {
 })
 
 describe('onlyChildSpecs', () => {
-  const specs = [{ name: 'vite' }, { name: 'capture' }, { name: 'paper' }, { name: 'llm' }]
+  const specs = [
+    { name: 'vite' },
+    { name: 'capture' },
+    { name: 'paper' },
+    { name: 'llm' },
+  ]
 
   it('keeps everything when DEV_ONLY is unset or empty', () => {
     assert.deepEqual(onlyChildSpecs(specs, {}), specs)
@@ -59,7 +64,9 @@ describe('onlyChildSpecs', () => {
 
   it('keeps only the named children and ignores unknown names', () => {
     assert.deepEqual(
-      onlyChildSpecs(specs, { DEV_ONLY: 'vite, capture,nope' }).map((s) => s.name),
+      onlyChildSpecs(specs, { DEV_ONLY: 'vite, capture,nope' }).map(
+        (s) => s.name,
+      ),
       ['vite', 'capture'],
     )
   })
