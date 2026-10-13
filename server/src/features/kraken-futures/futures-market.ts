@@ -592,7 +592,7 @@ export interface FuturesCollectorOptions {
   readonly onResilience?: (event: {
     readonly reason: string
     readonly action: string
-    readonly result: 'recovering' | 'recovered'
+    readonly result: 'recovering' | 'recovered' | 'info'
     readonly detail?: string
   }) => void
   readonly onState?: (state: MarketStatus, reason?: string) => void
@@ -608,6 +608,7 @@ export class KrakenFuturesMarketCollector {
   private connectStartedAt = 0
   private lastActivityAt = 0
   private lastDataAt = 0
+  private watchdogArmedAt = 0
   private opened = false
   private pendingRecovery: { reason: string; at: number } | null = null
   private state: MarketStatus = 'stopped'
@@ -851,6 +852,7 @@ export class KrakenFuturesMarketCollector {
   private armWatchdog(): void {
     this.clearWatchdog()
     if (this.stopped) return
+    this.watchdogArmedAt = this.options.clock()
     this.watchdogTimer = this.options.setTimeout(() => {
       this.watchdogTimer = null
       this.watchdog()
@@ -860,6 +862,19 @@ export class KrakenFuturesMarketCollector {
   private watchdog(): void {
     if (this.stopped || this.socket === null) return
     const now = this.options.clock()
+    // The check itself ran far later than asked: this process was blocked or the machine slept. Frames
+    // that arrived meanwhile are still queued, so judging silence now would reconnect a healthy socket.
+    // Skip this one check and look again after the queue has been delivered.
+    const lateBy = now - this.watchdogArmedAt - this.limits.watchdog
+    if (lateBy > 2_000) {
+      this.options.onResilience?.({
+        reason: 'process_blocked',
+        action: 'skip_watchdog_check',
+        result: 'info',
+        detail: `${lateBy} ms late`,
+      })
+      return this.armWatchdog()
+    }
     if (!this.opened && now - this.connectStartedAt > this.limits.connect)
       return this.reconnect('connect_timeout')
     if (this.opened && now - this.lastActivityAt > this.limits.silence)

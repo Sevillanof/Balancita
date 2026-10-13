@@ -1,5 +1,8 @@
 import { FuturesMarketStore } from '../features/kraken-futures/futures-market-store.ts'
+import { appendFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+import { createRetentionRunner } from '../features/kraken-futures/retention-runner.ts'
+import { createLoopMonitor } from '../features/live-gateway/loop-monitor.ts'
 import { createLiveCapture } from '../features/live-gateway/live-capture.ts'
 import type { FuturesSocket } from '../features/kraken-futures/futures-market.ts'
 import { resolveFuturesProducts } from '../features/kraken-futures/futures-products.ts'
@@ -86,26 +89,50 @@ async function main(): Promise<void> {
     eventRetentionMs: envNumber('FUTURES_EVENT_RETENTION_DAYS', 7) * 24 * HOUR,
     rawKeepMs: envNumber('FUTURES_RAW_COPY_KEEP_HOURS', 24) * HOUR,
   }
-  const trim = () => {
+  const diagnosticsDir = dirname(config.futuresMarketDbPath)
+  const appendJson = (file: string, value: unknown): void => {
     try {
-      const result = store.trimRawEvents({ now: Date.now(), ...retention })
-      if (result.deleted > 0 || result.slimmed > 0)
+      appendFileSync(join(diagnosticsDir, file), `${JSON.stringify(value)}\n`)
+    } catch {
+      // Diagnostics never take the capture down.
+    }
+  }
+  // The delete is synchronous (node:sqlite): it runs in small steps with the event loop free in between.
+  // FUTURES_RETENTION_MODE=legacy restores the former single call, only to measure before/after.
+  const legacyRetention = process.env.FUTURES_RETENTION_MODE === 'legacy'
+  const retentionRunner = createRetentionRunner({
+    store,
+    policy: retention,
+    mode: legacyRetention ? 'legacy' : 'incremental',
+    onCycle: (cycle) => {
+      appendJson('retention.jsonl', cycle)
+      if (cycle.deleted > 0 || cycle.slimmed > 0)
         log(
-          `retention: ${result.deleted} old events removed, ${result.slimmed} compacted${result.done ? '' : ' (more pending)'}`,
+          `retention: ${cycle.deleted} old events removed, ${cycle.slimmed} compacted in ${cycle.steps} step(s), longest ${Math.round(cycle.maxStepMs)} ms${cycle.done ? '' : ' (more pending)'}`,
         )
-    } catch (error) {
+    },
+  })
+  const trim = () => {
+    void retentionRunner.run().catch((error: unknown) => {
       log(
         `retention failed: ${error instanceof Error ? error.message : String(error)}`,
       )
-    }
+    })
   }
-  const trimTimer = setInterval(trim, 120_000)
+  const trimTimer = setInterval(trim, legacyRetention ? 120_000 : 15_000)
   trimTimer.unref()
+  // Worst timer delay per minute: tells a blocked or sleeping process from a network problem.
+  const loopMonitor = createLoopMonitor({
+    file: join(diagnosticsDir, 'eventloop.jsonl'),
+    log,
+  })
   let closing = false
   const shutdown = (signal: string) => {
     if (closing) return
     closing = true
     log(`received ${signal}, stopping`)
+    retentionRunner.stop()
+    loopMonitor.stop()
     void capture
       .stop()
       .then(() => store.close())

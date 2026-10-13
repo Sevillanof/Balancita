@@ -16,7 +16,8 @@
     "quotes:archive": "node --experimental-strip-types src/features/kraken-futures/quote-archive-cli.ts",
     "book:collect": "node --experimental-strip-types src/features/orderbook-collector/collector-main.ts",
     "book:loadtest": "node --experimental-strip-types src/features/orderbook-collector/loadtest.ts",
-    "market:prune": "node --experimental-strip-types src/features/kraken-futures/futures-market-prune-cli.ts"
+    "market:prune": "node --experimental-strip-types src/features/kraken-futures/futures-market-prune-cli.ts",
+    "retention:bench": "node --experimental-strip-types src/features/kraken-futures/retention-bench.ts"
   },
   "dependencies": {
     "@fastify/cors": "^11.3.0",

@@ -1097,6 +1097,63 @@ describe('live capture process core', () => {
     store.close()
   })
 
+  it('does not call a poll stuck when the process itself was blocked past its deadline', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'balancita-capture-'))
+    dirs.push(dir)
+    const store = new FuturesMarketStore(join(dir, 'market.sqlite'))
+    const logs: string[] = []
+    const logFile = join(dir, 'resilience.jsonl')
+    let calls = 0
+    const capture = createLiveCapture({
+      store,
+      makeSocket: () => fakeSocket().socket,
+      fetchCatalog: async () => catalog,
+      fundingFetch: async () => {
+        throw new Error('offline')
+      },
+      products: [
+        { productId: 'PF_XBTUSD', tickSize: '1' },
+        { productId: 'PF_ETHUSD', tickSize: '0.1' },
+      ],
+      officialCandlesFetch: async () =>
+        new Response(JSON.stringify({ candles: [], more_candles: false })),
+      officialPollMs: 60_000,
+      officialRequestGapMs: 0,
+      tickerPollMs: 5,
+      pollDeadlineMs: 40,
+      blockedProcessMs: 50,
+      resilienceLogFile: logFile,
+      // The first request blocks the whole process (like a synchronous delete) and answers right after.
+      tickerFetch: async () => {
+        calls += 1
+        if (calls === 1) {
+          await Promise.resolve() // let the poll's deadline timer start first
+          const until = Date.now() + 200
+          while (Date.now() < until) {
+            // busy wait
+          }
+          await new Promise((resolve) => setTimeout(resolve, 0))
+        }
+        return new Response(JSON.stringify({ result: 'success', tickers: [] }))
+      },
+      log: (line) => logs.push(line),
+    })
+    await capture.start()
+    await wait(150)
+    await capture.stop()
+    const events = existsSync(logFile)
+      ? readFileSync(logFile, 'utf8')
+          .trim()
+          .split('\n')
+          .filter(Boolean)
+          .map((line) => JSON.parse(line) as { reason: string })
+      : []
+    expect(events.map((e) => e.reason)).toContain('process_blocked')
+    expect(events.map((e) => e.reason)).not.toContain('poll_stuck')
+    expect(logs.some((line) => line.includes('poll stuck'))).toBe(false)
+    expect(capture.health.general()).toBe(false)
+  })
+
   describe('connectivity change', () => {
     /** Frames keep flowing and REST answers until `broken` is set: the route changed under open sockets. */
     function network() {
