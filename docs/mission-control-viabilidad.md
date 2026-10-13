@@ -354,6 +354,8 @@ PR modifica estrategias, lógica de decisiones, contabilidad ni comportamiento d
 
 ### Fase 3: observabilidad
 
+_Implementado (Fase 3.3, PR en borrador): pantalla `/observabilidad` con los seis componentes de B1 y la actividad de 3 h / 24 h de B2, solo lectura, con sus limitaciones. Capturas: [`mission-control/fase-3-3/`](mission-control/fase-3-3/)._
+
 - Backend B1+B2 (+B6) de solo lectura con pruebas de rendimiento; front con el indicador global.
 - Reglas: componente sin información suficiente = «Sin datos»; ausencia de errores no es salud;
   el estado global refleja degradaciones y comprobaciones no disponibles (peor estado entre componentes;

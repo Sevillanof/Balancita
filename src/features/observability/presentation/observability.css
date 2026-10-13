@@ -1,0 +1,351 @@
+/* Mission Control observability: tokens only (--mc-*), no colours of its own. */
+.obs-page {
+  display: grid;
+  gap: var(--mc-space-xl);
+  min-width: 0;
+  color: var(--mc-text);
+}
+
+.obs-page__heading {
+  display: grid;
+  gap: var(--mc-space-xs);
+  justify-items: start;
+}
+
+.obs-page__eyebrow {
+  margin: 0;
+  color: var(--mc-text-2);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.obs-page__title {
+  margin: 0;
+  font-size: 24px;
+  line-height: 32px;
+}
+
+.obs-page__lead {
+  max-width: 72ch;
+  margin: 0;
+  color: var(--mc-text-2);
+}
+
+.obs-refresh,
+.obs-seg button,
+.obs-select select {
+  min-height: 32px;
+  padding: 0 var(--mc-space-md);
+  border: 1px solid var(--mc-border-strong);
+  border-radius: var(--mc-radius);
+  color: var(--mc-text);
+  background: var(--mc-surface-2);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.obs-refresh:hover,
+.obs-seg button:hover {
+  background: var(--mc-surface-hover);
+}
+
+.obs-refresh:focus-visible,
+.obs-seg button:focus-visible,
+.obs-select select:focus-visible,
+.obs-details summary:focus-visible {
+  outline: 2px solid var(--mc-info);
+  outline-offset: 2px;
+}
+
+.obs-grid {
+  display: grid;
+  gap: var(--mc-space-xl);
+  min-width: 0;
+}
+
+.obs-overall {
+  margin: 0 0 var(--mc-space-sm);
+  font-size: 15px;
+}
+
+.obs-overall__list,
+.obs-meta,
+.obs-note {
+  margin: 0 0 var(--mc-space-sm);
+  color: var(--mc-text-2);
+  font-size: 13px;
+}
+
+.obs-overall__list strong {
+  color: var(--mc-text);
+}
+
+.obs-components {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr));
+  gap: var(--mc-space-md);
+  margin: var(--mc-space-lg) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.obs-component {
+  display: grid;
+  align-content: start;
+  gap: var(--mc-space-sm);
+  min-width: 0;
+  padding: var(--mc-space-md);
+  border: 1px solid var(--mc-border);
+  border-radius: var(--mc-radius);
+  background: var(--mc-surface-2);
+}
+
+.obs-component[data-status='error'] {
+  border-color: var(--mc-short);
+}
+
+.obs-component[data-status='warning'] {
+  border-color: var(--mc-warn);
+}
+
+.obs-component__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--mc-space-sm);
+}
+
+.obs-component__title {
+  margin: 0;
+  font-size: 14px;
+}
+
+.obs-component__summary {
+  margin: 0;
+  color: var(--mc-text-2);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.obs-details summary {
+  color: var(--mc-info);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.obs-checks,
+.obs-reasons,
+.obs-limitations ul {
+  margin: var(--mc-space-sm) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.obs-checks li {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2px var(--mc-space-sm);
+  padding: var(--mc-space-sm) 0;
+  border-top: 1px solid var(--mc-border);
+  font-size: 12px;
+}
+
+.obs-checks__value {
+  grid-column: 1;
+  font-family: var(--mc-font-mono);
+}
+
+.obs-checks__rule,
+.obs-checks__detail {
+  grid-column: 1 / -1;
+  color: var(--mc-text-2);
+  overflow-wrap: anywhere;
+}
+
+.obs-evidence {
+  margin: var(--mc-space-sm) 0 0;
+  font-size: 12px;
+}
+
+.obs-evidence div {
+  padding: var(--mc-space-xs) 0;
+  border-top: 1px solid var(--mc-border);
+}
+
+.obs-evidence dt {
+  font-family: var(--mc-font-mono);
+}
+
+.obs-evidence dd {
+  margin: 0;
+  color: var(--mc-text-2);
+  overflow-wrap: anywhere;
+}
+
+.obs-limitations {
+  padding: var(--mc-space-sm) var(--mc-space-md);
+  border-left: 2px solid var(--mc-warn);
+  color: var(--mc-text-2);
+  font-size: 12px;
+}
+
+.obs-limitations__title {
+  margin: 0;
+  color: var(--mc-text);
+  font-weight: 600;
+}
+
+.obs-limitations li {
+  padding: 2px 0;
+  overflow-wrap: anywhere;
+}
+
+.obs-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--mc-space-sm);
+}
+
+.obs-seg {
+  display: inline-flex;
+}
+
+.obs-seg button:not(:first-child) {
+  border-left: 0;
+  border-radius: 0 var(--mc-radius) var(--mc-radius) 0;
+}
+
+.obs-seg button:first-child {
+  border-radius: var(--mc-radius) 0 0 var(--mc-radius);
+}
+
+.obs-seg button[aria-pressed='true'] {
+  border-color: var(--mc-info);
+  color: var(--mc-info);
+  background: var(--mc-surface-hover);
+}
+
+.obs-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr));
+  gap: var(--mc-space-lg);
+  margin: var(--mc-space-md) 0;
+}
+
+.obs-subtitle {
+  margin: var(--mc-space-lg) 0 var(--mc-space-sm);
+  font-size: 13px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--mc-text-2);
+}
+
+.obs-grid > * {
+  min-width: 0;
+}
+
+.obs-table-wrap {
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.obs-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.obs-table th,
+.obs-table td {
+  padding: var(--mc-space-sm);
+  border-top: 1px solid var(--mc-border);
+  text-align: left;
+  vertical-align: top;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.obs-table thead th {
+  color: var(--mc-text-2);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.obs-expected {
+  display: block;
+  color: var(--mc-text-2);
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.obs-reasons li {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: var(--mc-space-sm);
+  padding: var(--mc-space-xs) 0;
+  border-top: 1px solid var(--mc-border);
+  font-size: 13px;
+}
+
+.obs-reasons code {
+  font-family: var(--mc-font-mono);
+  overflow-wrap: anywhere;
+}
+
+.obs-reasons__action {
+  color: var(--mc-text-2);
+  font-size: 11px;
+}
+
+.obs-reasons__count {
+  font-family: var(--mc-font-mono);
+}
+
+.obs-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+@media (max-width: 720px) {
+  .obs-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+
+  .obs-table,
+  .obs-table tbody,
+  .obs-table tr,
+  .obs-table th,
+  .obs-table td {
+    display: block;
+  }
+
+  .obs-table tr {
+    padding: var(--mc-space-sm) 0;
+    border-top: 1px solid var(--mc-border-strong);
+  }
+
+  .obs-table th,
+  .obs-table td {
+    border-top: 0;
+    padding: 2px 0;
+  }
+
+  .obs-table td::before {
+    display: block;
+    color: var(--mc-text-2);
+    font-size: 11px;
+    content: attr(data-label);
+  }
+}
