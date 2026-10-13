@@ -18,7 +18,10 @@ describe('AppStatusChips', () => {
     const health = {
       process: 'live-gateway',
       capture: { status: 'live', reason: null, lastReceivedAt: Date.now() },
-      processes: { capture: { status: 'running' }, live: { status: 'running' } },
+      processes: {
+        capture: { status: 'running' },
+        live: { status: 'running' },
+      },
     }
     vi.stubGlobal(
       'fetch',

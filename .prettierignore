@@ -3,3 +3,6 @@ dist
 pnpm-lock.yaml
 coverage
 doc
+config
+analisis
+server/src/features/kraken-futures/fixtures/historical-funding-PF_XBTUSD-20261003T225404Z.json
