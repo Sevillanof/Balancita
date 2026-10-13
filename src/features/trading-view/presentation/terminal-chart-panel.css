@@ -111,3 +111,47 @@
   margin: 0;
   color: var(--demo-muted);
 }
+
+/* Mission Control 2.6: compact metric cards. Same data and order, only
+   presentation. */
+.terminal-chart__stats > div {
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--demo-border);
+  border-radius: 0.375rem;
+  background: var(--demo-card);
+}
+
+@media (max-width: 600px) {
+  /* The metrics and the toolbar are one scrolling row each, so the chart
+     starts near the top of the first screen. */
+  .terminal-chart__stats {
+    display: flex;
+    gap: 0.4rem;
+    overflow-x: auto;
+    scroll-snap-type: x proximity;
+    padding-bottom: 0.25rem;
+  }
+
+  .terminal-chart__stats > div {
+    flex: 0 0 auto;
+    min-width: 8.5rem;
+    max-width: 14rem;
+    scroll-snap-align: start;
+  }
+
+  .terminal-chart__toolbar {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    gap: 0.5rem 0.75rem;
+    padding-bottom: 0.25rem;
+  }
+
+  .terminal-chart__toolbar > * {
+    flex: 0 0 auto;
+  }
+
+  .terminal-chart__toggles {
+    flex-wrap: nowrap;
+    white-space: nowrap;
+  }
+}

@@ -1325,12 +1325,15 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
         ...state.analyses,
       ],
     })
-    const markers = chartHarness.markerSets.at(-1)!
+    // The chart paints its markers in an effect, after the account renders:
+    // wait for exactly the expected set, not merely for some set to exist.
     // WAIT verdicts (one per minute) would only clutter the chart.
-    expect(markers.map((marker) => marker.id)).toEqual([
-      'verdict-hash-2',
-      'verdict-hash-3',
-    ])
+    await waitFor(() =>
+      expect(
+        chartHarness.markerSets.at(-1)?.map((marker) => marker.id),
+      ).toEqual(['verdict-hash-2', 'verdict-hash-3']),
+    )
+    const markers = chartHarness.markerSets.at(-1)!
     expect(markers.map((marker) => marker.shape)).toEqual([
       'arrowUp',
       'arrowDown',
@@ -1589,6 +1592,17 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
       expect(history().queryByText(/foreign-order/)).toBeNull()
       expect(screen.queryByText(/verdict-hash-9/)).toBeNull()
       expect(screen.getByText(/10\.000,49/)).toBeTruthy()
+    })
+
+    it('marks each decision with its action so the list can colour it', async () => {
+      await renderLive()
+      const list = screen.getByRole('region', { name: 'Decisiones del motor' })
+      for (const action of ['LONG', 'SHORT'])
+        expect(
+          within(list)
+            .getAllByText(action)
+            .some((node) => node.getAttribute('data-action') === action),
+        ).toBe(true)
     })
 
     it('puts the tools in a secondary row below the chart, naming the run they act on', async () => {
