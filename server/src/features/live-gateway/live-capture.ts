@@ -100,6 +100,8 @@ export interface LiveCaptureOptions {
    * candles 10 min). Without it one request that never settles stops its chain for good.
    */
   readonly pollDeadlineMs?: number
+  /** Time budget of one official-candles poll before it hands the rest to the next one (default 45 s). */
+  readonly officialPollBudgetMs?: number
   /**
    * Products whose official candles are captured (pinned config, never chosen
    * at runtime). The WebSocket feeds stay PF_XBTUSD only. Default: PF_XBTUSD.
@@ -208,10 +210,27 @@ export function createLiveCapture(options: LiveCaptureOptions) {
   // down for hours) the whole hole is fetched, window by window, from the last
   // stored bucket: a lookback only bounds an empty series.
   let holesRepaired = (options.officialRepairMs ?? 0) <= 0
+  // A poll that runs long (slow or throttled API) stops after its time budget and the next one
+  // starts from the series it left off, so no product is starved behind a slow one.
+  let seriesCursor = 0
   const pollOfficialCandles = async (): Promise<void> => {
     let requested = false
+    const pollStartedAt = Date.now()
+    const budgetMs = options.officialPollBudgetMs ?? 45_000
+    const begin = seriesCursor
+    let budgetHit = false
     // One product after another, 5m before 1m within each (OFFICIAL_CANDLE_INTERVALS).
-    for (const { productId, interval } of officialSeries) {
+    for (let k = 0; k < officialSeries.length; k += 1) {
+      const index = (begin + k) % officialSeries.length
+      if (k > 0 && Date.now() - pollStartedAt > budgetMs) {
+        seriesCursor = index
+        budgetHit = true
+        log(
+          `official candles poll over its ${budgetMs} ms budget after ${k} of ${officialSeries.length} series; continues next poll`,
+        )
+        break
+      }
+      const { productId, interval } = officialSeries[index]!
       if (stopped || officialClient === undefined) return
       const window = OFFICIAL_CANDLES_PER_REQUEST * interval
       const due = (): number | undefined => {
@@ -242,14 +261,24 @@ export function createLiveCapture(options: LiveCaptureOptions) {
         const now = clock()
         const to = Math.min(from + window, now)
         requested = true
+        const requestStartedAt = Date.now()
         try {
-          stored += store.appendOfficialCandles(
-            await officialClient.fetch(productId, interval, from, to),
-          ).inserted
+          const candles = await officialClient.fetch(
+            productId,
+            interval,
+            from,
+            to,
+          )
+          const took = Date.now() - requestStartedAt
+          if (took > 5_000)
+            log(
+              `slow official candles request (${productId} ${interval / 60_000}m): ${took} ms`,
+            )
+          stored += store.appendOfficialCandles(candles).inserted
         } catch (error) {
           if (stopped) return
           log(
-            `official candles unavailable (${productId} ${interval} ms): ${describe(error)}`,
+            `official candles unavailable (${productId} ${interval} ms, after ${Date.now() - requestStartedAt} ms): ${describe(error)}`,
           )
           break
         }
@@ -288,6 +317,7 @@ export function createLiveCapture(options: LiveCaptureOptions) {
         }
       }
     }
+    if (!budgetHit) seriesCursor = 0
     if (!holesRepaired && officialClient !== undefined && !stopped) {
       holesRepaired = true
       const toMs = clock() - 2 * 60_000
@@ -347,10 +377,12 @@ export function createLiveCapture(options: LiveCaptureOptions) {
           resolve()
         })
     })
+  // The first poll may be a long catch-up after downtime; later ones are short and bounded.
+  let officialPolls = 0
   const guardedOfficial = (): Promise<void> =>
     settleWithin(
       pollOfficialCandles(),
-      options.pollDeadlineMs ?? 600_000,
+      options.pollDeadlineMs ?? (officialPolls++ === 0 ? 600_000 : 90_000),
       'official candles',
       () => officialClient?.close(),
     )

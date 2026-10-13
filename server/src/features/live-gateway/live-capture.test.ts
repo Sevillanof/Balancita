@@ -1055,4 +1055,45 @@ describe('live capture process core', () => {
     expect(logs.some((line) => line.includes('ticker poll stuck'))).toBe(true)
     store.close()
   })
+
+  it('hands the rest of a slow official-candles poll to the next one so no product is starved', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'balancita-capture-'))
+    dirs.push(dir)
+    const store = new FuturesMarketStore(join(dir, 'market.sqlite'))
+    const now = 1_791_356_400_000 + 10_000
+    const seen = new Set<string>()
+    const logs: string[] = []
+    const capture = createLiveCapture({
+      store,
+      clock: () => now,
+      makeSocket: () => fakeSocket().socket,
+      fetchCatalog: async () => catalog,
+      fundingFetch: async () => {
+        throw new Error('offline')
+      },
+      products: [
+        { productId: 'PF_XBTUSD', tickSize: '1' },
+        { productId: 'PF_ETHUSD', tickSize: '0.1' },
+      ],
+      officialCandlesFetch: async (input) => {
+        seen.add(new URL(String(input)).pathname.split('/').at(-2)!)
+        await wait(30)
+        return new Response(
+          JSON.stringify({ candles: [], more_candles: false }),
+        )
+      },
+      officialPollMs: 5,
+      officialPollBudgetMs: 40,
+      officialRequestGapMs: 0,
+      log: (line) => logs.push(line),
+    })
+    await capture.start()
+    await wait(400)
+    await capture.stop()
+    expect(seen).toEqual(new Set(['PF_XBTUSD', 'PF_ETHUSD']))
+    expect(logs.some((line) => line.includes('over its 40 ms budget'))).toBe(
+      true,
+    )
+    store.close()
+  })
 })
