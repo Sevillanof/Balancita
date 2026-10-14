@@ -26,7 +26,7 @@ import sqlite3
 
 from . import paper_live_evaluator as LE
 from .multi_signals import stable_hash
-from .paper_live_ingest import Ingestor, SourceReader
+from .paper_live_ingest import GAP_SAMPLE, SILENCE_SAMPLE, Ingestor, SourceReader
 from .paper_runner import PaperRunner, RunnerError, make_event
 from .paper_runner_store import CHECKPOINT_FILE as RUNNER_CHECKPOINT_FILE
 from .paper_runner_store import JOURNAL_FILE as RUNNER_JOURNAL_FILE
@@ -362,9 +362,14 @@ class LiveSession(object):
         """Looks at the hole before this quote, the moment it arrives and before the runner receives it, while the pending
         orders are still pending: a check at the end of the step would find them already filled. The orders the hole affects
         are cancelled through the runner's own entry point (``cancel_for_source_loss``: durable, idempotent, only the pending
-        orders of that product whose window overlaps the hole), and what it returned is written to the audit journal. The
-        previous quote of a recovered session is the last one the runner received, so a hole open when the process died is
-        still seen; the downtime itself belongs to the runner's own recovery policy."""
+        orders of that product whose window overlaps the hole). The previous quote of a recovered session is the last one the
+        runner received, so a hole open when the process died is still seen; the downtime itself belongs to the runner's own
+        recovery policy.
+
+        The audit trail has three parts, none of which can be lost between two writes: ``source_stale_detected`` is written
+        before the call (it is derived again, identical, if the process dies before it), the ids that were cancelled are
+        derived from the runner's ``source_losses`` by ``flush_audit`` (they are in the runner's journal before anything else
+        can be lost), and a refusal is written as ``source_stale_refused``."""
         product, t_ms = event["payload"]["product_id"], event["t_ms"]
         previous = self.last_quote.get(product)
         self.last_quote[product] = t_ms if previous is None else max(previous, t_ms)        # a quote delivered again never moves it back
@@ -375,19 +380,36 @@ class LiveSession(object):
         if not hits:
             return
         gap = hits[0]["gap"]
-        record = {"source": "session", "kind": "source_stale_cancellation", "product_id": product, "gap": dict(gap),
-                  "pending_hit": [h["intent_id"] for h in hits], "limit_ms": self.max_quote_gap_ms}
+        record = {"source": "session", "kind": "source_stale_detected", "product_id": product, "gap": dict(gap),
+                  "pending_hit": [h["intent_id"] for h in hits], "limit_ms": self.max_quote_gap_ms,
+                  "ingestor": self.classify_gap(product, gap)}
+        if self.audit.add(record):
+            self.stats["audit_new"] += 1
         try:
-            record["cancelled"] = self.runner.cancel_for_source_loss(product, gap["from_ms"], gap["to_ms"], t_ms)
-            record["applied"] = True
+            self.runner.cancel_for_source_loss(product, gap["from_ms"], gap["to_ms"], t_ms)
         except RunnerError as error:
             # the cancellation did not happen: the evidence says so and the session stops here rather than hand the quote to
             # orders that should have been cancelled
-            record.update(applied=False, reason=error.reason)
-            self.audit.add(record)
+            self.audit.add({"source": "session", "kind": "source_stale_refused", "product_id": product, "gap": dict(gap),
+                            "applied": False, "reason": error.reason})
             raise
-        if self.audit.add(record):
-            self.stats["audit_new"] += 1
+
+    def classify_gap(self, product, gap):
+        """What the ingestor knew about this hole when it was detected (evidence only: it does not decide the cancellation).
+        ``source_silence``: the whole source was silent in it; ``product_silence``: only this product (others were alive);
+        ``data_gaps`` and ``epoch_changes``: the capture's own gap rows and transport epoch changes inside it. A hole none of
+        them explains has ``unexplained`` true. The ingestor keeps a capped sample: ``sample_capped`` says when it is full."""
+        ing = self.ingestor
+        inside = lambda a, b: a < gap["to_ms"] and b > gap["from_ms"]           # noqa: E731
+        silences = [x for x in ing.silences if inside(x["from_ms"], x["to_ms"]) and x["product_id"] in (None, product)]
+        gaps = [x for x in ing.data_gaps if x["product_id"] in (None, product) and gap["from_ms"] <= x["detected_at"] <= gap["to_ms"]]
+        changes = [x for x in ing.epoch_changes if x["product_id"] == product and gap["from_ms"] <= x["t_ms"] <= gap["to_ms"]]
+        out = {"source_silence": any(x["kind"] == "source_silence" for x in silences),
+               "product_silence": any(x["kind"] == "product_silence" for x in silences),
+               "data_gaps": len(gaps), "epoch_changes": len(changes),
+               "sample_capped": len(ing.silences) >= SILENCE_SAMPLE or len(ing.data_gaps) >= GAP_SAMPLE}
+        out["unexplained"] = not (out["source_silence"] or out["product_silence"] or out["data_gaps"] or out["epoch_changes"])
+        return out
 
     # ---- evidence ---------------------------------------------------------------------------------------------
     def flush_audit(self, ingest_state=None):
@@ -444,6 +466,18 @@ class LiveSession(object):
         self.funding.close()
 
     # ---- reading -----------------------------------------------------------------------------------------------
+    def comparable_state(self):
+        """The runner's state without what a recovery changes by design (counters, clock, coverage, journal position): two runs
+        that reach the same point, one of them through a process death, have the same one. ``paper_runner.py`` is not touched;
+        this is made of the parts its own ``state_digest`` is made of."""
+        runner = self.runner
+        return stable_hash({"financial": runner.financial_digest(),
+                            "watch": runner.executor.watch.events_hash() if runner.executor.watch else None,
+                            "seen": sorted(runner.seen.items()), "candles": sorted((list(k), v) for k, v in runner.candle_digest.items()),
+                            "offsets": runner.offsets.summary(), "open_cycles": sorted(runner.open_cycles),
+                            "open_funding": sorted(runner.open_funding),
+                            "source_losses": sorted((list(k), v) for k, v in runner.source_losses.items())})
+
     def digests(self):
         """What two runs must share to be called the same: the financial state, the signals and the orders."""
         runner = self.runner

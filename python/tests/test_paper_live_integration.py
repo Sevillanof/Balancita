@@ -33,7 +33,7 @@ from balancita_engine.portfolio import PortfolioPolicy
 from balancita_engine.portfolio_watch import WatchPolicy
 
 import test_paper_runner_recovery as RR
-from live_world import (ACCRUAL_RATE, BTC, FIRST_DECISION, HOUR, LAST_DECISION, LOAD_START, MIN, SEC, WORLD_END, World)
+from live_world import (ACCRUAL_RATE, BTC, ETH, FIRST_DECISION, HOUR, LAST_DECISION, LOAD_START, MIN, SEC, WORLD_END, World)
 from test_paper_live_ingest import Source
 
 D = Decimal
@@ -70,13 +70,13 @@ def journal_clock(directory):
     return max(e["t_ms"] for e in journal.entries)
 
 
-def new_session(world, directory, strategies, ingest_kw=INGEST_KW, max_quote_gap_ms=MAX_QUOTE_GAP_MS):
-    return LI.LiveSession.create(directory, world.path, strategies, (BTC,), runner_config(), decide_from_ms=FIRST_DECISION,
+def new_session(world, directory, strategies, ingest_kw=INGEST_KW, max_quote_gap_ms=MAX_QUOTE_GAP_MS, products=(BTC,)):
+    return LI.LiveSession.create(directory, world.path, strategies, products, runner_config(), decide_from_ms=FIRST_DECISION,
                                  decide_until_ms=LAST_DECISION, ingest_kw=ingest_kw, max_quote_gap_ms=max_quote_gap_ms)
 
 
-def recover_session(world, directory, strategies, recovery_ms, ingest_kw=INGEST_KW, **kw):
-    return LI.LiveSession.recover(directory, world.path, strategies, (BTC,), runner_config(), recovery_ms,
+def recover_session(world, directory, strategies, recovery_ms, ingest_kw=INGEST_KW, products=(BTC,), **kw):
+    return LI.LiveSession.recover(directory, world.path, strategies, products, runner_config(), recovery_ms,
                                   decide_from_ms=FIRST_DECISION, decide_until_ms=LAST_DECISION, ingest_kw=ingest_kw,
                                   **dict({"max_quote_gap_ms": MAX_QUOTE_GAP_MS}, **kw))
 
@@ -862,7 +862,7 @@ class TestSourceStaleCancellation(unittest.TestCase):
         loose_world.release_until(TIMES[ENTRY_STEP])
         loose.step(TIMES[ENTRY_STEP])
         cls.cache.update(world=world, a=session, loose=loose, loose_world=loose_world, record=record(session, TIMES[ENTRY_STEP]),
-                         losses=sorted(session.runner.source_losses.items()), cancelled=cls.cancel_trace(session))
+                         losses=sorted(session.runner.source_losses.items()), comparable=session.comparable_state(), cancelled=cls.cancel_trace(session))
 
     @classmethod
     def tearDownClass(cls):
@@ -884,7 +884,7 @@ class TestSourceStaleCancellation(unittest.TestCase):
         return {"source_loss": [e["data"] for e in entries if e["kind"] == "source_loss"],
                 "cancelled": [(e["data"]["intent_id"], e["data"]["reason"], e["data"]["uncovered_from_ms"], e["data"]["uncovered_to_ms"])
                               for e in entries if e["kind"] == "order_cancelled"],
-                "audit": sorted(stable_hash(r) for r in session.audit.records() if r["kind"] in ("source_loss", "source_stale_cancellation"))}
+                "audit": sorted(stable_hash(r) for r in session.audit.records() if r["kind"] in ("source_loss", "source_stale_detected"))}
 
     @staticmethod
     def quote_seq(session, time_ms):
@@ -909,11 +909,13 @@ class TestSourceStaleCancellation(unittest.TestCase):
     def test_the_hole_cancels_the_pending_order_before_the_quote_that_ends_it(self):
         session = self.cache["a"]
         self.assert_cancelled_before_the_quote(session)
-        evidence = [r for r in session.audit.records() if r["kind"] == "source_stale_cancellation"]
+        evidence = [r for r in session.audit.records() if r["kind"] == "source_stale_detected"]
         self.assertEqual(len(evidence), 1)
-        self.assertTrue(evidence[0]["applied"])
         self.assertEqual(evidence[0]["gap"], {"from_ms": GAP_FROM, "to_ms": GAP_TO})
-        self.assertEqual(evidence[0]["cancelled"], [first_order(session)["intent_id"]])
+        self.assertEqual(evidence[0]["pending_hit"], [first_order(session)["intent_id"]])
+        self.assertEqual(sorted(evidence[0]["ingestor"]), ["data_gaps", "epoch_changes", "product_silence", "sample_capped",
+                                                           "source_silence", "unexplained"])
+        self.assertEqual([r for r in session.audit.records() if r["kind"] == "source_stale_refused"], [])
         self.assertEqual(session.ingestor.outages, [])                          # the ingestor never called it an outage
         self.assertEqual(session.runner.integrity()["open_cycles"], [])
 
@@ -925,7 +927,7 @@ class TestSourceStaleCancellation(unittest.TestCase):
         self.assertEqual(order["state"], "opened")
         self.assertEqual(order["timeline"]["entry_ms"], GAP_TO)
         self.assertEqual([e for e in loose.runner.journal.entries if e["kind"] == "source_loss"], [])
-        self.assertEqual([r for r in loose.audit.records() if r["kind"] == "source_stale_cancellation"], [])
+        self.assertEqual([r for r in loose.audit.records() if r["kind"] in ("source_stale_detected", "source_loss")], [])
 
     def test_nothing_else_changes_the_cancellation_touches_only_the_pending_orders_of_the_hole(self):
         """Open positions, other decisions and the accounting are the runner's own: the only order cancelled is the one
@@ -985,8 +987,9 @@ class TestSourceStaleCancellation(unittest.TestCase):
                 self.assert_cancelled_before_the_quote(session)
                 self.assertEqual(record(session, TIMES[ENTRY_STEP]), self.cache["record"])
                 self.assertEqual(self.cancel_trace(session), self.cache["cancelled"])      # one loss, one cancellation, same evidence
-                # ``state_digest`` counts the recovery entries a killed process adds, so it differs by design; the declared losses do not
+                # ``state_digest`` counts what a recovery adds by design; the comparable state leaves that out
                 self.assertEqual(sorted(session.runner.source_losses.items()), self.cache["losses"])
+                self.assertEqual(session.comparable_state(), self.cache["comparable"])
                 self.assertEqual(session.runner.integrity()["open_cycles"], [])
 
     def test_repeating_the_same_interval_cancels_nothing_more(self):
@@ -1014,9 +1017,11 @@ class TestSourceStaleCancellation(unittest.TestCase):
         with self.assertRaises(RunnerError):
             session.step(TIMES[ENTRY_STEP])
         self.assertEqual(len(refused), 1)
-        records = [r for r in session.audit.records() if r["kind"] == "source_stale_cancellation"]
+        records = [r for r in session.audit.records() if r["kind"] == "source_stale_refused"]
         self.assertEqual([(r["applied"], r["reason"]) for r in records], [(False, "source_loss_after_quote")])
-        self.assertNotIn("cancelled", records[0])
+        self.assertEqual([r for r in session.audit.records() if r["kind"] == "source_loss"], [])         # nothing is recorded as cancelled
+        session.flush_audit()
+        self.assertEqual([r for r in session.audit.records() if r["kind"] == "source_loss"], [])
         self.assertEqual([e for e in session.runner.journal.entries if e["kind"] == "source_loss"], [])
         self.assertNotEqual(first_order(session)["state"], "opened")        # the quote that would have filled it was not delivered
 
@@ -1026,6 +1031,143 @@ class TestSourceStaleCancellation(unittest.TestCase):
         session = recover_session(world, directory, self.cache["strategies"], journal_clock(directory))
         self.addCleanup(abandon, session)
         self.assertEqual(session.last_quote[BTC], FIRST_DECISION + 50 * MIN - 10 * SEC)      # the last quote the runner received before the step
+
+
+class TestTheLiteral26SecondCut(unittest.TestCase):
+    """The regression as Fran named it: the quote that would fill the first order arrives 26 s after the previous one instead of
+    20 s (the limit of the circuit is 25 s, the ingestor's own silence limit is 45 s)."""
+
+    cache = {}
+
+    @classmethod
+    def setUpClass(cls):
+        SC.disarm()
+        if cls.cache:
+            return
+        cls.cache["dir"] = root = tempfile.mkdtemp()
+        strategies, _ = RS.load_frozen()
+        for name, limit in (("cut", MAX_QUOTE_GAP_MS), ("loose", 10 ** 9)):
+            where = os.path.join(root, name)
+            os.makedirs(where)
+            world = World(where, quote_moves=[(ENTRY_QUOTE_MS, ENTRY_QUOTE_MS + 6 * SEC)])        # 190 s -> 216 s: 26 s of silence
+            world.release_until(LOAD_START)
+            session = new_session(world, os.path.join(where, "s"), strategies, max_quote_gap_ms=limit)
+            for now in TIMES[:ENTRY_STEP + 1]:
+                world.release_until(now)
+                session.step(now)
+            cls.cache[name] = session
+            cls.cache.setdefault("worlds", []).append(world)
+
+    @classmethod
+    def tearDownClass(cls):
+        for name in ("cut", "loose"):
+            if name in cls.cache:
+                abandon(cls.cache.pop(name))
+        for world in cls.cache.get("worlds", []):
+            world.close()
+        shutil.rmtree(cls.cache.get("dir", ""), True)
+        cls.cache.clear()
+
+    def test_with_the_cancellation_the_order_is_cancelled_before_the_quote_and_never_fills(self):
+        cut = self.cache["cut"]
+        order = first_order(cut)
+        end = ENTRY_QUOTE_MS + 6 * SEC
+        self.assertEqual((order["state"], order["reasons"]), ("cancelled", ["source_stale"]))
+        losses = [e for e in cut.runner.journal.entries if e["kind"] == "source_loss"]
+        self.assertEqual([(l["data"]["gap_from_ms"], l["data"]["gap_to_ms"]) for l in losses], [(ENTRY_QUOTE_MS - 20 * SEC, end)])
+        self.assertEqual(end - losses[0]["data"]["gap_from_ms"], 26 * SEC)
+        quote_seq = next(e["seq"] for e in cut.runner.journal.entries if e["kind"] == "event_accepted" and e["data"]["event"]["kind"] == "quote"
+                         and e["data"]["event"]["payload"]["time_ms"] == end)
+        self.assertLess(losses[0]["seq"], quote_seq)
+        self.assertEqual(cut.ingestor.outages, [])                                # 26 s is not a source outage for the ingestor
+
+    def test_without_it_the_quote_after_the_26_seconds_fills_the_order(self):
+        loose = self.cache["loose"]
+        self.assertEqual(first_order(loose)["state"], "opened")
+        self.assertEqual(first_order(loose)["timeline"]["entry_ms"], ENTRY_QUOTE_MS + 6 * SEC)
+
+
+class TestSourceStaleTwoProductsInTheCircuit(unittest.TestCase):
+    """The complete circuit (SourceReader -> Ingestor -> LiveEvaluator -> PaperRunner -> Journal) with two products: BTC loses a quote
+    (the hole of the first class) while ETH keeps its own quotes. With ETH decided together with BTC (shift -3) its order is
+    pending during the hole; with ETH decided five minutes earlier (shift 5) its position is already open, with its stop and
+    target. The same world is run with the limit switched off as the reference: everything of ETH must be identical, and BTC is
+    the only product whose order is cancelled."""
+
+    cache = {}
+
+    @classmethod
+    def setUpClass(cls):
+        SC.disarm()
+        if cls.cache:
+            return
+        cls.cache["dir"] = root = tempfile.mkdtemp()
+        cls.cache["strategies"], _ = RS.load_frozen()
+        for shift in (-3, 5):
+            sessions = {}
+            for name, limit in (("cut", MAX_QUOTE_GAP_MS), ("loose", 10 ** 9)):
+                where = os.path.join(root, "w-{}-{}".format(shift, name))
+                os.makedirs(where)
+                world = World(where, quote_holes=[HOLE], second_product_shift=shift)
+                world.release_until(LOAD_START)
+                session = new_session(world, os.path.join(where, "s"), cls.cache["strategies"], max_quote_gap_ms=limit, products=(BTC, ETH))
+                for now in TIMES[:ENTRY_STEP + 2]:
+                    world.release_until(now)
+                    session.step(now)
+                sessions[name] = session
+                cls.cache.setdefault("worlds", []).append(world)
+            cls.cache[shift] = sessions
+
+    @classmethod
+    def tearDownClass(cls):
+        for shift in (-3, 5):
+            for session in cls.cache.pop(shift, {}).values():
+                abandon(session)
+        for world in cls.cache.get("worlds", []):
+            world.close()
+        shutil.rmtree(cls.cache.get("dir", ""), True)
+        cls.cache.clear()
+
+    @staticmethod
+    def orders(session, product, state=None):
+        return [o for o in session.runner.orders() if o["product_id"] == product and (state is None or o["state"] == state)]
+
+    @staticmethod
+    def positions(session, product):
+        return sorted((str(p.intent["side"]), str(p.intent["stop"]), str(p.intent["target"]), str(p.intent["intent_id"]))
+                      for k, p in session.runner.portfolio.positions.items() if p.intent["product_id"] == product)
+
+    def check(self, shift):
+        cut, loose = self.cache[shift]["cut"], self.cache[shift]["loose"]
+        # BTC: the order that waited in the hole is cancelled with the cause, and the position never opens
+        self.assertEqual(self.orders(cut, BTC)[0]["state"], "cancelled")
+        self.assertEqual(self.orders(cut, BTC)[0]["reasons"], ["source_stale"])
+        waited = self.orders(cut, BTC)[0]["intent_id"]
+        self.assertNotIn(waited, [p[3] for p in self.positions(cut, BTC)])           # a later signal may open one; this order never did
+        self.assertIn(waited, [p[3] for p in self.positions(loose, BTC)])
+        self.assertEqual(self.orders(loose, BTC)[0]["state"], "opened")           # the same hole, no limit: the quote fills it
+        # ETH: nothing about it changes, in any order or position, nor in the journal (no loss declared for it)
+        key = lambda o: {k: o[k] for k in ("state", "intent_id", "side", "reasons", "timeline")}          # noqa: E731
+        self.assertEqual([key(o) for o in self.orders(cut, ETH)], [key(o) for o in self.orders(loose, ETH)])
+        self.assertEqual(self.positions(cut, ETH), self.positions(loose, ETH))
+        self.assertNotEqual(self.positions(cut, ETH), [])
+        losses = [e["data"] for e in cut.runner.journal.entries if e["kind"] == "source_loss"]
+        self.assertEqual([l["product_id"] for l in losses], [BTC])
+        self.assertEqual([e["data"]["intent_id"] for e in cut.runner.journal.entries if e["kind"] == "order_cancelled"],
+                         [self.orders(cut, BTC)[0]["intent_id"]])
+        self.assertEqual([r["product_id"] for r in cut.audit.records() if r["kind"] == "source_loss"], [BTC])
+        self.assertEqual(cut.runner.integrity()["open_cycles"], [])
+        return cut
+
+    def test_eth_pending_in_the_hole_of_btc_is_untouched(self):
+        cut = self.check(-3)
+        entry = self.orders(cut, ETH, "opened")[0]["timeline"]["entry_ms"]
+        self.assertEqual(entry, ENTRY_QUOTE_MS)                            # ETH filled on its own quote, while BTC waited blind
+
+    def test_eth_position_with_its_stop_is_untouched_by_the_hole_of_btc(self):
+        cut = self.check(5)
+        entry = self.orders(cut, ETH, "opened")[0]["timeline"]["entry_ms"]
+        self.assertLess(entry, GAP_FROM)                                    # the position was open before the hole began
 
 
 class TestSourceStaleInTheSessionWithTwoProducts(unittest.TestCase):
@@ -1069,9 +1211,11 @@ class TestSourceStaleInTheSessionWithTwoProducts(unittest.TestCase):
         self.deliver_quote(session, RR.BTC, RR.CYCLE + 29 * SEC, "100010", 3)    # 26 s later
         self.assertEqual(self.states(session), {RR.BTC: "cancelled", RR.ETH: "pending"})       # the other product is intact
         self.assertEqual(len(session.runner.portfolio.positions), 0)                          # the position never opened
-        record = [r for r in session.audit.records() if r["kind"] == "source_stale_cancellation"]
+        session.flush_audit()
         cancelled = [o["intent_id"] for o in session.runner.orders() if o["product_id"] == RR.BTC]
-        self.assertEqual([(r["applied"], r["cancelled"], r["product_id"]) for r in record], [(True, cancelled, RR.BTC)])
+        detected = [r for r in session.audit.records() if r["kind"] == "source_stale_detected"]
+        self.assertEqual([(r["pending_hit"], r["product_id"]) for r in detected], [(cancelled, RR.BTC)])
+        self.assertEqual([(r["cancelled"], r["product_id"]) for r in session.audit.records() if r["kind"] == "source_loss"], [(cancelled, RR.BTC)])
         self.assertEqual([o["reasons"] for o in session.runner.orders() if o["product_id"] == RR.BTC], [["source_stale"]])
 
     def test_the_same_hole_without_the_limit_lets_the_quote_fill_the_order(self):
@@ -1093,7 +1237,7 @@ class TestSourceStaleInTheSessionWithTwoProducts(unittest.TestCase):
         self.assertEqual(stops(), before)
         self.assertEqual(len(runner.portfolio.positions), 2)
         self.assertEqual(len([e for e in runner.journal.entries if e["kind"] == "source_loss"]), losses)     # nothing to cancel: no call
-        self.assertEqual([r for r in session.audit.records() if r["kind"] == "source_stale_cancellation"], [])
+        self.assertEqual([r for r in session.audit.records() if r["kind"] in ("source_stale_detected", "source_stale_refused")], [])
 
 
 if __name__ == "__main__":
