@@ -3,6 +3,7 @@ import { cpSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, test, type Page } from '@playwright/test'
+import { OPERATIONAL_LABELS } from '../src/features/strategy-lab/domain/strategy-labels.ts'
 
 /*
  * Experiment comparison against the REAL strategy registry S, no route mocks (temp
@@ -139,7 +140,7 @@ test('Ver comparación shows one separate book per experiment from the real regi
   ).toHaveText('Candidata, no fiable')
   await expect(
     card('c30-momentum-12h-perp-v1').getByTestId('operational-badge'),
-  ).toHaveText('Activa en paper')
+  ).toHaveText(OPERATIONAL_LABELS.active)
   // Kronos has no source for its state; Carry keeps the registry's state.
   await expect(
     card('kronos-small-1h-h4-v1').getByTestId('operational-badge'),

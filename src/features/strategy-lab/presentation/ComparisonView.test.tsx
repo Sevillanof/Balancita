@@ -1,6 +1,7 @@
 import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
+import { OPERATIONAL_LABELS } from '../domain/strategy-labels.ts'
 import ComparisonView from './ComparisonView.tsx'
 import InventoryView from './InventoryView.tsx'
 import { exampleInventory, exampleRow } from '../testing/inventory-fixture.ts'
@@ -85,7 +86,7 @@ describe('ComparisonView (datos de ejemplo)', () => {
     )
     expect(
       within(card('x1')).getByTestId('operational-badge'),
-    ).toHaveTextContent('Activa en paper')
+    ).toHaveTextContent(OPERATIONAL_LABELS.active)
     expect(
       within(card('x4')).getByTestId('operational-badge'),
     ).toHaveTextContent('Estado no verificado')
