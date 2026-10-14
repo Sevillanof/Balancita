@@ -41,6 +41,7 @@ from .futures_spec_strategy import (
     validate_spec,
 )
 from .futures_replay import load_range
+from .futures_strategy_inventory import build_inventory
 from .futures_strategy_plan import all_plans, load_freeze
 from .futures_strategy_reliability import load_reliability, reliability_for
 from .futures_purged import cscv_pbo
@@ -493,7 +494,8 @@ class StrategyService:
     """What the API does: registry plus read-only verdicts, per product and period."""
 
     def __init__(self, registry, verdicts_db_path, products, provider_factory=None, replays=None,
-                 market_db_path=None):
+                 market_db_path=None, config_dir=None):
+        self.config_dir = config_dir
         self.registry = registry
         self.market_db_path = market_db_path
         self.replays = replays
@@ -586,6 +588,16 @@ class StrategyService:
         return {"product_id": product_id, "days": days, "buy_and_hold_pct": buy_and_hold,
                 "min_trades": MIN_TRADES, "verdicts_available": True, "overfitting": overfitting,
                 "strategies": rows}
+
+    def inventory(self):
+        """Operational and research state of every strategy; reads only, writes nothing (docs/strategy-inventory-api.md)."""
+        entries = self.registry.list()
+        specs = {e["id"]: self.registry.version(e["id"], e["version"])["spec"] for e in entries}
+        try:
+            carry = futures_carry.read_summary(*_carry_paths())
+        except (OSError, ValueError, KeyError):
+            carry = None
+        return build_inventory(entries, specs, config_dir=self.config_dir, carry=carry)
 
     def translate(self, text, source):
         """A draft spec from Pine Script or freqtrade text; nothing is saved (PS-08f)."""
@@ -710,6 +722,8 @@ def make_handler(service):
                 return {"strategies": registry.list()}
             if method == "GET" and parts == ["carry"]:
                 return futures_carry.read_summary(*_carry_paths())
+            if method == "GET" and parts == ["inventory"]:
+                return service.inventory()
             if method == "GET" and parts == ["plans"]:
                 return {"plans": registry.plans()}
             if method == "GET" and parts[:1] == ["replays"]:
@@ -806,6 +820,7 @@ def main(argv=None):
     parser.add_argument("--specs-dir", default=DEFAULT_SPEC_DIR, help="shipped specs seeded once (C25-C28)")
     parser.add_argument("--market-db", help="market DB (read-only) the historical replays read")
     parser.add_argument("--replays-dir", help="where each replay run DB is written (default: next to the strategies DB)")
+    parser.add_argument("--config-dir", help="config folder the inventory reads (default: the repo's config/)")
     parser.add_argument("--port", type=int, default=int(os.environ.get("STRATEGIES_PORT", DEFAULT_PORT)))
     args = parser.parse_args(argv)
     registry = StrategyRegistry(args.strategies_db)
@@ -819,7 +834,8 @@ def main(argv=None):
         directory = args.replays_dir or os.path.join(os.path.dirname(os.path.abspath(args.strategies_db)), "replays")
         replays = ReplayJobs(args.market_db, directory, lambda: registry.active_specs(_now_ms()), products,
                              qwen_factory(os.path.join(directory, "qwen-cache.db")))
-    service = StrategyService(registry, args.verdicts_db, products, replays=replays, market_db_path=args.market_db)
+    service = StrategyService(registry, args.verdicts_db, products, replays=replays, market_db_path=args.market_db,
+                              config_dir=args.config_dir)
     server = ThreadingHTTPServer(("127.0.0.1", args.port), make_handler(service))
     print("[strategies] registry {} on http://127.0.0.1:{}".format(args.strategies_db, args.port), flush=True)
     try:
