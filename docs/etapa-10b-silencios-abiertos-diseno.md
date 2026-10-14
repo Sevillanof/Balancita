@@ -75,11 +75,11 @@ Registro (condición 9): `source_stale_detected` ahora incluye `trigger: "open_s
 
 Vocabulario fijo, sin mezclar:
 
-| Registro | Qué es |
-|---|---|
-| `silence_open` | evidencia de continuidad insuficiente |
-| `observation_gap` | tiempo sin observación por interrupción del proceso |
-| `source_stale` | decisión de cancelar una orden pendiente |
+| Registro             | Qué es                                                                             |
+| -------------------- | ---------------------------------------------------------------------------------- |
+| `silence_open`       | evidencia de continuidad insuficiente                                              |
+| `observation_gap`    | tiempo sin observación por interrupción del proceso                                |
+| `source_stale`       | decisión de cancelar una orden pendiente                                           |
 | `runner_interrupted` | cancelación del runner por su propia interrupción (8B), sin relación con la fuente |
 
 `classify_gap` (#165) acepta también un silencio abierto (`since_ms..gap_to_ms`), solo sobre tramos observados. `sample_capped` y la ausencia de evidencia siguen sin leerse como continuidad.
@@ -102,7 +102,7 @@ Mundo sintético (`live_world`), reloj y SIGKILL como en 10D.
 3. La fuente nunca vuelve a emitir en la ventana: `silence_at_window_end`, sin cotización inventada, sin eventos nuevos al runner, estado financiero igual a la referencia. **Con un producto mudo y con toda la fuente muda** (`outage_open`, D-17-03).
 4. Caída corta (menos de un sondeo) dentro del silencio: `observation_gap` presente y cierre `partial` (D-17-02).
 5. Fila con `persisted_at` en `(released_ms, observed_until_ms]` de un silencio ya observado (D-17-09): se entrega al runner como siempre, se escribe `silence_contradicted` enlazado, el `silence_open` previo no cambia y la recuperación da el mismo resultado. Caso aparte: fila con `persisted_at <= released_ms` (tardía de verdad), solo se cuenta.
-5b. Fuente totalmente muda sin filas: los registros llevan `clock: "process"`, no entran en la comparación de determinismo y ninguno llega a `gap_to`. La prueba sigue hasta que la fuente vuelve: la primera fila real no genera `silence_contradicted` (D-17-11).
+   5b. Fuente totalmente muda sin filas: los registros llevan `clock: "process"`, no entran en la comparación de determinismo y ninguno llega a `gap_to`. La prueba sigue hasta que la fuente vuelve: la primera fila real no genera `silence_contradicted` (D-17-11).
 6. Caída entre `audit.jsonl` y el checkpoint, en ambos órdenes: la auditoría se rehace desde el checkpoint sin duplicados.
 7. Idempotencia: repetir `recover()` y repetir `observation`.
 8. Checkpoint viejo sin los campos nuevos: se restaura vacío, sin error.
