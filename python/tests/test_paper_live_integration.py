@@ -32,6 +32,7 @@ from balancita_engine.paper_runner_store import JOURNAL_FILE, FileRunnerJournal
 from balancita_engine.portfolio import PortfolioPolicy
 from balancita_engine.portfolio_watch import WatchPolicy
 
+import test_paper_runner_recovery as RR
 from live_world import (ACCRUAL_RATE, BTC, FIRST_DECISION, HOUR, LAST_DECISION, LOAD_START, MIN, SEC, WORLD_END, World)
 from test_paper_live_ingest import Source
 
@@ -1025,6 +1026,74 @@ class TestSourceStaleCancellation(unittest.TestCase):
         session = recover_session(world, directory, self.cache["strategies"], journal_clock(directory))
         self.addCleanup(abandon, session)
         self.assertEqual(session.last_quote[BTC], FIRST_DECISION + 50 * MIN - 10 * SEC)      # the last quote the runner received before the step
+
+
+class TestSourceStaleInTheSessionWithTwoProducts(unittest.TestCase):
+    """The same entry point (``LiveSession._deliver`` -> ``_continuity`` -> the runner's ``cancel_for_source_loss``) over a real
+    ``PaperRunner`` that holds two products, one with a pending order and another with its own, and two open positions with
+    their stops. The synthetic world of the circuit has one product, so these runner events are written by hand (the helpers of
+    the runner's own recovery tests); what is under test is the session's wiring, not the strategies."""
+
+    def scratch(self):
+        path = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, path, True)
+        return path
+
+    def wired(self, events):
+        """A session (so its real ``_deliver`` is used) whose runner is a fresh one fed with ``events`` first."""
+        root = self.scratch()
+        src = Source(os.path.join(root, "capture.sqlite"))
+        src.db.executescript("CREATE TABLE synthetic_fundpct (product_id TEXT, start_ms INTEGER, rate REAL, arrival_ms INTEGER);"
+                             "CREATE TABLE synthetic_accrual (product_id TEXT, start_ms INTEGER, end_ms INTEGER, rate TEXT, arrival_ms INTEGER);")
+        src.commit()
+        strategies, _ = RS.load_frozen()
+        session = LI.LiveSession.create(os.path.join(root, "s"), src.path, strategies, (BTC,), runner_config(),
+                                        decide_from_ms=FIRST_DECISION, decide_until_ms=LAST_DECISION, ingest_kw=INGEST_KW,
+                                        max_quote_gap_ms=MAX_QUOTE_GAP_MS)
+        session.runner.close()
+        session.runner = PaperRunner.create(os.path.join(root, "hand"), RR.cfg(), RR.strategies())
+        self.addCleanup(abandon, session)
+        session.runner.run(events)
+        return session
+
+    def states(self, session):
+        return {o["product_id"]: o["state"] for o in session.runner.orders()}
+
+    def deliver_quote(self, session, product, t_ms, mid, offset):
+        session._deliver("event", RR.quote(product, t_ms, mid, offset))
+
+    def test_a_26_second_hole_cancels_only_the_product_that_waited_and_never_opens_the_position(self):
+        session = self.wired([RR.cycle(RR.CYCLE + 2 * SEC, RR.BTC, 1), RR.cycle(RR.CYCLE + 3 * SEC, RR.ETH, 2)])
+        self.assertEqual(self.states(session), {RR.BTC: "pending", RR.ETH: "pending"})
+        session.last_quote[RR.BTC] = RR.CYCLE + 3 * SEC                       # the last quote of the product before the cut
+        self.deliver_quote(session, RR.BTC, RR.CYCLE + 29 * SEC, "100010", 3)    # 26 s later
+        self.assertEqual(self.states(session), {RR.BTC: "cancelled", RR.ETH: "pending"})       # the other product is intact
+        self.assertEqual(len(session.runner.portfolio.positions), 0)                          # the position never opened
+        record = [r for r in session.audit.records() if r["kind"] == "source_stale_cancellation"]
+        cancelled = [o["intent_id"] for o in session.runner.orders() if o["product_id"] == RR.BTC]
+        self.assertEqual([(r["applied"], r["cancelled"], r["product_id"]) for r in record], [(True, cancelled, RR.BTC)])
+        self.assertEqual([o["reasons"] for o in session.runner.orders() if o["product_id"] == RR.BTC], [["source_stale"]])
+
+    def test_the_same_hole_without_the_limit_lets_the_quote_fill_the_order(self):
+        session = self.wired([RR.cycle(RR.CYCLE + 2 * SEC, RR.BTC, 1), RR.cycle(RR.CYCLE + 3 * SEC, RR.ETH, 2)])
+        session.max_quote_gap_ms = 10 ** 9
+        session.last_quote[RR.BTC] = RR.CYCLE + 3 * SEC
+        self.deliver_quote(session, RR.BTC, RR.CYCLE + 29 * SEC, "100010", 3)
+        self.assertEqual(self.states(session), {RR.BTC: "opened", RR.ETH: "pending"})
+        self.assertEqual(len(session.runner.portfolio.positions), 1)
+
+    def test_open_positions_and_their_stops_are_not_touched_by_a_hole(self):
+        session = self.wired(RR.session()[:5])                                 # a long and a short, both open, with stops and targets
+        runner = session.runner
+        self.assertEqual(len(runner.portfolio.positions), 2)
+        stops = lambda: sorted((k, str(p.intent["stop"]), str(p.intent["target"])) for k, p in runner.portfolio.positions.items())   # noqa: E731
+        before, losses = stops(), len([e for e in runner.journal.entries if e["kind"] == "source_loss"])
+        session.last_quote[RR.BTC] = RR.CYCLE + 5 * SEC
+        self.deliver_quote(session, RR.BTC, RR.CYCLE + 40 * SEC, "100020", 20)          # a 35 s hole with positions only
+        self.assertEqual(stops(), before)
+        self.assertEqual(len(runner.portfolio.positions), 2)
+        self.assertEqual(len([e for e in runner.journal.entries if e["kind"] == "source_loss"]), losses)     # nothing to cancel: no call
+        self.assertEqual([r for r in session.audit.records() if r["kind"] == "source_stale_cancellation"], [])
 
 
 if __name__ == "__main__":
