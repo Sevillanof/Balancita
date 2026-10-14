@@ -12,6 +12,7 @@ from balancita_engine import replay_compare as RC
 from balancita_engine import futures_funding_context as FF
 from balancita_engine import replay_data as RD
 from balancita_engine import replay_funding_audit as RFA
+from balancita_engine import replay_funding_parity as RFP
 from balancita_engine import replay_driver as RP
 from balancita_engine import replay_specs as RS
 from balancita_engine import signal_continuity as SC
@@ -364,6 +365,74 @@ class FundingAudit(Tmp):
         gate.close()
         self.assertEqual(replay, {s: v for s, v in forward.items() if s < START + 5 * DAY + 3 * HOUR})
         self.assertNotEqual(replay[START + 3 * HOUR], 0.0099)                        # not the revision: the oldest response
+
+
+class SourceParity(Tmp):
+    HOURS = 760
+
+    def pair(self, skip_a=(), skip_b=(), rate_b=None, tail_poison=False):
+        import sqlite3
+        paths = []
+        for name, skip in (("a.sqlite", skip_a), ("b.sqlite", skip_b)):
+            path = self.path(name)
+            make_db(path, start_ms=START, end_ms=START + 2 * DAY, extra_funding_until=START + self.HOURS * HOUR, funding_skip=skip)
+            paths.append(path)
+        if rate_b:
+            con = sqlite3.connect(paths[1])
+            body = json.loads(con.execute("SELECT raw_response FROM paper_futures_funding_responses").fetchone()[0])
+            for n, rate in rate_b.items():
+                body["rates"][n]["relativeFundingRate"] = rate
+            con.execute("UPDATE paper_futures_funding_responses SET raw_response=?", (json.dumps(body),))
+            con.commit()
+            con.close()
+        return paths
+
+    def test_equal_sources_are_a_go(self):
+        a, b = self.pair()
+        report = RFP.compare_sources(a, b, BTC, START, START + self.HOURS * HOUR)
+        self.assertEqual(report["verdict"]["verdict"], "GO")
+        self.assertEqual(report["periods"]["in_both"], self.HOURS)
+        self.assertEqual(report["percentile"]["unequal"], 0)
+        self.assertGreater(report["percentile"]["instants_compared"], 0)
+
+    def test_a_different_rate_is_a_no_go_and_is_reported_exactly(self):
+        a, b = self.pair(rate_b={100: "0.0123"})
+        report = RFP.compare_sources(a, b, BTC, START, START + self.HOURS * HOUR)
+        self.assertEqual(report["verdict"]["verdict"], "NO-GO")
+        self.assertEqual(report["periods"]["count_rate_text_differences"], 1)
+        self.assertEqual(report["periods"]["rate_text_differences"][0]["start_ms"], START + 100 * HOUR)
+        self.assertEqual(report["periods"]["rate_text_differences"][0]["other"], "0.0123")
+
+    def test_a_missing_hour_in_one_source_is_reported_and_never_replaced(self):
+        a, b = self.pair(skip_b=(50,))
+        report = RFP.compare_sources(a, b, BTC, START, START + self.HOURS * HOUR)
+        self.assertEqual(report["periods"]["only_in_forward"], [START + 50 * HOUR])
+        self.assertEqual(report["other_source"]["missing_hours_list"], [START + 50 * HOUR])
+        self.assertEqual(report["forward_source"]["missing_hours"], 0)
+        self.assertEqual(report["verdict"]["verdict"], "NO-GO")
+
+    def test_the_same_hole_in_both_is_equivalent_and_still_a_hole(self):
+        a, b = self.pair(skip_a=(50,), skip_b=(50,))
+        report = RFP.compare_sources(a, b, BTC, START, START + self.HOURS * HOUR)
+        self.assertEqual(report["verdict"]["verdict"], "GO")
+        self.assertEqual(report["forward_source"]["missing_hours_list"], [START + 50 * HOUR])
+        self.assertEqual(report["periods"]["in_both"], self.HOURS - 1)
+
+    def test_a_poisoned_tail_is_never_needed_and_the_range_gate_applies(self):
+        import sqlite3
+        a, b = self.pair()
+        for path in (a, b):
+            con = sqlite3.connect(path)
+            raw = con.execute("SELECT raw_response FROM paper_futures_funding_responses").fetchone()[0]
+            con.execute("UPDATE paper_futures_funding_responses SET raw_response=?", (raw[:-2] + ', {"timestamp": "2026-08-02T00:00:00.000Z", '
+                                                                                  '"relativeFundingRate": "0.5"}, NOT JSON {{' + "]}",))
+            con.commit()
+            con.close()
+        # the poisoned tail sits after the last in-range hour; the stream must not need it
+        report = RFP.compare_sources(a, b, BTC, START, START + self.HOURS * HOUR)
+        self.assertEqual(report["verdict"]["verdict"], "GO")
+        with self.assertRaises(RD.RangeGateError):
+            RFP.compare_sources(a, b, BTC, START, RD.HI_EXCL_MS + HOUR)
 
 
 class FrozenEndToEnd(Shared):
