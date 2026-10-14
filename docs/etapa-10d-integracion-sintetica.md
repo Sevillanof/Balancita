@@ -30,13 +30,13 @@ El checkpoint de sesión nunca va por delante de ningún diario. Se escribe con 
 
 ## 2. Identidades y relación entre los diarios
 
-| Archivo | Qué guarda | Identidad |
-| --- | --- | --- |
-| `session.json` | identidad inmutable de la sesión (`session_id`, fuente, productos, ventana, estrategias y hashes, tope de cuadros y ciclos, configuración del ingestor y del runner) | `session_id` |
-| `evaluator.jsonl` | entradas del evaluador con cadena de hashes | su cabecera lleva `session_id` y `config_digest` |
-| `audit.jsonl` | evidencia (rechazos, conflictos, cuadros descartados, evaluaciones fallidas, fondeo tardío, cortes de fuente), idempotente, `record_id` = hash del contenido | cabecera con `session_id` |
-| `runner/` | diario del runner, señales y su checkpoint | el checkpoint del runner declara el `session_id` |
-| `session-checkpoint.json` | cursor del ingestor, longitudes y cabezas de hash de los tres diarios | `session_id` |
+| Archivo                   | Qué guarda                                                                                                                                                           | Identidad                                        |
+| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ |
+| `session.json`            | identidad inmutable de la sesión (`session_id`, fuente, productos, ventana, estrategias y hashes, tope de cuadros y ciclos, configuración del ingestor y del runner) | `session_id`                                     |
+| `evaluator.jsonl`         | entradas del evaluador con cadena de hashes                                                                                                                          | su cabecera lleva `session_id` y `config_digest` |
+| `audit.jsonl`             | evidencia (rechazos, conflictos, cuadros descartados, evaluaciones fallidas, fondeo tardío, cortes de fuente), idempotente, `record_id` = hash del contenido         | cabecera con `session_id`                        |
+| `runner/`                 | diario del runner, señales y su checkpoint                                                                                                                           | el checkpoint del runner declara el `session_id` |
+| `session-checkpoint.json` | cursor del ingestor, longitudes y cabezas de hash de los tres diarios                                                                                                | `session_id`                                     |
 
 `recover` verifica todo antes de llamar a `PaperRunner.recover` (que escribe una entrada de recuperación). Una sesión rechazada
 queda intacta (prueba incluida). Motivos de rechazo estables: `session_mismatch`, `checkpoint_foreign_session`,
@@ -76,13 +76,13 @@ doble muerte consecutiva, ambas convergen al resultado continuo.
 
 Se inyecta `FaultInjected` (BaseException) en cada punto de `POINTS`, antes de la entrada, la salida y la aplicación del fondeo:
 
-| Frontera | Punto |
-| --- | --- |
-| (a) lectura del ingestor y entrega al evaluador | `after_poll`, `before_handle` |
-| (b) escritura del log del evaluador y evaluación | `input_logged` |
-| (c) evaluación del ciclo y diario del runner | `after_evaluation` |
-| (d) diario del runner y checkpoint | `after_runner`, `after_audit`, `after_runner_checkpoint` |
-| (e) escritura temporal del checkpoint y reemplazo atómico | `checkpoint_tmp_written`, `after_checkpoint` |
+| Frontera                                                  | Punto                                                    |
+| --------------------------------------------------------- | -------------------------------------------------------- |
+| (a) lectura del ingestor y entrega al evaluador           | `after_poll`, `before_handle`                            |
+| (b) escritura del log del evaluador y evaluación          | `input_logged`                                           |
+| (c) evaluación del ciclo y diario del runner              | `after_evaluation`                                       |
+| (d) diario del runner y checkpoint                        | `after_runner`, `after_audit`, `after_runner_checkpoint` |
+| (e) escritura temporal del checkpoint y reemplazo atómico | `checkpoint_tmp_written`, `after_checkpoint`             |
 
 Tras la recuperación se exige: mismas señales, órdenes, fills, operaciones, resultado y estado contable; ninguna operación
 duplicada; ninguna obligación de fondeo perdida (muerte justo antes del evento de fondeo lo aplica una vez). También: muerte con
