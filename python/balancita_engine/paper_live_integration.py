@@ -1,0 +1,482 @@
+"""Stage 10D: the offline integration of the session circuit.
+
+    synthetic SQLite -> SourceReader -> Ingestor -> LiveEvaluator -> PaperRunner -> Portfolio -> journals -> recovery
+
+Nothing here is a strategy, an indicator or a financial rule. It only wires the pieces that already exist (9A replay pipeline,
+10B ingestor, 10C evaluator, the 8x runner) and makes the wiring durable and checkable:
+
+* one directory per session with four durable records and one checkpoint, all bound to the same ``session_id``:
+  ``runner/`` (the runner's own journal, signal log and checkpoint), ``evaluator.jsonl`` (the evaluator's input log),
+  ``audit.jsonl`` (this module's evidence journal) and ``session-checkpoint.json`` (ingestor state + cursors + the heads of the
+  three journals), plus ``session.json`` (the immutable identity of the session);
+* the order of one step is the whole protocol: poll -> deliver (evaluator input log first, runner journal after) -> audit
+  evidence -> checkpoint. The checkpoint is therefore never ahead of any journal, and everything a crash leaves undone is
+  re-derived from source rows that the older checkpoint will read again; every event has a deterministic id, so a repeat is a
+  ``duplicate_event`` for the runner and a ``duplicate`` for the evaluator, never a second effect;
+* funding has two separate channels that share nothing: ``fundpct`` rows feed the evaluator's percentile line (the signal's
+  input) and ``accrual`` rows reach the runner as ``funding`` events (the accounting of open positions).
+
+No wall clock, no network, no process: the caller decides when to ``step``. ``FaultInjected`` exists only so the tests can
+kill the "process" at a named point.
+"""
+
+import json
+import os
+import sqlite3
+
+from . import paper_live_evaluator as LE
+from .multi_signals import stable_hash
+from .paper_live_ingest import Ingestor, SourceReader
+from .paper_runner import PaperRunner, make_event
+from .paper_runner_store import CHECKPOINT_FILE as RUNNER_CHECKPOINT_FILE
+from .paper_runner_store import JOURNAL_FILE as RUNNER_JOURNAL_FILE
+from .paper_runner_store import FileRunnerJournal, StoreError, read_checkpoint
+
+SCHEMA = "balancita-paper-live-session.v1"
+CHECKPOINT_SCHEMA = "balancita-paper-live-session-checkpoint.v1"
+AUDIT_SCHEMA = "balancita-paper-live-audit.v1"
+SESSION_FILE, CHECKPOINT_FILE = "session.json", "session-checkpoint.json"
+EVALUATOR_FILE, AUDIT_FILE, RUNNER_DIR = "evaluator.jsonl", "audit.jsonl", "runner"
+GENESIS = "0" * 64
+FUNDING_SOURCE = "synthetic-funding"
+HOUR_MS = 3_600_000
+FUNDING_RANK = 0                         # a funding event goes before a market event at the same instant (as in the replay)
+POINTS = ("after_poll", "before_handle", "input_logged", "after_evaluation", "after_runner", "after_audit", "after_runner_checkpoint",
+          "checkpoint_tmp_written", "after_checkpoint")
+
+
+class IntegrationError(Exception):
+    def __init__(self, reason, detail=""):
+        super().__init__("{}: {}".format(reason, detail) if detail else reason)
+        self.reason = reason
+
+
+class FaultInjected(BaseException):
+    """A simulated process death. ``BaseException`` so that no ``except Exception`` of the pipeline can swallow it."""
+
+
+# ------------------------------------------------------------------------------------------------ the audit journal
+class AuditJournal(object):
+    """Append-only, hash-chained, ``fsync`` per entry, and **idempotent**: a record is identified by the hash of its content
+    (no wall clock in it), so writing the same evidence again after a crash is a no-op. Evidence is never lost (it is on disk
+    before the checkpoint that stops re-deriving it) and never duplicated."""
+
+    def __init__(self, path):
+        self.path, self.head, self.entries, self.ids, self.tail_discarded = path, GENESIS, [], set(), 0
+
+    @classmethod
+    def create(cls, path, header):
+        journal = cls(path)
+        if os.path.exists(path):
+            raise IntegrationError("audit_exists", path)
+        journal._write("header", dict(header, schema=AUDIT_SCHEMA))
+        return journal
+
+    @classmethod
+    def open(cls, path):
+        journal = cls(path)
+        with open(path, "rb") as handle:
+            raw = handle.read()
+        lines = raw.split(b"\n")
+        if lines and lines[-1] == b"":
+            lines.pop()
+        elif lines:                                     # no final newline: the last write was cut by a crash
+            lines.pop()
+            journal.tail_discarded = 1
+        if journal.tail_discarded:
+            with open(path, "wb") as handle:             # keep only the complete lines, so the next append starts clean
+                handle.write(b"".join(line + b"\n" for line in lines))
+                handle.flush()
+                os.fsync(handle.fileno())
+        for number, line in enumerate(lines, 1):
+            try:
+                entry = json.loads(line.decode("utf-8"))
+                body = {k: entry[k] for k in ("seq", "kind", "data", "prev")}
+                ok = entry["seq"] == number and entry["prev"] == journal.head and entry["hash"] == stable_hash(body)
+            except (ValueError, KeyError, TypeError, UnicodeDecodeError):
+                ok = False
+            if not ok:
+                raise IntegrationError("audit_corrupt", "line {}".format(number))
+            journal.entries.append(entry)
+            journal.head = entry["hash"]
+            if entry["kind"] == "audit":
+                journal.ids.add(entry["data"]["record_id"])
+        if not journal.entries or journal.entries[0]["kind"] != "header" or journal.entries[0]["data"].get("schema") != AUDIT_SCHEMA:
+            raise IntegrationError("audit_header", path)
+        return journal
+
+    def _write(self, kind, data):
+        body = {"seq": len(self.entries) + 1, "kind": kind, "data": data, "prev": self.head}
+        entry = dict(body, hash=stable_hash(body))
+        with open(self.path, "a", encoding="utf-8") as handle:
+            handle.write(json.dumps(entry, sort_keys=True) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        self.entries.append(entry)
+        self.head = entry["hash"]
+        return entry
+
+    def add(self, record):
+        """Writes ``record`` unless the same evidence is already there. Returns ``True`` when it was new."""
+        record_id = stable_hash(record)[:20]
+        if record_id in self.ids:
+            return False
+        self.ids.add(record_id)
+        self._write("audit", {"record_id": record_id, "record": record})
+        return True
+
+    def records(self):
+        return [e["data"]["record"] for e in self.entries if e["kind"] == "audit"]
+
+
+# ------------------------------------------------------------------------------------------------ funding channels
+class FundingSource(object):
+    """The two separate funding channels of a synthetic source, each with its own table and cursor.
+
+    * ``synthetic_fundpct(product_id, start_ms, rate, arrival_ms)``: the hourly rates the evaluator's percentile line uses.
+    * ``synthetic_accrual(product_id, start_ms, end_ms, rate, arrival_ms)``: the funding periods the runner applies to open
+      positions through its existing accounting (``funding`` events).
+
+    They are never joined, never derived from each other and never share a cursor: changing one cannot change the other."""
+
+    def __init__(self, path):
+        self.db = sqlite3.connect("file:{}?mode=ro".format(path), uri=True)
+        self.db.execute("PRAGMA query_only=ON")
+        self.db.row_factory = sqlite3.Row
+
+    def close(self):
+        self.db.close()
+
+    def fundpct(self, after, limit=5000):
+        return [dict(r) for r in self.db.execute(
+            "SELECT rowid AS rid, product_id, start_ms, rate, arrival_ms FROM synthetic_fundpct WHERE rowid>? ORDER BY rowid LIMIT ?",
+            (after, limit))]
+
+    def accrual(self, after, limit=5000):
+        return [dict(r) for r in self.db.execute(
+            "SELECT rowid AS rid, product_id, start_ms, end_ms, rate, arrival_ms FROM synthetic_accrual WHERE rowid>? ORDER BY rowid LIMIT ?",
+            (after, limit))]
+
+
+def accrual_event(row):
+    return make_event("funding", {"product_id": row["product_id"], "periods": [[row["start_ms"], row["end_ms"], row["rate"]]]},
+                      t_ms=row["arrival_ms"], source=FUNDING_SOURCE, stream="funding:" + row["product_id"])
+
+
+# ------------------------------------------------------------------------------------------------ the policy for stale sources
+def stale_quote_gaps(quote_times, max_gap_ms):
+    """Pure: the intervals in which a product's quotes had a hole longer than ``max_gap_ms`` (the continuity limit), from the
+    observed quote times (sorted). It does not rely on the 45 s outage of the ingestor, which a 26 s cut never reaches."""
+    return [{"from_ms": a, "to_ms": b} for a, b in zip(quote_times, quote_times[1:]) if b - a > max_gap_ms]
+
+
+def affected_orders(pending, gaps_by_product, max_gap_ms=None):
+    """Pure: the pending orders (``executor.pending`` shape) whose execution window overlaps a continuity hole of their own
+    product. Decision D-10-01 = B: these are the orders to cancel with ``source_stale``. Open positions are not affected."""
+    out = []
+    for intent_id, order in sorted(pending.items()):
+        line = order["timeline"]
+        for gap in gaps_by_product.get(order["product_id"], ()):
+            if gap["from_ms"] < line["deadline_ms"] and gap["to_ms"] > line["earliest_fill_ms"]:
+                out.append({"intent_id": intent_id, "product_id": order["product_id"], "gap": dict(gap),
+                            "window": [line["earliest_fill_ms"], line["deadline_ms"]]})
+                break
+    return out
+
+
+# ------------------------------------------------------------------------------------------------ the session
+class LiveSession(object):
+    """One synthetic session. ``create`` starts a new directory; ``recover`` continues it after any interruption."""
+
+    def __init__(self, directory, source_path, strategies, runner_config, runner, evaluator, audit, ingestor, reader, funding,
+                 identity, *, max_quote_gap_ms):
+        self.directory, self.source_path, self.strategies, self.runner_config = directory, source_path, list(strategies), runner_config
+        self.runner, self.evaluator, self.audit, self.ingestor, self.reader, self.funding = runner, evaluator, audit, ingestor, reader, funding
+        self.identity, self.max_quote_gap_ms = identity, int(max_quote_gap_ms)
+        self.cursors = {"fundpct": 0, "accrual": 0}
+        self.fault = None
+        self.last_quote = {}                          # product -> time of the previous quote this process saw
+        self.stats = {"steps": 0, "events": 0, "duplicates": 0, "rejected_by_runner": 0, "audit_new": 0}
+        evaluator.fault = lambda point: self._fault(point)
+
+    # ---- construction ----------------------------------------------------------------------------------------
+    @staticmethod
+    def _identity(products, ingest_kw, evaluator, first_runner_entry, source_id, max_quote_gap_ms):
+        """The immutable identity of the session: what each component was configured with, and the start of each journal."""
+        body = {"schema": SCHEMA, "source_id": source_id, "products": sorted(products), "ingestor": dict(sorted(ingest_kw.items())),
+                "max_quote_gap_ms": int(max_quote_gap_ms),
+                "evaluator_config_digest": evaluator.config_digest, "evaluator_header_hash": evaluator.log.entries[0]["hash"],
+                "runner_manifest_hash": first_runner_entry["data"]["manifest_hash"],
+                "runner_start_hash": first_runner_entry["hash"],
+                "funding_channels": {"fundpct": "synthetic_fundpct", "accrual": "synthetic_accrual"}}
+        return dict(body, session_id=stable_hash(body)[:20])
+
+    @classmethod
+    def create(cls, directory, source_path, strategies, products, runner_config, *, decide_from_ms, decide_until_ms=None,
+               source_id="synthetic", ingest_kw=None, evaluator_kw=None, max_quote_gap_ms=15_000):
+        if os.path.exists(os.path.join(directory, SESSION_FILE)):
+            raise IntegrationError("session_exists", directory)
+        os.makedirs(directory, exist_ok=True)
+        ingest_kw = dict(ingest_kw or {})
+        evaluator = LE.LiveEvaluator.create(os.path.join(directory, EVALUATOR_FILE), strategies, products,
+                                            decide_from_ms=decide_from_ms, decide_until_ms=decide_until_ms,
+                                            **dict(evaluator_kw or {}))
+        runner_dir = os.path.join(directory, RUNNER_DIR)
+        os.makedirs(runner_dir, exist_ok=True)
+        runner = PaperRunner.create(runner_dir, runner_config, strategies, evaluator=evaluator.evaluator)
+        identity = cls._identity(products, ingest_kw, evaluator, runner.journal.entries[0], source_id, max_quote_gap_ms)
+        audit = AuditJournal.create(os.path.join(directory, AUDIT_FILE), {"session_id": identity["session_id"]})
+        reader = SourceReader(source_path)
+        session = cls(directory, source_path, strategies, runner_config, runner, evaluator, audit, Ingestor(reader, **ingest_kw),
+                      reader, FundingSource(source_path), identity, max_quote_gap_ms=max_quote_gap_ms)
+        _atomic_write(os.path.join(directory, SESSION_FILE), identity)
+        session.save_checkpoint()
+        return session
+
+    @classmethod
+    def recover(cls, directory, source_path, strategies, products, runner_config, recovery_ms, *, decide_from_ms,
+                decide_until_ms=None, source_id="synthetic", ingest_kw=None, evaluator_kw=None, max_quote_gap_ms=15_000):
+        """Rebuilds a session from its directory. Refuses (``IntegrationError`` with a stable reason) a directory whose parts
+        do not belong to the same session, a checkpoint ahead of any journal, or any configuration that differs from the one
+        that created it. ``recovery_ms`` is the restart clock handed to the runner."""
+        try:
+            with open(os.path.join(directory, SESSION_FILE), encoding="utf-8") as handle:
+                stored = json.load(handle)
+        except (OSError, ValueError):
+            raise IntegrationError("session_unreadable", directory)
+        ingest_kw = dict(ingest_kw or {})
+        evaluator_kw = dict(evaluator_kw or {})
+        # the evaluator first: its header carries the configuration it was created with (bounds included)
+        try:
+            evaluator = LE.LiveEvaluator.recover(os.path.join(directory, EVALUATOR_FILE), strategies, **evaluator_kw)
+        except LE.EvaluatorError as error:
+            raise IntegrationError("evaluator_" + error.reason, str(error))
+        if evaluator.decide_from_ms != int(decide_from_ms) or evaluator.decide_until_ms != decide_until_ms:
+            raise IntegrationError("config_incompatible", "decision window")
+        # everything is verified from the files BEFORE the runner is recovered: recovering writes (a recovery entry and a
+        # checkpoint), and a session that is refused must be left exactly as it was found
+        runner_dir = os.path.join(directory, RUNNER_DIR)
+        try:
+            runner_journal = FileRunnerJournal.load(os.path.join(runner_dir, RUNNER_JOURNAL_FILE))
+            runner_checkpoint = read_checkpoint(os.path.join(runner_dir, RUNNER_CHECKPOINT_FILE))
+        except StoreError as error:
+            raise IntegrationError("runner_" + error.reason, str(error))
+        identity = cls._identity(products, ingest_kw, evaluator, runner_journal.entries[0], source_id, max_quote_gap_ms)
+        if identity != stored:
+            differs = sorted(k for k in set(identity) | set(stored) if identity.get(k) != stored.get(k))
+            raise IntegrationError("session_mismatch", "the parts do not belong to the session that was created: " + ", ".join(differs))
+        audit = AuditJournal.open(os.path.join(directory, AUDIT_FILE))
+        if audit.entries[0]["data"].get("session_id") != stored["session_id"]:
+            raise IntegrationError("audit_foreign_session", directory)
+        checkpoint = _read_checkpoint(os.path.join(directory, CHECKPOINT_FILE))
+        _verify_checkpoint(checkpoint, stored, runner_journal.entries, runner_checkpoint, evaluator, audit)
+        runner = PaperRunner.recover(runner_dir, runner_config, strategies, recovery_ms, evaluator=evaluator.evaluator)
+        reader = SourceReader(source_path)
+        ingestor = Ingestor.from_checkpoint(reader, checkpoint["ingestor"], **ingest_kw)
+        session = cls(directory, source_path, strategies, runner_config, runner, evaluator, audit, ingestor, reader,
+                      FundingSource(source_path), stored, max_quote_gap_ms=max_quote_gap_ms)
+        session.cursors = dict(checkpoint["cursors"])
+        return session
+
+    # ---- faults (tests only) ---------------------------------------------------------------------------------
+    def _fault(self, point, info=None):
+        if self.fault is not None:
+            self.fault(point, info)
+
+    # ---- one step --------------------------------------------------------------------------------------------
+    def step(self, observed_now_ms):
+        """Poll -> deliver -> audit -> checkpoint. Returns the poll's state."""
+        out = self.ingestor.poll(observed_now_ms)
+        self._fault("after_poll")
+        events = out["events"]
+        funding = self._due_funding(events[-1]["t_ms"] if events else None)
+        for _t, _rank, kind, item in sorted(funding + [(e["t_ms"], 1, "event", e) for e in events],
+                                            key=lambda x: (x[0], x[1])):
+            self._deliver(kind, item)
+        self._fault("after_runner")
+        self.stats["steps"] += 1
+        self.flush_audit(out["state"])
+        self._fault("after_audit")
+        self.save_checkpoint()
+        self._fault("after_checkpoint")
+        return out["state"]
+
+    def _due_funding(self, upto_ms):
+        """Funding rows whose arrival is not after the newest released market event (so the runner sees time in order)."""
+        if upto_ms is None:
+            return []
+        items = []
+        for row in self.funding.fundpct(self.cursors["fundpct"]):
+            if row["arrival_ms"] > upto_ms:
+                break
+            self.cursors["fundpct"] = row["rid"]
+            items.append((row["arrival_ms"], FUNDING_RANK, "fundpct", row))
+        for row in self.funding.accrual(self.cursors["accrual"]):
+            if row["arrival_ms"] > upto_ms:
+                break
+            self.cursors["accrual"] = row["rid"]
+            items.append((row["arrival_ms"], FUNDING_RANK, "accrual", row))
+        return items
+
+    def _handle(self, event):
+        self._fault("before_handle", event)
+        result = self.runner.handle(event)
+        self.stats["events"] += 1
+        if result["status"] == "duplicate":
+            self.stats["duplicates"] += 1
+        elif result["status"] != "accepted":
+            self.stats["rejected_by_runner"] += 1
+        return result
+
+    def _deliver(self, kind, item):
+        if kind == "fundpct":                               # the evaluator's input only: never the accounting
+            self.evaluator.feed_funding(item["product_id"], item["start_ms"], item["rate"], item["arrival_ms"])
+            return
+        if kind == "accrual":                               # the accounting only: never the signal's input
+            self._handle(accrual_event(item))
+            return
+        event = item
+        if event["kind"] == "candle":
+            payload = event["payload"]
+            candle = dict(payload["candle"], bucket_start=payload["bucket_ms"])      # nothing is invented: no volume stays absent
+            made = self.evaluator.feed_candle(payload["product_id"], candle, event["t_ms"])
+            self._fault("after_evaluation")
+            self._handle(event)
+            if made["cycle"] is not None:                    # a duplicate returns its cycle too; the runner dedups by event_id
+                self._handle(made["cycle"])
+            return
+        if event["kind"] == "quote":
+            self._track_quote(event)
+        self._handle(event)
+
+    def _track_quote(self, event):
+        self._continuity(event, self.runner.executor.pending)
+
+    def _continuity(self, event, pending):
+        """Looks at the hole before this quote, the moment it arrives, while the pending orders are still pending: a check at
+        the end of the step would find them already filled. After a restart the first quote has no predecessor: the downtime
+        itself belongs to the runner's own recovery policy."""
+        product, t_ms = event["payload"]["product_id"], event["t_ms"]
+        previous, self.last_quote[product] = self.last_quote.get(product), t_ms
+        if previous is None:
+            return
+        gaps = {product: stale_quote_gaps([previous, t_ms], self.max_quote_gap_ms)}
+        for hit in affected_orders(pending, gaps):
+            # written at once, before the quote reaches the runner: if the process dies afterwards the evidence is on disk, and if
+            # it dies before, the quote is delivered again to a runner that has not seen it, and the same record is derived again
+            if self.audit.add({"source": "session", "kind": "source_stale_pending_order", "order": hit, "applied": False,
+                               "reason": "runner_cancel_entry_point_missing", "limit_ms": self.max_quote_gap_ms}):
+                self.stats["audit_new"] += 1
+
+    # ---- evidence ---------------------------------------------------------------------------------------------
+    def flush_audit(self, ingest_state=None):
+        """Writes every piece of evidence the components hold, before the checkpoint that would stop re-deriving it."""
+        new = 0
+        report = self.evaluator.report()
+        records = []
+        for row in self.ingestor.rejected:
+            records.append({"source": "ingestor", "kind": "unreadable_row", "row": row})
+        for outage in self.ingestor.outages:
+            records.append({"source": "ingestor", "kind": "source_outage", "outage": outage})
+        for row in self.ingestor.late:
+            records.append({"source": "ingestor", "kind": "late_source_row", "row": row})
+        for kind, key in (("rejected_input", "rejected"), ("candle_conflict", "candle_conflicts"), ("frame_expired", "frames_expired"),
+                          ("evaluation_failed", "evaluation_misses"), ("late_funding", "late_funding"),
+                          ("gap", "gaps"), ("suppressed_cycle", "suppressed")):
+            for item in report[key]:
+                records.append({"source": "evaluator", "kind": kind, "item": item})
+        for record in records:
+            new += 1 if self.audit.add(record) else 0
+        self.stats["audit_new"] += new
+        return new
+
+    # ---- durability --------------------------------------------------------------------------------------------
+    def save_checkpoint(self):
+        runner_checkpoint = self.runner.checkpoint()           # the runner's own, written atomically by the runner
+        self._fault("after_runner_checkpoint")
+        entries = self.runner.journal.entries
+        body = {"schema": CHECKPOINT_SCHEMA, "session_id": self.identity["session_id"],
+                "runner": {"seq": len(entries), "hash": self.runner.journal.head, "start_hash": entries[0]["hash"],
+                           "checkpoint_upto_seq": runner_checkpoint["upto_seq"],
+                           "checkpoint_manifest_hash": runner_checkpoint["manifest_hash"]},
+                "evaluator": {"entries": len(self.evaluator.log.entries), "head": self.evaluator.log.head},
+                "audit": {"entries": len(self.audit.entries), "head": self.audit.head},
+                "cursors": dict(self.cursors), "ingestor": self.ingestor.checkpoint()}
+        text = json.dumps(dict(body, digest=stable_hash(body)), sort_keys=True)
+        path = os.path.join(self.directory, CHECKPOINT_FILE)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        self._fault("checkpoint_tmp_written")
+        os.replace(tmp, path)
+        _fsync_dir(path)
+        return body
+
+    def close(self):
+        self.runner.close()
+        self.reader.close()
+        self.funding.close()
+
+    # ---- reading -----------------------------------------------------------------------------------------------
+    def digests(self):
+        """What two runs must share to be called the same: the financial state, the signals and the orders."""
+        runner = self.runner
+        return {"financial": runner.financial_digest(),
+                "signals": stable_hash([e["data"]["signal"]["signal_id"] for e in runner.log.signals() if e["data"]["origin"] == "original"]),
+                "orders": stable_hash([{k: o[k] for k in ("state", "intent_id", "product_id", "strategy_id", "side")} for o in runner.orders()])}
+
+
+def _fsync_dir(path):
+    fd = os.open(os.path.dirname(os.path.abspath(path)), os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def _atomic_write(path, body):
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as handle:
+        handle.write(json.dumps(body, sort_keys=True))
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(tmp, path)
+    _fsync_dir(path)
+
+
+def _read_checkpoint(path):
+    try:
+        with open(path, encoding="utf-8") as handle:
+            stored = json.load(handle)
+        body = {k: v for k, v in stored.items() if k != "digest"}
+        ok = stable_hash(body) == stored["digest"]
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        raise IntegrationError("checkpoint_unreadable", path)
+    if not ok:
+        raise IntegrationError("checkpoint_digest_mismatch", path)
+    if body.get("schema") != CHECKPOINT_SCHEMA:
+        raise IntegrationError("checkpoint_schema", str(body.get("schema")))
+    return body
+
+
+def _verify_checkpoint(checkpoint, identity, entries, own, evaluator, audit):
+    """The checkpoint may be older than the journals (they are written first) but never ahead of them, and every journal
+    must still contain the entry the checkpoint saw. ``own`` is the runner's own checkpoint file."""
+    if checkpoint["session_id"] != identity["session_id"]:
+        raise IntegrationError("checkpoint_foreign_session", "the checkpoint belongs to another session")
+    seq = checkpoint["runner"]
+    if seq["seq"] > len(entries):
+        raise IntegrationError("checkpoint_ahead_of_runner", "{} > {}".format(seq["seq"], len(entries)))
+    if seq["start_hash"] != entries[0]["hash"] or (seq["seq"] and entries[seq["seq"] - 1]["hash"] != seq["hash"]):
+        raise IntegrationError("checkpoint_foreign_runner_journal", "the runner journal is not the one the checkpoint saw")
+    if own["manifest_hash"] != identity["runner_manifest_hash"] or own["journal_start_hash"] != identity["runner_start_hash"]:
+        raise IntegrationError("runner_checkpoint_foreign_session", "the runner's checkpoint belongs to another run")
+    if own["upto_seq"] < seq["checkpoint_upto_seq"]:
+        raise IntegrationError("runner_checkpoint_behind", "{} < {}".format(own["upto_seq"], seq["checkpoint_upto_seq"]))
+    for name, journal, ref in (("evaluator", evaluator.log, checkpoint["evaluator"]), ("audit", audit, checkpoint["audit"])):
+        if ref["entries"] > len(journal.entries):
+            raise IntegrationError("checkpoint_ahead_of_" + name, "{} > {}".format(ref["entries"], len(journal.entries)))
+        if ref["entries"] and journal.entries[ref["entries"] - 1]["hash"] != ref["head"]:
+            raise IntegrationError("checkpoint_foreign_" + name + "_journal", "the {} journal is not the one the checkpoint saw".format(name))

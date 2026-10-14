@@ -145,6 +145,7 @@ class LiveEvaluator(object):
         self.max_pending_frames, self.retain_cycles = int(max_pending_frames), int(retain_cycles)
         self.frames_expired, self.evaluation_misses = [], []
         self.recovering, self.dropped_on_recovery = False, set()
+        self.fault = None                    # tests only: ``fault(point)`` may raise to simulate a process death at ``point``
         self.config = self._config()
         self.config_digest = stable_hash(self.config)[:16]
         self.stats = {"candles": 0, "duplicates": 0, "cycles": 0, "funding_hours": 0}
@@ -214,6 +215,8 @@ class LiveEvaluator(object):
             return {"cycle": None, "duplicate": False, "rejected": "arrival_before_close"}
         if bucket > self.state[product]["last_one"]:                      # a repeat is not logged twice
             self.log.append("candle", {"product_id": product, "arrival_ms": int(arrival_ms), "candle": candle})
+            if self.fault is not None:
+                self.fault("input_logged")
         else:
             known = self.seen.get((product, bucket))
             if known is not None and known != stable_hash(candle):         # the source revised a minute we already used
