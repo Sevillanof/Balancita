@@ -9,8 +9,10 @@ import shutil
 import sqlite3
 import tempfile
 import unittest
+from unittest import mock
 from decimal import Decimal
 
+from balancita_engine import paper_live_ingest as ING
 from balancita_engine import signal_continuity as SC
 from balancita_engine import paper_live_publish as PUB
 from balancita_engine import paper_live_session as SES
@@ -696,6 +698,22 @@ class TestSourceContinuityEvidence(Base):
         self.assertEqual(changes["total"], 2)
         self.assertEqual([(c["product_id"], c["transport"], c["from_epoch"], c["to_epoch"]) for c in changes["sample"]],
                          [(BTC, "ws", 1, 2), (BTC, "ws", 2, 3)])
+
+    def test_the_evidence_sample_keeps_the_latest_events_and_the_counts_stay_exact(self):
+        """D-10D-11: a full sample must hold what happened last, not first, because the session classifies a hole by it."""
+        with mock.patch.object(ING, "SILENCE_SAMPLE", 3), mock.patch.object(ING, "GAP_SAMPLE", 2):
+            for i in range(10):
+                self.src.ticker(BTC, CYCLE + i * 40 * SEC, "100000")                        # every one is a 40 s silence of the source
+            for i in range(4):
+                self.src.gap(BTC, CYCLE + (10 + i) * SEC)
+            self.src.ticker(BTC, CYCLE + 600 * SEC, "100000")
+            self.src.commit()
+            state = self.run_all()[1]
+        silences = state["silences"]
+        self.assertEqual(silences["source"], 10)
+        self.assertEqual([x["to_ms"] for x in silences["sample"]], [CYCLE + 320 * SEC, CYCLE + 360 * SEC, CYCLE + 600 * SEC])
+        self.assertEqual(state["data_gaps"]["total"], 4)
+        self.assertEqual([g["detected_at"] for g in state["data_gaps"]["sample"]], [CYCLE + 12 * SEC, CYCLE + 13 * SEC])
 
     def test_the_capture_gaps_become_evidence_once_their_time_is_released_and_never_an_event(self):
         for i in range(0, 12):
