@@ -77,14 +77,14 @@ Cada entrada (vela, hora de funding) se escribe en un **log propio del evaluador
 
 ## 8. Bloqueos y pedidos
 
-| #       | Qué                                                                                                                                                                                                          | Dueño                                    |
-| ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------- |
-| D-10C-1 | **Resuelto** por 9A (#153 @ 2d97cc9): `make_cycle_event` y `funding_audit_row`; esta PR ya las usa y no repite el ensamblado                                                                                 | 9A                                       |
-| D-10C-2 | **El ingestor de 10B no entrega `volume_btc` en las velas** (solo OHLC), y `logvol` y otros indicadores lo necesitan. Hay que agregarlo al ingestor (y a su `SELECT`) antes de conectarlo con este evaluador | 10B (nueva PR, tras la decisión de Fran) |
-| D-10C-3 | Cancelación `source_stale` (D-10-01 = B) y detección fiable de interrupciones: el evaluador no resuelve nada de esto                                                                                         | 9A + coordinador                         |
-| D-10C-4 | Eventos `funding` para el runner (acumulación en el portafolio): la tabla `paper_futures_funding_periods` no tiene columna de producto; el evaluador solo usa el funding para el percentil                   | 9A / 10                                  |
-| D-10C-5 | Historia de arranque (calentamiento de varios días de velas 1 min y 720 h de funding) desde una fuente autorizada; hoy no se lee ninguna base real                                                           | Fran (autorización)                      |
-| D-10C-6 | La puerta 9A sigue abierta: si cambian `replay_driver`/`replay_specs`, esta PR debe seguirlos                                                                                                                | 9A                                       |
+| #       | Qué                                                                                                                                                                                        | Dueño               |
+| ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------- |
+| D-10C-1 | **Resuelto** por 9A (#153 @ 2d97cc9): `make_cycle_event` y `funding_audit_row`; esta PR ya las usa y no repite el ensamblado                                                               | 9A                  |
+| D-10C-2 | El ingestor de 10B no entregaba `volume_btc`; lo cierra la PR #164 (aparte, sobre #161)                                                                                                    | 10B                 |
+| D-10C-3 | Cancelación `source_stale` (D-10-01 = B) y detección fiable de interrupciones: el evaluador no resuelve nada de esto                                                                       | 9A + coordinador    |
+| D-10C-4 | Eventos `funding` para el runner (acumulación en el portafolio): la tabla `paper_futures_funding_periods` no tiene columna de producto; el evaluador solo usa el funding para el percentil | 9A / 10             |
+| D-10C-5 | Historia de arranque (calentamiento de varios días de velas 1 min y 720 h de funding) desde una fuente autorizada; hoy no se lee ninguna base real                                         | Fran (autorización) |
+| D-10C-6 | La puerta 9A sigue abierta: si cambian `replay_driver`/`replay_specs`, esta PR debe seguirlos                                                                                              | 9A                  |
 
 ## 9. Condiciones que faltarían para una sesión paper temporal
 
