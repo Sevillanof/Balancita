@@ -9,11 +9,15 @@ Independent of ``PaperRunner``, ``Portfolio`` and ``ModelledExecutor`` (stage 9A
 integers (milliseconds), so a collector, a replay or the runner can feed the same functions. Contract:
 docs/calidad-datos-ejecucion-9b.md.
 
-Evidence classes (every result carries one so that a modelled number is never read as an observed one):
+Evidence classes (every result carries one so that a modelled number is never read as an observed one; the first four
+are the runner's observability classes, 8C section 12):
 ``observed`` (timestamps and prices that came from the exchange feed), ``modelled`` (produced by the cost model or a
-simulated fill), ``insufficient`` (not enough observations to report a number).
+simulated fill, e.g. the replay label ``MODELLED_EXECUTION``), ``estimated`` (derived from observations with a stated
+bound), ``uncertain`` (coverage that cannot be shown), plus ``insufficient`` (not enough observations to report a
+number). Anything not labelled ``observed`` is never treated as an observation.
 """
 
+import math
 from decimal import Decimal
 
 from .futures_costs import side_impact_bps, spread_bps as model_spread_bps
@@ -21,7 +25,8 @@ from .futures_costs import side_impact_bps, spread_bps as model_spread_bps
 D = Decimal
 SCHEMA = "balancita-data-quality.v1"
 TEN_THOUSAND = Decimal(10_000)
-OBSERVED, MODELLED, INSUFFICIENT = "observed", "modelled", "insufficient"
+OBSERVED, MODELLED, ESTIMATED, UNCERTAIN, INSUFFICIENT = "observed", "modelled", "estimated", "uncertain", "insufficient"
+P99_MIN_SAMPLES = 100                      # below this the 99th percentile is just the maximum: not reported
 DEFAULT_MIN_SAMPLES = 30
 SENSITIVITY_THRESHOLDS_MS = (10_000, 30_000, 60_000, 120_000, 300_000, 600_000)
 
@@ -41,15 +46,14 @@ def summary(values, min_samples=DEFAULT_MIN_SAMPLES):
     n = len(values)
     out = {"n": n, "evidence": OBSERVED if n >= min_samples else INSUFFICIENT, "min_samples": min_samples}
     if n:
-        out.update(min=values[0], p50=percentile(values, 50), p90=percentile(values, 90), p99=percentile(values, 99),
-                   max=values[-1])
+        out.update(min=values[0], p50=percentile(values, 50), p90=percentile(values, 90),
+                   p99=percentile(values, 99) if n >= P99_MIN_SAMPLES else None, max=values[-1])
     return out
 
 
 def rule_of_three_n(rate, confidence=0.95):
     """Observations needed so that *zero* events in ``n`` puts the true rate below ``rate`` at ``confidence``
     (n >= ln(1 - confidence) / ln(1 - rate); ~3/rate for 95 %). Used to size the evidence for a threshold."""
-    import math
     if not 0 < rate < 1 or not 0 < confidence < 1:
         raise ValueError("rate and confidence must be in (0, 1)")
     return math.ceil(math.log(1 - confidence) / math.log(1 - rate))
@@ -140,7 +144,8 @@ def stop_watch_coverage(entry_ms, exit_ms, quote_times_ms, candle_ranges=(), *, 
         cls = "gaps_covered_by_candles"
     else:
         cls = "gaps_without_evidence"
-    return {"class": cls, "evidence": OBSERVED if cls != "insufficient_evidence" else INSUFFICIENT,
+    evidence = {"continuous": OBSERVED, "gaps_covered_by_candles": ESTIMATED, "gaps_without_evidence": UNCERTAIN}
+    return {"class": cls, "evidence": evidence.get(cls, INSUFFICIENT),
             "duration_ms": exit_ms - entry_ms, "quotes_watched": base["quotes"], "silences": base["gaps"],
             "uncovered": [{"from_ms": a, "to_ms": b, "duration_ms": b - a} for a, b in uncovered],
             "uncovered_ms": sum(b - a for a, b in uncovered), "threshold_ms": threshold_ms}
@@ -264,7 +269,7 @@ def gap_stop_exposure(gaps, candles, *, stop, side):
         if overlapping:
             touched = any((D(str(c["low"])) <= stop) if side == "LONG" else (D(str(c["high"])) >= stop)
                           for c in overlapping)
-        out.append(dict(g, possible_breach=touched, candles_overlapping=len(overlapping)))
+        out.append(dict(g, possible_breach=touched, candles_overlapping=len(overlapping), evidence=ESTIMATED))
     return out
 
 
@@ -282,6 +287,8 @@ def threshold_evidence(silences_ms, observed_ms, *, threshold_ms, possible_breac
     above = [s for s in silences_ms if s > threshold_ms]
     needed = rule_of_three_n(max_breach_rate, confidence)
     n_exposed = len(above)
+    if possible_breaches is not None and not 0 <= possible_breaches <= n_exposed:
+        raise ValueError("possible_breaches must be between 0 and the number of silences above the threshold")
     out = {"threshold_ms": threshold_ms, "silences_total": len(silences_ms), "silences_above": len(above),
            "observed_ms": observed_ms, "silent_share": None if not observed_ms else sum(above) / observed_ms,
            "possible_breaches": possible_breaches, "needed_observations": needed, "max_breach_rate": max_breach_rate,
@@ -297,4 +304,5 @@ def threshold_evidence(silences_ms, observed_ms, *, threshold_ms, possible_breac
         out["verdict"] = "supports_review"
         out["reason"] = "no possible breach in {} silences; a person must still decide".format(n_exposed)
     out["approved"] = False
+    out["evidence"] = ESTIMATED if out["verdict"] != "insufficient_evidence" else INSUFFICIENT
     return out

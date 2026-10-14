@@ -22,6 +22,10 @@ class PercentileTests(unittest.TestCase):
         self.assertEqual(dq.summary([1, 2, 3])["evidence"], dq.INSUFFICIENT)
         self.assertEqual(dq.summary(list(range(30)))["evidence"], dq.OBSERVED)
 
+    def test_p99_only_with_enough_samples(self):
+        self.assertIsNone(dq.summary(list(range(99)))["p99"])
+        self.assertEqual(dq.summary(list(range(1, 101)))["p99"], 99)
+
     def test_rule_of_three(self):
         self.assertEqual(dq.rule_of_three_n(0.01), 299)       # ~3 / 0.01
         with self.assertRaises(ValueError):
@@ -130,6 +134,11 @@ class ExecutionVsModelTests(unittest.TestCase):
         self.assertAlmostEqual(float(p["mean_residual_bps"]), 2.0, places=6)
         self.assertEqual(p["optimistic_share"], 1.0)
 
+    def test_any_label_other_than_observed_is_excluded(self):
+        r = dq.execution_vs_model([self.fill(1, execution="MODELLED_EXECUTION"), self.fill(1, execution="simulated_candle_open"),
+                                   {"product_id": "PF_ADAUSD", "side": "LONG", "mid": 1, "price": 1}])
+        self.assertEqual((r["products"], r["excluded_modelled"]), ({}, 3))
+
     def test_only_modelled_fills_give_no_product(self):
         self.assertEqual(dq.execution_vs_model([self.fill(1, execution="modelled")])["products"], {})
 
@@ -148,6 +157,19 @@ class ThresholdEvidenceTests(unittest.TestCase):
     def test_breaches_are_reported(self):
         r = dq.threshold_evidence([200 * S] * 500, 10 ** 9, threshold_ms=120 * S, possible_breaches=3)
         self.assertEqual(r["verdict"], "breaches_observed")
+
+    def test_breaches_cannot_exceed_silences(self):
+        with self.assertRaises(ValueError):
+            dq.threshold_evidence([200 * S], 10 ** 9, threshold_ms=120 * S, possible_breaches=2)
+
+    def test_evidence_classes(self):
+        self.assertEqual(dq.threshold_evidence([200 * S] * 500, 10 ** 9, threshold_ms=120 * S, possible_breaches=0)["evidence"],
+                         dq.ESTIMATED)
+        T = 120 * S
+        self.assertEqual(dq.stop_watch_coverage(0, 300 * S, [60 * S, 150 * S, 250 * S], threshold_ms=T)["evidence"], dq.OBSERVED)
+        self.assertEqual(dq.stop_watch_coverage(0, 400 * S, [10 * S, 390 * S], [[10 * S, 390 * S]], threshold_ms=T)["evidence"],
+                         dq.ESTIMATED)
+        self.assertEqual(dq.stop_watch_coverage(0, 400 * S, [10 * S, 390 * S], threshold_ms=T)["evidence"], dq.UNCERTAIN)
 
     def test_gap_stop_exposure_is_an_upper_bound(self):
         gaps = [{"from_ms": 100, "to_ms": 200}, {"from_ms": 1000, "to_ms": 1100}, {"from_ms": 5000, "to_ms": 5100}]

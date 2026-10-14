@@ -4,10 +4,10 @@ Estado: **investigación + utilidades aisladas**. Código: `python/balancita_eng
 
 ## 1. Regla general de los contratos
 
-1. Toda métrica lleva su **clase de evidencia**: `observed` (marcas y precios que vinieron del feed de Kraken), `modelled` (salió del modelo de costes o de un fill simulado) o `insufficient` (menos de `min_samples` observaciones: no se reporta como número firme).
+1. Toda métrica lleva su **clase de evidencia**, alineada con las clases de observabilidad del runner (8C §12): `observed` (marcas y precios que vinieron del feed de Kraken), `modelled` (modelo de costes o fill simulado, p. ej. la etiqueta `MODELLED_EXECUTION` del replay 9A), `estimated` (derivada de observaciones con una cota declarada, como `possible_breach`) y `uncertain` (cobertura que no se puede demostrar, como `gaps_without_evidence`); más `insufficient` (menos de `min_samples` observaciones: no es un número firme). Todo lo que no diga `observed` se excluye de las comparaciones contra el modelo.
 2. Un número modelado **nunca** se compara contra el modelo mismo: `execution_vs_model` excluye (y cuenta) los fills `modelled`.
 3. Toda ejecución histórica queda identificada como modelada (`execution=simulated_candle_open`, auditoría 9A §10).
-4. Cada percentil es un valor observado (nearest-rank, sin interpolar). Siempre se informa `n`.
+4. Cada percentil es un valor observado (nearest-rank, sin interpolar). Siempre se informa `n`. El p99 solo se informa con 100 o más observaciones (con menos es el máximo); por debajo de `min_samples` (30) la evidencia es `insufficient`.
 5. Los umbrales entran como argumento; ninguna función trae uno aprobado.
 
 ## 2. Contratos de métricas
