@@ -338,6 +338,18 @@ class TestBatchesAndDurability(Base):
             self.assertEqual([e["event_id"] for e in events if e["kind"] != "clock"],
                              [e["event_id"] for e in base if e["kind"] != "clock"], batch)
 
+    def test_six_thousand_tickers_with_the_default_batch_lose_nothing(self):
+        self.src.candle(BTC, CYCLE - MIN, 1, 2, 1, 2)
+        for i in range(6_000):
+            self.src.ticker(BTC, CYCLE + i * SEC, "100000")
+        self.src.candle(BTC, CYCLE + 100 * MIN, 1, 2, 1, 2)                # a candle far ahead of most quotes
+        self.src.commit()
+        events, state, _ = ingest_all(self.path, CYCLE + 6_000 * SEC)
+        quotes = [e for e in events if e["kind"] == "quote"]
+        self.assertEqual(state["stats"]["late_source_rows"], 0)
+        self.assertGreaterEqual(len(quotes), 6_000 - 2)                    # all but the last hold_ms of rows
+        self.assertEqual(len({e["event_id"] for e in quotes}), len(quotes))
+
     def test_same_time_rows_come_out_in_the_same_order_whatever_the_batch_size(self):
         for i in range(8):
             for product in (BTC, ETH):
