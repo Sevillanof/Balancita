@@ -365,7 +365,7 @@ test('Detalle C29 shows the real registry figures, B2 operations and no invented
   ).toBeVisible()
   // Same badges as the inventory.
   await expect(detail.getByTestId('operational-badge')).toHaveText(
-    'Activa en paper',
+    'Activa en el registro',
   )
   await expect(detail.getByTestId('research-badge')).toHaveText(
     'Sin ventaja demostrada',
