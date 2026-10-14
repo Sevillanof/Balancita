@@ -168,8 +168,9 @@ class Ingestor(object):
 
     def __init__(self, reader, *, hold_ms=DEFAULT_HOLD_MS, dead_after_ms=DEFAULT_DEAD_AFTER_MS,
                  clock_every_ms=DEFAULT_CLOCK_EVERY_MS, candle_lag_ms=DEFAULT_CANDLE_LAG_MS, batch=5_000,
-                 product_silence_ms=DEFAULT_PRODUCT_SILENCE_MS):
+                 product_silence_ms=DEFAULT_PRODUCT_SILENCE_MS, expected_products=()):
         self.reader, self.hold_ms, self.dead_after_ms = reader, hold_ms, dead_after_ms
+        self.expected_products = tuple(expected_products)
         self.product_silence_ms = product_silence_ms
         self.clock_every_ms, self.batch, self.candle_lag_ms = clock_every_ms, batch, candle_lag_ms
         self.cursor = {"ticker": 0, "candle": 0, "gap": 0}
@@ -198,6 +199,17 @@ class Ingestor(object):
         self.anchors = {}                 # table -> identity of the row at the cursor, to notice a table that was refilled
         self.epochs = {}                  # "product|transport" -> latest epoch read
         self.epoch_changes = []
+        # D-10B-17: how far the source was observed, and the silences still open at that point (durable evidence)
+        self.observed_until_ms = None     # latest source-clock bound of an exhausted poll: observed_now_ms - hold_ms
+        self.observed_process_ms = None   # same, from the process clock; kept apart, never feeds the source bound
+        self.first_observed_ms = None
+        self.open_silences = {}           # product -> {since_ms, observed_until_ms, scope, partial}; "*" is the whole source
+        self.open_process = {}            # same, extended only with the process clock (evidence, never a basis to cancel)
+        self.observation_gaps = []        # [from_ms, to_ms] the process was down, in the source domain
+        self.contradicted = []            # quotes that closed a silence at or before its observed_until_ms
+        self.observation_log = []         # {observed_until_ms, clock, last_ticker_ms}, at most one per product_silence_ms
+        self.last_logged_ms = None
+        self.recovered_from_ms = None     # set by mark_recovered(); the next poll closes the unobserved stretch
         self.data_gaps = []               # the capture's own gap rows, released once their detection time is released
         self.gap_pending = []             # read, but detected after the watermark
         self.gap_counts = {}              # product -> exact number of capture gaps released
@@ -243,8 +255,10 @@ class Ingestor(object):
                                                          "to_epoch": row["epoch"], "t_ms": t_ms, "rowid": row["rid"]}])[-SILENCE_SAMPLE:]
         self.epochs[key] = row["epoch"]
         last_any = self.last_any_ticker_ms                      # not updated by this row yet
+        closed = self._close_open(product, t_ms, source=last_any is not None and t_ms - last_any > self.product_silence_ms)
         if last_any is not None and t_ms - last_any > self.product_silence_ms:
-            self._silence("source_silence", None, last_any, t_ms, row["rid"], t_ms - last_any > self.dead_after_ms)
+            self._silence("source_silence", None, last_any, t_ms, row["rid"], t_ms - last_any > self.dead_after_ms,
+                          observed=closed["*"])
             self.source_intervals = (self.source_intervals + [[last_any, t_ms]])[-SOURCE_INTERVALS_KEPT:]
         previous = self.last_ticker_ms.get(product)
         if previous is None or t_ms - previous <= self.product_silence_ms:
@@ -255,7 +269,89 @@ class Ingestor(object):
         if t_ms - previous - covered > self.product_silence_ms \
                 and any(other > previous for name, other in self.last_ticker_ms.items() if name != product):
             self._silence("product_silence", product, previous, t_ms, row["rid"], t_ms - previous > self.dead_after_ms,
-                          source_silence_overlap=covered > 0, alive_ms=t_ms - previous - covered)
+                          source_silence_overlap=covered > 0, alive_ms=t_ms - previous - covered, observed=closed[product])
+
+    # ---- D-10B-17: open silences ---------------------------------------------------------------------------------
+    def _overlaps_gap(self, since_ms, until_ms):
+        return any(a < until_ms and b > since_ms for a, b in self.observation_gaps)
+
+    def _close_open(self, product, t_ms, source):
+        """A quote ends the silences it ends. Returns how each was observed (``complete``, ``partial`` or
+        ``not_observed`` when no poll saw it open). A quote at or before the bound an open silence already reached
+        contradicts it: it is kept as evidence and the earlier record is never rewritten."""
+        out = {product: "not_observed", "*": "not_observed"}
+        for key in {product, "*"} if source else {product}:
+            for table in (self.open_silences, self.open_process):
+                entry = table.pop(key, None)
+                if entry is None:
+                    continue
+                if table is self.open_silences:
+                    out[key] = "partial" if entry["partial"] else "complete"
+                    if t_ms <= entry["observed_until_ms"]:
+                        self.contradicted = (self.contradicted + [{"product_id": None if key == "*" else key, "since_ms": entry["since_ms"],
+                                                                    "observed_until_ms": entry["observed_until_ms"], "quote_ms": t_ms}])[-SILENCE_SAMPLE:]
+        return out
+
+    def mark_recovered(self):
+        """The process died and this ingestor was rebuilt from its checkpoint: the time between the last observation it
+        recorded and the next one was not observed. It is told as ``observation_gap``, never as silence."""
+        if self.observed_until_ms is not None:
+            self.recovered_from_ms = self.observed_until_ms
+
+    def _observe(self, observed_now_ms, clock):
+        """Extends the observed bound and the open silences. Only an exhausted poll (nothing left unread in either table)
+        proves anything; ``clock`` is ``source`` or ``process`` (a source that emits nothing gives no clock of its own)."""
+        if observed_now_ms is None or self.ticker_more or self.candle_more:
+            return
+        bound = observed_now_ms - self.hold_ms
+        if clock == "source":
+            if self.observed_until_ms is not None and bound <= self.observed_until_ms and self.recovered_from_ms is None:
+                return
+            if self.first_observed_ms is None:
+                self.first_observed_ms = bound
+            if self.recovered_from_ms is not None:
+                if bound > self.recovered_from_ms:
+                    self.observation_gaps = (self.observation_gaps + [[self.recovered_from_ms, bound]])[-SILENCE_SAMPLE:]
+                    for entry in self.open_silences.values():
+                        entry["partial"] = True
+                self.recovered_from_ms = None
+            self.observed_until_ms = bound if self.observed_until_ms is None else max(self.observed_until_ms, bound)
+            table, until = self.open_silences, self.observed_until_ms
+        else:
+            self.observed_process_ms = bound if self.observed_process_ms is None else max(self.observed_process_ms, bound)
+            table, until = self.open_process, self.observed_process_ms
+        last_any = self.last_any_ticker_ms
+        silent = {}
+        for product, last in self.last_ticker_ms.items():
+            if until - last > self.product_silence_ms:
+                silent[product] = last
+        if self.first_observed_ms is not None:
+            for product in self.expected_products:
+                if product not in self.last_ticker_ms and until - self.first_observed_ms > self.product_silence_ms:
+                    silent[product] = self.first_observed_ms
+        if last_any is not None and until - last_any > self.dead_after_ms:
+            silent["*"] = last_any
+        for key in list(table):
+            if key not in silent:
+                del table[key]
+        for key, since in sorted(silent.items()):
+            entry = table.get(key)
+            if entry is None:
+                entry = table[key] = {"since_ms": since, "observed_until_ms": until, "scope": "source" if key == "*" else "product",
+                                      "partial": self._overlaps_gap(since, until)}
+            else:
+                entry["observed_until_ms"] = until
+        if silent and (self.last_logged_ms is None or until - self.last_logged_ms >= self.product_silence_ms):
+            self.last_logged_ms = until
+            self.observation_log = (self.observation_log + [{"observed_until_ms": until, "clock": clock,
+                                                              "last_ticker_ms": dict(sorted(self.last_ticker_ms.items()))}])[-SILENCE_SAMPLE:]
+
+    def observation(self):
+        """The durable observation evidence, as plain JSON (what a session writes next to its own audit)."""
+        return json.loads(json.dumps({"observed_until_ms": self.observed_until_ms, "observed_process_ms": self.observed_process_ms,
+                                      "open_silences": self.open_silences, "open_process": self.open_process,
+                                      "observation_gaps": self.observation_gaps, "contradicted": self.contradicted,
+                                      "log": self.observation_log}))
 
     def _silence(self, kind, product, from_ms, to_ms, rowid, outage, **extra):
         self.stats[kind + "s"] += 1
@@ -349,9 +445,11 @@ class Ingestor(object):
             self.candle_pending[key] = {"digest": digest, "known": known}
 
     # ---- release ---------------------------------------------------------------------------------------------
-    def poll(self, observed_now_ms):
+    def poll(self, observed_now_ms, clock="source"):
         """One reading pass. ``observed_now_ms``: the caller's reading of the source clock (used only to tell a stale
-        source from a quiet one). Returns ``{"events": [...], "state": {...}}``; events are in ``t_ms`` order."""
+        source from a quiet one, and to extend the observed bound). ``clock="process"`` says the reading comes from the
+        process, not the source (a source that emits nothing has no clock): it is kept apart as evidence and never mixed
+        into the source bound. Returns ``{"events": [...], "state": {...}}``; events are in ``t_ms`` order."""
         self._read()
         out = []
         if self.max_seen_ms is not None:
@@ -366,6 +464,7 @@ class Ingestor(object):
                 self.released_ms = watermark
             self._release_gaps(self.released_ms)
         self.stats["emitted"] += len(out)
+        self._observe(observed_now_ms, clock)
         return {"events": out, "state": self.state(observed_now_ms)}
 
     def _watermark(self):
@@ -419,7 +518,9 @@ class Ingestor(object):
                     "ticker_more", "candle_more", "last_candle_read_ms")
     # added after the first checkpoint format; a checkpoint written before them restores these as empty (and a gap
     # cursor of 0: the capture's gap rows are re-read once, which only repeats evidence, never an event)
-    EVIDENCE_FIELDS = ("silences", "source_intervals", "anchors", "epochs", "epoch_changes", "data_gaps", "gap_pending", "gap_counts")
+    EVIDENCE_FIELDS = ("silences", "source_intervals", "anchors", "epochs", "epoch_changes", "data_gaps", "gap_pending", "gap_counts",
+                       "observed_until_ms", "observed_process_ms", "first_observed_ms", "open_silences", "open_process",
+                       "observation_gaps", "contradicted", "observation_log", "last_logged_ms", "recovered_from_ms")
 
     def checkpoint(self):
         """Everything the ingestor knows, as plain JSON: cursors, rows held for the watermark, candle revisions already
@@ -467,7 +568,8 @@ class Ingestor(object):
                 "silences": {"product": self.stats["product_silences"], "source": self.stats["source_silences"],
                              "sample": list(self.silences), "limit_ms": self.product_silence_ms,
                              "open": self._open_silences(observed_now_ms, stale)},
-                "epoch_changes": {"total": self.stats["epoch_changes"], "sample": list(self.epoch_changes)}}
+                "epoch_changes": {"total": self.stats["epoch_changes"], "sample": list(self.epoch_changes)},
+                "observation": self.observation()}
 
     def _open_silences(self, observed_now_ms, stale):
         """Products whose last quote is older than the limit right now: a silence that has not ended yet, which a record at
