@@ -374,6 +374,12 @@ class SourceLoss(Base):
             r.cancel_for_source_loss(BTC, self.FROM, self.FROM + TH + SEC, self.FROM + TH + SEC, TH + 1)
         self.assertEqual(caught.exception.reason, "source_loss_conflict")
 
+    def test_a_declaration_persisted_without_a_threshold_is_repeated_with_any_threshold(self):
+        path, r = self.pending_pair()
+        to, ids = self.declare(r, BTC, TH)
+        r.source_losses[(BTC, self.FROM, to)]["threshold_ms"] = None            # a journal of the first version
+        self.assertEqual(r.cancel_for_source_loss(BTC, self.FROM, to, to, TH + 1), ids)
+
     # ---- refusals ----------------------------------------------------------------------------------------------
     def test_invalid_calls_are_refused_and_write_nothing(self):
         path, r = self.pending_pair()

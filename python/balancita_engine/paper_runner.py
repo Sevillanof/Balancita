@@ -828,7 +828,7 @@ class PaperRunner(object):
             raise RunnerError("source_loss_invalid", "threshold_ms must be positive")
         key = (product_id, gap_from_ms, gap_to_ms)
         known = self.source_losses.get(key)
-        if known is not None and known.get("threshold_ms") != threshold_ms:
+        if known is not None and known.get("threshold_ms") not in (None, threshold_ms):   # None: a declaration of the first version
             raise RunnerError("source_loss_conflict", "the gap was declared with threshold {}".format(known.get("threshold_ms")))
         if known is None:
             if self.clock is not None and t_ms < self.clock:

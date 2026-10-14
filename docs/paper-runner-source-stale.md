@@ -52,3 +52,5 @@ La detección de la pérdida (cuándo hay una brecha y qué umbral usar) no est�
 - **Repetición:** la declaración guarda `threshold_ms`; repetirla con otro umbral es `source_loss_conflict`.
 - **Recuperación:** una orden no declarada que sigue pendiente al recuperar cae bajo la regla de 8B (`runner_interrupted`), como antes de esta API.
 - Las pruebas con `SIGKILL` real del proceso son las de #165 (hilo 10); aquí la caída se simula con los puntos de fallo del journal.
+- **Tiempo de la declaración:** `declared_ms = max(t_ms, último t_ms del diario)`; es el `now_ms` del vencimiento. En el camino de cierre de #165 es el `persisted_at` de la cotización de cierre, no el `received_ms` que usaría `on_quote`; es determinista y distinto de ese valor.
+- **Diarios de la primera versión:** una declaración persistida sin `threshold_ms` se repite con cualquier umbral (no es conflicto).
