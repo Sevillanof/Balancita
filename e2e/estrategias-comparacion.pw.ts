@@ -152,7 +152,7 @@ test('Ver comparación shows one separate book per experiment from the real regi
   await expect(
     card('kronos-small-1h-h4-v1').getByTestId('kronos-activity'),
   ).toContainText('Estado no verificado')
-  await expect(page.getByText('Actividad verificada')).toHaveCount(0)
+  await expect(page.getByText('Actividad reciente registrada')).toHaveCount(0)
   await expect(page.getByText(/Brazo/i)).toHaveCount(0)
   // Unit per experiment: only where the result is a net bp-per-trade figure.
   const unitRow = (name: RegExp) =>
@@ -195,7 +195,7 @@ test('Ver comparación shows one separate book per experiment from the real regi
   expect(inventoryCalls.every((entry) => entry.status === 200)).toBe(true)
 })
 
-test('Kronos shows «Actividad verificada» only with a fresh summary and scores with data', async ({
+test('Kronos shows «Actividad reciente registrada» only with a fresh summary and real score evidence', async ({
   page,
 }) => {
   // DATOS DE EJEMPLO · SANDBOX: the live gateway is off in this spec, so the two
@@ -214,30 +214,95 @@ test('Kronos shows «Actividad verificada» only with a fresh summary and scores
     }),
   )
   await page.route('**/api-live/kronos/scores*', (route) =>
-    route.fulfill({ json: { status: 'ok', products: [] } }),
+    route.fulfill({
+      json: {
+        status: 'ok',
+        products: [
+          {
+            product_id: 'PF_XBTUSD',
+            horizon_min: 240,
+            decisions: {
+              decisions: 30,
+              scored: 28,
+              pending: 2,
+              hits: 15,
+              misses: 13,
+              points: 2,
+              hit_rate: 0.54,
+              mean_net_bp: 1.2,
+              total_net_bp: 33.6,
+            },
+            by_option: {},
+            trading: {
+              trades: 1,
+              wins: 1,
+              hit_rate: 1,
+              pnl_usd: 0.4,
+              return_pct: 0.4,
+              max_drawdown: { pct: 0, at_ms: null },
+            },
+            open_position: null,
+            rows: [
+              {
+                bucket_start: updated - 3_600_000,
+                chosen: 'buy',
+                confidence: 0.6,
+                status: 'scored',
+                point: 1,
+                net_bp: 12,
+              },
+            ],
+            trades: [
+              {
+                side: 'LONG',
+                entry_time_ms: updated - 7_200_000,
+                entry_price: '100.0',
+                exit_time_ms: updated - 3_600_000,
+                exit_price: '100.4',
+                exit_reason: 'horizon',
+                net_bp: 12,
+                pnl_usd: 0.4,
+              },
+            ],
+          },
+        ],
+      },
+    }),
   )
   await page.goto('/estrategias')
   await page.getByRole('button', { name: 'Ver comparación' }).click()
   const kronos = page.locator('[data-id="kronos-small-1h-h4-v1"]')
   await expect(kronos.getByTestId('kronos-verified')).toHaveText(
-    'Actividad verificada',
+    'Actividad reciente registrada',
   )
   await expect(kronos.getByTestId('kronos-activity')).toContainText(
     '4 operaciones · 30 decisiones',
   )
-  await expect(page.getByText('Actividad verificada')).toHaveCount(1)
+  await expect(kronos.getByTestId('kronos-activity')).toContainText(
+    'no prueba que el proceso siga corriendo',
+  )
+  await expect(page.getByText('Actividad reciente registrada')).toHaveCount(1)
   await shot(page, '2-comparacion-kronos-verificado')
 
-  // Same summary but the scores route is off: back to unverified.
+  // The button opens the Laboratory on Kronos' own row, not another view.
+  await kronos
+    .getByRole('button', { name: 'Abrir Kronos en el Laboratorio' })
+    .click()
+  await expect(page.getByRole('heading', { name: 'Laboratorio' })).toBeVisible()
+  await expect(
+    page.getByRole('button', { name: /Kronos/, pressed: true }).first(),
+  ).toBeVisible()
+  await page.getByRole('tab', { name: 'Inventario de modelos' }).click()
+  await page.getByRole('button', { name: 'Ver comparación' }).click()
+
+  // status ok without products is not evidence: back to unverified.
   await page.route('**/api-live/kronos/scores*', (route) =>
-    route.fulfill({
-      json: { status: 'off', reason: 'kronos_not_configured', products: [] },
-    }),
+    route.fulfill({ json: { status: 'ok', products: [] } }),
   )
   await page.getByRole('button', { name: '← Volver al inventario' }).click()
   await page.getByRole('button', { name: 'Ver comparación' }).click()
   await expect(kronos.getByTestId('kronos-activity')).toContainText(
     'Estado no verificado',
   )
-  await expect(page.getByText('Actividad verificada')).toHaveCount(0)
+  await expect(page.getByText('Actividad reciente registrada')).toHaveCount(0)
 })

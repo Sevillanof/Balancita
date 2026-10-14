@@ -21,6 +21,11 @@
   },
   {
     "method": "GET",
+    "url": "/api-live/qwen/scores?product=PF_XBTUSD",
+    "status": 502
+  },
+  {
+    "method": "GET",
     "url": "/api-live/observability/health",
     "status": 502
   },
@@ -31,17 +36,12 @@
   },
   {
     "method": "GET",
-    "url": "/api-live/terminal/bootstrap",
-    "status": 502
-  },
-  {
-    "method": "GET",
-    "url": "/api-live/qwen/scores?product=PF_XBTUSD",
-    "status": 502
-  },
-  {
-    "method": "GET",
     "url": "/api-live/kronos/scores?product=PF_XBTUSD",
+    "status": 502
+  },
+  {
+    "method": "GET",
+    "url": "/api-live/terminal/bootstrap",
     "status": 502
   },
   {

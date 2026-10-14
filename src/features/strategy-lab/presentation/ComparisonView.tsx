@@ -8,6 +8,7 @@ import type {
   StrategyApi,
 } from '../infrastructure/strategy-api.ts'
 import {
+  activityAt,
   loadKronosActivity,
   type KronosActivity,
 } from '../infrastructure/kronos-activity.ts'
@@ -77,7 +78,7 @@ export function ExperimentCard({
         <span className="comparison__kind">EXP · {KIND_LABELS[row.kind]}</span>
         {verified ? (
           <span data-testid="kronos-verified">
-            <StatusPill tone="ok">Actividad verificada</StatusPill>
+            <StatusPill tone="ok">Actividad reciente registrada</StatusPill>
           </span>
         ) : (
           <OperationalBadge
@@ -118,6 +119,10 @@ export function ExperimentCard({
                 decisiones
               </strong>
               <small>Resumen del ciclo de {utcTime(verified.updated_ms)}</small>
+              <small>
+                Es un registro del resumen: no prueba que el proceso siga
+                corriendo.
+              </small>
             </>
           ) : (
             <em>Estado no verificado</em>
@@ -170,10 +175,18 @@ export function ExperimentCard({
       ) : (
         <button
           type="button"
-          aria-label={`Detalle de ${row.name}`}
+          aria-label={
+            row.kind === 'model'
+              ? 'Abrir Kronos en el Laboratorio'
+              : `Detalle de ${row.name}`
+          }
           onClick={onOpen}
         >
-          {row.kind === 'carry' ? 'Ver contador →' : 'Detalle →'}
+          {row.kind === 'model'
+            ? 'Abrir Kronos en el Laboratorio →'
+            : row.kind === 'carry'
+              ? 'Ver contador →'
+              : 'Detalle →'}
         </button>
       )}
     </article>
@@ -188,6 +201,9 @@ type Props = {
   onBack: () => void
   loadActivity?: () => Promise<KronosActivity>
 }
+
+const ACTIVITY_TICK_MS = 30_000
+const ACTIVITY_REREAD_MS = 5 * 60_000
 
 const defaultLoadActivity = () => loadKronosActivity()
 
@@ -204,18 +220,35 @@ export default function ComparisonView({
   loadActivity = defaultLoadActivity,
 }: Props) {
   const [inventory, setInventory] = useState<Inventory | null>(null)
-  const [activity, setActivity] = useState<KronosActivity | null>(null)
+  const [read, setRead] = useState<KronosActivity | null>(null)
+  const [now, setNow] = useState(() => Date.now())
 
+  // Re-read periodically; a failed read never keeps the previous "reciente".
   useEffect(() => {
     let active = true
-    loadActivity().then(
-      (loaded) => active && setActivity(loaded),
-      () => active && setActivity({ verified: false, reason: 'error' }),
-    )
+    const run = () =>
+      loadActivity().then(
+        (loaded) => {
+          if (!active) return
+          setNow(Date.now())
+          setRead(loaded)
+        },
+        () => active && setRead({ verified: false, reason: 'error' }),
+      )
+    void run()
+    const reread = setInterval(() => void run(), ACTIVITY_REREAD_MS)
     return () => {
       active = false
+      clearInterval(reread)
     }
   }, [loadActivity, reload])
+
+  // Freshness is evaluated against the clock on every tick and render.
+  useEffect(() => {
+    const tick = setInterval(() => setNow(Date.now()), ACTIVITY_TICK_MS)
+    return () => clearInterval(tick)
+  }, [])
+  const activity = activityAt(read, now)
   const [failure, setFailure] = useState<string | null>(null)
 
   useEffect(() => {
