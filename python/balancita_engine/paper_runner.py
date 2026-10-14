@@ -783,6 +783,8 @@ class PaperRunner(object):
 
         * Only pending orders of that product whose window overlaps the gap are touched; an order that already filled,
           expired or was cancelled, another product, open positions (their stops) and the risk rules are not.
+        * A new declaration needs ``t_ms >= gap_to_ms``: the interruption is declared once its end is known
+          (``source_loss_before_gap_end`` otherwise). A declaration already persisted is repeated with any ``t_ms``.
         * It must happen before the quote that ends the gap is delivered: after it the order may already have been judged
           on that quote, so the call is refused (``source_loss_after_quote``). The gap bounds are in the journal clock
           (``t_ms`` of the events); the check compares them with both the journal time and the ``time_ms`` of the last
@@ -811,6 +813,10 @@ class PaperRunner(object):
         if known is None:
             if self.clock is not None and t_ms < self.clock:
                 raise RunnerError("source_loss_in_the_past", "t_ms {} is before the runner clock {}".format(t_ms, self.clock))
+            if t_ms < gap_to_ms:
+                raise RunnerError("source_loss_before_gap_end",
+                                  "t_ms {} is before the end of the gap {}: an interruption is not complete until its end is observed"
+                                  .format(t_ms, gap_to_ms))
             # the gap is measured in journal time (``t_ms``, when the source persisted the quote), which can be later than the
             # quote's own ``time_ms``: a quote delivered at either time at or after the end of the gap closes the window
             last = max(self.executor.last_quote_ms.get(product_id, 0), self.quote_t_ms.get(product_id, 0))
@@ -826,7 +832,7 @@ class PaperRunner(object):
                 if hi > lo:
                     affected.append(intent_id)
                     windows[intent_id] = [lo, hi]
-            self._record(t_ms, "source_loss", {"product_id": product_id, "gap_from_ms": gap_from_ms, "gap_to_ms": gap_to_ms,
+            self._record(max(t_ms, self.journal.entries[-1]["t_ms"] if self.journal.entries else 0), "source_loss", {"product_id": product_id, "gap_from_ms": gap_from_ms, "gap_to_ms": gap_to_ms,
                                                "intent_ids": affected, "windows": windows})
             known = self.source_losses[key]
         for intent_id in known["intent_ids"]:

@@ -36,7 +36,7 @@ class SourceLoss(Base):
     # ---- what is cancelled -------------------------------------------------------------------------------------
     def test_only_the_pending_orders_of_the_product_that_overlap_the_gap_are_cancelled(self):
         path, r = self.pending_pair()
-        ids = r.cancel_for_source_loss(BTC, CYCLE + 3 * SEC, CYCLE + 29 * SEC, CYCLE + 10 * SEC)
+        ids = r.cancel_for_source_loss(BTC, CYCLE + 3 * SEC, CYCLE + 29 * SEC, CYCLE + 29 * SEC)
         self.assertEqual(len(ids), 1)
         self.assertEqual(self.states(r), {BTC: "cancelled", ETH: "pending"})
         record = [o for o in r.orders() if o["product_id"] == BTC][0]
@@ -47,7 +47,7 @@ class SourceLoss(Base):
 
     def test_a_gap_that_does_not_overlap_the_order_window_cancels_nothing(self):
         path, r = self.pending_pair()
-        late = r.cancel_for_source_loss(BTC, CYCLE + 90 * SEC, CYCLE + 120 * SEC, CYCLE + 100 * SEC)
+        late = r.cancel_for_source_loss(BTC, CYCLE + 90 * SEC, CYCLE + 120 * SEC, CYCLE + 120 * SEC)
         early = r.cancel_for_source_loss(BTC, CYCLE + 0, CYCLE + 3 * SEC, CYCLE + 100 * SEC)
         self.assertEqual((late, early), ([], []))
         self.assertEqual(self.states(r), {BTC: "pending", ETH: "pending"})
@@ -57,7 +57,7 @@ class SourceLoss(Base):
         r.run(session()[:5])
         self.assertEqual(len(r.portfolio.positions), 2)
         before = r.financial_digest()
-        ids = r.cancel_for_source_loss(BTC, CYCLE + 5 * SEC, CYCLE + 40 * SEC, r.clock)
+        ids = r.cancel_for_source_loss(BTC, CYCLE + 5 * SEC, CYCLE + 40 * SEC, max(r.clock, CYCLE + 40 * SEC))
         self.assertEqual(ids, [])
         self.assertEqual(r.financial_digest(), before)
         self.assertEqual(len(r.portfolio.positions), 2)
@@ -65,7 +65,7 @@ class SourceLoss(Base):
     # ---- before the quote that ends the gap --------------------------------------------------------------------
     def test_the_cancellation_comes_before_the_quote_after_the_cut_and_the_order_does_not_fill(self):
         path, r = self.pending_pair()
-        r.cancel_for_source_loss(BTC, CYCLE + 3 * SEC, CYCLE + 29 * SEC, CYCLE + 20 * SEC)
+        r.cancel_for_source_loss(BTC, CYCLE + 3 * SEC, CYCLE + 29 * SEC, CYCLE + 29 * SEC)
         r.handle(quote(BTC, CYCLE + 29 * SEC, "100010", 3))
         self.assertEqual(len(r.portfolio.positions), 0)
         self.assertEqual(self.states(r)[BTC], "cancelled")
@@ -111,13 +111,13 @@ class SourceLoss(Base):
     def test_an_order_decided_during_the_gap_is_also_cancelled(self):
         # D-SS-02 (declared, conservative): its earliest fill falls inside the gap
         path, r = self.pending_pair()
-        ids = r.cancel_for_source_loss(ETH, CYCLE + 2 * SEC, CYCLE + 29 * SEC, CYCLE + 10 * SEC)
+        ids = r.cancel_for_source_loss(ETH, CYCLE + 2 * SEC, CYCLE + 29 * SEC, CYCLE + 29 * SEC)
         self.assertEqual(len(ids), 1)
 
     # ---- idempotence -------------------------------------------------------------------------------------------
     def test_a_repeated_call_returns_the_same_ids_and_writes_nothing(self):
         path, r = self.pending_pair()
-        first = r.cancel_for_source_loss(BTC, CYCLE + 3 * SEC, CYCLE + 29 * SEC, CYCLE + 10 * SEC)
+        first = r.cancel_for_source_loss(BTC, CYCLE + 3 * SEC, CYCLE + 29 * SEC, CYCLE + 29 * SEC)
         entries, state, financial = len(r.journal.entries), r.state_digest(), r.financial_digest()
         again = r.cancel_for_source_loss(BTC, CYCLE + 3 * SEC, CYCLE + 29 * SEC, CYCLE + 12 * SEC)
         self.assertEqual((again, len(r.journal.entries), r.state_digest(), r.financial_digest()), (first, entries, state, financial))
@@ -125,17 +125,17 @@ class SourceLoss(Base):
 
     def test_a_different_gap_over_the_same_order_does_not_cancel_twice(self):
         path, r = self.pending_pair()
-        r.cancel_for_source_loss(BTC, CYCLE + 3 * SEC, CYCLE + 29 * SEC, CYCLE + 10 * SEC)
-        other = r.cancel_for_source_loss(BTC, CYCLE + 5 * SEC, CYCLE + 40 * SEC, CYCLE + 12 * SEC)
+        r.cancel_for_source_loss(BTC, CYCLE + 3 * SEC, CYCLE + 29 * SEC, CYCLE + 29 * SEC)
+        other = r.cancel_for_source_loss(BTC, CYCLE + 5 * SEC, CYCLE + 40 * SEC, CYCLE + 40 * SEC)
         self.assertEqual(other, [])
         self.assertEqual(len(cancelled_entries(r)), 1)
 
     # ---- recovery ----------------------------------------------------------------------------------------------
     def test_recovery_after_a_clean_cancellation_reproduces_it_without_cancelling_again(self):
         path, r = self.single_pending()
-        ids = r.cancel_for_source_loss(BTC, CYCLE + 3 * SEC, CYCLE + 29 * SEC, CYCLE + 10 * SEC)
+        ids = r.cancel_for_source_loss(BTC, CYCLE + 3 * SEC, CYCLE + 29 * SEC, CYCLE + 29 * SEC)
         before = r.financial_digest()
-        r2 = self.recover(path, CYCLE + 11 * SEC)
+        r2 = self.recover(path, CYCLE + 31 * SEC)
         self.assertEqual(r2.financial_digest(), before)
         self.assertEqual(len(cancelled_entries(r2)), 1)
         self.assertEqual(r2.last_recovery["interrupted_orders"], [])
@@ -147,9 +147,9 @@ class SourceLoss(Base):
         path, r = self.single_pending()
         ST.arm("before_journal", 1, "order_cancelled")
         with self.assertRaises(SC.SimulatedCrash):
-            r.cancel_for_source_loss(BTC, CYCLE + 3 * SEC, CYCLE + 29 * SEC, CYCLE + 10 * SEC)
+            r.cancel_for_source_loss(BTC, CYCLE + 3 * SEC, CYCLE + 29 * SEC, CYCLE + 29 * SEC)
         ST.disarm()
-        r2 = self.recover(path, CYCLE + 11 * SEC)
+        r2 = self.recover(path, CYCLE + 31 * SEC)
         self.assertEqual(self.states(r2), {BTC: "cancelled"})
         self.assertEqual(len(cancelled_entries(r2)), 1)
         self.assertEqual(r2.last_recovery["interrupted_orders"], [])        # cancelled for the loss, not for the interruption
@@ -162,20 +162,75 @@ class SourceLoss(Base):
         path, r = self.single_pending()
         ST.arm("mid_journal", 1, "order_cancelled")
         with self.assertRaises(SC.SimulatedCrash):
-            r.cancel_for_source_loss(BTC, CYCLE + 3 * SEC, CYCLE + 29 * SEC, CYCLE + 10 * SEC)
+            r.cancel_for_source_loss(BTC, CYCLE + 3 * SEC, CYCLE + 29 * SEC, CYCLE + 29 * SEC)
         ST.disarm()
-        r2 = self.recover(path, CYCLE + 11 * SEC)
+        r2 = self.recover(path, CYCLE + 31 * SEC)
         self.assertEqual(self.states(r2)[BTC], "cancelled")
         self.assertEqual(len(cancelled_entries(r2)), 1)
 
     def test_the_replay_of_the_journal_gives_the_same_state_as_the_live_run(self):
         path, r = self.pending_pair()
-        r.cancel_for_source_loss(BTC, CYCLE + 3 * SEC, CYCLE + 29 * SEC, CYCLE + 10 * SEC)
+        r.cancel_for_source_loss(BTC, CYCLE + 3 * SEC, CYCLE + 29 * SEC, CYCLE + 29 * SEC)
         r.handle(quote(ETH, CYCLE + 30 * SEC, "3500", 3))
         live = (r.financial_digest(), r.state_digest())
         entries = [dict(e) for e in r.journal.entries]
         r3 = PaperRunner(r.config, r.strategies, r.log, entries=entries)
         self.assertEqual((r3.financial_digest(), r3.state_digest()), live)
+
+    # ---- causality: HIGH 1 and HIGH 2 of the review of #168 ---------------------------------------------------
+    def test_a_new_declaration_before_the_end_of_the_gap_is_refused_and_writes_nothing(self):
+        path, r = self.pending_pair()
+        entries = len(r.journal.entries)
+        with self.assertRaises(RunnerError) as caught:
+            r.cancel_for_source_loss(BTC, CYCLE + 3 * SEC, CYCLE + 29 * SEC, CYCLE + 10 * SEC)
+        self.assertEqual(caught.exception.reason, "source_loss_before_gap_end")
+        self.assertEqual(len(r.journal.entries), entries)
+        self.assertEqual(self.states(r)[BTC], "pending")
+        self.assertEqual(len(r.cancel_for_source_loss(BTC, CYCLE + 3 * SEC, CYCLE + 29 * SEC, CYCLE + 29 * SEC)), 1)
+
+    def test_a_declaration_exactly_at_the_end_of_the_gap_is_accepted(self):
+        path, r = self.pending_pair()
+        self.assertEqual(len(r.cancel_for_source_loss(BTC, CYCLE + 3 * SEC, CYCLE + 29 * SEC, CYCLE + 29 * SEC)), 1)
+
+    def test_a_persisted_declaration_is_repeated_even_with_an_earlier_t_ms(self):
+        path, r = self.pending_pair()
+        ids = r.cancel_for_source_loss(BTC, CYCLE + 3 * SEC, CYCLE + 29 * SEC, CYCLE + 29 * SEC)
+        entries = len(r.journal.entries)
+        self.assertEqual(r.cancel_for_source_loss(BTC, CYCLE + 3 * SEC, CYCLE + 29 * SEC, CYCLE + 10 * SEC), ids)
+        self.assertEqual(len(r.journal.entries), entries)
+
+    def closing_quote(self, event_time_delta, source, stream):
+        """The quote that ends the gap: persisted at CYCLE + 29 s, its own time ``event_time_delta`` ms earlier."""
+        t = CYCLE + 29 * SEC
+        e = quote(BTC, t, "100010", 3)
+        e["source"], e["stream"] = source, stream
+        e["payload"]["time_ms"] = e["payload"]["received_ms"] = t - event_time_delta
+        return e
+
+    def test_before_the_closing_quote_it_cancels_and_after_it_it_refuses_for_every_clock_relation_and_transport(self):
+        for delta in (0, 800):                                  # event_time == persisted_at and event_time < persisted_at
+            for source, stream in (("kraken-rest", "tickers"), ("kraken-ws", "ticker")):    # REST and WebSocket quotes
+                with self.subTest(delta=delta, source=source):
+                    path, r = self.pending_pair("c{}{}".format(delta, source))
+                    ids = r.cancel_for_source_loss(BTC, CYCLE + 3 * SEC, CYCLE + 29 * SEC, CYCLE + 29 * SEC)
+                    self.assertEqual(len(ids), 1)
+                    r.handle(self.closing_quote(delta, source, stream))
+                    self.assertEqual(self.states(r)[BTC], "cancelled")
+                    self.assertEqual(len(r.portfolio.positions), 0)
+                    path, r = self.pending_pair("a{}{}".format(delta, source))
+                    r.handle(self.closing_quote(delta, source, stream))
+                    with self.assertRaises(RunnerError) as caught:
+                        r.cancel_for_source_loss(BTC, CYCLE + 3 * SEC, CYCLE + 29 * SEC, CYCLE + 29 * SEC)
+                    self.assertEqual(caught.exception.reason, "source_loss_after_quote")
+                    self.assertEqual(len([e for e in r.journal.entries if e["kind"] == "source_loss"]), 0)
+
+    def test_the_journal_times_never_go_back_across_successive_calls(self):
+        path, r = self.pending_pair()
+        r.cancel_for_source_loss(BTC, CYCLE + 3 * SEC, CYCLE + 29 * SEC, CYCLE + 29 * SEC)
+        r.cancel_for_source_loss(ETH, CYCLE + 4 * SEC, CYCLE + 35 * SEC, CYCLE + 35 * SEC)
+        r.cancel_for_source_loss(BTC, CYCLE + 3 * SEC, CYCLE + 29 * SEC, CYCLE + 12 * SEC)      # repeated
+        times = [e["t_ms"] for e in r.journal.entries]
+        self.assertEqual(times, sorted(times))
 
     # ---- refusals ----------------------------------------------------------------------------------------------
     def test_invalid_calls_are_refused_and_write_nothing(self):

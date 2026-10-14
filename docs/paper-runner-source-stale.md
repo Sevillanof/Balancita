@@ -31,3 +31,11 @@ Solo cancela lo afectado; una brecha fuera de la ventana no cancela nada; posici
 ## Límites
 
 La detección de la pérdida (cuándo hay una brecha y qué umbral usar) no está aquí: es de la sesión/ingestor y sus umbrales siguen como hipótesis. Esta API solo ejecuta la cancelación que la sesión decida y la deja durable y auditable.
+
+## Causalidad (revisión de #168)
+
+- **Brecha futura:** una declaración nueva exige `t_ms >= gap_to_ms`; una interrupción no se declara completa antes de observar su final (`source_loss_before_gap_end`). Una declaración ya persistida se repite con cualquier `t_ms` y no escribe nada.
+- **Relojes:** la comprobación `source_loss_after_quote` usa el máximo entre el `t_ms` del diario de la última cotización entregada y su `time_ms`. Probado con `event_time == persisted_at`, `event_time < persisted_at`, cotizaciones REST y WebSocket, cancelación antes y después de entregar la cotización.
+- Los tiempos del diario no retroceden entre llamadas sucesivas.
+- Una brecha entre cotizaciones no prueba por sí sola una caída de la fuente; quién declara la pérdida debe apoyarse en evidencia explícita.
+- **Residuo declarado (LOW):** `quote_t_ms` (tiempo del diario de la última cotización por producto) no entra en `state_digest`. Se reconstruye siempre por reproducción completa del diario; si alguna vez se restaura desde una instantánea, debe viajar con ella.
