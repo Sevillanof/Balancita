@@ -1,7 +1,7 @@
 # `GET /api/observability/health` (Mission Control B1)
 
 Estado de seis componentes del sistema, calculado **solo** con evidencia que se puede leer en el momento de la
-consulta. Solo lectura: no escribe, no lanza procesos y no hace polling. Vive en el gateway (`/api-live/api/observability/health`
+consulta. Solo lectura: no escribe, no lanza procesos y no hace polling. Vive en el gateway (`/api-live/observability/health`
 detrás del proxy de Vite, igual que `/api/health` y `/api/system`).
 
 Código: `server/src/features/live-gateway/observability-health.ts`. Pruebas: `observability-health.test.ts`.

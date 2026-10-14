@@ -2,7 +2,7 @@
 
 Qué hizo el sistema en las últimas 3 h o 24 h, contado con filas que ya existen: evaluaciones, señales direccionales,
 descartes agrupados por `reason_code` y la última operación de cada experimento. Solo lectura: no escribe, no lanza procesos y
-no hace polling. Vive en el gateway (`/api-live/api/observability/activity` detrás del proxy de Vite, igual que
+no hace polling. Vive en el gateway (`/api-live/observability/activity` detrás del proxy de Vite, igual que
 `/api/observability/health`). **No hay UI conectada** todavía.
 
 Código: `server/src/features/live-gateway/observability-activity.ts`. Pruebas: `observability-activity.test.ts`.
