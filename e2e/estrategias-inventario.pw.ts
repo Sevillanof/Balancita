@@ -296,15 +296,40 @@ test('navigation: Terminal <-> Estrategias <-> inventory <-> detail, no new tabs
     'Inventario de modelos',
     'Laboratorio',
   ])
-  // Detail of C29 -> laboratory -> back to the inventory.
+  // Inventory -> detail of C29 -> back through the breadcrumb.
   await page.getByRole('button', { name: /Detalle de C29/ }).click()
+  const detail = page.getByTestId('strategy-detail')
+  await expect(detail).toBeVisible()
+  await expect(detail.getByRole('heading', { name: /^C29/ })).toBeVisible()
+  await expect(
+    page.getByRole('tab', { name: 'Inventario de modelos' }),
+  ).toHaveAttribute('aria-selected', 'true')
+  await detail.getByRole('button', { name: 'Estrategias' }).click()
+  await expect(page.getByTestId('inventory-row')).toHaveCount(10)
+  // The detail is generic: other rules strategies open the same view, with
+  // their own figures and without C29's.
+  await page.getByRole('button', { name: /Detalle de C30/ }).click()
+  await expect(detail.getByRole('heading', { name: /^C30/ })).toBeVisible()
+  await expect(detail.getByTestId('module-performance')).toBeVisible()
+  await expect(detail.getByTestId('module-config')).not.toContainText(
+    'HASH: ca81f9ce',
+  )
+  await expect(detail.getByTestId('module-performance')).toContainText(
+    'Fuera de muestra (OOS)',
+  )
+  await detail.getByRole('button', { name: 'Estrategias' }).click()
+  // C32 has no backtest by design: «No disponible», not an empty table.
+  await page.getByRole('button', { name: /Detalle de C32/ }).click()
+  await expect(detail.getByRole('heading', { name: /^C32/ })).toBeVisible()
+  await expect(detail.getByTestId('module-performance')).toContainText(
+    'no tiene backtest por diseño',
+  )
+  // Detail -> laboratory (explicit action) -> back to the inventory tab.
+  await detail.getByRole('button', { name: 'Abrir en Laboratorio' }).click()
   await expect(page.getByRole('tab', { name: 'Laboratorio' })).toHaveAttribute(
     'aria-selected',
     'true',
   )
-  await expect(
-    page.getByRole('heading', { name: /^C29/ }).first(),
-  ).toBeVisible()
   await page.getByRole('tab', { name: 'Inventario de modelos' }).click()
   await expect(page.getByTestId('inventory-row')).toHaveCount(10)
   // Estrategias -> Terminal -> back: opens on the inventory again.
@@ -369,6 +394,14 @@ test('Detalle C29 shows the real registry figures, B2 operations and no invented
   await expect(performance.getByTestId('range-table')).toContainText(
     String(c29.by_range.previous!.trades),
   )
+  // The real ranges last 237 days (first/last bucket), not the 240 of a label.
+  await expect(performance).toContainText('2 rangos de 237 d')
+  await expect(performance.getByTestId('range-table')).not.toContainText('240')
+  // Backtest, out of sample and forward are separate and never mixed.
+  await expect(performance.getByTestId('oos-note')).toContainText(
+    'No disponible',
+  )
+  await expect(performance.getByText('Fuente:')).toHaveCount(3)
   await expect(performance.getByTestId('verdict')).toContainText(
     'no es rentabilidad demostrada',
   )

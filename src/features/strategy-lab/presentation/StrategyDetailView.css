@@ -208,9 +208,14 @@
 
 .detail__sides small,
 .detail__note,
+.detail__source,
 .detail__kpi small {
   color: var(--mc-text-2);
   font-size: 12px;
+}
+
+.detail__source {
+  margin: 6px 0 0;
 }
 
 .detail__scope {

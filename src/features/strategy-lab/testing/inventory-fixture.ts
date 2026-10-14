@@ -82,8 +82,12 @@ export const exampleInventory: Inventory = {
   period: {
     ranges: {
       previous: {
-        first_bucket_ms: 0,
-        last_bucket_ms: 240 * 86_400_000 - 60_000,
+        first_bucket_ms: 1_750_182_780_000,
+        last_bucket_ms: 1_770_659_520_000,
+      },
+      recent: {
+        first_bucket_ms: 1_770_916_800_000,
+        last_bucket_ms: 1_791_393_540_000,
       },
     },
   },
