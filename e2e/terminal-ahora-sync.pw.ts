@@ -78,6 +78,8 @@ test.afterAll(() => {
 })
 
 const hhmm = (ms: number) => new Date(ms).toISOString().slice(11, 16)
+// AHORA prints the hour without a leading zero (es-ES long format).
+const hmm = (ms: number) => hhmm(ms).replace(/^0/, '')
 
 async function markerPositions(chart: Locator) {
   await expect
@@ -107,13 +109,17 @@ test('AHORA shows the last real analysis of the stream, with its source', async 
   const detail = page.getByTestId('now-detail')
   await expect(detail).toContainText('no_directional_proposal')
   await expect(detail).toContainText('Régimen trend')
-  await expect(detail).toContainText(hhmm(newest.decisionTimeMs))
+  await expect(detail).toContainText(hmm(newest.decisionTimeMs))
   await expect(detail).toContainText(/hace \d+ min/)
   await expect(page.getByTestId('now-source')).toContainText(
     'análisis del motor recibido por el stream',
   )
   await expect(page.getByTestId('now-source')).toContainText(
-    'Esperar no es un error',
+    'Espera: el selector no abrió operación',
+  )
+  // It says nothing about proposals the selector may have rejected.
+  await expect(page.getByTestId('now-source')).not.toContainText(
+    'ninguna estrategia',
   )
   // The health of the source (B1) stays a separate fact next to it.
   await expect(page.getByTestId('observer-now')).toContainText(
@@ -153,7 +159,7 @@ test('history rows and chart markers are the same decisions and select each othe
   await expect(chart).toHaveAttribute('data-selected-marker', short.analysisId)
   const detail = page.getByLabel('Decisión seleccionada')
   await expect(detail).toContainText('SHORT')
-  await expect(detail).toContainText(hhmm(short.decisionTimeMs))
+  await expect(detail).toContainText(hmm(short.decisionTimeMs))
   // The selected marker is inside the visible chart.
   const box = (await chart.boundingBox())!
   const selected = (await markerPositions(chart)).find(
@@ -176,7 +182,7 @@ test('history rows and chart markers are the same decisions and select each othe
     }),
   ).toHaveAttribute('aria-pressed', 'true')
   await expect(detail).toContainText('LONG')
-  await expect(detail).toContainText(hhmm(other.decisionTimeMs))
+  await expect(detail).toContainText(hmm(other.decisionTimeMs))
   if (SHOTS)
     await page.screenshot({ path: `${SHOTS}/seleccion-sincronizada.png` })
 })
@@ -218,6 +224,27 @@ test('changing product swaps AHORA, rows and markers; nothing leaks across', asy
   await expect(page.getByTestId('now-action')).toHaveText('Espera')
   await expect(page.getByTestId('now-detail')).toContainText('Régimen trend')
   await expect(chart).toHaveAttribute('data-marker-count', '0')
+})
+
+test('an old verdict of a stopped engine is history, never the current state', async ({
+  page,
+}) => {
+  await openTerminal(page)
+  await page.getByRole('combobox').first().selectOption('PF_ZECUSD')
+  const stale = facts.PF_ZECUSD!.at(-1)!
+  expect(stale.action).toBe('LONG')
+  await expect(page.getByTestId('last-decision')).toContainText('No disponible')
+  await expect(page.getByTestId('now-action')).toHaveCount(0)
+  await expect(page.getByTestId('now-detail')).toHaveCount(0)
+  const historic = page.getByTestId('now-historic')
+  await expect(historic).toContainText('histórica, no es el estado actual')
+  await expect(historic).toContainText('LONG')
+  await expect(historic).toContainText(hmm(stale.decisionTimeMs))
+  await expect(historic).toContainText(/hace (3\d|2\d) min|hace \d+ min/)
+  // A LONG that is not current is not presented as a current proposal.
+  await expect(page.getByTestId('last-decision')).not.toContainText(
+    'propuesta, no operación',
+  )
 })
 
 test('chart controls on real data: timeframes, zoom, navigation, back to present, indicators', async ({

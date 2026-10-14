@@ -2,6 +2,17 @@ import { describe, expect, it } from 'vitest'
 import { latestDecision } from './latest-decision.ts'
 
 describe('latestDecision', () => {
+  it('ignores an analysis whose origin is not the engine verdicts', () => {
+    expect(
+      latestDecision([{ action: 'LONG', decision_time_ms: 5_000 }]),
+    ).toBeNull()
+    expect(
+      latestDecision([
+        { action: 'LONG', decision_time_ms: 5_000, runtime_version: 'other' },
+      ]),
+    ).toBeNull()
+  })
+
   it('is null without real analyses', () => {
     expect(latestDecision([])).toBeNull()
     expect(latestDecision([null, 3, 'x', {}])).toBeNull()
@@ -10,13 +21,18 @@ describe('latestDecision', () => {
   it('takes the newest decision by its time, not by position', () => {
     const found = latestDecision([
       {
+        runtime_version: 'futures-verdict.v1',
         action: 'LONG',
         reason_code: 'c25_long',
         regime: 'trend',
         decision_time_ms: 2_000,
         bucket_start_ms: 1_000,
       },
-      { action: 'WAIT', decision_time_ms: 1_000 },
+      {
+        runtime_version: 'futures-verdict.v1',
+        action: 'WAIT',
+        decision_time_ms: 1_000,
+      },
     ])
     expect(found).toEqual({
       action: 'LONG',
@@ -40,6 +56,7 @@ describe('latestDecision', () => {
     expect(
       latestDecision([
         {
+          runtime_version: 'futures-verdict.v1',
           decision_time_ms: 9,
           selector: { action: 'short', reason_code: 'r' },
         },

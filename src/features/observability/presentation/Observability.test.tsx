@@ -210,12 +210,62 @@ describe('ObserverPanel (right column)', () => {
     expect(detail).toHaveTextContent('Régimen range')
     expect(detail).toHaveTextContent('hace 2 min')
     expect(screen.getByTestId('now-source')).toHaveTextContent(
+      'Espera: el selector no abrió operación',
+    )
+    expect(screen.getByTestId('now-source')).not.toHaveTextContent(
+      'ninguna estrategia',
+    )
+    expect(screen.getByTestId('now-source')).toHaveTextContent(
       'análisis del motor recibido por el stream',
     )
     // Waiting is not an error and not a proposal.
     expect(screen.getByTestId('observer-now')).not.toHaveTextContent(
       'propuesta, no operación',
     )
+  })
+
+  it('shows an old analysis as history, not as the current decision', async () => {
+    serve({ activity: quiet })
+    render(
+      <Observer
+        latest={{
+          action: 'LONG',
+          reasonCode: 'c25_long_pullback',
+          regime: 'trend',
+          decisionTimeMs: 1_791_000_240_000 - 3_600_000,
+          bucketStartMs: null,
+        }}
+      />,
+    )
+    await screen.findByTestId('observer-now')
+    expect(screen.getByTestId('last-decision')).toHaveTextContent(
+      'No disponible',
+    )
+    expect(screen.queryByTestId('now-action')).toBeNull()
+    expect(screen.getByTestId('now-historic')).toHaveTextContent(
+      'histórica, no es el estado actual',
+    )
+    expect(screen.getByTestId('now-historic')).toHaveTextContent('hace 1 h')
+  })
+
+  it('does not show a decision dated in the future of this clock', async () => {
+    serve({ activity: quiet })
+    render(
+      <Observer
+        latest={{
+          action: 'LONG',
+          reasonCode: 'x',
+          regime: null,
+          decisionTimeMs: 1_791_000_240_000 + 600_000,
+          bucketStartMs: null,
+        }}
+      />,
+    )
+    await screen.findByTestId('observer-now')
+    expect(screen.getByTestId('last-decision')).toHaveTextContent(
+      'No disponible',
+    )
+    expect(screen.queryByTestId('now-historic')).toBeNull()
   })
 
   it('labels a LONG or SHORT as a proposal, never as an operation', async () => {

@@ -102,15 +102,19 @@ const closers: Array<() => void> = []
 const verdicts = new VerdictsDb(box.dir, closers)
 const account = new AccountDb(box.dir, closers)
 const latest = now - (now % MINUTE) - 3 * MINUTE
+const STOPPED_MINUTES: Record<string, number> = { PF_ZECUSD: 30 }
 const bucketAt = (i: number) => latest - i * MINUTE
 /** Planned non-WAIT verdicts by product (minutes back from the latest). */
 const PLAN: Record<string, Record<number, 'LONG' | 'SHORT'>> = {
   PF_XBTUSD: { 7: 'LONG', 22: 'SHORT', 41: 'LONG' },
   PF_ETHUSD: { 0: 'SHORT', 15: 'LONG' },
+  PF_ZECUSD: { 0: 'LONG' },
 }
 const facts: Record<string, unknown> = {}
 for (const product of PRODUCTS) {
   const plan = PLAN[product] ?? {}
+  // A product whose engine stopped long ago: its newest verdict is history.
+  const at = (i: number) => bucketAt(i + (STOPPED_MINUTES[product] ?? 0))
   const summary: unknown[] = []
   for (let i = 89; i >= 0; i -= 1) {
     const action = plan[i] ?? 'WAIT'
@@ -121,7 +125,7 @@ for (const product of PRODUCTS) {
           ? 'c25_long_pullback'
           : 'c26_short_reversion'
     verdicts.add(
-      bucketAt(i),
+      at(i),
       action,
       {
         regime: product === 'PF_ETHUSD' ? 'range' : 'trend',
@@ -136,7 +140,7 @@ for (const product of PRODUCTS) {
                 : 'c26-reversion-perp-v1',
           reason_code: reason,
         },
-        verdict_hash: `${product}-${bucketAt(i)}`,
+        verdict_hash: `${product}-${at(i)}`,
       },
       product,
     )
@@ -144,9 +148,9 @@ for (const product of PRODUCTS) {
       summary.push({
         action,
         reason,
-        bucket: bucketAt(i),
-        decisionTimeMs: bucketAt(i) + 63_000,
-        analysisId: `${product}-${bucketAt(i)}`,
+        bucket: at(i),
+        decisionTimeMs: at(i) + 63_000,
+        analysisId: `${product}-${at(i)}`,
       })
   }
   facts[product] = summary

@@ -17,7 +17,7 @@ import { utcDateTime } from '../../../shared/finance/format.ts'
 import { duration, momentLabel, shortProduct, sideLabel } from './format.ts'
 import { LABEL, TONE } from './health-view.ts'
 import type { HealthRead } from './HealthIndicator.tsx'
-import type { LatestDecision } from './latest-decision.ts'
+import { decisionStanding, type LatestDecision } from './latest-decision.ts'
 
 const WINDOW_LABELS: Record<ActivityWindow, string> = {
   '3h': '3 h',
@@ -49,7 +49,7 @@ function decisionLabel(action: string): string {
 function Now({
   report,
   health,
-  latest,
+  latest: known,
   nowMs,
 }: {
   report: ActivityReport | null
@@ -57,6 +57,10 @@ function Now({
   latest: LatestDecision | null
   nowMs: number
 }) {
+  // Only a fresh analysis describes the engine now; an old one is history.
+  const standing = known ? decisionStanding(known, nowMs) : null
+  const latest = standing === 'current' ? known : null
+  const historic = standing === 'historic' ? known : null
   const decisions = health.data?.components.find((c) => c.id === 'decisions')
   const mine =
     report?.evaluations.state === 'ok' && report.product
@@ -104,8 +108,28 @@ function Now({
             {' '}
             Fuente: análisis del motor recibido por el stream de la Terminal
             {latest.action === 'WAIT'
-              ? '. Esperar no es un error: ninguna estrategia propuso entrar.'
+              ? '. Espera: el selector no abrió operación; la causa es el motivo indicado. Esperar no es un error.'
               : '.'}
+          </small>
+        </p>
+      )}
+      {historic && (
+        <p className="obs-summary" data-testid="now-historic">
+          Última decisión conocida (histórica, no es el estado actual):{' '}
+          {decisionLabel(historic.action)}
+          {historic.reasonCode ? (
+            <>
+              {' · '}
+              <code>{historic.reasonCode}</code>
+            </>
+          ) : null}
+          {' · '}
+          {utcDateTime(historic.decisionTimeMs)} · hace{' '}
+          {duration(nowMs - historic.decisionTimeMs)}
+          <small className="obs-now__source">
+            {' '}
+            Fuente: análisis del motor guardado; el motor actual no entregó uno
+            reciente.
           </small>
         </p>
       )}
