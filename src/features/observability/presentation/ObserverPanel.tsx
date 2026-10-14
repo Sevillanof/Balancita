@@ -17,7 +17,11 @@ import { utcDateTime } from '../../../shared/finance/format.ts'
 import { duration, momentLabel, shortProduct, sideLabel } from './format.ts'
 import { LABEL, TONE } from './health-view.ts'
 import type { HealthRead } from './HealthIndicator.tsx'
-import { decisionStanding, type LatestDecision } from './latest-decision.ts'
+import {
+  decisionStanding,
+  verdictSourceEvidence,
+  type LatestDecision,
+} from './latest-decision.ts'
 
 const WINDOW_LABELS: Record<ActivityWindow, string> = {
   '3h': '3 h',
@@ -46,21 +50,46 @@ function decisionLabel(action: string): string {
  * decision, so without an analysis the line says «No disponible». The health
  * of the decisions source (B1) is a separate fact.
  */
+function proposalsNote(decision: LatestDecision): string {
+  const p = decision.proposals
+  if (p === null) return 'El veredicto no trae el detalle de las propuestas.'
+  if (p.total === 0)
+    return 'El veredicto no registra propuestas de estrategias.'
+  if (p.directional === 0)
+    return p.total === 1
+      ? 'La única propuesta registrada en el veredicto no fue LONG/SHORT.'
+      : `Ninguna de las ${p.total} propuestas registradas en el veredicto fue LONG/SHORT.`
+  return `${p.directional} de ${p.total} propuestas registradas fueron LONG/SHORT; el selector no abrió operación.`
+}
+
 function Now({
   report,
   health,
+  product,
   latest: known,
   nowMs,
+  serverClock,
 }: {
   report: ActivityReport | null
   health: HealthRead
+  product: string | null
   latest: LatestDecision | null
   nowMs: number
+  serverClock: boolean
 }) {
-  // Only a fresh analysis describes the engine now; an old one is history.
-  const standing = known ? decisionStanding(known, nowMs) : null
-  const latest = standing === 'current' ? known : null
+  // «Ahora» needs more than a young timestamp: B1 must read this same verdict
+  // as the newest of its source. Young without that is only «sin confirmar».
+  const standing = known
+    ? decisionStanding(
+        known,
+        nowMs,
+        verdictSourceEvidence(health.data, product),
+      )
+    : null
+  const latest =
+    standing === 'current' || standing === 'unconfirmed' ? known : null
   const historic = standing === 'historic' ? known : null
+  const clockNote = serverClock ? 'hora del servidor' : 'hora local'
   const decisions = health.data?.components.find((c) => c.id === 'decisions')
   const mine =
     report?.evaluations.state === 'ok' && report.product
@@ -98,18 +127,30 @@ function Now({
         </span>
       </p>
       {latest && (
-        <p className="obs-summary" data-testid="now-detail">
+        <p
+          className="obs-summary"
+          data-testid="now-detail"
+          data-standing={standing}
+        >
           {latest.reasonCode ? <code>{latest.reasonCode}</code> : 'Sin motivo'}
           {' · '}Régimen {latest.regime ?? 'No disponible'}
           {' · '}
           {utcDateTime(latest.decisionTimeMs)} · hace{' '}
-          {duration(nowMs - latest.decisionTimeMs)}
+          {duration(nowMs - latest.decisionTimeMs)} ({clockNote})
+          {standing === 'unconfirmed' && (
+            <small className="obs-now__source" data-testid="now-unconfirmed">
+              {' '}
+              Reciente, pero B1 no confirma este veredicto como el último de la
+              fuente: no se presenta como estado actual.
+            </small>
+          )}
           <small className="obs-now__source" data-testid="now-source">
             {' '}
-            Fuente: análisis del motor recibido por el stream de la Terminal
+            Fuente: veredicto del flujo en vivo del gateway; no describe el
+            estado del forward.
             {latest.action === 'WAIT'
-              ? '. Espera: el selector no abrió operación; la causa es el motivo indicado. Esperar no es un error.'
-              : '.'}
+              ? ` Espera: el selector no abrió operación; la causa es el motivo indicado. ${proposalsNote(latest)} Esperar no es un error.`
+              : ''}
           </small>
         </p>
       )}
@@ -125,11 +166,11 @@ function Now({
           ) : null}
           {' · '}
           {utcDateTime(historic.decisionTimeMs)} · hace{' '}
-          {duration(nowMs - historic.decisionTimeMs)}
+          {duration(nowMs - historic.decisionTimeMs)} ({clockNote})
           <small className="obs-now__source">
             {' '}
-            Fuente: análisis del motor guardado; el motor actual no entregó uno
-            reciente.
+            Fuente: veredicto guardado en el histórico del gateway; el flujo en
+            vivo no entregó uno reciente.
           </small>
         </p>
       )}
@@ -147,7 +188,7 @@ function Now({
         <summary>Qué fuentes respaldan esto</summary>
         <p className="obs-note">
           {latest
-            ? 'La última decisión es la del último análisis del motor recibido por el stream de este producto; los agregados de B2 no se usan para deducirla. '
+            ? 'La última decisión es la del último veredicto que el flujo en vivo del gateway entregó para este producto; la actualidad se contrasta con la hora del servidor y con la lectura de B1 de la fuente de veredictos. Los agregados de B2 no se usan para deducirla. '
             : 'Ninguna fuente verificable entrega la última decisión individual de este producto (llegará con B3). '}
           El estado es el de la fuente de decisiones según B1 (Fuente de
           decisiones (B1)).
@@ -295,6 +336,7 @@ export default function ObserverPanel({
   health,
   latest = null,
   nowMs,
+  serverClock = false,
   children,
 }: {
   product: string | null
@@ -303,6 +345,8 @@ export default function ObserverPanel({
   latest?: LatestDecision | null
   /** Clock the decision's age is measured against. */
   nowMs: number
+  /** True when `nowMs` is on the gateway's clock, false when it is local. */
+  serverClock?: boolean
   /** The decisions history the Terminal already renders. */
   children?: ReactNode
 }) {
@@ -337,7 +381,14 @@ export default function ObserverPanel({
           ))}
         </div>
       </div>
-      <Now report={current} health={health} latest={latest} nowMs={nowMs} />
+      <Now
+        report={current}
+        health={health}
+        product={product}
+        latest={latest}
+        nowMs={nowMs}
+        serverClock={serverClock}
+      />
       <div className="obs-observer__body">
         {error !== null && (
           <DataState

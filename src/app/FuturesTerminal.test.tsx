@@ -1322,7 +1322,7 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
     expect(screen.getByText('Rechazada')).toBeTruthy()
   })
 
-  it('draws verdict markers for entry verdicts only, none before the first candle or rebuilt from a backfill', async () => {
+  it('draws verdict markers (proposals as arrows, WAIT as a grey circle), none before the first candle or rebuilt from a backfill', async () => {
     await renderLive({
       ...state,
       analyses: [
@@ -1341,17 +1341,21 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
     })
     // The chart paints its markers in an effect, after the account renders:
     // wait for exactly the expected set, not merely for some set to exist.
-    // WAIT verdicts (one per minute) would only clutter the chart.
     await waitFor(() =>
       expect(
         chartHarness.markerSets.at(-1)?.map((marker) => marker.id),
-      ).toEqual(['verdict-hash-2', 'verdict-hash-3']),
+      ).toEqual(['verdict-hash-1', 'verdict-hash-2', 'verdict-hash-3']),
     )
     const markers = chartHarness.markerSets.at(-1)!
     expect(markers.map((marker) => marker.shape)).toEqual([
+      'circle',
       'arrowUp',
       'arrowDown',
     ])
+    // A proposal is not an operation: the label says so.
+    expect(
+      markers.map((marker) => String(marker.text).replace(' ◀', '')),
+    ).toEqual(['WAIT', 'C25 LONG prop.', 'C25 SHORT prop.'])
   })
 
   it('keeps pause, resume and close visibly disabled with the PS-06 notice, and sends nothing', async () => {
@@ -1576,11 +1580,10 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
     it('ignores a click on a marker that is not one of this product’s decisions', async () => {
       await renderReady()
       await clickMarker('verdict-hash-2')
-      // A foreign id, an exit marker and a decision without marker (WAIT)
-      // leave the current selection untouched (no fallback to the newest).
+      // A foreign id and an exit marker leave the current selection
+      // untouched (no fallback to the newest).
       await clickMarker('verdict-of-another-product')
       await clickMarker('exit:order-1')
-      await clickMarker('verdict-hash-1')
       expect(detail().getByText('LONG')).toBeTruthy()
       expect(marker('verdict-hash-2')?.text).toMatch(/◀/)
       expect(marker('verdict-hash-3')?.text).not.toMatch(/◀/)
@@ -1658,13 +1661,11 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
       })
     })
 
-    it('says a WAIT decision has no marker, and says nothing for an entry', async () => {
+    it('marks a WAIT decision too, and says nothing for any of them', async () => {
       await renderReady()
       await pickRow('verdict-hash-1')
-      expect(marker('verdict-hash-1')).toBeUndefined()
-      expect(notes()).toEqual([
-        'Esta decisión no tiene marcador en el gráfico: solo las entradas LONG/SHORT se marcan.',
-      ])
+      expect(marker('verdict-hash-1')?.text).toMatch(/WAIT ◀/)
+      expect(notes()).toEqual([])
       await pickRow('verdict-hash-2')
       expect(notes()).toEqual([])
     })

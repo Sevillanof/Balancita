@@ -82,6 +82,86 @@ export function exitMarkers(
   })
 }
 
+/**
+ * Operations actually executed: filled, non-reduce-only orders of paper
+ * execution D, drawn at their fill time. They are read from the orders alone;
+ * no decision is linked to them (the record that would link them is not here).
+ */
+export function fillMarkers(
+  orders: readonly unknown[],
+  options: { from?: number; to?: number; prefix?: string } = {},
+): ApprovedTerminalMarker[] {
+  return orders.flatMap((value) => {
+    const order = recordOf(value)
+    const at = Number(order.closed_at_ms)
+    const direction =
+      order.side === 'buy' ? 'long' : order.side === 'sell' ? 'short' : null
+    if (
+      order.state !== 'filled' ||
+      order.reduce_only === true ||
+      direction === null ||
+      typeof order.order_id !== 'string' ||
+      !Number.isSafeInteger(at)
+    )
+      return []
+    const time = Math.floor(at / 1000)
+    if (
+      (options.from !== undefined && time < options.from) ||
+      (options.to !== undefined && time > options.to)
+    )
+      return []
+    const strategyId =
+      typeof order.strategy_id === 'string' ? order.strategy_id : undefined
+    const code = strategyCode(strategyId)
+    const text = `${code ? `${code} ` : ''}EJEC. ${direction === 'long' ? 'LONG' : 'SHORT'}`
+    return [
+      {
+        id: `fill:${order.order_id}`,
+        time,
+        type: 'fill' as const,
+        direction,
+        label: options.prefix ? `${options.prefix} · ${text}` : text,
+        ...(strategyId ? { strategyId } : {}),
+      },
+    ]
+  })
+}
+
+/**
+ * WAIT verdicts come once a minute: one marker per `spanSeconds` window (the
+ * newest of the window carries the id, all of them are members) so they do not
+ * bury the proposals and fills. Other markers pass through untouched.
+ */
+export function groupWaitMarkers(
+  markers: readonly ApprovedTerminalMarker[],
+  spanSeconds: number,
+): ApprovedTerminalMarker[] {
+  const groups = new Map<number, ApprovedTerminalMarker[]>()
+  const out: ApprovedTerminalMarker[] = []
+  for (const marker of markers) {
+    if (marker.type !== 'wait') {
+      out.push(marker)
+      continue
+    }
+    const key = Math.floor(marker.time / spanSeconds)
+    groups.set(key, [...(groups.get(key) ?? []), marker])
+  }
+  for (const members of groups.values()) {
+    const newest = members.reduce((a, b) => (b.time >= a.time ? b : a))
+    out.push(
+      members.length === 1
+        ? newest
+        : {
+            ...newest,
+            label: `WAIT ×${members.length}`,
+            count: members.length,
+            memberIds: members.map((member) => member.id),
+          },
+    )
+  }
+  return out
+}
+
 /** Entry, stop and target of the open paper position as price lines. */
 export function positionLines(
   position: Record<string, unknown>,

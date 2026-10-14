@@ -22,7 +22,8 @@ describe('markerGap', () => {
     expect(markerGap(entry(), { ...options, firstCandleMs: null })).toBe(
       'no_candles',
     )
-    expect(markerGap(entry({ action: 'WAIT' }), options)).toBe('wait')
+    // A WAIT is marked now (grouped); it has the same gaps as any verdict.
+    expect(markerGap(entry({ action: 'WAIT' }), options)).toBeNull()
     expect(markerGap(entry({ knowledge_lag_ms: 15_001 }), options)).toBe(
       'rebuilt',
     )
@@ -39,8 +40,8 @@ describe('markerGap', () => {
   })
 
   it('writes a note per gap without inventing detail', () => {
-    expect(markerGapNote('wait')).toBe(
-      'Esta decisión no tiene marcador en el gráfico: solo las entradas LONG/SHORT se marcan.',
+    expect(markerGapNote('before_chart')).toBe(
+      'Esta decisión no tiene marcador en el gráfico: ocurrió antes de las velas visibles.',
     )
   })
 })

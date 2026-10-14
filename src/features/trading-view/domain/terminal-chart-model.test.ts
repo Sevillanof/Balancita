@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   exitMarkers,
+  fillMarkers,
+  groupWaitMarkers,
   positionLines,
   timeframeCandles,
 } from './terminal-chart-model.ts'
@@ -219,5 +221,81 @@ describe('lines per strategy book', () => {
     })
     expect(bounded.map((m) => m.id)).toEqual(['exit:inside'])
     expect(bounded[0]!.label).toBe('Histórico · Gateway D · OBJETIVO')
+  })
+})
+
+describe('executed-operation and WAIT markers', () => {
+  const filled = (extra: Record<string, unknown> = {}) => ({
+    order_id: 'o1',
+    state: 'filled',
+    side: 'buy',
+    reduce_only: false,
+    closed_at_ms: 120_000,
+    strategy_id: 'c25-pullback-perp-v1',
+    ...extra,
+  })
+
+  it('draws only filled, non-reduce-only orders with a known side, from the order alone', () => {
+    const markers = fillMarkers([
+      filled(),
+      filled({ order_id: 'o2', side: 'sell', strategy_id: undefined }),
+      filled({ order_id: 'o3', reduce_only: true }),
+      filled({ order_id: 'o4', state: 'open' }),
+      filled({ order_id: 'o5', side: 'hold' }),
+      filled({ order_id: 'o6', closed_at_ms: undefined }),
+    ])
+    expect(markers).toEqual([
+      {
+        id: 'fill:o1',
+        time: 120,
+        type: 'fill',
+        direction: 'long',
+        label: 'C25 EJEC. LONG',
+        strategyId: 'c25-pullback-perp-v1',
+      },
+      {
+        id: 'fill:o2',
+        time: 120,
+        type: 'fill',
+        direction: 'short',
+        label: 'EJEC. SHORT',
+      },
+    ])
+  })
+
+  it('keeps fills inside the period and names the history source', () => {
+    expect(fillMarkers([filled()], { from: 200 })).toEqual([])
+    expect(
+      fillMarkers([filled()], { prefix: 'Histórico · Gateway D' })[0]?.label,
+    ).toBe('Histórico · Gateway D · C25 EJEC. LONG')
+  })
+
+  it('groups WAIT markers per window and leaves the rest untouched', () => {
+    const wait = (id: string, time: number) => ({
+      id,
+      time,
+      type: 'wait' as const,
+      label: 'WAIT',
+    })
+    const proposal = {
+      id: 'p',
+      time: 60,
+      type: 'proposal' as const,
+      direction: 'long' as const,
+      label: 'LONG prop.',
+    }
+    const out = groupWaitMarkers(
+      [wait('a', 0), wait('b', 60), wait('c', 120), wait('d', 1_000), proposal],
+      900,
+    )
+    expect(out).toContainEqual(proposal)
+    const grouped = out.find((marker) => marker.id === 'c')
+    expect(grouped).toMatchObject({
+      label: 'WAIT ×3',
+      count: 3,
+      memberIds: ['a', 'b', 'c'],
+    })
+    expect(out.find((marker) => marker.id === 'd')?.label).toBe('WAIT')
+    expect(out).toHaveLength(3)
   })
 })

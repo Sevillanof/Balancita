@@ -23,6 +23,8 @@ import {
 } from '../infrastructure/terminal-chart-client.ts'
 import {
   exitMarkers,
+  fillMarkers,
+  groupWaitMarkers,
   strategyCode,
   strategyMarkerColor,
   positionLines,
@@ -243,6 +245,9 @@ function depthWithin(depth: ChartDepth | null, band: string) {
   return bid == null || ask == null ? null : { bid, ask }
 }
 
+/** WAIT verdicts closer than this share one marker (a verdict per minute). */
+const WAIT_GROUP_SECONDS = 900
+
 export default function TerminalChartPanel({
   candles,
   markers,
@@ -387,22 +392,26 @@ export default function TerminalChartPanel({
     hiddenStrategies,
     historicalLabel,
   ])
-  const everyMarker = useMemo(
-    () => [
-      ...markers,
-      ...exitMarkers(orders, {
-        // Only exits inside the candles on screen: none from another period.
-        ...(shown.length > 0
-          ? {
-              from: shown[0]!.time,
-              to: shown.at(-1)!.time + intervalSeconds,
-            }
-          : {}),
-        ...(historicalLabel ? { prefix: historicalLabel } : {}),
-      }),
-    ],
-    [markers, orders, shown, intervalSeconds, historicalLabel],
-  )
+  const everyMarker = useMemo(() => {
+    const period = {
+      // Only operations inside the candles on screen: none from another period.
+      ...(shown.length > 0
+        ? {
+            from: shown[0]!.time,
+            to: shown.at(-1)!.time + intervalSeconds,
+          }
+        : {}),
+      ...(historicalLabel ? { prefix: historicalLabel } : {}),
+    }
+    return groupWaitMarkers(
+      [
+        ...markers,
+        ...fillMarkers(orders, period),
+        ...exitMarkers(orders, period),
+      ],
+      Math.max(intervalSeconds, WAIT_GROUP_SECONDS),
+    )
+  }, [markers, orders, shown, intervalSeconds, historicalLabel])
   const strategyIds = useMemo(
     () =>
       [

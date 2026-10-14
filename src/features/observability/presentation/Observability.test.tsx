@@ -47,6 +47,17 @@ function serve(routes: {
 
 afterEach(() => vi.unstubAllGlobals())
 
+/** B1 as the gateway would report it when its newest verdict is `bucket`. */
+function healthWithVerdict(bucket: number, status = 'ok') {
+  const body: any = clone(healthHealthy)
+  const item = body.components
+    .find((c: any) => c.id === 'decisions')
+    .items.find((i: any) => i.product_id === 'PF_XBTUSD')
+  item.bucket_start_ms = bucket
+  item.status = status
+  return body
+}
+
 /** The indicator as the Terminal mounts it: fed by the shared B1 read. */
 function Indicator() {
   const health = useHealth()
@@ -57,10 +68,12 @@ function Indicator() {
 function Observer({
   product = 'PF_XBTUSD',
   latest = null,
+  serverClock = true,
   children,
 }: {
   product?: string | null
   latest?: LatestDecision | null
+  serverClock?: boolean
   children?: React.ReactNode
 }) {
   const health = useHealth()
@@ -70,6 +83,7 @@ function Observer({
       health={health}
       latest={latest}
       nowMs={1_791_000_240_000}
+      serverClock={serverClock}
     >
       {children}
     </ObserverPanel>
@@ -191,7 +205,10 @@ describe('ObserverPanel (right column)', () => {
   })
 
   it('shows the last decision only from a real stream analysis, with its source', async () => {
-    serve({ activity: quiet })
+    serve({
+      health: () => json(healthWithVerdict(1_791_000_060_000)),
+      activity: quiet,
+    })
     render(
       <Observer
         latest={{
@@ -200,6 +217,7 @@ describe('ObserverPanel (right column)', () => {
           regime: 'range',
           decisionTimeMs: 1_791_000_120_000,
           bucketStartMs: 1_791_000_060_000,
+          proposals: { total: 2, directional: 0 },
         }}
       />,
     )
@@ -212,12 +230,16 @@ describe('ObserverPanel (right column)', () => {
     expect(screen.getByTestId('now-source')).toHaveTextContent(
       'Espera: el selector no abrió operación',
     )
-    expect(screen.getByTestId('now-source')).not.toHaveTextContent(
-      'ninguna estrategia',
+    // The verdict lists its proposals: only then may it say none was LONG/SHORT.
+    expect(screen.getByTestId('now-source')).toHaveTextContent(
+      'Ninguna de las 2 propuestas registradas en el veredicto fue LONG/SHORT',
     )
     expect(screen.getByTestId('now-source')).toHaveTextContent(
-      'análisis del motor recibido por el stream',
+      'flujo en vivo del gateway; no describe el estado del forward',
     )
+    expect(detail).toHaveTextContent('(hora del servidor)')
+    expect(detail).toHaveAttribute('data-standing', 'current')
+    expect(screen.queryByTestId('now-unconfirmed')).toBeNull()
     // Waiting is not an error and not a proposal.
     expect(screen.getByTestId('observer-now')).not.toHaveTextContent(
       'propuesta, no operación',
@@ -234,6 +256,7 @@ describe('ObserverPanel (right column)', () => {
           regime: 'trend',
           decisionTimeMs: 1_791_000_240_000 - 3_600_000,
           bucketStartMs: null,
+          proposals: null,
         }}
       />,
     )
@@ -258,6 +281,7 @@ describe('ObserverPanel (right column)', () => {
           regime: null,
           decisionTimeMs: 1_791_000_240_000 + 600_000,
           bucketStartMs: null,
+          proposals: null,
         }}
       />,
     )
@@ -266,6 +290,107 @@ describe('ObserverPanel (right column)', () => {
       'No disponible',
     )
     expect(screen.queryByTestId('now-historic')).toBeNull()
+  })
+
+  it('does not claim any proposal fact for a WAIT without a proposals list', async () => {
+    serve({
+      health: () => json(healthWithVerdict(1_791_000_060_000)),
+      activity: quiet,
+    })
+    render(
+      <Observer
+        latest={{
+          action: 'WAIT',
+          reasonCode: 'no_setup',
+          regime: null,
+          decisionTimeMs: 1_791_000_120_000,
+          bucketStartMs: 1_791_000_060_000,
+          proposals: null,
+        }}
+      />,
+    )
+    await screen.findByTestId('observer-now')
+    const source = screen.getByTestId('now-source')
+    expect(source).toHaveTextContent('no trae el detalle de las propuestas')
+    expect(source).not.toHaveTextContent('Ninguna de las')
+  })
+
+  it('young but not confirmed by B1 is shown as unconfirmed, never as current', async () => {
+    // B1 reads an older bucket: the stream and the source disagree.
+    serve({
+      health: () => json(healthWithVerdict(1_790_999_940_000)),
+      activity: quiet,
+    })
+    render(
+      <Observer
+        latest={{
+          action: 'LONG',
+          reasonCode: 'c25_long_pullback',
+          regime: 'trend',
+          decisionTimeMs: 1_791_000_120_000,
+          bucketStartMs: 1_791_000_060_000,
+          proposals: null,
+        }}
+      />,
+    )
+    await screen.findByTestId('observer-now')
+    await waitFor(() =>
+      expect(screen.getByTestId('now-detail')).toHaveAttribute(
+        'data-standing',
+        'unconfirmed',
+      ),
+    )
+    expect(screen.getByTestId('now-unconfirmed')).toHaveTextContent(
+      'B1 no confirma',
+    )
+  })
+
+  it('does not confirm a young decision when B1 says the source is not ok', async () => {
+    serve({
+      health: () => json(healthWithVerdict(1_791_000_060_000, 'error')),
+      activity: quiet,
+    })
+    render(
+      <Observer
+        latest={{
+          action: 'WAIT',
+          reasonCode: 'x',
+          regime: null,
+          decisionTimeMs: 1_791_000_120_000,
+          bucketStartMs: 1_791_000_060_000,
+          proposals: null,
+        }}
+      />,
+    )
+    await screen.findByTestId('observer-now')
+    await waitFor(() =>
+      expect(screen.getByTestId('now-detail')).toHaveAttribute(
+        'data-standing',
+        'unconfirmed',
+      ),
+    )
+  })
+
+  it('names the local clock when the gateway time is not known', async () => {
+    serve({
+      health: () => json(healthWithVerdict(1_791_000_060_000)),
+      activity: quiet,
+    })
+    render(
+      <Observer
+        serverClock={false}
+        latest={{
+          action: 'WAIT',
+          reasonCode: 'x',
+          regime: null,
+          decisionTimeMs: 1_791_000_120_000,
+          bucketStartMs: 1_791_000_060_000,
+          proposals: null,
+        }}
+      />,
+    )
+    await screen.findByTestId('observer-now')
+    expect(screen.getByTestId('now-detail')).toHaveTextContent('(hora local)')
   })
 
   it('labels a LONG or SHORT as a proposal, never as an operation', async () => {
@@ -278,6 +403,7 @@ describe('ObserverPanel (right column)', () => {
           regime: null,
           decisionTimeMs: 1_791_000_120_000,
           bucketStartMs: null,
+          proposals: null,
         }}
       />,
     )

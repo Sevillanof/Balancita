@@ -25,14 +25,26 @@ export type ApprovedTerminalCandle = {
 export type ApprovedTerminalMarker = {
   id: string
   time: number
-  type: 'entry' | 'exit' | 'discard' | 'decision'
+  /**
+   * `proposal`: a LONG/SHORT verdict (a proposal, not an operation).
+   * `wait`: WAIT verdicts, possibly several grouped (`count`).
+   * `fill`: an operation actually executed in paper execution (a real fill).
+   */
+  type: 'entry' | 'exit' | 'discard' | 'decision' | 'proposal' | 'wait' | 'fill'
   direction?: 'long' | 'short' | 'flat'
   label: string
   positionId?: string | null
   /** Strategy that took the decision; colours the marker and feeds the filter. */
   strategyId?: string
   decisionStatus?: 'pending' | 'hold' | 'gate-rejected' | 'abstained'
+  /** A grouped marker stands for several decisions: how many. */
+  count?: number
+  /** Every id a grouped marker stands for (selecting any one highlights it). */
+  memberIds?: readonly string[]
 }
+
+const stands = (marker: ApprovedTerminalMarker, id: string): boolean =>
+  marker.id === id || (marker.memberIds?.includes(id) ?? false)
 
 export type ApprovedTerminalLevel = {
   positionId: string
@@ -110,8 +122,34 @@ import { strategyMarkerColor } from '../domain/terminal-chart-model.ts'
 
 function markerPresentation(
   marker: ApprovedTerminalMarker,
-  colors: { up: string; down: string; amber: string; info: string },
+  colors: {
+    up: string
+    down: string
+    amber: string
+    info: string
+    muted: string
+  },
 ) {
+  // Executed operation: a square on the side of the trade, apart from the
+  // arrows of proposals and the grey circles of WAIT.
+  if (marker.type === 'fill')
+    return marker.direction === 'short'
+      ? {
+          color: colors.down,
+          shape: 'square' as const,
+          position: 'aboveBar' as const,
+        }
+      : {
+          color: colors.up,
+          shape: 'square' as const,
+          position: 'belowBar' as const,
+        }
+  if (marker.type === 'wait')
+    return {
+      color: colors.muted,
+      shape: 'circle' as const,
+      position: 'aboveBar' as const,
+    }
   if (marker.type === 'discard')
     return {
       color: colors.amber,
@@ -491,6 +529,7 @@ export default function ApprovedTerminalChart({
       down: cssColor('--chart-down', '#ee7777'),
       amber: cssColor('--warning', '#d4aa62'),
       info: cssColor('--info', '#79a9bd'),
+      muted: cssColor('--muted-foreground', '#8b969a'),
     }
     const visibleMarkers: SeriesMarker<Time>[] = [...markers]
       .sort((left, right) => left.time - right.time)
@@ -506,9 +545,9 @@ export default function ApprovedTerminalChart({
             position: appearance.position,
             color: strategyColor ?? appearance.color,
             shape: appearance.shape,
-            text: `${marker.label}${selectedId === marker.id ? ' ◀' : ''}`,
+            text: `${marker.label}${stands(marker, selectedId) ? ' ◀' : ''}`,
             id: marker.id,
-            size: selectedId === marker.id ? 2 : 1,
+            size: stands(marker, selectedId) ? 2 : 1,
           },
         ]
       })
@@ -539,7 +578,7 @@ export default function ApprovedTerminalChart({
     if (!series) return
     priceLines.current.forEach((line) => series.removePriceLine(line))
     priceLines.current = []
-    const selected = markers.find((marker) => marker.id === selectedId)
+    const selected = markers.find((marker) => stands(marker, selectedId))
     if (!selected?.positionId) return
     const position = levels.find(
       (item) => item.positionId === selected.positionId,
@@ -566,7 +605,7 @@ export default function ApprovedTerminalChart({
   }, [markers, levels, selectedId, initialViewport])
 
   useEffect(() => {
-    const selected = markers.find((marker) => marker.id === selectedId)
+    const selected = markers.find((marker) => stands(marker, selectedId))
     if (!selected) return
     const bucket = Math.floor(selected.time / intervalSeconds) * intervalSeconds
     const index = candles.findIndex((candle) => candle.time === bucket)

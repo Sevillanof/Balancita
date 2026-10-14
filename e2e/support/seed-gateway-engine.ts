@@ -2,7 +2,7 @@
  * Seeds a throwaway sandbox where the REAL gateway engine follower emits
  * analyses: market DB (real schema, SYNTHETIC candles/ticker), a verdicts DB
  * with a known sequence of verdicts per product and a paper account DB with
- * no orders. Prints the environment the gateway needs plus the facts the
+ * one synthetic executed entry. Prints the environment the gateway needs plus the facts the
  * test checks, as JSON. Every number here is synthetic fixture data.
  */
 import { DatabaseSync } from 'node:sqlite'
@@ -113,11 +113,13 @@ const PLAN: Record<string, Record<number, 'LONG' | 'SHORT'>> = {
   PF_ZECUSD: { 0: 'LONG' },
 }
 const facts: Record<string, unknown> = {}
+const waitIds: Record<string, string[]> = {}
 for (const product of PRODUCTS) {
   const plan = PLAN[product] ?? {}
   // A product whose engine stopped long ago: its newest verdict is history.
   const at = (i: number) => bucketAt(i + (STOPPED_MINUTES[product] ?? 0))
   const summary: unknown[] = []
+  waitIds[product] = []
   for (let i = 89; i >= 0; i -= 1) {
     const action = plan[i] ?? 'WAIT'
     const reason =
@@ -146,6 +148,7 @@ for (const product of PRODUCTS) {
       },
       product,
     )
+    if (action === 'WAIT') waitIds[product]!.push(`${product}-${at(i)}`)
     if (action !== 'WAIT' || i === 0)
       summary.push({
         action,
@@ -157,7 +160,16 @@ for (const product of PRODUCTS) {
   }
   facts[product] = summary
 }
-// A fresh snapshot makes the engine «running» without inventing any order.
+// One SYNTHETIC executed entry in D's account (a buy fill, XBT), at a minute
+// where no LONG/SHORT is planned: the seed links no decision to it, exactly
+// as the product has no record that would.
+const fillAt = bucketAt(12) + 20_000
+account.enter('synthetic-fill-1', fillAt)
+const executed = {
+  PF_XBTUSD: [
+    { orderId: 'synthetic-fill-1', side: 'long', timeMs: fillAt + 150 },
+  ],
+}
 account.snapshot(now - 5_000)
 for (const close of closers) close()
 
@@ -168,5 +180,7 @@ console.log(
     FUTURES_VERDICTS_DB_PATH: verdicts.path,
     FUTURES_PAPER_ACCOUNT_DB_PATH: join(box.dir, 'account.sqlite'),
     facts,
+    waitIds,
+    executed,
   }),
 )

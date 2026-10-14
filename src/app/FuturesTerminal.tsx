@@ -60,6 +60,7 @@ export default function FuturesTerminal({
   const {
     state,
     connected,
+    serverOffsetMs,
     error,
     commandPending,
     commandStatus,
@@ -451,7 +452,8 @@ export default function FuturesTerminal({
                       ? latestDecision(analyses)
                       : null
                   }
-                  nowMs={displayClock}
+                  nowMs={displayClock + (serverOffsetMs ?? 0)}
+                  serverClock={serverOffsetMs !== null}
                 >
                   <TerminalDecisions
                     embedded={liveGateway}

@@ -48,7 +48,7 @@ export default function TerminalMarketChart({
   mode: TerminalBootstrap['mode']
   analyses: unknown[]
   selectedId: string
-  /** Mark only LONG/SHORT verdicts: a WAIT every minute would bury the chart. */
+  /** Live gateway: proposals and WAIT get their own markers (not entries). */
   entriesOnly?: boolean
   onSelect: (analysisId: string) => void
   apiBase: string
@@ -130,12 +130,18 @@ export default function TerminalMarketChart({
               {
                 id,
                 time: renderTime,
-                type: direction ? 'entry' : 'discard',
+                // Live gateway: LONG/SHORT are proposals, WAIT is a wait; they
+                // are never drawn as the operations executed (see `fill`).
+                type: direction
+                  ? entriesOnly
+                    ? 'proposal'
+                    : 'entry'
+                  : entriesOnly
+                    ? 'wait'
+                    : 'discard',
                 ...(direction ? { direction } : {}),
                 label: direction
-                  ? code
-                    ? `${code} ${action}`
-                    : action
+                  ? `${code ? `${code} ` : ''}${action}${entriesOnly ? ' prop.' : ''}`
                   : 'WAIT',
                 ...(direction && typeof strategyId === 'string'
                   ? { strategyId }
@@ -167,6 +173,13 @@ export default function TerminalMarketChart({
           {record(market.candles.at(-1)).closed === true
             ? 'Última vela cerrada'
             : 'Vela en formación'}
+        </p>
+      )}
+      {entriesOnly && (
+        <p className="visually-hidden" data-testid="marker-legend">
+          Marcadores: flecha = propuesta LONG/SHORT (no es una operación);
+          círculo gris = decisión WAIT (agrupadas); cuadrado EJEC. = operación
+          realmente ejecutada en paper; círculo azul = salida.
         </p>
       )}
       <TerminalChartPanel

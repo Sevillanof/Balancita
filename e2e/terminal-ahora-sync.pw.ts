@@ -22,6 +22,8 @@ interface Fact {
   analysisId: string
 }
 let facts: Record<string, Fact[]> = {}
+let waitIds: Record<string, string[]> = {}
+let executed: Record<string, { orderId: string; timeMs: number }[]> = {}
 let gateway: ChildProcess | null = null
 
 test.describe.configure({ mode: 'serial' })
@@ -40,6 +42,8 @@ test.beforeAll(async ({}, info) => {
     }).trim(),
   ) as Record<string, unknown>
   facts = env.facts as Record<string, Fact[]>
+  waitIds = env.waitIds as Record<string, string[]>
+  executed = env.executed as typeof executed
   const gatewayEnv = Object.fromEntries(
     Object.entries(env).filter(([key]) => key.startsWith('FUTURES_')),
   ) as Record<string, string>
@@ -111,15 +115,18 @@ test('AHORA shows the last real analysis of the stream, with its source', async 
   await expect(detail).toContainText('Régimen trend')
   await expect(detail).toContainText(hmm(newest.decisionTimeMs))
   await expect(detail).toContainText(/hace \d+ (s|min)/)
+  // Current = young AND B1 reads this same verdict as the newest of its source.
+  await expect(detail).toHaveAttribute('data-standing', 'current')
+  await expect(detail).toContainText('(hora del servidor)')
   await expect(page.getByTestId('now-source')).toContainText(
-    'análisis del motor recibido por el stream',
+    'flujo en vivo del gateway; no describe el estado del forward',
   )
   await expect(page.getByTestId('now-source')).toContainText(
     'Espera: el selector no abrió operación',
   )
-  // It says nothing about proposals the selector may have rejected.
-  await expect(page.getByTestId('now-source')).not.toContainText(
-    'ninguna estrategia',
+  // It may only say what the verdict records about its proposals.
+  await expect(page.getByTestId('now-source')).toContainText(
+    'La única propuesta registrada en el veredicto no fue LONG/SHORT',
   )
   // The health of the source (B1) stays a separate fact next to it.
   await expect(page.getByTestId('observer-now')).toContainText(
@@ -142,14 +149,24 @@ test('history rows and chart markers are the same decisions and select each othe
   const chart = page.getByTestId('approved-chart-renderer')
   const entries = facts.PF_XBTUSD!.filter((f) => f.action !== 'WAIT')
   expect(entries).toHaveLength(3)
-  // Only entries are drawn; the waits are not markers.
-  await expect(chart).toHaveAttribute('data-marker-count', '3')
   const rows = page.locator('.connected-terminal__decision-list li button')
   await expect(rows).toHaveCount(3)
+  // Proposals, grouped WAITs and the one executed fill: each from a real source.
   const positions = await markerPositions(chart)
-  expect(positions.map((p) => p.id).sort()).toEqual(
-    entries.map((f) => f.analysisId).sort(),
-  )
+  const ids = positions.map((p) => p.id)
+  for (const f of entries) expect(ids).toContain(f.analysisId)
+  expect(ids).toContain(`fill:${executed.PF_XBTUSD![0]!.orderId}`)
+  const waits = ids.filter((id) => waitIds.PF_XBTUSD!.includes(id))
+  // Every other marker is a WAIT group, far fewer than one per minute.
+  expect(ids).toHaveLength(entries.length + 1 + waits.length)
+  expect(waits.length).toBeGreaterThan(0)
+  expect(waits.length).toBeLessThanOrEqual(8)
+  if (SHOTS) {
+    mkdirSync(SHOTS, { recursive: true })
+    await page.screenshot({
+      path: `${SHOTS}/marcadores-propuesta-wait-ejecutada.png`,
+    })
+  }
 
   // History -> chart: pick the middle (SHORT) row.
   const short = entries.find((f) => f.action === 'SHORT')!
@@ -206,7 +223,11 @@ test('changing product swaps AHORA, rows and markers; nothing leaks across', asy
     'c26_short_reversion',
   )
   await expect(page.getByTestId('now-detail')).toContainText('Régimen range')
-  await expect(chart).toHaveAttribute('data-marker-count', '2')
+  const ethIds = (await markerPositions(chart)).map((p) => p.id)
+  for (const f of eth.filter((x) => x.action !== 'WAIT'))
+    expect(ethIds).toContain(f.analysisId)
+  // ETH has no executed operation in D: no executed marker may appear.
+  expect(ethIds.filter((id) => id.startsWith('fill:'))).toEqual([])
   const rows = page.locator('.connected-terminal__decision-list li button')
   await expect(rows).toHaveCount(2)
   for (const xbt of facts.PF_XBTUSD!.filter((f) => f.action !== 'WAIT'))
@@ -223,7 +244,12 @@ test('changing product swaps AHORA, rows and markers; nothing leaks across', asy
   await page.getByRole('combobox').first().selectOption('PF_SOLUSD')
   await expect(page.getByTestId('now-action')).toHaveText('Espera')
   await expect(page.getByTestId('now-detail')).toContainText('Régimen trend')
-  await expect(chart).toHaveAttribute('data-marker-count', '0')
+  // SOL only has WAITs: grouped WAIT markers, no proposal and no operation.
+  await expect(
+    page.getByRole('button', { name: /Seleccionar análisis/ }),
+  ).toHaveCount(0)
+  const solIds = (await markerPositions(chart)).map((p) => p.id)
+  for (const id of solIds) expect(waitIds.PF_SOLUSD).toContain(id)
 })
 
 test('an old verdict of a stopped engine is history, never the current state', async ({
@@ -319,10 +345,16 @@ test('chart controls on real data: timeframes, zoom, navigation, back to present
         (await chart.getAttribute('data-marker-positions')) ?? '[]',
       ) as { id: string }[]
     ).map((p) => p.id)
-    // Never a marker that is not one of the three real entries.
-    for (const id of ids) expect(entries.map((f) => f.analysisId)).toContain(id)
+    // Never a marker that is not a real proposal, WAIT or executed fill.
+    const real = [
+      ...entries.map((f) => f.analysisId),
+      ...waitIds.PF_XBTUSD!,
+      `fill:${executed.PF_XBTUSD![0]!.orderId}`,
+    ]
+    for (const id of ids) expect(real).toContain(id)
     // Same-hour entries stack on one candle; none may be dropped or invented.
-    expect(ids).toHaveLength(3)
+    for (const f of entries) expect(ids).toContain(f.analysisId)
+    expect(ids.filter((id) => id.startsWith('fill:'))).toHaveLength(1)
   }
 
   // Indicators on and off.

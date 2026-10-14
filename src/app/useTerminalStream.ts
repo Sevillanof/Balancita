@@ -26,6 +26,10 @@ export function useTerminalStream({
 }) {
   const [state, setState] = useState<ViewState | null>(null)
   const [connected, setConnected] = useState(false)
+  // Gateway clock minus this browser's clock, read from the envelopes the
+  // gateway stamps when it sends them (snapshot, heartbeat). Null until one
+  // arrives: nothing then claims to be on the gateway's time.
+  const [serverOffsetMs, setServerOffsetMs] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [commandPending, setCommandPending] = useState(false)
   const [commandStatus, setCommandStatus] = useState('')
@@ -87,6 +91,11 @@ export function useTerminalStream({
           setError('El flujo devolvió un evento incompatible.')
           return
         }
+        if (
+          (event.type === 'snapshot' || event.type === 'heartbeat') &&
+          event.run_id === activeRunRef.current
+        )
+          setServerOffsetMs(event.published_at - Date.now())
         if (event.type === 'snapshot') {
           if (event.run_id !== activeRunRef.current) {
             // Only a requested new run may move the view to another run.
@@ -236,6 +245,7 @@ export function useTerminalStream({
   return {
     state,
     connected,
+    serverOffsetMs,
     error,
     commandPending,
     commandStatus,

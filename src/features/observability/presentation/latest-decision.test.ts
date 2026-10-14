@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { latestDecision } from './latest-decision.ts'
+import {
+  decisionStanding,
+  latestDecision,
+  type LatestDecision,
+} from './latest-decision.ts'
 
 describe('latestDecision', () => {
   it('ignores an analysis whose origin is not the engine verdicts', () => {
@@ -40,6 +44,7 @@ describe('latestDecision', () => {
       regime: 'trend',
       decisionTimeMs: 2_000,
       bucketStartMs: 1_000,
+      proposals: null,
     })
   })
 
@@ -62,5 +67,68 @@ describe('latestDecision', () => {
         },
       ]),
     ).toMatchObject({ action: 'SHORT', reasonCode: 'r', regime: null })
+  })
+})
+
+describe('latestDecision proposals', () => {
+  it('counts directional proposals only when the list is present', () => {
+    const base = {
+      runtime_version: 'futures-verdict.v1',
+      action: 'WAIT',
+      decision_time_ms: 10,
+    }
+    expect(latestDecision([base])?.proposals).toBeNull()
+    expect(
+      latestDecision([
+        {
+          ...base,
+          proposals: [{ action: 'WAIT' }, { action: 'long' }, null],
+        },
+      ])?.proposals,
+    ).toEqual({ total: 3, directional: 1 })
+    expect(latestDecision([{ ...base, proposals: [] }])?.proposals).toEqual({
+      total: 0,
+      directional: 0,
+    })
+  })
+})
+
+describe('decisionStanding', () => {
+  const decision: LatestDecision = {
+    action: 'WAIT',
+    reasonCode: null,
+    regime: null,
+    decisionTimeMs: 1_000_000,
+    bucketStartMs: 940_000,
+    proposals: null,
+  }
+  const same = { status: 'ok' as const, bucketStartMs: 940_000 }
+
+  it('is current only with age and B1 evidence together', () => {
+    expect(decisionStanding(decision, 1_030_000, same)).toBe('current')
+    // Age alone is not proof.
+    expect(decisionStanding(decision, 1_030_000, null)).toBe('unconfirmed')
+    expect(
+      decisionStanding(decision, 1_030_000, { ...same, status: 'warning' }),
+    ).toBe('unconfirmed')
+    expect(
+      decisionStanding(decision, 1_030_000, {
+        ...same,
+        bucketStartMs: 1_000_000,
+      }),
+    ).toBe('unconfirmed')
+    expect(
+      decisionStanding({ ...decision, bucketStartMs: null }, 1_030_000, same),
+    ).toBe('unconfirmed')
+  })
+
+  it('B1 cannot make an old decision current', () => {
+    expect(decisionStanding(decision, 1_000_000 + 600_000, same)).toBe(
+      'historic',
+    )
+  })
+
+  it('does not date a decision in the future of the clock', () => {
+    expect(decisionStanding(decision, 900_000, same)).toBe('unprovable')
   })
 })
