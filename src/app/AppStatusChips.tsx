@@ -9,9 +9,9 @@ import { flowStatus, type FlowLevel } from './terminal-flow.ts'
 const HEALTH_POLL_MS = 10_000
 
 const SHORT_LABELS: Record<FlowLevel, string> = {
-  ok: 'En vivo',
-  warn: 'Con problemas',
-  bad: 'Sin conexión',
+  ok: 'Flujo en vivo',
+  warn: 'Flujo con problemas',
+  bad: 'Flujo sin conexión',
 }
 
 /** What the terminal already knows from its own WebSocket and quote. */
@@ -23,8 +23,8 @@ export interface FlowOverride {
 
 /**
  * The one status control of the header, the same on every page. It is the B1
- * health chip (see HealthIndicator) with the flow (en vivo, con problemas, sin
- * conexión) and the PAPER mark as details; clicking it opens the B1 inspector,
+ * health chip (see HealthIndicator) with the flow of the gateway's data (en
+ * vivo, con problemas, sin conexión; it is not the health of every service) and the PAPER mark as details; clicking it opens the B1 inspector,
  * which also holds the flow diagnosis: why the flow is not ok, usage (CPU,
  * data, Qwen, Kronos), the source and whatever technical detail the page
  * passes in `diagnosis`. The terminal passes `override` with what its
@@ -101,22 +101,34 @@ export default function AppStatusChips({
       flow={{ level: flow.level, text: SHORT_LABELS[flow.level], mode: paper }}
       extra={
         <>
-          <p className="obs-flow__title">{flow.label}</p>
-          {flow.reasons.length > 0 ? (
-            <ul>
-              {flow.reasons.map((reason) => (
-                <li key={reason}>{reason}</li>
-              ))}
-            </ul>
-          ) : (
-            <p>Todo corre con normalidad.</p>
-          )}
-          {showUsage && <SystemUsageChip apiBase={apiBase} />}
           <p>
-            <strong>{modeLabel}</strong> · precios reales de Kraken, operaciones
-            simuladas, sin órdenes reales ni conexión privada.
+            <strong className="obs-flow__title">{flow.label}</strong>{' '}
+            <span className="obs-flow__scope">
+              (solo el flujo de datos del gateway)
+            </span>
           </p>
-          {diagnosis}
+          <details>
+            <summary>Diagnóstico del flujo, uso y modo</summary>
+            {flow.reasons.length > 0 ? (
+              <ul>
+                {flow.reasons.map((reason) => (
+                  <li key={reason}>{reason}</li>
+                ))}
+              </ul>
+            ) : (
+              <p>
+                El flujo del gateway no informa problemas. Esto no resume la
+                salud de los servicios: eso lo dicen los seis componentes de
+                abajo.
+              </p>
+            )}
+            {showUsage && <SystemUsageChip apiBase={apiBase} />}
+            <p>
+              <strong>{modeLabel}</strong> · precios reales de Kraken,
+              operaciones simuladas, sin órdenes reales ni conexión privada.
+            </p>
+            {diagnosis}
+          </details>
         </>
       }
     />

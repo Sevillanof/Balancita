@@ -65,9 +65,9 @@
 
 .obs-flow {
   display: grid;
-  gap: var(--mc-space-sm);
-  margin-bottom: var(--mc-space-md);
-  padding: var(--mc-space-md) var(--mc-space-lg);
+  gap: var(--mc-space-xs, 4px);
+  margin-bottom: var(--mc-space-sm);
+  padding: var(--mc-space-sm) var(--mc-space-lg);
   border: 1px solid var(--mc-border);
   border-radius: var(--mc-radius);
   color: var(--mc-text-2);
@@ -85,6 +85,13 @@
 .obs-flow__title {
   color: var(--mc-text);
   font-weight: 600;
+}
+.obs-flow__scope {
+  color: var(--mc-text-2);
+  font-weight: 400;
+}
+.obs-flow details > :not(summary) {
+  margin-top: var(--mc-space-sm);
 }
 .obs-flow .demo-shell__badge {
   justify-self: start;

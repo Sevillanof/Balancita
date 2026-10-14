@@ -33,7 +33,7 @@ describe('AppStatusChips', () => {
       ),
     )
     render(<AppStatusChips apiBase="/api-live" showUsage={false} />)
-    expect(await screen.findByText('En vivo')).toBeInTheDocument()
+    expect(await screen.findByText('Flujo en vivo')).toBeInTheDocument()
     expect(screen.queryByText('Sin precio recibido todavía')).toBeNull()
   })
 
@@ -50,7 +50,7 @@ describe('AppStatusChips', () => {
     const chip = screen.getByTestId('health-indicator')
     expect(chip).toHaveTextContent('Salud: 5 con problemas')
     expect(within(chip).getByTestId('flow-status')).toHaveTextContent(
-      'Sin conexión',
+      'Flujo sin conexión',
     )
     expect(chip).toHaveTextContent('PAPER')
     expect(screen.getAllByTestId('health-indicator')).toHaveLength(1)
