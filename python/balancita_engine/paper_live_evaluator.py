@@ -35,13 +35,14 @@ from .futures_funding_context import PUBLICATION_LAG_MS, FundingContext
 from .futures_simulator import FIVE_MINUTES_MS, ONE_MINUTE_MS
 from .multi_experiment import FrameFeeder, required_warmup_ms
 from .multi_signals import merged_indicators, stable_hash
-from .paper_runner import make_event
 
 D = Decimal
 HOUR_MS = 3_600_000
 SCHEMA = "balancita-paper-live-evaluator.v1"
 LOG_SCHEMA = "balancita-paper-live-evaluator-log.v1"
 GENESIS = "0" * 64
+SEEN_MINUTES = 2880                        # candles remembered to detect a revised repeat (two days)
+FRAME_KEEP_MS = 3_600_000                  # frames of cycles the runner did not evaluate are dropped after an hour
 CYCLE_ASSEMBLY = "cycle-payload.v1"        # product_id, cycle_ms, price = candidate_close, atr = cycle_atr or atr14
 
 
@@ -138,6 +139,7 @@ class LiveEvaluator(object):
         self.state = {p: self._fresh_product() for p in self.products}
         self.cycles, self.frames, self.flags = {}, {}, {}
         self.audit_rows, self.gaps, self.suppressed, self.late_funding, self.rejected = [], [], [], [], []
+        self.conflicts, self.seen = [], {}
         self.stats = {"candles": 0, "duplicates": 0, "cycles": 0, "funding_hours": 0}
 
     # ---- construction ----------------------------------------------------------------------------------------
@@ -160,6 +162,8 @@ class LiveEvaluator(object):
         for entry in log.entries[1:]:
             if entry["kind"] == "candle":
                 evaluator._apply_candle(entry["data"]["product_id"], entry["data"]["candle"], entry["data"]["arrival_ms"])
+            elif entry["kind"] == "conflict":
+                evaluator.conflicts.append(entry["data"])
             elif entry["kind"] == "funding":
                 d = entry["data"]
                 evaluator._apply_funding(d["product_id"], d["start_ms"], d["rate"], d["arrival_ms"])
@@ -181,8 +185,18 @@ class LiveEvaluator(object):
             self.rejected.append({"product_id": product, "bucket_start": candle.get("bucket_start") if isinstance(candle, dict) else None,
                                   "reason": "invalid_candle"})
             return {"cycle": None, "duplicate": False, "rejected": "invalid_candle"}
-        if candle["bucket_start"] > self.state[product]["last_one"]:      # a repeat is not logged twice
+        bucket = candle["bucket_start"]
+        if int(arrival_ms) < bucket + ONE_MINUTE_MS:                      # a candle cannot arrive before its minute ends
+            self.rejected.append({"product_id": product, "bucket_start": bucket, "reason": "arrival_before_close"})
+            return {"cycle": None, "duplicate": False, "rejected": "arrival_before_close"}
+        if bucket > self.state[product]["last_one"]:                      # a repeat is not logged twice
             self.log.append("candle", {"product_id": product, "arrival_ms": int(arrival_ms), "candle": candle})
+        else:
+            known = self.seen.get((product, bucket))
+            if known is not None and known != stable_hash(candle):         # the source revised a minute we already used
+                data = {"product_id": product, "bucket_start": bucket, "arrival_ms": int(arrival_ms), "candle": candle}
+                self.log.append("conflict", data)
+                self.conflicts.append(data)
         return self._apply_candle(product, candle, arrival_ms)
 
     def feed_funding(self, product, start_ms, rate, arrival_ms):
@@ -191,6 +205,9 @@ class LiveEvaluator(object):
             raise EvaluatorError("unknown_product", product)
         if start_ms in self.state[product]["funding"]:
             return False                                                 # first seen wins, as in the forward
+        if int(arrival_ms) < int(start_ms) + HOUR_MS:                    # an hour that has not ended is provisional: never fixed
+            self.rejected.append({"product_id": product, "hour_ms": int(start_ms), "reason": "funding_before_hour_end"})
+            return False
         self.log.append("funding", {"product_id": product, "start_ms": int(start_ms), "rate": float(rate),
                                     "arrival_ms": int(arrival_ms)})
         return self._apply_funding(product, start_ms, float(rate), arrival_ms)
@@ -224,6 +241,8 @@ class LiveEvaluator(object):
         if state["feeder"] is None:
             state["feeder"] = FrameFeeder(self.periods)
         self.stats["candles"] += 1
+        self.seen[(product, bucket)] = stable_hash(candle)
+        self.seen.pop((product, bucket - SEEN_MINUTES * ONE_MINUTE_MS), None)
         bar_start = bucket - bucket % FIVE_MINUTES_MS
         state["bar"][bucket] = candle
         five = None
@@ -242,14 +261,12 @@ class LiveEvaluator(object):
             self.suppressed.append({"product_id": product, "cycle_ms": close_ms, "reason": "gap_warmup",
                                     "until_ms": state["suppress_until"]})
             return {"cycle": None, "duplicate": False, "rejected": None}
-        trend = frame[3]
-        atr = self.cycle_atr(frame) if self.cycle_atr is not None else None
-        atr = trend["atr14"] if atr is None or atr <= 0 else atr
-        event = make_event("cycle", {"product_id": product, "cycle_ms": close_ms, "price": str(trend["candidate_close"]),
-                                     "atr": str(atr)}, t_ms=max(int(arrival_ms), close_ms), source=self.source,
-                           stream="cycles:" + product)
+        event = RP.make_cycle_event(product, close_ms, frame, self.cycle_atr, source=self.source,
+                                    lag_ms=max(int(arrival_ms) - close_ms, 0))
         key = (product, close_ms)
         self.cycles[key], self.frames[key] = event, frame
+        for old in [k for k in self.frames if k[0] == product and k[1] < close_ms - FRAME_KEEP_MS]:
+            del self.frames[old]                                          # a frame the runner never asked for is not kept forever
         self.flags[key] = RFA.audit_record(state["context"], close_ms, self.bands)
         self.stats["cycles"] += 1
         return {"cycle": event, "duplicate": False, "rejected": None}
@@ -263,9 +280,7 @@ class LiveEvaluator(object):
         results = SC.evaluate_cycle(chosen, payload["product_id"], payload["cycle_ms"], frame)
         for strategy, (signal, _inputs) in zip(chosen, results):
             if getattr(strategy, "uses_funding", False):
-                row = dict(flag, strategy_id=strategy.id, product_id=payload["product_id"], original=signal["action"])
-                row["incomplete_evidence"] = signal["action"] != "WAIT" and bool(flag.get("carry_forward") or flag.get("long_window"))
-                row["strict_class"] = RFA.classify(signal["action"], flag["strict_signal"])
+                row = RP.funding_audit_row(strategy, payload["product_id"], signal["action"], flag)
                 self.audit_rows.append(row)
         return results
 
@@ -289,4 +304,4 @@ class LiveEvaluator(object):
 
     def report(self):
         return {"stats": dict(self.stats), "gaps": list(self.gaps), "suppressed": list(self.suppressed),
-                "late_funding": list(self.late_funding), "rejected": list(self.rejected), "log_tail_discarded": self.log.tail_discarded}
+                "late_funding": list(self.late_funding), "rejected": list(self.rejected), "candle_conflicts": list(self.conflicts), "log_tail_discarded": self.log.tail_discarded}

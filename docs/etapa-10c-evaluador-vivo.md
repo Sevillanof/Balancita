@@ -1,6 +1,6 @@
 # Etapa 10C: evaluador de sesión con el pipeline del replay 9A
 
-Estado: **diseño, contratos y pruebas sintéticas**. Código nuevo: `python/balancita_engine/paper_live_evaluator.py`; pruebas: `python/tests/test_paper_live_evaluator.py` (17). No hay conexión con la captura real, proceso persistente, lectura de bases reales ni cambios en `paper_runner.py`, forward, captura, Kronos, Qwen, estrategias congeladas, riesgo ni ADR. Sesión de integración: `mode = integration`, `evidence_class = not_forward_evidence`.
+Estado: **diseño, contratos y pruebas sintéticas**. Código nuevo: `python/balancita_engine/paper_live_evaluator.py`; pruebas: `python/tests/test_paper_live_evaluator.py` (21). No hay conexión con la captura real, proceso persistente, lectura de bases reales ni cambios en `paper_runner.py`, forward, captura, Kronos, Qwen, estrategias congeladas, riesgo ni ADR. Sesión de integración: `mode = integration`, `evidence_class = not_forward_evidence`.
 
 **Dependencia de 9A.** Esta PR está apilada sobre la rama de 9A (PR #153) porque importa `replay_driver`, `replay_specs` y `replay_funding_audit`, que solo existen allí. Si #153 cambia esas interfaces o se fusiona primero, hay que reapuntar esta PR; no se copió nada de 9A.
 
@@ -17,7 +17,7 @@ Recibe velas de 1 min **cerradas** y horas de funding, y devuelve eventos `cycle
 | Volatilidad que el runner toma como `atr`               | `SpecSignalStrategy.cycle_atr`                       |
 | Registro de auditoría de funding                        | `replay_funding_audit.audit_record` / `classify`     |
 
-No se agregó ningún indicador, regla de estrategia, riesgo, costo ni contabilidad. **No es un segundo evaluador**: lo que hace propio es el ensamblado del evento `cycle` (cuatro campos) y la gestión de entradas de una sesión; ambos están cubiertos por pruebas que comparan contra `replay_driver.product_events`.
+No se agregó ningún indicador, regla de estrategia, riesgo, costo ni contabilidad. **No es un segundo evaluador**: el evento `cycle` y las filas de auditoría salen de `replay_driver.make_cycle_event` y `replay_driver.funding_audit_row` (exportadas por 9A en #153 @ 2d97cc9); lo propio es la gestión de entradas de una sesión, cubierta por pruebas que comparan contra `replay_driver.product_events`.
 
 ## 2. Contrato
 
@@ -37,12 +37,13 @@ La vela es `{bucket_start, open, high, low, close, volume_btc}` (texto), como la
 - Un ciclo se evalúa solo cuando llega la vela que cierra su barra de 5 min; no existe ninguna ruta por la que una vela posterior lo alcance (el evaluador no recibe el futuro).
 - El funding de una hora entra al contexto cuando llega. `FundingContext.percentile(t)` sigue filtrando por `inicio + 1 h + 10 min <= t`. Una hora que llega **después** de ciclos que la necesitaban queda registrada (`late_funding`, con cuántos ciclos se evaluaron sin ella): esos ciclos fueron causales pero no son los que daría un replay con la serie completa.
 - Un minuto faltante es un **hueco**: los indicadores posteriores no son confiables, así que se reconstruye el `FrameFeeder` y no se decide durante el calentamiento que exigen los indicadores declarados (`required_warmup_ms`, mínimo un día); cada ciclo suprimido queda registrado (`suppressed`, motivo `gap_warmup`). El replay se niega a arrancar si hay huecos en su ventana de decisión.
-- Una vela inválida (OHLC incoherente, no decimal, bucket desalineado) se rechaza y se cuenta; no toca el estado ni el log.
+- Una vela inválida (OHLC incoherente, no decimal, bucket desalineado) o con llegada anterior a su cierre se rechaza y se cuenta; no toca el estado ni el log. Una hora de funding que llega antes de terminar (valor provisional) también se rechaza: «el primero visto gana» nunca fija un valor provisional. Una vela repetida con contenido distinto se devuelve como duplicado pero queda registrada en el log como `candle_conflict` (se ve en `report()` y sobrevive a `recover`); la memoria para detectarlo es de dos días de velas.
 
 ## 4. Recuperación sin pickle
 
 Cada entrada (vela, hora de funding) se escribe en un **log propio del evaluador**, encadenado por hash y con `fsync`, **antes** de usarse. `recover` vuelve a alimentar ese log a un evaluador nuevo: mismos ciclos, mismos `event_id`, misma identidad. No depende de cuánto retenga la captura ni de serializar el `FrameFeeder`.
 
+- **Contrato del llamador.** El ciclo que devuelve un duplicado se entrega **igual** al runner, que lo deduplica por `event_id`. Si el llamador lo descarta, un ciclo evaluado antes de la caída pero no journalado se pierde (lo demuestra una prueba). `rejected` y `frames` no son durables: tras `recover`, `rejected` empieza vacío (las velas inválidas no se registran en el log) y los cuadros de ciclos que el runner no pidió se descartan pasada una hora.
 - Una vela entregada de nuevo (el ingestor repite filas tras una caída) devuelve **el mismo** ciclo la primera vez que se produjo (`duplicate = true`) y no se registra otra vez: el runner lo deduplica si ya lo journaló, o lo procesa si la caída ocurrió entre «evaluado» y «journaled».
 - Última línea incompleta del log: se descarta y se informa (`log_tail_discarded`). Una línea alterada, fuera de secuencia o con hash roto: `log_corrupt`. Otro conjunto de estrategias: `strategies_changed`.
 - El runner no reevalúa en la recuperación: lee las señales persistidas de su `SignalLog` (decisión 8B).
@@ -68,7 +69,7 @@ Cada entrada (vela, hora de funding) se escribe en un **log propio del evaluador
 
 1. **Barra de 5 min.** El replay lee la serie oficial de 5 min; la sesión la agrega desde los 5 minutos que cubre. Sobre datos sintéticos son idénticas; sobre datos reales la diferencia es la que mide `replay_data.consistency_5m_vs_1m` (tolerancia de volumen 1e-6 relativo). **Condición previa a una sesión real**, hoy no verificable (no hay lectura real autorizada).
 2. **Huecos.** La sesión reconstruye y suprime; el replay se niega (o continúa con `--allow-gaps`).
-3. **Hora de llegada.** El replay usa `cierre + 2 s` por regla; la sesión, la llegada real de la vela. La señal no depende de ese tiempo (usa `cycle_ms`); sí depende de qué funding había llegado.
+3. **Hora de llegada.** El replay usa `cierre + 2 s` por regla; la sesión, la llegada real de la vela. `event_id` coincide con el del replay solo si la llegada es exactamente cierre + 2 s (alcance de la paridad: señales y orden son iguales; la identidad del evento no, con llegadas reales). La señal no depende de ese tiempo (usa `cycle_ms`); sí depende de qué funding había llegado.
 4. **Funding tardío.** Ver §3: causal, pero distinto del replay con serie completa; se cuantifica en `late_funding`.
 5. **Ejecución.** El replay llena con precios modelados; la sesión, con cotizaciones observadas. **Órdenes, trades y P&L no son comparables** (además, la cartera compartida del runner es solo experimental y el forward sigue con 100 USD fijos). Lo que se compara es todo lo anterior al fill: ciclos y señales. No se afirma paridad financiera.
 6. **Cadencia.** Igual que el replay: se decide en el último minuto de cada barra de 5 min; el forward evalúa cada minuto. Señales comparables, trades no (ya declarado por 9A).
@@ -76,14 +77,14 @@ Cada entrada (vela, hora de funding) se escribe en un **log propio del evaluador
 
 ## 8. Bloqueos y pedidos
 
-| #       | Qué                                                                                                                                                                                                                      | Dueño                                    |
-| ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------- |
-| D-10C-1 | El ensamblado del `cycle` (cuatro campos) y el cuerpo del `evaluator` con las filas de auditoría están inline en `replay_driver`; la sesión los repite (guardado por pruebas). Pedir a 9A que los exporte como funciones | 9A                                       |
-| D-10C-2 | **El ingestor de 10B no entrega `volume_btc` en las velas** (solo OHLC), y `logvol` y otros indicadores lo necesitan. Hay que agregarlo al ingestor (y a su `SELECT`) antes de conectarlo con este evaluador             | 10B (nueva PR, tras la decisión de Fran) |
-| D-10C-3 | Cancelación `source_stale` (D-10-01 = B) y detección fiable de interrupciones: el evaluador no resuelve nada de esto                                                                                                     | 9A + coordinador                         |
-| D-10C-4 | Eventos `funding` para el runner (acumulación en el portafolio): la tabla `paper_futures_funding_periods` no tiene columna de producto; el evaluador solo usa el funding para el percentil                               | 9A / 10                                  |
-| D-10C-5 | Historia de arranque (calentamiento de varios días de velas 1 min y 720 h de funding) desde una fuente autorizada; hoy no se lee ninguna base real                                                                       | Fran (autorización)                      |
-| D-10C-6 | La puerta 9A sigue abierta: si cambian `replay_driver`/`replay_specs`, esta PR debe seguirlos                                                                                                                            | 9A                                       |
+| #       | Qué                                                                                                                                                                                                          | Dueño                                    |
+| ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------- |
+| D-10C-1 | **Resuelto** por 9A (#153 @ 2d97cc9): `make_cycle_event` y `funding_audit_row`; esta PR ya las usa y no repite el ensamblado                                                                                 | 9A                                       |
+| D-10C-2 | **El ingestor de 10B no entrega `volume_btc` en las velas** (solo OHLC), y `logvol` y otros indicadores lo necesitan. Hay que agregarlo al ingestor (y a su `SELECT`) antes de conectarlo con este evaluador | 10B (nueva PR, tras la decisión de Fran) |
+| D-10C-3 | Cancelación `source_stale` (D-10-01 = B) y detección fiable de interrupciones: el evaluador no resuelve nada de esto                                                                                         | 9A + coordinador                         |
+| D-10C-4 | Eventos `funding` para el runner (acumulación en el portafolio): la tabla `paper_futures_funding_periods` no tiene columna de producto; el evaluador solo usa el funding para el percentil                   | 9A / 10                                  |
+| D-10C-5 | Historia de arranque (calentamiento de varios días de velas 1 min y 720 h de funding) desde una fuente autorizada; hoy no se lee ninguna base real                                                           | Fran (autorización)                      |
+| D-10C-6 | La puerta 9A sigue abierta: si cambian `replay_driver`/`replay_specs`, esta PR debe seguirlos                                                                                                                | 9A                                       |
 
 ## 9. Condiciones que faltarían para una sesión paper temporal
 

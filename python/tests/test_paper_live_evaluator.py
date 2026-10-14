@@ -103,10 +103,11 @@ class Fixture(unittest.TestCase):
             out = ev.feed_candle(BTC, data, arrival)
             if sink is not None and data["bucket_start"] + MIN >= FIRST_DECISION - FIVE_MINUTES_MS:
                 sink(RP._candle_event(BTC, data))
-            if out["cycle"] is not None and not out["duplicate"]:
-                cycles.append(out["cycle"])
+            if out["cycle"] is not None:
+                if not out["duplicate"]:
+                    cycles.append(out["cycle"])
                 if sink is not None:
-                    sink(out["cycle"])
+                    sink(out["cycle"])          # contract: a duplicate returns its cycle too and the runner dedups by event_id
         return cycles
 
     def runner_config(self):
@@ -254,6 +255,8 @@ class TestNoLookahead(Fixture):
         self.assertEqual(before, after)
         flags = lambda ev: [ev.flags[(BTC, c)]["forward_percentile"] for c in sorted(k[1] for k in ev.flags) if c <= cycle_ms]   # noqa: E731
         self.assertEqual(flags(base_ev), flags(changed_ev))
+        later = lambda ev: [ev.flags[(BTC, c)]["forward_percentile"] for c in sorted(k[1] for k in ev.flags) if c > cycle_ms + HOUR]   # noqa: E731
+        self.assertNotEqual(later(base_ev), later(changed_ev))               # the probe bites once the hour is published
 
     def test_a_late_funding_hour_is_reported_with_the_cycles_that_went_without_it(self):
         skipped = ((FIRST_DECISION + 10 * HOUR) // HOUR) * HOUR - 3 * HOUR
@@ -307,27 +310,84 @@ class TestRecoveryAndGaps(Fixture):
     def test_a_crash_between_evaluating_and_the_runner_journal_loses_no_cycle_and_duplicates_none(self):
         items = self.stream()
         want_cycles, want_signals, _ = self.uninterrupted()
-        first_cycle = next(i for i, it in enumerate(items) if it[2] == "candle"
-                           and it[3]["bucket_start"] + MIN >= FIRST_DECISION and (it[3]["bucket_start"] + MIN) % FIVE_MINUTES_MS == 0)
+        victim = next(it for it in items if it[2] == "candle" and it[3]["bucket_start"] + MIN >= FIRST_DECISION + 12 * HOUR
+                      and (it[3]["bucket_start"] + MIN) % FIVE_MINUTES_MS == 0)
+        resume = items.index(victim)
         durable = os.path.join(self.dir, "runner")
         ev = self.evaluator("crash.jsonl")
         runner = PaperRunner.create(durable, self.runner_config(), self.strategies, evaluator=ev.evaluator)
-        sink = runner.handle
-        self.drive(ev, items[:first_cycle + 2000], sink=sink)
-        victim = next(it for it in items[first_cycle + 2000:] if it[2] == "candle" and (it[3]["bucket_start"] + MIN) % FIVE_MINUTES_MS == 0
-                      and it[3]["bucket_start"] + MIN >= FIRST_DECISION)
-        resume = items.index(victim)
-        self.drive(ev, items[first_cycle + 2000:resume])
+        self.drive(ev, items[:resume], sink=runner.handle)
         # the evaluator logged the closing candle and made the cycle; the process dies before the runner journaled it
-        ev.feed_candle(BTC, victim[3], victim[0])
+        made = ev.feed_candle(BTC, victim[3], victim[0])
+        self.assertIsNotNone(made["cycle"])                             # the probe bites: the victim is a cycle inside the window
         clock = runner.clock
         runner.close()
         revived = LE.LiveEvaluator.recover(os.path.join(self.dir, "crash.jsonl"), self.strategies, source=RP.SOURCE)
         runner2 = PaperRunner.recover(durable, self.runner_config(), self.strategies, clock, evaluator=revived.evaluator)
         self.addCleanup(runner2.close)
         self.drive(revived, items[resume:], sink=runner2.handle)      # the ingestor hands the victim candle in again
+        self.assertEqual(len(self.signal_ids(runner2)), len(want_signals))
         self.assertEqual(self.signal_ids(runner2), want_signals)
         self.assertEqual(runner2.stats.get("rejected:evaluation_failed", 0), 0)
+
+    def test_without_delivering_the_duplicates_cycle_the_runner_would_lose_it(self):
+        """The contract made explicit: the cycle a duplicate returns must go to the runner, which dedups by event_id."""
+        items = self.stream()
+        want_signals = self.uninterrupted()[1]
+        victim = next(it for it in items if it[2] == "candle" and it[3]["bucket_start"] + MIN >= FIRST_DECISION + 12 * HOUR
+                      and (it[3]["bucket_start"] + MIN) % FIVE_MINUTES_MS == 0)
+        resume = items.index(victim)
+        durable = os.path.join(self.dir, "runner-lossy")
+        ev = self.evaluator("lossy.jsonl")
+        runner = PaperRunner.create(durable, self.runner_config(), self.strategies, evaluator=ev.evaluator)
+        self.drive(ev, items[:resume], sink=runner.handle)
+        ev.feed_candle(BTC, victim[3], victim[0])
+        clock = runner.clock
+        runner.close()
+        revived = LE.LiveEvaluator.recover(os.path.join(self.dir, "lossy.jsonl"), self.strategies, source=RP.SOURCE)
+        runner2 = PaperRunner.recover(durable, self.runner_config(), self.strategies, clock, evaluator=revived.evaluator)
+        self.addCleanup(runner2.close)
+        for arrival, _rank, kind, data in items[resume:]:             # the wrong caller: it drops what a duplicate returns
+            if kind == "funding":
+                revived.feed_funding(BTC, data[0], data[1], arrival)
+                continue
+            out = revived.feed_candle(BTC, data, arrival)
+            runner2.handle(RP._candle_event(BTC, data))
+            if out["cycle"] is not None and not out["duplicate"]:
+                runner2.handle(out["cycle"])
+        self.assertNotEqual(self.signal_ids(runner2), want_signals)
+
+    def test_a_candle_that_arrives_before_its_minute_ends_is_rejected(self):
+        ev = self.evaluator("early.jsonl")
+        self.drive(ev, self.head(50))
+        candle = self.cache["ones"][50]
+        out = ev.feed_candle(BTC, candle, candle["bucket_start"] + 1000)
+        self.assertEqual(out["rejected"], "arrival_before_close")
+        self.assertEqual(ev.report()["rejected"][-1]["reason"], "arrival_before_close")
+        self.assertEqual(len(ev.log.entries), len(self.head(50)) + 1)
+
+    def test_a_funding_hour_that_has_not_ended_is_not_fixed(self):
+        ev = self.evaluator("early-funding.jsonl")
+        start = FIRST_DECISION
+        self.assertFalse(ev.feed_funding(BTC, start, 0.5, start + 30 * 60_000))
+        self.assertEqual(ev.report()["rejected"][-1]["reason"], "funding_before_hour_end")
+        self.assertTrue(ev.feed_funding(BTC, start, 0.00001, start + HOUR + RP.FUNDING_LAG_MS))   # the final value is accepted later
+        self.assertEqual(ev.state[BTC]["funding"][start], 0.00001)
+
+    def test_a_repeated_candle_with_other_content_is_recorded_as_a_conflict(self):
+        ev = self.evaluator("conflict.jsonl")
+        items = self.head(80)
+        self.drive(ev, items)
+        _arrival, _rank, _kind, last = [i for i in items if i[2] == "candle"][-1]
+        revised = dict(last, close=str(D(last["close"]) + D("0.1")), high=str(D(last["high"]) + D("0.1")))
+        out = ev.feed_candle(BTC, revised, last["bucket_start"] + MIN + 5000)
+        self.assertTrue(out["duplicate"])
+        self.assertEqual(len(ev.report()["candle_conflicts"]), 1)
+        self.assertEqual(len(LE.LiveEvaluator.recover(os.path.join(self.dir, "conflict.jsonl"), self.strategies,
+                                                       source=RP.SOURCE).report()["candle_conflicts"]), 1)
+        again = ev.feed_candle(BTC, last, last["bucket_start"] + MIN + 5000)       # the identical repeat is a plain duplicate
+        self.assertTrue(again["duplicate"])
+        self.assertEqual(len(ev.report()["candle_conflicts"]), 1)
 
     def test_a_half_written_last_line_is_dropped_and_reported(self):
         ev = self.evaluator("tail.jsonl")
