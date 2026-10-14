@@ -812,7 +812,18 @@ class TestSourceStalePolicy(unittest.TestCase):
         self.assertEqual(LI.affected_orders(pending, gaps), [])
         self.assertEqual(LI.affected_orders(pending, {"PF_ETHUSD": [{"from_ms": 10 * SEC, "to_ms": 36 * SEC}]}),
                          [{"intent_id": "intent-2", "product_id": "PF_ETHUSD", "gap": {"from_ms": 10 * SEC, "to_ms": 36 * SEC},
-                           "window": [0, 80 * SEC]}])
+                           "action": "cancel", "window": [0, 80 * SEC]}])
+
+    def test_an_order_over_before_the_silence_was_excessive_expires_and_the_boundary_is_decided(self):
+        """D-17-19 / D-17-22: the silence is excessive only when it exceeds the limit, so a deadline at ``from + limit`` (the
+        equality included) was over before that and the order expires; one millisecond later it is still executable when the
+        limit is exceeded (``from + limit + 1``) and it is cancelled."""
+        limit, gap = 15 * SEC, {"from_ms": 10 * SEC, "to_ms": 10 * SEC + 15 * SEC + 1}
+        pending = {name: self.order(start=11 * SEC, deadline=deadline) for name, deadline in
+                   (("before", 10 * SEC + limit - 1), ("equal", 10 * SEC + limit), ("after", 10 * SEC + limit + 1))}
+        actions = {h["intent_id"]: h["action"] for h in LI.affected_orders(pending, {BTC: [gap]}, limit)}
+        self.assertEqual(actions, {"before": "expire", "equal": "expire", "after": "cancel"})
+        self.assertEqual({h["action"] for h in LI.affected_orders(pending, {BTC: [gap]})}, {"cancel"})         # no limit given: as before
 
 
 # ------------------------------------------------------------------------------------------------ 6. the durable cancellation
@@ -997,7 +1008,7 @@ class TestSourceStaleCancellation(unittest.TestCase):
     def test_repeating_the_same_interval_cancels_nothing_more(self):
         session = self.cache["a"]
         before = (len(session.runner.journal.entries), self.cancel_trace(session), session.runner.state_digest())
-        again = session.runner.cancel_for_source_loss(BTC, GAP_FROM, GAP_TO, session.runner.clock)       # declared already: any clock, no writes
+        again = session.runner.cancel_for_source_loss(BTC, GAP_FROM, GAP_TO, session.runner.clock, MAX_QUOTE_GAP_MS)       # declared already: any clock, no writes
         self.assertEqual(again, [first_order(session)["intent_id"]])
         session.last_quote.clear()
         session.last_quote[BTC] = GAP_FROM
@@ -1033,6 +1044,231 @@ class TestSourceStaleCancellation(unittest.TestCase):
         session = recover_session(world, directory, self.cache["strategies"], journal_clock(directory))
         self.addCleanup(abandon, session)
         self.assertEqual(session.last_quote[BTC], FIRST_DECISION + 50 * MIN - 10 * SEC)      # the last quote the runner received before the step
+
+
+class Killed(Exception):
+    """The process dies right here (the session is abandoned as it is: nothing is flushed)."""
+
+
+UNTIL_ORDER = ENTRY_QUOTE_MS + 15 * SEC            # BTC's order is decided and delivered (ETH's rows carry the watermark past it)
+
+
+class TestSilenceStillOpen(unittest.TestCase):
+    """D-10B-17 (Fran 15:52Z and 16:07Z): BTC loses a stretch of quotes while ETH keeps the source alive. The order BTC has pending
+    is cancelled by ``source_stale`` the moment the evidence proves the limit was exceeded while the order could still be
+    executed: from the event flow (the first event later than that instant) or, when nothing flows, from the ingestor's proof of
+    the observation alone. Both declare the same loss at the same instant, so the continuous run (one step to the end), the one
+    that waits in the silence and the ones that die at any point of the declaration leave the same journal, orders and money."""
+
+    cache = {}
+
+    @classmethod
+    def setUpClass(cls):
+        SC.disarm()
+        if cls.cache:
+            return
+        cls.cache["dir"] = root = tempfile.mkdtemp()
+        strategies, _ = RS.load_frozen()
+        cls.cache["strategies"] = strategies
+        world = World(root, quote_holes=[HOLE], second_product_shift=-3)
+        world.release_until(LOAD_START)
+        session = new_session(world, os.path.join(root, "a"), strategies, products=(BTC, ETH))
+        for now in TIMES[:ENTRY_STEP]:
+            world.release_until(now)
+            session.step(now)
+        cls.cache["snap"] = Circuit.take_snapshot(root, "silent", session, world, ENTRY_STEP)
+        cls.cache["world"] = world
+        world.release_until(TIMES[ENTRY_STEP])                       # the continuous run: one step, every event in the flow
+        session.step(TIMES[ENTRY_STEP])
+        cls.cache["a"] = session
+        cls.cache["record"] = record(session, TIMES[ENTRY_STEP])
+
+    @classmethod
+    def tearDownClass(cls):
+        if "a" in cls.cache:
+            abandon(cls.cache.pop("a"))
+        shutil.rmtree(cls.cache.get("dir", ""), True)
+        cls.cache.clear()
+
+    def fork(self, recovery_gap_ms=0):
+        root = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, root, True)
+        world = self.cache["world"].fork(root, self.cache["snap"]["world"])
+        directory = os.path.join(root, "s")
+        shutil.copytree(self.cache["snap"]["session"], directory)
+        return world, directory, self.recover_again(world, directory, recovery_gap_ms)
+
+    def recover_again(self, world, directory, recovery_gap_ms=0):
+        session = recover_session(world, directory, self.cache["strategies"], journal_clock(directory) + recovery_gap_ms, products=(BTC, ETH))
+        self.addCleanup(abandon, session)
+        return session
+
+    def losses(self, session, product=BTC):
+        return [e["data"] for e in session.runner.journal.entries if e["kind"] == "source_loss" and e["data"]["product_id"] == product]
+
+    def cancellations(self, session):
+        return [(e["data"]["intent_id"], e["data"]["product_id"] if "product_id" in e["data"] else None, e["data"]["reason"])
+                for e in session.runner.journal.entries if e["kind"] == "order_cancelled"]
+
+    def orders_view(self, session):
+        return [(o["intent_id"], o["product_id"], o["state"]) for o in session.runner.orders()]
+
+    def money(self, session):
+        snap = record(session, TIMES[ENTRY_STEP])
+        return {k: snap[k] for k in ("portfolio", "closed", "open", "fees", "funding_usd", "accounting_orders", "orders")}
+
+    def btc_order(self, session):
+        return next(o for o in session.runner.orders() if o["product_id"] == BTC)
+
+    def test_the_continuous_run_cancels_the_pending_order_of_the_silent_product_only(self):
+        session = self.cache["a"]
+        self.assertEqual(self.btc_order(session)["state"], "cancelled")
+        self.assertEqual([c[2] for c in self.cancellations(session)], ["source_stale"])
+        self.assertEqual([c[0] for c in self.cancellations(session)], [self.btc_order(session)["intent_id"]])       # ETH's order is untouched
+        loss = self.losses(session)
+        self.assertEqual(len(loss), 1)
+        self.assertEqual((loss[0]["gap_from_ms"], loss[0]["gap_to_ms"], loss[0]["threshold_ms"]),
+                         (ENTRY_QUOTE_MS - 20 * SEC, ENTRY_QUOTE_MS - 20 * SEC + MAX_QUOTE_GAP_MS + 1, MAX_QUOTE_GAP_MS))
+        evidence = [r for r in session.audit.records() if r["kind"] == "source_stale_detected"]
+        self.assertEqual([r["trigger"] for r in evidence], ["open_silence"])
+        self.assertEqual(self.losses(session, ETH), [])
+
+    def test_when_nothing_flows_the_proof_of_the_observation_declares_the_same_loss(self):
+        world, directory, session = self.fork()
+        world.release_until(UNTIL_ORDER)
+        session.step(UNTIL_ORDER)                                     # nothing later than the instant is delivered: no event can carry it
+        flow = self.cache["a"]
+        self.assertEqual(self.btc_order(session)["state"], "cancelled")
+        self.assertEqual(self.losses(session), self.losses(flow))
+        self.assertEqual(self.cancellations(session), self.cancellations(flow))
+        evidence = [r for r in session.audit.records() if r["kind"] == "source_stale_detected"]
+        self.assertEqual([r["trigger"] for r in evidence], ["observed_silence"])
+        self.assertEqual(session.runner.executor.last_quote_ms.get(BTC), ENTRY_QUOTE_MS - 20 * SEC)       # no quote was invented
+        for step_ms in (UNTIL_ORDER + MIN, UNTIL_ORDER + 5 * MIN):    # the source says nothing more: nothing more is declared
+            session.step(step_ms)
+        self.assertEqual(len(self.losses(session)), 1)
+
+    def test_without_proof_nothing_is_declared(self):
+        world, directory, session = self.fork()
+        world.release_until(ENTRY_QUOTE_MS + 5 * SEC)
+        session.step(ENTRY_QUOTE_MS + 5 * SEC)                        # observed time still short of the instant (the source's own clock)
+        self.assertEqual(self.losses(session), [])
+        self.assertEqual(self.btc_order(session)["state"], "pending")
+        session.ingestor.ticker_more = True                           # a read that did not reach its end proves nothing
+        session.ingestor.observed_until_ms = ENTRY_QUOTE_MS + 5 * MIN
+        self.assertIsNone(session.ingestor.proven_until())
+        session._declare_from_observation()
+        self.assertEqual(self.losses(session), [])
+        self.assertEqual(self.btc_order(session)["state"], "pending")
+
+    def test_waiting_in_the_silence_and_going_on_equals_the_continuous_run(self):
+        world, directory, session = self.fork()
+        world.release_until(UNTIL_ORDER)
+        session.step(UNTIL_ORDER)
+        session.step(UNTIL_ORDER + 2 * MIN)
+        world.release_until(TIMES[ENTRY_STEP])
+        session.step(TIMES[ENTRY_STEP])
+        flow = self.cache["a"]
+        self.assertEqual(self.orders_view(session), self.orders_view(flow))
+        self.assertEqual(self.money(session), self.money(flow))
+        self.assertEqual(self.losses(session), self.losses(flow))
+        self.assertEqual(self.cancellations(session), self.cancellations(flow))
+        self.assertEqual(len(self.losses(session)), 1)
+
+    def test_a_death_around_the_declaration_cancels_once_and_changes_no_money(self):
+        for point, via in (("after_poll", "observation"), ("after_open_declaration", "observation"), ("after_runner", "observation"),
+                           ("after_audit", "observation"), ("after_checkpoint", "observation"),
+                           ("after_open_declaration", "flow"), ("after_audit", "flow")):
+            with self.subTest(point=point, via=via):
+                world, directory, session = self.fork()
+                fired = []
+
+                def fault(name, info=None, point=point):
+                    if name == point:
+                        fired.append(name)
+                        raise Killed()
+                session.fault = fault
+                first = UNTIL_ORDER if via == "observation" else TIMES[ENTRY_STEP]
+                world.release_until(first)
+                with self.assertRaises(Killed):
+                    session.step(first)
+                abandon(session)
+                session = self.recover_again(world, directory)
+                session.step(first)
+                world.release_until(TIMES[ENTRY_STEP])
+                session.step(TIMES[ENTRY_STEP])
+                flow = self.cache["a"]
+                self.assertEqual(len(self.losses(session)), 1)
+                self.assertEqual(self.losses(session), self.losses(flow))
+                self.assertEqual(self.cancellations(session), self.cancellations(flow))
+                self.assertEqual(self.orders_view(session), self.orders_view(flow))
+                self.assertEqual(self.money(session), self.money(flow))
+                self.assertEqual(session.runner.integrity()["open_cycles"], [])
+                ids = [stable_hash(r) for r in session.audit.records()]       # an audit write that got ahead of the checkpoint is not written twice
+                self.assertEqual(len(ids), len(set(ids)))
+                self.assertEqual(len([r for r in session.audit.records() if r["kind"] == "source_loss"]), 1)
+
+    def test_a_restart_after_the_downtime_never_turns_the_silence_into_a_retroactive_cancellation(self):
+        """The process died before the declaration and was restarted ten minutes later: the runner's clock went past the events it
+        had not been given (they are rejected as late, as in every recovery with downtime), the stretch it was away for is an
+        observation gap, and no ``source_stale`` is declared for it, whatever the order was waiting for."""
+        world, directory, session = self.fork()
+        session.fault = lambda name, info=None: (_ for _ in ()).throw(Killed()) if name == "after_poll" else None
+        world.release_until(UNTIL_ORDER)
+        with self.assertRaises(Killed):
+            session.step(UNTIL_ORDER)
+        abandon(session)
+        session = self.recover_again(world, directory, recovery_gap_ms=10 * MIN)
+        session.step(UNTIL_ORDER + 10 * MIN)
+        world.release_until(TIMES[ENTRY_STEP])
+        session.step(TIMES[ENTRY_STEP])
+        self.assertEqual(self.losses(session), [])
+        self.assertNotIn("source_stale", [c[2] for c in self.cancellations(session)])
+        self.assertEqual([r for r in session.audit.records() if r["kind"] == "source_stale_detected"], [])
+        self.assertTrue(session.ingestor.observation_gaps)          # told as time nobody observed, never as a silence or a Kraken outage
+
+
+class TestOpenHolesOrder(unittest.TestCase):
+    """What ``_open_holes`` declares and in which order (D-17-17), without a circuit: the pending orders and last quotes are given."""
+
+    LIMIT = 15 * SEC
+
+    def session(self, pending, last_quote):
+        session = LI.LiveSession.__new__(LI.LiveSession)
+        session.runner = SimpleNamespace(executor=SimpleNamespace(pending=pending))
+        session.last_quote, session.max_quote_gap_ms = dict(last_quote), self.LIMIT
+        session.calls = []
+        session._declare = lambda product, gap, t_decl, trigger, pending: session.calls.append((product, gap["from_ms"], gap["to_ms"], t_decl, trigger))
+        return session
+
+    @staticmethod
+    def order(product, deadline):
+        return {"product_id": product, "side": "long", "timeline": {"deadline_ms": deadline, "earliest_fill_ms": 0}}
+
+    def test_two_products_that_cross_in_one_step_are_declared_in_ascending_instant_then_product_order(self):
+        pending = {"a": self.order(ETH, 10 ** 9), "b": self.order(BTC, 10 ** 9)}
+        session = self.session(pending, {BTC: 30 * SEC, ETH: 20 * SEC})                      # ETH crosses first
+        session._open_holes(90 * SEC, None)
+        self.assertEqual(session.calls, [(ETH, 20 * SEC, 20 * SEC + self.LIMIT + 1, 20 * SEC + self.LIMIT + 1, "open_silence"),
+                                         (BTC, 30 * SEC, 30 * SEC + self.LIMIT + 1, 30 * SEC + self.LIMIT + 1, "open_silence")])
+        tie = self.session(pending, {BTC: 30 * SEC, ETH: 30 * SEC})
+        tie._open_holes(90 * SEC, None)
+        self.assertEqual([c[0] for c in tie.calls], sorted([BTC, ETH]))                      # same instant: by product id
+
+    def test_the_event_of_the_product_itself_and_events_that_do_not_pass_the_instant_declare_nothing(self):
+        pending = {"a": self.order(BTC, 10 ** 9)}
+        session = self.session(pending, {BTC: 30 * SEC})
+        session._open_holes(90 * SEC, BTC)                                                   # its own closing quote: ``_continuity`` decides
+        session._open_holes(30 * SEC + self.LIMIT + 1, None)                                 # exactly at the instant: not later than it
+        self.assertEqual(session.calls, [])
+        session._open_holes(30 * SEC + self.LIMIT + 2, None)                                 # one millisecond later: the limit is exceeded
+        self.assertEqual([c[3] for c in session.calls], [30 * SEC + self.LIMIT + 1])         # declared at the instant, not at the event
+        self.assertEqual(self.session({}, {BTC: 30 * SEC}).calls, [])
+
+    def test_a_product_that_never_quoted_is_not_declared(self):
+        session = self.session({"a": self.order(BTC, 10 ** 9)}, {})
+        session._open_holes(10 ** 6, None)
+        self.assertEqual(session.calls, [])
 
 
 class TestTheLiteral26SecondCut(unittest.TestCase):

@@ -125,7 +125,7 @@ inventa), fondeo tardío, conflictos de velas, cuadros vencidos y cortes de la f
 
 ## 8. `source_stale` (D-10C-3): cancelación durable por el punto de entrada del runner
 
-La sesión llama a `PaperRunner.cancel_for_source_loss(product_id, gap_from_ms, gap_to_ms, t_ms)` (#168, reutiliza el executor y el diario del runner; no toca estrategias, stops de posiciones abiertas ni riesgo).
+La sesión llama a `PaperRunner.cancel_for_source_loss(product_id, gap_from_ms, gap_to_ms, t_ms, threshold_ms)` (#168 @ 750f96a, reutiliza el executor y el diario del runner; no toca estrategias, stops de posiciones abiertas ni riesgo).
 
 - Funciones puras `stale_quote_gaps` y `affected_orders`; la sesión las aplica por cotización (`_continuity`) **antes** de entregar al runner la cotización que cierra el hueco, con `t_ms` igual al tiempo del diario de esa cotización (el runner exige `t_ms >= gap_to_ms`).
 - Si hay órdenes pendientes del producto cuya ventana solapa el hueco, la sesión escribe `source_stale_detected` (hueco, órdenes pendientes afectadas, límite, clasificación del ingestor) **antes** de llamar al runner. Los ids que el runner efectivamente canceló se derivan de su `source_losses` en `flush_audit` (`source: runner`, `kind: source_loss`, con los ids y la ventana descubierta de cada uno): están en el diario del runner antes de que algo pueda perderse, así que una muerte entre el retorno de la API y cualquier escritura de la sesión no deja la auditoría distinta de la corrida continua (D-10D-08). Si el runner rechaza la llamada se escribe `source_stale_refused` (`applied: false`, con el código) y **la sesión se detiene** con el error; no entrega la cotización a órdenes que debieron cancelarse, y nunca hay un registro de cancelación aplicada que el runner no tenga. La API también cancela, de forma conservadora, una orden decidida durante el hueco.
@@ -148,6 +148,60 @@ Pruebas, todas en circuito completo (SourceReader, Ingestor, LiveEvaluator, Pape
 `comparable_state` (D-10D-09) es el estado del runner sin lo que una recuperación cambia por diseño (contadores, reloj, cobertura, posición del diario): se compone de las mismas partes que `state_digest`, que no se modifica porque `paper_runner.py` es de 9A. `state_digest` sigue sin ser comparable entre corrida continua y recuperada.
 
 Declarado: las posiciones abiertas con hueco y orden pendiente del mismo producto no existen en el circuito (una posición abierta rechaza las órdenes nuevas del producto, no quedan pendientes). No se prueba un corte real con terminación de proceso en el mundo de dos productos (el proceso hijo recupera solo el mundo de un producto); la recuperación de la cancelación se prueba con SIGKILL en el de un producto.
+
+## 8 bis. Silencios abiertos (D-10B-17): cancelar sin esperar la cotización que cierra
+
+Decisiones de Fran 15:52Z y 16:07Z (diseño en #171, ingestor en #172 @ d122f51, firma de #168 @ 750f96a). Una orden pendiente no
+sobrevive hasta la próxima cotización si ya hay evidencia de que su producto superó el umbral de continuidad mientras la orden
+seguía siendo ejecutable. Los umbrales siguen siendo hipótesis; no hay sesión real ni bases nuevas.
+
+- **Instante de la declaración:** `gap_to = última cotización + límite + 1` (el primer instante en que el silencio supera el
+  límite; con igualdad el silencio no es excesivo). La declaración siempre usa `t_ms = gap_to`, nunca el instante del evento que la
+  provoca ni el reloj del proceso, así que es la misma en la corrida continua, con otro ritmo de sondeos y tras una caída.
+- **Camino (a), por el flujo (`_open_holes`):** antes de entregar el primer evento con `t > gap_to` (de cualquier producto, funding
+  incluido) se declaran, en orden ascendente `(gap_to, producto)`, los productos con órdenes pendientes que ya lo cruzaron. El
+  producto del propio evento lo decide la cotización que cierra (`_continuity`). Evidencia `source_stale_detected` con
+  `trigger: open_silence`.
+- **Camino (b), por la observación (`_declare_from_observation`),** solo cuando nada fluye (un producto o fuente muda) y solo con
+  la prueba del ingestor (`proven_until()`: lectura agotada en el reloj de la fuente, sin vela vencida, sin tramo por contar). Antes
+  de declarar se liberan y entregan los eventos retenidos con `t <= gap_to` (`release_proven`), así una cotización ya leída nunca se
+  declara callada; después se declara con `trigger: observed_silence`. El reloj del runner debe ser `<= gap_to`. Tras una
+  recuperación, `released_ms` del ingestor no baja de `gap_to - 1` de ninguna pérdida del runner (la cotización que cierra, en
+  `gap_to`, todavía se entrega).
+- **Reglas del contrato de Fran:** una orden cuyo `deadline_ms <= desde + umbral` (igualdad incluida) vence con su motivo original
+  en la misma llamada (`TimedExecutor.expire_orders`), no se cancela; solo las que siguen ejecutables cuando se supera el umbral
+  se cancelan por `source_stale`. `affected_orders` separa `cancel` de `expire`; un silencio que solo vence órdenes no declara
+  por el camino abierto (vencen con la siguiente cotización, como siempre). Los vencimientos viejos no se convierten en
+  cancelaciones retroactivas. Misma regla en silencios abiertos y cerrados.
+- **Vocabulario distinto:** `silence_open` (continuidad insuficiente, ingestor), `observation_gap` (tiempo sin observar por
+  interrupción del proceso, nunca silencio ni caída de Kraken), `source_stale` (decisión sobre una orden pendiente) y
+  `runner_interrupted` (cancelación por interrupción del runner). El audit guarda `observation_gap`, `silence_contradicted`,
+  `observation`, `silence_open` y `silence_at_window_end`, además del `source_loss` del runner con `cancelled`, `expired` y
+  `threshold_ms`.
+- **Recuperación y auditoría:** `audit.jsonl` es de solo agregar y deduplica por hash; no se afirma que se reconstruya entero desde
+  el checkpoint. Lo demuestran las pruebas: una escritura de auditoría que quedó adelante del checkpoint no se escribe dos veces
+  y hay un solo `source_loss` en cualquier punto de corte.
+
+Pruebas (circuito completo con dos productos, BTC con hueco y ETH vivo; sin SIGKILL real en este mundo, la caída se simula
+abandonando la sesión en el punto de falla, igual que el resto de las pruebas de dos productos):
+
+- `TestSilenceStillOpen`: la corrida continua cancela solo la orden del producto callado y deja una sola pérdida con
+  `threshold_ms`; con nada fluyendo, la prueba del ingestor declara la misma pérdida (mismas pérdidas, cancelaciones, órdenes y
+  dinero) sin inventar cotizaciones y sin declarar de nuevo después; sin prueba (tiempo observado corto, lectura sin terminar) no
+  se declara; esperar en el silencio y seguir equivale a la corrida continua; una caída en `after_poll`, `after_open_declaration`,
+  `after_runner`, `after_audit` o `after_checkpoint`, por observación o por flujo, deja una sola cancelación e idéntico dinero,
+  sin registros duplicados; tras una caída con parada de 10 min no se declara ningún `source_stale` retroactivo y el tramo queda
+  como `observation_gap`.
+- `TestOpenHolesOrder`: orden ascendente de instante y luego producto (empate por id), el producto del propio evento no se
+  declara, igualdad exacta con `gap_to` no declara y un milisegundo después sí (con `t_ms = gap_to`), y un producto sin cotización
+  previa no se declara.
+- `TestSourceStalePolicy`: `affected_orders` con deadline antes, igual y después del límite (vencer, vencer, cancelar).
+
+Digests de 10D tras el cambio, sin diferencias: financiero `cf0446c1…351c`, órdenes `57031c71…6c80`, señales `32c1c980…5081` (864 señales, 436 órdenes, 3 operaciones cerradas, funding 0,945780, equity 1031,3785). Suite completa: 64 pruebas OK.
+
+Límite declarado: un producto único con la fuente muda no tiene órdenes pendientes que declarar, porque la vela que las crea queda
+retenida por la marca de agua hasta que algo más llegue; si la fuente vuelve, la orden se crea y la cotización que cierra la
+cancela como siempre. El camino (b) actúa cuando ya hay una orden pendiente (por ejemplo, otro producto movió la marca de agua).
 
 ## 9. Mediciones
 

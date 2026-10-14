@@ -172,13 +172,19 @@ def stale_quote_gaps(quote_times, max_gap_ms):
 
 def affected_orders(pending, gaps_by_product, max_gap_ms=None):
     """Pure: the pending orders (``executor.pending`` shape) whose execution window overlaps a continuity hole of their own
-    product. Decision D-10-01 = B: these are the orders to cancel with ``source_stale``. Open positions are not affected."""
+    product (the overlap rule of ``PaperRunner.cancel_for_source_loss``). Decision D-10-01 = B plus D-17-19: with
+    ``max_gap_ms`` (the continuity threshold) an order whose deadline is not after ``gap.from_ms + max_gap_ms`` (equality
+    included) was over before the silence became excessive, so its ``action`` is ``expire`` (it ends with the executor's own
+    expiry reason); any other is ``cancel`` (``source_stale``). Open positions are not affected."""
     out = []
     for intent_id, order in sorted(pending.items()):
         line = order["timeline"]
         for gap in gaps_by_product.get(order["product_id"], ()):
             if gap["from_ms"] < line["deadline_ms"] and gap["to_ms"] > line["earliest_fill_ms"]:
-                out.append({"intent_id": intent_id, "product_id": order["product_id"], "gap": dict(gap),
+                action = "cancel"
+                if max_gap_ms is not None and line["deadline_ms"] <= gap["from_ms"] + max_gap_ms:
+                    action = "expire"
+                out.append({"intent_id": intent_id, "product_id": order["product_id"], "gap": dict(gap), "action": action,
                             "window": [line["earliest_fill_ms"], line["deadline_ms"]]})
                 break
     return out
@@ -227,7 +233,7 @@ class LiveSession(object):
         identity = cls._identity(products, ingest_kw, evaluator, runner.journal.entries[0], source_id, max_quote_gap_ms)
         audit = AuditJournal.create(os.path.join(directory, AUDIT_FILE), {"session_id": identity["session_id"]})
         reader = SourceReader(source_path)
-        session = cls(directory, source_path, strategies, runner_config, runner, evaluator, audit, Ingestor(reader, **ingest_kw),
+        session = cls(directory, source_path, strategies, runner_config, runner, evaluator, audit, Ingestor(reader, expected_products=tuple(products), **ingest_kw),
                       reader, FundingSource(source_path), identity, max_quote_gap_ms=max_quote_gap_ms)
         _atomic_write(os.path.join(directory, SESSION_FILE), identity)
         session.save_checkpoint()
@@ -272,7 +278,10 @@ class LiveSession(object):
         _verify_checkpoint(checkpoint, stored, runner_journal.entries, runner_checkpoint, evaluator, audit)
         runner = PaperRunner.recover(runner_dir, runner_config, strategies, recovery_ms, evaluator=evaluator.evaluator)
         reader = SourceReader(source_path)
-        ingestor = Ingestor.from_checkpoint(reader, checkpoint["ingestor"], **ingest_kw)
+        ingestor = Ingestor.from_checkpoint(reader, checkpoint["ingestor"], expected_products=tuple(products), **ingest_kw)
+        ingestor.mark_recovered()               # the stretch nobody observed is told as an observation_gap, never as a silence
+        for (_product, _from, gap_to), _loss in runner.source_losses.items():     # a loss the runner made durable is never delivered under
+            ingestor.released_ms = max(ingestor.released_ms or 0, gap_to - 1)     # (the quote that ends it, at gap_to, still comes)
         session = cls(directory, source_path, strategies, runner_config, runner, evaluator, audit, ingestor, reader,
                       FundingSource(source_path), stored, max_quote_gap_ms=max_quote_gap_ms)
         session.cursors = dict(checkpoint["cursors"])
@@ -292,11 +301,8 @@ class LiveSession(object):
         """Poll -> deliver -> audit -> checkpoint. Returns the poll's state."""
         out = self.ingestor.poll(observed_now_ms)
         self._fault("after_poll")
-        events = out["events"]
-        funding = self._due_funding(events[-1]["t_ms"] if events else None)
-        for _t, _rank, kind, item in sorted(funding + [(e["t_ms"], 1, "event", e) for e in events],
-                                            key=lambda x: (x[0], x[1])):
-            self._deliver(kind, item)
+        self._deliver_batch(out["events"])
+        self._declare_from_observation()
         self._fault("after_runner")
         self.stats["steps"] += 1
         self.flush_audit(out["state"])
@@ -304,6 +310,12 @@ class LiveSession(object):
         self.save_checkpoint()
         self._fault("after_checkpoint")
         return out["state"]
+
+    def _deliver_batch(self, events):
+        funding = self._due_funding(events[-1]["t_ms"] if events else None)
+        for _t, _rank, kind, item in sorted(funding + [(e["t_ms"], 1, "event", e) for e in events],
+                                            key=lambda x: (x[0], x[1])):
+            self._deliver(kind, item)
 
     def _due_funding(self, upto_ms):
         """Funding rows whose arrival is not after the newest released market event (so the runner sees time in order)."""
@@ -339,9 +351,11 @@ class LiveSession(object):
             self.evaluator.feed_funding(item["product_id"], item["start_ms"], item["rate"], item["arrival_ms"])
             return
         if kind == "accrual":                               # the accounting only: never the signal's input
+            self._open_holes(item["arrival_ms"], None)
             self._handle(accrual_event(item))
             return
         event = item
+        self._open_holes(event["t_ms"], event["payload"]["product_id"] if event["kind"] == "quote" else None)
         if event["kind"] == "candle":
             payload = event["payload"]
             candle = dict(payload["candle"], bucket_start=payload["bucket_ms"])      # nothing is invented: no volume stays absent
@@ -376,23 +390,81 @@ class LiveSession(object):
         if previous is None:
             return
         gaps = {product: stale_quote_gaps([previous, t_ms], self.max_quote_gap_ms)}
-        hits = affected_orders(pending, gaps)
-        if not hits:
+        if gaps[product]:
+            self._declare(product, gaps[product][0], t_ms, "closing_quote", pending)
+
+    def _open_holes(self, t_ms, own):
+        """The same rule while the silence is still open (D-10B-17): before an event later than the first instant at which
+        a product's silence exceeded the limit (``last quote + limit + 1``) is delivered, the orders that silence affects are
+        handled, from the event flow alone, so the declaration is the same whenever the source was polled and whether or not
+        the process died. They go in ascending ``(gap_to, product)`` order, so no declaration is earlier than the journal
+        clock; the product of the event itself is left to ``_continuity`` (its hole ends with that quote)."""
+        pending = self.runner.executor.pending
+        if not pending:
             return
-        gap = hits[0]["gap"]
-        record = {"source": "session", "kind": "source_stale_detected", "product_id": product, "gap": dict(gap),
-                  "pending_hit": [h["intent_id"] for h in hits], "limit_ms": self.max_quote_gap_ms,
-                  "ingestor": self.classify_gap(product, gap)}
+        due = []
+        for product in sorted({order["product_id"] for order in pending.values()}):
+            since = self.last_quote.get(product)
+            if product == own or since is None:
+                continue
+            gap_to = since + self.max_quote_gap_ms + 1
+            if gap_to < t_ms:
+                due.append((gap_to, product, since))
+        for gap_to, product, since in sorted(due):
+            self._declare(product, {"from_ms": since, "to_ms": gap_to}, gap_to, "open_silence", pending)
+
+    def _declare(self, product, gap, t_decl, trigger, pending):
+        """Records what is about to be cancelled or expired and declares the source loss through the runner. The orders that
+        only expire (their window was over before the silence was excessive) are listed apart from the cancelled ones."""
+        hits = affected_orders(pending, {product: [gap]}, self.max_quote_gap_ms)
+        if not hits or (trigger != "closing_quote" and not any(h["action"] == "cancel" for h in hits)):
+            return                           # an order that only expires does it in the normal flow, with the next quote
+        record = {"source": "session", "kind": "source_stale_detected", "trigger": trigger, "product_id": product, "gap": dict(gap),
+                  "pending_hit": [h["intent_id"] for h in hits if h["action"] == "cancel"],
+                  "expiring": [h["intent_id"] for h in hits if h["action"] == "expire"], "limit_ms": self.max_quote_gap_ms}
+        record["ingestor"] = self.classify_gap(product, gap)
         if self.audit.add(record):
             self.stats["audit_new"] += 1
         try:
-            self.runner.cancel_for_source_loss(product, gap["from_ms"], gap["to_ms"], t_ms)
+            self.runner.cancel_for_source_loss(product, gap["from_ms"], gap["to_ms"], t_decl, self.max_quote_gap_ms)
         except RunnerError as error:
-            # the cancellation did not happen: the evidence says so and the session stops here rather than hand the quote to
-            # orders that should have been cancelled
-            self.audit.add({"source": "session", "kind": "source_stale_refused", "product_id": product, "gap": dict(gap),
-                            "applied": False, "reason": error.reason})
+            # the declaration did not happen: the evidence says so and the session stops here rather than hand the next event
+            # to orders that should have been cancelled
+            self.audit.add({"source": "session", "kind": "source_stale_refused", "trigger": trigger, "product_id": product,
+                            "gap": dict(gap), "applied": False, "reason": error.reason})
             raise
+        self._fault("after_open_declaration" if trigger != "closing_quote" else "after_closing_declaration")
+
+    def _declare_from_observation(self):
+        """Nothing else is coming (a single product, or a source that stopped): the event flow cannot tie the declaration.
+        Only then the observation does, and only with the ingestor's proof (``proven_until``: exhausted read in the source's
+        own clock, no overdue candle, no stretch waiting to be told as unobserved). What the watermark still holds at or before
+        the instant is released and delivered first (``release_proven``), so a quote that was already read is never declared
+        silent; the declaration is then the one the flow would make, and the ingestor never releases under it again."""
+        done = set()                                  # one declaration per product and silence in a step
+        while True:
+            pending = self.runner.executor.pending
+            bound = self.ingestor.proven_until()
+            if not pending or bound is None:
+                return
+            clock = self.runner.clock
+            due = []
+            for product in sorted({order["product_id"] for order in pending.values()}):
+                since = self.last_quote.get(product)
+                if since is None or (product, since) in done:
+                    continue
+                gap_to = since + self.max_quote_gap_ms + 1
+                if gap_to <= bound and (clock is None or clock <= gap_to):
+                    due.append((gap_to, product, since))
+            if not due:
+                return
+            gap_to, product, since = min(due)
+            released = self.ingestor.release_proven(gap_to)
+            self._deliver_batch(released)
+            if self.last_quote.get(product) != since or product not in {o["product_id"] for o in self.runner.executor.pending.values()}:
+                continue                          # what was released changed the picture: look again
+            self._declare(product, {"from_ms": since, "to_ms": gap_to}, gap_to, "observed_silence", self.runner.executor.pending)
+            done.add((product, since))
 
     def classify_gap(self, product, gap):
         """What the ingestor knew about this hole when it was detected (evidence only: it does not decide the cancellation).
@@ -404,8 +476,11 @@ class LiveSession(object):
         silences = [x for x in ing.silences if inside(x["from_ms"], x["to_ms"]) and x["product_id"] in (None, product)]
         gaps = [x for x in ing.data_gaps if x["product_id"] in (None, product) and gap["from_ms"] <= x["detected_at"] <= gap["to_ms"]]
         changes = [x for x in ing.epoch_changes if x["product_id"] == product and gap["from_ms"] <= x["t_ms"] <= gap["to_ms"]]
-        out = {"source_silence": any(x["kind"] == "source_silence" for x in silences),
-               "product_silence": any(x["kind"] == "product_silence" for x in silences),
+        still_open = {key: ing.open_silences.get(key) for key in (product, "*")}            # a silence the ingestor has seen but not ended
+        open_source = still_open["*"] is not None and still_open["*"]["since_ms"] < gap["to_ms"]
+        open_product = still_open[product] is not None and still_open[product]["since_ms"] < gap["to_ms"] and not open_source
+        out = {"source_silence": open_source or any(x["kind"] == "source_silence" for x in silences),
+               "product_silence": open_product or any(x["kind"] == "product_silence" for x in silences),
                "data_gaps": len(gaps), "epoch_changes": len(changes),
                "sample_capped": len(ing.silences) >= SILENCE_SAMPLE or len(ing.data_gaps) >= GAP_SAMPLE}
         out["unexplained"] = not (out["source_silence"] or out["product_silence"] or out["data_gaps"] or out["epoch_changes"])
@@ -430,11 +505,42 @@ class LiveSession(object):
                 records.append({"source": "evaluator", "kind": kind, "item": item})
         for (product, gap_from, gap_to), loss in sorted(self.runner.source_losses.items()):      # what the runner made durable
             records.append({"source": "runner", "kind": "source_loss", "product_id": product, "gap": {"from_ms": gap_from, "to_ms": gap_to},
-                            "cancelled": list(loss["intent_ids"]), "windows": {k: list(v) for k, v in sorted(loss["windows"].items())}})
+                            "cancelled": list(loss["intent_ids"]), "expired": list(loss.get("expire_ids", [])),
+                            "threshold_ms": loss.get("threshold_ms"),
+                            "windows": {k: list(v) for k, v in sorted(loss["windows"].items())}})
+        records += self._observation_records()
         for record in records:
             new += 1 if self.audit.add(record) else 0
         self.stats["audit_new"] += new
         return new
+
+    def _observation_records(self):
+        """D-10B-17 evidence, derived from the ingestor's durable state and the runner's pending orders. None of it is a quote
+        and none decides anything: ``silence_open`` (insufficient continuity), ``observation_gap`` (nobody was observing: the
+        process was down), ``silence_contradicted`` (a quote that arrived inside what had been observed as silent),
+        ``observation`` (how far the source was observed, one per ``product_silence_ms``) and ``silence_at_window_end``."""
+        seen = self.ingestor.observation()
+        records = []
+        for a, b in seen["observation_gaps"]:
+            records.append({"source": "ingestor", "kind": "observation_gap", "gap": {"from_ms": a, "to_ms": b}})
+        for item in seen["contradicted"]:
+            records.append({"source": "ingestor", "kind": "silence_contradicted", "item": item})
+        for item in seen["log"]:
+            records.append({"source": "ingestor", "kind": "observation", "item": item})
+        for clock, table in (("source", seen["open_silences"]), ("process", seen["open_process"])):
+            for key, entry in sorted(table.items()):
+                records.append({"source": "ingestor", "kind": "silence_open", "clock": clock, "product_id": None if key == "*" else key,
+                                "scope": entry["scope"], "since_ms": entry["since_ms"], "partial": entry["partial"]})
+        for intent_id, order in sorted(self.runner.executor.pending.items()):
+            line = order["timeline"]
+            for clock, table in (("source", seen["open_silences"]), ("process", seen["open_process"])):
+                entry = table.get(order["product_id"]) or table.get("*")
+                if entry is not None and entry["since_ms"] < line["deadline_ms"] <= entry["observed_until_ms"]:
+                    records.append({"source": "session", "kind": "silence_at_window_end", "clock": clock, "intent_id": intent_id,
+                                    "product_id": order["product_id"], "deadline_ms": line["deadline_ms"],
+                                    "since_ms": entry["since_ms"], "scope": entry["scope"]})
+                    break
+        return records
 
     # ---- durability --------------------------------------------------------------------------------------------
     def save_checkpoint(self):
