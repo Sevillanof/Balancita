@@ -281,6 +281,10 @@ class FundingAudit(Tmp):
         self.assertEqual(r["last_hour_used_ms"], START + 789 * HOUR)
         self.assertFalse(r["carry_forward"])
         self.assertTrue(r["in_publication_wait"])
+        # clock only: the flag does not depend on whether later hours exist in the data
+        short = RFA.audit_record(FundingContext(periods(790)), self.at(789) + HOUR + 1, self.BANDS)
+        full = RFA.audit_record(FundingContext(periods(800)), self.at(789) + HOUR + 1, self.BANDS)
+        self.assertEqual(short["in_publication_wait"], full["in_publication_wait"])
 
     def test_a_missing_last_hour_is_a_data_gap_carry_forward_and_strict_is_unknown(self):
         ctx = FundingContext(periods(800, skip=(790,)))

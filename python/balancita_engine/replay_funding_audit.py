@@ -47,7 +47,7 @@ def audit_record(context, at_ms, bands=None):
     first, last = starts[index - WINDOW], starts[index - 1]
     span_hours = (last + HOUR_MS - first) // HOUR_MS
     carry = used < due
-    pending = (due + HOUR_MS) in context_set(context)                # the next hour exists but is still in its wait
+    pending = at_ms >= due + 2 * HOUR_MS                             # clock only: the next hour has ended but is still in its wait
     rate = context.rates[index]
     forward_pct = _percentile(rate, context.rates[index - WINDOW:index])
     present = context_set(context)

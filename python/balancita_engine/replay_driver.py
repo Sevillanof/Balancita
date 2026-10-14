@@ -504,7 +504,9 @@ def build_results(cfg, data, runner, manifest, rejections, fills, funding_diag=N
             "the candles were used by earlier research: this is not an out-of-sample test",
             "funding known at the start of the hour is an unproven hypothesis: it is delivered 10 minutes after the hour ends",
             "the execution, risk and sizing parameters are hypotheses, not approved values",
-            "S2 uses information of the entry minute after the fill: it is a stress, not a causal scenario"]}
+            "S2 uses information of the entry minute after the fill: it is a stress, not a causal scenario",
+            "signal parity with the forward is parity of code path (same interpreter and indicator pipeline on the same candles); it was not contrasted with real forward results, which start inside the reserved period",
+            "orders and trades are not comparable with the forward 100 USD books: different cadence, one shared portfolio"]}
 
 
 def _entry_minute_summary(runner):

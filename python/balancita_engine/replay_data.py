@@ -145,7 +145,7 @@ class ReplayDataGate:
 
     def _stream_rates(self, sha):
         """Yields ``(start_ms, relative_rate)`` of one response in file order and stops at the first period at or after the
-        cap. Nothing after that point is decoded or parsed: it is not interpreted, not returned, not kept."""
+        cap. At most one block and one period beyond the cap are decoded / parsed (to detect the limit) and discarded."""
         from datetime import datetime
         decoder = json.JSONDecoder()
         chunks = self._chunks(sha)
@@ -205,8 +205,10 @@ class ReplayDataGate:
 
         The rate is Kraken's ``relativeFundingRate`` (what ``accrue_funding`` and ``FundingContext`` use; the absolute
         ``funding_rate`` is never converted). The stored response lists a year of periods, including the reserved ones, so
-        it is read as a stream from its start and abandoned at the first period at or after the cap: SQLite loads the stored
-        value, but no period at or after the cap is decoded, parsed or returned, and no JSON function is applied to it.
+        it is read as a stream from its start and abandoned at the first period at or after the cap. Declared residue: SQLite
+        loads the stored value (every block on the ``substr`` path of Python < 3.11), and the 4 KiB block that holds the first
+        reserved period is decoded and that one period is parsed to detect the limit; it is discarded. Nothing after it is read,
+        and no JSON function is applied to the stored response.
         Responses are the oldest and the two newest, as in the forward."""
         self.funding_bytes_read, self.funding_stopped_at = 0, None
         found, trail = {}, []
