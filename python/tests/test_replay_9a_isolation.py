@@ -118,6 +118,29 @@ class Isolation(unittest.TestCase):
             self.read(self.doc(starts))
         self.assertIn("isolation guarantee", str(caught.exception))
 
+    def test_a_reserved_timestamp_cut_at_the_edge_of_the_last_block_is_never_let_through(self):
+        # D-9A-26: for every alignment of the block edge, the run either aborts or the delivered bytes hold no reserved prefix
+        outcomes = {"aborted": 0, "passed": 0}
+        for pad in range(0, 560, 5):
+            first = rate(LIMIT - 30 * HOUR)
+            first["fundingRate"] = "0." + "5" * pad
+            records = [first] + [rate(LIMIT - 29 * HOUR + i * HOUR) for i in range(29)] + [rate(LIMIT), rate(CAP + 5 * HOUR)]
+            raw = json.dumps({"rates": records})
+            try:
+                got, entry, path = self.read(raw)
+            except RD.DataError:
+                outcomes["aborted"] += 1
+                continue
+            outcomes["passed"] += 1
+            self.assertNotIn("2026-08", self.delivered(path, entry["responses"][0]), pad)
+        self.assertGreater(outcomes["aborted"], 0)
+
+    def test_a_period_whose_first_key_is_not_the_timestamp_is_refused(self):
+        records = [rate(LIMIT - 30 * HOUR + i * HOUR) for i in range(30)] + [rate(LIMIT + i * HOUR) for i in range(40)]
+        records[3] = {"relativeFundingRate": "0.00001", "timestamp": records[3]["timestamp"]}
+        with self.assertRaises(RD.DataError):
+            self.read(json.dumps({"rates": records}))
+
     def test_a_jump_straight_into_the_reserved_period_fails_explicitly(self):
         starts = [LIMIT - 30 * HOUR + i * HOUR for i in range(25)] + [CAP + 3 * HOUR, CAP + 4 * HOUR]
         with self.assertRaises(RD.DataError) as caught:

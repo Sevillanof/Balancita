@@ -60,6 +60,7 @@ _STAMP = re.compile(r'"timestamp"\s*:\s*"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})')
 
 
 _CAP_ISO = "2026-08-02T00:00:00"
+_PARTIAL = re.compile(r'"timestamp"\s*:\s*"([0-9T:\-]{0,18})$')
 
 
 class _Blob:
@@ -132,7 +133,7 @@ class ReplayDataGate:
         self.db.execute("PRAGMA query_only=ON")
         self.funding_bytes_read, self.funding_stopped_at, self.funding_reader, self.funding_bytes_stored = 0, None, None, 0
         self._reads, self._decoded_max, self._decoded_n, self._stop_reason = [], None, 0, None
-        self._sha, self._ts_max, self._tail = hashlib.sha256(), None, ""
+        self._sha, self._ts_max, self._tail, self._stamps, self._partial_stamp = hashlib.sha256(), None, "", 0, None
         self.blob_backend = None        # None: blobopen when Python has it, else ctypes; tests may force one
         self.statements = []            # every statement executed with its bounds: the audit trail of what was read
 
@@ -264,6 +265,8 @@ class ReplayDataGate:
                         raise DataError("funding response has a broken period")
                     continue
                 pos = end
+                if not isinstance(item, dict) or next(iter(item), None) != "timestamp":
+                    raise DataError("funding period whose first key is not 'timestamp': the isolation scan cannot cover it")
                 try:
                     start_ms = int(datetime.fromisoformat(item["timestamp"].replace("Z", "+00:00")).timestamp() * 1000)
                     rate = item["relativeFundingRate"]
@@ -289,24 +292,45 @@ class ReplayDataGate:
     def begin_stream(self):
         self.funding_stopped_at = None
         self._reads, self._decoded_max, self._decoded_n, self._stop_reason = [], None, 0, None
-        self._sha, self._ts_max, self._tail = hashlib.sha256(), None, ""
+        self._sha, self._ts_max, self._tail, self._stamps, self._partial_stamp = hashlib.sha256(), None, "", 0, None
 
     def _scan_delivered(self, raw, text):
-        """Independent of the parser: hash of every byte delivered and the latest timestamp that appears in them. A timestamp at
-        or after the global cap in delivered bytes is an isolation failure, whatever the parser would have done with it."""
+        """Independent of the parser: hash of every byte delivered, the latest timestamp that appears in them and how many
+        timestamps there are. A timestamp at or after the global cap in delivered bytes is an isolation failure, whatever the
+        parser would have done with it."""
         self._sha.update(raw)
         window = self._tail + text
-        for stamp in _STAMP.findall(window):
+        seen_before = len(self._tail)
+        for found in _STAMP.finditer(window):
+            if found.end() <= seen_before:
+                continue                                    # already counted in the previous block
+            self._stamps += 1
+            stamp = found.group(1)
             if self._ts_max is None or stamp > self._ts_max:
                 self._ts_max = stamp
         self._tail = window[-64:]
         if self._ts_max is not None and self._ts_max >= _CAP_ISO:
             raise DataError("a reserved funding period reached the reader: the isolation guarantee does not hold")
 
+    def _check_boundary(self):
+        """A timestamp cut at the end of the last block delivered: its visible prefix may not reach the cap's prefix. Only a
+        prefix too short to hold a month (the year, 6 characters at most) is undecidable and cannot carry holdout information."""
+        partial = _PARTIAL.search(self._tail)
+        if partial is None:
+            return
+        prefix = partial.group(1)
+        if len(prefix) >= 7 and prefix >= _CAP_ISO[:len(prefix)]:
+            raise DataError("a reserved funding period reached the reader (cut at the end of the last block): the isolation "
+                            "guarantee does not hold")
+        self._partial_stamp = prefix
+
     def stream_trail(self, sha, bytes_read):
         """The audit record of one response read: every byte range delivered (summarised, with a hash of the full list), the
         stop and the periods decoded."""
         reads = self._reads
+        self._check_boundary()
+        if self._stamps < self._decoded_n:
+            raise DataError("the delivered bytes show fewer timestamps than periods decoded: the isolation scan cannot be trusted")
         return {"source": "/".join(self.path.rsplit("/", 2)[-2:]), "sha256": sha,
                 "bytes_read": bytes_read, "bytes_stored": self.funding_bytes_stored,
                 "stopped_at_ms": self.funding_stopped_at, "stop_reason": self._stop_reason or "end_of_blob",
@@ -317,6 +341,8 @@ class ReplayDataGate:
                 "contiguous_from_zero": all(reads[i][0] == (reads[i - 1][0] + reads[i - 1][2] if i else 0) for i in range(len(reads))),
                 "reads_sha256": hashlib.sha256(json.dumps(reads).encode()).hexdigest(),
                 "delivered_sha256": self._sha.hexdigest(), "max_timestamp_in_delivered_bytes": self._ts_max,
+                "timestamps_in_delivered_bytes": self._stamps, "unresolved_partial_timestamp": self._partial_stamp,
+                "chunk_bytes": self.CHUNK, "reads_note": "reads are contiguous chunk_bytes blocks from offset 0 (contiguous_from_zero); first/last read and reads_sha256 reconstruct the list",
                 "periods_decoded": self._decoded_n, "max_decoded_period_ms": self._decoded_max,
                 "read_whole_value": sum(r for _, _, r in reads) >= self.funding_bytes_stored > 0}
 
