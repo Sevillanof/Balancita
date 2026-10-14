@@ -581,7 +581,7 @@ def main(argv=None):
     parser.add_argument("--allow-gaps", action="store_true")
     parser.add_argument("--strategy-set", default="frozen", choices=("frozen", "mx"),
                         help="frozen: C29, C30, C32 from their spec files (default); mx: the native fixtures")
-    parser.add_argument("--window-policy", default="cut_decisions_24h_before_end", choices=sorted(WINDOW_POLICIES))
+    parser.add_argument("--window-policy", default="decide_until_data_end", choices=sorted(WINDOW_POLICIES))
     args = parser.parse_args(argv)
     config = ReplayConfig(products=tuple(args.products.split(",")), decision_start_ms=_ms(args.decision_start),
                           decision_end_ms=_ms(args.decision_end), scenario=args.scenario,
