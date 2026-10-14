@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import './observability.css'
 import { StatusPill, DataState } from '../../../shared/mission-control/index.ts'
 import {
@@ -94,10 +94,14 @@ function ComponentRow({
 function Inspector({
   report,
   error,
+  applicable,
+  extra,
   onClose,
 }: {
   report: HealthReport | null
   error: string | null
+  applicable: boolean
+  extra?: ReactNode
   onClose: () => void
 }) {
   const closeButton = useRef<HTMLButtonElement>(null)
@@ -141,7 +145,19 @@ function Inspector({
           )}
         </header>
         <div className="obs-inspector__body">
-          {error !== null && (
+          {extra && (
+            <section className="obs-flow" aria-label="Flujo y uso">
+              {extra}
+            </section>
+          )}
+          {!applicable && (
+            <DataState
+              kind="unavailable"
+              title="Salud B1: no disponible en este modo"
+              detail="Los seis componentes se leen solo del gateway real. No se muestra ningún estado inventado."
+            />
+          )}
+          {applicable && error !== null && (
             <DataState
               kind="error"
               title="No se pudo leer la salud"
@@ -152,7 +168,7 @@ function Inspector({
               }
             />
           )}
-          {report ? (
+          {applicable && report ? (
             <>
               <p
                 className="obs-inspector__overall"
@@ -179,7 +195,7 @@ function Inspector({
               ))}
             </>
           ) : (
-            error === null && <DataState kind="loading" />
+            applicable && error === null && <DataState kind="loading" />
           )}
         </div>
         <footer className="obs-inspector__foot">
@@ -197,12 +213,31 @@ function Inspector({
 
 export type HealthRead = { data: HealthReport | null; error: string | null }
 
+/** What the header says about the data flow, next to the health read. */
+export type FlowFace = {
+  level: 'ok' | 'warn' | 'bad'
+  text: string
+  /** «PAPER»: operations are simulated. */
+  mode: string
+}
+
+const FLOW_TONE = { ok: 'ok', warn: 'warning', bad: 'error' } as const
+
 /**
- * Header control: the global health read of B1 at a glance, with the
- * inspector behind it. Without a read it says «Salud: sin datos», never
- * healthy.
+ * The one status control of the header: the global health read of B1 (the
+ * source of truth for health) with the live flow and the PAPER mark as
+ * details in the same chip. It opens the inspector, which also carries the
+ * flow diagnosis (`extra`). Without a B1 read it says «Salud: sin datos»,
+ * never healthy; where B1 does not apply (`health` omitted) the dot follows
+ * the flow only and the inspector says so.
  */
-export default function HealthIndicator({ data, error }: HealthRead) {
+export default function HealthIndicator({
+  data,
+  error,
+  applicable = true,
+  flow,
+  extra,
+}: HealthRead & { applicable?: boolean; flow?: FlowFace; extra?: ReactNode }) {
   const [open, setOpen] = useState(false)
   const close = useCallback(() => setOpen(false), [])
   let tone: keyof typeof LABEL | 'none' = 'none'
@@ -220,6 +255,10 @@ export default function HealthIndicator({ data, error }: HealthRead) {
           : 'Salud: correcta'
     if (data.components.length > 0) text += ` · ${ok}/${data.components.length}`
   }
+  if (!applicable) {
+    tone = flow ? FLOW_TONE[flow.level] : 'none'
+    text = ''
+  }
   return (
     <>
       <button
@@ -231,16 +270,40 @@ export default function HealthIndicator({ data, error }: HealthRead) {
         data-testid="health-indicator"
         onClick={() => setOpen(true)}
         title={
-          error !== null && data
+          applicable && error !== null && data
             ? 'La última lectura falló: se muestra la anterior'
-            : 'Abrir el inspector de salud'
+            : 'Abrir el estado del sistema'
         }
       >
         <span className="obs-health__dot" aria-hidden="true" />
-        {text}
-        {error !== null && data ? ' (lectura anterior)' : ''}
+        {applicable && (
+          <span>
+            {text}
+            {error !== null && data ? ' (lectura anterior)' : ''}
+          </span>
+        )}
+        {flow && (
+          <>
+            <span
+              className="obs-health__flow"
+              data-level={flow.level}
+              data-testid="flow-status"
+            >
+              {flow.text}
+            </span>
+            <span className="obs-health__mode">{flow.mode}</span>
+          </>
+        )}
       </button>
-      {open && <Inspector report={data} error={error} onClose={close} />}
+      {open && (
+        <Inspector
+          report={data}
+          error={error}
+          applicable={applicable}
+          extra={extra}
+          onClose={close}
+        />
+      )}
     </>
   )
 }

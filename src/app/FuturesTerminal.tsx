@@ -37,7 +37,6 @@ import {
   utcTime,
 } from './terminal-labels.ts'
 import { record } from '../shared/wire/decode.ts'
-import HealthIndicator from '../features/observability/presentation/HealthIndicator.tsx'
 import { useHealth } from '../features/observability/presentation/useHealth.ts'
 import ObserverPanel from '../features/observability/presentation/ObserverPanel.tsx'
 
@@ -380,10 +379,8 @@ export default function FuturesTerminal({
             showUsage={bootstrap.mode === 'paper_live'}
             modeLabel={modeLabel}
             diagnosis={diagnosis}
+            b1={bootstrap.mode === 'paper_live' ? health : undefined}
           />
-          {bootstrap.mode === 'paper_live' && (
-            <HealthIndicator data={health.data} error={health.error} />
-          )}
           {localScenarioStatus && <span>{localScenarioStatus}</span>}
         </>
       }

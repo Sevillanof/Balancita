@@ -1,6 +1,7 @@
 import {
   act,
   cleanup,
+  fireEvent,
   render,
   screen,
   waitFor,
@@ -158,6 +159,11 @@ const bootstrap: TerminalBootstrap = {
   },
 }
 
+/** The run and engine details live in the status chip's inspector. */
+function openStatus() {
+  fireEvent.click(screen.getByTestId('health-indicator'))
+}
+
 describe('FuturesTerminal local scenario presentation', () => {
   afterEach(() => {
     cleanup()
@@ -276,6 +282,7 @@ describe('FuturesTerminal local scenario presentation', () => {
     TerminalSocket.latest!.publish(snapshot)
     expect(await screen.findByText(/100\.123,45/)).toBeTruthy()
     expect(screen.getByText('Último trade público · USD/BTC')).toBeTruthy()
+    openStatus()
     expect(
       screen.getByText(/Evento .* UTC · recibido .* UTC · hace \d+ s/),
     ).toBeTruthy()
@@ -487,6 +494,7 @@ describe('FuturesTerminal local scenario presentation', () => {
     await act(async () =>
       socket.receive(envelope('snapshot', 0, { watermark: 0, state: {} })),
     )
+    openStatus()
     expect(screen.getByText('MOCK · mercado simulado')).toBeTruthy()
     expect(screen.getByText('Escenario iniciado')).toBeTruthy()
     expect(interval).not.toHaveBeenCalled()
@@ -744,6 +752,7 @@ describe('FuturesTerminal local scenario presentation', () => {
       ),
     )
     expect(screen.getByText('Entradas activas')).toBeTruthy()
+    openStatus()
     expect(screen.getByText(`Run: child-run`)).toBeTruthy()
     expect(screen.queryByText(`Run: ${bootstrap.active_run_id}`)).toBeNull()
     expect(screen.queryByText('parent-analysis')).toBeNull()
@@ -1297,6 +1306,7 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
     expect(screen.getByText(/Ejecución buy/)).toBeTruthy()
     expect(screen.getByText('Decisiones del motor')).toBeTruthy()
     expect(screen.getByLabelText('Decisión seleccionada')).toBeTruthy()
+    openStatus()
     expect(screen.getByText(/Motor paper: en marcha/)).toBeTruthy()
     // The rejected order says why; the filled one is in Spanish.
     expect(
@@ -1502,6 +1512,7 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
         }),
       )
     })
+    openStatus()
     expect(await screen.findByText(/Motor paper: en marcha/)).toBeTruthy()
   })
 
