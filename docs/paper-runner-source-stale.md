@@ -5,7 +5,7 @@ Decisión de Fran (2026-10-14, tras 10D): una API durable del runner que cancele
 ## API
 
 ```python
-PaperRunner.cancel_for_source_loss(product_id: str, gap_from_ms: int, gap_to_ms: int, t_ms: int) -> list[str]
+PaperRunner.cancel_for_source_loss(product_id: str, gap_from_ms: int, gap_to_ms: int, t_ms: int, threshold_ms: int) -> list[str]
 ```
 
 Devuelve los ids de las órdenes afectadas por la pérdida.
@@ -40,3 +40,17 @@ La detección de la pérdida (cuándo hay una brecha y qué umbral usar) no est�
 - Una brecha entre cotizaciones no prueba por sí sola una caída de la fuente; quién declara la pérdida debe apoyarse en evidencia explícita.
 - **Residuo declarado (LOW):** `quote_t_ms` (tiempo del diario de la última cotización por producto) no entra en `state_digest`. Se reconstruye siempre por reproducción completa del diario; si alguna vez se restaura desde una instantánea, debe viajar con ella.
 - **Residuo declarado (LOW):** el runner no distingue el transporte (REST o WebSocket) de una cotización: la comprobación solo usa el producto y los relojes. Las pruebas cubren REST y WS con etiquetas de fuente distintas, no con clientes reales.
+
+## Umbral de continuidad (D-10B-17 / D-17-19)
+
+`threshold_ms` es el umbral que aplicó quien detectó el silencio (obligatorio, entero positivo). El runner no lo decide; lo usa para no cancelar lo que ya había terminado.
+
+- **Silencio excesivo:** solo cuando supera el umbral, es decir desde `gap_from_ms + threshold_ms + 1`. Si `gap_to_ms <= gap_from_ms + threshold_ms` la declaración se rechaza (`source_loss_below_threshold`) y no escribe nada.
+- **Misma regla para silencio abierto y cerrado:** en un silencio abierto `gap_to_ms` es el momento en que se observó; en uno cerrado, la cotización que lo terminó.
+- **Orden ya vencida:** si `deadline_ms <= gap_from_ms + threshold_ms` (igualdad incluida) y su ventana se solapa con el silencio, la ventana terminó antes de que el silencio fuera excesivo. No se cancela: vence en la misma llamada con la lógica de `TimedExecutor` (`expire_orders`, que usa su motivo: `no_quote_in_window` o `no_valid_quote_in_window`), con `decided_at_ms` igual al momento de la declaración (`declared_ms`, el `t_ms` del diario), después de las cancelaciones. La entrada de diario `source_loss_expiry` lo registra y la recuperación lo termina con el mismo `now_ms`, así que la corrida continua y la recuperada dan el mismo `decided_at_ms`. No se inventa cotización, tick ni timestamp retroactivo. Bordes: con `gap_to_ms = límite + 1`, `deadline_ms == límite` vence y `deadline_ms == gap_to_ms` todavía es ejecutable y se cancela.
+- **Orden vigente:** si `deadline_ms > gap_from_ms + threshold_ms` y su ventana se solapa con el silencio, se cancela por `source_stale`.
+- **Repetición:** la declaración guarda `threshold_ms`; repetirla con otro umbral es `source_loss_conflict`.
+- **Recuperación:** una orden no declarada que sigue pendiente al recuperar cae bajo la regla de 8B (`runner_interrupted`), como antes de esta API.
+- Las pruebas con `SIGKILL` real del proceso son las de #165 (hilo 10); aquí la caída se simula con los puntos de fallo del journal.
+- **Tiempo de la declaración:** `declared_ms = max(t_ms, último t_ms del diario)`; es el `now_ms` del vencimiento. En el camino de cierre de #165 es el `persisted_at` de la cotización de cierre, no el `received_ms` que usaría `on_quote`; es determinista y distinto de ese valor.
+- **Diarios de la primera versión:** una declaración persistida sin `threshold_ms` se repite con cualquier umbral (no es conflicto).

@@ -425,8 +425,15 @@ class PaperRunner(object):
                 self.offsets.process(*item["stream"])
         elif kind == "source_loss":
             key = (data["product_id"], data["gap_from_ms"], data["gap_to_ms"])
-            self.source_losses[key] = {"intent_ids": list(data["intent_ids"]), "windows": {k: list(v) for k, v in data["windows"].items()}}
+            self.source_losses[key] = {"intent_ids": list(data["intent_ids"]), "threshold_ms": data.get("threshold_ms"),
+                                       "expire_ids": list(data.get("expire_ids", [])), "declared_ms": data.get("declared_ms"),
+                                       "windows": {k: list(v) for k, v in data["windows"].items()}}
             self._count("source_losses")
+        elif kind == "source_loss_expiry":
+            before = self._open_snapshot()
+            self.executor.expire_orders(data["intent_ids"], data["now_ms"])
+            self._settle_closed(before)
+            self._count("source_loss_expiries")
         elif kind == "order_cancelled":
             extra = {"recovery_ms": data["recovery_ms"]} if "recovery_ms" in data else {}
             record = self.executor.cancel(data["intent_id"], data["reason"], entry["t_ms"],
@@ -777,12 +784,21 @@ class PaperRunner(object):
                                         "reference_price": str(payload["price"]), "atr": str(payload["atr"])})
 
     # ---- source continuity lost while an order waited (D-10C-3) ----------------------------------------------
-    def cancel_for_source_loss(self, product_id, gap_from_ms, gap_to_ms, t_ms):
+    def cancel_for_source_loss(self, product_id, gap_from_ms, gap_to_ms, t_ms, threshold_ms):
         """Cancels the pending orders of ``product_id`` whose execution window overlaps ``[gap_from_ms, gap_to_ms]`` (the time
         the source lost continuity), with the reason ``source_stale``. Returns the ids of the orders the loss affects.
 
         * Only pending orders of that product whose window overlaps the gap are touched; an order that already filled,
           expired or was cancelled, another product, open positions (their stops) and the risk rules are not.
+        * ``threshold_ms`` is the continuity threshold the caller applied: a silence is excessive only when it *exceeds* it,
+          that is from ``gap_from_ms + threshold_ms + 1``. The declaration is refused if the silence did not exceed it
+          (``source_loss_below_threshold``). The same rule serves an open silence (``gap_to_ms`` is the moment it was
+          observed) and a closed one (``gap_to_ms`` is the quote that ended it).
+        * An order whose ``deadline_ms`` is not after ``gap_from_ms + threshold_ms`` (the equality included) was over before
+          the silence became excessive: it is not cancelled but expired, in the same call, by the executor's own rule
+          (``expire_orders``: its reason, ``no_quote_in_window`` or ``no_valid_quote_in_window``) at the declaration time
+          (``declared_ms``, the journal ``t_ms``), after the cancellations. A journal entry ``source_loss_expiry`` carries it,
+          and a recovery finishes it with the same ``now_ms``. No quote, tick or timestamp is made up.
         * A new declaration needs ``t_ms >= gap_to_ms``: the interruption is declared once its end is known
           (``source_loss_before_gap_end`` otherwise). A declaration already persisted is repeated with any ``t_ms``.
         * It must happen before the quote that ends the gap is delivered: after it the order may already have been judged
@@ -803,13 +819,17 @@ class PaperRunner(object):
             raise RunnerError("source_loss_not_applicable", "orders fill on modelled prices, not on a source of quotes")
         if not isinstance(product_id, str) or not product_id:
             raise RunnerError("source_loss_invalid", "product_id")
-        for name, value in (("gap_from_ms", gap_from_ms), ("gap_to_ms", gap_to_ms), ("t_ms", t_ms)):
+        for name, value in (("gap_from_ms", gap_from_ms), ("gap_to_ms", gap_to_ms), ("t_ms", t_ms), ("threshold_ms", threshold_ms)):
             if isinstance(value, bool) or not isinstance(value, int) or value < 0:
                 raise RunnerError("source_loss_invalid", name)
         if gap_to_ms <= gap_from_ms:
             raise RunnerError("source_loss_invalid", "gap_to_ms must be after gap_from_ms")
+        if threshold_ms <= 0:
+            raise RunnerError("source_loss_invalid", "threshold_ms must be positive")
         key = (product_id, gap_from_ms, gap_to_ms)
         known = self.source_losses.get(key)
+        if known is not None and known.get("threshold_ms") not in (None, threshold_ms):   # None: a declaration of the first version
+            raise RunnerError("source_loss_conflict", "the gap was declared with threshold {}".format(known.get("threshold_ms")))
         if known is None:
             if self.clock is not None and t_ms < self.clock:
                 raise RunnerError("source_loss_in_the_past", "t_ms {} is before the runner clock {}".format(t_ms, self.clock))
@@ -823,24 +843,41 @@ class PaperRunner(object):
             if last >= gap_to_ms and last > 0:
                 raise RunnerError("source_loss_after_quote",
                                   "a quote at {} was already delivered; the gap ended at {}".format(last, gap_to_ms))
-            affected, windows = [], {}
+            limit = gap_from_ms + threshold_ms          # the silence is excessive only after this instant
+            if gap_to_ms <= limit:
+                raise RunnerError("source_loss_below_threshold",
+                                  "a silence of {} ms does not exceed the threshold of {} ms".format(gap_to_ms - gap_from_ms, threshold_ms))
+            affected, windows, expiring = [], {}, []
             for intent_id, order in sorted(self.executor.pending.items()):
                 if order["product_id"] != product_id:
                     continue
                 lo = max(gap_from_ms, order["timeline"]["earliest_fill_ms"])
                 hi = min(gap_to_ms, order["timeline"]["deadline_ms"])
-                if hi > lo:
+                if hi > lo and order["timeline"]["deadline_ms"] > limit:
                     affected.append(intent_id)
                     windows[intent_id] = [lo, hi]
-            self._record(max(t_ms, self.journal.entries[-1]["t_ms"] if self.journal.entries else 0), "source_loss", {"product_id": product_id, "gap_from_ms": gap_from_ms, "gap_to_ms": gap_to_ms,
-                                               "intent_ids": affected, "windows": windows})
+                elif hi > lo:
+                    expiring.append(intent_id)                  # over before the silence was excessive: it expires
+            declared = max(t_ms, self.journal.entries[-1]["t_ms"])
+            self._record(declared, "source_loss",
+                         {"product_id": product_id, "gap_from_ms": gap_from_ms, "gap_to_ms": gap_to_ms, "threshold_ms": threshold_ms,
+                          "declared_ms": declared, "intent_ids": affected, "expire_ids": expiring, "windows": windows})
             known = self.source_losses[key]
         for intent_id in known["intent_ids"]:
             if intent_id in self.executor.pending:
                 lo, hi = known["windows"][intent_id]
                 self._record(max(t_ms, self.journal.entries[-1]["t_ms"]), "order_cancelled",
                              {"intent_id": intent_id, "reason": "source_stale", "uncovered_from_ms": lo, "uncovered_to_ms": hi})
+        self._expire_for_source_loss(product_id, known, max(t_ms, self.journal.entries[-1]["t_ms"]))
         return list(known["intent_ids"])
+
+    def _expire_for_source_loss(self, product_id, loss, entry_ms):
+        """The orders the declaration found over before the silence was excessive end with the executor's own expiry (its
+        reason), at the time of the declaration: the same in a continuous run and in a recovered one."""
+        due = [i for i in loss["expire_ids"] if i in self.executor.pending
+               and loss["declared_ms"] > self.executor.pending[i]["timeline"]["deadline_ms"]]
+        if due:
+            self._record(entry_ms, "source_loss_expiry", {"product_id": product_id, "now_ms": loss["declared_ms"], "intent_ids": due})
 
     def _finish_source_losses(self, recovery_ms):
         """A process that died between the ``source_loss`` entry and the cancellations it announced: the recovery finishes them."""
@@ -851,6 +888,7 @@ class PaperRunner(object):
                     self._record(recovery_ms, "order_cancelled", {"intent_id": intent_id, "reason": "source_stale",
                                                                   "uncovered_from_ms": lo, "uncovered_to_ms": hi,
                                                                   "recovery_ms": recovery_ms})
+            self._expire_for_source_loss(key[0], loss, recovery_ms)
 
     # ---- recovery (8B) ---------------------------------------------------------------------------------------
     def _begin_recovery(self, recovery_ms, tail_discarded=0, rebuilt_checkpoint=None):
