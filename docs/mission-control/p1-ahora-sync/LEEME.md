@@ -23,6 +23,13 @@ mercado ni cuenta reales). Se regeneran con `AHORA_SHOTS_DIR=<carpeta>`.
   un fill durable del gateway (un marcador por fill, con su cantidad). No se enlaza ninguna decisión con una
   operación.
 
+- `ejecucion-seleccionada.png`: clic real sobre el marcador EJEC. del canvas.
+  Debajo del gráfico aparece «Ejecución seleccionada (EJEC.)» con `fill_id`,
+  `order_id`, hora original del fill en UTC (milisegundos), cantidad con su
+  unidad, dirección (LONG compra / SHORT venta), precio si el fill lo trae
+  (si no, «No disponible») y procedencia («Histórico · Gateway D»). Es un
+  evento independiente: no selecciona ni resalta ninguna decisión.
+
 - `marcadores-textos-cortos.png`: marcadores con textos cortos para que no se
   superpongan: propuesta `C25 LONG`, WAIT `W` / `W×n`, ejecución `EJ L` / `EJ S`.
   El texto completo (p. ej. «C25 EJEC. LONG 0.5 BTC», «C25 LONG propuesta»,
