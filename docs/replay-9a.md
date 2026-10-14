@@ -27,7 +27,15 @@ Paridad **no** reclamada, por diseño: el forward evalúa cada vela de 1 min con
 
 ## Funding: aislamiento y causalidad (A2, A3)
 
-La respuesta guardada de Kraken contiene un año de horas, incluidas las reservadas. `relative_funding` ya no usa funciones JSON de SQLite: lee la respuesta como flujo en trozos de 4 KiB, interpreta solo hasta el primer periodo con inicio `>=` 2026-08-02 y se detiene ahí. Ningún dato reservado llega al experimento: a lo sumo el primer periodo reservado se parsea para detectar el límite y se descarta, y nada posterior se lee (canario: una respuesta con basura tras el tope se lee igual). Se usa siempre `relativeFundingRate`, nunca se convierte la tasa absoluta. Respuestas: la más vieja y las dos más nuevas, igual que el forward. Límite residual declarado: a lo sumo un bloque (4 KiB) y un período más allá del tope se decodifican y parsean para detectar el límite, y se descartan; SQLite carga el valor almacenado en memoria (con Python >= 3.11 se usa `blobopen` y se lee incrementalmente); el manifest registra el lector, los bytes leídos y el instante donde se detuvo.
+Dos límites distintos: el **límite global** (2026-08-02T00:00Z, periodo reservado, nunca se lee) y el **límite local** de cada lectura (el fin de datos de la corrida). La respuesta guardada de Kraken contiene un año de horas, incluidas las reservadas, y SQLite carga el valor completo si se lo consulta con `substr`, `length` sobre un `CAST` o funciones JSON: eso **no** se considera aislamiento.
+
+`relative_funding` lee la respuesta con E/S incremental de SQLite (`Connection.blobopen` en Python >= 3.11; `sqlite3_blob_*` vía ctypes en Python < 3.11), en bloques de 512 bytes, y se detiene en el primer periodo con inicio `>=` el límite local. Si no hay E/S incremental disponible, **no lee** (no hay camino de respaldo que cargue el valor entero). El límite local no puede ser posterior a `cap - 48 h` (`FUNDING_MARGIN_MS`): el bloque leído tras el límite queda dentro del historial autorizado y el límite global no se alcanza ni siquiera por ese bloque. Por eso una corrida no puede decidir ni cargar datos en las últimas 48 h antes del cap (la ventana aprobada llega hasta `2026-07-31T23:59Z`). Se usa siempre `relativeFundingRate`, nunca se convierte la tasa absoluta. Respuestas: la más vieja y las dos más nuevas, igual que el forward.
+
+Qué está demostrado y qué no:
+
+- Demostrado (test sintético, ambos lectores): se destruyen todas las páginas de la respuesta desde el cap en adelante y se rompe el puntero de la página anterior; la lectura incremental devuelve exactamente lo mismo, mientras que una lectura completa del valor falla. Es decir, las páginas posteriores no se leen.
+- No demostrado: no hay traza de E/S del sistema operativo sobre una base real; el manifest registra el lector, el bloque, los bytes leídos, el límite local y el global.
+- Las corridas y auditorías hechas **antes** de este cambio (humo con los cuatro escenarios; primera auditoría de paridad de fuentes) usaron un lector que carga el valor completo (`substr`) y que parseó el primer periodo reservado para detectar el límite: no deben presentarse como aisladas.
 
 - Una hora llega a `inicio + 1 h + 10 min`; una hora ausente es desconocida, nunca 0.
 - Decisión de Fran (14-oct): se reproduce exactamente el cálculo vigente de C32 (`FundingContext.percentile()`, sin modificar ni reimplementar) y se expone su incertidumbre. El carry-forward no queda aprobado como política definitiva.
@@ -37,7 +45,7 @@ La respuesta guardada de Kraken contiene un año de horas, incluidas las reserva
 
 ## Política de ventana (A6)
 
-`window_policy`: `cut_decisions_24h_before_end` (por defecto; las decisiones paran 24 h antes del fin de los datos y lo que quede abierto se informa, no se cierra) o `decide_until_data_end` (se decide hasta el fin de los datos; las posiciones abiertas salen como `open_at_window_end`, nunca se cierran con precios posteriores). La política queda en el manifest y en `results.json`.
+`window_policy`: `decide_until_data_end` (política objetivo y valor por defecto, decisión de Fran 2026-10-14: se decide hasta el fin de los datos; las posiciones abiertas salen como `open_at_window_end`, marcadas a la última vela, y nunca se cierran con precios posteriores) o `cut_decisions_24h_before_end` (política original de las primeras corridas, conservada para reproducirlas). La política queda en el manifest y en `results.json`. Los resultados distinguen P&L realizado (trades cerrados) de P&L no realizado (posiciones abiertas) en `pnl_split`; no se comparan corridas con posiciones abiertas como si fueran resultados realizados.
 
 ## Comparación de escenarios (A5)
 
@@ -51,7 +59,7 @@ Las velas OHLC no son cotizaciones: ninguna operación se clasifica como observa
 
 - La vela 1 m `b` llega en `b + 60 s + 2 s`; el ciclo de la barra 5 m que cierra en `c` llega en `c + 2 s`, después de la vela.
 - El funding de la hora `[s, s+1h)` llega en `s + 1 h + 10 min`. Una hora ausente es desconocida, no 0.
-- Escenarios de ejecución (sensibilidad, no observaciones): `S0` contrafactual, apertura de la vela donde cierra la decisión (un precio anterior a la entrega de la decisión); `S1` (base) apertura de la vela siguiente; `S2` extremo adverso de la vela de entrada (estrés, no causal); `S3` = `S1` más un impacto adicional del producto.
+- Escenarios de ejecución (sensibilidad, no observaciones): `S0` contrafactual, apertura de la vela donde cierra la decisión (un precio anterior a la entrega de la decisión); `S1` (base) apertura de la vela siguiente; `S2` extremo adverso de la vela de entrada (estrés, no causal); `S3` = `S1` más un impacto adicional igual al impacto vigente de cada producto: sensibilidad experimental autorizada por Fran el 2026-10-14, sin validación para operaciones futuras ni para cambiar el modelo financiero (parámetros y advertencias en el manifest).
 - La vela del minuto de entrada la resuelve el ejecutor: si su rango toca el stop, cierra en el stop con evidencia `assumed_stop_entry_minute` (estimada); un objetivo tocado se ignora.
 
 ## Uso
@@ -67,3 +75,7 @@ PYTHONPATH=python python3 -m balancita_engine.replay_driver \
 ## Limitaciones
 
 Stop con evidencia OHLC (estimada); parámetros de ejecución, riesgo y sizing son hipótesis no aprobadas; "funding conocido al inicio de la hora" es una hipótesis no probada (por eso el retraso de 10 min); `S2` usa información posterior al fill.
+
+## Paridad de fuentes de funding (opción B)
+
+`python -m balancita_engine.replay_funding_parity FUENTE_DEL_FORWARD OTRA_BASE PRODUCTO SALIDA.json` compara, solo lectura y dentro del rango autorizado (hasta `cap - 48 h`), la fuente que usa el forward (`server/data/dev-live/futures-market.sqlite`, según `scripts/dev-provider-env.mjs`) con otra base: periodos, tasas, horas faltantes, percentil de `FundingContext` en cada hora publicada y señales de C32. Las pruebas sintéticas no sustituyen la comprobación sobre datos reales.

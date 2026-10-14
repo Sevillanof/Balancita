@@ -26,7 +26,7 @@ D = Decimal
 SCHEMA = "balancita-replay-compare.v1"
 LABEL = {"counterfactual": "COUNTERFACTUAL (price from before the decision was delivered)",
          "modelled_base": "modelled base", "non_causal_stress": "NON-CAUSAL STRESS (uses information after the fill)",
-         "unapproved_sensitivity": "sensitivity with an unapproved parameter"}
+         "experimental_sensitivity": "EXPERIMENTAL SENSITIVITY (not validated for future operations)"}
 
 
 def _key(order):
@@ -110,7 +110,15 @@ def compare(results, base=None):
                     "from_comparable_trades_usd": str(sum((pnl(key, k) - pnl(key, base) for key in common), D(0))),
                     "from_trades_only_in_scenario_usd": str(sum((pnl(key, k) for key in set(trades[k]) - common), D(0))),
                     "from_trades_only_in_base_usd": str(-sum((pnl(key, base) for key in set(trades[base]) - common), D(0)))}
-    out["trajectory"] = {"runs": trajectory, "pnl_split_against_base": split}
+    open_counts = {k: results[k].get("pnl_split", {}).get("open_positions_at_window_end", len(results[k].get("open_at_window_end", {})))
+                   for k in labels}
+    out["trajectory"] = {"runs": trajectory, "pnl_split_against_base": split,
+                         "open_positions_at_window_end": open_counts,
+                         "realized_closed_trades_usd": {k: results[k].get("pnl_split", {}).get("realized_closed_trades_usd") for k in labels},
+                         "unrealized_open_positions_usd": {k: results[k].get("pnl_split", {}).get("unrealized_open_positions_usd") for k in labels},
+                         "equity_comparable_as_realized": len(set(open_counts.values())) == 1 and set(open_counts.values()) == {0},
+                         "note_open_positions": "equity includes unrealized P&L; the split above uses closed trades only; runs with "
+                                                "open positions are not comparable with runs without them unless stated"}
     return out
 
 

@@ -6,9 +6,10 @@ Everything read from a market database goes through ``ReplayDataGate``:
 * ``LO_MS`` / ``HI_EXCL_MS`` are constants of this module. A window that starts before ``LO_MS`` or ends after
   ``HI_EXCL_MS`` raises ``RangeGateError`` *before* the file is opened. ``HI_EXCL_MS`` is 2026-08-02T00:00:00Z: the reserved
   period (2026-08-02 .. 2026-10-01) is never read, although the backfilled databases hold it physically;
-* every statement is parameterised with the window; funding is read as a stream of the stored response and abandoned at the
-  first period at or after the cap (no SQLite JSON function is applied to the stored response), so periods at or after the
-  cap are neither parsed nor returned.
+* every statement is parameterised with the window; funding is read through incremental blob I/O (only the pages of the
+  prefix of the stored response, nothing is loaded whole) and abandoned at the first period at or after the *local* limit of
+  the read, which may not be later than ``HI_EXCL_MS - FUNDING_MARGIN_MS``: the global cap is never reached, not even by the
+  block read past the stop. No SQLite JSON function is applied to the stored response.
 
 Candles are the first-known revision of each bucket. Their ``known_at`` is the time of the backfill (October 2026), so it
 says nothing about when a candle was known: the replay fixes availability by rule (``replay_driver``).
@@ -25,6 +26,7 @@ FIVE_MINUTES_MS = 300_000
 HOUR_MS = 3_600_000
 LO_MS = 1_760_313_600_000          # 2025-10-13T00:00:00Z: start of the audited range (and of the public funding history)
 HI_EXCL_MS = 1_785_628_800_000     # 2026-08-02T00:00:00Z: exclusive; everything from here on is the reserved period
+FUNDING_MARGIN_MS = 48 * HOUR_MS   # funding is read at most this long before the cap (see ``relative_funding``)
 SCHEMA = "balancita-replay-data.v1"
 INTERVALS = (ONE_MINUTE_MS, FIVE_MINUTES_MS)
 
@@ -53,13 +55,76 @@ def _plain(value):
     return json.loads(json.dumps(value, sort_keys=True, default=str))
 
 
+class _Blob:
+    """Incremental read of one stored value. ``read(offset, n)`` touches only the pages that hold those bytes."""
+
+    def __init__(self, backend, size, reader, closer):
+        self.backend, self.size, self._read, self._close = backend, size, reader, closer
+
+    def read(self, offset, n):
+        return self._read(offset, n)
+
+    def close(self):
+        self._close()
+
+
+def open_incremental_blob(path, db, table, column, rowid, prefer=None):
+    """``blobopen`` of Python >= 3.11 or, where it is missing, SQLite's own ``sqlite3_blob_*`` through ctypes (read-only
+    connection of its own). There is no third option: a read that would load the whole value is refused."""
+    if prefer != "ctypes" and hasattr(db, "blobopen"):
+        handle = db.blobopen(table, column, rowid, readonly=True)
+
+        def read(offset, n):
+            handle.seek(offset)
+            return handle.read(n)
+        return _Blob("blobopen", len(handle), read, handle.close)
+    return _ctypes_blob(path, table, column, rowid)
+
+
+def _ctypes_blob(path, table, column, rowid):
+    import ctypes
+    import ctypes.util
+    name = ctypes.util.find_library("sqlite3")
+    if not name:
+        raise DataError("no incremental blob I/O available (Python < 3.11 and no libsqlite3 for ctypes): the funding "
+                        "response cannot be read without loading it whole, so it is not read")
+    lib = ctypes.CDLL(name)
+    c_p, c_i = ctypes.c_void_p, ctypes.c_int
+    lib.sqlite3_open_v2.argtypes = [ctypes.c_char_p, ctypes.POINTER(c_p), c_i, ctypes.c_char_p]
+    lib.sqlite3_blob_open.argtypes = [c_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_int64, c_i, ctypes.POINTER(c_p)]
+    lib.sqlite3_blob_bytes.argtypes = [c_p]
+    lib.sqlite3_blob_read.argtypes = [c_p, c_p, c_i, c_i]
+    lib.sqlite3_blob_close.argtypes = [c_p]
+    lib.sqlite3_close.argtypes = [c_p]
+    conn = c_p()
+    if lib.sqlite3_open_v2(path.encode(), ctypes.byref(conn), 1, None) != 0:      # SQLITE_OPEN_READONLY
+        raise DataError("cannot open the database read-only through ctypes")
+    handle = c_p()
+    if lib.sqlite3_blob_open(conn, b"main", table.encode(), column.encode(), rowid, 0, ctypes.byref(handle)) != 0:
+        lib.sqlite3_close(conn)
+        raise DataError("cannot open the stored funding response for incremental reading")
+    size = lib.sqlite3_blob_bytes(handle)
+
+    def read(offset, n):
+        buffer = ctypes.create_string_buffer(n)
+        if lib.sqlite3_blob_read(handle, buffer, n, offset) != 0:
+            raise DataError("incremental read of the funding response failed")
+        return buffer.raw
+
+    def close():
+        lib.sqlite3_blob_close(handle)
+        lib.sqlite3_close(conn)
+    return _Blob("sqlite3_blob(ctypes)", size, read, close)
+
+
 class ReplayDataGate:
     def __init__(self, path, lo_ms, hi_excl_ms):
         check_window(lo_ms, hi_excl_ms)
         self.path, self.lo_ms, self.hi_excl_ms = path, lo_ms, hi_excl_ms
         self.db = sqlite3.connect("file:{}?mode=ro".format(path), uri=True)
         self.db.execute("PRAGMA query_only=ON")
-        self.funding_bytes_read, self.funding_stopped_at = 0, None
+        self.funding_bytes_read, self.funding_stopped_at, self.funding_reader, self.funding_bytes_stored = 0, None, None, 0
+        self.blob_backend = None        # None: blobopen when Python has it, else ctypes; tests may force one
         self.statements = []            # every statement executed with its bounds: the audit trail of what was read
 
     def close(self):
@@ -101,7 +166,7 @@ class ReplayDataGate:
         return [int(r[0]) for r in rows]
 
     # ---- funding --------------------------------------------------------------------------------------------------
-    CHUNK = 4096
+    CHUNK = 512
 
     def _response_shas(self, product_id):
         """The responses the forward reads (``futures_funding_context.load_periods``): the oldest and the two newest."""
@@ -115,37 +180,35 @@ class ReplayDataGate:
             shas = []
         return list(dict.fromkeys(shas[:1] + shas[-2:]))
 
+    def _open_blob(self, sha):
+        row = self.db.execute("SELECT rowid FROM paper_futures_funding_responses WHERE sha256=?", (sha,)).fetchone()
+        if row is None:
+            raise DataError("funding response not found")
+        return open_incremental_blob(self.path, self.db, "paper_futures_funding_responses", "raw_response", row[0],
+                                     prefer=self.blob_backend)
+
     def _chunks(self, sha):
-        """The stored response as text chunks, read on demand (``Connection.blobopen`` where Python has it, else a bounded
-        ``substr`` of the blob). The caller stops asking at the first period at or after the cap."""
-        row = self.db.execute("SELECT rowid, length(CAST(raw_response AS BLOB)) FROM paper_futures_funding_responses WHERE sha256=?",
-                              (sha,)).fetchone()
-        rowid, size = row
+        """The stored response as text chunks of ``CHUNK`` bytes, read on demand through SQLite's incremental blob I/O, which
+        reads only the pages it is asked for. The caller stops asking at the first period at or after its limit."""
         import codecs
         decoder = codecs.getincrementaldecoder("utf-8")()
-        blob = None
-        if hasattr(self.db, "blobopen"):
-            blob = self.db.blobopen("paper_futures_funding_responses", "raw_response", rowid, readonly=True)
+        blob = self._open_blob(sha)
+        self.funding_reader = blob.backend
+        self.funding_bytes_stored = blob.size
         offset = 0
         try:
-            while offset < size:
-                n = min(self.CHUNK, size - offset)
-                if blob is not None:
-                    blob.seek(offset)
-                    raw = blob.read(n)
-                else:
-                    raw = self.db.execute("SELECT substr(CAST(raw_response AS BLOB), ?, ?) FROM paper_futures_funding_responses "
-                                          "WHERE rowid=?", (offset + 1, n, rowid)).fetchone()[0]
+            while offset < blob.size:
+                n = min(self.CHUNK, blob.size - offset)
+                raw = blob.read(offset, n)
                 offset += n
                 self.funding_bytes_read += n
-                yield decoder.decode(raw, final=offset >= size)
+                yield decoder.decode(raw, final=offset >= blob.size)
         finally:
-            if blob is not None:
-                blob.close()
+            blob.close()
 
     def _stream_rates(self, sha):
         """Yields ``(start_ms, relative_rate)`` of one response in file order and stops at the first period at or after the
-        cap. At most one block and one period beyond the cap are decoded / parsed (to detect the limit) and discarded."""
+        limit. Reading stops there: at most one ``CHUNK`` beyond the limit is read (and one period parsed to detect it)."""
         from datetime import datetime
         decoder = json.JSONDecoder()
         chunks = self._chunks(sha)
@@ -159,70 +222,80 @@ class ReplayDataGate:
             except StopIteration:
                 return False
 
-        while True:
-            if state == "seek":                 # up to the opening bracket of "rates"
-                key = buffer.find('"rates"', pos)
-                if key >= 0:
-                    bracket = buffer.find("[", key)
-                    if bracket >= 0:
-                        pos, state = bracket + 1, "items"
-                        continue
-                if not more():
-                    raise DataError("funding response has no 'rates' array")
-                continue
-            while pos < len(buffer) and buffer[pos] in " \t\r\n,":
-                pos += 1
-            if pos >= len(buffer):
-                if not more():
-                    raise DataError("funding response ends inside the 'rates' array")
-                continue
-            if buffer[pos] == "]":
-                return
-            try:
-                item, end = decoder.raw_decode(buffer, pos)
-            except ValueError:
-                if not more():
-                    raise DataError("funding response has a broken period")
-                continue
-            pos = end
-            try:
-                start_ms = int(datetime.fromisoformat(item["timestamp"].replace("Z", "+00:00")).timestamp() * 1000)
-                rate = item["relativeFundingRate"]
-            except (KeyError, TypeError, ValueError, AttributeError):
-                raise DataError("funding period without timestamp / relativeFundingRate")
-            if last is not None and start_ms <= last:
-                raise DataError("funding response is not in increasing order: the bound cannot be applied")
-            last = start_ms
-            if start_ms >= self.hi_excl_ms:
-                self.funding_stopped_at = start_ms
-                return                           # the first reserved period: stop here, read nothing further
-            if start_ms >= self.lo_ms:
-                yield start_ms, rate
-            buffer, pos = buffer[pos:], 0        # keep the buffer small
+        try:
+            while True:
+                if state == "seek":                 # up to the opening bracket of "rates"
+                    key = buffer.find('"rates"', pos)
+                    if key >= 0:
+                        bracket = buffer.find("[", key)
+                        if bracket >= 0:
+                            pos, state = bracket + 1, "items"
+                            continue
+                    if not more():
+                        raise DataError("funding response has no 'rates' array")
+                    continue
+                while pos < len(buffer) and buffer[pos] in " \t\r\n,":
+                    pos += 1
+                if pos >= len(buffer):
+                    if not more():
+                        raise DataError("funding response ends inside the 'rates' array")
+                    continue
+                if buffer[pos] == "]":
+                    return
+                try:
+                    item, end = decoder.raw_decode(buffer, pos)
+                except ValueError:
+                    if not more():
+                        raise DataError("funding response has a broken period")
+                    continue
+                pos = end
+                try:
+                    start_ms = int(datetime.fromisoformat(item["timestamp"].replace("Z", "+00:00")).timestamp() * 1000)
+                    rate = item["relativeFundingRate"]
+                except (KeyError, TypeError, ValueError, AttributeError):
+                    raise DataError("funding period without timestamp / relativeFundingRate")
+                if last is not None and start_ms <= last:
+                    raise DataError("funding response is not in increasing order: the bound cannot be applied")
+                last = start_ms
+                if start_ms >= self.hi_excl_ms:
+                    self.funding_stopped_at = start_ms
+                    return                           # the first period at or after the limit: stop, read nothing further
+                if start_ms >= self.lo_ms:
+                    yield start_ms, rate
+                buffer, pos = buffer[pos:], 0        # keep the buffer small
+        finally:
+            chunks.close()
 
     def relative_funding(self, product_id):
         """``[(start_ms, relative_rate_text)]`` of the hourly funding periods inside ``[lo, hi_excl)``, first seen wins.
 
         The rate is Kraken's ``relativeFundingRate`` (what ``accrue_funding`` and ``FundingContext`` use; the absolute
-        ``funding_rate`` is never converted). The stored response lists a year of periods, including the reserved ones, so
-        it is read as a stream from its start and abandoned at the first period at or after the cap. Declared residue: SQLite
-        loads the stored value (every block on the ``substr`` path of Python < 3.11), and the 4 KiB block that holds the first
-        reserved period is decoded and that one period is parsed to detect the limit; it is discarded. Nothing after it is read,
-        and no JSON function is applied to the stored response.
-        Responses are the oldest and the two newest, as in the forward."""
+        ``funding_rate`` is never converted). Two limits, kept apart: the *local* limit ``hi_excl_ms`` of this read and the
+        *global* cap ``HI_EXCL_MS`` (the reserved period). The local limit may not be later than
+        ``HI_EXCL_MS - FUNDING_MARGIN_MS``, so that the block read past the local limit is still inside the authorised
+        history; a later one is refused before the file is opened.
+
+        The stored response lists a year of periods, including reserved ones, so it is read through incremental blob I/O
+        (``Connection.blobopen``, or ``sqlite3_blob_*`` through ctypes on Python < 3.11): only the pages of the prefix up to
+        the stop are read from the file. There is no fallback to a full-value read: without incremental I/O the read is
+        refused. Responses are the oldest and the two newest, as in the forward."""
+        if self.hi_excl_ms > HI_EXCL_MS - FUNDING_MARGIN_MS:
+            raise RangeGateError("funding is read up to {} h before the cap at most (local limit {} > {}): the block read past "
+                                 "the limit must stay inside the authorised history".format(
+                                     FUNDING_MARGIN_MS // HOUR_MS, self.hi_excl_ms, HI_EXCL_MS - FUNDING_MARGIN_MS))
         self.funding_bytes_read, self.funding_stopped_at = 0, None
-        found, trail = {}, []
+        found, trail, backend = {}, [], None
         for sha in self._response_shas(product_id):
             before = self.funding_bytes_read
+            self.funding_stopped_at = None
             for start_ms, rate in self._stream_rates(sha):
                 found.setdefault(start_ms, _decimal_text(rate))
-            size = self.db.execute("SELECT length(CAST(raw_response AS BLOB)) FROM paper_futures_funding_responses WHERE sha256=?",
-                                   (sha,)).fetchone()[0]
-            trail.append({"sha256": sha, "bytes_read": self.funding_bytes_read - before, "bytes_stored": size,
+            backend = self.funding_reader
+            trail.append({"sha256": sha, "bytes_read": self.funding_bytes_read - before, "bytes_stored": self.funding_bytes_stored,
                           "stopped_at_ms": self.funding_stopped_at})
-            self.funding_stopped_at = None
         self.statements.append({"name": "funding_stream", "params": [product_id, self.lo_ms, self.hi_excl_ms],
-                                "reader": "blobopen" if hasattr(self.db, "blobopen") else "substr_blob", "responses": trail})
+                                "reader": backend, "chunk_bytes": self.CHUNK, "local_limit_ms": self.hi_excl_ms,
+                                "global_cap_ms": HI_EXCL_MS, "margin_ms": FUNDING_MARGIN_MS, "responses": trail})
         return sorted(found.items())
 
 

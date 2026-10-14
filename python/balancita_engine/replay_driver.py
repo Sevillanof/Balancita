@@ -59,13 +59,13 @@ SCENARIO_TEXT = {
     "S0": "COUNTERFACTUAL: the open of the minute the decision closes on, a price from before the decision was delivered (cycle + 2 s)",
     "S1": "base: the open of the next minute (about one minute after the decision)",
     "S2": "adverse stress, NOT causal: the worst extreme of the entry minute (high for a buy, low for a sell)",
-    "S3": "S1 plus one more side impact of the product as extra slippage (declared, not approved)",
+    "S3": "EXPERIMENTAL SENSITIVITY: S1 plus one more side impact of the product as extra slippage (authorised by Fran 2026-10-14 only as a sensitivity; not validated for future operations nor for changing the financial model)",
 }
 DATA_LAG_MS = 2_000                  # a closed candle / a cycle is delivered this long after the close (hypothesis)
 FUNDING_LAG_MS = 600_000             # the funding of an hour is usable 10 minutes after the hour ends (hypothesis)
 MAX_EXECUTION_DELAY_MS = 120_000     # S1-S3 fill about one minute after the decision; the default 60 s would expire them
 TAIL_MS = DAY_MS                     # candles after the last decision (policy cut_decisions_24h_before_end); C29/C30/C32 hold up to 24 h
-SCENARIO_CLASS = {"S0": "counterfactual", "S1": "modelled_base", "S2": "non_causal_stress", "S3": "unapproved_sensitivity"}
+SCENARIO_CLASS = {"S0": "counterfactual", "S1": "modelled_base", "S2": "non_causal_stress", "S3": "experimental_sensitivity"}
 WINDOW_POLICIES = {
     "cut_decisions_24h_before_end": "decisions stop 24 h before the end of the data so that positions can close with data; "
                                     "a position still open at the end is reported, never closed",
@@ -95,7 +95,7 @@ class ReplayConfig:
     extra_slippage_bps: str = ""         # S3 only; "" = one more side impact of each product
     strategy_set: str = "frozen"         # "frozen": C29, C30, C32 from their spec files; "mx": the native mx-* fixtures
     dedupe_modelled_prices: bool = True  # one price event per (product, instant, price, scenario)
-    window_policy: str = "cut_decisions_24h_before_end"   # or "decide_until_data_end" (open positions stay open)
+    window_policy: str = "decide_until_data_end"   # target policy (Fran 2026-10-14); or "cut_decisions_24h_before_end"
 
     def resolved(self):
         tail = TAIL_MS if self.window_policy == "cut_decisions_24h_before_end" else 0
@@ -115,10 +115,13 @@ class ReplayConfig:
             raise ReplayError("no products")
         if self.decision_end_ms <= self.decision_start_ms:
             raise ReplayError("empty decision window")
-        if self.window_policy == "cut_decisions_24h_before_end" and self.decision_end_ms > RD.HI_EXCL_MS - TAIL_MS:
+        if self.window_policy == "cut_decisions_24h_before_end" and self.decision_end_ms > RD.HI_EXCL_MS - RD.FUNDING_MARGIN_MS - TAIL_MS:
             raise ReplayError("decisions must stop {} hours before the cap so positions can close "
                               "(or choose window_policy=decide_until_data_end)".format(TAIL_MS // HOUR_MS))
         RD.check_window(self.load_start_ms, self.data_end_ms)
+        if self.data_end_ms > RD.HI_EXCL_MS - RD.FUNDING_MARGIN_MS:
+            raise ReplayError("the data window must end at least {} h before the global cap {}: funding is not read closer, so "
+                              "that nothing at or after the cap is ever reached".format(RD.FUNDING_MARGIN_MS // HOUR_MS, iso(RD.HI_EXCL_MS)))
         if self.load_start_ms > self.decision_start_ms or self.data_end_ms < self.decision_end_ms:
             raise ReplayError("the data window must cover the decision window")
 
@@ -408,6 +411,18 @@ def run_replay(candles_db, funding_db, config, out_dir, *, data=None, strategies
     return results
 
 
+def scenario_parameters(cfg):
+    """What the scenario assumed, with its authorisation status, so a result can never be read without it."""
+    if cfg.scenario != "S3":
+        return {"scenario": cfg.scenario, "class": SCENARIO_CLASS[cfg.scenario]}
+    return {"scenario": "S3", "class": SCENARIO_CLASS["S3"],
+            "extra_slippage": cfg.extra_slippage_bps or "side_impact_bps of each product (current cost model)",
+            "per_product_side_impact_bps": {p: str(side_impact_bps(p)) for p in cfg.products},
+            "authorisation": "experimental sensitivity only (Fran 2026-10-14)",
+            "warnings": ["the value is not validated for future operations", "it does not modify the financial model",
+                         "it is applied on top of the S1 fill price and charged nowhere else"]}
+
+
 def run_manifest(cfg, data, runner, strategies, spec_identity=None):
     manifest = {
         "schema": SCHEMA, "execution": EXECUTION_LABEL, "scenario": cfg.scenario, "scenario_text": SCENARIO_TEXT[cfg.scenario],
@@ -420,6 +435,14 @@ def run_manifest(cfg, data, runner, strategies, spec_identity=None):
                         "max_execution_delay_ms": MAX_EXECUTION_DELAY_MS,
                         "extra_slippage_bps": cfg.extra_slippage_bps or "one side impact of the product (S3 only)",
                         "funding_known_at_start_of_hour": "unproven hypothesis, not used"},
+        "scenario_parameters": scenario_parameters(cfg),
+        "funding_source": {"declared": "the funding database given to the run (see data_files); parity of that source with the "
+                                       "forward's source is a separate audit (replay_funding_parity)",
+                           "synthetic_parity_tests_are_not_a_check_on_real_data": True,
+                           "holdout_isolation": {"global_cap": iso(RD.HI_EXCL_MS), "funding_margin_h": RD.FUNDING_MARGIN_MS // HOUR_MS,
+                                                 "local_limit": iso(cfg.data_end_ms),
+                                                 "claim": "incremental page reads stopped at the local limit; destroying the pages "
+                                                          "from the cap on does not change the read (test); no OS-level I/O trace"}},
         "runner_manifest_hash": stable_hash(runner.manifest), "cost_model_hash": cost_model_hash(),
         "build_identity": build_identity(), "engine_behavior": engine_behavior(), "code": code_identity(),
         "reads": data["statements"], "strategy_set": cfg.strategy_set, "window_policy": cfg.window_policy,
@@ -480,6 +503,11 @@ def build_results(cfg, data, runner, manifest, rejections, fills, funding_diag=N
                     "set_hash": stable_hash(sorted(x["signal_id"] for x in signal_entries)),
                     "entries_hash": stable_hash(sorted(x["signal_id"] for x in signal_entries if x["action"] != "WAIT"))},
         "orders": orders, "funding_diagnostics": funding_diag or {},
+        "pnl_split": {"realized_closed_trades_usd": str(sum((D(str(t["pnl_usd"])) for t in p.trades), D(0))),
+                      "unrealized_open_positions_usd": str(snap["unrealized_usd"]),
+                      "open_positions_at_window_end": len(p.positions),
+                      "note": "equity includes unrealized P&L of open positions; compare realized results only with realized "
+                              "results, and only with the open positions stated"},
         "evidence": {"classes": evidence, "stops": "OHLC candles are not quotes: a stop or target on a candle is estimated; "
                                                     "a stop assumed inside the entry minute is uncertain (the extreme may "
                                                     "have preceded the fill)", "observed_by_quotes": 0},

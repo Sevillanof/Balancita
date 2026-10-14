@@ -3,9 +3,10 @@
 Compares the funding that the forward reads (``futures_funding_context.load_periods``: the oldest and the two newest stored
 responses, first seen wins) with another market database (the replay's source), inside ``[LO, cap)`` only:
 
-* both are read with ``ReplayDataGate`` (``mode=ro``, ``query_only``), as a bounded stream that stops at the first period at
-  or after the cap, so the reserved period is not processed. A response that is not in increasing order stops the audit
-  (``DataError``): the bound could not be guaranteed;
+* both are read with ``ReplayDataGate`` (``mode=ro``, ``query_only``) through incremental blob I/O that stops at the first
+  period at or after the local limit, which is at most ``cap - 48 h``: the reserved period is not reached, not even by the
+  block read past the stop. A response that is not in increasing order stops the audit (``DataError``): the bound could not
+  be guaranteed;
 * per source: the responses selected (sha, received_at, bytes read), the periods, the missing hours, and the periods each
   response contributes;
 * between sources: hours present in only one, rates that differ (text and the float the forward uses), and for each of
@@ -30,8 +31,9 @@ HOUR_MS = RD.HOUR_MS
 LAG_MS = RFA.LAG_MS
 
 
-def _source(path, product, lo_ms, hi_ms):
+def _source(path, product, lo_ms, hi_ms, blob_backend=None):
     gate = RD.ReplayDataGate(path, lo_ms, hi_ms)
+    gate.blob_backend = blob_backend
     try:
         shas = gate._response_shas(product)
         meta = {r[0]: r[1] for r in gate.db.execute(
@@ -43,11 +45,9 @@ def _source(path, product, lo_ms, hi_ms):
             rows = {}
             for start_ms, rate in gate._stream_rates(sha):
                 rows[start_ms] = RD._decimal_text(rate)
-            size = gate.db.execute("SELECT length(CAST(raw_response AS BLOB)) FROM paper_futures_funding_responses WHERE sha256=?",
-                                   (sha,)).fetchone()[0]
             per_response.append({"sha256": sha, "received_at": meta.get(sha), "periods": len(rows),
                                  "first": min(rows) if rows else None, "last": max(rows) if rows else None,
-                                 "bytes_read": gate.funding_bytes_read, "bytes_stored": size,
+                                 "bytes_read": gate.funding_bytes_read, "bytes_stored": gate.funding_bytes_stored,
                                  "stopped_at_ms": gate.funding_stopped_at})
             for start_ms, rate in rows.items():
                 merged.setdefault(start_ms, rate)
@@ -55,7 +55,7 @@ def _source(path, product, lo_ms, hi_ms):
         columns = [r[1] for r in gate.db.execute("PRAGMA table_info(paper_futures_funding_periods)")]
         return {"path_name": os.path.basename(path), "responses": per_response, "periods": sorted(merged.items()),
                 "revision_differences_between_selected_responses": revisions, "periods_table_columns": columns,
-                "reader": "blobopen" if hasattr(gate.db, "blobopen") else "substr_blob"}, gate
+                "reader": gate.funding_reader}, gate
     except Exception:
         gate.close()
         raise
@@ -88,11 +88,11 @@ def _publication_instants(periods, lo_ms, hi_ms):
     return [s + HOUR_MS + LAG_MS for s in starts if lo_ms <= s + HOUR_MS + LAG_MS < hi_ms]
 
 
-def compare_sources(forward_db, other_db, product, lo_ms=RD.LO_MS, hi_ms=RD.HI_EXCL_MS):
+def compare_sources(forward_db, other_db, product, lo_ms=RD.LO_MS, hi_ms=RD.HI_EXCL_MS - RD.FUNDING_MARGIN_MS, blob_backend=None):
     RD.check_window(lo_ms, hi_ms)
-    a, gate_a = _source(forward_db, product, lo_ms, hi_ms)
+    a, gate_a = _source(forward_db, product, lo_ms, hi_ms, blob_backend)
     try:
-        b, gate_b = _source(other_db, product, lo_ms, hi_ms)
+        b, gate_b = _source(other_db, product, lo_ms, hi_ms, blob_backend)
     except Exception:
         gate_a.close()
         raise

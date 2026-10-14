@@ -99,18 +99,29 @@ class Gate(Tmp):
 
     def test_rows_at_or_after_the_cap_never_reach_python(self):
         path = self.path("m.sqlite")
-        make_db(path, start_ms=RD.HI_EXCL_MS - 2 * HOUR, end_ms=RD.HI_EXCL_MS + 2 * HOUR)
+        make_db(path, start_ms=RD.HI_EXCL_MS - 60 * HOUR, end_ms=RD.HI_EXCL_MS + 2 * HOUR)
         gate = RD.ReplayDataGate(path, RD.HI_EXCL_MS - 2 * HOUR, RD.HI_EXCL_MS)
         one = gate.candles(BTC, RD.ONE_MINUTE_MS)
         five = gate.candles(BTC, RD.FIVE_MINUTES_MS)
-        funding = gate.relative_funding(BTC)
         gate.close()
         self.assertEqual(one[-1]["bucket_start"], RD.HI_EXCL_MS - MIN)
         self.assertEqual(five[-1]["bucket_start"], RD.HI_EXCL_MS - 5 * MIN)
-        self.assertEqual(funding[-1][0], RD.HI_EXCL_MS - HOUR)
         self.assertTrue(all(c["bucket_start"] < RD.HI_EXCL_MS for c in one + five))
-        self.assertTrue(all(s < RD.HI_EXCL_MS for s, _ in funding))
+        limit = RD.HI_EXCL_MS - RD.FUNDING_MARGIN_MS
+        gate = RD.ReplayDataGate(path, RD.HI_EXCL_MS - 60 * HOUR, limit)
+        funding = gate.relative_funding(BTC)
+        self.assertEqual(funding[-1][0], limit - HOUR)
+        self.assertTrue(all(s < limit for s, _ in funding))
         self.assertTrue(all(len(s["params"]) >= 3 for s in gate.statements if s["name"] != "funding_responses"))
+        gate.close()
+
+    def test_funding_is_not_read_closer_to_the_cap_than_the_margin(self):
+        path = self.path("m.sqlite")
+        make_db(path, start_ms=RD.HI_EXCL_MS - 60 * HOUR, end_ms=RD.HI_EXCL_MS + 2 * HOUR)
+        gate = RD.ReplayDataGate(path, RD.HI_EXCL_MS - 60 * HOUR, RD.HI_EXCL_MS - RD.FUNDING_MARGIN_MS + HOUR)
+        with self.assertRaises(RD.RangeGateError):
+            gate.relative_funding(BTC)
+        gate.close()
 
     def test_it_is_read_only_and_leaves_the_file_untouched(self):
         path = self.path("m.sqlite")
@@ -157,9 +168,9 @@ class Gate(Tmp):
 
     # ---- A2: the reserved hours are not processed ----------------------------------------------------------------
     def poisoned_db(self, tail):
-        """A funding response whose hours at and after the cap are replaced by ``tail`` (text spliced into the JSON)."""
+        """A funding response with ``tail`` (text) spliced after its last hour."""
         path = self.path("m.sqlite")
-        make_db(path, start_ms=RD.HI_EXCL_MS - 6 * HOUR, end_ms=RD.HI_EXCL_MS)
+        make_db(path, start_ms=RD.HI_EXCL_MS - 60 * HOUR, end_ms=RD.HI_EXCL_MS - 44 * HOUR)
         db = sqlite3.connect(path)
         raw = db.execute("SELECT raw_response FROM paper_futures_funding_responses").fetchone()[0]
         db.execute("UPDATE paper_futures_funding_responses SET raw_response=?", (raw[:-2] + tail + "]}",))
@@ -167,28 +178,84 @@ class Gate(Tmp):
         db.close()
         return path
 
-    def test_reserved_hours_are_never_parsed(self):
-        # a canary: after the cap the response is not even valid JSON. A JSON function over the whole response would fail
-        # or touch it; the stream stops at the first reserved period.
-        stamp = "2026-08-02T00:00:00.000Z"
-        tail = ', {"timestamp": "%s", "relativeFundingRate": "0.5"}, THIS IS NOT JSON {{{{' % stamp
+    def test_hours_after_the_local_limit_are_never_parsed(self):
+        # a canary: after the limit the response is not even valid JSON. A JSON function over the whole response would fail
+        # or touch it; the stream stops at the first period at or after the limit.
+        tail = ', {"timestamp": "2026-08-01T00:00:00.000Z", "relativeFundingRate": "0.5"}, THIS IS NOT JSON {{{{'
         path = self.poisoned_db(tail)
-        gate = RD.ReplayDataGate(path, RD.HI_EXCL_MS - 6 * HOUR, RD.HI_EXCL_MS)
+        limit = RD.HI_EXCL_MS - RD.FUNDING_MARGIN_MS
+        gate = RD.ReplayDataGate(path, RD.HI_EXCL_MS - 60 * HOUR, limit)
         funding = gate.relative_funding(BTC)
         gate.close()
-        self.assertEqual(len(funding), 6)
-        self.assertEqual(funding[-1][0], RD.HI_EXCL_MS - HOUR)
+        self.assertEqual(len(funding), 12)
+        self.assertEqual(funding[-1][0], limit - HOUR)
 
-    def test_the_stream_stops_at_the_first_reserved_period_and_declares_it(self):
+    def test_the_stream_stops_at_the_first_period_past_the_limit_and_declares_it(self):
         path = self.path("m.sqlite")
-        make_db(path, start_ms=RD.HI_EXCL_MS - 3 * HOUR, end_ms=RD.HI_EXCL_MS + 400 * HOUR)
-        gate = RD.ReplayDataGate(path, RD.HI_EXCL_MS - 3 * HOUR, RD.HI_EXCL_MS)
+        make_db(path, start_ms=RD.HI_EXCL_MS - 60 * HOUR, end_ms=RD.HI_EXCL_MS - 59 * HOUR, extra_funding_until=RD.HI_EXCL_MS + 400 * HOUR)
+        limit = RD.HI_EXCL_MS - RD.FUNDING_MARGIN_MS
+        gate = RD.ReplayDataGate(path, RD.HI_EXCL_MS - 60 * HOUR, limit)
         funding = gate.relative_funding(BTC)
-        trail = [x for x in gate.statements if x["name"] == "funding_stream"][0]["responses"][0]
+        entry = [x for x in gate.statements if x["name"] == "funding_stream"][0]
+        trail = entry["responses"][0]
         gate.close()
-        self.assertEqual([s for s, _ in funding], [RD.HI_EXCL_MS - h * HOUR for h in (3, 2, 1)])
-        self.assertEqual(trail["stopped_at_ms"], RD.HI_EXCL_MS)
-        self.assertLess(trail["bytes_read"], trail["bytes_stored"] // 5)       # only the start of the response was read
+        self.assertEqual([s for s, _ in funding], [limit - h * HOUR for h in range(12, 0, -1)])
+        self.assertEqual(trail["stopped_at_ms"], limit)
+        self.assertLess(trail["bytes_read"], trail["bytes_stored"] // 10)       # only the start of the response was read
+        self.assertEqual((entry["local_limit_ms"], entry["global_cap_ms"]), (limit, RD.HI_EXCL_MS))
+
+    # ---- the isolation proof: pages that were never read can be destroyed -----------------------------------------
+    def big_db(self):
+        path = self.path("big.sqlite")
+        make_db(path, start_ms=RD.HI_EXCL_MS - 3000 * HOUR, end_ms=RD.HI_EXCL_MS - 3000 * HOUR + 2 * HOUR,
+                extra_funding_until=RD.HI_EXCL_MS + 3000 * HOUR)
+        return path
+
+    def corrupt_chain_before_the_cap(self, path):
+        """Breaks the overflow chain of the stored response right before the page that holds the first period at the cap."""
+        with open(path, "rb") as handle:
+            data = bytearray(handle.read())
+        page = int.from_bytes(data[16:18], "big")
+        page = 65536 if page == 1 else page
+        marker = b"2026-08-02T00:00:00"
+        offset = data.find(marker)
+        self.assertGreater(offset, 0)
+        first_reserved = offset // page
+        target = (first_reserved - 1) * page                         # the pointer of the page before the one with the cap
+        data[target:target + 4] = b"\xff\xff\xff\xff"
+        number = first_reserved + 1                                  # pages are 1-based; ``first_reserved`` is the 0-based index
+        while number:                                                # the rest of the chain, from the cap on, becomes garbage
+            start = (number - 1) * page
+            following = int.from_bytes(data[start:start + 4], "big")
+            data[start + 4:start + page] = b"\xa5" * (page - 4)
+            number = following if following <= len(data) // page else 0
+        with open(path, "wb") as handle:
+            handle.write(data)
+        return first_reserved
+
+    def test_destroying_every_page_from_the_cap_on_does_not_change_the_read(self):
+        path = self.big_db()
+        limit = RD.HI_EXCL_MS - RD.FUNDING_MARGIN_MS
+        reference = RD.ReplayDataGate(path, RD.LO_MS, limit)
+        expected = reference.relative_funding(BTC)
+        reference.close()
+        self.corrupt_chain_before_the_cap(path)
+        # the full-value read (what substr / a JSON function does) now fails: the test has teeth
+        con = sqlite3.connect(path)
+        with self.assertRaises(sqlite3.DatabaseError):
+            con.execute("SELECT length(raw_response), substr(raw_response, 1, 10) FROM paper_futures_funding_responses").fetchone()
+        con.close()
+        for backend in ("blobopen", "ctypes"):
+            if backend == "blobopen" and not hasattr(sqlite3.Connection, "blobopen"):
+                continue
+            gate = RD.ReplayDataGate(path, RD.LO_MS, limit)
+            gate.blob_backend = backend
+            got = gate.relative_funding(BTC)
+            stream = [x for x in gate.statements if x["name"] == "funding_stream"][0]
+            gate.close()
+            self.assertEqual(got, expected, backend)
+            self.assertTrue(stream["reader"].startswith("sqlite3_blob" if backend == "ctypes" else "blobopen"), stream["reader"])
+            self.assertEqual(stream["responses"][0]["stopped_at_ms"], limit)
 
     def test_a_funding_response_out_of_order_is_refused(self):
         path = self.path("m.sqlite")

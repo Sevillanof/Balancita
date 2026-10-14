@@ -552,6 +552,7 @@ class FrozenEndToEnd(Shared):
             self.assertEqual(parts, D(split["pnl_difference_usd"]), label)
         self.assertEqual(runs["S0"]["scenario_class"], "counterfactual")
         self.assertEqual(runs["S2"]["scenario_class"], "non_causal_stress")
+        self.assertEqual(runs["S3"]["scenario_class"], "experimental_sensitivity")
         self.assertIn("COUNTERFACTUAL", RP.SCENARIO_TEXT["S0"])
 
     def test_no_ordering_of_scenarios_is_assumed(self):
@@ -560,22 +561,62 @@ class FrozenEndToEnd(Shared):
         self.assertNotIn("ordering", json.dumps(report).lower())
 
     # ---- A6 -------------------------------------------------------------------------------------------------------
-    def test_the_window_policy_is_declared_and_open_positions_are_never_closed_with_later_data(self):
+    def test_the_target_policy_reports_open_positions_and_never_closes_them_with_later_data(self):
         out, _ = self.run_cached("s1")
-        self.assertEqual(out["window"]["policy"], "cut_decisions_24h_before_end")
-        cfg = self.config(decision_end_ms=FIRST_DECISION + 14 * 3600_000, data_end_ms=FIRST_DECISION + 14 * 3600_000 + 4 * 3600_000,
-                          window_policy="decide_until_data_end").resolved()
-        self.assertEqual(cfg.data_end_ms - cfg.decision_end_ms, 4 * 3600_000)       # the effective window is what was asked
-        cut, _ = self.run_cached("short", decision_end_ms=cfg.decision_end_ms, data_end_ms=cfg.data_end_ms,
-                                 window_policy="decide_until_data_end")
-        self.assertEqual(cut["window"]["policy"], "decide_until_data_end")
-        self.assertEqual(cut["window"]["forced_closes_with_later_data"], 0)
-        self.assertTrue(all(t["exit_time_ms"] <= cfg.data_end_ms + 120_000 for t in cut["trades"]))
-        self.assertEqual(cut["window"]["positions_open_at_window_end"], len(cut["open_at_window_end"]))
+        self.assertEqual(out["window"]["policy"], "decide_until_data_end")
+        self.assertEqual(out["window"]["data_end_excl"], out["window"]["decision_end_excl"])      # no tail: nothing after the end
+        cfg = self.config(decision_end_ms=FIRST_DECISION + 14 * 3600_000).resolved()
+        short, _ = self.run_cached("short", decision_end_ms=cfg.decision_end_ms)
+        self.assertEqual(short["window"]["forced_closes_with_later_data"], 0)
+        self.assertTrue(all(t["exit_time_ms"] <= cfg.data_end_ms + 120_000 for t in short["trades"]))
+        self.assertEqual(short["window"]["positions_open_at_window_end"], len(short["open_at_window_end"]))
+        self.assertEqual(short["pnl_split"]["open_positions_at_window_end"], len(short["open_at_window_end"]))
+        self.assertIn("unrealized_open_positions_usd", short["pnl_split"])
 
-    def test_the_default_policy_refuses_decisions_in_the_last_day_before_the_cap(self):
+    def test_the_original_policy_is_kept_for_the_earlier_runs(self):
+        old, _ = self.run_cached("cutpolicy", window_policy="cut_decisions_24h_before_end")
+        self.assertEqual(old["window"]["policy"], "cut_decisions_24h_before_end")
+        self.assertEqual(old["manifest"]["window_policy"], "cut_decisions_24h_before_end")
+        self.assertEqual(self.config(window_policy="cut_decisions_24h_before_end").resolved().data_end_ms - LAST_DECISION, DAY)
+
+    def test_the_data_window_cannot_reach_the_funding_margin_before_the_cap(self):
         with self.assertRaises(RP.ReplayError):
-            self.config(decision_end_ms=RD.HI_EXCL_MS - 3600_000, data_end_ms=RD.HI_EXCL_MS).resolved().validate()
+            self.config(decision_end_ms=RD.HI_EXCL_MS - 3600_000).resolved().validate()
+        with self.assertRaises(RP.ReplayError):
+            self.config(decision_end_ms=RD.HI_EXCL_MS - RD.FUNDING_MARGIN_MS - DAY // 2,
+                        window_policy="cut_decisions_24h_before_end").resolved().validate()
+        self.config(decision_end_ms=RD.HI_EXCL_MS - RD.FUNDING_MARGIN_MS).resolved().validate()   # the edge is allowed
+
+    def test_s3_is_declared_as_an_experimental_sensitivity_in_the_manifest(self):
+        out, _ = self.run_cached("s3", scenario="S3")
+        params = out["manifest"]["scenario_parameters"]
+        self.assertEqual(params["class"], "experimental_sensitivity")
+        self.assertIn("per_product_side_impact_bps", params)
+        self.assertTrue(any("not validated" in w for w in params["warnings"]))
+        self.assertIn("EXPERIMENTAL SENSITIVITY", out["manifest"]["scenario_text"])
+        base = self.run_cached("s1")[0]["manifest"]["scenario_parameters"]
+        self.assertEqual(base["class"], "modelled_base")
+
+    def test_the_manifest_states_where_the_funding_comes_from_and_how_it_was_isolated(self):
+        out, _ = self.run_cached("s1")
+        source = out["manifest"]["funding_source"]
+        self.assertTrue(source["synthetic_parity_tests_are_not_a_check_on_real_data"])
+        self.assertEqual(source["holdout_isolation"]["funding_margin_h"], 48)
+        stream = [x for x in out["manifest"]["reads"] if x["name"] == "funding_stream"][0]
+        self.assertIn(stream["reader"], ("blobopen", "sqlite3_blob(ctypes)"))
+        self.assertEqual(stream["global_cap_ms"], RD.HI_EXCL_MS)
+        self.assertLess(stream["local_limit_ms"], stream["global_cap_ms"])
+
+    def test_the_report_keeps_open_positions_apart_from_realized_results(self):
+        a = json.loads(json.dumps(self.run_cached("s1")[0]))
+        b = json.loads(json.dumps(a))
+        a["pnl_split"]["open_positions_at_window_end"] = 0
+        b["scenario"], b["scenario_class"] = "S0", "counterfactual"
+        b["pnl_split"]["open_positions_at_window_end"] = 1
+        report = RC.compare({"S1": a, "S0": b})
+        self.assertFalse(report["trajectory"]["equity_comparable_as_realized"])
+        self.assertEqual(report["trajectory"]["open_positions_at_window_end"], {"S1": 0, "S0": 1})
+        self.assertIn("note_open_positions", report["trajectory"])
 
     # ---- A7 -------------------------------------------------------------------------------------------------------
     def test_candles_are_never_presented_as_quotes(self):
