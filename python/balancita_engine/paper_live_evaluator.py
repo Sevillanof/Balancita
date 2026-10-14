@@ -42,7 +42,8 @@ SCHEMA = "balancita-paper-live-evaluator.v1"
 LOG_SCHEMA = "balancita-paper-live-evaluator-log.v1"
 GENESIS = "0" * 64
 SEEN_MINUTES = 2880                        # candles remembered to detect a revised repeat (two days)
-FRAME_KEEP_MS = 3_600_000                  # frames of cycles the runner did not evaluate are dropped after an hour
+MAX_PENDING_FRAMES = 288                   # per product: one day of 5-minute cycles waiting for the runner to evaluate them
+RETAIN_CYCLES = 2880                       # per product: cycles and funding flags kept for duplicates and late-funding counts
 CYCLE_ASSEMBLY = "cycle-payload.v1"        # product_id, cycle_ms, price = candidate_close, atr = cycle_atr or atr14
 
 
@@ -126,7 +127,8 @@ class InputLog(object):
 
 
 class LiveEvaluator(object):
-    def __init__(self, strategies, products, log, *, decide_from_ms, decide_until_ms=None, source="paper-live-eval"):
+    def __init__(self, strategies, products, log, *, decide_from_ms, decide_until_ms=None, source="paper-live-eval",
+                 max_pending_frames=MAX_PENDING_FRAMES, retain_cycles=RETAIN_CYCLES):
         if not strategies:
             raise EvaluatorError("no_strategy")
         self.strategies, self.products = list(strategies), list(products)
@@ -136,29 +138,45 @@ class LiveEvaluator(object):
         self.bands = next((s.funding_bands for s in self.strategies if getattr(s, "funding_bands", None)), None)
         self.cycle_atr = next((s.cycle_atr for s in self.strategies if hasattr(s, "cycle_atr")), None)
         self.log = log
+        self.config = self._config()
+        self.config_digest = stable_hash(self.config)[:16]
         self.state = {p: self._fresh_product() for p in self.products}
         self.cycles, self.frames, self.flags = {}, {}, {}
         self.audit_rows, self.gaps, self.suppressed, self.late_funding, self.rejected = [], [], [], [], []
         self.conflicts, self.seen = [], {}
+        self.max_pending_frames, self.retain_cycles = int(max_pending_frames), int(retain_cycles)
+        self.frames_expired, self.evaluation_misses = [], []
         self.stats = {"candles": 0, "duplicates": 0, "cycles": 0, "funding_hours": 0}
 
     # ---- construction ----------------------------------------------------------------------------------------
     @classmethod
     def create(cls, path, strategies, products, *, decide_from_ms, decide_until_ms=None, **kw):
+        evaluator = cls(strategies, products, None, decide_from_ms=decide_from_ms, decide_until_ms=decide_until_ms, **kw)
         header = {"schema": LOG_SCHEMA, "products": list(products), "decide_from_ms": int(decide_from_ms),
-                  "decide_until_ms": decide_until_ms, "strategies": ["{}@{}".format(s.id, s.version) for s in strategies]}
-        return cls(strategies, products, InputLog.create(path, header), decide_from_ms=decide_from_ms,
-                   decide_until_ms=decide_until_ms, **kw)
+                  "decide_until_ms": decide_until_ms, "strategies": ["{}@{}".format(s.id, s.version) for s in strategies],
+                  "config": evaluator.config, "config_digest": evaluator.config_digest}
+        evaluator.log = InputLog.create(path, header)
+        return evaluator
 
     @classmethod
     def recover(cls, path, strategies, **kw):
-        """Feeds the logged inputs again, in order, to a fresh evaluator: same cycles, same events, same frames."""
+        """Feeds the logged inputs again, in order, to a fresh evaluator: same cycles, same events, same frames. The
+        configuration written in the log header must be the one in force now: otherwise ``strategies_changed`` (another
+        id@version) or ``config_incompatible`` (anything else: a spec hash, ticks, indicators, source, window, warm-up, pipeline
+        or evaluator code). Nothing is replayed under a different configuration."""
         log = InputLog.open(path)
         header = log.entries[0]["data"]
         if header["strategies"] != ["{}@{}".format(s.id, s.version) for s in strategies]:
             raise EvaluatorError("strategies_changed", "the log was written for {}".format(header["strategies"]))
+        if "config_digest" not in header or "config" not in header:
+            raise EvaluatorError("log_header", "no configuration identity in the header")
+        kw.setdefault("source", header["config"]["source"])
         evaluator = cls(strategies, header["products"], log, decide_from_ms=header["decide_from_ms"],
                         decide_until_ms=header["decide_until_ms"], **kw)
+        if evaluator.config_digest != header["config_digest"]:
+            differs = sorted(k for k in set(evaluator.config) | set(header["config"])
+                             if evaluator.config.get(k) != header["config"].get(k))
+            raise EvaluatorError("config_incompatible", "the log was written under another configuration: " + ", ".join(differs))
         for entry in log.entries[1:]:
             if entry["kind"] == "candle":
                 evaluator._apply_candle(entry["data"]["product_id"], entry["data"]["candle"], entry["data"]["arrival_ms"])
@@ -265,17 +283,36 @@ class LiveEvaluator(object):
                                     lag_ms=max(int(arrival_ms) - close_ms, 0))
         key = (product, close_ms)
         self.cycles[key], self.frames[key] = event, frame
-        for old in [k for k in self.frames if k[0] == product and k[1] < close_ms - FRAME_KEEP_MS]:
-            del self.frames[old]                                          # a frame the runner never asked for is not kept forever
+        self._bound(product)
         self.flags[key] = RFA.audit_record(state["context"], close_ms, self.bands)
         self.stats["cycles"] += 1
         return {"cycle": event, "duplicate": False, "rejected": None}
+
+    def _bound(self, product):
+        """Memory is bounded by count, never by age: a frame waits for the runner for as long as fewer than
+        ``max_pending_frames`` newer ones are pending. Past that the oldest is dropped *with a record*
+        (``frames_expired``); asking for it then raises ``frame_expired`` and the runner rejects the cycle (no signal is made
+        or changed). Cycles and funding flags older than ``retain_cycles`` are forgotten (they only serve duplicates and the
+        late-funding count)."""
+        pending = sorted(k for k in self.frames if k[0] == product)
+        for key in pending[:max(len(pending) - self.max_pending_frames, 0)]:
+            del self.frames[key]
+            self.frames_expired.append({"product_id": key[0], "cycle_ms": key[1], "reason": "frame_expired"})
+        kept = sorted(k for k in self.cycles if k[0] == product)
+        for key in kept[:max(len(kept) - self.retain_cycles, 0)]:
+            self.cycles.pop(key, None)
+            self.flags.pop(key, None)
 
     # ---- what the runner calls ---------------------------------------------------------------------------------
     def evaluator(self, chosen, payload):
         """``PaperRunner(..., evaluator=live.evaluator)``: the frame of this cycle through ``evaluate_cycle``. A cycle the
         evaluator did not produce has no frame and the runner rejects it (``evaluation_failed``)."""
         key = (payload["product_id"], payload["cycle_ms"])
+        if key not in self.frames:
+            expired = any(e["product_id"] == key[0] and e["cycle_ms"] == key[1] for e in self.frames_expired)
+            reason = "frame_expired" if expired else ("already_evaluated" if key in self.cycles else "unknown_cycle")
+            self.evaluation_misses.append({"product_id": key[0], "cycle_ms": key[1], "reason": reason})
+            raise EvaluatorError(reason, "{} {}".format(key[0], key[1]))
         frame, flag = self.frames.pop(key), self.flags[key]
         results = SC.evaluate_cycle(chosen, payload["product_id"], payload["cycle_ms"], frame)
         for strategy, (signal, _inputs) in zip(chosen, results):
@@ -285,23 +322,34 @@ class LiveEvaluator(object):
         return results
 
     # ---- identity ------------------------------------------------------------------------------------------------
-    def identity(self, spec_identity=None):
-        """What a result must carry to be traced: strategies (id, version, spec hash), indicator periods, how the cycle is
-        assembled, the warm-up rule and the head of the input log. ``spec_identity`` is the second value ``load_frozen``
-        returns (file hashes)."""
+    def _config(self):
+        """Everything that decides what the evaluator produces from a given input, and nothing that depends on the inputs."""
         body = {"schema": SCHEMA, "strategies": {s.id: {"version": s.version, "spec_hash": getattr(s, "spec_hash", None)}
                                                 for s in self.strategies},
+                "products": sorted(self.products),
                 "indicators": {k: list(v) for k, v in sorted(self.periods.items())}, "cycle_assembly": CYCLE_ASSEMBLY,
                 "tick_sizes": dict(sorted(getattr(self.strategies[0], "tick_sizes", {}).items())),
-                "warmup_ms": self.warmup_ms, "five_minute_bar": "aggregated_from_1m",
+                "warmup_ms": self.warmup_ms, "five_minute_bar": "aggregated_from_1m", "source": self.source,
                 "decide_from_ms": self.decide_from_ms, "decide_until_ms": self.decide_until_ms}
         with open(os.path.abspath(__file__), "rb") as handle:
             body["code"] = {"replay_pipeline": RP.code_identity()["digest"],
                             "evaluator_sha256": hashlib.sha256(handle.read().replace(b"\r\n", b"\n")).hexdigest()[:16]}
+        return body
+
+    def identity(self, spec_identity=None):
+        """``config`` / ``config_digest``: the immutable configuration, stored in the log header and checked by ``recover``.
+        ``digest``: the full identity of a result, which adds the head of the input log. ``spec_identity`` is the second value
+        ``load_frozen`` returns (file hashes); it is reported but is not part of the digest the header holds."""
+        out = dict(self.config, config=self.config, config_digest=self.config_digest,
+                   input_log={"entries": len(self.log.entries), "head": self.log.head})
+        out["digest"] = stable_hash({"config_digest": self.config_digest, "input_log": out["input_log"]})[:16]
         if spec_identity is not None:
-            body["spec_files"] = spec_identity
-        return dict(body, digest=stable_hash(body)[:16], input_log={"entries": len(self.log.entries), "head": self.log.head})
+            out["spec_files"] = spec_identity
+        return out
 
     def report(self):
         return {"stats": dict(self.stats), "gaps": list(self.gaps), "suppressed": list(self.suppressed),
-                "late_funding": list(self.late_funding), "rejected": list(self.rejected), "candle_conflicts": list(self.conflicts), "log_tail_discarded": self.log.tail_discarded}
+                "late_funding": list(self.late_funding), "rejected": list(self.rejected), "candle_conflicts": list(self.conflicts), "frames_expired": list(self.frames_expired),
+                "evaluation_misses": list(self.evaluation_misses),
+                "memory": {"pending_frames": len(self.frames), "cycles": len(self.cycles), "flags": len(self.flags),
+                           "seen_candles": len(self.seen), "audit_rows": len(self.audit_rows)}, "log_tail_discarded": self.log.tail_discarded}

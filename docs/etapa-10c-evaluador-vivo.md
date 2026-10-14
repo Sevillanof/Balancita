@@ -1,6 +1,6 @@
 # Etapa 10C: evaluador de sesión con el pipeline del replay 9A
 
-Estado: **diseño, contratos y pruebas sintéticas**. Código nuevo: `python/balancita_engine/paper_live_evaluator.py`; pruebas: `python/tests/test_paper_live_evaluator.py` (21). No hay conexión con la captura real, proceso persistente, lectura de bases reales ni cambios en `paper_runner.py`, forward, captura, Kronos, Qwen, estrategias congeladas, riesgo ni ADR. Sesión de integración: `mode = integration`, `evidence_class = not_forward_evidence`.
+Estado: **diseño, contratos y pruebas sintéticas**. Código nuevo: `python/balancita_engine/paper_live_evaluator.py`; pruebas: `python/tests/test_paper_live_evaluator.py` (28). No hay conexión con la captura real, proceso persistente, lectura de bases reales ni cambios en `paper_runner.py`, forward, captura, Kronos, Qwen, estrategias congeladas, riesgo ni ADR. Sesión de integración: `mode = integration`, `evidence_class = not_forward_evidence`.
 
 **Dependencia de 9A.** Esta PR está apilada sobre la rama de 9A (PR #153) porque importa `replay_driver`, `replay_specs` y `replay_funding_audit`, que solo existen allí. Si #153 cambia esas interfaces o se fusiona primero, hay que reapuntar esta PR; no se copió nada de 9A.
 
@@ -99,3 +99,19 @@ Cada entrada (vela, hora de funding) se escribe en un **log propio del evaluador
 ## 10. Qué no se hizo
 
 No se conectó con el ingestor real (D-10C-2), no se generaron eventos `funding`, no se evaluó nada sobre datos reales, no se tocó el runner y no se midió el costo de recuperación sobre historia real (el costo de reconstruir el log de entradas sobre historia real no se midió).
+
+## 11. Cierre de 10C: identidad, retención y evidencia (decisión de Fran, 14-oct 09:49Z)
+
+**Identidad durable.** La cabecera del log guarda `config` (estrategias con id, versión y hash de spec; productos; indicadores; tamaños de tick; ensamblado del ciclo; calentamiento; regla de la barra de 5 min; origen de eventos; ventana de decisión; hashes del pipeline de 9A y de este módulo) y su `config_digest`. `recover()` rechaza lo que no coincida: `strategies_changed` si cambia id@version; `config_incompatible` (con las claves que difieren) si cambia cualquier otra cosa, incluido un hash de spec con el mismo id@version, el origen, los ticks o el código; `log_header` si el log no trae identidad. Si no se pasa `source`, se toma el de la cabecera. `identity()` separa `config_digest` (configuración) de `digest` (identidad completa de un resultado, que suma la cabeza del log de entradas). Un cambio de código invalida los logs anteriores a propósito: no se reproduce bajo otro código.
+
+**Retención de cuadros.** Ya no hay límite por edad. Un cuadro espera al runner mientras haya menos de `max_pending_frames` (288 por producto, un día de ciclos de 5 min) más nuevos pendientes; un ciclo evaluado seis horas después de su creación se evalúa igual (prueba). Pasado el límite, el cuadro más antiguo se descarta **con registro** (`frames_expired`); pedirlo después lanza `frame_expired` (o `already_evaluated` / `unknown_cycle`), el runner lo rechaza como `evaluation_failed`, no se crea ni cambia ninguna señal y la causa queda en `evaluation_misses`. En una recuperación del runner, el ciclo abierto sin señales persistidas vuelve a pedir su cuadro: el evaluador recuperado los reconstruye dentro del mismo límite. Memoria: `cycles` y `flags` se acotan a `retain_cycles` (2880 por producto, 10 días); `seen` guarda dos días de velas; `report()["memory"]` informa los tamaños. `audit_rows` crece con cada evaluación de una estrategia de funding y no está acotado: cabe en una sesión temporal, no en una prolongada (a definir al integrar). La política de sesiones largas no se implementa en 10C; el contrato es este.
+
+**Evidencia de rechazos.** `rejected`, `frames_expired` y `evaluation_misses` **no son durables** (se pierden al reiniciar; `candle_conflicts` sí, porque va al log de entradas). Contrato para la integración: el paso de sesión (ingestor → evaluador → runner → checkpoint) vuelca esos registros al journal de la sesión como eventos de auditoría antes de guardar el checkpoint, con la misma regla de orden que el checkpoint del ingestor. No se agrega aquí una segunda infraestructura de persistencia.
+
+**Dependencias que siguen abiertas.**
+
+- D-10C-2: PR #164, aparte, apilada sobre #161: el evento `candle` del ingestor lleva `volume_btc` exacto (texto). Sin lectura de la captura.
+- D-10C-3: cancelación `source_stale` con detección fiable de pérdida de continuidad (runner de 9A, vía coordinador).
+- D-10C-4: eventos `funding` para la contabilidad del runner. El funding que usa C32 (percentil de la línea publicada del forward) **no es** el funding devengado por las posiciones abiertas: son dos fuentes y dos propósitos; el evaluador solo toca el primero.
+
+**Siguiente hito (no incluido).** Integración sintética completa: SourceReader → Ingestor → LiveEvaluator → PaperRunner → Portfolio → Journal → Recuperación, con interrupciones en cada frontera de persistencia y los mismos digests y estado financiero que la corrida ininterrumpida. Sin captura real ni procesos persistentes.

@@ -1,6 +1,7 @@
 """Stage 10C: the session evaluator against the 9A replay. All data is synthetic (the 9A fixture database, built in a
 temporary directory); no real database, no network, no wall clock, no reserved period."""
 
+import copy
 import json
 import os
 import shutil
@@ -202,9 +203,13 @@ class TestParityWithTheReplay(Fixture):
         self.assertEqual(identity["indicators"], {k: list(v) for k, v in sorted(merged_indicators(self.strategies).items())})
         self.assertEqual(identity["code"]["replay_pipeline"], RP.code_identity()["digest"])
         self.assertEqual(identity["input_log"]["entries"], len(ev.log.entries))
-        self.assertEqual(self.evaluator("other.jsonl").identity()["digest"], ev.identity()["digest"])      # same config, same identity
+        other = self.evaluator("other.jsonl")
+        self.assertEqual(other.identity()["config_digest"], ev.identity()["config_digest"])      # same config, same config digest
+        self.assertNotEqual(other.identity()["digest"], ev.identity()["digest"])                 # the full identity adds the log head
+        self.drive(other, self.stream())
+        self.assertEqual(other.identity()["digest"], ev.identity()["digest"])                    # same inputs, same full identity
         changed = LE.LiveEvaluator.create(os.path.join(self.dir, "c.jsonl"), self.strategies, (BTC,), decide_from_ms=FIRST_DECISION + DAY)
-        self.assertNotEqual(changed.identity()["digest"], ev.identity()["digest"])
+        self.assertNotEqual(changed.identity()["config_digest"], ev.identity()["config_digest"])
 
 
 class TestNoLookahead(Fixture):
@@ -413,6 +418,106 @@ class TestRecoveryAndGaps(Fixture):
         with self.assertRaises(LE.EvaluatorError) as changed:
             LE.LiveEvaluator.recover(os.path.join(self.dir, "ok.jsonl"), other, source=RP.SOURCE)
         self.assertEqual(changed.exception.reason, "strategies_changed")
+
+    def refused(self, path, strategies, **kw):
+        with self.assertRaises(LE.EvaluatorError) as bad:
+            LE.LiveEvaluator.recover(path, strategies, **kw)
+        return bad.exception
+
+    def test_the_header_holds_the_configuration_identity_and_recover_accepts_the_same_one(self):
+        ev = self.evaluator("cfg.jsonl")
+        self.drive(ev, self.head(60))
+        header = ev.log.entries[0]["data"]
+        self.assertEqual(header["config_digest"], ev.config_digest)
+        self.assertEqual(header["config"]["source"], RP.SOURCE)
+        for key in ("strategies", "indicators", "tick_sizes", "code", "warmup_ms", "decide_from_ms", "decide_until_ms", "source"):
+            self.assertIn(key, header["config"])
+        revived = LE.LiveEvaluator.recover(os.path.join(self.dir, "cfg.jsonl"), self.strategies)      # source taken from the header
+        self.assertEqual(revived.config_digest, ev.config_digest)
+        self.assertEqual(revived.identity()["digest"], ev.identity()["digest"])
+
+    def test_recover_refuses_a_changed_spec_hash_with_the_same_id_and_version(self):
+        ev = self.evaluator("hash.jsonl")
+        self.drive(ev, self.head(60))
+        altered = [copy.copy(s) for s in self.strategies]
+        altered[0].spec_hash = "0" * 64
+        self.assertEqual([(s.id, s.version) for s in altered], [(s.id, s.version) for s in self.strategies])
+        error = self.refused(os.path.join(self.dir, "hash.jsonl"), altered)
+        self.assertEqual(error.reason, "config_incompatible")
+        self.assertIn("strategies", str(error))
+
+    def test_recover_refuses_another_source_other_ticks_and_other_code(self):
+        ev = self.evaluator("src.jsonl")
+        self.drive(ev, self.head(60))
+        path = os.path.join(self.dir, "src.jsonl")
+        error = self.refused(path, self.strategies, source="another-source")
+        self.assertEqual(error.reason, "config_incompatible")
+        self.assertIn("source", str(error))
+        ticks = [copy.copy(s) for s in self.strategies]
+        for s in ticks:
+            s.tick_sizes = dict(s.tick_sizes, **{BTC: "0.5"})
+        self.assertEqual(self.refused(path, ticks).reason, "config_incompatible")
+        real = RP.code_identity
+        RP.code_identity = lambda: dict(real(), digest="f" * 16)       # the replay pipeline changed
+        try:
+            error = self.refused(path, self.strategies)
+        finally:
+            RP.code_identity = real
+        self.assertEqual(error.reason, "config_incompatible")
+        self.assertIn("code", str(error))
+        LE.LiveEvaluator.recover(path, self.strategies)                 # the untouched configuration still recovers
+
+    def test_a_log_without_the_configuration_identity_is_refused(self):
+        ev = self.evaluator("old.jsonl")
+        path = os.path.join(self.dir, "old.jsonl")
+        data = ev.log.entries[0]["data"]
+        legacy = {k: v for k, v in data.items() if k not in ("config", "config_digest")}
+        body = {"seq": 1, "kind": "header", "data": legacy, "prev": LE.GENESIS}
+        with open(path, "w") as handle:
+            handle.write(json.dumps(dict(body, hash=LE.stable_hash(body)), sort_keys=True) + "\n")
+        self.assertEqual(self.refused(path, self.strategies).reason, "log_header")
+
+    def test_a_frame_waits_for_the_runner_however_long_it_takes_while_the_bound_holds(self):
+        ev = self.evaluator("late.jsonl")
+        items = self.stream()
+        cut = FIRST_DECISION + 6 * HOUR
+        made = self.drive(ev, [i for i in items if i[0] <= cut])
+        first = made[0]["payload"]
+        self.assertGreater(len(made), 12)                                # 6 hours of cycles are pending, the first is > 1 h old
+        later = ev.evaluator(self.strategies, first)
+        self.assertTrue(later)                                           # evaluated 6 h after it was created, nothing dropped
+        self.assertEqual(ev.report()["frames_expired"], [])
+        again = self.refused_eval(ev, first)
+        self.assertEqual(again, "already_evaluated")
+
+    def refused_eval(self, ev, payload):
+        with self.assertRaises(LE.EvaluatorError) as bad:
+            ev.evaluator(self.strategies, payload)
+        return bad.exception.reason
+
+    def test_past_the_bound_the_oldest_frame_is_recorded_as_expired_and_changes_no_signal(self):
+        ev = self.evaluator("bound.jsonl", max_pending_frames=3)
+        made = self.drive(ev, [i for i in self.stream() if i[0] <= FIRST_DECISION + 3 * HOUR])
+        report = ev.report()
+        self.assertEqual(len(report["frames_expired"]), len(made) - 3)
+        self.assertEqual(report["memory"]["pending_frames"], 3)
+        oldest = made[0]["payload"]
+        self.assertEqual(self.refused_eval(ev, oldest), "frame_expired")
+        self.assertEqual(ev.report()["evaluation_misses"][-1], {"product_id": BTC, "cycle_ms": oldest["cycle_ms"], "reason": "frame_expired"})
+        self.assertTrue(ev.evaluator(self.strategies, made[-1]["payload"]))      # the newest are still evaluable
+        self.assertEqual(self.refused_eval(ev, {"product_id": BTC, "cycle_ms": 1}), "unknown_cycle")
+        runner = self.memory_runner(ev, "bound-signals.jsonl")                    # the runner rejects it and writes no signal
+        runner.handle(made[0])
+        self.assertEqual(runner.stats.get("rejected:evaluation_failed", 0), 1)
+        self.assertEqual(self.signal_ids(runner), [])
+
+    def test_cycles_and_flags_are_bounded_and_the_memory_is_reported(self):
+        ev = self.evaluator("mem.jsonl", retain_cycles=10)
+        made = self.drive(ev, [i for i in self.stream() if i[0] <= FIRST_DECISION + 3 * HOUR])
+        memory = ev.report()["memory"]
+        self.assertGreater(len(made), 10)
+        self.assertEqual((memory["cycles"], memory["flags"]), (10, 10))
+        self.assertLessEqual(memory["seen_candles"], LE.SEEN_MINUTES)
 
     def test_a_missing_minute_rebuilds_the_features_and_holds_the_cycles_back_for_the_warmup(self):
         items = self.stream()
