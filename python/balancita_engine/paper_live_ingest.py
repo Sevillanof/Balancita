@@ -47,8 +47,8 @@ DEFAULT_HOLD_MS = 2_000                # hypothesis to test, not an approved val
 DEFAULT_DEAD_AFTER_MS = 45_000         # the capture's own ticker-silence limit
 DEFAULT_PRODUCT_SILENCE_MS = 15_000    # hypothesis to test: a product's quote gap worth recording (not an outage limit)
 REST_TICKER_EPOCH = 1_000_000          # server/src/features/kraken-futures/ticker-poll.ts: REST tickers; WebSocket epochs are 1..
-GAP_SAMPLE = 200                       # capture gaps kept as evidence (the count is exact)
-SILENCE_SAMPLE = 200                   # silences / epoch changes kept as evidence (the count is exact)
+GAP_SAMPLE = 200                       # the latest capture gaps kept as evidence (the count is exact)
+SILENCE_SAMPLE = 200                   # the latest silences / epoch changes kept as evidence (the count is exact)
 SOURCE_INTERVALS_KEPT = 16             # recent whole-source silences remembered to tell them from a product's own
 DEFAULT_CLOCK_EVERY_MS = 5_000
 DEFAULT_CANDLE_LAG_MS = 120_000        # hypothesis: how long an overdue candle holds the watermark back (0 = never)
@@ -239,9 +239,8 @@ class Ingestor(object):
         before = self.epochs.get(key)
         if before is not None and before != row["epoch"]:
             self.stats["epoch_changes"] += 1
-            if len(self.epoch_changes) < SILENCE_SAMPLE:
-                self.epoch_changes.append({"product_id": product, "transport": transport, "from_epoch": before,
-                                           "to_epoch": row["epoch"], "t_ms": t_ms, "rowid": row["rid"]})
+            self.epoch_changes = (self.epoch_changes + [{"product_id": product, "transport": transport, "from_epoch": before,
+                                                         "to_epoch": row["epoch"], "t_ms": t_ms, "rowid": row["rid"]}])[-SILENCE_SAMPLE:]
         self.epochs[key] = row["epoch"]
         last_any = self.last_any_ticker_ms                      # not updated by this row yet
         if last_any is not None and t_ms - last_any > self.product_silence_ms:
@@ -260,9 +259,8 @@ class Ingestor(object):
 
     def _silence(self, kind, product, from_ms, to_ms, rowid, outage, **extra):
         self.stats[kind + "s"] += 1
-        if len(self.silences) < SILENCE_SAMPLE:
-            self.silences.append(dict({"kind": kind, "product_id": product, "from_ms": from_ms, "to_ms": to_ms,
-                                       "outage": outage, "rowid": rowid}, **extra))
+        self.silences = (self.silences + [dict({"kind": kind, "product_id": product, "from_ms": from_ms, "to_ms": to_ms,
+                                                "outage": outage, "rowid": rowid}, **extra)])[-SILENCE_SAMPLE:]
 
     def _read_gaps(self):
         for row in self.reader.gaps(self.cursor["gap"], self.batch):
@@ -280,9 +278,8 @@ class Ingestor(object):
                 continue
             self.stats["data_gaps"] += 1
             self.gap_counts[row["product_id"]] = self.gap_counts.get(row["product_id"], 0) + 1
-            if len(self.data_gaps) < GAP_SAMPLE:
-                self.data_gaps.append({k: row[k] for k in ("rid", "gap_id", "feed", "product_id", "epoch", "expected_seq",
-                                                            "actual_seq", "detected_at", "reason", "policy_version")})
+            self.data_gaps = (self.data_gaps + [{k: row[k] for k in ("rid", "gap_id", "feed", "product_id", "epoch", "expected_seq",
+                                                                      "actual_seq", "detected_at", "reason", "policy_version")}])[-GAP_SAMPLE:]
         self.gap_pending = keep
 
     def _read_streams(self):
