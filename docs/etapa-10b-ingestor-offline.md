@@ -108,3 +108,7 @@ Limitaciones de esta medición: precios sintéticos con volatilidad constante; u
 - **No es todavía un ingestor funcional completo**: sin `cycle` ni `funding`, que dependen del evaluador y las implementaciones aprobadas de 9A (no se crea un segundo evaluador) y de la correspondencia producto-respuesta de funding.
 - Cursores: en esta etapa los pasa quien llama; el ingestor no guarda estado durable. Releer desde cero es seguro.
 - Sin proceso persistente ni lectura de la captura real (decisiones 10 y 12 de la auditoría).
+
+## Volumen en las velas (10C D-10C-2)
+
+El evento `candle` que emite el ingestor lleva ahora `volume_btc` además de `open`, `high`, `low` y `close`, tal como está guardado en la fuente (texto, sin redondeo). El evaluador de 10C lo necesita para `logvol` y otros indicadores. El runner solo valida y resume (`digest`) los cuatro precios, así que un campo adicional no cambia su comportamiento; la comparación de revisiones del ingestor sí incluye el volumen (una revisión que solo cambia el volumen cuenta como distinta; la primera revisión sigue ganando). Sin lectura de la captura real.

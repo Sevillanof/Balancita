@@ -60,10 +60,10 @@ class Source(object):
                         ("t{}".format(self.n), "ticker", product, REST_EPOCH, body["seq"], t, t, t, None, "{}",
                          json.dumps(body, sort_keys=True), "h{}".format(self.n)))
 
-    def candle(self, product, bucket, o, h, l, c, known_at=None, revision="r1"):   # noqa: E741
+    def candle(self, product, bucket, o, h, l, c, known_at=None, revision="r1", volume="1"):   # noqa: E741
         self.db.execute("INSERT INTO paper_futures_official_candles VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                         (product, MIN, bucket, revision, bucket + MIN + 2 * SEC if known_at is None else known_at,
-                         str(o), str(h), str(l), str(c), "1", "s"))
+                         str(o), str(h), str(l), str(c), volume, "s"))
 
     def gap(self, product, t, reason="seq_gap"):
         self.n += 1
@@ -160,6 +160,35 @@ class TestMapping(Base):
         self.assertEqual(candles[0]["payload"]["candle"]["high"], "12")
         self.assertEqual(state["stats"]["candle_revisions_seen"], 2)
         self.assertEqual(state["stats"]["candle_revisions_differing"], 1)
+
+    def test_the_candle_carries_the_volume_exactly_as_stored(self):
+        self.src.candle(BTC, CYCLE, 10, 12, 9, 11, volume="123.456789012345")
+        self.src.candle(BTC, CYCLE + MIN, 11, 12, 10, 11, volume="0")
+        self.src.ticker(BTC, CYCLE + 5 * MIN, "100000")
+        self.src.commit()
+        events, _, _ = ingest_all(self.path, CYCLE + 5 * MIN)
+        volumes = [e["payload"]["candle"]["volume_btc"] for e in events if e["kind"] == "candle"]
+        self.assertEqual(volumes, ["123.456789012345", "0"])                  # text, not float: nothing is rounded
+
+    def test_a_revision_that_differs_only_in_volume_is_counted_as_different(self):
+        self.src.candle(BTC, CYCLE, 10, 12, 9, 11, volume="5")
+        self.src.candle(BTC, CYCLE, 10, 12, 9, 11, known_at=CYCLE + 5 * MIN, revision="r2", volume="6")
+        self.src.ticker(BTC, CYCLE + 10 * MIN, "100000")
+        self.src.commit()
+        events, state, _ = ingest_all(self.path, CYCLE + 10 * MIN)
+        candles = [e for e in events if e["kind"] == "candle"]
+        self.assertEqual([c["payload"]["candle"]["volume_btc"] for c in candles], ["5"])      # the first revision still wins
+        self.assertEqual(state["stats"]["candle_revisions_differing"], 1)
+
+    def test_the_runner_accepts_a_candle_that_carries_volume(self):
+        self.src.candle(BTC, CYCLE, 10, 12, 9, 11, volume="5")
+        self.src.ticker(BTC, CYCLE + 5 * MIN, "100000")
+        self.src.commit()
+        events, _, _ = ingest_all(self.path, CYCLE + 5 * MIN)
+        candle = next(e for e in events if e["kind"] == "candle")["payload"]["candle"]
+        self.assertEqual(sorted(candle), ["close", "high", "low", "open", "volume_btc"])
+        from balancita_engine.paper_runner import valid_candle
+        self.assertTrue(valid_candle(candle))
 
     def test_source_database_is_never_modified_and_cannot_be_written(self):
         for i in range(5):

@@ -73,7 +73,7 @@ class SourceReader(object):
     def candles(self, after_rowid, limit):
         rows = self.db.execute(
             "SELECT rowid AS rid, product_id, bucket_start, revision_hash, known_at, open_price, high_price, low_price, "
-            "close_price FROM paper_futures_official_candles WHERE interval_ms=? AND rowid>? ORDER BY rowid LIMIT ?",
+            "close_price, volume_btc FROM paper_futures_official_candles WHERE interval_ms=? AND rowid>? ORDER BY rowid LIMIT ?",
             (ONE_MINUTE_MS, after_rowid, limit)).fetchall()
         return [dict(r) for r in rows]
 
@@ -108,7 +108,7 @@ def _candle_event(row):
     t_ms = max(row["known_at"], row["bucket_start"] + ONE_MINUTE_MS)
     payload = {"product_id": row["product_id"], "bucket_ms": row["bucket_start"],
                "candle": {"open": row["open_price"], "high": row["high_price"], "low": row["low_price"],
-                          "close": row["close_price"]}}
+                          "close": row["close_price"], "volume_btc": row["volume_btc"]}}
     return t_ms, make_event("candle", payload, t_ms=t_ms, source=SOURCE, stream="candle1m:" + row["product_id"],
                             source_offset=row["bucket_start"] // ONE_MINUTE_MS)
 
@@ -190,7 +190,7 @@ class Ingestor(object):
     def _read_candle(self, row):
         key = (row["product_id"], row["bucket_start"])
         known = (row["known_at"], row["revision_hash"])
-        digest = (row["open_price"], row["high_price"], row["low_price"], row["close_price"])
+        digest = (row["open_price"], row["high_price"], row["low_price"], row["close_price"], row["volume_btc"])
         self.last_candle_bucket[row["product_id"]] = max(row["bucket_start"],
                                                          self.last_candle_bucket.get(row["product_id"], row["bucket_start"]))
         if key in self.candle_first:                              # a revision was already emitted
