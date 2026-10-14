@@ -138,14 +138,15 @@ class LiveEvaluator(object):
         self.bands = next((s.funding_bands for s in self.strategies if getattr(s, "funding_bands", None)), None)
         self.cycle_atr = next((s.cycle_atr for s in self.strategies if hasattr(s, "cycle_atr")), None)
         self.log = log
-        self.config = self._config()
-        self.config_digest = stable_hash(self.config)[:16]
         self.state = {p: self._fresh_product() for p in self.products}
         self.cycles, self.frames, self.flags = {}, {}, {}
         self.audit_rows, self.gaps, self.suppressed, self.late_funding, self.rejected = [], [], [], [], []
         self.conflicts, self.seen = [], {}
         self.max_pending_frames, self.retain_cycles = int(max_pending_frames), int(retain_cycles)
         self.frames_expired, self.evaluation_misses = [], []
+        self.recovering, self.dropped_on_recovery = False, set()
+        self.config = self._config()
+        self.config_digest = stable_hash(self.config)[:16]
         self.stats = {"candles": 0, "duplicates": 0, "cycles": 0, "funding_hours": 0}
 
     # ---- construction ----------------------------------------------------------------------------------------
@@ -171,12 +172,15 @@ class LiveEvaluator(object):
         if "config_digest" not in header or "config" not in header:
             raise EvaluatorError("log_header", "no configuration identity in the header")
         kw.setdefault("source", header["config"]["source"])
+        for name in ("max_pending_frames", "retain_cycles"):
+            kw.setdefault(name, header["config"].get("bounds", {}).get(name, kw.get(name, globals()[name.upper()])))
         evaluator = cls(strategies, header["products"], log, decide_from_ms=header["decide_from_ms"],
                         decide_until_ms=header["decide_until_ms"], **kw)
         if evaluator.config_digest != header["config_digest"]:
             differs = sorted(k for k in set(evaluator.config) | set(header["config"])
                              if evaluator.config.get(k) != header["config"].get(k))
             raise EvaluatorError("config_incompatible", "the log was written under another configuration: " + ", ".join(differs))
+        evaluator.recovering = True
         for entry in log.entries[1:]:
             if entry["kind"] == "candle":
                 evaluator._apply_candle(entry["data"]["product_id"], entry["data"]["candle"], entry["data"]["arrival_ms"])
@@ -187,6 +191,7 @@ class LiveEvaluator(object):
                 evaluator._apply_funding(d["product_id"], d["start_ms"], d["rate"], d["arrival_ms"])
             else:
                 raise EvaluatorError("log_entry_kind", entry["kind"])
+        evaluator.recovering = False
         return evaluator
 
     @staticmethod
@@ -297,7 +302,10 @@ class LiveEvaluator(object):
         pending = sorted(k for k in self.frames if k[0] == product)
         for key in pending[:max(len(pending) - self.max_pending_frames, 0)]:
             del self.frames[key]
-            self.frames_expired.append({"product_id": key[0], "cycle_ms": key[1], "reason": "frame_expired"})
+            if self.recovering:             # rebuilding from the log: most of these were evaluated long ago, so it is no evidence
+                self.dropped_on_recovery.add(key)
+            else:
+                self.frames_expired.append({"product_id": key[0], "cycle_ms": key[1], "reason": "frame_expired"})
         kept = sorted(k for k in self.cycles if k[0] == product)
         for key in kept[:max(len(kept) - self.retain_cycles, 0)]:
             self.cycles.pop(key, None)
@@ -309,7 +317,8 @@ class LiveEvaluator(object):
         evaluator did not produce has no frame and the runner rejects it (``evaluation_failed``)."""
         key = (payload["product_id"], payload["cycle_ms"])
         if key not in self.frames:
-            expired = any(e["product_id"] == key[0] and e["cycle_ms"] == key[1] for e in self.frames_expired)
+            expired = key in self.dropped_on_recovery or any(e["product_id"] == key[0] and e["cycle_ms"] == key[1]
+                                                            for e in self.frames_expired)
             reason = "frame_expired" if expired else ("already_evaluated" if key in self.cycles else "unknown_cycle")
             self.evaluation_misses.append({"product_id": key[0], "cycle_ms": key[1], "reason": reason})
             raise EvaluatorError(reason, "{} {}".format(key[0], key[1]))
@@ -330,7 +339,8 @@ class LiveEvaluator(object):
                 "indicators": {k: list(v) for k, v in sorted(self.periods.items())}, "cycle_assembly": CYCLE_ASSEMBLY,
                 "tick_sizes": dict(sorted(getattr(self.strategies[0], "tick_sizes", {}).items())),
                 "warmup_ms": self.warmup_ms, "five_minute_bar": "aggregated_from_1m", "source": self.source,
-                "decide_from_ms": self.decide_from_ms, "decide_until_ms": self.decide_until_ms}
+                "decide_from_ms": self.decide_from_ms, "decide_until_ms": self.decide_until_ms,
+                "bounds": {"max_pending_frames": self.max_pending_frames, "retain_cycles": self.retain_cycles}}
         with open(os.path.abspath(__file__), "rb") as handle:
             body["code"] = {"replay_pipeline": RP.code_identity()["digest"],
                             "evaluator_sha256": hashlib.sha256(handle.read().replace(b"\r\n", b"\n")).hexdigest()[:16]}
@@ -349,7 +359,7 @@ class LiveEvaluator(object):
 
     def report(self):
         return {"stats": dict(self.stats), "gaps": list(self.gaps), "suppressed": list(self.suppressed),
-                "late_funding": list(self.late_funding), "rejected": list(self.rejected), "candle_conflicts": list(self.conflicts), "frames_expired": list(self.frames_expired),
+                "late_funding": list(self.late_funding), "rejected": list(self.rejected), "candle_conflicts": list(self.conflicts), "frames_expired": list(self.frames_expired), "frames_dropped_on_recovery": len(self.dropped_on_recovery),
                 "evaluation_misses": list(self.evaluation_misses),
                 "memory": {"pending_frames": len(self.frames), "cycles": len(self.cycles), "flags": len(self.flags),
                            "seen_candles": len(self.seen), "audit_rows": len(self.audit_rows)}, "log_tail_discarded": self.log.tail_discarded}

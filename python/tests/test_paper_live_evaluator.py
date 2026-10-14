@@ -511,6 +511,31 @@ class TestRecoveryAndGaps(Fixture):
         self.assertEqual(runner.stats.get("rejected:evaluation_failed", 0), 1)
         self.assertEqual(self.signal_ids(runner), [])
 
+    def test_recovering_a_session_longer_than_the_bound_invents_no_expired_frames(self):
+        ev = self.evaluator("long.jsonl", max_pending_frames=50)
+        made = self.drive(ev, [i for i in self.stream() if i[0] <= FIRST_DECISION + 8 * HOUR],
+                          sink=lambda e: e["kind"] == "cycle" and ev.evaluator(self.strategies, e["payload"]))   # the runner keeps up
+        evaluated = {m["payload"]["cycle_ms"] for m in made}
+        self.assertGreater(len(made), 60)
+        self.assertEqual(ev.report()["frames_expired"], [])
+        revived = LE.LiveEvaluator.recover(os.path.join(self.dir, "long.jsonl"), self.strategies)      # bounds come from the header
+        self.assertEqual(revived.max_pending_frames, 50)
+        self.assertEqual(revived.report()["frames_expired"], [])             # nothing is recorded as evidence by rebuilding
+        self.assertEqual(revived.report()["frames_dropped_on_recovery"], len(evaluated) - 50)
+        self.assertTrue(revived.evaluator(self.strategies, made[-1]["payload"]))
+        self.assertEqual(self.refused_eval(revived, made[0]["payload"]), "frame_expired")
+        self.assertEqual(revived.report()["evaluation_misses"][-1]["reason"], "frame_expired")    # asked for, so it is evidence now
+
+    def test_the_bounds_are_part_of_the_identified_configuration(self):
+        ev = self.evaluator("bounds.jsonl", max_pending_frames=7, retain_cycles=70)
+        self.drive(ev, self.head(40))
+        self.assertEqual(ev.config["bounds"], {"max_pending_frames": 7, "retain_cycles": 70})
+        path = os.path.join(self.dir, "bounds.jsonl")
+        error = self.refused(path, self.strategies, max_pending_frames=8)
+        self.assertEqual(error.reason, "config_incompatible")
+        self.assertIn("bounds", str(error))
+        self.assertEqual(LE.LiveEvaluator.recover(path, self.strategies).retain_cycles, 70)
+
     def test_cycles_and_flags_are_bounded_and_the_memory_is_reported(self):
         ev = self.evaluator("mem.jsonl", retain_cycles=10)
         made = self.drive(ev, [i for i in self.stream() if i[0] <= FIRST_DECISION + 3 * HOUR])
