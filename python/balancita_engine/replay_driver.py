@@ -22,6 +22,7 @@ the caller names (``signals.jsonl`` and ``results.json``, written once).
 """
 
 import argparse
+import bisect
 import hashlib
 import heapq
 import json
@@ -35,7 +36,7 @@ from . import replay_data as RD
 from . import signal_continuity as SC
 from .execution_timing import ExecutionPolicy
 from .futures_costs import cost_model_hash, side_impact_bps
-from .futures_funding_context import FundingContext
+from .futures_funding_context import PUBLICATION_LAG_MS, WINDOW, FundingContext
 from .futures_simulator import ONE_MINUTE_MS, FIVE_MINUTES_MS
 from .multi_experiment import FrameFeeder
 from .multi_signals import default_strategies, merged_indicators, stable_hash
@@ -54,7 +55,7 @@ EXECUTION_LABEL = "MODELLED_EXECUTION"
 SOURCE = "replay-history"
 SCENARIOS = ("S0", "S1", "S2", "S3")
 SCENARIO_TEXT = {
-    "S0": "optimistic: the open of the minute the decision closes on (almost no delay)",
+    "S0": "COUNTERFACTUAL: the open of the minute the decision closes on, a price from before the decision was delivered (cycle + 2 s)",
     "S1": "base: the open of the next minute (about one minute after the decision)",
     "S2": "adverse stress, NOT causal: the worst extreme of the entry minute (high for a buy, low for a sell)",
     "S3": "S1 plus one more side impact of the product as extra slippage (declared, not approved)",
@@ -62,7 +63,8 @@ SCENARIO_TEXT = {
 DATA_LAG_MS = 2_000                  # a closed candle / a cycle is delivered this long after the close (hypothesis)
 FUNDING_LAG_MS = 600_000             # the funding of an hour is usable 10 minutes after the hour ends (hypothesis)
 MAX_EXECUTION_DELAY_MS = 120_000     # S1-S3 fill about one minute after the decision; the default 60 s would expire them
-TAIL_MS = DAY_MS                     # candles after the last decision, so open positions can close (the longest horizon is 1 h)
+TAIL_MS = DAY_MS                     # candles after the last decision (policy cut_decisions_24h_before_end); C29/C30/C32 hold up to 24 h
+SCENARIO_CLASS = {"S0": "counterfactual", "S1": "modelled_base", "S2": "non_causal_stress", "S3": "unapproved_sensitivity"}
 WINDOW_POLICIES = {
     "cut_decisions_24h_before_end": "decisions stop 24 h before the end of the data so that positions can close with data; "
                                     "a position still open at the end is reported, never closed",
@@ -70,7 +72,9 @@ WINDOW_POLICIES = {
                              "open_at_window_end, marked to the last authorised candle, and are never closed with later data",
 }
 KIND_RANK = {"candle": 0, "funding": 1, "cycle": 2}
-CODE_MODULES = ("replay_data", "replay_execution", "replay_driver", "paper_runner")
+CODE_MODULES = ("replay_data", "replay_execution", "replay_driver", "replay_specs", "paper_runner", "signal_continuity",
+                "multi_experiment", "multi_signals", "multi_risk", "futures_funding_context", "futures_spec_strategy",
+                "futures_simulator", "futures_costs", "execution_timing", "portfolio")
 
 
 class ReplayError(ValueError):
@@ -203,7 +207,19 @@ def _candle_event(product, candle):
                       t_ms=bucket + ONE_MINUTE_MS + DATA_LAG_MS, source=SOURCE, stream="candles:" + product)
 
 
-def product_events(product, data, strategies, cfg, frames, cycle_atr=None):
+def funding_flags(context, at_ms):
+    """How the funding line the forward would use looks at ``at_ms``: ``unknown`` (under 30 days), ``stale`` (the newest usable
+    hour is not the latest one that was due: the forward then carries the older rate silently) and ``long_window`` (the 720
+    rows reach back more than 30 days because hours are missing). Diagnostic only: ``FundingContext`` is not changed."""
+    index = bisect.bisect_right(context.starts, at_ms - HOUR_MS - PUBLICATION_LAG_MS) - 1
+    if index < WINDOW:
+        return {"unknown": True, "stale": False, "long_window": False}
+    due = ((at_ms - PUBLICATION_LAG_MS - HOUR_MS) // HOUR_MS) * HOUR_MS
+    return {"unknown": False, "stale": context.starts[index] < due,
+            "long_window": context.starts[index - 1] - context.starts[index - WINDOW] > (WINDOW - 1) * HOUR_MS}
+
+
+def product_events(product, data, strategies, cfg, frames, cycle_atr=None, flags=None):
     """``(key, event)`` for one product, in time order: its candles and its cycles. ``frames`` receives the frame of each
     cycle (keyed by product and cycle) for the evaluator; nothing is looked up that was not known at that frame."""
     periods = merged_indicators(strategies)
@@ -225,6 +241,8 @@ def product_events(product, data, strategies, cfg, frames, cycle_atr=None):
             trend = frame[3]
             seq += 1
             frames[(product, close_ms)] = frame
+            if flags is not None:
+                flags[(product, close_ms)] = funding_flags(context, close_ms)
             atr = cycle_atr(frame) if cycle_atr is not None else None
             atr = trend["atr14"] if atr is None or atr <= 0 else atr      # the spec's volatility, else the default ATR
             event = make_event("cycle", {"product_id": product, "cycle_ms": close_ms, "price": str(trend["candidate_close"]),
@@ -269,7 +287,7 @@ def modelled_fill(scenario, order, one_minute, extra_bps):
 
 
 # ---------------------------------------------------------------------------------------------------- run
-def run_replay(candles_db, funding_db, config, out_dir, *, data=None, strategies=None):
+def run_replay(candles_db, funding_db, config, out_dir, *, data=None, strategies=None, on_runner=None):
     """Runs the replay and writes ``signals.jsonl`` and ``results.json`` (once) into ``out_dir``. Returns the results."""
     cfg = config.resolved()
     cfg.validate()
@@ -293,18 +311,30 @@ def run_replay(candles_db, funding_db, config, out_dir, *, data=None, strategies
     if os.path.exists(signals_path):
         raise ReplayError("signals.jsonl already exists")
     log = SC.SignalLog.create(signals_path, cfg.decision_start_ms)
-    frames = {}
+    frames, flags = {}, {}
+    funding_diag = {"cycles": 0, "unknown": 0, "stale": 0, "long_window": 0, "funding_decisions": 0,
+                    "funding_decisions_with_stale_hour": 0, "funding_decisions_with_long_window": 0}
 
     def evaluator(chosen, payload):
-        frame = frames.pop((payload["product_id"], payload["cycle_ms"]))
-        return SC.evaluate_cycle(chosen, payload["product_id"], payload["cycle_ms"], frame)
+        key = (payload["product_id"], payload["cycle_ms"])
+        frame, flag = frames.pop(key), flags.pop(key)
+        results = SC.evaluate_cycle(chosen, payload["product_id"], payload["cycle_ms"], frame)
+        funding_diag["cycles"] += 1
+        for name in ("unknown", "stale", "long_window"):
+            funding_diag[name] += 1 if flag[name] else 0
+        for strategy, (signal, _inputs) in zip(chosen, results):
+            if getattr(strategy, "uses_funding", False) and signal["action"] != "WAIT":
+                funding_diag["funding_decisions"] += 1
+                funding_diag["funding_decisions_with_stale_hour"] += 1 if flag["stale"] else 0
+                funding_diag["funding_decisions_with_long_window"] += 1 if flag["long_window"] else 0
+        return results
 
     runner = PaperRunner(runner_config, strategies, log, evaluator=evaluator)
     manifest = run_manifest(cfg, data, runner, strategies, spec_identity)
     cycle_atr = next((s.cycle_atr for s in strategies if hasattr(s, "cycle_atr")), None)
     streams = []
     for product in cfg.products:
-        streams.append(product_events(product, data["products"][product], strategies, cfg, frames, cycle_atr))
+        streams.append(product_events(product, data["products"][product], strategies, cfg, frames, cycle_atr, flags))
         streams.append(funding_events(product, data["products"][product], cfg))
     heap, scheduled, rejections, last_t = [], set(), {}, cfg.decision_start_ms
     fills = {"scheduled": 0, "unpriced": 0, "deduplicated": 0}
@@ -354,8 +384,10 @@ def run_replay(candles_db, funding_db, config, out_dir, *, data=None, strategies
     while heap:
         deliver(heapq.heappop(heap)[2])
     runner.finish(last_t)
-    results = build_results(cfg, data, runner, manifest, rejections, fills)
+    results = build_results(cfg, data, runner, manifest, rejections, fills, funding_diag)
     _write_once(os.path.join(out_dir, "results.json"), results)
+    if on_runner is not None:            # tests: the finished runner (journal, ledger) for recovery checks
+        on_runner(runner)
     return results
 
 
@@ -384,7 +416,7 @@ def _tag(trade):
     return dict(trade, execution=EXECUTION_LABEL)
 
 
-def build_results(cfg, data, runner, manifest, rejections, fills):
+def build_results(cfg, data, runner, manifest, rejections, fills, funding_diag=None):
     p = runner.portfolio
     audit_result = integrated_audit(runner)
     trades = [_tag(t) for t in p.trades]
@@ -409,10 +441,31 @@ def build_results(cfg, data, runner, manifest, rejections, fills):
                                           "mark": str(p.marks.get(b.intent["product_id"])), "strategy_id": b.position["strategy_id"],
                                           "status": "open_at_window_end", "execution": EXECUTION_LABEL}
     snap = p.snapshot()
+    signal_entries = [e["data"]["signal"] for e in runner.log.signals() if e["data"]["origin"] == "original"]
+    stop_assumed = {x["trade_id"] for x in runner.executor.modelled_log if x["kind"] == "entry_minute_stop"}
+    evidence = {"uncertain_entry_minute_stop": 0, "estimated_by_ohlc": 0}
+    for t in trades:
+        t["evidence_class"] = "uncertain_entry_minute_stop" if t["trade_id"] in stop_assumed else "estimated_by_ohlc"
+        evidence[t["evidence_class"]] += 1
+    orders = [{"strategy_id": r["strategy_id"], "product_id": r["product_id"], "side": r["side"],
+               "cycle_ms": r["timeline"]["candle_close_ms"], "signal_key": r["signal_key"], "status": r["status"],
+               "reasons": r.get("reasons", []), "entry_price": r.get("entry_price"), "intent_id": r["intent_id"]}
+              for r in runner.executor.records]
     return {
         "schema": SCHEMA, "execution": EXECUTION_LABEL,
         "label": "MODELLED_EXECUTION: integration and reproducibility test; not independent evidence of profitability",
-        "scenario": cfg.scenario, "manifest": manifest,
+        "scenario": cfg.scenario, "scenario_class": SCENARIO_CLASS[cfg.scenario], "manifest": manifest,
+        "window": {"policy": cfg.window_policy, "policy_text": WINDOW_POLICIES[cfg.window_policy],
+                   "decision_start": iso(cfg.decision_start_ms), "decision_end_excl": iso(cfg.decision_end_ms),
+                   "data_end_excl": iso(cfg.data_end_ms), "positions_open_at_window_end": len(p.positions),
+                   "forced_closes_with_later_data": 0},
+        "signals": {"all": len(signal_entries), "entries": len([x for x in signal_entries if x["action"] != "WAIT"]),
+                    "set_hash": stable_hash(sorted(x["signal_id"] for x in signal_entries)),
+                    "entries_hash": stable_hash(sorted(x["signal_id"] for x in signal_entries if x["action"] != "WAIT"))},
+        "orders": orders, "funding_diagnostics": funding_diag or {},
+        "evidence": {"classes": evidence, "stops": "OHLC candles are not quotes: a stop or target on a candle is estimated; "
+                                                    "a stop assumed inside the entry minute is uncertain (the extreme may "
+                                                    "have preceded the fill)", "observed_by_quotes": 0},
         "data_quality": data["reports"],
         "counts": {k: (str(v) if isinstance(v, D) else v) for k, v in summary.items()},
         "capital": {k: snap[k] for k in ("initial_equity_usd", "capital_definitive_usd", "provisional_gains_usd", "equity_usd",
@@ -464,15 +517,19 @@ def main(argv=None):
     parser.add_argument("--decision-start", required=True, help="YYYY-MM-DD (UTC)")
     parser.add_argument("--decision-end", required=True, help="YYYY-MM-DD (UTC), exclusive")
     parser.add_argument("--scenario", default="S1", choices=SCENARIOS)
-    parser.add_argument("--strategies", default="", help="comma-separated strategy ids; empty = all native")
+    parser.add_argument("--strategies", default="", help="comma-separated strategy ids; empty = every strategy of the set")
     parser.add_argument("--out", required=True)
     parser.add_argument("--load-start", default="", help="YYYY-MM-DD (UTC): first candle read (warm-up); default 21 days before")
     parser.add_argument("--allow-gaps", action="store_true")
+    parser.add_argument("--strategy-set", default="frozen", choices=("frozen", "mx"),
+                        help="frozen: C29, C30, C32 from their spec files (default); mx: the native fixtures")
+    parser.add_argument("--window-policy", default="cut_decisions_24h_before_end", choices=sorted(WINDOW_POLICIES))
     args = parser.parse_args(argv)
     config = ReplayConfig(products=tuple(args.products.split(",")), decision_start_ms=_ms(args.decision_start),
                           decision_end_ms=_ms(args.decision_end), scenario=args.scenario,
                           strategy_ids=tuple(x for x in args.strategies.split(",") if x), allow_gaps=args.allow_gaps,
-                          load_start_ms=_ms(args.load_start) if args.load_start else 0)
+                          load_start_ms=_ms(args.load_start) if args.load_start else 0,
+                          strategy_set=args.strategy_set, window_policy=args.window_policy)
     try:
         results = run_replay(args.candles_db, args.funding_db, config, args.out)
     except (ReplayError, RD.RangeGateError, RD.DataError) as error:

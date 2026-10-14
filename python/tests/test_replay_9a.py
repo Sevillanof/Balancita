@@ -24,7 +24,7 @@ DECISION_END = CYCLE_DAY + DAY
 
 
 def make_db(path, *, products=(BTC,), start_ms=START, end_ms=START + 5 * DAY, seed="9a", waypoints=None, funding_skip=(),
-            funding_rate="0.00002", extra_funding_until=None, perturb_from=None, revisions=()):
+            funding_rate="0.00002", extra_funding_until=None, perturb_from=None, revisions=(), funding_overrides=None):
     """Candles (1 m and the 5 m built from them) and one funding response per product, in the market-store schema."""
     db = sqlite3.connect(path)
     db.executescript("""
@@ -66,6 +66,8 @@ def make_db(path, *, products=(BTC,), start_ms=START, end_ms=START + 5 * DAY, se
             s = start_ms + n * HOUR
             stamp = "{}.000Z".format(RP.iso(s)[:-1])
             rate = D(funding_rate) + D(n % 7) / D(1_000_000)
+            if funding_overrides and n in funding_overrides:
+                rate = D(funding_overrides[n])
             rates.append({"timestamp": stamp, "fundingRate": "0.5", "relativeFundingRate": format(rate, "f")})
             periods.append(("sha-" + product, product, s, s + HOUR, "0.5", 1_790_000_000_000, "usd_per_base_per_hour"))
         db.execute("INSERT INTO paper_futures_funding_responses VALUES(?,?,?,?)",
