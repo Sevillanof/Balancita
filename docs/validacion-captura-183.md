@@ -58,14 +58,14 @@ El informe lleva la versión del validador, la muestra (fuente, versión, interv
 
 ## Cobertura exigida al informe
 
-- Cada `Result` guarda el rango y los parámetros con que corrió. `build_report` compara el rango con el de la muestra: un validador que cubrió menos (por ejemplo 2 h dentro de una muestra de 48 h) agrega `ABSENT` / `partial_range` y el informe sale `bloqueada`. El informe lista los parámetros usados por familia.
+- Cada `Result` guarda el rango y los parámetros con que corrió. `build_report` compara el rango con el de la muestra: un validador que cubrió menos (por ejemplo 2 h dentro de una muestra de 48 h) agrega `ABSENT` / `partial_range` y el informe sale `bloqueada`. El informe lista los parámetros de cada resultado (familia, productos y valores) y entran a la huella; no se funden entre productos.
 - Una fila de funding sin `relative_rate` da `ABSENT` en `funding.relative` (con la cantidad), no se saltea.
 - Las respuestas del colector y las cotizaciones que caen en el holdout se descartan como `VALIDATOR_ERROR`; un período que solo se podría probar con ellas queda `not_measurable`. Una respuesta tomada antes del fin del período que ya lo trae es no causal y es `DISCREPANCY`.
 - Si la serie oficial trae filas contradictorias para un bucket, ese bucket no se compara (no se culpa a la captura).
 
 ## Límite: instante del precio de referencia
 
-No está establecido a qué instante corresponde el precio que Kraken usó para pasar de tasa relativa a absoluta (pendiente abierto de #167). Por eso la tolerancia de `funding.relative_vs_absolute` es `rel_tolerance` más `max_price_drift_per_hour` (1 % por hora, parámetro del validador) por cada hora de antigüedad de la referencia contada hasta el fin del período. Esa comprobación detecta errores de unidad o de magnitud, no defectos finos de la captura: un hallazgo ahí no debe leerse como defecto de captura hasta fijar el instante con datos autorizados.
+No está establecido a qué instante corresponde el precio que Kraken usó para pasar de tasa relativa a absoluta (pendiente abierto de #167). Por eso la tolerancia de `funding.relative_vs_absolute` es `rel_tolerance` más `max_price_drift_per_hour` (1 % por hora, parámetro del validador) por cada hora de antigüedad de la referencia contada hasta el fin del período. Esa comprobación solo detecta desvíos grandes: por debajo de 1 a 3 % no detecta nada, y errores de unidad como ×8, ×100 o ×1/8, o un precio o una base equivocados, no quedan cubiertos con esa tolerancia. En productos de precio muy volátil (por ejemplo HYPE y ZEC) puede dar falsos `no_apta` (falla cerrado); esos casos se leen a mano, no se toman como defecto de la captura. Las tolerancias son fracciones de la magnitud y se rechaza cualquier tolerancia efectiva máxima de 0,5 o más (también las de velas). Un hallazgo ahí no es defecto fino de la captura: un hallazgo ahí no debe leerse como defecto de captura hasta fijar el instante con datos autorizados.
 
 ## Lo que estas pruebas NO demuestran
 

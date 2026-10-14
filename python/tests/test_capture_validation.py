@@ -365,7 +365,7 @@ class CandleTests(unittest.TestCase):
         end = self.A + cv.FIVE_MIN_MS
         found = cv.validate_candles("PF_XBTUSD", ours, ref, self.A, end)
         self.assertEqual(sorted(f["check"] for f in found.findings), ["candles.close", "candles.volume"])
-        self.assertEqual(cv.validate_candles("PF_XBTUSD", ours, ref, self.A, end, price_tol="0.5", volume_tol="0.2").findings, [])
+        self.assertEqual(cv.validate_candles("PF_XBTUSD", ours, ref, self.A, end, price_tol="0.01", volume_tol="0.02").findings, [])
 
     def test_missing_minute_is_absent_ours_not_zero(self):
         ours = [c for c in five_minutes(self.A) if c["bucket_start"] != self.A + 2 * cv.MINUTE_MS]
@@ -473,7 +473,26 @@ class ReportTests(unittest.TestCase):
 
     def test_report_declares_the_parameters_used(self):
         report = cv.build_report(self.SAMPLE, [run_funding(max_lag_ms=2 * H)], ("funding",))
-        self.assertEqual(report["parameters"]["funding"]["max_lag_ms"], 2 * H)
+        self.assertEqual(report["parameters"][0]["params"]["max_lag_ms"], 2 * H)
+
+    def test_different_parameters_in_one_family_are_not_collapsed(self):
+        a = cv.validate_candles("PF_XBTUSD", [], [], T0, T1, price_tol="0")
+        b = cv.validate_candles("PF_ETHUSD", [], [], T0, T1, price_tol="0.4")
+        sample = dict(self.SAMPLE, products=["PF_XBTUSD", "PF_ETHUSD"])
+        report = cv.build_report(sample, [a, b], ("candles",))
+        self.assertEqual([(p["products"], p["params"]["price_tol"]) for p in report["parameters"]],
+                         [(["PF_XBTUSD"], "0"), (["PF_ETHUSD"], "0.4")])
+        only_a = cv.build_report(sample, [a], ("candles",))
+        self.assertNotEqual(report["fingerprint"], only_a["fingerprint"])
+
+    def test_excessive_or_negative_tolerances_are_rejected(self):
+        for kw in ({"price_tol": "0.5"}, {"volume_tol": "1000"}, {"price_tol": "-0.1"}):
+            with self.assertRaises(ValueError):
+                cv.validate_candles("PF_XBTUSD", [], [], T0, T1, **kw)
+        for kw in ({"rel_tolerance": "0.5"}, {"max_price_drift_per_hour": "0.2"}, {"max_price_drift_per_hour": "-0.01"}):
+            with self.assertRaises(ValueError):
+                cv.validate_funding([], T0, T1, XBT, **kw)
+        cv.validate_funding([], T0, T1, XBT)  # defaults stay valid (0.0001 + 0.01 * 3)
 
     def test_required_must_be_valid_and_non_empty(self):
         for bad in ((), ("nope",)):

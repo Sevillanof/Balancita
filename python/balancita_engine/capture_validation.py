@@ -131,6 +131,16 @@ def _guard(result, check, product, fn):
         result.findings.append(Finding(VALIDATOR_ERROR, check, product, "malformed input: {}".format(error)))
 
 
+MAX_TOLERANCE = Decimal("0.5")
+
+
+def _check_tolerance(*tolerances):
+    """A tolerance is a fraction of the magnitude; at 50 % or more (or negative) it would excuse any unit error."""
+    for tolerance in tolerances:
+        if tolerance < 0 or tolerance >= MAX_TOLERANCE:
+            raise ValueError("effective tolerance must be in [0, 0.5)")
+
+
 def _holdout_error(result, check, product):
     # Deliberately no values from the row: a holdout record is dropped, never judged or echoed.
     result.findings.append(Finding(VALIDATOR_ERROR, check, product, "record reaches the holdout: dropped, not judged"))
@@ -160,6 +170,7 @@ def validate_funding(periods, from_ms, to_ms, products, references=None, respons
         "rel_tolerance": rel_tolerance, "max_lag_ms": max_lag_ms, "max_reference_age_ms": max_reference_age_ms,
         "max_price_drift_per_hour": max_price_drift_per_hour})
     rel_tol, drift = Decimal(rel_tolerance), Decimal(max_price_drift_per_hour)
+    _check_tolerance(rel_tol + drift * Decimal(max_reference_age_ms + HOUR_MS) / Decimal(HOUR_MS))
     no_relative = defaultdict(list)
     by_key = defaultdict(list)
     judged_starts = defaultdict(set)
@@ -393,7 +404,8 @@ def aggregate_to_five_minutes(candles_1m):
 def validate_candles(product, candles_1m, official_5m, from_ms, to_ms, price_tol="0", volume_tol="0"):
     """Compare our 5 m aggregation with an equivalent official 5 m series supplied by the caller.
 
-    Tolerances are explicit parameters (default exact); a nonzero one must be justified by the caller's report.
+    Tolerances are explicit RELATIVE fractions of the magnitude (default exact, 0; must stay below 0.5); a nonzero
+    one must be justified by the caller's report.
     Alignment is UTC and the close is the bucket end (exclusive). A misaligned or conflicting row in the OFFICIAL
     series is the reference's problem (``VALIDATOR_ERROR``); conflicting revisions of one of OUR minutes are a
     ``DISCREPANCY`` of the capture and that bucket is not compared.
@@ -401,6 +413,7 @@ def validate_candles(product, candles_1m, official_5m, from_ms, to_ms, price_tol
     assert_range_allowed(from_ms, to_ms)
     result = Result("candles", [product], from_ms, to_ms, {"price_tol": price_tol, "volume_tol": volume_tol})
     ptol, vtol = Decimal(price_tol), Decimal(volume_tol)
+    _check_tolerance(ptol, vtol)
     fields = ("open", "high", "low", "close", "volume")
     ours_rows, bad = {}, set()
     for index, candle in enumerate(candles_1m):
@@ -455,10 +468,10 @@ def validate_candles(product, candles_1m, official_5m, from_ms, to_ms, price_tol
         else:
             result.judged("candles.buckets", product)
             for field in ("open", "high", "low", "close"):
-                if abs(mine_[field] - ref_[field]) > ptol:
+                if abs(mine_[field] - ref_[field]) > ptol * max(abs(mine_[field]), abs(ref_[field])):
                     result.findings.append(Finding(DISCREPANCY, "candles." + field, product,
                                                    "{} != {}".format(mine_[field], ref_[field]), bucket_start=start))
-            if abs(mine_["volume"] - ref_["volume"]) > vtol:
+            if abs(mine_["volume"] - ref_["volume"]) > vtol * max(abs(mine_["volume"]), abs(ref_["volume"])):
                 result.findings.append(Finding(DISCREPANCY, "candles.volume", product,
                                                "{} != {}".format(mine_["volume"], ref_["volume"]), bucket_start=start))
     return result.close()
@@ -519,14 +532,14 @@ def build_report(sample, results, required):
     if not required or any(r not in REQUIRED_CHECKS for r in required):
         raise ValueError("required must be a non-empty subset of {}".format(sorted(REQUIRED_CHECKS)))
     findings, events, coverage = [], [], {}
-    parameters = {}
+    parameters = []
     for result in results:
         if result.from_ms != sample["from_ms"] or result.to_ms != sample["to_ms"]:
             findings.append(Finding(ABSENT, result.family, None,
                                     "partial_range: validated {}..{} but the sample declares {}..{}".format(
                                         result.from_ms, result.to_ms, sample["from_ms"], sample["to_ms"]),
                                     partial_range=True))
-        parameters.setdefault(result.family, result.params)
+        parameters.append({"family": result.family, "products": result.products, "params": result.params})
         findings.extend(result.findings)
         events.extend(result.events)
         for check, per_product in result.coverage.items():
@@ -545,7 +558,7 @@ def build_report(sample, results, required):
         fitness = "bloqueada"
     else:
         fitness = "sin_hallazgos"
-    body = {"validator_version": VALIDATOR_VERSION, "sample": sample, "required": list(required), "parameters": parameters, "coverage": coverage,
+    body = {"validator_version": VALIDATOR_VERSION, "sample": sample, "required": list(required), "parameters": sorted(parameters, key=lambda p: json.dumps(p, sort_keys=True)), "coverage": coverage,
             "events": sorted(events, key=lambda e: json.dumps(e, sort_keys=True)), "counts": counts, "fitness": fitness,
             "findings": sorted(findings, key=lambda f: json.dumps(f, sort_keys=True))}
     digest = hashlib.sha256(json.dumps(body, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
