@@ -170,7 +170,7 @@ def validate_funding(periods, from_ms, to_ms, products, references=None, respons
         "rel_tolerance": rel_tolerance, "max_lag_ms": max_lag_ms, "max_reference_age_ms": max_reference_age_ms,
         "max_price_drift_per_hour": max_price_drift_per_hour})
     rel_tol, drift = Decimal(rel_tolerance), Decimal(max_price_drift_per_hour)
-    _check_tolerance(rel_tol + drift * Decimal(max_reference_age_ms + HOUR_MS) / Decimal(HOUR_MS))
+    _check_tolerance(rel_tol, drift, rel_tol + drift * Decimal(max_reference_age_ms + HOUR_MS) / Decimal(HOUR_MS))
     no_relative = defaultdict(list)
     by_key = defaultdict(list)
     judged_starts = defaultdict(set)

@@ -489,7 +489,8 @@ class ReportTests(unittest.TestCase):
         for kw in ({"price_tol": "0.5"}, {"volume_tol": "1000"}, {"price_tol": "-0.1"}):
             with self.assertRaises(ValueError):
                 cv.validate_candles("PF_XBTUSD", [], [], T0, T1, **kw)
-        for kw in ({"rel_tolerance": "0.5"}, {"max_price_drift_per_hour": "0.2"}, {"max_price_drift_per_hour": "-0.01"}):
+        for kw in ({"rel_tolerance": "0.5"}, {"max_price_drift_per_hour": "0.2"}, {"max_price_drift_per_hour": "-0.01"},
+                   {"rel_tolerance": "0.6", "max_price_drift_per_hour": "-0.1"}):
             with self.assertRaises(ValueError):
                 cv.validate_funding([], T0, T1, XBT, **kw)
         cv.validate_funding([], T0, T1, XBT)  # defaults stay valid (0.0001 + 0.01 * 3)
