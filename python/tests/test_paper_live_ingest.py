@@ -14,7 +14,7 @@ from decimal import Decimal
 from balancita_engine import signal_continuity as SC
 from balancita_engine import paper_live_publish as PUB
 from balancita_engine import paper_live_session as SES
-from balancita_engine.paper_live_ingest import Ingestor, SourceReader, classify_expiry
+from balancita_engine.paper_live_ingest import IngestError, Ingestor, SourceReader, classify_expiry
 from balancita_engine.paper_runner import PaperRunner, RunnerConfig, make_event
 from balancita_engine.portfolio_scenarios import ScriptedStrategy
 
@@ -50,14 +50,14 @@ class Source(object):
         self.db = sqlite3.connect(path)
         self.db.executescript(SCHEMA)
 
-    def ticker(self, product, t, mid, half_bps="0.5", seq=None):
+    def ticker(self, product, t, mid, half_bps="0.5", seq=None, epoch=REST_EPOCH):
         mid = D(str(mid))
         half = D(half_bps) / D(10_000)
-        body = {"type": "ticker", "productId": product, "seq": t if seq is None else seq, "epoch": REST_EPOCH,
+        body = {"type": "ticker", "productId": product, "seq": t if seq is None else seq, "epoch": epoch,
                 "eventTime": t, "receivedAt": t, "persistedAt": t, "bid": str(mid * (1 - half)), "ask": str(mid * (1 + half))}
         self.n += 1
         self.db.execute("INSERT INTO paper_futures_market_events VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-                        ("t{}".format(self.n), "ticker", product, REST_EPOCH, body["seq"], t, t, t, None, "{}",
+                        ("t{}".format(self.n), "ticker", product, epoch, body["seq"], t, t, t, None, "{}",
                          json.dumps(body, sort_keys=True), "h{}".format(self.n)))
 
     def candle(self, product, bucket, o, h, l, c, known_at=None, revision="r1", volume="1"):   # noqa: E741
@@ -65,10 +65,10 @@ class Source(object):
                         (product, MIN, bucket, revision, bucket + MIN + 2 * SEC if known_at is None else known_at,
                          str(o), str(h), str(l), str(c), volume, "s"))
 
-    def gap(self, product, t, reason="seq_gap"):
+    def gap(self, product, t, reason="seq_gap", epoch=1):
         self.n += 1
         self.db.execute("INSERT INTO paper_futures_data_gaps VALUES(?,?,?,?,?,?,?,?,?)",
-                        ("g{}".format(self.n), "ticker", product, 1, 1, 3, t, reason, "p"))
+                        ("g{}".format(self.n), "ticker", product, epoch, 1, 3, t, reason, "p"))
 
     def commit(self):
         self.db.commit()
@@ -410,7 +410,9 @@ class TestBatchesAndDurability(Base):
         reader.db = Spy(reader.db)
         Ingestor(reader).poll(CYCLE + 140 * SEC)
         reader.close()
-        self.assertEqual(seen, ["BEGIN", "SELECT", "SELECT", "COMMIT"])
+        self.assertEqual(seen[0], "BEGIN")                           # every table is read between one BEGIN and one COMMIT
+        self.assertEqual(seen[-1], "COMMIT")
+        self.assertTrue(len(seen) > 4 and set(seen[1:-1]) == {"SELECT"}, seen)
 
     def test_a_restored_checkpoint_continues_exactly_like_the_uninterrupted_run(self):
         self.fill()
@@ -612,7 +614,8 @@ class TestSourceOutageVersusQuietMarket(Base):
         # read only until +250 s: ETH has been silent since +60 s while BTC kept ticking
         rows = [r for r in reader.tickers(0, 10_000) if r["event_time"] <= CYCLE + 250 * SEC]
         ing.reader = type("Cut", (), {"tickers": lambda self_, a, n: rows if a == 0 else [],
-                                      "candles": lambda self_, a, n: [],
+                                      "candles": lambda self_, a, n: [], "gaps": lambda self_, a, n: [],
+                                      "max_rowids": lambda self_: {"ticker": None, "candle": None, "gap": None},
                                       "begin": lambda self_: None, "end": lambda self_: None})()
         state = ing.poll(CYCLE + 251 * SEC)["state"]
         reader.close()
@@ -660,6 +663,208 @@ class TestSourceOutageVersusQuietMarket(Base):
         self.assertLessEqual(runner.clock, CYCLE + 145 * SEC)
         runner2, _ = self.run_order(outage=False, stop_ms=CYCLE + 290 * SEC)
         self.assertEqual([o["state"] for o in runner2.orders()], ["expired"])
+
+
+class TestSourceContinuityEvidence(Base):
+    """D-10B-06 and D-10B-07: what the capture says about its own gaps, which product or source was silent, and where each
+    quote came from. All of it is evidence; none of it changes an event the runner receives."""
+
+    def run_all(self, **kw):
+        events, state, ing = ingest_all(self.path, CYCLE + 3_000 * SEC, **kw)
+        return events, state, ing
+
+    def test_a_quote_keeps_its_transport_epoch_and_row_and_the_stream_stays_one_per_product(self):
+        self.src.ticker(BTC, CYCLE, "100000", epoch=REST_EPOCH)
+        self.src.ticker(BTC, CYCLE + 5 * SEC, "100000", epoch=3, seq=41)
+        self.src.ticker(BTC, CYCLE + 60 * SEC, "100000", epoch=3, seq=42)                  # releases the two before it
+        self.src.commit()
+        quotes = [e for e in self.run_all()[0] if e["kind"] == "quote"]
+        rest, ws = (q["payload"]["origin"] for q in quotes[:2])
+        self.assertEqual((rest["transport"], rest["epoch"]), ("rest", REST_EPOCH))
+        self.assertEqual((ws["transport"], ws["epoch"], ws["seq"]), ("ws", 3, 41))
+        self.assertTrue(all(o[k] for o in (rest, ws) for k in ("rowid", "event_id", "content_hash")))
+        self.assertNotEqual(rest["rowid"], ws["rowid"])
+        self.assertEqual({q["stream"] for q in quotes}, {"ticker:" + BTC})                 # what the runner sees is unchanged
+        self.assertEqual({(q["source_offset"], q["source_epoch"]) for q in quotes}, {(None, 0)})   # no offset is invented
+
+    def test_an_epoch_change_inside_a_product_transport_is_recorded_exactly(self):
+        for i, epoch in enumerate((1, 1, 2, 2, 2, 3)):
+            self.src.ticker(BTC, CYCLE + i * 5 * SEC, "100000", epoch=epoch, seq=i)
+            self.src.ticker(ETH, CYCLE + i * 5 * SEC, "3500", epoch=REST_EPOCH)            # another transport: no change
+        self.src.commit()
+        changes = self.run_all()[1]["epoch_changes"]
+        self.assertEqual(changes["total"], 2)
+        self.assertEqual([(c["product_id"], c["transport"], c["from_epoch"], c["to_epoch"]) for c in changes["sample"]],
+                         [(BTC, "ws", 1, 2), (BTC, "ws", 2, 3)])
+
+    def test_the_capture_gaps_become_evidence_once_their_time_is_released_and_never_an_event(self):
+        for i in range(0, 12):
+            self.src.ticker(BTC, CYCLE + i * 5 * SEC, "100000")
+        self.src.gap(BTC, CYCLE + 20 * SEC)
+        self.src.gap(ETH, CYCLE + 30 * SEC, reason="reconnect")
+        self.src.gap(BTC, CYCLE + 10_000 * SEC)                                           # detected far after what is released
+        self.src.commit()
+        events, state, ing = self.run_all()
+        gaps = state["data_gaps"]
+        self.assertEqual((gaps["total"], gaps["by_product"], gaps["pending"]), (2, {BTC: 1, ETH: 1}, 1))
+        self.assertEqual([g["reason"] for g in gaps["sample"]], ["seq_gap", "reconnect"])
+        self.assertEqual({e["kind"] for e in events}, {"quote", "clock"})                  # no gap_declared, no new kind
+        self.assertEqual(ing.cursor["gap"], 3)
+
+    def test_a_product_silence_is_told_apart_from_a_source_silence(self):
+        for i in range(0, 25):                                                             # BTC every 5 s for two minutes
+            self.src.ticker(BTC, CYCLE + i * 5 * SEC, "100000")
+        for i in range(0, 5):                                                              # ETH quotes, then 30 s of nothing
+            self.src.ticker(ETH, CYCLE + i * 5 * SEC, "3500")
+        self.src.ticker(ETH, CYCLE + 50 * SEC, "3500")
+        self.src.commit()
+        silences = self.run_all()[1]["silences"]
+        self.assertEqual((silences["product"], silences["source"]), (1, 0))
+        record = silences["sample"][0]
+        self.assertEqual((record["kind"], record["product_id"], record["from_ms"], record["to_ms"], record["outage"]),
+                         ("product_silence", ETH, CYCLE + 20 * SEC, CYCLE + 50 * SEC, False))
+
+    def test_a_silence_of_the_whole_source_is_recorded_once_and_flags_a_real_outage(self):
+        for t in (0, 5, 10, 40, 45, 120):                                                  # 30 s and then 75 s without any product
+            self.src.ticker(BTC, CYCLE + t * SEC, "100000")
+            self.src.ticker(ETH, CYCLE + t * SEC, "3500")
+        self.src.commit()
+        events, state, ing = self.run_all()
+        silences = state["silences"]
+        self.assertEqual((silences["source"], silences["product"]), (2, 0))                # not told again once per product
+        source = [s for s in silences["sample"] if s["kind"] == "source_silence"]
+        self.assertEqual([(s["from_ms"] - CYCLE, s["to_ms"] - CYCLE, s["outage"]) for s in source],
+                         [(10 * SEC, 40 * SEC, False), (45 * SEC, 120 * SEC, True)])
+        self.assertEqual(len(state["outages"]), 1)                                         # the old outage rule is untouched
+
+    def test_an_interruption_of_the_whole_source_is_one_record_not_one_per_product(self):
+        """D-10B-14: eight products come back after 30 s of nothing: one source_silence and no product_silence."""
+        products = ["PF_P{}USD".format(i) for i in range(8)]
+        for t in (0, 5, 10, 40, 45, 50):
+            for product in products:
+                self.src.ticker(product, CYCLE + t * SEC, "100")
+        self.src.commit()
+        silences = self.run_all()[1]["silences"]
+        self.assertEqual((silences["source"], silences["product"]), (1, 0))
+        self.assertEqual((silences["sample"][0]["kind"], silences["sample"][0]["from_ms"] - CYCLE, silences["sample"][0]["to_ms"] - CYCLE),
+                         ("source_silence", 10 * SEC, 40 * SEC))
+
+    def test_a_product_that_was_silent_while_the_source_was_alive_keeps_its_own_record_even_across_an_interruption(self):
+        for t in range(0, 21, 5):                                                          # both quote until +20 s
+            self.src.ticker(BTC, CYCLE + t * SEC, "100000")
+            self.src.ticker(ETH, CYCLE + t * SEC, "3500")
+        for t in range(25, 61, 5):                                                         # BTC alone: ETH silent while the source lives
+            self.src.ticker(BTC, CYCLE + t * SEC, "100000")
+        for t in (95, 100):                                                                # then nothing for 35 s, then both back
+            self.src.ticker(BTC, CYCLE + t * SEC, "100000")
+            self.src.ticker(ETH, CYCLE + t * SEC, "3500")
+        self.src.commit()
+        silences = self.run_all()[1]["silences"]
+        kinds = [(s["kind"], s["product_id"], s["source_silence_overlap"] if s["kind"] == "product_silence" else None) for s in silences["sample"]]
+        self.assertEqual(kinds, [("source_silence", None, None), ("product_silence", ETH, True)])    # BTC's gap is the source's only
+        eth = silences["sample"][1]
+        self.assertEqual(eth["alive_ms"], 75 * SEC - 35 * SEC)                              # ETH: +20..+95 minus the +60..+95 interruption
+
+    def test_the_threshold_is_a_parameter_not_a_rule(self):
+        for t in (0, 10, 20):
+            self.src.ticker(BTC, CYCLE + t * SEC, "100000")
+            self.src.ticker(ETH, CYCLE + t * SEC, "3500")
+        self.src.commit()
+        self.assertEqual(self.run_all()[1]["silences"]["source"], 0)                       # 10 s is under the 15 s hypothesis
+        self.assertEqual(self.run_all(product_silence_ms=5 * SEC)[1]["silences"]["source"], 2)
+
+    def test_a_silence_that_has_not_ended_is_reported_open_while_the_source_is_live(self):
+        for t in range(0, 61, 5):
+            self.src.ticker(BTC, CYCLE + t * SEC, "100000")
+        for t in range(0, 21, 5):
+            self.src.ticker(ETH, CYCLE + t * SEC, "3500")
+        self.src.commit()
+        reader = SourceReader(self.path)
+        ing = Ingestor(reader)
+        state = ing.poll(CYCLE + 62 * SEC)["state"]
+        reader.close()
+        self.assertEqual(state["source"], "live")
+        self.assertEqual([(o["product_id"], o["silent_for_ms"]) for o in state["silences"]["open"]], [(ETH, 42 * SEC)])
+        stale = Ingestor(SourceReader(self.path)).poll(CYCLE + 600 * SEC)["state"]
+        self.assertEqual((stale["source"], stale["silences"]["open"]), ("stale", []))      # an outage is told by the outage
+
+    def test_the_evidence_and_the_gap_cursor_survive_a_checkpoint_in_the_middle(self):
+        for i in range(0, 30):
+            self.src.ticker(BTC, CYCLE + i * 5 * SEC, "100000", epoch=1 + i // 10, seq=i)
+        self.src.gap(BTC, CYCLE + 20 * SEC)
+        self.src.gap(BTC, CYCLE + 60 * SEC)
+        self.src.commit()
+        whole = ingest_all(self.path, CYCLE + 3_000 * SEC)
+        reader = SourceReader(self.path)
+        first = Ingestor(reader)
+        out = first.poll(CYCLE + 3_000 * SEC)
+        saved = json.loads(json.dumps(first.checkpoint()))
+        reader.close()
+        reader = SourceReader(self.path)
+        second = Ingestor.from_checkpoint(reader, saved)
+        more = second.poll(CYCLE + 3_000 * SEC)
+        reader.close()
+        self.assertEqual(more["events"], [])                                              # nothing is read or evidenced twice
+        for key in ("data_gaps", "silences", "epoch_changes"):
+            self.assertEqual(more["state"][key], whole[1][key])
+        self.assertEqual(second.cursor, whole[2].cursor)
+
+    def test_a_checkpoint_from_before_the_evidence_fields_still_loads(self):
+        for i in range(0, 10):
+            self.src.ticker(BTC, CYCLE + i * 5 * SEC, "100000")
+        self.src.commit()
+        reader = SourceReader(self.path)
+        ing = Ingestor(reader)
+        ing.poll(CYCLE + 3_000 * SEC)
+        old = ing.checkpoint()
+        for name in Ingestor.EVIDENCE_FIELDS:
+            old.pop(name)
+        old["cursor"].pop("gap")
+        old["stats"] = {k: v for k, v in old["stats"].items() if k not in ("data_gaps", "product_silences", "source_silences", "epoch_changes")}
+        again = Ingestor.from_checkpoint(reader, old)
+        reader.close()
+        self.assertEqual((again.cursor["gap"], again.silences, again.data_gaps, again.stats["data_gaps"]), (0, [], [], 0))
+
+    def test_a_table_refilled_with_other_rows_past_the_cursor_is_noticed_by_the_row_at_the_cursor(self):
+        """D-10B-16: MAX(rowid) alone would not see a source that was emptied and refilled past the cursor."""
+        for i in range(0, 10):
+            self.src.ticker(BTC, CYCLE + i * 5 * SEC, "100000")
+        self.src.commit()
+        reader = SourceReader(self.path)
+        ing = Ingestor(reader)
+        ing.poll(CYCLE + 3_000 * SEC)
+        saved = ing.checkpoint()
+        reader.close()
+        other = Source(os.path.join(self.dir, "refilled.sqlite"))                           # same table shape, other rows, longer
+        other.n = 1_000                                                                     # other event ids
+        for i in range(0, 30):
+            other.ticker(BTC, CYCLE + 1_000 * SEC + i * 5 * SEC, "100000")
+        other.close()
+        reader = SourceReader(other.path)
+        again = Ingestor.from_checkpoint(reader, saved)
+        with self.assertRaises(IngestError) as caught:
+            again.poll(CYCLE + 3_000 * SEC)
+        reader.close()
+        self.assertEqual(caught.exception.reason, "cursor_anchor_mismatch")
+
+    def test_a_cursor_beyond_the_source_stops_the_ingestor_instead_of_skipping_rows(self):
+        for i in range(0, 10):
+            self.src.ticker(BTC, CYCLE + i * 5 * SEC, "100000")
+        self.src.commit()
+        reader = SourceReader(self.path)
+        ing = Ingestor(reader)
+        ing.poll(CYCLE + 3_000 * SEC)
+        saved = ing.checkpoint()
+        reader.close()
+        other = Source(os.path.join(self.dir, "replaced.sqlite"))                           # a different, shorter source
+        other.ticker(BTC, CYCLE, "100000")
+        other.close()
+        reader = SourceReader(other.path)
+        again = Ingestor.from_checkpoint(reader, saved)
+        with self.assertRaises(IngestError) as caught:
+            again.poll(CYCLE + 3_000 * SEC)
+        reader.close()
+        self.assertEqual(caught.exception.reason, "cursor_ahead_of_source")
 
 
 class TestShortOutageInsideTheWindow(Base):
