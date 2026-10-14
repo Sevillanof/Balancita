@@ -337,3 +337,41 @@ export function chartPositions(
   if (positions !== undefined) return own
   return position.side === 'long' || position.side === 'short' ? [position] : []
 }
+
+export interface MarkerPoint {
+  id: string
+  x: number
+  y: number
+}
+
+/**
+ * Which painted marker a click on the chart means. The chart library's own
+ * hit-test returns the FIRST marker (oldest first) whose glyph OR LABEL box
+ * contains the pointer, and a label is only measured once painted: a wide
+ * label of a neighbouring decision could therefore steal the click from an
+ * EJEC. square one candle away. The click belongs to the marker whose glyph
+ * is in the clicked candle column: nearest on x, then, within the same column,
+ * nearest on y. Null when no marker is within `tolerancePx` horizontally.
+ */
+export function pickMarkerAt(
+  markers: readonly MarkerPoint[],
+  point: { x: number; y: number },
+  tolerancePx: number,
+): string | null {
+  let best: MarkerPoint | null = null
+  for (const marker of markers) {
+    const dx = Math.abs(marker.x - point.x)
+    if (dx > tolerancePx) continue
+    if (best === null) {
+      best = marker
+      continue
+    }
+    const bestDx = Math.abs(best.x - point.x)
+    // Same column (a pixel of rounding): decide on y.
+    if (Math.abs(dx - bestDx) <= 1) {
+      if (Math.abs(marker.y - point.y) < Math.abs(best.y - point.y))
+        best = marker
+    } else if (dx < bestDx) best = marker
+  }
+  return best?.id ?? null
+}
