@@ -12,6 +12,7 @@ Ninguna base real, proceso de captura, estrategia ni WebSocket se tocó.
 - `comparacion-stitch-vs-react.png`: Stitch v5 (izquierda) y React (derecha).
 
 ## Diferencias con Stitch que quedan
+
 - Stitch muestra PnL neto paper, muestra forward y P&L por estrategia: esos datos son B5
   y hoy figuran «forward: B5» / «No disponible» (no se inventan).
 - Stitch dice «Validada», «Alfas desplegados en paper»: la app usa «Activa en el registro»
