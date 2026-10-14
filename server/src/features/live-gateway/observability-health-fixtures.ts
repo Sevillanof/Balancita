@@ -69,6 +69,13 @@ export interface MarketSeed {
   readonly tickerAgeMs?: Partial<Record<string, number>>
   /** Closed 1 min candle age (since its close) per product. */
   readonly candleAgeMs?: Partial<Record<string, number>>
+  /** Prices of those candles (default the toy 1 / 2 / 0.5 / 1.5). */
+  readonly candlePrices?: {
+    readonly open: string
+    readonly high: string
+    readonly low: string
+    readonly close: string
+  }
   /** An extra recent event of this feed (a trade, for «WS up, ticker stale»). */
   readonly otherFeed?: { feed: string; product: string; ageMs: number }
   readonly gaps?: readonly { product: string; ageMs: number; feed?: string }[]
@@ -150,10 +157,10 @@ export function seedMarket(path: string, seed: MarketSeed): void {
         bucket,
         `r${bucket}`,
         close + 3000,
-        '1',
-        '2',
-        '0.5',
-        '1.5',
+        seed.candlePrices?.open ?? '1',
+        seed.candlePrices?.high ?? '2',
+        seed.candlePrices?.low ?? '0.5',
+        seed.candlePrices?.close ?? '1.5',
         '3',
         sha,
       )
@@ -455,6 +462,10 @@ export interface OfficialCandleSeed {
   readonly bucket: number
   /** Close price; the other fields are fixed so rows stay comparable. */
   readonly close?: string
+  /** Optional shape of the first revision (default 100.0 / 101.25 / 99.75). */
+  readonly open?: string
+  readonly high?: string
+  readonly low?: string
   /** An extra later revision of the same bucket (the first known one wins). */
   readonly revisionKnownAt?: number
   readonly revisionClose?: string
@@ -496,9 +507,9 @@ export function seedOfficialCandles(
       r.bucket,
       `a${r.bucket}`,
       closeAt + 3000,
-      '100.0',
-      '101.25',
-      '99.75',
+      r.open ?? '100.0',
+      r.high ?? '101.25',
+      r.low ?? '99.75',
       r.close ?? '100.5',
       '3.5',
       sha,

@@ -3,7 +3,7 @@
 Velas históricas **oficiales de Kraken** ya guardadas en la base de mercado, de un producto y un intervalo, en un rango acotado.
 Es la fuente del gráfico de contexto de «Investigación de decisiones». Solo lectura: no escribe, no calcula nada financiero, no
 toca el WebSocket ni la captura. Vive en el gateway (`/api-live/observability/candles` detrás del proxy de Vite, igual que B1/B2).
-**No hay UI conectada** todavía.
+La consume el gráfico de contexto de «Investigación de decisiones» (`DecisionContext.tsx`, PR #157).
 
 Código: `server/src/features/live-gateway/observability-candles.ts`. Pruebas: `observability-candles.test.ts` (unitarias,
 rendimiento sintético, ejemplos) y `e2e/integracion-gateway.pw.ts` (gateway real con base temporal sintética).

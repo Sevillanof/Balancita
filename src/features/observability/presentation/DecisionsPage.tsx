@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import './observability.css'
 import './decisions.css'
+import DecisionContext from './DecisionContext.tsx'
 import { DataState, StatusPill } from '../../../shared/mission-control/index.ts'
 import {
   fetchDecisions,
@@ -850,6 +851,14 @@ export default function DecisionsPage({
       <div className="inv-grid">
         <div className="inv-main">
           <Summary trace={trace} product={product} />
+          {trace.state === 'ready' && trace.value.state === 'ok' && (
+            <DecisionContext
+              product={product}
+              bucketStartMs={trace.value.decision.bucketStartMs}
+              action={trace.value.decision.action}
+              reasonCode={trace.value.decision.reasonCode}
+            />
+          )}
           <Features trace={trace} />
           <section className="inv-panel inv-log" aria-label="Veredictos">
             <div className="inv-log__head">

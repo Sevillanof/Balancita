@@ -2,6 +2,7 @@
 import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import candlesFixture from '../../../../docs/mission-control/b6/ejemplo-con-huecos.json'
 import list from '../../../../docs/mission-control/b3/ejemplo-listado.json'
 import discards from '../../../../docs/mission-control/b3/ejemplo-listado-descartes.json'
 import noData from '../../../../docs/mission-control/b3/ejemplo-listado-sin-datos.json'
@@ -14,6 +15,11 @@ import {
 } from '../infrastructure/decisions-api.ts'
 import { UnexpectedReport } from '../infrastructure/observability-api.ts'
 import DecisionsPage from './DecisionsPage.tsx'
+
+// The context chart has its own tests (needs a canvas); here it is a stub.
+vi.mock('./ContextCandlesChart.tsx', () => ({
+  default: () => <div data-testid="context-chart" />,
+}))
 
 /**
  * The fixtures are the documented examples the backend tests generate from
@@ -149,6 +155,8 @@ function serve(handlers: {
       const url = new URL(input, 'http://localhost')
       if (/\/observability\/decisions\/[^/]+\/\d+$/.test(url.pathname))
         return handlers.trace?.(url) ?? json(traceProposal)
+      if (url.pathname.endsWith('/observability/candles'))
+        return json(candlesFixture)
       if (url.pathname.endsWith('/observability/decisions'))
         return handlers.list?.(url) ?? json(list)
       throw new Error(`unexpected ${input}`)

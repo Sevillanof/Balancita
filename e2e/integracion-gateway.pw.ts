@@ -41,6 +41,7 @@ test.beforeAll(async ({}, info) => {
   const env = {
     FUTURES_MARKET_DB_PATH: seeded.FUTURES_MARKET_DB_PATH,
     FUTURES_VERDICTS_DB_PATH: seeded.FUTURES_VERDICTS_DB_PATH,
+    FUTURES_DECISIONS_DB_PATH: seeded.FUTURES_DECISIONS_DB_PATH,
   } as Record<string, string>
   gateway = spawn('node', ['server/src/app/gateway-main.ts'], {
     env: {
@@ -303,7 +304,7 @@ test('Investigación de decisiones: HISTORIAL -> list -> trace on the real gatew
       const tag = document.createElement('div')
       tag.id = 'datos-de-ejemplo'
       tag.textContent =
-        'DATOS DE EJEMPLO · veredictos sintéticos en una base temporal, no del motor'
+        'DATOS DE EJEMPLO · veredictos y velas sintéticos en una base temporal, no del motor'
       tag.style.cssText =
         'position:fixed;left:12px;bottom:10px;z-index:99;padding:4px 10px;border:1px solid #f59e0b;border-radius:4px;background:#0a0d14;color:#f59e0b;font:600 11px Inter,sans-serif;letter-spacing:.06em'
       document.body.append(tag)
@@ -340,6 +341,15 @@ test('Investigación de decisiones: HISTORIAL -> list -> trace on the real gatew
   await expect(page.getByTestId('reason-origin')).toContainText(
     'no lo atribuye a ninguna estrategia',
   )
+  // The newest verdict is the last closed minute: its candle is not stored yet.
+  // The chart still draws the minutes before it and says so; no error, no marker.
+  await expect(page.getByTestId('context-chart')).toBeVisible()
+  await expect(page.getByTestId('context-no-decision-candle')).toContainText(
+    'no es un error',
+  )
+  await expect(page.getByTestId('context-decision')).toContainText(
+    'sin estrategia atribuida',
+  )
 
   // Second page by cursor.
   await page.getByRole('button', { name: 'Cargar más antiguos' }).click()
@@ -359,6 +369,24 @@ test('Investigación de decisiones: HISTORIAL -> list -> trace on the real gatew
   await expect(page.getByTestId('model-rows')).toContainText('LONG')
   await expect(page.getByTestId('model-rows')).toContainText('confianza 0.62')
   await expect(page.getByTestId('stage-6')).toContainText('No disponible')
+  // Context candles of the proposal's minute: 64 synthetic 1 m buckets in the
+  // range minus 4 holes = 60 candles, plus the one (unaligned) candle the base
+  // market fixture stores: 61. Holes and the not-yet-stored newest minutes are
+  // empty space; the 3 + 1 later ones are observed, not evaluated.
+  const chart = page.getByTestId('context-chart')
+  await expect(chart).toHaveAttribute('data-candle-count', '61')
+  expect(Number(await chart.getAttribute('data-gap-count'))).toBeGreaterThan(5)
+  await expect(page.getByTestId('context-decision')).toContainText(
+    'c25_long_pullback',
+  )
+  await expect(page.getByTestId('context-gaps')).toContainText('sin interpolar')
+  await expect(page.getByTestId('context-after')).toContainText(
+    '4 velas posteriores observadas',
+  )
+  await expect(page.getByTestId('context-no-decision-candle')).toHaveCount(0)
+  await expect(page.getByTestId('context-prov')).toContainText(
+    'paper_futures_official_candles',
+  )
 
   mkdirSync('docs/mission-control/b3', { recursive: true })
   await label()
@@ -415,5 +443,13 @@ test('Investigación de decisiones: HISTORIAL -> list -> trace on the real gatew
   )
   expect(
     log.some((e) => /\/observability\/decisions\/PF_XBTUSD\/\d+$/.test(e.url)),
+  ).toBe(true)
+  expect(
+    log.some(
+      (e) =>
+        e.url.includes(
+          '/observability/candles?product=PF_XBTUSD&interval=1m',
+        ) && e.status === 200,
+    ),
   ).toBe(true)
 })
