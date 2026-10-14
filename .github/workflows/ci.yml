@@ -73,7 +73,7 @@ jobs:
       - run: pnpm --dir server install --frozen-lockfile
       - run: pnpm typecheck:server
       - run: pnpm test:server
-
+  # Python engine: slow (about 25 to 35 minutes; most of it is test_paper_live_integration.py, which rebuilds a synthetic circuit per class), kept apart from the fast checks.
   # Python engine: slow (about 6 minutes), kept apart from the fast checks.
   python:
     runs-on: ubuntu-latest
