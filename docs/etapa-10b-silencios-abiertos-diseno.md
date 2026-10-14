@@ -109,6 +109,12 @@ La implementación en `paper_runner.py` es de 9A (pedido enviado). Esta rama no 
 
 Pruebas adicionales exigidas por Fran, comparando órdenes, motivos, journal y estado financiero entre corrida continua y recuperada: deadline antes del umbral; deadline exactamente en el límite; orden vigente al superarse el umbral; silencio abierto sin cotización posterior; cotización que cierra el silencio después del deadline; dos productos con órdenes y deadlines distintos; recuperación después de una caída anterior y posterior al vencimiento. Se suman a los casos L y O de §8.1.
 
+Resoluciones de la revisión de D sobre b1e941e:
+
+- **Borde (D-17-22):** `stale_quote_gaps` usa `>` (`paper_live_integration.py:170`) y `_expire` vence con `now > deadline` (`execution_timing.py:262`). Por lo tanto `deadline_ms < gap_to_ms` vence y `deadline_ms >= gap_to_ms` puede cancelarse. Se prueban los dos bordes: `deadline = gap_to - 1` (vence) y `deadline = gap_to` (se cancela).
+- **Sesión (D-17-20):** `affected_orders` de #165 (`paper_live_integration.py:180`) usa el mismo solapamiento que el runner, así que hoy anota en `pending_hit` órdenes que ahora deben vencer. La sesión aplica la misma regla (`deadline_ms >= gap_to_ms`) y registra aparte las que vencen (`expired_not_cancelled`) y las canceladas, según lo que devuelva 9A.
+- **Reloj del vencimiento (D-17-21), para el contrato de 9A:** hay que fijar qué `now_ms` usa el vencimiento dentro de `cancel_for_source_loss`. En el camino abierto solo existe `t_ms = gap_to_ms`; en el de cierre, `on_quote` vencería con `received_ms` (`execution_timing.py:205`) pero la declaración usa `persisted_at`. `decided_at_ms` debe coincidir entre la corrida continua y la recuperada, y el caso L lo compara.
+
 ## 7. Qué se compara en las pruebas
 
 Cada caso corre un mundo continuo y uno con caídas y recuperación.
@@ -132,7 +138,7 @@ Mundo sintético (`live_world`), reloj y SIGKILL como en 10D.
 9. Producto que nunca cotizó (`never_quoted`) y varias órdenes con ventanas distintas (`silence_at_window_end` por orden).
 10. Cantidad de `observation` acotada con 8 productos callados.
 11. Mutaciones: quitar `observed_until_ms` del checkpoint rompe el caso 1; quitar `observation_gap` rompe 4; no registrar `silence_contradicted` rompe 5.
-12. Digests financieros de 10D sin cambios (864 señales, 436 órdenes, 3 cierres).
+12. Digests financieros de 10D: **verificar y explicar** (D-17-22). Sin órdenes con `deadline < gap_to` que hoy se cancelan al cierre, deben ser idénticos (864 señales, 436 órdenes, 3 cierres); si el mundo sintético tiene alguna, la diferencia se enumera orden por orden (de `source_stale` a vencimiento) y no cambia fills, posiciones ni caja.
 
 ### 8.1 Pruebas obligatorias de la decisión de Fran
 
@@ -156,13 +162,13 @@ Cada una compara corrida continua y recuperada (equivalencia financiera donde se
 
 ## 9. Hallazgos de D resueltos
 
-D-17-01 reemplazado por D-17-09 (§3, §6) y D-17-10 (§3, caso 5b), D-17-02 (§4), D-17-03 (§4, caso 3), D-17-04 (§5, §7, caso 6), D-17-11 y D-17-12 (§3, §4, caso 5b), D-17-13 a 18 (§3, §3.1, §6, §6.1, casos G, K a O), LOW 05 (`silence_at_window_end`), 06 (`never_quoted`), 07 (tope de `observation`), 08 (§10).
+D-17-01 reemplazado por D-17-09 (§3, §6) y D-17-10 (§3, caso 5b), D-17-02 (§4), D-17-03 (§4, caso 3), D-17-04 (§5, §7, caso 6), D-17-11 y D-17-12 (§3, §4, caso 5b), D-17-13 a 22 (§3, §3.1, §6, §6.1, §8 caso 12, casos G, K a O), LOW 05 (`silence_at_window_end`), 06 (`never_quoted`), 07 (tope de `observation`), 08 (§10).
 
 ## 10. Dónde se implementa
 
 Dos PR apiladas, ninguna toca `paper_runner.py`, #168, contabilidad ni estrategias:
 
 1. Ingestor: `paper_live_ingest.py` y sus tests, base #166.
-2. Sesión: checkpoint/auditoría y `classify_gap` en `paper_live_integration.py`, y los casos 2, 3, 6 y 9 con SIGKILL, base #165 (que contiene #166), después de la primera.
+2. Sesión: checkpoint/auditoría, `classify_gap` y `affected_orders` (D-17-20) en `paper_live_integration.py`, y los casos 2, 3, 6 y 9 con SIGKILL, base #165 (que contiene #166), después de la primera.
 
 Los intervalos (`product_silence_ms`, `dead_after_ms`, `hold_ms`) siguen siendo hipótesis, como 15/25/45 s. Sigue sin cubrirse lo que el ingestor no ve: filas podadas por la captura o una fuente que reporta datos viejos como nuevos. Sin sesión real, bases ni endpoints nuevos.
