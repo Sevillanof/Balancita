@@ -77,10 +77,12 @@ class SourceReader(object):
             (ONE_MINUTE_MS, after_rowid, limit)).fetchall()
         return [dict(r) for r in rows]
 
-    def gaps(self):
-        """The capture's own record of what it did not capture (evidence for classifying a silence)."""
-        return [dict(r) for r in self.db.execute(
-            "SELECT feed, product_id, detected_at, reason FROM paper_futures_data_gaps ORDER BY detected_at")]
+    def begin(self):
+        """Both streams of one poll are read inside one transaction, so they come from the same WAL snapshot."""
+        self.db.execute("BEGIN")
+
+    def end(self):
+        self.db.execute("COMMIT")
 
 
 def _quote_event(row):
@@ -119,6 +121,9 @@ class Ingestor(object):
         self.reader, self.hold_ms, self.dead_after_ms = reader, hold_ms, dead_after_ms
         self.clock_every_ms, self.batch, self.candle_lag_ms = clock_every_ms, batch, candle_lag_ms
         self.cursor = {"ticker": 0, "candle": 0}
+        self.ticker_more = self.candle_more = False   # a full batch means rows may remain unread
+        self.last_candle_read_ms = None
+        self._last_candle_t = 0
         self.pending = []                 # (t_ms, order, event, candle key or None) waiting for the watermark
         self.max_ticker_ms = None         # latest ticker time read
         self.last_candle_bucket = {}      # product -> latest candle bucket read (drives the overdue-candle hold)
@@ -149,7 +154,16 @@ class Ingestor(object):
         return True
 
     def _read(self):
-        for row in self.reader.tickers(self.cursor["ticker"], self.batch):
+        self.reader.begin()
+        try:
+            self._read_streams()
+        finally:
+            self.reader.end()
+
+    def _read_streams(self):
+        rows = self.reader.tickers(self.cursor["ticker"], self.batch)
+        self.ticker_more = len(rows) >= self.batch
+        for row in rows:
             self.cursor["ticker"] = row["rid"]
             t_ms, event = _quote_event(row)
             if t_ms is None:
@@ -166,9 +180,12 @@ class Ingestor(object):
             self.last_ticker_ms[row["product_id"]] = max(t_ms, self.last_ticker_ms.get(row["product_id"], t_ms))
             self.last_any_ticker_ms = max(t_ms, self.last_any_ticker_ms or t_ms)
             self._queue(t_ms, event)
-        for row in self.reader.candles(self.cursor["candle"], self.batch):
+        rows = self.reader.candles(self.cursor["candle"], self.batch)
+        self.candle_more = len(rows) >= self.batch
+        for row in rows:
             self.cursor["candle"] = row["rid"]
             self._read_candle(row)
+            self.last_candle_read_ms = max(self.last_candle_read_ms or 0, self._last_candle_t)
 
     def _read_candle(self, row):
         key = (row["product_id"], row["bucket_start"])
@@ -199,6 +216,7 @@ class Ingestor(object):
                     self.pending.append(held)
             return
         t_ms, event = _candle_event(row)
+        self._last_candle_t = t_ms
         self.max_seen_ms = t_ms if self.max_seen_ms is None else max(self.max_seen_ms, t_ms)
         if self._queue(t_ms, event, key):
             self.candle_pending[key] = {"digest": digest, "known": known}
@@ -211,7 +229,7 @@ class Ingestor(object):
         out = []
         if self.max_seen_ms is not None:
             watermark = self._watermark()
-            ready = sorted((p for p in self.pending if p[0] <= watermark), key=lambda p: (p[0], p[1]))
+            ready = sorted((p for p in self.pending if p[0] <= watermark), key=lambda p: (p[0], p[2]["event_id"]))
             self.pending = [p for p in self.pending if p[0] > watermark]
             for _, _, _, key in ready:
                 if key is not None:
@@ -228,6 +246,11 @@ class Ingestor(object):
         tickers are ``candle_lag_ms`` past that point, quotes are not released beyond it, so a candle written late is not
         left behind (and dropped as late) by quotes that were released first. Never moves the watermark backwards."""
         watermark = self.max_seen_ms - self.hold_ms
+        # a stream with unread rows has not caught up: the others must not run ahead of it (rows would turn up "late")
+        if self.ticker_more and self.max_ticker_ms is not None:
+            watermark = min(watermark, self.max_ticker_ms - self.hold_ms)
+        if self.candle_more and self.last_candle_read_ms is not None:
+            watermark = min(watermark, self.last_candle_read_ms - self.hold_ms)
         if self.candle_lag_ms > 0 and self.max_ticker_ms is not None:
             due = [bucket + 2 * ONE_MINUTE_MS - 1 for bucket in self.last_candle_bucket.values()
                    if self.max_ticker_ms < bucket + 2 * ONE_MINUTE_MS + self.candle_lag_ms]
@@ -262,6 +285,33 @@ class Ingestor(object):
             self.clock_cursor = tick
             tick += self.clock_every_ms
 
+    # ---- durability --------------------------------------------------------------------------------------------
+    STATE_FIELDS = ("cursor", "order", "max_seen_ms", "max_ticker_ms", "released_ms", "last_ticker_ms", "last_any_ticker_ms",
+                    "clock_cursor", "last_candle_bucket", "stats", "late", "rejected", "alive_until", "outages",
+                    "ticker_more", "candle_more", "last_candle_read_ms")
+
+    def checkpoint(self):
+        """Everything the ingestor knows, as plain JSON: cursors, rows held for the watermark, candle revisions already
+        chosen, outages and counters. The ingestor writes nothing itself; whoever runs it stores this next to the runner's
+        checkpoint. Re-reading the source from zero is NOT a substitute: it does not reproduce what an incremental run
+        released (late rows and outages depend on when each poll happened) and the capture's ``market:prune`` removes
+        old source rows."""
+        out = {name: getattr(self, name) for name in self.STATE_FIELDS}
+        out["pending"] = [[t, o, e, list(k) if k else None] for t, o, e, k in self.pending]
+        out["candle_first"] = [[list(k), v] for k, v in sorted(self.candle_first.items())]
+        out["candle_pending"] = [[list(k), v] for k, v in sorted(self.candle_pending.items())]
+        return json.loads(json.dumps(out))
+
+    @classmethod
+    def from_checkpoint(cls, reader, state, **kw):
+        ing = cls(reader, **kw)
+        for name in cls.STATE_FIELDS:
+            setattr(ing, name, state[name])
+        ing.pending = [(t, o, e, tuple(k) if k else None) for t, o, e, k in state["pending"]]
+        ing.candle_first = {tuple(k): dict(v, known=tuple(v["known"]), digest=tuple(v["digest"])) for k, v in state["candle_first"]}
+        ing.candle_pending = {tuple(k): dict(v, known=tuple(v["known"]), digest=tuple(v["digest"])) for k, v in state["candle_pending"]}
+        return ing
+
     # ---- what the ingestor knows about the source ------------------------------------------------------------
     def state(self, observed_now_ms):
         """``source``: ``stale`` when no ticker advanced for ``dead_after_ms`` before ``observed_now_ms`` (the capture is
@@ -273,7 +323,7 @@ class Ingestor(object):
             silent = (not stale) and self.last_any_ticker_ms - last > self.dead_after_ms
             streams[product] = {"state": "silent" if silent else "alive", "last_source_ms": last}
         return {"source": "stale" if stale else "live", "watermark_ms": self.released_ms,
-                "pending": len(self.pending), "outages": list(self.outages), "streams": streams, "stats": dict(self.stats),
+                "pending": len(self.pending), "more_to_read": self.ticker_more or self.candle_more, "outages": list(self.outages), "streams": streams, "stats": dict(self.stats),
                 "late_sample": list(self.late), "rejected_sample": list(self.rejected)}
 
 

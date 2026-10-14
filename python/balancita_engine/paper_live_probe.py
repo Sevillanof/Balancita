@@ -67,9 +67,21 @@ def build(directory, products, ev, product_for_entry="PF_XBTUSD"):
     return config, script, runner, [cycle] + ev
 
 
-def size(directory, seconds, products, every_s):
+MARKER = ".paper_live_probe"
+
+
+def fresh(directory):
+    """Empties a probe directory. Refuses to delete anything this probe did not create: an existing directory must be
+    empty or carry the marker the probe writes."""
+    if os.path.isdir(directory) and os.listdir(directory) and not os.path.exists(os.path.join(directory, MARKER)):
+        raise SystemExit("refusing to empty {!r}: not a probe directory (no {} marker)".format(directory, MARKER))
     shutil.rmtree(directory, ignore_errors=True)
     os.makedirs(directory)
+    open(os.path.join(directory, MARKER), "w").close()
+
+
+def size(directory, seconds, products, every_s):
+    fresh(directory)
     ev = events(1, products, seconds, every_s)
     config, script, runner, evs = build(directory, products, ev)
     t0 = time.perf_counter()
@@ -93,8 +105,7 @@ def size(directory, seconds, products, every_s):
 
 def one(directory, seed, every_s, drift, phase=0):
     """A scripted long on BTC with a seeded drift; what the runner did (entry, exit, reason, prices)."""
-    shutil.rmtree(directory, ignore_errors=True)
-    os.makedirs(directory)
+    fresh(directory)
     walk = path(seed, "PF_XBTUSD", 7200, drift, 2.5)       # 2.5 bp/s so that stops and targets are reached
     ev = [quote("PF_XBTUSD", CYCLE + 3 * SEC + i * SEC, walk[i]) for i in range(phase, 7200, every_s)]
     config, script, runner, evs = build(directory, ["PF_XBTUSD"], ev)

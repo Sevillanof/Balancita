@@ -23,6 +23,7 @@ CYCLE = SC.DEMO_START_MS + 100 * SC.FIVE_MINUTES_MS
 BTC, ETH = "PF_XBTUSD", "PF_ETHUSD"
 FUNDING = tuple((p, ((CYCLE - 2 * HOUR, CYCLE + 48 * HOUR, "0"),)) for p in (BTC, ETH))
 REST_EPOCH = 1_000_000
+LIVE = {"source": "live"}
 
 SCHEMA = """
 CREATE TABLE paper_futures_market_events (
@@ -91,7 +92,7 @@ def ingest_all(path, observed_now_ms, **kw):
     while True:
         out = ing.poll(observed_now_ms)
         events += out["events"]
-        if not out["events"]:
+        if not out["events"] and not out["state"]["more_to_read"]:
             break
     reader.close()
     return events, out["state"], ing
@@ -313,6 +314,86 @@ class TestWatermarkAndCandles(Base):
         self.assertTrue(all(r["rowid"] and r["persisted_at"] for r in sample))
 
 
+class TestBatchesAndDurability(Base):
+    """Review (D-10B-01, -02): small read batches never turn on-time rows into late ones, and a restored checkpoint
+    reproduces the uninterrupted run."""
+
+    def fill(self):
+        self.src.candle(BTC, CYCLE - MIN, 1, 2, 1, 2)
+        for i in range(30):
+            self.src.ticker(BTC, CYCLE + i * SEC, "100000")
+        self.src.candle(BTC, CYCLE, 10, 12, 9, 11, known_at=CYCLE + 29 * SEC + MIN)   # ahead of most of the quotes
+        for i in range(30, 140):
+            self.src.ticker(BTC, CYCLE + i * SEC, "100000")
+            if i % 4 == 0:
+                self.src.ticker(ETH, CYCLE + i * SEC + 300, "3500")
+        self.src.commit()
+
+    def test_no_on_time_row_is_dropped_whatever_the_batch_size(self):
+        self.fill()
+        base, state0, _ = ingest_all(self.path, CYCLE + 140 * SEC, batch=5_000)
+        for batch in (1, 2, 7, 10):
+            events, state, _ = ingest_all(self.path, CYCLE + 140 * SEC, batch=batch)
+            self.assertEqual(state["stats"]["late_source_rows"], 0, batch)
+            self.assertEqual([e["event_id"] for e in events if e["kind"] != "clock"],
+                             [e["event_id"] for e in base if e["kind"] != "clock"], batch)
+
+    def test_same_time_rows_come_out_in_the_same_order_whatever_the_batch_size(self):
+        for i in range(8):
+            for product in (BTC, ETH):
+                self.src.ticker(product, CYCLE + 5 * SEC, "100000" if product == BTC else "3500", seq=i)
+        self.src.ticker(BTC, CYCLE + 60 * SEC, "100000")
+        self.src.commit()
+        base, _, _ = ingest_all(self.path, CYCLE + 61 * SEC, batch=5_000)
+        small, _, _ = ingest_all(self.path, CYCLE + 61 * SEC, batch=3)
+        self.assertEqual([e["event_id"] for e in small], [e["event_id"] for e in base])
+
+    def test_both_streams_are_read_in_one_snapshot(self):
+        self.fill()
+        reader = SourceReader(self.path)
+        seen = []
+        original = reader.db.execute
+
+        class Spy(object):
+            def __init__(self, db):
+                self.db = db
+
+            def execute(self, sql, *a):
+                seen.append(sql.split()[0])
+                return self.db.execute(sql, *a)
+
+            def __getattr__(self, name):
+                return getattr(self.db, name)
+
+        reader.db = Spy(reader.db)
+        Ingestor(reader).poll(CYCLE + 140 * SEC)
+        reader.close()
+        self.assertEqual(seen, ["BEGIN", "SELECT", "SELECT", "COMMIT"])
+
+    def test_a_restored_checkpoint_continues_exactly_like_the_uninterrupted_run(self):
+        self.fill()
+        reader = SourceReader(self.path)
+        whole = Ingestor(reader, hold_ms=2 * SEC)
+        a1 = whole.poll(CYCLE + 140 * SEC)["events"]
+        reader.close()
+
+        reader = SourceReader(self.path)
+        part = Ingestor(reader, hold_ms=2 * SEC, batch=40)
+        got = part.poll(CYCLE + 60 * SEC)["events"]
+        saved = json.loads(json.dumps(part.checkpoint()))
+        reader.close()
+        reader = SourceReader(self.path)                                    # new process, state restored from JSON
+        again = Ingestor.from_checkpoint(reader, saved, hold_ms=2 * SEC, batch=40)
+        while True:
+            out = again.poll(CYCLE + 140 * SEC)
+            got += out["events"]
+            if not out["events"] and not out["state"]["more_to_read"]:
+                break
+        reader.close()
+        self.assertEqual([e["event_id"] for e in got], [e["event_id"] for e in a1])
+        self.assertEqual(again.stats["late_source_rows"], 0)
+
+
 class TestSourceOutageVersusQuietMarket(Base):
     """C5: a capture outage and a product with no quotes are different things and are not confused."""
 
@@ -364,7 +445,8 @@ class TestSourceOutageVersusQuietMarket(Base):
         # read only until +250 s: ETH has been silent since +60 s while BTC kept ticking
         rows = [r for r in reader.tickers(0, 10_000) if r["event_time"] <= CYCLE + 250 * SEC]
         ing.reader = type("Cut", (), {"tickers": lambda self_, a, n: rows if a == 0 else [],
-                                      "candles": lambda self_, a, n: []})()
+                                      "candles": lambda self_, a, n: [],
+                                      "begin": lambda self_: None, "end": lambda self_: None})()
         state = ing.poll(CYCLE + 251 * SEC)["state"]
         reader.close()
         self.assertEqual(state["source"], "live")
@@ -506,7 +588,7 @@ class TestPublishedContracts(TestRunnerEquivalence):
         events = self.build()
         runner = self.runner("pos")
         runner.run(events[:len(events) // 2])           # the long is open
-        block = PUB.positions(runner, report_age_ms=1_000, max_age_ms=15_000)
+        block = PUB.positions(runner, report_age_ms=1_000, max_age_ms=15_000, source_state=LIVE)
         self.assertEqual((block["mode"], block["evidence_class"], block["execution_class"]),
                          ("integration", "not_forward_evidence", "observed_quotes"))
         self.assertEqual(len(block["positions"]), 1)
@@ -520,10 +602,22 @@ class TestPublishedContracts(TestRunnerEquivalence):
         events = self.build()
         runner = self.runner("stale")
         runner.run(events[:len(events) // 2])
-        stale = PUB.positions(runner, report_age_ms=60_000, max_age_ms=15_000)
+        stale = PUB.positions(runner, report_age_ms=60_000, max_age_ms=15_000, source_state=LIVE)
         self.assertFalse(stale["positions"][0]["verified"])
         self.assertEqual(stale["verification"]["reasons"], ["report_stale"])
-        self.assertFalse(PUB.positions(runner, None, 15_000)["positions"][0]["verified"])
+        self.assertFalse(PUB.positions(runner, None, 15_000, LIVE)["positions"][0]["verified"])
+
+    def test_positions_are_not_verified_when_the_data_is_stale_even_if_the_report_is_fresh(self):
+        events = self.build()
+        runner = self.runner("datastale")
+        runner.run(events[:len(events) // 2])
+        stale = PUB.positions(runner, 1_000, 15_000, {"source": "stale"})
+        self.assertFalse(stale["positions"][0]["verified"])
+        self.assertTrue(stale["positions"][0]["accounting_verified"] is False)
+        self.assertEqual(stale["verification"]["reasons"], ["source_stale"])
+        unknown = PUB.positions(runner, 1_000, 15_000)
+        self.assertEqual(unknown["verification"]["reasons"], ["source_state_unknown"])
+        self.assertFalse(unknown["positions"][0]["verified"])
 
     def test_a_stop_nobody_has_watched_since_the_entry_is_not_verified(self):
         events = self.build()
@@ -532,13 +626,13 @@ class TestPublishedContracts(TestRunnerEquivalence):
             runner.run([event])
             if runner.portfolio.positions:
                 break
-        block = PUB.positions(runner, report_age_ms=1_000, max_age_ms=15_000)
+        block = PUB.positions(runner, report_age_ms=1_000, max_age_ms=15_000, source_state=LIVE)
         row = block["positions"][0]
         self.assertEqual(row["protection_evidence"], "not_yet_observed")
         self.assertTrue(row["accounting_verified"])
         self.assertFalse(row["verified"])
         runner.run([e for e in events if e["t_ms"] > runner.clock][:20])
-        later = PUB.positions(runner, 1_000, 15_000)["positions"][0]
+        later = PUB.positions(runner, 1_000, 15_000, LIVE)["positions"][0]
         self.assertEqual(later["protection_evidence"], "observed")
         self.assertTrue(later["verified"])
 

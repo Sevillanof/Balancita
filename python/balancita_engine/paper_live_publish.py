@@ -29,11 +29,17 @@ def _tag(extra):
     return dict(extra, mode=SESSION_MODE, evidence_class=EVIDENCE_CLASS, execution_class=EXECUTION_CLASS)
 
 
-def verification(runner, report_age_ms, max_age_ms):
+def verification(runner, report_age_ms, max_age_ms, source_state=None):
     """Is it fair to call the positions "verified"? Only when the journal chain holds, the integrated audit has no
-    violation, no obligation is open, the runner is processing and the report is fresh. Returns
-    ``{"verified": bool, "reasons": [...]}``; a reason is a stable code."""
+    violation, no obligation is open, the runner is processing, the report is fresh AND the data is fresh: the report's
+    age says when the report was written, not whether the capture was still delivering, so the ingestor's own
+    ``state()`` is required (``source == "live"``). Without it the answer is "not verified" (``source_state_unknown``).
+    Returns ``{"verified": bool, "reasons": [...]}``; a reason is a stable code."""
     reasons = []
+    if source_state is None:
+        reasons.append("source_state_unknown")
+    elif source_state.get("source") != "live":
+        reasons.append("source_stale")
     if runner.status != PROCESSING:
         reasons.append("runner_not_processing")
     if report_age_ms is None or report_age_ms > max_age_ms:
@@ -45,13 +51,13 @@ def verification(runner, report_age_ms, max_age_ms):
     return {"verified": not reasons, "reasons": reasons}
 
 
-def positions(runner, report_age_ms, max_age_ms):
+def positions(runner, report_age_ms, max_age_ms, source_state=None):
     """B5: the open paper positions of the session. Each one says how well its stop was watched; none is ever called
     "open at Kraken": they are positions of the simulator over observed quotes. P&L is ``estimated``.
 
     ``accounting_verified`` is the session-level check (journal chain, audit, fresh report); ``protection_evidence`` is
     the stop's own evidence; ``verified`` needs both: a stop nobody has watched since the entry is never "verified"."""
-    check = verification(runner, report_age_ms, max_age_ms)
+    check = verification(runner, report_age_ms, max_age_ms, source_state)
     watch = {row["intent_id"]: row for row in protection(runner)}
     rows = []
     for product, book in sorted(runner.portfolio.positions.items()):
@@ -93,7 +99,7 @@ def intervals(runner, from_ms=None, to_ms=None, product=None):
             "decided_ms": row.get("decided_ms"), "side": row["side"],
             "stages": {
                 "signal": {"state": "not_available", "signal_key": row.get("signal_key")},
-                "decision": {"state": "ok", "decided_ms": row.get("decided_ms")},
+                "decision": {"state": "recorded" if row.get("decided_ms") is not None else "none", "decided_ms": row.get("decided_ms")},
                 "order": {"state": row["state"], "reasons": row["reasons"], "entry_ms": row.get("entry_ms")},
                 "trade": {"state": row["result"] if row["result"] in ("closed", "open") else "none",
                           "trade_id": row.get("trade_id"), "exit_reason": row.get("exit_reason")}}})
