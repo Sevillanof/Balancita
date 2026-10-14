@@ -8,6 +8,8 @@ import {
   PRODUCTS,
   sandbox,
   seedMarket,
+  seedOfficialCandles,
+  seedVerdictRows,
 } from '../../server/src/features/live-gateway/observability-health-fixtures.ts'
 import {
   C25,
@@ -23,6 +25,21 @@ seedMarket(box.marketDb, {
   tickerAgeMs: ages,
   candleAgeMs: Object.fromEntries(PRODUCTS.map((p) => [p, 90_000])),
 })
+// B6: 40 synthetic closed 15 m official candles of PF_XBTUSD with two holes.
+const QUARTER = 15 * MINUTE
+const lastQuarter = now - (now % QUARTER) - QUARTER
+const candleHoles = [5, 6, 20]
+seedOfficialCandles(
+  box.marketDb,
+  Array.from({ length: 40 }, (_, i) => i)
+    .filter((i) => !candleHoles.includes(i))
+    .map((i) => ({
+      product: 'PF_XBTUSD',
+      intervalMs: QUARTER,
+      bucket: lastQuarter - i * QUARTER,
+      close: String(100 + i),
+    })),
+)
 const bucket = now - (now % MINUTE) - MINUTE
 // SYNTHETIC verdicts (engine payload shape, invented numbers): the page shows
 // them as example data. XBT has 120 minutes so the list needs a second page.
@@ -56,5 +73,7 @@ console.log(
     FUTURES_MARKET_DB_PATH: box.marketDb,
     FUTURES_VERDICTS_DB_PATH: box.verdictsDb,
     FUTURES_DECISIONS_DB_PATH: box.decisionsDb,
+    candlesLastBucket: lastQuarter,
+    candlesHoles: candleHoles,
   }),
 )
