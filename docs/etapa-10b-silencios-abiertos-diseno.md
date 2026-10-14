@@ -168,7 +168,15 @@ D-17-01 reemplazado por D-17-09 (§3, §6) y D-17-10 (§3, caso 5b), D-17-02 (§
 
 Dos PR apiladas, ninguna toca `paper_runner.py`, #168, contabilidad ni estrategias:
 
-1. Ingestor: `paper_live_ingest.py` y sus tests, base #166.
-2. Sesión: checkpoint/auditoría, `classify_gap` y `affected_orders` (D-17-20) en `paper_live_integration.py`, y los casos 2, 3, 6 y 9 con SIGKILL, base #165 (que contiene #166), después de la primera.
+1. Ingestor: `paper_live_ingest.py` y sus tests, base #166 (#172 @ d122f51).
+2. Sesión: checkpoint/auditoría, `classify_gap` y `affected_orders` (D-17-20) en `paper_live_integration.py`, y los casos 2, 3, 6 y 9, base #165 (que contiene #166), después de la primera (#174).
 
 Los intervalos (`product_silence_ms`, `dead_after_ms`, `hold_ms`) siguen siendo hipótesis, como 15/25/45 s. Sigue sin cubrirse lo que el ingestor no ve: filas podadas por la captura o una fuente que reporta datos viejos como nuevos. Sin sesión real, bases ni endpoints nuevos.
+
+## 11. Contrato de #168 @ 750f96a incorporado (Fran 17:48Z, puntos 2, 3 y 5)
+
+- **Firma única:** la sesión llama solo a `cancel_for_source_loss(product_id, gap_from_ms, gap_to_ms, t_ms, threshold_ms)`. El umbral es el `max_quote_gap_ms` de la identidad inmutable de la sesión, el mismo que usan `stale_quote_gaps`, `affected_orders` y la declaración; no hay un valor implícito distinto. Un umbral distinto para el mismo intervalo lo rechaza el runner (`source_loss_conflict`).
+- **Sin lógica de vencimiento duplicada:** ni el ingestor ni `LiveSession` deciden cuándo vence una orden. Las que tienen `deadline_ms <= desde + umbral` (igualdad incluida) vencen dentro del runner con `TimedExecutor.expire_orders` y sus motivos originales (`no_quote_in_window`, `no_valid_quote_in_window`); la sesión solo las lista como `expiring` en la evidencia y omite la declaración abierta si no hay ninguna que cancelar.
+- **Registros separados:** la observación (`observation`, `observation_gap`, `silence_open`, `silence_contradicted`, `silence_at_window_end`) es del ingestor; la decisión es el `source_loss` del runner, que en el audit lleva `cancelled` (por `source_stale`), `expired` (vencimientos ordinarios), `expired_reasons`, `threshold_ms`, el intervalo `gap` y `declared_ms`. Un vencimiento ordinario nunca figura como cancelación de fuente.
+- **Instante de la declaración:** `t_ms = gap_to` (última cotización + umbral + 1), por el flujo o por la prueba de la observación; en el diario queda `max(t_ms, último t_ms)`.
+- **Pruebas en el circuito completo** (`TestSilenceStillOpen`, `TestDeadlineAgainstTheThreshold`, `TestOpenHolesOrder`, `TestSourceStaleCancellation` con SIGKILL real): deadline antes, igual y después del límite, silencio abierto sin cotización posterior, cotización que cierra el silencio, dos productos, recuperación tras la caída, caída entre `source_loss` y `source_loss_expiry` y entre la declaración y el checkpoint, con equivalencia de órdenes, motivos, cartera y evidencia entre corrida continua y recuperada. Diferencia operativa propia de la recuperación: si la caída ocurre antes de la declaración, `declared_ms` es el reloj de la recuperación.
