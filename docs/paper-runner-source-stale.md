@@ -39,3 +39,4 @@ La detección de la pérdida (cuándo hay una brecha y qué umbral usar) no est�
 - Los tiempos del diario no retroceden entre llamadas sucesivas.
 - Una brecha entre cotizaciones no prueba por sí sola una caída de la fuente; quién declara la pérdida debe apoyarse en evidencia explícita.
 - **Residuo declarado (LOW):** `quote_t_ms` (tiempo del diario de la última cotización por producto) no entra en `state_digest`. Se reconstruye siempre por reproducción completa del diario; si alguna vez se restaura desde una instantánea, debe viajar con ella.
+- **Residuo declarado (LOW):** el runner no distingue el transporte (REST o WebSocket) de una cotización: la comprobación solo usa el producto y los relojes. Las pruebas cubren REST y WS con etiquetas de fuente distintas, no con clientes reales.
