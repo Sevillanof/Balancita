@@ -115,29 +115,70 @@ class TestChecks(unittest.TestCase):
         self.assertEqual(len(eager["definitive"]), 2)                                    # the lag is a parameter (a hypothesis)
 
 
+class TestRealDataMode(unittest.TestCase):
+    """``strict`` is what a read of real responses has to use: product from the stored row, a price for every hour."""
+    price = staticmethod(lambda start: D("80000"))
+
+    def test_strict_needs_a_reference_price_and_the_product_the_stored_row_declares(self):
+        raw = response(settled(1), SERVER)
+        for kwargs, reason in (({"strict": True, "stored_product_id": BTC}, "reference_price_required"),
+                               ({"strict": True, "reference_price": self.price, "stored_product_id": ETH}, "product_mismatch"),
+                               ({"strict": True, "reference_price": self.price}, "product_mismatch")):
+            with self.assertRaises(FA.FundingAdapterError) as caught:
+                FA.parse_response(raw, BTC, SERVER, **kwargs)
+            self.assertEqual(caught.exception.reason, reason)
+        good = FA.parse_response(raw, BTC, SERVER, strict=True, reference_price=self.price, stored_product_id=BTC)
+        self.assertEqual(len(good["definitive"]), 1)
+
+    def test_an_hour_without_a_price_is_rejected_in_strict_mode_and_accepted_otherwise(self):
+        raw = response(settled(2), SERVER)
+        only_first = lambda start: D("80000") if start == T0 else None                          # noqa: E731
+        strict = FA.parse_response(raw, BTC, SERVER, strict=True, reference_price=only_first, stored_product_id=BTC)
+        self.assertEqual(([r["start_ms"] for r in strict["definitive"]], strict["rejected"][0]["reason"]), ([T0], "reference_price_missing"))
+        loose = FA.parse_response(raw, BTC, SERVER, reference_price=only_first)
+        self.assertEqual(len(loose["definitive"]), 2)
+
+    def test_a_response_of_another_product_is_caught_by_the_price_check(self):
+        eth_like = response(settled(1, price=3_000), SERVER)                                      # absolute = relative x 3000
+        parsed = FA.parse_response(eth_like, BTC, SERVER, strict=True, reference_price=self.price, stored_product_id=BTC)
+        self.assertEqual((parsed["definitive"], parsed["rejected"][0]["reason"]), ([], "unit_mismatch"))
+
+    def test_a_zero_relative_rate_with_an_absolute_one_is_a_unit_problem(self):
+        parsed = FA.parse_response(response([(T0, "0", "5")], SERVER), BTC, SERVER, strict=True, reference_price=self.price,
+                                   stored_product_id=BTC)
+        self.assertEqual(parsed["rejected"][0]["reason"], "unit_mismatch")
+        zero = FA.parse_response(response([(T0, "0", "0")], SERVER), BTC, SERVER, strict=True, reference_price=self.price,
+                                 stored_product_id=BTC)
+        self.assertEqual(len(zero["definitive"]), 1)
+
+
 class TestReconciliation(unittest.TestCase):
-    def test_the_first_seen_rate_stays_and_a_different_one_is_quarantined_with_its_evidence(self):
+    def test_the_first_seen_rate_stays_in_use_and_a_different_one_is_handed_to_the_runner_as_a_dispute(self):
         book = FA.FundingBook()
         first = book.add(FA.parse_response(response([(T0, "0.0001", "8")], SERVER), BTC, SERVER))
         self.assertEqual(len(first), 1)
         again = book.add(FA.parse_response(response([(T0, "0.0001", "8")], SERVER + 1), BTC, SERVER + 1))
         revised = book.add(FA.parse_response(response([(T0, "0.0002", "16")], SERVER + 2), BTC, SERVER + 2))
-        self.assertEqual((again, revised), ([], []))
+        self.assertEqual(again, [])
+        self.assertEqual([e["payload"]["periods"] for e in revised], [[[T0, T0 + HOUR, "0.0002"]]])      # the runner is told, once
         self.assertEqual((book.counts["accepted"], book.counts["duplicate"], book.counts["revision_conflict"]), (1, 1, 1))
-        self.assertEqual(book.periods[(BTC, T0)]["relative_rate"], "0.0001")
+        self.assertEqual(book.periods[(BTC, T0)]["relative_rate"], "0.0001")                              # the first is still in use
         self.assertEqual(book.quarantined[(BTC, T0)], ["0.0001", "0.0002"])
         self.assertEqual(book.evidence[-1]["kind"], "revision_conflict")
-        third = book.add(FA.parse_response(response([(T0, "0.0001", "8")], SERVER + 3), BTC, SERVER + 3))
-        self.assertEqual(third, [])                                                      # once disputed, the period stays out
-        self.assertEqual(book.counts["revision_conflict"], 2)
+        again_disputed = book.add(FA.parse_response(response([(T0, "0.0002", "16")], SERVER + 3), BTC, SERVER + 3))
+        original = book.add(FA.parse_response(response([(T0, "0.0001", "8")], SERVER + 4), BTC, SERVER + 4))
+        self.assertEqual((again_disputed, original), ([], []))                                            # nothing is sent twice
+        self.assertEqual((book.counts["revision_conflict"], book.counts["duplicate"]), (2, 2))
 
-    def test_two_rates_for_one_period_inside_a_response_are_both_withheld(self):
+    def test_two_rates_for_one_period_inside_a_response_are_both_handed_to_the_runner_and_none_is_accepted_here(self):
         rates = [(T0, "0.0001", "8"), (T0, "0.0002", "16"), (T0 + HOUR, "0.0001", "8")]
         book = FA.FundingBook()
-        (event,) = book.add(FA.parse_response(response(rates, SERVER), BTC, SERVER))
-        self.assertEqual([p[0] for p in event["payload"]["periods"]], [T0 + HOUR])
-        self.assertEqual(book.evidence[0]["kind"], "conflicts")
-        self.assertEqual(book.evidence[0]["reason"], "conflict_inside_response")
+        accepted, disputed = book.add(FA.parse_response(response(rates, SERVER), BTC, SERVER))
+        self.assertEqual([p[0] for p in accepted["payload"]["periods"]], [T0 + HOUR])
+        self.assertEqual(sorted(p[2] for p in disputed["payload"]["periods"]), ["0.0001", "0.0002"])
+        self.assertNotIn((BTC, T0), book.periods)
+        self.assertEqual((book.evidence[0]["kind"], book.evidence[0]["reason"]), ("conflicts", "conflict_inside_response"))
+        self.assertEqual((book.counts["conflict_inside_response"], book.counts["rejected"]), (1, 0))   # not mixed with malformed periods
 
     def test_two_products_get_their_own_events_and_the_same_hour_is_not_confused(self):
         book = FA.FundingBook()
@@ -184,17 +225,22 @@ class TestAgainstTheRunnersAccounting(unittest.TestCase):
         self.assertEqual(runner.handle(event)["status"], "duplicate")
         self.assertEqual(runner.financial_digest(), digest)
 
-    def test_a_conflicting_revision_that_reaches_the_runner_is_quarantined_there_too(self):
-        """If another path did deliver the revised rate, ``ingest_funding`` quarantines both and applies neither."""
-        from balancita_engine.paper_runner import make_event
+    def test_a_revision_is_quarantined_by_the_runner_and_the_first_rate_keeps_being_used(self):
         runner, book = self.runner(), FA.FundingBook()
-        (event,) = book.add(FA.parse_response(response([(T0, "0.0001", "8")], SERVER), BTC, SERVER))
-        runner.handle(event)
-        rogue = make_event("funding", {"product_id": BTC, "periods": [[T0, T0 + HOUR, "0.0002"]]}, t_ms=SERVER + 5, source="other", stream="x")
-        runner.handle(rogue)
-        self.assertEqual(runner.portfolio.funding[BTC], [(T0, T0 + HOUR, D("0.0001"))])           # the first stays
-        self.assertEqual(runner.portfolio.funding_conflicts[BTC], [[T0, T0 + HOUR, "0.0002"]])
-        self.assertEqual(FA.compare_with_portfolio(book, runner.portfolio.funding)["rate_differs"], [])
+        for raw, at in ((response([(T0, "0.0001", "8")], SERVER), SERVER), (response([(T0, "0.0002", "16")], SERVER + 2), SERVER + 2)):
+            for event in book.add(FA.parse_response(raw, BTC, at)):
+                runner.handle(event)
+        self.assertEqual(runner.portfolio.funding[BTC], [(T0, T0 + HOUR, D("0.0001"))])           # the first stays in use
+        self.assertEqual(runner.portfolio.funding_conflicts[BTC], [[T0, T0 + HOUR, "0.0002"]])    # the dispute is on the portfolio
+        self.assertEqual(FA.compare_with_portfolio(book, runner.portfolio.funding), {"missing": [], "extra": [], "rate_differs": []})
+        self.assertEqual([e["kind"] for e in runner.portfolio.funding_log].count("period_conflict"), 1)
+
+    def test_a_contradiction_inside_one_response_leaves_no_rate_in_use_on_the_runner(self):
+        runner, book = self.runner(), FA.FundingBook()
+        for event in book.add(FA.parse_response(response([(T0, "0.0001", "8"), (T0, "0.0002", "16")], SERVER), BTC, SERVER)):
+            runner.handle(event)
+        self.assertEqual(runner.portfolio.funding.get(BTC, []), [])                                # contradictory versions: none is used
+        self.assertEqual(sorted(c[2] for c in runner.portfolio.funding_conflicts[BTC]), ["0.0001", "0.0002"])
 
     def test_a_period_the_adapter_never_accepted_shows_up_as_extra_and_a_missing_one_as_missing(self):
         runner, book = self.runner(), FA.FundingBook()

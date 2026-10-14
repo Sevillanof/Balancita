@@ -18,8 +18,11 @@ What it verifies, one check per name (each one a stable reason code, never free 
 * publication: only a period that had ended ``settle_lag_ms`` before the server time is *definitive*. The one in progress,
   or one that just ended, is ``provisional`` and is not emitted. The event's time is the arrival time of the response,
   never earlier than the end of the period (the runner refuses a period that ends in the future);
-* reconciliation: first seen wins. The same period and rate again is a ``duplicate``; another rate for a period already
-  known is ``revision_conflict`` and is quarantined, as ``ingest_funding`` does, never silently replaced.
+* reconciliation: first seen stays in use. The same period and rate again is a ``duplicate``. Another rate for a period
+  already known is ``revision_conflict``; two rates for one period inside a response are ``conflict_inside_response`` (none is
+  accepted here). In both cases the contradicting period is also handed to the runner, whose ``ingest_funding`` quarantines it
+  (``portfolio.funding_conflicts``) and flags the trades it overlaps: nothing is silently replaced, and the runner, not this
+  module, decides what is disputed. A rate already in use is never swapped for the contradicting one.
 
 ``funding`` events carry accrual only. The funding that feeds C32's percentile (``LiveEvaluator.feed_funding``) is a
 different channel; this module has no way to reach it, and its events cannot be mistaken for one (kind ``funding``,
@@ -80,14 +83,26 @@ def _number(value):
 
 
 def parse_response(raw, product_id, received_ms, *, settle_lag_ms=DEFAULT_SETTLE_LAG_MS,
-                   max_abs_relative=DEFAULT_MAX_ABS_RELATIVE, reference_price=None, unit_tolerance=DEFAULT_UNIT_TOLERANCE):
+                   max_abs_relative=DEFAULT_MAX_ABS_RELATIVE, reference_price=None, unit_tolerance=DEFAULT_UNIT_TOLERANCE,
+                   strict=False, stored_product_id=None):
     """Checks one response. Returns ``{"sha256", "server_ms", "unit", "definitive", "provisional", "rejected", "conflicts"}``.
 
     ``definitive``: records ``{product_id, start_ms, end_ms, relative_rate, absolute_rate, unit, known_at_ms, sha256}`` (rates as
     exact decimal text) that may become accounting. ``provisional``, ``rejected`` and ``conflicts`` are evidence only, each with a
     reason code. A malformed response raises ``FundingAdapterError``. ``reference_price(start_ms)`` (optional) returns the price
-    used for the unit cross-check, or ``None`` when there is none for that hour."""
+    used for the unit cross-check, or ``None`` when there is none for that hour.
+
+    ``strict`` is for real data and is not optional there: the product of the response is not written in its body, so the caller
+    must pass the product the stored row declares (``stored_product_id``, from ``paper_futures_funding_periods`` for this response)
+    and it must be ``product_id`` (``product_mismatch``); and every hour needs a reference price, since the absolute/relative
+    check is what catches a mixed-up product or unit (``reference_price_required`` / ``reference_price_missing``). Synthetic
+    tests run without it."""
     unit = unit_for(product_id)
+    if strict:
+        if reference_price is None:
+            raise FundingAdapterError("reference_price_required")
+        if stored_product_id != product_id:
+            raise FundingAdapterError("product_mismatch", "{} != {}".format(stored_product_id, product_id))
     if not isinstance(received_ms, int) or isinstance(received_ms, bool) or received_ms < 0:
         raise FundingAdapterError("received_time_invalid")
     if not isinstance(raw, str) or len(raw.encode("utf-8")) > MAX_BODY_BYTES:
@@ -130,9 +145,17 @@ def parse_response(raw, product_id, received_ms, *, settle_lag_ms=DEFAULT_SETTLE
         if abs(relative) > max_abs_relative:
             bad("rate_out_of_bounds", start_ms=start)
             continue
-        if reference_price is not None and relative != 0:
+        if reference_price is not None:
             price = reference_price(start)
-            if price is not None:
+            if price is None:
+                if strict:
+                    bad("reference_price_missing", start_ms=start)
+                    continue
+            elif relative == 0:
+                if absolute != 0:                                        # no relative funding but money in the absolute rate
+                    bad("unit_mismatch", start_ms=start, implied_price="n/a")
+                    continue
+            else:
                 implied = absolute / relative
                 if price <= 0 or abs(implied - D(str(price))) > D(str(price)) * unit_tolerance:
                     bad("unit_mismatch", start_ms=start, implied_price=str(implied.quantize(D("0.0001"))))
@@ -143,7 +166,8 @@ def parse_response(raw, product_id, received_ms, *, settle_lag_ms=DEFAULT_SETTLE
         if prior is not None:
             if prior["relative_rate"] != record["relative_rate"] or prior["absolute_rate"] != record["absolute_rate"]:
                 out["conflicts"].append({"start_ms": start, "reason": "conflict_inside_response",
-                                         "rates": sorted({prior["relative_rate"], record["relative_rate"]})})
+                                         "rates": sorted({prior["relative_rate"], record["relative_rate"]}),
+                                         "records": [prior, record]})
                 by_start[start] = None
             continue
         by_start[start] = record
@@ -173,35 +197,46 @@ class FundingBook(object):
     def __init__(self):
         self.periods = {}            # (product, start_ms) -> {"relative_rate", "absolute_rate", "sha256", "known_at_ms"}
         self.quarantined = {}        # (product, start_ms) -> sorted list of rates in conflict
-        self.counts = {"responses": 0, "accepted": 0, "duplicate": 0, "revision_conflict": 0, "rejected": 0, "provisional": 0}
+        self.counts = {"responses": 0, "accepted": 0, "duplicate": 0, "revision_conflict": 0, "conflict_inside_response": 0,
+                       "rejected": 0, "provisional": 0}
         self.evidence = []           # rejected / provisional / conflict items, with the response they came from
 
     def add(self, parsed):
+        """Returns the runner events to deliver. A contradiction is handed to the runner too: ``ingest_funding`` quarantines
+        it there (``portfolio.funding_conflicts``) and flags the trades whose holding time it overlaps, which only the runner
+        can do. The rate seen first is still the one in use; nothing here, or there, picks the other one."""
         self.counts["responses"] += 1
-        fresh = []
+        fresh, contested = [], []
         for record in parsed["definitive"]:
             key = (record["product_id"], record["start_ms"])
-            if key in self.quarantined:
-                self.counts["revision_conflict"] += 1
-                self._note("revision_conflict", parsed, record["start_ms"], record["product_id"])
-                continue
             known = self.periods.get(key)
-            if known is None:
+            if known is None and key not in self.quarantined:
                 self.periods[key] = {k: record[k] for k in ("relative_rate", "absolute_rate", "sha256", "known_at_ms")}
                 self.counts["accepted"] += 1
                 fresh.append(record)
-            elif known["relative_rate"] == record["relative_rate"]:
+                continue
+            rates = self.quarantined.get(key, [])
+            if known is not None and known["relative_rate"] == record["relative_rate"]:
                 self.counts["duplicate"] += 1
-            else:                                   # the runner would quarantine both; here the first stays and the rest is evidence
-                self.quarantined[key] = sorted({known["relative_rate"], record["relative_rate"]})
+            elif record["relative_rate"] in rates:                   # a disputed rate seen again: already told to the runner
                 self.counts["revision_conflict"] += 1
-                self._note("revision_conflict", parsed, record["start_ms"], record["product_id"],
-                           rates=self.quarantined[key])
-        for kind in ("rejected", "provisional", "conflicts"):
+            else:
+                self.quarantined[key] = sorted(set(rates) | {record["relative_rate"]} | ({known["relative_rate"]} if known else set()))
+                self.counts["revision_conflict"] += 1
+                self._note("revision_conflict", parsed, record["start_ms"], record["product_id"], rates=self.quarantined[key])
+                contested.append(record)
+        for item in parsed["conflicts"]:
+            self.counts["conflict_inside_response"] += 1
+            self._note("conflicts", parsed, item["start_ms"], item["records"][0]["product_id"],
+                       **{k: v for k, v in item.items() if k not in ("start_ms", "records")})
+            for record in item["records"]:
+                self.quarantined[(record["product_id"], record["start_ms"])] = item["rates"]
+            contested.extend(item["records"])
+        for kind in ("rejected", "provisional"):
             for item in parsed[kind]:
-                self.counts["rejected" if kind == "conflicts" else kind] += 1
+                self.counts[kind] += 1
                 self._note(kind, parsed, item.get("start_ms"), None, **{k: v for k, v in item.items() if k != "start_ms"})
-        return self.events(fresh)
+        return self.events(fresh) + self.events(contested)
 
     def _note(self, kind, parsed, start_ms, product_id, **extra):
         self.evidence.append(dict({"kind": kind, "start_ms": start_ms, "product_id": product_id, "sha256": parsed["sha256"]}, **extra))
