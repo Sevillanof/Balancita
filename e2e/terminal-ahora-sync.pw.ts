@@ -155,7 +155,7 @@ test('history rows and chart markers are the same decisions and select each othe
   // The visible legend names every kind of marker, apart from each other.
   const legend = page.locator('.terminal-chart__legend')
   await expect(legend).toContainText('propuesta LONG/SHORT')
-  await expect(legend).toContainText('WAIT (agrupados)')
+  await expect(legend).toContainText('W = WAIT')
   await expect(legend).toContainText('EJEC. ejecución paper')
   await expect(legend).toContainText('salida')
   await expect(legend).not.toContainText('entrada larga')
@@ -176,6 +176,10 @@ test('history rows and chart markers are the same decisions and select each othe
     mkdirSync(SHOTS, { recursive: true })
     await page.screenshot({
       path: `${SHOTS}/marcadores-propuesta-wait-ejecutada.png`,
+    })
+    // Same markers with short texts (W×n, EJ L/S); the full text shows on select.
+    await page.screenshot({
+      path: `${SHOTS}/marcadores-textos-cortos.png`,
     })
     await legend.scrollIntoViewIfNeeded()
     await page.screenshot({ path: `${SHOTS}/leyenda-marcadores.png` })
@@ -279,9 +283,69 @@ test('without a B1 read AHORA says «Sin confirmar», never a current decision',
   await expect(page.getByTestId('last-decision')).toContainText('Sin confirmar')
   await expect(page.getByTestId('now-action')).toHaveCount(0)
   await expect(page.getByTestId('now-blockers')).toContainText('lectura de B1')
+  // The product's source health cannot say «Correcto» on a read that failed.
+  await expect(page.getByTestId('source-health')).toContainText('Sin confirmar')
+  await expect(page.getByTestId('source-health')).not.toContainText('Correcto')
   if (SHOTS) {
     mkdirSync(SHOTS, { recursive: true })
     await page.screenshot({ path: `${SHOTS}/ahora-sin-confirmar.png` })
+  }
+})
+
+test('a hole in the candles never moves a marker onto an earlier candle', async ({
+  page,
+}) => {
+  const entries = facts.PF_XBTUSD!.filter((f) => f.action !== 'WAIT')
+  const holed = entries.find((f) => f.action === 'SHORT')!
+  // Remove from the snapshot the candle of that verdict's bucket (SYNTHETIC
+  // gap); the verdict itself stays in the stream and in the history.
+  await page.route('**/api-live/terminal/bootstrap*', async (route) => {
+    const response = await route.fetch()
+    const body = (await response.json()) as {
+      terminal_market?: { candles: { time_ms: number }[] }
+    }
+    if (body.terminal_market)
+      body.terminal_market.candles = body.terminal_market.candles.filter(
+        (candle) => candle.time_ms !== holed.bucket,
+      )
+    await route.fulfill({ response, json: body })
+  })
+  await page.routeWebSocket(/\/terminal\/stream/, (ws) => {
+    const server = ws.connectToServer()
+    server.onMessage((message) => {
+      if (typeof message !== 'string') return ws.send(message)
+      try {
+        const parsed = JSON.parse(message) as {
+          type?: string
+          data?: { market?: { candles?: { time_ms: number }[] } }
+        }
+        const candles = parsed.data?.market?.candles
+        if (parsed.type === 'snapshot' && Array.isArray(candles))
+          parsed.data!.market!.candles = candles.filter(
+            (candle) => candle.time_ms !== holed.bucket,
+          )
+        ws.send(JSON.stringify(parsed))
+      } catch {
+        ws.send(message)
+      }
+    })
+  })
+  await openTerminal(page)
+  const chart = page.getByTestId('approved-chart-renderer')
+  const ids = (await markerPositions(chart)).map((p) => p.id)
+  const others = entries.filter((f) => f.analysisId !== holed.analysisId)
+  for (const f of others) expect(ids).toContain(f.analysisId)
+  expect(ids).not.toContain(holed.analysisId)
+  // It stays in the history, and says why it is not on the chart.
+  await page
+    .getByRole('button', { name: `Seleccionar análisis ${holed.analysisId}` })
+    .click()
+  await expect(page.getByLabel('Decisión seleccionada')).toContainText(
+    'no hay vela de su minuto',
+  )
+  if (SHOTS) {
+    mkdirSync(SHOTS, { recursive: true })
+    await page.screenshot({ path: `${SHOTS}/hueco-de-velas.png` })
   }
 })
 

@@ -19,6 +19,7 @@ import { LABEL, TONE } from './health-view.ts'
 import type { HealthRead } from './HealthIndicator.tsx'
 import {
   assessActuality,
+  confirmedSourceEvidence,
   BLOCKER_TEXT,
   type GatewayClock,
   type HealthFreshness,
@@ -103,10 +104,17 @@ function Now({
   const unconfirmed = standing === 'unconfirmed' ? known : null
   const historic = standing === 'historic' ? known : null
   const clockNote = actuality?.gatewayClock ? 'hora del servidor' : 'hora local'
-  // B1's reading for THIS product's verdict source, not the global status.
-  const source = health.data?.components
-    .find((c) => c.id === 'decisions')
-    ?.items?.find((item) => item.productId === product)
+  // B1's reading for THIS product's verdict source, shown only while the read
+  // passes the same freshness check as the decision above; else «Sin confirmar».
+  const sourceRead = confirmedSourceEvidence({
+    product,
+    connected,
+    connectedAtMs,
+    clock,
+    health,
+    localNowMs,
+  })
+  const source = sourceRead.evidence
   const mine =
     report?.evaluations.state === 'ok' && report.product
       ? (report.evaluations.byProduct.find(
@@ -141,8 +149,12 @@ function Now({
             <StatusPill tone={TONE[source.status]}>
               {LABEL[source.status]}
             </StatusPill>
-          ) : (
+          ) : sourceRead.confirmed ? (
             <span className="obs-na">Sin datos</span>
+          ) : (
+            <span className="obs-na" data-testid="source-health-unconfirmed">
+              Sin confirmar
+            </span>
           )}
         </span>
       </p>

@@ -705,11 +705,11 @@ export default function TerminalChartPanel({
               es una operación)
             </span>
             <span data-testid="legend-wait">
-              <b style={{ color: colors.muted }}>◌</b> WAIT (agrupados)
+              <b style={{ color: colors.muted }}>◌</b> W = WAIT (W×n: agrupados)
             </span>
             <span data-testid="legend-fill">
-              <b className="terminal-chart__up">■</b> EJEC. ejecución paper (un
-              marcador por fill)
+              <b className="terminal-chart__up">■</b> EJEC. ejecución paper (EJ
+              L/S, un marcador por fill; el detalle sale al seleccionarlo)
             </span>
             <span data-testid="legend-exit">
               <b style={{ color: colors.info }}>●</b> salida (stop, objetivo,

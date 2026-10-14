@@ -437,7 +437,10 @@ describe('ObserverPanel (right column)', () => {
   })
 
   it('shows what B1 says about the decisions source, apart from the trading figures', async () => {
-    serve({ health: () => json(healthDegraded), activity: quiet })
+    serve({
+      health: () => json(healthWithVerdict(1_791_000_120_000, 'error')),
+      activity: quiet,
+    })
     render(<Observer />)
     const now = await screen.findByTestId('observer-now')
     await waitFor(() => expect(now).toHaveTextContent('Error'))
@@ -746,5 +749,95 @@ describe('AHORA: a decision is current only with every evidence at once', () => 
     expect(screen.getByTestId('source-health')).not.toHaveTextContent(
       'Correcto',
     )
+  })
+
+  describe('source health is «Correcto» only on a fresh B1 read', () => {
+    const health = () => screen.getByTestId('source-health')
+
+    it('shows the product status while the read is fresh', async () => {
+      serve({ health: () => json(healthWithVerdict(BUCKET)), activity: quiet })
+      render(<Observer latest={null} />)
+      await waitFor(() => expect(health()).toHaveTextContent('Correcto'))
+      expect(health()).not.toHaveTextContent('Sin confirmar')
+    })
+
+    it('an old report is «Sin confirmar», never «Correcto»', async () => {
+      serve({ health: () => json(healthWithVerdict(BUCKET)), activity: quiet })
+      const { rerender } = render(<Observer latest={null} />)
+      await waitFor(() => expect(health()).toHaveTextContent('Correcto'))
+      const later = NOW + 100_000
+      rerender(
+        <Observer
+          latest={null}
+          clock={{ publishedAtMs: later, receivedAtMs: later }}
+          localNowMs={later}
+        />,
+      )
+      expect(health()).toHaveTextContent('Sin confirmar')
+      expect(health()).not.toHaveTextContent('Correcto')
+    })
+
+    it('a failed refresh is «Sin confirmar» although the data is still there', async () => {
+      let fail = false
+      serve({
+        health: () => (fail ? json({}, 503) : json(healthWithVerdict(BUCKET))),
+        activity: quiet,
+      })
+      const { rerender } = render(<Observer latest={null} />)
+      await waitFor(() => expect(health()).toHaveTextContent('Correcto'))
+      fail = true
+      await vi.advanceTimersByTimeAsync(31_000)
+      rerender(<Observer latest={null} />)
+      await waitFor(() => expect(health()).toHaveTextContent('Sin confirmar'))
+      expect(health()).not.toHaveTextContent('Correcto')
+    })
+
+    it('without any read it is «Sin confirmar»', async () => {
+      serve({ health: () => json({}, 503), activity: quiet })
+      render(<Observer latest={null} />)
+      await settled()
+      expect(health()).toHaveTextContent('Sin confirmar')
+      expect(health()).not.toHaveTextContent('Correcto')
+    })
+
+    it('a read older than this connection is «Sin confirmar»', async () => {
+      serve({ health: () => json(healthWithVerdict(BUCKET)), activity: quiet })
+      const { rerender } = render(<Observer latest={null} />)
+      await waitFor(() => expect(health()).toHaveTextContent('Correcto'))
+      rerender(<Observer latest={null} connectedAtMs={NOW + 5_000} />)
+      expect(health()).toHaveTextContent('Sin confirmar')
+    })
+
+    it('recovers with a new read taken on a valid clock', async () => {
+      let fail = false
+      serve({
+        health: () => (fail ? json({}, 503) : json(healthWithVerdict(BUCKET))),
+        activity: quiet,
+      })
+      const { rerender } = render(<Observer latest={null} />)
+      await waitFor(() => expect(health()).toHaveTextContent('Correcto'))
+      fail = true
+      await vi.advanceTimersByTimeAsync(31_000)
+      rerender(<Observer latest={null} />)
+      await waitFor(() => expect(health()).toHaveTextContent('Sin confirmar'))
+      fail = false
+      await vi.advanceTimersByTimeAsync(31_000)
+      const later = Date.now()
+      serve({
+        health: () =>
+          json(healthWithVerdict(BUCKET, 'ok', 'PF_XBTUSD', later - 5_000)),
+        activity: quiet,
+      })
+      await vi.advanceTimersByTimeAsync(31_000)
+      const now = Date.now()
+      rerender(
+        <Observer
+          latest={null}
+          clock={{ publishedAtMs: now, receivedAtMs: now }}
+          localNowMs={now}
+        />,
+      )
+      await waitFor(() => expect(health()).toHaveTextContent('Correcto'))
+    })
   })
 })

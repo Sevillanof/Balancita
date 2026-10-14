@@ -185,6 +185,11 @@ export default function FuturesTerminal({
           ? Math.floor(firstCandle / 1000) * 1000
           : null,
       entriesOnly: !localDemo,
+      candleSeconds: (Array.isArray(market.candles) ? market.candles : [])
+        .map((candle) => record(candle).time_ms)
+        .filter((ms): ms is number => Number.isSafeInteger(ms))
+        .map((ms) => Math.floor(ms / 1000))
+        .sort((a, b) => a - b),
     })
     if (gap) selectedNotes.push(markerGapNote(gap))
     if (!decisionRows.some((row) => row.id === selectedId))

@@ -136,13 +136,16 @@ export function fillMarkers(
     const code = strategyCode(strategyId)
     const quantity = `${String(fill.quantity_btc)}${options.unit ? ` ${options.unit}` : ''}`
     const text = `${code ? `${code} ` : ''}EJEC. ${direction === 'long' ? 'LONG' : 'SHORT'} ${quantity}`
+    // On the chart only a short tag; the full text shows when selected.
+    const shortText = `${code ? `${code} ` : ''}EJ ${direction === 'long' ? 'L' : 'S'}`
     return [
       {
         id: fill.fill_id,
         time,
         type: 'fill' as const,
         direction,
-        label: options.prefix ? `${options.prefix} · ${text}` : text,
+        label: options.prefix ? `${options.prefix} · ${shortText}` : shortText,
+        detail: options.prefix ? `${options.prefix} · ${text}` : text,
         ...(strategyId ? { strategyId } : {}),
       },
     ]
@@ -175,7 +178,8 @@ export function groupWaitMarkers(
         ? newest
         : {
             ...newest,
-            label: `WAIT ×${members.length}`,
+            label: `W×${members.length}`,
+            detail: `WAIT ×${members.length}`,
             count: members.length,
             memberIds: members.map((member) => member.id),
           },

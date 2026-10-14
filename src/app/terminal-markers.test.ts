@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { markerGap, markerGapNote } from './terminal-markers.ts'
+import {
+  candleForDecision,
+  markerGap,
+  markerGapNote,
+} from './terminal-markers.ts'
 
 const FIRST = 1_000_000
 const entry = (extra: Record<string, unknown> = {}) => ({
@@ -43,5 +47,56 @@ describe('markerGap', () => {
     expect(markerGapNote('before_chart')).toBe(
       'Esta decisión no tiene marcador en el gráfico: ocurrió antes de las velas visibles.',
     )
+  })
+})
+
+describe('candleForDecision', () => {
+  // Candles at minutes 0, 1, 3 (a hole at 2), in seconds.
+  const candles = [600, 660, 780]
+  const at = (ms: number, extra: Record<string, unknown> = {}) => ({
+    decision_time_ms: ms,
+    ...extra,
+  })
+
+  it('finds the candle that covers the instant', () => {
+    expect(candleForDecision(candles, at(665_000)).time).toBe(660)
+    expect(candleForDecision(candles, at(780_000)).time).toBe(780)
+  })
+
+  it('never falls back to an earlier candle across a hole', () => {
+    expect(candleForDecision(candles, at(725_000))).toEqual({
+      time: null,
+      gap: 'no_candle',
+    })
+  })
+
+  it('does not stick an event after the last candle to it', () => {
+    expect(candleForDecision(candles, at(841_000))).toEqual({
+      time: null,
+      gap: 'after_chart',
+    })
+  })
+
+  it('prefers the verdict bucket over the decision time', () => {
+    expect(
+      candleForDecision(candles, at(665_000, { bucket_start_ms: 600_000 }))
+        .time,
+    ).toBe(600)
+  })
+
+  it('snaps prehistory to the first candle only when asked (local fixture)', () => {
+    expect(candleForDecision(candles, at(100_000)).time).toBeNull()
+    expect(candleForDecision(candles, at(100_000), true).time).toBe(600)
+  })
+
+  it('names the hole and the late event through markerGap', () => {
+    const options = {
+      firstCandleMs: 600_000,
+      entriesOnly: true,
+      candleSeconds: candles,
+    }
+    expect(markerGap(at(725_000), options)).toBe('no_candle')
+    expect(markerGap(at(841_000), options)).toBe('after_chart')
+    expect(markerGap(at(665_000), options)).toBeNull()
   })
 })

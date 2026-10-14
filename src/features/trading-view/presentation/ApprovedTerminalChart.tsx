@@ -32,7 +32,10 @@ export type ApprovedTerminalMarker = {
    */
   type: 'entry' | 'exit' | 'discard' | 'decision' | 'proposal' | 'wait' | 'fill'
   direction?: 'long' | 'short' | 'flat'
+  /** Short text painted on the chart (markers pile up). */
   label: string
+  /** Full text, painted instead of `label` while the marker is selected. */
+  detail?: string
   positionId?: string | null
   /** Strategy that took the decision; colours the marker and feeds the filter. */
   strategyId?: string
@@ -560,7 +563,9 @@ export default function ApprovedTerminalChart({
             position: appearance.position,
             color: strategyColor ?? appearance.color,
             shape: appearance.shape,
-            text: `${marker.label}${stands(marker, selectedId) ? ' ◀' : ''}`,
+            text: stands(marker, selectedId)
+              ? `${marker.detail ?? marker.label} ◀`
+              : marker.label,
             id: marker.id,
             size: stands(marker, selectedId) ? 2 : 1,
           },

@@ -261,7 +261,8 @@ describe('executed-operation and WAIT markers', () => {
         time: 120,
         type: 'fill',
         direction: 'long',
-        label: 'C25 EJEC. LONG 0.5 BTC',
+        label: 'C25 EJ L',
+        detail: 'C25 EJEC. LONG 0.5 BTC',
         strategyId: 'c25-pullback-perp-v1',
       },
       {
@@ -269,7 +270,8 @@ describe('executed-operation and WAIT markers', () => {
         time: 120,
         type: 'fill',
         direction: 'short',
-        label: 'EJEC. SHORT 0.5 BTC',
+        label: 'EJ S',
+        detail: 'EJEC. SHORT 0.5 BTC',
       },
     ])
   })
@@ -302,7 +304,8 @@ describe('executed-operation and WAIT markers', () => {
       [order()],
     )
     expect(markers.map((m) => m.id)).toEqual(['fill:21', 'fill:22'])
-    expect(markers.map((m) => m.label)).toEqual([
+    expect(markers.map((m) => m.label)).toEqual(['C25 EJ L', 'C25 EJ L'])
+    expect(markers.map((m) => m.detail)).toEqual([
       'C25 EJEC. LONG 0.2',
       'C25 EJEC. LONG 0.3',
     ])
@@ -314,7 +317,7 @@ describe('executed-operation and WAIT markers', () => {
     expect(
       fillMarkers([fill()], [order()], { prefix: 'Histórico · Gateway D' })[0]
         ?.label,
-    ).toBe('Histórico · Gateway D · C25 EJEC. LONG 0.5')
+    ).toBe('Histórico · Gateway D · C25 EJ L')
   })
 
   it('groups WAIT markers per window and leaves the rest untouched', () => {
@@ -338,7 +341,8 @@ describe('executed-operation and WAIT markers', () => {
     expect(out).toContainEqual(proposal)
     const grouped = out.find((marker) => marker.id === 'c')
     expect(grouped).toMatchObject({
-      label: 'WAIT ×3',
+      label: 'W×3',
+      detail: 'WAIT ×3',
       count: 3,
       memberIds: ['a', 'b', 'c'],
     })

@@ -194,6 +194,71 @@ export interface HealthFreshness {
   receivedAt?: number | null
 }
 
+/**
+ * Whether the B1 read can be trusted now: no refresh error, read since this
+ * connection started, at most `B1_MAX_AGE_MS` old in the browser and in the
+ * gateway's clock (which must be valid). The one rule behind both AHORA's
+ * «actual» and the per-product source health: a stale or failed read never
+ * says «Correcto».
+ */
+export function b1ReadFresh(input: {
+  health: HealthFreshness
+  connectedAtMs: number | null
+  clockOk: boolean
+  nowMs: number
+  localNowMs: number
+}): boolean {
+  const { health, localNowMs, nowMs } = input
+  const generatedAt = health.data?.generatedAtMs
+  return (
+    health.data !== null &&
+    health.error === null &&
+    typeof health.receivedAt === 'number' &&
+    input.connectedAtMs !== null &&
+    health.receivedAt >= input.connectedAtMs &&
+    localNowMs - health.receivedAt <= B1_MAX_AGE_MS &&
+    localNowMs - health.receivedAt >= -CLOCK_SKEW_MS &&
+    input.clockOk &&
+    typeof generatedAt === 'number' &&
+    nowMs - generatedAt <= B1_MAX_AGE_MS &&
+    generatedAt - nowMs <= CLOCK_SKEW_MS
+  )
+}
+
+/**
+ * B1's status for one product's verdict source as AHORA may show it:
+ * the evidence only while the read is fresh and the connection is up
+ * (`confirmed`); otherwise nothing, shown as «Sin confirmar».
+ */
+export function confirmedSourceEvidence(input: {
+  product: string | null
+  connected: boolean
+  connectedAtMs: number | null
+  clock: GatewayClock | null
+  health: HealthFreshness
+  localNowMs: number
+}): { confirmed: boolean; evidence: VerdictSourceEvidence | null } {
+  const clockOk = gatewayClockValid(input.clock, input.localNowMs)
+  const nowMs = clockOk
+    ? gatewayNowMs(input.clock!, input.localNowMs)
+    : input.localNowMs
+  if (
+    !input.connected ||
+    !b1ReadFresh({
+      health: input.health,
+      connectedAtMs: input.connectedAtMs,
+      clockOk,
+      nowMs,
+      localNowMs: input.localNowMs,
+    })
+  )
+    return { confirmed: false, evidence: null }
+  return {
+    confirmed: true,
+    evidence: verdictSourceEvidence(input.health.data, input.product),
+  }
+}
+
 export type ActualityBlocker =
   'disconnected' | 'clock' | 'b1_obsolete' | 'b1_mismatch'
 
@@ -238,19 +303,13 @@ export function assessActuality(input: {
   const blockers: ActualityBlocker[] = []
   if (!connected) blockers.push('disconnected')
   if (!clockOk) blockers.push('clock')
-  const generatedAt = health.data?.generatedAtMs
-  const b1Fresh =
-    health.data !== null &&
-    health.error === null &&
-    typeof health.receivedAt === 'number' &&
-    input.connectedAtMs !== null &&
-    health.receivedAt >= input.connectedAtMs &&
-    localNowMs - health.receivedAt <= B1_MAX_AGE_MS &&
-    localNowMs - health.receivedAt >= -CLOCK_SKEW_MS &&
-    clockOk &&
-    typeof generatedAt === 'number' &&
-    nowMs - generatedAt <= B1_MAX_AGE_MS &&
-    generatedAt - nowMs <= CLOCK_SKEW_MS
+  const b1Fresh = b1ReadFresh({
+    health,
+    connectedAtMs: input.connectedAtMs,
+    clockOk,
+    nowMs,
+    localNowMs,
+  })
   if (!b1Fresh) blockers.push('b1_obsolete')
   const evidence = verdictSourceEvidence(health.data, input.product)
   let standing = decisionStanding(decision, nowMs, evidence)

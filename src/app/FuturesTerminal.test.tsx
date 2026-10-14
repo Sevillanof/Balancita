@@ -874,6 +874,15 @@ describe('FuturesTerminal local scenario presentation', () => {
                 volume_btc: '1',
                 closed: true,
               },
+              {
+                time_ms: decisionTimes[0],
+                open: '100000',
+                high: '100050',
+                low: '99950',
+                close: '100000',
+                volume_btc: '1',
+                closed: false,
+              },
             ],
           },
           state: { analyses: [], orders: [], fills: [] },
@@ -993,7 +1002,7 @@ describe('FuturesTerminal local scenario presentation', () => {
     )
     expect(new Set(visibleMarkers.map((marker) => marker.time)).size).toBe(1)
     expect(visibleMarkers.map((marker) => marker.time)).toEqual([
-      21_540, 21_540, 21_540, 21_540, 21_540,
+      21_600, 21_600, 21_600, 21_600, 21_600,
     ])
     expect(visibleMarkers.map((marker) => marker.shape)).toEqual([
       'square',
@@ -1091,6 +1100,15 @@ describe('FuturesTerminal local scenario presentation', () => {
                 volume_btc: '1',
                 closed: true,
               },
+              {
+                time_ms: 21_600_000,
+                open: '100000',
+                high: '100050',
+                low: '99950',
+                close: '100000',
+                volume_btc: '1',
+                closed: false,
+              },
             ],
           },
           state: { analyses, orders: [], fills: [] },
@@ -1099,14 +1117,14 @@ describe('FuturesTerminal local scenario presentation', () => {
     )
 
     expect(chartHarness.markerSets.at(-1)).toMatchObject(
-      analyses.map((analysis) => ({ id: analysis.analysis_id, time: 21_540 })),
+      analyses.map((analysis) => ({ id: analysis.analysis_id, time: 21_600 })),
     )
     expect(selectedAnalysisId()).toBe('analysis-5')
 
     const reached: (string | undefined)[] = []
     for (let click = 0; click < 5; click += 1) {
       await act(async () =>
-        chartHarness.clickHandlers.at(-1)?.({ time: 21_540 }),
+        chartHarness.clickHandlers.at(-1)?.({ time: 21_600 }),
       )
       reached.push(selectedAnalysisId())
     }
@@ -1118,9 +1136,9 @@ describe('FuturesTerminal local scenario presentation', () => {
       'analysis-5',
     ])
 
-    await act(async () => chartHarness.clickHandlers.at(-1)?.({ time: 21_600 }))
+    await act(async () => chartHarness.clickHandlers.at(-1)?.({ time: 21_660 }))
     expect(selectedAnalysisId()).toBe('analysis-5')
-    await act(async () => chartHarness.clickHandlers.at(-1)?.({ time: 21_480 }))
+    await act(async () => chartHarness.clickHandlers.at(-1)?.({ time: 21_540 }))
     expect(selectedAnalysisId()).toBe('analysis-5')
 
     await act(async () =>
@@ -1129,7 +1147,7 @@ describe('FuturesTerminal local scenario presentation', () => {
         .click(),
     )
     expect(selectedAnalysisId()).toBe('analysis-1')
-    await act(async () => chartHarness.clickHandlers.at(-1)?.({ time: 21_540 }))
+    await act(async () => chartHarness.clickHandlers.at(-1)?.({ time: 21_600 }))
     expect(selectedAnalysisId()).toBe('analysis-2')
   })
 
@@ -1179,6 +1197,8 @@ describe('FuturesTerminal local scenario presentation', () => {
 
 describe('FuturesTerminal on the live gateway with paper execution', () => {
   const T0 = 1_800_000_000_000
+  // Minute offsets (from T0) of the candles the live gateway delivers.
+  let candleOffsets = [-3, -2, -1, 0]
   const liveBootstrap = (status = 'running'): TerminalBootstrap => ({
     schema_version: 1,
     mode: 'paper_live',
@@ -1194,7 +1214,7 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
       schema_version: 'futures-terminal-market.v1',
       as_of_ms: T0,
       interval_ms: 60_000,
-      candles: [-3, -2, -1].map((offset) => ({
+      candles: candleOffsets.map((offset) => ({
         time_ms: T0 + offset * 60_000,
         open: '100000',
         high: '100050',
@@ -1296,6 +1316,7 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
 
   afterEach(() => {
     cleanup()
+    candleOffsets = [-3, -2, -1, 0]
     chartHarness.priceLines = []
     chartHarness.markerSets = []
     vi.unstubAllGlobals()
@@ -1356,7 +1377,7 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
     // A proposal is not an operation: the label says so.
     expect(
       markers.map((marker) => String(marker.text).replace(' ◀', '')),
-    ).toEqual(['WAIT', 'C25 LONG prop.', 'C25 SHORT prop.'])
+    ).toEqual(['W', 'C25 LONG', 'C25 SHORT propuesta'])
   })
 
   it('keeps pause, resume and close visibly disabled with the PS-06 notice, and sends nothing', async () => {
@@ -1698,6 +1719,59 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
       expect(notes()[0]).toMatch(/se reconstruyó a partir de un backfill/)
     })
 
+    it('never pins a decision to an earlier candle when its minute has none (hole)', async () => {
+      candleOffsets = [-4, -3, -1, 0]
+      await renderReady({
+        ...state,
+        analyses: [
+          analysis(1, 'LONG'),
+          analysis(2, 'LONG'),
+          analysis(3, 'SHORT'),
+        ],
+      })
+      // analysis(1) falls in the missing minute: no marker on candle -3.
+      expect(marker('verdict-hash-1')).toBeUndefined()
+      expect(marker('verdict-hash-2')).toBeDefined()
+      expect(marker('verdict-hash-3')).toBeDefined()
+      // It stays in the history and says why it is not on the chart.
+      await pickRow('verdict-hash-1')
+      expect(notes()).toEqual([
+        'Esta decisión no tiene marcador en el gráfico: no hay vela de su minuto en el gráfico (hueco en las velas); sigue en el historial.',
+      ])
+    })
+
+    it('does not glue a decision after the last candle to it', async () => {
+      candleOffsets = [-3, -2, -1]
+      await renderReady({
+        ...state,
+        analyses: [analysis(2, 'LONG'), analysis(3, 'SHORT')],
+      })
+      expect(marker('verdict-hash-2')).toBeDefined()
+      expect(marker('verdict-hash-3')).toBeUndefined()
+      await pickRow('verdict-hash-3')
+      expect(notes()).toEqual([
+        'Esta decisión no tiene marcador en el gráfico: ocurrió después de la última vela disponible.',
+      ])
+    })
+
+    it('uses the verdict bucket, not the later decision time, to find its candle', async () => {
+      // Decided 3 s into minute 0, but about the closed bucket of minute -1.
+      await renderReady({
+        ...state,
+        analyses: [
+          {
+            ...analysis(3, 'LONG'),
+            bucket_start_ms: T0 - 60_000,
+          },
+        ],
+      })
+      expect(marker('verdict-hash-3')).toBeDefined()
+      expect(
+        chartHarness.markerSets.at(-1)?.find((m) => m.id === 'verdict-hash-3')
+          ?.time,
+      ).toBe((T0 - 60_000) / 1000)
+    })
+
     it('opens a decision older than the 100 listed and says it is not in the list', async () => {
       const many = Array.from({ length: 101 }, (_, index) => ({
         ...analysis(2, 'LONG'),
@@ -2009,7 +2083,7 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
     })
     const ejecIds = () =>
       (chartHarness.markerSets.at(-1) ?? [])
-        .filter((m) => String(m.text).includes('EJEC.'))
+        .filter((m) => String(m.id).startsWith('fill:'))
         .map((m) => ({ id: m.id, text: String(m.text) }))
 
     it('draws one marker per fill, partial fills included, with the original ids and quantities', async () => {
@@ -2035,9 +2109,28 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
         expect(ejecIds().map((m) => m.id)).toEqual(['fill:7', 'fill:8']),
       )
       expect(ejecIds().map((m) => m.text)).toEqual([
-        'Histórico · Gateway D · C25 EJEC. LONG 0.2 BTC',
-        'Histórico · Gateway D · C25 EJEC. LONG 0.3 BTC',
+        'Histórico · Gateway D · C25 EJ L',
+        'Histórico · Gateway D · C25 EJ L',
       ])
+    })
+
+    it('does not draw a fill over another candle when its minute has none', async () => {
+      candleOffsets = [-4, -3, -1, 0]
+      await renderLive(
+        withFills(
+          [
+            fill(7, 'o1', { quantity_btc: '0.2', event_time_ms: T0 - 90_000 }),
+            fill(8, 'o1', { quantity_btc: '0.3', event_time_ms: T0 - 30_000 }),
+            fill(9, 'o1', { quantity_btc: '0.1', event_time_ms: T0 - 20_000 }),
+          ],
+          [{ order_id: 'o1', side: 'buy', state: 'filled' }],
+        ),
+      )
+      // fill:7 falls in the missing minute (-2); the two partial fills of the
+      // candle that exists are still drawn, each with its own id.
+      await waitFor(() =>
+        expect(ejecIds().map((m) => m.id)).toEqual(['fill:8', 'fill:9']),
+      )
     })
 
     it('does not invent a marker from a filled order that has no fill', async () => {
@@ -2066,7 +2159,7 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
       await renderLive()
       const legend = document.querySelector('.terminal-chart__legend')!
       expect(legend.textContent).toMatch(/propuesta LONG\/SHORT/)
-      expect(legend.textContent).toMatch(/WAIT \(agrupados\)/)
+      expect(legend.textContent).toMatch(/W = WAIT/)
       expect(legend.textContent).toMatch(/EJEC\. ejecución paper/)
       expect(legend.textContent).toMatch(/salida/)
       expect(legend.textContent).not.toMatch(/entrada larga|entrada corta/)
