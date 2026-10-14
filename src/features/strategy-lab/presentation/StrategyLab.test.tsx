@@ -297,7 +297,7 @@ describe('StrategyLab', () => {
     await user.click(screen.getByRole('button', { name: 'Desactivar' }))
     await screen.findByText(/pasó a desactivada/)
     await user.click(screen.getByRole('button', { name: 'Activar' }))
-    await screen.findByText(/pasó a activa en paper/)
+    await screen.findByText(/pasó a activa en el registro/)
   })
 
   it('deletes a strategy only after two confirmations and its id', async () => {

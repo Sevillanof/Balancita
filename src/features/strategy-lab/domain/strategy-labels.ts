@@ -27,7 +27,7 @@ export type ResearchState =
   | 'registry_note'
 
 export const OPERATIONAL_LABELS: Record<OperationalState, string> = {
-  active: 'Activa en paper',
+  active: 'Activa en el registro',
   shadow: 'En sombra',
   draft: 'Borrador',
   retired: 'Desactivada',
@@ -76,7 +76,8 @@ export const FROZEN_HINT =
   'No cambia de comportamiento hasta 100 operaciones forward (ADR 0001).'
 
 export const OPERATIONAL_BASIS_HINT: Record<string, string> = {
-  registry: 'Estado del registro de estrategias',
+  registry:
+    'Estado del registro de estrategias: no prueba que el proceso corra ahora',
   config:
     'Registrada en un archivo de configuración: no prueba que el proceso esté corriendo',
   none: 'Ninguna fuente confirma este estado',

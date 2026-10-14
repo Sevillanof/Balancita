@@ -166,7 +166,7 @@ test('Estrategias opens on the inventory and every interaction answers', async (
     'Candidata, no fiable',
   )
   await expect(c30.getByTestId('operational-badge')).toHaveText(
-    'Activa en paper',
+    'Activa en el registro',
   )
   await expect(
     page
@@ -184,7 +184,7 @@ test('Estrategias opens on the inventory and every interaction answers', async (
   // Filters.
   await page.getByRole('button', { name: /Cerradas/ }).click()
   await expect(rows).toHaveCount(4)
-  await page.getByRole('button', { name: /Con evidencia de ventaja/ }).click()
+  await page.getByRole('button', { name: /Evidencia preliminar/ }).click()
   await expect(rows).toHaveCount(1)
   await page.getByRole('button', { name: /Todas/ }).click()
   await expect(rows).toHaveCount(10)

@@ -67,6 +67,8 @@ class InventoryTest(unittest.TestCase):
         self.assertEqual(c31["research"]["state"], "unmeasured")
         self.assertIsNone(c31["research"]["backtest"])
         self.assertEqual(c31["operational"]["basis"], "config")
+        self.assertEqual(c31["operational"]["state"], "unverified")
+        self.assertEqual(inv["counts"]["active"], 3)
         self.assertEqual(_row(inv, "kronos-small-1h-h4-v1")["operational"]["state"], "unverified")
         self.assertTrue(_row(inv, "c32-funding-contrarian-24h-perp-v1")["no_backtest"])
 

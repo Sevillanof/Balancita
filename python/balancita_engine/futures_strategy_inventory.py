@@ -188,8 +188,8 @@ def build_inventory(entries, specs, *, config_dir=None, carry=None):
             "description": "Entradas de {}; Qwen decide cada salida.".format(
                 ", ".join(s.split("-")[0].upper() for s in qwen_exit["entry_specs"])),
             "kind": "qwen_exit", "spec_hash": None,
-            # Registered in config with a start; no registry state exists for it.
-            "operational": {"state": "active", "basis": "config", "since_ms": qwen_exit.get("start_ms"),
+            # Registered in config with a start; a config does not prove the process runs now.
+            "operational": {"state": "unverified", "basis": "config", "since_ms": qwen_exit.get("start_ms"),
                             "reason": "registered_in_qwen_exit_config"},
             "frozen": strategy_id in frozen,
             "research": {"state": "unmeasured", "evidence_of_edge": False, "reliable": False,

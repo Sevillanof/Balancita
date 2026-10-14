@@ -698,7 +698,7 @@ export default function StrategyLab({
                 <dd>{inventory.counts.strategies}</dd>
               </div>
               <div>
-                <dt>En forward</dt>
+                <dt>Activas en el registro</dt>
                 <dd>{inventory.counts.active}</dd>
               </div>
               <div>

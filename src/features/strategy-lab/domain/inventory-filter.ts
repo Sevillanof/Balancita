@@ -12,7 +12,7 @@ export const FILTERS: readonly { id: InventoryFilter; label: string }[] = [
   { id: 'frozen', label: 'Congeladas' },
   { id: 'closed', label: 'Cerradas' },
   { id: 'investigating', label: 'En investigación' },
-  { id: 'edge', label: 'Con evidencia de ventaja' },
+  { id: 'edge', label: 'Evidencia preliminar' },
 ]
 
 export function filterCount(inventory: Inventory, filter: InventoryFilter) {

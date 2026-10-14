@@ -343,7 +343,7 @@ export default function InventoryView({
           <p className="inventory__eyebrow">
             Directorio cuantitativo ·{' '}
             <span className="is-up">
-              {inventory.counts.active} experimentos activos en paper
+              {inventory.counts.active} activas en el registro
             </span>
           </p>
           <h2>Inventario de modelos y calificación estadística</h2>

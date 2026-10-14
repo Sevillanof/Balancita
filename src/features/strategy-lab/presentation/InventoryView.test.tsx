@@ -80,12 +80,12 @@ describe('InventoryView (datos de ejemplo)', () => {
     await userEvent.click(screen.getByRole('button', { name: /Cerradas/ }))
     expect(screen.getAllByTestId('inventory-row')).toHaveLength(1)
     await userEvent.click(
-      screen.getByRole('button', { name: /Con evidencia de ventaja/ }),
+      screen.getByRole('button', { name: /Evidencia preliminar/ }),
     )
     expect(screen.getAllByTestId('inventory-row')).toHaveLength(1)
     expect(screen.getByText('X1 Candidata')).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: /Activas/ }))
-    expect(screen.getAllByTestId('inventory-row')).toHaveLength(3)
+    expect(screen.getAllByTestId('inventory-row')).toHaveLength(2)
   })
 
   it('audits a closed strategy in place and opens the detail of the others', async () => {

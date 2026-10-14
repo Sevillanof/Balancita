@@ -89,7 +89,7 @@ export const exampleInventory: Inventory = {
   },
   counts: {
     strategies: 5,
-    active: 3,
+    active: 2,
     frozen: 5,
     closed: 1,
     investigating: 3,
@@ -124,7 +124,7 @@ export const exampleInventory: Inventory = {
       no_backtest: true,
       market: { products: 8, horizon_minutes: null, exit_by: 'qwen' },
       operational: {
-        state: 'active',
+        state: 'unverified',
         basis: 'config',
         since_ms: 1,
         reason: null,
