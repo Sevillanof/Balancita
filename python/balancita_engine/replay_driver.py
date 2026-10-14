@@ -452,8 +452,11 @@ def run_manifest(cfg, data, runner, strategies, spec_identity=None):
                            "synthetic_parity_tests_are_not_a_check_on_real_data": True,
                            "holdout_isolation": {"global_cap": iso(RD.HI_EXCL_MS), "funding_margin_h": RD.FUNDING_MARGIN_MS // HOUR_MS,
                                                  "local_limit": iso(cfg.data_end_ms),
-                                                 "claim": "incremental page reads stopped at the local limit; destroying the pages "
-                                                          "from the cap on does not change the read (test); no OS-level I/O trace"}},
+                                                 "claim": "bytes delivered to the reader are traced per response (reads.funding_stream.responses: "
+                                                          "offsets, lengths, delivered_sha256, max timestamp in the delivered bytes, "
+                                                          "stop reason); a timestamp at or after the cap in delivered bytes aborts the "
+                                                          "run; destroying the pages from the cap on does not change the read (test); "
+                                                          "no OS-level I/O trace (not required)"}},
         "runner_manifest_hash": stable_hash(runner.manifest), "cost_model_hash": cost_model_hash(),
         "build_identity": build_identity(), "engine_behavior": engine_behavior(), "code": code_identity(),
         "reads": data["statements"], "strategy_set": cfg.strategy_set, "window_policy": cfg.window_policy,

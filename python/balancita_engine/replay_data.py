@@ -17,6 +17,7 @@ says nothing about when a candle was known: the replay fixes availability by rul
 
 import hashlib
 import json
+import re
 import sqlite3
 from decimal import Decimal, InvalidOperation
 
@@ -53,6 +54,12 @@ def check_window(lo_ms, hi_excl_ms):
 
 def _plain(value):
     return json.loads(json.dumps(value, sort_keys=True, default=str))
+
+
+_STAMP = re.compile(r'"timestamp"\s*:\s*"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})')
+
+
+_CAP_ISO = "2026-08-02T00:00:00"
 
 
 class _Blob:
@@ -124,6 +131,8 @@ class ReplayDataGate:
         self.db = sqlite3.connect("file:{}?mode=ro".format(path), uri=True)
         self.db.execute("PRAGMA query_only=ON")
         self.funding_bytes_read, self.funding_stopped_at, self.funding_reader, self.funding_bytes_stored = 0, None, None, 0
+        self._reads, self._decoded_max, self._decoded_n, self._stop_reason = [], None, 0, None
+        self._sha, self._ts_max, self._tail = hashlib.sha256(), None, ""
         self.blob_backend = None        # None: blobopen when Python has it, else ctypes; tests may force one
         self.statements = []            # every statement executed with its bounds: the audit trail of what was read
 
@@ -200,9 +209,14 @@ class ReplayDataGate:
             while offset < blob.size:
                 n = min(self.CHUNK, blob.size - offset)
                 raw = blob.read(offset, n)
+                self._reads.append((offset, n, len(raw)))
+                if len(raw) != n:
+                    raise DataError("incremental read returned a different length than requested")
                 offset += n
                 self.funding_bytes_read += n
-                yield decoder.decode(raw, final=offset >= blob.size)
+                text = decoder.decode(raw, final=offset >= blob.size)
+                self._scan_delivered(raw, text)
+                yield text
         finally:
             blob.close()
 
@@ -241,6 +255,7 @@ class ReplayDataGate:
                         raise DataError("funding response ends inside the 'rates' array")
                     continue
                 if buffer[pos] == "]":
+                    self._stop_reason = "end_of_rates_array"
                     return
                 try:
                     item, end = decoder.raw_decode(buffer, pos)
@@ -257,14 +272,53 @@ class ReplayDataGate:
                 if last is not None and start_ms <= last:
                     raise DataError("funding response is not in increasing order: the bound cannot be applied")
                 last = start_ms
+                if start_ms >= HI_EXCL_MS:
+                    raise DataError("a reserved funding period reached the decoder: the isolation guarantee does not hold")
+                self._decoded_n += 1
+                self._decoded_max = start_ms if self._decoded_max is None else max(self._decoded_max, start_ms)
                 if start_ms >= self.hi_excl_ms:
                     self.funding_stopped_at = start_ms
+                    self._stop_reason = "first_period_at_or_after_local_limit"
                     return                           # the first period at or after the limit: stop, read nothing further
                 if start_ms >= self.lo_ms:
                     yield start_ms, rate
                 buffer, pos = buffer[pos:], 0        # keep the buffer small
         finally:
             chunks.close()
+
+    def begin_stream(self):
+        self.funding_stopped_at = None
+        self._reads, self._decoded_max, self._decoded_n, self._stop_reason = [], None, 0, None
+        self._sha, self._ts_max, self._tail = hashlib.sha256(), None, ""
+
+    def _scan_delivered(self, raw, text):
+        """Independent of the parser: hash of every byte delivered and the latest timestamp that appears in them. A timestamp at
+        or after the global cap in delivered bytes is an isolation failure, whatever the parser would have done with it."""
+        self._sha.update(raw)
+        window = self._tail + text
+        for stamp in _STAMP.findall(window):
+            if self._ts_max is None or stamp > self._ts_max:
+                self._ts_max = stamp
+        self._tail = window[-64:]
+        if self._ts_max is not None and self._ts_max >= _CAP_ISO:
+            raise DataError("a reserved funding period reached the reader: the isolation guarantee does not hold")
+
+    def stream_trail(self, sha, bytes_read):
+        """The audit record of one response read: every byte range delivered (summarised, with a hash of the full list), the
+        stop and the periods decoded."""
+        reads = self._reads
+        return {"source": "/".join(self.path.rsplit("/", 2)[-2:]), "sha256": sha,
+                "bytes_read": bytes_read, "bytes_stored": self.funding_bytes_stored,
+                "stopped_at_ms": self.funding_stopped_at, "stop_reason": self._stop_reason or "end_of_blob",
+                "local_limit_ms": self.hi_excl_ms, "read_count": len(reads),
+                "first_read": list(reads[0]) if reads else None, "last_read": list(reads[-1]) if reads else None,
+                "max_offset_excl": max((o + r for o, _, r in reads), default=0),
+                "requested_bytes": sum(n for _, n, _ in reads), "received_bytes": sum(r for _, _, r in reads),
+                "contiguous_from_zero": all(reads[i][0] == (reads[i - 1][0] + reads[i - 1][2] if i else 0) for i in range(len(reads))),
+                "reads_sha256": hashlib.sha256(json.dumps(reads).encode()).hexdigest(),
+                "delivered_sha256": self._sha.hexdigest(), "max_timestamp_in_delivered_bytes": self._ts_max,
+                "periods_decoded": self._decoded_n, "max_decoded_period_ms": self._decoded_max,
+                "read_whole_value": sum(r for _, _, r in reads) >= self.funding_bytes_stored > 0}
 
     def relative_funding(self, product_id):
         """``[(start_ms, relative_rate_text)]`` of the hourly funding periods inside ``[lo, hi_excl)``, first seen wins.
@@ -287,12 +341,11 @@ class ReplayDataGate:
         found, trail, backend = {}, [], None
         for sha in self._response_shas(product_id):
             before = self.funding_bytes_read
-            self.funding_stopped_at = None
+            self.begin_stream()
             for start_ms, rate in self._stream_rates(sha):
                 found.setdefault(start_ms, _decimal_text(rate))
             backend = self.funding_reader
-            trail.append({"sha256": sha, "bytes_read": self.funding_bytes_read - before, "bytes_stored": self.funding_bytes_stored,
-                          "stopped_at_ms": self.funding_stopped_at})
+            trail.append(self.stream_trail(sha, self.funding_bytes_read - before))
         self.statements.append({"name": "funding_stream", "params": [product_id, self.lo_ms, self.hi_excl_ms],
                                 "reader": backend, "chunk_bytes": self.CHUNK, "local_limit_ms": self.hi_excl_ms,
                                 "global_cap_ms": HI_EXCL_MS, "margin_ms": FUNDING_MARGIN_MS, "responses": trail})
