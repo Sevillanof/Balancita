@@ -173,6 +173,9 @@ export default function StrategyLab({
   // «Ver contador» del inventario: lleva al contador de Carry dentro del laboratorio.
   const [carryRequest, setCarryRequest] = useState(0)
   const carryRef = useRef<HTMLDivElement>(null)
+  // Last carry request already served: a later entry to the laboratory from
+  // another view (comparison, detail, tab) must not pull the focus back to Carry.
+  const carryServed = useRef(0)
   const [detailRow, setDetailRow] = useState<InventoryStrategy | null>(null)
   const [inventory, setInventory] = useState<Inventory | null>(null)
   const [market, setMarket] = useState<LabCandles | null>(null)
@@ -474,9 +477,11 @@ export default function StrategyLab({
   }
 
   useEffect(() => {
-    if (carryRequest === 0 || view !== 'lab') return
+    if (carryRequest === 0 || carryRequest === carryServed.current) return
+    if (view !== 'lab') return
     const target = carryRef.current
     if (!target) return
+    carryServed.current = carryRequest
     target.scrollIntoView?.({ block: 'start' })
     target.focus({ preventScroll: true })
   }, [carryRequest, view, api])
@@ -715,7 +720,9 @@ export default function StrategyLab({
     <div className="strategy-lab">
       <StrategyViewTabs
         tabs={VIEW_TABS}
-        current={view === 'comparison' || view === 'detail' ? 'inventory' : view}
+        current={
+          view === 'comparison' || view === 'detail' ? 'inventory' : view
+        }
         onChange={setView}
         trailing={
           inventory && (
