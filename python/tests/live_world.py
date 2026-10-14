@@ -43,6 +43,13 @@ def second_product_db(path, shift_minutes):
             funding_overrides={34 * 24 + 3: "0.003", 34 * 24 + 15: "-0.003"})
 
 
+def dense_quotes_of(candle):
+    """Six quotes a minute (every 10 s, at 5, 15, ... 55 s, interleaved with the first product's): a second product that keeps the
+    source alive under the ingestor's 15 s silence limit, so only one product's silence is a product silence."""
+    o, c = D(candle["open"]), D(candle["close"])
+    return [(candle["bucket_start"] + (5 + 10 * (k - 1)) * SEC, (o + (c - o) * k / 7).quantize(D("0.1"))) for k in range(1, 7)]
+
+
 def quotes_of(candle):
     """Three deterministic quotes inside a minute (at 10, 30 and 50 s), moving from the open to the close, with a 1.0 spread."""
     o, c = D(candle["open"]), D(candle["close"])
@@ -92,7 +99,7 @@ class World(object):
         if self.second is not None and with_quotes:
             for candle in self.second["ones"]:
                 if candle["bucket_start"] >= QUOTE_FROM:
-                    self.second["quotes"] += [q for q in quotes_of(candle) if not any(a <= q[0] < b for a, b in second_product_holes)]
+                    self.second["quotes"] += [q for q in dense_quotes_of(candle) if not any(a <= q[0] < b for a, b in second_product_holes)]
         self.accrual_rate = accrual_rate
         self._write_funding()
 
@@ -120,9 +127,9 @@ class World(object):
             self.source.candle(BTC, candle["bucket_start"], candle["open"], candle["high"], candle["low"], candle["close"],
                                volume=str(candle["volume_btc"]))
             self.next_candle += 1
+        due = []
         while self.next_quote < len(self.quotes) and self.quotes[self.next_quote][0] <= t_ms:
-            t, mid = self.quotes[self.next_quote]
-            self.source.ticker(BTC, t, mid, half_bps="0.05")
+            due.append((self.quotes[self.next_quote][0], BTC, self.quotes[self.next_quote][1]))
             self.next_quote += 1
         if self.second is not None:
             two = self.second
@@ -134,9 +141,10 @@ class World(object):
                                    volume=str(candle["volume_btc"]))
                 two["next_candle"] += 1
             while two["next_quote"] < len(two["quotes"]) and two["quotes"][two["next_quote"]][0] <= t_ms:
-                t, mid = two["quotes"][two["next_quote"]]
-                self.source.ticker(ETH, t, mid, half_bps="0.05")
+                due.append((two["quotes"][two["next_quote"]][0], ETH, two["quotes"][two["next_quote"]][1]))
                 two["next_quote"] += 1
+        for t, product, mid in sorted(due, key=lambda q: (q[0], q[1])):         # the capture writes in arrival order, whatever the product
+            self.source.ticker(product, t, mid, half_bps="0.05")
         self.source.commit()
 
     def snapshot(self, directory):

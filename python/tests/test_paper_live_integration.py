@@ -916,6 +916,8 @@ class TestSourceStaleCancellation(unittest.TestCase):
         self.assertEqual(sorted(evidence[0]["ingestor"]), ["data_gaps", "epoch_changes", "product_silence", "sample_capped",
                                                            "source_silence", "unexplained"])
         self.assertEqual([r for r in session.audit.records() if r["kind"] == "source_stale_refused"], [])
+        self.assertEqual({k: evidence[0]["ingestor"][k] for k in ("source_silence", "product_silence", "unexplained")},
+                         {"source_silence": True, "product_silence": False, "unexplained": False})      # one product: the source itself was silent
         self.assertEqual(session.ingestor.outages, [])                          # the ingestor never called it an outage
         self.assertEqual(session.runner.integrity()["open_cycles"], [])
 
@@ -1157,12 +1159,17 @@ class TestSourceStaleTwoProductsInTheCircuit(unittest.TestCase):
                          [self.orders(cut, BTC)[0]["intent_id"]])
         self.assertEqual([r["product_id"] for r in cut.audit.records() if r["kind"] == "source_loss"], [BTC])
         self.assertEqual(cut.runner.integrity()["open_cycles"], [])
+        # the ingestor's evidence, as the session saw it: only BTC was silent, the source was alive (ETH kept quoting)
+        detected = [r for r in cut.audit.records() if r["kind"] == "source_stale_detected"]
+        self.assertEqual(len(detected), 1)
+        self.assertEqual({k: detected[0]["ingestor"][k] for k in ("product_silence", "source_silence", "unexplained")},
+                         {"product_silence": True, "source_silence": False, "unexplained": False})
         return cut
 
     def test_eth_pending_in_the_hole_of_btc_is_untouched(self):
         cut = self.check(-3)
         entry = self.orders(cut, ETH, "opened")[0]["timeline"]["entry_ms"]
-        self.assertEqual(entry, ENTRY_QUOTE_MS)                            # ETH filled on its own quote, while BTC waited blind
+        self.assertLess(entry, GAP_TO)                                     # ETH filled on its own quote, while BTC waited blind
 
     def test_eth_position_with_its_stop_is_untouched_by_the_hole_of_btc(self):
         cut = self.check(5)
