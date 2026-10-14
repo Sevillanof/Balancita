@@ -1,12 +1,8 @@
 import { Fragment, useEffect, useState } from 'react'
 import { amount } from '../../../shared/finance/format.ts'
 import { DataState } from '../../../shared/mission-control/index.ts'
-import {
-  count,
-  horizonText,
-  netBpPerOp,
-  netUsd,
-} from '../domain/strategy-format.ts'
+import { count, netBpPerOp, netUsd } from '../domain/strategy-format.ts'
+import { marketText, validationDetail } from '../domain/inventory-text.ts'
 import type {
   Inventory,
   InventoryStrategy,
@@ -23,57 +19,6 @@ import {
   OperationalBadge,
   ResearchBadge,
 } from './StrategyStatusBadges.tsx'
-
-function marketText(row: InventoryStrategy) {
-  const parts: string[] = []
-  if (row.market.products)
-    parts.push(
-      row.kind === 'carry'
-        ? `${row.market.products} perpetuos PF_ + contado`
-        : `${row.market.products} perpetuos PF_`,
-    )
-  if (row.market.exit_by === 'qwen') parts.push('Qwen decide la salida')
-  else if (row.market.horizon_minutes != null)
-    parts.push(`horizonte ${horizonText(row.market.horizon_minutes)}`)
-  return parts.length > 0 ? parts.join(' · ') : 'No disponible'
-}
-
-function validationDetail(row: InventoryStrategy, inventory: Inventory) {
-  const backtest = row.research.backtest
-  if (backtest) {
-    const t =
-      backtest.t_stat == null ? 'No disponible' : amount(backtest.t_stat)
-    const tests = backtest.selection_trials
-    return {
-      line: `t = ${t} · prob. deflactada ${
-        backtest.deflated_probability == null
-          ? 'No disponible'
-          : amount(backtest.deflated_probability)
-      } · tramos positivos ${backtest.folds_positive ?? '—'}/${backtest.folds_judged ?? '—'}`,
-      extra:
-        tests == null
-          ? null
-          : tests > 1
-            ? `Elegida entre ${count(tests)} configuraciones`
-            : 'Elegida entre 1 configuración',
-    }
-  }
-  if (row.kind === 'carry')
-    return { line: row.research.text ?? 'Estado no verificado', extra: null }
-  if (row.kind === 'qwen_exit')
-    return {
-      line: `Qwen decide la salida; se juzga con ${count(inventory.forward_min_trades)} operaciones forward.`,
-      extra: null,
-    }
-  if (row.kind === 'model')
-    return { line: 'Resultados en archivo local; sin endpoint.', extra: null }
-  if (row.no_backtest)
-    return {
-      line: 'Sin backtest por diseño: solo cuentan las operaciones posteriores al inicio.',
-      extra: null,
-    }
-  return { line: 'Sin medición comparable para este spec.', extra: null }
-}
 
 /** One strategy row of the inventory. Exported so later views reuse the table. */
 export function InventoryRow({
@@ -266,6 +211,8 @@ type Props = {
   onOpen: (row: InventoryStrategy) => void
   /** The loaded inventory, for the header figures of the page. */
   onLoaded?: (inventory: Inventory | null) => void
+  /** Switches to the experiment comparison (same page, no navigation entry). */
+  onCompare?: () => void
 }
 
 /** Default view of Estrategias: who is active, frozen, closed or under study, and what the evidence says. */
@@ -275,6 +222,7 @@ export default function InventoryView({
   reload,
   onOpen,
   onLoaded,
+  onCompare,
 }: Props) {
   const [inventory, setInventory] = useState<Inventory | null>(null)
   const [failure, setFailure] = useState<string | null>(null)
@@ -353,6 +301,15 @@ export default function InventoryView({
           <h2>Inventario de modelos y calificación estadística</h2>
         </div>
         <div className="inventory__chips">
+          {onCompare && (
+            <button
+              type="button"
+              className="inventory__compare"
+              onClick={onCompare}
+            >
+              Ver comparación
+            </button>
+          )}
           {thresholds.t_reliable != null && (
             <span>
               Fiable: t &gt; {amount(thresholds.t_reliable)} y ≥{' '}
