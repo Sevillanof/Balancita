@@ -18,7 +18,8 @@ Esquema: `balancita-data-quality.v1`. Tiempos en ms epoch.
 
 - Definición: `received_ms − time_ms` por cotización (instante del exchange → instante de recepción), por producto.
 - Entrada: `{product_id, time_ms, received_ms}`. Si falta una marca se cuenta en `missing_stamp` (no se adivina); `received < time` es sesgo de reloj o marca mala: `negative`, fuera de los percentiles.
-- Salida: `n, min, p50, p90, p99, max, evidence, missing_stamp, negative`.
+- `time_ms` debe ser la marca del **exchange** (campo `time` del WebSocket). Las cotizaciones por REST fijan `eventTime` = hora de recepción: dan 0 ms y se marcan `suspect_stamps` (evidencia `insufficient`) en vez de reportarse.
+- Salida: `n, min, p50, p90, p99, max, evidence, missing_stamp, negative, suspect_stamps`.
 - **Hallazgo:** `quote_snapshot` del archivo (`quote-archive.ts`) guarda solo `received_at`. **No tiene el instante del exchange**, así que el archivo no sirve para esta métrica. Hoy solo se puede medir sobre `paper_futures_market_events` (tiene `event_time` y `received_at`, retención 24 h). Ver decisión D1.
 - Lo que sí mide hoy cualquier colector sin cambios: `rtt` de un GET (≈ 230–440 ms desde el contenedor, un instante) y `candle_lag_ms` que ya expone `/api/observability/health`. No son la latencia de recepción de cotizaciones.
 
@@ -33,7 +34,7 @@ Esquema: `balancita-data-quality.v1`. Tiempos en ms epoch.
 ### 2.3 Cobertura de vigilancia de stops (`stop_watch_coverage`)
 
 - Por posición, entre entrada y salida (o ahora si está abierta). Evidencia: cotizaciones aceptadas **después** de la entrada (la que abrió la posición no cuenta) y rangos de velas procesadas después del minuto de entrada.
-- Clases, con el mismo vocabulario que `closed_trade_coverage` del runner (arquitectura §12): `continuous`, `gaps_covered_by_candles`, `gaps_without_evidence`, y `insufficient_evidence` (nunca hubo evidencia: **no** es `continuous` por ser corta).
+- Clases, con el mismo vocabulario que `closed_trade_coverage` del runner (arquitectura §12): `continuous` (exige al menos una cotización; evidencia `observed`), `gaps_covered_by_candles` y `candles_only` (solo velas: el orden dentro de la vela es desconocido, evidencia `estimated`), `gaps_without_evidence` (`uncertain`), y `insufficient_evidence` (nunca hubo evidencia: **no** es `continuous` por ser corta).
 - Un tramo sin cubrir de hasta el umbral se tolera (igual que la auditoría 8C).
 - Es una **implementación independiente** pensada como segunda opinión: la propuesta es compararla con la cobertura que produce el runner cuando 9A esté integrada (ver §5).
 

@@ -63,7 +63,8 @@ def rule_of_three_n(rate, confidence=0.95):
 def receive_latency(quotes, *, min_samples=DEFAULT_MIN_SAMPLES):
     """Per product: ``received_ms - time_ms`` (exchange timestamp to our receipt), in ms.
 
-    Needs both stamps. A quote with only one is counted in ``missing_stamp`` and never guessed. A negative latency is
+    ``time_ms`` must be the *exchange* stamp (WebSocket ``time``); REST polls stamp ``eventTime`` with the receipt time,
+    so they come out as 0 ms and are flagged ``suspect_stamps`` instead of being reported. Needs both stamps. A quote with only one is counted in ``missing_stamp`` and never guessed. A negative latency is
     clock skew or a bad stamp: it is counted in ``negative`` and excluded from the percentiles. The archive
     ``quote_snapshot`` keeps only ``received_at``, so it cannot feed this metric (see the contract, section 2.1).
     """
@@ -77,8 +78,16 @@ def receive_latency(quotes, *, min_samples=DEFAULT_MIN_SAMPLES):
             p["negative"] += 1
         else:
             p["values"].append(int(r) - int(t))
-    return {product: dict(summary(p["values"], min_samples), missing_stamp=p["missing_stamp"], negative=p["negative"])
-            for product, p in sorted(per.items(), key=lambda kv: str(kv[0]))}
+    out = {}
+    for product, p in sorted(per.items(), key=lambda kv: str(kv[0])):
+        r = dict(summary(p["values"], min_samples), missing_stamp=p["missing_stamp"], negative=p["negative"])
+        # every latency exactly 0: ``time_ms`` is almost surely our own receipt time (e.g. REST polls), not the
+        # exchange's; the number would measure nothing
+        r["suspect_stamps"] = bool(p["values"]) and max(p["values"]) == 0
+        if r["suspect_stamps"]:
+            r["evidence"] = INSUFFICIENT
+        out[product] = r
+    return out
 
 
 # ---- 2. silences and coverage ---------------------------------------------------------------------------------
@@ -127,8 +136,9 @@ def stop_watch_coverage(entry_ms, exit_ms, quote_times_ms, candle_ranges=(), *, 
     * ``continuous``: no silence longer than the threshold;
     * ``gaps_covered_by_candles``: every silence lies inside processed candle ranges;
     * ``gaps_without_evidence``: at least one stretch longer than the threshold has neither quote nor candle;
-    * ``insufficient_evidence``: the position never had a watched quote (not even a candle): never ``continuous``
-      for being short.
+    * ``candles_only``: no quote at all, only processed candles (the order inside a candle is unknown: ``estimated``);
+    * ``insufficient_evidence``: neither a quote nor a candle: never ``continuous`` for being short.
+    ``continuous`` requires at least one accepted quote.
     Open positions: pass the current instant as ``exit_ms``.
     """
     ranges = sorted([int(a), int(b)] for a, b in candle_ranges)
@@ -136,15 +146,17 @@ def stop_watch_coverage(entry_ms, exit_ms, quote_times_ms, candle_ranges=(), *, 
     uncovered = []
     for gap in base["gaps"]:
         uncovered += [s for s in _subtract(gap["from_ms"], gap["to_ms"], ranges) if s[1] - s[0] > threshold_ms]
-    if base["quotes"] == 0 and not ranges:
-        cls = "insufficient_evidence"
+    if base["quotes"] == 0:
+        # no quote ever watched the stop: never ``continuous``, however short the position
+        cls = "insufficient_evidence" if not ranges else "candles_only" if not base["gaps"] else \
+            "gaps_without_evidence" if uncovered else "gaps_covered_by_candles"
     elif not base["gaps"]:
         cls = "continuous"
     elif not uncovered:
         cls = "gaps_covered_by_candles"
     else:
         cls = "gaps_without_evidence"
-    evidence = {"continuous": OBSERVED, "gaps_covered_by_candles": ESTIMATED, "gaps_without_evidence": UNCERTAIN}
+    evidence = {"continuous": OBSERVED, "gaps_covered_by_candles": ESTIMATED, "candles_only": ESTIMATED, "gaps_without_evidence": UNCERTAIN}
     return {"class": cls, "evidence": evidence.get(cls, INSUFFICIENT),
             "duration_ms": exit_ms - entry_ms, "quotes_watched": base["quotes"], "silences": base["gaps"],
             "uncovered": [{"from_ms": a, "to_ms": b, "duration_ms": b - a} for a, b in uncovered],

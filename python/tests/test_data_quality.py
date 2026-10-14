@@ -45,6 +45,13 @@ class LatencyTests(unittest.TestCase):
         self.assertEqual(r["PF_ETHUSD"]["evidence"], dq.INSUFFICIENT)
 
 
+class SuspectStampTests(unittest.TestCase):
+    def test_all_zero_latency_is_flagged_not_reported(self):
+        quotes = [{"product_id": "PF_XBTUSD", "time_ms": i, "received_ms": i} for i in range(50)]
+        r = dq.receive_latency(quotes)["PF_XBTUSD"]
+        self.assertEqual((r["suspect_stamps"], r["evidence"]), (True, dq.INSUFFICIENT))
+
+
 class GapTests(unittest.TestCase):
     def test_gaps_longer_than_threshold_only(self):
         r = dq.quote_gaps([10 * S, 20 * S, 200 * S], 0, 300 * S, threshold_ms=120 * S)
@@ -91,6 +98,12 @@ class StopCoverageTests(unittest.TestCase):
     def test_short_position_without_evidence_is_never_continuous(self):
         r = dq.stop_watch_coverage(0, 30 * S, [], threshold_ms=self.T)
         self.assertEqual((r["class"], r["evidence"]), ("insufficient_evidence", dq.INSUFFICIENT))
+
+    def test_short_position_with_only_candles_is_not_continuous(self):
+        r = dq.stop_watch_coverage(0, 60 * S, [], [[0, 60 * S]], threshold_ms=self.T)
+        self.assertEqual((r["class"], r["evidence"]), ("candles_only", dq.ESTIMATED))
+        long = dq.stop_watch_coverage(0, 3600 * S, [], [[0, 3600 * S]], threshold_ms=self.T)
+        self.assertEqual((long["class"], long["evidence"]), ("gaps_covered_by_candles", dq.ESTIMATED))
 
     def test_uncovered_stretch_shorter_than_threshold_is_tolerated(self):
         r = dq.stop_watch_coverage(0, 400 * S, [10 * S, 390 * S], [[10 * S, 300 * S]], threshold_ms=self.T)
