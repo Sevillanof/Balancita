@@ -96,6 +96,13 @@ Limitaciones de esta medición: precios sintéticos con volatilidad constante; u
 
 ## 6. Límites y dependencias
 
+**Requisitos previos a conectar con la captura real (no resueltos; no hay lectura real autorizada):**
+
+- **D-10B-06:** la tabla `paper_futures_data_gaps` de la captura no se usa (se eliminó `SourceReader.gaps()`). Antes de la conexión real hay que decidir cómo se cruzan sus huecos con las caídas que infiere el ingestor.
+- **D-10B-07:** REST y WS se funden en un mismo flujo `ticker:<producto>` sin época ni `rowid` en el evento; falta distinguirlos (época) y conservar el `rowid` como identidad.
+
+**Límites menores declarados:** una fila con `t_ms` igual a la marca ya liberada se cuenta como tardía (`<=`, deliberado: evita que el orden entre lotes dependa de cuándo llegó); si la captura confirma filas tardías durante una caída, el contador de tardías difiere del de una corrida sin caída (D-10B-13); no se cuentan las posiciones sin marca de protección; el comportamiento «reloj parado» del ingestor es el actual, no una regla.
+
 - Datos sintéticos y esquema reconstruido a partir del código de la captura: no se verificó contra la base real (no autorizado). La tabla `paper_futures_official_candles` tiene columna de producto desde la migración 5; una base anterior no la tendría.
 - Marca de agua de 2 s (`hold_ms`) y 45 s (`dead_after_ms`): hipótesis a probar, no valores aprobados.
 - **No es todavía un ingestor funcional completo**: sin `cycle` ni `funding`, que dependen del evaluador y las implementaciones aprobadas de 9A (no se crea un segundo evaluador) y de la correspondencia producto-respuesta de funding.

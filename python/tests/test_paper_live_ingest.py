@@ -623,7 +623,7 @@ class TestSourceOutageVersusQuietMarket(Base):
         self.assertEqual(expired[0]["reasons"], expired2[0]["reasons"])
 
     def test_order_is_not_expired_by_the_clock_while_the_source_is_down(self):
-        """The stop-the-clock rule: during the outage no tick moves the executor past the last evidence plus
+        """Current behavior of the ingestor (not a rule; D-10-01 = B is pending): during the outage no tick moves the executor past the last evidence plus
         ``dead_after_ms`` (+145 s), so the order (deadline +165 s) is still pending when the outage is almost over. In the
         quiet-market case the same order is already expired by then."""
         runner, _ = self.run_order(outage=True, stop_ms=CYCLE + 290 * SEC)
