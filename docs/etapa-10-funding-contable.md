@@ -48,12 +48,14 @@ una respuesta (el runner no usa ninguna de las dos).
 
 ## 3 bis. Modo estricto para datos reales
 
-`parse_response(..., strict=True, reference_price=f, stored_product_id=p)` es obligatorio al leer respuestas reales (D-10F-02).
+`parse_response(..., reference_price=f, stored_product_id=p)` es estricto por defecto (D-10F-06) y lo exige con datos reales (D-10F-02). Las pruebas sintéticas lo desactivan con `strict=False`.
 El producto no figura en el cuerpo de la respuesta: lo declara la fila guardada (`paper_futures_funding_periods.product_id` de
 ese `sha256`) y debe coincidir con el pedido (`product_mismatch`). Cada hora necesita un precio de referencia
 (`reference_price_required`, `reference_price_missing`), porque `absoluto / relativo` cercano al precio es lo que detecta un producto o
 una unidad cruzados; una tasa relativa cero con tasa absoluta distinta de cero también se rechaza (`unit_mismatch`). Las
 tolerancias (5 %, 1 % por hora) y el desfase de 10 minutos son hipótesis sin validar con datos reales.
+
+La publicación se decide antes de buscar contradicciones (D-10F-05): una hora todavía en curso con dos tasas es provisional, no se pone en cuarentena para siempre y no genera un evento fechado después de su llegada. Solo las horas definitivas pueden contradecirse.
 
 Las contradicciones dentro de una respuesta se cuentan aparte (`conflict_inside_response`) y no en `rejected` (D-10F-03).
 

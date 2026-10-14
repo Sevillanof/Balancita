@@ -84,7 +84,7 @@ def _number(value):
 
 def parse_response(raw, product_id, received_ms, *, settle_lag_ms=DEFAULT_SETTLE_LAG_MS,
                    max_abs_relative=DEFAULT_MAX_ABS_RELATIVE, reference_price=None, unit_tolerance=DEFAULT_UNIT_TOLERANCE,
-                   strict=False, stored_product_id=None):
+                   strict=True, stored_product_id=None):
     """Checks one response. Returns ``{"sha256", "server_ms", "unit", "definitive", "provisional", "rejected", "conflicts"}``.
 
     ``definitive``: records ``{product_id, start_ms, end_ms, relative_rate, absolute_rate, unit, known_at_ms, sha256}`` (rates as
@@ -92,11 +92,10 @@ def parse_response(raw, product_id, received_ms, *, settle_lag_ms=DEFAULT_SETTLE
     reason code. A malformed response raises ``FundingAdapterError``. ``reference_price(start_ms)`` (optional) returns the price
     used for the unit cross-check, or ``None`` when there is none for that hour.
 
-    ``strict`` is for real data and is not optional there: the product of the response is not written in its body, so the caller
+    ``strict`` is the default and is what real data requires; synthetic tests opt out with ``strict=False``. The product of the response is not written in its body, so the caller
     must pass the product the stored row declares (``stored_product_id``, from ``paper_futures_funding_periods`` for this response)
     and it must be ``product_id`` (``product_mismatch``); and every hour needs a reference price, since the absolute/relative
-    check is what catches a mixed-up product or unit (``reference_price_required`` / ``reference_price_missing``). Synthetic
-    tests run without it."""
+    check is what catches a mixed-up product or unit (``reference_price_required`` / ``reference_price_missing``)."""
     unit = unit_for(product_id)
     if strict:
         if reference_price is None:
@@ -119,7 +118,7 @@ def parse_response(raw, product_id, received_ms, *, settle_lag_ms=DEFAULT_SETTLE
         raise FundingAdapterError("server_time_invalid", str(error))
     sha = stable_hash(raw)
     out = {"sha256": sha, "server_ms": server_ms, "unit": unit, "definitive": [], "provisional": [], "rejected": [], "conflicts": []}
-    by_start = {}
+    by_start, provisional = {}, {}
     for index, item in enumerate(body["rates"]):
         def bad(reason, **extra):
             out["rejected"].append(dict({"index": index, "reason": reason}, **extra))
@@ -160,7 +159,14 @@ def parse_response(raw, product_id, received_ms, *, settle_lag_ms=DEFAULT_SETTLE
                 if price <= 0 or abs(implied - D(str(price))) > D(str(price)) * unit_tolerance:
                     bad("unit_mismatch", start_ms=start, implied_price=str(implied.quantize(D("0.0001"))))
                     continue
-        record = {"product_id": product_id, "start_ms": start, "end_ms": start + HOUR_MS, "relative_rate": _text(relative),
+        end = start + HOUR_MS
+        reason = "not_settled_at_server_time" if end + settle_lag_ms > server_ms else \
+            "not_settled_at_receipt" if end > received_ms else None
+        if reason:                                      # decided before any conflict is looked for: provisional values never count
+            if start not in provisional:
+                provisional[start] = {"start_ms": start, "reason": reason}
+            continue
+        record = {"product_id": product_id, "start_ms": start, "end_ms": end, "relative_rate": _text(relative),
                   "absolute_rate": _text(absolute), "unit": unit, "known_at_ms": received_ms, "sha256": sha}
         prior = by_start.get(start)
         if prior is not None:
@@ -171,15 +177,8 @@ def parse_response(raw, product_id, received_ms, *, settle_lag_ms=DEFAULT_SETTLE
                 by_start[start] = None
             continue
         by_start[start] = record
-    for start, record in sorted(by_start.items()):
-        if record is None:
-            continue
-        if record["end_ms"] + settle_lag_ms > server_ms:
-            out["provisional"].append({"start_ms": start, "reason": "not_settled_at_server_time"})
-        elif record["end_ms"] > received_ms:
-            out["provisional"].append({"start_ms": start, "reason": "not_settled_at_receipt"})
-        else:
-            out["definitive"].append(record)
+    out["definitive"] = [record for _, record in sorted(by_start.items()) if record is not None]
+    out["provisional"] = [provisional[start] for start in sorted(provisional)]
     return out
 
 
