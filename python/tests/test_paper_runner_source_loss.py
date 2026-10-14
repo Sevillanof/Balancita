@@ -248,13 +248,18 @@ class SourceLoss(Base):
         to = self.FROM + threshold + extra
         return to, r.cancel_for_source_loss(product, self.FROM, to, to if t_ms is None else t_ms, threshold)
 
-    def test_an_order_whose_deadline_is_before_the_limit_is_not_cancelled(self):
+    def decided(self, r, product):
+        return [o for o in r.executor.records if o["product_id"] == product][0]["decided_at_ms"]
+
+    def test_an_order_whose_deadline_is_before_the_limit_is_not_cancelled_it_expires_at_the_declaration(self):
         path, r = self.pending_pair()
         deadline = self.deadlines(r)[BTC]
         to, ids = self.declare(r, BTC, deadline - self.FROM + 5 * SEC)
         self.assertEqual(ids, [])
-        self.assertEqual(self.states(r)[BTC], "pending")
+        self.assertEqual(self.reasons(r)[BTC], ("expired", ["no_quote_in_window"]))
+        self.assertEqual(self.decided(r, BTC), to)                      # the declaration time, no made-up timestamp
         self.assertEqual(len(cancelled_entries(r)), 0)
+        self.assertEqual(self.states(r)[ETH], "pending")
 
     def test_an_order_whose_deadline_equals_the_limit_expires_and_one_millisecond_less_cancels_it(self):
         # the silence is excessive only when it exceeds the threshold: at deadline == gap_from + threshold it did not yet
@@ -280,15 +285,22 @@ class SourceLoss(Base):
         self.assertEqual(len(r.journal.entries), entries)
         self.assertEqual(len(r.cancel_for_source_loss(BTC, self.FROM, self.FROM + TH + 1, self.FROM + TH + 1, TH)), 1)
 
-    def test_an_open_silence_leaves_the_expired_order_to_the_executor_which_expires_it_with_its_own_reason(self):
+    def test_an_open_silence_expires_the_order_without_any_later_quote_or_clock_event(self):
         path, r = self.pending_pair()
         deadline = self.deadlines(r)[BTC]
-        to, ids = self.declare(r, BTC, deadline - self.FROM + 5 * SEC)          # no quote after the silence
-        self.assertEqual((ids, self.states(r)[BTC]), ([], "pending"))
-        r.handle(make_event("clock", {}, t_ms=deadline + SEC, source=SRC, source_offset=4))
-        self.assertEqual(self.reasons(r)[BTC], ("expired", ["no_quote_in_window"]))
-        self.assertEqual(len(cancelled_entries(r)), 0)
+        before = [e["kind"] for e in r.journal.entries]
+        to, ids = self.declare(r, BTC, deadline - self.FROM + 5 * SEC)          # nothing arrived after the silence
+        self.assertEqual((ids, self.reasons(r)[BTC]), ([], ("expired", ["no_quote_in_window"])))
+        added = [e["kind"] for e in r.journal.entries][len(before):]
+        self.assertEqual(added, ["source_loss", "source_loss_expiry"])          # no quote, no clock event
         self.assertEqual(len(r.portfolio.positions), 0)
+
+    def test_the_reason_of_an_order_that_saw_a_quote_is_the_one_of_the_executor(self):
+        path, r = self.single_pending()
+        r.handle(quote(BTC, CYCLE + 2 * SEC + 500, "100010", 3))               # before its latency: seen, not usable
+        deadline = self.deadlines(r)[BTC]
+        self.declare(r, BTC, deadline - self.FROM + 5 * SEC)
+        self.assertEqual(self.reasons(r)[BTC], ("expired", ["no_valid_quote_in_window"]))
 
     def test_a_quote_that_closes_the_silence_after_the_deadline_expires_the_order_with_its_original_reason(self):
         path, r = self.pending_pair()
@@ -309,31 +321,51 @@ class SourceLoss(Base):
         to = self.FROM + threshold + 5 * SEC
         self.assertEqual(r.cancel_for_source_loss(BTC, self.FROM, to, to, threshold), [])
         self.assertEqual(len(r.cancel_for_source_loss(ETH, self.FROM, to, to, threshold)), 1)
-        self.assertEqual(self.reasons(r), {BTC: ("pending", []), ETH: ("cancelled", ["source_stale"])})
+        self.assertEqual(self.reasons(r), {BTC: ("expired", ["no_quote_in_window"]), ETH: ("cancelled", ["source_stale"])})
+
+    def outcome(self, r):
+        return ({o["product_id"]: (o["state"], o.get("reasons"), o.get("timeline")) for o in r.orders()},
+                {x["product_id"]: x["decided_at_ms"] for x in r.executor.records}, r.financial_digest())
+
+    def declared_run(self, name):
+        path, r = self.pending_pair(name)
+        deadline = self.deadlines(r)[BTC]
+        threshold = deadline - self.FROM                         # limit == BTC deadline: BTC expires, ETH is cancelled
+        to = self.FROM + threshold + SEC
+        return path, r, to, threshold
 
     def test_recovery_after_the_expiry_reproduces_the_continuous_run(self):
-        events_after = lambda deadline: [quote(BTC, deadline + 5 * SEC, "100010", 4)]
-        path, r = self.pending_pair("cont")
-        deadline = self.deadlines(r)[BTC]
-        to, _ = self.declare(r, BTC, deadline - self.FROM + 5 * SEC)
-        for e in events_after(deadline):
-            r.handle(e)
-        reference = (self.reasons(r), r.financial_digest(), len(cancelled_entries(r)))
-        r2 = self.recover(path, deadline + 30 * SEC)
-        self.assertEqual((self.reasons(r2), r2.financial_digest(), len(cancelled_entries(r2))), reference)
-
-    def test_recovery_before_the_expiry_keeps_the_cancellation_and_does_not_double_it(self):
-        path, r = self.pending_pair()
-        deadline = self.deadlines(r)[BTC]
-        threshold = deadline - self.FROM                         # BTC is not affected, ETH is
-        to = self.FROM + threshold + 5 * SEC
+        path, r, to, threshold = self.declared_run("cont")
         r.cancel_for_source_loss(BTC, self.FROM, to, to, threshold)
         r.cancel_for_source_loss(ETH, self.FROM, to, to, threshold)
-        r2 = self.recover(path, to + SEC)
-        self.assertEqual(self.reasons(r2)[ETH], ("cancelled", ["source_stale"]))
+        reference = self.outcome(r)
+        r2 = self.recover(path, to + 30 * SEC)
+        self.assertEqual(self.outcome(r2), reference)
         self.assertEqual(len(cancelled_entries(r2)), 1)
+
+    def test_a_crash_between_the_loss_and_its_expiry_is_finished_by_the_recovery_with_the_same_time(self):
+        path, r, to, threshold = self.declared_run("crash")
+        ST.arm("before_journal", 1, "source_loss_expiry")
+        with self.assertRaises(SC.SimulatedCrash):
+            r.cancel_for_source_loss(BTC, self.FROM, to, to, threshold)
+        ST.disarm()
+        r2 = self.recover(path, to + 30 * SEC)
+        self.assertEqual(self.reasons(r2)[BTC], ("expired", ["no_quote_in_window"]))
+        self.assertEqual(self.decided(r2, BTC), to)                      # not the recovery time
+        self.assertEqual(len(cancelled_entries(r2)), 0)
+        self.assertEqual(r2.cancel_for_source_loss(BTC, self.FROM, to, to, threshold), [])
+        self.assertEqual(len([e for e in r2.journal.entries if e["kind"] == "source_loss_expiry"]), 1)
+
+    def test_a_crash_between_the_cancellation_and_the_expiry_is_finished_too(self):
+        path, r, to, threshold = self.declared_run("crash2")
+        r.cancel_for_source_loss(ETH, self.FROM, to, to, threshold)
+        ST.arm("before_journal", 1, "source_loss_expiry")
+        with self.assertRaises(SC.SimulatedCrash):
+            r.cancel_for_source_loss(BTC, self.FROM, to, to, threshold)
+        ST.disarm()
+        r2 = self.recover(path, to + 30 * SEC)
+        self.assertEqual(self.reasons(r2), {BTC: ("expired", ["no_quote_in_window"]), ETH: ("cancelled", ["source_stale"])})
         self.assertEqual(len(r2.portfolio.positions), 0)
-        self.assertEqual(r2.cancel_for_source_loss(ETH, self.FROM, to, to, threshold), [e["data"]["intent_id"] for e in cancelled_entries(r2)])
 
     def test_a_repeated_declaration_with_another_threshold_is_a_conflict(self):
         path, r = self.pending_pair()
