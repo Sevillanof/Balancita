@@ -168,9 +168,7 @@ Envuelve `balancita-paper-runner-report.v2` sin reinterpretarlo:
     "mode": "integration",
     "evidence_class": "not_forward_evidence",
     "execution_class": "observed_quotes", // vs MODELLED_EXECUTION de 9A (§10)
-    "alerts": [
-      /* catálogo §7.3, con severidad, desde cuándo, detalle */
-    ],
+    "alerts": [/* catálogo §7.3, con severidad, desde cuándo, detalle */],
   },
   "ingest": {
     "streams": [
@@ -192,12 +190,8 @@ Envuelve `balancita-paper-runner-report.v2` sin reinterpretarlo:
       "candle_revisions_seen": 0,
     },
   },
-  "positions": [
-    /* §5.4: B5 */
-  ],
-  "intervals": [
-    /* §5.5: B3 */
-  ],
+  "positions": [/* §5.4: B5 */],
+  "intervals": [/* §5.5: B3 */],
 }
 ```
 
