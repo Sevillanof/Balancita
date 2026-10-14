@@ -11,10 +11,12 @@ PaperRunner.cancel_for_source_loss(product_id: str, gap_from_ms: int, gap_to_ms:
 Devuelve los ids de las órdenes afectadas por la pérdida.
 
 - **Qué cancela:** las órdenes pendientes de `product_id` cuya ventana de ejecución (`earliest_fill_ms`, `deadline_ms`) se solapa con `[gap_from_ms, gap_to_ms]` (mismo criterio que `runner_interrupted`: `min(deadline, gap_to) > max(earliest_fill, gap_from)`). No toca órdenes ya llenadas, vencidas o canceladas, otros productos, posiciones abiertas ni sus stops.
-- **Antes de la cotización posterior al corte:** si el executor ya recibió una cotización del producto con `time_ms >= gap_to_ms` se rechaza con `source_loss_after_quote` y no escribe nada. La sesión debe llamar a la API antes de entregar la cotización que cierra la brecha.
+- **Antes de la cotización posterior al corte:** si el executor ya recibió una cotización del producto con `time_ms >= gap_to_ms` se rechaza con `source_loss_after_quote` y no escribe nada. La brecha se mide en el reloj del diario (`t_ms` de los eventos, cuando la fuente persistió la cotización), que puede ser posterior al `time_ms` de la propia cotización; la comprobación usa el más tardío de los dos. La sesión debe llamar a la API antes de entregar la cotización que cierra la brecha.
 - **Idempotente** por `(product_id, gap_from_ms, gap_to_ms)`: una segunda llamada devuelve los mismos ids y no escribe nada.
 - **Durable:** primero se escribe en el diario `source_loss` (clave, ids afectados y ventana descubierta de cada uno) y después un `order_cancelled` por orden con motivo `source_stale`. Si el proceso muere entre ambos, la recuperación termina las cancelaciones anunciadas por el `source_loss` (antes de calcular las órdenes interrumpidas) y no las duplica.
 - **Rechazos explícitos:** `not_processing`, `source_loss_not_applicable` (modo modelado: no hay fuente de cotizaciones), `source_loss_invalid` (producto vacío, no enteros, `gap_to <= gap_from`), `source_loss_in_the_past` (`t_ms` anterior al reloj del runner), `source_loss_after_quote`.
+
+- **Conservadora:** también cancela una orden decidida durante la brecha cuya `earliest_fill_ms` cae dentro de ella (nadie vigilaba la fuente mientras esperaba).
 
 ## Qué cambió
 

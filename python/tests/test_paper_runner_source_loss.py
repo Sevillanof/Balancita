@@ -84,6 +84,36 @@ class SourceLoss(Base):
         self.assertEqual(caught.exception.reason, "source_loss_after_quote")
         self.assertEqual(len(cancelled_entries(r)), 0)
 
+    def test_a_closing_quote_whose_own_time_is_before_the_end_of_the_gap_still_refuses_the_call(self):
+        # D-SS-01: the gap is measured in journal time (persisted_at); the quote's time_ms can be earlier than its t_ms
+        path, r = self.pending_pair()
+        late = quote(BTC, CYCLE + 29 * SEC, "100010", 3)
+        late["payload"]["time_ms"] = CYCLE + 29 * SEC - 800
+        late["payload"]["received_ms"] = CYCLE + 29 * SEC - 800
+        r.handle(late)
+        self.assertEqual(self.states(r)[BTC], "opened")
+        with self.assertRaises(RunnerError) as caught:
+            r.cancel_for_source_loss(BTC, CYCLE + 3 * SEC, CYCLE + 29 * SEC, CYCLE + 29 * SEC)
+        self.assertEqual(caught.exception.reason, "source_loss_after_quote")
+        self.assertEqual(len([e for e in r.journal.entries if e["kind"] == "source_loss"]), 0)
+
+    def test_the_clock_of_the_last_quote_survives_a_recovery(self):
+        path, r = self.pending_pair()
+        late = quote(ETH, CYCLE + 29 * SEC, "3500", 3)
+        late["payload"]["time_ms"] = CYCLE + 29 * SEC - 800
+        late["payload"]["received_ms"] = CYCLE + 29 * SEC - 800
+        r.handle(late)
+        r2 = self.recover(path, CYCLE + 40 * SEC)
+        with self.assertRaises(RunnerError) as caught:
+            r2.cancel_for_source_loss(ETH, CYCLE + 4 * SEC, CYCLE + 29 * SEC, CYCLE + 41 * SEC)
+        self.assertEqual(caught.exception.reason, "source_loss_after_quote")
+
+    def test_an_order_decided_during_the_gap_is_also_cancelled(self):
+        # D-SS-02 (declared, conservative): its earliest fill falls inside the gap
+        path, r = self.pending_pair()
+        ids = r.cancel_for_source_loss(ETH, CYCLE + 2 * SEC, CYCLE + 29 * SEC, CYCLE + 10 * SEC)
+        self.assertEqual(len(ids), 1)
+
     # ---- idempotence -------------------------------------------------------------------------------------------
     def test_a_repeated_call_returns_the_same_ids_and_writes_nothing(self):
         path, r = self.pending_pair()

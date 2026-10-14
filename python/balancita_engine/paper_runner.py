@@ -280,6 +280,7 @@ class PaperRunner(object):
         self.decision_owner = {}     # signal key -> event_id of the cycle that must decide it
         self.cycles_seen = set()     # (product, cycle_ms) of every accepted cycle
         self.open_funding = {}       # event_id -> funding/reconcile event whose reconciliation entry is not recorded yet
+        self.quote_t_ms = {}         # product -> journal time (t_ms) of the last quote delivered: the clock a source loss is measured in
         self.source_losses = {}      # (product, gap_from_ms, gap_to_ms) -> {"intent_ids": [...], "windows": {intent_id: [lo, hi]}}
         self.coverage = {"last_quote": {}, "watch": {}, "candles": {}, "gaps": []}     # market coverage while positions are open (observed facts)
         self.recoveries, self.last_recovery, self.last_checkpoint = 0, None, None
@@ -564,6 +565,7 @@ class PaperRunner(object):
         kind, payload = event["kind"], event["payload"]
         if kind == "quote":
             before = self._open_snapshot()
+            self.quote_t_ms[payload["product_id"]] = max(self.quote_t_ms.get(payload["product_id"], 0), event["t_ms"])
             self.executor.on_quote(payload)
             self._note_quote(payload, before)
             self._settle_closed(before)
@@ -782,7 +784,11 @@ class PaperRunner(object):
         * Only pending orders of that product whose window overlaps the gap are touched; an order that already filled,
           expired or was cancelled, another product, open positions (their stops) and the risk rules are not.
         * It must happen before the quote that ends the gap is delivered: after it the order may already have been judged
-          on that quote, so the call is refused (``source_loss_after_quote``).
+          on that quote, so the call is refused (``source_loss_after_quote``). The gap bounds are in the journal clock
+          (``t_ms`` of the events); the check compares them with both the journal time and the ``time_ms`` of the last
+          quote delivered, whichever is later.
+        * An order whose earliest fill falls inside the gap is cancelled too, even if it was decided during the gap
+          (conservative: nobody was watching the source while it waited).
         * Idempotent by ``(product_id, gap_from_ms, gap_to_ms)``: the loss is a journal entry written before any
           cancellation, so a repeated call, or a recovery that finds the entry with orders still pending, cancels each
           order once and returns the same ids.
@@ -805,8 +811,10 @@ class PaperRunner(object):
         if known is None:
             if self.clock is not None and t_ms < self.clock:
                 raise RunnerError("source_loss_in_the_past", "t_ms {} is before the runner clock {}".format(t_ms, self.clock))
-            last = self.executor.last_quote_ms.get(product_id)
-            if last is not None and last >= gap_to_ms:
+            # the gap is measured in journal time (``t_ms``, when the source persisted the quote), which can be later than the
+            # quote's own ``time_ms``: a quote delivered at either time at or after the end of the gap closes the window
+            last = max(self.executor.last_quote_ms.get(product_id, 0), self.quote_t_ms.get(product_id, 0))
+            if last >= gap_to_ms and last > 0:
                 raise RunnerError("source_loss_after_quote",
                                   "a quote at {} was already delivered; the gap ended at {}".format(last, gap_to_ms))
             affected, windows = [], {}
