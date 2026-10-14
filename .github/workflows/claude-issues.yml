@@ -1,8 +1,9 @@
 name: Claude Issues
 
-# Prueba de comunicación Issue -> Claude. Solo responde con comentarios:
-# sin escritura de código, ramas ni PRs. Solo se activa si el comentario
-# lo escribe Sevillanof en una Issue (no en PRs) e incluye @claude.
+# Comunicación Issue -> Claude. Solo responde con comentarios en la Issue:
+# lectura de PRs, CI y git, sin escritura de código, ramas ni PRs. Solo se
+# activa si el comentario lo escribe Sevillanof en una Issue (no en PRs) e
+# incluye @claude.
 on:
   issue_comment:
     types: [created]
@@ -10,6 +11,8 @@ on:
 permissions:
   contents: read
   issues: write
+  pull-requests: read
+  actions: read
 
 concurrency:
   group: claude-issues-${{ github.event.issue.number }}
@@ -22,16 +25,19 @@ jobs:
       github.event.sender.login == 'Sevillanof' &&
       contains(github.event.comment.body, '@claude')
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 1
-          persist-credentials: false
+          fetch-depth: 0
+      - name: Traer las ramas de las PR (solo lectura)
+        run: git fetch origin '+refs/pull/*/head:refs/remotes/pr/*'
       - uses: anthropics/claude-code-action@v1
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
           claude_args: |
-            --max-turns 8
-            --allowedTools "Read,Glob,Grep"
+            --max-turns 25
+            --allowedTools "Read,Glob,Grep,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr checks:*),Bash(gh pr list:*),Bash(gh issue view:*),Bash(gh run view:*),Bash(gh run list:*),Bash(git log:*),Bash(git diff:*),Bash(git show:*),Bash(git branch:*),Bash(git ls-remote:*)"
