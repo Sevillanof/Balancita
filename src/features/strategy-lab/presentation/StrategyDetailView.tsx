@@ -1017,6 +1017,7 @@ export default function StrategyDetailView({
   const activity = useLoaded(loadActivity, `activity:${row.id}`)
   const stored = detail.state === 'ok' ? detail.value : null
   const plan = plans.state === 'ok' ? (plans.value[row.id] ?? null) : null
+  const code = /^[A-Z]+\d+/.exec(row.name)?.[0] ?? row.name
   const market =
     row.market.products != null ? `${row.market.products} perpetuos PF_` : NA
   return (
@@ -1053,8 +1054,13 @@ export default function StrategyDetailView({
           <button type="button" onClick={onOpenLab}>
             Abrir en Laboratorio
           </button>
-          <a href="/terminal">Ver en Terminal →</a>
+          <a href="/terminal" aria-describedby="detail-terminal-note">
+            Abrir la Terminal →
+          </a>
         </div>
+        <p id="detail-terminal-note" className="detail__actions-note">
+          Abre la Terminal general; no selecciona el experimento {code}.
+        </p>
       </header>
 
       {detail.state === 'error' && (

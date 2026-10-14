@@ -196,6 +196,16 @@ describe('StrategyDetailView (datos de ejemplo)', () => {
     )
   })
 
+  it('offers the general Terminal and does not promise to select the experiment', async () => {
+    view(() => Promise.resolve(report([])))
+    const link = await screen.findByRole('link', { name: /Abrir la Terminal/ })
+    expect(link).toHaveAttribute('href', '/terminal')
+    expect(link).toHaveAccessibleDescription(
+      'Abre la Terminal general; no selecciona el experimento X2.',
+    )
+    expect(screen.queryByText(/Ver en Terminal/)).not.toBeInTheDocument()
+  })
+
   it('draws no chart and states that there is no equity curve', async () => {
     const { container } = view(() => Promise.resolve(report([])))
     await screen.findByTestId('module-operations')

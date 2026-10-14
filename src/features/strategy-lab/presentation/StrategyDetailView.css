@@ -98,6 +98,14 @@
   font-weight: 600;
 }
 
+.detail__actions-note {
+  flex-basis: 100%;
+  margin-top: -4px;
+  color: var(--mc-text-2);
+  font-size: 12px;
+  text-align: right;
+}
+
 .detail__grid {
   display: grid;
   grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);

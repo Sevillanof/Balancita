@@ -324,6 +324,23 @@ test('navigation: Terminal <-> Estrategias <-> inventory <-> detail, no new tabs
   await expect(detail.getByTestId('module-performance')).toContainText(
     'no tiene backtest por diseño',
   )
+  // Detail of C29 -> general Terminal (no C29 selection) -> back.
+  await detail.getByRole('button', { name: 'Estrategias' }).click()
+  await page.getByRole('button', { name: /Detalle de C29/ }).click()
+  await expect(detail.getByRole('heading', { name: /^C29/ })).toBeVisible()
+  await expect(detail.getByText('Ver en Terminal')).toHaveCount(0)
+  const toTerminal = detail.getByRole('link', { name: /Abrir la Terminal/ })
+  await expect(toTerminal).toHaveAccessibleDescription(
+    'Abre la Terminal general; no selecciona el experimento C29.',
+  )
+  await toTerminal.click()
+  await expect(page).toHaveURL(/\/terminal$/)
+  expect(new URL(page.url()).search + new URL(page.url()).hash).toBe('')
+  await expect(page.getByTestId('strategy-detail')).toHaveCount(0)
+  await page.goBack()
+  await expect(page).toHaveURL(/\/estrategias$/)
+  await expect(page.getByTestId('inventory-row')).toHaveCount(10)
+  await page.getByRole('button', { name: /Detalle de C32/ }).click()
   // Detail -> laboratory (explicit action) -> back to the inventory tab.
   await detail.getByRole('button', { name: 'Abrir en Laboratorio' }).click()
   await expect(page.getByRole('tab', { name: 'Laboratorio' })).toHaveAttribute(

@@ -61,7 +61,7 @@
   },
   {
     "method": "GET",
-    "url": "/api-strategies/plans",
+    "url": "/api-live/observability/activity?window=24h",
     "status": 200
   },
   {
@@ -71,7 +71,7 @@
   },
   {
     "method": "GET",
-    "url": "/api-live/observability/activity?window=24h",
+    "url": "/api-strategies/plans",
     "status": 200
   },
   {
