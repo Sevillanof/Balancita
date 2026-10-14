@@ -79,3 +79,13 @@ Stop con evidencia OHLC (estimada); parámetros de ejecución, riesgo y sizing s
 ## Paridad de fuentes de funding (opción B)
 
 `python -m balancita_engine.replay_funding_parity FUENTE_DEL_FORWARD OTRA_BASE PRODUCTO SALIDA.json` compara, solo lectura y dentro del rango autorizado (hasta `cap - 48 h`), la fuente que usa el forward (`server/data/dev-live/futures-market.sqlite`, según `scripts/dev-provider-env.mjs`) con otra base: periodos, tasas, horas faltantes, percentil de `FundingContext` en cada hora publicada y señales de C32. Las pruebas sintéticas no sustituyen la comprobación sobre datos reales.
+
+### Alcances declarados de la paridad
+
+- La señal C32 se compara solo por bandas de percentil (`pct_low`/`pct_high`), no por el valor numérico del percentil.
+- El rango replayable de funding termina en 2026-07-31T00:00Z (tope global menos 48 h). `load_data` rechaza un `data_end` posterior.
+- Las 7-8 horas faltantes por producto son horas desconocidas, no rellenadas. El informe de paridad por producto debe listarlas (`missing_hours_list`) junto con sus registros en la tabla de períodos; las de febrero son solo 2 de ellas.
+
+### Residuo del aislamiento
+
+Aun con el lector incremental, el read-ahead del sistema operativo y su caché de páginas pueden haber tocado bytes posteriores al corte. Esto no se puede descartar sin una traza de E/S del SO; el manifest declara «no OS-level I/O trace».
