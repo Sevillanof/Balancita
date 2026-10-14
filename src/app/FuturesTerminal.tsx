@@ -60,7 +60,8 @@ export default function FuturesTerminal({
   const {
     state,
     connected,
-    serverOffsetMs,
+    serverClock,
+    connectedAtMs,
     error,
     commandPending,
     commandStatus,
@@ -205,10 +206,18 @@ export default function FuturesTerminal({
   )
 
   useEffect(() => {
-    if (bootstrap.mode !== 'paper_live' || quote.receivedAt === null) return
+    if (bootstrap.mode !== 'paper_live') return
+    // Ticks even without a quote: AHORA must notice by itself that the gateway
+    // clock or B1 went stale.
     const timer = setInterval(() => setDisplayClock(Date.now()), 1_000)
     return () => clearInterval(timer)
-  }, [bootstrap.mode, quote.receivedAt])
+  }, [bootstrap.mode])
+
+  // A (re)connection evaluates AHORA from scratch: B1 is read again.
+  const reloadHealth = health.reload
+  useEffect(() => {
+    if (connectedAtMs !== null) reloadHealth()
+  }, [connectedAtMs, reloadHealth])
 
   // Per-process health from the dev supervisor (live gateway only).
   useEffect(() => {
@@ -430,6 +439,12 @@ export default function FuturesTerminal({
                   position={position}
                   positions={positions}
                   orders={orders}
+                  fills={fills}
+                  quantityUnit={
+                    typeof state?.quantity_unit === 'string'
+                      ? state.quantity_unit
+                      : undefined
+                  }
                   historicalLabel={
                     gatewayEngine ? 'Histórico · Gateway D' : undefined
                   }
@@ -452,8 +467,10 @@ export default function FuturesTerminal({
                       ? latestDecision(analyses)
                       : null
                   }
-                  nowMs={displayClock + (serverOffsetMs ?? 0)}
-                  serverClock={serverOffsetMs !== null}
+                  connected={connected}
+                  connectedAtMs={connectedAtMs}
+                  clock={serverClock}
+                  localNowMs={displayClock}
                 >
                   <TerminalDecisions
                     embedded={liveGateway}

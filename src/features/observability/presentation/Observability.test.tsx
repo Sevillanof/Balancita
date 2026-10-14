@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- loosely typed JSON fixtures */
 import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import healthDegraded from '../../../../docs/mission-control/b1/ejemplo-degradado.json'
 import healthHealthy from '../../../../docs/mission-control/b1/ejemplo-saludable.json'
 import activityBusy from '../../../../docs/mission-control/b2/ejemplo-con-actividad.json'
@@ -10,7 +10,7 @@ import activityQuiet from '../../../../docs/mission-control/b2/ejemplo-sin-activ
 import HealthIndicator from './HealthIndicator.tsx'
 import { useHealth } from './useHealth.ts'
 import ObserverPanel from './ObserverPanel.tsx'
-import type { LatestDecision } from './latest-decision.ts'
+import type { GatewayClock, LatestDecision } from './latest-decision.ts'
 
 /**
  * The fixtures are the documented examples the backend tests generate from its
@@ -45,14 +45,29 @@ function serve(routes: {
   return calls
 }
 
-afterEach(() => vi.unstubAllGlobals())
+afterEach(() => {
+  vi.unstubAllGlobals()
+  vi.useRealTimers()
+})
 
-/** B1 as the gateway would report it when its newest verdict is `bucket`. */
-function healthWithVerdict(bucket: number, status = 'ok') {
+/** The browser's clock in the panel tests (fake timers start here). */
+const NOW = 1_791_000_240_000
+
+/**
+ * B1 as the gateway would report it when its newest verdict of `product` is
+ * `bucket`, generated 10 s before NOW on the gateway's clock.
+ */
+function healthWithVerdict(
+  bucket: number,
+  status = 'ok',
+  product = 'PF_XBTUSD',
+  generatedAtMs = NOW - 10_000,
+) {
   const body: any = clone(healthHealthy)
+  body.generated_at_ms = generatedAtMs
   const item = body.components
     .find((c: any) => c.id === 'decisions')
-    .items.find((i: any) => i.product_id === 'PF_XBTUSD')
+    .items.find((i: any) => i.product_id === product)
   item.bucket_start_ms = bucket
   item.status = status
   return body
@@ -64,26 +79,40 @@ function Indicator() {
   return <HealthIndicator data={health.data} error={health.error} />
 }
 
-/** The observer panel with its own B1 read, as the Terminal gives it. */
+type ObserverProps = {
+  product?: string | null
+  latest?: LatestDecision | null
+  connected?: boolean
+  connectedAtMs?: number | null
+  clock?: GatewayClock | null
+  localNowMs?: number
+  children?: React.ReactNode
+}
+
+/**
+ * The observer panel with its own B1 read, as the Terminal gives it. By
+ * default everything holds: connected, a gateway clock that agrees with the
+ * browser's, connection opened a minute ago.
+ */
 function Observer({
   product = 'PF_XBTUSD',
   latest = null,
-  serverClock = true,
+  connected = true,
+  connectedAtMs = NOW - 60_000,
+  clock = { publishedAtMs: NOW, receivedAtMs: NOW },
+  localNowMs = NOW,
   children,
-}: {
-  product?: string | null
-  latest?: LatestDecision | null
-  serverClock?: boolean
-  children?: React.ReactNode
-}) {
+}: ObserverProps) {
   const health = useHealth()
   return (
     <ObserverPanel
       product={product}
       health={health}
       latest={latest}
-      nowMs={1_791_000_240_000}
-      serverClock={serverClock}
+      connected={connected}
+      connectedAtMs={connectedAtMs}
+      clock={clock}
+      localNowMs={localNowMs}
     >
       {children}
     </ObserverPanel>
@@ -190,6 +219,10 @@ describe('HealthIndicator (header)', () => {
 
 describe('ObserverPanel (right column)', () => {
   const quiet = () => json(activityQuiet)
+  // The panel compares every evidence with the browser's clock: pin it.
+  beforeEach(() => {
+    vi.useFakeTimers({ now: NOW, shouldAdvanceTime: true })
+  })
 
   it('never deduces the last decision from an aggregate', async () => {
     serve({ activity: quiet })
@@ -200,7 +233,7 @@ describe('ObserverPanel (right column)', () => {
     )
     // No «Esperando» just because there are no directional proposals.
     expect(screen.queryByText(/Esperando/)).toBeNull()
-    expect(now).toHaveTextContent('Fuente de decisiones (B1)')
+    expect(now).toHaveTextContent('para este producto')
     expect(screen.queryByText('Error')).toBeNull()
   })
 
@@ -221,8 +254,7 @@ describe('ObserverPanel (right column)', () => {
         }}
       />,
     )
-    await screen.findByTestId('observer-now')
-    expect(screen.getByTestId('now-action')).toHaveTextContent('Espera')
+    expect(await screen.findByTestId('now-action')).toHaveTextContent('Espera')
     const detail = screen.getByTestId('now-detail')
     expect(detail).toHaveTextContent('no_directional_proposal')
     expect(detail).toHaveTextContent('Régimen range')
@@ -309,7 +341,7 @@ describe('ObserverPanel (right column)', () => {
         }}
       />,
     )
-    await screen.findByTestId('observer-now')
+    await screen.findByTestId('now-action')
     const source = screen.getByTestId('now-source')
     expect(source).toHaveTextContent('no trae el detalle de las propuestas')
     expect(source).not.toHaveTextContent('Ninguna de las')
@@ -335,11 +367,15 @@ describe('ObserverPanel (right column)', () => {
     )
     await screen.findByTestId('observer-now')
     await waitFor(() =>
-      expect(screen.getByTestId('now-detail')).toHaveAttribute(
+      expect(screen.getByTestId('now-unconfirmed')).toHaveAttribute(
         'data-standing',
         'unconfirmed',
       ),
     )
+    expect(screen.getByTestId('last-decision')).toHaveTextContent(
+      'Sin confirmar',
+    )
+    expect(screen.queryByTestId('now-action')).toBeNull()
     expect(screen.getByTestId('now-unconfirmed')).toHaveTextContent(
       'B1 no confirma',
     )
@@ -364,37 +400,21 @@ describe('ObserverPanel (right column)', () => {
     )
     await screen.findByTestId('observer-now')
     await waitFor(() =>
-      expect(screen.getByTestId('now-detail')).toHaveAttribute(
+      expect(screen.getByTestId('now-unconfirmed')).toHaveAttribute(
         'data-standing',
         'unconfirmed',
       ),
     )
+    expect(screen.getByTestId('last-decision')).toHaveTextContent(
+      'Sin confirmar',
+    )
   })
 
-  it('names the local clock when the gateway time is not known', async () => {
+  it('labels a LONG or SHORT as a proposal, never as an operation', async () => {
     serve({
       health: () => json(healthWithVerdict(1_791_000_060_000)),
       activity: quiet,
     })
-    render(
-      <Observer
-        serverClock={false}
-        latest={{
-          action: 'WAIT',
-          reasonCode: 'x',
-          regime: null,
-          decisionTimeMs: 1_791_000_120_000,
-          bucketStartMs: 1_791_000_060_000,
-          proposals: null,
-        }}
-      />,
-    )
-    await screen.findByTestId('observer-now')
-    expect(screen.getByTestId('now-detail')).toHaveTextContent('(hora local)')
-  })
-
-  it('labels a LONG or SHORT as a proposal, never as an operation', async () => {
-    serve({ activity: quiet })
     render(
       <Observer
         latest={{
@@ -402,12 +422,12 @@ describe('ObserverPanel (right column)', () => {
           reasonCode: 'c26_short_reversion',
           regime: null,
           decisionTimeMs: 1_791_000_120_000,
-          bucketStartMs: null,
+          bucketStartMs: 1_791_000_060_000,
           proposals: null,
         }}
       />,
     )
-    await screen.findByTestId('observer-now')
+    await screen.findByTestId('now-action')
     expect(screen.getByTestId('last-decision')).toHaveTextContent(
       'SHORT propuesta, no operación',
     )
@@ -515,5 +535,216 @@ describe('ObserverPanel (right column)', () => {
     )
     const history = await screen.findByRole('region', { name: 'Historial' })
     expect(history).toHaveTextContent('lista de decisiones del terminal')
+  })
+})
+
+describe('AHORA: a decision is current only with every evidence at once', () => {
+  const quiet = () => json(activityQuiet)
+  const BUCKET = 1_791_000_060_000
+  const decision: LatestDecision = {
+    action: 'LONG',
+    reasonCode: 'c25_long_pullback',
+    regime: 'trend',
+    decisionTimeMs: NOW - 120_000,
+    bucketStartMs: BUCKET,
+    proposals: null,
+  }
+  beforeEach(() => {
+    vi.useFakeTimers({ now: NOW, shouldAdvanceTime: true })
+  })
+  const label = () => screen.getByTestId('last-decision')
+  const settled = async () => {
+    await waitFor(() =>
+      expect(screen.getByTestId('activity-panel')).toBeInTheDocument(),
+    )
+    // Let the B1 read land.
+    await vi.advanceTimersByTimeAsync(50)
+  }
+
+  it('is current when connected, the clock is valid and B1 agrees', async () => {
+    serve({ health: () => json(healthWithVerdict(BUCKET)), activity: quiet })
+    render(<Observer latest={decision} />)
+    expect(await screen.findByTestId('now-action')).toHaveTextContent('LONG')
+    expect(screen.queryByTestId('now-unconfirmed')).toBeNull()
+    expect(label()).not.toHaveTextContent('Sin confirmar')
+  })
+
+  it('goes back to «Sin confirmar» when the WebSocket drops, and re-evaluates from scratch on recovery', async () => {
+    let calls = 0
+    serve({
+      health: () => {
+        calls += 1
+        return json(healthWithVerdict(BUCKET))
+      },
+      activity: quiet,
+    })
+    const { rerender } = render(<Observer latest={decision} />)
+    await screen.findByTestId('now-action')
+
+    // Disconnected: the same decision and the same B1 are no longer current.
+    rerender(
+      <Observer
+        latest={decision}
+        connected={false}
+        connectedAtMs={null}
+        clock={null}
+      />,
+    )
+    expect(label()).toHaveTextContent('Sin confirmar')
+    expect(screen.queryByTestId('now-action')).toBeNull()
+    expect(screen.getByTestId('now-blockers')).toHaveTextContent(
+      'sin conexión WebSocket',
+    )
+
+    // Reconnected: the clock is valid again but the B1 read predates this
+    // connection, so nothing earlier is reused as current.
+    await vi.advanceTimersByTimeAsync(5_000)
+    const reconnectedAt = Date.now()
+    rerender(
+      <Observer
+        latest={decision}
+        connectedAtMs={reconnectedAt}
+        clock={{ publishedAtMs: reconnectedAt, receivedAtMs: reconnectedAt }}
+        localNowMs={reconnectedAt}
+      />,
+    )
+    expect(label()).toHaveTextContent('Sin confirmar')
+    expect(screen.getByTestId('now-blockers')).toHaveTextContent(
+      'lectura de B1',
+    )
+
+    // A new B1 read, taken on this connection, restores it.
+    const before = calls
+    await vi.advanceTimersByTimeAsync(31_000)
+    await waitFor(() => expect(calls).toBeGreaterThan(before))
+    const later = Date.now()
+    rerender(
+      <Observer
+        latest={{ ...decision, decisionTimeMs: later - 30_000 }}
+        connectedAtMs={reconnectedAt}
+        clock={{ publishedAtMs: later, receivedAtMs: later }}
+        localNowMs={later}
+      />,
+    )
+    // Every evidence is now of this connection and agrees: current again.
+    expect(await screen.findByTestId('now-action')).toHaveTextContent('LONG')
+    expect(label()).not.toHaveTextContent('Sin confirmar')
+  })
+
+  it('B1 obsolete: a perfect match read long ago is not evidence of now', async () => {
+    serve({ health: () => json(healthWithVerdict(BUCKET)), activity: quiet })
+    const { rerender } = render(<Observer latest={decision} />)
+    await screen.findByTestId('now-action')
+    const later = NOW + 100_000
+    rerender(
+      <Observer
+        latest={{ ...decision, decisionTimeMs: later - 60_000 }}
+        clock={{ publishedAtMs: later, receivedAtMs: later }}
+        localNowMs={later}
+      />,
+    )
+    expect(label()).toHaveTextContent('Sin confirmar')
+    expect(screen.getByTestId('now-blockers')).toHaveTextContent(
+      'falta, es obsoleta',
+    )
+  })
+
+  it('B1 whose refresh fails is obsolete even though its data is still there', async () => {
+    let fail = false
+    serve({
+      health: () => (fail ? json({}, 503) : json(healthWithVerdict(BUCKET))),
+      activity: quiet,
+    })
+    const { rerender } = render(<Observer latest={decision} />)
+    await screen.findByTestId('now-action')
+    fail = true
+    await vi.advanceTimersByTimeAsync(31_000)
+    rerender(<Observer latest={decision} />)
+    await waitFor(() => expect(label()).toHaveTextContent('Sin confirmar'))
+  })
+
+  it('B1 without a read yet is not confirmation', async () => {
+    serve({ health: () => json({}, 503), activity: quiet })
+    render(<Observer latest={decision} />)
+    await settled()
+    expect(label()).toHaveTextContent('Sin confirmar')
+  })
+
+  it.each([
+    ['no gateway clock yet', null],
+    [
+      'a gateway clock in the future of its arrival',
+      { publishedAtMs: NOW + 30_000, receivedAtMs: NOW },
+    ],
+    [
+      'a gateway message older than a few heartbeats',
+      { publishedAtMs: NOW - 120_000, receivedAtMs: NOW },
+    ],
+    [
+      'no message from the gateway for a minute',
+      { publishedAtMs: NOW - 60_000, receivedAtMs: NOW - 60_000 },
+    ],
+  ])(
+    'an invalid gateway clock (%s) leaves it unconfirmed',
+    async (_name, clock) => {
+      serve({ health: () => json(healthWithVerdict(BUCKET)), activity: quiet })
+      render(<Observer latest={decision} clock={clock} />)
+      await settled()
+      expect(label()).toHaveTextContent('Sin confirmar')
+      expect(screen.getByTestId('now-blockers')).toHaveTextContent(
+        'reloj del gateway',
+      )
+      expect(screen.getByTestId('now-unconfirmed')).toHaveTextContent(
+        '(hora local)',
+      )
+    },
+  )
+
+  it('B1 of another product does not confirm this product’s decision', async () => {
+    // ETH reads this very bucket; XBT (the product on screen) reads an older one.
+    const body = healthWithVerdict(BUCKET - 60_000, 'ok', 'PF_XBTUSD')
+    body.components
+      .find((c: any) => c.id === 'decisions')
+      .items.find((i: any) => i.product_id === 'PF_ETHUSD').bucket_start_ms =
+      BUCKET
+    serve({ health: () => json(body), activity: quiet })
+    render(<Observer latest={decision} />)
+    await settled()
+    expect(label()).toHaveTextContent('Sin confirmar')
+    expect(screen.getByTestId('now-blockers')).toHaveTextContent(
+      'B1 no confirma',
+    )
+  })
+
+  it('B1 with another bucket for the same product does not confirm it', async () => {
+    serve({
+      health: () => json(healthWithVerdict(BUCKET + 60_000)),
+      activity: quiet,
+    })
+    render(<Observer latest={decision} />)
+    await settled()
+    expect(label()).toHaveTextContent('Sin confirmar')
+  })
+
+  it('shows the source health of the selected product, not the global one', async () => {
+    const body = healthWithVerdict(BUCKET)
+    body.components
+      .find((c: any) => c.id === 'decisions')
+      .items.find((i: any) => i.product_id === 'PF_ETHUSD').status = 'error'
+    serve({ health: () => json(body), activity: quiet })
+    const { rerender } = render(<Observer latest={null} product="PF_XBTUSD" />)
+    await waitFor(() =>
+      expect(screen.getByTestId('source-health')).toHaveTextContent('Correcto'),
+    )
+    expect(screen.getByTestId('source-health')).toHaveTextContent('XBT')
+    rerender(<Observer latest={null} product="PF_ETHUSD" />)
+    expect(screen.getByTestId('source-health')).toHaveTextContent('Error')
+    expect(screen.getByTestId('source-health')).toHaveTextContent('ETH')
+    // A product B1 has no reading for says so; it never borrows the global one.
+    rerender(<Observer latest={null} product="PF_NOEXISTE" />)
+    expect(screen.getByTestId('source-health')).toHaveTextContent('Sin datos')
+    expect(screen.getByTestId('source-health')).not.toHaveTextContent(
+      'Correcto',
+    )
   })
 })

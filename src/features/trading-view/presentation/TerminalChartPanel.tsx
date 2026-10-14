@@ -247,6 +247,7 @@ function depthWithin(depth: ChartDepth | null, band: string) {
 
 /** WAIT verdicts closer than this share one marker (a verdict per minute). */
 const WAIT_GROUP_SECONDS = 900
+const NO_FILLS: readonly unknown[] = []
 
 export default function TerminalChartPanel({
   candles,
@@ -260,6 +261,9 @@ export default function TerminalChartPanel({
   position,
   positions,
   orders,
+  fills = NO_FILLS,
+  quantityUnit,
+  proposalLegend = false,
   historicalLabel,
   instrument = `${productPair(product)} perpetuo`,
 }: {
@@ -277,6 +281,12 @@ export default function TerminalChartPanel({
   /** One open position per strategy book (gateway `positions`). */
   positions?: readonly unknown[]
   orders: readonly unknown[]
+  /** Durable fills of the gateway: one EJEC. marker per fill. */
+  fills?: readonly unknown[]
+  /** Base unit of the fills' quantity (the gateway's `quantity_unit`). */
+  quantityUnit?: string
+  /** Live gateway: the legend names proposals, WAIT, EJEC. and exits. */
+  proposalLegend?: boolean
   /** Positions and exits come from a retired book: every one carries this label. */
   historicalLabel?: string
   instrument?: string
@@ -406,12 +416,23 @@ export default function TerminalChartPanel({
     return groupWaitMarkers(
       [
         ...markers,
-        ...fillMarkers(orders, period),
+        ...fillMarkers(fills, orders, {
+          ...period,
+          ...(quantityUnit ? { unit: quantityUnit } : {}),
+        }),
         ...exitMarkers(orders, period),
       ],
       Math.max(intervalSeconds, WAIT_GROUP_SECONDS),
     )
-  }, [markers, orders, shown, intervalSeconds, historicalLabel])
+  }, [
+    markers,
+    orders,
+    fills,
+    quantityUnit,
+    shown,
+    intervalSeconds,
+    historicalLabel,
+  ])
   const strategyIds = useMemo(
     () =>
       [
@@ -676,16 +697,39 @@ export default function TerminalChartPanel({
         />
       )}
       <p className="terminal-chart__legend">
-        <span>
-          <b className="terminal-chart__up">▲</b> entrada larga
-        </span>
-        <span>
-          <b className="terminal-chart__down">▼</b> entrada corta
-        </span>
-        <span>
-          <b style={{ color: colors.info }}>●</b> salida (stop, objetivo,
-          tiempo)
-        </span>
+        {proposalLegend ? (
+          <>
+            <span data-testid="legend-proposal">
+              <b className="terminal-chart__up">▲</b>
+              <b className="terminal-chart__down">▼</b> propuesta LONG/SHORT (no
+              es una operación)
+            </span>
+            <span data-testid="legend-wait">
+              <b style={{ color: colors.muted }}>◌</b> WAIT (agrupados)
+            </span>
+            <span data-testid="legend-fill">
+              <b className="terminal-chart__up">■</b> EJEC. ejecución paper (un
+              marcador por fill)
+            </span>
+            <span data-testid="legend-exit">
+              <b style={{ color: colors.info }}>●</b> salida (stop, objetivo,
+              tiempo)
+            </span>
+          </>
+        ) : (
+          <>
+            <span>
+              <b className="terminal-chart__up">▲</b> entrada larga
+            </span>
+            <span>
+              <b className="terminal-chart__down">▼</b> entrada corta
+            </span>
+            <span>
+              <b style={{ color: colors.info }}>●</b> salida (stop, objetivo,
+              tiempo)
+            </span>
+          </>
+        )}
         {panes.some((pane) => pane.id === 'flow') && (
           <span>
             Compra/venta: volumen agresor comprador arriba, vendedor abajo

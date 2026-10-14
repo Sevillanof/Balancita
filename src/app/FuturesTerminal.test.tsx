@@ -7,7 +7,7 @@ import {
   waitFor,
   within,
 } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import FuturesTerminal from './FuturesTerminal.tsx'
 import type {
   TerminalBootstrap,
@@ -15,6 +15,7 @@ import type {
 } from '../features/connected-trading/infrastructure/terminal-stream-client.ts'
 import { parseTerminalEnvelope } from '../features/connected-trading/infrastructure/terminal-stream-client.ts'
 import { reasonLabel } from './terminal-copy.ts'
+import healthHealthy from '../../docs/mission-control/b1/ejemplo-saludable.json'
 
 type ChartClickParameter = {
   hoveredInfo?: { objectId?: string }
@@ -1986,6 +1987,228 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
         screen.queryByRole('group', { name: 'Historial del gateway' }),
       ).toBeNull()
       expect(screen.queryByText('Posición actual: No disponible')).toBeNull()
+    })
+  })
+
+  describe('executed operations (EJEC.) come from the durable fills', () => {
+    const fill = (id: number, order: string, extra = {}) => ({
+      fill_id: `fill:${id}`,
+      order_id: order,
+      side: 'buy',
+      quantity_btc: '0.2',
+      price_usd_per_btc: '100011',
+      reduce_only: false,
+      event_time_ms: T0 - 90_000,
+      ...extra,
+    })
+    const withFills = (fills: unknown[], orders: unknown[]) => ({
+      ...state,
+      quantity_unit: 'BTC',
+      orders,
+      fills,
+    })
+    const ejecIds = () =>
+      (chartHarness.markerSets.at(-1) ?? [])
+        .filter((m) => String(m.text).includes('EJEC.'))
+        .map((m) => ({ id: m.id, text: String(m.text) }))
+
+    it('draws one marker per fill, partial fills included, with the original ids and quantities', async () => {
+      await renderLive(
+        withFills(
+          [
+            fill(7, 'o1', { quantity_btc: '0.2', event_time_ms: T0 - 90_000 }),
+            fill(8, 'o1', { quantity_btc: '0.3', event_time_ms: T0 - 70_000 }),
+            fill(9, 'o1', { side: 'sell', reduce_only: true }),
+          ],
+          [
+            {
+              order_id: 'o1',
+              side: 'buy',
+              state: 'filled',
+              reduce_only: false,
+              strategy_id: 'c25-pullback-perp-v1',
+            },
+          ],
+        ),
+      )
+      await waitFor(() =>
+        expect(ejecIds().map((m) => m.id)).toEqual(['fill:7', 'fill:8']),
+      )
+      expect(ejecIds().map((m) => m.text)).toEqual([
+        'Histórico · Gateway D · C25 EJEC. LONG 0.2 BTC',
+        'Histórico · Gateway D · C25 EJEC. LONG 0.3 BTC',
+      ])
+    })
+
+    it('does not invent a marker from a filled order that has no fill', async () => {
+      await renderLive(
+        withFills(
+          [],
+          [
+            {
+              order_id: 'o-orphan',
+              side: 'buy',
+              state: 'filled',
+              status: 'filled',
+              reduce_only: false,
+              closed_at_ms: T0 - 90_000,
+            },
+          ],
+        ),
+      )
+      await waitFor(() =>
+        expect(chartHarness.markerSets.at(-1)?.length).toBeGreaterThan(0),
+      )
+      expect(ejecIds()).toEqual([])
+    })
+
+    it('names proposals, WAIT, EJEC. and exits in the visible legend', async () => {
+      await renderLive()
+      const legend = document.querySelector('.terminal-chart__legend')!
+      expect(legend.textContent).toMatch(/propuesta LONG\/SHORT/)
+      expect(legend.textContent).toMatch(/WAIT \(agrupados\)/)
+      expect(legend.textContent).toMatch(/EJEC\. ejecución paper/)
+      expect(legend.textContent).toMatch(/salida/)
+      expect(legend.textContent).not.toMatch(/entrada larga|entrada corta/)
+    })
+  })
+
+  describe('AHORA is current only with the socket, a valid gateway clock and B1', () => {
+    const BUCKET = T0 - 60_000
+    // The clock the browser and the gateway share in these tests.
+    const AT = T0 + 10_000
+    const healthBody = (bucket: number, generatedAtMs = AT - 5_000) => {
+      const body = JSON.parse(JSON.stringify(healthHealthy))
+      body.generated_at_ms = generatedAtMs
+      const item = body.components
+        .find((c: { id: string }) => c.id === 'decisions')
+        .items.find((i: { product_id: string }) => i.product_id === 'PF_XBTUSD')
+      item.bucket_start_ms = bucket
+      return body
+    }
+    const ahoraState = {
+      ...state,
+      analyses: [
+        {
+          ...analysis(3, 'SHORT'),
+          decision_time_ms: AT - 20_000,
+          bucket_start_ms: BUCKET,
+        },
+      ],
+    }
+    let healthCalls = 0
+    let healthBucket = BUCKET
+    const stubFetch = () => {
+      healthCalls = 0
+      healthBucket = BUCKET
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (input: string) => {
+          const json = (body: unknown) =>
+            new Response(JSON.stringify(body), {
+              status: 200,
+              headers: { 'Content-Type': 'application/json' },
+            })
+          if (String(input).includes('/observability/health')) {
+            healthCalls += 1
+            return json(healthBody(healthBucket))
+          }
+          return new Response('{}', { status: 404 })
+        }),
+      )
+    }
+    const open = async (publishedAt = AT) => {
+      vi.stubGlobal('WebSocket', TerminalSocket)
+      render(
+        <FuturesTerminal bootstrap={liveBootstrap()} product="PF_XBTUSD" />,
+      )
+      await waitFor(() => expect(TerminalSocket.latest).toBeDefined())
+      TerminalSocket.latest!.publish(
+        envelope(
+          'snapshot',
+          0,
+          { watermark: 0, state: ahoraState },
+          publishedAt,
+          'live-market-view',
+        ),
+      )
+      await screen.findByText('Saldo USD')
+    }
+    const label = () => screen.getByTestId('last-decision')
+
+    beforeEach(() => {
+      // Only the clock is faked: the sockets, timers and fetch stay real.
+      vi.useFakeTimers({ toFake: ['Date'], now: AT })
+      stubFetch()
+      TerminalSocket.latest = undefined
+    })
+    afterEach(() => vi.useRealTimers())
+
+    it('is current when connected, the clock is valid and B1 reads the same bucket', async () => {
+      await open()
+      expect(await screen.findByTestId('now-action')).toHaveTextContent('SHORT')
+      expect(label()).not.toHaveTextContent('Sin confirmar')
+    })
+
+    it('falls back to «Sin confirmar» on disconnection and evaluates again from scratch on recovery', async () => {
+      await open()
+      await screen.findByTestId('now-action')
+      const readsBefore = healthCalls
+      const first = TerminalSocket.latest!
+      act(() => first.onclose?.())
+      await waitFor(() => expect(label()).toHaveTextContent('Sin confirmar'))
+      expect(screen.queryByTestId('now-action')).toBeNull()
+      expect(screen.getByTestId('now-blockers')).toHaveTextContent(
+        'sin conexión WebSocket',
+      )
+      // The stream reconnects by itself: until it delivers a message of the
+      // new connection there is no valid gateway clock, hence no «actual».
+      await waitFor(() => expect(TerminalSocket.latest).not.toBe(first))
+      expect(screen.queryByTestId('now-action')).toBeNull()
+      await act(async () => {
+        TerminalSocket.latest!.publish(
+          envelope(
+            'snapshot',
+            0,
+            { watermark: 0, state: ahoraState },
+            AT,
+            'live-market-view',
+          ),
+        )
+      })
+      // B1 was read again for the new connection, not reused.
+      await waitFor(() => expect(healthCalls).toBeGreaterThan(readsBefore))
+      expect(await screen.findByTestId('now-action')).toHaveTextContent('SHORT')
+    })
+
+    it('goes back to «Sin confirmar» when the gateway goes silent and its clock gets old', async () => {
+      await open()
+      await screen.findByTestId('now-action')
+      // A minute and a half of silence: no heartbeat, B1 not refreshed.
+      vi.setSystemTime(AT + 90_000)
+      await waitFor(() => expect(label()).toHaveTextContent('Sin confirmar'), {
+        timeout: 4_000,
+      })
+      expect(screen.getByTestId('now-blockers')).toHaveTextContent(
+        'reloj del gateway',
+      )
+    })
+
+    it('does not trust a gateway clock stamped in the future', async () => {
+      await open(AT + 600_000)
+      await waitFor(() => expect(healthCalls).toBeGreaterThan(0))
+      await waitFor(() => expect(label()).toHaveTextContent('Sin confirmar'))
+      expect(screen.queryByTestId('now-action')).toBeNull()
+    })
+
+    it('stays unconfirmed when B1 reads another bucket', async () => {
+      healthBucket = BUCKET - 60_000
+      await open()
+      await waitFor(() => expect(healthCalls).toBeGreaterThan(0))
+      await waitFor(() => expect(label()).toHaveTextContent('Sin confirmar'))
+      expect(screen.getByTestId('now-blockers')).toHaveTextContent(
+        'B1 no confirma',
+      )
     })
   })
 })

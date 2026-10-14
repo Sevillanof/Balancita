@@ -83,25 +83,47 @@ export function exitMarkers(
 }
 
 /**
- * Operations actually executed: filled, non-reduce-only orders of paper
- * execution D, drawn at their fill time. They are read from the orders alone;
- * no decision is linked to them (the record that would link them is not here).
+ * Operations actually executed, one marker per DURABLE FILL the gateway
+ * delivers (`state.fills`, built from the engine's `order_filled` events), not
+ * per order: a partial fill is its own marker with its own quantity. Each
+ * keeps the fill's original id, order id, time and quantity. Reduce-only fills
+ * are exits, not entries. No decision is linked to them (the record that would
+ * link them is not here); `orders` only lends the strategy's code to the
+ * label, through the fill's own `order_id`.
  */
 export function fillMarkers(
-  orders: readonly unknown[],
-  options: { from?: number; to?: number; prefix?: string } = {},
+  fills: readonly unknown[],
+  orders: readonly unknown[] = [],
+  options: {
+    from?: number
+    to?: number
+    prefix?: string
+    /** Unit of the quantity (the product's base), e.g. «BTC». */
+    unit?: string
+  } = {},
 ): ApprovedTerminalMarker[] {
-  return orders.flatMap((value) => {
+  const strategyOf = new Map<string, string>()
+  for (const value of orders) {
     const order = recordOf(value)
-    const at = Number(order.closed_at_ms)
-    const direction =
-      order.side === 'buy' ? 'long' : order.side === 'sell' ? 'short' : null
     if (
-      order.state !== 'filled' ||
-      order.reduce_only === true ||
+      typeof order.order_id === 'string' &&
+      typeof order.strategy_id === 'string'
+    )
+      strategyOf.set(order.order_id, order.strategy_id)
+  }
+  return fills.flatMap((value) => {
+    const fill = recordOf(value)
+    const at = Number(fill.event_time_ms)
+    const direction =
+      fill.side === 'buy' ? 'long' : fill.side === 'sell' ? 'short' : null
+    const amount = Number(fill.quantity_btc)
+    if (
+      fill.reduce_only === true ||
       direction === null ||
-      typeof order.order_id !== 'string' ||
-      !Number.isSafeInteger(at)
+      typeof fill.fill_id !== 'string' ||
+      typeof fill.order_id !== 'string' ||
+      !Number.isSafeInteger(at) ||
+      !(amount > 0)
     )
       return []
     const time = Math.floor(at / 1000)
@@ -110,13 +132,13 @@ export function fillMarkers(
       (options.to !== undefined && time > options.to)
     )
       return []
-    const strategyId =
-      typeof order.strategy_id === 'string' ? order.strategy_id : undefined
+    const strategyId = strategyOf.get(fill.order_id)
     const code = strategyCode(strategyId)
-    const text = `${code ? `${code} ` : ''}EJEC. ${direction === 'long' ? 'LONG' : 'SHORT'}`
+    const quantity = `${String(fill.quantity_btc)}${options.unit ? ` ${options.unit}` : ''}`
+    const text = `${code ? `${code} ` : ''}EJEC. ${direction === 'long' ? 'LONG' : 'SHORT'} ${quantity}`
     return [
       {
-        id: `fill:${order.order_id}`,
+        id: fill.fill_id,
         time,
         type: 'fill' as const,
         direction,

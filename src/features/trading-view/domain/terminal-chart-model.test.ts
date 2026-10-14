@@ -225,49 +225,96 @@ describe('lines per strategy book', () => {
 })
 
 describe('executed-operation and WAIT markers', () => {
-  const filled = (extra: Record<string, unknown> = {}) => ({
+  const order = (extra: Record<string, unknown> = {}) => ({
     order_id: 'o1',
-    state: 'filled',
-    side: 'buy',
-    reduce_only: false,
-    closed_at_ms: 120_000,
     strategy_id: 'c25-pullback-perp-v1',
     ...extra,
   })
+  const fill = (extra: Record<string, unknown> = {}) => ({
+    fill_id: 'fill:11',
+    order_id: 'o1',
+    side: 'buy',
+    quantity_btc: '0.5',
+    price_usd_per_btc: '100000',
+    reduce_only: false,
+    event_time_ms: 120_000,
+    ...extra,
+  })
 
-  it('draws only filled, non-reduce-only orders with a known side, from the order alone', () => {
-    const markers = fillMarkers([
-      filled(),
-      filled({ order_id: 'o2', side: 'sell', strategy_id: undefined }),
-      filled({ order_id: 'o3', reduce_only: true }),
-      filled({ order_id: 'o4', state: 'open' }),
-      filled({ order_id: 'o5', side: 'hold' }),
-      filled({ order_id: 'o6', closed_at_ms: undefined }),
-    ])
+  it('draws one marker per durable fill with its original id, time and quantity', () => {
+    const markers = fillMarkers(
+      [
+        fill(),
+        fill({ fill_id: 'fill:12', order_id: 'o2', side: 'sell' }),
+        fill({ fill_id: 'fill:13', reduce_only: true }),
+        fill({ fill_id: 'fill:14', side: 'hold' }),
+        fill({ fill_id: 'fill:15', event_time_ms: undefined }),
+        fill({ fill_id: undefined }),
+        fill({ fill_id: 'fill:16', quantity_btc: '0' }),
+      ],
+      [order(), order({ order_id: 'o2', strategy_id: undefined })],
+      { unit: 'BTC' },
+    )
     expect(markers).toEqual([
       {
-        id: 'fill:o1',
+        id: 'fill:11',
         time: 120,
         type: 'fill',
         direction: 'long',
-        label: 'C25 EJEC. LONG',
+        label: 'C25 EJEC. LONG 0.5 BTC',
         strategyId: 'c25-pullback-perp-v1',
       },
       {
-        id: 'fill:o2',
+        id: 'fill:12',
         time: 120,
         type: 'fill',
         direction: 'short',
-        label: 'EJEC. SHORT',
+        label: 'EJEC. SHORT 0.5 BTC',
       },
     ])
   })
 
-  it('keeps fills inside the period and names the history source', () => {
-    expect(fillMarkers([filled()], { from: 200 })).toEqual([])
+  it('never reads the order state: a filled order without fills draws nothing', () => {
     expect(
-      fillMarkers([filled()], { prefix: 'Histórico · Gateway D' })[0]?.label,
-    ).toBe('Histórico · Gateway D · C25 EJEC. LONG')
+      fillMarkers(
+        [],
+        [order({ state: 'filled', side: 'buy', closed_at_ms: 120_000 })],
+      ),
+    ).toEqual([])
+    // A fill still draws when its order is not in the (trimmed) order list.
+    expect(fillMarkers([fill()], [])).toHaveLength(1)
+  })
+
+  it('draws every partial fill of one order as its own marker with its quantity', () => {
+    const markers = fillMarkers(
+      [
+        fill({
+          fill_id: 'fill:21',
+          quantity_btc: '0.2',
+          event_time_ms: 120_000,
+        }),
+        fill({
+          fill_id: 'fill:22',
+          quantity_btc: '0.3',
+          event_time_ms: 125_000,
+        }),
+      ],
+      [order()],
+    )
+    expect(markers.map((m) => m.id)).toEqual(['fill:21', 'fill:22'])
+    expect(markers.map((m) => m.label)).toEqual([
+      'C25 EJEC. LONG 0.2',
+      'C25 EJEC. LONG 0.3',
+    ])
+    expect(markers.map((m) => m.time)).toEqual([120, 125])
+  })
+
+  it('keeps fills inside the period and names the history source', () => {
+    expect(fillMarkers([fill()], [], { from: 200 })).toEqual([])
+    expect(
+      fillMarkers([fill()], [order()], { prefix: 'Histórico · Gateway D' })[0]
+        ?.label,
+    ).toBe('Histórico · Gateway D · C25 EJEC. LONG 0.5')
   })
 
   it('groups WAIT markers per window and leaves the rest untouched', () => {

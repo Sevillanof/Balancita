@@ -7,6 +7,7 @@ import {
 import { applyTerminalEvents } from '../features/connected-trading/infrastructure/terminal-state.ts'
 import { createTerminalBatcher } from '../features/connected-trading/infrastructure/terminal-batch.ts'
 import { record } from '../shared/wire/decode.ts'
+import type { GatewayClock } from '../features/observability/presentation/latest-decision.ts'
 
 export type ViewState = Record<string, unknown>
 
@@ -26,10 +27,13 @@ export function useTerminalStream({
 }) {
   const [state, setState] = useState<ViewState | null>(null)
   const [connected, setConnected] = useState(false)
-  // Gateway clock minus this browser's clock, read from the envelopes the
-  // gateway stamps when it sends them (snapshot, heartbeat). Null until one
-  // arrives: nothing then claims to be on the gateway's time.
-  const [serverOffsetMs, setServerOffsetMs] = useState<number | null>(null)
+  // The gateway's clock as its last snapshot/heartbeat of THIS connection
+  // delivered it (`published_at`) with the browser time it arrived at. Null
+  // until one arrives and again as soon as the socket drops: nothing carries
+  // over from a previous connection and nothing claims the gateway's time.
+  const [serverClock, setServerClock] = useState<GatewayClock | null>(null)
+  // Browser time the current connection opened; null while disconnected.
+  const [connectedAtMs, setConnectedAtMs] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [commandPending, setCommandPending] = useState(false)
   const [commandStatus, setCommandStatus] = useState('')
@@ -59,6 +63,8 @@ export function useTerminalStream({
       socket = new WebSocket(terminalWebSocketUrl(apiBase, product))
       socketRef.current = socket
       socket.onopen = () => {
+        setServerClock(null)
+        setConnectedAtMs(Date.now())
         setConnected(true)
         retryDelay = 500
         socket?.send(
@@ -95,7 +101,10 @@ export function useTerminalStream({
           (event.type === 'snapshot' || event.type === 'heartbeat') &&
           event.run_id === activeRunRef.current
         )
-          setServerOffsetMs(event.published_at - Date.now())
+          setServerClock({
+            publishedAtMs: event.published_at,
+            receivedAtMs: Date.now(),
+          })
         if (event.type === 'snapshot') {
           if (event.run_id !== activeRunRef.current) {
             // Only a requested new run may move the view to another run.
@@ -206,6 +215,8 @@ export function useTerminalStream({
       }
       socket.onclose = () => {
         setConnected(false)
+        setConnectedAtMs(null)
+        setServerClock(null)
         if (cancelled) return
         retryTimer = setTimeout(openSocket, retryDelay)
         retryDelay = Math.min(10_000, retryDelay * 2)
@@ -245,7 +256,8 @@ export function useTerminalStream({
   return {
     state,
     connected,
-    serverOffsetMs,
+    serverClock,
+    connectedAtMs,
     error,
     commandPending,
     commandStatus,

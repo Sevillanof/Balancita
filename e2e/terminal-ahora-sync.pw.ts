@@ -128,9 +128,10 @@ test('AHORA shows the last real analysis of the stream, with its source', async 
   await expect(page.getByTestId('now-source')).toContainText(
     'La única propuesta registrada en el veredicto no fue LONG/SHORT',
   )
-  // The health of the source (B1) stays a separate fact next to it.
-  await expect(page.getByTestId('observer-now')).toContainText(
-    'Salud de la fuente',
+  // The health of the source (B1) stays a separate fact next to it, and it is
+  // the one of the product on screen (the global one lives in the header).
+  await expect(page.getByTestId('source-health')).toContainText(
+    'Salud de la fuente · XBT',
   )
   // A WAIT is never presented as a proposal.
   await expect(page.getByTestId('observer-now')).not.toContainText(
@@ -151,11 +152,21 @@ test('history rows and chart markers are the same decisions and select each othe
   expect(entries).toHaveLength(3)
   const rows = page.locator('.connected-terminal__decision-list li button')
   await expect(rows).toHaveCount(3)
-  // Proposals, grouped WAITs and the one executed fill: each from a real source.
+  // The visible legend names every kind of marker, apart from each other.
+  const legend = page.locator('.terminal-chart__legend')
+  await expect(legend).toContainText('propuesta LONG/SHORT')
+  await expect(legend).toContainText('WAIT (agrupados)')
+  await expect(legend).toContainText('EJEC. ejecución paper')
+  await expect(legend).toContainText('salida')
+  await expect(legend).not.toContainText('entrada larga')
+  // Proposals, grouped WAITs and the durable fill: each from a real source.
   const positions = await markerPositions(chart)
   const ids = positions.map((p) => p.id)
   for (const f of entries) expect(ids).toContain(f.analysisId)
-  expect(ids).toContain(`fill:${executed.PF_XBTUSD![0]!.orderId}`)
+  // The executed marker is the durable fill itself (its id is the fill's).
+  expect(ids.filter((id) => id.startsWith('fill:'))).toHaveLength(
+    executed.PF_XBTUSD!.length,
+  )
   const waits = ids.filter((id) => waitIds.PF_XBTUSD!.includes(id))
   // Every other marker is a WAIT group, far fewer than one per minute.
   expect(ids).toHaveLength(entries.length + 1 + waits.length)
@@ -166,6 +177,8 @@ test('history rows and chart markers are the same decisions and select each othe
     await page.screenshot({
       path: `${SHOTS}/marcadores-propuesta-wait-ejecutada.png`,
     })
+    await legend.scrollIntoViewIfNeeded()
+    await page.screenshot({ path: `${SHOTS}/leyenda-marcadores.png` })
   }
 
   // History -> chart: pick the middle (SHORT) row.
@@ -216,6 +229,9 @@ test('changing product swaps AHORA, rows and markers; nothing leaks across', asy
   expect(newest.action).toBe('SHORT')
   // ETH's newest verdict is a SHORT proposal, labelled as such.
   await expect(page.getByTestId('now-action')).toHaveText('SHORT')
+  await expect(page.getByTestId('source-health')).toContainText(
+    'Salud de la fuente · ETH',
+  )
   await expect(page.getByTestId('observer-now')).toContainText(
     'propuesta, no operación',
   )
@@ -250,6 +266,23 @@ test('changing product swaps AHORA, rows and markers; nothing leaks across', asy
   ).toHaveCount(0)
   const solIds = (await markerPositions(chart)).map((p) => p.id)
   for (const id of solIds) expect(waitIds.PF_SOLUSD).toContain(id)
+})
+
+test('without a B1 read AHORA says «Sin confirmar», never a current decision', async ({
+  page,
+}) => {
+  // B1 unreachable: the verdict is young but nothing confirms it.
+  await page.route('**/api-live/observability/health', (route) =>
+    route.fulfill({ status: 503, body: '{}' }),
+  )
+  await openTerminal(page)
+  await expect(page.getByTestId('last-decision')).toContainText('Sin confirmar')
+  await expect(page.getByTestId('now-action')).toHaveCount(0)
+  await expect(page.getByTestId('now-blockers')).toContainText('lectura de B1')
+  if (SHOTS) {
+    mkdirSync(SHOTS, { recursive: true })
+    await page.screenshot({ path: `${SHOTS}/ahora-sin-confirmar.png` })
+  }
 })
 
 test('an old verdict of a stopped engine is history, never the current state', async ({
@@ -346,15 +379,14 @@ test('chart controls on real data: timeframes, zoom, navigation, back to present
       ) as { id: string }[]
     ).map((p) => p.id)
     // Never a marker that is not a real proposal, WAIT or executed fill.
-    const real = [
-      ...entries.map((f) => f.analysisId),
-      ...waitIds.PF_XBTUSD!,
-      `fill:${executed.PF_XBTUSD![0]!.orderId}`,
-    ]
-    for (const id of ids) expect(real).toContain(id)
+    const real = [...entries.map((f) => f.analysisId), ...waitIds.PF_XBTUSD!]
+    for (const id of ids)
+      expect(real.includes(id) || id.startsWith('fill:')).toBe(true)
     // Same-hour entries stack on one candle; none may be dropped or invented.
     for (const f of entries) expect(ids).toContain(f.analysisId)
-    expect(ids.filter((id) => id.startsWith('fill:'))).toHaveLength(1)
+    expect(ids.filter((id) => id.startsWith('fill:'))).toHaveLength(
+      executed.PF_XBTUSD!.length,
+    )
   }
 
   // Indicators on and off.

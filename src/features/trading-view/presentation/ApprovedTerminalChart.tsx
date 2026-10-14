@@ -148,7 +148,8 @@ function markerPresentation(
     return {
       color: colors.muted,
       shape: 'circle' as const,
-      position: 'aboveBar' as const,
+      // Inside the candle: apart from the exits' circle above the bar.
+      position: 'inBar' as const,
     }
   if (marker.type === 'discard')
     return {
@@ -193,7 +194,10 @@ const FALLBACK_PANE_HEIGHT_PX = 420
 const MAX_STACK_MARGIN = 0.6
 const MAX_TOTAL_MARGIN = 0.9
 
-type StackedMarker = { time: unknown; position: 'aboveBar' | 'belowBar' }
+type StackedMarker = {
+  time: unknown
+  position: 'aboveBar' | 'belowBar' | 'inBar'
+}
 
 /**
  * Same-bucket, same-side markers stack by roughly one glyph plus its label per
@@ -211,6 +215,7 @@ function markerStackScaleMargins(
   let maxAbove = 0
   let maxBelow = 0
   for (const marker of markers) {
+    if (marker.position === 'inBar') continue
     const side = depth[marker.position]
     const count = (side.get(marker.time) ?? 0) + 1
     side.set(marker.time, count)
@@ -410,7 +415,11 @@ export default function ApprovedTerminalChart({
         const x = chart.timeScale().timeToCoordinate(marker.time)
         const y = candle
           ? series.priceToCoordinate(
-              marker.position === 'aboveBar' ? candle.high : candle.low,
+              marker.position === 'aboveBar'
+                ? candle.high
+                : marker.position === 'inBar'
+                  ? (candle.high + candle.low) / 2
+                  : candle.low,
             )
           : null
         if (x === null || y === null) return []
@@ -418,7 +427,13 @@ export default function ApprovedTerminalChart({
           {
             id: marker.id,
             x: Math.round(x),
-            y: Math.round(y) + (marker.position === 'aboveBar' ? -12 : 12),
+            y:
+              Math.round(y) +
+              (marker.position === 'aboveBar'
+                ? -12
+                : marker.position === 'inBar'
+                  ? 0
+                  : 12),
           },
         ]
       })

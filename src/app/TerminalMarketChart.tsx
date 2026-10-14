@@ -42,6 +42,8 @@ export default function TerminalMarketChart({
   position,
   positions,
   orders,
+  fills = [],
+  quantityUnit,
   historicalLabel,
 }: {
   market: Record<string, unknown>
@@ -57,6 +59,9 @@ export default function TerminalMarketChart({
   position: Record<string, unknown>
   positions?: unknown[]
   orders: unknown[]
+  /** Durable gateway fills: one EJEC. marker each. */
+  fills?: unknown[]
+  quantityUnit?: string
   historicalLabel?: string
 }) {
   const marketCandles = market.candles
@@ -175,13 +180,6 @@ export default function TerminalMarketChart({
             : 'Vela en formación'}
         </p>
       )}
-      {entriesOnly && (
-        <p className="visually-hidden" data-testid="marker-legend">
-          Marcadores: flecha = propuesta LONG/SHORT (no es una operación);
-          círculo gris = decisión WAIT (agrupadas); cuadrado EJEC. = operación
-          realmente ejecutada en paper; círculo azul = salida.
-        </p>
-      )}
       <TerminalChartPanel
         candles={candles}
         markers={markers}
@@ -194,6 +192,9 @@ export default function TerminalMarketChart({
         position={position}
         positions={positions}
         orders={orders}
+        fills={fills}
+        quantityUnit={quantityUnit}
+        proposalLegend={entriesOnly}
         historicalLabel={historicalLabel}
       />
     </>
