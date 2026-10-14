@@ -41,14 +41,15 @@ def _source(path, product, lo_ms, hi_ms, blob_backend=None):
             shas)} if shas else {}
         per_response, merged = [], {}
         for sha in shas:
-            gate.funding_bytes_read, gate.funding_stopped_at = 0, None
+            gate.funding_bytes_read = 0
+            gate.begin_stream()
             rows = {}
             for start_ms, rate in gate._stream_rates(sha):
                 rows[start_ms] = RD._decimal_text(rate)
             per_response.append({"sha256": sha, "received_at": meta.get(sha), "periods": len(rows),
                                  "first": min(rows) if rows else None, "last": max(rows) if rows else None,
                                  "bytes_read": gate.funding_bytes_read, "bytes_stored": gate.funding_bytes_stored,
-                                 "stopped_at_ms": gate.funding_stopped_at})
+                                 "stopped_at_ms": gate.funding_stopped_at, "trace": gate.stream_trail(sha, gate.funding_bytes_read)})
             for start_ms, rate in rows.items():
                 merged.setdefault(start_ms, rate)
         revisions = _revisions(shas, gate, product, lo_ms, hi_ms)

@@ -79,3 +79,23 @@ Stop con evidencia OHLC (estimada); parámetros de ejecución, riesgo y sizing s
 ## Paridad de fuentes de funding (opción B)
 
 `python -m balancita_engine.replay_funding_parity FUENTE_DEL_FORWARD OTRA_BASE PRODUCTO SALIDA.json` compara, solo lectura y dentro del rango autorizado (hasta `cap - 48 h`), la fuente que usa el forward (`server/data/dev-live/futures-market.sqlite`, según `scripts/dev-provider-env.mjs`) con otra base: periodos, tasas, horas faltantes, percentil de `FundingContext` en cada hora publicada y señales de C32. Las pruebas sintéticas no sustituyen la comprobación sobre datos reales.
+
+### Alcances declarados de la paridad
+
+- La señal C32 se compara solo por bandas de percentil (`pct_low`/`pct_high`), no por el valor numérico del percentil.
+- El rango replayable de funding termina en 2026-07-31T00:00Z (tope global menos 48 h). `load_data` rechaza un `data_end` posterior.
+- Las 7-8 horas faltantes por producto son horas desconocidas, no rellenadas. El informe de paridad por producto debe listarlas (`missing_hours_list`) junto con sus registros en la tabla de períodos; las de febrero son solo 2 de ellas.
+
+### Residuo del aislamiento
+
+Aun con el lector incremental, el read-ahead del sistema operativo y su caché de páginas pueden haber tocado bytes posteriores al corte. Esto no se puede descartar sin una traza de E/S del SO; el manifest declara «no OS-level I/O trace».
+
+### Traza de bytes entregados al lector (criterio de Fran, 2026-10-14)
+
+No se exige traza de E/S del sistema operativo: se exige una prueba a nivel de bytes entregados al lector y de períodos decodificados. Por cada respuesta leída, el manifest (`reads` → `funding_stream` → `responses`) y la salida de paridad (`trace`) registran: fuente, SHA de la respuesta, offset inicial (`first_read`), último rango (`last_read`), cantidad de lecturas, bytes pedidos y recibidos, offset máximo exclusivo, contigüidad desde 0, hash de la lista completa de lecturas, `delivered_sha256` de los bytes entregados, el máximo `timestamp` que aparece en esos bytes (escaneo independiente del parser), períodos decodificados y el máximo decodificado, límite local y motivo exacto de detención (`first_period_at_or_after_local_limit`, `end_of_rates_array` o `end_of_blob`).
+
+Reglas que abortan con error explícito: un `timestamp` de período igual o posterior al tope global (2026-08-02T00:00Z) en los bytes entregados o en un período decodificado; respuesta truncada o fuera de orden antes del corte; falta de E/S incremental (no hay lectura completa de reserva). Consecuencia: un salto temporal que lleve el siguiente período a la zona reservada dentro del mismo bloque de 512 bytes que el período de corte falla en vez de continuar. El margen de 48 horas es el mecanismo; esta traza es la prueba.
+
+Casos adversariales (`python/tests/test_replay_9a_isolation.py`): horas consecutivas con la primera fecha no permitida pegada a la última procesable, horas faltantes, saltos largos (con y sin llegar a la zona reservada), respuesta truncada antes y después del corte, JSON malformado tras el corte, orden inverso antes y después del corte, BLOB grande con páginas de overflow, sin fallback a lectura completa. En datos reales se exige que la traza cumpla las mismas propiedades (contigua desde 0, sin timestamps reservados en los bytes entregados, mismo motivo de corte). Las lecturas físicas de páginas de SQLite no se interpretan como acceso lógico a los períodos que contienen.
+
+Refuerzos tras la revisión de D (D-9A-26/27/28): un `timestamp` cortado en el borde del último bloque entregado aborta si su prefijo visible (de 7 caracteres o más) alcanza el prefijo del tope; un prefijo visible menor que el del tope pasa y queda registrado en `unresolved_partial_timestamp` (por ejemplo `2026-07-3`); solo un prefijo de a lo sumo 6 caracteres (el año) es indecidible y no puede contener información del holdout. El orden de claves del fragmento posterior al corte no se verifica porque nunca se decodifica. La corrida aborta si en los bytes entregados hay menos sellos que períodos decodificados, y si la primera clave de un período no es `timestamp`. Las lecturas son bloques contiguos de `chunk_bytes` desde el offset 0 (`contiguous_from_zero`); `first_read`, `last_read` y `reads_sha256` permiten reconstruir la lista completa.

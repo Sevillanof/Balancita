@@ -437,18 +437,38 @@ class SourceParity(Tmp):
     def test_a_poisoned_tail_is_never_needed_and_the_range_gate_applies(self):
         import sqlite3
         a, b = self.pair()
+        filler = "".join(', {{"timestamp": "2026-06-01T{:02d}:00:00.000Z", "relativeFundingRate": "0.00001"}}'.format(h % 24)
+                         for h in range(0, 24)).replace("2026-06-01T", "2026-06-01T")
+        filler = "".join(', {{"timestamp": "{}", "relativeFundingRate": "0.00001"}}'.format(RP.iso(START + (self.HOURS + 1 + n) * HOUR)[:-1] + ".000Z")
+                         for n in range(30))
         for path in (a, b):
             con = sqlite3.connect(path)
             raw = con.execute("SELECT raw_response FROM paper_futures_funding_responses").fetchone()[0]
-            con.execute("UPDATE paper_futures_funding_responses SET raw_response=?", (raw[:-2] + ', {"timestamp": "2026-08-02T00:00:00.000Z", '
+            con.execute("UPDATE paper_futures_funding_responses SET raw_response=?", (raw[:-2] + filler + ', {"timestamp": "2026-08-02T00:00:00.000Z", '
                                                                                   '"relativeFundingRate": "0.5"}, NOT JSON {{' + "]}",))
             con.commit()
             con.close()
-        # the poisoned tail sits after the last in-range hour; the stream must not need it
+        # the poisoned tail sits far after the last in-range hour (more than one block); the stream must not need it
         report = RFP.compare_sources(a, b, BTC, START, START + self.HOURS * HOUR)
         self.assertEqual(report["verdict"]["verdict"], "GO")
+        for source in ("forward_source", "other_source"):
+            for response in report[source]["responses"]:
+                self.assertEqual(response["trace"]["stop_reason"], "first_period_at_or_after_local_limit")
+                self.assertLess(response["trace"]["max_timestamp_in_delivered_bytes"], "2026-08-02T00:00:00")
         with self.assertRaises(RD.RangeGateError):
             RFP.compare_sources(a, b, BTC, START, RD.HI_EXCL_MS + HOUR)
+
+    def test_a_reserved_period_inside_the_block_after_the_limit_fails_explicitly(self):
+        import sqlite3
+        a, b = self.pair()
+        con = sqlite3.connect(a)
+        raw = con.execute("SELECT raw_response FROM paper_futures_funding_responses").fetchone()[0]
+        con.execute("UPDATE paper_futures_funding_responses SET raw_response=?", (raw[:-2] + ', {"timestamp": "2026-08-02T00:00:00.000Z", '
+                                                                              '"relativeFundingRate": "0.5"}' + "]}",))
+        con.commit()
+        con.close()
+        with self.assertRaises(RD.DataError):
+            RFP.compare_sources(a, b, BTC, START, START + self.HOURS * HOUR)
 
 
 class FrozenEndToEnd(Shared):
