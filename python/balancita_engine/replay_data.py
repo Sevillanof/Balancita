@@ -6,8 +6,9 @@ Everything read from a market database goes through ``ReplayDataGate``:
 * ``LO_MS`` / ``HI_EXCL_MS`` are constants of this module. A window that starts before ``LO_MS`` or ends after
   ``HI_EXCL_MS`` raises ``RangeGateError`` *before* the file is opened. ``HI_EXCL_MS`` is 2026-08-02T00:00:00Z: the reserved
   period (2026-08-02 .. 2026-10-01) is never read, although the backfilled databases hold it physically;
-* every statement is parameterised with the window; funding rates are extracted with SQLite's JSON functions *inside* the
-  query and filtered by timestamp there, so periods at or after the cap never reach Python.
+* every statement is parameterised with the window; funding is read as a stream of the stored response and abandoned at the
+  first period at or after the cap (no SQLite JSON function is applied to the stored response), so periods at or after the
+  cap are neither parsed nor returned.
 
 Candles are the first-known revision of each bucket. Their ``known_at`` is the time of the backfill (October 2026), so it
 says nothing about when a candle was known: the replay fixes availability by rule (``replay_driver``).
@@ -58,6 +59,7 @@ class ReplayDataGate:
         self.path, self.lo_ms, self.hi_excl_ms = path, lo_ms, hi_excl_ms
         self.db = sqlite3.connect("file:{}?mode=ro".format(path), uri=True)
         self.db.execute("PRAGMA query_only=ON")
+        self.funding_bytes_read, self.funding_stopped_at = 0, None
         self.statements = []            # every statement executed with its bounds: the audit trail of what was read
 
     def close(self):
@@ -99,24 +101,126 @@ class ReplayDataGate:
         return [int(r[0]) for r in rows]
 
     # ---- funding --------------------------------------------------------------------------------------------------
-    def relative_funding(self, product_id):
-        """``[(start_ms, relative_rate_text)]`` of the hourly funding periods inside the window, first-seen response wins.
+    CHUNK = 4096
 
-        The rate is Kraken's ``relativeFundingRate`` (what ``accrue_funding`` and ``FundingContext`` use), taken from the
-        stored raw response. The JSON is parsed and filtered by SQLite; rows outside ``[lo, hi_excl)`` are never returned."""
-        rows = self._run("funding", """
-            SELECT CAST(strftime('%s', json_extract(j.value,'$.timestamp')) AS INTEGER)*1000 AS start_ms,
-                   json_extract(j.value,'$.relativeFundingRate') AS rate, r.received_at, r.sha256
-            FROM paper_futures_funding_responses r, json_each(r.raw_response,'$.rates') j
-            WHERE r.sha256 IN (SELECT DISTINCT response_sha256 FROM paper_futures_funding_periods WHERE product_id=?)
-              AND CAST(strftime('%s', json_extract(j.value,'$.timestamp')) AS INTEGER)*1000 >= ?
-              AND CAST(strftime('%s', json_extract(j.value,'$.timestamp')) AS INTEGER)*1000 < ?
-            ORDER BY start_ms, r.received_at, r.sha256""", (product_id, self.lo_ms, self.hi_excl_ms))
-        found = {}
-        for start_ms, rate, _received, _sha in rows:
-            if start_ms is None or rate is None:
+    def _response_shas(self, product_id):
+        """The responses the forward reads (``futures_funding_context.load_periods``): the oldest and the two newest."""
+        columns = [r[1] for r in self.db.execute("PRAGMA table_info(paper_futures_funding_periods)")]
+        if "product_id" in columns:
+            shas = [r[0] for r in self._run("funding_responses", """
+                SELECT sha256 FROM paper_futures_funding_responses WHERE sha256 IN
+                  (SELECT response_sha256 FROM paper_futures_funding_periods WHERE product_id=?)
+                ORDER BY received_at, rowid""", (product_id,))]
+        else:
+            shas = []
+        return list(dict.fromkeys(shas[:1] + shas[-2:]))
+
+    def _chunks(self, sha):
+        """The stored response as text chunks, read on demand (``Connection.blobopen`` where Python has it, else a bounded
+        ``substr`` of the blob). The caller stops asking at the first period at or after the cap."""
+        row = self.db.execute("SELECT rowid, length(CAST(raw_response AS BLOB)) FROM paper_futures_funding_responses WHERE sha256=?",
+                              (sha,)).fetchone()
+        rowid, size = row
+        import codecs
+        decoder = codecs.getincrementaldecoder("utf-8")()
+        blob = None
+        if hasattr(self.db, "blobopen"):
+            blob = self.db.blobopen("paper_futures_funding_responses", "raw_response", rowid, readonly=True)
+        offset = 0
+        try:
+            while offset < size:
+                n = min(self.CHUNK, size - offset)
+                if blob is not None:
+                    blob.seek(offset)
+                    raw = blob.read(n)
+                else:
+                    raw = self.db.execute("SELECT substr(CAST(raw_response AS BLOB), ?, ?) FROM paper_futures_funding_responses "
+                                          "WHERE rowid=?", (offset + 1, n, rowid)).fetchone()[0]
+                offset += n
+                self.funding_bytes_read += n
+                yield decoder.decode(raw, final=offset >= size)
+        finally:
+            if blob is not None:
+                blob.close()
+
+    def _stream_rates(self, sha):
+        """Yields ``(start_ms, relative_rate)`` of one response in file order and stops at the first period at or after the
+        cap. Nothing after that point is decoded or parsed: it is not interpreted, not returned, not kept."""
+        from datetime import datetime
+        decoder = json.JSONDecoder()
+        chunks = self._chunks(sha)
+        buffer, pos, state, last = "", 0, "seek", None
+
+        def more():
+            nonlocal buffer
+            try:
+                buffer += next(chunks)
+                return True
+            except StopIteration:
+                return False
+
+        while True:
+            if state == "seek":                 # up to the opening bracket of "rates"
+                key = buffer.find('"rates"', pos)
+                if key >= 0:
+                    bracket = buffer.find("[", key)
+                    if bracket >= 0:
+                        pos, state = bracket + 1, "items"
+                        continue
+                if not more():
+                    raise DataError("funding response has no 'rates' array")
                 continue
-            found.setdefault(int(start_ms), _decimal_text(rate))
+            while pos < len(buffer) and buffer[pos] in " \t\r\n,":
+                pos += 1
+            if pos >= len(buffer):
+                if not more():
+                    raise DataError("funding response ends inside the 'rates' array")
+                continue
+            if buffer[pos] == "]":
+                return
+            try:
+                item, end = decoder.raw_decode(buffer, pos)
+            except ValueError:
+                if not more():
+                    raise DataError("funding response has a broken period")
+                continue
+            pos = end
+            try:
+                start_ms = int(datetime.fromisoformat(item["timestamp"].replace("Z", "+00:00")).timestamp() * 1000)
+                rate = item["relativeFundingRate"]
+            except (KeyError, TypeError, ValueError, AttributeError):
+                raise DataError("funding period without timestamp / relativeFundingRate")
+            if last is not None and start_ms <= last:
+                raise DataError("funding response is not in increasing order: the bound cannot be applied")
+            last = start_ms
+            if start_ms >= self.hi_excl_ms:
+                self.funding_stopped_at = start_ms
+                return                           # the first reserved period: stop here, read nothing further
+            if start_ms >= self.lo_ms:
+                yield start_ms, rate
+            buffer, pos = buffer[pos:], 0        # keep the buffer small
+
+    def relative_funding(self, product_id):
+        """``[(start_ms, relative_rate_text)]`` of the hourly funding periods inside ``[lo, hi_excl)``, first seen wins.
+
+        The rate is Kraken's ``relativeFundingRate`` (what ``accrue_funding`` and ``FundingContext`` use; the absolute
+        ``funding_rate`` is never converted). The stored response lists a year of periods, including the reserved ones, so
+        it is read as a stream from its start and abandoned at the first period at or after the cap: SQLite loads the stored
+        value, but no period at or after the cap is decoded, parsed or returned, and no JSON function is applied to it.
+        Responses are the oldest and the two newest, as in the forward."""
+        self.funding_bytes_read, self.funding_stopped_at = 0, None
+        found, trail = {}, []
+        for sha in self._response_shas(product_id):
+            before = self.funding_bytes_read
+            for start_ms, rate in self._stream_rates(sha):
+                found.setdefault(start_ms, _decimal_text(rate))
+            size = self.db.execute("SELECT length(CAST(raw_response AS BLOB)) FROM paper_futures_funding_responses WHERE sha256=?",
+                                   (sha,)).fetchone()[0]
+            trail.append({"sha256": sha, "bytes_read": self.funding_bytes_read - before, "bytes_stored": size,
+                          "stopped_at_ms": self.funding_stopped_at})
+            self.funding_stopped_at = None
+        self.statements.append({"name": "funding_stream", "params": [product_id, self.lo_ms, self.hi_excl_ms],
+                                "reader": "blobopen" if hasattr(self.db, "blobopen") else "substr_blob", "responses": trail})
         return sorted(found.items())
 
 

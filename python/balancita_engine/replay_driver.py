@@ -44,6 +44,7 @@ from .paper_runner_report import counts, integrated_audit
 from .portfolio import PortfolioPolicy
 from .portfolio_audit import accounting_digest
 from .portfolio_watch import WatchPolicy
+from .replay_specs import FROZEN_IDS, load_frozen
 
 D = Decimal
 HOUR_MS = 3_600_000
@@ -62,6 +63,12 @@ DATA_LAG_MS = 2_000                  # a closed candle / a cycle is delivered th
 FUNDING_LAG_MS = 600_000             # the funding of an hour is usable 10 minutes after the hour ends (hypothesis)
 MAX_EXECUTION_DELAY_MS = 120_000     # S1-S3 fill about one minute after the decision; the default 60 s would expire them
 TAIL_MS = DAY_MS                     # candles after the last decision, so open positions can close (the longest horizon is 1 h)
+WINDOW_POLICIES = {
+    "cut_decisions_24h_before_end": "decisions stop 24 h before the end of the data so that positions can close with data; "
+                                    "a position still open at the end is reported, never closed",
+    "decide_until_data_end": "decisions run until the end of the data; positions still open at the end are reported as "
+                             "open_at_window_end, marked to the last authorised candle, and are never closed with later data",
+}
 KIND_RANK = {"candle": 0, "funding": 1, "cycle": 2}
 CODE_MODULES = ("replay_data", "replay_execution", "replay_driver", "paper_runner")
 
@@ -81,9 +88,13 @@ class ReplayConfig:
     load_start_ms: int = 0               # first candle read (warm-up); 0 = 21 days before the first decision, floored
     allow_gaps: bool = False             # declared in the manifest when true
     extra_slippage_bps: str = ""         # S3 only; "" = one more side impact of each product
+    strategy_set: str = "frozen"         # "frozen": C29, C30, C32 from their spec files; "mx": the native mx-* fixtures
+    dedupe_modelled_prices: bool = True  # one price event per (product, instant, price, scenario)
+    window_policy: str = "cut_decisions_24h_before_end"   # or "decide_until_data_end" (open positions stay open)
 
     def resolved(self):
-        data_end = self.data_end_ms or min(self.decision_end_ms + TAIL_MS, RD.HI_EXCL_MS)
+        tail = TAIL_MS if self.window_policy == "cut_decisions_24h_before_end" else 0
+        data_end = self.data_end_ms or min(self.decision_end_ms + tail, RD.HI_EXCL_MS)
         load_start = self.load_start_ms or max(RD.LO_MS, self.decision_start_ms - 21 * DAY_MS)
         return ReplayConfig(**dict(asdict(self), products=tuple(self.products), strategy_ids=tuple(self.strategy_ids),
                                    data_end_ms=data_end, load_start_ms=load_start))
@@ -91,12 +102,17 @@ class ReplayConfig:
     def validate(self):
         if self.scenario not in SCENARIOS:
             raise ReplayError("unknown scenario {!r}".format(self.scenario))
+        if self.strategy_set not in ("frozen", "mx"):
+            raise ReplayError("unknown strategy set {!r}".format(self.strategy_set))
+        if self.window_policy not in WINDOW_POLICIES:
+            raise ReplayError("unknown window policy {!r}".format(self.window_policy))
         if not self.products:
             raise ReplayError("no products")
         if self.decision_end_ms <= self.decision_start_ms:
             raise ReplayError("empty decision window")
-        if self.decision_end_ms > RD.HI_EXCL_MS - TAIL_MS:
-            raise ReplayError("decisions must stop {} hours before the cap so positions can close".format(TAIL_MS // HOUR_MS))
+        if self.window_policy == "cut_decisions_24h_before_end" and self.decision_end_ms > RD.HI_EXCL_MS - TAIL_MS:
+            raise ReplayError("decisions must stop {} hours before the cap so positions can close "
+                              "(or choose window_policy=decide_until_data_end)".format(TAIL_MS // HOUR_MS))
         RD.check_window(self.load_start_ms, self.data_end_ms)
         if self.load_start_ms > self.decision_start_ms or self.data_end_ms < self.decision_end_ms:
             raise ReplayError("the data window must cover the decision window")
@@ -187,7 +203,7 @@ def _candle_event(product, candle):
                       t_ms=bucket + ONE_MINUTE_MS + DATA_LAG_MS, source=SOURCE, stream="candles:" + product)
 
 
-def product_events(product, data, strategies, cfg, frames):
+def product_events(product, data, strategies, cfg, frames, cycle_atr=None):
     """``(key, event)`` for one product, in time order: its candles and its cycles. ``frames`` receives the frame of each
     cycle (keyed by product and cycle) for the evaluator; nothing is looked up that was not known at that frame."""
     periods = merged_indicators(strategies)
@@ -209,8 +225,10 @@ def product_events(product, data, strategies, cfg, frames):
             trend = frame[3]
             seq += 1
             frames[(product, close_ms)] = frame
+            atr = cycle_atr(frame) if cycle_atr is not None else None
+            atr = trend["atr14"] if atr is None or atr <= 0 else atr      # the spec's volatility, else the default ATR
             event = make_event("cycle", {"product_id": product, "cycle_ms": close_ms, "price": str(trend["candidate_close"]),
-                                         "atr": str(trend["atr14"])}, t_ms=close_ms + DATA_LAG_MS, source=SOURCE,
+                                         "atr": str(atr)}, t_ms=close_ms + DATA_LAG_MS, source=SOURCE,
                                stream="cycles:" + product)
             yield (event["t_ms"], KIND_RANK["cycle"], product, seq), event
 
@@ -261,8 +279,12 @@ def run_replay(candles_db, funding_db, config, out_dir, *, data=None, strategies
     data = data or load_data(candles_db, funding_db, cfg)
     for blob in data["products"].values():
         blob.setdefault("_by_minute", {c["bucket_start"]: c for c in blob["1m"]})
-    if strategies is None:       # ``strategies`` is for tests (scripted strategies); a real run uses the native ones
-        strategies = [s for s in default_strategies() if not cfg.strategy_ids or s.id in cfg.strategy_ids]
+    spec_identity = None
+    if strategies is None:       # ``strategies`` is for tests (scripted strategies); a real run uses the configured set
+        if cfg.strategy_set == "frozen":
+            strategies, spec_identity = load_frozen(ids=cfg.strategy_ids or FROZEN_IDS)
+        else:
+            strategies = [s for s in default_strategies() if not cfg.strategy_ids or s.id in cfg.strategy_ids]
     if not strategies:
         raise ReplayError("no strategy selected")
     runner_config = RunnerConfig(portfolio=PortfolioPolicy(), execution=execution_policy(), watch=WatchPolicy(), funding=(),
@@ -278,13 +300,15 @@ def run_replay(candles_db, funding_db, config, out_dir, *, data=None, strategies
         return SC.evaluate_cycle(chosen, payload["product_id"], payload["cycle_ms"], frame)
 
     runner = PaperRunner(runner_config, strategies, log, evaluator=evaluator)
-    manifest = run_manifest(cfg, data, runner, strategies)
+    manifest = run_manifest(cfg, data, runner, strategies, spec_identity)
+    cycle_atr = next((s.cycle_atr for s in strategies if hasattr(s, "cycle_atr")), None)
     streams = []
     for product in cfg.products:
-        streams.append(product_events(product, data["products"][product], strategies, cfg, frames))
+        streams.append(product_events(product, data["products"][product], strategies, cfg, frames, cycle_atr))
         streams.append(funding_events(product, data["products"][product], cfg))
     heap, scheduled, rejections, last_t = [], set(), {}, cfg.decision_start_ms
-    fills = {"scheduled": 0, "unpriced": 0}
+    fills = {"scheduled": 0, "unpriced": 0, "deduplicated": 0}
+    priced = set()
     counter = [0]
 
     def push(event):
@@ -311,6 +335,12 @@ def run_replay(candles_db, funding_db, config, out_dir, *, data=None, strategies
                 push(make_event("clock", {}, t_ms=order["timeline"]["deadline_ms"] + 1, source=SOURCE, stream="clock"))
                 continue
             fill_ms, price, source = found
+            if cfg.dedupe_modelled_prices:       # one event per product / instant / price / scenario; acceptance is unchanged
+                key = (product, fill_ms, price, cfg.scenario)
+                if key in priced:
+                    fills["deduplicated"] += 1
+                    continue
+                priced.add(key)
             fills["scheduled"] += 1
             push(make_event("modelled_price", {"product_id": product, "price": price, "source": source, "scenario": cfg.scenario},
                             t_ms=fill_ms, source=SOURCE, stream="modelled:" + product))
@@ -329,7 +359,7 @@ def run_replay(candles_db, funding_db, config, out_dir, *, data=None, strategies
     return results
 
 
-def run_manifest(cfg, data, runner, strategies):
+def run_manifest(cfg, data, runner, strategies, spec_identity=None):
     manifest = {
         "schema": SCHEMA, "execution": EXECUTION_LABEL, "scenario": cfg.scenario, "scenario_text": SCENARIO_TEXT[cfg.scenario],
         "window": {"load_start": iso(cfg.load_start_ms), "decision_start": iso(cfg.decision_start_ms),
@@ -343,7 +373,8 @@ def run_manifest(cfg, data, runner, strategies):
                         "funding_known_at_start_of_hour": "unproven hypothesis, not used"},
         "runner_manifest_hash": stable_hash(runner.manifest), "cost_model_hash": cost_model_hash(),
         "build_identity": build_identity(), "engine_behavior": engine_behavior(), "code": code_identity(),
-        "reads": data["statements"],
+        "reads": data["statements"], "strategy_set": cfg.strategy_set, "window_policy": cfg.window_policy,
+        "dedupe_modelled_prices": cfg.dedupe_modelled_prices, "spec_identity": spec_identity,
     }
     manifest["manifest_hash"] = stable_hash(manifest)
     return manifest

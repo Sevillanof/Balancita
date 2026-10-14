@@ -108,7 +108,7 @@ class Gate(Tmp):
         self.assertEqual(funding[-1][0], RD.HI_EXCL_MS - HOUR)
         self.assertTrue(all(c["bucket_start"] < RD.HI_EXCL_MS for c in one + five))
         self.assertTrue(all(s < RD.HI_EXCL_MS for s, _ in funding))
-        self.assertTrue(all(len(s["params"]) >= 3 for s in gate.statements))
+        self.assertTrue(all(len(s["params"]) >= 3 for s in gate.statements if s["name"] != "funding_responses"))
 
     def test_it_is_read_only_and_leaves_the_file_untouched(self):
         path = self.path("m.sqlite")
@@ -151,6 +151,64 @@ class Gate(Tmp):
         report = RD.funding_report(periods, START, START + 6 * HOUR)
         self.assertEqual(report["missing_hours"], [START + 3 * HOUR])
         self.assertNotIn(START + 3 * HOUR, [s for s, _ in periods])
+
+
+    # ---- A2: the reserved hours are not processed ----------------------------------------------------------------
+    def poisoned_db(self, tail):
+        """A funding response whose hours at and after the cap are replaced by ``tail`` (text spliced into the JSON)."""
+        path = self.path("m.sqlite")
+        make_db(path, start_ms=RD.HI_EXCL_MS - 6 * HOUR, end_ms=RD.HI_EXCL_MS)
+        db = sqlite3.connect(path)
+        raw = db.execute("SELECT raw_response FROM paper_futures_funding_responses").fetchone()[0]
+        db.execute("UPDATE paper_futures_funding_responses SET raw_response=?", (raw[:-2] + tail + "]}",))
+        db.commit()
+        db.close()
+        return path
+
+    def test_reserved_hours_are_never_parsed(self):
+        # a canary: after the cap the response is not even valid JSON. A JSON function over the whole response would fail
+        # or touch it; the stream stops at the first reserved period.
+        stamp = "2026-08-02T00:00:00.000Z"
+        tail = ', {"timestamp": "%s", "relativeFundingRate": "0.5"}, THIS IS NOT JSON {{{{' % stamp
+        path = self.poisoned_db(tail)
+        gate = RD.ReplayDataGate(path, RD.HI_EXCL_MS - 6 * HOUR, RD.HI_EXCL_MS)
+        funding = gate.relative_funding(BTC)
+        gate.close()
+        self.assertEqual(len(funding), 6)
+        self.assertEqual(funding[-1][0], RD.HI_EXCL_MS - HOUR)
+
+    def test_the_stream_stops_at_the_first_reserved_period_and_declares_it(self):
+        path = self.path("m.sqlite")
+        make_db(path, start_ms=RD.HI_EXCL_MS - 3 * HOUR, end_ms=RD.HI_EXCL_MS + 400 * HOUR)
+        gate = RD.ReplayDataGate(path, RD.HI_EXCL_MS - 3 * HOUR, RD.HI_EXCL_MS)
+        funding = gate.relative_funding(BTC)
+        trail = [x for x in gate.statements if x["name"] == "funding_stream"][0]["responses"][0]
+        gate.close()
+        self.assertEqual([s for s, _ in funding], [RD.HI_EXCL_MS - h * HOUR for h in (3, 2, 1)])
+        self.assertEqual(trail["stopped_at_ms"], RD.HI_EXCL_MS)
+        self.assertLess(trail["bytes_read"], trail["bytes_stored"] // 5)       # only the start of the response was read
+
+    def test_a_funding_response_out_of_order_is_refused(self):
+        path = self.path("m.sqlite")
+        make_db(path, start_ms=START, end_ms=START + 4 * HOUR)
+        db = sqlite3.connect(path)
+        raw = json.loads(db.execute("SELECT raw_response FROM paper_futures_funding_responses").fetchone()[0])
+        raw["rates"].reverse()
+        db.execute("UPDATE paper_futures_funding_responses SET raw_response=?", (json.dumps(raw),))
+        db.commit()
+        db.close()
+        gate = RD.ReplayDataGate(path, START, START + 4 * HOUR)
+        with self.assertRaises(RD.DataError):
+            gate.relative_funding(BTC)
+        gate.close()
+
+    def test_the_relative_rate_is_what_is_used_never_the_absolute_one(self):
+        path = self.path("m.sqlite")
+        make_db(path, start_ms=START, end_ms=START + 3 * HOUR, funding_rate="0.00002")
+        gate = RD.ReplayDataGate(path, START, START + 3 * HOUR)
+        funding = gate.relative_funding(BTC)
+        gate.close()
+        self.assertTrue(all(D(rate) < D("0.001") for _, rate in funding))          # the absolute rate in the fixture is 0.5
 
 
 class Integrity(unittest.TestCase):
@@ -409,7 +467,7 @@ class Driver(Tmp):
     def test_native_strategies_run_end_to_end_without_rejected_events(self):
         wave = {BTC: [(0, "100000"), (4 * 1440, "112000"), (5 * 1440, "99000")]}
         path = self.setup_db(waypoints=wave)
-        out = self.replay(path, "o")
+        out = self.replay(path, "o", strategy_set="mx")
         self.assertEqual(out["event_rejections"], {})
         self.assertTrue(out["audit"]["passed"], out["audit"]["violations"])
         self.assertEqual(out["manifest"]["strategies"], ["mx-funding-v1@1", "mx-momentum-v1@1", "mx-meanrev-v1@1"])
