@@ -101,7 +101,9 @@ store.close()
 const closers: Array<() => void> = []
 const verdicts = new VerdictsDb(box.dir, closers)
 const account = new AccountDb(box.dir, closers)
-const latest = now - (now % MINUTE) - 3 * MINUTE
+// Two minutes back: the newest verdict is 1-2 min old, far from the 3 min
+// limit of «current» even when CI is slow.
+const latest = now - (now % MINUTE) - 2 * MINUTE
 const STOPPED_MINUTES: Record<string, number> = { PF_ZECUSD: 30 }
 const bucketAt = (i: number) => latest - i * MINUTE
 /** Planned non-WAIT verdicts by product (minutes back from the latest). */

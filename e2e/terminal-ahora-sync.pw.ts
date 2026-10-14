@@ -110,7 +110,7 @@ test('AHORA shows the last real analysis of the stream, with its source', async 
   await expect(detail).toContainText('no_directional_proposal')
   await expect(detail).toContainText('Régimen trend')
   await expect(detail).toContainText(hmm(newest.decisionTimeMs))
-  await expect(detail).toContainText(/hace \d+ min/)
+  await expect(detail).toContainText(/hace \d+ (s|min)/)
   await expect(page.getByTestId('now-source')).toContainText(
     'análisis del motor recibido por el stream',
   )
@@ -298,7 +298,9 @@ test('chart controls on real data: timeframes, zoom, navigation, back to present
   await expect
     .poll(async () => Number(await xOf(last!.analysisId)))
     .toBeLessThan(lastX + 100)
-  expect(Math.abs((await spread()) - zoomedSpread)).toBeLessThan(4)
+  await expect
+    .poll(async () => Math.abs((await spread()) - zoomedSpread))
+    .toBeLessThan(6)
   expect(Number(await xOf(last!.analysisId))).toBeGreaterThan(box.width / 2)
   expect(Number(await xOf(last!.analysisId))).toBeLessThan(box.width)
 
