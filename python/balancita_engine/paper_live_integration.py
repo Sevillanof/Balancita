@@ -506,13 +506,21 @@ class LiveSession(object):
         for (product, gap_from, gap_to), loss in sorted(self.runner.source_losses.items()):      # what the runner made durable
             records.append({"source": "runner", "kind": "source_loss", "product_id": product, "gap": {"from_ms": gap_from, "to_ms": gap_to},
                             "cancelled": list(loss["intent_ids"]), "expired": list(loss.get("expire_ids", [])),
-                            "threshold_ms": loss.get("threshold_ms"),
+                            "expired_reasons": self._expiry_reasons(loss.get("expire_ids", [])),
+                            "threshold_ms": loss.get("threshold_ms"), "declared_ms": loss.get("declared_ms"),
                             "windows": {k: list(v) for k, v in sorted(loss["windows"].items())}})
         records += self._observation_records()
         for record in records:
             new += 1 if self.audit.add(record) else 0
         self.stats["audit_new"] += new
         return new
+
+    def _expiry_reasons(self, intent_ids):
+        """Why each order the declaration found over before the silence was excessive ended: the executor's own expiry reasons,
+        read from its records (never a ``source_stale`` cancellation). An order that has not ended yet has none."""
+        wanted = set(intent_ids)
+        return {r["intent_id"]: list(r["reasons"]) for r in self.runner.executor.records
+                if r.get("status") == "rejected" and r.get("intent_id") in wanted}
 
     def _observation_records(self):
         """D-10B-17 evidence, derived from the ingestor's durable state and the runner's pending orders. None of it is a quote

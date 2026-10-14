@@ -176,8 +176,9 @@ seguía siendo ejecutable. Los umbrales siguen siendo hipótesis; no hay sesión
 - **Vocabulario distinto:** `silence_open` (continuidad insuficiente, ingestor), `observation_gap` (tiempo sin observar por
   interrupción del proceso, nunca silencio ni caída de Kraken), `source_stale` (decisión sobre una orden pendiente) y
   `runner_interrupted` (cancelación por interrupción del runner). El audit guarda `observation_gap`, `silence_contradicted`,
-  `observation`, `silence_open` y `silence_at_window_end`, además del `source_loss` del runner con `cancelled`, `expired` y
-  `threshold_ms`.
+  `observation`, `silence_open` y `silence_at_window_end`, además del `source_loss` del runner con `cancelled` (cancelados por `source_stale`), `expired` (vencidos normalmente),
+  `expired_reasons` (los motivos del executor), `threshold_ms` (el de la identidad inmutable de la sesión, el mismo que aplicó el
+  detector), el intervalo `gap` y `declared_ms`. Un vencimiento ordinario nunca se registra como cancelación de fuente.
 - **Recuperación y auditoría:** `audit.jsonl` es de solo agregar y deduplica por hash; no se afirma que se reconstruya entero desde
   el checkpoint. Lo demuestran las pruebas: una escritura de auditoría que quedó adelante del checkpoint no se escribe dos veces
   y hay un solo `source_loss` en cualquier punto de corte.
@@ -196,6 +197,12 @@ abandonando la sesión en el punto de falla, igual que el resto de las pruebas d
   declara, igualdad exacta con `gap_to` no declara y un milisegundo después sí (con `t_ms = gap_to`), y un producto sin cotización
   previa no se declara.
 - `TestSourceStalePolicy`: `affected_orders` con deadline antes, igual y después del límite (vencer, vencer, cancelar).
+- `TestDeadlineAgainstTheThreshold` (circuito completo, un hueco de 160 s): el mismo silencio con el límite un milisegundo por
+  debajo, igual y un milisegundo por encima del deadline de la orden (hasta `desde + límite`, igualdad incluida, vence con
+  `no_quote_in_window` y estado `expired`, sin `order_cancelled`; después se cancela por `source_stale`); el audit separa cancelados,
+  vencidos y motivos, y la caída entre `source_loss` y `source_loss_expiry`, en `after_closing_declaration`, `after_runner` y
+  `after_audit` deja las mismas órdenes, motivos, `digests`, cartera y evidencia que la corrida continua (el instante de declaración
+  es el de la recuperación si la caída fue antes). Con SIGKILL real siguen las pruebas de `TestSourceStaleCancellation`.
 
 Digests de 10D tras el cambio, sin diferencias: financiero `cf0446c1…351c`, órdenes `57031c71…6c80`, señales `32c1c980…5081` (864 señales, 436 órdenes, 3 operaciones cerradas, funding 0,945780, equity 1031,3785). Suite completa: 64 pruebas OK.
 

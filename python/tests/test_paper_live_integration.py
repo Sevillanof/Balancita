@@ -1228,6 +1228,137 @@ class TestSilenceStillOpen(unittest.TestCase):
         self.assertTrue(session.ingestor.observation_gaps)          # told as time nobody observed, never as a silence or a Kraken outage
 
 
+LONG_HOLE = (ENTRY_QUOTE_MS - 5 * SEC, ENTRY_QUOTE_MS + 135 * SEC)      # BTC is silent from 2990 s to 3150 s (160 s): its order lives until 3122 s
+ORDER_DEADLINE = FIRST_DECISION + 50 * MIN + 2 * SEC + 120 * SEC
+
+
+class TestDeadlineAgainstTheThreshold(unittest.TestCase):
+    """Fran 16:07Z and 17:48Z, in the complete circuit: the same silence with the limit just under, exactly at and just over the
+    order's deadline (``deadline <= last quote + limit`` expires with the executor's own reason; later is cancelled by
+    ``source_stale``), the audit keeps the cancelled and the expired apart with the threshold, the interval and the instant of the
+    declaration, and a death between ``source_loss`` and ``source_loss_expiry`` or between the declaration and the checkpoint
+    leaves the same orders, reasons and money as the continuous run."""
+
+    cache = {}
+    LIMITS = {"after": ORDER_DEADLINE - (ENTRY_QUOTE_MS - 20 * SEC) - 1, "equal": ORDER_DEADLINE - (ENTRY_QUOTE_MS - 20 * SEC),
+              "before": ORDER_DEADLINE - (ENTRY_QUOTE_MS - 20 * SEC) + 1}
+
+    @classmethod
+    def setUpClass(cls):
+        SC.disarm()
+        if cls.cache:
+            return
+        cls.cache["dir"] = root = tempfile.mkdtemp()
+        strategies, _ = RS.load_frozen()
+        cls.cache["strategies"] = strategies
+        for name, limit in cls.LIMITS.items():
+            where = os.path.join(root, name)
+            os.makedirs(where)
+            world = World(where, quote_holes=[LONG_HOLE])
+            world.release_until(LOAD_START)
+            session = new_session(world, os.path.join(where, "a"), strategies, max_quote_gap_ms=limit)
+            for now in TIMES[:ENTRY_STEP]:
+                world.release_until(now)
+                session.step(now)
+            snap = Circuit.take_snapshot(where, "pre", session, world, ENTRY_STEP)
+            world.release_until(TIMES[ENTRY_STEP])
+            session.step(TIMES[ENTRY_STEP])
+            cls.cache[name] = {"world": world, "session": session, "snap": snap, "limit": limit}
+
+    @classmethod
+    def tearDownClass(cls):
+        for name in cls.LIMITS:
+            if name in cls.cache:
+                abandon(cls.cache[name]["session"])
+        shutil.rmtree(cls.cache.get("dir", ""), True)
+        cls.cache.clear()
+
+    def first(self, session):
+        return first_order(session)
+
+    def loss_audit(self, session):
+        return [r for r in session.audit.records() if r["kind"] == "source_loss"]
+
+    def test_the_limit_just_under_the_deadline_cancels_by_source_stale(self):
+        item = self.cache["after"]
+        session, limit = item["session"], item["limit"]
+        order = self.first(session)
+        self.assertEqual(order["state"], "cancelled")
+        audit = self.loss_audit(session)
+        self.assertEqual(len(audit), 1)
+        self.assertEqual((audit[0]["cancelled"], audit[0]["expired"], audit[0]["expired_reasons"], audit[0]["threshold_ms"]),
+                         ([order["intent_id"]], [], {}, limit))
+        self.assertEqual(audit[0]["gap"], {"from_ms": ENTRY_QUOTE_MS - 20 * SEC, "to_ms": ENTRY_QUOTE_MS + 140 * SEC})
+        self.assertIsNotNone(audit[0]["declared_ms"])
+
+    def test_a_deadline_at_or_before_the_limit_expires_with_the_executors_reason_and_is_never_a_source_cancellation(self):
+        for name in ("equal", "before"):
+            with self.subTest(name=name):
+                item = self.cache[name]
+                session, limit = item["session"], item["limit"]
+                order = self.first(session)
+                self.assertEqual(order["state"], "expired")
+                entries = session.runner.journal.entries
+                self.assertEqual([e for e in entries if e["kind"] == "order_cancelled"], [])
+                self.assertEqual(len([e for e in entries if e["kind"] == "source_loss_expiry"]), 1)
+                audit = self.loss_audit(session)
+                self.assertEqual(len(audit), 1)
+                self.assertEqual((audit[0]["cancelled"], audit[0]["expired"], audit[0]["expired_reasons"], audit[0]["threshold_ms"]),
+                                 ([], [order["intent_id"]], {order["intent_id"]: ["no_quote_in_window"]}, limit))
+                self.assertIsNotNone(audit[0]["declared_ms"])
+                detected = [r for r in session.audit.records() if r["kind"] == "source_stale_detected"]
+                self.assertEqual([(r["pending_hit"], r["expiring"]) for r in detected], [([], [order["intent_id"]])])
+                self.assertEqual(session.runner.integrity()["open_cycles"], [])
+
+    def killed_between(self, name, point):
+        item = self.cache[name]
+        root = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, root, True)
+        world = item["world"].fork(root, item["snap"]["world"])
+        directory = os.path.join(root, "s")
+        shutil.copytree(item["snap"]["session"], directory)
+        session = recover_session(world, directory, self.cache["strategies"], journal_clock(directory), max_quote_gap_ms=item["limit"])
+        self.addCleanup(abandon, session)
+        if point == "between_loss_and_expiry":
+            def die(*args, **kw):
+                raise Killed()
+            session.runner._expire_for_source_loss = die
+        else:
+            def fault(name_, info=None):
+                if name_ == point:
+                    raise Killed()
+            session.fault = fault
+        world.release_until(TIMES[ENTRY_STEP])
+        with self.assertRaises(Killed):
+            session.step(TIMES[ENTRY_STEP])
+        abandon(session)
+        again = recover_session(world, directory, self.cache["strategies"], journal_clock(directory), max_quote_gap_ms=item["limit"])
+        self.addCleanup(abandon, again)
+        again.step(TIMES[ENTRY_STEP])
+        return again
+
+    def test_a_death_between_the_loss_and_its_expiry_or_the_checkpoint_changes_neither_orders_nor_money(self):
+        for name in ("after", "equal", "before"):
+            for point in ("between_loss_and_expiry", "after_closing_declaration", "after_runner", "after_audit"):
+                if name == "after" and point == "between_loss_and_expiry":
+                    continue                                            # a cancellation has no expiry to die before
+                with self.subTest(name=name, point=point):
+                    session, flow = self.killed_between(name, point), self.cache[name]["session"]
+                    self.assertEqual([(o["intent_id"], o["state"]) for o in session.runner.orders()],
+                                     [(o["intent_id"], o["state"]) for o in flow.runner.orders()])
+                    self.assertEqual(session.digests(), flow.digests())
+                    self.assertEqual(session.runner.portfolio.snapshot(), flow.runner.portfolio.snapshot())
+                    reasons = lambda sess: sorted((r["intent_id"], tuple(r["reasons"])) for r in sess.runner.executor.records     # noqa: E731
+                                                  if r.get("status") == "rejected")
+                    self.assertEqual(reasons(session), reasons(flow))
+                    self.assertEqual([e["data"]["reason"] for e in session.runner.journal.entries if e["kind"] == "order_cancelled"],
+                                     [e["data"]["reason"] for e in flow.runner.journal.entries if e["kind"] == "order_cancelled"])
+                    mine, theirs = self.loss_audit(session), self.loss_audit(flow)
+                    self.assertEqual([{k: v for k, v in r.items() if k != "declared_ms"} for r in mine],
+                                     [{k: v for k, v in r.items() if k != "declared_ms"} for r in theirs])      # the declaration instant is the recovery's own if it died first
+                    self.assertEqual(session.runner.integrity()["open_cycles"], [])
+
+
 class TestOpenHolesOrder(unittest.TestCase):
     """What ``_open_holes`` declares and in which order (D-17-17), without a circuit: the pending orders and last quotes are given."""
 
