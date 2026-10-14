@@ -441,6 +441,8 @@ export default function ApprovedTerminalChart({
       // the pointer, so the label of a neighbouring decision could win over
       // an EJEC. square. The marker whose glyph is in the clicked candle
       // column is resolved here, from the coordinates the chart has now.
+      // A click with a pointer that is not on a marker selects nothing: it
+      // is neither the library's label hit nor a bare candle.
       const objectId = param.point
         ? pickMarkerAt(
             markerPoints(),
@@ -449,6 +451,7 @@ export default function ApprovedTerminalChart({
               16,
               Math.max(8, chart.timeScale().options().barSpacing / 2),
             ),
+            MARKER_STACK_STEP_PX,
           )
         : hovered
       if (typeof objectId === 'string') {
@@ -459,7 +462,7 @@ export default function ApprovedTerminalChart({
               state.intervalSeconds,
             marker.id,
           )
-      } else if (typeof param.time === 'number') {
+      } else if (!param.point && typeof param.time === 'number') {
         state.onSelect(param.time)
       }
     }

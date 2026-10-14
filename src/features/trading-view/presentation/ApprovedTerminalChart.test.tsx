@@ -243,6 +243,11 @@ describe('approved connected terminal chart', () => {
     expect(onSelect).toHaveBeenLastCalledWith(candles[41]!.time, 'fill:3')
     click({ point: at(40), hoveredObjectId: 'fill:3' })
     expect(onSelect).toHaveBeenLastCalledWith(candles[40]!.time, 'PF_XBTUSD-1')
+    // The bare background, far below the glyphs, selects neither of them.
+    onSelect.mockClear()
+    click({ point: { x: 41 * 13, y: 500 }, hoveredObjectId: 'PF_XBTUSD-1' })
+    click({ point: { x: 300 * 13, y: 112 }, time: candles[41]!.time })
+    expect(onSelect).not.toHaveBeenCalled()
   })
 
   it('retains the newest 200 eligible markers after sorting', () => {

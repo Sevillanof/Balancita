@@ -363,6 +363,42 @@ test('a fill and the decision next to it open their own facts, in either order, 
   }
 })
 
+test('clicking the bare background of the chart opens neither a decision nor a fill', async ({
+  page,
+}) => {
+  await openTerminal(page)
+  const chart = page.getByTestId('approved-chart-renderer')
+  const detail = page.getByLabel('Ejecución seleccionada')
+  const selectedBefore = await chart.getAttribute('data-selected-marker')
+  const box = (await chart.boundingBox())!
+  const all = await markerPositions(chart)
+  const fill = all.find((p) => p.id.startsWith('fill:'))!
+  // Straight below the fill, well inside the plot and far from every glyph.
+  const y = Math.min(fill.y + 200, box.height - 60)
+  expect(
+    all
+      .filter((p) => Math.abs(p.x - fill.x) < 60)
+      .every((p) => Math.abs(p.y - y) > 60),
+  ).toBe(true)
+  for (const x of [fill.x, fill.x - 13, fill.x + 13]) {
+    await page.clock.fastForward(600)
+    await page.mouse.move(box.x + x, box.y + y, { steps: 6 })
+    await page.evaluate(() => new Promise(requestAnimationFrame))
+    await page.mouse.click(box.x + x, box.y + y)
+    await page.evaluate(
+      () =>
+        new Promise((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(resolve)),
+        ),
+    )
+    await expect(chart).toHaveAttribute(
+      'data-selected-marker',
+      selectedBefore ?? '',
+    )
+    await expect(detail).toHaveCount(0)
+  }
+})
+
 test('changing product swaps AHORA, rows and markers; nothing leaks across', async ({
   page,
 }) => {

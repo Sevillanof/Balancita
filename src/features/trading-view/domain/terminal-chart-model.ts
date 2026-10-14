@@ -351,17 +351,24 @@ export interface MarkerPoint {
  * label of a neighbouring decision could therefore steal the click from an
  * EJEC. square one candle away. The click belongs to the marker whose glyph
  * is in the clicked candle column: nearest on x, then, within the same column,
- * nearest on y. Null when no marker is within `tolerancePx` horizontally.
+ * nearest on y.
+ *
+ * Both distances are bounded, so a click on the bare background selects
+ * nothing: `toleranceX` is about half a bar, `toleranceY` the vertical reach
+ * of a glyph with its label (the distance at which the library stacks the
+ * next marker of a candle), measured from the glyph centre. Null when no
+ * marker is within both.
  */
 export function pickMarkerAt(
   markers: readonly MarkerPoint[],
   point: { x: number; y: number },
-  tolerancePx: number,
+  toleranceX: number,
+  toleranceY: number,
 ): string | null {
   let best: MarkerPoint | null = null
   for (const marker of markers) {
     const dx = Math.abs(marker.x - point.x)
-    if (dx > tolerancePx) continue
+    if (dx > toleranceX || Math.abs(marker.y - point.y) > toleranceY) continue
     if (best === null) {
       best = marker
       continue
