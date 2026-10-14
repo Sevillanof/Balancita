@@ -93,6 +93,7 @@ class SpecSignalStrategy(Strategy):
         self.spec_hash = spec_hash(spec)
         self.spec_json = json.dumps(spec, sort_keys=True)
         self.uses_funding = "fundpct" in self.spec_json     # reads the funding percentile (a funding-dependent strategy)
+        self.funding_bands = (float(params["pct_low"]), float(params["pct_high"])) if self.uses_funding and "pct_low" in params else None
         self.tick_sizes = dict(tick_sizes)
         self.vol_feature, self.vol_minutes = risk["vol"], risk["vol_minutes"]
         self._spec = spec

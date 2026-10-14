@@ -9,7 +9,9 @@ import unittest
 from decimal import Decimal
 
 from balancita_engine import replay_compare as RC
+from balancita_engine import futures_funding_context as FF
 from balancita_engine import replay_data as RD
+from balancita_engine import replay_funding_audit as RFA
 from balancita_engine import replay_driver as RP
 from balancita_engine import replay_specs as RS
 from balancita_engine import signal_continuity as SC
@@ -254,6 +256,109 @@ class Compare(unittest.TestCase):
         self.assertFalse(RC.compare({"S1": a, "S0": b})["signals"]["identical_across_scenarios"])
 
 
+def periods(n, skip=()):
+    return [(START + i * HOUR, 0.00001 * (i % 40) + i * 1e-9) for i in range(n) if i not in skip]
+
+
+class FundingAudit(Tmp):
+    BANDS = (10.0, 90.0)
+
+    def at(self, hour):                                       # the instant hour ``hour`` becomes published
+        return START + hour * HOUR + HOUR + 600_000
+
+    def test_clean_history_has_no_carry_forward_and_both_readings_agree(self):
+        ctx = FundingContext(periods(800))
+        r = RFA.audit_record(ctx, self.at(790), self.BANDS)
+        self.assertFalse(r["carry_forward"])
+        self.assertEqual(r["window_hours"], 720)
+        self.assertEqual(r["last_hour_used_ms"], START + 790 * HOUR)
+        self.assertEqual(r["forward_percentile"], r["strict_percentile"])
+        self.assertEqual(r["forward_percentile"], ctx.percentile(self.at(790))[1])
+
+    def test_an_hour_in_its_publication_wait_is_not_a_carry_forward(self):
+        ctx = FundingContext(periods(800))
+        r = RFA.audit_record(ctx, self.at(790) - 1, self.BANDS)        # hour 790 exists but is not published yet
+        self.assertEqual(r["last_hour_used_ms"], START + 789 * HOUR)
+        self.assertFalse(r["carry_forward"])
+        self.assertTrue(r["in_publication_wait"])
+
+    def test_a_missing_last_hour_is_a_data_gap_carry_forward_and_strict_is_unknown(self):
+        ctx = FundingContext(periods(800, skip=(790,)))
+        r = RFA.audit_record(ctx, self.at(790), self.BANDS)
+        self.assertTrue(r["carry_forward"])
+        self.assertEqual(r["carry_forward_reason"], "data_gap")
+        self.assertEqual(r["last_hour_used_ms"], START + 789 * HOUR)
+        self.assertEqual(r["missing_hours_since_due"], 1)
+        self.assertEqual(r["forward_percentile"], ctx.percentile(self.at(790))[1])      # the forward's own number, unchanged
+        self.assertTrue(r["strict_unknown"])
+        self.assertIsNone(r["strict_signal"])
+
+    def test_a_hole_inside_the_window_stretches_it_and_makes_strict_unknown(self):
+        ctx = FundingContext(periods(800, skip=(300,)))
+        r = RFA.audit_record(ctx, self.at(790), self.BANDS)
+        self.assertFalse(r["carry_forward"])
+        self.assertEqual(r["window_hours"], 721)
+        self.assertEqual(r["missing_hours_in_window"], 1)
+        self.assertTrue(r["long_window"])
+        self.assertTrue(r["strict_unknown"])
+        # the hole leaves the window 720 hours later: both readings agree again
+        later = RFA.audit_record(ctx, self.at(790 + 0), self.BANDS)
+        self.assertEqual(later["window_hours"], 721)
+        clean = RFA.audit_record(FundingContext(periods(1100, skip=(300,))), self.at(1040), self.BANDS)
+        self.assertEqual(clean["window_hours"], 720)
+        self.assertFalse(clean["strict_unknown"])
+
+    def test_under_30_days_is_unknown_in_both_readings(self):
+        r = RFA.audit_record(FundingContext(periods(800)), self.at(700), self.BANDS)
+        self.assertTrue(r["unknown"] and r["strict_unknown"])
+
+    def test_strict_never_invents_a_signal_and_the_classes_cover_every_case(self):
+        self.assertEqual(RFA.classify("SELL", None), "disappears_unknown")
+        self.assertEqual(RFA.classify("SELL", "WAIT"), "disappears_wait")
+        self.assertEqual(RFA.classify("SELL", "BUY"), "different_direction")
+        self.assertEqual(RFA.classify("SELL", "SELL"), "same_entry")
+        self.assertEqual(RFA.classify("WAIT", "BUY"), "additional_in_strict")
+        self.assertEqual(RFA.classify("WAIT", None), "wait_strict_unknown")
+        self.assertEqual(RFA.classify("WAIT", "WAIT"), "both_wait")
+
+    def test_summary_counts_divergence_without_touching_the_records(self):
+        rows = [dict(unknown=False, carry_forward=True, carry_forward_reason="data_gap", in_publication_wait=False, long_window=False,
+                     window_hours=720, original="SELL", incomplete_evidence=True, strict_unknown=True, strict_class="disappears_unknown"),
+                dict(unknown=False, carry_forward=False, carry_forward_reason=None, in_publication_wait=False, long_window=False,
+                     window_hours=720, original="WAIT", incomplete_evidence=False, strict_unknown=False, strict_class="both_wait")]
+        before = json.dumps(rows, sort_keys=True)
+        out = RFA.summarize(rows)
+        self.assertEqual(json.dumps(rows, sort_keys=True), before)
+        self.assertEqual(out["with_carry_forward"], 1)
+        self.assertEqual(out["original_entries_that_disappear_strict"], 1)
+        self.assertEqual(out["divergence_pct_of_evaluations"], 50.0)
+        self.assertEqual(out["divergence_pct_of_original_entries"], 100.0)
+
+    def test_the_replay_reads_the_same_periods_as_the_forward(self):
+        path = os.path.join(tempfile.mkdtemp(), "m.sqlite")
+        self.addCleanup(shutil.rmtree, os.path.dirname(path), True)
+        make_db(path, start_ms=START, end_ms=START + 5 * DAY)
+        import sqlite3
+        db = sqlite3.connect(path)
+        raw = json.loads(db.execute("SELECT raw_response FROM paper_futures_funding_responses").fetchone()[0])
+        for n, (received, revised) in enumerate(((1_790_000_100_000, "0.0099"), (1_790_000_200_000, "0.0088"), (1_790_000_300_000, "0.0077"))):
+            body = json.loads(json.dumps(raw))
+            body["rates"][3]["relativeFundingRate"] = revised                    # a later revision of hour 3: the oldest wins
+            body["rates"].append({"timestamp": "{}.000Z".format(RP.iso(START + 5 * DAY + n * HOUR)[:-1]), "fundingRate": "0.5",
+                                  "relativeFundingRate": "0.0001"})
+            db.execute("INSERT INTO paper_futures_funding_responses VALUES(?,?,?,?)", ("r%d" % n, received, "t", json.dumps(body)))
+            db.execute("INSERT INTO paper_futures_funding_periods VALUES(?,?,?,?,?,?,?)",
+                       ("r%d" % n, BTC, START, START + HOUR, "0.5", received, "usd_per_base_per_hour"))
+        db.commit()
+        db.close()
+        forward = dict(FF.load_periods(path, BTC))
+        gate = RD.ReplayDataGate(path, START, START + 5 * DAY + 3 * HOUR)
+        replay = {s: float(r) for s, r in gate.relative_funding(BTC)}
+        gate.close()
+        self.assertEqual(replay, {s: v for s, v in forward.items() if s < START + 5 * DAY + 3 * HOUR})
+        self.assertNotEqual(replay[START + 3 * HOUR], 0.0099)                        # not the revision: the oldest response
+
+
 class FrozenEndToEnd(Shared):
     def test_the_run_uses_the_three_frozen_strategies_and_declares_their_identity(self):
         out, _ = self.run_cached("s1")
@@ -309,6 +414,31 @@ class FrozenEndToEnd(Shared):
         self.assertGreater(diag["stale"], 0)
         self.assertGreater(diag["cycles"], diag["stale"] - 1)
         self.assertIn("funding_decisions_with_stale_hour", diag)
+
+    def test_c32_evaluations_are_audited_one_by_one_and_summarised(self):
+        out, _ = self.run_cached("s1")
+        audit = out["funding_diagnostics"]["audit"]
+        self.assertEqual(audit["evaluations"], out["funding_diagnostics"]["cycles"])
+        self.assertEqual(audit["with_carry_forward"], 0)
+        self.assertEqual(audit["strict_classes"].get("different_direction", 0), 0)
+        home, _ = self.home()
+        info = out["funding_diagnostics"]["audit_file"]
+        with open(os.path.join(home, "s1", info["path"]), "rb") as handle:
+            blob = handle.read()
+        import hashlib
+        self.assertEqual(hashlib.sha256(blob).hexdigest(), info["sha256"])
+        self.assertEqual(len(blob.splitlines()), info["rows"])
+
+    def test_the_audit_sees_the_holes_without_changing_the_decisions(self):
+        home, path = self.home()
+        holes = os.path.join(home, "holes.sqlite")
+        if not os.path.exists(holes):
+            fixture_db(holes, funding_skip=tuple(range(34 * 24 + 4, 34 * 24 + 24)))
+        out, _ = self.run_cached("holes", db=holes)
+        audit = out["funding_diagnostics"]["audit"]
+        self.assertGreater(audit["with_carry_forward"], 0)
+        self.assertGreater(audit["original_entries_on_incomplete_evidence"], 0)
+        self.assertGreater(audit["original_entries_that_disappear_strict"], 0)
 
     def test_funding_accounting_is_not_duplicated_by_reconciliation(self):
         out, _ = self.run_cached("s1")

@@ -45,6 +45,7 @@ from .paper_runner_report import counts, integrated_audit
 from .portfolio import PortfolioPolicy
 from .portfolio_audit import accounting_digest
 from .portfolio_watch import WatchPolicy
+from . import replay_funding_audit as RFA
 from .replay_specs import FROZEN_IDS, load_frozen
 
 D = Decimal
@@ -223,6 +224,7 @@ def product_events(product, data, strategies, cfg, frames, cycle_atr=None, flags
     """``(key, event)`` for one product, in time order: its candles and its cycles. ``frames`` receives the frame of each
     cycle (keyed by product and cycle) for the evaluator; nothing is looked up that was not known at that frame."""
     periods = merged_indicators(strategies)
+    bands = next((s.funding_bands for s in strategies if getattr(s, "funding_bands", None)), None)
     feeder = FrameFeeder(periods)
     context = FundingContext([(s, float(r)) for s, r in data["funding"]])
     feed_from = cfg.decision_start_ms - FIVE_MINUTES_MS
@@ -242,7 +244,7 @@ def product_events(product, data, strategies, cfg, frames, cycle_atr=None, flags
             seq += 1
             frames[(product, close_ms)] = frame
             if flags is not None:
-                flags[(product, close_ms)] = funding_flags(context, close_ms)
+                flags[(product, close_ms)] = RFA.audit_record(context, close_ms, bands)
             atr = cycle_atr(frame) if cycle_atr is not None else None
             atr = trend["atr14"] if atr is None or atr <= 0 else atr      # the spec's volatility, else the default ATR
             event = make_event("cycle", {"product_id": product, "cycle_ms": close_ms, "price": str(trend["candidate_close"]),
@@ -311,7 +313,7 @@ def run_replay(candles_db, funding_db, config, out_dir, *, data=None, strategies
     if os.path.exists(signals_path):
         raise ReplayError("signals.jsonl already exists")
     log = SC.SignalLog.create(signals_path, cfg.decision_start_ms)
-    frames, flags = {}, {}
+    frames, flags, audit_rows = {}, {}, []
     funding_diag = {"cycles": 0, "unknown": 0, "stale": 0, "long_window": 0, "funding_decisions": 0,
                     "funding_decisions_with_stale_hour": 0, "funding_decisions_with_long_window": 0}
 
@@ -323,6 +325,12 @@ def run_replay(candles_db, funding_db, config, out_dir, *, data=None, strategies
         for name in ("unknown", "stale", "long_window"):
             funding_diag[name] += 1 if flag[name] else 0
         for strategy, (signal, _inputs) in zip(chosen, results):
+            if getattr(strategy, "uses_funding", False):
+                original = signal["action"]
+                row = dict(flag, strategy_id=strategy.id, product_id=payload["product_id"], original=original)
+                row["incomplete_evidence"] = original != "WAIT" and bool(flag.get("carry_forward") or flag.get("long_window"))
+                row["strict_class"] = RFA.classify(original, flag["strict_signal"])
+                audit_rows.append(row)
             if getattr(strategy, "uses_funding", False) and signal["action"] != "WAIT":
                 funding_diag["funding_decisions"] += 1
                 funding_diag["funding_decisions_with_stale_hour"] += 1 if flag["stale"] else 0
@@ -384,6 +392,15 @@ def run_replay(candles_db, funding_db, config, out_dir, *, data=None, strategies
     while heap:
         deliver(heapq.heappop(heap)[2])
     runner.finish(last_t)
+    if audit_rows:
+        funding_diag["audit"] = RFA.summarize(audit_rows)
+        audit_path = os.path.join(out_dir, "funding_audit.jsonl")
+        text = "".join(json.dumps(r, sort_keys=True) + "\n" for r in audit_rows)
+        with open(audit_path + ".partial", "w", encoding="utf-8") as handle:
+            handle.write(text)
+        os.replace(audit_path + ".partial", audit_path)
+        funding_diag["audit_file"] = {"path": "funding_audit.jsonl", "rows": len(audit_rows),
+                                      "sha256": hashlib.sha256(text.encode("utf-8")).hexdigest()}
     results = build_results(cfg, data, runner, manifest, rejections, fills, funding_diag)
     _write_once(os.path.join(out_dir, "results.json"), results)
     if on_runner is not None:            # tests: the finished runner (journal, ledger) for recovery checks
