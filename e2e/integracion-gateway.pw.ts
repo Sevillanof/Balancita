@@ -206,7 +206,24 @@ test('Terminal on the real gateway: every interaction answers without 404', asyn
   // Terminal <-> Estrategias (registry S is up in this run).
   await page.getByRole('link', { name: 'Estrategias' }).click()
   await expect(page).toHaveURL(/estrategias/)
+  // Estrategias opens on the inventory (read from the real registry S).
+  await expect(
+    page.getByRole('heading', {
+      name: 'Inventario de modelos y calificación estadística',
+    }),
+  ).toBeVisible()
+  // inventory -> laboratory -> inventory -> detail of a strategy -> Terminal.
+  await page.getByRole('tab', { name: 'Laboratorio' }).click()
   await expect(page.getByText('Registro de estrategias ·')).toBeVisible()
+  await page.getByRole('tab', { name: 'Inventario de modelos' }).click()
+  await page
+    .getByRole('button', { name: /Detalle de/ })
+    .first()
+    .click()
+  await expect(page.getByRole('tab', { name: 'Laboratorio' })).toHaveAttribute(
+    'aria-selected',
+    'true',
+  )
   await page.getByRole('link', { name: 'Terminal', exact: true }).click()
   await expect(page.getByTestId('activity-panel')).toBeVisible()
 
@@ -235,6 +252,7 @@ test('Estrategias on the real registry S: list, detail, period, new-strategy mod
   const before = await count()
 
   await page.goto('/estrategias')
+  await page.getByRole('tab', { name: 'Laboratorio' }).click()
   await expect(page.getByText('Registro de estrategias ·')).toBeVisible()
   await expect(
     page.getByText('Registro de estrategias no disponible'),
@@ -298,6 +316,10 @@ test('Estrategias with the registry stopped: honest state, no Carry spam', async
   const log = recordApi(page)
 
   await page.goto('/estrategias')
+  // The inventory (default view) and the laboratory both say it.
+  await expect(page.getByText('No se pudo leer el inventario')).toBeVisible()
+  await expect(page.getByText(/servicio sin iniciar/).first()).toBeVisible()
+  await page.getByRole('tab', { name: 'Laboratorio' }).click()
   await expect(
     page
       .getByText('Registro de estrategias no disponible: servicio sin iniciar')

@@ -22,7 +22,7 @@ const REGISTRY_PORT = 8790
 const SHOTS =
   process.env.INVENTORY_SHOTS_DIR ?? 'playwright-artifacts/inventario'
 const SANDBOX_NOTE =
-  'SANDBOX · config/ real copiada (solo lectura) + base temporal del registro · estados de registro sembrados, no los de la Mac'
+  'DATOS DE EJEMPLO · SANDBOX · config/ real copiada (solo lectura) + base temporal del registro · estados de registro sembrados, no los de la Mac'
 
 let registry: ChildProcess | null = null
 let configCopy = ''
@@ -178,6 +178,13 @@ test('Estrategias opens on the inventory and every interaction answers', async (
       .locator('[data-id="kronos-small-1h-h4-v1"]')
       .getByTestId('operational-badge'),
   ).toHaveText('Estado no verificado')
+  // C31 is registered only in qwen-exit.json: a config does not prove it runs.
+  const c31 = page.locator('[data-id^="c31"]')
+  await expect(c31.getByTestId('operational-badge')).toHaveText(
+    'Estado no verificado',
+  )
+  await expect(page.getByText('Activa en paper')).toHaveCount(0)
+  await expect(page.getByText('Con evidencia de ventaja')).toHaveCount(0)
   await expect(page.getByText('Todas', { exact: false }).first()).toBeVisible()
   await shot(page, '1-inventario')
 
@@ -224,4 +231,43 @@ test('Estrategias opens on the inventory and every interaction answers', async (
     (entry) => entry.url.startsWith('/api-strategies/') && entry.status >= 500,
   )
   expect(failed, JSON.stringify(failed, null, 2)).toEqual([])
+})
+
+test('navigation: Terminal <-> Estrategias <-> inventory <-> detail, no new tabs', async ({
+  page,
+}) => {
+  await page.route('**/api-live/**', (route) =>
+    route.fulfill({ status: 503, json: {} }),
+  )
+  // The Terminal side of the round trip (with its own navigation) is covered
+  // against the real gateway in integracion-gateway.pw.ts.
+  await page.goto('/estrategias')
+  await expect(
+    page.getByRole('heading', {
+      name: 'Inventario de modelos y calificación estadística',
+    }),
+  ).toBeVisible()
+  await expect(page.getByTestId('inventory-row')).toHaveCount(10)
+  // No new tab: the two views of Estrategias are the only ones.
+  await expect(page.getByRole('tab')).toHaveText([
+    'Inventario de modelos',
+    'Laboratorio',
+  ])
+  // Detail of C29 -> laboratory -> back to the inventory.
+  await page.getByRole('button', { name: /Detalle de C29/ }).click()
+  await expect(page.getByRole('tab', { name: 'Laboratorio' })).toHaveAttribute(
+    'aria-selected',
+    'true',
+  )
+  await expect(
+    page.getByRole('heading', { name: /^C29/ }).first(),
+  ).toBeVisible()
+  await page.getByRole('tab', { name: 'Inventario de modelos' }).click()
+  await expect(page.getByTestId('inventory-row')).toHaveCount(10)
+  // Estrategias -> Terminal -> back: opens on the inventory again.
+  await page.getByRole('link', { name: 'Terminal', exact: true }).click()
+  await expect(page).toHaveURL(/\/terminal$/)
+  await page.goBack()
+  await expect(page).toHaveURL(/\/estrategias$/)
+  await expect(page.getByTestId('inventory-row')).toHaveCount(10)
 })

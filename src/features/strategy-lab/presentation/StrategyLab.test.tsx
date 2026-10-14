@@ -513,6 +513,7 @@ describe('StrategyLab without the registry', () => {
     const fetched = vi.spyOn(globalThis, 'fetch')
     render(
       <StrategyLab
+        initialView="lab"
         loadCandles={() => Promise.resolve(market)}
         connect={() => Promise.reject(new Error('sin respuesta (estado 502).'))}
         loadQwen={() => Promise.resolve(null as never)}
@@ -533,6 +534,7 @@ describe('StrategyLab without the registry', () => {
   it('draws no invented candles when the Terminal does not answer', async () => {
     render(
       <StrategyLab
+        initialView="lab"
         loadCandles={() => Promise.reject(new Error('Terminal caído.'))}
         connect={() => Promise.reject(new Error('sin respuesta.'))}
         loadQwen={() => Promise.resolve(null as never)}
