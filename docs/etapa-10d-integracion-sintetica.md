@@ -146,7 +146,15 @@ La suite de integración tarda ~290 s, por lo que el trabajo de Python de CI se 
 
 ## 11. GO/NO-GO para una sesión paper temporal (no iniciada)
 
-**NO-GO por ahora.** La integración sintética está demostrada y es reproducible, pero antes de una sesión temporal con cotizaciones
-observadas faltan: (1) el punto de entrada de cancelación por `source_stale` en el runner (9A), (2) la decisión sobre la fuente
-de fondeo devengado, (3) una revisión independiente de esta PR (agente D) y la autorización de Fran para el alcance de la
-sesión (duración, productos, ruta de datos). Con esos tres puntos cerrados y CI 5/5 sobre el HEAD final, el GO es razonable.
+**NO-GO por ahora.** La integración sintética está demostrada y es reproducible (revisión independiente de D sobre 92ecf02: sin
+BLOCKER, HIGH ni MEDIUM), pero antes de una sesión temporal con cotizaciones observadas faltan:
+
+1. El punto de entrada de cancelación por `source_stale` en el runner (9A). Pendiente, a decisión de Fran.
+2. La decisión sobre la fuente de fondeo devengado real (D-10C-4). Pendiente, a decisión de Fran.
+3. D-10B-06 (MEDIUM, abierto): `SourceReader.gaps()` no se usa; el silencio de un producto no se registra como intervalo.
+4. D-10B-07 (MEDIUM, abierto): REST y WebSocket se fusionan en `ticker:<producto>` sin `epoch`, `rid` ni `seq` en el evento; no se
+   puede rastrear su origen ni ver un cambio de época. D-10B-06 y -07 no impiden la puerta offline, pero bloquean conectar el
+   ingestor a la captura real. No se amplía el alcance de 10B sin pedido de Fran.
+5. La autorización de Fran para el alcance de la sesión (duración, productos, ruta de datos).
+
+Con esos puntos cerrados y CI 5/5 sobre el HEAD final, el GO es razonable.
