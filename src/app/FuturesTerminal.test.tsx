@@ -7,7 +7,7 @@ import {
   waitFor,
   within,
 } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import FuturesTerminal from './FuturesTerminal.tsx'
 import type {
   TerminalBootstrap,
@@ -15,6 +15,7 @@ import type {
 } from '../features/connected-trading/infrastructure/terminal-stream-client.ts'
 import { parseTerminalEnvelope } from '../features/connected-trading/infrastructure/terminal-stream-client.ts'
 import { reasonLabel } from './terminal-copy.ts'
+import healthHealthy from '../../docs/mission-control/b1/ejemplo-saludable.json'
 
 type ChartClickParameter = {
   hoveredInfo?: { objectId?: string }
@@ -33,6 +34,7 @@ vi.mock('lightweight-charts', () => {
   const series = {
     setData() {},
     update() {},
+    priceToCoordinate: () => null,
     priceScale: () => priceScale,
     createPriceLine: (options: Record<string, unknown>) => {
       chartHarness.priceLines.push(options)
@@ -46,6 +48,9 @@ vi.mock('lightweight-charts', () => {
     setVisibleLogicalRange() {},
     fitContent() {},
     scrollToRealTime() {},
+    subscribeVisibleLogicalRangeChange() {},
+    unsubscribeVisibleLogicalRangeChange() {},
+    timeToCoordinate: () => null,
   }
   const chart = {
     addSeries: () => series,
@@ -869,6 +874,15 @@ describe('FuturesTerminal local scenario presentation', () => {
                 volume_btc: '1',
                 closed: true,
               },
+              {
+                time_ms: decisionTimes[0],
+                open: '100000',
+                high: '100050',
+                low: '99950',
+                close: '100000',
+                volume_btc: '1',
+                closed: false,
+              },
             ],
           },
           state: { analyses: [], orders: [], fills: [] },
@@ -988,7 +1002,7 @@ describe('FuturesTerminal local scenario presentation', () => {
     )
     expect(new Set(visibleMarkers.map((marker) => marker.time)).size).toBe(1)
     expect(visibleMarkers.map((marker) => marker.time)).toEqual([
-      21_540, 21_540, 21_540, 21_540, 21_540,
+      21_600, 21_600, 21_600, 21_600, 21_600,
     ])
     expect(visibleMarkers.map((marker) => marker.shape)).toEqual([
       'square',
@@ -1086,6 +1100,15 @@ describe('FuturesTerminal local scenario presentation', () => {
                 volume_btc: '1',
                 closed: true,
               },
+              {
+                time_ms: 21_600_000,
+                open: '100000',
+                high: '100050',
+                low: '99950',
+                close: '100000',
+                volume_btc: '1',
+                closed: false,
+              },
             ],
           },
           state: { analyses, orders: [], fills: [] },
@@ -1094,14 +1117,14 @@ describe('FuturesTerminal local scenario presentation', () => {
     )
 
     expect(chartHarness.markerSets.at(-1)).toMatchObject(
-      analyses.map((analysis) => ({ id: analysis.analysis_id, time: 21_540 })),
+      analyses.map((analysis) => ({ id: analysis.analysis_id, time: 21_600 })),
     )
     expect(selectedAnalysisId()).toBe('analysis-5')
 
     const reached: (string | undefined)[] = []
     for (let click = 0; click < 5; click += 1) {
       await act(async () =>
-        chartHarness.clickHandlers.at(-1)?.({ time: 21_540 }),
+        chartHarness.clickHandlers.at(-1)?.({ time: 21_600 }),
       )
       reached.push(selectedAnalysisId())
     }
@@ -1113,9 +1136,9 @@ describe('FuturesTerminal local scenario presentation', () => {
       'analysis-5',
     ])
 
-    await act(async () => chartHarness.clickHandlers.at(-1)?.({ time: 21_600 }))
+    await act(async () => chartHarness.clickHandlers.at(-1)?.({ time: 21_660 }))
     expect(selectedAnalysisId()).toBe('analysis-5')
-    await act(async () => chartHarness.clickHandlers.at(-1)?.({ time: 21_480 }))
+    await act(async () => chartHarness.clickHandlers.at(-1)?.({ time: 21_540 }))
     expect(selectedAnalysisId()).toBe('analysis-5')
 
     await act(async () =>
@@ -1124,7 +1147,7 @@ describe('FuturesTerminal local scenario presentation', () => {
         .click(),
     )
     expect(selectedAnalysisId()).toBe('analysis-1')
-    await act(async () => chartHarness.clickHandlers.at(-1)?.({ time: 21_540 }))
+    await act(async () => chartHarness.clickHandlers.at(-1)?.({ time: 21_600 }))
     expect(selectedAnalysisId()).toBe('analysis-2')
   })
 
@@ -1174,6 +1197,8 @@ describe('FuturesTerminal local scenario presentation', () => {
 
 describe('FuturesTerminal on the live gateway with paper execution', () => {
   const T0 = 1_800_000_000_000
+  // Minute offsets (from T0) of the candles the live gateway delivers.
+  let candleOffsets = [-3, -2, -1, 0]
   const liveBootstrap = (status = 'running'): TerminalBootstrap => ({
     schema_version: 1,
     mode: 'paper_live',
@@ -1189,7 +1214,7 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
       schema_version: 'futures-terminal-market.v1',
       as_of_ms: T0,
       interval_ms: 60_000,
-      candles: [-3, -2, -1].map((offset) => ({
+      candles: candleOffsets.map((offset) => ({
         time_ms: T0 + offset * 60_000,
         open: '100000',
         high: '100050',
@@ -1291,6 +1316,7 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
 
   afterEach(() => {
     cleanup()
+    candleOffsets = [-3, -2, -1, 0]
     chartHarness.priceLines = []
     chartHarness.markerSets = []
     vi.unstubAllGlobals()
@@ -1318,7 +1344,7 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
     expect(screen.getByText('Rechazada')).toBeTruthy()
   })
 
-  it('draws verdict markers for entry verdicts only, none before the first candle or rebuilt from a backfill', async () => {
+  it('draws verdict markers (proposals as arrows, WAIT as a grey circle), none before the first candle or rebuilt from a backfill', async () => {
     await renderLive({
       ...state,
       analyses: [
@@ -1337,17 +1363,21 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
     })
     // The chart paints its markers in an effect, after the account renders:
     // wait for exactly the expected set, not merely for some set to exist.
-    // WAIT verdicts (one per minute) would only clutter the chart.
     await waitFor(() =>
       expect(
         chartHarness.markerSets.at(-1)?.map((marker) => marker.id),
-      ).toEqual(['verdict-hash-2', 'verdict-hash-3']),
+      ).toEqual(['verdict-hash-1', 'verdict-hash-2', 'verdict-hash-3']),
     )
     const markers = chartHarness.markerSets.at(-1)!
     expect(markers.map((marker) => marker.shape)).toEqual([
+      'circle',
       'arrowUp',
       'arrowDown',
     ])
+    // A proposal is not an operation: the label says so.
+    expect(
+      markers.map((marker) => String(marker.text).replace(' ◀', '')),
+    ).toEqual(['W', 'C25 LONG', 'C25 SHORT propuesta'])
   })
 
   it('keeps pause, resume and close visibly disabled with the PS-06 notice, and sends nothing', async () => {
@@ -1572,14 +1602,127 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
     it('ignores a click on a marker that is not one of this product’s decisions', async () => {
       await renderReady()
       await clickMarker('verdict-hash-2')
-      // A foreign id, an exit marker and a decision without marker (WAIT)
-      // leave the current selection untouched (no fallback to the newest).
+      // A foreign id and an exit marker leave the current selection
+      // untouched (no fallback to the newest).
       await clickMarker('verdict-of-another-product')
       await clickMarker('exit:order-1')
-      await clickMarker('verdict-hash-1')
       expect(detail().getByText('LONG')).toBeTruthy()
       expect(marker('verdict-hash-2')?.text).toMatch(/◀/)
       expect(marker('verdict-hash-3')?.text).not.toMatch(/◀/)
+    })
+
+    describe('a picked EJEC. marker shows its own verifiable facts', () => {
+      const fillOf = (id: number, extra = {}) => ({
+        fill_id: `fill:${id}`,
+        order_id: 'order-partial',
+        side: 'buy',
+        quantity_btc: '0.2',
+        price_usd_per_btc: '100011',
+        reduce_only: false,
+        event_time_ms: T0 - 90_000 + 123,
+        ...extra,
+      })
+      const withPartialFills = () => ({
+        ...state,
+        quantity_unit: 'BTC',
+        orders: [
+          {
+            order_id: 'order-partial',
+            side: 'buy',
+            state: 'filled',
+            reduce_only: false,
+          },
+        ],
+        fills: [
+          fillOf(7),
+          fillOf(8, {
+            quantity_btc: '0.3',
+            price_usd_per_btc: undefined,
+            event_time_ms: T0 - 70_000 + 456,
+          }),
+          fillOf(9, { side: 'sell', quantity_btc: '0.4' }),
+        ],
+      })
+      const fillDetail = () => screen.queryByLabelText('Ejecución seleccionada')
+
+      it('clicking the marker of a fill opens fill_id, order_id, UTC time, quantity, direction and source', async () => {
+        await renderReady(withPartialFills())
+        expect(fillDetail()).toBeNull()
+        await clickMarker('fill:7')
+        const facts = within(fillDetail()!)
+        expect(facts.getByText('fill:7')).toBeTruthy()
+        expect(facts.getByText('order-partial')).toBeTruthy()
+        expect(facts.getByText('2027-01-15 07:58:30.123 UTC')).toBeTruthy()
+        expect(facts.getByText('0.2 BTC')).toBeTruthy()
+        expect(facts.getByText('LONG (compra)')).toBeTruthy()
+        expect(facts.getByText('100011 USD')).toBeTruthy()
+        expect(facts.getByText('Histórico · Gateway D')).toBeTruthy()
+        expect(marker('fill:7')?.text).toMatch(/◀/)
+        expect(marker('fill:8')?.text).not.toMatch(/◀/)
+      })
+
+      it('shows each partial fill of the same order on its own and clears the previous one', async () => {
+        await renderReady(withPartialFills())
+        await clickMarker('fill:7')
+        await clickMarker('fill:8')
+        const facts = within(fillDetail()!)
+        expect(facts.getByText('fill:8')).toBeTruthy()
+        expect(facts.queryByText('fill:7')).toBeNull()
+        expect(facts.getByText('order-partial')).toBeTruthy()
+        expect(facts.getByText('2027-01-15 07:58:50.456 UTC')).toBeTruthy()
+        expect(facts.getByText('0.3 BTC')).toBeTruthy()
+        // The fill carries no price: it says so instead of inventing one.
+        expect(facts.getByText('No disponible')).toBeTruthy()
+        await clickMarker('fill:9')
+        const sell = within(fillDetail()!)
+        expect(sell.getByText('SHORT (venta)')).toBeTruthy()
+        expect(sell.getByText('0.4 BTC')).toBeTruthy()
+      })
+
+      it('is independent of the decisions: no row, detail or marker of a decision changes', async () => {
+        await renderReady(withPartialFills())
+        const pressed = () =>
+          screen
+            .getAllByRole('button', { name: /^Seleccionar análisis / })
+            .map((button) => button.getAttribute('aria-pressed'))
+        const before = pressed()
+        const decisionBefore = detail().getByText('SHORT')
+        expect(decisionBefore).toBeTruthy()
+        await clickMarker('fill:7')
+        expect(pressed()).toEqual(before)
+        expect(detail().getByText('SHORT')).toBeTruthy()
+        expect(fillDetail()!.textContent).not.toMatch(/verdict-hash/)
+        expect(fillDetail()!.textContent).toMatch(/ninguna decisión/)
+      })
+
+      it('clears when another marker, a history row, the same marker or Cerrar is picked', async () => {
+        await renderReady(withPartialFills())
+        await clickMarker('fill:7')
+        expect(fillDetail()).not.toBeNull()
+        await clickMarker('verdict-hash-2')
+        expect(fillDetail()).toBeNull()
+        expect(detail().getByText('LONG')).toBeTruthy()
+        await clickMarker('fill:7')
+        await pickRow('verdict-hash-3')
+        expect(fillDetail()).toBeNull()
+        await clickMarker('fill:7')
+        await clickMarker('fill:7')
+        expect(fillDetail()).toBeNull()
+        await clickMarker('fill:8')
+        await act(async () =>
+          within(fillDetail()!).getByRole('button', { name: 'Cerrar' }).click(),
+        )
+        expect(fillDetail()).toBeNull()
+        expect(marker('fill:8')?.text).not.toMatch(/◀/)
+      })
+
+      it('leaves exit and unknown markers as they were', async () => {
+        await renderReady(withPartialFills())
+        await clickMarker('fill:7')
+        await clickMarker('exit:order-1')
+        await clickMarker('not-a-marker')
+        expect(within(fillDetail()!).getByText('fill:7')).toBeTruthy()
+      })
     })
 
     describe('scroll of the selected row', () => {
@@ -1654,13 +1797,11 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
       })
     })
 
-    it('says a WAIT decision has no marker, and says nothing for an entry', async () => {
+    it('marks a WAIT decision too, and says nothing for any of them', async () => {
       await renderReady()
       await pickRow('verdict-hash-1')
-      expect(marker('verdict-hash-1')).toBeUndefined()
-      expect(notes()).toEqual([
-        'Esta decisión no tiene marcador en el gráfico: solo las entradas LONG/SHORT se marcan.',
-      ])
+      expect(marker('verdict-hash-1')?.text).toMatch(/WAIT ◀/)
+      expect(notes()).toEqual([])
       await pickRow('verdict-hash-2')
       expect(notes()).toEqual([])
     })
@@ -1690,6 +1831,59 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
       await pickRow('verdict-backfill')
       expect(marker('verdict-backfill')).toBeUndefined()
       expect(notes()[0]).toMatch(/se reconstruyó a partir de un backfill/)
+    })
+
+    it('never pins a decision to an earlier candle when its minute has none (hole)', async () => {
+      candleOffsets = [-4, -3, -1, 0]
+      await renderReady({
+        ...state,
+        analyses: [
+          analysis(1, 'LONG'),
+          analysis(2, 'LONG'),
+          analysis(3, 'SHORT'),
+        ],
+      })
+      // analysis(1) falls in the missing minute: no marker on candle -3.
+      expect(marker('verdict-hash-1')).toBeUndefined()
+      expect(marker('verdict-hash-2')).toBeDefined()
+      expect(marker('verdict-hash-3')).toBeDefined()
+      // It stays in the history and says why it is not on the chart.
+      await pickRow('verdict-hash-1')
+      expect(notes()).toEqual([
+        'Esta decisión no tiene marcador en el gráfico: no hay vela de su minuto en el gráfico (hueco en las velas); sigue en el historial.',
+      ])
+    })
+
+    it('does not glue a decision after the last candle to it', async () => {
+      candleOffsets = [-3, -2, -1]
+      await renderReady({
+        ...state,
+        analyses: [analysis(2, 'LONG'), analysis(3, 'SHORT')],
+      })
+      expect(marker('verdict-hash-2')).toBeDefined()
+      expect(marker('verdict-hash-3')).toBeUndefined()
+      await pickRow('verdict-hash-3')
+      expect(notes()).toEqual([
+        'Esta decisión no tiene marcador en el gráfico: ocurrió después de la última vela disponible.',
+      ])
+    })
+
+    it('uses the verdict bucket, not the later decision time, to find its candle', async () => {
+      // Decided 3 s into minute 0, but about the closed bucket of minute -1.
+      await renderReady({
+        ...state,
+        analyses: [
+          {
+            ...analysis(3, 'LONG'),
+            bucket_start_ms: T0 - 60_000,
+          },
+        ],
+      })
+      expect(marker('verdict-hash-3')).toBeDefined()
+      expect(
+        chartHarness.markerSets.at(-1)?.find((m) => m.id === 'verdict-hash-3')
+          ?.time,
+      ).toBe((T0 - 60_000) / 1000)
     })
 
     it('opens a decision older than the 100 listed and says it is not in the list', async () => {
@@ -1981,6 +2175,247 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
         screen.queryByRole('group', { name: 'Historial del gateway' }),
       ).toBeNull()
       expect(screen.queryByText('Posición actual: No disponible')).toBeNull()
+    })
+  })
+
+  describe('executed operations (EJEC.) come from the durable fills', () => {
+    const fill = (id: number, order: string, extra = {}) => ({
+      fill_id: `fill:${id}`,
+      order_id: order,
+      side: 'buy',
+      quantity_btc: '0.2',
+      price_usd_per_btc: '100011',
+      reduce_only: false,
+      event_time_ms: T0 - 90_000,
+      ...extra,
+    })
+    const withFills = (fills: unknown[], orders: unknown[]) => ({
+      ...state,
+      quantity_unit: 'BTC',
+      orders,
+      fills,
+    })
+    const ejecIds = () =>
+      (chartHarness.markerSets.at(-1) ?? [])
+        .filter((m) => String(m.id).startsWith('fill:'))
+        .map((m) => ({ id: m.id, text: String(m.text) }))
+
+    it('draws one marker per fill, partial fills included, with the original ids and quantities', async () => {
+      await renderLive(
+        withFills(
+          [
+            fill(7, 'o1', { quantity_btc: '0.2', event_time_ms: T0 - 90_000 }),
+            fill(8, 'o1', { quantity_btc: '0.3', event_time_ms: T0 - 70_000 }),
+            fill(9, 'o1', { side: 'sell', reduce_only: true }),
+          ],
+          [
+            {
+              order_id: 'o1',
+              side: 'buy',
+              state: 'filled',
+              reduce_only: false,
+              strategy_id: 'c25-pullback-perp-v1',
+            },
+          ],
+        ),
+      )
+      await waitFor(() =>
+        expect(ejecIds().map((m) => m.id)).toEqual(['fill:7', 'fill:8']),
+      )
+      expect(ejecIds().map((m) => m.text)).toEqual([
+        'Histórico · Gateway D · C25 EJ L',
+        'Histórico · Gateway D · C25 EJ L',
+      ])
+    })
+
+    it('does not draw a fill over another candle when its minute has none', async () => {
+      candleOffsets = [-4, -3, -1, 0]
+      await renderLive(
+        withFills(
+          [
+            fill(7, 'o1', { quantity_btc: '0.2', event_time_ms: T0 - 90_000 }),
+            fill(8, 'o1', { quantity_btc: '0.3', event_time_ms: T0 - 30_000 }),
+            fill(9, 'o1', { quantity_btc: '0.1', event_time_ms: T0 - 20_000 }),
+          ],
+          [{ order_id: 'o1', side: 'buy', state: 'filled' }],
+        ),
+      )
+      // fill:7 falls in the missing minute (-2); the two partial fills of the
+      // candle that exists are still drawn, each with its own id.
+      await waitFor(() =>
+        expect(ejecIds().map((m) => m.id)).toEqual(['fill:8', 'fill:9']),
+      )
+    })
+
+    it('does not invent a marker from a filled order that has no fill', async () => {
+      await renderLive(
+        withFills(
+          [],
+          [
+            {
+              order_id: 'o-orphan',
+              side: 'buy',
+              state: 'filled',
+              status: 'filled',
+              reduce_only: false,
+              closed_at_ms: T0 - 90_000,
+            },
+          ],
+        ),
+      )
+      await waitFor(() =>
+        expect(chartHarness.markerSets.at(-1)?.length).toBeGreaterThan(0),
+      )
+      expect(ejecIds()).toEqual([])
+    })
+
+    it('names proposals, WAIT, EJEC. and exits in the visible legend', async () => {
+      await renderLive()
+      const legend = document.querySelector('.terminal-chart__legend')!
+      expect(legend.textContent).toMatch(/propuesta LONG\/SHORT/)
+      expect(legend.textContent).toMatch(/W = WAIT/)
+      expect(legend.textContent).toMatch(/EJEC\. ejecución paper/)
+      expect(legend.textContent).toMatch(/salida/)
+      expect(legend.textContent).not.toMatch(/entrada larga|entrada corta/)
+    })
+  })
+
+  describe('AHORA is current only with the socket, a valid gateway clock and B1', () => {
+    const BUCKET = T0 - 60_000
+    // The clock the browser and the gateway share in these tests.
+    const AT = T0 + 10_000
+    const healthBody = (bucket: number, generatedAtMs = AT - 5_000) => {
+      const body = JSON.parse(JSON.stringify(healthHealthy))
+      body.generated_at_ms = generatedAtMs
+      const item = body.components
+        .find((c: { id: string }) => c.id === 'decisions')
+        .items.find((i: { product_id: string }) => i.product_id === 'PF_XBTUSD')
+      item.bucket_start_ms = bucket
+      return body
+    }
+    const ahoraState = {
+      ...state,
+      analyses: [
+        {
+          ...analysis(3, 'SHORT'),
+          decision_time_ms: AT - 20_000,
+          bucket_start_ms: BUCKET,
+        },
+      ],
+    }
+    let healthCalls = 0
+    let healthBucket = BUCKET
+    const stubFetch = () => {
+      healthCalls = 0
+      healthBucket = BUCKET
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (input: string) => {
+          const json = (body: unknown) =>
+            new Response(JSON.stringify(body), {
+              status: 200,
+              headers: { 'Content-Type': 'application/json' },
+            })
+          if (String(input).includes('/observability/health')) {
+            healthCalls += 1
+            return json(healthBody(healthBucket))
+          }
+          return new Response('{}', { status: 404 })
+        }),
+      )
+    }
+    const open = async (publishedAt = AT) => {
+      vi.stubGlobal('WebSocket', TerminalSocket)
+      render(
+        <FuturesTerminal bootstrap={liveBootstrap()} product="PF_XBTUSD" />,
+      )
+      await waitFor(() => expect(TerminalSocket.latest).toBeDefined())
+      TerminalSocket.latest!.publish(
+        envelope(
+          'snapshot',
+          0,
+          { watermark: 0, state: ahoraState },
+          publishedAt,
+          'live-market-view',
+        ),
+      )
+      await screen.findByText('Saldo USD')
+    }
+    const label = () => screen.getByTestId('last-decision')
+
+    beforeEach(() => {
+      // Only the clock is faked: the sockets, timers and fetch stay real.
+      vi.useFakeTimers({ toFake: ['Date'], now: AT })
+      stubFetch()
+      TerminalSocket.latest = undefined
+    })
+    afterEach(() => vi.useRealTimers())
+
+    it('is current when connected, the clock is valid and B1 reads the same bucket', async () => {
+      await open()
+      expect(await screen.findByTestId('now-action')).toHaveTextContent('SHORT')
+      expect(label()).not.toHaveTextContent('Sin confirmar')
+    })
+
+    it('falls back to «Sin confirmar» on disconnection and evaluates again from scratch on recovery', async () => {
+      await open()
+      await screen.findByTestId('now-action')
+      const readsBefore = healthCalls
+      const first = TerminalSocket.latest!
+      act(() => first.onclose?.())
+      await waitFor(() => expect(label()).toHaveTextContent('Sin confirmar'))
+      expect(screen.queryByTestId('now-action')).toBeNull()
+      expect(screen.getByTestId('now-blockers')).toHaveTextContent(
+        'sin conexión WebSocket',
+      )
+      // The stream reconnects by itself: until it delivers a message of the
+      // new connection there is no valid gateway clock, hence no «actual».
+      await waitFor(() => expect(TerminalSocket.latest).not.toBe(first))
+      expect(screen.queryByTestId('now-action')).toBeNull()
+      await act(async () => {
+        TerminalSocket.latest!.publish(
+          envelope(
+            'snapshot',
+            0,
+            { watermark: 0, state: ahoraState },
+            AT,
+            'live-market-view',
+          ),
+        )
+      })
+      // B1 was read again for the new connection, not reused.
+      await waitFor(() => expect(healthCalls).toBeGreaterThan(readsBefore))
+      expect(await screen.findByTestId('now-action')).toHaveTextContent('SHORT')
+    })
+
+    it('goes back to «Sin confirmar» when the gateway goes silent and its clock gets old', async () => {
+      await open()
+      await screen.findByTestId('now-action')
+      // A minute and a half of silence: no heartbeat, B1 not refreshed.
+      vi.setSystemTime(AT + 90_000)
+      await waitFor(() => expect(label()).toHaveTextContent('Sin confirmar'), {
+        timeout: 4_000,
+      })
+      expect(screen.getByTestId('now-blockers')).toHaveTextContent(
+        'reloj del gateway',
+      )
+    })
+
+    it('does not trust a gateway clock stamped in the future', async () => {
+      await open(AT + 600_000)
+      await waitFor(() => expect(healthCalls).toBeGreaterThan(0))
+      await waitFor(() => expect(label()).toHaveTextContent('Sin confirmar'))
+      expect(screen.queryByTestId('now-action')).toBeNull()
+    })
+
+    it('stays unconfirmed when B1 reads another bucket', async () => {
+      healthBucket = BUCKET - 60_000
+      await open()
+      await waitFor(() => expect(healthCalls).toBeGreaterThan(0))
+      await waitFor(() => expect(label()).toHaveTextContent('Sin confirmar'))
+      expect(screen.getByTestId('now-blockers')).toHaveTextContent(
+        'B1 no confirma',
+      )
     })
   })
 })

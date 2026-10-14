@@ -589,3 +589,20 @@
 .obs-card__pill-label {
   white-space: nowrap;
 }
+
+/* AHORA: the last real analysis of the stream, with its source. */
+.obs-now__kind {
+  color: var(--mc-text-3);
+  font-size: 11.5px;
+}
+.obs-now__source {
+  display: block;
+  color: var(--mc-text-3);
+  font-size: 11px;
+}
+.obs-now [data-action='LONG'] {
+  color: var(--mc-long);
+}
+.obs-now [data-action='SHORT'] {
+  color: var(--mc-short);
+}

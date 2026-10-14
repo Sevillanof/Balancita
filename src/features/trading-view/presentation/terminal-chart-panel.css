@@ -282,3 +282,43 @@
     padding: 2px;
   }
 }
+
+/* Facts of the EJEC. marker picked on the chart (an event of its own). */
+.terminal-chart__fill-detail {
+  margin: 0 0.75rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--demo-border, rgb(255 255 255 / 12%));
+  border-radius: 0.5rem;
+  font-size: 0.75rem;
+}
+.terminal-chart__fill-detail header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.terminal-chart__fill-detail h3 {
+  margin: 0;
+  font-size: 0.8125rem;
+}
+.terminal-chart__fill-detail dl {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  gap: 0.25rem 1rem;
+  margin: 0.5rem 0;
+}
+.terminal-chart__fill-detail dl > div {
+  min-width: 0;
+}
+.terminal-chart__fill-detail dt {
+  color: var(--demo-muted);
+}
+.terminal-chart__fill-detail dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums;
+}
+.terminal-chart__fill-detail p {
+  margin: 0;
+  color: var(--demo-muted);
+}

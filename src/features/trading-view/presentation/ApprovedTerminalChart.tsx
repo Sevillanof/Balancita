@@ -25,14 +25,29 @@ export type ApprovedTerminalCandle = {
 export type ApprovedTerminalMarker = {
   id: string
   time: number
-  type: 'entry' | 'exit' | 'discard' | 'decision'
+  /**
+   * `proposal`: a LONG/SHORT verdict (a proposal, not an operation).
+   * `wait`: WAIT verdicts, possibly several grouped (`count`).
+   * `fill`: an operation actually executed in paper execution (a real fill).
+   */
+  type: 'entry' | 'exit' | 'discard' | 'decision' | 'proposal' | 'wait' | 'fill'
   direction?: 'long' | 'short' | 'flat'
+  /** Short text painted on the chart (markers pile up). */
   label: string
+  /** Full text, painted instead of `label` while the marker is selected. */
+  detail?: string
   positionId?: string | null
   /** Strategy that took the decision; colours the marker and feeds the filter. */
   strategyId?: string
   decisionStatus?: 'pending' | 'hold' | 'gate-rejected' | 'abstained'
+  /** A grouped marker stands for several decisions: how many. */
+  count?: number
+  /** Every id a grouped marker stands for (selecting any one highlights it). */
+  memberIds?: readonly string[]
 }
+
+const stands = (marker: ApprovedTerminalMarker, id: string): boolean =>
+  marker.id === id || (marker.memberIds?.includes(id) ?? false)
 
 export type ApprovedTerminalLevel = {
   positionId: string
@@ -110,8 +125,35 @@ import { strategyMarkerColor } from '../domain/terminal-chart-model.ts'
 
 function markerPresentation(
   marker: ApprovedTerminalMarker,
-  colors: { up: string; down: string; amber: string; info: string },
+  colors: {
+    up: string
+    down: string
+    amber: string
+    info: string
+    muted: string
+  },
 ) {
+  // Executed operation: a square on the side of the trade, apart from the
+  // arrows of proposals and the grey circles of WAIT.
+  if (marker.type === 'fill')
+    return marker.direction === 'short'
+      ? {
+          color: colors.down,
+          shape: 'square' as const,
+          position: 'aboveBar' as const,
+        }
+      : {
+          color: colors.up,
+          shape: 'square' as const,
+          position: 'belowBar' as const,
+        }
+  if (marker.type === 'wait')
+    return {
+      color: colors.muted,
+      shape: 'circle' as const,
+      // Inside the candle: apart from the exits' circle above the bar.
+      position: 'inBar' as const,
+    }
   if (marker.type === 'discard')
     return {
       color: colors.amber,
@@ -155,7 +197,10 @@ const FALLBACK_PANE_HEIGHT_PX = 420
 const MAX_STACK_MARGIN = 0.6
 const MAX_TOTAL_MARGIN = 0.9
 
-type StackedMarker = { time: unknown; position: 'aboveBar' | 'belowBar' }
+type StackedMarker = {
+  time: unknown
+  position: 'aboveBar' | 'belowBar' | 'inBar'
+}
 
 /**
  * Same-bucket, same-side markers stack by roughly one glyph plus its label per
@@ -173,6 +218,7 @@ function markerStackScaleMargins(
   let maxAbove = 0
   let maxBelow = 0
   for (const marker of markers) {
+    if (marker.position === 'inBar') continue
     const side = depth[marker.position]
     const count = (side.get(marker.time) ?? 0) + 1
     side.set(marker.time, count)
@@ -237,6 +283,8 @@ export default function ApprovedTerminalChart({
   const renderedCandles = useRef<readonly ApprovedTerminalCandle[] | null>(null)
   const renderedInterval = useRef<number | null>(null)
   const propsRef = useRef({ candles, markers, intervalSeconds, onSelect })
+  const publishRef = useRef<(() => void) | null>(null)
+  const paintedRef = useRef<readonly SeriesMarker<Time>[]>([])
 
   useEffect(() => {
     propsRef.current = { candles, markers, intervalSeconds, onSelect }
@@ -356,11 +404,57 @@ export default function ApprovedTerminalChart({
       }
     }
     chart.subscribeClick(handleClick)
+    // Where each painted marker sits (container pixels). The canvas has no DOM
+    // per marker, so this is what lets the browser tests (and anyone
+    // inspecting the page) find and click a marker without guessing.
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const publishPositions = () => {
+      timer = null
+      const byTime = new Map(
+        propsRef.current.candles.map((candle) => [candle.time, candle]),
+      )
+      const positions = paintedRef.current.flatMap((marker) => {
+        const candle = byTime.get(Number(marker.time))
+        const x = chart.timeScale().timeToCoordinate(marker.time)
+        const y = candle
+          ? series.priceToCoordinate(
+              marker.position === 'aboveBar'
+                ? candle.high
+                : marker.position === 'inBar'
+                  ? (candle.high + candle.low) / 2
+                  : candle.low,
+            )
+          : null
+        if (x === null || y === null) return []
+        return [
+          {
+            id: marker.id,
+            x: Math.round(x),
+            y:
+              Math.round(y) +
+              (marker.position === 'aboveBar'
+                ? -12
+                : marker.position === 'inBar'
+                  ? 0
+                  : 12),
+          },
+        ]
+      })
+      node.dataset.markerPositions = JSON.stringify(positions)
+    }
+    const schedulePositions = () => {
+      if (timer === null) timer = setTimeout(publishPositions, 30)
+    }
+    publishRef.current = schedulePositions
+    chart.timeScale().subscribeVisibleLogicalRangeChange(schedulePositions)
     chartRef.current = chart
     candleSeriesRef.current = series
     volumeRef.current = volume
     markerRef.current = markerApi
     return () => {
+      chart.timeScale().unsubscribeVisibleLogicalRangeChange(schedulePositions)
+      publishRef.current = null
+      if (timer !== null) clearTimeout(timer)
       chart.unsubscribeClick(handleClick)
       priceLines.current.forEach((line) => series.removePriceLine(line))
       priceLines.current = []
@@ -453,6 +547,7 @@ export default function ApprovedTerminalChart({
       down: cssColor('--chart-down', '#ee7777'),
       amber: cssColor('--warning', '#d4aa62'),
       info: cssColor('--info', '#79a9bd'),
+      muted: cssColor('--muted-foreground', '#8b969a'),
     }
     const visibleMarkers: SeriesMarker<Time>[] = [...markers]
       .sort((left, right) => left.time - right.time)
@@ -468,9 +563,11 @@ export default function ApprovedTerminalChart({
             position: appearance.position,
             color: strategyColor ?? appearance.color,
             shape: appearance.shape,
-            text: `${marker.label}${selectedId === marker.id ? ' ◀' : ''}`,
+            text: stands(marker, selectedId)
+              ? `${marker.detail ?? marker.label} ◀`
+              : marker.label,
             id: marker.id,
-            size: selectedId === marker.id ? 2 : 1,
+            size: stands(marker, selectedId) ? 2 : 1,
           },
         ]
       })
@@ -491,6 +588,8 @@ export default function ApprovedTerminalChart({
       marginsApplied.current = stacked
     }
     markerRef.current?.setMarkers(painted)
+    paintedRef.current = painted
+    publishRef.current?.()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bucketsKey, markers, selectedId, intervalSeconds, initialViewport])
 
@@ -499,7 +598,7 @@ export default function ApprovedTerminalChart({
     if (!series) return
     priceLines.current.forEach((line) => series.removePriceLine(line))
     priceLines.current = []
-    const selected = markers.find((marker) => marker.id === selectedId)
+    const selected = markers.find((marker) => stands(marker, selectedId))
     if (!selected?.positionId) return
     const position = levels.find(
       (item) => item.positionId === selected.positionId,
@@ -526,7 +625,7 @@ export default function ApprovedTerminalChart({
   }, [markers, levels, selectedId, initialViewport])
 
   useEffect(() => {
-    const selected = markers.find((marker) => marker.id === selectedId)
+    const selected = markers.find((marker) => stands(marker, selectedId))
     if (!selected) return
     const bucket = Math.floor(selected.time / intervalSeconds) * intervalSeconds
     const index = candles.findIndex((candle) => candle.time === bucket)
@@ -677,6 +776,7 @@ export default function ApprovedTerminalChart({
         data-testid="approved-chart-renderer"
         data-candle-count={candles.length}
         data-marker-count={markers.length}
+        data-selected-marker={selectedId}
         className="demo-terminal__chart"
         style={
           panes.length > 0

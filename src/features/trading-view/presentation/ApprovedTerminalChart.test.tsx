@@ -8,6 +8,7 @@ const chartMocks = vi.hoisted(() => {
     priceScale: vi.fn(() => ({ applyOptions: priceScaleApply })),
     setData: vi.fn(),
     update: vi.fn(),
+    priceToCoordinate: vi.fn(() => null),
     applyOptions: vi.fn(),
     createPriceLine: vi.fn(),
     removePriceLine: vi.fn(),
@@ -22,6 +23,9 @@ const chartMocks = vi.hoisted(() => {
     getVisibleLogicalRange: vi.fn(() => ({ from: 7, to: 74 })),
     setVisibleLogicalRange: vi.fn(),
     scrollToRealTime: vi.fn(),
+    subscribeVisibleLogicalRangeChange: vi.fn(),
+    unsubscribeVisibleLogicalRangeChange: vi.fn(),
+    timeToCoordinate: vi.fn(() => null),
   }
   const markerApi = { setMarkers: vi.fn() }
   const chart = {
