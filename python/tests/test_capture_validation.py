@@ -35,10 +35,20 @@ def full_funding(product="PF_XBTUSD"):
 def hourly_polls(product="PF_XBTUSD", delay=60_000):
     """One poll shortly after each period end; each poll holds every period published so far."""
     return [{"product_id": product, "received_at": T0 + (i + 1) * H + delay,
-             "starts": [T0 + j * H for j in range(i + 1)]} for i in range(6)]
+             "starts": [T0 + j * H for j in range(i + 1)], "final_starts": [T0 + j * H for j in range(i + 1)]}
+            for i in range(6)]
 
 
 REFS = {"PF_XBTUSD": [(T0 + i * H - H, "100000") for i in range(7)]}  # a fresh price before every period
+
+
+def without(polls, start, until):
+    """Remove one period from every poll received before ``until`` (as if it were not listed/definitive yet)."""
+    for poll in polls:
+        if poll["received_at"] < until:
+            poll["starts"] = [s for s in poll["starts"] if s != start]
+            poll["final_starts"] = [s for s in poll["final_starts"] if s != start]
+    return polls
 
 
 def run_funding(rows=None, **kw):
@@ -160,16 +170,43 @@ class FundingTests(unittest.TestCase):
     def test_publication_late_is_proven_only_by_a_later_poll_that_lacks_it(self):
         polls = hourly_polls()
         # period 0 first appears 3 h late; the poll at the 2 h mark (past the 1 h deadline) lacks it: proven late
-        for poll in polls:
-            poll["starts"] = [s for s in poll["starts"] if s != T0 or poll["received_at"] > T0 + 4 * H]
+        without(polls, T0, T0 + 4 * H)
         found = [f for f in run_funding(responses=polls).findings if f["check"] == "funding.publication"]
         self.assertEqual([(f["kind"], f["count"]) for f in found], [(cv.DISCREPANCY, 1)])
+
+    def test_provisional_early_then_definitive_on_time_is_clean(self):
+        polls = hourly_polls() + [{"product_id": "PF_XBTUSD", "received_at": T0 + 30 * 60_000, "starts": [T0], "final_starts": []}]
+        rows = full_funding() + [period(T0, rate="0.4", provisional=True)]
+        result = run_funding(rows, responses=polls)
+        self.assertEqual(result.findings, [])
+        self.assertEqual(sorted(e["event"] for e in result.events), ["provisional_observation", "provisional_row"])
+
+    def test_provisional_listings_do_not_hide_a_really_late_definitive(self):
+        polls = without(hourly_polls(), T0, T0 + 4 * H)
+        for poll in polls:  # the open/closed period keeps being listed, but never as definitive until 4 h
+            if poll["received_at"] < T0 + 4 * H:
+                poll["starts"].append(T0)
+        found = [f for f in run_funding(responses=polls).findings if f["check"] == "funding.publication"]
+        self.assertEqual([(f["kind"], f["count"]) for f in found], [(cv.DISCREPANCY, 1)])
+
+    def test_polls_without_finality_evidence_are_not_measurable_and_not_condemned(self):
+        polls = hourly_polls()
+        for poll in polls:
+            del poll["final_starts"]
+        result = run_funding(responses=polls)
+        found = [f for f in result.findings if f["check"] == "funding.publication"]
+        self.assertEqual([(f["kind"], f.get("not_measurable")) for f in found], [(cv.ABSENT, True)])
+        self.assertEqual(result.coverage["funding.publication"], {"PF_XBTUSD": 0})
+
+    def test_final_starts_must_be_listed_in_starts(self):
+        polls = hourly_polls()
+        polls[0]["final_starts"] = [T0 + 99 * H]
+        self.assertIn(cv.VALIDATOR_ERROR, kinds(run_funding(responses=polls)))
 
     def test_collector_down_is_not_attributed_to_kraken(self):
         # polls missing between period 0's deadline and its first holder: nothing proves lateness -> not measurable
         polls = [p for p in hourly_polls() if p["received_at"] not in (T0 + 2 * H + 60_000, T0 + 3 * H + 60_000)]
-        for poll in polls:
-            poll["starts"] = [s for s in poll["starts"] if s != T0 or poll["received_at"] >= T0 + 4 * H]
+        without(polls, T0, T0 + 4 * H)
         found = [f for f in run_funding(responses=polls).findings if f["check"] == "funding.publication"]
         self.assertEqual([f["kind"] for f in found], [cv.ABSENT])
         self.assertTrue(found[0]["not_measurable"])
@@ -205,9 +242,9 @@ class FundingTests(unittest.TestCase):
         self.assertEqual(len([f for f in result.findings if f["kind"] == cv.VALIDATOR_ERROR]), 1)
         self.assertTrue(any(f.get("not_measurable") and f["check"] == "funding.publication" for f in result.findings))
 
-    def test_non_causal_response_is_not_on_time(self):
+    def test_response_that_marks_a_period_definitive_before_it_ended_is_contradictory(self):
         polls = hourly_polls()
-        polls[0]["received_at"] = T0 + 30 * 60_000  # taken mid-period yet already holding it
+        polls[0]["received_at"] = T0 + 30 * 60_000  # taken mid-period yet already showing it as definitive
         found = [f for f in run_funding(responses=polls).findings if f["check"] == "funding.publication"]
         self.assertEqual([f["kind"] for f in found], [cv.DISCREPANCY])
 

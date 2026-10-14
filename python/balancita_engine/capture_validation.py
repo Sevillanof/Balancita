@@ -160,10 +160,16 @@ def validate_funding(periods, from_ms, to_ms, products, references=None, respons
     instants Kraken could use), so an ordinary price move is not read as a unit error. The instant of the price
     Kraken itself used is NOT established (open question of #167): a ``funding.relative_vs_absolute`` finding is
     evidence of a unit/magnitude mismatch only, never of a capture defect at the tolerance's resolution.
-    ``responses``: ``[{product_id, received_at, starts: [period starts it contains]}]``, the polls that fetched
-    funding. ``known_at`` is OUR receipt time, not Kraken's publication time, so publication is judged only with
-    responses: a period is timely if the first response holding it arrived by ``end + max_lag_ms``; late only if
-    a response after that deadline still lacked it; otherwise ``not_measurable`` (the collector was not looking).
+    ``responses``: ``[{product_id, received_at, starts: [...], final_starts: [...]}]``, the polls that fetched
+    funding; ``final_starts`` (subset of ``starts``) are the periods the poll shows as definitive, and the loader must
+    take it from the provider/adapter (#167 distinguishes provisional from final). A row with ``provisional: True`` is
+    an open-hour observation and is not judged. Rows and polls that do not say so are read as definitive/without
+    evidence, and the first fails closed (a row known before its end is flagged), the second is not measurable.
+    ``known_at`` is OUR receipt time, not Kraken's publication time, so publication is judged only with responses: a
+    period is timely if the first response showing it DEFINITIVE arrived by ``end + max_lag_ms``; late only if a
+    response (with finality evidence) after that deadline still did not show it definitive; a response that shows it
+    definitive before its end is contradictory; otherwise ``not_measurable`` (the collector was not looking, or the
+    polls carry no finality evidence). A provisional listing of the open hour is an event, never a finding.
     """
     assert_range_allowed(from_ms, to_ms)
     result = Result("funding", products, from_ms, to_ms, {
@@ -183,6 +189,9 @@ def validate_funding(periods, from_ms, to_ms, products, references=None, respons
             if start >= HOLDOUT_START_MS or end > HOLDOUT_START_MS:
                 return _holdout_error(result, "funding.rows", product)
             if start < from_ms or end > to_ms:
+                return
+            if row.get("provisional") is True:  # an open-hour observation: neither judged nor a revision conflict
+                result.events.append({"event": "provisional_row", "product": product, "start_ms": start})
                 return
             rate = _dec(row["funding_rate"], "funding_rate")
             base = product[3:-3].replace("XBT", "BTC")
@@ -238,16 +247,25 @@ def validate_funding(periods, from_ms, to_ms, products, references=None, respons
 
 
 def _parse_responses(result, responses):
-    """Group the collector polls by product once; a poll inside the holdout is dropped, a malformed one reported once."""
+    """Group the collector polls by product once; a poll inside the holdout is dropped, a malformed one reported once.
+
+    A poll is ``(received_at, starts, finals)``: ``finals`` is the set of periods the poll marks as DEFINITIVE
+    (``final_starts``), or ``None`` when the poll carries no finality information.
+    """
     polls = defaultdict(list)
     for index, resp in enumerate(responses or []):
         def parse(resp=resp):
             product = resp["product_id"]
             at = _int(resp["received_at"], "received_at")
             starts = frozenset(_int(s, "start") for s in resp["starts"])
+            finals = None
+            if "final_starts" in resp:
+                finals = frozenset(_int(s, "final start") for s in resp["final_starts"])
+                if not finals <= starts:
+                    raise ValueError("final_starts must be a subset of starts")
             if at >= HOLDOUT_START_MS:
                 return _holdout_error(result, "funding.response", product)
-            polls[product].append((at, starts))
+            polls[product].append((at, starts, finals))
         _guard(result, "funding.response[{}]".format(index), resp.get("product_id") if isinstance(resp, dict) else None, parse)
     for product in polls:
         polls[product].sort(key=lambda p: p[0])
@@ -255,29 +273,41 @@ def _parse_responses(result, responses):
 
 
 def _publication(result, product, starts, polls, max_lag_ms):
-    late, unknown = [], []
+    """Definitive availability only. A period listed by a poll but not marked final is provisional: Kraken lists the
+    open hour, so that is a legitimate observation (an event, never a defect) and proves nothing about publication.
+    Without ``final_starts`` the poll gives no evidence at all and the period stays not measurable (limit declared,
+    finality is not inferred from the poll's timing)."""
+    late, early_final, unknown = [], [], []
     for start in starts:
-        deadline = start + HOUR_MS + max_lag_ms
-        holders = [at for at, held in polls if start in held]
-        first = holders[0] if holders else None
-        if first is not None and first < start + HOUR_MS:
-            result.findings.append(Finding(DISCREPANCY, "funding.publication", product,
-                                           "a response taken before the period ended already holds it (not causal)", start_ms=start))
+        end, deadline = start + HOUR_MS, start + HOUR_MS + max_lag_ms
+        definitive = [at for at, _, finals in polls if finals is not None and start in finals]
+        first = definitive[0] if definitive else None
+        provisional = sum(1 for at, held, finals in polls if finals is not None and start in held and start not in finals)
+        if provisional:
+            result.events.append({"event": "provisional_observation", "product": product, "start_ms": start, "count": provisional})
+        if first is not None and first < end:
+            result.judged("funding.publication", product)
+            early_final.append(start)
         elif first is not None and first <= deadline:
             result.judged("funding.publication", product)
-        elif any(deadline < at and (first is None or at < first) for at, _ in polls):
+        elif any(finals is not None and deadline < at and (first is None or at < first)
+                 for at, _, finals in polls):
             result.judged("funding.publication", product)
             late.append(start)
         else:
             unknown.append(start)
+    if early_final:
+        result.findings.append(Finding(DISCREPANCY, "funding.publication", product,
+                                       "{} periods marked definitive by a response taken before they ended (contradictory)".format(
+                                           len(early_final)), first_start_ms=early_final[0], count=len(early_final)))
     if late:
         result.findings.append(Finding(DISCREPANCY, "funding.publication", product,
-                                       "{} periods still missing from a response taken more than {} ms after their end".format(
+                                       "{} periods still not definitive in a response taken more than {} ms after their end".format(
                                            len(late), max_lag_ms), first_start_ms=late[0], count=len(late)))
     if unknown:
         result.findings.append(Finding(ABSENT, "funding.publication", product,
-                                       "not_measurable: {} periods have no response proving timely or late publication "
-                                       "(known_at is our receipt time, not Kraken's)".format(len(unknown)),
+                                       "not_measurable: {} periods have no response with finality evidence proving timely or "
+                                       "late definitive publication (known_at is our receipt time, not Kraken's)".format(len(unknown)),
                                        not_measurable=True, first_start_ms=unknown[0], last_start_ms=unknown[-1], count=len(unknown)))
 
 

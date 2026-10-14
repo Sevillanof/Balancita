@@ -47,11 +47,13 @@ El informe lleva la versión del validador, la muestra (fuente, versión, interv
 
 ## Qué mide la publicación del funding y qué no
 
-`known_at` en el almacén es la hora en que **nuestro** colector recibió la respuesta, no la hora en que Kraken publicó. Por eso el retraso se juzga con las respuestas del colector (`responses`), nunca con `known_at`:
+`known_at` en el almacén es la hora en que **nuestro** colector recibió la respuesta, no la hora en que Kraken publicó. Por eso el retraso se juzga con las respuestas del colector (`responses`), nunca con `known_at`. Además, aparecer en una respuesta no prueba que el período esté terminado: Kraken puede listar la hora abierta (valor provisional, como admite `historical-funding.ts` y distingue #167). Cada respuesta debe traer `final_starts`, los períodos que muestra como definitivos; el adaptador lo toma del proveedor o de #167.
 
-- A tiempo: la primera respuesta que contiene el período llegó antes de `fin + max_lag_ms`.
-- Tarde: llegó después del plazo **y** existe una respuesta posterior al plazo, anterior a esa, que no lo traía. Eso prueba la demora de la fuente.
-- No medible: el colector no consultó entre el plazo y la primera respuesta que lo trae (por ejemplo, estuvo caído). No se le atribuye nada a Kraken; el informe lo cuenta como `ABSENT` / `not_measurable` con cantidad, primer y último período.
+- A tiempo: la primera respuesta que lo muestra **definitivo** llegó antes de `fin + max_lag_ms`.
+- Tarde: llegó después del plazo **y** existe una respuesta con evidencia de finalidad, posterior al plazo y anterior a esa, que aún no lo traía definitivo. Un listado provisional no cuenta como publicación.
+- Contradictorio: una respuesta tomada antes del fin del período ya lo marca definitivo.
+- Provisional: un listado del período sin marcarlo definitivo, o una fila con `provisional: true`, es un evento (`provisional_observation` / `provisional_row`), no un hallazgo ni un conflicto de revisión. Una fila definitiva con `known_at` anterior al fin sigue siendo no causal (falla cerrado si el adaptador no marcó la fila como provisional).
+- No medible: el colector no consultó entre el plazo y la primera respuesta definitiva, o las respuestas no traen `final_starts`. No se infiere finalidad por la hora de la respuesta ni se le atribuye nada a Kraken; el informe lo cuenta como `ABSENT` / `not_measurable` con cantidad, primer y último período.
 - Un período traído por backfill no es medible.
 
 `max_lag_ms` (1 h por defecto) es un parámetro del validador, no un valor aprobado. Debe declararse en el informe real junto con la cadencia efectiva del colector.
