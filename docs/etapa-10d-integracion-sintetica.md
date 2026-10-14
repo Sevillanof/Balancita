@@ -136,6 +136,14 @@ La suite de integración tarda ~290 s, por lo que el trabajo de Python de CI se 
 8. Duración de la suite (~5 min) y 175 MB de pico en CI.
 9. Las pruebas de corte son inyecciones en el mismo proceso, no `kill -9` reales; el fsync del sistema de archivos real no se prueba.
 
+### Residuos BAJOS de la revisión de D (declarados, no resueltos en esta PR)
+
+- `late_candle`: los 3 rechazos los emite el runner y aparecen igual en el oráculo independiente, por lo que no vienen de la integración. Su causa exacta en este mundo sintético no se investigó.
+- Un `frame_expired` real entre el último checkpoint y una muerte se pierde como evidencia (el cuadro se reconstruye al recuperar y se cuenta como `dropped_on_recovery`).
+- `_due_funding` asume `arrival_ms` monótono por `rowid`. La fuente real tendría que garantizarlo.
+- `source_stale` solo se evalúa cuando llega la cotización siguiente; un corte que no termina no genera evidencia hasta que termine.
+- Base: esta rama ya incluye la 9A actual (f32ff48 y 56d9e04).
+
 ## 11. GO/NO-GO para una sesión paper temporal (no iniciada)
 
 **NO-GO por ahora.** La integración sintética está demostrada y es reproducible, pero antes de una sesión temporal con cotizaciones
