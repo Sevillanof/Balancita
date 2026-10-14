@@ -30,3 +30,7 @@ Tipografía Inter / IBM Plex Mono cargada localmente (se permitió el directorio
 - Stitch dice «Evidencia: Robusta (118 ops)» y «Activa en paper»; la app dice «Sin ventaja demostrada» y «Activa en el registro».
 - Condiciones L2 / Order Book y EMA 21: C29 es momentum de retorno logarítmico; se muestran las condiciones reales del spec.
 - Cabecera de Stitch (PF_XBTUSD · 5m, SYNC: KRAKEN-L2): la estrategia opera 8 perpetuos; no hay ese chip.
+
+## Verificación sobre main
+
+Rebasado sobre main f7a5fda (con #156, #170, #173 y #158 ya integrados). Local: vitest 293/293 y Playwright desktop-1440x900 31/31, incluido el spec de integración conjunta (`e2e/estrategias-integracion-conjunta.pw.ts`) y `terminal-ahora-sync`.
