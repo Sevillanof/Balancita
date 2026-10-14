@@ -183,6 +183,39 @@ class FundingTests(unittest.TestCase):
         self.assertNotIn("0.31415", json.dumps(result.findings))
         self.assertEqual(result.coverage["funding.rows"], {"PF_XBTUSD": 6})
 
+    def test_rows_without_relative_rate_are_reported_not_skipped(self):
+        rows = full_funding()
+        for row in rows[1:]:
+            del row["relative_rate"]
+        found = [f for f in run_funding(rows).findings if f["check"] == "funding.relative"]
+        self.assertEqual([(f["kind"], f["count"]) for f in found], [(cv.ABSENT, 5)])
+
+    def test_ordinary_price_move_is_not_a_unit_error_but_a_big_one_is(self):
+        rows = full_funding()
+        rows[3]["relative_rate"] = "0.00000502"  # implies 0.502 vs 0.5: a 0.4 % move inside the age allowance
+        rows[4]["relative_rate"] = "0.000007"    # 40 % off
+        found = [f for f in run_funding(rows).findings if f["check"] == "funding.relative_vs_absolute"]
+        self.assertEqual([f["start_ms"] for f in found], [T0 + 4 * H])
+
+    def test_response_inside_the_holdout_is_dropped_and_the_period_is_not_measurable(self):
+        polls = hourly_polls() + [{"product_id": "PF_XBTUSD", "received_at": cv.HOLDOUT_START_MS + 5, "starts": [T0 + 5 * H]}]
+        polls = [p for p in polls if not (T0 + 5 * H in p["starts"] and p["received_at"] < cv.HOLDOUT_START_MS)]
+        result = run_funding(responses=polls)
+        self.assertEqual(result.coverage["funding.publication"], {"PF_XBTUSD": 5})
+        self.assertEqual(len([f for f in result.findings if f["kind"] == cv.VALIDATOR_ERROR]), 1)
+        self.assertTrue(any(f.get("not_measurable") and f["check"] == "funding.publication" for f in result.findings))
+
+    def test_non_causal_response_is_not_on_time(self):
+        polls = hourly_polls()
+        polls[0]["received_at"] = T0 + 30 * 60_000  # taken mid-period yet already holding it
+        found = [f for f in run_funding(responses=polls).findings if f["check"] == "funding.publication"]
+        self.assertEqual([f["kind"] for f in found], [cv.DISCREPANCY])
+
+    def test_malformed_response_is_reported_once(self):
+        polls = hourly_polls() + [{"product_id": "PF_XBTUSD", "received_at": "x", "starts": []}]
+        cv_res = cv.validate_funding(full_funding(), T0, T1, ["PF_XBTUSD", "PF_ETHUSD"], references=REFS, responses=polls)
+        self.assertEqual(len([f for f in cv_res.findings if f["check"] == "funding.response[6]"]), 1)
+
     def test_malformed_rows_are_validator_errors_not_capture_findings(self):
         rows = full_funding()
         rows[0]["funding_rate"] = "abc"
@@ -275,6 +308,11 @@ class QuoteTests(unittest.TestCase):
         found = self.run_quotes(rows).findings
         self.assertEqual([(f["kind"], f["product"]) for f in found if f["check"] == "quote.coverage"], [(cv.ABSENT, "PF_ZECUSD")])
 
+    def test_quotes_in_the_holdout_are_reported_not_dropped_silently(self):
+        rows = all_products() + [quote(0, at=cv.HOLDOUT_START_MS + 1_000)]
+        found = [f for f in self.run_quotes(rows).findings if f["kind"] == cv.VALIDATOR_ERROR]
+        self.assertEqual(len(found), 1)
+
     def test_unexpected_product_and_malformed_rows_are_validator_errors(self):
         rows = all_products() + [quote(0, product="PF_DOGEUSD")]
         rows[0]["received_at"] = "x"
@@ -350,6 +388,13 @@ class CandleTests(unittest.TestCase):
         self.assertEqual([f["check"] for f in found.findings if f["kind"] == cv.DISCREPANCY], ["candles.revision_conflict"])
         self.assertEqual(found.coverage["candles.buckets"], {"PF_XBTUSD": 0})
 
+    def test_contradictory_official_rows_exclude_the_bucket(self):
+        ref = [official_for(self.A), dict(official_for(self.A), close="999")]
+        found = cv.validate_candles("PF_XBTUSD", five_minutes(self.A), ref, self.A, self.A + cv.FIVE_MIN_MS)
+        self.assertEqual(kinds(found), sorted([cv.VALIDATOR_ERROR, cv.ABSENT]))
+        self.assertNotIn(cv.DISCREPANCY, kinds(found))
+        self.assertEqual(found.coverage["candles.buckets"], {"PF_XBTUSD": 0})
+
     def test_identical_duplicate_minute_is_harmless(self):
         ours = five_minutes(self.A) + [five_minutes(self.A)[0]]
         found = cv.validate_candles("PF_XBTUSD", ours, [official_for(self.A)], self.A, self.A + cv.FIVE_MIN_MS)
@@ -419,6 +464,17 @@ class ReportTests(unittest.TestCase):
         report = cv.build_report(sample, [run_funding()], ("funding",))
         self.assertEqual({f["product"] for f in report["findings"]}, {"PF_ETHUSD"})
 
+    def test_partial_range_cannot_read_clean(self):
+        short = cv.validate_funding(full_funding()[:2], T0, T0 + 2 * H, XBT, references=REFS, responses=hourly_polls())
+        self.assertEqual(short.findings, [])  # clean over its own 2 h
+        report = cv.build_report(self.SAMPLE, [short, self.quotes_result()], ("funding", "quotes"))
+        self.assertEqual(report["fitness"], "bloqueada")
+        self.assertTrue(any(f.get("partial_range") for f in report["findings"]))
+
+    def test_report_declares_the_parameters_used(self):
+        report = cv.build_report(self.SAMPLE, [run_funding(max_lag_ms=2 * H)], ("funding",))
+        self.assertEqual(report["parameters"]["funding"]["max_lag_ms"], 2 * H)
+
     def test_required_must_be_valid_and_non_empty(self):
         for bad in ((), ("nope",)):
             with self.assertRaises(ValueError):
@@ -426,7 +482,7 @@ class ReportTests(unittest.TestCase):
 
     def test_fitness_ladder(self):
         def result_with(*findings):
-            r = cv.Result("candles", XBT)
+            r = cv.Result("candles", XBT, T0, T1)
             r.coverage["candles.buckets"]["PF_XBTUSD"] = 1
             r.findings.extend(findings)
             return r

@@ -60,11 +60,13 @@ class Finding(dict):
 class Result:
     """Findings + what was actually judged + non-defect events of one validator run."""
 
-    def __init__(self, family, products):
+    def __init__(self, family, products, from_ms=None, to_ms=None, params=None):
         if family not in REQUIRED_CHECKS:
             raise ValueError("unknown validator family")
         self.family = family
         self.products = _products(products)
+        self.from_ms, self.to_ms = from_ms, to_ms  # the range this run judged; build_report compares it to the sample
+        self.params = dict(params or {})  # every threshold/tolerance used, so the report declares them
         self.findings = []
         self.events = []
         self.coverage = {check: {p: 0 for p in self.products} for check in REQUIRED_CHECKS[family]}
@@ -137,21 +139,28 @@ def _holdout_error(result, check, product):
 # ---------------------------------------------------------------- funding
 
 def validate_funding(periods, from_ms, to_ms, products, references=None, responses=None, rel_tolerance="0.0001",
-                     max_lag_ms=HOUR_MS, max_reference_age_ms=2 * HOUR_MS):
+                     max_lag_ms=HOUR_MS, max_reference_age_ms=2 * HOUR_MS, max_price_drift_per_hour="0.01"):
     """Funding periods: units, reference price, period shape, publication, coverage, contradictory revisions.
 
     ``periods``: dicts with product_id, start_ms, end_ms, funding_rate (absolute, quote per base per hour, string),
     unit (``USD/<BASE>/hour``), known_at (receipt time), response_sha256, optionally relative_rate (string).
     ``references``: ``{product: [(at_ms, price)]}``; a price older than ``max_reference_age_ms`` before the period
-    does not count. ``rel_tolerance`` is relative (error / magnitude), so it scales with the price.
+    does not count. ``rel_tolerance`` is relative (error / magnitude), so it scales with the price, and it grows by
+    ``max_price_drift_per_hour`` per hour of reference age (counted to the period end, the later of the two
+    instants Kraken could use), so an ordinary price move is not read as a unit error. The instant of the price
+    Kraken itself used is NOT established (open question of #167): a ``funding.relative_vs_absolute`` finding is
+    evidence of a unit/magnitude mismatch only, never of a capture defect at the tolerance's resolution.
     ``responses``: ``[{product_id, received_at, starts: [period starts it contains]}]``, the polls that fetched
     funding. ``known_at`` is OUR receipt time, not Kraken's publication time, so publication is judged only with
     responses: a period is timely if the first response holding it arrived by ``end + max_lag_ms``; late only if
     a response after that deadline still lacked it; otherwise ``not_measurable`` (the collector was not looking).
     """
-    result = Result("funding", products)
     assert_range_allowed(from_ms, to_ms)
-    rel_tol = Decimal(rel_tolerance)
+    result = Result("funding", products, from_ms, to_ms, {
+        "rel_tolerance": rel_tolerance, "max_lag_ms": max_lag_ms, "max_reference_age_ms": max_reference_age_ms,
+        "max_price_drift_per_hour": max_price_drift_per_hour})
+    rel_tol, drift = Decimal(rel_tolerance), Decimal(max_price_drift_per_hour)
+    no_relative = defaultdict(list)
     by_key = defaultdict(list)
     judged_starts = defaultdict(set)
     for index, row in enumerate(periods):
@@ -176,8 +185,10 @@ def validate_funding(periods, from_ms, to_ms, products, references=None, respons
                                                "period is not one aligned UTC hour", start_ms=start, end_ms=end))
             by_key[(product, start)].append((rate, known))
             relative = row.get("relative_rate")
-            if relative is not None:
-                price = _reference_price(references, product, start, max_reference_age_ms)
+            if relative is None:
+                no_relative[product].append(start)
+            else:
+                price, price_at = _reference_price(references, product, start, max_reference_age_ms)
                 if price is None:
                     result.findings.append(Finding(ABSENT, "funding.reference_price", product,
                                                    "relative rate has no fresh provider price at or before the period",
@@ -185,10 +196,12 @@ def validate_funding(periods, from_ms, to_ms, products, references=None, respons
                 else:
                     result.judged("funding.relative", product)
                     implied = _dec(relative, "relative_rate") * price
-                    if abs(implied - rate) > rel_tol * max(abs(implied), abs(rate)):
+                    age_h = Decimal(end - price_at) / Decimal(HOUR_MS)
+                    tolerance = rel_tol + drift * age_h
+                    if abs(implied - rate) > tolerance * max(abs(implied), abs(rate)):
                         result.findings.append(Finding(DISCREPANCY, "funding.relative_vs_absolute", product,
-                                                       "relative * price differs from absolute beyond the relative tolerance",
-                                                       start_ms=start))
+                                                       "relative * price differs from absolute beyond the age-scaled tolerance",
+                                                       start_ms=start, tolerance=str(tolerance)))
             if known < end:
                 result.findings.append(Finding(DISCREPANCY, "funding.publication", product,
                                                "known_at precedes the period end (not causal)", start_ms=start))
@@ -198,30 +211,48 @@ def validate_funding(periods, from_ms, to_ms, products, references=None, respons
             result.findings.append(Finding(DISCREPANCY, "funding.revision", product,
                                            "contradictory rates for one period across responses", start_ms=start,
                                            rates=sorted(str(rate) for rate, _ in versions)))
+    polls = _parse_responses(result, responses)
     first = -(-from_ms // HOUR_MS) * HOUR_MS
     for product in result.products:
+        if no_relative[product]:
+            result.findings.append(Finding(ABSENT, "funding.relative", product,
+                                           "{} judged rows carry no relative_rate: unit not checked for them".format(len(no_relative[product])),
+                                           count=len(no_relative[product]), first_start_ms=min(no_relative[product])))
         missing = [t for t in range(first, to_ms - HOUR_MS + 1, HOUR_MS) if t not in judged_starts[product]]
         if missing:
             result.findings.append(Finding(ABSENT, "funding.coverage", product, "{} hourly periods missing".format(len(missing)),
                                            missing_count=len(missing), first_missing_ms=missing[0], last_missing_ms=missing[-1]))
-        _publication(result, product, sorted(judged_starts[product]), responses, max_lag_ms)
+        _publication(result, product, sorted(judged_starts[product]), polls.get(product, []), max_lag_ms)
     return result.close()
 
 
-def _publication(result, product, starts, responses, max_lag_ms):
-    polls = []
+def _parse_responses(result, responses):
+    """Group the collector polls by product once; a poll inside the holdout is dropped, a malformed one reported once."""
+    polls = defaultdict(list)
     for index, resp in enumerate(responses or []):
         def parse(resp=resp):
-            if resp["product_id"] == product:
-                polls.append((_int(resp["received_at"], "received_at"), frozenset(_int(s, "start") for s in resp["starts"])))
-        _guard(result, "funding.response[{}]".format(index), product, parse)
-    polls.sort(key=lambda p: p[0])
+            product = resp["product_id"]
+            at = _int(resp["received_at"], "received_at")
+            starts = frozenset(_int(s, "start") for s in resp["starts"])
+            if at >= HOLDOUT_START_MS:
+                return _holdout_error(result, "funding.response", product)
+            polls[product].append((at, starts))
+        _guard(result, "funding.response[{}]".format(index), resp.get("product_id") if isinstance(resp, dict) else None, parse)
+    for product in polls:
+        polls[product].sort(key=lambda p: p[0])
+    return polls
+
+
+def _publication(result, product, starts, polls, max_lag_ms):
     late, unknown = [], []
     for start in starts:
         deadline = start + HOUR_MS + max_lag_ms
         holders = [at for at, held in polls if start in held]
         first = holders[0] if holders else None
-        if first is not None and first <= deadline:
+        if first is not None and first < start + HOUR_MS:
+            result.findings.append(Finding(DISCREPANCY, "funding.publication", product,
+                                           "a response taken before the period ended already holds it (not causal)", start_ms=start))
+        elif first is not None and first <= deadline:
             result.judged("funding.publication", product)
         elif any(deadline < at and (first is None or at < first) for at, _ in polls):
             result.judged("funding.publication", product)
@@ -244,7 +275,7 @@ def _reference_price(references, product, at_ms, max_age_ms):
     for when, price in (references or {}).get(product) or []:
         if when <= at_ms and at_ms - when <= max_age_ms and (best is None or when > best[0]):
             best = (when, _dec(price, "reference price"))
-    return best[1] if best and best[1] > 0 else None
+    return (best[1], best[0]) if best and best[1] > 0 else (None, None)
 
 
 # ------------------------------------------------------------------ quotes
@@ -259,8 +290,8 @@ def validate_quotes(quotes, from_ms, to_ms, products, stale_ms=45_000, skew_ms=5
     A product needs at least two quotes before any interval (order, freshness) is judged; the silence before
     the first quote and after the last counts.
     """
-    result = Result("quotes", products)
     assert_range_allowed(from_ms, to_ms)
+    result = Result("quotes", products, from_ms, to_ms, {"stale_ms": stale_ms, "skew_ms": skew_ms, "contiguous_seq": contiguous_seq})
     last = {}
     for index, row in enumerate(quotes):
         def judge(row=row):
@@ -269,6 +300,8 @@ def validate_quotes(quotes, from_ms, to_ms, products, stale_ms=45_000, skew_ms=5
                 raise ValueError("product not in the expected list")
             received = _int(row["received_at"], "received_at")
             event = _int(row["event_time"], "event_time")
+            if received >= HOLDOUT_START_MS:
+                return _holdout_error(result, "quote.records", product)
             if not from_ms <= received < to_ms:
                 return
             result.judged("quote.records", product)
@@ -365,8 +398,8 @@ def validate_candles(product, candles_1m, official_5m, from_ms, to_ms, price_tol
     series is the reference's problem (``VALIDATOR_ERROR``); conflicting revisions of one of OUR minutes are a
     ``DISCREPANCY`` of the capture and that bucket is not compared.
     """
-    result = Result("candles", [product])
     assert_range_allowed(from_ms, to_ms)
+    result = Result("candles", [product], from_ms, to_ms, {"price_tol": price_tol, "volume_tol": volume_tol})
     ptol, vtol = Decimal(price_tol), Decimal(volume_tol)
     fields = ("open", "high", "low", "close", "volume")
     ours_rows, bad = {}, set()
@@ -388,7 +421,7 @@ def validate_candles(product, candles_1m, official_5m, from_ms, to_ms, price_tol
     except (ValueError, KeyError, TypeError) as error:
         result.findings.append(Finding(VALIDATOR_ERROR, "candles.aggregate", product, "malformed input: {}".format(error)))
         return result.close()
-    official = {}
+    official, official_bad = {}, set()
     for index, candle in enumerate(official_5m):
         def ref(candle=candle):
             start = _int(candle["bucket_start"], "bucket_start")
@@ -401,13 +434,14 @@ def validate_candles(product, candles_1m, official_5m, from_ms, to_ms, price_tol
             elif from_ms <= start < to_ms:
                 row = {k: _dec(candle[k], k) for k in fields}
                 if start in official and official[start] != row:
+                    official_bad.add(start)
                     result.findings.append(Finding(VALIDATOR_ERROR, "candles.official", product,
-                                                   "conflicting official rows for one bucket", bucket_start=start))
+                                                   "conflicting official rows for one bucket: bucket not compared", bucket_start=start))
                 official[start] = row
         _guard(result, "candles.official[{}]".format(index), product, ref)
     first = -(-from_ms // FIVE_MIN_MS) * FIVE_MIN_MS
     for start in range(first, to_ms - FIVE_MIN_MS + 1, FIVE_MIN_MS):
-        if start in bad:
+        if start in bad or start in official_bad:
             continue
         mine_, ref_ = ours.get(start), official.get(start)
         if mine_ is None and ref_ is None:
@@ -485,7 +519,14 @@ def build_report(sample, results, required):
     if not required or any(r not in REQUIRED_CHECKS for r in required):
         raise ValueError("required must be a non-empty subset of {}".format(sorted(REQUIRED_CHECKS)))
     findings, events, coverage = [], [], {}
+    parameters = {}
     for result in results:
+        if result.from_ms != sample["from_ms"] or result.to_ms != sample["to_ms"]:
+            findings.append(Finding(ABSENT, result.family, None,
+                                    "partial_range: validated {}..{} but the sample declares {}..{}".format(
+                                        result.from_ms, result.to_ms, sample["from_ms"], sample["to_ms"]),
+                                    partial_range=True))
+        parameters.setdefault(result.family, result.params)
         findings.extend(result.findings)
         events.extend(result.events)
         for check, per_product in result.coverage.items():
@@ -504,7 +545,7 @@ def build_report(sample, results, required):
         fitness = "bloqueada"
     else:
         fitness = "sin_hallazgos"
-    body = {"validator_version": VALIDATOR_VERSION, "sample": sample, "required": list(required), "coverage": coverage,
+    body = {"validator_version": VALIDATOR_VERSION, "sample": sample, "required": list(required), "parameters": parameters, "coverage": coverage,
             "events": sorted(events, key=lambda e: json.dumps(e, sort_keys=True)), "counts": counts, "fitness": fitness,
             "findings": sorted(findings, key=lambda f: json.dumps(f, sort_keys=True))}
     digest = hashlib.sha256(json.dumps(body, sort_keys=True, separators=(",", ":")).encode()).hexdigest()

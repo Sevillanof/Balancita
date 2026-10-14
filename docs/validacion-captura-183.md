@@ -56,12 +56,23 @@ El informe lleva la versión del validador, la muestra (fuente, versión, interv
 
 `max_lag_ms` (1 h por defecto) es un parámetro del validador, no un valor aprobado. Debe declararse en el informe real junto con la cadencia efectiva del colector.
 
+## Cobertura exigida al informe
+
+- Cada `Result` guarda el rango y los parámetros con que corrió. `build_report` compara el rango con el de la muestra: un validador que cubrió menos (por ejemplo 2 h dentro de una muestra de 48 h) agrega `ABSENT` / `partial_range` y el informe sale `bloqueada`. El informe lista los parámetros usados por familia.
+- Una fila de funding sin `relative_rate` da `ABSENT` en `funding.relative` (con la cantidad), no se saltea.
+- Las respuestas del colector y las cotizaciones que caen en el holdout se descartan como `VALIDATOR_ERROR`; un período que solo se podría probar con ellas queda `not_measurable`. Una respuesta tomada antes del fin del período que ya lo trae es no causal y es `DISCREPANCY`.
+- Si la serie oficial trae filas contradictorias para un bucket, ese bucket no se compara (no se culpa a la captura).
+
+## Límite: instante del precio de referencia
+
+No está establecido a qué instante corresponde el precio que Kraken usó para pasar de tasa relativa a absoluta (pendiente abierto de #167). Por eso la tolerancia de `funding.relative_vs_absolute` es `rel_tolerance` más `max_price_drift_per_hour` (1 % por hora, parámetro del validador) por cada hora de antigüedad de la referencia contada hasta el fin del período. Esa comprobación detecta errores de unidad o de magnitud, no defectos finos de la captura: un hallazgo ahí no debe leerse como defecto de captura hasta fijar el instante con datos autorizados.
+
 ## Lo que estas pruebas NO demuestran
 
 - Nada sobre datos reales: los fixtures son inventados. No se afirma que la captura cumpla ningún criterio.
 - La comparación de velas contra la fuente oficial exige que alguien aporte la serie oficial; los validadores no llaman a Kraken. Hasta que Fran lo autorice, es solo el comparador.
 - Las cotizaciones del archivo son tope de libro (mejor bid/ask y tamaños), sin profundidad. Cualquier conclusión de ejecución es modelada.
-- Los parámetros de los validadores (`max_lag_ms`, `rel_tolerance=0.0001`, `max_reference_age_ms`, `stale_ms`, `skew_ms`, `max_false_alarm_rate=0.001`, `min_samples=1000`) no son criterios aprobados; el informe real debe declararlos y justificarlos.
+- Los parámetros de los validadores (`max_lag_ms`, `rel_tolerance=0.0001`, `max_price_drift_per_hour=0.01`, `max_reference_age_ms`, `stale_ms`, `skew_ms`, `max_false_alarm_rate=0.001`, `min_samples=1000`) no son criterios aprobados; el informe real debe declararlos y justificarlos.
 - La calibración de umbrales supone que las brechas de entrada vienen de intervalos sin caída; esa clasificación la aporta el ingestor (#166), no este módulo.
 
 ## Pedido de autorización de lectura (borrador, para que Fran responda en la PR)
