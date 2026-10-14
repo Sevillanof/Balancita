@@ -221,6 +221,29 @@ memoria ~175 MB, 282 pasos, 13.308 eventos del runner, 14.064 entradas del diari
 437 del diario de auditoría. Memoria del evaluador al final: 288 ciclos, 288 banderas, 0 cuadros pendientes, 2.880 velas vistas.
 La suite de integración tarda ~290 s sin reloj y otros ~250 s con reloj y terminación real (dos mundos sintéticos), por lo que el trabajo de Python de CI se alarga.
 
+Duración real por clase de `test_paper_live_integration.py` (14-oct, corridas locales en el entorno de la nube, cada clase sola y
+con su propio mundo sintético, 68 pruebas, total 1287 s ≈ 21 min; el CI de GitHub tarda más, p. ej. #165 con 54 pruebas tardó
+23 min en el job `python` y #174 pasó los 30 min):
+
+| Clase                                                                           | Pruebas | Segundos |
+| ------------------------------------------------------------------------------- | ------- | -------- |
+| `TestFaultsAtEveryBoundary`                                                     | 8       | 267      |
+| `TestSilenceStillOpen`                                                          | 7       | 168      |
+| `TestRealProcessTermination`                                                    | 2       | 168      |
+| `TestClockAtItsNormalCadence`                                                   | 4       | 166      |
+| `TestSourceStaleTwoProductsInTheCircuit`                                        | 2       | 118      |
+| `TestSessionIdentityAndCheckpoints`                                             | 8       | 103      |
+| `TestDeadlineAgainstTheThreshold`                                               | 3       | 103      |
+| `TestFinancialCircuit`                                                          | 7       | 83       |
+| `TestSourceStaleCancellation`                                                   | 7       | 83       |
+| `TestTheLiteral26SecondCut`                                                     | 2       | 29       |
+| el resto (adaptador, política, sesión de dos productos, orden de `_open_holes`) | 18      | < 1      |
+
+El peso está en reconstruir un mundo sintético y calentar una sesión por clase (30 a 45 s cada vez) y en los procesos hijos con
+terminación real. Con Fran (14-oct, 19:19Z): el timeout del job `python` sube temporalmente a 45 min, no se recorta ninguna prueba
+funcional, financiera ni de recuperación, y la optimización (compartir mundos y calentamientos entre clases sin cambiar las
+garantías) se propone después, cuando la integración esté estable.
+
 ## 10. Riesgos sin resolver
 
 1. Los umbrales de continuidad (15 s de la sesión por defecto, 15 s de silencio del ingestor, 45 s de interrupción del ingestor) son hipótesis sin validar con datos reales.
