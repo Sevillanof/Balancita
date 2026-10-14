@@ -23,7 +23,10 @@ from balancita_engine.multi_signals import merged_indicators
 from balancita_engine.paper_runner import PaperRunner
 from balancita_engine.portfolio_scenarios import candle_series
 
-from test_replay_9a import BTC, DAY, HOUR, MIN, START, Tmp, make_db
+try:
+    from test_replay_9a import BTC, DAY, HOUR, MIN, START, Tmp, make_db
+except ImportError:           # run as python.tests.test_replay_9a_audit
+    from .test_replay_9a import BTC, DAY, HOUR, MIN, START, Tmp, make_db
 
 D = Decimal
 TICK = "0.5"
