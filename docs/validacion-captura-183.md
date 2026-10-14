@@ -2,51 +2,72 @@
 
 Estado: **parcial**. Hay validadores y pruebas con fixtures sintéticos. No se leyó ninguna captura ni base real, así que la fuente **no está validada**.
 
-Código: `python/balancita_engine/capture_validation.py`. Pruebas: `python/tests/test_capture_validation.py`.
-Base: `main`. No importa el ingestor (#166) ni modifica `quote-archive.ts`, colectores ni `paper_live_ingest.py`: los validadores reciben filas ya cargadas, con la forma de las tablas de la captura en main (`paper_futures_funding_periods`, eventos de ticker, velas). Quien cargue una muestra autorizada hace de adaptador.
+Código: `python/balancita_engine/capture_validation.py` (versión `capture-validation.v2`). Pruebas: `python/tests/test_capture_validation.py`.
+Base: `main`. No importa el ingestor (#166) ni modifica `quote-archive.ts`, colectores ni `paper_live_ingest.py`: los validadores reciben filas ya cargadas, con la forma de las tablas de la captura en main. Quien cargue una muestra autorizada hace de adaptador y debe sacar `relative_rate` (el `relativeFundingRate` del proveedor) y `product_id` de `raw_response` y de la fila de período; el `funding_rate` guardado solo no muestra la unidad relativa.
 
 ## Tres tipos de resultado (nunca se mezclan)
 
-| Tipo              | Significa                                                                                        |
-| ----------------- | ------------------------------------------------------------------------------------------------ |
-| `ABSENT`          | la captura no tiene el dato donde corresponde                                                    |
-| `DISCREPANCY`     | el dato existe pero se contradice o difiere de la referencia                                     |
-| `VALIDATOR_ERROR` | la entrada no se pudo juzgar (registro mal formado, producto fuera de los 8, parámetro inválido) |
+| Tipo              | Significa                                                                                                                                      |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ABSENT`          | la captura no tiene el dato donde corresponde, o la muestra no permite medir el criterio (`not_measurable`: no se juzgó ningún registro)       |
+| `DISCREPANCY`     | el dato existe pero se contradice o difiere de la referencia                                                                                   |
+| `VALIDATOR_ERROR` | la entrada no se pudo juzgar (registro mal formado, producto inesperado, fila que llega al holdout, fila oficial desalineada o contradictoria) |
 
-Aptitud del informe (`build_report`): `no_apta` si hay alguna `DISCREPANCY`; `bloqueada` si no, pero hay `ABSENT` o `VALIDATOR_ERROR`; `sin_hallazgos` si no hay nada (solo sobre lo medido, no es aval general). El informe lleva `validator_version`, la muestra (fuente, versión, intervalo, productos) y una huella SHA-256 estable.
+Cada validador devuelve un `Result` con `findings`, `coverage` (cuántos registros juzgó cada chequeo, por producto esperado) y `events` (hechos que no son defectos, como las reconexiones). Un chequeo que juzgó cero registros de un producto esperado queda como `ABSENT` / `not_measurable`; nunca como éxito silencioso.
+
+## Informe y aptitud
+
+`build_report(sample, results, required)` exige la lista de familias que debieron correr (`funding`, `quotes`, `candles`) y los productos esperados salen de `sample.products`. Una familia o un producto sin cobertura reportada se agrega como `ABSENT` / `validator_not_run`. Aptitud:
+
+- `no_apta`: hay alguna `DISCREPANCY`.
+- `bloqueada`: no hay discrepancias, pero hay `ABSENT` o `VALIDATOR_ERROR` (incluye lo no medible y lo no corrido).
+- `sin_hallazgos`: todo lo requerido se juzgó y no se encontró nada. No es un aval más allá de los criterios medidos.
+
+El informe lleva la versión del validador, la muestra (fuente, versión, intervalo, productos), la cobertura, los eventos y una huella SHA-256 estable.
 
 ## Criterio de #183 → validador → prueba
 
-| Criterio | Validador | Pruebas (`test_capture_validation.py`) |
-| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------- | ----------------------------------------------------- |
-| Funding: unidades absolutas/relativas | `validate_funding`: unidad `USD/<BASE>/hour`; relativo × precio = absoluto | `test_unit_mismatch…`, `test_relative_vs_absolute…` |
-| Funding: precio de referencia | precio del proveedor en o antes del período; sin precio → `ABSENT` | `test_relative_without_price_is_absent` |
-| Funding: períodos | hora UTC alineada y de 1 h | `test_period_must_be_one_aligned_hour` |
-| Funding: publicación | `known_at >= fin` (causal); retraso solo en períodos vistos en vivo | `test_known_before_period_end…`, `test_late_live_publication…` |
-| Funding: cobertura | horas faltantes por producto | `test_missing_hours_are_absent…` |
-| Funding: revisiones contradictorias | misma (producto, inicio) con tasas distintas | `test_contradictory_revisions`, `test_identical_revisions…` |
-| Cotizaciones: bid/ask, identidad | falta, no positivo o cruzado; producto fuera de los 8 | `test_missing_bid_or_ask…`, `test_identity…` |
-| Cotizaciones: timestamps y orden | | recepción − evento | ; recepción hacia atrás | `test_timestamp_skew`, `test_arrival_order_backwards` |
-| Cotizaciones: frescura, reconexiones | silencio > límite (interior y final); cambio de epoch; salto de secuencia | `test_freshness…`, `test_sequence_gap_and_reconnect`, `test_product_with_no_quotes…` |
-| Velas: agregación 5 min vs fuente oficial | `aggregate_to_five_minutes` + `validate_candles` (UTC, `[inicio, inicio+5 min)`, tolerancias explícitas, exactas por defecto) | `test_aggregation_math`, `test_match_is_clean`, `test_field_discrepancies_and_tolerance`, `test_missing_minute…`, `test_official_misaligned…` |
-| Umbrales 15/25/45 s | `calibrate_thresholds`: cuantiles y tasa de falsa alarma por candidato; `rechazado` / `no_rechazado` / `sin_evidencia`; `adopted` siempre `None` | `test_never_adopts…`, `test_small_sample…` |
-| Ausente vs discrepancia vs error | tipo de `Finding` | `test_malformed_*`, `test_fitness_ladder` |
-| Holdout preservado | `assert_range_allowed` en cada validador y en el informe (rechaza rangos que lleguen a 2026-08-02 UTC) | `RangeGuardTests`, `test_sample_must_be_identified…` |
-| Reproducible | huella determinista | `test_fingerprint…`, `test_end_to_end_synthetic_run…` |
+| Criterio                                | Validador                                                                                                                                                                                            | Pruebas (`test_capture_validation.py`)                                                                                                   |
+| --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| Funding: unidades absolutas y relativas | `validate_funding`: unidad `USD/<BASE>/hour`; relativo × precio contra absoluto con tolerancia relativa (escala con el precio)                                                                       | `test_unit_mismatch…`, `test_relative_vs_absolute…`, `test_tolerance_scales…`                                                            |
+| Funding: precio de referencia           | precio del proveedor en o antes del período y no más viejo que `max_reference_age_ms` (2 h por defecto); si no hay, `ABSENT`                                                                         | `test_stale_reference_price…`, `test_future_reference_price…`                                                                            |
+| Funding: períodos                       | hora UTC alineada y de 1 h                                                                                                                                                                           | `test_period_must_be_one_aligned_hour`                                                                                                   |
+| Funding: publicación                    | con las respuestas del colector: a tiempo si la primera respuesta que lo trae llegó antes de fin + `max_lag_ms`; tarde solo si una respuesta posterior al plazo no lo traía; si no, `not_measurable` | `test_publication_late_is_proven…`, `test_collector_down…`, `test_known_before_period_end…`, `test_backfill_only…`                       |
+| Funding: cobertura                      | horas faltantes por cada producto esperado, también si no tiene filas                                                                                                                                | `test_missing_hours…`, `test_no_rows_is_not_measurable…`, `test_expected_product_without_rows…`                                          |
+| Funding: revisiones contradictorias     | misma (producto, inicio) con tasas distintas                                                                                                                                                         | `test_contradictory_revisions`, `test_identical_revisions…`                                                                              |
+| Cotizaciones: bid/ask e identidad       | falta, no positivo o cruzado; producto fuera de lo esperado                                                                                                                                          | `test_missing_bid_or_ask…`, `test_unexpected_product…`                                                                                   |
+| Cotizaciones: timestamps y orden        | diferencia entre recepción y evento; recepción hacia atrás; `seq` que no crece dentro de un epoch (no se exige contigüidad: el ticker REST guarda `seq = received_at`)                               | `test_timestamp_skew_and_order`, `test_seq_must_increase…`, `test_clean_rest_feed…`, `test_contiguous_seq_is_opt_in`                     |
+| Cotizaciones: frescura y reconexiones   | silencio inicial, interior y final por encima del límite; un cambio de epoch es un evento de reconexión, no un defecto                                                                               | `test_initial_interior_and_final_silence`, `test_reconnect_is_an_event…`, `test_one_quote_per_product…`, `test_product_with_no_quotes…`  |
+| Velas: 5 min contra fuente oficial      | `aggregate_to_five_minutes` + `validate_candles` (UTC, `[inicio, inicio + 5 min)`, tolerancias explícitas y exactas por defecto, revisiones que se pisan reportadas)                                 | `test_aggregation_math`, `test_match_is_clean…`, `test_field_discrepancies…`, `test_conflicting_revisions…`, `test_misaligned_official…` |
+| Umbrales 15/25/45 s                     | `calibrate_thresholds`: cuantiles y tasa de falsa alarma por candidato; `rechazado` / `no_rechazado` / `sin_evidencia`; `adopted` siempre `None`                                                     | `test_never_adopts…`, `test_small_sample…`                                                                                               |
+| Ausente vs discrepancia vs error        | tipo de `Finding`                                                                                                                                                                                    | `test_malformed_*`, `test_fitness_ladder`                                                                                                |
+| Holdout preservado                      | rango rechazado en cada validador y en el informe; filas y velas desde 2026-08-02 UTC se descartan como `VALIDATOR_ERROR` sin copiar sus valores                                                     | `RangeGuardTests`, `test_holdout_rows_and_references…`, `test_holdout_candles_are_dropped`                                               |
+| Sin éxito por falta de evidencia        | cobertura por chequeo y producto; informe con lista de familias requeridas                                                                                                                           | `test_report_without_validators…`, `test_required_family…`, `test_expected_product_missing…`, `test_backfill_only…`                      |
+| Reproducible                            | huella determinista                                                                                                                                                                                  | `test_fingerprint_is_deterministic…`                                                                                                     |
+
+## Qué mide la publicación del funding y qué no
+
+`known_at` en el almacén es la hora en que **nuestro** colector recibió la respuesta, no la hora en que Kraken publicó. Por eso el retraso se juzga con las respuestas del colector (`responses`), nunca con `known_at`:
+
+- A tiempo: la primera respuesta que contiene el período llegó antes de `fin + max_lag_ms`.
+- Tarde: llegó después del plazo **y** existe una respuesta posterior al plazo, anterior a esa, que no lo traía. Eso prueba la demora de la fuente.
+- No medible: el colector no consultó entre el plazo y la primera respuesta que lo trae (por ejemplo, estuvo caído). No se le atribuye nada a Kraken; el informe lo cuenta como `ABSENT` / `not_measurable` con cantidad, primer y último período.
+- Un período traído por backfill no es medible.
+
+`max_lag_ms` (1 h por defecto) es un parámetro del validador, no un valor aprobado. Debe declararse en el informe real junto con la cadencia efectiva del colector.
 
 ## Lo que estas pruebas NO demuestran
 
 - Nada sobre datos reales: los fixtures son inventados. No se afirma que la captura cumpla ningún criterio.
 - La comparación de velas contra la fuente oficial exige que alguien aporte la serie oficial; los validadores no llaman a Kraken. Hasta que Fran lo autorice, es solo el comparador.
-- `known_at` en el almacén de funding es la hora de recepción. Un período traído por backfill tiene `known_at` muy posterior a su fin, así que su retraso de publicación **no se puede medir**; solo se juzga lo visto casi en vivo. Hay que decidir con la muestra real si eso alcanza.
 - Las cotizaciones del archivo son tope de libro (mejor bid/ask y tamaños), sin profundidad. Cualquier conclusión de ejecución es modelada.
-- Los umbrales de la calibración (`max_false_alarm_rate=0.001`, `min_samples=1000`) son parámetros del validador, no criterios aprobados; el informe real debe declararlos.
-- Si la tasa de falsa alarma sirve como criterio de rechazo depende de que las brechas de entrada provengan de intervalos sin caída; esa clasificación la aporta el ingestor (#166), no este módulo.
+- Los parámetros de los validadores (`max_lag_ms`, `rel_tolerance=0.0001`, `max_reference_age_ms`, `stale_ms`, `skew_ms`, `max_false_alarm_rate=0.001`, `min_samples=1000`) no son criterios aprobados; el informe real debe declararlos y justificarlos.
+- La calibración de umbrales supone que las brechas de entrada vienen de intervalos sin caída; esa clasificación la aporta el ingestor (#166), no este módulo.
 
 ## Pedido de autorización de lectura (borrador, para que Fran responda en la PR)
 
-- Fuente: solo lectura de la base de mercado de la captura (`dev-live`) y, para velas, de `paper_futures_official_candles` ya almacenada (sin llamadas nuevas a Kraken).
+- Fuente: solo lectura de la base de mercado de la captura (`dev-live`) y, para velas, de `paper_futures_official_candles` ya almacenada (sin llamadas nuevas a Kraken). Para publicar el funding hacen falta además las respuestas guardadas (`paper_futures_funding_responses`) con su hora de recepción y los períodos que contiene cada una.
 - Productos: los 8 `PF_*`, o un subconjunto que Fran indique (propuesta mínima: `PF_XBTUSD` y `PF_ETHUSD`).
-- Intervalo: propuesta de 48 h consecutivas dentro de 2025-10-13→2026-08-01 (rango ya autorizado para lectura en otras tareas); el rango exacto lo fija Fran. Nunca desde 2026-08-02 (holdout).
-- Volumen: unas 48 h de tickers (retención 24 h en el archivo de mercado: puede que el rango real quede limitado por esa retención), 2 880 velas de 1 m y 576 de 5 m por producto, y los períodos de funding del rango.
+- Intervalo: propuesta de 48 h consecutivas dentro de 2025-10-13 → 2026-08-01 (rango ya autorizado para lectura en otras tareas); el rango exacto lo fija Fran. Nunca desde 2026-08-02 (holdout).
+- Volumen: unas 48 h de tickers (retención 24 h en el archivo de mercado: puede que el rango real quede limitado por esa retención), 2 880 velas de 1 m y 576 de 5 m por producto, y los períodos y respuestas de funding del rango.
 - Propósito: ejecutar estos validadores y producir el informe reproducible de #183. Sin escritura, sin otra captura, sin sesión.
