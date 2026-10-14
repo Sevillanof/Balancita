@@ -96,7 +96,39 @@ async function markerPositions(chart: Locator) {
   ) as { id: string; x: number; y: number }[]
 }
 
+/**
+ * Click a marker where the chart paints it NOW: the position and the box are
+ * read right before the click, from the same published layout.
+ */
+async function clickMarker(page: Page, chart: Locator, id: string) {
+  // The chart has finished moving to the selection it was last given.
+  await expect(chart).toHaveAttribute(
+    'data-focused-marker',
+    (await chart.getAttribute('data-selected-marker')) ?? '',
+  )
+  // The chart ignores a click that follows another within 500 ms (it waits
+  // for a possible double click): move ITS clock past that window.
+  await page.clock.fastForward(600)
+  // Two frames: the chart has laid out its scales and published them.
+  await page.evaluate(
+    () =>
+      new Promise((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(resolve)),
+      ),
+  )
+  const box = (await chart.boundingBox())!
+  const marker = (await markerPositions(chart)).find((p) => p.id === id)!
+  // The canvas registers a pointer before it registers a click on it: arrive
+  // (several moves), let one frame paint, then press.
+  await page.mouse.move(box.x + marker.x, box.y + marker.y, { steps: 6 })
+  await page.evaluate(() => new Promise(requestAnimationFrame))
+  await page.mouse.click(box.x + marker.x, box.y + marker.y)
+}
+
 async function openTerminal(page: Page) {
+  // Time keeps flowing; it only lets a test jump the chart's click window.
+  await page.clock.install()
+  await page.clock.resume()
   await page.goto('/terminal')
   await expect(page.getByTestId('observer-now')).toBeVisible()
   await expect(page.getByTestId('approved-chart-renderer')).toBeVisible()
@@ -207,8 +239,7 @@ test('history rows and chart markers are the same decisions and select each othe
   const target = (await markerPositions(chart)).find(
     (p) => p.id === other.analysisId,
   )!
-  await page.mouse.move(box.x + target.x, box.y + target.y)
-  await page.mouse.click(box.x + target.x, box.y + target.y)
+  await clickMarker(page, chart, target.id)
   await expect(chart).toHaveAttribute('data-selected-marker', other.analysisId)
   await expect(
     page.getByRole('button', {
@@ -229,16 +260,13 @@ test('clicking the EJEC. marker on the canvas opens the facts of its fill, apart
   const sale = executed.PF_XBTUSD![0]!
   const positions = await markerPositions(chart)
   const target = positions.find((p) => p.id.startsWith('fill:'))!
-  const box = (await chart.boundingBox())!
   const pressedBefore = await page
     .locator('.connected-terminal__decision-list li button')
     .evaluateAll((buttons) =>
       buttons.map((button) => button.getAttribute('aria-pressed')),
     )
   const decisionBefore = await chart.getAttribute('data-selected-marker')
-  await page.mouse.move(box.x + target.x, box.y + target.y, { steps: 6 })
-  await page.evaluate(() => new Promise(requestAnimationFrame))
-  await page.mouse.click(box.x + target.x, box.y + target.y)
+  await clickMarker(page, chart, target.id)
   await expect(chart).toHaveAttribute('data-selected-marker', target.id)
   const detail = page.getByLabel('Ejecución seleccionada')
   await expect(detail).toBeVisible()
@@ -276,26 +304,99 @@ test('clicking the EJEC. marker on the canvas opens the facts of its fill, apart
   }
   // Picking a decision marker clears the facts of the fill.
   const entries = facts.PF_XBTUSD!.filter((f) => f.action !== 'WAIT')
-  // The hover of a canvas needs a frame to register: retry the real click.
-  await expect(async () => {
-    const now = (await chart.boundingBox())!
-    // The one well inside the chart, not at its edge.
-    const other = (await markerPositions(chart))
-      .filter(
-        (p) =>
-          entries.some((f) => f.analysisId === p.id) &&
-          p.x > 0 &&
-          p.x < now.width,
-      )
-      .at(-1)!
-    await page.mouse.move(now.x + other.x, now.y + other.y, { steps: 6 })
-    await page.evaluate(() => new Promise(requestAnimationFrame))
-    await page.mouse.click(now.x + other.x, now.y + other.y)
-    await expect(chart).toHaveAttribute('data-selected-marker', other.id, {
-      timeout: 1500,
-    })
-  }).toPass({ timeout: 15_000 })
+  const now = (await chart.boundingBox())!
+  // The one well inside the chart, not at its edge.
+  const other = (await markerPositions(chart))
+    .filter(
+      (p) =>
+        entries.some((f) => f.analysisId === p.id) &&
+        p.x > 0 &&
+        p.x < now.width,
+    )
+    .at(-1)!
+  await clickMarker(page, chart, other.id)
+  await expect(chart).toHaveAttribute('data-selected-marker', other.id)
   await expect(detail).toHaveCount(0)
+})
+
+test('a fill and the decision next to it open their own facts, in either order, also zoomed', async ({
+  page,
+}) => {
+  // Nine real clicks over three layouts: slower than the default budget.
+  test.slow()
+  await openTerminal(page)
+  const chart = page.getByTestId('approved-chart-renderer')
+  const neighbour = async () => {
+    const all = await markerPositions(chart)
+    const fill = all.find((p) => p.id.startsWith('fill:'))!
+    const near = all
+      .filter((p) => !p.id.startsWith('fill:'))
+      .sort((a, b) => Math.abs(a.x - fill.x) - Math.abs(b.x - fill.x))[0]!
+    return { fill, near }
+  }
+  const detail = page.getByLabel('Ejecución seleccionada')
+  const roundTrip = async () => {
+    const { fill, near } = await neighbour()
+    // Decision first, then the fill beside it, then the decision again.
+    await clickMarker(page, chart, near.id)
+    await expect(chart).toHaveAttribute('data-selected-marker', near.id)
+    await expect(detail).toHaveCount(0)
+    await clickMarker(page, chart, fill.id)
+    await expect(chart).toHaveAttribute('data-selected-marker', fill.id)
+    await expect(detail).toBeVisible()
+    await clickMarker(page, chart, near.id)
+    await expect(chart).toHaveAttribute('data-selected-marker', near.id)
+    await expect(detail).toHaveCount(0)
+    return { fill, near }
+  }
+  await roundTrip()
+  // Zoom out and in: the scale changes between measuring and clicking.
+  const box = (await chart.boundingBox())!
+  for (const delta of [400, -800]) {
+    const before = await chart.getAttribute('data-marker-positions')
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+    await page.mouse.wheel(0, delta)
+    await expect
+      .poll(async () => chart.getAttribute('data-marker-positions'))
+      .not.toBe(before)
+    await roundTrip()
+  }
+})
+
+test('clicking the bare background of the chart opens neither a decision nor a fill', async ({
+  page,
+}) => {
+  await openTerminal(page)
+  const chart = page.getByTestId('approved-chart-renderer')
+  const detail = page.getByLabel('Ejecución seleccionada')
+  const selectedBefore = await chart.getAttribute('data-selected-marker')
+  const box = (await chart.boundingBox())!
+  const all = await markerPositions(chart)
+  const fill = all.find((p) => p.id.startsWith('fill:'))!
+  // Straight below the fill, well inside the plot and far from every glyph.
+  const y = Math.min(fill.y + 200, box.height - 60)
+  expect(
+    all
+      .filter((p) => Math.abs(p.x - fill.x) < 60)
+      .every((p) => Math.abs(p.y - y) > 60),
+  ).toBe(true)
+  for (const x of [fill.x, fill.x - 13, fill.x + 13]) {
+    await page.clock.fastForward(600)
+    await page.mouse.move(box.x + x, box.y + y, { steps: 6 })
+    await page.evaluate(() => new Promise(requestAnimationFrame))
+    await page.mouse.click(box.x + x, box.y + y)
+    await page.evaluate(
+      () =>
+        new Promise((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(resolve)),
+        ),
+    )
+    await expect(chart).toHaveAttribute(
+      'data-selected-marker',
+      selectedBefore ?? '',
+    )
+    await expect(detail).toHaveCount(0)
+  }
 })
 
 test('changing product swaps AHORA, rows and markers; nothing leaks across', async ({

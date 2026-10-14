@@ -4,6 +4,7 @@ import {
   fillDetailRows,
   fillMarkers,
   groupWaitMarkers,
+  pickMarkerAt,
   positionLines,
   timeframeCandles,
 } from './terminal-chart-model.ts'
@@ -374,5 +375,64 @@ describe('executed-operation and WAIT markers', () => {
     })
     expect(out.find((marker) => marker.id === 'd')?.label).toBe('WAIT')
     expect(out).toHaveLength(3)
+  })
+})
+
+describe('pickMarkerAt', () => {
+  // A decision one candle (13 px) before an EJEC. fill, labels overlapping.
+  const decision = { id: 'PF_XBTUSD-1', x: 616, y: 231 }
+  const fill = { id: 'fill:3', x: 629, y: 229 }
+
+  it('opens the fill when the click is on the fill, whatever the order', () => {
+    expect(pickMarkerAt([decision, fill], fill, 16, 30)).toBe('fill:3')
+    expect(pickMarkerAt([fill, decision], fill, 16, 30)).toBe('fill:3')
+  })
+
+  it('opens the decision when the click is on the decision, whatever the order', () => {
+    expect(pickMarkerAt([decision, fill], decision, 16, 30)).toBe('PF_XBTUSD-1')
+    expect(pickMarkerAt([fill, decision], decision, 16, 30)).toBe('PF_XBTUSD-1')
+  })
+
+  it('keeps telling them apart when a zoom brings them to 4 px', () => {
+    const zoomedOut = [
+      { id: 'PF_XBTUSD-1', x: 620, y: 231 },
+      { id: 'fill:3', x: 624, y: 229 },
+    ]
+    expect(pickMarkerAt(zoomedOut, { x: 624, y: 229 }, 8, 30)).toBe('fill:3')
+    expect(pickMarkerAt(zoomedOut, { x: 620, y: 231 }, 8, 30)).toBe(
+      'PF_XBTUSD-1',
+    )
+  })
+
+  it('tells apart markers stacked on one candle by y, in both directions', () => {
+    const stacked = [
+      { id: 'PF_XBTUSD-2', x: 100, y: 200 },
+      { id: 'fill:1', x: 100, y: 230 },
+    ]
+    expect(pickMarkerAt(stacked, { x: 100, y: 228 }, 16, 30)).toBe('fill:1')
+    expect(pickMarkerAt(stacked, { x: 100, y: 203 }, 16, 30)).toBe(
+      'PF_XBTUSD-2',
+    )
+    expect(
+      pickMarkerAt([...stacked].reverse(), { x: 101, y: 228 }, 16, 30),
+    ).toBe('fill:1')
+  })
+
+  it('selects nothing when the click is far above or below the glyph', () => {
+    const lone = { id: 'fill:3', x: 629, y: 229 }
+    expect(pickMarkerAt([lone], { x: 629, y: 229 }, 16, 30)).toBe('fill:3')
+    expect(pickMarkerAt([lone], { x: 629, y: 500 }, 16, 30)).toBeNull()
+    expect(pickMarkerAt([lone], { x: 629, y: 20 }, 16, 30)).toBeNull()
+    // Beyond the vertical reach of the neighbour too, even in its column.
+    expect(
+      pickMarkerAt([decision, fill], { x: 616, y: 500 }, 16, 30),
+    ).toBeNull()
+  })
+
+  it('returns null away from every marker', () => {
+    expect(
+      pickMarkerAt([decision, fill], { x: 300, y: 229 }, 16, 30),
+    ).toBeNull()
+    expect(pickMarkerAt([], { x: 1, y: 1 }, 16, 30)).toBeNull()
   })
 })
