@@ -1517,6 +1517,17 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
   })
 
   describe('selection between chart, history and decisions (Fase 2.7)', () => {
+    // The chart paints its markers in an effect after the first render: wait
+    // for them (and for the click handler) before reading or clicking.
+    const renderReady = async (
+      snapshotState: Record<string, unknown> = state,
+    ) => {
+      await renderLive(snapshotState)
+      await waitFor(() => {
+        expect(chartHarness.clickHandlers.length).toBeGreaterThan(0)
+        expect(chartHarness.markerSets.at(-1)?.length).toBeGreaterThan(0)
+      })
+    }
     const clickMarker = (id: string) =>
       act(async () =>
         chartHarness.clickHandlers.at(-1)?.({ hoveredObjectId: id }),
@@ -1534,7 +1545,7 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
       screen.queryAllByTestId('decision-limit').map((n) => n.textContent)
 
     it('opens the detail of the decision picked on the chart and highlights its row and marker', async () => {
-      await renderLive()
+      await renderReady()
       // Default: the newest decision, a SHORT.
       expect(marker('verdict-hash-3')?.text).toMatch(/◀/)
       await clickMarker('verdict-hash-2')
@@ -1550,7 +1561,7 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
     })
 
     it('highlights the right marker when a history row is picked', async () => {
-      await renderLive()
+      await renderReady()
       await clickMarker('verdict-hash-2')
       await pickRow('verdict-hash-3')
       expect(detail().getByText('SHORT')).toBeTruthy()
@@ -1559,7 +1570,7 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
     })
 
     it('ignores a click on a marker that is not one of this product’s decisions', async () => {
-      await renderLive()
+      await renderReady()
       await clickMarker('verdict-hash-2')
       // A foreign id, an exit marker and a decision without marker (WAIT)
       // leave the current selection untouched (no fallback to the newest).
@@ -1600,7 +1611,7 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
         const windowScroll = vi
           .spyOn(window, 'scrollTo')
           .mockImplementation(() => {})
-        await renderLive()
+        await renderReady()
         const list = document.querySelector<HTMLElement>(
           '.connected-terminal__decision-list',
         )!
@@ -1610,7 +1621,7 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
       })
 
       it('moves only the list’s own scroll, never the page', async () => {
-        await renderLive()
+        await renderReady()
         const { pageScroll, list } = spies()
         const windowScroll = vi
           .spyOn(window, 'scrollTo')
@@ -1644,7 +1655,7 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
     })
 
     it('says a WAIT decision has no marker, and says nothing for an entry', async () => {
-      await renderLive()
+      await renderReady()
       await pickRow('verdict-hash-1')
       expect(marker('verdict-hash-1')).toBeUndefined()
       expect(notes()).toEqual([
@@ -1655,7 +1666,7 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
     })
 
     it('says why rebuilt and out-of-period decisions have no marker', async () => {
-      await renderLive({
+      await renderReady({
         ...state,
         analyses: [
           {
@@ -1687,7 +1698,7 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
         analysis_id: `verdict-${index}`,
         decision_time_ms: T0 - 120_000 + index * 100,
       }))
-      await renderLive({ ...state, analyses: many })
+      await renderReady({ ...state, analyses: many })
       await clickMarker('verdict-0')
       expect(detail().getByText('LONG')).toBeTruthy()
       expect(marker('verdict-0')?.text).toMatch(/◀/)
@@ -1896,6 +1907,11 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
           live(0, 'snapshot', { watermark: 0, state: mixed }),
         )
         await screen.findByText('Saldo USD')
+        // The chart paints lines and markers in effects after the render.
+        await waitFor(() => {
+          expect(chartHarness.priceLines.length).toBeGreaterThan(0)
+          expect(chartHarness.markerSets.length).toBeGreaterThan(0)
+        })
       }
 
       afterEach(() => {
