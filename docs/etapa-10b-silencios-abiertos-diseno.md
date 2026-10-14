@@ -94,7 +94,20 @@ Opciones para Fran:
 - **(a) Pedido a 9A** (único dueño de `paper_runner.py`): parámetro opcional que deje fuera las órdenes con `deadline_ms < gap_to_ms`, aplicable en los dos caminos (abierto y cierre de #165), más una forma determinista de vencerlas (por ejemplo `_expire` del producto en `t_ms`) sin inventar eventos. Cambia #168 y exige revisión propia.
 - **(b) Aceptar** que esas órdenes se cancelen por `source_stale`, como ya hace #165 hoy, y declararlo en la documentación y en el registro (`trigger` y `deadline_before_gap_to: true` en `source_stale_detected`).
 
-**Decisión de Fran (16:07Z): opción (a).** Se pide a 9A, único dueño de `paper_runner.py`, un parámetro opcional de `cancel_for_source_loss` que deje fuera las órdenes con `deadline_ms < gap_to_ms`, aplicable en los dos caminos (abierto y cierre de #165), más una forma determinista de vencerlas (por ejemplo `_expire` del producto en `t_ms`) sin inventar eventos. La sesión de esta implementación no copia ni reimplementa nada del runner: usa el parámetro cuando 9A lo entregue y esa parte queda bloqueada hasta entonces. El ingestor (silencios abiertos durables, registros y recuperación) no depende de 9A.
+**Decisión de Fran (16:07Z, D-17-19): opción (a); rechaza aceptar cancelaciones `source_stale` de órdenes cuya ventana terminó antes de superar el umbral.** Autoriza al responsable de 9A a modificar #168 (PR acotada o commit adicional). Contrato obligatorio de Fran:
+
+1. Si `deadline_ms` es anterior al primer instante de superación del umbral, la orden vence normalmente.
+2. Si el umbral se supera mientras la orden sigue siendo ejecutable, puede cancelarse por `source_stale`.
+3. La misma regla en silencios abiertos y cerrados.
+4. La igualdad en los límites se resuelve explícitamente: el silencio es excesivo solo cuando supera el umbral (`gap_to_ms = since_ms + limit_ms + 1`).
+5. Se reutiliza la lógica de vencimiento de `TimedExecutor`, con sus motivos originales.
+6. Sin cotizaciones, ticks ni timestamps retroactivos inventados para provocar vencimientos.
+7. Durable, idempotente y recuperable tras `SIGKILL`.
+8. Sin cambios en posiciones, stops, estrategias ni contabilidad.
+
+La implementación en `paper_runner.py` es de 9A (pedido enviado). Esta rama no copia ni reimplementa nada del runner: usa la firma nueva cuando 9A la entregue, y la parte de sesión que cancela queda bloqueada hasta entonces. El ingestor (silencios abiertos durables, registros y recuperación) no depende de 9A. Después, 9A/D revisan #168 y se actualiza #165 y este diseño.
+
+Pruebas adicionales exigidas por Fran, comparando órdenes, motivos, journal y estado financiero entre corrida continua y recuperada: deadline antes del umbral; deadline exactamente en el límite; orden vigente al superarse el umbral; silencio abierto sin cotización posterior; cotización que cierra el silencio después del deadline; dos productos con órdenes y deadlines distintos; recuperación después de una caída anterior y posterior al vencimiento. Se suman a los casos L y O de §8.1.
 
 ## 7. Qué se compara en las pruebas
 
