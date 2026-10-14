@@ -11,6 +11,7 @@ Tipografía Inter / IBM Plex Mono cargada localmente (se permitió el directorio
 - `detalle-c29.png`: detalle de C29 a 1440x900.
 - `detalle-c29-completo.png`: página completa.
 - `comparacion-stitch-vs-react.png`: Stitch v5 (izquierda) y React (derecha).
+- Botón de la cabecera: «Abrir la Terminal →» abre la Terminal general (`/terminal`, sin estado de selección); la nota «Abre la Terminal general; no selecciona el experimento C29.» lo aclara y no promete navegar al experimento. Stitch decía «Ver en Terminal».
 - `solicitudes.json`: solicitudes `/api-*` de la captura (ninguna 4xx/5xx).
 
 ## Qué sale de qué fuente (C29)
