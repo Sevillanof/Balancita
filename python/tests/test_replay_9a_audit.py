@@ -367,6 +367,22 @@ class FundingAudit(Tmp):
         self.assertNotEqual(replay[START + 3 * HOUR], 0.0099)                        # not the revision: the oldest response
 
 
+class Reusable(unittest.TestCase):
+    def test_the_cycle_event_and_the_audit_row_are_reusable_pieces(self):
+        frame = (0, {}, None, {"candidate_close": "100.5", "atr14": "2"}, "range")
+        event = RP.make_cycle_event(BTC, 300_000, frame, cycle_atr=lambda f: D("3.25"))
+        self.assertEqual(event["payload"], {"product_id": BTC, "cycle_ms": 300_000, "price": "100.5", "atr": "3.25"})
+        self.assertEqual(event["t_ms"], 300_000 + RP.DATA_LAG_MS)
+        self.assertEqual(RP.make_cycle_event(BTC, 300_000, frame, cycle_atr=lambda f: None)["payload"]["atr"], "2")   # default ATR
+        self.assertEqual(RP.make_cycle_event(BTC, 300_000, frame)["payload"]["atr"], "2")
+        flag = {"carry_forward": True, "long_window": False, "strict_signal": None}
+        strategy = type("S", (), {"id": "c32"})()
+        row = RP.funding_audit_row(strategy, BTC, "SELL", flag)
+        self.assertTrue(row["incomplete_evidence"])
+        self.assertEqual((row["strategy_id"], row["strict_class"]), ("c32", "disappears_unknown"))
+        self.assertNotIn("incomplete_evidence", flag)                  # the flag record is not modified
+
+
 class SourceParity(Tmp):
     HOURS = 760
 

@@ -223,6 +223,25 @@ def funding_flags(context, at_ms):
             "long_window": context.starts[index - 1] - context.starts[index - WINDOW] > (WINDOW - 1) * HOUR_MS}
 
 
+def make_cycle_event(product, close_ms, frame, cycle_atr=None, source=None, lag_ms=None):
+    """The ``cycle`` event of one closed 5-minute bar. ``cycle_atr(frame)`` is the strategies' own volatility (the frozen specs'
+    stop distance), else the frame's default ATR. Reusable: the same assembly for any producer of cycles."""
+    trend = frame[3]
+    atr = cycle_atr(frame) if cycle_atr is not None else None
+    atr = trend["atr14"] if atr is None or atr <= 0 else atr
+    return make_event("cycle", {"product_id": product, "cycle_ms": close_ms, "price": str(trend["candidate_close"]), "atr": str(atr)},
+                      t_ms=close_ms + (DATA_LAG_MS if lag_ms is None else lag_ms), source=source or SOURCE, stream="cycles:" + product)
+
+
+def funding_audit_row(strategy, product, original_action, flag):
+    """One audit row of a funding-dependent strategy's evaluation: the forward's funding line (``flag`` from
+    ``replay_funding_audit.audit_record``), the signal that was produced and how the strict reading relates to it."""
+    row = dict(flag, strategy_id=strategy.id, product_id=product, original=original_action)
+    row["incomplete_evidence"] = original_action != "WAIT" and bool(flag.get("carry_forward") or flag.get("long_window"))
+    row["strict_class"] = RFA.classify(original_action, flag["strict_signal"])
+    return row
+
+
 def product_events(product, data, strategies, cfg, frames, cycle_atr=None, flags=None):
     """``(key, event)`` for one product, in time order: its candles and its cycles. ``frames`` receives the frame of each
     cycle (keyed by product and cycle) for the evaluator; nothing is looked up that was not known at that frame."""
@@ -248,11 +267,7 @@ def product_events(product, data, strategies, cfg, frames, cycle_atr=None, flags
             frames[(product, close_ms)] = frame
             if flags is not None:
                 flags[(product, close_ms)] = RFA.audit_record(context, close_ms, bands)
-            atr = cycle_atr(frame) if cycle_atr is not None else None
-            atr = trend["atr14"] if atr is None or atr <= 0 else atr      # the spec's volatility, else the default ATR
-            event = make_event("cycle", {"product_id": product, "cycle_ms": close_ms, "price": str(trend["candidate_close"]),
-                                         "atr": str(atr)}, t_ms=close_ms + DATA_LAG_MS, source=SOURCE,
-                               stream="cycles:" + product)
+            event = make_cycle_event(product, close_ms, frame, cycle_atr)
             yield (event["t_ms"], KIND_RANK["cycle"], product, seq), event
 
 
@@ -329,11 +344,7 @@ def run_replay(candles_db, funding_db, config, out_dir, *, data=None, strategies
             funding_diag[name] += 1 if flag[name] else 0
         for strategy, (signal, _inputs) in zip(chosen, results):
             if getattr(strategy, "uses_funding", False):
-                original = signal["action"]
-                row = dict(flag, strategy_id=strategy.id, product_id=payload["product_id"], original=original)
-                row["incomplete_evidence"] = original != "WAIT" and bool(flag.get("carry_forward") or flag.get("long_window"))
-                row["strict_class"] = RFA.classify(original, flag["strict_signal"])
-                audit_rows.append(row)
+                audit_rows.append(funding_audit_row(strategy, payload["product_id"], signal["action"], flag))
             if getattr(strategy, "uses_funding", False) and signal["action"] != "WAIT":
                 funding_diag["funding_decisions"] += 1
                 funding_diag["funding_decisions_with_stale_hour"] += 1 if flag["stale"] else 0
