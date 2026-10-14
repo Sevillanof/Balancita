@@ -52,7 +52,18 @@ Distinción implementada: la fuente está **caída** solo si ningún ticker de n
 
 La recuperación reproduce el estado idéntico (`replay_matches_continuous: true`) en ambas políticas. Las cifras de tiempo de escritura (11,5 s por 28 800 cotizaciones) no se extrapolan a la Mac. **No se propone muestreo ni compactación**: lo medido es el costo de no reducir (≈ 361 MB por día, replay de decenas de segundos por día de sesión) y, abajo, qué cambia una política más rala.
 
-FIDELIDAD_PENDIENTE
+### Qué cambia una política más rala (fidelidad, 40 caminatas sembradas, 2 h cada una)
+
+Mismas cotizaciones de BTC, volatilidad 2,5 pb/s (para que se alcancen stops y objetivos), una orden de compra a mercado decidida al inicio; «rala» = una cotización cada N segundos (con fase distinta por caminata). Se compara contra la política completa (una por segundo).
+
+| Una cada | Entradas distintas en hora | Entradas con otro precio | Operaciones cerradas en ambas | Motivo de salida distinto | Salida en otra hora | Retraso medio de la salida (s) |
+| -------- | -------------------------- | ------------------------ | ----------------------------- | ------------------------- | ------------------- | ------------------------------ |
+| 5 s      | 32 de 40                   | 14 de 18                 | 18                            | 0                         | 16 de 18            | 55,8                           |
+| 10 s     | 36 de 40                   | 16 de 18                 | 18                            | 0                         | 18 de 18            | 77,7                           |
+| 30 s     | 38 de 40                   | 16 de 18                 | 18                            | 0                         | 18 de 18            | 91,1                           |
+| 60 s     | 39 de 40                   | 16 de 17                 | 17                            | 0                         | 17 de 17            | 180,7                          |
+
+Lectura, sin recomendar: en este camino sintético el motivo de salida no cambió en ningún caso, pero **la hora de la entrada y casi siempre la de la salida sí cambian incluso con una cotización cada 5 s**, y el retraso medio de la salida crece con el intervalo. El retraso es una media sobre 17-18 pares, sensible a valores extremos (no se calculó la mediana). Esto es lo que habría que pesar frente al ahorro de tamaño de la tabla anterior, con datos reales y una política condicionada (solo con orden pendiente o posición abierta), que no se midió.
 
 Limitaciones de esta medición: precios sintéticos con volatilidad constante; una sola posición BTC; una política «solo con orden pendiente o posición abierta» requiere que el runner avise al ingestor y no se midió aquí; no se midió el tamaño del journal con cotizaciones rechazadas por spread o antigüedad.
 
