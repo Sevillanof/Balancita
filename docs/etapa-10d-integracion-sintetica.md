@@ -1,14 +1,31 @@
 # Etapa 10D: integración sintética completa
 
 Estado: borrador, solo offline. No lee capturas reales, no abre procesos persistentes, no toca estrategias congeladas
-(C29, C30, C32), forward, Kronos, Qwen, captura ni ADR. `paper_runner.py` no se modifica (es de 9A).
+(C29, C30, C32), forward, Kronos, Qwen, captura ni ADR. `paper_runner.py` no se modifica aquí (es de 9A; la rama contiene el cambio de #168).
 
-Pila: esta rama parte de la rama de #153 (9A, 977e542) y contiene las ramas de #163 (10C, 12dc0c0) y #164 (volumen,
-4302be1, sobre #161). Nada se copió: se fusionaron las ramas. Cambios propios:
+Pila: esta rama parte de la rama de #153 (9A, 977e542) y contiene las ramas de #163 (10C, 12dc0c0), #164 (volumen,
+4302be1, sobre #161), #166 (continuidad de la fuente, 7180560) y #168 (cancelación `source_stale`, 92b86ab). Nada se copió: se
+fusionaron las ramas. Cambios propios:
 
 - `python/balancita_engine/paper_live_integration.py`: la sesión (`LiveSession`), el diario de auditoría y los puntos de falla.
 - `python/balancita_engine/paper_live_evaluator.py`: un único gancho de pruebas (`self.fault`) en `feed_candle`, sin efecto si es `None`.
-- `python/tests/live_world.py` y `python/tests/test_paper_live_integration.py`: mundo sintético y 41 pruebas.
+- `python/tests/live_world.py` y `python/tests/test_paper_live_integration.py`: mundo sintético y 47 pruebas.
+
+## 0. Árbol de dependencias
+
+```
+main
+ └─ #153 9A replay y runner (56d9e04)
+     ├─ #168 cancelación source_stale (92b86ab)
+     ├─ #163 10C evaluador vivo (c5b31d7)
+     └─ #167 adaptador de funding contable (diseño, sin integrar)
+ └─ #161 10B ingestor offline
+     └─ #164 velas con volumen (4302be1)
+         └─ #166 continuidad e identidad de la fuente (7180560)
+#165 10D integración = #153 + #163 + #164 + #166 + #168 (fusionadas, nada copiado)
+```
+
+El adaptador de funding (#167) no está integrado en 10D: la sesión sigue usando la tabla sintética de devengo.
 
 ## 1. Camino de eventos
 
@@ -106,27 +123,21 @@ ni la pierde ni la duplica (pruebas de muerte antes y después de la escritura d
 y repara una última línea a medio escribir. Cubre: vela con volumen no numérico (evidencia, no señal), vela sin volumen (no se
 inventa), fondeo tardío, conflictos de velas, cuadros vencidos y cortes de la fuente.
 
-## 8. `source_stale` (D-10C-3 sigue abierto)
+## 8. `source_stale` (D-10C-3): cancelación durable por el punto de entrada del runner
 
-Política: cancelar las órdenes pendientes cuya continuidad de fuente se perdió. Aquí está diseñada y probada solo como evidencia:
+La sesión llama a `PaperRunner.cancel_for_source_loss(product_id, gap_from_ms, gap_to_ms, t_ms)` (#168, reutiliza el executor y el diario del runner; no toca estrategias, stops de posiciones abiertas ni riesgo).
 
-- Funciones puras `stale_quote_gaps` y `affected_orders`; la sesión las aplica por cotización (`_continuity`) y escribe un registro `source_stale_pending_order` con `applied: false` y `reason: runner_cancel_entry_point_missing`.
-- Caso de regresión del corte de 26 s: con el límite de 15 s lo detecta aunque el ingestor (umbral de 45 s) nunca lo llame caída, y se prueba sin duplicar el registro al reentregar la cotización.
+- Funciones puras `stale_quote_gaps` y `affected_orders`; la sesión las aplica por cotización (`_continuity`) **antes** de entregar al runner la cotización que cierra el hueco, con `t_ms` igual al tiempo del diario de esa cotización (el runner exige `t_ms >= gap_to_ms`).
+- Si hay órdenes pendientes del producto cuya ventana solapa el hueco, la sesión llama al runner y escribe `source_stale_cancellation` con `applied: true`, el hueco y los ids que devolvió la API (la API también cancela, de forma conservadora, una orden decidida durante el hueco). Si el runner lo rechaza, escribe el registro con `applied: false` y el código del rechazo y **la sesión se detiene** con el error; no entrega la cotización a órdenes que debieron cancelarse.
+- `flush_audit` además vuelca cada `source_loss` que el runner dejó durable (`source: runner`, `kind: source_loss`). Así, una muerte entre la cancelación y la escritura del registro de la sesión no pierde la evidencia: se deriva de nuevo del diario del runner.
+- El runner es idempotente por `(producto, desde, hasta)`: reentregar la cotización tras una recuperación no cancela dos veces.
+- **Cotización previa tras una recuperación:** `LiveSession.recover` toma la cotización previa de cada producto del runner (`quote_t_ms`, `last_quote_ms`), no de la memoria del proceso muerto. Sin eso, un hueco abierto cuando el proceso murió (inicio del hueco ya procesado, final todavía no entregado) no se veía y la primera cotización posterior llenaba la orden. Una cotización reentregada nunca retrocede ese valor.
+- Límite de continuidad por defecto: 15 s (hipótesis, sin validar con datos reales). Las pruebas del circuito usan 25 s porque las cotizaciones sintéticas llegan cada 20 s; el hueco de la prueba es de 40 s (la cotización de 10 s de un minuto falta), menor que los 45 s del silencio del ingestor.
 - Una pausa de 45 s no es garantía suficiente (prueba incluida).
-- **No se cancela nada**: falta un punto de entrada del runner para cancelar una orden por esta causa. Eso es de 9A y debe pedirse por coordinación.
 
-### Firma propuesta del punto de entrada (para que 9A la evalúe cuando Fran lo apruebe)
+Pruebas (`TestSourceStaleCancellation`): el hueco cancela la única orden pendiente antes de la cotización que lo cierra (el `source_loss` y el `order_cancelled` van antes en el diario del runner); sin la cancelación (límite desactivado) esa cotización llena la orden (regresión); solo se cancela esa orden; y, con terminación real (SIGKILL) del proceso hijo en `after_poll`, antes de entregar el evento previo a la cotización final, justo antes de ella, justo después y al final de la entrega, el proceso recuperado cancela la orden una sola vez, antes de la cotización, con los mismos `financial_digest`, órdenes, operaciones, `source_losses`, entradas `source_loss` y `order_cancelled` y evidencia de auditoría que la corrida continua (los puntos incluyen la caída entre la cancelación y el checkpoint: `after_audit`, `after_runner_checkpoint`, `checkpoint_tmp_written`, `after_checkpoint`). `state_digest` no se compara entre corrida continua y recuperada porque cuenta las entradas de recuperación; sí entre ejecuciones iguales. Además: repetir el mismo intervalo (llamada directa y por la sesión) no escribe nada; si el runner rechaza la cancelación, el registro queda `applied: false` con el código del rechazo, sin ids, y la sesión se detiene sin entregar la cotización. Las suites de reloj normal y SIGKILL de 6 bis se repitieron completas con el runner nuevo (45 pruebas OK antes de añadir estas dos).
 
-No se implementa aquí. Propuesta mínima, sin tocar la lógica financiera:
-
-```python
-PaperRunner.cancel_for_source_loss(product_id: str, gap_from_ms: int, gap_to_ms: int, t_ms: int) -> list[str]
-```
-
-- Cancela solo las órdenes pendientes de `product_id` cuya ventana solapa `[gap_from_ms, gap_to_ms]`, con motivo `source_stale`.
-- Se registra como evento del diario del runner (idempotente por `(product_id, gap_from_ms, gap_to_ms)`), para que la recuperación no cancele dos veces ni deje una orden viva.
-- Devuelve los ids cancelados; la sesión enlaza el registro `source_stale_pending_order` de auditoría con ese evento y pasa a `applied: true`.
-- Misma semántica que `runner_interrupted` en `_begin_recovery`, con otra causa.
+Cobertura declarada: el mundo sintético tiene un solo producto y no hay una posición abierta durante el hueco; que otros productos y las posiciones abiertas y sus stops no cambian lo prueban las pruebas del runner de #168 (`test_paper_runner_source_loss.py`) y la selección pura de esta rama (`TestSourceStalePolicy`). Esta rama no repite esa prueba en circuito completo. Verificado por mutación: sin la siembra de la cotización previa el caso de la orden queda llena y la prueba falla.
 
 ## 9. Mediciones
 
@@ -137,7 +148,7 @@ La suite de integración tarda ~290 s sin reloj y otros ~250 s con reloj y termi
 
 ## 10. Riesgos sin resolver
 
-1. `source_stale` no se aplica (falta el punto de entrada en el runner, de 9A).
+1. Los umbrales de continuidad (15 s de la sesión, 15 s de silencio de producto, 45 s de la fuente) son hipótesis sin validar con datos reales.
 2. No hay fuente real de fondeo devengado; el devengo solo se probó con tasas sintéticas (D-10C-4).
 3. El runner emitió 3 rechazos `late_candle` en el mundo sintético; se registran pero no se investigó su origen en datos reales.
 4. Residuos BAJOS de la revisión de D: `dropped_on_recovery` sin tope; la etiqueta `frame_expired` tras una recuperación puede confundirse con cuadros reconstruidos.
@@ -152,7 +163,8 @@ La suite de integración tarda ~290 s sin reloj y otros ~250 s con reloj y termi
 - `late_candle`: los 3 rechazos los emite el runner y aparecen igual en el oráculo independiente, por lo que no vienen de la integración. Su causa exacta en este mundo sintético no se investigó.
 - Un `frame_expired` real entre el último checkpoint y una muerte se pierde como evidencia (el cuadro se reconstruye al recuperar y se cuenta como `dropped_on_recovery`).
 - `_due_funding` asume `arrival_ms` monótono por `rowid`. La fuente real tendría que garantizarlo.
-- `source_stale` solo se evalúa cuando llega la cotización siguiente; un corte que no termina no genera evidencia hasta que termine.
+- `source_stale` solo se evalúa cuando llega la cotización siguiente; un corte que no termina no genera evidencia hasta que termine (la API del runner declara la pérdida una vez observado su final).
+- D-10B-17 (#166): los silencios abiertos del ingestor no son durables ni se vuelcan a `audit.jsonl`.
 - Base: esta rama ya incluye la 9A actual (f32ff48 y 56d9e04).
 
 ## 11. GO/NO-GO para una sesión paper temporal (no iniciada)
@@ -160,12 +172,9 @@ La suite de integración tarda ~290 s sin reloj y otros ~250 s con reloj y termi
 **NO-GO por ahora.** La integración sintética está demostrada y es reproducible (revisión independiente de D sobre 92ecf02: sin
 BLOCKER, HIGH ni MEDIUM), pero antes de una sesión temporal con cotizaciones observadas faltan:
 
-1. El punto de entrada de cancelación por `source_stale` en el runner (9A). Pendiente, a decisión de Fran.
-2. La decisión sobre la fuente de fondeo devengado real (D-10C-4). Pendiente, a decisión de Fran.
-3. D-10B-06 (MEDIUM, abierto): `SourceReader.gaps()` no se usa; el silencio de un producto no se registra como intervalo.
-4. D-10B-07 (MEDIUM, abierto): REST y WebSocket se fusionan en `ticker:<producto>` sin `epoch`, `rid` ni `seq` en el evento; no se
-   puede rastrear su origen ni ver un cambio de época. D-10B-06 y -07 no impiden la puerta offline, pero bloquean conectar el
-   ingestor a la captura real. No se amplía el alcance de 10B sin pedido de Fran.
-5. La autorización de Fran para el alcance de la sesión (duración, productos, ruta de datos).
+1. ~~Punto de entrada de cancelación por `source_stale`~~: hecho en #168 y cableado aquí; falta su merge y la decisión de Fran.
+2. La fuente de fondeo devengado real (D-10C-4): el diseño del adaptador está en #167; falta confirmarlo con datos reales (autorización de Fran).
+3. ~~D-10B-06 y D-10B-07~~: hechos en #166 (silencios de producto y de fuente, `data_gaps`, origen REST/WS, época). Esta rama ya los contiene; cambió el `event_id` de las cotizaciones (D-10B-15) y se repitió la suite completa. No se vuelcan a `audit.jsonl` ni son durables los silencios abiertos (D-10B-17).
+4. La autorización de Fran para el alcance de la sesión (duración, productos, ruta de datos).
 
 Con esos puntos cerrados y CI 5/5 sobre el HEAD final, el GO es razonable.

@@ -27,7 +27,7 @@ import sqlite3
 from . import paper_live_evaluator as LE
 from .multi_signals import stable_hash
 from .paper_live_ingest import Ingestor, SourceReader
-from .paper_runner import PaperRunner, make_event
+from .paper_runner import PaperRunner, RunnerError, make_event
 from .paper_runner_store import CHECKPOINT_FILE as RUNNER_CHECKPOINT_FILE
 from .paper_runner_store import JOURNAL_FILE as RUNNER_JOURNAL_FILE
 from .paper_runner_store import FileRunnerJournal, StoreError, read_checkpoint
@@ -276,6 +276,10 @@ class LiveSession(object):
         session = cls(directory, source_path, strategies, runner_config, runner, evaluator, audit, ingestor, reader,
                       FundingSource(source_path), stored, max_quote_gap_ms=max_quote_gap_ms)
         session.cursors = dict(checkpoint["cursors"])
+        # the previous quote of a product is the last one the runner received, so a hole that was open when the process died is
+        # still seen when the quote that ends it is delivered again (journal time: the clock a source loss is measured in)
+        session.last_quote = {product: max(runner.quote_t_ms.get(product, 0), runner.executor.last_quote_ms.get(product, 0))
+                              for product in set(runner.quote_t_ms) | set(runner.executor.last_quote_ms)}
         return session
 
     # ---- faults (tests only) ---------------------------------------------------------------------------------
@@ -355,20 +359,35 @@ class LiveSession(object):
         self._continuity(event, self.runner.executor.pending)
 
     def _continuity(self, event, pending):
-        """Looks at the hole before this quote, the moment it arrives, while the pending orders are still pending: a check at
-        the end of the step would find them already filled. After a restart the first quote has no predecessor: the downtime
-        itself belongs to the runner's own recovery policy."""
+        """Looks at the hole before this quote, the moment it arrives and before the runner receives it, while the pending
+        orders are still pending: a check at the end of the step would find them already filled. The orders the hole affects
+        are cancelled through the runner's own entry point (``cancel_for_source_loss``: durable, idempotent, only the pending
+        orders of that product whose window overlaps the hole), and what it returned is written to the audit journal. The
+        previous quote of a recovered session is the last one the runner received, so a hole open when the process died is
+        still seen; the downtime itself belongs to the runner's own recovery policy."""
         product, t_ms = event["payload"]["product_id"], event["t_ms"]
-        previous, self.last_quote[product] = self.last_quote.get(product), t_ms
+        previous = self.last_quote.get(product)
+        self.last_quote[product] = t_ms if previous is None else max(previous, t_ms)        # a quote delivered again never moves it back
         if previous is None:
             return
         gaps = {product: stale_quote_gaps([previous, t_ms], self.max_quote_gap_ms)}
-        for hit in affected_orders(pending, gaps):
-            # written at once, before the quote reaches the runner: if the process dies afterwards the evidence is on disk, and if
-            # it dies before, the quote is delivered again to a runner that has not seen it, and the same record is derived again
-            if self.audit.add({"source": "session", "kind": "source_stale_pending_order", "order": hit, "applied": False,
-                               "reason": "runner_cancel_entry_point_missing", "limit_ms": self.max_quote_gap_ms}):
-                self.stats["audit_new"] += 1
+        hits = affected_orders(pending, gaps)
+        if not hits:
+            return
+        gap = hits[0]["gap"]
+        record = {"source": "session", "kind": "source_stale_cancellation", "product_id": product, "gap": dict(gap),
+                  "pending_hit": [h["intent_id"] for h in hits], "limit_ms": self.max_quote_gap_ms}
+        try:
+            record["cancelled"] = self.runner.cancel_for_source_loss(product, gap["from_ms"], gap["to_ms"], t_ms)
+            record["applied"] = True
+        except RunnerError as error:
+            # the cancellation did not happen: the evidence says so and the session stops here rather than hand the quote to
+            # orders that should have been cancelled
+            record.update(applied=False, reason=error.reason)
+            self.audit.add(record)
+            raise
+        if self.audit.add(record):
+            self.stats["audit_new"] += 1
 
     # ---- evidence ---------------------------------------------------------------------------------------------
     def flush_audit(self, ingest_state=None):
@@ -387,6 +406,9 @@ class LiveSession(object):
                           ("gap", "gaps"), ("suppressed_cycle", "suppressed")):
             for item in report[key]:
                 records.append({"source": "evaluator", "kind": kind, "item": item})
+        for (product, gap_from, gap_to), loss in sorted(self.runner.source_losses.items()):      # what the runner made durable
+            records.append({"source": "runner", "kind": "source_loss", "product_id": product, "gap": {"from_ms": gap_from, "to_ms": gap_to},
+                            "cancelled": list(loss["intent_ids"]), "windows": {k: list(v) for k, v in sorted(loss["windows"].items())}})
         for record in records:
             new += 1 if self.audit.add(record) else 0
         self.stats["audit_new"] += new

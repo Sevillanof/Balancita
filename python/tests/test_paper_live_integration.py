@@ -27,7 +27,7 @@ from balancita_engine import replay_driver as RP
 from balancita_engine import replay_specs as RS
 from balancita_engine import signal_continuity as SC
 from balancita_engine.multi_signals import stable_hash
-from balancita_engine.paper_runner import PaperRunner, RunnerConfig, make_event
+from balancita_engine.paper_runner import PaperRunner, RunnerConfig, RunnerError, make_event
 from balancita_engine.paper_runner_store import JOURNAL_FILE, FileRunnerJournal
 from balancita_engine.portfolio import PortfolioPolicy
 from balancita_engine.portfolio_watch import WatchPolicy
@@ -39,6 +39,7 @@ D = Decimal
 INGEST_KW = {"clock_every_ms": 10 ** 12}                 # no clock events: the independent reference has none either
 PREFIX_BEFORE = 30 * MIN                                 # the warm-up snapshot is taken this long before the first decision
 DOWNTIME_MS = 5 * MIN
+MAX_QUOTE_GAP_MS = 25 * SEC          # above the synthetic quotes' own 20 s cadence: the circuit's holes are the ones a test makes
 
 
 def schedule():
@@ -68,14 +69,15 @@ def journal_clock(directory):
     return max(e["t_ms"] for e in journal.entries)
 
 
-def new_session(world, directory, strategies, ingest_kw=INGEST_KW):
+def new_session(world, directory, strategies, ingest_kw=INGEST_KW, max_quote_gap_ms=MAX_QUOTE_GAP_MS):
     return LI.LiveSession.create(directory, world.path, strategies, (BTC,), runner_config(), decide_from_ms=FIRST_DECISION,
-                                 decide_until_ms=LAST_DECISION, ingest_kw=ingest_kw)
+                                 decide_until_ms=LAST_DECISION, ingest_kw=ingest_kw, max_quote_gap_ms=max_quote_gap_ms)
 
 
 def recover_session(world, directory, strategies, recovery_ms, ingest_kw=INGEST_KW, **kw):
     return LI.LiveSession.recover(directory, world.path, strategies, (BTC,), runner_config(), recovery_ms,
-                                  decide_from_ms=FIRST_DECISION, decide_until_ms=LAST_DECISION, ingest_kw=ingest_kw, **kw)
+                                  decide_from_ms=FIRST_DECISION, decide_until_ms=LAST_DECISION, ingest_kw=ingest_kw,
+                                  **dict({"max_quote_gap_ms": MAX_QUOTE_GAP_MS}, **kw))
 
 
 def record(session, now):
@@ -802,51 +804,227 @@ class TestSourceStalePolicy(unittest.TestCase):
         self.assertEqual([h["intent_id"] for h in LI.affected_orders(pending, gaps)], ["a"])
         self.assertEqual(LI.affected_orders({}, gaps), [])                    # open positions are not pending orders: not touched
 
-    def quote(self, t_ms):
-        return make_event("quote", {"product_id": BTC, "time_ms": t_ms, "received_ms": t_ms, "bid": "99999.9", "ask": "100000.1"},
-                          t_ms=t_ms, source=ING.SOURCE, stream="ticker:" + BTC)
+    def test_a_hole_inside_the_limit_selects_nothing_and_the_session_does_not_call_the_runner(self):
+        """The session's own selection is pure: a regular cadence, or a hole of another product, produces no cancellation call."""
+        gaps = {BTC: LI.stale_quote_gaps([0, 5 * SEC, 10 * SEC, 15 * SEC, 20 * SEC], 15 * SEC)}
+        pending = {"intent-1": self.order(start=0, deadline=80 * SEC), "intent-2": self.order(product="PF_ETHUSD", start=0, deadline=80 * SEC)}
+        self.assertEqual(LI.affected_orders(pending, gaps), [])
+        self.assertEqual(LI.affected_orders(pending, {"PF_ETHUSD": [{"from_ms": 10 * SEC, "to_ms": 36 * SEC}]}),
+                         [{"intent_id": "intent-2", "product_id": "PF_ETHUSD", "gap": {"from_ms": 10 * SEC, "to_ms": 36 * SEC},
+                           "window": [0, 80 * SEC]}])
 
-    def test_the_session_records_a_pending_order_hit_by_a_26_second_hole_as_evidence_that_was_not_applied(self):
-        """Plumbing at the session level with a scripted pending order (the executor is not touched): a 26 s cut, shorter than
-        the ingestor's 45 s, is written to the audit journal before the quote that ends it reaches the runner."""
-        root = self.scratch()
-        src = Source(os.path.join(root, "capture.sqlite"))
-        src.db.executescript("CREATE TABLE synthetic_fundpct (product_id TEXT, start_ms INTEGER, rate REAL, arrival_ms INTEGER);"
-                             "CREATE TABLE synthetic_accrual (product_id TEXT, start_ms INTEGER, end_ms INTEGER, rate TEXT, arrival_ms INTEGER);")
-        src.commit()
-        session = LI.LiveSession.create(os.path.join(root, "s"), src.path, self.strategies, (BTC,), runner_config(),
-                                        decide_from_ms=FIRST_DECISION, decide_until_ms=LAST_DECISION, ingest_kw=INGEST_KW)
-        self.addCleanup(abandon, session)
-        base = FIRST_DECISION + HOUR
-        pending = {"intent-1": self.order(start=base + 20 * SEC, deadline=base + 80 * SEC)}
-        for offset in (0, 5, 10, 36, 41):
-            session._continuity(self.quote(base + offset * SEC), pending)
-        stale = [r for r in session.audit.records() if r["kind"] == "source_stale_pending_order"]
-        self.assertEqual(len(stale), 1)
-        self.assertEqual(stale[0]["order"]["gap"], {"from_ms": base + 10 * SEC, "to_ms": base + 36 * SEC})
-        self.assertEqual((stale[0]["applied"], stale[0]["reason"]), (False, "runner_cancel_entry_point_missing"))
-        self.assertEqual(session.ingestor.outages, [])                           # the ingestor never called it an outage
-        for offset in (0, 5, 10, 36, 41):                                          # the same evidence derived again is not written twice
-            session.last_quote.clear()
-            session._continuity(self.quote(base + offset * SEC), pending)
-        self.assertEqual(len([r for r in session.audit.records() if r["kind"] == "source_stale_pending_order"]), 1)
-        self.assertEqual([o for o in session.runner.orders() if o["state"] == "cancelled"], [])      # nothing was cancelled
 
-    def test_a_regular_cadence_and_an_unrelated_product_produce_no_evidence(self):
+# ------------------------------------------------------------------------------------------------ 6. the durable cancellation
+ENTRY_QUOTE_MS = FIRST_DECISION + 50 * MIN + 10 * SEC           # the 10 s quote of the minute that opens the first order of the day
+HOLE = (ENTRY_QUOTE_MS - 5 * SEC, ENTRY_QUOTE_MS + 5 * SEC)     # that one quote is missing: the source is silent for 40 s (> the 25 s limit, < 45 s)
+GAP_FROM, GAP_TO = ENTRY_QUOTE_MS - 20 * SEC, ENTRY_QUOTE_MS + 20 * SEC
+BEFORE_ENTRY = FIRST_DECISION + 50 * MIN + 25 * SEC          # the order is decided and the quote that opens the hole is delivered; the one that ends it is not
+ENTRY_STEP = next(i for i, t in enumerate(TIMES) if t >= FIRST_DECISION + 50 * MIN + 2 * SEC)
+
+
+def first_order(session):
+    return session.runner.orders()[0]
+
+
+class TestSourceStaleCancellation(unittest.TestCase):
+    """Decision D-10C-3 wired through the runner's ``cancel_for_source_loss``: the 40 s hole (shorter than the ingestor's 45 s
+    silence) in which the first order waits cancels it before the quote that ends the hole is delivered, in the continuous run
+    and after a real process death at any of the neighbouring boundaries. The same hole with the limit switched off lets that
+    quote fill the order."""
+
+    cache = {}
+
+    @classmethod
+    def setUpClass(cls):
+        SC.disarm()
+        if cls.cache:
+            return
+        cls.cache["dir"] = root = tempfile.mkdtemp()
+        strategies, _ = RS.load_frozen()
+        cls.cache["strategies"] = strategies
+        world = World(root, quote_holes=[HOLE])
+        world.release_until(LOAD_START)
+        session = new_session(world, os.path.join(root, "a"), strategies)
+        loose_root = os.path.join(root, "loose-world")
+        os.makedirs(loose_root)
+        loose_world = World(loose_root, quote_holes=[HOLE])
+        loose_world.release_until(LOAD_START)
+        loose = new_session(loose_world, os.path.join(root, "loose"), strategies, max_quote_gap_ms=10 ** 9)
+        for now in TIMES[:ENTRY_STEP] + [BEFORE_ENTRY]:       # the quote that opens the hole is in a step that is already checkpointed
+            world.release_until(now)
+            session.step(now)
+            loose_world.release_until(now)
+            loose.step(now)
+        cls.cache["snap"] = Circuit.take_snapshot(root, "pre-hole", session, world, ENTRY_STEP)
+        world.release_until(TIMES[ENTRY_STEP])
+        session.step(TIMES[ENTRY_STEP])
+        loose_world.release_until(TIMES[ENTRY_STEP])
+        loose.step(TIMES[ENTRY_STEP])
+        cls.cache.update(world=world, a=session, loose=loose, loose_world=loose_world, record=record(session, TIMES[ENTRY_STEP]),
+                         losses=sorted(session.runner.source_losses.items()), cancelled=cls.cancel_trace(session))
+
+    @classmethod
+    def tearDownClass(cls):
+        for name in ("a", "loose"):
+            if name in cls.cache:
+                abandon(cls.cache.pop(name))
+        shutil.rmtree(cls.cache.get("dir", ""), True)
+        cls.cache.clear()
+
+    def scratch(self):
+        path = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, path, True)
+        return path
+
+    @staticmethod
+    def cancel_trace(session):
+        """What the journals say about the cancellation, without the bookkeeping a recovery adds."""
+        entries = session.runner.journal.entries
+        return {"source_loss": [e["data"] for e in entries if e["kind"] == "source_loss"],
+                "cancelled": [(e["data"]["intent_id"], e["data"]["reason"], e["data"]["uncovered_from_ms"], e["data"]["uncovered_to_ms"])
+                              for e in entries if e["kind"] == "order_cancelled"],
+                "audit": sorted(stable_hash(r) for r in session.audit.records() if r["kind"] in ("source_loss", "source_stale_cancellation"))}
+
+    @staticmethod
+    def quote_seq(session, time_ms):
+        return next(e["seq"] for e in session.runner.journal.entries
+                    if e["kind"] == "event_accepted" and e["data"]["event"]["kind"] == "quote"
+                    and e["data"]["event"]["payload"]["time_ms"] == time_ms)
+
+    def assert_cancelled_before_the_quote(self, session):
+        order = first_order(session)
+        self.assertEqual(order["state"], "cancelled")
+        entries = session.runner.journal.entries
+        losses = [e for e in entries if e["kind"] == "source_loss"]
+        cancels = [e for e in entries if e["kind"] == "order_cancelled" and e["data"]["reason"] == "source_stale"]
+        self.assertEqual(len(losses), 1)
+        self.assertEqual([c["data"]["intent_id"] for c in cancels], [order["intent_id"]])
+        self.assertEqual({k: losses[0]["data"][k] for k in ("product_id", "gap_from_ms", "gap_to_ms")},
+                         {"product_id": BTC, "gap_from_ms": GAP_FROM, "gap_to_ms": GAP_TO})
+        self.assertLess(cancels[0]["seq"], self.quote_seq(session, GAP_TO))        # before the quote that ends the hole was delivered
+        self.assertLess(losses[0]["seq"], cancels[0]["seq"])
+        self.assertEqual([r for r in session.audit.records() if r["kind"] == "source_loss"][0]["cancelled"], [order["intent_id"]])
+
+    def test_the_hole_cancels_the_pending_order_before_the_quote_that_ends_it(self):
+        session = self.cache["a"]
+        self.assert_cancelled_before_the_quote(session)
+        evidence = [r for r in session.audit.records() if r["kind"] == "source_stale_cancellation"]
+        self.assertEqual(len(evidence), 1)
+        self.assertTrue(evidence[0]["applied"])
+        self.assertEqual(evidence[0]["gap"], {"from_ms": GAP_FROM, "to_ms": GAP_TO})
+        self.assertEqual(evidence[0]["cancelled"], [first_order(session)["intent_id"]])
+        self.assertEqual(session.ingestor.outages, [])                          # the ingestor never called it an outage
+        self.assertEqual(session.runner.integrity()["open_cycles"], [])
+
+    def test_without_the_cancellation_the_quote_after_the_hole_fills_the_order(self):
+        """The regression: the same hole, the limit switched off, and the order that waited blind is filled on the first quote
+        after it."""
+        loose = self.cache["loose"]
+        order = first_order(loose)
+        self.assertEqual(order["state"], "opened")
+        self.assertEqual(order["timeline"]["entry_ms"], GAP_TO)
+        self.assertEqual([e for e in loose.runner.journal.entries if e["kind"] == "source_loss"], [])
+        self.assertEqual([r for r in loose.audit.records() if r["kind"] == "source_stale_cancellation"], [])
+
+    def test_nothing_else_changes_the_cancellation_touches_only_the_pending_orders_of_the_hole(self):
+        """Open positions, other decisions and the accounting are the runner's own: the only order cancelled is the one
+        that was pending in the hole."""
+        session = self.cache["a"]
+        cancelled = [o for o in session.runner.orders() if o["state"] == "cancelled"]
+        self.assertEqual([o["intent_id"] for o in cancelled], [first_order(session)["intent_id"]])
+
+    # ---- real process death around the cancellation -----------------------------------------------------------
+    def fork(self):
+        snap = self.cache["snap"]
         root = self.scratch()
-        src = Source(os.path.join(root, "capture.sqlite"))
-        src.db.executescript("CREATE TABLE synthetic_fundpct (product_id TEXT, start_ms INTEGER, rate REAL, arrival_ms INTEGER);"
-                             "CREATE TABLE synthetic_accrual (product_id TEXT, start_ms INTEGER, end_ms INTEGER, rate TEXT, arrival_ms INTEGER);")
-        src.commit()
-        session = LI.LiveSession.create(os.path.join(root, "s"), src.path, self.strategies, (BTC,), runner_config(),
-                                        decide_from_ms=FIRST_DECISION, decide_until_ms=LAST_DECISION, ingest_kw=INGEST_KW)
+        world = self.cache["world"].fork(root, snap["world"])
+        directory = os.path.join(root, "s")
+        shutil.copytree(snap["session"], directory)
+        return world, directory
+
+    def boundaries(self):
+        """How many times the step crosses ``before_handle`` before the quote that ends the hole (counted in-process)."""
+        world, directory = self.fork()
+        session = recover_session(world, directory, self.cache["strategies"], journal_clock(directory))
         self.addCleanup(abandon, session)
-        base = FIRST_DECISION + HOUR
-        pending = {"intent-1": self.order(start=base, deadline=base + 80 * SEC), "intent-2": self.order(product="PF_ETHUSD", start=base,
-                                                                                                          deadline=base + 80 * SEC)}
-        for offset in (0, 5, 10, 15, 20, 25):
-            session._continuity(self.quote(base + offset * SEC), pending)
-        self.assertEqual([r for r in session.audit.records() if r["kind"] == "source_stale_pending_order"], [])
+        seen = {"n": 0, "end": None}
+
+        def fault(name, info=None):
+            if name == "before_handle":
+                seen["n"] += 1
+                if info is not None and info["kind"] == "quote" and info["payload"]["time_ms"] == GAP_TO and seen["end"] is None:
+                    seen["end"] = seen["n"]
+        session.fault = fault
+        world.release_until(TIMES[ENTRY_STEP])
+        session.step(TIMES[ENTRY_STEP])
+        self.assertIsNotNone(seen["end"])
+        return seen["end"]
+
+    def kill_and_recover(self, point, occurrence):
+        world, directory = self.fork()
+        world.release_until(TIMES[ENTRY_STEP])
+        env = dict(os.environ, PYTHONPATH=os.pathsep.join((os.path.dirname(os.path.dirname(os.path.abspath(LI.__file__))),
+                                                           os.path.dirname(os.path.abspath(__file__)))))
+        done = subprocess.run([sys.executable, "-W", "ignore", os.path.join(os.path.dirname(os.path.abspath(__file__)), "live_kill_worker.py"),
+                               directory, world.path, str(journal_clock(directory)), point, str(occurrence), str(ENTRY_STEP), "plain"],
+                              env=env, capture_output=True, text=True, timeout=600)
+        self.assertEqual(done.returncode, -signal.SIGKILL, "the boundary {} #{} was not crossed\n{}".format(point, occurrence, done.stderr[-2000:]))
+        session = recover_session(world, directory, self.cache["strategies"], journal_clock(directory))
+        self.addCleanup(abandon, session)
+        session.step(TIMES[ENTRY_STEP])
+        return session
+
+    def test_a_killed_process_still_cancels_the_order_once_and_before_the_quote(self):
+        end = self.boundaries()
+        for point, occurrence in (("after_poll", 1), ("before_handle", end - 1), ("before_handle", end), ("before_handle", end + 1),
+                                  ("after_runner", 1), ("after_audit", 1), ("after_runner_checkpoint", 1), ("checkpoint_tmp_written", 1),
+                                  ("after_checkpoint", 1)):
+            with self.subTest(point=point, occurrence=occurrence):
+                session = self.kill_and_recover(point, occurrence)
+                self.assert_cancelled_before_the_quote(session)
+                self.assertEqual(record(session, TIMES[ENTRY_STEP]), self.cache["record"])
+                self.assertEqual(self.cancel_trace(session), self.cache["cancelled"])      # one loss, one cancellation, same evidence
+                # ``state_digest`` counts the recovery entries a killed process adds, so it differs by design; the declared losses do not
+                self.assertEqual(sorted(session.runner.source_losses.items()), self.cache["losses"])
+                self.assertEqual(session.runner.integrity()["open_cycles"], [])
+
+    def test_repeating_the_same_interval_cancels_nothing_more(self):
+        session = self.cache["a"]
+        before = (len(session.runner.journal.entries), self.cancel_trace(session), session.runner.state_digest())
+        again = session.runner.cancel_for_source_loss(BTC, GAP_FROM, GAP_TO, session.runner.clock)       # declared already: any clock, no writes
+        self.assertEqual(again, [first_order(session)["intent_id"]])
+        session.last_quote.clear()
+        session.last_quote[BTC] = GAP_FROM
+        session._continuity(make_event("quote", {"product_id": BTC, "time_ms": GAP_TO, "received_ms": GAP_TO, "bid": "1", "ask": "2"},
+                                        t_ms=GAP_TO, source=ING.SOURCE, stream="ticker:" + BTC), session.runner.executor.pending)
+        self.assertEqual((len(session.runner.journal.entries), self.cancel_trace(session), session.runner.state_digest()), before)
+
+    def test_a_refused_cancellation_is_never_recorded_as_applied_and_the_session_stops(self):
+        world, directory = self.fork()
+        session = recover_session(world, directory, self.cache["strategies"], journal_clock(directory))
+        self.addCleanup(abandon, session)
+        refused = []
+
+        def refuse(*args):
+            refused.append(args)
+            raise RunnerError("source_loss_after_quote", "test")
+        session.runner.cancel_for_source_loss = refuse
+        world.release_until(TIMES[ENTRY_STEP])
+        with self.assertRaises(RunnerError):
+            session.step(TIMES[ENTRY_STEP])
+        self.assertEqual(len(refused), 1)
+        records = [r for r in session.audit.records() if r["kind"] == "source_stale_cancellation"]
+        self.assertEqual([(r["applied"], r["reason"]) for r in records], [(False, "source_loss_after_quote")])
+        self.assertNotIn("cancelled", records[0])
+        self.assertEqual([e for e in session.runner.journal.entries if e["kind"] == "source_loss"], [])
+        self.assertNotEqual(first_order(session)["state"], "opened")        # the quote that would have filled it was not delivered
+
+    def test_a_recovered_session_takes_the_previous_quote_from_the_runner_not_from_its_own_memory(self):
+        """The hole is seen from the runner's last quote, not from what the dead process remembered."""
+        world, directory = self.fork()
+        session = recover_session(world, directory, self.cache["strategies"], journal_clock(directory))
+        self.addCleanup(abandon, session)
+        self.assertEqual(session.last_quote[BTC], FIRST_DECISION + 50 * MIN - 10 * SEC)      # the last quote the runner received before the step
 
 
 if __name__ == "__main__":
