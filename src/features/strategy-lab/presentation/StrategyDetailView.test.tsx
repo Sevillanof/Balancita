@@ -147,11 +147,17 @@ describe('StrategyDetailView (datos de ejemplo)', () => {
     view(() => Promise.resolve(report([])))
     const perf = within(await screen.findByTestId('module-performance'))
     expect(perf.getByText('Backtest · todo el período')).toBeInTheDocument()
-    expect(perf.getByText('Fuera de muestra · por rango')).toBeInTheDocument()
+    expect(perf.getByText('Fuera de muestra (OOS)')).toBeInTheDocument()
     expect(
       perf.getByText('Forward paper · desde el primer ciclo'),
     ).toBeInTheDocument()
     expect(perf.getByText('+24,02 pb/op')).toBeInTheDocument()
+    // The ranges last 237 days by their real buckets, never the 240 of a label.
+    expect(perf.getByTestId('range-table')).toHaveTextContent('237')
+    expect(perf.getByTestId('range-table')).not.toHaveTextContent('240')
+    expect(screen.getByTestId('module-performance')).toHaveTextContent(
+      '2 rangos de 237 d',
+    )
     // Forward has no source: B5, never a number.
     expect(perf.getAllByText('No disponible').length).toBeGreaterThan(0)
     expect(perf.getAllByText(/resultados del forward: B5/).length).toBe(2)
@@ -160,7 +166,7 @@ describe('StrategyDetailView (datos de ejemplo)', () => {
     expect(verdict).toHaveTextContent('Sin ventaja demostrada')
     expect(verdict).toHaveTextContent('no es rentabilidad demostrada')
     expect(perf.getByTestId('oos-note')).toHaveTextContent(
-      'No hay un tramo fuera de muestra puro',
+      'No disponible: la fuente no marca ningún tramo como fuera de muestra',
     )
     expect(screen.getByTestId('sources-table')).toHaveTextContent(
       'config/strategy-reliability.json',

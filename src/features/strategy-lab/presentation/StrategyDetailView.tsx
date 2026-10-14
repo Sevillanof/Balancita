@@ -128,6 +128,11 @@ function Sub({ title, children }: { title: string; children?: ReactNode }) {
   )
 }
 
+/** Where the figures of a section come from; sections never share a source. */
+function Source({ children }: { children: ReactNode }) {
+  return <p className="detail__source">Fuente: {children}</p>
+}
+
 function Unavailable({ children }: { children: ReactNode }) {
   return <p className="detail__unavailable">{children}</p>
 }
@@ -581,10 +586,15 @@ function PerformanceModule({
   const ranges = Object.entries(bt?.ranges ?? {})
   const periodRanges = inventory.period?.ranges ?? {}
   const periodNames = Object.keys(periodRanges)
-  const firstRange = Object.values(periodRanges)[0]
-  const days = firstRange
-    ? spanDays(firstRange.first_bucket_ms, firstRange.last_bucket_ms)
-    : null
+  const rangeDays = Object.values(periodRanges).map((span) =>
+    spanDays(span.first_bucket_ms, span.last_bucket_ms),
+  )
+  // Real length of the ranges, from the first/last bucket of the data (not
+  // the «240 days» of the source label).
+  const days =
+    rangeDays.length > 0 && rangeDays.every((d) => d === rangeDays[0])
+      ? rangeDays[0]
+      : null
   const t = inventory.thresholds
   const trials = bt?.selection_trials ?? null
   const fwd = row.forward
@@ -676,6 +686,63 @@ function PerformanceModule({
                 note="tramos de tiempo, purgados"
               />
             </dl>
+            {ranges.length > 0 && (
+              <table className="detail__table" data-testid="range-table">
+                <thead>
+                  <tr>
+                    <th>Rango de backtest</th>
+                    <th>Fechas (UTC)</th>
+                    <th className="is-num">Días</th>
+                    <th className="is-num">Ops</th>
+                    <th className="is-num">Neto medio</th>
+                    <th className="is-num">t</th>
+                    <th className="is-num">Tramos +</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {ranges.map(([name, range]) => {
+                    const span = periodRanges[name]
+                    return (
+                      <tr key={name}>
+                        <td>{rangeName(name)}</td>
+                        <td>
+                          {span
+                            ? `${utcDay(span.first_bucket_ms)} → ${utcDay(span.last_bucket_ms)}`
+                            : NA}
+                        </td>
+                        <td className="is-num">
+                          {span
+                            ? spanDays(
+                                span.first_bucket_ms,
+                                span.last_bucket_ms,
+                              )
+                            : NA}
+                        </td>
+                        <td className="is-num">{count(range.trades)}</td>
+                        <td
+                          className={`is-num is-${tone(range.mean_net_bp) ?? 'missing'}`}
+                        >
+                          {netBpPerOp(range.mean_net_bp) ?? NA}
+                        </td>
+                        <td className="is-num">
+                          {range.t_stat == null ? NA : amount(range.t_stat)}
+                        </td>
+                        <td className="is-num">
+                          {range.folds_positive ?? '—'}/
+                          {range.folds_judged ?? '—'}
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            )}
+            <Source>
+              <code>config/strategy-reliability.json</code> · costes{' '}
+              <code>{inventory.cost_model?.version ?? NA}</code> ·{' '}
+              {inventory.notional_usd} USD por operación · bruto/costes y
+              drawdown: {NA.toLowerCase()}
+            </Source>
           </>
         ) : (
           <Unavailable>
@@ -687,60 +754,19 @@ function PerformanceModule({
         )}
       </Sub>
 
-      <Sub title="Fuera de muestra · por rango">
-        {ranges.length > 0 ? (
-          <>
-            <table className="detail__table" data-testid="range-table">
-              <thead>
-                <tr>
-                  <th>Rango</th>
-                  <th>Fechas (UTC)</th>
-                  <th className="is-num">Ops</th>
-                  <th className="is-num">Neto medio</th>
-                  <th className="is-num">t</th>
-                  <th className="is-num">Tramos +</th>
-                </tr>
-              </thead>
-              <tbody>
-                {ranges.map(([name, range]) => {
-                  const span = periodRanges[name]
-                  return (
-                    <tr key={name}>
-                      <td>{rangeName(name)}</td>
-                      <td>
-                        {span
-                          ? `${utcDay(span.first_bucket_ms)} → ${utcDay(span.last_bucket_ms)}`
-                          : NA}
-                      </td>
-                      <td className="is-num">{count(range.trades)}</td>
-                      <td
-                        className={`is-num is-${tone(range.mean_net_bp) ?? 'missing'}`}
-                      >
-                        {netBpPerOp(range.mean_net_bp) ?? NA}
-                      </td>
-                      <td className="is-num">
-                        {range.t_stat == null ? NA : amount(range.t_stat)}
-                      </td>
-                      <td className="is-num">
-                        {range.folds_positive ?? '—'}/
-                        {range.folds_judged ?? '—'}
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-            <p className="detail__note" data-testid="oos-note">
-              {trials != null && trials > 1
-                ? `No hay un tramo fuera de muestra puro: los parámetros se buscaron entre ${count(trials)} configuraciones mirando estos rangos. Solo el forward puede validar.`
-                : 'Rangos medidos por separado. La fuente no marca cuál sirvió para elegir parámetros; no se llama «fuera de muestra» a ninguno.'}
-            </p>
-          </>
-        ) : (
-          <Unavailable>
-            {NA}: sin medición por rango para este spec.
-          </Unavailable>
-        )}
+      <Sub title="Fuera de muestra (OOS)">
+        <Unavailable>
+          <b data-testid="oos-note">
+            {NA}: la fuente no marca ningún tramo como fuera de muestra.
+          </b>{' '}
+          {trials != null && trials > 1
+            ? `Los parámetros se buscaron entre ${count(trials)} configuraciones mirando estos mismos rangos, y los tramos purgados son validación cruzada dentro del backtest. `
+            : 'Los tramos purgados son validación cruzada dentro del backtest, no una prueba aparte. '}
+          Los rangos del backtest no se llaman «fuera de muestra».
+        </Unavailable>
+        <Source>
+          <code>config/strategy-reliability.json</code> (sin campo OOS)
+        </Source>
       </Sub>
 
       <Sub title="Forward paper · desde el primer ciclo">
@@ -774,6 +800,10 @@ function PerformanceModule({
             }
           />
         </dl>
+        <Source>
+          inicio y umbral de <code>config/forward-strategies.json</code>;
+          resultados: {fwd.missing} (no existe)
+        </Source>
       </Sub>
     </Module>
   )

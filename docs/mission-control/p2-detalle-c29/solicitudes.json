@@ -1,0 +1,92 @@
+[
+  {
+    "method": "GET",
+    "url": "/api-live/health",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "/api-live/qwen/scores?product=PF_XBTUSD",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "/api-live/kronos/scores?product=PF_XBTUSD",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "/api-live/terminal/bootstrap",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "/api-live/observability/health",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "/api-live/health",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "/api-live/qwen/scores?product=PF_XBTUSD",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "/api-live/kronos/scores?product=PF_XBTUSD",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "/api-live/terminal/bootstrap",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "/api-strategies/health",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "/api-strategies/inventory",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "/api-strategies/strategies/c29-momentum-perp-v1",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "/api-strategies/plans",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "/api-strategies/strategies/c29-momentum-perp-v1",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "/api-live/observability/activity?window=24h",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "/api-strategies/plans",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "/api-strategies/inventory",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "/api-strategies/inventory",
+    "status": 200
+  }
+]

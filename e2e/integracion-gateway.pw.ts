@@ -220,10 +220,7 @@ test('Terminal on the real gateway: every interaction answers without 404', asyn
     .getByRole('button', { name: /Detalle de/ })
     .first()
     .click()
-  await expect(page.getByRole('tab', { name: 'Laboratorio' })).toHaveAttribute(
-    'aria-selected',
-    'true',
-  )
+  await expect(page.getByTestId('strategy-detail')).toBeVisible()
   await page.getByRole('link', { name: 'Terminal', exact: true }).click()
   await expect(page.getByTestId('activity-panel')).toBeVisible()
 
