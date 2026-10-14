@@ -9,16 +9,26 @@ Ninguna base real, proceso de captura, estrategia ni WebSocket se tocó.
 - `1-comparacion.png`: comparación con el gateway apagado; Kronos queda «Estado no verificado».
 - `2-comparacion-kronos-verificado.png`: `/api-live/system` y `/api-live/kronos/scores`
   respondidos con cifras sintéticas en la prueba (resumen de hace 10 min, scores `ok`):
-  Kronos pasa a «Actividad verificada» con operaciones, decisiones y hora del resumen.
+  Kronos pasa a «Actividad reciente registrada» con operaciones, decisiones y hora UTC del resumen;
+  el botón dice «Abrir Kronos en el Laboratorio» y lleva a la fila de Kronos del Laboratorio.
 - `comparacion-stitch-vs-react.png`: Stitch v5 (izquierda) y React (derecha).
 - `solicitudes.json`: llamadas `/api-*` de la prueba.
 
 ## Regla de Kronos (solo lectura)
 
-«Actividad verificada» solo si `kronos.updated_ms` de `/api/system` tiene ≤ 90 min (regla de B1) y
-`/api/kronos/scores` responde con datos (no `off`). Si falta `updated_ms`, el resumen es viejo,
-`/api/system` no responde o Kronos no está configurado: «Estado no verificado». Nunca se infiere
-de la configuración ni de `running`.
+«Actividad reciente registrada» solo si se cumplen las tres condiciones:
+
+- `kronos.updated_ms` de `/api/system` tiene ≤ 90 min (regla de B1).
+- `/api/kronos/scores` trae evidencia real: al menos un producto con decisiones o con
+  operaciones forward con marcas de tiempo. `status: ok` con `products: []` no alcanza.
+- Ninguna marca de tiempo (`updated_ms`, decisiones, entradas/salidas) es posterior al reloj
+  actual + 5 s.
+
+En cualquier otro caso: «Estado no verificado». La frescura se vuelve a calcular con el reloj
+(cada 30 s) y la lectura se repite cada 5 min: si pasan 90 min sin lectura nueva, o una relectura
+falla, deja de mostrarse como reciente sin recargar. El texto no afirma nada sobre el proceso:
+es un registro del resumen y no prueba que siga corriendo. Nunca se infiere de la configuración
+ni de `running`.
 
 ## Diferencias con Stitch que quedan
 

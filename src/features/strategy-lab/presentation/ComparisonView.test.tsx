@@ -1,6 +1,6 @@
-import { render, screen, within } from '@testing-library/react'
+import { act, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { OPERATIONAL_LABELS } from '../domain/strategy-labels.ts'
 import ComparisonView from './ComparisonView.tsx'
 import InventoryView from './InventoryView.tsx'
@@ -124,7 +124,7 @@ describe('ComparisonView (datos de ejemplo)', () => {
     renderView(vi.fn(), vi.fn(), () =>
       Promise.resolve({
         verified: true as const,
-        updated_ms: Date.UTC(2026, 9, 14, 10, 30),
+        updated_ms: Date.now() - 10 * 60_000,
         trades: 4,
         decisions: 30,
       }),
@@ -133,11 +133,87 @@ describe('ComparisonView (datos de ejemplo)', () => {
     const card = document.querySelector('[data-id="x4"]') as HTMLElement
     expect(
       await within(card).findByTestId('kronos-verified'),
-    ).toHaveTextContent('Actividad verificada')
+    ).toHaveTextContent('Actividad reciente registrada')
     expect(within(card).getByTestId('kronos-activity')).toHaveTextContent(
-      '2026-10-14 10:30 UTC',
+      new Date(Date.now() - 10 * 60_000)
+        .toISOString()
+        .slice(0, 13)
+        .replace('T', ' '),
     )
-    expect(screen.getAllByText('Actividad verificada')).toHaveLength(1)
+    expect(within(card).getByTestId('kronos-activity')).toHaveTextContent(
+      'no prueba que el proceso siga corriendo',
+    )
+    expect(screen.getAllByText('Actividad reciente registrada')).toHaveLength(1)
+    expect(document.body.textContent).not.toMatch(
+      /Actividad verificada|en ejecución|Kronos activo/,
+    )
+  })
+
+  describe('freshness over time', () => {
+    afterEach(() => vi.useRealTimers())
+    const T0 = Date.UTC(2026, 9, 14, 12, 0)
+    const fresh = (updated: number) => () =>
+      Promise.resolve({
+        verified: true as const,
+        updated_ms: updated,
+        trades: 4,
+        decisions: 30,
+      })
+
+    it('drops to «Estado no verificado» after 90 minutes without a new read', async () => {
+      vi.useFakeTimers({
+        toFake: ['Date', 'setInterval', 'clearInterval'],
+        now: T0,
+      })
+      const loader = vi
+        .fn<() => Promise<KronosActivity>>()
+        .mockImplementationOnce(fresh(T0 - 60_000))
+        .mockImplementation(() => new Promise(() => {}))
+      renderView(vi.fn(), vi.fn(), loader)
+      await act(async () => {})
+      const card = () => document.querySelector('[data-id="x4"]') as HTMLElement
+      expect(within(card()).getByTestId('kronos-verified')).toBeTruthy()
+      await act(async () => {
+        vi.advanceTimersByTime(100 * 60_000)
+      })
+      expect(within(card()).queryByTestId('kronos-verified')).toBeNull()
+      expect(within(card()).getByTestId('kronos-activity')).toHaveTextContent(
+        'Estado no verificado',
+      )
+    })
+
+    it('does not keep «reciente» when a re-read fails', async () => {
+      vi.useFakeTimers({
+        toFake: ['Date', 'setInterval', 'clearInterval'],
+        now: T0,
+      })
+      const loader = vi
+        .fn<() => Promise<KronosActivity>>()
+        .mockImplementationOnce(fresh(T0))
+        .mockImplementation(() => Promise.reject(new Error('down')))
+      renderView(vi.fn(), vi.fn(), loader)
+      await act(async () => {})
+      const card = () => document.querySelector('[data-id="x4"]') as HTMLElement
+      expect(within(card()).getByTestId('kronos-verified')).toBeTruthy()
+      await act(async () => {
+        vi.advanceTimersByTime(6 * 60_000)
+      })
+      expect(loader.mock.calls.length).toBeGreaterThan(1)
+      expect(within(card()).queryByTestId('kronos-verified')).toBeNull()
+    })
+  })
+
+  it('names the Kronos button for what it opens', async () => {
+    const onOpen = vi.fn()
+    renderView(onOpen)
+    await screen.findAllByTestId('experiment-card')
+    const card = document.querySelector('[data-id="x4"]') as HTMLElement
+    const button = within(card).getByRole('button', {
+      name: 'Abrir Kronos en el Laboratorio',
+    })
+    expect(button).toHaveTextContent('Abrir Kronos en el Laboratorio')
+    await userEvent.click(button)
+    expect(onOpen).toHaveBeenCalledWith(expect.objectContaining({ id: 'x4' }))
   })
 
   it('keeps Kronos «Estado no verificado» when the activity is not verified', async () => {
@@ -148,7 +224,7 @@ describe('ComparisonView (datos de ejemplo)', () => {
     expect(within(card).getByTestId('kronos-activity')).toHaveTextContent(
       'Estado no verificado',
     )
-    expect(document.body.textContent).not.toMatch(/Actividad verificada/)
+    expect(document.body.textContent).not.toMatch(/Actividad reciente/)
   })
 
   it('shows the unit only where the result is computed that way and adds no arms', async () => {
