@@ -1,5 +1,5 @@
 import { DEFAULT_LAB_PRODUCT, LAB_PRODUCTS } from '../domain/products.ts'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import ApprovedTerminalChart, {
   type ApprovedTerminalMarker,
 } from '../../trading-view/presentation/ApprovedTerminalChart.tsx'
@@ -165,6 +165,9 @@ export default function StrategyLab({
   initialView = 'inventory',
 }: Props) {
   const [view, setView] = useState<StrategyView>(initialView)
+  // «Ver contador» del inventario: lleva al contador de Carry dentro del laboratorio.
+  const [carryRequest, setCarryRequest] = useState(0)
+  const carryRef = useRef<HTMLDivElement>(null)
   const [inventory, setInventory] = useState<Inventory | null>(null)
   const [market, setMarket] = useState<LabCandles | null>(null)
   const [api, setApi] = useState<StrategyApi | null>(null)
@@ -464,6 +467,14 @@ export default function StrategyLab({
     }
   }
 
+  useEffect(() => {
+    if (carryRequest === 0 || view !== 'lab') return
+    const target = carryRef.current
+    if (!target) return
+    target.scrollIntoView?.({ block: 'start' })
+    target.focus({ preventScroll: true })
+  }, [carryRequest, view, api])
+
   const select = (id: string) => {
     setSelectedId(id)
     setSaveMode('modify')
@@ -475,7 +486,8 @@ export default function StrategyLab({
     setView('lab')
     setNotice(null)
     setError(null)
-    if (row.kind === 'model') setFocus('kronos')
+    if (row.kind === 'carry') setCarryRequest((value) => value + 1)
+    else if (row.kind === 'model') setFocus('kronos')
     else if (row.kind === 'rules') {
       setFocus(null)
       setShowPreview(false)
@@ -1045,7 +1057,16 @@ export default function StrategyLab({
                 </span>
                 <span>gris = menos de {ranking?.min_trades ?? 30} trades</span>
               </div>
-              {api && <CarryPanel />}
+              {api && (
+                <div
+                  ref={carryRef}
+                  id="carry-contador"
+                  data-testid="carry-destino"
+                  tabIndex={-1}
+                >
+                  <CarryPanel />
+                </div>
+              )}
             </section>
 
             <section

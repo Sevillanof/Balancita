@@ -358,3 +358,10 @@ td.inventory__num em {
     grid-template-columns: 1fr;
   }
 }
+
+#carry-contador:focus {
+  outline: none;
+}
+#carry-contador:focus-visible > .strategy-lab__carry {
+  outline: 2px solid var(--accent, #38bdf8);
+}

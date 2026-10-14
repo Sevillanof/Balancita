@@ -9,6 +9,7 @@ Ninguna base real, proceso de captura, estrategia ni WebSocket se tocó.
 - `1-inventario.png`: inventario de modelos (vista por defecto de Estrategias).
 - `2-auditoria-cerrada.png`: auditoría de una estrategia cerrada.
 - `3-laboratorio-c29.png`: «Detalle» abre el Laboratorio sobre C29.
+- `4-contador-carry.png`: «Ver contador» de la fila Carry abre el Laboratorio en el contador real de Carry de funding (resumen del registro; sin resultados todavía en la base temporal).
 - `comparacion-stitch-vs-react.png`: Stitch v5 (izquierda) y React (derecha).
 
 ## Diferencias con Stitch que quedan

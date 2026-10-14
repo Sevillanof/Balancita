@@ -113,6 +113,38 @@ describe('InventoryView (datos de ejemplo)', () => {
     ).toBeDisabled()
   })
 
+  it('opens the Carry counter from its own row', async () => {
+    const base = exampleInventory.strategies[0]
+    const carry = {
+      ...base,
+      id: 'carry-x',
+      name: 'Carry de prueba',
+      kind: 'carry' as const,
+    }
+    const onOpen = vi.fn()
+    render(
+      <InventoryView
+        api={api(() =>
+          Promise.resolve({
+            ...exampleInventory,
+            strategies: [...exampleInventory.strategies, carry],
+          }),
+        )}
+        connectError={null}
+        reload={0}
+        onOpen={onOpen}
+      />,
+    )
+    const button = await screen.findByRole('button', {
+      name: 'Ver contador de Carry de prueba',
+    })
+    expect(button).toBeEnabled()
+    await userEvent.click(button)
+    expect(onOpen).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'carry-x', kind: 'carry' }),
+    )
+  })
+
   it('shows the failure instead of example data', async () => {
     render(
       <InventoryView

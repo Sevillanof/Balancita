@@ -216,6 +216,20 @@ test('Estrategias opens on the inventory and every interaction answers', async (
   await page.getByRole('tab', { name: 'Inventario de modelos' }).click()
   await expect(rows).toHaveCount(10)
 
+  // «Ver contador» of the Carry row opens the real counter and returns.
+  await page.getByRole('button', { name: /Ver contador de/ }).click()
+  await expect(page.getByRole('tab', { name: 'Laboratorio' })).toHaveAttribute(
+    'aria-selected',
+    'true',
+  )
+  const carryPanel = page.getByRole('region', { name: 'Carry de funding' })
+  await expect(carryPanel).toBeVisible()
+  await expect(page.getByTestId('carry-destino')).toBeFocused()
+  await expect(carryPanel).toBeInViewport()
+  await shot(page, '4-contador-carry')
+  await page.getByRole('tab', { name: 'Inventario de modelos' }).click()
+  await expect(rows).toHaveCount(10)
+
   mkdirSync(SHOTS, { recursive: true })
   writeFileSync(join(SHOTS, 'solicitudes.json'), JSON.stringify(log, null, 2))
   const inventoryCalls = log.filter((entry) =>

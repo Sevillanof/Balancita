@@ -170,7 +170,11 @@ export function InventoryRow({
         ) : (
           <button
             type="button"
-            aria-label={`Detalle de ${row.name}`}
+            aria-label={
+              row.kind === 'carry'
+                ? `Ver contador de ${row.name}`
+                : `Detalle de ${row.name}`
+            }
             disabled={row.kind === 'qwen_exit'}
             title={
               row.kind === 'qwen_exit'
