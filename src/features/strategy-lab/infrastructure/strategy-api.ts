@@ -129,6 +129,90 @@ export type StrategyPlan = {
   >
 }
 
+/** `GET /api-strategies/inventory` (docs/strategy-inventory-api.md): read-only. */
+export type InventoryRange = {
+  trades: number | null
+  mean_net_bp: number | null
+  t_stat: number | null
+  folds_positive: number | null
+  folds_judged: number | null
+}
+
+export type InventoryBacktest = InventoryRange & {
+  hit_rate: number | null
+  median_net_bp: number | null
+  pnl_usd: number | null
+  deflated_probability: number | null
+  selection_trials: number | null
+  verdict: string | null
+  ranges: Record<string, InventoryRange>
+}
+
+export type InventoryStrategy = {
+  id: string
+  version: number
+  name: string
+  description: string
+  kind: 'rules' | 'qwen_exit' | 'model' | 'carry'
+  spec_hash: string | null
+  operational: {
+    state: string
+    basis: string
+    since_ms: number | null
+    reason: string | null
+  }
+  frozen: boolean
+  research: {
+    state: string
+    evidence_of_edge: boolean
+    reliable?: boolean
+    investigating: boolean
+    backtest: InventoryBacktest | null
+    text?: string
+  }
+  forward: {
+    registered: boolean
+    start_ms: number | null
+    registered_at: string | null
+    min_trades: number | null
+    trades: number | null
+    available: boolean
+    missing: string
+  }
+  market: {
+    products: number | null
+    horizon_minutes: number | null
+    exit_by: 'rules' | 'qwen' | 'time' | null
+  }
+  note: string | null
+  no_backtest: boolean
+}
+
+export type Inventory = {
+  schema: string
+  cost_model: { version: string; hash: string } | null
+  notional_usd: string
+  thresholds: {
+    t_tentative?: number
+    t_reliable?: number
+    reliable_trades?: number
+  }
+  forward_min_trades: number | null
+  period: {
+    ranges?: Record<string, { first_bucket_ms: number; last_bucket_ms: number }>
+  } | null
+  counts: {
+    strategies: number
+    active: number
+    frozen: number
+    closed: number
+    investigating: number
+    edge_evidence: number
+  }
+  strategies: InventoryStrategy[]
+  missing: string[]
+}
+
 export type Gate = {
   code: string
   passed: boolean
@@ -167,6 +251,8 @@ export interface StrategyApi {
   readonly mode: 'registry' | 'example'
   ranking(days: PeriodDays, product?: string): Promise<Ranking>
   detail(id: string, version?: number): Promise<StrategyDetail>
+  /** Inventory of every strategy; absent in the example API (no made-up data). */
+  inventory?(): Promise<Inventory>
   /** Plans of every strategy by id; absent in the example API. */
   plans?(): Promise<Record<string, StrategyPlan>>
   backtest(ref: SpecRef, days: PeriodDays, product?: string): Promise<Backtest>
@@ -240,6 +326,7 @@ export function httpStrategyApi(
       request(
         `/strategies/${encodeURIComponent(id)}${version ? `?version=${version}` : ''}`,
       ),
+    inventory: () => request('/inventory'),
     plans: async () =>
       (await request<{ plans: Record<string, StrategyPlan> }>('/plans')).plans,
     backtest: (ref, days, product = DEFAULT_PRODUCT) =>
