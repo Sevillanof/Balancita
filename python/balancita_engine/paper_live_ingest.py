@@ -352,6 +352,41 @@ class Ingestor(object):
             self.observation_log = (self.observation_log + [{"observed_until_ms": until, "clock": clock,
                                                               "last_ticker_ms": dict(sorted(self.last_ticker_ms.items()))}])[-SILENCE_SAMPLE:]
 
+    def proven_until(self):
+        """The source time up to which nothing can still arrive, or ``None`` when that cannot be said (D-10B-17). It is the
+        observed bound (``observed_now_ms - hold_ms``, source clock), and only when the last poll read everything, no stretch
+        waits to be told as unobserved, and no overdue 1-minute candle is holding the watermark back (it is then limited to
+        that candle's due time). Rows held by the usual watermark are still in ``pending``: ``release_proven`` hands them out."""
+        if self.observed_until_ms is None or self.ticker_more or self.candle_more or self.recovered_from_ms is not None:
+            return None
+        bound = self.observed_until_ms
+        if self.candle_lag_ms > 0 and self.max_ticker_ms is not None:
+            due = [bucket + 2 * ONE_MINUTE_MS - 1 for bucket in self.last_candle_bucket.values()
+                   if self.max_ticker_ms < bucket + 2 * ONE_MINUTE_MS + self.candle_lag_ms]
+            if due:
+                bound = min(bound, min(due))
+        return bound
+
+    def release_proven(self, bound_ms):
+        """Releases, in order, the rows still held by the watermark whose time is at or before ``bound_ms`` (which must not
+        exceed ``proven_until()``): a source that went silent never moves ``max_seen - hold_ms`` again, and what it said last
+        would otherwise stay undelivered for good. Afterwards nothing at or before ``bound_ms`` is released again."""
+        proven = self.proven_until()
+        if proven is None or bound_ms > proven:
+            raise IngestError("release_beyond_proof", "{} is not proven (bound {})".format(bound_ms, proven))
+        if self.released_ms is not None and bound_ms <= self.released_ms:
+            return []
+        ready = sorted((p for p in self.pending if p[0] <= bound_ms), key=lambda p: (p[0], p[2]["event_id"]))
+        self.pending = [p for p in self.pending if p[0] > bound_ms]
+        for _, _, _, key in ready:
+            if key is not None:
+                self.candle_first[key] = self.candle_pending.pop(key)
+        out = self._with_clock(ready, bound_ms)
+        self.released_ms = bound_ms
+        self._release_gaps(self.released_ms)
+        self.stats["emitted"] += len(out)
+        return out
+
     def observation(self):
         """The durable observation evidence, as plain JSON (what a session writes next to its own audit)."""
         return json.loads(json.dumps({"observed_until_ms": self.observed_until_ms, "observed_process_ms": self.observed_process_ms,

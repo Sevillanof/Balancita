@@ -1140,6 +1140,57 @@ class TestOpenSilencesAreDurable(Base):
         self.assertEqual(len(ing.observation_gaps), 1)
         self.assertEqual(ing.observation_gaps[0][0], released)                              # what was read is all that is known
 
+    def test_what_a_silent_source_said_last_is_released_only_up_to_what_is_proven(self):
+        self.feed(30)
+        reader = SourceReader(self.path)
+        ing = Ingestor(reader)
+        out = self.poll(ing, 31)
+        held = [e for e in out["events"] if e["kind"] == "quote"]
+        self.assertTrue(ing.pending)                                                          # the last rows wait for the watermark
+        self.poll(ing, 200)
+        self.assertTrue(ing.pending)                                                          # a mute source never moves it
+        proven = ing.proven_until()
+        self.assertEqual(proven, CYCLE + 200 * SEC - ING.DEFAULT_HOLD_MS)
+        with self.assertRaises(IngestError) as caught:
+            ing.release_proven(proven + 1)
+        self.assertEqual(caught.exception.reason, "release_beyond_proof")
+        late = ing.release_proven(CYCLE + 100 * SEC)
+        reader.close()
+        self.assertEqual([e["t_ms"] for e in late if e["kind"] == "quote"], [CYCLE + 30 * SEC])
+        self.assertTrue(held)
+        self.assertEqual(ing.pending, [])
+        self.assertEqual(ing.released_ms, CYCLE + 100 * SEC)
+        self.assertEqual(ing.release_proven(CYCLE + 100 * SEC), [])                           # nothing twice
+
+    def test_nothing_is_proven_while_the_read_is_unfinished_or_a_death_is_not_told(self):
+        self.feed(30)
+        reader = SourceReader(self.path)
+        ing = Ingestor(reader, batch=3)
+        self.poll(ing, 100)
+        self.assertIsNone(ing.proven_until())
+        reader.close()
+        reader = SourceReader(self.path)
+        again = Ingestor(reader)
+        self.poll(again, 100)
+        self.assertIsNotNone(again.proven_until())
+        again, reader = self.reopen(again, reader)
+        self.assertIsNone(again.proven_until())                                               # the stretch nobody observed comes first
+        self.poll(again, 120)
+        self.assertIsNotNone(again.proven_until())
+        reader.close()
+
+    def test_an_overdue_candle_limits_what_is_proven(self):
+        for t in range(0, 61, 5):
+            self.src.ticker(BTC, CYCLE + t * SEC, "100000")
+        self.src.candle(BTC, CYCLE - MIN, 1, 1, 1, 1)
+        self.src.commit()
+        reader = SourceReader(self.path)
+        ing = Ingestor(reader)
+        self.poll(ing, 70)
+        bound = ing.proven_until()
+        reader.close()
+        self.assertLess(bound, ing.observed_until_ms)                                         # a candle may still turn up for that minute
+
     def test_the_events_the_runner_receives_do_not_change(self):
         self.feed(60, 20)
         plain = ingest_all(self.path, CYCLE + 3_000 * SEC)[0]
