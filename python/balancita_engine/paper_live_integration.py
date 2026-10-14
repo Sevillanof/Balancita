@@ -351,11 +351,11 @@ class LiveSession(object):
             self.evaluator.feed_funding(item["product_id"], item["start_ms"], item["rate"], item["arrival_ms"])
             return
         if kind == "accrual":                               # the accounting only: never the signal's input
-            self._open_holes(item["arrival_ms"], None)
+            self._open_holes(item["arrival_ms"])
             self._handle(accrual_event(item))
             return
         event = item
-        self._open_holes(event["t_ms"], event["payload"]["product_id"] if event["kind"] == "quote" else None)
+        self._open_holes(event["t_ms"])
         if event["kind"] == "candle":
             payload = event["payload"]
             candle = dict(payload["candle"], bucket_start=payload["bucket_ms"])      # nothing is invented: no volume stays absent
@@ -393,19 +393,21 @@ class LiveSession(object):
         if gaps[product]:
             self._declare(product, gaps[product][0], t_ms, "closing_quote", pending)
 
-    def _open_holes(self, t_ms, own):
+    def _open_holes(self, t_ms):
         """The same rule while the silence is still open (D-10B-17): before an event later than the first instant at which
         a product's silence exceeded the limit (``last quote + limit + 1``) is delivered, the orders that silence affects are
         handled, from the event flow alone, so the declaration is the same whenever the source was polled and whether or not
         the process died. They go in ascending ``(gap_to, product)`` order, so no declaration is earlier than the journal
-        clock; the product of the event itself is left to ``_continuity`` (its hole ends with that quote)."""
+        clock; the product of the event itself is included: its own closing quote, later than that instant, is declared here first,
+        so the loss is the same whether or not anything else flowed or the source was polled in between; ``_continuity`` keeps
+        only what is still pending with a window after that instant."""
         pending = self.runner.executor.pending
         if not pending:
             return
         due = []
         for product in sorted({order["product_id"] for order in pending.values()}):
             since = self.last_quote.get(product)
-            if product == own or since is None:
+            if since is None:
                 continue
             gap_to = since + self.max_quote_gap_ms + 1
             if gap_to < t_ms:

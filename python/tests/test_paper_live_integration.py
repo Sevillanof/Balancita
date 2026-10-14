@@ -829,7 +829,8 @@ class TestSourceStalePolicy(unittest.TestCase):
 # ------------------------------------------------------------------------------------------------ 6. the durable cancellation
 ENTRY_QUOTE_MS = FIRST_DECISION + 50 * MIN + 10 * SEC           # the 10 s quote of the minute that opens the first order of the day
 HOLE = (ENTRY_QUOTE_MS - 5 * SEC, ENTRY_QUOTE_MS + 5 * SEC)     # that one quote is missing: the source is silent for 40 s (> the 25 s limit, < 45 s)
-GAP_FROM, GAP_TO = ENTRY_QUOTE_MS - 20 * SEC, ENTRY_QUOTE_MS + 20 * SEC
+GAP_FROM, GAP_TO = ENTRY_QUOTE_MS - 20 * SEC, ENTRY_QUOTE_MS + 20 * SEC       # the silence and the quote that ends it
+DECLARED_TO = GAP_FROM + MAX_QUOTE_GAP_MS + 1                                   # what is declared: the first instant over the limit (D-174-01)
 BEFORE_ENTRY = FIRST_DECISION + 50 * MIN + 25 * SEC          # the order is decided and the quote that opens the hole is delivered; the one that ends it is not
 ENTRY_STEP = next(i for i, t in enumerate(TIMES) if t >= FIRST_DECISION + 50 * MIN + 2 * SEC)
 
@@ -912,7 +913,7 @@ class TestSourceStaleCancellation(unittest.TestCase):
         self.assertEqual(len(losses), 1)
         self.assertEqual([c["data"]["intent_id"] for c in cancels], [order["intent_id"]])
         self.assertEqual({k: losses[0]["data"][k] for k in ("product_id", "gap_from_ms", "gap_to_ms")},
-                         {"product_id": BTC, "gap_from_ms": GAP_FROM, "gap_to_ms": GAP_TO})
+                         {"product_id": BTC, "gap_from_ms": GAP_FROM, "gap_to_ms": DECLARED_TO})
         self.assertLess(cancels[0]["seq"], self.quote_seq(session, GAP_TO))        # before the quote that ends the hole was delivered
         self.assertLess(losses[0]["seq"], cancels[0]["seq"])
         self.assertEqual([r for r in session.audit.records() if r["kind"] == "source_loss"][0]["cancelled"], [order["intent_id"]])
@@ -922,7 +923,7 @@ class TestSourceStaleCancellation(unittest.TestCase):
         self.assert_cancelled_before_the_quote(session)
         evidence = [r for r in session.audit.records() if r["kind"] == "source_stale_detected"]
         self.assertEqual(len(evidence), 1)
-        self.assertEqual(evidence[0]["gap"], {"from_ms": GAP_FROM, "to_ms": GAP_TO})
+        self.assertEqual(evidence[0]["gap"], {"from_ms": GAP_FROM, "to_ms": DECLARED_TO})
         self.assertEqual(evidence[0]["pending_hit"], [first_order(session)["intent_id"]])
         self.assertEqual(sorted(evidence[0]["ingestor"]), ["data_gaps", "epoch_changes", "product_silence", "sample_capped",
                                                            "source_silence", "unexplained"])
@@ -1008,7 +1009,7 @@ class TestSourceStaleCancellation(unittest.TestCase):
     def test_repeating_the_same_interval_cancels_nothing_more(self):
         session = self.cache["a"]
         before = (len(session.runner.journal.entries), self.cancel_trace(session), session.runner.state_digest())
-        again = session.runner.cancel_for_source_loss(BTC, GAP_FROM, GAP_TO, session.runner.clock, MAX_QUOTE_GAP_MS)       # declared already: any clock, no writes
+        again = session.runner.cancel_for_source_loss(BTC, GAP_FROM, DECLARED_TO, session.runner.clock, MAX_QUOTE_GAP_MS)       # declared already: any clock, no writes
         self.assertEqual(again, [first_order(session)["intent_id"]])
         session.last_quote.clear()
         session.last_quote[BTC] = GAP_FROM
@@ -1082,9 +1083,24 @@ class TestSilenceStillOpen(unittest.TestCase):
         session.step(TIMES[ENTRY_STEP])
         cls.cache["a"] = session
         cls.cache["record"] = record(session, TIMES[ENTRY_STEP])
+        # D-174-01: ETH is mute from 2 s after BTC's last quote, so nothing flows between the instant and BTC's closing quote
+        where = os.path.join(root, "mute")
+        os.makedirs(where)
+        mute = World(where, quote_holes=[HOLE], second_product_shift=-3, second_product_holes=[(ENTRY_QUOTE_MS + 2 * SEC, ENTRY_QUOTE_MS + 60 * SEC)])
+        mute.release_until(LOAD_START)
+        quiet = new_session(mute, os.path.join(where, "a"), strategies, products=(BTC, ETH))
+        for now in TIMES[:ENTRY_STEP]:
+            mute.release_until(now)
+            quiet.step(now)
+        cls.cache["mute"] = {"world": mute, "snap": Circuit.take_snapshot(where, "mute", quiet, mute, ENTRY_STEP)}
+        mute.release_until(TIMES[ENTRY_STEP])
+        quiet.step(TIMES[ENTRY_STEP])
+        cls.cache["quiet"] = quiet
 
     @classmethod
     def tearDownClass(cls):
+        if "quiet" in cls.cache:
+            abandon(cls.cache.pop("quiet"))
         if "a" in cls.cache:
             abandon(cls.cache.pop("a"))
         shutil.rmtree(cls.cache.get("dir", ""), True)
@@ -1208,6 +1224,30 @@ class TestSilenceStillOpen(unittest.TestCase):
                 self.assertEqual(len(ids), len(set(ids)))
                 self.assertEqual(len([r for r in session.audit.records() if r["kind"] == "source_loss"]), 1)
 
+    def test_polling_inside_the_silence_never_changes_what_is_declared(self):
+        """D-174-01: with nothing else flowing between the instant the limit is exceeded and the product's own closing quote, the
+        declaration is the same, in the journal and in the digests, whether or not the source was polled in between."""
+        item = self.cache["mute"]
+        root = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, root, True)
+        world = item["world"].fork(root, item["snap"]["world"])
+        directory = os.path.join(root, "s")
+        shutil.copytree(item["snap"]["session"], directory)
+        session = self.recover_again(world, directory)
+        for now in (ENTRY_QUOTE_MS + 12 * SEC, ENTRY_QUOTE_MS + 22 * SEC):
+            world.release_until(now)
+            session.step(now)
+        world.release_until(TIMES[ENTRY_STEP])
+        session.step(TIMES[ENTRY_STEP])
+        quiet = self.cache["quiet"]
+        self.assertEqual(len(self.losses(quiet)), 1)
+        self.assertEqual(self.losses(session), self.losses(quiet))
+        self.assertEqual(self.cancellations(session), self.cancellations(quiet))
+        self.assertEqual(session.digests(), quiet.digests())
+        self.assertEqual(session.runner.portfolio.snapshot(), quiet.runner.portfolio.snapshot())
+        self.assertEqual((self.losses(quiet)[0]["gap_from_ms"], self.losses(quiet)[0]["gap_to_ms"]),
+                         (ENTRY_QUOTE_MS - 20 * SEC, ENTRY_QUOTE_MS - 20 * SEC + MAX_QUOTE_GAP_MS + 1))     # the instant, not the closing quote
+
     def test_a_restart_after_the_downtime_never_turns_the_silence_into_a_retroactive_cancellation(self):
         """The process died before the declaration and was restarted ten minutes later: the runner's clock went past the events it
         had not been given (they are rejected as late, as in every recovery with downtime), the stretch it was away for is an
@@ -1288,7 +1328,7 @@ class TestDeadlineAgainstTheThreshold(unittest.TestCase):
         self.assertEqual(len(audit), 1)
         self.assertEqual((audit[0]["cancelled"], audit[0]["expired"], audit[0]["expired_reasons"], audit[0]["threshold_ms"]),
                          ([order["intent_id"]], [], {}, limit))
-        self.assertEqual(audit[0]["gap"], {"from_ms": ENTRY_QUOTE_MS - 20 * SEC, "to_ms": ENTRY_QUOTE_MS + 140 * SEC})
+        self.assertEqual(audit[0]["gap"], {"from_ms": ENTRY_QUOTE_MS - 20 * SEC, "to_ms": ENTRY_QUOTE_MS - 20 * SEC + limit + 1})
         self.assertIsNotNone(audit[0]["declared_ms"])
 
     def test_a_deadline_at_or_before_the_limit_expires_with_the_executors_reason_and_is_never_a_source_cancellation(self):
@@ -1325,7 +1365,7 @@ class TestDeadlineAgainstTheThreshold(unittest.TestCase):
             session.runner._expire_for_source_loss = die
         else:
             def fault(name_, info=None):
-                if name_ == point:
+                if name_ == point or (point == "after_declaration" and name_ in ("after_open_declaration", "after_closing_declaration")):
                     raise Killed()
             session.fault = fault
         world.release_until(TIMES[ENTRY_STEP])
@@ -1339,7 +1379,7 @@ class TestDeadlineAgainstTheThreshold(unittest.TestCase):
 
     def test_a_death_between_the_loss_and_its_expiry_or_the_checkpoint_changes_neither_orders_nor_money(self):
         for name in ("after", "equal", "before"):
-            for point in ("between_loss_and_expiry", "after_closing_declaration", "after_runner", "after_audit"):
+            for point in ("between_loss_and_expiry", "after_declaration", "after_runner", "after_audit"):
                 if name == "after" and point == "between_loss_and_expiry":
                     continue                                            # a cancellation has no expiry to die before
                 with self.subTest(name=name, point=point):
@@ -1379,26 +1419,25 @@ class TestOpenHolesOrder(unittest.TestCase):
     def test_two_products_that_cross_in_one_step_are_declared_in_ascending_instant_then_product_order(self):
         pending = {"a": self.order(ETH, 10 ** 9), "b": self.order(BTC, 10 ** 9)}
         session = self.session(pending, {BTC: 30 * SEC, ETH: 20 * SEC})                      # ETH crosses first
-        session._open_holes(90 * SEC, None)
+        session._open_holes(90 * SEC)
         self.assertEqual(session.calls, [(ETH, 20 * SEC, 20 * SEC + self.LIMIT + 1, 20 * SEC + self.LIMIT + 1, "open_silence"),
                                          (BTC, 30 * SEC, 30 * SEC + self.LIMIT + 1, 30 * SEC + self.LIMIT + 1, "open_silence")])
         tie = self.session(pending, {BTC: 30 * SEC, ETH: 30 * SEC})
-        tie._open_holes(90 * SEC, None)
+        tie._open_holes(90 * SEC)
         self.assertEqual([c[0] for c in tie.calls], sorted([BTC, ETH]))                      # same instant: by product id
 
-    def test_the_event_of_the_product_itself_and_events_that_do_not_pass_the_instant_declare_nothing(self):
+    def test_events_that_do_not_pass_the_instant_declare_nothing_and_the_product_own_closing_quote_declares_first(self):
         pending = {"a": self.order(BTC, 10 ** 9)}
         session = self.session(pending, {BTC: 30 * SEC})
-        session._open_holes(90 * SEC, BTC)                                                   # its own closing quote: ``_continuity`` decides
-        session._open_holes(30 * SEC + self.LIMIT + 1, None)                                 # exactly at the instant: not later than it
+        session._open_holes(30 * SEC + self.LIMIT + 1)                                       # exactly at the instant: not later than it
         self.assertEqual(session.calls, [])
-        session._open_holes(30 * SEC + self.LIMIT + 2, None)                                 # one millisecond later: the limit is exceeded
+        session._open_holes(30 * SEC + self.LIMIT + 2)                                       # one millisecond later (a closing quote included): exceeded
         self.assertEqual([c[3] for c in session.calls], [30 * SEC + self.LIMIT + 1])         # declared at the instant, not at the event
         self.assertEqual(self.session({}, {BTC: 30 * SEC}).calls, [])
 
     def test_a_product_that_never_quoted_is_not_declared(self):
         session = self.session({"a": self.order(BTC, 10 ** 9)}, {})
-        session._open_holes(10 ** 6, None)
+        session._open_holes(10 ** 6)
         self.assertEqual(session.calls, [])
 
 
@@ -1443,8 +1482,7 @@ class TestTheLiteral26SecondCut(unittest.TestCase):
         end = ENTRY_QUOTE_MS + 6 * SEC
         self.assertEqual((order["state"], order["reasons"]), ("cancelled", ["source_stale"]))
         losses = [e for e in cut.runner.journal.entries if e["kind"] == "source_loss"]
-        self.assertEqual([(l["data"]["gap_from_ms"], l["data"]["gap_to_ms"]) for l in losses], [(ENTRY_QUOTE_MS - 20 * SEC, end)])
-        self.assertEqual(end - losses[0]["data"]["gap_from_ms"], 26 * SEC)
+        self.assertEqual([(l["data"]["gap_from_ms"], l["data"]["gap_to_ms"]) for l in losses], [(ENTRY_QUOTE_MS - 20 * SEC, ENTRY_QUOTE_MS - 20 * SEC + MAX_QUOTE_GAP_MS + 1)])
         quote_seq = next(e["seq"] for e in cut.runner.journal.entries if e["kind"] == "event_accepted" and e["data"]["event"]["kind"] == "quote"
                          and e["data"]["event"]["payload"]["time_ms"] == end)
         self.assertLess(losses[0]["seq"], quote_seq)

@@ -160,7 +160,9 @@ seguía siendo ejecutable. Los umbrales siguen siendo hipótesis; no hay sesión
   provoca ni el reloj del proceso, así que es la misma en la corrida continua, con otro ritmo de sondeos y tras una caída.
 - **Camino (a), por el flujo (`_open_holes`):** antes de entregar el primer evento con `t > gap_to` (de cualquier producto, funding
   incluido) se declaran, en orden ascendente `(gap_to, producto)`, los productos con órdenes pendientes que ya lo cruzaron. El
-  producto del propio evento lo decide la cotización que cierra (`_continuity`). Evidencia `source_stale_detected` con
+  producto del propio evento **se incluye** (D-174-01): su cotización de cierre, posterior a ese instante, declara primero
+  `[última, última + límite + 1]`, así que la pérdida es la misma haya o no otros eventos y se haya sondeado o no dentro del
+  silencio; `_continuity` solo queda para lo que sigue pendiente con una ventana posterior. Evidencia `source_stale_detected` con
   `trigger: open_silence`.
 - **Camino (b), por la observación (`_declare_from_observation`),** solo cuando nada fluye (un producto o fuente muda) y solo con
   la prueba del ingestor (`proven_until()`: lectura agotada en el reloj de la fuente, sin vela vencida, sin tramo por contar). Antes
@@ -205,6 +207,8 @@ abandonando la sesión en el punto de falla, igual que el resto de las pruebas d
   es el de la recuperación si la caída fue antes). Con SIGKILL real siguen las pruebas de `TestSourceStaleCancellation`.
 
 Digests de 10D tras el cambio, sin diferencias: financiero `cf0446c1…351c`, órdenes `57031c71…6c80`, señales `32c1c980…5081` (864 señales, 436 órdenes, 3 operaciones cerradas, funding 0,945780, equity 1031,3785). Suite completa: 64 pruebas OK.
+
+Residuos declarados (D-174-02 y D-174-03, LOW): con un producto único, la fila retenida que crearía la orden no se libera mientras no haya orden pendiente, así que la declaración espera a la cotización de cierre (no hay riesgo de llenado). Tras recuperar, `released_ms = gap_to - 1` hace que filas ya entregadas y releídas cuenten como `late_source_rows` en la muestra de tardías; el runner las deduplica y no cambia dinero, pero esa muestra no es evidencia de retraso real.
 
 Límite declarado: un producto único con la fuente muda no tiene órdenes pendientes que declarar, porque la vela que las crea queda
 retenida por la marca de agua hasta que algo más llegue; si la fuente vuelve, la orden se crea y la cotización que cierra la
