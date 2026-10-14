@@ -12,8 +12,8 @@ from balancita_engine import replay_data as RD
 from balancita_engine import replay_driver as RP
 from balancita_engine.futures_simulator import FIVE_MINUTES_MS, ONE_MINUTE_MS
 
-from .test_paper_live_ingest import Source
-from .test_replay_9a_audit import BTC, FIRST_DECISION, LAST_DECISION, fixture_db
+from test_paper_live_ingest import Source
+from test_replay_9a_audit import BTC, FIRST_DECISION, LAST_DECISION, fixture_db
 
 D = Decimal
 SEC, MIN, HOUR = 1_000, 60_000, 3_600_000

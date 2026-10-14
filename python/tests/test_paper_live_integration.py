@@ -29,8 +29,8 @@ from balancita_engine.paper_runner_store import JOURNAL_FILE, FileRunnerJournal
 from balancita_engine.portfolio import PortfolioPolicy
 from balancita_engine.portfolio_watch import WatchPolicy
 
-from .live_world import (ACCRUAL_RATE, BTC, FIRST_DECISION, HOUR, LAST_DECISION, LOAD_START, MIN, SEC, WORLD_END, World)
-from .test_paper_live_ingest import Source
+from live_world import (ACCRUAL_RATE, BTC, FIRST_DECISION, HOUR, LAST_DECISION, LOAD_START, MIN, SEC, WORLD_END, World)
+from test_paper_live_ingest import Source
 
 D = Decimal
 INGEST_KW = {"clock_every_ms": 10 ** 12}                 # no clock events: the independent reference has none either
