@@ -32,6 +32,7 @@ Esa fila entra al runner como cualquier otra (no se toca `released_ms`) y ademá
 `hold_ms` y `observed_until_ms` solos no prueban un hueco. La prueba es el propio flujo de eventos que el ingestor entrega en orden bajo su marca de agua natural (`max_seen_ms - hold_ms`, con sus retenciones). Para un producto P con última cotización `since_ms` y `gap_to_ms = since_ms + limit_ms + 1` (primer instante en que se supera el umbral, independiente de cuándo se sondeó):
 
 - **(a) Atado al flujo.** Antes de entregar el primer evento con `t_ms > gap_to_ms` (de cualquier producto, o un tick de reloj), si P tiene órdenes pendientes y no hubo cotización de P en `(since_ms, gap_to_ms]`, la sesión declara `cancel_for_source_loss(P, since_ms, gap_to_ms, t_ms=gap_to_ms)`. El journal sigue en `<= gap_to_ms`, y la marca de agua natural ya probó que salió todo lo que tiene `t <= gap_to_ms`. Es función solo del flujo, así que la corrida continua y la recuperada declaran exactamente lo mismo, con el mismo `t_ms` (así los digests coinciden: no entra `decided_at_ms` dependiente del sondeo ni la hora en que otras órdenes vencen).
+- **Varios productos en el mismo paso (D-17-17).** Si un evento cruza el `gap_to_ms` de más de un producto, las declaraciones se hacen en orden ascendente de `(gap_to_ms, product_id)`, incluida la cancelación al cierre de #165 cuando cae en el mismo paso. Así el `t_ms` de cada una es `>=` el reloj del runner y #168 no rechaza (`source_loss_in_the_past`). Declarar primero el mayor haría que la segunda llegara con `t_ms` menor y detendría la sesión.
 - **(b) Sin eventos posteriores** (un solo producto o fuente muda más allá de `alive_until`): no hay flujo que la ate. Solo entonces se usa la observación, y únicamente si se cumple todo: sondeo agotado en ambas tablas (`more_to_read` falso), sin eventos pendientes en el ingestor, `ticker_more`/`candle_more`/vela atrasada falsos, reloj de la fuente (nunca la cota del proceso), `gap_to_ms <= observed_until_ms` y reloj del runner `<= gap_to_ms`. Se declara con `t_ms = gap_to_ms` (el mismo valor que en (a)) y, **en la misma operación**, `released_ms = max(released_ms, gap_to_ms)`. Como el runner nunca quedó atrás de ese `t_ms`, no hay evento previo pendiente al que se le adelante el reloj (condición 5).
 - **Recuperación:** `recover()` toma `released_ms >= max(gap_to_ms)` de `runner.source_losses`, de modo que si la muerte ocurre entre la cancelación y el checkpoint del ingestor, una fila real con `t <= gap_to_ms` no entra al runner después. Una fila tardía así se cuenta en `late_source_rows` y se escribe `silence_contradicted` (solo como evidencia; la cancelación ya es durable).
 
@@ -84,9 +85,16 @@ Vocabulario fijo, sin mezclar:
 
 **Cambio en #168:** ninguno. `t_ms = gap_to_ms >= reloj del runner` y `source_loss_after_quote` se cumplen por construcción (§3.1); si el runner rechazara, la sesión se detiene.
 
-### 6.1 Único punto que necesitaría un gancho de 9A (no se implementa aquí)
+### 6.1 Órdenes con `deadline_ms < gap_to_ms`: decisión de Fran pendiente
 
-`cancel_for_source_loss` cancela toda orden de P cuya ventana se solapa con `[since_ms, gap_to_ms]` (`hi = min(gap_to, deadline) > lo`). Una orden cuyo `deadline_ms` cae **antes** de `gap_to_ms` y que sigue pendiente porque no hubo ningún evento entre su vencimiento y `gap_to_ms` también se solaparía, y se cancelaría en vez de vencer (una cancelación que reemplaza a un vencimiento, condición 10). Cuando hay ticks de reloj el caso no ocurre (vencen antes). Solo ocurre con flujo de eventos escaso. Solicitud a 9A, a decidir por Fran: un parámetro opcional que deje fuera las órdenes con `deadline_ms < gap_to_ms`. Mientras no exista, la sesión no declara en ese caso y lo registra como `source_stale_deferred` (evidencia) con la orden afectada; vence cuando llegue el próximo evento.
+`cancel_for_source_loss` cancela toda orden de P cuya ventana se solapa con `[since_ms, gap_to_ms]` (`hi = min(gap_to, deadline) > lo`). Una orden con `deadline_ms <= since_ms + limit_ms` terminó su ventana sin superar el umbral: lo correcto es que venza por `no_quote_in_window`, no que se cancele por `source_stale` (condición 10 de Fran). Cuando hay ticks de reloj vence antes. Sin ticks, no: `_expire` depende del producto (una cotización de otro producto solo vence órdenes de ese producto, `execution_timing.py:205`) y el vencimiento global solo llega con un tick (`:236`). La orden de P sigue pendiente hasta la cotización de cierre de P, y ahí el camino de #165 también la cancelaría. **Diferir no cambia el resultado: solo lo posterga**, así que no existe `source_stale_deferred`.
+
+Opciones para Fran:
+
+- **(a) Pedido a 9A** (único dueño de `paper_runner.py`): parámetro opcional que deje fuera las órdenes con `deadline_ms < gap_to_ms`, aplicable en los dos caminos (abierto y cierre de #165), más una forma determinista de vencerlas (por ejemplo `_expire` del producto en `t_ms`) sin inventar eventos. Cambia #168 y exige revisión propia.
+- **(b) Aceptar** que esas órdenes se cancelen por `source_stale`, como ya hace #165 hoy, y declararlo en la documentación y en el registro (`trigger` y `deadline_before_gap_to: true` en `source_stale_detected`).
+
+Hasta que Fran decida, no se implementa ninguna. Por defecto de la implementación: (b), con el registro explícito.
 
 ## 7. Qué se compara en las pruebas
 
@@ -125,7 +133,8 @@ Cada una compara corrida continua y recuperada (equivalencia financiera donde se
 - F. Evento de mercado retenido con `t_ms` anterior al avance de observación: se entrega antes de declarar; si es del mismo producto el silencio desaparece y no hay cancelación; el reloj del journal no pasa por delante.
 - G. Fila tardía posterior a una cancelación del camino (b) (`persisted_at <= gap_to_ms`): no entra al runner (`released_ms` adelantado en la misma operación, y recuperado de `runner.source_losses` tras una muerte entre cancelación y checkpoint), queda `silence_contradicted`.
 - K. Misma cancelación, distinto sondeo y caídas: el digest financiero y el `t_ms` de la entrada `source_loss` son idénticos en corrida continua y recuperada (D-17-13).
-- L. Orden con `deadline_ms < gap_to_ms` y sin eventos intermedios: no se cancela retroactivamente; `source_stale_deferred` (§6.1).
+- L. Orden con `deadline_ms < gap_to_ms` y sin eventos intermedios: queda fijado el resultado de la opción elegida en §6.1: con (b) se cancela por `source_stale` con `deadline_before_gap_to: true`, igual en el camino abierto y en el de cierre; con (a) vence por `no_quote_in_window`. Se prueba que ambos caminos dan lo mismo.
+- O. Dos productos cuyo `gap_to_ms` cruza el mismo evento: las declaraciones salen en orden `(gap_to_ms, product_id)`; sin `source_loss_in_the_past`, incluido el caso en que uno de ellos cierra por cotización de #165 en el mismo paso (D-17-17).
 - M. Muerte entre `cancel_for_source_loss` y el checkpoint del ingestor, con una fila real de `t <= gap_to_ms` en la fuente (D-17-14 iii).
 - N. Vela atrasada de otro producto con `t <= gap_to_ms`: se entrega, no se descarta (D-17-14 i).
 - H. Audit adelantado con checkpoint anterior (muerte entre ambos) y a la inversa: sin duplicados ni registros distintos.
@@ -134,7 +143,7 @@ Cada una compara corrida continua y recuperada (equivalencia financiera donde se
 
 ## 9. Hallazgos de D resueltos
 
-D-17-01 reemplazado por D-17-09 (§3, §6) y D-17-10 (§3, caso 5b), D-17-02 (§4), D-17-03 (§4, caso 3), D-17-04 (§5, §7, caso 6), D-17-11 y D-17-12 (§3, §4, caso 5b), D-17-13 a 16 (§3, §3.1, §6, §6.1, casos G, K a N), LOW 05 (`silence_at_window_end`), 06 (`never_quoted`), 07 (tope de `observation`), 08 (§10).
+D-17-01 reemplazado por D-17-09 (§3, §6) y D-17-10 (§3, caso 5b), D-17-02 (§4), D-17-03 (§4, caso 3), D-17-04 (§5, §7, caso 6), D-17-11 y D-17-12 (§3, §4, caso 5b), D-17-13 a 18 (§3, §3.1, §6, §6.1, casos G, K a O), LOW 05 (`silence_at_window_end`), 06 (`never_quoted`), 07 (tope de `observation`), 08 (§10).
 
 ## 10. Dónde se implementa
 
