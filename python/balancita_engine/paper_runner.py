@@ -280,6 +280,8 @@ class PaperRunner(object):
         self.decision_owner = {}     # signal key -> event_id of the cycle that must decide it
         self.cycles_seen = set()     # (product, cycle_ms) of every accepted cycle
         self.open_funding = {}       # event_id -> funding/reconcile event whose reconciliation entry is not recorded yet
+        self.quote_t_ms = {}         # product -> journal time (t_ms) of the last quote delivered: the clock a source loss is measured in
+        self.source_losses = {}      # (product, gap_from_ms, gap_to_ms) -> {"intent_ids": [...], "windows": {intent_id: [lo, hi]}}
         self.coverage = {"last_quote": {}, "watch": {}, "candles": {}, "gaps": []}     # market coverage while positions are open (observed facts)
         self.recoveries, self.last_recovery, self.last_checkpoint = 0, None, None
         self.replaying = False
@@ -421,10 +423,15 @@ class PaperRunner(object):
             item = self.open_funding.pop(data["event_id"], None)
             if item is not None and item["stream"] is not None:
                 self.offsets.process(*item["stream"])
+        elif kind == "source_loss":
+            key = (data["product_id"], data["gap_from_ms"], data["gap_to_ms"])
+            self.source_losses[key] = {"intent_ids": list(data["intent_ids"]), "windows": {k: list(v) for k, v in data["windows"].items()}}
+            self._count("source_losses")
         elif kind == "order_cancelled":
+            extra = {"recovery_ms": data["recovery_ms"]} if "recovery_ms" in data else {}
             record = self.executor.cancel(data["intent_id"], data["reason"], entry["t_ms"],
                                           uncovered_from_ms=data["uncovered_from_ms"], uncovered_to_ms=data["uncovered_to_ms"],
-                                          recovery_ms=data["recovery_ms"])
+                                          **extra)
             self._count("orders_cancelled" if record is not None else "cancel_without_order")
         elif kind == "recovery":
             self.clock = data["recovery_ms"] if self.clock is None else max(self.clock, data["recovery_ms"])
@@ -558,6 +565,7 @@ class PaperRunner(object):
         kind, payload = event["kind"], event["payload"]
         if kind == "quote":
             before = self._open_snapshot()
+            self.quote_t_ms[payload["product_id"]] = max(self.quote_t_ms.get(payload["product_id"], 0), event["t_ms"])
             self.executor.on_quote(payload)
             self._note_quote(payload, before)
             self._settle_closed(before)
@@ -768,6 +776,82 @@ class PaperRunner(object):
         self._record(t_ms, "decision", {"signal_key": key, "decided_ms": t_ms,
                                         "reference_price": str(payload["price"]), "atr": str(payload["atr"])})
 
+    # ---- source continuity lost while an order waited (D-10C-3) ----------------------------------------------
+    def cancel_for_source_loss(self, product_id, gap_from_ms, gap_to_ms, t_ms):
+        """Cancels the pending orders of ``product_id`` whose execution window overlaps ``[gap_from_ms, gap_to_ms]`` (the time
+        the source lost continuity), with the reason ``source_stale``. Returns the ids of the orders the loss affects.
+
+        * Only pending orders of that product whose window overlaps the gap are touched; an order that already filled,
+          expired or was cancelled, another product, open positions (their stops) and the risk rules are not.
+        * A new declaration needs ``t_ms >= gap_to_ms``: the interruption is declared once its end is known
+          (``source_loss_before_gap_end`` otherwise). A declaration already persisted is repeated with any ``t_ms``.
+        * It must happen before the quote that ends the gap is delivered: after it the order may already have been judged
+          on that quote, so the call is refused (``source_loss_after_quote``). The gap bounds are in the journal clock
+          (``t_ms`` of the events); the check compares them with both the journal time and the ``time_ms`` of the last
+          quote delivered, whichever is later.
+        * An order whose earliest fill falls inside the gap is cancelled too, even if it was decided during the gap
+          (conservative: nobody was watching the source while it waited).
+        * Idempotent by ``(product_id, gap_from_ms, gap_to_ms)``: the loss is a journal entry written before any
+          cancellation, so a repeated call, or a recovery that finds the entry with orders still pending, cancels each
+          order once and returns the same ids.
+        * The cancellation is the executor's own (``cancel``) and each one is an ``order_cancelled`` entry, as in
+          ``runner_interrupted``; nothing else of the book changes."""
+        self._guard_open()
+        if self.status != PROCESSING:
+            raise RunnerError("not_processing", self.status)
+        if self.config.execution_mode != "quotes":
+            raise RunnerError("source_loss_not_applicable", "orders fill on modelled prices, not on a source of quotes")
+        if not isinstance(product_id, str) or not product_id:
+            raise RunnerError("source_loss_invalid", "product_id")
+        for name, value in (("gap_from_ms", gap_from_ms), ("gap_to_ms", gap_to_ms), ("t_ms", t_ms)):
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise RunnerError("source_loss_invalid", name)
+        if gap_to_ms <= gap_from_ms:
+            raise RunnerError("source_loss_invalid", "gap_to_ms must be after gap_from_ms")
+        key = (product_id, gap_from_ms, gap_to_ms)
+        known = self.source_losses.get(key)
+        if known is None:
+            if self.clock is not None and t_ms < self.clock:
+                raise RunnerError("source_loss_in_the_past", "t_ms {} is before the runner clock {}".format(t_ms, self.clock))
+            if t_ms < gap_to_ms:
+                raise RunnerError("source_loss_before_gap_end",
+                                  "t_ms {} is before the end of the gap {}: an interruption is not complete until its end is observed"
+                                  .format(t_ms, gap_to_ms))
+            # the gap is measured in journal time (``t_ms``, when the source persisted the quote), which can be later than the
+            # quote's own ``time_ms``: a quote delivered at either time at or after the end of the gap closes the window
+            last = max(self.executor.last_quote_ms.get(product_id, 0), self.quote_t_ms.get(product_id, 0))
+            if last >= gap_to_ms and last > 0:
+                raise RunnerError("source_loss_after_quote",
+                                  "a quote at {} was already delivered; the gap ended at {}".format(last, gap_to_ms))
+            affected, windows = [], {}
+            for intent_id, order in sorted(self.executor.pending.items()):
+                if order["product_id"] != product_id:
+                    continue
+                lo = max(gap_from_ms, order["timeline"]["earliest_fill_ms"])
+                hi = min(gap_to_ms, order["timeline"]["deadline_ms"])
+                if hi > lo:
+                    affected.append(intent_id)
+                    windows[intent_id] = [lo, hi]
+            self._record(max(t_ms, self.journal.entries[-1]["t_ms"] if self.journal.entries else 0), "source_loss", {"product_id": product_id, "gap_from_ms": gap_from_ms, "gap_to_ms": gap_to_ms,
+                                               "intent_ids": affected, "windows": windows})
+            known = self.source_losses[key]
+        for intent_id in known["intent_ids"]:
+            if intent_id in self.executor.pending:
+                lo, hi = known["windows"][intent_id]
+                self._record(max(t_ms, self.journal.entries[-1]["t_ms"]), "order_cancelled",
+                             {"intent_id": intent_id, "reason": "source_stale", "uncovered_from_ms": lo, "uncovered_to_ms": hi})
+        return list(known["intent_ids"])
+
+    def _finish_source_losses(self, recovery_ms):
+        """A process that died between the ``source_loss`` entry and the cancellations it announced: the recovery finishes them."""
+        for key, loss in sorted(self.source_losses.items()):
+            for intent_id in loss["intent_ids"]:
+                if intent_id in self.executor.pending:
+                    lo, hi = loss["windows"][intent_id]
+                    self._record(recovery_ms, "order_cancelled", {"intent_id": intent_id, "reason": "source_stale",
+                                                                  "uncovered_from_ms": lo, "uncovered_to_ms": hi,
+                                                                  "recovery_ms": recovery_ms})
+
     # ---- recovery (8B) ---------------------------------------------------------------------------------------
     def _begin_recovery(self, recovery_ms, tail_discarded=0, rebuilt_checkpoint=None):
         """After the replay: what the interrupted process owed is paid with the recovery clock.
@@ -781,6 +865,7 @@ class PaperRunner(object):
         if recovery_ms < before:
             self._refuse("recovery_clock_behind", "recovery at {} but the journal reached {}".format(recovery_ms, before))
         self.status = RECOVERING
+        self._finish_source_losses(recovery_ms)
         interrupted = []
         for intent_id, order in sorted(self.executor.pending.items()):
             lo = max(before, order["timeline"]["earliest_fill_ms"])
@@ -951,7 +1036,8 @@ class PaperRunner(object):
             "seen": sorted(self.seen.items()), "candles": sorted((list(k), v) for k, v in self.candle_digest.items()),
             "offsets": self.offsets.summary(), "open_cycles": sorted(self.open_cycles),
             "open_funding": sorted(self.open_funding), "coverage": self.coverage,
-            "stats": sorted(self.stats.items()), "clock": self.clock})
+            "stats": sorted(self.stats.items()), "clock": self.clock,
+            **({"source_losses": sorted((list(k), v) for k, v in self.source_losses.items())} if self.source_losses else {})})
 
     def operational_digest(self):
         """The operational state (what the runner will accept next), apart from the financial one."""
@@ -965,7 +1051,7 @@ class PaperRunner(object):
         for record in self.executor.records:
             reasons = record.get("reasons", ())
             state = record["status"]
-            if state == "rejected" and "runner_interrupted" in reasons:
+            if state == "rejected" and ("runner_interrupted" in reasons or "source_stale" in reasons):
                 state = "cancelled"
             elif state == "rejected" and any(r in ("no_quote_in_window", "no_valid_quote_in_window") for r in reasons):
                 state = "expired"
