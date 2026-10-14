@@ -17,6 +17,12 @@ EVIDENCE_CLASS = "not_forward_evidence"
 EXECUTION_CLASS = "observed_quotes"
 POSITIONS_SCHEMA = "balancita-paper-session-positions.v1"
 INTERVALS_SCHEMA = "balancita-paper-session-intervals.v1"
+# ``verified`` needs evidence that the stop was watched after the entry: ``not_yet_observed`` and ``unobserved`` are not.
+PROTECTED = ("observed", "observed_by_candles")
+# Stages of the B3 chain this module can fill from the runner. ``signal`` is not among them: the runner keeps the
+# ``signal_key`` of a decision but not the strategy output that produced it (that lives in the evaluator, stage 9A).
+INTERVAL_STAGES_PRESENT = ("decision", "order", "trade")
+INTERVAL_STAGES_MISSING = ("signal",)
 
 
 def _tag(extra):
@@ -41,7 +47,10 @@ def verification(runner, report_age_ms, max_age_ms):
 
 def positions(runner, report_age_ms, max_age_ms):
     """B5: the open paper positions of the session. Each one says how well its stop was watched; none is ever called
-    "open at Kraken": they are positions of the simulator over observed quotes. P&L is ``estimated``."""
+    "open at Kraken": they are positions of the simulator over observed quotes. P&L is ``estimated``.
+
+    ``accounting_verified`` is the session-level check (journal chain, audit, fresh report); ``protection_evidence`` is
+    the stop's own evidence; ``verified`` needs both: a stop nobody has watched since the entry is never "verified"."""
     check = verification(runner, report_age_ms, max_age_ms)
     watch = {row["intent_id"]: row for row in protection(runner)}
     rows = []
@@ -57,7 +66,9 @@ def positions(runner, report_age_ms, max_age_ms):
             "coverage": {"quotes_watched": cover.get("quotes_watched"), "last_watched_ms": cover.get("last_watched_ms"),
                          "last_quote_ms": cover.get("last_quote_ms"), "silent_now_ms": cover.get("silent_now_ms"),
                          "gaps": cover.get("gaps", [])},
-            "verified": check["verified"] and cover.get("stop_protection") != "unobserved",
+            "accounting_verified": check["verified"],
+            "protection_evidence": cover.get("stop_protection"),
+            "verified": check["verified"] and cover.get("stop_protection") in PROTECTED,
             "classes": {"position": "simulated", "price": "observed", "pnl": "estimated"}})
     return _tag({"schema": POSITIONS_SCHEMA, "clock_ms": runner.clock, "verification": check,
                  "unrealized_usd": str(runner.portfolio.unrealized_usd()), "unrealized_class": "estimated",
@@ -65,7 +76,8 @@ def positions(runner, report_age_ms, max_age_ms):
 
 
 def intervals(runner, from_ms=None, to_ms=None, product=None):
-    """B3: signal -> decision -> order -> trade per (product, bucket), from the runner's own decision rows. A stage that
+    """B3, partial: decision -> order -> trade per (product, bucket), from the runner's own decision rows. The ``signal``
+    stage is NOT filled by this module (``contract.complete`` is false and says which stage is missing); a stage that
     does not exist is ``none``, never inferred. Qwen decisions and C verdicts come from their own databases (B3 original)."""
     rows = []
     for row in decisions(runner):
@@ -80,9 +92,12 @@ def intervals(runner, from_ms=None, to_ms=None, product=None):
             "key": row.get("signal_key"), "product_id": row["product_id"], "strategy_id": row["strategy_id"],
             "decided_ms": row.get("decided_ms"), "side": row["side"],
             "stages": {
+                "signal": {"state": "not_available", "signal_key": row.get("signal_key")},
                 "decision": {"state": "ok", "decided_ms": row.get("decided_ms")},
                 "order": {"state": row["state"], "reasons": row["reasons"], "entry_ms": row.get("entry_ms")},
                 "trade": {"state": row["result"] if row["result"] in ("closed", "open") else "none",
                           "trade_id": row.get("trade_id"), "exit_reason": row.get("exit_reason")}}})
     return _tag({"schema": INTERVALS_SCHEMA, "clock_ms": runner.clock, "from_ms": from_ms, "to_ms": to_ms,
-                 "product": product, "intervals": rows})
+                 "product": product, "contract": {"complete": False, "stages_present": list(INTERVAL_STAGES_PRESENT),
+                                                  "stages_missing": list(INTERVAL_STAGES_MISSING)},
+                 "intervals": rows})

@@ -12,9 +12,15 @@ Rules (docs/etapa-10-integracion-paper-tiempo-real.md, section 3):
   for candles), never the wall clock;
 * quotes carry ``source_offset = None``: ticker ``seq`` is a timestamp (REST) or only monotonic (WS), not a contiguous
   counter, so it cannot drive the ``OffsetLedger``; candles use ``bucket // 60 s``, which is contiguous by construction;
-* the first revision of a candle (lowest ``known_at``) is the one emitted; later revisions are counted, never applied;
-* events are released in order up to a watermark (``latest source time seen - hold_ms``). A row older than what was
-  already released is counted as ``late_source_rows`` and not emitted (the runner would reject it as out of order);
+* the first revision of a candle is the one with the lowest ``(known_at, revision_hash)`` among the revisions read before
+  its release, whatever their ``rowid`` order; later revisions are counted, never applied. An earlier revision that shows
+  up after a later one was already emitted is counted (``candle_earlier_revision_after_emit``), never swapped in;
+* a ticker row that cannot be parsed is not emitted but is kept as evidence (``rejected_sample``: rowid, event id,
+  product, times, content hash and a stable reason code); the count is exact, the sample is capped;
+* events are released in order up to a watermark (``latest source time seen - hold_ms``). The watermark is also held
+  back while a 1-minute candle is overdue (``candle_lag_ms``): a candle written late must not be left behind by quotes
+  that were released first. A row older than what was already released is counted as ``late_source_rows`` and not
+  emitted (the runner would reject it as out of order); it stays counted, with a sample, as evidence;
 * ``clock`` ticks are emitted only while there is evidence that the capture was alive around the tick (a ticker row
   within ``dead_after_ms`` before it). A silent product with other products still ticking is a quiet market for that
   product; no stream advancing at all is a source outage, and the clock does not move through it.
@@ -31,7 +37,9 @@ ONE_MINUTE_MS = 60_000
 DEFAULT_HOLD_MS = 2_000                # hypothesis to test, not an approved value
 DEFAULT_DEAD_AFTER_MS = 45_000         # the capture's own ticker-silence limit
 DEFAULT_CLOCK_EVERY_MS = 5_000
+DEFAULT_CANDLE_LAG_MS = 120_000        # hypothesis: how long an overdue candle holds the watermark back (0 = never)
 LATE_SAMPLE = 20                       # late rows kept as evidence (the count is exact)
+REJECT_SAMPLE = 50                     # unreadable rows kept as evidence (the count is exact)
 
 
 class IngestError(Exception):
@@ -56,7 +64,8 @@ class SourceReader(object):
 
     def tickers(self, after_rowid, limit):
         rows = self.db.execute(
-            "SELECT rowid AS rid, product_id, epoch, seq, event_time, received_at, persisted_at, normalized_json "
+            "SELECT rowid AS rid, event_id, product_id, epoch, seq, event_time, received_at, persisted_at, content_hash, "
+            "normalized_json "
             "FROM paper_futures_market_events WHERE feed='ticker' AND rowid>? ORDER BY rowid LIMIT ?",
             (after_rowid, limit)).fetchall()
         return [dict(r) for r in rows]
@@ -75,12 +84,18 @@ class SourceReader(object):
 
 
 def _quote_event(row):
+    """``(persisted_at, event)`` or ``(None, reason)``: the reason is a stable code, never free text."""
     try:
         data = json.loads(row["normalized_json"])
+    except (ValueError, TypeError):
+        return None, "json_invalid"
+    if not isinstance(data, dict) or "bid" not in data or "ask" not in data:
+        return None, "missing_bid_or_ask"
+    try:
         bid, ask = str(data["bid"]), str(data["ask"])
         Decimal(bid), Decimal(ask)
-    except (ValueError, KeyError, TypeError, InvalidOperation):
-        return None
+    except (InvalidOperation, ValueError):
+        return None, "price_not_decimal"
     payload = {"product_id": row["product_id"], "time_ms": row["event_time"], "received_ms": row["received_at"],
                "bid": bid, "ask": ask}
     return row["persisted_at"], make_event("quote", payload, t_ms=row["persisted_at"], source=SOURCE,
@@ -100,43 +115,52 @@ class Ingestor(object):
     """Reads new rows, holds them until they are safely ordered, and returns the runner events that are ready."""
 
     def __init__(self, reader, *, hold_ms=DEFAULT_HOLD_MS, dead_after_ms=DEFAULT_DEAD_AFTER_MS,
-                 clock_every_ms=DEFAULT_CLOCK_EVERY_MS, batch=5_000):
+                 clock_every_ms=DEFAULT_CLOCK_EVERY_MS, candle_lag_ms=DEFAULT_CANDLE_LAG_MS, batch=5_000):
         self.reader, self.hold_ms, self.dead_after_ms = reader, hold_ms, dead_after_ms
-        self.clock_every_ms, self.batch = clock_every_ms, batch
+        self.clock_every_ms, self.batch, self.candle_lag_ms = clock_every_ms, batch, candle_lag_ms
         self.cursor = {"ticker": 0, "candle": 0}
-        self.pending = []                 # (t_ms, order, event) waiting for the watermark
+        self.pending = []                 # (t_ms, order, event, candle key or None) waiting for the watermark
+        self.max_ticker_ms = None         # latest ticker time read
+        self.last_candle_bucket = {}      # product -> latest candle bucket read (drives the overdue-candle hold)
         self.order = 0
         self.max_seen_ms = None           # latest source time of any row read
         self.released_ms = None           # everything at or below this was released
         self.last_ticker_ms = {}          # product -> latest ticker time read
         self.last_any_ticker_ms = None
         self.clock_cursor = None          # last clock tick emitted
-        self.candle_first = {}            # (product, bucket) -> digest of the first revision emitted
+        self.candle_first = {}            # (product, bucket) -> {digest, known} of the revision emitted
+        self.candle_pending = {}          # (product, bucket) -> {digest, known} of the revision waiting for release
         self.stats = {"emitted": 0, "late_source_rows": 0, "candle_revisions_seen": 0, "candle_revisions_differing": 0,
-                      "unreadable_rows": 0}
+                      "unreadable_rows": 0, "candle_earlier_revision_after_emit": 0, "watermark_held_for_candle": 0}
         self.late = []
+        self.rejected = []                # unreadable ticker rows kept as evidence
         self.alive_until = None           # last quote time + dead_after_ms: clock ticks only up to here
         self.outages = []                 # intervals where no ticker of any product arrived for dead_after_ms
 
     # ---- reading ---------------------------------------------------------------------------------------------
-    def _queue(self, t_ms, event):
+    def _queue(self, t_ms, event, key=None):
         if self.released_ms is not None and t_ms <= self.released_ms:
             self.stats["late_source_rows"] += 1
             if len(self.late) < LATE_SAMPLE:
                 self.late.append({"stream": event["stream"], "t_ms": t_ms, "released_ms": self.released_ms})
-            return
-        self.pending.append((t_ms, self.order, event))
+            return False
+        self.pending.append((t_ms, self.order, event, key))
         self.order += 1
+        return True
 
     def _read(self):
         for row in self.reader.tickers(self.cursor["ticker"], self.batch):
             self.cursor["ticker"] = row["rid"]
-            built = _quote_event(row)
-            if built is None:
+            t_ms, event = _quote_event(row)
+            if t_ms is None:
                 self.stats["unreadable_rows"] += 1
+                if len(self.rejected) < REJECT_SAMPLE:
+                    self.rejected.append({"rowid": row["rid"], "event_id": row["event_id"], "product_id": row["product_id"],
+                                          "persisted_at": row["persisted_at"], "content_hash": row["content_hash"],
+                                          "reason": event})
                 continue
-            t_ms, event = built
             self.max_seen_ms = t_ms if self.max_seen_ms is None else max(self.max_seen_ms, t_ms)
+            self.max_ticker_ms = t_ms if self.max_ticker_ms is None else max(self.max_ticker_ms, t_ms)
             if self.last_any_ticker_ms is not None and t_ms - self.last_any_ticker_ms > self.dead_after_ms:
                 self.outages.append({"from_ms": self.last_any_ticker_ms, "to_ms": t_ms})
             self.last_ticker_ms[row["product_id"]] = max(t_ms, self.last_ticker_ms.get(row["product_id"], t_ms))
@@ -144,17 +168,40 @@ class Ingestor(object):
             self._queue(t_ms, event)
         for row in self.reader.candles(self.cursor["candle"], self.batch):
             self.cursor["candle"] = row["rid"]
-            key = (row["product_id"], row["bucket_start"])
-            digest = (row["open_price"], row["high_price"], row["low_price"], row["close_price"])
-            if key in self.candle_first:
-                self.stats["candle_revisions_seen"] += 1
-                if self.candle_first[key] != digest:
-                    self.stats["candle_revisions_differing"] += 1
-                continue
-            self.candle_first[key] = digest
-            t_ms, event = _candle_event(row)
-            self.max_seen_ms = t_ms if self.max_seen_ms is None else max(self.max_seen_ms, t_ms)
-            self._queue(t_ms, event)
+            self._read_candle(row)
+
+    def _read_candle(self, row):
+        key = (row["product_id"], row["bucket_start"])
+        known = (row["known_at"], row["revision_hash"])
+        digest = (row["open_price"], row["high_price"], row["low_price"], row["close_price"])
+        self.last_candle_bucket[row["product_id"]] = max(row["bucket_start"],
+                                                         self.last_candle_bucket.get(row["product_id"], row["bucket_start"]))
+        if key in self.candle_first:                              # a revision was already emitted
+            self.stats["candle_revisions_seen"] += 1
+            first = self.candle_first[key]
+            if first["digest"] != digest:
+                self.stats["candle_revisions_differing"] += 1
+            if known < first["known"]:
+                self.stats["candle_earlier_revision_after_emit"] += 1
+            return
+        waiting = [p for p in self.pending if p[3] == key]
+        if waiting:                                               # same release batch: the lowest (known_at, hash) wins
+            held = waiting[0]
+            self.stats["candle_revisions_seen"] += 1
+            if self.candle_pending[key]["digest"] != digest:
+                self.stats["candle_revisions_differing"] += 1
+            if known < self.candle_pending[key]["known"]:
+                t_ms, event = _candle_event(row)
+                self.pending.remove(held)
+                if self._queue(t_ms, event, key):
+                    self.candle_pending[key] = {"digest": digest, "known": known}
+                else:                                             # too late to replace: keep the revision already held
+                    self.pending.append(held)
+            return
+        t_ms, event = _candle_event(row)
+        self.max_seen_ms = t_ms if self.max_seen_ms is None else max(self.max_seen_ms, t_ms)
+        if self._queue(t_ms, event, key):
+            self.candle_pending[key] = {"digest": digest, "known": known}
 
     # ---- release ---------------------------------------------------------------------------------------------
     def poll(self, observed_now_ms):
@@ -163,21 +210,40 @@ class Ingestor(object):
         self._read()
         out = []
         if self.max_seen_ms is not None:
-            watermark = self.max_seen_ms - self.hold_ms
+            watermark = self._watermark()
             ready = sorted((p for p in self.pending if p[0] <= watermark), key=lambda p: (p[0], p[1]))
             self.pending = [p for p in self.pending if p[0] > watermark]
+            for _, _, _, key in ready:
+                if key is not None:
+                    self.candle_first[key] = self.candle_pending.pop(key)
             out = self._with_clock(ready, watermark)
             if watermark is not None and (self.released_ms is None or watermark > self.released_ms):
                 self.released_ms = watermark
         self.stats["emitted"] += len(out)
         return {"events": out, "state": self.state(observed_now_ms)}
 
+    def _watermark(self):
+        """``latest source time seen - hold_ms``, held back while a 1-minute candle is overdue. A product's next candle is
+        due when its bucket closes (``bucket + 2 min`` for the one after the latest read); until it shows up, or until
+        tickers are ``candle_lag_ms`` past that point, quotes are not released beyond it, so a candle written late is not
+        left behind (and dropped as late) by quotes that were released first. Never moves the watermark backwards."""
+        watermark = self.max_seen_ms - self.hold_ms
+        if self.candle_lag_ms > 0 and self.max_ticker_ms is not None:
+            due = [bucket + 2 * ONE_MINUTE_MS - 1 for bucket in self.last_candle_bucket.values()
+                   if self.max_ticker_ms < bucket + 2 * ONE_MINUTE_MS + self.candle_lag_ms]
+            if due and min(due) < watermark:
+                self.stats["watermark_held_for_candle"] += 1
+                watermark = min(due)
+        if self.released_ms is not None:
+            watermark = max(watermark, self.released_ms)
+        return watermark
+
     def _with_clock(self, ready, watermark):
         """Merges ``clock`` ticks into the ordered events, only where the capture was alive around the tick."""
         out, alive_until = [], self.alive_until
         if self.clock_cursor is None and ready:
             self.clock_cursor = (ready[0][0] // self.clock_every_ms) * self.clock_every_ms
-        for t_ms, _, event in ready:
+        for t_ms, _, event, _ in ready:
             self._ticks(out, t_ms, alive_until)
             out.append(event)
             if event["kind"] == "quote":
@@ -207,7 +273,8 @@ class Ingestor(object):
             silent = (not stale) and self.last_any_ticker_ms - last > self.dead_after_ms
             streams[product] = {"state": "silent" if silent else "alive", "last_source_ms": last}
         return {"source": "stale" if stale else "live", "watermark_ms": self.released_ms,
-                "pending": len(self.pending), "outages": list(self.outages), "streams": streams, "stats": dict(self.stats), "late_sample": list(self.late)}
+                "pending": len(self.pending), "outages": list(self.outages), "streams": streams, "stats": dict(self.stats),
+                "late_sample": list(self.late), "rejected_sample": list(self.rejected)}
 
 
 def classify_expiry(order, outages):

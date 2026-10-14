@@ -221,6 +221,98 @@ class TestOrderingAndLateRows(Base):
         self.assertEqual(out["state"]["pending"], 5)
 
 
+class TestWatermarkAndCandles(Base):
+    """Review fixes: a late-written candle is not lost, revision choice does not depend on ``rowid``, unreadable rows
+    leave evidence."""
+
+    def quotes(self, upto_s):
+        for i in range(0, upto_s):
+            self.src.ticker(BTC, CYCLE + i * SEC, "100000")
+
+    def late_candle_run(self, **kw):
+        self.src.candle(BTC, CYCLE - MIN, 1, 2, 1, 2)                       # on time: its stream is active
+        self.quotes(90)
+        self.src.commit()
+        reader = SourceReader(self.path)
+        ing = Ingestor(reader, hold_ms=2 * SEC, **kw)
+        first = ing.poll(CYCLE + 90 * SEC)["events"]
+        self.src.candle(BTC, CYCLE, 10, 12, 9, 11, known_at=CYCLE + MIN + 5 * SEC)   # written after quotes to +90 s
+        self.src.commit()
+        second = ing.poll(CYCLE + 91 * SEC)
+        reader.close()
+        return first, second
+
+    def test_a_candle_written_late_is_not_left_behind_by_released_quotes(self):
+        first, second = self.late_candle_run()
+        self.assertLess(max(e["t_ms"] for e in first), CYCLE + MIN)             # quotes held back at the overdue candle
+        candles = [e for e in first + second["events"] if e["kind"] == "candle" and e["payload"]["bucket_ms"] == CYCLE]
+        self.assertEqual(len(candles), 1)
+        self.assertEqual(second["state"]["stats"]["late_source_rows"], 0)
+        self.assertGreater(second["state"]["stats"]["watermark_held_for_candle"], 0)
+        times = [e["t_ms"] for e in first + second["events"]]
+        self.assertEqual(times, sorted(times))
+
+    def test_without_the_candle_hold_the_same_candle_is_lost_as_late(self):
+        first, second = self.late_candle_run(candle_lag_ms=0)
+        candles = [e for e in first + second["events"] if e["kind"] == "candle" and e["payload"]["bucket_ms"] == CYCLE]
+        self.assertEqual(candles, [])
+        self.assertEqual(second["state"]["stats"]["late_source_rows"], 1)
+
+    def test_a_candle_that_never_comes_does_not_stall_quotes_for_ever(self):
+        self.src.candle(BTC, CYCLE - MIN, 1, 2, 1, 2)
+        self.quotes(400)
+        self.src.commit()
+        events, state, _ = ingest_all(self.path, CYCLE + 400 * SEC)
+        self.assertGreaterEqual(max(e["t_ms"] for e in events if e["kind"] == "quote"), CYCLE + 390 * SEC)
+        self.assertEqual(state["stats"]["late_source_rows"], 0)
+
+    def test_first_revision_is_the_lowest_known_at_whatever_the_rowid_order(self):
+        self.src.candle(BTC, CYCLE, 10, 13, 9, 11, known_at=CYCLE + 6 * MIN, revision="r3")      # rowid 1, known last
+        self.src.candle(BTC, CYCLE, 10, 12, 9, 11, known_at=CYCLE + 2 * MIN, revision="r1")      # rowid 2, known first
+        self.src.candle(BTC, CYCLE, 10, 14, 9, 11, known_at=CYCLE + 4 * MIN, revision="r2")
+        self.src.ticker(BTC, CYCLE + 10 * MIN, "100000")
+        self.src.commit()
+        events, state, _ = ingest_all(self.path, CYCLE + 10 * MIN)
+        candles = [e for e in events if e["kind"] == "candle"]
+        self.assertEqual([c["payload"]["candle"]["high"] for c in candles], ["12"])
+        self.assertEqual(candles[0]["t_ms"], CYCLE + 2 * MIN)
+        self.assertEqual(state["stats"]["candle_revisions_seen"], 2)
+        self.assertEqual(state["stats"]["candle_revisions_differing"], 2)
+
+    def test_an_earlier_revision_after_a_later_one_was_emitted_is_counted_not_swapped(self):
+        self.src.candle(BTC, CYCLE, 10, 13, 9, 11, known_at=CYCLE + 2 * MIN, revision="r2")
+        self.src.ticker(BTC, CYCLE + 10 * MIN, "100000")
+        self.src.commit()
+        reader = SourceReader(self.path)
+        ing = Ingestor(reader)
+        first = ing.poll(CYCLE + 10 * MIN)["events"]
+        self.src.candle(BTC, CYCLE, 10, 12, 9, 11, known_at=CYCLE + MIN + 5 * SEC, revision="r1")
+        self.src.commit()
+        second = ing.poll(CYCLE + 10 * MIN)
+        reader.close()
+        self.assertEqual([e["payload"]["candle"]["high"] for e in first if e["kind"] == "candle"], ["13"])
+        self.assertEqual([e for e in second["events"] if e["kind"] == "candle"], [])
+        self.assertEqual(second["state"]["stats"]["candle_earlier_revision_after_emit"], 1)
+
+    def test_unreadable_rows_are_not_emitted_but_keep_identity_and_reason(self):
+        self.src.ticker(BTC, CYCLE, "100000")
+        for n, (body, reason) in enumerate([("not json", "json_invalid"), ('{"bid": "1"}', "missing_bid_or_ask"),
+                                            ('{"bid": "x", "ask": "2"}', "price_not_decimal")]):
+            t = CYCLE + (n + 1) * SEC
+            self.src.db.execute("INSERT INTO paper_futures_market_events VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                                ("bad{}".format(n), "ticker", ETH, REST_EPOCH, t, t, t, t, None, "{}", body, "hash{}".format(n)))
+        self.src.ticker(BTC, CYCLE + 10 * SEC, "100000")
+        self.src.commit()
+        events, state, _ = ingest_all(self.path, CYCLE + 10 * SEC)
+        self.assertEqual([e["payload"]["product_id"] for e in events if e["kind"] == "quote"], [BTC])
+        self.assertEqual(state["stats"]["unreadable_rows"], 3)
+        sample = state["rejected_sample"]
+        self.assertEqual([r["reason"] for r in sample], ["json_invalid", "missing_bid_or_ask", "price_not_decimal"])
+        self.assertEqual([(r["event_id"], r["content_hash"], r["product_id"]) for r in sample],
+                         [("bad{}".format(n), "hash{}".format(n), ETH) for n in range(3)])
+        self.assertTrue(all(r["rowid"] and r["persisted_at"] for r in sample))
+
+
 class TestSourceOutageVersusQuietMarket(Base):
     """C5: a capture outage and a product with no quotes are different things and are not confused."""
 
@@ -433,6 +525,23 @@ class TestPublishedContracts(TestRunnerEquivalence):
         self.assertEqual(stale["verification"]["reasons"], ["report_stale"])
         self.assertFalse(PUB.positions(runner, None, 15_000)["positions"][0]["verified"])
 
+    def test_a_stop_nobody_has_watched_since_the_entry_is_not_verified(self):
+        events = self.build()
+        runner = self.runner("fresh")
+        for event in events:
+            runner.run([event])
+            if runner.portfolio.positions:
+                break
+        block = PUB.positions(runner, report_age_ms=1_000, max_age_ms=15_000)
+        row = block["positions"][0]
+        self.assertEqual(row["protection_evidence"], "not_yet_observed")
+        self.assertTrue(row["accounting_verified"])
+        self.assertFalse(row["verified"])
+        runner.run([e for e in events if e["t_ms"] > runner.clock][:20])
+        later = PUB.positions(runner, 1_000, 15_000)["positions"][0]
+        self.assertEqual(later["protection_evidence"], "observed")
+        self.assertTrue(later["verified"])
+
     def test_intervals_block_follows_signal_to_trade_and_filters(self):
         events = self.build()
         runner = self.runner("int")
@@ -440,6 +549,9 @@ class TestPublishedContracts(TestRunnerEquivalence):
         block = PUB.intervals(runner)
         self.assertEqual(len(block["intervals"]), 1)
         row = block["intervals"][0]
+        self.assertEqual(block["contract"], {"complete": False, "stages_present": ["decision", "order", "trade"],
+                                             "stages_missing": ["signal"]})
+        self.assertEqual(row["stages"]["signal"]["state"], "not_available")
         self.assertEqual(row["stages"]["order"]["state"], "opened")
         self.assertIn(row["stages"]["trade"]["state"], ("closed", "open"))
         self.assertEqual(PUB.intervals(runner, product=ETH)["intervals"], [])
