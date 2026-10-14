@@ -94,7 +94,7 @@ Opciones para Fran:
 - **(a) Pedido a 9A** (único dueño de `paper_runner.py`): parámetro opcional que deje fuera las órdenes con `deadline_ms < gap_to_ms`, aplicable en los dos caminos (abierto y cierre de #165), más una forma determinista de vencerlas (por ejemplo `_expire` del producto en `t_ms`) sin inventar eventos. Cambia #168 y exige revisión propia.
 - **(b) Aceptar** que esas órdenes se cancelen por `source_stale`, como ya hace #165 hoy, y declararlo en la documentación y en el registro (`trigger` y `deadline_before_gap_to: true` en `source_stale_detected`).
 
-Hasta que Fran decida, no se implementa ninguna. Por defecto de la implementación: (b), con el registro explícito.
+**Decisión de Fran (16:07Z): opción (a).** Se pide a 9A, único dueño de `paper_runner.py`, un parámetro opcional de `cancel_for_source_loss` que deje fuera las órdenes con `deadline_ms < gap_to_ms`, aplicable en los dos caminos (abierto y cierre de #165), más una forma determinista de vencerlas (por ejemplo `_expire` del producto en `t_ms`) sin inventar eventos. La sesión de esta implementación no copia ni reimplementa nada del runner: usa el parámetro cuando 9A lo entregue y esa parte queda bloqueada hasta entonces. El ingestor (silencios abiertos durables, registros y recuperación) no depende de 9A.
 
 ## 7. Qué se compara en las pruebas
 
@@ -133,7 +133,7 @@ Cada una compara corrida continua y recuperada (equivalencia financiera donde se
 - F. Evento de mercado retenido con `t_ms` anterior al avance de observación: se entrega antes de declarar; si es del mismo producto el silencio desaparece y no hay cancelación; el reloj del journal no pasa por delante.
 - G. Fila tardía posterior a una cancelación del camino (b) (`persisted_at <= gap_to_ms`): no entra al runner (`released_ms` adelantado en la misma operación, y recuperado de `runner.source_losses` tras una muerte entre cancelación y checkpoint), queda `silence_contradicted`.
 - K. Misma cancelación, distinto sondeo y caídas: el digest financiero y el `t_ms` de la entrada `source_loss` son idénticos en corrida continua y recuperada (D-17-13).
-- L. Orden con `deadline_ms < gap_to_ms` y sin eventos intermedios: queda fijado el resultado de la opción elegida en §6.1: con (b) se cancela por `source_stale` con `deadline_before_gap_to: true`, igual en el camino abierto y en el de cierre; con (a) vence por `no_quote_in_window`. Se prueba que ambos caminos dan lo mismo.
+- L. Orden con `deadline_ms < gap_to_ms` y sin eventos intermedios: queda fijado el resultado de la opción elegida en §6.1: con (a), elegida, vence por `no_quote_in_window` en ambos caminos y se prueba que dan lo mismo.
 - O. Dos productos cuyo `gap_to_ms` cruza el mismo evento: las declaraciones salen en orden `(gap_to_ms, product_id)`; sin `source_loss_in_the_past`, incluido el caso en que uno de ellos cierra por cotización de #165 en el mismo paso (D-17-17).
 - M. Muerte entre `cancel_for_source_loss` y el checkpoint del ingestor, con una fila real de `t <= gap_to_ms` en la fuente (D-17-14 iii).
 - N. Vela atrasada de otro producto con `t <= gap_to_ms`: se entrega, no se descarta (D-17-14 i).
