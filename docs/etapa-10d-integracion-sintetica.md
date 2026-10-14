@@ -8,7 +8,7 @@ Pila: esta rama parte de la rama de #153 (9A, 977e542) y contiene las ramas de #
 
 - `python/balancita_engine/paper_live_integration.py`: la sesión (`LiveSession`), el diario de auditoría y los puntos de falla.
 - `python/balancita_engine/paper_live_evaluator.py`: un único gancho de pruebas (`self.fault`) en `feed_candle`, sin efecto si es `None`.
-- `python/tests/live_world.py` y `python/tests/test_paper_live_integration.py`: mundo sintético y 35 pruebas.
+- `python/tests/live_world.py` y `python/tests/test_paper_live_integration.py`: mundo sintético y 41 pruebas.
 
 ## 1. Camino de eventos
 
@@ -88,6 +88,17 @@ Tras la recuperación se exige: mismas señales, órdenes, fills, operaciones, r
 duplicada; ninguna obligación de fondeo perdida (muerte justo antes del evento de fondeo lo aplica una vez). También: muerte con
 orden pendiente sin tiempo caído deja la orden, y con tiempo caído la cancela y lo dice (`runner_interrupted`).
 
+## 6 bis. Reloj a su cadencia normal y terminación real del proceso
+
+Pedido de Fran (11:50Z). Las pruebas de las secciones 3 a 6 desactivan los eventos `clock` para poder compararse con la
+referencia independiente, que no los tiene. Se agregan dos clases que usan los `clock` del ingestor a su cadencia normal (cada
+5 s de tiempo de la fuente, más de 10.000 eventos en el día sintético):
+
+- `TestClockAtItsNormalCadence`: los `clock` llegan al runner a la cadencia normal; una segunda corrida que parte de una recuperación llega al mismo estado paso a paso; las nueve fronteras de `POINTS` en la entrada dan el mismo resultado que la corrida continua; una muerte entre dos `clock` ni repite ni salta un tick.
+- `TestRealProcessTermination`: el proceso hijo `python/tests/live_kill_worker.py` recupera el directorio, arma `os.kill(os.getpid(), SIGKILL)` en una frontera y da un paso. El padre verifica que terminó por SIGKILL (si la frontera no se cruzó, la prueba falla), recupera el directorio desde disco en otro proceso y compara cada paso posterior contra la corrida continua. Cubre las nueve fronteras y la muerte en el séptimo ciclo de un paso con varias velas.
+
+Limitación: el padre y el hijo comparten sistema de archivos y caché; no se simula pérdida de datos no sincronizados.
+
 ## 7. Evidencia de errores
 
 La evidencia se escribe en `audit.jsonl` antes del checkpoint, con identificador derivado del contenido, por lo que una muerte
@@ -122,7 +133,7 @@ PaperRunner.cancel_for_source_loss(product_id: str, gap_from_ms: int, gap_to_ms:
 Mundo sintético de un día de decisiones: corrida continua 41 s, preparación completa de las pruebas 73 s, crecimiento máximo de
 memoria ~175 MB, 282 pasos, 13.308 eventos del runner, 14.064 entradas del diario del runner, 8.405 del log del evaluador,
 437 del diario de auditoría. Memoria del evaluador al final: 288 ciclos, 288 banderas, 0 cuadros pendientes, 2.880 velas vistas.
-La suite de integración tarda ~290 s, por lo que el trabajo de Python de CI se alarga.
+La suite de integración tarda ~290 s sin reloj y otros ~250 s con reloj y terminación real (dos mundos sintéticos), por lo que el trabajo de Python de CI se alarga.
 
 ## 10. Riesgos sin resolver
 
@@ -133,8 +144,8 @@ La suite de integración tarda ~290 s, por lo que el trabajo de Python de CI se 
 5. `last_quote` por producto se acota en memoria, pero el calentamiento histórico real necesitaría autorización para leer datos.
 6. El agregado de 5 minutos del evaluador no es la barra oficial de Kraken; la paridad con velas reales no está probada.
 7. La ejecución con cotizaciones observadas es simulada; no hay bid/ask histórico.
-8. Duración de la suite (~5 min) y 175 MB de pico en CI.
-9. Las pruebas de corte son inyecciones en el mismo proceso, no `kill -9` reales; el fsync del sistema de archivos real no se prueba.
+8. Duración de la suite (~9 min en local) y 175 MB de pico en CI.
+9. Las pruebas de corte con `FaultInjected` son inyecciones en el mismo proceso. La terminación real (SIGKILL, ver 6 bis) es de un proceso hijo en el mismo equipo y sistema de archivos; un corte de energía con pérdida de la caché del sistema de archivos no se prueba.
 
 ### Residuos BAJOS de la revisión de D (declarados, no resueltos en esta PR)
 

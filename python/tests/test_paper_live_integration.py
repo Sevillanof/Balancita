@@ -11,6 +11,9 @@ import json
 import os
 import resource
 import shutil
+import signal
+import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -65,14 +68,14 @@ def journal_clock(directory):
     return max(e["t_ms"] for e in journal.entries)
 
 
-def new_session(world, directory, strategies):
+def new_session(world, directory, strategies, ingest_kw=INGEST_KW):
     return LI.LiveSession.create(directory, world.path, strategies, (BTC,), runner_config(), decide_from_ms=FIRST_DECISION,
-                                 decide_until_ms=LAST_DECISION, ingest_kw=INGEST_KW)
+                                 decide_until_ms=LAST_DECISION, ingest_kw=ingest_kw)
 
 
-def recover_session(world, directory, strategies, recovery_ms, **kw):
+def recover_session(world, directory, strategies, recovery_ms, ingest_kw=INGEST_KW, **kw):
     return LI.LiveSession.recover(directory, world.path, strategies, (BTC,), runner_config(), recovery_ms,
-                                  decide_from_ms=FIRST_DECISION, decide_until_ms=LAST_DECISION, ingest_kw=INGEST_KW, **kw)
+                                  decide_from_ms=FIRST_DECISION, decide_until_ms=LAST_DECISION, ingest_kw=ingest_kw, **kw)
 
 
 def record(session, now):
@@ -95,14 +98,16 @@ def abandon(session):
 
 
 def tearDownModule():
-    shutil.rmtree(Circuit.cache.get("dir", ""), True)
-    Circuit.cache.clear()
+    for cache in (Circuit.cache, ClockCircuit.cache):
+        shutil.rmtree(cache.get("dir", ""), True)
+        cache.clear()
 
 
 class Circuit(unittest.TestCase):
     """One continuous reference run, a second run from the warm-up snapshot (with snapshots before each instant), shared."""
 
     cache = {}
+    ingest_kw = INGEST_KW
 
     @classmethod
     def setUpClass(cls):
@@ -116,7 +121,7 @@ class Circuit(unittest.TestCase):
         world = World(root)
         cache["world"] = world
         world.release_until(LOAD_START)
-        session = new_session(world, os.path.join(root, "a"), cache["strategies"])
+        session = new_session(world, os.path.join(root, "a"), cache["strategies"], cls.ingest_kw)
         timeline, prefix = [], None
         for index, now in enumerate(TIMES):
             world.release_until(now)
@@ -136,7 +141,7 @@ class Circuit(unittest.TestCase):
         os.makedirs(fork_dir)
         world_b = world.fork(fork_dir, prefix["world"])
         shutil.copytree(prefix["session"], os.path.join(root, "b"))
-        session_b = recover_session(world_b, os.path.join(root, "b"), cache["strategies"], journal_clock(os.path.join(root, "b")))
+        session_b = recover_session(world_b, os.path.join(root, "b"), cache["strategies"], journal_clock(os.path.join(root, "b")), cls.ingest_kw)
         wanted = {}                                      # snapshot one step before each instant, so the step itself can be killed
         for name, i in instants.items():
             wanted.setdefault(max(i - 1, PREFIX_INDEX + 1), []).append(name)
@@ -180,7 +185,7 @@ class Circuit(unittest.TestCase):
         world = self.cache["world"].fork(root, snap["world"])
         directory = os.path.join(root, "s")
         shutil.copytree(snap["session"], directory)
-        session = recover_session(world, directory, self.strategies, journal_clock(directory))
+        session = recover_session(world, directory, self.strategies, journal_clock(directory), self.ingest_kw)
         counter, fired, records = {"n": 0}, {"done": False}, []
 
         def arm(session):
@@ -202,7 +207,7 @@ class Circuit(unittest.TestCase):
                 session.step(now)
             except LI.FaultInjected:
                 abandon(session)
-                session = recover_session(world, directory, self.strategies, journal_clock(directory) + downtime)
+                session = recover_session(world, directory, self.strategies, journal_clock(directory) + downtime, self.ingest_kw)
                 arm(session)
                 session.step(now)
             records.append(record(session, now))
@@ -385,7 +390,7 @@ class TestFaultsAtEveryBoundary(Circuit):
         world = self.cache["world"].fork(root, snap["world"])
         directory = os.path.join(root, "s")
         shutil.copytree(snap["session"], directory)
-        session = recover_session(world, directory, self.strategies, journal_clock(directory))
+        session = recover_session(world, directory, self.strategies, journal_clock(directory), self.ingest_kw)
         deaths = iter(("after_evaluation", "checkpoint_tmp_written", None))
         point = next(deaths)
 
@@ -407,7 +412,7 @@ class TestFaultsAtEveryBoundary(Circuit):
                     break
                 except LI.FaultInjected:
                     abandon(session)
-                    session = recover_session(world, directory, self.strategies, journal_clock(directory))
+                    session = recover_session(world, directory, self.strategies, journal_clock(directory), self.ingest_kw)
                     point = next(deaths, None)
                     arm(session, point)
             self.assertEqual(record(session, now), self.timeline[index])
@@ -422,6 +427,82 @@ class TestFaultsAtEveryBoundary(Circuit):
 
 
 # ------------------------------------------------------------------------------------------------ 3. one session, three journals
+class ClockCircuit(Circuit):
+    """The same circuit with the ingestor's clock events at their normal cadence (every 5 s of source time), which the other
+    classes switch off to compare with an independent reference that has none."""
+
+    cache = {}
+    ingest_kw = {}
+
+    def kill_scenario(self, point, instant="open", *, occurrence=1, steps_after=4):
+        """A real process is killed with SIGKILL at ``point`` during the step of ``instant``; this process then recovers the
+        directory and keeps stepping. Every step is compared with the continuous run."""
+        snap = self.cache["snaps"][instant]
+        root = self.scratch()
+        world = self.cache["world"].fork(root, snap["world"])
+        directory = os.path.join(root, "s")
+        shutil.copytree(snap["session"], directory)
+        index = snap["index"]
+        world.release_until(TIMES[index])
+        env = dict(os.environ, PYTHONPATH=os.pathsep.join((os.path.dirname(os.path.dirname(os.path.abspath(LI.__file__))),
+                                                           os.path.dirname(os.path.abspath(__file__)))))
+        done = subprocess.run([sys.executable, "-W", "ignore", os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                                                           "live_kill_worker.py"),
+                               directory, world.path, str(journal_clock(directory)), point, str(occurrence), str(index),
+                               "clock" if self.ingest_kw == {} else "plain"],
+                              env=env, capture_output=True, text=True, timeout=600)
+        self.assertEqual(done.returncode, -signal.SIGKILL, "the boundary {} was not crossed\n{}".format(point, done.stderr[-2000:]))
+        session = recover_session(world, directory, self.strategies, journal_clock(directory), self.ingest_kw)
+        self.addCleanup(abandon, session)
+        for step in range(index, min(index + 1 + steps_after, len(TIMES))):
+            now = TIMES[step]
+            world.release_until(now)
+            session.step(now)
+            self.assertEqual(record(session, now), self.timeline[step], "step {} differs from the continuous run".format(step))
+        self.assertEqual(session.runner.integrity()["open_funding"], [])
+        self.assertEqual(session.runner.integrity()["open_cycles"], [])
+        return session
+
+
+class TestClockAtItsNormalCadence(ClockCircuit):
+    def test_the_clock_events_reach_the_runner_at_the_normal_cadence(self):
+        a = self.cache["a"]
+        self.assertGreater(a.stats["clock_events"], 10_000)                     # a day of 5 s ticks, not a handful
+        self.assertEqual(a.ingestor.clock_every_ms, ING.DEFAULT_CLOCK_EVERY_MS)
+        self.assertEqual(a.runner.integrity()["open_cycles"], [])
+
+    def test_the_continuous_run_with_the_clock_is_deterministic(self):
+        """Run B reached every step through a recovery from a snapshot: same records as the continuous run."""
+        self.assertEqual(self.cache["timeline_b"], self.timeline[PREFIX_INDEX + 1:])
+        self.assertEqual(self.cache["b"].digests(), self.cache["a"].digests())
+
+    def test_every_boundary_at_the_entry_with_the_clock_running(self):
+        for point in LI.POINTS:
+            with self.subTest(point=point):
+                records, session = self.scenario("open", point)
+                self.assertEqual(session.runner.integrity()["open_cycles"], [])
+
+    def test_a_death_between_two_clock_events_neither_repeats_nor_skips_a_tick(self):
+        def clock_event(session, event):
+            return event is not None and event["kind"] == "clock" and len(session.runner.executor.pending) > 0
+        self.scenario("open", "before_handle", predicate=clock_event, occurrence=3, steps_after=6)       # compares every step
+
+
+class TestRealProcessTermination(ClockCircuit):
+    """The same boundaries as the injected faults, but the process really dies (SIGKILL, no unwinding) with the clock at its
+    normal cadence, and a different process recovers from what is on disk."""
+
+    def test_a_killed_process_is_recovered_at_every_boundary(self):
+        for point in LI.POINTS:
+            with self.subTest(point=point):
+                self.kill_scenario(point)
+
+    def test_a_process_killed_in_the_middle_of_a_step_of_candles_is_recovered(self):
+        for point in ("input_logged", "after_evaluation"):
+            with self.subTest(point=point):
+                self.kill_scenario(point, occurrence=7)
+
+
 class TestSessionIdentityAndCheckpoints(Circuit):
     def fork_prefix(self):
         snap = self.cache["prefix"]

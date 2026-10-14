@@ -196,7 +196,7 @@ class LiveSession(object):
         self.cursors = {"fundpct": 0, "accrual": 0}
         self.fault = None
         self.last_quote = {}                          # product -> time of the previous quote this process saw
-        self.stats = {"steps": 0, "events": 0, "duplicates": 0, "rejected_by_runner": 0, "audit_new": 0}
+        self.stats = {"steps": 0, "events": 0, "duplicates": 0, "rejected_by_runner": 0, "audit_new": 0, "clock_events": 0}
         evaluator.fault = lambda point: self._fault(point)
 
     # ---- construction ----------------------------------------------------------------------------------------
@@ -322,6 +322,8 @@ class LiveSession(object):
         self._fault("before_handle", event)
         result = self.runner.handle(event)
         self.stats["events"] += 1
+        if event["kind"] == "clock":
+            self.stats["clock_events"] += 1
         if result["status"] == "duplicate":
             self.stats["duplicates"] += 1
         elif result["status"] != "accepted":
