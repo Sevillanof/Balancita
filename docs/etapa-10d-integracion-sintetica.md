@@ -104,6 +104,19 @@ Política: cancelar las órdenes pendientes cuya continuidad de fuente se perdi�
 - Una pausa de 45 s no es garantía suficiente (prueba incluida).
 - **No se cancela nada**: falta un punto de entrada del runner para cancelar una orden por esta causa. Eso es de 9A y debe pedirse por coordinación.
 
+### Firma propuesta del punto de entrada (para que 9A la evalúe cuando Fran lo apruebe)
+
+No se implementa aquí. Propuesta mínima, sin tocar la lógica financiera:
+
+```python
+PaperRunner.cancel_for_source_loss(product_id: str, gap_from_ms: int, gap_to_ms: int, t_ms: int) -> list[str]
+```
+
+- Cancela solo las órdenes pendientes de `product_id` cuya ventana solapa `[gap_from_ms, gap_to_ms]`, con motivo `source_stale`.
+- Se registra como evento del diario del runner (idempotente por `(product_id, gap_from_ms, gap_to_ms)`), para que la recuperación no cancele dos veces ni deje una orden viva.
+- Devuelve los ids cancelados; la sesión enlaza el registro `source_stale_pending_order` de auditoría con ese evento y pasa a `applied: true`.
+- Misma semántica que `runner_interrupted` en `_begin_recovery`, con otra causa.
+
 ## 9. Mediciones
 
 Mundo sintético de un día de decisiones: corrida continua 41 s, preparación completa de las pruebas 73 s, crecimiento máximo de
