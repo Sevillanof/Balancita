@@ -255,7 +255,7 @@ class Ingestor(object):
                                                          "to_epoch": row["epoch"], "t_ms": t_ms, "rowid": row["rid"]}])[-SILENCE_SAMPLE:]
         self.epochs[key] = row["epoch"]
         last_any = self.last_any_ticker_ms                      # not updated by this row yet
-        closed = self._close_open(product, t_ms, source=last_any is not None and t_ms - last_any > self.product_silence_ms)
+        closed = self._close_open(product, t_ms)
         if last_any is not None and t_ms - last_any > self.product_silence_ms:
             self._silence("source_silence", None, last_any, t_ms, row["rid"], t_ms - last_any > self.dead_after_ms,
                           observed=closed["*"])
@@ -275,18 +275,20 @@ class Ingestor(object):
     def _overlaps_gap(self, since_ms, until_ms):
         return any(a < until_ms and b > since_ms for a, b in self.observation_gaps)
 
-    def _close_open(self, product, t_ms, source):
+    def _close_open(self, product, t_ms):
         """A quote ends the silences it ends. Returns how each was observed (``complete``, ``partial`` or
         ``not_observed`` when no poll saw it open). A quote at or before the bound an open silence already reached
         contradicts it: it is kept as evidence and the earlier record is never rewritten."""
         out = {product: "not_observed", "*": "not_observed"}
-        for key in {product, "*"} if source else {product}:
+        for key in (product, "*"):                           # any quote ends the whole-source silence too
             for table in (self.open_silences, self.open_process):
                 entry = table.pop(key, None)
                 if entry is None:
                     continue
                 if table is self.open_silences:
-                    out[key] = "partial" if entry["partial"] else "complete"
+                    # a silence that crosses a death is partial even when the quote that ends it is read before the first
+                    # observation that records the gap
+                    out[key] = "partial" if entry["partial"] or self.recovered_from_ms is not None else "complete"
                     if t_ms <= entry["observed_until_ms"]:
                         self.contradicted = (self.contradicted + [{"product_id": None if key == "*" else key, "since_ms": entry["since_ms"],
                                                                     "observed_until_ms": entry["observed_until_ms"], "quote_ms": t_ms}])[-SILENCE_SAMPLE:]
@@ -295,8 +297,11 @@ class Ingestor(object):
     def mark_recovered(self):
         """The process died and this ingestor was rebuilt from its checkpoint: the time between the last observation it
         recorded and the next one was not observed. It is told as ``observation_gap``, never as silence."""
-        if self.observed_until_ms is not None:
-            self.recovered_from_ms = self.observed_until_ms
+        seen = self.observed_until_ms if self.observed_until_ms is not None else self.released_ms
+        if seen is not None:                                    # before any exhausted poll, what was read is all that is known
+            self.recovered_from_ms = seen
+        for entry in self.open_silences.values():
+            entry["partial"] = True
 
     def _observe(self, observed_now_ms, clock):
         """Extends the observed bound and the open silences. Only an exhausted poll (nothing left unread in either table)
@@ -331,9 +336,10 @@ class Ingestor(object):
                     silent[product] = self.first_observed_ms
         if last_any is not None and until - last_any > self.dead_after_ms:
             silent["*"] = last_any
-        for key in list(table):
-            if key not in silent:
-                del table[key]
+        if table is self.open_process:                          # evidence only: it is derived again at the next observation
+            for key in list(table):
+                if key not in silent:
+                    del table[key]
         for key, since in sorted(silent.items()):
             entry = table.get(key)
             if entry is None:

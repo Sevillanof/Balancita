@@ -1070,6 +1070,76 @@ class TestOpenSilencesAreDurable(Base):
         loaded = Ingestor.from_checkpoint(SourceReader(self.path), old)
         self.assertEqual((loaded.observed_until_ms, loaded.open_silences, loaded.observation_gaps), (None, {}, []))
 
+    def test_a_silence_that_crosses_a_death_is_partial_even_if_a_row_read_in_the_first_poll_ends_it(self):
+        self.feed(60, 20)
+        reader = SourceReader(self.path)
+        ing = Ingestor(reader)
+        self.poll(ing, 38)
+        saved = json.loads(json.dumps(ing.checkpoint()))
+        reader.close()
+        self.src.ticker(ETH, CYCLE + 70 * SEC, "3500")                                       # written while the process was dead
+        for t in range(65, 91, 5):
+            self.src.ticker(BTC, CYCLE + t * SEC, "100000")
+        self.src.commit()
+        reader = SourceReader(self.path)
+        again = Ingestor.from_checkpoint(reader, saved)
+        again.mark_recovered()
+        self.poll(again, 90)
+        self.poll(again, 120)
+        reader.close()
+        self.assertEqual([x["observed"] for x in again.silences if x["product_id"] == ETH], ["partial"])
+        self.assertEqual(len(again.observation_gaps), 1)
+
+    def test_a_first_poll_that_does_not_exhaust_the_read_still_ends_the_silence_as_partial(self):
+        self.feed(60, 20)
+        reader = SourceReader(self.path)
+        ing = Ingestor(reader)
+        self.poll(ing, 38)
+        saved = json.loads(json.dumps(ing.checkpoint()))
+        reader.close()
+        self.src.ticker(ETH, CYCLE + 70 * SEC, "3500")
+        for t in range(65, 121, 5):
+            self.src.ticker(BTC, CYCLE + t * SEC, "100000")
+        self.src.commit()
+        reader = SourceReader(self.path)
+        again = Ingestor.from_checkpoint(reader, saved, batch=3)
+        again.mark_recovered()
+        self.poll(again, 130)
+        self.assertTrue(again.ticker_more)
+        for _ in range(10):
+            self.poll(again, 130)
+        reader.close()
+        self.assertEqual({x["observed"] for x in again.silences if x["product_id"] == ETH}, {"partial"})
+
+    def test_any_late_row_ends_the_whole_source_silence_and_a_changed_start_is_a_new_silence(self):
+        self.feed(30)
+        reader = SourceReader(self.path)
+        ing = Ingestor(reader)
+        self.poll(ing, 40)
+        self.poll(ing, 100)
+        self.assertEqual(ing.open_silences["*"]["since_ms"], CYCLE + 30 * SEC)
+        self.src.ticker(BTC, CYCLE + 35 * SEC, "100000")                                     # inside the observed stretch, 5 s after the last row
+        self.src.commit()
+        self.poll(ing, 101)
+        reader.close()
+        self.assertIn(None, [c["product_id"] for c in ing.contradicted])
+        self.assertTrue(all(e["since_ms"] != CYCLE + 30 * SEC for e in ing.open_silences.values()))
+
+    def test_a_death_before_the_first_exhausted_poll_still_leaves_an_observation_gap(self):
+        self.feed(60, 20)
+        reader = SourceReader(self.path)
+        ing = Ingestor(reader, batch=4)
+        self.poll(ing, 70)
+        self.assertIsNone(ing.observed_until_ms)
+        released = ing.released_ms
+        self.assertIsNotNone(released)
+        ing, reader = self.reopen(ing, reader)
+        ing.batch = 5_000
+        self.poll(ing, 90)
+        reader.close()
+        self.assertEqual(len(ing.observation_gaps), 1)
+        self.assertEqual(ing.observation_gaps[0][0], released)                              # what was read is all that is known
+
     def test_the_events_the_runner_receives_do_not_change(self):
         self.feed(60, 20)
         plain = ingest_all(self.path, CYCLE + 3_000 * SEC)[0]
