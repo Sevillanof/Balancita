@@ -230,6 +230,16 @@ test('Estrategias opens on the inventory and every interaction answers', async (
   await page.getByRole('tab', { name: 'Inventario de modelos' }).click()
   await expect(rows).toHaveCount(10)
 
+  // The Carry request is served once: entering the Laboratory again from the
+  // tab (not from «Ver contador») must not pull the focus back to Carry.
+  await page.getByRole('tab', { name: 'Laboratorio' }).click()
+  await expect(
+    page.getByRole('region', { name: 'Carry de funding' }),
+  ).toBeVisible()
+  await expect(page.getByTestId('carry-destino')).not.toBeFocused()
+  await page.getByRole('tab', { name: 'Inventario de modelos' }).click()
+  await expect(rows).toHaveCount(10)
+
   mkdirSync(SHOTS, { recursive: true })
   writeFileSync(join(SHOTS, 'solicitudes.json'), JSON.stringify(log, null, 2))
   const inventoryCalls = log.filter((entry) =>
