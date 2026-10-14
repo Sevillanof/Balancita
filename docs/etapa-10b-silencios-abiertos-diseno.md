@@ -1,7 +1,7 @@
 # D-10B-17: silencios abiertos durables (diseño, sin implementación)
 
 Solo diseño. No cambia código, contabilidad, estrategias ni umbrales. No autoriza captura real ni sesión paper.
-Revisión D sobre 95d2a5a: D-17-01 a 04 y LOW 05 a 08 resueltos aquí (sección 9).
+Revisión D sobre 95d2a5a y 7af0a93: D-17-01 a 04, 09, 10 y LOW 05 a 08 resueltos aquí (sección 9).
 
 ## 1. Qué falta hoy
 
@@ -13,17 +13,23 @@ Revisión D sobre 95d2a5a: D-17-01 a 04 y LOW 05 a 08 resueltos aquí (sección 
 ## 2. Principios
 
 1. Una observación es un hecho de la sesión («consulté la fuente hasta T y no había nada más»), no una cotización. No se inventa cotización ni vela.
-2. **Un solo dominio de tiempo: el de la fuente.** El ingestor no tiene reloj de pared (su «ahora» es `observed_now_ms`, lectura del reloj de la fuente). Ningún registro nuevo usa la hora del proceso.
+2. **Dominio de tiempo: el de la fuente.** El ingestor no tiene reloj de pared (su «ahora» es `observed_now_ms`). Única excepción, declarada y marcada `clock: "process"`: la fuente totalmente muda (§3).
 3. El silencio se afirma solo hasta donde se observó. El tramo con el proceso caído es `observation_gap`, nunca silencio ni caída de Kraken.
 4. Ninguna lógica financiera nueva. La cancelación es la de #168 con la regla conservadora de Fran, sin cambios.
 
-## 3. Cuánto se observó (D-17-01)
+## 3. Cuánto se observó (D-17-01, D-17-09, D-17-10)
 
-`observed_until_ms = observed_now_ms - hold_ms`, solo si el sondeo leyó hasta agotar (`more_to_read` falso). Es el mismo límite de la marca de agua: toda fila con `persisted_at` menor ya fue leída y liberada, así que una fila tardía no puede contradecir evidencia ya durable. `observed_until_ms` es monótono creciente y está en el dominio de la fuente.
+`observed_until_ms = observed_now_ms - hold_ms`, solo si el sondeo leyó hasta agotar (`more_to_read` falso). Monótono creciente, en el dominio de la fuente.
 
-Una fila que igual llegue con `persisted_at <= observed_until_ms` (violación del supuesto de `hold_ms`) no reescribe nada: se cuenta en `late_source_rows` como hoy y además en `late_inside_observed`, y la auditoría la deja como evidencia. El silencio ya registrado no se corrige.
+**Esto no es la marca de agua.** La marca real es `max_seen_ms - hold_ms` (`_watermark`, `paper_live_ingest.py:376`) y `released_ms` queda congelado durante un silencio, mientras `observed_until_ms` sigue avanzando. Una fila con `persisted_at` en `(released_ms, observed_until_ms]` no es tardía (solo se descarta `t <= released_ms`): entra normal, llega al runner como cotización y cierra el silencio antes de un `observed_until_ms` que ya era durable. Hoy no suma a ningún contador.
 
-## 4. Registros nuevos (en `audit.jsonl`, deduplicados por hash; sin hora del proceso)
+Decisión de diseño (opción b, a confirmar por Fran): **no se toca lo que recibe el runner ni `released_ms`.** Esa fila se entrega como siempre y además se registra `silence_contradicted` `{product_id, since_ms, observed_until_ms, quote_ms}`, append-only y enlazado al `silence_open` que contradice. El `silence_open` previo no se reescribe. Consecuencia: **`observed_until_ms` nunca puede usarse como `gap_to` de #168** (§6); la evidencia de un silencio abierto no es prueba de hueco.
+
+Alternativa (a), no propuesta: con el sondeo agotado, adelantar `released_ms` a `observed_now_ms - hold_ms`, de modo que esa fila sea tardía y se descarte. Cierra la contradicción, pero cambia lo que se entrega al runner cuando se viola `hold_ms` y obliga a revalidar los digests de 10D. Lo decide Fran.
+
+**Fuente totalmente muda.** Sin filas no hay reloj de la fuente que avance. En ese caso `observed_now_ms` sale de la hora del proceso, y cada `observation`/`outage_open` que lo use lleva `clock: "process"` (en los demás, `clock: "source"`). Ese valor es solo evidencia: no se usa como `gap_to`, no cancela y no entra en comparaciones de determinismo. No se propone leer otra tabla ni un latido de la captura; eso necesitaría autorización escrita de Fran.
+
+## 4. Registros nuevos (en `audit.jsonl`, deduplicados por hash; reloj de la fuente salvo `clock: "process"` marcado)
 
 - `observation` `{observed_until_ms, last_ticker_ms: {producto: T}}`. Un único registro por avance, para todos los productos, solo si `observed_until_ms` avanzó al menos `product_silence_ms` desde el último y algún producto lleva más de ese umbral sin cotizar. Cantidad máxima = duración de la sesión / `product_silence_ms`, sin importar cuántos productos callan (LOW 07).
 - `silence_open` `{product_id, scope: "product" | "source", since_ms, observed_until_ms}`. `since_ms` = última cotización del producto. Se extiende con cada `observation`. `scope: "source"` cuando ningún producto cotizó en más de `dead_after_ms`.
@@ -44,7 +50,7 @@ Una fila que igual llegue con `persisted_at <= observed_until_ms` (violación de
 
 - `classify_gap` (#165) acepta también un silencio abierto (`since_ms..observed_until_ms`) con la misma lógica `source_silence` / `product_silence` / `unexplained`, solo sobre tramos observados. `sample_capped` y la ausencia de evidencia siguen sin leerse como continuidad.
 - La cancelación por `source_stale` no cambia: se dispara antes de la cotización que cierra el intervalo. Un silencio abierto sin cotización posterior no cancela nada; queda como evidencia y la orden vence por su ventana.
-- Pendiente de Fran, no propuesto: cancelar al fin de la ventana con un silencio abierto. Si se aprueba, `gap_to = observed_until_ms` ya está en el dominio de la fuente y acotado por la marca de agua (§3), por eso §3 no puede relajarse.
+- Pendiente de Fran, no propuesto: cancelar al fin de la ventana con un silencio abierto. **Queda prohibido usar `observed_until_ms` como `gap_to`** mientras rija la opción (b): una cotización entregada después puede desmentir el hueco (`silence_contradicted`). Cancelar así exigiría antes la opción (a) o un `gap_to` que sea una cotización real.
 
 ## 7. Qué se compara en las pruebas
 
@@ -61,18 +67,19 @@ Mundo sintético (`live_world`), reloj y SIGKILL como en 10D.
 2. Caída en cada punto de `POINTS` durante un silencio abierto: mismos hechos y mismas formas (§7).
 3. La fuente nunca vuelve a emitir en la ventana: `silence_at_window_end`, sin cotización inventada, sin eventos nuevos al runner, estado financiero igual a la referencia. **Con un producto mudo y con toda la fuente muda** (`outage_open`, D-17-03).
 4. Caída corta (menos de un sondeo) dentro del silencio: `observation_gap` presente y cierre `partial` (D-17-02).
-5. Fila tardía con `persisted_at` dentro de un silencio ya observado: no reescribe el registro, queda contada en `late_inside_observed`; la recuperación sigue siendo igual (D-17-01).
+5. Fila con `persisted_at` en `(released_ms, observed_until_ms]` de un silencio ya observado (D-17-09): se entrega al runner como siempre, se escribe `silence_contradicted` enlazado, el `silence_open` previo no cambia y la recuperación da el mismo resultado. Caso aparte: fila con `persisted_at <= released_ms` (tardía de verdad), solo se cuenta.
+5b. Fuente totalmente muda sin filas: los registros llevan `clock: "process"`, no entran en la comparación de determinismo y ninguno llega a `gap_to`.
 6. Caída entre `audit.jsonl` y el checkpoint, en ambos órdenes: la auditoría se rehace desde el checkpoint sin duplicados.
 7. Idempotencia: repetir `recover()` y repetir `observation`.
 8. Checkpoint viejo sin los campos nuevos: se restaura vacío, sin error.
 9. Producto que nunca cotizó (`never_quoted`) y varias órdenes con ventanas distintas (`silence_at_window_end` por orden).
 10. Cantidad de `observation` acotada con 8 productos callados.
-11. Mutaciones: quitar `observed_until_ms` del checkpoint rompe el caso 1; quitar `observation_gap` rompe 4; usar hora del proceso rompe 5.
+11. Mutaciones: quitar `observed_until_ms` del checkpoint rompe el caso 1; quitar `observation_gap` rompe 4; no registrar `silence_contradicted` rompe 5.
 12. Digests financieros de 10D sin cambios (864 señales, 436 órdenes, 3 cierres).
 
 ## 9. Hallazgos de D resueltos
 
-D-17-01 (§2, §3, §6), D-17-02 (§4), D-17-03 (§4, caso 3), D-17-04 (§5, §7, caso 6), LOW 05 (`silence_at_window_end`), 06 (`never_quoted`), 07 (tope de `observation`), 08 (§10).
+D-17-01 reemplazado por D-17-09 (§3, §6) y D-17-10 (§3, caso 5b), D-17-02 (§4), D-17-03 (§4, caso 3), D-17-04 (§5, §7, caso 6), LOW 05 (`silence_at_window_end`), 06 (`never_quoted`), 07 (tope de `observation`), 08 (§10).
 
 ## 10. Dónde se implementa
 
