@@ -11,7 +11,7 @@ Ninguna base real, proceso de captura, estrategia ni WebSocket se tocó.
   respondidos con cifras sintéticas en la prueba (resumen de hace 10 min, scores `ok`):
   Kronos pasa a «Actividad reciente registrada» con operaciones, decisiones y hora UTC del resumen;
   el botón dice «Abrir Kronos en el Laboratorio» y lleva a la fila de Kronos del Laboratorio.
-- `comparacion-stitch-vs-react.png`: Stitch v5 (izquierda) y React (derecha).
+- `comparacion-stitch-vs-react.png`: Stitch v5 (izquierda) y React con Kronos «Estado no verificado» (centro) y «Actividad reciente registrada» con «Abrir Kronos en el Laboratorio →» (derecha).
 - `solicitudes.json`: llamadas `/api-*` de la prueba.
 
 ## Regla de Kronos (solo lectura)
