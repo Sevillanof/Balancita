@@ -189,6 +189,31 @@ class FundingTests(unittest.TestCase):
         found = [f for f in run_funding(responses=polls).findings if f["check"] == "funding.publication"]
         self.assertEqual([(f["kind"], f["count"]) for f in found], [(cv.DISCREPANCY, 1)])
 
+    def test_without_final_starts_a_poll_that_does_not_list_the_period_still_proves_a_delay(self):
+        polls = without(hourly_polls(), T0, T0 + 4 * H)
+        for poll in polls:
+            del poll["final_starts"]
+        found = [f for f in run_funding(responses=polls).findings if f["check"] == "funding.publication"]
+        # period 0 was visibly absent past its deadline: Kraken's delay (DISCREPANCY); the other five cannot be shown timely
+        self.assertEqual(sorted((f["kind"], f["count"]) for f in found), [(cv.ABSENT, 5), (cv.DISCREPANCY, 1)])
+
+    def test_settle_lag_moves_the_deadline_and_a_perfect_feed_stays_clean(self):
+        result = run_funding(settle_lag_ms=120 * 60_000)  # finality inferred 2 h after the end (#167-style)
+        self.assertEqual(result.findings, [])
+        polls = without(hourly_polls(), T0, T0 + 5 * H)
+        found = [f for f in run_funding(responses=polls, settle_lag_ms=120 * 60_000).findings if f["check"] == "funding.publication"]
+        self.assertEqual([f["kind"] for f in found], [cv.DISCREPANCY])  # the 4 h poll is past end + 2 h + 1 h and lacks it
+        again = [f for f in run_funding(responses=without(hourly_polls(), T0, T0 + 3 * H + 30 * 60_000), settle_lag_ms=120 * 60_000).findings
+                 if f["check"] == "funding.publication"]
+        self.assertEqual([f["kind"] for f in again], [cv.ABSENT])  # no poll past the deadline lacks it: not measurable
+
+    def test_settle_lag_is_declared_and_validated(self):
+        report = cv.build_report(ReportTests.SAMPLE, [run_funding(settle_lag_ms=0)], ("funding",))
+        self.assertEqual(report["parameters"][0]["params"]["settle_lag_ms"], 0)
+        for bad in (-1, 1.5, True):
+            with self.assertRaises(ValueError):
+                cv.validate_funding([], T0, T1, XBT, settle_lag_ms=bad)
+
     def test_polls_without_finality_evidence_are_not_measurable_and_not_condemned(self):
         polls = hourly_polls()
         for poll in polls:

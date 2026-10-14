@@ -149,7 +149,8 @@ def _holdout_error(result, check, product):
 # ---------------------------------------------------------------- funding
 
 def validate_funding(periods, from_ms, to_ms, products, references=None, responses=None, rel_tolerance="0.0001",
-                     max_lag_ms=HOUR_MS, max_reference_age_ms=2 * HOUR_MS, max_price_drift_per_hour="0.01"):
+                     max_lag_ms=HOUR_MS, max_reference_age_ms=2 * HOUR_MS, max_price_drift_per_hour="0.01",
+                     settle_lag_ms=600_000):
     """Funding periods: units, reference price, period shape, publication, coverage, contradictory revisions.
 
     ``periods``: dicts with product_id, start_ms, end_ms, funding_rate (absolute, quote per base per hour, string),
@@ -166,15 +167,20 @@ def validate_funding(periods, from_ms, to_ms, products, references=None, respons
     an open-hour observation and is not judged. Rows and polls that do not say so are read as definitive/without
     evidence, and the first fails closed (a row known before its end is flagged), the second is not measurable.
     ``known_at`` is OUR receipt time, not Kraken's publication time, so publication is judged only with responses: a
-    period is timely if the first response showing it DEFINITIVE arrived by ``end + max_lag_ms``; late only if a
+    period is timely if the first response showing it DEFINITIVE arrived by ``end + settle_lag_ms + max_lag_ms``; late only if a
     response (with finality evidence) after that deadline still did not show it definitive; a response that shows it
     definitive before its end is contradictory; otherwise ``not_measurable`` (the collector was not looking, or the
     polls carry no finality evidence). A provisional listing of the open hour is an event, never a finding.
+    ``settle_lag_ms``: #167 infers finality by time (a period is definitive once ``end + settle_lag`` has passed on
+    the provider's clock; its default of 10 min is a hypothesis), so ``final_starts`` cannot be earlier than that and
+    the publication deadline is ``end + settle_lag_ms + max_lag_ms``. Both are declared in the report parameters.
     """
     assert_range_allowed(from_ms, to_ms)
     result = Result("funding", products, from_ms, to_ms, {
         "rel_tolerance": rel_tolerance, "max_lag_ms": max_lag_ms, "max_reference_age_ms": max_reference_age_ms,
-        "max_price_drift_per_hour": max_price_drift_per_hour})
+        "max_price_drift_per_hour": max_price_drift_per_hour, "settle_lag_ms": settle_lag_ms})
+    if isinstance(settle_lag_ms, bool) or not isinstance(settle_lag_ms, int) or settle_lag_ms < 0:
+        raise ValueError("settle_lag_ms must be a non-negative integer")
     rel_tol, drift = Decimal(rel_tolerance), Decimal(max_price_drift_per_hour)
     _check_tolerance(rel_tol, drift, rel_tol + drift * Decimal(max_reference_age_ms + HOUR_MS) / Decimal(HOUR_MS))
     no_relative = defaultdict(list)
@@ -242,7 +248,7 @@ def validate_funding(periods, from_ms, to_ms, products, references=None, respons
         if missing:
             result.findings.append(Finding(ABSENT, "funding.coverage", product, "{} hourly periods missing".format(len(missing)),
                                            missing_count=len(missing), first_missing_ms=missing[0], last_missing_ms=missing[-1]))
-        _publication(result, product, sorted(judged_starts[product]), polls.get(product, []), max_lag_ms)
+        _publication(result, product, sorted(judged_starts[product]), polls.get(product, []), max_lag_ms + settle_lag_ms)
     return result.close()
 
 
@@ -272,14 +278,15 @@ def _parse_responses(result, responses):
     return polls
 
 
-def _publication(result, product, starts, polls, max_lag_ms):
+def _publication(result, product, starts, polls, allowed_lag_ms):
     """Definitive availability only. A period listed by a poll but not marked final is provisional: Kraken lists the
     open hour, so that is a legitimate observation (an event, never a defect) and proves nothing about publication.
-    Without ``final_starts`` the poll gives no evidence at all and the period stays not measurable (limit declared,
-    finality is not inferred from the poll's timing)."""
+    A poll that does not even LIST the period after the deadline proves it was not definitive, with or without
+    ``final_starts`` (that is delay evidence); but listing it without ``final_starts`` proves nothing, so without
+    finality evidence the period stays not measurable (the poll's own timing is not taken as finality)."""
     late, early_final, unknown = [], [], []
     for start in starts:
-        end, deadline = start + HOUR_MS, start + HOUR_MS + max_lag_ms
+        end, deadline = start + HOUR_MS, start + HOUR_MS + allowed_lag_ms
         definitive = [at for at, _, finals in polls if finals is not None and start in finals]
         first = definitive[0] if definitive else None
         provisional = sum(1 for at, held, finals in polls if finals is not None and start in held and start not in finals)
@@ -290,8 +297,8 @@ def _publication(result, product, starts, polls, max_lag_ms):
             early_final.append(start)
         elif first is not None and first <= deadline:
             result.judged("funding.publication", product)
-        elif any(finals is not None and deadline < at and (first is None or at < first)
-                 for at, _, finals in polls):
+        elif any(deadline < at and (first is None or at < first) and (start not in held if finals is None else True)
+                 for at, held, finals in polls):
             result.judged("funding.publication", product)
             late.append(start)
         else:
@@ -303,7 +310,7 @@ def _publication(result, product, starts, polls, max_lag_ms):
     if late:
         result.findings.append(Finding(DISCREPANCY, "funding.publication", product,
                                        "{} periods still not definitive in a response taken more than {} ms after their end".format(
-                                           len(late), max_lag_ms), first_start_ms=late[0], count=len(late)))
+                                           len(late), allowed_lag_ms), first_start_ms=late[0], count=len(late)))
     if unknown:
         result.findings.append(Finding(ABSENT, "funding.publication", product,
                                        "not_measurable: {} periods have no response with finality evidence proving timely or "

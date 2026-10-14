@@ -49,14 +49,14 @@ El informe lleva la versión del validador, la muestra (fuente, versión, interv
 
 `known_at` en el almacén es la hora en que **nuestro** colector recibió la respuesta, no la hora en que Kraken publicó. Por eso el retraso se juzga con las respuestas del colector (`responses`), nunca con `known_at`. Además, aparecer en una respuesta no prueba que el período esté terminado: Kraken puede listar la hora abierta (valor provisional, como admite `historical-funding.ts` y distingue #167). Cada respuesta debe traer `final_starts`, los períodos que muestra como definitivos; el adaptador lo toma del proveedor o de #167.
 
-- A tiempo: la primera respuesta que lo muestra **definitivo** llegó antes de `fin + max_lag_ms`.
-- Tarde: llegó después del plazo **y** existe una respuesta con evidencia de finalidad, posterior al plazo y anterior a esa, que aún no lo traía definitivo. Un listado provisional no cuenta como publicación.
+- A tiempo: la primera respuesta que lo muestra **definitivo** llegó antes de `fin + settle_lag_ms + max_lag_ms`.
+- Tarde: no hubo respuesta definitiva antes de ese plazo **y** una respuesta posterior al plazo y anterior a la primera definitiva no lo traía definitivo. Si la respuesta ni siquiera lista el período, eso prueba que no era definitivo aunque no traiga `final_starts`. Si lo lista sin `final_starts`, no prueba nada. Un listado provisional no cuenta como publicación.
 - Contradictorio: una respuesta tomada antes del fin del período ya lo marca definitivo.
 - Provisional: un listado del período sin marcarlo definitivo, o una fila con `provisional: true`, es un evento (`provisional_observation` / `provisional_row`), no un hallazgo ni un conflicto de revisión. Una fila definitiva con `known_at` anterior al fin sigue siendo no causal (falla cerrado si el adaptador no marcó la fila como provisional).
-- No medible: el colector no consultó entre el plazo y la primera respuesta definitiva, o las respuestas no traen `final_starts`. No se infiere finalidad por la hora de la respuesta ni se le atribuye nada a Kraken; el informe lo cuenta como `ABSENT` / `not_measurable` con cantidad, primer y último período.
+- No medible: el colector no consultó entre el plazo y la primera respuesta definitiva, o las respuestas no traen `final_starts` y ninguna prueba la demora. El informe lo cuenta como `ABSENT` / `not_measurable` con cantidad, primer y último período, sin atribuirle nada a Kraken.
 - Un período traído por backfill no es medible.
 
-`max_lag_ms` (1 h por defecto) es un parámetro del validador, no un valor aprobado. Debe declararse en el informe real junto con la cadencia efectiva del colector.
+Kraken no marca la finalidad: #167 la infiere por tiempo (definitivo cuando `fin + settle_lag` ya pasó según la hora del servidor; su valor por defecto de 10 min es una hipótesis). Por eso `final_starts` no puede ser anterior a ese momento y el plazo se mide como `fin + settle_lag_ms + max_lag_ms` (`settle_lag_ms` = 10 min por defecto). Ni la hora de la respuesta ni este validador deciden la finalidad: la trae el adaptador. `settle_lag_ms` y `max_lag_ms` (1 h por defecto) son parámetros del validador, no valores aprobados; ambos quedan declarados en los parámetros del informe y en la huella, y deben justificarse junto con la cadencia efectiva del colector.
 
 ## Cobertura exigida al informe
 
@@ -74,7 +74,7 @@ No está establecido a qué instante corresponde el precio que Kraken usó para 
 - Nada sobre datos reales: los fixtures son inventados. No se afirma que la captura cumpla ningún criterio.
 - La comparación de velas contra la fuente oficial exige que alguien aporte la serie oficial; los validadores no llaman a Kraken. Hasta que Fran lo autorice, es solo el comparador.
 - Las cotizaciones del archivo son tope de libro (mejor bid/ask y tamaños), sin profundidad. Cualquier conclusión de ejecución es modelada.
-- Los parámetros de los validadores (`max_lag_ms`, `rel_tolerance=0.0001`, `max_price_drift_per_hour=0.01`, `max_reference_age_ms`, `stale_ms`, `skew_ms`, `max_false_alarm_rate=0.001`, `min_samples=1000`) no son criterios aprobados; el informe real debe declararlos y justificarlos.
+- Los parámetros de los validadores (`max_lag_ms`, `settle_lag_ms`, `rel_tolerance=0.0001`, `max_price_drift_per_hour=0.01`, `max_reference_age_ms`, `stale_ms`, `skew_ms`, `max_false_alarm_rate=0.001`, `min_samples=1000`) no son criterios aprobados; el informe real debe declararlos y justificarlos.
 - La calibración de umbrales supone que las brechas de entrada vienen de intervalos sin caída; esa clasificación la aporta el ingestor (#166), no este módulo.
 
 ## Pedido de autorización de lectura (borrador, para que Fran responda en la PR)
