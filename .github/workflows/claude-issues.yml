@@ -1,0 +1,37 @@
+name: Claude Issues
+
+# Prueba de comunicación Issue -> Claude. Solo responde con comentarios:
+# sin escritura de código, ramas ni PRs. Solo se activa si el comentario
+# lo escribe Sevillanof en una Issue (no en PRs) e incluye @claude.
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: claude-issues-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  claude:
+    if: >-
+      github.event.issue.pull_request == null &&
+      github.event.sender.login == 'Sevillanof' &&
+      contains(github.event.comment.body, '@claude')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          claude_args: |
+            --max-turns 8
+            --allowedTools "Read,Glob,Grep"

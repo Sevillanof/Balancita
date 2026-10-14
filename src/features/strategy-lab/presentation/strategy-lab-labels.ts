@@ -1,5 +1,6 @@
 import type { QwenScores } from '../infrastructure/qwen-scores.ts'
 import type { StrategyState } from '../infrastructure/strategy-api.ts'
+import { OPERATIONAL_LABELS } from '../domain/strategy-labels.ts'
 
 /** Models scored in Qwen's format (`docs/qwen-scores-api.md`). */
 export type ModelKey = 'qwen' | 'kronos'
@@ -7,10 +8,11 @@ export type ModelKey = 'qwen' | 'kronos'
 export type Dot = StrategyState | 'preview' | 'reference' | ModelKey
 
 export const STATE_LABELS: Record<Dot, string> = {
-  active: 'Activa en paper',
-  shadow: 'En sombra',
-  draft: 'Borrador',
-  retired: 'Desactivada',
+  // Same words as the inventory: one vocabulary (domain/strategy-labels.ts).
+  active: OPERATIONAL_LABELS.active,
+  shadow: OPERATIONAL_LABELS.shadow,
+  draft: OPERATIONAL_LABELS.draft,
+  retired: OPERATIONAL_LABELS.retired,
   preview: 'Cambios sin guardar',
   reference: 'Referencia',
   qwen: 'Decisiones de Qwen',

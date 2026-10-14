@@ -2,8 +2,8 @@
  * Mission Control visual system (Stitch "Obsidian Mission Control").
  * Color is semantic only: long/up, short/down, standby/warning, and a neutral
  * "no data" state. Surfaces are flat and separated by 1px borders, with no
- * glows. The tokens are the single source: the legacy `--demo-*` and `--lab-*`
- * variables are mapped to them in DemoShell.css and StrategyLab.css.
+ * glows. The tokens are the single source: the screens use `--mc-*` directly and
+ * only the local `--lab-*` aliases of StrategyLab.css point at them.
  */
 :root {
   --mc-canvas: #0a0d14;

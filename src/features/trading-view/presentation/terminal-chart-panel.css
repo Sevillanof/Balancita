@@ -16,7 +16,7 @@
   min-width: 0;
 }
 .terminal-chart__stats dt {
-  color: var(--demo-muted);
+  color: var(--mc-text-2);
   font-size: 0.7rem;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -28,10 +28,10 @@
   overflow-wrap: anywhere;
 }
 .terminal-chart__up {
-  color: var(--demo-up);
+  color: var(--mc-long);
 }
 .terminal-chart__down {
-  color: var(--demo-down);
+  color: var(--mc-short);
 }
 .terminal-chart__toolbar {
   display: flex;
@@ -44,7 +44,7 @@
   display: inline-flex;
   gap: 2px;
   padding: 3px;
-  border: 1px solid var(--demo-border);
+  border: 1px solid var(--mc-border);
   border-radius: 8px;
 }
 .terminal-chart__seg button {
@@ -55,11 +55,11 @@
   border: 0;
   border-radius: 5px;
   background: transparent;
-  color: var(--demo-muted);
+  color: var(--mc-text-2);
   cursor: pointer;
 }
 .terminal-chart__seg button[aria-pressed='true'] {
-  background: var(--demo-border);
+  background: var(--mc-border);
   color: inherit;
 }
 .terminal-chart__toggles {
@@ -75,7 +75,7 @@
 .terminal-chart__toggles legend {
   float: left;
   margin-right: 0.25rem;
-  color: var(--demo-muted);
+  color: var(--mc-text-2);
   font-size: 0.7rem;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -96,7 +96,7 @@
 .terminal-chart__legend {
   margin: 0;
   padding: 0 0.75rem;
-  color: var(--demo-muted);
+  color: var(--mc-text-2);
   font-size: 0.75rem;
 }
 .terminal-chart__legend {
@@ -109,16 +109,16 @@
   place-items: center;
   height: var(--terminal-chart-height, 440px);
   margin: 0;
-  color: var(--demo-muted);
+  color: var(--mc-text-2);
 }
 
 /* Mission Control 2.6: compact metric cards. Same data and order, only
    presentation. */
 .terminal-chart__stats > div {
   padding: 0.4rem 0.6rem;
-  border: 1px solid var(--demo-border);
+  border: 1px solid var(--mc-border);
   border-radius: 0.375rem;
-  background: var(--demo-card);
+  background: var(--mc-surface-1);
 }
 
 @media (max-width: 600px) {
@@ -187,9 +187,9 @@
   align-items: center;
   min-height: 30px;
   padding: 0 0.7rem;
-  border: 1px solid var(--demo-border);
+  border: 1px solid var(--mc-border);
   border-radius: 8px;
-  color: var(--demo-muted);
+  color: var(--mc-text-2);
   cursor: pointer;
 }
 .terminal-chart__more[open] > .terminal-chart__stats {
@@ -199,9 +199,9 @@
   left: 0;
   width: min(46rem, 80vw);
   padding: 0.6rem;
-  border: 1px solid var(--demo-border);
+  border: 1px solid var(--mc-border);
   border-radius: 0.5rem;
-  background: var(--demo-card);
+  background: var(--mc-surface-1);
   box-shadow: 0 8px 24px -4px rgb(0 0 0 / 60%);
 }
 .terminal-chart__tools {
@@ -216,9 +216,9 @@
   gap: 0.5rem;
   min-width: 22rem;
   padding: 0.75rem;
-  border: 1px solid var(--demo-border);
+  border: 1px solid var(--mc-border);
   border-radius: 0.5rem;
-  background: var(--demo-card);
+  background: var(--mc-surface-1);
   box-shadow: 0 8px 24px -4px rgb(0 0 0 / 60%);
 }
 .terminal-chart__legend {
@@ -281,4 +281,44 @@
   .terminal-chart__seg {
     padding: 2px;
   }
+}
+
+/* Facts of the EJEC. marker picked on the chart (an event of its own). */
+.terminal-chart__fill-detail {
+  margin: 0 0.75rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--demo-border, rgb(255 255 255 / 12%));
+  border-radius: 0.5rem;
+  font-size: 0.75rem;
+}
+.terminal-chart__fill-detail header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.terminal-chart__fill-detail h3 {
+  margin: 0;
+  font-size: 0.8125rem;
+}
+.terminal-chart__fill-detail dl {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  gap: 0.25rem 1rem;
+  margin: 0.5rem 0;
+}
+.terminal-chart__fill-detail dl > div {
+  min-width: 0;
+}
+.terminal-chart__fill-detail dt {
+  color: var(--demo-muted);
+}
+.terminal-chart__fill-detail dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums;
+}
+.terminal-chart__fill-detail p {
+  margin: 0;
+  color: var(--demo-muted);
 }

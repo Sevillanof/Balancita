@@ -8,6 +8,7 @@ const chartMocks = vi.hoisted(() => {
     priceScale: vi.fn(() => ({ applyOptions: priceScaleApply })),
     setData: vi.fn(),
     update: vi.fn(),
+    priceToCoordinate: vi.fn(() => 100),
     applyOptions: vi.fn(),
     createPriceLine: vi.fn(),
     removePriceLine: vi.fn(),
@@ -22,6 +23,12 @@ const chartMocks = vi.hoisted(() => {
     getVisibleLogicalRange: vi.fn(() => ({ from: 7, to: 74 })),
     setVisibleLogicalRange: vi.fn(),
     scrollToRealTime: vi.fn(),
+    subscribeVisibleLogicalRangeChange: vi.fn(),
+    unsubscribeVisibleLogicalRangeChange: vi.fn(),
+    timeToCoordinate: vi.fn(
+      (time: number) => ((time - 1_800_000_000) / 60) * 13,
+    ),
+    options: vi.fn(() => ({ barSpacing: 13 })),
   }
   const markerApi = { setMarkers: vi.fn() }
   const chart = {
@@ -195,6 +202,52 @@ describe('approved connected terminal chart', () => {
       .calls[0]?.[0] as (event: { hoveredObjectId: string }) => void
     click({ hoveredObjectId: 'latest' })
     expect(onSelect).toHaveBeenCalledWith(newest.time, 'latest')
+  })
+
+  it('opens the marker under the pointer, never the label of the one beside it', () => {
+    const onSelect = vi.fn()
+    // A decision one candle before an EJEC. fill (13 px apart, as painted).
+    const markers = [
+      {
+        id: 'PF_XBTUSD-1',
+        time: candles[40]!.time,
+        type: 'decision' as const,
+        label: 'W×4',
+        decisionStatus: 'abstained' as const,
+      },
+      {
+        id: 'fill:3',
+        time: candles[41]!.time,
+        type: 'fill' as const,
+        label: 'EJEC.',
+        direction: 'long' as const,
+      },
+    ]
+    render(
+      <ApprovedTerminalChart
+        candles={candles}
+        markers={markers}
+        selectedId=""
+        intervalSeconds={60}
+        initialViewport="approved-terminal"
+        onSelect={onSelect}
+      />,
+    )
+    const click = chartMocks.chart.subscribeClick.mock.calls[0]?.[0] as (
+      event: Record<string, unknown>,
+    ) => void
+    const at = (index: number) => ({ x: index * 13, y: 112 })
+    // The library says the DECISION (its label covers the fill); the fill's
+    // own column decides.
+    click({ point: at(41), hoveredObjectId: 'PF_XBTUSD-1' })
+    expect(onSelect).toHaveBeenLastCalledWith(candles[41]!.time, 'fill:3')
+    click({ point: at(40), hoveredObjectId: 'fill:3' })
+    expect(onSelect).toHaveBeenLastCalledWith(candles[40]!.time, 'PF_XBTUSD-1')
+    // The bare background, far below the glyphs, selects neither of them.
+    onSelect.mockClear()
+    click({ point: { x: 41 * 13, y: 500 }, hoveredObjectId: 'PF_XBTUSD-1' })
+    click({ point: { x: 300 * 13, y: 112 }, time: candles[41]!.time })
+    expect(onSelect).not.toHaveBeenCalled()
   })
 
   it('retains the newest 200 eligible markers after sorting', () => {
