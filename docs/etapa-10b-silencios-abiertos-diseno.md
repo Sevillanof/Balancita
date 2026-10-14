@@ -2,7 +2,7 @@
 
 Solo diseño. No cambia código, contabilidad, estrategias ni umbrales. No autoriza captura real ni sesión paper.
 
-**Decisión de Fran (15:52Z):** se autoriza cancelar por `source_stale` con el silencio todavía abierto, con diez condiciones (§6). Esto reemplaza la opción (b) de D-17-09 por la resolución de §3.1: la prueba de que no hay hueco desmentido se construye antes de cancelar, sin cambiar `paper_runner.py` ni #168.
+**Decisión de Fran (15:52Z):** se autoriza cancelar por `source_stale` con el silencio todavía abierto, con diez condiciones (§6). La cancelación se ata al **flujo de eventos** (§3.1), no a la cota de observación; D-17-13, 14, 15 y 16 resueltos aquí. Sin cambios en `paper_runner.py` ni #168, salvo el gancho opcional de §6.1, que solo puede hacer 9A.
 Revisión D sobre 95d2a5a y 7af0a93: D-17-01 a 04, 09, 10 y LOW 05 a 08 resueltos aquí (sección 9).
 
 ## 1. Qué falta hoy
@@ -25,21 +25,19 @@ Revisión D sobre 95d2a5a y 7af0a93: D-17-01 a 04, 09, 10 y LOW 05 a 08 resuelto
 
 **Esto no es la marca de agua.** La marca real es `max_seen_ms - hold_ms` (`_watermark`, `paper_live_ingest.py:376`) y `released_ms` queda congelado durante un silencio, mientras `observed_until_ms` sigue avanzando. Una fila con `persisted_at` en `(released_ms, observed_until_ms]` no es tardía (solo se descarta `t <= released_ms`): entra normal, llega al runner como cotización y cierra el silencio antes de un `observed_until_ms` que ya era durable. Hoy no suma a ningún contador.
 
-Decisión de diseño (opción b, a confirmar por Fran): **no se toca lo que recibe el runner ni `released_ms`.** Esa fila se entrega como siempre y además se registra `silence_contradicted` `{product_id, since_ms, observed_until_ms, quote_ms}`, append-only y enlazado al `silence_open` que contradice. El `silence_open` previo no se reescribe. Consecuencia: **`observed_until_ms` nunca puede usarse como `gap_to` de #168** (§6); la evidencia de un silencio abierto no es prueba de hueco.
+Esa fila entra al runner como cualquier otra (no se toca `released_ms`) y además se registra `silence_contradicted` `{product_id, since_ms, observed_until_ms, quote_ms}`, append-only y enlazado al `silence_open`: **la evidencia de un silencio abierto nunca es prueba de hueco, y ninguna cancelación se apoya en `observed_until_ms`** (§3.1). La alternativa de adelantar `released_ms` en cada sondeo se descarta: se saltea las retenciones de `_watermark` por velas atrasadas y por `ticker_more`/`candle_more` (`paper_live_ingest.py:376-387`).
 
-Alternativa (a), no propuesta: con el sondeo agotado, adelantar `released_ms` a `observed_now_ms - hold_ms`, de modo que esa fila sea tardía y se descarte. Cierra la contradicción, pero cambia lo que se entrega al runner cuando se viola `hold_ms` y obliga a revalidar los digests de 10D. Lo decide Fran.
+### 3.1 Cuándo se cancela: atado al flujo de eventos (condición 4 de Fran; D-17-13, D-17-14)
 
-### 3.1 Cuándo `observed_until` vale como prueba (condición 4 de Fran)
+`hold_ms` y `observed_until_ms` solos no prueban un hueco. La prueba es el propio flujo de eventos que el ingestor entrega en orden bajo su marca de agua natural (`max_seen_ms - hold_ms`, con sus retenciones). Para un producto P con última cotización `since_ms` y `gap_to_ms = since_ms + limit_ms + 1` (primer instante en que se supera el umbral, independiente de cuándo se sondeó):
 
-`hold_ms` solo no alcanza: una fila en `(released_ms, observed_until_ms]` puede llegar después y desmentir el hueco. Un silencio abierto solo puede dar lugar a una cancelación si se cumplen **las tres** a la vez, evaluadas en el mismo sondeo:
+- **(a) Atado al flujo.** Antes de entregar el primer evento con `t_ms > gap_to_ms` (de cualquier producto, o un tick de reloj), si P tiene órdenes pendientes y no hubo cotización de P en `(since_ms, gap_to_ms]`, la sesión declara `cancel_for_source_loss(P, since_ms, gap_to_ms, t_ms=gap_to_ms)`. El journal sigue en `<= gap_to_ms`, y la marca de agua natural ya probó que salió todo lo que tiene `t <= gap_to_ms`. Es función solo del flujo, así que la corrida continua y la recuperada declaran exactamente lo mismo, con el mismo `t_ms` (así los digests coinciden: no entra `decided_at_ms` dependiente del sondeo ni la hora en que otras órdenes vencen).
+- **(b) Sin eventos posteriores** (un solo producto o fuente muda más allá de `alive_until`): no hay flujo que la ate. Solo entonces se usa la observación, y únicamente si se cumple todo: sondeo agotado en ambas tablas (`more_to_read` falso), sin eventos pendientes en el ingestor, `ticker_more`/`candle_more`/vela atrasada falsos, reloj de la fuente (nunca la cota del proceso), `gap_to_ms <= observed_until_ms` y reloj del runner `<= gap_to_ms`. Se declara con `t_ms = gap_to_ms` (el mismo valor que en (a)) y, **en la misma operación**, `released_ms = max(released_ms, gap_to_ms)`. Como el runner nunca quedó atrás de ese `t_ms`, no hay evento previo pendiente al que se le adelante el reloj (condición 5).
+- **Recuperación:** `recover()` toma `released_ms >= max(gap_to_ms)` de `runner.source_losses`, de modo que si la muerte ocurre entre la cancelación y el checkpoint del ingestor, una fila real con `t <= gap_to_ms` no entra al runner después. Una fila tardía así se cuenta en `late_source_rows` y se escribe `silence_contradicted` (solo como evidencia; la cancelación ya es durable).
 
-1. El sondeo leyó hasta agotar (`more_to_read` falso) en ambas tablas, y la fuente está `live` (hay filas de otros productos o `observed_until` es del reloj de la fuente; con la cota del proceso nunca, ver abajo).
-2. `gap_to_ms = since_ms + limit_ms + 1`, no `observed_until_ms`. Es el primer instante en que el umbral queda superado, por lo tanto **no depende de cuándo se sondeó** y la corrida continua y la recuperada declaran lo mismo (`from`, `to`). Se exige `gap_to_ms <= observed_until_ms`.
-3. Antes de declarar, el ingestor entrega al runner todo evento pendiente con `t_ms <= gap_to_ms` (en orden, de cualquier producto) y recién entonces adelanta `released_ms` a `gap_to_ms`. Si entre ellos hay una cotización del mismo producto, el silencio no existe y no se cancela. El reloj del journal (condición 5) nunca pasa por delante de un evento anterior todavía pendiente.
+Si en el tramo aparece una cotización de P con `t_ms` en `(since_ms, gap_to_ms]` o el hueco queda cerrado antes, no se declara nada por este camino. La cotización que cierra el hueco sigue pasando por el camino de #165 (cancelar antes de entregarla, `to` = hora de la cotización).
 
-Después de declarar, una fila con `persisted_at <= gap_to_ms` es tardía como cualquier otra (`released_ms`): se descarta de la entrega, se cuenta en `late_source_rows` y se escribe `silence_contradicted` enlazado al `silence_open`. No puede entrar al runner con tiempo anterior a una cancelación ya durable. Esto cambia la entrega solo después de una cancelación comprobada, y solo para filas que violan `hold_ms`; sin cancelación todo se entrega como hoy (los digests de 10D no cambian).
-
-La cota del proceso (fuente totalmente muda) **no cumple 1 ni 3**: nunca cancela, solo registra evidencia (`clock: "process"`).
+La cota del proceso (fuente totalmente muda) **no cumple (b)**: nunca cancela, solo registra evidencia (`clock: "process"`).
 
 **Fuente totalmente muda.** Sin filas no hay reloj de la fuente que avance. En ese caso `observed_now_ms` sale de la hora del proceso, y cada `observation`/`outage_open` que lo use lleva `clock: "process"` (en los demás, `clock: "source"`). **Dos cotas separadas (D-17-11):** `observed_until_source_ms` (monótona, solo del reloj de la fuente) y `observed_until_process_ms` (aparte). La del proceso nunca alimenta el máximo de la de la fuente; si lo hiciera, al volver la fuente su primera fila real generaría un `silence_contradicted` espurio. Ese valor es solo evidencia: no se usa como `gap_to`, no cancela y no entra en comparaciones de determinismo. No se propone leer otra tabla ni un latido de la captura; eso necesitaría autorización escrita de Fran.
 
@@ -64,8 +62,8 @@ La cota del proceso (fuente totalmente muda) **no cumple 1 ni 3**: nunca cancela
 
 Una orden pendiente no sobrevive hasta una nueva cotización si ya hay prueba (§3.1) de que su producto superó el umbral en su ventana. Dos puntos de decisión, ambos con `PaperRunner.cancel_for_source_loss(product, since_ms, gap_to_ms, t_ms)` de #168 sin cambios:
 
-- **Durante el silencio abierto:** en cada sondeo, para cada producto con órdenes pendientes y `gap_to_ms = since_ms + limit_ms + 1 <= observed_until_ms`, con §3.1 cumplido, la sesión declara la pérdida con `t_ms` = reloj del journal (>= `gap_to_ms`, como exige #168). No espera al vencimiento.
-- **Al final de la ventana:** antes del vencimiento ordinario de una orden (`no_quote_in_window` por tick de reloj), se comprueba esa misma condición. Si se cumple, se cancela y la orden no vence. Si no se cumple, vence como hoy.
+- **Durante el silencio abierto:** según §3.1 (a) o (b), con `t_ms = gap_to_ms` exacto. No espera al vencimiento.
+- **Antes del vencimiento ordinario (D-17-15):** el vencimiento ocurre dentro de `_tick`/`_expire` al entregar cualquier evento con `t > deadline_ms`. Como la declaración de (a) se hace antes de entregar el primer evento con `t > gap_to_ms`, y `gap_to_ms` se compara con el `deadline_ms` de cada orden, la comprobación ocurre antes del vencimiento sin tocar el runner: si `gap_to_ms <= deadline_ms` la orden se cancela, si no, su ventana terminó dentro del umbral permitido y vence como hoy. El único caso que la sesión sola no puede resolver está en §6.1.
 - **La cotización que cierra el hueco** sigue pasando por el camino de #165 (cancelar antes de entregarla, con `from=since_ms`, `to=` hora de la cotización); si la orden ya fue cancelada por el camino abierto, no queda nada pendiente y no cambia nada. Las órdenes decididas dentro del hueco después de la cancelación abierta las cubre este camino, como hoy.
 - **Qué no se hace:** no se tocan posiciones, stops ni riesgo; no se cancela una orden que ya venció o se llenó (sin cancelaciones retroactivas de vencimientos antiguos, condición 10); no se cancela con `observation_gap`, `never_quoted` por sí solo, ni con la cota del proceso.
 
@@ -84,7 +82,11 @@ Vocabulario fijo, sin mezclar:
 
 `classify_gap` (#165) acepta también un silencio abierto (`since_ms..gap_to_ms`), solo sobre tramos observados. `sample_capped` y la ausencia de evidencia siguen sin leerse como continuidad.
 
-**Cambio en #168:** ninguno. `t_ms >= gap_to_ms` y `source_loss_after_quote` se cumplen por construcción (§3.1); si el runner rechazara, la sesión se detiene. Si en la implementación apareciera una guarda que impide esto, se le pide al hilo 9A; no se copia ni se reimplementa.
+**Cambio en #168:** ninguno. `t_ms = gap_to_ms >= reloj del runner` y `source_loss_after_quote` se cumplen por construcción (§3.1); si el runner rechazara, la sesión se detiene.
+
+### 6.1 Único punto que necesitaría un gancho de 9A (no se implementa aquí)
+
+`cancel_for_source_loss` cancela toda orden de P cuya ventana se solapa con `[since_ms, gap_to_ms]` (`hi = min(gap_to, deadline) > lo`). Una orden cuyo `deadline_ms` cae **antes** de `gap_to_ms` y que sigue pendiente porque no hubo ningún evento entre su vencimiento y `gap_to_ms` también se solaparía, y se cancelaría en vez de vencer (una cancelación que reemplaza a un vencimiento, condición 10). Cuando hay ticks de reloj el caso no ocurre (vencen antes). Solo ocurre con flujo de eventos escaso. Solicitud a 9A, a decidir por Fran: un parámetro opcional que deje fuera las órdenes con `deadline_ms < gap_to_ms`. Mientras no exista, la sesión no declara en ese caso y lo registra como `source_stale_deferred` (evidencia) con la orden afectada; vence cuando llegue el próximo evento.
 
 ## 7. Qué se compara en las pruebas
 
@@ -101,7 +103,7 @@ Mundo sintético (`live_world`), reloj y SIGKILL como en 10D.
 2. Caída en cada punto de `POINTS` durante un silencio abierto: mismos hechos y mismas formas (§7).
 3. La fuente nunca vuelve a emitir en la ventana: `silence_at_window_end`, sin cotización inventada, sin eventos nuevos al runner, estado financiero igual a la referencia. **Con un producto mudo y con toda la fuente muda** (`outage_open`, D-17-03).
 4. Caída corta (menos de un sondeo) dentro del silencio: `observation_gap` presente y cierre `partial` (D-17-02).
-5. Fila con `persisted_at` en `(released_ms, observed_until_ms]` de un silencio ya observado (D-17-09): se entrega al runner como siempre, se escribe `silence_contradicted` enlazado, el `silence_open` previo no cambia y la recuperación da el mismo resultado. Caso aparte: fila con `persisted_at <= released_ms` (tardía de verdad), solo se cuenta.
+5. Fila con `persisted_at` en `(released_ms, observed_until_ms]` de un silencio ya observado, **sin cancelación declarada** (D-17-09, D-17-16): se entrega al runner como siempre, se escribe `silence_contradicted` enlazado, el `silence_open` previo no cambia y la recuperación da el mismo resultado. Caso aparte: fila con `persisted_at <= released_ms` (tardía de verdad), solo se cuenta.
    5b. Fuente totalmente muda sin filas: los registros llevan `clock: "process"`, no entran en la comparación de determinismo y ninguno llega a `gap_to`. La prueba sigue hasta que la fuente vuelve: la primera fila real no genera `silence_contradicted` (D-17-11).
 6. Caída entre `audit.jsonl` y el checkpoint, en ambos órdenes: la auditoría se rehace desde el checkpoint sin duplicados.
 7. Idempotencia: repetir `recover()` y repetir `observation`.
@@ -121,14 +123,18 @@ Cada una compara corrida continua y recuperada (equivalencia financiera donde se
 - D. Caída durante el silencio abierto (todos los `POINTS`, SIGKILL): una sola cancelación, idempotente, con `observation_gap` y sin contarlo como silencio.
 - E. Recuperación posterior al vencimiento: una orden ya vencida o ya llenada no se cancela (sin cancelaciones retroactivas).
 - F. Evento de mercado retenido con `t_ms` anterior al avance de observación: se entrega antes de declarar; si es del mismo producto el silencio desaparece y no hay cancelación; el reloj del journal no pasa por delante.
-- G. Fila tardía posterior a la cancelación (`persisted_at <= gap_to_ms`): no entra al runner, queda `silence_contradicted`.
+- G. Fila tardía posterior a una cancelación del camino (b) (`persisted_at <= gap_to_ms`): no entra al runner (`released_ms` adelantado en la misma operación, y recuperado de `runner.source_losses` tras una muerte entre cancelación y checkpoint), queda `silence_contradicted`.
+- K. Misma cancelación, distinto sondeo y caídas: el digest financiero y el `t_ms` de la entrada `source_loss` son idénticos en corrida continua y recuperada (D-17-13).
+- L. Orden con `deadline_ms < gap_to_ms` y sin eventos intermedios: no se cancela retroactivamente; `source_stale_deferred` (§6.1).
+- M. Muerte entre `cancel_for_source_loss` y el checkpoint del ingestor, con una fila real de `t <= gap_to_ms` en la fuente (D-17-14 iii).
+- N. Vela atrasada de otro producto con `t <= gap_to_ms`: se entrega, no se descarta (D-17-14 i).
 - H. Audit adelantado con checkpoint anterior (muerte entre ambos) y a la inversa: sin duplicados ni registros distintos.
 - I. Cota del proceso (fuente totalmente muda) nunca cancela.
-- J. Mutaciones: quitar la entrega previa de pendientes (F) rompe F; usar `observed_until_ms` como `gap_to` rompe la equivalencia; quitar la comprobación al final de la ventana rompe B.
+- J. Mutaciones: cancelar con `t_ms` = reloj del sondeo rompe K; usar `observed_until_ms` como `gap_to` rompe la equivalencia; adelantar `released_ms` sin las condiciones de (b) rompe N; no recuperar `released_ms` de `source_losses` rompe M; quitar la comparación `gap_to_ms <= deadline_ms` rompe B.
 
 ## 9. Hallazgos de D resueltos
 
-D-17-01 reemplazado por D-17-09 (§3, §6) y D-17-10 (§3, caso 5b), D-17-02 (§4), D-17-03 (§4, caso 3), D-17-04 (§5, §7, caso 6), D-17-11 y D-17-12 (§3, §4, caso 5b), LOW 05 (`silence_at_window_end`), 06 (`never_quoted`), 07 (tope de `observation`), 08 (§10).
+D-17-01 reemplazado por D-17-09 (§3, §6) y D-17-10 (§3, caso 5b), D-17-02 (§4), D-17-03 (§4, caso 3), D-17-04 (§5, §7, caso 6), D-17-11 y D-17-12 (§3, §4, caso 5b), D-17-13 a 16 (§3, §3.1, §6, §6.1, casos G, K a N), LOW 05 (`silence_at_window_end`), 06 (`never_quoted`), 07 (tope de `observation`), 08 (§10).
 
 ## 10. Dónde se implementa
 
