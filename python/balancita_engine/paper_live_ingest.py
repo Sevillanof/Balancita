@@ -361,8 +361,10 @@ class Ingestor(object):
             return None
         bound = self.observed_until_ms
         if self.candle_lag_ms > 0 and self.max_ticker_ms is not None:
+            # a silent source no longer moves ``max_ticker_ms``: the observed bound is the time that has passed (D-172-05)
+            now = max(self.max_ticker_ms, bound)
             due = [bucket + 2 * ONE_MINUTE_MS - 1 for bucket in self.last_candle_bucket.values()
-                   if self.max_ticker_ms < bucket + 2 * ONE_MINUTE_MS + self.candle_lag_ms]
+                   if now < bucket + 2 * ONE_MINUTE_MS + self.candle_lag_ms]
             if due:
                 bound = min(bound, min(due))
         return bound

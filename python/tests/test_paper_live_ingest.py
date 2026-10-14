@@ -1179,17 +1179,27 @@ class TestOpenSilencesAreDurable(Base):
         self.assertIsNotNone(again.proven_until())
         reader.close()
 
-    def test_an_overdue_candle_limits_what_is_proven(self):
-        for t in range(0, 61, 5):
+    def test_an_overdue_candle_limits_what_is_proven_until_the_lag_has_passed(self):
+        """D-172-05 / D-172-06: the candle of a minute may still turn up until ``candle_lag_ms`` after it was due. While that
+        holds, what is proven stops at its due time; once the observed time is past the lag (the source being mute, the
+        tickers no longer move), it stops limiting."""
+        for t in range(0, 231, 5):
             self.src.ticker(BTC, CYCLE + t * SEC, "100000")
-        self.src.candle(BTC, CYCLE - MIN, 1, 1, 1, 1)
+        for bucket in (0, 1, 2):
+            self.src.candle(BTC, CYCLE + bucket * MIN, 1, 1, 1, 1)
         self.src.commit()
         reader = SourceReader(self.path)
         ing = Ingestor(reader)
-        self.poll(ing, 70)
-        bound = ing.proven_until()
+        due_ms = CYCLE + 2 * MIN + 2 * MIN - 1                                                # the last bucket read is minute 2: due at 4 min
+        lag = ING.DEFAULT_CANDLE_LAG_MS
+        self.poll(ing, 250)
+        self.assertEqual(ing.proven_until(), due_ms)
+        self.poll(ing, 2 * MIN // SEC + 120 + 120)                                            # still inside the lag: 4 min + 120 s after the due minute
+        self.assertEqual(ing.proven_until(), due_ms)
+        past = (due_ms + 1 + lag - CYCLE) // SEC + ING.DEFAULT_HOLD_MS // SEC + 1
+        self.poll(ing, past)
+        self.assertEqual(ing.proven_until(), ing.observed_until_ms)                           # the mute source: the lag is over
         reader.close()
-        self.assertLess(bound, ing.observed_until_ms)                                         # a candle may still turn up for that minute
 
     def test_the_events_the_runner_receives_do_not_change(self):
         self.feed(60, 20)
