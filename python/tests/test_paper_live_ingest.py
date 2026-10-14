@@ -13,6 +13,7 @@ from decimal import Decimal
 
 from balancita_engine import signal_continuity as SC
 from balancita_engine import paper_live_publish as PUB
+from balancita_engine import paper_live_session as SES
 from balancita_engine.paper_live_ingest import Ingestor, SourceReader, classify_expiry
 from balancita_engine.paper_runner import PaperRunner, RunnerConfig, make_event
 from balancita_engine.portfolio_scenarios import ScriptedStrategy
@@ -404,6 +405,131 @@ class TestBatchesAndDurability(Base):
         reader.close()
         self.assertEqual([e["event_id"] for e in got], [e["event_id"] for e in a1])
         self.assertEqual(again.stats["late_source_rows"], 0)
+
+
+class TestSessionCheckpoint(Base):
+    """D-10B-02: the ingestor checkpoint is written atomically after the runner has journaled the poll's events, never ahead
+    of the runner, and any crash leaves a state that resumes to the uninterrupted result. ``paper_runner.py`` is untouched."""
+
+    def setUp(self):
+        super().setUp()
+        for i in range(3, 241):
+            self.src.ticker(BTC, CYCLE + i * SEC, "100010" if i < 90 else "103400")
+        for n, (o, h, l, c) in enumerate([(100000, 100100, 99900, 100010), (100010, 100100, 99900, 100010),
+                                          (100010, 103500, 100000, 103400), (103400, 103500, 103300, 103400)]):
+            self.src.candle(BTC, CYCLE + n * MIN, o, h, l, c)
+        self.src.commit()
+        self.config = RunnerConfig(funding=FUNDING, start_ms=CYCLE - HOUR)
+        self.script = {(BTC, CYCLE): {"action": "BUY", "strength": "0.8"}}
+        self.cycle = make_event("cycle", {"product_id": BTC, "cycle_ms": CYCLE, "price": "100000", "atr": "1000"},
+                                t_ms=CYCLE + 2 * SEC, source="test", stream="cycle", source_offset=None)
+        self.polls = [CYCLE + 60 * SEC, CYCLE + 120 * SEC, CYCLE + 180 * SEC, CYCLE + 250 * SEC, CYCLE + 250 * SEC]
+
+    def new_runner(self, name):
+        runner = PaperRunner.create(self.runner_dir(name), self.config, [ScriptedStrategy("scripted-a", self.script)])
+        self.addCleanup(runner.close)
+        runner.run([self.cycle])
+        return runner
+
+    def recover(self, name, clock):
+        runner = PaperRunner.recover(self.runner_dir(name), self.config, [ScriptedStrategy("scripted-a", self.script)], clock)
+        self.addCleanup(runner.close)
+        return runner
+
+    def uninterrupted(self):
+        runner = self.new_runner("whole")
+        reader = SourceReader(self.path)
+        ing = Ingestor(reader, hold_ms=2 * SEC, batch=40)
+        for now in self.polls:
+            SES.step(self.runner_dir("whole"), ing, runner, now)
+        reader.close()
+        self.assertTrue(runner.portfolio.positions or runner.portfolio.trades)
+        return runner
+
+    def resume(self, name, runner_clock, from_poll):
+        runner = self.recover(name, runner_clock)
+        reader = SourceReader(self.path)
+        self.addCleanup(reader.close)
+        ing = SES.restore(self.runner_dir(name), reader, runner, hold_ms=2 * SEC, batch=40)
+        for now in self.polls[from_poll:]:
+            SES.step(self.runner_dir(name), ing, runner, now)
+        return runner
+
+    def same_result(self, a, b):
+        self.assertEqual(a.financial_digest(), b.financial_digest())
+        self.assertEqual(a.portfolio.snapshot(), b.portfolio.snapshot())
+
+    def test_process_restart_between_steps_resumes_to_the_uninterrupted_result(self):
+        whole = self.uninterrupted()
+        runner = self.new_runner("cut")
+        reader = SourceReader(self.path)
+        ing = Ingestor(reader, hold_ms=2 * SEC, batch=40)
+        for now in self.polls[:2]:
+            SES.step(self.runner_dir("cut"), ing, runner, now)
+        clock = runner.clock
+        reader.close()
+        runner.close()
+        self.same_result(self.resume("cut", clock, 2), whole)
+
+    def test_crash_after_the_runner_but_before_the_ingestor_checkpoint_replays_duplicates_harmlessly(self):
+        whole = self.uninterrupted()
+        runner = self.new_runner("late")
+        reader = SourceReader(self.path)
+        ing = Ingestor(reader, hold_ms=2 * SEC, batch=40)
+        SES.step(self.runner_dir("late"), ing, runner, self.polls[0])
+        out = ing.poll(self.polls[1])                      # the runner takes the events ...
+        runner.run(out["events"])                          # ... and the process dies before SES.save
+        clock = runner.clock
+        reader.close()
+        runner.close()
+        resumed = self.resume("late", clock, 1)            # the older checkpoint re-emits the same rows
+        self.same_result(resumed, whole)
+        self.assertGreater(resumed.stats.get("rejected:duplicate_event", 0), 0)
+
+    def test_a_crash_while_writing_leaves_the_previous_checkpoint_and_no_partial_file(self):
+        whole = self.uninterrupted()
+        runner = self.new_runner("mid")
+        reader = SourceReader(self.path)
+        ing = Ingestor(reader, hold_ms=2 * SEC, batch=40)
+        SES.step(self.runner_dir("mid"), ing, runner, self.polls[0])
+        path = os.path.join(self.runner_dir("mid"), SES.CHECKPOINT_FILE)
+        before = open(path, "rb").read()
+        runner.run(ing.poll(self.polls[1])["events"])
+        with self.assertRaises(SystemError):
+            SES.save(self.runner_dir("mid"), ing, runner, _crash_before_rename=True)
+        self.assertEqual(open(path, "rb").read(), before)               # the old, complete file stands
+        self.assertTrue(os.path.exists(path + ".tmp"))
+        clock = runner.clock
+        reader.close()
+        runner.close()
+        self.same_result(self.resume("mid", clock, 1), whole)
+
+    def test_a_checkpoint_never_ahead_of_the_runner_and_foreign_or_damaged_files_are_refused(self):
+        runner = self.new_runner("ref")
+        reader = SourceReader(self.path)
+        ing = Ingestor(reader, hold_ms=2 * SEC, batch=40)
+        SES.step(self.runner_dir("ref"), ing, runner, self.polls[0])
+        path = os.path.join(self.runner_dir("ref"), SES.CHECKPOINT_FILE)
+        self.assertEqual(json.load(open(path))["runner_seq"], len(runner.journal.entries))
+        self.assertIsNotNone(SES.load(self.runner_dir("ref"), runner))
+        other = self.new_runner("other")                                 # another journal: shorter and different
+        other_dir = self.runner_dir("other")
+        shutil.copy(path, os.path.join(other_dir, SES.CHECKPOINT_FILE))
+        with self.assertRaises(SES.SessionError) as ahead:
+            SES.load(other_dir, other)
+        self.assertEqual(ahead.exception.reason, "checkpoint_ahead_of_runner")
+        text = open(path).read()
+        open(path, "w").write(text.replace('"runner_seq": ', '"runner_seq": 0, "x": ', 1))
+        with self.assertRaises(SES.SessionError) as damaged:
+            SES.load(self.runner_dir("ref"), runner)
+        self.assertEqual(damaged.exception.reason, "checkpoint_digest_mismatch")
+        open(path, "w").write("{not json")
+        with self.assertRaises(SES.SessionError) as bad:
+            SES.load(self.runner_dir("ref"), runner)
+        self.assertEqual(bad.exception.reason, "checkpoint_unreadable")
+        os.remove(path)
+        self.assertIsNone(SES.load(self.runner_dir("ref"), runner))
+        reader.close()
 
 
 class TestSourceOutageVersusQuietMarket(Base):
