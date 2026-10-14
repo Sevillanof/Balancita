@@ -27,7 +27,7 @@ Decisión de diseño (opción b, a confirmar por Fran): **no se toca lo que reci
 
 Alternativa (a), no propuesta: con el sondeo agotado, adelantar `released_ms` a `observed_now_ms - hold_ms`, de modo que esa fila sea tardía y se descarte. Cierra la contradicción, pero cambia lo que se entrega al runner cuando se viola `hold_ms` y obliga a revalidar los digests de 10D. Lo decide Fran.
 
-**Fuente totalmente muda.** Sin filas no hay reloj de la fuente que avance. En ese caso `observed_now_ms` sale de la hora del proceso, y cada `observation`/`outage_open` que lo use lleva `clock: "process"` (en los demás, `clock: "source"`). Ese valor es solo evidencia: no se usa como `gap_to`, no cancela y no entra en comparaciones de determinismo. No se propone leer otra tabla ni un latido de la captura; eso necesitaría autorización escrita de Fran.
+**Fuente totalmente muda.** Sin filas no hay reloj de la fuente que avance. En ese caso `observed_now_ms` sale de la hora del proceso, y cada `observation`/`outage_open` que lo use lleva `clock: "process"` (en los demás, `clock: "source"`). **Dos cotas separadas (D-17-11):** `observed_until_source_ms` (monótona, solo del reloj de la fuente) y `observed_until_process_ms` (aparte). La del proceso nunca alimenta el máximo de la de la fuente; si lo hiciera, al volver la fuente su primera fila real generaría un `silence_contradicted` espurio. Ese valor es solo evidencia: no se usa como `gap_to`, no cancela y no entra en comparaciones de determinismo. No se propone leer otra tabla ni un latido de la captura; eso necesitaría autorización escrita de Fran.
 
 ## 4. Registros nuevos (en `audit.jsonl`, deduplicados por hash; reloj de la fuente salvo `clock: "process"` marcado)
 
@@ -37,7 +37,7 @@ Alternativa (a), no propuesta: con el sondeo agotado, adelantar `released_ms` a 
 - `never_quoted` `{product_id, since_ms}` (LOW 06): el conjunto de productos esperados lo declara la sesión. Uno que nunca cotizó se cuenta como silencio desde el primer `observed_until_ms` de la sesión.
 - `observation_gap` `{from_ms, to_ms}`: en el dominio de la fuente, de la última `observed_until_ms` durable al primer `observed_until_ms` tras recuperar. Se escribe en **cada** `recover()`, aunque la caída sea corta (D-17-02); no hay umbral de dos sondeos.
 - Al llegar la cotización posterior, el registro `silences` existente gana `observed: "complete" | "partial"` y `observed_span_ms`. `partial` si algún `observation_gap` cae dentro del silencio.
-- `silence_at_window_end` `{intent_id, deadline_ms, product_id, since_ms, observed_until_ms}` (LOW 05): uno por orden pendiente cuya ventana termina con el silencio abierto. Con varias ventanas hay un registro por orden, no uno por silencio. Es evidencia; no cancela.
+- `silence_at_window_end` `{intent_id, deadline_ms, product_id, since_ms, observed_until_ms}` (LOW 05): uno por orden pendiente cuya ventana termina con el silencio abierto. Con varias ventanas hay un registro por orden, no uno por silencio. Es evidencia; no cancela. `deadline_ms` está en el dominio de la fuente: con la fuente totalmente muda el registro no usa la cota de la fuente, sino la del proceso, y lleva `clock: "process"` (D-17-12).
 
 ## 5. Recuperación y durabilidad (D-17-04)
 
@@ -68,7 +68,7 @@ Mundo sintético (`live_world`), reloj y SIGKILL como en 10D.
 3. La fuente nunca vuelve a emitir en la ventana: `silence_at_window_end`, sin cotización inventada, sin eventos nuevos al runner, estado financiero igual a la referencia. **Con un producto mudo y con toda la fuente muda** (`outage_open`, D-17-03).
 4. Caída corta (menos de un sondeo) dentro del silencio: `observation_gap` presente y cierre `partial` (D-17-02).
 5. Fila con `persisted_at` en `(released_ms, observed_until_ms]` de un silencio ya observado (D-17-09): se entrega al runner como siempre, se escribe `silence_contradicted` enlazado, el `silence_open` previo no cambia y la recuperación da el mismo resultado. Caso aparte: fila con `persisted_at <= released_ms` (tardía de verdad), solo se cuenta.
-5b. Fuente totalmente muda sin filas: los registros llevan `clock: "process"`, no entran en la comparación de determinismo y ninguno llega a `gap_to`.
+5b. Fuente totalmente muda sin filas: los registros llevan `clock: "process"`, no entran en la comparación de determinismo y ninguno llega a `gap_to`. La prueba sigue hasta que la fuente vuelve: la primera fila real no genera `silence_contradicted` (D-17-11).
 6. Caída entre `audit.jsonl` y el checkpoint, en ambos órdenes: la auditoría se rehace desde el checkpoint sin duplicados.
 7. Idempotencia: repetir `recover()` y repetir `observation`.
 8. Checkpoint viejo sin los campos nuevos: se restaura vacío, sin error.
@@ -79,7 +79,7 @@ Mundo sintético (`live_world`), reloj y SIGKILL como en 10D.
 
 ## 9. Hallazgos de D resueltos
 
-D-17-01 reemplazado por D-17-09 (§3, §6) y D-17-10 (§3, caso 5b), D-17-02 (§4), D-17-03 (§4, caso 3), D-17-04 (§5, §7, caso 6), LOW 05 (`silence_at_window_end`), 06 (`never_quoted`), 07 (tope de `observation`), 08 (§10).
+D-17-01 reemplazado por D-17-09 (§3, §6) y D-17-10 (§3, caso 5b), D-17-02 (§4), D-17-03 (§4, caso 3), D-17-04 (§5, §7, caso 6), D-17-11 y D-17-12 (§3, §4, caso 5b), LOW 05 (`silence_at_window_end`), 06 (`never_quoted`), 07 (tope de `observation`), 08 (§10).
 
 ## 10. Dónde se implementa
 
