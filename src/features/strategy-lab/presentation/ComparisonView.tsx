@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { DataState } from '../../../shared/mission-control/index.ts'
+import { DataState, StatusPill } from '../../../shared/mission-control/index.ts'
 import { count, horizonText, netBpPerOp } from '../domain/strategy-format.ts'
 import { splitExperiments } from '../domain/comparison-groups.ts'
 import type {
@@ -7,6 +7,10 @@ import type {
   InventoryStrategy,
   StrategyApi,
 } from '../infrastructure/strategy-api.ts'
+import {
+  loadKronosActivity,
+  type KronosActivity,
+} from '../infrastructure/kronos-activity.ts'
 import { marketText, validationDetail } from '../domain/inventory-text.ts'
 import {
   FrozenBadge,
@@ -32,6 +36,10 @@ function utcDay(ms: number) {
   return new Date(ms).toISOString().slice(0, 10)
 }
 
+function utcTime(ms: number) {
+  return `${new Date(ms).toISOString().slice(0, 16).replace('T', ' ')} UTC`
+}
+
 function forwardText(row: InventoryStrategy) {
   if (row.forward.start_ms != null)
     return `Registrada desde ${utcDay(row.forward.start_ms)} (UTC)`
@@ -44,9 +52,12 @@ export function ExperimentCard({
   inventory,
   onOpen,
   onInventory,
+  activity = null,
 }: {
   row: InventoryStrategy
   inventory: Inventory
+  /** Only read for Kronos (`kind === 'model'`); null while unknown. */
+  activity?: KronosActivity | null
   onOpen: () => void
   onInventory: () => void
 }) {
@@ -55,6 +66,7 @@ export function ExperimentCard({
   const detail = validationDetail(row, inventory)
   const closed = row.operational.state === 'closed'
   const start = forwardText(row)
+  const verified = row.kind === 'model' && activity?.verified ? activity : null
   return (
     <article
       className={closed ? 'comparison__card is-closed' : 'comparison__card'}
@@ -63,10 +75,16 @@ export function ExperimentCard({
     >
       <header>
         <span className="comparison__kind">EXP · {KIND_LABELS[row.kind]}</span>
-        <OperationalBadge
-          state={row.operational.state}
-          basis={row.operational.basis}
-        />
+        {verified ? (
+          <span data-testid="kronos-verified">
+            <StatusPill tone="ok">Actividad verificada</StatusPill>
+          </span>
+        ) : (
+          <OperationalBadge
+            state={row.operational.state}
+            basis={row.operational.basis}
+          />
+        )}
       </header>
       <h3>
         {row.name} <small>v{row.version}</small>
@@ -83,6 +101,29 @@ export function ExperimentCard({
         <h4>Modelo</h4>
         <p>{marketText(row)}</p>
       </section>
+
+      {row.kind === 'model' && (
+        <section className="comparison__block" data-testid="kronos-activity">
+          <h4>Actividad (solo lectura)</h4>
+          {verified ? (
+            <>
+              <strong>
+                {verified.trades == null
+                  ? 'No disponible'
+                  : count(verified.trades)}{' '}
+                operaciones ·{' '}
+                {verified.decisions == null
+                  ? 'No disponible'
+                  : count(verified.decisions)}{' '}
+                decisiones
+              </strong>
+              <small>Resumen del ciclo de {utcTime(verified.updated_ms)}</small>
+            </>
+          ) : (
+            <em>Estado no verificado</em>
+          )}
+        </section>
+      )}
 
       <section className="comparison__block">
         <h4>Backtest (neto de costes)</h4>
@@ -145,7 +186,10 @@ type Props = {
   reload: number
   onOpen: (row: InventoryStrategy) => void
   onBack: () => void
+  loadActivity?: () => Promise<KronosActivity>
 }
+
+const defaultLoadActivity = () => loadKronosActivity()
 
 /**
  * Experiment comparison: one independent book per experiment, side by side.
@@ -157,8 +201,21 @@ export default function ComparisonView({
   reload,
   onOpen,
   onBack,
+  loadActivity = defaultLoadActivity,
 }: Props) {
   const [inventory, setInventory] = useState<Inventory | null>(null)
+  const [activity, setActivity] = useState<KronosActivity | null>(null)
+
+  useEffect(() => {
+    let active = true
+    loadActivity().then(
+      (loaded) => active && setActivity(loaded),
+      () => active && setActivity({ verified: false, reason: 'error' }),
+    )
+    return () => {
+      active = false
+    }
+  }, [loadActivity, reload])
   const [failure, setFailure] = useState<string | null>(null)
 
   useEffect(() => {
@@ -221,6 +278,7 @@ export default function ComparisonView({
       inventory={inventory}
       onOpen={() => onOpen(row)}
       onInventory={onBack}
+      activity={activity}
     />
   )
   return (
@@ -274,7 +332,7 @@ export default function ComparisonView({
                 <th>Experimento</th>
                 <th>Quién decide la salida</th>
                 <th>Horizonte</th>
-                <th>Unidad</th>
+                <th>Unidad del resultado</th>
               </tr>
             </thead>
             <tbody>
@@ -289,7 +347,11 @@ export default function ComparisonView({
                   <td>
                     {horizonText(row.market.horizon_minutes) ?? 'No disponible'}
                   </td>
-                  <td>pb por operación (neto)</td>
+                  <td>
+                    {netBpPerOp(row.research.backtest?.mean_net_bp)
+                      ? 'pb por operación (neto)'
+                      : 'No disponible'}
+                  </td>
                 </tr>
               ))}
             </tbody>

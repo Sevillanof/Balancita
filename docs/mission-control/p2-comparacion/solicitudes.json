@@ -1,0 +1,157 @@
+[
+  {
+    "method": "GET",
+    "url": "/api-live/health",
+    "status": 502
+  },
+  {
+    "method": "GET",
+    "url": "/api-live/qwen/scores?product=PF_XBTUSD",
+    "status": 502
+  },
+  {
+    "method": "GET",
+    "url": "/api-live/kronos/scores?product=PF_XBTUSD",
+    "status": 502
+  },
+  {
+    "method": "GET",
+    "url": "/api-live/terminal/bootstrap",
+    "status": 502
+  },
+  {
+    "method": "GET",
+    "url": "/api-live/observability/health",
+    "status": 502
+  },
+  {
+    "method": "GET",
+    "url": "/api-live/health",
+    "status": 502
+  },
+  {
+    "method": "GET",
+    "url": "/api-live/terminal/bootstrap",
+    "status": 502
+  },
+  {
+    "method": "GET",
+    "url": "/api-live/qwen/scores?product=PF_XBTUSD",
+    "status": 502
+  },
+  {
+    "method": "GET",
+    "url": "/api-live/kronos/scores?product=PF_XBTUSD",
+    "status": 502
+  },
+  {
+    "method": "GET",
+    "url": "/api-strategies/health",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "/api-strategies/inventory",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "/api-live/system",
+    "status": 502
+  },
+  {
+    "method": "GET",
+    "url": "/api-live/system",
+    "status": 502
+  },
+  {
+    "method": "GET",
+    "url": "/api-live/kronos/scores?product=PF_XBTUSD",
+    "status": 502
+  },
+  {
+    "method": "GET",
+    "url": "/api-live/kronos/scores?product=PF_XBTUSD",
+    "status": 502
+  },
+  {
+    "method": "GET",
+    "url": "/api-strategies/inventory",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "/api-strategies/inventory",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "/api-strategies/carry",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "/api-strategies/ranking?product=PF_XBTUSD&days=30",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "/api-strategies/carry",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "/api-strategies/strategies/c29-momentum-perp-v1",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "/api-strategies/inventory",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "/api-strategies/inventory",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "/api-live/system",
+    "status": 502
+  },
+  {
+    "method": "GET",
+    "url": "/api-live/system",
+    "status": 502
+  },
+  {
+    "method": "GET",
+    "url": "/api-live/kronos/scores?product=PF_XBTUSD",
+    "status": 502
+  },
+  {
+    "method": "GET",
+    "url": "/api-live/kronos/scores?product=PF_XBTUSD",
+    "status": 502
+  },
+  {
+    "method": "GET",
+    "url": "/api-strategies/inventory",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "/api-strategies/inventory",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "/api-strategies/inventory",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "/api-strategies/inventory",
+    "status": 200
+  }
+]

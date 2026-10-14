@@ -17,7 +17,7 @@ const REGISTRY_PORT = 8790
 const SHOTS =
   process.env.COMPARISON_SHOTS_DIR ?? 'playwright-artifacts/comparacion'
 const SANDBOX_NOTE =
-  'SANDBOX · config/ real copiada (solo lectura) + base temporal del registro · estados de registro sembrados, no los de la Mac'
+  'DATOS DE EJEMPLO · SANDBOX · config/ real copiada (solo lectura) + base temporal del registro · estados de registro sembrados, no los de la Mac'
 
 let registry: ChildProcess | null = null
 let configCopy = ''
@@ -148,6 +148,17 @@ test('Ver comparación shows one separate book per experiment from the real regi
   await expect(
     card('carry-funding-c-v1').getByTestId('operational-badge'),
   ).toHaveText('Estado no verificado')
+  // The gateway is off in this spec: Kronos stays unverified, never inferred.
+  await expect(
+    card('kronos-small-1h-h4-v1').getByTestId('kronos-activity'),
+  ).toContainText('Estado no verificado')
+  await expect(page.getByText('Actividad verificada')).toHaveCount(0)
+  await expect(page.getByText(/Brazo/i)).toHaveCount(0)
+  // Unit per experiment: only where the result is a net bp-per-trade figure.
+  const unitRow = (name: RegExp) =>
+    page.getByRole('row').filter({ hasText: name })
+  await expect(unitRow(/Kronos/)).toContainText('No disponible')
+  await expect(unitRow(/Kronos/)).not.toContainText('pb por operación')
   await expect(card('carry-funding-c-v1')).not.toContainText('descartad')
   await expect(
     card('c25-pullback-perp-v1').getByTestId('operational-badge'),
@@ -182,4 +193,51 @@ test('Ver comparación shows one separate book per experiment from the real regi
   )
   expect(inventoryCalls.length).toBeGreaterThan(1)
   expect(inventoryCalls.every((entry) => entry.status === 200)).toBe(true)
+})
+
+test('Kronos shows «Actividad verificada» only with a fresh summary and scores with data', async ({
+  page,
+}) => {
+  // DATOS DE EJEMPLO · SANDBOX: the live gateway is off in this spec, so the two
+  // read-only routes are answered here with synthetic figures.
+  const updated = Date.now() - 10 * 60_000
+  await page.route('**/api-live/system', (route) =>
+    route.fulfill({
+      json: {
+        kronos: {
+          running: true,
+          trades: 4,
+          decisions: 30,
+          updated_ms: updated,
+        },
+      },
+    }),
+  )
+  await page.route('**/api-live/kronos/scores*', (route) =>
+    route.fulfill({ json: { status: 'ok', products: [] } }),
+  )
+  await page.goto('/estrategias')
+  await page.getByRole('button', { name: 'Ver comparación' }).click()
+  const kronos = page.locator('[data-id="kronos-small-1h-h4-v1"]')
+  await expect(kronos.getByTestId('kronos-verified')).toHaveText(
+    'Actividad verificada',
+  )
+  await expect(kronos.getByTestId('kronos-activity')).toContainText(
+    '4 operaciones · 30 decisiones',
+  )
+  await expect(page.getByText('Actividad verificada')).toHaveCount(1)
+  await shot(page, '2-comparacion-kronos-verificado')
+
+  // Same summary but the scores route is off: back to unverified.
+  await page.route('**/api-live/kronos/scores*', (route) =>
+    route.fulfill({
+      json: { status: 'off', reason: 'kronos_not_configured', products: [] },
+    }),
+  )
+  await page.getByRole('button', { name: '← Volver al inventario' }).click()
+  await page.getByRole('button', { name: 'Ver comparación' }).click()
+  await expect(kronos.getByTestId('kronos-activity')).toContainText(
+    'Estado no verificado',
+  )
+  await expect(page.getByText('Actividad verificada')).toHaveCount(0)
 })

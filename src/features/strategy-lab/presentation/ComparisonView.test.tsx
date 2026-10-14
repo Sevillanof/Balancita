@@ -5,6 +5,7 @@ import { OPERATIONAL_LABELS } from '../domain/strategy-labels.ts'
 import ComparisonView from './ComparisonView.tsx'
 import InventoryView from './InventoryView.tsx'
 import { exampleInventory, exampleRow } from '../testing/inventory-fixture.ts'
+import type { KronosActivity } from '../infrastructure/kronos-activity.ts'
 import type { Inventory, StrategyApi } from '../infrastructure/strategy-api.ts'
 
 // DATOS DE EJEMPLO: estados y cifras sintéticos de pruebas, nunca de la app.
@@ -41,9 +42,17 @@ const api = (): StrategyApi =>
     inventory: () => Promise.resolve(inventory),
   }) as unknown as StrategyApi
 
-function renderView(onOpen = vi.fn(), onBack = vi.fn()) {
+const unverified = () =>
+  Promise.resolve({ verified: false as const, reason: 'scores_off' })
+
+function renderView(
+  onOpen = vi.fn(),
+  onBack = vi.fn(),
+  loadActivity: () => Promise<KronosActivity> = unverified,
+) {
   render(
     <ComparisonView
+      loadActivity={loadActivity}
       api={api()}
       connectError={null}
       reload={0}
@@ -109,6 +118,49 @@ describe('ComparisonView (datos de ejemplo)', () => {
       screen.getByRole('button', { name: '← Volver al inventario' }),
     )
     expect(onBack).toHaveBeenCalled()
+  })
+
+  it('shows Kronos as verified only with a verified activity read', async () => {
+    renderView(vi.fn(), vi.fn(), () =>
+      Promise.resolve({
+        verified: true as const,
+        updated_ms: Date.UTC(2026, 9, 14, 10, 30),
+        trades: 4,
+        decisions: 30,
+      }),
+    )
+    await screen.findAllByTestId('experiment-card')
+    const card = document.querySelector('[data-id="x4"]') as HTMLElement
+    expect(
+      await within(card).findByTestId('kronos-verified'),
+    ).toHaveTextContent('Actividad verificada')
+    expect(within(card).getByTestId('kronos-activity')).toHaveTextContent(
+      '2026-10-14 10:30 UTC',
+    )
+    expect(screen.getAllByText('Actividad verificada')).toHaveLength(1)
+  })
+
+  it('keeps Kronos «Estado no verificado» when the activity is not verified', async () => {
+    renderView()
+    await screen.findAllByTestId('experiment-card')
+    const card = document.querySelector('[data-id="x4"]') as HTMLElement
+    expect(within(card).queryByTestId('kronos-verified')).toBeNull()
+    expect(within(card).getByTestId('kronos-activity')).toHaveTextContent(
+      'Estado no verificado',
+    )
+    expect(document.body.textContent).not.toMatch(/Actividad verificada/)
+  })
+
+  it('shows the unit only where the result is computed that way and adds no arms', async () => {
+    renderView()
+    await screen.findAllByTestId('experiment-card')
+    const rows = screen.getAllByRole('row').slice(1)
+    const x1 = rows.find((r) => r.textContent?.includes('X1 Candidata'))!
+    const x4 = rows.find((r) => r.textContent?.includes('X4 Modelo'))!
+    expect(x1).toHaveTextContent('pb por operación (neto)')
+    expect(x4).toHaveTextContent('No disponible')
+    expect(x4).not.toHaveTextContent('pb por operación')
+    expect(document.body.textContent).not.toMatch(/Brazo/i)
   })
 
   it('shows the failure instead of example data', async () => {
