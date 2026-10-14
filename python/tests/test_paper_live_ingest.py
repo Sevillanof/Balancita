@@ -885,6 +885,273 @@ class TestSourceContinuityEvidence(Base):
         self.assertEqual(caught.exception.reason, "cursor_ahead_of_source")
 
 
+class TestOpenSilencesAreDurable(Base):
+    """D-10B-17: a silence that has not ended yet is evidence too. How far the source was observed is kept (in the source's
+    clock), a silence that crosses a process death stays one silence with the unobserved stretch told apart, and nothing
+    here is a quote: no event is invented and the runner receives exactly what it did before."""
+
+    def feed(self, btc_until, eth_until=None, step=5):
+        for t in range(0, btc_until + 1, step):
+            self.src.ticker(BTC, CYCLE + t * SEC, "100000")
+        for t in range(0, (eth_until if eth_until is not None else btc_until) + 1, step):
+            if eth_until is not None:
+                self.src.ticker(ETH, CYCLE + t * SEC, "3500")
+        self.src.commit()
+
+    def poll(self, ing, at_s, **kw):
+        return ing.poll(CYCLE + at_s * SEC, **kw)
+
+    def reopen(self, ing, reader):
+        saved = json.loads(json.dumps(ing.checkpoint()))
+        reader.close()
+        reader = SourceReader(self.path)
+        again = Ingestor.from_checkpoint(reader, saved, **{"expected_products": ing.expected_products})
+        again.mark_recovered()
+        return again, reader
+
+    def test_an_open_silence_keeps_its_start_and_how_far_it_was_observed(self):
+        self.feed(60, 20)
+        reader = SourceReader(self.path)
+        ing = Ingestor(reader)
+        self.poll(ing, 62)
+        first = ing.observation()
+        self.poll(ing, 80)
+        second = ing.observation()
+        reader.close()
+        self.assertEqual(first["open_silences"][ETH]["since_ms"], CYCLE + 20 * SEC)
+        self.assertEqual(first["open_silences"][ETH]["observed_until_ms"], CYCLE + 62 * SEC - ING.DEFAULT_HOLD_MS)
+        self.assertEqual(second["open_silences"][ETH]["since_ms"], CYCLE + 20 * SEC)           # extended, never restarted
+        self.assertEqual(second["open_silences"][ETH]["observed_until_ms"], CYCLE + 80 * SEC - ING.DEFAULT_HOLD_MS)
+        self.assertEqual(second["observation_gaps"], [])
+
+    def test_a_silence_across_a_process_death_is_one_silence_with_the_unobserved_stretch_told_apart(self):
+        self.feed(60, 20)
+        reader = SourceReader(self.path)
+        ing = Ingestor(reader)
+        self.poll(ing, 40)
+        ing, reader = self.reopen(ing, reader)
+        self.poll(ing, 90)
+        seen = ing.observation()
+        self.assertEqual(seen["observation_gaps"], [[CYCLE + 40 * SEC - ING.DEFAULT_HOLD_MS, CYCLE + 90 * SEC - ING.DEFAULT_HOLD_MS]])
+        self.assertEqual(seen["open_silences"][ETH]["since_ms"], CYCLE + 20 * SEC)
+        self.assertTrue(seen["open_silences"][ETH]["partial"])
+        self.src.ticker(ETH, CYCLE + 100 * SEC, "3500")
+        self.src.ticker(BTC, CYCLE + 110 * SEC, "100000")
+        self.src.commit()
+        self.poll(ing, 200)
+        reader.close()
+        closed = [x for x in ing.silences if x["kind"] == "product_silence" and x["product_id"] == ETH]
+        self.assertEqual([x["observed"] for x in closed], ["partial"])
+        self.assertEqual(ing.open_silences[ETH]["since_ms"], CYCLE + 100 * SEC)               # a new silence, not the old one
+        self.assertFalse(ing.open_silences[ETH]["partial"])
+
+    def test_the_same_silence_without_a_death_is_observed_in_full(self):
+        self.feed(60, 20)
+        reader = SourceReader(self.path)
+        ing = Ingestor(reader)
+        self.poll(ing, 40)
+        self.poll(ing, 90)
+        self.src.ticker(ETH, CYCLE + 100 * SEC, "3500")
+        self.src.ticker(BTC, CYCLE + 110 * SEC, "100000")
+        self.src.commit()
+        self.poll(ing, 200)
+        reader.close()
+        self.assertEqual([x["observed"] for x in ing.silences if x["product_id"] == ETH], ["complete"])
+        self.assertEqual(ing.observation_gaps, [])
+
+    def test_a_short_death_is_still_an_observation_gap(self):
+        self.feed(60, 20)
+        reader = SourceReader(self.path)
+        ing = Ingestor(reader)
+        self.poll(ing, 40)
+        ing, reader = self.reopen(ing, reader)
+        self.poll(ing, 41)
+        reader.close()
+        self.assertEqual(len(ing.observation_gaps), 1)
+
+    def test_a_source_that_never_emits_again_leaves_the_silence_open_and_invents_nothing(self):
+        self.feed(30)
+        reader = SourceReader(self.path)
+        ing = Ingestor(reader)
+        base = self.poll(ing, 40)["events"]
+        later = [self.poll(ing, at) for at in (100, 400, 1_000)]
+        reader.close()
+        self.assertTrue(all(o["events"] == [] or all(e["kind"] == "clock" for e in o["events"]) for o in later))
+        self.assertFalse([e for o in later for e in o["events"] if e["kind"] in ("quote", "candle")])
+        seen = ing.observation()
+        self.assertEqual(seen["open_silences"]["*"]["scope"], "source")
+        self.assertEqual(seen["open_silences"]["*"]["since_ms"], CYCLE + 30 * SEC)
+        self.assertEqual(seen["open_silences"]["*"]["observed_until_ms"], CYCLE + 1_000 * SEC - ING.DEFAULT_HOLD_MS)
+        self.assertEqual(ing.last_any_ticker_ms, CYCLE + 30 * SEC)
+        self.assertTrue(base is not None)
+
+    def test_the_process_clock_is_kept_apart_and_never_feeds_the_source_bound(self):
+        self.feed(30)
+        reader = SourceReader(self.path)
+        ing = Ingestor(reader)
+        self.poll(ing, 40)
+        before = ing.observation()
+        self.poll(ing, 500, clock="process")
+        mid = ing.observation()
+        self.assertEqual(mid["observed_until_ms"], before["observed_until_ms"])
+        self.assertEqual(mid["open_process"]["*"]["observed_until_ms"], CYCLE + 500 * SEC - ING.DEFAULT_HOLD_MS)
+        self.src.ticker(BTC, CYCLE + 520 * SEC, "100000")                                    # the source is back
+        self.src.ticker(BTC, CYCLE + 600 * SEC, "100000")
+        self.src.commit()
+        self.poll(ing, 700)
+        reader.close()
+        self.assertEqual(ing.contradicted, [])                                               # no spurious contradiction
+        self.assertEqual(ing.open_process, {})
+
+    def test_a_quote_inside_what_was_already_observed_contradicts_it_and_is_still_delivered(self):
+        self.feed(60, 20)
+        reader = SourceReader(self.path)
+        ing = Ingestor(reader)
+        self.poll(ing, 62)
+        self.assertIn(ETH, ing.open_silences)
+        self.src.ticker(ETH, CYCLE + 59 * SEC, "3500")                                       # persisted late, inside the bound
+        self.src.ticker(BTC, CYCLE + 120 * SEC, "100000")
+        self.src.commit()
+        out = self.poll(ing, 125)
+        reader.close()
+        self.assertEqual([(c["product_id"], c["since_ms"], c["quote_ms"]) for c in ing.contradicted],
+                         [(ETH, CYCLE + 20 * SEC, CYCLE + 59 * SEC)])
+        self.assertIn((ETH, CYCLE + 59 * SEC), [(e["payload"]["product_id"], e["t_ms"]) for e in out["events"] if e["kind"] == "quote"])
+        self.assertEqual(ing.open_silences[ETH]["since_ms"], CYCLE + 59 * SEC)                # the old silence is closed
+
+    def test_a_silence_nobody_saw_open_is_not_called_observed(self):
+        self.feed(60, 20)
+        reader = SourceReader(self.path)
+        ing = Ingestor(reader)
+        self.poll(ing, 125)                                                                   # first look, after it already ended
+        reader.close()
+        self.assertTrue([x for x in ing.silences if x["product_id"] == ETH] == [] or
+                        {x["observed"] for x in ing.silences if x["product_id"] == ETH} <= {"not_observed", "complete"})
+
+    def test_a_product_that_never_quoted_is_a_silence_from_the_first_observation(self):
+        self.feed(60)
+        reader = SourceReader(self.path)
+        ing = Ingestor(reader, expected_products=(BTC, ETH))
+        self.poll(ing, 62)
+        self.assertNotIn(ETH, ing.open_silences)                                              # not over the limit yet
+        self.poll(ing, 90)
+        reader.close()
+        self.assertEqual(ing.observation()["open_silences"][ETH]["since_ms"], ing.first_observed_ms)
+
+    def test_an_unfinished_read_proves_nothing(self):
+        self.feed(60)
+        reader = SourceReader(self.path)
+        ing = Ingestor(reader, batch=3)
+        self.poll(ing, 62)
+        self.assertTrue(ing.ticker_more)
+        self.assertIsNone(ing.observed_until_ms)
+        reader.close()
+
+    def test_the_observation_log_is_bounded_by_time_not_by_the_number_of_silent_products(self):
+        self.feed(10)
+        reader = SourceReader(self.path)
+        ing = Ingestor(reader, expected_products=tuple("PF_P{}".format(i) for i in range(8)) + (BTC,))
+        for at in range(12, 400, 3):
+            self.poll(ing, at)
+        reader.close()
+        self.assertLessEqual(len(ing.observation_log), 400 // 15 + 1)
+
+    def test_the_observation_evidence_survives_the_checkpoint_and_an_old_checkpoint_loads_empty(self):
+        self.feed(60, 20)
+        reader = SourceReader(self.path)
+        ing = Ingestor(reader)
+        self.poll(ing, 62)
+        saved = json.loads(json.dumps(ing.checkpoint()))
+        reader.close()
+        for name in ING.Ingestor.EVIDENCE_FIELDS[-10:]:
+            self.assertIn(name, saved)
+        self.assertEqual(Ingestor.from_checkpoint(SourceReader(self.path), saved).observation(), ing.observation())
+        old = {k: v for k, v in saved.items() if k not in ING.Ingestor.EVIDENCE_FIELDS[-10:]}
+        loaded = Ingestor.from_checkpoint(SourceReader(self.path), old)
+        self.assertEqual((loaded.observed_until_ms, loaded.open_silences, loaded.observation_gaps), (None, {}, []))
+
+    def test_a_silence_that_crosses_a_death_is_partial_even_if_a_row_read_in_the_first_poll_ends_it(self):
+        self.feed(60, 20)
+        reader = SourceReader(self.path)
+        ing = Ingestor(reader)
+        self.poll(ing, 38)
+        saved = json.loads(json.dumps(ing.checkpoint()))
+        reader.close()
+        self.src.ticker(ETH, CYCLE + 70 * SEC, "3500")                                       # written while the process was dead
+        for t in range(65, 91, 5):
+            self.src.ticker(BTC, CYCLE + t * SEC, "100000")
+        self.src.commit()
+        reader = SourceReader(self.path)
+        again = Ingestor.from_checkpoint(reader, saved)
+        again.mark_recovered()
+        self.poll(again, 90)
+        self.poll(again, 120)
+        reader.close()
+        self.assertEqual([x["observed"] for x in again.silences if x["product_id"] == ETH], ["partial"])
+        self.assertEqual(len(again.observation_gaps), 1)
+
+    def test_a_first_poll_that_does_not_exhaust_the_read_still_ends_the_silence_as_partial(self):
+        self.feed(60, 20)
+        reader = SourceReader(self.path)
+        ing = Ingestor(reader)
+        self.poll(ing, 38)
+        saved = json.loads(json.dumps(ing.checkpoint()))
+        reader.close()
+        self.src.ticker(ETH, CYCLE + 70 * SEC, "3500")
+        for t in range(65, 121, 5):
+            self.src.ticker(BTC, CYCLE + t * SEC, "100000")
+        self.src.commit()
+        reader = SourceReader(self.path)
+        again = Ingestor.from_checkpoint(reader, saved, batch=3)
+        again.mark_recovered()
+        self.poll(again, 130)
+        self.assertTrue(again.ticker_more)
+        for _ in range(10):
+            self.poll(again, 130)
+        reader.close()
+        self.assertEqual({x["observed"] for x in again.silences if x["product_id"] == ETH}, {"partial"})
+
+    def test_any_late_row_ends_the_whole_source_silence_and_a_changed_start_is_a_new_silence(self):
+        self.feed(30)
+        reader = SourceReader(self.path)
+        ing = Ingestor(reader)
+        self.poll(ing, 40)
+        self.poll(ing, 100)
+        self.assertEqual(ing.open_silences["*"]["since_ms"], CYCLE + 30 * SEC)
+        self.src.ticker(BTC, CYCLE + 35 * SEC, "100000")                                     # inside the observed stretch, 5 s after the last row
+        self.src.commit()
+        self.poll(ing, 101)
+        reader.close()
+        self.assertIn(None, [c["product_id"] for c in ing.contradicted])
+        self.assertTrue(all(e["since_ms"] != CYCLE + 30 * SEC for e in ing.open_silences.values()))
+
+    def test_a_death_before_the_first_exhausted_poll_still_leaves_an_observation_gap(self):
+        self.feed(60, 20)
+        reader = SourceReader(self.path)
+        ing = Ingestor(reader, batch=4)
+        self.poll(ing, 70)
+        self.assertIsNone(ing.observed_until_ms)
+        released = ing.released_ms
+        self.assertIsNotNone(released)
+        ing, reader = self.reopen(ing, reader)
+        ing.batch = 5_000
+        self.poll(ing, 90)
+        reader.close()
+        self.assertEqual(len(ing.observation_gaps), 1)
+        self.assertEqual(ing.observation_gaps[0][0], released)                              # what was read is all that is known
+
+    def test_the_events_the_runner_receives_do_not_change(self):
+        self.feed(60, 20)
+        plain = ingest_all(self.path, CYCLE + 3_000 * SEC)[0]
+        reader = SourceReader(self.path)
+        ing = Ingestor(reader)
+        events = []
+        for at in (30, 62, 90, 3_000):
+            events += self.poll(ing, at)["events"]
+        reader.close()
+        self.assertEqual([e for e in events if e["kind"] != "clock"], [e for e in plain if e["kind"] != "clock"])
+
+
 class TestShortOutageInsideTheWindow(Base):
     """D-10-01: with the clock stopped, a short outage does not cancel the order: the first quote after the outage fills
     it if it still falls inside the execution window. That is the behavior to decide on (docs section 6), not a rule."""

@@ -128,3 +128,15 @@ Solo evidencia: ningún evento nuevo llega al runner y ninguna decisión cambia.
   - Si la fila del cursor fue podada (`market:prune`), el ancla no se puede verificar: ese caso solo lo cubre `cursor_ahead_of_source` (una tabla que se rellena hasta pasar el cursor con otras filas y sin la fila ancla no se detecta).
   - Los silencios abiertos (`state()["silences"]["open"]`) no son durables y un producto que nunca cotizó no aparece. La sesión de integración (10D) todavía no vuelca estas evidencias al diario de auditoría (D-10B-17).
   - Los umbrales (15 s de silencio de producto, 45 s de caída) siguen siendo hipótesis sin validar con datos reales.
+
+## Silencios abiertos durables (D-10B-17)
+
+Diseño: `docs/etapa-10b-silencios-abiertos-diseno.md` (PR #171). Esta parte es solo el ingestor; no cancela nada ni toca el runner.
+
+- `poll(observed_now_ms, clock="source")` extiende `observed_until_ms = observed_now_ms - hold_ms`, solo con la lectura agotada (`ticker_more` y `candle_more` falsos). Con `clock="process"` (fuente sin filas, sin reloj propio) la cota se guarda aparte (`observed_process_ms`, `open_process`) y no alimenta la de la fuente.
+- Silencios abiertos por producto, de toda la fuente (`"*"`, más de `dead_after_ms`) y de productos esperados que nunca cotizaron (`expected_products`). Cada uno guarda `since_ms`, `observed_until_ms`, `scope` y `partial`.
+- `mark_recovered()` tras `from_checkpoint`: el próximo sondeo registra `observation_gaps` `[desde, hasta]` (siempre, aunque la caída sea corta) y marca `partial` los silencios que cruza. Ese tramo no se cuenta como silencio.
+- Al llegar la cotización que lo cierra, el registro de `silences` gana `observed`: `complete`, `partial` o `not_observed` (ningún sondeo lo vio abierto). Una cotización con `t_ms <= observed_until_ms` del silencio abierto queda en `contradicted` sin reescribir nada y se entrega como siempre.
+- `observation_log`: un registro por avance de `product_silence_ms`, sin importar cuántos productos callan.
+- Todo va en el checkpoint como campos de evidencia (uno anterior carga vacío). Los eventos que recibe el runner no cambian.
+- Revisión de D (D-172-01 a 04): mientras el ingestor se recupera (`recovered_from_ms` sin cerrar), todo silencio abierto cuenta como `partial` aunque lo termine una fila leída en el primer sondeo, y `mark_recovered()` marca `partial` los abiertos. Cualquier fila cierra el silencio de toda la fuente (con contradicción si `t_ms <= observed_until_ms`); si cambia el inicio, es un silencio nuevo. Si el proceso muere antes de la primera lectura agotada, el tramo sin observar empieza en `released_ms`. Los silencios de la fuente solo salen por una cotización; solo la evidencia del reloj de proceso se descarta y se recalcula.
