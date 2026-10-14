@@ -731,12 +731,39 @@ class TestSourceContinuityEvidence(Base):
         self.src.commit()
         events, state, ing = self.run_all()
         silences = state["silences"]
-        self.assertEqual((silences["source"], silences["product"]), (2, 2))                # per-product records overlap them
+        self.assertEqual((silences["source"], silences["product"]), (2, 0))                # not told again once per product
         source = [s for s in silences["sample"] if s["kind"] == "source_silence"]
         self.assertEqual([(s["from_ms"] - CYCLE, s["to_ms"] - CYCLE, s["outage"]) for s in source],
                          [(10 * SEC, 40 * SEC, False), (45 * SEC, 120 * SEC, True)])
         self.assertEqual(len(state["outages"]), 1)                                         # the old outage rule is untouched
-        self.assertTrue(all(s["source_silence_overlap"] for s in silences["sample"] if s["kind"] == "product_silence"))
+
+    def test_an_interruption_of_the_whole_source_is_one_record_not_one_per_product(self):
+        """D-10B-14: eight products come back after 30 s of nothing: one source_silence and no product_silence."""
+        products = ["PF_P{}USD".format(i) for i in range(8)]
+        for t in (0, 5, 10, 40, 45, 50):
+            for product in products:
+                self.src.ticker(product, CYCLE + t * SEC, "100")
+        self.src.commit()
+        silences = self.run_all()[1]["silences"]
+        self.assertEqual((silences["source"], silences["product"]), (1, 0))
+        self.assertEqual((silences["sample"][0]["kind"], silences["sample"][0]["from_ms"] - CYCLE, silences["sample"][0]["to_ms"] - CYCLE),
+                         ("source_silence", 10 * SEC, 40 * SEC))
+
+    def test_a_product_that_was_silent_while_the_source_was_alive_keeps_its_own_record_even_across_an_interruption(self):
+        for t in range(0, 21, 5):                                                          # both quote until +20 s
+            self.src.ticker(BTC, CYCLE + t * SEC, "100000")
+            self.src.ticker(ETH, CYCLE + t * SEC, "3500")
+        for t in range(25, 61, 5):                                                         # BTC alone: ETH silent while the source lives
+            self.src.ticker(BTC, CYCLE + t * SEC, "100000")
+        for t in (95, 100):                                                                # then nothing for 35 s, then both back
+            self.src.ticker(BTC, CYCLE + t * SEC, "100000")
+            self.src.ticker(ETH, CYCLE + t * SEC, "3500")
+        self.src.commit()
+        silences = self.run_all()[1]["silences"]
+        kinds = [(s["kind"], s["product_id"], s["source_silence_overlap"] if s["kind"] == "product_silence" else None) for s in silences["sample"]]
+        self.assertEqual(kinds, [("source_silence", None, None), ("product_silence", ETH, True)])    # BTC's gap is the source's only
+        eth = silences["sample"][1]
+        self.assertEqual(eth["alive_ms"], 75 * SEC - 35 * SEC)                              # ETH: +20..+95 minus the +60..+95 interruption
 
     def test_the_threshold_is_a_parameter_not_a_rule(self):
         for t in (0, 10, 20):
@@ -797,6 +824,28 @@ class TestSourceContinuityEvidence(Base):
         again = Ingestor.from_checkpoint(reader, old)
         reader.close()
         self.assertEqual((again.cursor["gap"], again.silences, again.data_gaps, again.stats["data_gaps"]), (0, [], [], 0))
+
+    def test_a_table_refilled_with_other_rows_past_the_cursor_is_noticed_by_the_row_at_the_cursor(self):
+        """D-10B-16: MAX(rowid) alone would not see a source that was emptied and refilled past the cursor."""
+        for i in range(0, 10):
+            self.src.ticker(BTC, CYCLE + i * 5 * SEC, "100000")
+        self.src.commit()
+        reader = SourceReader(self.path)
+        ing = Ingestor(reader)
+        ing.poll(CYCLE + 3_000 * SEC)
+        saved = ing.checkpoint()
+        reader.close()
+        other = Source(os.path.join(self.dir, "refilled.sqlite"))                           # same table shape, other rows, longer
+        other.n = 1_000                                                                     # other event ids
+        for i in range(0, 30):
+            other.ticker(BTC, CYCLE + 1_000 * SEC + i * 5 * SEC, "100000")
+        other.close()
+        reader = SourceReader(other.path)
+        again = Ingestor.from_checkpoint(reader, saved)
+        with self.assertRaises(IngestError) as caught:
+            again.poll(CYCLE + 3_000 * SEC)
+        reader.close()
+        self.assertEqual(caught.exception.reason, "cursor_anchor_mismatch")
 
     def test_a_cursor_beyond_the_source_stops_the_ingestor_instead_of_skipping_rows(self):
         for i in range(0, 10):

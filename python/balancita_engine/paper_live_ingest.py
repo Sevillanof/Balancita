@@ -49,6 +49,7 @@ DEFAULT_PRODUCT_SILENCE_MS = 15_000    # hypothesis to test: a product's quote g
 REST_TICKER_EPOCH = 1_000_000          # server/src/features/kraken-futures/ticker-poll.ts: REST tickers; WebSocket epochs are 1..
 GAP_SAMPLE = 200                       # capture gaps kept as evidence (the count is exact)
 SILENCE_SAMPLE = 200                   # silences / epoch changes kept as evidence (the count is exact)
+SOURCE_INTERVALS_KEPT = 16             # recent whole-source silences remembered to tell them from a product's own
 DEFAULT_CLOCK_EVERY_MS = 5_000
 DEFAULT_CANDLE_LAG_MS = 120_000        # hypothesis: how long an overdue candle holds the watermark back (0 = never)
 LATE_SAMPLE = 20                       # late rows kept as evidence (the count is exact)
@@ -99,6 +100,17 @@ class SourceReader(object):
         except sqlite3.OperationalError:
             return []
         return [dict(r) for r in rows]
+
+    def identity(self, name, rowid):
+        """What the row at ``rowid`` is (its event id, candle key or gap id), or ``None`` when no row has that rowid."""
+        sql = {"ticker": "SELECT event_id FROM paper_futures_market_events WHERE rowid=?",
+               "candle": "SELECT product_id||'|'||bucket_start||'|'||revision_hash FROM paper_futures_official_candles WHERE rowid=?",
+               "gap": "SELECT gap_id FROM paper_futures_data_gaps WHERE rowid=?"}[name]
+        try:
+            row = self.db.execute(sql, (rowid,)).fetchone()
+        except sqlite3.OperationalError:
+            return None
+        return None if row is None else row[0]
 
     def max_rowids(self):
         """Highest rowid of each table the ingestor follows (``None`` for an absent or empty one): a cursor beyond it means
@@ -182,7 +194,8 @@ class Ingestor(object):
         self.alive_until = None           # last quote time + dead_after_ms: clock ticks only up to here
         self.outages = []                 # intervals where no ticker of any product arrived for dead_after_ms
         self.silences = []                # quote gaps longer than product_silence_ms: product_silence / source_silence
-        self.last_source_silence_to = None
+        self.source_intervals = []        # recent [from_ms, to_ms] of whole-source silences (what product silences subtract)
+        self.anchors = {}                 # table -> identity of the row at the cursor, to notice a table that was refilled
         self.epochs = {}                  # "product|transport" -> latest epoch read
         self.epoch_changes = []
         self.data_gaps = []               # the capture's own gap rows, released once their detection time is released
@@ -212,6 +225,11 @@ class Ingestor(object):
         for name, top in self.reader.max_rowids().items():
             if self.cursor[name] > 0 and (top is None or top < self.cursor[name]):
                 raise IngestError("cursor_ahead_of_source", "{}: cursor {} > highest rowid {}".format(name, self.cursor[name], top))
+            anchor = self.anchors.get(name)
+            if anchor is not None and self.cursor[name] > 0:
+                found = self.reader.identity(name, self.cursor[name])
+                if found is not None and found != anchor:           # the rowid exists but it is another row: refilled or replaced
+                    raise IngestError("cursor_anchor_mismatch", "{}: row {} is not the one read".format(name, self.cursor[name]))
 
     def _note_quote(self, row, t_ms):
         """Per-product evidence from one readable ticker row: epoch changes and silences that this row ends."""
@@ -228,14 +246,17 @@ class Ingestor(object):
         last_any = self.last_any_ticker_ms                      # not updated by this row yet
         if last_any is not None and t_ms - last_any > self.product_silence_ms:
             self._silence("source_silence", None, last_any, t_ms, row["rid"], t_ms - last_any > self.dead_after_ms)
-            self.last_source_silence_to = t_ms
+            self.source_intervals = (self.source_intervals + [[last_any, t_ms]])[-SOURCE_INTERVALS_KEPT:]
         previous = self.last_ticker_ms.get(product)
         if previous is None or t_ms - previous <= self.product_silence_ms:
             return
-        if any(other > previous for name, other in self.last_ticker_ms.items() if name != product):
-            # another product quoted inside the gap: the source was alive for at least part of it
+        covered = sum(max(0, min(t_ms, b) - max(previous, a)) for a, b in self.source_intervals)
+        # only the time the source was alive counts as the product's own silence: a whole-source interruption is told once,
+        # as a source_silence, and not again as one silence per product when the products come back
+        if t_ms - previous - covered > self.product_silence_ms \
+                and any(other > previous for name, other in self.last_ticker_ms.items() if name != product):
             self._silence("product_silence", product, previous, t_ms, row["rid"], t_ms - previous > self.dead_after_ms,
-                          source_silence_overlap=(self.last_source_silence_to or 0) > previous)
+                          source_silence_overlap=covered > 0, alive_ms=t_ms - previous - covered)
 
     def _silence(self, kind, product, from_ms, to_ms, rowid, outage, **extra):
         self.stats[kind + "s"] += 1
@@ -246,6 +267,7 @@ class Ingestor(object):
     def _read_gaps(self):
         for row in self.reader.gaps(self.cursor["gap"], self.batch):
             self.cursor["gap"] = row["rid"]
+            self.anchors["gap"] = row["gap_id"]
             self.gap_pending.append(row)
 
     def _release_gaps(self, watermark):
@@ -270,6 +292,7 @@ class Ingestor(object):
         self.ticker_more = len(rows) >= self.batch
         for row in rows:
             self.cursor["ticker"] = row["rid"]
+            self.anchors["ticker"] = row["event_id"]
             t_ms, event = _quote_event(row)
             if t_ms is None:
                 self.stats["unreadable_rows"] += 1
@@ -290,6 +313,7 @@ class Ingestor(object):
         self.candle_more = len(rows) >= self.batch
         for row in rows:
             self.cursor["candle"] = row["rid"]
+            self.anchors["candle"] = "{}|{}|{}".format(row["product_id"], row["bucket_start"], row["revision_hash"])
             self._read_candle(row)
             self.last_candle_read_ms = max(self.last_candle_read_ms or 0, self._last_candle_t)
 
@@ -398,7 +422,7 @@ class Ingestor(object):
                     "ticker_more", "candle_more", "last_candle_read_ms")
     # added after the first checkpoint format; a checkpoint written before them restores these as empty (and a gap
     # cursor of 0: the capture's gap rows are re-read once, which only repeats evidence, never an event)
-    EVIDENCE_FIELDS = ("silences", "last_source_silence_to", "epochs", "epoch_changes", "data_gaps", "gap_pending", "gap_counts")
+    EVIDENCE_FIELDS = ("silences", "source_intervals", "anchors", "epochs", "epoch_changes", "data_gaps", "gap_pending", "gap_counts")
 
     def checkpoint(self):
         """Everything the ingestor knows, as plain JSON: cursors, rows held for the watermark, candle revisions already
