@@ -23,6 +23,7 @@ import {
 } from '../infrastructure/terminal-chart-client.ts'
 import {
   exitMarkers,
+  fillDetailRows,
   fillMarkers,
   groupWaitMarkers,
   strategyCode,
@@ -293,6 +294,16 @@ export default function TerminalChartPanel({
 }) {
   const [settings, setSettings] = useState<Settings>(loadSettings)
   const [now, setNow] = useState(() => Date.now())
+  // A picked EJEC. marker: independent of the decision selection (a fill is
+  // not linked to any verdict). The decision picked from outside or another
+  // product clears it.
+  const [pickedFill, setPickedFill] = useState<string | null>(null)
+  const [pickedFor, setPickedFor] = useState(`${product ?? ''}|${selectedId}`)
+  const resetKey = `${product ?? ''}|${selectedId}`
+  if (pickedFor !== resetKey) {
+    setPickedFor(resetKey)
+    setPickedFill(null)
+  }
   useEffect(() => {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(settings))
@@ -452,6 +463,27 @@ export default function TerminalChartPanel({
       ),
     [everyMarker, hiddenStrategies],
   )
+  // Only a fill marker that is still on this chart can be the picked one.
+  const fillId =
+    pickedFill !== null &&
+    allMarkers.some(
+      (marker) => marker.type === 'fill' && marker.id === pickedFill,
+    )
+      ? pickedFill
+      : null
+  const fillRows = useMemo(() => {
+    if (fillId === null) return null
+    const fill = fills.find((item) => {
+      const data = item as { fill_id?: unknown }
+      return data.fill_id === fillId
+    })
+    return fill === undefined
+      ? null
+      : fillDetailRows(fill, {
+          ...(quantityUnit ? { unit: quantityUnit } : {}),
+          ...(historicalLabel ? { source: historicalLabel } : {}),
+        })
+  }, [fillId, fills, quantityUnit, historicalLabel])
   const latestFlow = remote?.flow.at(-1)
   const depth = depthWithin(remote?.depth ?? null, 'liquidity01')
   const toggle = <T extends string>(list: readonly T[], id: T): T[] =>
@@ -664,7 +696,7 @@ export default function TerminalChartPanel({
           focusOnMount={false}
           candles={shown}
           markers={allMarkers}
-          selectedId={selectedId}
+          selectedId={fillId ?? selectedId}
           intervalSeconds={intervalSeconds}
           currency="USD"
           instrument={instrument}
@@ -674,10 +706,24 @@ export default function TerminalChartPanel({
           priceLines={lines}
           onSelect={(time, markerId) => {
             if (markerId) {
+              // An executed operation (EJEC.) opens its own facts; it never
+              // selects a decision. Picking it again closes them.
+              if (
+                allMarkers.some(
+                  (marker) => marker.type === 'fill' && marker.id === markerId,
+                )
+              ) {
+                setPickedFill((current) =>
+                  current === markerId ? null : markerId,
+                )
+                return
+              }
               // Only ids of this chart's decision markers reach the selection
               // (exit markers and foreign ids are ignored).
-              if (markers.some((marker) => marker.id === markerId))
+              if (markers.some((marker) => marker.id === markerId)) {
+                setPickedFill(null)
                 onSelect(markerId)
+              }
               return
             }
             if (!Number.isFinite(time)) return
@@ -692,9 +738,38 @@ export default function TerminalChartPanel({
               (marker) => marker.id === selectedId,
             )
             const next = bucketMarkers[(current + 1) % bucketMarkers.length]
-            if (next) onSelect(next.id)
+            if (next) {
+              setPickedFill(null)
+              onSelect(next.id)
+            }
           }}
         />
+      )}
+      {fillRows && (
+        <section
+          className="terminal-chart__fill-detail"
+          aria-label="Ejecución seleccionada"
+          data-testid="fill-detail"
+        >
+          <header>
+            <h3>Ejecución seleccionada (EJEC.)</h3>
+            <button type="button" onClick={() => setPickedFill(null)}>
+              Cerrar
+            </button>
+          </header>
+          <dl>
+            {fillRows.map((row) => (
+              <div key={row.key} data-field={row.key}>
+                <dt>{row.label}</dt>
+                <dd>{row.value}</dd>
+              </div>
+            ))}
+          </dl>
+          <p>
+            Evento independiente: no está vinculado a ninguna decisión ni
+            veredicto.
+          </p>
+        </section>
       )}
       <p className="terminal-chart__legend">
         {proposalLegend ? (

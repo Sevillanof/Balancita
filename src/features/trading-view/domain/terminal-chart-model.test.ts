@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   exitMarkers,
+  fillDetailRows,
   fillMarkers,
   groupWaitMarkers,
   positionLines,
@@ -274,6 +275,31 @@ describe('executed-operation and WAIT markers', () => {
         detail: 'EJEC. SHORT 0.5 BTC',
       },
     ])
+  })
+
+  it('lists only the facts the fill records, in UTC, and says what is missing', () => {
+    const rows = (value: unknown) =>
+      Object.fromEntries(
+        fillDetailRows(value, {
+          unit: 'BTC',
+          source: 'Histórico · Gateway D',
+        }).map((row) => [row.key, row.value]),
+      )
+    expect(rows(fill({ event_time_ms: 1_800_000_000_007 }))).toEqual({
+      fill_id: 'fill:11',
+      order_id: 'o1',
+      time: '2027-01-15 08:00:00.007 UTC',
+      quantity: '0.5 BTC',
+      side: 'LONG (compra)',
+      price: '100000 USD',
+      source: 'Histórico · Gateway D',
+    })
+    expect(
+      rows(fill({ side: 'sell', price_usd_per_btc: undefined })),
+    ).toMatchObject({ side: 'SHORT (venta)', price: 'No disponible' })
+    expect(fillDetailRows({}).map((row) => row.value)).toEqual(
+      Array(7).fill('No disponible'),
+    )
   })
 
   it('never reads the order state: a filled order without fills draws nothing', () => {

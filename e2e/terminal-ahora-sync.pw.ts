@@ -221,6 +221,83 @@ test('history rows and chart markers are the same decisions and select each othe
     await page.screenshot({ path: `${SHOTS}/seleccion-sincronizada.png` })
 })
 
+test('clicking the EJEC. marker on the canvas opens the facts of its fill, apart from every decision', async ({
+  page,
+}) => {
+  await openTerminal(page)
+  const chart = page.getByTestId('approved-chart-renderer')
+  const sale = executed.PF_XBTUSD![0]!
+  const positions = await markerPositions(chart)
+  const target = positions.find((p) => p.id.startsWith('fill:'))!
+  const box = (await chart.boundingBox())!
+  const pressedBefore = await page
+    .locator('.connected-terminal__decision-list li button')
+    .evaluateAll((buttons) =>
+      buttons.map((button) => button.getAttribute('aria-pressed')),
+    )
+  const decisionBefore = await chart.getAttribute('data-selected-marker')
+  await page.mouse.move(box.x + target.x, box.y + target.y, { steps: 6 })
+  await page.evaluate(() => new Promise(requestAnimationFrame))
+  await page.mouse.click(box.x + target.x, box.y + target.y)
+  await expect(chart).toHaveAttribute('data-selected-marker', target.id)
+  const detail = page.getByLabel('Ejecución seleccionada')
+  await expect(detail).toBeVisible()
+  await expect(detail.locator('[data-field="fill_id"]')).toContainText(
+    target.id,
+  )
+  await expect(detail.locator('[data-field="order_id"]')).toContainText(
+    sale.orderId,
+  )
+  // Original event time, in UTC (to the millisecond).
+  await expect(detail.locator('[data-field="time"]')).toContainText(
+    new Date(sale.timeMs).toISOString().replace('T', ' ').replace('Z', ' UTC'),
+  )
+  await expect(detail.locator('[data-field="quantity"]')).toContainText(/BTC/)
+  await expect(detail.locator('[data-field="side"]')).toContainText(
+    'LONG (compra)',
+  )
+  await expect(detail.locator('[data-field="source"]')).toContainText(
+    'Histórico · Gateway D',
+  )
+  await expect(detail).toContainText('no está vinculado a ninguna decisión')
+  // No decision row is pressed because of it and its detail is the same.
+  expect(
+    await page
+      .locator('.connected-terminal__decision-list li button')
+      .evaluateAll((buttons) =>
+        buttons.map((button) => button.getAttribute('aria-pressed')),
+      ),
+  ).toEqual(pressedBefore)
+  expect(decisionBefore).not.toBe(target.id)
+  if (SHOTS) {
+    mkdirSync(SHOTS, { recursive: true })
+    await detail.scrollIntoViewIfNeeded()
+    await page.screenshot({ path: `${SHOTS}/ejecucion-seleccionada.png` })
+  }
+  // Picking a decision marker clears the facts of the fill.
+  const entries = facts.PF_XBTUSD!.filter((f) => f.action !== 'WAIT')
+  // The hover of a canvas needs a frame to register: retry the real click.
+  await expect(async () => {
+    const now = (await chart.boundingBox())!
+    // The one well inside the chart, not at its edge.
+    const other = (await markerPositions(chart))
+      .filter(
+        (p) =>
+          entries.some((f) => f.analysisId === p.id) &&
+          p.x > 0 &&
+          p.x < now.width,
+      )
+      .at(-1)!
+    await page.mouse.move(now.x + other.x, now.y + other.y, { steps: 6 })
+    await page.evaluate(() => new Promise(requestAnimationFrame))
+    await page.mouse.click(now.x + other.x, now.y + other.y)
+    await expect(chart).toHaveAttribute('data-selected-marker', other.id, {
+      timeout: 1500,
+    })
+  }).toPass({ timeout: 15_000 })
+  await expect(detail).toHaveCount(0)
+})
+
 test('changing product swaps AHORA, rows and markers; nothing leaks across', async ({
   page,
 }) => {

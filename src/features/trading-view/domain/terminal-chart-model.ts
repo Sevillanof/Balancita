@@ -82,6 +82,68 @@ export function exitMarkers(
   })
 }
 
+const pad = (value: number, size = 2) => String(value).padStart(size, '0')
+
+/** `2026-10-14 12:34:56.789 UTC` from the fill's original event_time_ms. */
+export function utcTime(ms: number): string {
+  const date = new Date(ms)
+  return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())} ${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}:${pad(date.getUTCSeconds())}.${pad(date.getUTCMilliseconds(), 3)} UTC`
+}
+
+export interface FillDetailRow {
+  key:
+    'fill_id' | 'order_id' | 'time' | 'quantity' | 'side' | 'price' | 'source'
+  label: string
+  value: string
+}
+
+/**
+ * Verifiable facts of ONE durable fill, exactly as the fill records them (no
+ * decision or verdict is linked: they are independent events). A fact the
+ * fill does not carry reads «No disponible».
+ */
+export function fillDetailRows(
+  fill: unknown,
+  options: { unit?: string; source?: string } = {},
+): FillDetailRow[] {
+  const data = recordOf(fill)
+  const text = (value: unknown) =>
+    typeof value === 'string' && value !== '' ? value : null
+  const at = Number(data.event_time_ms)
+  const quantity = text(data.quantity_btc)
+  const price = text(data.price_usd_per_btc)
+  const side =
+    data.side === 'buy'
+      ? 'LONG (compra)'
+      : data.side === 'sell'
+        ? 'SHORT (venta)'
+        : null
+  const none = 'No disponible'
+  return [
+    { key: 'fill_id', label: 'fill_id', value: text(data.fill_id) ?? none },
+    { key: 'order_id', label: 'order_id', value: text(data.order_id) ?? none },
+    {
+      key: 'time',
+      label: 'Hora',
+      value: Number.isSafeInteger(at) ? utcTime(at) : none,
+    },
+    {
+      key: 'quantity',
+      label: 'Cantidad',
+      value: quantity
+        ? `${quantity}${options.unit ? ` ${options.unit}` : ''}`
+        : none,
+    },
+    { key: 'side', label: 'Dirección', value: side ?? none },
+    {
+      key: 'price',
+      label: 'Precio',
+      value: price ? `${price} USD` : none,
+    },
+    { key: 'source', label: 'Procedencia', value: options.source ?? none },
+  ]
+}
+
 /**
  * Operations actually executed, one marker per DURABLE FILL the gateway
  * delivers (`state.fills`, built from the engine's `order_filled` events), not

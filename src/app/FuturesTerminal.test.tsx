@@ -1611,6 +1611,120 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
       expect(marker('verdict-hash-3')?.text).not.toMatch(/◀/)
     })
 
+    describe('a picked EJEC. marker shows its own verifiable facts', () => {
+      const fillOf = (id: number, extra = {}) => ({
+        fill_id: `fill:${id}`,
+        order_id: 'order-partial',
+        side: 'buy',
+        quantity_btc: '0.2',
+        price_usd_per_btc: '100011',
+        reduce_only: false,
+        event_time_ms: T0 - 90_000 + 123,
+        ...extra,
+      })
+      const withPartialFills = () => ({
+        ...state,
+        quantity_unit: 'BTC',
+        orders: [
+          {
+            order_id: 'order-partial',
+            side: 'buy',
+            state: 'filled',
+            reduce_only: false,
+          },
+        ],
+        fills: [
+          fillOf(7),
+          fillOf(8, {
+            quantity_btc: '0.3',
+            price_usd_per_btc: undefined,
+            event_time_ms: T0 - 70_000 + 456,
+          }),
+          fillOf(9, { side: 'sell', quantity_btc: '0.4' }),
+        ],
+      })
+      const fillDetail = () => screen.queryByLabelText('Ejecución seleccionada')
+
+      it('clicking the marker of a fill opens fill_id, order_id, UTC time, quantity, direction and source', async () => {
+        await renderReady(withPartialFills())
+        expect(fillDetail()).toBeNull()
+        await clickMarker('fill:7')
+        const facts = within(fillDetail()!)
+        expect(facts.getByText('fill:7')).toBeTruthy()
+        expect(facts.getByText('order-partial')).toBeTruthy()
+        expect(facts.getByText('2027-01-15 07:58:30.123 UTC')).toBeTruthy()
+        expect(facts.getByText('0.2 BTC')).toBeTruthy()
+        expect(facts.getByText('LONG (compra)')).toBeTruthy()
+        expect(facts.getByText('100011 USD')).toBeTruthy()
+        expect(facts.getByText('Histórico · Gateway D')).toBeTruthy()
+        expect(marker('fill:7')?.text).toMatch(/◀/)
+        expect(marker('fill:8')?.text).not.toMatch(/◀/)
+      })
+
+      it('shows each partial fill of the same order on its own and clears the previous one', async () => {
+        await renderReady(withPartialFills())
+        await clickMarker('fill:7')
+        await clickMarker('fill:8')
+        const facts = within(fillDetail()!)
+        expect(facts.getByText('fill:8')).toBeTruthy()
+        expect(facts.queryByText('fill:7')).toBeNull()
+        expect(facts.getByText('order-partial')).toBeTruthy()
+        expect(facts.getByText('2027-01-15 07:58:50.456 UTC')).toBeTruthy()
+        expect(facts.getByText('0.3 BTC')).toBeTruthy()
+        // The fill carries no price: it says so instead of inventing one.
+        expect(facts.getByText('No disponible')).toBeTruthy()
+        await clickMarker('fill:9')
+        const sell = within(fillDetail()!)
+        expect(sell.getByText('SHORT (venta)')).toBeTruthy()
+        expect(sell.getByText('0.4 BTC')).toBeTruthy()
+      })
+
+      it('is independent of the decisions: no row, detail or marker of a decision changes', async () => {
+        await renderReady(withPartialFills())
+        const pressed = () =>
+          screen
+            .getAllByRole('button', { name: /^Seleccionar análisis / })
+            .map((button) => button.getAttribute('aria-pressed'))
+        const before = pressed()
+        const decisionBefore = detail().getByText('SHORT')
+        expect(decisionBefore).toBeTruthy()
+        await clickMarker('fill:7')
+        expect(pressed()).toEqual(before)
+        expect(detail().getByText('SHORT')).toBeTruthy()
+        expect(fillDetail()!.textContent).not.toMatch(/verdict-hash/)
+        expect(fillDetail()!.textContent).toMatch(/ninguna decisión/)
+      })
+
+      it('clears when another marker, a history row, the same marker or Cerrar is picked', async () => {
+        await renderReady(withPartialFills())
+        await clickMarker('fill:7')
+        expect(fillDetail()).not.toBeNull()
+        await clickMarker('verdict-hash-2')
+        expect(fillDetail()).toBeNull()
+        expect(detail().getByText('LONG')).toBeTruthy()
+        await clickMarker('fill:7')
+        await pickRow('verdict-hash-3')
+        expect(fillDetail()).toBeNull()
+        await clickMarker('fill:7')
+        await clickMarker('fill:7')
+        expect(fillDetail()).toBeNull()
+        await clickMarker('fill:8')
+        await act(async () =>
+          within(fillDetail()!).getByRole('button', { name: 'Cerrar' }).click(),
+        )
+        expect(fillDetail()).toBeNull()
+        expect(marker('fill:8')?.text).not.toMatch(/◀/)
+      })
+
+      it('leaves exit and unknown markers as they were', async () => {
+        await renderReady(withPartialFills())
+        await clickMarker('fill:7')
+        await clickMarker('exit:order-1')
+        await clickMarker('not-a-marker')
+        expect(within(fillDetail()!).getByText('fill:7')).toBeTruthy()
+      })
+    })
+
     describe('scroll of the selected row', () => {
       afterEach(() => {
         vi.restoreAllMocks()
