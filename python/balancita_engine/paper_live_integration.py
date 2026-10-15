@@ -266,14 +266,15 @@ class LiveSession(object):
         runner, so the directory is owned without a gap from the first byte read to ``close``; a second opener is refused
         (``runner_directory_locked``) before it touches a file, and a recovery that fails releases the lock."""
         runner_dir = os.path.join(directory, RUNNER_DIR)
-        lock = _take_lock(runner_dir) if os.path.isdir(runner_dir) else None
+        if not os.path.isdir(runner_dir):             # nothing to own: refuse before opening (and so cutting) any file
+            raise IntegrationError("runner_missing", directory)
+        lock = _take_lock(runner_dir)
         try:
             return cls._recover(lock, directory, source_path, strategies, products, runner_config, recovery_ms,
                                 decide_from_ms=decide_from_ms, decide_until_ms=decide_until_ms, source_id=source_id,
                                 ingest_kw=ingest_kw, evaluator_kw=evaluator_kw, max_quote_gap_ms=max_quote_gap_ms)
         except BaseException:
-            if lock is not None:
-                lock.release()
+            lock.release()
             raise
 
     @classmethod

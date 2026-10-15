@@ -528,7 +528,7 @@ class TestLockIsOwnedBeforeAnythingIsOpened(Base):
         DirectoryLock(runner_dir).release()
         self.assertEqual(disk(directory), before)
 
-    def test_a_session_that_fails_to_start_leaves_the_directory_free(self):
+    def test_a_session_that_fails_to_start_releases_its_lock_itself(self):
         world, directory, runner_dir = self.copy_of_the_snapshot()
         root = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, root, True)
@@ -536,9 +536,35 @@ class TestLockIsOwnedBeforeAnythingIsOpened(Base):
         os.makedirs(fresh)
         with open(os.path.join(fresh, LI.AUDIT_FILE), "w") as handle:      # create() fails when it reaches the audit journal
             handle.write("")
-        with self.assertRaises(LI.IntegrationError):
-            new_session(world, fresh, self.cache["strategies"], products=(BTC, ETH))
-        DirectoryLock(os.path.join(fresh, LI.RUNNER_DIR)).release()
+        taken, released = [], []
+        real_init, real_release = DirectoryLock.__init__, DirectoryLock.release
+
+        def init(lock, *a, **k):
+            real_init(lock, *a, **k)
+            taken.append(lock)                                   # keeps it alive: the garbage collector cannot free it for us
+
+        def release(lock, *a, **k):
+            released.append(lock)
+            return real_release(lock, *a, **k)
+
+        with mock.patch.object(DirectoryLock, "__init__", init), mock.patch.object(DirectoryLock, "release", release):
+            with self.assertRaises(LI.IntegrationError):
+                new_session(world, fresh, self.cache["strategies"], products=(BTC, ETH))
+            self.assertEqual(len(taken), 1)
+            self.assertEqual([id(x) for x in released], [id(x) for x in taken])
+            DirectoryLock(os.path.join(fresh, LI.RUNNER_DIR)).release()       # free while the first object is still alive
+
+    def test_a_recovery_without_a_runner_directory_opens_and_cuts_nothing(self):
+        world, directory, runner_dir = self.copy_of_the_snapshot()
+        clock = journal_clock(directory)
+        shutil.rmtree(runner_dir)
+        with open(os.path.join(directory, LI.AUDIT_FILE), "ab") as handle:
+            handle.write(b'{"half": ')                               # a half line that opening the audit would cut
+        before = disk(directory)
+        with self.assertRaises(LI.IntegrationError) as caught:
+            recover_session(world, directory, self.cache["strategies"], clock, products=(BTC, ETH))
+        self.assertEqual(caught.exception.reason, "runner_missing")
+        self.assertEqual(disk(directory), before)
 
     def test_two_processes_that_start_together_leave_one_owner_and_the_other_opens_nothing(self):
         here = os.path.dirname(os.path.abspath(__file__))
