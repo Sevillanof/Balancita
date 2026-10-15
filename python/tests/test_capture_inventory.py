@@ -40,6 +40,11 @@ CREATE TABLE quote_snapshot(product_id TEXT NOT NULL, received_at INTEGER NOT NU
 """
 
 
+def digest(path):
+    with open(path, "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()
+
+
 def make_main(path):
     c = sqlite3.connect(path)
     c.executescript(SCHEMA)
@@ -160,13 +165,46 @@ class InventoryTests(unittest.TestCase):
             self.assertNotRegex(sql, r"(?i)\b(insert|update|delete|drop|alter|create|attach|pragma)\b", name)
 
     def test_database_is_opened_read_only_and_left_untouched(self):
-        before = hashlib.sha256(open(self.db, "rb").read()).hexdigest()
+        before = digest(self.db)
         conn = inv._open_readonly(self.db)
         with self.assertRaises(sqlite3.OperationalError):
             conn.execute("INSERT INTO paper_futures_market_events VALUES('x','ticker','PF_XBTUSD',1,1,'')")
         conn.close()
         self.run_inventory()
-        self.assertEqual(before, hashlib.sha256(open(self.db, "rb").read()).hexdigest())
+        self.assertEqual(before, digest(self.db))
+
+    def test_path_with_percent_and_hash_opens_the_right_file(self):
+        odd = os.path.join(self.dir.name, "cap%41 #1?.sqlite")
+        make_main(odd)
+        conn = inv._open_readonly(odd)
+        try:
+            self.assertGreater(inv.build_inventory(conn)["sections"]["funding_periods"]["rows"][0][1], 0)
+        finally:
+            conn.close()
+
+    def test_read_only_inventory_coexists_with_a_live_wal_writer(self):
+        wal = os.path.join(self.dir.name, "wal.sqlite")
+        writer = sqlite3.connect(wal, isolation_level=None)
+        self.addCleanup(writer.close)
+        self.assertEqual(writer.execute("PRAGMA journal_mode=WAL").fetchone()[0], "wal")
+        writer.execute("PRAGMA wal_autocheckpoint=0")
+        writer.executescript(SCHEMA)
+        writer.execute("INSERT INTO paper_futures_market_events VALUES('a','ticker','PF_XBTUSD',?,?,'')", (H - 9, H - 9))
+        main_before = digest(wal)
+        wal_before = os.path.getsize(wal + "-wal")
+        reader = inv._open_readonly(wal)
+        out = inv.build_inventory(reader)
+        self.assertEqual(out["sections"]["ticker_events"]["rows"][0][1], 1)  # sees the uncheckpointed row
+        # the writer is not blocked while the reader is open, and its commit reaches a fresh read
+        writer.execute("INSERT INTO paper_futures_market_events VALUES('b','ticker','PF_XBTUSD',?,?,'')", (H - 8, H - 8))
+        reader.close()
+        self.assertEqual(main_before, digest(wal))  # no checkpoint by the reader
+        self.assertGreaterEqual(os.path.getsize(wal + "-wal"), wal_before)
+        again = inv._open_readonly(wal)
+        try:
+            self.assertEqual(inv.build_inventory(again)["sections"]["ticker_events"]["rows"][0][1], 2)
+        finally:
+            again.close()
 
     def test_missing_table_is_reported_as_unavailable_not_as_zero(self):
         c = sqlite3.connect(self.db)

@@ -16,6 +16,7 @@ import os
 import re
 import sqlite3
 import sys
+import urllib.parse
 
 from .capture_validation import ALLOWED_PRODUCTS, HOLDOUT_START_MS, VALIDATOR_VERSION
 
@@ -99,7 +100,7 @@ QUERIES = {
 def _open_readonly(path):
     if not os.path.isfile(path):
         raise FileNotFoundError("database file not found")
-    conn = sqlite3.connect("file:%s?mode=ro" % path.replace("?", "%3f").replace("#", "%23"), uri=True, timeout=2.0)
+    conn = sqlite3.connect("file:%s?mode=ro" % urllib.parse.quote(path), uri=True, timeout=2.0)
     conn.execute("PRAGMA query_only = ON")
     return conn
 
@@ -161,7 +162,8 @@ def build_inventory(main_db, quotes_db=None):
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--db", required=True, help="local capture database (opened read-only)")
-    ap.add_argument("--quotes-db", help="quote archive file, if it is part of the same authorized local capture")
+    ap.add_argument("--quotes-db", help="NOT part of the P1 procedure: the quote archive is not in WAL mode, so reading it "
+                    "takes a SHARED lock that can make a live archiver commit fail (D-188-21); needs Fran's decision")
     args = ap.parse_args(argv)
     main_db = _open_readonly(args.db)
     quotes_db = _open_readonly(args.quotes_db) if args.quotes_db else None
