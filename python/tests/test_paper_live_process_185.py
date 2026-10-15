@@ -261,7 +261,7 @@ class TestLifecycle(Base):
         restarted.start(restart=True)
         self.assertEqual(restarted.run(max_steps=3), LP.EXIT_OK)
 
-    def test_a_killed_process_restarts_without_asking_and_ends_with_the_same_signals_as_a_continuous_run(self):
+    def test_a_killed_process_restarts_only_when_asked_and_ends_with_the_same_signals_as_a_continuous_run(self):
         steps = 40
         reference_root = tempfile.mkdtemp(dir=self.cache["dir"])
         reference_world = World(reference_root)
@@ -285,12 +285,136 @@ class TestLifecycle(Base):
         self.assertFalse(os.path.exists(os.path.join(self.directory, LP.REPORT_FILE)))
         self.assertIn(self.read(LP.HEARTBEAT_FILE)["phase"], (LP.WARMUP, LP.LIVE))
         second_clock = Clock(steps // 2 - 1)                             # restarts at the instant of the last step: no downtime to account for
+        unasked = self.supervisor(second_clock)
+        with self.assertRaises(LP.ProcessError) as caught:                # BAL-DECISION-185-01: a cut is not taken up on its own
+            unasked.start()
+        self.assertEqual(caught.exception.reason, "restart_requires_operator")
         second = self.supervisor(second_clock)
-        second.start()
+        second.start(restart=True)
         second_clock.sleep(0)
         second.run(max_steps=steps // 2)
         digests = self.read(LP.REPORT_FILE)["digests"]
         self.assertEqual(digests["signals"], reference["signals"])
+
+
+class TestAnyCutNeedsTheOperator(Base):
+    """BAL-DECISION-185-01: a directory that holds a started session is taken up again only on an explicit request, whatever marks exist."""
+
+    def snapshot(self):
+        out = {}
+        for name in sorted(os.listdir(self.directory)):
+            path = os.path.join(self.directory, name)
+            if os.path.isfile(path):
+                with open(path, "rb") as handle:
+                    out[name] = hashlib.sha256(handle.read()).hexdigest()
+        return out
+
+    def killed(self, steps=3):
+        clock = Clock()
+        first = self.supervisor(clock)
+        first.start()
+        for _ in range(steps):
+            now = clock.now()
+            first.tick(now)
+            first.session.step(now)
+            clock.sleep(0)
+        first.abandon()
+        return clock
+
+    def refused(self, clock):
+        before = self.snapshot()
+        again = self.supervisor(clock)
+        with self.assertRaises(LP.ProcessError) as caught:
+            again.start()
+        self.assertEqual(caught.exception.reason, "restart_requires_operator")
+        self.assertIsNone(again.session)                      # nothing opened, so no lock taken either
+        self.assertEqual(self.snapshot(), before)             # and nothing written, repaired or stepped
+        self.assertFalse(os.path.exists(os.path.join(self.directory, LP.HALT_FILE)))
+
+    def test_an_ordinary_kill_with_no_mark_at_all_is_refused_whatever_the_heartbeat_says(self):
+        clock = self.killed()
+        beat_path = os.path.join(self.directory, LP.HEARTBEAT_FILE)
+        with open(beat_path, encoding="utf-8") as handle:
+            beat = json.load(handle)
+        self.assertEqual(beat["phase"] in (LP.WARMUP, LP.LIVE), True)
+        self.refused(clock)                                                       # heartbeat says what it said at the kill
+        LP._write_json(beat_path, dict(beat, phase=LP.LIVE))
+        self.refused(clock)                                                       # heartbeat says LIVE
+        os.remove(beat_path)
+        self.refused(clock)                                                       # heartbeat missing
+        with open(beat_path, "w", encoding="utf-8") as handle:
+            handle.write("{not json")
+        self.refused(clock)                                                       # heartbeat unreadable
+
+    def test_a_halt_whose_two_writes_both_failed_leaves_no_mark_and_is_still_refused(self):
+        """The double write failure of D-205-09: neither the audit line nor halt.json exists, the heartbeat still says LIVE."""
+        clock = Clock()
+        supervisor = self.supervisor(clock)
+        supervisor.start()
+        real, halt_path = LP._write_json, os.path.join(self.directory, LP.HALT_FILE)
+
+        def refuse(path, body):
+            if path in (halt_path, os.path.join(self.directory, LP.HEARTBEAT_FILE)) and supervisor.phase == LP.HALTED:
+                raise OSError(28, "No space left on device")
+            return real(path, body)
+        original_step = supervisor.session.step
+        calls = {"n": 0}
+
+        def failing(now):
+            calls["n"] += 1
+            if calls["n"] == 2:
+                raise RuntimeError("a step that cannot go on")
+            return original_step(now)
+        supervisor.session.step = failing
+        LP._write_json = refuse
+        try:
+            self.assertEqual(supervisor.run(max_steps=10), LP.EXIT_HALTED)
+        finally:
+            LP._write_json = real
+        self.assertFalse(os.path.exists(halt_path))
+        self.assertEqual(self.read_beat()["phase"] in (LP.WARMUP, LP.LIVE), True)    # the heartbeat still says it was alive
+        self.refused(clock)
+
+    def read_beat(self):
+        with open(os.path.join(self.directory, LP.HEARTBEAT_FILE), encoding="utf-8") as handle:
+            return json.load(handle)
+
+    def test_the_request_is_on_record_and_the_checks_still_run(self):
+        clock = self.killed()
+        other = self.supervisor(clock, max_quote_gap_ms=20_000)                   # identity: another configuration is refused even with --restart
+        with self.assertRaises(LP.ProcessError) as caught:
+            other.start(restart=True)
+        self.assertEqual(caught.exception.reason, "preflight_failed")
+        asked = self.supervisor(clock)
+        asked.start(restart=True)
+        with open(os.path.join(self.directory, LP.RESTARTS_FILE), encoding="utf-8") as handle:
+            self.assertEqual(json.load(handle)["restarts"], 1)
+        locked = self.supervisor(clock)                                           # exclusion of writers: the directory is held now
+        with self.assertRaises(LP.ProcessError) as caught:
+            locked.start(restart=True)
+        self.assertIn("directory_unlocked", str(caught.exception))
+
+    def test_an_orderly_stop_is_still_terminal_even_with_the_restart_request_and_without_a_heartbeat(self):
+        supervisor = self.supervisor(Clock())
+        supervisor.start()
+        supervisor.run(max_steps=3)
+        os.remove(os.path.join(self.directory, LP.HEARTBEAT_FILE))                 # the report still says STOPPED
+        again = self.supervisor(Clock(4))
+        with self.assertRaises(LP.ProcessError) as caught:
+            again.start(restart=True)
+        self.assertEqual(caught.exception.reason, "session_stopped")
+
+    def test_the_command_line_refuses_a_cut_directory_without_the_flag(self):
+        self.killed()
+        config = os.path.join(self.root, "config.json")
+        with open(config, "w", encoding="utf-8") as handle:
+            json.dump(config_dict(), handle)
+        cmd = [sys.executable, "-m", "balancita_engine.paper_live_process", "run", "--config", config, "--directory", self.directory,
+               "--source", self.world.path, "--clock-from-ms", str(TIMES[START])]
+        env = dict(os.environ, PYTHONPATH=ENGINE_PATH + os.pathsep + HERE)
+        done = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=300)
+        self.assertEqual(done.returncode, LP.EXIT_REFUSED, done.stderr)
+        self.assertIn("restart_requires_operator", done.stdout + done.stderr)
 
 
 class TestCommandLine(Base):
@@ -492,14 +616,18 @@ class TestObservedLifecycle(unittest.TestCase):
                 self.assertEqual(caught.exception.reason, "restart_requires_operator")
                 self.assertIsNone(again.session)
 
-    def test_a_crash_after_an_acknowledged_halt_restarts_without_the_operator(self):
+    def test_a_crash_after_an_acknowledged_halt_needs_the_operator_again(self):
         _, clock = self.halted_run()
         restarted = self.supervisor(clock)
         restarted.start(restart=True)
         restarted.abandon()                                                        # it dies later, with nothing new wrong
         third = self.supervisor(clock)
-        third.start()
+        with self.assertRaises(LP.ProcessError) as caught:
+            third.start()
+        self.assertEqual(caught.exception.reason, "restart_requires_operator")
+        third.start(restart=True)
         self.assertIn(third.phase, (LP.WARMUP, LP.LIVE))
+        self.assertEqual(self.read(LP.RESTARTS_FILE)["restarts"], 2)
 
     def test_a_heartbeat_that_cannot_be_written_is_a_durable_halt_with_exit_3(self):
         """D-205-03: the disk refuses the heartbeat; the process halts (not a traceback with exit 1 and a heartbeat that still says LIVE)."""

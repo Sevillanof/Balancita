@@ -14,10 +14,12 @@ What this module refuses, on purpose, while the real-session GATE is NO-GO (deci
   capture has neither, so it is refused whatever the configuration says; this guards against a mistake, not against someone who
   forges the marker on purpose. A session with real data needs its own written authorization and a reviewed code change;
 * the wall clock (``wall_clock_not_authorized``): the command line runs on a simulated clock only;
-* a restart on its own after ``HALTED`` or ``REFUSED`` (``restart_requires_operator``): the operator decides, with ``--restart``. The
-  halt is durable and does not depend on the heartbeat: ``halt.json`` is written (fsync) before the process answers ``HALTED``, and
-  an unacknowledged ``funding_book_diverged`` record in the audit journal (BAL-DECISION-184-01) also requires the operator, even if
-  the process died before it could write anything else or the heartbeat is missing;
+* a restart on its own of a directory that already holds a started session (``restart_requires_operator``, BAL-DECISION-185-01): after
+  ANY run that did not end in order (HALTED, REFUSED, a kill, a power cut, a full disk) the operator decides, with ``--restart``, and
+  nothing is opened, recovered or stepped before that. The gate does not read marks: ``halt.json``, the heartbeat and the audit are
+  only the reasons shown to the operator, because a double write failure leaves none of them and the absence of a mark is not a
+  licence. Identity, lock and coherent recovery are checked as always once the operator asked. BAL-DECISION-184-01: a funding
+  divergence is never taken up again by this module on its own;
 * a restart after an orderly stop (``session_stopped``): a stopped session is over.
 
 Open positions when the process stops are not touched (D-186-1): while it is down nobody evaluates their stops or targets. The
@@ -248,15 +250,19 @@ class Supervisor(object):
             _write_json(os.path.join(self.directory, CONFIG_FILE), self.config)
         else:
             last = _read_json(os.path.join(self.directory, HEARTBEAT_FILE)) or {}
-            if last.get("phase") == STOPPED_PHASE:
+            ended = _read_json(os.path.join(self.directory, REPORT_FILE)) or {}
+            if STOPPED_PHASE in (last.get("phase"), ended.get("ended_as")):
                 raise ProcessError("session_stopped", "the operator stopped this session; a stopped session is over")
+            # BAL-DECISION-185-01: a directory that holds a started session that was not stopped in order is never taken up again
+            # without an explicit operator request, whatever the files say (heartbeat LIVE or missing, no halt.json, no audit line:
+            # a double write failure leaves no mark, and the absence of a mark is not a licence). Nothing is opened or written first.
             pending = self.unacknowledged_halts()
-            if pending and not restart:
-                raise ProcessError("restart_requires_operator", "{}: restart explicitly after reading the report".format("; ".join(pending)))
+            if not restart:
+                why = "; ".join(pending) or "the previous run did not end in order (a cut, a crash or a kill)"
+                raise ProcessError("restart_requires_operator", "{}: restart explicitly after reading the report".format(why))
             self.session = LI.LiveSession.recover(self.directory, self.source_path, strategies, self.config["products"],
                                                   runner_config_of(self.config), self.clock(), **kwargs)
-            if pending:
-                self._acknowledge()                 # only after the recovery worked: a death before this leaves the gate closed
+            self._acknowledge()                     # only after the recovery worked: a death before this leaves the gate closed
         self.phase = phase_of(self.session)
         self._beat(self.clock(), None)
         return self.session
@@ -440,7 +446,7 @@ def main(argv=None, *, tick=lambda now: None):
     parser.add_argument("--wall-clock", action="store_true", help="refused while the real-session GATE is NO-GO")
     parser.add_argument("--max-steps", type=int)
     parser.add_argument("--step-sleep-s", type=float, default=0.0, help="real seconds between steps (to give a signal time to arrive)")
-    parser.add_argument("--restart", action="store_true", help="continue a directory whose last run ended HALTED or REFUSED")
+    parser.add_argument("--restart", action="store_true", help="take up a directory whose last run did not end in order (halt, refusal, kill, power cut)")
     args = parser.parse_args(argv)
     try:
         config = load_config(args.config)
