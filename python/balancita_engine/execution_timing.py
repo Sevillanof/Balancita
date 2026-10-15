@@ -67,7 +67,7 @@ REJECTION_REASONS = frozenset({
     "adverse_move_consumed_stop_distance", "favorable_move_consumed_target_distance",
     # requested explicitly by the caller (stage 8B): the runner was down over part of the execution window
     "runner_interrupted"})
-CANCEL_REASONS = frozenset({"runner_interrupted"})
+CANCEL_REASONS = frozenset({"runner_interrupted", "source_stale"})
 
 
 @dataclass(frozen=True)
@@ -236,7 +236,8 @@ class TimedExecutor:
         return self._expire(now_ms, None)
 
     def cancel(self, intent_id, reason, now_ms, **extra):
-        """Cancels one pending order *on request* (stage 8B, ``runner_interrupted``). Nothing in this module calls it:
+        """Cancels one pending order *on request* (stage 8B ``runner_interrupted``; ``source_stale`` when the source lost
+        continuity while the order was waiting). Nothing in this module calls it:
         without a request an order is filled, rejected or expired exactly as before. Returns the terminal record, or
         ``None`` when the order is not pending (already filled, rejected or unknown)."""
         if reason not in CANCEL_REASONS:
@@ -259,8 +260,23 @@ class TimedExecutor:
         out = []
         for order in sorted(self.pending.values(), key=lambda o: (o["timeline"]["decided_ms"], o["intent"]["intent_id"])):
             if (product is None or order["product_id"] == product) and now_ms > order["timeline"]["deadline_ms"]:
-                reason = "no_quote_in_window" if not order["quotes_seen"] else "no_valid_quote_in_window"
-                out.append(self._reject(order, [reason], now_ms)["record"])
+                out.append(self._reject(order, [self._expiry_reason(order)], now_ms)["record"])
+        return out
+
+    @staticmethod
+    def _expiry_reason(order):
+        return "no_quote_in_window" if not order["quotes_seen"] else "no_valid_quote_in_window"
+
+    def expire_orders(self, intent_ids, now_ms):
+        """Expires, at ``now_ms`` and with the reason ``_expire`` gives, the listed orders whose window is over
+        (``now_ms`` after the deadline). Used by the runner when a silence of the source is declared: those orders were over
+        before the silence became excessive, so they end as they always do. No quote and no clock event is made up."""
+        self._tick(now_ms)
+        out = []
+        wanted = set(intent_ids)
+        for order in sorted(self.pending.values(), key=lambda o: (o["timeline"]["decided_ms"], o["intent"]["intent_id"])):
+            if order["intent"]["intent_id"] in wanted and now_ms > order["timeline"]["deadline_ms"]:
+                out.append(self._reject(order, [self._expiry_reason(order)], now_ms)["record"])
         return out
 
     # ---- price checks and fill -------------------------------------------------------------------------------
