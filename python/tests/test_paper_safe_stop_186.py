@@ -273,7 +273,9 @@ print("finished", flush=True)
         cancelled = [e["data"] for e in rec.journal.entries if e["kind"] == "order_cancelled"]
         self.assertEqual(len(cancelled), 2)
         self.assertEqual({c["reason"] for c in cancelled}, {"runner_interrupted"})
-        self.assertTrue(all(c["uncovered_to_ms"] == at for c in cancelled))    # the unobserved window is the original one
+        windows = lambda r: sorted((c["data"]["intent_id"], c["data"]["uncovered_from_ms"], c["data"]["uncovered_to_ms"])
+                                   for c in r.journal.entries if c["kind"] == "order_cancelled")
+        self.assertEqual(windows(rec), windows(ref))                          # the unobserved window is the original one
 
     def copy(self, path, name):
         target = os.path.join(self.dir, name)
