@@ -1,4 +1,4 @@
-import { act, cleanup, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import FuturesTerminal from './FuturesTerminal.tsx'
 import type {
@@ -133,6 +133,11 @@ async function advance(ms: number) {
   await act(async () => {
     vi.advanceTimersByTime(ms)
   })
+}
+
+/** The run and engine details live in the status chip's inspector. */
+function openStatus() {
+  fireEvent.click(screen.getByTestId('health-indicator'))
 }
 
 describe('FuturesTerminal WebSocket protocol (characterization)', () => {
@@ -291,6 +296,7 @@ describe('FuturesTerminal WebSocket protocol (characterization)', () => {
     await act(async () =>
       socket.receive(snapshot(5, 'run-2', [{ order_id: 'foreignOrder' }])),
     )
+    openStatus()
     expect(screen.getByText(`Run: ${RUN}`)).toBeTruthy()
     expect(screen.queryByText(/foreignOrder/)).toBeNull()
 
@@ -326,6 +332,7 @@ describe('FuturesTerminal WebSocket protocol (characterization)', () => {
 
     // The request was cancelled, so a snapshot of another run is ignored again.
     await act(async () => socket.receive(snapshot(4, 'run-2')))
+    openStatus()
     expect(screen.getByText(`Run: ${RUN}`)).toBeTruthy()
     expect(screen.queryByText('Run: run-2')).toBeNull()
   })
@@ -339,6 +346,7 @@ describe('FuturesTerminal WebSocket protocol (characterization)', () => {
       screen.getByRole('button', { name: 'Confirmar nueva cuenta' }).click(),
     )
     await act(async () => socket.receive(snapshot(4, 'run-2')))
+    openStatus()
     expect(screen.getByText('Run: run-2')).toBeTruthy()
 
     // run-2 continues at 5; run-1 events no longer apply.

@@ -8,26 +8,8 @@ import type { TerminalTickerStats } from '../features/trading-view/infrastructur
 import type { TerminalBootstrap } from '../features/connected-trading/infrastructure/terminal-stream-client.ts'
 import { strategyCode } from '../features/trading-view/domain/terminal-chart-model.ts'
 import { record } from '../shared/wire/decode.ts'
-import { markerGap } from './terminal-markers.ts'
+import { candleForDecision, markerGap } from './terminal-markers.ts'
 import { analysisAction } from './terminal-labels.ts'
-
-/** Time of the last candle at or before `seconds` (the first one when none is). */
-function candleTimeAtOrBefore(
-  candles: readonly ApprovedTerminalCandle[],
-  seconds: number,
-): number {
-  let low = 0
-  let high = candles.length - 1
-  let found = 0
-  while (low <= high) {
-    const middle = (low + high) >> 1
-    if (candles[middle]!.time <= seconds) {
-      found = middle
-      low = middle + 1
-    } else high = middle - 1
-  }
-  return candles[found]!.time
-}
 
 export default function TerminalMarketChart({
   market,
@@ -42,13 +24,15 @@ export default function TerminalMarketChart({
   position,
   positions,
   orders,
+  fills = [],
+  quantityUnit,
   historicalLabel,
 }: {
   market: Record<string, unknown>
   mode: TerminalBootstrap['mode']
   analyses: unknown[]
   selectedId: string
-  /** Mark only LONG/SHORT verdicts: a WAIT every minute would bury the chart. */
+  /** Live gateway: proposals and WAIT get their own markers (not entries). */
   entriesOnly?: boolean
   onSelect: (analysisId: string) => void
   apiBase: string
@@ -57,6 +41,9 @@ export default function TerminalMarketChart({
   position: Record<string, unknown>
   positions?: unknown[]
   orders: unknown[]
+  /** Durable gateway fills: one EJEC. marker each. */
+  fills?: unknown[]
+  quantityUnit?: string
   historicalLabel?: string
 }) {
   const marketCandles = market.candles
@@ -90,6 +77,11 @@ export default function TerminalMarketChart({
   // Markers only depend on which candle buckets exist, not on the live price
   // of the forming one: a new array per tick would repaint every marker.
   const bucketsKey = `${candles.length}:${candles[0]?.time}:${candles.at(-1)?.time}`
+  const candleSeconds = useMemo(
+    () => candles.map((candle) => candle.time).sort((a, b) => a - b),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [bucketsKey],
+  )
   const markers = useMemo<ApprovedTerminalMarker[]>(
     () =>
       candles.length === 0
@@ -108,12 +100,18 @@ export default function TerminalMarketChart({
               markerGap(analysis, {
                 firstCandleMs: candles[0]!.time * 1000,
                 entriesOnly,
+                candleSeconds,
               })
             )
               return []
             const action = analysisAction(analysis)
-            const decisionSeconds = Math.floor(Number(time) / 1000)
-            const renderTime = candleTimeAtOrBefore(candles, decisionSeconds)
+            // The candle that covers the verdict's bucket, never an earlier one.
+            const renderTime = candleForDecision(
+              candleSeconds,
+              analysis,
+              !entriesOnly,
+            ).time
+            if (renderTime === null) return []
             const direction =
               action === 'LONG'
                 ? 'long'
@@ -130,12 +128,23 @@ export default function TerminalMarketChart({
               {
                 id,
                 time: renderTime,
-                type: direction ? 'entry' : 'discard',
+                // Live gateway: LONG/SHORT are proposals, WAIT is a wait; they
+                // are never drawn as the operations executed (see `fill`).
+                type: direction
+                  ? entriesOnly
+                    ? 'proposal'
+                    : 'entry'
+                  : entriesOnly
+                    ? 'wait'
+                    : 'discard',
                 ...(direction ? { direction } : {}),
                 label: direction
-                  ? code
-                    ? `${code} ${action}`
-                    : action
+                  ? `${code ? `${code} ` : ''}${action}`
+                  : entriesOnly
+                    ? 'W'
+                    : 'WAIT',
+                detail: direction
+                  ? `${code ? `${code} ` : ''}${action}${entriesOnly ? ' propuesta' : ''}`
                   : 'WAIT',
                 ...(direction && typeof strategyId === 'string'
                   ? { strategyId }
@@ -181,6 +190,9 @@ export default function TerminalMarketChart({
         position={position}
         positions={positions}
         orders={orders}
+        fills={fills}
+        quantityUnit={quantityUnit}
+        proposalLegend={entriesOnly}
         historicalLabel={historicalLabel}
       />
     </>

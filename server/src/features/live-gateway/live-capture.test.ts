@@ -44,6 +44,22 @@ function fakeSocket() {
 }
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+/** Blocks this process like a descheduled CI runner would: no timer or I/O callback runs meanwhile. */
+const stall = (ms: number) => {
+  const end = Date.now() + ms
+  while (Date.now() < end) {
+    // busy wait
+  }
+}
+/**
+ * Waits for a condition instead of sleeping a fixed time: a count of polls inside a wall-clock
+ * window depends on how long this process was scheduled, not on what the code does. The cap only
+ * bounds a hang; the assertions that follow are unchanged.
+ */
+const until = async (condition: () => boolean, capMs = 5_000) => {
+  const deadline = Date.now() + capMs
+  while (!condition() && Date.now() < deadline) await wait(2)
+}
 
 describe('live capture process core', () => {
   it('persists events and candles with no engine and no HTTP server', async () => {
@@ -237,6 +253,7 @@ describe('live capture process core', () => {
       fetchCatalog: async () => catalog,
       fundingFetch: async () => {
         calls += 1
+        if (calls === 2) stall(80) // the whole fixed window of the old wait(60)
         return new Response(
           JSON.stringify({
             result: 'success',
@@ -271,12 +288,12 @@ describe('live capture process core', () => {
       return result
     }
     await capture.start()
-    await wait(60)
+    await until(() => calls >= 3)
     expect(calls).toBeGreaterThanOrEqual(3)
     expect(rows()).toEqual([1, 3])
     periods = [...periods, hour]
     const before = calls
-    await wait(60)
+    await until(() => calls > before + 1)
     await capture.stop()
     expect(calls).toBeGreaterThan(before)
     expect(rows()).toEqual([2, 4])
@@ -649,7 +666,8 @@ describe('live capture process core', () => {
     it('staggers requests by the configured gap', async () => {
       const { store, capture, requests } = setup({ officialRequestGapMs: 20 })
       await capture.start()
-      await wait(220)
+      setTimeout(() => stall(250), 30) // longer than the old fixed wait(220)
+      await until(() => requests.length >= 6)
       await capture.stop()
       expect(requests.length).toBeGreaterThanOrEqual(6)
       for (let index = 1; index < Math.min(requests.length, 6); index += 1)
@@ -1386,6 +1404,100 @@ describe('live capture process core', () => {
       expect(events().filter((e) => e.component === 'websocket')).toEqual([])
       await capture.stop()
       net.stop()
+      store.close()
+    })
+
+    it('does not replace a healthy socket whose newest frames are still queued behind a stalled loop', async () => {
+      // Deterministic reproduction of the intermittent CI failure of the test above. When the process
+      // is not scheduled for a while, the poll deadline timers of the REST sources fire in the same
+      // timers phase as (and before) the feeder: the incidents are noted while the frames that
+      // arrived meanwhile are not delivered yet, so the ticker looks idle although the socket is fine.
+      // The stall is injected through the injected clock and the log hook, so no real timing matters:
+      // right before each deadline incident is noted the clock jumps ahead and one fresh frame is
+      // queued behind the current callback, exactly like a frame waiting in the event loop.
+      const dir = mkdtempSync(join(tmpdir(), 'balancita-capture-'))
+      dirs.push(dir)
+      const logFile = join(dir, 'resilience.jsonl')
+      const store = new FuturesMarketStore(join(dir, 'market.sqlite'))
+      const net = network()
+      net.stop() // frames are delivered by hand below
+      let now = 1_790_000_000_000
+      let seq = 0
+      const deliver = () => {
+        seq += 1
+        net.sockets[net.sockets.length - 1]?.onmessage?.({
+          data: JSON.stringify({
+            feed: 'ticker',
+            product_id: 'PF_XBTUSD',
+            time: now,
+            seq,
+            bid: 90000,
+            ask: 90001,
+            last: 90000.5,
+            markPrice: 90000,
+            index: 89999,
+            suspended: false,
+          }),
+        })
+      }
+      let stalls = 0
+      const capture = createLiveCapture({
+        store,
+        clock: () => now,
+        makeSocket: net.makeSocket,
+        fetchCatalog: async () => catalog,
+        fundingFetch: async () => {
+          throw new Error('offline')
+        },
+        products: [
+          { productId: 'PF_XBTUSD', tickSize: '1' },
+          { productId: 'PF_ETHUSD', tickSize: '0.1' },
+        ],
+        officialCandlesFetch: net.officialFetch,
+        tickerFetch: net.tickerFetch,
+        officialPollMs: 15,
+        officialRequestGapMs: 0,
+        tickerPollMs: 5,
+        pollDeadlineMs: 20,
+        resilienceLogFile: logFile,
+        silenceMs: 600_000,
+        dataSilenceMs: 600_000,
+        generalIdleMs: 30,
+        analytics: {
+          metrics: ['open-interest' as const],
+          intervals: [60_000],
+          pollMs: 15,
+          fetch: (_url: string, init?: RequestInit) =>
+            new Promise<Response>((_, reject) =>
+              init?.signal?.addEventListener('abort', () =>
+                reject(new DOMException('aborted', 'AbortError')),
+              ),
+            ),
+        },
+        log: (line) => {
+          if (!line.includes('poll stuck')) return
+          // The loop was stalled 100 ms: the clock moved, the newest frame is still queued.
+          stalls += 1
+          now += 100
+          setImmediate(deliver)
+        },
+      })
+      await capture.start()
+      await wait(20)
+      deliver()
+      net.state.restBroken = true // every REST source hangs until its deadline
+      for (let i = 0; i < 200 && stalls < 6; i += 1) await wait(20)
+      expect(stalls).toBeGreaterThanOrEqual(6)
+      await wait(20)
+      const events = readFileSync(logFile, 'utf8')
+        .trim()
+        .split('\n')
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as { component: string })
+      expect(events.some((e) => e.component === 'rest-tickers')).toBe(true)
+      expect(events.filter((e) => e.component === 'websocket')).toEqual([])
+      expect(net.sockets.length).toBe(1)
+      await capture.stop()
       store.close()
     })
   })

@@ -25,14 +25,29 @@ export type ApprovedTerminalCandle = {
 export type ApprovedTerminalMarker = {
   id: string
   time: number
-  type: 'entry' | 'exit' | 'discard' | 'decision'
+  /**
+   * `proposal`: a LONG/SHORT verdict (a proposal, not an operation).
+   * `wait`: WAIT verdicts, possibly several grouped (`count`).
+   * `fill`: an operation actually executed in paper execution (a real fill).
+   */
+  type: 'entry' | 'exit' | 'discard' | 'decision' | 'proposal' | 'wait' | 'fill'
   direction?: 'long' | 'short' | 'flat'
+  /** Short text painted on the chart (markers pile up). */
   label: string
+  /** Full text, painted instead of `label` while the marker is selected. */
+  detail?: string
   positionId?: string | null
   /** Strategy that took the decision; colours the marker and feeds the filter. */
   strategyId?: string
   decisionStatus?: 'pending' | 'hold' | 'gate-rejected' | 'abstained'
+  /** A grouped marker stands for several decisions: how many. */
+  count?: number
+  /** Every id a grouped marker stands for (selecting any one highlights it). */
+  memberIds?: readonly string[]
 }
+
+const stands = (marker: ApprovedTerminalMarker, id: string): boolean =>
+  marker.id === id || (marker.memberIds?.includes(id) ?? false)
 
 export type ApprovedTerminalLevel = {
   positionId: string
@@ -106,12 +121,42 @@ function cssColor(name: string, fallback: string): string {
   )
 }
 
-import { strategyMarkerColor } from '../domain/terminal-chart-model.ts'
+import {
+  pickMarkerAt,
+  strategyMarkerColor,
+} from '../domain/terminal-chart-model.ts'
 
 function markerPresentation(
   marker: ApprovedTerminalMarker,
-  colors: { up: string; down: string; amber: string; info: string },
+  colors: {
+    up: string
+    down: string
+    amber: string
+    info: string
+    muted: string
+  },
 ) {
+  // Executed operation: a square on the side of the trade, apart from the
+  // arrows of proposals and the grey circles of WAIT.
+  if (marker.type === 'fill')
+    return marker.direction === 'short'
+      ? {
+          color: colors.down,
+          shape: 'square' as const,
+          position: 'aboveBar' as const,
+        }
+      : {
+          color: colors.up,
+          shape: 'square' as const,
+          position: 'belowBar' as const,
+        }
+  if (marker.type === 'wait')
+    return {
+      color: colors.muted,
+      shape: 'circle' as const,
+      // Inside the candle: apart from the exits' circle above the bar.
+      position: 'inBar' as const,
+    }
   if (marker.type === 'discard')
     return {
       color: colors.amber,
@@ -151,11 +196,16 @@ function markerPresentation(
 
 const BASE_SCALE_MARGINS = { top: 0.12, bottom: 0.22 }
 const MARKER_STACK_PX = 54
+// Distance between two stacked glyphs of one candle: glyph + margin + label.
+const MARKER_STACK_STEP_PX = 30
 const FALLBACK_PANE_HEIGHT_PX = 420
 const MAX_STACK_MARGIN = 0.6
 const MAX_TOTAL_MARGIN = 0.9
 
-type StackedMarker = { time: unknown; position: 'aboveBar' | 'belowBar' }
+type StackedMarker = {
+  time: unknown
+  position: 'aboveBar' | 'belowBar' | 'inBar'
+}
 
 /**
  * Same-bucket, same-side markers stack by roughly one glyph plus its label per
@@ -173,6 +223,7 @@ function markerStackScaleMargins(
   let maxAbove = 0
   let maxBelow = 0
   for (const marker of markers) {
+    if (marker.position === 'inBar') continue
     const side = depth[marker.position]
     const count = (side.get(marker.time) ?? 0) + 1
     side.set(marker.time, count)
@@ -237,6 +288,8 @@ export default function ApprovedTerminalChart({
   const renderedCandles = useRef<readonly ApprovedTerminalCandle[] | null>(null)
   const renderedInterval = useRef<number | null>(null)
   const propsRef = useRef({ candles, markers, intervalSeconds, onSelect })
+  const publishRef = useRef<(() => void) | null>(null)
+  const paintedRef = useRef<readonly SeriesMarker<Time>[]>([])
 
   useEffect(() => {
     propsRef.current = { candles, markers, intervalSeconds, onSelect }
@@ -334,6 +387,47 @@ export default function ApprovedTerminalChart({
       .priceScale()
       .applyOptions({ scaleMargins: { top: 0.83, bottom: 0.02 } })
     const markerApi = createSeriesMarkers(series, [])
+    // Where each painted marker sits (container pixels). The canvas has no DOM
+    // per marker, so this is what lets the browser tests (and anyone
+    // inspecting the page) find and click a marker without guessing, and what
+    // resolves a click to a marker (see pickMarkerAt).
+    const markerPoints = () => {
+      const byTime = new Map(
+        propsRef.current.candles.map((candle) => [candle.time, candle]),
+      )
+      // The library stacks markers of one candle and side outwards, one glyph
+      // plus its label apart.
+      const stacked = new Map<string, number>()
+      return paintedRef.current.flatMap((marker) => {
+        const candle = byTime.get(Number(marker.time))
+        const x = chart.timeScale().timeToCoordinate(marker.time)
+        const y = candle
+          ? series.priceToCoordinate(
+              marker.position === 'aboveBar'
+                ? candle.high
+                : marker.position === 'inBar'
+                  ? (candle.high + candle.low) / 2
+                  : candle.low,
+            )
+          : null
+        if (x === null || y === null || marker.id === undefined) return []
+        const key = `${marker.time}:${marker.position}`
+        const depth = marker.position === 'inBar' ? 0 : (stacked.get(key) ?? 0)
+        stacked.set(key, depth + 1)
+        const outward = marker.position === 'aboveBar' ? -1 : 1
+        return [
+          {
+            id: marker.id,
+            x: Math.round(x),
+            y:
+              Math.round(y) +
+              (marker.position === 'inBar'
+                ? 0
+                : outward * (12 + depth * MARKER_STACK_STEP_PX)),
+          },
+        ]
+      })
+    }
     const handleClick = (
       param: Parameters<typeof chart.subscribeClick>[0] extends (
         arg: infer P,
@@ -341,8 +435,25 @@ export default function ApprovedTerminalChart({
         ? P
         : never,
     ) => {
-      const objectId = param.hoveredInfo?.objectId ?? param.hoveredObjectId
+      const hovered = param.hoveredInfo?.objectId ?? param.hoveredObjectId
       const state = propsRef.current
+      // The library answers with the FIRST marker whose glyph OR LABEL holds
+      // the pointer, so the label of a neighbouring decision could win over
+      // an EJEC. square. The marker whose glyph is in the clicked candle
+      // column is resolved here, from the coordinates the chart has now.
+      // A click with a pointer that is not on a marker selects nothing: it
+      // is neither the library's label hit nor a bare candle.
+      const objectId = param.point
+        ? pickMarkerAt(
+            markerPoints(),
+            param.point,
+            Math.min(
+              16,
+              Math.max(8, chart.timeScale().options().barSpacing / 2),
+            ),
+            MARKER_STACK_STEP_PX,
+          )
+        : hovered
       if (typeof objectId === 'string') {
         const marker = state.markers.find((item) => item.id === objectId)
         if (marker)
@@ -351,16 +462,32 @@ export default function ApprovedTerminalChart({
               state.intervalSeconds,
             marker.id,
           )
-      } else if (typeof param.time === 'number') {
+      } else if (!param.point && typeof param.time === 'number') {
         state.onSelect(param.time)
       }
     }
     chart.subscribeClick(handleClick)
+    const publishPositions = () => {
+      const next = JSON.stringify(markerPoints())
+      if (node.dataset.markerPositions !== next)
+        node.dataset.markerPositions = next
+    }
+    publishRef.current = publishPositions
+    // The positions are read at every repaint, once the library has laid out
+    // the scales for the frame: right after a change of markers, of selection
+    // or of zoom its coordinates are still those of the previous frame.
+    // (The tests' chart mocks have no primitives.)
+    const painted = { updateAllViews: publishPositions, paneViews: () => [] }
+    if (typeof series.attachPrimitive === 'function')
+      series.attachPrimitive(painted)
+    chart.timeScale().subscribeVisibleLogicalRangeChange(publishPositions)
     chartRef.current = chart
     candleSeriesRef.current = series
     volumeRef.current = volume
     markerRef.current = markerApi
     return () => {
+      chart.timeScale().unsubscribeVisibleLogicalRangeChange(publishPositions)
+      publishRef.current = null
       chart.unsubscribeClick(handleClick)
       priceLines.current.forEach((line) => series.removePriceLine(line))
       priceLines.current = []
@@ -453,6 +580,7 @@ export default function ApprovedTerminalChart({
       down: cssColor('--chart-down', '#ee7777'),
       amber: cssColor('--warning', '#d4aa62'),
       info: cssColor('--info', '#79a9bd'),
+      muted: cssColor('--muted-foreground', '#8b969a'),
     }
     const visibleMarkers: SeriesMarker<Time>[] = [...markers]
       .sort((left, right) => left.time - right.time)
@@ -468,9 +596,11 @@ export default function ApprovedTerminalChart({
             position: appearance.position,
             color: strategyColor ?? appearance.color,
             shape: appearance.shape,
-            text: `${marker.label}${selectedId === marker.id ? ' ◀' : ''}`,
+            text: stands(marker, selectedId)
+              ? `${marker.detail ?? marker.label} ◀`
+              : marker.label,
             id: marker.id,
-            size: selectedId === marker.id ? 2 : 1,
+            size: stands(marker, selectedId) ? 2 : 1,
           },
         ]
       })
@@ -491,6 +621,8 @@ export default function ApprovedTerminalChart({
       marginsApplied.current = stacked
     }
     markerRef.current?.setMarkers(painted)
+    paintedRef.current = painted
+    publishRef.current?.()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bucketsKey, markers, selectedId, intervalSeconds, initialViewport])
 
@@ -499,7 +631,7 @@ export default function ApprovedTerminalChart({
     if (!series) return
     priceLines.current.forEach((line) => series.removePriceLine(line))
     priceLines.current = []
-    const selected = markers.find((marker) => marker.id === selectedId)
+    const selected = markers.find((marker) => stands(marker, selectedId))
     if (!selected?.positionId) return
     const position = levels.find(
       (item) => item.positionId === selected.positionId,
@@ -526,7 +658,7 @@ export default function ApprovedTerminalChart({
   }, [markers, levels, selectedId, initialViewport])
 
   useEffect(() => {
-    const selected = markers.find((marker) => marker.id === selectedId)
+    const selected = markers.find((marker) => stands(marker, selectedId))
     if (!selected) return
     const bucket = Math.floor(selected.time / intervalSeconds) * intervalSeconds
     const index = candles.findIndex((candle) => candle.time === bucket)
@@ -542,6 +674,11 @@ export default function ApprovedTerminalChart({
       })
       focusedSelection.current = selectionKey
     }
+    // The chart has moved to the selection (or needs no move): what the
+    // browser tests wait for before they click at the published positions.
+    publishRef.current?.()
+    if (container.current && selectedId)
+      container.current.dataset.focusedMarker = selectedId
   }, [
     markers,
     selectedId,
@@ -677,6 +814,7 @@ export default function ApprovedTerminalChart({
         data-testid="approved-chart-renderer"
         data-candle-count={candles.length}
         data-marker-count={markers.length}
+        data-selected-marker={selectedId}
         className="demo-terminal__chart"
         style={
           panes.length > 0
