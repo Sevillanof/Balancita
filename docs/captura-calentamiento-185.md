@@ -1,11 +1,12 @@
 # Disponibilidad de calentamiento de la captura viva (#185, etapa 1)
 
 Herramienta: `python/balancita_engine/capture_warmup_availability.py` (`capture-warmup-availability.v1`). Pruebas: `python/tests/test_capture_warmup_availability.py`.
+Ventana: la primera (`[2026-10-01T00:00Z, 2026-10-13T01:00Z)`, versión `v1`) salió `bloqueada` porque la captura empieza el 1-oct a las 19:50Z; Fran autorizó repetir una sola vez con esta ventana (versión `v2`, mismos topes y columnas; [6200506915](https://github.com/Sevillanof/Balancita/issues/185#issuecomment-6200506915)).
 Autorización: BAL-DECISION-185-02 ([6199674315](https://github.com/Sevillanof/Balancita/issues/185#issuecomment-6199674315)). Esta PR no corre nada contra datos reales: solo agrega la herramienta. Una sola ejecución, en la Mac de Fran, después del GO de D y del CI completo sobre el HEAD exacto.
 
 ## Qué responde
 
-¿La captura viva tiene, para `PF_XBTUSD`, velas oficiales de 1 minuto en `[2026-10-01T00:00Z, 2026-10-13T01:00Z)` (17 340 minutos) y al menos 17 290 minutos consecutivos hasta el final de la ventana, sin campos vacíos en esos 17 290 minutos? 17 290 = `required_warmup_ms` de las estrategias congeladas (1 037 400 000 ms = 3 458 barras de 5 min = 288 h 10 min); la prueba lo recalcula del código. Es una prueba de disponibilidad: no es el calentamiento de una sesión, no mira valores ni compara con Kraken.
+¿La captura viva tiene, para `PF_XBTUSD`, velas oficiales de 1 minuto en `[2026-10-01T19:50Z, 2026-10-13T21:00Z)` (17 350 minutos, 60 de margen) y al menos 17 290 minutos consecutivos hasta el final de la ventana, sin campos vacíos en esos 17 290 minutos? 17 290 = `required_warmup_ms` de las estrategias congeladas (1 037 400 000 ms = 3 458 barras de 5 min = 288 h 10 min); la prueba lo recalcula del código. Es una prueba de disponibilidad: no es el calentamiento de una sesión, no mira valores ni compara con Kraken.
 
 ## Qué lee
 

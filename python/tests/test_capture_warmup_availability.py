@@ -62,10 +62,10 @@ class Base(unittest.TestCase):
 
 class Constants(unittest.TestCase):
     def test_the_window_is_the_authorized_one_and_the_requirement_is_the_frozen_strategies(self):
-        self.assertEqual(cwa.EXPECTED_MINUTES, 17_340)
+        self.assertEqual(cwa.EXPECTED_MINUTES, 17_350)
         self.assertEqual(cwa.REQUIRED_MINUTES, 17_290)
-        self.assertEqual(W0, 1_790_812_800_000)       # 2026-10-01T00:00:00Z
-        self.assertEqual(W1, 1_791_853_200_000)       # 2026-10-13T01:00:00Z
+        self.assertEqual(W0, 1_790_884_200_000)       # 2026-10-01T19:50:00Z
+        self.assertEqual(W1, 1_791_925_200_000)       # 2026-10-13T21:00:00Z
         self.assertEqual(cwa.ROW_BUDGET, 60_000)
         self.assertEqual(cwa.QUERY_TIMEOUT_S, 60)
         self.assertEqual(cwa.RUN_TIMEOUT_S, 600)
@@ -82,30 +82,30 @@ class Availability(Base):
     def test_a_complete_window_is_apta(self):
         r = self.report()
         self.assertIsNone(r["stopped"])
-        self.assertEqual(r["counts"]["rows"], 17_340)               # the extra rows are outside the filters
-        self.assertEqual(r["counts"]["distinct_buckets"], 17_340)
+        self.assertEqual(r["counts"]["rows"], 17_350)               # the extra rows are outside the filters
+        self.assertEqual(r["counts"]["distinct_buckets"], 17_350)
         self.assertEqual((r["counts"]["min_bucket_start"], r["counts"]["max_bucket_start"]), (W0, W1 - M1))
         self.assertEqual(r["counts"]["empty_fields_rows"], 0)
-        self.assertEqual(r["availability"]["consecutive_minutes_up_to_the_end"], 17_340)
+        self.assertEqual(r["availability"]["consecutive_minutes_up_to_the_end"], 17_350)
         self.assertEqual(r["verdict"]["fitness"], "apta")
-        self.assertEqual(r["rows_scanned"], {"fetched": 17_340, "limit": 60_000})
+        self.assertEqual(r["rows_scanned"], {"fetched": 17_350, "limit": 60_000})
         self.assertEqual(len(r["query_plan"]), 1)
         self.assertTrue(r["query_plan"][0].startswith("SEARCH") and cwa.PK_INDEX in r["query_plan"][0])
         self.assertEqual(r["guards"], {"opened_with": "mode=ro", "query_only_readback": 1})
 
     def test_the_margin_is_exactly_fifty_minutes(self):
-        self.assertEqual(self.report(skip=range(0, 50))["verdict"]["fitness"], "apta")          # 17 290 consecutive
-        self.assertEqual(self.report(skip=range(0, 51))["verdict"]["fitness"], "bloqueada")     # 17 289
+        self.assertEqual(self.report(skip=range(0, 60))["verdict"]["fitness"], "apta")          # 17 290 consecutive
+        self.assertEqual(self.report(skip=range(0, 61))["verdict"]["fitness"], "bloqueada")     # 17 289
 
     def test_a_hole_at_the_end_blocks(self):
-        r = self.report(skip=[17_339])
+        r = self.report(skip=[17_349])
         self.assertEqual(r["availability"]["consecutive_minutes_up_to_the_end"], 0)
         self.assertEqual(r["verdict"]["fitness"], "bloqueada")
         self.assertEqual(r["availability"]["missing_runs"]["longest"], [{"start_ms": W1 - M1, "minutes": 1}])
 
     def test_a_hole_in_the_middle_with_a_long_enough_tail_is_apta_and_still_reported(self):
         r = self.report(skip=[30, 31])
-        self.assertEqual(r["availability"]["consecutive_minutes_up_to_the_end"], 17_340 - 32)
+        self.assertEqual(r["availability"]["consecutive_minutes_up_to_the_end"], 17_350 - 32)
         self.assertEqual(r["availability"]["minutes_missing"], 2)
         self.assertEqual(r["availability"]["missing_runs"]["longest"], [{"start_ms": W0 + 30 * M1, "minutes": 2}])
         self.assertEqual(r["verdict"]["fitness"], "apta")
@@ -123,15 +123,15 @@ class Availability(Base):
         self.assertIn("1 rows with an empty", r["verdict"]["reasons"][0])
 
     def test_an_empty_field_before_the_required_span_is_reported_but_does_not_block(self):
-        r = self.report(empty_at=10)                       # minute 10 is before the 17 290 minutes that end the window
+        r = self.report(empty_at=10)                       # minute 10 is before the 17 290 minutes that end the window (the span starts at minute 60)
         self.assertEqual((r["counts"]["empty_fields_rows"], r["counts"]["empty_fields_rows_in_required_span"]), (1, 0))
         self.assertEqual(r["verdict"]["fitness"], "apta")
 
     def test_revisions_are_counted_and_late_ones_show_in_known_at(self):
         r = self.report(second=range(0, 1_000))
-        self.assertEqual(r["counts"]["rows"], 18_340)
-        self.assertEqual(r["counts"]["distinct_buckets"], 17_340)
-        self.assertEqual(r["availability"]["revisions"], {"rows": 18_340, "buckets_with_more_than_one": 1_000, "max_per_bucket": 2})
+        self.assertEqual(r["counts"]["rows"], 18_350)
+        self.assertEqual(r["counts"]["distinct_buckets"], 17_350)
+        self.assertEqual(r["availability"]["revisions"], {"rows": 18_350, "buckets_with_more_than_one": 1_000, "max_per_bucket": 2})
         self.assertEqual(r["availability"]["known_at_minus_bucket_end_ms"]["min"], 3_000)
         self.assertEqual(r["availability"]["known_at_minus_bucket_end_ms"]["max"], 3_001)
         self.assertEqual(r["verdict"]["fitness"], "apta")
@@ -139,7 +139,7 @@ class Availability(Base):
     def test_two_revisions_on_every_minute_fit_now_that_there_is_no_second_pass(self):
         r = self.report(revisions=2)
         self.assertIsNone(r["stopped"])
-        self.assertEqual(r["counts"]["rows"], 34_680)
+        self.assertEqual(r["counts"]["rows"], 34_700)
         self.assertEqual(r["verdict"]["fitness"], "apta")
 
     def test_over_the_scan_budget_the_database_never_returns_more_than_the_limit(self):
@@ -166,11 +166,11 @@ class Availability(Base):
         self.assertNotIn("verdict", r)
 
     def test_just_under_the_limit_is_analysed_and_exactly_the_limit_is_refused(self):
-        r = self.report(revs=lambda i: 4 if i < 7_979 else 3)      # 59 999 rows
+        r = self.report(revs=lambda i: 4 if i < 7_949 else 3)      # 59 999 rows
         self.assertIsNone(r["stopped"])
         self.assertEqual(r["rows_scanned"], {"fetched": 59_999, "limit": 60_000})
         self.assertEqual(r["counts"]["rows"], 59_999)
-        r = self.report(revs=lambda i: 4 if i < 7_980 else 3)      # 60 000 rows: may be more, refused
+        r = self.report(revs=lambda i: 4 if i < 7_950 else 3)      # 60 000 rows: may be more, refused
         self.assertEqual(r["stopped"]["reason"], "row_budget")
 
     def test_the_statement_is_one_bounded_ordered_query_and_values_only_leave_as_a_flag(self):

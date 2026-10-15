@@ -2,7 +2,8 @@
 
 One question: does the live capture hold the 1-minute official candles of PF_XBTUSD that the frozen strategies need to warm
 up (``required_warmup_ms`` = 1 037 400 000 ms = 3 458 five-minute bars = 17 290 one-minute candles = 288 h 10 min) in the
-fixed window [2026-10-01T00:00Z, 2026-10-13T01:00Z), 17 340 minutes? It reads times and counters only: ``bucket_start`` and
+fixed window [2026-10-01T19:50Z, 2026-10-13T21:00Z), 17 350 minutes (the first window, from
+2026-10-01T00:00Z, started 19 h 50 min before the capture begins and came back ``bloqueada``)? It reads times and counters only: ``bucket_start`` and
 ``known_at`` of every candle, plus an aggregate that counts empty price/volume fields without ever returning one. No price,
 rate, volume or raw body leaves the database.
 
@@ -30,13 +31,13 @@ import sys
 import time
 import urllib.parse
 
-TOOL_VERSION = "capture-warmup-availability.v1"
+TOOL_VERSION = "capture-warmup-availability.v2"
 PRODUCT = "PF_XBTUSD"
 INTERVAL_MS = 60_000
-WINDOW_START_MS = 1_790_812_800_000  # 2026-10-01T00:00:00Z, inclusive
-WINDOW_END_MS = 1_791_853_200_000  # 2026-10-13T01:00:00Z, exclusive
+WINDOW_START_MS = 1_790_884_200_000  # 2026-10-01T19:50:00Z, inclusive: the first minute the capture recorded
+WINDOW_END_MS = 1_791_925_200_000  # 2026-10-13T21:00:00Z, exclusive: 60 minutes after 17 290 minutes from the start
 WINDOW = (WINDOW_START_MS, WINDOW_END_MS)
-EXPECTED_MINUTES = (WINDOW_END_MS - WINDOW_START_MS) // INTERVAL_MS  # 17 340
+EXPECTED_MINUTES = (WINDOW_END_MS - WINDOW_START_MS) // INTERVAL_MS  # 17 350
 REQUIRED_MINUTES = 1_037_400_000 // INTERVAL_MS  # 17 290: required_warmup_ms of the frozen strategies
 REQUIRED_SPAN_START_MS = WINDOW_END_MS - REQUIRED_MINUTES * INTERVAL_MS  # the 17 290 minutes that end the window
 ROW_BUDGET = 60_000
