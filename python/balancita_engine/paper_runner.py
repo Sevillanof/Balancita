@@ -281,6 +281,7 @@ class PaperRunner(object):
         self.cycles_seen = set()     # (product, cycle_ms) of every accepted cycle
         self.open_funding = {}       # event_id -> funding/reconcile event whose reconciliation entry is not recorded yet
         self.quote_t_ms = {}         # product -> journal time (t_ms) of the last quote delivered: the clock a source loss is measured in
+        self.owed_interruptions = {}  # intent_id -> item announced by a ``recovery`` entry and not yet cancelled
         self.source_losses = {}      # (product, gap_from_ms, gap_to_ms) -> {"intent_ids": [...], "windows": {intent_id: [lo, hi]}}
         self.coverage = {"last_quote": {}, "watch": {}, "candles": {}, "gaps": []}     # market coverage while positions are open (observed facts)
         self.recoveries, self.last_recovery, self.last_checkpoint = 0, None, None
@@ -305,7 +306,13 @@ class PaperRunner(object):
     def _record(self, t_ms, kind, data):
         """Write-ahead: the entry is in the journal before any effect of it exists."""
         self._guard_open()
-        entry = self.journal.add(t_ms, kind, data)
+        try:
+            entry = self.journal.add(t_ms, kind, data)
+        except OSError as error:
+            # the disk refused the entry: memory is now behind the file, so nothing may go on from this instance. Never
+            # retry the same fsync: after an EIO the kernel may have dropped the dirty pages and a second fsync can report
+            # success for data that is not on disk. The only safe way on is a new process that replays the file.
+            self._refuse("journal_write_failed", repr(error))
         self._apply(entry)
         hit("after_apply", kind)
         return entry
@@ -440,7 +447,11 @@ class PaperRunner(object):
                                           uncovered_from_ms=data["uncovered_from_ms"], uncovered_to_ms=data["uncovered_to_ms"],
                                           **extra)
             self._count("orders_cancelled" if record is not None else "cancel_without_order")
+            if data["reason"] == "runner_interrupted":
+                self.owed_interruptions.pop(data["intent_id"], None)
         elif kind == "recovery":
+            for item in data["interrupted_orders"]:
+                self.owed_interruptions[item["intent_id"]] = item
             self.clock = data["recovery_ms"] if self.clock is None else max(self.clock, data["recovery_ms"])
             self.recoveries += 1
             self.last_recovery = {k: data[k] for k in ("recovery_ms", "journal_clock_ms", "uncovered_ms", "obligations",
@@ -759,7 +770,10 @@ class PaperRunner(object):
         origin = "reconstructed" if event["kind"] == "reconstructed" else "original"
         refs, actionable = [], []
         for signal, inputs in results:
-            receipt = self.log.ingest(signal, inputs, t_ms, origin=origin, source_offset=offset)
+            try:
+                receipt = self.log.ingest(signal, inputs, t_ms, origin=origin, source_offset=offset)
+            except OSError as error:
+                self._refuse("signal_log_write_failed", repr(error))
             if receipt["status"] not in ("persisted", "duplicate", "already_present"):
                 continue
             seq = receipt["seq"]
@@ -904,8 +918,12 @@ class PaperRunner(object):
             self._refuse("recovery_clock_behind", "recovery at {} but the journal reached {}".format(recovery_ms, before))
         self.status = RECOVERING
         self._finish_source_losses(recovery_ms)
-        interrupted = []
+        # a recovery that died after its ``recovery`` entry but before its cancellations: they are still owed, and
+        # ``before`` already equals that recovery's clock, so the windows would otherwise look watched
+        interrupted = [dict(item) for _, item in sorted(self.owed_interruptions.items()) if item["intent_id"] in self.executor.pending]
         for intent_id, order in sorted(self.executor.pending.items()):
+            if intent_id in self.owed_interruptions:
+                continue
             lo = max(before, order["timeline"]["earliest_fill_ms"])
             hi = min(recovery_ms, order["timeline"]["deadline_ms"])
             if hi > lo:
@@ -956,9 +974,11 @@ class PaperRunner(object):
         return gaps
 
     @classmethod
-    def create(cls, directory, config, strategies, *, evaluator=None):
-        """A new durable run in an empty ``directory``: signal log, journal and a first checkpoint."""
-        lock = _lock(directory)
+    def create(cls, directory, config, strategies, *, evaluator=None, lock=None):
+        """A new durable run in an empty ``directory``: signal log, journal and a first checkpoint. ``lock`` is a
+        ``DirectoryLock`` the caller already holds (a session that must repair its own files first); the runner takes
+        it over and releases it on ``close()`` or if this fails."""
+        lock = lock if lock is not None else _lock(directory)
         try:
             log = SC.SignalLog.create(os.path.join(directory, SIGNALS_FILE), config.start_ms)
             journal = FileRunnerJournal.create(os.path.join(directory, JOURNAL_FILE))
@@ -971,15 +991,15 @@ class PaperRunner(object):
         return runner
 
     @classmethod
-    def recover(cls, directory, config, strategies, recovery_ms, *, evaluator=None, bad_checkpoint="refuse"):
+    def recover(cls, directory, config, strategies, recovery_ms, *, evaluator=None, bad_checkpoint="refuse", lock=None):
         """Rebuilds a run from its directory, in this or another process. Refuses (``RunnerError`` with a stable reason)
         a damaged or foreign journal, signal log or checkpoint, another configuration or engine behaviour, a checkpoint
         the replay does not reproduce, and signals no accepted event explains. ``bad_checkpoint="rebuild"`` is the
         explicit operator action after a damaged checkpoint: the file is kept as evidence, the journal replayed in full
-        and a new checkpoint written."""
+        and a new checkpoint written. ``lock``: as in ``create``."""
         if not os.path.isdir(directory):
             raise RunnerError("journal_missing", directory)
-        lock = _lock(directory)         # before reading anything: a second opener must not touch a single byte
+        lock = lock if lock is not None else _lock(directory)         # before reading anything: a second opener must not touch a single byte
         try:
             runner = cls._recover_dir(directory, config, strategies, recovery_ms, evaluator, bad_checkpoint, lock)
         except BaseException:
