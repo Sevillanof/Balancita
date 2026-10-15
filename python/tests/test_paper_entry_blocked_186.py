@@ -52,6 +52,18 @@ class Blocked(T.Base):
         self.assertEqual(self.states(r), [(T.BTC, "rejected", ("entry_blocked_source_stale",))])
         self.assertEqual(len(r.executor.pending), 0)
 
+    def test_the_blocked_late_old_quote_case_recovers_to_the_continuous_run(self):
+        t = T.CYCLE + 2 * T.SEC
+        events = [T.make_event("quote", {"product_id": T.BTC, "time_ms": t - 10 * T.MIN, "received_ms": t - T.SEC,
+                                         "bid": "100005", "ask": "100015"}, t_ms=t - T.SEC, source=T.SRC, source_offset=1),
+                  T.cycle(t, T.BTC, 2)]
+        path, r = self.runner(name="late")
+        r.run(events)
+        want = (r.financial_digest(), self.states(r))
+        r2 = self.recover(path, t + T.SEC, config=with_limit())
+        self.assertEqual((r2.financial_digest(), self.states(r2)), want)
+        self.assertEqual((len(r2.executor.pending), len(r2.portfolio.positions)), (0, 0))
+
     def test_a_quote_of_its_own_fresh_time_does_not_block(self):
         path, r = self.runner()
         t = T.CYCLE + 2 * T.SEC
