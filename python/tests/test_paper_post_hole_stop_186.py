@@ -111,6 +111,39 @@ class PostHoleStop(T.Base):
             self.assertEqual(trade["stop_exit"]["evidence"], "ohlc_open_gap_after_hole_simulated")
             self.assertGreaterEqual(trade["exit_time_ms"], RECOVERY_MS)
 
+    def test_a_quote_gap_without_any_crash_is_a_declared_hole_too(self):
+        # D-206-02: "hueco de observación declarado" in 186-05 includes a silence of quotes (coverage_gap_ms, a hypothesis)
+        path, r = self.with_open_positions()
+        r.run([T.quote(T.BTC, T.CYCLE + 4 * T.MIN, "100000", 7), T.quote(T.ETH, T.CYCLE + 4 * T.MIN, "3500", 8)])
+        kinds = [g["kind"] for g in r.coverage["gaps"]]
+        self.assertEqual(sorted(kinds), ["quote_gap", "quote_gap"])
+        self.assertEqual(len(r.portfolio.positions), 2)
+        r.run(both(T.CYCLE + 4 * T.MIN, 9))
+        got = self.trades(r)
+        self.assertEqual({p: t["exit_price"] for p, t in got.items()}, OPEN_REFERENCE)
+        for trade in got.values():
+            self.assertEqual(trade["stop_exit"]["evidence"], "ohlc_open_gap_after_hole_simulated")
+            self.assertGreaterEqual(trade["exit_time_ms"], T.CYCLE + 4 * T.MIN)
+
+    def test_without_that_gap_the_same_candle_exits_at_the_level(self):
+        path, r = self.with_open_positions()
+        r.run([T.quote(T.BTC, T.CYCLE + 90 * T.SEC, "100000", 7), T.quote(T.ETH, T.CYCLE + 90 * T.SEC, "3500", 8)])
+        self.assertEqual([g for g in r.coverage["gaps"] if g["kind"] == "quote_gap"], [])
+        r.run(both(T.CYCLE + 2 * T.MIN, 9))
+        self.assertEqual({p: t["exit_price"] for p, t in self.trades(r).items()}, LEVEL_EXIT)
+
+    def test_quotes_after_a_hole_are_treated_as_before_the_policy(self):
+        # BAL-DECISION-186-05: "el tratamiento de cotizaciones permanece igual"
+        crossing = [T.quote(T.BTC, AFTER_MS, "90000", 7), T.quote(T.ETH, AFTER_MS, "4500", 8)]
+        results = []
+        for name, policy in (("new", "gap_open"), ("old", "level")):
+            path, r = self.recovered(name, stop_after_hole=policy)
+            r.run(crossing)
+            results.append(sorted((p, t["exit_price"], t["exit_reason"], t["exit_time_ms"], "stop_exit" in t)
+                                  for p, t in self.trades(r).items()))
+        self.assertEqual(len(results[0]), 2)
+        self.assertEqual(results[0], results[1])
+
     def test_the_book_without_a_valid_open_keeps_the_level_and_declares_it(self):
         path, r = self.recovered()
         book = r.portfolio.positions[T.BTC]
