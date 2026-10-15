@@ -65,6 +65,16 @@ orden (nunca cuenta 0 bytes). Si un SIGTERM llegó en el mismo paso, la parada i
 nada y el digest de la configuración no cambia. **No hay valores aprobados**: los números de las Issues (disco 100/150 MB, memoria
 400/600 MB) siguen siendo propuestas diferidas; el código solo da el mecanismo. Pruebas: `python/tests/test_paper_live_resources_185.py`.
 
+## Guarda de reloj y hora de pared (opcional, apagada por defecto)
+
+Con `clock_guard: {"max_forward_jump_ms": n}` (sin valor por defecto: lo nombra el operador) el proceso compara cada instante con el anterior
+**antes** de dar el paso. Si el reloj retrocede o salta más que `n`, hace un **halt durable** (`halt.json`, estado HALTED, salida 3; reanudar
+exige `--restart` del operador, sin reinicio automático). Es una insuficiencia de continuidad (regla 10D), no una caída de Kraken: no se
+tocan posiciones, stops ni riesgo y nada se reordena. Con la guarda el latido suma `wall_ms` (hora de pared, solo observabilidad: no entra
+en decisiones ni en el digest; hay prueba con dos horas distintas). Sin la guarda no se lee la hora de pared. `--wall-clock` sigue
+rechazado y el GATE no se toca. `authorization_ref` (`BAL-DECISION-<issue>-<n>`) es solo rastro de auditoría: se valida el formato, no
+abre nada y no entra en el digest. Pruebas: `python/tests/test_paper_live_clock_185.py`. El tope de salto no tiene valor aprobado.
+
 ## Límites
 
 - No hay reloj de pared ni fuente real (rechazados); el reloj simulado avanza por paso.
