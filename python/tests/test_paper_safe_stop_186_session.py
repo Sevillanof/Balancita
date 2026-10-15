@@ -242,6 +242,59 @@ class TestAuditWriteFails(Base):
                     self.recover_and_finish(world, directory)
                     self.release()
 
+    def failing_fsync(self, nth):
+        """The whole line reached the file and the ``fsync`` that follows it is what the disk refuses."""
+        world, directory, session = self.fork()
+        count, marked, real_open, real_fsync = {"n": 0}, {"fd": None}, open, os.fsync
+        audit_path = session.audit.path
+
+        class Marked(object):
+            def __init__(self, handle):
+                self.h = handle
+                marked["fd"] = handle.fileno()
+
+            def __getattr__(self, name):
+                return getattr(self.h, name)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return self.h.__exit__(*a)
+
+        def fake_open(file, mode="r", *a, **k):
+            handle = real_open(file, mode, *a, **k)
+            if str(file) == audit_path and "a" in mode:
+                count["n"] += 1
+                if count["n"] == nth:
+                    return Marked(handle)
+            return handle
+
+        def fake_fsync(fd):
+            if marked["fd"] is not None and fd == marked["fd"]:
+                marked["fd"] = None
+                raise FULL
+            return real_fsync(fd)
+
+        raised = None
+        with mock.patch.object(LI, "open", fake_open, create=True), mock.patch.object(LI.os, "fsync", fake_fsync):
+            try:
+                session.step(NOW)
+            except Exception as error:               # noqa: BLE001 - the type is what is under test
+                raised = error
+        return world, directory, session, raised
+
+    def test_a_complete_line_whose_fsync_failed_is_not_written_twice_after_the_recovery(self):
+        total = self.reference()["counts"]["audit"]
+        for nth in self.sample(total):
+            with self.subTest(write=nth):
+                world, directory, session, error = self.failing_fsync(nth)
+                self.assertIsInstance(error, LI.IntegrationError)
+                self.assertEqual(error.reason, "audit_write_failed")
+                abandon(session)
+                self.recover_and_finish(world, directory)         # the line on the file is kept and the record is not added again
+                self.release()
+
     def test_the_record_that_was_refused_is_not_remembered_as_written(self):
         world, directory, session, error = self.failing_disk(1, False)
         self.assertIsInstance(error, LI.IntegrationError)
