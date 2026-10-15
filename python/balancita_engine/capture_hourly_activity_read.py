@@ -5,11 +5,15 @@ reason. This read tells "the capture process left no trace at all" apart from "i
 the rows each part of the capture stored. Only timestamps (hour buckets), product ids, feed names and counts are published.
 
 Parts (all in ``dev-live/futures-market.sqlite``, ``mode=ro`` + ``query_only``; BAL-DECISION-183-15):
-- ``paper_futures_market_events``: websocket and ticker events (total, per product, per feed). Written by the capture's sockets and 1 s ticker poll;
-  tickers older than 24 h and trades/books older than the retention are deleted (retention did not empty 11-oct, see the control result);
-- ``paper_futures_analytics_responses``: Kraken analytics polled by the capture over REST every 60 s, stored when the content is new
-  (``INSERT OR IGNORE`` on the response hash), so a count above 0 means the capture process was alive and fetching; 0 does not prove it was down;
-- ``paper_futures_official_candle_responses``: official candle fetches, including the repair after a restart (``officialRepairMs``);
+- ``paper_futures_market_events``: trades and books (total, per product, per feed), written by the capture's sockets (live-capture.ts). Tickers
+  (1 s poll) older than 24 h are deleted by design, so ticker counts of this window are NOT informative: they are published apart as
+  ``ticker_rows`` with ``ticker_informative`` false and never enter ``rows`` or an inference. Trades and books are deleted by the retention
+  (unknown real value; the control showed it did not empty 11-oct) and the retention keeps moving: the oldest surviving event is read in THE SAME RUN
+  and every hour that starts before the hour after it is marked ``retention_possible`` and left out of the inferences;
+- ``paper_futures_analytics_responses``: Kraken analytics polled over REST every 60 s and written ONLY by live-capture.ts, stored when the content is
+  new (``INSERT OR IGNORE`` on the response hash): a count above 0 means that process was alive and fetching; 0 does not prove it was down;
+- ``paper_futures_official_candle_responses``: official candle fetches. They are ALSO written by the manual command official-candles-backfill-cli.ts,
+  so they are reported but are NOT a sign that the capture was alive and never enter an inference;
 - ``paper_futures_candle_revisions``: own XBT 1m candle revisions (revisions and distinct buckets). Never deleted.
 
 How it reads, without a scan: the hour boundaries are found by bisection on ``rowid`` (rowid grows with the reception time, which is what the
@@ -17,13 +21,14 @@ store's own retention assumes; single-row reads; an empty table counts as zero r
 candle primary-key prefix) with ``LIMIT cap + 1``: an hour over the cap is reported as ``over_cap`` and its rows are NOT published as a count.
 Rows whose own timestamp falls outside their hour are counted as ``misplaced`` (a non-monotone table); the run never hides them.
 Every statement is EXPLAINed once (SEARCH only: a table scan or a temporary B-tree stops the run), 60 s per statement, 10 min per run,
-no retry, no widening. Caps are required: ``--max-hour-rows`` (per hour and part) and ``--max-table-rows`` (total walked per part; over it the
-run stops with ``row_budget`` and keeps every hour already finished).
+no retry, no widening. Caps are required and per kind of part: events (``--max-events-hour``, ``--max-events-table``) and the small parts
+analytics, official responses and own candles (``--max-small-hour``, ``--max-small-table``); over a table cap the run stops with ``row_budget`` and
+keeps every hour already finished. The caps are CEILINGS from rowid ranges (they count insertions, deleted tickers included), not measured counts.
 
 Inferences are printed in ``inferences``: they only say which hours have rows in some part and which in none. They do not say why.
 
 Usage:
-    python3 -m balancita_engine.capture_hourly_activity_read --db <futures-market.sqlite> --max-hour-rows N --max-table-rows M > out.json
+    python3 -m balancita_engine.capture_hourly_activity_read --db <futures-market.sqlite> --max-events-hour N --max-events-table M --max-small-hour K --max-small-table L > out.json
 """
 import argparse
 import json
@@ -34,7 +39,8 @@ import time
 from . import capture_gap_diagnosis as g
 from . import capture_minimal_read as m
 
-TOOL_VERSION = "capture-hourly-activity-read.v1"
+TOOL_VERSION = "capture-hourly-activity-read.v2"
+TICKER_KEEP_MS = 24 * m.HOUR_MS
 HOUR_MS = m.HOUR_MS
 START_MS = m.WINDOW_B[0] - 49 * HOUR_MS        # 2026-10-08T23:00Z
 END_MS = m.WINDOW_B[0] + 24 * HOUR_MS          # 2026-10-12T00:00Z
@@ -133,11 +139,15 @@ def boundaries(guard, part, counter):
     return out
 
 
-def _hour_of(at):
-    return (at - START_MS) // HOUR_MS
+SMALL = ("analytics", "official", "candles")
 
 
-def read_part(guard, part, cuts, hour_cap, table_cap, counter, hours):
+def retention_boundary(oldest_ms):
+    """Start of the hour after the hour of the oldest surviving event: an hour that starts before it may have been trimmed by retention."""
+    return END_MS if oldest_ms is None else (oldest_ms // HOUR_MS + 1) * HOUR_MS
+
+
+def read_part(guard, part, cuts, hour_cap, table_cap, counter, hours, flags):
     """One range read per hour. Hours are appended as they finish, so a stop keeps every hour already done."""
     if cuts is None:                        # an empty table has zero rows in every hour: that is a finding, not a missing read
         cuts = [0] * (HOURS + 1)
@@ -147,14 +157,15 @@ def read_part(guard, part, cuts, hour_cap, table_cap, counter, hours):
         h0, h1 = START_MS + k * HOUR_MS, START_MS + (k + 1) * HOUR_MS
         entry = {"start_ms": h0, "rows": 0, "over_cap": False, "misplaced": 0, "by_product": {}}
         if part == "events":
-            entry["by_feed"] = {}
+            entry.update(by_feed={}, ticker_rows=0, ticker_informative=flags["ticker_informative"](h1),
+                         retention_possible=h0 < flags["retention_boundary_ms"])
         if hi > lo:
             rows = guard.fetch("walk_" + part, sql, (lo, hi))
             counter.walk(part, len(rows))
             if len(rows) > hour_cap:
                 entry["over_cap"] = True
-                entry.pop("by_product")
-                entry.pop("by_feed", None)
+                for key in ("by_product", "by_feed", "ticker_rows"):
+                    entry.pop(key, None)
                 hours[part].append(entry)
                 if counter.walked.get(part, 0) > table_cap:
                     raise m.Stopped("row_budget", {"stage": part, "cap": table_cap, "after_hour": h0})
@@ -163,6 +174,9 @@ def read_part(guard, part, cuts, hour_cap, table_cap, counter, hours):
                 at, product = row[0], row[1]
                 if not h0 <= at < h1:
                     entry["misplaced"] += 1
+                    continue
+                if part == "events" and row[2] == "ticker":
+                    entry["ticker_rows"] += 1            # kept apart: tickers older than 24 h are deleted by design
                     continue
                 entry["rows"] += 1
                 entry["by_product"][product] = entry["by_product"].get(product, 0) + 1
@@ -181,74 +195,90 @@ def read_candles(guard, hour_cap, table_cap, counter, hours):
         counter.walk("candles", len(rows))
         entry = {"start_ms": h0, "revisions": len(rows), "distinct_buckets": len({b for (b,) in rows}), "over_cap": len(rows) > hour_cap,
                  "misplaced": sum(1 for (b,) in rows if not h0 <= b < h1)}
-        if entry["over_cap"]:
+        if entry["over_cap"]:                                    # a partial count is never published as a complete one
             entry["revisions"] = entry["distinct_buckets"] = None
         hours["candles"].append(entry)
         if counter.walked.get("candles", 0) > table_cap:
             raise m.Stopped("row_budget", {"stage": "candles", "cap": table_cap, "after_hour": h0})
 
 
-def _rows(entry):
-    """Rows of an hour in any part, or None when it is unknown (over cap)."""
-    if entry.get("over_cap"):
+def _has(entry):
+    """True / False when the hour has rows in this part; an hour over its cap has (more than the cap)."""
+    if entry is None:
         return None
-    return entry["revisions"] if "revisions" in entry else entry["rows"]
+    if entry.get("over_cap"):
+        return True
+    return (entry["revisions"] if "revisions" in entry else entry["rows"]) > 0
 
 
 def inferences(hours):
-    """Which hours have rows in which part. Never why. ``over_cap`` hours count as 'has rows' (more than the cap)."""
+    """Which hours have rows in which part. Never why. Hours that retention may have trimmed are left out; official responses never count."""
     by_start = {}
     for part, entries in hours.items():
         for e in entries:
             by_start.setdefault(e["start_ms"], {})[part] = e
-    def has(entry):
-        if entry is None:
-            return None
-        return True if entry.get("over_cap") else _rows(entry) > 0
-    complete = [s for s in sorted(by_start) if all(p in by_start[s] for p in ("events", "analytics", "official"))]
-    out = {"hours_without_events_with_analytics": [], "hours_without_any_row": [], "hours_with_misplaced_rows": []}
-    for s in complete:
-        parts = by_start[s]
-        if has(parts["events"]) is False and has(parts["analytics"]) is True:
-            out["hours_without_events_with_analytics"].append(s)
-        if all(has(parts[p]) is False for p in ("events", "analytics", "official")) and (parts.get("candles") is None or has(parts["candles"]) is False):
-            out["hours_without_any_row"].append(s)
+    out = {"hours_without_events_with_analytics": [], "hours_without_any_row": [], "hours_retention_possible": [], "hours_with_misplaced_rows": []}
+    for start in sorted(by_start):
+        parts = by_start[start]
+        if not all(p in parts for p in ("events", "analytics", "candles")):
+            continue
+        if parts["events"].get("retention_possible"):
+            out["hours_retention_possible"].append(start)          # not informative about events: retention may have deleted them
+            continue
+        no_events = _has(parts["events"]) is False
+        if no_events and _has(parts["analytics"]) is True:
+            out["hours_without_events_with_analytics"].append(start)
+        if no_events and _has(parts["analytics"]) is False and _has(parts["candles"]) is False:
+            out["hours_without_any_row"].append(start)
     out["hours_with_misplaced_rows"] = [s for s in sorted(by_start) if any(e.get("misplaced") for e in by_start[s].values())]
     out["says"] = {
-        "hours_without_events_with_analytics": "the capture's REST pollers stored new responses in an hour with no stored market events: the process was "
-                                               "running then, and the websocket/ticker stream stored nothing (or all of it was deleted, which the control result "
-                                               "excludes for 11-oct)",
-        "hours_without_any_row": "no trace of the capture in any of these parts; consistent with the process being down, not proof (unchanged responses are "
-                                 "not stored)",
+        "hours_without_events_with_analytics": "live-capture.ts stored new analytics responses in an hour with no stored trades or books (retention cannot "
+                                               "explain it: the hour starts after the oldest surviving event's hour): that process was running and its "
+                                               "market-event stream stored nothing",
+        "hours_without_any_row": "no trade, book, analytics or own-candle row in the hour (retention cannot explain the events): no trace of the capture "
+                                 "process; consistent with it being down, not proof (unchanged analytics responses are not stored)",
+        "hours_retention_possible": "the hour starts before the hour after the oldest surviving event: retention may have trimmed its events, so it says "
+                                    "nothing about the capture",
         "hours_with_misplaced_rows": "rows whose timestamp is outside the hour found by rowid: the table is not monotone there, so its counts are not reliable",
     }
     out["does_not_say"] = ["why the stream stored nothing", "whether Kraken or the network was at fault", "the real retention configuration",
-                           "anything about trades the capture never received"]
+                           "anything from ticker counts (older than 24 h, deleted by design)",
+                           "anything from official candle responses (also written by the manual command official-candles-backfill-cli.ts)"]
     return out
 
 
-def build_result(conn, *, max_hour_rows, max_table_rows, read_date_ms, started=None):
+def build_result(conn, *, max_events_hour, max_events_table, max_small_hour, max_small_table, read_date_ms, started=None):
     started = started if started is not None else time.monotonic()
-    g._valid_cap(max_hour_rows, "max_hour_rows")
-    g._valid_cap(max_table_rows, "max_table_rows")
+    for value, name in ((max_events_hour, "max_events_hour"), (max_events_table, "max_events_table"),
+                        (max_small_hour, "max_small_hour"), (max_small_table, "max_small_table")):
+        g._valid_cap(value, name)
     result = {"tool_version": TOOL_VERSION, "sqlite_version": sqlite3.sqlite_version, "read_date_ms": read_date_ms,
-              "caps": {"hour_rows": max_hour_rows, "table_rows": max_table_rows}, "stopped": None,
-              "window_ms": [START_MS, END_MS], "hours": HOURS,
+              "caps": {"events_hour": max_events_hour, "events_table": max_events_table, "small_hour": max_small_hour,
+                       "small_table": max_small_table},
+              "stopped": None, "window_ms": [START_MS, END_MS], "hours": HOURS,
               "note": "Aggregates only: hour buckets, product ids, feed names and counts. Inferences say which hours have rows, never why."}
     if conn.execute("PRAGMA query_only").fetchone()[0] != 1:
         raise m.Stopped("guard", "query_only was not on")
     result["guards"] = {"opened_with": "mode=ro", "query_only_readback": 1}
     if sqlite3.sqlite_version_info < m.MIN_SQLITE:
         raise m.Stopped("sqlite_version", sqlite3.sqlite_version)
-    max_single = len(TABLE) * (2 + (HOURS + 1) * SINGLE_PER_BOUNDARY)
+    max_single = len(TABLE) * (2 + (HOURS + 1) * SINGLE_PER_BOUNDARY) + 1
     guard, counter = _Guard(conn, started), Counter(max_single)
     hours = {"events": [], "analytics": [], "official": [], "candles": []}
+    flags = {"retention_boundary_ms": END_MS, "ticker_informative": lambda hour_end: hour_end > read_date_ms - TICKER_KEEP_MS}
     try:
         try:
-            read_candles(guard, max_hour_rows, max_table_rows, counter, hours)          # small parts first
-            for part in ("official", "analytics", "events"):
+            oldest = guard.fetch("bisect_events", sql_bisect("events"), (0,))      # the oldest surviving event, in THIS run
+            counter.one()
+            result["oldest_event"] = {"rowid": oldest[0][0], "received_at": oldest[0][1]} if oldest else None
+            flags["retention_boundary_ms"] = retention_boundary(oldest[0][1] if oldest else None)
+            result["retention_boundary_ms"] = flags["retention_boundary_ms"]
+            read_candles(guard, max_small_hour, max_small_table, counter, hours)          # small parts first
+            for part in ("official", "analytics"):
                 cuts = boundaries(guard, part, counter)
-                read_part(guard, part, cuts, max_hour_rows, max_table_rows, counter, hours)
+                read_part(guard, part, cuts, max_small_hour, max_small_table, counter, hours, flags)
+            cuts = boundaries(guard, "events", counter)
+            read_part(guard, "events", cuts, max_events_hour, max_events_table, counter, hours, flags)
         except m.Stopped as stop:
             result["stopped"] = {"reason": stop.reason, "detail": stop.detail}
     finally:
@@ -256,7 +286,7 @@ def build_result(conn, *, max_hour_rows, max_table_rows, read_date_ms, started=N
     result["hours_by_part"] = hours
     result["inferences"] = inferences(hours)
     result["rows_read"] = {"single_row_reads": counter.single, "single_row_cap": max_single, "walked_by_part": counter.walked,
-                           "total_cap": max_single + 4 * (max_table_rows + max_hour_rows + 1)}
+                           "total_cap": max_single + max_events_table + max_events_hour + 1 + 3 * (max_small_table + max_small_hour + 1)}
     result["plans"] = sorted({d for details in guard.planned.values() for d in details})
     return result
 
@@ -264,20 +294,24 @@ def build_result(conn, *, max_hour_rows, max_table_rows, read_date_ms, started=N
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--db", required=True)
-    ap.add_argument("--max-hour-rows", required=True, type=int, help="cap per hour and part; an hour over it is reported as over_cap; no default")
-    ap.add_argument("--max-table-rows", required=True, type=int, help="cap on the rows walked per part; no default")
+    ap.add_argument("--max-events-hour", required=True, type=int, help="cap on events per hour; an hour over it is reported as over_cap; no default")
+    ap.add_argument("--max-events-table", required=True, type=int, help="cap on the events walked in total; no default")
+    ap.add_argument("--max-small-hour", required=True, type=int, help="cap per hour of analytics, official responses and own candles; no default")
+    ap.add_argument("--max-small-table", required=True, type=int, help="cap walked in total per small part; no default")
     args = ap.parse_args(argv)
     started = time.monotonic()
     try:
         before = m.check_identity(args.db)
-        g._valid_cap(args.max_hour_rows, "max_hour_rows")
-        g._valid_cap(args.max_table_rows, "max_table_rows")
+        for value, name in ((args.max_events_hour, "max_events_hour"), (args.max_events_table, "max_events_table"),
+                            (args.max_small_hour, "max_small_hour"), (args.max_small_table, "max_small_table")):
+            g._valid_cap(value, name)
     except (m.Stopped, OSError) as error:
         sys.stderr.write("refused: %s %s\n" % (getattr(error, "reason", "identity"), getattr(error, "detail", error)))
         return 2
     conn = m._open_readonly(args.db)
     try:
-        result = build_result(conn, max_hour_rows=args.max_hour_rows, max_table_rows=args.max_table_rows,
+        result = build_result(conn, max_events_hour=args.max_events_hour, max_events_table=args.max_events_table,
+                              max_small_hour=args.max_small_hour, max_small_table=args.max_small_table,
                               read_date_ms=int(time.time() * 1000), started=started)
     finally:
         conn.close()

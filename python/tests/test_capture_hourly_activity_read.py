@@ -46,9 +46,12 @@ class HourlyTests(unittest.TestCase):
         self.conn.commit()
         ro = m._open_readonly(self.path)
         self.addCleanup(ro.close)
-        caps.setdefault("max_hour_rows", 1000)
-        caps.setdefault("max_table_rows", 100000)
-        return h.build_result(ro, read_date_ms=1, **caps)
+        read_date = caps.pop("read_date_ms", 1)
+        caps.setdefault("max_events_hour", 1000)
+        caps.setdefault("max_events_table", 100000)
+        caps.setdefault("max_small_hour", 1000)
+        caps.setdefault("max_small_table", 100000)
+        return h.build_result(ro, read_date_ms=read_date, **caps)
 
     def seed(self):
         n = 0
@@ -94,7 +97,7 @@ class HourlyTests(unittest.TestCase):
     def test_an_hour_over_the_cap_is_flagged_and_not_counted(self):
         for i in range(6):
             event(self.conn, m.BTC, "book", S + H + i, i)
-        r = self.run_read(max_hour_rows=5)
+        r = self.run_read(max_events_hour=5)
         self.assertIsNone(r["stopped"])
         hour = r["hours_by_part"]["events"][1]
         self.assertTrue(hour["over_cap"])
@@ -106,7 +109,7 @@ class HourlyTests(unittest.TestCase):
         for hour in range(10):
             for i in range(3):
                 event(self.conn, m.BTC, "book", S + hour * H + i, hour * 10 + i)
-        r = self.run_read(max_hour_rows=100, max_table_rows=7)
+        r = self.run_read(max_events_hour=100, max_events_table=7)
         self.assertEqual(r["stopped"]["reason"], "row_budget")
         self.assertEqual(r["stopped"]["detail"]["stage"], "events")
         self.assertEqual(len(r["hours_by_part"]["events"]), 3)                # hours 0..2 finished (9 rows > 7)
@@ -122,17 +125,65 @@ class HourlyTests(unittest.TestCase):
         self.assertGreater(sum(e["misplaced"] for e in r["hours_by_part"]["events"]), 0)
         self.assertTrue(r["inferences"]["hours_with_misplaced_rows"])
 
+    def test_hours_before_the_oldest_surviving_event_are_left_out_of_the_inferences(self):
+        """D-218-01: retention keeps moving; an hour that starts before the hour after the oldest event may have been trimmed."""
+        event(self.conn, m.BTC, "book", S + 3 * H + H // 2, 1)
+        event(self.conn, m.BTC, "book", S + 6 * H + 5, 2)
+        for hour in range(8):
+            analytics(self.conn, m.BTC, S + hour * H + 9, hour)
+        r = self.run_read()
+        self.assertEqual(r["oldest_event"]["received_at"], S + 3 * H + H // 2)
+        self.assertEqual(r["retention_boundary_ms"], S + 4 * H)
+        flags = [e["retention_possible"] for e in r["hours_by_part"]["events"][:6]]
+        self.assertEqual(flags, [True, True, True, True, False, False])
+        inf = r["inferences"]
+        self.assertEqual(inf["hours_retention_possible"], [S + k * H for k in range(4)])
+        self.assertEqual(inf["hours_without_events_with_analytics"], [S + 4 * H, S + 5 * H, S + 7 * H])
+        self.assertEqual([x for x in inf["hours_without_any_row"] if x < S + 8 * H], [])      # none of the analyzed hours 0..7
+        self.assertNotIn(S + 2 * H, inf["hours_without_any_row"])
+
+    def test_ticker_rows_are_kept_apart_and_flagged_not_informative_when_old(self):
+        event(self.conn, m.BTC, "book", S + 1, 1)
+        for i in range(3):
+            event(self.conn, m.ETH, "ticker", S + 2 + i, 10 + i)
+        old = self.run_read(read_date_ms=S + 30 * H)["hours_by_part"]["events"][0]
+        self.assertEqual((old["rows"], old["ticker_rows"], old["ticker_informative"]), (1, 3, False))
+        self.assertEqual(old["by_product"], {m.BTC: 1})
+        self.assertNotIn("ticker", old["by_feed"])
+        recent = self.run_read(read_date_ms=S + 2 * H)["hours_by_part"]["events"][0]
+        self.assertTrue(recent["ticker_informative"])
+
+    def test_a_partial_candle_count_is_never_published_as_complete(self):
+        """D-218-02: over the hour cap the candle counts are None, not the first cap+1 rows."""
+        for i in range(6):
+            candle(self.conn, S + 2 * H + i * m.MINUTE_MS)
+        hour = self.run_read(max_small_hour=5)["hours_by_part"]["candles"][2]
+        self.assertTrue(hour["over_cap"])
+        self.assertIsNone(hour["revisions"])
+        self.assertIsNone(hour["distinct_buckets"])
+        complete = self.run_read(max_small_hour=6)["hours_by_part"]["candles"][2]
+        self.assertEqual((complete["revisions"], complete["distinct_buckets"], complete["over_cap"]), (6, 6, False))
+
+    def test_official_responses_never_count_as_a_trace_of_the_capture(self):
+        """D-218-03: the manual backfill command also writes them."""
+        event(self.conn, m.BTC, "book", S + 5 * H, 1)
+        official(self.conn, m.BTC, S + 7 * H + 1, 1)
+        inf = self.run_read()["inferences"]
+        self.assertIn(S + 7 * H, inf["hours_without_any_row"])
+        self.assertIn("official-candles-backfill", str(inf["does_not_say"]))
+
     def test_empty_database_gives_zero_rows_in_every_hour(self):
         r = self.run_read()
         self.assertIsNone(r["stopped"])
         self.assertEqual(len(r["hours_by_part"]["candles"]), h.HOURS)
         self.assertEqual([e["rows"] for e in r["hours_by_part"]["events"]], [0] * h.HOURS)
-        self.assertEqual(len(r["inferences"]["hours_without_any_row"]), h.HOURS)
+        self.assertEqual(r["inferences"]["hours_without_any_row"], [])           # no event survives: retention cannot be excluded anywhere
+        self.assertEqual(len(r["inferences"]["hours_retention_possible"]), h.HOURS)
 
     def test_boundaries_are_found_with_few_single_row_reads(self):
         for i in range(2000):
             event(self.conn, m.BTC, "book", S + (i * 73 * H) // 2000, i)
-        r = self.run_read(max_hour_rows=100, max_table_rows=100000)
+        r = self.run_read(max_events_hour=100, max_events_table=100000)
         self.assertIsNone(r["stopped"])
         self.assertLess(r["rows_read"]["single_row_reads"], 74 * 14 + 10)
         self.assertEqual(sum(e["rows"] for e in r["hours_by_part"]["events"]), 2000)
@@ -172,7 +223,7 @@ class HourlyTests(unittest.TestCase):
         with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
             h.main(["--db", self.path])
         with contextlib.redirect_stderr(io.StringIO()):
-            self.assertEqual(h.main(["--db", self.path, "--max-hour-rows", "0", "--max-table-rows", "10"]), 2)
+            self.assertEqual(h.main(["--db", self.path, "--max-events-hour", "0", "--max-events-table", "10", "--max-small-hour", "5", "--max-small-table", "9"]), 2)
 
 
 if __name__ == "__main__":
