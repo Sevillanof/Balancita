@@ -113,13 +113,39 @@ def _int(value, name):
     return value
 
 
-def assert_range_allowed(from_ms, to_ms):
+def holdout_exception(window):
+    """Validate the opt-in engineering window (``None`` or ``(from_ms, to_ms)``, non-empty, wholly after the cut).
+
+    ``HOLDOUT_START_MS`` itself never changes: a caller that was explicitly authorised for one fixed window passes it,
+    and only records and ranges wholly inside it stop counting as holdout.
+    """
+    if window is None:
+        return None
+    from_ms, to_ms = window
+    _int(from_ms, "holdout_window from")
+    _int(to_ms, "holdout_window to")
+    if to_ms <= from_ms or from_ms < HOLDOUT_START_MS:
+        raise ValueError("holdout_window must be a non-empty range wholly at or after the holdout cut")
+    return (from_ms, to_ms)
+
+
+def _past_cut(ms, exception, end=False):
+    """True when ``ms`` (a start, or an exclusive end when ``end``) reaches the holdout outside the exception window."""
+    if not (ms > HOLDOUT_START_MS if end else ms >= HOLDOUT_START_MS):
+        return False
+    if exception is not None and (exception[0] < ms <= exception[1] if end else exception[0] <= ms < exception[1]):
+        return False
+    return True
+
+
+def assert_range_allowed(from_ms, to_ms, exception=None):
     """Refuse any validation range that touches the sealed holdout or is malformed."""
     _int(from_ms, "from_ms")
     _int(to_ms, "to_ms")
     if to_ms <= from_ms:
         raise ValueError("empty range")
-    if to_ms > HOLDOUT_START_MS:
+    exception = holdout_exception(exception)
+    if to_ms > HOLDOUT_START_MS and not (exception is not None and exception[0] <= from_ms and to_ms <= exception[1]):
         raise ValueError("range reaches the holdout (>= 2026-08-02T00:00:00Z)")
 
 
@@ -152,7 +178,7 @@ def _holdout_error(result, check, product):
 
 def validate_funding(periods, from_ms, to_ms, products, references=None, responses=None, rel_tolerance="0.0001",
                      max_lag_ms=HOUR_MS, max_reference_age_ms=2 * HOUR_MS, max_price_drift_per_hour="0.01",
-                     settle_lag_ms=600_000):
+                     settle_lag_ms=600_000, holdout_window=None):
     """Funding periods: units, reference price, period shape, publication, coverage, contradictory revisions.
 
     ``periods``: dicts with product_id, start_ms, end_ms, funding_rate (absolute, quote per base per hour, string),
@@ -177,10 +203,12 @@ def validate_funding(periods, from_ms, to_ms, products, references=None, respons
     the provider's clock; its default of 10 min is a hypothesis), so ``final_starts`` cannot be earlier than that and
     the publication deadline is ``end + settle_lag_ms + max_lag_ms``. Both are declared in the report parameters.
     """
-    assert_range_allowed(from_ms, to_ms)
+    exception = holdout_exception(holdout_window)
+    assert_range_allowed(from_ms, to_ms, exception)
     result = Result("funding", products, from_ms, to_ms, {
         "rel_tolerance": rel_tolerance, "max_lag_ms": max_lag_ms, "max_reference_age_ms": max_reference_age_ms,
-        "max_price_drift_per_hour": max_price_drift_per_hour, "settle_lag_ms": settle_lag_ms})
+        "max_price_drift_per_hour": max_price_drift_per_hour, "settle_lag_ms": settle_lag_ms,
+        "holdout_exception": list(exception) if exception else None})
     for name, value, cap in (("settle_lag_ms", settle_lag_ms, MAX_SETTLE_LAG_MS), ("max_lag_ms", max_lag_ms, MAX_PUBLICATION_LAG_MS)):
         if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= cap:
             raise ValueError("{} must be an integer in [0, {}]: a larger allowance would hide any delay".format(name, cap))
@@ -195,7 +223,7 @@ def validate_funding(periods, from_ms, to_ms, products, references=None, respons
             if product not in result.products:
                 raise ValueError("product not in the expected list")
             start, end, known = _int(row["start_ms"], "start_ms"), _int(row["end_ms"], "end_ms"), _int(row["known_at"], "known_at")
-            if start >= HOLDOUT_START_MS or end > HOLDOUT_START_MS:
+            if _past_cut(start, exception) or _past_cut(end, exception, end=True):
                 return _holdout_error(result, "funding.rows", product)
             if start < from_ms or end > to_ms:
                 return
@@ -240,7 +268,7 @@ def validate_funding(periods, from_ms, to_ms, products, references=None, respons
             result.findings.append(Finding(DISCREPANCY, "funding.revision", product,
                                            "contradictory rates for one period across responses", start_ms=start,
                                            rates=sorted(str(rate) for rate, _ in versions)))
-    polls = _parse_responses(result, responses)
+    polls = _parse_responses(result, responses, exception)
     first = -(-from_ms // HOUR_MS) * HOUR_MS
     for product in result.products:
         if no_relative[product]:
@@ -255,7 +283,7 @@ def validate_funding(periods, from_ms, to_ms, products, references=None, respons
     return result.close()
 
 
-def _parse_responses(result, responses):
+def _parse_responses(result, responses, exception=None):
     """Group the collector polls by product once; a poll inside the holdout is dropped, a malformed one reported once.
 
     A poll is ``(received_at, starts, finals)``: ``finals`` is the set of periods the poll marks as DEFINITIVE
@@ -272,7 +300,7 @@ def _parse_responses(result, responses):
                 finals = frozenset(_int(s, "final start") for s in resp["final_starts"])
                 if not finals <= starts:
                     raise ValueError("final_starts must be a subset of starts")
-            if at >= HOLDOUT_START_MS:
+            if _past_cut(at, exception):
                 return _holdout_error(result, "funding.response", product)
             polls[product].append((at, starts, finals))
         _guard(result, "funding.response[{}]".format(index), resp.get("product_id") if isinstance(resp, dict) else None, parse)
@@ -442,7 +470,7 @@ def aggregate_to_five_minutes(candles_1m):
     return out
 
 
-def validate_candles(product, candles_1m, official_5m, from_ms, to_ms, price_tol="0", volume_tol="0"):
+def validate_candles(product, candles_1m, official_5m, from_ms, to_ms, price_tol="0", volume_tol="0", holdout_window=None):
     """Compare our 5 m aggregation with an equivalent official 5 m series supplied by the caller.
 
     Tolerances are explicit RELATIVE fractions of the magnitude (default exact, 0; must stay below 0.5); a nonzero
@@ -451,8 +479,10 @@ def validate_candles(product, candles_1m, official_5m, from_ms, to_ms, price_tol
     series is the reference's problem (``VALIDATOR_ERROR``); conflicting revisions of one of OUR minutes are a
     ``DISCREPANCY`` of the capture and that bucket is not compared.
     """
-    assert_range_allowed(from_ms, to_ms)
-    result = Result("candles", [product], from_ms, to_ms, {"price_tol": price_tol, "volume_tol": volume_tol})
+    exception = holdout_exception(holdout_window)
+    assert_range_allowed(from_ms, to_ms, exception)
+    result = Result("candles", [product], from_ms, to_ms, {"price_tol": price_tol, "volume_tol": volume_tol,
+                                                           "holdout_exception": list(exception) if exception else None})
     ptol, vtol = Decimal(price_tol), Decimal(volume_tol)
     _check_tolerance(ptol, vtol)
     fields = ("open", "high", "low", "close", "volume")
@@ -460,7 +490,7 @@ def validate_candles(product, candles_1m, official_5m, from_ms, to_ms, price_tol
     for index, candle in enumerate(candles_1m):
         def mine(candle=candle):
             start = _int(candle["bucket_start"], "bucket_start")
-            if start >= HOLDOUT_START_MS:
+            if _past_cut(start, exception):
                 return _holdout_error(result, "candles.buckets", product)
             if not from_ms <= start < to_ms:
                 return
@@ -479,7 +509,7 @@ def validate_candles(product, candles_1m, official_5m, from_ms, to_ms, price_tol
     for index, candle in enumerate(official_5m):
         def ref(candle=candle):
             start = _int(candle["bucket_start"], "bucket_start")
-            if start >= HOLDOUT_START_MS:
+            if _past_cut(start, exception):
                 return _holdout_error(result, "candles.official", product)
             if start % FIVE_MIN_MS:
                 result.findings.append(Finding(VALIDATOR_ERROR, "candles.alignment", product,
@@ -567,7 +597,7 @@ def build_report(sample, results, required):
     for key in ("source", "version", "from_ms", "to_ms", "products"):
         if key not in sample:
             raise ValueError("sample is missing {}".format(key))
-    assert_range_allowed(sample["from_ms"], sample["to_ms"])
+    assert_range_allowed(sample["from_ms"], sample["to_ms"], sample.get("holdout_exception"))
     expected = _products(sample["products"])
     required = tuple(required)
     if not required or any(r not in REQUIRED_CHECKS for r in required):

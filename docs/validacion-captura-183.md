@@ -84,3 +84,20 @@ No está establecido a qué instante corresponde el precio que Kraken usó para 
 - Intervalo: propuesta de 48 h consecutivas dentro de 2025-10-13 → 2026-08-01 (rango ya autorizado para lectura en otras tareas); el rango exacto lo fija Fran. Nunca desde 2026-08-02 (holdout).
 - Volumen: unas 48 h de tickers (retención 24 h en el archivo de mercado: puede que el rango real quede limitado por esa retención), 2 880 velas de 1 m y 576 de 5 m por producto, y los períodos y respuestas de funding del rango.
 - Propósito: ejecutar estos validadores y producir el informe reproducible de #183. Sin escritura, sin otra captura, sin sesión.
+
+## Lectura mínima de la captura viva (BAL-DECISION-185-02 y 185-03, etapas 2a a 2d)
+
+`python/balancita_engine/capture_minimal_read.py` (`capture-minimal-read.v1`), CLI con solo `--db`. Lee la captura viva
+(`dev-live/futures-market.sqlite`, solo lectura, `query_only` verificado) en dos ventanas fijas de octubre de 2026 y entrega
+los datos a los validadores de #188; publica solo agregados (conteos, aptitud, hallazgos por chequeo con primera y última
+hora), nunca series, precios, tasas ni cuerpos de respuesta.
+
+- 2a velas oficiales 1 min XBT/ETH `[10-oct, 12-oct)`, tope 12 000; 2b velas propias XBT `[11-oct 00:00Z, 06:00Z)`, tope
+  100 000 (valores solo de revisiones cerradas); 2c períodos de funding, tope 400; 2d respuestas de funding, tope 600 y 20 MB.
+- Cada consulta tiene `LIMIT tope+1` y se detiene con `row_budget` si lo supera; sin conteo previo, muestreo ni reintentos.
+  2a y 2b exigen plan de búsqueda por clave primaria; 2c y 2d filtran columnas sin índice y el plan se publica.
+- 60 s por consulta y 10 min por corrida; identidad del archivo (nombre, carpeta, tamaño mínimo, mtime) antes y después.
+- Los validadores reciben `holdout_window=(10-oct 00:00Z, 12-oct 00:00Z)`: parámetro opcional que solo deja de tratar como
+  holdout un rango y registros enteramente dentro de esa ventana. `HOLDOUT_START_MS` no cambia y sin el parámetro todo sigue
+  igual.
+- No mide la puntualidad de Kraken, no usa cotizaciones y no prueba nada fuera de estas ventanas.

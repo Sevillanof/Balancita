@@ -416,8 +416,7 @@ def evaluate(official_rows, own_rows, period_rows, responses):
         "official_1m": summarize_official(official_rows),
         "own_1m": own_summary,
         "funding_rows": {"rows": len(period_rows), "responses_read": len(responses), "adapter": adapter_events},
-        "candles_report": _summarize_report(cv.build_report(sample_b, [candles], ("candles"
-                                                                                   ,))),
+        "candles_report": _summarize_report(cv.build_report(sample_b, [candles], ("candles",))),
         "funding_report": _summarize_report(cv.build_report(sample_a, [funding], ("funding",))),
     }
 

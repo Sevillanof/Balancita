@@ -152,3 +152,78 @@ class SummaryTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class EvaluateTests(Fixture):
+    def _fill(self, own_close="100"):
+        for b in range(B0, B1, m.MINUTE_MS):
+            official(self.conn, m.BTC, b)
+            revision(self.conn, b, 1, 0, close="1")
+            revision(self.conn, b, 2, 1, close=own_close)
+        self.conn.commit()
+
+    def _evaluate(self):
+        g = self.guard()
+        led = m.Ledger()
+        return m.evaluate(m.read_2a(g, led), m.read_2b(g, led), m.read_2c(g, led), m.read_2d(g, led))
+
+    def test_candles_agree_and_no_value_is_published(self):
+        self._fill()
+        out = self._evaluate()
+        report = out["candles_report"]
+        self.assertEqual(report["counts"]["DISCREPANCY"], 0)
+        self.assertNotIn("100", repr(report["findings_by_check"]))
+
+    def test_a_different_own_close_is_a_discrepancy_without_values(self):
+        self._fill(own_close="150")
+        report = self._evaluate()["candles_report"]
+        self.assertEqual(report["fitness"], "no_apta")
+        self.assertTrue(all("detail" not in g for g in report["findings_by_check"]))
+        self.assertNotIn("150", repr(report))
+
+
+class HoldoutWindowTests(unittest.TestCase):
+    def test_default_still_refuses_after_the_cut(self):
+        from balancita_engine import capture_validation as cv
+        with self.assertRaises(ValueError):
+            cv.assert_range_allowed(A0, A1)
+        with self.assertRaises(ValueError):
+            cv.validate_candles(m.BTC, [], [], A0, A1)
+
+    def test_window_allows_only_ranges_inside_it(self):
+        from balancita_engine import capture_validation as cv
+        cv.assert_range_allowed(B0, B1, m.HOLDOUT_WINDOW)
+        with self.assertRaises(ValueError):
+            cv.assert_range_allowed(A0, A1 + m.MINUTE_MS, m.HOLDOUT_WINDOW)
+        with self.assertRaises(ValueError):
+            cv.assert_range_allowed(cv.HOLDOUT_START_MS - m.MINUTE_MS, A1, m.HOLDOUT_WINDOW)
+
+    def test_window_before_the_cut_is_rejected(self):
+        from balancita_engine import capture_validation as cv
+        with self.assertRaises(ValueError):
+            cv.holdout_exception((cv.HOLDOUT_START_MS - 1, A1))
+
+
+class FundingSmokeTests(Fixture):
+    def test_funding_path_runs_and_publishes_no_rates(self):
+        from datetime import datetime, timezone
+
+        def iso(ms):
+            return datetime.fromtimestamp(ms / 1000, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+        hour = 3_600_000
+        start = A0 + 10 * hour
+        rel, price = "0.0000125", 80_000
+        server = start + 3 * hour
+        body = '{"result":"success","serverTime":"%s","rates":[{"timestamp":"%s","fundingRate":%s,"relativeFundingRate":%s}]}' % (
+            iso(server), iso(start), "1.0", rel)
+        self.conn.execute("INSERT INTO paper_futures_funding_responses VALUES ('s',?,?,?)", (server, server, body))
+        self.conn.execute("INSERT INTO paper_futures_funding_periods VALUES ('s',?,?,?,?,?,?)",
+                          (start, m.BTC, start + hour, "1.0", server, "USD/BTC/hour"))
+        for b in range(A0, A1, m.MINUTE_MS * 60):
+            official(self.conn, m.BTC, b, close=str(price))
+        self.conn.commit()
+        g = self.guard()
+        led = m.Ledger()
+        out = m.evaluate(m.read_2a(g, led), m.read_2b(g, led), m.read_2c(g, led), m.read_2d(g, led))
+        self.assertEqual(out["funding_rows"]["adapter"]["responses_parsed"], 1)
+        self.assertNotIn(rel, repr(out["funding_report"]))
