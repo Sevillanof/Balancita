@@ -24,8 +24,10 @@ import dataclasses
 import json
 import os
 import sqlite3
+from decimal import Decimal
 
 from . import paper_live_evaluator as LE
+from .funding_adapter import FundingAdapterError, FundingBook, compare_with_portfolio, parse_response
 from .multi_signals import stable_hash
 from .paper_live_ingest import GAP_SAMPLE, SILENCE_SAMPLE, Ingestor, SourceReader
 from .paper_runner import STOPPED, PaperRunner, RunnerError, make_event
@@ -168,6 +170,48 @@ class FundingSource(object):
             (after, limit))]
 
 
+REFERENCE_MAX_AGE_MS = 3_600_000          # hypothesis (not approved): the newest quote for the unit cross-check may be up to one hour old
+SYNTHETIC_FUNDING = "synthetic"
+OBSERVED_FUNDING = "observed"
+
+
+class ObservedFundingSource(FundingSource):
+    """The accounting channel read from the capture's own funding evidence (#184): ``paper_futures_funding_responses`` (the
+    response text, exactly as received, and when) and ``paper_futures_funding_periods`` (which product each response is about).
+    Read-only, like the rest of the source. The signal channel (``fundpct``) is NOT this table: it keeps its own source, and when
+    that source has no ``synthetic_fundpct`` table it is simply empty. ``reference_price`` is the mid of the newest ticker at or
+    before the hour, which is what the adapter's unit check needs; it never invents a price (``None`` when there is none)."""
+
+    def fundpct(self, after, limit=5000):
+        try:
+            return FundingSource.fundpct(self, after, limit)
+        except sqlite3.OperationalError:
+            return []
+
+    def accrual(self, after, limit=5000):
+        raise IntegrationError("observed_funding_has_no_synthetic_accrual", "the accounting channel is the capture's responses")
+
+    def responses(self, after, limit=200):
+        out = []
+        for row in self.db.execute(
+                "SELECT rowid AS rid, sha256, received_at, raw_response FROM paper_futures_funding_responses WHERE rowid>? "
+                "ORDER BY rowid LIMIT ?", (after, limit)).fetchall():
+            products = sorted(r[0] for r in self.db.execute(
+                "SELECT DISTINCT product_id FROM paper_futures_funding_periods WHERE response_sha256=?", (row["sha256"],)))
+            out.append({"rid": row["rid"], "sha256": row["sha256"], "received_at": row["received_at"], "raw": row["raw_response"],
+                        "product_id": products[0] if len(products) == 1 else None, "products": products})
+        return out
+
+    def reference_price(self, product_id, at_ms):
+        row = self.db.execute(
+            "SELECT event_time, normalized_json FROM paper_futures_market_events WHERE feed='ticker' AND product_id=? AND event_time<=? "
+            "ORDER BY event_time DESC LIMIT 1", (product_id, int(at_ms))).fetchone()
+        if row is None or int(at_ms) - row["event_time"] > REFERENCE_MAX_AGE_MS:
+            return None
+        body = json.loads(row["normalized_json"])
+        return (Decimal(str(body["bid"])) + Decimal(str(body["ask"]))) / 2
+
+
 def accrual_event(row):
     return make_event("funding", {"product_id": row["product_id"], "periods": [[row["start_ms"], row["end_ms"], row["rate"]]]},
                       t_ms=row["arrival_ms"], source=FUNDING_SOURCE, stream="funding:" + row["product_id"])
@@ -215,15 +259,28 @@ def _session_config(runner_config, max_quote_gap_ms, block_stale_entries):
     return dataclasses.replace(runner_config, entry_max_quote_age_ms=int(max_quote_gap_ms))
 
 
+def _funding_source(path, funding_mode):
+    return ObservedFundingSource(path) if funding_mode == OBSERVED_FUNDING else FundingSource(path)
+
+
+def _check_funding_options(funding_mode, on_funding_divergence):
+    if funding_mode not in (SYNTHETIC_FUNDING, OBSERVED_FUNDING):
+        raise IntegrationError("config_incompatible", "funding_mode")
+    if on_funding_divergence not in ("alert", "halt"):
+        raise IntegrationError("config_incompatible", "on_funding_divergence")
+
+
 class LiveSession(object):
     """One synthetic session. ``create`` starts a new directory; ``recover`` continues it after any interruption."""
 
     def __init__(self, directory, source_path, strategies, runner_config, runner, evaluator, audit, ingestor, reader, funding,
-                 identity, *, max_quote_gap_ms):
+                 identity, *, max_quote_gap_ms, funding_mode=SYNTHETIC_FUNDING, on_funding_divergence="alert"):
         self.directory, self.source_path, self.strategies, self.runner_config = directory, source_path, list(strategies), runner_config
         self.runner, self.evaluator, self.audit, self.ingestor, self.reader, self.funding = runner, evaluator, audit, ingestor, reader, funding
         self.identity, self.max_quote_gap_ms = identity, int(max_quote_gap_ms)
         self.cursors = {"fundpct": 0, "accrual": 0}
+        self.funding_mode, self.on_funding_divergence = funding_mode, on_funding_divergence
+        self.book = FundingBook() if funding_mode == OBSERVED_FUNDING else None       # what the adapter accepted (durable)
         self.fault = None
         self.stopped = None                           # the runner's answer once the operator stopped the session (D-186-1)
         self.halted = None                            # why this instance stopped: set by a step that failed before its checkpoint
@@ -233,20 +290,23 @@ class LiveSession(object):
 
     # ---- construction ----------------------------------------------------------------------------------------
     @staticmethod
-    def _identity(products, ingest_kw, evaluator, first_runner_entry, source_id, max_quote_gap_ms):
+    def _identity(products, ingest_kw, evaluator, first_runner_entry, source_id, max_quote_gap_ms, funding_mode=SYNTHETIC_FUNDING):
         """The immutable identity of the session: what each component was configured with, and the start of each journal."""
         body = {"schema": SCHEMA, "source_id": source_id, "products": sorted(products), "ingestor": dict(sorted(ingest_kw.items())),
                 "max_quote_gap_ms": int(max_quote_gap_ms),
                 "evaluator_config_digest": evaluator.config_digest, "evaluator_header_hash": evaluator.log.entries[0]["hash"],
                 "runner_manifest_hash": first_runner_entry["data"]["manifest_hash"],
                 "runner_start_hash": first_runner_entry["hash"],
-                "funding_channels": {"fundpct": "synthetic_fundpct", "accrual": "synthetic_accrual"}}
+                "funding_channels": {"fundpct": "synthetic_fundpct",
+                                     "accrual": "synthetic_accrual" if funding_mode == SYNTHETIC_FUNDING
+                                     else "paper_futures_funding_responses"}}
         return dict(body, session_id=stable_hash(body)[:20])
 
     @classmethod
     def create(cls, directory, source_path, strategies, products, runner_config, *, decide_from_ms, decide_until_ms=None,
                source_id="synthetic", ingest_kw=None, evaluator_kw=None, max_quote_gap_ms=15_000,
-               block_stale_entries=True):
+               block_stale_entries=True, funding_mode=SYNTHETIC_FUNDING, on_funding_divergence="alert"):
+        _check_funding_options(funding_mode, on_funding_divergence)
         runner_config = _session_config(runner_config, max_quote_gap_ms, block_stale_entries)
         if os.path.exists(os.path.join(directory, SESSION_FILE)):
             raise IntegrationError("session_exists", directory)
@@ -260,11 +320,12 @@ class LiveSession(object):
                                                 decide_from_ms=decide_from_ms, decide_until_ms=decide_until_ms,
                                                 **dict(evaluator_kw or {}))
             runner = PaperRunner.create(runner_dir, runner_config, strategies, evaluator=evaluator.evaluator, lock=lock)
-            identity = cls._identity(products, ingest_kw, evaluator, runner.journal.entries[0], source_id, max_quote_gap_ms)
+            identity = cls._identity(products, ingest_kw, evaluator, runner.journal.entries[0], source_id, max_quote_gap_ms, funding_mode)
             audit = AuditJournal.create(os.path.join(directory, AUDIT_FILE), {"session_id": identity["session_id"]})
             reader = SourceReader(source_path)
             session = cls(directory, source_path, strategies, runner_config, runner, evaluator, audit, Ingestor(reader, expected_products=tuple(products), **ingest_kw),
-                          reader, FundingSource(source_path), identity, max_quote_gap_ms=max_quote_gap_ms)
+                          reader, _funding_source(source_path, funding_mode), identity, max_quote_gap_ms=max_quote_gap_ms,
+                          funding_mode=funding_mode, on_funding_divergence=on_funding_divergence)
             _atomic_write(os.path.join(directory, SESSION_FILE), identity)
             session.save_checkpoint()
         except BaseException:
@@ -275,7 +336,7 @@ class LiveSession(object):
     @classmethod
     def recover(cls, directory, source_path, strategies, products, runner_config, recovery_ms, *, decide_from_ms,
                 decide_until_ms=None, source_id="synthetic", ingest_kw=None, evaluator_kw=None, max_quote_gap_ms=15_000,
-                block_stale_entries=True):
+                block_stale_entries=True, funding_mode=SYNTHETIC_FUNDING, on_funding_divergence="alert"):
         """Rebuilds a session from its directory. Refuses (``IntegrationError`` with a stable reason) a directory whose parts
         do not belong to the same session, a checkpoint ahead of any journal, or any configuration that differs from the one
         that created it. ``recovery_ms`` is the restart clock handed to the runner.
@@ -284,6 +345,7 @@ class LiveSession(object):
         line (a write), and a half line may be the live writer's own write in flight. The same lock is then handed to the
         runner, so the directory is owned without a gap from the first byte read to ``close``; a second opener is refused
         (``runner_directory_locked``) before it touches a file, and a recovery that fails releases the lock."""
+        _check_funding_options(funding_mode, on_funding_divergence)
         runner_config = _session_config(runner_config, max_quote_gap_ms, block_stale_entries)
         runner_dir = os.path.join(directory, RUNNER_DIR)
         if not os.path.isdir(runner_dir):             # nothing to own: refuse before opening (and so cutting) any file
@@ -292,14 +354,15 @@ class LiveSession(object):
         try:
             return cls._recover(lock, directory, source_path, strategies, products, runner_config, recovery_ms,
                                 decide_from_ms=decide_from_ms, decide_until_ms=decide_until_ms, source_id=source_id,
-                                ingest_kw=ingest_kw, evaluator_kw=evaluator_kw, max_quote_gap_ms=max_quote_gap_ms)
+                                ingest_kw=ingest_kw, evaluator_kw=evaluator_kw, max_quote_gap_ms=max_quote_gap_ms,
+                                funding_mode=funding_mode, on_funding_divergence=on_funding_divergence)
         except BaseException:
             lock.release()
             raise
 
     @classmethod
     def _recover(cls, lock, directory, source_path, strategies, products, runner_config, recovery_ms, *, decide_from_ms,
-                 decide_until_ms, source_id, ingest_kw, evaluator_kw, max_quote_gap_ms):
+                 decide_until_ms, source_id, ingest_kw, evaluator_kw, max_quote_gap_ms, funding_mode, on_funding_divergence):
         try:
             with open(os.path.join(directory, SESSION_FILE), encoding="utf-8") as handle:
                 stored = json.load(handle)
@@ -322,7 +385,7 @@ class LiveSession(object):
             runner_checkpoint = read_checkpoint(os.path.join(runner_dir, RUNNER_CHECKPOINT_FILE))
         except StoreError as error:
             raise IntegrationError("runner_" + error.reason, str(error))
-        identity = cls._identity(products, ingest_kw, evaluator, runner_journal.entries[0], source_id, max_quote_gap_ms)
+        identity = cls._identity(products, ingest_kw, evaluator, runner_journal.entries[0], source_id, max_quote_gap_ms, funding_mode)
         if identity != stored:
             differs = sorted(k for k in set(identity) | set(stored) if identity.get(k) != stored.get(k))
             raise IntegrationError("session_mismatch", "the parts do not belong to the session that was created: " + ", ".join(differs))
@@ -338,8 +401,11 @@ class LiveSession(object):
         for (_product, _from, gap_to), _loss in runner.source_losses.items():     # a loss the runner made durable is never delivered under
             ingestor.released_ms = max(ingestor.released_ms or 0, gap_to - 1)     # (the quote that ends it, at gap_to, still comes)
         session = cls(directory, source_path, strategies, runner_config, runner, evaluator, audit, ingestor, reader,
-                      FundingSource(source_path), stored, max_quote_gap_ms=max_quote_gap_ms)
+                      _funding_source(source_path, funding_mode), stored, max_quote_gap_ms=max_quote_gap_ms,
+                      funding_mode=funding_mode, on_funding_divergence=on_funding_divergence)
         session.cursors = dict(checkpoint["cursors"])
+        if funding_mode == OBSERVED_FUNDING:
+            session.book = FundingBook.from_state(checkpoint["funding_book"])
         # the previous quote of a product is the last one the runner received, so a hole that was open when the process died is
         # still seen when the quote that ends it is delivered again (journal time: the clock a source loss is measured in)
         session.last_quote = {product: max(runner.quote_t_ms.get(product, 0), runner.executor.last_quote_ms.get(product, 0))
@@ -369,6 +435,7 @@ class LiveSession(object):
             out = self.ingestor.poll(observed_now_ms)
             self._fault("after_poll")
             self._deliver_batch(out["events"])
+            self._check_funding_book()
             self._declare_from_observation()
             self._fault("after_runner")
             self.stats["steps"] += 1
@@ -397,12 +464,80 @@ class LiveSession(object):
                 break
             self.cursors["fundpct"] = row["rid"]
             items.append((row["arrival_ms"], FUNDING_RANK, "fundpct", row))
+        if self.funding_mode == OBSERVED_FUNDING:
+            items += self._observed_accrual(upto_ms)
+            return items
         for row in self.funding.accrual(self.cursors["accrual"]):
             if row["arrival_ms"] > upto_ms:
                 break
             self.cursors["accrual"] = row["rid"]
             items.append((row["arrival_ms"], FUNDING_RANK, "accrual", row))
         return items
+
+    def _observed_accrual(self, upto_ms):
+        """The capture's funding responses that had arrived by ``upto_ms``, through the adapter (#167): only definitive hours
+        become ``funding`` events; everything else (provisional, rejected, contradicted) is evidence in the audit, never dropped.
+        The cursor is the response's row id and, with the book, is written in the checkpoint: a replay after a death re-derives
+        the same events, and the runner answers ``duplicate`` to the ones it already journaled."""
+        items = []
+        for row in self.funding.responses(self.cursors["accrual"]):
+            if row["received_at"] > upto_ms:
+                break
+            self.cursors["accrual"] = row["rid"]
+            seen = len(self.book.evidence)
+            try:
+                parsed = parse_response(row["raw"], row["product_id"] or "", row["received_at"],
+                                        reference_price=lambda start, p=row["product_id"]: self.funding.reference_price(p, start),
+                                        stored_product_id=row["product_id"])
+            except FundingAdapterError as error:
+                self.audit.add({"source": "funding", "kind": "funding_response_rejected", "sha256": row["sha256"],
+                                "received_at": row["received_at"], "products": row["products"], "reason": error.reason})
+                continue
+            for event in self.book.add(parsed):
+                items.append((event["t_ms"], FUNDING_RANK, "observed_funding", event))
+            self.audit.add({"source": "funding", "kind": "funding_response", "sha256": row["sha256"], "product_id": row["product_id"],
+                            "received_at": row["received_at"], "definitive": len(parsed["definitive"]),
+                            "provisional": len(parsed["provisional"]), "rejected": len(parsed["rejected"]),
+                            "conflicts": len(parsed["conflicts"])})
+            for evidence in self.book.evidence[seen:]:
+                body = dict(evidence)
+                self.audit.add(dict(body, source="funding", kind="funding_evidence", evidence_kind=body.pop("kind")))
+        return items
+
+    def funding_divergence(self):
+        """Differences between what the adapter accepted (``missing``, ``extra``, ``rate_differs``, as in ``compare_with_portfolio``)
+        and the funding the runner's portfolio holds as known. Empty lists mean they agree; ``{}`` outside the observed mode."""
+        if self.book is None:
+            return {}
+        return compare_with_portfolio(self.book, self.runner.portfolio.funding)
+
+    def _check_funding_book(self):
+        """Two authoritative states of our own code that disagree are not a market condition: the evidence is written, and the
+        session either keeps going (``alert``, the default) or stops (``halt``). Which of the two is a decision of the owner
+        (#184); nothing here repairs either side."""
+        diverged = self.funding_divergence()
+        if not any(diverged.values()):
+            return
+        record = {"source": "funding", "kind": "funding_book_diverged",
+                  **{k: [list(x) for x in v] for k, v in diverged.items()}}
+        if self.audit.add(record):
+            self.stats["audit_new"] += 1
+        if self.on_funding_divergence == "halt":
+            raise IntegrationError("funding_book_diverged", "the funding book and the portfolio disagree")
+
+    def funding_report(self):
+        """What a reader may say about the net result (#184): ``pnl_verified`` is False while any trade lacks complete funding,
+        is disputed by a quarantined period, or the book and the portfolio disagree; it is never inferred from a missing hour."""
+        if self.book is None:
+            return {"mode": SYNTHETIC_FUNDING}
+        portfolio = self.runner.portfolio
+        diverged = self.funding_divergence()
+        incomplete = sorted(t["trade_id"] for t in portfolio.trades if not t["net_complete"])
+        disputed = sorted(portfolio.funding_disputes)
+        return {"mode": OBSERVED_FUNDING, "counts": dict(self.book.counts),
+                "quarantined": [[p, s, v] for (p, s), v in sorted(self.book.quarantined.items())],
+                "disputed_trades": disputed, "incomplete_trades": incomplete, "divergence": diverged,
+                "pnl_verified": not (disputed or incomplete or any(diverged.values()))}
 
     def _handle(self, event):
         self._fault("before_handle", event)
@@ -419,6 +554,10 @@ class LiveSession(object):
     def _deliver(self, kind, item):
         if kind == "fundpct":                               # the evaluator's input only: never the accounting
             self.evaluator.feed_funding(item["product_id"], item["start_ms"], item["rate"], item["arrival_ms"])
+            return
+        if kind == "observed_funding":                      # the accounting only, from the capture's responses
+            self._open_holes(item["t_ms"])
+            self._handle(item)
             return
         if kind == "accrual":                               # the accounting only: never the signal's input
             self._open_holes(item["arrival_ms"])
@@ -650,6 +789,8 @@ class LiveSession(object):
                 "evaluator": {"entries": len(self.evaluator.log.entries), "head": self.evaluator.log.head},
                 "audit": {"entries": len(self.audit.entries), "head": self.audit.head},
                 "cursors": dict(self.cursors), "ingestor": self.ingestor.checkpoint()}
+        if self.book is not None:
+            body["funding_book"] = self.book.state()
         text = json.dumps(dict(body, digest=stable_hash(body)), sort_keys=True)
         path = os.path.join(self.directory, CHECKPOINT_FILE)
         tmp = path + ".tmp"
