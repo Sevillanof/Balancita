@@ -1,0 +1,272 @@
+{
+  "schema": "observability-decision-trace.v1",
+  "generated_at_ms": 1790000000000,
+  "cache_ttl_ms": 10000,
+  "product": "PF_XBTUSD",
+  "bucket_start_ms": 1789999860000,
+  "state": "ok",
+  "evidence": {
+    "source": "paper_futures_verdicts",
+    "origin": "futures-verdicts.sqlite",
+    "state": "read",
+    "rule": "la fila de paper_futures_verdicts con la clave (producto, bucket_start) y su payload_json tal como se guardó"
+  },
+  "decision": {
+    "product": "PF_XBTUSD",
+    "bucket_start_ms": 1789999860000,
+    "interval_ms": 60000,
+    "decision_known_at_ms": 1789999923000,
+    "regime": "range",
+    "action": "WAIT",
+    "reason_code": "no_directional_proposal",
+    "verdict_hash": "synthetic-PF_XBTUSD-1789999860000",
+    "written_at_ms": 1789999924000
+  },
+  "payload_state": "ok",
+  "payload": {
+    "schema_version": "futures-verdict.v1",
+    "config_hash": "synthetic-config",
+    "product_id": "PF_XBTUSD",
+    "interval_ms": 60000,
+    "bucket_start_ms": 1789999860000,
+    "close_at_ms": 1789999920000,
+    "decision_known_at_ms": 1789999923000,
+    "knowledge_lag_ms": 3000,
+    "previous_regime": "range",
+    "regime": "range",
+    "action": "WAIT",
+    "reason_code": "no_directional_proposal",
+    "selected": {
+      "action": "WAIT",
+      "reason_code": "no_directional_proposal"
+    },
+    "proposals": [
+      {
+        "strategy_id": "c25-pullback-perp-v1",
+        "strategy_version": "c25-pullback-perp-v1",
+        "action": "WAIT",
+        "reason_code": "entry_conditions_not_met",
+        "conditions": [
+          {
+            "code": "trend_ema9_above_ema21",
+            "value": "99.8",
+            "operator": ">",
+            "threshold": "99.4",
+            "passed": true
+          },
+          {
+            "code": "trend_close_above_sma50",
+            "value": "100.1",
+            "operator": ">",
+            "threshold": "98.9",
+            "passed": true
+          },
+          {
+            "code": "current_close_crosses_above_ema9",
+            "value": "100.1",
+            "operator": ">",
+            "threshold": "99.8",
+            "passed": false
+          }
+        ],
+        "feature_age_ms": 3000,
+        "supported_direction": [
+          "LONG",
+          "SHORT"
+        ],
+        "invalidation": null,
+        "proposed_stop": null,
+        "proposed_target": null,
+        "horizon_minutes": 30,
+        "estimated_round_trip_cost_bps": null,
+        "status": "ready",
+        "delegated_strategy_id": null,
+        "signal_key": null
+      },
+      {
+        "strategy_id": "c26-reversion-perp-v1",
+        "strategy_version": "c26-reversion-perp-v1",
+        "action": "WAIT",
+        "reason_code": "entry_conditions_not_met",
+        "conditions": [
+          {
+            "code": "previous_close_below_lower_band",
+            "value": "99.9",
+            "operator": "<",
+            "threshold": "98.7",
+            "passed": false
+          }
+        ],
+        "feature_age_ms": 3000,
+        "supported_direction": [
+          "LONG",
+          "SHORT"
+        ],
+        "invalidation": null,
+        "proposed_stop": null,
+        "proposed_target": null,
+        "horizon_minutes": 30,
+        "estimated_round_trip_cost_bps": null,
+        "status": "ready",
+        "delegated_strategy_id": null,
+        "signal_key": null
+      },
+      {
+        "strategy_id": "c27-breakout-perp-v1",
+        "strategy_version": "c27-breakout-perp-v1",
+        "action": "WAIT",
+        "reason_code": "entry_conditions_not_met",
+        "conditions": [
+          {
+            "code": "close_breaks_prior_high",
+            "value": "100.1",
+            "operator": ">",
+            "threshold": "100.9",
+            "passed": false
+          },
+          {
+            "code": "volume_above_1_25_prior_mean",
+            "value": "410",
+            "operator": ">",
+            "threshold": "475",
+            "passed": false
+          }
+        ],
+        "feature_age_ms": 3000,
+        "supported_direction": [
+          "LONG",
+          "SHORT"
+        ],
+        "invalidation": null,
+        "proposed_stop": null,
+        "proposed_target": null,
+        "horizon_minutes": 30,
+        "estimated_round_trip_cost_bps": null,
+        "status": "ready",
+        "delegated_strategy_id": null,
+        "signal_key": null
+      },
+      {
+        "strategy_id": "c28-adapter-perp-v1",
+        "strategy_version": "c28-adapter-perp-v1",
+        "action": "WAIT",
+        "reason_code": "entry_conditions_not_met",
+        "conditions": [
+          {
+            "code": "close_breaks_prior_high",
+            "value": "100.1",
+            "operator": ">",
+            "threshold": "100.9",
+            "passed": false
+          }
+        ],
+        "feature_age_ms": 3000,
+        "supported_direction": [
+          "LONG",
+          "SHORT"
+        ],
+        "invalidation": null,
+        "proposed_stop": null,
+        "proposed_target": null,
+        "horizon_minutes": 30,
+        "estimated_round_trip_cost_bps": null,
+        "status": "ready",
+        "delegated_strategy_id": "c27-breakout-perp-v1",
+        "signal_key": null
+      }
+    ],
+    "features": {
+      "1m": {
+        "schema_version": "c27-features.v2",
+        "ready": true,
+        "reason_codes": [],
+        "candidate_close": "100.1",
+        "ema9": "99.8",
+        "ema21": "99.4",
+        "sma50": "98.9",
+        "rsi14": "52.3",
+        "atr14": "0.42",
+        "bollinger_mid20": "99.6",
+        "bollinger_lower20": "98.7",
+        "bollinger_upper20": "100.5",
+        "donchian_high20": "100.9",
+        "donchian_low20": "98.2",
+        "donchian_mid20": "99.55",
+        "candidate_volume": "410",
+        "prior_volume_mean20": "380",
+        "smoothing": "wilder"
+      },
+      "1m_previous": {
+        "schema_version": "c27-features.v2",
+        "ready": true,
+        "reason_codes": [],
+        "candidate_close": "99.9",
+        "ema9": "99.8",
+        "ema21": "99.4",
+        "sma50": "98.9",
+        "rsi14": "52.3",
+        "atr14": "0.42",
+        "bollinger_mid20": "99.6",
+        "bollinger_lower20": "98.7",
+        "bollinger_upper20": "100.5",
+        "donchian_high20": "100.9",
+        "donchian_low20": "98.2",
+        "donchian_mid20": "99.55",
+        "candidate_volume": "410",
+        "prior_volume_mean20": "380",
+        "smoothing": "wilder"
+      },
+      "5m": {
+        "schema_version": "c27-features.v2",
+        "ready": true,
+        "reason_codes": [],
+        "candidate_close": "100.0",
+        "ema9": "99.8",
+        "ema21": "99.4",
+        "sma50": "98.9",
+        "rsi14": "52.3",
+        "atr14": "0.42",
+        "bollinger_mid20": "99.6",
+        "bollinger_lower20": "98.7",
+        "bollinger_upper20": "100.5",
+        "donchian_high20": "100.9",
+        "donchian_low20": "98.2",
+        "donchian_mid20": "99.55",
+        "candidate_volume": "410",
+        "prior_volume_mean20": "380",
+        "smoothing": "wilder"
+      }
+    },
+    "inputs": {
+      "1m": {
+        "count": 120,
+        "first_bucket_start_ms": 1789992720000
+      },
+      "5m": {
+        "count": 60,
+        "first_bucket_start_ms": 1789982160000
+      }
+    },
+    "verdict_hash": "synthetic-PF_XBTUSD-1789999860000"
+  },
+  "mismatches": [],
+  "model_decisions": {
+    "state": "ok",
+    "evidence": {
+      "source": "paper_futures_llm_decisions",
+      "origin": "futures-llm-decisions.sqlite",
+      "state": "read",
+      "rule": "filas de paper_futures_llm_decisions con la misma clave (producto, bucket_start), sin state_text ni logprobs"
+    },
+    "items": []
+  },
+  "not_recorded": [
+    "libro de órdenes y spread al decidir",
+    "funding, flujo y volatilidad de mercado más allá de los indicadores del payload",
+    "decisión del modelo en los minutos en que no se lo consultó (solo hay fila si el modelo respondió)",
+    "qué participación tuvo el modelo en la acción del selector (la correlación es por producto y minuto)",
+    "rechazos del motor de riesgo",
+    "operación del forward asociada a este veredicto (B5)",
+    "resultado posterior a 15/60/240/1440 min (B3 completo)"
+  ]
+}

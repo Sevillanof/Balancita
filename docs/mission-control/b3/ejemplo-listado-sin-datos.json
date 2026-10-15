@@ -1,0 +1,24 @@
+{
+  "schema": "observability-decisions.v1",
+  "generated_at_ms": 1790000000000,
+  "cache_ttl_ms": 10000,
+  "product": "PF_XBTUSD",
+  "from_ms": 1789989180000,
+  "to_ms": 1789999980000,
+  "limit": 50,
+  "filter": {
+    "action": null,
+    "reason_code": null
+  },
+  "decisions": {
+    "state": "unavailable",
+    "evidence": {
+      "source": "paper_futures_verdicts",
+      "origin": "futures-verdicts.sqlite",
+      "state": "missing",
+      "detail": "file_not_found",
+      "rule": "filas de paper_futures_verdicts de un producto con bucket_start en [from, to), más nuevas primero; sin leer el payload salvo selected.strategy_id de las filas devueltas"
+    },
+    "detail": "file_not_found"
+  }
+}

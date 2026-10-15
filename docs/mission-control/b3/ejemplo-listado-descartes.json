@@ -1,0 +1,86 @@
+{
+  "schema": "observability-decisions.v1",
+  "generated_at_ms": 1790000000000,
+  "cache_ttl_ms": 10000,
+  "product": "PF_XBTUSD",
+  "from_ms": 1789989180000,
+  "to_ms": 1789999980000,
+  "limit": 3,
+  "filter": {
+    "action": null,
+    "reason_code": "conflicting_signals"
+  },
+  "decisions": {
+    "state": "ok",
+    "evidence": {
+      "source": "paper_futures_verdicts",
+      "origin": "futures-verdicts.sqlite",
+      "state": "read",
+      "rule": "filas de paper_futures_verdicts de un producto con bucket_start en [from, to), más nuevas primero; sin leer el payload salvo selected.strategy_id de las filas devueltas"
+    },
+    "range_total": 120,
+    "by_action": [
+      {
+        "action": "ABSTAIN",
+        "count": 12
+      },
+      {
+        "action": "LONG",
+        "count": 1
+      },
+      {
+        "action": "WAIT",
+        "count": 107
+      }
+    ],
+    "matching": 12,
+    "items": [
+      {
+        "product": "PF_XBTUSD",
+        "bucket_start_ms": 1789999920000,
+        "interval_ms": 60000,
+        "decision_known_at_ms": 1789999983000,
+        "regime": "range",
+        "action": "ABSTAIN",
+        "reason_code": "conflicting_signals",
+        "verdict_hash": "synthetic-PF_XBTUSD-1789999920000",
+        "written_at_ms": 1789999984000,
+        "selected_strategy_id": null
+      },
+      {
+        "product": "PF_XBTUSD",
+        "bucket_start_ms": 1789999320000,
+        "interval_ms": 60000,
+        "decision_known_at_ms": 1789999383000,
+        "regime": "range",
+        "action": "ABSTAIN",
+        "reason_code": "conflicting_signals",
+        "verdict_hash": "synthetic-PF_XBTUSD-1789999320000",
+        "written_at_ms": 1789999384000,
+        "selected_strategy_id": null
+      },
+      {
+        "product": "PF_XBTUSD",
+        "bucket_start_ms": 1789998720000,
+        "interval_ms": 60000,
+        "decision_known_at_ms": 1789998783000,
+        "regime": "range",
+        "action": "ABSTAIN",
+        "reason_code": "conflicting_signals",
+        "verdict_hash": "synthetic-PF_XBTUSD-1789998720000",
+        "written_at_ms": 1789998784000,
+        "selected_strategy_id": null
+      }
+    ],
+    "next_cursor": "1789998720000",
+    "not_recorded": [
+      "libro de órdenes y spread al decidir",
+      "funding, flujo y volatilidad de mercado más allá de los indicadores del payload",
+      "decisión del modelo en los minutos en que no se lo consultó (solo hay fila si el modelo respondió)",
+      "qué participación tuvo el modelo en la acción del selector (la correlación es por producto y minuto)",
+      "rechazos del motor de riesgo",
+      "operación del forward asociada a este veredicto (B5)",
+      "resultado posterior a 15/60/240/1440 min (B3 completo)"
+    ]
+  }
+}
