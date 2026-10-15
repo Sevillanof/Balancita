@@ -157,7 +157,11 @@ class SummaryTests(unittest.TestCase):
 
     def test_cli_only_takes_db(self):
         with self.assertRaises(SystemExit):
-            m.main(["--db", "x", "--from", "1"])
+            m.main(["--db", "x", "--prior-first-rows", "1", "--prior-v2-rows", "1", "--from", "1"])
+        with self.assertRaises(SystemExit):
+            m.main(["--db", "x"])                      # the two prior-rows arguments are mandatory
+        with self.assertRaises(SystemExit):
+            m.main(["--db", "x", "--prior-first-rows", "1"])
 
 
 if __name__ == "__main__":
@@ -302,7 +306,7 @@ class BoundedWalkTests(Fixture):
         self.conn.close()
         ro = m._open_readonly(self.path)
         self.addCleanup(ro.close)
-        result = m.build_result(ro)
+        result = m.build_result(ro, prior_rows=17_131)
         self.assertEqual(result["stopped"]["reason"], "row_budget")
         self.assertIn("candles_report", result["evaluation"])
         self.assertIn("single_row_reads", result["rows_total"])
@@ -399,3 +403,65 @@ class CapsTests(unittest.TestCase):
         self.assertEqual(m.CAPS, {"2a": 12_000, "2b": 100_000, "2c": 600, "2d": 1_200})
         self.assertEqual(m.MAX_BODY_BYTES, 200_000_000)
         self.assertEqual(m.TOTAL_ROWS_CAP, 173_000)
+
+
+class PlanAndGlobalCapTests(Fixture):
+    def test_no_executed_statement_scans_a_table(self):
+        for b in range(B0, B1, m.MINUTE_MS):
+            official(self.conn, m.BTC, b)
+            revision(self.conn, b, 2, 1)
+        self.conn.executemany("INSERT INTO paper_futures_funding_responses VALUES (?,?,?,?)",
+                              [("h%05d" % i, A0 + i * 60_000, "t", "x" * 10) for i in range(40)])
+        self.conn.executemany("INSERT INTO paper_futures_funding_periods VALUES (?,?,?,?,?,?,?)",
+                              [("h%05d" % i, A0 + i, m.BTC, A0 + i + 1, "1", A0 + i * 60_000, "u") for i in range(40)])
+        self.conn.commit()
+        g, led, rd = self.guard(), m.Ledger(), m.Reads()
+        m.read_2a(g, led)
+        m.read_2b(g, led)
+        m.read_2c(g, led, rd)
+        m.read_2d(g, led, rd)
+        self.assertGreater(len(g.planned), 8)
+        for (mode, sql), details in g.planned.items():
+            self.assertFalse([d for d in details if d.startswith("SCAN") and "subquery" not in d and d.strip() != "SCAN w"],
+                             (mode, sql, details))
+
+    def test_a_statement_with_a_table_scan_is_refused_before_it_runs(self):
+        g = self.guard()
+        with self.assertRaises(m.Stopped) as ctx:
+            g.fetch("2c_bound", "SELECT min(rowid), max(rowid) FROM %s" % m._PERIODS)
+        self.assertEqual(ctx.exception.reason, "query_plan")
+
+    def test_bound_search_cost_does_not_grow_with_the_table(self):
+        def steps(n):
+            d = tempfile.mkdtemp()
+            path = os.path.join(d, "dev-live", m.DB_NAME)
+            os.makedirs(os.path.dirname(path))
+            conn = make_db(path)
+            conn.executemany("INSERT INTO paper_futures_funding_periods VALUES (?,?,?,?,?,?,?)",
+                             [("h%07d" % i, A0 + i, m.BTC, A0 + i + 1, "1", A0 + i * 1000, "u") for i in range(n)])
+            conn.commit()
+            conn.close()
+            ro = m._open_readonly(path)
+            self.addCleanup(ro.close)
+            count = [0]
+            g = m._Guard(ro, time.monotonic())
+            ro.set_progress_handler(lambda: count.__setitem__(0, count[0] + 1) or 0, 1)
+            m._lower_bound(g, "2c_bound", m._PERIODS, "known_at", A0 + n * 500, m.Reads())
+            return count[0]
+        small, large = steps(1000), steps(30000)
+        self.assertLess(large, small * 3 + 200)
+
+    def test_global_total_frontier(self):
+        self.assertEqual(m.stage_rows_needed(), 12_001 + 100_001 + 600 + 1_200)
+        self.conn.commit()
+        self.conn.close()
+        remaining_ok = m.TOTAL_ROWS_CAP - m.stage_rows_needed()
+        ro = m._open_readonly(self.path)
+        self.addCleanup(ro.close)
+        over = m.build_result(ro, prior_rows=remaining_ok + 1)           # one row short: stops without reading
+        self.assertEqual(over["stopped"]["reason"], "global_cap")
+        self.assertNotIn("reads", over)
+        self.assertNotIn("evaluation", over)
+        ok = m.build_result(m._open_readonly(self.path), prior_rows=remaining_ok)   # exactly what is left: allowed to start
+        self.assertNotEqual((ok["stopped"] or {}).get("reason"), "global_cap")
+        self.assertIn("reads", ok)

@@ -105,3 +105,5 @@ hora), nunca series, precios, tasas ni cuerpos de respuesta.
   enteramente dentro de esa ventana. `HOLDOUT_START_MS` no cambia y sin el parámetro todo sigue
   igual.
 - No mide la puntualidad de Kraken, no usa cotizaciones y no prueba nada fuera de estas ventanas.
+- Total de 173 000 filas compartido con la etapa 1: la herramienta exige `--prior-first-rows` y `--prior-v2-rows` (las filas de las dos corridas de la etapa 1 tal como están publicadas en #185; sin valor por defecto) y antes de leer exige que 12 001 + 100 001 + 600 + 1 200 = 113 802 entren en 173 000 menos esas filas; si no entran, se detiene con `global_cap` sin leer. La repetición (v2) de la etapa 1 corre ANTES que esta etapa.
+- Todo SQL ejecutado se planifica antes de correr y se rechaza (`query_plan`) si contiene un SCAN de tabla o un TEMP B-TREE; los límites de rowid se leen con dos consultas de una fila (`min(rowid)` y `max(rowid)` por separado).

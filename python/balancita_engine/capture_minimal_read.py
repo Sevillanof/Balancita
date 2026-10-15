@@ -170,6 +170,7 @@ class _Guard:
 
     def __init__(self, conn, started):
         self.conn, self.started, self.deadline, self.mode = conn, started, None, None
+        self.planned = {}
         conn.set_authorizer(self._authorize)
         conn.set_progress_handler(self._tick, PROGRESS_OPS)
 
@@ -185,10 +186,27 @@ class _Guard:
         now = time.monotonic()
         return 1 if (self.deadline is not None and now > self.deadline) or now - self.started > RUN_TIMEOUT_S else 0
 
+    def _gate(self, mode, sql, params):
+        """Every statement is planned once before it first runs: any SCAN of a table or temporary B-tree stops the run
+        (D-212-13). A scan of the bounded subquery itself (``w``, a co-routine) is fine."""
+        key = (mode, sql)
+        if key in self.planned:
+            return
+        self.deadline = time.monotonic() + QUERY_TIMEOUT_S
+        details = [r[3] for r in self.conn.execute("EXPLAIN QUERY PLAN " + sql, params).fetchall()]
+        bad = [d for d in details if (d.startswith("SCAN") and "subquery" not in d and d.strip() not in ("SCAN w", "SCAN w1"))
+               or "TEMP B-TREE" in d]
+        if bad:
+            raise Stopped("query_plan", {"stage": mode, "plan": details})
+        self.planned[key] = details
+
     def fetch(self, mode, sql, params=()):
         self.mode = mode
         self.deadline = time.monotonic() + QUERY_TIMEOUT_S
         try:
+            if not sql.startswith("EXPLAIN"):
+                self._gate(mode, sql, params)
+                self.deadline = time.monotonic() + QUERY_TIMEOUT_S
             return self.conn.execute(sql, params).fetchall()
         except sqlite3.OperationalError as exc:
             if "interrupt" in str(exc).lower():
@@ -295,8 +313,9 @@ def _lower_bound(guard, mode, table, column, target, reads):
     immutable and their time columns are written at insertion, so ``rowid`` order is time order). Returns
     ``(rowid, evidence)``; ``rowid`` is ``max + 1`` when no row qualifies."""
     stage = mode[:2]
-    reads.spend(stage, mode)
-    lo_row, hi_row = guard.fetch(mode, "SELECT min(rowid), max(rowid) FROM %s" % table)[0]
+    reads.spend(stage, mode, 2)                      # two one-row reads: the first and the last rowid (never both in one SELECT)
+    lo_row = guard.fetch(mode, "SELECT min(rowid) FROM %s" % table)[0][0]
+    hi_row = guard.fetch(mode, "SELECT max(rowid) FROM %s" % table)[0][0]
     if lo_row is None:
         return 0, {"empty": True}
     lo, hi = lo_row, hi_row + 1
@@ -320,7 +339,7 @@ def _lower_bound(guard, mode, table, column, target, reads):
     at = guard.fetch(mode, _sql_bound(table, column), (lo,))
     if (before and before[0][1] >= target) or (at and at[0][1] < target):
         raise Stopped("rowid_order", {"table": table, "column": column})
-    return lo, {"bound_rowid": lo, "table_min_rowid": lo_row, "table_max_rowid": hi_row, "search_reads": steps + 3}
+    return lo, {"bound_rowid": lo, "table_min_rowid": lo_row, "table_max_rowid": hi_row, "search_reads": steps + 4}
 
 
 def _span(guard, mode, table, column, lo_ms, hi_ms, reads, stage, cap, ledger):
@@ -599,7 +618,12 @@ def _identity(path):
             "regular_file_not_a_link": os.path.isfile(path) and not os.path.islink(path)}
 
 
-def build_result(conn, started=None):
+def stage_rows_needed():
+    """Worst case of this tool, counting the extra row of ``LIMIT cap + 1`` in 2a and 2b: 12 001 + 100 001 + 600 + 1 200."""
+    return CAPS["2a"] + 1 + CAPS["2b"] + 1 + CAPS["2c"] + CAPS["2d"]
+
+
+def build_result(conn, started=None, *, prior_rows):
     started = time.monotonic() if started is None else started
     result = {"tool_version": TOOL_VERSION, "decisions": list(DECISIONS), "products": list(PRODUCTS),
               "window_a_ms": list(WINDOW_A), "window_b_ms": list(WINDOW_B), "caps": CAPS, "body_bytes_cap": MAX_BODY_BYTES,
@@ -613,6 +637,13 @@ def build_result(conn, started=None):
         result["guards"] = {"opened_with": "mode=ro", "query_only_readback": readback}
         if readback != 1:
             raise Stopped("connection_not_query_only")
+        need = stage_rows_needed()
+        result["global_rows"] = {"cap": TOTAL_ROWS_CAP, "prior_rows_counted": prior_rows, "stage_rows_needed": need}
+        if isinstance(prior_rows, bool) or not isinstance(prior_rows, int) or prior_rows < 0:
+            raise Stopped("prior_rows", "prior_rows must be a non-negative integer")
+        if prior_rows + need > TOTAL_ROWS_CAP:        # D-212-14: the total of 185-02 cannot be exceeded in any case; stop without reading
+            raise Stopped("global_cap", {"cap": TOTAL_ROWS_CAP, "prior_rows": prior_rows, "stage_rows_needed": need,
+                                         "remaining": TOTAL_ROWS_CAP - prior_rows})
         result["sqlite_version"] = sqlite3.sqlite_version
         if sqlite3.sqlite_version_info < MIN_SQLITE:
             raise Stopped("sqlite_version", "octet_length() needs SQLite >= 3.43")
@@ -665,6 +696,10 @@ def check_identity(path):
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--db", required=True, help="local live-capture database (opened read-only)")
+    ap.add_argument("--prior-first-rows", required=True, type=int,
+                    help="rows counted by the first stage-1 run, as published in #185 (the 173 000 total is shared)")
+    ap.add_argument("--prior-v2-rows", required=True, type=int,
+                    help="rows counted by the repeated (v2) stage-1 run, as published in #185; it must run BEFORE this stage")
     args = ap.parse_args(argv)
     started = time.monotonic()
     try:
@@ -675,7 +710,7 @@ def main(argv=None):
         return 2
     conn = _open_readonly(args.db)
     try:
-        result = build_result(conn, started)
+        result = build_result(conn, started, prior_rows=args.prior_first_rows + args.prior_v2_rows)
     finally:
         conn.close()
     result["source"] = {"before": before, "after": _identity(args.db), "elapsed_s": round(time.monotonic() - started, 3)}
