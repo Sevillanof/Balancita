@@ -93,7 +93,7 @@ los datos a los validadores de #188; publica solo agregados (conteos, aptitud, h
 hora), nunca series, precios, tasas ni cuerpos de respuesta.
 
 - 2a velas oficiales 1 min XBT/ETH `[10-oct, 12-oct)`, tope 12 000; 2b velas propias XBT `[11-oct 00:00Z, 06:00Z)`, tope
-  100 000 (valores solo de revisiones cerradas); 2c períodos de funding, tope 400; 2d respuestas de funding, tope 600 y 20 MB.
+  100 000 (valores solo de revisiones cerradas); 2c períodos de funding, tope 600 lecturas; 2d respuestas de funding, tope 1 200 lecturas y 200 MB (BAL-DECISION-183-11; antes 400, 600 y 20 MB).
 - Cada consulta tiene `LIMIT tope+1` y se detiene con `row_budget` si lo supera; sin conteo previo, muestreo ni reintentos.
   Todas exigen plan de búsqueda por clave primaria. 2c y 2d no recorren las tablas: una búsqueda binaria por `rowid`
   (lecturas de una fila, contadas y publicadas) acota el rango de la ventana y su ancho se compara con el tope antes de leer;

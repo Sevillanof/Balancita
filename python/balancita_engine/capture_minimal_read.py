@@ -10,8 +10,8 @@ Fixed by the authorization (the CLI takes only ``--db``; any other window, produ
 - 2a  official 1-minute candles, PF_XBTUSD and PF_ETHUSD, ``[2026-10-10T00:00Z, 2026-10-12T00:00Z)``, at most 12 000 rows in all;
 - 2b  the capture's own 1-minute candles, PF_XBTUSD, ``[2026-10-11T00:00Z, 06:00Z)``, at most 100 000 rows; the values are
       returned only for CLOSED revisions (a ``CASE`` turns every open revision's values into NULL inside the statement);
-- 2c  funding periods that START in the 2a window, both products, at most 400 rows;
-- 2d  funding responses RECEIVED in the 2a window, both products, at most 600 rows and 20 MB; each body is parsed in memory
+- 2c  funding periods that START in the 2a window, both products, at most 600 reads of the stage (rows of 2c itself: at most 400 returned);
+- 2d  funding responses RECEIVED in the 2a window, both products, at most 1 200 reads of the stage and 200 MB; each body is parsed in memory
       by ``funding_adapter`` only to take the relative rate, ``serverTime`` and which periods are definitive.
 
 Guards, the same family as ``capture_warmup_availability`` (Etapa 10):
@@ -30,7 +30,7 @@ Guards, the same family as ``capture_warmup_availability`` (Etapa 10):
   hold, the run stops with ``rowid_order``. 2c's range covers ``known_at`` from one hour before the window to three after
   (declared margins); rows outside the window are dropped in memory and counted;
 - ``EXPLAIN QUERY PLAN`` runs first: every statement must show a SEARCH on the primary key (or rowid) and no temporary sort;
-- the size of each response is read with ``octet_length`` (SQLite >= 3.43, else the run stops) so the 20 MB cap is checked
+- the size of each response is read with ``octet_length`` (SQLite >= 3.43, else the run stops) so the 200 MB cap is checked
   without reading the bodies; each stage that was read is evaluated and published even if a later one stops the run;
 - 60 s per statement and 10 min for the run (progress handler); no retry, no widening; every stop is published and exits 2.
 
@@ -64,8 +64,9 @@ MINUTE_MS = 60_000
 WINDOW_A = (1_791_590_400_000, 1_791_763_200_000)   # 2026-10-10T00:00Z .. 2026-10-12T00:00Z (2a, 2c, 2d)
 WINDOW_B = (1_791_676_800_000, 1_791_698_400_000)   # 2026-10-11T00:00Z .. 06:00Z (2b)
 HOLDOUT_WINDOW = WINDOW_A                            # the one exception the validators are given (contains WINDOW_B)
-CAPS = {"2a": 12_000, "2b": 100_000, "2c": 400, "2d": 600}
-MAX_BODY_BYTES = 20_000_000
+# 2c and 2d: reads of the whole stage (BAL-DECISION-183-11, Fran 2026-10-15 20:03:52Z); 2a and 2b: BAL-DECISION-185-02
+CAPS = {"2a": 12_000, "2b": 100_000, "2c": 600, "2d": 1_200}
+MAX_BODY_BYTES = 200_000_000
 TOTAL_ROWS_CAP = 173_000
 HOUR_MS = 3_600_000
 FUNDING_MARGIN_BEFORE_MS = HOUR_MS        # a period is first seen no earlier than the hour before it starts

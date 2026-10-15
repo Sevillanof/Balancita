@@ -392,3 +392,10 @@ class ExactBudgetTests(Fixture):
             m.read_2d(g, m.Ledger(), rd)
         self.assertLessEqual(rd.used["2d"] + rd.reserved["2d"], walk_search_products + 5)
         self.assertEqual(rd.count["2d_body"], 0)
+
+
+class CapsTests(unittest.TestCase):
+    def test_caps_are_the_authorised_ones(self):
+        self.assertEqual(m.CAPS, {"2a": 12_000, "2b": 100_000, "2c": 600, "2d": 1_200})
+        self.assertEqual(m.MAX_BODY_BYTES, 200_000_000)
+        self.assertEqual(m.TOTAL_ROWS_CAP, 173_000)
