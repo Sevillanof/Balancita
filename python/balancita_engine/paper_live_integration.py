@@ -30,7 +30,7 @@ from .paper_live_ingest import GAP_SAMPLE, SILENCE_SAMPLE, Ingestor, SourceReade
 from .paper_runner import PaperRunner, RunnerError, make_event
 from .paper_runner_store import CHECKPOINT_FILE as RUNNER_CHECKPOINT_FILE
 from .paper_runner_store import JOURNAL_FILE as RUNNER_JOURNAL_FILE
-from .paper_runner_store import FileRunnerJournal, StoreError, read_checkpoint
+from .paper_runner_store import DirectoryLock, FileRunnerJournal, StoreError, read_checkpoint
 
 SCHEMA = "balancita-paper-live-session.v1"
 CHECKPOINT_SCHEMA = "balancita-paper-live-session-checkpoint.v1"
@@ -63,6 +63,7 @@ class AuditJournal(object):
 
     def __init__(self, path):
         self.path, self.head, self.entries, self.ids, self.tail_discarded = path, GENESIS, [], set(), 0
+        self.failed = None                  # set by the first write the disk refused: nothing more is appended from this instance
 
     @classmethod
     def create(cls, path, header):
@@ -106,12 +107,20 @@ class AuditJournal(object):
         return journal
 
     def _write(self, kind, data):
+        if self.failed is not None:
+            raise IntegrationError("audit_write_failed", self.failed)
         body = {"seq": len(self.entries) + 1, "kind": kind, "data": data, "prev": self.head}
         entry = dict(body, hash=stable_hash(body))
-        with open(self.path, "a", encoding="utf-8") as handle:
-            handle.write(json.dumps(entry, sort_keys=True) + "\n")
-            handle.flush()
-            os.fsync(handle.fileno())
+        try:
+            with open(self.path, "a", encoding="utf-8") as handle:
+                handle.write(json.dumps(entry, sort_keys=True) + "\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+        except OSError as error:
+            # memory may now be behind the file (a cut line, or a full one that was never synced): nothing may be appended after
+            # it from this instance, and the record is not remembered as written; the next open() cuts a torn tail
+            self.failed = repr(error)
+            raise IntegrationError("audit_write_failed", self.failed) from error
         self.entries.append(entry)
         self.head = entry["hash"]
         return entry
@@ -121,8 +130,8 @@ class AuditJournal(object):
         record_id = stable_hash(record)[:20]
         if record_id in self.ids:
             return False
-        self.ids.add(record_id)
         self._write("audit", {"record_id": record_id, "record": record})
+        self.ids.add(record_id)             # only once it is on disk: a refused write must not make the evidence look written
         return True
 
     def records(self):
@@ -201,6 +210,7 @@ class LiveSession(object):
         self.identity, self.max_quote_gap_ms = identity, int(max_quote_gap_ms)
         self.cursors = {"fundpct": 0, "accrual": 0}
         self.fault = None
+        self.halted = None                            # why this instance stopped: set by a step that failed before its checkpoint
         self.last_quote = {}                          # product -> time of the previous quote this process saw
         self.stats = {"steps": 0, "events": 0, "duplicates": 0, "rejected_by_runner": 0, "audit_new": 0, "clock_events": 0}
         evaluator.fault = lambda point: self._fault(point)
@@ -224,19 +234,24 @@ class LiveSession(object):
             raise IntegrationError("session_exists", directory)
         os.makedirs(directory, exist_ok=True)
         ingest_kw = dict(ingest_kw or {})
-        evaluator = LE.LiveEvaluator.create(os.path.join(directory, EVALUATOR_FILE), strategies, products,
-                                            decide_from_ms=decide_from_ms, decide_until_ms=decide_until_ms,
-                                            **dict(evaluator_kw or {}))
         runner_dir = os.path.join(directory, RUNNER_DIR)
         os.makedirs(runner_dir, exist_ok=True)
-        runner = PaperRunner.create(runner_dir, runner_config, strategies, evaluator=evaluator.evaluator)
-        identity = cls._identity(products, ingest_kw, evaluator, runner.journal.entries[0], source_id, max_quote_gap_ms)
-        audit = AuditJournal.create(os.path.join(directory, AUDIT_FILE), {"session_id": identity["session_id"]})
-        reader = SourceReader(source_path)
-        session = cls(directory, source_path, strategies, runner_config, runner, evaluator, audit, Ingestor(reader, expected_products=tuple(products), **ingest_kw),
-                      reader, FundingSource(source_path), identity, max_quote_gap_ms=max_quote_gap_ms)
-        _atomic_write(os.path.join(directory, SESSION_FILE), identity)
-        session.save_checkpoint()
+        lock = _take_lock(runner_dir)                  # the writer's lock first: nothing below is written without owning it
+        try:
+            evaluator = LE.LiveEvaluator.create(os.path.join(directory, EVALUATOR_FILE), strategies, products,
+                                                decide_from_ms=decide_from_ms, decide_until_ms=decide_until_ms,
+                                                **dict(evaluator_kw or {}))
+            runner = PaperRunner.create(runner_dir, runner_config, strategies, evaluator=evaluator.evaluator, lock=lock)
+            identity = cls._identity(products, ingest_kw, evaluator, runner.journal.entries[0], source_id, max_quote_gap_ms)
+            audit = AuditJournal.create(os.path.join(directory, AUDIT_FILE), {"session_id": identity["session_id"]})
+            reader = SourceReader(source_path)
+            session = cls(directory, source_path, strategies, runner_config, runner, evaluator, audit, Ingestor(reader, expected_products=tuple(products), **ingest_kw),
+                          reader, FundingSource(source_path), identity, max_quote_gap_ms=max_quote_gap_ms)
+            _atomic_write(os.path.join(directory, SESSION_FILE), identity)
+            session.save_checkpoint()
+        except BaseException:
+            lock.release()                              # a session that failed to start leaves the directory free
+            raise
         return session
 
     @classmethod
@@ -244,7 +259,27 @@ class LiveSession(object):
                 decide_until_ms=None, source_id="synthetic", ingest_kw=None, evaluator_kw=None, max_quote_gap_ms=15_000):
         """Rebuilds a session from its directory. Refuses (``IntegrationError`` with a stable reason) a directory whose parts
         do not belong to the same session, a checkpoint ahead of any journal, or any configuration that differs from the one
-        that created it. ``recovery_ms`` is the restart clock handed to the runner."""
+        that created it. ``recovery_ms`` is the restart clock handed to the runner.
+
+        The runner's writer lock is taken BEFORE anything is opened: opening the evaluator log and the audit journal cuts a half
+        line (a write), and a half line may be the live writer's own write in flight. The same lock is then handed to the
+        runner, so the directory is owned without a gap from the first byte read to ``close``; a second opener is refused
+        (``runner_directory_locked``) before it touches a file, and a recovery that fails releases the lock."""
+        runner_dir = os.path.join(directory, RUNNER_DIR)
+        if not os.path.isdir(runner_dir):             # nothing to own: refuse before opening (and so cutting) any file
+            raise IntegrationError("runner_missing", directory)
+        lock = _take_lock(runner_dir)
+        try:
+            return cls._recover(lock, directory, source_path, strategies, products, runner_config, recovery_ms,
+                                decide_from_ms=decide_from_ms, decide_until_ms=decide_until_ms, source_id=source_id,
+                                ingest_kw=ingest_kw, evaluator_kw=evaluator_kw, max_quote_gap_ms=max_quote_gap_ms)
+        except BaseException:
+            lock.release()
+            raise
+
+    @classmethod
+    def _recover(cls, lock, directory, source_path, strategies, products, runner_config, recovery_ms, *, decide_from_ms,
+                 decide_until_ms, source_id, ingest_kw, evaluator_kw, max_quote_gap_ms):
         try:
             with open(os.path.join(directory, SESSION_FILE), encoding="utf-8") as handle:
                 stored = json.load(handle)
@@ -276,7 +311,7 @@ class LiveSession(object):
             raise IntegrationError("audit_foreign_session", directory)
         checkpoint = _read_checkpoint(os.path.join(directory, CHECKPOINT_FILE))
         _verify_checkpoint(checkpoint, stored, runner_journal.entries, runner_checkpoint, evaluator, audit)
-        runner = PaperRunner.recover(runner_dir, runner_config, strategies, recovery_ms, evaluator=evaluator.evaluator)
+        runner = PaperRunner.recover(runner_dir, runner_config, strategies, recovery_ms, evaluator=evaluator.evaluator, lock=lock)
         reader = SourceReader(source_path)
         ingestor = Ingestor.from_checkpoint(reader, checkpoint["ingestor"], expected_products=tuple(products), **ingest_kw)
         ingestor.mark_recovered()               # the stretch nobody observed is told as an observation_gap, never as a silence
@@ -298,15 +333,26 @@ class LiveSession(object):
 
     # ---- one step --------------------------------------------------------------------------------------------
     def step(self, observed_now_ms):
-        """Poll -> deliver -> audit -> checkpoint. Returns the poll's state."""
-        out = self.ingestor.poll(observed_now_ms)
-        self._fault("after_poll")
-        self._deliver_batch(out["events"])
-        self._declare_from_observation()
-        self._fault("after_runner")
-        self.stats["steps"] += 1
-        self.flush_audit(out["state"])
-        self._fault("after_audit")
+        """Poll -> deliver -> audit -> checkpoint. Returns the poll's state.
+
+        A step that fails before its checkpoint (a runner that refuses, a disk that refuses the audit) leaves the ingestor
+        ahead of what the runner took: this instance never steps or checkpoints again, so a cursor that moved past events the
+        runner did not journal is never written down. The directory is recovered from the last checkpoint. A failure of the
+        checkpoint itself is not in this rule (its policy is decision D-186-2 of #186): the exception goes up as it always did."""
+        if self.halted is not None:
+            raise IntegrationError("session_halted", self.halted)
+        try:
+            out = self.ingestor.poll(observed_now_ms)
+            self._fault("after_poll")
+            self._deliver_batch(out["events"])
+            self._declare_from_observation()
+            self._fault("after_runner")
+            self.stats["steps"] += 1
+            self.flush_audit(out["state"])
+            self._fault("after_audit")
+        except Exception as error:               # noqa: BLE001 - a simulated death is a BaseException and is not caught here
+            self.halted = repr(error)
+            raise
         self.save_checkpoint()
         self._fault("after_checkpoint")
         return out["state"]
@@ -432,8 +478,11 @@ class LiveSession(object):
         except RunnerError as error:
             # the declaration did not happen: the evidence says so and the session stops here rather than hand the next event
             # to orders that should have been cancelled
-            self.audit.add({"source": "session", "kind": "source_stale_refused", "trigger": trigger, "product_id": product,
-                            "gap": dict(gap), "applied": False, "reason": error.reason})
+            try:
+                self.audit.add({"source": "session", "kind": "source_stale_refused", "trigger": trigger, "product_id": product,
+                                "gap": dict(gap), "applied": False, "reason": error.reason})
+            except (IntegrationError, OSError):
+                pass                         # the disk refused the evidence too: the runner's refusal is still the error that stops
             raise
         self._fault("after_open_declaration" if trigger != "closing_quote" else "after_closing_declaration")
 
@@ -554,6 +603,8 @@ class LiveSession(object):
 
     # ---- durability --------------------------------------------------------------------------------------------
     def save_checkpoint(self):
+        if self.halted is not None:
+            raise IntegrationError("session_halted", self.halted)
         runner_checkpoint = self.runner.checkpoint()           # the runner's own, written atomically by the runner
         self._fault("after_runner_checkpoint")
         entries = self.runner.journal.entries
@@ -600,6 +651,14 @@ class LiveSession(object):
         return {"financial": runner.financial_digest(),
                 "signals": stable_hash([e["data"]["signal"]["signal_id"] for e in runner.log.signals() if e["data"]["origin"] == "original"]),
                 "orders": stable_hash([{k: o[k] for k in ("state", "intent_id", "product_id", "strategy_id", "side")} for o in runner.orders()])}
+
+
+def _take_lock(runner_dir):
+    """The runner's own single-writer lock (``runner.lock``), taken by the session and handed to the runner."""
+    try:
+        return DirectoryLock(runner_dir)
+    except StoreError as error:
+        raise IntegrationError("runner_" + error.reason, str(error))
 
 
 def _fsync_dir(path):
