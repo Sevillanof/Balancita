@@ -132,6 +132,8 @@ def _guard(result, check, product, fn):
 
 
 MAX_TOLERANCE = Decimal("0.5")
+MAX_SETTLE_LAG_MS = HOUR_MS  # finality inferred later than 1 h after the end would excuse any delay
+MAX_PUBLICATION_LAG_MS = 3 * HOUR_MS
 
 
 def _check_tolerance(*tolerances):
@@ -169,7 +171,7 @@ def validate_funding(periods, from_ms, to_ms, products, references=None, respons
     ``known_at`` is OUR receipt time, not Kraken's publication time, so publication is judged only with responses: a
     period is timely if the first response showing it DEFINITIVE arrived by ``end + settle_lag_ms + max_lag_ms``; late only if a
     response (with finality evidence) after that deadline still did not show it definitive; a response that shows it
-    definitive before its end is contradictory; otherwise ``not_measurable`` (the collector was not looking, or the
+    definitive before ``end + settle_lag_ms`` is contradictory (or the adapter's settle is smaller than the validator's); otherwise ``not_measurable`` (the collector was not looking, or the
     polls carry no finality evidence). A provisional listing of the open hour is an event, never a finding.
     ``settle_lag_ms``: #167 infers finality by time (a period is definitive once ``end + settle_lag`` has passed on
     the provider's clock; its default of 10 min is a hypothesis), so ``final_starts`` cannot be earlier than that and
@@ -179,8 +181,9 @@ def validate_funding(periods, from_ms, to_ms, products, references=None, respons
     result = Result("funding", products, from_ms, to_ms, {
         "rel_tolerance": rel_tolerance, "max_lag_ms": max_lag_ms, "max_reference_age_ms": max_reference_age_ms,
         "max_price_drift_per_hour": max_price_drift_per_hour, "settle_lag_ms": settle_lag_ms})
-    if isinstance(settle_lag_ms, bool) or not isinstance(settle_lag_ms, int) or settle_lag_ms < 0:
-        raise ValueError("settle_lag_ms must be a non-negative integer")
+    for name, value, cap in (("settle_lag_ms", settle_lag_ms, MAX_SETTLE_LAG_MS), ("max_lag_ms", max_lag_ms, MAX_PUBLICATION_LAG_MS)):
+        if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= cap:
+            raise ValueError("{} must be an integer in [0, {}]: a larger allowance would hide any delay".format(name, cap))
     rel_tol, drift = Decimal(rel_tolerance), Decimal(max_price_drift_per_hour)
     _check_tolerance(rel_tol, drift, rel_tol + drift * Decimal(max_reference_age_ms + HOUR_MS) / Decimal(HOUR_MS))
     no_relative = defaultdict(list)
@@ -248,7 +251,7 @@ def validate_funding(periods, from_ms, to_ms, products, references=None, respons
         if missing:
             result.findings.append(Finding(ABSENT, "funding.coverage", product, "{} hourly periods missing".format(len(missing)),
                                            missing_count=len(missing), first_missing_ms=missing[0], last_missing_ms=missing[-1]))
-        _publication(result, product, sorted(judged_starts[product]), polls.get(product, []), max_lag_ms + settle_lag_ms)
+        _publication(result, product, sorted(judged_starts[product]), polls.get(product, []), max_lag_ms, settle_lag_ms)
     return result.close()
 
 
@@ -278,21 +281,22 @@ def _parse_responses(result, responses):
     return polls
 
 
-def _publication(result, product, starts, polls, allowed_lag_ms):
+def _publication(result, product, starts, polls, max_lag_ms, settle_lag_ms):
     """Definitive availability only. A period listed by a poll but not marked final is provisional: Kraken lists the
     open hour, so that is a legitimate observation (an event, never a defect) and proves nothing about publication.
     A poll that does not even LIST the period after the deadline proves it was not definitive, with or without
     ``final_starts`` (that is delay evidence); but listing it without ``final_starts`` proves nothing, so without
     finality evidence the period stays not measurable (the poll's own timing is not taken as finality)."""
     late, early_final, unknown = [], [], []
+    allowed_lag_ms = settle_lag_ms + max_lag_ms
     for start in starts:
-        end, deadline = start + HOUR_MS, start + HOUR_MS + allowed_lag_ms
+        end, deadline = start + HOUR_MS, start + HOUR_MS + settle_lag_ms + max_lag_ms
         definitive = [at for at, _, finals in polls if finals is not None and start in finals]
         first = definitive[0] if definitive else None
         provisional = sum(1 for at, held, finals in polls if finals is not None and start in held and start not in finals)
         if provisional:
             result.events.append({"event": "provisional_observation", "product": product, "start_ms": start, "count": provisional})
-        if first is not None and first < end:
+        if first is not None and first < end + settle_lag_ms:
             result.judged("funding.publication", product)
             early_final.append(start)
         elif first is not None and first <= deadline:
@@ -305,8 +309,8 @@ def _publication(result, product, starts, polls, allowed_lag_ms):
             unknown.append(start)
     if early_final:
         result.findings.append(Finding(DISCREPANCY, "funding.publication", product,
-                                       "{} periods marked definitive by a response taken before they ended (contradictory)".format(
-                                           len(early_final)), first_start_ms=early_final[0], count=len(early_final)))
+                                       "{} periods marked definitive by a response taken before end + settle_lag_ms (the adapter uses "
+                                       "a smaller settle than the validator, or the response is contradictory)".format(len(early_final)), first_start_ms=early_final[0], count=len(early_final)))
     if late:
         result.findings.append(Finding(DISCREPANCY, "funding.publication", product,
                                        "{} periods still not definitive in a response taken more than {} ms after their end".format(

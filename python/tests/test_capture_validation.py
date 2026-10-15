@@ -52,7 +52,7 @@ def without(polls, start, until):
 
 
 def run_funding(rows=None, **kw):
-    args = dict(references=REFS, responses=hourly_polls())
+    args = dict(references=REFS, responses=hourly_polls(), settle_lag_ms=0)  # fixtures publish 60 s after the end
     args.update(kw)
     return cv.validate_funding(full_funding() if rows is None else rows, T0, T1, XBT, **args)
 
@@ -198,14 +198,35 @@ class FundingTests(unittest.TestCase):
         self.assertEqual(sorted((f["kind"], f["count"]) for f in found), [(cv.ABSENT, 5), (cv.DISCREPANCY, 1)])
 
     def test_settle_lag_moves_the_deadline_and_a_perfect_feed_stays_clean(self):
-        result = run_funding(settle_lag_ms=120 * 60_000)  # finality inferred 2 h after the end (#167-style)
-        self.assertEqual(result.findings, [])
-        polls = without(hourly_polls(), T0, T0 + 5 * H)
-        found = [f for f in run_funding(responses=polls, settle_lag_ms=120 * 60_000).findings if f["check"] == "funding.publication"]
-        self.assertEqual([f["kind"] for f in found], [cv.DISCREPANCY])  # the 4 h poll is past end + 2 h + 1 h and lacks it
-        again = [f for f in run_funding(responses=without(hourly_polls(), T0, T0 + 3 * H + 30 * 60_000), settle_lag_ms=120 * 60_000).findings
-                 if f["check"] == "funding.publication"]
-        self.assertEqual([f["kind"] for f in again], [cv.ABSENT])  # no poll past the deadline lacks it: not measurable
+        settle = 60 * 60_000  # finality inferred 1 h after the end (#167-style); polls become definitive 1 h + 60 s after it
+        fresh = lambda: hourly_polls(delay=H + 60_000)
+        self.assertEqual(run_funding(responses=fresh(), settle_lag_ms=settle).findings, [])
+        late = [f for f in run_funding(responses=without(fresh(), T0, T0 + 5 * H + 30 * 60_000), settle_lag_ms=settle).findings
+                if f["check"] == "funding.publication"]
+        self.assertEqual([f["kind"] for f in late], [cv.DISCREPANCY])  # polls past end + 1 h + 1 h still lack the period
+        near = [f for f in run_funding(responses=without(fresh(), T0, T0 + 2 * H + 30 * 60_000), settle_lag_ms=settle).findings
+                if f["check"] == "funding.publication"]
+        self.assertEqual([f["kind"] for f in near], [cv.ABSENT])  # no poll past the deadline lacks it: not measurable
+
+    def test_final_starts_earlier_than_the_validator_settle_is_a_finding(self):
+        # fixture polls mark periods definitive 60 s after the end: an adapter with a 10 min settle would not do that
+        found = [f for f in run_funding(settle_lag_ms=600_000).findings if f["check"] == "funding.publication"]
+        self.assertEqual([(f["kind"], f["count"]) for f in found], [(cv.DISCREPANCY, 6)])
+        polls = hourly_polls(delay=11 * 60_000)
+        self.assertEqual(run_funding(responses=polls, settle_lag_ms=600_000).findings, [])
+
+    def test_a_larger_adapter_settle_than_the_validator_fails_closed(self):
+        polls = hourly_polls(delay=2 * H)  # the adapter only calls periods final 2 h after the end
+        found = [f for f in run_funding(responses=polls, settle_lag_ms=600_000).findings if f["check"] == "funding.publication"]
+        self.assertTrue(found)  # never a clean pass on a settle the validator does not know about
+        self.assertNotIn(cv.DISCREPANCY, [f["kind"] for f in run_funding(responses=polls, settle_lag_ms=cv.HOUR_MS).findings
+                                           if f["check"] == "funding.publication"])
+
+    def test_lag_allowances_are_capped(self):
+        for kw in ({"settle_lag_ms": cv.MAX_SETTLE_LAG_MS + 1}, {"max_lag_ms": cv.MAX_PUBLICATION_LAG_MS + 1}, {"max_lag_ms": -1}):
+            with self.assertRaises(ValueError):
+                cv.validate_funding([], T0, T1, XBT, **kw)
+        cv.validate_funding([], T0, T1, XBT, settle_lag_ms=cv.MAX_SETTLE_LAG_MS, max_lag_ms=cv.MAX_PUBLICATION_LAG_MS)
 
     def test_settle_lag_is_declared_and_validated(self):
         report = cv.build_report(ReportTests.SAMPLE, [run_funding(settle_lag_ms=0)], ("funding",))
@@ -527,7 +548,7 @@ class ReportTests(unittest.TestCase):
         self.assertEqual({f["product"] for f in report["findings"]}, {"PF_ETHUSD"})
 
     def test_partial_range_cannot_read_clean(self):
-        short = cv.validate_funding(full_funding()[:2], T0, T0 + 2 * H, XBT, references=REFS, responses=hourly_polls())
+        short = cv.validate_funding(full_funding()[:2], T0, T0 + 2 * H, XBT, references=REFS, responses=hourly_polls(), settle_lag_ms=0)
         self.assertEqual(short.findings, [])  # clean over its own 2 h
         report = cv.build_report(self.SAMPLE, [short, self.quotes_result()], ("funding", "quotes"))
         self.assertEqual(report["fitness"], "bloqueada")
