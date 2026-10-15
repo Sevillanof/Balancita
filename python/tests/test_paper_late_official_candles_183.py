@@ -16,11 +16,14 @@ What is shown at the ingestor (this file, ``TestLateCandlesAtTheIngestor``):
 
 What is shown together with the evaluator, the runner and the portfolio (``TestLateCandlesThroughTheSession``): see that class."""
 
+import contextlib
 import os
 import shutil
 import tempfile
 import unittest
+from unittest import mock
 
+from balancita_engine import paper_live_ingest as ING
 from balancita_engine import replay_specs as RS
 from balancita_engine.paper_live_ingest import Ingestor, SourceReader
 from live_world import FIRST_DECISION, LOAD_START, World
@@ -246,6 +249,14 @@ class LateWorld(World):
             self.recovered = True
 
 
+_real_candle_event = ING._candle_event
+
+
+def naive_candle_event(row):
+    """What the ingestor would do if it ignored ``known_at``: the candle enters at the close of its own minute."""
+    return _real_candle_event(dict(row, known_at=0))
+
+
 def instants():
     out = [t for t in TIMES if t < HOLE_FROM - 10 * MIN]
     t = HOLE_FROM - 10 * MIN
@@ -266,15 +277,17 @@ class TestLateCandlesThroughTheSession(unittest.TestCase):
         strategies, _ = RS.load_frozen()
         cls.strategies = strategies
         cls.runs = {}
-        for name, recover in (("late", True), ("control", False)):
+        for name, recover, naive in (("late", True, False), ("control", False, False), ("naive", True, True)):
             os.makedirs(os.path.join(cls.root, "w-" + name))
             world = LateWorld(os.path.join(cls.root, "w-" + name), recover=recover)
             world.release_until(LOAD_START)
             directory = os.path.join(cls.root, "s-" + name)
-            session = new_session(world, directory, strategies)
-            for now in instants():
-                world.release_until(now)
-                session.step(now)
+            # "naive" is the counterfactual: the same recovered candles stamped at the close of their own bucket (known_at ignored)
+            with mock.patch.object(ING, "_candle_event", naive_candle_event) if naive else contextlib.nullcontext():
+                session = new_session(world, directory, strategies)
+                for now in instants():
+                    world.release_until(now)
+                    session.step(now)
             cls.runs[name] = (world, directory, session)
 
     @classmethod
@@ -309,11 +322,24 @@ class TestLateCandlesThroughTheSession(unittest.TestCase):
                             if e["kind"] == "event_accepted" and e["data"]["event"]["kind"] == "cycle"]
         self.assertEqual(cycles(late), cycles(control))                              # no decision cycle is added or moved by the late data
 
+    def test_the_case_has_a_concrete_opportunity_that_ignoring_known_at_would_have_executed(self):
+        """Equal empty orders would prove little. The counterfactual run (known_at ignored) makes retroactive decisions inside the
+        outage and the order book changes: the protection is what keeps them out of the real run."""
+        late, control, naive = (self.runs[k][2] for k in ("late", "control", "naive"))
+        decisions = lambda s: len([e for e in s.runner.journal.entries if e["kind"] == "decision"])
+        self.assertEqual(decisions(late), decisions(control))
+        self.assertGreater(decisions(naive), decisions(control))                      # decisions on candles of minutes already over
+        self.assertGreater(len(naive.runner.orders()), len(control.runner.orders()))   # and orders that the real run never has
+        self.assertEqual(len(late.runner.orders()), len(control.runner.orders()))
+        self.assertNotEqual(record(naive, 0)["orders"], record(control, 0)["orders"])
+
     def test_a_late_candle_does_not_refresh_the_quote(self):
         late, control = self.runs["late"][2], self.runs["control"][2]
         self.assertEqual(late.runner.quote_t_ms, control.runner.quote_t_ms)
 
-    def test_a_restart_after_the_recovery_does_not_repeat_any_effect(self):
+    def test_a_simulated_death_after_the_recovery_does_not_repeat_any_effect(self):
+        """What runs: the session is abandoned between steps (runner, reader and funding closed without a stop, only the lock goes)
+        and recovered from disk at the same instant. It is a simulated death at a step boundary, not a SIGKILL of a process."""
         world, directory, session = self.runs["late"]
         before = record(session, 0)
         events_before = len(session.runner.journal.entries)
