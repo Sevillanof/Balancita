@@ -55,6 +55,16 @@ estrategias congeladas sin cambios, cartera etiquetada experimental, sin proceso
 Antes de proponerla hace falta: #182 integrado, #184 verificado, #186 con verificación independiente y la autorización separada de
 Fran con fuente, productos, intervalo y condiciones.
 
+## Monitoreo de recursos (opcional, apagado por defecto)
+
+Si la configuración trae `resource_limits`, el proceso mide cada `check_every_steps` pasos (30 por defecto, y en el primer paso) el tamaño
+del directorio de la sesión y su memoria residente. Claves aceptadas: `disk_warn_bytes`, `disk_stop_bytes`, `memory_warn_bytes`,
+`memory_stop_bytes` (enteros positivos, aviso < parada, al menos una). Un aviso se registra una vez por recurso; una parada pide la
+misma parada ordenada que SIGTERM (informe con `stop_reason`, estado final STOPPED, salida 4). Los límites son inclusivos (valor igual al límite ya cuenta). Si la medición falla, o una carpeta del directorio no se puede leer, también para en
+orden (nunca cuenta 0 bytes). Si un SIGTERM llegó en el mismo paso, la parada igual queda registrada con su `stop_reason` y la salida es 4. Las lecturas y los eventos van al `heartbeat.json` y al `report.json` (`resources`). Sin `resource_limits` no se mide ni se escribe
+nada y el digest de la configuración no cambia. **No hay valores aprobados**: los números de las Issues (disco 100/150 MB, memoria
+400/600 MB) siguen siendo propuestas diferidas; el código solo da el mecanismo. Pruebas: `python/tests/test_paper_live_resources_185.py`.
+
 ## Límites
 
 - No hay reloj de pared ni fuente real (rechazados); el reloj simulado avanza por paso.

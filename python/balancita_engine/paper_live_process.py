@@ -22,6 +22,12 @@ What this module refuses, on purpose, while the real-session GATE is NO-GO (deci
   divergence is never taken up again by this module on its own;
 * a restart after an orderly stop (``session_stopped``): a stopped session is over.
 
+Resource limits (``resource_limits`` in the configuration, optional and OFF unless the configuration names them): the process measures the
+size of the session directory and its own resident memory every ``check_every_steps`` steps, writes the readings and every warning
+to the heartbeat, and when a ``*_stop_bytes`` limit is reached it stops IN ORDER (the same terminal stop as a SIGTERM, with
+``stop_reason`` in the report and exit status 4). No value is approved or defaulted: Fran has not decided any (the numbers in the
+Issues are proposals), so a configuration without ``resource_limits`` behaves exactly as before.
+
 Open positions when the process stops are not touched (D-186-1): while it is down nobody evaluates their stops or targets. The
 report lists them so the operator sees what was left open. No persistent process is started by this module; ``run`` ends when
 it is told to stop, when it has done ``max_steps`` or when the decision window is over.
@@ -61,12 +67,15 @@ FRESH_MS = 600_000                               # the newest warm-up candle may
 
 INIT, WARMUP, LIVE, STOPPING, STOPPED_PHASE, HALTED, REFUSED_PHASE = "INIT", "WARMUP", "LIVE", "STOPPING", "STOPPED", "HALTED", "REFUSED"
 FINAL_PHASES = (STOPPED_PHASE, HALTED, REFUSED_PHASE)
-EXIT_OK, EXIT_REFUSED, EXIT_HALTED = 0, 2, 3
+EXIT_OK, EXIT_REFUSED, EXIT_HALTED, EXIT_RESOURCE_STOP = 0, 2, 3, 4
 
 DEFAULTS = {"source_id": SYNTHETIC_SOURCE, "decide_until_ms": None, "max_quote_gap_ms": 15_000, "block_stale_entries": True,
             "funding_mode": LI.SYNTHETIC_FUNDING, "on_funding_divergence": "halt", "ingest_kw": {}, "evaluator_kw": {},
             "strategies": "frozen", "capital_policy": CAPITAL_POLICY, "step_interval_ms": 1_000, "min_free_bytes": 1 << 30, "warmup_minutes": None}
 REQUIRED = ("schema", "products", "decide_from_ms")
+OPTIONAL = ("resource_limits",)                  # absent from DEFAULTS on purpose: a configuration without it keeps its digest
+RESOURCE_KEYS = ("disk_warn_bytes", "disk_stop_bytes", "memory_warn_bytes", "memory_stop_bytes")
+DEFAULT_CHECK_EVERY_STEPS = 30
 
 
 class ProcessError(Exception):
@@ -90,7 +99,7 @@ def load_config(path):
 def validate_config(raw):
     if not isinstance(raw, dict):
         raise ProcessError("config_invalid", "not an object")
-    unknown = sorted(set(raw) - set(DEFAULTS) - set(REQUIRED))
+    unknown = sorted(set(raw) - set(DEFAULTS) - set(REQUIRED) - set(OPTIONAL))
     if unknown:
         raise ProcessError("config_invalid", "unknown keys: " + ", ".join(unknown))
     missing = [k for k in REQUIRED if k not in raw]
@@ -125,7 +134,30 @@ def validate_config(raw):
         raise ProcessError("config_invalid", "strategies: only the frozen set exists")
     if config["capital_policy"] != CAPITAL_POLICY:
         raise ProcessError("config_invalid", "capital_policy: the sizing is the ADR's, a session cannot change it")
+    if "resource_limits" in config:
+        config["resource_limits"] = _validate_resource_limits(config["resource_limits"])
     return dict(config, digest=stable_hash({k: v for k, v in config.items() if k != "digest"})[:20])
+
+
+def _validate_resource_limits(raw):
+    """Named limits only, positive integers, a warning below its stop, at least one limit; nothing is defaulted but the cadence."""
+    if not isinstance(raw, dict):
+        raise ProcessError("config_invalid", "resource_limits: not an object")
+    unknown = sorted(set(raw) - set(RESOURCE_KEYS) - {"check_every_steps"})
+    if unknown:
+        raise ProcessError("config_invalid", "resource_limits: unknown keys: " + ", ".join(unknown))
+    limits = {k: raw[k] for k in RESOURCE_KEYS if k in raw}
+    if not limits:
+        raise ProcessError("config_invalid", "resource_limits: no limit named")
+    every = raw.get("check_every_steps", DEFAULT_CHECK_EVERY_STEPS)
+    for key, value in list(limits.items()) + [("check_every_steps", every)]:
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+            raise ProcessError("config_invalid", "resource_limits." + key)
+    for resource in ("disk", "memory"):
+        warn, stop = limits.get(resource + "_warn_bytes"), limits.get(resource + "_stop_bytes")
+        if warn is not None and stop is not None and warn >= stop:
+            raise ProcessError("config_invalid", "resource_limits: {}_warn_bytes must be below {}_stop_bytes".format(resource, resource))
+    return dict(limits, check_every_steps=every)
 
 
 def runner_config_of(config):
@@ -221,9 +253,13 @@ class Supervisor(object):
     """Starts, runs and ends one session. ``clock()`` returns the observation time in ms; ``sleep(seconds)`` waits between steps;
     ``tick(now)`` is called before each step (a test releases the invented market there)."""
 
-    def __init__(self, config, directory, source_path, *, clock, sleep=lambda seconds: None, tick=lambda now: None, strategies=None):
+    def __init__(self, config, directory, source_path, *, clock, sleep=lambda seconds: None, tick=lambda now: None, strategies=None,
+                 resources=None):
         self.config, self.directory, self.source_path = config, directory, source_path
         self.clock, self.sleep, self.tick = clock, sleep, tick
+        self.resources = resources or read_resources           # ``resources(directory) -> {"disk_bytes", "memory_bytes"}``; injected in tests
+        self.resource_events, self.last_resources, self.stop_reason = [], None, None
+        self._warned = set()
         self.strategies = strategies
         self.session = None
         self.stop_requested = False
@@ -316,6 +352,40 @@ class Supervisor(object):
         """Only sets a flag (safe in a signal handler): the loop stops after the step it is in."""
         self.stop_requested, self.stop_signal = True, signum
 
+    # ---- resources -------------------------------------------------------------------------------------------
+    def _check_resources(self, now, steps):
+        """Every ``check_every_steps`` steps (and on the first): measure, record, warn once per level and, at a stop limit, ask for the
+        same orderly stop as a SIGTERM. A measurement that fails is a reason to stop in order too: a limit that cannot be checked is
+        not a limit that holds."""
+        limits = self.config.get("resource_limits")
+        if not limits or (steps != 1 and steps % limits["check_every_steps"]):
+            return
+        try:
+            reading = self.resources(self.directory)
+        except (OSError, ValueError) as error:
+            self._resource_event(now, "stop", "measurement", None, None, "resources could not be measured: " + repr(error))
+            return
+        self.last_resources = dict(reading, observed_now_ms=now)
+        for resource in ("disk", "memory"):
+            value = reading.get(resource + "_bytes")
+            stop, warn = limits.get(resource + "_stop_bytes"), limits.get(resource + "_warn_bytes")
+            if value is None:
+                continue
+            if stop is not None and value >= stop:
+                self._resource_event(now, "stop", resource, value, stop, "{} {} bytes reached the stop limit {}".format(resource, value, stop))
+            elif warn is not None and value >= warn and resource not in self._warned:
+                self._warned.add(resource)
+                self._resource_event(now, "warning", resource, value, warn, "{} {} bytes reached the warning limit {}".format(resource, value, warn))
+
+    def _resource_event(self, now, kind, resource, value, limit, detail):
+        self.resource_events.append({"kind": kind, "resource": resource, "value_bytes": value, "limit_bytes": limit,
+                                     "observed_now_ms": now, "detail": detail})
+        if kind == "stop":
+            # The limit is always on record (and the exit status is 4) even if a SIGTERM got there first in the same step.
+            self.stop_reason = self.stop_reason or "resource_limit:" + resource
+            if not self.stop_requested:
+                self.request_stop(None)
+
     # ---- run -------------------------------------------------------------------------------------------------
     def run(self, max_steps=None):
         """Steps until told to stop, until ``max_steps`` or until the decision window is over. Returns the exit code."""
@@ -331,12 +401,14 @@ class Supervisor(object):
                 return self._halt(now, repr(error))
             steps += 1
             self.phase = phase_of(self.session)
+            self._check_resources(now, steps)
             try:
                 self._beat(now, state)
             except OSError as error:                 # the supervisor cannot even say it is alive: that is a halt too
                 return self._halt(now, "heartbeat: " + repr(error))
             self.sleep(self.config["step_interval_ms"] / 1000.0)
-        return self.end()
+        code = self.end()
+        return EXIT_RESOURCE_STOP if code == EXIT_OK and self.stop_reason else code
 
     def end(self):
         """Orderly end (decision D-186-1): pending orders are cancelled with their own reason, open positions are left as they are,
@@ -390,11 +462,14 @@ class Supervisor(object):
     # ---- files -----------------------------------------------------------------------------------------------
     def _beat(self, now, state):
         session = self.session
-        _write_json(os.path.join(self.directory, HEARTBEAT_FILE), {
+        beat = {
             "schema": HEARTBEAT_SCHEMA, "session_id": session.identity["session_id"], "config_digest": self.config["digest"],
             "phase": self.phase, "pid": os.getpid(), "observed_now_ms": now, "steps": session.stats["steps"],
             "ingest_state": state, "runner_status": session.runner.status, "halted": session.halted,
-            "pending_orders": len(session.runner.executor.pending), "open_positions": session.runner.portfolio.snapshot()["open_positions"]})
+            "pending_orders": len(session.runner.executor.pending), "open_positions": session.runner.portfolio.snapshot()["open_positions"]}
+        if self.config.get("resource_limits"):
+            beat["resources"] = {"last": self.last_resources, "events": self.resource_events}
+        _write_json(os.path.join(self.directory, HEARTBEAT_FILE), beat)
 
     def _finish(self, now, halted=None):
         session = self.session
@@ -407,12 +482,40 @@ class Supervisor(object):
                 "pending_at_end": len(session.runner.executor.pending),
                 "capital_policy": self.config["capital_policy"], "policy_status": "experimental", "evidence_class": "not_forward_evidence",
                 "stop_signal": self.stop_signal}
+        if self.config.get("resource_limits"):
+            body["resources"] = {"last": self.last_resources, "events": self.resource_events, "stop_reason": self.stop_reason}
         if self.config["funding_mode"] == LI.OBSERVED_FUNDING:
             body["funding"] = session.funding_report()
         _write_json(os.path.join(self.directory, REPORT_FILE), body)
         self._beat(now, None)
         self._close()
         return body
+
+
+def read_resources(directory):
+    """Bytes in the session directory (every file, the runner's journals included) and the resident memory of this process now (Linux:
+    ``/proc/self/statm``; elsewhere the peak, which only goes up and so stops sooner, never later)."""
+    disk = 0
+
+    def unreadable(error):                                   # os.walk would skip it and count 0 bytes: that is not a measurement
+        raise error
+    for root, _dirs, names in os.walk(directory, onerror=unreadable):
+        for name in names:
+            try:
+                disk += os.lstat(os.path.join(root, name)).st_size
+            except FileNotFoundError:                        # a temporary file replaced between the listing and the stat
+                continue
+    return {"disk_bytes": disk, "memory_bytes": _resident_bytes()}
+
+
+def _resident_bytes():
+    try:
+        with open("/proc/self/statm", encoding="ascii") as handle:
+            return int(handle.read().split()[1]) * os.sysconf("SC_PAGE_SIZE")
+    except (OSError, ValueError, IndexError):
+        import resource
+        peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        return peak if sys.platform == "darwin" else peak * 1024
 
 
 def _write_json(path, body):
@@ -435,7 +538,7 @@ def _read_json(path):
 
 # ---- command line ------------------------------------------------------------------------------------------------
 def main(argv=None, *, tick=lambda now: None):
-    """``preflight`` and ``run`` on the simulated clock. Exit status: 0 ok, 2 refused (no file was written), 3 halted."""
+    """``preflight`` and ``run`` on the simulated clock. Exit status: 0 ok, 2 refused (no file was written), 3 halted, 4 stopped in order by a resource limit."""
     parser = argparse.ArgumentParser(prog="paper_live_process", description="Offline paper session lifecycle (synthetic source only).")
     parser.add_argument("command", choices=("preflight", "run"))
     parser.add_argument("--config", required=True)
