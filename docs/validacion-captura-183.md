@@ -91,6 +91,8 @@ Herramienta aparte: `python/balancita_engine/capture_timing_sample.py` (`capture
 
 - Ventana fija `[2026-10-15T06:00:00Z, 2026-10-15T12:00:00Z)` y productos `PF_XBTUSD` y `PF_ETHUSD`, como constantes del módulo. La línea de comandos solo recibe `--db`; `build_sample` rechaza otra ventana u otros productos.
 - Solo tiempos y contadores. Un autorizador de SQLite deniega la lectura de cualquier columna que no esté en `ALLOWED_COLUMNS` (ningún precio, tasa, volumen, bid/ask, tamaño ni cuerpo `raw_*` / `*_json`) y toda escritura, y la base se abre con `mode=ro` y `query_only`.
+- Filtros de recepción (revisión de D en #207): cada ticker debe tener tanto el tiempo del evento como el de recepción dentro de la ventana, y cada respuesta de funding debe haberse recibido dentro de ella (las respuestas posteriores repiten historia y quedan fuera). Un evento registrado después de las 12:00Z no entra. El rango sobre la recepción permite usar el índice `(product_id, received_at, seq)`.
+- Plazo: la corrida debe hacerse antes de 2026-10-16T06:00Z; desde ahí la retención de 24 h del ticker empieza a borrar la ventana.
 - Presupuesto: se cuenta con `COUNT(*)` antes de leer filas; si el total pasa de 300 000 se detiene sin leer nada más. Cada consulta tiene un límite de 60 s. Una sola corrida.
 - Mide nuestra recepción (cobertura, silencios, orden de `seq`, demora entre el evento y nuestro registro, cota de desfase de reloj con `server_time` del funding). No mide cuándo publica Kraken ni valida valores. Los límites de silencio de 15/25/45 s solo se cuentan; ninguno se adopta.
 - Sale un JSON agregado con versión, ventana, filtros efectivos y huella SHA-256; si una guarda detiene la corrida, `stopped` dice por qué y el código de salida es 2.

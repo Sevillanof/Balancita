@@ -33,6 +33,7 @@ CREATE TABLE paper_futures_candle_revisions(candle_id TEXT NOT NULL, interval_ms
 CREATE TABLE paper_futures_market_events(event_id TEXT PRIMARY KEY, feed TEXT NOT NULL, product_id TEXT NOT NULL,
   epoch INTEGER NOT NULL, seq INTEGER NOT NULL, event_time INTEGER NOT NULL, received_at INTEGER NOT NULL,
   raw_json TEXT NOT NULL, normalized_json TEXT NOT NULL) STRICT;
+CREATE INDEX paper_futures_market_received ON paper_futures_market_events(product_id, received_at, seq);
 CREATE TABLE paper_futures_data_gaps(gap_id TEXT PRIMARY KEY, feed TEXT NOT NULL, product_id TEXT NOT NULL,
   epoch INTEGER NOT NULL, detected_at INTEGER NOT NULL, reason TEXT NOT NULL) STRICT;
 """
@@ -65,6 +66,8 @@ def make_db(path):
     tick(XBT, 1, 100, W1, W1 + 5)
     tick(XBT, 1, 101, W0 + 10, W0 + 10, feed="trade")
     tick(SOL, 1, 1, W0 + 10, W0 + 10)
+    tick(XBT, 1, 102, W1 - 100, W1 + 50)  # event inside the window, recorded after it: left out
+    tick(XBT, 1, 103, W0 - 50, W0 + 50)  # recorded inside the window, event before it: left out
 
     def candle(product, bucket, revision, known_at, closed):
         c.execute("INSERT INTO paper_futures_candle_revisions VALUES(?,?,?,?,?,?,?,?,?,?)",
@@ -91,6 +94,8 @@ def make_db(path):
     funding(XBT, "x1", W0 + 3_600_000, W0 + 3_700_000, "2026-10-15T07:01:40.500Z")
     funding(XBT, "x2", W0 + 7_200_000, W0 + 7_300_000, "not a timestamp")
     funding(ETH, "y1", W0, W0 + 3_650_000, "2026-10-15T07:00:50Z")
+    funding(XBT, "late", W0 + 10_800_000, W1 + 1_000, "2026-10-15T12:00:01Z")  # history repeated after the window
+    funding(XBT, "late2", W0 + 14_400_000, W1 + 84_600_000, "2026-10-16T11:30:00Z")  # a response 23.5 h after
     funding(XBT, "xo", W0 - 3_600_000, W0 + 100, "2026-10-15T06:00:00Z")  # period before the window
     funding(XBT, "xe", W1, W1 + 100, "2026-10-15T12:00:00Z")  # period starting at the end: excluded
 
@@ -170,6 +175,20 @@ class TimingSampleTests(unittest.TestCase):
         self.assertEqual(out[XBT]["reconnect"]["count"], 1)
         self.assertEqual(out[ETH]["seq_gap"]["count"], 1)
 
+    def test_late_responses_and_late_receipts_are_outside_the_window(self):
+        out = self.sample()
+        self.assertEqual(out["sections"]["funding"][XBT]["max_received_at"], W0 + 7_300_000)
+        self.assertEqual(out["sections"]["funding"][XBT]["responses"], 2)
+        self.assertLess(out["sections"]["ticker"][XBT]["max_received_at"], W1)
+        self.assertGreaterEqual(out["sections"]["ticker"][XBT]["min_received_at"], W0)
+
+    def test_ticker_query_uses_the_received_at_index(self):
+        conn = cts._open_readonly(self.db)
+        plan = " ".join(str(r) for r in conn.execute("EXPLAIN QUERY PLAN " + cts.SQL["ticker"][1]).fetchall())
+        conn.close()
+        self.assertIn("paper_futures_market_received", plan)
+        self.assertNotIn("SCAN paper_futures_market_events", plan.replace("USING INDEX", ""))
+
     def test_no_market_value_reaches_the_output(self):
         text = json.dumps(self.sample())
         for forbidden in (SENTINEL_PRICE, SENTINEL_RATE, SENTINEL_BODY, SOL):
@@ -188,7 +207,7 @@ class TimingSampleTests(unittest.TestCase):
                     "SELECT 1 FROM sqlite_master"):
             with self.assertRaises(sqlite3.DatabaseError, msg=sql):
                 conn.execute(sql).fetchall()
-        self.assertEqual(conn.execute("SELECT COUNT(*) FROM paper_futures_market_events").fetchone()[0], 11)
+        self.assertEqual(conn.execute("SELECT COUNT(*) FROM paper_futures_market_events").fetchone()[0], 13)
         conn.close()
 
     def test_authorizer_denies_writes_and_pragmas(self):

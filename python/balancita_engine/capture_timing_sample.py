@@ -10,6 +10,11 @@ This is not part of the validators of #188, which keep rejecting every range fro
 reception (coverage, silences, order, delay between the event and our record, clock offset bounded with the funding
 ``server_time``); it does not measure when Kraken publishes, and it does not validate values.
 
+Both the event time and the receipt time of every ticker row, and the receipt time of every funding response, must fall
+inside the window: later responses repeat history and are outside what was authorized (D-207-01), and a receipt range
+lets the ticker query use the (product_id, received_at, seq) index (D-207-02). An event recorded after 12:00Z is left out.
+The run must happen before 2026-10-16T06:00Z: from then on the 24 h ticker retention starts deleting the window (D-207-03).
+
 Usage (stdlib only; Python 3.9 is enough):
     python3 -m balancita_engine.capture_timing_sample --db <capture.sqlite> > out.json
 """
@@ -56,10 +61,12 @@ _CANDLE_PRODUCT = "substr(candle_id, 1, instr(candle_id, ':') - 1)"
 SQL = {
     "ticker": (
         "SELECT COUNT(*) FROM paper_futures_market_events WHERE feed = 'ticker' AND product_id IN (%s) "
-        "AND event_time >= %d AND event_time < %d" % (_IN, _W0, _W1),
+        "AND event_time >= %d AND event_time < %d AND received_at >= %d AND received_at < %d"
+        % (_IN, _W0, _W1, _W0, _W1),
         "SELECT product_id, epoch, seq, event_time, received_at FROM paper_futures_market_events "
-        "WHERE feed = 'ticker' AND product_id IN (%s) AND event_time >= %d AND event_time < %d "
-        "ORDER BY product_id, received_at, seq" % (_IN, _W0, _W1),
+        "WHERE feed = 'ticker' AND product_id IN (%s) AND received_at >= %d AND received_at < %d "
+        "AND event_time >= %d AND event_time < %d ORDER BY product_id, received_at, seq"
+        % (_IN, _W0, _W1, _W0, _W1),
     ),
     "candles_5m": (
         "SELECT COUNT(*) FROM paper_futures_candle_revisions WHERE %s IN (%s) AND interval_ms = %d "
@@ -70,12 +77,12 @@ SQL = {
     ),
     "funding": (
         "SELECT COUNT(*) FROM paper_futures_funding_periods p JOIN paper_futures_funding_responses r "
-        "ON r.sha256 = p.response_sha256 WHERE p.product_id IN (%s) AND p.start_ms >= %d AND p.start_ms < %d"
-        % (_IN, _W0, _W1),
+        "ON r.sha256 = p.response_sha256 WHERE p.product_id IN (%s) AND p.start_ms >= %d AND p.start_ms < %d "
+        "AND r.received_at >= %d AND r.received_at < %d" % (_IN, _W0, _W1, _W0, _W1),
         "SELECT p.product_id, p.start_ms, p.end_ms, p.known_at, r.sha256, r.received_at, r.server_time "
         "FROM paper_futures_funding_periods p JOIN paper_futures_funding_responses r ON r.sha256 = p.response_sha256 "
-        "WHERE p.product_id IN (%s) AND p.start_ms >= %d AND p.start_ms < %d ORDER BY p.product_id, p.start_ms"
-        % (_IN, _W0, _W1),
+        "WHERE p.product_id IN (%s) AND p.start_ms >= %d AND p.start_ms < %d AND r.received_at >= %d "
+        "AND r.received_at < %d ORDER BY p.product_id, p.start_ms" % (_IN, _W0, _W1, _W0, _W1),
     ),
     "data_gaps": (
         "SELECT COUNT(*) FROM paper_futures_data_gaps WHERE product_id IN (%s) AND detected_at >= %d "
