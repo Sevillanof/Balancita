@@ -9,7 +9,7 @@ import unittest
 from unittest import mock
 
 from balancita_engine import paper_live_integration as LI
-from balancita_engine.paper_runner import REFUSED, RunnerError
+from balancita_engine.paper_runner import REFUSED, STOPPED, RunnerError
 from test_paper_safe_stop_186_session import Base, FULL, NOW, kinds
 from test_paper_live_integration import journal_clock, recover_session, BTC, ETH
 
@@ -64,6 +64,10 @@ class TestStopOrderlyInTheSession(Base):
         self.assertFalse(again.runner.executor.pending)
         self.assertEqual(again.comparable_state(), before)
         self.assertEqual(len(kinds(again, "operator_stop")), 1)
+        self.assertEqual(again.runner.status, STOPPED)                  # terminal, also after the recovery
+        with self.assertRaises(LI.IntegrationError) as caught:
+            again.step(NOW)
+        self.assertEqual(caught.exception.reason, "session_stopped")
 
     def test_a_stopped_session_does_not_step_and_asking_again_changes_nothing(self):
         world, directory, session = self.stopped()

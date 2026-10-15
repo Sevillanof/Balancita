@@ -27,7 +27,7 @@ import sqlite3
 from . import paper_live_evaluator as LE
 from .multi_signals import stable_hash
 from .paper_live_ingest import GAP_SAMPLE, SILENCE_SAMPLE, Ingestor, SourceReader
-from .paper_runner import PaperRunner, RunnerError, make_event
+from .paper_runner import STOPPED, PaperRunner, RunnerError, make_event
 from .paper_runner_store import CHECKPOINT_FILE as RUNNER_CHECKPOINT_FILE
 from .paper_runner_store import JOURNAL_FILE as RUNNER_JOURNAL_FILE
 from .paper_runner_store import DirectoryLock, FileRunnerJournal, StoreError, read_checkpoint
@@ -342,7 +342,7 @@ class LiveSession(object):
         checkpoint itself is not in this rule (its policy is decision D-186-2 of #186): the exception goes up as it always did."""
         if self.halted is not None:
             raise IntegrationError("session_halted", self.halted)
-        if self.stopped is not None:
+        if self.stopped is not None or self.runner.status == STOPPED:       # also a directory recovered from a stopped run
             raise IntegrationError("session_stopped", "the operator stopped this session")
         try:
             out = self.ingestor.poll(observed_now_ms)
