@@ -8,3 +8,8 @@ export function sectionForPath(pathname: string): AppSection {
   const path = pathname.replace(/\/+$/, '')
   return path === '/estrategias' ? 'estrategias' : 'terminal'
 }
+
+/** The decisions investigation: a page of the Terminal, not a tab of its own. */
+export function isInvestigationPath(pathname: string): boolean {
+  return pathname.replace(/\/+$/, '') === '/investigacion'
+}
