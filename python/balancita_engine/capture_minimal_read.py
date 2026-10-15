@@ -99,7 +99,8 @@ ALLOWED = {
     "2c": {_PERIODS: {"rowid", "product_id", "start_ms", "end_ms", "funding_rate", "known_at", "unit", "response_sha256"}},
     "2d_bound": {_RESPONSES: {"rowid", "received_at"}},
     "2d_meta": {_RESPONSES: {"rowid", "sha256", "received_at"}},
-    "2d_lookup": {_PERIODS: {"response_sha256", "product_id"}, _RESPONSES: {"sha256", "raw_response"}},
+    "2d_lookup": {_PERIODS: {"response_sha256", "product_id"}},
+    "2d_size": {_RESPONSES: {"sha256", "raw_response"}},
     "2d_body": {_RESPONSES: {"sha256", "raw_response"}},
 }
 
@@ -144,9 +145,9 @@ def _sql_bound(table, column):
 
 SQL_2D_PRODUCT = "SELECT product_id FROM %s WHERE response_sha256 = ? LIMIT 1" % _PERIODS
 SQL_2D_BODY = "SELECT raw_response FROM %s WHERE sha256 = ?" % _RESPONSES
-# product and size of one response in a single point read (primary keys on both tables)
-SQL_2D_LOOKUP = ("SELECT p.product_id, octet_length(r.raw_response) FROM %s p JOIN %s r ON r.sha256 = p.response_sha256 "
-                 "WHERE p.response_sha256 = ? LIMIT 1" % (_PERIODS, _RESPONSES))
+# product of one response (primary key of the periods table) and, for XBT/ETH only, the size of its body (primary key of responses)
+SQL_2D_PRODUCT = "SELECT product_id FROM %s WHERE response_sha256 = ? LIMIT 1" % _PERIODS
+SQL_2D_SIZE = "SELECT octet_length(raw_response) FROM %s WHERE sha256 = ?" % _RESPONSES
 
 
 class Stopped(Exception):
@@ -256,7 +257,7 @@ class Reads:
     the run is complete (D-212-04)."""
 
     def __init__(self):
-        self.count = {"2c_bound": 0, "2d_bound": 0, "2d_lookup": 0, "2d_body": 0}
+        self.count = {"2c_bound": 0, "2d_bound": 0, "2d_lookup": 0, "2d_size": 0, "2d_body": 0}
 
     def total(self):
         return sum(self.count.values())
@@ -334,7 +335,7 @@ def read_2c(guard, ledger, reads):
 
 def read_2d(guard, ledger, reads):
     """Responses of XBT/ETH received in the window. The stage's reads are counted together against the cap: the walk, the
-    searches, one lookup (product and size) per response received in the window, and one body read per XBT/ETH response."""
+    searches, one product read per response received in the window, and a size read and a body read per XBT/ETH response."""
     lo, hi, evidence = _span(guard, "2d_bound", _RESPONSES, "received_at", WINDOW_A[0], WINDOW_A[1], reads, "2d", CAPS["2d"], ledger)
     base = evidence["search_reads"]
     sql = _sql_2d_meta(CAPS["2d"] - base + 1)
@@ -350,14 +351,18 @@ def read_2d(guard, ledger, reads):
     _check_order(got, _RESPONSES, "received_at")
     targets, total = [], 0
     for _rowid, received_at, sha in inside:
-        row = guard.fetch("2d_lookup", SQL_2D_LOOKUP, (sha,))
+        row = guard.fetch("2d_lookup", SQL_2D_PRODUCT, (sha,))
         reads.count["2d_lookup"] += 1
         if len(row) != 1:
             raise Stopped("response_not_found", {"stage": "2d"})
         if row[0][0] in PRODUCTS:
+            size = guard.fetch("2d_size", SQL_2D_SIZE, (sha,))
+            reads.count["2d_size"] += 1
+            if len(size) != 1:
+                raise Stopped("response_not_found", {"stage": "2d"})
             targets.append((sha, received_at, row[0][0]))
-            total += int(row[0][1] or 0)
-    stage_reads = walked + base + len(inside) + len(targets)     # + one body read per target
+            total += int(size[0][0] or 0)
+    stage_reads = walked + base + len(inside) + 2 * len(targets)     # + one size read done and one body read to come per target
     ledger.add("2d", stage_reads, CAPS["2d"], plan, rows_returned=len(targets), bytes=total, **entry)
     if stage_reads > CAPS["2d"]:
         raise Stopped("row_budget", {"stage": "2d", "stage_reads": stage_reads, "cap": CAPS["2d"]})

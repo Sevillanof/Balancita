@@ -274,8 +274,9 @@ class BoundedWalkTests(Fixture):
         self.assertEqual(len(out), 50)                                       # only XBT responses
         self.assertEqual(entry["rows_walked"], 100)
         self.assertEqual(rd.count["2d_lookup"], 100)
+        self.assertEqual(rd.count["2d_size"], 50)
         self.assertEqual(rd.count["2d_body"], 50)
-        self.assertEqual(entry["rows"], 100 + entry["search_reads"] + 100 + 50)
+        self.assertEqual(entry["rows"], 100 + entry["search_reads"] + 100 + 50 + 50)
 
     def test_2d_stage_reads_over_the_cap_stop_before_any_body(self):
         self._responses(120, start=A0, step=60_000)
@@ -284,7 +285,7 @@ class BoundedWalkTests(Fixture):
                               ("h%05d" % i, A0 + i, m.BTC, A0 + i + 1, "1", A0 + i, "u"))
         self.conn.commit()
         old = m.CAPS["2d"]
-        m.CAPS["2d"] = 300                                                   # 120 walk + ~25 + 120 lookups + 120 bodies > 300
+        m.CAPS["2d"] = 300                                                   # 120 walk + ~25 + 120 products + 240 > 300
         self.addCleanup(m.CAPS.__setitem__, "2d", old)
         g, rd = self.guard(), m.Reads()
         with self.assertRaises(m.Stopped) as ctx:
