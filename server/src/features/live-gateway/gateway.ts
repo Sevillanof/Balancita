@@ -19,6 +19,12 @@ import {
   isActivityWindow,
   type ObservabilityActivity,
 } from './observability-activity.ts'
+import {
+  CandlesRequestError,
+  createObservabilityCandles,
+  type CandlesErrorCode,
+  type ObservabilityCandles,
+} from './observability-candles.ts'
 import { loadPinnedProducts } from '../kraken-futures/futures-products.ts'
 
 /** Synthetic stream id: the gateway has no engine run, only a market view. */
@@ -51,6 +57,8 @@ export interface LiveGatewayOptions {
   /** Read-only health of six components (B1). Absent: built from the paths above. */
   readonly observabilityHealth?: ObservabilityHealth
   readonly observabilityActivity?: ObservabilityActivity
+  /** Read-only stored candles of a bounded range (B6). Absent: built from `marketDbPath`. */
+  readonly observabilityCandles?: ObservabilityCandles
   /** Pinned products the Terminal may pick (default: the pinned list). */
   readonly products?: readonly string[]
   readonly allowedOrigins?: readonly string[]
@@ -337,6 +345,43 @@ export async function buildLiveGateway(
       if (product !== undefined && !products.includes(product))
         return reply.code(400).send({ error: { code: 'invalid_product' } })
       return observabilityActivity.report(window, product)
+    },
+  )
+  const observabilityCandles =
+    options.observabilityCandles ??
+    createObservabilityCandles({
+      products,
+      marketDbPath: options.marketDbPath,
+      clock,
+    })
+  app.get<{ Querystring: Record<string, string | string[] | undefined> }>(
+    '/api/observability/candles',
+    (request, reply) => {
+      const q = request.query
+      // A repeated parameter arrives as an array: ambiguous, so rejected.
+      const code: Record<string, CandlesErrorCode> = {
+        product: 'invalid_product',
+        interval: 'invalid_interval',
+        from: 'invalid_range',
+        to: 'invalid_range',
+        limit: 'invalid_limit',
+      }
+      for (const [name, error] of Object.entries(code))
+        if (Array.isArray(q[name]))
+          return reply.code(400).send({ error: { code: error } })
+      try {
+        return observabilityCandles.report({
+          product: String(q.product ?? ''),
+          interval: String(q.interval ?? ''),
+          from: q.from as string | undefined,
+          to: q.to as string | undefined,
+          limit: q.limit as string | undefined,
+        })
+      } catch (error) {
+        if (error instanceof CandlesRequestError)
+          return reply.code(400).send({ error: { code: error.code } })
+        throw error
+      }
     },
   )
   const qwenScores =
