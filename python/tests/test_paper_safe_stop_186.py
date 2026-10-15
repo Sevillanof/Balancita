@@ -253,6 +253,28 @@ print("finished", flush=True)
         self.assertEqual(self.fingerprint(rec), self.fingerprint(ref))
         self.assertEqual(rec.owed_interruptions, {})
 
+    def test_the_second_recovery_may_run_at_a_later_clock(self):
+        events = T.session()[:2]
+        at, later = T.CYCLE + 20 * T.MIN, T.CYCLE + 30 * T.MIN
+        path, r = self.fresh("later")
+        r.run(events)
+        self.die()
+        ref = self.recover(self.copy(path, "ref-later"), at)
+        victim = self.copy(path, "victim-later")
+        proc = self.start(self.RECOVER, victim, str(at), "after_journal", "1")
+        proc.communicate(timeout=60)
+        self.assertEqual(proc.returncode, -signal.SIGKILL)
+        rec = self.recover(victim, later)
+        # the cancellations carry the later clock, so the order ledger differs by design; the money and the book do not
+        self.assertEqual(len(rec.portfolio.trades), len(ref.portfolio.trades))
+        self.assertEqual(rec.executor.pending, ref.executor.pending)
+        self.assertEqual(sorted(rec.portfolio.positions), sorted(ref.portfolio.positions))
+        self.assertEqual(rec.owed_interruptions, {})
+        cancelled = [e["data"] for e in rec.journal.entries if e["kind"] == "order_cancelled"]
+        self.assertEqual(len(cancelled), 2)
+        self.assertEqual({c["reason"] for c in cancelled}, {"runner_interrupted"})
+        self.assertTrue(all(c["uncovered_to_ms"] == at for c in cancelled))    # the unobserved window is the original one
+
     def copy(self, path, name):
         target = os.path.join(self.dir, name)
         shutil.copytree(path, target, ignore=shutil.ignore_patterns("*.lock"))
