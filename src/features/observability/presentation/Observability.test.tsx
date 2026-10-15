@@ -143,6 +143,19 @@ describe('HealthIndicator (header)', () => {
     expect(screen.queryByText('Correcto')).toBeNull()
   })
 
+  it('treats a response that is not the documented contract as «sin datos», never healthy', async () => {
+    serve({ health: () => json({ schema: 'otra-cosa', components: [] }) })
+    render(<Indicator />)
+    const button = screen.getByTestId('health-indicator')
+    await waitFor(() => expect(button).toHaveAttribute('title'))
+    expect(button).toHaveTextContent('Salud: sin datos')
+    await userEvent.click(button)
+    expect(
+      await screen.findByText('No se pudo leer la salud'),
+    ).toBeInTheDocument()
+    expect(screen.queryByText('Correcto')).toBeNull()
+  })
+
   it('opens the inspector with problems first and the technical detail folded', async () => {
     serve({ health: () => json(healthDegraded) })
     render(<Indicator />)
@@ -484,6 +497,20 @@ describe('ObserverPanel (right column)', () => {
         'true',
       ),
     )
+  })
+
+  it('tells how many reasons the list holds when the backend cut it', async () => {
+    const cut = clone(activityQuiet) as any
+    cut.window = '3h'
+    cut.product = 'PF_XBTUSD'
+    cut.discards.truncated = true
+    cut.discards.distinct_reasons = 70
+    serve({ activity: () => json(cut) })
+    render(<Observer />)
+    const note = await screen.findByTestId('discards-more')
+    expect(note).toHaveTextContent('de 70')
+    expect(note).toHaveTextContent(`(${cut.discards.total})`)
+    expect(note).toHaveTextContent('los incluye todos')
   })
 
   it('lists the reasons as the engine wrote them, counts included', async () => {

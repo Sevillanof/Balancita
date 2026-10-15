@@ -254,18 +254,20 @@ class TestRealKillStopCrossedWhileDownQuotesOnly(StopCrossedWhileDownBase, unitt
 
 
 class TestRealKillStopCrossedWhileDownCoherentCandles(StopCrossedWhileDownBase, unittest.TestCase):
-    """The door of the candles (D-202-05): the candles tell the same story as the quotes. This pins what the runner does TODAY and
-    it is NOT an endorsement: the position leaves with the candle that closes at the recovery instant, at the stop's level (less
-    costs), which is exactly the question to Fran in #186 (``Pregunta para Fran (Sí/No)``: close at the first real price seen after
-    the restart instead of at the stop's level). When that decision changes the runner, this test has to change with it."""
+    """The door of the candles (D-202-05): the candles tell the same story as the quotes. BAL-DECISION-186-05/06 (#206, in main):
+    after a real interruption of the runner the first valid candle that closes at the end of the hole is evaluated against the
+    simulated OPENING of that candle (``stop_after_hole = gap_open``, the default), not against the stop's level. The position leaves
+    at that open (less the modeled cost), the same price the quotes door gives; it is a SIMULATED reference, not a fill."""
 
     COHERENT = True
 
-    def test_today_the_candle_of_the_downtime_closes_the_position_at_the_stop_level_when_the_recovery_ends(self):
+    def test_the_position_leaves_at_the_simulated_open_after_the_hole_not_at_the_stop_level(self):
         _, trade, recovery_ms = self.recovered_and_stepped_twice()
-        self.assertEqual(trade["exit_time_ms"], recovery_ms)
-        self.assertGreater(D(str(trade["exit_price"])), CROSSING)                        # not the price of any quote after the restart
-        self.assertLess(D(str(trade["exit_price"])), D(str(trade["stop_price"])))        # the stop's level less costs
+        self.assertEqual(trade["exit_reason"], "stop")
+        self.assertEqual(D(str(trade["exit_price"])), D("3399.8062"))              # the candle's open (3400.0) less the modeled cost
+        self.assertLess(D(str(trade["exit_price"])), D(str(trade["stop_price"])))  # and not the stop's level (above it, 3476.49)
+        self.assertLess(D(str(trade["exit_price"])), CROSSING)
+        self.assertGreaterEqual(trade["exit_time_ms"], recovery_ms)                # nothing is executed back in time
 
 
 class TestWallClockJumpsDuringAnOpenSilence(Base):

@@ -8,6 +8,7 @@ import {
 import { createKronosScores } from '../features/live-gateway/kronos-scores.ts'
 import { createObservabilityHealth } from '../features/live-gateway/observability-health.ts'
 import { createObservabilityActivity } from '../features/live-gateway/observability-activity.ts'
+import { createObservabilityDecisions } from '../features/live-gateway/observability-decisions.ts'
 import { loadPinnedProducts } from '../features/kraken-futures/futures-products.ts'
 import { serverConfigFrom } from '../platform/config.ts'
 
@@ -113,6 +114,12 @@ async function main(): Promise<void> {
         process.env.FUTURES_FORWARD_REGISTRATION_PATH || undefined,
       strategySpecsDir: process.env.FUTURES_STRATEGY_SPECS_DIR || undefined,
       forwardProducts: forwardProducts(process.env),
+    }),
+    // B3: verdict list and trace, same read-only sources.
+    observabilityDecisions: createObservabilityDecisions({
+      products: loadPinnedProducts().map((p) => p.productId),
+      verdictsDbPath: process.env.FUTURES_VERDICTS_DB_PATH || undefined,
+      decisionsDbPath: process.env.FUTURES_DECISIONS_DB_PATH || undefined,
     }),
     systemUsage: createSystemUsage({
       healthPath: process.env.DEV_HEALTH_FILE || undefined,
