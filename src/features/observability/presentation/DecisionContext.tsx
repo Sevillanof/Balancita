@@ -100,11 +100,15 @@ export default function DecisionContext({
   )
   const marker = useMemo<ContextMarker>(
     () => ({
-      text: `${action} · ${reasonCode}`,
+      text: `${action} · ${reasonCode}${
+        series && series.minutesAfterInMarker > 0
+          ? ` · vela con ${series.minutesAfterInMarker} min posteriores`
+          : ''
+      }`,
       tone:
         action === 'LONG' ? 'long' : action === 'SHORT' ? 'short' : 'neutral',
     }),
-    [action, reasonCode],
+    [action, reasonCode, series],
   )
 
   return (
@@ -161,6 +165,14 @@ export default function DecisionContext({
                 <li data-testid="context-truncated">
                   El rango se acortó por el límite de {report.limit} velas: se
                   muestran desde las {utcClock(report.fromMs)}.
+                </li>
+              )}
+              {series.decisionCandle && series.minutesAfterInMarker > 0 && (
+                <li data-testid="context-coarse-candle">
+                  La vela de {report.interval} de la decisión incluye{' '}
+                  {series.minutesAfterInMarker} min posteriores a las{' '}
+                  {utcMinute(bucketStartMs)}: no es solo información anterior a
+                  la decisión.
                 </li>
               )}
               {!series.decisionCandle && (

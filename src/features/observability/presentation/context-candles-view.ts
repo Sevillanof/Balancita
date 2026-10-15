@@ -57,6 +57,12 @@ export type ContextSeries = {
   /** Whether a candle exists at that bucket (the marker needs one). */
   decisionCandle: boolean
   afterCount: number
+  /**
+   * Minutes of the marked candle that come AFTER the decision's minute. Zero
+   * for 1 m candles; up to 4 for 5 m ones, where the candle holding the
+   * decision also holds later minutes. Those are not «before» information.
+   */
+  minutesAfterInMarker: number
 }
 
 /**
@@ -102,5 +108,9 @@ export function contextSeries(
     markerTime: bucket / 1000,
     decisionCandle: present.has(bucket),
     afterCount: candles.filter((c) => c.after).length,
+    minutesAfterInMarker: Math.max(
+      0,
+      Math.floor((bucket + step - (decisionBucketMs + 60_000)) / 60_000),
+    ),
   }
 }

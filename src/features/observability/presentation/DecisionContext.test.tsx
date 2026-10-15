@@ -118,6 +118,26 @@ describe('context range and series', () => {
     expect(series.candles[0].close).toBe(100.5)
   })
 
+  it('counts the minutes of the marked candle that come after the decision (D-157-01)', () => {
+    const asFive = (r: ReturnType<typeof decodeCandles>) => ({
+      ...r,
+      interval: '5m',
+      intervalMs: 300_000,
+    })
+    const report = decodeCandles(gaps)
+    // 1 m: the candle is the decision's minute, nothing after it inside it.
+    expect(contextSeries(report, BUCKET)!.minutesAfterInMarker).toBe(0)
+    // 5 m, decision on the first minute of the candle: 4 later minutes.
+    expect(contextSeries(asFive(report), BUCKET)!.minutesAfterInMarker).toBe(4)
+    // Decision on the 4th minute: 1 later minute. On the last one: none.
+    expect(
+      contextSeries(asFive(report), BUCKET + 3 * 60_000)!.minutesAfterInMarker,
+    ).toBe(1)
+    expect(
+      contextSeries(asFive(report), BUCKET + 4 * 60_000)!.minutesAfterInMarker,
+    ).toBe(0)
+  })
+
   it('has nothing to draw when the source is unavailable', () => {
     expect(contextSeries(decodeCandles(missing), BUCKET)).toBeNull()
   })
@@ -211,6 +231,31 @@ describe('DecisionContext', () => {
     expect(await screen.findByTestId('context-chart')).toBeInTheDocument()
     expect(calls).toHaveLength(2)
     expect(screen.getByText(/· 5m/)).toBeInTheDocument()
+  })
+
+  it('with 5 m candles it says the marked candle includes minutes after the decision', async () => {
+    const empty: any = clone(gaps)
+    empty.candles.count = 0
+    empty.candles.items = []
+    const five: any = clone(gaps)
+    five.interval = '5m'
+    five.interval_ms = 300_000
+    serve((url) =>
+      url.searchParams.get('interval') === '1m' ? json(empty) : json(five),
+    )
+    show()
+    expect(
+      await screen.findByTestId('context-coarse-candle'),
+    ).toHaveTextContent('incluye 4 min posteriores')
+    expect(drawn.marker.text).toContain('vela con 4 min posteriores')
+  })
+
+  it('with 1 m candles there is no such warning', async () => {
+    serve(() => json(gaps))
+    show()
+    await screen.findByTestId('context-chart')
+    expect(screen.queryByTestId('context-coarse-candle')).toBeNull()
+    expect(drawn.marker.text).not.toContain('posteriores')
   })
 
   it('warns when the range was cut by the limit', async () => {

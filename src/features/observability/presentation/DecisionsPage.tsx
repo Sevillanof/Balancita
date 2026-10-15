@@ -437,6 +437,7 @@ function TraceColumn({ trace }: { trace: Loaded<DecisionTrace> }) {
       {trace.state === 'ready' && trace.value.state === 'ok' && (
         <>
           <h2 className="inv-trace__title">
+            {utcDay(trace.value.decision.bucketStartMs)}{' '}
             {utcClock(trace.value.decision.bucketStartMs)}
             <small>{trace.value.product} · Kraken Futures</small>
           </h2>
@@ -629,7 +630,7 @@ function DecisionRows({
                   aria-pressed={item.bucketStartMs === selected}
                   onClick={() => onSelect(item.bucketStartMs)}
                 >
-                  {utcClock(item.bucketStartMs)}
+                  {utcDay(item.bucketStartMs)} {utcClock(item.bucketStartMs)}
                 </button>
               </td>
               <td>
