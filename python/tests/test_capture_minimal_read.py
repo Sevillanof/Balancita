@@ -10,18 +10,7 @@ from balancita_engine import capture_minimal_read as m
 A0, A1 = m.WINDOW_A
 B0, B1 = m.WINDOW_B
 
-SCHEMA = """
-CREATE TABLE paper_futures_official_candles (product_id TEXT, interval_ms INTEGER, bucket_start INTEGER, revision_hash TEXT,
-  known_at INTEGER, open_price TEXT, high_price TEXT, low_price TEXT, close_price TEXT, volume_btc TEXT, response_sha256 TEXT,
-  PRIMARY KEY (product_id, interval_ms, bucket_start, revision_hash));
-CREATE TABLE paper_futures_candle_revisions (candle_id TEXT, revision INTEGER, interval_ms INTEGER, bucket_start INTEGER,
-  known_at INTEGER, close_at INTEGER, is_closed INTEGER, coverage TEXT, open_price TEXT, high_price TEXT, low_price TEXT,
-  close_price TEXT, volume_btc TEXT, trade_count INTEGER, source_hash TEXT, PRIMARY KEY (candle_id, revision));
-CREATE INDEX paper_futures_candle_revisions_bucket ON paper_futures_candle_revisions(interval_ms, bucket_start);
-CREATE TABLE paper_futures_funding_periods (response_sha256 TEXT, start_ms INTEGER, product_id TEXT, end_ms INTEGER,
-  funding_rate TEXT, known_at INTEGER, unit TEXT, PRIMARY KEY (response_sha256, start_ms));
-CREATE TABLE paper_futures_funding_responses (sha256 TEXT PRIMARY KEY, received_at INTEGER, server_time INTEGER, raw_response TEXT);
-"""
+SCHEMA = open(os.path.join(os.path.dirname(__file__), "real_futures_schema.sql"), encoding="utf-8").read()
 
 
 def make_db(path):
@@ -36,7 +25,7 @@ def official(conn, product, bucket, known=None, rev="h", close="100"):
 
 
 def revision(conn, bucket, rev, closed, close="100"):
-    conn.execute("INSERT INTO paper_futures_candle_revisions VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+    conn.execute("INSERT INTO paper_futures_candle_revisions (candle_id, revision, interval_ms, bucket_start, known_at, close_at, is_closed, coverage, open_price, high_price, low_price, close_price, volume_btc, trade_count, source_hash) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                  ("%s:%d:%d" % (m.BTC, m.MINUTE_MS, bucket), rev, m.MINUTE_MS, bucket, bucket + 61_000, bucket + 60_000,
                   closed, "full", "100", "101", "99", close, "1", 3, "s"))
 
@@ -87,7 +76,7 @@ class ReadTests(Fixture):
         self.assertEqual([r for r in rows if r[3] == 1][0][7], "105")
 
     def test_2c_filters_by_start_and_product_inside_sqlite(self):
-        ins = "INSERT INTO paper_futures_funding_periods VALUES (?,?,?,?,?,?,?)"
+        ins = "INSERT INTO paper_futures_funding_periods (response_sha256, start_ms, product_id, end_ms, funding_rate, known_at, unit) VALUES (?,?,?,?,?,?,?)"
         self.conn.execute(ins, ("a", A0, m.BTC, A0 + 3_600_000, "0.1", A0 + 10, "u"))
         self.conn.execute(ins, ("b", A0, "PF_SOLUSD", A0 + 3_600_000, "9.99", A0 + 20, "u"))
         self.conn.execute(ins, ("c", A1, m.BTC, A1 + 3_600_000, "0.1", A1 + 30, "u"))
@@ -96,7 +85,7 @@ class ReadTests(Fixture):
         self.assertNotIn("9.99", repr(rows))
 
     def test_2c_stops_when_time_decreases_inside_the_range(self):
-        ins = "INSERT INTO paper_futures_funding_periods VALUES (?,?,?,?,?,?,?)"
+        ins = "INSERT INTO paper_futures_funding_periods (response_sha256, start_ms, product_id, end_ms, funding_rate, known_at, unit) VALUES (?,?,?,?,?,?,?)"
         self.conn.execute(ins, ("a", A0, m.BTC, A0 + 1, "0.1", A0 + 50, "u"))
         self.conn.execute(ins, ("b", A0 + 1, m.BTC, A0 + 2, "0.1", A0 + 10, "u"))
         with self.assertRaises(m.Stopped) as ctx:
@@ -104,7 +93,7 @@ class ReadTests(Fixture):
         self.assertEqual(ctx.exception.reason, "rowid_order")
 
     def test_2d_byte_budget_stops_before_reading_bodies(self):
-        self.conn.execute("INSERT INTO paper_futures_funding_periods VALUES ('s',?,?,?,?,?,?)", (A0, m.BTC, A0 + 1, "1", 1, "u"))
+        self.conn.execute("INSERT INTO paper_futures_funding_periods (response_sha256, start_ms, product_id, end_ms, funding_rate, known_at, unit) VALUES ('s',?,?,?,?,?,?)", (A0, m.BTC, A0 + 1, "1", 1, "u"))
         self.conn.execute("INSERT INTO paper_futures_funding_responses VALUES ('s',?,?,?)", (A0 + 5, str(A0 + 5), "x" * 50))
         old = m.MAX_BODY_BYTES
         m.MAX_BODY_BYTES = 10
@@ -232,7 +221,7 @@ class FundingSmokeTests(Fixture):
         body = '{"result":"success","serverTime":"%s","rates":[{"timestamp":"%s","fundingRate":%s,"relativeFundingRate":%s}]}' % (
             iso(server), iso(start), "1.0", rel)
         self.conn.execute("INSERT INTO paper_futures_funding_responses VALUES ('s',?,?,?)", (server, str(server), body))
-        self.conn.execute("INSERT INTO paper_futures_funding_periods VALUES ('s',?,?,?,?,?,?)",
+        self.conn.execute("INSERT INTO paper_futures_funding_periods (response_sha256, start_ms, product_id, end_ms, funding_rate, known_at, unit) VALUES ('s',?,?,?,?,?,?)",
                           (start, m.BTC, start + hour, "1.0", server, "USD/BTC/hour"))
         for b in range(A0, A1, m.MINUTE_MS * 60):
             official(self.conn, m.BTC, b, close=str(price))
@@ -270,7 +259,7 @@ class BoundedWalkTests(Fixture):
     def test_2d_reads_only_the_range_and_counts_every_read_of_the_stage(self):
         self._responses(120, start=A0 - 20 * 60_000, step=60_000)           # 20 before the window, 100 inside
         for i in range(120):
-            self.conn.execute("INSERT INTO paper_futures_funding_periods VALUES (?,?,?,?,?,?,?)",
+            self.conn.execute("INSERT INTO paper_futures_funding_periods (response_sha256, start_ms, product_id, end_ms, funding_rate, known_at, unit) VALUES (?,?,?,?,?,?,?)",
                               ("h%05d" % i, A0 + i, m.BTC if i % 2 else "PF_SOLUSD", A0 + i + 1, "1", A0 + i, "u"))
         self.conn.commit()
         g, rd, led = self.guard(), m.Reads(), m.Ledger()
@@ -286,7 +275,7 @@ class BoundedWalkTests(Fixture):
     def test_2d_stage_reads_over_the_cap_stop_before_any_body(self):
         self._responses(120, start=A0, step=60_000)
         for i in range(120):
-            self.conn.execute("INSERT INTO paper_futures_funding_periods VALUES (?,?,?,?,?,?,?)",
+            self.conn.execute("INSERT INTO paper_futures_funding_periods (response_sha256, start_ms, product_id, end_ms, funding_rate, known_at, unit) VALUES (?,?,?,?,?,?,?)",
                               ("h%05d" % i, A0 + i, m.BTC, A0 + i + 1, "1", A0 + i, "u"))
         self.conn.commit()
         old = m.CAPS["2d"]
@@ -326,7 +315,7 @@ class AuthorizedWindowTests(unittest.TestCase):
 
 class SinglePassTests(Fixture):
     def _periods(self, n_products_rows):
-        ins = "INSERT INTO paper_futures_funding_periods VALUES (?,?,?,?,?,?,?)"
+        ins = "INSERT INTO paper_futures_funding_periods (response_sha256, start_ms, product_id, end_ms, funding_rate, known_at, unit) VALUES (?,?,?,?,?,?,?)"
         for i, product in enumerate(n_products_rows):
             self.conn.execute(ins, ("s%d" % i, A0 + i * 1000, product, A0 + i * 1000 + 1, "7.77" if product.startswith("PF_SOL") or product.startswith("PF_ADA") else "1.5",
                                     A0 + i, "u"))
@@ -356,7 +345,7 @@ class ExactBudgetTests(Fixture):
     def _setup(self, n=60):
         self.conn.executemany("INSERT INTO paper_futures_funding_responses VALUES (?,?,?,?)",
                               [("h%05d" % i, A0 + i * 60_000, "t", "x" * 10) for i in range(n)])
-        self.conn.executemany("INSERT INTO paper_futures_funding_periods VALUES (?,?,?,?,?,?,?)",
+        self.conn.executemany("INSERT INTO paper_futures_funding_periods (response_sha256, start_ms, product_id, end_ms, funding_rate, known_at, unit) VALUES (?,?,?,?,?,?,?)",
                               [("h%05d" % i, A0 + i, m.BTC, A0 + i + 1, "1", A0 + i * 60_000, "u") for i in range(n)])
         self.conn.commit()
 
@@ -413,7 +402,7 @@ class PlanAndGlobalCapTests(Fixture):
             revision(self.conn, b, 2, 1)
         self.conn.executemany("INSERT INTO paper_futures_funding_responses VALUES (?,?,?,?)",
                               [("h%05d" % i, A0 + i * 60_000, "t", "x" * 10) for i in range(40)])
-        self.conn.executemany("INSERT INTO paper_futures_funding_periods VALUES (?,?,?,?,?,?,?)",
+        self.conn.executemany("INSERT INTO paper_futures_funding_periods (response_sha256, start_ms, product_id, end_ms, funding_rate, known_at, unit) VALUES (?,?,?,?,?,?,?)",
                               [("h%05d" % i, A0 + i, m.BTC, A0 + i + 1, "1", A0 + i * 60_000, "u") for i in range(40)])
         self.conn.commit()
         g, led, rd = self.guard(), m.Ledger(), m.Reads()
@@ -438,7 +427,7 @@ class PlanAndGlobalCapTests(Fixture):
             path = os.path.join(d, "dev-live", m.DB_NAME)
             os.makedirs(os.path.dirname(path))
             conn = make_db(path)
-            conn.executemany("INSERT INTO paper_futures_funding_periods VALUES (?,?,?,?,?,?,?)",
+            conn.executemany("INSERT INTO paper_futures_funding_periods (response_sha256, start_ms, product_id, end_ms, funding_rate, known_at, unit) VALUES (?,?,?,?,?,?,?)",
                              [("h%07d" % i, A0 + i, m.BTC, A0 + i + 1, "1", A0 + i * 1000, "u") for i in range(n)])
             conn.commit()
             conn.close()
@@ -495,3 +484,46 @@ class RealSchemaPlanTests(Fixture):
         with self.assertRaises(m.Stopped) as ctx:
             g.fetch("2b", sql)
         self.assertEqual(ctx.exception.reason, "query_plan")
+
+
+class PriorRowsArgumentTests(Fixture):
+    def test_each_prior_parameter_must_be_non_negative_on_its_own(self):
+        import contextlib
+        import io
+        for bad in (["--prior-first-rows", "-1", "--prior-v2-rows", "20000", "--prior-stage2-rows", "5760"],
+                    ["--prior-first-rows", "17131", "--prior-v2-rows", "-5", "--prior-stage2-rows", "5760"],
+                    ["--prior-first-rows", "17131", "--prior-v2-rows", "18331", "--prior-stage2-rows", "-100000"]):
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                code = m.main(["--db", self.path] + bad)
+            self.assertEqual(code, 2, bad)
+            self.assertIn("must be >= 0", err.getvalue())
+
+    def test_real_schema_has_the_primary_key_indexes_named_in_the_statements(self):
+        names = {r[0] for r in self.conn.execute("SELECT name FROM sqlite_master WHERE type='index'")}
+        self.assertIn("sqlite_autoindex_paper_futures_candle_revisions_1", names)
+        self.assertIn("sqlite_autoindex_paper_futures_official_candles_1", names)
+        self.assertIn("paper_futures_candle_revisions_bucket", names)
+        strict = {r[0] for r in self.conn.execute("SELECT name FROM pragma_table_list WHERE strict=1")}
+        self.assertTrue({"paper_futures_candle_revisions", "paper_futures_funding_periods",
+                         "paper_futures_funding_responses", "paper_futures_official_candles"} <= strict)
+
+    def test_every_statement_of_2a_to_2d_plans_without_scan_or_temp_btree_after_analyze(self):
+        for i in range(500):
+            revision(self.conn, B0 + (i % 360) * m.MINUTE_MS, i, 1)
+            official(self.conn, m.BTC, A0 + i * m.MINUTE_MS, rev="h%d" % i)
+        self.conn.executemany("INSERT INTO paper_futures_funding_responses VALUES (?,?,?,?)",
+                              [("h%05d" % i, A0 + i * 60_000, "t", "x" * 10) for i in range(40)])
+        self.conn.executemany("INSERT INTO paper_futures_funding_periods (response_sha256, start_ms, product_id, end_ms, funding_rate, known_at, unit) VALUES (?,?,?,?,?,?,?)",
+                              [("h%05d" % i, A0 + i, m.BTC, A0 + i + 1, "1", A0 + i * 60_000, "u") for i in range(40)])
+        self.conn.execute("ANALYZE")
+        self.conn.commit()
+        g, led, rd = self.guard(), m.Ledger(), m.Reads()
+        m.read_2a(g, led)
+        m.read_2b(g, led)
+        m.read_2c(g, led, rd)
+        m.read_2d(g, led, rd)
+        for (mode, sql), details in g.planned.items():
+            self.assertFalse([d for d in details if "TEMP B-TREE" in d], (mode, sql, details))
+            self.assertFalse([d for d in details if d.startswith("SCAN") and "subquery" not in d and d.strip() != "SCAN w"],
+                             (mode, sql, details))

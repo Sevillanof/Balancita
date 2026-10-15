@@ -706,6 +706,12 @@ def main(argv=None):
     ap.add_argument("--prior-v2-rows", required=True, type=int,
                     help="rows counted by the repeated (v2) stage-1 run, as published in #185; it must run BEFORE this stage")
     args = ap.parse_args(argv)
+    priors = {"prior-first-rows": args.prior_first_rows, "prior-v2-rows": args.prior_v2_rows,
+              "prior-stage2-rows": args.prior_stage2_rows}
+    bad = sorted(name for name, value in priors.items() if value < 0)
+    if bad:                                    # D-212-16: a negative value could cancel another and hide consumed rows
+        sys.stderr.write("refused: prior_rows each --%s must be >= 0\n" % ", --".join(bad))
+        return 2
     started = time.monotonic()
     try:
         before = check_identity(args.db)
