@@ -52,21 +52,20 @@ class DiagTests(unittest.TestCase):
         event(self.conn, m.ETH, "trade", W0 + 10, n)                       # other product
         result = self.run_diag()
         self.assertIsNone(result["stopped"])
-        hours = {h["start_ms"]: h["events_by_feed"] for h in result["hours"]}
+        hours = {h["start_ms"]: h["by_feed"] for h in result["events"]["by_hour"]}
         self.assertEqual(hours[W0], {"trade": 3, "book": 2})
         self.assertEqual(hours[W0 + 3 * g.HOUR_MS], {"ticker": 1})
         self.assertEqual(hours[W0 + 5 * g.HOUR_MS], {"trade": 4})
-        self.assertEqual(result["reads"]["events"]["rows"], 10)
+        self.assertEqual(result["events"]["rows"], 10)
         self.assertEqual(result["classification"], "trades_received")
 
     def test_plans_are_searches_without_scan_or_temp_btree(self):
         for i in range(50):
             event(self.conn, m.BTC, "trade", W0 + i * 1000, i)
             gap(self.conn, m.BTC, "trade", W0 + i * 1000, "seq", i)
-        self.conn.execute("ANALYZE")
         result = self.run_diag()
         for read in ("events", "gaps"):
-            plan = result["reads"][read]["plan"]
+            plan = result[read]["plan"]
             self.assertTrue(any(d.startswith("SEARCH") for d in plan), plan)
             self.assertFalse([d for d in plan if "TEMP B-TREE" in d or (d.startswith("SCAN") and d.strip() != "SCAN w")], plan)
 
@@ -74,18 +73,33 @@ class DiagTests(unittest.TestCase):
         gap(self.conn, m.BTC, "trade", W0 + 10, "seq", 1)
         gap(self.conn, m.ETH, "book", W0 + 20, "secret_reason_eth", 2)
         result = self.run_diag()
-        self.assertEqual(result["reads"]["gaps"]["rows_walked"], 2)
-        self.assertEqual(result["reads"]["gaps"]["rows_of_the_product"], 1)
+        self.assertEqual(result["gaps"]["rows_walked"], 2)
+        self.assertEqual(result["gaps"]["rows_of_the_product"], 1)
         self.assertNotIn("secret_reason_eth", str(result))
-        self.assertEqual(result["hours"][0]["gaps_by_feed_reason"], {"trade:seq": 1})
+        self.assertEqual(result["gaps"]["by_hour"][0]["by_feed_reason"], {"trade:seq": 1})
 
     def test_event_cap_counts_every_walked_event_and_publishes_no_counts_when_exceeded(self):
         for i in range(11):
             event(self.conn, m.BTC, "book", W0 + i, i)
         result = self.run_diag(max_events=10)
         self.assertEqual(result["stopped"]["reason"], "row_budget")
-        self.assertNotIn("hours", result)
+        self.assertNotIn("events", result)
         self.assertEqual(self.run_diag(max_events=11)["stopped"], None)
+
+    def test_gaps_are_read_first_and_survive_an_events_stop(self):
+        gap(self.conn, m.BTC, "trade", W0 + 10, "seq", 1)
+        for i in range(5):
+            event(self.conn, m.BTC, "book", W0 + i, i)
+        result = self.run_diag(max_events=3)
+        self.assertEqual(result["stopped"]["reason"], "row_budget")
+        self.assertEqual(result["gaps"]["by_hour"][0]["by_feed_reason"], {"trade:seq": 1})
+        self.assertNotIn("events", result)
+        self.assertNotIn("classification", result)
+
+    def test_both_statements_force_their_index_whatever_the_planner_thinks(self):
+        # no ANALYZE here: the guarantee is the hint itself, so a statement without it must fail this test
+        self.assertIn("INDEXED BY paper_futures_market_received", g.sql_events(10))
+        self.assertIn("INDEXED BY paper_futures_data_gaps_detected_at", g.sql_gaps(10))
 
     def test_classification(self):
         self.assertEqual(self.run_diag()["classification"], "no_events")

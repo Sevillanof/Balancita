@@ -12,8 +12,12 @@ Fixed scope (the authorization to ask for must name exactly this):
 - statement EVENTS: ``paper_futures_market_events`` columns ``feed``, ``received_at`` (filters ``product_id``, ``seq`` for the
   order); product ``PF_XBTUSD``; ``received_at`` in [2026-10-11T00:00Z, 2026-10-11T06:00Z); the index
   ``paper_futures_market_received (product_id, received_at, seq)`` is named with INDEXED BY, so the walk is a SEARCH in index
-  order and needs no sort. It walks EVERY event of the product in the window (books and tickers included, not only trades):
-  that is what ``--max-events`` bounds, counted over the walked rows (``LIMIT max-events + 1`` ... stop with ``row_budget``);
+  order and needs no sort. It walks EVERY event of the product that still exists in the window (books included, not only
+  trades): that is what ``--max-events`` bounds, counted over the walked rows (``LIMIT max-events + 1`` ... stop with
+  ``row_budget``). Tickers are deleted after 24 h (``FUTURES_TICKER_RETENTION_HOURS``): the ones of 2026-10-11 no longer exist,
+  so their absence says nothing;
+- the GAPS statement runs FIRST and its counts are published even if the events then stop the run (gaps are cheap and never
+  deleted); the events cap has no earlier measurement (books were never measured), so a too-short cap loses the events part;
 - statement GAPS: ``paper_futures_data_gaps`` columns ``detected_at``, ``product_id``, ``feed``, ``reason`` through
   ``paper_futures_data_gaps_detected_at``; the ``LIMIT`` is inside a subquery so it bounds the rows WALKED (all products),
   and the product filter is applied in the outer query, so other products' values never leave SQLite (``--max-gaps``);
@@ -135,7 +139,8 @@ def build_result(conn, *, max_events, max_gaps, read_date_ms, started=None):
               "caps": {"events": max_events, "gaps": max_gaps}, "read_date_ms": read_date_ms, "stopped": None,
               "retention_caveat": "Events are deleted after FUTURES_EVENT_RETENTION_DAYS (default 7, real configuration unknown): an empty "
                                   "window read after that point cannot tell 'never recorded' from 'already deleted'.",
-              "note": "Aggregates only: hourly counts. Not a measure of Kraken's timing; says nothing about other days or products."}
+              "note": "Aggregates only: hourly counts. Not a measure of Kraken's timing; says nothing about other days or products. "
+                      "Tickers are deleted after 24 h, so the ticker feed is not expected for this window."}
     if conn.execute("PRAGMA query_only").fetchone()[0] != 1:
         raise m.Stopped("guard", "query_only was not on")
     result["guards"] = {"opened_with": "mode=ro", "query_only_readback": 1}
@@ -144,17 +149,17 @@ def build_result(conn, *, max_events, max_gaps, read_date_ms, started=None):
     guard = _DiagGuard(conn, started)
     try:
         try:
-            n_events, event_hours, plan_e = read_events(guard, max_events)
             n_walked, n_mine, gap_hours, plan_g = read_gaps(guard, max_gaps)
+            result["gaps"] = {"rows_walked": n_walked, "rows_of_the_product": n_mine, "cap": max_gaps, "plan": plan_g,
+                              "by_hour": [{"start_ms": WINDOW[0] + i * HOUR_MS, "by_feed_reason": gap_hours[i]} for i in range(HOURS)]}
+            n_events, event_hours, plan_e = read_events(guard, max_events)
         except m.Stopped as stop:
             result["stopped"] = {"reason": stop.reason, "detail": stop.detail}
             return result
     finally:
         guard.close()
-    result["reads"] = {"events": {"rows": n_events, "cap": max_events, "plan": plan_e},
-                       "gaps": {"rows_walked": n_walked, "rows_of_the_product": n_mine, "cap": max_gaps, "plan": plan_g}}
-    result["hours"] = [{"start_ms": WINDOW[0] + i * HOUR_MS, "events_by_feed": event_hours[i], "gaps_by_feed_reason": gap_hours[i]}
-                       for i in range(HOURS)]
+    result["events"] = {"rows": n_events, "cap": max_events, "plan": plan_e,
+                        "by_hour": [{"start_ms": WINDOW[0] + i * HOUR_MS, "by_feed": event_hours[i]} for i in range(HOURS)]}
     result["classification"] = classify(event_hours)
     return result
 
