@@ -7,7 +7,7 @@ import unittest
 import test_paper_runner_recovery as T
 from balancita_engine import paper_runner_store as ST
 from balancita_engine import signal_continuity as SC
-from balancita_engine.paper_runner import REFUSED, PROCESSING, PaperRunner, RunnerError
+from balancita_engine.paper_runner import FINISHED, REFUSED, STOPPED, PaperRunner, RunnerError
 
 AT = T.CYCLE + 30 * T.SEC          # inside both order windows (60 s)
 LATE = T.CYCLE + 10 * T.MIN        # after both deadlines
@@ -56,7 +56,7 @@ class StopOrderly(T.Base):
         self.assertEqual(out["cancelled"] + out["expired"], [])
         self.assertEqual(sorted(r.portfolio.positions), positions)
         self.assertEqual((r.financial_digest(), len(r.portfolio.trades)), before)
-        self.assertEqual(r.status, PROCESSING)
+        self.assertEqual(r.status, STOPPED)
 
     def test_a_stop_with_nothing_pending_still_leaves_its_entry(self):
         path, r = self.fresh("empty")
@@ -140,6 +140,74 @@ class StopOrderly(T.Base):
         rec = self.recover(path, AT + T.MIN)
         self.assertEqual(len(cancelled(rec)), 2)
         self.assertEqual(rec.financial_digest(), r.financial_digest())
+
+
+class StoppedStaysStopped(T.Base):
+    """D-191-01: after ``operator_stop`` the runner takes no new input, live or after any recovery."""
+
+    def stopped(self, name="st"):
+        path, r = self.fresh(name)
+        r.run(T.session()[:2])
+        r.stop_orderly(AT)
+        return path, r
+
+    def refuses(self, r, event):
+        with self.assertRaises(RunnerError) as caught:
+            r.handle(event)
+        self.assertEqual(caught.exception.reason, "not_processing")
+
+    def test_a_stopped_runner_takes_no_new_orders_and_writes_nothing(self):
+        path, r = self.stopped()
+        self.assertEqual(r.status, STOPPED)
+        before = (len(r.journal.entries), r.financial_digest())
+        self.refuses(r, T.session()[2])
+        self.refuses(r, T.cycle(T.CYCLE + 40 * T.SEC, T.BTC, 99))
+        self.assertEqual((len(r.journal.entries), r.financial_digest()), before)
+        self.assertEqual(r.executor.pending, {})
+
+    def test_source_loss_declarations_refuse_too(self):
+        path, r = self.stopped()
+        with self.assertRaises(RunnerError):
+            r.cancel_for_source_loss(T.BTC, T.CYCLE, T.CYCLE + 60 * T.SEC, T.CYCLE + 60 * T.SEC, 15 * T.SEC)
+
+    def test_a_recovered_stopped_run_is_stopped_and_refuses_input(self):
+        path, r = self.stopped()
+        r.checkpoint()
+        self.die()
+        rec = self.recover(path, AT + T.MIN)
+        self.assertEqual(rec.status, STOPPED)
+        self.assertNotIn("recovery", kinds(rec)[-3:])                 # it resumed nothing
+        self.refuses(rec, T.session()[2])
+        self.assertEqual(rec.executor.pending, {})
+
+    def test_a_death_half_way_through_the_stop_recovers_stopped_with_the_cancellations_done(self):
+        path, r = self.fresh("half")
+        r.run(T.session()[:2])
+        ST.arm("after_journal", 1, "operator_stop")
+        with self.assertRaises(SC.SimulatedCrash):
+            r.stop_orderly(AT)
+        ST.disarm()
+        self.die()
+        rec = self.recover(path, AT)
+        self.assertEqual(rec.status, STOPPED)
+        self.assertEqual(len(cancelled(rec)), 2)
+        self.assertEqual({reason for _, reason in cancelled(rec)}, {"operator_stop"})
+        self.refuses(rec, T.session()[2])
+        self.assertEqual(rec.executor.pending, {})
+
+    def test_stopping_twice_adds_nothing(self):
+        path, r = self.stopped()
+        size = len(r.journal.entries)
+        r.stop_orderly(AT + T.SEC)
+        self.assertEqual(len(r.journal.entries), size)
+
+    def test_a_stopped_run_can_still_be_finished_and_recovers_finished(self):
+        path, r = self.stopped()
+        r.finish()
+        self.assertEqual(r.status, FINISHED)
+        self.die()
+        rec = self.recover(path, AT + T.MIN)
+        self.assertEqual(rec.status, FINISHED)
 
 
 if __name__ == "__main__":

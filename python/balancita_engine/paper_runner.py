@@ -49,9 +49,10 @@ EVENT_KINDS = ("cycle", "quote", "candle", "clock", "reconstructed", "gap_declar
 # price the replay driver models from candles, delivered as ``modelled_price``; observed quotes are refused in this mode).
 EXECUTION_MODES = ("quotes", "modelled")
 CREATED, PROCESSING, RECOVERING, FINISHED, REFUSED = "CREATED", "PROCESSING", "RECOVERING", "FINISHED", "REFUSED"
+STOPPED = "STOPPED"          # the operator stopped the run (``operator_stop``): it takes no new input, live or replayed
 # 8C adds DEGRADED and STOPPED; SUSPENDED_ENTRIES is not a runner state but a flag derived from the portfolio (it only
 # blocks new entries).
-RUNNER_STATES = (CREATED, PROCESSING, RECOVERING, FINISHED, REFUSED)
+RUNNER_STATES = (CREATED, PROCESSING, RECOVERING, FINISHED, REFUSED, STOPPED)
 ENGINE_BEHAVIOR_VERSION = "balancita-paper-engine.1"
 # Offsets that are marked processed when their event is rejected (the journal holds the rejection). Not these: a repeat
 # of an event still being processed, or an offset another event already took.
@@ -443,6 +444,7 @@ class PaperRunner(object):
             self._settle_closed(before)
             self._count("source_loss_expiries")
         elif kind == "operator_stop":
+            self.status = STOPPED
             before = self._open_snapshot()
             self.executor.expire_orders(data["expire_ids"], data["declared_ms"])
             self._settle_closed(before)
@@ -903,8 +905,15 @@ class PaperRunner(object):
         ``order_cancelled`` per order, so a process that dies half-way is finished by the recovery with the same reasons.
         If any of those writes fails the call raises (the runner refuses) and the stop must not be reported as done. While
         the engine is stopped nobody evaluates stops or targets: that is not protection. Returns
-        ``{"cancelled": [...], "expired": [...], "declared_ms": ...}``."""
+        ``{"cancelled": [...], "expired": [...], "declared_ms": ...}``.
+
+        From the ``operator_stop`` entry on the runner is ``STOPPED``: ``handle`` and the source-loss declarations refuse
+        (``not_processing``), live and in a replay, so a stopped run can neither take new orders nor be revived by a
+        recovery. It can still be checkpointed and ``finish``ed. Calling this again is harmless."""
         self._guard_open()
+        if self.status == STOPPED:                    # already stopped: only what a dead process left half-way is finished
+            self._finish_operator_stop(max(int(t_ms), self.journal.entries[-1]["t_ms"]))
+            return {"cancelled": [], "expired": [], "declared_ms": None}
         if self.status != PROCESSING:
             raise RunnerError("not_processing", self.status)
         declared = max(int(t_ms), self.journal.entries[-1]["t_ms"])
@@ -965,12 +974,11 @@ class PaperRunner(object):
             self._refuse("recovery_clock_behind", "recovery at {} but the journal reached {}".format(recovery_ms, before))
         self.status = RECOVERING
         self._finish_source_losses(recovery_ms)
-        self._finish_operator_stop(recovery_ms)
         # a recovery that died after its ``recovery`` entry but before its cancellations: they are still owed, and
         # ``before`` already equals that recovery's clock, so the windows would otherwise look watched
         interrupted = [dict(item) for _, item in sorted(self.owed_interruptions.items()) if item["intent_id"] in self.executor.pending]
         for intent_id, order in sorted(self.executor.pending.items()):
-            if intent_id in self.owed_interruptions or intent_id in self.owed_stops:
+            if intent_id in self.owed_interruptions:
                 continue
             lo = max(before, order["timeline"]["earliest_fill_ms"])
             hi = min(recovery_ms, order["timeline"]["deadline_ms"])
@@ -1079,7 +1087,10 @@ class PaperRunner(object):
         runner = cls(config, strategies, log, entries=journal.entries, journal=journal, evaluator=evaluator,
                      directory=directory, checkpoint=checkpoint)
         runner.lock = lock
-        if runner.status != FINISHED:
+        if runner.status == STOPPED:               # the operator had stopped it: finish the cancellations, resume nothing
+            runner._finish_operator_stop(max(recovery_ms, runner.journal.entries[-1]["t_ms"]))
+            runner.checkpoint()
+        elif runner.status != FINISHED:
             runner._begin_recovery(recovery_ms, journal.tail_discarded, rebuilt)
             runner.checkpoint()
         return runner
@@ -1123,7 +1134,7 @@ class PaperRunner(object):
     def finish(self, t_ms=None):
         """Ends the session durably: ``run_end`` is replayed, so a recovered session stays ``FINISHED``."""
         self._guard_open()
-        if self.status != PROCESSING:
+        if self.status not in (PROCESSING, STOPPED):
             raise RunnerError("not_processing", self.status)
         self._record(self.clock if t_ms is None else t_ms, "run_end", {"state_digest": self.state_digest()})
 
