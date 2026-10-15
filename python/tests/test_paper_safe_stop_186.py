@@ -4,6 +4,7 @@ replaced, a second process on a run that is held, and a process killed while it 
 import errno
 import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -159,7 +160,13 @@ class CheckpointCannotBeReplaced(T.Base):
         self.assertEqual(rec.financial_digest(), self.continuous(events, "ref").financial_digest())
 
 
-class SecondProcess(T.SingleWriter):
+class Procs(T.Base):
+    """Subprocess helpers of 8B's ``SingleWriter`` without inheriting (and re-running) its tests."""
+    HOLDER, OPENER = T.SingleWriter.HOLDER, T.SingleWriter.OPENER
+    where, start, holder = T.SingleWriter.where, T.SingleWriter.start, T.SingleWriter.holder
+
+
+class SecondProcess(Procs):
     def test_second_process_changes_nothing_on_disk(self):
         path = os.path.join(self.dir, "held")
         holder = self.holder(path)
@@ -175,7 +182,7 @@ class SecondProcess(T.SingleWriter):
         holder.stderr.close()
 
 
-class KilledWhileRecovering(T.SingleWriter):
+class KilledWhileRecovering(Procs):
     """SIGKILL at several moments inside recovery, then a clean recovery equals the continuous run."""
 
     RECOVER = """
@@ -201,23 +208,55 @@ PaperRunner.recover(sys.argv[1], T.cfg(), T.strategies(), int(sys.argv[2]))
 print("finished", flush=True)
 """
 
-    def test_recovery_killed_at_each_write_point(self):
-        events = T.session()
-        ref = self.continuous(events, "ref")
-        for point in ("before_journal", "after_journal", "after_apply", "before_checkpoint", "after_checkpoint"):
-            for nth in (1, 2):
-                path, r = self.fresh("k-{}-{}".format(point, nth))
-                r.run(events[:5])
-                self.die()
-                at = events[4]["t_ms"]
-                proc = self.start(self.RECOVER, path, str(at), point, str(nth))
+    def test_recovery_killed_between_the_recovery_entry_and_the_interruptions(self):
+        """Two orders pending, a long downtime: recovery writes ``recovery`` and then cancels both as
+        ``runner_interrupted``. Killing it at each of those writes must really kill it, and the next recovery must end
+        where an uninterrupted one does."""
+        events = T.session()[:2]                                   # two cycles: two orders, no quote yet
+        at = T.CYCLE + 20 * T.MIN
+        path, r = self.fresh("pending")
+        r.run(events)
+        self.die()
+        reference = self.copy(path, "ref-dir")
+        ref = self.recover(reference, at)
+        kinds = [e["kind"] for e in ref.journal.entries]
+        self.assertEqual(kinds.count("order_cancelled"), 2)        # the scenario does reach the interruptions
+        written = len(kinds) - len(r.journal.entries)
+        for point in ("before_journal", "after_journal", "after_apply"):
+            for nth in range(1, written + 1):
+                victim = self.copy(path, "k-{}-{}".format(point, nth))
+                proc = self.start(self.RECOVER, victim, str(at), point, str(nth))
                 proc.communicate(timeout=60)
                 with self.subTest(point=point, nth=nth):
-                    self.assertIn(proc.returncode, (0, -signal.SIGKILL))
-                    rec = self.recover(path, at)
-                    for event in events:
-                        rec.handle(event)
+                    self.assertEqual(proc.returncode, -signal.SIGKILL)
+                    rec = self.recover(victim, at)
                     self.assertEqual(rec.financial_digest(), ref.financial_digest())
+                    self.assertEqual(self.fingerprint(rec), self.fingerprint(ref))
+                    cancelled = [e["data"] for e in rec.journal.entries if e["kind"] == "order_cancelled"]
+                    self.assertEqual(sorted(c["intent_id"] for c in cancelled),
+                                     sorted(c["data"]["intent_id"] for c in ref.journal.entries if c["kind"] == "order_cancelled"))
+
+    def test_two_recoveries_killed_in_a_row_still_cancel_what_the_first_one_owed(self):
+        events = T.session()[:2]
+        at = T.CYCLE + 20 * T.MIN
+        path, r = self.fresh("twice")
+        r.run(events)
+        self.die()
+        reference = self.copy(path, "ref-twice")
+        ref = self.recover(reference, at)
+        victim = self.copy(path, "victim-twice")
+        for point, nth in (("after_journal", 1), ("after_journal", 1)):    # each dies right after its ``recovery`` entry
+            proc = self.start(self.RECOVER, victim, str(at), point, str(nth))
+            proc.communicate(timeout=60)
+            self.assertEqual(proc.returncode, -signal.SIGKILL)
+        rec = self.recover(victim, at)
+        self.assertEqual(self.fingerprint(rec), self.fingerprint(ref))
+        self.assertEqual(rec.owed_interruptions, {})
+
+    def copy(self, path, name):
+        target = os.path.join(self.dir, name)
+        shutil.copytree(path, target, ignore=shutil.ignore_patterns("*.lock"))
+        return target
 
 
 if __name__ == "__main__":

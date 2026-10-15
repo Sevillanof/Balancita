@@ -281,6 +281,7 @@ class PaperRunner(object):
         self.cycles_seen = set()     # (product, cycle_ms) of every accepted cycle
         self.open_funding = {}       # event_id -> funding/reconcile event whose reconciliation entry is not recorded yet
         self.quote_t_ms = {}         # product -> journal time (t_ms) of the last quote delivered: the clock a source loss is measured in
+        self.owed_interruptions = {}  # intent_id -> item announced by a ``recovery`` entry and not yet cancelled
         self.source_losses = {}      # (product, gap_from_ms, gap_to_ms) -> {"intent_ids": [...], "windows": {intent_id: [lo, hi]}}
         self.coverage = {"last_quote": {}, "watch": {}, "candles": {}, "gaps": []}     # market coverage while positions are open (observed facts)
         self.recoveries, self.last_recovery, self.last_checkpoint = 0, None, None
@@ -308,7 +309,9 @@ class PaperRunner(object):
         try:
             entry = self.journal.add(t_ms, kind, data)
         except OSError as error:
-            # the disk refused the entry: memory is now behind the file, so nothing may go on from this instance
+            # the disk refused the entry: memory is now behind the file, so nothing may go on from this instance. Never
+            # retry the same fsync: after an EIO the kernel may have dropped the dirty pages and a second fsync can report
+            # success for data that is not on disk. The only safe way on is a new process that replays the file.
             self._refuse("journal_write_failed", repr(error))
         self._apply(entry)
         hit("after_apply", kind)
@@ -444,7 +447,11 @@ class PaperRunner(object):
                                           uncovered_from_ms=data["uncovered_from_ms"], uncovered_to_ms=data["uncovered_to_ms"],
                                           **extra)
             self._count("orders_cancelled" if record is not None else "cancel_without_order")
+            if data["reason"] == "runner_interrupted":
+                self.owed_interruptions.pop(data["intent_id"], None)
         elif kind == "recovery":
+            for item in data["interrupted_orders"]:
+                self.owed_interruptions[item["intent_id"]] = item
             self.clock = data["recovery_ms"] if self.clock is None else max(self.clock, data["recovery_ms"])
             self.recoveries += 1
             self.last_recovery = {k: data[k] for k in ("recovery_ms", "journal_clock_ms", "uncovered_ms", "obligations",
@@ -911,8 +918,12 @@ class PaperRunner(object):
             self._refuse("recovery_clock_behind", "recovery at {} but the journal reached {}".format(recovery_ms, before))
         self.status = RECOVERING
         self._finish_source_losses(recovery_ms)
-        interrupted = []
+        # a recovery that died after its ``recovery`` entry but before its cancellations: they are still owed, and
+        # ``before`` already equals that recovery's clock, so the windows would otherwise look watched
+        interrupted = [dict(item) for _, item in sorted(self.owed_interruptions.items()) if item["intent_id"] in self.executor.pending]
         for intent_id, order in sorted(self.executor.pending.items()):
+            if intent_id in self.owed_interruptions:
+                continue
             lo = max(before, order["timeline"]["earliest_fill_ms"])
             hi = min(recovery_ms, order["timeline"]["deadline_ms"])
             if hi > lo:
