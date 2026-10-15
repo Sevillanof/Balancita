@@ -213,3 +213,16 @@ describe('decodeIntervalsBlock: an incomplete trace stays incomplete', () => {
     expect(() => decodeIntervalsBlock(bad)).toThrow(/contract.complete/)
   })
 })
+
+describe('gateway block', () => {
+  it('reads what the gateway measured and refuses an unknown reason', () => {
+    const base = verification.approvedFresh()
+    expect(decode(base).gateway).toBeNull()
+    expect(
+      decode({ ...base, gateway: { age_ms: 5, reason: null } }).gateway,
+    ).toEqual({ ageMs: 5, reason: null })
+    expect(() =>
+      decode({ ...base, gateway: { age_ms: 5, reason: 'dead' } }),
+    ).toThrow(/gateway.reason/)
+  })
+})

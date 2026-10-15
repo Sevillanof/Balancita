@@ -48,6 +48,18 @@ export type SessionPosition = {
   coverage: { gaps: number; silentNowMs: number | null }
 }
 
+/**
+ * What the gateway measured when it degraded the block
+ * (`server/.../session-validity.ts`). Absent when the block did not go through
+ * the gateway: then nothing was measured and nothing is claimed.
+ */
+export type GatewayReason =
+  'report_age_over_limit' | 'report_age_unknown' | 'threshold_missing'
+export type GatewayValidity = {
+  ageMs: number | null
+  reason: GatewayReason | null
+}
+
 export type PositionsBlock = {
   schema: typeof POSITIONS_SCHEMA
   mode: string
@@ -55,6 +67,7 @@ export type PositionsBlock = {
   executionClass: string
   clockMs: number
   verification: SessionVerification
+  gateway: GatewayValidity | null
   unrealizedUsd: string
   unrealizedClass: string
   positions: SessionPosition[]
@@ -151,6 +164,20 @@ function decodeVerification(raw: unknown): SessionVerification {
   }
 }
 
+function decodeGateway(raw: unknown): GatewayValidity | null {
+  if (raw === undefined || raw === null) return null
+  const g = record(raw)
+  const reason =
+    g.reason === null || g.reason === undefined
+      ? null
+      : oneOf(
+          g.reason,
+          ['report_age_over_limit', 'report_age_unknown', 'threshold_missing'],
+          'gateway.reason',
+        )
+  return { ageMs: numOrNull(g.age_ms, 'gateway.age_ms'), reason }
+}
+
 export function decodePositionsBlock(raw: unknown): PositionsBlock {
   const r = record(raw)
   if (r.schema !== POSITIONS_SCHEMA) fail('schema')
@@ -161,6 +188,7 @@ export function decodePositionsBlock(raw: unknown): PositionsBlock {
     executionClass: str(r.execution_class, 'execution_class'),
     clockMs: num(r.clock_ms, 'clock_ms'),
     verification: decodeVerification(r.verification),
+    gateway: decodeGateway(r.gateway),
     unrealizedUsd: str(r.unrealized_usd, 'unrealized_usd'),
     unrealizedClass: str(r.unrealized_class, 'unrealized_class'),
     positions: list(r.positions, 'positions').map((p, i): SessionPosition => {
