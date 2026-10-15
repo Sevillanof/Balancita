@@ -19,19 +19,25 @@ from balancita_engine import signal_continuity as SC
 from balancita_engine.paper_runner_store import FileRunnerJournal, JOURNAL_FILE
 from live_world import LOAD_START, World
 from test_paper_safe_stop_186_session import NOW, Base, kinds
-from test_paper_live_integration import (BTC, ENTRY_STEP, ETH, HOLE, TIMES, Circuit, abandon, journal_clock, new_session, record,
+from test_paper_live_integration import (BTC, ENTRY_STEP, ETH, HOLE, TIMES, UNTIL_ORDER, Circuit, abandon, journal_clock, new_session, record,
                                          recover_session)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 
 def run_child(test, directory, world, fault, kind, nth=1, in_recovery=False, step=ENTRY_STEP):
-    """Runs one step in another process that dies (SIGKILL) at the ``nth`` time ``fault`` is reached for ``kind``."""
-    env = dict(os.environ, PYTHONPATH=os.pathsep.join((os.path.dirname(HERE), HERE)), KILL_IN_RECOVERY="1" if in_recovery else "0")
+    """Runs one step in another process that dies (SIGKILL) at the ``nth`` time ``fault`` is reached for ``kind``. Returns the path of
+    the marker the worker writes when its recovery has returned (absent if the process died inside the recovery)."""
+    stage = directory + ".stage"
+    if os.path.exists(stage):
+        os.remove(stage)
+    env = dict(os.environ, PYTHONPATH=os.pathsep.join((os.path.dirname(HERE), HERE)), KILL_IN_RECOVERY="1" if in_recovery else "0",
+               KILL_STAGE_FILE=stage)
     done = subprocess.run([sys.executable, "-W", "ignore", os.path.join(HERE, "live_kill_store_worker.py"), directory, world.path,
                            str(journal_clock(directory)), fault, kind or "-", str(nth), str(step)],
                           env=env, capture_output=True, text=True, timeout=900)
     test.assertEqual(done.returncode, -signal.SIGKILL, "{} {} #{} was not reached\n{}".format(fault, kind, nth, done.stderr[-2000:]))
+    return stage
 
 
 def raw_journal(directory):
@@ -41,7 +47,7 @@ def raw_journal(directory):
 
 class KillBase(Base):
     def child(self, directory, world, fault, kind, nth=1, in_recovery=False):
-        run_child(self, directory, world, fault, kind, nth, in_recovery)
+        return run_child(self, directory, world, fault, kind, nth, in_recovery)
 
     def fork_dir(self):
         """A world and a session directory standing just before the step, with NO session open on it."""
@@ -68,7 +74,20 @@ class KillBase(Base):
         self.assertEqual(kinds(session, "source_loss"), ref["loss_records"])
         cancelled = [(e["data"]["intent_id"], e["data"]["reason"], e["t_ms"]) for e in session.runner.journal.entries if e["kind"] == "order_cancelled"]
         self.assertEqual(len(cancelled), len(set(c[0] for c in cancelled)))                    # never cancelled twice
+        self.assert_disk_equals_memory(session, directory)
         return session
+
+    def assert_disk_equals_memory(self, session, directory):
+        """D-202-01: what the process holds in memory is what the files hold. A half line that was not cut leaves the next entry
+        glued to it: the memory looks right and the next start would find a corrupt journal. Both journals are read again from disk."""
+        runner_path = os.path.join(directory, LI.RUNNER_DIR, JOURNAL_FILE)
+        self.assertTrue(raw_journal(directory).endswith(b"\n"))
+        reloaded = FileRunnerJournal.load(runner_path)
+        self.assertEqual(reloaded.tail_discarded, 0)
+        self.assertEqual([e["hash"] for e in reloaded.entries], [e["hash"] for e in session.runner.journal.entries])
+        audit = LI.AuditJournal.open(os.path.join(directory, LI.AUDIT_FILE))
+        self.assertEqual(audit.tail_discarded, 0)
+        self.assertEqual((len(audit.entries), audit.head), (len(session.audit.entries), session.audit.head))
 
 
 class TestRealKillAroundTheDeclaration(KillBase):
@@ -91,10 +110,22 @@ class TestRealKillAroundTheDeclaration(KillBase):
         self.child(directory, world, "after_journal", "source_loss")
         journal = FileRunnerJournal.load(os.path.join(directory, LI.RUNNER_DIR, JOURNAL_FILE))
         self.assertEqual(journal.entries[-1]["kind"], "source_loss")                          # the loss is on disk, the cancellation is not
+        session = self.reopen(world, directory)
+        self.assert_cancelled_by_the_recovery(session)
+        abandon(self.live.pop())
         session = self.finish(world, directory)
         self.assertEqual(len(self.losses(session)), 1)
         self.assertEqual(len([e for e in session.runner.journal.entries if e["kind"] == "order_cancelled"]),
                          len([e for e in self.reference_entries() if e["kind"] == "order_cancelled"]))
+
+    def assert_cancelled_by_the_recovery(self, session):
+        """D-202-03: right after ``recover`` and BEFORE any step, the order is already cancelled and the cancellation carries the
+        recovery's clock: the recovery finished the obligation, not the step that is made again afterwards."""
+        cancelled = [e for e in session.runner.journal.entries if e["kind"] == "order_cancelled"]
+        self.assertEqual(len(cancelled), 1)
+        self.assertIn("recovery_ms", cancelled[0]["data"])
+        self.assertEqual(cancelled[0]["data"]["reason"], "source_stale")
+        self.assertEqual([o["state"] for o in session.runner.orders() if o["intent_id"] == cancelled[0]["data"]["intent_id"]], ["cancelled"])
 
     def reference_entries(self):
         world, directory, session = self.fork()
@@ -103,8 +134,15 @@ class TestRealKillAroundTheDeclaration(KillBase):
 
     def test_two_deaths_in_a_row_with_the_silence_open_make_one_silence_and_one_cancellation(self):
         world, directory = self.fork_dir()
-        self.child(directory, world, "after_journal", "source_loss")                           # first death: the loss is journaled
-        self.child(directory, world, "before_journal", "order_cancelled", in_recovery=True)    # second death: inside the recovery itself
+        first = self.child(directory, world, "after_journal", "source_loss")                   # first death: the loss is journaled
+        self.assertTrue(os.path.exists(first), "the first death was meant to happen in the step, after the recovery")
+        second = self.child(directory, world, "before_journal", "order_cancelled", in_recovery=True)    # second: inside the recovery
+        # D-202-04: the second process died while recovering (it never got to the point where the worker marks "recovered"), and the
+        # fault is disarmed once the recovery returns, so a death in the step cannot stand for it
+        self.assertFalse(os.path.exists(second), "the second death happened after the recovery returned")
+        journal = FileRunnerJournal.load(os.path.join(directory, LI.RUNNER_DIR, JOURNAL_FILE))
+        self.assertEqual(journal.entries[-1]["kind"], "source_loss")                        # the cancellation it died writing is not there
+        self.assertNotIn("order_cancelled", [e["kind"] for e in journal.entries])
         self.finish(world, directory)
 
 
@@ -128,25 +166,30 @@ STOP_STEP = 106                                  # the step after which ETH has 
 CROSSING = D("3400.0")                           # from this instant on ETH quotes far below that stop, and stays there
 
 
-class TestRealKillWithAnOpenPositionAndTheStopCrossedWhileDown(unittest.TestCase):
+class StopCrossedWhileDownBase(object):
     """S-K5 (matrix A6): the process dies with a position open and, while it is down, the market goes below the stop and stays
-    there. The continuous run exits at the first quote below the stop. The recovered run must NOT exit with a quote of the downtime
-    (no retroactive execution): the recovery declares the uncovered stretch, and the position leaves with the first quote
-    observed after the recovery, at that quote's price (not at the stop level). Invented data only."""
+    there. The recovered run must NOT execute anything with a quote of the downtime (no retroactive execution): the recovery
+    declares the uncovered stretch and the position leaves afterwards. Invented data only. ``COHERENT`` says whether the candles of
+    the product tell the same story as its quotes (D-202-05): they do in one scenario and they do not in the other, because the
+    two worlds exercise two different doors of the runner."""
 
-    cache = {}
+    COHERENT = False
+    cache = None
 
     @classmethod
     def setUpClass(cls):
-        if cls.cache:
-            return
         SC.disarm()
+        cls.cache = {}
         cls.cache["dir"] = root = tempfile.mkdtemp()
         strategies, _ = RS.load_frozen()
         cls.cache["strategies"] = strategies
         world = World(root, quote_holes=[HOLE], second_product_shift=5)
         cross_from = TIMES[STOP_STEP] + 60_000
         world.second["quotes"] = [(t, CROSSING if t > cross_from else p) for t, p in world.second["quotes"]]
+        if cls.COHERENT:
+            for candle in world.second["ones"]:
+                if candle["bucket_start"] + 60_000 > cross_from:
+                    candle.update(open=str(CROSSING), high=str(CROSSING), low=str(CROSSING), close=str(CROSSING))
         world.release_until(LOAD_START)
         session = new_session(world, os.path.join(root, "a"), strategies, products=(BTC, ETH))
         for now in TIMES[:STOP_STEP + 1]:
@@ -163,13 +206,13 @@ class TestRealKillWithAnOpenPositionAndTheStopCrossedWhileDown(unittest.TestCase
     @classmethod
     def tearDownClass(cls):
         shutil.rmtree(cls.cache.get("dir", ""), True)
-        cls.cache.clear()
+        cls.cache = None
 
     @staticmethod
     def eth_trades(session):
         return [t for t in session.runner.portfolio.trades if t["product_id"] == ETH]
 
-    def test_the_stop_is_not_executed_with_a_quote_of_the_downtime(self):
+    def recovered_and_stepped_twice(self):
         root = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, root, True)
         snap = self.cache["snap"]
@@ -178,11 +221,9 @@ class TestRealKillWithAnOpenPositionAndTheStopCrossedWhileDown(unittest.TestCase
         shutil.copytree(snap["session"], directory)
         world.release_until(TIMES[STOP_STEP + 1])
         run_child(self, directory, world, "before_journal", None, step=STOP_STEP + 1)        # it dies before its first write of the step
-        raw = raw_journal(directory)
-        self.assertTrue(raw.endswith(b"\n"))
-        # while it is down the market went below the stop (the continuous run exited with the first such quote)
-        first_cross = self.cache["continuous"][0]["exit_time_ms"]
-        self.assertLess(first_cross, TIMES[STOP_STEP + 1])
+        self.assertTrue(raw_journal(directory).endswith(b"\n"))
+        self.assertEqual(self.cache["continuous"][0]["exit_reason"], "stop")                 # the continuous run left through the stop
+        self.assertLess(self.cache["continuous"][0]["exit_time_ms"], TIMES[STOP_STEP + 1])  # while the process was down
         recovery_ms = TIMES[STOP_STEP + 1]
         session = recover_session(world, directory, self.cache["strategies"], recovery_ms, products=(BTC, ETH))
         self.addCleanup(abandon, session)
@@ -190,16 +231,41 @@ class TestRealKillWithAnOpenPositionAndTheStopCrossedWhileDown(unittest.TestCase
         self.assertIn(ETH, recovery["open_positions"])                          # the open position is declared by the recovery
         self.assertGreater(recovery["uncovered_ms"], 0)                         # and so is the stretch nobody watched
         session.step(recovery_ms)
-        self.assertEqual(self.eth_trades(session), [], "the stop was executed with a quote of the downtime")
+        self.assertEqual(self.eth_trades(session), [], "the stop was executed with something of the downtime")
         world.release_until(TIMES[STOP_STEP + 2])
         session.step(TIMES[STOP_STEP + 2])
         trades = self.eth_trades(session)
         self.assertEqual(len(trades), 1)
         self.assertEqual(trades[0]["exit_reason"], "stop")
-        self.assertGreater(trades[0]["exit_time_ms"], recovery_ms)                # the first quote observed after the recovery
-        self.assertLess(trades[0]["exit_time_ms"], TIMES[STOP_STEP + 2])
-        self.assertLessEqual(D(str(trades[0]["exit_price"])), CROSSING)                  # its price, not the stop's level
         self.assertEqual(session.runner.integrity()["open_cycles"], [])
+        return session, trades[0], recovery_ms
+
+
+class TestRealKillStopCrossedWhileDownQuotesOnly(StopCrossedWhileDownBase, unittest.TestCase):
+    """The door of the quotes: the candles of the product keep their original prices (above the stop), so only its quotes cross the
+    stop. The position leaves with the FIRST quote observed after the recovery, at that quote's price, not at the stop's level."""
+
+    def test_the_position_leaves_with_the_first_quote_after_the_recovery_at_its_price(self):
+        _, trade, recovery_ms = self.recovered_and_stepped_twice()
+        first_after = min(t for t, _ in self.cache["world"].second["quotes"] if t > recovery_ms)
+        self.assertEqual(trade["exit_time_ms"], first_after)
+        self.assertEqual(D(str(trade["exit_price"])), D("3399.8062"))              # that quote's 3400.0 less the modeled cost, not the stop's level
+        self.assertLess(D(str(trade["exit_price"])), CROSSING)
+
+
+class TestRealKillStopCrossedWhileDownCoherentCandles(StopCrossedWhileDownBase, unittest.TestCase):
+    """The door of the candles (D-202-05): the candles tell the same story as the quotes. This pins what the runner does TODAY and
+    it is NOT an endorsement: the position leaves with the candle that closes at the recovery instant, at the stop's level (less
+    costs), which is exactly the question to Fran in #186 (``Pregunta para Fran (Sí/No)``: close at the first real price seen after
+    the restart instead of at the stop's level). When that decision changes the runner, this test has to change with it."""
+
+    COHERENT = True
+
+    def test_today_the_candle_of_the_downtime_closes_the_position_at_the_stop_level_when_the_recovery_ends(self):
+        _, trade, recovery_ms = self.recovered_and_stepped_twice()
+        self.assertEqual(trade["exit_time_ms"], recovery_ms)
+        self.assertGreater(D(str(trade["exit_price"])), CROSSING)                        # not the price of any quote after the restart
+        self.assertLess(D(str(trade["exit_price"])), D(str(trade["stop_price"])))        # the stop's level less costs
 
 
 class TestWallClockJumpsDuringAnOpenSilence(Base):
@@ -228,6 +294,70 @@ class TestWallClockJumpsDuringAnOpenSilence(Base):
                 self.assertEqual(session.runner.integrity()["open_cycles"], [])
                 self.release()
 
+
+class TestObservedSilenceUnderAJumpingClock(Base):
+    """S-U4, D-202-02: the branch where the CLOCK carries the declaration (``observed_silence``): the world is released only up to
+    the instant of the silence (the market has not moved past it), so no event can tie the declaration and the order is still alive;
+    then the market goes on after the jump. The declaration must stay at the end of the excess (not at the observed bound), the
+    observed bound must never go back, and the money must be the one of the normal clock."""
+
+    OBSERVED_JUMPS = {"forward_first": (10 * 86_400_000,), "back_then_on": (0, -1_800_000, 60_000), "forward_then_back": (3_600_000, 0, 60_000)}
+
+    def observed_run(self, offsets):
+        root = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, root, True)
+        world = self.cache["world"].fork(root, self.cache["snap"]["world"])
+        directory = os.path.join(root, "s")
+        shutil.copytree(self.cache["snap"]["session"], directory)
+        session = self.reopen(world, directory)
+        world.release_until(UNTIL_ORDER)
+        bounds = []
+        for offset in offsets:
+            session.step(UNTIL_ORDER + offset)
+            bounds.append(session.ingestor.observed_until_ms)
+        world.release_until(NOW)
+        session.step(NOW)
+        return session, bounds
+
+    @staticmethod
+    def declarations(session):
+        return [(e["kind"], e["t_ms"]) for e in session.runner.journal.entries if e["kind"] in ("source_loss", "order_cancelled")]
+
+    def test_the_observed_bound_does_not_go_back_when_the_first_step_after_a_recovery_has_an_earlier_clock(self):
+        """The one place where a clock that went back could lower the bound: the first poll after a recovery (otherwise a poll with an
+        earlier bound is ignored). The bound the dead process had reached is kept."""
+        root = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, root, True)
+        world = self.cache["world"].fork(root, self.cache["snap"]["world"])
+        directory = os.path.join(root, "s")
+        shutil.copytree(self.cache["snap"]["session"], directory)
+        session = self.reopen(world, directory)
+        world.release_until(UNTIL_ORDER)
+        session.step(UNTIL_ORDER + 60_000)
+        before = session.ingestor.observed_until_ms
+        self.assertIsNotNone(before)
+        abandon(self.live.pop())                                          # the process dies
+        again = self.reopen(world, directory)
+        again.step(UNTIL_ORDER - 1_800_000)                              # the machine's clock is half an hour behind after the restart
+        self.assertGreaterEqual(again.ingestor.observed_until_ms, before)
+        self.assertEqual(len(self.losses(again)), 1)                      # and the silence is declared once
+
+    def test_the_observed_silence_is_declared_at_its_own_instant_whatever_the_clock_does(self):
+        reference, _ = self.observed_run((0,))
+        self.assertEqual([r["trigger"] for r in kinds(reference, "source_stale_detected")], ["observed_silence"])    # the branch is exercised
+        self.assertEqual(len(self.losses(reference)), 1)
+        gap_to = self.losses(reference)[0]["gap_to_ms"]
+        self.assertEqual([t for k, t in self.declarations(reference) if k == "source_loss"], [gap_to])          # at the end of the excess
+        for name, offsets in self.OBSERVED_JUMPS.items():
+            with self.subTest(jump=name):
+                session, bounds = self.observed_run(offsets)
+                self.assertEqual([r["trigger"] for r in kinds(session, "source_stale_detected")], ["observed_silence"])
+                self.assertEqual(self.declarations(session), self.declarations(reference))                       # same instants as the normal clock
+                self.assertEqual(self.losses(session), self.losses(reference))
+                seen = [b for b in bounds if b is not None]
+                self.assertEqual(seen, sorted(seen), "the observed bound went back with the clock")
+                for key in ("orders", "portfolio", "closed", "open", "fees"):
+                    self.assertEqual(record(session, NOW)[key], record(reference, NOW)[key], key)
 
 if __name__ == "__main__":
     unittest.main()
