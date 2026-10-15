@@ -345,3 +345,50 @@ class SinglePassTests(Fixture):
             m.read_2c(g, led, m.Reads())
         self.assertEqual(ctx.exception.reason, "row_budget")
         self.assertEqual(ctx.exception.detail["walk_upper_bound"], m.CAPS["2c"] + 38)
+
+
+class ExactBudgetTests(Fixture):
+    def _setup(self, n=60):
+        self.conn.executemany("INSERT INTO paper_futures_funding_responses VALUES (?,?,?,?)",
+                              [("h%05d" % i, A0 + i * 60_000, "t", "x" * 10) for i in range(n)])
+        self.conn.executemany("INSERT INTO paper_futures_funding_periods VALUES (?,?,?,?,?,?,?)",
+                              [("h%05d" % i, A0 + i, m.BTC, A0 + i + 1, "1", A0 + i * 60_000, "u") for i in range(n)])
+        self.conn.commit()
+
+    def _run(self, cap):
+        old = m.CAPS["2d"]
+        m.CAPS["2d"] = cap
+        self.addCleanup(m.CAPS.__setitem__, "2d", old)
+        g, rd = self.guard(), m.Reads()
+        executed = []
+        real_fetch = g.fetch
+        g.fetch = lambda mode, *a, **k: (executed.append(mode), real_fetch(mode, *a, **k))[1]
+        return g, rd, executed
+
+    def test_exact_frontier_never_executes_a_read_over_the_cap(self):
+        self._setup()
+        g, rd, _ = self._run(10_000)
+        m.read_2d(g, m.Ledger(), rd)
+        needed = rd.used["2d"]
+        self.assertEqual(rd.reserved["2d"], 0)
+        g, rd, _ = self._run(needed)
+        m.read_2d(g, m.Ledger(), rd)                                 # exactly at the cap: allowed
+        self.assertEqual(rd.used["2d"], needed)
+        g, rd, executed = self._run(needed - 1)                      # one under: stops BEFORE the read that would exceed it
+        with self.assertRaises(m.Stopped) as ctx:
+            m.read_2d(g, m.Ledger(), rd)
+        self.assertEqual(ctx.exception.reason, "row_budget")
+        self.assertLessEqual(rd.used["2d"] + rd.reserved["2d"], needed - 1)
+        self.assertEqual(rd.count["2d_body"], 0)
+        self.assertLessEqual(len([e for e in executed if e in ("2d_lookup", "2d_size", "2d_body")]) + rd.count["2d_bound"], needed - 1)
+
+    def test_size_reads_cannot_pass_the_cap_after_the_products(self):
+        self._setup(100)
+        g, rd, _ = self._run(10_000)
+        m.read_2d(g, m.Ledger(), rd)
+        walk_search_products = rd.used["2d"] - rd.count["2d_size"] - rd.count["2d_body"]
+        g, rd, _ = self._run(walk_search_products + 5)               # products fit, only a few sizes may follow
+        with self.assertRaises(m.Stopped):
+            m.read_2d(g, m.Ledger(), rd)
+        self.assertLessEqual(rd.used["2d"] + rd.reserved["2d"], walk_search_products + 5)
+        self.assertEqual(rd.count["2d_body"], 0)
