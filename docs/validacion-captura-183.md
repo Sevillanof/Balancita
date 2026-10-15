@@ -84,3 +84,13 @@ No está establecido a qué instante corresponde el precio que Kraken usó para 
 - Intervalo: propuesta de 48 h consecutivas dentro de 2025-10-13 → 2026-08-01 (rango ya autorizado para lectura en otras tareas); el rango exacto lo fija Fran. Nunca desde 2026-08-02 (holdout).
 - Volumen: unas 48 h de tickers (retención 24 h en el archivo de mercado: puede que el rango real quede limitado por esa retención), 2 880 velas de 1 m y 576 de 5 m por producto, y los períodos y respuestas de funding del rango.
 - Propósito: ejecutar estos validadores y producir el informe reproducible de #183. Sin escritura, sin otra captura, sin sesión.
+
+## Muestra de tiempos de la captura en vivo (P2 nivel A, BAL-DECISION-183-07)
+
+Herramienta aparte: `python/balancita_engine/capture_timing_sample.py` (`capture-timing-sample.v1`), pruebas en `python/tests/test_capture_timing_sample.py`. No forma parte de los validadores: estos siguen rechazando todo rango desde el corte del holdout.
+
+- Ventana fija `[2026-10-15T06:00:00Z, 2026-10-15T12:00:00Z)` y productos `PF_XBTUSD` y `PF_ETHUSD`, como constantes del módulo. La línea de comandos solo recibe `--db`; `build_sample` rechaza otra ventana u otros productos.
+- Solo tiempos y contadores. Un autorizador de SQLite deniega la lectura de cualquier columna que no esté en `ALLOWED_COLUMNS` (ningún precio, tasa, volumen, bid/ask, tamaño ni cuerpo `raw_*` / `*_json`) y toda escritura, y la base se abre con `mode=ro` y `query_only`.
+- Presupuesto: se cuenta con `COUNT(*)` antes de leer filas; si el total pasa de 300 000 se detiene sin leer nada más. Cada consulta tiene un límite de 60 s. Una sola corrida.
+- Mide nuestra recepción (cobertura, silencios, orden de `seq`, demora entre el evento y nuestro registro, cota de desfase de reloj con `server_time` del funding). No mide cuándo publica Kraken ni valida valores. Los límites de silencio de 15/25/45 s solo se cuentan; ninguno se adopta.
+- Sale un JSON agregado con versión, ventana, filtros efectivos y huella SHA-256; si una guarda detiene la corrida, `stopped` dice por qué y el código de salida es 2.
