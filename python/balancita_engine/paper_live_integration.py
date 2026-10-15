@@ -523,6 +523,10 @@ class LiveSession(object):
             return
         record = {"source": "funding", "kind": "funding_book_diverged",
                   **{k: [list(x) for x in v] for k, v in diverged.items()}}
+        if self.on_funding_divergence == "halt":
+            # one line per occurrence, not per content: the same divergence that comes back after an acknowledged restart must not be
+            # swallowed by the audit's dedupe (the process counts these lines to know whether an operator has seen it)
+            record["occurrence"] = 1 + sum(1 for r in self.audit.records() if r["kind"] == "funding_book_diverged")
         if self.audit.add(record):
             self.stats["audit_new"] += 1
         if self.on_funding_divergence == "halt":

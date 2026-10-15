@@ -456,6 +456,42 @@ class TestObservedLifecycle(unittest.TestCase):
         self.assertGreaterEqual(report["funding"]["divergence_evidence"], 1)       # the evidence is still there
         self.assertFalse(report["funding"]["pnl_verified"])
 
+    def test_the_same_divergence_after_an_acknowledged_restart_is_a_new_occurrence_the_operator_must_see(self):
+        """D-205-06 / BAL-COORD-205-02: the audit dedupes by content, so the SAME divergence that comes back after an acknowledged
+        restart used to add no line, the count stayed at what the operator had acknowledged, and if the process then died before
+        ``halt.json`` (here: its write fails) with the heartbeat saying LIVE or absent, the next start went through unattended."""
+        _, clock = self.halted_run()
+        before = self.read(LP.RESTARTS_FILE) if os.path.exists(os.path.join(self.directory, LP.RESTARTS_FILE)) else None
+        self.assertIsNone(before)
+        restarted = self.supervisor(clock)
+        restarted.start(restart=True)
+        acknowledged = self.read(LP.RESTARTS_FILE)["acknowledged_divergences"]
+        self.diverge_at(restarted, 1)
+        real, halt_path = LP._write_json, os.path.join(self.directory, LP.HALT_FILE)
+
+        def refuse_halt(path, body):
+            if path == halt_path:
+                raise OSError(28, "No space left on device")
+            return real(path, body)
+        LP._write_json = refuse_halt
+        try:
+            self.assertEqual(restarted.run(max_steps=60), LP.EXIT_HALTED)
+        finally:
+            LP._write_json = real
+        self.assertFalse(os.path.exists(halt_path))                                  # the halt file never made it
+        self.assertGreater(restarted._divergences_in_audit(), acknowledged)          # the occurrence is in the audit anyway
+        beat_path = os.path.join(self.directory, LP.HEARTBEAT_FILE)
+        beat = self.read(LP.HEARTBEAT_FILE)
+        for name, tamper in (("heartbeat says LIVE", lambda: LP._write_json(beat_path, dict(beat, phase=LP.LIVE))),
+                             ("heartbeat missing", lambda: os.remove(beat_path))):
+            tamper()
+            with self.subTest(probe=name):
+                again = self.supervisor(Clock(5))
+                with self.assertRaises(LP.ProcessError) as caught:
+                    again.start()                                                    # unattended: still refused
+                self.assertEqual(caught.exception.reason, "restart_requires_operator")
+                self.assertIsNone(again.session)
+
     def test_a_crash_after_an_acknowledged_halt_restarts_without_the_operator(self):
         _, clock = self.halted_run()
         restarted = self.supervisor(clock)
