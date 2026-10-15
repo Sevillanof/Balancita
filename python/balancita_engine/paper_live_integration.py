@@ -20,7 +20,6 @@ No wall clock, no network, no process: the caller decides when to ``step``. ``Fa
 kill the "process" at a named point.
 """
 
-import fcntl
 import json
 import os
 import sqlite3
@@ -31,8 +30,7 @@ from .paper_live_ingest import GAP_SAMPLE, SILENCE_SAMPLE, Ingestor, SourceReade
 from .paper_runner import PaperRunner, RunnerError, make_event
 from .paper_runner_store import CHECKPOINT_FILE as RUNNER_CHECKPOINT_FILE
 from .paper_runner_store import JOURNAL_FILE as RUNNER_JOURNAL_FILE
-from .paper_runner_store import LOCK_FILE as RUNNER_LOCK_FILE
-from .paper_runner_store import FileRunnerJournal, StoreError, read_checkpoint
+from .paper_runner_store import DirectoryLock, FileRunnerJournal, StoreError, read_checkpoint
 
 SCHEMA = "balancita-paper-live-session.v1"
 CHECKPOINT_SCHEMA = "balancita-paper-live-session-checkpoint.v1"
@@ -236,19 +234,24 @@ class LiveSession(object):
             raise IntegrationError("session_exists", directory)
         os.makedirs(directory, exist_ok=True)
         ingest_kw = dict(ingest_kw or {})
-        evaluator = LE.LiveEvaluator.create(os.path.join(directory, EVALUATOR_FILE), strategies, products,
-                                            decide_from_ms=decide_from_ms, decide_until_ms=decide_until_ms,
-                                            **dict(evaluator_kw or {}))
         runner_dir = os.path.join(directory, RUNNER_DIR)
         os.makedirs(runner_dir, exist_ok=True)
-        runner = PaperRunner.create(runner_dir, runner_config, strategies, evaluator=evaluator.evaluator)
-        identity = cls._identity(products, ingest_kw, evaluator, runner.journal.entries[0], source_id, max_quote_gap_ms)
-        audit = AuditJournal.create(os.path.join(directory, AUDIT_FILE), {"session_id": identity["session_id"]})
-        reader = SourceReader(source_path)
-        session = cls(directory, source_path, strategies, runner_config, runner, evaluator, audit, Ingestor(reader, expected_products=tuple(products), **ingest_kw),
-                      reader, FundingSource(source_path), identity, max_quote_gap_ms=max_quote_gap_ms)
-        _atomic_write(os.path.join(directory, SESSION_FILE), identity)
-        session.save_checkpoint()
+        lock = _take_lock(runner_dir)                  # the writer's lock first: nothing below is written without owning it
+        try:
+            evaluator = LE.LiveEvaluator.create(os.path.join(directory, EVALUATOR_FILE), strategies, products,
+                                                decide_from_ms=decide_from_ms, decide_until_ms=decide_until_ms,
+                                                **dict(evaluator_kw or {}))
+            runner = PaperRunner.create(runner_dir, runner_config, strategies, evaluator=evaluator.evaluator, lock=lock)
+            identity = cls._identity(products, ingest_kw, evaluator, runner.journal.entries[0], source_id, max_quote_gap_ms)
+            audit = AuditJournal.create(os.path.join(directory, AUDIT_FILE), {"session_id": identity["session_id"]})
+            reader = SourceReader(source_path)
+            session = cls(directory, source_path, strategies, runner_config, runner, evaluator, audit, Ingestor(reader, expected_products=tuple(products), **ingest_kw),
+                          reader, FundingSource(source_path), identity, max_quote_gap_ms=max_quote_gap_ms)
+            _atomic_write(os.path.join(directory, SESSION_FILE), identity)
+            session.save_checkpoint()
+        except BaseException:
+            lock.release()                              # a session that failed to start leaves the directory free
+            raise
         return session
 
     @classmethod
@@ -256,8 +259,26 @@ class LiveSession(object):
                 decide_until_ms=None, source_id="synthetic", ingest_kw=None, evaluator_kw=None, max_quote_gap_ms=15_000):
         """Rebuilds a session from its directory. Refuses (``IntegrationError`` with a stable reason) a directory whose parts
         do not belong to the same session, a checkpoint ahead of any journal, or any configuration that differs from the one
-        that created it. ``recovery_ms`` is the restart clock handed to the runner."""
-        _refuse_if_held(directory)
+        that created it. ``recovery_ms`` is the restart clock handed to the runner.
+
+        The runner's writer lock is taken BEFORE anything is opened: opening the evaluator log and the audit journal cuts a half
+        line (a write), and a half line may be the live writer's own write in flight. The same lock is then handed to the
+        runner, so the directory is owned without a gap from the first byte read to ``close``; a second opener is refused
+        (``runner_directory_locked``) before it touches a file, and a recovery that fails releases the lock."""
+        runner_dir = os.path.join(directory, RUNNER_DIR)
+        lock = _take_lock(runner_dir) if os.path.isdir(runner_dir) else None
+        try:
+            return cls._recover(lock, directory, source_path, strategies, products, runner_config, recovery_ms,
+                                decide_from_ms=decide_from_ms, decide_until_ms=decide_until_ms, source_id=source_id,
+                                ingest_kw=ingest_kw, evaluator_kw=evaluator_kw, max_quote_gap_ms=max_quote_gap_ms)
+        except BaseException:
+            if lock is not None:
+                lock.release()
+            raise
+
+    @classmethod
+    def _recover(cls, lock, directory, source_path, strategies, products, runner_config, recovery_ms, *, decide_from_ms,
+                 decide_until_ms, source_id, ingest_kw, evaluator_kw, max_quote_gap_ms):
         try:
             with open(os.path.join(directory, SESSION_FILE), encoding="utf-8") as handle:
                 stored = json.load(handle)
@@ -289,7 +310,7 @@ class LiveSession(object):
             raise IntegrationError("audit_foreign_session", directory)
         checkpoint = _read_checkpoint(os.path.join(directory, CHECKPOINT_FILE))
         _verify_checkpoint(checkpoint, stored, runner_journal.entries, runner_checkpoint, evaluator, audit)
-        runner = PaperRunner.recover(runner_dir, runner_config, strategies, recovery_ms, evaluator=evaluator.evaluator)
+        runner = PaperRunner.recover(runner_dir, runner_config, strategies, recovery_ms, evaluator=evaluator.evaluator, lock=lock)
         reader = SourceReader(source_path)
         ingestor = Ingestor.from_checkpoint(reader, checkpoint["ingestor"], expected_products=tuple(products), **ingest_kw)
         ingestor.mark_recovered()               # the stretch nobody observed is told as an observation_gap, never as a silence
@@ -631,19 +652,12 @@ class LiveSession(object):
                 "orders": stable_hash([{k: o[k] for k in ("state", "intent_id", "product_id", "strategy_id", "side")} for o in runner.orders()])}
 
 
-def _refuse_if_held(directory):
-    """A live writer holds the runner's lock for its whole life. Opening the evaluator log and the audit journal cuts a half
-    line (a write), and a half line may be the live writer's own write in flight, so a directory that is held is refused BEFORE
-    anything is opened. The probe takes the lock and lets it go at once; the runner's own exclusive lock stays the guard (two
-    openers that start in the same instant can still pass the probe, and the second one then fails at the runner)."""
-    path = os.path.join(directory, RUNNER_DIR, RUNNER_LOCK_FILE)
-    if not os.path.exists(path):
-        return
-    with open(path, "a") as handle:
-        try:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError:
-            raise IntegrationError("runner_directory_locked", "another process (or runner) writes in " + directory)
+def _take_lock(runner_dir):
+    """The runner's own single-writer lock (``runner.lock``), taken by the session and handed to the runner."""
+    try:
+        return DirectoryLock(runner_dir)
+    except StoreError as error:
+        raise IntegrationError("runner_" + error.reason, str(error))
 
 
 def _fsync_dir(path):

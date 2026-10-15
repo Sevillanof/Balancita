@@ -9,7 +9,10 @@ import errno
 import gc
 import os
 import shutil
+import subprocess
+import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -17,6 +20,7 @@ from balancita_engine import paper_live_integration as LI
 from balancita_engine import replay_specs as RS
 from balancita_engine import signal_continuity as SC
 from balancita_engine.paper_runner import REFUSED, RunnerError
+from balancita_engine.paper_runner_store import DirectoryLock, StoreError
 from live_world import LOAD_START, World
 from test_paper_live_integration import (BTC, ENTRY_QUOTE_MS, ENTRY_STEP, ETH, HOLE, TIMES, Circuit, abandon, journal_clock, new_session,
                                          recover_session, record)
@@ -436,6 +440,124 @@ class TestSecondProcessOnTheSession(Base):
         with self.assertRaises(Exception):
             new_session(world, directory, self.cache["strategies"], products=(BTC, ETH))
         self.assertEqual(disk(directory), before)
+
+
+CHILD = """
+import os, sys, time
+sys.path.insert(0, {py!r})
+sys.path.insert(0, {tests!r})
+import test_paper_live_integration as TI
+from types import SimpleNamespace
+from balancita_engine import paper_live_evaluator as LE
+from balancita_engine import paper_live_integration as LI
+from balancita_engine import replay_specs as RS
+directory, capture, recovery_ms, sync, role = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4], sys.argv[5]
+real = LE.LiveEvaluator.recover.__func__
+def seen(cls, *a, **k):                                   # the first thing the session opens: the evaluator log
+    open(os.path.join(sync, "opened." + role), "w").close()
+    return real(cls, *a, **k)
+LE.LiveEvaluator.recover = classmethod(seen)
+strategies, _ = RS.load_frozen()
+open(os.path.join(sync, "ready." + role), "w").close()
+while not all(os.path.exists(os.path.join(sync, "ready." + r)) for r in ("a", "b")):
+    time.sleep(0.01)                                       # both start together
+try:
+    session = TI.recover_session(SimpleNamespace(path=capture), directory, strategies, recovery_ms, products=(TI.BTC, TI.ETH))
+    print("won", flush=True)
+    session.runner.close()
+except Exception as error:
+    print("rejected:" + getattr(error, "reason", type(error).__name__), flush=True)
+"""
+
+
+class TestLockIsOwnedBeforeAnythingIsOpened(Base):
+    """BAL-REV-190-01 (B5): the session takes the runner's writer lock before it opens, creates or repairs a file, hands that same
+    lock to the runner, and lets it go if it fails to start. Two processes that start together: one owns the directory, the
+    other is refused before it opens anything."""
+
+    def copy_of_the_snapshot(self):
+        root = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, root, True)
+        world = self.cache["world"].fork(root, self.cache["snap"]["world"])
+        directory = os.path.join(root, "s")
+        shutil.copytree(self.cache["snap"]["session"], directory)
+        return world, directory, os.path.join(directory, LI.RUNNER_DIR)
+
+    def test_the_lock_is_already_held_when_the_evaluator_log_and_the_audit_are_opened(self):
+        world, directory, runner_dir = self.copy_of_the_snapshot()
+        held = {}
+        real_eval, real_audit = LI.LE.LiveEvaluator.recover.__func__, LI.AuditJournal.open.__func__
+
+        def probe(name):
+            try:
+                DirectoryLock(runner_dir).release()
+                held[name] = False
+            except StoreError:
+                held[name] = True
+
+        def eval_recover(cls, *a, **k):
+            probe("evaluator")
+            return real_eval(cls, *a, **k)
+
+        def audit_open(cls, *a, **k):
+            probe("audit")
+            return real_audit(cls, *a, **k)
+
+        with mock.patch.object(LI.LE.LiveEvaluator, "recover", classmethod(eval_recover)), \
+                mock.patch.object(LI.AuditJournal, "open", classmethod(audit_open)):
+            session = recover_session(world, directory, self.cache["strategies"], journal_clock(directory), products=(BTC, ETH))
+        self.live.append(session)
+        self.assertEqual(held, {"evaluator": True, "audit": True})
+        with self.assertRaises(StoreError):                     # and it is the runner that keeps it afterwards
+            DirectoryLock(runner_dir)
+
+    def test_the_runner_keeps_that_same_lock_until_close(self):
+        world, directory, runner_dir = self.copy_of_the_snapshot()
+        session = recover_session(world, directory, self.cache["strategies"], journal_clock(directory), products=(BTC, ETH))
+        self.live.append(session)
+        with self.assertRaises(StoreError):
+            DirectoryLock(runner_dir)
+        session.runner.close()
+        DirectoryLock(runner_dir).release()                      # closing the runner frees it
+
+    def test_a_recovery_that_is_refused_leaves_the_directory_free(self):
+        world, directory, runner_dir = self.copy_of_the_snapshot()
+        before = disk(directory)
+        with self.assertRaises(LI.IntegrationError):
+            recover_session(world, directory, self.cache["strategies"], journal_clock(directory), products=(BTC,))   # another product set
+        DirectoryLock(runner_dir).release()
+        self.assertEqual(disk(directory), before)
+
+    def test_a_session_that_fails_to_start_leaves_the_directory_free(self):
+        world, directory, runner_dir = self.copy_of_the_snapshot()
+        root = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, root, True)
+        fresh = os.path.join(root, "new")
+        os.makedirs(fresh)
+        with open(os.path.join(fresh, LI.AUDIT_FILE), "w") as handle:      # create() fails when it reaches the audit journal
+            handle.write("")
+        with self.assertRaises(LI.IntegrationError):
+            new_session(world, fresh, self.cache["strategies"], products=(BTC, ETH))
+        DirectoryLock(os.path.join(fresh, LI.RUNNER_DIR)).release()
+
+    def test_two_processes_that_start_together_leave_one_owner_and_the_other_opens_nothing(self):
+        here = os.path.dirname(os.path.abspath(__file__))
+        py = os.path.dirname(here)
+        for round_ in range(3):
+            world, directory, _ = self.copy_of_the_snapshot()
+            sync = tempfile.mkdtemp()
+            self.addCleanup(shutil.rmtree, sync, True)
+            env = dict(os.environ, PYTHONPATH=py + os.pathsep + here)
+            code = CHILD.format(py=py, tests=here)
+            children = {role: subprocess.Popen([sys.executable, "-W", "ignore", "-c", code, directory, world.path,
+                                                str(journal_clock(directory)), sync, role], env=env,
+                                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) for role in ("a", "b")}
+            out = {role: proc.communicate(timeout=600)[0].strip().splitlines()[-1:] for role, proc in children.items()}
+            results = sorted(v[0] if v else "no-output" for v in out.values())
+            with self.subTest(round=round_):
+                self.assertEqual(results, ["rejected:runner_directory_locked", "won"])
+                opened = sorted(name for name in os.listdir(sync) if name.startswith("opened."))
+                self.assertEqual(len(opened), 1)                  # only the owner ever opened the evaluator log
 
 
 if __name__ == "__main__":
