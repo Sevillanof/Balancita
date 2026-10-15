@@ -90,11 +90,12 @@ class TestConfiguration(unittest.TestCase):
         a, b = LP.validate_config(config_dict()), LP.validate_config(dict(reversed(list(config_dict().items()))))
         self.assertEqual(a["digest"], b["digest"])
         self.assertEqual(a["capital_policy"], LP.CAPITAL_POLICY)
+        self.assertEqual(a["on_funding_divergence"], "halt")
         self.assertNotEqual(LP.validate_config(config_dict(max_quote_gap_ms=20_000))["digest"], a["digest"])
 
     def test_what_is_wrong_is_refused_with_a_reason_and_nothing_is_guessed(self):
         for over in ({"products": []}, {"products": ["BTC-EUR"]}, {"products": [BTC, BTC]}, {"decide_from_ms": "x"},
-                     {"decide_until_ms": FIRST_DECISION}, {"funding_mode": "real"}, {"on_funding_divergence": "ignore"},
+                     {"decide_until_ms": FIRST_DECISION}, {"funding_mode": "real"}, {"on_funding_divergence": "ignore"}, {"on_funding_divergence": "alert"},
                      {"strategies": "all"}, {"capital_policy": "kelly"}, {"surprise": 1}, {"block_stale_entries": 1}):
             with self.assertRaises(LP.ProcessError, msg=str(over)) as caught:
                 LP.validate_config(config_dict(**over))

@@ -53,7 +53,7 @@ FINAL_PHASES = (STOPPED_PHASE, HALTED, REFUSED_PHASE)
 EXIT_OK, EXIT_REFUSED, EXIT_HALTED = 0, 2, 3
 
 DEFAULTS = {"source_id": SYNTHETIC_SOURCE, "decide_until_ms": None, "max_quote_gap_ms": 15_000, "block_stale_entries": True,
-            "funding_mode": LI.SYNTHETIC_FUNDING, "on_funding_divergence": "alert", "ingest_kw": {}, "evaluator_kw": {},
+            "funding_mode": LI.SYNTHETIC_FUNDING, "on_funding_divergence": "halt", "ingest_kw": {}, "evaluator_kw": {},
             "strategies": "frozen", "capital_policy": CAPITAL_POLICY, "step_interval_ms": 1_000, "min_free_bytes": 1 << 30, "warmup_minutes": None}
 REQUIRED = ("schema", "products", "decide_from_ms")
 
@@ -105,7 +105,7 @@ def validate_config(raw):
         raise ProcessError("config_invalid", "block_stale_entries")
     if config["funding_mode"] not in (LI.SYNTHETIC_FUNDING, LI.OBSERVED_FUNDING):
         raise ProcessError("config_invalid", "funding_mode")
-    if config["on_funding_divergence"] not in ("alert", "halt"):
+    if config["on_funding_divergence"] != "halt":                    # BAL-DECISION-184-01: an unexplained divergence stops the session
         raise ProcessError("config_invalid", "on_funding_divergence")
     for key in ("ingest_kw", "evaluator_kw"):
         if not isinstance(config[key], dict):

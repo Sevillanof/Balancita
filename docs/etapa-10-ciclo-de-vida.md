@@ -31,6 +31,7 @@ autorización escrita de Fran y un cambio de código revisado, no una opción.
 
 - Arranque: el pre-vuelo y el calentamiento completo van antes de evaluar señales como vigentes. La fase `LIVE` empieza cuando todos
   los productos tienen vela hasta el primer instante de decisión y fuera de la supresión por hueco.
+- Divergencia interna de funding (BAL-DECISION-184-01): la sesión se para (`HALTED`), la evidencia queda en la auditoría y el P&L se marca no verificado; se reinicia solo con `--restart`.
 - Falla de disco o de un paso: la instancia pasa a `HALTED` (P3 `Mantener`, D-186-2 `Toda`), escribe el reporte y sale con estado 3.
   La recuperación equivale a un corte de energía en esa escritura.
 - Corte (SIGKILL): sin reporte; el latido queda en `WARMUP`/`LIVE`; `start` recupera con el tramo sin observar declarado
