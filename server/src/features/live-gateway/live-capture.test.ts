@@ -110,7 +110,11 @@ describe('live capture process core', () => {
     })
     // Advance the process clock past the minute so the 1 s tick closes it.
     now += 120_000
-    await wait(40)
+    await until(() =>
+      (store.candleRevisions() as Array<{ is_closed: number }>).some(
+        (row) => row.is_closed === 1,
+      ),
+    )
     await capture.stop()
     store.close()
 
@@ -135,7 +139,9 @@ describe('live capture process core', () => {
     dirs.push(dir)
     const path = join(dir, 'market.sqlite')
     const store = new FuturesMarketStore(path)
+    let revisionAttempts = 0
     store.saveCandleRevision = () => {
+      revisionAttempts += 1
       throw new Error('UNIQUE constraint failed: candle revisions')
     }
     const { socket } = fakeSocket()
@@ -169,7 +175,8 @@ describe('live capture process core', () => {
         }),
       })
     now += 120_000
-    await wait(40)
+    // Several failing ticks, so "logged once" is checked after the failure repeated.
+    await until(() => revisionAttempts >= 3)
     await capture.stop()
     store.close()
     const reader = new FuturesMarketStore(path, { readOnly: true })
@@ -253,7 +260,7 @@ describe('live capture process core', () => {
       fetchCatalog: async () => catalog,
       fundingFetch: async () => {
         calls += 1
-        if (calls === 2) stall(80) // the whole fixed window of the old wait(60)
+        if (calls === 2) stall(80) // longer than any fixed window
         return new Response(
           JSON.stringify({
             result: 'success',
@@ -340,7 +347,11 @@ describe('live capture process core', () => {
       log: () => undefined,
     })
     await capture.start()
-    await wait(30)
+    await until(
+      () =>
+        requests.length >= 2 &&
+        store.latestOfficialBucket('PF_XBTUSD', M) !== undefined,
+    )
     // 5m first: on a 5 minute boundary the closed 5m candle is known before
     // the 1m candle that closes with it, so verdicts see the fresh trend bar.
     const backfill = requests.slice(0, 2)
@@ -352,7 +363,9 @@ describe('live capture process core', () => {
     // Settled closed candles only: the open minute is never stored.
     expect(lastMinute + M).toBeLessThanOrEqual(now)
     now += 2 * M
-    await wait(40)
+    await until(
+      () => (store.latestOfficialBucket('PF_XBTUSD', M) ?? 0) > lastMinute,
+    )
     await capture.stop()
     const later = requests.filter((item) => item.interval === '1m').at(-1)!
     expect(later.from).toBe(lastMinute + M)
@@ -370,7 +383,7 @@ describe('live capture process core', () => {
     const M = 60_000
     const H = 60 * M
     let now = 1_791_281_220_000 + 10 * M + 5_000
-    const run = async (repairMs?: number) => {
+    const run = async (done: () => boolean, repairMs?: number) => {
       const capture = createLiveCapture({
         store,
         clock: () => now,
@@ -409,13 +422,23 @@ describe('live capture process core', () => {
         log: () => undefined,
       })
       await capture.start()
-      await wait(200)
+      await until(done)
       await capture.stop()
     }
-    await run()
+    await run(
+      () =>
+        store.latestOfficialBucket('PF_XBTUSD', M) !== undefined &&
+        store.latestOfficialBucket('PF_XBTUSD', 5 * M) !== undefined,
+    )
     const before = store.latestOfficialBucket('PF_XBTUSD', M)!
     now += 40 * H
-    await run()
+    await run(
+      () =>
+        (store.latestOfficialBucket('PF_XBTUSD', M) ?? 0) > before + 39 * H &&
+        (store.latestOfficialBucket('PF_XBTUSD', 5 * M) ?? 0) >
+          before + 39 * H &&
+        (store.gapsAsOf(now) as Array<{ feed: string }>).length >= 2,
+    )
     const after = store.latestOfficialBucket('PF_XBTUSD', M)!
     expect(after).toBeGreaterThan(before + 39 * H)
     // No hole: every minute between the two runs is stored.
@@ -477,7 +500,11 @@ describe('live capture process core', () => {
       log: () => undefined,
     })
     await first.start()
-    await wait(60)
+    await until(
+      () =>
+        store.latestOfficialBucket('PF_XBTUSD', M) !== undefined &&
+        store.latestOfficialBucket('PF_XBTUSD', 5 * M) !== undefined,
+    )
     await first.stop()
     const countHole = () =>
       store.countOfficialBuckets('PF_XBTUSD', M, now - 8 * M, now - 4 * M)
@@ -517,7 +544,7 @@ describe('live capture process core', () => {
       log: () => undefined,
     })
     await full.start()
-    await wait(150)
+    await until(() => countHole() > holey)
     await full.stop()
     expect(countHole()).toBeGreaterThan(holey)
     store.close()
@@ -541,7 +568,9 @@ describe('live capture process core', () => {
       log: (line) => lines.push(line),
     })
     await capture.start()
-    await wait(30)
+    await until(() =>
+      lines.some((line) => line.includes('official candles unavailable')),
+    )
     expect(capture.collector?.status).not.toBe('stopped')
     await capture.stop()
     expect(
@@ -629,7 +658,14 @@ describe('live capture process core', () => {
     it('backfills and polls every product, 5m before 1m, one product after another', async () => {
       const { store, capture, requests, advance } = setup()
       await capture.start()
-      await wait(40)
+      await until(
+        () =>
+          requests.length >= 6 &&
+          productsOf.every(
+            ({ productId }) =>
+              store.latestOfficialBucket(productId, M) !== undefined,
+          ),
+      )
       const firstRound = requests
         .slice(0, 6)
         .map((item) => `${item.product} ${item.interval}`)
@@ -647,7 +683,12 @@ describe('live capture process core', () => {
       for (const last of lasts) expect(last).toBeDefined()
       expect(new Set(lasts).size).toBe(1)
       advance(2 * M)
-      await wait(40)
+      await until(() =>
+        productsOf.every(
+          ({ productId }, index) =>
+            (store.latestOfficialBucket(productId, M) ?? 0) > lasts[index]!,
+        ),
+      )
       await capture.stop()
       for (const [index, { productId }] of productsOf.entries()) {
         expect(store.latestOfficialBucket(productId, M)).toBeGreaterThan(
@@ -666,7 +707,7 @@ describe('live capture process core', () => {
     it('staggers requests by the configured gap', async () => {
       const { store, capture, requests } = setup({ officialRequestGapMs: 20 })
       await capture.start()
-      setTimeout(() => stall(250), 30) // longer than the old fixed wait(220)
+      setTimeout(() => stall(250), 30) // longer than the request gap
       await until(() => requests.length >= 6)
       await capture.stop()
       expect(requests.length).toBeGreaterThanOrEqual(6)
@@ -680,7 +721,16 @@ describe('live capture process core', () => {
     it('does not let one failing product block the others, and names it in the log', async () => {
       const { store, capture, lines } = setup({}, ['PF_ETHUSD'])
       await capture.start()
-      await wait(40)
+      await until(
+        () =>
+          store.latestOfficialBucket('PF_SOLUSD', M) !== undefined &&
+          store.latestOfficialBucket('PF_XBTUSD', M) !== undefined &&
+          lines.some(
+            (line) =>
+              line.includes('official candles unavailable') &&
+              line.includes('PF_ETHUSD'),
+          ),
+      )
       await capture.stop()
       expect(store.latestOfficialBucket('PF_ETHUSD', M)).toBeUndefined()
       expect(store.latestOfficialBucket('PF_SOLUSD', M)).toBeDefined()
@@ -700,7 +750,7 @@ describe('live capture process core', () => {
         officialRequestGapMs: 30_000,
       })
       await capture.start()
-      await wait(30)
+      await until(() => requests.length >= 1)
       const started = performance.now()
       await capture.stop()
       expect(performance.now() - started).toBeLessThan(1_000)
@@ -722,7 +772,9 @@ describe('live capture process core', () => {
         }),
       })
       await capture.start()
-      await wait(20)
+      await until(() =>
+        lines.some((line) => line.includes('PF_SOLUSD is missing')),
+      )
       await capture.stop()
       expect(lines).toContain(
         'catalog warning: PF_ETHUSD tick size 0.05 in the catalog differs from the pinned 0.1',
@@ -755,7 +807,7 @@ describe('live capture process core', () => {
       log: () => undefined,
     })
     await capture.start()
-    await wait(60)
+    await until(() => attempts >= 3 && store.instrumentVersions().length === 1)
     await capture.stop()
     expect(attempts).toBeGreaterThanOrEqual(3)
     expect(store.instrumentVersions()).toHaveLength(1)
@@ -839,7 +891,13 @@ describe('live capture process core', () => {
       log: (line) => lines.push(line),
     })
     await capture.start()
-    await wait(40)
+    await until(
+      () =>
+        candleRequests.length >= 3 &&
+        store.latestOfficialBucket('PF_XBTUSD', H) !== undefined &&
+        store.latestAnalyticsBucket('PF_XBTUSD', 'cvd', M) !== undefined &&
+        analyticsRequests.some((item) => item.path.endsWith('/open-interest')),
+    )
     // Verdict series first, then the chart-only timeframe of PF_XBTUSD.
     expect(candleRequests.slice(0, 3)).toEqual([
       'PF_XBTUSD 5m',
@@ -856,7 +914,13 @@ describe('live capture process core', () => {
     // Settled buckets only: the minute still filling is never stored.
     expect(latest + M).toBeLessThanOrEqual(now)
     now += 2 * M
-    await wait(40)
+    await until(
+      () =>
+        (store.latestAnalyticsBucket('PF_XBTUSD', 'cvd', M) ?? 0) > latest &&
+        lines.some((line) =>
+          line.includes('analytics unavailable (PF_XBTUSD open-interest'),
+        ),
+    )
     await capture.stop()
     const cvdSince = analyticsRequests
       .filter((item) => item.path.endsWith('/cvd'))
@@ -928,7 +992,7 @@ describe('live capture process core', () => {
       log: () => undefined,
     })
     await capture.start()
-    await wait(40)
+    await until(() => paths.length >= 3)
     await capture.stop()
     expect(paths).toEqual([
       'PF_XBTUSD/cvd',
@@ -991,8 +1055,18 @@ describe('live capture process core', () => {
         ),
       log: () => undefined,
     })
+    const tickerRows = () =>
+      Number(
+        (
+          store['db']
+            .prepare(
+              "SELECT COUNT(*) AS n FROM paper_futures_market_events WHERE feed='ticker'",
+            )
+            .get() as { n: number }
+        ).n,
+      )
     await capture.start()
-    await wait(40)
+    await until(() => tickerRows() > 0)
     await capture.stop()
     const rows = store['db']
       .prepare(
@@ -1060,7 +1134,20 @@ describe('live capture process core', () => {
       log: (line) => logs.push(line),
     })
     await capture.start()
-    await wait(200)
+    await until(
+      () =>
+        calls >= 2 && logs.some((line) => line.includes('ticker poll stuck')),
+    )
+    await until(
+      () =>
+        (
+          store['db']
+            .prepare(
+              "SELECT COUNT(*) AS n FROM paper_futures_market_events WHERE feed='ticker'",
+            )
+            .get() as { n: number }
+        ).n > 0,
+    )
     await capture.stop()
     const count = (
       store['db']
@@ -1106,7 +1193,11 @@ describe('live capture process core', () => {
       log: (line) => logs.push(line),
     })
     await capture.start()
-    await wait(400)
+    await until(
+      () =>
+        seen.size === 2 &&
+        logs.some((line) => line.includes('over its 40 ms budget')),
+    )
     await capture.stop()
     expect(seen).toEqual(new Set(['PF_XBTUSD', 'PF_ETHUSD']))
     expect(logs.some((line) => line.includes('over its 40 ms budget'))).toBe(
@@ -1156,16 +1247,23 @@ describe('live capture process core', () => {
       },
       log: (line) => logs.push(line),
     })
+    const readEvents = () =>
+      existsSync(logFile)
+        ? readFileSync(logFile, 'utf8')
+            .trim()
+            .split('\n')
+            .filter(Boolean)
+            .map((line) => JSON.parse(line) as { reason: string })
+        : []
     await capture.start()
-    await wait(150)
+    // The blocked poll answered and the chain went on: the deadline had its whole chance to fire.
+    await until(
+      () =>
+        calls >= 2 &&
+        readEvents().some((event) => event.reason === 'process_blocked'),
+    )
     await capture.stop()
-    const events = existsSync(logFile)
-      ? readFileSync(logFile, 'utf8')
-          .trim()
-          .split('\n')
-          .filter(Boolean)
-          .map((line) => JSON.parse(line) as { reason: string })
-      : []
+    const events = readEvents()
     expect(events.map((e) => e.reason)).toContain('process_blocked')
     expect(events.map((e) => e.reason)).not.toContain('poll_stuck')
     expect(logs.some((line) => line.includes('poll stuck'))).toBe(false)
@@ -1179,7 +1277,13 @@ describe('live capture process core', () => {
       const sockets: FuturesSocket[] = []
       const connectionHeaders: (string | undefined)[] = []
       let seq = 0
+      // The capture's clock is sampled by the feeder, in the same callback that delivers the frame.
+      // A healthy socket therefore never looks idle because this process was not scheduled for a
+      // while (the real-time version of that stall is the deterministic test at the end); a cut
+      // socket stops delivering, and the clock keeps moving, so its age still grows.
+      let sampled = Date.now()
       const feeder = setInterval(() => {
+        sampled = Date.now()
         const socket = sockets[sockets.length - 1]
         if (state.socketSilent || !socket) return
         seq += 1
@@ -1187,7 +1291,7 @@ describe('live capture process core', () => {
           data: JSON.stringify({
             feed: 'ticker',
             product_id: 'PF_XBTUSD',
-            time: Date.now(),
+            time: sampled,
             seq,
             bid: 90000,
             ask: 90001,
@@ -1212,6 +1316,7 @@ describe('live capture process core', () => {
       }
       return {
         state,
+        clock: () => sampled,
         cut: (on: boolean) => {
           state.socketSilent = on
           state.restBroken = on
@@ -1259,6 +1364,7 @@ describe('live capture process core', () => {
       const logs: string[] = []
       const capture = createLiveCapture({
         store,
+        clock: net.clock,
         makeSocket: net.makeSocket,
         fetchCatalog: async () => catalog,
         fundingFetch: async () => {
@@ -1324,13 +1430,24 @@ describe('live capture process core', () => {
       const { capture, store, net, logs, events } = await run({
         silenceMs: 80,
       })
-      await wait(150)
+      // Healthy: frames are stored and both REST sources have answered at least once.
+      await until(
+        () => store.eventCount() > 0 && net.connectionHeaders.length >= 4,
+      )
       expect(events().filter((e) => e.result === 'recovering')).toEqual([])
       const before = store.eventCount()
       expect(before).toBeGreaterThan(0)
 
       net.cut(true) // route change: socket silent, REST hangs
-      await wait(500)
+      const has = (component: string, field: 'reason' | 'result', v: string) =>
+        events().some((e) => e.component === component && e[field] === v)
+      await until(
+        () =>
+          has('websocket', 'reason', 'silent_socket') &&
+          has('rest-tickers', 'result', 'recovering') &&
+          has('rest-candles', 'result', 'recovering') &&
+          net.sockets.length > 1,
+      )
       const during = events()
       expect(
         during.some(
@@ -1351,7 +1468,12 @@ describe('live capture process core', () => {
       expect(capture.health.general()).toBe(true)
 
       net.cut(false) // new route works again; nobody restarts anything
-      await wait(400)
+      await until(
+        () =>
+          ['websocket', 'rest-tickers', 'rest-candles'].every((component) =>
+            has(component, 'result', 'recovered'),
+          ) && store.eventCount() > before,
+      )
       const after = events()
       for (const component of ['websocket', 'rest-tickers', 'rest-candles'])
         expect(
@@ -1376,9 +1498,15 @@ describe('live capture process core', () => {
         generalIdleMs: 30,
         withAnalytics: true,
       })
-      await wait(150)
+      await until(() => store.eventCount() > 0 && net.sockets.length === 1)
       net.cut(true)
-      await wait(500)
+      await until(
+        () =>
+          events().some(
+            (e) =>
+              e.component === 'websocket' && e.reason === 'general_incident',
+          ) && net.sockets.length > 1,
+      )
       const reconnects = events().filter(
         (e) => e.component === 'websocket' && e.reason === 'general_incident',
       )
@@ -1395,10 +1523,13 @@ describe('live capture process core', () => {
         generalIdleMs: 30,
         withAnalytics: true,
       })
-      await wait(150)
+      await until(() => store.eventCount() > 0 && net.sockets.length === 1)
       const sockets = net.sockets.length
       net.state.restBroken = true // the socket keeps receiving frames
-      await wait(400)
+      // The replace-or-leave decision is taken in the very call that makes the failure general, so
+      // once it is general the socket has already been judged.
+      await until(() => capture.health.general())
+      expect(capture.health.general()).toBe(true)
       expect(events().some((e) => e.component === 'rest-tickers')).toBe(true)
       expect(net.sockets.length).toBe(sockets)
       expect(events().filter((e) => e.component === 'websocket')).toEqual([])
@@ -1483,12 +1614,12 @@ describe('live capture process core', () => {
         },
       })
       await capture.start()
-      await wait(20)
+      await until(() => net.sockets.length === 1)
       deliver()
       net.state.restBroken = true // every REST source hangs until its deadline
-      for (let i = 0; i < 200 && stalls < 6; i += 1) await wait(20)
+      await until(() => stalls >= 6)
       expect(stalls).toBeGreaterThanOrEqual(6)
-      await wait(20)
+      await new Promise((resolve) => setImmediate(resolve)) // the last queued frame
       const events = readFileSync(logFile, 'utf8')
         .trim()
         .split('\n')
