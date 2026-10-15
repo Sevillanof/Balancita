@@ -54,11 +54,15 @@ const stall = (ms: number) => {
 /**
  * Waits for a condition instead of sleeping a fixed time: a count of polls inside a wall-clock
  * window depends on how long this process was scheduled, not on what the code does. The cap only
- * bounds a hang; the assertions that follow are unchanged.
+ * bounds a hang, and reaching it fails the test with the condition that never held.
  */
 const until = async (condition: () => boolean, capMs = 5_000) => {
   const deadline = Date.now() + capMs
-  while (!condition() && Date.now() < deadline) await wait(2)
+  while (!condition()) {
+    if (Date.now() >= deadline)
+      throw new Error(`until timed out after ${capMs} ms: ${condition}`)
+    await wait(2)
+  }
 }
 
 describe('live capture process core', () => {
@@ -1434,6 +1438,7 @@ describe('live capture process core', () => {
       await until(
         () => store.eventCount() > 0 && net.connectionHeaders.length >= 4,
       )
+      await wait(150) // dwell: a false incident would need time to appear
       expect(events().filter((e) => e.result === 'recovering')).toEqual([])
       const before = store.eventCount()
       expect(before).toBeGreaterThan(0)
@@ -1526,9 +1531,10 @@ describe('live capture process core', () => {
       await until(() => store.eventCount() > 0 && net.sockets.length === 1)
       const sockets = net.sockets.length
       net.state.restBroken = true // the socket keeps receiving frames
-      // The replace-or-leave decision is taken in the very call that makes the failure general, so
-      // once it is general the socket has already been judged.
       await until(() => capture.health.general())
+      // The replace-or-leave decision is scheduled with setImmediate when the failure turns general:
+      // let it run before checking that the socket was left alone.
+      await new Promise((resolve) => setImmediate(resolve))
       expect(capture.health.general()).toBe(true)
       expect(events().some((e) => e.component === 'rest-tickers')).toBe(true)
       expect(net.sockets.length).toBe(sockets)
