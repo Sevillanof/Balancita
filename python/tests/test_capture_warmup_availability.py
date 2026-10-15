@@ -17,21 +17,21 @@ CREATE TABLE paper_futures_official_candles(
   product_id TEXT NOT NULL, interval_ms INTEGER NOT NULL, bucket_start INTEGER NOT NULL, revision_hash TEXT NOT NULL,
   known_at INTEGER NOT NULL, open_price TEXT NOT NULL, high_price TEXT NOT NULL, low_price TEXT NOT NULL,
   close_price TEXT NOT NULL, volume_btc TEXT NOT NULL, response_sha256 TEXT NOT NULL,
-  PRIMARY KEY(product_id, interval_ms, bucket_start, revision_hash)) STRICT;
+  %s) STRICT;
 CREATE TABLE paper_futures_official_candle_responses(sha256 TEXT PRIMARY KEY, raw_response TEXT NOT NULL) STRICT;
 """
 
 
-def make_db(path, skip=(), revisions=1, empty_at=None, extra=True, second=()):
+def make_db(path, skip=(), revisions=1, empty_at=None, extra=True, second=(), revs=None, pk=True):
     if os.path.exists(path):
         os.remove(path)
     c = sqlite3.connect(path)
-    c.executescript(SCHEMA)
+    c.executescript(SCHEMA % ("PRIMARY KEY(product_id, interval_ms, bucket_start, revision_hash)" if pk else "UNIQUE(revision_hash, response_sha256)"))
     rows = []
     for i, b in enumerate(range(W0, W1, M1)):
         if i in skip:
             continue
-        for r in range(2 if i in second else revisions):
+        for r in range(revs(i) if revs else (2 if i in second else revisions)):
             value = "" if i == empty_at and r == 0 else SENTINEL
             rows.append((XBT, M1, b, "h%d-%d" % (b, r), b + M1 + 3_000 + r, value, SENTINEL, SENTINEL, SENTINEL, SENTINEL, "s"))
     if extra:
@@ -88,7 +88,9 @@ class Availability(Base):
         self.assertEqual(r["counts"]["empty_fields_rows"], 0)
         self.assertEqual(r["availability"]["consecutive_minutes_up_to_the_end"], 17_340)
         self.assertEqual(r["verdict"]["fitness"], "apta")
-        self.assertEqual(r["rows_scanned"], {"aggregate": 17_340, "fetch_planned": 17_340, "total_planned": 34_680, "fetched": 17_340})
+        self.assertEqual(r["rows_scanned"], {"fetched": 17_340, "limit": 60_000})
+        self.assertEqual(len(r["query_plan"]), 1)
+        self.assertTrue(r["query_plan"][0].startswith("SEARCH") and cwa.PK_INDEX in r["query_plan"][0])
         self.assertEqual(r["guards"], {"opened_with": "mode=ro", "query_only_readback": 1})
 
     def test_the_margin_is_exactly_fifty_minutes(self):
@@ -120,6 +122,11 @@ class Availability(Base):
         self.assertEqual(r["verdict"]["fitness"], "bloqueada")
         self.assertIn("1 rows with an empty", r["verdict"]["reasons"][0])
 
+    def test_an_empty_field_before_the_required_span_is_reported_but_does_not_block(self):
+        r = self.report(empty_at=10)                       # minute 10 is before the 17 290 minutes that end the window
+        self.assertEqual((r["counts"]["empty_fields_rows"], r["counts"]["empty_fields_rows_in_required_span"]), (1, 0))
+        self.assertEqual(r["verdict"]["fitness"], "apta")
+
     def test_revisions_are_counted_and_late_ones_show_in_known_at(self):
         r = self.report(second=range(0, 1_000))
         self.assertEqual(r["counts"]["rows"], 18_340)
@@ -129,35 +136,84 @@ class Availability(Base):
         self.assertEqual(r["availability"]["known_at_minus_bucket_end_ms"]["max"], 3_001)
         self.assertEqual(r["verdict"]["fitness"], "apta")
 
-    def test_two_revisions_on_every_minute_do_not_fit_the_budget(self):
-        r = self.report(revisions=2)           # 34 680 rows scanned twice: 69 360 > 60 000
-        self.assertEqual(r["stopped"], {"reason": "row_budget", "detail": {"total_planned": 69_360, "limit": 60_000}})
+    def test_two_revisions_on_every_minute_fit_now_that_there_is_no_second_pass(self):
+        r = self.report(revisions=2)
+        self.assertIsNone(r["stopped"])
+        self.assertEqual(r["counts"]["rows"], 34_680)
+        self.assertEqual(r["verdict"]["fitness"], "apta")
 
-    def test_over_the_scan_budget_nothing_is_fetched_and_nothing_is_sampled(self):
-        # 3 revisions: the aggregate scans 52 020 rows and the fetch would scan them again: 104 040 > 60 000
-        fetched = []
-        make_db(self.db, revisions=3)
+    def test_over_the_scan_budget_the_database_never_returns_more_than_the_limit(self):
+        # 4 revisions per minute: 69 360 rows in the window. The one statement is cut at 60 000 by LIMIT and refused.
+        make_db(self.db, revisions=4)
         conn = cwa._open_readonly(self.db)
+        seen = []
         real = cwa._Guard.fetch
 
         def spy(guard, mode, sql):
-            fetched.append(mode)
-            return real(guard, mode, sql)
+            rows = real(guard, mode, sql)
+            seen.append((sql, len(rows)))
+            return rows
         with mock.patch.object(cwa._Guard, "fetch", spy):
             r = cwa.build_report(conn)
         conn.close()
-        self.assertEqual(fetched, ["aggregate"])
-        self.assertEqual(r["stopped"], {"reason": "row_budget", "detail": {"total_planned": 104_040, "limit": 60_000}})
-        self.assertEqual(r["counts"]["rows"], 52_020)
+        self.assertEqual(r["stopped"], {"reason": "row_budget", "detail": {"fetched": 60_000, "limit": 60_000}})
+        self.assertEqual(max(n for _sql, n in seen), 60_000)               # the plan row aside, never more than the limit
+        self.assertEqual([sql.startswith("EXPLAIN") for sql, _n in seen], [True, False])    # no pre-count, no aggregate
+        for sql, _n in seen:
+            self.assertNotIn("COUNT(", sql)
+        self.assertNotIn("counts", r)
         self.assertNotIn("availability", r)
         self.assertNotIn("verdict", r)
 
-    def test_the_limit_is_on_the_total_scanned_rows_aggregate_included(self):
-        r = self.report(second=range(0, 12_660))      # 30 000 rows: 60 000 scanned, exactly the budget
+    def test_just_under_the_limit_is_analysed_and_exactly_the_limit_is_refused(self):
+        r = self.report(revs=lambda i: 4 if i < 7_979 else 3)      # 59 999 rows
         self.assertIsNone(r["stopped"])
-        self.assertEqual(r["rows_scanned"]["total_planned"], 60_000)
-        r = self.report(second=range(0, 12_661))      # one more row: refused
+        self.assertEqual(r["rows_scanned"], {"fetched": 59_999, "limit": 60_000})
+        self.assertEqual(r["counts"]["rows"], 59_999)
+        r = self.report(revs=lambda i: 4 if i < 7_980 else 3)      # 60 000 rows: may be more, refused
         self.assertEqual(r["stopped"]["reason"], "row_budget")
+
+    def test_the_statement_is_one_bounded_ordered_query_and_values_only_leave_as_a_flag(self):
+        sql = cwa.SQL_FETCH
+        self.assertEqual(sql.count("SELECT"), 1)
+        self.assertTrue(sql.endswith("ORDER BY bucket_start LIMIT 60000"))
+        head, tail = sql.split(" FROM ", 1)
+        self.assertTrue(head.startswith("SELECT bucket_start, known_at, CASE WHEN"))
+        for column in sorted(cwa.VALUE_COLUMNS):
+            self.assertIn(column, head)            # only inside the CASE
+            self.assertNotIn(column, tail.split(" WHERE ", 1)[1])
+        self.assertNotIn("COUNT", sql)
+        self.assertNotIn("known_at,", tail)        # no ordering by known_at: the primary-key order lets LIMIT cut
+
+    def test_a_flag_that_is_not_zero_or_one_stops(self):
+        make_db(self.db)
+        conn = cwa._open_readonly(self.db)
+        real = cwa._Guard.fetch
+
+        def lie(guard, mode, sql):
+            rows = real(guard, mode, sql)
+            return rows if sql.startswith("EXPLAIN") else [(b, k, SENTINEL) for b, k, _f in rows]
+        with mock.patch.object(cwa._Guard, "fetch", lie):
+            r = cwa.build_report(conn)
+        conn.close()
+        self.assertEqual(r["stopped"], {"reason": "unexpected_flag", "detail": None})
+
+    def test_without_the_primary_key_index_the_plan_is_refused_before_reading(self):
+        make_db(self.db, pk=False)
+        conn = cwa._open_readonly(self.db)
+        r = cwa.build_report(conn)
+        conn.close()
+        self.assertEqual(r["stopped"]["reason"], "query_plan")
+        self.assertTrue(any(d.startswith("SCAN") for d in r["query_plan"]))
+        self.assertNotIn("rows_scanned", r)
+
+    def test_a_plan_with_a_scan_or_a_temporary_sort_is_not_ok(self):
+        index = "SEARCH paper_futures_official_candles USING INDEX %s (product_id=? AND interval_ms=?)" % cwa.PK_INDEX
+        self.assertTrue(cwa._plan_ok([(0, 0, 0, index)])[0])
+        self.assertFalse(cwa._plan_ok([(0, 0, 0, index), (0, 0, 0, "USE TEMP B-TREE FOR ORDER BY")])[0])
+        self.assertFalse(cwa._plan_ok([(0, 0, 0, "SCAN paper_futures_official_candles")])[0])
+        self.assertFalse(cwa._plan_ok([(0, 0, 0, "SEARCH paper_futures_official_candles USING INDEX other_idx (a=?)")])[0])
+        self.assertFalse(cwa._plan_ok([])[0])
 
     def test_off_grid_buckets_are_reported_not_counted_as_minutes(self):
         a = cwa.analyse([(W0 + 5, W0 + M1), (W0, W0 + M1 + 1)])
@@ -171,19 +227,10 @@ class Guards(Base):
         self.conn = cwa._open_readonly(self.db)
         self.addCleanup(self.conn.close)
 
-    def test_the_price_columns_cannot_be_fetched_only_counted(self):
-        guard = cwa._Guard(self.conn, 0.0)
-        self.addCleanup(guard.close)
-        with self.assertRaises(sqlite3.DatabaseError):
-            guard.fetch("fetch", "SELECT open_price FROM paper_futures_official_candles LIMIT 1")
-        with self.assertRaises(sqlite3.DatabaseError):
-            guard.fetch("fetch", "SELECT COUNT(*) FROM paper_futures_official_candles WHERE open_price = ''")
-        self.assertEqual(guard.fetch("aggregate", "SELECT COUNT(*) FROM paper_futures_official_candles WHERE open_price = ''"), [(0,)])
-
     def test_nothing_else_is_readable_and_nothing_is_writable(self):
         guard = cwa._Guard(self.conn, 0.0)
         self.addCleanup(guard.close)
-        for mode in ("aggregate", "fetch"):
+        for mode in ("fetch",):
             with self.assertRaises(sqlite3.DatabaseError):
                 guard.fetch(mode, "SELECT raw_response FROM paper_futures_official_candle_responses")
             with self.assertRaises(sqlite3.DatabaseError):
@@ -209,7 +256,7 @@ class Guards(Base):
     def test_the_time_limit_stops_the_run(self):
         with mock.patch.object(cwa, "QUERY_TIMEOUT_S", -1), mock.patch.object(cwa, "PROGRESS_OPS", 1):
             r = cwa.build_report(self.conn)
-        self.assertEqual(r["stopped"], {"reason": "time_limit", "detail": "aggregate"})
+        self.assertEqual(r["stopped"], {"reason": "time_limit", "detail": "fetch"})
 
     def test_the_run_limit_stops_the_run(self):
         with mock.patch.object(cwa, "PROGRESS_OPS", 1):
@@ -260,7 +307,7 @@ class Output(Base):
         self.assertEqual(open(self.db, "rb").read(), before)
 
     def test_a_stopped_run_exits_with_2_and_still_prints_the_counts(self):
-        make_db(self.db, revisions=3)
+        make_db(self.db, revisions=4)
         code, result, _ = self.run_main(self.db)
         self.assertEqual(code, 2)
         self.assertEqual(result["stopped"]["reason"], "row_budget")

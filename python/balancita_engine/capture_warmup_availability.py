@@ -8,11 +8,13 @@ rate, volume or raw body leaves the database.
 
 Guards (the authorization is the contract, not this file; any other window, product, interval, table or column is refused):
 - read-only connection (``mode=ro``) and ``PRAGMA query_only`` read back (must be 1); a link or a missing file is refused;
-- a SQLite authorizer that denies every column not on the allow-list of the statement being run; the price and volume columns
-  are readable only by the aggregate that counts empty values and returns one integer;
-- scanned-row budget of 60 000 that includes the aggregate (which is the pre-count): the tool runs the aggregate first and
-  refuses to fetch anything unless the aggregate rows plus the rows to fetch fit in the budget (2 x rows <= 60 000); a refusal
-  reports the counts and nothing is sampled;
+- a SQLite authorizer that denies every column not on the allow-list; the price and volume columns can only be read inside the
+  fixed statement's ``CASE`` that turns them into a 0/1 flag, so nothing but an integer leaves the database;
+- ONE statement, no pre-count: it is bounded by ``LIMIT 60000`` and ordered by ``bucket_start`` (the primary-key order), so
+  the database never walks more than 60 000 rows. If 60 000 rows come back the window may hold more: the tool stops with
+  ``row_budget`` and analyses nothing (nothing is sampled; exactly 60 000 rows is also refused, on purpose);
+- before it runs, ``EXPLAIN QUERY PLAN`` must show a SEARCH on the primary-key index with no scan and no temporary sort;
+  otherwise it stops with ``query_plan`` and the published plan is the proof of what "scanned" means;
 - 60 s per statement (progress handler) and 10 min for the whole run; no retry, no widening.
 It measures our own recording, not when Kraken published, and says nothing about the values.
 
@@ -36,6 +38,7 @@ WINDOW_END_MS = 1_791_853_200_000  # 2026-10-13T01:00:00Z, exclusive
 WINDOW = (WINDOW_START_MS, WINDOW_END_MS)
 EXPECTED_MINUTES = (WINDOW_END_MS - WINDOW_START_MS) // INTERVAL_MS  # 17 340
 REQUIRED_MINUTES = 1_037_400_000 // INTERVAL_MS  # 17 290: required_warmup_ms of the frozen strategies
+REQUIRED_SPAN_START_MS = WINDOW_END_MS - REQUIRED_MINUTES * INTERVAL_MS  # the 17 290 minutes that end the window
 ROW_BUDGET = 60_000
 QUERY_TIMEOUT_S = 60
 RUN_TIMEOUT_S = 600
@@ -46,17 +49,17 @@ DB_NAME = "futures-market.sqlite"
 
 TIME_COLUMNS = {"product_id", "interval_ms", "bucket_start", "known_at"}
 VALUE_COLUMNS = {"open_price", "high_price", "low_price", "close_price", "volume_btc"}
-# Which columns the statement running right now may read; everything else is denied by the authorizer.
-_ALLOWED = {"aggregate": TIME_COLUMNS | VALUE_COLUMNS, "fetch": TIME_COLUMNS}
+# One mode only: the value columns are read by the fixed CASE of SQL_FETCH and by nothing else (tests pin the statement).
+_ALLOWED = {"fetch": TIME_COLUMNS | VALUE_COLUMNS}
+PK_INDEX = "sqlite_autoindex_paper_futures_official_candles_1"
 
 _WHERE = "product_id = '%s' AND interval_ms = %d AND bucket_start >= %d AND bucket_start < %d" % (
     PRODUCT, INTERVAL_MS, WINDOW_START_MS, WINDOW_END_MS)
 _EMPTY = "(%s IS NULL OR trim(%s) = '')"
-SQL_AGGREGATE = (
-    "SELECT COUNT(*), COUNT(DISTINCT bucket_start), MIN(bucket_start), MAX(bucket_start), "
-    "SUM(CASE WHEN %s THEN 1 ELSE 0 END) FROM %s WHERE %s" % (
-        " OR ".join(_EMPTY % (c, c) for c in sorted(VALUE_COLUMNS)), TABLE, _WHERE))
-SQL_FETCH = "SELECT bucket_start, known_at FROM %s WHERE %s ORDER BY bucket_start, known_at" % (TABLE, _WHERE)
+SQL_FETCH = (
+    "SELECT bucket_start, known_at, CASE WHEN %s THEN 1 ELSE 0 END FROM %s WHERE %s ORDER BY bucket_start LIMIT %d" % (
+        " OR ".join(_EMPTY % (c, c) for c in sorted(VALUE_COLUMNS)), TABLE, _WHERE, ROW_BUDGET))
+SQL_PLAN = "EXPLAIN QUERY PLAN " + SQL_FETCH
 
 
 class Stopped(Exception):
@@ -151,19 +154,28 @@ def analyse(rows):
 
 
 def verdict(counts, availability):
-    """``apta``: at least REQUIRED_MINUTES consecutive minutes up to the end of the window and no empty field."""
+    """``apta``: at least REQUIRED_MINUTES consecutive minutes up to the end of the window and no empty field in the
+    17 290 minutes that end the window (an empty field earlier in the window, or in a revision, is reported, not blocking)."""
     reasons = []
     if availability["consecutive_minutes_up_to_the_end"] < REQUIRED_MINUTES:
         reasons.append("only %d consecutive minutes up to the end of the window, %d are required" % (
             availability["consecutive_minutes_up_to_the_end"], REQUIRED_MINUTES))
-    if counts["empty_fields_rows"]:
-        reasons.append("%d rows with an empty price or volume field" % counts["empty_fields_rows"])
+    if counts["empty_fields_rows_in_required_span"]:
+        reasons.append("%d rows with an empty price or volume field in the %d minutes that end the window" % (
+            counts["empty_fields_rows_in_required_span"], REQUIRED_MINUTES))
     return {"fitness": "bloqueada" if reasons else "apta", "required_consecutive_minutes": REQUIRED_MINUTES,
             "reasons": reasons}
 
 
+def _plan_ok(plan):
+    """The plan must be a SEARCH on the primary-key index: no table scan and no temporary sort."""
+    details = [row[3] for row in plan]
+    searches = [d for d in details if d.startswith("SEARCH") and PK_INDEX in d]
+    return bool(searches) and not any(d.startswith("SCAN") or "TEMP B-TREE" in d for d in details), details
+
+
 def build_report(conn, window=WINDOW, product=PRODUCT, started=None):
-    """Run the two fixed statements. Anything other than the approved window and product is refused."""
+    """Run the one fixed statement. Anything other than the approved window and product is refused."""
     if tuple(window) != WINDOW or product != PRODUCT:
         raise ValueError("only the approved window and product are allowed")
     started = time.monotonic() if started is None else started
@@ -183,20 +195,26 @@ def build_report(conn, window=WINDOW, product=PRODUCT, started=None):
         if readback != 1:
             raise Stopped("connection_not_query_only")
         guard = _Guard(conn, started)
-        total, distinct, first, last, empty = guard.fetch("aggregate", SQL_AGGREGATE)[0]
-        counts = {"rows": total, "distinct_buckets": distinct, "min_bucket_start": first, "max_bucket_start": last,
-                  "empty_fields_rows": empty or 0}
-        result["counts"] = counts
-        scanned = total * 2  # the aggregate scanned them and the fetch is about to scan them again
-        result["rows_scanned"] = {"aggregate": total, "fetch_planned": total, "total_planned": scanned}
-        if scanned > ROW_BUDGET:
-            raise Stopped("row_budget", {"total_planned": scanned, "limit": ROW_BUDGET})
-        rows = [(r[0], r[1]) for r in guard.fetch("fetch", SQL_FETCH)]
-        if len(rows) != total:
-            raise Stopped("rows_changed_between_statements", {"counted": total, "fetched": len(rows)})
-        result["rows_scanned"]["fetched"] = len(rows)
+        plan = guard.fetch("fetch", SQL_PLAN)
+        ok, details = _plan_ok(plan)
+        result["query_plan"] = details
+        if not ok:
+            raise Stopped("query_plan", details)
+        raw = guard.fetch("fetch", SQL_FETCH)
+        result["rows_scanned"] = {"fetched": len(raw), "limit": ROW_BUDGET}
+        if len(raw) >= ROW_BUDGET:
+            raise Stopped("row_budget", {"fetched": len(raw), "limit": ROW_BUDGET})
+        if any(r[2] not in (0, 1) for r in raw):
+            raise Stopped("unexpected_flag")
+        rows = [(r[0], r[1]) for r in raw]
+        buckets = [r[0] for r in rows]
+        result["counts"] = {
+            "rows": len(rows), "distinct_buckets": len(set(buckets)),
+            "min_bucket_start": min(buckets) if buckets else None, "max_bucket_start": max(buckets) if buckets else None,
+            "empty_fields_rows": sum(r[2] for r in raw),
+            "empty_fields_rows_in_required_span": sum(r[2] for r in raw if r[0] >= REQUIRED_SPAN_START_MS)}
         result["availability"] = analyse(rows)
-        result["verdict"] = verdict(counts, result["availability"])
+        result["verdict"] = verdict(result["counts"], result["availability"])
     except Stopped as stop:
         result["stopped"] = {"reason": stop.reason, "detail": stop.detail}
     except sqlite3.DatabaseError as exc:

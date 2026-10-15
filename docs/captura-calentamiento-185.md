@@ -5,23 +5,23 @@ Autorización: BAL-DECISION-185-02 ([6199674315](https://github.com/Sevillanof/B
 
 ## Qué responde
 
-¿La captura viva tiene, para `PF_XBTUSD`, velas oficiales de 1 minuto en `[2026-10-01T00:00Z, 2026-10-13T01:00Z)` (17 340 minutos) y al menos 17 290 minutos consecutivos hasta el final de la ventana, sin campos vacíos? 17 290 = `required_warmup_ms` de las estrategias congeladas (1 037 400 000 ms = 3 458 barras de 5 min = 288 h 10 min); la prueba lo recalcula del código. Es una prueba de disponibilidad: no es el calentamiento de una sesión, no mira valores ni compara con Kraken.
+¿La captura viva tiene, para `PF_XBTUSD`, velas oficiales de 1 minuto en `[2026-10-01T00:00Z, 2026-10-13T01:00Z)` (17 340 minutos) y al menos 17 290 minutos consecutivos hasta el final de la ventana, sin campos vacíos en esos 17 290 minutos? 17 290 = `required_warmup_ms` de las estrategias congeladas (1 037 400 000 ms = 3 458 barras de 5 min = 288 h 10 min); la prueba lo recalcula del código. Es una prueba de disponibilidad: no es el calentamiento de una sesión, no mira valores ni compara con Kraken.
 
 ## Qué lee
 
-- Un agregado: conteo de filas, minutos distintos, mínimo y máximo de `bucket_start`, y cuántas filas tienen vacío (o nulo) algún campo de precio o volumen. Los campos de precio y volumen solo los puede leer ese agregado y devuelve un entero.
-- Las filas `(bucket_start, known_at)` de la ventana.
+- Una sola consulta, sin preconteo ni agregado previo: `SELECT bucket_start, known_at, <bandera 0/1 de campos vacíos> ... ORDER BY bucket_start LIMIT 60000`. Los campos de precio y volumen solo aparecen dentro de esa bandera, así que de la base sale un 0 o un 1, nunca un valor. Los conteos, los minutos distintos, el mínimo y el máximo se calculan en Python.
 - Nada más: ninguna otra tabla, columna, producto, intervalo ni ventana. El autorizador de SQLite deniega el resto y la herramienta rechaza otra ventana u otro producto.
 
 ## Topes
 
-- 60 000 filas escaneadas en total: el agregado (que es el preconteo) más el fetch. Se corre el agregado primero; si `2 × filas > 60 000` no se hace el fetch y se informa el conteo. No hay muestreo.
+- 60 000 filas escaneadas: el `LIMIT` hace que la base nunca recorra más. Si vuelven 60 000 filas, la ventana puede tener más: se detiene con `row_budget` y no analiza nada (con exactamente 60 000 filas también se rechaza, a propósito). No hay muestreo.
+- Antes de leer, `EXPLAIN QUERY PLAN` debe mostrar un `SEARCH` sobre el índice de la clave primaria, sin `SCAN` ni orden temporal; si no, se detiene con `query_plan`. El plan se publica en la salida: es la prueba de que "filas escaneadas" es lo que se dice.
 - 60 s por consulta y 10 min en total. Sin reintentos. Con exceso o falla se detiene e informa (código de salida 2).
 - Apertura `mode=ro` y `PRAGMA query_only` leído de vuelta (debe ser 1); un enlace simbólico se rechaza; el archivo debe llamarse `futures-market.sqlite`.
 
 ## Salida
 
-JSON con versión, ventana, guardas, conteos, filas escaneadas, disponibilidad (minutos presentes y faltantes, tramos faltantes con inicio y largo, minutos consecutivos hasta el final, revisiones por vela, `known_at` menos fin de la vela), veredicto (`apta` o `bloqueada` con motivos), identidad del archivo antes y después (nombre, tamaño, fecha de modificación, archivo regular) y huella SHA-256. Sin precios, tasas ni volúmenes.
+JSON con versión, ventana, guardas, conteos, filas escaneadas, disponibilidad (minutos presentes y faltantes, tramos faltantes con inicio y largo, minutos consecutivos hasta el final, revisiones por vela, `known_at` menos fin de la vela), veredicto (`apta` o `bloqueada` con motivos; un campo vacío bloquea solo si está en los 17 290 minutos que cierran la ventana, los demás se informan), plan de consulta, identidad del archivo antes y después (nombre, tamaño, fecha de modificación, archivo regular) y huella SHA-256. Sin precios, tasas ni volúmenes.
 
 Con `bloqueada` no se mueve la ventana y no se corre la etapa 2 de BAL-DECISION-185-02: se informa y se espera la decisión de Fran.
 
