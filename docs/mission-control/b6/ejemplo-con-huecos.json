@@ -1,0 +1,97 @@
+{
+  "schema": "observability-candles.v1",
+  "generated_at_ms": 1790000000000,
+  "cache_ttl_ms": 5000,
+  "product": "PF_XBTUSD",
+  "interval": "1m",
+  "interval_ms": 60000,
+  "limit": 500,
+  "from_ms": 1789999200000,
+  "to_ms": 1789999680000,
+  "truncated": false,
+  "candles": {
+    "state": "ok",
+    "evidence": {
+      "source": "paper_futures_official_candles",
+      "origin": "futures-market.sqlite",
+      "state": "read",
+      "rule": "velas oficiales cerradas de paper_futures_official_candles (primera revisión conocida de cada bucket) con bucket_start en [from_ms, to_ms); los buckets sin vela se listan en gaps y no se rellenan"
+    },
+    "count": 5,
+    "expected": 8,
+    "missing": 3,
+    "gaps": [
+      {
+        "from_ms": 1789999380000,
+        "to_ms": 1789999500000,
+        "missing": 2
+      },
+      {
+        "from_ms": 1789999620000,
+        "to_ms": 1789999680000,
+        "missing": 1
+      }
+    ],
+    "gaps_truncated": false,
+    "first_bucket_ms": 1789999200000,
+    "last_bucket_ms": 1789999560000,
+    "last_candle_closed": true,
+    "items": [
+      {
+        "bucket_start_ms": 1789999200000,
+        "close_at_ms": 1789999260000,
+        "known_at_ms": 1789999263000,
+        "open": "100.0",
+        "high": "101.25",
+        "low": "99.75",
+        "close": "100.5",
+        "volume_btc": "3.5",
+        "closed": true
+      },
+      {
+        "bucket_start_ms": 1789999260000,
+        "close_at_ms": 1789999320000,
+        "known_at_ms": 1789999323000,
+        "open": "100.0",
+        "high": "101.25",
+        "low": "99.75",
+        "close": "101.5",
+        "volume_btc": "3.5",
+        "closed": true
+      },
+      {
+        "bucket_start_ms": 1789999320000,
+        "close_at_ms": 1789999380000,
+        "known_at_ms": 1789999383000,
+        "open": "100.0",
+        "high": "101.25",
+        "low": "99.75",
+        "close": "102.5",
+        "volume_btc": "3.5",
+        "closed": true
+      },
+      {
+        "bucket_start_ms": 1789999500000,
+        "close_at_ms": 1789999560000,
+        "known_at_ms": 1789999563000,
+        "open": "100.0",
+        "high": "101.25",
+        "low": "99.75",
+        "close": "105.5",
+        "volume_btc": "3.5",
+        "closed": true
+      },
+      {
+        "bucket_start_ms": 1789999560000,
+        "close_at_ms": 1789999620000,
+        "known_at_ms": 1789999623000,
+        "open": "100.0",
+        "high": "101.25",
+        "low": "99.75",
+        "close": "106.5",
+        "volume_btc": "3.5",
+        "closed": true
+      }
+    ]
+  }
+}

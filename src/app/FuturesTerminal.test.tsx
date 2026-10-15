@@ -1333,7 +1333,13 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
     expect(screen.getByText('Decisiones del motor')).toBeTruthy()
     expect(screen.getByLabelText('Decisión seleccionada')).toBeTruthy()
     openStatus()
-    expect(screen.getByText(/Motor paper: en marcha/)).toBeTruthy()
+    expect(screen.getByText(/Libro D \(histórico, solo lectura\)/)).toBeTruthy()
+    // The retired book is history: its status never reads as a healthy signal.
+    expect(
+      screen
+        .getByText(/Libro D \(histórico, solo lectura\)/)
+        .getAttribute('data-tone'),
+    ).toBe('nodata')
     // The rejected order says why; the filled one is in Spanish.
     expect(
       screen.getByText(
@@ -1461,14 +1467,28 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
   })
 
   it.each([
-    ['starting', /Motor paper: arrancando/],
-    ['idle', /Motor paper: inactivo/],
-    ['unavailable', /Motor paper: no disponible/],
+    ['starting', /Libro D \(histórico, solo lectura\)/],
+    ['idle', /Libro D \(histórico, solo lectura\)/],
+    ['unavailable', /Libro D \(histórico\): no disponible/],
   ])('reports the %s engine without calling it off', async (status, label) => {
     await renderLive({ ...state, engine: { ...state.engine, status } })
+    openStatus()
     expect(screen.getAllByText(label).length).toBeGreaterThan(0)
     expect(screen.queryByText(/Motor de decisiones apagado/)).toBeNull()
   })
+
+  it.each(['running', 'starting', 'idle', 'unavailable'])(
+    'never shows the retired book D as running or active (%s)',
+    async (status) => {
+      await renderLive({ ...state, engine: { ...state.engine, status } })
+      openStatus()
+      const chip = screen.getByText(/^Libro D \(histórico/)
+      expect(chip.textContent).not.toMatch(
+        /en marcha|ejecución paper activa|ejecución activa|arrancando|inactivo|Motor paper/,
+      )
+      expect(chip.getAttribute('data-tone')).toBe('nodata')
+    },
+  )
 
   it('explains in the analyses area and engine line that Python is missing', async () => {
     await renderLive({
@@ -1485,8 +1505,9 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
         /Servicio de veredicto y ejecución paper no disponibles: no se encontró Python 3\.9\+ \(configurá BALANCITA_PYTHON\)/,
       ),
     ).toBeTruthy()
+    openStatus()
     expect(
-      screen.getAllByText(/Motor paper: no disponible/).length,
+      screen.getAllByText(/Libro D \(histórico\): no disponible/).length,
     ).toBeGreaterThan(0)
     expect(screen.queryByText('Aún no hay análisis registrados.')).toBeNull()
   })
@@ -1543,7 +1564,9 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
       )
     })
     openStatus()
-    expect(await screen.findByText(/Motor paper: en marcha/)).toBeTruthy()
+    expect(
+      await screen.findByText(/Libro D \(histórico, solo lectura\)/),
+    ).toBeTruthy()
   })
 
   describe('selection between chart, history and decisions (Fase 2.7)', () => {
