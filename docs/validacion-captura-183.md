@@ -99,3 +99,11 @@ Herramienta aparte: `python/balancita_engine/capture_timing_sample.py` (`capture
 - Presupuesto: se cuenta con `COUNT(*)` antes de leer filas; si el total pasa de 300 000 se detiene sin leer nada más. Cada consulta tiene un límite de 60 s. Una sola corrida.
 - Mide nuestra recepción (cobertura, silencios, orden de `seq`, demora entre el evento y nuestro registro, cota de desfase de reloj con `server_time` del funding). No mide cuándo publica Kraken ni valida valores. Los límites de silencio de 15/25/45 s solo se cuentan; ninguno se adopta.
 - Sale un JSON agregado con versión, ventana, filtros efectivos y huella SHA-256; si una guarda detiene la corrida, `stopped` dice por qué y el código de salida es 2.
+
+### Velas y operaciones de la captura (seguimiento de la muestra P2)
+
+Herramienta aparte: `python/balancita_engine/capture_candle_sample.py` (`capture-candle-sample.v1`), pruebas en `python/tests/test_capture_candle_sample.py`. Reutiliza ventana, productos, autorizador, presupuesto, límite de tiempo y comprobación de `query_only` de `capture_timing_sample`, así que hay una sola lista de columnas permitidas para revisar.
+
+- Contesta por qué las velas de 5 min de la captura salieron en 0 de 72: cuenta las velas de la captura de cada tamaño presente (revisiones, buckets distintos y faltantes, tramos de buckets faltantes y demora entre el cierre y el registro) y cuántas operaciones (`feed = 'trade'`) llegaron. La captura arma sus velas a partir de operaciones (`futures-candles.ts`, intervalos 1 m, 5 m, 15 m y 1 h por defecto): sin operaciones no hay velas.
+- Solo tiempos y contadores: no lee precios, volúmenes, tamaños ni `raw_*` / `*_json`. No compara valores (eso sería el Nivel B).
+- Retención: la tabla de velas nunca se borra (`futures-market-store.ts`, «Candles, funding, analytics and gaps are never touched»), y las operaciones se conservan 7 días, así que esta muestra no tiene el plazo de 24 h del ticker.
