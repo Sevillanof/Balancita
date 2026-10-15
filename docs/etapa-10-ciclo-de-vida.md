@@ -7,13 +7,13 @@ cartera. El GATE de sesión paper real sigue en NO-GO.
 
 `python/balancita_engine/paper_live_process.py`:
 
-| Pieza | Qué hace |
-|---|---|
+| Pieza                                                               | Qué hace                                                                                                                                                                                                                               |
+| ------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Configuración versionada (`balancita-paper-live-process-config.v1`) | Productos, ventana de decisión, brecha máxima de cotización, modo de funding, parámetros del ingestor. Claves desconocidas se rechazan; su `digest` se guarda en `process-config.json` y otro digest no puede continuar el directorio. |
-| `preflight` | Solo lectura. Compuerta de sesión real, configuración contra directorio, directorio libre y sin otro escritor, disco libre, fuente legible, calentamiento completo por producto. Corre todos los chequeos y los lista. |
-| Fases | `INIT → WARMUP → LIVE → STOPPING → STOPPED`, o `HALTED`. Se derivan de lo que tiene la sesión; el `heartbeat.json` (escritura atómica tras cada paso) las informa. |
-| Parada ordenada | SIGTERM/SIGINT solo levantan una bandera; el bucle termina el paso en curso y llama `LiveSession.stop` (D-186-1: cancela pendientes con `operator_stop`) y escribe `report.json`. |
-| Reinicio | Tras un corte (kill, energía) `start` recupera solo, con el reloj del reinicio. Tras `HALTED`/`REFUSED` exige `--restart` explícito. Tras una parada ordenada no reinicia (`session_stopped`). |
+| `preflight`                                                         | Solo lectura. Compuerta de sesión real, configuración contra directorio, directorio libre y sin otro escritor, disco libre, fuente legible, calentamiento completo por producto. Corre todos los chequeos y los lista.                 |
+| Fases                                                               | `INIT → WARMUP → LIVE → STOPPING → STOPPED`, o `HALTED`. Se derivan de lo que tiene la sesión; el `heartbeat.json` (escritura atómica tras cada paso) las informa.                                                                     |
+| Parada ordenada                                                     | SIGTERM/SIGINT solo levantan una bandera; el bucle termina el paso en curso y llama `LiveSession.stop` (D-186-1: cancela pendientes con `operator_stop`) y escribe `report.json`.                                                      |
+| Reinicio                                                            | Tras un corte (kill, energía) `start` recupera solo, con el reloj del reinicio. Tras `HALTED`/`REFUSED` exige `--restart` explícito. Tras una parada ordenada no reinicia (`session_stopped`).                                         |
 
 ## Reproducir (todo local, reloj simulado)
 
