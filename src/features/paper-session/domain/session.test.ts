@@ -91,7 +91,7 @@ describe('presented freshness: never fresh on a limit that is not approved', () 
     expect(thresholdLabel(block)).toMatch(/hipótesis/)
   })
 
-  it('follows the publisher on a hypothetical limit: unknown, or stale when older', () => {
+  it('follows the publisher on a hypothetical limit: unknown, and stale when older (it degrades)', () => {
     const unknown = decode(verification.hypothesisUnknown())
     expect(unknown.verification.reasons).toContain(
       'freshness_threshold_not_approved',
@@ -102,7 +102,9 @@ describe('presented freshness: never fresh on a limit that is not approved', () 
     )
     const stale = decode(verification.hypothesisStale())
     expect(stale.verification.freshness).toBe('stale')
-    expect(presentedFreshness(stale)).toBe('unknown')
+    // Degrading is allowed even on a limit that is only a hypothesis.
+    expect(presentedFreshness(stale)).toBe('stale')
+    expect(isCurrent(stale)).toBe(false)
   })
 
   it('keeps the stable reason report_age_unknown when the age is missing', () => {

@@ -1333,11 +1333,11 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
     expect(screen.getByText('Decisiones del motor')).toBeTruthy()
     expect(screen.getByLabelText('Decisión seleccionada')).toBeTruthy()
     openStatus()
-    expect(screen.getByText(/Libro D \(histórico\): en marcha/)).toBeTruthy()
+    expect(screen.getByText(/Libro D \(histórico, solo lectura\)/)).toBeTruthy()
     // The retired book is history: its status never reads as a healthy signal.
     expect(
       screen
-        .getByText(/Libro D \(histórico\): en marcha/)
+        .getByText(/Libro D \(histórico, solo lectura\)/)
         .getAttribute('data-tone'),
     ).toBe('nodata')
     // The rejected order says why; the filled one is in Spanish.
@@ -1467,8 +1467,8 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
   })
 
   it.each([
-    ['starting', /Libro D \(histórico\): arrancando/],
-    ['idle', /Libro D \(histórico\): inactivo/],
+    ['starting', /Libro D \(histórico, solo lectura\)/],
+    ['idle', /Libro D \(histórico, solo lectura\)/],
     ['unavailable', /Libro D \(histórico\): no disponible/],
   ])('reports the %s engine without calling it off', async (status, label) => {
     await renderLive({ ...state, engine: { ...state.engine, status } })
@@ -1476,6 +1476,19 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
     expect(screen.getAllByText(label).length).toBeGreaterThan(0)
     expect(screen.queryByText(/Motor de decisiones apagado/)).toBeNull()
   })
+
+  it.each(['running', 'starting', 'idle', 'unavailable'])(
+    'never shows the retired book D as running or active (%s)',
+    async (status) => {
+      await renderLive({ ...state, engine: { ...state.engine, status } })
+      openStatus()
+      const chip = screen.getByText(/^Libro D \(histórico/)
+      expect(chip.textContent).not.toMatch(
+        /en marcha|ejecución paper activa|ejecución activa|arrancando|inactivo|Motor paper/,
+      )
+      expect(chip.getAttribute('data-tone')).toBe('nodata')
+    },
+  )
 
   it('explains in the analyses area and engine line that Python is missing', async () => {
     await renderLive({
@@ -1552,7 +1565,7 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
     })
     openStatus()
     expect(
-      await screen.findByText(/Libro D \(histórico\): en marcha/),
+      await screen.findByText(/Libro D \(histórico, solo lectura\)/),
     ).toBeTruthy()
   })
 

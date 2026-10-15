@@ -29,7 +29,6 @@ import {
   analysisReason,
   marketStatusLabel,
   money,
-  paperEngineLabel,
   quantity,
   reasonLabel,
   shortTime,
@@ -288,7 +287,11 @@ export default function FuturesTerminal({
                   key: 'engine',
                   // Retired book D: history, never a current health signal.
                   tone: 'nodata' as string,
-                  text: `Libro D (histórico): ${paperEngineLabel(gatewayEngineStatus, gatewayEngineReason)}`,
+                  // History only: never «en marcha» or «ejecución activa».
+                  text:
+                    gatewayEngineStatus === 'unavailable'
+                      ? 'Libro D (histórico): no disponible'
+                      : 'Libro D (histórico, solo lectura)',
                 },
               ]
             : []),

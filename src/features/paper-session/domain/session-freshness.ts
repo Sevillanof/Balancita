@@ -6,7 +6,8 @@ import type { PositionsBlock, SessionPosition } from './session-blocks.ts'
  * The publisher judges the report against the limit it carries (`freshness`).
  * That limit is an experiment until someone approves it, so the screen never
  * calls anything `fresh` on a limit that is not approved: with a missing or
- * hypothetical limit the presented freshness is `unknown`. There is no
+ * hypothetical limit the presented freshness is `unknown`, except that `stale`
+ * is kept (a report older than its limit degrades, hypothetical or not). There is no
  * default threshold here, no phase is derived, and `verified` is only ever
  * degraded, never promoted or rebuilt. The publisher (PR #192, de6e857)
  * already refuses `fresh` and `verified` without an approved limit; this rule
@@ -18,6 +19,10 @@ export function presentedFreshness(
   block: Pick<PositionsBlock, 'verification'>,
 ): PresentedFreshness {
   const { freshness, thresholds } = block.verification
+  // Degrading is always allowed: a report older than its own limit is stale
+  // even when that limit is only a hypothesis.
+  if (freshness === 'stale') return 'stale'
+  // Promoting is not: `fresh` needs an approved limit.
   if (thresholds.status !== 'approved') return 'unknown'
   if (thresholds.reportMaxAgeMs === null) return 'unknown'
   return freshness
