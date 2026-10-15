@@ -80,27 +80,6 @@ export function entryStateLabel(risk: Record<string, unknown>): string {
   return 'Entradas activas'
 }
 
-export function paperEngineLabel(status: unknown, reason: unknown): string {
-  const labels: Record<string, string> = {
-    running: 'en marcha',
-    idle: 'inactivo',
-    starting: 'arrancando',
-    unavailable: 'no disponible',
-  }
-  const reasons: Record<string, string> = {
-    paper_execution_active: 'ejecución paper activa',
-    no_recent_paper_execution_activity: 'sin actividad reciente',
-    account_db_not_ready: 'la cuenta paper aún no existe',
-    no_paper_execution_records_yet: 'aún sin registros de ejecución',
-    account_db_unreadable: 'no se puede leer la cuenta paper',
-    python_unavailable: 'no se encontró Python',
-    python_sqlite_too_old: 'el SQLite de Python es demasiado antiguo',
-  }
-  const label = labels[String(status)] ?? 'estado desconocido'
-  const detail = typeof reason === 'string' ? reasons[reason] : undefined
-  return detail ? `${label} (${detail})` : label
-}
-
 /** Spanish notice for the analyses panel when the engine has nothing to show. */
 export function analysesNotice(
   status: unknown,

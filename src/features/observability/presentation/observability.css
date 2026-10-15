@@ -397,6 +397,17 @@
   letter-spacing: 0.07em;
   text-transform: uppercase;
 }
+.obs-card__label .obs-card__link {
+  margin-left: auto;
+  white-space: nowrap;
+  color: var(--mc-info);
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.obs-card__label .obs-card__link:hover {
+  text-decoration: underline;
+}
 .obs-card__label strong {
   color: var(--mc-text);
   font-size: 13px;
