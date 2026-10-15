@@ -286,11 +286,9 @@ export default function FuturesTerminal({
             ? [
                 {
                   key: 'engine',
-                  tone:
-                    gatewayEngineStatus === 'running'
-                      ? 'ok'
-                      : ('warn' as string),
-                  text: `Motor paper: ${paperEngineLabel(gatewayEngineStatus, gatewayEngineReason)}`,
+                  // Retired book D: history, never a current health signal.
+                  tone: 'nodata' as string,
+                  text: `Libro D (histórico): ${paperEngineLabel(gatewayEngineStatus, gatewayEngineReason)}`,
                 },
               ]
             : []),
