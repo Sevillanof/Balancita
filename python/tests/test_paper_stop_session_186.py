@@ -59,8 +59,10 @@ class TestStopOrderlyInTheSession(Base):
         world, directory, session = self.stopped()
         session.stop(NOW)
         before = session.comparable_state()
+        written = kinds(session, "operator_stop")
         self.release()
         again = self.reopen(world, directory)
+        self.assertEqual(kinds(again, "operator_stop"), written)               # not written a second time by the recovery
         self.assertFalse(again.runner.executor.pending)
         self.assertEqual(again.comparable_state(), before)
         self.assertEqual(len(kinds(again, "operator_stop")), 1)
@@ -114,6 +116,52 @@ class TestStopOrderlyInTheSession(Base):
         again = self.reopen(world, directory)
         self.assertFalse(again.runner.executor.pending)         # the recovery finishes the announced stop, exactly once
         self.assertEqual(len([e for e in again.runner.journal.entries if e["kind"] == "operator_stop"]), 1)
+
+    def test_a_halted_session_never_reports_a_stop(self):
+        """D-195-01: the audit refuses after the runner journaled the stop; the session is halted and asking again must not
+        answer 'stopped' with nothing in the audit."""
+        world, directory, session = self.stopped()
+        with mock.patch.object(session.audit, "add", side_effect=LI.IntegrationError("audit_write_failed", "disk")):
+            with self.assertRaises(LI.IntegrationError):
+                session.stop(NOW)
+        self.assertIsNotNone(session.halted)
+        with self.assertRaises(LI.IntegrationError) as caught:
+            session.stop(NOW)
+        self.assertEqual(caught.exception.reason, "session_halted")
+        self.assertEqual(kinds(session, "operator_stop"), [])
+
+    def test_a_process_that_died_between_the_journal_and_the_audit_leaves_the_stop_in_the_audit_after_the_recovery(self):
+        """D-195-02: the runner's journal says 'stopped'; the audit must say it too once the directory is recovered, with the
+        same record the live stop writes."""
+        world, directory, session = self.stopped()
+        reference_world, reference_dir, reference = self.stopped()
+        reference.stop(NOW)
+        expected = kinds(reference, "operator_stop")
+        self.assertEqual(len(expected), 1)
+        with mock.patch.object(session, "_audit_operator_stop", side_effect=Interrupted()):
+            with self.assertRaises(Interrupted):
+                session.stop(NOW)
+        self.assertEqual(kinds(session, "operator_stop"), [])                   # the process died before the audit write
+        self.release()
+        again = self.reopen(world, directory)
+        self.assertEqual(again.runner.status, STOPPED)
+        self.assertEqual(kinds(again, "operator_stop"), expected)
+        with self.assertRaises(LI.IntegrationError) as caught:
+            again.step(NOW)
+        self.assertEqual(caught.exception.reason, "session_stopped")
+
+    def test_stopping_a_session_recovered_from_a_stopped_run_answers_the_same_and_writes_nothing(self):
+        """D-195-03: no second 'operator_stop' record, no declared_ms None."""
+        world, directory, session = self.stopped()
+        first = session.stop(NOW)
+        self.release()
+        again = self.reopen(world, directory)
+        entries, records = len(again.runner.journal.entries), kinds(again, "operator_stop")
+        self.assertEqual(again.stop(NOW + 9_000), first)
+        self.assertIsNotNone(first["declared_ms"])
+        self.assertEqual(len(again.runner.journal.entries), entries)
+        self.assertEqual(kinds(again, "operator_stop"), records)
+        self.assertEqual(len(records), 1)
 
 
 if __name__ == "__main__":
