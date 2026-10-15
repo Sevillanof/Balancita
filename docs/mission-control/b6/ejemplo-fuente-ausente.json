@@ -1,0 +1,23 @@
+{
+  "schema": "observability-candles.v1",
+  "generated_at_ms": 1790000000000,
+  "cache_ttl_ms": 5000,
+  "product": "PF_XBTUSD",
+  "interval": "1m",
+  "interval_ms": 60000,
+  "limit": 500,
+  "from_ms": 1789999200000,
+  "to_ms": 1789999380000,
+  "truncated": false,
+  "candles": {
+    "state": "unavailable",
+    "evidence": {
+      "source": "paper_futures_official_candles",
+      "origin": "futures-market.sqlite",
+      "state": "missing",
+      "detail": "file_not_found",
+      "rule": "velas oficiales cerradas de paper_futures_official_candles (primera revisión conocida de cada bucket) con bucket_start en [from_ms, to_ms); los buckets sin vela se listan en gaps y no se rellenan"
+    },
+    "detail": "file_not_found"
+  }
+}

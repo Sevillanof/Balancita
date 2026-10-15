@@ -29,12 +29,19 @@ def _tag(extra):
     return dict(extra, mode=SESSION_MODE, evidence_class=EVIDENCE_CLASS, execution_class=EXECUTION_CLASS)
 
 
-def verification(runner, report_age_ms, max_age_ms, source_state=None):
+def verification(runner, report_age_ms, max_age_ms=None, source_state=None, threshold_approved=False):
     """Is it fair to call the positions "verified"? Only when the journal chain holds, the integrated audit has no
     violation, no obligation is open, the runner is processing, the report is fresh AND the data is fresh: the report's
     age says when the report was written, not whether the capture was still delivering, so the ingestor's own
     ``state()`` is required (``source == "live"``). Without it the answer is "not verified" (``source_state_unknown``).
-    Returns ``{"verified": bool, "reasons": [...]}``; a reason is a stable code."""
+    Returns ``{"verified": bool, "reasons": [...], "freshness": ..., "thresholds": ...}``; a reason is a stable code.
+
+    The age limit is the caller's and has NO default here (decision BAL-DECISION-187-01, P2). No limit is approved yet, so
+    ``threshold_approved`` is false for every real caller and the block says so (``thresholds.status``: ``not_approved``
+    without a limit, ``hypothesis`` with an unapproved one, ``approved`` only when the caller says it is). A limit that is
+    not approved can degrade (older than it = ``stale``) but never promote: the report is then ``unknown``, never ``fresh``,
+    and ``verified`` is false (``freshness_threshold_not_approved``). A missing report age is ``report_age_unknown``. The
+    gateway only degrades this, it never promotes it."""
     reasons = []
     if source_state is None:
         reasons.append("source_state_unknown")
@@ -42,22 +49,33 @@ def verification(runner, report_age_ms, max_age_ms, source_state=None):
         reasons.append("source_stale")
     if runner.status != PROCESSING:
         reasons.append("runner_not_processing")
-    if report_age_ms is None or report_age_ms > max_age_ms:
+    approved = threshold_approved and max_age_ms is not None
+    if report_age_ms is None:
+        reasons.append("report_age_unknown")
+        freshness = "unknown"
+    elif max_age_ms is not None and report_age_ms > max_age_ms:
         reasons.append("report_stale")
+        freshness = "stale"
+    else:
+        freshness = "fresh" if approved else "unknown"
+    if not approved:
+        reasons.append("freshness_threshold_not_approved")
     if runner.open_cycles or runner.open_funding:
         reasons.append("open_obligations")
     if integrated_audit(runner)["violations"]:
         reasons.append("audit_violations")
-    return {"verified": not reasons, "reasons": reasons}
+    status = "not_approved" if max_age_ms is None else ("approved" if approved else "hypothesis")
+    return {"verified": not reasons, "reasons": reasons, "freshness": freshness,
+            "thresholds": {"report_max_age_ms": max_age_ms, "status": status}}
 
 
-def positions(runner, report_age_ms, max_age_ms, source_state=None):
+def positions(runner, report_age_ms, max_age_ms=None, source_state=None, threshold_approved=False):
     """B5: the open paper positions of the session. Each one says how well its stop was watched; none is ever called
     "open at Kraken": they are positions of the simulator over observed quotes. P&L is ``estimated``.
 
     ``accounting_verified`` is the session-level check (journal chain, audit, fresh report); ``protection_evidence`` is
     the stop's own evidence; ``verified`` needs both: a stop nobody has watched since the entry is never "verified"."""
-    check = verification(runner, report_age_ms, max_age_ms, source_state)
+    check = verification(runner, report_age_ms, max_age_ms, source_state, threshold_approved)
     watch = {row["intent_id"]: row for row in protection(runner)}
     rows = []
     for product, book in sorted(runner.portfolio.positions.items()):
