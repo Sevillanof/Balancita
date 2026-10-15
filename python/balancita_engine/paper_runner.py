@@ -305,7 +305,11 @@ class PaperRunner(object):
     def _record(self, t_ms, kind, data):
         """Write-ahead: the entry is in the journal before any effect of it exists."""
         self._guard_open()
-        entry = self.journal.add(t_ms, kind, data)
+        try:
+            entry = self.journal.add(t_ms, kind, data)
+        except OSError as error:
+            # the disk refused the entry: memory is now behind the file, so nothing may go on from this instance
+            self._refuse("journal_write_failed", repr(error))
         self._apply(entry)
         hit("after_apply", kind)
         return entry
@@ -759,7 +763,10 @@ class PaperRunner(object):
         origin = "reconstructed" if event["kind"] == "reconstructed" else "original"
         refs, actionable = [], []
         for signal, inputs in results:
-            receipt = self.log.ingest(signal, inputs, t_ms, origin=origin, source_offset=offset)
+            try:
+                receipt = self.log.ingest(signal, inputs, t_ms, origin=origin, source_offset=offset)
+            except OSError as error:
+                self._refuse("signal_log_write_failed", repr(error))
             if receipt["status"] not in ("persisted", "duplicate", "already_present"):
                 continue
             seq = receipt["seq"]
