@@ -7,42 +7,18 @@
   overflow-x: clip;
 }
 
-.connected-terminal__panel,
-.connected-terminal__error,
-.connected-terminal__state {
+.connected-terminal__panel {
   min-width: 0;
   overflow-x: clip;
-  border: 1px solid var(--demo-border);
+  border: 1px solid var(--mc-border);
   border-radius: 0.375rem;
-  background: var(--demo-card);
+  background: var(--mc-surface-1);
   padding: 1rem;
 }
 
 .connected-terminal__panel small {
-  color: var(--demo-soft);
+  color: var(--mc-text-2);
   font-size: 0.8rem;
-}
-
-.connected-terminal__metadata {
-  margin-top: 0.75rem;
-  color: var(--demo-muted);
-  font-size: 0.75rem;
-}
-
-.connected-terminal__metadata > summary {
-  cursor: pointer;
-}
-
-.connected-terminal__metadata summary {
-  cursor: pointer;
-  color: var(--demo-soft);
-  font-size: 0.8rem;
-}
-.connected-terminal__metadata[open] > section {
-  margin-top: 0.6rem;
-}
-.connected-terminal__metadata .connected-terminal__panel {
-  margin: 0;
 }
 
 .connected-terminal__panel h2 {
@@ -59,16 +35,16 @@
   min-height: 2.5rem;
   margin: 0.25rem 0.5rem 0.25rem 0;
   padding: 0.55rem 0.8rem;
-  border: 1px solid var(--demo-border);
+  border: 1px solid var(--mc-border);
   border-radius: 0.25rem;
-  background: var(--demo-panel);
-  color: var(--demo-text);
+  background: var(--mc-surface-1);
+  color: var(--mc-text);
   font: inherit;
   cursor: pointer;
 }
 
 .connected-terminal .demo-terminal__present:hover:not(:disabled) {
-  border-color: var(--demo-accent);
+  border-color: var(--mc-warn);
 }
 
 .connected-terminal .demo-terminal__present:disabled {
@@ -77,7 +53,7 @@
 }
 
 .connected-terminal .demo-terminal__present:focus-visible {
-  outline: 2px solid var(--demo-accent);
+  outline: 2px solid var(--mc-warn);
   outline-offset: 2px;
 }
 
@@ -105,222 +81,52 @@
   font-size: 0.75rem;
 }
 
-.connected-terminal__error button {
-  border: 1px solid var(--demo-border-strong);
-  border-radius: 0.25rem;
-  background: transparent;
-  color: inherit;
-  padding: 0.35rem 0.55rem;
-  cursor: pointer;
-}
-
-.connected-terminal__table-wrap {
-  min-width: 0;
-  overflow-x: auto;
-}
 .connected-terminal table {
   width: 100%;
   border-collapse: collapse;
   font-size: 0.82rem;
 }
+
 .connected-terminal th,
 .connected-terminal td {
   padding: 0.65rem;
-  border-bottom: 1px solid var(--demo-border);
+  border-bottom: 1px solid var(--mc-border);
   text-align: left;
   white-space: nowrap;
 }
+
 .connected-terminal th {
-  color: var(--demo-soft);
+  color: var(--mc-text-2);
   font-weight: 500;
 }
+
 .connected-terminal tr[data-selected='true'] {
   background: rgb(69 214 165 / 10%);
 }
-.connected-terminal__stale {
-  color: var(--demo-warning-text);
-}
-.connected-terminal__error {
-  display: flex;
-  flex-wrap: wrap;
-  min-width: 0;
-  justify-content: space-between;
-  gap: 1rem;
-  overflow: visible;
-  color: var(--demo-danger-text);
-}
-.connected-terminal__error span {
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-.connected-terminal__error button {
-  flex-shrink: 0;
-}
+
 .connected-terminal button:focus-visible,
 .connected-terminal a:focus-visible {
-  outline: 2px solid var(--demo-up);
+  outline: 2px solid var(--mc-long);
   outline-offset: 2px;
-}
-.connected-terminal__decision-status {
-  display: grid;
-  gap: 0.25rem;
-  padding: 0.55rem 0.9rem;
-  border-bottom: 1px solid var(--demo-border);
-  color: var(--demo-muted);
-  font-size: 0.65rem;
-  line-height: 1.35;
-}
-.connected-terminal__decision-status button {
-  justify-self: start;
-  min-height: 2.75rem;
-}
-.connected-terminal .demo-terminal__event {
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 0.2rem 0.55rem;
-  min-height: 3.25rem;
-  padding: 0.45rem 0.75rem;
-}
-.connected-terminal .demo-terminal__event-kind {
-  justify-self: start;
-  max-width: 100%;
-  border: 1px solid var(--demo-border);
-  border-radius: 999px;
-  padding: 0.08rem 0.35rem;
-  color: var(--demo-muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 0.64rem;
-}
-.connected-terminal .demo-terminal__event time {
-  grid-column: 2;
-  grid-row: 1;
-  white-space: nowrap;
-}
-.connected-terminal .demo-terminal__event strong,
-.connected-terminal .demo-terminal__event-reason {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 0.68rem;
-}
-.connected-terminal .demo-terminal__event strong {
-  grid-column: 1 / -1;
-}
-.connected-terminal .demo-terminal__event-price {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip-path: inset(50%);
-  white-space: nowrap;
-}
-.connected-terminal .demo-terminal__event:focus-visible,
-.connected-terminal__decision-status button:focus-visible {
-  outline: 2px solid var(--demo-accent);
-  outline-offset: -2px;
-}
-.connected-terminal .demo-terminal__event-detail {
-  display: grid;
-  gap: 0.3rem;
-  padding: 0.6rem 0.75rem 0.7rem 1rem;
-  border-bottom: 1px solid var(--demo-border);
-  background: var(--demo-sunken);
-  color: var(--demo-muted);
-  font-size: 0.68rem;
-  line-height: 1.45;
-  overflow-wrap: anywhere;
 }
 
 /* Data-source switch: compact dark segmented control (native radios). */
-.source-switch {
-  display: inline-flex;
-  flex: 0 0 auto;
-  gap: 2px;
-  padding: 2px;
-  border: 1px solid var(--demo-border);
-  border-radius: 4px;
-  background: var(--demo-surface);
-}
-
-.source-switch__option {
-  position: relative;
-  display: inline-flex;
-}
-
-.source-switch__input {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  margin: 0;
-  opacity: 0;
-  cursor: pointer;
-}
-
-.source-switch__label {
-  display: inline-flex;
-  min-height: 28px;
-  align-items: center;
-  padding: 0 10px;
-  border-radius: 3px;
-  color: var(--demo-muted);
-  font-family: 'IBM Plex Mono', ui-monospace, monospace;
-  font-size: 11px;
-  white-space: nowrap;
-}
-
-.source-switch__input:checked + .source-switch__label {
-  color: var(--demo-text);
-  background: color-mix(in oklab, var(--demo-primary) 18%, transparent);
-  box-shadow: inset 0 -2px 0 var(--demo-primary);
-  font-weight: 700;
-}
-
-.source-switch__input:checked + .source-switch__label::before {
-  content: '● ';
-  color: var(--demo-primary);
-}
-
-.source-switch__input:focus-visible + .source-switch__label {
-  outline: 2px solid var(--demo-primary);
-  outline-offset: 1px;
-}
 
 .source-switch-bar {
   display: flex;
   justify-content: flex-end;
   padding: 8px 28px;
-  border-bottom: 1px solid var(--demo-border);
-}
-
-.source-switch__announce {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip-path: inset(50%);
-  white-space: nowrap;
+  border-bottom: 1px solid var(--mc-border);
 }
 
 @media (max-width: 480px) {
-  .source-switch {
-    max-width: 100%;
-  }
-
-  .source-switch__label {
-    min-height: 44px;
-    padding: 0 8px;
-    font-size: 10px;
-  }
-
   .source-switch-bar {
     padding-inline: 16px;
   }
 }
 
 /* Up to 100 analyses: keep them in their own scroll instead of growing the page. */
+
 .connected-terminal__decisions {
   max-height: 640px;
   overflow-y: auto;
@@ -329,7 +135,7 @@
 
 .connected-terminal__decisions article {
   padding: 10px 0;
-  border-top: 1px solid var(--demo-border);
+  border-top: 1px solid var(--mc-border);
 }
 
 .connected-terminal__decisions article p {
@@ -337,6 +143,7 @@
 }
 
 /* Decisions list: fixed height, own scroll; the page never grows with verdicts. */
+
 .connected-terminal__decisions {
   height: 560px;
   max-height: none;
@@ -367,7 +174,7 @@
 
 .connected-terminal__decision-list li {
   padding: 6px 0;
-  border-top: 1px solid var(--demo-border);
+  border-top: 1px solid var(--mc-border);
 }
 
 .connected-terminal__decision-list li button {
@@ -399,7 +206,7 @@
   flex: 0 1 auto;
   max-height: 50%;
   overflow-y: auto;
-  border-top: 2px solid var(--demo-border);
+  border-top: 2px solid var(--mc-border);
   padding-top: 8px;
 }
 
@@ -420,29 +227,30 @@
 
 .connected-terminal__chips li {
   padding: 2px 10px;
-  border: 1px solid var(--demo-border);
+  border: 1px solid var(--mc-border);
   border-radius: 999px;
 }
 
 .connected-terminal__chips li[data-tone='ok'] {
-  border-color: var(--demo-ok);
+  border-color: var(--mc-long);
 }
 
 .connected-terminal__chips li[data-tone='warn'] {
-  border-color: var(--demo-caution);
+  border-color: var(--mc-warn);
 }
 
 .connected-terminal__chips li[data-tone='bad'] {
-  border-color: var(--demo-danger);
+  border-color: var(--mc-short);
 }
 
 .connected-terminal__reset {
   margin-top: 12px;
   padding-top: 12px;
-  border-top: 1px solid var(--demo-border);
+  border-top: 1px solid var(--mc-border);
 }
 
 /* One-line market strip above the chart: pair, price, 24 h change, age. */
+
 .connected-terminal__strip {
   display: flex;
   flex-wrap: wrap;
@@ -458,13 +266,13 @@
 }
 
 .connected-terminal__strip h1 > span {
-  color: var(--demo-muted);
+  color: var(--mc-text-2);
   font-weight: 500;
 }
 
 .connected-terminal__strip h1 small {
   margin-left: 10px;
-  color: var(--demo-muted);
+  color: var(--mc-text-2);
   font-family: 'IBM Plex Mono', ui-monospace, monospace;
   font-size: 11px;
   font-weight: 500;
@@ -483,15 +291,15 @@
 }
 
 .connected-terminal__change[data-tone='ok'] {
-  color: var(--demo-up);
+  color: var(--mc-long);
 }
 
 .connected-terminal__change[data-tone='bad'] {
-  color: var(--demo-down);
+  color: var(--mc-short);
 }
 
 .connected-terminal__quote-label {
-  color: var(--demo-muted);
+  color: var(--mc-text-2);
   font-size: 12px;
 }
 
@@ -511,6 +319,7 @@
 
 /* Mission Control 2.5: the chart leads; position, account and tools are a
    secondary row below it. Composition only, no data or behaviour changes. */
+
 .mc-terminal__secondary {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -532,6 +341,7 @@
   }
 
   /* The decisions stay beside the chart while the page scrolls. */
+
   .demo-terminal__grid > :last-child {
     position: sticky;
     top: 1rem;
@@ -539,6 +349,7 @@
 }
 
 /* Mission Control 2.6: decisions panel hierarchy. Presentation only. */
+
 .connected-terminal__decisions [data-action='LONG'] {
   color: var(--mc-long, #10b981);
 }
@@ -548,7 +359,7 @@
 }
 
 .connected-terminal__decisions [data-action='WAIT'] {
-  color: var(--demo-muted);
+  color: var(--mc-text-2);
   font-weight: 500;
 }
 
@@ -558,7 +369,7 @@
 }
 
 .connected-terminal__decision-list li button small {
-  color: var(--demo-muted);
+  color: var(--mc-text-2);
   overflow: hidden;
   display: -webkit-box;
   -webkit-line-clamp: 2;
@@ -567,29 +378,23 @@
 
 .connected-terminal__decision-list li button[aria-pressed='true'] {
   outline: 0;
-  background: var(--demo-border);
+  background: var(--mc-border);
 }
 
 /* With a notice instead of a list there is nothing to keep tall. */
+
 .connected-terminal__decisions:not(:has(.connected-terminal__decision-list)) {
   height: auto;
 }
 
 /* Right column: activity of the engine above the decisions list. */
-.connected-terminal__side {
-  display: grid;
-  gap: 1rem;
-  min-width: 0;
-  align-content: start;
-}
-.connected-terminal__side .obs-activity {
-  margin-bottom: 0;
-}
+
 .connected-terminal__decisions--embedded {
   height: auto;
   max-height: none;
   overflow: visible;
 }
+
 .obs-sr {
   position: absolute;
   width: 1px;

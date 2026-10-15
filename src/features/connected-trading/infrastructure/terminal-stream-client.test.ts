@@ -9,8 +9,7 @@ import {
 describe('terminal API base selection', () => {
   afterEach(() => vi.unstubAllGlobals())
 
-  it('maps each source to its proxy prefix', () => {
-    expect(terminalApiBase('mock')).toBe('/api-mock')
+  it('maps the only source (live) to its proxy prefix', () => {
     expect(terminalApiBase('live')).toBe('/api-live')
   })
 
