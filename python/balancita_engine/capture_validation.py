@@ -113,8 +113,13 @@ def _int(value, name):
     return value
 
 
+# The only windows after the cut a caller may be given, each tied to the written decision that authorises it. Any other
+# window, however it is built (a neighbour, a superset, the whole holdout), is refused.
+AUTHORIZED_HOLDOUT_EXCEPTIONS = {(1_791_590_400_000, 1_791_763_200_000): "BAL-DECISION-185-02/185-03 (2026-10-10T00:00Z..2026-10-12T00:00Z)"}
+
+
 def holdout_exception(window):
-    """Validate the opt-in engineering window (``None`` or ``(from_ms, to_ms)``, non-empty, wholly after the cut).
+    """Validate the opt-in engineering window (``None`` or one of ``AUTHORIZED_HOLDOUT_EXCEPTIONS``, exactly).
 
     ``HOLDOUT_START_MS`` itself never changes: a caller that was explicitly authorised for one fixed window passes it,
     and only records and ranges wholly inside it stop counting as holdout.
@@ -124,8 +129,8 @@ def holdout_exception(window):
     from_ms, to_ms = window
     _int(from_ms, "holdout_window from")
     _int(to_ms, "holdout_window to")
-    if to_ms <= from_ms or from_ms < HOLDOUT_START_MS:
-        raise ValueError("holdout_window must be a non-empty range wholly at or after the holdout cut")
+    if (from_ms, to_ms) not in AUTHORIZED_HOLDOUT_EXCEPTIONS:
+        raise ValueError("holdout_window is not one of the exact windows authorised in writing")
     return (from_ms, to_ms)
 
 

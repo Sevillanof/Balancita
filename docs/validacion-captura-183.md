@@ -95,9 +95,13 @@ hora), nunca series, precios, tasas ni cuerpos de respuesta.
 - 2a velas oficiales 1 min XBT/ETH `[10-oct, 12-oct)`, tope 12 000; 2b velas propias XBT `[11-oct 00:00Z, 06:00Z)`, tope
   100 000 (valores solo de revisiones cerradas); 2c períodos de funding, tope 400; 2d respuestas de funding, tope 600 y 20 MB.
 - Cada consulta tiene `LIMIT tope+1` y se detiene con `row_budget` si lo supera; sin conteo previo, muestreo ni reintentos.
-  2a y 2b exigen plan de búsqueda por clave primaria; 2c y 2d filtran columnas sin índice y el plan se publica.
+  Todas exigen plan de búsqueda por clave primaria. 2c y 2d no recorren las tablas: una búsqueda binaria por `rowid`
+  (lecturas de una fila, contadas y publicadas) acota el rango de la ventana y su ancho se compara con el tope antes de leer;
+  los bordes se verifican. El tamaño de cada respuesta se mide con `octet_length` y cada etapa leída se publica aunque una
+  posterior se detenga.
 - 60 s por consulta y 10 min por corrida; identidad del archivo (nombre, carpeta, tamaño mínimo, mtime) antes y después.
-- Los validadores reciben `holdout_window=(10-oct 00:00Z, 12-oct 00:00Z)`: parámetro opcional que solo deja de tratar como
-  holdout un rango y registros enteramente dentro de esa ventana. `HOLDOUT_START_MS` no cambia y sin el parámetro todo sigue
+- Los validadores reciben `holdout_window=(10-oct 00:00Z, 12-oct 00:00Z)`: parámetro opcional que acepta solo las ventanas exactas de
+  `AUTHORIZED_HOLDOUT_EXCEPTIONS` (cualquier otra se rechaza) y solo deja de tratar como holdout un rango y registros
+  enteramente dentro de esa ventana. `HOLDOUT_START_MS` no cambia y sin el parámetro todo sigue
   igual.
 - No mide la puntualidad de Kraken, no usa cotizaciones y no prueba nada fuera de estas ventanas.

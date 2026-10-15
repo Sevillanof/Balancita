@@ -20,11 +20,18 @@ Guards, the same family as ``capture_warmup_availability`` (Etapa 10):
   after;
 - ``mode=ro`` and ``PRAGMA query_only`` read back (must be 1); a SQLite authorizer allows, per statement, only the tables and
   columns of that statement, and denies every write, pragma and attach;
-- no pre-count: every statement is bounded by ``LIMIT <cap> + 1`` and the run stops with ``row_budget`` if more than the cap
-  comes back (nothing is sampled, truncated or retried). The rows of the whole run are the sum of the caps;
-- ``EXPLAIN QUERY PLAN`` runs first: 2a and 2b must show a SEARCH on the primary-key index and no temporary sort (published);
-  2c and 2d filter columns that have no index, so SQLite walks those tables (the plan is published) and the bound is the
-  returned-row cap plus the time limit, which is said here instead of hidden;
+- no COUNT pre-count: every statement is bounded by ``LIMIT <cap> + 1`` and the run stops with ``row_budget`` if more than the
+  cap comes back (nothing is sampled, truncated or retried);
+- 2c and 2d filter columns without an index, so they do not walk the tables: the tables are append-only and immutable and their
+  time columns are written at insertion, so ``rowid`` order is time order. A binary search over ``rowid`` (single-row reads,
+  all counted and published) finds the rowid range of the window, its width is an upper bound of what the read walks and is
+  checked against the cap BEFORE any row is read, and the read is ``WHERE rowid >= ? AND rowid < ?`` with the ``LIMIT`` inside
+  the subquery. The border rows are checked (the one at the bound qualifies, the one before does not); if the order did not
+  hold, the run stops with ``rowid_order``. 2c's range covers ``known_at`` from one hour before the window to three after
+  (declared margins); rows outside the window are dropped in memory and counted;
+- ``EXPLAIN QUERY PLAN`` runs first: every statement must show a SEARCH on the primary key (or rowid) and no temporary sort;
+- the size of each response is read with ``octet_length`` (SQLite >= 3.43, else the run stops) so the 20 MB cap is checked
+  without reading the bodies; each stage that was read is evaluated and published even if a later one stops the run;
 - 60 s per statement and 10 min for the run (progress handler); no retry, no widening; every stop is published and exits 2.
 
 The validators keep refusing every range from the holdout cut: ``HOLDOUT_START_MS`` is not changed. This module gives them
@@ -59,6 +66,11 @@ WINDOW_B = (1_791_676_800_000, 1_791_698_400_000)   # 2026-10-11T00:00Z .. 06:00
 HOLDOUT_WINDOW = WINDOW_A                            # the one exception the validators are given (contains WINDOW_B)
 CAPS = {"2a": 12_000, "2b": 100_000, "2c": 400, "2d": 600}
 MAX_BODY_BYTES = 20_000_000
+TOTAL_ROWS_CAP = 173_000
+HOUR_MS = 3_600_000
+FUNDING_MARGIN_BEFORE_MS = HOUR_MS        # a period is first seen no earlier than the hour before it starts
+FUNDING_MARGIN_AFTER_MS = 3 * HOUR_MS     # and, for the last hour of the window, up to its end + settle lag + one poll
+MIN_SQLITE = (3, 43, 0)                   # octet_length() reads the size without reading the body
 QUERY_TIMEOUT_S = 60
 RUN_TIMEOUT_S = 600
 PROGRESS_OPS = 1000
@@ -76,15 +88,17 @@ _REVISIONS = "paper_futures_candle_revisions"
 _PERIODS = "paper_futures_funding_periods"
 _RESPONSES = "paper_futures_funding_responses"
 
-# statement mode -> {table: allowed columns}. The empty name is what SQLite reports for row access without a column.
+# statement mode -> {table: allowed columns}. The empty name is what SQLite reports for row access without a column; ``rowid``
+# is the integer primary key SQLite walks for the bounded 2c/2d reads.
 ALLOWED = {
     "2a": {_OFFICIAL: {"product_id", "interval_ms", "bucket_start", "revision_hash", "known_at", "open_price",
                        "high_price", "low_price", "close_price", "volume_btc"}},
     "2b": {_REVISIONS: {"candle_id", "interval_ms", "bucket_start", "revision", "known_at", "is_closed", "open_price",
                         "high_price", "low_price", "close_price", "volume_btc"}},
-    "2c": {_PERIODS: {"product_id", "start_ms", "end_ms", "funding_rate", "known_at", "unit", "response_sha256"}},
-    "2d_meta": {_RESPONSES: {"sha256", "received_at", "server_time", "raw_response"},
-                _PERIODS: {"response_sha256", "product_id"}},
+    "2c_bound": {_PERIODS: {"rowid", "known_at"}},
+    "2c": {_PERIODS: {"rowid", "product_id", "start_ms", "end_ms", "funding_rate", "known_at", "unit", "response_sha256"}},
+    "2d_bound": {_RESPONSES: {"rowid", "received_at"}},
+    "2d_meta": {_RESPONSES: {"rowid", "sha256", "received_at", "server_time", "raw_response"}},
     "2d_product": {_PERIODS: {"response_sha256", "product_id"}},
     "2d_body": {_RESPONSES: {"sha256", "raw_response"}},
 }
@@ -106,14 +120,19 @@ def _sql_2b(limit):
 
 
 def _sql_2c(limit):
-    return ("SELECT product_id, start_ms, end_ms, funding_rate, known_at, unit, response_sha256 FROM %s WHERE product_id IN (%s) "
-            "AND start_ms >= %d AND start_ms < %d LIMIT %d" % (_PERIODS, _P, WINDOW_A[0], WINDOW_A[1], limit))
+    """Rows by ``rowid`` range, the LIMIT inside the subquery so it bounds what is WALKED, not only what is returned."""
+    return ("SELECT product_id, start_ms, end_ms, funding_rate, known_at, unit, response_sha256 FROM (SELECT product_id, start_ms, "
+            "end_ms, funding_rate, known_at, unit, response_sha256 FROM %s WHERE rowid >= ? AND rowid < ? ORDER BY rowid LIMIT %d)"
+            % (_PERIODS, limit))
 
 
 def _sql_2d_meta(limit):
-    return ("SELECT sha256, received_at, server_time, length(raw_response) FROM %s r WHERE received_at >= %d AND received_at < %d "
-            "AND EXISTS (SELECT 1 FROM %s p WHERE p.response_sha256 = r.sha256 AND p.product_id IN (%s)) LIMIT %d"
-            % (_RESPONSES, WINDOW_A[0], WINDOW_A[1], _PERIODS, _P, limit))
+    return ("SELECT sha256, received_at, server_time, size FROM (SELECT sha256, received_at, server_time, octet_length(raw_response) "
+            "AS size FROM %s WHERE rowid >= ? AND rowid < ? ORDER BY rowid LIMIT %d)" % (_RESPONSES, limit))
+
+
+def _sql_bound(table, column):
+    return "SELECT rowid, %s FROM %s WHERE rowid >= ? ORDER BY rowid LIMIT 1" % (column, table)
 
 
 SQL_2D_PRODUCT = "SELECT product_id FROM %s WHERE response_sha256 = ? LIMIT 1" % _PERIODS
@@ -145,7 +164,7 @@ class _Guard:
     def _authorize(self, action, arg1, arg2, _db, _source):
         if action == sqlite3.SQLITE_READ:
             allowed = ALLOWED.get(self.mode, {}).get(arg1) if self.mode else None
-            return sqlite3.SQLITE_OK if allowed is not None and (arg2 in allowed or arg2 == "") else sqlite3.SQLITE_DENY
+            return sqlite3.SQLITE_OK if allowed is not None and (arg2 in allowed or arg2.lower() == "rowid" and "rowid" in allowed or arg2 == "") else sqlite3.SQLITE_DENY
         if action in (sqlite3.SQLITE_SELECT, sqlite3.SQLITE_FUNCTION):
             return sqlite3.SQLITE_OK
         return sqlite3.SQLITE_DENY  # no write, no pragma, no attach, no transaction control
@@ -219,33 +238,104 @@ def read_2b(guard, ledger):
     return [tuple(r) for r in got]
 
 
-def read_2c(guard, ledger):
+class Reads:
+    """Single-row reads outside the main statements (the bound searches and the per-response lookups), so the row count of
+    the run is complete (D-212-04)."""
+
+    def __init__(self):
+        self.count = {"2c_bound": 0, "2d_bound": 0, "2d_product": 0, "2d_body": 0}
+
+    def total(self):
+        return sum(self.count.values())
+
+
+def _lower_bound(guard, mode, table, column, target, reads):
+    """Smallest ``rowid`` whose ``column`` is >= ``target``, by binary search over the rowids (the tables are append-only,
+    immutable and their time columns are written at insertion, so ``rowid`` order is time order). Returns
+    ``(rowid, evidence)``; ``rowid`` is ``max + 1`` when no row qualifies."""
+    lo_row, hi_row = guard.fetch(mode, "SELECT min(rowid), max(rowid) FROM %s" % table)[0]
+    reads.count[mode] += 1
+    if lo_row is None:
+        return 0, {"empty": True}
+    lo, hi = lo_row, hi_row + 1
+    steps = 0
+    while lo < hi:
+        mid = (lo + hi) // 2
+        row = guard.fetch(mode, _sql_bound(table, column), (mid,))
+        reads.count[mode] += 1
+        steps += 1
+        if not row:
+            hi = mid
+        elif row[0][1] >= target:
+            hi = mid
+        else:
+            lo = row[0][0] + 1
+        if steps > 64:
+            raise Stopped("bound_search", {"table": table})
+    # border check: the row at the bound qualifies and the one before it does not
+    before = guard.fetch(mode, "SELECT rowid, %s FROM %s WHERE rowid < ? ORDER BY rowid DESC LIMIT 1" % (column, table), (lo,))
+    at = guard.fetch(mode, _sql_bound(table, column), (lo,))
+    reads.count[mode] += 2
+    if (before and before[0][1] >= target) or (at and at[0][1] < target):
+        raise Stopped("rowid_order", {"table": table, "column": column})
+    return lo, {"bound_rowid": lo, "table_min_rowid": lo_row, "table_max_rowid": hi_row, "search_reads": steps + 3}
+
+
+def _span(guard, mode, table, column, lo_ms, hi_ms, reads, stage, cap, ledger):
+    """The rowid range [lo, hi) whose ``column`` covers ``[lo_ms, hi_ms)``. Its width is an upper bound of what the read walks
+    and is checked against the cap BEFORE any row is read."""
+    lo, ev_lo = _lower_bound(guard, mode, table, column, lo_ms, reads)
+    hi, ev_hi = _lower_bound(guard, mode, table, column, hi_ms, reads)
+    width = max(0, hi - lo)
+    evidence = {"rowid_from": lo, "rowid_to": hi, "walk_upper_bound": width, "search": [ev_lo, ev_hi]}
+    if width > cap:
+        ledger.add(stage, 0, cap, None, **evidence, over_budget=True)
+        raise Stopped("row_budget", {"stage": stage, "walk_upper_bound": width, "cap": cap, "rowid_span": [lo, hi]})
+    return lo, hi, evidence
+
+
+def read_2c(guard, ledger, reads):
+    """Funding periods that START in the window. Receipt time (``known_at``) of a period is the poll that first showed it, so
+    the rowid range covers ``[A0 - FUNDING_MARGIN_BEFORE_MS, A1 + FUNDING_MARGIN_AFTER_MS)`` of ``known_at`` (declared margins)."""
+    lo, hi, evidence = _span(guard, "2c_bound", _PERIODS, "known_at", WINDOW_A[0] - FUNDING_MARGIN_BEFORE_MS,
+                             WINDOW_A[1] + FUNDING_MARGIN_AFTER_MS, reads, "2c", CAPS["2c"], ledger)
     sql = _sql_2c(CAPS["2c"] + 1)
-    plan = _plan(guard, "2c", sql)
-    got = guard.fetch("2c", sql)
-    ledger.add("2c", len(got), CAPS["2c"], plan, index_on_filter=False)
+    plan = _plan(guard, "2c", sql, (lo, hi))
+    got = guard.fetch("2c", sql, (lo, hi))
+    ledger.add("2c", len(got), CAPS["2c"], plan, walk_bounded_by_rowid_range=True, **evidence)
     if len(got) > CAPS["2c"]:
         raise Stopped("row_budget", {"stage": "2c", "cap": CAPS["2c"]})
-    return [tuple(r) for r in got]
+    rows = [tuple(r) for r in got]
+    return [r for r in rows if r[0] in PRODUCTS and WINDOW_A[0] <= r[1] < WINDOW_A[1]]
 
 
-def read_2d(guard, ledger):
+def read_2d(guard, ledger, reads):
+    lo, hi, evidence = _span(guard, "2d_bound", _RESPONSES, "received_at", WINDOW_A[0], WINDOW_A[1], reads, "2d", CAPS["2d"], ledger)
     sql = _sql_2d_meta(CAPS["2d"] + 1)
-    plan = _plan(guard, "2d_meta", sql)
-    meta = guard.fetch("2d_meta", sql)
+    plan = _plan(guard, "2d_meta", sql, (lo, hi))
+    meta = guard.fetch("2d_meta", sql, (lo, hi))
     total = sum(int(r[3] or 0) for r in meta)
-    ledger.add("2d", len(meta), CAPS["2d"], plan, index_on_filter=False, bytes=total, bytes_cap=MAX_BODY_BYTES)
+    ledger.add("2d", len(meta), CAPS["2d"], plan, walk_bounded_by_rowid_range=True, bytes=total, bytes_cap=MAX_BODY_BYTES,
+               **evidence)
     if len(meta) > CAPS["2d"]:
         raise Stopped("row_budget", {"stage": "2d", "cap": CAPS["2d"]})
     if total > MAX_BODY_BYTES:
         raise Stopped("byte_budget", {"stage": "2d", "bytes": total, "cap": MAX_BODY_BYTES})
-    out = []
-    for sha, received_at, server_time, _length in meta:
+    out, outside = [], 0
+    for sha, received_at, server_time, _size in meta:
+        if not WINDOW_A[0] <= received_at < WINDOW_A[1]:
+            outside += 1
+            continue
         prod = guard.fetch("2d_product", SQL_2D_PRODUCT, (sha,))
+        reads.count["2d_product"] += 1
+        if len(prod) != 1 or prod[0][0] not in PRODUCTS:
+            continue
         body = guard.fetch("2d_body", SQL_2D_BODY, (sha,))
-        if len(prod) != 1 or len(body) != 1:
+        reads.count["2d_body"] += 1
+        if len(body) != 1:
             raise Stopped("response_not_found", {"stage": "2d"})
         out.append((sha, received_at, server_time, prod[0][0], body[0][0]))
+    ledger.entries[-1]["rows_in_range_outside_window"] = outside
     return out
 
 
@@ -400,25 +490,32 @@ def _summarize_report(report):
             "events": event_counts, "validator_version": report["validator_version"], "report_fingerprint": report["fingerprint"]}
 
 
-def evaluate(official_rows, own_rows, period_rows, responses):
-    """Both reports (candles: BTC, window B; funding: both products, window A) and the aggregates of 2a to 2d."""
+def evaluate_candles(official_rows, own_rows):
+    """Candle report (BTC, window B, from 2a and 2b) and the aggregates of those two stages. Independent of funding."""
     candles_own, own_summary = own_minutes(own_rows)
-    sample_b = {"source": "dev-live/%s" % DB_NAME, "version": TOOL_VERSION, "from_ms": WINDOW_B[0], "to_ms": WINDOW_B[1],
-                "products": [BTC], "holdout_exception": list(HOLDOUT_WINDOW)}
+    sample = {"source": "dev-live/%s" % DB_NAME, "version": TOOL_VERSION, "from_ms": WINDOW_B[0], "to_ms": WINDOW_B[1],
+              "products": [BTC], "holdout_exception": list(HOLDOUT_WINDOW)}
     candles = cv.validate_candles(BTC, candles_own, official_5m(official_rows), WINDOW_B[0], WINDOW_B[1],
                                   holdout_window=HOLDOUT_WINDOW)
+    return {"official_1m": summarize_official(official_rows), "own_1m": own_summary,
+            "candles_report": _summarize_report(cv.build_report(sample, [candles], ("candles",)))}
+
+
+def evaluate_funding(official_rows, period_rows, responses):
+    """Funding report (both products, window A, from 2a, 2c and 2d)."""
     periods, polls, adapter_events = funding_inputs(period_rows, responses)
-    sample_a = {"source": "dev-live/%s" % DB_NAME, "version": TOOL_VERSION, "from_ms": WINDOW_A[0], "to_ms": WINDOW_A[1],
-                "products": list(PRODUCTS), "holdout_exception": list(HOLDOUT_WINDOW)}
+    sample = {"source": "dev-live/%s" % DB_NAME, "version": TOOL_VERSION, "from_ms": WINDOW_A[0], "to_ms": WINDOW_A[1],
+              "products": list(PRODUCTS), "holdout_exception": list(HOLDOUT_WINDOW)}
     funding = cv.validate_funding(periods, WINDOW_A[0], WINDOW_A[1], list(PRODUCTS), references=references(official_rows),
                                   responses=polls, holdout_window=HOLDOUT_WINDOW)
-    return {
-        "official_1m": summarize_official(official_rows),
-        "own_1m": own_summary,
-        "funding_rows": {"rows": len(period_rows), "responses_read": len(responses), "adapter": adapter_events},
-        "candles_report": _summarize_report(cv.build_report(sample_b, [candles], ("candles",))),
-        "funding_report": _summarize_report(cv.build_report(sample_a, [funding], ("funding",))),
-    }
+    return {"funding_rows": {"rows": len(period_rows), "responses_read": len(responses), "adapter": adapter_events},
+            "funding_report": _summarize_report(cv.build_report(sample, [funding], ("funding",)))}
+
+
+def evaluate(official_rows, own_rows, period_rows, responses):
+    out = evaluate_candles(official_rows, own_rows)
+    out.update(evaluate_funding(official_rows, period_rows, responses))
+    return out
 
 
 # ---------------------------------------------------------------------------------------------------- run
@@ -443,15 +540,19 @@ def build_result(conn, started=None):
         result["guards"] = {"opened_with": "mode=ro", "query_only_readback": readback}
         if readback != 1:
             raise Stopped("connection_not_query_only")
+        result["sqlite_version"] = sqlite3.sqlite_version
+        if sqlite3.sqlite_version_info < MIN_SQLITE:
+            raise Stopped("sqlite_version", "octet_length() needs SQLite >= 3.43")
         guard = _Guard(conn, started)
-        ledger = Ledger()
-        result["_ledger"] = ledger
+        ledger, reads = Ledger(), Reads()
+        result["_ledger"], result["_reads"] = ledger, reads
+        evaluation = result["evaluation"] = {}          # each stage's result is kept even if a later stage stops the run
         official = read_2a(guard, ledger)
         own = read_2b(guard, ledger)
-        periods = read_2c(guard, ledger)
-        responses = read_2d(guard, ledger)
-        result["reads"] = ledger.entries
-        result["evaluation"] = evaluate(official, own, periods, responses)
+        evaluation.update(evaluate_candles(official, own))
+        periods = read_2c(guard, ledger, reads)
+        responses = read_2d(guard, ledger, reads)
+        evaluation.update(evaluate_funding(official, periods, responses))
     except Stopped as stop:
         result["stopped"] = {"reason": stop.reason, "detail": stop.detail}
     except sqlite3.DatabaseError as exc:
@@ -461,9 +562,12 @@ def build_result(conn, started=None):
     finally:
         if guard is not None:
             guard.close()
-    ledger = result.pop("_ledger", None)
+    ledger, reads = result.pop("_ledger", None), result.pop("_reads", None)
     if ledger is not None:
         result["reads"] = ledger.entries
+        stage_rows = sum(e["rows"] for e in ledger.entries)
+        result["rows_total"] = {"statement_rows": stage_rows, "single_row_reads": reads.total(), "single_row_reads_by_kind": reads.count,
+                                "total": stage_rows + reads.total(), "cap": TOTAL_ROWS_CAP}
     return result
 
 

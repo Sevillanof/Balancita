@@ -87,19 +87,19 @@ class ReadTests(Fixture):
 
     def test_2c_filters_by_start_and_product(self):
         ins = "INSERT INTO paper_futures_funding_periods VALUES (?,?,?,?,?,?,?)"
-        self.conn.execute(ins, ("a", A0, m.BTC, A0 + 3_600_000, "0.1", 1, "u"))
-        self.conn.execute(ins, ("a", A1, m.BTC, A1 + 3_600_000, "0.1", 1, "u"))
-        self.conn.execute(ins, ("b", A0, "PF_SOLUSD", A0 + 3_600_000, "0.1", 1, "u"))
-        self.assertEqual(len(m.read_2c(self.guard(), m.Ledger())), 1)
+        self.conn.execute(ins, ("a", A0, m.BTC, A0 + 3_600_000, "0.1", A0 + 10, "u"))
+        self.conn.execute(ins, ("a", A1, m.BTC, A1 + 3_600_000, "0.1", A1 + 10, "u"))
+        self.conn.execute(ins, ("b", A0, "PF_SOLUSD", A0 + 3_600_000, "0.1", A0 + 10, "u"))
+        self.assertEqual(len(m.read_2c(self.guard(), m.Ledger(), m.Reads())), 1)
 
     def test_2d_byte_budget_stops_before_reading_bodies(self):
         self.conn.execute("INSERT INTO paper_futures_funding_periods VALUES ('s',?,?,?,?,?,?)", (A0, m.BTC, A0 + 1, "1", 1, "u"))
-        self.conn.execute("INSERT INTO paper_futures_funding_responses VALUES ('s',?,?,?)", (A0 + 5, A0 + 5, "x" * 50))
+        self.conn.execute("INSERT INTO paper_futures_funding_responses VALUES ('s',?,?,?)", (A0 + 5, str(A0 + 5), "x" * 50))
         old = m.MAX_BODY_BYTES
         m.MAX_BODY_BYTES = 10
         self.addCleanup(setattr, m, "MAX_BODY_BYTES", old)
         with self.assertRaises(m.Stopped) as ctx:
-            m.read_2d(self.guard(), m.Ledger())
+            m.read_2d(self.guard(), m.Ledger(), m.Reads())
         self.assertEqual(ctx.exception.reason, "byte_budget")
 
 
@@ -164,8 +164,8 @@ class EvaluateTests(Fixture):
 
     def _evaluate(self):
         g = self.guard()
-        led = m.Ledger()
-        return m.evaluate(m.read_2a(g, led), m.read_2b(g, led), m.read_2c(g, led), m.read_2d(g, led))
+        led, rd = m.Ledger(), m.Reads()
+        return m.evaluate(m.read_2a(g, led), m.read_2b(g, led), m.read_2c(g, led, rd), m.read_2d(g, led, rd))
 
     def test_candles_agree_and_no_value_is_published(self):
         self._fill()
@@ -216,14 +216,77 @@ class FundingSmokeTests(Fixture):
         server = start + 3 * hour
         body = '{"result":"success","serverTime":"%s","rates":[{"timestamp":"%s","fundingRate":%s,"relativeFundingRate":%s}]}' % (
             iso(server), iso(start), "1.0", rel)
-        self.conn.execute("INSERT INTO paper_futures_funding_responses VALUES ('s',?,?,?)", (server, server, body))
+        self.conn.execute("INSERT INTO paper_futures_funding_responses VALUES ('s',?,?,?)", (server, str(server), body))
         self.conn.execute("INSERT INTO paper_futures_funding_periods VALUES ('s',?,?,?,?,?,?)",
                           (start, m.BTC, start + hour, "1.0", server, "USD/BTC/hour"))
         for b in range(A0, A1, m.MINUTE_MS * 60):
             official(self.conn, m.BTC, b, close=str(price))
         self.conn.commit()
         g = self.guard()
-        led = m.Ledger()
-        out = m.evaluate(m.read_2a(g, led), m.read_2b(g, led), m.read_2c(g, led), m.read_2d(g, led))
+        led, rd = m.Ledger(), m.Reads()
+        out = m.evaluate(m.read_2a(g, led), m.read_2b(g, led), m.read_2c(g, led, rd), m.read_2d(g, led, rd))
         self.assertEqual(out["funding_rows"]["adapter"]["responses_parsed"], 1)
         self.assertNotIn(rel, repr(out["funding_report"]))
+
+
+class BoundedWalkTests(Fixture):
+    def _responses(self, n, start=None, step=60_000):
+        start = A0 - 5 * 3_600_000 if start is None else start
+        self.conn.executemany("INSERT INTO paper_futures_funding_responses VALUES (?,?,?,?)",
+                              [("h%05d" % i, start + i * step, "t", "x") for i in range(n)])
+        self.conn.commit()
+
+    def test_binary_search_finds_the_window_edges_in_few_reads(self):
+        self._responses(5000, start=A0 - 100 * 60_000, step=60_000)        # one per minute, 100 min before A0
+        g, rd = self.guard(), m.Reads()
+        lo, ev = m._lower_bound(g, "2d_bound", m._RESPONSES, "received_at", A0, rd)
+        self.assertEqual(lo, 101)                                        # rowids start at 1; row i has time A0 + (i-101) min
+        self.assertLess(rd.total(), 25)
+
+    def test_span_wider_than_the_cap_stops_before_reading_rows(self):
+        self._responses(2000, start=A0, step=60_000)
+        g, rd, led = self.guard(), m.Reads(), m.Ledger()
+        with self.assertRaises(m.Stopped) as ctx:
+            m.read_2d(g, led, rd)
+        self.assertEqual(ctx.exception.reason, "row_budget")
+        self.assertEqual(ctx.exception.detail["stage"], "2d")
+        self.assertEqual(led.entries[-1]["rows"], 0)
+
+    def test_2d_reads_only_the_range_and_counts_point_reads(self):
+        self._responses(300, start=A0 - 100 * 60_000, step=60_000)          # 100 before the window, 200 inside
+        for i in range(300):
+            self.conn.execute("INSERT INTO paper_futures_funding_periods VALUES (?,?,?,?,?,?,?)",
+                              ("h%05d" % i, A0 + i, m.BTC, A0 + i + 1, "1", A0 + i, "u"))
+        self.conn.commit()
+        g, rd, led = self.guard(), m.Reads(), m.Ledger()
+        out = m.read_2d(g, led, rd)
+        self.assertEqual(len(out), 200)
+        self.assertEqual(led.entries[-1]["rows"], 200)
+        self.assertEqual(led.entries[-1]["rows_in_range_outside_window"], 0)
+        self.assertEqual(rd.count["2d_product"], 200)
+        self.assertEqual(rd.count["2d_body"], 200)
+
+    def test_stage_results_survive_a_later_stop(self):
+        for b in range(B0, B1, m.MINUTE_MS):
+            official(self.conn, m.BTC, b)
+            revision(self.conn, b, 2, 1)
+        self._responses(2000, start=A0, step=60_000)                    # 2d will exceed its cap
+        self.conn.commit()
+        self.conn.close()
+        ro = m._open_readonly(self.path)
+        self.addCleanup(ro.close)
+        result = m.build_result(ro)
+        self.assertEqual(result["stopped"]["reason"], "row_budget")
+        self.assertIn("candles_report", result["evaluation"])
+        self.assertIn("single_row_reads", result["rows_total"])
+
+
+class AuthorizedWindowTests(unittest.TestCase):
+    def test_only_the_exact_authorised_window(self):
+        from balancita_engine import capture_validation as cv
+        cv.holdout_exception(m.HOLDOUT_WINDOW)
+        for window in ((A0, A1 + m.MINUTE_MS), (A0 - m.MINUTE_MS, A1), (cv.HOLDOUT_START_MS, 10 ** 13), (B0, B1)):
+            with self.assertRaises(ValueError):
+                cv.holdout_exception(window)
+            with self.assertRaises(ValueError):
+                cv.assert_range_allowed(window[0], window[1], window)
