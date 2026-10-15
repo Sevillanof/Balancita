@@ -13,9 +13,18 @@ import {
   type Section,
 } from '../infrastructure/observability-api.ts'
 import { useReport } from '../infrastructure/useReport.ts'
-import { momentLabel, shortProduct, sideLabel } from './format.ts'
+import { utcDateTime } from '../../../shared/finance/format.ts'
+import { duration, momentLabel, shortProduct, sideLabel } from './format.ts'
 import { LABEL, TONE } from './health-view.ts'
 import type { HealthRead } from './HealthIndicator.tsx'
+import {
+  assessActuality,
+  confirmedSourceEvidence,
+  BLOCKER_TEXT,
+  type GatewayClock,
+  type HealthFreshness,
+  type LatestDecision,
+} from './latest-decision.ts'
 
 const WINDOW_LABELS: Record<ActivityWindow, string> = {
   '3h': '3 h',
@@ -33,20 +42,79 @@ function Unavailable({ section }: { section: Section<object> }) {
   )
 }
 
+function decisionLabel(action: string): string {
+  return action === 'WAIT' ? 'Espera' : action
+}
+
 /**
- * AHORA: what is known about the engine at this moment. B2 gives aggregates,
- * not the last individual decision, so that line says «No disponible» and the
- * panel shows only what can be checked: how fresh the evaluations are and
- * what B1 says about the decisions source.
+ * AHORA: what is known about the engine at this moment. The last decision is
+ * shown only when it comes from a real analysis the Terminal stream delivered
+ * for this product (`latest`); B2 gives aggregates, never an individual
+ * decision, so without an analysis the line says «No disponible». The health
+ * of the decisions source (B1) is a separate fact.
  */
+function proposalsNote(decision: LatestDecision): string {
+  const p = decision.proposals
+  if (p === null) return 'El veredicto no trae el detalle de las propuestas.'
+  if (p.total === 0)
+    return 'El veredicto no registra propuestas de estrategias.'
+  if (p.directional === 0)
+    return p.total === 1
+      ? 'La única propuesta registrada en el veredicto no fue LONG/SHORT.'
+      : `Ninguna de las ${p.total} propuestas registradas en el veredicto fue LONG/SHORT.`
+  return `${p.directional} de ${p.total} propuestas registradas fueron LONG/SHORT; el selector no abrió operación.`
+}
+
 function Now({
   report,
   health,
+  product,
+  latest: known,
+  connected,
+  connectedAtMs,
+  clock,
+  localNowMs,
 }: {
   report: ActivityReport | null
-  health: HealthRead
+  health: HealthRead & HealthFreshness
+  product: string | null
+  latest: LatestDecision | null
+  connected: boolean
+  connectedAtMs: number | null
+  clock: GatewayClock | null
+  localNowMs: number
 }) {
-  const decisions = health.data?.components.find((c) => c.id === 'decisions')
+  // «Ahora» needs more than a young timestamp: WebSocket connected, a valid
+  // gateway clock and B1 evidence read on this connection that matches this
+  // verdict. Anything less is «Sin confirmar», never a silent reuse.
+  const actuality = known
+    ? assessActuality({
+        decision: known,
+        product,
+        connected,
+        connectedAtMs,
+        clock,
+        health,
+        localNowMs,
+      })
+    : null
+  const standing = actuality?.standing ?? null
+  const nowMs = actuality?.nowMs ?? localNowMs
+  const latest = standing === 'current' ? known : null
+  const unconfirmed = standing === 'unconfirmed' ? known : null
+  const historic = standing === 'historic' ? known : null
+  const clockNote = actuality?.gatewayClock ? 'hora del servidor' : 'hora local'
+  // B1's reading for THIS product's verdict source, shown only while the read
+  // passes the same freshness check as the decision above; else «Sin confirmar».
+  const sourceRead = confirmedSourceEvidence({
+    product,
+    connected,
+    connectedAtMs,
+    clock,
+    health,
+    localNowMs,
+  })
+  const source = sourceRead.evidence
   const mine =
     report?.evaluations.state === 'ok' && report.product
       ? (report.evaluations.byProduct.find(
@@ -58,18 +126,103 @@ function Now({
     <section className="obs-now" aria-label="Ahora" data-testid="observer-now">
       <p className="obs-card__label">Ahora</p>
       <p className="obs-card__big" data-testid="last-decision">
-        Última decisión: <span className="obs-na">No disponible</span>
-        <span className="obs-card__pill">
-          <span className="obs-card__pill-label">Salud de la fuente</span>
-          {decisions ? (
-            <StatusPill tone={TONE[decisions.status]}>
-              {LABEL[decisions.status]}
+        Última decisión:{' '}
+        {latest ? (
+          <>
+            <strong data-action={latest.action} data-testid="now-action">
+              {decisionLabel(latest.action)}
+            </strong>
+            {latest.action === 'LONG' || latest.action === 'SHORT' ? (
+              <small className="obs-now__kind"> propuesta, no operación</small>
+            ) : null}
+          </>
+        ) : unconfirmed ? (
+          <strong data-testid="now-unconfirmed-label">Sin confirmar</strong>
+        ) : (
+          <span className="obs-na">No disponible</span>
+        )}
+        <span className="obs-card__pill" data-testid="source-health">
+          <span className="obs-card__pill-label">
+            Salud de la fuente{product ? ` · ${shortProduct(product)}` : ''}
+          </span>
+          {source ? (
+            <StatusPill tone={TONE[source.status]}>
+              {LABEL[source.status]}
             </StatusPill>
-          ) : (
+          ) : sourceRead.confirmed ? (
             <span className="obs-na">Sin datos</span>
+          ) : (
+            <span className="obs-na" data-testid="source-health-unconfirmed">
+              Sin confirmar
+            </span>
           )}
         </span>
       </p>
+      {unconfirmed && actuality && (
+        <p
+          className="obs-summary"
+          data-testid="now-unconfirmed"
+          data-standing="unconfirmed"
+        >
+          Último veredicto recibido (no se presenta como estado actual):{' '}
+          {decisionLabel(unconfirmed.action)}
+          {unconfirmed.reasonCode ? (
+            <>
+              {' · '}
+              <code>{unconfirmed.reasonCode}</code>
+            </>
+          ) : null}
+          {' · '}
+          {utcDateTime(unconfirmed.decisionTimeMs)} · hace{' '}
+          {duration(nowMs - unconfirmed.decisionTimeMs)} ({clockNote})
+          <small className="obs-now__source" data-testid="now-blockers">
+            {' '}
+            Falta confirmar:{' '}
+            {actuality.blockers.map((b) => BLOCKER_TEXT[b]).join('; ')}.
+          </small>
+        </p>
+      )}
+      {latest && (
+        <p
+          className="obs-summary"
+          data-testid="now-detail"
+          data-standing={standing}
+        >
+          {latest.reasonCode ? <code>{latest.reasonCode}</code> : 'Sin motivo'}
+          {' · '}Régimen {latest.regime ?? 'No disponible'}
+          {' · '}
+          {utcDateTime(latest.decisionTimeMs)} · hace{' '}
+          {duration(nowMs - latest.decisionTimeMs)} ({clockNote})
+          <small className="obs-now__source" data-testid="now-source">
+            {' '}
+            Fuente: veredicto del flujo en vivo del gateway; no describe el
+            estado del forward.
+            {latest.action === 'WAIT'
+              ? ` Espera: el selector no abrió operación; la causa es el motivo indicado. ${proposalsNote(latest)} Esperar no es un error.`
+              : ''}
+          </small>
+        </p>
+      )}
+      {historic && (
+        <p className="obs-summary" data-testid="now-historic">
+          Última decisión conocida (histórica, no es el estado actual):{' '}
+          {decisionLabel(historic.action)}
+          {historic.reasonCode ? (
+            <>
+              {' · '}
+              <code>{historic.reasonCode}</code>
+            </>
+          ) : null}
+          {' · '}
+          {utcDateTime(historic.decisionTimeMs)} · hace{' '}
+          {duration(nowMs - historic.decisionTimeMs)} ({clockNote})
+          <small className="obs-now__source">
+            {' '}
+            Fuente: veredicto guardado en el histórico del gateway; el flujo en
+            vivo no entregó uno reciente.
+          </small>
+        </p>
+      )}
       {report && mine && report.signals.state === 'ok' && (
         <p className="obs-summary" data-testid="window-summary">
           Últimas {windowLabel} · {mine.count}{' '}
@@ -83,9 +236,11 @@ function Now({
       <details className="obs-details obs-details--inline">
         <summary>Qué fuentes respaldan esto</summary>
         <p className="obs-note">
-          Ninguna fuente verificable entrega la última decisión individual de
-          este producto (llegará con B3). El estado es el de la fuente de
-          decisiones según B1 (Fuente de decisiones (B1)).
+          {latest
+            ? 'La última decisión es la del último veredicto que el flujo en vivo del gateway entregó para este producto; solo se presenta como actual con la conexión WebSocket activa, la hora del servidor válida y una lectura reciente de B1 que coincide con ese veredicto. Los agregados de B2 no se usan para deducirla. '
+            : 'Ninguna fuente verificable entrega la última decisión individual de este producto (llegará con B3). '}
+          «Salud de la fuente» es la lectura de B1 de la fuente de decisiones
+          para este producto; la salud global sigue en la cabecera.
         </p>
         <p className="obs-note">
           Última evaluación registrada:{' '}
@@ -228,10 +383,25 @@ function Results({ report }: { report: ActivityReport }) {
 export default function ObserverPanel({
   product,
   health,
+  latest = null,
+  connected,
+  connectedAtMs,
+  clock,
+  localNowMs,
   children,
 }: {
   product: string | null
-  health: HealthRead
+  health: HealthRead & HealthFreshness
+  /** Last real analysis of the stream for this product, or null. */
+  latest?: LatestDecision | null
+  /** The Terminal's WebSocket is connected right now. */
+  connected: boolean
+  /** Browser time the current connection opened; null while disconnected. */
+  connectedAtMs: number | null
+  /** Gateway clock of the current connection, null when none arrived. */
+  clock: GatewayClock | null
+  /** This browser's clock, ticking: the staleness of every evidence. */
+  localNowMs: number
   /** The decisions history the Terminal already renders. */
   children?: ReactNode
 }) {
@@ -266,7 +436,16 @@ export default function ObserverPanel({
           ))}
         </div>
       </div>
-      <Now report={current} health={health} />
+      <Now
+        report={current}
+        health={health}
+        product={product}
+        latest={latest}
+        connected={connected}
+        connectedAtMs={connectedAtMs}
+        clock={clock}
+        localNowMs={localNowMs}
+      />
       <div className="obs-observer__body">
         {error !== null && (
           <DataState

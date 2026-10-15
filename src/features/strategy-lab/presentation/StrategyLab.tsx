@@ -1,5 +1,5 @@
 import { DEFAULT_LAB_PRODUCT, LAB_PRODUCTS } from '../domain/products.ts'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import ApprovedTerminalChart, {
   type ApprovedTerminalMarker,
 } from '../../trading-view/presentation/ApprovedTerminalChart.tsx'
@@ -44,6 +44,8 @@ import {
   type Gate,
   type PeriodDays,
   type Ranking,
+  type Inventory,
+  type InventoryStrategy,
   type StrategyApi,
   type StrategyPlan,
   type StrategyDetail,
@@ -68,6 +70,11 @@ import {
   VersionsTab,
 } from './StrategyLabPanels.tsx'
 import { NewStrategyModal } from './NewStrategyModal.tsx'
+import InventoryView from './InventoryView.tsx'
+import ComparisonView from './ComparisonView.tsx'
+import StrategyDetailView, { type LoadActivity } from './StrategyDetailView.tsx'
+import StrategyViewTabs from './StrategyViewTabs.tsx'
+import './InventoryView.css'
 import {
   MODEL_TEXTS,
   STATE_LABELS,
@@ -78,10 +85,20 @@ import './StrategyLab.css'
 
 type Props = {
   loadCandles?: () => Promise<LabCandles>
-  connect?: (candles: LabCandles) => Promise<StrategyApi>
+  connect?: (candles: LabCandles | null) => Promise<StrategyApi>
   loadQwen?: (product: string) => Promise<QwenScores>
   loadKronos?: (product: string) => Promise<QwenScores>
+  /** The default view is the inventory; the laboratory keeps every existing action. */
+  initialView?: StrategyView
+  /** B2 activity reader for the detail view (tests inject it). */
+  loadActivity?: LoadActivity
 }
+
+type StrategyView = 'inventory' | 'lab' | 'comparison' | 'detail'
+const VIEW_TABS = [
+  { id: 'inventory', label: 'Inventario de modelos' },
+  { id: 'lab', label: 'Laboratorio' },
+] as const
 
 type Tab = 'rules' | 'params' | 'risk' | 'plan' | 'json' | 'versions'
 type SaveMode = 'modify' | 'new'
@@ -101,8 +118,6 @@ type Row = {
 const PERIODS: readonly PeriodDays[] = [7, 30, 90]
 const SOURCE_LABELS: Record<LabCandles['source'], string> = {
   live: 'velas reales de Terminal',
-  mock: 'velas del fixture MOCK de Terminal',
-  synthetic: 'velas sintéticas (Terminal no respondió)',
 }
 const GATE_LABELS: Record<string, string> = {
   backtested: 'Tiene un backtest',
@@ -151,10 +166,22 @@ export default function StrategyLab({
   connect = defaultConnect,
   loadQwen = defaultLoadQwen,
   loadKronos = defaultLoadKronos,
+  initialView = 'inventory',
+  loadActivity,
 }: Props) {
+  const [view, setView] = useState<StrategyView>(initialView)
+  // «Ver contador» del inventario: lleva al contador de Carry dentro del laboratorio.
+  const [carryRequest, setCarryRequest] = useState(0)
+  const carryRef = useRef<HTMLDivElement>(null)
+  // Last carry request already served: a later entry to the laboratory from
+  // another view (comparison, detail, tab) must not pull the focus back to Carry.
+  const carryServed = useRef(0)
+  const [detailRow, setDetailRow] = useState<InventoryStrategy | null>(null)
+  const [inventory, setInventory] = useState<Inventory | null>(null)
   const [market, setMarket] = useState<LabCandles | null>(null)
   const [api, setApi] = useState<StrategyApi | null>(null)
   const [connectError, setConnectError] = useState<string | null>(null)
+  const [marketError, setMarketError] = useState<string | null>(null)
   const [days, setDays] = useState<PeriodDays>(30)
   const [reload, setReload] = useState(0)
   const [ranking, setRanking] = useState<Ranking | null>(null)
@@ -212,23 +239,31 @@ export default function StrategyLab({
 
   useEffect(() => {
     let active = true
-    void loadCandles().then(async (loaded) => {
+    void (async () => {
+      let loaded: LabCandles | null = null
+      try {
+        loaded = await loadCandles()
+      } catch (error) {
+        // No invented candles: the chart says the Terminal did not answer and
+        // the registry (which does not need them) still connects.
+        if (active) setMarketError(errorText(error))
+      }
       if (!active) return
-      setMarket(loaded)
+      if (loaded) setMarket(loaded)
       try {
         const connected = await connect(loaded)
         if (active) setApi(connected)
       } catch (error) {
         if (active) setConnectError(errorText(error))
       }
-    })
+    })()
     return () => {
       active = false
     }
   }, [loadCandles, connect])
 
   useEffect(() => {
-    if (!api) return
+    if (!api || view !== 'lab') return
     let active = true
     api.ranking(days, product).then(
       (loaded) => {
@@ -241,7 +276,7 @@ export default function StrategyLab({
     return () => {
       active = false
     }
-  }, [api, days, product, reload])
+  }, [api, days, product, reload, view])
 
   useEffect(() => {
     if (!api?.plans || tab !== 'plan') return
@@ -441,11 +476,43 @@ export default function StrategyLab({
     }
   }
 
+  useEffect(() => {
+    if (carryRequest === 0 || carryRequest === carryServed.current) return
+    if (view !== 'lab') return
+    const target = carryRef.current
+    if (!target) return
+    carryServed.current = carryRequest
+    target.scrollIntoView?.({ block: 'start' })
+    target.focus({ preventScroll: true })
+  }, [carryRequest, view, api])
+
   const select = (id: string) => {
     setSelectedId(id)
     setSaveMode('modify')
     setNotice(null)
     setError(null)
+  }
+
+  const openInLab = (row: InventoryStrategy) => {
+    setView('lab')
+    setNotice(null)
+    setError(null)
+    if (row.kind === 'carry') setCarryRequest((value) => value + 1)
+    else if (row.kind === 'model') setFocus('kronos')
+    else if (row.kind === 'rules') {
+      setFocus(null)
+      setShowPreview(false)
+      if (row.id !== selectedId) select(row.id)
+    }
+  }
+
+  const openFromInventory = (row: InventoryStrategy) => {
+    if (row.kind === 'rules' && api?.detail && inventory) {
+      setDetailRow(row)
+      setView('detail')
+      return
+    }
+    openInLab(row)
   }
 
   const refresh = (id: string | null, message: string) => {
@@ -651,831 +718,941 @@ export default function StrategyLab({
 
   return (
     <div className="strategy-lab">
-      <div className="strategy-lab__toolbar">
-        <h1>Laboratorio</h1>
-        <p className="strategy-lab__context">
-          {!market
-            ? 'Cargando las velas de Terminal…'
-            : connectError
-              ? 'Sin conexión con el registro de estrategias'
-              : !api
-                ? 'Conectando con el registro de estrategias…'
-                : example
-                  ? `Sin conexión con el registro de estrategias · datos de ejemplo sobre ${SOURCE_LABELS[market.source]}`
-                  : `Registro de estrategias · backtest sobre los veredictos de C (velas oficiales de Terminal) · ${product} · ${days} d`}
-        </p>
-        <div className="strategy-lab__toolbar-actions">
-          <select
-            aria-label="Producto"
-            value={product}
-            onChange={(event) => {
-              setProduct(event.target.value)
-              setFocus(null)
-            }}
-          >
-            {LAB_PRODUCTS.map((item) => (
-              <option key={item} value={item}>
-                {item}
-              </option>
-            ))}
-          </select>
-          <div
-            className="strategy-lab__seg"
-            role="group"
-            aria-label="Período de la prueba"
-          >
-            {PERIODS.map((value) => (
-              <button
-                type="button"
-                aria-pressed={days === value}
-                key={value}
-                disabled={example}
-                title={
-                  example
-                    ? 'Los periodos necesitan el registro de estrategias'
-                    : undefined
-                }
-                onClick={() => setDays(value)}
-              >
-                {value} d
-              </button>
-            ))}
-          </div>
-          <button
-            type="button"
-            className="strategy-lab__button"
-            onClick={() => setImporting((open) => !open)}
-            aria-expanded={importing}
-          >
-            Importar
-          </button>
-          <button
-            type="button"
-            className="strategy-lab__button strategy-lab__button--primary"
-            onClick={() => setCreating(true)}
-          >
-            Nueva estrategia
-          </button>
-        </div>
-      </div>
-
-      {creating && (
-        <NewStrategyModal
+      <StrategyViewTabs
+        tabs={VIEW_TABS}
+        current={
+          view === 'comparison' || view === 'detail' ? 'inventory' : view
+        }
+        onChange={setView}
+        trailing={
+          inventory && (
+            <dl className="strategy-views__figures" aria-label="Resumen">
+              <div>
+                <dt>Estrategias</dt>
+                <dd>{inventory.counts.strategies}</dd>
+              </div>
+              <div>
+                <dt>Activas en el registro</dt>
+                <dd>{inventory.counts.active}</dd>
+              </div>
+              <div>
+                <dt>Costes</dt>
+                <dd>{inventory.cost_model?.version ?? 'No disponible'}</dd>
+              </div>
+              <div>
+                <dt>Capital</dt>
+                <dd>{inventory.notional_usd} USD por operación</dd>
+              </div>
+            </dl>
+          )
+        }
+      />
+      {view === 'inventory' && (
+        <InventoryView
           api={api}
-          onClose={() => setCreating(false)}
-          onCreated={(entry) => {
-            setCreating(false)
-            refresh(
-              entry.id,
-              `Agregada ${shortName(entry.name, entry.id)} (${STATE_LABELS[entry.state].toLowerCase()}).`,
-            )
-          }}
+          connectError={connectError}
+          reload={reload}
+          onOpen={openFromInventory}
+          onLoaded={setInventory}
+          onCompare={() => setView('comparison')}
         />
       )}
-      {connectError && (
-        <p
-          role="alert"
-          className="strategy-lab__notice strategy-lab__notice--warn"
-        >
-          {connectError} No se muestran datos de ejemplo: con{' '}
-          <code>pnpm dev</code> y el registro corriendo se ven las estrategias y
-          sus backtests reales.
-        </p>
+      {view === 'comparison' && (
+        <ComparisonView
+          api={api}
+          connectError={connectError}
+          reload={reload}
+          onOpen={openFromInventory}
+          onBack={() => setView('inventory')}
+        />
       )}
-      {example && (
-        <p className="strategy-lab__notice strategy-lab__notice--warn">
-          El registro de estrategias no respondió: ranking, trades y resultados
-          son de ejemplo y no salen de un backtest. Con <code>pnpm dev</code> y
-          el registro corriendo se ven los datos reales.
-        </p>
+      {view === 'detail' && detailRow && api && inventory && (
+        <StrategyDetailView
+          api={api}
+          row={detailRow}
+          inventory={inventory}
+          loadActivity={loadActivity}
+          onBack={() => setView('inventory')}
+          onOpenLab={() => openInLab(detailRow)}
+        />
       )}
-      {ranking && !ranking.verdicts_available && (
-        <p className="strategy-lab__notice strategy-lab__notice--warn">
-          Todavía no hay veredictos guardados para backtestear
-          {ranking.detail ? ` (${ranking.detail})` : ''}.
-        </p>
-      )}
-      {notice && (
-        <p role="status" className="strategy-lab__notice">
-          {notice}
-        </p>
-      )}
-      {error && (
-        <div role="alert" className="strategy-lab__errors">
-          <p>{error}</p>
-          {gates.length > 0 && (
-            <ul>
-              {gates.map((gate) => (
-                <li
-                  key={gate.code}
-                  className={gate.passed ? 'is-up' : 'is-down'}
-                >
-                  {gate.passed ? '✓' : '✗'}{' '}
-                  {GATE_LABELS[gate.code] ?? gate.code}
-                  {gate.value !== null && gate.value !== undefined
-                    ? ` · ${String(gate.value)} (pide ${String(gate.threshold)})`
-                    : ''}
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      )}
-
-      {importing && (
-        <section
-          className="strategy-lab__import"
-          aria-label="Importar estrategia"
-        >
-          <div className="strategy-lab__seg" role="group" aria-label="Formato">
-            {(
-              [
-                ['json', 'JSON'],
-                ['pine', 'Pine Script'],
-                ['freqtrade', 'freqtrade'],
-              ] as const
-            ).map(([value, label]) => (
-              <button
-                key={value}
-                type="button"
-                aria-pressed={importSource === value}
-                onClick={() => setImportSource(value)}
+      {view === 'lab' && (
+        <>
+          <div className="strategy-lab__toolbar">
+            <h1>Laboratorio</h1>
+            <p className="strategy-lab__context">
+              {connectError
+                ? 'Registro de estrategias no disponible: servicio sin iniciar'
+                : !market && !marketError
+                  ? 'Cargando las velas de Terminal…'
+                  : !api
+                    ? 'Conectando con el registro de estrategias…'
+                    : example
+                      ? `Sin conexión con el registro de estrategias · datos de ejemplo sobre ${market ? SOURCE_LABELS[market.source] : 'velas no disponibles'}`
+                      : `Registro de estrategias · backtest sobre los veredictos de C (velas oficiales de Terminal) · ${product} · ${days} d`}
+            </p>
+            <div className="strategy-lab__toolbar-actions">
+              <select
+                aria-label="Producto"
+                value={product}
+                onChange={(event) => {
+                  setProduct(event.target.value)
+                  setFocus(null)
+                }}
               >
-                {label}
-              </button>
-            ))}
-          </div>
-          <label htmlFor="strategy-lab-import">
-            {importSource === 'json'
-              ? 'Pegá una estrategia en JSON (balancita-strategy.v1). Entra como borrador.'
-              : 'Pegá el código: el modelo local lo traduce a una estrategia para revisar. El código nunca se ejecuta.'}
-          </label>
-          <textarea
-            id="strategy-lab-import"
-            value={importText}
-            onChange={(event) => setImportText(event.target.value)}
-            rows={6}
-            spellCheck={false}
-          />
-          {importNotes.length > 0 && (
-            <ul className="strategy-lab__context">
-              {importNotes.map((note) => (
-                <li key={note}>{note}</li>
-              ))}
-            </ul>
-          )}
-          <div className="strategy-lab__row-actions">
-            <button
-              type="button"
-              className="strategy-lab__button strategy-lab__button--primary"
-              onClick={importSpec}
-              disabled={busy || importText.trim() === ''}
-            >
-              {importSource === 'json' ? 'Importar como borrador' : 'Traducir'}
-            </button>
-            <button
-              type="button"
-              className="strategy-lab__button strategy-lab__button--ghost"
-              onClick={() => setImporting(false)}
-            >
-              Cancelar
-            </button>
-          </div>
-        </section>
-      )}
-
-      <div className="strategy-lab__grid">
-        <section
-          className="strategy-lab__panel strategy-lab__ranking"
-          aria-labelledby="lab-ranking-title"
-        >
-          <div className="strategy-lab__panel-head">
-            <h2 id="lab-ranking-title">Ranking por rentabilidad</h2>
-            <span className="strategy-lab__eyebrow">acierto · trades</span>
-          </div>
-          {rows.length === 0 && (
-            <p className="strategy-lab__empty">Cargando estrategias…</p>
-          )}
-          {rankGroups.map((group) => (
-            <div key={group.key} className="strategy-lab__rank-group">
-              {group.title && (
-                <h3 className="strategy-lab__rank-group-title">
-                  {group.title}
-                </h3>
-              )}
-              <ol className="strategy-lab__rank-list">
-                {group.rows.map((row) => {
-                  const current = isModel(row.state)
-                    ? focus === row.state
-                    : !focus &&
-                      (row.state === 'preview'
-                        ? showPreview
-                        : row.id !== null &&
-                          row.id === selectedId &&
-                          !showPreview)
-                  return (
-                    <li key={row.key}>
-                      <button
-                        type="button"
-                        className={`strategy-lab__rank strategy-lab__rank--${row.state}`}
-                        aria-pressed={current}
-                        disabled={row.state === 'reference'}
-                        onClick={() => {
-                          setFocus(isModel(row.state) ? row.state : null)
-                          if (row.state === 'preview') setShowPreview(true)
-                          else if (row.id) {
-                            setShowPreview(false)
-                            if (row.id !== selectedId) select(row.id)
-                          }
-                        }}
-                      >
-                        <span
-                          className={`strategy-lab__dot strategy-lab__dot--${row.state}`}
-                          title={STATE_LABELS[row.state]}
-                        />
-                        <span className="strategy-lab__rank-name">
-                          {row.label}
-                        </span>
-                        <span
-                          className={`strategy-lab__num strategy-lab__rank-return ${(row.returnPct ?? 0) >= 0 ? 'is-up' : 'is-down'}`}
-                        >
-                          {row.returnPct === null
-                            ? '—'
-                            : signedPercent(row.returnPct, 2)}
-                        </span>
-                        <span className="strategy-lab__bar" aria-hidden="true">
-                          <span
-                            className={
-                              (row.returnPct ?? 0) >= 0 ? 'is-up' : 'is-down'
-                            }
-                            style={{
-                              width: `${Math.round((Math.abs(row.returnPct ?? 0) / bestReturn) * 100)}%`,
-                            }}
-                          />
-                        </span>
-                        <span
-                          className={`strategy-lab__num strategy-lab__rank-hit${row.few ? ' is-few' : ''}`}
-                        >
-                          {row.state === 'reference'
-                            ? 'referencia'
-                            : isModel(row.state) && !modelProducts[row.state]
-                              ? 'sin decisiones'
-                              : row.hitRate === null
-                                ? 'sin trades'
-                                : `${percent(row.hitRate * 100)} · ${row.trades}`}
-                        </span>
-                      </button>
-                    </li>
-                  )
-                })}
-              </ol>
-            </div>
-          ))}
-          <div className="strategy-lab__legend">
-            <span>
-              <span className="strategy-lab__dot strategy-lab__dot--active" />
-              activa
-            </span>
-            <span>
-              <span className="strategy-lab__dot strategy-lab__dot--shadow" />
-              sombra
-            </span>
-            <span>
-              <span className="strategy-lab__dot strategy-lab__dot--draft" />
-              borrador
-            </span>
-            <span>
-              <span className="strategy-lab__dot strategy-lab__dot--preview" />
-              sin guardar
-            </span>
-            <span>
-              <span className="strategy-lab__dot strategy-lab__dot--qwen" />
-              Qwen
-            </span>
-            <span>
-              <span className="strategy-lab__dot strategy-lab__dot--kronos" />
-              Kronos
-            </span>
-            <span>gris = menos de {ranking?.min_trades ?? 30} trades</span>
-          </div>
-          <CarryPanel />
-        </section>
-
-        <section
-          className="strategy-lab__panel strategy-lab__focus"
-          aria-label="Resultado de la estrategia elegida"
-        >
-          {focus ? (
-            <QwenFocusHead
-              scores={modelScores[focus]}
-              product={modelProducts[focus]}
-              model={focus}
-            />
-          ) : (
-            <>
-              <div className="strategy-lab__panel-head">
-                <h2>
-                  {showPreview && previewResult
-                    ? `${draftLabel} · cambios sin guardar`
-                    : detail
-                      ? `${shortName(detail.name, detail.id)}${detail.version > 1 ? ` v${detail.version}` : ''}`
-                      : '—'}
-                </h2>
-                {detail && (
-                  <span
-                    className={`strategy-lab__chip strategy-lab__chip--${showPreview ? 'preview' : detail.state}`}
-                  >
-                    {STATE_LABELS[showPreview ? 'preview' : detail.state]}
-                  </span>
-                )}
-                <span className="strategy-lab__context">
-                  {example
-                    ? 'Datos de ejemplo'
-                    : `Book paper propio · costos y tamaño de D · 70 % dentro / 30 % fuera de muestra${result ? ` · ${result.trials} pruebas` : ''}`}
-                </span>
-              </div>
-              {all && (
-                <div className="strategy-lab__kpis">
-                  <div className="strategy-lab__kpi strategy-lab__kpi--key">
-                    <span className="strategy-lab__eyebrow">Rentabilidad</span>
-                    <strong
-                      className={`strategy-lab__num ${all.return_pct >= 0 ? 'is-up' : 'is-down'}`}
-                    >
-                      {signedPercent(all.return_pct, 2)}
-                    </strong>
-                    <span className="strategy-lab__num">
-                      {signedUsd(all.pnl_usd)}
-                    </span>
-                  </div>
-                  <div className="strategy-lab__kpi strategy-lab__kpi--key">
-                    <span className="strategy-lab__eyebrow">Acierto</span>
-                    <strong className="strategy-lab__num">
-                      {all.hit_rate === null
-                        ? '—'
-                        : percent(all.hit_rate * 100)}
-                    </strong>
-                    <span className="strategy-lab__num">
-                      {all.wins} de {all.trades} trades
-                    </span>
-                  </div>
-                  <div className="strategy-lab__kpi">
-                    <span className="strategy-lab__eyebrow">
-                      Vs comprar y mantener
-                    </span>
-                    <strong className="strategy-lab__num">
-                      {result.vs_buy_and_hold_pts === null
-                        ? '—'
-                        : signedPercent(result.vs_buy_and_hold_pts, 2).replace(
-                            ' %',
-                            ' pts',
-                          )}
-                    </strong>
-                    <span className="strategy-lab__num">
-                      {reference === null ? '' : signedPercent(reference, 2)}
-                    </span>
-                  </div>
-                  <div className="strategy-lab__kpi">
-                    <span className="strategy-lab__eyebrow">Caída máxima</span>
-                    <strong className="strategy-lab__num is-down">
-                      {result.max_drawdown.pct === null
-                        ? '—'
-                        : signedPercent(result.max_drawdown.pct, 2)}
-                    </strong>
-                  </div>
-                  <div className="strategy-lab__kpi">
-                    <span className="strategy-lab__eyebrow">
-                      Fuera de muestra
-                    </span>
-                    <strong
-                      className={`strategy-lab__num ${(oos?.return_pct ?? 0) >= 0 ? 'is-up' : 'is-down'}`}
-                    >
-                      {oos ? signedPercent(oos.return_pct, 2) : '—'}
-                    </strong>
-                    <span className="strategy-lab__num">
-                      {oos?.hit_rate === null || oos === undefined
-                        ? 'sin trades'
-                        : `${percent(oos.hit_rate * 100)} de ${oos.trades}`}
-                      {result.deflated_sharpe_probability === null
-                        ? ''
-                        : ` · Sharpe defl. ${percent(result.deflated_sharpe_probability * 100)}`}
-                    </span>
-                  </div>
-                </div>
-              )}
-            </>
-          )}
-          <div className="strategy-lab__chart">
-            {candles.length > 0 ? (
-              <ApprovedTerminalChart
-                candles={candles}
-                markers={markers}
-                selectedId=""
-                intervalSeconds={60}
-                currency="USD"
-                instrument="BTC/USD perpetuo"
-                onSelect={() => {}}
-                ariaLabel="Velas de Terminal con los trades de la estrategia elegida"
-              />
-            ) : (
-              <p className="strategy-lab__empty">
-                Cargando las velas de Terminal…
-              </p>
-            )}
-          </div>
-          <div className="strategy-lab__chart-legend">
-            <span>
-              <b className="is-up">▲</b> entrada larga
-            </span>
-            <span>
-              <b className="is-down">▼</b> entrada corta
-            </span>
-            <span>
-              <b className="is-info">●</b> salida con su resultado neto
-            </span>
-            {trades.length > visible.length && (
-              <span>
-                {visible.length} de {trades.length} trades caen en la ventana
-                del gráfico
-              </span>
-            )}
-          </div>
-        </section>
-
-        {focus ? (
-          <QwenSide product={modelProducts[focus]} model={focus} />
-        ) : (
-          <aside
-            className="strategy-lab__panel strategy-lab__editor"
-            aria-label={`Editar ${draftLabel}`}
-          >
-            <div className="strategy-lab__panel-head">
-              <h2>
-                {draftLabel}
-                {draft && draft.version > 1 ? ` v${draft.version}` : ''}
-              </h2>
-            </div>
-            {draft?.description && (
-              <p className="strategy-lab__description">{draft.description}</p>
-            )}
-            <div
-              className="strategy-lab__tabs"
-              role="tablist"
-              aria-label="Partes de la estrategia"
-            >
-              {(
-                [
-                  ['rules', 'Reglas'],
-                  ['params', 'Parámetros'],
-                  ['risk', 'Riesgo'],
-                  ['plan', 'Plan'],
-                  ['json', 'JSON'],
-                  ['versions', 'Versiones'],
-                ] as const
-              ).map(([value, label]) => (
-                <button
-                  key={value}
-                  type="button"
-                  role="tab"
-                  aria-selected={tab === value}
-                  onClick={() => setTab(value)}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-
-            {tab === 'rules' && draft && (
-              <div className="strategy-lab__tab-body">
-                {scopes.length > 1 && (
-                  <div
-                    className="strategy-lab__seg"
-                    role="group"
-                    aria-label="Régimen"
-                  >
-                    {scopes.map((value) => (
-                      <button
-                        key={value}
-                        type="button"
-                        aria-pressed={scope === value}
-                        onClick={() => setScope(value)}
-                      >
-                        {SCOPE_LABELS[value]}
-                      </button>
-                    ))}
-                  </div>
-                )}
-                <div className="strategy-lab__side-row">
-                  <div
-                    className="strategy-lab__seg"
-                    role="group"
-                    aria-label="Lado"
-                  >
-                    {(['LONG', 'SHORT'] as const).map((value) => (
-                      <button
-                        key={value}
-                        type="button"
-                        aria-pressed={side === value}
-                        onClick={() => setSide(value)}
-                        disabled={!rules?.sides[value]}
-                      >
-                        {value}
-                      </button>
-                    ))}
-                  </div>
-                  <span className="strategy-lab__context">
-                    Entra si se cumplen todas · punto = última vela
-                  </span>
+                {LAB_PRODUCTS.map((item) => (
+                  <option key={item} value={item}>
+                    {item}
+                  </option>
+                ))}
+              </select>
+              <div
+                className="strategy-lab__seg"
+                role="group"
+                aria-label="Período de la prueba"
+              >
+                {PERIODS.map((value) => (
                   <button
                     type="button"
-                    className="strategy-lab__button"
-                    aria-pressed={editingRules}
-                    onClick={() => setEditingRules((open) => !open)}
-                  >
-                    {editingRules ? 'Listo' : 'Editar reglas'}
-                  </button>
-                </div>
-                {conditions.length === 0 && (
-                  <p className="strategy-lab__context">
-                    Sin condiciones para este lado.
-                  </p>
-                )}
-                <ul className="strategy-lab__rules">
-                  {conditions.map(({ path, node }, index) => {
-                    const state = dots.get(node.cmp)
-                    const patch = (
-                      change: Parameters<typeof patchCondition>[3],
-                    ) => update(patchCondition(draft, scope, path, change))
-                    return (
-                      <li
-                        key={`${path.check}-${path.steps.join('.')}`}
-                        className="strategy-lab__rule"
-                      >
-                        <span
-                          className={`strategy-lab__dot ${state === true ? 'strategy-lab__dot--active' : state === false ? 'strategy-lab__dot--fail' : ''}`}
-                          title={
-                            state === true
-                              ? 'Se cumple en la última vela'
-                              : state === false
-                                ? 'No se cumple en la última vela'
-                                : 'Sin datos todavía'
-                          }
-                        />
-                        {!editingRules ? (
-                          <span className="strategy-lab__sentence">
-                            {conditionSentence(node, draft.params)}
-                          </span>
-                        ) : (
-                          <>
-                            {operandEditor(
-                              node.left,
-                              `Condición ${index + 1}: indicador`,
-                              (left) => patch({ left }),
-                            )}
-                            <select
-                              aria-label={`Condición ${index + 1}: comparador`}
-                              className="strategy-lab__op"
-                              value={node.op}
-                              onChange={(event) =>
-                                patch({ op: event.target.value as Comparator })
-                              }
-                            >
-                              {COMPARATORS.map((op) => (
-                                <option key={op} value={op}>
-                                  {COMPARATOR_LABELS[op]}
-                                </option>
-                              ))}
-                            </select>
-                            {operandEditor(
-                              node.right,
-                              `Condición ${index + 1}: contra`,
-                              (right) => patch({ right }),
-                            )}
-                            <button
-                              type="button"
-                              className="strategy-lab__button"
-                              aria-label={`Quitar condición ${index + 1}`}
-                              onClick={() =>
-                                update(
-                                  removeCondition(draft, scope, side, path),
-                                )
-                              }
-                            >
-                              ✕
-                            </button>
-                          </>
-                        )}
-                      </li>
-                    )
-                  })}
-                </ul>
-                {editingRules && (
-                  <button
-                    type="button"
-                    className="strategy-lab__button"
-                    disabled={!rules?.sides[side]}
-                    onClick={() => update(addCondition(draft, scope, side))}
-                  >
-                    + condición
-                  </button>
-                )}
-              </div>
-            )}
-
-            {tab === 'params' && draft && (
-              <div className="strategy-lab__tab-body">
-                <fieldset className="strategy-lab__params">
-                  <legend className="strategy-lab__eyebrow">Parámetros</legend>
-                  {Object.entries(draft.params).map(([param, value]) => (
-                    <label key={param}>
-                      <span className="strategy-lab__num">${param}</span>
-                      <input
-                        aria-label={`Parámetro ${param}`}
-                        defaultValue={formatDecimal(value)}
-                        key={`${param}-${value}`}
-                        onBlur={(event) => setParam(param, event.target.value)}
-                      />
-                      <small>
-                        {detail && detail.spec.params[param] !== value
-                          ? `antes ${formatDecimal(detail.spec.params[param] ?? '—')}`
-                          : ' '}
-                      </small>
-                    </label>
-                  ))}
-                </fieldset>
-                <fieldset className="strategy-lab__params strategy-lab__sweep">
-                  <legend className="strategy-lab__eyebrow">
-                    Probar varios valores
-                  </legend>
-                  <label>
-                    <span>Parámetro</span>
-                    <select
-                      aria-label="Parámetro a barrer"
-                      value={sweepParam}
-                      onChange={(event) => setSweepParam(event.target.value)}
-                    >
-                      {Object.keys(draft.params).map((param) => (
-                        <option key={param} value={param}>
-                          ${param}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label>
-                    <span>Valores</span>
-                    <input
-                      aria-label="Valores a probar"
-                      placeholder="35; 40; 45"
-                      value={sweepText}
-                      aria-invalid={
-                        sweepText !== '' && parseParamValues(sweepText) === null
-                      }
-                      onChange={(event) => setSweepText(event.target.value)}
-                    />
-                  </label>
-                  <button
-                    type="button"
-                    className="strategy-lab__button"
-                    disabled={
-                      busy ||
-                      !sweepParam ||
-                      parseParamValues(sweepText) === null
+                    aria-pressed={days === value}
+                    key={value}
+                    disabled={example}
+                    title={
+                      example
+                        ? 'Los periodos necesitan el registro de estrategias'
+                        : undefined
                     }
-                    onClick={createVariants}
+                    onClick={() => setDays(value)}
                   >
-                    Crear variantes
+                    {value} d
                   </button>
-                  <small>
-                    Cada valor crea una estrategia borrador a partir de la
-                    versión guardada y entra al ranking.
-                  </small>
-                </fieldset>
+                ))}
               </div>
-            )}
-
-            {tab === 'risk' && draft && rules && (
-              <div className="strategy-lab__tab-body strategy-lab__risk">
-                <label>
-                  Stop (× ATR 14)
-                  <input
-                    defaultValue={formatDecimal(
-                      resolveValue(rules.risk.stop_atr, draft.params),
-                    )}
-                    key={`stop-${draftKey}`}
-                    onBlur={(event) => setRisk('stop_atr', event.target.value)}
-                  />
-                </label>
-                <label>
-                  Objetivo (× distancia del stop)
-                  <input
-                    defaultValue={formatDecimal(
-                      resolveValue(rules.risk.target_stop_ratio, draft.params),
-                    )}
-                    key={`target-${draftKey}`}
-                    onBlur={(event) =>
-                      setRisk('target_stop_ratio', event.target.value)
-                    }
-                  />
-                </label>
-                <label>
-                  Cierre por tiempo (minutos, 1-1440)
-                  <input
-                    defaultValue={String(rules.horizon_minutes)}
-                    key={`horizon-${draftKey}`}
-                    onBlur={(event) => {
-                      const minutes = Number(event.target.value)
-                      if (
-                        !Number.isSafeInteger(minutes) ||
-                        minutes < 1 ||
-                        minutes > 1440
-                      )
-                        return
-                      const next = cloneSpec(draft)
-                      rulesOf(next, scope)!.horizon_minutes = minutes
-                      update(next)
-                    }}
-                  />
-                </label>
-              </div>
-            )}
-
-            {tab === 'plan' && (
-              <PlanTab plan={plans?.[selectedId ?? ''] ?? null} />
-            )}
-
-            {tab === 'json' && draft && (
-              <JsonTab
-                draft={draft}
-                jsonText={jsonText}
-                onChange={setJsonText}
-                onApply={applyJson}
-              />
-            )}
-
-            {tab === 'versions' && detail && (
-              <VersionsTab
-                detail={detail}
-                busy={busy}
-                onState={changeState}
-                onDelete={deleteStrategy}
-              />
-            )}
-
-            {dirty && (
               <button
                 type="button"
                 className="strategy-lab__button"
-                disabled={busy}
-                onClick={testDraft}
+                onClick={() => setImporting((open) => !open)}
+                aria-expanded={importing}
               >
-                Probar cambios
+                Importar
               </button>
-            )}
-            <fieldset className="strategy-lab__save">
-              <legend className="strategy-lab__eyebrow">Al guardar</legend>
-              <label className="strategy-lab__check">
-                <input
-                  type="radio"
-                  name="strategy-lab-save"
-                  checked={saveMode === 'modify'}
-                  onChange={() => setSaveMode('modify')}
-                />
-                Modificar {detail ? shortName(detail.name, detail.id) : ''}
-              </label>
-              <label className="strategy-lab__check">
-                <input
-                  type="radio"
-                  name="strategy-lab-save"
-                  checked={saveMode === 'new'}
-                  onChange={() => {
-                    setSaveMode('new')
-                    if (!newName && draft) setNewName(`${draft.name} (copia)`)
-                  }}
-                />
-                Crear estrategia nueva
-              </label>
-              {saveMode === 'new' && (
-                <input
-                  aria-label="Nombre de la estrategia nueva"
-                  value={newName}
-                  onChange={(event) => setNewName(event.target.value)}
-                />
-              )}
-            </fieldset>
-            <button
-              type="button"
-              className="strategy-lab__button strategy-lab__button--primary strategy-lab__save-button"
-              disabled={!canSave}
-              onClick={save}
+              <button
+                type="button"
+                className="strategy-lab__button strategy-lab__button--primary"
+                onClick={() => setCreating(true)}
+              >
+                Nueva estrategia
+              </button>
+            </div>
+          </div>
+
+          {creating && (
+            <NewStrategyModal
+              api={api}
+              onClose={() => setCreating(false)}
+              onCreated={(entry) => {
+                setCreating(false)
+                refresh(
+                  entry.id,
+                  `Agregada ${shortName(entry.name, entry.id)} (${STATE_LABELS[entry.state].toLowerCase()}).`,
+                )
+              }}
+            />
+          )}
+          {connectError && (
+            <p
+              role="alert"
+              className="strategy-lab__notice strategy-lab__notice--warn"
             >
-              Guardar
-            </button>
-            <small className="strategy-lab__context">
-              Se guarda como borrador; el motor sólo usa versiones activas.
-            </small>
-          </aside>
-        )}
-      </div>
-      <TradesTable trades={trades} />
+              {connectError} No se muestran datos de ejemplo: con{' '}
+              <code>pnpm dev</code> y el registro corriendo se ven las
+              estrategias y sus backtests reales. Las estrategias, los backtests
+              y el Carry no se piden hasta que el servicio responda.
+            </p>
+          )}
+          {example && (
+            <p className="strategy-lab__notice strategy-lab__notice--warn">
+              El registro de estrategias no respondió: ranking, trades y
+              resultados son de ejemplo y no salen de un backtest. Con{' '}
+              <code>pnpm dev</code> y el registro corriendo se ven los datos
+              reales.
+            </p>
+          )}
+          {ranking && !ranking.verdicts_available && (
+            <p className="strategy-lab__notice strategy-lab__notice--warn">
+              Todavía no hay veredictos guardados para backtestear
+              {ranking.detail ? ` (${ranking.detail})` : ''}.
+            </p>
+          )}
+          {notice && (
+            <p role="status" className="strategy-lab__notice">
+              {notice}
+            </p>
+          )}
+          {error && (
+            <div role="alert" className="strategy-lab__errors">
+              <p>{error}</p>
+              {gates.length > 0 && (
+                <ul>
+                  {gates.map((gate) => (
+                    <li
+                      key={gate.code}
+                      className={gate.passed ? 'is-up' : 'is-down'}
+                    >
+                      {gate.passed ? '✓' : '✗'}{' '}
+                      {GATE_LABELS[gate.code] ?? gate.code}
+                      {gate.value !== null && gate.value !== undefined
+                        ? ` · ${String(gate.value)} (pide ${String(gate.threshold)})`
+                        : ''}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+
+          {importing && (
+            <section
+              className="strategy-lab__import"
+              aria-label="Importar estrategia"
+            >
+              <div
+                className="strategy-lab__seg"
+                role="group"
+                aria-label="Formato"
+              >
+                {(
+                  [
+                    ['json', 'JSON'],
+                    ['pine', 'Pine Script'],
+                    ['freqtrade', 'freqtrade'],
+                  ] as const
+                ).map(([value, label]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    aria-pressed={importSource === value}
+                    onClick={() => setImportSource(value)}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <label htmlFor="strategy-lab-import">
+                {importSource === 'json'
+                  ? 'Pegá una estrategia en JSON (balancita-strategy.v1). Entra como borrador.'
+                  : 'Pegá el código: el modelo local lo traduce a una estrategia para revisar. El código nunca se ejecuta.'}
+              </label>
+              <textarea
+                id="strategy-lab-import"
+                value={importText}
+                onChange={(event) => setImportText(event.target.value)}
+                rows={6}
+                spellCheck={false}
+              />
+              {importNotes.length > 0 && (
+                <ul className="strategy-lab__context">
+                  {importNotes.map((note) => (
+                    <li key={note}>{note}</li>
+                  ))}
+                </ul>
+              )}
+              <div className="strategy-lab__row-actions">
+                <button
+                  type="button"
+                  className="strategy-lab__button strategy-lab__button--primary"
+                  onClick={importSpec}
+                  disabled={busy || importText.trim() === ''}
+                >
+                  {importSource === 'json'
+                    ? 'Importar como borrador'
+                    : 'Traducir'}
+                </button>
+                <button
+                  type="button"
+                  className="strategy-lab__button strategy-lab__button--ghost"
+                  onClick={() => setImporting(false)}
+                >
+                  Cancelar
+                </button>
+              </div>
+            </section>
+          )}
+
+          <div className="strategy-lab__grid">
+            <section
+              className="strategy-lab__panel strategy-lab__ranking"
+              aria-labelledby="lab-ranking-title"
+            >
+              <div className="strategy-lab__panel-head">
+                <h2 id="lab-ranking-title">Ranking por rentabilidad</h2>
+                <span className="strategy-lab__eyebrow">acierto · trades</span>
+              </div>
+              {rows.length === 0 && (
+                <p className="strategy-lab__empty">Cargando estrategias…</p>
+              )}
+              {rankGroups.map((group) => (
+                <div key={group.key} className="strategy-lab__rank-group">
+                  {group.title && (
+                    <h3 className="strategy-lab__rank-group-title">
+                      {group.title}
+                    </h3>
+                  )}
+                  <ol className="strategy-lab__rank-list">
+                    {group.rows.map((row) => {
+                      const current = isModel(row.state)
+                        ? focus === row.state
+                        : !focus &&
+                          (row.state === 'preview'
+                            ? showPreview
+                            : row.id !== null &&
+                              row.id === selectedId &&
+                              !showPreview)
+                      return (
+                        <li key={row.key}>
+                          <button
+                            type="button"
+                            className={`strategy-lab__rank strategy-lab__rank--${row.state}`}
+                            aria-pressed={current}
+                            disabled={row.state === 'reference'}
+                            onClick={() => {
+                              setFocus(isModel(row.state) ? row.state : null)
+                              if (row.state === 'preview') setShowPreview(true)
+                              else if (row.id) {
+                                setShowPreview(false)
+                                if (row.id !== selectedId) select(row.id)
+                              }
+                            }}
+                          >
+                            <span
+                              className={`strategy-lab__dot strategy-lab__dot--${row.state}`}
+                              title={STATE_LABELS[row.state]}
+                            />
+                            <span className="strategy-lab__rank-name">
+                              {row.label}
+                            </span>
+                            <span
+                              className={`strategy-lab__num strategy-lab__rank-return ${(row.returnPct ?? 0) >= 0 ? 'is-up' : 'is-down'}`}
+                            >
+                              {row.returnPct === null
+                                ? '—'
+                                : signedPercent(row.returnPct, 2)}
+                            </span>
+                            <span
+                              className="strategy-lab__bar"
+                              aria-hidden="true"
+                            >
+                              <span
+                                className={
+                                  (row.returnPct ?? 0) >= 0
+                                    ? 'is-up'
+                                    : 'is-down'
+                                }
+                                style={{
+                                  width: `${Math.round((Math.abs(row.returnPct ?? 0) / bestReturn) * 100)}%`,
+                                }}
+                              />
+                            </span>
+                            <span
+                              className={`strategy-lab__num strategy-lab__rank-hit${row.few ? ' is-few' : ''}`}
+                            >
+                              {row.state === 'reference'
+                                ? 'referencia'
+                                : isModel(row.state) &&
+                                    !modelProducts[row.state]
+                                  ? 'sin decisiones'
+                                  : row.hitRate === null
+                                    ? 'sin trades'
+                                    : `${percent(row.hitRate * 100)} · ${row.trades}`}
+                            </span>
+                          </button>
+                        </li>
+                      )
+                    })}
+                  </ol>
+                </div>
+              ))}
+              <div className="strategy-lab__legend">
+                <span>
+                  <span className="strategy-lab__dot strategy-lab__dot--active" />
+                  activa
+                </span>
+                <span>
+                  <span className="strategy-lab__dot strategy-lab__dot--shadow" />
+                  sombra
+                </span>
+                <span>
+                  <span className="strategy-lab__dot strategy-lab__dot--draft" />
+                  borrador
+                </span>
+                <span>
+                  <span className="strategy-lab__dot strategy-lab__dot--preview" />
+                  sin guardar
+                </span>
+                <span>
+                  <span className="strategy-lab__dot strategy-lab__dot--qwen" />
+                  Qwen
+                </span>
+                <span>
+                  <span className="strategy-lab__dot strategy-lab__dot--kronos" />
+                  Kronos
+                </span>
+                <span>gris = menos de {ranking?.min_trades ?? 30} trades</span>
+              </div>
+              {api && (
+                <div
+                  ref={carryRef}
+                  id="carry-contador"
+                  data-testid="carry-destino"
+                  tabIndex={-1}
+                >
+                  <CarryPanel />
+                </div>
+              )}
+            </section>
+
+            <section
+              className="strategy-lab__panel strategy-lab__focus"
+              aria-label="Resultado de la estrategia elegida"
+            >
+              {focus ? (
+                <QwenFocusHead
+                  scores={modelScores[focus]}
+                  product={modelProducts[focus]}
+                  model={focus}
+                />
+              ) : (
+                <>
+                  <div className="strategy-lab__panel-head">
+                    <h2>
+                      {showPreview && previewResult
+                        ? `${draftLabel} · cambios sin guardar`
+                        : detail
+                          ? `${shortName(detail.name, detail.id)}${detail.version > 1 ? ` v${detail.version}` : ''}`
+                          : '—'}
+                    </h2>
+                    {detail && (
+                      <span
+                        className={`strategy-lab__chip strategy-lab__chip--${showPreview ? 'preview' : detail.state}`}
+                      >
+                        {STATE_LABELS[showPreview ? 'preview' : detail.state]}
+                      </span>
+                    )}
+                    <span className="strategy-lab__context">
+                      {example
+                        ? 'Datos de ejemplo'
+                        : `Book paper propio · costos y tamaño de D · 70 % dentro / 30 % fuera de muestra${result ? ` · ${result.trials} pruebas` : ''}`}
+                    </span>
+                  </div>
+                  {all && (
+                    <div className="strategy-lab__kpis">
+                      <div className="strategy-lab__kpi strategy-lab__kpi--key">
+                        <span className="strategy-lab__eyebrow">
+                          Rentabilidad
+                        </span>
+                        <strong
+                          className={`strategy-lab__num ${all.return_pct >= 0 ? 'is-up' : 'is-down'}`}
+                        >
+                          {signedPercent(all.return_pct, 2)}
+                        </strong>
+                        <span className="strategy-lab__num">
+                          {signedUsd(all.pnl_usd)}
+                        </span>
+                      </div>
+                      <div className="strategy-lab__kpi strategy-lab__kpi--key">
+                        <span className="strategy-lab__eyebrow">Acierto</span>
+                        <strong className="strategy-lab__num">
+                          {all.hit_rate === null
+                            ? '—'
+                            : percent(all.hit_rate * 100)}
+                        </strong>
+                        <span className="strategy-lab__num">
+                          {all.wins} de {all.trades} trades
+                        </span>
+                      </div>
+                      <div className="strategy-lab__kpi">
+                        <span className="strategy-lab__eyebrow">
+                          Vs comprar y mantener
+                        </span>
+                        <strong className="strategy-lab__num">
+                          {result.vs_buy_and_hold_pts === null
+                            ? '—'
+                            : signedPercent(
+                                result.vs_buy_and_hold_pts,
+                                2,
+                              ).replace(' %', ' pts')}
+                        </strong>
+                        <span className="strategy-lab__num">
+                          {reference === null
+                            ? ''
+                            : signedPercent(reference, 2)}
+                        </span>
+                      </div>
+                      <div className="strategy-lab__kpi">
+                        <span className="strategy-lab__eyebrow">
+                          Caída máxima
+                        </span>
+                        <strong className="strategy-lab__num is-down">
+                          {result.max_drawdown.pct === null
+                            ? '—'
+                            : signedPercent(result.max_drawdown.pct, 2)}
+                        </strong>
+                      </div>
+                      <div className="strategy-lab__kpi">
+                        <span className="strategy-lab__eyebrow">
+                          Fuera de muestra
+                        </span>
+                        <strong
+                          className={`strategy-lab__num ${(oos?.return_pct ?? 0) >= 0 ? 'is-up' : 'is-down'}`}
+                        >
+                          {oos ? signedPercent(oos.return_pct, 2) : '—'}
+                        </strong>
+                        <span className="strategy-lab__num">
+                          {oos?.hit_rate === null || oos === undefined
+                            ? 'sin trades'
+                            : `${percent(oos.hit_rate * 100)} de ${oos.trades}`}
+                          {result.deflated_sharpe_probability === null
+                            ? ''
+                            : ` · Sharpe defl. ${percent(result.deflated_sharpe_probability * 100)}`}
+                        </span>
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+              <div className="strategy-lab__chart">
+                {candles.length > 0 ? (
+                  <ApprovedTerminalChart
+                    candles={candles}
+                    markers={markers}
+                    selectedId=""
+                    intervalSeconds={60}
+                    currency="USD"
+                    instrument="BTC/USD perpetuo"
+                    onSelect={() => {}}
+                    ariaLabel="Velas de Terminal con los trades de la estrategia elegida"
+                  />
+                ) : (
+                  <p className="strategy-lab__empty">
+                    {marketError
+                      ? `Velas de Terminal no disponibles: ${marketError} No se dibujan velas de ejemplo.`
+                      : 'Cargando las velas de Terminal…'}
+                  </p>
+                )}
+              </div>
+              <div className="strategy-lab__chart-legend">
+                <span>
+                  <b className="is-up">▲</b> entrada larga
+                </span>
+                <span>
+                  <b className="is-down">▼</b> entrada corta
+                </span>
+                <span>
+                  <b className="is-info">●</b> salida con su resultado neto
+                </span>
+                {trades.length > visible.length && (
+                  <span>
+                    {visible.length} de {trades.length} trades caen en la
+                    ventana del gráfico
+                  </span>
+                )}
+              </div>
+            </section>
+
+            {focus ? (
+              <QwenSide product={modelProducts[focus]} model={focus} />
+            ) : (
+              <aside
+                className="strategy-lab__panel strategy-lab__editor"
+                aria-label={`Editar ${draftLabel}`}
+              >
+                <div className="strategy-lab__panel-head">
+                  <h2>
+                    {draftLabel}
+                    {draft && draft.version > 1 ? ` v${draft.version}` : ''}
+                  </h2>
+                </div>
+                {draft?.description && (
+                  <p className="strategy-lab__description">
+                    {draft.description}
+                  </p>
+                )}
+                <div
+                  className="strategy-lab__tabs"
+                  role="tablist"
+                  aria-label="Partes de la estrategia"
+                >
+                  {(
+                    [
+                      ['rules', 'Reglas'],
+                      ['params', 'Parámetros'],
+                      ['risk', 'Riesgo'],
+                      ['plan', 'Plan'],
+                      ['json', 'JSON'],
+                      ['versions', 'Versiones'],
+                    ] as const
+                  ).map(([value, label]) => (
+                    <button
+                      key={value}
+                      type="button"
+                      role="tab"
+                      aria-selected={tab === value}
+                      onClick={() => setTab(value)}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+
+                {tab === 'rules' && draft && (
+                  <div className="strategy-lab__tab-body">
+                    {scopes.length > 1 && (
+                      <div
+                        className="strategy-lab__seg"
+                        role="group"
+                        aria-label="Régimen"
+                      >
+                        {scopes.map((value) => (
+                          <button
+                            key={value}
+                            type="button"
+                            aria-pressed={scope === value}
+                            onClick={() => setScope(value)}
+                          >
+                            {SCOPE_LABELS[value]}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    <div className="strategy-lab__side-row">
+                      <div
+                        className="strategy-lab__seg"
+                        role="group"
+                        aria-label="Lado"
+                      >
+                        {(['LONG', 'SHORT'] as const).map((value) => (
+                          <button
+                            key={value}
+                            type="button"
+                            aria-pressed={side === value}
+                            onClick={() => setSide(value)}
+                            disabled={!rules?.sides[value]}
+                          >
+                            {value}
+                          </button>
+                        ))}
+                      </div>
+                      <span className="strategy-lab__context">
+                        Entra si se cumplen todas · punto = última vela
+                      </span>
+                      <button
+                        type="button"
+                        className="strategy-lab__button"
+                        aria-pressed={editingRules}
+                        onClick={() => setEditingRules((open) => !open)}
+                      >
+                        {editingRules ? 'Listo' : 'Editar reglas'}
+                      </button>
+                    </div>
+                    {conditions.length === 0 && (
+                      <p className="strategy-lab__context">
+                        Sin condiciones para este lado.
+                      </p>
+                    )}
+                    <ul className="strategy-lab__rules">
+                      {conditions.map(({ path, node }, index) => {
+                        const state = dots.get(node.cmp)
+                        const patch = (
+                          change: Parameters<typeof patchCondition>[3],
+                        ) => update(patchCondition(draft, scope, path, change))
+                        return (
+                          <li
+                            key={`${path.check}-${path.steps.join('.')}`}
+                            className="strategy-lab__rule"
+                          >
+                            <span
+                              className={`strategy-lab__dot ${state === true ? 'strategy-lab__dot--active' : state === false ? 'strategy-lab__dot--fail' : ''}`}
+                              title={
+                                state === true
+                                  ? 'Se cumple en la última vela'
+                                  : state === false
+                                    ? 'No se cumple en la última vela'
+                                    : 'Sin datos todavía'
+                              }
+                            />
+                            {!editingRules ? (
+                              <span className="strategy-lab__sentence">
+                                {conditionSentence(node, draft.params)}
+                              </span>
+                            ) : (
+                              <>
+                                {operandEditor(
+                                  node.left,
+                                  `Condición ${index + 1}: indicador`,
+                                  (left) => patch({ left }),
+                                )}
+                                <select
+                                  aria-label={`Condición ${index + 1}: comparador`}
+                                  className="strategy-lab__op"
+                                  value={node.op}
+                                  onChange={(event) =>
+                                    patch({
+                                      op: event.target.value as Comparator,
+                                    })
+                                  }
+                                >
+                                  {COMPARATORS.map((op) => (
+                                    <option key={op} value={op}>
+                                      {COMPARATOR_LABELS[op]}
+                                    </option>
+                                  ))}
+                                </select>
+                                {operandEditor(
+                                  node.right,
+                                  `Condición ${index + 1}: contra`,
+                                  (right) => patch({ right }),
+                                )}
+                                <button
+                                  type="button"
+                                  className="strategy-lab__button"
+                                  aria-label={`Quitar condición ${index + 1}`}
+                                  onClick={() =>
+                                    update(
+                                      removeCondition(draft, scope, side, path),
+                                    )
+                                  }
+                                >
+                                  ✕
+                                </button>
+                              </>
+                            )}
+                          </li>
+                        )
+                      })}
+                    </ul>
+                    {editingRules && (
+                      <button
+                        type="button"
+                        className="strategy-lab__button"
+                        disabled={!rules?.sides[side]}
+                        onClick={() => update(addCondition(draft, scope, side))}
+                      >
+                        + condición
+                      </button>
+                    )}
+                  </div>
+                )}
+
+                {tab === 'params' && draft && (
+                  <div className="strategy-lab__tab-body">
+                    <fieldset className="strategy-lab__params">
+                      <legend className="strategy-lab__eyebrow">
+                        Parámetros
+                      </legend>
+                      {Object.entries(draft.params).map(([param, value]) => (
+                        <label key={param}>
+                          <span className="strategy-lab__num">${param}</span>
+                          <input
+                            aria-label={`Parámetro ${param}`}
+                            defaultValue={formatDecimal(value)}
+                            key={`${param}-${value}`}
+                            onBlur={(event) =>
+                              setParam(param, event.target.value)
+                            }
+                          />
+                          <small>
+                            {detail && detail.spec.params[param] !== value
+                              ? `antes ${formatDecimal(detail.spec.params[param] ?? '—')}`
+                              : ' '}
+                          </small>
+                        </label>
+                      ))}
+                    </fieldset>
+                    <fieldset className="strategy-lab__params strategy-lab__sweep">
+                      <legend className="strategy-lab__eyebrow">
+                        Probar varios valores
+                      </legend>
+                      <label>
+                        <span>Parámetro</span>
+                        <select
+                          aria-label="Parámetro a barrer"
+                          value={sweepParam}
+                          onChange={(event) =>
+                            setSweepParam(event.target.value)
+                          }
+                        >
+                          {Object.keys(draft.params).map((param) => (
+                            <option key={param} value={param}>
+                              ${param}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label>
+                        <span>Valores</span>
+                        <input
+                          aria-label="Valores a probar"
+                          placeholder="35; 40; 45"
+                          value={sweepText}
+                          aria-invalid={
+                            sweepText !== '' &&
+                            parseParamValues(sweepText) === null
+                          }
+                          onChange={(event) => setSweepText(event.target.value)}
+                        />
+                      </label>
+                      <button
+                        type="button"
+                        className="strategy-lab__button"
+                        disabled={
+                          busy ||
+                          !sweepParam ||
+                          parseParamValues(sweepText) === null
+                        }
+                        onClick={createVariants}
+                      >
+                        Crear variantes
+                      </button>
+                      <small>
+                        Cada valor crea una estrategia borrador a partir de la
+                        versión guardada y entra al ranking.
+                      </small>
+                    </fieldset>
+                  </div>
+                )}
+
+                {tab === 'risk' && draft && rules && (
+                  <div className="strategy-lab__tab-body strategy-lab__risk">
+                    <label>
+                      Stop (× ATR 14)
+                      <input
+                        defaultValue={formatDecimal(
+                          resolveValue(rules.risk.stop_atr, draft.params),
+                        )}
+                        key={`stop-${draftKey}`}
+                        onBlur={(event) =>
+                          setRisk('stop_atr', event.target.value)
+                        }
+                      />
+                    </label>
+                    <label>
+                      Objetivo (× distancia del stop)
+                      <input
+                        defaultValue={formatDecimal(
+                          resolveValue(
+                            rules.risk.target_stop_ratio,
+                            draft.params,
+                          ),
+                        )}
+                        key={`target-${draftKey}`}
+                        onBlur={(event) =>
+                          setRisk('target_stop_ratio', event.target.value)
+                        }
+                      />
+                    </label>
+                    <label>
+                      Cierre por tiempo (minutos, 1-1440)
+                      <input
+                        defaultValue={String(rules.horizon_minutes)}
+                        key={`horizon-${draftKey}`}
+                        onBlur={(event) => {
+                          const minutes = Number(event.target.value)
+                          if (
+                            !Number.isSafeInteger(minutes) ||
+                            minutes < 1 ||
+                            minutes > 1440
+                          )
+                            return
+                          const next = cloneSpec(draft)
+                          rulesOf(next, scope)!.horizon_minutes = minutes
+                          update(next)
+                        }}
+                      />
+                    </label>
+                  </div>
+                )}
+
+                {tab === 'plan' && (
+                  <PlanTab plan={plans?.[selectedId ?? ''] ?? null} />
+                )}
+
+                {tab === 'json' && draft && (
+                  <JsonTab
+                    draft={draft}
+                    jsonText={jsonText}
+                    onChange={setJsonText}
+                    onApply={applyJson}
+                  />
+                )}
+
+                {tab === 'versions' && detail && (
+                  <VersionsTab
+                    detail={detail}
+                    busy={busy}
+                    onState={changeState}
+                    onDelete={deleteStrategy}
+                  />
+                )}
+
+                {dirty && (
+                  <button
+                    type="button"
+                    className="strategy-lab__button"
+                    disabled={busy}
+                    onClick={testDraft}
+                  >
+                    Probar cambios
+                  </button>
+                )}
+                <fieldset className="strategy-lab__save">
+                  <legend className="strategy-lab__eyebrow">Al guardar</legend>
+                  <label className="strategy-lab__check">
+                    <input
+                      type="radio"
+                      name="strategy-lab-save"
+                      checked={saveMode === 'modify'}
+                      onChange={() => setSaveMode('modify')}
+                    />
+                    Modificar {detail ? shortName(detail.name, detail.id) : ''}
+                  </label>
+                  <label className="strategy-lab__check">
+                    <input
+                      type="radio"
+                      name="strategy-lab-save"
+                      checked={saveMode === 'new'}
+                      onChange={() => {
+                        setSaveMode('new')
+                        if (!newName && draft)
+                          setNewName(`${draft.name} (copia)`)
+                      }}
+                    />
+                    Crear estrategia nueva
+                  </label>
+                  {saveMode === 'new' && (
+                    <input
+                      aria-label="Nombre de la estrategia nueva"
+                      value={newName}
+                      onChange={(event) => setNewName(event.target.value)}
+                    />
+                  )}
+                </fieldset>
+                <button
+                  type="button"
+                  className="strategy-lab__button strategy-lab__button--primary strategy-lab__save-button"
+                  disabled={!canSave}
+                  onClick={save}
+                >
+                  Guardar
+                </button>
+                <small className="strategy-lab__context">
+                  Se guarda como borrador; el motor sólo usa versiones activas.
+                </small>
+              </aside>
+            )}
+          </div>
+          <TradesTable trades={trades} />
+        </>
+      )}
     </div>
   )
 }

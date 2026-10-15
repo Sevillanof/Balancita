@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import {
   exitMarkers,
+  fillDetailRows,
+  fillMarkers,
+  groupWaitMarkers,
+  pickMarkerAt,
   positionLines,
   timeframeCandles,
 } from './terminal-chart-model.ts'
@@ -219,5 +223,216 @@ describe('lines per strategy book', () => {
     })
     expect(bounded.map((m) => m.id)).toEqual(['exit:inside'])
     expect(bounded[0]!.label).toBe('Histórico · Gateway D · OBJETIVO')
+  })
+})
+
+describe('executed-operation and WAIT markers', () => {
+  const order = (extra: Record<string, unknown> = {}) => ({
+    order_id: 'o1',
+    strategy_id: 'c25-pullback-perp-v1',
+    ...extra,
+  })
+  const fill = (extra: Record<string, unknown> = {}) => ({
+    fill_id: 'fill:11',
+    order_id: 'o1',
+    side: 'buy',
+    quantity_btc: '0.5',
+    price_usd_per_btc: '100000',
+    reduce_only: false,
+    event_time_ms: 120_000,
+    ...extra,
+  })
+
+  it('draws one marker per durable fill with its original id, time and quantity', () => {
+    const markers = fillMarkers(
+      [
+        fill(),
+        fill({ fill_id: 'fill:12', order_id: 'o2', side: 'sell' }),
+        fill({ fill_id: 'fill:13', reduce_only: true }),
+        fill({ fill_id: 'fill:14', side: 'hold' }),
+        fill({ fill_id: 'fill:15', event_time_ms: undefined }),
+        fill({ fill_id: undefined }),
+        fill({ fill_id: 'fill:16', quantity_btc: '0' }),
+      ],
+      [order(), order({ order_id: 'o2', strategy_id: undefined })],
+      { unit: 'BTC' },
+    )
+    expect(markers).toEqual([
+      {
+        id: 'fill:11',
+        time: 120,
+        type: 'fill',
+        direction: 'long',
+        label: 'C25 EJ L',
+        detail: 'C25 EJEC. LONG 0.5 BTC',
+        strategyId: 'c25-pullback-perp-v1',
+      },
+      {
+        id: 'fill:12',
+        time: 120,
+        type: 'fill',
+        direction: 'short',
+        label: 'EJ S',
+        detail: 'EJEC. SHORT 0.5 BTC',
+      },
+    ])
+  })
+
+  it('lists only the facts the fill records, in UTC, and says what is missing', () => {
+    const rows = (value: unknown) =>
+      Object.fromEntries(
+        fillDetailRows(value, {
+          unit: 'BTC',
+          source: 'Histórico · Gateway D',
+        }).map((row) => [row.key, row.value]),
+      )
+    expect(rows(fill({ event_time_ms: 1_800_000_000_007 }))).toEqual({
+      fill_id: 'fill:11',
+      order_id: 'o1',
+      time: '2027-01-15 08:00:00.007 UTC',
+      quantity: '0.5 BTC',
+      side: 'LONG (compra)',
+      price: '100000 USD',
+      source: 'Histórico · Gateway D',
+    })
+    expect(
+      rows(fill({ side: 'sell', price_usd_per_btc: undefined })),
+    ).toMatchObject({ side: 'SHORT (venta)', price: 'No disponible' })
+    expect(fillDetailRows({}).map((row) => row.value)).toEqual(
+      Array(7).fill('No disponible'),
+    )
+  })
+
+  it('never reads the order state: a filled order without fills draws nothing', () => {
+    expect(
+      fillMarkers(
+        [],
+        [order({ state: 'filled', side: 'buy', closed_at_ms: 120_000 })],
+      ),
+    ).toEqual([])
+    // A fill still draws when its order is not in the (trimmed) order list.
+    expect(fillMarkers([fill()], [])).toHaveLength(1)
+  })
+
+  it('draws every partial fill of one order as its own marker with its quantity', () => {
+    const markers = fillMarkers(
+      [
+        fill({
+          fill_id: 'fill:21',
+          quantity_btc: '0.2',
+          event_time_ms: 120_000,
+        }),
+        fill({
+          fill_id: 'fill:22',
+          quantity_btc: '0.3',
+          event_time_ms: 125_000,
+        }),
+      ],
+      [order()],
+    )
+    expect(markers.map((m) => m.id)).toEqual(['fill:21', 'fill:22'])
+    expect(markers.map((m) => m.label)).toEqual(['C25 EJ L', 'C25 EJ L'])
+    expect(markers.map((m) => m.detail)).toEqual([
+      'C25 EJEC. LONG 0.2',
+      'C25 EJEC. LONG 0.3',
+    ])
+    expect(markers.map((m) => m.time)).toEqual([120, 125])
+  })
+
+  it('keeps fills inside the period and names the history source', () => {
+    expect(fillMarkers([fill()], [], { from: 200 })).toEqual([])
+    expect(
+      fillMarkers([fill()], [order()], { prefix: 'Histórico · Gateway D' })[0]
+        ?.label,
+    ).toBe('Histórico · Gateway D · C25 EJ L')
+  })
+
+  it('groups WAIT markers per window and leaves the rest untouched', () => {
+    const wait = (id: string, time: number) => ({
+      id,
+      time,
+      type: 'wait' as const,
+      label: 'WAIT',
+    })
+    const proposal = {
+      id: 'p',
+      time: 60,
+      type: 'proposal' as const,
+      direction: 'long' as const,
+      label: 'LONG prop.',
+    }
+    const out = groupWaitMarkers(
+      [wait('a', 0), wait('b', 60), wait('c', 120), wait('d', 1_000), proposal],
+      900,
+    )
+    expect(out).toContainEqual(proposal)
+    const grouped = out.find((marker) => marker.id === 'c')
+    expect(grouped).toMatchObject({
+      label: 'W×3',
+      detail: 'WAIT ×3',
+      count: 3,
+      memberIds: ['a', 'b', 'c'],
+    })
+    expect(out.find((marker) => marker.id === 'd')?.label).toBe('WAIT')
+    expect(out).toHaveLength(3)
+  })
+})
+
+describe('pickMarkerAt', () => {
+  // A decision one candle (13 px) before an EJEC. fill, labels overlapping.
+  const decision = { id: 'PF_XBTUSD-1', x: 616, y: 231 }
+  const fill = { id: 'fill:3', x: 629, y: 229 }
+
+  it('opens the fill when the click is on the fill, whatever the order', () => {
+    expect(pickMarkerAt([decision, fill], fill, 16, 30)).toBe('fill:3')
+    expect(pickMarkerAt([fill, decision], fill, 16, 30)).toBe('fill:3')
+  })
+
+  it('opens the decision when the click is on the decision, whatever the order', () => {
+    expect(pickMarkerAt([decision, fill], decision, 16, 30)).toBe('PF_XBTUSD-1')
+    expect(pickMarkerAt([fill, decision], decision, 16, 30)).toBe('PF_XBTUSD-1')
+  })
+
+  it('keeps telling them apart when a zoom brings them to 4 px', () => {
+    const zoomedOut = [
+      { id: 'PF_XBTUSD-1', x: 620, y: 231 },
+      { id: 'fill:3', x: 624, y: 229 },
+    ]
+    expect(pickMarkerAt(zoomedOut, { x: 624, y: 229 }, 8, 30)).toBe('fill:3')
+    expect(pickMarkerAt(zoomedOut, { x: 620, y: 231 }, 8, 30)).toBe(
+      'PF_XBTUSD-1',
+    )
+  })
+
+  it('tells apart markers stacked on one candle by y, in both directions', () => {
+    const stacked = [
+      { id: 'PF_XBTUSD-2', x: 100, y: 200 },
+      { id: 'fill:1', x: 100, y: 230 },
+    ]
+    expect(pickMarkerAt(stacked, { x: 100, y: 228 }, 16, 30)).toBe('fill:1')
+    expect(pickMarkerAt(stacked, { x: 100, y: 203 }, 16, 30)).toBe(
+      'PF_XBTUSD-2',
+    )
+    expect(
+      pickMarkerAt([...stacked].reverse(), { x: 101, y: 228 }, 16, 30),
+    ).toBe('fill:1')
+  })
+
+  it('selects nothing when the click is far above or below the glyph', () => {
+    const lone = { id: 'fill:3', x: 629, y: 229 }
+    expect(pickMarkerAt([lone], { x: 629, y: 229 }, 16, 30)).toBe('fill:3')
+    expect(pickMarkerAt([lone], { x: 629, y: 500 }, 16, 30)).toBeNull()
+    expect(pickMarkerAt([lone], { x: 629, y: 20 }, 16, 30)).toBeNull()
+    // Beyond the vertical reach of the neighbour too, even in its column.
+    expect(
+      pickMarkerAt([decision, fill], { x: 616, y: 500 }, 16, 30),
+    ).toBeNull()
+  })
+
+  it('returns null away from every marker', () => {
+    expect(
+      pickMarkerAt([decision, fill], { x: 300, y: 229 }, 16, 30),
+    ).toBeNull()
+    expect(pickMarkerAt([], { x: 1, y: 1 }, 16, 30)).toBeNull()
   })
 })

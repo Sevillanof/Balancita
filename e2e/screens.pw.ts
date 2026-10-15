@@ -142,9 +142,11 @@ test('estrategias without the registry shows the error and no example data', asy
   )
   await page.goto('/estrategias')
   // The same status chips as the terminal, even when the gateway is down.
-  await expect(page.getByTestId('flow-status')).toHaveText('Sin conexión')
+  await expect(page.getByTestId('flow-status')).toHaveText('Flujo sin conexión')
   await page.getByTestId('flow-status').click()
+  await page.getByText('Diagnóstico del flujo, uso y modo').click()
   await expect(page.getByTestId('system-usage')).toBeVisible()
+  await page.keyboard.press('Escape')
   await expect(page.getByRole('alert').first()).toContainText(
     'No se muestran datos de ejemplo',
   )
@@ -193,8 +195,9 @@ test('terminal live header shows the flow status and the usage chip', async ({
   )
   await page.routeWebSocket(/\/api-live\/terminal\/stream/, () => {})
   await page.goto('/terminal')
-  await expect(page.getByTestId('flow-status')).toHaveText('Sin conexión')
+  await expect(page.getByTestId('flow-status')).toHaveText('Flujo sin conexión')
   await page.getByTestId('flow-status').click()
+  await page.getByText('Diagnóstico del flujo, uso y modo').click()
   await expect(page.getByTestId('system-usage')).toContainText('CPU 37 %')
   await expect(page.getByTestId('system-usage')).toContainText('DATOS 148 MB')
   await expect(page.getByTestId('system-usage')).toContainText('QWEN 12/h')
@@ -229,8 +232,9 @@ test('estrategias shows the same chips as the terminal when the gateway is up', 
     }),
   )
   await page.goto('/estrategias')
-  await expect(page.getByTestId('flow-status')).toHaveText('En vivo')
+  await expect(page.getByTestId('flow-status')).toHaveText('Flujo en vivo')
   await page.getByTestId('flow-status').click()
+  await page.getByText('Diagnóstico del flujo, uso y modo').click()
   await expect(page.getByTestId('system-usage')).toContainText(
     'CPU 15 % · DATOS 3419 MB · QWEN 120/h · KRONOS 3 op.',
   )
