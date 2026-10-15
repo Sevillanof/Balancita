@@ -380,9 +380,11 @@ class Supervisor(object):
     def _resource_event(self, now, kind, resource, value, limit, detail):
         self.resource_events.append({"kind": kind, "resource": resource, "value_bytes": value, "limit_bytes": limit,
                                      "observed_now_ms": now, "detail": detail})
-        if kind == "stop" and not self.stop_requested:
-            self.stop_reason = "resource_limit:" + resource
-            self.request_stop(None)
+        if kind == "stop":
+            # The limit is always on record (and the exit status is 4) even if a SIGTERM got there first in the same step.
+            self.stop_reason = self.stop_reason or "resource_limit:" + resource
+            if not self.stop_requested:
+                self.request_stop(None)
 
     # ---- run -------------------------------------------------------------------------------------------------
     def run(self, max_steps=None):
@@ -494,7 +496,10 @@ def read_resources(directory):
     """Bytes in the session directory (every file, the runner's journals included) and the resident memory of this process now (Linux:
     ``/proc/self/statm``; elsewhere the peak, which only goes up and so stops sooner, never later)."""
     disk = 0
-    for root, _dirs, names in os.walk(directory):
+
+    def unreadable(error):                                   # os.walk would skip it and count 0 bytes: that is not a measurement
+        raise error
+    for root, _dirs, names in os.walk(directory, onerror=unreadable):
         for name in names:
             try:
                 disk += os.lstat(os.path.join(root, name)).st_size
@@ -533,7 +538,7 @@ def _read_json(path):
 
 # ---- command line ------------------------------------------------------------------------------------------------
 def main(argv=None, *, tick=lambda now: None):
-    """``preflight`` and ``run`` on the simulated clock. Exit status: 0 ok, 2 refused (no file was written), 3 halted."""
+    """``preflight`` and ``run`` on the simulated clock. Exit status: 0 ok, 2 refused (no file was written), 3 halted, 4 stopped in order by a resource limit."""
     parser = argparse.ArgumentParser(prog="paper_live_process", description="Offline paper session lifecycle (synthetic source only).")
     parser.add_argument("command", choices=("preflight", "run"))
     parser.add_argument("--config", required=True)
