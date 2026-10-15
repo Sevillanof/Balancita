@@ -170,7 +170,6 @@ class FundingSource(object):
             (after, limit))]
 
 
-REFERENCE_MAX_AGE_MS = 3_600_000          # hypothesis (not approved): the newest quote for the unit cross-check may be up to one hour old
 SYNTHETIC_FUNDING = "synthetic"
 OBSERVED_FUNDING = "observed"
 
@@ -179,14 +178,16 @@ class ObservedFundingSource(FundingSource):
     """The accounting channel read from the capture's own funding evidence (#184): ``paper_futures_funding_responses`` (the
     response text, exactly as received, and when) and ``paper_futures_funding_periods`` (which product each response is about).
     Read-only, like the rest of the source. The signal channel (``fundpct``) is NOT this table: it keeps its own source, and when
-    that source has no ``synthetic_fundpct`` table it is simply empty. ``reference_price`` is the mid of the newest ticker at or
-    before the hour, which is what the adapter's unit check needs; it never invents a price (``None`` when there is none)."""
+    that source has no ``synthetic_fundpct`` table it is simply empty (the table is looked up, a failed read is not mistaken for it:
+    a lock or a disk error goes up and halts the session, decision P3 of #186). ``reference_price`` is the mid of the newest ticker
+    at or before the hour, which is what the adapter's unit check needs; it never invents a price (``None`` when there is none) and
+    it has no age limit of its own: an old reference that no longer matches within the adapter's tolerance makes the hour
+    ``unit_mismatch`` (rejected, with evidence), so no new threshold is introduced here."""
 
     def fundpct(self, after, limit=5000):
-        try:
-            return FundingSource.fundpct(self, after, limit)
-        except sqlite3.OperationalError:
+        if self.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='synthetic_fundpct'").fetchone() is None:
             return []
+        return FundingSource.fundpct(self, after, limit)
 
     def accrual(self, after, limit=5000):
         raise IntegrationError("observed_funding_has_no_synthetic_accrual", "the accounting channel is the capture's responses")
@@ -206,7 +207,7 @@ class ObservedFundingSource(FundingSource):
         row = self.db.execute(
             "SELECT event_time, normalized_json FROM paper_futures_market_events WHERE feed='ticker' AND product_id=? AND event_time<=? "
             "ORDER BY event_time DESC LIMIT 1", (product_id, int(at_ms))).fetchone()
-        if row is None or int(at_ms) - row["event_time"] > REFERENCE_MAX_AGE_MS:
+        if row is None:
             return None
         body = json.loads(row["normalized_json"])
         return (Decimal(str(body["bid"])) + Decimal(str(body["ask"]))) / 2

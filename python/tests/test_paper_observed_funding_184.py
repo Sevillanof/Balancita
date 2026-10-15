@@ -2,11 +2,14 @@
 ``paper_futures_funding_periods``) through the #167 adapter, instead of the synthetic ``synthetic_accrual`` table, and stays apart
 from the funding the signals use. Invented data only: the responses are written by the tests into a capture-shaped file."""
 
+import inspect
 import json
 import os
 import shutil
+import sqlite3
 import tempfile
 import unittest
+from unittest import mock
 from datetime import datetime, timezone
 from decimal import Decimal as D
 
@@ -347,6 +350,57 @@ class TestObservedFundingScenarios(unittest.TestCase):
         self.assertIn("divergence_evidence_recorded", report["unverified_reasons"])
         self.go(world, again, self.cache["index"] + 14)
         self.assertEqual(money(again), base["money"])                               # no period charged twice, nothing rewritten
+
+    def test_a_different_rate_in_the_portfolio_halts_the_session_like_a_missing_one(self):
+        """D-204-02: ``rate_differs`` and ``extra`` stop the session as ``missing`` does."""
+        for name, tamper, key in (("rate_differs", lambda f: f.__setitem__(0, (f[0][0], f[0][1], D("0.5"))), "rate_differs"),
+                                  ("extra", lambda f: f.append((f[-1][1] + HOUR * 100, f[-1][1] + HOUR * 101, D("0.0001"))), "extra")):
+            with self.subTest(difference=name):
+                world, directory, session = self.start()
+                self.go(world, session, self.cache["index"], self.cache["index"] + 14)
+                tamper(session.runner.portfolio.funding[BTC])
+                with self.assertRaises(LI.IntegrationError) as stop:
+                    self.go(world, session, self.cache["index"] + 14, self.cache["index"] + 16)
+                self.assertEqual(stop.exception.reason, "funding_book_diverged")
+                record = [r for r in session.audit.records() if r["kind"] == "funding_book_diverged"][0]
+                self.assertEqual(len(record[key]), 1)
+                self.assertFalse(session.funding_report()["pnl_verified"])
+
+    def test_the_default_of_the_session_is_to_halt_on_a_divergence(self):
+        for method in (LI.LiveSession.create, LI.LiveSession.recover, LI.LiveSession.__init__):
+            self.assertEqual(inspect.signature(method).parameters["on_funding_divergence"].default, "halt", method)
+
+    def test_a_failing_read_of_the_signal_funding_stops_the_session_and_an_absent_table_does_not(self):
+        """D-204-01: only a table that is not there means "no signal funding"; a lock or a disk error is not mistaken for it."""
+        world, directory, session = self.start()
+        with mock.patch.object(LI.FundingSource, "fundpct", side_effect=sqlite3.OperationalError("database is locked")):
+            with self.assertRaises(sqlite3.OperationalError):
+                session.funding.fundpct(0)
+            with self.assertRaises(sqlite3.OperationalError):
+                self.go(world, session, self.cache["index"], self.cache["index"] + 3)
+        self.assertIsNotNone(session.halted)                                       # the session did not go on as if nothing was wrong
+
+    def test_without_a_signal_funding_table_the_signal_channel_is_empty(self):
+        root = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, root, True)
+        path = os.path.join(root, "bare.sqlite")
+        db = sqlite3.connect(path)
+        db.execute("CREATE TABLE paper_futures_market_events(x)")
+        db.commit()
+        db.close()
+        source = LI.ObservedFundingSource(path)
+        self.addCleanup(source.close)
+        self.assertEqual(source.fundpct(0), [])
+
+    def test_the_reference_price_has_no_age_limit_of_its_own(self):
+        """The unit check of the adapter keeps its own tolerance; this layer adds no threshold (an old reference that no longer fits
+        makes the hour ``unit_mismatch``, rejected with evidence)."""
+        world, directory, session = self.start()
+        self.go(world, session, self.cache["index"], self.cache["index"] + 2)
+        last = session.funding.db.execute("SELECT MAX(event_time) FROM paper_futures_market_events WHERE feed='ticker' AND product_id=?",
+                                          (BTC,)).fetchone()[0]
+        self.assertIsNotNone(session.funding.reference_price(BTC, last + 30 * 86_400_000))             # a month later: still the newest quote
+        self.assertIsNone(session.funding.reference_price(BTC, 0))                                      # before any quote: none, never invented
 
     def test_a_directory_made_with_the_observed_accounting_is_not_opened_as_a_synthetic_one(self):
         world, directory, session = self.start()

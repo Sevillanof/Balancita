@@ -93,3 +93,8 @@ Si el libro de funding que aceptó el adaptador y el funding que la cartera tien
 directorio desde su último checkpoint, a mano; nada reinicia solo y ningún período se cobra dos veces. No se reescribe ni se cuadra
 ningún diario ni se elige qué registro es el correcto. `alert` (seguir) queda solo como opción de biblioteca para pruebas.
 Esto no cierra #184: depende de la verificación independiente.
+
+La referencia de precio para la comprobación de unidades es la cotización más reciente a la hora o antes, sin límite de edad propio: no se
+agrega ningún umbral nuevo en esta capa. Una referencia vieja que ya no calza dentro de la tolerancia del adaptador deja la hora como
+`unit_mismatch` (rechazada, con evidencia). Una lectura fallida del funding de la señal (bloqueo, error de disco) detiene la sesión; solo
+una tabla ausente significa «sin funding de señal».
