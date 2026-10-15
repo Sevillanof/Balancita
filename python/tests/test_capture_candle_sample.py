@@ -38,6 +38,11 @@ def make_db(path):
     candle(XBT, M1, W1, 1, W1 + M1)  # at the end (exclusive)
     candle(SOL, M1, W0, 1, W0 + M1)  # another product
 
+    for b in range(W0, W1, M1):  # official 1 m for XBT: complete
+        c.execute("INSERT INTO paper_futures_official_candles VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                  (XBT, M1, b, "h%d" % b, b + M1 + 3_000, SENTINEL_PRICE, "1", "1", "1", "1", "s"))
+    c.execute("INSERT INTO paper_futures_official_candles VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+              (XBT, M1, W1, "hz", W1 + M1, "1", "1", "1", "1", "1", "s"))  # starts at the end: excluded
     n = [0]
 
     def trade(product, epoch, seq, event_time, received_at, feed="trade"):
@@ -89,6 +94,16 @@ class CandleSampleTests(unittest.TestCase):
         eth = out["sections"]["candles"][ETH]
         self.assertEqual(eth["intervals_present"], [M5])
         self.assertEqual(eth["by_interval_ms"][str(M5)]["missing_buckets"], 71)
+
+    def test_official_candles_per_interval(self):
+        out = self.sample()["sections"]["official_candles"]
+        m1 = out[XBT]["by_interval_ms"][str(M1)]
+        self.assertEqual((m1["revisions"], m1["distinct_buckets"], m1["missing_buckets"]), (360, 360, 0))
+        self.assertEqual(m1["known_at_minus_bucket_end_ms"]["max"], 3_000)
+        self.assertNotIn("buckets_with_a_closed_revision", m1)
+        self.assertEqual(m1["missing_runs"], {"count": 0, "longest": []})
+        self.assertEqual(out[ETH], {"intervals_present": [], "by_interval_ms": {}})
+        self.assertEqual(self.sample()["row_counts"]["official_candles"], 360)
 
     def test_product_without_candles_reports_nothing_present(self):
         c = sqlite3.connect(self.db)

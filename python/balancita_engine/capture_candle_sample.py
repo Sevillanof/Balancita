@@ -3,7 +3,7 @@
 Same fixed window, same two products and same guards as ``capture_timing_sample`` (read-only connection, SQLite
 authorizer that denies every column not on its allow-list, COUNT(*) row budget, per-query time limit, receipt and
 event time both inside the window). It only answers why the 5 m capture candles came back empty: how many candles the
-capture has for each interval present (which buckets are missing, how long after closing each was recorded) and how
+capture has, and how many official candles are stored, for each interval present (which buckets are missing, how long after closing each was recorded) and how
 many trade events arrived (the capture builds its candles from trades). Times and counters only: no price, volume,
 size or ``raw_*`` / ``*_json`` column is read. It measures our reception, not Kraken, and does not compare values.
 
@@ -37,6 +37,13 @@ SQL = {
         "WHERE %s IN (%s) AND interval_ms > 0 AND bucket_start >= %d AND bucket_start < %d "
         "ORDER BY 1, interval_ms, bucket_start, revision" % (_PRODUCT, _PRODUCT, _IN, _W0, _W1),
     ),
+    "official_candles": (
+        "SELECT COUNT(*) FROM paper_futures_official_candles WHERE product_id IN (%s) AND interval_ms > 0 "
+        "AND bucket_start >= %d AND bucket_start < %d" % (_IN, _W0, _W1),
+        "SELECT product_id, interval_ms, bucket_start, 0, known_at, 0 FROM paper_futures_official_candles "
+        "WHERE product_id IN (%s) AND interval_ms > 0 AND bucket_start >= %d AND bucket_start < %d "
+        "ORDER BY product_id, interval_ms, bucket_start, known_at" % (_IN, _W0, _W1),
+    ),
     "trades": (
         "SELECT COUNT(*) FROM paper_futures_market_events WHERE feed = 'trade' AND product_id IN (%s) "
         "AND event_time >= %d AND event_time < %d AND received_at >= %d AND received_at < %d"
@@ -64,7 +71,7 @@ def _missing_runs(buckets, interval):
     return {"count": len(runs), "longest": runs[:MAX_REPORTED_RUNS]}
 
 
-def _candles(rows):
+def _candles(rows, with_closed=True):
     out = {}
     for product in PRODUCTS:
         mine = [r for r in rows if r[0] == product]
@@ -80,7 +87,7 @@ def _candles(rows):
                 "expected_buckets": expected,
                 "missing_buckets": max(0, expected - len(on_grid)),
                 "off_grid_buckets": len(buckets) - len(on_grid),
-                "buckets_with_a_closed_revision": len({r[2] for r in part if r[5] == 1}),
+                **({"buckets_with_a_closed_revision": len({r[2] for r in part if r[5] == 1})} if with_closed else {}),
                 "min_bucket_start": min(buckets),
                 "max_bucket_start": max(buckets),
                 "known_at_minus_bucket_end_ms": cts._quantiles([r[4] - (r[2] + interval) for r in part]),
@@ -90,7 +97,8 @@ def _candles(rows):
     return out
 
 
-_SECTIONS = {"candles": _candles, "trades": cts._ticker}
+_SECTIONS = {"candles": _candles, "official_candles": lambda rows: _candles(rows, with_closed=False),
+             "trades": cts._ticker}
 
 
 def build_sample(conn, window=WINDOW, products=PRODUCTS):
