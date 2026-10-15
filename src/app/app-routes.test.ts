@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { appNavigation } from './app-navigation.ts'
-import { sectionForPath } from './app-routes.ts'
+import { isInvestigationPath, sectionForPath } from './app-routes.ts'
 
 describe('sectionForPath', () => {
   it('maps the two screens and falls back to the terminal', () => {
@@ -9,6 +9,22 @@ describe('sectionForPath', () => {
     expect(sectionForPath('/terminal')).toBe('terminal')
     expect(sectionForPath('/')).toBe('terminal')
     expect(sectionForPath('/otra-cosa')).toBe('terminal')
+  })
+})
+
+describe('isInvestigationPath', () => {
+  it('recognises only the investigation page, with or without a slash', () => {
+    expect(isInvestigationPath('/investigacion')).toBe(true)
+    expect(isInvestigationPath('/investigacion/')).toBe(true)
+    expect(isInvestigationPath('/terminal')).toBe(false)
+    expect(isInvestigationPath('/investigacion/otra')).toBe(false)
+  })
+  it('does not add a section nor a navigation tab', () => {
+    expect(sectionForPath('/investigacion')).toBe('terminal')
+    expect(appNavigation('terminal').map((i) => i.href)).toEqual([
+      '/terminal',
+      '/estrategias',
+    ])
   })
 })
 

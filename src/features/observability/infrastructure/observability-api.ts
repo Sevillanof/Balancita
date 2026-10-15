@@ -146,21 +146,21 @@ export type ActivityReport = {
 
 export class UnexpectedReport extends Error {}
 
-function fail(what: string): never {
+export function fail(what: string): never {
   throw new UnexpectedReport(`respuesta inesperada: ${what}`)
 }
 
-const text = (value: unknown, what: string): string =>
+export const text = (value: unknown, what: string): string =>
   typeof value === 'string' ? value : fail(what)
-const integer = (value: unknown, what: string): number =>
+export const integer = (value: unknown, what: string): number =>
   typeof value === 'number' && Number.isFinite(value) ? value : fail(what)
-const maybeInteger = (value: unknown): number | null =>
+export const maybeInteger = (value: unknown): number | null =>
   typeof value === 'number' && Number.isFinite(value) ? value : null
-const maybeText = (value: unknown): string | null =>
+export const maybeText = (value: unknown): string | null =>
   typeof value === 'string' ? value : null
-const list = (value: unknown, what: string): unknown[] =>
+export const list = (value: unknown, what: string): unknown[] =>
   Array.isArray(value) ? value : fail(what)
-const strings = (value: unknown): string[] =>
+export const strings = (value: unknown): string[] =>
   Array.isArray(value) ? value.filter((v) => typeof v === 'string') : []
 
 function status(value: unknown, what: string): HealthStatus {
@@ -248,7 +248,7 @@ export function decodeHealth(raw: unknown): HealthReport {
   }
 }
 
-function decodeEvidenceOfSection(raw: unknown): SectionEvidence {
+export function decodeEvidenceOfSection(raw: unknown): SectionEvidence {
   const e = record(raw)
   return {
     source: text(e.source, 'section.evidence.source'),
@@ -259,7 +259,7 @@ function decodeEvidenceOfSection(raw: unknown): SectionEvidence {
   }
 }
 
-function section<T>(
+export function section<T>(
   raw: unknown,
   what: string,
   read: (body: JsonRecord) => T,
@@ -354,7 +354,10 @@ export function decodeActivity(raw: unknown): ActivityReport {
   }
 }
 
-async function getJson(url: string, signal: AbortSignal): Promise<unknown> {
+export async function getJson(
+  url: string,
+  signal: AbortSignal,
+): Promise<unknown> {
   const response = await fetch(url, { signal })
   if (!response.ok) throw new Error(`HTTP ${response.status}`)
   return response.json()

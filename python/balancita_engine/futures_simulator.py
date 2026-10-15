@@ -384,6 +384,18 @@ class Book:
         stop, long = position["stop"], position["side"] == "LONG"
         evidence = "stop_level"
         price = stop
+        if self.post_hole_stop_reference and self.stop_policy == "level":
+            # #186: the first valid candle after a declared hole of observation. Where it opened beyond the stop the open is
+            # the SIMULATED reference (not a fill, not verified liquidity); without a valid open nothing is invented and the
+            # stop level stays, declared as a limitation; an open before the stop is the ordinary case.
+            opened = current.get("candidate_open")
+            self._pending_evidence = None
+            if opened is None:
+                self._pending_evidence = "post_hole_open_unavailable_stop_level"
+            elif (D(opened) <= stop) if long else (D(opened) >= stop):
+                price = D(opened)
+                self._pending_evidence = "ohlc_open_gap_after_hole_simulated"
+            return price
         if self.stop_policy == "gap_worst":
             price, evidence = _worse(position["side"], stop, low if long else high), "ohlc_worst_bound"
         elif self.stop_policy == "gap_open":
@@ -398,6 +410,7 @@ class Book:
         return price
 
     _pending_evidence = None
+    post_hole_stop_reference = False   # set by the runner for the one candle that is the first after a declared hole (#186)
 
     def _entry_start_ms(self, position):
         """Funding runs from the real entry when it is known (``entry_ms``), else from the opening minute."""
