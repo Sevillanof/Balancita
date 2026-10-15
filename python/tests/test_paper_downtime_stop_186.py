@@ -5,10 +5,10 @@ not inside that candle. The outage is a declared hole of coverage that starts at
 stops are not executed retroactively in time, and the first observation closes them at the price each ``stop_policy``
 defines. Invented data only; nothing is connected to a live process.
 
-Current behaviour, recorded here and not changed (``stop_policy`` is an experimental hypothesis; what applies after an
-outage is Fran's decision, see the PR): with ``level`` (the default) the exit is at the stop level, a price that was never
-observed after the recovery (97998.24 / 3640.21); ``gap_open`` exits near the open of the first candle and ``gap_worst``
-near its worst price."""
+What applies after an outage is Fran's decision BAL-DECISION-186-05 (``stop_after_hole``, #206): by default the first
+valid candle after a real interruption gives its open as a SIMULATED reference (80098.56 / 4990.28) even with
+``stop_policy="level"``; ``stop_after_hole="level"`` keeps the earlier behaviour (the stop level, 97998.24 / 3640.21, a price
+never observed after the recovery). ``gap_open`` and ``gap_worst`` do not depend on it."""
 
 import os
 import signal
@@ -26,7 +26,7 @@ sys.path.insert(0, {py!r})
 sys.path.insert(0, {tests!r})
 import test_paper_runner_recovery as T
 from balancita_engine.paper_runner import PaperRunner
-r = PaperRunner.create(sys.argv[1], T.cfg(stop_policy=sys.argv[3]), T.strategies())
+r = PaperRunner.create(sys.argv[1], T.cfg(stop_policy=sys.argv[3], stop_after_hole=sys.argv[4]), T.strategies())
 r.run(T.session()[:int(sys.argv[2])])
 os.kill(os.getpid(), signal.SIGKILL)
 """
@@ -35,17 +35,19 @@ RECOVERY_MS = T.CYCLE + 30 * T.MIN
 FIRST_OBSERVATION_MS = T.CYCLE + 40 * T.MIN
 # last quote of each product before the kill (events 3 and 4 of ``T.session()``): where the unobserved time starts
 LAST_EVIDENCE = {T.BTC: T.CYCLE + 5 * T.SEC, T.ETH: T.CYCLE + 6 * T.SEC}
-EXIT = {"level": {T.BTC: "97998.236000", T.ETH: "3640.207480"},
-        "gap_open": {T.BTC: "80098.558200", T.ETH: "4990.284430"},
-        "gap_worst": {T.BTC: "79998.560000", T.ETH: "5000.285000"}}
+# (stop_policy, stop_after_hole) -> exit price
+EXIT = {("level", "level"): {T.BTC: "97998.236000", T.ETH: "3640.207480"},
+        ("level", "gap_open"): {T.BTC: "80098.558200", T.ETH: "4990.284430"},
+        ("gap_open", "gap_open"): {T.BTC: "80098.558200", T.ETH: "4990.284430"},
+        ("gap_worst", "gap_open"): {T.BTC: "79998.560000", T.ETH: "5000.285000"}}
 
 
 class StopCrossedDuringTheOutage(T.Base):
-    def killed_with_open_positions(self, policy, name):
+    def killed_with_open_positions(self, policy, name, after_hole="gap_open"):
         py = os.path.dirname(os.path.dirname(os.path.abspath(ST.__file__)))
         tests = os.path.dirname(os.path.abspath(__file__))
         path = os.path.join(self.dir, name)
-        done = subprocess.run([sys.executable, "-c", CHILD.format(py=py, tests=tests), path, "6", policy],
+        done = subprocess.run([sys.executable, "-c", CHILD.format(py=py, tests=tests), path, "6", policy, after_hole],
                               capture_output=True, text=True, timeout=120)
         self.assertEqual(done.returncode, -signal.SIGKILL, done.stderr)
         return path
@@ -69,10 +71,10 @@ class StopCrossedDuringTheOutage(T.Base):
             self.assertEqual((gap["from_ms"], gap["to_ms"]), (LAST_EVIDENCE[product], RECOVERY_MS), product)
 
     def test_the_first_observation_beyond_the_stops_closes_them_at_the_price_of_each_policy(self):
-        for policy, expected in EXIT.items():
-            with self.subTest(stop_policy=policy):
-                path = self.killed_with_open_positions(policy, "killed-" + policy)
-                r = self.recover(path, RECOVERY_MS, config=T.cfg(stop_policy=policy))
+        for (policy, after_hole), expected in EXIT.items():
+            with self.subTest(stop_policy=policy, stop_after_hole=after_hole):
+                path = self.killed_with_open_positions(policy, "killed-%s-%s" % (policy, after_hole), after_hole)
+                r = self.recover(path, RECOVERY_MS, config=T.cfg(stop_policy=policy, stop_after_hole=after_hole))
                 r.run(self.first_observation(7))
                 self.assertEqual(len(r.portfolio.positions), 0)
                 got = {t["product_id"]: t for t in r.portfolio.trades}
