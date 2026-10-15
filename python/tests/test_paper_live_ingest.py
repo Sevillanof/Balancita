@@ -1325,6 +1325,25 @@ class TestPublishedContracts(TestRunnerEquivalence):
         self.assertEqual(stale["verification"]["reasons"], ["report_stale"])
         self.assertFalse(PUB.positions(runner, None, 15_000, LIVE)["positions"][0]["verified"])
 
+    def test_without_an_approved_limit_nothing_is_current_and_the_block_says_so(self):
+        """BAL-DECISION-187-01, P2: the publisher carries the limits, labelled hypothesis; there is no default. A missing limit
+        gives ``unknown`` freshness and never ``verified``, even with live data and a brand-new report."""
+        events = self.build()
+        runner = self.runner("nolimit")
+        runner.run(events[:len(events) // 2])
+        block = PUB.positions(runner, report_age_ms=0, source_state=LIVE)
+        self.assertFalse(block["positions"][0]["verified"])
+        self.assertFalse(block["positions"][0]["accounting_verified"])
+        self.assertEqual(block["verification"]["reasons"], ["freshness_threshold_not_approved"])
+        self.assertEqual(block["verification"]["freshness"], "unknown")
+        self.assertEqual(block["verification"]["thresholds"], {"report_max_age_ms": None, "status": "not_approved"})
+        given = PUB.positions(runner, report_age_ms=1_000, max_age_ms=15_000, source_state=LIVE)["verification"]
+        self.assertEqual((given["freshness"], given["thresholds"]), ("fresh", {"report_max_age_ms": 15_000, "status": "hypothesis"}))
+        old = PUB.positions(runner, report_age_ms=60_000, max_age_ms=15_000, source_state=LIVE)["verification"]
+        self.assertEqual(old["freshness"], "stale")
+        self.assertEqual(PUB.positions(runner, None, 15_000, LIVE)["verification"]["freshness"], "unknown")
+        json.dumps(block)
+
     def test_positions_are_not_verified_when_the_data_is_stale_even_if_the_report_is_fresh(self):
         events = self.build()
         runner = self.runner("datastale")
