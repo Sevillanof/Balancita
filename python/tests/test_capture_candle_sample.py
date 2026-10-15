@@ -179,17 +179,23 @@ class CandleSampleTests(unittest.TestCase):
         body = {k: v for k, v in out.items() if k != "fingerprint_sha256"}
         self.assertEqual(out["fingerprint_sha256"], ccs.fingerprint(body))
 
-    def test_tiny_and_huge_intervals_do_not_blow_up(self):
+    def test_only_the_listed_intervals_are_read(self):
         c = sqlite3.connect(self.db)
-        for interval, bucket in ((1, W0 + 5), (W1 - W0 + 1, W0)):
+        for interval, bucket in ((1, W0 + 5), (W1 - W0 + 1, W0), (120_000, W0)):
             c.execute("INSERT INTO paper_futures_candle_revisions VALUES(?,?,?,?,?,?,?,?,?,?)",
                       ("PF_ETHUSD:%d:%d" % (interval, bucket), interval, bucket, 1, bucket + interval, None, 1, "1", "1", "1"))
+            c.execute("INSERT INTO paper_futures_official_candles VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                      (ETH, interval, bucket, "x%d" % interval, bucket + interval, "1", "1", "1", "1", "1", "s"))
+        c.execute("INSERT INTO paper_futures_official_candles VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                  (ETH, 900_000, W0, "q", W0 + 900_000, "1", "1", "1", "1", "1", "s"))  # 15 m is not an official size
         c.commit()
         c.close()
-        eth = self.sample()["sections"]["candles"][ETH]["by_interval_ms"]
-        self.assertEqual(eth["1"]["distinct_buckets"], 1)
-        self.assertEqual(eth[str(W1 - W0 + 1)]["expected_buckets"], 0)
-        self.assertIsNone(eth[str(W1 - W0 + 1)]["missing_runs"])
+        out = self.sample()["sections"]
+        self.assertEqual(out["candles"][ETH]["intervals_present"], [M5])
+        self.assertEqual(out["official_candles"][ETH], {"intervals_present": [], "by_interval_ms": {}})
+        self.assertEqual(ccs.CAPTURE_INTERVALS_MS, (60_000, 300_000, 900_000, 3_600_000))
+        self.assertEqual(ccs.OFFICIAL_INTERVALS_MS, (60_000, 300_000))
+        self.assertNotIn("interval_ms > 0", " ".join(q for pair in ccs.SQL.values() for q in pair))
 
 
 if __name__ == "__main__":

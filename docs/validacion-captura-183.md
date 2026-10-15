@@ -111,6 +111,8 @@ Lo que dice el código sobre el «0 de 72» velas de 5 min de la captura (leído
 - El ingestor (`paper_live_ingest.py`) lee tickers, huecos de la captura y las velas **oficiales de 1 m**; no lee las velas de la captura. Estas las usa la terminal y el validador de velas, que las compara con la serie oficial agregando 1 m a 5 m.
 - Lo que el código no dice, y por eso se mide: si la serie de 1 m de BTC está completa fuera de la caída, y cuántas velas oficiales de 1 m hay en la ventana (la muestra anterior solo contó las de 5 m).
 
-La herramienta cuenta, por producto e intervalo presente, las velas de la captura y las velas oficiales (revisiones, buckets distintos y faltantes, tramos de buckets faltantes y demora entre el cierre y el registro) y las operaciones (`feed = 'trade'`) que llegaron. Solo tiempos y contadores: no lee precios, volúmenes, tamaños ni `raw_*` / `*_json`, y no compara valores (eso sería el Nivel B).
+La herramienta cuenta, por producto e intervalo, las velas de la captura (60 s, 5, 15 y 60 min, los tamaños que conoce el constructor) y las velas oficiales (1 y 5 min, como en `official-candles.ts`; ningún otro tamaño se lee) (revisiones, buckets distintos y faltantes, tramos de buckets faltantes y demora entre el cierre y el registro) y las operaciones (`feed = 'trade'`) que llegaron. Solo tiempos y contadores: no lee precios, volúmenes, tamaños ni `raw_*` / `*_json`, y no compara valores (eso sería el Nivel B).
 
 Retención: la tabla de velas nunca se borra (`futures-market-store.ts`, «Candles, funding, analytics and gaps are never touched») y las operaciones se conservan 7 días, así que esta muestra no tiene el plazo de 24 h del ticker.
+
+La última vela de cada tamaño cierra a las 12:00Z y su revisión de cierre puede haberse registrado después de la ventana: se selecciona por inicio del bucket, así que se lee, pero un faltante o una demora en ese borde no es un hueco de captura (campo `edge_limits`).

@@ -3,7 +3,7 @@
 Same fixed window, same two products and same guards as ``capture_timing_sample`` (read-only connection, SQLite
 authorizer that denies every column not on its allow-list, COUNT(*) row budget, per-query time limit, receipt and
 event time both inside the window). It only answers why the 5 m capture candles came back empty: how many candles the
-capture has, and how many official candles are stored, for each interval present (which buckets are missing, how long after closing each was recorded) and how
+capture has (60 s, 5, 15 and 60 min) and how many official candles are stored (1 and 5 min) (which buckets are missing, how long after closing each was recorded) and how
 many trade events arrived (the capture builds its candles from trades). Times and counters only: no price, volume,
 size or ``raw_*`` / ``*_json`` column is read. It measures our reception, not Kraken, and does not compare values.
 
@@ -24,6 +24,10 @@ from . import capture_timing_sample as cts
 TOOL_VERSION = "capture-candle-sample.v1"
 WINDOW_START_MS, WINDOW_END_MS, WINDOW, PRODUCTS = cts.WINDOW_START_MS, cts.WINDOW_END_MS, cts.WINDOW, cts.PRODUCTS
 MAX_REPORTED_RUNS = 20
+CAPTURE_INTERVALS_MS = (60_000, 300_000, 900_000, 3_600_000)  # the builder's four known sizes (the capture uses 60 s)
+OFFICIAL_INTERVALS_MS = (60_000, 300_000)  # the official series (official-candles.ts)
+_CAPTURE_IN = ",".join(str(i) for i in CAPTURE_INTERVALS_MS)
+_OFFICIAL_IN = ",".join(str(i) for i in OFFICIAL_INTERVALS_MS)
 
 _W0, _W1 = WINDOW_START_MS, WINDOW_END_MS
 _IN = cts._IN
@@ -31,18 +35,18 @@ _PRODUCT = cts._CANDLE_PRODUCT
 
 SQL = {
     "candles": (
-        "SELECT COUNT(*) FROM paper_futures_candle_revisions WHERE %s IN (%s) AND interval_ms > 0 "
-        "AND bucket_start >= %d AND bucket_start < %d" % (_PRODUCT, _IN, _W0, _W1),
+        "SELECT COUNT(*) FROM paper_futures_candle_revisions WHERE %s IN (%s) AND interval_ms IN (%s) "
+        "AND bucket_start >= %d AND bucket_start < %d" % (_PRODUCT, _IN, _CAPTURE_IN, _W0, _W1),
         "SELECT %s, interval_ms, bucket_start, revision, known_at, is_closed FROM paper_futures_candle_revisions "
-        "WHERE %s IN (%s) AND interval_ms > 0 AND bucket_start >= %d AND bucket_start < %d "
-        "ORDER BY 1, interval_ms, bucket_start, revision" % (_PRODUCT, _PRODUCT, _IN, _W0, _W1),
+        "WHERE %s IN (%s) AND interval_ms IN (%s) AND bucket_start >= %d AND bucket_start < %d "
+        "ORDER BY 1, interval_ms, bucket_start, revision" % (_PRODUCT, _PRODUCT, _IN, _CAPTURE_IN, _W0, _W1),
     ),
     "official_candles": (
-        "SELECT COUNT(*) FROM paper_futures_official_candles WHERE product_id IN (%s) AND interval_ms > 0 "
-        "AND bucket_start >= %d AND bucket_start < %d" % (_IN, _W0, _W1),
+        "SELECT COUNT(*) FROM paper_futures_official_candles WHERE product_id IN (%s) AND interval_ms IN (%s) "
+        "AND bucket_start >= %d AND bucket_start < %d" % (_IN, _OFFICIAL_IN, _W0, _W1),
         "SELECT product_id, interval_ms, bucket_start, 0, known_at, 0 FROM paper_futures_official_candles "
-        "WHERE product_id IN (%s) AND interval_ms > 0 AND bucket_start >= %d AND bucket_start < %d "
-        "ORDER BY product_id, interval_ms, bucket_start, known_at" % (_IN, _W0, _W1),
+        "WHERE product_id IN (%s) AND interval_ms IN (%s) AND bucket_start >= %d AND bucket_start < %d "
+        "ORDER BY product_id, interval_ms, bucket_start, known_at" % (_IN, _OFFICIAL_IN, _W0, _W1),
     ),
     "trades": (
         "SELECT COUNT(*) FROM paper_futures_market_events WHERE feed = 'trade' AND product_id IN (%s) "
