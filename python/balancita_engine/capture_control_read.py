@@ -11,7 +11,7 @@ Candles, funding and gaps are never deleted. A previous offline ``market:prune``
 
 Scope (BAL-DECISION-183-15; each real run is published here BEFORE it runs, with D's review and a green CI on the exact head):
 - ``dev-live/futures-market.sqlite`` only, ``mode=ro`` + ``query_only`` read back, identity before/after, no copy, no Kraken;
-- BOUNDS (single-row reads, all counted): the oldest and newest event by ``rowid`` (rowid, received_at, event_time), the oldest and newest
+- BOUNDS (single-row reads, all counted): the oldest and newest event by ``rowid`` (rowid, received_at, event_time, persisted_at), the oldest and newest
   ``received_at`` of XBT and of ETH (with event_time), oldest/newest ``detected_at`` of gaps, oldest/newest own XBT 1m candle bucket;
 - MONOTONICITY PROBE: ``PROBES`` evenly spaced rowids between the min and max rowid, one single-row read each (rowid, received_at), to check
   the assumption retention relies on (rowid grows with received_at) and to expose late loads. It is a probe, not a proof;
@@ -49,9 +49,9 @@ IDX_EVENTS, IDX_GAPS = g.IDX_EVENTS, g.IDX_GAPS
 PK_REVS = m.PK_REVISIONS
 
 ALLOWED = {
-    "bound_rowid": {EVENTS: {"rowid", "received_at", "event_time"}},
+    "bound_rowid": {EVENTS: {"rowid", "received_at", "event_time", "persisted_at"}},
     "probe": {EVENTS: {"rowid", "received_at"}},
-    "bound_product": {EVENTS: {"product_id", "received_at", "event_time"}},
+    "bound_product": {EVENTS: {"product_id", "received_at", "event_time", "persisted_at"}},
     "bound_gaps": {GAPS: {"detected_at"}},
     "bound_candles": {REVS: {"candle_id", "interval_ms", "bucket_start", "revision"}},
     "witness_events": {EVENTS: {"feed", "product_id", "received_at", "seq"}},
@@ -75,15 +75,15 @@ def _candle_range(day_from, day_to):
 
 
 SQL_BOUND_ROWID = {
-    "oldest": "SELECT rowid, received_at, event_time FROM %s WHERE rowid >= 0 ORDER BY rowid LIMIT 1" % EVENTS,
-    "newest": "SELECT rowid, received_at, event_time FROM %s WHERE rowid >= 0 ORDER BY rowid DESC LIMIT 1" % EVENTS,
+    "oldest": "SELECT rowid, received_at, event_time, persisted_at FROM %s WHERE rowid >= 0 ORDER BY rowid LIMIT 1" % EVENTS,
+    "newest": "SELECT rowid, received_at, event_time, persisted_at FROM %s WHERE rowid >= 0 ORDER BY rowid DESC LIMIT 1" % EVENTS,
 }
 SQL_PROBE = "SELECT rowid, received_at FROM %s WHERE rowid >= ? ORDER BY rowid LIMIT 1" % EVENTS
 
 
 def _sql_bound_product(direction):
     order = "" if direction == "oldest" else " DESC"
-    return ("SELECT received_at, event_time FROM %s INDEXED BY %s WHERE product_id = ? ORDER BY received_at%s LIMIT 1"
+    return ("SELECT received_at, event_time, persisted_at FROM %s INDEXED BY %s WHERE product_id = ? ORDER BY received_at%s LIMIT 1"
             % (EVENTS, IDX_EVENTS, order))
 
 
@@ -138,9 +138,9 @@ def _row(guard, mode, sql, params, count, names):
 def read_bounds(guard, count):
     out = {"events_overall": {}, "events_xbt": {}, "events_eth": {}, "gaps": {}, "candles_xbt": {}}
     for d in ("oldest", "newest"):
-        out["events_overall"][d] = _row(guard, "bound_rowid", SQL_BOUND_ROWID[d], (), count, ("rowid", "received_at", "event_time"))
-        out["events_xbt"][d] = _row(guard, "bound_product", _sql_bound_product(d), (XBT,), count, ("received_at", "event_time"))
-        out["events_eth"][d] = _row(guard, "bound_product", _sql_bound_product(d), (ETH,), count, ("received_at", "event_time"))
+        out["events_overall"][d] = _row(guard, "bound_rowid", SQL_BOUND_ROWID[d], (), count, ("rowid", "received_at", "event_time", "persisted_at"))
+        out["events_xbt"][d] = _row(guard, "bound_product", _sql_bound_product(d), (XBT,), count, ("received_at", "event_time", "persisted_at"))
+        out["events_eth"][d] = _row(guard, "bound_product", _sql_bound_product(d), (ETH,), count, ("received_at", "event_time", "persisted_at"))
         out["gaps"][d] = _one(guard, "bound_gaps", _sql_bound_gaps(d), (), count)
         out["candles_xbt"][d] = _one(guard, "bound_candles", _sql_bound_candles(d), (), count)
     return out
@@ -199,15 +199,22 @@ def inferences(bounds, probe, witnesses):
     oldest = (bounds or {}).get("events_overall", {}).get("oldest")
     out = {"window_start_ms": DAY0}
     obs = {"oldest_event_received_at_ms": oldest and oldest["received_at"], "oldest_event_event_time_ms": oldest and oldest["event_time"],
+           "oldest_event_persisted_at_ms": oldest and oldest["persisted_at"],
+           "xbt_oldest_persisted_at_ms": ((bounds or {}).get("events_xbt", {}).get("oldest") or {}).get("persisted_at"),
            "oldest_rowid": oldest and oldest["rowid"], "oldest_rowid_above_1": oldest is not None and oldest["rowid"] > 1,
            "rowid_probe_monotone": probe["monotone_nondecreasing"] if probe else None}
     out["observations"] = obs
     cond = oldest is not None and probe is not None and probe["monotone_nondecreasing"] is True
-    if cond and oldest["received_at"] <= DAY0:
-        retention = {"holds": True, "says": "an event received at or before the window start survives and the probe found rowid monotone with "
-                     "received_at, so a prefix deletion (what retention does) cannot have removed the window; the empty window was not "
-                     "emptied by retention under the code's rule", "does_not_say": "why it is empty (never captured, not loaded, other tool); "
-                     "late loads between probes are not excluded"}
+    if cond and oldest["received_at"] <= DAY0 and oldest["persisted_at"] <= DAY0:
+        retention = {"holds": True, "says": "the event with the lowest rowid was received AND stored (persisted_at) at or before the window start "
+                     "and the probe found rowid monotone with received_at, so a prefix deletion (what retention does) cannot have removed the "
+                     "window; the empty window was not emptied by retention under the code's rule", "does_not_say": "why it is empty (never "
+                     "captured, not loaded, other tool); persisted_at is set by the caller of the store, not by the database; late loads "
+                     "between probes are not excluded"}
+    elif cond and oldest["received_at"] <= DAY0:
+        retention = {"holds": None, "says": "undetermined: the event with the lowest rowid has an old received_at but was stored after the window "
+                     "start (a late load): a prefix deletion could have removed the window before it", "does_not_say": "retention happened; "
+                     "never having been captured"}
     elif cond:
         retention = {"holds": None, "says": "undetermined: the oldest surviving event is newer than the window start; that is compatible with "
                      "retention having deleted the window AND with the window never having been captured", "does_not_say": "retention happened; "
@@ -249,11 +256,11 @@ def build_result(conn, *, max_events, max_candles, read_date_ms, started=None):
     try:
         try:
             result["bounds"] = read_bounds(guard, count)
-            witnesses["xbt_after"] = read_witness_events(guard, XBT, WINDOW_XBT_AFTER, max_events, count)
-            witnesses["eth_same"] = read_witness_events(guard, ETH, WINDOW_ETH_SAME, max_events, count)
             result["probe"] = read_probe(guard, result["bounds"], count)
             witnesses["xbt_candles_before"] = read_witness_candles(guard, WINDOW_CANDLES_BEFORE, max_candles, count)
             witnesses["xbt_candles_after"] = read_witness_candles(guard, WINDOW_XBT_AFTER, max_candles, count)
+            witnesses["eth_same"] = read_witness_events(guard, ETH, WINDOW_ETH_SAME, max_events, count)
+            witnesses["xbt_after"] = read_witness_events(guard, XBT, WINDOW_XBT_AFTER, max_events, count)
         except m.Stopped as stop:
             result["stopped"] = {"reason": stop.reason, "detail": stop.detail}
     finally:

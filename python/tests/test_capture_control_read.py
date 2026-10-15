@@ -14,10 +14,10 @@ D0 = c.DAY0
 H = c.HOUR_MS
 
 
-def event(conn, product, feed, at, n):
+def event(conn, product, feed, at, n, persisted=None):
     conn.execute("INSERT INTO paper_futures_market_events (event_id,feed,product_id,epoch,seq,event_time,received_at,persisted_at,uid,"
                  "raw_json,normalized_json,content_hash) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-                 ("%s:%s:%d" % (feed, product, n), feed, product, 1, n, at, at, at, None, "{}", "{}", "h%d" % n))
+                 ("%s:%s:%d" % (feed, product, n), feed, product, 1, n, at, at, at if persisted is None else persisted, None, "{}", "{}", "h%d" % n))
 
 
 def gap(conn, at, n):
@@ -63,9 +63,10 @@ class ControlTests(unittest.TestCase):
         r = self.run_control()
         self.assertIsNone(r["stopped"])
         b = r["bounds"]
-        self.assertEqual(b["events_overall"]["oldest"], {"rowid": 1, "received_at": D0 - 2 * H, "event_time": D0 - 2 * H})
+        self.assertEqual(b["events_overall"]["oldest"], {"rowid": 1, "received_at": D0 - 2 * H, "event_time": D0 - 2 * H,
+                                                         "persisted_at": D0 - 2 * H})
         self.assertEqual(b["events_overall"]["newest"]["received_at"], D0 + 20 * H)
-        self.assertEqual(b["events_xbt"]["oldest"], {"received_at": D0 - 2 * H, "event_time": D0 - 2 * H})
+        self.assertEqual(b["events_xbt"]["oldest"], {"received_at": D0 - 2 * H, "event_time": D0 - 2 * H, "persisted_at": D0 - 2 * H})
         self.assertEqual(b["events_eth"]["newest"]["received_at"], D0 + H)
         self.assertEqual(b["gaps"], {"oldest": D0 - 5 * H, "newest": D0 + 9 * H})
         self.assertEqual(b["candles_xbt"], {"oldest": D0 - 10 * H, "newest": D0 + 30 * H})
@@ -122,6 +123,44 @@ class ControlTests(unittest.TestCase):
         obs = self.run_control()["inferences"]["observations"]
         self.assertTrue(obs["oldest_rowid_above_1"])
 
+    def test_a_late_load_at_the_lowest_rowid_is_undetermined(self):
+        """D-216-04: received_at is old but it was stored after the window start, so a prefix deletion could have removed the window first."""
+        event(self.conn, m.BTC, "book", D0 - 2 * H, 1, persisted=D0 + 8 * H)
+        event(self.conn, m.BTC, "book", D0 + 7 * H, 2)
+        r = self.run_control()
+        self.assertTrue(r["probe"]["monotone_nondecreasing"])
+        inf = r["inferences"]["window_not_trimmed_by_retention"]
+        self.assertIsNone(inf["holds"])
+        self.assertIn("late load", inf["says"])
+        self.assertEqual(r["inferences"]["observations"]["oldest_event_persisted_at_ms"], D0 + 8 * H)
+
+    def test_the_boundary_is_inclusive_on_both_clocks(self):
+        event(self.conn, m.BTC, "book", D0, 1)
+        self.assertIs(self.run_control()["inferences"]["window_not_trimmed_by_retention"]["holds"], True)
+
+    def test_one_millisecond_after_the_boundary_is_undetermined(self):
+        event(self.conn, m.BTC, "book", D0 + 1, 1)
+        self.assertIsNone(self.run_control()["inferences"]["window_not_trimmed_by_retention"]["holds"])
+        other = tempfile.mkdtemp()
+        path = os.path.join(other, "dev-live", m.DB_NAME)
+        os.makedirs(os.path.dirname(path))
+        conn = sqlite3.connect(path)
+        conn.executescript(SCHEMA)
+        event(conn, m.BTC, "book", D0, 1, persisted=D0 + 1)
+        conn.commit()
+        ro = m._open_readonly(path)
+        self.addCleanup(ro.close)
+        r = c.build_result(ro, read_date_ms=1, max_events=10, max_candles=10)
+        self.assertIsNone(r["inferences"]["window_not_trimmed_by_retention"]["holds"])
+
+    def test_a_witness_that_goes_backwards_stops_the_run(self):
+        class Fake:
+            def fetch(self, *_args, **_kwargs):
+                return [("book", 20), ("book", 10)]
+        with self.assertRaises(m.Stopped) as ctx:
+            c.read_witness_events(Fake(), m.BTC, (0, 10 * H), 10, c.Count())
+        self.assertEqual(ctx.exception.reason, "order")
+
     def test_empty_base_gives_none_not_errors(self):
         r = self.run_control()
         self.assertIsNone(r["stopped"])
@@ -142,7 +181,8 @@ class ControlTests(unittest.TestCase):
         self.assertEqual(r["stopped"]["reason"], "row_budget")
         self.assertIn("events_overall", r["bounds"])
         self.assertNotIn("xbt_after", r["witnesses"])
-        self.assertNotIn("xbt_candles_after", r["witnesses"])
+        self.assertIn("xbt_candles_after", r["witnesses"])         # the small witnesses are read first and survive
+        self.assertNotIn("xbt_after", r["witnesses"])
 
     def test_candle_cap(self):
         for i in range(5):
