@@ -4,7 +4,7 @@ Decisión de Fran: BAL-DECISION-186-05. Solo cambia un caso; todo lo demás qued
 
 ## Qué cambia
 
-Una posición está abierta y el runner declaró un hueco de observación (`runner_interrupted` o `quote_gap`). La primera vela
+Una posición está abierta y el runner declaró una interrupción real (caída). La primera vela
 válida que llega después del hueco ya abre más allá del stop. Antes, la salida se registraba al nivel del stop, un precio
 que el runner nunca observó. Ahora la referencia de la salida es la apertura de esa vela, con el modelo de costes que ya existe.
 
@@ -22,7 +22,7 @@ que el runner nunca observó. Ahora la referencia de la salida es la apertura de
 ## Qué no cambia
 
 - La vela que cierra justo cuando termina el hueco (su minuto cae dentro del tiempo no observado, pero es lo primero que ve el runner después) también es «la primera»: usa su apertura como referencia simulada, no el nivel del stop (D-206-01).
-- «Hueco declarado» incluye `quote_gap`: un silencio de cotizaciones de más de `coverage_gap_ms` (120 s, hipótesis sin aprobar) sin ninguna caída. BAL-DECISION-186-05 dice «hueco de observación declarado» y no limita el caso a las caídas; si Fran lo quiere solo para caídas, se saca `quote_gap` de la lista en `_first_candle_after_hole`.
+- Solo cuenta una interrupción real del runner (`runner_interrupted`). Un silencio de cotizaciones de más de `coverage_gap_ms` (120 s, hipótesis sin aprobar) sin caída (`quote_gap`) NO activa la regla: la salida queda como antes (BAL-DECISION-186-06, Fran: No).
 - Las cotizaciones después de un hueco se tratan igual que antes (prueba: mismo resultado con `gap_open` y con `level`).
 - La identidad de la corrida incluye siempre `stop_after_hole`: un directorio de runner creado antes de este cambio no se recupera (`config_incompatible`), falla cerrado y no se reinterpreta (D-206-04).
 - Sin hueco declarado, o con una vela que abre antes del stop, o si no es la primera vela después del hueco: se aplica `stop_policy` como siempre (por defecto `level`).

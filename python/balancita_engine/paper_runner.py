@@ -542,15 +542,15 @@ class PaperRunner(object):
         record["quotes"], record["last_ms"] = state["quotes"], now
 
     def _first_candle_after_hole(self, book, bucket):
-        """#186 (BAL-DECISION-186-05): is ``bucket`` the first valid candle a position sees after a declared hole of
-        observation (``runner_interrupted`` or ``quote_gap``) and does the policy ``stop_after_hole`` ask for the open
+        """#186 (BAL-DECISION-186-05): is ``bucket`` the first valid candle a position sees after a real interruption
+        of the runner (``runner_interrupted``; BAL-DECISION-186-06: not a ``quote_gap``, a silence of quotes without a crash) and does the policy ``stop_after_hole`` ask for the open
         as the reference of a stop the market already went through? The candle that closes at the end of the hole counts: its
         open lies inside the unobserved time. It is a SIMULATED reference, not a fill."""
         if self.config.stop_after_hole != "gap_open":
             return False
         intent_id = book.intent["intent_id"]
         ends = [g["to_ms"] for g in self.coverage["gaps"]
-                if g["intent_id"] == intent_id and g["kind"] in ("runner_interrupted", "quote_gap") and g["to_ms"] <= bucket + 60_000]
+                if g["intent_id"] == intent_id and g["kind"] == "runner_interrupted" and g["to_ms"] <= bucket + 60_000]
         if not ends:
             return False
         end = max(ends)

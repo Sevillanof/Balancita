@@ -111,19 +111,17 @@ class PostHoleStop(T.Base):
             self.assertEqual(trade["stop_exit"]["evidence"], "ohlc_open_gap_after_hole_simulated")
             self.assertGreaterEqual(trade["exit_time_ms"], RECOVERY_MS)
 
-    def test_a_quote_gap_without_any_crash_is_a_declared_hole_too(self):
-        # D-206-02: "hueco de observación declarado" in 186-05 includes a silence of quotes (coverage_gap_ms, a hypothesis)
+    def test_a_quote_gap_without_any_crash_keeps_the_level(self):
+        # BAL-DECISION-186-06 (Fran: No): a silence of quotes longer than coverage_gap_ms, without an interruption, is
+        # still declared as a quote_gap but does not activate the simulated open
         path, r = self.with_open_positions()
         r.run([T.quote(T.BTC, T.CYCLE + 4 * T.MIN, "100000", 7), T.quote(T.ETH, T.CYCLE + 4 * T.MIN, "3500", 8)])
-        kinds = [g["kind"] for g in r.coverage["gaps"]]
-        self.assertEqual(sorted(kinds), ["quote_gap", "quote_gap"])
-        self.assertEqual(len(r.portfolio.positions), 2)
+        self.assertEqual(sorted(g["kind"] for g in r.coverage["gaps"]), ["quote_gap", "quote_gap"])
         r.run(both(T.CYCLE + 4 * T.MIN, 9))
         got = self.trades(r)
-        self.assertEqual({p: t["exit_price"] for p, t in got.items()}, OPEN_REFERENCE)
+        self.assertEqual({p: t["exit_price"] for p, t in got.items()}, LEVEL_EXIT)
         for trade in got.values():
-            self.assertEqual(trade["stop_exit"]["evidence"], "ohlc_open_gap_after_hole_simulated")
-            self.assertGreaterEqual(trade["exit_time_ms"], T.CYCLE + 4 * T.MIN)
+            self.assertNotIn("stop_exit", trade)
 
     def test_without_that_gap_the_same_candle_exits_at_the_level(self):
         path, r = self.with_open_positions()
