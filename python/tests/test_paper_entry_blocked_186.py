@@ -42,6 +42,24 @@ class Blocked(T.Base):
                 self.assertEqual(bool(reasons), blocked)
                 self.assertEqual(len(r.executor.pending), 0 if blocked else 1)
 
+    def test_an_old_quote_delivered_just_before_the_decision_is_still_old(self):
+        """Its own time counts, not its arrival: a quote of 10 minutes ago that arrives one second before the decision."""
+        path, r = self.runner()
+        t = T.CYCLE + 2 * T.SEC
+        late = T.make_event("quote", {"product_id": T.BTC, "time_ms": t - 10 * T.MIN, "received_ms": t - T.SEC,
+                                      "bid": "100005", "ask": "100015"}, t_ms=t - T.SEC, source=T.SRC, source_offset=1)
+        r.run([late, T.cycle(t, T.BTC, 2)])
+        self.assertEqual(self.states(r), [(T.BTC, "rejected", ("entry_blocked_source_stale",))])
+        self.assertEqual(len(r.executor.pending), 0)
+
+    def test_a_quote_of_its_own_fresh_time_does_not_block(self):
+        path, r = self.runner()
+        t = T.CYCLE + 2 * T.SEC
+        r.run([T.make_event("quote", {"product_id": T.BTC, "time_ms": t - 10 * T.SEC, "received_ms": t - T.SEC,
+                                      "bid": "100005", "ask": "100015"}, t_ms=t - T.SEC, source=T.SRC, source_offset=1),
+               T.cycle(t, T.BTC, 2)])
+        self.assertEqual([o[1] for o in self.states(r)], ["pending"])
+
     def test_only_the_stale_product_is_blocked(self):
         path, r = self.runner()
         t = T.CYCLE + 2 * T.SEC

@@ -134,8 +134,8 @@ class TimedExecutor:
 
         ``max_quote_age_ms`` (None: not checked, the previous behaviour) blocks the entry, before any order exists, with
         ``entry_blocked_source_stale`` when the product has no quote (``last_quote_ms`` falsy) or its last one is older than
-        the limit at ``decided_ms`` (a quote exactly at the limit is still fresh). ``last_quote_ms`` is the caller's last
-        quote time for the product."""
+        the limit at ``decided_ms`` (a quote exactly at the limit is still fresh). ``last_quote_ms`` is the time of the product's last quote itself
+        (when it was quoted, not when it arrived: an old quote delivered late is still old)."""
         data = entry["data"]
         signal = data["signal"]
         if signal["action"] not in (BUY, SELL):

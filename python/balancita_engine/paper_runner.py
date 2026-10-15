@@ -423,7 +423,7 @@ class PaperRunner(object):
             if self.config.entry_max_quote_age_ms is not None:
                 product = self.log.entries[seq - 1]["data"]["signal"]["product_id"]
                 extra = {"max_quote_age_ms": self.config.entry_max_quote_age_ms,
-                         "last_quote_ms": max(self.executor.last_quote_ms.get(product, 0), self.quote_t_ms.get(product, 0))}
+                         "last_quote_ms": self.executor.last_quote_ms.get(product, 0)}   # the quote's own time, not its arrival
             result = self.executor.submit(self.log.entries[seq - 1], reference_price=data["reference_price"],
                                           atr=data["atr"], decided_ms=data["decided_ms"], **extra)
             self.submits[data["signal_key"]] = result["status"]
