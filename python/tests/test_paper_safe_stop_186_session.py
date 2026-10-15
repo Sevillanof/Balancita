@@ -356,9 +356,10 @@ class TestRefusedCancellationAndFullDisk(Base):
 
 
 class TestSessionCheckpointFails(Base):
-    """E2 at the level of the session. The policy (stop everything or only new actions) is decision D-186-2 and is NOT changed:
-    today the exception goes up, the previous session checkpoint stays as it was and the journals are ahead of it, which the
-    recovery accepts. What is checked is that nothing is lost or doubled whichever way the replacement fails."""
+    """E2 at the level of the session, with decision D-186-2 (``Toda``): the checkpoint that cannot be written stops the whole
+    session. The exception goes up, the previous session checkpoint stays as it was, this instance is halted (it processes and
+    writes nothing more) and the journals are ahead of the checkpoint, which the recovery accepts. What is checked is that
+    nothing is lost or doubled whichever way the replacement fails."""
 
     def checkpoint_bytes(self, directory):
         with open(os.path.join(directory, LI.CHECKPOINT_FILE), "rb") as handle:
@@ -384,6 +385,13 @@ class TestSessionCheckpointFails(Base):
             with self.assertRaises(OSError):
                 session.step(NOW)
         self.assertEqual(self.checkpoint_bytes(directory), before)               # the previous checkpoint is untouched
+        self.assertIn("No space left", session.halted)                           # the failure is declared as the reason to stop
+        after = disk(directory)
+        for call in (lambda: session.step(NOW), session.save_checkpoint):        # and nothing more is processed or written
+            with self.assertRaises(LI.IntegrationError) as caught:
+                call()
+            self.assertEqual(caught.exception.reason, "session_halted")
+        self.assertEqual(disk(directory), after)
         abandon(session)
         return world, directory
 
@@ -393,6 +401,53 @@ class TestSessionCheckpointFails(Base):
                 world, directory = self.fails_at(how)
                 self.recover_and_finish(world, directory)
                 self.release()
+
+
+class TestAnyExceptionBeforeTheCheckpointHaltsTheInstance(Base):
+    """Decision P3 (``Mantener``): any exception of the part of the step before its checkpoint, a transient read of the source
+    included, halts that instance; it is not retried on it, and the recovery from the last checkpoint neither skips nor doubles
+    an event."""
+
+    def halted_after(self, make_poll):
+        world, directory, session = self.fork()
+        real = session.ingestor.poll
+        with mock.patch.object(session.ingestor, "poll", make_poll(real)):
+            with self.assertRaises(OSError):
+                session.step(NOW)
+        self.assertIsNotNone(session.halted)
+        before = disk(directory)
+        polled = {"n": 0}
+
+        def counting(*a, **k):
+            polled["n"] += 1
+            return real(*a, **k)
+
+        with mock.patch.object(session.ingestor, "poll", counting):
+            with self.assertRaises(LI.IntegrationError) as caught:
+                session.step(NOW)                                  # insisting on the same instance
+        self.assertEqual((caught.exception.reason, polled["n"]), ("session_halted", 0))   # not retried: not even read again
+        self.assertEqual(disk(directory), before)
+        abandon(session)
+        return world, directory
+
+    def test_a_transient_read_error_before_anything_was_taken_halts_and_the_recovery_gives_the_reference(self):
+        def failing(real):
+            def poll(*a, **k):
+                raise OSError(errno.EIO, "transient read error")
+            return poll
+
+        world, directory = self.halted_after(failing)
+        self.recover_and_finish(world, directory)
+
+    def test_a_read_error_after_the_ingestor_moved_halts_and_the_recovery_skips_and_doubles_nothing(self):
+        def failing(real):
+            def poll(*a, **k):
+                real(*a, **k)                                      # the ingestor advanced past events nobody journaled
+                raise OSError(errno.EIO, "transient read error")
+            return poll
+
+        world, directory = self.halted_after(failing)
+        self.recover_and_finish(world, directory)
 
 
 def disk(directory):

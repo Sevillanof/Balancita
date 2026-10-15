@@ -339,8 +339,9 @@ class LiveSession(object):
 
         A step that fails before its checkpoint (a runner that refuses, a disk that refuses the audit) leaves the ingestor
         ahead of what the runner took: this instance never steps or checkpoints again, so a cursor that moved past events the
-        runner did not journal is never written down. The directory is recovered from the last checkpoint. A failure of the
-        checkpoint itself is not in this rule (its policy is decision D-186-2 of #186): the exception goes up as it always did."""
+        runner did not journal is never written down. The directory is recovered from the last checkpoint. Any exception of this part halts the instance,
+        transient source reads included, and nothing is retried on it (decision P3 of #186, ``Mantener``). A failure of the checkpoint itself halts it too
+        (``save_checkpoint``, decision D-186-2, ``Toda``)."""
         if self.halted is not None:
             raise IntegrationError("session_halted", self.halted)
         if self.stopped is not None or self.runner.status == STOPPED:       # also a directory recovered from a stopped run
@@ -607,8 +608,19 @@ class LiveSession(object):
 
     # ---- durability --------------------------------------------------------------------------------------------
     def save_checkpoint(self):
+        """Makes the session durable up to here. If it cannot be written (decision D-186-2 of #186, ``Toda``) the whole session
+        stops: this instance is halted (``session_halted``, with the failure as its reason), processes nothing more and writes
+        nothing more, the previous checkpoint stays as it was and the directory is recovered from it and the journals. A stop
+        caused by a failing disk does not ask for successful writes after the error."""
         if self.halted is not None:
             raise IntegrationError("session_halted", self.halted)
+        try:
+            return self._write_checkpoint()
+        except Exception as error:               # noqa: BLE001 - a simulated death is a BaseException and is not caught here
+            self.halted = repr(error)
+            raise
+
+    def _write_checkpoint(self):
         runner_checkpoint = self.runner.checkpoint()           # the runner's own, written atomically by the runner
         self._fault("after_runner_checkpoint")
         entries = self.runner.journal.entries
@@ -637,8 +649,8 @@ class LiveSession(object):
         positions are not touched, and while the engine is stopped nobody evaluates their stops or targets: this is not
         protection. The stop is reported done only after the runner has journaled it; if the runner refuses (a journal that
         cannot be written) the call raises ``RunnerError`` and this instance never steps again. A halted session never reports a
-        stop (``session_halted``), whatever happened before it halted. A failure of the checkpoint after a stop goes up as any
-        checkpoint failure does (D-186-2 is not decided here). Asking again returns the same answer, also for a session
+        stop (``session_halted``), whatever happened before it halted. A failure of the checkpoint after a stop halts the
+        session like any checkpoint failure (D-186-2, ``Toda``). Asking again returns the same answer, also for a session
         recovered from a run that was already stopped: nothing is written twice. The session is closed separately with
         ``close()``."""
         if self.halted is not None:

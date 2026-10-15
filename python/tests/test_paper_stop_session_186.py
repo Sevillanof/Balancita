@@ -1,7 +1,7 @@
 """Issue #186, decision D-186-1 (BAL-DECISION-186-01: Cancelar), seen from the SESSION: ``LiveSession.stop`` calls the runner's
 ``stop_orderly`` (covered by ``test_paper_stop_orderly_186``), audits it, makes it durable with a checkpoint and closes the door
-to further steps. Invented data only (the world of ``TestSilenceStillOpen``). D-186-2 (what the session does when its checkpoint
-fails) is not decided and nothing here chooses it."""
+to further steps. Invented data only (the world of ``TestSilenceStillOpen``). The checkpoint failure policy (D-186-2, ``Toda``) is
+covered in ``test_paper_safe_stop_186_session``."""
 
 import errno
 import os
@@ -106,12 +106,16 @@ class TestStopOrderlyInTheSession(Base):
         again = self.reopen(world, directory)
         self.assertTrue(again.runner.executor.pending)
 
-    def test_a_checkpoint_that_fails_after_the_stop_goes_up_and_the_stop_stays_journaled(self):
+    def test_a_checkpoint_that_fails_after_the_stop_halts_the_session_and_the_stop_stays_journaled(self):
         world, directory, session = self.stopped()
         with mock.patch("balancita_engine.paper_live_integration.os.replace", side_effect=FULL):
             with self.assertRaises(OSError):
                 session.stop(NOW)
         self.assertIsNotNone(session.stopped)                   # the runner journaled it: that is what the answer reports
+        self.assertIsNotNone(session.halted)                    # D-186-2 (Toda): the checkpoint failure stops the whole session
+        with self.assertRaises(LI.IntegrationError) as caught:
+            session.stop(NOW)                                   # and a halted session reports no stop
+        self.assertEqual(caught.exception.reason, "session_halted")
         self.release()
         again = self.reopen(world, directory)
         self.assertFalse(again.runner.executor.pending)         # the recovery finishes the announced stop, exactly once
