@@ -464,7 +464,6 @@ class RealSchemaPlanTests(Fixture):
     def test_2b_uses_the_primary_key_and_no_temp_btree_even_with_the_secondary_index(self):
         for i in range(2000):
             revision(self.conn, B0 + (i % 360) * m.MINUTE_MS, i, 1)
-        self.conn.execute("ANALYZE")
         self.conn.commit()
         g = self.guard()
         rows = m.read_2b(g, m.Ledger())
@@ -472,6 +471,11 @@ class RealSchemaPlanTests(Fixture):
         plan = g.planned[("2b", m._sql_2b(m.CAPS["2b"] + 1))]
         self.assertTrue(any("sqlite_autoindex_paper_futures_candle_revisions_1" in d for d in plan), plan)
         self.assertFalse(any("TEMP B-TREE" in d for d in plan), plan)
+
+    def test_2a_and_2b_force_the_primary_key_index_whatever_the_planner_statistics_are(self):
+        # D-212-19: no ANALYZE here; the guarantee is the hint itself, so a statement without it must fail this test.
+        for sql in (m._sql_2a(10), m._sql_2b(10)):
+            self.assertRegex(sql, r"INDEXED BY sqlite_autoindex_paper_futures_\w+_1\b")
 
     def test_2b_statement_names_the_primary_key_index(self):
         self.assertIn("INDEXED BY sqlite_autoindex_paper_futures_candle_revisions_1", m._sql_2b(10))
@@ -508,7 +512,7 @@ class PriorRowsArgumentTests(Fixture):
         self.assertTrue({"paper_futures_candle_revisions", "paper_futures_funding_periods",
                          "paper_futures_funding_responses", "paper_futures_official_candles"} <= strict)
 
-    def test_every_statement_of_2a_to_2d_plans_without_scan_or_temp_btree_after_analyze(self):
+    def test_every_statement_of_2a_to_2d_plans_without_scan_or_temp_btree_(self):
         for i in range(500):
             revision(self.conn, B0 + (i % 360) * m.MINUTE_MS, i, 1)
             official(self.conn, m.BTC, A0 + i * m.MINUTE_MS, rev="h%d" % i)
@@ -516,7 +520,6 @@ class PriorRowsArgumentTests(Fixture):
                               [("h%05d" % i, A0 + i * 60_000, "t", "x" * 10) for i in range(40)])
         self.conn.executemany("INSERT INTO paper_futures_funding_periods (response_sha256, start_ms, product_id, end_ms, funding_rate, known_at, unit) VALUES (?,?,?,?,?,?,?)",
                               [("h%05d" % i, A0 + i, m.BTC, A0 + i + 1, "1", A0 + i * 60_000, "u") for i in range(40)])
-        self.conn.execute("ANALYZE")
         self.conn.commit()
         g, led, rd = self.guard(), m.Ledger(), m.Reads()
         m.read_2a(g, led)
