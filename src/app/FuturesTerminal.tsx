@@ -37,8 +37,8 @@ import {
   utcTime,
 } from './terminal-labels.ts'
 import { record } from '../shared/wire/decode.ts'
-import HealthIndicator from '../features/observability/presentation/HealthIndicator.tsx'
 import { useHealth } from '../features/observability/presentation/useHealth.ts'
+import { latestDecision } from '../features/observability/presentation/latest-decision.ts'
 import ObserverPanel from '../features/observability/presentation/ObserverPanel.tsx'
 
 /** Closed 1 m candles the engine needs before it can decide. */
@@ -60,6 +60,8 @@ export default function FuturesTerminal({
   const {
     state,
     connected,
+    serverClock,
+    connectedAtMs,
     error,
     commandPending,
     commandStatus,
@@ -183,6 +185,11 @@ export default function FuturesTerminal({
           ? Math.floor(firstCandle / 1000) * 1000
           : null,
       entriesOnly: !localDemo,
+      candleSeconds: (Array.isArray(market.candles) ? market.candles : [])
+        .map((candle) => record(candle).time_ms)
+        .filter((ms): ms is number => Number.isSafeInteger(ms))
+        .map((ms) => Math.floor(ms / 1000))
+        .sort((a, b) => a - b),
     })
     if (gap) selectedNotes.push(markerGapNote(gap))
     if (!decisionRows.some((row) => row.id === selectedId))
@@ -204,10 +211,18 @@ export default function FuturesTerminal({
   )
 
   useEffect(() => {
-    if (bootstrap.mode !== 'paper_live' || quote.receivedAt === null) return
+    if (bootstrap.mode !== 'paper_live') return
+    // Ticks even without a quote: AHORA must notice by itself that the gateway
+    // clock or B1 went stale.
     const timer = setInterval(() => setDisplayClock(Date.now()), 1_000)
     return () => clearInterval(timer)
-  }, [bootstrap.mode, quote.receivedAt])
+  }, [bootstrap.mode])
+
+  // A (re)connection evaluates AHORA from scratch: B1 is read again.
+  const reloadHealth = health.reload
+  useEffect(() => {
+    if (connectedAtMs !== null) reloadHealth()
+  }, [connectedAtMs, reloadHealth])
 
   // Per-process health from the dev supervisor (live gateway only).
   useEffect(() => {
@@ -380,10 +395,8 @@ export default function FuturesTerminal({
             showUsage={bootstrap.mode === 'paper_live'}
             modeLabel={modeLabel}
             diagnosis={diagnosis}
+            b1={bootstrap.mode === 'paper_live' ? health : undefined}
           />
-          {bootstrap.mode === 'paper_live' && (
-            <HealthIndicator data={health.data} error={health.error} />
-          )}
           {localScenarioStatus && <span>{localScenarioStatus}</span>}
         </>
       }
@@ -431,6 +444,12 @@ export default function FuturesTerminal({
                   position={position}
                   positions={positions}
                   orders={orders}
+                  fills={fills}
+                  quantityUnit={
+                    typeof state?.quantity_unit === 'string'
+                      ? state.quantity_unit
+                      : undefined
+                  }
                   historicalLabel={
                     gatewayEngine ? 'Histórico · Gateway D' : undefined
                   }
@@ -448,6 +467,15 @@ export default function FuturesTerminal({
                 <ObserverPanel
                   product={product ?? bootstrap.products?.[0] ?? null}
                   health={health}
+                  latest={
+                    gatewayEngine && !engineOff
+                      ? latestDecision(analyses)
+                      : null
+                  }
+                  connected={connected}
+                  connectedAtMs={connectedAtMs}
+                  clock={serverClock}
+                  localNowMs={displayClock}
                 >
                   <TerminalDecisions
                     embedded={liveGateway}

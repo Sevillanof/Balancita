@@ -72,10 +72,10 @@ async function openTerminal(page: Page, health: unknown, activity: unknown) {
       },
     }),
   )
-  await page.route('**/api-live/api/observability/health', (route) =>
+  await page.route('**/api-live/observability/health', (route) =>
     route.fulfill({ json: health }),
   )
-  await page.route('**/api-live/api/observability/activity**', (route) => {
+  await page.route('**/api-live/observability/activity**', (route) => {
     // The gateway echoes the window and product it was asked for.
     const query = new URL(route.request().url()).searchParams
     route.fulfill({
@@ -281,6 +281,18 @@ test('health inspector is centered, fits the viewport and scrolls inside', async
   if (viewport.width > 900) {
     const center = box!.x + box!.width / 2
     expect(Math.abs(center - viewport.width / 2)).toBeLessThan(8)
+  }
+  if (viewport.width >= 1440) {
+    // The flow diagnosis is collapsed: the six B1 components are identifiable
+    // at first sight, with no scrolling inside the inspector.
+    const headings = dialog.getByRole('heading', { level: 3 })
+    await expect(headings).toHaveCount(6)
+    for (let i = 0; i < 6; i += 1) {
+      const heading = (await headings.nth(i).boundingBox())!
+      expect(heading.y + heading.height).toBeLessThanOrEqual(
+        box!.y + box!.height - 48,
+      )
+    }
   }
   await shot(page, 'inspector-salud')
 })

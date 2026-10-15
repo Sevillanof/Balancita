@@ -6,8 +6,8 @@ import { record, type JsonRecord } from '../../../shared/wire/decode.ts'
  * said and nothing else: no value is computed, defaulted to «healthy» or
  * filled in. A shape that does not match is an error, never a guess.
  */
-export const HEALTH_URL = '/api-live/api/observability/health'
-export const ACTIVITY_URL = '/api-live/api/observability/activity'
+export const HEALTH_URL = '/api-live/observability/health'
+export const ACTIVITY_URL = '/api-live/observability/activity'
 
 export type HealthStatus = 'ok' | 'warning' | 'error' | 'unknown'
 export type ActivityWindow = '3h' | '24h'
@@ -41,6 +41,14 @@ export type HealthEvidence = {
   detail: string | null
 }
 
+/** Per-product reading of the verdict source (`decisions` component only). */
+export type HealthItem = {
+  productId: string
+  status: HealthStatus
+  bucketStartMs: number | null
+  writtenAtMs: number | null
+}
+
 export type HealthComponent = {
   id: (typeof COMPONENT_IDS)[number]
   label: string
@@ -48,6 +56,8 @@ export type HealthComponent = {
   summary: string
   checks: HealthCheck[]
   evidence: HealthEvidence[]
+  /** Only when the backend sent per-product items (decisions). */
+  items?: HealthItem[]
   limitations: string[]
 }
 
@@ -185,6 +195,26 @@ function decodeEvidence(raw: unknown): HealthEvidence {
   }
 }
 
+function decodeItems(raw: unknown): HealthItem[] | undefined {
+  if (!Array.isArray(raw)) return undefined
+  return raw.flatMap((value) => {
+    const i = record(value)
+    if (typeof i.product_id !== 'string') return []
+    const state = i.status
+    return [
+      {
+        productId: i.product_id,
+        status:
+          typeof state === 'string' && STATUSES.includes(state)
+            ? (state as HealthStatus)
+            : 'unknown',
+        bucketStartMs: maybeInteger(i.bucket_start_ms),
+        writtenAtMs: maybeInteger(i.written_at_ms),
+      },
+    ]
+  })
+}
+
 export function decodeHealth(raw: unknown): HealthReport {
   const r = record(raw)
   if (r.schema !== 'observability-health.v1') fail('schema')
@@ -201,6 +231,7 @@ export function decodeHealth(raw: unknown): HealthReport {
       summary: text(c.summary, 'component.summary'),
       checks: list(c.checks, 'component.checks').map(decodeCheck),
       evidence: list(c.evidence, 'component.evidence').map(decodeEvidence),
+      ...(decodeItems(c.items) ? { items: decodeItems(c.items) } : {}),
       limitations: strings(c.limitations),
     }
   })
