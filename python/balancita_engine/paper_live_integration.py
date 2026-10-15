@@ -27,7 +27,7 @@ import sqlite3
 from . import paper_live_evaluator as LE
 from .multi_signals import stable_hash
 from .paper_live_ingest import GAP_SAMPLE, SILENCE_SAMPLE, Ingestor, SourceReader
-from .paper_runner import PaperRunner, RunnerError, make_event
+from .paper_runner import STOPPED, PaperRunner, RunnerError, make_event
 from .paper_runner_store import CHECKPOINT_FILE as RUNNER_CHECKPOINT_FILE
 from .paper_runner_store import JOURNAL_FILE as RUNNER_JOURNAL_FILE
 from .paper_runner_store import DirectoryLock, FileRunnerJournal, StoreError, read_checkpoint
@@ -210,6 +210,7 @@ class LiveSession(object):
         self.identity, self.max_quote_gap_ms = identity, int(max_quote_gap_ms)
         self.cursors = {"fundpct": 0, "accrual": 0}
         self.fault = None
+        self.stopped = None                           # the runner's answer once the operator stopped the session (D-186-1)
         self.halted = None                            # why this instance stopped: set by a step that failed before its checkpoint
         self.last_quote = {}                          # product -> time of the previous quote this process saw
         self.stats = {"steps": 0, "events": 0, "duplicates": 0, "rejected_by_runner": 0, "audit_new": 0, "clock_events": 0}
@@ -324,6 +325,7 @@ class LiveSession(object):
         # still seen when the quote that ends it is delivered again (journal time: the clock a source loss is measured in)
         session.last_quote = {product: max(runner.quote_t_ms.get(product, 0), runner.executor.last_quote_ms.get(product, 0))
                               for product in set(runner.quote_t_ms) | set(runner.executor.last_quote_ms)}
+        session._recover_operator_stop()
         return session
 
     # ---- faults (tests only) ---------------------------------------------------------------------------------
@@ -341,6 +343,8 @@ class LiveSession(object):
         checkpoint itself is not in this rule (its policy is decision D-186-2 of #186): the exception goes up as it always did."""
         if self.halted is not None:
             raise IntegrationError("session_halted", self.halted)
+        if self.stopped is not None or self.runner.status == STOPPED:       # also a directory recovered from a stopped run
+            raise IntegrationError("session_stopped", "the operator stopped this session")
         try:
             out = self.ingestor.poll(observed_now_ms)
             self._fault("after_poll")
@@ -626,6 +630,53 @@ class LiveSession(object):
         os.replace(tmp, path)
         _fsync_dir(path)
         return body
+
+    def stop(self, t_ms):
+        """The operator stops the session in order (decision D-186-1 of #186): the runner cancels what is still pending with the
+        reason ``operator_stop`` (journal first), the audit says so, and the stop is made durable with a checkpoint. Open
+        positions are not touched, and while the engine is stopped nobody evaluates their stops or targets: this is not
+        protection. The stop is reported done only after the runner has journaled it; if the runner refuses (a journal that
+        cannot be written) the call raises ``RunnerError`` and this instance never steps again. A halted session never reports a
+        stop (``session_halted``), whatever happened before it halted. A failure of the checkpoint after a stop goes up as any
+        checkpoint failure does (D-186-2 is not decided here). Asking again returns the same answer, also for a session
+        recovered from a run that was already stopped: nothing is written twice. The session is closed separately with
+        ``close()``."""
+        if self.halted is not None:
+            raise IntegrationError("session_halted", self.halted)
+        if self.stopped is not None:
+            return self.stopped
+        try:
+            result = self.runner.stop_orderly(t_ms)
+        except Exception as error:               # noqa: BLE001
+            self.halted = repr(error)
+            raise
+        self.stopped = result
+        try:
+            self._audit_operator_stop(result["declared_ms"], result["cancelled"], result["expired"])
+            self.flush_audit()
+        except Exception as error:               # noqa: BLE001
+            self.halted = repr(error)
+            raise
+        self.save_checkpoint()
+        return result
+
+    def _audit_operator_stop(self, declared_ms, cancelled, expired):
+        """The audit's record of a stop, built only from what the runner's journal holds (so the live stop and the recovery of
+        a process that died between the journal and the audit write the very same record, once)."""
+        return self.audit.add({"source": "runner", "kind": "operator_stop", "declared_ms": declared_ms,
+                               "cancelled": list(cancelled), "expired": list(expired),
+                               "expired_reasons": self._expiry_reasons(expired)})
+
+    def _recover_operator_stop(self):
+        """A run that was stopped: the stop is in the runner's journal, so the audit gets its record if the process died before
+        writing it, and this instance answers ``stop`` and refuses ``step`` like the one that stopped it."""
+        stops = [e["data"] for e in self.runner.journal.entries if e["kind"] == "operator_stop"]
+        if not stops:
+            return
+        for data in stops:
+            self._audit_operator_stop(data["declared_ms"], data["cancel_ids"], data["expire_ids"])
+        last = stops[-1]
+        self.stopped = {"cancelled": list(last["cancel_ids"]), "expired": list(last["expire_ids"]), "declared_ms": last["declared_ms"]}
 
     def close(self):
         self.runner.close()
