@@ -97,7 +97,7 @@ hora), nunca series, precios, tasas ni cuerpos de respuesta.
 - Cada consulta tiene `LIMIT tope+1` y se detiene con `row_budget` si lo supera; sin conteo previo, muestreo ni reintentos.
   Todas exigen plan de búsqueda por clave primaria. 2c y 2d no recorren las tablas: una búsqueda binaria por `rowid`
   (lecturas de una fila, contadas y publicadas) acota el rango de la ventana y su ancho se compara con el tope antes de leer;
-  los bordes se verifican. El tamaño de cada respuesta se mide con `octet_length` y cada etapa leída se publica aunque una
+  el orden se verifica en la misma pasada (una sola lectura del rango: por fila se devuelven rowid y hora; los valores solo de las filas de XBT/ETH dentro de la ventana, el filtro está en la consulta de afuera) y el resultado separa filas recorridas y devueltas. El tamaño de cada respuesta se mide con `octet_length` y cada etapa leída se publica aunque una
   posterior se detenga.
 - 60 s por consulta y 10 min por corrida; identidad del archivo (nombre, carpeta, tamaño mínimo, mtime) antes y después.
 - Los validadores reciben `holdout_window=(10-oct 00:00Z, 12-oct 00:00Z)`: parámetro opcional que acepta solo las ventanas exactas de

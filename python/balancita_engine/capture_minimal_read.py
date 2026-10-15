@@ -96,10 +96,8 @@ ALLOWED = {
     "2b": {_REVISIONS: {"candle_id", "interval_ms", "bucket_start", "revision", "known_at", "is_closed", "open_price",
                         "high_price", "low_price", "close_price", "volume_btc"}},
     "2c_bound": {_PERIODS: {"rowid", "known_at"}},
-    "2c_order": {_PERIODS: {"rowid", "known_at"}},
     "2c": {_PERIODS: {"rowid", "product_id", "start_ms", "end_ms", "funding_rate", "known_at", "unit", "response_sha256"}},
     "2d_bound": {_RESPONSES: {"rowid", "received_at"}},
-    "2d_order": {_RESPONSES: {"rowid", "received_at"}},
     "2d_meta": {_RESPONSES: {"rowid", "sha256", "received_at", "server_time", "raw_response"},
                 _PERIODS: {"response_sha256", "product_id"}},
     "2d_product": {_PERIODS: {"response_sha256", "product_id"}},
@@ -123,24 +121,25 @@ def _sql_2b(limit):
 
 
 def _sql_2c(limit):
-    """Rows by ``rowid`` range, the LIMIT inside the subquery so it bounds what is WALKED, not only what is returned. The
-    product and window filter is in the OUTER query: values of the other products never leave SQLite (D-212-05)."""
-    return ("SELECT w.product_id, w.start_ms, w.end_ms, w.funding_rate, w.known_at, w.unit, w.response_sha256 FROM "
-            "(SELECT product_id, start_ms, end_ms, funding_rate, known_at, unit, response_sha256 FROM %s WHERE rowid >= ? AND rowid < ? "
-            "ORDER BY rowid LIMIT %d) w WHERE w.product_id IN (%s) AND w.start_ms >= %d AND w.start_ms < %d"
-            % (_PERIODS, limit, _P, WINDOW_A[0], WINDOW_A[1]))
+    """ONE pass over the rowid range, the LIMIT inside the subquery so it bounds what is WALKED. Every walked row gives its
+    rowid and receipt time (for the order check); the other columns are NULL unless the row is XBT/ETH and starts in the
+    window, decided in the OUTER query, so values of the other products never leave SQLite (D-212-05, D-212-08)."""
+    keep = "w.product_id IN (%s) AND w.start_ms >= %d AND w.start_ms < %d" % (_P, WINDOW_A[0], WINDOW_A[1])
+    cols = ", ".join("CASE WHEN %s THEN w.%s END" % (keep, c) for c in
+                     ("product_id", "start_ms", "end_ms", "funding_rate", "unit", "response_sha256"))
+    return ("SELECT w.rowid_, w.known_at, %s FROM (SELECT rowid AS rowid_, product_id, start_ms, end_ms, funding_rate, known_at, unit, "
+            "response_sha256 FROM %s WHERE rowid >= ? AND rowid < ? ORDER BY rowid LIMIT %d) w" % (cols, _PERIODS, limit))
 
 
 def _sql_2d_meta(limit):
-    """Responses of the two products received in the window; the size (and later the body) is taken ONLY for those."""
-    return ("SELECT w.sha256, w.received_at, w.server_time, (SELECT octet_length(x.raw_response) FROM %s x WHERE x.sha256 = w.sha256) "
-            "FROM (SELECT sha256, received_at, server_time FROM %s WHERE rowid >= ? AND rowid < ? ORDER BY rowid LIMIT %d) w "
-            "WHERE w.received_at >= %d AND w.received_at < %d AND EXISTS (SELECT 1 FROM %s p WHERE p.response_sha256 = w.sha256 "
-            "AND p.product_id IN (%s))" % (_RESPONSES, _RESPONSES, limit, WINDOW_A[0], WINDOW_A[1], _PERIODS, _P))
-
-
-def _sql_order(table, column):
-    return "SELECT %s FROM %s WHERE rowid >= ? AND rowid < ? ORDER BY rowid" % (column, table)
+    """ONE pass over the responses' rowid range. Each walked row gives rowid and received_at; the size is taken only for
+    responses of the two products received in the window (NULL otherwise)."""
+    keep = ("w.received_at >= %d AND w.received_at < %d AND EXISTS (SELECT 1 FROM %s p WHERE p.response_sha256 = w.sha256 "
+            "AND p.product_id IN (%s))" % (WINDOW_A[0], WINDOW_A[1], _PERIODS, _P))
+    return ("SELECT w.rowid_, w.received_at, CASE WHEN %s THEN w.sha256 END, CASE WHEN %s THEN w.server_time END, "
+            "CASE WHEN %s THEN (SELECT octet_length(x.raw_response) FROM %s x WHERE x.sha256 = w.sha256) END "
+            "FROM (SELECT rowid AS rowid_, sha256, received_at, server_time FROM %s WHERE rowid >= ? AND rowid < ? ORDER BY rowid "
+            "LIMIT %d) w" % (keep, keep, keep, _RESPONSES, _RESPONSES, limit))
 
 
 def _sql_bound(table, column):
@@ -258,7 +257,7 @@ class Reads:
     the run is complete (D-212-04)."""
 
     def __init__(self):
-        self.count = {"2c_bound": 0, "2c_order": 0, "2d_bound": 0, "2d_order": 0, "2d_product": 0, "2d_body": 0}
+        self.count = {"2c_bound": 0, "2d_bound": 0, "2d_product": 0, "2d_body": 0}
 
     def total(self):
         return sum(self.count.values())
@@ -306,44 +305,48 @@ def _span(guard, mode, table, column, lo_ms, hi_ms, reads, stage, cap, ledger):
     if width > cap:
         ledger.add(stage, 0, cap, None, **evidence, over_budget=True)
         raise Stopped("row_budget", {"stage": stage, "walk_upper_bound": width, "cap": cap, "rowid_span": [lo, hi]})
-    # the time column must not decrease along the whole range (D-212-07), not only at the borders; only timestamps are read
-    kind = mode.replace("_bound", "_order")
-    times = guard.fetch(kind, _sql_order(table, column), (lo, hi))
-    reads.count[kind] = len(times)
-    if any(b[0] < a[0] for a, b in zip(times, times[1:])):
-        raise Stopped("rowid_order", {"table": table, "column": column, "inside_range": True})
-    evidence["order_checked_rows"] = len(times)
     return lo, hi, evidence
+
+
+def _check_order(rows, table, column):
+    """The receipt time must not decrease along the walked range (D-212-07); ``rows`` carry (rowid, time, ...)."""
+    if any(b[1] < a[1] for a, b in zip(rows, rows[1:])):
+        raise Stopped("rowid_order", {"table": table, "column": column, "inside_range": True})
 
 
 def read_2c(guard, ledger, reads):
     """Funding periods that START in the window. Receipt time (``known_at``) of a period is the poll that first showed it, so
-    the rowid range covers ``[A0 - FUNDING_MARGIN_BEFORE_MS, A1 + FUNDING_MARGIN_AFTER_MS)`` of ``known_at`` (declared margins)."""
+    the rowid range covers ``[A0 - FUNDING_MARGIN_BEFORE_MS, A1 + FUNDING_MARGIN_AFTER_MS)`` of ``known_at`` (declared margins).
+    One pass: ``rows_walked`` is every row of the range, ``rows_returned`` only those of XBT/ETH starting in the window."""
     lo, hi, evidence = _span(guard, "2c_bound", _PERIODS, "known_at", WINDOW_A[0] - FUNDING_MARGIN_BEFORE_MS,
                              WINDOW_A[1] + FUNDING_MARGIN_AFTER_MS, reads, "2c", CAPS["2c"], ledger)
     sql = _sql_2c(CAPS["2c"] + 1)
     plan = _plan(guard, "2c", sql, (lo, hi), "INTEGER PRIMARY KEY")
-    got = guard.fetch("2c", sql, (lo, hi))
-    ledger.add("2c", len(got), CAPS["2c"], plan, walk_bounded_by_rowid_range=True, **evidence)
+    got = [tuple(r) for r in guard.fetch("2c", sql, (lo, hi))]
+    out = [(r[2], r[3], r[4], r[5], r[1], r[6], r[7]) for r in got if r[2] is not None]
+    ledger.add("2c", len(got), CAPS["2c"], plan, rows_walked=len(got), rows_returned=len(out), **evidence)
     if len(got) > CAPS["2c"]:
         raise Stopped("row_budget", {"stage": "2c", "cap": CAPS["2c"]})
-    return [tuple(r) for r in got]
+    _check_order(got, _PERIODS, "known_at")
+    return out
 
 
 def read_2d(guard, ledger, reads):
     lo, hi, evidence = _span(guard, "2d_bound", _RESPONSES, "received_at", WINDOW_A[0], WINDOW_A[1], reads, "2d", CAPS["2d"], ledger)
     sql = _sql_2d_meta(CAPS["2d"] + 1)
     plan = _plan(guard, "2d_meta", sql, (lo, hi), "INTEGER PRIMARY KEY")
-    meta = guard.fetch("2d_meta", sql, (lo, hi))
-    total = sum(int(r[3] or 0) for r in meta)
-    ledger.add("2d", len(meta), CAPS["2d"], plan, walk_bounded_by_rowid_range=True, bytes=total, bytes_cap=MAX_BODY_BYTES,
-               **evidence)
-    if len(meta) > CAPS["2d"]:
+    got = [tuple(r) for r in guard.fetch("2d_meta", sql, (lo, hi))]
+    meta = [r for r in got if r[2] is not None]
+    total = sum(int(r[4] or 0) for r in meta)
+    ledger.add("2d", len(got), CAPS["2d"], plan, rows_walked=len(got), rows_returned=len(meta), bytes=total,
+               bytes_cap=MAX_BODY_BYTES, **evidence)
+    if len(got) > CAPS["2d"]:
         raise Stopped("row_budget", {"stage": "2d", "cap": CAPS["2d"]})
+    _check_order(got, _RESPONSES, "received_at")
     if total > MAX_BODY_BYTES:
         raise Stopped("byte_budget", {"stage": "2d", "bytes": total, "cap": MAX_BODY_BYTES})
     out = []
-    for sha, received_at, server_time, _size in meta:
+    for _rowid, received_at, sha, server_time, _size in meta:
         prod = guard.fetch("2d_product", SQL_2D_PRODUCT, (sha,))
         reads.count["2d_product"] += 1
         if len(prod) != 1 or prod[0][0] not in PRODUCTS:
@@ -582,8 +585,8 @@ def build_result(conn, started=None):
     ledger, reads = result.pop("_ledger", None), result.pop("_reads", None)
     if ledger is not None:
         result["reads"] = ledger.entries
-        stage_rows = sum(e["rows"] for e in ledger.entries)
-        result["rows_total"] = {"statement_rows": stage_rows, "single_row_reads": reads.total(), "single_row_reads_by_kind": reads.count,
+        stage_rows = sum(e.get("rows_walked", e["rows"]) for e in ledger.entries)
+        result["rows_total"] = {"statement_rows_walked": stage_rows, "statement_rows_returned": sum(e.get("rows_returned", e["rows"]) for e in ledger.entries), "single_row_reads": reads.total(), "single_row_reads_by_kind": reads.count,
                                 "total": stage_rows + reads.total(), "cap": TOTAL_ROWS_CAP}
     return result
 

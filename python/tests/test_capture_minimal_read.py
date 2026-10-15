@@ -299,3 +299,31 @@ class AuthorizedWindowTests(unittest.TestCase):
                 cv.holdout_exception(window)
             with self.assertRaises(ValueError):
                 cv.assert_range_allowed(window[0], window[1], window)
+
+
+class SinglePassTests(Fixture):
+    def _periods(self, n_products_rows):
+        ins = "INSERT INTO paper_futures_funding_periods VALUES (?,?,?,?,?,?,?)"
+        for i, product in enumerate(n_products_rows):
+            self.conn.execute(ins, ("s%d" % i, A0 + i * 1000, product, A0 + i * 1000 + 1, "7.77" if product != m.BTC else "1.5",
+                                    A0 + i, "u"))
+        self.conn.commit()
+
+    def test_one_pass_walks_each_row_once_and_hides_other_products(self):
+        self._periods([m.BTC, "PF_SOLUSD", m.ETH, "PF_ADAUSD"])
+        g, led = self.guard(), m.Ledger()
+        rows = m.read_2c(g, led, m.Reads())
+        entry = led.entries[-1]
+        self.assertEqual((entry["rows_walked"], entry["rows_returned"]), (4, 2))
+        self.assertNotIn("7.77", repr(rows))
+        raw = g.fetch("2c", m._sql_2c(10), (1, 5))
+        self.assertNotIn("7.77", repr(raw))
+        self.assertEqual(sum(1 for r in raw if r[2] is None), 2)
+
+    def test_walk_over_the_cap_stops_before_reading(self):
+        self._periods([m.BTC if i % 2 else "PF_SOLUSD" for i in range(m.CAPS["2c"] + 38)])
+        g, led = self.guard(), m.Ledger()
+        with self.assertRaises(m.Stopped) as ctx:
+            m.read_2c(g, led, m.Reads())
+        self.assertEqual(ctx.exception.reason, "row_budget")
+        self.assertEqual(ctx.exception.detail["walk_upper_bound"], m.CAPS["2c"] + 38)
