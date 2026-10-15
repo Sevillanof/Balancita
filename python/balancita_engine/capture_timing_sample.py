@@ -241,6 +241,8 @@ def _funding(rows):
             "periods": len(starts),
             "expected_periods": EXPECTED_FUNDING_PERIODS,
             "missing_periods": EXPECTED_FUNDING_PERIODS - len(starts),
+            "missing_periods_excluding_last_hour": (EXPECTED_FUNDING_PERIODS - 1)
+            - len({s for s in starts if s < WINDOW_END_MS - 3_600_000}),
             "responses": len(responses),
             "min_received_at": min((v[0] for v in responses.values()), default=None),
             "max_received_at": max((v[0] for v in responses.values()), default=None),
@@ -293,15 +295,28 @@ def build_sample(conn, window=WINDOW, products=PRODUCTS):
         "row_budget": ROW_BUDGET,
         "query_time_limit_s": QUERY_TIMEOUT_S,
         "silence_limits_ms_counted_not_adopted": list(SILENCE_LIMITS_MS),
+        "edge_limits": [
+            "A funding period is received after it ends: the period starting at 11:00Z ends at 12:00Z and its "
+            "response arrives outside the window, so it is not observable here. Its absence is not evidence of a capture gap.",
+            "A ticker row recorded after 12:00Z is not read even if its event time is inside the window; a short "
+            "silence at the end of the window may be this edge, not a gap in capture.",
+            "If the 24 h ticker retention already deleted part of the window, that is a limitation to report; the "
+            "window, products and interval do not change and the run is not repeated.",
+        ],
         "sections": {},
         "stopped": None,
         "note": "Times and counters only. No price, rate, volume, bid/ask, size or raw body was read. Measures our "
                 "reception, not when Kraken publishes; received-minus-event includes network delay and local clock "
                 "offset. Counts and quantiles do not prove quality.",
     }
-    conn.set_authorizer(_authorizer)
-    guard = _Guard(conn)
+    guard = None
     try:
+        # Evidence that does not depend on the authorizer: the connection must already be query_only.
+        result["guards"] = {"opened_with": "mode=ro", "query_only_readback": conn.execute("PRAGMA query_only").fetchone()[0]}
+        if result["guards"]["query_only_readback"] != 1:
+            raise Stopped("connection_not_query_only")
+        conn.set_authorizer(_authorizer)
+        guard = _Guard(conn)
         counts = {}
         for name, (count_sql, _rows_sql) in SQL.items():
             counts[name] = guard.fetch(name, count_sql)[0][0]
@@ -317,8 +332,9 @@ def build_sample(conn, window=WINDOW, products=PRODUCTS):
         result["stopped"] = {"reason": "database_error", "detail": "%s: %s" % (type(exc).__name__, exc)}
         result["sections"] = {}
     finally:
-        conn.set_progress_handler(None, 0)
-        conn.set_authorizer(None)
+        if guard is not None:
+            conn.set_progress_handler(None, 0)
+            conn.set_authorizer(None)
     return result
 
 

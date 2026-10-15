@@ -261,6 +261,33 @@ class TimingSampleTests(unittest.TestCase):
         out = self.sample()
         self.assertEqual(out["stopped"]["reason"], "database_error")
 
+    def test_mode_ro_rejects_writes_without_the_pragma_or_the_authorizer(self):
+        conn = sqlite3.connect("file:%s?mode=ro" % self.db, uri=True)  # no query_only, no authorizer
+        with self.assertRaises(sqlite3.OperationalError):
+            conn.execute("INSERT INTO paper_futures_data_gaps VALUES('z','t','PF_XBTUSD',1,1,'r')")
+        conn.close()
+        ours = cts._open_readonly(self.db)
+        self.assertEqual(ours.execute("PRAGMA query_only").fetchone()[0], 1)
+        with self.assertRaises(sqlite3.OperationalError):
+            ours.execute("DELETE FROM paper_futures_data_gaps")
+        ours.close()
+
+    def test_connection_that_is_not_query_only_is_refused_and_reports_the_readback(self):
+        conn = sqlite3.connect("file:%s?mode=ro" % self.db, uri=True)
+        self.addCleanup(conn.close)
+        out = cts.build_sample(conn)
+        self.assertEqual(out["stopped"]["reason"], "connection_not_query_only")
+        self.assertEqual(out["sections"], {})
+        self.assertEqual(self.sample()["guards"], {"opened_with": "mode=ro", "query_only_readback": 1})
+
+    def test_edge_limits_and_last_hour_are_stated(self):
+        out = self.sample()
+        self.assertEqual(len(out["edge_limits"]), 3)
+        xbt = out["sections"]["funding"][XBT]
+        self.assertEqual(xbt["missing_periods"], 3)
+        # starts present: hours 0, 1, 2 (+ 3 and 4 are "late" responses, excluded): 5 observable starts expected
+        self.assertEqual(xbt["missing_periods_excluding_last_hour"], 5 - 3)
+
     def test_read_only_and_cli_output(self):
         before = digest(self.db)
         buf = io.StringIO()
