@@ -82,6 +82,174 @@ export function exitMarkers(
   })
 }
 
+const pad = (value: number, size = 2) => String(value).padStart(size, '0')
+
+/** `2026-10-14 12:34:56.789 UTC` from the fill's original event_time_ms. */
+export function utcTime(ms: number): string {
+  const date = new Date(ms)
+  return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())} ${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}:${pad(date.getUTCSeconds())}.${pad(date.getUTCMilliseconds(), 3)} UTC`
+}
+
+export interface FillDetailRow {
+  key:
+    'fill_id' | 'order_id' | 'time' | 'quantity' | 'side' | 'price' | 'source'
+  label: string
+  value: string
+}
+
+/**
+ * Verifiable facts of ONE durable fill, exactly as the fill records them (no
+ * decision or verdict is linked: they are independent events). A fact the
+ * fill does not carry reads «No disponible».
+ */
+export function fillDetailRows(
+  fill: unknown,
+  options: { unit?: string; source?: string } = {},
+): FillDetailRow[] {
+  const data = recordOf(fill)
+  const text = (value: unknown) =>
+    typeof value === 'string' && value !== '' ? value : null
+  const at = Number(data.event_time_ms)
+  const quantity = text(data.quantity_btc)
+  const price = text(data.price_usd_per_btc)
+  const side =
+    data.side === 'buy'
+      ? 'LONG (compra)'
+      : data.side === 'sell'
+        ? 'SHORT (venta)'
+        : null
+  const none = 'No disponible'
+  return [
+    { key: 'fill_id', label: 'fill_id', value: text(data.fill_id) ?? none },
+    { key: 'order_id', label: 'order_id', value: text(data.order_id) ?? none },
+    {
+      key: 'time',
+      label: 'Hora',
+      value: Number.isSafeInteger(at) ? utcTime(at) : none,
+    },
+    {
+      key: 'quantity',
+      label: 'Cantidad',
+      value: quantity
+        ? `${quantity}${options.unit ? ` ${options.unit}` : ''}`
+        : none,
+    },
+    { key: 'side', label: 'Dirección', value: side ?? none },
+    {
+      key: 'price',
+      label: 'Precio',
+      value: price ? `${price} USD` : none,
+    },
+    { key: 'source', label: 'Procedencia', value: options.source ?? none },
+  ]
+}
+
+/**
+ * Operations actually executed, one marker per DURABLE FILL the gateway
+ * delivers (`state.fills`, built from the engine's `order_filled` events), not
+ * per order: a partial fill is its own marker with its own quantity. Each
+ * keeps the fill's original id, order id, time and quantity. Reduce-only fills
+ * are exits, not entries. No decision is linked to them (the record that would
+ * link them is not here); `orders` only lends the strategy's code to the
+ * label, through the fill's own `order_id`.
+ */
+export function fillMarkers(
+  fills: readonly unknown[],
+  orders: readonly unknown[] = [],
+  options: {
+    from?: number
+    to?: number
+    prefix?: string
+    /** Unit of the quantity (the product's base), e.g. «BTC». */
+    unit?: string
+  } = {},
+): ApprovedTerminalMarker[] {
+  const strategyOf = new Map<string, string>()
+  for (const value of orders) {
+    const order = recordOf(value)
+    if (
+      typeof order.order_id === 'string' &&
+      typeof order.strategy_id === 'string'
+    )
+      strategyOf.set(order.order_id, order.strategy_id)
+  }
+  return fills.flatMap((value) => {
+    const fill = recordOf(value)
+    const at = Number(fill.event_time_ms)
+    const direction =
+      fill.side === 'buy' ? 'long' : fill.side === 'sell' ? 'short' : null
+    const amount = Number(fill.quantity_btc)
+    if (
+      fill.reduce_only === true ||
+      direction === null ||
+      typeof fill.fill_id !== 'string' ||
+      typeof fill.order_id !== 'string' ||
+      !Number.isSafeInteger(at) ||
+      !(amount > 0)
+    )
+      return []
+    const time = Math.floor(at / 1000)
+    if (
+      (options.from !== undefined && time < options.from) ||
+      (options.to !== undefined && time > options.to)
+    )
+      return []
+    const strategyId = strategyOf.get(fill.order_id)
+    const code = strategyCode(strategyId)
+    const quantity = `${String(fill.quantity_btc)}${options.unit ? ` ${options.unit}` : ''}`
+    const text = `${code ? `${code} ` : ''}EJEC. ${direction === 'long' ? 'LONG' : 'SHORT'} ${quantity}`
+    // On the chart only a short tag; the full text shows when selected.
+    const shortText = `${code ? `${code} ` : ''}EJ ${direction === 'long' ? 'L' : 'S'}`
+    return [
+      {
+        id: fill.fill_id,
+        time,
+        type: 'fill' as const,
+        direction,
+        label: options.prefix ? `${options.prefix} · ${shortText}` : shortText,
+        detail: options.prefix ? `${options.prefix} · ${text}` : text,
+        ...(strategyId ? { strategyId } : {}),
+      },
+    ]
+  })
+}
+
+/**
+ * WAIT verdicts come once a minute: one marker per `spanSeconds` window (the
+ * newest of the window carries the id, all of them are members) so they do not
+ * bury the proposals and fills. Other markers pass through untouched.
+ */
+export function groupWaitMarkers(
+  markers: readonly ApprovedTerminalMarker[],
+  spanSeconds: number,
+): ApprovedTerminalMarker[] {
+  const groups = new Map<number, ApprovedTerminalMarker[]>()
+  const out: ApprovedTerminalMarker[] = []
+  for (const marker of markers) {
+    if (marker.type !== 'wait') {
+      out.push(marker)
+      continue
+    }
+    const key = Math.floor(marker.time / spanSeconds)
+    groups.set(key, [...(groups.get(key) ?? []), marker])
+  }
+  for (const members of groups.values()) {
+    const newest = members.reduce((a, b) => (b.time >= a.time ? b : a))
+    out.push(
+      members.length === 1
+        ? newest
+        : {
+            ...newest,
+            label: `W×${members.length}`,
+            detail: `WAIT ×${members.length}`,
+            count: members.length,
+            memberIds: members.map((member) => member.id),
+          },
+    )
+  }
+  return out
+}
+
 /** Entry, stop and target of the open paper position as price lines. */
 export function positionLines(
   position: Record<string, unknown>,
@@ -168,4 +336,49 @@ export function chartPositions(
   )
   if (positions !== undefined) return own
   return position.side === 'long' || position.side === 'short' ? [position] : []
+}
+
+export interface MarkerPoint {
+  id: string
+  x: number
+  y: number
+}
+
+/**
+ * Which painted marker a click on the chart means. The chart library's own
+ * hit-test returns the FIRST marker (oldest first) whose glyph OR LABEL box
+ * contains the pointer, and a label is only measured once painted: a wide
+ * label of a neighbouring decision could therefore steal the click from an
+ * EJEC. square one candle away. The click belongs to the marker whose glyph
+ * is in the clicked candle column: nearest on x, then, within the same column,
+ * nearest on y.
+ *
+ * Both distances are bounded, so a click on the bare background selects
+ * nothing: `toleranceX` is about half a bar, `toleranceY` the vertical reach
+ * of a glyph with its label (the distance at which the library stacks the
+ * next marker of a candle), measured from the glyph centre. Null when no
+ * marker is within both.
+ */
+export function pickMarkerAt(
+  markers: readonly MarkerPoint[],
+  point: { x: number; y: number },
+  toleranceX: number,
+  toleranceY: number,
+): string | null {
+  let best: MarkerPoint | null = null
+  for (const marker of markers) {
+    const dx = Math.abs(marker.x - point.x)
+    if (dx > toleranceX || Math.abs(marker.y - point.y) > toleranceY) continue
+    if (best === null) {
+      best = marker
+      continue
+    }
+    const bestDx = Math.abs(best.x - point.x)
+    // Same column (a pixel of rounding): decide on y.
+    if (Math.abs(dx - bestDx) <= 1) {
+      if (Math.abs(marker.y - point.y) < Math.abs(best.y - point.y))
+        best = marker
+    } else if (dx < bestDx) best = marker
+  }
+  return best?.id ?? null
 }
