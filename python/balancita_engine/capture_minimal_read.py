@@ -96,9 +96,12 @@ ALLOWED = {
     "2b": {_REVISIONS: {"candle_id", "interval_ms", "bucket_start", "revision", "known_at", "is_closed", "open_price",
                         "high_price", "low_price", "close_price", "volume_btc"}},
     "2c_bound": {_PERIODS: {"rowid", "known_at"}},
+    "2c_order": {_PERIODS: {"rowid", "known_at"}},
     "2c": {_PERIODS: {"rowid", "product_id", "start_ms", "end_ms", "funding_rate", "known_at", "unit", "response_sha256"}},
     "2d_bound": {_RESPONSES: {"rowid", "received_at"}},
-    "2d_meta": {_RESPONSES: {"rowid", "sha256", "received_at", "server_time", "raw_response"}},
+    "2d_order": {_RESPONSES: {"rowid", "received_at"}},
+    "2d_meta": {_RESPONSES: {"rowid", "sha256", "received_at", "server_time", "raw_response"},
+                _PERIODS: {"response_sha256", "product_id"}},
     "2d_product": {_PERIODS: {"response_sha256", "product_id"}},
     "2d_body": {_RESPONSES: {"sha256", "raw_response"}},
 }
@@ -120,15 +123,24 @@ def _sql_2b(limit):
 
 
 def _sql_2c(limit):
-    """Rows by ``rowid`` range, the LIMIT inside the subquery so it bounds what is WALKED, not only what is returned."""
-    return ("SELECT product_id, start_ms, end_ms, funding_rate, known_at, unit, response_sha256 FROM (SELECT product_id, start_ms, "
-            "end_ms, funding_rate, known_at, unit, response_sha256 FROM %s WHERE rowid >= ? AND rowid < ? ORDER BY rowid LIMIT %d)"
-            % (_PERIODS, limit))
+    """Rows by ``rowid`` range, the LIMIT inside the subquery so it bounds what is WALKED, not only what is returned. The
+    product and window filter is in the OUTER query: values of the other products never leave SQLite (D-212-05)."""
+    return ("SELECT w.product_id, w.start_ms, w.end_ms, w.funding_rate, w.known_at, w.unit, w.response_sha256 FROM "
+            "(SELECT product_id, start_ms, end_ms, funding_rate, known_at, unit, response_sha256 FROM %s WHERE rowid >= ? AND rowid < ? "
+            "ORDER BY rowid LIMIT %d) w WHERE w.product_id IN (%s) AND w.start_ms >= %d AND w.start_ms < %d"
+            % (_PERIODS, limit, _P, WINDOW_A[0], WINDOW_A[1]))
 
 
 def _sql_2d_meta(limit):
-    return ("SELECT sha256, received_at, server_time, size FROM (SELECT sha256, received_at, server_time, octet_length(raw_response) "
-            "AS size FROM %s WHERE rowid >= ? AND rowid < ? ORDER BY rowid LIMIT %d)" % (_RESPONSES, limit))
+    """Responses of the two products received in the window; the size (and later the body) is taken ONLY for those."""
+    return ("SELECT w.sha256, w.received_at, w.server_time, (SELECT octet_length(x.raw_response) FROM %s x WHERE x.sha256 = w.sha256) "
+            "FROM (SELECT sha256, received_at, server_time FROM %s WHERE rowid >= ? AND rowid < ? ORDER BY rowid LIMIT %d) w "
+            "WHERE w.received_at >= %d AND w.received_at < %d AND EXISTS (SELECT 1 FROM %s p WHERE p.response_sha256 = w.sha256 "
+            "AND p.product_id IN (%s))" % (_RESPONSES, _RESPONSES, limit, WINDOW_A[0], WINDOW_A[1], _PERIODS, _P))
+
+
+def _sql_order(table, column):
+    return "SELECT %s FROM %s WHERE rowid >= ? AND rowid < ? ORDER BY rowid" % (column, table)
 
 
 def _sql_bound(table, column):
@@ -191,11 +203,14 @@ class _Guard:
 
 
 def _plan(guard, mode, sql, params=(), require_search=None):
+    """``EXPLAIN QUERY PLAN`` first. Required: a SEARCH using ``require_search``; forbidden: any table SCAN (a scan of the
+    bounded subquery itself is fine) and any temporary B-tree."""
     rows = guard.fetch(mode, "EXPLAIN QUERY PLAN " + sql, params)
     details = [r[3] for r in rows]
     if require_search is not None:
-        ok = any(d.startswith("SEARCH") and require_search in d for d in details) and not any(
-            d.startswith("SCAN") or "TEMP B-TREE" in d for d in details)
+        scans = [d for d in details if d.startswith("SCAN") and "subquery" not in d and d.strip() not in ("SCAN w", "SCAN w1")]
+        ok = any(d.startswith("SEARCH") and require_search in d for d in details) and not scans and not any(
+            "TEMP B-TREE" in d for d in details)
         if not ok:
             raise Stopped("query_plan", details)
     return details
@@ -243,7 +258,7 @@ class Reads:
     the run is complete (D-212-04)."""
 
     def __init__(self):
-        self.count = {"2c_bound": 0, "2d_bound": 0, "2d_product": 0, "2d_body": 0}
+        self.count = {"2c_bound": 0, "2c_order": 0, "2d_bound": 0, "2d_order": 0, "2d_product": 0, "2d_body": 0}
 
     def total(self):
         return sum(self.count.values())
@@ -291,6 +306,13 @@ def _span(guard, mode, table, column, lo_ms, hi_ms, reads, stage, cap, ledger):
     if width > cap:
         ledger.add(stage, 0, cap, None, **evidence, over_budget=True)
         raise Stopped("row_budget", {"stage": stage, "walk_upper_bound": width, "cap": cap, "rowid_span": [lo, hi]})
+    # the time column must not decrease along the whole range (D-212-07), not only at the borders; only timestamps are read
+    kind = mode.replace("_bound", "_order")
+    times = guard.fetch(kind, _sql_order(table, column), (lo, hi))
+    reads.count[kind] = len(times)
+    if any(b[0] < a[0] for a, b in zip(times, times[1:])):
+        raise Stopped("rowid_order", {"table": table, "column": column, "inside_range": True})
+    evidence["order_checked_rows"] = len(times)
     return lo, hi, evidence
 
 
@@ -300,19 +322,18 @@ def read_2c(guard, ledger, reads):
     lo, hi, evidence = _span(guard, "2c_bound", _PERIODS, "known_at", WINDOW_A[0] - FUNDING_MARGIN_BEFORE_MS,
                              WINDOW_A[1] + FUNDING_MARGIN_AFTER_MS, reads, "2c", CAPS["2c"], ledger)
     sql = _sql_2c(CAPS["2c"] + 1)
-    plan = _plan(guard, "2c", sql, (lo, hi))
+    plan = _plan(guard, "2c", sql, (lo, hi), "INTEGER PRIMARY KEY")
     got = guard.fetch("2c", sql, (lo, hi))
     ledger.add("2c", len(got), CAPS["2c"], plan, walk_bounded_by_rowid_range=True, **evidence)
     if len(got) > CAPS["2c"]:
         raise Stopped("row_budget", {"stage": "2c", "cap": CAPS["2c"]})
-    rows = [tuple(r) for r in got]
-    return [r for r in rows if r[0] in PRODUCTS and WINDOW_A[0] <= r[1] < WINDOW_A[1]]
+    return [tuple(r) for r in got]
 
 
 def read_2d(guard, ledger, reads):
     lo, hi, evidence = _span(guard, "2d_bound", _RESPONSES, "received_at", WINDOW_A[0], WINDOW_A[1], reads, "2d", CAPS["2d"], ledger)
     sql = _sql_2d_meta(CAPS["2d"] + 1)
-    plan = _plan(guard, "2d_meta", sql, (lo, hi))
+    plan = _plan(guard, "2d_meta", sql, (lo, hi), "INTEGER PRIMARY KEY")
     meta = guard.fetch("2d_meta", sql, (lo, hi))
     total = sum(int(r[3] or 0) for r in meta)
     ledger.add("2d", len(meta), CAPS["2d"], plan, walk_bounded_by_rowid_range=True, bytes=total, bytes_cap=MAX_BODY_BYTES,
@@ -321,11 +342,8 @@ def read_2d(guard, ledger, reads):
         raise Stopped("row_budget", {"stage": "2d", "cap": CAPS["2d"]})
     if total > MAX_BODY_BYTES:
         raise Stopped("byte_budget", {"stage": "2d", "bytes": total, "cap": MAX_BODY_BYTES})
-    out, outside = [], 0
+    out = []
     for sha, received_at, server_time, _size in meta:
-        if not WINDOW_A[0] <= received_at < WINDOW_A[1]:
-            outside += 1
-            continue
         prod = guard.fetch("2d_product", SQL_2D_PRODUCT, (sha,))
         reads.count["2d_product"] += 1
         if len(prod) != 1 or prod[0][0] not in PRODUCTS:
@@ -335,7 +353,6 @@ def read_2d(guard, ledger, reads):
         if len(body) != 1:
             raise Stopped("response_not_found", {"stage": "2d"})
         out.append((sha, received_at, server_time, prod[0][0], body[0][0]))
-    ledger.entries[-1]["rows_in_range_outside_window"] = outside
     return out
 
 

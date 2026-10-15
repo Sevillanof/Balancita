@@ -85,12 +85,22 @@ class ReadTests(Fixture):
         self.assertTrue(all(v is None for v in open_row[4:]))
         self.assertEqual([r for r in rows if r[3] == 1][0][7], "105")
 
-    def test_2c_filters_by_start_and_product(self):
+    def test_2c_filters_by_start_and_product_inside_sqlite(self):
         ins = "INSERT INTO paper_futures_funding_periods VALUES (?,?,?,?,?,?,?)"
         self.conn.execute(ins, ("a", A0, m.BTC, A0 + 3_600_000, "0.1", A0 + 10, "u"))
-        self.conn.execute(ins, ("a", A1, m.BTC, A1 + 3_600_000, "0.1", A1 + 10, "u"))
-        self.conn.execute(ins, ("b", A0, "PF_SOLUSD", A0 + 3_600_000, "0.1", A0 + 10, "u"))
-        self.assertEqual(len(m.read_2c(self.guard(), m.Ledger(), m.Reads())), 1)
+        self.conn.execute(ins, ("b", A0, "PF_SOLUSD", A0 + 3_600_000, "9.99", A0 + 20, "u"))
+        self.conn.execute(ins, ("c", A1, m.BTC, A1 + 3_600_000, "0.1", A1 + 30, "u"))
+        rows = m.read_2c(self.guard(), m.Ledger(), m.Reads())
+        self.assertEqual(len(rows), 1)
+        self.assertNotIn("9.99", repr(rows))
+
+    def test_2c_stops_when_time_decreases_inside_the_range(self):
+        ins = "INSERT INTO paper_futures_funding_periods VALUES (?,?,?,?,?,?,?)"
+        self.conn.execute(ins, ("a", A0, m.BTC, A0 + 1, "0.1", A0 + 50, "u"))
+        self.conn.execute(ins, ("b", A0 + 1, m.BTC, A0 + 2, "0.1", A0 + 10, "u"))
+        with self.assertRaises(m.Stopped) as ctx:
+            m.read_2c(self.guard(), m.Ledger(), m.Reads())
+        self.assertEqual(ctx.exception.reason, "rowid_order")
 
     def test_2d_byte_budget_stops_before_reading_bodies(self):
         self.conn.execute("INSERT INTO paper_futures_funding_periods VALUES ('s',?,?,?,?,?,?)", (A0, m.BTC, A0 + 1, "1", 1, "u"))
@@ -262,7 +272,6 @@ class BoundedWalkTests(Fixture):
         out = m.read_2d(g, led, rd)
         self.assertEqual(len(out), 200)
         self.assertEqual(led.entries[-1]["rows"], 200)
-        self.assertEqual(led.entries[-1]["rows_in_range_outside_window"], 0)
         self.assertEqual(rd.count["2d_product"], 200)
         self.assertEqual(rd.count["2d_body"], 200)
 
