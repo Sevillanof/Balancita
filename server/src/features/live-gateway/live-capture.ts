@@ -178,14 +178,7 @@ export function createLiveCapture(options: LiveCaptureOptions) {
       // Three independent sources failing inside a minute is a connectivity problem, not one slow product.
       generalThreshold: 3,
     })
-  /**
-   * Records an incident. When it makes the failure general and the WebSocket is silent too, that
-   * socket is replaced at once (rate limited); a healthy WebSocket is never touched, and neither is
-   * any other connection: each REST client recovers by itself with a new connection.
-   */
-  const note = (event: Omit<ResilienceEvent, 'at'>): void => {
-    health.report(event)
-    if (event.component === 'websocket' || !health.general()) return
+  const replaceSilentSocket = (): void => {
     const age = collector?.metrics.tickerAgeMs
     if (
       collector !== undefined &&
@@ -195,6 +188,20 @@ export function createLiveCapture(options: LiveCaptureOptions) {
       health.allowRecovery('websocket-general')
     )
       collector.reconnect('general_incident')
+  }
+  /**
+   * Records an incident. When it makes the failure general and the WebSocket is silent too, that
+   * socket is replaced at once (rate limited); a healthy WebSocket is never touched, and neither is
+   * any other connection: each REST client recovers by itself with a new connection.
+   */
+  const note = (event: Omit<ResilienceEvent, 'at'>): void => {
+    health.report(event)
+    if (event.component === 'websocket' || !health.general()) return
+    // The incident is noted from a timer callback. If the process was not running for a while, the
+    // frames that arrived meanwhile are still queued behind it, so judging the ticker age now would
+    // replace a healthy socket (the same case the collector's watchdog skips). Look once the loop has
+    // delivered what it had: the timers phase and the sockets run before the check phase.
+    setImmediate(replaceSilentSocket)
   }
   let collector: KrakenFuturesMarketCollector | undefined
   let candleTimer: ReturnType<typeof setInterval> | undefined
