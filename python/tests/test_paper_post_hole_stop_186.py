@@ -101,13 +101,15 @@ class PostHoleStop(T.Base):
         r.run([T.candle(T.BTC, AFTER_MS + T.MIN, 80100, 80200, 80000, 80100, 8)])
         self.assertEqual(self.trades(r)[T.BTC]["stop_exit"]["evidence"], "ohlc_open_gap_after_hole_simulated")
 
-    def test_a_candle_that_closes_at_the_recovery_is_inside_the_hole_not_after_it(self):
+    def test_a_candle_that_closes_at_the_recovery_is_the_first_one_after_the_hole(self):
+        # D-206-01: its minute lies inside the unobserved time, but it is the first thing the runner sees after the
+        # hole; the stop level there is the unobserved level the policy avoids, so it takes the simulated open.
         path, r = self.recovered()
-        r.run(both(RECOVERY_MS - T.MIN, 7))           # it covers the last minute of the unobserved time
+        r.run(both(RECOVERY_MS - T.MIN, 7))
         got = self.trades(r)
-        self.assertEqual({p: t["exit_price"] for p, t in got.items()}, LEVEL_EXIT)
         for trade in got.values():
-            self.assertNotIn("stop_exit", trade)
+            self.assertEqual(trade["stop_exit"]["evidence"], "ohlc_open_gap_after_hole_simulated")
+            self.assertGreaterEqual(trade["exit_time_ms"], RECOVERY_MS)
 
     def test_the_book_without_a_valid_open_keeps_the_level_and_declares_it(self):
         path, r = self.recovered()

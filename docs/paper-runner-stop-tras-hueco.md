@@ -21,6 +21,7 @@ que el runner nunca observó. Ahora la referencia de la salida es la apertura de
 
 ## Qué no cambia
 
+- La vela que cierra justo cuando termina el hueco (su minuto cae dentro del tiempo no observado, pero es lo primero que ve el runner después) también es «la primera»: usa su apertura como referencia simulada, no el nivel del stop (D-206-01).
 - Sin hueco declarado, o con una vela que abre antes del stop, o si no es la primera vela después del hueco: se aplica `stop_policy` como siempre (por defecto `level`).
 - Las cotizaciones se tratan igual. `stop_policy` (`level`, `gap_open`, `gap_worst`) no cambia para ningún libro.
 - Una vela con una apertura inválida se rechaza antes de llegar al diario; no se inventa una apertura. A nivel de `Book`, sin apertura se conserva el nivel del stop y se declara (`post_hole_open_unavailable_stop_level`).
