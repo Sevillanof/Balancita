@@ -32,61 +32,76 @@ _H = int(HOLDOUT_START_MS)
 _INT = ",".join(str(i) for i in CANDLE_INTERVALS)
 _CANDLE_PRODUCT = "substr(candle_id, 1, instr(candle_id, ':') - 1)"
 
-# name -> (database, columns, sql). Columns are only identifiers, counts and timestamps.
+def _recv(column):
+    """Receipt-time aggregates that never materialize a value at or beyond the cut: backfilled rows are recorded
+    (``known_at``/``received_at``) long after the event they describe, so the cut applies to the EVENT time only."""
+    return (
+        "MIN(CASE WHEN %(c)s < %(h)d THEN %(c)s END), MAX(CASE WHEN %(c)s < %(h)d THEN %(c)s END), "
+        "SUM(%(c)s >= %(h)d)" % {"c": column, "h": _H}
+    )
+
+
+# name -> (database, columns, sql). Columns are only identifiers, counts and timestamps. The holdout cut is applied to
+# event-time columns (start_ms, end_ms, bucket_start, from_ms, to_ms, event_time); receipt-time columns are only
+# aggregated through ``_recv`` (see its docstring). v1 also cut on receipt time and so dropped every backfilled row.
 QUERIES = {
     "funding_periods": (
         "main",
         ("product_id", "rows", "distinct_starts", "min_start_ms", "max_start_ms", "min_end_ms", "max_end_ms",
-         "min_known_at", "max_known_at", "starts_off_hour_grid"),
+         "min_known_at", "max_known_at", "rows_known_after_cut", "starts_off_hour_grid"),
         "SELECT product_id, COUNT(*), COUNT(DISTINCT start_ms), MIN(start_ms), MAX(start_ms), MIN(end_ms), "
-        "MAX(end_ms), MIN(known_at), MAX(known_at), SUM(start_ms %% %d <> 0) "
+        "MAX(end_ms), %s, SUM(start_ms %% %d <> 0) "
         "FROM paper_futures_funding_periods "
-        "WHERE product_id IN (%s) AND start_ms < %d AND end_ms < %d AND known_at < %d "
-        "GROUP BY product_id ORDER BY product_id" % (HOUR_MS, _IN, _H, _H, _H),
+        "WHERE product_id IN (%s) AND start_ms < %d AND end_ms < %d "
+        "GROUP BY product_id ORDER BY product_id" % (_recv("known_at"), HOUR_MS, _IN, _H, _H),
     ),
     "funding_responses": (
         "main",
-        ("product_id", "responses", "min_received_at", "max_received_at"),
-        "SELECT p.product_id, COUNT(DISTINCT r.sha256), MIN(r.received_at), MAX(r.received_at) "
+        ("product_id", "responses", "min_received_at", "max_received_at", "responses_received_after_cut"),
+        "SELECT p.product_id, COUNT(DISTINCT r.sha256), "
+        "MIN(CASE WHEN r.received_at < %d THEN r.received_at END), "
+        "MAX(CASE WHEN r.received_at < %d THEN r.received_at END), "
+        "COUNT(DISTINCT CASE WHEN r.received_at >= %d THEN r.sha256 END) "
         "FROM paper_futures_funding_periods p JOIN paper_futures_funding_responses r ON r.sha256 = p.response_sha256 "
-        "WHERE p.product_id IN (%s) AND p.start_ms < %d AND p.end_ms < %d AND p.known_at < %d AND r.received_at < %d "
-        "GROUP BY p.product_id ORDER BY p.product_id" % (_IN, _H, _H, _H, _H),
+        "WHERE p.product_id IN (%s) AND p.start_ms < %d AND p.end_ms < %d "
+        "GROUP BY p.product_id ORDER BY p.product_id" % (_H, _H, _H, _IN, _H, _H),
     ),
     "official_candles": (
         "main",
         ("product_id", "interval_ms", "rows", "distinct_buckets", "min_bucket_start", "max_bucket_start",
-         "min_known_at", "max_known_at"),
+         "min_known_at", "max_known_at", "rows_known_after_cut"),
         "SELECT product_id, interval_ms, COUNT(*), COUNT(DISTINCT bucket_start), MIN(bucket_start), "
-        "MAX(bucket_start), MIN(known_at), MAX(known_at) FROM paper_futures_official_candles "
-        "WHERE product_id IN (%s) AND interval_ms IN (%s) AND bucket_start < %d AND known_at < %d "
-        "GROUP BY product_id, interval_ms ORDER BY product_id, interval_ms" % (_IN, _INT, _H, _H),
+        "MAX(bucket_start), %s FROM paper_futures_official_candles "
+        "WHERE product_id IN (%s) AND interval_ms IN (%s) AND bucket_start < %d "
+        "GROUP BY product_id, interval_ms ORDER BY product_id, interval_ms" % (_recv("known_at"), _IN, _INT, _H),
     ),
     "official_candle_responses": (
         "main",
         ("product_id", "interval_ms", "responses", "min_from_ms", "max_to_ms", "min_received_at",
-         "max_received_at"),
-        "SELECT product_id, interval_ms, COUNT(*), MIN(from_ms), MAX(to_ms), MIN(received_at), MAX(received_at) "
+         "max_received_at", "responses_received_after_cut"),
+        "SELECT product_id, interval_ms, COUNT(*), MIN(from_ms), MAX(to_ms), %s "
         "FROM paper_futures_official_candle_responses "
-        "WHERE product_id IN (%s) AND interval_ms IN (%s) AND from_ms < %d AND to_ms < %d AND received_at < %d "
-        "GROUP BY product_id, interval_ms ORDER BY product_id, interval_ms" % (_IN, _INT, _H, _H, _H),
+        "WHERE product_id IN (%s) AND interval_ms IN (%s) AND from_ms < %d AND to_ms < %d "
+        "GROUP BY product_id, interval_ms ORDER BY product_id, interval_ms" % (_recv("received_at"), _IN, _INT, _H, _H),
     ),
     "capture_candles": (
         "main",
         ("product_id", "interval_ms", "rows", "distinct_buckets", "min_bucket_start", "max_bucket_start",
-         "min_known_at", "max_known_at"),
-        "SELECT %s, interval_ms, COUNT(*), COUNT(DISTINCT bucket_start), MIN(bucket_start), MAX(bucket_start), "
-        "MIN(known_at), MAX(known_at) FROM paper_futures_candle_revisions "
-        "WHERE %s IN (%s) AND interval_ms IN (%s) AND bucket_start < %d AND known_at < %d "
+         "min_known_at", "max_known_at", "rows_known_after_cut"),
+        "SELECT %s, interval_ms, COUNT(*), COUNT(DISTINCT bucket_start), MIN(bucket_start), MAX(bucket_start), %s "
+        "FROM paper_futures_candle_revisions "
+        "WHERE %s IN (%s) AND interval_ms IN (%s) AND bucket_start < %d "
         "GROUP BY %s, interval_ms ORDER BY %s, interval_ms"
-        % (_CANDLE_PRODUCT, _CANDLE_PRODUCT, _IN, _INT, _H, _H, _CANDLE_PRODUCT, _CANDLE_PRODUCT),
+        % (_CANDLE_PRODUCT, _recv("known_at"), _CANDLE_PRODUCT, _IN, _INT, _H, _CANDLE_PRODUCT, _CANDLE_PRODUCT),
     ),
     "ticker_events": (
         "main",
-        ("product_id", "rows", "min_received_at", "max_received_at", "min_event_time", "max_event_time"),
-        "SELECT product_id, COUNT(*), MIN(received_at), MAX(received_at), MIN(event_time), MAX(event_time) "
+        ("product_id", "rows", "min_event_time", "max_event_time", "min_received_at", "max_received_at",
+         "rows_received_after_cut"),
+        "SELECT product_id, COUNT(*), MIN(event_time), MAX(event_time), %s "
         "FROM paper_futures_market_events "
-        "WHERE feed = 'ticker' AND product_id IN (%s) AND received_at < %d AND event_time < %d "
-        "GROUP BY product_id ORDER BY product_id" % (_IN, _H, _H),
+        "WHERE feed = 'ticker' AND product_id IN (%s) AND event_time < %d "
+        "GROUP BY product_id ORDER BY product_id" % (_recv("received_at"), _IN, _H),
     ),
     "quote_snapshot": (
         "quotes",

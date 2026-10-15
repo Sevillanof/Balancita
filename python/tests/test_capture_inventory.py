@@ -125,9 +125,10 @@ class InventoryTests(unittest.TestCase):
         self.assertLess(funding["PF_XBTUSD"]["max_end_ms"], H + 1)
         self.assertLessEqual(funding["PF_XBTUSD"]["max_end_ms"], H - 1 + 1)
         candles = self.rows(out, "official_candles")[0]
-        self.assertEqual(candles["rows"], 3)  # 6 inserted; 4 start before H, the 4th is known at H
+        self.assertEqual(candles["rows"], 4)  # 6 inserted; the cut is on bucket_start, so 4 start before H
         self.assertLess(candles["max_bucket_start"], H)
         self.assertLess(candles["max_known_at"], H)
+        self.assertEqual(candles["rows_known_after_cut"], 1)  # the 4th bucket is recorded at the cut: counted, not shown
         self.assertEqual(self.rows(out, "official_candle_responses")[0]["responses"], 1)
         ticker = self.rows(out, "ticker_events")[0]
         self.assertEqual(ticker["rows"], 1)  # only the pre-holdout ticker; trades are not counted
@@ -146,7 +147,7 @@ class InventoryTests(unittest.TestCase):
         out = self.run_inventory()
         rows = self.rows(out, "capture_candles")
         self.assertEqual([r["product_id"] for r in rows], ["PF_ETHUSD"])
-        self.assertEqual(rows[0]["rows"], 1)  # 4 minutes inserted; 2 start in the holdout, 1 is known at it
+        self.assertEqual(rows[0]["rows"], 2)  # 4 minutes inserted; 2 start in the holdout
         self.assertIn("PF_XBTUSD", out["sections"]["capture_candles"]["products_without_rows"])
 
     def test_no_value_leaves_the_inventory(self):
@@ -172,6 +173,33 @@ class InventoryTests(unittest.TestCase):
         conn.close()
         self.run_inventory()
         self.assertEqual(before, digest(self.db))
+
+    def test_backfilled_rows_recorded_after_the_cut_are_counted_by_event_time(self):
+        """v1 cut on receipt time too, so every backfilled row (recorded months later) vanished: empty by construction."""
+        bf = os.path.join(self.dir.name, "backfill.sqlite")
+        c = sqlite3.connect(bf)
+        c.executescript(SCHEMA)
+        late = H + 40 * 24 * HOUR  # recorded long after the cut, describing events before it
+        for i in range(3):
+            start = H - (5 - i) * HOUR
+            c.execute("INSERT INTO paper_futures_funding_responses VALUES(?,?,?,?)", ("b%d" % i, late, "t", "{}"))
+            c.execute("INSERT INTO paper_futures_funding_periods VALUES(?,?,?,?,?,?,?)",
+                      ("b%d" % i, start, start + HOUR, SENTINEL_RATE, late, "u", "PF_XBTUSD"))
+        c.commit()
+        c.close()
+        conn = inv._open_readonly(bf)
+        try:
+            out = inv.build_inventory(conn)
+        finally:
+            conn.close()
+        row = dict(zip(out["sections"]["funding_periods"]["columns"], out["sections"]["funding_periods"]["rows"][0]))
+        self.assertEqual((row["rows"], row["rows_known_after_cut"]), (3, 3))
+        self.assertIsNone(row["min_known_at"])  # no receipt time at or beyond the cut is ever returned
+        self.assertIsNone(row["max_known_at"])
+        resp = dict(zip(out["sections"]["funding_responses"]["columns"], out["sections"]["funding_responses"]["rows"][0]))
+        self.assertEqual((resp["responses"], resp["responses_received_after_cut"]), (3, 3))
+        self.assertIsNone(resp["max_received_at"])
+        self.assertNotIn(str(late), json.dumps(out))
 
     def test_path_with_percent_and_hash_opens_the_right_file(self):
         odd = os.path.join(self.dir.name, "cap%41 #1?.sqlite")
