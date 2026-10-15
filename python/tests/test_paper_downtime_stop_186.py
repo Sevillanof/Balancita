@@ -1,9 +1,15 @@
-"""Issue #186, scenario A6 / S-K5 at the runner: a process is killed for real (SIGKILL) with both positions open, the
-price crosses their stops while it is down, and the recovery has no quote from that time. The outage is a declared hole
-of coverage, the stops are not executed with anything retroactive and the first observation after the recovery closes
-them. Invented data only; nothing is connected to a live process."""
+"""Issue #186, scenario A6 / S-K5 at the runner: a process is killed for real (SIGKILL) with both positions open and
+the market goes through their stops while it is down. The first observation after the recovery already opens beyond the
+stops (long stop 98000, short stop 3640; the candle opens at 80100 / 4990), so the stop was crossed during the outage,
+not inside that candle. The outage is a declared hole of coverage that starts at the last evidence before the kill, the
+stops are not executed retroactively in time, and the first observation closes them at the price each ``stop_policy``
+defines. Invented data only; nothing is connected to a live process.
 
-import json
+Current behaviour, recorded here and not changed (``stop_policy`` is an experimental hypothesis; what applies after an
+outage is Fran's decision, see the PR): with ``level`` (the default) the exit is at the stop level, a price that was never
+observed after the recovery (97998.24 / 3640.21); ``gap_open`` exits near the open of the first candle and ``gap_worst``
+near its worst price."""
+
 import os
 import signal
 import subprocess
@@ -11,7 +17,6 @@ import sys
 import unittest
 
 from balancita_engine import paper_runner_store as ST
-from balancita_engine.paper_runner import PaperRunner
 
 import test_paper_runner_recovery as T
 
@@ -21,53 +26,69 @@ sys.path.insert(0, {py!r})
 sys.path.insert(0, {tests!r})
 import test_paper_runner_recovery as T
 from balancita_engine.paper_runner import PaperRunner
-r = PaperRunner.create(sys.argv[1], T.cfg(), T.strategies())
+r = PaperRunner.create(sys.argv[1], T.cfg(stop_policy=sys.argv[3]), T.strategies())
 r.run(T.session()[:int(sys.argv[2])])
 os.kill(os.getpid(), signal.SIGKILL)
 """
 
+RECOVERY_MS = T.CYCLE + 30 * T.MIN
+FIRST_OBSERVATION_MS = T.CYCLE + 40 * T.MIN
+# last quote of each product before the kill (events 3 and 4 of ``T.session()``): where the unobserved time starts
+LAST_EVIDENCE = {T.BTC: T.CYCLE + 5 * T.SEC, T.ETH: T.CYCLE + 6 * T.SEC}
+EXIT = {"level": {T.BTC: "97998.236000", T.ETH: "3640.207480"},
+        "gap_open": {T.BTC: "80098.558200", T.ETH: "4990.284430"},
+        "gap_worst": {T.BTC: "79998.560000", T.ETH: "5000.285000"}}
+
 
 class StopCrossedDuringTheOutage(T.Base):
-    def killed_with_open_positions(self):
+    def killed_with_open_positions(self, policy, name):
         py = os.path.dirname(os.path.dirname(os.path.abspath(ST.__file__)))
         tests = os.path.dirname(os.path.abspath(__file__))
-        path = os.path.join(self.dir, "killed")
-        done = subprocess.run([sys.executable, "-c", CHILD.format(py=py, tests=tests), path, "6"], capture_output=True,
-                              text=True, timeout=120)
+        path = os.path.join(self.dir, name)
+        done = subprocess.run([sys.executable, "-c", CHILD.format(py=py, tests=tests), path, "6", policy],
+                              capture_output=True, text=True, timeout=120)
         self.assertEqual(done.returncode, -signal.SIGKILL, done.stderr)
         return path
 
-    def crossing(self, off):
-        """The first observation after the recovery: both prices far beyond their stops (long 98000, short 3640)."""
-        t = T.CYCLE + 40 * T.MIN
-        return [T.candle(T.BTC, t, 100010, 100020, 80000, 80100, off), T.candle(T.ETH, t, 3500, 5000, 3499, 4990, off + 1)]
+    def first_observation(self, off):
+        """Both products already beyond their stops when it opens, and still beyond when it closes."""
+        t = FIRST_OBSERVATION_MS
+        return [T.candle(T.BTC, t, 80100, 80200, 80000, 80100, off), T.candle(T.ETH, t, 4990, 5000, 4980, 4990, off + 1)]
 
-    def test_the_outage_is_a_declared_hole_and_the_stops_wait_for_the_first_observation(self):
-        path = self.killed_with_open_positions()
-        recovery_ms = T.CYCLE + 30 * T.MIN
-        r = self.recover(path, recovery_ms)
+    def outage_gaps(self, runner):
+        return {g["product_id"]: g for g in runner.coverage["gaps"] if g["kind"] == "runner_interrupted"}
+
+    def test_the_outage_is_a_hole_from_the_last_evidence_and_nothing_is_closed_by_the_recovery(self):
+        path = self.killed_with_open_positions("level", "killed")
+        r = self.recover(path, RECOVERY_MS)
         self.assertEqual(len(r.portfolio.positions), 2)
-        self.assertEqual(len(r.portfolio.trades), 0)                    # nothing was closed by the recovery itself
-        gaps = sorted(r.coverage["gaps"], key=lambda g: g["product_id"])    # ETH before XBT
-        self.assertEqual([(g["product_id"], g["kind"], g["to_ms"]) for g in gaps],
-                         [(T.ETH, "runner_interrupted", recovery_ms), (T.BTC, "runner_interrupted", recovery_ms)])
-        for gap in gaps:
-            self.assertLess(gap["from_ms"], recovery_ms)
-        events = self.crossing(7)
-        r.run(events)
-        self.assertEqual(len(r.portfolio.positions), 0)
-        self.assertEqual(sorted(t["exit_reason"] for t in r.portfolio.trades), ["stop", "stop"])
-        for trade in r.portfolio.trades:                                # never before the recovery: no retroactive exit
-            self.assertGreaterEqual(trade["exit_time_ms"], recovery_ms)
-        self.assertEqual(r.integrity()["offset_holes"], 0)
+        self.assertEqual(len(r.portfolio.trades), 0)
+        gaps = self.outage_gaps(r)
+        self.assertEqual(sorted(gaps), sorted(LAST_EVIDENCE))
+        for product, gap in gaps.items():
+            self.assertEqual((gap["from_ms"], gap["to_ms"]), (LAST_EVIDENCE[product], RECOVERY_MS), product)
 
-    def test_a_second_recovery_of_the_same_files_declares_the_same_hole_once(self):
-        path = self.killed_with_open_positions()
-        first = self.recover(path, T.CYCLE + 30 * T.MIN)
-        want = json.dumps(first.coverage["gaps"], sort_keys=True)
-        again = self.recover(path, T.CYCLE + 30 * T.MIN)
-        self.assertEqual(json.dumps(again.coverage["gaps"], sort_keys=True), want)
-        self.assertEqual(len(again.coverage["gaps"]), 2)
+    def test_the_first_observation_beyond_the_stops_closes_them_at_the_price_of_each_policy(self):
+        for policy, expected in EXIT.items():
+            with self.subTest(stop_policy=policy):
+                path = self.killed_with_open_positions(policy, "killed-" + policy)
+                r = self.recover(path, RECOVERY_MS, config=T.cfg(stop_policy=policy))
+                r.run(self.first_observation(7))
+                self.assertEqual(len(r.portfolio.positions), 0)
+                got = {t["product_id"]: t for t in r.portfolio.trades}
+                self.assertEqual(sorted(got), sorted(expected))
+                for product, trade in got.items():
+                    self.assertEqual(trade["exit_reason"], "stop")
+                    self.assertEqual(str(trade["exit_price"]), expected[product], product)
+                    self.assertGreaterEqual(trade["exit_time_ms"], RECOVERY_MS)     # never inside the outage
+                self.assertEqual(r.integrity()["offset_holes"], 0)
+
+    def test_a_second_recovery_of_the_same_files_declares_the_same_hole(self):
+        path = self.killed_with_open_positions("level", "twice")
+        first = self.outage_gaps(self.recover(path, RECOVERY_MS))
+        again = self.outage_gaps(self.recover(path, RECOVERY_MS))
+        self.assertEqual(again, first)
+        self.assertEqual(len(again), 2)
 
 
 if __name__ == "__main__":
