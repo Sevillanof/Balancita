@@ -81,6 +81,11 @@ class RunnerConfig:
     start_ms: int = 0
     coverage_gap_ms: int = 120_000   # experimental hypothesis: longer without a quote while a position is open = unobserved
     execution_mode: str = "quotes"
+    # #186 (BAL-DECISION-186-05): how a stop the market had already crossed is priced when the first valid candle after a
+    # declared hole opens beyond it. ``gap_open``: the open of that candle is the SIMULATED reference (with the existing
+    # cost model; not a fill and not verified liquidity); ``level``: the earlier behaviour. Other cases are not affected.
+    stop_after_hole: str = "gap_open"
+    entry_max_quote_age_ms: "int | None" = None   # #186 (C8): None = no entry is blocked for a missing or old quote (as before)
 
     def funding_map(self):
         return {product: [tuple(row) for row in rows] for product, rows in self.funding}
@@ -156,6 +161,8 @@ def manifest(config, log, strategies):
         "build_identity": build_identity(),
         "offset_identity": "source|stream|epoch",
         **({"execution_mode": config.execution_mode} if config.execution_mode != "quotes" else {}),
+        "stop_after_hole": config.stop_after_hole,
+        **({"entry_max_quote_age_ms": config.entry_max_quote_age_ms} if config.entry_max_quote_age_ms is not None else {}),
         "policy_status": "execution, watch and gap policies are experimental hypotheses, not validated values",
     }
 
@@ -417,8 +424,13 @@ class PaperRunner(object):
                 self._maybe_close(data["event_id"])
         elif kind == "decision":
             seq = self.persisted[data["signal_key"]]["seq"]
+            extra = {}
+            if self.config.entry_max_quote_age_ms is not None:
+                product = self.log.entries[seq - 1]["data"]["signal"]["product_id"]
+                extra = {"max_quote_age_ms": self.config.entry_max_quote_age_ms,
+                         "last_quote_ms": self.executor.last_quote_ms.get(product, 0)}   # the quote's own time, not its arrival
             result = self.executor.submit(self.log.entries[seq - 1], reference_price=data["reference_price"],
-                                          atr=data["atr"], decided_ms=data["decided_ms"])
+                                          atr=data["atr"], decided_ms=data["decided_ms"], **extra)
             self.submits[data["signal_key"]] = result["status"]
             self._count("decisions")
             owner = self.decision_owner.get(data["signal_key"])
@@ -536,6 +548,21 @@ class PaperRunner(object):
         self._record_gap(product, intent_id, record["last_ms"], now)
         record["quotes"], record["last_ms"] = state["quotes"], now
 
+    def _first_candle_after_hole(self, book, bucket):
+        """#186 (BAL-DECISION-186-05): is ``bucket`` the first valid candle a position sees after a real interruption
+        of the runner (``runner_interrupted``; BAL-DECISION-186-06: not a ``quote_gap``, a silence of quotes without a crash) and does the policy ``stop_after_hole`` ask for the open
+        as the reference of a stop the market already went through? The candle that closes at the end of the hole counts: its
+        open lies inside the unobserved time. It is a SIMULATED reference, not a fill."""
+        if self.config.stop_after_hole != "gap_open":
+            return False
+        intent_id = book.intent["intent_id"]
+        ends = [g["to_ms"] for g in self.coverage["gaps"]
+                if g["intent_id"] == intent_id and g["kind"] == "runner_interrupted" and g["to_ms"] <= bucket + 60_000]
+        if not ends:
+            return False
+        end = max(ends)
+        return not any(hi >= end for _, hi in self.coverage["candles"].get(intent_id, ()))
+
     def _note_candle(self, product, bucket, before):
         """A processed candle after the entry minute covers [bucket, bucket + 1 min]; it is evidence of its own kind."""
         if product not in before:
@@ -611,7 +638,15 @@ class PaperRunner(object):
             product, bucket = payload["product_id"], int(payload["bucket_ms"])
             self.candle_digest[(product, bucket)] = stable_hash({k: str(payload["candle"][k]) for k in ("open", "high", "low", "close")})
             before = self._open_snapshot()
-            self.executor.on_candle(product, bucket, payload["candle"])
+            book = self.portfolio.positions.get(product)
+            after_hole = book is not None and self._first_candle_after_hole(book, bucket)
+            if after_hole:
+                book.post_hole_stop_reference = True
+            try:
+                self.executor.on_candle(product, bucket, payload["candle"])
+            finally:
+                if after_hole:
+                    book.post_hole_stop_reference = False
             self._note_candle(product, bucket, before)
             self._settle_closed(before)
         elif kind == "clock":

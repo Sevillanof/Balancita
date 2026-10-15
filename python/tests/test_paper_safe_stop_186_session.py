@@ -511,6 +511,22 @@ class TestLockIsOwnedBeforeAnythingIsOpened(Base):
         with self.assertRaises(StoreError):                     # and it is the runner that keeps it afterwards
             DirectoryLock(runner_dir)
 
+    def test_the_runner_receives_the_very_lock_the_session_took_when_it_recovers(self):
+        """D-190-01: not a second lock taken after the session let go of the first (a gap another process could use)."""
+        world, directory, runner_dir = self.copy_of_the_snapshot()
+        taken, real = [], LI._take_lock
+
+        def spy(path):
+            lock = real(path)
+            taken.append(lock)
+            return lock
+
+        with mock.patch.object(LI, "_take_lock", spy):
+            session = recover_session(world, directory, self.cache["strategies"], journal_clock(directory), products=(BTC, ETH))
+        self.live.append(session)
+        self.assertEqual(len(taken), 1)
+        self.assertIs(session.runner.lock, taken[0])
+
     def test_the_runner_keeps_that_same_lock_until_close(self):
         world, directory, runner_dir = self.copy_of_the_snapshot()
         session = recover_session(world, directory, self.cache["strategies"], journal_clock(directory), products=(BTC, ETH))
