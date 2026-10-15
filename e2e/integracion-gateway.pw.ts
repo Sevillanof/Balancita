@@ -20,6 +20,8 @@ const GATEWAY = `http://127.0.0.1:${LIVE_PORT}`
 const REGISTRY = `http://127.0.0.1:${STRATEGIES_PORT}`
 
 let gateway: ChildProcess | null = null
+// Synthetic 15 m candles seeded for B6 (see seed-gateway-sandbox.ts).
+let candles = { lastBucket: 0, holes: [] as number[] }
 let registry: ChildProcess | null = null
 
 type Logged = { method: string; url: string; status: number }
@@ -69,14 +71,22 @@ test.beforeAll(async ({}, info) => {
     info.project.name !== 'desktop-1440x900',
     'one project only: the gateway owns a fixed port',
   )
-  const env = JSON.parse(
+  const seeded = JSON.parse(
     execFileSync('node', ['e2e/support/seed-gateway-sandbox.ts'], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
     }).trim(),
-  ) as Record<string, string>
-  const dir = env.dir as string
-  delete env.dir // the seed prints its folder; the gateway does not need it
+  ) as Record<string, unknown>
+  candles = {
+    lastBucket: seeded.candlesLastBucket as number,
+    holes: seeded.candlesHoles as number[],
+  }
+  const dir = seeded.dir as string
+  // The seed prints more than the gateway's environment: keep only the paths.
+  const env = {
+    FUTURES_MARKET_DB_PATH: seeded.FUTURES_MARKET_DB_PATH,
+    FUTURES_VERDICTS_DB_PATH: seeded.FUTURES_VERDICTS_DB_PATH,
+  } as Record<string, string>
   gateway = spawn('node', ['server/src/app/gateway-main.ts'], {
     env: {
       ...process.env,
@@ -158,6 +168,60 @@ test('B1 and B2 answer through the Vite proxy; the old doubled path is a 404', a
   // What the frontend asked for before the fix: /api/api/... at the gateway.
   expect(
     (await request.get('/api-live/api/observability/health')).status(),
+  ).toBe(404)
+})
+
+test('B6 candles on the real gateway: bounded range, gaps reported not filled, 400 and 404 where they belong', async ({
+  request,
+}) => {
+  const QUARTER = 15 * 60_000
+  const from = candles.lastBucket - 39 * QUARTER
+  const to = candles.lastBucket + QUARTER
+  // Through the Vite proxy, the path the frontend will use.
+  const res = await request.get(
+    `/api-live/observability/candles?product=PF_XBTUSD&interval=15m&from=${from}&to=${to}`,
+  )
+  expect(res.status()).toBe(200)
+  const body = await res.json()
+  expect(body.schema).toBe('observability-candles.v1')
+  expect([body.from_ms, body.to_ms, body.truncated]).toEqual([from, to, false])
+  expect(body.candles.state).toBe('ok')
+  expect(body.candles.expected).toBe(40)
+  expect(body.candles.count).toBe(40 - candles.holes.length)
+  expect(body.candles.missing).toBe(candles.holes.length)
+  const starts: number[] = body.candles.items.map(
+    (i: { bucket_start_ms: number }) => i.bucket_start_ms,
+  )
+  expect(starts).toEqual([...starts].sort((a, b) => a - b))
+  for (const h of candles.holes)
+    expect(starts).not.toContain(candles.lastBucket - h * QUARTER)
+  expect(body.candles.gaps).toHaveLength(2)
+  expect(body.candles.last_bucket_ms).toBe(candles.lastBucket)
+  expect(body.candles.last_candle_closed).toBe(true)
+  expect(body.candles.items[0]).toHaveProperty('known_at_ms')
+
+  // A product with nothing stored: 200 and an explicit empty state, not 404.
+  const empty = await request.get(
+    '/api-live/observability/candles?product=PF_ETHUSD&interval=15m&limit=10',
+  )
+  expect(empty.status()).toBe(200)
+  expect((await empty.json()).candles).toMatchObject({ state: 'ok', count: 0 })
+
+  // Explicit 400 with a code; 404 only for an unknown route.
+  const cases: [string, string][] = [
+    ['product=PF_XBTUSD', 'invalid_interval'],
+    ['product=PF_NOPE&interval=1m', 'invalid_product'],
+    ['product=PF_XBTUSD&interval=1m&limit=1501', 'invalid_limit'],
+    ['product=PF_XBTUSD&interval=1m&from=0', 'range_too_large'],
+    ['product=PF_XBTUSD&interval=1m&from=9&to=3', 'invalid_range'],
+  ]
+  for (const [qs, code] of cases) {
+    const bad = await request.get(`/api-live/observability/candles?${qs}`)
+    expect([qs, bad.status()]).toEqual([qs, 400])
+    expect(await bad.json()).toEqual({ error: { code } })
+  }
+  expect(
+    (await request.get(`${GATEWAY}/api/observability/velas`)).status(),
   ).toBe(404)
 })
 
