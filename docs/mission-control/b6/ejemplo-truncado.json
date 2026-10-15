@@ -1,0 +1,64 @@
+{
+  "schema": "observability-candles.v1",
+  "generated_at_ms": 1790000000000,
+  "cache_ttl_ms": 5000,
+  "product": "PF_XBTUSD",
+  "interval": "5m",
+  "interval_ms": 300000,
+  "limit": 3,
+  "from_ms": 1790000100000,
+  "to_ms": 1790001000000,
+  "truncated": true,
+  "candles": {
+    "state": "ok",
+    "evidence": {
+      "source": "paper_futures_official_candles",
+      "origin": "futures-market.sqlite",
+      "state": "read",
+      "rule": "velas oficiales cerradas de paper_futures_official_candles (primera revisión conocida de cada bucket) con bucket_start en [from_ms, to_ms); los buckets sin vela se listan en gaps y no se rellenan"
+    },
+    "count": 3,
+    "expected": 3,
+    "missing": 0,
+    "gaps": [],
+    "gaps_truncated": false,
+    "first_bucket_ms": 1790000100000,
+    "last_bucket_ms": 1790000700000,
+    "last_candle_closed": false,
+    "items": [
+      {
+        "bucket_start_ms": 1790000100000,
+        "close_at_ms": 1790000400000,
+        "known_at_ms": 1790000403000,
+        "open": "100.0",
+        "high": "101.25",
+        "low": "99.75",
+        "close": "100.5",
+        "volume_btc": "3.5",
+        "closed": false
+      },
+      {
+        "bucket_start_ms": 1790000400000,
+        "close_at_ms": 1790000700000,
+        "known_at_ms": 1790000703000,
+        "open": "100.0",
+        "high": "101.25",
+        "low": "99.75",
+        "close": "100.5",
+        "volume_btc": "3.5",
+        "closed": false
+      },
+      {
+        "bucket_start_ms": 1790000700000,
+        "close_at_ms": 1790001000000,
+        "known_at_ms": 1790001003000,
+        "open": "100.0",
+        "high": "101.25",
+        "low": "99.75",
+        "close": "100.5",
+        "volume_btc": "3.5",
+        "closed": false
+      }
+    ]
+  }
+}
