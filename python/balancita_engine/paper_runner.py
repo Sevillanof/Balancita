@@ -85,6 +85,7 @@ class RunnerConfig:
     # declared hole opens beyond it. ``gap_open``: the open of that candle is the SIMULATED reference (with the existing
     # cost model; not a fill and not verified liquidity); ``level``: the earlier behaviour. Other cases are not affected.
     stop_after_hole: str = "gap_open"
+    entry_max_quote_age_ms: "int | None" = None   # #186 (C8): None = no entry is blocked for a missing or old quote (as before)
 
     def funding_map(self):
         return {product: [tuple(row) for row in rows] for product, rows in self.funding}
@@ -161,6 +162,7 @@ def manifest(config, log, strategies):
         "offset_identity": "source|stream|epoch",
         **({"execution_mode": config.execution_mode} if config.execution_mode != "quotes" else {}),
         "stop_after_hole": config.stop_after_hole,
+        **({"entry_max_quote_age_ms": config.entry_max_quote_age_ms} if config.entry_max_quote_age_ms is not None else {}),
         "policy_status": "execution, watch and gap policies are experimental hypotheses, not validated values",
     }
 
@@ -422,8 +424,13 @@ class PaperRunner(object):
                 self._maybe_close(data["event_id"])
         elif kind == "decision":
             seq = self.persisted[data["signal_key"]]["seq"]
+            extra = {}
+            if self.config.entry_max_quote_age_ms is not None:
+                product = self.log.entries[seq - 1]["data"]["signal"]["product_id"]
+                extra = {"max_quote_age_ms": self.config.entry_max_quote_age_ms,
+                         "last_quote_ms": self.executor.last_quote_ms.get(product, 0)}   # the quote's own time, not its arrival
             result = self.executor.submit(self.log.entries[seq - 1], reference_price=data["reference_price"],
-                                          atr=data["atr"], decided_ms=data["decided_ms"])
+                                          atr=data["atr"], decided_ms=data["decided_ms"], **extra)
             self.submits[data["signal_key"]] = result["status"]
             self._count("decisions")
             owner = self.decision_owner.get(data["signal_key"])
