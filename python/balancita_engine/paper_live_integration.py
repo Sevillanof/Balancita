@@ -20,6 +20,7 @@ No wall clock, no network, no process: the caller decides when to ``step``. ``Fa
 kill the "process" at a named point.
 """
 
+import dataclasses
 import json
 import os
 import sqlite3
@@ -200,6 +201,20 @@ def affected_orders(pending, gaps_by_product, max_gap_ms=None):
 
 
 # ------------------------------------------------------------------------------------------------ the session
+def _session_config(runner_config, max_quote_gap_ms, block_stale_entries):
+    """The runner configuration the session runs with (C8 of #186). By default the session hands the runner its own
+    ``max_quote_gap_ms`` as ``entry_max_quote_age_ms``: an entry whose product has no quote, or whose last quote is older than the
+    limit, is rejected when it is decided (``entry_blocked_source_stale``), before any order exists. The limit is the session's
+    explicit parameter (still an unapproved hypothesis); the session has no default of its own beyond the one it already had.
+    A configuration that already carries another limit is refused, so the two can never disagree. ``block_stale_entries=False``
+    leaves the configuration as it came (no blocking), which is how the earlier digests of 10D are reproduced."""
+    if not block_stale_entries:
+        return runner_config
+    if runner_config.entry_max_quote_age_ms not in (None, int(max_quote_gap_ms)):
+        raise IntegrationError("config_incompatible", "entry_max_quote_age_ms differs from max_quote_gap_ms")
+    return dataclasses.replace(runner_config, entry_max_quote_age_ms=int(max_quote_gap_ms))
+
+
 class LiveSession(object):
     """One synthetic session. ``create`` starts a new directory; ``recover`` continues it after any interruption."""
 
@@ -230,7 +245,9 @@ class LiveSession(object):
 
     @classmethod
     def create(cls, directory, source_path, strategies, products, runner_config, *, decide_from_ms, decide_until_ms=None,
-               source_id="synthetic", ingest_kw=None, evaluator_kw=None, max_quote_gap_ms=15_000):
+               source_id="synthetic", ingest_kw=None, evaluator_kw=None, max_quote_gap_ms=15_000,
+               block_stale_entries=True):
+        runner_config = _session_config(runner_config, max_quote_gap_ms, block_stale_entries)
         if os.path.exists(os.path.join(directory, SESSION_FILE)):
             raise IntegrationError("session_exists", directory)
         os.makedirs(directory, exist_ok=True)
@@ -257,7 +274,8 @@ class LiveSession(object):
 
     @classmethod
     def recover(cls, directory, source_path, strategies, products, runner_config, recovery_ms, *, decide_from_ms,
-                decide_until_ms=None, source_id="synthetic", ingest_kw=None, evaluator_kw=None, max_quote_gap_ms=15_000):
+                decide_until_ms=None, source_id="synthetic", ingest_kw=None, evaluator_kw=None, max_quote_gap_ms=15_000,
+                block_stale_entries=True):
         """Rebuilds a session from its directory. Refuses (``IntegrationError`` with a stable reason) a directory whose parts
         do not belong to the same session, a checkpoint ahead of any journal, or any configuration that differs from the one
         that created it. ``recovery_ms`` is the restart clock handed to the runner.
@@ -266,6 +284,7 @@ class LiveSession(object):
         line (a write), and a half line may be the live writer's own write in flight. The same lock is then handed to the
         runner, so the directory is owned without a gap from the first byte read to ``close``; a second opener is refused
         (``runner_directory_locked``) before it touches a file, and a recovery that fails releases the lock."""
+        runner_config = _session_config(runner_config, max_quote_gap_ms, block_stale_entries)
         runner_dir = os.path.join(directory, RUNNER_DIR)
         if not os.path.isdir(runner_dir):             # nothing to own: refuse before opening (and so cutting) any file
             raise IntegrationError("runner_missing", directory)
