@@ -305,7 +305,7 @@ class SinglePassTests(Fixture):
     def _periods(self, n_products_rows):
         ins = "INSERT INTO paper_futures_funding_periods VALUES (?,?,?,?,?,?,?)"
         for i, product in enumerate(n_products_rows):
-            self.conn.execute(ins, ("s%d" % i, A0 + i * 1000, product, A0 + i * 1000 + 1, "7.77" if product != m.BTC else "1.5",
+            self.conn.execute(ins, ("s%d" % i, A0 + i * 1000, product, A0 + i * 1000 + 1, "7.77" if product.startswith("PF_SOL") or product.startswith("PF_ADA") else "1.5",
                                     A0 + i, "u"))
         self.conn.commit()
 
