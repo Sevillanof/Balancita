@@ -202,5 +202,32 @@ class TestRealKillWithAnOpenPositionAndTheStopCrossedWhileDown(unittest.TestCase
         self.assertEqual(session.runner.integrity()["open_cycles"], [])
 
 
+class TestWallClockJumpsDuringAnOpenSilence(Base):
+    """S-U4 (matrix E6): the instant the session is given (``observed_now_ms``) jumps backwards or far forwards around the step that
+    declares a silence of the source. Nothing may break, nothing may be declared twice, the cancelled order, the money and the signals
+    must be the ones of the run whose clock was normal, and the journal's own time never goes back. Invented data only."""
+
+    JUMPS = {"back_before": (-1_800_000, 0), "forward_before": (10 * 86_400_000, 0), "forward_only": (10 * 86_400_000,),
+             "back_after": (0, -1_800_000, 60_000), "forward_then_back": (3_600_000, 0, 60_000)}
+
+    def test_a_clock_that_jumps_changes_neither_the_declaration_nor_the_money(self):
+        ref = self.reference()
+        for name, offsets in self.JUMPS.items():
+            with self.subTest(jump=name):
+                world, directory, session = self.fork()
+                for offset in offsets:
+                    now = NOW + offset
+                    world.release_until(NOW)                                       # the market itself did not move
+                    session.step(now)
+                state = record(session, NOW)
+                self.assertEqual({k: v for k, v in state.items() if k != "now"}, {k: v for k, v in ref["record"].items() if k != "now"})
+                self.assertEqual(self.losses(session), ref["losses"])                              # declared once
+                self.assertEqual(kinds(session, "source_stale_detected"), ref["detected"])
+                times = [e["t_ms"] for e in session.runner.journal.entries[1:]]       # the first entry is the run start
+                self.assertEqual(times, sorted(times), "the journal's time went back")
+                self.assertEqual(session.runner.integrity()["open_cycles"], [])
+                self.release()
+
+
 if __name__ == "__main__":
     unittest.main()
