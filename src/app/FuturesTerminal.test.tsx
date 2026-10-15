@@ -1581,10 +1581,14 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
         expect(chartHarness.markerSets.at(-1)?.length).toBeGreaterThan(0)
       })
     }
+    // A click with no subscribed handler would be a silent no-op and the
+    // default selection would then fail a later assertion: fail right here.
     const clickMarker = (id: string) =>
-      act(async () =>
-        chartHarness.clickHandlers.at(-1)?.({ hoveredObjectId: id }),
-      )
+      act(async () => {
+        const handler = chartHarness.clickHandlers.at(-1)
+        if (!handler) throw new Error('the chart has no click handler yet')
+        handler({ hoveredObjectId: id })
+      })
     const pickRow = (id: string) =>
       act(async () =>
         screen
