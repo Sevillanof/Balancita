@@ -210,6 +210,7 @@ class LiveSession(object):
         self.identity, self.max_quote_gap_ms = identity, int(max_quote_gap_ms)
         self.cursors = {"fundpct": 0, "accrual": 0}
         self.fault = None
+        self.stopped = None                           # the runner's answer once the operator stopped the session (D-186-1)
         self.halted = None                            # why this instance stopped: set by a step that failed before its checkpoint
         self.last_quote = {}                          # product -> time of the previous quote this process saw
         self.stats = {"steps": 0, "events": 0, "duplicates": 0, "rejected_by_runner": 0, "audit_new": 0, "clock_events": 0}
@@ -341,6 +342,8 @@ class LiveSession(object):
         checkpoint itself is not in this rule (its policy is decision D-186-2 of #186): the exception goes up as it always did."""
         if self.halted is not None:
             raise IntegrationError("session_halted", self.halted)
+        if self.stopped is not None:
+            raise IntegrationError("session_stopped", "the operator stopped this session")
         try:
             out = self.ingestor.poll(observed_now_ms)
             self._fault("after_poll")
@@ -626,6 +629,35 @@ class LiveSession(object):
         os.replace(tmp, path)
         _fsync_dir(path)
         return body
+
+    def stop(self, t_ms):
+        """The operator stops the session in order (decision D-186-1 of #186): the runner cancels what is still pending with the
+        reason ``operator_stop`` (journal first), the audit says so, and the stop is made durable with a checkpoint. Open
+        positions are not touched, and while the engine is stopped nobody evaluates their stops or targets: this is not
+        protection. The stop is reported done only after the runner has journaled it; if the runner refuses (a journal that
+        cannot be written) the call raises ``RunnerError`` and this instance never steps again. A failure of the checkpoint after
+        a stop goes up as any checkpoint failure does (D-186-2 is not decided here). Asking again returns the same answer. The
+        session is closed separately with ``close()``."""
+        if self.stopped is not None:
+            return self.stopped
+        if self.halted is not None:
+            raise IntegrationError("session_halted", self.halted)
+        try:
+            result = self.runner.stop_orderly(t_ms)
+        except Exception as error:               # noqa: BLE001
+            self.halted = repr(error)
+            raise
+        self.stopped = result
+        try:
+            self.audit.add({"source": "runner", "kind": "operator_stop", "declared_ms": result["declared_ms"],
+                            "cancelled": list(result["cancelled"]), "expired": list(result["expired"]),
+                            "expired_reasons": self._expiry_reasons(result["expired"])})
+            self.flush_audit()
+        except Exception as error:               # noqa: BLE001
+            self.halted = repr(error)
+            raise
+        self.save_checkpoint()
+        return result
 
     def close(self):
         self.runner.close()
