@@ -974,9 +974,11 @@ class PaperRunner(object):
         return gaps
 
     @classmethod
-    def create(cls, directory, config, strategies, *, evaluator=None):
-        """A new durable run in an empty ``directory``: signal log, journal and a first checkpoint."""
-        lock = _lock(directory)
+    def create(cls, directory, config, strategies, *, evaluator=None, lock=None):
+        """A new durable run in an empty ``directory``: signal log, journal and a first checkpoint. ``lock`` is a
+        ``DirectoryLock`` the caller already holds (a session that must repair its own files first); the runner takes
+        it over and releases it on ``close()`` or if this fails."""
+        lock = lock if lock is not None else _lock(directory)
         try:
             log = SC.SignalLog.create(os.path.join(directory, SIGNALS_FILE), config.start_ms)
             journal = FileRunnerJournal.create(os.path.join(directory, JOURNAL_FILE))
@@ -989,15 +991,15 @@ class PaperRunner(object):
         return runner
 
     @classmethod
-    def recover(cls, directory, config, strategies, recovery_ms, *, evaluator=None, bad_checkpoint="refuse"):
+    def recover(cls, directory, config, strategies, recovery_ms, *, evaluator=None, bad_checkpoint="refuse", lock=None):
         """Rebuilds a run from its directory, in this or another process. Refuses (``RunnerError`` with a stable reason)
         a damaged or foreign journal, signal log or checkpoint, another configuration or engine behaviour, a checkpoint
         the replay does not reproduce, and signals no accepted event explains. ``bad_checkpoint="rebuild"`` is the
         explicit operator action after a damaged checkpoint: the file is kept as evidence, the journal replayed in full
-        and a new checkpoint written."""
+        and a new checkpoint written. ``lock``: as in ``create``."""
         if not os.path.isdir(directory):
             raise RunnerError("journal_missing", directory)
-        lock = _lock(directory)         # before reading anything: a second opener must not touch a single byte
+        lock = lock if lock is not None else _lock(directory)         # before reading anything: a second opener must not touch a single byte
         try:
             runner = cls._recover_dir(directory, config, strategies, recovery_ms, evaluator, bad_checkpoint, lock)
         except BaseException:

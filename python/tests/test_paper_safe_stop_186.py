@@ -160,6 +160,42 @@ class CheckpointCannotBeReplaced(T.Base):
         self.assertEqual(rec.financial_digest(), self.continuous(events, "ref").financial_digest())
 
 
+MIN_ = T.MIN
+
+
+class LockHandedOver(T.Base):
+    """The session takes the run lock before it repairs anything and hands it to the runner (B5 at session level)."""
+
+    def test_a_lock_taken_first_is_kept_by_the_runner_and_released_on_close(self):
+        path, r = self.fresh("handover")
+        r.run(T.session()[:3])
+        r.close()
+        lock = ST.DirectoryLock(path)
+        rec = PaperRunner.recover(path, T.cfg(), T.strategies(), T.CYCLE + MIN_ + 1, lock=lock)
+        self.live.append(rec)
+        with self.assertRaises(ST.StoreError):
+            ST.DirectoryLock(path)                                  # the runner still holds the very same lock
+        rec.close()
+        ST.DirectoryLock(path).release()                            # and gives it back
+
+    def test_a_lock_handed_over_is_released_when_recovery_is_refused(self):
+        path, r = self.fresh("refused")
+        r.run(T.session()[:3])
+        r.close()
+        lock = ST.DirectoryLock(path)
+        with self.assertRaises(RunnerError):
+            PaperRunner.recover(path, T.cfg(), T.strategies(), 0, lock=lock)     # a recovery clock behind the journal
+        ST.DirectoryLock(path).release()
+
+    def test_without_a_lock_everything_is_as_before(self):
+        path, r = self.fresh("plain")
+        r.close()
+        rec = PaperRunner.recover(path, T.cfg(), T.strategies(), T.CYCLE)
+        self.live.append(rec)
+        with self.assertRaises(RunnerError):
+            PaperRunner.recover(path, T.cfg(), T.strategies(), T.CYCLE)
+
+
 class Procs(T.Base):
     """Subprocess helpers of 8B's ``SingleWriter`` without inheriting (and re-running) its tests."""
     HOLDER, OPENER = T.SingleWriter.HOLDER, T.SingleWriter.OPENER
