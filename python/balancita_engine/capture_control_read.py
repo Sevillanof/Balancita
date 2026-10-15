@@ -1,26 +1,27 @@
-"""Control read for the empty XBT window of 2026-10-11T00:00Z to 06:00Z: DRAFT, never run on real data.
+"""Control read for the empty XBT window of 2026-10-11T00:00Z to 06:00Z: DRAFT, never run on real data (v2, after BAL-COORD-183-CONTROL-INFERENCIAS-01).
 
-The first diagnosis (capture_gap_diagnosis, BAL-RESULTADO-183-VELAS-PROPIAS-01) found 0 events and 0 gaps in the window, which
-does not tell "never recorded" from "already deleted" (events are deleted by ``received_at`` after
-``FUTURES_EVENT_RETENTION_DAYS``, default 7). This control gives the facts that tell them apart. Only timestamps and hourly counts
-are published; no price, quantity, body or id.
+The first diagnosis (capture_gap_diagnosis, BAL-RESULTADO-183-VELAS-PROPIAS-01) found 0 events and 0 gaps in the window, which does not
+tell "never recorded" from "already deleted". Only timestamps, rowids and hourly counts are published; no price, quantity, body or id.
+
+What the code does (read, not assumed; the real environment value of ``FUTURES_EVENT_RETENTION_DAYS`` is unknown and is NOT assumed):
+``trimRawEvents`` (futures-market-store.ts) takes ``now - eventRetentionMs`` (``now`` is the capture process wall clock), bisects the
+largest ``rowid`` whose ``received_at`` is below that cutoff (it ASSUMES rowid grows with received_at) and deletes ``rowid <= bound``,
+every product and feed. ``received_at`` is the local reception time; ``event_time`` is the provider's. Tickers go earlier (24 h).
+Candles, funding and gaps are never deleted. A previous offline ``market:prune`` could have run with another ``now``.
 
 Scope (BAL-DECISION-183-15; each real run is published here BEFORE it runs, with D's review and a green CI on the exact head):
 - ``dev-live/futures-market.sqlite`` only, ``mode=ro`` + ``query_only`` read back, identity before/after, no copy, no Kraken;
-- BOUNDS (single-row reads, every one counted): the oldest and newest ``received_at`` of ``paper_futures_market_events`` overall
-  (by ``rowid``, which retention deletes in order), of XBT and of ETH (by ``paper_futures_market_received``); the oldest and newest
-  ``detected_at`` of ``paper_futures_data_gaps``; the oldest and newest own XBT 1m candle bucket (``paper_futures_candle_revisions``
-  primary key, ``candle_id`` range, ``bucket_start`` only). If events older than the window still exist, retention did not purge it;
-- WITNESSES: events per hour and feed of XBT in [2026-10-11T06:00Z, 12:00Z) and of ETH in [2026-10-11T00:00Z, 06:00Z) (ETH has no own
-  trades or candles by design, so an empty ETH witness proves nothing), and the number of own XBT 1m candles per hour in
-  [2026-10-11T06:00Z, 12:00Z). Each witness walks every event of the product in its window (books included) and is bounded by
-  ``--max-events`` (``LIMIT max + 1`` inside the statement; over the cap stops the run with ``row_budget`` and publishes the bounds
-  already read); candles by ``--max-candles``. Counting is done in memory, no GROUP BY;
-- every statement is EXPLAINed first (SEARCH only: any table SCAN or temporary B-tree stops the run), 60 s per statement, 10 min per
-  run, no retry, no sampling, no widening; total rows read are counted and published.
+- BOUNDS (single-row reads, all counted): the oldest and newest event by ``rowid`` (rowid, received_at, event_time), the oldest and newest
+  ``received_at`` of XBT and of ETH (with event_time), oldest/newest ``detected_at`` of gaps, oldest/newest own XBT 1m candle bucket;
+- MONOTONICITY PROBE: ``PROBES`` evenly spaced rowids between the min and max rowid, one single-row read each (rowid, received_at), to check
+  the assumption retention relies on (rowid grows with received_at) and to expose late loads. It is a probe, not a proof;
+- WITNESSES: events per hour and feed of XBT in [2026-10-11T06:00Z, 12:00Z) and of ETH in [00:00Z, 06:00Z) (ETH has no own trades or candles
+  by design: empty ETH proves nothing); own XBT 1m candles per hour in [10-oct 18:00Z, 11-oct 00:00Z) and [11-oct 06:00Z, 12:00Z). Each
+  walks every row of its window under its cap (``LIMIT cap + 1``; over the cap stops with ``row_budget`` and keeps what was already read);
+- every statement is EXPLAINed first (SEARCH only), 60 s per statement, 10 min per run, no retry, no sampling beyond the probe, no widening.
 
-Retention itself is confirmed from the code (``capture-main.ts``: ``eventRetentionMs`` from ``FUTURES_EVENT_RETENTION_DAYS``, default 7,
-cutoff on ``received_at``); the real environment value is not readable from the database and is not assumed.
+Inferences: the output carries ``inferences`` with what each result allows to say and what it does not. It never says "purged" or "never
+recorded" on its own; when a condition fails the entry says "undetermined".
 
 Usage:
     python3 -m balancita_engine.capture_control_read --db <futures-market.sqlite> --max-events N --max-candles M > out.json
@@ -34,10 +35,13 @@ import time
 from . import capture_gap_diagnosis as g
 from . import capture_minimal_read as m
 
-TOOL_VERSION = "capture-control-read.v1"
+TOOL_VERSION = "capture-control-read.v2"
+PROBES = 64
+SINGLE_MAX = 10 + PROBES
 HOUR_MS = m.HOUR_MS
 DAY0 = m.WINDOW_B[0]                                         # 2026-10-11T00:00Z
 WINDOW_XBT_AFTER = (DAY0 + 6 * HOUR_MS, DAY0 + 12 * HOUR_MS)  # [06:00Z, 12:00Z)
+WINDOW_CANDLES_BEFORE = (DAY0 - 6 * HOUR_MS, DAY0)           # [10-oct 18:00Z, 00:00Z)
 WINDOW_ETH_SAME = m.WINDOW_B                                  # [00:00Z, 06:00Z)
 XBT, ETH = m.BTC, m.ETH
 EVENTS, GAPS, REVS = g.EVENTS, g.GAPS, "paper_futures_candle_revisions"
@@ -45,8 +49,9 @@ IDX_EVENTS, IDX_GAPS = g.IDX_EVENTS, g.IDX_GAPS
 PK_REVS = m.PK_REVISIONS
 
 ALLOWED = {
-    "bound_rowid": {EVENTS: {"rowid", "received_at"}},
-    "bound_product": {EVENTS: {"product_id", "received_at"}},
+    "bound_rowid": {EVENTS: {"rowid", "received_at", "event_time"}},
+    "probe": {EVENTS: {"rowid", "received_at"}},
+    "bound_product": {EVENTS: {"product_id", "received_at", "event_time"}},
     "bound_gaps": {GAPS: {"detected_at"}},
     "bound_candles": {REVS: {"candle_id", "interval_ms", "bucket_start", "revision"}},
     "witness_events": {EVENTS: {"feed", "product_id", "received_at", "seq"}},
@@ -70,14 +75,15 @@ def _candle_range(day_from, day_to):
 
 
 SQL_BOUND_ROWID = {
-    "oldest": "SELECT received_at FROM %s WHERE rowid >= 0 ORDER BY rowid LIMIT 1" % EVENTS,
-    "newest": "SELECT received_at FROM %s WHERE rowid >= 0 ORDER BY rowid DESC LIMIT 1" % EVENTS,
+    "oldest": "SELECT rowid, received_at, event_time FROM %s WHERE rowid >= 0 ORDER BY rowid LIMIT 1" % EVENTS,
+    "newest": "SELECT rowid, received_at, event_time FROM %s WHERE rowid >= 0 ORDER BY rowid DESC LIMIT 1" % EVENTS,
 }
+SQL_PROBE = "SELECT rowid, received_at FROM %s WHERE rowid >= ? ORDER BY rowid LIMIT 1" % EVENTS
 
 
 def _sql_bound_product(direction):
     order = "" if direction == "oldest" else " DESC"
-    return ("SELECT received_at FROM %s INDEXED BY %s WHERE product_id = ? ORDER BY received_at%s LIMIT 1"
+    return ("SELECT received_at, event_time FROM %s INDEXED BY %s WHERE product_id = ? ORDER BY received_at%s LIMIT 1"
             % (EVENTS, IDX_EVENTS, order))
 
 
@@ -123,15 +129,39 @@ def _one(guard, mode, sql, params, count):
     return rows[0][0] if rows else None
 
 
+def _row(guard, mode, sql, params, count, names):
+    rows = guard.fetch(mode, sql, params)
+    count.single += 1
+    return dict(zip(names, rows[0])) if rows else None
+
+
 def read_bounds(guard, count):
     out = {"events_overall": {}, "events_xbt": {}, "events_eth": {}, "gaps": {}, "candles_xbt": {}}
     for d in ("oldest", "newest"):
-        out["events_overall"][d] = _one(guard, "bound_rowid", SQL_BOUND_ROWID[d], (), count)
-        out["events_xbt"][d] = _one(guard, "bound_product", _sql_bound_product(d), (XBT,), count)
-        out["events_eth"][d] = _one(guard, "bound_product", _sql_bound_product(d), (ETH,), count)
+        out["events_overall"][d] = _row(guard, "bound_rowid", SQL_BOUND_ROWID[d], (), count, ("rowid", "received_at", "event_time"))
+        out["events_xbt"][d] = _row(guard, "bound_product", _sql_bound_product(d), (XBT,), count, ("received_at", "event_time"))
+        out["events_eth"][d] = _row(guard, "bound_product", _sql_bound_product(d), (ETH,), count, ("received_at", "event_time"))
         out["gaps"][d] = _one(guard, "bound_gaps", _sql_bound_gaps(d), (), count)
         out["candles_xbt"][d] = _one(guard, "bound_candles", _sql_bound_candles(d), (), count)
     return out
+
+
+def read_probe(guard, bounds, count):
+    """PROBES single-row reads spread over the rowid range: does received_at grow with rowid (what retention assumes)?"""
+    first, last = bounds["events_overall"]["oldest"], bounds["events_overall"]["newest"]
+    if first is None or last is None:
+        return {"points": [], "monotone_nondecreasing": None, "first_inversion": None}
+    lo, hi = first["rowid"], last["rowid"]
+    points, inversion = [], None
+    for i in range(PROBES):
+        target = lo + (hi - lo) * i // (PROBES - 1)
+        row = _row(guard, "probe", SQL_PROBE, (target,), count, ("rowid", "received_at"))
+        if row is None:
+            continue
+        if points and inversion is None and row["received_at"] < points[-1]["received_at"]:
+            inversion = {"previous": points[-1], "current": row}
+        points.append(row)
+    return {"points": points, "monotone_nondecreasing": inversion is None, "first_inversion": inversion}
 
 
 def _by_hour(window, hits):
@@ -164,16 +194,40 @@ def read_witness_candles(guard, window, cap, count):
     return {"rows": len(rows), "cap": cap, "by_hour": _by_hour(window, [("revisions", b) for (b,) in rows])}
 
 
-def facts(bounds, witnesses):
-    """Facts, not a verdict. ``purge_ruled_out``: events older than the empty window still exist."""
-    oldest = bounds["events_overall"]["oldest"]
-    out = {"window_start_ms": DAY0, "purge_ruled_out": oldest is not None and oldest <= DAY0}
-    xbt_after = witnesses.get("xbt_after")
-    eth_same = witnesses.get("eth_same")
-    out["xbt_events_after_window"] = None if xbt_after is None else xbt_after["rows"] > 0
-    out["eth_events_in_window"] = None if eth_same is None else eth_same["rows"] > 0
-    candles = witnesses.get("xbt_candles_after")
-    out["xbt_candles_after_window"] = None if candles is None else candles["rows"] > 0
+def inferences(bounds, probe, witnesses):
+    """What the results allow to say and what they do not. Never a verdict by itself; failing conditions give ``undetermined``."""
+    oldest = (bounds or {}).get("events_overall", {}).get("oldest")
+    out = {"window_start_ms": DAY0}
+    obs = {"oldest_event_received_at_ms": oldest and oldest["received_at"], "oldest_event_event_time_ms": oldest and oldest["event_time"],
+           "oldest_rowid": oldest and oldest["rowid"], "oldest_rowid_above_1": oldest is not None and oldest["rowid"] > 1,
+           "rowid_probe_monotone": probe["monotone_nondecreasing"] if probe else None}
+    out["observations"] = obs
+    cond = oldest is not None and probe is not None and probe["monotone_nondecreasing"] is True
+    if cond and oldest["received_at"] <= DAY0:
+        retention = {"holds": True, "says": "an event received at or before the window start survives and the probe found rowid monotone with "
+                     "received_at, so a prefix deletion (what retention does) cannot have removed the window; the empty window was not "
+                     "emptied by retention under the code's rule", "does_not_say": "why it is empty (never captured, not loaded, other tool); "
+                     "late loads between probes are not excluded"}
+    elif cond:
+        retention = {"holds": None, "says": "undetermined: the oldest surviving event is newer than the window start; that is compatible with "
+                     "retention having deleted the window AND with the window never having been captured", "does_not_say": "retention happened; "
+                     "never captured"}
+    else:
+        retention = {"holds": None, "says": "undetermined: no events, a stop, or rowid not monotone with received_at (the assumption retention "
+                     "uses is not met on the probed points)", "does_not_say": "anything about the cause"}
+    out["window_not_trimmed_by_retention"] = retention
+    before, after = witnesses.get("xbt_candles_before"), witnesses.get("xbt_candles_after")
+    if before is not None and after is not None:
+        candles = {"holds": before["rows"] > 0 and after["rows"] > 0,
+                   "says": "own candles exist before and after the window and none inside it; retention never deletes candles, so retention does "
+                   "not explain their absence" if before["rows"] > 0 and after["rows"] > 0 else "undetermined: own candles are missing before "
+                   "and/or after the window (capture of own candles not continuous around it)",
+                   "does_not_say": "why the capture did not build them"}
+    else:
+        candles = {"holds": None, "says": "undetermined: candle witnesses were not read", "does_not_say": "anything"}
+    out["own_candles_absence_not_explained_by_retention"] = candles
+    out["not_concluded"] = ["retention config of the real environment (unknown)", "that the oldest surviving event proves purge or absence",
+                            "cause of the capture gap", "Kraken timing"]
     return out
 
 
@@ -183,8 +237,9 @@ def build_result(conn, *, max_events, max_candles, read_date_ms, started=None):
     g._valid_cap(max_candles, "max_candles")
     result = {"tool_version": TOOL_VERSION, "sqlite_version": sqlite3.sqlite_version, "read_date_ms": read_date_ms,
               "caps": {"events_per_witness": max_events, "candles": max_candles}, "stopped": None,
-              "windows_ms": {"xbt_after": list(WINDOW_XBT_AFTER), "eth_same": list(WINDOW_ETH_SAME)},
-              "note": "Aggregates only: timestamps and hourly counts. Facts, not a verdict; says nothing about Kraken's timing."}
+              "windows_ms": {"xbt_after": list(WINDOW_XBT_AFTER), "eth_same": list(WINDOW_ETH_SAME),
+                             "candles_before": list(WINDOW_CANDLES_BEFORE)},
+              "note": "Aggregates only: timestamps and hourly counts. Observations and bounded inferences, not a verdict; says nothing about Kraken's timing."}
     if conn.execute("PRAGMA query_only").fetchone()[0] != 1:
         raise m.Stopped("guard", "query_only was not on")
     result["guards"] = {"opened_with": "mode=ro", "query_only_readback": 1}
@@ -196,15 +251,17 @@ def build_result(conn, *, max_events, max_candles, read_date_ms, started=None):
             result["bounds"] = read_bounds(guard, count)
             witnesses["xbt_after"] = read_witness_events(guard, XBT, WINDOW_XBT_AFTER, max_events, count)
             witnesses["eth_same"] = read_witness_events(guard, ETH, WINDOW_ETH_SAME, max_events, count)
+            result["probe"] = read_probe(guard, result["bounds"], count)
+            witnesses["xbt_candles_before"] = read_witness_candles(guard, WINDOW_CANDLES_BEFORE, max_candles, count)
             witnesses["xbt_candles_after"] = read_witness_candles(guard, WINDOW_XBT_AFTER, max_candles, count)
         except m.Stopped as stop:
             result["stopped"] = {"reason": stop.reason, "detail": stop.detail}
     finally:
         guard.close()
     result["witnesses"] = witnesses
-    result["facts"] = facts(result.get("bounds", {"events_overall": {"oldest": None}}), witnesses)
+    result["inferences"] = inferences(result.get("bounds"), result.get("probe"), witnesses)
     result["rows_read"] = {"single_row_reads": count.single, "rows_walked": count.walked, "total": count.total,
-                           "total_cap": 2 * (max_events + 1) + (max_candles + 1) + 10}
+                           "total_cap": 2 * (max_events + 1) + 2 * (max_candles + 1) + SINGLE_MAX}
     result["plans"] = sorted({d for details in guard.planned.values() for d in details})
     return result
 

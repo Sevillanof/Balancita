@@ -49,8 +49,8 @@ class ControlTests(unittest.TestCase):
 
     def seed(self):
         n = 0
-        for at, product, feed in ((D0 - 2 * H, m.BTC, "trade"), (D0 + 7 * H, m.BTC, "book"), (D0 + 7 * H + 5, m.BTC, "trade"),
-                                  (D0 + H, m.ETH, "book"), (D0 + 20 * H, m.BTC, "book")):
+        for at, product, feed in ((D0 - 2 * H, m.BTC, "trade"), (D0 + H, m.ETH, "book"), (D0 + 7 * H, m.BTC, "book"),
+                                  (D0 + 7 * H + 5, m.BTC, "trade"), (D0 + 20 * H, m.BTC, "book")):
             n += 1
             event(self.conn, product, feed, at, n)
         gap(self.conn, D0 - 5 * H, 1)
@@ -58,14 +58,15 @@ class ControlTests(unittest.TestCase):
         for b in (D0 - 10 * H, D0 + 6 * H, D0 + 6 * H + m.MINUTE_MS, D0 + 30 * H):
             candle(self.conn, b)
 
-    def test_bounds_and_witnesses_on_invented_data(self):
+    def test_bounds_probe_and_inferences_on_invented_data(self):
         self.seed()
         r = self.run_control()
         self.assertIsNone(r["stopped"])
         b = r["bounds"]
-        self.assertEqual(b["events_overall"], {"oldest": D0 - 2 * H, "newest": D0 + 20 * H})
-        self.assertEqual(b["events_xbt"], {"oldest": D0 - 2 * H, "newest": D0 + 20 * H})
-        self.assertEqual(b["events_eth"], {"oldest": D0 + H, "newest": D0 + H})
+        self.assertEqual(b["events_overall"]["oldest"], {"rowid": 1, "received_at": D0 - 2 * H, "event_time": D0 - 2 * H})
+        self.assertEqual(b["events_overall"]["newest"]["received_at"], D0 + 20 * H)
+        self.assertEqual(b["events_xbt"]["oldest"], {"received_at": D0 - 2 * H, "event_time": D0 - 2 * H})
+        self.assertEqual(b["events_eth"]["newest"]["received_at"], D0 + H)
         self.assertEqual(b["gaps"], {"oldest": D0 - 5 * H, "newest": D0 + 9 * H})
         self.assertEqual(b["candles_xbt"], {"oldest": D0 - 10 * H, "newest": D0 + 30 * H})
         xa = r["witnesses"]["xbt_after"]
@@ -73,22 +74,59 @@ class ControlTests(unittest.TestCase):
         self.assertEqual(xa["by_hour"][1]["count_by_feed"], {"book": 1, "trade": 1})
         self.assertEqual(r["witnesses"]["eth_same"]["by_hour"][1]["count_by_feed"], {"book": 1})
         self.assertEqual(r["witnesses"]["xbt_candles_after"]["rows"], 2)
-        self.assertEqual(r["facts"], {"window_start_ms": D0, "purge_ruled_out": True, "xbt_events_after_window": True,
-                                      "eth_events_in_window": True, "xbt_candles_after_window": True})
-        self.assertEqual(r["rows_read"]["single_row_reads"], 10)
-        self.assertEqual(r["rows_read"]["rows_walked"], 2 + 1 + 2)
+        self.assertEqual(r["witnesses"]["xbt_candles_before"]["rows"], 0)
+        self.assertTrue(r["probe"]["monotone_nondecreasing"])
+        inf = r["inferences"]
+        self.assertIs(inf["window_not_trimmed_by_retention"]["holds"], True)
+        self.assertIs(inf["own_candles_absence_not_explained_by_retention"]["holds"], False)   # no candles before the window
+        self.assertEqual(r["rows_read"]["single_row_reads"], 10 + len(r["probe"]["points"]))
+        self.assertLessEqual(r["rows_read"]["total"], r["rows_read"]["total_cap"])
+        self.assertNotIn("purge_ruled_out", r)
 
-    def test_purge_is_not_ruled_out_when_nothing_older_than_the_window_exists(self):
-        event(self.conn, m.BTC, "book", D0 + 7 * H, 1)
+    def test_candles_inference_needs_candles_on_both_sides(self):
+        candle(self.conn, D0 - 3 * H)
+        candle(self.conn, D0 + 7 * H)
         r = self.run_control()
-        self.assertFalse(r["facts"]["purge_ruled_out"])
-        self.assertFalse(r["facts"]["eth_events_in_window"])
+        self.assertIs(r["inferences"]["own_candles_absence_not_explained_by_retention"]["holds"], True)
+
+    def test_a_newer_oldest_event_is_undetermined_not_purged(self):
+        event(self.conn, m.BTC, "book", D0 + 7 * H, 1)
+        inf = self.run_control()["inferences"]["window_not_trimmed_by_retention"]
+        self.assertIsNone(inf["holds"])
+        self.assertIn("undetermined", inf["says"])
+        self.assertIn("never having been captured", inf["says"])
+
+    def test_non_monotone_rowid_makes_the_retention_inference_undetermined(self):
+        event(self.conn, m.BTC, "book", D0 - 2 * H, 1)
+        event(self.conn, m.BTC, "book", D0 + 7 * H, 2)
+        event(self.conn, m.BTC, "book", D0 - H, 3)          # late load: high rowid, old received_at
+        r = self.run_control()
+        self.assertFalse(r["probe"]["monotone_nondecreasing"])
+        self.assertIsNotNone(r["probe"]["first_inversion"])
+        self.assertIsNone(r["inferences"]["window_not_trimmed_by_retention"]["holds"])
+
+    def test_probe_is_bounded_and_reads_single_rows(self):
+        for i in range(200):
+            event(self.conn, m.BTC, "book", D0 - 2 * H + i, i)
+        r = self.run_control()
+        self.assertEqual(len(r["probe"]["points"]), c.PROBES - 1 if len(r["probe"]["points"]) < c.PROBES else c.PROBES)
+        self.assertLessEqual(r["rows_read"]["single_row_reads"], c.SINGLE_MAX)
+
+    def test_oldest_rowid_above_one_is_reported_as_an_observation(self):
+        for i in range(5):
+            event(self.conn, m.BTC, "book", D0 + i, i)
+        for (name,) in self.conn.execute("SELECT name FROM sqlite_master WHERE type = 'trigger'").fetchall():
+            self.conn.execute("DROP TRIGGER " + name)
+        self.conn.execute("DELETE FROM paper_futures_market_events WHERE rowid <= 2")
+        self.conn.commit()
+        obs = self.run_control()["inferences"]["observations"]
+        self.assertTrue(obs["oldest_rowid_above_1"])
 
     def test_empty_base_gives_none_not_errors(self):
         r = self.run_control()
         self.assertIsNone(r["stopped"])
         self.assertIsNone(r["bounds"]["events_overall"]["oldest"])
-        self.assertFalse(r["facts"]["purge_ruled_out"])
+        self.assertIsNone(r["inferences"]["window_not_trimmed_by_retention"]["holds"])
 
     def test_every_plan_is_a_search_without_scan_or_temp_btree(self):
         self.seed()
@@ -104,7 +142,7 @@ class ControlTests(unittest.TestCase):
         self.assertEqual(r["stopped"]["reason"], "row_budget")
         self.assertIn("events_overall", r["bounds"])
         self.assertNotIn("xbt_after", r["witnesses"])
-        self.assertNotIn("candle", str(r["witnesses"]))
+        self.assertNotIn("xbt_candles_after", r["witnesses"])
 
     def test_candle_cap(self):
         for i in range(5):
@@ -115,13 +153,15 @@ class ControlTests(unittest.TestCase):
     def test_no_product_or_value_leaves_other_than_timestamps_and_counts(self):
         self.seed()
         text = str(self.run_control())
-        for forbidden in ("raw_json", "normalized_json", "open_price", "close_price", "event_id"):
+        for forbidden in ("raw_json", "normalized_json", "open_price", "close_price", "event_id", "uid"):
             self.assertNotIn(forbidden, text)
 
     def test_statements_force_their_indexes_without_analyze(self):
         for sql in (c._sql_bound_product("oldest"), c._sql_witness_events(c.WINDOW_XBT_AFTER, 10), c._sql_bound_gaps("newest")):
             self.assertIn("INDEXED BY", sql)
-        for sql in (c._sql_bound_candles("oldest"), c._sql_witness_candles(c.WINDOW_XBT_AFTER, 10)):
+        self.assertIn("rowid", c.SQL_PROBE)
+        for sql in (c._sql_bound_candles("oldest"), c._sql_witness_candles(c.WINDOW_XBT_AFTER, 10),
+                    c._sql_witness_candles(c.WINDOW_CANDLES_BEFORE, 10)):
             self.assertIn("INDEXED BY sqlite_autoindex_paper_futures_candle_revisions_1", sql)
 
     def test_the_authorizer_denies_other_columns(self):
@@ -131,7 +171,9 @@ class ControlTests(unittest.TestCase):
         guard = c._Guard(ro, 0)
         for mode, sql in (("bound_rowid", "SELECT raw_json FROM paper_futures_market_events WHERE rowid >= 0 LIMIT 1"),
                           ("bound_gaps", "SELECT reason FROM paper_futures_data_gaps WHERE detected_at >= 0 LIMIT 1"),
-                          ("bound_candles", "SELECT close_price FROM paper_futures_candle_revisions LIMIT 1")):
+                          ("bound_candles", "SELECT close_price FROM paper_futures_candle_revisions LIMIT 1"),
+                          ("probe", "SELECT event_time FROM paper_futures_market_events WHERE rowid >= 0 LIMIT 1"),
+                          ("bound_rowid", "SELECT uid FROM paper_futures_market_events WHERE rowid >= 0 LIMIT 1")):
             with self.assertRaises(sqlite3.DatabaseError):
                 guard.fetch(mode, sql)
 
