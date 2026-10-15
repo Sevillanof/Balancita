@@ -262,18 +262,35 @@ class BoundedWalkTests(Fixture):
         self.assertEqual(ctx.exception.detail["stage"], "2d")
         self.assertEqual(led.entries[-1]["rows"], 0)
 
-    def test_2d_reads_only_the_range_and_counts_point_reads(self):
-        self._responses(300, start=A0 - 100 * 60_000, step=60_000)          # 100 before the window, 200 inside
-        for i in range(300):
+    def test_2d_reads_only_the_range_and_counts_every_read_of_the_stage(self):
+        self._responses(120, start=A0 - 20 * 60_000, step=60_000)           # 20 before the window, 100 inside
+        for i in range(120):
             self.conn.execute("INSERT INTO paper_futures_funding_periods VALUES (?,?,?,?,?,?,?)",
-                              ("h%05d" % i, A0 + i, m.BTC, A0 + i + 1, "1", A0 + i, "u"))
+                              ("h%05d" % i, A0 + i, m.BTC if i % 2 else "PF_SOLUSD", A0 + i + 1, "1", A0 + i, "u"))
         self.conn.commit()
         g, rd, led = self.guard(), m.Reads(), m.Ledger()
         out = m.read_2d(g, led, rd)
-        self.assertEqual(len(out), 200)
-        self.assertEqual(led.entries[-1]["rows"], 200)
-        self.assertEqual(rd.count["2d_product"], 200)
-        self.assertEqual(rd.count["2d_body"], 200)
+        entry = led.entries[-1]
+        self.assertEqual(len(out), 50)                                       # only XBT responses
+        self.assertEqual(entry["rows_walked"], 100)
+        self.assertEqual(rd.count["2d_lookup"], 100)
+        self.assertEqual(rd.count["2d_body"], 50)
+        self.assertEqual(entry["rows"], 100 + entry["search_reads"] + 100 + 50)
+
+    def test_2d_stage_reads_over_the_cap_stop_before_any_body(self):
+        self._responses(120, start=A0, step=60_000)
+        for i in range(120):
+            self.conn.execute("INSERT INTO paper_futures_funding_periods VALUES (?,?,?,?,?,?,?)",
+                              ("h%05d" % i, A0 + i, m.BTC, A0 + i + 1, "1", A0 + i, "u"))
+        self.conn.commit()
+        old = m.CAPS["2d"]
+        m.CAPS["2d"] = 300                                                   # 120 walk + ~25 + 120 lookups + 120 bodies > 300
+        self.addCleanup(m.CAPS.__setitem__, "2d", old)
+        g, rd = self.guard(), m.Reads()
+        with self.assertRaises(m.Stopped) as ctx:
+            m.read_2d(g, m.Ledger(), rd)
+        self.assertEqual(ctx.exception.reason, "row_budget")
+        self.assertEqual(rd.count["2d_body"], 0)
 
     def test_stage_results_survive_a_later_stop(self):
         for b in range(B0, B1, m.MINUTE_MS):

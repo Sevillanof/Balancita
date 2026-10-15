@@ -98,9 +98,8 @@ ALLOWED = {
     "2c_bound": {_PERIODS: {"rowid", "known_at"}},
     "2c": {_PERIODS: {"rowid", "product_id", "start_ms", "end_ms", "funding_rate", "known_at", "unit", "response_sha256"}},
     "2d_bound": {_RESPONSES: {"rowid", "received_at"}},
-    "2d_meta": {_RESPONSES: {"rowid", "sha256", "received_at", "server_time", "raw_response"},
-                _PERIODS: {"response_sha256", "product_id"}},
-    "2d_product": {_PERIODS: {"response_sha256", "product_id"}},
+    "2d_meta": {_RESPONSES: {"rowid", "sha256", "received_at"}},
+    "2d_lookup": {_PERIODS: {"response_sha256", "product_id"}, _RESPONSES: {"sha256", "raw_response"}},
     "2d_body": {_RESPONSES: {"sha256", "raw_response"}},
 }
 
@@ -132,14 +131,11 @@ def _sql_2c(limit):
 
 
 def _sql_2d_meta(limit):
-    """ONE pass over the responses' rowid range. Each walked row gives rowid and received_at; the size is taken only for
-    responses of the two products received in the window (NULL otherwise)."""
-    keep = ("w.received_at >= %d AND w.received_at < %d AND EXISTS (SELECT 1 FROM %s p WHERE p.response_sha256 = w.sha256 "
-            "AND p.product_id IN (%s))" % (WINDOW_A[0], WINDOW_A[1], _PERIODS, _P))
-    return ("SELECT w.rowid_, w.received_at, CASE WHEN %s THEN w.sha256 END, CASE WHEN %s THEN w.server_time END, "
-            "CASE WHEN %s THEN (SELECT octet_length(x.raw_response) FROM %s x WHERE x.sha256 = w.sha256) END "
-            "FROM (SELECT rowid AS rowid_, sha256, received_at, server_time FROM %s WHERE rowid >= ? AND rowid < ? ORDER BY rowid "
-            "LIMIT %d) w" % (keep, keep, keep, _RESPONSES, _RESPONSES, limit))
+    """ONE pass over the responses' rowid range, with no inner lookups: every walked row gives rowid and received_at, and the
+    hash only when the response was received in the window. Product and size come from counted single-row reads."""
+    return ("SELECT w.rowid_, w.received_at, CASE WHEN w.received_at >= %d AND w.received_at < %d THEN w.sha256 END FROM "
+            "(SELECT rowid AS rowid_, sha256, received_at FROM %s WHERE rowid >= ? AND rowid < ? ORDER BY rowid LIMIT %d) w"
+            % (WINDOW_A[0], WINDOW_A[1], _RESPONSES, limit))
 
 
 def _sql_bound(table, column):
@@ -148,6 +144,9 @@ def _sql_bound(table, column):
 
 SQL_2D_PRODUCT = "SELECT product_id FROM %s WHERE response_sha256 = ? LIMIT 1" % _PERIODS
 SQL_2D_BODY = "SELECT raw_response FROM %s WHERE sha256 = ?" % _RESPONSES
+# product and size of one response in a single point read (primary keys on both tables)
+SQL_2D_LOOKUP = ("SELECT p.product_id, octet_length(r.raw_response) FROM %s p JOIN %s r ON r.sha256 = p.response_sha256 "
+                 "WHERE p.response_sha256 = ? LIMIT 1" % (_PERIODS, _RESPONSES))
 
 
 class Stopped(Exception):
@@ -257,7 +256,7 @@ class Reads:
     the run is complete (D-212-04)."""
 
     def __init__(self):
-        self.count = {"2c_bound": 0, "2d_bound": 0, "2d_product": 0, "2d_body": 0}
+        self.count = {"2c_bound": 0, "2d_bound": 0, "2d_lookup": 0, "2d_body": 0}
 
     def total(self):
         return sum(self.count.values())
@@ -301,10 +300,12 @@ def _span(guard, mode, table, column, lo_ms, hi_ms, reads, stage, cap, ledger):
     lo, ev_lo = _lower_bound(guard, mode, table, column, lo_ms, reads)
     hi, ev_hi = _lower_bound(guard, mode, table, column, hi_ms, reads)
     width = max(0, hi - lo)
-    evidence = {"rowid_from": lo, "rowid_to": hi, "walk_upper_bound": width, "search": [ev_lo, ev_hi]}
-    if width > cap:
+    searches = reads.count[mode]
+    evidence = {"rowid_from": lo, "rowid_to": hi, "walk_upper_bound": width, "search_reads": searches, "search": [ev_lo, ev_hi]}
+    if width + searches > cap:                      # the stage's reads: the walk plus the single-row searches
         ledger.add(stage, 0, cap, None, **evidence, over_budget=True)
-        raise Stopped("row_budget", {"stage": stage, "walk_upper_bound": width, "cap": cap, "rowid_span": [lo, hi]})
+        raise Stopped("row_budget", {"stage": stage, "walk_upper_bound": width, "search_reads": searches, "cap": cap,
+                                     "rowid_span": [lo, hi]})
     return lo, hi, evidence
 
 
@@ -320,42 +321,55 @@ def read_2c(guard, ledger, reads):
     One pass: ``rows_walked`` is every row of the range, ``rows_returned`` only those of XBT/ETH starting in the window."""
     lo, hi, evidence = _span(guard, "2c_bound", _PERIODS, "known_at", WINDOW_A[0] - FUNDING_MARGIN_BEFORE_MS,
                              WINDOW_A[1] + FUNDING_MARGIN_AFTER_MS, reads, "2c", CAPS["2c"], ledger)
-    sql = _sql_2c(CAPS["2c"] + 1)
+    sql = _sql_2c(CAPS["2c"] - evidence["search_reads"] + 1)
     plan = _plan(guard, "2c", sql, (lo, hi), "INTEGER PRIMARY KEY")
     got = [tuple(r) for r in guard.fetch("2c", sql, (lo, hi))]
     out = [(r[2], r[3], r[4], r[5], r[1], r[6], r[7]) for r in got if r[2] is not None]
-    ledger.add("2c", len(got), CAPS["2c"], plan, rows_walked=len(got), rows_returned=len(out), **evidence)
-    if len(got) > CAPS["2c"]:
+    ledger.add("2c", len(got) + evidence["search_reads"], CAPS["2c"], plan, rows_walked=len(got), rows_returned=len(out), **evidence)
+    if len(got) + evidence["search_reads"] > CAPS["2c"]:
         raise Stopped("row_budget", {"stage": "2c", "cap": CAPS["2c"]})
     _check_order(got, _PERIODS, "known_at")
     return out
 
 
 def read_2d(guard, ledger, reads):
+    """Responses of XBT/ETH received in the window. The stage's reads are counted together against the cap: the walk, the
+    searches, one lookup (product and size) per response received in the window, and one body read per XBT/ETH response."""
     lo, hi, evidence = _span(guard, "2d_bound", _RESPONSES, "received_at", WINDOW_A[0], WINDOW_A[1], reads, "2d", CAPS["2d"], ledger)
-    sql = _sql_2d_meta(CAPS["2d"] + 1)
+    base = evidence["search_reads"]
+    sql = _sql_2d_meta(CAPS["2d"] - base + 1)
     plan = _plan(guard, "2d_meta", sql, (lo, hi), "INTEGER PRIMARY KEY")
     got = [tuple(r) for r in guard.fetch("2d_meta", sql, (lo, hi))]
-    meta = [r for r in got if r[2] is not None]
-    total = sum(int(r[4] or 0) for r in meta)
-    ledger.add("2d", len(got), CAPS["2d"], plan, rows_walked=len(got), rows_returned=len(meta), bytes=total,
-               bytes_cap=MAX_BODY_BYTES, **evidence)
-    if len(got) > CAPS["2d"]:
-        raise Stopped("row_budget", {"stage": "2d", "cap": CAPS["2d"]})
+    inside = [r for r in got if r[2] is not None]
+    walked = len(got)
+    entry = dict(rows_walked=walked, rows_in_window=len(inside), bytes_cap=MAX_BODY_BYTES, **evidence)
+    if walked + base + len(inside) > CAPS["2d"]:        # lower bound of the stage's reads: walk + searches + one lookup each
+        ledger.add("2d", walked + base, CAPS["2d"], plan, rows_returned=0, **entry)
+        raise Stopped("row_budget", {"stage": "2d", "walked": walked, "search_reads": base, "lookups_needed": len(inside),
+                                     "cap": CAPS["2d"]})
     _check_order(got, _RESPONSES, "received_at")
+    targets, total = [], 0
+    for _rowid, received_at, sha in inside:
+        row = guard.fetch("2d_lookup", SQL_2D_LOOKUP, (sha,))
+        reads.count["2d_lookup"] += 1
+        if len(row) != 1:
+            raise Stopped("response_not_found", {"stage": "2d"})
+        if row[0][0] in PRODUCTS:
+            targets.append((sha, received_at, row[0][0]))
+            total += int(row[0][1] or 0)
+    stage_reads = walked + base + len(inside) + len(targets)     # + one body read per target
+    ledger.add("2d", stage_reads, CAPS["2d"], plan, rows_returned=len(targets), bytes=total, **entry)
+    if stage_reads > CAPS["2d"]:
+        raise Stopped("row_budget", {"stage": "2d", "stage_reads": stage_reads, "cap": CAPS["2d"]})
     if total > MAX_BODY_BYTES:
         raise Stopped("byte_budget", {"stage": "2d", "bytes": total, "cap": MAX_BODY_BYTES})
     out = []
-    for _rowid, received_at, sha, server_time, _size in meta:
-        prod = guard.fetch("2d_product", SQL_2D_PRODUCT, (sha,))
-        reads.count["2d_product"] += 1
-        if len(prod) != 1 or prod[0][0] not in PRODUCTS:
-            continue
+    for sha, received_at, product in targets:
         body = guard.fetch("2d_body", SQL_2D_BODY, (sha,))
         reads.count["2d_body"] += 1
         if len(body) != 1:
             raise Stopped("response_not_found", {"stage": "2d"})
-        out.append((sha, received_at, server_time, prod[0][0], body[0][0]))
+        out.append((sha, received_at, "", product, body[0][0]))
     return out
 
 
