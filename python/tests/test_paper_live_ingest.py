@@ -1306,7 +1306,7 @@ class TestPublishedContracts(TestRunnerEquivalence):
         events = self.build()
         runner = self.runner("pos")
         runner.run(events[:len(events) // 2])           # the long is open
-        block = PUB.positions(runner, report_age_ms=1_000, max_age_ms=15_000, source_state=LIVE)
+        block = PUB.positions(runner, report_age_ms=1_000, max_age_ms=15_000, source_state=LIVE, threshold_approved=True)
         self.assertEqual((block["mode"], block["evidence_class"], block["execution_class"]),
                          ("integration", "not_forward_evidence", "observed_quotes"))
         self.assertEqual(len(block["positions"]), 1)
@@ -1320,39 +1320,47 @@ class TestPublishedContracts(TestRunnerEquivalence):
         events = self.build()
         runner = self.runner("stale")
         runner.run(events[:len(events) // 2])
-        stale = PUB.positions(runner, report_age_ms=60_000, max_age_ms=15_000, source_state=LIVE)
+        stale = PUB.positions(runner, report_age_ms=60_000, max_age_ms=15_000, source_state=LIVE, threshold_approved=True)
         self.assertFalse(stale["positions"][0]["verified"])
         self.assertEqual(stale["verification"]["reasons"], ["report_stale"])
-        self.assertFalse(PUB.positions(runner, None, 15_000, LIVE)["positions"][0]["verified"])
+        self.assertFalse(PUB.positions(runner, None, 15_000, LIVE, threshold_approved=True)["positions"][0]["verified"])
 
-    def test_without_an_approved_limit_nothing_is_current_and_the_block_says_so(self):
-        """BAL-DECISION-187-01, P2: the publisher carries the limits, labelled hypothesis; there is no default. A missing limit
-        gives ``unknown`` freshness and never ``verified``, even with live data and a brand-new report."""
+    def test_a_limit_that_is_not_approved_never_makes_anything_fresh_or_verified(self):
+        """BAL-DECISION-187-01, P2: the publisher carries the limits, labelled hypothesis; there is no default and no limit is
+        approved. Without an approved limit the report is never ``fresh`` and the positions are never ``verified``, with live
+        data and a brand-new report alike; an older report than the limit still degrades to ``stale``."""
         events = self.build()
         runner = self.runner("nolimit")
         runner.run(events[:len(events) // 2])
-        block = PUB.positions(runner, report_age_ms=0, source_state=LIVE)
-        self.assertFalse(block["positions"][0]["verified"])
-        self.assertFalse(block["positions"][0]["accounting_verified"])
-        self.assertEqual(block["verification"]["reasons"], ["freshness_threshold_not_approved"])
-        self.assertEqual(block["verification"]["freshness"], "unknown")
-        self.assertEqual(block["verification"]["thresholds"], {"report_max_age_ms": None, "status": "not_approved"})
-        given = PUB.positions(runner, report_age_ms=1_000, max_age_ms=15_000, source_state=LIVE)["verification"]
-        self.assertEqual((given["freshness"], given["thresholds"]), ("fresh", {"report_max_age_ms": 15_000, "status": "hypothesis"}))
+        none = PUB.positions(runner, report_age_ms=0, source_state=LIVE)
+        self.assertFalse(none["positions"][0]["verified"])
+        self.assertFalse(none["positions"][0]["accounting_verified"])
+        self.assertEqual(none["verification"]["reasons"], ["freshness_threshold_not_approved"])
+        self.assertEqual((none["verification"]["freshness"], none["verification"]["thresholds"]),
+                         ("unknown", {"report_max_age_ms": None, "status": "not_approved"}))
+        hypothesis = PUB.positions(runner, report_age_ms=1_000, max_age_ms=15_000, source_state=LIVE)
+        self.assertFalse(hypothesis["positions"][0]["verified"])
+        self.assertEqual(hypothesis["verification"]["reasons"], ["freshness_threshold_not_approved"])
+        self.assertEqual((hypothesis["verification"]["freshness"], hypothesis["verification"]["thresholds"]),
+                         ("unknown", {"report_max_age_ms": 15_000, "status": "hypothesis"}))
         old = PUB.positions(runner, report_age_ms=60_000, max_age_ms=15_000, source_state=LIVE)["verification"]
-        self.assertEqual(old["freshness"], "stale")
-        self.assertEqual(PUB.positions(runner, None, 15_000, LIVE)["verification"]["freshness"], "unknown")
-        json.dumps(block)
+        self.assertEqual((old["freshness"], old["reasons"]), ("stale", ["report_stale", "freshness_threshold_not_approved"]))
+        no_age = PUB.positions(runner, None, 15_000, LIVE)["verification"]
+        self.assertEqual((no_age["freshness"], no_age["reasons"]), ("unknown", ["report_age_unknown", "freshness_threshold_not_approved"]))
+        approved = PUB.positions(runner, 1_000, 15_000, LIVE, threshold_approved=True)["verification"]    # a fixture, not a real approval
+        self.assertEqual((approved["freshness"], approved["thresholds"]["status"], approved["verified"]), ("fresh", "approved", True))
+        self.assertFalse(PUB.positions(runner, 1_000, None, LIVE, threshold_approved=True)["verification"]["verified"])
+        json.dumps(none)
 
     def test_positions_are_not_verified_when_the_data_is_stale_even_if_the_report_is_fresh(self):
         events = self.build()
         runner = self.runner("datastale")
         runner.run(events[:len(events) // 2])
-        stale = PUB.positions(runner, 1_000, 15_000, {"source": "stale"})
+        stale = PUB.positions(runner, 1_000, 15_000, {"source": "stale"}, threshold_approved=True)
         self.assertFalse(stale["positions"][0]["verified"])
         self.assertTrue(stale["positions"][0]["accounting_verified"] is False)
         self.assertEqual(stale["verification"]["reasons"], ["source_stale"])
-        unknown = PUB.positions(runner, 1_000, 15_000)
+        unknown = PUB.positions(runner, 1_000, 15_000, threshold_approved=True)
         self.assertEqual(unknown["verification"]["reasons"], ["source_state_unknown"])
         self.assertFalse(unknown["positions"][0]["verified"])
 
@@ -1363,13 +1371,13 @@ class TestPublishedContracts(TestRunnerEquivalence):
             runner.run([event])
             if runner.portfolio.positions:
                 break
-        block = PUB.positions(runner, report_age_ms=1_000, max_age_ms=15_000, source_state=LIVE)
+        block = PUB.positions(runner, report_age_ms=1_000, max_age_ms=15_000, source_state=LIVE, threshold_approved=True)
         row = block["positions"][0]
         self.assertEqual(row["protection_evidence"], "not_yet_observed")
         self.assertTrue(row["accounting_verified"])
         self.assertFalse(row["verified"])
         runner.run([e for e in events if e["t_ms"] > runner.clock][:20])
-        later = PUB.positions(runner, 1_000, 15_000, LIVE)["positions"][0]
+        later = PUB.positions(runner, 1_000, 15_000, LIVE, threshold_approved=True)["positions"][0]
         self.assertEqual(later["protection_evidence"], "observed")
         self.assertTrue(later["verified"])
 
