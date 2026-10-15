@@ -7,13 +7,13 @@ cartera. El GATE de sesión paper real sigue en NO-GO.
 
 `python/balancita_engine/paper_live_process.py`:
 
-| Pieza                                                               | Qué hace                                                                                                                                                                                                                               |
-| ------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Configuración versionada (`balancita-paper-live-process-config.v1`) | Productos, ventana de decisión, brecha máxima de cotización, modo de funding, parámetros del ingestor. Claves desconocidas se rechazan; su `digest` se guarda en `process-config.json` y otro digest no puede continuar el directorio. |
-| `preflight`                                                         | Solo lectura. Compuerta de sesión real, configuración contra directorio, directorio libre y sin otro escritor, disco libre, fuente legible, calentamiento completo por producto. Corre todos los chequeos y los lista.                 |
-| Fases                                                               | `INIT → WARMUP → LIVE → STOPPING → STOPPED`, o `HALTED`. Se derivan de lo que tiene la sesión; el `heartbeat.json` (escritura atómica tras cada paso) las informa.                                                                     |
-| Parada ordenada                                                     | SIGTERM/SIGINT solo levantan una bandera; el bucle termina el paso en curso y llama `LiveSession.stop` (D-186-1: cancela pendientes con `operator_stop`) y escribe `report.json`.                                                      |
-| Reinicio                                                            | Tras un corte (kill, energía) `start` recupera solo, con el reloj del reinicio. Tras `HALTED`/`REFUSED` exige `--restart` explícito. Tras una parada ordenada no reinicia (`session_stopped`).                                         |
+| Pieza                                                               | Qué hace                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| ------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Configuración versionada (`balancita-paper-live-process-config.v1`) | Productos, ventana de decisión, brecha máxima de cotización, modo de funding, parámetros del ingestor. Claves desconocidas se rechazan; su `digest` se guarda en `process-config.json` y otro digest no puede continuar el directorio.                                                                                                                                                                                             |
+| `preflight`                                                         | Solo lectura. Compuerta de sesión real, configuración contra directorio, directorio libre y sin otro escritor, disco libre, fuente legible, calentamiento completo por producto. Corre todos los chequeos y los lista.                                                                                                                                                                                                             |
+| Fases                                                               | `INIT → WARMUP → LIVE → STOPPING → STOPPED`, o `HALTED`. Se derivan de lo que tiene la sesión; el `heartbeat.json` (escritura atómica tras cada paso) las informa.                                                                                                                                                                                                                                                                 |
+| Parada ordenada                                                     | SIGTERM/SIGINT solo levantan una bandera; el bucle termina el paso en curso y llama `LiveSession.stop` (D-186-1: cancela pendientes con `operator_stop`) y escribe `report.json`.                                                                                                                                                                                                                                                  |
+| Reinicio                                                            | Tras un corte (kill, energía) `start` recupera solo, con el reloj del reinicio. Tras un halt exige `--restart` explícito, y eso no depende del latido: `halt.json` (escrito con fsync antes de responder `HALTED`) o un `funding_book_diverged` del audit sin reinicio de operador registrado (`operator-restarts.json`) lo exigen aunque el latido falte o diga `LIVE`. Tras una parada ordenada no reinicia (`session_stopped`). |
 
 ## Reproducir (todo local, reloj simulado)
 
@@ -24,15 +24,17 @@ PYTHONPATH=.. python3 -m balancita_engine.paper_live_process preflight --config 
 PYTHONPATH=.. python3 -m balancita_engine.paper_live_process run --config C.json --directory D --source S.sqlite --clock-from-ms T --max-steps N
 ```
 
-La línea de comandos rechaza `--wall-clock` y cualquier `source_id` distinto de `synthetic`. Habilitar datos reales exige una
-autorización escrita de Fran y un cambio de código revisado, no una opción.
+La línea de comandos rechaza `--wall-clock` y toda fuente que no se identifique como la fixture sintética: la configuración debe decir
+`source_id: synthetic` y el SQLite debe llevar la tabla marcador `balancita_synthetic_fixture`. Una captura real no tiene ninguna de las
+dos y se rechaza con `real_session_not_authorized`, diga lo que diga la configuración. Es una protección contra un error, no contra
+quien falsifique el marcador a propósito. Habilitar datos reales exige una autorización escrita de Fran y un cambio de código revisado.
 
 ## Conexión con #186
 
 - Arranque: el pre-vuelo y el calentamiento completo van antes de evaluar señales como vigentes. La fase `LIVE` empieza cuando todos
   los productos tienen vela hasta el primer instante de decisión y fuera de la supresión por hueco.
 - Divergencia interna de funding (BAL-DECISION-184-01): la sesión se para (`HALTED`), la evidencia queda en la auditoría y el P&L se marca no verificado; se reinicia solo con `--restart`.
-- Falla de disco o de un paso: la instancia pasa a `HALTED` (P3 `Mantener`, D-186-2 `Toda`), escribe el reporte y sale con estado 3.
+- Falla de disco o de un paso (también la del latido o del reporte): la instancia pasa a `HALTED`, se escribe `halt.json` primero (P3 `Mantener`, D-186-2 `Toda`), escribe el reporte y sale con estado 3.
   La recuperación equivale a un corte de energía en esa escritura.
 - Corte (SIGKILL): sin reporte; el latido queda en `WARMUP`/`LIVE`; `start` recupera con el tramo sin observar declarado
   (`observation_gap`), sin cancelaciones retroactivas.
