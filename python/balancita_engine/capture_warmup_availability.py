@@ -4,7 +4,7 @@ One question: does the live capture hold the 1-minute official candles of PF_XBT
 up (``required_warmup_ms`` = 1 037 400 000 ms = 3 458 five-minute bars = 17 290 one-minute candles = 288 h 10 min) in the
 fixed window [2026-10-01T19:50Z, 2026-10-13T21:00Z), 17 350 minutes (the first window, from
 2026-10-01T00:00Z, started 19 h 50 min before the capture begins and came back ``bloqueada``)? It reads times and counters only: ``bucket_start`` and
-``known_at`` of every candle, plus an aggregate that counts empty price/volume fields without ever returning one. No price,
+``known_at`` of every candle, plus a 0/1 flag per row that says whether a price/volume field is empty (never the value). No price,
 rate, volume or raw body leaves the database.
 
 Guards (the authorization is the contract, not this file; any other window, product, interval, table or column is refused):
