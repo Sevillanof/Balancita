@@ -67,7 +67,7 @@ REJECTION_REASONS = frozenset({
     "adverse_move_consumed_stop_distance", "favorable_move_consumed_target_distance",
     # requested explicitly by the caller (stage 8B): the runner was down over part of the execution window
     "runner_interrupted"})
-CANCEL_REASONS = frozenset({"runner_interrupted", "source_stale"})
+CANCEL_REASONS = frozenset({"runner_interrupted", "source_stale", "operator_stop"})
 
 
 @dataclass(frozen=True)
@@ -237,7 +237,7 @@ class TimedExecutor:
 
     def cancel(self, intent_id, reason, now_ms, **extra):
         """Cancels one pending order *on request* (stage 8B ``runner_interrupted``; ``source_stale`` when the source lost
-        continuity while the order was waiting). Nothing in this module calls it:
+        continuity while the order was waiting; ``operator_stop`` when the operator stops the run). Nothing in this module calls it:
         without a request an order is filled, rejected or expired exactly as before. Returns the terminal record, or
         ``None`` when the order is not pending (already filled, rejected or unknown)."""
         if reason not in CANCEL_REASONS:

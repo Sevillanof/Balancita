@@ -281,6 +281,7 @@ class PaperRunner(object):
         self.cycles_seen = set()     # (product, cycle_ms) of every accepted cycle
         self.open_funding = {}       # event_id -> funding/reconcile event whose reconciliation entry is not recorded yet
         self.quote_t_ms = {}         # product -> journal time (t_ms) of the last quote delivered: the clock a source loss is measured in
+        self.owed_stops = {}          # intent_id -> [lo, hi] announced by an ``operator_stop`` entry and not yet cancelled
         self.owed_interruptions = {}  # intent_id -> item announced by a ``recovery`` entry and not yet cancelled
         self.source_losses = {}      # (product, gap_from_ms, gap_to_ms) -> {"intent_ids": [...], "windows": {intent_id: [lo, hi]}}
         self.coverage = {"last_quote": {}, "watch": {}, "candles": {}, "gaps": []}     # market coverage while positions are open (observed facts)
@@ -441,6 +442,12 @@ class PaperRunner(object):
             self.executor.expire_orders(data["intent_ids"], data["now_ms"])
             self._settle_closed(before)
             self._count("source_loss_expiries")
+        elif kind == "operator_stop":
+            before = self._open_snapshot()
+            self.executor.expire_orders(data["expire_ids"], data["declared_ms"])
+            self._settle_closed(before)
+            self.owed_stops.update({i: list(data["windows"][i]) for i in data["cancel_ids"]})
+            self._count("operator_stops")
         elif kind == "order_cancelled":
             extra = {"recovery_ms": data["recovery_ms"]} if "recovery_ms" in data else {}
             record = self.executor.cancel(data["intent_id"], data["reason"], entry["t_ms"],
@@ -449,6 +456,8 @@ class PaperRunner(object):
             self._count("orders_cancelled" if record is not None else "cancel_without_order")
             if data["reason"] == "runner_interrupted":
                 self.owed_interruptions.pop(data["intent_id"], None)
+            elif data["reason"] == "operator_stop":
+                self.owed_stops.pop(data["intent_id"], None)
         elif kind == "recovery":
             for item in data["interrupted_orders"]:
                 self.owed_interruptions[item["intent_id"]] = item
@@ -885,6 +894,44 @@ class PaperRunner(object):
         self._expire_for_source_loss(product_id, known, max(t_ms, self.journal.entries[-1]["t_ms"]))
         return list(known["intent_ids"])
 
+    def stop_orderly(self, t_ms):
+        """The operator stops the run (decision D-186-1): every pending order still open is cancelled with the reason
+        ``operator_stop``; one whose window was already over ends with the executor's own expiry reason. Open positions,
+        their stops and targets, the risk rules and the accounting are not touched, and no exit, quote or tick is made up.
+
+        The journal says so first (``operator_stop``: what is cancelled, what expires, their windows) and then one
+        ``order_cancelled`` per order, so a process that dies half-way is finished by the recovery with the same reasons.
+        If any of those writes fails the call raises (the runner refuses) and the stop must not be reported as done. While
+        the engine is stopped nobody evaluates stops or targets: that is not protection. Returns
+        ``{"cancelled": [...], "expired": [...], "declared_ms": ...}``."""
+        self._guard_open()
+        if self.status != PROCESSING:
+            raise RunnerError("not_processing", self.status)
+        declared = max(int(t_ms), self.journal.entries[-1]["t_ms"])
+        clock = self.clock if self.clock is not None else self.journal.entries[0]["t_ms"]
+        cancel_ids, expire_ids, windows = [], [], {}
+        for intent_id, order in sorted(self.executor.pending.items()):
+            timeline = order["timeline"]
+            if declared > timeline["deadline_ms"]:
+                expire_ids.append(intent_id)
+            else:
+                lo = max(clock, timeline["earliest_fill_ms"])
+                cancel_ids.append(intent_id)
+                windows[intent_id] = [lo, max(lo, min(declared, timeline["deadline_ms"]))]
+        self._record(declared, "operator_stop", {"declared_ms": declared, "cancel_ids": cancel_ids, "expire_ids": expire_ids,
+                                                 "windows": windows})
+        self._finish_operator_stop(declared)
+        return {"cancelled": cancel_ids, "expired": expire_ids, "declared_ms": declared}
+
+    def _finish_operator_stop(self, entry_ms):
+        """The ``order_cancelled`` entries an ``operator_stop`` announced and a dead process never wrote."""
+        for intent_id, (lo, hi) in sorted(self.owed_stops.items()):
+            if intent_id in self.executor.pending:
+                self._record(entry_ms, "order_cancelled", {"intent_id": intent_id, "reason": "operator_stop",
+                                                           "uncovered_from_ms": lo, "uncovered_to_ms": hi})
+            else:
+                self.owed_stops.pop(intent_id, None)
+
     def _expire_for_source_loss(self, product_id, loss, entry_ms):
         """The orders the declaration found over before the silence was excessive end with the executor's own expiry (its
         reason), at the time of the declaration: the same in a continuous run and in a recovered one."""
@@ -918,11 +965,12 @@ class PaperRunner(object):
             self._refuse("recovery_clock_behind", "recovery at {} but the journal reached {}".format(recovery_ms, before))
         self.status = RECOVERING
         self._finish_source_losses(recovery_ms)
+        self._finish_operator_stop(recovery_ms)
         # a recovery that died after its ``recovery`` entry but before its cancellations: they are still owed, and
         # ``before`` already equals that recovery's clock, so the windows would otherwise look watched
         interrupted = [dict(item) for _, item in sorted(self.owed_interruptions.items()) if item["intent_id"] in self.executor.pending]
         for intent_id, order in sorted(self.executor.pending.items()):
-            if intent_id in self.owed_interruptions:
+            if intent_id in self.owed_interruptions or intent_id in self.owed_stops:
                 continue
             lo = max(before, order["timeline"]["earliest_fill_ms"])
             hi = min(recovery_ms, order["timeline"]["deadline_ms"])
