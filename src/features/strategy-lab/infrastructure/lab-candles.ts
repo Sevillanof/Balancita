@@ -14,15 +14,12 @@ export type LabCandle = {
   volume: number
 }
 
-export type LabCandleSource = 'live' | 'mock' | 'synthetic'
+export type LabCandleSource = 'live'
 
 export type LabCandles = {
   source: LabCandleSource
   candles: LabCandle[]
 }
-
-/** Below this the indicators barely warm up, so the sample is not useful. */
-export const MIN_USEFUL_CANDLES = 60
 
 /** Closed candles of a terminal bootstrap's `terminal_market`, oldest first. */
 export function candlesFromBootstrap(bootstrap: unknown): LabCandle[] {
@@ -52,8 +49,8 @@ export function candlesFromBootstrap(bootstrap: unknown): LabCandle[] {
 }
 
 /**
- * Deterministic random walk around 84.000 US$ for when no terminal backend
- * answers, so the screen still renders a realistic working state.
+ * Deterministic random walk around 84.000 US$. TEST FIXTURE ONLY (DATOS DE
+ * EJEMPLO): the screens never fall back to it when the Terminal is down.
  */
 export function syntheticCandles(
   count = 480,
@@ -87,19 +84,15 @@ export function syntheticCandles(
 }
 
 /**
- * The same 1m PF_XBTUSD candles the Terminal chart shows: the live gateway
- * first, then the MOCK fixture, then synthetic candles.
+ * The same 1m PF_XBTUSD candles the Terminal chart shows, from the live
+ * gateway only (MOCK is not used any more). With no live candles it throws:
+ * the screen says so instead of drawing invented ones.
  */
 export async function loadLabCandles(
   load: typeof loadTerminalBootstrap = loadTerminalBootstrap,
 ): Promise<LabCandles> {
-  for (const source of ['live', 'mock'] as const) {
-    try {
-      const candles = candlesFromBootstrap(await load(terminalApiBase(source)))
-      if (candles.length >= MIN_USEFUL_CANDLES) return { source, candles }
-    } catch {
-      // Try the next source.
-    }
-  }
-  return { source: 'synthetic', candles: syntheticCandles() }
+  const candles = candlesFromBootstrap(await load(terminalApiBase('live')))
+  if (candles.length === 0)
+    throw new Error('El Terminal no devolvió velas cerradas.')
+  return { source: 'live', candles }
 }

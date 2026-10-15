@@ -7,6 +7,8 @@ export default defineConfig({
   testDir: './e2e',
   testMatch: '**/*.pw.ts',
   fullyParallel: false,
+  // The real-gateway specs share fixed ports (Vite 5174, gateway 8789).
+  workers: 1,
   reporter: 'list',
   outputDir: './test-results',
   use: {
