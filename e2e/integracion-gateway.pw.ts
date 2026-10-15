@@ -86,6 +86,7 @@ test.beforeAll(async ({}, info) => {
   const env = {
     FUTURES_MARKET_DB_PATH: seeded.FUTURES_MARKET_DB_PATH,
     FUTURES_VERDICTS_DB_PATH: seeded.FUTURES_VERDICTS_DB_PATH,
+    FUTURES_DECISIONS_DB_PATH: seeded.FUTURES_DECISIONS_DB_PATH,
   } as Record<string, string>
   gateway = spawn('node', ['server/src/app/gateway-main.ts'], {
     env: {
@@ -299,6 +300,224 @@ test('Terminal on the real gateway: every interaction answers without 404', asyn
   ).toBe(true)
   expect(
     log.some((e) => e.url.includes('/observability/activity?window=24h')),
+  ).toBe(true)
+})
+
+test('B3 answers through the Vite proxy: list, pages, trace and 400s', async ({
+  request,
+}) => {
+  const list = await request.get(
+    '/api-live/observability/decisions?product=PF_XBTUSD&limit=50',
+  )
+  expect(list.status()).toBe(200)
+  const body = await list.json()
+  expect(body.schema).toBe('observability-decisions.v1')
+  expect(body.decisions.state).toBe('ok')
+  expect(body.decisions.items).toHaveLength(50)
+  expect(body.decisions.range_total).toBe(120)
+  expect(body.decisions.next_cursor).not.toBeNull()
+  // The next page continues from the cursor and never repeats a row.
+  const next = await request.get(
+    `/api-live/observability/decisions?product=PF_XBTUSD&limit=50&from=${body.from_ms}&to=${body.to_ms}&cursor=${body.decisions.next_cursor}`,
+  )
+  expect(next.status()).toBe(200)
+  const page2 = (await next.json()).decisions.items
+  expect(page2[0].bucket_start_ms).toBeLessThan(
+    body.decisions.items.at(-1).bucket_start_ms,
+  )
+  const trace = await request.get(
+    `/api-live/observability/decisions/PF_XBTUSD/${body.decisions.items[0].bucket_start_ms}`,
+  )
+  expect(trace.status()).toBe(200)
+  const traced = await trace.json()
+  expect(traced.state).toBe('ok')
+  expect(traced.payload_state).toBe('ok')
+  expect(traced.payload.proposals.length).toBeGreaterThan(0)
+  // Model rows join by (product, bucket): this minute has none, the LONG has one.
+  expect(traced.model_decisions.state).toBe('ok')
+  expect(traced.model_decisions.items).toEqual([])
+  // Bad requests are 400 with a code, never a 404 (that means «route unknown»).
+  for (const [url, code] of [
+    ['/api-live/observability/decisions', 'invalid_product'],
+    [
+      '/api-live/observability/decisions?product=PF_XBTUSD&limit=9999',
+      'invalid_limit',
+    ],
+    ['/api-live/observability/decisions/PF_XBTUSD/abc', 'invalid_bucket'],
+  ] as const) {
+    const res = await request.get(url)
+    expect(res.status(), url).toBe(400)
+    expect((await res.json()).error.code).toBe(code)
+  }
+})
+
+test('Investigación de decisiones: HISTORIAL -> list -> trace on the real gateway', async ({
+  page,
+}) => {
+  const log: { method: string; url: string; status: number }[] = []
+  page.on('response', (response) => {
+    const url = new URL(response.url())
+    if (url.pathname.startsWith('/api-'))
+      log.push({
+        method: response.request().method(),
+        url: url.pathname + url.search,
+        status: response.status(),
+      })
+  })
+  // Everything the page shows comes from synthetic verdicts: say so on screen.
+  const label = async () =>
+    page.evaluate(() => {
+      document.getElementById('datos-de-ejemplo')?.remove()
+      const tag = document.createElement('div')
+      tag.id = 'datos-de-ejemplo'
+      tag.textContent =
+        'DATOS DE EJEMPLO · veredictos y velas sintéticos en una base temporal, no del motor'
+      tag.style.cssText =
+        'position:fixed;left:12px;bottom:10px;z-index:99;padding:4px 10px;border:1px solid #f59e0b;border-radius:4px;background:#0a0d14;color:#f59e0b;font:600 11px Inter,sans-serif;letter-spacing:.06em'
+      document.body.append(tag)
+    })
+
+  await page.goto('/terminal')
+  await expect(page.getByTestId('activity-panel')).toBeVisible()
+  await page.getByTestId('open-investigation').scrollIntoViewIfNeeded()
+  mkdirSync('docs/mission-control/b3', { recursive: true })
+  await label()
+  await page.screenshot({
+    path: 'docs/mission-control/b3/captura-terminal-historial-1440x900.png',
+  })
+  await page.getByTestId('open-investigation').click()
+  await expect(page).toHaveURL(/\/investigacion\?product=PF_XBTUSD/)
+  await expect(page.getByTestId('investigation')).toBeVisible()
+  // No navigation tab was added: the Terminal stays the current page.
+  await expect(
+    page.getByRole('link', { name: 'Terminal', exact: true }),
+  ).toHaveAttribute('aria-current', 'page')
+  await expect(page.getByRole('navigation')).not.toContainText('Investigación')
+
+  const list = page.getByTestId('decision-list')
+  await expect(list).toBeVisible()
+  await expect(page.getByTestId('list-count')).toContainText(
+    'Mostrando 50 de 120',
+  )
+  // The newest verdict opens its trace, with the six stages.
+  await expect(page.getByTestId('stage-6')).toBeVisible()
+  await expect(page.getByTestId('proposals')).toContainText(
+    'c25-pullback-perp-v1',
+  )
+  await expect(page.getByTestId('card-action')).toContainText('WAIT')
+  await expect(page.getByTestId('reason-origin')).toContainText(
+    'no lo atribuye a ninguna estrategia',
+  )
+  // The newest verdict is the last closed minute: its candle is not stored yet.
+  // The chart still draws the minutes before it and says so; no error, no marker.
+  await expect(page.getByTestId('context-chart')).toBeVisible()
+  await expect(page.getByTestId('context-no-decision-candle')).toContainText(
+    'no es un error',
+  )
+  await expect(page.getByTestId('context-decision')).toContainText(
+    'sin estrategia atribuida',
+  )
+
+  // Second page by cursor.
+  await page.getByRole('button', { name: 'Cargar más antiguos' }).click()
+  await expect(page.getByTestId('list-count')).toContainText(
+    'Mostrando 100 de 120',
+  )
+
+  // Filter to the proposal: its row names the strategy the payload names.
+  await page.getByRole('button', { name: /^LONG/ }).click()
+  await expect(page.getByTestId('list-count')).toContainText('Mostrando 1 de 1')
+  await expect(list).toContainText('c25_long_pullback')
+  await expect(list).toContainText('c25-pullback-perp-v1')
+  await expect(page.getByTestId('card-action')).toContainText(
+    'LONG (propuesta)',
+  )
+  await expect(page.getByTestId('stage-4')).toContainText('99.47')
+  await expect(page.getByTestId('model-rows')).toContainText('LONG')
+  await expect(page.getByTestId('model-rows')).toContainText('confianza 0.62')
+  await expect(page.getByTestId('stage-6')).toContainText('No disponible')
+  // Context candles of the proposal's minute: 64 synthetic 1 m buckets in the
+  // range minus 4 holes = 60 candles, plus the one (unaligned) candle the base
+  // market fixture stores: 61. Holes and the not-yet-stored newest minutes are
+  // empty space; the 3 + 1 later ones are observed, not evaluated.
+  const chart = page.getByTestId('context-chart')
+  await expect(chart).toHaveAttribute('data-candle-count', '61')
+  expect(Number(await chart.getAttribute('data-gap-count'))).toBeGreaterThan(5)
+  await expect(page.getByTestId('context-decision')).toContainText(
+    'c25_long_pullback',
+  )
+  await expect(page.getByTestId('context-gaps')).toContainText('sin interpolar')
+  await expect(page.getByTestId('context-after')).toContainText(
+    '4 velas posteriores observadas',
+  )
+  await expect(page.getByTestId('context-no-decision-candle')).toHaveCount(0)
+  await expect(page.getByTestId('context-prov')).toContainText(
+    'paper_futures_official_candles',
+  )
+
+  mkdirSync('docs/mission-control/b3', { recursive: true })
+  await label()
+  await page.screenshot({
+    path: 'docs/mission-control/b3/captura-propuesta-1440x900.png',
+  })
+
+  // The lower stages of the same trace (selector, model rows, final, paper).
+  await page
+    .getByTestId('trace-panel')
+    .evaluate((el) => el.scrollTo(0, el.scrollHeight))
+  await page.screenshot({
+    path: 'docs/mission-control/b3/captura-propuesta-etapas-1440x900.png',
+  })
+  await page.getByTestId('trace-panel').evaluate((el) => el.scrollTo(0, 0))
+
+  // Back to everything, filter by a clicked reason and clear it.
+  await page.getByRole('button', { name: /^Todos/ }).click()
+  await expect(page.getByTestId('list-count')).toContainText('de 120')
+  await page.getByTitle('Filtrar por este motivo').first().click()
+  await expect(page.getByTestId('reason-filter')).toContainText(
+    'no_directional_proposal',
+  )
+  await page.getByRole('button', { name: 'Quitar el filtro de motivo' }).click()
+  await expect(page.getByTestId('reason-filter')).toHaveCount(0)
+  // A discard: its reason is the selector's, attributed to no strategy.
+  await page.getByRole('button', { name: /^WAIT/ }).click()
+  await page
+    .getByTestId('decision-list')
+    .getByRole('button', { name: /UTC$/ })
+    .nth(2)
+    .click()
+  await expect(page.getByTestId('card-action')).toContainText('WAIT')
+  await expect(page.getByTestId('stage-3')).toContainText(
+    'el payload no lo atribuye a ninguna estrategia',
+  )
+  await label()
+  await page.screenshot({
+    path: 'docs/mission-control/b3/captura-descarte-1440x900.png',
+  })
+
+  // Another product, and the way back.
+  await page
+    .getByLabel('Producto de la investigación')
+    .selectOption('PF_ETHUSD')
+  await expect(page.getByTestId('list-count')).toContainText('de 30')
+  await page.getByRole('link', { name: 'Volver a la Terminal' }).click()
+  await expect(page.getByTestId('activity-panel')).toBeVisible()
+
+  const failed = log.filter((entry) => entry.status >= 400)
+  expect(failed, JSON.stringify(failed, null, 2)).toEqual([])
+  expect(log.some((e) => e.url.includes('/observability/decisions?'))).toBe(
+    true,
+  )
+  expect(
+    log.some((e) => /\/observability\/decisions\/PF_XBTUSD\/\d+$/.test(e.url)),
+  ).toBe(true)
+  expect(
+    log.some(
+      (e) =>
+        e.url.includes(
+          '/observability/candles?product=PF_XBTUSD&interval=1m',
+        ) && e.status === 200,
+    ),
   ).toBe(true)
 })
 

@@ -1,0 +1,14 @@
+{
+  "schema": "observability-decision-trace.v1",
+  "generated_at_ms": 1790000000000,
+  "cache_ttl_ms": 10000,
+  "product": "PF_XBTUSD",
+  "bucket_start_ms": 1790000040000,
+  "state": "not_found",
+  "evidence": {
+    "source": "paper_futures_verdicts",
+    "origin": "futures-verdicts.sqlite",
+    "state": "read",
+    "rule": "la fila de paper_futures_verdicts con la clave (producto, bucket_start) y su payload_json tal como se guardó"
+  }
+}

@@ -20,6 +20,13 @@ import {
   type ObservabilityActivity,
 } from './observability-activity.ts'
 import {
+  createObservabilityDecisions,
+  DecisionsRequestError,
+  parseBucket,
+  parseDecisionsQuery,
+  type ObservabilityDecisions,
+} from './observability-decisions.ts'
+import {
   CandlesRequestError,
   createObservabilityCandles,
   type CandlesErrorCode,
@@ -57,6 +64,8 @@ export interface LiveGatewayOptions {
   /** Read-only health of six components (B1). Absent: built from the paths above. */
   readonly observabilityHealth?: ObservabilityHealth
   readonly observabilityActivity?: ObservabilityActivity
+  /** Read-only verdict list and trace (B3). Absent: built from the verdicts path. */
+  readonly observabilityDecisions?: ObservabilityDecisions
   /** Read-only stored candles of a bounded range (B6). Absent: built from `marketDbPath`. */
   readonly observabilityCandles?: ObservabilityCandles
   /** Pinned products the Terminal may pick (default: the pinned list). */
@@ -345,6 +354,40 @@ export async function buildLiveGateway(
       if (product !== undefined && !products.includes(product))
         return reply.code(400).send({ error: { code: 'invalid_product' } })
       return observabilityActivity.report(window, product)
+    },
+  )
+  const observabilityDecisions =
+    options.observabilityDecisions ??
+    createObservabilityDecisions({
+      products,
+      verdictsDbPath: options.verdictsDbPath,
+      clock,
+    })
+  const decisionsError = (error: unknown) => {
+    if (error instanceof DecisionsRequestError) return error.code
+    throw error
+  }
+  app.get<{ Querystring: Record<string, unknown> }>(
+    '/api/observability/decisions',
+    (request, reply) => {
+      try {
+        return observabilityDecisions.list(parseDecisionsQuery(request.query))
+      } catch (error) {
+        return reply.code(400).send({ error: { code: decisionsError(error) } })
+      }
+    },
+  )
+  app.get<{ Params: { product: string; bucket: string } }>(
+    '/api/observability/decisions/:product/:bucket',
+    (request, reply) => {
+      try {
+        return observabilityDecisions.trace(
+          request.params.product,
+          parseBucket(request.params.bucket),
+        )
+      } catch (error) {
+        return reply.code(400).send({ error: { code: decisionsError(error) } })
+      }
     },
   )
   const observabilityCandles =
