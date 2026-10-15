@@ -9,10 +9,15 @@ when the process ends). The clock and the sleep are injected, so a test runs a w
 
 What this module refuses, on purpose, while the real-session GATE is NO-GO (decision of Fran, unchanged by #185):
 
-* any source other than the synthetic fixture (``real_session_not_authorized``): a session with real data needs its own written
-  authorization, and enabling it is a code change, not a flag;
+* any source that does not identify itself as the synthetic fixture (``real_session_not_authorized``): the configuration must say
+  ``source_id: synthetic`` AND the SQLite file must carry the fixture's own marker table (``balancita_synthetic_fixture``). A real
+  capture has neither, so it is refused whatever the configuration says; this guards against a mistake, not against someone who
+  forges the marker on purpose. A session with real data needs its own written authorization and a reviewed code change;
 * the wall clock (``wall_clock_not_authorized``): the command line runs on a simulated clock only;
-* a restart on its own after ``HALTED`` or ``REFUSED`` (``restart_requires_operator``): the operator decides, with ``--restart``;
+* a restart on its own after ``HALTED`` or ``REFUSED`` (``restart_requires_operator``): the operator decides, with ``--restart``. The
+  halt is durable and does not depend on the heartbeat: ``halt.json`` is written (fsync) before the process answers ``HALTED``, and
+  an unacknowledged ``funding_book_diverged`` record in the audit journal (BAL-DECISION-184-01) also requires the operator, even if
+  the process died before it could write anything else or the heartbeat is missing;
 * a restart after an orderly stop (``session_stopped``): a stopped session is over.
 
 Open positions when the process stops are not touched (D-186-1): while it is down nobody evaluates their stops or targets. The
@@ -37,6 +42,7 @@ from .multi_experiment import required_warmup_ms
 from .multi_signals import merged_indicators, stable_hash
 from .paper_live_ingest import SourceReader
 from .paper_runner import STOPPED, RunnerConfig
+from .paper_runner_store import StoreError
 from .portfolio import PortfolioPolicy
 from .portfolio_watch import WatchPolicy
 
@@ -44,6 +50,9 @@ CONFIG_SCHEMA = "balancita-paper-live-process-config.v1"
 HEARTBEAT_SCHEMA = "balancita-paper-live-heartbeat.v1"
 REPORT_SCHEMA = "balancita-paper-live-process-report.v1"
 CONFIG_FILE, HEARTBEAT_FILE, REPORT_FILE = "process-config.json", "heartbeat.json", "report.json"
+HALT_FILE, RESTARTS_FILE = "halt.json", "operator-restarts.json"        # durable, independent of the heartbeat
+MARKER_TABLE, MARKER = "balancita_synthetic_fixture", "balancita-synthetic-fixture.v1"
+POST_WINDOW_MS = 6 * 3_600_000                  # the loop ends this long after the decision window (positions may still close)
 CAPITAL_POLICY = "adr-0001-fixed-100-usd"        # a label: the sizing is the portfolio policy's, this module has no money rule
 SYNTHETIC_SOURCE = "synthetic"
 FRESH_MS = 600_000                               # the newest warm-up candle may be this far from the first decision
@@ -151,7 +160,7 @@ def preflight(config, directory, source_path, *, strategies=None):
     free = shutil.disk_usage(parent).free if os.path.isdir(parent) else 0
     check("disk_free", free >= config["min_free_bytes"], "{} bytes free, {} required".format(free, config["min_free_bytes"]))
     runner_dir = os.path.join(directory, LI.RUNNER_DIR)
-    if os.path.isdir(runner_dir):
+    if os.path.exists(os.path.join(runner_dir, "runner.lock")):             # never creates the lock: a free directory has none to take
         try:
             LI._take_lock(runner_dir).release()
             check("directory_unlocked", True)
@@ -164,16 +173,22 @@ def preflight(config, directory, source_path, *, strategies=None):
         return {"ok": False, "checks": checks}
     try:
         check("source_readable", True)
+        try:
+            marker = reader.db.execute("SELECT marker FROM {}".format(MARKER_TABLE)).fetchall()
+        except Exception:               # noqa: BLE001 - no such table: not the fixture
+            marker = []
+        check("synthetic_marker", [m[0] for m in marker] == [MARKER], "the source does not carry the synthetic fixture's marker "
+              "({}): real data is not authorized".format(MARKER_TABLE))
         strategies = strategies or RS.load_frozen()[0]
         need = config["warmup_minutes"] or required_warmup_ms(merged_indicators(strategies)) // ONE_MINUTE_MS     # the indicators' own, unless lowered
         warmup_ms = need * ONE_MINUTE_MS
         for product in config["products"]:
             try:
                 newest = reader.db.execute("SELECT MAX(bucket_start) FROM paper_futures_official_candles WHERE product_id=? AND interval_ms=? "
-                                           "AND bucket_start<?", (product, ONE_MINUTE_MS, config["decide_from_ms"])).fetchone()[0]
+                                           "AND bucket_start<? AND known_at<=?", (product, ONE_MINUTE_MS, config["decide_from_ms"], config["decide_from_ms"])).fetchone()[0]
                 have = 0 if newest is None else reader.db.execute(
                     "SELECT COUNT(*) FROM paper_futures_official_candles WHERE product_id=? AND interval_ms=? AND bucket_start>? "
-                    "AND bucket_start<=?", (product, ONE_MINUTE_MS, newest - warmup_ms, newest)).fetchone()[0]
+                    "AND bucket_start<=? AND known_at<=?", (product, ONE_MINUTE_MS, newest - warmup_ms, newest, config["decide_from_ms"])).fetchone()[0]
             except Exception as error:       # noqa: BLE001
                 check("warmup_" + product, False, "source has no candles table: " + str(error))
                 continue
@@ -212,6 +227,7 @@ class Supervisor(object):
         self.stop_requested = False
         self.stop_signal = None
         self.phase = INIT
+        self._closed = False
 
     # ---- start -----------------------------------------------------------------------------------------------
     def start(self, *, restart=False):
@@ -220,7 +236,7 @@ class Supervisor(object):
         report = preflight(self.config, self.directory, self.source_path, strategies=self.strategies)
         if not report["ok"]:
             failed = [c for c in report["checks"] if not c["ok"]]
-            reason = "real_session_not_authorized" if any(c["name"] == "real_session_gate" for c in failed) else "preflight_failed"
+            reason = "real_session_not_authorized" if any(c["name"] in ("real_session_gate", "synthetic_marker") for c in failed) else "preflight_failed"
             raise ProcessError(reason, "; ".join("{}: {}".format(c["name"], c["detail"]) for c in failed))
         strategies = self.strategies or RS.load_frozen()[0]
         kwargs = session_kwargs(self.config)
@@ -234,13 +250,61 @@ class Supervisor(object):
             last = _read_json(os.path.join(self.directory, HEARTBEAT_FILE)) or {}
             if last.get("phase") == STOPPED_PHASE:
                 raise ProcessError("session_stopped", "the operator stopped this session; a stopped session is over")
-            if last.get("phase") in (HALTED, REFUSED_PHASE) and not restart:
-                raise ProcessError("restart_requires_operator", "the last run ended {}: restart explicitly after reading its report".format(last["phase"]))
+            pending = self.unacknowledged_halts()
+            if pending and not restart:
+                raise ProcessError("restart_requires_operator", "{}: restart explicitly after reading the report".format("; ".join(pending)))
             self.session = LI.LiveSession.recover(self.directory, self.source_path, strategies, self.config["products"],
                                                   runner_config_of(self.config), self.clock(), **kwargs)
+            if pending:
+                self._acknowledge()                 # only after the recovery worked: a death before this leaves the gate closed
         self.phase = phase_of(self.session)
         self._beat(self.clock(), None)
         return self.session
+
+    def unacknowledged_halts(self):
+        """Why a restart needs the operator, from files that do not depend on the heartbeat (a heartbeat that is missing, unreadable or
+        still says LIVE changes nothing): the durable ``halt.json``, an unacknowledged ``funding_book_diverged`` record in the audit
+        journal (BAL-DECISION-184-01: the contradiction is not resolved by a restart), and, as a last resort, a heartbeat that says
+        HALTED or REFUSED."""
+        reasons = []
+        if os.path.exists(os.path.join(self.directory, HALT_FILE)):
+            reasons.append("{} exists: the last run halted".format(HALT_FILE))
+        diverged = self._divergences_in_audit()
+        if diverged > (_read_json(os.path.join(self.directory, RESTARTS_FILE)) or {}).get("acknowledged_divergences", 0):
+            reasons.append("the audit journal holds a funding_book_diverged record that no operator restart has acknowledged")
+        last = _read_json(os.path.join(self.directory, HEARTBEAT_FILE)) or {}
+        if last.get("phase") in (HALTED, REFUSED_PHASE):
+            reasons.append("the heartbeat says {}".format(last["phase"]))
+        return reasons
+
+    def _divergences_in_audit(self):
+        """How many ``funding_book_diverged`` records the audit file holds. Reads the file as it is (a torn last line is skipped, nothing
+        is cut or written: opening the journal is the session's job)."""
+        count = 0
+        try:
+            with open(os.path.join(self.directory, LI.AUDIT_FILE), "rb") as handle:
+                lines = handle.read().split(b"\n")
+        except OSError:
+            return 0
+        for line in lines:
+            try:
+                entry = json.loads(line.decode("utf-8"))
+                if entry["kind"] == "audit" and entry["data"]["record"]["kind"] == "funding_book_diverged":
+                    count += 1
+            except (ValueError, KeyError, TypeError, UnicodeDecodeError):
+                continue
+        return count
+
+    def _acknowledge(self):
+        """The operator restarted after a halt: it is on record (the divergences seen so far are acknowledged and ``halt.json`` is kept
+        under another name, not deleted)."""
+        previous = _read_json(os.path.join(self.directory, RESTARTS_FILE)) or {}
+        number = previous.get("restarts", 0) + 1
+        _write_json(os.path.join(self.directory, RESTARTS_FILE), {"restarts": number, "acknowledged_divergences": self._divergences_in_audit()})
+        halt = os.path.join(self.directory, HALT_FILE)
+        if os.path.exists(halt):
+            os.replace(halt, os.path.join(self.directory, "halt-acknowledged-{}.json".format(number)))
+            LI._fsync_dir(halt)
 
     def request_stop(self, signum=None):
         """Only sets a flag (safe in a signal handler): the loop stops after the step it is in."""
@@ -252,38 +316,66 @@ class Supervisor(object):
         steps = 0
         while not self.stop_requested and (max_steps is None or steps < max_steps):
             now = self.clock()
-            if self.config["decide_until_ms"] is not None and now >= self.config["decide_until_ms"] + 6 * 3_600_000:
+            if self.config["decide_until_ms"] is not None and now >= self.config["decide_until_ms"] + POST_WINDOW_MS:
                 break
             self.tick(now)
             try:
                 state = self.session.step(now)
             except Exception as error:               # noqa: BLE001
-                self.phase = HALTED
-                self._beat(now, None)
-                self._finish(now, halted=repr(error))
-                return EXIT_HALTED
+                return self._halt(now, repr(error))
             steps += 1
             self.phase = phase_of(self.session)
-            self._beat(now, state)
+            try:
+                self._beat(now, state)
+            except OSError as error:                 # the supervisor cannot even say it is alive: that is a halt too
+                return self._halt(now, "heartbeat: " + repr(error))
             self.sleep(self.config["step_interval_ms"] / 1000.0)
         return self.end()
 
     def end(self):
         """Orderly end (decision D-186-1): pending orders are cancelled with their own reason, open positions are left as they are,
-        and the report says so."""
+        and the report says so. A halted process never reports STOPPED, and ending twice writes nothing twice."""
         now = self.clock()
+        if self.session.halted is not None or self.phase == HALTED:
+            return self._halt(now, self.session.halted or "halted before the end")
+        if self.phase == STOPPED_PHASE and self.session.stopped is not None and os.path.exists(os.path.join(self.directory, REPORT_FILE)):
+            return EXIT_OK
         self.phase = STOPPING
-        self._beat(now, None)
         try:
+            self._beat(now, None)
             self.session.stop(now)
         except Exception as error:               # noqa: BLE001
-            self.phase = HALTED
-            self._beat(now, None)
-            self._finish(now, halted=repr(error))
-            return EXIT_HALTED
+            return self._halt(now, repr(error))
         self.phase = STOPPED_PHASE
-        self._finish(now)
+        try:
+            self._finish(now)
+        except OSError as error:
+            return self._halt(now, "report: " + repr(error))
         return EXIT_OK
+
+    def _close(self):
+        if not self._closed:
+            self._closed = True
+            self.session.close()
+
+    def _halt(self, now, reason):
+        """The process cannot go on. The halt is made durable FIRST (``halt.json``), then the heartbeat and the report are tried: if the
+        disk refuses them the exit status is still 3 and the next start still needs the operator."""
+        self.phase = HALTED
+        try:
+            _write_json(os.path.join(self.directory, HALT_FILE), {"schema": "balancita-paper-live-halt.v1", "reason": reason,
+                                                                   "session_id": self.session.identity["session_id"],
+                                                                   "steps": self.session.stats["steps"], "observed_now_ms": now})
+        except OSError:
+            pass
+        try:
+            self._beat(now, None)
+            self._finish(now, halted=reason)
+        except OSError:
+            pass
+        finally:
+            self._close()
+        return EXIT_HALTED
 
     def abandon(self):
         """The process ends without an orderly stop (what a kill does, for a test or an exception): the lock goes with it."""
@@ -313,7 +405,7 @@ class Supervisor(object):
             body["funding"] = session.funding_report()
         _write_json(os.path.join(self.directory, REPORT_FILE), body)
         self._beat(now, None)
-        session.close()
+        self._close()
         return body
 
 
@@ -377,6 +469,9 @@ def main(argv=None, *, tick=lambda now: None):
         return EXIT_REFUSED
     except LI.IntegrationError as error:
         print(json.dumps({"refused": error.reason, "detail": str(error)}, sort_keys=True), file=sys.stderr)
+        return EXIT_REFUSED
+    except (OSError, StoreError) as error:               # the directory or the source cannot be opened: refused, nothing was started
+        print(json.dumps({"refused": "cannot_start", "detail": repr(error)}, sort_keys=True), file=sys.stderr)
         return EXIT_REFUSED
 
 

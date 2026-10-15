@@ -51,6 +51,8 @@ class Source(object):
         self.path, self.n = path, 0
         self.db = sqlite3.connect(path)
         self.db.executescript(SCHEMA)
+        self.db.executescript("CREATE TABLE balancita_synthetic_fixture(marker TEXT NOT NULL);"      # the fixture says what it is (#185 gate)
+                              "INSERT INTO balancita_synthetic_fixture VALUES('balancita-synthetic-fixture.v1');")
 
     def ticker(self, product, t, mid, half_bps="0.5", seq=None, epoch=REST_EPOCH):
         mid = D(str(mid))

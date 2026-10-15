@@ -1,6 +1,7 @@
 """Issue #185: the life of a paper session as a process (configuration, pre-flight, warm-up, orderly stop, restart). Invented data
 only; the clock is simulated and the sleep does nothing, except in the one test that sends a real SIGTERM to a child process."""
 
+import hashlib
 import json
 import os
 import shutil
@@ -16,6 +17,7 @@ from balancita_engine import paper_live_process as LP
 from balancita_engine import replay_specs as RS
 from balancita_engine import signal_continuity as SC
 from live_world import LOAD_START, MIN, World
+from test_paper_observed_funding_184 import FIRST_HOUR, HOUR, LAG, hourly_responses, new_world
 from test_paper_live_integration import BTC, FIRST_DECISION, INGEST_KW, LAST_DECISION, MAX_QUOTE_GAP_MS, TIMES
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -355,6 +357,198 @@ class TestCommandLine(Base):
                              "--clock-from-ms", str(TIMES[10]))
         self.assertEqual(again.returncode, LP.EXIT_REFUSED)
         self.assertIn("session_stopped", again.stderr)
+
+
+class TestObservedLifecycle(unittest.TestCase):
+    """D-205-01..05: the halt is durable and does not depend on the heartbeat, a failing disk is a halt, the report of a halted process
+    carries the funding evidence, and the gates hold. The accounting funding is the observed one (#184) so a divergence can be made."""
+
+    def setUp(self):
+        SC.disarm()
+        self.root = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.root, True)
+        self.world = new_world(self.root, observed=True)
+        self.addCleanup(self.world.close)
+        hourly_responses(self.world, FIRST_HOUR, ((TIMES[-1] - LAG) // HOUR - 1) * HOUR)
+        self.world.release_until(FIRST_DECISION - MIN)
+        self.directory = os.path.join(self.root, "session")
+        self.strategies = RS.load_frozen()[0]
+        self.supervisors = []
+        self.addCleanup(self.close_all)
+
+    def close_all(self):
+        for supervisor in self.supervisors:
+            if supervisor.session is not None:
+                supervisor.abandon()
+
+    def supervisor(self, clock, world=None, **over):
+        config = LP.validate_config(config_dict(funding_mode="observed", **over))
+        supervisor = LP.Supervisor(config, self.directory, (world or self.world).path, clock=clock.now, sleep=clock.sleep,
+                                   tick=(world or self.world).release_until, strategies=self.strategies)
+        self.supervisors.append(supervisor)
+        return supervisor
+
+    def read(self, name):
+        with open(os.path.join(self.directory, name), encoding="utf-8") as handle:
+            return json.load(handle)
+
+    def diverge_at(self, supervisor, step):
+        """From ``step`` on, the first time the portfolio holds a funding row, it loses it while the book keeps it: two authoritative
+        states of our own code now disagree."""
+        seen = {"n": 0, "done": False}
+        original = supervisor.tick
+
+        def tick(now):
+            original(now)
+            seen["n"] += 1
+            funding = supervisor.session.runner.portfolio.funding.get(BTC)
+            if seen["n"] >= step and not seen["done"] and funding:
+                del funding[0]
+                seen["done"] = True
+        supervisor.tick = tick
+
+    def halted_run(self):
+        clock = Clock()
+        supervisor = self.supervisor(clock)
+        supervisor.start()
+        self.diverge_at(supervisor, 4)
+        self.assertEqual(supervisor.run(max_steps=60), LP.EXIT_HALTED)
+        return supervisor, clock
+
+    def test_a_divergence_halts_the_process_with_the_evidence_and_the_pnl_not_verified(self):
+        supervisor, _ = self.halted_run()
+        halt, report, beat = self.read(LP.HALT_FILE), self.read(LP.REPORT_FILE), self.read(LP.HEARTBEAT_FILE)
+        self.assertIn("funding_book_diverged", halt["reason"])
+        self.assertEqual((report["ended_as"], beat["phase"]), (LP.HALTED, LP.HALTED))
+        self.assertFalse(report["funding"]["pnl_verified"])                      # D-205-04: the report of a halted process carries the funding
+        self.assertIn("divergence_evidence_recorded", report["funding"]["unverified_reasons"])
+        self.assertGreaterEqual(report["funding"]["divergence_evidence"], 1)
+
+    def test_the_halt_does_not_depend_on_the_heartbeat(self):
+        """D-205-01: the heartbeat still says LIVE (the process died before writing HALTED), says nothing, or the halt file is gone:
+        the restart still needs the operator, because the audit holds a divergence nobody acknowledged."""
+        _, _ = self.halted_run()
+        beat_path, halt_path = os.path.join(self.directory, LP.HEARTBEAT_FILE), os.path.join(self.directory, LP.HALT_FILE)
+        beat = self.read(LP.HEARTBEAT_FILE)
+        probes = []
+        probes.append(("heartbeat says LIVE", lambda: LP._write_json(beat_path, dict(beat, phase=LP.LIVE))))
+        probes.append(("heartbeat missing", lambda: os.remove(beat_path)))
+        probes.append(("halt file missing as well", lambda: os.remove(halt_path)))
+        for name, tamper in probes:
+            tamper()
+            with self.subTest(probe=name):
+                again = self.supervisor(Clock(5))
+                with self.assertRaises(LP.ProcessError) as caught:
+                    again.start()
+                self.assertEqual(caught.exception.reason, "restart_requires_operator")
+                self.assertIsNone(again.session)
+
+    def test_the_operator_restart_is_on_record_and_a_later_crash_restarts_without_asking(self):
+        _, clock = self.halted_run()
+        restarted = self.supervisor(clock)
+        restarted.start(restart=True)
+        self.assertEqual(self.read(LP.RESTARTS_FILE)["restarts"], 1)
+        self.assertFalse(os.path.exists(os.path.join(self.directory, LP.HALT_FILE)))
+        self.assertTrue(os.path.exists(os.path.join(self.directory, "halt-acknowledged-1.json")))
+        self.assertEqual(restarted.run(max_steps=2), LP.EXIT_OK)
+        report = self.read(LP.REPORT_FILE)
+        self.assertEqual(report["ended_as"], LP.STOPPED_PHASE)
+        self.assertGreaterEqual(report["funding"]["divergence_evidence"], 1)       # the evidence is still there
+        self.assertFalse(report["funding"]["pnl_verified"])
+
+    def test_a_crash_after_an_acknowledged_halt_restarts_without_the_operator(self):
+        _, clock = self.halted_run()
+        restarted = self.supervisor(clock)
+        restarted.start(restart=True)
+        restarted.abandon()                                                        # it dies later, with nothing new wrong
+        third = self.supervisor(clock)
+        third.start()
+        self.assertIn(third.phase, (LP.WARMUP, LP.LIVE))
+
+    def test_a_heartbeat_that_cannot_be_written_is_a_durable_halt_with_exit_3(self):
+        """D-205-03: the disk refuses the heartbeat; the process halts (not a traceback with exit 1 and a heartbeat that still says LIVE)."""
+        clock = Clock()
+        supervisor = self.supervisor(clock)
+        supervisor.start()
+        real, calls = supervisor._beat, {"n": 0}
+
+        def failing(now, state):
+            calls["n"] += 1
+            if calls["n"] == 3:
+                raise OSError(28, "No space left on device")
+            return real(now, state)
+        supervisor._beat = failing
+        self.assertEqual(supervisor.run(max_steps=10), LP.EXIT_HALTED)
+        self.assertIn("heartbeat", self.read(LP.HALT_FILE)["reason"])
+        again = self.supervisor(Clock(5))
+        with self.assertRaises(LP.ProcessError) as caught:
+            again.start()
+        self.assertEqual(caught.exception.reason, "restart_requires_operator")
+
+    def test_ending_a_halted_process_never_writes_stopped(self):
+        supervisor, _ = self.halted_run()
+        self.assertEqual(supervisor.end(), LP.EXIT_HALTED)
+        self.assertEqual(self.read(LP.REPORT_FILE)["ended_as"], LP.HALTED)
+        self.assertEqual(self.read(LP.HEARTBEAT_FILE)["phase"], LP.HALTED)
+
+    def test_ending_twice_writes_nothing_twice(self):
+        clock = Clock()
+        supervisor = self.supervisor(clock)
+        supervisor.start()
+        self.assertEqual(supervisor.run(max_steps=3), LP.EXIT_OK)
+        before = open(os.path.join(self.directory, LP.REPORT_FILE), "rb").read()
+        self.assertEqual(supervisor.end(), LP.EXIT_OK)
+        self.assertEqual(open(os.path.join(self.directory, LP.REPORT_FILE), "rb").read(), before)
+
+    def test_the_preflight_does_not_touch_the_source(self):
+        def digest():
+            return hashlib.sha256(open(self.world.path, "rb").read()).hexdigest()
+        config = LP.validate_config(config_dict(funding_mode="observed"))
+        before = digest()
+        self.assertTrue(LP.preflight(config, self.directory, self.world.path, strategies=self.strategies)["ok"])
+        self.assertEqual(digest(), before)
+        self.assertFalse(os.path.exists(self.directory))
+
+    def test_a_source_that_does_not_carry_the_fixture_marker_is_refused_even_with_the_synthetic_label(self):
+        """D-205-02: the gate is not the label alone. A copy of the source without the marker (what a real capture is) is refused."""
+        real = os.path.join(self.root, "real-looking.sqlite")
+        shutil.copyfile(self.world.path, real)
+        import sqlite3
+        db = sqlite3.connect(real)
+        db.execute("DROP TABLE balancita_synthetic_fixture")
+        db.commit()
+        db.close()
+        config = LP.validate_config(config_dict(funding_mode="observed"))
+        self.assertEqual(config["source_id"], "synthetic")
+        report = LP.preflight(config, self.directory, real, strategies=self.strategies)
+        self.assertEqual([c["name"] for c in report["checks"] if not c["ok"]], ["synthetic_marker"])
+        supervisor = LP.Supervisor(config, self.directory, real, clock=Clock().now, strategies=self.strategies)
+        with self.assertRaises(LP.ProcessError) as caught:
+            supervisor.start()
+        self.assertEqual(caught.exception.reason, "real_session_not_authorized")
+        self.assertFalse(os.path.exists(self.directory))
+
+    def test_the_funding_mode_is_part_of_what_a_directory_was_created_with(self):
+        first = self.supervisor(Clock())
+        first.start()
+        first.abandon()
+        config = LP.validate_config(config_dict(funding_mode="synthetic"))
+        self.assertNotEqual(config["digest"], first.config["digest"])
+        report = LP.preflight(config, self.directory, self.world.path, strategies=self.strategies)
+        self.assertIn("configuration_matches_directory", [c["name"] for c in report["checks"] if not c["ok"]])
+
+    def test_a_directory_that_cannot_be_created_is_a_refusal_not_a_traceback(self):
+        config_path = os.path.join(self.root, "config.json")
+        with open(config_path, "w", encoding="utf-8") as handle:
+            json.dump(config_dict(funding_mode="observed"), handle)
+        blocker = os.path.join(self.root, "a-file")
+        open(blocker, "w").close()
+        done = subprocess.run([sys.executable, "-m", "balancita_engine.paper_live_process", "run", "--config", config_path,
+                               "--directory", os.path.join(blocker, "inside"), "--source", self.world.path,
+                               "--clock-from-ms", str(TIMES[START])], env=dict(os.environ, PYTHONPATH=ENGINE_PATH + os.pathsep + HERE),
+                              capture_output=True, text=True, timeout=300)
+        self.assertEqual(done.returncode, LP.EXIT_REFUSED, done.stderr)
+        self.assertNotIn("Traceback", done.stderr)
 
 
 if __name__ == "__main__":
