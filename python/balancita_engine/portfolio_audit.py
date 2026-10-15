@@ -64,7 +64,7 @@ def exit_basis(trade):
         return "modelled_at_stop_level"
     if stop_exit["quote_backed"]:
         return "quote_backed"
-    if stop_exit["evidence"] in ("stop_level", "ohlc_stop_level"):
+    if stop_exit["evidence"] in ("stop_level", "ohlc_stop_level", "post_hole_open_unavailable_stop_level"):
         return "modelled_at_stop_level"
     return "estimated_assumed_stop" if stop_exit["evidence"] == "assumed_stop_entry_minute" else "estimated_from_candles"
 
