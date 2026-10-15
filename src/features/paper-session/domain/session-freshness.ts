@@ -8,7 +8,9 @@ import type { PositionsBlock, SessionPosition } from './session-blocks.ts'
  * calls anything `fresh` on a limit that is not approved: with a missing or
  * hypothetical limit the presented freshness is `unknown`. There is no
  * default threshold here, no phase is derived, and `verified` is only ever
- * degraded, never promoted or rebuilt.
+ * degraded, never promoted or rebuilt. The publisher (PR #192, de6e857)
+ * already refuses `fresh` and `verified` without an approved limit; this rule
+ * is the defensive second line for a block that did not.
  */
 export type PresentedFreshness = 'fresh' | 'stale' | 'unknown'
 

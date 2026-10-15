@@ -59,8 +59,45 @@ export function positionsBlock(
 
 /** Family 1 · verification of positions. */
 export const verification = {
-  /** Publisher says verified, on a limit that is only a hypothesis. */
-  hypothesisFresh: () => positionsBlock(),
+  /** Hypothetical limit, report inside it: the publisher says unknown, not verified. */
+  hypothesisUnknown: () =>
+    positionsBlock(
+      {
+        verified: false,
+        reasons: ['freshness_threshold_not_approved'],
+        freshness: 'unknown',
+        thresholds: { report_max_age_ms: 60_000, status: 'hypothesis' },
+      },
+      [position({ accounting_verified: false, verified: false })],
+    ),
+  /** Hypothetical limit, report older than it: it can degrade to stale. */
+  hypothesisStale: () =>
+    positionsBlock(
+      {
+        verified: false,
+        reasons: ['report_stale', 'freshness_threshold_not_approved'],
+        freshness: 'stale',
+        thresholds: { report_max_age_ms: 60_000, status: 'hypothesis' },
+      },
+      [position({ accounting_verified: false, verified: false })],
+    ),
+  /** The report age is missing: stable reason `report_age_unknown`. */
+  reportAgeUnknown: () =>
+    positionsBlock(
+      {
+        verified: false,
+        reasons: ['report_age_unknown', 'freshness_threshold_not_approved'],
+        freshness: 'unknown',
+        thresholds: { report_max_age_ms: null, status: 'not_approved' },
+      },
+      [position({ accounting_verified: false, verified: false })],
+    ),
+  /**
+   * DEFENSIVE, not a publisher output: a block that promotes on a limit that
+   * is not approved (the pre-de6e857 behaviour). The decoder and the rule must
+   * still refuse to present it as current.
+   */
+  hypothesisPromoted: () => positionsBlock(),
   /** No limit in the block: publisher says unknown and not verified. */
   notApproved: () =>
     positionsBlock(

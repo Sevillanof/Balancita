@@ -18,7 +18,7 @@ const decode = (raw: unknown) => decodePositionsBlock(raw)
 
 describe('decodePositionsBlock', () => {
   it('keeps what the publisher said, without computing anything', () => {
-    const block = decode(verification.hypothesisFresh())
+    const block = decode(verification.hypothesisPromoted())
     expect(block.verification).toEqual({
       verified: true,
       reasons: [],
@@ -83,12 +83,34 @@ describe('decodePositionsBlock', () => {
 })
 
 describe('presented freshness: never fresh on a limit that is not approved', () => {
-  it('is unknown with a hypothetical limit even if the publisher said fresh', () => {
-    const block = decode(verification.hypothesisFresh())
+  it('is unknown with a hypothetical limit even if a block said fresh (defensive)', () => {
+    const block = decode(verification.hypothesisPromoted())
     expect(block.verification.freshness).toBe('fresh')
     expect(presentedFreshness(block)).toBe('unknown')
     expect(isCurrent(block)).toBe(false)
     expect(thresholdLabel(block)).toMatch(/hipótesis/)
+  })
+
+  it('follows the publisher on a hypothetical limit: unknown, or stale when older', () => {
+    const unknown = decode(verification.hypothesisUnknown())
+    expect(unknown.verification.reasons).toContain(
+      'freshness_threshold_not_approved',
+    )
+    expect(presentedFreshness(unknown)).toBe('unknown')
+    expect(effectiveVerification(unknown, unknown.positions[0])).toBe(
+      'not_verified',
+    )
+    const stale = decode(verification.hypothesisStale())
+    expect(stale.verification.freshness).toBe('stale')
+    expect(presentedFreshness(stale)).toBe('unknown')
+  })
+
+  it('keeps the stable reason report_age_unknown when the age is missing', () => {
+    const block = decode(verification.reportAgeUnknown())
+    expect(block.verification.reasons).toContain('report_age_unknown')
+    expect(block.verification.freshness).toBe('unknown')
+    expect(presentedFreshness(block)).toBe('unknown')
+    expect(isCurrent(block)).toBe(false)
   })
 
   it('is unknown with no limit at all, and says «Umbral no aprobado»', () => {
@@ -142,8 +164,8 @@ describe('effective verification: only degrades, never promotes', () => {
     expect(effectiveVerification(block, p)).toBe('not_verified')
   })
 
-  it('a publisher true on a hypothetical limit is «not current»', () => {
-    const block = decode(verification.hypothesisFresh())
+  it('a verified block on a hypothetical limit is «not current» (defensive)', () => {
+    const block = decode(verification.hypothesisPromoted())
     expect(effectiveVerification(block, block.positions[0])).toBe('not_current')
   })
 
