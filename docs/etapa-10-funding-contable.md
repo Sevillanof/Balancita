@@ -83,3 +83,13 @@ La tabla sintética `synthetic_accrual` de la sesión de integración se reempla
 `(received_at, raw_response, product_id)`; la sesión llamaría a `parse_response` y `FundingBook.add` y entregaría los eventos al
 runner, guardando `FundingBook.state()` en su checkpoint y cada elemento de `evidence` en el diario de auditoría. Hasta que
 Fran autorice leer datos reales, la fuente sigue siendo sintética.
+
+## Divergencia interna entre el libro y la cartera (BAL-DECISION-184-01)
+
+Si el libro de funding que aceptó el adaptador y el funding que la cartera tiene como conocido difieren sin explicación, la sesión
+**se para** (`HALTED`, motivo `funding_book_diverged`): es la conducta por defecto. La evidencia (`funding_book_diverged` en
+`audit.jsonl`, con lo que falta, sobra o difiere) queda escrita antes de parar. `funding_report()` marca el P&L como no verificado
+(`pnl_verified: false`, `unverified_reasons`) y lo sigue marcando tras recuperar, porque la evidencia es durable. Se recupera el
+directorio desde su último checkpoint, a mano; nada reinicia solo y ningún período se cobra dos veces. No se reescribe ni se cuadra
+ningún diario ni se elige qué registro es el correcto. `alert` (seguir) queda solo como opción de biblioteca para pruebas.
+Esto no cierra #184: depende de la verificación independiente.

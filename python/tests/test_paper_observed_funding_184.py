@@ -314,8 +314,8 @@ class TestObservedFundingScenarios(unittest.TestCase):
         audit = [r for r in again.audit.records() if r["kind"] == "funding_response"]
         self.assertEqual(len(audit), len({r["sha256"] for r in audit}))            # one record per response, replays included
 
-    def test_a_divergence_between_the_book_and_the_portfolio_is_written_and_by_default_the_session_goes_on(self):
-        world, directory, session = self.start()
+    def test_with_alert_a_divergence_is_written_and_the_session_goes_on(self):
+        world, directory, session = self.start(on_funding_divergence="alert")
         self.go(world, session, self.cache["index"], self.cache["index"] + 14)
         del session.runner.portfolio.funding[BTC][0]                                # the two authoritative states now disagree
         self.go(world, session, self.cache["index"] + 14, self.cache["index"] + 16)
@@ -325,8 +325,9 @@ class TestObservedFundingScenarios(unittest.TestCase):
         self.assertFalse(session.funding_report()["pnl_verified"])
         self.assertIsNone(session.halted)
 
-    def test_with_halt_the_session_stops_recoverable_and_repairs_nothing(self):
-        world, directory, session = self.start(on_funding_divergence="halt")
+    def test_an_unexplained_divergence_stops_the_session_by_default_and_repairs_nothing(self):
+        base = self.baseline()
+        world, directory, session = self.start()
         self.go(world, session, self.cache["index"], self.cache["index"] + 14)
         del session.runner.portfolio.funding[BTC][0]
         with self.assertRaises(LI.IntegrationError) as stop:
@@ -335,9 +336,17 @@ class TestObservedFundingScenarios(unittest.TestCase):
         self.assertIsNotNone(session.halted)
         with self.assertRaises(LI.IntegrationError):
             session.step(TIMES[self.cache["index"] + 16])
+        self.assertEqual(len([r for r in session.audit.records() if r["kind"] == "funding_book_diverged"]), 1)     # the evidence is kept
+        self.assertFalse(session.funding_report()["pnl_verified"])
         abandon(session)
-        again = self.open(world, directory, on_funding_divergence="halt")          # the directory is recoverable and consistent
-        self.assertEqual(again.funding_report()["divergence"], {"missing": [], "extra": [], "rate_differs": []})
+        again = self.open(world, directory)                                         # recovered from the last checkpoint, by hand
+        report = again.funding_report()
+        self.assertEqual(report["divergence"], {"missing": [], "extra": [], "rate_differs": []})
+        self.assertEqual(report["divergence_evidence"], 1)                          # the evidence survived the recovery
+        self.assertFalse(report["pnl_verified"])                                    # and the P&L stays not verified
+        self.assertIn("divergence_evidence_recorded", report["unverified_reasons"])
+        self.go(world, again, self.cache["index"] + 14)
+        self.assertEqual(money(again), base["money"])                               # no period charged twice, nothing rewritten
 
     def test_a_directory_made_with_the_observed_accounting_is_not_opened_as_a_synthetic_one(self):
         world, directory, session = self.start()

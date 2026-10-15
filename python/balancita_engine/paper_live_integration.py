@@ -274,7 +274,7 @@ class LiveSession(object):
     """One synthetic session. ``create`` starts a new directory; ``recover`` continues it after any interruption."""
 
     def __init__(self, directory, source_path, strategies, runner_config, runner, evaluator, audit, ingestor, reader, funding,
-                 identity, *, max_quote_gap_ms, funding_mode=SYNTHETIC_FUNDING, on_funding_divergence="alert"):
+                 identity, *, max_quote_gap_ms, funding_mode=SYNTHETIC_FUNDING, on_funding_divergence="halt"):
         self.directory, self.source_path, self.strategies, self.runner_config = directory, source_path, list(strategies), runner_config
         self.runner, self.evaluator, self.audit, self.ingestor, self.reader, self.funding = runner, evaluator, audit, ingestor, reader, funding
         self.identity, self.max_quote_gap_ms = identity, int(max_quote_gap_ms)
@@ -305,7 +305,7 @@ class LiveSession(object):
     @classmethod
     def create(cls, directory, source_path, strategies, products, runner_config, *, decide_from_ms, decide_until_ms=None,
                source_id="synthetic", ingest_kw=None, evaluator_kw=None, max_quote_gap_ms=15_000,
-               block_stale_entries=True, funding_mode=SYNTHETIC_FUNDING, on_funding_divergence="alert"):
+               block_stale_entries=True, funding_mode=SYNTHETIC_FUNDING, on_funding_divergence="halt"):
         _check_funding_options(funding_mode, on_funding_divergence)
         runner_config = _session_config(runner_config, max_quote_gap_ms, block_stale_entries)
         if os.path.exists(os.path.join(directory, SESSION_FILE)):
@@ -336,7 +336,7 @@ class LiveSession(object):
     @classmethod
     def recover(cls, directory, source_path, strategies, products, runner_config, recovery_ms, *, decide_from_ms,
                 decide_until_ms=None, source_id="synthetic", ingest_kw=None, evaluator_kw=None, max_quote_gap_ms=15_000,
-                block_stale_entries=True, funding_mode=SYNTHETIC_FUNDING, on_funding_divergence="alert"):
+                block_stale_entries=True, funding_mode=SYNTHETIC_FUNDING, on_funding_divergence="halt"):
         """Rebuilds a session from its directory. Refuses (``IntegrationError`` with a stable reason) a directory whose parts
         do not belong to the same session, a checkpoint ahead of any journal, or any configuration that differs from the one
         that created it. ``recovery_ms`` is the restart clock handed to the runner.
@@ -513,8 +513,10 @@ class LiveSession(object):
 
     def _check_funding_book(self):
         """Two authoritative states of our own code that disagree are not a market condition: the evidence is written, and the
-        session either keeps going (``alert``, the default) or stops (``halt``). Which of the two is a decision of the owner
-        (#184); nothing here repairs either side."""
+        session stops (``halt``, the default: decision BAL-DECISION-184-01 of Fran). ``alert`` (keep going) exists only for tests that
+        look at the evidence of a session that went on. Nothing here repairs or reconciles either side, and nothing chooses which
+        record is right: the evidence stays in the audit, the P&L is reported as not verified (also after a recovery) and the
+        directory is recovered from its last checkpoint, never restarted by this code."""
         diverged = self.funding_divergence()
         if not any(diverged.values()):
             return
@@ -534,10 +536,14 @@ class LiveSession(object):
         diverged = self.funding_divergence()
         incomplete = sorted(t["trade_id"] for t in portfolio.trades if not t["net_complete"])
         disputed = sorted(portfolio.funding_disputes)
+        evidence = sum(1 for r in self.audit.records() if r["kind"] == "funding_book_diverged")     # durable: survives a recovery
+        reasons = [name for name, present in (("trade_funding_incomplete", incomplete), ("trade_funding_disputed", disputed),
+                                              ("book_and_portfolio_diverge", any(diverged.values())),
+                                              ("divergence_evidence_recorded", evidence)) if present]
         return {"mode": OBSERVED_FUNDING, "counts": dict(self.book.counts),
                 "quarantined": [[p, s, v] for (p, s), v in sorted(self.book.quarantined.items())],
                 "disputed_trades": disputed, "incomplete_trades": incomplete, "divergence": diverged,
-                "pnl_verified": not (disputed or incomplete or any(diverged.values()))}
+                "divergence_evidence": evidence, "unverified_reasons": reasons, "pnl_verified": not reasons}
 
     def _handle(self, event):
         self._fault("before_handle", event)
