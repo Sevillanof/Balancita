@@ -106,19 +106,22 @@ ALLOWED = {
 }
 
 
+# 2a and 2b name the primary-key index: on the Mac (SQLite 3.51) the planner picked the secondary ``..._bucket`` index for 2b and
+# needed a temporary sort (run of 2026-10-15 20:38Z stopped with ``query_plan``). With INDEXED BY the plan is the one reviewed, or the
+# statement fails (fail closed) if that index is not there.
 def _sql_2a(limit):
     return ("SELECT product_id, bucket_start, known_at, revision_hash, open_price, high_price, low_price, close_price, "
-            "volume_btc FROM %s WHERE product_id = ? AND interval_ms = %d AND bucket_start >= %d AND bucket_start < %d "
-            "ORDER BY interval_ms, bucket_start, revision_hash LIMIT %d" % (_OFFICIAL, MINUTE_MS, WINDOW_A[0], WINDOW_A[1], limit))
+            "volume_btc FROM %s INDEXED BY %s WHERE product_id = ? AND interval_ms = %d AND bucket_start >= %d AND bucket_start < %d "
+            "ORDER BY interval_ms, bucket_start, revision_hash LIMIT %d" % (_OFFICIAL, PK_CANDLES, MINUTE_MS, WINDOW_A[0], WINDOW_A[1], limit))
 
 
 def _sql_2b(limit):
     lo, hi = "%s:%d:%d" % (BTC, MINUTE_MS, WINDOW_B[0]), "%s:%d:%d" % (BTC, MINUTE_MS, WINDOW_B[1])
     cases = ", ".join("CASE WHEN is_closed = 1 THEN %s END" % c for c in
                       ("open_price", "high_price", "low_price", "close_price", "volume_btc"))
-    return ("SELECT bucket_start, revision, known_at, is_closed, %s FROM %s WHERE candle_id >= '%s' AND candle_id < '%s' "
+    return ("SELECT bucket_start, revision, known_at, is_closed, %s FROM %s INDEXED BY %s WHERE candle_id >= '%s' AND candle_id < '%s' "
             "AND interval_ms = %d AND bucket_start >= %d AND bucket_start < %d ORDER BY candle_id, revision LIMIT %d"
-            % (cases, _REVISIONS, lo, hi, MINUTE_MS, WINDOW_B[0], WINDOW_B[1], limit))
+            % (cases, _REVISIONS, PK_REVISIONS, lo, hi, MINUTE_MS, WINDOW_B[0], WINDOW_B[1], limit))
 
 
 def _sql_2c(limit):
@@ -698,6 +701,8 @@ def main(argv=None):
     ap.add_argument("--db", required=True, help="local live-capture database (opened read-only)")
     ap.add_argument("--prior-first-rows", required=True, type=int,
                     help="rows counted by the first stage-1 run, as published in #185 (the 173 000 total is shared)")
+    ap.add_argument("--prior-stage2-rows", required=True, type=int,
+                    help="rows already counted by earlier attempts of THIS stage 2 (5760 for the run of 2026-10-15 20:38Z)")
     ap.add_argument("--prior-v2-rows", required=True, type=int,
                     help="rows counted by the repeated (v2) stage-1 run, as published in #185; it must run BEFORE this stage")
     args = ap.parse_args(argv)
@@ -710,7 +715,7 @@ def main(argv=None):
         return 2
     conn = _open_readonly(args.db)
     try:
-        result = build_result(conn, started, prior_rows=args.prior_first_rows + args.prior_v2_rows)
+        result = build_result(conn, started, prior_rows=args.prior_first_rows + args.prior_v2_rows + args.prior_stage2_rows)
     finally:
         conn.close()
     result["source"] = {"before": before, "after": _identity(args.db), "elapsed_s": round(time.monotonic() - started, 3)}

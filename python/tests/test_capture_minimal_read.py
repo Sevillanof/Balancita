@@ -17,6 +17,7 @@ CREATE TABLE paper_futures_official_candles (product_id TEXT, interval_ms INTEGE
 CREATE TABLE paper_futures_candle_revisions (candle_id TEXT, revision INTEGER, interval_ms INTEGER, bucket_start INTEGER,
   known_at INTEGER, close_at INTEGER, is_closed INTEGER, coverage TEXT, open_price TEXT, high_price TEXT, low_price TEXT,
   close_price TEXT, volume_btc TEXT, trade_count INTEGER, source_hash TEXT, PRIMARY KEY (candle_id, revision));
+CREATE INDEX paper_futures_candle_revisions_bucket ON paper_futures_candle_revisions(interval_ms, bucket_start);
 CREATE TABLE paper_futures_funding_periods (response_sha256 TEXT, start_ms INTEGER, product_id TEXT, end_ms INTEGER,
   funding_rate TEXT, known_at INTEGER, unit TEXT, PRIMARY KEY (response_sha256, start_ms));
 CREATE TABLE paper_futures_funding_responses (sha256 TEXT PRIMARY KEY, received_at INTEGER, server_time INTEGER, raw_response TEXT);
@@ -157,7 +158,7 @@ class SummaryTests(unittest.TestCase):
 
     def test_cli_only_takes_db(self):
         with self.assertRaises(SystemExit):
-            m.main(["--db", "x", "--prior-first-rows", "1", "--prior-v2-rows", "1", "--from", "1"])
+            m.main(["--db", "x", "--prior-first-rows", "1", "--prior-v2-rows", "1", "--prior-stage2-rows", "1", "--from", "1"])
         with self.assertRaises(SystemExit):
             m.main(["--db", "x"])                      # the two prior-rows arguments are mandatory
         with self.assertRaises(SystemExit):
@@ -465,3 +466,32 @@ class PlanAndGlobalCapTests(Fixture):
         ok = m.build_result(m._open_readonly(self.path), prior_rows=remaining_ok)   # exactly what is left: allowed to start
         self.assertNotEqual((ok["stopped"] or {}).get("reason"), "global_cap")
         self.assertIn("reads", ok)
+
+
+class RealSchemaPlanTests(Fixture):
+    """The run of 2026-10-15 20:38Z stopped because, on SQLite 3.51 and with the real secondary index, 2b was planned on
+    ``paper_futures_candle_revisions_bucket`` with a temporary sort. The test schema now has that index too."""
+
+    def test_2b_uses_the_primary_key_and_no_temp_btree_even_with_the_secondary_index(self):
+        for i in range(2000):
+            revision(self.conn, B0 + (i % 360) * m.MINUTE_MS, i, 1)
+        self.conn.execute("ANALYZE")
+        self.conn.commit()
+        g = self.guard()
+        rows = m.read_2b(g, m.Ledger())
+        self.assertEqual(len(rows), 2000)
+        plan = g.planned[("2b", m._sql_2b(m.CAPS["2b"] + 1))]
+        self.assertTrue(any("sqlite_autoindex_paper_futures_candle_revisions_1" in d for d in plan), plan)
+        self.assertFalse(any("TEMP B-TREE" in d for d in plan), plan)
+
+    def test_2b_statement_names_the_primary_key_index(self):
+        self.assertIn("INDEXED BY sqlite_autoindex_paper_futures_candle_revisions_1", m._sql_2b(10))
+        self.assertIn("INDEXED BY sqlite_autoindex_paper_futures_official_candles_1", m._sql_2a(10))
+
+    def test_the_secondary_index_would_have_been_rejected_by_the_gate(self):
+        g = self.guard()
+        sql = ("SELECT bucket_start FROM paper_futures_candle_revisions INDEXED BY paper_futures_candle_revisions_bucket "
+               "WHERE interval_ms = 60000 AND bucket_start >= 0 AND bucket_start < 10 ORDER BY candle_id, revision LIMIT 5")
+        with self.assertRaises(m.Stopped) as ctx:
+            g.fetch("2b", sql)
+        self.assertEqual(ctx.exception.reason, "query_plan")
