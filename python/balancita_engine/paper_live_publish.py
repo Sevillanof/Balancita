@@ -125,3 +125,92 @@ def intervals(runner, from_ms=None, to_ms=None, product=None):
                  "product": product, "contract": {"complete": False, "stages_present": list(INTERVAL_STAGES_PRESENT),
                                                   "stages_missing": list(INTERVAL_STAGES_MISSING)},
                  "intervals": rows})
+
+
+# ---- the operating block (Issue #187, contract BAL-CONTRATO-187-01): what the process says about itself ----------------------
+STATUS_SCHEMA = "balancita-paper-session-status.v1"
+HEARTBEAT_SCHEMA = "balancita-paper-live-heartbeat.v1"        # kept equal to paper_live_process.HEARTBEAT_SCHEMA by a test
+# The phases the process writes -> the names the gateway shows. Anything else is not guessed: the block says why it cannot tell.
+PUBLISHED_PHASE = {"INIT": "INIT", "WARMUP": "WARMING_UP", "LIVE": "LIVE", "STOPPING": "STOPPING", "STOPPED": "STOPPED",
+                   "HALTED": "HALTED", "REFUSED": "REFUSED"}
+FINAL_PHASES = ("STOPPED", "HALTED", "REFUSED")
+
+
+def _status_tag(extra):
+    return dict(extra, mode=SESSION_MODE, evidence_class=EVIDENCE_CLASS)          # no ``execution_class``: this block holds no trade
+
+
+def _status_unavailable(reason):
+    return _status_tag({"schema": STATUS_SCHEMA, "phase": "unavailable", "liveness": "unknown", "reasons": [reason],
+                 "halt_reason": None, "orderly_stop": None, "resources": None, "clock": None})
+
+
+def _report_is_newer(report, beat):
+    """A ``report.json`` outlives an operator restart (nothing rewrites it until the new run ends), so it only outranks the heartbeat when
+    it is of the same session and configuration AND was written strictly after the heartbeat's observation time (D-223-01; a tie goes to the heartbeat: the first heartbeat of a restarted run carries the
+    same observation time as the halt that preceded it, and the process writes its report at a later step than its last heartbeat). With no
+    heartbeat there is nothing to compare: the report is all there is."""
+    if not beat:
+        return True
+    ended, seen = report.get("ended_at_observed_ms"), beat.get("observed_now_ms")
+    if (report.get("session_id"), report.get("config_digest")) != (beat.get("session_id"), beat.get("config_digest")):
+        return False
+    return isinstance(ended, int) and isinstance(seen, int) and ended > seen
+
+
+def session_status(heartbeat, halt=None, report=None, heartbeat_age_ms=None, max_age_ms=None, threshold_approved=False):
+    """The operating block of a session, read from the files the process leaves (``heartbeat.json``, ``halt.json``, ``report.json``
+    already parsed; a missing file is ``None``). It computes nothing about money and reads no database.
+
+    The phase is the process's own word, never promoted: a heartbeat that says LIVE does not make the session live. ``liveness`` is
+    ``final`` for a phase that ended, and for a running one ``unknown`` (no approved age limit, or no age: BAL-DECISION-187-01, no
+    default here), ``stale`` (older than the caller's limit; the phase is then ``unverified``) or ``alive`` (only with an APPROVED
+    limit). A ``halt.json`` outranks a heartbeat that never got to say HALTED (the process died between the two writes). A missing or
+    unknown heartbeat is ``unavailable``, never an empty LIVE."""
+    if not any(isinstance(part, dict) for part in (heartbeat, halt, report)):
+        return _status_unavailable("heartbeat_missing")
+    beat = heartbeat if isinstance(heartbeat, dict) else {}
+    if beat and beat.get("schema") != HEARTBEAT_SCHEMA:
+        return _status_unavailable("heartbeat_schema_unknown")
+    reasons = []
+    if isinstance(report, dict) and not _report_is_newer(report, beat):
+        report = None                   # a report of an earlier run (kept across an operator restart) says nothing about this one
+    reported = beat.get("phase")
+    if reported is not None and reported not in PUBLISHED_PHASE:
+        return _status_unavailable("heartbeat_phase_unknown")
+    phase = PUBLISHED_PHASE.get(reported)
+    halt_reason = None
+    if isinstance(halt, dict):
+        halt_reason = halt.get("reason")
+        if phase != "HALTED":
+            reasons.append("halt_file_outranks_heartbeat")
+        phase = "HALTED"
+    elif isinstance(report, dict) and report.get("ended_as") in FINAL_PHASES and phase not in FINAL_PHASES:
+        reasons.append("report_ended_after_heartbeat")
+        phase = PUBLISHED_PHASE[report["ended_as"]]
+        halt_reason = report.get("halted")
+    if phase is None:
+        return _status_unavailable("heartbeat_phase_missing")
+    if phase in FINAL_PHASES:
+        liveness = "final"
+    elif heartbeat_age_ms is None:
+        liveness = "unknown"
+        reasons.append("heartbeat_age_unknown")
+    elif max_age_ms is not None and heartbeat_age_ms > max_age_ms:
+        liveness, phase = "stale", "unverified"
+        reasons.append("heartbeat_stale")
+    elif threshold_approved and max_age_ms is not None:
+        liveness = "alive"
+    else:
+        liveness = "unknown"
+    if phase not in FINAL_PHASES and liveness == "unknown" and "heartbeat_age_unknown" not in reasons:
+        reasons.append("liveness_threshold_not_approved")
+    status = "not_approved" if max_age_ms is None else ("approved" if threshold_approved else "hypothesis")
+    body = {"schema": STATUS_SCHEMA, "phase": phase, "reported_phase": reported, "liveness": liveness, "reasons": reasons,
+            "thresholds": {"heartbeat_max_age_ms": max_age_ms, "status": status},
+            "halt_reason": halt_reason,
+            "orderly_stop": (report or {}).get("stop") if isinstance(report, dict) else None,
+            "steps": beat.get("steps"), "observed_now_ms": beat.get("observed_now_ms"),
+            "pending_orders": beat.get("pending_orders"), "open_positions": beat.get("open_positions"),
+            "resources": beat.get("resources"), "clock": (report or {}).get("clock") if isinstance(report, dict) else None}
+    return _status_tag(body)
