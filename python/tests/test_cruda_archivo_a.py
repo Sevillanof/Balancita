@@ -17,7 +17,7 @@ sys.path.insert(0, PYTHON_DIR)
 
 from experimentos.cruda_parquet import archivo_a as A
 from experimentos.cruda_parquet.corpus import CorpusConfig, Rng, generate
-from experimentos.cruda_parquet.derivacion import derivation_hash, derive_minutes
+from experimentos.cruda_parquet.derivacion import derivation_hash, derive_minutes, state_as_of
 
 CONFIG = CorpusConfig(seed=248, max_records=1500, max_size=8192)
 
@@ -147,11 +147,32 @@ class ArchiveTests(unittest.TestCase):
         again = derive_minutes(A.ArchiveReader(self.dir).records())
         self.assertEqual(derivation_hash(again), derivation_hash(from_archive), "deterministic reconstruction")
 
+    def test_replay_as_of_each_cut_matches_between_corpus_and_archive(self):
+        """Bounded claim: at 25 cuts of ``received_at`` (arrival order) the state rebuilt from the archive equals the one from the corpus,
+        and nothing received after a cut is visible in it. It does not enumerate every decision point."""
+        write(self.dir, self.messages, block_records=250)
+        archived = list(A.ArchiveReader(self.dir).records())
+        received = [r.received_at for r in archived]
+        self.assertEqual(received, sorted(received), "arrival order advances received_at")
+        step = max(1, len(self.messages) // 25)
+        for index in range(0, len(self.messages), step):
+            cut = self.messages[index].received_at
+            from_corpus, from_archive = state_as_of(self.messages, cut), state_as_of(archived, cut)
+            self.assertEqual(derivation_hash(from_archive), derivation_hash(from_corpus), "cut %d" % cut)
+            for series in ("live", "recovered"):
+                for value in from_archive[series].values():
+                    self.assertLessEqual(value["known_last"], cut, "nothing received after the cut is visible")
+        self.assertEqual(derivation_hash(state_as_of(archived, received[-1])), derivation_hash(derive_minutes(archived)))
+        first_recovered = next(r for r in archived if r.endpoint == "trade_snapshot")
+        before = state_as_of(archived, first_recovered.received_at - 1)
+        after = state_as_of(archived, first_recovered.received_at)
+        self.assertLess(sum(v["count"] for v in before["recovered"].values()), sum(v["count"] for v in after["recovered"].values()))
+
 
 class RealKillTests(unittest.TestCase):
     """A real SIGKILL of a writer process (D condition T1). What this does NOT prove: power loss, what the disk does on fsync."""
 
-    POINTS = ("append", "seal_half_written", "seal_tmp_written", "seal_renamed", "manifest_half_written", "manifest_confirmed")
+    POINTS = ("epoch_claim_start", "epoch_claim_created", "epoch_claim_durable", "append", "seal_half_written", "seal_tmp_written", "seal_renamed", "manifest_half_written", "manifest_confirmed")
 
     def run_worker(self, directory, seed, records, point, occurrence):
         env = dict(os.environ, PYTHONPATH=PYTHON_DIR)
@@ -163,7 +184,7 @@ class RealKillTests(unittest.TestCase):
         seed, records = 11, 400
         full = list(generate(CorpusConfig(seed=seed, max_records=records, max_size=8192)))
         for point in self.POINTS:
-            occurrence = 1 + rng.below(3 if point != "append" else 300)
+            occurrence = 1 if point.startswith("epoch_claim") else 1 + rng.below(3 if point != "append" else 300)
             with self.subTest(point=point, occurrence=occurrence):
                 directory = tempfile.mkdtemp(prefix="cruda-kill-")
                 self.addCleanup(shutil.rmtree, directory, True)
@@ -176,17 +197,38 @@ class RealKillTests(unittest.TestCase):
                 # what survived is exactly a prefix of the corpus, in arrival order, byte for byte
                 self.assertEqual([r.raw for r in got], [m.raw for m in full[: len(got)]])
                 self.assertEqual([r.arrival_no for r in got], list(range(1, len(got) + 1)))
-                self.assertTrue(all(len(read(os.path.join(directory, n))) > 0 for n in os.listdir(directory)))
+                self.assertTrue(all(len(read(os.path.join(directory, n))) > 0 for n in os.listdir(directory) if n.endswith(".blk")))
                 if point == "append":
                     self.assertLessEqual(len(got), occurrence - 1, "pending records are lost, never invented")
                 # a restart takes a NEW epoch: numbers of the lost pending records are not reused
                 writer = A.ArchiveWriter(directory, block_records=50)
-                self.assertEqual(writer.epoch, 2)
+                # a kill before the claim leaves no epoch claimed AND no record accepted, so epoch 1 is still free; otherwise epoch 2
+                self.assertEqual(writer.epoch, 1 if point == "epoch_claim_start" else 2)
                 writer.append("ws", "trade", "", b"after", "", "", 1)
                 writer.close()
                 ids = [(r.epoch, r.arrival_no) for r in A.ArchiveReader(directory).records()]
                 self.assertEqual(len(ids), len(set(ids)))
-                self.assertEqual(ids[-1], (2, 1))
+                self.assertEqual(ids[-1], (writer.epoch, 1))
+
+    def test_sigkill_while_claiming_the_epoch_never_reuses_an_identity_even_without_confirmed_blocks(self):
+        for point in ("epoch_claim_start", "epoch_claim_created", "epoch_claim_durable"):
+            with self.subTest(point=point):
+                directory = tempfile.mkdtemp(prefix="cruda-kill-")
+                self.addCleanup(shutil.rmtree, directory, True)
+                # run A accepts records that are only pending (block of 50 never fills) and dies: epoch 1 was claimed, nothing confirmed
+                self.assertEqual(self.run_worker(directory, 21, 400, "append", 7), -9)
+                self.assertEqual(A.read_manifest(directory), [])
+                self.assertEqual(A.last_epoch(directory), 1)
+                # run B dies INSIDE the epoch claim; it accepted nothing
+                self.assertEqual(self.run_worker(directory, 22, 400, point, 1), -9)
+                self.assertEqual(A.read_manifest(directory), [])
+                # run C: must not use epoch 1 (A's lost pending records had identities (1, 1..7))
+                writer = write(directory, list(generate(CorpusConfig(seed=23, max_records=120, max_size=8192))), block_records=50)
+                self.assertGreaterEqual(writer.epoch, 2)
+                ids = [(r.epoch, r.arrival_no) for r in A.ArchiveReader(directory).records()]
+                self.assertEqual(len(ids), len(set(ids)))
+                self.assertTrue(all(e >= 2 for e, _ in ids), "no confirmed record carries the epoch of the dead writer A")
+                self.assertTrue(os.path.exists(os.path.join(directory, "epoch-000001")))
 
     def test_a_killed_seal_is_adopted_only_when_the_block_is_complete(self):
         directory = tempfile.mkdtemp(prefix="cruda-kill-")

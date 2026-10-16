@@ -4,7 +4,8 @@ Original messages are kept byte for byte in blocks compressed with zlib (or lzma
 
 Directory layout::
 
-    epoch            last epoch handed out (fsynced BEFORE the first record of a new writer is accepted)
+    epoch-000001     one EMPTY marker per epoch ever claimed (created O_EXCL + directory fsync BEFORE the first record of a writer is
+                     accepted; the NAME is the ledger, so a kill while claiming cannot leave a half-written number behind)
     manifest.jsonl   one JSON line per CONFIRMED block (append-only)
     000001.blk       sealed block: header + compressed payload + sha256 trailer over everything before it
     000002.blk.tmp   block being sealed (never read as valid)
@@ -222,15 +223,28 @@ def recover(directory: str) -> dict:
 
 def last_epoch(directory: str) -> int:
     best = 0
-    path = os.path.join(directory, "epoch")
-    if os.path.exists(path):
-        try:
-            best = int(_read(path, "r").strip() or 0)
-        except ValueError:
-            best = 0
+    if os.path.isdir(directory):
+        for name in os.listdir(directory):
+            if name.startswith("epoch-") and name[6:].isdigit():
+                best = max(best, int(name[6:]))
     for entry in read_manifest(directory):
         best = max(best, entry["last"][0])
     return best
+
+
+class BudgetExceeded(Exception):
+    """The next block would push the files of the experiment past ``max_dir_bytes``. Nothing is written for that block."""
+
+
+def tree_bytes(directory: str) -> int:
+    total = 0
+    for base, _, files in os.walk(directory):
+        for name in files:
+            try:
+                total += os.path.getsize(os.path.join(base, name))
+            except OSError:
+                pass
+    return total
 
 
 class WriterStats:
@@ -253,19 +267,18 @@ class ArchiveWriter:
     """Single writer. ``hook(point, n)`` lets a test or a worker stop the process at an exact point (SIGKILL)."""
 
     def __init__(self, directory: str, block_records: int = 2000, block_bytes: int = 4 * 1024 * 1024, codec: str = "zlib",
-                 hook: Optional[Callable[[str, int], None]] = None):
+                 hook: Optional[Callable[[str, int], None]] = None, max_dir_bytes: Optional[int] = None, external_bytes: int = 0):
         self.directory = directory
         self.block_records = block_records
         self.block_bytes = block_bytes
         self.codec = codec
         self.hook = hook or (lambda point, n: None)
+        # Hard stop on the files of the experiment: bytes already on disk (this tree + ``external_bytes`` such as the corpus file) plus the
+        # block about to be written (it exists twice at the peak: as ``.tmp`` and after the rename is accounted for by the same bytes).
+        self.max_dir_bytes = max_dir_bytes
+        self.external_bytes = external_bytes
         self.recovery = recover(directory)
-        self.epoch = last_epoch(directory) + 1  # a NEW epoch on every start: pending numbers lost in a kill are never reused
-        with open(os.path.join(directory, "epoch"), "w") as handle:
-            handle.write(str(self.epoch))
-            handle.flush()
-            os.fsync(handle.fileno())
-        _fsync_dir(directory)
+        self.epoch = self._claim_epoch()  # a NEW epoch on every start: pending numbers lost in a kill are never reused
         numbers = [int(n[:6]) for n in os.listdir(directory) if len(n) >= 10 and n[:6].isdigit() and ".blk" in n]
         self.next_block = max(numbers + [e["block"] for e in read_manifest(directory)] + [0]) + 1
         self.next_arrival = 1
@@ -273,6 +286,22 @@ class ArchiveWriter:
         self.buffer_bytes = 0
         self.stats = WriterStats()
         self.closed = False
+
+    def _claim_epoch(self) -> int:
+        """Claim ``last + 1`` with an exclusive create of an empty marker file; a taken name means somebody (or an earlier run) has it."""
+        candidate = last_epoch(self.directory) + 1
+        while True:
+            self.hook("epoch_claim_start", candidate)
+            try:
+                fd = os.open(os.path.join(self.directory, "epoch-%06d" % candidate), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+            except FileExistsError:
+                candidate += 1
+                continue
+            self.hook("epoch_claim_created", candidate)
+            os.close(fd)
+            _fsync_dir(self.directory)
+            self.hook("epoch_claim_durable", candidate)
+            return candidate
 
     def append(self, source: str, endpoint: str, product: str, raw: bytes, provider_time: str, provider_seq: str, received_at: int) -> Tuple[int, int]:
         started = time.perf_counter()
@@ -298,6 +327,12 @@ class ArchiveWriter:
         wall, cpu = time.perf_counter(), time.process_time()
         records, self.buffer, self.buffer_bytes = self.buffer, [], 0
         data = build_block(records, self.codec)
+        if self.max_dir_bytes is not None:
+            needed = self.external_bytes + tree_bytes(self.directory) + len(data) + 1024  # block + a generous manifest line
+            if needed > self.max_dir_bytes:
+                self.buffer = records + self.buffer
+                self.buffer_bytes = sum(len(r.raw) for r in self.buffer)
+                raise BudgetExceeded("sealing block %d needs %d bytes, limit %d" % (self.next_block, needed, self.max_dir_bytes))
         name = "%06d.blk" % self.next_block
         tmp = os.path.join(self.directory, name + ".tmp")
         final = os.path.join(self.directory, name)
@@ -338,7 +373,10 @@ class ArchiveWriter:
 
 
 class ArchiveReader:
-    """Reads CONFIRMED blocks only, verifying each block against its manifest hash before decoding it (bounded memory: one block)."""
+    """Reads CONFIRMED blocks only, verifying each block against its manifest hash before decoding it.
+
+Memory is NOT constant: it holds the whole manifest, decodes (and keeps alive) one block plus its compressed bytes at a time, and
+``query``/``records`` consumers may materialise lists. Measure the total peak of each phase (see medir.py); do not assume a bound."""
 
     def __init__(self, directory: str):
         self.directory = directory
