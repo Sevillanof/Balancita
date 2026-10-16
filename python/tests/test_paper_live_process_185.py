@@ -88,6 +88,14 @@ class Base(unittest.TestCase):
 
 
 class TestConfiguration(unittest.TestCase):
+    def test_the_capital_label_follows_the_portfolio_the_runner_really_uses(self):
+        portfolio = LP.runner_config_of(LP.validate_config(config_dict())).portfolio
+        self.assertEqual(LP.CAPITAL_POLICY, LP.capital_policy_label(portfolio))
+        self.assertEqual(LP.CAPITAL_POLICY, "shared-portfolio-1000-usd-risk-1pct-experimental")
+        self.assertNotIn("100-usd", LP.CAPITAL_POLICY.replace("1000-usd", ""))
+        other = type(portfolio)(initial_equity_usd="2500", risk_per_trade="0.005")
+        self.assertEqual(LP.capital_policy_label(other), "shared-portfolio-2500-usd-risk-0.5pct-experimental")
+
     def test_a_valid_configuration_has_a_stable_digest_and_the_defaults_are_filled(self):
         a, b = LP.validate_config(config_dict()), LP.validate_config(dict(reversed(list(config_dict().items()))))
         self.assertEqual(a["digest"], b["digest"])

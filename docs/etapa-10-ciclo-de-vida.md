@@ -44,7 +44,7 @@ quien falsifique el marcador a propósito. Habilitar datos reales exige una auto
 
 ## Capital
 
-El reporte lleva `capital_policy: adr-0001-fixed-100-usd`, `policy_status: experimental` y `evidence_class: not_forward_evidence`.
+El reporte lleva `capital_policy: shared-portfolio-1000-usd-risk-1pct-experimental` (la cartera experimental compartida, tamaño según riesgo; NO los 100 USD fijos del ADR, que son del forward; la etiqueta se deriva de `PortfolioPolicy()` y un test falla si divergen), `policy_status: experimental` y `evidence_class: not_forward_evidence`.
 La configuración no admite otro dimensionamiento: `capital_policy` distinto se rechaza. `experimental` no sustituye al ADR.
 
 ## Plan de sesión supervisada (propuesta para decisión del propietario; no autoriza nada)
