@@ -104,6 +104,55 @@ class ArchiveTests(unittest.TestCase):
             A.ArchiveReader(self.dir).verify()
         self.assertEqual(A.recover(self.dir)["confirmed_damaged"], ["000002.blk"])
 
+    def test_the_block_trailer_is_verified_on_its_own(self):
+        block = bytearray(A.build_block([A.Record(1, i, 5, "ws", "trade", "P", "1", "2", b"payload-%d" % i) for i in range(1, 4)], "zlib"))
+        self.assertEqual(len(A.parse_block(bytes(block))), 3)
+        tampered = bytearray(block)
+        tampered[-1] ^= 0x01  # only the sha256 trailer changes: zlib and the per-record hashes still pass
+        with self.assertRaises(ValueError):
+            A.parse_block(bytes(tampered))
+        header_only = bytearray(block)
+        header_only[5] ^= 0x01  # record count in the header: the payload is untouched
+        with self.assertRaises(ValueError):
+            A.parse_block(bytes(header_only))
+
+    def test_derivation_counts_a_duplicate_once_with_hand_written_expectations(self):
+        trade = b'{"feed":"trade","product_id":"PF_XBTUSD","uid":"u1","seq":1,"time":120000,"qty":0.5,"price":100}'
+        other = b'{"feed":"trade","product_id":"PF_XBTUSD","uid":"u2","seq":2,"time":120500,"qty":0.25,"price":101}'
+        snapshot = b'{"feed":"trade_snapshot","trades":[{"uid":"u0","seq":0,"time":60000,"qty":2,"price":99}]}'
+
+        def message(endpoint, raw, received):
+            return A.Record(1, received, received, "ws", endpoint, "PF_XBTUSD", "", "", raw)
+        records = [message("trade", trade, 121000), message("trade", trade, 121100), message("trade", other, 121500),
+                   message("trade_snapshot", snapshot, 300000)]
+        result = derive_minutes(records)
+        self.assertEqual(result["live"], {"120000": {"count": 2, "volume": "0.75", "known_first": 121000, "known_last": 121500}})
+        self.assertEqual(result["recovered"], {"60000": {"count": 1, "volume": "2", "known_first": 300000, "known_last": 300000}})
+        # the duplicate stays in the archive
+        write(self.dir, [type("M", (), dict(source="ws", endpoint="trade", product="P", raw=r.raw, provider_time="", provider_seq="", received_at=r.received_at)) for r in records])
+        self.assertEqual(len(list(A.ArchiveReader(self.dir).records())), 4)
+
+    def test_oversized_messages_above_the_limit_are_kept_whole(self):
+        big = [m for m in self.messages if len(m.raw) > CONFIG.max_size]
+        self.assertTrue(big, "the corpus has messages above max_size")
+        write(self.dir, self.messages, block_records=400)
+        stored = {hashlib.sha256(r.raw).hexdigest(): r.raw for r in A.ArchiveReader(self.dir).records()}
+        for message in big:
+            self.assertEqual(stored[hashlib.sha256(message.raw).hexdigest()], message.raw)
+
+    def test_the_writer_refuses_to_start_on_a_damaged_confirmed_block(self):
+        write(self.dir, self.messages[:300], block_records=100)
+        victim = os.path.join(self.dir, "000002.blk")
+        data = bytearray(read(victim))
+        data[len(data) // 3] ^= 0x01
+        put(victim, bytes(data))
+        with self.assertRaises(A.ArchiveDamaged):
+            A.ArchiveWriter(self.dir, block_records=100)
+        os.remove(victim)
+        with self.assertRaises(A.ArchiveDamaged):
+            A.ArchiveWriter(self.dir, block_records=100)
+        self.assertEqual(A.last_epoch(self.dir), 1, "a refused start claims no epoch")
+
     def test_missing_manifest_adopts_only_complete_blocks(self):
         write(self.dir, self.messages[:300], block_records=100)
         os.remove(os.path.join(self.dir, "manifest.jsonl"))

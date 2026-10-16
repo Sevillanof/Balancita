@@ -11,7 +11,7 @@ from experimentos.cruda_parquet.corpus import CorpusConfig, Rng, corpus_hash, ex
 
 CONFIG = CorpusConfig(seed=248, max_records=2000)
 # Pinned: it must be identical on Python 3.9, 3.12 and 3.13 (checked with ``uv run --python``).
-PINNED = ("4d2066d63cdde0a5a8612ecff6f59938ab34ed0a32844b259a49c8fd587192a3", 2000)
+PINNED = ("b3084dd64c074dfc998f89b44ad47821f31a9ff8f833a728a74beefed9af861a", 2000)
 
 
 class CorpusTests(unittest.TestCase):
@@ -41,7 +41,7 @@ class CorpusTests(unittest.TestCase):
         self.assertTrue(any(not _utf8(raw) for raw in raws), "non-UTF-8 message")
         self.assertTrue(any(raws.count(raw) > 1 for raw in raws if raw), "exact duplicate")
         self.assertTrue(any(m.source == "rest" for m in messages))
-        self.assertTrue(any(len(m.raw) >= CONFIG.max_size for m in messages), "oversized message")
+        self.assertTrue(any(len(m.raw) > CONFIG.max_size for m in messages), "oversized message ABOVE max_size")
 
     def test_trade_sequence_is_not_monotonic(self):
         seqs = [int(m.provider_seq) for m in generate(CONFIG) if m.endpoint == "trade" and m.provider_seq.isdigit()]
@@ -66,7 +66,8 @@ class CorpusTests(unittest.TestCase):
     def test_size_distribution_is_declared(self):
         summary = size_summary(generate(CONFIG))
         self.assertEqual(summary["n"], 2000)
-        self.assertLessEqual(summary["max"], CONFIG.max_size)
+        self.assertGreater(summary["max"], CONFIG.max_size)
+        self.assertLessEqual(summary["max"], CONFIG.max_size + 1024)
         self.assertGreater(summary["p99"], summary["p50"])
 
     def test_extract_meta_never_raises(self):

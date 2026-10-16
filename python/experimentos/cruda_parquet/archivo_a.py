@@ -232,6 +232,10 @@ def last_epoch(directory: str) -> int:
     return best
 
 
+class ArchiveDamaged(Exception):
+    """A CONFIRMED block is missing or does not match its manifest hash: the writer refuses to start on top of it."""
+
+
 class BudgetExceeded(Exception):
     """The next block would push the files of the experiment past ``max_dir_bytes``. Nothing is written for that block."""
 
@@ -278,6 +282,8 @@ class ArchiveWriter:
         self.max_dir_bytes = max_dir_bytes
         self.external_bytes = external_bytes
         self.recovery = recover(directory)
+        if self.recovery["confirmed_damaged"]:
+            raise ArchiveDamaged("confirmed blocks damaged or missing: %s" % ", ".join(self.recovery["confirmed_damaged"]))
         self.epoch = self._claim_epoch()  # a NEW epoch on every start: pending numbers lost in a kill are never reused
         numbers = [int(n[:6]) for n in os.listdir(directory) if len(n) >= 10 and n[:6].isdigit() and ".blk" in n]
         self.next_block = max(numbers + [e["block"] for e in read_manifest(directory)] + [0]) + 1

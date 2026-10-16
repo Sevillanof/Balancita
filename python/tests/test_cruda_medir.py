@@ -67,7 +67,7 @@ class MeasureHelpersTests(unittest.TestCase):
         directory = tempfile.mkdtemp(prefix="cruda-medir-")
         self.addCleanup(shutil.rmtree, directory, True)
         messages = list(generate(CorpusConfig(seed=9, max_records=600)))
-        limit = 120_000
+        limit = 400_000
         writer = A.ArchiveWriter(os.path.join(directory, "a"), block_records=50, max_dir_bytes=limit, external_bytes=20_000)
         with self.assertRaises(A.BudgetExceeded):
             for m in messages:

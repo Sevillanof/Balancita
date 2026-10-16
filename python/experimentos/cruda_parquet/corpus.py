@@ -171,7 +171,7 @@ def generate(config: CorpusConfig) -> Iterator[Message]:
             elif kind == 2:
                 raw = b""
             else:
-                raw = _pad(rng, {"feed": "trade", "product_id": "PF_XBTUSD", "seq": seq + 1}, config.max_size)
+                raw = _pad(rng, {"feed": "trade", "product_id": "PF_XBTUSD", "seq": seq + 1}, config.max_size + 1 + rng.below(1024))  # ABOVE max_size on purpose: kept whole, never truncated
             msg = _message("ws", "invalid", raw, received)
         elif roll < 840 and trades:  # exact duplicate (same bytes, new arrival)
             first = trades[rng.below(len(trades))]
