@@ -210,6 +210,7 @@ function decodeAccount(raw: unknown): SessionAccount | null {
   oneOf(a.class, ['simulated'], 'account.class')
   oneOf(a.committed_scope, ['open_positions_only'], 'account.committed_scope')
   oneOf(a.pending_reservation, ['none'], 'account.pending_reservation')
+  oneOf(a.pending_reserved_usd, ['0'], 'account.pending_reserved_usd')
   return {
     totalSimulatedUsd: str(
       a.total_simulated_usd,

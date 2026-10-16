@@ -221,4 +221,14 @@ describe('simulated account (BAL-DECISION-185-CARTERA-SIMULADA-02)', () => {
       }),
     ).toThrow()
   })
+
+  it('refuses an account whose pending reserved amount is not zero', () => {
+    const raw = current() as Record<string, any> // eslint-disable-line @typescript-eslint/no-explicit-any
+    expect(() =>
+      decodePositionsBlock({
+        ...raw,
+        account: { ...raw.account, pending_reserved_usd: '10' },
+      }),
+    ).toThrow()
+  })
 })
