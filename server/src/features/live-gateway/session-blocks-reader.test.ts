@@ -184,6 +184,23 @@ describe('readSessionBlocks: a derived file read with the server clock', () => {
     )
   })
 
+  it('restart with the same pid, session and configuration: the previous start’s file is refused', () => {
+    const doc = scenarios.operating_threshold_hypothesis
+    const path = publish(doc, T0)
+    const sameEverythingButTheStart = heartbeatFor(path, doc, {
+      run_id: 'the-new-start',
+    })
+    expect(
+      readSessionBlocks(path, T0 + 1_000, sameEverythingButTheStart),
+    ).toEqual({ state: 'invalid', reason: 'other_run' })
+    // a heartbeat from before run ids existed is not enough to accept a file either
+    const noRunId = heartbeatFor(path, doc, { run_id: undefined })
+    expect(readSessionBlocks(path, T0 + 1_000, noRunId)).toEqual({
+      state: 'invalid',
+      reason: 'other_run',
+    })
+  })
+
   it('republishing restarts the age', () => {
     const doc = scenarios.operating_threshold_hypothesis
     const path = publish(doc, T0)
