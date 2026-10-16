@@ -4,6 +4,11 @@ Context (#183, stage 2 repeat): 3 stored funding responses came back ``server_ti
 (``historical-funding.ts``) accepts any string ``Date.parse`` understands and saves it verbatim; the adapter
 (``funding_adapter._ms``) accepts only ISO strings ending in ``Z``. This table documents both sides for the same strings, so a
 contradiction in the data can be told apart from a contract gap without reading the database again. It changes no behaviour.
+
+Run it under the interpreter that took the real readings (3.9) as well as the CI one (3.12)::
+
+    PYTHONPATH=python uv run --no-project --python 3.9 python -m unittest discover -s python/tests -p test_server_time_contract.py
+    PYTHONPATH=python uv run --no-project --python 3.12 python -m unittest discover -s python/tests -p test_server_time_contract.py
 ``JS_ACCEPTS`` was produced with ``Number.isFinite(Date.parse(s))`` on Node 22 and is copied here as fixed data.
 """
 import sys
@@ -29,9 +34,12 @@ JS_ACCEPTS = {
 PY_ACCEPTS = {
     "2026-10-11T19:00:00Z": 1791745200000,
     "2026-10-11T19:00:00.316Z": 1791745200316,
+    "2026-10-11 19:00:00Z": 1791745200000,
+}
+# forms only Python >= 3.11 parses (before 3.11 ``fromisoformat`` takes just 3 or 6 fraction digits): 1 and 9 digits
+PY_ACCEPTS_FROM_3_11 = {
     "2026-10-11T19:00:00.3Z": 1791745200300,
     "2026-10-11T19:00:00.316123456Z": 1791745200316,
-    "2026-10-11 19:00:00Z": 1791745200000,
 }
 
 
@@ -40,8 +48,17 @@ class ServerTimeContractTests(unittest.TestCase):
         for text, expected in PY_ACCEPTS.items():
             self.assertEqual(FA._ms(text), expected, text)
 
+    def test_forms_that_only_python_3_11_or_later_accepts(self):
+        for text, expected in PY_ACCEPTS_FROM_3_11.items():
+            if sys.version_info >= (3, 11):
+                self.assertEqual(FA._ms(text), expected, text)
+            else:
+                with self.assertRaises(ValueError) as caught:
+                    FA._ms(text)
+                self.assertEqual(str(caught.exception), "timestamp_invalid", text)
+
     def test_strings_the_store_would_save_but_the_adapter_rejects(self):
-        gap = [s for s, js in JS_ACCEPTS.items() if js and s not in PY_ACCEPTS]
+        gap = [s for s, js in JS_ACCEPTS.items() if js and s not in PY_ACCEPTS and s not in PY_ACCEPTS_FROM_3_11]
         self.assertEqual(sorted(gap), sorted([
             "2026-10-11", "2026-10-11T19:00:00", "2026-10-11T19:00:00+00:00",
             "2026-10-11T19:00:00.316+00:00", "Sat, 11 Oct 2026 19:00:00 GMT"]))
