@@ -166,6 +166,112 @@ describe('the session page states', () => {
     expect(within(status).queryByTestId('halt-reason')).toBeNull()
   })
 
+  describe('traceability of the intervals', () => {
+    type Interval = {
+      stages: {
+        signal: Record<string, unknown>
+        order: Record<string, unknown>
+        trade: Record<string, unknown>
+      }
+    } & Record<string, unknown>
+    const withIntervals = (
+      change: (intervals: Interval[], block: Record<string, unknown>) => void,
+    ) =>
+      envelope('operating_threshold_hypothesis', (doc) => {
+        const block = doc.intervals as Record<string, unknown> & {
+          intervals: Interval[]
+        }
+        change(block.intervals, block)
+        return doc
+      })
+
+    it('shows what traded and what only waited, with the age of the document', () => {
+      show(envelope('operating_threshold_hypothesis'))
+      const rows = screen.getAllByTestId('interval')
+      const actions = rows.map((r) => r.getAttribute('data-action')).sort()
+      expect(actions).toEqual(['BUY', 'WAIT'])
+      const panel = screen.getByTestId('session-intervals')
+      expect(within(panel).getByText('Compra')).toBeInTheDocument()
+      expect(within(panel).getByText('Espera')).toBeInTheDocument()
+      expect(within(panel).getByText('Abierta', PILL)).toBeInTheDocument()
+      expect(screen.getByTestId('intervals-age')).toHaveTextContent(
+        'publicado hace 1 s',
+      )
+    })
+
+    it('shows HOLD and the end of an order (rejected, expired, cancelled, unknown) as recorded', () => {
+      show(
+        withIntervals((intervals) => {
+          const make = (action: string, state: string, reasons: string[]) => {
+            const base = structuredClone(intervals[0])
+            base.key = `${action}-${state}`
+            base.stages.signal.action = action
+            base.stages.order.state = state
+            base.stages.order.reasons = reasons
+            return base
+          }
+          intervals.push(
+            make('HOLD', 'none', []),
+            make('BUY', 'rejected', ['no_quote']),
+            make('BUY', 'expired', ['stale_entry']),
+            make('BUY', 'cancelled', []),
+            make('BUY', 'brand_new_state', []),
+          )
+        }),
+      )
+      const panel = screen.getByTestId('session-intervals')
+      expect(within(panel).getByText('Mantener')).toBeInTheDocument()
+      expect(within(panel).getByText('Rechazada', PILL)).toBeInTheDocument()
+      expect(within(panel).getByText('Vencida', PILL)).toBeInTheDocument()
+      expect(within(panel).getByText('Cancelada', PILL)).toBeInTheDocument()
+      expect(within(panel).getByText('brand_new_state')).toBeInTheDocument()
+      expect(panel.textContent).toContain('Entrada vencida')
+      expect(panel.textContent).toContain('Sin cotización')
+    })
+
+    it('warns when the chain is incomplete or a signal cannot be traced', () => {
+      show(
+        withIntervals((_intervals, block) => {
+          block.contract = {
+            complete: false,
+            stages_missing: ['order'],
+            stages_present: ['signal'],
+          }
+          block.signal_references = { verified: 1, unverified: ['k1', 'k2'] }
+        }),
+      )
+      const warnings = screen.getByLabelText('Advertencias de la trazabilidad')
+      expect(warnings.textContent).toContain('Cadena incompleta: faltan order')
+      expect(warnings.textContent).toContain('2 señales sin referencia')
+      expect(screen.getByText('Con advertencias', PILL)).toBeInTheDocument()
+    })
+
+    it('shows only the latest intervals of a long session and says so', () => {
+      show(
+        withIntervals((intervals) => {
+          const first = intervals[0]
+          for (let n = 0; n < 60; n += 1)
+            intervals.push({ ...structuredClone(first), key: `k${n}` })
+        }),
+      )
+      expect(screen.getAllByTestId('interval')).toHaveLength(50)
+      expect(screen.getByTestId('intervals-truncated')).toHaveTextContent(
+        'últimos 50 de 62',
+      )
+    })
+
+    it('has no intervals: says so instead of an empty table', () => {
+      show(
+        withIntervals((intervals) => {
+          intervals.length = 0
+        }),
+      )
+      expect(
+        screen.getByText('Sin intervalos registrados.'),
+      ).toBeInTheDocument()
+    })
+  })
+
   it('has no control: the page only reads', () => {
     show(envelope('operating_threshold_hypothesis'))
     expect(screen.queryAllByRole('button')).toHaveLength(0)

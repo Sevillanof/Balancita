@@ -43,6 +43,22 @@ describe('session document decoder against documents the real publisher emitted'
     expect(() => decodeSessionBlocks(withoutRun)).toThrow()
   })
 
+  it('keeps the signal, decision and order detail of every interval as the publisher wrote it', () => {
+    const doc = decodeSessionBlocks(documents.operating_threshold_hypothesis)
+    const byAction = Object.fromEntries(
+      doc.intervals.intervals.map((i) => [i.signal.action, i]),
+    )
+    expect(byAction.BUY.order.state).toBe('opened')
+    expect(byAction.BUY.order.entryMs).toBeGreaterThan(0)
+    expect(byAction.BUY.decision.decidedMs).toBeGreaterThan(0)
+    expect(byAction.WAIT.signal.state).toBe('recorded')
+    expect(byAction.WAIT.order.state).toBe('none')
+    expect(doc.intervals.signalReferences).toEqual({
+      verified: 2,
+      unverified: [],
+    })
+  })
+
   it('a session without a heartbeat is unavailable and has no identity', () => {
     const doc = decodeSessionBlocks(documents.without_status)
     expect(doc.status.phase).toBe('unavailable')
