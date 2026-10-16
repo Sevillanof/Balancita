@@ -62,6 +62,8 @@ export interface LiveGatewayOptions {
   readonly processHealthPath?: string
   /** Derived blocks file the Supervisor publishes (#187). Read-only; absent: reported `absent`. */
   readonly sessionBlocksPath?: string
+  /** Heartbeat of the same session: the blocks file is refused unless it comes from that run. */
+  readonly sessionHeartbeatPath?: string
   /** CPU, data size, Qwen and Kronos usage for `/api/system`. Absent: null report. */
   readonly systemUsage?: SystemUsage
   /** Read-only health of six components (B1). Absent: built from the paths above. */
@@ -331,7 +333,11 @@ export async function buildLiveGateway(
   }))
   app.get('/api/paper-session/blocks', () =>
     options.sessionBlocksPath
-      ? readSessionBlocks(options.sessionBlocksPath, clock())
+      ? readSessionBlocks(
+          options.sessionBlocksPath,
+          clock(),
+          options.sessionHeartbeatPath,
+        )
       : { state: 'absent' },
   )
   app.get('/api/system', () => options.systemUsage?.report() ?? null)

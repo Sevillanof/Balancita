@@ -6,7 +6,7 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
 import { degradeStatus, readSessionBlocks } from './session-blocks-reader.ts'
@@ -47,6 +47,28 @@ function publish(document: unknown, publishedAtMs: number): string {
 
 const T0 = 1_800_000_000_000
 
+/** Heartbeat of the run that wrote `document`, next to its blocks file. */
+function heartbeatFor(path: string, document: Loose, over: Loose = {}): string {
+  const beat = join(dirname(path), 'heartbeat.json')
+  writeFileSync(
+    beat,
+    JSON.stringify({
+      session_id: document.session_id,
+      config_digest: document.config_digest,
+      pid: document.run.pid,
+      ...over,
+    }),
+  )
+  return beat
+}
+
+/** Reads a scenario as the route does: blocks file plus its own run's heartbeat. */
+function read(name: string, nowMs: number, over: Loose = {}) {
+  const doc = scenarios[name]
+  const path = publish(doc, T0)
+  return readSessionBlocks(path, nowMs, heartbeatFor(path, doc, over))
+}
+
 function ok(reading: ReturnType<typeof readSessionBlocks>) {
   if (reading.state !== 'ok')
     throw new Error(`expected ok, got ${reading.state}`)
@@ -70,36 +92,25 @@ describe('readSessionBlocks: a derived file read with the server clock', () => {
       [{ ...base, status: null }, 'block_missing'],
       [{ ...base, positions: { schema: 'x' } }, 'block_shape'],
     ]
-    for (const [doc, reason] of cases)
-      expect(readSessionBlocks(publish(doc, T0), T0)).toEqual({
-        state: 'invalid',
+    for (const [doc, reason] of cases) {
+      const path = publish(doc, T0)
+      expect(
+        readSessionBlocks(path, T0, heartbeatFor(path, base)),
         reason,
-      })
+      ).toEqual({ state: 'invalid', reason })
+    }
   })
 
   it('a running session is never alive/fresh from the file alone', () => {
-    const doc = ok(
-      readSessionBlocks(
-        publish(scenarios.operating_threshold_hypothesis, T0),
-        T0 + 1_000,
-      ),
-    )
+    const doc = ok(read('operating_threshold_hypothesis', T0 + 1_000))
     expect(doc.status.liveness).toBe('unknown')
     expect(doc.status.phase).toBe('LIVE')
-    expect(doc.status.gateway).toEqual({
-      age_ms: 1_000,
-      reason: null,
-    })
+    expect(doc.status.gateway).toEqual({ age_ms: 1_000, reason: null })
     expect(doc.positions.verification.freshness).not.toBe('fresh')
   })
 
   it('old state: older than the limit the publisher carries is stale/unverified', () => {
-    const doc = ok(
-      readSessionBlocks(
-        publish(scenarios.operating_threshold_hypothesis, T0),
-        T0 + 16_000,
-      ),
-    )
+    const doc = ok(read('operating_threshold_hypothesis', T0 + 16_000))
     expect(doc.status.liveness).toBe('stale')
     expect(doc.status.phase).toBe('unverified')
     expect(doc.status.reported_phase).toBe('LIVE')
@@ -108,24 +119,14 @@ describe('readSessionBlocks: a derived file read with the server clock', () => {
   })
 
   it('no limit in the block: no default is invented', () => {
-    const doc = ok(
-      readSessionBlocks(
-        publish(scenarios.operating_no_threshold, T0),
-        T0 + 999_000_000,
-      ),
-    )
+    const doc = ok(read('operating_no_threshold', T0 + 999_000_000))
     expect(doc.status.liveness).toBe('unknown')
     expect(doc.status.phase).toBe('LIVE')
     expect(doc.status.gateway.reason).toBe('threshold_missing')
   })
 
   it('a clock going back leaves the age unknown, not zero', () => {
-    const doc = ok(
-      readSessionBlocks(
-        publish(scenarios.operating_threshold_hypothesis, T0),
-        T0 - 5_000,
-      ),
-    )
+    const doc = ok(read('operating_threshold_hypothesis', T0 - 5_000))
     expect(doc.status.gateway).toEqual({
       age_ms: null,
       reason: 'heartbeat_age_unknown',
@@ -134,38 +135,74 @@ describe('readSessionBlocks: a derived file read with the server clock', () => {
 
   it('stop and halt: final phases are left alone however old the file is', () => {
     for (const name of ['stopped_orderly', 'halted_funding_diverged']) {
-      const input = scenarios[name]
-      const doc = ok(readSessionBlocks(publish(input, T0), T0 + 10 ** 9))
-      expect(doc.status.phase).toBe(input.status.phase)
+      const doc = ok(read(name, T0 + 10 ** 9))
+      expect(doc.status.phase).toBe(scenarios[name].status.phase)
       expect(doc.status.liveness).toBe('final')
       expect(doc.status.gateway).toBeNull()
     }
   })
 
-  it('unavailable status passes through as unavailable', () => {
-    const doc = ok(
-      readSessionBlocks(publish(scenarios.without_status, T0), T0 + 10 ** 9),
-    )
-    expect(doc.status.phase).toBe('unavailable')
-    expect(doc.status.liveness).toBe('unknown')
+  it('a document built without a heartbeat has no run to confirm and is refused', () => {
+    const doc = scenarios.without_status
+    const path = publish(doc, T0)
+    expect(
+      readSessionBlocks(
+        path,
+        T0,
+        heartbeatFor(path, scenarios.stopped_orderly),
+      ),
+    ).toEqual({ state: 'invalid', reason: 'other_run' })
   })
 
-  it('restart: a republished file is read as new, the age restarts', () => {
-    const path = publish(scenarios.operating_threshold_hypothesis, T0)
-    expect(ok(readSessionBlocks(path, T0 + 60_000)).status.liveness).toBe(
+  it('restart: a file of the previous run is refused even with a recent mtime', () => {
+    const doc = scenarios.operating_threshold_hypothesis
+    const path = publish(doc, T0)
+    const fresh = T0 + 1_000
+    // The new run left its heartbeat; the old blocks file is still there.
+    for (const over of [
+      { pid: doc.run.pid + 1 },
+      { session_id: 'another-session' },
+      { config_digest: 'another-digest' },
+    ])
+      expect(
+        readSessionBlocks(path, fresh, heartbeatFor(path, doc, over)),
+        JSON.stringify(over),
+      ).toEqual({ state: 'invalid', reason: 'other_run' })
+    // No heartbeat at all, or an unreadable one: the run cannot be confirmed.
+    expect(readSessionBlocks(path, fresh)).toEqual({
+      state: 'invalid',
+      reason: 'other_run',
+    })
+    expect(
+      readSessionBlocks(path, fresh, join(dirname(path), 'missing.json')),
+    ).toEqual({ state: 'invalid', reason: 'other_run' })
+    // The same run is accepted.
+    expect(readSessionBlocks(path, fresh, heartbeatFor(path, doc)).state).toBe(
+      'ok',
+    )
+  })
+
+  it('republishing restarts the age', () => {
+    const doc = scenarios.operating_threshold_hypothesis
+    const path = publish(doc, T0)
+    const beat = heartbeatFor(path, doc)
+    expect(ok(readSessionBlocks(path, T0 + 60_000, beat)).status.liveness).toBe(
       'stale',
     )
     utimesSync(path, (T0 + 59_000) / 1000, (T0 + 59_000) / 1000)
-    expect(ok(readSessionBlocks(path, T0 + 60_000)).status.liveness).toBe(
+    expect(ok(readSessionBlocks(path, T0 + 60_000, beat)).status.liveness).toBe(
       'unknown',
     )
   })
 
-  it('never writes: the file is byte-identical after reading', () => {
-    const path = publish(scenarios.operating_threshold_hypothesis, T0)
-    const before = readFileSync(path)
-    readSessionBlocks(path, T0 + 1)
-    expect(readFileSync(path).equals(before)).toBe(true)
+  it('never writes: the files are byte-identical after reading', () => {
+    const doc = scenarios.operating_threshold_hypothesis
+    const path = publish(doc, T0)
+    const beat = heartbeatFor(path, doc)
+    const before = [readFileSync(path), readFileSync(beat)]
+    readSessionBlocks(path, T0 + 1, beat)
+    expect(readFileSync(path).equals(before[0])).toBe(true)
+    expect(readFileSync(beat).equals(before[1])).toBe(true)
   })
 
   it('degradeStatus only degrades: an alive status without a limit is not kept alive', () => {
