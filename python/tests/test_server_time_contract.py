@@ -1,0 +1,101 @@
+"""Server-time contract between the TypeScript store and the Python adapter (synthetic strings only; no real data).
+
+Context (#183, stage 2 repeat): 3 stored funding responses came back ``server_time_invalid``. The store
+(``historical-funding.ts``) accepts any string ``Date.parse`` understands and saves it verbatim; the adapter
+(``funding_adapter._ms``) accepts only ISO strings ending in ``Z``. This table documents both sides for the same strings, so a
+contradiction in the data can be told apart from a contract gap without reading the database again. It changes no behaviour.
+
+Run it under the interpreter that took the real readings (3.9) as well as the CI one (3.12)::
+
+    PYTHONPATH=python uv run --no-project --python 3.9 python -m unittest discover -s python/tests -p test_server_time_contract.py
+    PYTHONPATH=python uv run --no-project --python 3.12 python -m unittest discover -s python/tests -p test_server_time_contract.py
+``JS_ACCEPTS`` was produced with ``Number.isFinite(Date.parse(s))`` on Node 22 and is copied here as fixed data.
+"""
+import sys
+import unittest
+
+from balancita_engine import funding_adapter as FA
+
+# string -> accepted by the TypeScript store (Date.parse finite)
+JS_ACCEPTS = {
+    "2026-10-11T19:00:00Z": True,
+    "2026-10-11T19:00:00.316Z": True,
+    "2026-10-11T19:00:00.3Z": True,
+    "2026-10-11T19:00:00.316123456Z": True,
+    "2026-10-11T19:00:00+00:00": True,
+    "2026-10-11T19:00:00.316+00:00": True,
+    "2026-10-11T19:00:00": True,                      # JS reads a no-offset datetime as LOCAL time
+    "2026-10-11": True,
+    "Sat, 11 Oct 2026 19:00:00 GMT": True,
+    "2026-10-11 19:00:00Z": True,
+    "1791745200316": False,
+}
+# the strings the adapter must accept today, with the instant (ms) it must return
+PY_ACCEPTS = {
+    "2026-10-11T19:00:00Z": 1791745200000,
+    "2026-10-11T19:00:00.316Z": 1791745200316,
+    "2026-10-11 19:00:00Z": 1791745200000,
+}
+# forms only Python >= 3.11 parses (before 3.11 ``fromisoformat`` takes just 3 or 6 fraction digits): 1 and 9 digits
+PY_ACCEPTS_FROM_3_11 = {
+    "2026-10-11T19:00:00.3Z": 1791745200300,
+    "2026-10-11T19:00:00.316123456Z": 1791745200316,
+}
+
+
+class ServerTimeContractTests(unittest.TestCase):
+    def test_adapter_accepts_exactly_the_documented_z_forms(self):
+        for text, expected in PY_ACCEPTS.items():
+            self.assertEqual(FA._ms(text), expected, text)
+
+    def test_forms_that_only_python_3_11_or_later_accepts(self):
+        for text, expected in PY_ACCEPTS_FROM_3_11.items():
+            if sys.version_info >= (3, 11):
+                self.assertEqual(FA._ms(text), expected, text)
+            else:
+                with self.assertRaises(ValueError) as caught:
+                    FA._ms(text)
+                self.assertEqual(str(caught.exception), "timestamp_invalid", text)
+
+    def test_strings_the_store_would_save_but_the_adapter_rejects(self):
+        gap = [s for s, js in JS_ACCEPTS.items() if js and s not in PY_ACCEPTS and s not in PY_ACCEPTS_FROM_3_11]
+        self.assertEqual(sorted(gap), sorted([
+            "2026-10-11", "2026-10-11T19:00:00", "2026-10-11T19:00:00+00:00",
+            "2026-10-11T19:00:00.316+00:00", "Sat, 11 Oct 2026 19:00:00 GMT"]))
+        for text in gap:
+            with self.assertRaises(ValueError) as caught:
+                FA._ms(text)
+            self.assertEqual(str(caught.exception), "timestamp_not_utc", text)
+
+    def test_a_whole_response_with_such_a_server_time_is_rejected_as_server_time_invalid(self):
+        for text in ("2026-10-11T19:00:00+00:00", "2026-10-11T19:00:00", "Sat, 11 Oct 2026 19:00:00 GMT"):
+            raw = '{"result":"success","serverTime":"%s","rates":[]}' % text
+            with self.assertRaises(FA.FundingAdapterError) as caught:
+                FA.parse_response(raw, "PF_XBTUSD", 1791745200000, strict=False)
+            self.assertEqual(caught.exception.reason, "server_time_invalid", text)
+
+    def test_the_inner_cause_is_only_in_the_exception_message(self):
+        raw = '{"result":"success","serverTime":"2026-10-11T19:00:00+00:00","rates":[]}'
+        with self.assertRaises(FA.FundingAdapterError) as caught:
+            FA.parse_response(raw, "PF_XBTUSD", 1791745200000, strict=False)
+        self.assertEqual(caught.exception.reason, "server_time_invalid")
+        self.assertEqual(str(caught.exception), "server_time_invalid: timestamp_not_utc")   # detail only in the message
+
+    def test_a_fraction_that_is_not_3_or_6_digits_depends_on_the_interpreter(self):
+        """DIAG-02 (#183): the 3 rejected serverTime had 2 fraction digits and the run used Python 3.9.6.
+
+        Before 3.11 ``datetime.fromisoformat`` accepts fractions of exactly 3 or 6 digits; from 3.11 it accepts any number of digits.
+        The adapter's contract is not relaxed here: this only records which interpreter gives which answer for the same string.
+        """
+        for digits in (1, 2, 4, 5, 7):
+            text = "2026-10-11T19:00:00.%sZ" % "123456789"[:digits]
+            if sys.version_info >= (3, 11):
+                self.assertEqual(FA._ms(text), 1791745200000 + int(("123456789"[:digits] + "00")[:3]), text)
+            else:
+                with self.assertRaises(ValueError) as caught:
+                    FA._ms(text)
+                self.assertEqual(str(caught.exception), "timestamp_invalid", text)
+
+
+if __name__ == "__main__":
+    unittest.main()
