@@ -142,12 +142,12 @@ def _status_tag(extra):
 
 def _status_unavailable(reason):
     return _status_tag({"schema": STATUS_SCHEMA, "phase": "unavailable", "liveness": "unknown", "reasons": [reason],
-                 "halt_reason": None, "orderly_stop": None, "resources": None, "clock": None})
+                 "halt_reason": None, "orderly_stop": None, "resources": None, "clock": None, "funding": funding_block(None)})
 
 
 def _report_is_newer(report, beat):
     """A ``report.json`` outlives an operator restart (nothing rewrites it until the new run ends), so it only outranks the heartbeat when
-    it is of the same session and configuration AND was written strictly after the heartbeat's observation time (D-223-01; a tie goes to the heartbeat: the first heartbeat of a restarted run carries the
+    it is of the same session and configuration AND was written strictly after the heartbeat's observation time while that heartbeat still runs (D-223-01; a tie goes to the heartbeat: the first heartbeat of a restarted run carries the
     same observation time as the halt that preceded it, and the process writes its report at a later step than its last heartbeat). With no
     heartbeat there is nothing to compare: the report is all there is."""
     if not beat:
@@ -155,10 +155,39 @@ def _report_is_newer(report, beat):
     ended, seen = report.get("ended_at_observed_ms"), beat.get("observed_now_ms")
     if (report.get("session_id"), report.get("config_digest")) != (beat.get("session_id"), beat.get("config_digest")):
         return False
-    return isinstance(ended, int) and isinstance(seen, int) and ended > seen
+    if not (isinstance(ended, int) and isinstance(seen, int)):
+        return False
+    # a run that ended writes its report and then a final heartbeat at the same observation time: for a final heartbeat a tie is the same run
+    return ended >= seen if PUBLISHED_PHASE.get(beat.get("phase")) in FINAL_PHASES else ended > seen
 
 
-def session_status(heartbeat, halt=None, report=None, heartbeat_age_ms=None, max_age_ms=None, threshold_approved=False):
+def funding_block(funding):
+    """Where the funding of the session comes from and whether its net result may be called verified (``pnl_verified``), from the
+    ``funding_report()`` the session itself produces (or the copy the final report holds). It decides nothing: it restates, and it
+    never trusts a ``pnl_verified: true`` that comes with a reason against it. ``source`` is ``synthetic`` (invented accrual: the result
+    is never verified), ``observed`` (the funding the capture stored, #184) or ``unknown`` (nothing was given: absent is not "fine")."""
+    if not isinstance(funding, dict) or "mode" not in funding:
+        return {"source": "unknown", "pnl_verified": False, "reasons": ["funding_report_missing"], "incomplete_trades": None,
+                "disputed_trades": None, "quarantined_periods": None, "divergence_evidence": None}
+    if funding["mode"] != "observed":
+        return {"source": "synthetic" if funding["mode"] == "synthetic" else "unknown", "pnl_verified": False,
+                "reasons": ["synthetic_funding" if funding["mode"] == "synthetic" else "funding_mode_unknown"], "incomplete_trades": None,
+                "disputed_trades": None, "quarantined_periods": None, "divergence_evidence": None}
+    reasons = list(funding.get("unverified_reasons") or [])
+    incomplete, disputed = funding.get("incomplete_trades"), funding.get("disputed_trades")
+    quarantined, evidence = funding.get("quarantined"), funding.get("divergence_evidence")
+    divergent = any((funding.get("divergence") or {}).values()) if isinstance(funding.get("divergence"), dict) else bool(funding.get("divergence"))
+    for reason, present in (("trade_funding_incomplete", incomplete), ("trade_funding_disputed", disputed), ("book_and_portfolio_diverge", divergent),
+                            ("divergence_evidence_recorded", evidence)):
+        if present and reason not in reasons:
+            reasons.append(reason)                       # recomputed from the facts, not only from the reasons the producer listed
+    if incomplete is None or disputed is None or evidence is None:
+        reasons.append("funding_report_incomplete")
+    return {"source": "observed", "pnl_verified": not reasons and funding.get("pnl_verified") is True, "reasons": reasons,
+            "incomplete_trades": incomplete, "disputed_trades": disputed, "quarantined_periods": quarantined, "divergence_evidence": evidence}
+
+
+def session_status(heartbeat, halt=None, report=None, heartbeat_age_ms=None, max_age_ms=None, threshold_approved=False, funding=None):
     """The operating block of a session, read from the files the process leaves (``heartbeat.json``, ``halt.json``, ``report.json``
     already parsed; a missing file is ``None``). It computes nothing about money and reads no database.
 
@@ -212,5 +241,6 @@ def session_status(heartbeat, halt=None, report=None, heartbeat_age_ms=None, max
             "orderly_stop": (report or {}).get("stop") if isinstance(report, dict) else None,
             "steps": beat.get("steps"), "observed_now_ms": beat.get("observed_now_ms"),
             "pending_orders": beat.get("pending_orders"), "open_positions": beat.get("open_positions"),
-            "resources": beat.get("resources"), "clock": (report or {}).get("clock") if isinstance(report, dict) else None}
+            "resources": beat.get("resources"), "clock": (report or {}).get("clock") if isinstance(report, dict) else None,
+            "funding": funding_block(funding if funding is not None else (report or {}).get("funding") if isinstance(report, dict) else None)}
     return _status_tag(body)
