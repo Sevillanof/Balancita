@@ -5,7 +5,7 @@
   "document": {
     "attempt": 144,
     "authority": "none",
-    "config_digest": "ff487531c207296ef1a9",
+    "config_digest": "ca545859422f680b648c",
     "derived": true,
     "intervals": {
       "clock_ms": 1763335170000,
@@ -138,15 +138,15 @@
       "account": {
         "class": "simulated",
         "committed_scope": "open_positions_only",
-        "committed_usd": "321.50",
-        "definitive_usd": "1027.6180",
-        "free_usd": "706.1180",
+        "committed_usd": "100.00",
+        "definitive_usd": "1006.6132",
+        "free_usd": "906.6132",
         "initial_usd": "1000",
         "pending_orders": 0,
         "pending_reservation": "none",
         "pending_reserved_usd": "0",
         "provisional_gains_usd": "0",
-        "total_simulated_usd": "1027.6180"
+        "total_simulated_usd": "1006.6132"
       },
       "clock_ms": 1763335170000,
       "evidence_class": "not_forward_evidence",
@@ -172,7 +172,7 @@
           "intent_id": "2c061951bad4c271c70c9687",
           "product_id": "PF_XBTUSD",
           "protection_evidence": "observed",
-          "quantity": "0.002966377510124717136505084960",
+          "quantity": "0.0009226679658241732928476158506",
           "side": "LONG",
           "stop": "105072.9555023886555694361556",
           "stop_protection": "observed",
@@ -184,7 +184,7 @@
       ],
       "schema": "balancita-paper-session-positions.v1",
       "unrealized_class": "estimated",
-      "unrealized_usd": "12.6616",
+      "unrealized_usd": "3.9383",
       "verification": {
         "freshness": "unknown",
         "reasons": [
@@ -211,7 +211,7 @@
       "pid": 4242
     },
     "schema": "balancita-paper-session-blocks.v1",
-    "session_id": "e6821de91445db8ca3ef",
+    "session_id": "4f9868c3a5535c9c7080",
     "status": {
       "clock": null,
       "evidence_class": "not_forward_evidence",

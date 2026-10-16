@@ -5,7 +5,7 @@
   "document": {
     "attempt": 3,
     "authority": "none",
-    "config_digest": "ff487531c207296ef1a9",
+    "config_digest": "ca545859422f680b648c",
     "derived": true,
     "intervals": {
       "clock_ms": 1763251770000,
@@ -176,7 +176,7 @@
       "pid": 4242
     },
     "schema": "balancita-paper-session-blocks.v1",
-    "session_id": "e6821de91445db8ca3ef",
+    "session_id": "4f9868c3a5535c9c7080",
     "status": {
       "clock": null,
       "evidence_class": "not_forward_evidence",
