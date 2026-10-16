@@ -44,10 +44,10 @@ quien falsifique el marcador a propósito. Habilitar datos reales exige una auto
 
 ## Capital
 
-El reporte lleva `capital_policy: shared-portfolio-1000-usd-risk-1pct-experimental` (la cartera experimental compartida, tamaño según riesgo; NO los 100 USD fijos del ADR, que son del forward; la etiqueta se deriva de `PortfolioPolicy()` y un test falla si divergen), `policy_status: experimental` y `evidence_class: not_forward_evidence`.
+El reporte lleva `capital_policy: shared-portfolio-1000-usd-notional-100usd-experimental` (la cartera experimental compartida de 1000 USD; cada operación abre un nocional provisional de 100 USD, configurable con `notional_per_trade_usd`; NO es la política forward congelada del ADR; la etiqueta se deriva de la política de la sesión y un test falla si divergen), `policy_status: experimental` y `evidence_class: not_forward_evidence`.
 
 **Cambio de etiqueta y digest (D-185-CAP-01, BAL-REV-185-CAP-02).** `capital_policy` participa en el digest de la configuración. Una configuración o un directorio creados antes de la corrección (etiqueta `adr-0001-fixed-100-usd`) tienen otro digest y se **rechazan de forma explícita**: `validate_config` responde `config_invalid` con la etiqueta vigente en el mensaje, y el pre-vuelo rechaza el directorio (`configuration_matches_directory`), con o sin `--restart`. No se migra, no se repara y no se borra nada: el directorio queda byte a byte como estaba, con sus evidencias, y no se asume que no existan sesiones sintéticas previas. Quien quiera retomar una sesión vieja necesita una decisión explícita aparte.
-La configuración no admite otro dimensionamiento: `capital_policy` distinto se rechaza. `experimental` no sustituye al ADR.
+**Tamaño de operación (BAL-DECISION-185-DIMENSIONAMIENTO-03).** 100 USD es un nocional provisional, no pérdida máxima ni capital independiente. `notional_per_trade_usd` entra al digest y a la etiqueta: cambiarlo es otra configuración, que solo usa una sesión nueva (un directorio de otra configuración se rechaza, sin migrar ni tocar saldos, posiciones ni órdenes). Si el capital libre o un límite deja menos, la operación se rechaza, no se achica. El resto del dimensionamiento se rechaza: `capital_policy` distinto no se admite. `experimental` no sustituye al ADR.
 
 ## Plan de sesión supervisada (propuesta para decisión del propietario; no autoriza nada)
 

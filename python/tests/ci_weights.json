@@ -51,6 +51,7 @@
   "test_multi_strategy": 14,
   "test_multi_validation": 11,
   "test_paper_account_185": 1,
+  "test_paper_notional_185": 1,
   "test_paper_downtime_stop_186": 1,
   "test_paper_entry_blocked_186": 1,
   "test_paper_entry_blocked_session_186": 32,
