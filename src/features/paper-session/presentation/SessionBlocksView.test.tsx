@@ -1,10 +1,18 @@
-import { render, screen, waitFor, within } from '@testing-library/react'
+import {
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import documents from '../../../../docs/mission-control/b3/documento-bloques-publicador-real.json'
 import { decodeSessionBlocksReading } from '../infrastructure/session-blocks-api.ts'
 import SessionBlocksView, {
   SessionBlocksReadingView,
 } from './SessionBlocksView.tsx'
+
+const PILL = { selector: '.mc-pill' }
 
 // SYNTHETIC: documents the real publisher built from invented sessions
 // (python/tests/session_document_187.py). Nothing here is a real session.
@@ -56,6 +64,14 @@ describe('the session page states', () => {
     expect(screen.queryByTestId('session-status')).toBeNull()
   })
 
+  it('shows how old the document is, next to the blocks, and says when it cannot tell', () => {
+    show(envelope('operating_threshold_hypothesis'))
+    expect(screen.getByTestId('document-age')).toHaveTextContent('hace 1 s')
+    cleanup()
+    show({ ...envelope('operating_threshold_hypothesis'), evaluated_ms: 1 })
+    expect(screen.getByTestId('document-age')).toHaveTextContent('no medible')
+  })
+
   it('a running session is not shown as alive or current: no approved limit', () => {
     show(envelope('operating_threshold_hypothesis'))
     const status = screen.getByTestId('session-status')
@@ -66,6 +82,46 @@ describe('the session page states', () => {
     expect(screen.getByTestId('session-validity')).toHaveAttribute(
       'data-current',
       'false',
+    )
+  })
+
+  it('a running session without a confirmed heartbeat has a neutral tone and no word of life', () => {
+    show(
+      envelope('operating_threshold_hypothesis', (doc) => ({
+        ...doc,
+        status: {
+          ...(doc.status as { reasons: string[] }),
+          reasons: ['liveness_threshold_not_approved'],
+        },
+      })),
+    )
+    const status = screen.getByTestId('session-status')
+    const pill = screen.getByText(/en marcha, sin confirmar/i, PILL)
+    expect(pill).toHaveAttribute('data-tone', 'nodata')
+    expect(status.textContent).not.toMatch(/vigente|viva\b|al día/i)
+    expect(screen.queryByText('En marcha', PILL)).toBeNull()
+    expect(
+      within(status).getByText('Límite del latido no aprobado'),
+    ).toBeInTheDocument()
+  })
+
+  it('only a confirmed heartbeat (alive) earns the green «En marcha»', () => {
+    show(
+      envelope('operating_threshold_hypothesis', (doc) => ({
+        ...doc,
+        status: {
+          ...(doc.status as { thresholds: object }),
+          liveness: 'alive',
+          thresholds: {
+            ...(doc.status as { thresholds: object }).thresholds,
+            status: 'approved',
+          },
+        },
+      })),
+    )
+    expect(screen.getByText('En marcha', PILL)).toHaveAttribute(
+      'data-tone',
+      'ok',
     )
   })
 
@@ -132,6 +188,35 @@ describe('SessionBlocksView reads the gateway route', () => {
     ]
     expect(url).toBe('/api-live/paper-session/blocks')
     expect(init?.method ?? 'GET').toBe('GET')
+  })
+
+  it('after a failed refresh the kept document says its age is as of the last read', async () => {
+    const answers = [
+      () => Response.json(envelope('operating_threshold_hypothesis')),
+      () => new Response('x', { status: 500 }),
+    ]
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => (answers.length > 1 ? answers.shift()! : answers[0])()),
+    )
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      render(<SessionBlocksView />)
+      await waitFor(() =>
+        expect(screen.getByTestId('document-age')).toBeInTheDocument(),
+      )
+      expect(screen.getByTestId('document-age').textContent).not.toMatch(
+        /última lectura/,
+      )
+      await vi.advanceTimersByTimeAsync(31_000)
+      await waitFor(() =>
+        expect(screen.getByTestId('document-age')).toHaveTextContent(
+          'a la última lectura',
+        ),
+      )
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('a failed read is an error, not an empty session', async () => {
