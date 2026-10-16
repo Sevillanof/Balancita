@@ -56,6 +56,7 @@ function heartbeatFor(path: string, document: Loose, over: Loose = {}): string {
       session_id: document.session_id,
       config_digest: document.config_digest,
       pid: document.run.pid,
+      run_id: document.run.id,
       ...over,
     }),
   )
@@ -161,6 +162,7 @@ describe('readSessionBlocks: a derived file read with the server clock', () => {
     // The new run left its heartbeat; the old blocks file is still there.
     for (const over of [
       { pid: doc.run.pid + 1 },
+      { run_id: 'another-start-same-pid' },
       { session_id: 'another-session' },
       { config_digest: 'another-digest' },
     ])
@@ -180,6 +182,23 @@ describe('readSessionBlocks: a derived file read with the server clock', () => {
     expect(readSessionBlocks(path, fresh, heartbeatFor(path, doc)).state).toBe(
       'ok',
     )
+  })
+
+  it('restart with the same pid, session and configuration: the previous start’s file is refused', () => {
+    const doc = scenarios.operating_threshold_hypothesis
+    const path = publish(doc, T0)
+    const sameEverythingButTheStart = heartbeatFor(path, doc, {
+      run_id: 'the-new-start',
+    })
+    expect(
+      readSessionBlocks(path, T0 + 1_000, sameEverythingButTheStart),
+    ).toEqual({ state: 'invalid', reason: 'other_run' })
+    // a heartbeat from before run ids existed is not enough to accept a file either
+    const noRunId = heartbeatFor(path, doc, { run_id: undefined })
+    expect(readSessionBlocks(path, T0 + 1_000, noRunId)).toEqual({
+      state: 'invalid',
+      reason: 'other_run',
+    })
   })
 
   it('republishing restarts the age', () => {
