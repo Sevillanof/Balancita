@@ -190,6 +190,35 @@ describe('SessionBlocksView reads the gateway route', () => {
     expect(init?.method ?? 'GET').toBe('GET')
   })
 
+  it('after a failed refresh the kept document says its age is as of the last read', async () => {
+    const answers = [
+      () => Response.json(envelope('operating_threshold_hypothesis')),
+      () => new Response('x', { status: 500 }),
+    ]
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => (answers.length > 1 ? answers.shift()! : answers[0])()),
+    )
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      render(<SessionBlocksView />)
+      await waitFor(() =>
+        expect(screen.getByTestId('document-age')).toBeInTheDocument(),
+      )
+      expect(screen.getByTestId('document-age').textContent).not.toMatch(
+        /última lectura/,
+      )
+      await vi.advanceTimersByTimeAsync(31_000)
+      await waitFor(() =>
+        expect(screen.getByTestId('document-age')).toHaveTextContent(
+          'a la última lectura',
+        ),
+      )
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('a failed read is an error, not an empty session', async () => {
     vi.stubGlobal(
       'fetch',
