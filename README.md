@@ -48,15 +48,13 @@ flowchart LR
     M & V & S & L & NW --> G[live<br/>gateway :8789]
     G --> W[Web React :5173<br/>Terminal + Estrategias]
     REG --> W
-    MOCK[mock :8788<br/>mercado grabado] --> W
 ```
 
 ### Procesos de `pnpm dev`
 
 | Proceso      | Puerto | Qué es                                                                                                                                                                                            |
 | ------------ | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `vite`       | 5173   | App web y proxy (`/api-mock` → 8788, `/api-live` → 8789, `/api-strategies` → 8790)                                                                                                                |
-| `mock`       | 8788   | Fuente MOCK: mercado BTC determinista de 12 h, con C y D reales corriendo `--once` sobre él (sin comandos paper)                                                                                  |
+| `vite`       | 5173   | App web y proxy (`/api-live` → 8789, `/api-strategies` → 8790)                                                                                                                                    |
 | `capture`    | -      | WebSocket y REST públicos de Kraken → `server/data/dev-live/futures-market.sqlite` (único escritor)                                                                                               |
 | `live`       | 8789   | Gateway de solo lectura: sirve `/api/terminal/*` leyendo el market DB; no arranca recolector ni motor                                                                                             |
 | `verdict`    | -      | **C**: lee el market DB y escribe veredictos de entrada (`futures-verdicts.sqlite`)                                                                                                               |
@@ -131,9 +129,9 @@ pnpm install
 pnpm dev          # abre http://localhost:5173
 ```
 
-`pnpm dev` comprueba los puertos 5173, 8788, 8789 y 8790 antes de arrancar; si uno está ocupado dice cuál y sale con código 1 (`lsof -ti tcp:<puerto> | xargs kill`). Cada proceso tiene su log con prefijo, Ctrl+C detiene todo el grupo y los restos de un `dev` anterior en este checkout se limpian solos. El estado de cada proceso se escribe en `server/data/dev-live/dev-health.json`.
+`pnpm dev` comprueba los puertos 5173, 8789 y 8790 antes de arrancar; si uno está ocupado dice cuál y sale con código 1 (`lsof -ti tcp:<puerto> | xargs kill`). Cada proceso tiene su log con prefijo, Ctrl+C detiene todo el grupo y los restos de un `dev` anterior en este checkout se limpian solos. El estado de cada proceso se escribe en `server/data/dev-live/dev-health.json`.
 
-Sin red, `capture` y la fuente Real avisan; `vite`, `mock` y el resto siguen funcionando, así que MOCK siempre es utilizable.
+Sin red, `capture` y la fuente Real avisan; `vite` y el resto siguen funcionando.
 
 ### Configuración (`.env.local` o `.env` en la raíz; el entorno real gana)
 

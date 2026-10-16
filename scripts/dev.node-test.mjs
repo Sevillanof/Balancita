@@ -396,11 +396,8 @@ describe('devProxyConfig', () => {
     assert.equal(proxy['/api'], undefined)
   })
 
-  it('routes /api-mock and /api-live to their backends with /api rewrite', () => {
-    for (const [prefix, port] of [
-      ['/api-mock', 8788],
-      ['/api-live', 8789],
-    ]) {
+  it('routes /api-live to its backend with /api rewrite', () => {
+    for (const [prefix, port] of [['/api-live', 8789]]) {
       assert.equal(proxy[prefix].target, `http://127.0.0.1:${port}`)
       assert.equal(proxy[prefix].ws, true)
       assert.equal(
@@ -411,11 +408,7 @@ describe('devProxyConfig', () => {
   })
 
   it('only proxies the prefixed /api-* routes', () => {
-    assert.deepEqual(Object.keys(proxy), [
-      '/api-mock',
-      '/api-live',
-      '/api-strategies',
-    ])
+    assert.deepEqual(Object.keys(proxy), ['/api-live', '/api-strategies'])
   })
 })
 
@@ -455,7 +448,6 @@ describe('port checks before startup', () => {
     assert.equal(result.ok, true)
     assert.deepEqual(calls, [
       [5173, 'localhost'],
-      [8788, '127.0.0.1'],
       [8789, '127.0.0.1'],
     ])
   })
@@ -471,10 +463,10 @@ describe('port checks before startup', () => {
   })
 
   it('reports every conflict', async () => {
-    const result = await checkDevPorts({ probe: taken(5173, 8788) })
+    const result = await checkDevPorts({ probe: taken(5173, 8789) })
     assert.deepEqual(
       result.conflicts.map((c) => c.port),
-      [5173, 8788],
+      [5173, 8789],
     )
   })
 
