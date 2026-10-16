@@ -561,7 +561,10 @@ class Supervisor(object):
         """The derived blocks file (#187, option A): written atomically after the durable state and before the heartbeat, so ``publication``
         in the heartbeat describes THIS attempt. A failure never stops the session and never touches the previous file: it is counted and
         reported (``except Exception`` only, with the type and a short text without paths). The document carries the run (session, digest,
-        pid) and no age: the reader measures it."""
+        pid, run id) and no age: the reader measures it.
+
+        LIMITATION (measured on a synthetic session, #187-05): the whole document is rebuilt and rewritten at every step and its intervals grow
+        with the session (840 intervals, about 485 kB at the end of the synthetic run). A window or a cap for them is a separate decision."""
         try:
             session = self.session
             funding = session.funding_report() if self.config["funding_mode"] == LI.OBSERVED_FUNDING else None

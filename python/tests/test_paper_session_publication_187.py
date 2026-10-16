@@ -95,6 +95,20 @@ class TestPublication(Rig):
         self.assertEqual((doc["status"]["phase"], doc["status"]["halt_reason"]), ("HALTED", "invented halt"))
         self.assertEqual(self.read(LP.HEARTBEAT_FILE)["publication"]["failures"], 0)
 
+    def test_the_evaluator_runs_before_its_step_is_published_and_never_waits_for_a_publication(self):
+        supervisor = self.supervisor(P185.Clock(), publish_blocks=True)
+        supervisor.start()
+        order = []
+        step, publish = supervisor.session.step, supervisor._publish
+        supervisor.session.step = lambda now: (order.append("step"), step(now))[1]
+        supervisor._publish = lambda beat, state: (order.append("publish"), publish(beat, state))[1]
+        supervisor.run(max_steps=4)
+        loop = order[:order.index("publish") + 1]
+        self.assertEqual(loop, ["step", "publish"])                             # each publication follows the step it reports
+        steps = [i for i, event in enumerate(order) if event == "step"]
+        for before, after in zip(steps, steps[1:]):
+            self.assertIn("publish", order[before:after])                       # one publication per step, between two steps
+
     def test_the_session_bytes_are_the_same_with_and_without_publication(self):
         skip = (LP.HEARTBEAT_FILE, LP.REPORT_FILE, LP.CONFIG_FILE, LP.BLOCKS_FILE)
         self.run_session(len(TIMES) // 2)
