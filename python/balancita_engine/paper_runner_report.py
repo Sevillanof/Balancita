@@ -43,7 +43,8 @@ def decisions(runner):
     trades = {t["intent_id"]: t for t in portfolio.trades}
     rows = []
     pending = [("pending", dict(o, intent_id=i)) for i, o in sorted(runner.executor.pending.items())]
-    for state, record in pending + [(r["status"], r) for r in runner.executor.records]:
+    named = {o["record_id"]: o["state"] for o in runner.orders() if "record_id" in o}      # the operator's word for a closed order (expired, cancelled)
+    for state, record in pending + [(named.get(r["record_id"], r["status"]), r) for r in runner.executor.records]:
         decision = by_intent.get(record["intent_id"])
         trade = trades.get(record["intent_id"])
         book = portfolio.positions.get(record["product_id"])
