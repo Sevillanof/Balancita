@@ -140,11 +140,11 @@ C25-C31 and Kronos are not modified until 100 forward trades; the three experime
 
 ## Amendment 2026-10-16: provisional operation size of the simulated paper session
 
-Requested directly by the user (Fran) in the project chat on 2026-10-16, after approving the text as BAL-DECISION-185-TEXTO-ADR-04 (issue #185, comment 6225435845). The functional change is BAL-DECISION-185-DIMENSIONAMIENTO-03 (comment 6223371484), where the user said the 100 USD per operation must not stay fixed permanently. Everything remains paper only: no real orders, no private endpoints, no credentials. This amendment is limited to the simulated paper session and removes nothing from the text above.
+Authorized by the user (Fran) through BAL-DECISION-185-TEXTO-ADR-04 (issue #185, comment 6225435845), which approves the text below; Fran also asked for this amendment directly in the project chat on 2026-10-16. The functional change is BAL-DECISION-185-DIMENSIONAMIENTO-03 (comment 6223371484), where the user said the 100 USD per operation must not stay fixed permanently. Everything remains paper only: no real orders, no private endpoints, no credentials. This amendment is limited to the simulated paper session and removes nothing from the text above.
 
 ### Text approved
 
-«Para la sesión de papel simulada, el tamaño de una operación es un nocional provisional de 100 USD, configurable por sesión, separado del saldo simulado compartido de 1000 USD. No es pérdida máxima ni capital independiente. Cambiarlo afecta solo operaciones futuras de una sesión nueva. La política forward congelada y su evidencia no cambian.»
+«Para la sesión de papel simulada, el tamaño de una operación es un nocional provisional de 100 USD, configurable por sesión, separado del saldo simulado compartido de 1000 USD. No es pérdida máxima ni capital independiente. Cambiarlo afecta solo operaciones futuras de una sesión nueva. La política forward congelada y su evidencia no cambian»
 
 ### What it means
 
