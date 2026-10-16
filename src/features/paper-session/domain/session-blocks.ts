@@ -92,7 +92,7 @@ export type IntervalsBlock = {
   evidenceClass: string
   executionClass: string
   clockMs: number
-  /** `complete: false` while a stage (today `signal`) is not filled. */
+  /** `complete: false` while a stage is not filled or a signal reference is unverified. */
   contract: { complete: boolean; stagesMissing: string[] }
   intervals: SessionInterval[]
 }
