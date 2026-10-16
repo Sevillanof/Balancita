@@ -33,13 +33,13 @@ Corpus de 97 650 mensajes (255 MiB, media 2,9 KB, p50 170 B, máx. ~66 KB). Toda
 10 min por corrida (la mayor, 2 min) y 1 GiB de memoria (el pico mayor fue 310 MiB). Ida y vuelta exacta y derivación idéntica al corpus en
 todas. Los dos candidatos en Python 3.9 para que la comparación sea justa; B en Python 3.9.25 con pyarrow 21.0.0.
 
-| Candidato | Escritura (reg/s) | Archivo | Razón | Memoria pico escritura | Verificar todo | Reconstruir |
-|---|---|---|---|---|---|---|
-| A zlib (3.9) | 4 561 | 138 MiB | 1,85 | 106 MiB | 3,9 s | 4,5 s |
-| A zlib (3.13) | 7 076 | 138 MiB | 1,85 | 56 MiB | 2,8 s | 3,7 s |
-| A lzma (3.13) | 1 954 | 129 MiB | 1,98 | 58 MiB | 8,7 s | 9,5 s |
-| B zstd (3.9) | 35 574 | 120 MiB | 2,12 | 147 MiB | 1,7 s | 2,9 s |
-| B snappy (3.9) | 30 091 | 246 MiB | 1,04 | 163 MiB | 1,9 s | 2,8 s |
+| Candidato      | Escritura (reg/s) | Archivo | Razón | Memoria pico escritura | Verificar todo | Reconstruir |
+| -------------- | ----------------- | ------- | ----- | ---------------------- | -------------- | ----------- |
+| A zlib (3.9)   | 4 561             | 138 MiB | 1,85  | 106 MiB                | 3,9 s          | 4,5 s       |
+| A zlib (3.13)  | 7 076             | 138 MiB | 1,85  | 56 MiB                 | 2,8 s          | 3,7 s       |
+| A lzma (3.13)  | 1 954             | 129 MiB | 1,98  | 58 MiB                 | 8,7 s          | 9,5 s       |
+| B zstd (3.9)   | 35 574            | 120 MiB | 2,12  | 147 MiB                | 1,7 s          | 2,9 s       |
+| B snappy (3.9) | 30 091            | 246 MiB | 1,04  | 163 MiB                | 1,9 s          | 2,8 s       |
 
 La razón de compresión depende del corpus sintético y NO se extrapola a Kraken. Consultas (rango+producto, un registro): B igual o más rápido
 (0,05–0,12 s contra 0,15 s), memoria de consulta mayor en B (hasta 310 MiB contra 85 MiB).
@@ -47,10 +47,10 @@ La razón de compresión depende del corpus sintético y NO se extrapola a Krake
 Costo y latencia de confirmar (alternativas medidas; A zlib / B zstd, 20 000 mensajes, Python 3.9):
 
 | Registros por bloque | Latencia máx. de confirmación A / B | Se pierde al matar (pendientes) | Bloques |
-|---|---|---|---|
-| 100 | 0,07 s / 0,02 s | 100 | 200 |
-| 1 000 | 0,30 s / 0,05 s | 1 000 | 20 |
-| 10 000 | 0,75 s / 0,22 s | 534 (corte por bytes) | 7 |
+| -------------------- | ----------------------------------- | ------------------------------- | ------- |
+| 100                  | 0,07 s / 0,02 s                     | 100                             | 200     |
+| 1 000                | 0,30 s / 0,05 s                     | 1 000                           | 20      |
+| 10 000               | 0,75 s / 0,22 s                     | 534 (corte por bytes)           | 7       |
 
 Es el compromiso medido: bloques chicos confirman antes y pierden menos, pero hacen más archivos y más `fsync`. El `fsync` de este disco virtual
 no es representativo del de la Mac: no se concluye nada sobre el costo real del sincronizado.
@@ -67,16 +67,16 @@ llegada completo. Un archivo crudo la conservaría hacia adelante; no explica el
 
 **(c) Ventajas y costo.**
 
-| | A (stdlib) | B (Parquet) |
-|---|---|---|
-| Escritura medida | 4,6 mil reg/s (3.9) | 30 a 36 mil reg/s |
-| Tamaño medido (sintético) | 138 MiB (zlib) | 120 MiB (zstd) |
-| Dependencia nueva | ninguna | pyarrow (rueda binaria grande), un entorno aparte |
-| Complejidad de código | formato propio a mantener | formato estándar, legible por otras herramientas |
-| Lectura por columnas, consultas | por bloque completo | columnar nativo (no se aprovechó: el payload es una sola columna) |
-| Riesgo de migración | bajo, formato propio sin terceros | medio: versión de pyarrow, ruedas por plataforma, evolución del formato |
-| Mantenimiento | todo propio, incluido el formato | dependiente de terceros |
-| Efecto sobre el paper | ninguno: no está conectado | ninguno: no está conectado |
+|                                 | A (stdlib)                        | B (Parquet)                                                             |
+| ------------------------------- | --------------------------------- | ----------------------------------------------------------------------- |
+| Escritura medida                | 4,6 mil reg/s (3.9)               | 30 a 36 mil reg/s                                                       |
+| Tamaño medido (sintético)       | 138 MiB (zlib)                    | 120 MiB (zstd)                                                          |
+| Dependencia nueva               | ninguna                           | pyarrow (rueda binaria grande), un entorno aparte                       |
+| Complejidad de código           | formato propio a mantener         | formato estándar, legible por otras herramientas                        |
+| Lectura por columnas, consultas | por bloque completo               | columnar nativo (no se aprovechó: el payload es una sola columna)       |
+| Riesgo de migración             | bajo, formato propio sin terceros | medio: versión de pyarrow, ruedas por plataforma, evolución del formato |
+| Mantenimiento                   | todo propio, incluido el formato  | dependiente de terceros                                                 |
+| Efecto sobre el paper           | ninguno: no está conectado        | ninguno: no está conectado                                              |
 
 Lectura honesta: B es más rápido y algo más chico, pero el beneficio se mide sobre un corpus sintético, no es una razón para conectar nada, y
 trae una dependencia que hoy el proyecto no tiene. A alcanza como referencia simple. La elección, y si conviene una capa cruda, queda para la
