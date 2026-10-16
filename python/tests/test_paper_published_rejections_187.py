@@ -43,12 +43,12 @@ class TestRejectionsAndPending(T.Rig):
         self.assertEqual(direct[rejected["product_id"]]["result"], "rejected")
         self.assertIn("open_risk_limit", direct[rejected["product_id"]]["reasons"])
 
-    def test_the_contract_stays_incomplete_while_the_signal_stage_is_missing(self):
+    def test_the_contract_is_complete_only_because_every_signal_reference_checks_out(self):
         r = self.competing()
         block = PUB.intervals(r)
-        self.assertFalse(block["contract"]["complete"])                                # the signal stage is still missing and says so
-        self.assertEqual(block["contract"]["stages_missing"], ["signal"])
-        self.assertTrue(all(row["stages"]["signal"]["state"] == "not_available" for row in block["intervals"]))
+        self.assertTrue(block["contract"]["complete"])
+        self.assertEqual(block["contract"]["stages_missing"], [])
+        self.assertTrue(all(row["stages"]["signal"]["state"] == "recorded" for row in block["intervals"]))
 
     def test_an_order_without_a_quote_is_published_as_pending_with_no_entry_and_then_as_expired(self):
         r = self.runner({"scripted-a": {(T.BTC, T.CYCLE): self.call("BUY")}})

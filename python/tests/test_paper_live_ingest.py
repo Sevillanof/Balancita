@@ -1390,9 +1390,9 @@ class TestPublishedContracts(TestRunnerEquivalence):
         block = PUB.intervals(runner)
         self.assertEqual(len(block["intervals"]), 1)
         row = block["intervals"][0]
-        self.assertEqual(block["contract"], {"complete": False, "stages_present": ["decision", "order", "trade"],
-                                             "stages_missing": ["signal"]})
-        self.assertEqual(row["stages"]["signal"]["state"], "not_available")
+        self.assertEqual(block["contract"], {"complete": True, "stages_present": ["signal", "decision", "order", "trade"],
+                                             "stages_missing": []})
+        self.assertEqual(row["stages"]["signal"]["state"], "recorded")
         self.assertEqual(row["stages"]["order"]["state"], "opened")
         self.assertIn(row["stages"]["trade"]["state"], ("closed", "open"))
         self.assertEqual(PUB.intervals(runner, product=ETH)["intervals"], [])
