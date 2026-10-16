@@ -1,6 +1,11 @@
 import LaboratoryPage from './LaboratoryPage.tsx'
-import { isInvestigationPath, sectionForPath } from './app-routes.ts'
+import {
+  isInvestigationPath,
+  isSessionPath,
+  sectionForPath,
+} from './app-routes.ts'
 import InvestigationPage from './InvestigationPage.tsx'
+import SessionPage from './SessionPage.tsx'
 import TerminalEntry from './TerminalEntry.tsx'
 
 /**
@@ -10,6 +15,7 @@ import TerminalEntry from './TerminalEntry.tsx'
 export default function App() {
   if (isInvestigationPath(window.location.pathname))
     return <InvestigationPage />
+  if (isSessionPath(window.location.pathname)) return <SessionPage />
   if (sectionForPath(window.location.pathname) === 'estrategias')
     return <LaboratoryPage />
   return <TerminalEntry />

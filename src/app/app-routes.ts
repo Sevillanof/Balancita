@@ -13,3 +13,8 @@ export function sectionForPath(pathname: string): AppSection {
 export function isInvestigationPath(pathname: string): boolean {
   return pathname.replace(/\/+$/, '') === '/investigacion'
 }
+
+/** The session status page: a page of the Terminal, not a tab of its own. */
+export function isSessionPath(pathname: string): boolean {
+  return pathname.replace(/\/+$/, '') === '/sesion'
+}
