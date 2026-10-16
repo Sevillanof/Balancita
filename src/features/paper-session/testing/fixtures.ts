@@ -53,6 +53,19 @@ export function positionsBlock(
     },
     unrealized_usd: '1.25',
     unrealized_class: 'estimated',
+    account: {
+      class: 'simulated',
+      initial_usd: '1000',
+      total_simulated_usd: '1012.50',
+      definitive_usd: '1010.00',
+      provisional_gains_usd: '2.50',
+      committed_usd: '321.50',
+      committed_scope: 'open_positions_only',
+      free_usd: '688.50',
+      pending_orders: 2,
+      pending_reservation: 'none',
+      pending_reserved_usd: '0',
+    },
     positions,
   }
 }

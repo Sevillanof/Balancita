@@ -104,6 +104,45 @@ export default function SessionValidityPanel({
           value={current ? block.unrealizedUsd : 'No vigente'}
           hint={current ? undefined : 'Sin vigencia para mostrar la cifra'}
         />
+        {block.account && (
+          <section aria-label="Cuenta simulada" data-testid="session-account">
+            <h3>Cuenta simulada compartida</h3>
+            <Metric
+              label="Saldo total simulado"
+              value={current ? block.account.totalSimulatedUsd : 'No vigente'}
+              hint={
+                current
+                  ? 'Incluye ganancias aún provisionales: es informativo'
+                  : 'Sin vigencia para mostrar la cifra'
+              }
+            />
+            <Metric
+              label="Capital definitivo"
+              value={current ? block.account.definitiveUsd : 'No vigente'}
+              hint={
+                current
+                  ? `Sin ganancias no verificadas (${block.account.provisionalGainsUsd} provisionales)`
+                  : undefined
+              }
+            />
+            <Metric
+              label="Comprometido por posiciones abiertas"
+              value={current ? block.account.committedUsd : 'No vigente'}
+              hint={
+                current
+                  ? `Órdenes pendientes: ${block.account.pendingOrders} · sin reserva`
+                  : undefined
+              }
+            />
+            <Metric
+              label="Libre para operar"
+              value={current ? block.account.freeUsd : 'No vigente'}
+              hint={
+                current ? 'Capital definitivo menos comprometido' : undefined
+              }
+            />
+          </section>
+        )}
         {block.positions.length === 0 ? (
           <p>Sin posiciones abiertas en el reporte.</p>
         ) : (

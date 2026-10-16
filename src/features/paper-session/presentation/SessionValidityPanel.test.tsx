@@ -154,3 +154,81 @@ describe('degraded scenarios', () => {
     ).toBeInTheDocument()
   })
 })
+
+describe('simulated account (BAL-DECISION-185-CARTERA-SIMULADA-02)', () => {
+  const current = () =>
+    positionsBlock({
+      thresholds: { report_max_age_ms: 60_000, status: 'approved' },
+    })
+
+  it('shows total, definitive, committed and free with unambiguous names, as published', () => {
+    const view = show(current())
+    const account = within(view).getByTestId('session-account')
+    expect(
+      within(account).getByText('Saldo total simulado'),
+    ).toBeInTheDocument()
+    expect(within(account).getByText('1012.50')).toBeInTheDocument()
+    expect(within(account).getByText('Capital definitivo')).toBeInTheDocument()
+    expect(within(account).getByText('1010.00')).toBeInTheDocument()
+    expect(
+      within(account).getByText('Comprometido por posiciones abiertas'),
+    ).toBeInTheDocument()
+    expect(within(account).getByText('321.50')).toBeInTheDocument()
+    expect(within(account).getByText('Libre para operar')).toBeInTheDocument()
+    expect(within(account).getByText('688.50')).toBeInTheDocument()
+  })
+
+  it('pending orders are shown as pending without reservation, never as committed', () => {
+    const account = within(show(current())).getByTestId('session-account')
+    expect(
+      within(account).getByText(/Órdenes pendientes: 2 · sin reserva/),
+    ).toBeInTheDocument()
+  })
+
+  it('a provisional gain is named as such and the free amount says it comes from the definitive capital', () => {
+    const account = within(show(current())).getByTestId('session-account')
+    expect(
+      within(account).getByText(
+        /Sin ganancias no verificadas \(2.50 provisionales\)/,
+      ),
+    ).toBeInTheDocument()
+    expect(
+      within(account).getByText('Capital definitivo menos comprometido'),
+    ).toBeInTheDocument()
+  })
+
+  it('when the report is not current no figure is presented as current', () => {
+    const account = within(show(verification.hypothesisStale())).getByTestId(
+      'session-account',
+    )
+    expect(within(account).getAllByText('No vigente')).toHaveLength(4)
+    expect(within(account).queryByText('688.50')).toBeNull()
+  })
+
+  it('a file that predates the field shows no account instead of inventing one', () => {
+    const { account: _omit, ...old } = current() as Record<string, unknown>
+    void _omit
+    const view = show(old)
+    expect(within(view).queryByTestId('session-account')).toBeNull()
+  })
+
+  it('refuses an account that claims a reservation for pending orders', () => {
+    const raw = current() as Record<string, any> // eslint-disable-line @typescript-eslint/no-explicit-any
+    expect(() =>
+      decodePositionsBlock({
+        ...raw,
+        account: { ...raw.account, pending_reservation: 'reserved' },
+      }),
+    ).toThrow()
+  })
+
+  it('refuses an account whose pending reserved amount is not zero', () => {
+    const raw = current() as Record<string, any> // eslint-disable-line @typescript-eslint/no-explicit-any
+    expect(() =>
+      decodePositionsBlock({
+        ...raw,
+        account: { ...raw.account, pending_reserved_usd: '10' },
+      }),
+    ).toThrow()
+  })
+})
