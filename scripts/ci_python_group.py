@@ -6,6 +6,9 @@ Units are packed into GROUPS groups with longest-first greedy packing on the
 recorded weights (seconds). A unit with no recorded weight gets DEFAULT_WEIGHT,
 so a new module or class is always assigned to some group and never left out.
 
+Note: if two split modules shared one TestCase class (by import), their ids would fall under one unit and the
+group's "ran == expected" check would fail (safe side). Today no class is shared.
+
 Usage: python scripts/ci_python_group.py <group-index> <groups>
 Writes units.txt (units to run) and ids-<index>.txt (test ids loaded).
 """

@@ -2,6 +2,7 @@
   "test_book_costs": 1,
   "test_capture_inventory": 1,
   "test_capture_validation": 1,
+  "test_ci_python_compare": 1,
   "test_data_quality": 1,
   "test_execution_timing": 1,
   "test_funding_adapter": 1,

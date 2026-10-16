@@ -16,6 +16,9 @@ env:
   NODE_VERSION: '22.22.0'
   PNPM_VERSION: '10.28.0'
   PYTHON_VERSION: '3.12'
+  # Number of Python groups. The matrix of `python-tests` must list 0..PYTHON_GROUPS-1;
+  # the `python` gate fails if a group file is missing or extra.
+  PYTHON_GROUPS: 10
 
 jobs:
   # Frontend: fast checks (no network services, no databases).
@@ -91,7 +94,6 @@ jobs:
         group: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
     env:
       GROUP: ${{ matrix.group }}
-      GROUPS_TOTAL: 10
       PYTHONPATH: python:python/tests
     steps:
       - uses: actions/checkout@v4
@@ -100,7 +102,7 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
       - name: Select the tests of this group
         shell: bash
-        run: python scripts/ci_python_group.py "$GROUP" "$GROUPS_TOTAL"
+        run: python scripts/ci_python_group.py "$GROUP" "$PYTHON_GROUPS"
       - name: Run the tests of this group
         shell: bash
         run: |
@@ -149,40 +151,7 @@ jobs:
           path: ids
           merge-multiple: true
       - name: Compare the groups with a full discovery
-        shell: bash
-        run: |
-          python - <<'PY'
-          import collections, glob, unittest
-
-          def walk(suite, out):
-              for t in suite:
-                  walk(t, out) if isinstance(t, unittest.TestSuite) else out.append(t.id())
-
-          full = []
-          walk(unittest.defaultTestLoader.discover("python/tests"), full)
-          grouped = []
-          files = sorted(glob.glob("ids/ids-*.txt"))
-          for f in files:
-              ids = [l for l in open(f).read().splitlines() if l]
-              print("%s: %d tests" % (f, len(ids)))
-              grouped += ids
-          print("groups total: %d; full discovery: %d" % (len(grouped), len(full)))
-          problems = []
-          if len(files) != 10:
-              problems.append("expected 10 group files, found %d" % len(files))
-          c_full, c_group = collections.Counter(full), collections.Counter(grouped)
-          missing = sorted((c_full - c_group).elements())
-          extra = sorted((c_group - c_full).elements())
-          if missing:
-              problems.append("%d tests in no group: %s" % (len, missing[:20]))
-          if extra:
-              problems.append("%d tests duplicated or unknown: %s" % (len(extra), extra[:20]))
-          if any("unittest.loader." in i for i in full):
-              problems.append("a module fails to import")
-          if problems:
-              raise SystemExit("\n".join(problems))
-          print("OK: the ten groups run exactly the %d tests of the full discovery" % len(full))
-          PY
+        run: python scripts/ci_python_compare.py "$PYTHON_GROUPS" ids
 
   # End to end: Playwright with mocked network responses (see e2e/screens.pw.ts).
   e2e:
