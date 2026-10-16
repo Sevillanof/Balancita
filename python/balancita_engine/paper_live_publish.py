@@ -75,13 +75,13 @@ def account(portfolio, pending_orders=0):
     recomputed here). Two labelled balances: ``total_simulated_usd`` (1000 plus everything realized, net of all costs) and
     ``definitive_usd`` (the same without gains still provisional; it is the one that sizes and limits). ``committed_usd`` is the
     margin held by OPEN POSITIONS only (pending orders hold no reservation, see below) and ``free_usd`` is ``definitive_usd - committed_usd``.
-    Pending orders are counted apart (``pending_orders``) and hold no reservation (``pending_reservation: none``): size and admission are
+    Pending orders are counted apart (``pending_orders``) and hold no reservation (``pending_reservation: none``, ``pending_reserved_usd: 0``): size and admission are
     decided when the order fills, against the free capital of that instant (BAL-DECISION-185-CARTERA-SIMULADA-02)."""
     snap = portfolio.snapshot()
     return {"class": "simulated", "initial_usd": snap["initial_equity_usd"], "total_simulated_usd": snap["equity_usd"],
             "definitive_usd": snap["capital_definitive_usd"], "provisional_gains_usd": snap["provisional_gains_usd"],
             "committed_usd": snap["reserved_usd"], "committed_scope": "open_positions_only", "free_usd": snap["available_usd"],
-            "pending_orders": pending_orders, "pending_reservation": "none"}
+            "pending_orders": pending_orders, "pending_reservation": "none", "pending_reserved_usd": "0"}
 
 
 def positions(runner, report_age_ms, max_age_ms=None, source_state=None, threshold_approved=False):

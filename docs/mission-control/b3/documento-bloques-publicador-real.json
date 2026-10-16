@@ -104,6 +104,7 @@
         "initial_usd": "1000",
         "pending_orders": 0,
         "pending_reservation": "none",
+        "pending_reserved_usd": "0",
         "provisional_gains_usd": "0",
         "total_simulated_usd": "1000"
       },
@@ -304,6 +305,7 @@
         "initial_usd": "1000",
         "pending_orders": 0,
         "pending_reservation": "none",
+        "pending_reserved_usd": "0",
         "provisional_gains_usd": "0",
         "total_simulated_usd": "1000"
       },
@@ -504,6 +506,7 @@
         "initial_usd": "1000",
         "pending_orders": 0,
         "pending_reservation": "none",
+        "pending_reserved_usd": "0",
         "provisional_gains_usd": "0",
         "total_simulated_usd": "1000"
       },
@@ -704,6 +707,7 @@
         "initial_usd": "1000",
         "pending_orders": 0,
         "pending_reservation": "none",
+        "pending_reserved_usd": "0",
         "provisional_gains_usd": "0",
         "total_simulated_usd": "1000"
       },
@@ -904,6 +908,7 @@
         "initial_usd": "1000",
         "pending_orders": 0,
         "pending_reservation": "none",
+        "pending_reserved_usd": "0",
         "provisional_gains_usd": "0",
         "total_simulated_usd": "1000"
       },
@@ -1106,6 +1111,7 @@
         "initial_usd": "1000",
         "pending_orders": 0,
         "pending_reservation": "none",
+        "pending_reserved_usd": "0",
         "provisional_gains_usd": "0",
         "total_simulated_usd": "1000"
       },

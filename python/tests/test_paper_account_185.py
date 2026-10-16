@@ -61,6 +61,7 @@ class TestThePublishedAccount(unittest.TestCase):
         self.assertGreater(D(view["committed_usd"]), 0)
         self.assertEqual(D(view["free_usd"]), D(view["definitive_usd"]) - D(view["committed_usd"]))
         self.assertEqual((view["committed_scope"], view["pending_orders"], view["pending_reservation"]), ("open_positions_only", 0, "none"))
+        self.assertEqual(view["pending_reserved_usd"], "0")
         json.dumps(view)
 
     def test_the_two_balances_differ_only_by_the_gains_still_provisional(self):
