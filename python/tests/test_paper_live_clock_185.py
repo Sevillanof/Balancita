@@ -46,18 +46,35 @@ class TestAuthorizationRef(unittest.TestCase):
             with self.assertRaises(LP.ProcessError, msg=repr(bad)):
                 LP.validate_config(config_dict(authorization_ref=bad))
 
-    def test_it_opens_nothing(self):
-        import json, subprocess, sys, tempfile
+    def run_cli(self, over, *flags):
+        """The command line with an ``authorization_ref`` in the configuration; returns (exit status, stderr, directory created?)."""
+        import json, sqlite3, subprocess, sys, tempfile
         here = os.path.dirname(os.path.abspath(__file__))
         with tempfile.TemporaryDirectory() as root:
-            path = os.path.join(root, "c.json")
+            path, source = os.path.join(root, "c.json"), os.path.join(root, "source.sqlite")
+            db = sqlite3.connect(source)                                          # nothing real is read; the synthetic marker is there so
+            db.execute("CREATE TABLE {}(marker TEXT)".format(LP.MARKER_TABLE))   # that the GATE is the only thing that can refuse
+            db.execute("INSERT INTO {} VALUES(?)".format(LP.MARKER_TABLE), (LP.MARKER,))
+            db.commit()
+            db.close()
             with open(path, "w") as handle:
-                json.dump(config_dict(authorization_ref="BAL-DECISION-185-07", source_id="real"), handle)
+                json.dump(config_dict(authorization_ref="BAL-DECISION-185-07", **over), handle)
             done = subprocess.run([sys.executable, "-m", "balancita_engine.paper_live_process", "run", "--config", path,
-                                   "--directory", os.path.join(root, "d"), "--source", os.path.join(root, "none.sqlite"), "--wall-clock"],
+                                   "--directory", os.path.join(root, "d"), "--source", source, "--clock-from-ms", "0", *flags],
                                   env=dict(os.environ, PYTHONPATH=os.path.dirname(here) + os.pathsep + here), capture_output=True, text=True)
-        self.assertEqual(done.returncode, LP.EXIT_REFUSED)
-        self.assertFalse(os.path.exists(os.path.join(root, "d")))
+            return done.returncode, done.stderr, os.path.exists(os.path.join(root, "d"))
+
+    def test_it_does_not_accept_the_wall_clock(self):
+        code, err, created = self.run_cli({}, "--wall-clock")                  # a synthetic source: only the clock is at stake
+        self.assertEqual(code, LP.EXIT_REFUSED)
+        self.assertIn("wall_clock_not_authorized", err)
+        self.assertFalse(created)
+
+    def test_it_does_not_open_the_real_source_gate(self):
+        code, err, created = self.run_cli({"source_id": "real"})               # no --wall-clock: only the gate is at stake
+        self.assertEqual(code, LP.EXIT_REFUSED)
+        self.assertIn("real_session_not_authorized", err)
+        self.assertFalse(created)
 
 
 class TestClockGuard(Base):
@@ -82,6 +99,15 @@ class TestClockGuard(Base):
             again.start()
         self.assertEqual(caught.exception.reason, "restart_requires_operator")
         again.session = None
+
+    def test_a_one_millisecond_regression_halts(self):
+        t = TIMES[START]
+        _, code = self.go([t, t + 60_000, t + 59_999], "one-ms")
+        self.assertEqual(code, LP.EXIT_HALTED)
+        self.assertIn("clock_regression", self.read(LP.REPORT_FILE)["halted"])
+        self.assertEqual(self.read(LP.REPORT_FILE)["steps"], 2)
+        _, code = self.go([t, t + 60_000, t + 60_000], "same", )               # the same instant twice is not a regression
+        self.assertEqual(code, LP.EXIT_OK)
 
     def test_a_jump_past_the_bound_halts_and_exactly_the_bound_does_not(self):
         t = TIMES[START]
