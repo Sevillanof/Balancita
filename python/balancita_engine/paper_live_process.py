@@ -39,6 +39,7 @@ import os
 import re
 import shutil
 import signal
+import stat
 import sys
 import time
 
@@ -199,6 +200,8 @@ def preflight(config, directory, source_path, *, strategies=None):
     def check(name, ok, detail=""):
         checks.append({"name": name, "ok": bool(ok), "detail": detail})
 
+    check("causal_ingest", config["source_id"] == SYNTHETIC_SOURCE or config["ingest_kw"].get("causal_until_clock") is True,
+          "a source that is not the synthetic fixture needs ingest_kw.causal_until_clock (no row is read before the clock reaches it; D-185-R4-01)")
     check("real_session_gate", config["source_id"] == SYNTHETIC_SOURCE,
           "source_id {!r}: real data needs a written authorization (the GATE is NO-GO)".format(config["source_id"]))
     stored_path = os.path.join(directory, CONFIG_FILE)
@@ -280,6 +283,7 @@ class Supervisor(object):
         self._warned = set()
         self.wall_time = wall_time or (lambda: int(time.time() * 1000))     # only read when ``clock_guard`` is configured
         self.clock_events, self._last_now = [], None
+        self.source_identity = None
         self.strategies = strategies
         self.session = None
         self.stop_requested = False
@@ -296,6 +300,7 @@ class Supervisor(object):
             failed = [c for c in report["checks"] if not c["ok"]]
             reason = "real_session_not_authorized" if any(c["name"] in ("real_session_gate", "synthetic_marker") for c in failed) else "preflight_failed"
             raise ProcessError(reason, "; ".join("{}: {}".format(c["name"], c["detail"]) for c in failed))
+        self.source_identity = file_identity(self.source_path)      # taken once the pre-flight passed, before the session opens the file
         strategies = self.strategies or RS.load_frozen()[0]
         kwargs = session_kwargs(self.config)
         existing = os.path.exists(os.path.join(self.directory, LI.SESSION_FILE))
@@ -397,6 +402,18 @@ class Supervisor(object):
                 self._warned.add(resource)
                 self._resource_event(now, "warning", resource, value, warn, "{} {} bytes reached the warning limit {}".format(resource, value, warn))
 
+    def _check_source(self):
+        """A live capture file is written all the time, so its size and mtime always change: its identity is the FILE (device and inode).
+        If the path now names another file, or none, the session is reading something it did not start on: halt (reason or None)."""
+        try:
+            now_identity = file_identity(self.source_path)
+        except OSError as error:
+            return "source_unreadable: " + repr(error)
+        if now_identity != self.source_identity:
+            return "source_replaced: the path no longer names the file the session started on (device/inode {} -> {})".format(
+                self.source_identity, now_identity)
+        return None
+
     def _check_clock(self, now):
         """Time must not run backwards and must not jump past the named bound between two steps. Returns the reason, or None. A clock
         anomaly is an insufficiency of continuity (rule 10D), not a Kraken outage: the caller HALTS durably (a restart needs the operator,
@@ -434,6 +451,9 @@ class Supervisor(object):
             if anomaly:
                 return self._halt(now, anomaly)
             self.tick(now)
+            anomaly = self._check_source()           # as late as possible: right before the step that reads the file
+            if anomaly:
+                return self._halt(now, anomaly)
             try:
                 state = self.session.step(now)
             except Exception as error:               # noqa: BLE001
@@ -533,6 +553,14 @@ class Supervisor(object):
         self._beat(now, None)
         self._close()
         return body
+
+
+def file_identity(path):
+    """``(device, inode)`` of a regular file (symlinks followed, as the reader does). Raises ``OSError`` for anything else."""
+    info = os.stat(path)
+    if not stat.S_ISREG(info.st_mode):
+        raise OSError("not a regular file: " + path)
+    return (info.st_dev, info.st_ino)
 
 
 def read_resources(directory):

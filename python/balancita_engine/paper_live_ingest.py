@@ -168,9 +168,12 @@ class Ingestor(object):
 
     def __init__(self, reader, *, hold_ms=DEFAULT_HOLD_MS, dead_after_ms=DEFAULT_DEAD_AFTER_MS,
                  clock_every_ms=DEFAULT_CLOCK_EVERY_MS, candle_lag_ms=DEFAULT_CANDLE_LAG_MS, batch=5_000,
-                 product_silence_ms=DEFAULT_PRODUCT_SILENCE_MS, expected_products=()):
+                 product_silence_ms=DEFAULT_PRODUCT_SILENCE_MS, expected_products=(), causal_until_clock=False):
         self.reader, self.hold_ms, self.dead_after_ms = reader, hold_ms, dead_after_ms
         self.expected_products = tuple(expected_products)
+        # Opt-in (D-185-R4): rows whose arrival is after the caller's clock are not read yet, whatever the source already holds. Off by
+        # default: the ingestor is source-time driven and a replay of a complete file relies on that.
+        self.causal_until_clock, self._clock_now_ms = bool(causal_until_clock), None
         self.product_silence_ms = product_silence_ms
         self.clock_every_ms, self.batch, self.candle_lag_ms = clock_every_ms, batch, candle_lag_ms
         self.cursor = {"ticker": 0, "candle": 0, "gap": 0}
@@ -427,6 +430,10 @@ class Ingestor(object):
         rows = self.reader.tickers(self.cursor["ticker"], self.batch)
         self.ticker_more = len(rows) >= self.batch
         for row in rows:
+            if self.causal_until_clock and max(row["persisted_at"], row["received_at"]) > self._clock_now_ms:
+                self.ticker_more = False                  # held, not backlog: the clock has not reached it
+                self.stats["held_after_clock"] = self.stats.get("held_after_clock", 0) + 1
+                break
             self.cursor["ticker"] = row["rid"]
             self.anchors["ticker"] = row["event_id"]
             t_ms, event = _quote_event(row)
@@ -448,6 +455,10 @@ class Ingestor(object):
         rows = self.reader.candles(self.cursor["candle"], self.batch)
         self.candle_more = len(rows) >= self.batch
         for row in rows:
+            if self.causal_until_clock and max(row["known_at"], row["bucket_start"] + ONE_MINUTE_MS) > self._clock_now_ms:
+                self.candle_more = False
+                self.stats["held_after_clock"] = self.stats.get("held_after_clock", 0) + 1
+                break
             self.cursor["candle"] = row["rid"]
             self.anchors["candle"] = "{}|{}|{}".format(row["product_id"], row["bucket_start"], row["revision_hash"])
             self._read_candle(row)
@@ -493,6 +504,7 @@ class Ingestor(object):
         source from a quiet one, and to extend the observed bound). ``clock="process"`` says the reading comes from the
         process, not the source (a source that emits nothing has no clock): it is kept apart as evidence and never mixed
         into the source bound. Returns ``{"events": [...], "state": {...}}``; events are in ``t_ms`` order."""
+        self._clock_now_ms = observed_now_ms
         self._read()
         out = []
         if self.max_seen_ms is not None:
