@@ -58,10 +58,7 @@ class TestRejectionsAndPending(T.Rig):
         self.assertEqual(pending["decision"]["state"], "recorded")
         r.run([T.make_event("clock", {}, t_ms=T.CYCLE + 70 * T.SEC)])
         gone = rows(r)[T.BTC]["stages"]["order"]
-        # KNOWN GAP (BAL-MATRIZ-187-COBERTURA-01): the published row copies the executor's raw state, so an order that expired without a
-        # quote reads "rejected" here while ``runner.orders()`` normalizes it to "expired". The reason is the same and is what a reader needs;
-        # the state word is fixed by the follow-up change proposed in the matrix, and this assertion must then change with it.
-        self.assertEqual((gone["state"], gone["reasons"]), ("rejected", ["no_quote_in_window"]))
+        self.assertEqual((gone["state"], gone["reasons"]), ("expired", ["no_quote_in_window"]))      # the word runner.orders() uses
         [order] = r.orders()
         self.assertEqual((order["state"], order["reasons"]), ("expired", ["no_quote_in_window"]))
 
