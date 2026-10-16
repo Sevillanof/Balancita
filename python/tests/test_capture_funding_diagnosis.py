@@ -228,6 +228,108 @@ class SeveralEarlyTests(unittest.TestCase):
         self.assertTrue(out["consistent_with_validator"])
 
 
+class CombinedEquivalenceTests(unittest.TestCase):
+    """BAL-COORD-183-DIAG-CORRECCION-02: the copy and the whole validator agree on combined cases and the control has no false positives."""
+
+    OFFSET = "2026-10-11T19:00:00.123+00:00"
+
+    def _mixed(self, rnd):
+        periods, responses, n = [], [], 0
+        for product in m.PRODUCTS:
+            for hour in sorted(rnd.sample(range(0, 40), rnd.randint(0, 9))):
+                start = A0 + hour * H
+                kind = rnd.choice(["timely", "early", "late", "open", "rejected_open", "rejected_timely", "unknown"])
+                if kind == "timely":
+                    at, server = start + H + rnd.randint(11, 59) * 60_000, None
+                elif kind == "early":
+                    at = start + H + 600_000 - rnd.randint(1, 5_000)
+                    server = iso(start + H + 600_000 + rnd.randint(0, 5_000))
+                elif kind == "late":
+                    at, server = start + H + 75 * 60_000 + rnd.randint(0, 30) * 60_000, None
+                elif kind == "open":
+                    at, server = start + rnd.randint(1, H - 1), None
+                elif kind == "rejected_open":
+                    at, server = start + rnd.randint(1, H - 1), self.OFFSET
+                elif kind == "rejected_timely":
+                    at, server = start + H + rnd.randint(11, 59) * 60_000, self.OFFSET
+                else:
+                    at, server = start + H + 90 * 60_000, None
+                n += 1
+                sha = "m%d" % n
+                periods.append((product, start, start + H, RATE, at, "USD/X/hour", sha))
+                responses.append(response(sha, at, [start], server=server, product=product))
+                if kind == "late":          # a later poll that lists it as definitive, so "late" is judged and not unknown
+                    n += 1
+                    periods_sha = "m%d" % n
+                    responses.append(response(periods_sha, at + 60_000, [start], product=product))
+        return periods, responses
+
+    def test_random_mixes_of_all_three_reasons_agree_with_the_validator(self):
+        rnd = random.Random(2302)
+        seen = {"early": 0, "late": 0, "not_causal": 0, "not_measurable": 0}
+        for _ in range(250):
+            periods, responses = self._mixed(rnd)
+            out = d.diagnose(periods, responses)
+            self.assertTrue(out["consistent_with_validator"], out["per_product"])
+            for p in out["per_product"].values():
+                pub = p["publication"]
+                self.assertEqual(pub["early_count"] + pub["late_count"] + pub["not_causal_count"], p["validator_publication_counts"]["discrepancy"])
+                seen["early"] += pub["early_count"]
+                seen["late"] += pub["late_count"]
+                seen["not_causal"] += pub["not_causal_count"]
+                seen["not_measurable"] += pub["not_measurable_count"]
+        self.assertTrue(all(v > 0 for v in seen.values()), seen)      # the mix really exercises every reason
+
+    def test_all_three_reasons_in_one_product_are_counted_together(self):
+        s_early, s_late, s_open = A0 + 10 * H, A0 + 14 * H, A0 + 20 * H
+        at_early = s_early + H + 600_000 - 2_000
+        periods = [(m.BTC, s_early, s_early + H, RATE, at_early, "USD/BTC/hour", "e"),
+                   (m.BTC, s_late, s_late + H, RATE, s_late + H + 90 * 60_000, "USD/BTC/hour", "l"),
+                   (m.BTC, s_open, s_open + H, RATE, s_open + 30_000, "USD/BTC/hour", "o")]
+        periods.append((m.BTC, s_late + H, s_late + 2 * H, RATE, s_late + H + 75 * 60_000, "USD/BTC/hour", "l0"))
+        responses = [response("e", at_early, [s_early], server=iso(s_early + H + 600_000 + 5_000)),
+                     response("l0", s_late + H + 75 * 60_000, [s_late + H]),      # past the deadline and without s_late
+                     response("l", s_late + H + 90 * 60_000, [s_late]),
+                     response("o", s_open + 30_000, [s_open], server=self.OFFSET)]
+        out = d.diagnose(periods, responses)
+        pub = out["per_product"][m.BTC]["publication"]
+        self.assertEqual((pub["early_count"], pub["late_count"], pub["not_causal_count"]), (1, 1, 1))
+        self.assertEqual(out["per_product"][m.BTC]["validator_publication_counts"]["discrepancy"], 3)
+        self.assertTrue(out["consistent_with_validator"])
+
+    def test_clean_data_gives_no_discrepancy_and_a_true_control(self):
+        periods, responses = [], []
+        for i, hour in enumerate((8, 12, 16, 20)):
+            s = A0 + hour * H
+            periods.append(stored("c%d" % i, s))
+            responses.append(response("c%d" % i, s + H + 30 * 60_000, [s]))
+        out = d.diagnose(periods, responses)
+        pub = out["per_product"][m.BTC]["publication"]
+        self.assertEqual((pub["early_count"], pub["late_count"], pub["not_causal_count"]), (0, 0, 0))
+        self.assertEqual(out["per_product"][m.BTC]["validator_publication_counts"]["discrepancy"], 0)
+        self.assertTrue(out["consistent_with_validator"])
+
+    def test_the_control_is_false_when_only_one_reason_is_dropped_in_a_mix(self):
+        rnd = random.Random(7)
+        for dropped in ("early", "late", "not_causal"):
+            hit = False
+            for _ in range(60):
+                periods, responses = self._mixed(rnd)
+                real = d.classify_publication
+                if dropped == "not_causal":
+                    ctx = mock.patch.object(d, "not_causal_cases", lambda *a, **k: [])
+                else:
+                    ctx = mock.patch.object(d, "classify_publication", lambda s, p, _r=real, _k=dropped: dict(_r(s, p), **{_k: []}))
+                base = d.diagnose(periods, responses)
+                with ctx:
+                    cut = d.diagnose(periods, responses)
+                if sum(p["publication"][dropped + "_count"] for p in base["per_product"].values()) > 0:
+                    self.assertFalse(cut["consistent_with_validator"], dropped)
+                    hit = True
+                    break
+            self.assertTrue(hit, dropped)
+
+
 class NotCausalTests(unittest.TestCase):
     """D-230-06: the third reason of a funding.publication DISCREPANCY, a judged row with known_at before the end of its period."""
 
