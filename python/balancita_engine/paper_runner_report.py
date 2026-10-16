@@ -384,7 +384,8 @@ def integrated_audit(runner):
 
 
 def counts(runner):
-    """The numbers of the summary, read from the engine."""
+    """The numbers of the summary, read from the engine. ``rejected`` counts every closed order that did not open: the expired
+    and the cancelled ones too (``runner.orders()`` names them apart)."""
     p = runner.portfolio
     signals = [e for e in runner.log.signals() if e["data"]["origin"] == "original"
                and e["data"]["signal"]["action"] in (BUY, SELL)]

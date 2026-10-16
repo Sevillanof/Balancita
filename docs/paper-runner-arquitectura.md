@@ -91,7 +91,7 @@ SIGNAL_PERSISTED ─► DECIDED(pending) ─► OPENED ─► CLOSED
         └──► NOT_ACTIONABLE (WAIT) | REJECTED (reconstruida, vencida, causalidad)
 ```
 
-Se corresponde 1:1 con los registros de `TimedExecutor` (`pending`, `opened`, `rejected` con su motivo); `EXPIRED` es el subconjunto de rechazos por ventana. El runner no inventa estados que los componentes no tengan.
+Se corresponde con los registros de `TimedExecutor` (`pending`, `opened`, `rejected` con su motivo), con una diferencia de nombre: el ejecutor guarda como `rejected` tanto la orden vencida como la cancelada, y `runner.orders()` las nombra `expired` (`no_quote_in_window` / `no_valid_quote_in_window`) y `cancelled` (`runner_interrupted`, `source_stale`) por su motivo. Lo publicado (`decisions()` e `intervals()`) usa esos mismos nombres, tomados de `runner.orders()`. Los totales de `counts()` no hacen esa distinción: cuentan como `rejected` toda orden cerrada que no abrió, vencidas y canceladas incluidas. El runner no inventa estados que los componentes no tengan.
 
 ## 4. Invariantes (cada una tiene prueba)
 
