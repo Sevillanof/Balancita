@@ -68,4 +68,68 @@ describe('session status decoder against blocks the real publisher emitted', () 
     ]
     for (const raw of bad) expect(() => decodeSessionStatus(raw)).toThrow()
   })
+
+  it('keeps the funding detail the publisher gave (D-229-01)', () => {
+    const s = decodeSessionStatus(statuses.halted_funding_diverged)
+    expect(s.funding).toMatchObject({
+      incompleteTrades: [],
+      disputedTrades: [],
+      quarantinedPeriods: [],
+      divergenceEvidence: 1,
+    })
+    const none = decodeSessionStatus(statuses.warming_up)
+    expect(none.funding.incompleteTrades).toBeNull()
+    expect(none.funding.divergenceEvidence).toBeNull()
+  })
+
+  it('rejects combinations the publisher cannot produce (D-229-02)', () => {
+    const live = statuses.live_threshold_hypothesis
+    const halted = statuses.halted_funding_diverged
+    const stale = statuses.live_heartbeat_stale
+    const bad: Record<string, unknown> = {
+      'alive without an approved limit': { ...live, liveness: 'alive' },
+      'stale without the unverified phase': { ...live, liveness: 'stale' },
+      'unverified without being stale': { ...live, phase: 'unverified' },
+      'final for a running phase': { ...live, liveness: 'final' },
+      'an ended phase that is not final': { ...halted, liveness: 'unknown' },
+      'stale without a limit': {
+        ...stale,
+        thresholds: { ...stale.thresholds, heartbeat_max_age_ms: null },
+      },
+      'a halt reason on a running block': { ...live, halt_reason: 'x' },
+      'verified synthetic funding': {
+        ...live,
+        funding: { ...live.funding, pnl_verified: true },
+      },
+      'verified funding with reasons against it': {
+        ...halted,
+        funding: { ...halted.funding, pnl_verified: true },
+      },
+      'a live block without thresholds': { ...live, thresholds: undefined },
+      'an unavailable block with thresholds': {
+        ...statuses.unavailable,
+        thresholds: live.thresholds,
+      },
+      'unavailable but alive': { ...statuses.unavailable, liveness: 'alive' },
+    }
+    for (const [name, raw] of Object.entries(bad))
+      expect(() => decodeSessionStatus(raw), name).toThrow()
+  })
+
+  it('decodes what the gateway measured when it degraded the block', () => {
+    const s = decodeSessionStatus({
+      ...statuses.live_heartbeat_stale,
+      gateway: { age_ms: 61000, reason: 'heartbeat_age_over_limit' },
+    })
+    expect(s.gateway).toEqual({
+      ageMs: 61000,
+      reason: 'heartbeat_age_over_limit',
+    })
+    expect(() =>
+      decodeSessionStatus({
+        ...statuses.live_heartbeat_stale,
+        gateway: { age_ms: 1, reason: 'made_up' },
+      }),
+    ).toThrow()
+  })
 })
