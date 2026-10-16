@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import documents from '../../../../docs/mission-control/b3/documento-bloques-publicador-real.json'
-import { decodeSessionBlocks } from './session-blocks.ts'
+import { decodeSessionBlocks, newestFirst } from './session-blocks.ts'
 
 // The documents come from the REAL publisher (python/tests/session_document_187.py): this checks the
 // decoder reads what Python writes next to the heartbeat, not what a fixture imagines.
@@ -57,6 +57,18 @@ describe('session document decoder against documents the real publisher emitted'
       verified: 2,
       unverified: [],
     })
+  })
+
+  it('a signal without decision that happened BEFORE a decision is listed after it, and carries the earlier time', () => {
+    const rows = decodeSessionBlocks(documents.intervals_wait_before_decision)
+      .intervals.intervals
+    expect(rows.map((r) => r.signal.action)).toEqual(['BUY', 'WAIT'])
+    expect(rows[1].atMs).not.toBeNull()
+    expect(rows[1].atMs as number).toBeLessThan(rows[0].atMs as number)
+    expect(newestFirst(rows).map((r) => r.signal.action)).toEqual([
+      'BUY',
+      'WAIT',
+    ])
   })
 
   it('a session without a heartbeat is unavailable and has no identity', () => {

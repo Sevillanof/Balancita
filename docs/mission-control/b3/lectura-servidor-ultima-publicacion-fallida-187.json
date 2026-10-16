@@ -24,6 +24,7 @@
       "from_ms": null,
       "intervals": [
         {
+          "at_ms": 1763254202000,
           "decided_ms": 1763254202000,
           "key": "98465f97729ed734b28d0e4a",
           "product_id": "PF_XBTUSD",
@@ -55,6 +56,7 @@
           "strategy_id": "c29-momentum-perp-v1"
         },
         {
+          "at_ms": 1763254502000,
           "decided_ms": 1763254502000,
           "key": "cd833d62f653de2ac8903d88",
           "product_id": "PF_XBTUSD",
@@ -88,6 +90,7 @@
           "strategy_id": "c29-momentum-perp-v1"
         },
         {
+          "at_ms": 1763254802000,
           "decided_ms": 1763254802000,
           "key": "99811dc0a457d18e4fb11931",
           "product_id": "PF_XBTUSD",

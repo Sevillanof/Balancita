@@ -270,8 +270,9 @@ class TestRestartAndCost(Rig):
         self.assertEqual(supervisor.run(max_steps=len(TIMES) // 2), LP.EXIT_OK)
         self.assertEqual(self.read(LP.HEARTBEAT_FILE)["publication"]["failures"], 0)
         ms = [c[0] for c in costs]
-        print("\n[187-05 cost, synthetic] {} publications; first {:.1f} ms / {} bytes; last {:.1f} ms / {} bytes; max {:.1f} ms; mean {:.1f} ms".format(
-            len(costs), costs[0][0], costs[0][1], costs[-1][0], costs[-1][1], max(ms), sum(ms) / len(ms)))
+        intervals = len(self.blocks()["intervals"]["intervals"])
+        print("\n[187-05 cost, synthetic] {} publications, {} intervals at the end; first {:.1f} ms / {} bytes; last {:.1f} ms / {} bytes; max {:.1f} ms; mean {:.1f} ms".format(
+            len(costs), intervals, costs[0][0], costs[0][1], costs[-1][0], costs[-1][1], max(ms), sum(ms) / len(ms)))
         self.assertGreater(costs[-1][1], costs[0][1])                     # the document grows with the intervals of the session
 
 

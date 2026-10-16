@@ -85,6 +85,8 @@ export type SessionInterval = {
   productId: string
   strategyId: string
   decidedMs: number | null
+  /** Decision time, or signal generation time when there is no decision: the order key (the array is not chronological). */
+  atMs: number | null
   side: string
   signal: SignalStage
   decision: IntervalStage & { decidedMs: number | null }
@@ -271,6 +273,7 @@ export function decodeIntervalsBlock(raw: unknown): IntervalsBlock {
         productId: str(row.product_id, `intervals[${i}].product_id`),
         strategyId: str(row.strategy_id, `intervals[${i}].strategy_id`),
         decidedMs: numOrNull(row.decided_ms, `intervals[${i}].decided_ms`),
+        atMs: numOrNull(row.at_ms, `intervals[${i}].at_ms`),
         side: str(row.side, `intervals[${i}].side`),
         signal: {
           ...stage(stages.signal, `intervals[${i}].stages.signal`),
@@ -582,4 +585,23 @@ export function decodeSessionBlocks(raw: unknown): SessionBlocksDocument {
     positions: decodePositionsBlock(r.positions),
     intervals: decodeIntervalsBlock(r.intervals),
   }
+}
+
+/**
+ * Newest first by `atMs` (decision time, or the signal's generation time when it
+ * had no decision). The publisher's array is not chronological (decided rows,
+ * then signals without a decision), so its order is not used; rows without a
+ * time keep the array order and go last, as the oldest.
+ */
+export function newestFirst(intervals: SessionInterval[]): SessionInterval[] {
+  return intervals
+    .map((interval, index) => ({ interval, index }))
+    .sort((a, b) => {
+      const ta = a.interval.atMs
+      const tb = b.interval.atMs
+      if (ta !== null && tb !== null && ta !== tb) return tb - ta
+      if ((ta === null) !== (tb === null)) return ta === null ? 1 : -1
+      return b.index - a.index
+    })
+    .map((entry) => entry.interval)
 }

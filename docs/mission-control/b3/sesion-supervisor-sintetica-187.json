@@ -22,6 +22,7 @@
         "from_ms": null,
         "intervals": [
           {
+            "at_ms": 1763254202000,
             "decided_ms": 1763254202000,
             "key": "98465f97729ed734b28d0e4a",
             "product_id": "PF_XBTUSD",
@@ -53,6 +54,7 @@
             "strategy_id": "c29-momentum-perp-v1"
           },
           {
+            "at_ms": 1763254502000,
             "decided_ms": 1763254502000,
             "key": "cd833d62f653de2ac8903d88",
             "product_id": "PF_XBTUSD",
@@ -86,6 +88,7 @@
             "strategy_id": "c29-momentum-perp-v1"
           },
           {
+            "at_ms": 1763254802000,
             "decided_ms": 1763254802000,
             "key": "99811dc0a457d18e4fb11931",
             "product_id": "PF_XBTUSD",
@@ -271,6 +274,7 @@
         "from_ms": null,
         "intervals": [
           {
+            "at_ms": 1763251202000,
             "decided_ms": null,
             "key": "25b637f6501c39eb63be2966",
             "product_id": "PF_XBTUSD",
@@ -302,6 +306,7 @@
             "strategy_id": "c29-momentum-perp-v1"
           },
           {
+            "at_ms": 1763251202000,
             "decided_ms": null,
             "key": "762c35291ed0f8da9710a064",
             "product_id": "PF_XBTUSD",
@@ -333,6 +338,7 @@
             "strategy_id": "c30-momentum-12h-perp-v1"
           },
           {
+            "at_ms": 1763251202000,
             "decided_ms": null,
             "key": "c3d492f91e3c83b81de0ce95",
             "product_id": "PF_XBTUSD",
@@ -1069,6 +1075,7 @@
         "from_ms": null,
         "intervals": [
           {
+            "at_ms": 1763251202000,
             "decided_ms": null,
             "key": "25b637f6501c39eb63be2966",
             "product_id": "PF_XBTUSD",
@@ -1100,6 +1107,7 @@
             "strategy_id": "c29-momentum-perp-v1"
           },
           {
+            "at_ms": 1763251202000,
             "decided_ms": null,
             "key": "762c35291ed0f8da9710a064",
             "product_id": "PF_XBTUSD",
@@ -1131,6 +1139,7 @@
             "strategy_id": "c30-momentum-12h-perp-v1"
           },
           {
+            "at_ms": 1763251202000,
             "decided_ms": null,
             "key": "c3d492f91e3c83b81de0ce95",
             "product_id": "PF_XBTUSD",
@@ -1286,6 +1295,7 @@
         "from_ms": null,
         "intervals": [
           {
+            "at_ms": 1763251202000,
             "decided_ms": null,
             "key": "25b637f6501c39eb63be2966",
             "product_id": "PF_XBTUSD",
@@ -1317,6 +1327,7 @@
             "strategy_id": "c29-momentum-perp-v1"
           },
           {
+            "at_ms": 1763251202000,
             "decided_ms": null,
             "key": "762c35291ed0f8da9710a064",
             "product_id": "PF_XBTUSD",
@@ -1348,6 +1359,7 @@
             "strategy_id": "c30-momentum-12h-perp-v1"
           },
           {
+            "at_ms": 1763251202000,
             "decided_ms": null,
             "key": "c3d492f91e3c83b81de0ce95",
             "product_id": "PF_XBTUSD",
@@ -1500,6 +1512,7 @@
         "from_ms": null,
         "intervals": [
           {
+            "at_ms": 1763254202000,
             "decided_ms": 1763254202000,
             "key": "98465f97729ed734b28d0e4a",
             "product_id": "PF_XBTUSD",
@@ -1531,6 +1544,7 @@
             "strategy_id": "c29-momentum-perp-v1"
           },
           {
+            "at_ms": 1763254502000,
             "decided_ms": 1763254502000,
             "key": "cd833d62f653de2ac8903d88",
             "product_id": "PF_XBTUSD",
@@ -1564,6 +1578,7 @@
             "strategy_id": "c29-momentum-perp-v1"
           },
           {
+            "at_ms": 1763254802000,
             "decided_ms": 1763254802000,
             "key": "99811dc0a457d18e4fb11931",
             "product_id": "PF_XBTUSD",

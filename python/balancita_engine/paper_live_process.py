@@ -564,7 +564,7 @@ class Supervisor(object):
         pid, run id) and no age: the reader measures it.
 
         LIMITATION (measured on a synthetic session, #187-05): the whole document is rebuilt and rewritten at every step and its intervals grow
-        with the session (840 intervals, about 485 kB at the end of the synthetic run). A window or a cap for them is a separate decision."""
+        with the session. One synthetic run (test_the_cost_of_publishing_is_measured..., 143 publications): 840 intervals at the end, the file from about 2 kB to about 0.6 MB (it varies a little between runs) and 70-300 ms per publication on one machine. It is a measurement of that run, not a statement about long sessions. A window or a cap for them is a separate decision."""
         self.publication["attempts"] += 1                        # the document carries this number: a reader can tell a stale one from the heartbeat's
         try:
             session = self.session

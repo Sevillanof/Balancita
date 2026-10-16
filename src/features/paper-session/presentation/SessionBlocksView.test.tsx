@@ -250,11 +250,18 @@ describe('the session page states', () => {
       show(
         withIntervals((intervals) => {
           // the 2 oldest intervals are marked HOLD; the 60 newer ones are SELL
-          for (const old of intervals) old.stages.signal.action = 'HOLD'
+          intervals.forEach((old, n) => {
+            old.stages.signal.action = 'HOLD'
+            old.at_ms = n
+          })
           const first = structuredClone(intervals[0])
           first.stages.signal.action = 'SELL'
           for (let n = 0; n < 60; n += 1)
-            intervals.push({ ...structuredClone(first), key: `k${n}` })
+            intervals.push({
+              ...structuredClone(first),
+              key: `k${n}`,
+              at_ms: 100 + n,
+            })
         }),
       )
       const rows = screen.getAllByTestId('interval')
@@ -266,6 +273,32 @@ describe('the session page states', () => {
       expect(screen.getByTestId('intervals-truncated')).toHaveTextContent(
         'últimos 50 de 62',
       )
+    })
+
+    it('orders by time, not by the publisher’s array (decided rows first, signals without decision after)', () => {
+      show(
+        withIntervals((intervals) => {
+          const base = intervals[0]
+          const row = (action: string, atMs: number | null, key: string) => {
+            const r = structuredClone(base)
+            r.key = key
+            r.at_ms = atMs
+            r.stages.signal.action = action
+            return r
+          }
+          // publisher order: decided rows (t=100, t=300), then a signal without decision (t=200)
+          intervals.length = 0
+          intervals.push(
+            row('BUY', 100, 'a'),
+            row('SELL', 300, 'b'),
+            row('WAIT', 200, 'c'),
+          )
+        }),
+      )
+      const actions = screen
+        .getAllByTestId('interval')
+        .map((r) => r.getAttribute('data-action'))
+      expect(actions).toEqual(['SELL', 'WAIT', 'BUY']) // newest first: 300, 200, 100
     })
 
     it('has no intervals: says so instead of an empty table', () => {
