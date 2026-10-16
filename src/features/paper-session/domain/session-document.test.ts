@@ -32,6 +32,16 @@ describe('session document decoder against documents the real publisher emitted'
     expect(doc.steps).toBe(2)
   })
 
+  it('carries the mark of the run that wrote it, and a document without it is refused', () => {
+    const doc = decodeSessionBlocks(documents.operating_threshold_hypothesis)
+    expect(doc.runPid).toBe(4242)
+    const withoutRun: Record<string, unknown> = {
+      ...documents.operating_threshold_hypothesis,
+    }
+    delete withoutRun.run
+    expect(() => decodeSessionBlocks(withoutRun)).toThrow()
+  })
+
   it('a session without a heartbeat is unavailable and has no identity', () => {
     const doc = decodeSessionBlocks(documents.without_status)
     expect(doc.status.phase).toBe('unavailable')

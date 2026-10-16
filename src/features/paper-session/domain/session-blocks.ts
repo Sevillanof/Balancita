@@ -501,6 +501,8 @@ export type SessionBlocksDocument = {
   schema: typeof BLOCKS_SCHEMA
   sessionId: string | null
   configDigest: string | null
+  /** The process run that wrote it (its pid): a reader refuses a file of another run. */
+  runPid: number | null
   observedNowMs: number | null
   steps: number | null
   status: SessionStatusBlock
@@ -513,10 +515,12 @@ export function decodeSessionBlocks(raw: unknown): SessionBlocksDocument {
   if (r.schema !== BLOCKS_SCHEMA) fail('schema')
   if (r.derived !== true) fail('derived')
   if (r.authority !== 'none') fail('authority')
+  if (typeof r.run !== 'object' || r.run === null) fail('run')
   return {
     schema: BLOCKS_SCHEMA,
     sessionId: strOrNull(r.session_id, 'session_id'),
     configDigest: strOrNull(r.config_digest, 'config_digest'),
+    runPid: numOrNull(record(r.run).pid, 'run.pid'),
     observedNowMs: numOrNull(r.observed_now_ms, 'observed_now_ms'),
     steps: numOrNull(r.steps, 'steps'),
     status: decodeSessionStatus(r.status),

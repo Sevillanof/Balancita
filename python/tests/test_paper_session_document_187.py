@@ -75,6 +75,13 @@ class TestTheWriterClaimsNoAge(unittest.TestCase):
 
 
 class TestBuildingNeverChangesTheSession(unittest.TestCase):
+    def test_the_document_carries_the_mark_of_the_run_that_wrote_it(self):
+        documents = GEN.build()
+        for name in ("operating_threshold_hypothesis", "operating_no_threshold", "stopped_orderly", "halted_funding_diverged"):
+            self.assertEqual(documents[name]["run"], {"pid": GEN.RUN_PID}, name)
+            self.assertTrue(documents[name]["session_id"] and documents[name]["config_digest"], name)
+        self.assertEqual(documents["without_status"]["run"], {"pid": None})      # no heartbeat, no run: the reader refuses it
+
     def test_the_runner_is_the_same_after_a_document_is_built(self):
         case = GEN._Case()
         case.setUp()
