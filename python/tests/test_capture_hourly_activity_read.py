@@ -81,8 +81,9 @@ class HourlyTests(unittest.TestCase):
         self.assertEqual([a["rows"] for a in an[:5]], [1, 1, 1, 1, 0])
         self.assertEqual(r["hours_by_part"]["official"][3]["rows"], 1)
         ca = r["hours_by_part"]["candles"]
-        self.assertEqual((ca[5]["revisions"], ca[5]["distinct_buckets"]), (3, 2))
-        self.assertEqual(sum(e["misplaced"] for p in r["hours_by_part"].values() for e in p), 0)
+        self.assertEqual(ca[5]["distinct_buckets"], 2)                       # 3 revisions, 2 buckets
+        self.assertEqual(ca[4]["distinct_buckets"], 0)
+        self.assertEqual(sum(e.get("misplaced", 0) for p in r["hours_by_part"].values() for e in p), 0)
 
     def test_inferences_only_say_which_hours_have_rows(self):
         self.seed()
@@ -113,8 +114,8 @@ class HourlyTests(unittest.TestCase):
         self.assertEqual(r["stopped"]["reason"], "row_budget")
         self.assertEqual(r["stopped"]["detail"]["stage"], "events")
         self.assertEqual(len(r["hours_by_part"]["events"]), 3)                # hours 0..2 finished (9 rows > 7)
-        self.assertEqual(len(r["hours_by_part"]["candles"]), h.HOURS)         # the small parts were read first
-        self.assertEqual(len(r["hours_by_part"]["analytics"]), h.HOURS)
+        self.assertEqual(r["hours_by_part"]["analytics"], [])                 # events come first and stopped the run
+        self.assertEqual(r["hours_by_part"]["candles"], [])
 
     def test_rows_out_of_their_hour_are_counted_as_misplaced(self):
         event(self.conn, m.BTC, "book", S + 2 * H, 1)
@@ -154,15 +155,51 @@ class HourlyTests(unittest.TestCase):
         self.assertTrue(recent["ticker_informative"])
 
     def test_a_partial_candle_count_is_never_published_as_complete(self):
-        """D-218-02: over the hour cap the candle counts are None, not the first cap+1 rows."""
-        for i in range(6):
-            candle(self.conn, S + 2 * H + i * m.MINUTE_MS)
-        hour = self.run_read(max_small_hour=5)["hours_by_part"]["candles"][2]
+        """D-218-02: an hour with more distinct buckets than fit in an hour publishes no count, not the first ones."""
+        for i in range(h.MAX_BUCKETS + 1):
+            candle(self.conn, S + 2 * H + i * 1000)                          # off-grid buckets: 61 distinct in one hour
+        hour = self.run_read()["hours_by_part"]["candles"][2]
         self.assertTrue(hour["over_cap"])
-        self.assertIsNone(hour["revisions"])
         self.assertIsNone(hour["distinct_buckets"])
-        complete = self.run_read(max_small_hour=6)["hours_by_part"]["candles"][2]
-        self.assertEqual((complete["revisions"], complete["distinct_buckets"], complete["over_cap"]), (6, 6, False))
+        self.assertEqual(self.run_read()["inferences"]["hours_without_any_row"].count(S + 2 * H), 0)
+
+    def test_candles_are_counted_by_distinct_buckets_with_few_single_reads(self):
+        """Dozens of revisions of the same bucket cost one read, not one per revision."""
+        for rev in range(1, 80):
+            candle(self.conn, S + 3 * H, rev=rev)
+            candle(self.conn, S + 3 * H + m.MINUTE_MS, rev=rev)
+        r = self.run_read()
+        self.assertEqual(r["hours_by_part"]["candles"][3]["distinct_buckets"], 2)
+        self.assertEqual(r["rows_read"]["walked_by_part"].get("candles", 0), 0)
+        self.assertLessEqual(r["rows_read"]["single_row_reads"], r["rows_read"]["single_row_cap"])
+
+    def test_the_candle_statement_uses_a_search_and_one_row(self):
+        self.assertIn("LIMIT 1", h.sql_next_bucket())
+
+    def test_a_stop_in_a_later_part_keeps_the_earlier_parts_complete(self):
+        """The parts that answer the question (events, analytics, candles) run before the official responses."""
+        event(self.conn, m.BTC, "book", S + H + 1, 1)
+        analytics(self.conn, m.BTC, S + H + 2, 1)
+        candle(self.conn, S + H)
+        for i in range(8):
+            official(self.conn, m.BTC, S + 2 * H + i, i)
+        r = self.run_read(max_small_hour=100, max_small_table=5)
+        self.assertEqual(r["stopped"]["reason"], "row_budget")
+        self.assertEqual(r["stopped"]["detail"]["stage"], "official")
+        for part in ("events", "analytics", "candles"):
+            self.assertEqual(len(r["hours_by_part"][part]), h.HOURS, part)
+        self.assertEqual(r["hours_by_part"]["events"][1]["rows"], 1)
+        self.assertEqual(r["hours_by_part"]["analytics"][1]["rows"], 1)
+        self.assertEqual(r["hours_by_part"]["candles"][1]["distinct_buckets"], 1)
+
+    def test_a_stop_in_analytics_keeps_the_events_complete_and_skips_the_later_parts(self):
+        event(self.conn, m.BTC, "book", S + 1, 1)
+        for i in range(6):
+            analytics(self.conn, m.BTC, S + 2 * H + i, i)
+        r = self.run_read(max_small_table=3)
+        self.assertEqual(r["stopped"]["detail"]["stage"], "analytics")
+        self.assertEqual(len(r["hours_by_part"]["events"]), h.HOURS)
+        self.assertEqual(r["hours_by_part"]["candles"], [])
 
     def test_official_responses_never_count_as_a_trace_of_the_capture(self):
         """D-218-03: the manual backfill command also writes them."""
@@ -197,7 +234,7 @@ class HourlyTests(unittest.TestCase):
             self.assertFalse(d.startswith("SCAN") or "TEMP B-TREE" in d, d)
 
     def test_candle_statement_forces_the_primary_key_index(self):
-        self.assertIn("INDEXED BY sqlite_autoindex_paper_futures_candle_revisions_1", h.sql_candles(10))
+        self.assertIn("INDEXED BY sqlite_autoindex_paper_futures_candle_revisions_1", h.sql_next_bucket())
 
     def test_the_authorizer_denies_bodies_and_other_columns(self):
         self.conn.commit()

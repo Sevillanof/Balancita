@@ -14,16 +14,18 @@ Parts (all in ``dev-live/futures-market.sqlite``, ``mode=ro`` + ``query_only``; 
   new (``INSERT OR IGNORE`` on the response hash): a count above 0 means that process was alive and fetching; 0 does not prove it was down;
 - ``paper_futures_official_candle_responses``: official candle fetches. They are ALSO written by the manual command official-candles-backfill-cli.ts,
   so they are reported but are NOT a sign that the capture was alive and never enter an inference;
-- ``paper_futures_candle_revisions``: own XBT 1m candle revisions (revisions and distinct buckets). Never deleted.
+- ``paper_futures_candle_revisions``: own XBT 1m candles, counted as DISTINCT BUCKETS per hour (a candle has dozens of revisions, so walking them is
+  costly and says nothing more): the next bucket is found by one single-row read on the primary key, at most ``MAX_BUCKETS`` per hour (an hour with
+  more is ``over_cap`` and publishes no count). Never deleted by retention; a trigger forbids deleting them.
 
 How it reads, without a scan: the hour boundaries are found by bisection on ``rowid`` (rowid grows with the reception time, which is what the
 store's own retention assumes; single-row reads; an empty table counts as zero rows in every hour). Each hour is then one range read over the primary key (``rowid >= a AND rowid < b``, or the
 candle primary-key prefix) with ``LIMIT cap + 1``: an hour over the cap is reported as ``over_cap`` and its rows are NOT published as a count.
 Rows whose own timestamp falls outside their hour are counted as ``misplaced`` (a non-monotone table); the run never hides them.
 Every statement is EXPLAINed once (SEARCH only: a table scan or a temporary B-tree stops the run), 60 s per statement, 10 min per run,
-no retry, no widening. Caps are required and per kind of part: events (``--max-events-hour``, ``--max-events-table``) and the small parts
-analytics, official responses and own candles (``--max-small-hour``, ``--max-small-table``); over a table cap the run stops with ``row_budget`` and
-keeps every hour already finished. The caps are CEILINGS from rowid ranges (they count insertions, deleted tickers included), not measured counts.
+no retry, no widening. Parts run in this order, the ones that answer the question first: events, analytics, own candles, official responses; a stop
+keeps every part and hour already finished. Caps are required: events (``--max-events-hour``, ``--max-events-table``) and the small walked parts
+analytics and official responses (``--max-small-hour``, ``--max-small-table``); over a table cap the run stops with ``row_budget``. The caps are CEILINGS from rowid ranges (they count insertions, deleted tickers included), not measured counts.
 
 Inferences are printed in ``inferences``: they only say which hours have rows in some part and which in none. They do not say why.
 
@@ -49,6 +51,7 @@ XBT = m.BTC
 EVENTS, ANALYTICS, OFFICIAL, REVS = (g.EVENTS, "paper_futures_analytics_responses", "paper_futures_official_candle_responses",
                                      "paper_futures_candle_revisions")
 PK_REVS = m.PK_REVISIONS
+MAX_BUCKETS = 60                                # 1m buckets in an hour; a 61st read in the same hour means the hour is over_cap
 BISECT_STEPS = 26                               # 2**26 > 67 million rowids: a bisection never needs more
 SINGLE_PER_BOUNDARY = BISECT_STEPS + 1
 PARTS = ("events", "analytics", "official")     # the three rowid tables; candles are read by primary-key prefix
@@ -62,7 +65,7 @@ for _part, _table in TABLE.items():
     ALLOWED["edge_" + _part] = {_table: {"rowid"}}
     ALLOWED["bisect_" + _part] = {_table: {"rowid", "received_at"}}
     ALLOWED["walk_" + _part] = {_table: _walk}
-ALLOWED["walk_candles"] = {REVS: {"candle_id", "interval_ms", "bucket_start", "revision"}}
+ALLOWED["walk_candles"] = {REVS: {"candle_id", "interval_ms", "bucket_start"}}
 
 
 class _Guard(m._Guard):
@@ -89,9 +92,9 @@ def sql_walk(part, limit):
     return ("SELECT %s FROM %s WHERE rowid >= ? AND rowid < ? ORDER BY rowid LIMIT %d" % (WALK_COLUMNS[part], TABLE[part], limit))
 
 
-def sql_candles(limit):
+def sql_next_bucket():
     return ("SELECT bucket_start FROM %s INDEXED BY %s WHERE candle_id >= ? AND candle_id < ? AND interval_ms = %d "
-            "ORDER BY candle_id, revision LIMIT %d" % (REVS, PK_REVS, m.MINUTE_MS, limit))
+            "ORDER BY candle_id LIMIT 1" % (REVS, PK_REVS, m.MINUTE_MS))
 
 
 def candle_key(bucket_ms):
@@ -187,19 +190,23 @@ def read_part(guard, part, cuts, hour_cap, table_cap, counter, hours, flags):
             raise m.Stopped("row_budget", {"stage": part, "cap": table_cap, "after_hour": h0})
 
 
-def read_candles(guard, hour_cap, table_cap, counter, hours):
-    sql = sql_candles(hour_cap + 1)
+def read_candles(guard, counter, hours):
+    """Distinct own XBT 1m buckets per hour, by seeking the next bucket on the primary key (one single-row read each)."""
+    sql = sql_next_bucket()
     for k in range(HOURS):
         h0, h1 = START_MS + k * HOUR_MS, START_MS + (k + 1) * HOUR_MS
-        rows = guard.fetch("walk_candles", sql, (candle_key(h0), candle_key(h1)))
-        counter.walk("candles", len(rows))
-        entry = {"start_ms": h0, "revisions": len(rows), "distinct_buckets": len({b for (b,) in rows}), "over_cap": len(rows) > hour_cap,
-                 "misplaced": sum(1 for (b,) in rows if not h0 <= b < h1)}
-        if entry["over_cap"]:                                    # a partial count is never published as a complete one
-            entry["revisions"] = entry["distinct_buckets"] = None
-        hours["candles"].append(entry)
-        if counter.walked.get("candles", 0) > table_cap:
-            raise m.Stopped("row_budget", {"stage": "candles", "cap": table_cap, "after_hour": h0})
+        seen, key, over = 0, candle_key(h0), False
+        while True:
+            rows = guard.fetch("walk_candles", sql, (key, candle_key(h1)))
+            counter.one()
+            if not rows:
+                break
+            seen += 1
+            if seen > MAX_BUCKETS:
+                over = True
+                break
+            key = candle_key(rows[0][0] + 1)
+        hours["candles"].append({"start_ms": h0, "distinct_buckets": None if over else seen, "over_cap": over})
 
 
 def _has(entry):
@@ -208,7 +215,7 @@ def _has(entry):
         return None
     if entry.get("over_cap"):
         return True
-    return (entry["revisions"] if "revisions" in entry else entry["rows"]) > 0
+    return (entry["distinct_buckets"] if "distinct_buckets" in entry else entry["rows"]) > 0
 
 
 def inferences(hours):
@@ -262,7 +269,7 @@ def build_result(conn, *, max_events_hour, max_events_table, max_small_hour, max
     result["guards"] = {"opened_with": "mode=ro", "query_only_readback": 1}
     if sqlite3.sqlite_version_info < m.MIN_SQLITE:
         raise m.Stopped("sqlite_version", sqlite3.sqlite_version)
-    max_single = len(TABLE) * (2 + (HOURS + 1) * SINGLE_PER_BOUNDARY) + 1
+    max_single = len(TABLE) * (2 + (HOURS + 1) * SINGLE_PER_BOUNDARY) + 1 + HOURS * (MAX_BUCKETS + 2)
     guard, counter = _Guard(conn, started), Counter(max_single)
     hours = {"events": [], "analytics": [], "official": [], "candles": []}
     flags = {"retention_boundary_ms": END_MS, "ticker_informative": lambda hour_end: hour_end > read_date_ms - TICKER_KEEP_MS}
@@ -273,12 +280,14 @@ def build_result(conn, *, max_events_hour, max_events_table, max_small_hour, max
             result["oldest_event"] = {"rowid": oldest[0][0], "received_at": oldest[0][1]} if oldest else None
             flags["retention_boundary_ms"] = retention_boundary(oldest[0][1] if oldest else None)
             result["retention_boundary_ms"] = flags["retention_boundary_ms"]
-            read_candles(guard, max_small_hour, max_small_table, counter, hours)          # small parts first
-            for part in ("official", "analytics"):
-                cuts = boundaries(guard, part, counter)
-                read_part(guard, part, cuts, max_small_hour, max_small_table, counter, hours, flags)
+            # the parts that answer the question first; a stop keeps everything already finished
             cuts = boundaries(guard, "events", counter)
             read_part(guard, "events", cuts, max_events_hour, max_events_table, counter, hours, flags)
+            cuts = boundaries(guard, "analytics", counter)
+            read_part(guard, "analytics", cuts, max_small_hour, max_small_table, counter, hours, flags)
+            read_candles(guard, counter, hours)
+            cuts = boundaries(guard, "official", counter)
+            read_part(guard, "official", cuts, max_small_hour, max_small_table, counter, hours, flags)
         except m.Stopped as stop:
             result["stopped"] = {"reason": stop.reason, "detail": stop.detail}
     finally:
@@ -286,7 +295,7 @@ def build_result(conn, *, max_events_hour, max_events_table, max_small_hour, max
     result["hours_by_part"] = hours
     result["inferences"] = inferences(hours)
     result["rows_read"] = {"single_row_reads": counter.single, "single_row_cap": max_single, "walked_by_part": counter.walked,
-                           "total_cap": max_single + max_events_table + max_events_hour + 1 + 3 * (max_small_table + max_small_hour + 1)}
+                           "total_cap": max_single + max_events_table + max_events_hour + 1 + 2 * (max_small_table + max_small_hour + 1)}
     result["plans"] = sorted({d for details in guard.planned.values() for d in details})
     return result
 
@@ -296,8 +305,8 @@ def main(argv=None):
     ap.add_argument("--db", required=True)
     ap.add_argument("--max-events-hour", required=True, type=int, help="cap on events per hour; an hour over it is reported as over_cap; no default")
     ap.add_argument("--max-events-table", required=True, type=int, help="cap on the events walked in total; no default")
-    ap.add_argument("--max-small-hour", required=True, type=int, help="cap per hour of analytics, official responses and own candles; no default")
-    ap.add_argument("--max-small-table", required=True, type=int, help="cap walked in total per small part; no default")
+    ap.add_argument("--max-small-hour", required=True, type=int, help="cap per hour of analytics and official responses; no default")
+    ap.add_argument("--max-small-table", required=True, type=int, help="cap walked in total per small part (analytics, official); no default")
     args = ap.parse_args(argv)
     started = time.monotonic()
     try:
