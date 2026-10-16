@@ -59,6 +59,9 @@ LONG, SHORT = "LONG", "SHORT"
 TEN_THOUSAND = Decimal(10_000)
 CENT = Decimal("0.01")
 RISK_SIZING, FIXED_NOTIONAL = "risk", "fixed_notional"
+# In ``fixed_notional`` mode the risk-formula numbers (``risk_budget_usd``, ``risk_budget_used_usd``, ``risk_notional_usd``) are still written,
+# so no reader breaks, but they did NOT size the operation: ``notional_usd`` did. Every record says so with this label.
+RISK_FIELDS_INFORMATIONAL = "informational_not_used_for_sizing"
 SIZING_MODES = (RISK_SIZING, FIXED_NOTIONAL)
 SIGNAL_FIELDS = ("product_id", "side", "bucket_ms", "price", "stop", "target", "horizon_minutes")
 
@@ -498,6 +501,8 @@ class Portfolio:
             "capital_definitive_usd": str(self.capital_usd()), "available_usd": str(self.available_usd()),
             "risk_budget_usd": str(self.risk_budget_usd()), "open_risk_usd": str(self.open_risk_usd()),
             "loss_fraction": str(plan["loss_fraction"]) if plan else None}, **extra)
+        if self.policy.sizing_mode == FIXED_NOTIONAL:     # what sized the operation is ``notional_usd``; the risk-formula fields stay (contracts) but are labelled
+            body.update(sizing_mode=FIXED_NOTIONAL, risk_fields_role=RISK_FIELDS_INFORMATIONAL)
         body["decision_id"] = stable_hash([body["intent_id"], status, now_ms, extra.get("reasons")])[:24]
         return body
 
@@ -527,7 +532,7 @@ class Portfolio:
             planned_loss_usd=str(planned), planned_loss_pct_of_capital=str(planned / self.capital_usd() * 100),
             open_risk_before_usd=str(open_before), open_risk_after_usd=str(self.open_risk_usd()),
             risk_budget_used_usd=str(budget), risk_notional_usd=str(budget / plan["loss_fraction"]),
-            limits_applied=applied, **({"sizing_mode": FIXED_NOTIONAL} if self.policy.sizing_mode == FIXED_NOTIONAL else {}))
+            limits_applied=applied)
 
     # ---- candles -------------------------------------------------------------------------------------------
     def on_candle(self, product_id, bucket_ms, candle):

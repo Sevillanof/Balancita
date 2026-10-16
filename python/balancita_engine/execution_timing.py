@@ -365,6 +365,7 @@ class TimedExecutor:
             body["portfolio_decision_id"] = decision["decision_id"]
             body["loss_fraction"] = decision["loss_fraction"]
             body["loss_fraction_at_reference"] = order.get("loss_fraction_at_reference")
+            body.update({k: decision[k] for k in ("sizing_mode", "risk_fields_role") if k in decision})
             if status == "opened":
                 budget, lf_ref = D(decision["risk_budget_used_usd"]), D(order["loss_fraction_at_reference"])
                 body.update(notional_usd=decision["notional_usd"], entry_price=decision["entry_price"],

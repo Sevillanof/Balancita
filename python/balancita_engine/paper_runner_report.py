@@ -36,6 +36,14 @@ def _usd(value):
     return str(D(str(value)))
 
 
+def _at_decision(decision):
+    """The portfolio numbers of one decision. In ``fixed_notional`` mode ``risk_budget_usd`` stays (contract) but is labelled: it did not size the operation."""
+    body = {k: decision.get(k) for k in ("capital_definitive_usd", "available_usd", "risk_budget_usd", "open_risk_usd")}
+    if "risk_fields_role" in decision:
+        body["risk_budget_role"] = decision["risk_fields_role"]
+    return body
+
+
 def decisions(runner):
     """One row per decision the runner took, from the signal to the later result and the funding reliability."""
     portfolio = runner.portfolio
@@ -65,8 +73,8 @@ def decisions(runner):
             "reference_price": record.get("reference_price"), "executable_price": record.get("entry_price"),
             "stop": record.get("stop"), "target": record.get("target"),
             "notional_usd": record.get("notional_usd"), "planned_loss_usd": record.get("planned_loss_usd"),
-            "portfolio_at_decision": None if decision is None else {
-                k: decision.get(k) for k in ("capital_definitive_usd", "available_usd", "risk_budget_usd", "open_risk_usd")},
+            "portfolio_at_decision": None if decision is None else _at_decision(decision),
+            **({} if decision is None else {k: decision[k] for k in ("sizing_mode", "risk_fields_role") if k in decision}),
             "result": result,
             "trade_id": None if trade is None else trade["trade_id"],
             "pnl_usd": None if trade is None else trade["pnl_usd"],

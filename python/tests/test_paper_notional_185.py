@@ -2,10 +2,14 @@
 from the shared 1000 USD balance. It is a notional, not a loss limit and not capital: the operation is rejected, never shrunk, when the free
 capital or a limit leaves less, and the costs are counted once. Invented data, nothing real."""
 
+import json
 import unittest
 from decimal import Decimal
 
-from balancita_engine.portfolio import FIXED_NOTIONAL, Portfolio, PortfolioError, PortfolioPolicy
+from balancita_engine.paper_runner import RunnerConfig
+from balancita_engine.paper_runner_report import decisions
+from balancita_engine.portfolio import FIXED_NOTIONAL, RISK_FIELDS_INFORMATIONAL, Portfolio, PortfolioError, PortfolioPolicy
+import test_paper_runner_financial as FIN
 from test_portfolio import D, FULL_FUNDING, MIN, T0, candle, intent, roomy
 
 
@@ -98,6 +102,49 @@ class TestChangingTheSizeOnlyAffectsFutureOperations(unittest.TestCase):
         fresh = Portfolio(new, funding=FULL_FUNDING)                      # only a NEW portfolio (a new session) opens with the new size
         self.assertEqual(D(first(fresh)["notional_usd"]), D("200"))
         self.assertEqual(fresh.snapshot()["initial_equity_usd"], "1000")
+
+
+class TestTheRecordSaysWhatSizedTheOperation(unittest.TestCase):
+    """BAL-REV-185-DIM-TRACE-05: in ``fixed_notional`` mode the risk-formula numbers stay (no contract breaks) but every record that carries
+    them says they are informational, and ``notional_usd`` + ``sizing_mode`` say what sized the operation, down to the published decision rows."""
+
+    def run_session(self, policy):
+        helper = FIN.Fin("setUp")          # the module, not the class: importing Fin by name would make unittest run its tests here
+        helper.setUp()
+        self.addCleanup(helper.tearDown)
+        path, r = helper.start({"a": {(FIN.BTC, FIN.CYCLE): FIN.BUY}}, config=RunnerConfig(portfolio=policy, funding=FIN.FULL, start_ms=FIN.CYCLE - FIN.HOUR))
+        f = helper.f
+        r.run([f.cycle(FIN.CYCLE + 2 * FIN.SEC, FIN.BTC), f.quote(FIN.BTC, FIN.CYCLE + 6 * FIN.SEC, "100010"),
+               f.candle(FIN.BTC, FIN.CYCLE + FIN.MIN, 100010, 100100, 99900, 100010), f.candle(FIN.BTC, FIN.CYCLE + 2 * FIN.MIN, 100010, 103500, 100000, 103400)])
+        return r
+
+    def test_the_trace_reaches_the_portfolio_the_execution_record_and_the_published_row(self):
+        r = self.run_session(PortfolioPolicy(sizing_mode=FIXED_NOTIONAL, notional_per_trade_usd="100"))
+        [opened] = [d for d in r.portfolio.decisions if d["status"] == "opened"]
+        [record] = [x for x in r.executor.records if x["status"] == "opened"]
+        [row] = decisions(r)
+        for body in (opened, record, row):
+            self.assertEqual(body["sizing_mode"], FIXED_NOTIONAL)
+            self.assertEqual(body["risk_fields_role"], RISK_FIELDS_INFORMATIONAL)
+        self.assertEqual(D(opened["notional_usd"]), D(100))                      # what sized the operation
+        self.assertEqual(D(record["notional_usd"]), D(100))
+        self.assertEqual(D(row["notional_usd"]), D(100))
+        self.assertEqual(row["portfolio_at_decision"]["risk_budget_role"], RISK_FIELDS_INFORMATIONAL)
+        for key in ("risk_budget_used_usd", "risk_notional_usd"):                # still there: nothing that reads them breaks
+            self.assertIn(key, opened)
+        self.assertIn("risk_budget_usd", record)
+        self.assertIn("risk_budget_usd", row["portfolio_at_decision"])
+        published = json.loads(json.dumps(r.report()["sections"]["simulated"]["data"]["decisions"]))
+        self.assertEqual(published[0]["risk_fields_role"], RISK_FIELDS_INFORMATIONAL)
+
+    def test_the_rejected_decision_is_labelled_too_and_the_risk_mode_adds_nothing(self):
+        p = Portfolio(fixed("100", initial_equity_usd="50"), funding=FULL_FUNDING)
+        self.assertEqual(first(p)["risk_fields_role"], RISK_FIELDS_INFORMATIONAL)
+        r = self.run_session(PortfolioPolicy())
+        [opened] = [d for d in r.portfolio.decisions if d["status"] == "opened"]
+        [row] = decisions(r)
+        for body in (opened, row, row["portfolio_at_decision"]):
+            self.assertFalse({"sizing_mode", "risk_fields_role", "risk_budget_role"} & set(body))
 
 
 if __name__ == "__main__":
