@@ -77,6 +77,97 @@ class TestAuthorizationRef(unittest.TestCase):
         self.assertFalse(created)
 
 
+class TestWallClockIsOffButReady(Base):
+    """The code for the wall clock exists and is tested with a fake clock; the constant that opens it is False (BAL-DECISION needed to change it)."""
+
+    def run_main(self, instants, guard=True, extra=()):
+        import json, signal
+        from unittest import mock
+        clock = Scripted(instants)
+        config = os.path.join(self.root, "wall-config.json")
+        with open(config, "w", encoding="utf-8") as handle:
+            json.dump(config_dict(**({"clock_guard": GUARD} if guard else {})), handle)
+        self.directory = os.path.join(self.root, "wall-session")
+        saved = {s: signal.getsignal(s) for s in (signal.SIGTERM, signal.SIGINT)}
+        try:
+            with mock.patch.object(LP, "WALL_CLOCK_GATE", True), mock.patch.object(LP, "_wall_now_ms", clock.now), \
+                    mock.patch.object(LP.time, "sleep", clock.sleep):
+                return LP.main(["run", "--config", config, "--directory", self.directory, "--source", self.world.path,
+                                "--wall-clock", "--max-steps", "4", *extra])
+        finally:
+            for number, handler in saved.items():
+                signal.signal(number, handler)
+
+    def test_the_gate_is_a_constant_of_the_code_and_it_is_off(self):
+        self.assertIs(LP.WALL_CLOCK_GATE, False)
+        self.assertNotIn("wall_clock_gate", LP.DEFAULTS)
+        self.assertNotIn("wall_clock", LP.OPTIONAL)                         # no configuration key can open it
+
+    def test_a_wall_clock_without_a_guard_is_refused_even_with_the_gate_open(self):
+        with self.assertRaises(LP.ProcessError) as caught:
+            LP.wall_clock_runtime(LP.validate_config(config_dict()))
+        self.assertEqual(caught.exception.reason, "config_invalid")
+        self.assertEqual(self.run_main([TIMES[START]], guard=False), LP.EXIT_REFUSED)
+        self.assertFalse(os.path.exists(self.directory))
+
+    def test_with_the_gate_open_the_session_follows_the_clock_it_is_given(self):
+        t = TIMES[START:START + 6]
+        self.assertEqual(self.run_main(t), LP.EXIT_OK)
+        self.assertEqual(self.read(LP.REPORT_FILE)["steps"], 4)
+        self.assertEqual(self.read(LP.HEARTBEAT_FILE)["observed_now_ms"], t[4])      # the instants came from the injected wall clock, not a simulated one
+
+    def test_with_the_gate_open_a_real_clock_that_goes_back_or_jumps_still_halts(self):
+        t = TIMES[START:START + 6]
+        self.assertEqual(self.run_main([t[0], t[1], t[0]]), LP.EXIT_HALTED)
+        self.assertIn("clock_regression", self.read(LP.REPORT_FILE)["halted"])
+        self.setUp()
+        self.assertEqual(self.run_main([t[0], t[0] + GUARD["max_forward_jump_ms"] + 1]), LP.EXIT_HALTED)
+        self.assertIn("clock_jump", self.read(LP.REPORT_FILE)["halted"])
+
+    def test_both_clocks_at_once_are_refused(self):
+        self.assertEqual(self.run_main([TIMES[START]], extra=("--clock-from-ms", "0")), LP.EXIT_REFUSED)
+        self.assertFalse(os.path.exists(self.directory))
+
+
+class TestRealCaptureStaysRefusedAndUntouched(Base):
+    """A capture-shaped file without the fixture's marker (what the real capture looks like) is refused by the GATE, whatever the configuration
+    says, and the file is not changed by being looked at."""
+
+    def digest(self, path):
+        import hashlib
+        with open(path, "rb") as handle:
+            return hashlib.sha256(handle.read()).hexdigest()
+
+    def test_preflight_and_run_refuse_it_and_leave_the_file_and_the_directory_as_they_were(self):
+        import json, shutil, sqlite3, subprocess, sys
+        real = os.path.join(self.root, "real-capture.sqlite")
+        shutil.copyfile(self.world.path, real)
+        db = sqlite3.connect(real)
+        db.execute("DROP TABLE {}".format(LP.MARKER_TABLE))                       # what the real capture does not have
+        db.commit()
+        db.close()
+        before = self.digest(real)
+        over = {"source_id": "kraken-capture", "ingest_kw": dict(config_dict()["ingest_kw"], causal_until_clock=True)}
+        config = os.path.join(self.root, "real-config.json")
+        with open(config, "w", encoding="utf-8") as handle:
+            json.dump(config_dict(**over), handle)
+        report = LP.preflight(LP.load_config(config), self.directory, real)
+        failed = sorted(c["name"] for c in report["checks"] if not c["ok"])
+        self.assertFalse(report["ok"])
+        self.assertIn("real_session_gate", failed)
+        self.assertIn("synthetic_marker", failed)
+        here = os.path.dirname(os.path.abspath(__file__))
+        env = dict(os.environ, PYTHONPATH=os.path.dirname(here) + os.pathsep + here)
+        done = subprocess.run([sys.executable, "-m", "balancita_engine.paper_live_process", "run", "--config", config, "--directory", self.directory,
+                               "--source", real, "--clock-from-ms", str(TIMES[START])], env=env, capture_output=True, text=True)
+        self.assertEqual(done.returncode, LP.EXIT_REFUSED)
+        self.assertIn("real_session_not_authorized", done.stderr)
+        self.assertFalse(os.path.exists(self.directory))
+        self.assertEqual(self.digest(real), before)
+        with self.assertRaises(Exception):                                          # the reader itself cannot write to what it reads
+            LP.SourceReader(real).db.execute("CREATE TABLE x(a)")
+
+
 class TestClockGuard(Base):
     def go(self, instants, name, **over):
         clock = Scripted(instants)

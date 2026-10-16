@@ -13,7 +13,9 @@ What this module refuses, on purpose, while the real-session GATE is NO-GO (deci
   ``source_id: synthetic`` AND the SQLite file must carry the fixture's own marker table (``balancita_synthetic_fixture``). A real
   capture has neither, so it is refused whatever the configuration says; this guards against a mistake, not against someone who
   forges the marker on purpose. A session with real data needs its own written authorization and a reviewed code change;
-* the wall clock (``wall_clock_not_authorized``): the command line runs on a simulated clock only;
+* the wall clock (``wall_clock_not_authorized``): the command line runs on a simulated clock only. The code for the wall clock exists
+  (``wall_clock_runtime``, tested with a fake clock) but ``WALL_CLOCK_GATE`` is a constant of the code and is False: turning it on is a
+  reviewed commit that names a written authorization (BAL-DECISION), never a flag or a configuration key;
 * a restart on its own of a directory that already holds a started session (``restart_requires_operator``, BAL-DECISION-185-01): after
   ANY run that did not end in order (HALTED, REFUSED, a kill, a power cut, a full disk) the operator decides, with ``--restart``, and
   nothing is opened, recovered or stepped before that. The gate does not read marks: ``halt.json``, the heartbeat and the audit are
@@ -78,6 +80,7 @@ def capital_policy_label(policy):
 
 CAPITAL_POLICY = capital_policy_label(PortfolioPolicy())        # a label: the sizing is the portfolio policy's, this module has no money rule
 SYNTHETIC_SOURCE = "synthetic"
+WALL_CLOCK_GATE = False                  # OFF. Only a reviewed change of this constant, with a BAL-DECISION naming it, opens the wall clock
 FRESH_MS = 600_000                               # the newest warm-up candle may be this far from the first decision
 
 INIT, WARMUP, LIVE, STOPPING, STOPPED_PHASE, HALTED, REFUSED_PHASE = "INIT", "WARMUP", "LIVE", "STOPPING", "STOPPED", "HALTED", "REFUSED"
@@ -665,6 +668,21 @@ def _read_json(path):
         return None
 
 
+# ---- wall clock (OFF) ----------------------------------------------------------------------------------------------
+def _wall_now_ms():
+    return time.time_ns() // 1_000_000
+
+
+def wall_clock_runtime(config, *, now_ms=None, sleeper=None):
+    """``(clock, sleep)`` for a session that follows the real clock. Nothing calls it while ``WALL_CLOCK_GATE`` is False. The real clock can
+    go back or jump (NTP, suspend): the supervisor already halts on a regression or on a jump past ``clock_guard.max_forward_jump_ms``
+    and writes the event, so a configuration without ``clock_guard`` is refused here instead of running unguarded. It adds no value: the
+    bound is whatever the configuration names (30 s is only a hypothesis in the Issues). The sleep is real and has no side effect on the clock."""
+    if not config.get("clock_guard"):
+        raise ProcessError("config_invalid", "the wall clock needs clock_guard (a regression or a jump must halt the session)")
+    return (now_ms or _wall_now_ms), (sleeper or time.sleep)
+
+
 # ---- command line ------------------------------------------------------------------------------------------------
 def main(argv=None, *, tick=lambda now: None):
     """``preflight`` and ``run`` on the simulated clock. Exit status: 0 ok, 2 refused (no file was written), 3 halted, 4 stopped in order by a resource limit."""
@@ -675,7 +693,7 @@ def main(argv=None, *, tick=lambda now: None):
     parser.add_argument("--source", required=True, help="SQLite file of the synthetic source")
     parser.add_argument("--clock-from-ms", type=int, help="start of the simulated clock")
     parser.add_argument("--clock-step-ms", type=int, default=60_000)
-    parser.add_argument("--wall-clock", action="store_true", help="refused while the real-session GATE is NO-GO")
+    parser.add_argument("--wall-clock", action="store_true", help="refused while WALL_CLOCK_GATE is False (the real-session GATE is NO-GO)")
     parser.add_argument("--max-steps", type=int)
     parser.add_argument("--step-sleep-s", type=float, default=0.0, help="real seconds between steps (to give a signal time to arrive)")
     parser.add_argument("--restart", action="store_true", help="take up a directory whose last run did not end in order (halt, refusal, kill, power cut)")
@@ -686,18 +704,26 @@ def main(argv=None, *, tick=lambda now: None):
             report = preflight(config, args.directory, args.source)
             print(json.dumps(report, sort_keys=True, indent=1))
             return EXIT_OK if report["ok"] else EXIT_REFUSED
-        if args.wall_clock:
+        if args.wall_clock and not WALL_CLOCK_GATE:
             raise ProcessError("wall_clock_not_authorized", "the command line runs on a simulated clock only (--clock-from-ms)")
-        if args.clock_from_ms is None:
-            raise ProcessError("config_invalid", "--clock-from-ms is required")
-        state = {"now": args.clock_from_ms}
+        if args.wall_clock:
+            if args.clock_from_ms is not None:
+                raise ProcessError("config_invalid", "--wall-clock and --clock-from-ms exclude each other")
+            clock, sleep = wall_clock_runtime(config)
+        else:
+            if args.clock_from_ms is None:
+                raise ProcessError("config_invalid", "--clock-from-ms is required")
+            state = {"now": args.clock_from_ms}
 
-        def sleep(_seconds):
-            if args.step_sleep_s:
-                time.sleep(args.step_sleep_s)
-            state["now"] += args.clock_step_ms
+            def sleep(_seconds):
+                if args.step_sleep_s:
+                    time.sleep(args.step_sleep_s)
+                state["now"] += args.clock_step_ms
 
-        supervisor = Supervisor(config, args.directory, args.source, clock=lambda: state["now"], sleep=sleep, tick=tick)
+            def clock():
+                return state["now"]
+
+        supervisor = Supervisor(config, args.directory, args.source, clock=clock, sleep=sleep, tick=tick)
         supervisor.start(restart=args.restart)
         signal.signal(signal.SIGTERM, lambda signum, _frame: supervisor.request_stop(signum))
         signal.signal(signal.SIGINT, lambda signum, _frame: supervisor.request_stop(signum))
