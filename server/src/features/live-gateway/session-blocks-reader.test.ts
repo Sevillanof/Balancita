@@ -56,6 +56,7 @@ function heartbeatFor(path: string, document: Loose, over: Loose = {}): string {
       session_id: document.session_id,
       config_digest: document.config_digest,
       pid: document.run.pid,
+      run_id: document.run.id,
       ...over,
     }),
   )
@@ -161,6 +162,7 @@ describe('readSessionBlocks: a derived file read with the server clock', () => {
     // The new run left its heartbeat; the old blocks file is still there.
     for (const over of [
       { pid: doc.run.pid + 1 },
+      { run_id: 'another-start-same-pid' },
       { session_id: 'another-session' },
       { config_digest: 'another-digest' },
     ])
@@ -212,5 +214,68 @@ describe('readSessionBlocks: a derived file read with the server clock', () => {
     )
     expect(out.liveness).toBe('unknown')
     expect((out.gateway as { reason: string }).reason).toBe('threshold_missing')
+  })
+})
+
+// The two files a REAL Supervisor (python/tests/session_e2e_187.py) left in an invented session
+// with a simulated clock: what Python writes is what the server reads.
+const REAL = JSON.parse(
+  readFileSync(
+    fileURLToPath(
+      new URL(
+        '../../../../docs/mission-control/b3/sesion-supervisor-sintetica-187.json',
+        import.meta.url,
+      ),
+    ),
+    'utf8',
+  ),
+) as Record<string, { blocks: Loose; heartbeat: Loose }>
+
+function placeFiles(name: string, publishedAtMs: number) {
+  const path = publish(REAL[name].blocks, publishedAtMs)
+  const beat = join(dirname(path), 'heartbeat.json')
+  writeFileSync(beat, JSON.stringify(REAL[name].heartbeat))
+  return { path, beat }
+}
+
+describe('the server reads what a real Supervisor wrote (synthetic session)', () => {
+  it('operation: the running session is read, not alive, with the age of its publication', () => {
+    const { path, beat } = placeFiles('operating', T0)
+    const reading = readSessionBlocks(path, T0 + 2_000, beat)
+    const doc = ok(reading)
+    expect(doc.status.phase).toBe('LIVE')
+    expect(doc.status.liveness).toBe('unknown')
+    expect(doc.status.gateway).toEqual({
+      age_ms: 2_000,
+      reason: 'threshold_missing',
+    })
+    expect(doc.run.id).toBe(REAL.operating.heartbeat.run_id)
+    // The reading the page gets: a committed snapshot, decoded by the frontend test.
+    return expect(JSON.stringify(reading, null, 2) + '\n').toMatchFileSnapshot(
+      '../../../../docs/mission-control/b3/lectura-servidor-operando-187.json',
+    )
+  })
+
+  it('stop: the orderly stop is read as final', () => {
+    const { path, beat } = placeFiles('stopped', T0)
+    const reading = readSessionBlocks(path, T0 + 10 ** 9, beat)
+    const doc = ok(reading)
+    expect(doc.status.phase).toBe('STOPPED')
+    expect(doc.status.liveness).toBe('final')
+    return expect(JSON.stringify(reading, null, 2) + '\n').toMatchFileSnapshot(
+      '../../../../docs/mission-control/b3/lectura-servidor-detenida-187.json',
+    )
+  })
+
+  it('restart: the stopped session’s file is refused against the heartbeat of a new start', () => {
+    const { path, beat } = placeFiles('stopped', T0)
+    writeFileSync(
+      beat,
+      JSON.stringify({ ...REAL.stopped.heartbeat, run_id: 'a-new-start' }),
+    )
+    expect(readSessionBlocks(path, T0, beat)).toEqual({
+      state: 'invalid',
+      reason: 'other_run',
+    })
   })
 })
