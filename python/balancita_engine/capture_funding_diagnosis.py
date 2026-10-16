@@ -30,6 +30,7 @@ Usage (stdlib only):
 """
 import argparse
 import json
+import os
 import re
 import sqlite3
 import sys
@@ -271,6 +272,17 @@ def build_result(conn, started=None, *, prior_rows):
     return result
 
 
+def _stat_pair(path):
+    st = os.stat(path)
+    return st.st_dev, st.st_ino
+
+
+def _device_inode(path, before):
+    """Device and inode before and after, so the run does not depend on a separate report to show the file was the same."""
+    after = _stat_pair(path)
+    return {"device_inode_before": list(before), "device_inode_after": list(after), "same_device_and_inode": tuple(before) == tuple(after)}
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--db", required=True, help="local live-capture database (opened read-only)")
@@ -287,16 +299,19 @@ def main(argv=None):
         reason = error.reason if isinstance(error, m.Stopped) else "identity"
         sys.stderr.write("refused: %s %s\n" % (reason, getattr(error, "detail", error)))
         return 2
+    dev_inode_before = _stat_pair(args.db)
     conn = m._open_readonly(args.db)
     try:
         result = build_result(conn, started, prior_rows=args.prior_rows)
     finally:
         conn.close()
     result["source"] = {"before": before, "after": m._identity(args.db), "elapsed_s": round(time.monotonic() - started, 3)}
+    result["source"].update(_device_inode(args.db, dev_inode_before))
+    result["exit_code"] = 2 if result["stopped"] else 0           # D-183-DIAG02-04: the output itself says how the run ended
     result["fingerprint_sha256"] = m.fingerprint(result)
     json.dump(result, sys.stdout, indent=2, sort_keys=True)
     sys.stdout.write("\n")
-    return 2 if result["stopped"] else 0
+    return result["exit_code"]
 
 
 if __name__ == "__main__":

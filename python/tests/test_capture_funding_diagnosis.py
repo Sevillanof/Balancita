@@ -378,6 +378,17 @@ class NotCausalTests(unittest.TestCase):
         self.assertEqual(out["per_product"][m.BTC]["publication"]["not_causal_count"], 0)
         self.assertTrue(out["consistent_with_validator"])
 
+    def test_a_row_outside_the_window_with_known_at_before_its_end_is_not_a_case(self):
+        before = A0 - H                                                  # starts before the window: the validator skips it (D-230-07)
+        after = A1 - H // 2                                              # ends after the window
+        periods = [(m.BTC, before, before + H, RATE, before + 30_000, "USD/BTC/hour", "o1"),
+                   (m.BTC, after, after + H, RATE, after + 30_000, "USD/BTC/hour", "o2")]
+        responses = [response("o1", before + 30_000, [before], server=self.OFFSET), response("o2", after + 30_000, [after], server=self.OFFSET)]
+        out = d.diagnose(periods, responses)
+        self.assertEqual(out["per_product"][m.BTC]["publication"]["not_causal_count"], 0)
+        self.assertEqual(out["per_product"][m.BTC]["validator_publication_counts"]["discrepancy"], 0)
+        self.assertTrue(out["consistent_with_validator"])
+
     def test_exactly_at_the_end_is_not_before_it(self):
         s = A0 + 20 * H
         periods = [(m.BTC, s, s + H, RATE, s + H, "USD/BTC/hour", "rej")]
@@ -473,6 +484,31 @@ class GuardTests(unittest.TestCase):
 
     def test_main_refuses_a_file_smaller_than_the_identified_one(self):
         self.assertEqual(d.main(["--db", self.path, "--prior-rows", "1"]), 2)
+
+    def _run_main(self, prior_rows):
+        import contextlib
+        import io
+        buf = io.StringIO()
+        with mock.patch.object(m, "MIN_SIZE_BYTES", 0), contextlib.redirect_stdout(buf):
+            code = d.main(["--db", self.path, "--prior-rows", str(prior_rows)])
+        return code, json.loads(buf.getvalue())
+
+    def test_the_output_carries_the_exit_code_and_the_device_and_inode_before_and_after(self):
+        code, out = self._run_main(0)                                     # D-183-DIAG02-04
+        st = os.stat(self.path)
+        self.assertEqual((code, out["exit_code"]), (0, 0))
+        self.assertEqual(out["source"]["device_inode_before"], [st.st_dev, st.st_ino])
+        self.assertEqual(out["source"]["device_inode_after"], [st.st_dev, st.st_ino])
+        self.assertTrue(out["source"]["same_device_and_inode"])
+
+    def test_a_changed_device_or_inode_is_published_as_not_the_same(self):
+        st = os.stat(self.path)
+        self.assertFalse(d._device_inode(self.path, (st.st_dev, st.st_ino + 1))["same_device_and_inode"])
+        self.assertTrue(d._device_inode(self.path, (st.st_dev, st.st_ino))["same_device_and_inode"])
+
+    def test_a_stopped_run_says_exit_code_2_in_its_own_output(self):
+        code, out = self._run_main(m.TOTAL_ROWS_CAP - 10)
+        self.assertEqual((code, out["exit_code"], out["stopped"]["reason"]), (2, 2, "global_cap"))
 
     def test_caps_are_the_stage_caps_and_not_wider(self):
         self.assertEqual((m.CAPS["2c"], m.CAPS["2d"]), (600, 1_200))
