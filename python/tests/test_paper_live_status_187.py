@@ -135,6 +135,10 @@ class TestFundingBlock(unittest.TestCase):
                 self.assertFalse(block["pnl_verified"])
                 self.assertTrue(block["reasons"])
 
+    def test_a_producer_that_does_not_say_verified_is_not_overruled(self):
+        self.assertFalse(PUB.funding_block(observed(pnl_verified=False))["pnl_verified"])         # no reason listed, still not verified
+        self.assertFalse(PUB.funding_block(observed(pnl_verified=None))["pnl_verified"])
+
     def test_the_reasons_are_recomputed_from_the_facts_and_a_gap_in_the_report_is_not_fine(self):
         block = PUB.funding_block(observed(incomplete_trades=["t1"], disputed_trades=["t2"]))
         self.assertIn("trade_funding_incomplete", block["reasons"])
