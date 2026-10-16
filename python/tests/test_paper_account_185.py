@@ -60,7 +60,7 @@ class TestThePublishedAccount(unittest.TestCase):
                          (snap["equity_usd"], snap["capital_definitive_usd"], snap["reserved_usd"], snap["available_usd"]))
         self.assertGreater(D(view["committed_usd"]), 0)
         self.assertEqual(D(view["free_usd"]), D(view["definitive_usd"]) - D(view["committed_usd"]))
-        self.assertEqual(view["committed_scope"], "open_positions_only")
+        self.assertEqual((view["committed_scope"], view["pending_orders"], view["pending_reservation"]), ("open_positions_only", 0, "none"))
         json.dumps(view)
 
     def test_the_two_balances_differ_only_by_the_gains_still_provisional(self):
@@ -71,6 +71,19 @@ class TestThePublishedAccount(unittest.TestCase):
         self.assertGreater(D(view["provisional_gains_usd"]), 0)
         self.assertEqual(D(view["total_simulated_usd"]) - D(view["definitive_usd"]), D(view["provisional_gains_usd"]))
         self.assertEqual(view["committed_usd"], "0")        # nothing open
+
+    def test_free_is_the_definitive_balance_minus_committed_never_the_total_minus_committed(self):
+        p = Portfolio(roomy())                              # no funding history: the first gain stays provisional
+        p.decide([intent("PF_XBTUSD")], T0 + MIN)
+        p.on_candle("PF_XBTUSD", T0 + MIN, candle("104", high="104", low="100"))
+        p.decide([intent("PF_ETHUSD", t=T0 + MIN)], T0 + 2 * MIN)       # and a position is open on top of it
+        view = PUB.account(p)
+        self.assertEqual(len(p.positions), 1)
+        self.assertGreater(D(view["provisional_gains_usd"]), 0)
+        self.assertGreater(D(view["committed_usd"]), 0)
+        self.assertEqual(D(view["free_usd"]), D(view["definitive_usd"]) - D(view["committed_usd"]))
+        self.assertNotEqual(D(view["free_usd"]), D(view["total_simulated_usd"]) - D(view["committed_usd"]))
+        self.assertEqual(D(view["total_simulated_usd"]) - D(view["free_usd"]) - D(view["committed_usd"]), D(view["provisional_gains_usd"]))
 
     def test_the_positions_block_carries_it_and_still_claims_nothing_else(self):
         p = Portfolio(roomy(), funding=FULL_FUNDING)

@@ -70,15 +70,18 @@ def verification(runner, report_age_ms, max_age_ms=None, source_state=None, thre
             "thresholds": {"report_max_age_ms": max_age_ms, "status": status}}
 
 
-def account(portfolio):
+def account(portfolio, pending_orders=0):
     """BAL-DECISION-185-CARTERA-SIMULADA-01: the one shared SIMULATED balance, read from the portfolio's own snapshot (nothing is
     recomputed here). Two labelled balances: ``total_simulated_usd`` (1000 plus everything realized, net of all costs) and
     ``definitive_usd`` (the same without gains still provisional; it is the one that sizes and limits). ``committed_usd`` is the
-    margin held by OPEN POSITIONS only (pending orders hold nothing yet) and ``free_usd`` is ``definitive_usd - committed_usd``."""
+    margin held by OPEN POSITIONS only (pending orders hold no reservation, see below) and ``free_usd`` is ``definitive_usd - committed_usd``.
+    Pending orders are counted apart (``pending_orders``) and hold no reservation (``pending_reservation: none``): size and admission are
+    decided when the order fills, against the free capital of that instant (BAL-DECISION-185-CARTERA-SIMULADA-02)."""
     snap = portfolio.snapshot()
     return {"class": "simulated", "initial_usd": snap["initial_equity_usd"], "total_simulated_usd": snap["equity_usd"],
             "definitive_usd": snap["capital_definitive_usd"], "provisional_gains_usd": snap["provisional_gains_usd"],
-            "committed_usd": snap["reserved_usd"], "committed_scope": "open_positions_only", "free_usd": snap["available_usd"]}
+            "committed_usd": snap["reserved_usd"], "committed_scope": "open_positions_only", "free_usd": snap["available_usd"],
+            "pending_orders": pending_orders, "pending_reservation": "none"}
 
 
 def positions(runner, report_age_ms, max_age_ms=None, source_state=None, threshold_approved=False):
@@ -108,7 +111,8 @@ def positions(runner, report_age_ms, max_age_ms=None, source_state=None, thresho
             "classes": {"position": "simulated", "price": "observed", "pnl": "estimated"}})
     return _tag({"schema": POSITIONS_SCHEMA, "clock_ms": runner.clock, "verification": check,
                  "unrealized_usd": str(runner.portfolio.unrealized_usd()), "unrealized_class": "estimated",
-                 "account": account(runner.portfolio), "positions": rows})
+                 "account": account(runner.portfolio, len(getattr(getattr(runner, "executor", None), "pending", ()))),
+                 "positions": rows})
 
 
 def _ref_problem(log, ref):
