@@ -4,6 +4,7 @@ import {
   fetchSessionBlocks,
   type SessionBlocksReading,
 } from '../infrastructure/session-blocks-api.ts'
+import SessionIntervalsPanel from './SessionIntervalsPanel.tsx'
 import SessionStatusPanel from './SessionStatusPanel.tsx'
 import SessionValidityPanel from './SessionValidityPanel.tsx'
 
@@ -56,6 +57,11 @@ export function SessionBlocksReadingView({
       </p>
       <SessionStatusPanel status={document.status} />
       <SessionValidityPanel block={document.positions} />
+      <SessionIntervalsPanel
+        block={document.intervals}
+        ageSeconds={age >= 0 ? Math.round(age / 1000) : null}
+        lastRead={lastRead}
+      />
     </>
   )
 }
