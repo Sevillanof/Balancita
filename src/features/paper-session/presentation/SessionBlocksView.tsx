@@ -39,11 +39,17 @@ export function SessionBlocksReadingView({
       />
     )
   const { document } = reading
+  const age = reading.evaluatedMs - reading.publishedAtMs
   return (
     <>
       <p role="note">
         Archivo derivado, sin autoridad sobre la sesión. La edad es la de la
         publicación, no la del dato.
+      </p>
+      <p data-testid="document-age">
+        {age >= 0
+          ? `Documento publicado hace ${Math.round(age / 1000)} s`
+          : 'Edad del documento no medible'}
       </p>
       <SessionStatusPanel status={document.status} />
       <SessionValidityPanel block={document.positions} />

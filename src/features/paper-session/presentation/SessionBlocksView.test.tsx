@@ -1,4 +1,10 @@
-import { render, screen, waitFor, within } from '@testing-library/react'
+import {
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import documents from '../../../../docs/mission-control/b3/documento-bloques-publicador-real.json'
 import { decodeSessionBlocksReading } from '../infrastructure/session-blocks-api.ts'
@@ -54,6 +60,14 @@ describe('the session page states', () => {
     expect(screen.getByText('Archivo no utilizable')).toBeInTheDocument()
     expect(screen.getByText(/otra corrida/)).toBeInTheDocument()
     expect(screen.queryByTestId('session-status')).toBeNull()
+  })
+
+  it('shows how old the document is, next to the blocks, and says when it cannot tell', () => {
+    show(envelope('operating_threshold_hypothesis'))
+    expect(screen.getByTestId('document-age')).toHaveTextContent('hace 1 s')
+    cleanup()
+    show({ ...envelope('operating_threshold_hypothesis'), evaluated_ms: 1 })
+    expect(screen.getByTestId('document-age')).toHaveTextContent('no medible')
   })
 
   it('a running session is not shown as alive or current: no approved limit', () => {
