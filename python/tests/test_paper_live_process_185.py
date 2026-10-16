@@ -565,6 +565,7 @@ class TestObservedLifecycle(unittest.TestCase):
                 with self.assertRaises(LP.ProcessError) as caught:
                     again.start()
                 self.assertEqual(caught.exception.reason, "restart_requires_operator")
+                self.assertIn("funding_book_diverged", str(caught.exception))        # D-830-01: the refusal says WHY, not just "restart explicitly"
                 self.assertIsNone(again.session)
 
     def test_the_operator_restart_is_on_record_and_a_later_crash_restarts_without_asking(self):
