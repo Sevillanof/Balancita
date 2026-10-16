@@ -95,6 +95,19 @@
     },
     "observed_now_ms": 1763256600000,
     "positions": {
+      "account": {
+        "class": "simulated",
+        "committed_scope": "open_positions_only",
+        "committed_usd": "472.71",
+        "definitive_usd": "1000",
+        "free_usd": "527.29",
+        "initial_usd": "1000",
+        "pending_orders": 0,
+        "pending_reservation": "none",
+        "pending_reserved_usd": "0",
+        "provisional_gains_usd": "0",
+        "total_simulated_usd": "1000"
+      },
       "clock_ms": 1791030005000,
       "evidence_class": "not_forward_evidence",
       "execution_class": "observed_quotes",
@@ -283,6 +296,19 @@
     },
     "observed_now_ms": 1763251800000,
     "positions": {
+      "account": {
+        "class": "simulated",
+        "committed_scope": "open_positions_only",
+        "committed_usd": "472.71",
+        "definitive_usd": "1000",
+        "free_usd": "527.29",
+        "initial_usd": "1000",
+        "pending_orders": 0,
+        "pending_reservation": "none",
+        "pending_reserved_usd": "0",
+        "provisional_gains_usd": "0",
+        "total_simulated_usd": "1000"
+      },
       "clock_ms": 1791030005000,
       "evidence_class": "not_forward_evidence",
       "execution_class": "observed_quotes",
@@ -471,6 +497,19 @@
     },
     "observed_now_ms": 1763251800000,
     "positions": {
+      "account": {
+        "class": "simulated",
+        "committed_scope": "open_positions_only",
+        "committed_usd": "472.71",
+        "definitive_usd": "1000",
+        "free_usd": "527.29",
+        "initial_usd": "1000",
+        "pending_orders": 0,
+        "pending_reservation": "none",
+        "pending_reserved_usd": "0",
+        "provisional_gains_usd": "0",
+        "total_simulated_usd": "1000"
+      },
       "clock_ms": 1791030005000,
       "evidence_class": "not_forward_evidence",
       "execution_class": "observed_quotes",
@@ -659,6 +698,19 @@
     },
     "observed_now_ms": 1763251800000,
     "positions": {
+      "account": {
+        "class": "simulated",
+        "committed_scope": "open_positions_only",
+        "committed_usd": "472.71",
+        "definitive_usd": "1000",
+        "free_usd": "527.29",
+        "initial_usd": "1000",
+        "pending_orders": 0,
+        "pending_reservation": "none",
+        "pending_reserved_usd": "0",
+        "provisional_gains_usd": "0",
+        "total_simulated_usd": "1000"
+      },
       "clock_ms": 1791030005000,
       "evidence_class": "not_forward_evidence",
       "execution_class": "observed_quotes",
@@ -847,6 +899,19 @@
     },
     "observed_now_ms": 1763335800000,
     "positions": {
+      "account": {
+        "class": "simulated",
+        "committed_scope": "open_positions_only",
+        "committed_usd": "472.71",
+        "definitive_usd": "1000",
+        "free_usd": "527.29",
+        "initial_usd": "1000",
+        "pending_orders": 0,
+        "pending_reservation": "none",
+        "pending_reserved_usd": "0",
+        "provisional_gains_usd": "0",
+        "total_simulated_usd": "1000"
+      },
       "clock_ms": 1791030005000,
       "evidence_class": "not_forward_evidence",
       "execution_class": "observed_quotes",
@@ -1037,6 +1102,19 @@
     },
     "observed_now_ms": null,
     "positions": {
+      "account": {
+        "class": "simulated",
+        "committed_scope": "open_positions_only",
+        "committed_usd": "472.71",
+        "definitive_usd": "1000",
+        "free_usd": "527.29",
+        "initial_usd": "1000",
+        "pending_orders": 0,
+        "pending_reservation": "none",
+        "pending_reserved_usd": "0",
+        "provisional_gains_usd": "0",
+        "total_simulated_usd": "1000"
+      },
       "clock_ms": 1791030005000,
       "evidence_class": "not_forward_evidence",
       "execution_class": "observed_quotes",

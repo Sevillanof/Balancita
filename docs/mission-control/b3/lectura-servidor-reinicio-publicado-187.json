@@ -131,6 +131,19 @@
     },
     "observed_now_ms": 1763253000000,
     "positions": {
+      "account": {
+        "class": "simulated",
+        "committed_scope": "open_positions_only",
+        "committed_usd": "0",
+        "definitive_usd": "1000",
+        "free_usd": "1000",
+        "initial_usd": "1000",
+        "pending_orders": 0,
+        "pending_reservation": "none",
+        "pending_reserved_usd": "0",
+        "provisional_gains_usd": "0",
+        "total_simulated_usd": "1000"
+      },
       "clock_ms": 1763253000000,
       "evidence_class": "not_forward_evidence",
       "execution_class": "observed_quotes",

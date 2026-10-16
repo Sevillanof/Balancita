@@ -116,3 +116,7 @@ p.snapshot()
 ## Validación integral offline
 
 `python/balancita_engine/portfolio_offline.py` ejecuta esta cartera con velas y señales sintéticas, un diario encadenado por hash, comprobaciones independientes de límites y contabilidad, y un reinicio desde un checkpoint persistido. Diseño, límites y capacidades de recuperación (existentes y faltantes): [`validacion-cartera-offline.md`](validacion-cartera-offline.md). Resultados: `analisis/validacion-cartera-offline/informe.md`.
+
+## Saldo simulado publicado (#185, BAL-DECISION-185-CARTERA-SIMULADA-01)
+
+El bloque de posiciones de la sesión lleva `account` (clase `simulated`), copiado de `Portfolio.snapshot()` sin recalcular: `total_simulated_usd` (1000 más todo lo realizado, neto de todos los costes), `definitive_usd` (igual, sin las ganancias aún provisionales; es el que dimensiona y limita), `committed_usd` (margen de las posiciones abiertas; las órdenes pendientes no reservan: tamaño y admisión se deciden al llenarse, BAL-DECISION-185-CARTERA-SIMULADA-02; se cuentan aparte en `pending_orders` con `pending_reservation: none`) y `free_usd` (`definitive_usd − committed_usd`). No cambia el dimensionado, el apalancamiento ni ningún saldo existente.
