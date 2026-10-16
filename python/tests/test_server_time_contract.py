@@ -6,6 +6,7 @@ Context (#183, stage 2 repeat): 3 stored funding responses came back ``server_ti
 contradiction in the data can be told apart from a contract gap without reading the database again. It changes no behaviour.
 ``JS_ACCEPTS`` was produced with ``Number.isFinite(Date.parse(s))`` on Node 22 and is copied here as fixed data.
 """
+import sys
 import unittest
 
 from balancita_engine import funding_adapter as FA
@@ -62,6 +63,21 @@ class ServerTimeContractTests(unittest.TestCase):
             FA.parse_response(raw, "PF_XBTUSD", 1791745200000, strict=False)
         self.assertEqual(caught.exception.reason, "server_time_invalid")
         self.assertEqual(str(caught.exception), "server_time_invalid: timestamp_not_utc")   # detail only in the message
+
+    def test_a_fraction_that_is_not_3_or_6_digits_depends_on_the_interpreter(self):
+        """DIAG-02 (#183): the 3 rejected serverTime had 2 fraction digits and the run used Python 3.9.6.
+
+        Before 3.11 ``datetime.fromisoformat`` accepts fractions of exactly 3 or 6 digits; from 3.11 it accepts any number of digits.
+        The adapter's contract is not relaxed here: this only records which interpreter gives which answer for the same string.
+        """
+        for digits in (1, 2, 4, 5, 7):
+            text = "2026-10-11T19:00:00.%sZ" % "123456789"[:digits]
+            if sys.version_info >= (3, 11):
+                self.assertEqual(FA._ms(text), 1791745200000 + int(("123456789"[:digits] + "00")[:3]), text)
+            else:
+                with self.assertRaises(ValueError) as caught:
+                    FA._ms(text)
+                self.assertEqual(str(caught.exception), "timestamp_invalid", text)
 
 
 if __name__ == "__main__":
