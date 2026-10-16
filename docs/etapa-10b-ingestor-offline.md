@@ -94,6 +94,16 @@ Limitaciones de esta medición: precios sintéticos con volatilidad constante; u
 - Ambos llevan `mode = integration`, `evidence_class = not_forward_evidence` y `execution_class = observed_quotes` (nunca `MODELLED_EXECUTION`, que es del replay de 9A).
 - B1 (Riesgo): sigue en «sin datos»; solo cambia con una sesión autorizada (ver el documento de diseño, §5.9). No se tocó el gateway.
 
+## 5b. Bloque operativo de la sesión (`session_status`, Issue #187)
+
+`paper_live_publish.session_status(heartbeat, halt, report, heartbeat_age_ms, max_age_ms, threshold_approved)` arma el bloque de fase a partir de los archivos que deja el proceso (`heartbeat.json`, `halt.json`, `report.json`, ya leídos). No lee ninguna base, no calcula dinero y no dice nunca «verificado».
+
+- La fase es la que el proceso dice de sí mismo (`INIT`, `WARMING_UP`, `LIVE`, `STOPPING`, `STOPPED`, `HALTED`, `REFUSED`). Un latido que dice LIVE no vuelve viva a la sesión: `liveness` es `unknown` salvo con un límite de edad **aprobado** (`alive`); más viejo que el límite del llamante degrada a `phase: unverified` / `stale`. No hay límite por defecto (BAL-DECISION-187-01).
+- Una fase terminada (`STOPPED`, `HALTED`, `REFUSED`) es `final`. Un `halt.json` pesa más que un latido que no llegó a decir HALTED; un reporte terminado después del último latido también.
+- Latido ausente, de otro esquema o con una fase desconocida: `phase: unavailable` con el motivo; nunca un LIVE vacío.
+- Lleva `halt_reason`, la parada ordenada (`orderly_stop`), recursos y reloj tal como los escribió el proceso. Un corte sin parada ordenada ni motivo registrado se muestra como «motivo no registrado», no como una causa inventada.
+- El único camino de reinicio sigue siendo el comando manual `--restart` (BAL-DECISION-187-03, A); este bloque no ofrece botón ni endpoint.
+
 ## 6. Límites y dependencias
 
 **Requisitos previos a conectar con la captura real (no resueltos; no hay lectura real autorizada):**
