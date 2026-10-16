@@ -21,6 +21,16 @@ from test_paper_live_process_185 import START, Base
 STEPS = 90                       # about the first third of the invented session: enough to see decisions before, during and after
 
 
+def position_detail(supervisor):
+    """Everything that identifies an open position and its protection, as the runner holds it (not a count)."""
+    rows = []
+    for product, book in sorted(supervisor.session.runner.portfolio.positions.items()):
+        pos = book.position
+        rows.append((product, book.intent["intent_id"], pos["side"], int(pos["entry_ms"]), str(pos["entry"]), str(pos["stop"]),
+                     str(pos["target"]), str(pos["quantity"])))
+    return rows
+
+
 def kinds(supervisor):
     return collections.Counter(e["kind"] for e in supervisor.session.runner.journal.entries)
 
@@ -30,13 +40,14 @@ class Gate(object):
 
     def __init__(self, supervisor, first, last):
         self.supervisor, self.first, self.last = supervisor, first, last
-        self.original, self.edges = supervisor.tick, {}
+        self.original, self.edges, self.details = supervisor.tick, {}, {}
         supervisor.tick = self.tick
 
     def tick(self, now):
         step = next((i for i, t in enumerate(TIMES) if t >= now), len(TIMES)) - START
         if step in (self.first, self.last) and step not in self.edges:
             self.edges[step] = (kinds(self.supervisor).get("decision", 0), len(self.supervisor.session.runner.orders()))
+            self.details[step] = position_detail(self.supervisor)
         if not (self.first <= step < self.last):
             self.original(now)
 
@@ -82,6 +93,14 @@ class TestSilentSourceSeenByTheProcess(Base):
         self.assertEqual(report["positions"]["open_at_end"], 1)                        # reported as left open, not closed or modified by the stop
         self.assertIn("nobody evaluates their stops", report["positions"]["note"])
         self.assertEqual(gate.edges[30][1], len(supervisor.session.runner.orders()))   # not one order was added after the last row
+        # the position itself (side, quantity, entry, stop, target, intent) is the one the silence found, not only the same count
+        before, after = gate.details[30], position_detail(supervisor)
+        self.assertEqual(len(before), 1)
+        self.assertEqual(before, after)
+        product, intent_id, side, entry_ms, entry, stop, target, quantity = after[0]
+        document = self.read(LP.BLOCKS_FILE)["positions"]["positions"]                  # and the published document describes that same position
+        self.assertEqual([(r["product_id"], r["intent_id"], r["side"], r["entry_ms"], r["entry_price"], r["stop"], r["target"], r["quantity"])
+                          for r in document], after)
 
     def test_the_silence_and_the_publication_together_never_present_the_session_as_confirmed_alive(self):
         supervisor, _, _ = self.run_with_silence(30, 10 ** 6, steps=60)
