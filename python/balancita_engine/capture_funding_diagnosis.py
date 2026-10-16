@@ -1,14 +1,15 @@
 """Funding publication diagnosis for Issue #183: DRAFT, never run on real data (BAL-COORD-183-FUNDING-DIAG-01, D-212-21).
 
 Stage 2 left two open items in the funding family and could not say more because its summary keeps one line per finding group:
-- three ``funding.publication`` DISCREPANCY (PF_ETHUSD 1, PF_XBTUSD 2, 2026-10-11T19:00Z..23:00Z): the validator raises it for two different
-  reasons (a response shows the period definitive BEFORE ``end + settle_lag``, or no response shows it definitive by ``end + settle_lag +
-  max_lag``) and the summary does not say which;
+- three ``funding.publication`` DISCREPANCY (PF_ETHUSD 1, PF_XBTUSD 2, 2026-10-11T19:00Z..23:00Z): the validator raises it for THREE different
+  reasons (a response shows the period definitive BEFORE ``end + settle_lag``; no response shows it definitive by ``end + settle_lag +
+  max_lag``; or a judged row has ``known_at`` before the END of its period, "not causal") and the summary does not say which. The first
+  version of this tool ignored the third (D-230-06) and so did not reproduce stage 2;
 - three responses rejected as ``server_time_invalid``: the summary keeps the code, not the inner reason nor the shape of the string.
 
 This tool reads the same rows as stages 2c and 2d (``capture_minimal_read.read_2c`` and ``read_2d``, unchanged: same windows, products, caps, guards
 and plans) and publishes, in aggregate and without prices, rates, volumes or bodies:
-- per publication case, its kind (``early`` or ``late``) and the offsets in ms: how far the receipt was from ``end + settle_lag`` and from the
+- per publication case, its kind (``early``, ``late`` or ``not_causal``, the third reason of the validator: a judged row whose ``known_at`` is before the end of its period; it publishes ``end - known_at`` and whether the response that stored the row was rejected) and the offsets in ms: how far the receipt was from ``end + settle_lag`` and from the
   deadline, and, for early cases, ``serverTime - received_at`` of the response that showed the period definitive. Offsets quantify; they do not
   say that the validator is wrong, and they do not say anything about Kraken's punctuality;
 - per product, the quantiles of ``serverTime - received_at`` over all parsed responses (the clock offset between the two clocks);
@@ -75,12 +76,12 @@ def inspect_responses(period_rows, responses):
 
     Returns ``(polls, per_response, server_by_receipt)``: ``polls`` is the validator's own input; ``per_response`` has one entry per
     response (product, receipt, ``server_ms`` or ``None``, adapter reason and inner reason, shape of ``serverTime``);
-    ``server_by_receipt`` maps ``(product, received_at)`` to the ``server_ms`` values seen."""
+    ``sha`` identifies the response inside this process only (it is never published); ``server_by_receipt`` maps ``(product, received_at)`` to the ``server_ms`` values seen."""
     _periods, polls, _events = m.funding_inputs(period_rows, responses)
     per_response, server_by_receipt = [], defaultdict(set)
     parsed_index = 0
     for sha, received_at, _server_time, product, body in responses:
-        entry = {"product_id": product, "received_at": received_at, "shape": shape_of(_server_time_text(body)),
+        entry = {"sha": sha, "product_id": product, "received_at": received_at, "shape": shape_of(_server_time_text(body)),
                  "server_ms": None, "reason": None, "inner_reason": None}
         try:
             parsed = funding_adapter.parse_response(body, product, received_at, strict=False)
@@ -143,6 +144,22 @@ def late_case(start, polls, settle_lag_ms=SETTLE_LAG_MS, max_lag_ms=MAX_LAG_MS):
             "deadline_minus_last_poll_before_deadline_ms": (deadline - before[-1]) if before else None}
 
 
+def not_causal_cases(periods, product, rejected_shas, read_shas):
+    """The third reason of ``validate_funding`` for a ``funding.publication`` DISCREPANCY: a judged row whose ``known_at`` (our receipt
+    time) is before the END of its period ("known_at precedes the period end (not causal)"). One finding per row, no ``count``.
+    Rows flagged provisional are not judged, so a row stored by a response the adapter rejected (never flagged) can be one. Published per
+    case: the start, ``known_at``, ``end - known_at`` in ms, and whether the response that stored the row was rejected / was read."""
+    out = []
+    for row in periods:
+        if row["product_id"] != product or row.get("provisional") is True:
+            continue
+        if row["start_ms"] < m.WINDOW_A[0] or row["end_ms"] > m.WINDOW_A[1] or row["known_at"] >= row["end_ms"]:
+            continue
+        out.append({"start_ms": row["start_ms"], "known_at_ms": row["known_at"], "end_minus_known_ms": row["end_ms"] - row["known_at"],
+                    "response_rejected": row["response_sha256"] in rejected_shas, "response_read": row["response_sha256"] in read_shas})
+    return sorted(out, key=lambda c: (c["start_ms"], c["known_at_ms"]))
+
+
 def diagnose(period_rows, responses):
     """The whole diagnosis from the stage rows. Pure: no database."""
     polls_for_validator, per_response, server_by_receipt = inspect_responses(period_rows, responses)
@@ -152,6 +169,8 @@ def diagnose(period_rows, responses):
     polls = cv._parse_responses(holder, polls_for_validator, exception)
     validator = cv.validate_funding(periods, m.WINDOW_A[0], m.WINDOW_A[1], list(m.PRODUCTS), references=None,
                                     responses=polls_for_validator, holdout_window=m.HOLDOUT_WINDOW)
+    rejected_shas = {e["sha"] for e in per_response if e["reason"] is not None}
+    read_shas = {e["sha"] for e in per_response}
     per_product = {}
     for product in m.PRODUCTS:
         starts = [r["start_ms"] for r in periods if r["product_id"] == product and not r.get("provisional")
@@ -159,20 +178,23 @@ def diagnose(period_rows, responses):
         starts = sorted(set(starts))
         product_polls = sorted(polls.get(product, []), key=lambda p: p[0])
         classes = classify_publication(starts, product_polls)
-        ours = {"discrepancy": len(classes["early"]) + len(classes["late"]), "not_measurable": len(classes["unknown"])}
+        non_causal = not_causal_cases(periods, product, rejected_shas, read_shas)
+        ours = {"discrepancy": len(classes["early"]) + len(classes["late"]) + len(non_causal), "not_measurable": len(classes["unknown"])}
         theirs = {"discrepancy": 0, "not_measurable": 0}
         for f in validator.findings:
-            if f["check"] == "funding.publication" and f["product"] == product and f.get("count") is not None:
-                if f["kind"] == cv.DISCREPANCY:
+            if f["check"] == "funding.publication" and f["product"] == product:
+                if f["kind"] == cv.DISCREPANCY:        # early / late carry ``count``; a known_at-before-end finding is one row
                     theirs["discrepancy"] += int(f.get("count", 1))
-                elif f["kind"] == cv.ABSENT:
-                    theirs["not_measurable"] += int(f.get("count", 1))
+                elif f["kind"] == cv.ABSENT and f.get("count") is not None:
+                    theirs["not_measurable"] += int(f["count"])
         offsets = [e["server_ms"] - e["received_at"] for e in per_response if e["product_id"] == product and e["server_ms"] is not None]
         per_product[product] = {
             "periods_judged": len(starts),
             "stored_polls": len(product_polls),
             "publication": {
-                "early_count": len(classes["early"]), "late_count": len(classes["late"]), "not_measurable_count": len(classes["unknown"]),
+                "early_count": len(classes["early"]), "late_count": len(classes["late"]), "not_causal_count": len(non_causal),
+                "not_measurable_count": len(classes["unknown"]),
+                "not_causal_cases": non_causal[:MAX_CASES],
                 "early_cases": [early_case(s, product_polls, server_by_receipt, product) for s in classes["early"][:MAX_CASES]],
                 "late_cases": [late_case(s, product_polls) for s in classes["late"][:MAX_CASES]]},
             "server_minus_receipt_ms": m._quantiles(offsets),
@@ -197,7 +219,7 @@ def diagnose(period_rows, responses):
         "per_product": per_product,
         "consistent_with_validator": all(p["consistent_with_validator"] for p in per_product.values()),
         "matches_stage2": all(p["matches_stage2"] for p in per_product.values()),
-        "says": "kind (early or late) and offsets in ms of the three publication cases; shapes and inner reason of the rejected serverTime; "
+        "says": "kind (early, late or not_causal: known_at before the period end) and offsets in ms of the publication cases; shapes and inner reason of the rejected serverTime; "
                 "the clock offset serverTime - received_at of the parsed responses",
         "does_not_say": "that the validator or the adapter is wrong (an offset quantifies, it does not judge); why the process was or was not "
                         "polling; anything about Kraken's punctuality; the fitness, which stays what the validator says"}

@@ -213,6 +213,92 @@ class ControlsPublishFalseTests(unittest.TestCase):
         self.assertEqual(out["per_product"][m.BTC]["periods_judged"], 1)
 
 
+class SeveralEarlyTests(unittest.TestCase):
+    def test_two_early_periods_of_one_product_are_two_in_the_validator_count_and_in_ours(self):
+        periods, responses = [], []
+        for hour in (10, 14):
+            start = A0 + hour * H
+            at = start + H + 600_000 - 2_000
+            periods.append(stored("e%d" % hour, start))
+            periods[-1] = (m.BTC, start, start + H, RATE, at, "USD/BTC/hour", "e%d" % hour)
+            responses.append(response("e%d" % hour, at, [start], server=iso(start + H + 600_000 + 5_000)))
+        out = d.diagnose(periods, responses)
+        self.assertEqual(out["per_product"][m.BTC]["publication"]["early_count"], 2)
+        self.assertEqual(out["per_product"][m.BTC]["validator_publication_counts"]["discrepancy"], 2)
+        self.assertTrue(out["consistent_with_validator"])
+
+
+class NotCausalTests(unittest.TestCase):
+    """D-230-06: the third reason of a funding.publication DISCREPANCY, a judged row with known_at before the end of its period."""
+
+    OFFSET = "2026-10-11T19:00:00.123+00:00"           # rejected as timestamp_not_utc by every Python
+
+    def _scenario(self):
+        s_open = A0 + 20 * H                           # the hour in progress when the rejected response arrives
+        rejected_at = s_open + 30_000
+        periods = [stored("rej", s_open, product=m.BTC)]
+        periods[0] = (m.BTC, s_open, s_open + H, RATE, rejected_at, "USD/BTC/hour", "rej")
+        responses = [response("rej", rejected_at, [s_open], server=self.OFFSET)]
+        s_ok = A0 + 10 * H                             # a timely, parsed period next to it
+        periods.append(stored("ok", s_ok))
+        responses.append(response("ok", s_ok + H + 20 * 60_000, [s_ok]))
+        return periods, responses, s_open, rejected_at
+
+    def test_a_row_stored_by_a_rejected_response_before_the_period_end_is_counted_and_described(self):
+        periods, responses, s_open, rejected_at = self._scenario()
+        out = d.diagnose(periods, responses)
+        pub = out["per_product"][m.BTC]["publication"]
+        self.assertEqual((pub["early_count"], pub["late_count"], pub["not_causal_count"]), (0, 0, 1))
+        self.assertEqual(pub["not_causal_cases"], [{"start_ms": s_open, "known_at_ms": rejected_at, "end_minus_known_ms": H - 30_000,
+                                                    "response_rejected": True, "response_read": True}])
+        self.assertEqual(out["per_product"][m.BTC]["validator_publication_counts"]["discrepancy"], 1)
+        self.assertTrue(out["per_product"][m.BTC]["consistent_with_validator"])
+        self.assertTrue(out["consistent_with_validator"])
+
+    def test_the_first_version_would_have_published_zero_here_and_the_control_now_catches_it(self):
+        periods, responses, _s, _t = self._scenario()
+        with mock.patch.object(d, "not_causal_cases", lambda *a, **k: []):     # what D-230-06 found: the third reason ignored
+            out = d.diagnose(periods, responses)
+        self.assertEqual(out["per_product"][m.BTC]["publication"]["not_causal_count"], 0)
+        self.assertEqual(out["per_product"][m.BTC]["validator_publication_counts"]["discrepancy"], 1)
+        self.assertFalse(out["per_product"][m.BTC]["consistent_with_validator"])
+        self.assertFalse(out["consistent_with_validator"])
+
+    def test_a_provisional_row_and_a_row_known_after_the_end_are_not_counted(self):
+        s_open = A0 + 20 * H
+        received = s_open + 30_000
+        periods = [(m.BTC, s_open, s_open + H, RATE, received, "USD/BTC/hour", "prov")]     # parsed: the open hour is provisional
+        responses = [response("prov", received, [s_open])]
+        late_known = A0 + 10 * H
+        periods.append(stored("after", late_known))                                           # known 30 s after its end
+        responses.append(response("after", late_known + H + 20 * 60_000, [late_known]))
+        out = d.diagnose(periods, responses)
+        self.assertEqual(out["per_product"][m.BTC]["publication"]["not_causal_count"], 0)
+        self.assertTrue(out["consistent_with_validator"])
+
+    def test_exactly_at_the_end_is_not_before_it(self):
+        s = A0 + 20 * H
+        periods = [(m.BTC, s, s + H, RATE, s + H, "USD/BTC/hour", "rej")]
+        responses = [response("rej", s + H, [s], server=self.OFFSET)]
+        out = d.diagnose(periods, responses)
+        self.assertEqual(out["per_product"][m.BTC]["publication"]["not_causal_count"], 0)
+        self.assertTrue(out["consistent_with_validator"])
+
+    def test_stage_2_shape_one_for_eth_two_for_xbt_matches_the_published_discrepancy_counts(self):
+        periods, responses = [], []
+        for product, starts in ((m.ETH, [A0 + 22 * H]), (m.BTC, [A0 + 19 * H, A0 + 23 * H])):
+            for start in starts:
+                at = start + 30_000
+                sha = "%s-%d" % (product, start)
+                periods.append((product, start, start + H, RATE, at, "USD/%s/hour" % ("ETH" if product == m.ETH else "BTC"), sha))
+                responses.append(response(sha, at, [start], server=self.OFFSET, product=product))
+        out = d.diagnose(periods, responses)
+        counts = {p: out["per_product"][p]["validator_publication_counts"]["discrepancy"] for p in m.PRODUCTS}
+        self.assertEqual(counts, {m.ETH: 1, m.BTC: 2})
+        self.assertEqual({p: out["per_product"][p]["publication"]["not_causal_count"] for p in m.PRODUCTS}, {m.ETH: 1, m.BTC: 2})
+        self.assertTrue(out["consistent_with_validator"])
+
+
 class RejectedCapTests(unittest.TestCase):
     def test_at_most_twenty_receipt_times_per_rejected_group_but_every_one_is_counted(self):
         responses = [response("r%02d" % i, A0 + i * 60_000, [A0], server="2026-10-11T19:00:00+00:00") for i in range(25)]
