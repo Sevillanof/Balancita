@@ -1,0 +1,230 @@
+{
+  "halted_funding_diverged": {
+    "clock": null,
+    "evidence_class": "not_forward_evidence",
+    "funding": {
+      "disputed_trades": [],
+      "divergence_evidence": 1,
+      "incomplete_trades": [],
+      "pnl_verified": false,
+      "quarantined_periods": [],
+      "reasons": [
+        "book_and_portfolio_diverge",
+        "divergence_evidence_recorded"
+      ],
+      "source": "observed"
+    },
+    "halt_reason": "IntegrationError('funding_book_diverged: the funding book and the portfolio disagree')",
+    "liveness": "final",
+    "mode": "integration",
+    "observed_now_ms": 1763256600000,
+    "open_positions": 1,
+    "orderly_stop": null,
+    "pending_orders": 0,
+    "phase": "HALTED",
+    "reasons": [],
+    "reported_phase": "HALTED",
+    "resources": null,
+    "schema": "balancita-paper-session-status.v1",
+    "steps": 9,
+    "thresholds": {
+      "heartbeat_max_age_ms": 5000,
+      "status": "hypothesis"
+    }
+  },
+  "live_alive_threshold_approved": {
+    "clock": null,
+    "evidence_class": "not_forward_evidence",
+    "funding": {
+      "disputed_trades": null,
+      "divergence_evidence": null,
+      "incomplete_trades": null,
+      "pnl_verified": false,
+      "quarantined_periods": null,
+      "reasons": [
+        "funding_report_missing"
+      ],
+      "source": "unknown"
+    },
+    "halt_reason": null,
+    "liveness": "alive",
+    "mode": "integration",
+    "observed_now_ms": 1763251800000,
+    "open_positions": 0,
+    "orderly_stop": null,
+    "pending_orders": 0,
+    "phase": "LIVE",
+    "reasons": [],
+    "reported_phase": "LIVE",
+    "resources": null,
+    "schema": "balancita-paper-session-status.v1",
+    "steps": 2,
+    "thresholds": {
+      "heartbeat_max_age_ms": 5000,
+      "status": "approved"
+    }
+  },
+  "live_heartbeat_stale": {
+    "clock": null,
+    "evidence_class": "not_forward_evidence",
+    "funding": {
+      "disputed_trades": null,
+      "divergence_evidence": null,
+      "incomplete_trades": null,
+      "pnl_verified": false,
+      "quarantined_periods": null,
+      "reasons": [
+        "funding_report_missing"
+      ],
+      "source": "unknown"
+    },
+    "halt_reason": null,
+    "liveness": "stale",
+    "mode": "integration",
+    "observed_now_ms": 1763251800000,
+    "open_positions": 0,
+    "orderly_stop": null,
+    "pending_orders": 0,
+    "phase": "unverified",
+    "reasons": [
+      "heartbeat_stale"
+    ],
+    "reported_phase": "LIVE",
+    "resources": null,
+    "schema": "balancita-paper-session-status.v1",
+    "steps": 2,
+    "thresholds": {
+      "heartbeat_max_age_ms": 5000,
+      "status": "hypothesis"
+    }
+  },
+  "live_threshold_hypothesis": {
+    "clock": null,
+    "evidence_class": "not_forward_evidence",
+    "funding": {
+      "disputed_trades": null,
+      "divergence_evidence": null,
+      "incomplete_trades": null,
+      "pnl_verified": false,
+      "quarantined_periods": null,
+      "reasons": [
+        "funding_report_missing"
+      ],
+      "source": "unknown"
+    },
+    "halt_reason": null,
+    "liveness": "unknown",
+    "mode": "integration",
+    "observed_now_ms": 1763251800000,
+    "open_positions": 0,
+    "orderly_stop": null,
+    "pending_orders": 0,
+    "phase": "LIVE",
+    "reasons": [
+      "liveness_threshold_not_approved"
+    ],
+    "reported_phase": "LIVE",
+    "resources": null,
+    "schema": "balancita-paper-session-status.v1",
+    "steps": 2,
+    "thresholds": {
+      "heartbeat_max_age_ms": 5000,
+      "status": "hypothesis"
+    }
+  },
+  "stopped_orderly": {
+    "clock": null,
+    "evidence_class": "not_forward_evidence",
+    "funding": {
+      "disputed_trades": null,
+      "divergence_evidence": null,
+      "incomplete_trades": null,
+      "pnl_verified": false,
+      "quarantined_periods": null,
+      "reasons": [
+        "funding_report_missing"
+      ],
+      "source": "unknown"
+    },
+    "halt_reason": null,
+    "liveness": "final",
+    "mode": "integration",
+    "observed_now_ms": 1763335800000,
+    "open_positions": 1,
+    "orderly_stop": {
+      "cancelled": [],
+      "declared_ms": 1763335800000,
+      "expired": []
+    },
+    "pending_orders": 0,
+    "phase": "STOPPED",
+    "reasons": [],
+    "reported_phase": "STOPPED",
+    "resources": null,
+    "schema": "balancita-paper-session-status.v1",
+    "steps": 141,
+    "thresholds": {
+      "heartbeat_max_age_ms": 5000,
+      "status": "hypothesis"
+    }
+  },
+  "unavailable": {
+    "clock": null,
+    "evidence_class": "not_forward_evidence",
+    "funding": {
+      "disputed_trades": null,
+      "divergence_evidence": null,
+      "incomplete_trades": null,
+      "pnl_verified": false,
+      "quarantined_periods": null,
+      "reasons": [
+        "funding_report_missing"
+      ],
+      "source": "unknown"
+    },
+    "halt_reason": null,
+    "liveness": "unknown",
+    "mode": "integration",
+    "orderly_stop": null,
+    "phase": "unavailable",
+    "reasons": [
+      "heartbeat_missing"
+    ],
+    "resources": null,
+    "schema": "balancita-paper-session-status.v1"
+  },
+  "warming_up": {
+    "clock": null,
+    "evidence_class": "not_forward_evidence",
+    "funding": {
+      "disputed_trades": null,
+      "divergence_evidence": null,
+      "incomplete_trades": null,
+      "pnl_verified": false,
+      "quarantined_periods": null,
+      "reasons": [
+        "funding_report_missing"
+      ],
+      "source": "unknown"
+    },
+    "halt_reason": null,
+    "liveness": "unknown",
+    "mode": "integration",
+    "observed_now_ms": 1763251200000,
+    "open_positions": 0,
+    "orderly_stop": null,
+    "pending_orders": 0,
+    "phase": "WARMING_UP",
+    "reasons": [
+      "liveness_threshold_not_approved"
+    ],
+    "reported_phase": "WARMUP",
+    "resources": null,
+    "schema": "balancita-paper-session-status.v1",
+    "steps": 0,
+    "thresholds": {
+      "heartbeat_max_age_ms": 5000,
+      "status": "hypothesis"
+    }
+  }
+}

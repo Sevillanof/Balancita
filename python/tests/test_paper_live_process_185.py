@@ -14,6 +14,7 @@ import unittest
 
 from balancita_engine import paper_live_integration as LI
 from balancita_engine import paper_live_process as LP
+from balancita_engine import paper_live_publish as PUB
 from balancita_engine import replay_specs as RS
 from balancita_engine import signal_continuity as SC
 from live_world import LOAD_START, MIN, World
@@ -88,6 +89,14 @@ class Base(unittest.TestCase):
 
 
 class TestConfiguration(unittest.TestCase):
+    def test_the_capital_label_follows_the_portfolio_the_runner_really_uses(self):
+        portfolio = LP.runner_config_of(LP.validate_config(config_dict())).portfolio
+        self.assertEqual(LP.CAPITAL_POLICY, LP.capital_policy_label(portfolio))
+        self.assertEqual(LP.CAPITAL_POLICY, "shared-portfolio-1000-usd-risk-1pct-experimental")
+        self.assertNotIn("100-usd", LP.CAPITAL_POLICY.replace("1000-usd", ""))
+        other = type(portfolio)(initial_equity_usd="2500", risk_per_trade="0.005")
+        self.assertEqual(LP.capital_policy_label(other), "shared-portfolio-2500-usd-risk-0.5pct-experimental")
+
     def test_a_valid_configuration_has_a_stable_digest_and_the_defaults_are_filled(self):
         a, b = LP.validate_config(config_dict()), LP.validate_config(dict(reversed(list(config_dict().items()))))
         self.assertEqual(a["digest"], b["digest"])
@@ -155,6 +164,49 @@ class TestPreflightAndStart(Base):
             other.start()
         self.assertEqual(caught.exception.reason, "preflight_failed")
         self.assertIn("configuration_matches_directory", str(caught.exception))
+
+    def test_a_configuration_with_the_old_capital_label_is_refused_and_says_what_the_label_is(self):
+        """BAL-REV-185-CAP-02: the message names the real label (not 'the sizing is the ADR's') and an older label is refused, not migrated."""
+        for label in ("adr-0001-fixed-100-usd", "kelly", ""):
+            with self.subTest(label=label), self.assertRaises(LP.ProcessError) as caught:
+                LP.validate_config(config_dict(capital_policy=label))
+            self.assertEqual(caught.exception.reason, "config_invalid")
+            self.assertIn(LP.CAPITAL_POLICY, str(caught.exception))
+            self.assertIn("refused, not migrated", str(caught.exception))
+            self.assertNotIn("the sizing is the ADR's", str(caught.exception))
+
+    def test_a_directory_made_with_the_old_capital_label_is_refused_untouched_with_or_without_restart(self):
+        """The label is part of the digest, so a directory created before the fix has another digest: nothing resumes it, nothing migrates,
+        repairs or deletes it, and every byte of its evidence stays as it was."""
+        first = self.supervisor(Clock())
+        first.start()
+        first.abandon()
+        stored = LP._read_json(os.path.join(self.directory, LP.CONFIG_FILE))
+        old = {k: v for k, v in stored.items() if k != "digest"}
+        old["capital_policy"] = "adr-0001-fixed-100-usd"
+        old["digest"] = LP.stable_hash({k: v for k, v in old.items() if k != "authorization_ref"})[:20]
+        self.assertNotEqual(old["digest"], stored["digest"])
+        LP._write_json(os.path.join(self.directory, LP.CONFIG_FILE), old)
+
+        def snapshot():
+            seen = {}
+            for base, _, names in os.walk(self.directory):
+                for name in names:
+                    path = os.path.join(base, name)
+                    with open(path, "rb") as handle:
+                        seen[os.path.relpath(path, self.directory)] = hashlib.sha256(handle.read()).hexdigest()
+            return seen
+
+        before = snapshot()
+        for restart in (False, True):
+            with self.subTest(restart=restart):
+                again = self.supervisor(Clock(5))
+                with self.assertRaises(LP.ProcessError) as caught:
+                    again.start(restart=restart)
+                self.assertEqual(caught.exception.reason, "preflight_failed")
+                self.assertIn("configuration_matches_directory", str(caught.exception))
+                self.assertIsNone(again.session)
+                self.assertEqual(snapshot(), before)
 
     def test_a_directory_with_a_live_writer_is_refused(self):
         first = self.supervisor(Clock())
@@ -565,6 +617,7 @@ class TestObservedLifecycle(unittest.TestCase):
                 with self.assertRaises(LP.ProcessError) as caught:
                     again.start()
                 self.assertEqual(caught.exception.reason, "restart_requires_operator")
+                self.assertIn("funding_book_diverged", str(caught.exception))        # D-830-01: the refusal says WHY, not just "restart explicitly"
                 self.assertIsNone(again.session)
 
     def test_the_operator_restart_is_on_record_and_a_later_crash_restarts_without_asking(self):
@@ -579,6 +632,33 @@ class TestObservedLifecycle(unittest.TestCase):
         self.assertEqual(report["ended_as"], LP.STOPPED_PHASE)
         self.assertGreaterEqual(report["funding"]["divergence_evidence"], 1)       # the evidence is still there
         self.assertFalse(report["funding"]["pnl_verified"])
+
+    def test_the_published_funding_of_a_diverged_session_says_observed_and_not_verified(self):
+        """#187: the block restates the session's own funding report; a divergence is never published as a verified result."""
+        supervisor, _ = self.halted_run()
+        block = PUB.session_status(self.read(LP.HEARTBEAT_FILE), self.read(LP.HALT_FILE), self.read(LP.REPORT_FILE),
+                                   funding=supervisor.session.funding_report())
+        self.assertEqual((block["phase"], block["funding"]["source"], block["funding"]["pnl_verified"]), ("HALTED", "observed", False))
+        self.assertIn("divergence_evidence_recorded", block["funding"]["reasons"])
+        from_file = PUB.session_status(self.read(LP.HEARTBEAT_FILE), self.read(LP.HALT_FILE), self.read(LP.REPORT_FILE))
+        self.assertEqual(from_file["funding"]["reasons"], block["funding"]["reasons"])        # the copy in report.json says the same
+
+    def test_the_old_report_of_a_halted_run_does_not_make_a_restarted_session_look_ended(self):
+        """D-223-01: ``report.json`` outlives an operator restart; while the new run works the published block follows the heartbeat."""
+        _, clock = self.halted_run()
+        old_report = self.read(LP.REPORT_FILE)
+        restarted = self.supervisor(clock)
+        restarted.start(restart=True)
+        beat = self.read(LP.HEARTBEAT_FILE)
+        self.assertEqual(self.read(LP.REPORT_FILE), old_report)                      # nothing rewrote it
+        self.assertGreaterEqual(beat["observed_now_ms"], old_report["ended_at_observed_ms"])        # the first beat of the new run ties with the halt
+        block = PUB.session_status(beat, None, old_report)
+        self.assertEqual(block["phase"], PUB.PUBLISHED_PHASE[beat["phase"]])
+        self.assertNotIn(block["phase"], PUB.FINAL_PHASES)
+        self.assertNotIn("report_ended_after_heartbeat", block["reasons"])
+        self.assertIsNone(block["halt_reason"])
+        self.assertIsNone(block["orderly_stop"])
+        restarted.run(max_steps=2)
 
     def test_the_same_divergence_after_an_acknowledged_restart_is_a_new_occurrence_the_operator_must_see(self):
         """D-205-06 / BAL-COORD-205-02: the audit dedupes by content, so the SAME divergence that comes back after an acknowledged

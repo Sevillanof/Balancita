@@ -13,7 +13,9 @@ What this module refuses, on purpose, while the real-session GATE is NO-GO (deci
   ``source_id: synthetic`` AND the SQLite file must carry the fixture's own marker table (``balancita_synthetic_fixture``). A real
   capture has neither, so it is refused whatever the configuration says; this guards against a mistake, not against someone who
   forges the marker on purpose. A session with real data needs its own written authorization and a reviewed code change;
-* the wall clock (``wall_clock_not_authorized``): the command line runs on a simulated clock only;
+* the wall clock (``wall_clock_not_authorized``): the command line runs on a simulated clock only. The code for the wall clock exists
+  (``wall_clock_runtime``, tested with a fake clock) but ``WALL_CLOCK_GATE`` is a constant of the code and is False: turning it on is a
+  reviewed commit that names a written authorization (BAL-DECISION), never a flag or a configuration key;
 * a restart on its own of a directory that already holds a started session (``restart_requires_operator``, BAL-DECISION-185-01): after
   ANY run that did not end in order (HALTED, REFUSED, a kill, a power cut, a full disk) the operator decides, with ``--restart``, and
   nothing is opened, recovered or stepped before that. The gate does not read marks: ``halt.json``, the heartbeat and the audit are
@@ -21,6 +23,12 @@ What this module refuses, on purpose, while the real-session GATE is NO-GO (deci
   licence. Identity, lock and coherent recovery are checked as always once the operator asked. BAL-DECISION-184-01: a funding
   divergence is never taken up again by this module on its own;
 * a restart after an orderly stop (``session_stopped``): a stopped session is over.
+
+Resource limits (``resource_limits`` in the configuration, optional and OFF unless the configuration names them): the process measures the
+size of the session directory and its own resident memory every ``check_every_steps`` steps, writes the readings and every warning
+to the heartbeat, and when a ``*_stop_bytes`` limit is reached it stops IN ORDER (the same terminal stop as a SIGTERM, with
+``stop_reason`` in the report and exit status 4). No value is approved or defaulted: Fran has not decided any (the numbers in the
+Issues are proposals), so a configuration without ``resource_limits`` behaves exactly as before.
 
 Open positions when the process stops are not touched (D-186-1): while it is down nobody evaluates their stops or targets. The
 report lists them so the operator sees what was left open. No persistent process is started by this module; ``run`` ends when
@@ -30,12 +38,16 @@ it is told to stop, when it has done ``max_steps`` or when the decision window i
 import argparse
 import json
 import os
+import re
 import shutil
 import signal
+import stat
 import sys
 import time
+from decimal import Decimal
 
 from . import paper_live_integration as LI
+from . import paper_live_publish as PUB
 from . import replay_driver as RP
 from . import replay_specs as RS
 from .futures_products import is_product_id
@@ -52,21 +64,37 @@ CONFIG_SCHEMA = "balancita-paper-live-process-config.v1"
 HEARTBEAT_SCHEMA = "balancita-paper-live-heartbeat.v1"
 REPORT_SCHEMA = "balancita-paper-live-process-report.v1"
 CONFIG_FILE, HEARTBEAT_FILE, REPORT_FILE = "process-config.json", "heartbeat.json", "report.json"
+BLOCKS_FILE = "session-blocks.json"             # derived, read by the server (#187): never an input of the session
 HALT_FILE, RESTARTS_FILE = "halt.json", "operator-restarts.json"        # durable, independent of the heartbeat
 MARKER_TABLE, MARKER = "balancita_synthetic_fixture", "balancita-synthetic-fixture.v1"
 POST_WINDOW_MS = 6 * 3_600_000                  # the loop ends this long after the decision window (positions may still close)
-CAPITAL_POLICY = "adr-0001-fixed-100-usd"        # a label: the sizing is the portfolio policy's, this module has no money rule
+
+
+def capital_policy_label(policy):
+    """What the session really trades with, read from the portfolio policy the runner is built with (D-185-CAP-01): the shared experimental
+    portfolio, sized by risk. It is NOT the ADR's fixed 100 USD per trade, and nothing in this module sizes a trade."""
+    equity = format(Decimal(policy.initial_equity_usd).normalize(), "f")
+    risk_pct = format((Decimal(policy.risk_per_trade) * 100).normalize(), "f")
+    return "shared-portfolio-{}-usd-risk-{}pct-experimental".format(equity, risk_pct)
+
+
+CAPITAL_POLICY = capital_policy_label(PortfolioPolicy())        # a label: the sizing is the portfolio policy's, this module has no money rule
 SYNTHETIC_SOURCE = "synthetic"
+WALL_CLOCK_GATE = False                  # OFF. Only a reviewed change of this constant, with a BAL-DECISION naming it, opens the wall clock
 FRESH_MS = 600_000                               # the newest warm-up candle may be this far from the first decision
 
 INIT, WARMUP, LIVE, STOPPING, STOPPED_PHASE, HALTED, REFUSED_PHASE = "INIT", "WARMUP", "LIVE", "STOPPING", "STOPPED", "HALTED", "REFUSED"
 FINAL_PHASES = (STOPPED_PHASE, HALTED, REFUSED_PHASE)
-EXIT_OK, EXIT_REFUSED, EXIT_HALTED = 0, 2, 3
+EXIT_OK, EXIT_REFUSED, EXIT_HALTED, EXIT_RESOURCE_STOP = 0, 2, 3, 4
 
 DEFAULTS = {"source_id": SYNTHETIC_SOURCE, "decide_until_ms": None, "max_quote_gap_ms": 15_000, "block_stale_entries": True,
             "funding_mode": LI.SYNTHETIC_FUNDING, "on_funding_divergence": "halt", "ingest_kw": {}, "evaluator_kw": {},
             "strategies": "frozen", "capital_policy": CAPITAL_POLICY, "step_interval_ms": 1_000, "min_free_bytes": 1 << 30, "warmup_minutes": None}
 REQUIRED = ("schema", "products", "decide_from_ms")
+OPTIONAL = ("resource_limits", "clock_guard", "authorization_ref", "publish_blocks")                  # absent from DEFAULTS on purpose: a configuration without it keeps its digest
+RESOURCE_KEYS = ("disk_warn_bytes", "disk_stop_bytes", "memory_warn_bytes", "memory_stop_bytes")
+DEFAULT_CHECK_EVERY_STEPS = 30
+AUTHORIZATION_REF = re.compile(r"^BAL-DECISION-[0-9]{1,4}-[0-9]{1,3}$")
 
 
 class ProcessError(Exception):
@@ -90,7 +118,7 @@ def load_config(path):
 def validate_config(raw):
     if not isinstance(raw, dict):
         raise ProcessError("config_invalid", "not an object")
-    unknown = sorted(set(raw) - set(DEFAULTS) - set(REQUIRED))
+    unknown = sorted(set(raw) - set(DEFAULTS) - set(REQUIRED) - set(OPTIONAL))
     if unknown:
         raise ProcessError("config_invalid", "unknown keys: " + ", ".join(unknown))
     missing = [k for k in REQUIRED if k not in raw]
@@ -124,8 +152,50 @@ def validate_config(raw):
     if config["strategies"] != "frozen":
         raise ProcessError("config_invalid", "strategies: only the frozen set exists")
     if config["capital_policy"] != CAPITAL_POLICY:
-        raise ProcessError("config_invalid", "capital_policy: the sizing is the ADR's, a session cannot change it")
-    return dict(config, digest=stable_hash({k: v for k, v in config.items() if k != "digest"})[:20])
+        raise ProcessError("config_invalid", "capital_policy: must be {!r}, the label of the portfolio policy the runner uses; a session cannot change it "
+                                             "(an older label, such as 'adr-0001-fixed-100-usd', is refused, not migrated)".format(CAPITAL_POLICY))
+    if "clock_guard" in config:
+        config["clock_guard"] = _validate_clock_guard(config["clock_guard"])
+    ref = config.get("authorization_ref")
+    if ref is not None and not (isinstance(ref, str) and AUTHORIZATION_REF.match(ref)):
+        raise ProcessError("config_invalid", "authorization_ref: expected BAL-DECISION-<issue>-<n>")
+    if "resource_limits" in config:
+        config["resource_limits"] = _validate_resource_limits(config["resource_limits"])
+    if "publish_blocks" in config and config["publish_blocks"] is not True:
+        raise ProcessError("config_invalid", "publish_blocks: only true; leave it out to publish nothing")
+    # ``authorization_ref`` is an audit trail only: it opens nothing (the gate is a constant of the code) and is not part of the identity
+    return dict(config, digest=stable_hash({k: v for k, v in config.items() if k not in ("digest", "authorization_ref")})[:20])
+
+
+def _validate_clock_guard(raw):
+    """``{"max_forward_jump_ms": n}``: the one value is named by the operator (nothing is approved or defaulted)."""
+    if not isinstance(raw, dict) or set(raw) != {"max_forward_jump_ms"}:
+        raise ProcessError("config_invalid", "clock_guard: exactly max_forward_jump_ms")
+    value = raw["max_forward_jump_ms"]
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ProcessError("config_invalid", "clock_guard.max_forward_jump_ms")
+    return {"max_forward_jump_ms": value}
+
+
+def _validate_resource_limits(raw):
+    """Named limits only, positive integers, a warning below its stop, at least one limit; nothing is defaulted but the cadence."""
+    if not isinstance(raw, dict):
+        raise ProcessError("config_invalid", "resource_limits: not an object")
+    unknown = sorted(set(raw) - set(RESOURCE_KEYS) - {"check_every_steps"})
+    if unknown:
+        raise ProcessError("config_invalid", "resource_limits: unknown keys: " + ", ".join(unknown))
+    limits = {k: raw[k] for k in RESOURCE_KEYS if k in raw}
+    if not limits:
+        raise ProcessError("config_invalid", "resource_limits: no limit named")
+    every = raw.get("check_every_steps", DEFAULT_CHECK_EVERY_STEPS)
+    for key, value in list(limits.items()) + [("check_every_steps", every)]:
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+            raise ProcessError("config_invalid", "resource_limits." + key)
+    for resource in ("disk", "memory"):
+        warn, stop = limits.get(resource + "_warn_bytes"), limits.get(resource + "_stop_bytes")
+        if warn is not None and stop is not None and warn >= stop:
+            raise ProcessError("config_invalid", "resource_limits: {}_warn_bytes must be below {}_stop_bytes".format(resource, resource))
+    return dict(limits, check_every_steps=every)
 
 
 def runner_config_of(config):
@@ -149,6 +219,8 @@ def preflight(config, directory, source_path, *, strategies=None):
     def check(name, ok, detail=""):
         checks.append({"name": name, "ok": bool(ok), "detail": detail})
 
+    check("causal_ingest", config["source_id"] == SYNTHETIC_SOURCE or config["ingest_kw"].get("causal_until_clock") is True,
+          "a source that is not the synthetic fixture needs ingest_kw.causal_until_clock (no row is read before the clock reaches it; D-185-R4-01)")
     check("real_session_gate", config["source_id"] == SYNTHETIC_SOURCE,
           "source_id {!r}: real data needs a written authorization (the GATE is NO-GO)".format(config["source_id"]))
     stored_path = os.path.join(directory, CONFIG_FILE)
@@ -221,9 +293,18 @@ class Supervisor(object):
     """Starts, runs and ends one session. ``clock()`` returns the observation time in ms; ``sleep(seconds)`` waits between steps;
     ``tick(now)`` is called before each step (a test releases the invented market there)."""
 
-    def __init__(self, config, directory, source_path, *, clock, sleep=lambda seconds: None, tick=lambda now: None, strategies=None):
+    def __init__(self, config, directory, source_path, *, clock, sleep=lambda seconds: None, tick=lambda now: None, strategies=None,
+                 resources=None, wall_time=None):
         self.config, self.directory, self.source_path = config, directory, source_path
         self.clock, self.sleep, self.tick = clock, sleep, tick
+        self.resources = resources or read_resources           # ``resources(directory) -> {"disk_bytes", "memory_bytes"}``; injected in tests
+        self.resource_events, self.last_resources, self.stop_reason = [], None, None
+        self._warned = set()
+        self.wall_time = wall_time or (lambda: int(time.time() * 1000))     # only read when ``clock_guard`` is configured
+        self.clock_events, self._last_now = [], None
+        self.run_id = os.urandom(8).hex()                                  # one per process start: a pid repeats inside a container (D-231-04)
+        self.publication = {"attempts": 0, "failures": 0, "last_error": None, "last_ok_observed_now_ms": None}     # only reported when ``publish_blocks`` is on
+        self.source_identity = None
         self.strategies = strategies
         self.session = None
         self.stop_requested = False
@@ -240,6 +321,7 @@ class Supervisor(object):
             failed = [c for c in report["checks"] if not c["ok"]]
             reason = "real_session_not_authorized" if any(c["name"] in ("real_session_gate", "synthetic_marker") for c in failed) else "preflight_failed"
             raise ProcessError(reason, "; ".join("{}: {}".format(c["name"], c["detail"]) for c in failed))
+        self.source_identity = file_identity(self.source_path)      # taken once the pre-flight passed, before the session opens the file
         strategies = self.strategies or RS.load_frozen()[0]
         kwargs = session_kwargs(self.config)
         existing = os.path.exists(os.path.join(self.directory, LI.SESSION_FILE))
@@ -316,6 +398,68 @@ class Supervisor(object):
         """Only sets a flag (safe in a signal handler): the loop stops after the step it is in."""
         self.stop_requested, self.stop_signal = True, signum
 
+    # ---- resources -------------------------------------------------------------------------------------------
+    def _check_resources(self, now, steps):
+        """Every ``check_every_steps`` steps (and on the first): measure, record, warn once per level and, at a stop limit, ask for the
+        same orderly stop as a SIGTERM. A measurement that fails is a reason to stop in order too: a limit that cannot be checked is
+        not a limit that holds."""
+        limits = self.config.get("resource_limits")
+        if not limits or (steps != 1 and steps % limits["check_every_steps"]):
+            return
+        try:
+            reading = self.resources(self.directory)
+        except (OSError, ValueError) as error:
+            self._resource_event(now, "stop", "measurement", None, None, "resources could not be measured: " + repr(error))
+            return
+        self.last_resources = dict(reading, observed_now_ms=now)
+        for resource in ("disk", "memory"):
+            value = reading.get(resource + "_bytes")
+            stop, warn = limits.get(resource + "_stop_bytes"), limits.get(resource + "_warn_bytes")
+            if value is None:
+                continue
+            if stop is not None and value >= stop:
+                self._resource_event(now, "stop", resource, value, stop, "{} {} bytes reached the stop limit {}".format(resource, value, stop))
+            elif warn is not None and value >= warn and resource not in self._warned:
+                self._warned.add(resource)
+                self._resource_event(now, "warning", resource, value, warn, "{} {} bytes reached the warning limit {}".format(resource, value, warn))
+
+    def _check_source(self):
+        """A live capture file is written all the time, so its size and mtime always change: its identity is the FILE (device and inode).
+        If the path now names another file, or none, the session is reading something it did not start on: halt (reason or None)."""
+        try:
+            now_identity = file_identity(self.source_path)
+        except OSError as error:
+            return "source_unreadable: " + repr(error)
+        if now_identity != self.source_identity:
+            return "source_replaced: the path no longer names the file the session started on (device/inode {} -> {})".format(
+                self.source_identity, now_identity)
+        return None
+
+    def _check_clock(self, now):
+        """Time must not run backwards and must not jump past the named bound between two steps. Returns the reason, or None. A clock
+        anomaly is an insufficiency of continuity (rule 10D), not a Kraken outage: the caller HALTS durably (a restart needs the operator,
+        BAL-DECISION-184-01 / 185-01) and nothing is reordered or corrected; positions, stops and risk are not touched."""
+        guard, last, self._last_now = self.config.get("clock_guard"), self._last_now, now
+        if not guard or last is None:
+            return None
+        if now < last:
+            reason, detail = "clock_regression", "the clock went back {} ms".format(last - now)
+        elif now - last > guard["max_forward_jump_ms"]:
+            reason, detail = "clock_jump", "the clock jumped {} ms (bound {})".format(now - last, guard["max_forward_jump_ms"])
+        else:
+            return None
+        self.clock_events.append({"kind": reason, "previous_now_ms": last, "observed_now_ms": now, "detail": detail})
+        return reason + ": " + detail
+
+    def _resource_event(self, now, kind, resource, value, limit, detail):
+        self.resource_events.append({"kind": kind, "resource": resource, "value_bytes": value, "limit_bytes": limit,
+                                     "observed_now_ms": now, "detail": detail})
+        if kind == "stop":
+            # The limit is always on record (and the exit status is 4) even if a SIGTERM got there first in the same step.
+            self.stop_reason = self.stop_reason or "resource_limit:" + resource
+            if not self.stop_requested:
+                self.request_stop(None)
+
     # ---- run -------------------------------------------------------------------------------------------------
     def run(self, max_steps=None):
         """Steps until told to stop, until ``max_steps`` or until the decision window is over. Returns the exit code."""
@@ -324,19 +468,27 @@ class Supervisor(object):
             now = self.clock()
             if self.config["decide_until_ms"] is not None and now >= self.config["decide_until_ms"] + POST_WINDOW_MS:
                 break
+            anomaly = self._check_clock(now)         # before the step: a bad instant is never stepped on
+            if anomaly:
+                return self._halt(now, anomaly)
             self.tick(now)
+            anomaly = self._check_source()           # as late as possible: right before the step that reads the file
+            if anomaly:
+                return self._halt(now, anomaly)
             try:
                 state = self.session.step(now)
             except Exception as error:               # noqa: BLE001
                 return self._halt(now, repr(error))
             steps += 1
             self.phase = phase_of(self.session)
+            self._check_resources(now, steps)
             try:
                 self._beat(now, state)
             except OSError as error:                 # the supervisor cannot even say it is alive: that is a halt too
                 return self._halt(now, "heartbeat: " + repr(error))
             self.sleep(self.config["step_interval_ms"] / 1000.0)
-        return self.end()
+        code = self.end()
+        return EXIT_RESOURCE_STOP if code == EXIT_OK and self.stop_reason else code
 
     def end(self):
         """Orderly end (decision D-186-1): pending orders are cancelled with their own reason, open positions are left as they are,
@@ -390,11 +542,44 @@ class Supervisor(object):
     # ---- files -----------------------------------------------------------------------------------------------
     def _beat(self, now, state):
         session = self.session
-        _write_json(os.path.join(self.directory, HEARTBEAT_FILE), {
+        beat = {
             "schema": HEARTBEAT_SCHEMA, "session_id": session.identity["session_id"], "config_digest": self.config["digest"],
             "phase": self.phase, "pid": os.getpid(), "observed_now_ms": now, "steps": session.stats["steps"],
             "ingest_state": state, "runner_status": session.runner.status, "halted": session.halted,
-            "pending_orders": len(session.runner.executor.pending), "open_positions": session.runner.portfolio.snapshot()["open_positions"]})
+            "pending_orders": len(session.runner.executor.pending), "open_positions": session.runner.portfolio.snapshot()["open_positions"]}
+        if self.config.get("clock_guard"):
+            beat["wall_ms"] = self.wall_time()                  # lets a supervisor tell a stuck process from a simulated clock
+        if self.config.get("resource_limits"):
+            beat["resources"] = {"last": self.last_resources, "events": self.resource_events}
+        if self.config.get("publish_blocks"):
+            beat["run_id"] = self.run_id
+            self._publish(beat, state)                           # after the step's journal and checkpoint, before the heartbeat that reports it
+            beat["publication"] = dict(self.publication)
+        _write_json(os.path.join(self.directory, HEARTBEAT_FILE), beat)
+
+    def _write_blocks(self, path, body):
+        _write_json(path, body)                                  # a seam: tests make the publication fail here
+
+    def _publish(self, beat, state):
+        """The derived blocks file (#187, option A): written atomically after the durable state and before the heartbeat, so ``publication``
+        in the heartbeat describes THIS attempt. A failure never stops the session and never touches the previous file: it is counted and
+        reported (``except Exception`` only, with the type and a short text without paths). The document carries the run (session, digest,
+        pid, run id) and no age: the reader measures it.
+
+        LIMITATION (measured on a synthetic session, #187-05): the whole document is rebuilt and rewritten at every step and its intervals grow
+        with the session. One synthetic run (test_the_cost_of_publishing_is_measured..., 143 publications): 840 intervals at the end, the file from about 2 kB to about 0.6 MB (it varies a little between runs) and 70-300 ms per publication on one machine. It is a measurement of that run, not a statement about long sessions. A window or a cap for them is a separate decision."""
+        self.publication["attempts"] += 1                        # the document carries this number: a reader can tell a stale one from the heartbeat's
+        try:
+            session = self.session
+            funding = session.funding_report() if self.config["funding_mode"] == LI.OBSERVED_FUNDING else None
+            document = PUB.session_blocks(session.runner, beat, _read_json(os.path.join(self.directory, HALT_FILE)),
+                                          _read_json(os.path.join(self.directory, REPORT_FILE)), source_state=state, funding=funding)
+            document["attempt"] = self.publication["attempts"]
+            self._write_blocks(os.path.join(self.directory, BLOCKS_FILE), document)
+            self.publication["last_ok_observed_now_ms"] = beat["observed_now_ms"]
+        except Exception as error:                               # noqa: BLE001 - a derived file must never end the session
+            self.publication["failures"] += 1
+            self.publication["last_error"] = _short_error(error, self.directory)
 
     def _finish(self, now, halted=None):
         session = self.session
@@ -407,12 +592,62 @@ class Supervisor(object):
                 "pending_at_end": len(session.runner.executor.pending),
                 "capital_policy": self.config["capital_policy"], "policy_status": "experimental", "evidence_class": "not_forward_evidence",
                 "stop_signal": self.stop_signal}
+        if self.config.get("clock_guard"):
+            body["clock"] = {"events": self.clock_events}
+        if self.config.get("resource_limits"):
+            body["resources"] = {"last": self.last_resources, "events": self.resource_events, "stop_reason": self.stop_reason}
         if self.config["funding_mode"] == LI.OBSERVED_FUNDING:
             body["funding"] = session.funding_report()
         _write_json(os.path.join(self.directory, REPORT_FILE), body)
         self._beat(now, None)
         self._close()
         return body
+
+
+def file_identity(path):
+    """``(device, inode)`` of a regular file (symlinks followed, as the reader does). Raises ``OSError`` for anything else."""
+    info = os.stat(path)
+    if not stat.S_ISREG(info.st_mode):
+        raise OSError("not a regular file: " + path)
+    return (info.st_dev, info.st_ino)
+
+
+def read_resources(directory):
+    """Bytes in the session directory (every file, the runner's journals included) and the resident memory of this process now (Linux:
+    ``/proc/self/statm``; elsewhere the peak, which only goes up and so stops sooner, never later)."""
+    disk = 0
+
+    def unreadable(error):                                   # os.walk would skip it and count 0 bytes: that is not a measurement
+        raise error
+    for root, _dirs, names in os.walk(directory, onerror=unreadable):
+        for name in names:
+            try:
+                disk += os.lstat(os.path.join(root, name)).st_size
+            except FileNotFoundError:                        # a temporary file replaced between the listing and the stat
+                continue
+    return {"disk_bytes": disk, "memory_bytes": _resident_bytes()}
+
+
+def _resident_bytes():
+    try:
+        with open("/proc/self/statm", encoding="ascii") as handle:
+            return int(handle.read().split()[1]) * os.sysconf("SC_PAGE_SIZE")
+    except (OSError, ValueError, IndexError):
+        import resource
+        peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        return peak if sys.platform == "darwin" else peak * 1024
+
+
+def _short_error(error, directory):
+    """The type and a short text of a publication failure, without absolute paths (the heartbeat is read by others)."""
+    text = errno_name(error) if isinstance(error, OSError) and error.errno else str(error)
+    text = re.sub(r"(/[^\s'\"]+)+", "<path>", text.replace(directory, "<dir>"))
+    return {"type": type(error).__name__, "text": text[:80]}
+
+
+def errno_name(error):
+    import errno
+    return errno.errorcode.get(error.errno, "errno")
 
 
 def _write_json(path, body):
@@ -433,9 +668,24 @@ def _read_json(path):
         return None
 
 
+# ---- wall clock (OFF) ----------------------------------------------------------------------------------------------
+def _wall_now_ms():
+    return time.time_ns() // 1_000_000
+
+
+def wall_clock_runtime(config, *, now_ms=None, sleeper=None):
+    """``(clock, sleep)`` for a session that follows the real clock. Nothing calls it while ``WALL_CLOCK_GATE`` is False. The real clock can
+    go back or jump (NTP, suspend): the supervisor already halts on a regression or on a jump past ``clock_guard.max_forward_jump_ms``
+    and writes the event, so a configuration without ``clock_guard`` is refused here instead of running unguarded. It adds no value: the
+    bound is whatever the configuration names (30 s is only a hypothesis in the Issues). The sleep is real and has no side effect on the clock."""
+    if not config.get("clock_guard"):
+        raise ProcessError("config_invalid", "the wall clock needs clock_guard (a regression or a jump must halt the session)")
+    return (now_ms or _wall_now_ms), (sleeper or time.sleep)
+
+
 # ---- command line ------------------------------------------------------------------------------------------------
 def main(argv=None, *, tick=lambda now: None):
-    """``preflight`` and ``run`` on the simulated clock. Exit status: 0 ok, 2 refused (no file was written), 3 halted."""
+    """``preflight`` and ``run`` on the simulated clock. Exit status: 0 ok, 2 refused (no file was written), 3 halted, 4 stopped in order by a resource limit."""
     parser = argparse.ArgumentParser(prog="paper_live_process", description="Offline paper session lifecycle (synthetic source only).")
     parser.add_argument("command", choices=("preflight", "run"))
     parser.add_argument("--config", required=True)
@@ -443,7 +693,7 @@ def main(argv=None, *, tick=lambda now: None):
     parser.add_argument("--source", required=True, help="SQLite file of the synthetic source")
     parser.add_argument("--clock-from-ms", type=int, help="start of the simulated clock")
     parser.add_argument("--clock-step-ms", type=int, default=60_000)
-    parser.add_argument("--wall-clock", action="store_true", help="refused while the real-session GATE is NO-GO")
+    parser.add_argument("--wall-clock", action="store_true", help="refused while WALL_CLOCK_GATE is False (the real-session GATE is NO-GO)")
     parser.add_argument("--max-steps", type=int)
     parser.add_argument("--step-sleep-s", type=float, default=0.0, help="real seconds between steps (to give a signal time to arrive)")
     parser.add_argument("--restart", action="store_true", help="take up a directory whose last run did not end in order (halt, refusal, kill, power cut)")
@@ -454,18 +704,26 @@ def main(argv=None, *, tick=lambda now: None):
             report = preflight(config, args.directory, args.source)
             print(json.dumps(report, sort_keys=True, indent=1))
             return EXIT_OK if report["ok"] else EXIT_REFUSED
-        if args.wall_clock:
+        if args.wall_clock and not WALL_CLOCK_GATE:
             raise ProcessError("wall_clock_not_authorized", "the command line runs on a simulated clock only (--clock-from-ms)")
-        if args.clock_from_ms is None:
-            raise ProcessError("config_invalid", "--clock-from-ms is required")
-        state = {"now": args.clock_from_ms}
+        if args.wall_clock:
+            if args.clock_from_ms is not None:
+                raise ProcessError("config_invalid", "--wall-clock and --clock-from-ms exclude each other")
+            clock, sleep = wall_clock_runtime(config)
+        else:
+            if args.clock_from_ms is None:
+                raise ProcessError("config_invalid", "--clock-from-ms is required")
+            state = {"now": args.clock_from_ms}
 
-        def sleep(_seconds):
-            if args.step_sleep_s:
-                time.sleep(args.step_sleep_s)
-            state["now"] += args.clock_step_ms
+            def sleep(_seconds):
+                if args.step_sleep_s:
+                    time.sleep(args.step_sleep_s)
+                state["now"] += args.clock_step_ms
 
-        supervisor = Supervisor(config, args.directory, args.source, clock=lambda: state["now"], sleep=sleep, tick=tick)
+            def clock():
+                return state["now"]
+
+        supervisor = Supervisor(config, args.directory, args.source, clock=clock, sleep=sleep, tick=tick)
         supervisor.start(restart=args.restart)
         signal.signal(signal.SIGTERM, lambda signum, _frame: supervisor.request_stop(signum))
         signal.signal(signal.SIGINT, lambda signum, _frame: supervisor.request_stop(signum))

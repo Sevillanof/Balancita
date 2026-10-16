@@ -1,0 +1,254 @@
+{
+  "intervals": {
+    "clock_ms": 1791030005000,
+    "contract": {
+      "complete": true,
+      "stages_missing": [],
+      "stages_present": [
+        "signal",
+        "decision",
+        "order",
+        "trade"
+      ]
+    },
+    "evidence_class": "not_forward_evidence",
+    "execution_class": "observed_quotes",
+    "from_ms": null,
+    "intervals": [
+      {
+        "at_ms": 1791030002000,
+        "decided_ms": 1791030002000,
+        "key": "dcd4ab505718dca6568fe4b0",
+        "product_id": "PF_XBTUSD",
+        "side": "LONG",
+        "stages": {
+          "decision": {
+            "decided_ms": 1791030002000,
+            "state": "recorded"
+          },
+          "order": {
+            "entry_ms": 1791030005000,
+            "reasons": [],
+            "state": "opened"
+          },
+          "signal": {
+            "action": "BUY",
+            "entry_hash": "c3e31d0f22143b7319f0f269ee8bd3214b8db51ee2b7e187c25676adfc70fad9",
+            "origin": "original",
+            "seq": 3,
+            "signal_key": "dcd4ab505718dca6568fe4b0",
+            "state": "recorded"
+          },
+          "trade": {
+            "exit_reason": null,
+            "state": "open",
+            "trade_id": null
+          }
+        },
+        "strategy_id": "scripted-a"
+      },
+      {
+        "at_ms": 1791030003000,
+        "decided_ms": null,
+        "key": "439f099e9159540c19f0412c",
+        "product_id": "PF_ETHUSD",
+        "side": "none",
+        "stages": {
+          "decision": {
+            "decided_ms": null,
+            "state": "none"
+          },
+          "order": {
+            "entry_ms": null,
+            "reasons": [],
+            "state": "none"
+          },
+          "signal": {
+            "action": "WAIT",
+            "entry_hash": "644aec02c22d65fc0ddbd1a1cd388f3740e6de969645264700f84aed9fce6b92",
+            "origin": "original",
+            "seq": 4,
+            "signal_key": "439f099e9159540c19f0412c",
+            "state": "recorded"
+          },
+          "trade": {
+            "exit_reason": null,
+            "state": "none",
+            "trade_id": null
+          }
+        },
+        "strategy_id": "scripted-a"
+      }
+    ],
+    "mode": "integration",
+    "product": null,
+    "schema": "balancita-paper-session-intervals.v1",
+    "signal_references": {
+      "unverified": [],
+      "verified": 2
+    },
+    "to_ms": null
+  },
+  "intervals_with_unverified_reference": {
+    "clock_ms": 1791030005000,
+    "contract": {
+      "complete": false,
+      "stages_missing": [],
+      "stages_present": [
+        "signal",
+        "decision",
+        "order",
+        "trade"
+      ]
+    },
+    "evidence_class": "not_forward_evidence",
+    "execution_class": "observed_quotes",
+    "from_ms": null,
+    "intervals": [
+      {
+        "at_ms": 1791030002000,
+        "decided_ms": 1791030002000,
+        "key": "dcd4ab505718dca6568fe4b0",
+        "product_id": "PF_XBTUSD",
+        "side": "LONG",
+        "stages": {
+          "decision": {
+            "decided_ms": 1791030002000,
+            "state": "recorded"
+          },
+          "order": {
+            "entry_ms": 1791030005000,
+            "reasons": [],
+            "state": "opened"
+          },
+          "signal": {
+            "action": "BUY",
+            "entry_hash": "c3e31d0f22143b7319f0f269ee8bd3214b8db51ee2b7e187c25676adfc70fad9",
+            "origin": "original",
+            "seq": 3,
+            "signal_key": "dcd4ab505718dca6568fe4b0",
+            "state": "recorded"
+          },
+          "trade": {
+            "exit_reason": null,
+            "state": "open",
+            "trade_id": null
+          }
+        },
+        "strategy_id": "scripted-a"
+      }
+    ],
+    "mode": "integration",
+    "product": null,
+    "schema": "balancita-paper-session-intervals.v1",
+    "signal_references": {
+      "unverified": [
+        {
+          "key": "439f099e9159540c19f0412c",
+          "reason": "entry_hash_mismatch",
+          "seq": 4
+        }
+      ],
+      "verified": 1
+    },
+    "to_ms": null
+  },
+  "positions": {
+    "clock_ms": 1791030005000,
+    "evidence_class": "not_forward_evidence",
+    "execution_class": "observed_quotes",
+    "mode": "integration",
+    "positions": [
+      {
+        "accounting_verified": false,
+        "classes": {
+          "pnl": "estimated",
+          "position": "simulated",
+          "price": "observed"
+        },
+        "coverage": {
+          "gaps": [],
+          "last_quote_ms": 1791030005000,
+          "last_watched_ms": null,
+          "quotes_watched": 0,
+          "silent_now_ms": 0
+        },
+        "entry_ms": 1791030005000,
+        "entry_price": "100015.0005000000000000000000",
+        "intent_id": "38b7ea97b0962a493aeb6c7b",
+        "product_id": "PF_XBTUSD",
+        "protection_evidence": "not_yet_observed",
+        "quantity": "0.004726391017715387603282569598",
+        "side": "LONG",
+        "stop": "98000",
+        "stop_protection": "not_yet_observed",
+        "strategy_id": "scripted-a",
+        "strategy_version": 1,
+        "target": "103000.0",
+        "verified": false
+      }
+    ],
+    "schema": "balancita-paper-session-positions.v1",
+    "unrealized_class": "estimated",
+    "unrealized_usd": "-0.4784",
+    "verification": {
+      "freshness": "unknown",
+      "reasons": [
+        "freshness_threshold_not_approved"
+      ],
+      "thresholds": {
+        "report_max_age_ms": 15000,
+        "status": "hypothesis"
+      },
+      "verified": false
+    }
+  },
+  "positions_threshold_approved": {
+    "clock_ms": 1791030005000,
+    "evidence_class": "not_forward_evidence",
+    "execution_class": "observed_quotes",
+    "mode": "integration",
+    "positions": [
+      {
+        "accounting_verified": true,
+        "classes": {
+          "pnl": "estimated",
+          "position": "simulated",
+          "price": "observed"
+        },
+        "coverage": {
+          "gaps": [],
+          "last_quote_ms": 1791030005000,
+          "last_watched_ms": null,
+          "quotes_watched": 0,
+          "silent_now_ms": 0
+        },
+        "entry_ms": 1791030005000,
+        "entry_price": "100015.0005000000000000000000",
+        "intent_id": "38b7ea97b0962a493aeb6c7b",
+        "product_id": "PF_XBTUSD",
+        "protection_evidence": "not_yet_observed",
+        "quantity": "0.004726391017715387603282569598",
+        "side": "LONG",
+        "stop": "98000",
+        "stop_protection": "not_yet_observed",
+        "strategy_id": "scripted-a",
+        "strategy_version": 1,
+        "target": "103000.0",
+        "verified": false
+      }
+    ],
+    "schema": "balancita-paper-session-positions.v1",
+    "unrealized_class": "estimated",
+    "unrealized_usd": "-0.4784",
+    "verification": {
+      "freshness": "fresh",
+      "reasons": [],
+      "thresholds": {
+        "report_max_age_ms": 15000,
+        "status": "approved"
+      },
+      "verified": true
+    }
+  }
+}

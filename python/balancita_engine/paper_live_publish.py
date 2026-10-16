@@ -19,10 +19,11 @@ POSITIONS_SCHEMA = "balancita-paper-session-positions.v1"
 INTERVALS_SCHEMA = "balancita-paper-session-intervals.v1"
 # ``verified`` needs evidence that the stop was watched after the entry: ``not_yet_observed`` and ``unobserved`` are not.
 PROTECTED = ("observed", "observed_by_candles")
-# Stages of the B3 chain this module can fill from the runner. ``signal`` is not among them: the runner keeps the
-# ``signal_key`` of a decision but not the strategy output that produced it (that lives in the evaluator, stage 9A).
-INTERVAL_STAGES_PRESENT = ("decision", "order", "trade")
-INTERVAL_STAGES_MISSING = ("signal",)
+# Stages of the B3 chain this module fills from the runner. ``signal`` comes from the references the runner journaled
+# (``signals_persisted.refs``) checked against the ``SignalLog`` (BAL-DECISION-187-04); a reference that cannot be checked is
+# published as ``unverified``, never as a signal.
+INTERVAL_STAGES_PRESENT = ("signal", "decision", "order", "trade")
+INTERVAL_STAGES_MISSING = ()
 
 
 def _tag(extra):
@@ -99,12 +100,65 @@ def positions(runner, report_age_ms, max_age_ms=None, source_state=None, thresho
                  "positions": rows})
 
 
+def _ref_problem(log, ref):
+    """Why a journaled signal reference cannot be trusted (None when it can): the log entry it points to must exist, carry the
+    same hash and key, and hold the same action. A reference is never repaired or guessed."""
+    seq = ref.get("seq")
+    if not isinstance(seq, int) or isinstance(seq, bool) or not 1 <= seq <= len(log.entries):
+        return "reference_missing"
+    entry = log.entries[seq - 1]
+    if entry.get("kind") != "signal":
+        return "not_a_signal_entry"
+    if entry.get("hash") != ref.get("entry_hash"):
+        return "entry_hash_mismatch"
+    data = entry.get("data", {})
+    if data.get("key") != ref.get("key"):
+        return "key_mismatch"
+    if data.get("signal", {}).get("action") != ref.get("action"):
+        return "action_mismatch"
+    return None
+
+
+def signal_trace(runner):
+    """The signals the runner persisted, read from its journal (``signals_persisted.refs``) and contrasted with the ``SignalLog`` by
+    ``seq`` and ``entry_hash``. WAIT signals are included: they have no decision and no order and none is made up for them. Read only.
+    Returns ``{"verified": {key: row}, "unverified": [{key, seq, reason}]}``."""
+    verified, unverified = {}, []
+    for entry in runner.journal.entries:
+        if entry.get("kind") != "signals_persisted":
+            continue
+        for ref in entry.get("data", {}).get("refs", ()):
+            reason = _ref_problem(runner.log, ref)
+            if reason is not None:
+                unverified.append({"key": ref.get("key"), "seq": ref.get("seq"), "reason": reason})
+                continue
+            logged = runner.log.entries[ref["seq"] - 1]["data"]
+            verified.setdefault(ref["key"], {
+                "key": ref["key"], "seq": ref["seq"], "entry_hash": ref["entry_hash"], "action": ref["action"],
+                "origin": logged.get("origin"), "product_id": logged.get("product_id"),
+                "strategy_id": logged["signal"]["strategy_id"], "generated_ms": logged.get("generated_ms")})
+    return {"verified": verified, "unverified": unverified}
+
+
+def _signal_stage(trace, key):
+    found = trace["verified"].get(key)
+    if found is None:
+        return {"state": "unverified", "signal_key": key, "reason": "no_verified_reference"}
+    return {"state": "recorded", "signal_key": key, "action": found["action"], "seq": found["seq"],
+            "entry_hash": found["entry_hash"], "origin": found["origin"]}
+
+
 def intervals(runner, from_ms=None, to_ms=None, product=None):
-    """B3, partial: decision -> order -> trade per (product, bucket), from the runner's own decision rows. The ``signal``
-    stage is NOT filled by this module (``contract.complete`` is false and says which stage is missing); a stage that
-    does not exist is ``none``, never inferred. Qwen decisions and C verdicts come from their own databases (B3 original)."""
+    """B3: signal -> decision -> order -> trade per (product, bucket). Decision, order and trade come from the runner's own
+    decision rows; the ``signal`` stage from ``signal_trace`` (a signal without a decision, a WAIT included, is a row whose later
+    stages are ``none``). A stage that does not exist is ``none``, never inferred; a signal reference that does not match the
+    log is ``unverified`` and the contract says so. The array is NOT chronological (decided rows first, then the signals without a
+    decision): ``at_ms`` is the time of each row (the decision time, or the signal's generation time when there is no decision) and
+    is what a reader orders by; a row without a time says ``null``. Qwen decisions and C verdicts come from their own databases (B3 original)."""
+    trace = signal_trace(runner)
     rows = []
-    for row in decisions(runner):
+    decided = decisions(runner)
+    for row in decided:
         bucket = (row.get("decided_ms") or 0)
         if product is not None and row["product_id"] != product:
             continue
@@ -114,14 +168,175 @@ def intervals(runner, from_ms=None, to_ms=None, product=None):
             continue
         rows.append({
             "key": row.get("signal_key"), "product_id": row["product_id"], "strategy_id": row["strategy_id"],
-            "decided_ms": row.get("decided_ms"), "side": row["side"],
+            "decided_ms": row.get("decided_ms"), "at_ms": row.get("decided_ms"), "side": row["side"],
             "stages": {
-                "signal": {"state": "not_available", "signal_key": row.get("signal_key")},
+                "signal": _signal_stage(trace, row.get("signal_key")),
                 "decision": {"state": "recorded" if row.get("decided_ms") is not None else "none", "decided_ms": row.get("decided_ms")},
                 "order": {"state": row["state"], "reasons": row["reasons"], "entry_ms": row.get("entry_ms")},
                 "trade": {"state": row["result"] if row["result"] in ("closed", "open") else "none",
                           "trade_id": row.get("trade_id"), "exit_reason": row.get("exit_reason")}}})
+    decided_keys = {d.get("signal_key") for d in decided}
+    for key, sig in sorted(trace["verified"].items(), key=lambda kv: (kv[1]["generated_ms"] or 0, kv[0])):
+        if key in decided_keys:
+            continue
+        bucket = sig["generated_ms"] or 0
+        if (product is not None and sig["product_id"] != product) or (from_ms is not None and bucket < from_ms) \
+                or (to_ms is not None and bucket >= to_ms):
+            continue
+        rows.append({
+            "key": key, "product_id": sig["product_id"], "strategy_id": sig["strategy_id"], "decided_ms": None, "at_ms": sig["generated_ms"], "side": "none",
+            "stages": {
+                "signal": _signal_stage(trace, key),
+                "decision": {"state": "none", "decided_ms": None},
+                "order": {"state": "none", "reasons": [], "entry_ms": None},
+                "trade": {"state": "none", "trade_id": None, "exit_reason": None}}})
+    complete = not trace["unverified"] and all(r["stages"]["signal"]["state"] == "recorded" for r in rows)
     return _tag({"schema": INTERVALS_SCHEMA, "clock_ms": runner.clock, "from_ms": from_ms, "to_ms": to_ms,
-                 "product": product, "contract": {"complete": False, "stages_present": list(INTERVAL_STAGES_PRESENT),
+                 "product": product, "contract": {"complete": complete, "stages_present": list(INTERVAL_STAGES_PRESENT),
                                                   "stages_missing": list(INTERVAL_STAGES_MISSING)},
+                 "signal_references": {"verified": len(trace["verified"]), "unverified": trace["unverified"]},
                  "intervals": rows})
+
+
+# ---- the operating block (Issue #187, contract BAL-CONTRATO-187-01): what the process says about itself ----------------------
+STATUS_SCHEMA = "balancita-paper-session-status.v1"
+HEARTBEAT_SCHEMA = "balancita-paper-live-heartbeat.v1"        # kept equal to paper_live_process.HEARTBEAT_SCHEMA by a test
+# The phases the process writes -> the names the gateway shows. Anything else is not guessed: the block says why it cannot tell.
+PUBLISHED_PHASE = {"INIT": "INIT", "WARMUP": "WARMING_UP", "LIVE": "LIVE", "STOPPING": "STOPPING", "STOPPED": "STOPPED",
+                   "HALTED": "HALTED", "REFUSED": "REFUSED"}
+FINAL_PHASES = ("STOPPED", "HALTED", "REFUSED")
+
+
+def _status_tag(extra):
+    return dict(extra, mode=SESSION_MODE, evidence_class=EVIDENCE_CLASS)          # no ``execution_class``: this block holds no trade
+
+
+def _status_unavailable(reason):
+    return _status_tag({"schema": STATUS_SCHEMA, "phase": "unavailable", "liveness": "unknown", "reasons": [reason],
+                 "halt_reason": None, "orderly_stop": None, "resources": None, "clock": None, "funding": funding_block(None)})
+
+
+def _report_is_newer(report, beat):
+    """A ``report.json`` outlives an operator restart (nothing rewrites it until the new run ends), so it only outranks the heartbeat when
+    it is of the same session and configuration AND was written strictly after the heartbeat's observation time while that heartbeat still runs (D-223-01; a tie goes to the heartbeat: the first heartbeat of a restarted run carries the
+    same observation time as the halt that preceded it, and the process writes its report at a later step than its last heartbeat). With no
+    heartbeat there is nothing to compare: the report is all there is."""
+    if not beat:
+        return True
+    ended, seen = report.get("ended_at_observed_ms"), beat.get("observed_now_ms")
+    if (report.get("session_id"), report.get("config_digest")) != (beat.get("session_id"), beat.get("config_digest")):
+        return False
+    if not (isinstance(ended, int) and isinstance(seen, int)):
+        return False
+    # a run that ended writes its report and then a final heartbeat at the same observation time: for a final heartbeat a tie is the same run
+    return ended >= seen if PUBLISHED_PHASE.get(beat.get("phase")) in FINAL_PHASES else ended > seen
+
+
+def funding_block(funding):
+    """Where the funding of the session comes from and whether its net result may be called verified (``pnl_verified``), from the
+    ``funding_report()`` the session itself produces (or the copy the final report holds). It decides nothing: it restates, and it
+    never trusts a ``pnl_verified: true`` that comes with a reason against it. ``source`` is ``synthetic`` (invented accrual: the result
+    is never verified), ``observed`` (the funding the capture stored, #184) or ``unknown`` (nothing was given: absent is not "fine")."""
+    if not isinstance(funding, dict) or "mode" not in funding:
+        return {"source": "unknown", "pnl_verified": False, "reasons": ["funding_report_missing"], "incomplete_trades": None,
+                "disputed_trades": None, "quarantined_periods": None, "divergence_evidence": None}
+    if funding["mode"] != "observed":
+        return {"source": "synthetic" if funding["mode"] == "synthetic" else "unknown", "pnl_verified": False,
+                "reasons": ["synthetic_funding" if funding["mode"] == "synthetic" else "funding_mode_unknown"], "incomplete_trades": None,
+                "disputed_trades": None, "quarantined_periods": None, "divergence_evidence": None}
+    reasons = list(funding.get("unverified_reasons") or [])
+    incomplete, disputed = funding.get("incomplete_trades"), funding.get("disputed_trades")
+    quarantined, evidence = funding.get("quarantined"), funding.get("divergence_evidence")
+    divergent = any((funding.get("divergence") or {}).values()) if isinstance(funding.get("divergence"), dict) else bool(funding.get("divergence"))
+    for reason, present in (("trade_funding_incomplete", incomplete), ("trade_funding_disputed", disputed), ("book_and_portfolio_diverge", divergent),
+                            ("divergence_evidence_recorded", evidence)):
+        if present and reason not in reasons:
+            reasons.append(reason)                       # recomputed from the facts, not only from the reasons the producer listed
+    if incomplete is None or disputed is None or evidence is None:
+        reasons.append("funding_report_incomplete")
+    return {"source": "observed", "pnl_verified": not reasons and funding.get("pnl_verified") is True, "reasons": reasons,
+            "incomplete_trades": incomplete, "disputed_trades": disputed, "quarantined_periods": quarantined, "divergence_evidence": evidence}
+
+
+def session_status(heartbeat, halt=None, report=None, heartbeat_age_ms=None, max_age_ms=None, threshold_approved=False, funding=None):
+    """The operating block of a session, read from the files the process leaves (``heartbeat.json``, ``halt.json``, ``report.json``
+    already parsed; a missing file is ``None``). It computes nothing about money and reads no database.
+
+    The phase is the process's own word, never promoted: a heartbeat that says LIVE does not make the session live. ``liveness`` is
+    ``final`` for a phase that ended, and for a running one ``unknown`` (no approved age limit, or no age: BAL-DECISION-187-01, no
+    default here), ``stale`` (older than the caller's limit; the phase is then ``unverified``) or ``alive`` (only with an APPROVED
+    limit). A ``halt.json`` outranks a heartbeat that never got to say HALTED (the process died between the two writes). A missing or
+    unknown heartbeat is ``unavailable``, never an empty LIVE."""
+    if not any(isinstance(part, dict) for part in (heartbeat, halt, report)):
+        return _status_unavailable("heartbeat_missing")
+    beat = heartbeat if isinstance(heartbeat, dict) else {}
+    if beat and beat.get("schema") != HEARTBEAT_SCHEMA:
+        return _status_unavailable("heartbeat_schema_unknown")
+    reasons = []
+    if isinstance(report, dict) and not _report_is_newer(report, beat):
+        report = None                   # a report of an earlier run (kept across an operator restart) says nothing about this one
+    reported = beat.get("phase")
+    if reported is not None and reported not in PUBLISHED_PHASE:
+        return _status_unavailable("heartbeat_phase_unknown")
+    phase = PUBLISHED_PHASE.get(reported)
+    halt_reason = None
+    if isinstance(halt, dict):
+        halt_reason = halt.get("reason")
+        if phase != "HALTED":
+            reasons.append("halt_file_outranks_heartbeat")
+        phase = "HALTED"
+    elif isinstance(report, dict) and report.get("ended_as") in FINAL_PHASES and phase not in FINAL_PHASES:
+        reasons.append("report_ended_after_heartbeat")
+        phase = PUBLISHED_PHASE[report["ended_as"]]
+        halt_reason = report.get("halted")
+    if phase is None:
+        return _status_unavailable("heartbeat_phase_missing")
+    if phase in FINAL_PHASES:
+        liveness = "final"
+    elif heartbeat_age_ms is None:
+        liveness = "unknown"
+        reasons.append("heartbeat_age_unknown")
+    elif max_age_ms is not None and heartbeat_age_ms > max_age_ms:
+        liveness, phase = "stale", "unverified"
+        reasons.append("heartbeat_stale")
+    elif threshold_approved and max_age_ms is not None:
+        liveness = "alive"
+    else:
+        liveness = "unknown"
+    if phase not in FINAL_PHASES and liveness == "unknown" and "heartbeat_age_unknown" not in reasons:
+        reasons.append("liveness_threshold_not_approved")
+    status = "not_approved" if max_age_ms is None else ("approved" if threshold_approved else "hypothesis")
+    body = {"schema": STATUS_SCHEMA, "phase": phase, "reported_phase": reported, "liveness": liveness, "reasons": reasons,
+            "thresholds": {"heartbeat_max_age_ms": max_age_ms, "status": status},
+            "halt_reason": halt_reason,
+            "orderly_stop": (report or {}).get("stop") if isinstance(report, dict) else None,
+            "steps": beat.get("steps"), "observed_now_ms": beat.get("observed_now_ms"),
+            "pending_orders": beat.get("pending_orders"), "open_positions": beat.get("open_positions"),
+            "resources": beat.get("resources"), "clock": (report or {}).get("clock") if isinstance(report, dict) else None,
+            "funding": funding_block(funding if funding is not None else (report or {}).get("funding") if isinstance(report, dict) else None)}
+    return _status_tag(body)
+
+
+# ---- the document of blocks a session leaves for its readers (BAL-DECISION-187-05, option A of BAL-OPCIONES-187-PRODUCCION-01) ----
+BLOCKS_SCHEMA = "balancita-paper-session-blocks.v1"
+
+
+def session_blocks(runner, heartbeat, halt=None, report=None, observed_now_ms=None, max_age_ms=None, source_state=None, funding=None):
+    """The three blocks of a session in ONE document that the process that holds the runner writes next to its heartbeat and that the
+    gateway only reads. It is derived and has no authority over the session: nothing in it is read back by the process.
+
+    The WRITER never measures an age: ``heartbeat_age_ms`` and ``report_age_ms`` are ``None`` here on purpose, because an age taken by the
+    process at the moment it writes would be 0 by construction and would prove nothing. The READER measures the age of the document
+    with its own clock and may only degrade (it never promotes ``unknown`` to ``fresh`` or ``alive``). So in a document the freshness is
+    ``unknown`` (``report_age_unknown``) and the liveness of a running session is ``unknown`` (``heartbeat_age_unknown``) until a reader
+    says otherwise. ``max_age_ms`` is the caller's limit and has no default; no limit is approved, so the thresholds are never ``approved``.
+
+    ``steps`` and ``observed_now_ms`` are the process's own counters, for diagnosis. ``derived`` and ``authority`` say what this is."""
+    beat = heartbeat if isinstance(heartbeat, dict) else {}
+    return {"schema": BLOCKS_SCHEMA, "session_id": beat.get("session_id"), "config_digest": beat.get("config_digest"),
+            "run": {"pid": beat.get("pid"), "id": beat.get("run_id")},      # the mark of the process run that wrote it: the reader refuses a file whose run is not the heartbeat's
+                "observed_now_ms": observed_now_ms if observed_now_ms is not None else beat.get("observed_now_ms"),
+            "steps": beat.get("steps"), "derived": True, "authority": "none",
+            "status": session_status(heartbeat, halt, report, heartbeat_age_ms=None, max_age_ms=max_age_ms, threshold_approved=False, funding=funding),
+            "positions": positions(runner, None, max_age_ms, source_state, False),
+            "intervals": intervals(runner)}

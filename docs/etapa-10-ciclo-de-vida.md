@@ -44,7 +44,9 @@ quien falsifique el marcador a propósito. Habilitar datos reales exige una auto
 
 ## Capital
 
-El reporte lleva `capital_policy: adr-0001-fixed-100-usd`, `policy_status: experimental` y `evidence_class: not_forward_evidence`.
+El reporte lleva `capital_policy: shared-portfolio-1000-usd-risk-1pct-experimental` (la cartera experimental compartida, tamaño según riesgo; NO los 100 USD fijos del ADR, que son del forward; la etiqueta se deriva de `PortfolioPolicy()` y un test falla si divergen), `policy_status: experimental` y `evidence_class: not_forward_evidence`.
+
+**Cambio de etiqueta y digest (D-185-CAP-01, BAL-REV-185-CAP-02).** `capital_policy` participa en el digest de la configuración. Una configuración o un directorio creados antes de la corrección (etiqueta `adr-0001-fixed-100-usd`) tienen otro digest y se **rechazan de forma explícita**: `validate_config` responde `config_invalid` con la etiqueta vigente en el mensaje, y el pre-vuelo rechaza el directorio (`configuration_matches_directory`), con o sin `--restart`. No se migra, no se repara y no se borra nada: el directorio queda byte a byte como estaba, con sus evidencias, y no se asume que no existan sesiones sintéticas previas. Quien quiera retomar una sesión vieja necesita una decisión explícita aparte.
 La configuración no admite otro dimensionamiento: `capital_policy` distinto se rechaza. `experimental` no sustituye al ADR.
 
 ## Plan de sesión supervisada (propuesta para decisión del propietario; no autoriza nada)
@@ -54,6 +56,40 @@ estrategias congeladas sin cambios, cartera etiquetada experimental, sin proceso
 `heartbeat.json`, y termina con SIGTERM. Se verifica el ciclo de vida (arranque, calentamiento, parada, reinicio), no la rentabilidad.
 Antes de proponerla hace falta: #182 integrado, #184 verificado, #186 con verificación independiente y la autorización separada de
 Fran con fuente, productos, intervalo y condiciones.
+
+## Monitoreo de recursos (opcional, apagado por defecto)
+
+Si la configuración trae `resource_limits`, el proceso mide cada `check_every_steps` pasos (30 por defecto, y en el primer paso) el tamaño
+del directorio de la sesión y su memoria residente. Claves aceptadas: `disk_warn_bytes`, `disk_stop_bytes`, `memory_warn_bytes`,
+`memory_stop_bytes` (enteros positivos, aviso < parada, al menos una). Un aviso se registra una vez por recurso; una parada pide la
+misma parada ordenada que SIGTERM (informe con `stop_reason`, estado final STOPPED, salida 4). Los límites son inclusivos (valor igual al límite ya cuenta). Si la medición falla, o una carpeta del directorio no se puede leer, también para en
+orden (nunca cuenta 0 bytes). Si un SIGTERM llegó en el mismo paso, la parada igual queda registrada con su `stop_reason` y la salida es 4. Las lecturas y los eventos van al `heartbeat.json` y al `report.json` (`resources`). Sin `resource_limits` no se mide ni se escribe
+nada y el digest de la configuración no cambia. **No hay valores aprobados**: los números de las Issues (disco 100/150 MB, memoria
+400/600 MB) siguen siendo propuestas diferidas; el código solo da el mecanismo. Pruebas: `python/tests/test_paper_live_resources_185.py`.
+
+## Guarda de reloj y hora de pared (opcional, apagada por defecto)
+
+Con `clock_guard: {"max_forward_jump_ms": n}` (sin valor por defecto: lo nombra el operador) el proceso compara cada instante con el anterior
+**antes** de dar el paso. Si el reloj retrocede o salta más que `n`, hace un **halt durable** (`halt.json`, estado HALTED, salida 3; reanudar
+exige `--restart` del operador, sin reinicio automático). Es una insuficiencia de continuidad (regla 10D), no una caída de Kraken: no se
+tocan posiciones, stops ni riesgo y nada se reordena. Con la guarda el latido suma `wall_ms` (hora de pared, solo observabilidad: no entra
+en decisiones ni en el digest; hay prueba con dos horas distintas). Sin la guarda no se lee la hora de pared. `--wall-clock` sigue
+rechazado y el GATE no se toca. `authorization_ref` (`BAL-DECISION-<issue>-<n>`) es solo rastro de auditoría: se valida el formato, no
+abre nada y no entra en el digest. Pruebas: `python/tests/test_paper_live_clock_185.py`. El tope de salto no tiene valor aprobado. La guarda no conserva su instante anterior entre reinicios (D-217-03): el retroceso lo frena la recuperación del runner (`recovery_clock_behind`) y el salto durante una caída lo cubren las reglas de reinicio.
+
+## Identidad de la fuente y causalidad (D-185-R4)
+
+- **Identidad:** el archivo de una captura viva se escribe todo el tiempo, así que tamaño y fecha no sirven. La identidad es el archivo
+  mismo (dispositivo e inodo, archivo regular). El proceso la toma al arrancar y la comprueba justo antes de cada paso que lee: si la ruta
+  pasa a nombrar otro archivo, o ninguno, hace un halt durable (`source_replaced` / `source_unreadable`).
+- **Causalidad (opcional):** el ingestor se guía por el tiempo de la fuente, así que un archivo que ya contiene el futuro se lee por
+  delante del reloj (hay una prueba que lo documenta). Con `ingest_kw: {"causal_until_clock": true}` no se leen filas cuya llegada
+  (`max(persisted_at, received_at)` en tickers, `max(known_at, bucket + 60 s)` en velas) es posterior al reloj del proceso; quedan retenidas y se cuentan en
+  `held_after_clock`. El pre-vuelo exige esta opción a toda fuente que no sea la fixture sintética (`causal_ingest`, D-185-R4-01), aunque esa fuente igual sigue rechazada. Apagado por defecto en la fixture (un replay de un archivo completo depende del comportamiento actual). El desfase entre el reloj
+  de la captura y el del proceso (D-188-24) no se corrige aquí: queda como dato a registrar antes de cualquier sesión real.
+- **Límites conocidos (D-219-03/04):** la identidad se toma después del pre-vuelo, y el pre-vuelo lee el archivo, así que un reemplazo entre los dos no se detecta; tampoco se conserva entre reinicios (el reinicio igual exige al operador, que ve el informe). El desfase entre el reloj de la captura y el del proceso (D-188-24) no se corrige: tiene que estar **medido** antes de cualquier sesión real, porque con un desfase positivo el filtro retiene filas legítimas y con uno negativo deja pasar filas aún no llegadas. Una fila retenida bloquea las que tiene detrás (`break`, no `continue`) para que el cursor nunca la salte aunque llegue fuera de orden de rowid.
+- El tipo de fuente real sigue rechazado (`real_session_not_authorized`); nada de esto abre una base real. Pruebas:
+  `python/tests/test_paper_live_source_185.py`.
 
 ## Límites
 

@@ -34,9 +34,9 @@ describe('terminal API base selection', () => {
       }),
     }))
     vi.stubGlobal('fetch', fetchMock)
-    await loadTerminalBootstrap('/api-mock')
+    await loadTerminalBootstrap('/api-live')
     expect(fetchMock).toHaveBeenCalledWith(
-      '/api-mock/terminal/bootstrap',
+      '/api-live/terminal/bootstrap',
       expect.anything(),
     )
   })
@@ -55,7 +55,7 @@ describe('terminal API base selection', () => {
             }),
         ),
       )
-      const outcome = loadTerminalBootstrap('/api-mock').then(
+      const outcome = loadTerminalBootstrap('/api-live').then(
         () => 'resolved',
         (error: unknown) => (error as Error).name,
       )

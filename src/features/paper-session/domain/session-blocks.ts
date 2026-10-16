@@ -74,15 +74,23 @@ export type PositionsBlock = {
 }
 
 export type IntervalStage = { state: string }
+export type SignalStage = IntervalStage & {
+  /** `BUY`, `SELL`, `WAIT`, `HOLD`...: what the signal said, as recorded. */
+  action: string | null
+  origin: string | null
+  seq: number | null
+}
 export type SessionInterval = {
   key: string | null
   productId: string
   strategyId: string
   decidedMs: number | null
+  /** Decision time, or signal generation time when there is no decision: the order key (the array is not chronological). */
+  atMs: number | null
   side: string
-  signal: IntervalStage
-  decision: IntervalStage
-  order: IntervalStage & { reasons: string[] }
+  signal: SignalStage
+  decision: IntervalStage & { decidedMs: number | null }
+  order: IntervalStage & { reasons: string[]; entryMs: number | null }
   trade: IntervalStage & { tradeId: string | null; exitReason: string | null }
 }
 
@@ -92,8 +100,10 @@ export type IntervalsBlock = {
   evidenceClass: string
   executionClass: string
   clockMs: number
-  /** `complete: false` while a stage (today `signal`) is not filled. */
+  /** `complete: false` while a stage is not filled or a signal reference is unverified. */
   contract: { complete: boolean; stagesMissing: string[] }
+  /** Signal references the publisher could (`verified`) or could not (`unverified`) trace. */
+  signalReferences: { verified: number; unverified: unknown[] }
   intervals: SessionInterval[]
 }
 
@@ -243,6 +253,16 @@ export function decodeIntervalsBlock(raw: unknown): IntervalsBlock {
         'contract.stages_missing',
       ).map((s, i) => str(s, `contract.stages_missing[${i}]`)),
     },
+    signalReferences: {
+      verified: num(
+        record(r.signal_references).verified ?? 0,
+        'signal_references.verified',
+      ),
+      unverified: list(
+        record(r.signal_references).unverified ?? [],
+        'signal_references.unverified',
+      ),
+    },
     intervals: list(r.intervals, 'intervals').map((v, i): SessionInterval => {
       const row = record(v)
       const stages = record(row.stages)
@@ -253,11 +273,36 @@ export function decodeIntervalsBlock(raw: unknown): IntervalsBlock {
         productId: str(row.product_id, `intervals[${i}].product_id`),
         strategyId: str(row.strategy_id, `intervals[${i}].strategy_id`),
         decidedMs: numOrNull(row.decided_ms, `intervals[${i}].decided_ms`),
+        atMs: numOrNull(row.at_ms, `intervals[${i}].at_ms`),
         side: str(row.side, `intervals[${i}].side`),
-        signal: stage(stages.signal, `intervals[${i}].stages.signal`),
-        decision: stage(stages.decision, `intervals[${i}].stages.decision`),
+        signal: {
+          ...stage(stages.signal, `intervals[${i}].stages.signal`),
+          action: strOrNull(
+            record(stages.signal).action,
+            `intervals[${i}].stages.signal.action`,
+          ),
+          origin: strOrNull(
+            record(stages.signal).origin,
+            `intervals[${i}].stages.signal.origin`,
+          ),
+          seq: numOrNull(
+            record(stages.signal).seq,
+            `intervals[${i}].stages.signal.seq`,
+          ),
+        },
+        decision: {
+          ...stage(stages.decision, `intervals[${i}].stages.decision`),
+          decidedMs: numOrNull(
+            record(stages.decision).decided_ms,
+            `intervals[${i}].stages.decision.decided_ms`,
+          ),
+        },
         order: {
           ...stage(order, `intervals[${i}].stages.order`),
+          entryMs: numOrNull(
+            order.entry_ms,
+            `intervals[${i}].stages.order.entry_ms`,
+          ),
           reasons: list(
             order.reasons ?? [],
             `intervals[${i}].stages.order.reasons`,
@@ -279,4 +324,284 @@ export function decodeIntervalsBlock(raw: unknown): IntervalsBlock {
       }
     }),
   }
+}
+
+export const STATUS_SCHEMA = 'balancita-paper-session-status.v1'
+
+/** The process's own word for its phase; `unverified` and `unavailable` are what the publisher says when it cannot confirm it. */
+export const SESSION_PHASES = [
+  'INIT',
+  'WARMING_UP',
+  'LIVE',
+  'STOPPING',
+  'STOPPED',
+  'HALTED',
+  'REFUSED',
+  'unverified',
+  'unavailable',
+] as const
+export type SessionPhase = (typeof SESSION_PHASES)[number]
+
+export type SessionFunding = {
+  /** `synthetic` never verifies a result; `unknown` means nothing was given, which is not "fine". */
+  source: 'synthetic' | 'observed' | 'unknown'
+  pnlVerified: boolean
+  reasons: string[]
+  /**
+   * The detail the publisher gives for an observed source, kept as it came:
+   * `null` is "not given", which is not the same as an empty list (D-229-01).
+   */
+  incompleteTrades: unknown[] | null
+  disputedTrades: unknown[] | null
+  quarantinedPeriods: unknown[] | null
+  divergenceEvidence: number | null
+}
+
+/**
+ * What the gateway measured when it degraded the status block. Absent when the
+ * block did not go through the gateway: then nothing was measured.
+ */
+export type StatusGatewayReason =
+  | 'heartbeat_age_over_limit'
+  | 'heartbeat_age_unknown'
+  | 'threshold_missing'
+  | 'publication_behind'
+export type StatusGatewayValidity = {
+  ageMs: number | null
+  reason: StatusGatewayReason | null
+  /** With `publication_behind`: what the latest heartbeat says, ahead of the document. */
+  heartbeatPhase: string | null
+}
+
+/**
+ * The operating block of the session (`paper_live_publish.session_status`):
+ * phase, liveness, stop reason, funding origin. `resources` and `clock` are
+ * kept opaque on purpose: this decoder does not interpret them.
+ */
+export type SessionStatusBlock = {
+  schema: typeof STATUS_SCHEMA
+  mode: string
+  evidenceClass: string
+  phase: SessionPhase
+  reportedPhase: string | null
+  liveness: 'unknown' | 'alive' | 'stale' | 'final'
+  reasons: string[]
+  /** `null` when the publisher says `unavailable`: then it measured nothing and gives no limit. */
+  thresholds: {
+    heartbeatMaxAgeMs: number | null
+    status: ThresholdStatus
+  } | null
+  haltReason: string | null
+  orderlyStop: Record<string, unknown> | null
+  steps: number | null
+  observedNowMs: number | null
+  pendingOrders: number | null
+  openPositions: number | null
+  resources: Record<string, unknown> | null
+  clock: Record<string, unknown> | null
+  funding: SessionFunding
+  gateway: StatusGatewayValidity | null
+}
+
+function listOrNull(value: unknown, path: string): unknown[] | null {
+  return value === null || value === undefined ? null : list(value, path)
+}
+
+function decodeStatusGateway(raw: unknown): StatusGatewayValidity | null {
+  if (raw === undefined || raw === null) return null
+  const g = record(raw)
+  const reason =
+    g.reason === null || g.reason === undefined
+      ? null
+      : oneOf(
+          g.reason,
+          [
+            'heartbeat_age_over_limit',
+            'heartbeat_age_unknown',
+            'threshold_missing',
+            'publication_behind',
+          ],
+          'gateway.reason',
+        )
+  return {
+    ageMs: numOrNull(g.age_ms, 'gateway.age_ms'),
+    reason,
+    heartbeatPhase: strOrNull(g.heartbeat_phase, 'gateway.heartbeat_phase'),
+  }
+}
+
+function recordOrNull(value: unknown): Record<string, unknown> | null {
+  return value === null || value === undefined ? null : record(value)
+}
+
+export function decodeSessionStatus(raw: unknown): SessionStatusBlock {
+  const r = record(raw)
+  if (r.schema !== STATUS_SCHEMA) fail('schema')
+  const rawThresholds =
+    r.thresholds === undefined || r.thresholds === null
+      ? null
+      : record(r.thresholds)
+  let thresholds: SessionStatusBlock['thresholds'] = null
+  if (rawThresholds) {
+    const heartbeatMaxAge = numOrNull(
+      rawThresholds.heartbeat_max_age_ms,
+      'thresholds.heartbeat_max_age_ms',
+    )
+    if (heartbeatMaxAge !== null && heartbeatMaxAge <= 0)
+      fail('thresholds.heartbeat_max_age_ms')
+    thresholds = {
+      heartbeatMaxAgeMs: heartbeatMaxAge,
+      status: oneOf(
+        rawThresholds.status,
+        ['not_approved', 'hypothesis', 'approved'],
+        'thresholds.status',
+      ),
+    }
+  }
+  const funding = record(r.funding)
+  const status: SessionStatusBlock = {
+    schema: STATUS_SCHEMA,
+    mode: str(r.mode, 'mode'),
+    evidenceClass: str(r.evidence_class, 'evidence_class'),
+    phase: oneOf(r.phase, SESSION_PHASES, 'phase'),
+    reportedPhase: strOrNull(r.reported_phase, 'reported_phase'),
+    liveness: oneOf(
+      r.liveness,
+      ['unknown', 'alive', 'stale', 'final'],
+      'liveness',
+    ),
+    reasons: list(r.reasons, 'reasons').map((s, i) => str(s, `reasons[${i}]`)),
+    thresholds,
+    haltReason: strOrNull(r.halt_reason, 'halt_reason'),
+    orderlyStop: recordOrNull(r.orderly_stop),
+    steps: numOrNull(r.steps, 'steps'),
+    observedNowMs: numOrNull(r.observed_now_ms, 'observed_now_ms'),
+    pendingOrders: numOrNull(r.pending_orders, 'pending_orders'),
+    openPositions: numOrNull(r.open_positions, 'open_positions'),
+    resources: recordOrNull(r.resources),
+    clock: recordOrNull(r.clock),
+    funding: {
+      source: oneOf(
+        funding.source,
+        ['synthetic', 'observed', 'unknown'],
+        'funding.source',
+      ),
+      pnlVerified: bool(funding.pnl_verified, 'funding.pnl_verified'),
+      reasons: list(funding.reasons, 'funding.reasons').map((s, i) =>
+        str(s, `funding.reasons[${i}]`),
+      ),
+      incompleteTrades: listOrNull(
+        funding.incomplete_trades,
+        'funding.incomplete_trades',
+      ),
+      disputedTrades: listOrNull(
+        funding.disputed_trades,
+        'funding.disputed_trades',
+      ),
+      quarantinedPeriods: listOrNull(
+        funding.quarantined_periods,
+        'funding.quarantined_periods',
+      ),
+      divergenceEvidence: numOrNull(
+        funding.divergence_evidence,
+        'funding.divergence_evidence',
+      ),
+    },
+    gateway: decodeStatusGateway(r.gateway),
+  }
+  checkStatusInvariants(status)
+  return status
+}
+
+const ENDED_PHASES: readonly SessionPhase[] = ['STOPPED', 'HALTED', 'REFUSED']
+
+/**
+ * Combinations the publisher cannot produce (D-229-02). A block that carries one
+ * was altered or came from something else, and it is an error, not a guess:
+ * the screen would otherwise show a state nobody can stand behind.
+ */
+function checkStatusInvariants(s: SessionStatusBlock): void {
+  if ((s.phase === 'unverified') !== (s.liveness === 'stale'))
+    fail('phase/liveness: unverified and stale go together')
+  if (ENDED_PHASES.includes(s.phase) !== (s.liveness === 'final'))
+    fail('phase/liveness: final goes with a phase that ended')
+  if (s.phase === 'unavailable' && s.liveness !== 'unknown')
+    fail('phase/liveness: unavailable is unknown')
+  if (s.phase === 'unavailable' ? s.thresholds !== null : s.thresholds === null)
+    fail('thresholds: only an unavailable block has none')
+  if (
+    s.liveness === 'alive' &&
+    (s.thresholds?.status !== 'approved' ||
+      s.thresholds.heartbeatMaxAgeMs === null)
+  )
+    fail('liveness: alive needs an approved limit')
+  if (s.liveness === 'stale' && s.thresholds?.heartbeatMaxAgeMs == null)
+    fail('liveness: stale needs a limit')
+  if (s.haltReason !== null && s.phase !== 'HALTED')
+    fail('halt_reason: only a halted block has one')
+  if (s.funding.pnlVerified && s.funding.source !== 'observed')
+    fail('funding: only an observed source can be verified')
+  if (s.funding.pnlVerified && s.funding.reasons.length > 0)
+    fail('funding: verified with reasons against it')
+}
+
+export const BLOCKS_SCHEMA = 'balancita-paper-session-blocks.v1'
+
+/**
+ * The document a session leaves for its readers (`paper_live_publish.session_blocks`):
+ * the three blocks together. It is derived and has no authority over the
+ * session. The writer measures no age; the reader does.
+ */
+export type SessionBlocksDocument = {
+  schema: typeof BLOCKS_SCHEMA
+  sessionId: string | null
+  configDigest: string | null
+  /** The process run that wrote it (its pid): a reader refuses a file of another run. */
+  runPid: number | null
+  /** One per process start; a pid repeats inside a container. */
+  runId: string | null
+  observedNowMs: number | null
+  steps: number | null
+  status: SessionStatusBlock
+  positions: PositionsBlock
+  intervals: IntervalsBlock
+}
+
+export function decodeSessionBlocks(raw: unknown): SessionBlocksDocument {
+  const r = record(raw)
+  if (r.schema !== BLOCKS_SCHEMA) fail('schema')
+  if (r.derived !== true) fail('derived')
+  if (r.authority !== 'none') fail('authority')
+  if (typeof r.run !== 'object' || r.run === null) fail('run')
+  return {
+    schema: BLOCKS_SCHEMA,
+    sessionId: strOrNull(r.session_id, 'session_id'),
+    configDigest: strOrNull(r.config_digest, 'config_digest'),
+    runPid: numOrNull(record(r.run).pid, 'run.pid'),
+    runId: strOrNull(record(r.run).id, 'run.id'),
+    observedNowMs: numOrNull(r.observed_now_ms, 'observed_now_ms'),
+    steps: numOrNull(r.steps, 'steps'),
+    status: decodeSessionStatus(r.status),
+    positions: decodePositionsBlock(r.positions),
+    intervals: decodeIntervalsBlock(r.intervals),
+  }
+}
+
+/**
+ * Newest first by `atMs` (decision time, or the signal's generation time when it
+ * had no decision). The publisher's array is not chronological (decided rows,
+ * then signals without a decision), so its order is not used; rows without a
+ * time keep the array order and go last, as the oldest.
+ */
+export function newestFirst(intervals: SessionInterval[]): SessionInterval[] {
+  return intervals
+    .map((interval, index) => ({ interval, index }))
+    .sort((a, b) => {
+      const ta = a.interval.atMs
+      const tb = b.interval.atMs
+      if (ta !== null && tb !== null && ta !== tb) return tb - ta
+      if ((ta === null) !== (tb === null)) return ta === null ? 1 : -1
+      return b.index - a.index
+    })
+    .map((entry) => entry.interval)
 }
