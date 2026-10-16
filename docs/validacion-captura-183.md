@@ -84,3 +84,27 @@ No está establecido a qué instante corresponde el precio que Kraken usó para 
 - Intervalo: propuesta de 48 h consecutivas dentro de 2025-10-13 → 2026-08-01 (rango ya autorizado para lectura en otras tareas); el rango exacto lo fija Fran. Nunca desde 2026-08-02 (holdout).
 - Volumen: unas 48 h de tickers (retención 24 h en el archivo de mercado: puede que el rango real quede limitado por esa retención), 2 880 velas de 1 m y 576 de 5 m por producto, y los períodos y respuestas de funding del rango.
 - Propósito: ejecutar estos validadores y producir el informe reproducible de #183. Sin escritura, sin otra captura, sin sesión.
+
+## Lectura mínima de la captura viva (BAL-DECISION-185-02 y 185-03, etapas 2a a 2d)
+
+`python/balancita_engine/capture_minimal_read.py` (`capture-minimal-read.v1`), CLI con solo `--db`. Lee la captura viva
+(`dev-live/futures-market.sqlite`, solo lectura, `query_only` verificado) en dos ventanas fijas de octubre de 2026 y entrega
+los datos a los validadores de #188; publica solo agregados (conteos, aptitud, hallazgos por chequeo con primera y última
+hora), nunca series, precios, tasas ni cuerpos de respuesta.
+
+- 2a velas oficiales 1 min XBT/ETH `[10-oct, 12-oct)`, tope 12 000; 2b velas propias XBT `[11-oct 00:00Z, 06:00Z)`, tope
+  100 000 (valores solo de revisiones cerradas); 2c períodos de funding, tope 600 lecturas; 2d respuestas de funding, tope 1 200 lecturas y 200 MB (BAL-DECISION-183-11; antes 400, 600 y 20 MB).
+- Cada consulta tiene `LIMIT tope+1` y se detiene con `row_budget` si lo supera; sin conteo previo, muestreo ni reintentos.
+  Todas exigen plan de búsqueda por clave primaria. 2c y 2d no recorren las tablas: una búsqueda binaria por `rowid`
+  (lecturas de una fila, contadas y publicadas) acota el rango de la ventana y su ancho se compara con el tope antes de leer;
+  el orden se verifica en la misma pasada (una sola lectura del rango: por fila se devuelven rowid y hora; los valores solo de las filas de XBT/ETH dentro de la ventana, el filtro está en la consulta de afuera) y el resultado separa filas recorridas y devueltas. Los topes de 2c y 2d cuentan todas las lecturas de la etapa y cada lectura se descuenta del tope ANTES de ejecutarla (la herramienta se detiene antes de la que lo excedería; el cuerpo de una respuesta se reserva al leer su tamaño): 2c, ancho del rango más las búsquedas; 2d, ancho más búsquedas más una lectura de producto por respuesta recibida en la ventana más una de tamaño y una de cuerpo por respuesta de XBT/ETH (los cuerpos solo se leen si todo eso entra en el tope y los bytes en el tope de MB). El tamaño de cada respuesta se mide con `octet_length` y cada etapa leída se publica aunque una
+  posterior se detenga.
+- 60 s por consulta y 10 min por corrida; identidad del archivo (nombre, carpeta, tamaño mínimo, mtime) antes y después.
+- Los validadores reciben `holdout_window=(10-oct 00:00Z, 12-oct 00:00Z)`: parámetro opcional que acepta solo las ventanas exactas de
+  `AUTHORIZED_HOLDOUT_EXCEPTIONS` (cualquier otra se rechaza) y solo deja de tratar como holdout un rango y registros
+  enteramente dentro de esa ventana. `HOLDOUT_START_MS` no cambia y sin el parámetro todo sigue
+  igual.
+- No mide la puntualidad de Kraken, no usa cotizaciones y no prueba nada fuera de estas ventanas.
+- Total de 173 000 filas compartido con la etapa 1: la herramienta exige `--prior-first-rows`, `--prior-v2-rows` y `--prior-stage2-rows` (las filas de las dos corridas de la etapa 1 tal como están publicadas en #185 y las de intentos anteriores de esta misma etapa 2; sin valor por defecto) y antes de leer exige que 12 001 + 100 001 + 600 + 1 200 = 113 802 entren en 173 000 menos esas filas; si no entran, se detiene con `global_cap` sin leer. La repetición (v2) de la etapa 1 corre ANTES que esta etapa.
+- Todo SQL ejecutado se planifica antes de correr y se rechaza (`query_plan`) si contiene un SCAN de tabla o un TEMP B-TREE; los límites de rowid se leen con dos consultas de una fila (`min(rowid)` y `max(rowid)` por separado).
+- 2a y 2b nombran el índice de clave primaria (`INDEXED BY`): en la Mac (SQLite 3.51) el planificador eligió el índice secundario `paper_futures_candle_revisions_bucket` con orden temporal y la guarda detuvo la corrida del 15-oct 20:38Z. Con `INDEXED BY` el plan es el revisado o la consulta falla (cierra sin leer).
