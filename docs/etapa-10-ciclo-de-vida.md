@@ -85,6 +85,7 @@ abre nada y no entra en el digest. Pruebas: `python/tests/test_paper_live_clock_
   (`max(persisted_at, received_at)` en tickers, `max(known_at, bucket + 60 s)` en velas) es posterior al reloj del proceso; quedan retenidas y se cuentan en
   `held_after_clock`. El pre-vuelo exige esta opción a toda fuente que no sea la fixture sintética (`causal_ingest`, D-185-R4-01), aunque esa fuente igual sigue rechazada. Apagado por defecto en la fixture (un replay de un archivo completo depende del comportamiento actual). El desfase entre el reloj
   de la captura y el del proceso (D-188-24) no se corrige aquí: queda como dato a registrar antes de cualquier sesión real.
+- **Límites conocidos (D-219-03/04):** la identidad se toma después del pre-vuelo, y el pre-vuelo lee el archivo, así que un reemplazo entre los dos no se detecta; tampoco se conserva entre reinicios (el reinicio igual exige al operador, que ve el informe). El desfase entre el reloj de la captura y el del proceso (D-188-24) no se corrige: tiene que estar **medido** antes de cualquier sesión real, porque con un desfase positivo el filtro retiene filas legítimas y con uno negativo deja pasar filas aún no llegadas. Una fila retenida bloquea las que tiene detrás (`break`, no `continue`) para que el cursor nunca la salte aunque llegue fuera de orden de rowid.
 - El tipo de fuente real sigue rechazado (`real_session_not_authorized`); nada de esto abre una base real. Pruebas:
   `python/tests/test_paper_live_source_185.py`.
 

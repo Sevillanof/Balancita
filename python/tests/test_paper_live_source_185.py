@@ -6,7 +6,8 @@ import shutil
 import unittest
 
 from balancita_engine import paper_live_process as LP
-from test_paper_live_integration import INGEST_KW, LAST_DECISION, TIMES
+from balancita_engine.paper_live_ingest import Ingestor, SourceReader
+from test_paper_live_integration import BTC, INGEST_KW, LAST_DECISION, TIMES
 from test_paper_live_process_185 import START, Base, Clock, config_dict
 
 
@@ -102,6 +103,65 @@ class TestCausality(Base):
         supervisor.tick = lambda now: None
         self.assertEqual(supervisor.run(max_steps=1), LP.EXIT_OK)
         self.assertGreater(supervisor.session.ingestor.stats.get("held_after_clock", 0), 0)     # only the received_at rule can hold these
+
+
+class TestHeldRows(Base):
+    """D-219-01 / D-219-02: what exactly is held, and that a held row is never skipped."""
+
+    @staticmethod
+    def drain(ingestor, now):
+        """A poll reads one batch: poll again while the source still has rows to read (held rows do not count as backlog)."""
+        for _ in range(200):
+            ingestor.poll(now)
+            if not (ingestor.ticker_more or ingestor.candle_more):
+                return
+        raise AssertionError("the source never drained")
+
+    def clone_row(self, db, **over):
+        db.row_factory = __import__("sqlite3").Row
+        row = dict(db.execute("SELECT * FROM paper_futures_market_events WHERE feed='ticker' ORDER BY rowid DESC LIMIT 1").fetchone())
+        row.update(over)
+        db.execute("INSERT INTO paper_futures_market_events({}) VALUES({})".format(
+            ",".join(row), ",".join(":" + k for k in row)), row)
+        db.commit()
+
+    def test_a_candle_known_before_it_closes_is_held_until_its_close(self):
+        import sqlite3
+        self.world.release_until(TIMES[START])
+        now = TIMES[START]
+        db = sqlite3.connect(self.world.path)
+        bucket = (now // 60_000) * 60_000                                  # still open at ``now``: it closes after the clock
+        db.execute("INSERT INTO paper_futures_official_candles VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                   (BTC, 60_000, bucket, "early", now - 1, "1", "1", "1", "1", "1", "x"))
+        db.commit()
+        db.close()
+        reader = SourceReader(self.world.path)
+        ingestor = Ingestor(reader, causal_until_clock=True, expected_products=(BTC,), **INGEST_KW)
+        self.drain(ingestor, now)
+        self.assertGreater(ingestor.stats.get("held_after_clock", 0), 0)   # known_at is before the clock, the close is not
+        reader.close()
+
+    def test_a_held_row_is_not_skipped_when_a_later_row_arrived_earlier(self):
+        import sqlite3
+        self.world.release_until(TIMES[START])
+        now = TIMES[START]
+        db = sqlite3.connect(self.world.path)
+        template = db.execute("SELECT MAX(rowid) FROM paper_futures_market_events").fetchone()[0]
+        late = dict(event_id="late-A", content_hash="hash-A", seq=10 ** 7, event_time=now + 600_000, persisted_at=now + 600_000,
+                    received_at=now + 600_000)
+        early = dict(event_id="early-B", content_hash="hash-B", seq=10 ** 7 + 1, event_time=now - 1_000, persisted_at=now - 1_000,
+                     received_at=now - 1_000)
+        self.clone_row(db, **late)                                         # lower rowid, arrives after the clock
+        self.clone_row(db, **early)                                        # higher rowid, arrived before it
+        db.close()
+        self.assertGreater(template, 0)
+        reader = SourceReader(self.world.path)
+        ingestor = Ingestor(reader, causal_until_clock=True, expected_products=(BTC,), **INGEST_KW)
+        self.drain(ingestor, now)
+        read_then = ingestor.order
+        self.drain(ingestor, now + 700_000)                                       # the clock has reached both
+        self.assertEqual(ingestor.order, read_then + 2)                   # the held row and the one behind it were both read
+        reader.close()
 
 
 class TestPreflightCausal(Base):
