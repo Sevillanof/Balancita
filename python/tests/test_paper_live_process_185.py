@@ -633,6 +633,16 @@ class TestObservedLifecycle(unittest.TestCase):
         self.assertGreaterEqual(report["funding"]["divergence_evidence"], 1)       # the evidence is still there
         self.assertFalse(report["funding"]["pnl_verified"])
 
+    def test_the_published_funding_of_a_diverged_session_says_observed_and_not_verified(self):
+        """#187: the block restates the session's own funding report; a divergence is never published as a verified result."""
+        supervisor, _ = self.halted_run()
+        block = PUB.session_status(self.read(LP.HEARTBEAT_FILE), self.read(LP.HALT_FILE), self.read(LP.REPORT_FILE),
+                                   funding=supervisor.session.funding_report())
+        self.assertEqual((block["phase"], block["funding"]["source"], block["funding"]["pnl_verified"]), ("HALTED", "observed", False))
+        self.assertIn("divergence_evidence_recorded", block["funding"]["reasons"])
+        from_file = PUB.session_status(self.read(LP.HEARTBEAT_FILE), self.read(LP.HALT_FILE), self.read(LP.REPORT_FILE))
+        self.assertEqual(from_file["funding"]["reasons"], block["funding"]["reasons"])        # the copy in report.json says the same
+
     def test_the_old_report_of_a_halted_run_does_not_make_a_restarted_session_look_ended(self):
         """D-223-01: ``report.json`` outlives an operator restart; while the new run works the published block follows the heartbeat."""
         _, clock = self.halted_run()

@@ -74,6 +74,16 @@ class TestSessionStatus(unittest.TestCase):
         refused = PUB.session_status(beat("LIVE", observed_now_ms=900), report=dict(report, ended_as="REFUSED"))              # D-223-02: handled like the others
         self.assertEqual(refused["phase"], "REFUSED")
 
+    def test_the_report_of_the_run_that_just_ended_is_kept_when_its_time_ties_with_the_final_heartbeat(self):
+        """A run writes its report and then the final heartbeat at the same observation time: they are the same run, nothing to discard."""
+        report = {"ended_as": "STOPPED", "stop": {"signal": "SIGTERM"}, "session_id": "s", "config_digest": "d", "ended_at_observed_ms": 1_000,
+                  "clock": {"events": []}, "funding": {"mode": "synthetic"}}
+        block = PUB.session_status(beat("STOPPED"), report=report)
+        self.assertEqual((block["phase"], block["orderly_stop"], block["clock"]), ("STOPPED", {"signal": "SIGTERM"}, {"events": []}))
+        self.assertEqual(block["funding"]["source"], "synthetic")
+        stale = PUB.session_status(beat("STOPPED", observed_now_ms=1_001), report=report)          # a report older than the final heartbeat is not this run's
+        self.assertIsNone(stale["orderly_stop"])
+
     def test_what_cannot_be_read_is_unavailable_never_a_quiet_live(self):
         cases = {"heartbeat_missing": (None, None), "heartbeat_schema_unknown": (dict(beat(), schema="other.v9"), None),
                  "heartbeat_phase_unknown": (beat("DEGRADED"), None), "heartbeat_phase_missing": (beat(phase=None), None)}
@@ -92,6 +102,58 @@ class TestSessionStatus(unittest.TestCase):
         self.assertEqual(block["clock"], {"events": [{"kind": "regression"}]})
         self.assertNotIn("execution_class", block)
         self.assertNotIn("verified", block)                                          # this block never says an account is verified
+
+
+def observed(**over):
+    """A funding report as ``LiveSession.funding_report()`` writes it for a session that reads the funding the capture stored."""
+    return dict({"mode": "observed", "counts": {}, "quarantined": [], "disputed_trades": [], "incomplete_trades": [], "divergence": {},
+                 "divergence_evidence": 0, "unverified_reasons": [], "pnl_verified": True}, **over)
+
+
+class TestFundingBlock(unittest.TestCase):
+    def test_where_the_funding_comes_from_is_always_said(self):
+        self.assertEqual(PUB.funding_block({"mode": "synthetic"})["source"], "synthetic")
+        self.assertEqual(PUB.funding_block(observed())["source"], "observed")
+        for nothing in (None, {}, "observed", {"counts": {}}):
+            with self.subTest(nothing=nothing):
+                block = PUB.funding_block(nothing)
+                self.assertEqual((block["source"], block["pnl_verified"], block["reasons"]), ("unknown", False, ["funding_report_missing"]))
+        self.assertEqual(PUB.funding_block({"mode": "real"})["source"], "unknown")
+
+    def test_a_synthetic_result_is_never_verified(self):
+        block = PUB.funding_block({"mode": "synthetic"})
+        self.assertFalse(block["pnl_verified"])
+        self.assertEqual(block["reasons"], ["synthetic_funding"])
+
+    def test_only_a_complete_observed_report_is_verified(self):
+        self.assertTrue(PUB.funding_block(observed())["pnl_verified"])
+        for name, over in {"incomplete": {"incomplete_trades": ["t1"]}, "disputed": {"disputed_trades": ["t2"]},
+                           "diverge": {"divergence": {"BTC": True}}, "evidence": {"divergence_evidence": 1},
+                           "listed reason": {"unverified_reasons": ["x"]}}.items():
+            with self.subTest(name=name):
+                block = PUB.funding_block(observed(**over))                      # the producer still says pnl_verified: true
+                self.assertFalse(block["pnl_verified"])
+                self.assertTrue(block["reasons"])
+
+    def test_the_reasons_are_recomputed_from_the_facts_and_a_gap_in_the_report_is_not_fine(self):
+        block = PUB.funding_block(observed(incomplete_trades=["t1"], disputed_trades=["t2"]))
+        self.assertIn("trade_funding_incomplete", block["reasons"])
+        self.assertIn("trade_funding_disputed", block["reasons"])
+        missing = observed()
+        del missing["divergence_evidence"]
+        block = PUB.funding_block(missing)
+        self.assertFalse(block["pnl_verified"])
+        self.assertIn("funding_report_incomplete", block["reasons"])
+
+    def test_the_status_block_carries_it_from_the_argument_or_from_the_report(self):
+        self.assertEqual(PUB.session_status(beat())["funding"]["source"], "unknown")
+        self.assertEqual(PUB.session_status(beat(), funding=observed())["funding"]["source"], "observed")
+        report = {"ended_as": "STOPPED", "session_id": "s", "config_digest": "d", "ended_at_observed_ms": 2_000, "funding": {"mode": "synthetic"}}
+        self.assertEqual(PUB.session_status(beat(), report=report)["funding"]["source"], "synthetic")
+        self.assertEqual(PUB.session_status(beat(), report=report, funding=observed(incomplete_trades=["t"]))["funding"]["reasons"],
+                         ["trade_funding_incomplete"])                           # the live report of the session outranks the copy in the file
+        gone = PUB.session_status(None)                                          # nothing readable: the funding is unknown too, not absent
+        self.assertEqual((gone["phase"], gone["funding"]["source"]), ("unavailable", "unknown"))
 
 
 if __name__ == "__main__":
