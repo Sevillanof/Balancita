@@ -12,6 +12,8 @@ import SessionBlocksView, {
   SessionBlocksReadingView,
 } from './SessionBlocksView.tsx'
 
+const PILL = { selector: '.mc-pill' }
+
 // SYNTHETIC: documents the real publisher built from invented sessions
 // (python/tests/session_document_187.py). Nothing here is a real session.
 const scenario = (name: keyof typeof documents) => documents[name]
@@ -80,6 +82,46 @@ describe('the session page states', () => {
     expect(screen.getByTestId('session-validity')).toHaveAttribute(
       'data-current',
       'false',
+    )
+  })
+
+  it('a running session without a confirmed heartbeat has a neutral tone and no word of life', () => {
+    show(
+      envelope('operating_threshold_hypothesis', (doc) => ({
+        ...doc,
+        status: {
+          ...(doc.status as { reasons: string[] }),
+          reasons: ['liveness_threshold_not_approved'],
+        },
+      })),
+    )
+    const status = screen.getByTestId('session-status')
+    const pill = screen.getByText(/en marcha, sin confirmar/i, PILL)
+    expect(pill).toHaveAttribute('data-tone', 'nodata')
+    expect(status.textContent).not.toMatch(/vigente|viva\b|al día/i)
+    expect(screen.queryByText('En marcha', PILL)).toBeNull()
+    expect(
+      within(status).getByText('Límite del latido no aprobado'),
+    ).toBeInTheDocument()
+  })
+
+  it('only a confirmed heartbeat (alive) earns the green «En marcha»', () => {
+    show(
+      envelope('operating_threshold_hypothesis', (doc) => ({
+        ...doc,
+        status: {
+          ...(doc.status as { thresholds: object }),
+          liveness: 'alive',
+          thresholds: {
+            ...(doc.status as { thresholds: object }).thresholds,
+            status: 'approved',
+          },
+        },
+      })),
+    )
+    expect(screen.getByText('En marcha', PILL)).toHaveAttribute(
+      'data-tone',
+      'ok',
     )
   })
 

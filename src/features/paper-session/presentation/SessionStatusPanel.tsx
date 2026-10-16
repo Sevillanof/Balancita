@@ -23,6 +23,20 @@ const PHASE: Record<SessionPhase, { tone: StatusTone; label: string }> = {
   unavailable: { tone: 'nodata', label: 'No disponible' },
 }
 
+/**
+ * «En marcha» in green is the process's word for itself confirmed by a
+ * heartbeat inside an approved limit (`alive`). Anything less is shown as
+ * what it is: the process says it is running and nobody confirmed it.
+ */
+function presentedPhase(status: SessionStatusBlock): {
+  tone: StatusTone
+  label: string
+} {
+  if (status.phase === 'LIVE' && status.liveness !== 'alive')
+    return { tone: 'nodata', label: 'Informa estar en marcha, sin confirmar' }
+  return PHASE[status.phase]
+}
+
 const LIVENESS: Record<SessionStatusBlock['liveness'], string> = {
   unknown: 'Latido sin confirmar (vigencia no determinada)',
   alive: 'Latido al día',
@@ -33,6 +47,8 @@ const LIVENESS: Record<SessionStatusBlock['liveness'], string> = {
 const REASONS: Record<string, string> = {
   heartbeat_age_unknown: 'Edad del latido desconocida',
   heartbeat_stale: 'Latido más viejo que su límite',
+  liveness_threshold_not_approved: 'Límite del latido no aprobado',
+  funding_report_incomplete: 'Informe de fondeo incompleto',
   halt_file_outranks_heartbeat: 'El archivo de parada manda sobre el latido',
   report_ended_after_heartbeat: 'El informe final es posterior al latido',
   heartbeat_missing: 'Sin latido',
@@ -60,7 +76,7 @@ export default function SessionStatusPanel({
 }: {
   status: SessionStatusBlock
 }) {
-  const phase = PHASE[status.phase]
+  const phase = presentedPhase(status)
   const gateway = status.gateway
   return (
     <Panel
