@@ -102,6 +102,34 @@ class TestSilentSourceSeenByTheProcess(Base):
         self.assertEqual([(r["product_id"], r["intent_id"], r["side"], r["entry_ms"], r["entry_price"], r["stop"], r["target"], r["quantity"])
                           for r in document], after)
 
+    def test_the_published_positions_block_says_source_stale_exactly_while_the_source_is_silent(self):
+        """The visibility that already exists, pinned (no new field, no new threshold): the ingestor's own state turns ``stale`` after its
+        ``dead_after_ms`` (a hypothesis, not a calibrated value) and the published positions block carries ``source_stale`` among the
+        verification reasons, which the view labels «Fuente desactualizada». It goes away when rows come back. The heartbeat says nothing:
+        this is the only place, and it is the same block that already says the figures are not verified."""
+        supervisor = self.supervisor(self.clock(), publish_blocks=True)
+        supervisor.start()
+        Gate(supervisor, 30, 60)
+        seen, real = [], supervisor._beat
+
+        def spy(now, state):
+            real(now, state)
+            if state is None:                                                              # the beats of the orderly end carry no poll
+                return
+            seen.append((state["source"], self.read(LP.BLOCKS_FILE)["positions"]["verification"]))
+        supervisor._beat = spy
+        self.assertEqual(supervisor.run(max_steps=STEPS), LP.EXIT_OK)
+        stale = [i for i, (source, _) in enumerate(seen) if source == "stale"]
+        self.assertTrue(stale)
+        self.assertEqual(stale, list(range(stale[0], stale[-1] + 1)))                    # one contiguous stretch, inside the silence
+        self.assertGreaterEqual(stale[0], 30)
+        self.assertLess(stale[-1], 60)
+        for i, (source, verification) in enumerate(seen):
+            with self.subTest(step=i, source=source):
+                self.assertEqual("source_stale" in verification["reasons"], source == "stale")
+                self.assertFalse(verification["verified"])                              # never verified, silent or not (no approved threshold)
+                self.assertEqual(verification["freshness"], "unknown")
+
     def test_the_silence_and_the_publication_together_never_present_the_session_as_confirmed_alive(self):
         supervisor, _, _ = self.run_with_silence(30, 10 ** 6, steps=60)
         document = self.read(LP.BLOCKS_FILE)
