@@ -91,7 +91,7 @@ export function degradeStatus(
 
 /**
  * The file must come from the run whose heartbeat is on disk now
- * (session_id, config_digest and the pid of the process that wrote it). A
+ * (session_id, config_digest, the pid and the run id of the process start that wrote it). A
  * file left by an earlier run keeps a recent mtime after a restart; without
  * this check it would be shown as the current session (D-223-01 again).
  */
@@ -109,9 +109,11 @@ function sameRun(document: Json, heartbeatPath: string | undefined): boolean {
     typeof beat.session_id === 'string' &&
     typeof beat.config_digest === 'string' &&
     typeof beat.pid === 'number' &&
+    typeof beat.run_id === 'string' &&
     document.session_id === beat.session_id &&
     document.config_digest === beat.config_digest &&
-    run.pid === beat.pid
+    run.pid === beat.pid &&
+    run.id === beat.run_id
   )
 }
 
