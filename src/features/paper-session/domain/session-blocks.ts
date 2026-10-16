@@ -503,6 +503,8 @@ export type SessionBlocksDocument = {
   configDigest: string | null
   /** The process run that wrote it (its pid): a reader refuses a file of another run. */
   runPid: number | null
+  /** One per process start; a pid repeats inside a container. */
+  runId: string | null
   observedNowMs: number | null
   steps: number | null
   status: SessionStatusBlock
@@ -521,6 +523,7 @@ export function decodeSessionBlocks(raw: unknown): SessionBlocksDocument {
     sessionId: strOrNull(r.session_id, 'session_id'),
     configDigest: strOrNull(r.config_digest, 'config_digest'),
     runPid: numOrNull(record(r.run).pid, 'run.pid'),
+    runId: strOrNull(record(r.run).id, 'run.id'),
     observedNowMs: numOrNull(r.observed_now_ms, 'observed_now_ms'),
     steps: numOrNull(r.steps, 'steps'),
     status: decodeSessionStatus(r.status),
