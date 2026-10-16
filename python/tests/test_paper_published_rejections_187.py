@@ -43,7 +43,7 @@ class TestRejectionsAndPending(T.Rig):
         self.assertEqual(direct[rejected["product_id"]]["result"], "rejected")
         self.assertIn("open_risk_limit", direct[rejected["product_id"]]["reasons"])
 
-    def test_a_rejection_never_reads_as_verified_or_complete(self):
+    def test_the_contract_stays_incomplete_while_the_signal_stage_is_missing(self):
         r = self.competing()
         block = PUB.intervals(r)
         self.assertFalse(block["contract"]["complete"])                                # the signal stage is still missing and says so
