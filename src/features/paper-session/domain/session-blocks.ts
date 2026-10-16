@@ -60,6 +60,21 @@ export type GatewayValidity = {
   reason: GatewayReason | null
 }
 
+/**
+ * The shared SIMULATED account as the publisher copied it from the portfolio
+ * (BAL-DECISION-185-CARTERA-SIMULADA-01/02): nothing is computed here. `null`
+ * when the file predates the field. Money stays as text, as published.
+ */
+export type SessionAccount = {
+  totalSimulatedUsd: string
+  definitiveUsd: string
+  provisionalGainsUsd: string
+  /** Margin held by OPEN POSITIONS only: pending orders hold no reservation. */
+  committedUsd: string
+  freeUsd: string
+  pendingOrders: number
+}
+
 export type PositionsBlock = {
   schema: typeof POSITIONS_SCHEMA
   mode: string
@@ -70,6 +85,7 @@ export type PositionsBlock = {
   gateway: GatewayValidity | null
   unrealizedUsd: string
   unrealizedClass: string
+  account: SessionAccount | null
   positions: SessionPosition[]
 }
 
@@ -188,6 +204,28 @@ function decodeGateway(raw: unknown): GatewayValidity | null {
   return { ageMs: numOrNull(g.age_ms, 'gateway.age_ms'), reason }
 }
 
+function decodeAccount(raw: unknown): SessionAccount | null {
+  if (raw === undefined || raw === null) return null
+  const a = record(raw)
+  oneOf(a.class, ['simulated'], 'account.class')
+  oneOf(a.committed_scope, ['open_positions_only'], 'account.committed_scope')
+  oneOf(a.pending_reservation, ['none'], 'account.pending_reservation')
+  return {
+    totalSimulatedUsd: str(
+      a.total_simulated_usd,
+      'account.total_simulated_usd',
+    ),
+    definitiveUsd: str(a.definitive_usd, 'account.definitive_usd'),
+    provisionalGainsUsd: str(
+      a.provisional_gains_usd,
+      'account.provisional_gains_usd',
+    ),
+    committedUsd: str(a.committed_usd, 'account.committed_usd'),
+    freeUsd: str(a.free_usd, 'account.free_usd'),
+    pendingOrders: num(a.pending_orders, 'account.pending_orders'),
+  }
+}
+
 export function decodePositionsBlock(raw: unknown): PositionsBlock {
   const r = record(raw)
   if (r.schema !== POSITIONS_SCHEMA) fail('schema')
@@ -201,6 +239,7 @@ export function decodePositionsBlock(raw: unknown): PositionsBlock {
     gateway: decodeGateway(r.gateway),
     unrealizedUsd: str(r.unrealized_usd, 'unrealized_usd'),
     unrealizedClass: str(r.unrealized_class, 'unrealized_class'),
+    account: decodeAccount(r.account),
     positions: list(r.positions, 'positions').map((p, i): SessionPosition => {
       const pos = record(p)
       const coverage = record(pos.coverage)
