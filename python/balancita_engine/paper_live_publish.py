@@ -19,10 +19,11 @@ POSITIONS_SCHEMA = "balancita-paper-session-positions.v1"
 INTERVALS_SCHEMA = "balancita-paper-session-intervals.v1"
 # ``verified`` needs evidence that the stop was watched after the entry: ``not_yet_observed`` and ``unobserved`` are not.
 PROTECTED = ("observed", "observed_by_candles")
-# Stages of the B3 chain this module can fill from the runner. ``signal`` is not among them: the runner keeps the
-# ``signal_key`` of a decision but not the strategy output that produced it (that lives in the evaluator, stage 9A).
-INTERVAL_STAGES_PRESENT = ("decision", "order", "trade")
-INTERVAL_STAGES_MISSING = ("signal",)
+# Stages of the B3 chain this module fills from the runner. ``signal`` comes from the references the runner journaled
+# (``signals_persisted.refs``) checked against the ``SignalLog`` (BAL-DECISION-187-04); a reference that cannot be checked is
+# published as ``unverified``, never as a signal.
+INTERVAL_STAGES_PRESENT = ("signal", "decision", "order", "trade")
+INTERVAL_STAGES_MISSING = ()
 
 
 def _tag(extra):
@@ -99,11 +100,61 @@ def positions(runner, report_age_ms, max_age_ms=None, source_state=None, thresho
                  "positions": rows})
 
 
+def _ref_problem(log, ref):
+    """Why a journaled signal reference cannot be trusted (None when it can): the log entry it points to must exist, carry the
+    same hash and key, and hold the same action. A reference is never repaired or guessed."""
+    seq = ref.get("seq")
+    if not isinstance(seq, int) or isinstance(seq, bool) or not 1 <= seq <= len(log.entries):
+        return "reference_missing"
+    entry = log.entries[seq - 1]
+    if entry.get("kind") != "signal":
+        return "not_a_signal_entry"
+    if entry.get("hash") != ref.get("entry_hash"):
+        return "entry_hash_mismatch"
+    data = entry.get("data", {})
+    if data.get("key") != ref.get("key"):
+        return "key_mismatch"
+    if data.get("signal", {}).get("action") != ref.get("action"):
+        return "action_mismatch"
+    return None
+
+
+def signal_trace(runner):
+    """The signals the runner persisted, read from its journal (``signals_persisted.refs``) and contrasted with the ``SignalLog`` by
+    ``seq`` and ``entry_hash``. WAIT signals are included: they have no decision and no order and none is made up for them. Read only.
+    Returns ``{"verified": {key: row}, "unverified": [{key, seq, reason}]}``."""
+    verified, unverified = {}, []
+    for entry in runner.journal.entries:
+        if entry.get("kind") != "signals_persisted":
+            continue
+        for ref in entry.get("data", {}).get("refs", ()):
+            reason = _ref_problem(runner.log, ref)
+            if reason is not None:
+                unverified.append({"key": ref.get("key"), "seq": ref.get("seq"), "reason": reason})
+                continue
+            logged = runner.log.entries[ref["seq"] - 1]["data"]
+            verified.setdefault(ref["key"], {
+                "key": ref["key"], "seq": ref["seq"], "entry_hash": ref["entry_hash"], "action": ref["action"],
+                "origin": logged.get("origin"), "product_id": logged.get("product_id"),
+                "strategy_id": logged["signal"]["strategy_id"], "generated_ms": logged.get("generated_ms")})
+    return {"verified": verified, "unverified": unverified}
+
+
+def _signal_stage(trace, key):
+    found = trace["verified"].get(key)
+    if found is None:
+        return {"state": "unverified", "signal_key": key, "reason": "no_verified_reference"}
+    return {"state": "recorded", "signal_key": key, "action": found["action"], "seq": found["seq"],
+            "entry_hash": found["entry_hash"], "origin": found["origin"]}
+
+
 def intervals(runner, from_ms=None, to_ms=None, product=None):
-    """B3, partial: decision -> order -> trade per (product, bucket), from the runner's own decision rows. The ``signal``
-    stage is NOT filled by this module (``contract.complete`` is false and says which stage is missing); a stage that
-    does not exist is ``none``, never inferred. Qwen decisions and C verdicts come from their own databases (B3 original)."""
-    rows = []
+    """B3: signal -> decision -> order -> trade per (product, bucket). Decision, order and trade come from the runner's own
+    decision rows; the ``signal`` stage from ``signal_trace`` (a signal without a decision, a WAIT included, is a row whose later
+    stages are ``none``). A stage that does not exist is ``none``, never inferred; a signal reference that does not match the
+    log is ``unverified`` and the contract says so. Qwen decisions and C verdicts come from their own databases (B3 original)."""
+    trace = signal_trace(runner)
+    rows, seen = [], set()
     for row in decisions(runner):
         bucket = (row.get("decided_ms") or 0)
         if product is not None and row["product_id"] != product:
@@ -112,18 +163,36 @@ def intervals(runner, from_ms=None, to_ms=None, product=None):
             continue
         if to_ms is not None and bucket >= to_ms:
             continue
+        seen.add(row.get("signal_key"))
         rows.append({
             "key": row.get("signal_key"), "product_id": row["product_id"], "strategy_id": row["strategy_id"],
             "decided_ms": row.get("decided_ms"), "side": row["side"],
             "stages": {
-                "signal": {"state": "not_available", "signal_key": row.get("signal_key")},
+                "signal": _signal_stage(trace, row.get("signal_key")),
                 "decision": {"state": "recorded" if row.get("decided_ms") is not None else "none", "decided_ms": row.get("decided_ms")},
                 "order": {"state": row["state"], "reasons": row["reasons"], "entry_ms": row.get("entry_ms")},
                 "trade": {"state": row["result"] if row["result"] in ("closed", "open") else "none",
                           "trade_id": row.get("trade_id"), "exit_reason": row.get("exit_reason")}}})
+    decided_keys = {d.get("signal_key") for d in decisions(runner)}
+    for key, sig in sorted(trace["verified"].items(), key=lambda kv: (kv[1]["generated_ms"] or 0, kv[0])):
+        if key in decided_keys:
+            continue
+        bucket = sig["generated_ms"] or 0
+        if (product is not None and sig["product_id"] != product) or (from_ms is not None and bucket < from_ms) \
+                or (to_ms is not None and bucket >= to_ms):
+            continue
+        rows.append({
+            "key": key, "product_id": sig["product_id"], "strategy_id": sig["strategy_id"], "decided_ms": None, "side": "none",
+            "stages": {
+                "signal": _signal_stage(trace, key),
+                "decision": {"state": "none", "decided_ms": None},
+                "order": {"state": "none", "reasons": [], "entry_ms": None},
+                "trade": {"state": "none", "trade_id": None, "exit_reason": None}}})
+    complete = not trace["unverified"] and all(r["stages"]["signal"]["state"] == "recorded" for r in rows)
     return _tag({"schema": INTERVALS_SCHEMA, "clock_ms": runner.clock, "from_ms": from_ms, "to_ms": to_ms,
-                 "product": product, "contract": {"complete": False, "stages_present": list(INTERVAL_STAGES_PRESENT),
+                 "product": product, "contract": {"complete": complete, "stages_present": list(INTERVAL_STAGES_PRESENT),
                                                   "stages_missing": list(INTERVAL_STAGES_MISSING)},
+                 "signal_references": {"verified": len(trace["verified"]), "unverified": trace["unverified"]},
                  "intervals": rows})
 
 
