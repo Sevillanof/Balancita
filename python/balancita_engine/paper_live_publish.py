@@ -313,3 +313,28 @@ def session_status(heartbeat, halt=None, report=None, heartbeat_age_ms=None, max
             "resources": beat.get("resources"), "clock": (report or {}).get("clock") if isinstance(report, dict) else None,
             "funding": funding_block(funding if funding is not None else (report or {}).get("funding") if isinstance(report, dict) else None)}
     return _status_tag(body)
+
+
+# ---- the document of blocks a session leaves for its readers (BAL-DECISION-187-05, option A of BAL-OPCIONES-187-PRODUCCION-01) ----
+BLOCKS_SCHEMA = "balancita-paper-session-blocks.v1"
+
+
+def session_blocks(runner, heartbeat, halt=None, report=None, observed_now_ms=None, max_age_ms=None, source_state=None, funding=None):
+    """The three blocks of a session in ONE document that the process that holds the runner writes next to its heartbeat and that the
+    gateway only reads. It is derived and has no authority over the session: nothing in it is read back by the process.
+
+    The WRITER never measures an age: ``heartbeat_age_ms`` and ``report_age_ms`` are ``None`` here on purpose, because an age taken by the
+    process at the moment it writes would be 0 by construction and would prove nothing. The READER measures the age of the document
+    with its own clock and may only degrade (it never promotes ``unknown`` to ``fresh`` or ``alive``). So in a document the freshness is
+    ``unknown`` (``report_age_unknown``) and the liveness of a running session is ``unknown`` (``heartbeat_age_unknown``) until a reader
+    says otherwise. ``max_age_ms`` is the caller's limit and has no default; no limit is approved, so the thresholds are never ``approved``.
+
+    ``steps`` and ``observed_now_ms`` are the process's own counters, for diagnosis. ``derived`` and ``authority`` say what this is."""
+    beat = heartbeat if isinstance(heartbeat, dict) else {}
+    return {"schema": BLOCKS_SCHEMA, "session_id": beat.get("session_id"), "config_digest": beat.get("config_digest"),
+            "run": {"pid": beat.get("pid"), "id": beat.get("run_id")},      # the mark of the process run that wrote it: the reader refuses a file whose run is not the heartbeat's
+                "observed_now_ms": observed_now_ms if observed_now_ms is not None else beat.get("observed_now_ms"),
+            "steps": beat.get("steps"), "derived": True, "authority": "none",
+            "status": session_status(heartbeat, halt, report, heartbeat_age_ms=None, max_age_ms=max_age_ms, threshold_approved=False, funding=funding),
+            "positions": positions(runner, None, max_age_ms, source_state, False),
+            "intervals": intervals(runner)}

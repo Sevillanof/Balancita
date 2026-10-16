@@ -302,6 +302,25 @@ export type SessionFunding = {
   source: 'synthetic' | 'observed' | 'unknown'
   pnlVerified: boolean
   reasons: string[]
+  /**
+   * The detail the publisher gives for an observed source, kept as it came:
+   * `null` is "not given", which is not the same as an empty list (D-229-01).
+   */
+  incompleteTrades: unknown[] | null
+  disputedTrades: unknown[] | null
+  quarantinedPeriods: unknown[] | null
+  divergenceEvidence: number | null
+}
+
+/**
+ * What the gateway measured when it degraded the status block. Absent when the
+ * block did not go through the gateway: then nothing was measured.
+ */
+export type StatusGatewayReason =
+  'heartbeat_age_over_limit' | 'heartbeat_age_unknown' | 'threshold_missing'
+export type StatusGatewayValidity = {
+  ageMs: number | null
+  reason: StatusGatewayReason | null
 }
 
 /**
@@ -331,6 +350,29 @@ export type SessionStatusBlock = {
   resources: Record<string, unknown> | null
   clock: Record<string, unknown> | null
   funding: SessionFunding
+  gateway: StatusGatewayValidity | null
+}
+
+function listOrNull(value: unknown, path: string): unknown[] | null {
+  return value === null || value === undefined ? null : list(value, path)
+}
+
+function decodeStatusGateway(raw: unknown): StatusGatewayValidity | null {
+  if (raw === undefined || raw === null) return null
+  const g = record(raw)
+  const reason =
+    g.reason === null || g.reason === undefined
+      ? null
+      : oneOf(
+          g.reason,
+          [
+            'heartbeat_age_over_limit',
+            'heartbeat_age_unknown',
+            'threshold_missing',
+          ],
+          'gateway.reason',
+        )
+  return { ageMs: numOrNull(g.age_ms, 'gateway.age_ms'), reason }
 }
 
 function recordOrNull(value: unknown): Record<string, unknown> | null {
@@ -362,7 +404,7 @@ export function decodeSessionStatus(raw: unknown): SessionStatusBlock {
     }
   }
   const funding = record(r.funding)
-  return {
+  const status: SessionStatusBlock = {
     schema: STATUS_SCHEMA,
     mode: str(r.mode, 'mode'),
     evidenceClass: str(r.evidence_class, 'evidence_class'),
@@ -393,6 +435,99 @@ export function decodeSessionStatus(raw: unknown): SessionStatusBlock {
       reasons: list(funding.reasons, 'funding.reasons').map((s, i) =>
         str(s, `funding.reasons[${i}]`),
       ),
+      incompleteTrades: listOrNull(
+        funding.incomplete_trades,
+        'funding.incomplete_trades',
+      ),
+      disputedTrades: listOrNull(
+        funding.disputed_trades,
+        'funding.disputed_trades',
+      ),
+      quarantinedPeriods: listOrNull(
+        funding.quarantined_periods,
+        'funding.quarantined_periods',
+      ),
+      divergenceEvidence: numOrNull(
+        funding.divergence_evidence,
+        'funding.divergence_evidence',
+      ),
     },
+    gateway: decodeStatusGateway(r.gateway),
+  }
+  checkStatusInvariants(status)
+  return status
+}
+
+const ENDED_PHASES: readonly SessionPhase[] = ['STOPPED', 'HALTED', 'REFUSED']
+
+/**
+ * Combinations the publisher cannot produce (D-229-02). A block that carries one
+ * was altered or came from something else, and it is an error, not a guess:
+ * the screen would otherwise show a state nobody can stand behind.
+ */
+function checkStatusInvariants(s: SessionStatusBlock): void {
+  if ((s.phase === 'unverified') !== (s.liveness === 'stale'))
+    fail('phase/liveness: unverified and stale go together')
+  if (ENDED_PHASES.includes(s.phase) !== (s.liveness === 'final'))
+    fail('phase/liveness: final goes with a phase that ended')
+  if (s.phase === 'unavailable' && s.liveness !== 'unknown')
+    fail('phase/liveness: unavailable is unknown')
+  if (s.phase === 'unavailable' ? s.thresholds !== null : s.thresholds === null)
+    fail('thresholds: only an unavailable block has none')
+  if (
+    s.liveness === 'alive' &&
+    (s.thresholds?.status !== 'approved' ||
+      s.thresholds.heartbeatMaxAgeMs === null)
+  )
+    fail('liveness: alive needs an approved limit')
+  if (s.liveness === 'stale' && s.thresholds?.heartbeatMaxAgeMs == null)
+    fail('liveness: stale needs a limit')
+  if (s.haltReason !== null && s.phase !== 'HALTED')
+    fail('halt_reason: only a halted block has one')
+  if (s.funding.pnlVerified && s.funding.source !== 'observed')
+    fail('funding: only an observed source can be verified')
+  if (s.funding.pnlVerified && s.funding.reasons.length > 0)
+    fail('funding: verified with reasons against it')
+}
+
+export const BLOCKS_SCHEMA = 'balancita-paper-session-blocks.v1'
+
+/**
+ * The document a session leaves for its readers (`paper_live_publish.session_blocks`):
+ * the three blocks together. It is derived and has no authority over the
+ * session. The writer measures no age; the reader does.
+ */
+export type SessionBlocksDocument = {
+  schema: typeof BLOCKS_SCHEMA
+  sessionId: string | null
+  configDigest: string | null
+  /** The process run that wrote it (its pid): a reader refuses a file of another run. */
+  runPid: number | null
+  /** One per process start; a pid repeats inside a container. */
+  runId: string | null
+  observedNowMs: number | null
+  steps: number | null
+  status: SessionStatusBlock
+  positions: PositionsBlock
+  intervals: IntervalsBlock
+}
+
+export function decodeSessionBlocks(raw: unknown): SessionBlocksDocument {
+  const r = record(raw)
+  if (r.schema !== BLOCKS_SCHEMA) fail('schema')
+  if (r.derived !== true) fail('derived')
+  if (r.authority !== 'none') fail('authority')
+  if (typeof r.run !== 'object' || r.run === null) fail('run')
+  return {
+    schema: BLOCKS_SCHEMA,
+    sessionId: strOrNull(r.session_id, 'session_id'),
+    configDigest: strOrNull(r.config_digest, 'config_digest'),
+    runPid: numOrNull(record(r.run).pid, 'run.pid'),
+    runId: strOrNull(record(r.run).id, 'run.id'),
+    observedNowMs: numOrNull(r.observed_now_ms, 'observed_now_ms'),
+    steps: numOrNull(r.steps, 'steps'),
+    status: decodeSessionStatus(r.status),
+    positions: decodePositionsBlock(r.positions),
+    intervals: decodeIntervalsBlock(r.intervals),
   }
 }
