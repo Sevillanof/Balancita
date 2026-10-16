@@ -1,8 +1,8 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- loosely typed JSON assertions */
 import { createHash } from 'node:crypto'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import type { AddressInfo } from 'node:net'
 import WebSocket from 'ws'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -175,6 +175,34 @@ function connect(port: number): {
 }
 
 describe('live market gateway', () => {
+  it('serves the session blocks file read-only and reports it absent otherwise', async () => {
+    const path = dbPath()
+    const writer = seedWriter(path, 5)
+    closers.push(() => writer.close())
+    const off = await start(path)
+    expect((await off.app.inject('/api/paper-session/blocks')).json()).toEqual({
+      state: 'absent',
+    })
+    const garbage = join(dirname(path), 'blocks-garbage.json')
+    writeFileSync(garbage, '{no')
+    const bad = await start(path, { sessionBlocksPath: garbage })
+    expect((await bad.app.inject('/api/paper-session/blocks')).json()).toEqual({
+      state: 'invalid',
+      reason: 'not_json',
+    })
+    const before = sha(garbage)
+    await bad.app.inject('/api/paper-session/blocks')
+    expect(sha(garbage)).toBe(before)
+    expect(
+      (
+        await bad.app.inject({
+          method: 'POST',
+          url: '/api/paper-session/blocks',
+        })
+      ).statusCode,
+    ).toBe(404)
+  })
+
   it('serves Qwen scores and reports them off when not configured', async () => {
     const path = dbPath()
     const writer = seedWriter(path, 5)
