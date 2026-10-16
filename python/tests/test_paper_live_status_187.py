@@ -7,7 +7,7 @@ from balancita_engine import paper_live_publish as PUB
 
 
 def beat(phase="LIVE", **extra):
-    return dict({"schema": LP.HEARTBEAT_SCHEMA, "session_id": "s", "phase": phase, "steps": 12, "observed_now_ms": 1_000,
+    return dict({"schema": LP.HEARTBEAT_SCHEMA, "session_id": "s", "config_digest": "d", "phase": phase, "steps": 12, "observed_now_ms": 1_000,
                  "pending_orders": 0, "open_positions": 0}, **extra)
 
 
@@ -52,9 +52,24 @@ class TestSessionStatus(unittest.TestCase):
         only_halt = PUB.session_status(None, halt={"reason": "r"})              # the heartbeat is gone as well
         self.assertEqual((only_halt["phase"], only_halt["halt_reason"]), ("HALTED", "r"))
 
-    def test_a_report_that_ended_after_the_last_heartbeat_wins(self):
-        block = PUB.session_status(beat("LIVE"), report={"ended_as": "STOPPED", "stop": {"signal": "SIGTERM"}})
+    def test_a_report_that_ended_after_the_last_heartbeat_wins_only_for_the_same_run(self):
+        report = {"ended_as": "STOPPED", "stop": {"signal": "SIGTERM"}, "session_id": "s", "config_digest": "d", "ended_at_observed_ms": 1_000}
+        block = PUB.session_status(beat("LIVE", observed_now_ms=900), report=report)             # written after the last heartbeat: the report wins
         self.assertEqual((block["phase"], block["liveness"], block["orderly_stop"]), ("STOPPED", "final", {"signal": "SIGTERM"}))
+        self.assertIn("report_ended_after_heartbeat", block["reasons"])
+        self.assertEqual(PUB.session_status(beat("LIVE"), report=report)["phase"], "LIVE")        # a tie goes to the heartbeat
+        # D-223-01: an older report (a previous run, kept across an operator restart) never outranks the heartbeat
+        for name, other in {"older report": dict(report, ended_at_observed_ms=999), "same time": dict(report, ended_at_observed_ms=1_000), "other session": dict(report, session_id="x"),
+                            "other configuration": dict(report, config_digest="y"), "no time": {k: v for k, v in report.items() if k != "ended_at_observed_ms"}}.items():
+            with self.subTest(name=name):
+                block = PUB.session_status(beat("WARMUP"), report=other)
+                self.assertEqual(block["phase"], "WARMING_UP")
+                self.assertNotIn("report_ended_after_heartbeat", block["reasons"])
+                self.assertIsNone(block["orderly_stop"])
+        only_report = PUB.session_status(None, report=dict(report, ended_as="HALTED", halted="boom"))     # no heartbeat: nothing to compare
+        self.assertEqual((only_report["phase"], only_report["halt_reason"]), ("HALTED", "boom"))
+        refused = PUB.session_status(beat("LIVE", observed_now_ms=900), report=dict(report, ended_as="REFUSED"))              # D-223-02: handled like the others
+        self.assertEqual(refused["phase"], "REFUSED")
 
     def test_what_cannot_be_read_is_unavailable_never_a_quiet_live(self):
         cases = {"heartbeat_missing": (None, None), "heartbeat_schema_unknown": (dict(beat(), schema="other.v9"), None),
@@ -67,8 +82,8 @@ class TestSessionStatus(unittest.TestCase):
 
     def test_the_block_is_tagged_as_integration_and_carries_resources_and_clock_as_the_process_wrote_them(self):
         resources = {"last": {"disk_bytes": 5, "memory_bytes": 7}, "events": []}
-        block = PUB.session_status(beat(resources=resources), report={"ended_as": "HALTED", "halted": "clock_regressed",
-                                                                      "clock": {"events": [{"kind": "regression"}]}})
+        block = PUB.session_status(beat(resources=resources), report={"ended_as": "HALTED", "halted": "clock_regressed", "session_id": "s", "config_digest": "d",
+                                                                      "ended_at_observed_ms": 2_000, "clock": {"events": [{"kind": "regression"}]}})
         self.assertEqual((block["mode"], block["evidence_class"]), ("integration", "not_forward_evidence"))
         self.assertEqual(block["resources"], resources)
         self.assertEqual(block["clock"], {"events": [{"kind": "regression"}]})

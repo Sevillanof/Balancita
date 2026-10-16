@@ -14,6 +14,7 @@ import unittest
 
 from balancita_engine import paper_live_integration as LI
 from balancita_engine import paper_live_process as LP
+from balancita_engine import paper_live_publish as PUB
 from balancita_engine import replay_specs as RS
 from balancita_engine import signal_continuity as SC
 from live_world import LOAD_START, MIN, World
@@ -579,6 +580,23 @@ class TestObservedLifecycle(unittest.TestCase):
         self.assertEqual(report["ended_as"], LP.STOPPED_PHASE)
         self.assertGreaterEqual(report["funding"]["divergence_evidence"], 1)       # the evidence is still there
         self.assertFalse(report["funding"]["pnl_verified"])
+
+    def test_the_old_report_of_a_halted_run_does_not_make_a_restarted_session_look_ended(self):
+        """D-223-01: ``report.json`` outlives an operator restart; while the new run works the published block follows the heartbeat."""
+        _, clock = self.halted_run()
+        old_report = self.read(LP.REPORT_FILE)
+        restarted = self.supervisor(clock)
+        restarted.start(restart=True)
+        beat = self.read(LP.HEARTBEAT_FILE)
+        self.assertEqual(self.read(LP.REPORT_FILE), old_report)                      # nothing rewrote it
+        self.assertGreaterEqual(beat["observed_now_ms"], old_report["ended_at_observed_ms"])        # the first beat of the new run ties with the halt
+        block = PUB.session_status(beat, None, old_report)
+        self.assertEqual(block["phase"], PUB.PUBLISHED_PHASE[beat["phase"]])
+        self.assertNotIn(block["phase"], PUB.FINAL_PHASES)
+        self.assertNotIn("report_ended_after_heartbeat", block["reasons"])
+        self.assertIsNone(block["halt_reason"])
+        self.assertIsNone(block["orderly_stop"])
+        restarted.run(max_steps=2)
 
     def test_the_same_divergence_after_an_acknowledged_restart_is_a_new_occurrence_the_operator_must_see(self):
         """D-205-06 / BAL-COORD-205-02: the audit dedupes by content, so the SAME divergence that comes back after an acknowledged

@@ -145,6 +145,19 @@ def _status_unavailable(reason):
                  "halt_reason": None, "orderly_stop": None, "resources": None, "clock": None})
 
 
+def _report_is_newer(report, beat):
+    """A ``report.json`` outlives an operator restart (nothing rewrites it until the new run ends), so it only outranks the heartbeat when
+    it is of the same session and configuration AND was written strictly after the heartbeat's observation time (D-223-01; a tie goes to the heartbeat: the first heartbeat of a restarted run carries the
+    same observation time as the halt that preceded it, and the process writes its report at a later step than its last heartbeat). With no
+    heartbeat there is nothing to compare: the report is all there is."""
+    if not beat:
+        return True
+    ended, seen = report.get("ended_at_observed_ms"), beat.get("observed_now_ms")
+    if (report.get("session_id"), report.get("config_digest")) != (beat.get("session_id"), beat.get("config_digest")):
+        return False
+    return isinstance(ended, int) and isinstance(seen, int) and ended > seen
+
+
 def session_status(heartbeat, halt=None, report=None, heartbeat_age_ms=None, max_age_ms=None, threshold_approved=False):
     """The operating block of a session, read from the files the process leaves (``heartbeat.json``, ``halt.json``, ``report.json``
     already parsed; a missing file is ``None``). It computes nothing about money and reads no database.
@@ -154,12 +167,14 @@ def session_status(heartbeat, halt=None, report=None, heartbeat_age_ms=None, max
     default here), ``stale`` (older than the caller's limit; the phase is then ``unverified``) or ``alive`` (only with an APPROVED
     limit). A ``halt.json`` outranks a heartbeat that never got to say HALTED (the process died between the two writes). A missing or
     unknown heartbeat is ``unavailable``, never an empty LIVE."""
-    if not isinstance(heartbeat, dict) and not isinstance(halt, dict):
+    if not any(isinstance(part, dict) for part in (heartbeat, halt, report)):
         return _status_unavailable("heartbeat_missing")
     beat = heartbeat if isinstance(heartbeat, dict) else {}
     if beat and beat.get("schema") != HEARTBEAT_SCHEMA:
         return _status_unavailable("heartbeat_schema_unknown")
     reasons = []
+    if isinstance(report, dict) and not _report_is_newer(report, beat):
+        report = None                   # a report of an earlier run (kept across an operator restart) says nothing about this one
     reported = beat.get("phase")
     if reported is not None and reported not in PUBLISHED_PHASE:
         return _status_unavailable("heartbeat_phase_unknown")
@@ -170,7 +185,7 @@ def session_status(heartbeat, halt=None, report=None, heartbeat_age_ms=None, max
         if phase != "HALTED":
             reasons.append("halt_file_outranks_heartbeat")
         phase = "HALTED"
-    elif isinstance(report, dict) and report.get("ended_as") in ("HALTED", "STOPPED") and phase not in FINAL_PHASES:
+    elif isinstance(report, dict) and report.get("ended_as") in FINAL_PHASES and phase not in FINAL_PHASES:
         reasons.append("report_ended_after_heartbeat")
         phase = PUBLISHED_PHASE[report["ended_as"]]
         halt_reason = report.get("halted")
