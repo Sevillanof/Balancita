@@ -7,7 +7,8 @@ import json
 import os
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+_HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path[:0] = [_HERE, os.path.join(_HERE, "..")]            # so the command below works without PYTHONPATH
 
 from balancita_engine import paper_live_publish as PUB          # noqa: E402
 
