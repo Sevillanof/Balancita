@@ -66,8 +66,8 @@ def _server_time_text(raw):
     try:
         body = json.loads(raw)
     except ValueError:
-        return "unparseable"
-    return body.get("serverTime", "missing") if isinstance(body, dict) else "not_an_object"
+        return "tool:unparseable"
+    return body.get("serverTime", "tool:missing") if isinstance(body, dict) else "tool:not_an_object"
 
 
 def inspect_responses(period_rows, responses):

@@ -164,6 +164,65 @@ class ClassificationMatchesTheValidator(unittest.TestCase):
             self.assertEqual({k: len(v) for k, v in ours.items()}, theirs)
 
 
+def stored(sha, start, rate=RATE, product=m.BTC):
+    return (product, start, start + H, rate, start + H + 30_000, "USD/BTC/hour", sha)
+
+
+def response(sha, received, starts, server=None, product=m.BTC):
+    text = iso(received) if server is None else server
+    return (sha, received, "", product, body(text, starts))
+
+
+class ControlsPublishFalseTests(unittest.TestCase):
+    """D-230-01, D-230-03: the published controls must be able to say False, and an out-of-window row must not break them."""
+
+    def _timely(self):
+        s = A0 + 10 * H
+        # one definitive poll 20 minutes after the end: timely, judged by the validator and by the copy alike
+        return [stored("a", s)], [response("a", s + H + 20 * 60_000, [s])]
+
+    def test_consistent_when_the_copy_and_the_validator_judge_the_same_periods(self):
+        periods, responses = self._timely()
+        out = d.diagnose(periods, responses)
+        self.assertTrue(out["per_product"][m.BTC]["consistent_with_validator"])
+        self.assertTrue(out["consistent_with_validator"])
+
+    def test_a_period_the_validator_does_not_judge_makes_the_control_false_per_product_and_globally(self):
+        periods, responses = self._timely()
+        bad = A0 + 12 * H
+        periods.append(stored("b", bad, rate="not-a-number"))      # the validator drops it (VALIDATOR_ERROR); the copy would count it
+        out = d.diagnose(periods, responses)
+        self.assertFalse(out["per_product"][m.BTC]["consistent_with_validator"])
+        self.assertFalse(out["consistent_with_validator"])
+        self.assertTrue(out["per_product"][m.ETH]["consistent_with_validator"])   # the other product is untouched
+
+    def test_a_forced_divergence_in_the_classification_is_published_as_false(self):
+        periods, responses = self._timely()
+        real = d.classify_publication
+        with mock.patch.object(d, "classify_publication", lambda starts, polls: dict(real(starts, polls), unknown=real(starts, polls)["unknown"] + [A0])):
+            out = d.diagnose(periods, responses)
+        self.assertFalse(out["consistent_with_validator"])
+
+    def test_rows_outside_the_window_and_provisional_rows_do_not_change_the_control(self):
+        periods, responses = self._timely()
+        before = A0 - H                                              # starts before the window: the validator skips it
+        after = A1                                                   # ends after it
+        periods += [stored("c", before), stored("d", after)]
+        out = d.diagnose(periods, responses)
+        self.assertTrue(out["consistent_with_validator"])
+        self.assertEqual(out["per_product"][m.BTC]["periods_judged"], 1)
+
+
+class RejectedCapTests(unittest.TestCase):
+    def test_at_most_twenty_receipt_times_per_rejected_group_but_every_one_is_counted(self):
+        responses = [response("r%02d" % i, A0 + i * 60_000, [A0], server="2026-10-11T19:00:00+00:00") for i in range(25)]
+        out = d.diagnose([], responses)
+        group = out["server_time_rejected"][0]
+        self.assertEqual(group["count"], 25)
+        self.assertEqual(len(group["received_at_ms"]), d.MAX_CASES)
+        self.assertEqual(out["responses"]["rejected"], 25)
+
+
 class BoundaryTests(unittest.TestCase):
     def test_a_response_exactly_at_end_plus_settle_is_not_early_and_one_ms_before_is(self):
         start = A0 + 5 * H
@@ -193,9 +252,9 @@ class ShapeTests(unittest.TestCase):
         self.assertLessEqual(len(d.shape_of("x" * 500)), d.SHAPE_MAX)
 
     def test_missing_and_malformed_bodies_do_not_raise(self):
-        self.assertEqual(d._server_time_text("{not json"), "unparseable")
-        self.assertEqual(d._server_time_text("[1]"), "not_an_object")
-        self.assertEqual(d._server_time_text("{}"), "missing")
+        self.assertEqual(d._server_time_text("{not json"), "tool:unparseable")
+        self.assertEqual(d._server_time_text("[1]"), "tool:not_an_object")
+        self.assertEqual(d._server_time_text("{}"), "tool:missing")
 
 
 class GuardTests(unittest.TestCase):
@@ -230,6 +289,15 @@ class GuardTests(unittest.TestCase):
     def test_caps_are_the_stage_caps_and_not_wider(self):
         self.assertEqual((m.CAPS["2c"], m.CAPS["2d"]), (600, 1_200))
         self.assertEqual(d.need_rows(), 1_800)
+
+    def test_a_connection_that_is_not_query_only_stops_before_any_read(self):
+        rw = sqlite3.connect(self.path)                              # plain connection: PRAGMA query_only is 0
+        out = d.build_result(rw, prior_rows=0)
+        rw.close()
+        self.assertEqual(out["guards"]["query_only_readback"], 0)
+        self.assertEqual(out["stopped"]["reason"], "connection_not_query_only")
+        self.assertNotIn("reads", out)
+        self.assertNotIn("diagnosis", out)
 
     def test_empty_database_gives_an_empty_diagnosis(self):
         ro = m._open_readonly(self.path)
