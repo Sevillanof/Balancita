@@ -220,13 +220,29 @@ class TestFilesForTheServer(unittest.TestCase):
 
     def test_the_pair_belongs_to_one_run_and_the_running_one_is_not_alive(self):
         files = E2E.build()
-        for name, pair in files.items():
-            beat, doc = pair["heartbeat"], pair["blocks"]
+        for name in ("operating", "stopped"):
+            beat, doc = files[name]["heartbeat"], files[name]["blocks"]
             self.assertEqual((doc["session_id"], doc["config_digest"], doc["run"]),
                              (beat["session_id"], beat["config_digest"], {"pid": E2E.RUN_PID, "id": E2E.RUN_ID}), name)
         self.assertEqual(files["operating"]["blocks"]["status"]["phase"], "LIVE")
         self.assertEqual(files["operating"]["blocks"]["status"]["liveness"], "unknown")
         self.assertEqual(files["stopped"]["blocks"]["status"]["phase"], "STOPPED")
+
+
+class TestOperatorRestartFromRealSupervisors(unittest.TestCase):
+    def test_a_restart_with_the_same_pid_session_and_configuration_is_told_apart_only_by_the_run_mark(self):
+        files = E2E.build()
+        failed, published = files["restart_publication_failed"], files["restart_published"]
+        for name, pair in (("failed", failed), ("published", published)):
+            self.assertEqual(pair["heartbeat"]["pid"], pair["blocks"]["run"]["pid"], name)
+            self.assertEqual(pair["heartbeat"]["session_id"], pair["blocks"]["session_id"], name)
+            self.assertEqual(pair["heartbeat"]["config_digest"], pair["blocks"]["config_digest"], name)
+        self.assertEqual(published["heartbeat"]["run_id"], published["blocks"]["run"]["id"])
+        self.assertNotEqual(failed["heartbeat"]["run_id"], failed["blocks"]["run"]["id"])
+        self.assertEqual(failed["heartbeat"]["publication"]["failures"], 1)
+        self.assertEqual(failed["heartbeat"]["publication"]["last_error"], {"type": "OSError", "text": "ENOSPC"})
+        self.assertIsNone(failed["heartbeat"]["publication"]["last_ok_observed_now_ms"])
+        self.assertEqual(published["heartbeat"]["publication"]["failures"], 0)
 
 
 class TestRestartAndCost(Rig):

@@ -284,15 +284,33 @@ describe('the server reads what a real Supervisor wrote (synthetic session)', ()
     )
   })
 
-  it('restart: the stopped session’s file is refused against the heartbeat of a new start', () => {
-    const { path, beat } = placeFiles('stopped', T0)
-    writeFileSync(
-      beat,
-      JSON.stringify({ ...REAL.stopped.heartbeat, run_id: 'a-new-start' }),
+  it('restart (operator): the new start publishes, its pair is read as the new run', () => {
+    const { path, beat } = placeFiles('restart_published', T0)
+    const reading = readSessionBlocks(path, T0 + 1_000, beat)
+    expect(ok(reading).run.id).toBe('run-synthetic-0002')
+    return expect(JSON.stringify(reading, null, 2) + '\n').toMatchFileSnapshot(
+      '../../../../docs/mission-control/b3/lectura-servidor-reinicio-publicado-187.json',
     )
-    expect(readSessionBlocks(path, T0, beat)).toEqual({
-      state: 'invalid',
-      reason: 'other_run',
-    })
+  })
+
+  it('restart (operator) whose first publication failed: same pid, session and configuration, the cut run’s file is refused', () => {
+    const { path, beat } = placeFiles('restart_publication_failed', T0)
+    expect(REAL.restart_publication_failed.heartbeat.pid).toBe(
+      REAL.restart_publication_failed.blocks.run.pid,
+    )
+    expect(REAL.restart_publication_failed.heartbeat.session_id).toBe(
+      REAL.restart_publication_failed.blocks.session_id,
+    )
+    expect(REAL.restart_publication_failed.heartbeat.config_digest).toBe(
+      REAL.restart_publication_failed.blocks.config_digest,
+    )
+    expect(REAL.restart_publication_failed.heartbeat.publication.failures).toBe(
+      1,
+    )
+    const reading = readSessionBlocks(path, T0 + 1_000, beat)
+    expect(reading).toEqual({ state: 'invalid', reason: 'other_run' })
+    return expect(JSON.stringify(reading, null, 2) + '\n').toMatchFileSnapshot(
+      '../../../../docs/mission-control/b3/lectura-servidor-reinicio-fallido-187.json',
+    )
   })
 })

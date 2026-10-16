@@ -1,6 +1,8 @@
 import { render, screen, within } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 import operating from '../../../../docs/mission-control/b3/lectura-servidor-operando-187.json'
+import restartFailed from '../../../../docs/mission-control/b3/lectura-servidor-reinicio-fallido-187.json'
+import restartPublished from '../../../../docs/mission-control/b3/lectura-servidor-reinicio-publicado-187.json'
 import stopped from '../../../../docs/mission-control/b3/lectura-servidor-detenida-187.json'
 import { decodeSessionBlocksReading } from '../infrastructure/session-blocks-api.ts'
 import { SessionBlocksReadingView } from './SessionBlocksView.tsx'
@@ -39,5 +41,25 @@ describe('real Supervisor → server reader → client decoder → page (synthet
     const status = screen.getByTestId('session-status')
     expect(status).toHaveAttribute('data-phase', 'STOPPED')
     expect(within(status).getByText('Sesión terminada')).toBeInTheDocument()
+  })
+
+  it('operator restart that publishes: the page shows the new run', () => {
+    render(
+      <SessionBlocksReadingView
+        reading={decodeSessionBlocksReading(restartPublished)}
+      />,
+    )
+    expect(screen.getByTestId('session-status')).toBeInTheDocument()
+  })
+
+  it('operator restart whose publication failed: the page refuses the cut run’s file', () => {
+    render(
+      <SessionBlocksReadingView
+        reading={decodeSessionBlocksReading(restartFailed)}
+      />,
+    )
+    expect(screen.getByText('Archivo no utilizable')).toBeInTheDocument()
+    expect(screen.getByText(/otra corrida/)).toBeInTheDocument()
+    expect(screen.queryByTestId('session-status')).toBeNull()
   })
 })

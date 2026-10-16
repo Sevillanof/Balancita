@@ -1,0 +1,204 @@
+{
+  "state": "ok",
+  "published_at_ms": 1800000000000,
+  "evaluated_ms": 1800000001000,
+  "document": {
+    "authority": "none",
+    "config_digest": "ff487531c207296ef1a9",
+    "derived": true,
+    "intervals": {
+      "clock_ms": 1763253000000,
+      "contract": {
+        "complete": true,
+        "stages_missing": [],
+        "stages_present": [
+          "signal",
+          "decision",
+          "order",
+          "trade"
+        ]
+      },
+      "evidence_class": "not_forward_evidence",
+      "execution_class": "observed_quotes",
+      "from_ms": null,
+      "intervals": [
+        {
+          "decided_ms": null,
+          "key": "25b637f6501c39eb63be2966",
+          "product_id": "PF_XBTUSD",
+          "side": "none",
+          "stages": {
+            "decision": {
+              "decided_ms": null,
+              "state": "none"
+            },
+            "order": {
+              "entry_ms": null,
+              "reasons": [],
+              "state": "none"
+            },
+            "signal": {
+              "action": "WAIT",
+              "entry_hash": "55500fded97d8bd6490a8081107d457fb9820558f54f4c20dd76aed7dfd3e19c",
+              "origin": "original",
+              "seq": 5,
+              "signal_key": "25b637f6501c39eb63be2966",
+              "state": "recorded"
+            },
+            "trade": {
+              "exit_reason": null,
+              "state": "none",
+              "trade_id": null
+            }
+          },
+          "strategy_id": "c29-momentum-perp-v1"
+        },
+        {
+          "decided_ms": null,
+          "key": "762c35291ed0f8da9710a064",
+          "product_id": "PF_XBTUSD",
+          "side": "none",
+          "stages": {
+            "decision": {
+              "decided_ms": null,
+              "state": "none"
+            },
+            "order": {
+              "entry_ms": null,
+              "reasons": [],
+              "state": "none"
+            },
+            "signal": {
+              "action": "WAIT",
+              "entry_hash": "47142a86cc7097475a8e3aa224e5932a93f5e4fe1d295ed547e0a5c1393415e2",
+              "origin": "original",
+              "seq": 6,
+              "signal_key": "762c35291ed0f8da9710a064",
+              "state": "recorded"
+            },
+            "trade": {
+              "exit_reason": null,
+              "state": "none",
+              "trade_id": null
+            }
+          },
+          "strategy_id": "c30-momentum-12h-perp-v1"
+        },
+        {
+          "decided_ms": null,
+          "key": "c3d492f91e3c83b81de0ce95",
+          "product_id": "PF_XBTUSD",
+          "side": "none",
+          "stages": {
+            "decision": {
+              "decided_ms": null,
+              "state": "none"
+            },
+            "order": {
+              "entry_ms": null,
+              "reasons": [],
+              "state": "none"
+            },
+            "signal": {
+              "action": "WAIT",
+              "entry_hash": "e9a634be7a965c3489177db940a9f71fb21a5a8f787c46b9e573103ac87f0311",
+              "origin": "original",
+              "seq": 7,
+              "signal_key": "c3d492f91e3c83b81de0ce95",
+              "state": "recorded"
+            },
+            "trade": {
+              "exit_reason": null,
+              "state": "none",
+              "trade_id": null
+            }
+          },
+          "strategy_id": "c32-funding-contrarian-24h-perp-v1"
+        }
+      ],
+      "mode": "integration",
+      "product": null,
+      "schema": "balancita-paper-session-intervals.v1",
+      "signal_references": {
+        "unverified": [],
+        "verified": 12
+      },
+      "to_ms": null
+    },
+    "observed_now_ms": 1763253000000,
+    "positions": {
+      "clock_ms": 1763253000000,
+      "evidence_class": "not_forward_evidence",
+      "execution_class": "observed_quotes",
+      "mode": "integration",
+      "positions": [],
+      "schema": "balancita-paper-session-positions.v1",
+      "unrealized_class": "estimated",
+      "unrealized_usd": "0",
+      "verification": {
+        "freshness": "unknown",
+        "reasons": [
+          "source_state_unknown",
+          "report_age_unknown",
+          "freshness_threshold_not_approved"
+        ],
+        "thresholds": {
+          "report_max_age_ms": null,
+          "status": "not_approved"
+        },
+        "verified": false
+      },
+      "gateway": {
+        "published_at_ms": 1800000000000,
+        "evaluated_ms": 1800000001000,
+        "age_ms": 1000,
+        "reason": "threshold_missing"
+      }
+    },
+    "run": {
+      "id": "run-synthetic-0002",
+      "pid": 4242
+    },
+    "schema": "balancita-paper-session-blocks.v1",
+    "session_id": "e6821de91445db8ca3ef",
+    "status": {
+      "clock": null,
+      "evidence_class": "not_forward_evidence",
+      "funding": {
+        "disputed_trades": null,
+        "divergence_evidence": null,
+        "incomplete_trades": null,
+        "pnl_verified": false,
+        "quarantined_periods": null,
+        "reasons": [
+          "funding_report_missing"
+        ],
+        "source": "unknown"
+      },
+      "halt_reason": null,
+      "liveness": "unknown",
+      "mode": "integration",
+      "observed_now_ms": 1763253000000,
+      "open_positions": 0,
+      "orderly_stop": null,
+      "pending_orders": 0,
+      "phase": "LIVE",
+      "reasons": [
+        "heartbeat_age_unknown"
+      ],
+      "reported_phase": "LIVE",
+      "resources": null,
+      "schema": "balancita-paper-session-status.v1",
+      "steps": 0,
+      "thresholds": {
+        "heartbeat_max_age_ms": null,
+        "status": "not_approved"
+      },
+      "gateway": {
+        "age_ms": 1000,
+        "reason": "threshold_missing"
+      }
+    },
+    "steps": 0
+  }
+}
