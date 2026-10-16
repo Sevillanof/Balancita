@@ -56,6 +56,7 @@ const REASONS: Record<string, string> = {
   heartbeat_age_unknown: 'Edad del latido desconocida',
   heartbeat_stale: 'Latido más viejo que su límite',
   liveness_threshold_not_approved: 'Límite del latido no aprobado',
+  source_stale: 'Fuente desactualizada',
   funding_report_incomplete: 'Informe de fondeo incompleto',
   halt_file_outranks_heartbeat: 'El archivo de parada manda sobre el latido',
   report_ended_after_heartbeat: 'El informe final es posterior al latido',

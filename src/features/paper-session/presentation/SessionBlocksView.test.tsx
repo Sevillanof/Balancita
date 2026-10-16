@@ -105,6 +105,27 @@ describe('the session page states', () => {
     ).toBeInTheDocument()
   })
 
+  it('a silent source shows «Fuente desactualizada» in the status block too, and still no word of life', () => {
+    show(
+      envelope('operating_threshold_hypothesis', (doc) => ({
+        ...doc,
+        status: {
+          ...(doc.status as { reasons: string[] }),
+          reasons: ['liveness_threshold_not_approved', 'source_stale'],
+        },
+      })),
+    )
+    const status = screen.getByTestId('session-status')
+    expect(
+      within(status).getByText('Fuente desactualizada'),
+    ).toBeInTheDocument()
+    expect(status.textContent).not.toMatch(/vigente|viva\b|al día/i)
+    expect(screen.getByText(/en marcha, sin confirmar/i, PILL)).toHaveAttribute(
+      'data-tone',
+      'nodata',
+    )
+  })
+
   it('only a confirmed heartbeat (alive) earns the green «En marcha»', () => {
     show(
       envelope('operating_threshold_hypothesis', (doc) => ({

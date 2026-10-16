@@ -258,14 +258,17 @@ def funding_block(funding):
             "incomplete_trades": incomplete, "disputed_trades": disputed, "quarantined_periods": quarantined, "divergence_evidence": evidence}
 
 
-def session_status(heartbeat, halt=None, report=None, heartbeat_age_ms=None, max_age_ms=None, threshold_approved=False, funding=None):
+def session_status(heartbeat, halt=None, report=None, heartbeat_age_ms=None, max_age_ms=None, threshold_approved=False, funding=None,
+                   source_state=None):
     """The operating block of a session, read from the files the process leaves (``heartbeat.json``, ``halt.json``, ``report.json``
     already parsed; a missing file is ``None``). It computes nothing about money and reads no database.
 
     The phase is the process's own word, never promoted: a heartbeat that says LIVE does not make the session live. ``liveness`` is
     ``final`` for a phase that ended, and for a running one ``unknown`` (no approved age limit, or no age: BAL-DECISION-187-01, no
     default here), ``stale`` (older than the caller's limit; the phase is then ``unverified``) or ``alive`` (only with an APPROVED
-    limit). A ``halt.json`` outranks a heartbeat that never got to say HALTED (the process died between the two writes). A missing or
+    limit). When the caller gives the ingestor's own ``source_state`` and a running session's source is not ``live``, the block repeats the
+    code the positions block already carries, ``source_stale`` (same semantics, no new field and no new limit: it is the ingestor's own
+    state, which turns ``stale`` after its ``dead_after_ms``); it changes neither the phase nor the liveness. A ``halt.json`` outranks a heartbeat that never got to say HALTED (the process died between the two writes). A missing or
     unknown heartbeat is ``unavailable``, never an empty LIVE."""
     if not any(isinstance(part, dict) for part in (heartbeat, halt, report)):
         return _status_unavailable("heartbeat_missing")
@@ -305,6 +308,8 @@ def session_status(heartbeat, halt=None, report=None, heartbeat_age_ms=None, max
         liveness = "unknown"
     if phase not in FINAL_PHASES and liveness == "unknown" and "heartbeat_age_unknown" not in reasons:
         reasons.append("liveness_threshold_not_approved")
+    if phase not in FINAL_PHASES and isinstance(source_state, dict) and source_state.get("source") != "live":
+        reasons.append("source_stale")
     status = "not_approved" if max_age_ms is None else ("approved" if threshold_approved else "hypothesis")
     body = {"schema": STATUS_SCHEMA, "phase": phase, "reported_phase": reported, "liveness": liveness, "reasons": reasons,
             "thresholds": {"heartbeat_max_age_ms": max_age_ms, "status": status},
@@ -337,6 +342,7 @@ def session_blocks(runner, heartbeat, halt=None, report=None, observed_now_ms=No
             "run": {"pid": beat.get("pid"), "id": beat.get("run_id")},      # the mark of the process run that wrote it: the reader refuses a file whose run is not the heartbeat's
                 "observed_now_ms": observed_now_ms if observed_now_ms is not None else beat.get("observed_now_ms"),
             "steps": beat.get("steps"), "derived": True, "authority": "none",
-            "status": session_status(heartbeat, halt, report, heartbeat_age_ms=None, max_age_ms=max_age_ms, threshold_approved=False, funding=funding),
+            "status": session_status(heartbeat, halt, report, heartbeat_age_ms=None, max_age_ms=max_age_ms, threshold_approved=False, funding=funding,
+                                     source_state=source_state),
             "positions": positions(runner, None, max_age_ms, source_state, False),
             "intervals": intervals(runner)}

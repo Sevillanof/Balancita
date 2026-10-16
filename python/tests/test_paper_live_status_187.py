@@ -30,6 +30,20 @@ class TestSessionStatus(unittest.TestCase):
         self.assertEqual(ok["liveness"], "alive")
         self.assertEqual(ok["thresholds"]["status"], "approved")
 
+    def test_a_source_that_is_not_live_adds_source_stale_to_a_running_phase_and_changes_nothing_else(self):
+        """BAL-MAPEO-186-FUENTE-CALLADA-01, gap 2: the same code the positions block carries, no new field and no new limit."""
+        base = PUB.session_status(beat(), heartbeat_age_ms=500, max_age_ms=5_000)
+        for source_state, expected in (({"source": "stale"}, True), ({"source": "live"}, False), (None, False)):
+            with self.subTest(source_state=source_state):
+                block = PUB.session_status(beat(), heartbeat_age_ms=500, max_age_ms=5_000, source_state=source_state)
+                self.assertEqual("source_stale" in block["reasons"], expected)
+                self.assertEqual((block["phase"], block["liveness"], block["thresholds"]), (base["phase"], base["liveness"], base["thresholds"]))
+                self.assertEqual([r for r in block["reasons"] if r != "source_stale"], base["reasons"])
+        for phase in ("STOPPED", "HALTED"):                                   # a phase that ended says nothing about the source
+            with self.subTest(phase=phase):
+                block = PUB.session_status(beat(phase), source_state={"source": "stale"})
+                self.assertNotIn("source_stale", block["reasons"])
+
     def test_an_old_heartbeat_degrades_the_phase_to_unverified(self):
         block = PUB.session_status(beat(), heartbeat_age_ms=60_000, max_age_ms=5_000)
         self.assertEqual((block["phase"], block["liveness"], block["reported_phase"]), ("unverified", "stale", "LIVE"))
