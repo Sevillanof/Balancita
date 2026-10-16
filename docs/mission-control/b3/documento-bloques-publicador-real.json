@@ -1,7 +1,7 @@
 {
   "halted_funding_diverged": {
     "authority": "none",
-    "config_digest": "e5efd98a479421828e2f",
+    "config_digest": "25c1f92f8e44e35d29b5",
     "derived": true,
     "intervals": {
       "clock_ms": 1791030005000,
@@ -164,7 +164,7 @@
       "pid": 4242
     },
     "schema": "balancita-paper-session-blocks.v1",
-    "session_id": "68fee1c831233e9988df",
+    "session_id": "cf859f5bbe3bfc72d01d",
     "status": {
       "clock": null,
       "evidence_class": "not_forward_evidence",
@@ -202,7 +202,7 @@
   },
   "intervals_wait_before_decision": {
     "authority": "none",
-    "config_digest": "b924eb80987cd96c5f22",
+    "config_digest": "00e662d03f13dd267bed",
     "derived": true,
     "intervals": {
       "clock_ms": 1791030005000,
@@ -364,7 +364,7 @@
       "pid": 4242
     },
     "schema": "balancita-paper-session-blocks.v1",
-    "session_id": "e6821de91445db8ca3ef",
+    "session_id": "4f9868c3a5535c9c7080",
     "status": {
       "clock": null,
       "evidence_class": "not_forward_evidence",
@@ -403,7 +403,7 @@
   },
   "operating_no_threshold": {
     "authority": "none",
-    "config_digest": "b924eb80987cd96c5f22",
+    "config_digest": "00e662d03f13dd267bed",
     "derived": true,
     "intervals": {
       "clock_ms": 1791030005000,
@@ -565,7 +565,7 @@
       "pid": 4242
     },
     "schema": "balancita-paper-session-blocks.v1",
-    "session_id": "e6821de91445db8ca3ef",
+    "session_id": "4f9868c3a5535c9c7080",
     "status": {
       "clock": null,
       "evidence_class": "not_forward_evidence",
@@ -604,7 +604,7 @@
   },
   "operating_threshold_hypothesis": {
     "authority": "none",
-    "config_digest": "b924eb80987cd96c5f22",
+    "config_digest": "00e662d03f13dd267bed",
     "derived": true,
     "intervals": {
       "clock_ms": 1791030005000,
@@ -766,7 +766,7 @@
       "pid": 4242
     },
     "schema": "balancita-paper-session-blocks.v1",
-    "session_id": "e6821de91445db8ca3ef",
+    "session_id": "4f9868c3a5535c9c7080",
     "status": {
       "clock": null,
       "evidence_class": "not_forward_evidence",
@@ -805,7 +805,7 @@
   },
   "stopped_orderly": {
     "authority": "none",
-    "config_digest": "b924eb80987cd96c5f22",
+    "config_digest": "00e662d03f13dd267bed",
     "derived": true,
     "intervals": {
       "clock_ms": 1791030005000,
@@ -967,7 +967,7 @@
       "pid": 4242
     },
     "schema": "balancita-paper-session-blocks.v1",
-    "session_id": "e6821de91445db8ca3ef",
+    "session_id": "4f9868c3a5535c9c7080",
     "status": {
       "clock": null,
       "evidence_class": "not_forward_evidence",

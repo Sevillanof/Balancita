@@ -92,10 +92,23 @@ class TestConfiguration(unittest.TestCase):
     def test_the_capital_label_follows_the_portfolio_the_runner_really_uses(self):
         portfolio = LP.runner_config_of(LP.validate_config(config_dict())).portfolio
         self.assertEqual(LP.CAPITAL_POLICY, LP.capital_policy_label(portfolio))
-        self.assertEqual(LP.CAPITAL_POLICY, "shared-portfolio-1000-usd-risk-1pct-experimental")
-        self.assertNotIn("100-usd", LP.CAPITAL_POLICY.replace("1000-usd", ""))
+        self.assertEqual(LP.CAPITAL_POLICY, "shared-portfolio-1000-usd-notional-100usd-experimental")
+        self.assertEqual((portfolio.sizing_mode, portfolio.notional_per_trade_usd), ("fixed_notional", "100"))
         other = type(portfolio)(initial_equity_usd="2500", risk_per_trade="0.005")
         self.assertEqual(LP.capital_policy_label(other), "shared-portfolio-2500-usd-risk-0.5pct-experimental")
+
+    def test_the_operation_size_is_one_easy_setting_that_changes_the_identity_of_a_new_session(self):
+        """BAL-DECISION-185-DIMENSIONAMIENTO-03: 100 USD is the provisional default; another value is another configuration (other digest, other label)."""
+        base, other = LP.validate_config(config_dict()), LP.validate_config(config_dict(notional_per_trade_usd="150"))
+        self.assertEqual(other["capital_policy"], "shared-portfolio-1000-usd-notional-150usd-experimental")
+        self.assertNotEqual(base["digest"], other["digest"])
+        self.assertEqual(LP.runner_config_of(other).portfolio.notional_per_trade_usd, "150")
+        self.assertEqual(LP.runner_config_of(base).portfolio.notional_per_trade_usd, "100")
+        for bad in ("5", "abc", "NaN", "100.123", 100, None, ""):
+            with self.subTest(bad=bad), self.assertRaises(LP.ProcessError):
+                LP.validate_config(config_dict(notional_per_trade_usd=bad))
+        with self.assertRaises(LP.ProcessError):          # a label written by hand cannot disagree with the size
+            LP.validate_config(config_dict(notional_per_trade_usd="150", capital_policy=LP.CAPITAL_POLICY))
 
     def test_a_valid_configuration_has_a_stable_digest_and_the_defaults_are_filled(self):
         a, b = LP.validate_config(config_dict()), LP.validate_config(dict(reversed(list(config_dict().items()))))
