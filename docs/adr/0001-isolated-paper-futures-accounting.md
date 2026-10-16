@@ -137,3 +137,21 @@ One signal contract (`balancita-signal.v1`, BUY/SELL/WAIT scores that are **not*
 ### Unchanged
 
 C25-C31 and Kronos are not modified until 100 forward trades; the three experimental strategies (`mx-funding-v1`, `mx-momentum-v1`, `mx-meanrev-v1`) have new ids, live outside the strategy registry and `config/strategies/`, and exist to exercise the path, not because they are believed to earn money. There is no minimum number of trades per day. Funding is never inferred: a trade without funding history keeps its complete net P&L null. Historical validation (walk-forward, CPCV, Holm, DSR, PBO) and any forward freezing are later increments with criteria fixed before looking at results; 100 forward trades do not by themselves prove an edge. If Qwen does not beat the deterministic combiner after costs, the combiner stays.
+
+## Amendment 2026-10-16: provisional operation size of the simulated paper session
+
+Authorized by the user (Fran) through BAL-DECISION-185-TEXTO-ADR-04 (issue #185, comment 6225435845), which approves the text below; Fran also asked for this amendment directly in the project chat on 2026-10-16. The functional change is BAL-DECISION-185-DIMENSIONAMIENTO-03 (comment 6223371484), where the user said the 100 USD per operation must not stay fixed permanently. Everything remains paper only: no real orders, no private endpoints, no credentials. This amendment is limited to the simulated paper session and removes nothing from the text above.
+
+### Text approved
+
+«Para la sesión de papel simulada, el tamaño de una operación es un nocional provisional de 100 USD, configurable por sesión, separado del saldo simulado compartido de 1000 USD. No es pérdida máxima ni capital independiente. Cambiarlo afecta solo operaciones futuras de una sesión nueva. La política forward congelada y su evidencia no cambian»
+
+### What it means
+
+- The simulated paper session (`paper_live_process`) opens each operation with a notional of 100 USD (`notional_per_trade_usd`, `fixed_notional` mode of `PortfolioPolicy`), apart from the shared simulated balance of 1000 USD. The value is provisional and set in the session configuration.
+- 100 USD is a notional: not a maximum loss and not independent capital. An operation is rejected, never shrunk, when the free capital or a limit leaves less; all costs still count once.
+- Changing the value is another session configuration. It affects only operations of a new session and moves no balance, position or order that already exists.
+
+### Unchanged
+
+The fixed 100 USD per trade of the frozen forward policy (C29-C31, Kronos and the forward measurement), its evidence and its 100-trade rule stay as written above. A future rule that varies the size by operation type is expressly **undefined**: this amendment does not define it and does not make a permanent fixed size an obligation. It does not authorize strategy or forward changes, additional sizing, leverage, migration or reinterpretation of existing balances, real sessions or money.
