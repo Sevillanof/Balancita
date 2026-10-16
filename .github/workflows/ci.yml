@@ -73,11 +73,13 @@ jobs:
       - run: pnpm --dir server install --frozen-lockfile
       - run: pnpm typecheck:server
       - run: pnpm test:server
-  # Python engine, split in three parallel groups (BAL-DECISION-197-01). Every
-  # test still runs: a module belongs to `integration` or `session` when listed
-  # there, otherwise to `rest`, so a new module is never left out. Each group
-  # records the ids of the tests it loads and checks that unittest ran exactly
-  # that many; the `python` job below compares the union against a full
+  # Python engine, split in GROUPS balanced parallel groups. Every test still
+  # runs: scripts/ci_python_group.py packs whole modules (and, for the slow
+  # real-process modules, single TestCase classes) into groups using the
+  # recorded seconds in python/tests/ci_weights.json; a module or class with no
+  # recorded weight gets a default weight, so a new one is never left out. Each
+  # group records the ids of the tests it loads and checks that unittest ran
+  # exactly that many; the `python` job below compares the union against a full
   # `discover -s python/tests` and fails on any missing or duplicated test.
   python-tests:
     name: python (${{ matrix.group }})
@@ -86,60 +88,33 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        group: [integration, session, rest]
+        group: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
     env:
       GROUP: ${{ matrix.group }}
+      GROUPS_TOTAL: 10
       PYTHONPATH: python:python/tests
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-      - name: Select the modules of this group
+      - name: Select the tests of this group
         shell: bash
-        run: |
-          python - <<'PY'
-          import glob, os, unittest
-
-          # Explicit groups. Everything else goes to `rest`. The session
-          # modules may not exist yet on a given branch: then that group is empty.
-          GROUPS = {
-              "integration": ["test_paper_live_integration"],
-              "session": ["test_paper_safe_stop_186_session", "test_paper_stop_session_186"],
-          }
-          group = os.environ["GROUP"]
-          on_disk = sorted(os.path.basename(p)[:-3] for p in glob.glob("python/tests/test*.py"))
-          explicit = {m for ms in GROUPS.values() for m in ms}
-          mods = [m for m in on_disk if m in GROUPS[group]] if group in GROUPS \
-              else [m for m in on_disk if m not in explicit]
-          ids = []
-          def walk(suite):
-              for t in suite:
-                  walk(t) if isinstance(t, unittest.TestSuite) else ids.append(t.id())
-          for m in mods:
-              walk(unittest.defaultTestLoader.loadTestsFromName(m))
-          bad = [i for i in ids if i.startswith("unittest.loader.")]
-          if bad:
-              raise SystemExit("modules that fail to import: %s" % bad)
-          open("modules.txt", "w").write(" ".join(mods))
-          open("ids-%s.txt" % group, "w").write("\n".join(sorted(ids)) + ("\n" if ids else ""))
-          print("group %s: %d modules, %d tests" % (group, len(mods), len(ids)))
-          print("\n".join(mods))
-          PY
+        run: python scripts/ci_python_group.py "$GROUP" "$GROUPS_TOTAL"
       - name: Run the tests of this group
         shell: bash
         run: |
-          if [ -z "$(cat modules.txt)" ]; then
+          if [ -z "$(cat units.txt)" ]; then
             echo "Group $GROUP has no modules on this branch; nothing to run."
             echo "Ran 0 tests" > run.log
           else
-            python -m unittest $(cat modules.txt) 2>&1 | tee run.log
+            python -m unittest $(cat units.txt) 2>&1 | tee run.log
           fi
       - name: Check that unittest ran exactly the tests loaded
         shell: bash
         run: |
           ran=$(sed -n 's/^Ran \([0-9]*\) tests\? in .*/\1/p' run.log | tail -1)
-          [ "$ran" = "" ] && [ "$(cat modules.txt)" = "" ] && ran=0
+          [ "$ran" = "" ] && [ "$(cat units.txt)" = "" ] && ran=0
           expected=$(grep -c . "ids-$GROUP.txt" || true)
           echo "group=$GROUP ran=$ran expected=$expected"
           [ "$ran" = "$expected" ]
@@ -150,8 +125,8 @@ jobs:
           path: ids-${{ matrix.group }}.txt
           retention-days: 7
 
-  # Aggregate gate. Keeps the old check name `python`. It needs all three
-  # groups green and the same test ids as one full discovery: same count,
+  # Aggregate gate. Keeps the old check name `python`. It needs all groups
+  # green and the same test ids as one full discovery: same count,
   # same names, none lost and none run twice.
   python:
     needs: python-tests
@@ -193,20 +168,20 @@ jobs:
               grouped += ids
           print("groups total: %d; full discovery: %d" % (len(grouped), len(full)))
           problems = []
-          if len(files) != 3:
-              problems.append("expected 3 group files, found %d" % len(files))
+          if len(files) != 10:
+              problems.append("expected 10 group files, found %d" % len(files))
           c_full, c_group = collections.Counter(full), collections.Counter(grouped)
           missing = sorted((c_full - c_group).elements())
           extra = sorted((c_group - c_full).elements())
           if missing:
-              problems.append("%d tests in no group: %s" % (len(missing), missing[:20]))
+              problems.append("%d tests in no group: %s" % (len, missing[:20]))
           if extra:
               problems.append("%d tests duplicated or unknown: %s" % (len(extra), extra[:20]))
           if any("unittest.loader." in i for i in full):
               problems.append("a module fails to import")
           if problems:
               raise SystemExit("\n".join(problems))
-          print("OK: the three groups run exactly the %d tests of the full discovery" % len(full))
+          print("OK: the ten groups run exactly the %d tests of the full discovery" % len(full))
           PY
 
   # End to end: Playwright with mocked network responses (see e2e/screens.pw.ts).
