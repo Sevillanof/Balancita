@@ -101,6 +101,24 @@ describe('session status decoder against blocks the real publisher emitted', () 
         ...live,
         funding: { ...live.funding, pnl_verified: true },
       },
+      'verified unknown funding with no reasons': {
+        ...live,
+        funding: {
+          ...live.funding,
+          source: 'unknown',
+          reasons: [],
+          pnl_verified: true,
+        },
+      },
+      'verified synthetic funding with no reasons': {
+        ...live,
+        funding: {
+          ...live.funding,
+          source: 'synthetic',
+          reasons: [],
+          pnl_verified: true,
+        },
+      },
       'verified funding with reasons against it': {
         ...halted,
         funding: { ...halted.funding, pnl_verified: true },

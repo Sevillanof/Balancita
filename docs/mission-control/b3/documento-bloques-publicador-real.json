@@ -144,6 +144,9 @@
         "verified": false
       }
     },
+    "run": {
+      "pid": 4242
+    },
     "schema": "balancita-paper-session-blocks.v1",
     "session_id": "68fee1c831233e9988df",
     "status": {
@@ -324,6 +327,9 @@
         },
         "verified": false
       }
+    },
+    "run": {
+      "pid": 4242
     },
     "schema": "balancita-paper-session-blocks.v1",
     "session_id": "e6821de91445db8ca3ef",
@@ -507,6 +513,9 @@
         "verified": false
       }
     },
+    "run": {
+      "pid": 4242
+    },
     "schema": "balancita-paper-session-blocks.v1",
     "session_id": "e6821de91445db8ca3ef",
     "status": {
@@ -688,6 +697,9 @@
         },
         "verified": false
       }
+    },
+    "run": {
+      "pid": 4242
     },
     "schema": "balancita-paper-session-blocks.v1",
     "session_id": "e6821de91445db8ca3ef",
@@ -873,6 +885,9 @@
         },
         "verified": false
       }
+    },
+    "run": {
+      "pid": null
     },
     "schema": "balancita-paper-session-blocks.v1",
     "session_id": null,

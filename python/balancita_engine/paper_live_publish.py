@@ -332,7 +332,8 @@ def session_blocks(runner, heartbeat, halt=None, report=None, observed_now_ms=No
     ``steps`` and ``observed_now_ms`` are the process's own counters, for diagnosis. ``derived`` and ``authority`` say what this is."""
     beat = heartbeat if isinstance(heartbeat, dict) else {}
     return {"schema": BLOCKS_SCHEMA, "session_id": beat.get("session_id"), "config_digest": beat.get("config_digest"),
-            "observed_now_ms": observed_now_ms if observed_now_ms is not None else beat.get("observed_now_ms"),
+            "run": {"pid": beat.get("pid")},      # the mark of the process run that wrote it: the reader refuses a file whose run is not the heartbeat's
+                "observed_now_ms": observed_now_ms if observed_now_ms is not None else beat.get("observed_now_ms"),
             "steps": beat.get("steps"), "derived": True, "authority": "none",
             "status": session_status(heartbeat, halt, report, heartbeat_age_ms=None, max_age_ms=max_age_ms, threshold_approved=False, funding=funding),
             "positions": positions(runner, None, max_age_ms, source_state, False),

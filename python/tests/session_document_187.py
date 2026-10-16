@@ -17,6 +17,7 @@ import test_paper_runner as T                                    # noqa: E402
 
 TARGET = os.path.join(_HERE, "..", "..", "docs", "mission-control", "b3", "documento-bloques-publicador-real.json")
 LIVE = {"source": "live"}
+RUN_PID = 4242                                   # an invented process id: the fixture must be byte-stable
 MAX_AGE_MS = 15_000                           # a test value, not an approved threshold
 _CACHE = {}
 
@@ -39,6 +40,7 @@ def build():
         return _CACHE["doc"]
     warming, live, stopped_beat, report = STATUS._lifecycle()
     halted_beat, halt, halted_report, funding = STATUS._halted()
+    live, stopped_beat, halted_beat = (dict(beat, pid=RUN_PID) for beat in (live, stopped_beat, halted_beat))   # the real pid changes every run
     case = _Case()
     case.setUp()
     try:
