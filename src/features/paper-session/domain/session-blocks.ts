@@ -280,3 +280,119 @@ export function decodeIntervalsBlock(raw: unknown): IntervalsBlock {
     }),
   }
 }
+
+export const STATUS_SCHEMA = 'balancita-paper-session-status.v1'
+
+/** The process's own word for its phase; `unverified` and `unavailable` are what the publisher says when it cannot confirm it. */
+export const SESSION_PHASES = [
+  'INIT',
+  'WARMING_UP',
+  'LIVE',
+  'STOPPING',
+  'STOPPED',
+  'HALTED',
+  'REFUSED',
+  'unverified',
+  'unavailable',
+] as const
+export type SessionPhase = (typeof SESSION_PHASES)[number]
+
+export type SessionFunding = {
+  /** `synthetic` never verifies a result; `unknown` means nothing was given, which is not "fine". */
+  source: 'synthetic' | 'observed' | 'unknown'
+  pnlVerified: boolean
+  reasons: string[]
+}
+
+/**
+ * The operating block of the session (`paper_live_publish.session_status`):
+ * phase, liveness, stop reason, funding origin. `resources` and `clock` are
+ * kept opaque on purpose: this decoder does not interpret them.
+ */
+export type SessionStatusBlock = {
+  schema: typeof STATUS_SCHEMA
+  mode: string
+  evidenceClass: string
+  phase: SessionPhase
+  reportedPhase: string | null
+  liveness: 'unknown' | 'alive' | 'stale' | 'final'
+  reasons: string[]
+  /** `null` when the publisher says `unavailable`: then it measured nothing and gives no limit. */
+  thresholds: {
+    heartbeatMaxAgeMs: number | null
+    status: ThresholdStatus
+  } | null
+  haltReason: string | null
+  orderlyStop: Record<string, unknown> | null
+  steps: number | null
+  observedNowMs: number | null
+  pendingOrders: number | null
+  openPositions: number | null
+  resources: Record<string, unknown> | null
+  clock: Record<string, unknown> | null
+  funding: SessionFunding
+}
+
+function recordOrNull(value: unknown): Record<string, unknown> | null {
+  return value === null || value === undefined ? null : record(value)
+}
+
+export function decodeSessionStatus(raw: unknown): SessionStatusBlock {
+  const r = record(raw)
+  if (r.schema !== STATUS_SCHEMA) fail('schema')
+  const rawThresholds =
+    r.thresholds === undefined || r.thresholds === null
+      ? null
+      : record(r.thresholds)
+  let thresholds: SessionStatusBlock['thresholds'] = null
+  if (rawThresholds) {
+    const heartbeatMaxAge = numOrNull(
+      rawThresholds.heartbeat_max_age_ms,
+      'thresholds.heartbeat_max_age_ms',
+    )
+    if (heartbeatMaxAge !== null && heartbeatMaxAge <= 0)
+      fail('thresholds.heartbeat_max_age_ms')
+    thresholds = {
+      heartbeatMaxAgeMs: heartbeatMaxAge,
+      status: oneOf(
+        rawThresholds.status,
+        ['not_approved', 'hypothesis', 'approved'],
+        'thresholds.status',
+      ),
+    }
+  }
+  const funding = record(r.funding)
+  return {
+    schema: STATUS_SCHEMA,
+    mode: str(r.mode, 'mode'),
+    evidenceClass: str(r.evidence_class, 'evidence_class'),
+    phase: oneOf(r.phase, SESSION_PHASES, 'phase'),
+    reportedPhase: strOrNull(r.reported_phase, 'reported_phase'),
+    liveness: oneOf(
+      r.liveness,
+      ['unknown', 'alive', 'stale', 'final'],
+      'liveness',
+    ),
+    reasons: list(r.reasons, 'reasons').map((s, i) => str(s, `reasons[${i}]`)),
+    thresholds,
+    haltReason: strOrNull(r.halt_reason, 'halt_reason'),
+    orderlyStop: recordOrNull(r.orderly_stop),
+    steps: numOrNull(r.steps, 'steps'),
+    observedNowMs: numOrNull(r.observed_now_ms, 'observed_now_ms'),
+    pendingOrders: numOrNull(r.pending_orders, 'pending_orders'),
+    openPositions: numOrNull(r.open_positions, 'open_positions'),
+    resources: recordOrNull(r.resources),
+    clock: recordOrNull(r.clock),
+    funding: {
+      source: oneOf(
+        funding.source,
+        ['synthetic', 'observed', 'unknown'],
+        'funding.source',
+      ),
+      pnlVerified: bool(funding.pnl_verified, 'funding.pnl_verified'),
+      reasons: list(funding.reasons, 'funding.reasons').map((s, i) =>
+        str(s, `funding.reasons[${i}]`),
+      ),
+    },
+  }
+}
