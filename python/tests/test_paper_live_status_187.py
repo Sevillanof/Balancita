@@ -59,10 +59,13 @@ class TestSessionStatus(unittest.TestCase):
         self.assertIn("report_ended_after_heartbeat", block["reasons"])
         self.assertEqual(PUB.session_status(beat("LIVE"), report=report)["phase"], "LIVE")        # a tie goes to the heartbeat
         # D-223-01: an older report (a previous run, kept across an operator restart) never outranks the heartbeat
-        for name, other in {"older report": dict(report, ended_at_observed_ms=999), "same time": dict(report, ended_at_observed_ms=1_000), "other session": dict(report, session_id="x"),
-                            "other configuration": dict(report, config_digest="y"), "no time": {k: v for k, v in report.items() if k != "ended_at_observed_ms"}}.items():
+        # (report, observed time of the heartbeat): the identity cases use a heartbeat OLDER than the report, so only the identity rejects them (D-223-04)
+        cases = {"older report": (dict(report, ended_at_observed_ms=999), 1_000), "same time": (dict(report, ended_at_observed_ms=1_000), 1_000),
+                 "other session": (dict(report, session_id="x"), 900), "other configuration": (dict(report, config_digest="y"), 900),
+                 "no time": ({k: v for k, v in report.items() if k != "ended_at_observed_ms"}, 900)}
+        for name, (other, seen) in cases.items():
             with self.subTest(name=name):
-                block = PUB.session_status(beat("WARMUP"), report=other)
+                block = PUB.session_status(beat("WARMUP", observed_now_ms=seen), report=other)
                 self.assertEqual(block["phase"], "WARMING_UP")
                 self.assertNotIn("report_ended_after_heartbeat", block["reasons"])
                 self.assertIsNone(block["orderly_stop"])
