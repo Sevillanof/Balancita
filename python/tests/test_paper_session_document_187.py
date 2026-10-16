@@ -22,6 +22,26 @@ class TestCommittedDocuments(unittest.TestCase):
         self.assertEqual(GEN.dumps(GEN.build()), GEN.dumps(GEN.build()))
 
 
+class TestIntervalsCarryTheirOwnTime(unittest.TestCase):
+    """The ``intervals`` array is not chronological (decided rows first, then signals without a decision): ``at_ms`` is the key a reader orders by."""
+
+    def test_every_row_has_the_time_of_its_decision_or_of_its_signal(self):
+        document = GEN.build()["operating_threshold_hypothesis"]
+        rows = document["intervals"]["intervals"]
+        self.assertGreaterEqual(len(rows), 2)
+        for row in rows:
+            self.assertIsNotNone(row["at_ms"])
+            if row["decided_ms"] is not None:
+                self.assertEqual(row["at_ms"], row["decided_ms"])
+        self.assertTrue(any(r["decided_ms"] is None for r in rows), "a signal without decision is part of the case")
+
+
+    def test_a_wait_before_a_decision_is_listed_after_it_but_its_time_is_earlier(self):
+        rows = GEN.build()["intervals_wait_before_decision"]["intervals"]["intervals"]
+        self.assertEqual([r["stages"]["signal"]["action"] for r in rows], ["BUY", "WAIT"])          # publisher order: decided rows first
+        self.assertLess(rows[1]["at_ms"], rows[0]["at_ms"])                                          # but the WAIT happened first
+
+
 class TestTheWriterClaimsNoAge(unittest.TestCase):
     """A document written by the process that holds the runner can say nothing about its own age: 0 by construction proves nothing."""
 

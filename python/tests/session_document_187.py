@@ -36,6 +36,14 @@ def _runner(case):
     return runner
 
 
+def _runner_wait_first(case):
+    """The same two products, but the WAIT (no decision, so it is listed after the decided rows) happens BEFORE the BUY: the array order and the time order differ."""
+    script = {"scripted-a": {(T.BTC, T.CYCLE): case.call("BUY"), (T.ETH, T.CYCLE): case.call("WAIT")}}
+    runner = case.runner(script)
+    runner.run([T.cycle(T.CYCLE + 2 * T.SEC, T.ETH), T.cycle(T.CYCLE + 3 * T.SEC, T.BTC), T.quote(T.BTC, T.CYCLE + 5 * T.SEC, "100010")])
+    return runner
+
+
 def build():
     if "doc" in _CACHE:
         return _CACHE["doc"]
@@ -51,6 +59,7 @@ def build():
             "operating_no_threshold": PUB.session_blocks(runner, live, source_state=LIVE),
             "stopped_orderly": PUB.session_blocks(runner, stopped_beat, None, report, max_age_ms=MAX_AGE_MS, source_state=LIVE),
             "halted_funding_diverged": PUB.session_blocks(runner, halted_beat, halt, halted_report, max_age_ms=MAX_AGE_MS, funding=funding),
+            "intervals_wait_before_decision": PUB.session_blocks(_runner_wait_first(case), live, max_age_ms=MAX_AGE_MS, source_state=LIVE),
             "without_status": PUB.session_blocks(runner, None, max_age_ms=MAX_AGE_MS),
         }
     finally:

@@ -152,7 +152,9 @@ def intervals(runner, from_ms=None, to_ms=None, product=None):
     """B3: signal -> decision -> order -> trade per (product, bucket). Decision, order and trade come from the runner's own
     decision rows; the ``signal`` stage from ``signal_trace`` (a signal without a decision, a WAIT included, is a row whose later
     stages are ``none``). A stage that does not exist is ``none``, never inferred; a signal reference that does not match the
-    log is ``unverified`` and the contract says so. Qwen decisions and C verdicts come from their own databases (B3 original)."""
+    log is ``unverified`` and the contract says so. The array is NOT chronological (decided rows first, then the signals without a
+    decision): ``at_ms`` is the time of each row (the decision time, or the signal's generation time when there is no decision) and
+    is what a reader orders by; a row without a time says ``null``. Qwen decisions and C verdicts come from their own databases (B3 original)."""
     trace = signal_trace(runner)
     rows = []
     decided = decisions(runner)
@@ -166,7 +168,7 @@ def intervals(runner, from_ms=None, to_ms=None, product=None):
             continue
         rows.append({
             "key": row.get("signal_key"), "product_id": row["product_id"], "strategy_id": row["strategy_id"],
-            "decided_ms": row.get("decided_ms"), "side": row["side"],
+            "decided_ms": row.get("decided_ms"), "at_ms": row.get("decided_ms"), "side": row["side"],
             "stages": {
                 "signal": _signal_stage(trace, row.get("signal_key")),
                 "decision": {"state": "recorded" if row.get("decided_ms") is not None else "none", "decided_ms": row.get("decided_ms")},
@@ -182,7 +184,7 @@ def intervals(runner, from_ms=None, to_ms=None, product=None):
                 or (to_ms is not None and bucket >= to_ms):
             continue
         rows.append({
-            "key": key, "product_id": sig["product_id"], "strategy_id": sig["strategy_id"], "decided_ms": None, "side": "none",
+            "key": key, "product_id": sig["product_id"], "strategy_id": sig["strategy_id"], "decided_ms": None, "at_ms": sig["generated_ms"], "side": "none",
             "stages": {
                 "signal": _signal_stage(trace, key),
                 "decision": {"state": "none", "decided_ms": None},

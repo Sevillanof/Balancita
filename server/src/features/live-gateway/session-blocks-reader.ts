@@ -89,23 +89,27 @@ export function degradeStatus(
   }
 }
 
+function readHeartbeat(heartbeatPath: string | undefined): Json | null {
+  if (!heartbeatPath) return null
+  try {
+    const beat: unknown = JSON.parse(readFileSync(heartbeatPath, 'utf8'))
+    return isRecord(beat) ? beat : null
+  } catch {
+    return null
+  }
+}
+
 /**
  * The file must come from the run whose heartbeat is on disk now
- * (session_id, config_digest, the pid and the run id of the process start that wrote it). A
- * file left by an earlier run keeps a recent mtime after a restart; without
- * this check it would be shown as the current session (D-223-01 again).
+ * (session_id, config_digest, the pid and the run id of the process start that
+ * wrote it). A file left by an earlier run keeps a recent mtime after a
+ * restart; without this check it would be shown as the current session
+ * (D-223-01 again).
  */
-function sameRun(document: Json, heartbeatPath: string | undefined): boolean {
-  if (!heartbeatPath) return false
-  let beat: unknown
-  try {
-    beat = JSON.parse(readFileSync(heartbeatPath, 'utf8'))
-  } catch {
-    return false
-  }
+function sameRun(document: Json, beat: Json | null): boolean {
+  if (!beat) return false
   const run = isRecord(document.run) ? document.run : {}
   return (
-    isRecord(beat) &&
     typeof beat.session_id === 'string' &&
     typeof beat.config_digest === 'string' &&
     typeof beat.pid === 'number' &&
@@ -114,6 +118,25 @@ function sameRun(document: Json, heartbeatPath: string | undefined): boolean {
     document.config_digest === beat.config_digest &&
     run.pid === beat.pid &&
     run.id === beat.run_id
+  )
+}
+
+/**
+ * Whether the heartbeat is ahead of the document (D-234-01). The Supervisor
+ * writes the heartbeat after the publication of the same attempt and counts the
+ * attempts in both: a failed publication leaves the previous document of the
+ * SAME run next to a heartbeat that has moved on, and that document is not the
+ * current state of the session. Without the counters in the heartbeat nothing
+ * can be confirmed, which also counts as behind.
+ */
+function publicationBehind(document: Json, beat: Json): boolean {
+  const publication = isRecord(beat.publication) ? beat.publication : null
+  return (
+    publication === null ||
+    typeof publication.attempts !== 'number' ||
+    document.attempt !== publication.attempts ||
+    document.observed_now_ms !== beat.observed_now_ms ||
+    document.steps !== beat.steps
   )
 }
 
@@ -148,20 +171,46 @@ export function readSessionBlocks(
     !isRecord(parsed.intervals)
   )
     return { state: 'invalid', reason: 'block_missing' }
-  if (!sameRun(parsed, heartbeatPath))
+  const beat = readHeartbeat(heartbeatPath)
+  if (!sameRun(parsed, beat) || beat === null)
     return { state: 'invalid', reason: 'other_run' }
   const publishedAtMs = Math.round(mtimeMs)
   try {
     const validity = { nowMs, publishedAtMs }
+    const behind = publicationBehind(parsed, beat)
+    let status = degradeStatus(parsed.status, validity)
+    let positions = degradeValidity(parsed.positions, validity)
+    if (behind) {
+      // The document is the last one that could be written, not the latest state.
+      const gateway = isRecord(status.gateway) ? status.gateway : {}
+      status = {
+        ...status,
+        liveness: status.liveness === 'alive' ? 'unknown' : status.liveness,
+        gateway: {
+          age_ms: gateway.age_ms ?? null,
+          reason: 'publication_behind',
+          heartbeat_phase: typeof beat.phase === 'string' ? beat.phase : null,
+        },
+      }
+      const verification = isRecord(positions.verification)
+        ? positions.verification
+        : {}
+      positions = {
+        ...positions,
+        verification: {
+          ...verification,
+          freshness:
+            verification.freshness === 'fresh'
+              ? 'unknown'
+              : verification.freshness,
+        },
+      }
+    }
     return {
       state: 'ok',
       published_at_ms: publishedAtMs,
       evaluated_ms: nowMs,
-      document: {
-        ...parsed,
-        status: degradeStatus(parsed.status, validity),
-        positions: degradeValidity(parsed.positions, validity),
-      },
+      document: { ...parsed, status, positions },
     }
   } catch {
     return { state: 'invalid', reason: 'block_shape' }

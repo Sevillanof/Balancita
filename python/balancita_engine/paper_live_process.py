@@ -45,6 +45,7 @@ import time
 from decimal import Decimal
 
 from . import paper_live_integration as LI
+from . import paper_live_publish as PUB
 from . import replay_driver as RP
 from . import replay_specs as RS
 from .futures_products import is_product_id
@@ -61,6 +62,7 @@ CONFIG_SCHEMA = "balancita-paper-live-process-config.v1"
 HEARTBEAT_SCHEMA = "balancita-paper-live-heartbeat.v1"
 REPORT_SCHEMA = "balancita-paper-live-process-report.v1"
 CONFIG_FILE, HEARTBEAT_FILE, REPORT_FILE = "process-config.json", "heartbeat.json", "report.json"
+BLOCKS_FILE = "session-blocks.json"             # derived, read by the server (#187): never an input of the session
 HALT_FILE, RESTARTS_FILE = "halt.json", "operator-restarts.json"        # durable, independent of the heartbeat
 MARKER_TABLE, MARKER = "balancita_synthetic_fixture", "balancita-synthetic-fixture.v1"
 POST_WINDOW_MS = 6 * 3_600_000                  # the loop ends this long after the decision window (positions may still close)
@@ -86,7 +88,7 @@ DEFAULTS = {"source_id": SYNTHETIC_SOURCE, "decide_until_ms": None, "max_quote_g
             "funding_mode": LI.SYNTHETIC_FUNDING, "on_funding_divergence": "halt", "ingest_kw": {}, "evaluator_kw": {},
             "strategies": "frozen", "capital_policy": CAPITAL_POLICY, "step_interval_ms": 1_000, "min_free_bytes": 1 << 30, "warmup_minutes": None}
 REQUIRED = ("schema", "products", "decide_from_ms")
-OPTIONAL = ("resource_limits", "clock_guard", "authorization_ref")                  # absent from DEFAULTS on purpose: a configuration without it keeps its digest
+OPTIONAL = ("resource_limits", "clock_guard", "authorization_ref", "publish_blocks")                  # absent from DEFAULTS on purpose: a configuration without it keeps its digest
 RESOURCE_KEYS = ("disk_warn_bytes", "disk_stop_bytes", "memory_warn_bytes", "memory_stop_bytes")
 DEFAULT_CHECK_EVERY_STEPS = 30
 AUTHORIZATION_REF = re.compile(r"^BAL-DECISION-[0-9]{1,4}-[0-9]{1,3}$")
@@ -156,6 +158,8 @@ def validate_config(raw):
         raise ProcessError("config_invalid", "authorization_ref: expected BAL-DECISION-<issue>-<n>")
     if "resource_limits" in config:
         config["resource_limits"] = _validate_resource_limits(config["resource_limits"])
+    if "publish_blocks" in config and config["publish_blocks"] is not True:
+        raise ProcessError("config_invalid", "publish_blocks: only true; leave it out to publish nothing")
     # ``authorization_ref`` is an audit trail only: it opens nothing (the gate is a constant of the code) and is not part of the identity
     return dict(config, digest=stable_hash({k: v for k, v in config.items() if k not in ("digest", "authorization_ref")})[:20])
 
@@ -295,6 +299,8 @@ class Supervisor(object):
         self._warned = set()
         self.wall_time = wall_time or (lambda: int(time.time() * 1000))     # only read when ``clock_guard`` is configured
         self.clock_events, self._last_now = [], None
+        self.run_id = os.urandom(8).hex()                                  # one per process start: a pid repeats inside a container (D-231-04)
+        self.publication = {"attempts": 0, "failures": 0, "last_error": None, "last_ok_observed_now_ms": None}     # only reported when ``publish_blocks`` is on
         self.source_identity = None
         self.strategies = strategies
         self.session = None
@@ -542,7 +548,35 @@ class Supervisor(object):
             beat["wall_ms"] = self.wall_time()                  # lets a supervisor tell a stuck process from a simulated clock
         if self.config.get("resource_limits"):
             beat["resources"] = {"last": self.last_resources, "events": self.resource_events}
+        if self.config.get("publish_blocks"):
+            beat["run_id"] = self.run_id
+            self._publish(beat, state)                           # after the step's journal and checkpoint, before the heartbeat that reports it
+            beat["publication"] = dict(self.publication)
         _write_json(os.path.join(self.directory, HEARTBEAT_FILE), beat)
+
+    def _write_blocks(self, path, body):
+        _write_json(path, body)                                  # a seam: tests make the publication fail here
+
+    def _publish(self, beat, state):
+        """The derived blocks file (#187, option A): written atomically after the durable state and before the heartbeat, so ``publication``
+        in the heartbeat describes THIS attempt. A failure never stops the session and never touches the previous file: it is counted and
+        reported (``except Exception`` only, with the type and a short text without paths). The document carries the run (session, digest,
+        pid, run id) and no age: the reader measures it.
+
+        LIMITATION (measured on a synthetic session, #187-05): the whole document is rebuilt and rewritten at every step and its intervals grow
+        with the session. One synthetic run (test_the_cost_of_publishing_is_measured..., 143 publications): 840 intervals at the end, the file from about 2 kB to about 0.6 MB (it varies a little between runs) and 70-300 ms per publication on one machine. It is a measurement of that run, not a statement about long sessions. A window or a cap for them is a separate decision."""
+        self.publication["attempts"] += 1                        # the document carries this number: a reader can tell a stale one from the heartbeat's
+        try:
+            session = self.session
+            funding = session.funding_report() if self.config["funding_mode"] == LI.OBSERVED_FUNDING else None
+            document = PUB.session_blocks(session.runner, beat, _read_json(os.path.join(self.directory, HALT_FILE)),
+                                          _read_json(os.path.join(self.directory, REPORT_FILE)), source_state=state, funding=funding)
+            document["attempt"] = self.publication["attempts"]
+            self._write_blocks(os.path.join(self.directory, BLOCKS_FILE), document)
+            self.publication["last_ok_observed_now_ms"] = beat["observed_now_ms"]
+        except Exception as error:                               # noqa: BLE001 - a derived file must never end the session
+            self.publication["failures"] += 1
+            self.publication["last_error"] = _short_error(error, self.directory)
 
     def _finish(self, now, halted=None):
         session = self.session
@@ -599,6 +633,18 @@ def _resident_bytes():
         import resource
         peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
         return peak if sys.platform == "darwin" else peak * 1024
+
+
+def _short_error(error, directory):
+    """The type and a short text of a publication failure, without absolute paths (the heartbeat is read by others)."""
+    text = errno_name(error) if isinstance(error, OSError) and error.errno else str(error)
+    text = re.sub(r"(/[^\s'\"]+)+", "<path>", text.replace(directory, "<dir>"))
+    return {"type": type(error).__name__, "text": text[:80]}
+
+
+def errno_name(error):
+    import errno
+    return errno.errorcode.get(error.errno, "errno")
 
 
 def _write_json(path, body):

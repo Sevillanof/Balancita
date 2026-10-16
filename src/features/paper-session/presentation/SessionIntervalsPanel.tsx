@@ -1,5 +1,6 @@
 import { Panel, StatusPill } from '../../../shared/mission-control'
 import type { StatusTone } from '../../../shared/mission-control'
+import { newestFirst } from '../domain/session-blocks.ts'
 import type { IntervalsBlock } from '../domain/session-blocks.ts'
 
 /**
@@ -57,7 +58,7 @@ export default function SessionIntervalsPanel({
   ageSeconds: number | null
   lastRead?: boolean
 }) {
-  const newest = [...block.intervals].reverse()
+  const newest = newestFirst(block.intervals)
   const shown = newest.slice(0, VISIBLE_INTERVALS)
   const unverified = block.signalReferences.unverified.length
   const warnings: string[] = []

@@ -1,0 +1,1745 @@
+{
+  "last_publication_failed": {
+    "blocks": {
+      "attempt": 142,
+      "authority": "none",
+      "config_digest": "ff487531c207296ef1a9",
+      "derived": true,
+      "intervals": {
+        "clock_ms": 1763335170000,
+        "contract": {
+          "complete": true,
+          "stages_missing": [],
+          "stages_present": [
+            "signal",
+            "decision",
+            "order",
+            "trade"
+          ]
+        },
+        "evidence_class": "not_forward_evidence",
+        "execution_class": "observed_quotes",
+        "from_ms": null,
+        "intervals": [
+          {
+            "at_ms": 1763254202000,
+            "decided_ms": 1763254202000,
+            "key": "98465f97729ed734b28d0e4a",
+            "product_id": "PF_XBTUSD",
+            "side": "LONG",
+            "stages": {
+              "decision": {
+                "decided_ms": 1763254202000,
+                "state": "recorded"
+              },
+              "order": {
+                "entry_ms": 1763254210000,
+                "reasons": [],
+                "state": "opened"
+              },
+              "signal": {
+                "action": "BUY",
+                "entry_hash": "1978483f7a908f6a204c6ea42ea129c9e07981c699874d3e517ca9a8c4e8dbd3",
+                "origin": "original",
+                "seq": 35,
+                "signal_key": "98465f97729ed734b28d0e4a",
+                "state": "recorded"
+              },
+              "trade": {
+                "exit_reason": "target",
+                "state": "closed",
+                "trade_id": "162467f865dd15872fa319c0"
+              }
+            },
+            "strategy_id": "c29-momentum-perp-v1"
+          },
+          {
+            "at_ms": 1763254502000,
+            "decided_ms": 1763254502000,
+            "key": "cd833d62f653de2ac8903d88",
+            "product_id": "PF_XBTUSD",
+            "side": "LONG",
+            "stages": {
+              "decision": {
+                "decided_ms": 1763254502000,
+                "state": "recorded"
+              },
+              "order": {
+                "entry_ms": 1763254510000,
+                "reasons": [
+                  "position_already_open"
+                ],
+                "state": "rejected"
+              },
+              "signal": {
+                "action": "BUY",
+                "entry_hash": "cf06e89b216d72aa436b189f8748938d33bfffb2313cb9a00ed9db816cde133c",
+                "origin": "original",
+                "seq": 38,
+                "signal_key": "cd833d62f653de2ac8903d88",
+                "state": "recorded"
+              },
+              "trade": {
+                "exit_reason": null,
+                "state": "none",
+                "trade_id": null
+              }
+            },
+            "strategy_id": "c29-momentum-perp-v1"
+          },
+          {
+            "at_ms": 1763254802000,
+            "decided_ms": 1763254802000,
+            "key": "99811dc0a457d18e4fb11931",
+            "product_id": "PF_XBTUSD",
+            "side": "LONG",
+            "stages": {
+              "decision": {
+                "decided_ms": 1763254802000,
+                "state": "recorded"
+              },
+              "order": {
+                "entry_ms": 1763254810000,
+                "reasons": [
+                  "position_already_open"
+                ],
+                "state": "rejected"
+              },
+              "signal": {
+                "action": "BUY",
+                "entry_hash": "80df763bd7f39f83dd4e0f57481d430a849a580f29036f91ab43dc0e44a7a321",
+                "origin": "original",
+                "seq": 41,
+                "signal_key": "99811dc0a457d18e4fb11931",
+                "state": "recorded"
+              },
+              "trade": {
+                "exit_reason": null,
+                "state": "none",
+                "trade_id": null
+              }
+            },
+            "strategy_id": "c29-momentum-perp-v1"
+          }
+        ],
+        "mode": "integration",
+        "product": null,
+        "schema": "balancita-paper-session-intervals.v1",
+        "signal_references": {
+          "unverified": [],
+          "verified": 840
+        },
+        "to_ms": null
+      },
+      "observed_now_ms": 1763335200000,
+      "positions": {
+        "clock_ms": 1763335170000,
+        "evidence_class": "not_forward_evidence",
+        "execution_class": "observed_quotes",
+        "mode": "integration",
+        "positions": [
+          {
+            "accounting_verified": false,
+            "classes": {
+              "pnl": "estimated",
+              "position": "simulated",
+              "price": "observed"
+            },
+            "coverage": {
+              "gaps": [],
+              "last_quote_ms": 1763335170000,
+              "last_watched_ms": 1763335170000,
+              "quotes_watched": 3268,
+              "silent_now_ms": 0
+            },
+            "entry_ms": 1763269810000,
+            "entry_price": "108381.3502842000000",
+            "intent_id": "2c061951bad4c271c70c9687",
+            "product_id": "PF_XBTUSD",
+            "protection_evidence": "observed",
+            "quantity": "0.002966377510124717136505084960",
+            "side": "LONG",
+            "stop": "105072.9555023886555694361556",
+            "stop_protection": "observed",
+            "strategy_id": "c29-momentum-perp-v1",
+            "strategy_version": 1,
+            "target": "113350.8167464170166458457666",
+            "verified": false
+          }
+        ],
+        "schema": "balancita-paper-session-positions.v1",
+        "unrealized_class": "estimated",
+        "unrealized_usd": "12.6616",
+        "verification": {
+          "freshness": "unknown",
+          "reasons": [
+            "report_age_unknown",
+            "freshness_threshold_not_approved"
+          ],
+          "thresholds": {
+            "report_max_age_ms": null,
+            "status": "not_approved"
+          },
+          "verified": false
+        }
+      },
+      "run": {
+        "id": "run-synthetic-0001",
+        "pid": 4242
+      },
+      "schema": "balancita-paper-session-blocks.v1",
+      "session_id": "e6821de91445db8ca3ef",
+      "status": {
+        "clock": null,
+        "evidence_class": "not_forward_evidence",
+        "funding": {
+          "disputed_trades": null,
+          "divergence_evidence": null,
+          "incomplete_trades": null,
+          "pnl_verified": false,
+          "quarantined_periods": null,
+          "reasons": [
+            "funding_report_missing"
+          ],
+          "source": "unknown"
+        },
+        "halt_reason": null,
+        "liveness": "unknown",
+        "mode": "integration",
+        "observed_now_ms": 1763335200000,
+        "open_positions": 1,
+        "orderly_stop": null,
+        "pending_orders": 0,
+        "phase": "LIVE",
+        "reasons": [
+          "heartbeat_age_unknown"
+        ],
+        "reported_phase": "LIVE",
+        "resources": null,
+        "schema": "balancita-paper-session-status.v1",
+        "steps": 141,
+        "thresholds": {
+          "heartbeat_max_age_ms": null,
+          "status": "not_approved"
+        }
+      },
+      "steps": 141
+    },
+    "heartbeat": {
+      "config_digest": "ff487531c207296ef1a9",
+      "halted": null,
+      "ingest_state": null,
+      "observed_now_ms": 1763335800000,
+      "open_positions": 1,
+      "pending_orders": 0,
+      "phase": "STOPPED",
+      "pid": 4242,
+      "publication": {
+        "attempts": 144,
+        "failures": 2,
+        "last_error": {
+          "text": "ENOSPC",
+          "type": "OSError"
+        },
+        "last_ok_observed_now_ms": 1763335200000
+      },
+      "run_id": "run-synthetic-0001",
+      "runner_status": "STOPPED",
+      "schema": "balancita-paper-live-heartbeat.v1",
+      "session_id": "e6821de91445db8ca3ef",
+      "steps": 141
+    },
+    "intervals_before_trimming": 840
+  },
+  "operating": {
+    "blocks": {
+      "attempt": 3,
+      "authority": "none",
+      "config_digest": "ff487531c207296ef1a9",
+      "derived": true,
+      "intervals": {
+        "clock_ms": 1763251770000,
+        "contract": {
+          "complete": true,
+          "stages_missing": [],
+          "stages_present": [
+            "signal",
+            "decision",
+            "order",
+            "trade"
+          ]
+        },
+        "evidence_class": "not_forward_evidence",
+        "execution_class": "observed_quotes",
+        "from_ms": null,
+        "intervals": [
+          {
+            "at_ms": 1763251202000,
+            "decided_ms": null,
+            "key": "25b637f6501c39eb63be2966",
+            "product_id": "PF_XBTUSD",
+            "side": "none",
+            "stages": {
+              "decision": {
+                "decided_ms": null,
+                "state": "none"
+              },
+              "order": {
+                "entry_ms": null,
+                "reasons": [],
+                "state": "none"
+              },
+              "signal": {
+                "action": "WAIT",
+                "entry_hash": "55500fded97d8bd6490a8081107d457fb9820558f54f4c20dd76aed7dfd3e19c",
+                "origin": "original",
+                "seq": 5,
+                "signal_key": "25b637f6501c39eb63be2966",
+                "state": "recorded"
+              },
+              "trade": {
+                "exit_reason": null,
+                "state": "none",
+                "trade_id": null
+              }
+            },
+            "strategy_id": "c29-momentum-perp-v1"
+          },
+          {
+            "at_ms": 1763251202000,
+            "decided_ms": null,
+            "key": "762c35291ed0f8da9710a064",
+            "product_id": "PF_XBTUSD",
+            "side": "none",
+            "stages": {
+              "decision": {
+                "decided_ms": null,
+                "state": "none"
+              },
+              "order": {
+                "entry_ms": null,
+                "reasons": [],
+                "state": "none"
+              },
+              "signal": {
+                "action": "WAIT",
+                "entry_hash": "47142a86cc7097475a8e3aa224e5932a93f5e4fe1d295ed547e0a5c1393415e2",
+                "origin": "original",
+                "seq": 6,
+                "signal_key": "762c35291ed0f8da9710a064",
+                "state": "recorded"
+              },
+              "trade": {
+                "exit_reason": null,
+                "state": "none",
+                "trade_id": null
+              }
+            },
+            "strategy_id": "c30-momentum-12h-perp-v1"
+          },
+          {
+            "at_ms": 1763251202000,
+            "decided_ms": null,
+            "key": "c3d492f91e3c83b81de0ce95",
+            "product_id": "PF_XBTUSD",
+            "side": "none",
+            "stages": {
+              "decision": {
+                "decided_ms": null,
+                "state": "none"
+              },
+              "order": {
+                "entry_ms": null,
+                "reasons": [],
+                "state": "none"
+              },
+              "signal": {
+                "action": "WAIT",
+                "entry_hash": "e9a634be7a965c3489177db940a9f71fb21a5a8f787c46b9e573103ac87f0311",
+                "origin": "original",
+                "seq": 7,
+                "signal_key": "c3d492f91e3c83b81de0ce95",
+                "state": "recorded"
+              },
+              "trade": {
+                "exit_reason": null,
+                "state": "none",
+                "trade_id": null
+              }
+            },
+            "strategy_id": "c32-funding-contrarian-24h-perp-v1"
+          }
+        ],
+        "mode": "integration",
+        "product": null,
+        "schema": "balancita-paper-session-intervals.v1",
+        "signal_references": {
+          "unverified": [],
+          "verified": 6
+        },
+        "to_ms": null
+      },
+      "observed_now_ms": 1763251800000,
+      "positions": {
+        "clock_ms": 1763251770000,
+        "evidence_class": "not_forward_evidence",
+        "execution_class": "observed_quotes",
+        "mode": "integration",
+        "positions": [],
+        "schema": "balancita-paper-session-positions.v1",
+        "unrealized_class": "estimated",
+        "unrealized_usd": "0",
+        "verification": {
+          "freshness": "unknown",
+          "reasons": [
+            "report_age_unknown",
+            "freshness_threshold_not_approved"
+          ],
+          "thresholds": {
+            "report_max_age_ms": null,
+            "status": "not_approved"
+          },
+          "verified": false
+        }
+      },
+      "run": {
+        "id": "run-synthetic-0001",
+        "pid": 4242
+      },
+      "schema": "balancita-paper-session-blocks.v1",
+      "session_id": "e6821de91445db8ca3ef",
+      "status": {
+        "clock": null,
+        "evidence_class": "not_forward_evidence",
+        "funding": {
+          "disputed_trades": null,
+          "divergence_evidence": null,
+          "incomplete_trades": null,
+          "pnl_verified": false,
+          "quarantined_periods": null,
+          "reasons": [
+            "funding_report_missing"
+          ],
+          "source": "unknown"
+        },
+        "halt_reason": null,
+        "liveness": "unknown",
+        "mode": "integration",
+        "observed_now_ms": 1763251800000,
+        "open_positions": 0,
+        "orderly_stop": null,
+        "pending_orders": 0,
+        "phase": "LIVE",
+        "reasons": [
+          "heartbeat_age_unknown"
+        ],
+        "reported_phase": "LIVE",
+        "resources": null,
+        "schema": "balancita-paper-session-status.v1",
+        "steps": 2,
+        "thresholds": {
+          "heartbeat_max_age_ms": null,
+          "status": "not_approved"
+        }
+      },
+      "steps": 2
+    },
+    "heartbeat": {
+      "config_digest": "ff487531c207296ef1a9",
+      "halted": null,
+      "ingest_state": {
+        "data_gaps": {
+          "by_product": {},
+          "pending": 0,
+          "sample": [],
+          "total": 0
+        },
+        "epoch_changes": {
+          "sample": [],
+          "total": 0
+        },
+        "late_sample": [],
+        "more_to_read": false,
+        "observation": {
+          "contradicted": [],
+          "log": [],
+          "observation_gaps": [],
+          "observed_process_ms": null,
+          "observed_until_ms": 1763251798000,
+          "open_process": {},
+          "open_silences": {}
+        },
+        "outages": [],
+        "pending": 1,
+        "rejected_sample": [],
+        "silences": {
+          "limit_ms": 15000,
+          "open": [],
+          "product": 0,
+          "sample": [
+            {
+              "from_ms": 1763250610000,
+              "kind": "source_silence",
+              "observed": "not_observed",
+              "outage": false,
+              "product_id": null,
+              "rowid": 2,
+              "to_ms": 1763250630000
+            },
+            {
+              "from_ms": 1763250630000,
+              "kind": "source_silence",
+              "observed": "not_observed",
+              "outage": false,
+              "product_id": null,
+              "rowid": 3,
+              "to_ms": 1763250650000
+            },
+            {
+              "from_ms": 1763250650000,
+              "kind": "source_silence",
+              "observed": "not_observed",
+              "outage": false,
+              "product_id": null,
+              "rowid": 4,
+              "to_ms": 1763250670000
+            },
+            {
+              "from_ms": 1763250670000,
+              "kind": "source_silence",
+              "observed": "not_observed",
+              "outage": false,
+              "product_id": null,
+              "rowid": 5,
+              "to_ms": 1763250690000
+            },
+            {
+              "from_ms": 1763250690000,
+              "kind": "source_silence",
+              "observed": "not_observed",
+              "outage": false,
+              "product_id": null,
+              "rowid": 6,
+              "to_ms": 1763250710000
+            },
+            {
+              "from_ms": 1763250710000,
+              "kind": "source_silence",
+              "observed": "not_observed",
+              "outage": false,
+              "product_id": null,
+              "rowid": 7,
+              "to_ms": 1763250730000
+            },
+            {
+              "from_ms": 1763250730000,
+              "kind": "source_silence",
+              "observed": "not_observed",
+              "outage": false,
+              "product_id": null,
+              "rowid": 8,
+              "to_ms": 1763250750000
+            },
+            {
+              "from_ms": 1763250750000,
+              "kind": "source_silence",
+              "observed": "not_observed",
+              "outage": false,
+              "product_id": null,
+              "rowid": 9,
+              "to_ms": 1763250770000
+            },
+            {
+              "from_ms": 1763250770000,
+              "kind": "source_silence",
+              "observed": "not_observed",
+              "outage": false,
+              "product_id": null,
+              "rowid": 10,
+              "to_ms": 1763250790000
+            },
+            {
+              "from_ms": 1763250790000,
+              "kind": "source_silence",
+              "observed": "not_observed",
+              "outage": false,
+              "product_id": null,
+              "rowid": 11,
+              "to_ms": 1763250810000
+            },
+            {
+              "from_ms": 1763250810000,
+              "kind": "source_silence",
+              "observed": "not_observed",
+              "outage": false,
+              "product_id": null,
+              "rowid": 12,
+              "to_ms": 1763250830000
+            },
+            {
+              "from_ms": 1763250830000,
+              "kind": "source_silence",
+              "observed": "not_observed",
+              "outage": false,
+              "product_id": null,
+              "rowid": 13,
+              "to_ms": 1763250850000
+            },
+            {
+              "from_ms": 1763250850000,
+              "kind": "source_silence",
+              "observed": "not_observed",
+              "outage": false,
+              "product_id": null,
+              "rowid": 14,
+              "to_ms": 1763250870000
+            },
+            {
+              "from_ms": 1763250870000,
+              "kind": "source_silence",
+              "observed": "not_observed",
+              "outage": false,
+              "product_id": null,
+              "rowid": 15,
+              "to_ms": 1763250890000
+            },
+            {
+              "from_ms": 1763250890000,
+              "kind": "source_silence",
+              "observed": "not_observed",
+              "outage": false,
+              "product_id": null,
+              "rowid": 16,
+              "to_ms": 1763250910000
+            },
+            {
+              "from_ms": 1763250910000,
+              "kind": "source_silence",
+              "observed": "not_observed",
+              "outage": false,
+              "product_id": null,
+              "rowid": 17,
+              "to_ms": 1763250930000
+            },
+            {
+              "from_ms": 1763250930000,
+              "kind": "source_silence",
+              "observed": "not_observed",
+              "outage": false,
+              "product_id": null,
+              "rowid": 18,
+              "to_ms": 1763250950000
+            },
+            {
+              "from_ms": 1763250950000,
+              "kind": "source_silence",
+              "observed": "not_observed",
+              "outage": false,
+              "product_id": null,
+              "rowid": 19,
+              "to_ms": 1763250970000
+            },
+            {
+              "from_ms": 1763250970000,
+              "kind": "source_silence",
+              "observed": "not_observed",
+              "outage": false,
+              "product_id": null,
+              "rowid": 20,
+              "to_ms": 1763250990000
+            },
+            {
+              "from_ms": 1763250990000,
+              "kind": "source_silence",
+              "observed": "not_observed",
+              "outage": false,
+              "product_id": null,
+              "rowid": 21,
+              "to_ms": 1763251010000
+            },
+            {
+              "from_ms": 1763251010000,
+              "kind": "source_silence",
+              "observed": "not_observed",
+              "outage": false,
+              "product_id": null,
+              "rowid": 22,
+              "to_ms": 1763251030000
+            },
+            {
+              "from_ms": 1763251030000,
+              "kind": "source_silence",
+              "observed": "not_observed",
+              "outage": false,
+              "product_id": null,
+              "rowid": 23,
+              "to_ms": 1763251050000
+            },
+            {
+              "from_ms": 1763251050000,
+              "kind": "source_silence",
+              "observed": "not_observed",
+              "outage": false,
+              "product_id": null,
+              "rowid": 24,
+              "to_ms": 1763251070000
+            },
+            {
+              "from_ms": 1763251070000,
+              "kind": "source_silence",
+              "observed": "not_observed",
+              "outage": false,
+              "product_id": null,
+              "rowid": 25,
+              "to_ms": 1763251090000
+            },
+            {
+              "from_ms": 1763251090000,
+              "kind": "source_silence",
+              "observed": "not_observed",
+              "outage": false,
+              "product_id": null,
+              "rowid": 26,
+              "to_ms": 1763251110000
+            },
+            {
+              "from_ms": 1763251110000,
+              "kind": "source_silence",
+              "observed": "not_observed",
+              "outage": false,
+              "product_id": null,
+              "rowid": 27,
+              "to_ms": 1763251130000
+            },
+            {
+              "from_ms": 1763251130000,
+              "kind": "source_silence",
+              "observed": "not_observed",
+              "outage": false,
+              "product_id": null,
+              "rowid": 28,
+              "to_ms": 1763251150000
+            },
+            {
+              "from_ms": 1763251150000,
+              "kind": "source_silence",
+              "observed": "not_observed",
+              "outage": false,
+              "product_id": null,
+              "rowid": 29,
+              "to_ms": 1763251170000
+            },
+            {
+              "from_ms": 1763251170000,
+              "kind": "source_silence",
+              "observed": "not_observed",
+              "outage": false,
+              "product_id": null,
+              "rowid": 30,
+              "to_ms": 1763251190000
+            },
+            {
+              "from_ms": 1763251190000,
+              "kind": "source_silence",
+              "observed": "not_observed",
+              "outage": false,
+              "product_id": null,
+              "rowid": 31,
+              "to_ms": 1763251210000
+            },
+            {
+              "from_ms": 1763251210000,
+              "kind": "source_silence",
+              "observed": "not_observed",
+              "outage": false,
+              "product_id": null,
+              "rowid": 32,
+              "to_ms": 1763251230000
+            },
+            {
+              "from_ms": 1763251230000,
+              "kind": "source_silence",
+              "observed": "not_observed",
+              "outage": false,
+              "product_id": null,
+              "rowid": 33,
+              "to_ms": 1763251250000
+            },
+            {
+              "from_ms": 1763251250000,
+              "kind": "source_silence",
+              "observed": "not_observed",
+              "outage": false,
+              "product_id": null,
+              "rowid": 34,
+              "to_ms": 1763251270000
+            },
+            {
+              "from_ms": 1763251270000,
+              "kind": "source_silence",
+              "observed": "not_observed",
+              "outage": false,
+              "product_id": null,
+              "rowid": 35,
+              "to_ms": 1763251290000
+            },
+            {
+              "from_ms": 1763251290000,
+              "kind": "source_silence",
+              "observed": "not_observed",
+              "outage": false,
+              "product_id": null,
+              "rowid": 36,
+              "to_ms": 1763251310000
+            },
+            {
+              "from_ms": 1763251310000,
+              "kind": "source_silence",
+              "observed": "not_observed",
+              "outage": false,
+              "product_id": null,
+              "rowid": 37,
+              "to_ms": 1763251330000
+            },
+            {
+              "from_ms": 1763251330000,
+              "kind": "source_silence",
+              "observed": "not_observed",
+              "outage": false,
+              "product_id": null,
+              "rowid": 38,
+              "to_ms": 1763251350000
+            },
+            {
+              "from_ms": 1763251350000,
+              "kind": "source_silence",
+              "observed": "not_observed",
+              "outage": false,
+              "product_id": null,
+              "rowid": 39,
+              "to_ms": 1763251370000
+            },
+            {
+              "from_ms": 1763251370000,
+              "kind": "source_silence",
+              "observed": "not_observed",
+              "outage": false,
+              "product_id": null,
+              "rowid": 40,
+              "to_ms": 1763251390000
+            },
+            {
+              "from_ms": 1763251390000,
+              "kind": "source_silence",
+              "observed": "not_observed",
+              "outage": false,
+              "product_id": null,
+              "rowid": 41,
+              "to_ms": 1763251410000
+            },
+            {
+              "from_ms": 1763251410000,
+              "kind": "source_silence",
+              "observed": "not_observed",
+              "outage": false,
+              "product_id": null,
+              "rowid": 42,
+              "to_ms": 1763251430000
+            },
+            {
+              "from_ms": 1763251430000,
+              "kind": "source_silence",
+              "observed": "not_observed",
+              "outage": false,
+              "product_id": null,
+              "rowid": 43,
+              "to_ms": 1763251450000
+            },
+            {
+              "from_ms": 1763251450000,
+              "kind": "source_silence",
+              "observed": "not_observed",
+              "outage": false,
+              "product_id": null,
+              "rowid": 44,
+              "to_ms": 1763251470000
+            },
+            {
+              "from_ms": 1763251470000,
+              "kind": "source_silence",
+              "observed": "not_observed",
+              "outage": false,
+              "product_id": null,
+              "rowid": 45,
+              "to_ms": 1763251490000
+            },
+            {
+              "from_ms": 1763251490000,
+              "kind": "source_silence",
+              "observed": "not_observed",
+              "outage": false,
+              "product_id": null,
+              "rowid": 46,
+              "to_ms": 1763251510000
+            },
+            {
+              "from_ms": 1763251510000,
+              "kind": "source_silence",
+              "observed": "not_observed",
+              "outage": false,
+              "product_id": null,
+              "rowid": 47,
+              "to_ms": 1763251530000
+            },
+            {
+              "from_ms": 1763251530000,
+              "kind": "source_silence",
+              "observed": "not_observed",
+              "outage": false,
+              "product_id": null,
+              "rowid": 48,
+              "to_ms": 1763251550000
+            },
+            {
+              "from_ms": 1763251550000,
+              "kind": "source_silence",
+              "observed": "not_observed",
+              "outage": false,
+              "product_id": null,
+              "rowid": 49,
+              "to_ms": 1763251570000
+            },
+            {
+              "from_ms": 1763251570000,
+              "kind": "source_silence",
+              "observed": "not_observed",
+              "outage": false,
+              "product_id": null,
+              "rowid": 50,
+              "to_ms": 1763251590000
+            },
+            {
+              "from_ms": 1763251590000,
+              "kind": "source_silence",
+              "observed": "not_observed",
+              "outage": false,
+              "product_id": null,
+              "rowid": 51,
+              "to_ms": 1763251610000
+            },
+            {
+              "from_ms": 1763251610000,
+              "kind": "source_silence",
+              "observed": "not_observed",
+              "outage": false,
+              "product_id": null,
+              "rowid": 52,
+              "to_ms": 1763251630000
+            },
+            {
+              "from_ms": 1763251630000,
+              "kind": "source_silence",
+              "observed": "not_observed",
+              "outage": false,
+              "product_id": null,
+              "rowid": 53,
+              "to_ms": 1763251650000
+            },
+            {
+              "from_ms": 1763251650000,
+              "kind": "source_silence",
+              "observed": "not_observed",
+              "outage": false,
+              "product_id": null,
+              "rowid": 54,
+              "to_ms": 1763251670000
+            },
+            {
+              "from_ms": 1763251670000,
+              "kind": "source_silence",
+              "observed": "not_observed",
+              "outage": false,
+              "product_id": null,
+              "rowid": 55,
+              "to_ms": 1763251690000
+            },
+            {
+              "from_ms": 1763251690000,
+              "kind": "source_silence",
+              "observed": "not_observed",
+              "outage": false,
+              "product_id": null,
+              "rowid": 56,
+              "to_ms": 1763251710000
+            },
+            {
+              "from_ms": 1763251710000,
+              "kind": "source_silence",
+              "observed": "not_observed",
+              "outage": false,
+              "product_id": null,
+              "rowid": 57,
+              "to_ms": 1763251730000
+            },
+            {
+              "from_ms": 1763251730000,
+              "kind": "source_silence",
+              "observed": "not_observed",
+              "outage": false,
+              "product_id": null,
+              "rowid": 58,
+              "to_ms": 1763251750000
+            },
+            {
+              "from_ms": 1763251750000,
+              "kind": "source_silence",
+              "observed": "not_observed",
+              "outage": false,
+              "product_id": null,
+              "rowid": 59,
+              "to_ms": 1763251770000
+            },
+            {
+              "from_ms": 1763251770000,
+              "kind": "source_silence",
+              "observed": "not_observed",
+              "outage": false,
+              "product_id": null,
+              "rowid": 60,
+              "to_ms": 1763251790000
+            }
+          ],
+          "source": 59
+        },
+        "source": "live",
+        "stats": {
+          "candle_earlier_revision_after_emit": 0,
+          "candle_revisions_differing": 0,
+          "candle_revisions_seen": 0,
+          "data_gaps": 0,
+          "emitted": 5828,
+          "epoch_changes": 0,
+          "late_source_rows": 0,
+          "product_silences": 0,
+          "source_silences": 59,
+          "unreadable_rows": 0,
+          "watermark_held_for_candle": 0
+        },
+        "streams": {
+          "PF_XBTUSD": {
+            "last_source_ms": 1763251790000,
+            "state": "alive"
+          }
+        },
+        "watermark_ms": 1763251788000
+      },
+      "observed_now_ms": 1763251800000,
+      "open_positions": 0,
+      "pending_orders": 0,
+      "phase": "LIVE",
+      "pid": 4242,
+      "publication": {
+        "attempts": 3,
+        "failures": 0,
+        "last_error": null,
+        "last_ok_observed_now_ms": 1763251800000
+      },
+      "run_id": "run-synthetic-0001",
+      "runner_status": "PROCESSING",
+      "schema": "balancita-paper-live-heartbeat.v1",
+      "session_id": "e6821de91445db8ca3ef",
+      "steps": 2
+    },
+    "intervals_before_trimming": 6
+  },
+  "restart_publication_failed": {
+    "blocks": {
+      "attempt": 4,
+      "authority": "none",
+      "config_digest": "ff487531c207296ef1a9",
+      "derived": true,
+      "intervals": {
+        "clock_ms": 1763252370000,
+        "contract": {
+          "complete": true,
+          "stages_missing": [],
+          "stages_present": [
+            "signal",
+            "decision",
+            "order",
+            "trade"
+          ]
+        },
+        "evidence_class": "not_forward_evidence",
+        "execution_class": "observed_quotes",
+        "from_ms": null,
+        "intervals": [
+          {
+            "at_ms": 1763251202000,
+            "decided_ms": null,
+            "key": "25b637f6501c39eb63be2966",
+            "product_id": "PF_XBTUSD",
+            "side": "none",
+            "stages": {
+              "decision": {
+                "decided_ms": null,
+                "state": "none"
+              },
+              "order": {
+                "entry_ms": null,
+                "reasons": [],
+                "state": "none"
+              },
+              "signal": {
+                "action": "WAIT",
+                "entry_hash": "55500fded97d8bd6490a8081107d457fb9820558f54f4c20dd76aed7dfd3e19c",
+                "origin": "original",
+                "seq": 5,
+                "signal_key": "25b637f6501c39eb63be2966",
+                "state": "recorded"
+              },
+              "trade": {
+                "exit_reason": null,
+                "state": "none",
+                "trade_id": null
+              }
+            },
+            "strategy_id": "c29-momentum-perp-v1"
+          },
+          {
+            "at_ms": 1763251202000,
+            "decided_ms": null,
+            "key": "762c35291ed0f8da9710a064",
+            "product_id": "PF_XBTUSD",
+            "side": "none",
+            "stages": {
+              "decision": {
+                "decided_ms": null,
+                "state": "none"
+              },
+              "order": {
+                "entry_ms": null,
+                "reasons": [],
+                "state": "none"
+              },
+              "signal": {
+                "action": "WAIT",
+                "entry_hash": "47142a86cc7097475a8e3aa224e5932a93f5e4fe1d295ed547e0a5c1393415e2",
+                "origin": "original",
+                "seq": 6,
+                "signal_key": "762c35291ed0f8da9710a064",
+                "state": "recorded"
+              },
+              "trade": {
+                "exit_reason": null,
+                "state": "none",
+                "trade_id": null
+              }
+            },
+            "strategy_id": "c30-momentum-12h-perp-v1"
+          },
+          {
+            "at_ms": 1763251202000,
+            "decided_ms": null,
+            "key": "c3d492f91e3c83b81de0ce95",
+            "product_id": "PF_XBTUSD",
+            "side": "none",
+            "stages": {
+              "decision": {
+                "decided_ms": null,
+                "state": "none"
+              },
+              "order": {
+                "entry_ms": null,
+                "reasons": [],
+                "state": "none"
+              },
+              "signal": {
+                "action": "WAIT",
+                "entry_hash": "e9a634be7a965c3489177db940a9f71fb21a5a8f787c46b9e573103ac87f0311",
+                "origin": "original",
+                "seq": 7,
+                "signal_key": "c3d492f91e3c83b81de0ce95",
+                "state": "recorded"
+              },
+              "trade": {
+                "exit_reason": null,
+                "state": "none",
+                "trade_id": null
+              }
+            },
+            "strategy_id": "c32-funding-contrarian-24h-perp-v1"
+          }
+        ],
+        "mode": "integration",
+        "product": null,
+        "schema": "balancita-paper-session-intervals.v1",
+        "signal_references": {
+          "unverified": [],
+          "verified": 12
+        },
+        "to_ms": null
+      },
+      "observed_now_ms": 1763252400000,
+      "positions": {
+        "clock_ms": 1763252370000,
+        "evidence_class": "not_forward_evidence",
+        "execution_class": "observed_quotes",
+        "mode": "integration",
+        "positions": [],
+        "schema": "balancita-paper-session-positions.v1",
+        "unrealized_class": "estimated",
+        "unrealized_usd": "0",
+        "verification": {
+          "freshness": "unknown",
+          "reasons": [
+            "source_state_unknown",
+            "report_age_unknown",
+            "freshness_threshold_not_approved"
+          ],
+          "thresholds": {
+            "report_max_age_ms": null,
+            "status": "not_approved"
+          },
+          "verified": false
+        }
+      },
+      "run": {
+        "id": "run-synthetic-0001",
+        "pid": 4242
+      },
+      "schema": "balancita-paper-session-blocks.v1",
+      "session_id": "e6821de91445db8ca3ef",
+      "status": {
+        "clock": null,
+        "evidence_class": "not_forward_evidence",
+        "funding": {
+          "disputed_trades": null,
+          "divergence_evidence": null,
+          "incomplete_trades": null,
+          "pnl_verified": false,
+          "quarantined_periods": null,
+          "reasons": [
+            "funding_report_missing"
+          ],
+          "source": "unknown"
+        },
+        "halt_reason": null,
+        "liveness": "unknown",
+        "mode": "integration",
+        "observed_now_ms": 1763252400000,
+        "open_positions": 0,
+        "orderly_stop": null,
+        "pending_orders": 0,
+        "phase": "WARMING_UP",
+        "reasons": [
+          "heartbeat_age_unknown"
+        ],
+        "reported_phase": "WARMUP",
+        "resources": null,
+        "schema": "balancita-paper-session-status.v1",
+        "steps": 3,
+        "thresholds": {
+          "heartbeat_max_age_ms": null,
+          "status": "not_approved"
+        }
+      },
+      "steps": 3
+    },
+    "heartbeat": {
+      "config_digest": "ff487531c207296ef1a9",
+      "halted": null,
+      "ingest_state": null,
+      "observed_now_ms": 1763253000000,
+      "open_positions": 0,
+      "pending_orders": 0,
+      "phase": "LIVE",
+      "pid": 4242,
+      "publication": {
+        "attempts": 1,
+        "failures": 1,
+        "last_error": {
+          "text": "ENOSPC",
+          "type": "OSError"
+        },
+        "last_ok_observed_now_ms": null
+      },
+      "run_id": "run-synthetic-0002",
+      "runner_status": "PROCESSING",
+      "schema": "balancita-paper-live-heartbeat.v1",
+      "session_id": "e6821de91445db8ca3ef",
+      "steps": 0
+    },
+    "intervals_before_trimming": 12
+  },
+  "restart_published": {
+    "blocks": {
+      "attempt": 1,
+      "authority": "none",
+      "config_digest": "ff487531c207296ef1a9",
+      "derived": true,
+      "intervals": {
+        "clock_ms": 1763253000000,
+        "contract": {
+          "complete": true,
+          "stages_missing": [],
+          "stages_present": [
+            "signal",
+            "decision",
+            "order",
+            "trade"
+          ]
+        },
+        "evidence_class": "not_forward_evidence",
+        "execution_class": "observed_quotes",
+        "from_ms": null,
+        "intervals": [
+          {
+            "at_ms": 1763251202000,
+            "decided_ms": null,
+            "key": "25b637f6501c39eb63be2966",
+            "product_id": "PF_XBTUSD",
+            "side": "none",
+            "stages": {
+              "decision": {
+                "decided_ms": null,
+                "state": "none"
+              },
+              "order": {
+                "entry_ms": null,
+                "reasons": [],
+                "state": "none"
+              },
+              "signal": {
+                "action": "WAIT",
+                "entry_hash": "55500fded97d8bd6490a8081107d457fb9820558f54f4c20dd76aed7dfd3e19c",
+                "origin": "original",
+                "seq": 5,
+                "signal_key": "25b637f6501c39eb63be2966",
+                "state": "recorded"
+              },
+              "trade": {
+                "exit_reason": null,
+                "state": "none",
+                "trade_id": null
+              }
+            },
+            "strategy_id": "c29-momentum-perp-v1"
+          },
+          {
+            "at_ms": 1763251202000,
+            "decided_ms": null,
+            "key": "762c35291ed0f8da9710a064",
+            "product_id": "PF_XBTUSD",
+            "side": "none",
+            "stages": {
+              "decision": {
+                "decided_ms": null,
+                "state": "none"
+              },
+              "order": {
+                "entry_ms": null,
+                "reasons": [],
+                "state": "none"
+              },
+              "signal": {
+                "action": "WAIT",
+                "entry_hash": "47142a86cc7097475a8e3aa224e5932a93f5e4fe1d295ed547e0a5c1393415e2",
+                "origin": "original",
+                "seq": 6,
+                "signal_key": "762c35291ed0f8da9710a064",
+                "state": "recorded"
+              },
+              "trade": {
+                "exit_reason": null,
+                "state": "none",
+                "trade_id": null
+              }
+            },
+            "strategy_id": "c30-momentum-12h-perp-v1"
+          },
+          {
+            "at_ms": 1763251202000,
+            "decided_ms": null,
+            "key": "c3d492f91e3c83b81de0ce95",
+            "product_id": "PF_XBTUSD",
+            "side": "none",
+            "stages": {
+              "decision": {
+                "decided_ms": null,
+                "state": "none"
+              },
+              "order": {
+                "entry_ms": null,
+                "reasons": [],
+                "state": "none"
+              },
+              "signal": {
+                "action": "WAIT",
+                "entry_hash": "e9a634be7a965c3489177db940a9f71fb21a5a8f787c46b9e573103ac87f0311",
+                "origin": "original",
+                "seq": 7,
+                "signal_key": "c3d492f91e3c83b81de0ce95",
+                "state": "recorded"
+              },
+              "trade": {
+                "exit_reason": null,
+                "state": "none",
+                "trade_id": null
+              }
+            },
+            "strategy_id": "c32-funding-contrarian-24h-perp-v1"
+          }
+        ],
+        "mode": "integration",
+        "product": null,
+        "schema": "balancita-paper-session-intervals.v1",
+        "signal_references": {
+          "unverified": [],
+          "verified": 12
+        },
+        "to_ms": null
+      },
+      "observed_now_ms": 1763253000000,
+      "positions": {
+        "clock_ms": 1763253000000,
+        "evidence_class": "not_forward_evidence",
+        "execution_class": "observed_quotes",
+        "mode": "integration",
+        "positions": [],
+        "schema": "balancita-paper-session-positions.v1",
+        "unrealized_class": "estimated",
+        "unrealized_usd": "0",
+        "verification": {
+          "freshness": "unknown",
+          "reasons": [
+            "source_state_unknown",
+            "report_age_unknown",
+            "freshness_threshold_not_approved"
+          ],
+          "thresholds": {
+            "report_max_age_ms": null,
+            "status": "not_approved"
+          },
+          "verified": false
+        }
+      },
+      "run": {
+        "id": "run-synthetic-0002",
+        "pid": 4242
+      },
+      "schema": "balancita-paper-session-blocks.v1",
+      "session_id": "e6821de91445db8ca3ef",
+      "status": {
+        "clock": null,
+        "evidence_class": "not_forward_evidence",
+        "funding": {
+          "disputed_trades": null,
+          "divergence_evidence": null,
+          "incomplete_trades": null,
+          "pnl_verified": false,
+          "quarantined_periods": null,
+          "reasons": [
+            "funding_report_missing"
+          ],
+          "source": "unknown"
+        },
+        "halt_reason": null,
+        "liveness": "unknown",
+        "mode": "integration",
+        "observed_now_ms": 1763253000000,
+        "open_positions": 0,
+        "orderly_stop": null,
+        "pending_orders": 0,
+        "phase": "LIVE",
+        "reasons": [
+          "heartbeat_age_unknown"
+        ],
+        "reported_phase": "LIVE",
+        "resources": null,
+        "schema": "balancita-paper-session-status.v1",
+        "steps": 0,
+        "thresholds": {
+          "heartbeat_max_age_ms": null,
+          "status": "not_approved"
+        }
+      },
+      "steps": 0
+    },
+    "heartbeat": {
+      "config_digest": "ff487531c207296ef1a9",
+      "halted": null,
+      "ingest_state": null,
+      "observed_now_ms": 1763253000000,
+      "open_positions": 0,
+      "pending_orders": 0,
+      "phase": "LIVE",
+      "pid": 4242,
+      "publication": {
+        "attempts": 1,
+        "failures": 0,
+        "last_error": null,
+        "last_ok_observed_now_ms": 1763253000000
+      },
+      "run_id": "run-synthetic-0002",
+      "runner_status": "PROCESSING",
+      "schema": "balancita-paper-live-heartbeat.v1",
+      "session_id": "e6821de91445db8ca3ef",
+      "steps": 0
+    },
+    "intervals_before_trimming": 12
+  },
+  "stopped": {
+    "blocks": {
+      "attempt": 144,
+      "authority": "none",
+      "config_digest": "ff487531c207296ef1a9",
+      "derived": true,
+      "intervals": {
+        "clock_ms": 1763335170000,
+        "contract": {
+          "complete": true,
+          "stages_missing": [],
+          "stages_present": [
+            "signal",
+            "decision",
+            "order",
+            "trade"
+          ]
+        },
+        "evidence_class": "not_forward_evidence",
+        "execution_class": "observed_quotes",
+        "from_ms": null,
+        "intervals": [
+          {
+            "at_ms": 1763254202000,
+            "decided_ms": 1763254202000,
+            "key": "98465f97729ed734b28d0e4a",
+            "product_id": "PF_XBTUSD",
+            "side": "LONG",
+            "stages": {
+              "decision": {
+                "decided_ms": 1763254202000,
+                "state": "recorded"
+              },
+              "order": {
+                "entry_ms": 1763254210000,
+                "reasons": [],
+                "state": "opened"
+              },
+              "signal": {
+                "action": "BUY",
+                "entry_hash": "1978483f7a908f6a204c6ea42ea129c9e07981c699874d3e517ca9a8c4e8dbd3",
+                "origin": "original",
+                "seq": 35,
+                "signal_key": "98465f97729ed734b28d0e4a",
+                "state": "recorded"
+              },
+              "trade": {
+                "exit_reason": "target",
+                "state": "closed",
+                "trade_id": "162467f865dd15872fa319c0"
+              }
+            },
+            "strategy_id": "c29-momentum-perp-v1"
+          },
+          {
+            "at_ms": 1763254502000,
+            "decided_ms": 1763254502000,
+            "key": "cd833d62f653de2ac8903d88",
+            "product_id": "PF_XBTUSD",
+            "side": "LONG",
+            "stages": {
+              "decision": {
+                "decided_ms": 1763254502000,
+                "state": "recorded"
+              },
+              "order": {
+                "entry_ms": 1763254510000,
+                "reasons": [
+                  "position_already_open"
+                ],
+                "state": "rejected"
+              },
+              "signal": {
+                "action": "BUY",
+                "entry_hash": "cf06e89b216d72aa436b189f8748938d33bfffb2313cb9a00ed9db816cde133c",
+                "origin": "original",
+                "seq": 38,
+                "signal_key": "cd833d62f653de2ac8903d88",
+                "state": "recorded"
+              },
+              "trade": {
+                "exit_reason": null,
+                "state": "none",
+                "trade_id": null
+              }
+            },
+            "strategy_id": "c29-momentum-perp-v1"
+          },
+          {
+            "at_ms": 1763254802000,
+            "decided_ms": 1763254802000,
+            "key": "99811dc0a457d18e4fb11931",
+            "product_id": "PF_XBTUSD",
+            "side": "LONG",
+            "stages": {
+              "decision": {
+                "decided_ms": 1763254802000,
+                "state": "recorded"
+              },
+              "order": {
+                "entry_ms": 1763254810000,
+                "reasons": [
+                  "position_already_open"
+                ],
+                "state": "rejected"
+              },
+              "signal": {
+                "action": "BUY",
+                "entry_hash": "80df763bd7f39f83dd4e0f57481d430a849a580f29036f91ab43dc0e44a7a321",
+                "origin": "original",
+                "seq": 41,
+                "signal_key": "99811dc0a457d18e4fb11931",
+                "state": "recorded"
+              },
+              "trade": {
+                "exit_reason": null,
+                "state": "none",
+                "trade_id": null
+              }
+            },
+            "strategy_id": "c29-momentum-perp-v1"
+          }
+        ],
+        "mode": "integration",
+        "product": null,
+        "schema": "balancita-paper-session-intervals.v1",
+        "signal_references": {
+          "unverified": [],
+          "verified": 840
+        },
+        "to_ms": null
+      },
+      "observed_now_ms": 1763335800000,
+      "positions": {
+        "clock_ms": 1763335170000,
+        "evidence_class": "not_forward_evidence",
+        "execution_class": "observed_quotes",
+        "mode": "integration",
+        "positions": [
+          {
+            "accounting_verified": false,
+            "classes": {
+              "pnl": "estimated",
+              "position": "simulated",
+              "price": "observed"
+            },
+            "coverage": {
+              "gaps": [],
+              "last_quote_ms": 1763335170000,
+              "last_watched_ms": 1763335170000,
+              "quotes_watched": 3268,
+              "silent_now_ms": 0
+            },
+            "entry_ms": 1763269810000,
+            "entry_price": "108381.3502842000000",
+            "intent_id": "2c061951bad4c271c70c9687",
+            "product_id": "PF_XBTUSD",
+            "protection_evidence": "observed",
+            "quantity": "0.002966377510124717136505084960",
+            "side": "LONG",
+            "stop": "105072.9555023886555694361556",
+            "stop_protection": "observed",
+            "strategy_id": "c29-momentum-perp-v1",
+            "strategy_version": 1,
+            "target": "113350.8167464170166458457666",
+            "verified": false
+          }
+        ],
+        "schema": "balancita-paper-session-positions.v1",
+        "unrealized_class": "estimated",
+        "unrealized_usd": "12.6616",
+        "verification": {
+          "freshness": "unknown",
+          "reasons": [
+            "source_state_unknown",
+            "runner_not_processing",
+            "report_age_unknown",
+            "freshness_threshold_not_approved"
+          ],
+          "thresholds": {
+            "report_max_age_ms": null,
+            "status": "not_approved"
+          },
+          "verified": false
+        }
+      },
+      "run": {
+        "id": "run-synthetic-0001",
+        "pid": 4242
+      },
+      "schema": "balancita-paper-session-blocks.v1",
+      "session_id": "e6821de91445db8ca3ef",
+      "status": {
+        "clock": null,
+        "evidence_class": "not_forward_evidence",
+        "funding": {
+          "disputed_trades": null,
+          "divergence_evidence": null,
+          "incomplete_trades": null,
+          "pnl_verified": false,
+          "quarantined_periods": null,
+          "reasons": [
+            "funding_report_missing"
+          ],
+          "source": "unknown"
+        },
+        "halt_reason": null,
+        "liveness": "final",
+        "mode": "integration",
+        "observed_now_ms": 1763335800000,
+        "open_positions": 1,
+        "orderly_stop": {
+          "cancelled": [],
+          "declared_ms": 1763335800000,
+          "expired": []
+        },
+        "pending_orders": 0,
+        "phase": "STOPPED",
+        "reasons": [],
+        "reported_phase": "STOPPED",
+        "resources": null,
+        "schema": "balancita-paper-session-status.v1",
+        "steps": 141,
+        "thresholds": {
+          "heartbeat_max_age_ms": null,
+          "status": "not_approved"
+        }
+      },
+      "steps": 141
+    },
+    "heartbeat": {
+      "config_digest": "ff487531c207296ef1a9",
+      "halted": null,
+      "ingest_state": null,
+      "observed_now_ms": 1763335800000,
+      "open_positions": 1,
+      "pending_orders": 0,
+      "phase": "STOPPED",
+      "pid": 4242,
+      "publication": {
+        "attempts": 144,
+        "failures": 0,
+        "last_error": null,
+        "last_ok_observed_now_ms": 1763335800000
+      },
+      "run_id": "run-synthetic-0001",
+      "runner_status": "STOPPED",
+      "schema": "balancita-paper-live-heartbeat.v1",
+      "session_id": "e6821de91445db8ca3ef",
+      "steps": 141
+    },
+    "intervals_before_trimming": 840
+  }
+}

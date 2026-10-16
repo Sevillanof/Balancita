@@ -142,6 +142,7 @@ describe('session status decoder against blocks the real publisher emitted', () 
     expect(s.gateway).toEqual({
       ageMs: 61000,
       reason: 'heartbeat_age_over_limit',
+      heartbeatPhase: null,
     })
     expect(() =>
       decodeSessionStatus({

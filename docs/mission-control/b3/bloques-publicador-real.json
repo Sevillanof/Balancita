@@ -16,6 +16,7 @@
     "from_ms": null,
     "intervals": [
       {
+        "at_ms": 1791030002000,
         "decided_ms": 1791030002000,
         "key": "dcd4ab505718dca6568fe4b0",
         "product_id": "PF_XBTUSD",
@@ -47,6 +48,7 @@
         "strategy_id": "scripted-a"
       },
       {
+        "at_ms": 1791030003000,
         "decided_ms": null,
         "key": "439f099e9159540c19f0412c",
         "product_id": "PF_ETHUSD",
@@ -104,6 +106,7 @@
     "from_ms": null,
     "intervals": [
       {
+        "at_ms": 1791030002000,
         "decided_ms": 1791030002000,
         "key": "dcd4ab505718dca6568fe4b0",
         "product_id": "PF_XBTUSD",
