@@ -6,6 +6,7 @@ same open positions as a run that never had the problem. Nothing is retried, rep
 
 import collections
 import errno
+import hashlib
 import json
 import os
 import tempfile
@@ -48,6 +49,16 @@ class TestDiskFullSeenByTheProcess(Base):
         self.cache["disk_full_reference"] = digests, position_detail(continuous), signal_ids(continuous)
         return self.cache["disk_full_reference"]
 
+    def snapshot(self):
+        """sha256 of every file of the session directory: what the process wrote, byte by byte."""
+        out = {}
+        for name in sorted(os.listdir(self.directory)):
+            path = os.path.join(self.directory, name)
+            if os.path.isfile(path):
+                with open(path, "rb") as handle:
+                    out[name] = hashlib.sha256(handle.read()).hexdigest()
+        return out
+
     def full_disk(self, supervisor):
         real = supervisor.session.runner.journal.add
 
@@ -88,34 +99,36 @@ class TestDiskFullSeenByTheProcess(Base):
         """Documents what happens today, it does not judge it: the events the failed step had polled are not journaled, and when the
         restart is at the instant of that step the recovery is one step ahead of them, so the runner refuses them as out of order and the
         signals they would have made are never generated (same rule as any outage). Nothing is invented and nothing already journaled is lost."""
-        _, _, reference_signals = self.reference()
+        _, positions, reference_signals = self.reference()
         clock = Clock()
         first = self.supervisor(clock, publish_blocks=True)
         first.start()
         self.full_disk(first)
         self.assertEqual(first.run(max_steps=STEPS), LP.EXIT_HALTED)
         done = clock.index - START
+        before_halt = signal_ids(first)
         second = self.supervisor(Clock(done), publish_blocks=True)
         second.start(restart=True)
         self.assertEqual(second.run(max_steps=STEPS - done), LP.EXIT_OK)
         got = signal_ids(second)
-        self.assertTrue(set(got) < set(reference_signals))                                  # fewer, never different
-        self.assertEqual([s for s in reference_signals if s in set(got)], got)             # in the same order
-        self.assertGreater(len(reference_signals) - len(got), 0)
+        lost = len(reference_signals) - len(got)
+        self.assertGreater(lost, 0)
+        self.assertEqual(got[:len(before_halt)], before_halt)                              # what was journaled before the halt is an exact prefix
+        self.assertEqual(reference_signals[:len(before_halt)], before_halt)                # ... of the continuous run too
+        self.assertEqual(got, before_halt + reference_signals[len(before_halt) + lost:])   # exactly one contiguous block is lost, right after the halt
+        self.assertEqual(position_detail(second), positions)                               # the open position is the continuous run's, field by field
         self.assertGreater(rejections(second)["out_of_order_event"], 0)                     # why: the polled events came before the recovery
 
-    def test_a_disk_that_stays_full_leaves_the_halt_and_nothing_else_changing(self):
+    def test_a_journal_that_stays_full_leaves_the_halt_and_nothing_else_changing(self):
         clock = Clock()
         first = self.supervisor(clock)
         first.start()
         self.full_disk(first)
         self.assertEqual(first.run(max_steps=STEPS), LP.EXIT_HALTED)
-        before = {name: os.path.getsize(os.path.join(self.directory, name)) for name in sorted(os.listdir(self.directory))
-                  if os.path.isfile(os.path.join(self.directory, name))}
+        before = self.snapshot()
         self.assertEqual(first.end(), LP.EXIT_HALTED)                                       # ending a halted process writes no clean stop
         self.assertEqual(self.read(LP.REPORT_FILE)["ended_as"], LP.HALTED)
-        after = {name: os.path.getsize(os.path.join(self.directory, name)) for name in before}
-        self.assertEqual(after, before)                                                    # nothing was repaired, retried or deleted
+        self.assertEqual(self.snapshot(), before)                                           # nothing was repaired, retried or deleted
 
 
 if __name__ == "__main__":
