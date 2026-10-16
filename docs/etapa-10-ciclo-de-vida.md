@@ -75,6 +75,19 @@ en decisiones ni en el digest; hay prueba con dos horas distintas). Sin la guard
 rechazado y el GATE no se toca. `authorization_ref` (`BAL-DECISION-<issue>-<n>`) es solo rastro de auditoría: se valida el formato, no
 abre nada y no entra en el digest. Pruebas: `python/tests/test_paper_live_clock_185.py`. El tope de salto no tiene valor aprobado. La guarda no conserva su instante anterior entre reinicios (D-217-03): el retroceso lo frena la recuperación del runner (`recovery_clock_behind`) y el salto durante una caída lo cubren las reglas de reinicio.
 
+## Identidad de la fuente y causalidad (D-185-R4)
+
+- **Identidad:** el archivo de una captura viva se escribe todo el tiempo, así que tamaño y fecha no sirven. La identidad es el archivo
+  mismo (dispositivo e inodo, archivo regular). El proceso la toma al arrancar y la comprueba justo antes de cada paso que lee: si la ruta
+  pasa a nombrar otro archivo, o ninguno, hace un halt durable (`source_replaced` / `source_unreadable`).
+- **Causalidad (opcional):** el ingestor se guía por el tiempo de la fuente, así que un archivo que ya contiene el futuro se lee por
+  delante del reloj (hay una prueba que lo documenta). Con `ingest_kw: {"causal_until_clock": true}` no se leen filas cuya llegada
+  (`max(persisted_at, received_at)` en tickers, `max(known_at, bucket + 60 s)` en velas) es posterior al reloj del proceso; quedan retenidas y se cuentan en
+  `held_after_clock`. El pre-vuelo exige esta opción a toda fuente que no sea la fixture sintética (`causal_ingest`, D-185-R4-01), aunque esa fuente igual sigue rechazada. Apagado por defecto en la fixture (un replay de un archivo completo depende del comportamiento actual). El desfase entre el reloj
+  de la captura y el del proceso (D-188-24) no se corrige aquí: queda como dato a registrar antes de cualquier sesión real.
+- El tipo de fuente real sigue rechazado (`real_session_not_authorized`); nada de esto abre una base real. Pruebas:
+  `python/tests/test_paper_live_source_185.py`.
+
 ## Límites
 
 - No hay reloj de pared ni fuente real (rechazados); el reloj simulado avanza por paso.
