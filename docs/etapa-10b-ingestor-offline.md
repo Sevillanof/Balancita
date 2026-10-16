@@ -101,7 +101,7 @@ Limitaciones de esta medición: precios sintéticos con volatilidad constante; u
 - La fase es la que el proceso dice de sí mismo (`INIT`, `WARMING_UP`, `LIVE`, `STOPPING`, `STOPPED`, `HALTED`, `REFUSED`). Un latido que dice LIVE no vuelve viva a la sesión: `liveness` es `unknown` salvo con un límite de edad **aprobado** (`alive`); más viejo que el límite del llamante degrada a `phase: unverified` / `stale`. No hay límite por defecto (BAL-DECISION-187-01).
 - Una fase terminada (`STOPPED`, `HALTED`, `REFUSED`) es `final`. Un `halt.json` pesa más que un latido que no llegó a decir HALTED; un reporte terminado después del último latido también.
 - Latido ausente, de otro esquema o con una fase desconocida: `phase: unavailable` con el motivo; nunca un LIVE vacío.
-- Lleva `halt_reason`, la parada ordenada (`orderly_stop`), recursos y reloj tal como los escribió el proceso. Un corte sin parada ordenada ni motivo registrado se muestra como «motivo no registrado», no como una causa inventada.
+- Lleva `halt_reason`, la parada ordenada (`orderly_stop`), recursos y reloj tal como los escribió el proceso. Si no hay motivo registrado, `halt_reason` queda en `null`: el bloque no inventa una causa (la vista decide cómo mostrarlo).
 - El único camino de reinicio sigue siendo el comando manual `--restart` (BAL-DECISION-187-03, A); este bloque no ofrece botón ni endpoint.
 
 ## 6. Límites y dependencias
