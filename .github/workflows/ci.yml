@@ -38,6 +38,8 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm lint
       - run: pnpm test
+      # The `pnpm dev` launcher (scripts/dev*.mjs) has its own node:test suites.
+      - run: node --test scripts/*.node-test.mjs
       - run: pnpm build
 
   # Formatting. Requires the formatting-only PR to be merged first.
