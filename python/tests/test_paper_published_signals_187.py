@@ -54,7 +54,21 @@ class TestSignalStage(T.Rig):
         wait_ms = r.log.entries[by_product(PUB.intervals(r))[T.ETH]["stages"]["signal"]["seq"] - 1]["data"]["generated_ms"]
         waits = lambda block: [x["product_id"] for x in block["intervals"] if x["stages"]["decision"]["state"] == "none"]
         self.assertEqual(waits(PUB.intervals(r, to_ms=wait_ms)), [])                        # the window ends before the wait signal
+        self.assertEqual(waits(PUB.intervals(r, to_ms=wait_ms + 1)), [T.ETH])
+        self.assertEqual(waits(PUB.intervals(r, from_ms=wait_ms + 1)), [])                  # the window starts after it
         self.assertEqual(waits(PUB.intervals(r, from_ms=wait_ms)), [T.ETH])
+
+    def test_a_reconstructed_signal_keeps_its_origin_and_gets_no_decision(self):
+        r = self.runner()
+        strategy = self.strategies[0]
+        signal = T.make_signal(strategy_id=strategy.id, strategy_version=strategy.version, product_id=T.BTC, bucket_ms=T.CYCLE,
+                               action="BUY", strength="0.8", horizon_minutes=60, evidence={"x": "1"})
+        r.run([T.make_event("reconstructed", {"signal": signal, "inputs": {"price": "100000"}, "price": "100000", "atr": "1000"},
+                            t_ms=T.CYCLE + T.HOUR)])
+        [row] = PUB.intervals(r)["intervals"]
+        self.assertEqual((row["stages"]["signal"]["state"], row["stages"]["signal"]["origin"]), ("recorded", "reconstructed"))
+        self.assertEqual((row["stages"]["decision"]["state"], row["stages"]["order"]["state"]), ("none", "none"))
+        self.assertEqual((row["side"], row["stages"]["signal"]["action"]), ("none", "BUY"))
 
     def test_a_reference_that_does_not_match_the_log_is_unverified_and_makes_no_row(self):
         for name, damage, reason in (

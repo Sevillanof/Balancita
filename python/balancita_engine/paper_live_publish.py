@@ -154,8 +154,9 @@ def intervals(runner, from_ms=None, to_ms=None, product=None):
     stages are ``none``). A stage that does not exist is ``none``, never inferred; a signal reference that does not match the
     log is ``unverified`` and the contract says so. Qwen decisions and C verdicts come from their own databases (B3 original)."""
     trace = signal_trace(runner)
-    rows, seen = [], set()
-    for row in decisions(runner):
+    rows = []
+    decided = decisions(runner)
+    for row in decided:
         bucket = (row.get("decided_ms") or 0)
         if product is not None and row["product_id"] != product:
             continue
@@ -163,7 +164,6 @@ def intervals(runner, from_ms=None, to_ms=None, product=None):
             continue
         if to_ms is not None and bucket >= to_ms:
             continue
-        seen.add(row.get("signal_key"))
         rows.append({
             "key": row.get("signal_key"), "product_id": row["product_id"], "strategy_id": row["strategy_id"],
             "decided_ms": row.get("decided_ms"), "side": row["side"],
@@ -173,7 +173,7 @@ def intervals(runner, from_ms=None, to_ms=None, product=None):
                 "order": {"state": row["state"], "reasons": row["reasons"], "entry_ms": row.get("entry_ms")},
                 "trade": {"state": row["result"] if row["result"] in ("closed", "open") else "none",
                           "trade_id": row.get("trade_id"), "exit_reason": row.get("exit_reason")}}})
-    decided_keys = {d.get("signal_key") for d in decisions(runner)}
+    decided_keys = {d.get("signal_key") for d in decided}
     for key, sig in sorted(trace["verified"].items(), key=lambda kv: (kv[1]["generated_ms"] or 0, kv[0])):
         if key in decided_keys:
             continue
