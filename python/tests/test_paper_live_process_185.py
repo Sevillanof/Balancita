@@ -164,6 +164,49 @@ class TestPreflightAndStart(Base):
         self.assertEqual(caught.exception.reason, "preflight_failed")
         self.assertIn("configuration_matches_directory", str(caught.exception))
 
+    def test_a_configuration_with_the_old_capital_label_is_refused_and_says_what_the_label_is(self):
+        """BAL-REV-185-CAP-02: the message names the real label (not 'the sizing is the ADR's') and an older label is refused, not migrated."""
+        for label in ("adr-0001-fixed-100-usd", "kelly", ""):
+            with self.subTest(label=label), self.assertRaises(LP.ProcessError) as caught:
+                LP.validate_config(config_dict(capital_policy=label))
+            self.assertEqual(caught.exception.reason, "config_invalid")
+            self.assertIn(LP.CAPITAL_POLICY, str(caught.exception))
+            self.assertIn("refused, not migrated", str(caught.exception))
+            self.assertNotIn("the sizing is the ADR's", str(caught.exception))
+
+    def test_a_directory_made_with_the_old_capital_label_is_refused_untouched_with_or_without_restart(self):
+        """The label is part of the digest, so a directory created before the fix has another digest: nothing resumes it, nothing migrates,
+        repairs or deletes it, and every byte of its evidence stays as it was."""
+        first = self.supervisor(Clock())
+        first.start()
+        first.abandon()
+        stored = LP._read_json(os.path.join(self.directory, LP.CONFIG_FILE))
+        old = {k: v for k, v in stored.items() if k != "digest"}
+        old["capital_policy"] = "adr-0001-fixed-100-usd"
+        old["digest"] = LP.stable_hash({k: v for k, v in old.items() if k != "authorization_ref"})[:20]
+        self.assertNotEqual(old["digest"], stored["digest"])
+        LP._write_json(os.path.join(self.directory, LP.CONFIG_FILE), old)
+
+        def snapshot():
+            seen = {}
+            for base, _, names in os.walk(self.directory):
+                for name in names:
+                    path = os.path.join(base, name)
+                    with open(path, "rb") as handle:
+                        seen[os.path.relpath(path, self.directory)] = hashlib.sha256(handle.read()).hexdigest()
+            return seen
+
+        before = snapshot()
+        for restart in (False, True):
+            with self.subTest(restart=restart):
+                again = self.supervisor(Clock(5))
+                with self.assertRaises(LP.ProcessError) as caught:
+                    again.start(restart=restart)
+                self.assertEqual(caught.exception.reason, "preflight_failed")
+                self.assertIn("configuration_matches_directory", str(caught.exception))
+                self.assertIsNone(again.session)
+                self.assertEqual(snapshot(), before)
+
     def test_a_directory_with_a_live_writer_is_refused(self):
         first = self.supervisor(Clock())
         first.start()

@@ -147,7 +147,8 @@ def validate_config(raw):
     if config["strategies"] != "frozen":
         raise ProcessError("config_invalid", "strategies: only the frozen set exists")
     if config["capital_policy"] != CAPITAL_POLICY:
-        raise ProcessError("config_invalid", "capital_policy: the sizing is the ADR's, a session cannot change it")
+        raise ProcessError("config_invalid", "capital_policy: must be {!r}, the label of the portfolio policy the runner uses; a session cannot change it "
+                                             "(an older label, such as 'adr-0001-fixed-100-usd', is refused, not migrated)".format(CAPITAL_POLICY))
     if "clock_guard" in config:
         config["clock_guard"] = _validate_clock_guard(config["clock_guard"])
     ref = config.get("authorization_ref")
