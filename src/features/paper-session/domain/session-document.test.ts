@@ -35,6 +35,7 @@ describe('session document decoder against documents the real publisher emitted'
   it('carries the mark of the run that wrote it, and a document without it is refused', () => {
     const doc = decodeSessionBlocks(documents.operating_threshold_hypothesis)
     expect(doc.runPid).toBe(4242)
+    expect(doc.runId).toBe('run-synthetic-0001')
     const withoutRun: Record<string, unknown> = {
       ...documents.operating_threshold_hypothesis,
     }
