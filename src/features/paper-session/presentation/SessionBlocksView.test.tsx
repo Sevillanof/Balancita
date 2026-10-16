@@ -249,12 +249,20 @@ describe('the session page states', () => {
     it('shows only the latest intervals of a long session and says so', () => {
       show(
         withIntervals((intervals) => {
-          const first = intervals[0]
+          // the 2 oldest intervals are marked HOLD; the 60 newer ones are SELL
+          for (const old of intervals) old.stages.signal.action = 'HOLD'
+          const first = structuredClone(intervals[0])
+          first.stages.signal.action = 'SELL'
           for (let n = 0; n < 60; n += 1)
             intervals.push({ ...structuredClone(first), key: `k${n}` })
         }),
       )
-      expect(screen.getAllByTestId('interval')).toHaveLength(50)
+      const rows = screen.getAllByTestId('interval')
+      expect(rows).toHaveLength(50)
+      // the LAST 50 are shown (D-233-05), not the first 50: no old HOLD row
+      expect(rows.every((r) => r.getAttribute('data-action') === 'SELL')).toBe(
+        true,
+      )
       expect(screen.getByTestId('intervals-truncated')).toHaveTextContent(
         'últimos 50 de 62',
       )

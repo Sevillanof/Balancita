@@ -32,6 +32,14 @@ function presentedPhase(status: SessionStatusBlock): {
   tone: StatusTone
   label: string
 } {
+  if (status.gateway?.reason === 'publication_behind')
+    return {
+      tone: 'nodata',
+      label:
+        status.gateway.heartbeatPhase === null
+          ? 'Último estado publicado, desactualizado'
+          : `Último estado publicado, desactualizado (el latido ya informa ${status.gateway.heartbeatPhase})`,
+    }
   if (status.phase === 'LIVE' && status.liveness !== 'alive')
     return { tone: 'nodata', label: 'Informa estar en marcha, sin confirmar' }
   return PHASE[status.phase]
@@ -61,6 +69,8 @@ const GATEWAY_REASONS: Record<string, string> = {
   heartbeat_age_over_limit: 'Archivo más viejo que su límite',
   heartbeat_age_unknown: 'Edad del archivo no medible',
   threshold_missing: 'Sin límite en el bloque',
+  publication_behind:
+    'El último archivo no es el estado actual: la publicación posterior falló',
 }
 
 const FUNDING_SOURCE = {

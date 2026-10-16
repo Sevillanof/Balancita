@@ -300,7 +300,7 @@ class Supervisor(object):
         self.wall_time = wall_time or (lambda: int(time.time() * 1000))     # only read when ``clock_guard`` is configured
         self.clock_events, self._last_now = [], None
         self.run_id = os.urandom(8).hex()                                  # one per process start: a pid repeats inside a container (D-231-04)
-        self.publication = {"failures": 0, "last_error": None, "last_ok_observed_now_ms": None}     # only reported when ``publish_blocks`` is on
+        self.publication = {"attempts": 0, "failures": 0, "last_error": None, "last_ok_observed_now_ms": None}     # only reported when ``publish_blocks`` is on
         self.source_identity = None
         self.strategies = strategies
         self.session = None
@@ -565,11 +565,13 @@ class Supervisor(object):
 
         LIMITATION (measured on a synthetic session, #187-05): the whole document is rebuilt and rewritten at every step and its intervals grow
         with the session (840 intervals, about 485 kB at the end of the synthetic run). A window or a cap for them is a separate decision."""
+        self.publication["attempts"] += 1                        # the document carries this number: a reader can tell a stale one from the heartbeat's
         try:
             session = self.session
             funding = session.funding_report() if self.config["funding_mode"] == LI.OBSERVED_FUNDING else None
             document = PUB.session_blocks(session.runner, beat, _read_json(os.path.join(self.directory, HALT_FILE)),
                                           _read_json(os.path.join(self.directory, REPORT_FILE)), source_state=state, funding=funding)
+            document["attempt"] = self.publication["attempts"]
             self._write_blocks(os.path.join(self.directory, BLOCKS_FILE), document)
             self.publication["last_ok_observed_now_ms"] = beat["observed_now_ms"]
         except Exception as error:                               # noqa: BLE001 - a derived file must never end the session

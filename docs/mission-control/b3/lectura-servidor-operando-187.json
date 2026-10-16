@@ -3,6 +3,7 @@
   "published_at_ms": 1800000000000,
   "evaluated_ms": 1800000002000,
   "document": {
+    "attempt": 3,
     "authority": "none",
     "config_digest": "ff487531c207296ef1a9",
     "derived": true,

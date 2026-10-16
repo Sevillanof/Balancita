@@ -359,10 +359,15 @@ export type SessionFunding = {
  * block did not go through the gateway: then nothing was measured.
  */
 export type StatusGatewayReason =
-  'heartbeat_age_over_limit' | 'heartbeat_age_unknown' | 'threshold_missing'
+  | 'heartbeat_age_over_limit'
+  | 'heartbeat_age_unknown'
+  | 'threshold_missing'
+  | 'publication_behind'
 export type StatusGatewayValidity = {
   ageMs: number | null
   reason: StatusGatewayReason | null
+  /** With `publication_behind`: what the latest heartbeat says, ahead of the document. */
+  heartbeatPhase: string | null
 }
 
 /**
@@ -411,10 +416,15 @@ function decodeStatusGateway(raw: unknown): StatusGatewayValidity | null {
             'heartbeat_age_over_limit',
             'heartbeat_age_unknown',
             'threshold_missing',
+            'publication_behind',
           ],
           'gateway.reason',
         )
-  return { ageMs: numOrNull(g.age_ms, 'gateway.age_ms'), reason }
+  return {
+    ageMs: numOrNull(g.age_ms, 'gateway.age_ms'),
+    reason,
+    heartbeatPhase: strOrNull(g.heartbeat_phase, 'gateway.heartbeat_phase'),
+  }
 }
 
 function recordOrNull(value: unknown): Record<string, unknown> | null {

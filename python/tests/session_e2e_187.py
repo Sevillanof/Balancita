@@ -55,8 +55,35 @@ def build():
         case.tearDown()
         P185.TestLifecycle.tearDownClass()
     seen.update(_restarts())
+    seen.update(_last_publication_failed())
     _CACHE["files"] = seen
     return seen
+
+
+def _last_publication_failed():
+    """The publication of the stop fails (the disk refuses it) after the session published while it ran: the heartbeat is the STOPPED one
+    and says it failed, the blocks file is still the last LIVE document of the SAME run. D-234-01: a reader must not show that file as current."""
+    P185.TestLifecycle.setUpClass()
+    case = P185.TestLifecycle("test_a_stopped_session_is_over")
+    case.setUp()
+    try:
+        supervisor = case.supervisor(P185.Clock(), publish_blocks=True)
+        supervisor.start()
+        original = supervisor._write_blocks
+
+        def write(path, body):
+            if supervisor.phase not in (LP.WARMUP, LP.LIVE):          # STOPPING and STOPPED: the disk refuses
+                raise OSError(28, "No space left on device")
+            original(path, body)
+        supervisor._write_blocks = write
+        assert supervisor.run(max_steps=len(P185.TIMES) // 2) == LP.EXIT_OK
+        pair = _pair(case)
+        assert pair["heartbeat"]["phase"] == LP.STOPPED_PHASE and pair["blocks"]["status"]["phase"] == "LIVE"
+        assert pair["heartbeat"]["publication"]["failures"] >= 1
+        return {"last_publication_failed": pair}
+    finally:
+        case.tearDown()
+        P185.TestLifecycle.tearDownClass()
 
 
 def _restarts():

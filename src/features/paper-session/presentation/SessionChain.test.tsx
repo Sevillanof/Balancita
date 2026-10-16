@@ -1,5 +1,6 @@
 import { render, screen, within } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
+import lastFailed from '../../../../docs/mission-control/b3/lectura-servidor-ultima-publicacion-fallida-187.json'
 import operating from '../../../../docs/mission-control/b3/lectura-servidor-operando-187.json'
 import restartFailed from '../../../../docs/mission-control/b3/lectura-servidor-reinicio-fallido-187.json'
 import restartPublished from '../../../../docs/mission-control/b3/lectura-servidor-reinicio-publicado-187.json'
@@ -61,5 +62,21 @@ describe('real Supervisor → server reader → client decoder → page (synthet
     expect(screen.getByText('Archivo no utilizable')).toBeInTheDocument()
     expect(screen.getByText(/otra corrida/)).toBeInTheDocument()
     expect(screen.queryByTestId('session-status')).toBeNull()
+  })
+
+  it('last publication failed: the page does not present the old file as the running session', () => {
+    render(
+      <SessionBlocksReadingView
+        reading={decodeSessionBlocksReading(lastFailed)}
+      />,
+    )
+    const status = screen.getByTestId('session-status')
+    expect(status.textContent).not.toMatch(/en marcha|vigente|viva\b|al día/i)
+    expect(screen.getByTestId('status-gateway-reason')).toHaveTextContent(
+      /no es el estado actual/,
+    )
+    expect(
+      within(screen.getByTestId('session-validity')).queryByText(/fresca/i),
+    ).toBeNull()
   })
 })

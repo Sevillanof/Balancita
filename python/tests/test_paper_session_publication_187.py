@@ -64,7 +64,8 @@ class TestPublication(Rig):
         self.assertEqual((doc["session_id"], doc["config_digest"], doc["run"]), (beat["session_id"], beat["config_digest"], {"pid": os.getpid(), "id": supervisor.run_id}))
         self.assertEqual(beat["run_id"], supervisor.run_id)
         self.assertEqual((doc["schema"], doc["derived"], doc["authority"]), (PUB.BLOCKS_SCHEMA, True, "none"))
-        self.assertEqual(beat["publication"], {"failures": 0, "last_error": None, "last_ok_observed_now_ms": beat["observed_now_ms"]})
+        self.assertEqual(beat["publication"], {"attempts": doc["attempt"], "failures": 0, "last_error": None, "last_ok_observed_now_ms": beat["observed_now_ms"]})
+        self.assertGreaterEqual(doc["attempt"], 1)
         self.assertEqual(doc["status"]["phase"], "STOPPED")                  # the last file is the orderly stop, after the report
         self.assertEqual(doc["status"]["liveness"], "final")
 

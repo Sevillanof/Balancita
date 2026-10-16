@@ -39,7 +39,9 @@ function publish(document: unknown, publishedAtMs: number): string {
   const path = join(dir, 'blocks.json')
   writeFileSync(
     path,
-    typeof document === 'string' ? document : JSON.stringify(document),
+    typeof document === 'string'
+      ? document
+      : JSON.stringify({ attempt: 1, ...(document as Loose) }),
   )
   utimesSync(path, publishedAtMs / 1000, publishedAtMs / 1000)
   return path
@@ -57,6 +59,9 @@ function heartbeatFor(path: string, document: Loose, over: Loose = {}): string {
       config_digest: document.config_digest,
       pid: document.run.pid,
       run_id: document.run.id,
+      observed_now_ms: document.observed_now_ms,
+      steps: document.steps,
+      publication: { attempts: 1 },
       ...over,
     }),
   )
@@ -312,5 +317,36 @@ describe('the server reads what a real Supervisor wrote (synthetic session)', ()
     return expect(JSON.stringify(reading, null, 2) + '\n').toMatchFileSnapshot(
       '../../../../docs/mission-control/b3/lectura-servidor-reinicio-fallido-187.json',
     )
+  })
+
+  it('last publication failed (D-234-01): the stale file of the same run is not shown as the current state', () => {
+    const { path, beat } = placeFiles('last_publication_failed', T0)
+    const heartbeat = REAL.last_publication_failed.heartbeat
+    expect(heartbeat.phase).toBe('STOPPED')
+    expect(REAL.last_publication_failed.blocks.status.phase).toBe('LIVE')
+    expect(heartbeat.publication.failures).toBeGreaterThanOrEqual(1)
+    // same run on both sides: only the counters tell the file is behind
+    const reading = readSessionBlocks(path, T0 + 1_000, beat)
+    const doc = ok(reading)
+    expect(doc.status.liveness).not.toBe('alive')
+    expect(doc.status.gateway).toEqual({
+      age_ms: 1_000,
+      reason: 'publication_behind',
+      heartbeat_phase: 'STOPPED',
+    })
+    expect(doc.positions.verification.freshness).not.toBe('fresh')
+    return expect(JSON.stringify(reading, null, 2) + '\n').toMatchFileSnapshot(
+      '../../../../docs/mission-control/b3/lectura-servidor-ultima-publicacion-fallida-187.json',
+    )
+  })
+
+  it('a heartbeat without publication counters cannot confirm the file is current', () => {
+    const { path, beat } = placeFiles('operating', T0)
+    const heartbeat = { ...REAL.operating.heartbeat }
+    delete heartbeat.publication
+    writeFileSync(beat, JSON.stringify(heartbeat))
+    expect(
+      ok(readSessionBlocks(path, T0 + 1_000, beat)).status.gateway.reason,
+    ).toBe('publication_behind')
   })
 })
