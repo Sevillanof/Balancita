@@ -369,7 +369,7 @@ class TimedExecutor:
                 budget, lf_ref = D(decision["risk_budget_used_usd"]), D(order["loss_fraction_at_reference"])
                 body.update(notional_usd=decision["notional_usd"], entry_price=decision["entry_price"],
                             planned_loss_usd=decision["planned_loss_usd"], risk_budget_usd=decision["risk_budget_used_usd"],
-                            notional_at_reference_usd=str((budget / lf_ref).quantize(D("0.01"))),
+                            notional_at_reference_usd=str(self.portfolio.wanted_notional_usd(lf_ref, budget).quantize(D("0.01"))),
                             limits_applied=decision["limits_applied"],
                             stop_unchanged=D(extra["position_stop"]) == D(intent["stop"]),
                             entry_vs_reference_model_bps=str(adverse_bps(

@@ -58,6 +58,8 @@ PORTFOLIO_SCHEMA = "balancita-portfolio.v2"
 LONG, SHORT = "LONG", "SHORT"
 TEN_THOUSAND = Decimal(10_000)
 CENT = Decimal("0.01")
+RISK_SIZING, FIXED_NOTIONAL = "risk", "fixed_notional"
+SIZING_MODES = (RISK_SIZING, FIXED_NOTIONAL)
 SIGNAL_FIELDS = ("product_id", "side", "bucket_ms", "price", "stop", "target", "horizon_minutes")
 
 
@@ -82,9 +84,29 @@ class PortfolioPolicy:
     max_data_age_ms: int = 600_000
     daily_loss_limit_usd: str = "20"
     max_drawdown_usd: str = "60"
+    # BAL-DECISION-185-DIMENSIONAMIENTO-03: how big one operation is, apart from the shared balance. ``risk`` (the default, every earlier result)
+    # sizes by ``risk_per_trade``. ``fixed_notional`` opens exactly ``notional_per_trade_usd`` of notional or, if a limit or the free capital
+    # leaves less, rejects: it never shrinks the operation. The value is a PROVISIONAL standard, easy to change; it is not a loss limit and not capital.
+    sizing_mode: str = "risk"
+    notional_per_trade_usd: str = "100"
+
+    def __post_init__(self):
+        if self.sizing_mode not in SIZING_MODES:
+            raise PortfolioError("sizing_mode: expected one of {}".format(", ".join(SIZING_MODES)))
+        if self.sizing_mode == FIXED_NOTIONAL:
+            try:
+                value = Decimal(self.notional_per_trade_usd)
+                floor = Decimal(self.min_notional_usd)
+            except InvalidOperation:
+                raise PortfolioError("notional_per_trade_usd: not a number")
+            if not value.is_finite() or value < floor or value != value.quantize(CENT):
+                raise PortfolioError("notional_per_trade_usd: a finite amount, in cents, not below min_notional_usd")
 
     def policy_hash(self):
-        return stable_hash(dict(asdict(self), cost_model=COST_MODEL_VERSION, schema=PORTFOLIO_SCHEMA))[:16]
+        body = asdict(self)
+        if self.sizing_mode == RISK_SIZING:                # the earlier policies keep the hash they always had
+            del body["sizing_mode"], body["notional_per_trade_usd"]
+        return stable_hash(dict(body, cost_model=COST_MODEL_VERSION, schema=PORTFOLIO_SCHEMA))[:16]
 
 
 def make_intent(*, strategy_id, product_id, side, strength, bucket_ms, price, stop, target, horizon_minutes,
@@ -232,6 +254,12 @@ class Portfolio:
     def risk_budget_usd(self):
         return max(D(0), self.capital_usd()) * D(self.policy.risk_per_trade)
 
+    def wanted_notional_usd(self, loss_fraction, budget=None):
+        """The notional the policy asks for before any limit: the fixed standard, or the risk budget over the planned loss per USD."""
+        if self.policy.sizing_mode == FIXED_NOTIONAL:
+            return D(self.policy.notional_per_trade_usd)
+        return (self.risk_budget_usd() if budget is None else budget) / loss_fraction
+
     def open_risk_usd(self):
         return sum((b.planned_loss_usd for b in self.positions.values()), D(0))
 
@@ -314,7 +342,7 @@ class Portfolio:
         long, short = self.exposure()
         directional = long - short if intent["side"] == LONG else short - long
         loss = plan["loss_fraction"]
-        wanted = self.risk_budget_usd() / loss
+        wanted = self.wanted_notional_usd(loss)
         caps = {
             "gross_limit": D(p.max_gross_exposure_pct) * capital - (long + short),
             "product_limit": D(p.max_product_exposure_pct) * capital,
@@ -329,7 +357,9 @@ class Portfolio:
         reasons = []
         if len(self.positions) >= p.max_open_positions:
             reasons.append("max_open_positions")
-        if notional < D(p.min_notional_usd):
+        if p.sizing_mode == FIXED_NOTIONAL and notional < wanted:     # the standard operation does not fit: rejected, never shrunk
+            reasons.append(self._shortfall_reason(applied))
+        elif notional < D(p.min_notional_usd):
             reasons.append(self._shortfall_reason(applied))
         return notional, applied, reasons
 
@@ -497,7 +527,7 @@ class Portfolio:
             planned_loss_usd=str(planned), planned_loss_pct_of_capital=str(planned / self.capital_usd() * 100),
             open_risk_before_usd=str(open_before), open_risk_after_usd=str(self.open_risk_usd()),
             risk_budget_used_usd=str(budget), risk_notional_usd=str(budget / plan["loss_fraction"]),
-            limits_applied=applied)
+            limits_applied=applied, **({"sizing_mode": FIXED_NOTIONAL} if self.policy.sizing_mode == FIXED_NOTIONAL else {}))
 
     # ---- candles -------------------------------------------------------------------------------------------
     def on_candle(self, product_id, bucket_ms, candle):

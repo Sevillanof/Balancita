@@ -57,7 +57,7 @@ from .multi_signals import merged_indicators, stable_hash
 from .paper_live_ingest import SourceReader
 from .paper_runner import STOPPED, RunnerConfig
 from .paper_runner_store import StoreError
-from .portfolio import PortfolioPolicy
+from .portfolio import FIXED_NOTIONAL, PortfolioError, PortfolioPolicy
 from .portfolio_watch import WatchPolicy
 
 CONFIG_SCHEMA = "balancita-paper-live-process-config.v1"
@@ -72,13 +72,23 @@ POST_WINDOW_MS = 6 * 3_600_000                  # the loop ends this long after 
 
 def capital_policy_label(policy):
     """What the session really trades with, read from the portfolio policy the runner is built with (D-185-CAP-01): the shared experimental
-    portfolio, sized by risk. It is NOT the ADR's fixed 100 USD per trade, and nothing in this module sizes a trade."""
+    portfolio and how big one operation is (BAL-DECISION-185-DIMENSIONAMIENTO-03: a provisional fixed notional, or risk sizing). Nothing in
+    this module sizes a trade."""
     equity = format(Decimal(policy.initial_equity_usd).normalize(), "f")
+    if policy.sizing_mode == FIXED_NOTIONAL:
+        return "shared-portfolio-{}-usd-notional-{}usd-experimental".format(equity, format(Decimal(policy.notional_per_trade_usd).normalize(), "f"))
     risk_pct = format((Decimal(policy.risk_per_trade) * 100).normalize(), "f")
     return "shared-portfolio-{}-usd-risk-{}pct-experimental".format(equity, risk_pct)
 
 
-CAPITAL_POLICY = capital_policy_label(PortfolioPolicy())        # a label: the sizing is the portfolio policy's, this module has no money rule
+DEFAULT_NOTIONAL_USD = "100"            # PROVISIONAL standard size of one operation (notional, not loss limit, not capital); change it here or per session
+
+
+def session_policy(notional_per_trade_usd=DEFAULT_NOTIONAL_USD):
+    return PortfolioPolicy(sizing_mode=FIXED_NOTIONAL, notional_per_trade_usd=notional_per_trade_usd)
+
+
+CAPITAL_POLICY = capital_policy_label(session_policy())        # a label: the sizing is the portfolio policy's, this module has no money rule
 SYNTHETIC_SOURCE = "synthetic"
 WALL_CLOCK_GATE = False                  # OFF. Only a reviewed change of this constant, with a BAL-DECISION naming it, opens the wall clock
 FRESH_MS = 600_000                               # the newest warm-up candle may be this far from the first decision
@@ -89,7 +99,7 @@ EXIT_OK, EXIT_REFUSED, EXIT_HALTED, EXIT_RESOURCE_STOP = 0, 2, 3, 4
 
 DEFAULTS = {"source_id": SYNTHETIC_SOURCE, "decide_until_ms": None, "max_quote_gap_ms": 15_000, "block_stale_entries": True,
             "funding_mode": LI.SYNTHETIC_FUNDING, "on_funding_divergence": "halt", "ingest_kw": {}, "evaluator_kw": {},
-            "strategies": "frozen", "capital_policy": CAPITAL_POLICY, "step_interval_ms": 1_000, "min_free_bytes": 1 << 30, "warmup_minutes": None}
+            "strategies": "frozen", "capital_policy": CAPITAL_POLICY, "notional_per_trade_usd": DEFAULT_NOTIONAL_USD, "step_interval_ms": 1_000, "min_free_bytes": 1 << 30, "warmup_minutes": None}
 REQUIRED = ("schema", "products", "decide_from_ms")
 OPTIONAL = ("resource_limits", "clock_guard", "authorization_ref", "publish_blocks")                  # absent from DEFAULTS on purpose: a configuration without it keeps its digest
 RESOURCE_KEYS = ("disk_warn_bytes", "disk_stop_bytes", "memory_warn_bytes", "memory_stop_bytes")
@@ -151,9 +161,17 @@ def validate_config(raw):
             raise ProcessError("config_invalid", key)
     if config["strategies"] != "frozen":
         raise ProcessError("config_invalid", "strategies: only the frozen set exists")
-    if config["capital_policy"] != CAPITAL_POLICY:
+    if not isinstance(config["notional_per_trade_usd"], str):
+        raise ProcessError("config_invalid", "notional_per_trade_usd: a string amount in USD, e.g. \"100\"")
+    try:
+        label = capital_policy_label(session_policy(config["notional_per_trade_usd"]))
+    except (PortfolioError, ArithmeticError) as exc:
+        raise ProcessError("config_invalid", "notional_per_trade_usd: {}".format(exc))
+    if "capital_policy" not in raw:                      # the label follows the size chosen; a label written by hand must still match it
+        config["capital_policy"] = label
+    if config["capital_policy"] != label:
         raise ProcessError("config_invalid", "capital_policy: must be {!r}, the label of the portfolio policy the runner uses; a session cannot change it "
-                                             "(an older label, such as 'adr-0001-fixed-100-usd', is refused, not migrated)".format(CAPITAL_POLICY))
+                                             "(an older label, such as 'adr-0001-fixed-100-usd', is refused, not migrated)".format(label))
     if "clock_guard" in config:
         config["clock_guard"] = _validate_clock_guard(config["clock_guard"])
     ref = config.get("authorization_ref")
@@ -199,7 +217,7 @@ def _validate_resource_limits(raw):
 
 
 def runner_config_of(config):
-    return RunnerConfig(portfolio=PortfolioPolicy(), execution=RP.execution_policy(), watch=WatchPolicy(), funding=(),
+    return RunnerConfig(portfolio=session_policy(config["notional_per_trade_usd"]), execution=RP.execution_policy(), watch=WatchPolicy(), funding=(),
                         start_ms=config["decide_from_ms"], execution_mode="quotes")
 
 
