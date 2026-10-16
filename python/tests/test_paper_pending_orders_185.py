@@ -1,5 +1,5 @@
 """Issue #185, BAL-DECISION-185-CARTERA-SIMULADA-02 (G3): a pending order holds NO reservation. Size and admission are decided when the order
-fills (``execution_timing._fill``), against the free capital of that instant; what is shown as committed is only open positions. Invented data,
+fills (``execution_timing._fill``), against the free capital of that instant; the replay test shows determinism and the duplicate guard, not a real process restart (that is covered by the session tests of #186); what is shown as committed is only open positions. Invented data,
 nothing real, no new rule: this pins what the executor does today, so a change that lets an order reserve, double-use or duplicate shows up."""
 
 import unittest
@@ -57,6 +57,24 @@ class Pending(Env):
         self.assertEqual((view["committed_usd"], view["free_usd"], view["committed_scope"]), ("0", "1000", "open_positions_only"))
         self.assertEqual(ex.portfolio.capital_log, [])                     # and the ledger has nothing for them
 
+    def test_the_published_block_counts_the_pending_orders_apart_from_the_committed_money(self):
+        from unittest import mock
+        ex = self.make()
+        for product in BOOK:
+            self.send(ex, product)
+
+        class Runner(object):                               # only what ``positions`` reads from a runner
+            portfolio, clock, open_cycles, open_funding, status = ex.portfolio, CYCLE, [], [], "closed"
+            executor = ex
+
+        with mock.patch.object(PUB, "protection", lambda r: []), mock.patch.object(PUB, "integrated_audit", lambda r: {"violations": []}):
+            before = PUB.positions(Runner(), report_age_ms=None, max_age_ms=None)["account"]
+            self.fill(ex, PRODUCT)
+        after = PUB.account(ex.portfolio, len(ex.pending))
+        self.assertEqual((before["pending_orders"], before["committed_usd"], before["pending_reserved_usd"]), (2, "0", "0"))
+        self.assertEqual((after["pending_orders"], after["pending_reservation"], after["pending_reserved_usd"]), (1, "none", "0"))
+        self.assertEqual(D(after["committed_usd"]), D("600.00"))          # only the position that opened is committed
+
     def test_two_simultaneous_orders_fill_one_after_the_other_against_the_free_capital_of_each_instant(self):
         ex = self.make()
         for product in BOOK:
@@ -111,7 +129,7 @@ class Pending(Env):
         self.assertEqual(with_cancelled["notional_usd"], reference["notional_usd"])
         self.assertEqual(self.money(ex), self.money(alone))
 
-    def test_a_restart_that_replays_the_same_orders_gives_the_same_money_and_a_resent_order_is_not_counted_twice(self):
+    def test_replaying_the_same_orders_is_deterministic_and_a_resent_decision_is_not_counted_twice(self):
         first, replay = self.make(), self.make()
         for ex in (first, replay):
             for product in BOOK:
