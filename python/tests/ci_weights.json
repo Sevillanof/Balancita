@@ -94,6 +94,7 @@
   "test_paper_published_order_state_187": 1,
   "test_paper_published_rejections_187": 1,
   "test_paper_published_signals_187": 1,
+  "test_paper_reconnect_warmup_186": 150,
   "test_paper_runner": 1,
   "test_paper_runner_financial": 2,
   "test_paper_runner_recovery": 3,
