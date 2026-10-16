@@ -36,6 +36,7 @@ it is told to stop, when it has done ``max_steps`` or when the decision window i
 import argparse
 import json
 import os
+import re
 import shutil
 import signal
 import sys
@@ -73,9 +74,10 @@ DEFAULTS = {"source_id": SYNTHETIC_SOURCE, "decide_until_ms": None, "max_quote_g
             "funding_mode": LI.SYNTHETIC_FUNDING, "on_funding_divergence": "halt", "ingest_kw": {}, "evaluator_kw": {},
             "strategies": "frozen", "capital_policy": CAPITAL_POLICY, "step_interval_ms": 1_000, "min_free_bytes": 1 << 30, "warmup_minutes": None}
 REQUIRED = ("schema", "products", "decide_from_ms")
-OPTIONAL = ("resource_limits",)                  # absent from DEFAULTS on purpose: a configuration without it keeps its digest
+OPTIONAL = ("resource_limits", "clock_guard", "authorization_ref")                  # absent from DEFAULTS on purpose: a configuration without it keeps its digest
 RESOURCE_KEYS = ("disk_warn_bytes", "disk_stop_bytes", "memory_warn_bytes", "memory_stop_bytes")
 DEFAULT_CHECK_EVERY_STEPS = 30
+AUTHORIZATION_REF = re.compile(r"^BAL-DECISION-[0-9]{1,4}-[0-9]{1,3}$")
 
 
 class ProcessError(Exception):
@@ -134,9 +136,25 @@ def validate_config(raw):
         raise ProcessError("config_invalid", "strategies: only the frozen set exists")
     if config["capital_policy"] != CAPITAL_POLICY:
         raise ProcessError("config_invalid", "capital_policy: the sizing is the ADR's, a session cannot change it")
+    if "clock_guard" in config:
+        config["clock_guard"] = _validate_clock_guard(config["clock_guard"])
+    ref = config.get("authorization_ref")
+    if ref is not None and not (isinstance(ref, str) and AUTHORIZATION_REF.match(ref)):
+        raise ProcessError("config_invalid", "authorization_ref: expected BAL-DECISION-<issue>-<n>")
     if "resource_limits" in config:
         config["resource_limits"] = _validate_resource_limits(config["resource_limits"])
-    return dict(config, digest=stable_hash({k: v for k, v in config.items() if k != "digest"})[:20])
+    # ``authorization_ref`` is an audit trail only: it opens nothing (the gate is a constant of the code) and is not part of the identity
+    return dict(config, digest=stable_hash({k: v for k, v in config.items() if k not in ("digest", "authorization_ref")})[:20])
+
+
+def _validate_clock_guard(raw):
+    """``{"max_forward_jump_ms": n}``: the one value is named by the operator (nothing is approved or defaulted)."""
+    if not isinstance(raw, dict) or set(raw) != {"max_forward_jump_ms"}:
+        raise ProcessError("config_invalid", "clock_guard: exactly max_forward_jump_ms")
+    value = raw["max_forward_jump_ms"]
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ProcessError("config_invalid", "clock_guard.max_forward_jump_ms")
+    return {"max_forward_jump_ms": value}
 
 
 def _validate_resource_limits(raw):
@@ -254,12 +272,14 @@ class Supervisor(object):
     ``tick(now)`` is called before each step (a test releases the invented market there)."""
 
     def __init__(self, config, directory, source_path, *, clock, sleep=lambda seconds: None, tick=lambda now: None, strategies=None,
-                 resources=None):
+                 resources=None, wall_time=None):
         self.config, self.directory, self.source_path = config, directory, source_path
         self.clock, self.sleep, self.tick = clock, sleep, tick
         self.resources = resources or read_resources           # ``resources(directory) -> {"disk_bytes", "memory_bytes"}``; injected in tests
         self.resource_events, self.last_resources, self.stop_reason = [], None, None
         self._warned = set()
+        self.wall_time = wall_time or (lambda: int(time.time() * 1000))     # only read when ``clock_guard`` is configured
+        self.clock_events, self._last_now = [], None
         self.strategies = strategies
         self.session = None
         self.stop_requested = False
@@ -377,6 +397,22 @@ class Supervisor(object):
                 self._warned.add(resource)
                 self._resource_event(now, "warning", resource, value, warn, "{} {} bytes reached the warning limit {}".format(resource, value, warn))
 
+    def _check_clock(self, now):
+        """Time must not run backwards and must not jump past the named bound between two steps. Returns the reason, or None. A clock
+        anomaly is an insufficiency of continuity (rule 10D), not a Kraken outage: the caller HALTS durably (a restart needs the operator,
+        BAL-DECISION-184-01 / 185-01) and nothing is reordered or corrected; positions, stops and risk are not touched."""
+        guard, last, self._last_now = self.config.get("clock_guard"), self._last_now, now
+        if not guard or last is None:
+            return None
+        if now < last:
+            reason, detail = "clock_regression", "the clock went back {} ms".format(last - now)
+        elif now - last > guard["max_forward_jump_ms"]:
+            reason, detail = "clock_jump", "the clock jumped {} ms (bound {})".format(now - last, guard["max_forward_jump_ms"])
+        else:
+            return None
+        self.clock_events.append({"kind": reason, "previous_now_ms": last, "observed_now_ms": now, "detail": detail})
+        return reason + ": " + detail
+
     def _resource_event(self, now, kind, resource, value, limit, detail):
         self.resource_events.append({"kind": kind, "resource": resource, "value_bytes": value, "limit_bytes": limit,
                                      "observed_now_ms": now, "detail": detail})
@@ -394,6 +430,9 @@ class Supervisor(object):
             now = self.clock()
             if self.config["decide_until_ms"] is not None and now >= self.config["decide_until_ms"] + POST_WINDOW_MS:
                 break
+            anomaly = self._check_clock(now)         # before the step: a bad instant is never stepped on
+            if anomaly:
+                return self._halt(now, anomaly)
             self.tick(now)
             try:
                 state = self.session.step(now)
@@ -467,6 +506,8 @@ class Supervisor(object):
             "phase": self.phase, "pid": os.getpid(), "observed_now_ms": now, "steps": session.stats["steps"],
             "ingest_state": state, "runner_status": session.runner.status, "halted": session.halted,
             "pending_orders": len(session.runner.executor.pending), "open_positions": session.runner.portfolio.snapshot()["open_positions"]}
+        if self.config.get("clock_guard"):
+            beat["wall_ms"] = self.wall_time()                  # lets a supervisor tell a stuck process from a simulated clock
         if self.config.get("resource_limits"):
             beat["resources"] = {"last": self.last_resources, "events": self.resource_events}
         _write_json(os.path.join(self.directory, HEARTBEAT_FILE), beat)
@@ -482,6 +523,8 @@ class Supervisor(object):
                 "pending_at_end": len(session.runner.executor.pending),
                 "capital_policy": self.config["capital_policy"], "policy_status": "experimental", "evidence_class": "not_forward_evidence",
                 "stop_signal": self.stop_signal}
+        if self.config.get("clock_guard"):
+            body["clock"] = {"events": self.clock_events}
         if self.config.get("resource_limits"):
             body["resources"] = {"last": self.last_resources, "events": self.resource_events, "stop_reason": self.stop_reason}
         if self.config["funding_mode"] == LI.OBSERVED_FUNDING:
