@@ -42,6 +42,7 @@ import signal
 import stat
 import sys
 import time
+from decimal import Decimal
 
 from . import paper_live_integration as LI
 from . import replay_driver as RP
@@ -63,7 +64,17 @@ CONFIG_FILE, HEARTBEAT_FILE, REPORT_FILE = "process-config.json", "heartbeat.jso
 HALT_FILE, RESTARTS_FILE = "halt.json", "operator-restarts.json"        # durable, independent of the heartbeat
 MARKER_TABLE, MARKER = "balancita_synthetic_fixture", "balancita-synthetic-fixture.v1"
 POST_WINDOW_MS = 6 * 3_600_000                  # the loop ends this long after the decision window (positions may still close)
-CAPITAL_POLICY = "adr-0001-fixed-100-usd"        # a label: the sizing is the portfolio policy's, this module has no money rule
+
+
+def capital_policy_label(policy):
+    """What the session really trades with, read from the portfolio policy the runner is built with (D-185-CAP-01): the shared experimental
+    portfolio, sized by risk. It is NOT the ADR's fixed 100 USD per trade, and nothing in this module sizes a trade."""
+    equity = format(Decimal(policy.initial_equity_usd).normalize(), "f")
+    risk_pct = format((Decimal(policy.risk_per_trade) * 100).normalize(), "f")
+    return "shared-portfolio-{}-usd-risk-{}pct-experimental".format(equity, risk_pct)
+
+
+CAPITAL_POLICY = capital_policy_label(PortfolioPolicy())        # a label: the sizing is the portfolio policy's, this module has no money rule
 SYNTHETIC_SOURCE = "synthetic"
 FRESH_MS = 600_000                               # the newest warm-up candle may be this far from the first decision
 
@@ -136,7 +147,8 @@ def validate_config(raw):
     if config["strategies"] != "frozen":
         raise ProcessError("config_invalid", "strategies: only the frozen set exists")
     if config["capital_policy"] != CAPITAL_POLICY:
-        raise ProcessError("config_invalid", "capital_policy: the sizing is the ADR's, a session cannot change it")
+        raise ProcessError("config_invalid", "capital_policy: must be {!r}, the label of the portfolio policy the runner uses; a session cannot change it "
+                                             "(an older label, such as 'adr-0001-fixed-100-usd', is refused, not migrated)".format(CAPITAL_POLICY))
     if "clock_guard" in config:
         config["clock_guard"] = _validate_clock_guard(config["clock_guard"])
     ref = config.get("authorization_ref")

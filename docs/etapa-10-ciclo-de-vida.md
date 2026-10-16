@@ -44,7 +44,9 @@ quien falsifique el marcador a propósito. Habilitar datos reales exige una auto
 
 ## Capital
 
-El reporte lleva `capital_policy: adr-0001-fixed-100-usd`, `policy_status: experimental` y `evidence_class: not_forward_evidence`.
+El reporte lleva `capital_policy: shared-portfolio-1000-usd-risk-1pct-experimental` (la cartera experimental compartida, tamaño según riesgo; NO los 100 USD fijos del ADR, que son del forward; la etiqueta se deriva de `PortfolioPolicy()` y un test falla si divergen), `policy_status: experimental` y `evidence_class: not_forward_evidence`.
+
+**Cambio de etiqueta y digest (D-185-CAP-01, BAL-REV-185-CAP-02).** `capital_policy` participa en el digest de la configuración. Una configuración o un directorio creados antes de la corrección (etiqueta `adr-0001-fixed-100-usd`) tienen otro digest y se **rechazan de forma explícita**: `validate_config` responde `config_invalid` con la etiqueta vigente en el mensaje, y el pre-vuelo rechaza el directorio (`configuration_matches_directory`), con o sin `--restart`. No se migra, no se repara y no se borra nada: el directorio queda byte a byte como estaba, con sus evidencias, y no se asume que no existan sesiones sintéticas previas. Quien quiera retomar una sesión vieja necesita una decisión explícita aparte.
 La configuración no admite otro dimensionamiento: `capital_policy` distinto se rechaza. `experimental` no sustituye al ADR.
 
 ## Plan de sesión supervisada (propuesta para decisión del propietario; no autoriza nada)
