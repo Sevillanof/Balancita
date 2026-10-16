@@ -321,7 +321,7 @@ export function resolveLlamaServer({ env, run = defaultRun }) {
   return { command: 'llama-server' }
 }
 
-export const DEV_PORTS = { vite: 5173, mock: 8788, live: 8789 }
+export const DEV_PORTS = { vite: 5173, live: 8789 }
 // Strategy registry S (Python): checked only when its child runs.
 export const STRATEGIES_PORT = 8790
 // Hosts the children bind to: gateway and mock use 127.0.0.1 (HOST
@@ -436,8 +436,6 @@ const GATEWAY_ARGS = [
   '--watch',
   'src/app/gateway-main.ts',
 ]
-// No --watch: the mock re-seeds its own DBs on start.
-const MOCK_ARGS = ['--experimental-strip-types', 'src/app/mock-main.ts']
 // No --watch: capture is the sole market-DB writer; never restart it on edits.
 const CAPTURE_ARGS = ['--experimental-strip-types', 'src/app/capture-main.ts']
 
@@ -838,7 +836,6 @@ function prefixedBackend(prefix, port) {
 /** Vite dev proxy. Longer prefixes first: Vite uses the first matching key. */
 export function devProxyConfig() {
   return {
-    '/api-mock': prefixedBackend('/api-mock', DEV_PORTS.mock),
     '/api-live': prefixedBackend('/api-live', DEV_PORTS.live),
     // Strategy registry S: its routes already start with /api-strategies.
     '/api-strategies': { target: `http://127.0.0.1:${STRATEGIES_PORT}` },
