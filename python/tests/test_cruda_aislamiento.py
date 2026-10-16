@@ -51,9 +51,18 @@ class IsolationTests(unittest.TestCase):
         self.assertEqual(offenders, [])
 
     def test_the_experiment_package_runs_without_the_optional_dependencies(self):
-        for name in ("corpus.py", "archivo_a.py", "derivacion.py", "escritor_trabajo.py"):
+        for name in ("corpus.py", "archivo_a.py", "derivacion.py", "confirmacion.py", "medir.py"):
             for module, _ in imports(os.path.join(EXPERIMENT, name)):
                 self.assertNotIn(module, FORBIDDEN, name)
+
+    def test_only_candidate_b_imports_pyarrow_and_never_duckdb(self):
+        for name in sorted(os.listdir(EXPERIMENT)):
+            if not name.endswith(".py"):
+                continue
+            modules = {module for module, _ in imports(os.path.join(EXPERIMENT, name))}
+            self.assertNotIn("duckdb", modules, name)
+            if name != "archivo_b.py":
+                self.assertNotIn("pyarrow", modules, name)
 
     def test_no_dependency_file_lists_them(self):
         for name in ("pyproject.toml", "requirements.txt", "package.json", "pnpm-lock.yaml"):

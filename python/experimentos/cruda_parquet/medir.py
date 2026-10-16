@@ -1,6 +1,8 @@
-"""Issue #248: measurement script for candidate A (candidate B comes in the next PR). NOT a test: large runs never go through CI.
+"""Issue #248: measurement script for candidates A (standard library) and B (Parquet). NOT a test: large runs never go through CI.
 
-``PYTHONPATH=python python3 -m experimentos.cruda_parquet.medir [--registros N ...] [--max-bytes B] [--seed S] [--bloque N] [--codec zlib|lzma]``
+``PYTHONPATH=python python3 -m experimentos.cruda_parquet.medir [--formato A|B] [--registros N ...] [--max-bytes B] [--seed S] [--bloque N] [--codec C]``
+
+B needs pyarrow: run it with the interpreter of the pinned virtualenv (docs/experimento-cruda-248.md). Codecs: A zlib|lzma, B zstd|snappy|gzip|none.
 
 Each phase (generate, write+seal, query, rebuild) runs in a FRESH child process; the child's peak memory (whole process, never assumed
 constant: manifest, query lists, decompression and copies while sealing all count) and CPU come from
@@ -22,6 +24,8 @@ import time
 from typing import Iterator
 
 from experimentos.cruda_parquet import archivo_a as A
+from experimentos.cruda_parquet import archivo_b as B
+from experimentos.cruda_parquet.confirmacion import compare_paths
 from experimentos.cruda_parquet.corpus import CorpusConfig, Message, corpus_hash, generate, size_summary
 from experimentos.cruda_parquet.derivacion import derivation_hash, derive_minutes
 
@@ -49,8 +53,16 @@ def rss_mib(maxrss: int, platform: str) -> float:
     return round(maxrss / (1048576.0 if platform == "darwin" else 1024.0), 1)
 
 
+META = ("source", "endpoint", "product", "provider_time", "provider_seq", "received_at")
+
+
+def _meta(item) -> tuple:
+    return tuple(getattr(item, name) for name in META)
+
+
 def compare_streams(left, right) -> dict:
-    """Full comparison: same cardinality AND the same bytes/fields for every pair (a truncated or missing record cannot pass)."""
+    """Full comparison: same cardinality AND the same payload bytes AND the same metadata fields for every pair (a truncated, missing or
+    re-labelled record cannot pass). Identity (epoch, arrival_no) is not compared: the corpus has none."""
     import hashlib
     count_left = count_right = mismatches = 0
     digest_left, digest_right = hashlib.sha256(), hashlib.sha256()
@@ -66,7 +78,7 @@ def compare_streams(left, right) -> dict:
         if b is not sentinel:
             count_right += 1
             digest_right.update(hashlib.sha256(b.raw).digest())
-        if a is sentinel or b is sentinel or a.raw != b.raw:
+        if a is sentinel or b is sentinel or a.raw != b.raw or _meta(a) != _meta(b):
             mismatches += 1
     return {"count_left": count_left, "count_right": count_right, "mismatches": mismatches,
             "sha256_left": digest_left.hexdigest(), "sha256_right": digest_right.hexdigest(),
@@ -110,6 +122,18 @@ def read_corpus(path: str) -> Iterator[Message]:
             yield Message(parts[0].decode(), parts[1].decode(), parts[2].decode(), parts[6], parts[3].decode(), parts[4].decode(), int(parts[5]))
 
 
+def fmt_of(args):
+    if args.formato == "B":
+        if not B.available():
+            raise SystemExit("candidate B needs pyarrow: run with the interpreter of the pinned virtualenv")
+        return B.FORMAT_B
+    return A.FORMAT_A
+
+
+def archive_dir(args) -> str:
+    return os.path.join(args.work, "archivo_" + args.formato.lower())
+
+
 def tree_total(path: str) -> int:
     return A.tree_bytes(path)
 
@@ -130,12 +154,12 @@ def work_generate(args) -> dict:
 
 
 def work_write(args) -> dict:
-    archive = os.path.join(args.work, "archivo_a")
+    archive = archive_dir(args)
     shutil.rmtree(archive, ignore_errors=True)
     started = time.perf_counter()
     corpus_bytes = os.path.getsize(os.path.join(args.work, "corpus.bin"))
     writer = A.ArchiveWriter(archive, block_records=args.bloque, block_bytes=args.bloque_bytes, codec=args.codec,
-                             max_dir_bytes=args.tope_bytes, external_bytes=corpus_bytes)
+                             max_dir_bytes=args.tope_bytes, external_bytes=corpus_bytes, fmt=fmt_of(args))
     try:
         for m in read_corpus(os.path.join(args.work, "corpus.bin")):
             writer.append(m.source, m.endpoint, m.product, m.raw, m.provider_time, m.provider_seq, m.received_at)
@@ -149,15 +173,17 @@ def work_write(args) -> dict:
             "append_seconds": round(stats["append_seconds"], 3), "seal_seconds": round(stats["seal_seconds"], 3),
             "seal_cpu_seconds": round(stats["seal_cpu_seconds"], 3), "blocks": stats["sealed_blocks"], "raw_bytes": stats["sealed_raw_bytes"],
             "archive_bytes": directory_bytes(archive), "ratio": round(stats["sealed_raw_bytes"] / max(1, stats["sealed_file_bytes"]), 3),
-            "peak_buffer_bytes": stats["peak_buffer_bytes"], "peak_temp_block_bytes": stats["peak_temp_bytes"], "codec": args.codec,
+            "peak_buffer_bytes": stats["peak_buffer_bytes"], "confirm_latency_max_seconds": round(stats["confirm_latency_max"], 4),
+            "confirm_latency_mean_seconds": round(stats["confirm_latency_sum"] / max(1, stats["confirmed_records"]), 4),
+            "confirmed_records": stats["confirmed_records"], "pending_at_close": writer.pending, "peak_temp_block_bytes": stats["peak_temp_bytes"], "codec": args.codec, "formato": args.formato,
             "total_bytes": corpus_bytes + A.tree_bytes(archive), "limit_bytes": args.tope_bytes}
 
 
 def work_query(args) -> dict:
-    archive = os.path.join(args.work, "archivo_a")
+    archive = archive_dir(args)
     out = {}
     started = time.perf_counter()
-    reader = A.ArchiveReader(archive)
+    reader = A.ArchiveReader(archive, fmt_of(args))
     out["startup_seconds"] = round(time.perf_counter() - started, 4)
     entries = reader.entries
     mid = entries[len(entries) // 2]
@@ -178,9 +204,9 @@ def work_query(args) -> dict:
 
 
 def work_rebuild(args) -> dict:
-    archive = os.path.join(args.work, "archivo_a")
+    archive = archive_dir(args)
     started = time.perf_counter()
-    reader = A.ArchiveReader(archive)
+    reader = A.ArchiveReader(archive, fmt_of(args))
     from_archive = derivation_hash(derive_minutes(reader.records()))
     seconds = round(time.perf_counter() - started, 3)
     from_corpus = derivation_hash(derive_minutes(read_corpus(os.path.join(args.work, "corpus.bin"))))
@@ -189,14 +215,41 @@ def work_rebuild(args) -> dict:
             "byte_exact_round_trip": comparison["equal"], "comparison": comparison}
 
 
-WORKLOADS = {"generar": work_generate, "escribir": work_write, "consultar": work_query, "reconstruir": work_rebuild}
+def work_contrast(args) -> dict:
+    """A real SIGKILL at 60 % of the records, then the pending-consuming path against the confirmed one (BAL-REV-183-DURABILIDAD-09).
+
+    Reference = derivation over CONFIRMED records only; the pending path consumed every appended record. Divergence is labelled, not
+    "fixed"; no sync frequency or loss window is chosen here. Uses its own small synthetic corpus (seed, up to 20 000 records)."""
+    count = min(args.registros, 20_000)
+    kill_at = max(1, count * 6 // 10)
+    directory = os.path.join(args.work, "contraste_" + args.formato.lower())
+    shutil.rmtree(directory, ignore_errors=True)
+    started = time.perf_counter()
+    proc = subprocess.run([sys.executable, "-m", "experimentos.cruda_parquet.escritor_trabajo", directory, str(args.seed), str(count), "append",
+                           str(kill_at), str(args.bloque if args.bloque < count else max(1, count // 10)), args.formato, args.codec],
+                          capture_output=True, text=True, env=child_env())
+    fmt = fmt_of(args)
+    recovery = A.recover(directory, fmt)
+    consumed = list(generate(CorpusConfig(seed=args.seed, max_records=count, max_size=8192)))[:kill_at]
+    reader = A.ArchiveReader(directory, fmt)
+    confirmed = list(reader.records())
+    # the corpus has no identity: the killed run numbers its records 1..N in epoch 1, in the corpus order
+    consumed_records = [A.Record(1, i + 1, m.received_at, m.source, m.endpoint, m.product, m.provider_time, m.provider_seq, m.raw)
+                        for i, m in enumerate(consumed)]
+    result = compare_paths(consumed_records, confirmed)
+    result.update({"killed": proc.returncode < 0, "returncode": proc.returncode, "kill_after_appended": kill_at, "seconds": round(time.perf_counter() - started, 3),
+                   "recovery": {k: v for k, v in recovery.items() if v}, "confirmed_blocks": len(reader.entries)})
+    return result
+
+
+WORKLOADS = {"generar": work_generate, "escribir": work_write, "consultar": work_query, "reconstruir": work_rebuild, "contrastar": work_contrast}
 
 
 # ---- process plumbing ---------------------------------------------------------------------------
 
 def cli_args(args, phase: str):
     return [phase, "--work", args.work, "--registros", str(args.registros), "--max-bytes", str(args.max_bytes), "--seed", str(args.seed),
-            "--bloque", str(args.bloque), "--bloque-bytes", str(args.bloque_bytes), "--codec", args.codec, "--tope-bytes", str(args.tope_bytes)]
+            "--bloque", str(args.bloque), "--bloque-bytes", str(args.bloque_bytes), "--codec", args.codec, "--formato", args.formato, "--tope-bytes", str(args.tope_bytes)]
 
 
 def run_wrapper(args) -> None:
@@ -216,7 +269,8 @@ def run_wrapper(args) -> None:
 
 
 def orchestrate(args) -> dict:
-    report = {"python": sys.version.split()[0], "platform": sys.platform, "seed": args.seed, "codec": args.codec, "bloque_registros": args.bloque,
+    default_codec(args)
+    report = {"python": sys.version.split()[0], "platform": sys.platform, "formato": args.formato, "pyarrow": B.version() if args.formato == "B" else None, "seed": args.seed, "codec": args.codec, "bloque_registros": args.bloque,
               "bloque_bytes": args.bloque_bytes, "tope_bytes": args.tope_bytes, "escalones": []}
     for registros in args.registros_lista:
         args.registros = registros
@@ -232,7 +286,7 @@ def orchestrate(args) -> dict:
             continue
         args.work = tempfile.mkdtemp(prefix="cruda-medir-")
         try:
-            for phase in ("generar", "escribir", "consultar", "reconstruir"):
+            for phase in ("generar", "escribir", "consultar", "reconstruir", "contrastar"):
                 if tree_total(args.work) > args.tope_bytes:
                     step["detenido"] = "los archivos de trabajo ya pasan el tope de %d bytes antes de la fase %s" % (args.tope_bytes, phase)
                     break
@@ -240,11 +294,19 @@ def orchestrate(args) -> dict:
                                      capture_output=True, text=True, env=child_env())
                 step[phase] = json.loads(out.stdout.strip().splitlines()[-1]) if out.stdout.strip() else {"error": out.stderr[-400:]}
             step["disco"] = {"corpus_bytes": os.path.getsize(os.path.join(args.work, "corpus.bin")),
-                             "archivo_a_bytes": directory_bytes(os.path.join(args.work, "archivo_a")), "total_bytes": tree_total(args.work)}
+                             "archivo_bytes": directory_bytes(archive_dir(args)), "total_bytes": tree_total(args.work)}
         finally:
             shutil.rmtree(args.work, ignore_errors=True)
         report["escalones"].append(step)
     return report
+
+
+def default_codec(args) -> None:
+    valid = ("zlib", "lzma") if args.formato == "A" else B.CODECS
+    if args.codec is None:
+        args.codec = valid[0]
+    if args.codec not in valid:
+        raise SystemExit("codec %s is not valid for format %s (use %s)" % (args.codec, args.formato, "/".join(valid)))
 
 
 def parser() -> argparse.ArgumentParser:
@@ -257,7 +319,8 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--seed", type=int, default=248)
     p.add_argument("--bloque", type=int, default=10_000)
     p.add_argument("--bloque-bytes", type=int, default=8 * 1024 * 1024)
-    p.add_argument("--codec", default="zlib", choices=["zlib", "lzma"])
+    p.add_argument("--formato", default="A", choices=["A", "B"])
+    p.add_argument("--codec", default=None, choices=["zlib", "lzma", "zstd", "snappy", "gzip", "none"], help="default: zlib for A, zstd for B")
     p.add_argument("--tope-bytes", type=int, default=DEFAULT_CAP, help="hard limit on corpus + archive files (default 2 GiB)")
     p.add_argument("--work", default="")
     return p
@@ -265,6 +328,7 @@ def parser() -> argparse.ArgumentParser:
 
 def main(argv=None) -> None:
     args = parser().parse_args(argv)
+    default_codec(args)
     if args.modo == "orquestar":
         print(json.dumps(orchestrate(args), indent=2, sort_keys=True))
     elif args.modo == "envoltura":

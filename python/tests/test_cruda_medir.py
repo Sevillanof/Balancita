@@ -99,6 +99,67 @@ class MeasureHelpersTests(unittest.TestCase):
         self.assertLessEqual(result.get("disco", {}).get("total_bytes", 0), 3_000_000, "the hard limit holds even when the estimate let it run")
         json.dumps(report)
 
+    def _args(self, work, **overrides):
+        args = medir.parser().parse_args(["trabajo", "reconstruir", "--registros", "300", "--bloque", "100", "--work", work])
+        medir.default_codec(args)
+        for key, value in overrides.items():
+            setattr(args, key, value)
+        return args
+
+    def _prepared_workdir(self):
+        from experimentos.cruda_parquet import archivo_a as A
+        work = tempfile.mkdtemp(prefix="cruda-medir-")
+        self.addCleanup(shutil.rmtree, work, True)
+        messages = list(generate(CorpusConfig(seed=248, max_records=300)))
+        medir.write_corpus(os.path.join(work, "corpus.bin"), messages)
+        writer = A.ArchiveWriter(os.path.join(work, "archivo_a"), block_records=100)
+        for m in messages:
+            writer.append(m.source, m.endpoint, m.product, m.raw, m.provider_time, m.provider_seq, m.received_at)
+        writer.close()
+        return work, messages
+
+    def test_rebuild_reports_a_failed_round_trip_when_the_corpus_and_archive_differ(self):
+        """D-249-11: the phase must say False, not just True, when the archive does not match the corpus."""
+        work, messages = self._prepared_workdir()
+        ok = medir.work_rebuild(self._args(work))
+        self.assertTrue(ok["byte_exact_round_trip"] and ok["equals_corpus"])
+        changed = list(messages)
+        changed[150] = changed[150]._replace(raw=changed[150].raw + b"x")
+        medir.write_corpus(os.path.join(work, "corpus.bin"), changed)
+        bad = medir.work_rebuild(self._args(work))
+        self.assertFalse(bad["byte_exact_round_trip"])
+        self.assertEqual(bad["comparison"]["mismatches"], 1)
+        medir.write_corpus(os.path.join(work, "corpus.bin"), messages[:-1])
+        short = medir.work_rebuild(self._args(work))
+        self.assertFalse(short["byte_exact_round_trip"])
+        self.assertEqual((short["comparison"]["count_left"], short["comparison"]["count_right"]), (300, 299))
+
+    def test_comparison_covers_metadata_fields_not_only_the_payload(self):
+        """D-249-12: the docstring promises bytes AND fields, so a re-labelled record must fail."""
+        messages = list(generate(CorpusConfig(seed=5, max_records=50)))
+        for field, value in (("product", "PF_OTHER"), ("provider_seq", "999999999"), ("received_at", messages[10].received_at + 1),
+                             ("endpoint", "x"), ("provider_time", "t"), ("source", "other")):
+            changed = list(messages)
+            changed[10] = changed[10]._replace(**{field: value})
+            self.assertFalse(medir.compare_streams(iter(messages), iter(changed))["equal"], field)
+
+    def test_orchestrator_stops_before_a_phase_when_the_work_files_already_pass_the_limit(self):
+        """D-249-12: the pre-phase cutoff is exercised, and no later phase runs."""
+        from unittest import mock
+        args = medir.parser().parse_args(["orquestar", "--registros-lista", "100", "--max-bytes", "100000", "--bloque", "50", "--tope-bytes", "50000000"])
+        calls = {"n": 0}
+
+        def over_after_first(path):
+            calls["n"] += 1
+            return 0 if calls["n"] == 1 else args.tope_bytes + 1  # the first check precedes "generar"; the next one follows it
+        with mock.patch.object(medir, "tree_total", side_effect=over_after_first):
+            step = medir.orchestrate(args)["escalones"][0]
+        self.assertIn("generar", step)
+        self.assertIn("detenido", step)
+        self.assertIn("antes de la fase escribir", step["detenido"])
+        for later in ("escribir", "consultar", "reconstruir", "contrastar"):
+            self.assertNotIn(later, step)
+
 
 if __name__ == "__main__":
     unittest.main()

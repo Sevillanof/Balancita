@@ -108,6 +108,18 @@ def parse_block(data: bytes) -> List[Record]:
     return records
 
 
+class BlockFormat(NamedTuple):
+    """How a block is serialised. A is the standard-library format above; candidate B (archivo_b.py) plugs Parquet into the SAME writer,
+    recovery and manifest protocol, so the two are compared on the format and nothing else."""
+    name: str
+    build: Callable[[List[Record], str], bytes]
+    parse: Callable[[bytes], List[Record]]
+    codec_of: Callable[[bytes], str]
+
+
+FORMAT_A = BlockFormat("A", build_block, parse_block, lambda data: CODECS[data[4]][0])
+
+
 def _read(path: str, mode: str = "rb"):
     with open(path, mode) as handle:
         return handle.read()
@@ -173,7 +185,7 @@ def _manifest_valid_end(directory: str) -> int:
     return end
 
 
-def recover(directory: str) -> dict:
+def recover(directory: str, fmt: BlockFormat = FORMAT_A) -> dict:
     """Make the directory consistent after a stop. Never promotes a partial block.
 
     * ``*.blk.tmp`` -> renamed ``*.partial`` (evidence, ignored).
@@ -202,12 +214,12 @@ def recover(directory: str) -> dict:
         elif name.endswith(".blk") and name not in confirmed:
             data = _read(full)
             try:
-                records = parse_block(data)
+                records = fmt.parse(data)
             except Exception:
                 os.replace(full, full + ".partial")
                 report["partial"].append(name)
                 continue
-            codec = CODECS[data[4]][0]
+            codec = fmt.codec_of(data)
             with open(path, "ab") as handle:
                 handle.write((json.dumps(_manifest_entry(int(name[:-4]), name, data, records, codec, True), sort_keys=True) + "\n").encode())
                 handle.flush()
@@ -262,6 +274,9 @@ class WriterStats:
         self.seal_cpu_seconds = 0.0
         self.peak_buffer_bytes = 0
         self.peak_temp_bytes = 0
+        self.confirmed_records = 0
+        self.confirm_latency_max = 0.0  # seconds from append() to the manifest line being fsynced (logical confirmation; physical durability NOT proven)
+        self.confirm_latency_sum = 0.0
 
     def as_dict(self) -> dict:
         return dict(self.__dict__)
@@ -270,18 +285,19 @@ class WriterStats:
 class ArchiveWriter:
     """Single writer. ``hook(point, n)`` lets a test or a worker stop the process at an exact point (SIGKILL)."""
 
-    def __init__(self, directory: str, block_records: int = 2000, block_bytes: int = 4 * 1024 * 1024, codec: str = "zlib",
-                 hook: Optional[Callable[[str, int], None]] = None, max_dir_bytes: Optional[int] = None, external_bytes: int = 0):
+    def __init__(self, directory: str, block_records: int = 2000, block_bytes: int = 4 * 1024 * 1024, codec: Optional[str] = None,
+                 hook: Optional[Callable[[str, int], None]] = None, max_dir_bytes: Optional[int] = None, external_bytes: int = 0, fmt: BlockFormat = FORMAT_A):
+        self.fmt = fmt
         self.directory = directory
         self.block_records = block_records
         self.block_bytes = block_bytes
-        self.codec = codec
+        self.codec = codec or ("zstd" if fmt.name == "B" else "zlib")
         self.hook = hook or (lambda point, n: None)
         # Hard stop on the files of the experiment: bytes already on disk (this tree + ``external_bytes`` such as the corpus file) plus the
         # block about to be written (it exists twice at the peak: as ``.tmp`` and after the rename is accounted for by the same bytes).
         self.max_dir_bytes = max_dir_bytes
         self.external_bytes = external_bytes
-        self.recovery = recover(directory)
+        self.recovery = recover(directory, fmt)
         if self.recovery["confirmed_damaged"]:
             raise ArchiveDamaged("confirmed blocks damaged or missing: %s" % ", ".join(self.recovery["confirmed_damaged"]))
         self.epoch = self._claim_epoch()  # a NEW epoch on every start: pending numbers lost in a kill are never reused
@@ -289,7 +305,9 @@ class ArchiveWriter:
         self.next_block = max(numbers + [e["block"] for e in read_manifest(directory)] + [0]) + 1
         self.next_arrival = 1
         self.buffer: List[Record] = []
+        self.buffer_times: List[float] = []
         self.buffer_bytes = 0
+        self.confirmed_through = (0, 0)  # (epoch, arrival_no) of the last record whose block is confirmed
         self.stats = WriterStats()
         self.closed = False
 
@@ -314,6 +332,7 @@ class ArchiveWriter:
         record = Record(self.epoch, self.next_arrival, received_at, source, endpoint, product, provider_time, provider_seq, bytes(raw))
         self.next_arrival += 1
         self.buffer.append(record)
+        self.buffer_times.append(started)
         self.buffer_bytes += len(raw)
         self.stats.appended += 1
         self.stats.peak_buffer_bytes = max(self.stats.peak_buffer_bytes, self.buffer_bytes)
@@ -332,11 +351,13 @@ class ArchiveWriter:
             return
         wall, cpu = time.perf_counter(), time.process_time()
         records, self.buffer, self.buffer_bytes = self.buffer, [], 0
-        data = build_block(records, self.codec)
+        times, self.buffer_times = self.buffer_times, []
+        data = self.fmt.build(records, self.codec)
         if self.max_dir_bytes is not None:
             needed = self.external_bytes + tree_bytes(self.directory) + len(data) + 1024  # block + a generous manifest line
             if needed > self.max_dir_bytes:
                 self.buffer = records + self.buffer
+                self.buffer_times = times + self.buffer_times
                 self.buffer_bytes = sum(len(r.raw) for r in self.buffer)
                 raise BudgetExceeded("sealing block %d needs %d bytes, limit %d" % (self.next_block, needed, self.max_dir_bytes))
         name = "%06d.blk" % self.next_block
@@ -364,7 +385,13 @@ class ArchiveWriter:
             handle.write(line[len(line) // 2:])
             handle.flush()
             os.fsync(handle.fileno())
+        confirmed_at = time.perf_counter()
         self.hook("manifest_confirmed", self.next_block)
+        self.confirmed_through = (records[-1].epoch, records[-1].arrival_no)
+        self.stats.confirmed_records += len(records)
+        for t in times:
+            self.stats.confirm_latency_max = max(self.stats.confirm_latency_max, confirmed_at - t)
+            self.stats.confirm_latency_sum += confirmed_at - t
         self.next_block += 1
         self.stats.sealed_blocks += 1
         self.stats.sealed_raw_bytes += entry["raw_bytes"]
@@ -384,15 +411,16 @@ class ArchiveReader:
 Memory is NOT constant: it holds the whole manifest, decodes (and keeps alive) one block plus its compressed bytes at a time, and
 ``query``/``records`` consumers may materialise lists. Measure the total peak of each phase (see medir.py); do not assume a bound."""
 
-    def __init__(self, directory: str):
+    def __init__(self, directory: str, fmt: BlockFormat = FORMAT_A):
         self.directory = directory
+        self.fmt = fmt
         self.entries = read_manifest(directory)
 
     def _block(self, entry: dict) -> List[Record]:
         data = _read(os.path.join(self.directory, entry["file"]))
         if hashlib.sha256(data).hexdigest() != entry["file_sha256"]:
             raise ValueError("confirmed block %s does not match its manifest hash" % entry["file"])
-        return parse_block(data)
+        return self.fmt.parse(data)
 
     def records(self) -> Iterator[Record]:
         for entry in self.entries:
