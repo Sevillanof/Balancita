@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { appNavigation } from './app-navigation.ts'
-import { isInvestigationPath, sectionForPath } from './app-routes.ts'
+import {
+  isInvestigationPath,
+  isSessionPath,
+  sectionForPath,
+} from './app-routes.ts'
 
 describe('sectionForPath', () => {
   it('maps the two screens and falls back to the terminal', () => {
@@ -34,6 +38,20 @@ describe('appNavigation', () => {
     expect(items.map((i) => [i.href, i.current])).toEqual([
       ['/terminal', false],
       ['/estrategias', true],
+    ])
+  })
+})
+
+describe('isSessionPath', () => {
+  it('recognises only the session page and adds no tab', () => {
+    expect(isSessionPath('/sesion')).toBe(true)
+    expect(isSessionPath('/sesion/')).toBe(true)
+    expect(isSessionPath('/sesion/otra')).toBe(false)
+    expect(isSessionPath('/terminal')).toBe(false)
+    expect(sectionForPath('/sesion')).toBe('terminal')
+    expect(appNavigation('terminal').map((i) => i.href)).toEqual([
+      '/terminal',
+      '/estrategias',
     ])
   })
 })

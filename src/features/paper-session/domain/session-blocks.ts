@@ -74,15 +74,21 @@ export type PositionsBlock = {
 }
 
 export type IntervalStage = { state: string }
+export type SignalStage = IntervalStage & {
+  /** `BUY`, `SELL`, `WAIT`, `HOLD`...: what the signal said, as recorded. */
+  action: string | null
+  origin: string | null
+  seq: number | null
+}
 export type SessionInterval = {
   key: string | null
   productId: string
   strategyId: string
   decidedMs: number | null
   side: string
-  signal: IntervalStage
-  decision: IntervalStage
-  order: IntervalStage & { reasons: string[] }
+  signal: SignalStage
+  decision: IntervalStage & { decidedMs: number | null }
+  order: IntervalStage & { reasons: string[]; entryMs: number | null }
   trade: IntervalStage & { tradeId: string | null; exitReason: string | null }
 }
 
@@ -94,6 +100,8 @@ export type IntervalsBlock = {
   clockMs: number
   /** `complete: false` while a stage is not filled or a signal reference is unverified. */
   contract: { complete: boolean; stagesMissing: string[] }
+  /** Signal references the publisher could (`verified`) or could not (`unverified`) trace. */
+  signalReferences: { verified: number; unverified: unknown[] }
   intervals: SessionInterval[]
 }
 
@@ -243,6 +251,16 @@ export function decodeIntervalsBlock(raw: unknown): IntervalsBlock {
         'contract.stages_missing',
       ).map((s, i) => str(s, `contract.stages_missing[${i}]`)),
     },
+    signalReferences: {
+      verified: num(
+        record(r.signal_references).verified ?? 0,
+        'signal_references.verified',
+      ),
+      unverified: list(
+        record(r.signal_references).unverified ?? [],
+        'signal_references.unverified',
+      ),
+    },
     intervals: list(r.intervals, 'intervals').map((v, i): SessionInterval => {
       const row = record(v)
       const stages = record(row.stages)
@@ -254,10 +272,34 @@ export function decodeIntervalsBlock(raw: unknown): IntervalsBlock {
         strategyId: str(row.strategy_id, `intervals[${i}].strategy_id`),
         decidedMs: numOrNull(row.decided_ms, `intervals[${i}].decided_ms`),
         side: str(row.side, `intervals[${i}].side`),
-        signal: stage(stages.signal, `intervals[${i}].stages.signal`),
-        decision: stage(stages.decision, `intervals[${i}].stages.decision`),
+        signal: {
+          ...stage(stages.signal, `intervals[${i}].stages.signal`),
+          action: strOrNull(
+            record(stages.signal).action,
+            `intervals[${i}].stages.signal.action`,
+          ),
+          origin: strOrNull(
+            record(stages.signal).origin,
+            `intervals[${i}].stages.signal.origin`,
+          ),
+          seq: numOrNull(
+            record(stages.signal).seq,
+            `intervals[${i}].stages.signal.seq`,
+          ),
+        },
+        decision: {
+          ...stage(stages.decision, `intervals[${i}].stages.decision`),
+          decidedMs: numOrNull(
+            record(stages.decision).decided_ms,
+            `intervals[${i}].stages.decision.decided_ms`,
+          ),
+        },
         order: {
           ...stage(order, `intervals[${i}].stages.order`),
+          entryMs: numOrNull(
+            order.entry_ms,
+            `intervals[${i}].stages.order.entry_ms`,
+          ),
           reasons: list(
             order.reasons ?? [],
             `intervals[${i}].stages.order.reasons`,
