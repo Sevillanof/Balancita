@@ -81,6 +81,7 @@ async function main(): Promise<void> {
     qwenScores: qwenScoresFrom(process.env),
     kronosScores: kronosScoresFrom(process.env),
     processHealthPath: process.env.DEV_HEALTH_FILE || undefined,
+    sessionBlocksPath: process.env.PAPER_SESSION_BLOCKS_FILE || undefined,
     // Read-only health of six components: every source is optional and a
     // missing one is reported as «Sin datos», never as healthy.
     observabilityHealth: createObservabilityHealth({
