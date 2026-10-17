@@ -9,7 +9,6 @@ import { AppShell, DataState } from '../shared/mission-control/index.ts'
 import GatewayHistory from './GatewayHistory.tsx'
 import MarketStrip from './MarketStrip.tsx'
 import PaperAccountPanel from './PaperAccountPanel.tsx'
-import SelectedAnalysis from './SelectedAnalysis.tsx'
 import SimulatedControls from './SimulatedControls.tsx'
 import { appNavigation } from './app-navigation.ts'
 import ApprovedPortfolioTables from '../features/trading-view/presentation/ApprovedPortfolioTables.tsx'
@@ -109,24 +108,12 @@ export default function FuturesTerminal({
       setSelectedAnalysisId(id)
   }
   const selectedDecisionTime = selectedAnalysis?.decision_time_ms
-  const selectedOrder =
-    selectedAnalysis && Number.isSafeInteger(selectedDecisionTime)
-      ? orders
-          .map(record)
-          .find((order) => order.decision_at_ms === selectedDecisionTime)
-      : undefined
-  const selectedOrderId = selectedOrder?.order_id
-  const selectedFills =
-    typeof selectedOrderId === 'string'
-      ? fills.map(record).filter((fill) => fill.order_id === selectedOrderId)
-      : []
   const [displayClock, setDisplayClock] = useState(() => Date.now())
   // The live gateway serves public candles/price while the decision engine is
   // not running: show that state explicitly and render no engine-owned data.
   const engineOff =
     bootstrap.mode === 'paper_live' &&
     (record(state?.engine).status ?? bootstrap.engine?.status) === 'off'
-  const localDemo = bootstrap.source === 'local-protection.v1'
   // The live gateway shows paper execution D read-only: it has no command
   // channel yet (PS-06), so controls render disabled.
   const gatewayEngine =
@@ -137,7 +124,7 @@ export default function FuturesTerminal({
     record(state?.engine).status ?? bootstrap.engine?.status
   const gatewayEngineReason =
     record(state?.engine).reason ?? bootstrap.engine?.reason
-  const showAnalysisTime = localDemo || gatewayEngine
+  const showAnalysisTime = gatewayEngine
   const change24h = (
     (marketState.ticker_stats ?? record(bootstrap.market).ticker_stats) as {
       change_24h_pct?: unknown
@@ -167,7 +154,7 @@ export default function FuturesTerminal({
         strategy: strategyLabel(
           selector.strategy_id ?? analysis.selected_strategy_id,
         ).split(' · ')[0]!,
-        reason: analysisReason(analysis, localDemo),
+        reason: analysisReason(analysis),
         time: shortTime(analysis.decision_time_ms),
       }
     })
@@ -177,13 +164,13 @@ export default function FuturesTerminal({
     .map(record)
     .find((candle) => Number.isSafeInteger(candle.time_ms))?.time_ms
   const selectedNotes: string[] = []
-  if (selectedAnalysis && (localDemo || gatewayEngine)) {
+  if (selectedAnalysis && gatewayEngine) {
     const gap = markerGap(selectedAnalysis, {
       firstCandleMs:
         typeof firstCandle === 'number'
           ? Math.floor(firstCandle / 1000) * 1000
           : null,
-      entriesOnly: !localDemo,
+      entriesOnly: true,
       candleSeconds: (Array.isArray(market.candles) ? market.candles : [])
         .map((candle) => record(candle).time_ms)
         .filter((ms): ms is number => Number.isSafeInteger(ms))
@@ -196,18 +183,6 @@ export default function FuturesTerminal({
         'Esta decisión no aparece en la lista: solo se muestran las últimas 100.',
       )
   }
-  const originalRunActive = activeRunId === bootstrap.active_run_id
-  const localScenarioStatus = localDemo
-    ? String(
-        record(state?.engine).message ??
-          (originalRunActive ? bootstrap.engine?.scenario_status : undefined) ??
-          'Escenario iniciado',
-      )
-    : null
-  const entryRisk = record(
-    record(state?.engine).risk ??
-      (originalRunActive ? bootstrap.engine?.risk : undefined),
-  )
 
   useEffect(() => {
     if (bootstrap.mode !== 'paper_live') return
@@ -376,11 +351,7 @@ export default function FuturesTerminal({
     </details>
   )
 
-  const modeLabel = localDemo
-    ? 'MOCK · mercado simulado'
-    : bootstrap?.mode === 'mock'
-      ? 'DATOS Y OPERACIONES SIMULADAS'
-      : 'PAPER · KRAKEN'
+  const modeLabel = 'PAPER · KRAKEN'
 
   return (
     <AppShell
@@ -398,13 +369,11 @@ export default function FuturesTerminal({
             diagnosis={diagnosis}
             b1={bootstrap.mode === 'paper_live' ? health : undefined}
           />
-          {localScenarioStatus && <span>{localScenarioStatus}</span>}
         </>
       }
     >
       <MarketStrip
         product={product}
-        source={bootstrap.source}
         mode={bootstrap.mode}
         displayedPrice={displayedPrice}
         change24h={change24h}
@@ -431,9 +400,9 @@ export default function FuturesTerminal({
                 <TerminalMarketChart
                   market={market}
                   mode={bootstrap.mode}
-                  analyses={localDemo || gatewayEngine ? analyses : []}
-                  selectedId={localDemo || gatewayEngine ? selectedId : ''}
-                  entriesOnly={!localDemo}
+                  analyses={gatewayEngine ? analyses : []}
+                  selectedId={gatewayEngine ? selectedId : ''}
+                  entriesOnly
                   onSelect={selectAnalysis}
                   apiBase={apiBase}
                   product={product}
@@ -499,22 +468,12 @@ export default function FuturesTerminal({
                           analysis={selectedAnalysis}
                           id={selectedId}
                           time={utcTime(selectedDecisionTime)}
-                          reason={analysisReason(selectedAnalysis, localDemo)}
+                          reason={analysisReason(selectedAnalysis)}
                           notes={selectedNotes}
                         />
                       ) : null
                     }
-                  >
-                    {localDemo && selectedAnalysis && (
-                      <SelectedAnalysis
-                        selectedId={selectedId}
-                        selectedDecisionTime={selectedDecisionTime}
-                        selectedAnalysis={selectedAnalysis}
-                        selectedOrder={selectedOrder}
-                        selectedFills={selectedFills}
-                      />
-                    )}
-                  </TerminalDecisions>
+                  ></TerminalDecisions>
                 </ObserverPanel>
               ) : (
                 <TerminalDecisions
@@ -538,22 +497,12 @@ export default function FuturesTerminal({
                         analysis={selectedAnalysis}
                         id={selectedId}
                         time={utcTime(selectedDecisionTime)}
-                        reason={analysisReason(selectedAnalysis, localDemo)}
+                        reason={analysisReason(selectedAnalysis)}
                         notes={selectedNotes}
                       />
                     ) : null
                   }
-                >
-                  {localDemo && selectedAnalysis && (
-                    <SelectedAnalysis
-                      selectedId={selectedId}
-                      selectedDecisionTime={selectedDecisionTime}
-                      selectedAnalysis={selectedAnalysis}
-                      selectedOrder={selectedOrder}
-                      selectedFills={selectedFills}
-                    />
-                  )}
-                </TerminalDecisions>
+                ></TerminalDecisions>
               )
             }
           />
@@ -581,7 +530,6 @@ export default function FuturesTerminal({
                     account={account}
                     netValue={netValue}
                     position={position}
-                    localDemo={localDemo}
                     showAnalysisTime={showAnalysisTime}
                     historical={gatewayEngine}
                   />
@@ -668,9 +616,7 @@ export default function FuturesTerminal({
               </div>
               <div className="mc-terminal__secondary-tools">
                 <SimulatedControls
-                  localDemo={localDemo}
                   gatewayEngine={gatewayEngine}
-                  entryRisk={entryRisk}
                   connected={connected}
                   commandPending={commandPending}
                   commandStatus={commandStatus}

@@ -30,10 +30,7 @@ export function analysisAction(value: unknown): string {
   ).toUpperCase()
 }
 
-export function analysisReason(
-  value: unknown,
-  preferOwnReason = false,
-): string {
+export function analysisReason(value: unknown): string {
   const analysis = record(value)
   const selector = record(analysis.selector)
   const proposals = Array.isArray(analysis.proposals) ? analysis.proposals : []
@@ -49,11 +46,7 @@ export function analysisReason(
   const firstReasonCode = reasonCodes[0]
   const selectorReason =
     selector.reason_code ?? record(selectedProposal).reason_code
-  const reason = preferOwnReason
-    ? (analysisReasonCode ?? firstReasonCode ?? selectorReason)
-    : (selectorReason ?? firstReasonCode ?? analysisReasonCode)
-  if (preferOwnReason && reason === 'position_closed_this_cycle')
-    return 'La posición se cerró durante este ciclo'
+  const reason = selectorReason ?? firstReasonCode ?? analysisReasonCode
   return reasonLabel(reason)
 }
 
@@ -67,17 +60,6 @@ export function strategyLabel(value: unknown): string {
     'c28-adapter-perp-v1': 'C28 · adaptador (experimental)',
   }
   return known[value] ?? 'Sin estrategia seleccionada'
-}
-
-export function entryStateLabel(risk: Record<string, unknown>): string {
-  if (Object.keys(risk).length === 0) return 'Estado de entradas no disponible'
-  if (risk.daily_loss_latched === true)
-    return 'Entradas bloqueadas por límite de pérdida diaria'
-  if (risk.user_paused === true)
-    return 'Entradas pausadas por el usuario (MOCK)'
-  if (risk.entry_paused === true || risk.system_paused === true)
-    return 'Entradas pausadas por el sistema'
-  return 'Entradas activas'
 }
 
 /** Spanish notice for the analyses panel when the engine has nothing to show. */

@@ -62,10 +62,10 @@ class FakeSocket {
 const RUN = 'run-1'
 const bootstrap: TerminalBootstrap = {
   schema_version: 1,
-  mode: 'mock',
-  source: 'local-protection.v1',
+  mode: 'paper_live',
+  source: 'kraken-public-live-stream.v1',
   active_run_id: RUN,
-  engine: { scenario_status: 'Escenario iniciado' },
+  engine: { status: 'running' },
 }
 
 function envelope(
@@ -201,8 +201,14 @@ describe('FuturesTerminal WebSocket protocol (characterization)', () => {
 
     // seq 3 arrives with 2 missing.
     await act(async () => socket.receive(orderAt(3, 'o3')))
-    expect(screen.getByRole('alert').textContent).toContain(
-      'Se detectó un salto en el flujo; resincronizando.',
+    expect(
+      screen.getAllByRole('alert').map((alert) => alert.textContent),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining(
+          'Se detectó un salto en el flujo; resincronizando.',
+        ),
+      ]),
     )
     expect(socket.readyState).toBe(3)
     expect(screen.queryByText(/0\.01 · o3/)).toBeNull()
@@ -262,14 +268,12 @@ describe('FuturesTerminal WebSocket protocol (characterization)', () => {
     expect(screen.queryByText(/Se detectó un salto/)).toBeNull()
   })
 
-  // Documented risk (docs/mission-control-fase-2-plan.md §8): this pins current
-  // behavior, not a guarantee. A stale engine.status can overwrite a newer one.
-  it('applies engine.status of the active run before the seq check, even when its seq is stale', async () => {
+  it('does not move the sequence when an engine.status event carries a stale seq', async () => {
     const socket = await mountConnected()
     await act(async () => socket.receive(orderAt(1, 'o1')))
     await act(async () => socket.receive(orderAt(2, 'o2')))
 
-    // seq 1 is already applied, but engine.status is merged before that check.
+    // seq 1 is already applied: the engine.status event is not a gap.
     await act(async () =>
       socket.receive(
         envelope(
@@ -281,7 +285,6 @@ describe('FuturesTerminal WebSocket protocol (characterization)', () => {
         ),
       ),
     )
-    expect(screen.getAllByText(/Estado tardío/).length).toBeGreaterThan(0)
     // It does not move the sequence: seq 3 is still the next event.
     await act(async () => socket.receive(orderAt(3, 'o3')))
     expect(screen.getAllByText(/0\.01 · o3/).length).toBeGreaterThan(0)
@@ -316,7 +319,7 @@ describe('FuturesTerminal WebSocket protocol (characterization)', () => {
     const socket = await mountConnected()
 
     await act(async () =>
-      screen.getByRole('button', { name: 'Nueva cuenta/run (MOCK)' }).click(),
+      screen.getByRole('button', { name: 'Nueva cuenta/run' }).click(),
     )
     await act(async () =>
       screen.getByRole('button', { name: 'Confirmar nueva cuenta' }).click(),
@@ -326,8 +329,14 @@ describe('FuturesTerminal WebSocket protocol (characterization)', () => {
     await act(async () =>
       socket.receive(envelope('protocol.error', 1, { code: 'stale_version' })),
     )
-    expect(screen.getByRole('alert').textContent).toContain(
-      'Comando rechazado por el servidor: stale_version',
+    expect(
+      screen.getAllByRole('alert').map((alert) => alert.textContent),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining(
+          'Comando rechazado por el servidor: stale_version',
+        ),
+      ]),
     )
 
     // The request was cancelled, so a snapshot of another run is ignored again.
@@ -340,7 +349,7 @@ describe('FuturesTerminal WebSocket protocol (characterization)', () => {
   it('follows a requested new run, then keeps the sequence of the new run', async () => {
     const socket = await mountConnected()
     await act(async () =>
-      screen.getByRole('button', { name: 'Nueva cuenta/run (MOCK)' }).click(),
+      screen.getByRole('button', { name: 'Nueva cuenta/run' }).click(),
     )
     await act(async () =>
       screen.getByRole('button', { name: 'Confirmar nueva cuenta' }).click(),

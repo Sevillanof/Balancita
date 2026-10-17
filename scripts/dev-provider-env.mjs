@@ -324,7 +324,7 @@ export function resolveLlamaServer({ env, run = defaultRun }) {
 export const DEV_PORTS = { vite: 5173, live: 8789 }
 // Strategy registry S (Python): checked only when its child runs.
 export const STRATEGIES_PORT = 8790
-// Hosts the children bind to: gateway and mock use 127.0.0.1 (HOST
+// Hosts the children bind to: the gateway uses 127.0.0.1 (HOST
 // defaults to it); vite uses its default `localhost`. Vite HMR shares the
 // vite port, so there is no separate 24678 listener to check.
 const DEV_PORT_HOSTS = { vite: 'localhost' }

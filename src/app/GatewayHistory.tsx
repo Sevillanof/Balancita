@@ -5,7 +5,7 @@ import { DataProvenance, StatusPill } from '../shared/mission-control/index.ts'
  * Secondary section for what the live gateway reads from the retired D book.
  * It is history, not the state of the forward experiments, so it is labelled
  * and its provenance stated. Without the gateway engine the children render
- * as they are (MOCK keeps its own simulated data).
+ * as they are.
  */
 export default function GatewayHistory({
   enabled,

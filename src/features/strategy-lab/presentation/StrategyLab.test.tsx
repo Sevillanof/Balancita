@@ -3,10 +3,8 @@ import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import StrategyLab from './StrategyLab.tsx'
 import { exampleStrategyApi } from '../testing/example-strategy-api.ts'
-import {
-  syntheticCandles,
-  type LabCandles,
-} from '../infrastructure/lab-candles.ts'
+import type { LabCandles } from '../infrastructure/lab-candles.ts'
+import { syntheticCandles } from '../testing/synthetic-candles.ts'
 import type { QwenScores } from '../infrastructure/qwen-scores.ts'
 import {
   httpStrategyApi,

@@ -80,8 +80,7 @@ export interface LiveGatewayOptions {
   readonly pollMs?: number
   readonly heartbeatMs?: number
   readonly clock?: () => number
-  /** `mock`: the dev MOCK terminal serves a seeded copy of a market. */
-  readonly mode?: 'mock' | 'paper_live'
+  readonly mode?: 'paper_live'
 }
 
 interface Envelope {

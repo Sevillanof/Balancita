@@ -10,7 +10,7 @@ import {
 } from '../features/connected-trading/infrastructure/terminal-stream-client.ts'
 
 // The terminal always reads the live gateway (paper orders, public Kraken
-// data); the MOCK source is not offered any more.
+// data).
 const SOURCE: TerminalSource = 'live'
 
 function SourceView({ source }: { source: TerminalSource }) {

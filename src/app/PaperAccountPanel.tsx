@@ -4,14 +4,12 @@ export default function PaperAccountPanel({
   account,
   netValue,
   position,
-  localDemo,
   showAnalysisTime,
   historical = false,
 }: {
   account: Record<string, unknown>
   netValue: unknown
   position: Record<string, unknown>
-  localDemo: boolean
   showAnalysisTime: boolean
   /** Retired-book data: an empty position is not a current position. */
   historical?: boolean
@@ -28,7 +26,7 @@ export default function PaperAccountPanel({
             title={String(account.equity_usd ?? '')}
             data-value={String(account.equity_usd ?? '')}
           >
-            {money(account.equity_usd, localDemo ? 5 : 2)}
+            {money(account.equity_usd, 2)}
           </dd>
           {showAnalysisTime && (
             <>
@@ -46,7 +44,7 @@ export default function PaperAccountPanel({
             title={String(account.fees_usd ?? '')}
             data-value={String(account.fees_usd ?? '')}
           >
-            {money(account.fees_usd, localDemo ? 5 : 2)}
+            {money(account.fees_usd, 2)}
           </dd>
           <dt>Funding pagado (USD)</dt>
           <dd>
@@ -55,29 +53,20 @@ export default function PaperAccountPanel({
               : 'Incompleto · neto no disponible'}
           </dd>
           <dt>PnL neto</dt>
-          <dd
-            {...(localDemo && netValue != null
-              ? {
-                  title: String(netValue),
-                  'data-value': String(netValue),
-                }
-              : {})}
-          >
+          <dd>
             {netValue == null
               ? account.funding_complete === true
                 ? 'No disponible durante posición abierta'
                 : 'Incompleto'
-              : money(netValue, localDemo ? 5 : 2)}
+              : money(netValue, 2)}
           </dd>
           <dt>Posición</dt>
           <dd>
             {position.side
               ? `${String(position.side)} · ${quantity(position.quantity_btc)}`
-              : localDemo
-                ? `${quantity(position.quantity_btc ?? '0')} · Sin exposición`
-                : historical
-                  ? 'Sin posición abierta en el libro D'
-                  : 'Sin posición abierta'}
+              : historical
+                ? 'Sin posición abierta en el libro D'
+                : 'Sin posición abierta'}
           </dd>
         </dl>
       </div>
