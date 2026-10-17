@@ -2,10 +2,10 @@ import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { expect, test, type Page } from '@playwright/test'
 
-const RUN = 'local-protection-v1'
+const RUN = 'live-market-view'
 
 const market = {
-  schema_version: 'mock-terminal-market.v1',
+  schema_version: 'futures-terminal-market.v1',
   as_of_ms: 21_600_000,
   interval_ms: 60_000,
   candles: [
@@ -23,10 +23,14 @@ const market = {
 
 const bootstrap = {
   schema_version: 1,
-  mode: 'mock',
-  source: 'local-protection.v1',
+  mode: 'paper_live',
+  source: 'kraken-public-live-stream.v1',
   active_run_id: RUN,
-  engine: { scenario_status: 'Escenario iniciado' },
+  engine: {
+    status: 'running',
+    reason: 'paper_execution_active',
+    commands: 'unavailable',
+  },
   terminal_market: market,
 }
 
@@ -40,7 +44,7 @@ function analyses(count: number) {
   }))
 }
 
-/** Serves the MOCK terminal with `count` stored decisions, no backend needed. */
+/** Serves the live terminal with `count` stored decisions, no backend needed. */
 async function openTerminal(page: Page, count: number) {
   const first = !routed.has(page)
   routed.add(page)

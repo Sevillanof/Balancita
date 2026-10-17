@@ -6,7 +6,6 @@ import { money } from './terminal-labels.ts'
 
 export default function MarketStrip({
   product,
-  source,
   mode,
   displayedPrice,
   change24h,
@@ -17,7 +16,6 @@ export default function MarketStrip({
   alerts,
 }: {
   product?: string
-  source: string | null
   mode: string
   displayedPrice: unknown
   change24h: unknown
@@ -37,11 +35,7 @@ export default function MarketStrip({
           ? productBase(product)
           : 'Bitcoin'}{' '}
         <span>/ Dólar</span>
-        <small>
-          {source === 'local-protection.v1'
-            ? 'MOCK · perpetuo'
-            : `${product ?? 'PF_XBTUSD'} · perpetuo`}
-        </small>
+        <small>{`${product ?? 'PF_XBTUSD'} · perpetuo`}</small>
       </h1>
       <strong className="connected-terminal__price">
         {money(displayedPrice)}

@@ -157,20 +157,12 @@ export default function TerminalMarketChart({
   )
 
   if (
-    !['mock-terminal-market.v1', 'futures-terminal-market.v1'].includes(
-      String(market.schema_version),
-    ) ||
+    market.schema_version !== 'futures-terminal-market.v1' ||
     candles.length === 0
   )
     return <p>El snapshot no contiene velas verificables.</p>
   return (
     <>
-      {mode !== 'paper_live' && (
-        <p>
-          Velas cerradas del fixture determinista MOCK · actualización por
-          WebSocket.
-        </p>
-      )}
       {market.candles instanceof Array && market.candles.length > 0 && (
         <p role="status" className="visually-hidden">
           {record(market.candles.at(-1)).closed === true

@@ -31,11 +31,11 @@ vi.mock('./FuturesTerminal.tsx', async () => {
   }
 })
 
-function bootstrapBody(mode: 'mock' | 'paper_live') {
+function bootstrapBody(mode: 'paper_live') {
   return {
     schema_version: 1,
     mode,
-    source: mode === 'mock' ? 'local-protection.v1' : 'kraken-futures',
+    source: 'kraken-futures',
     active_run_id: 'run-1',
   }
 }

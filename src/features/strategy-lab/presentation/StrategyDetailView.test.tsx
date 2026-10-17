@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 import StrategyDetailView from './StrategyDetailView.tsx'
 import StrategyLab from './StrategyLab.tsx'
 import { exampleInventory } from '../testing/inventory-fixture.ts'
-import { syntheticCandles } from '../infrastructure/lab-candles.ts'
+import { syntheticCandles } from '../testing/synthetic-candles.ts'
 import type {
   StrategyApi,
   StrategyDetail,

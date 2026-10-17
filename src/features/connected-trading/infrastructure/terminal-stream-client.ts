@@ -13,7 +13,7 @@ export type TerminalEnvelope = {
 
 export type TerminalBootstrap = {
   schema_version: 1
-  mode: 'mock' | 'paper_live'
+  mode: 'paper_live'
   source: string | null
   active_run_id: string
   instrument_id?: string
@@ -24,21 +24,6 @@ export type TerminalBootstrap = {
   engine?: Record<string, unknown>
   /** Pinned products the gateway can serve (`?product=`). */
   products?: string[]
-}
-
-export type MockTerminalMarket = {
-  schema_version: 'mock-terminal-market.v1'
-  as_of_ms: number
-  interval_ms: number
-  candles: Array<{
-    time_ms: number
-    open: string
-    high: string
-    low: string
-    close: string
-    volume_btc: string
-    closed: boolean
-  }>
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -68,9 +53,7 @@ export function parseTerminalEnvelope(value: unknown): TerminalEnvelope | null {
     const market = value.data.market
     if (
       !isRecord(market) ||
-      !['mock-terminal-market.v1', 'futures-terminal-market.v1'].includes(
-        String(market.schema_version),
-      ) ||
+      market.schema_version !== 'futures-terminal-market.v1' ||
       !Number.isSafeInteger(market.as_of_ms) ||
       ![60_000, 300_000, 900_000, 3_600_000].includes(
         Number(market.interval_ms),
@@ -133,7 +116,7 @@ export function parseTerminalEnvelope(value: unknown): TerminalEnvelope | null {
   return value as unknown as TerminalEnvelope
 }
 
-/** Data source behind the terminal: the live gateway (MOCK is not used any more). */
+/** Data source behind the terminal: the live gateway. */
 export type TerminalSource = 'live'
 
 export function terminalApiBase(source: TerminalSource): string {
@@ -188,7 +171,7 @@ async function fetchTerminalBootstrap(
   if (
     !isRecord(value) ||
     value.schema_version !== 1 ||
-    !['mock', 'paper_live'].includes(String(value.mode)) ||
+    value.mode !== 'paper_live' ||
     typeof value.active_run_id !== 'string' ||
     !(typeof value.source === 'string' || value.source === null)
   )

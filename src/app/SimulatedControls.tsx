@@ -1,9 +1,5 @@
-import { entryStateLabel } from './terminal-labels.ts'
-
 export default function SimulatedControls({
-  localDemo,
   gatewayEngine,
-  entryRisk,
   connected,
   commandPending,
   commandStatus,
@@ -12,9 +8,7 @@ export default function SimulatedControls({
   sendCommand,
   runId,
 }: {
-  localDemo: boolean
   gatewayEngine: boolean
-  entryRisk: Record<string, unknown>
   connected: boolean
   commandPending: boolean
   commandStatus: string
@@ -34,33 +28,21 @@ export default function SimulatedControls({
         Actúan solo sobre el run {runId ? <code>{runId}</code> : 'activo'}; no
         controlan los experimentos forward.
       </p>
-      {localDemo && (
-        <>
-          <p>
-            Pausar entradas bloquea solo nuevas entradas en esta ejecución MOCK;
-            no detiene el motor, el mercado simulado, la protección ni los
-            cierres.
-          </p>
-          <p>{entryStateLabel(entryRisk)}</p>
-        </>
-      )}
       {gatewayEngine && (
         <p>
           Pausar, reanudar y cerrar llegarán en PS-06: por ahora el terminal
           live es de solo lectura.
         </p>
       )}
-      {(localDemo
-        ? (['paper.pause', 'paper.resume', 'paper.new_run'] as const)
-        : gatewayEngine
-          ? (['paper.pause', 'paper.resume', 'paper.close'] as const)
-          : ([
-              'paper.start',
-              'paper.pause',
-              'paper.resume',
-              'paper.close',
-              'paper.new_run',
-            ] as const)
+      {(gatewayEngine
+        ? (['paper.pause', 'paper.resume', 'paper.close'] as const)
+        : ([
+            'paper.start',
+            'paper.pause',
+            'paper.resume',
+            'paper.close',
+            'paper.new_run',
+          ] as const)
       )
         .filter((action) => action !== 'paper.new_run')
         .map((action) => (
@@ -78,21 +60,13 @@ export default function SimulatedControls({
             }}
           >
             {
-              (localDemo
-                ? {
-                    'paper.start': 'Iniciar simulación',
-                    'paper.pause': 'Pausar entradas (MOCK)',
-                    'paper.resume': 'Reanudar entradas (MOCK)',
-                    'paper.close': 'Cerrar posición',
-                    'paper.new_run': 'Nueva cuenta/run (MOCK)',
-                  }
-                : {
-                    'paper.start': 'Iniciar simulación',
-                    'paper.pause': 'Pausar entradas',
-                    'paper.resume': 'Reanudar entradas',
-                    'paper.close': 'Cerrar posición',
-                    'paper.new_run': 'Nueva cuenta/run',
-                  })[action]
+              {
+                'paper.start': 'Iniciar simulación',
+                'paper.pause': 'Pausar entradas',
+                'paper.resume': 'Reanudar entradas',
+                'paper.close': 'Cerrar posición',
+                'paper.new_run': 'Nueva cuenta/run',
+              }[action]
             }
           </button>
         ))}
@@ -104,9 +78,7 @@ export default function SimulatedControls({
         {confirmingReset ? (
           <>
             <p role="alert">
-              {localDemo
-                ? 'Se crea una cuenta/run MOCK nueva que repite el escenario; el historial anterior se conserva.'
-                : 'Se crea una cuenta/run nuevo; el historial anterior se conserva.'}
+              Se crea una cuenta/run nuevo; el historial anterior se conserva.
             </p>
             <button
               type="button"
@@ -135,7 +107,7 @@ export default function SimulatedControls({
               disabled={!connected || commandPending}
               onClick={() => setConfirmingReset(true)}
             >
-              {localDemo ? 'Nueva cuenta/run (MOCK)' : 'Nueva cuenta/run'}
+              Nueva cuenta/run
             </button>
           )
         )}

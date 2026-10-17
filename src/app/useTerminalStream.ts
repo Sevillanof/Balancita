@@ -129,16 +129,11 @@ export function useTerminalStream({
               ...record(snapshotState.market),
             },
             terminal_market:
-              market.schema_version === 'mock-terminal-market.v1' ||
               market.schema_version === 'futures-terminal-market.v1'
                 ? market
                 : originalRun &&
-                    [
-                      'mock-terminal-market.v1',
-                      'futures-terminal-market.v1',
-                    ].includes(
-                      String(record(bootstrap.terminal_market).schema_version),
-                    )
+                    record(bootstrap.terminal_market).schema_version ===
+                      'futures-terminal-market.v1'
                   ? bootstrap.terminal_market
                   : null,
           })

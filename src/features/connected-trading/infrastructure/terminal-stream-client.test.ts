@@ -28,7 +28,7 @@ describe('terminal API base selection', () => {
       status: 200,
       json: async () => ({
         schema_version: 1,
-        mode: 'mock',
+        mode: 'paper_live',
         source: null,
         active_run_id: 'r',
       }),
@@ -117,7 +117,7 @@ describe('parseTerminalEnvelope', () => {
         watermark: 0,
         state: { account: {} },
         market: {
-          schema_version: 'mock-terminal-market.v1',
+          schema_version: 'futures-terminal-market.v1',
           as_of_ms: 120_000,
           interval_ms: 60_000,
           candles: [
