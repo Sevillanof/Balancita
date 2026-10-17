@@ -172,7 +172,7 @@ class TestPreflightCausal(Base):
     def test_a_source_that_is_not_the_fixture_needs_the_causal_option(self):
         self.assertFalse(self.checks(source_id="real", ingest_kw=dict(INGEST_KW))["causal_ingest"])
         self.assertTrue(self.checks(source_id="real", ingest_kw=dict(INGEST_KW, causal_until_clock=True))["causal_ingest"])
-        self.assertFalse(self.checks(source_id="real", ingest_kw=dict(INGEST_KW, causal_until_clock=True))["real_session_gate"])   # still refused
+        self.assertFalse(self.checks(source_id="real", ingest_kw=dict(INGEST_KW, causal_until_clock=True))["real_session_authorized"])   # still refused
         self.assertTrue(self.checks()["causal_ingest"])                                                                              # the fixture
 
 

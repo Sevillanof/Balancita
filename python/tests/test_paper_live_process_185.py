@@ -155,7 +155,7 @@ class TestPreflightAndStart(Base):
         config = LP.validate_config(config_dict())
         report = LP.preflight(config, self.directory, self.world.path, strategies=self.cache["strategies"])
         self.assertTrue(report["ok"], report)
-        self.assertEqual({c["name"] for c in report["checks"]} >= {"real_session_gate", "disk_free", "source_readable", "warmup_" + BTC}, True)
+        self.assertEqual({c["name"] for c in report["checks"]} >= {"real_session_authorized", "disk_free", "source_readable", "warmup_" + BTC}, True)
         self.assertFalse(os.path.exists(self.directory))
 
     def test_a_source_without_the_warmup_is_refused_before_anything_is_created(self):
@@ -793,7 +793,7 @@ class TestObservedLifecycle(unittest.TestCase):
         config = LP.validate_config(config_dict(funding_mode="observed"))
         self.assertEqual(config["source_id"], "synthetic")
         report = LP.preflight(config, self.directory, real, strategies=self.strategies)
-        self.assertEqual([c["name"] for c in report["checks"] if not c["ok"]], ["synthetic_marker"])
+        self.assertEqual([c["name"] for c in report["checks"] if not c["ok"]], ["source_kind"])
         supervisor = LP.Supervisor(config, self.directory, real, clock=Clock().now, strategies=self.strategies)
         with self.assertRaises(LP.ProcessError) as caught:
             supervisor.start()

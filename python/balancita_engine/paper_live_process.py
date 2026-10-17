@@ -9,10 +9,12 @@ when the process ends). The clock and the sleep are injected, so a test runs a w
 
 What this module refuses, on purpose, while the real-session GATE is NO-GO (decision of Fran, unchanged by #185):
 
-* any source that does not identify itself as the synthetic fixture (``real_session_not_authorized``): the configuration must say
-  ``source_id: synthetic`` AND the SQLite file must carry the fixture's own marker table (``balancita_synthetic_fixture``). A real
-  capture has neither, so it is refused whatever the configuration says; this guards against a mistake, not against someone who
-  forges the marker on purpose. A session with real data needs its own written authorization and a reviewed code change;
+* any source that is not authorized (``real_session_not_authorized``). Two kinds exist: the synthetic fixture (``source_id: synthetic``,
+  a test-only seam that carries the marker table ``balancita_synthetic_fixture``) and the capture of Kraken (``source_id:
+  kraken-capture``, which must NOT carry that marker). The capture is authorized only by an entry of ``AUTHORIZED_SESSIONS`` in this
+  file (a reviewed commit naming a BAL-DECISION) that matches the configuration's ``authorization_ref``, the source file and the first
+  decision; the list is empty, so no real session starts. The capture has no mark of its own in its tables: it is recognised by where it
+  comes from. Paper trading on real prices and real orders are different things: nothing here can send an order (test_no_real_orders_184);
 * the wall clock (``wall_clock_not_authorized``): the command line runs on a simulated clock only. The code for the wall clock exists
   (``wall_clock_runtime``, tested with a fake clock) but ``WALL_CLOCK_GATE`` is a constant of the code and is False: turning it on is a
   reviewed commit that names a written authorization (BAL-DECISION), never a flag or a configuration key;
@@ -89,7 +91,12 @@ def session_policy(notional_per_trade_usd=DEFAULT_NOTIONAL_USD):
 
 
 CAPITAL_POLICY = capital_policy_label(session_policy())        # a label: the sizing is the portfolio policy's, this module has no money rule
-SYNTHETIC_SOURCE = "synthetic"
+SYNTHETIC_SOURCE = "synthetic"          # test-only seam (removed when the invented data are gone, docs/etapa-10e 7.2)
+REAL_SOURCE = "kraken-capture"          # the capture of Kraken Futures: recognised by where it comes from, not by what the configuration says
+# Sessions on the real capture that were authorized in writing, by ``authorization_ref``: the source file and the first decision.
+# Empty on purpose: no session is authorized. Only a reviewed commit that names the BAL-DECISION adds an entry, so the configuration
+# alone (which anyone can write) never opens a real source. The capture has no mark in its tables, hence the path.
+AUTHORIZED_SESSIONS = {}                # {"BAL-DECISION-<n>-<n>": {"source_path": "/abs/futures-market.sqlite", "decide_from_ms": int}}
 WALL_CLOCK_GATE = False                  # OFF. Only a reviewed change of this constant, with a BAL-DECISION naming it, opens the wall clock
 FRESH_MS = 600_000                               # the newest warm-up candle may be this far from the first decision
 
@@ -181,7 +188,7 @@ def validate_config(raw):
         config["resource_limits"] = _validate_resource_limits(config["resource_limits"])
     if "publish_blocks" in config and config["publish_blocks"] is not True:
         raise ProcessError("config_invalid", "publish_blocks: only true; leave it out to publish nothing")
-    # ``authorization_ref`` is an audit trail only: it opens nothing (the gate is a constant of the code) and is not part of the identity
+    # ``authorization_ref`` is not part of the identity; it opens nothing by itself: it must match an entry of ``AUTHORIZED_SESSIONS`` (code)
     return dict(config, digest=stable_hash({k: v for k, v in config.items() if k not in ("digest", "authorization_ref")})[:20])
 
 
@@ -237,10 +244,19 @@ def preflight(config, directory, source_path, *, strategies=None):
     def check(name, ok, detail=""):
         checks.append({"name": name, "ok": bool(ok), "detail": detail})
 
-    check("causal_ingest", config["source_id"] == SYNTHETIC_SOURCE or config["ingest_kw"].get("causal_until_clock") is True,
+    synthetic = config["source_id"] == SYNTHETIC_SOURCE
+    check("causal_ingest", synthetic or config["ingest_kw"].get("causal_until_clock") is True,
           "a source that is not the synthetic fixture needs ingest_kw.causal_until_clock (no row is read before the clock reaches it; D-185-R4-01)")
-    check("real_session_gate", config["source_id"] == SYNTHETIC_SOURCE,
-          "source_id {!r}: real data needs a written authorization (the GATE is NO-GO)".format(config["source_id"]))
+    if synthetic:
+        authorized, why = True, ""
+    elif config["source_id"] != REAL_SOURCE:
+        authorized, why = False, "source_id {!r}: neither the synthetic fixture nor the capture of Kraken ({!r})".format(config["source_id"], REAL_SOURCE)
+    else:
+        grant = AUTHORIZED_SESSIONS.get(config.get("authorization_ref"))
+        authorized = (grant is not None and os.path.realpath(source_path) == os.path.realpath(grant["source_path"])
+                      and grant["decide_from_ms"] == config["decide_from_ms"])
+        why = "no written authorization for this source and this first decision (authorization_ref {!r}; AUTHORIZED_SESSIONS)".format(config.get("authorization_ref"))
+    check("real_session_authorized", authorized, why)
     stored_path = os.path.join(directory, CONFIG_FILE)
     if os.path.exists(os.path.join(directory, LI.SESSION_FILE)):
         stored = _read_json(stored_path)
@@ -266,11 +282,11 @@ def preflight(config, directory, source_path, *, strategies=None):
     try:
         check("source_readable", True)
         try:
-            marker = reader.db.execute("SELECT marker FROM {}".format(MARKER_TABLE)).fetchall()
+            marker = [m[0] for m in reader.db.execute("SELECT marker FROM {}".format(MARKER_TABLE)).fetchall()]
         except Exception:               # noqa: BLE001 - no such table: not the fixture
             marker = []
-        check("synthetic_marker", [m[0] for m in marker] == [MARKER], "the source does not carry the synthetic fixture's marker "
-              "({}): real data is not authorized".format(MARKER_TABLE))
+        check("source_kind", marker == [MARKER] if synthetic else marker == [],
+              "the source {} the synthetic fixture's marker ({})".format("does not carry" if synthetic else "carries", MARKER_TABLE))
         strategies = strategies or RS.load_frozen()[0]
         need = config["warmup_minutes"] or required_warmup_ms(merged_indicators(strategies)) // ONE_MINUTE_MS     # the indicators' own, unless lowered
         warmup_ms = need * ONE_MINUTE_MS
@@ -337,7 +353,7 @@ class Supervisor(object):
         report = preflight(self.config, self.directory, self.source_path, strategies=self.strategies)
         if not report["ok"]:
             failed = [c for c in report["checks"] if not c["ok"]]
-            reason = "real_session_not_authorized" if any(c["name"] in ("real_session_gate", "synthetic_marker") for c in failed) else "preflight_failed"
+            reason = "real_session_not_authorized" if any(c["name"] in ("real_session_authorized", "source_kind") for c in failed) else "preflight_failed"
             raise ProcessError(reason, "; ".join("{}: {}".format(c["name"], c["detail"]) for c in failed))
         self.source_identity = file_identity(self.source_path)      # taken once the pre-flight passed, before the session opens the file
         strategies = self.strategies or RS.load_frozen()[0]
