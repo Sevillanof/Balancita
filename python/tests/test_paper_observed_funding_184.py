@@ -104,7 +104,7 @@ def new_world(root, *, observed, **kw):
 
 def make_session(world, directory, strategies, *, observed, **kw):
     world.release_until(LOAD_START)
-    return LI.LiveSession.create(directory, world.path, strategies, (BTC,), runner_config(), decide_from_ms=FIRST_DECISION,
+    return LI.LiveSession.create(directory, world.path, strategies, (BTC,), runner_config(), decide_from_ms=FIRST_DECISION, source_id="synthetic",
                                  decide_until_ms=LAST_DECISION, ingest_kw=INGEST_KW, max_quote_gap_ms=MAX_QUOTE_GAP_MS,
                                  funding_mode="observed" if observed else "synthetic", **kw)
 
@@ -232,7 +232,7 @@ class TestObservedFundingScenarios(unittest.TestCase):
 
     def open(self, world, directory, **kw):
         session = LI.LiveSession.recover(directory, world.path, self.cache["strategies"], (BTC,), runner_config(), journal_clock(directory),
-                                         decide_from_ms=FIRST_DECISION, decide_until_ms=LAST_DECISION, ingest_kw=INGEST_KW,
+                                         decide_from_ms=FIRST_DECISION, source_id="synthetic", decide_until_ms=LAST_DECISION, ingest_kw=INGEST_KW,
                                          max_quote_gap_ms=MAX_QUOTE_GAP_MS, **dict({"funding_mode": "observed"}, **kw))
         self.addCleanup(abandon, session)
         return session
@@ -402,6 +402,13 @@ class TestObservedFundingScenarios(unittest.TestCase):
     def test_the_default_of_the_session_is_to_halt_on_a_divergence(self):
         for method in (LI.LiveSession.create, LI.LiveSession.recover, LI.LiveSession.__init__):
             self.assertEqual(inspect.signature(method).parameters["on_funding_divergence"].default, "halt", method)
+
+    def test_the_source_and_the_funding_mode_have_no_default(self):
+        """D-262-01: a session never starts from a source or a funding mode nobody chose."""
+        for method in (LI.LiveSession.create, LI.LiveSession.recover, LI.LiveSession.__init__):
+            for name in ("source_id", "funding_mode"):
+                if name in inspect.signature(method).parameters:
+                    self.assertIs(inspect.signature(method).parameters[name].default, inspect.Parameter.empty, (method, name))
 
     def test_a_failing_read_of_the_signal_funding_stops_the_session_and_an_absent_table_does_not(self):
         """D-204-01: only a table that is not there means "no signal funding"; a lock or a disk error is not mistaken for it."""

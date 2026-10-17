@@ -40,7 +40,7 @@ class TestEntryBlockedInTheSession(unittest.TestCase):
             world = World(where, quote_holes=[HOLE])
             world.release_until(LOAD_START)
             session = LI.LiveSession.create(os.path.join(where, "s"), world.path, cls.cache["strategies"], (BTC,), runner_config(),
-                                            decide_from_ms=FIRST_DECISION, decide_until_ms=LAST_DECISION, ingest_kw=INGEST_KW,
+                                            decide_from_ms=FIRST_DECISION, source_id="synthetic", funding_mode="synthetic", decide_until_ms=LAST_DECISION, ingest_kw=INGEST_KW,
                                             max_quote_gap_ms=MAX_QUOTE_GAP_MS, block_stale_entries=block)
             records = []
             snap = None
@@ -102,7 +102,7 @@ class TestEntryBlockedInTheSession(unittest.TestCase):
         other = replace(runner_config(), entry_max_quote_age_ms=MAX_QUOTE_GAP_MS + 1)
         with self.assertRaises(LI.IntegrationError) as bad:
             LI.LiveSession.create(os.path.join(root, "s"), world.path, self.cache["strategies"], (BTC,), other,
-                                  decide_from_ms=FIRST_DECISION, decide_until_ms=LAST_DECISION, ingest_kw=INGEST_KW,
+                                  decide_from_ms=FIRST_DECISION, source_id="synthetic", funding_mode="synthetic", decide_until_ms=LAST_DECISION, ingest_kw=INGEST_KW,
                                   max_quote_gap_ms=MAX_QUOTE_GAP_MS)
         self.assertEqual(bad.exception.reason, "config_incompatible")
         self.assertFalse(os.path.exists(os.path.join(root, "s")))          # refused before anything was written

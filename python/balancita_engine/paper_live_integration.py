@@ -275,7 +275,7 @@ class LiveSession(object):
     """One synthetic session. ``create`` starts a new directory; ``recover`` continues it after any interruption."""
 
     def __init__(self, directory, source_path, strategies, runner_config, runner, evaluator, audit, ingestor, reader, funding,
-                 identity, *, max_quote_gap_ms, funding_mode=SYNTHETIC_FUNDING, on_funding_divergence="halt"):
+                 identity, *, max_quote_gap_ms, funding_mode, on_funding_divergence="halt"):
         self.directory, self.source_path, self.strategies, self.runner_config = directory, source_path, list(strategies), runner_config
         self.runner, self.evaluator, self.audit, self.ingestor, self.reader, self.funding = runner, evaluator, audit, ingestor, reader, funding
         self.identity, self.max_quote_gap_ms = identity, int(max_quote_gap_ms)
@@ -291,7 +291,7 @@ class LiveSession(object):
 
     # ---- construction ----------------------------------------------------------------------------------------
     @staticmethod
-    def _identity(products, ingest_kw, evaluator, first_runner_entry, source_id, max_quote_gap_ms, funding_mode=SYNTHETIC_FUNDING):
+    def _identity(products, ingest_kw, evaluator, first_runner_entry, source_id, max_quote_gap_ms, funding_mode):
         """The immutable identity of the session: what each component was configured with, and the start of each journal."""
         body = {"schema": SCHEMA, "source_id": source_id, "products": sorted(products), "ingestor": dict(sorted(ingest_kw.items())),
                 "max_quote_gap_ms": int(max_quote_gap_ms),
@@ -305,8 +305,8 @@ class LiveSession(object):
 
     @classmethod
     def create(cls, directory, source_path, strategies, products, runner_config, *, decide_from_ms, decide_until_ms=None,
-               source_id="synthetic", ingest_kw=None, evaluator_kw=None, max_quote_gap_ms=15_000,
-               block_stale_entries=True, funding_mode=SYNTHETIC_FUNDING, on_funding_divergence="halt"):
+               source_id, ingest_kw=None, evaluator_kw=None, max_quote_gap_ms=15_000,
+               block_stale_entries=True, funding_mode, on_funding_divergence="halt"):
         _check_funding_options(funding_mode, on_funding_divergence)
         runner_config = _session_config(runner_config, max_quote_gap_ms, block_stale_entries)
         if os.path.exists(os.path.join(directory, SESSION_FILE)):
@@ -336,8 +336,8 @@ class LiveSession(object):
 
     @classmethod
     def recover(cls, directory, source_path, strategies, products, runner_config, recovery_ms, *, decide_from_ms,
-                decide_until_ms=None, source_id="synthetic", ingest_kw=None, evaluator_kw=None, max_quote_gap_ms=15_000,
-                block_stale_entries=True, funding_mode=SYNTHETIC_FUNDING, on_funding_divergence="halt"):
+                decide_until_ms=None, source_id, ingest_kw=None, evaluator_kw=None, max_quote_gap_ms=15_000,
+                block_stale_entries=True, funding_mode, on_funding_divergence="halt"):
         """Rebuilds a session from its directory. Refuses (``IntegrationError`` with a stable reason) a directory whose parts
         do not belong to the same session, a checkpoint ahead of any journal, or any configuration that differs from the one
         that created it. ``recovery_ms`` is the restart clock handed to the runner.
