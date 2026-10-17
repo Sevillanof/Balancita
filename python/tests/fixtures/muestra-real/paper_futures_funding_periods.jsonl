@@ -1,0 +1,2 @@
+{"response_sha256":"f762b8ece01b78a021648fa0a62f1c837c26f3c4b9821e7eb560a7fbe9776a8d","start_ms":1792256400000,"end_ms":1792260000000,"funding_rate":"0.549918226547556282","known_at":1792256430151,"unit":"USD/BTC/hour","product_id":"PF_XBTUSD"}
+{"response_sha256":"ec51c75130ff901a97de2b184532c1448b6ea4eb53c77295e46185e0fe02a774","start_ms":1792256400000,"end_ms":1792260000000,"funding_rate":"-0.000005449242405167","known_at":1792256431517,"unit":"USD/ADA/hour","product_id":"PF_ADAUSD"}
