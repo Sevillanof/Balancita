@@ -350,7 +350,9 @@ export function createLiveCapture(options: LiveCaptureOptions) {
         // The bucket after the latest stored one has not closed yet.
         if (latest !== undefined && latest + 2 * interval > now)
           return undefined
-        if (latest !== undefined) return latest + interval
+        // The request also covers the latest stored bucket, one interval after it closed: a bucket Kraken
+        // completed or corrected since is kept as another revision, never overwritten.
+        if (latest !== undefined) return latest
         return Math.max(
           now - (lookbacks[interval] ?? 500 * interval),
           now - window,
@@ -359,7 +361,7 @@ export function createLiveCapture(options: LiveCaptureOptions) {
       let from = due()
       if (from === undefined) continue
       const gapStart = store.latestOfficialBucket(productId, interval)
-      const gapFrom = gapStart === undefined ? undefined : from
+      const gapFrom = gapStart === undefined ? undefined : gapStart + interval
       let stored = 0
       for (
         let step = 0;

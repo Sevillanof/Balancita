@@ -3,10 +3,12 @@ import { createTickerPollClient, parseRestTickers } from './ticker-poll.ts'
 
 const body = JSON.stringify({
   result: 'success',
+  serverTime: '2026-10-17T12:20:04.297Z',
   tickers: [
     {
       symbol: 'PF_ETHUSD',
       last: 2577.6,
+      lastTime: '2026-10-17T12:19:51.284373141Z',
       bid: 2577.7,
       ask: 2577.8,
       bidSize: 2.097,
@@ -43,6 +45,8 @@ describe('REST ticker poll', () => {
         bid_size: '2.097',
         ask_size: '1.818',
         relative_funding_rate: '-0.00000218355',
+        server_time: '2026-10-17T12:20:04.297Z',
+        last_time: '2026-10-17T12:19:51.284373141Z',
       },
     })
   })
