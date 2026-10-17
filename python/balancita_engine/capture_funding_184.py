@@ -85,17 +85,28 @@ def _ratio_quantiles(values):
     return None if q is None else {k: (v if k == "n" else str(v)) for k, v in q.items()}
 
 
-def coverage(period_rows):
-    """Per product and per hour of the window: is there a definitive period row? ``mask`` is one character per hour."""
+def coverage(periods):
+    """Per product and per hour of the window: is the hour covered by a DEFINITIVE period? ``periods`` are the enriched rows of
+    ``capture_minimal_read.funding_inputs``: a row carries ``relative_rate`` only when an interpreted response shows its period
+    definitive (``final_starts``), and ``provisional`` when it shows it open. An hour that only has provisional rows, or rows
+    stored by a response the adapter rejected, is not covered: it is published apart. ``mask`` is one character per hour."""
     out = {}
     for product in PRODUCTS:
-        starts = {r[1] for r in period_rows if r[0] == product}
-        hours = range(WINDOW[0], WINDOW[1], HOUR_MS)
-        missing = [h for h in hours if h not in starts]
-        out[product] = {"expected_hours": PER_PRODUCT_HOURS, "hours_with_a_period": PER_PRODUCT_HOURS - len(missing),
-                        "missing_hours": len(missing), "first_missing_ms": missing[0] if missing else None,
-                        "last_missing_ms": missing[-1] if missing else None,
-                        "mask": "".join("0" if h in missing else "1" for h in hours)}
+        by_hour = defaultdict(list)
+        for row in periods:
+            if row["product_id"] == product and WINDOW[0] <= row["start_ms"] and row["end_ms"] <= WINDOW[1]:
+                by_hour[row["start_ms"]].append(row)
+        hours = list(range(WINDOW[0], WINDOW[1], HOUR_MS))
+        covered = [h for h in hours if any("relative_rate" in r and r.get("provisional") is not True for r in by_hour.get(h, ()))]
+        only_provisional = [h for h in hours if h not in covered and any(r.get("provisional") is True for r in by_hour.get(h, ()))]
+        only_unparsed = [h for h in hours if h not in covered and h not in only_provisional and h in by_hour]
+        missing = [h for h in hours if h not in covered]
+        out[product] = {"expected_hours": PER_PRODUCT_HOURS, "hours_with_a_definitive_period": len(covered),
+                        "hours_not_covered": len(missing), "hours_without_any_row": len(missing) - len(only_provisional) - len(only_unparsed),
+                        "hours_only_provisional": len(only_provisional),
+                        "hours_only_from_rejected_responses": len(only_unparsed),
+                        "first_not_covered_ms": missing[0] if missing else None, "last_not_covered_ms": missing[-1] if missing else None,
+                        "mask": "".join("1" if h in covered else "0" for h in hours)}
     return out
 
 
@@ -188,9 +199,12 @@ def hypotheses(fd, units, rev, diagnosis, validator_counts):
     not_causal = sum(diagnosis["per_product"][p]["publication"]["not_causal_count"] for p in PRODUCTS)
     late = sum(diagnosis["per_product"][p]["publication"]["late_count"] for p in PRODUCTS)
     measured = sum(fd[p]["with_a_definitive_response"] for p in PRODUCTS)
-    out["definitivo_a_los_10_min"] = {"verdict": verdict(early + not_causal, measured), "periods_measured": measured,
-                                      "against_early": early, "against_not_causal": not_causal, "late": late,
-                                      "periods_not_measurable": sum(fd[p]["without"] for p in PRODUCTS)}
+    not_measurable = sum(fd[p]["without"] for p in PRODUCTS)
+    out["definitivo_no_antes_de_10_min"] = {"verdict": verdict(early + not_causal, measured + early + not_causal),
+                                            "periods_measured": measured, "against_early": early,
+                                            "against_not_causal": not_causal, "periods_not_measurable": not_measurable}
+    out["definitivo_dentro_del_plazo"] = {"verdict": verdict(late, measured + late), "periods_measured": measured,
+                                          "against_late": late, "periods_not_measurable": not_measurable}
     periods = sum(rev[p]["periods"] for p in PRODUCTS)
     conflicts = sum(rev[p]["periods_with_distinct_rates"] for p in PRODUCTS)
     out["primero_visto_gana"] = {"verdict": verdict(conflicts, periods), "periods": periods, "periods_with_distinct_rates": conflicts}
@@ -217,7 +231,7 @@ def measure(official_rows, period_rows, responses):
                               holdout_window=m.HOLDOUT_WINDOW)
     counts = validator_counts({"findings": raw.findings})
     diagnosis = diag.diagnose(period_rows, responses)
-    cov, rev = coverage(period_rows), revisions(periods)
+    cov, rev = coverage(periods), revisions(periods)
     first = first_definitive(periods, polls)
     units = units_and_reference(periods, official_rows)
     return {"coverage": cov, "revisions": rev, "publication": {"first_definitive_response": first, "classification": diagnosis},

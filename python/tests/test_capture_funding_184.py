@@ -44,11 +44,12 @@ class Fixture(unittest.TestCase):
             self.conn.execute("INSERT INTO paper_futures_official_candles VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                               (product, m.MINUTE_MS, b, "h", b + 120_000, PRICE, PRICE, PRICE, PRICE, "1", "r"))
 
-    def period(self, sha, start, rate=RATE, rel=REL, lag_ms=11 * 60_000, product=m.BTC, server_lag_ms=5_000):
+    def period(self, sha, start, rate=RATE, rel=REL, lag_ms=11 * 60_000, product=m.BTC, server_lag_ms=5_000, server_text=None):
         """One response received ``lag_ms`` after the period end, showing the period, and the period row it stored."""
         received = start + H + lag_ms
-        self.conn.execute("INSERT INTO paper_futures_funding_responses VALUES (?,?,?,?)",
-                          (sha, received, iso(received + server_lag_ms), body(received + server_lag_ms, start, rate, rel)))
+        text = server_text or iso(received + server_lag_ms)
+        raw = body(received + server_lag_ms, start, rate, rel).replace(iso(received + server_lag_ms), text)
+        self.conn.execute("INSERT INTO paper_futures_funding_responses VALUES (?,?,?,?)", (sha, received, text, raw))
         self.conn.execute("INSERT INTO paper_futures_funding_periods (response_sha256, start_ms, product_id, end_ms, funding_rate, known_at, unit) VALUES (?,?,?,?,?,?,?)",
                           (sha, start, product, start + H, rate, received, "USD/BTC/hour"))
 
@@ -89,11 +90,23 @@ class MeasurementTests(Fixture):
 
     def test_coverage_is_per_product_and_per_hour(self):
         btc, eth = self.out["coverage"][m.BTC], self.out["coverage"][m.ETH]
-        self.assertEqual((btc["expected_hours"], btc["hours_with_a_period"], btc["missing_hours"]), (48, 3, 45))
+        self.assertEqual((btc["expected_hours"], btc["hours_with_a_definitive_period"], btc["hours_not_covered"]), (48, 3, 45))
         self.assertEqual(len(btc["mask"]), 48)
         self.assertEqual([i for i, c in enumerate(btc["mask"]) if c == "1"], [10, 12, 14])
-        self.assertEqual((btc["first_missing_ms"], btc["last_missing_ms"]), (A0, A1 - H))
-        self.assertEqual((eth["hours_with_a_period"], eth["missing_hours"]), (0, 48))
+        self.assertEqual((btc["first_not_covered_ms"], btc["last_not_covered_ms"]), (A0, A1 - H))
+        self.assertEqual((btc["hours_without_any_row"], btc["hours_only_provisional"], btc["hours_only_from_rejected_responses"]), (45, 0, 0))
+        self.assertEqual((eth["hours_with_a_definitive_period"], eth["hours_not_covered"], eth["hours_without_any_row"]), (0, 48, 48))
+
+    def test_an_hour_with_only_a_provisional_row_is_not_covered_and_is_published_apart(self):
+        self.period("p1", A0 + 20 * H, lag_ms=30_000)                    # received 30 s after the end: the server clock shows it still open
+        self.period("p2", A0 + 22 * H, server_text="2026-13-45T99:00:00Z")      # stored by a response the adapter rejects
+        out = t.measure(*self.rows())
+        btc = out["coverage"][m.BTC]
+        self.assertEqual([i for i, c in enumerate(btc["mask"]) if c == "1"], [10, 12, 14])
+        self.assertEqual((btc["hours_with_a_definitive_period"], btc["hours_only_provisional"], btc["hours_only_from_rejected_responses"]),
+                         (3, 1, 1))
+        self.assertEqual(btc["hours_without_any_row"], 43)
+        self.assertEqual(btc["hours_not_covered"], 45)
 
     def test_revisions_count_rows_and_distinct_rates_without_publishing_them(self):
         rev = self.out["revisions"][m.BTC]
@@ -135,8 +148,9 @@ class MeasurementTests(Fixture):
         h = self.out["hypotheses"]
         self.assertEqual(h["relativo_por_precio_igual_al_absoluto"]["verdict"], "contradicha")
         self.assertEqual(h["relativo_por_precio_igual_al_absoluto"]["against"], 1)
-        self.assertEqual(h["definitivo_a_los_10_min"]["verdict"], "sostenida")
-        self.assertEqual(h["definitivo_a_los_10_min"]["periods_measured"], 3)
+        self.assertEqual(h["definitivo_no_antes_de_10_min"]["verdict"], "sostenida")
+        self.assertEqual(h["definitivo_no_antes_de_10_min"]["periods_measured"], 3)
+        self.assertEqual(h["definitivo_dentro_del_plazo"]["verdict"], "sostenida")
         self.assertEqual(h["primero_visto_gana"]["verdict"], "contradicha")
         self.assertEqual(h["primero_visto_gana"]["periods_with_distinct_rates"], 1)
 
@@ -144,7 +158,49 @@ class MeasurementTests(Fixture):
         # received 2 s before end + 10 min, while the server clock already shows the period definitive
         self.period("r5", A0 + 16 * H, lag_ms=10 * 60_000 - 2_000, server_lag_ms=62_000)
         out = t.measure(*self.rows())
-        self.assertEqual(out["hypotheses"]["definitivo_a_los_10_min"]["verdict"], "contradicha")
+        h = out["hypotheses"]
+        self.assertEqual((h["definitivo_no_antes_de_10_min"]["verdict"], h["definitivo_no_antes_de_10_min"]["against_early"]), ("contradicha", 1))
+        self.assertEqual(h["definitivo_dentro_del_plazo"]["verdict"], "sostenida")
+
+    def test_a_not_causal_row_contradicts_the_ten_minute_hypothesis(self):
+        # stored 30 minutes before the end of its period by a response the adapter rejects (never flagged provisional)
+        self.period("r6", A0 + 18 * H, lag_ms=-30 * 60_000, server_text="2026-13-45T99:00:00Z")
+        h = t.measure(*self.rows())["hypotheses"]
+        self.assertEqual((h["definitivo_no_antes_de_10_min"]["verdict"], h["definitivo_no_antes_de_10_min"]["against_not_causal"]),
+                         ("contradicha", 1))
+        self.assertEqual(h["definitivo_dentro_del_plazo"]["verdict"], "sostenida")
+
+    def test_a_late_period_contradicts_the_deadline_hypothesis_and_not_the_ten_minute_one(self):
+        s2 = A0 + 20 * H
+        self.period("l1", s2, lag_ms=30_000)                             # open when seen
+        self.period("l2", s2 + H, lag_ms=15 * 60_000)                    # 75 min after the end of s2: past the deadline, s2 not listed
+        self.period("l3", s2, lag_ms=90 * 60_000)                        # s2 definitive, too late
+        out = t.measure(*self.rows())
+        pub = out["publication"]["classification"]["per_product"][m.BTC]["publication"]
+        self.assertEqual(pub["late_count"], 1)
+        h = out["hypotheses"]
+        self.assertEqual((h["definitivo_dentro_del_plazo"]["verdict"], h["definitivo_dentro_del_plazo"]["against_late"]), ("contradicha", 1))
+        self.assertEqual(h["definitivo_no_antes_de_10_min"]["verdict"], "sostenida")
+
+    def test_the_first_definitive_response_is_the_earliest_one(self):
+        # A0 + 12 h is shown definitive by r2 at +11 min and again by r3 at +20 min: the offset is the first one
+        first = self.out["publication"]["first_definitive_response"][m.BTC]
+        self.assertEqual((first["with_a_definitive_response"], first["received_minus_end_ms"]["min"], first["received_minus_end_ms"]["max"]),
+                         (3, 11 * 60_000, 11 * 60_000))
+
+    def test_provisional_rows_are_not_revisions(self):
+        self.period("r8", A0 + 20 * H, rate="9.0", lag_ms=30_000)        # the open hour, seen with another rate before it closed
+        self.period("r9", A0 + 20 * H)                                   # the definitive row of the same period
+        rev = t.measure(*self.rows())["revisions"][m.BTC]
+        self.assertEqual((rev["periods"], rev["periods_by_number_of_rows"], rev["periods_with_distinct_rates"]), (4, {"1": 3, "2": 1}, 1))
+
+    def test_units_only_judge_rows_inside_the_window(self):
+        official, period_rows, responses = self.rows()
+        periods = m.funding_inputs(period_rows, responses)[0]
+        outside = dict(next(p for p in periods if p["product_id"] == m.BTC and "relative_rate" in p), start_ms=A1 + H, end_ms=A1 + 2 * H,
+                       funding_rate="500.0")
+        u = t.units_and_reference(periods + [outside], official)[m.BTC]
+        self.assertEqual((u["rows_checked"], u["units"]), (4, {"USD/BTC/hour": 4}))
 
     def test_nothing_with_a_rate_or_a_price_is_published(self):
         text = json.dumps(self.out)
@@ -229,6 +285,18 @@ class GuardTests(Fixture):
         self.assertEqual(out["stopped"]["reason"], "row_budget")
         self.assertEqual(out["stopped"]["detail"]["stage"], "2a")
         self.assertNotIn("measurements", out)
+
+    def test_the_reference_cap_is_the_total_of_both_products(self):
+        self.scenario()
+        self.candles(m.ETH)                                              # 48 candles each: 96 together, 48 alone
+        with mock.patch.object(t, "CAP_REFERENCE", 60):
+            out = self.run_tool()
+        self.assertEqual((out["stopped"]["reason"], out["stopped"]["detail"]["stage"], out["stopped"]["detail"]["product"]),
+                         ("row_budget", "2a", m.ETH))
+        with mock.patch.object(t, "CAP_REFERENCE", 96):
+            self.assertIsNone(self.run_tool()["stopped"])
+        with mock.patch.object(t, "CAP_REFERENCE", 95):
+            self.assertEqual(self.run_tool()["stopped"]["reason"], "row_budget")
 
     def test_the_total_is_checked_before_reading(self):
         self.scenario()
