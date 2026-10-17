@@ -1,6 +1,6 @@
 # Etapa 10B: ingestor offline sobre una base sintética
 
-Estado: **implementado, offline y aislado**. Código nuevo: `python/balancita_engine/paper_live_ingest.py`, `paper_live_publish.py`, `paper_live_probe.py`; pruebas: `python/tests/test_paper_live_ingest.py`. Diseño de referencia: [etapa-10-integracion-paper-tiempo-real.md](etapa-10-integracion-paper-tiempo-real.md) (PR #150).
+Estado: **implementado, offline y aislado**. Código nuevo: `python/balancita_engine/paper_live_ingest.py`, `paper_live_publish.py` (la sonda de medición `paper_live_probe.py` se retiró: ver §4); pruebas: `python/tests/test_paper_live_ingest.py`. Diseño de referencia: [etapa-10-integracion-paper-tiempo-real.md](etapa-10-integracion-paper-tiempo-real.md) (PR #150).
 
 Alcance respetado: solo bases **sintéticas** con el esquema que escribe la captura; no se lee la captura real ni ninguna base de la Mac; no hay conexión a Kraken, proceso persistente, reloj de pared dentro de los eventos, ni credenciales. No se modifica `paper_runner.py` (ni ningún módulo existente), no hay evaluador paralelo, no se tocan forward, captura, Kronos, Qwen, estrategias, riesgo, ADR ni frontend.
 
@@ -61,7 +61,7 @@ Distinción implementada: la fuente está **caída** solo si ningún ticker de n
 
 ## 4. Journal de cotizaciones: medido, sin recomendar (C4)
 
-`paper_live_probe.py` mide con una caminata aleatoria sembrada (precios sintéticos, no de Kraken), en este contenedor (disco de CI/nube, no el de la Mac; `fsync` real):
+La sonda `paper_live_probe.py` (retirada después de medir, #184: generaba precios inventados y no pertenece al camino operativo; está en el historial de git) midió con una caminata aleatoria sembrada (precios sintéticos, no de Kraken), en este contenedor (disco de CI/nube, no el de la Mac; `fsync` real):
 
 | Política                              | Cotizaciones por día (8 productos) | Bytes por cotización | Journal por día | Replay (recuperación) por día               |
 | ------------------------------------- | ---------------------------------- | -------------------- | --------------- | ------------------------------------------- |
