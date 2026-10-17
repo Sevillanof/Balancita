@@ -6,8 +6,7 @@ B needs pyarrow: run it with the interpreter of the pinned virtualenv (docs/expe
 
 Each phase (generate, write+seal, query, rebuild) runs in a FRESH child process; the child's peak memory (whole process, never assumed
 constant: manifest, query lists, decompression and copies while sealing all count) and CPU come from
-``resource.getrusage(RUSAGE_CHILDREN)`` read by a wrapper process whose only child is the workload, so phases never share memory (same idea as
-``measure_growth_186.py``). Everything is SYNTHETIC: nothing here calibrates the real capture and nothing is extrapolated.
+``resource.getrusage(RUSAGE_CHILDREN)`` read by a wrapper process whose only child is the workload, so phases never share memory. Everything is SYNTHETIC: nothing here calibrates the real capture and nothing is extrapolated.
 """
 from __future__ import annotations
 
