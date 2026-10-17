@@ -1,6 +1,9 @@
 import { DatabaseSync, type StatementSync } from 'node:sqlite'
 import { createHash } from 'node:crypto'
-import type { HistoricalFundingResponse } from './historical-funding.ts'
+import {
+  fundingLiteralExtract,
+  type HistoricalFundingResponse,
+} from './historical-funding.ts'
 import type { OfficialCandleResponse } from './official-candles.ts'
 import type { AnalyticsResponse } from './market-analytics.ts'
 import { existsSync, mkdirSync } from 'node:fs'
@@ -110,6 +113,22 @@ function time(value: unknown, name: string): number {
   return value
 }
 
+/** Closed periods that ended up to this long before a response get a sighting row. */
+const FUNDING_SIGHTING_WINDOW_MS = 2 * 3_600_000
+export type FundingPollPurpose = 'startup' | 'hourly' | 'retry' | 'settle'
+export type FundingPollOutcome =
+  'ok' | 'http_error' | 'timeout' | 'parse_error' | 'network_error' | 'aborted'
+export type FundingPollRecord = Readonly<{
+  productId: string
+  purpose: FundingPollPurpose
+  scheduledAt: number
+  startedAt: number
+  finishedAt: number
+  outcome: FundingPollOutcome
+  httpStatus?: number
+  detail?: string
+  response?: HistoricalFundingResponse
+}>
 const OFFICIAL_PRODUCT = /^PF_[A-Z0-9]{2,20}$/
 
 function product(value: unknown): string {
@@ -325,6 +344,32 @@ export class FuturesMarketStore {
     this.db.exec(
       "INSERT OR IGNORE INTO paper_futures_market_migrations VALUES(7, unixepoch('subsec') * 1000)",
     )
+    // Additive funding evidence (#184). Deliberately not a numbered migration:
+    // readers of schema versions 3-7 keep working; readers detect these tables
+    // in sqlite_master.
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS paper_futures_funding_polls(
+        product_id TEXT NOT NULL, started_at INTEGER NOT NULL, purpose TEXT NOT NULL,
+        scheduled_at INTEGER NOT NULL, finished_at INTEGER NOT NULL, outcome TEXT NOT NULL,
+        http_status INTEGER, detail TEXT, response_sha256 TEXT,
+        extract_text TEXT, extract_sha256 TEXT, extract_periods INTEGER,
+        PRIMARY KEY(product_id, started_at, purpose)
+      ) STRICT;
+      CREATE TABLE IF NOT EXISTS paper_futures_funding_sightings(
+        product_id TEXT NOT NULL, start_ms INTEGER NOT NULL, received_at INTEGER NOT NULL,
+        funding_rate TEXT NOT NULL, end_ms INTEGER NOT NULL, server_time TEXT NOT NULL,
+        response_sha256 TEXT NOT NULL,
+        PRIMARY KEY(product_id, start_ms, received_at)
+      ) STRICT;
+      CREATE TRIGGER IF NOT EXISTS paper_futures_funding_polls_no_update
+        BEFORE UPDATE ON paper_futures_funding_polls BEGIN SELECT RAISE(ABORT, 'funding evidence is immutable'); END;
+      CREATE TRIGGER IF NOT EXISTS paper_futures_funding_polls_no_delete
+        BEFORE DELETE ON paper_futures_funding_polls BEGIN SELECT RAISE(ABORT, 'funding evidence is immutable'); END;
+      CREATE TRIGGER IF NOT EXISTS paper_futures_funding_sightings_no_update
+        BEFORE UPDATE ON paper_futures_funding_sightings BEGIN SELECT RAISE(ABORT, 'funding evidence is immutable'); END;
+      CREATE TRIGGER IF NOT EXISTS paper_futures_funding_sightings_no_delete
+        BEFORE DELETE ON paper_futures_funding_sightings BEGIN SELECT RAISE(ABORT, 'funding evidence is immutable'); END;
+    `)
   }
 
   /**
@@ -713,6 +758,116 @@ export class FuturesMarketStore {
     if (fresh.length === 0) return { stored: false, newPeriods: 0 }
     this.writeFundingResponse(response, fresh, productId)
     return { stored: true, newPeriods: fresh.length }
+  }
+
+  /**
+   * Appends one funding attempt (any outcome, no body) and, when it got a
+   * response, one sighting per period that had closed up to two hours before
+   * it. A sighting is the rate Kraken showed at `received_at`; a rate change
+   * shows up as two sightings of one period with different rates. The store
+   * does not say when a period is "definitive": Kraken sends no such signal.
+   * `extract_text` is the literal text of those periods from the response
+   * (verifiable with `extract_sha256`); the full body is not kept.
+   */
+  recordFundingPoll(poll: FundingPollRecord): { sightings: number } {
+    if (this.readOnly)
+      throw new Error('Cannot append to a read-only market store.')
+    const response = poll.response
+    const startedAt = time(poll.startedAt, 'startedAt')
+    const closed =
+      response === undefined
+        ? []
+        : response.records.filter((record) => {
+            const lag = response.receivedAtMs - record.endMs
+            return lag >= 0 && lag <= FUNDING_SIGHTING_WINDOW_MS
+          })
+    if (
+      response !== undefined &&
+      sha256(response.rawResponse) !== response.sha256
+    )
+      throw new Error('Funding response hash mismatch.')
+    const extract =
+      response === undefined
+        ? undefined
+        : fundingLiteralExtract(
+            response,
+            new Set(closed.map((record) => record.startMs)),
+          )
+    // A sighted period missing from the extract is noted, never silent.
+    const detail =
+      [
+        poll.detail,
+        extract !== undefined && extract.periods !== closed.length
+          ? `extract_mismatch: ${extract.periods} of ${closed.length} periods`
+          : undefined,
+      ]
+        .filter((part) => part !== undefined)
+        .join('; ')
+        .slice(0, 200) || null
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      this.db
+        .prepare(
+          'INSERT OR IGNORE INTO paper_futures_funding_polls VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
+        )
+        .run(
+          poll.productId,
+          startedAt,
+          poll.purpose,
+          time(poll.scheduledAt, 'scheduledAt'),
+          time(poll.finishedAt, 'finishedAt'),
+          poll.outcome,
+          poll.httpStatus ?? null,
+          detail,
+          response?.sha256 ?? null,
+          extract?.text ?? null,
+          extract?.sha256 ?? null,
+          extract?.periods ?? null,
+        )
+      const insert = this.db.prepare(
+        'INSERT OR IGNORE INTO paper_futures_funding_sightings VALUES(?,?,?,?,?,?,?)',
+      )
+      let sightings = 0
+      for (const record of closed)
+        sightings += Number(
+          insert.run(
+            poll.productId,
+            time(record.startMs, 'funding start'),
+            time(response!.receivedAtMs, 'receivedAtMs'),
+            record.fundingRate,
+            time(record.endMs, 'funding end'),
+            response!.serverTime,
+            response!.sha256,
+          ).changes,
+        )
+      this.db.exec('COMMIT')
+      return { sightings }
+    } catch (error) {
+      this.db.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  /** `null` when the table does not exist (older database), `[]` when it is empty. */
+  fundingSightings(
+    productId: string,
+    knownAtCutoff: number,
+  ): Record<string, unknown>[] | null {
+    time(knownAtCutoff, 'knownAtCutoff')
+    const exists = this.db
+      .prepare(
+        "SELECT 1 AS present FROM sqlite_master WHERE type='table' AND name='paper_futures_funding_sightings'",
+      )
+      .get()
+    if (exists === undefined) return null
+    return this.db
+      .prepare(
+        `SELECT start_ms AS startMs,end_ms AS endMs,funding_rate AS fundingRate,received_at AS receivedAt,
+      server_time AS serverTime,response_sha256 AS sha256
+      FROM paper_futures_funding_sightings WHERE product_id=? AND received_at<=?
+      ORDER BY start_ms,received_at`,
+      )
+      .all(productId, knownAtCutoff) as Record<string, unknown>[]
   }
 
   private writeFundingResponse(

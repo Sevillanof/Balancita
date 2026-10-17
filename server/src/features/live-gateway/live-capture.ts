@@ -7,7 +7,12 @@ import {
   type FuturesSocket,
 } from '../kraken-futures/futures-market.ts'
 import { FuturesCandleBuilder } from '../kraken-futures/futures-candles.ts'
-import type { FuturesMarketStore } from '../kraken-futures/futures-market-store.ts'
+import type {
+  FundingPollOutcome,
+  FundingPollPurpose,
+  FuturesMarketStore,
+} from '../kraken-futures/futures-market-store.ts'
+import type { HistoricalFundingResponse } from '../kraken-futures/historical-funding.ts'
 import {
   createHistoricalFundingClient,
   type HistoricalFundingFetch,
@@ -76,6 +81,62 @@ const CAPTURE_CANDLE_INTERVAL_MS = 60_000
 const FUNDING_POLL_OFFSET_MS = 30_000
 const FUNDING_RETRY_MS = 60_000
 const FUNDING_MAX_RETRIES = 10
+// One more funding poll this long after each hour, past the 10 min lag, so a later look at the closed period is recorded (#184).
+const FUNDING_SETTLE_OFFSET_MS = 11 * 60_000
+
+/**
+ * When to poll funding next: retry every minute while the new hour is not
+ * listed yet (up to the limit), then one settle poll 11 min after the hour,
+ * then the next hour + 30 s.
+ */
+export function fundingPollDelayMs(state: {
+  now: number
+  latestFundingStart: number
+  retries: number
+}): { delay: number; retries: number; purpose: FundingPollPurpose } {
+  const sinceHour = state.now % HOUR_MS
+  const currentHour = state.now - sinceHour
+  if (
+    state.latestFundingStart < currentHour &&
+    sinceHour < 10 * 60_000 &&
+    state.retries < FUNDING_MAX_RETRIES
+  )
+    return {
+      delay: FUNDING_RETRY_MS,
+      retries: state.retries + 1,
+      purpose: 'retry',
+    }
+  if (sinceHour + 1_000 < FUNDING_SETTLE_OFFSET_MS)
+    return {
+      delay: FUNDING_SETTLE_OFFSET_MS - sinceHour,
+      retries: 0,
+      purpose: 'settle',
+    }
+  return {
+    delay: HOUR_MS - sinceHour + FUNDING_POLL_OFFSET_MS,
+    retries: 0,
+    purpose: 'hourly',
+  }
+}
+
+/** How a failed funding attempt is recorded (the client throws plain errors). */
+export function classifyFundingError(error: unknown): {
+  outcome: FundingPollOutcome
+  httpStatus?: number
+} {
+  if (error instanceof Error && error.name === 'AbortError')
+    return { outcome: 'timeout' }
+  const text = error instanceof Error ? error.message : String(error)
+  const http = /HTTP (\d{3})/.exec(text)
+  if (http) return { outcome: 'http_error', httpStatus: Number(http[1]) }
+  if (
+    error instanceof SyntaxError ||
+    error instanceof RangeError ||
+    /^(Invalid|Historical|Conflicting)/.test(text)
+  )
+    return { outcome: 'parse_error' }
+  return { outcome: 'network_error' }
+}
 
 export interface LiveCaptureOptions {
   readonly store: FuturesMarketStore
@@ -646,58 +707,100 @@ export function createLiveCapture(options: LiveCaptureOptions) {
     })
     // Newest period start Kraken has listed so far (drives the post-boundary retry).
     let latestFundingStart = 0
-    const pollFunding = async (): Promise<void> => {
+    // One attempt for one product: the response is stored as before (only when
+    // it adds knowledge) and the attempt is recorded with the sightings it
+    // gave. Recording is extra evidence and never blocks the poll.
+    const pollOne = async (
+      productId: string,
+      purpose: FundingPollPurpose,
+      scheduledAt: number,
+    ): Promise<HistoricalFundingResponse | undefined> => {
+      const startedAt = clock()
+      const label =
+        productId === FUTURES_PRODUCT ? 'funding' : `funding ${productId}`
+      let response: HistoricalFundingResponse | undefined
+      let failure: unknown
+      let storeFailure: unknown
       try {
-        const response = await fundingClient!.fetch()
-        const { newPeriods } = store.appendNewFundingKnowledge(response)
-        if (newPeriods > 0) log(`funding +${newPeriods} period(s)`)
-        for (const record of response.records)
-          latestFundingStart = Math.max(latestFundingStart, record.startMs)
+        response = await fundingClient!.fetch(undefined, productId)
       } catch (error) {
+        failure = error
         if (!(error instanceof Error && error.name === 'AbortError'))
-          log(`funding unavailable: ${describe(error)}`)
+          log(`${label} unavailable: ${describe(error)}`)
       }
-      // The other pinned perpetuals: each one is best effort and never blocks BTC.
-      for (const { productId } of products) {
-        if (productId === FUTURES_PRODUCT || stopped) continue
+      if (response !== undefined) {
+        // A store error is not a Kraken or network failure: the valid response
+        // is still recorded as an ok attempt, with the store error noted apart.
         try {
-          const response = await fundingClient!.fetch(undefined, productId)
           const { newPeriods } = store.appendNewFundingKnowledge(
             response,
             productId,
           )
-          if (newPeriods > 0)
-            log(`funding ${productId} +${newPeriods} period(s)`)
+          if (newPeriods > 0) log(`${label} +${newPeriods} period(s)`)
         } catch (error) {
-          if (!(error instanceof Error && error.name === 'AbortError'))
-            log(`funding ${productId} unavailable: ${describe(error)}`)
+          storeFailure = error
+          log(`${label} not stored: ${describe(error)}`)
         }
+      }
+      try {
+        const failed =
+          failure === undefined
+            ? { outcome: 'ok' as const }
+            : stopped
+              ? { outcome: 'aborted' as const }
+              : classifyFundingError(failure)
+        store.recordFundingPoll({
+          productId,
+          purpose,
+          scheduledAt,
+          startedAt,
+          finishedAt: clock(),
+          ...failed,
+          detail:
+            failure !== undefined
+              ? describe(failure)
+              : storeFailure !== undefined
+                ? `store: ${describe(storeFailure)}`
+                : undefined,
+          response,
+        })
+      } catch (error) {
+        log(`funding attempt not recorded: ${describe(error)}`)
+      }
+      return response
+    }
+    const pollFunding = async (
+      purpose: FundingPollPurpose,
+      scheduledAt: number,
+    ): Promise<void> => {
+      const btc = await pollOne(FUTURES_PRODUCT, purpose, scheduledAt)
+      if (btc !== undefined)
+        for (const record of btc.records)
+          latestFundingStart = Math.max(latestFundingStart, record.startMs)
+      // The other pinned perpetuals: each one is best effort and never blocks BTC.
+      for (const { productId } of products) {
+        if (productId === FUTURES_PRODUCT || stopped) continue
+        await pollOne(productId, purpose, scheduledAt)
       }
     }
     let fundingRetries = 0
     const scheduleFundingPoll = (): void => {
       if (stopped) return
-      const now = clock()
-      const currentHour = now - (now % HOUR_MS)
-      let delay: number
-      if (options.fundingPollMs !== undefined) delay = options.fundingPollMs
-      else if (
-        latestFundingStart < currentHour &&
-        now - currentHour < 10 * 60_000 &&
-        fundingRetries < FUNDING_MAX_RETRIES
-      ) {
-        // Just after a boundary and the new hour is not listed yet.
-        fundingRetries += 1
-        delay = FUNDING_RETRY_MS
-      } else {
-        fundingRetries = 0
-        delay = HOUR_MS - (now % HOUR_MS) + FUNDING_POLL_OFFSET_MS
-      }
+      const next = fundingPollDelayMs({
+        now: clock(),
+        latestFundingStart,
+        retries: fundingRetries,
+      })
+      fundingRetries = next.retries
+      const delay = options.fundingPollMs ?? next.delay
+      const scheduledAt = clock() + delay
       fundingTimer = setTimeout(() => {
-        fundingPoll = pollFunding().then(scheduleFundingPoll)
+        fundingPoll = pollFunding(next.purpose, scheduledAt).then(
+          scheduleFundingPoll,
+        )
       }, delay)
     }
-    fundingPoll = pollFunding().then(scheduleFundingPoll)
+    fundingPoll = pollFunding('startup', clock()).then(scheduleFundingPoll)
     collector = new KrakenFuturesMarketCollector({
       clock,
       random: Math.random,

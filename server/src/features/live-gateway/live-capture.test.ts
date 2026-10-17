@@ -2,10 +2,14 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { FuturesSocket } from '../kraken-futures/futures-market.ts'
 import { FuturesMarketStore } from '../kraken-futures/futures-market-store.ts'
-import { createLiveCapture } from './live-capture.ts'
+import {
+  classifyFundingError,
+  createLiveCapture,
+  fundingPollDelayMs,
+} from './live-capture.ts'
 
 const dirs: string[] = []
 afterEach(() => {
@@ -309,6 +313,250 @@ describe('live capture process core', () => {
     expect(calls).toBeGreaterThan(before)
     expect(rows()).toEqual([2, 4])
     store.close()
+  })
+
+  it('plans funding polls: retry until the new hour is listed, one settle poll at +11 min, then the next hour', () => {
+    const HOUR = 3_600_000
+    const hour = Math.floor(1_790_000_000_000 / HOUR) * HOUR
+    const at = (offsetMs: number, listed: boolean, retries = 0) =>
+      fundingPollDelayMs({
+        now: hour + offsetMs,
+        latestFundingStart: listed ? hour : hour - HOUR,
+        retries,
+      })
+    expect(at(30_000, false)).toEqual({
+      delay: 60_000,
+      retries: 1,
+      purpose: 'retry',
+    })
+    // Listed already: the next look is the settle poll at +11 min.
+    expect(at(30_000, true)).toEqual({
+      delay: 11 * 60_000 - 30_000,
+      retries: 0,
+      purpose: 'settle',
+    })
+    // Retries used up before +10 min: still a settle poll afterwards.
+    expect(at(5 * 60_000, false, 10).purpose).toBe('settle')
+    // After the settle poll: next hour + 30 s.
+    expect(at(11 * 60_000 + 2_000, true)).toEqual({
+      delay: HOUR - (11 * 60_000 + 2_000) + 30_000,
+      retries: 0,
+      purpose: 'hourly',
+    })
+    // The retry window closes at +10 min: later it is a settle poll, earlier a retry.
+    expect(at(10 * 60_000 - 1, false).purpose).toBe('retry')
+    expect(at(10 * 60_000, false).purpose).toBe('settle')
+    // Never lands on the hour boundary twice in a row.
+    expect(at(59 * 60_000, true).delay).toBe(60_000 + 30_000)
+  })
+
+  it('classifies failed funding attempts', () => {
+    const abort = Object.assign(new Error('aborted'), { name: 'AbortError' })
+    expect(classifyFundingError(abort)).toEqual({ outcome: 'timeout' })
+    expect(
+      classifyFundingError(new Error('Historical funding HTTP 503.')),
+    ).toEqual({ outcome: 'http_error', httpStatus: 503 })
+    expect(classifyFundingError(new SyntaxError('Unexpected token'))).toEqual({
+      outcome: 'parse_error',
+    })
+    expect(
+      classifyFundingError(new TypeError('Invalid historical funding period.')),
+    ).toEqual({ outcome: 'parse_error' })
+    expect(classifyFundingError(new TypeError('fetch failed'))).toEqual({
+      outcome: 'network_error',
+    })
+  })
+
+  it('records every funding attempt, with sightings, and the failures without a body', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'balancita-capture-'))
+    dirs.push(dir)
+    const path = join(dir, 'market.sqlite')
+    const store = new FuturesMarketStore(path)
+    const HOUR = 3_600_000
+    const now = Math.floor(1_790_000_000_000 / HOUR) * HOUR + 120_000
+    const hour = Math.floor(now / HOUR) * HOUR
+    let calls = 0
+    const capture = createLiveCapture({
+      store,
+      clock: () => now,
+      makeSocket: () => fakeSocket().socket,
+      fetchCatalog: async () => catalog,
+      fundingFetch: async () => {
+        calls += 1
+        if (calls === 2) return new Response('nope', { status: 503 })
+        return new Response(
+          JSON.stringify({
+            result: 'success',
+            serverTime: new Date(now).toISOString(),
+            rates: [hour - 2 * HOUR, hour - HOUR].map((start) => ({
+              timestamp: new Date(start).toISOString(),
+              fundingRate: 0.5,
+              relativeFundingRate: 0.00001,
+            })),
+          }),
+        )
+      },
+      fundingPollMs: 5,
+      log: () => undefined,
+    })
+    await capture.start()
+    await until(() => calls >= 3)
+    await capture.stop()
+    store.close()
+    const db = new DatabaseSync(path, { readOnly: true })
+    const polls = db
+      .prepare(
+        'SELECT purpose, outcome, http_status, response_sha256 FROM paper_futures_funding_polls ORDER BY started_at, rowid',
+      )
+      .all() as Array<Record<string, unknown>>
+    expect(polls[0]).toMatchObject({ purpose: 'startup', outcome: 'ok' })
+    const failed = polls.filter((row) => row.outcome === 'http_error')
+    expect(failed.length).toBeGreaterThan(0)
+    expect(failed[0]).toMatchObject({ http_status: 503, response_sha256: null })
+    expect(
+      Number(
+        (
+          db
+            .prepare(
+              "SELECT COUNT(*) AS n FROM paper_futures_funding_sightings WHERE product_id='PF_XBTUSD'",
+            )
+            .get() as { n: number }
+        ).n,
+      ),
+    ).toBe(2)
+    db.close()
+  })
+
+  it('keeps a valid response as an ok attempt when only the store fails, and notes the store error', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'balancita-capture-'))
+    dirs.push(dir)
+    const path = join(dir, 'market.sqlite')
+    const store = new FuturesMarketStore(path)
+    vi.spyOn(store, 'appendNewFundingKnowledge').mockImplementation(() => {
+      throw new Error('database is locked')
+    })
+    const HOUR = 3_600_000
+    const now = Math.floor(1_790_000_000_000 / HOUR) * HOUR + 120_000
+    const hour = Math.floor(now / HOUR) * HOUR
+    let calls = 0
+    const capture = createLiveCapture({
+      store,
+      clock: () => now,
+      makeSocket: () => fakeSocket().socket,
+      fetchCatalog: async () => catalog,
+      fundingFetch: async () => {
+        calls += 1
+        return new Response(
+          JSON.stringify({
+            result: 'success',
+            serverTime: new Date(now).toISOString(),
+            rates: [hour - HOUR].map((start) => ({
+              timestamp: new Date(start).toISOString(),
+              fundingRate: 0.5,
+              relativeFundingRate: 0.00001,
+            })),
+          }),
+        )
+      },
+      fundingPollMs: 5,
+      log: () => undefined,
+    })
+    await capture.start()
+    await until(() => calls >= 1)
+    await capture.stop()
+    store.close()
+    const db = new DatabaseSync(path, { readOnly: true })
+    const first = db
+      .prepare(
+        "SELECT outcome, detail, response_sha256 FROM paper_futures_funding_polls WHERE product_id='PF_XBTUSD' ORDER BY started_at, rowid",
+      )
+      .get() as { outcome: string; detail: string; response_sha256: string }
+    expect(first.outcome).toBe('ok')
+    expect(first.detail).toBe('store: database is locked')
+    expect(first.response_sha256).not.toBeNull()
+    expect(
+      Number(
+        (
+          db
+            .prepare(
+              'SELECT COUNT(*) AS n FROM paper_futures_funding_sightings',
+            )
+            .get() as { n: number }
+        ).n,
+      ),
+    ).toBeGreaterThan(0)
+    db.close()
+  })
+
+  it('records the scheduled time and marks an attempt cut short by stop as aborted', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'balancita-capture-'))
+    dirs.push(dir)
+    const path = join(dir, 'market.sqlite')
+    const store = new FuturesMarketStore(path)
+    const now = 1_790_000_000_000
+    let calls = 0
+    let reject: (error: Error) => void = () => undefined
+    const capture = createLiveCapture({
+      store,
+      clock: () => now,
+      makeSocket: () => fakeSocket().socket,
+      fetchCatalog: async () => catalog,
+      fundingFetch: async () => {
+        calls += 1
+        if (calls === 1) throw new Error('Historical funding HTTP 500.')
+        return new Promise<Response>((_, fail) => {
+          reject = fail
+        })
+      },
+      fundingPollMs: 5,
+      log: () => undefined,
+    })
+    await capture.start()
+    await until(() => calls >= 2)
+    const stopping = capture.stop()
+    reject(new Error('socket closed'))
+    await stopping
+    store.close()
+    const db = new DatabaseSync(path, { readOnly: true })
+    const rows = db
+      .prepare(
+        "SELECT purpose, scheduled_at, started_at, outcome FROM paper_futures_funding_polls WHERE product_id='PF_XBTUSD' ORDER BY rowid",
+      )
+      .all() as Array<{
+      purpose: string
+      scheduled_at: number
+      started_at: number
+      outcome: string
+    }>
+    expect(rows[0]).toMatchObject({
+      purpose: 'startup',
+      scheduled_at: now,
+      outcome: 'http_error',
+    })
+    expect(rows[1]).toMatchObject({
+      scheduled_at: now + 5,
+      outcome: 'aborted',
+    })
+    db.close()
+  })
+
+  it('writes no funding attempts when the capture never starts', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'balancita-capture-'))
+    dirs.push(dir)
+    const path = join(dir, 'market.sqlite')
+    const store = new FuturesMarketStore(path)
+    store.close()
+    const db = new DatabaseSync(path, { readOnly: true })
+    expect(
+      Number(
+        (
+          db
+            .prepare('SELECT COUNT(*) AS n FROM paper_futures_funding_polls')
+            .get() as { n: number }
+        ).n,
+      ),
+    ).toBe(0)
+    db.close()
   })
 
   it('backfills and then polls official 1m and 5m candles incrementally', async () => {
