@@ -50,6 +50,17 @@ for owner, names in ((socket.socket, ("connect", "connect_ex")), (ssl.SSLContext
         if hasattr(owner, name):
             setattr(owner, name, deny("{}.{}".format(getattr(owner, "__name__", owner.__class__.__name__), name)))
 
+AUDITED = ("socket.connect", "socket.getaddrinfo", "socket.gethostbyname", "subprocess.Popen", "os.system", "os.exec",
+           "os.posix_spawn", "os.spawn")
+
+
+def audit(event, args):                         # sees what the patches above cannot: C-level sockets and dynamic imports
+    if event in AUDITED:
+        hits.append("audit:" + event)
+        raise OSError("blocked by the audit hook: " + event)
+
+
+sys.addaudithook(audit)
 sys.path[:0] = sys.argv[1:3]                    # only now: the engine and the test helpers are imported with the traps in place
 NAMES = ["test_paper_live_process_185.TestLifecycle.test_warmup_then_live_then_an_orderly_stop_that_leaves_the_files_a_supervisor_needs",
          "test_paper_live_process_185.TestObservedLifecycle.test_a_divergence_halts_the_process_with_the_evidence_and_the_pnl_not_verified"]

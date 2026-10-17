@@ -74,11 +74,20 @@ describe('no real orders (server)', () => {
   })
 
   it('has no HTTP route that writes, and the gateway answers a paper command with an error only', () => {
-    const verbs =
-      /\b(?:app|server|fastify|instance|gateway)\.(?:post|put|patch|delete)\(/
-    expect(
-      files.filter((file) => verbs.test(readFileSync(file, 'utf8'))),
-    ).toEqual([])
+    // by verb, whatever the variable is called: a route (.post('/x')) or a request (method: 'POST')
+    const verbs = [
+      /(?<!searchParams)\.(?:post|put|patch|delete)\(\s*['"`/]/,
+      /method:\s*['"](?:POST|PUT|PATCH|DELETE)/i,
+    ]
+    // the one write there is: the carry on/off switch of the local strategies API (a flag, not an order)
+    const writers = files.filter((file) => {
+      const text = readFileSync(file, 'utf8')
+      return verbs.some((verb) => verb.test(text))
+    })
+    expect(writers.map((file) => relative(frontendSrc, file))).toEqual([
+      join('features', 'strategy-lab', 'infrastructure', 'carry-api.ts'),
+    ])
+    expect(readFileSync(writers[0], 'utf8')).not.toMatch(/kraken/i)
     const gateway = readFileSync(
       join(serverSrc, 'features', 'live-gateway', 'gateway.ts'),
       'utf8',
