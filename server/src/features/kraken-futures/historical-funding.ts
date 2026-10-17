@@ -109,6 +109,39 @@ export function parseHistoricalFundingResponse(
   }
 }
 
+/**
+ * Literal text of the response's period objects for the given period starts,
+ * one per line after the response's own `serverTime`, with its own SHA-256.
+ * It is a verifiable excerpt of the raw body (the body itself is not kept); the
+ * full response's hash is `response.sha256`.
+ */
+export function fundingLiteralExtract(
+  response: Pick<HistoricalFundingResponse, 'serverTime' | 'rawResponse'>,
+  startsMs: ReadonlySet<number>,
+): { text: string; sha256: string } {
+  const literals = new Map<number, string>()
+  for (const match of response.rawResponse.matchAll(/\{[^{}]*\}/g)) {
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(match[0])
+    } catch {
+      continue
+    }
+    if (!isRecord(parsed) || typeof parsed.timestamp !== 'string') continue
+    const startMs = Date.parse(parsed.timestamp)
+    if (startsMs.has(startMs) && !literals.has(startMs))
+      literals.set(startMs, match[0])
+  }
+  const lines = [...literals.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([, literal]) => literal)
+  const text = [`serverTime=${response.serverTime}`, ...lines].join('\n')
+  return {
+    text,
+    sha256: createHash('sha256').update(text, 'utf8').digest('hex'),
+  }
+}
+
 export function historicalFundingAt(
   records: readonly HistoricalFundingRecord[],
   decisionAtMs: number,

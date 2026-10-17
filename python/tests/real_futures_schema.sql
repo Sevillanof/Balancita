@@ -133,3 +133,24 @@ CREATE TRIGGER paper_futures_analytics_points_no_update
         BEFORE UPDATE ON paper_futures_analytics_points BEGIN SELECT RAISE(ABORT, 'market evidence is immutable'); END;
 CREATE TRIGGER paper_futures_analytics_points_no_delete
         BEFORE DELETE ON paper_futures_analytics_points BEGIN SELECT RAISE(ABORT, 'market evidence is immutable'); END;
+CREATE TABLE paper_futures_funding_polls(
+        product_id TEXT NOT NULL, started_at INTEGER NOT NULL, purpose TEXT NOT NULL,
+        scheduled_at INTEGER NOT NULL, finished_at INTEGER NOT NULL, outcome TEXT NOT NULL,
+        http_status INTEGER, detail TEXT, response_sha256 TEXT,
+        extract_text TEXT, extract_sha256 TEXT,
+        PRIMARY KEY(product_id, started_at, purpose)
+      ) STRICT;
+CREATE TABLE paper_futures_funding_sightings(
+        product_id TEXT NOT NULL, start_ms INTEGER NOT NULL, received_at INTEGER NOT NULL,
+        funding_rate TEXT NOT NULL, end_ms INTEGER NOT NULL, server_time TEXT NOT NULL,
+        response_sha256 TEXT NOT NULL,
+        PRIMARY KEY(product_id, start_ms, received_at)
+      ) STRICT;
+CREATE TRIGGER paper_futures_funding_polls_no_update
+        BEFORE UPDATE ON paper_futures_funding_polls BEGIN SELECT RAISE(ABORT, 'funding evidence is immutable'); END;
+CREATE TRIGGER paper_futures_funding_polls_no_delete
+        BEFORE DELETE ON paper_futures_funding_polls BEGIN SELECT RAISE(ABORT, 'funding evidence is immutable'); END;
+CREATE TRIGGER paper_futures_funding_sightings_no_update
+        BEFORE UPDATE ON paper_futures_funding_sightings BEGIN SELECT RAISE(ABORT, 'funding evidence is immutable'); END;
+CREATE TRIGGER paper_futures_funding_sightings_no_delete
+        BEFORE DELETE ON paper_futures_funding_sightings BEGIN SELECT RAISE(ABORT, 'funding evidence is immutable'); END;
