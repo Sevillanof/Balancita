@@ -97,10 +97,10 @@ INIT, WARMUP, LIVE, STOPPING, STOPPED_PHASE, HALTED, REFUSED_PHASE = "INIT", "WA
 FINAL_PHASES = (STOPPED_PHASE, HALTED, REFUSED_PHASE)
 EXIT_OK, EXIT_REFUSED, EXIT_HALTED, EXIT_RESOURCE_STOP = 0, 2, 3, 4
 
-DEFAULTS = {"source_id": SYNTHETIC_SOURCE, "decide_until_ms": None, "max_quote_gap_ms": 15_000, "block_stale_entries": True,
+DEFAULTS = {"decide_until_ms": None, "max_quote_gap_ms": 15_000, "block_stale_entries": True,
             "on_funding_divergence": "halt", "ingest_kw": {}, "evaluator_kw": {},
             "strategies": "frozen", "capital_policy": CAPITAL_POLICY, "notional_per_trade_usd": DEFAULT_NOTIONAL_USD, "step_interval_ms": 1_000, "min_free_bytes": 1 << 30, "warmup_minutes": None}
-REQUIRED = ("schema", "products", "decide_from_ms", "funding_mode")      # funding_mode has no default: the accounting source is always chosen, never implied (#184)
+REQUIRED = ("schema", "products", "decide_from_ms", "funding_mode", "source_id")      # no default for either: the market source and the accounting source are always chosen, never implied (#184)
 OPTIONAL = ("resource_limits", "clock_guard", "authorization_ref", "publish_blocks")                  # absent from DEFAULTS on purpose: a configuration without it keeps its digest
 RESOURCE_KEYS = ("disk_warn_bytes", "disk_stop_bytes", "memory_warn_bytes", "memory_stop_bytes")
 DEFAULT_CHECK_EVERY_STEPS = 30
