@@ -189,6 +189,7 @@ class Portfolio:
         self.adjustments = []         # append-only, hash-chained: late funding reconciliations
         self.funding_log = []         # append-only, hash-chained: funding periods accepted, duplicated, conflicting, rejected
         self.funding_conflicts = {}   # product -> quarantined periods that contradict accepted ones (never applied)
+        self.funding_revised = {}     # product -> [(start_ms, end_ms)] periods whose rate in use was replaced by a later publication
         self.review_flags = {}        # trade_id -> reasons a person should look at the trade
         self.funding_disputes = {}    # trade_id -> quarantined funding periods that overlap the trade (never auto-resolved)
         self.reclassifications = []   # append-only, hash-chained: results moved out of the usable capital when a dispute became known

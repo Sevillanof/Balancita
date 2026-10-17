@@ -239,8 +239,12 @@ def audit(portfolio):
         for record in records:
             if record["before"] != state:
                 violate("adjustment_chain_state", trade_id=tid, seq=record["seq"])
-            if record["after"]["funding_covered_ms"] <= record["before"]["funding_covered_ms"]:
+            revised = record["kind"] == "funding_revision"          # a revised rate changes the amount, not the coverage
+            if record["after"]["funding_covered_ms"] < record["before"]["funding_covered_ms"] or \
+                    (not revised and record["after"]["funding_covered_ms"] == record["before"]["funding_covered_ms"]):
                 violate("adjustment_without_new_coverage", trade_id=tid, seq=record["seq"])
+            if revised and not record.get("revised_periods"):
+                violate("revision_without_revised_periods", trade_id=tid, seq=record["seq"])
             became_definitive = record["after"]["net_complete"] and not record["before"]["net_complete"]
             if became_definitive != (record["transition"] == "provisional_to_definitive"):
                 violate("transition_not_explicit", trade_id=tid, seq=record["seq"], transition=record["transition"])
@@ -258,7 +262,13 @@ def audit(portfolio):
         funding = D(str(trade["funding_usd"])) if trade["funding_usd"] is not None else D(0)
         if recount["covered"] == int(trade["funding_covered_ms"]):
             if abs(recount["funding"] - funding) > D("0.000002"):
-                violate("funding_recount", trade_id=trade["trade_id"], recounted=recount["funding"], stored=funding)
+                if any(min(int(trade["exit_time_ms"]), b) > max(int(trade["entry_time_ms"]), a)
+                       for a, b in p.funding_revised.get(trade["product_id"], ())):
+                    # a revised rate not reconciled yet: the same pending obligation as late coverage, not an error
+                    warnings.append({"rule": "revision_reconciliation_pending", "trade_id": trade["trade_id"],
+                                     "stored_funding_usd": str(funding), "recounted_funding_usd": str(recount["funding"])})
+                else:
+                    violate("funding_recount", trade_id=trade["trade_id"], recounted=recount["funding"], stored=funding)
         elif recount["covered"] > int(trade["funding_covered_ms"]):
             warnings.append({"rule": "reconciliation_pending", "trade_id": trade["trade_id"],
                              "covered_ms": int(trade["funding_covered_ms"]), "available_ms": int(recount["covered"])})

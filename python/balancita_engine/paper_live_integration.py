@@ -545,7 +545,9 @@ class LiveSession(object):
         reasons = [name for name, present in (("trade_funding_incomplete", incomplete), ("trade_funding_disputed", disputed),
                                               ("book_and_portfolio_diverge", any(diverged.values())),
                                               ("divergence_evidence_recorded", evidence)) if present]
-        return {"mode": OBSERVED_FUNDING, "counts": dict(self.book.counts),
+        revised = sorted(([p, s] for (p, s) in {(r["product_id"], r["start_ms"]) for r in self.audit.records()
+                                                 if r["kind"] == "funding_evidence" and r.get("evidence_kind") == "revision_applied"}))
+        return {"mode": OBSERVED_FUNDING, "counts": dict(self.book.counts), "revised_periods": revised,
                 "quarantined": [[p, s, v] for (p, s), v in sorted(self.book.quarantined.items())],
                 "disputed_trades": disputed, "incomplete_trades": incomplete, "divergence": diverged,
                 "divergence_evidence": evidence, "unverified_reasons": reasons, "pnl_verified": not reasons}

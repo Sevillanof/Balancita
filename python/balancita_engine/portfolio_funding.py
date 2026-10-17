@@ -24,6 +24,16 @@ and after, the capital, risk budget and drawdown around it, and the hash of the 
 original closing in ``trade_details[...]["as_closed"]``; decisions already taken (positions opened, intents rejected)
 are not revised, only listed.
 
+``revise_funding(portfolio, product, revisions, received_ms=...)`` is the other way a rate can change (BAL-DECISION-184-03): the
+source published another rate for a period that is already in use. The rate seen last is the one used from then on, and nothing
+is overwritten without a trace: the funding log gets a ``period_revised`` entry that names the rate it replaces and the log
+entry (sequence and hash) that had accepted it, and every closed trade that overlapped the period is *recomputed from the
+periods* by ``reconcile_funding`` and receives an append-only ``funding_revision`` adjustment with its state before and after,
+the change in capital and the periods used. Repeating a revision, or reconciling twice, changes nothing: the rate in use is
+already the new one, and the recount of a trade equals what it stores. A revision that does not start from the rate in use
+(``revision_base_mismatch``) or refers to a period never accepted is not applied: the portfolio and its source then disagree,
+which the session reports and stops on.
+
 Provisional rule kept: a gain of an incomplete trade never raises the definitive capital; a loss always lowers it.
 Time is an argument everywhere; no wall clock, no network, no randomness.
 """
@@ -121,6 +131,70 @@ def ingest_funding(portfolio, product_id, periods, *, received_ms, source="feed"
     return counts
 
 
+def _find_logged(portfolio, product_id, start):
+    """The latest log entry that put a rate in use for the period starting at ``start``, or ``None``."""
+    for entry in reversed(portfolio.funding_log):
+        if entry["kind"] in ("period_accepted", "period_revised") and entry.get("product_id") == product_id \
+                and entry["period"][0] == start:
+            return entry
+    return None
+
+
+def revise_funding(portfolio, product_id, revisions, *, received_ms, source="feed"):
+    """Another rate for periods already in use: ``revisions`` is ``(start_ms, end_ms, previous_rate, new_rate)``.
+
+    The new rate replaces the one in use (also in the positions still open: they have not paid it yet) and the replaced rate
+    stays in the funding log, linked to the entry that had accepted it. Returns the count per outcome. The trades that were
+    already closed are not touched here: ``reconcile_funding`` recomputes them from the periods and records the adjustment."""
+    known = portfolio.funding.setdefault(product_id, [])
+    counts = {"revised": 0, "duplicate": 0, "rejected": 0}
+    for raw in sorted(revisions, key=lambda r: tuple(str(x) for x in r)):
+        try:
+            start, end, old = _parse_period(raw[:3])
+            new = D(str(raw[3]))
+            if not new.is_finite():
+                raise ValueError("invalid_period")
+        except (ValueError, IndexError, TypeError, InvalidOperation):
+            counts["rejected"] += 1
+            _log(portfolio, "revision_rejected", received_ms, product_id=product_id, reason="invalid_revision",
+                 period=stable_hash(list(map(str, raw)))[:16], source=source)
+            continue
+        label = [start, end, str(new)]
+        if end > received_ms:
+            counts["rejected"] += 1
+            _log(portfolio, "revision_rejected", received_ms, product_id=product_id, reason="not_settled",
+                 period=label, source=source)
+            continue
+        current = [p for p in known if (p[0], p[1]) == (start, end)]
+        if not current:
+            counts["rejected"] += 1
+            _log(portfolio, "revision_rejected", received_ms, product_id=product_id, reason="revision_of_unknown_period",
+                 period=label, source=source)
+            continue
+        in_use = current[0]
+        if in_use[2] == new:
+            counts["duplicate"] += 1
+            _log(portfolio, "period_duplicate", received_ms, product_id=product_id, period=label, source=source)
+            continue
+        if in_use[2] != old:
+            counts["rejected"] += 1
+            _log(portfolio, "revision_rejected", received_ms, product_id=product_id, reason="revision_base_mismatch",
+                 period=label, previous=[start, end, str(old)], in_use=[start, end, str(in_use[2])], source=source)
+            continue
+        prior = _find_logged(portfolio, product_id, start)
+        known.remove(in_use)
+        known.append((start, end, new))
+        known.sort()
+        for book in portfolio.positions.values():
+            if book.product == product_id:
+                book.funding = sorted([p for p in book.funding if (p[0], p[1]) != (start, end)] + [(start, end, new)])
+        portfolio.funding_revised.setdefault(product_id, []).append((start, end))
+        counts["revised"] += 1
+        _log(portfolio, "period_revised", received_ms, product_id=product_id, period=label, previous=[start, end, str(old)],
+             supersedes={"seq": prior["seq"], "hash": prior["hash"]} if prior else None, source=source)
+    return counts
+
+
 def _recount(trade, periods):
     """Funding, completeness and pnl of a closed trade from the accepted periods (nothing taken from its stored pnl)."""
     start, end = int(trade["entry_time_ms"]), int(trade["exit_time_ms"])
@@ -136,6 +210,46 @@ def _recount(trade, periods):
     used = sorted((a, b, str(r)) for a, b, r in periods if min(end, b) > max(start, a))
     return {"funding": funding, "covered": covered, "complete": complete, "status": status, "pnl": gross - fees - funding,
             "periods_sha256": hashlib.sha256(json.dumps(used).encode()).hexdigest(), "held": end - start}
+
+
+def _adjust(portfolio, trade, new, now_ms, *, kind, transition, extra=None):
+    """Applies a recount to a closed trade and appends the adjustment (state before and after, capital, risk budget and
+    drawdown around it, hash of the periods used). Shared by the two reasons a trade is recomputed: funding that covers more
+    of its holding time, and a rate that was revised."""
+    product = trade["product_id"]
+    before = {k: trade[k] for k in portfolio.CLOSED_FIELDS}
+    risk_before, dd_before = portfolio.risk_budget_usd(), portfolio.drawdown_usd()
+    contribution_before = portfolio.contribution(trade)
+    pnl = new["pnl"]
+    measured = is_measured(product)
+    net_complete = new["complete"] and measured
+    trade.update(pnl_usd=float(round(pnl, 4)), net_bp=float(round(pnl / D(trade["notional_usd"]) * 10_000, 4)),
+                 hit=trade_hit(pnl), funding_usd=float(round(new["funding"], 6)), funding_complete=new["complete"],
+                 funding_status=new["status"], funding_covered_ms=int(new["covered"]), net_complete=net_complete,
+                 net_usd=float(round(pnl, 4)) if net_complete else None, partial_usd=float(round(pnl, 4)))
+    delta = portfolio.contribution(trade) - contribution_before
+    after = {k: trade[k] for k in portfolio.CLOSED_FIELDS}
+    entry = portfolio.append_capital_event("funding_reconciled", now_ms, trade["trade_id"], delta)
+    later = [d["decision_id"] for d in portfolio.decisions
+             if d["status"] == "opened" and d["decided_ms"] >= trade["exit_time_ms"] and d["decided_ms"] <= now_ms]
+    record = {
+        "seq": len(portfolio.adjustments) + 1, "trade_id": trade["trade_id"], "product_id": product,
+        "at_ms": int(now_ms), "kind": kind,
+        "transition": transition or ("provisional_to_definitive" if net_complete else
+                                      "provisional_more_covered" if not before["funding_complete"] else "funding_complete_product_unmeasured"),
+        "coverage": {"covered_ms": int(new["covered"]), "held_ms": int(new["held"]), "status": new["status"],
+                     "previous_covered_ms": int(before["funding_covered_ms"])},
+        "before": before, "after": after, "delta_pnl_usd": str(D(str(after["pnl_usd"])) - D(str(before["pnl_usd"]))),
+        "delta_capital_usd": str(delta), "capital_before_usd": entry["capital_before_usd"],
+        "capital_after_usd": entry["capital_after_usd"], "risk_budget_before_usd": str(risk_before),
+        "risk_budget_after_usd": str(portfolio.risk_budget_usd()), "drawdown_before_usd": str(dd_before),
+        "drawdown_after_usd": str(portfolio.drawdown_usd()), "periods_sha256": new["periods_sha256"],
+        "decisions_not_revised": later,
+        "prev": portfolio.adjustments[-1]["hash"] if portfolio.adjustments else ZERO_HASH}
+    record.update(extra or {})
+    record["hash"] = stable_hash(record)
+    portfolio.adjustments.append(record)
+    return record
 
 
 def reconcile_funding(portfolio, now_ms):
@@ -160,35 +274,27 @@ def reconcile_funding(portfolio, now_ms):
             if "closed_pnl_inconsistent" not in flags:
                 flags.append("closed_pnl_inconsistent")
             continue                       # the stored closing does not rebuild: do not build a correction on it
-        risk_before, dd_before = portfolio.risk_budget_usd(), portfolio.drawdown_usd()
-        contribution_before = portfolio.contribution(trade)
-        pnl = new["pnl"]
-        measured = is_measured(product)
-        net_complete = new["complete"] and measured
-        trade.update(pnl_usd=float(round(pnl, 4)), net_bp=float(round(pnl / D(trade["notional_usd"]) * 10_000, 4)),
-                     hit=trade_hit(pnl), funding_usd=float(round(new["funding"], 6)), funding_complete=new["complete"],
-                     funding_status=new["status"], funding_covered_ms=int(new["covered"]), net_complete=net_complete,
-                     net_usd=float(round(pnl, 4)) if net_complete else None, partial_usd=float(round(pnl, 4)))
-        delta = portfolio.contribution(trade) - contribution_before
-        after = {k: trade[k] for k in portfolio.CLOSED_FIELDS}
-        entry = portfolio.append_capital_event("funding_reconciled", now_ms, trade["trade_id"], delta)
-        later = [d["decision_id"] for d in portfolio.decisions
-                 if d["status"] == "opened" and d["decided_ms"] >= trade["exit_time_ms"] and d["decided_ms"] <= now_ms]
-        record = {
-            "seq": len(portfolio.adjustments) + 1, "trade_id": trade["trade_id"], "product_id": product,
-            "at_ms": int(now_ms), "kind": "funding_reconciliation",
-            "transition": ("provisional_to_definitive" if net_complete else
-                           "provisional_more_covered" if not trade["funding_complete"] else "funding_complete_product_unmeasured"),
-            "coverage": {"covered_ms": int(new["covered"]), "held_ms": int(new["held"]), "status": new["status"],
-                         "previous_covered_ms": int(before["funding_covered_ms"])},
-            "before": before, "after": after, "delta_pnl_usd": str(D(str(after["pnl_usd"])) - D(str(before["pnl_usd"]))),
-            "delta_capital_usd": str(delta), "capital_before_usd": entry["capital_before_usd"],
-            "capital_after_usd": entry["capital_after_usd"], "risk_budget_before_usd": str(risk_before),
-            "risk_budget_after_usd": str(portfolio.risk_budget_usd()), "drawdown_before_usd": str(dd_before),
-            "drawdown_after_usd": str(portfolio.drawdown_usd()), "periods_sha256": new["periods_sha256"],
-            "decisions_not_revised": later,
-            "prev": portfolio.adjustments[-1]["hash"] if portfolio.adjustments else ZERO_HASH}
-        record["hash"] = stable_hash(record)
-        portfolio.adjustments.append(record)
-        made.append(record)
+        made.append(_adjust(portfolio, trade, new, now_ms, kind="funding_reconciliation", transition=None))
+    # A rate that was revised changes the funding of the trades that overlapped it even when their coverage did not grow.
+    # The recount is from the periods in use, so a trade that already carries that funding is left alone (idempotent).
+    for trade in portfolio.trades:
+        product = trade["product_id"]
+        revised = [list(p) for p in portfolio.funding_revised.get(product, ())
+                   if min(int(trade["exit_time_ms"]), p[1]) > max(int(trade["entry_time_ms"]), p[0])]
+        if not revised or int(trade["exit_time_ms"]) > now_ms:
+            continue
+        new = _recount(trade, portfolio.funding.get(product, ()))
+        if new["covered"] < int(trade["funding_covered_ms"]):
+            continue                       # never regress the coverage: the periods in use cannot cover less than they did
+        if trade["funding_usd"] is not None and float(round(new["funding"], 6)) == trade["funding_usd"] \
+                and new["covered"] == int(trade["funding_covered_ms"]):
+            continue                       # already carries the funding of the periods in use
+        stored_gross_fees = D(str(trade["pnl_usd"])) + D(str(trade["funding_usd"] or 0))
+        if abs(stored_gross_fees - (new["pnl"] + new["funding"])) > D("0.0006"):
+            flags = portfolio.review_flags.setdefault(trade["trade_id"], [])
+            if "closed_pnl_inconsistent" not in flags:
+                flags.append("closed_pnl_inconsistent")
+            continue
+        made.append(_adjust(portfolio, trade, new, now_ms, kind="funding_revision", transition="funding_rate_revised",
+                            extra={"revised_periods": sorted(revised)}))
     return made

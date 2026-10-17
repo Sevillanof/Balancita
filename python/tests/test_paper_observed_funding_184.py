@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from decimal import Decimal as D
 
 from balancita_engine import paper_live_integration as LI
+from balancita_engine import portfolio_audit as AU
 from balancita_engine import replay_driver as RP
 from balancita_engine import replay_specs as RS
 from balancita_engine import signal_continuity as SC
@@ -269,24 +270,56 @@ class TestObservedFundingScenarios(unittest.TestCase):
         self.assertNotEqual(money(session)["funding_usd"], base["money"]["funding_usd"])
         self.assertEqual(session.digests()["signals"], base["signals"])           # the signals do not know about the accounting channel
 
-    def test_a_contradictory_revision_is_quarantined_flagged_and_never_replaces_the_first_one(self):
-        base = self.baseline()
-
+    def revised_session(self, revised_at):
+        """The baseline plan, but Kraken publishes 0.0009 instead of the rate in use for HOUR_HELD at ``revised_at`` and keeps listing it so."""
         def tweak():
-            return hourly_plan(FIRST_HOUR, LAST_HOUR) + [plan_response([HOUR_HELD], HOUR_HELD + HOUR + LAG + 5 * 60_000, rates={HOUR_HELD: "0.0009"})]
+            plan = hourly_plan(FIRST_HOUR, LAST_HOUR)
+            for item in plan:                                  # once corrected, the later listings carry the corrected rate
+                if item["received_ms"] >= revised_at and HOUR_HELD in item["hours"]:
+                    item["rates"][HOUR_HELD] = "0.0009"
+            return plan + [plan_response([HOUR_HELD], revised_at, rates={HOUR_HELD: "0.0009"})]
 
         world, _, session = self.start(tweak)
         self.go(world, session, self.cache["index"])
-        report = session.funding_report()
-        self.assertEqual([(p, s) for p, s, _ in report["quarantined"]], [(BTC, HOUR_HELD)])
-        self.assertEqual(money(session)["funding_usd"], base["money"]["funding_usd"])          # the first rate seen stays in use
-        self.assertEqual(report["disputed_trades"], [session.runner.portfolio.trades[0]["trade_id"]])
-        self.assertFalse(report["pnl_verified"])
-        self.assertIn("funding_conflict", [a["code"] for a in LI_alerts(session)])
+        return session
+
+    def assert_revised(self, session, base, expect_adjustment):
+        """The rate seen last is used, the funding of the trade moves by exactly the difference, nothing is quarantined, the session does
+        not stop, the signals do not notice and the replaced rate stays in the evidence (BAL-DECISION-184-03)."""
+        from balancita_engine.futures_simulator import accrue_funding
+        report, portfolio = session.funding_report(), session.runner.portfolio
+        self.assertEqual(report["quarantined"], [])
+        self.assertEqual(report["disputed_trades"], [])
+        self.assertEqual(report["revised_periods"], [[BTC, HOUR_HELD]])
+        self.assertEqual(report["divergence"], {"missing": [], "extra": [], "rate_differs": []})        # book and portfolio agree
+        self.assertEqual(report["counts"]["revision_applied"], 1)                                      # once, not once per delivery
+        revisions = [a for a in portfolio.adjustments if a["kind"] == "funding_revision"]
+        self.assertEqual(len(revisions), 1 if expect_adjustment else 0)
+        [trade] = portfolio.trades
+        notional = D(trade["entry_price"]) * D(trade["quantity"])
+        old, _ = accrue_funding([(HOUR_HELD, HOUR_HELD + HOUR, D(RATE))], trade["entry_time_ms"], trade["exit_time_ms"], notional)
+        new, _ = accrue_funding([(HOUR_HELD, HOUR_HELD + HOUR, D("0.0009"))], trade["entry_time_ms"], trade["exit_time_ms"], notional)
+        sign = 1 if trade["side"] == "LONG" else -1
+        self.assertAlmostEqual(float(D(money(session)["funding_usd"]) - D(base["money"]["funding_usd"])), float(sign * (new - old)), places=5)
+        if expect_adjustment:
+            self.assertAlmostEqual(float(D(revisions[0]["after"]["funding_usd"]) - D(revisions[0]["before"]["funding_usd"])),
+                                   float(sign * (new - old)), places=5)
+            self.assertEqual(revisions[0]["revised_periods"], [[HOUR_HELD, HOUR_HELD + HOUR]])
         evidence = [r for r in session.audit.records() if r["kind"] == "funding_evidence" and r["start_ms"] == HOUR_HELD]
-        self.assertEqual([e["evidence_kind"] for e in evidence], ["revision_conflict"])
-        self.assertEqual(evidence[0]["rates"], ["0.0001", "0.0009"])               # both rates are kept as evidence
+        self.assertEqual([e["evidence_kind"] for e in evidence], ["revision_applied"])
+        self.assertEqual((evidence[0]["previous_rate"], evidence[0]["rate"]), (RATE, "0.0009"))        # the replaced rate is kept
         self.assertEqual(session.digests()["signals"], base["signals"])
+        self.assertTrue(report["pnl_verified"])
+        self.assertNotIn("funding_conflict", [a["code"] for a in LI_alerts(session)])
+        self.assertEqual([v for v in AU.audit(portfolio)["violations"]], [])
+
+    def test_a_rate_revised_while_the_trade_is_open_prices_its_close_and_needs_no_adjustment(self):
+        base = self.baseline()
+        self.assert_revised(self.revised_session(HOUR_HELD + HOUR + LAG + 5 * 60_000), base, expect_adjustment=False)
+
+    def test_a_rate_revised_after_the_trade_closed_is_an_adjustment_and_the_session_goes_on(self):
+        base = self.baseline()
+        self.assert_revised(self.revised_session(HOUR_HELD + 2 * HOUR + LAG + 5 * 60_000), base, expect_adjustment=True)
 
     def test_a_provisional_hour_is_evidence_only_and_the_later_definitive_one_is_applied(self):
         base = self.baseline()
