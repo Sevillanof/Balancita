@@ -716,28 +716,31 @@ export function createLiveCapture(options: LiveCaptureOptions) {
       scheduledAt: number,
     ): Promise<HistoricalFundingResponse | undefined> => {
       const startedAt = clock()
+      const label =
+        productId === FUTURES_PRODUCT ? 'funding' : `funding ${productId}`
       let response: HistoricalFundingResponse | undefined
       let failure: unknown
+      let storeFailure: unknown
       try {
         response = await fundingClient!.fetch(undefined, productId)
-        const { newPeriods } = store.appendNewFundingKnowledge(
-          response,
-          productId,
-        )
-        if (newPeriods > 0)
-          log(
-            productId === FUTURES_PRODUCT
-              ? `funding +${newPeriods} period(s)`
-              : `funding ${productId} +${newPeriods} period(s)`,
-          )
       } catch (error) {
         failure = error
         if (!(error instanceof Error && error.name === 'AbortError'))
-          log(
-            productId === FUTURES_PRODUCT
-              ? `funding unavailable: ${describe(error)}`
-              : `funding ${productId} unavailable: ${describe(error)}`,
+          log(`${label} unavailable: ${describe(error)}`)
+      }
+      if (response !== undefined) {
+        // A store error is not a Kraken or network failure: the valid response
+        // is still recorded as an ok attempt, with the store error noted apart.
+        try {
+          const { newPeriods } = store.appendNewFundingKnowledge(
+            response,
+            productId,
           )
+          if (newPeriods > 0) log(`${label} +${newPeriods} period(s)`)
+        } catch (error) {
+          storeFailure = error
+          log(`${label} not stored: ${describe(error)}`)
+        }
       }
       try {
         const failed =
@@ -753,13 +756,18 @@ export function createLiveCapture(options: LiveCaptureOptions) {
           startedAt,
           finishedAt: clock(),
           ...failed,
-          detail: failure === undefined ? undefined : describe(failure),
-          response: failure === undefined ? response : undefined,
+          detail:
+            failure !== undefined
+              ? describe(failure)
+              : storeFailure !== undefined
+                ? `store: ${describe(storeFailure)}`
+                : undefined,
+          response,
         })
       } catch (error) {
         log(`funding attempt not recorded: ${describe(error)}`)
       }
-      return failure === undefined ? response : undefined
+      return response
     }
     const pollFunding = async (
       purpose: FundingPollPurpose,

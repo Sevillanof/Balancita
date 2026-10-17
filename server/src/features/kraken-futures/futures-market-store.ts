@@ -352,7 +352,7 @@ export class FuturesMarketStore {
         product_id TEXT NOT NULL, started_at INTEGER NOT NULL, purpose TEXT NOT NULL,
         scheduled_at INTEGER NOT NULL, finished_at INTEGER NOT NULL, outcome TEXT NOT NULL,
         http_status INTEGER, detail TEXT, response_sha256 TEXT,
-        extract_text TEXT, extract_sha256 TEXT,
+        extract_text TEXT, extract_sha256 TEXT, extract_periods INTEGER,
         PRIMARY KEY(product_id, started_at, purpose)
       ) STRICT;
       CREATE TABLE IF NOT EXISTS paper_futures_funding_sightings(
@@ -793,11 +793,22 @@ export class FuturesMarketStore {
             response,
             new Set(closed.map((record) => record.startMs)),
           )
+    // A sighted period missing from the extract is noted, never silent.
+    const detail =
+      [
+        poll.detail,
+        extract !== undefined && extract.periods !== closed.length
+          ? `extract_mismatch: ${extract.periods} of ${closed.length} periods`
+          : undefined,
+      ]
+        .filter((part) => part !== undefined)
+        .join('; ')
+        .slice(0, 200) || null
     this.db.exec('BEGIN IMMEDIATE')
     try {
       this.db
         .prepare(
-          'INSERT OR IGNORE INTO paper_futures_funding_polls VALUES(?,?,?,?,?,?,?,?,?,?,?)',
+          'INSERT OR IGNORE INTO paper_futures_funding_polls VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
         )
         .run(
           poll.productId,
@@ -807,10 +818,11 @@ export class FuturesMarketStore {
           time(poll.finishedAt, 'finishedAt'),
           poll.outcome,
           poll.httpStatus ?? null,
-          poll.detail?.slice(0, 200) ?? null,
+          detail,
           response?.sha256 ?? null,
           extract?.text ?? null,
           extract?.sha256 ?? null,
+          extract?.periods ?? null,
         )
       const insert = this.db.prepare(
         'INSERT OR IGNORE INTO paper_futures_funding_sightings VALUES(?,?,?,?,?,?,?)',

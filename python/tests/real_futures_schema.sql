@@ -137,7 +137,7 @@ CREATE TABLE paper_futures_funding_polls(
         product_id TEXT NOT NULL, started_at INTEGER NOT NULL, purpose TEXT NOT NULL,
         scheduled_at INTEGER NOT NULL, finished_at INTEGER NOT NULL, outcome TEXT NOT NULL,
         http_status INTEGER, detail TEXT, response_sha256 TEXT,
-        extract_text TEXT, extract_sha256 TEXT,
+        extract_text TEXT, extract_sha256 TEXT, extract_periods INTEGER,
         PRIMARY KEY(product_id, started_at, purpose)
       ) STRICT;
 CREATE TABLE paper_futures_funding_sightings(

@@ -118,7 +118,7 @@ export function parseHistoricalFundingResponse(
 export function fundingLiteralExtract(
   response: Pick<HistoricalFundingResponse, 'serverTime' | 'rawResponse'>,
   startsMs: ReadonlySet<number>,
-): { text: string; sha256: string } {
+): { text: string; sha256: string; periods: number } {
   const literals = new Map<number, string>()
   for (const match of response.rawResponse.matchAll(/\{[^{}]*\}/g)) {
     let parsed: unknown
@@ -139,6 +139,7 @@ export function fundingLiteralExtract(
   return {
     text,
     sha256: createHash('sha256').update(text, 'utf8').digest('hex'),
+    periods: lines.length,
   }
 }
 

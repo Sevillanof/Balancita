@@ -258,6 +258,75 @@ describe('funding sightings and attempts (#184)', () => {
     db.close()
   })
 
+  it('keeps only the windowed periods in the extract of a long response', () => {
+    const { store, path } = open()
+    const at = T0 + 40 * HOUR + 30_000
+    // 40 closed periods plus the open one: only the last two ended within 2 h.
+    const rates: Array<[number, string]> = Array.from(
+      { length: 41 },
+      (_, k) => [k, '0.1'],
+    )
+    const result = poll(store, at, rates)
+    expect(result.sightings).toBe(2)
+    store.close()
+    const db = new DatabaseSync(path, { readOnly: true })
+    const row = db
+      .prepare(
+        'SELECT extract_text, extract_periods FROM paper_futures_funding_polls',
+      )
+      .get() as { extract_text: string; extract_periods: number }
+    expect(row.extract_periods).toBe(2)
+    expect(row.extract_text.split('\n')).toHaveLength(3)
+    expect(row.extract_text.length).toBeLessThan(400)
+    db.close()
+  })
+
+  it('notes a sighted period missing from the extract instead of staying silent', () => {
+    const { store, path } = open()
+    const at = T0 + 2 * HOUR + 30_000
+    const base = {
+      timestamp: new Date(T0 + HOUR).toISOString(),
+      fundingRate: 0.2,
+      relativeFundingRate: 0.00001,
+    }
+    store.recordFundingPoll({
+      productId: 'PF_XBTUSD',
+      purpose: 'hourly',
+      scheduledAt: at,
+      startedAt: at,
+      finishedAt: at,
+      outcome: 'ok',
+      // A brace inside a value defeats the literal-object scan.
+      response: parseHistoricalFundingResponse(
+        JSON.stringify({
+          result: 'success',
+          serverTime: new Date(at).toISOString(),
+          rates: [{ ...base, note: '}' }],
+        }),
+        at,
+      ),
+    })
+    store.close()
+    const db = new DatabaseSync(path, { readOnly: true })
+    const row = db
+      .prepare(
+        'SELECT detail, extract_periods FROM paper_futures_funding_polls',
+      )
+      .get() as { detail: string; extract_periods: number }
+    expect(row.extract_periods).toBe(0)
+    expect(row.detail).toBe('extract_mismatch: 0 of 1 periods')
+    db.close()
+  })
+
+  it('reads sightings up to and including the cutoff', () => {
+    const { store } = open()
+    const at = T0 + 2 * HOUR + 30_000
+    poll(store, at, [[1, '0.2']])
+    expect(store.fundingSightings('PF_XBTUSD', at - 1)).toEqual([])
+    expect(store.fundingSightings('PF_XBTUSD', at)).toHaveLength(1)
+    store.close()
+  })
+
   it('extracts only the requested periods, literally', () => {
     const raw =
       '{"result":"success","serverTime":"2026-10-05T12:00:30.000Z","rates":[{"timestamp":"2026-10-05T10:00:00.000Z","fundingRate":0.10,"relativeFundingRate":1e-5},{"timestamp":"2026-10-05T11:00:00.000Z","fundingRate":-0.20,"relativeFundingRate":2e-5}]}'
