@@ -77,8 +77,8 @@ def new_session(world, directory, strategies, ingest_kw=INGEST_KW, max_quote_gap
 
 def recover_session(world, directory, strategies, recovery_ms, ingest_kw=INGEST_KW, products=(BTC,), **kw):
     return LI.LiveSession.recover(directory, world.path, strategies, products, runner_config(), recovery_ms,
-                                  decide_from_ms=FIRST_DECISION, source_id="synthetic", funding_mode="synthetic", decide_until_ms=LAST_DECISION, ingest_kw=ingest_kw,
-                                  **dict({"max_quote_gap_ms": MAX_QUOTE_GAP_MS}, **kw))
+                                  decide_from_ms=FIRST_DECISION, decide_until_ms=LAST_DECISION, ingest_kw=ingest_kw,
+                                  **dict({"max_quote_gap_ms": MAX_QUOTE_GAP_MS, "source_id": "synthetic", "funding_mode": "synthetic"}, **kw))
 
 
 def record(session, now):
@@ -644,12 +644,14 @@ CREATE TABLE synthetic_accrual (product_id TEXT NOT NULL, start_ms INTEGER NOT N
 
     def session(self, **kw):
         return LI.LiveSession.create(os.path.join(self.dir, "s"), self.path, self.strategies, (BTC,), runner_config(),
-                                     decide_from_ms=FIRST_DECISION, source_id="synthetic", funding_mode="synthetic", decide_until_ms=LAST_DECISION, ingest_kw=INGEST_KW, **kw)
+                                     decide_from_ms=FIRST_DECISION, decide_until_ms=LAST_DECISION, ingest_kw=INGEST_KW,
+                                     **dict({"source_id": "synthetic", "funding_mode": "synthetic"}, **kw))
 
     def recover(self, **kw):
         return LI.LiveSession.recover(os.path.join(self.dir, "s"), self.path, self.strategies, (BTC,), runner_config(),
-                                      journal_clock(os.path.join(self.dir, "s")), decide_from_ms=FIRST_DECISION, source_id="synthetic", funding_mode="synthetic",
-                                      decide_until_ms=LAST_DECISION, ingest_kw=INGEST_KW, **kw)
+                                      journal_clock(os.path.join(self.dir, "s")), decide_from_ms=FIRST_DECISION,
+                                      decide_until_ms=LAST_DECISION, ingest_kw=INGEST_KW,
+                                      **dict({"source_id": "synthetic", "funding_mode": "synthetic"}, **kw))
 
     def candles(self, count, bad_at=None, bad_volume="not-a-number"):
         for i in range(count):
