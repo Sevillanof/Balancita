@@ -1,14 +1,11 @@
-"""Synthetic, deterministic scenarios for ``portfolio_offline`` and the report generator.
+"""Synthetic, deterministic scenarios for ``portfolio_offline`` (the report generator and its committed output were deleted).
 
 Everything here is invented data: scripted price paths with hash-derived noise (no ``random``), scripted strategies
 that subclass the existing ``multi_signals.Strategy`` (so signals come out of ``make_signal`` exactly as in production),
 and funding tables that are deliberately complete, partial or absent. Nothing is read from the market, the forward,
 Kronos, Qwen, ``capture`` or any database, and no holdout data is involved.
-
-    python -m balancita_engine.portfolio_scenarios --out analisis/validacion-cartera-offline
 """
 
-import argparse
 import hashlib
 import json
 import os

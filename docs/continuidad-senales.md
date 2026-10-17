@@ -54,14 +54,11 @@ Puntos de fallo (`arm`): `before_persist`, `mid_persist` (escritura a medias), `
 
 ```
 PYTHONPATH=python python3 -m unittest python/tests/test_signal_continuity.py          # ~30 s, incluye procesos independientes
-PYTHONPATH=python python3 -m balancita_engine.signal_continuity_demo --out analisis/continuidad-senales-offline
 # a mano, dos procesos:
 D=$(mktemp -d)
 PYTHONPATH=python python3 -m balancita_engine.signal_continuity produce --dir $D --stop 100 --crash after_persist:40   # muere con 137
 PYTHONPATH=python python3 -m balancita_engine.signal_continuity recover --dir $D      # restaura, detecta, reconstruye, escribe report.json
 ```
-
-`analisis/continuidad-senales-offline/` (`informe.md`, `resultados.json`) es la salida de la demo; una prueba la regenera y exige que coincida.
 
 ## Limitaciones para la integración futura (decisión de Fran, 2026-10-13)
 

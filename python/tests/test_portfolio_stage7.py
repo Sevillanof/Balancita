@@ -28,7 +28,6 @@ from balancita_engine.portfolio_watch import QuoteWatch, WatchPolicy, parse_quot
 
 D = Decimal
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-COMMITTED = os.path.join(ROOT, "analisis", "etapa7-contabilidad-adversa")
 APPROVED_POLICY_HASH = "8c22a0c0143c697c"   # PortfolioPolicy().policy_hash() on main before stage 7: no limit may change
 
 
@@ -1191,15 +1190,6 @@ class Reproducibility(unittest.TestCase):
             env = dict(os.environ, PYTHONHASHSEED=seed, PYTHONPATH=os.path.join(ROOT, "python"))
             outs.append(subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, check=True).stdout)
         self.assertEqual(outs[0], outs[1])
-
-    def test_committed_results_match_a_fresh_run(self):
-        """The report is regenerated, not hand-edited: ``python -m balancita_engine.portfolio_stage7`` and commit."""
-        with tempfile.TemporaryDirectory() as out:
-            S.write_outputs(out)
-            for name in ("resultados.json", "informe.md"):
-                with open(os.path.join(out, name), encoding="utf-8") as fresh, \
-                        open(os.path.join(COMMITTED, name), encoding="utf-8") as kept:
-                    self.assertEqual(fresh.read(), kept.read(), name)
 
     def test_every_scenario_passes_every_independent_check(self):
         results = S.run_all()

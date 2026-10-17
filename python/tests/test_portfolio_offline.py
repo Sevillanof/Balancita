@@ -11,7 +11,7 @@ import unittest
 from decimal import Decimal
 from unittest import mock
 
-from balancita_engine import portfolio_offline, portfolio_report, portfolio_scenarios as S
+from balancita_engine import portfolio_offline, portfolio_scenarios as S
 from balancita_engine.portfolio import Portfolio, PortfolioPolicy
 from balancita_engine import portfolio_two_process as TP
 from balancita_engine.portfolio_offline import (
@@ -20,7 +20,6 @@ from balancita_engine.portfolio_offline import (
 
 D = Decimal
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-COMMITTED = os.path.join(ROOT, "analisis", "validacion-cartera-offline")
 MIN = 60_000
 
 
@@ -179,19 +178,6 @@ class Determinism(unittest.TestCase):
             env = dict(os.environ, PYTHONHASHSEED=seed, PYTHONPATH=os.path.join(ROOT, "python"))
             outs.append(subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, check=True).stdout)
         self.assertEqual(outs[0], outs[1])
-
-    def test_committed_results_match_a_fresh_run(self):
-        """The committed report is regenerated, not hand-edited: if costs or the portfolio change on purpose, run
-        ``python -m balancita_engine.portfolio_report --out analisis/validacion-cartera-offline`` and commit."""
-        with tempfile.TemporaryDirectory() as scratch, tempfile.TemporaryDirectory() as out:
-            portfolio_report.run_all(out, checkpoint_dir=scratch)
-            for name in ("resultados.json", "informe.md"):
-                with open(os.path.join(out, name), encoding="utf-8") as fresh, open(os.path.join(COMMITTED, name), encoding="utf-8") as kept:
-                    self.assertEqual(fresh.read(), kept.read(), name)
-            for name in os.listdir(os.path.join(out, "journals")):
-                with open(os.path.join(out, "journals", name), encoding="utf-8") as fresh, \
-                        open(os.path.join(COMMITTED, "journals", name), encoding="utf-8") as kept:
-                    self.assertEqual(fresh.read(), kept.read(), name)
 
     def test_whole_event_stream_delivered_twice_changes_nothing(self):
         scenario = S.s1_simultaneous()
@@ -444,7 +430,7 @@ class Isolation(unittest.TestCase):
         forbidden = re.compile(r"^\s*(?:import|from)\s+(sqlite3|socket|http|urllib|requests|ssl|subprocess|random|time|datetime|asyncio|"
                                r"threading)\b|kronos|qwen|futures_forward|futures_replay|capture", re.I | re.M)
         base = os.path.join(ROOT, "python", "balancita_engine")
-        for name in ("portfolio_offline.py", "portfolio_scenarios.py", "portfolio_report.py"):
+        for name in ("portfolio_offline.py", "portfolio_scenarios.py"):
             with open(os.path.join(base, name), encoding="utf-8") as handle:
                 source = handle.read()
             imports = "\n".join(line for line in source.splitlines() if re.match(r"\s*(import|from)\s", line))
