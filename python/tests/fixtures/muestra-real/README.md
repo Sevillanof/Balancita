@@ -6,7 +6,7 @@ Lectura real y sin modificar de `futures-market.sqlite` (captura viva, abierta e
 
 - Tickers (`paper_futures_market_events`, feed `ticker`): se achicó la ventana para respetar el tope de 400 KB. XBT: received_at 13:58:00Z a 13:58:30Z (54 eventos; contiene el hueco real de 2,088 s que empieza a las 13:58:11,626Z). ADA: 13:56:30Z a 13:57:30Z (53 eventos; contiene el hueco real de 3,575 s que empieza a las 13:57:10,651Z). Los tickers del WebSocket de XBT pesan unos 5 KB por evento por el bloque `marketQuality`.
 - Velas oficiales 1m (`paper_futures_official_candles` y `paper_futures_official_candle_responses`): buckets de 13:40Z a 14:09Z de ambos productos, todas las revisiones guardadas (hay una por vela: ninguna cambió) y las respuestas crudas que las originaron (referenciadas por `response_sha256`; `sha256` de la respuesta es la clave).
-- Funding: última respuesta cruda guardada de cada producto (la de la consulta `hourly` de 2026-10-17T17:00:30Z aprox., las posteriores no guardaron respuesta nueva), con sus consultas (`paper_futures_funding_polls`), períodos (`paper_futures_funding_periods`) y avistamientos (`paper_futures_funding_sightings`). `paper_futures_funding_responses.jsonl` va SIN la columna `raw_response` porque cada cuerpo pesa ~1 MB (historial completo); en su lugar lleva `raw_response_bytes` y `raw_response_sha256_check` (sha256 del cuerpo). Los cuerpos están aparte en `funding_raw_*.json` (paquete opcional).
+- Funding: última respuesta cruda guardada de cada producto (la de la consulta `hourly` de 2026-10-17T17:00:30Z aprox., las posteriores no guardaron respuesta nueva), con sus consultas (`paper_futures_funding_polls`), períodos (`paper_futures_funding_periods`) y avistamientos (`paper_futures_funding_sightings`). `paper_futures_funding_responses.jsonl` va SIN la columna `raw_response` porque cada cuerpo pesa ~1 MB (historial completo); en su lugar lleva `raw_response_bytes` y `raw_response_sha256_check` (sha256 del cuerpo). Los cuerpos no están en este repositorio.
 
 ## Tablas y archivos (filas; bytes; sha256)
 
@@ -30,5 +30,5 @@ Lectura real y sin modificar de `futures-market.sqlite` (captura viva, abierta e
 
 Las horas `*_at`, `event_time`, `bucket_start`, `start_ms`, `end_ms` son milisegundos Unix UTC. El 17-oct 00:00:00Z = 1792195200000.
 
-Los cuerpos crudos de funding (opcionales, ~1 MB cada uno) están en la subcarpeta `funding-crudo/`.
+Los cuerpos crudos de funding (~1 MB cada uno) no están en este repositorio.
 Origen: copia verificada por sha256 del paquete armado en la Mac de Fran; sin tocar la captura viva.
