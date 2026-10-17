@@ -71,13 +71,13 @@ def journal_clock(directory):
 
 
 def new_session(world, directory, strategies, ingest_kw=INGEST_KW, max_quote_gap_ms=MAX_QUOTE_GAP_MS, products=(BTC,)):
-    return LI.LiveSession.create(directory, world.path, strategies, products, runner_config(), decide_from_ms=FIRST_DECISION,
+    return LI.LiveSession.create(directory, world.path, strategies, products, runner_config(), decide_from_ms=FIRST_DECISION, source_id="synthetic", funding_mode="synthetic",
                                  decide_until_ms=LAST_DECISION, ingest_kw=ingest_kw, max_quote_gap_ms=max_quote_gap_ms)
 
 
 def recover_session(world, directory, strategies, recovery_ms, ingest_kw=INGEST_KW, products=(BTC,), **kw):
     return LI.LiveSession.recover(directory, world.path, strategies, products, runner_config(), recovery_ms,
-                                  decide_from_ms=FIRST_DECISION, decide_until_ms=LAST_DECISION, ingest_kw=ingest_kw,
+                                  decide_from_ms=FIRST_DECISION, source_id="synthetic", funding_mode="synthetic", decide_until_ms=LAST_DECISION, ingest_kw=ingest_kw,
                                   **dict({"max_quote_gap_ms": MAX_QUOTE_GAP_MS}, **kw))
 
 
@@ -544,7 +544,7 @@ class TestSessionIdentityAndCheckpoints(Circuit):
         _root, world, directory = self.fork_prefix()
         with self.assertRaises(LI.IntegrationError) as bad:
             LI.LiveSession.recover(directory, world.path, self.strategies, (BTC,), runner_config(), journal_clock(directory),
-                                   decide_from_ms=FIRST_DECISION, decide_until_ms=LAST_DECISION,
+                                   decide_from_ms=FIRST_DECISION, source_id="synthetic", funding_mode="synthetic", decide_until_ms=LAST_DECISION,
                                    ingest_kw=dict(INGEST_KW, hold_ms=5_000))
         self.assertEqual(bad.exception.reason, "session_mismatch")
 
@@ -644,11 +644,11 @@ CREATE TABLE synthetic_accrual (product_id TEXT NOT NULL, start_ms INTEGER NOT N
 
     def session(self, **kw):
         return LI.LiveSession.create(os.path.join(self.dir, "s"), self.path, self.strategies, (BTC,), runner_config(),
-                                     decide_from_ms=FIRST_DECISION, decide_until_ms=LAST_DECISION, ingest_kw=INGEST_KW, **kw)
+                                     decide_from_ms=FIRST_DECISION, source_id="synthetic", funding_mode="synthetic", decide_until_ms=LAST_DECISION, ingest_kw=INGEST_KW, **kw)
 
     def recover(self, **kw):
         return LI.LiveSession.recover(os.path.join(self.dir, "s"), self.path, self.strategies, (BTC,), runner_config(),
-                                      journal_clock(os.path.join(self.dir, "s")), decide_from_ms=FIRST_DECISION,
+                                      journal_clock(os.path.join(self.dir, "s")), decide_from_ms=FIRST_DECISION, source_id="synthetic", funding_mode="synthetic",
                                       decide_until_ms=LAST_DECISION, ingest_kw=INGEST_KW, **kw)
 
     def candles(self, count, bad_at=None, bad_volume="not-a-number"):
@@ -1602,7 +1602,7 @@ class TestSourceStaleInTheSessionWithTwoProducts(unittest.TestCase):
         src.commit()
         strategies, _ = RS.load_frozen()
         session = LI.LiveSession.create(os.path.join(root, "s"), src.path, strategies, (BTC,), runner_config(),
-                                        decide_from_ms=FIRST_DECISION, decide_until_ms=LAST_DECISION, ingest_kw=INGEST_KW,
+                                        decide_from_ms=FIRST_DECISION, source_id="synthetic", funding_mode="synthetic", decide_until_ms=LAST_DECISION, ingest_kw=INGEST_KW,
                                         max_quote_gap_ms=MAX_QUOTE_GAP_MS)
         session.runner.close()
         session.runner = PaperRunner.create(os.path.join(root, "hand"), RR.cfg(), RR.strategies())
