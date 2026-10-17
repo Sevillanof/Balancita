@@ -24,9 +24,7 @@ PYTHONPATH=.. python3 -m balancita_engine.paper_live_process preflight --config 
 PYTHONPATH=.. python3 -m balancita_engine.paper_live_process run --config C.json --directory D --source S.sqlite --clock-from-ms T --max-steps N
 ```
 
-La línea de comandos rechaza `--wall-clock` y toda fuente que no se identifique como la fixture sintética: la configuración debe decir
-`source_id: synthetic` y el SQLite debe llevar la tabla marcador `balancita_synthetic_fixture`. Una captura real no tiene ninguna de las
-dos y se rechaza con `real_session_not_authorized`, diga lo que diga la configuración. Es una protección contra un error, no contra
+La línea de comandos rechaza `--wall-clock` y toda fuente no autorizada. Hay dos tipos de fuente: la fixture sintética (`source_id: synthetic`, solo para pruebas, con la tabla marcador `balancita_synthetic_fixture`) y la captura de Kraken (`source_id: kraken-capture`, que no debe llevar ese marcador). La captura se autoriza únicamente con una entrada de `AUTHORIZED_SESSIONS` en `paper_live_process.py` (un cambio de código revisado que nombra la BAL-DECISION) que coincida con el `authorization_ref` de la configuración, el archivo de la fuente y la primera decisión. La lista está vacía: ninguna sesión real arranca y se rechaza con `real_session_not_authorized`, diga lo que diga la configuración. La captura no tiene marca propia en sus tablas, por eso se reconoce por su procedencia. Es una protección contra un error, no contra
 quien falsifique el marcador a propósito. Habilitar datos reales exige una autorización escrita de Fran y un cambio de código revisado.
 
 ## Conexión con #186
@@ -74,8 +72,7 @@ Con `clock_guard: {"max_forward_jump_ms": n}` (sin valor por defecto: lo nombra 
 exige `--restart` del operador, sin reinicio automático). Es una insuficiencia de continuidad (regla 10D), no una caída de Kraken: no se
 tocan posiciones, stops ni riesgo y nada se reordena. Con la guarda el latido suma `wall_ms` (hora de pared, solo observabilidad: no entra
 en decisiones ni en el digest; hay prueba con dos horas distintas). Sin la guarda no se lee la hora de pared. `--wall-clock` sigue
-rechazado y el GATE no se toca. `authorization_ref` (`BAL-DECISION-<issue>-<n>`) es solo rastro de auditoría: se valida el formato, no
-abre nada y no entra en el digest. Pruebas: `python/tests/test_paper_live_clock_185.py`. El tope de salto no tiene valor aprobado. La guarda no conserva su instante anterior entre reinicios (D-217-03): el retroceso lo frena la recuperación del runner (`recovery_clock_behind`) y el salto durante una caída lo cubren las reglas de reinicio.
+rechazado y el GATE no se toca. `authorization_ref` (`BAL-DECISION-<issue>-<n>`) se valida en el formato, no entra en el digest y por sí solo no abre nada: debe coincidir con una entrada de `AUTHORIZED_SESSIONS` (código revisado). Pruebas: `python/tests/test_paper_live_clock_185.py`. El tope de salto no tiene valor aprobado. La guarda no conserva su instante anterior entre reinicios (D-217-03): el retroceso lo frena la recuperación del runner (`recovery_clock_behind`) y el salto durante una caída lo cubren las reglas de reinicio.
 
 ## Identidad de la fuente y causalidad (D-185-R4)
 
@@ -88,8 +85,8 @@ abre nada y no entra en el digest. Pruebas: `python/tests/test_paper_live_clock_
   `held_after_clock`. El pre-vuelo exige esta opción a toda fuente que no sea la fixture sintética (`causal_ingest`, D-185-R4-01), aunque esa fuente igual sigue rechazada. Apagado por defecto en la fixture (un replay de un archivo completo depende del comportamiento actual). El desfase entre el reloj
   de la captura y el del proceso (D-188-24) no se corrige aquí: queda como dato a registrar antes de cualquier sesión real.
 - **Límites conocidos (D-219-03/04):** la identidad se toma después del pre-vuelo, y el pre-vuelo lee el archivo, así que un reemplazo entre los dos no se detecta; tampoco se conserva entre reinicios (el reinicio igual exige al operador, que ve el informe). El desfase entre el reloj de la captura y el del proceso (D-188-24) no se corrige: tiene que estar **medido** antes de cualquier sesión real, porque con un desfase positivo el filtro retiene filas legítimas y con uno negativo deja pasar filas aún no llegadas. Una fila retenida bloquea las que tiene detrás (`break`, no `continue`) para que el cursor nunca la salte aunque llegue fuera de orden de rowid.
-- El tipo de fuente real sigue rechazado (`real_session_not_authorized`); nada de esto abre una base real. Pruebas:
-  `python/tests/test_paper_live_source_185.py`.
+- La fuente real solo se abre con una entrada de `AUTHORIZED_SESSIONS` (vacía hoy: `real_session_not_authorized`); nada de esto abre una base real. Pruebas:
+  `python/tests/test_paper_live_source_185.py` y `python/tests/test_paper_live_gate_184.py`.
 
 ## Límites
 

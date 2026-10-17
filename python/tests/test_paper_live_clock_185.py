@@ -154,8 +154,8 @@ class TestRealCaptureStaysRefusedAndUntouched(Base):
         report = LP.preflight(LP.load_config(config), self.directory, real)
         failed = sorted(c["name"] for c in report["checks"] if not c["ok"])
         self.assertFalse(report["ok"])
-        self.assertIn("real_session_gate", failed)
-        self.assertIn("synthetic_marker", failed)
+        self.assertIn("real_session_authorized", failed)
+        self.assertNotIn("source_kind", failed)      # the capture has no marker, and must not have one
         here = os.path.dirname(os.path.abspath(__file__))
         env = dict(os.environ, PYTHONPATH=os.path.dirname(here) + os.pathsep + here)
         done = subprocess.run([sys.executable, "-m", "balancita_engine.paper_live_process", "run", "--config", config, "--directory", self.directory,
