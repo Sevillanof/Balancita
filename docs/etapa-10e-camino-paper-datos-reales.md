@@ -69,3 +69,37 @@ Estrategias, costes, tamaño de operación, riesgo, forward, Kronos, Qwen, colec
 
 - De Captura: cómo se reconoce una captura real (marca de la base) y qué tablas lee la sesión.
 - De Fran: que el reparto en 5a/5b/5c le sirve, y la autorización escrita por sesión cuando llegue 5c.
+
+## 7. Borrar los datos inventados (Fran, 17-oct 17:37Z)
+
+Decisión: ya no se usan datos inventados y la idea es borrarlos. Criterio del coordinador: se borra todo generador, fixture grande,
+modo o valor por defecto con datos inventados, en código y en pruebas. En las pruebas solo queda lo mínimo escrito a mano para
+comprobar una regla puntual (un par de velas o una cotización armados en el mismo test) o muestras reales capturadas. Una prueba
+que solo existe para ejercitar datos inventados se borra.
+
+### 7.1 Tamaño real (contado en el repo, 17-oct)
+
+De 2.230 pruebas de Python, unas 1.000 en 30 archivos se apoyan en datos inventados: el mundo de la sesión (`live_world.py`, 21
+archivos), la fixture 9A (`make_db`, `fixture_db`), los escenarios (`portfolio_scenarios`, `portfolio_stage7`, `portfolio_offline`)
+y las demos (`paper_runner_demo`, `signal_continuity_demo`). Las más pesadas: `test_portfolio_stage7` (120), `test_paper_live_ingest`
+(75), `test_paper_live_integration` (68), `test_paper_runner_financial` (59), `test_paper_runner_recovery` (57),
+`test_replay_9a_audit` (45), `test_paper_live_process_185` (42).
+
+Esas pruebas son hoy la red de seguridad de reglas de dinero (costes, funding, liquidación, recuperación). Borrarlas sin reemplazo
+deja esas reglas sin prueba, así que el borrado va por etapas y cada archivo se decide por separado.
+
+### 7.2 Etapas
+
+1. Código operativo (junto con 5a): fuera el camino `source_id: synthetic`, la marca `balancita_synthetic_fixture`, el modo de
+   funding sintético y sus canales. Lo que dependía de ellos pasa a fuente real o se borra.
+2. Demos y escenarios que no corren en producción: `paper_runner_demo`, `signal_continuity_demo`, `portfolio_two_process`,
+   `portfolio_report`. Por archivo: si la prueba comprueba una regla, se reescribe con datos mínimos escritos a mano dentro del mismo
+   test; si solo ejercita el generador, se borra con el generador.
+3. Mundo de la sesión y fixture 9A (`live_world.py`, `make_db`): se reemplazan por una muestra real chica extraída de la captura
+   guardada (lectura, solo lectura), versionada en el repo, más casos mínimos a mano para las reglas puntuales.
+
+### 7.3 Qué hace falta para la etapa 3
+
+Una muestra real de la captura (unas horas de velas oficiales, cotizaciones y funding de uno o dos productos). La captura vive en
+la Mac, así que la extracción la hace una sesión de la Mac; esta sesión no la tiene. Hasta tenerla, las etapas 1 y 2 se pueden
+hacer, y la 3 queda esperando esa muestra.
