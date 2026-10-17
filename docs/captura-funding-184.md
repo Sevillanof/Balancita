@@ -21,15 +21,15 @@ Una sola corrida mide, para `PF_XBTUSD` y `PF_ETHUSD` en `[2026-10-10T00:00Z, 20
 
 ## Tablas y columnas que el autorizador deja pasar, por sentencia
 
-| Sentencia | Tabla | Columnas |
-|---|---|---|
-| 2a (referencia) | `paper_futures_official_candles` | `product_id`, `interval_ms` (filtro), `bucket_start`, `revision_hash`, `known_at`, `open_price`, `high_price`, `low_price`, `close_price`, `volume_btc` |
-| 2c_bound | `paper_futures_funding_periods` | `rowid`, `known_at` |
-| 2c | `paper_futures_funding_periods` | `rowid`, `product_id`, `start_ms`, `end_ms`, `funding_rate`, `known_at`, `unit`, `response_sha256` |
-| 2d_bound | `paper_futures_funding_responses` | `rowid`, `received_at` |
-| 2d_meta | `paper_futures_funding_responses` | `rowid`, `sha256`, `received_at` |
-| 2d_lookup | `paper_futures_funding_periods` | `response_sha256`, `product_id` |
-| 2d_size / 2d_body | `paper_futures_funding_responses` | `sha256`, `raw_response` (el tamaño con `octet_length` antes de leer el cuerpo) |
+| Sentencia         | Tabla                             | Columnas                                                                                                                                                |
+| ----------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 2a (referencia)   | `paper_futures_official_candles`  | `product_id`, `interval_ms` (filtro), `bucket_start`, `revision_hash`, `known_at`, `open_price`, `high_price`, `low_price`, `close_price`, `volume_btc` |
+| 2c_bound          | `paper_futures_funding_periods`   | `rowid`, `known_at`                                                                                                                                     |
+| 2c                | `paper_futures_funding_periods`   | `rowid`, `product_id`, `start_ms`, `end_ms`, `funding_rate`, `known_at`, `unit`, `response_sha256`                                                      |
+| 2d_bound          | `paper_futures_funding_responses` | `rowid`, `received_at`                                                                                                                                  |
+| 2d_meta           | `paper_futures_funding_responses` | `rowid`, `sha256`, `received_at`                                                                                                                        |
+| 2d_lookup         | `paper_futures_funding_periods`   | `response_sha256`, `product_id`                                                                                                                         |
+| 2d_size / 2d_body | `paper_futures_funding_responses` | `sha256`, `raw_response` (el tamaño con `octet_length` antes de leer el cuerpo)                                                                         |
 
 Las lecturas de borde de la búsqueda binaria (2c_bound y 2d_bound) devuelven solo `rowid` y un instante, pueden caer fuera de la ventana, se cuentan en los topes y no se publican. Las sentencias son las de `capture_minimal_read`; la única diferencia es el valor de `LIMIT` de 2a.
 
