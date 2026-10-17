@@ -41,6 +41,25 @@ describe('terminal API base selection', () => {
     )
   })
 
+  it('rejects a bootstrap in any mode but paper_live', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          schema_version: 1,
+          mode: 'mock',
+          source: null,
+          active_run_id: 'r',
+        }),
+      })),
+    )
+    await expect(loadTerminalBootstrap('/api-live')).rejects.toThrow(
+      'modo de futuros inválido',
+    )
+  })
+
   it('aborts a hung bootstrap after the timeout instead of waiting forever', async () => {
     vi.useFakeTimers()
     try {
@@ -138,6 +157,31 @@ describe('parseTerminalEnvelope', () => {
     const malformed = structuredClone(envelope)
     malformed.data.market.candles[0].close = 'NaN'
     expect(parseTerminalEnvelope(malformed)).toBeNull()
+  })
+
+  it('rejects a snapshot whose market uses the retired mock schema', () => {
+    const envelope = {
+      schema_version: 1,
+      event_id: 'event-mock',
+      stream_id: 'stream-1',
+      run_id: 'run-1',
+      seq: 0,
+      type: 'snapshot',
+      instrument_id: 'kraken-futures:PF_XBTUSD',
+      event_time: 1,
+      published_at: 1,
+      data: {
+        watermark: 0,
+        state: { account: {} },
+        market: {
+          schema_version: 'mock-terminal-market.v1',
+          as_of_ms: 120_000,
+          interval_ms: 60_000,
+          candles: [],
+        },
+      },
+    }
+    expect(parseTerminalEnvelope(envelope)).toBeNull()
   })
 
   it('accepts recorded REPLAY candles without relabeling them as MOCK fixtures', () => {
