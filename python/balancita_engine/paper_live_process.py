@@ -93,10 +93,11 @@ def session_policy(notional_per_trade_usd=DEFAULT_NOTIONAL_USD):
 CAPITAL_POLICY = capital_policy_label(session_policy())        # a label: the sizing is the portfolio policy's, this module has no money rule
 SYNTHETIC_SOURCE = "synthetic"          # test-only seam (removed when the invented data are gone, docs/etapa-10e 7.2)
 REAL_SOURCE = "kraken-capture"          # the capture of Kraken Futures: recognised by where it comes from, not by what the configuration says
-# Sessions on the real capture that were authorized in writing, by ``authorization_ref``: the source file and the first decision.
+SYNTHETIC_CLI = False                   # the command line refuses the synthetic fixture; only a test entry (tests/cli_with_synthetic_source.py) turns it on
+# Sessions on the real capture that were authorized in writing, by ``authorization_ref``: the source file, the session directory and the window.
 # Empty on purpose: no session is authorized. Only a reviewed commit that names the BAL-DECISION adds an entry, so the configuration
 # alone (which anyone can write) never opens a real source. The capture has no mark in its tables, hence the path.
-AUTHORIZED_SESSIONS = {}                # {"BAL-DECISION-<n>-<n>": {"source_path": "/abs/futures-market.sqlite", "decide_from_ms": int}}
+AUTHORIZED_SESSIONS = {}                # {"BAL-DECISION-<n>-<n>": {"source_path": "/abs/futures-market.sqlite", "directory": "/abs/session", "decide_from_ms": int, "decide_until_ms": int}}
 WALL_CLOCK_GATE = False                  # OFF. Only a reviewed change of this constant, with a BAL-DECISION naming it, opens the wall clock
 FRESH_MS = 600_000                               # the newest warm-up candle may be this far from the first decision
 
@@ -254,9 +255,12 @@ def preflight(config, directory, source_path, *, strategies=None):
     else:
         grant = AUTHORIZED_SESSIONS.get(config.get("authorization_ref"))
         authorized = (grant is not None and os.path.realpath(source_path) == os.path.realpath(grant["source_path"])
-                      and grant["decide_from_ms"] == config["decide_from_ms"])
-        why = "no written authorization for this source and this first decision (authorization_ref {!r}; AUTHORIZED_SESSIONS)".format(config.get("authorization_ref"))
+                      and os.path.realpath(directory) == os.path.realpath(grant["directory"])
+                      and grant["decide_from_ms"] == config["decide_from_ms"] and grant["decide_until_ms"] == config["decide_until_ms"])
+        why = "no written authorization for this source, directory and window (authorization_ref {!r}; AUTHORIZED_SESSIONS)".format(config.get("authorization_ref"))
     check("real_session_authorized", authorized, why)
+    if not authorized:
+        return {"ok": False, "checks": checks}      # a source nobody authorized is not even opened
     stored_path = os.path.join(directory, CONFIG_FILE)
     if os.path.exists(os.path.join(directory, LI.SESSION_FILE)):
         stored = _read_json(stored_path)
@@ -720,11 +724,11 @@ def wall_clock_runtime(config, *, now_ms=None, sleeper=None):
 # ---- command line ------------------------------------------------------------------------------------------------
 def main(argv=None, *, tick=lambda now: None):
     """``preflight`` and ``run`` on the simulated clock. Exit status: 0 ok, 2 refused (no file was written), 3 halted, 4 stopped in order by a resource limit."""
-    parser = argparse.ArgumentParser(prog="paper_live_process", description="Offline paper session lifecycle (synthetic source only).")
+    parser = argparse.ArgumentParser(prog="paper_live_process", description="Offline paper session lifecycle (the capture of Kraken, once a session is authorized).")
     parser.add_argument("command", choices=("preflight", "run"))
     parser.add_argument("--config", required=True)
     parser.add_argument("--directory", required=True)
-    parser.add_argument("--source", required=True, help="SQLite file of the synthetic source")
+    parser.add_argument("--source", required=True, help="SQLite file of the capture")
     parser.add_argument("--clock-from-ms", type=int, help="start of the simulated clock")
     parser.add_argument("--clock-step-ms", type=int, default=60_000)
     parser.add_argument("--wall-clock", action="store_true", help="refused while WALL_CLOCK_GATE is False (the real-session GATE is NO-GO)")
@@ -734,6 +738,8 @@ def main(argv=None, *, tick=lambda now: None):
     args = parser.parse_args(argv)
     try:
         config = load_config(args.config)
+        if config["source_id"] == SYNTHETIC_SOURCE and not SYNTHETIC_CLI:
+            raise ProcessError("real_session_not_authorized", "the command line does not take the synthetic fixture: that source exists for tests, which enter through Supervisor")
         if args.command == "preflight":
             report = preflight(config, args.directory, args.source)
             print(json.dumps(report, sort_keys=True, indent=1))

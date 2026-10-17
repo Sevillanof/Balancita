@@ -3,14 +3,17 @@
 The capture has no mark in its tables, so it is recognised by where it comes from: an entry of ``AUTHORIZED_SESSIONS`` (code, reviewed
 commit) must match the configuration's ``authorization_ref``, the source file and the first decision. The list is empty today."""
 
+import io
+import json
 import os
 import shutil
 import sqlite3
+import sys
 import unittest
 from unittest import mock
 
 from balancita_engine import paper_live_process as LP
-from test_paper_live_integration import FIRST_DECISION, INGEST_KW
+from test_paper_live_integration import FIRST_DECISION, INGEST_KW, LAST_DECISION
 from test_paper_live_process_185 import Base, Clock, config_dict
 
 REF = "BAL-DECISION-999-01"
@@ -37,7 +40,7 @@ class TestRealSessionGate(Base):
         return report, sorted(c["name"] for c in report["checks"] if not c["ok"])
 
     def grant(self, path, **over):
-        return {REF: dict({"source_path": path, "decide_from_ms": FIRST_DECISION}, **over)}
+        return {REF: dict({"source_path": path, "directory": self.directory, "decide_from_ms": FIRST_DECISION, "decide_until_ms": LAST_DECISION}, **over)}
 
     def test_no_session_is_authorized_in_the_code(self):
         self.assertEqual(LP.AUTHORIZED_SESSIONS, {})        # adding one is a reviewed commit that names its BAL-DECISION and changes this line
@@ -54,6 +57,8 @@ class TestRealSessionGate(Base):
         cases = {
             "another file": (self.grant(other), self.config()),
             "another first decision": (self.grant(path, decide_from_ms=FIRST_DECISION + 60_000), self.config()),
+            "another end of the window": (self.grant(path, decide_until_ms=LAST_DECISION + 60_000), self.config()),
+            "another session directory": (self.grant(path, directory=os.path.join(self.root, "elsewhere")), self.config()),
             "no reference in the configuration": (self.grant(path), self.config(authorization_ref=None)),
             "a reference the code does not list": ({"BAL-DECISION-999-02": self.grant(path)[REF]}, self.config()),
             "an empty list": ({}, self.config()),
@@ -66,6 +71,25 @@ class TestRealSessionGate(Base):
                     LP.Supervisor(config, self.directory, path, clock=Clock().now, strategies=self.cache["strategies"]).start()
                 self.assertEqual(caught.exception.reason, "real_session_not_authorized", label)
                 self.assertFalse(os.path.exists(self.directory), label)
+
+    def test_a_source_nobody_authorized_is_not_even_opened(self):
+        path = self.real_copy()
+        with mock.patch.object(LP, "SourceReader", side_effect=AssertionError("the source was opened")):
+            report, failed = self.failed(self.config(), path)
+        self.assertEqual(failed, ["real_session_authorized"])
+        self.assertFalse(report["ok"])
+
+    def test_the_command_line_does_not_take_the_synthetic_fixture(self):
+        config = os.path.join(self.root, "config.json")
+        with open(config, "w", encoding="utf-8") as handle:
+            json.dump(config_dict(), handle)                       # source_id synthetic, the fixture's marker present
+        for command in (["preflight"], ["run", "--clock-from-ms", "0"]):
+            stderr = io.StringIO()
+            with mock.patch.object(sys, "stderr", stderr):
+                code = LP.main(command + ["--config", config, "--directory", self.directory, "--source", self.world.path])
+            self.assertEqual(code, LP.EXIT_REFUSED, command)
+            self.assertIn("real_session_not_authorized", stderr.getvalue())
+            self.assertFalse(os.path.exists(self.directory))
 
     def test_the_configuration_alone_never_opens_the_capture(self):
         path = self.real_copy()

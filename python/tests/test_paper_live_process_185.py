@@ -489,7 +489,7 @@ class TestAnyCutNeedsTheOperator(Base):
         config = os.path.join(self.root, "config.json")
         with open(config, "w", encoding="utf-8") as handle:
             json.dump(config_dict(), handle)
-        cmd = [sys.executable, "-m", "balancita_engine.paper_live_process", "run", "--config", config, "--directory", self.directory,
+        cmd = [sys.executable, os.path.join(HERE, "cli_with_synthetic_source.py"), "run", "--config", config, "--directory", self.directory,
                "--source", self.world.path, "--clock-from-ms", str(TIMES[START])]
         env = dict(os.environ, PYTHONPATH=ENGINE_PATH + os.pathsep + HERE)
         done = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=300)
@@ -500,7 +500,7 @@ class TestAnyCutNeedsTheOperator(Base):
 class TestCommandLine(Base):
     def run_cli(self, *args, **kw):
         env = dict(os.environ, PYTHONPATH=ENGINE_PATH + os.pathsep + HERE)
-        return subprocess.run([sys.executable, "-m", "balancita_engine.paper_live_process"] + list(args), env=env, capture_output=True,
+        return subprocess.run([sys.executable, os.path.join(HERE, "cli_with_synthetic_source.py")] + list(args), env=env, capture_output=True,
                               text=True, timeout=600, **kw)
 
     def files(self):
@@ -533,7 +533,7 @@ class TestCommandLine(Base):
         args = ["run", "--config", self.files(), "--directory", self.directory, "--source", self.world.path,
                 "--clock-from-ms", str(TIMES[0]), "--clock-step-ms", "600000", "--step-sleep-s", "0.3"]
         env = dict(os.environ, PYTHONPATH=ENGINE_PATH + os.pathsep + HERE)
-        child = subprocess.Popen([sys.executable, "-m", "balancita_engine.paper_live_process"] + args, env=env,
+        child = subprocess.Popen([sys.executable, os.path.join(HERE, "cli_with_synthetic_source.py")] + args, env=env,
                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         try:
             beat_path = os.path.join(self.directory, LP.HEARTBEAT_FILE)
@@ -815,7 +815,7 @@ class TestObservedLifecycle(unittest.TestCase):
             json.dump(config_dict(funding_mode="observed"), handle)
         blocker = os.path.join(self.root, "a-file")
         open(blocker, "w").close()
-        done = subprocess.run([sys.executable, "-m", "balancita_engine.paper_live_process", "run", "--config", config_path,
+        done = subprocess.run([sys.executable, os.path.join(HERE, "cli_with_synthetic_source.py"), "run", "--config", config_path,
                                "--directory", os.path.join(blocker, "inside"), "--source", self.world.path,
                                "--clock-from-ms", str(TIMES[START])], env=dict(os.environ, PYTHONPATH=ENGINE_PATH + os.pathsep + HERE),
                               capture_output=True, text=True, timeout=300)

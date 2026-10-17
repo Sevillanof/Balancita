@@ -59,7 +59,7 @@ class TestAuthorizationRef(unittest.TestCase):
             db.close()
             with open(path, "w") as handle:
                 json.dump(config_dict(authorization_ref="BAL-DECISION-185-07", **over), handle)
-            done = subprocess.run([sys.executable, "-m", "balancita_engine.paper_live_process", "run", "--config", path,
+            done = subprocess.run([sys.executable, os.path.join(here, "cli_with_synthetic_source.py"), "run", "--config", path,
                                    "--directory", os.path.join(root, "d"), "--source", source, "--clock-from-ms", "0", *flags],
                                   env=dict(os.environ, PYTHONPATH=os.path.dirname(here) + os.pathsep + here), capture_output=True, text=True)
             return done.returncode, done.stderr, os.path.exists(os.path.join(root, "d"))
@@ -90,7 +90,7 @@ class TestWallClockIsOffButReady(Base):
         self.directory = os.path.join(self.root, "wall-session")
         saved = {s: signal.getsignal(s) for s in (signal.SIGTERM, signal.SIGINT)}
         try:
-            with mock.patch.object(LP, "WALL_CLOCK_GATE", True), mock.patch.object(LP, "_wall_now_ms", clock.now), \
+            with mock.patch.object(LP, "WALL_CLOCK_GATE", True), mock.patch.object(LP, "_wall_now_ms", clock.now), mock.patch.object(LP, "SYNTHETIC_CLI", True), \
                     mock.patch.object(LP.time, "sleep", clock.sleep):
                 return LP.main(["run", "--config", config, "--directory", self.directory, "--source", self.world.path,
                                 "--wall-clock", "--max-steps", "4", *extra])
