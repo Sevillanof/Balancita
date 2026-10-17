@@ -18,11 +18,13 @@ What it verifies, one check per name (each one a stable reason code, never free 
 * publication: only a period that had ended ``settle_lag_ms`` before the server time is *definitive*. The one in progress,
   or one that just ended, is ``provisional`` and is not emitted. The event's time is the arrival time of the response,
   never earlier than the end of the period (the runner refuses a period that ends in the future);
-* reconciliation: first seen stays in use. The same period and rate again is a ``duplicate``. Another rate for a period
-  already known is ``revision_conflict``; two rates for one period inside a response are ``conflict_inside_response`` (none is
-  accepted here). In both cases the contradicting period is also handed to the runner, whose ``ingest_funding`` quarantines it
-  (``portfolio.funding_conflicts``) and flags the trades it overlaps: nothing is silently replaced, and the runner, not this
-  module, decides what is disputed. A rate already in use is never swapped for the contradicting one.
+* reconciliation: the rate comes as Kraken publishes it. The same period and rate again is a ``duplicate``. Another rate for a
+  period already in use is a *revision* (BAL-DECISION-184-02/03): the rate seen last is used from then on and the runner is
+  handed a ``funding`` event whose ``revisions`` name the rate it replaces; the runner records it in its funding log and, for
+  the trades that overlapped the period, as an append-only ``funding_revision`` adjustment (``portfolio_funding``). Two rates
+  for one period inside a response are ``conflict_inside_response``: that is not a correction but a contradiction, and none is
+  accepted; it is handed to the runner, whose ``ingest_funding`` quarantines it (``portfolio.funding_conflicts``) and flags the
+  trades it overlaps. A period already quarantined stays so (``revision_conflict``).
 
 ``funding`` events carry accrual only. The funding that feeds C32's percentile (``LiveEvaluator.feed_funding``) is a
 different channel; this module has no way to reach it, and its events cannot be mistaken for one (kind ``funding``,
@@ -188,7 +190,7 @@ def _text(number):
 
 
 class FundingBook(object):
-    """What the adapter has accepted so far: first seen wins, a different rate for the same period is quarantined.
+    """What the adapter has accepted so far: a rate as published; a different rate for a period in use is a revision.
 
     Deterministic, with no clock: ``add`` is called with each response in arrival order and returns the runner events to
     deliver (an event only for periods that are new). ``state``/``from_state`` make it durable as plain JSON."""
@@ -205,7 +207,7 @@ class FundingBook(object):
         it there (``portfolio.funding_conflicts``) and flags the trades whose holding time it overlaps, which only the runner
         can do. The rate seen first is still the one in use; nothing here, or there, picks the other one."""
         self.counts["responses"] += 1
-        fresh, contested = [], []
+        fresh, contested, revised = [], [], []
         for record in parsed["definitive"]:
             key = (record["product_id"], record["start_ms"])
             known = self.periods.get(key)
@@ -217,6 +219,15 @@ class FundingBook(object):
             rates = self.quarantined.get(key, [])
             if known is not None and known["relative_rate"] == record["relative_rate"]:
                 self.counts["duplicate"] += 1
+            elif known is not None and key not in self.quarantined:
+                # Kraken published another rate for a period already in use (BAL-DECISION-184-02/03): the rate seen last is used
+                # from now on and the runner records the change as an adjustment; the one it replaces stays in the evidence.
+                previous = dict(known)
+                self.periods[key] = {k: record[k] for k in ("relative_rate", "absolute_rate", "sha256", "known_at_ms")}
+                self.counts["revision_applied"] = self.counts.get("revision_applied", 0) + 1
+                self._note("revision_applied", parsed, record["start_ms"], record["product_id"],
+                           previous_rate=previous["relative_rate"], rate=record["relative_rate"], previous_sha256=previous["sha256"])
+                revised.append((record, previous["relative_rate"]))
             elif record["relative_rate"] in rates:                   # a disputed rate seen again: already told to the runner
                 self.counts["revision_conflict"] += 1
             else:
@@ -235,10 +246,25 @@ class FundingBook(object):
             for item in parsed[kind]:
                 self.counts[kind] += 1
                 self._note(kind, parsed, item.get("start_ms"), None, **{k: v for k, v in item.items() if k != "start_ms"})
-        return self.events(fresh) + self.events(contested)
+        return self.events(fresh) + self.events(contested) + self.revision_events(revised)
 
     def _note(self, kind, parsed, start_ms, product_id, **extra):
         self.evidence.append(dict({"kind": kind, "start_ms": start_ms, "product_id": product_id, "sha256": parsed["sha256"]}, **extra))
+
+    @staticmethod
+    def revision_events(revised):
+        """One ``funding`` event per product per response that carries only revisions ``[start, end, previous_rate, rate]``."""
+        by_product = {}
+        for record, previous in revised:
+            by_product.setdefault(record["product_id"], []).append((record, previous))
+        events = []
+        for product, items in sorted(by_product.items()):
+            items.sort(key=lambda item: item[0]["start_ms"])
+            t_ms = max(max(r["known_at_ms"] for r, _ in items), max(r["end_ms"] for r, _ in items))
+            payload = {"product_id": product, "periods": [],
+                       "revisions": [[r["start_ms"], r["end_ms"], previous, r["relative_rate"]] for r, previous in items]}
+            events.append(make_event("funding", payload, t_ms=t_ms, source=SOURCE, stream="funding:" + product))
+        return events
 
     @staticmethod
     def events(records):

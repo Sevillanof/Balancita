@@ -1,6 +1,7 @@
 {
   "test_book_costs": 1,
   "test_capture_funding_184": 1,
+  "test_funding_revision_184": 1,
   "test_capture_inventory": 1,
   "test_capture_validation": 1,
   "test_ci_python_compare": 1,

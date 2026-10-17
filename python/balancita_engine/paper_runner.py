@@ -34,7 +34,7 @@ from .paper_runner_store import (
 )
 from .portfolio import PORTFOLIO_SCHEMA, Portfolio, PortfolioPolicy
 from .portfolio_audit import accounting_digest
-from .portfolio_funding import ingest_funding, reconcile_funding
+from .portfolio_funding import ingest_funding, reconcile_funding, revise_funding
 from .portfolio_watch import SCHEMA as WATCH_SCHEMA, WatchPolicy, parse_quote
 
 D = Decimal
@@ -634,6 +634,10 @@ class PaperRunner(object):
                                     source=event["source"])
             for name, number in counts.items():
                 self._count("funding_" + name, number)
+            if payload.get("revisions"):
+                for name, number in revise_funding(self.portfolio, payload["product_id"], payload["revisions"],
+                                                   received_ms=event["t_ms"], source=event["source"]).items():
+                    self._count("funding_revision_" + name, number)
         elif kind == "candle":
             product, bucket = payload["product_id"], int(payload["bucket_ms"])
             self.candle_digest[(product, bucket)] = stable_hash({k: str(payload["candle"][k]) for k in ("open", "high", "low", "close")})
@@ -765,8 +769,10 @@ class PaperRunner(object):
                 return self._gap_check(payload)
             elif kind == "funding":
                 periods = payload["periods"]
+                revisions = payload.get("revisions", [])
                 if not isinstance(payload["product_id"], str) or not isinstance(periods, list) \
-                        or any(not isinstance(p, (list, tuple)) for p in periods):
+                        or any(not isinstance(p, (list, tuple)) for p in periods) \
+                        or not isinstance(revisions, list) or any(not isinstance(r, (list, tuple)) for r in revisions):
                     return "invalid_event"
             elif kind == "reconcile":
                 return None

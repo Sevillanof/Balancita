@@ -183,22 +183,33 @@ class TestRealDataMode(unittest.TestCase):
 
 
 class TestReconciliation(unittest.TestCase):
-    def test_the_first_seen_rate_stays_in_use_and_a_different_one_is_handed_to_the_runner_as_a_dispute(self):
+    def test_a_different_rate_for_a_period_in_use_is_a_revision_handed_to_the_runner_and_the_new_rate_is_used(self):
         book = FA.FundingBook()
         first = book.add(parse(response([(T0, "0.0001", "8")], SERVER), BTC, SERVER))
         self.assertEqual(len(first), 1)
         again = book.add(parse(response([(T0, "0.0001", "8")], SERVER + 1), BTC, SERVER + 1))
         revised = book.add(parse(response([(T0, "0.0002", "16")], SERVER + 2), BTC, SERVER + 2))
         self.assertEqual(again, [])
-        self.assertEqual([e["payload"]["periods"] for e in revised], [[[T0, T0 + HOUR, "0.0002"]]])      # the runner is told, once
-        self.assertEqual((book.counts["accepted"], book.counts["duplicate"], book.counts["revision_conflict"]), (1, 1, 1))
-        self.assertEqual(book.periods[(BTC, T0)]["relative_rate"], "0.0001")                              # the first is still in use
-        self.assertEqual(book.quarantined[(BTC, T0)], ["0.0001", "0.0002"])
-        self.assertEqual(book.evidence[-1]["kind"], "revision_conflict")
-        again_disputed = book.add(parse(response([(T0, "0.0002", "16")], SERVER + 3), BTC, SERVER + 3))
-        original = book.add(parse(response([(T0, "0.0001", "8")], SERVER + 4), BTC, SERVER + 4))
-        self.assertEqual((again_disputed, original), ([], []))                                            # nothing is sent twice
-        self.assertEqual((book.counts["revision_conflict"], book.counts["duplicate"]), (2, 2))
+        self.assertEqual([(e["payload"]["periods"], e["payload"]["revisions"]) for e in revised],
+                         [([], [[T0, T0 + HOUR, "0.0001", "0.0002"]])])                                   # the runner is told, once
+        self.assertEqual((book.counts["accepted"], book.counts["duplicate"], book.counts["revision_applied"]), (1, 1, 1))
+        self.assertEqual(book.periods[(BTC, T0)]["relative_rate"], "0.0002")                              # the rate seen last is in use
+        self.assertEqual(book.quarantined, {})                                                            # a revision is not a dispute
+        self.assertEqual((book.evidence[-1]["kind"], book.evidence[-1]["previous_rate"], book.evidence[-1]["rate"]),
+                         ("revision_applied", "0.0001", "0.0002"))
+        same = book.add(parse(response([(T0, "0.0002", "16")], SERVER + 3), BTC, SERVER + 3))
+        self.assertEqual(same, [])                                                                        # nothing is sent twice
+        back = book.add(parse(response([(T0, "0.0001", "8")], SERVER + 4), BTC, SERVER + 4))
+        self.assertEqual([e["payload"]["revisions"] for e in back], [[[T0, T0 + HOUR, "0.0002", "0.0001"]]])   # a later change is another revision
+        self.assertEqual((book.counts["revision_applied"], book.counts["duplicate"]), (2, 2))
+
+    def test_a_period_quarantined_for_a_contradiction_inside_a_response_is_not_revised_afterwards(self):
+        book = FA.FundingBook()
+        book.add(parse(response([(T0, "0.0001", "8"), (T0, "0.0002", "16")], SERVER), BTC, SERVER))
+        later = book.add(parse(response([(T0, "0.0003", "24")], SERVER + 1), BTC, SERVER + 1))
+        self.assertEqual(book.counts.get("revision_applied", 0), 0)
+        self.assertEqual(book.counts["revision_conflict"], 1)                                             # still a dispute, handed to the runner
+        self.assertEqual([e["payload"]["periods"] for e in later], [[[T0, T0 + HOUR, "0.0003"]]])
 
     def test_two_rates_for_one_period_inside_a_response_are_both_handed_to_the_runner_and_none_is_accepted_here(self):
         rates = [(T0, "0.0001", "8"), (T0, "0.0002", "16"), (T0 + HOUR, "0.0001", "8")]
@@ -223,7 +234,8 @@ class TestReconciliation(unittest.TestCase):
         book.add(parse(response([(T0, "0.0009", "72")], SERVER + 1), BTC, SERVER + 1))
         restored = FA.FundingBook.from_state(json.loads(json.dumps(book.state())))
         self.assertEqual(restored.state(), book.state())
-        self.assertEqual(restored.add(parse(response(settled(3), SERVER), BTC, SERVER + 2)), [])
+        current = [(T0, "0.0009", "72")] + settled(3)[1:]                                            # what the book holds now
+        self.assertEqual(restored.add(parse(response(current, SERVER), BTC, SERVER + 2)), [])
         more = restored.add(parse(response(settled(4), SERVER + HOUR), BTC, SERVER + HOUR))
         self.assertEqual([p[0] for p in more[0]["payload"]["periods"]], [T0 + 3 * HOUR])
 
@@ -255,15 +267,30 @@ class TestAgainstTheRunnersAccounting(unittest.TestCase):
         self.assertEqual(runner.handle(event)["status"], "duplicate")
         self.assertEqual(runner.financial_digest(), digest)
 
-    def test_a_revision_is_quarantined_by_the_runner_and_the_first_rate_keeps_being_used(self):
+    def test_a_revision_replaces_the_rate_in_use_on_the_runner_and_is_logged_not_quarantined(self):
         runner, book = self.runner(), FA.FundingBook()
         for raw, at in ((response([(T0, "0.0001", "8")], SERVER), SERVER), (response([(T0, "0.0002", "16")], SERVER + 2), SERVER + 2)):
             for event in book.add(parse(raw, BTC, at)):
-                runner.handle(event)
-        self.assertEqual(runner.portfolio.funding[BTC], [(T0, T0 + HOUR, D("0.0001"))])           # the first stays in use
-        self.assertEqual(runner.portfolio.funding_conflicts[BTC], [[T0, T0 + HOUR, "0.0002"]])    # the dispute is on the portfolio
+                self.assertEqual(runner.handle(event)["status"], "accepted")
+        self.assertEqual(runner.portfolio.funding[BTC], [(T0, T0 + HOUR, D("0.0002"))])           # the rate seen last is in use
+        self.assertEqual(runner.portfolio.funding_conflicts, {})                                   # not a dispute
         self.assertEqual(FA.compare_with_portfolio(book, runner.portfolio.funding), {"missing": [], "extra": [], "rate_differs": []})
-        self.assertEqual([e["kind"] for e in runner.portfolio.funding_log].count("period_conflict"), 1)
+        log = runner.portfolio.funding_log
+        self.assertEqual([e["kind"] for e in log].count("period_revised"), 1)
+        revised = [e for e in log if e["kind"] == "period_revised"][0]
+        self.assertEqual(revised["previous"], [T0, T0 + HOUR, "0.0001"])
+        self.assertEqual(revised["supersedes"]["seq"], 1)                                          # the entry that accepted the old rate
+        self.assertEqual(runner.integrity()["open_funding"], [])
+
+    def test_redelivering_a_revision_event_changes_nothing_in_the_runner(self):
+        runner, book = self.runner(), FA.FundingBook()
+        events = book.add(parse(response([(T0, "0.0001", "8")], SERVER), BTC, SERVER)) \
+            + book.add(parse(response([(T0, "0.0002", "16")], SERVER + 2), BTC, SERVER + 2))
+        for event in events:
+            runner.handle(event)
+        digest = runner.financial_digest()
+        self.assertEqual([runner.handle(event)["status"] for event in events], ["duplicate", "duplicate"])
+        self.assertEqual(runner.financial_digest(), digest)
 
     def test_a_contradiction_inside_one_response_leaves_no_rate_in_use_on_the_runner(self):
         runner, book = self.runner(), FA.FundingBook()

@@ -27,7 +27,8 @@ ENGINE_PATH = os.path.dirname(HERE)
 
 def config_dict(**over):
     body = {"schema": LP.CONFIG_SCHEMA, "products": [BTC], "decide_from_ms": FIRST_DECISION, "decide_until_ms": LAST_DECISION,
-            "ingest_kw": INGEST_KW, "max_quote_gap_ms": MAX_QUOTE_GAP_MS, "min_free_bytes": 1, "warmup_minutes": 2800}
+            "ingest_kw": INGEST_KW, "max_quote_gap_ms": MAX_QUOTE_GAP_MS, "min_free_bytes": 1, "warmup_minutes": 2800,
+            "funding_mode": "synthetic"}                 # the fixtures' sources are synthetic: said, not implied (#184)
     body.update(over)
     return body
 
@@ -116,6 +117,18 @@ class TestConfiguration(unittest.TestCase):
         self.assertEqual(a["capital_policy"], LP.CAPITAL_POLICY)
         self.assertEqual(a["on_funding_divergence"], "halt")
         self.assertNotEqual(LP.validate_config(config_dict(max_quote_gap_ms=20_000))["digest"], a["digest"])
+
+    def test_the_accounting_source_of_funding_is_always_chosen_and_never_implied(self):
+        """#184: the synthetic accrual is a fixture, not a default. A configuration without ``funding_mode`` is refused (it used to
+        fall back to the synthetic one); both modes are accepted when written, and the mode is part of the digest."""
+        body = config_dict()
+        del body["funding_mode"]
+        with self.assertRaises(LP.ProcessError) as caught:
+            LP.validate_config(body)
+        self.assertEqual(caught.exception.reason, "config_invalid")
+        self.assertIn("funding_mode", str(caught.exception))
+        a, b = LP.validate_config(config_dict(funding_mode="synthetic")), LP.validate_config(config_dict(funding_mode="observed"))
+        self.assertNotEqual(a["digest"], b["digest"])
 
     def test_what_is_wrong_is_refused_with_a_reason_and_nothing_is_guessed(self):
         for over in ({"products": []}, {"products": ["BTC-EUR"]}, {"products": [BTC, BTC]}, {"decide_from_ms": "x"},
