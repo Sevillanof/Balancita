@@ -31,7 +31,6 @@ No es un sistema de persistencia de producción: no decide dónde viven los arch
 ## Cómo se ejecuta
 
 ```
-PYTHONPATH=python python3 -m balancita_engine.portfolio_report --out analisis/validacion-cartera-offline
 PYTHONPATH=python python3 -m unittest python/tests/test_portfolio_offline.py
 PYTHONPATH=python python3 -m balancita_engine.portfolio_two_process first|second --scenario s5_integral_reinicio_replay_log --dir /tmp/x   # dos procesos, a mano
 ```

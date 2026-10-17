@@ -1,16 +1,12 @@
 """Reproducible demonstration of ``signal_continuity``: every scenario runs in brand-new Python processes that share
 only the files in a temporary directory. Invented data, no network, no wall clock; the output is deterministic.
-
-    PYTHONPATH=python python3 -m balancita_engine.signal_continuity_demo --out analisis/continuidad-senales-offline
 """
 
-import argparse
 import json
 import os
 import shutil
 import subprocess
 import sys
-import tempfile
 
 from .signal_continuity import CHECKPOINT_FILE, EFFECTS_FILE, LOG_FILE
 
@@ -178,43 +174,3 @@ def scenarios(base):
     }
     out["archivos_danados"] = {label: sabotage(label, change) for label, change in damage.items()}
     return out
-
-
-def render(results):
-    lines = ["# Demostración: continuidad durable de señales (offline)", "",
-             "Generada por `python -m balancita_engine.signal_continuity_demo`. Cada escenario usa procesos Python nuevos que "
-             "solo comparten archivos. Datos sintéticos; sin red, sin reloj de pared, sin holdout.", ""]
-    ref = results["referencia_sin_caidas"]
-    lines += ["## Referencia (sin caídas)", "",
-              "- {senales} señales registradas, {podian_abrir_posicion} podían abrir posición, {huecos} huecos, verificación ok: {verificacion_ok}.".format(**ref),
-              "- Cabeza de la cadena: `{cabeza_del_registro}`.".format(**ref), ""]
-    for name, value in results.items():
-        if name in ("referencia_sin_caidas", "reconstruccion_con_versiones_incompatibles", "archivos_danados"):
-            continue
-        lines += ["## " + name.replace("_", " "), ""] + ["- {}: {}".format(k.replace("_", " "), v) for k, v in value.items()] + [""]
-    lines += ["## reconstrucción con versiones incompatibles", "", "| caso | código | motivo | registro intacto | escribió informe |", "|---|---|---|---|---|"]
-    for k, v in results["reconstruccion_con_versiones_incompatibles"].items():
-        lines.append("| {} | {} | {} | {} | {} |".format(k, v["codigo"], v["motivo"], v["registro_intacto"], v["escribio_informe"]))
-    lines += ["", "## archivos dañados (el segundo proceso debe negarse)", "", "| daño | código | motivo | escribió informe |", "|---|---|---|---|"]
-    for k, v in results["archivos_danados"].items():
-        lines.append("| {} | {} | {} | {} |".format(k, v["codigo"], v["motivo"], v["escribio_informe"]))
-    return "\n".join(lines) + "\n"
-
-
-def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--out", required=True)
-    args = parser.parse_args(argv)
-    with tempfile.TemporaryDirectory() as base:
-        results = scenarios(base)
-    os.makedirs(args.out, exist_ok=True)
-    with open(os.path.join(args.out, "resultados.json"), "w", encoding="utf-8") as handle:
-        json.dump(results, handle, sort_keys=True, indent=1, ensure_ascii=False)
-        handle.write("\n")
-    with open(os.path.join(args.out, "informe.md"), "w", encoding="utf-8") as handle:
-        handle.write(render(results))
-    return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())

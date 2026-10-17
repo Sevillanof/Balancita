@@ -23,7 +23,7 @@ Objetivo: que la cartera compartida represente y contabilice bien una pérdida m
 - `portfolio_watch`: vigilancia con cotizaciones (abajo).
 - `portfolio_funding`: `ingest_funding` y `reconcile_funding`.
 - `portfolio_audit`: `audit`, `trade_reconstruction`, `planned_vs_realized`, `accounting_digest`, `intake_digest`.
-- `portfolio_stage7`: 17 escenarios sintéticos y el generador del informe (`analisis/etapa7-contabilidad-adversa/`).
+- `portfolio_stage7`: 17 escenarios sintéticos (el informe generado se borró al sacar los datos inventados).
 
 ## Stops ante gaps
 
@@ -94,7 +94,6 @@ La auditoría compara con los periodos en cuarentena, no solo con las marcas: `f
 ## Cómo ejecutar
 
 ```
-PYTHONPATH=python python3 -m balancita_engine.portfolio_stage7 --out analisis/etapa7-contabilidad-adversa
 PYTHONPATH=python python3 -m unittest python/tests/test_portfolio_stage7.py
 PYTHONPATH=python python3 -m unittest discover -s python/tests
 ```

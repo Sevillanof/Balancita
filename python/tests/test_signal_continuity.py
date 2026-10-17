@@ -12,7 +12,6 @@ from balancita_engine import signal_continuity as SC, signal_continuity_demo as 
 from balancita_engine.multi_signals import make_signal
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-COMMITTED = os.path.join(ROOT, "analisis", "continuidad-senales-offline")
 MS = SC.FIVE_MINUTES_MS
 T0 = SC.DEMO_START_MS
 
@@ -390,12 +389,6 @@ class TwoProcessTests(unittest.TestCase):
         self.assertEqual(got, expected)
         for case in self.results["archivos_danados"].values():
             self.assertEqual((case["codigo"], case["escribio_informe"]), (3, False))
-
-    def test_committed_demo_matches_a_fresh_run(self):
-        with open(os.path.join(COMMITTED, "resultados.json"), encoding="utf-8") as handle:
-            self.assertEqual(json.load(handle), json.loads(json.dumps(self.results, ensure_ascii=False)))
-        with open(os.path.join(COMMITTED, "informe.md"), encoding="utf-8") as handle:
-            self.assertEqual(handle.read(), demo.render(self.results))
 
 
 class IsolationTests(unittest.TestCase):
