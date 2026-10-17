@@ -48,7 +48,8 @@ function decimalText(value: unknown): string | undefined {
 /**
  * Turns Kraken's REST `tickers` response into ticker events of the requested
  * products, shaped like the WebSocket ones (bid/ask/mark plus `bid_size` and
- * `ask_size` in `raw`), so paper execution reads them the same way. A product
+ * `ask_size` in `raw`, plus the response's `server_time` and the ticker's
+ * `last_time`), so paper execution reads them the same way. A product
  * with a missing or crossed quote is skipped, never guessed.
  */
 export function parseRestTickers(
@@ -63,6 +64,11 @@ export function parseRestTickers(
   )
     throw new TypeError('Invalid REST tickers response.')
   const wanted = new Set(options.products)
+  // The provider's own clock at the moment it answered: the only provider time the REST response carries.
+  const serverTime =
+    typeof (body as Json).serverTime === 'string'
+      ? ((body as Json).serverTime as string)
+      : null
   const events: RestTickerEvent[] = []
   for (const item of (body as { tickers: unknown[] }).tickers) {
     if (typeof item !== 'object' || item === null) continue
@@ -106,6 +112,8 @@ export function parseRestTickers(
         ask_size: decimalText(ticker.askSize) ?? null,
         funding_rate: funding ?? null,
         relative_funding_rate: decimalText(ticker.relativeFundingRate) ?? null,
+        server_time: serverTime,
+        last_time: typeof ticker.lastTime === 'string' ? ticker.lastTime : null,
       },
     })
   }

@@ -620,11 +620,75 @@ describe('live capture process core', () => {
     )
     await capture.stop()
     const later = requests.filter((item) => item.interval === '1m').at(-1)!
-    expect(later.from).toBe(lastMinute + M)
+    expect(later.from).toBe(lastMinute)
     expect(store.latestOfficialBucket('PF_XBTUSD', M)).toBeGreaterThan(
       lastMinute,
     )
     expect(store.latestOfficialBucket('PF_XBTUSD', 5 * M)).toBeDefined()
+    store.close()
+  })
+
+  it('re-reads the latest stored candle one interval later and keeps a corrected bucket as another revision', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'balancita-capture-'))
+    dirs.push(dir)
+    const store = new FuturesMarketStore(join(dir, 'market.sqlite'))
+    const M = 60_000
+    let now = 1_791_281_220_000 + 10 * M + 5_000
+    const served = new Map<number, number>()
+    const capture = createLiveCapture({
+      store,
+      clock: () => now,
+      makeSocket: () => fakeSocket().socket,
+      fetchCatalog: async () => catalog,
+      fundingFetch: async () => {
+        throw new Error('offline')
+      },
+      officialCandlesFetch: async (input) => {
+        const url = new URL(String(input))
+        const interval = url.pathname.split('/').at(-1)!
+        const from = Number(url.searchParams.get('from')) * 1000
+        const to = Number(url.searchParams.get('to')) * 1000
+        const step = interval === '1m' ? M : 5 * M
+        const candles = []
+        for (
+          let time = Math.ceil(from / step) * step;
+          time <= to;
+          time += step
+        ) {
+          const key = interval === '1m' ? time : -time
+          const seen = (served.get(key) ?? 0) + 1
+          served.set(key, seen)
+          // The first answer for a minute is partial; later ones carry the final volume.
+          candles.push({
+            time,
+            open: '100',
+            high: '101',
+            low: '99',
+            close: '100',
+            volume: seen === 1 ? '1' : '5',
+          })
+        }
+        return new Response(JSON.stringify({ candles, more_candles: false }))
+      },
+      officialCandleLookbackMs: { 60_000: 5 * M, 300_000: 30 * M },
+      officialPollMs: 5,
+      officialRequestGapMs: 0,
+      log: () => undefined,
+    })
+    await capture.start()
+    await until(() => store.latestOfficialBucket('PF_XBTUSD', M) !== undefined)
+    const first = store.latestOfficialBucket('PF_XBTUSD', M)!
+    now += 2 * M
+    await until(() => (store.latestOfficialBucket('PF_XBTUSD', M) ?? 0) > first)
+    await capture.stop()
+    const db = new DatabaseSync(join(dir, 'market.sqlite'), { readOnly: true })
+    const revisions = db
+      .prepare(
+        "SELECT volume_btc FROM paper_futures_official_candles WHERE product_id='PF_XBTUSD' AND interval_ms=? AND bucket_start=? ORDER BY known_at, rowid",
+      )
+      .all(M, first) as Array<{ volume_btc: string }>
+    db.close()
+    expect(revisions.map((row) => row.volume_btc)).toEqual(['1', '5'])
     store.close()
   })
 
