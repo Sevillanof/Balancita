@@ -16,7 +16,6 @@ export default function TerminalMarketChart({
   mode,
   analyses,
   selectedId,
-  entriesOnly = false,
   onSelect,
   apiBase,
   product,
@@ -32,8 +31,6 @@ export default function TerminalMarketChart({
   mode: TerminalBootstrap['mode']
   analyses: unknown[]
   selectedId: string
-  /** Live gateway: proposals and WAIT get their own markers (not entries). */
-  entriesOnly?: boolean
   onSelect: (analysisId: string) => void
   apiBase: string
   product?: string
@@ -99,18 +96,13 @@ export default function TerminalMarketChart({
             if (
               markerGap(analysis, {
                 firstCandleMs: candles[0]!.time * 1000,
-                entriesOnly,
                 candleSeconds,
               })
             )
               return []
             const action = analysisAction(analysis)
             // The candle that covers the verdict's bucket, never an earlier one.
-            const renderTime = candleForDecision(
-              candleSeconds,
-              analysis,
-              !entriesOnly,
-            ).time
+            const renderTime = candleForDecision(candleSeconds, analysis).time
             if (renderTime === null) return []
             const direction =
               action === 'LONG'
@@ -128,23 +120,13 @@ export default function TerminalMarketChart({
               {
                 id,
                 time: renderTime,
-                // Live gateway: LONG/SHORT are proposals, WAIT is a wait; they
-                // are never drawn as the operations executed (see `fill`).
-                type: direction
-                  ? entriesOnly
-                    ? 'proposal'
-                    : 'entry'
-                  : entriesOnly
-                    ? 'wait'
-                    : 'discard',
+                // LONG/SHORT are proposals, WAIT is a wait; they are never
+                // drawn as the operations executed (see `fill`).
+                type: direction ? 'proposal' : 'wait',
                 ...(direction ? { direction } : {}),
-                label: direction
-                  ? `${code ? `${code} ` : ''}${action}`
-                  : entriesOnly
-                    ? 'W'
-                    : 'WAIT',
+                label: direction ? `${code ? `${code} ` : ''}${action}` : 'W',
                 detail: direction
-                  ? `${code ? `${code} ` : ''}${action}${entriesOnly ? ' propuesta' : ''}`
+                  ? `${code ? `${code} ` : ''}${action} propuesta`
                   : 'WAIT',
                 ...(direction && typeof strategyId === 'string'
                   ? { strategyId }
@@ -153,7 +135,7 @@ export default function TerminalMarketChart({
             ]
           }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [analyses, bucketsKey, entriesOnly],
+    [analyses, bucketsKey],
   )
 
   if (
@@ -184,7 +166,7 @@ export default function TerminalMarketChart({
         orders={orders}
         fills={fills}
         quantityUnit={quantityUnit}
-        proposalLegend={entriesOnly}
+        proposalLegend
         historicalLabel={historicalLabel}
       />
     </>
