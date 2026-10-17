@@ -42,6 +42,12 @@ class RealSampleTests(unittest.TestCase):
                 self.assertLessEqual(float(candle["low_price"]), min(float(candle["open_price"]), float(candle["close_price"])))
                 self.assertGreaterEqual(float(candle["high_price"]), max(float(candle["open_price"]), float(candle["close_price"])))
 
+    def test_the_stored_hashes_match_the_stored_bodies(self):
+        for response in real_sample.rows("official_candle_responses"):
+            self.assertEqual(hashlib.sha256(response["raw_response"].encode("utf-8")).hexdigest(), response["sha256"])
+        for event in real_sample.rows("market_events"):
+            self.assertEqual(hashlib.sha256(event["normalized_json"].encode("utf-8")).hexdigest(), event["content_hash"])
+
 
 if __name__ == "__main__":
     unittest.main()

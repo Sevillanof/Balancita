@@ -405,10 +405,13 @@ class TestObservedFundingScenarios(unittest.TestCase):
 
     def test_the_source_and_the_funding_mode_have_no_default(self):
         """D-262-01: a session never starts from a source or a funding mode nobody chose."""
-        for method in (LI.LiveSession.create, LI.LiveSession.recover, LI.LiveSession.__init__):
-            for name in ("source_id", "funding_mode"):
-                if name in inspect.signature(method).parameters:
-                    self.assertIs(inspect.signature(method).parameters[name].default, inspect.Parameter.empty, (method, name))
+        both = ("source_id", "funding_mode")
+        for method, names in ((LI.LiveSession.create, both), (LI.LiveSession.recover, both), (LI.LiveSession._identity, both),
+                              (LI.LiveSession.__init__, ("funding_mode",))):      # __init__ gets the source through ``identity``
+            parameters = inspect.signature(method).parameters
+            for name in names:
+                self.assertIn(name, parameters, (method, name))      # a renamed parameter fails here instead of passing unseen
+                self.assertIs(parameters[name].default, inspect.Parameter.empty, (method, name))
 
     def test_a_failing_read_of_the_signal_funding_stops_the_session_and_an_absent_table_does_not(self):
         """D-204-01: only a table that is not there means "no signal funding"; a lock or a disk error is not mistaken for it."""
