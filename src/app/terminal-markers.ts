@@ -20,8 +20,6 @@ const DEFAULT_STEP_SECONDS = 60
 export function candleForDecision(
   candleSeconds: readonly number[],
   analysis: Record<string, unknown>,
-  /** Local fixture only: prehistory snaps to the first candle. */
-  snapBeforeFirst = false,
 ): { time: number | null; gap: 'no_candle' | 'after_chart' | null } {
   const bucket = Number.isSafeInteger(analysis.bucket_start_ms)
     ? Number(analysis.bucket_start_ms)
@@ -43,10 +41,7 @@ export function candleForDecision(
       low = middle + 1
     } else high = middle - 1
   }
-  if (found < 0)
-    return snapBeforeFirst
-      ? { time: candleSeconds[0]!, gap: null }
-      : { time: null, gap: 'no_candle' }
+  if (found < 0) return { time: null, gap: 'no_candle' }
   const time = candleSeconds[found]!
   if (seconds < time + step) return { time, gap: null }
   return {
@@ -67,7 +62,6 @@ export function markerGap(
   analysis: Record<string, unknown>,
   options: {
     firstCandleMs: number | null
-    entriesOnly: boolean
     /** Candle times (seconds, ascending): when given, a missing one is a gap. */
     candleSeconds?: readonly number[]
   },
@@ -75,20 +69,14 @@ export function markerGap(
   const time = analysis.decision_time_ms
   if (!Number.isSafeInteger(time)) return 'no_time'
   if (options.firstCandleMs === null) return 'no_candles'
-  // Live gateway: every verdict (LONG, SHORT and WAIT) is marked, WAIT grouped.
-  if (options.entriesOnly) {
-    // Rebuilt verdicts were not decisions taken at that time (paper execution
-    // ignores them too: max_verdict_lag_ms).
-    if (Number(analysis.knowledge_lag_ms) > MAX_VERDICT_LAG_MS) return 'rebuilt'
-    // A verdict older than the chart has no candle: do not pile it on the first.
-    if (Number(time) < options.firstCandleMs) return 'before_chart'
-  }
+  // Every verdict (LONG, SHORT and WAIT) is marked, WAIT grouped.
+  // Rebuilt verdicts were not decisions taken at that time (paper execution
+  // ignores them too: max_verdict_lag_ms).
+  if (Number(analysis.knowledge_lag_ms) > MAX_VERDICT_LAG_MS) return 'rebuilt'
+  // A verdict older than the chart has no candle: do not pile it on the first.
+  if (Number(time) < options.firstCandleMs) return 'before_chart'
   if (options.candleSeconds) {
-    const { gap } = candleForDecision(
-      options.candleSeconds,
-      analysis,
-      !options.entriesOnly,
-    )
+    const { gap } = candleForDecision(options.candleSeconds, analysis)
     // Before the first candle is already said by `before_chart` (live).
     if (gap) return gap
   }

@@ -170,7 +170,6 @@ export default function FuturesTerminal({
         typeof firstCandle === 'number'
           ? Math.floor(firstCandle / 1000) * 1000
           : null,
-      entriesOnly: true,
       candleSeconds: (Array.isArray(market.candles) ? market.candles : [])
         .map((candle) => record(candle).time_ms)
         .filter((ms): ms is number => Number.isSafeInteger(ms))
@@ -402,7 +401,6 @@ export default function FuturesTerminal({
                   mode={bootstrap.mode}
                   analyses={gatewayEngine ? analyses : []}
                   selectedId={gatewayEngine ? selectedId : ''}
-                  entriesOnly
                   onSelect={selectAnalysis}
                   apiBase={apiBase}
                   product={product}

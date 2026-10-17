@@ -13,7 +13,7 @@ const entry = (extra: Record<string, unknown> = {}) => ({
 })
 
 describe('markerGap', () => {
-  const options = { firstCandleMs: FIRST, entriesOnly: true }
+  const options = { firstCandleMs: FIRST }
 
   it('is null for an entry inside the candles', () => {
     expect(markerGap(entry(), options)).toBeNull()
@@ -35,12 +35,6 @@ describe('markerGap', () => {
     expect(markerGap(entry({ decision_time_ms: FIRST - 1 }), options)).toBe(
       'before_chart',
     )
-  })
-
-  it('marks every decision with a time when entries are not the only ones', () => {
-    const all = { ...options, entriesOnly: false }
-    expect(markerGap(entry({ action: 'WAIT' }), all)).toBeNull()
-    expect(markerGap(entry({ decision_time_ms: FIRST - 1 }), all)).toBeNull()
   })
 
   it('writes a note per gap without inventing detail', () => {
@@ -84,15 +78,13 @@ describe('candleForDecision', () => {
     ).toBe(600)
   })
 
-  it('snaps prehistory to the first candle only when asked (local fixture)', () => {
+  it('never snaps prehistory to the first candle', () => {
     expect(candleForDecision(candles, at(100_000)).time).toBeNull()
-    expect(candleForDecision(candles, at(100_000), true).time).toBe(600)
   })
 
   it('names the hole and the late event through markerGap', () => {
     const options = {
       firstCandleMs: 600_000,
-      entriesOnly: true,
       candleSeconds: candles,
     }
     expect(markerGap(at(725_000), options)).toBe('no_candle')
