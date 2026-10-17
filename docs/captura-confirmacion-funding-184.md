@@ -6,8 +6,8 @@ Estado: **solo diseño. No hay código ni cambio en la captura viva ni en su bas
 
 La lectura de solo lectura de BAL-DECISION-184-02 (`funding-184.json`, SHA-256 `f1a91c8a28b2220245f06b4b337481c22af52e725ac5e8e03d9a00f0b0fc0558`, HEAD `22b7abe`) dejó la parte de tiempos de #184 sin poder medirse:
 
-- Desde el 11-oct 10:00Z solo hay filas **provisionales** (11 a 12 horas por producto en la ventana de 48 h). Las horas definitivas llegaron mucho después del fin del período (mediana ≈ 16,8 h).
-- Publicación medible a tiempo: **1 de 73 períodos**. La regla de 10 minutos, el plazo y «primero visto gana» no se pueden juzgar.
+- En ETH, desde el 11-oct 10:00Z solo hay filas **provisionales** (11 a 12 horas de la ventana de 48 h); en XBT la máscara de cobertura son las horas 0 a 33 más la 45. Las horas definitivas llegaron mucho después del fin del período (mediana ≈ 16,8 h).
+- Publicación medible a tiempo: **4 de 73 períodos** (2 por producto, todos a tiempo; en ambos productos es la hora 33, con primera definitiva a ≈50,8 min). La regla de 10 minutos, el plazo y «primero visto gana» no se pueden juzgar.
 
 Causa en el código (lectura, no medición): `FuturesMarketStore.appendNewFundingKnowledge` guarda una respuesta solo si trae un par (inicio, tasa) que no estaba. La confirmación posterior de un período ya conocido, con la misma tasa, no escribe nada. Además `live-capture.ts` consulta el funding 30 s después de cada hora y reintenta cada minuto hasta 10 veces mientras la hora nueva no aparezca; después no vuelve a consultar hasta la hora siguiente, así que casi nunca hay una consulta pasados los 10 minutos del cierre.
 
