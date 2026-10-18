@@ -1,5 +1,5 @@
-"""Issue #187 (BAL-DECISION-187-05, option A): the Supervisor publishes the derived blocks file. Invented data and a simulated clock only:
-nothing here is a real session, a real capture or a real clock, and it proves the chain works, not that any result is valid."""
+"""Issue #187 (BAL-DECISION-187-05, option A): the Supervisor publishes the derived blocks file. The real BTC market and a simulated clock:
+nothing here is a real session, the live capture or a real clock, and it proves the chain works, not that any result is valid."""
 
 import hashlib
 import json
@@ -12,7 +12,6 @@ from balancita_engine import paper_live_publish as PUB
 
 import session_e2e_187 as E2E
 import test_paper_live_process_185 as P185
-from test_paper_live_integration import TIMES
 
 
 def hash_tree(directory, skip=()):
@@ -58,7 +57,7 @@ class TestPublication(Rig):
         self.assertNotIn("publication", self.read(LP.HEARTBEAT_FILE))
 
     def test_operation_the_file_carries_the_run_and_matches_the_heartbeat_that_reports_it(self):
-        supervisor, code = self.run_session(len(TIMES) // 2, publish_blocks=True)
+        supervisor, code = self.run_session(P185.RUN_STEPS, publish_blocks=True)
         self.assertEqual(code, LP.EXIT_OK)
         beat, doc = self.read(LP.HEARTBEAT_FILE), self.blocks()
         self.assertEqual((doc["session_id"], doc["config_digest"], doc["run"]), (beat["session_id"], beat["config_digest"], {"pid": os.getpid(), "id": supervisor.run_id}))
@@ -80,7 +79,7 @@ class TestPublication(Rig):
             if supervisor.phase == LP.LIVE:
                 seen.append(self.blocks())
         supervisor._beat = spy
-        supervisor.run(max_steps=4)
+        supervisor.run(max_steps=P185.RUN_STEPS)
         self.assertTrue(seen)
         for doc in seen:
             self.assertEqual(doc["status"]["phase"], "LIVE")
@@ -112,22 +111,25 @@ class TestPublication(Rig):
 
     def test_the_session_bytes_are_the_same_with_and_without_publication(self):
         skip = (LP.HEARTBEAT_FILE, LP.REPORT_FILE, LP.CONFIG_FILE, LP.BLOCKS_FILE)
-        self.run_session(len(TIMES) // 2)
+        self.run_session(P185.RUN_STEPS)
         plain = hash_tree(self.directory, skip=skip)
+        self.published_run(skip)
+        self.assertTrue(plain)
+        self.assertEqual(plain, self.published)
+
+    def published_run(self, skip):
         os.makedirs(os.path.join(self.root, "other"))
-        other = P185.World(os.path.join(self.root, "other"))
+        other = P185.RealWorld(os.path.join(self.root, "other"))
         try:
-            other.release_until(P185.FIRST_DECISION - P185.MIN)
+            other.release_until(P185.DECIDE_FROM - P185.MIN)
             directory = os.path.join(self.root, "published")
             supervisor = self.supervisor(P185.Clock(), world=other, directory=directory, publish_blocks=True)
             supervisor.start()
-            supervisor.run(max_steps=len(TIMES) // 2)
-            published = hash_tree(directory, skip=skip)
+            supervisor.run(max_steps=P185.RUN_STEPS)
+            self.published = hash_tree(directory, skip=skip)
             self.assertTrue(os.path.exists(os.path.join(directory, LP.BLOCKS_FILE)))
         finally:
             other.close()
-        self.assertTrue(plain)
-        self.assertEqual(plain, published)
 
 
 class TestFailure(Rig):
@@ -156,8 +158,8 @@ class TestFailure(Rig):
     def test_a_write_failure_does_not_stop_the_session_leaves_the_old_file_and_is_reported(self):
         supervisor = self.supervisor(P185.Clock(), publish_blocks=True)
         supervisor.start()
-        seen = self.failing(supervisor, OSError(28, "No space left on device: '/secret/abs/path/session-blocks.json'"), {3, 4, 5})
-        self.assertEqual(supervisor.run(max_steps=6), LP.EXIT_OK)             # three failed publications, still an orderly stop
+        seen = self.failing(supervisor, OSError(28, "No space left on device: '/secret/abs/path/session-blocks.json'"), {9, 10, 11})
+        self.assertEqual(supervisor.run(max_steps=P185.RUN_STEPS), LP.EXIT_OK)             # three failed publications, still an orderly stop
         self.assertEqual(seen["phases"], [LP.LIVE] * 3)                       # failed while the session was running: not a halt
         self.assertEqual(len(set(seen["files"])), 1)                          # the old file stayed the same through all three
         beat = self.read(LP.HEARTBEAT_FILE)
@@ -186,8 +188,8 @@ class TestFailure(Rig):
     def test_publication_describes_this_attempt_and_recovers_when_the_failure_ends(self):
         supervisor = self.supervisor(P185.Clock(), publish_blocks=True)
         supervisor.start()
-        seen = self.failing(supervisor, OSError(5, "Input/output error"), {3})
-        supervisor.run(max_steps=4)
+        seen = self.failing(supervisor, OSError(5, "Input/output error"), {9})
+        supervisor.run(max_steps=P185.RUN_STEPS)
         by_publication = [b["publication"] for b in seen["beats"]]
         failed = [p for p in by_publication if p["failures"] == 1][0]
         self.assertEqual(failed["last_error"]["text"], "EIO")                 # the heartbeat of the failed step already says so
@@ -207,7 +209,7 @@ class TestFailure(Rig):
             original(path, body)
         LP._write_json = write
         try:
-            code = supervisor.run(max_steps=len(TIMES) // 2)
+            code = supervisor.run(max_steps=P185.RUN_STEPS)
         finally:
             LP._write_json = original
         self.assertEqual(code, LP.EXIT_HALTED)
@@ -256,7 +258,7 @@ class TestRestartAndCost(Rig):
         self.assertNotEqual(second.run_id, old["run"]["id"])
         self.assertEqual(old["run"]["pid"], os.getpid())
 
-    def test_the_cost_of_publishing_is_measured_with_synthetic_data_over_a_whole_session(self):
+    def test_the_cost_of_publishing_is_measured_with_the_real_market_over_a_whole_session(self):
         supervisor = self.supervisor(P185.Clock(), publish_blocks=True)
         supervisor.start()
         costs = []
@@ -267,11 +269,11 @@ class TestRestartAndCost(Rig):
             original(beat, state)
             costs.append(((time.perf_counter() - started) * 1000, os.path.getsize(os.path.join(self.directory, LP.BLOCKS_FILE))))
         supervisor._publish = timed
-        self.assertEqual(supervisor.run(max_steps=len(TIMES) // 2), LP.EXIT_OK)
+        self.assertEqual(supervisor.run(max_steps=P185.RUN_STEPS), LP.EXIT_OK)
         self.assertEqual(self.read(LP.HEARTBEAT_FILE)["publication"]["failures"], 0)
         ms = [c[0] for c in costs]
         intervals = len(self.blocks()["intervals"]["intervals"])
-        print("\n[187-05 cost, synthetic] {} publications, {} intervals at the end; first {:.1f} ms / {} bytes; last {:.1f} ms / {} bytes; max {:.1f} ms; mean {:.1f} ms".format(
+        print("\n[187-05 cost, real market] {} publications, {} intervals at the end; first {:.1f} ms / {} bytes; last {:.1f} ms / {} bytes; max {:.1f} ms; mean {:.1f} ms".format(
             len(costs), intervals, costs[0][0], costs[0][1], costs[-1][0], costs[-1][1], max(ms), sum(ms) / len(ms)))
         self.assertGreater(costs[-1][1], costs[0][1])                     # the document grows with the intervals of the session
 
