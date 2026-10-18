@@ -121,6 +121,7 @@
   "test_paper_session_publication_187.TestOperatorRestartFromRealSupervisors": 124,
   "test_paper_session_publication_187.TestPublication": 161,
   "test_paper_session_publication_187.TestRestartAndCost": 60,
+  "test_paper_silent_source_process_186": 280,
   "test_paper_stop_orderly_186": 1,
   "test_paper_stop_session_186.TestStopOrderlyInTheSession": 94,
   "test_portfolio": 1,
