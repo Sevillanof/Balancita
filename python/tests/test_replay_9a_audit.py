@@ -16,7 +16,7 @@ from balancita_engine import replay_funding_parity as RFP
 from balancita_engine import replay_driver as RP
 from balancita_engine import replay_specs as RS
 from balancita_engine import signal_continuity as SC
-from balancita_engine.futures_funding_context import FundingContext
+from balancita_engine.futures_funding_context import FundingContext, with_publication_wait
 from balancita_engine.futures_simulator import FIVE_MINUTES_MS, frames
 from balancita_engine.futures_spec_strategy import propose_spec, load_spec, DEFAULT_SPEC_DIR
 from balancita_engine.multi_experiment import FrameFeeder
@@ -505,7 +505,7 @@ class FrozenEndToEnd(Shared):
     def test_a_percentile_never_uses_an_hour_before_it_is_published(self):
         periods = [(START + n * HOUR, 0.00001 * (n % 40)) for n in range(760)]
         periods[750] = (periods[750][0], 0.05)
-        ctx = FundingContext(periods)
+        ctx = FundingContext(with_publication_wait(periods))
         published = periods[750][0] + HOUR + 600_000
         self.assertNotEqual(ctx.percentile(published - 1)[0], 0.05)
         self.assertEqual(ctx.percentile(published)[0], 0.05)

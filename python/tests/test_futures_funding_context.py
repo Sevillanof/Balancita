@@ -23,12 +23,18 @@ def ramp(n=800, start=0, base=1e-5):
 
 
 class FundingContextTests(unittest.TestCase):
-    def test_a_period_counts_only_after_it_closed_plus_the_publication_lag(self):
+    def test_a_pair_without_known_at_counts_when_it_closes_with_no_floor(self):
         ctx = fc.FundingContext(ramp())
         period = fc.WINDOW + 5  # judged period index; it closes at (period + 1) * H
         closes = (period + 1) * H
-        self.assertEqual(ctx.percentile(closes + fc.PUBLICATION_LAG_MS - 1)[0], ramp()[period - 1][1])
-        self.assertEqual(ctx.percentile(closes + fc.PUBLICATION_LAG_MS)[0], ramp()[period][1])
+        self.assertEqual(ctx.percentile(closes - 1)[0], ramp()[period - 1][1])
+        self.assertEqual(ctx.percentile(closes)[0], ramp()[period][1])
+
+    def test_with_publication_wait_dates_the_pairs_ten_minutes_after_they_close(self):
+        ctx = fc.FundingContext(fc.with_publication_wait(ramp()))
+        closes = (fc.WINDOW + 6) * H
+        self.assertEqual(ctx.percentile(closes + fc.PUBLICATION_LAG_MS - 1)[0], ramp()[fc.WINDOW + 4][1])
+        self.assertEqual(ctx.percentile(closes + fc.PUBLICATION_LAG_MS)[0], ramp()[fc.WINDOW + 5][1])
 
     def test_the_percentile_excludes_the_period_it_judges_and_the_future(self):
         ctx = fc.FundingContext(ramp())

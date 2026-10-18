@@ -25,7 +25,7 @@ import sys
 
 from . import replay_data as RD
 from . import replay_funding_audit as RFA
-from .futures_funding_context import FundingContext
+from .futures_funding_context import FundingContext, with_publication_wait
 
 HOUR_MS = RD.HOUR_MS
 LAG_MS = RFA.LAG_MS
@@ -108,8 +108,8 @@ def compare_sources(forward_db, other_db, product, lo_ms=RD.LO_MS, hi_ms=RD.HI_E
         expected = range((first // HOUR_MS) * HOUR_MS, last + HOUR_MS, HOUR_MS)
         missing_a = [h for h in expected if h not in pa]
         missing_b = [h for h in expected if h not in pb]
-        ca = FundingContext([(s, float(r)) for s, r in a["periods"]])
-        cb = FundingContext([(s, float(r)) for s, r in b["periods"]])
+        ca = FundingContext(with_publication_wait([(s, float(r)) for s, r in a["periods"]]))
+        cb = FundingContext(with_publication_wait([(s, float(r)) for s, r in b["periods"]]))
         instants = sorted(set(_publication_instants(a["periods"], lo_ms, hi_ms)) | set(_publication_instants(b["periods"], lo_ms, hi_ms)))
         compared = unequal = unknown_a = unknown_b = 0
         signal_differences, examples = 0, []

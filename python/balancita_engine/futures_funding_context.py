@@ -1,9 +1,11 @@
 """Funding as one line of Qwen's STATE (FC-02): where the last closed funding period sits against the month before it.
 
-Causal by construction: a funding period counts only once the capture had seen it (its stored ``known_at``, never
-earlier than its end plus ``PUBLICATION_LAG_MS``), only while it is at most ``MAX_PERIOD_AGE_MS`` old, and its
-percentile is taken against the 30 days of time before it (``WINDOW_MS``), never against the whole history (which, in a
-replay, contains the future). Too old, or too many hours missing: unknown, with a reason (``FundingContext.assess``). The rate is Kraken's relative hourly rate, so products are comparable.
+Causal by construction: a funding period counts only once the capture had seen it (its stored ``known_at``, the real
+moment, no floor), only while it is at most ``MAX_PERIOD_AGE_MS`` old, and its percentile is taken against the 30 days
+of time before it (``WINDOW_MS``), never against the whole history (which, in a replay, contains the future). The
+window must be complete (every hour known); an hour the capture learned late, from the Kraken history backfill, counts
+as soon as its ``known_at`` is <= the instant judged. Anything else is unknown, and always with a stable code and a
+human-readable reason (``FundingContext.assess``). The rate is Kraken's relative hourly rate, so products are comparable.
 """
 
 import bisect
@@ -14,12 +16,13 @@ from .futures_llm_decisions import sanitize_text
 
 HOUR_MS = 3_600_000
 WINDOW = 720  # hourly periods, 30 days
-PUBLICATION_LAG_MS = 600_000  # floor: never before the period's end + 10 min; the real moment is the stored known_at
+PUBLICATION_LAG_MS = 600_000  # FundingContext has no floor; this is the wait modelled by with_publication_wait (9A replay, live evaluator)
 WINDOW_MS = WINDOW * HOUR_MS
-# PROVISIONAL (Fran approves): the real listing lag is ~16.8 h median (docs/captura-confirmacion-funding-184.md), so the
-# newest usable period is normally 17-20 h old; 36 h is about twice that. A capture gap of 30 h pushes it past the limit.
-MAX_PERIOD_AGE_MS = 36 * HOUR_MS
-MIN_WINDOW_COVERAGE = 0.9  # PROVISIONAL: share of the 720 hours before the judged period that must be known
+# PROVISIONAL (owner decision), pending the WebSocket funding work. Measured from the END of the newest known period:
+# funding is hourly and the just-closed period is normally known 30 s-11 min after its end (the capture's REST retries and
+# settle poll, live-capture.ts), so in normal operation the newest known period ended at most ~60 min ago; beyond 71 min the
+# just-closed hour did not arrive. With funding from the WebSocket this drops to ~61 min.
+MAX_PERIOD_AGE_MS = 71 * 60_000
 HIGH, LOW = 90.0, 10.0  # percentile bands that read "high" / "low"
 PLACEBO_SHIFT_MS = 7 * 24 * HOUR_MS
 FUNDING_QUESTION_VERSION = 5
@@ -169,56 +172,100 @@ def load_periods(market_db_path, product_id, since_ms=None):
     return load_periods_detailed(market_db_path, product_id, since_ms)[0]
 
 
+def with_publication_wait(pairs):
+    """``(start, rate)`` pairs as ``(start, rate, end + PUBLICATION_LAG_MS)``: for the callers that model their own
+    publication wait (the 9A replay, its parity check, the live evaluator). The context itself applies no floor."""
+    return [(start, rate, start + HOUR_MS + PUBLICATION_LAG_MS) for start, rate in pairs]
+
+
+def _hours_text(ms):
+    return "{:g} h".format(round(ms / HOUR_MS, 1))
+
+
+def _utc(ms):
+    from datetime import datetime, timezone
+
+    return datetime.fromtimestamp(ms / 1000, timezone.utc).strftime("%Y-%m-%dT%H:%MZ")
+
+
 class FundingContext:
     """The funding line as of any instant. ``shift_ms`` > 0 is the placebo: same format, data from that long before.
 
-    ``periods`` are ``(start, rate, known_at)``; a pair ``(start, rate)`` is known when it closed plus
-    ``PUBLICATION_LAG_MS`` (callers that feed funding as it is published). A period is usable at ``t`` only when
-    ``known_at`` (never earlier than its end plus the lag) is <= ``t``; the judged one must also be at most
-    ``MAX_PERIOD_AGE_MS`` old and the 30 days before it must be covered at least ``MIN_WINDOW_COVERAGE``.
+    ``periods`` are ``(start, rate, known_at)``; a pair ``(start, rate)`` is known when the period closed (callers that
+    feed funding as it is published). A period is usable at ``t`` only when ``known_at`` <= ``t`` (the real moment the
+    capture saw it, no floor); the judged one must also be at most ``MAX_PERIOD_AGE_MS`` old and each of the 720 hours
+    before it must be known (100%, no tolerance), else the result is unknown with a code and a reason.
+
+    ``recover_until_ms`` (the forward only): when an instant is unusable on what was known then, it is judged again on
+    what the capture knows by that moment (a backfilled off period). Such a result carries ``quality["recovered"]`` and
+    the instant is kept in ``late_at``: any decision resting on it must be labelled recovered, never live.
     """
 
-    def __init__(self, periods, shift_ms=0, approximate=(), conflicts=None):
+    def __init__(self, periods, shift_ms=0, approximate=(), conflicts=None, recover_until_ms=None):
         """``approximate``: starts whose ``known_at`` is an estimate; ``conflicts``: ``{start: other rates seen}``."""
         self.approximate, self.conflicts = set(approximate), dict(conflicts or {})
         rows = sorted(periods)
         self.starts = [row[0] for row in rows]
         self.rates = [row[1] for row in rows]
-        floor = [s + HOUR_MS + PUBLICATION_LAG_MS for s in self.starts]
-        self.known = [floor[i] if len(row) < 3 else max(row[2], floor[i]) for i, row in enumerate(rows)]
+        self.known = [(row[0] + HOUR_MS) if len(row) < 3 else row[2] for row in rows]
         self.shift_ms = shift_ms
+        self.recover_until_ms = recover_until_ms
+        self.late_at = set()
 
     def assess(self, at_ms):
-        """``((rate, percentile), "ok")`` or ``(None, reason)``: ``no_history`` / ``stale`` / ``window_gaps``."""
-        return self.assess_detail(at_ms)[:2]
+        """``((rate, percentile), "ok", "")`` or ``(None, code, reason)``. Codes: ``no_history`` (nothing known yet),
+        ``stale`` (newest known rate older than ``MAX_PERIOD_AGE_MS``), ``insufficient_history`` (fewer than 30 days
+        known), ``window_gaps`` (hours missing inside the 30 days). ``reason`` is Spanish text with the specifics."""
+        return self.assess_detail(at_ms)[:3]
 
     def assess_detail(self, at_ms):
-        """``(result, reason, quality)``; ``quality`` counts, for the judged period and its window, the hours whose
+        """``(result, code, reason, quality)``; ``quality`` counts, for the judged period and its window, the hours whose
         ``known_at`` is approximate and those with conflicting sightings (empty before a period is judged)."""
+        found = self._judge(at_ms, at_ms - self.shift_ms)
+        if found[0] is None and self.recover_until_ms is not None:
+            again = self._judge(at_ms, self.recover_until_ms)
+            if again[0] is not None:
+                self.late_at.add(at_ms)
+                return again[0], "ok", "", dict(again[3], recovered=True)
+        return found
+
+    def assess_live(self, at_ms):
+        """Like ``assess`` but never judging again on later knowledge: what a live reader had at ``at_ms``."""
+        return self._judge(at_ms, at_ms - self.shift_ms)[:3]
+
+    def _judge(self, at_ms, cutoff):
+        """Judges ``at_ms`` (less the placebo shift) on the periods the capture knew by ``cutoff``."""
         at_ms -= self.shift_ms
         top = bisect.bisect_right(self.starts, at_ms - HOUR_MS)  # periods that have ended
-        judged = None
-        for i in range(top - 1, -1, -1):
-            if self.starts[i] + HOUR_MS < at_ms - MAX_PERIOD_AGE_MS:
-                break
-            if self.known[i] <= at_ms:
-                judged = i
-                break
+        judged = next((i for i in range(top - 1, -1, -1) if self.known[i] <= cutoff), None)
         if judged is None:
-            seen = any(k <= at_ms for k in self.known)
-            return None, ("stale" if seen else "no_history"), {}
-        low = bisect.bisect_left(self.starts, self.starts[judged] - WINDOW_MS)
-        used = [i for i in range(low, judged) if self.known[i] <= at_ms]  # excludes the judged period
-        window = [self.rates[i] for i in used]
+            return None, "no_history", "sin ninguna tasa de funding conocida todavía", {}
+        age = at_ms - (self.starts[judged] + HOUR_MS)
+        if age > MAX_PERIOD_AGE_MS:
+            return None, "stale", "la hora {} no llegó: {} min por encima del límite de {} min (última tasa conocida de hace {})".format(
+                _utc(self.starts[judged] + HOUR_MS)[11:], round((age - MAX_PERIOD_AGE_MS) / 60_000), MAX_PERIOD_AGE_MS // 60_000,
+                _hours_text(age)), {}
+        first = self.starts[judged] - WINDOW_MS
+        low = bisect.bisect_left(self.starts, first)
+        used = [i for i in range(low, judged) if self.known[i] <= cutoff]  # excludes the judged period
+        present = {self.starts[i] for i in used}
+        missing = [s for s in range(first, self.starts[judged], HOUR_MS) if s not in present]
         quality = {"approximate_hours": sum(1 for i in used + [judged] if self.starts[i] in self.approximate),
                    "conflicting_hours": sum(1 for i in used + [judged] if self.starts[i] in self.conflicts),
-                   "window_hours": len(window)}
-        if len(window) < MIN_WINDOW_COVERAGE * WINDOW:
-            return None, "window_gaps", quality
+                   "window_hours": len(used)}
+        if missing:
+            if missing == list(range(first, first + len(missing) * HOUR_MS, HOUR_MS)):  # only the oldest end is bare
+                return None, "insufficient_history", "sin historia suficiente: {} de {} días".format(
+                    len(used) // 24, WINDOW // 24), quality
+            runs = 1 + sum(1 for a, b in zip(missing, missing[1:]) if b - a > HOUR_MS)
+            return None, "window_gaps", "faltan {} horas de funding entre {} y {}{} (captura apagada o sin relleno)".format(
+                len(missing), _utc(missing[0]), _utc(missing[-1] + HOUR_MS),
+                "" if runs == 1 else ", en {} tramos".format(runs)), quality
+        window = [self.rates[i] for i in used]
         rate = self.rates[judged]
         below = sum(1 for x in window if x < rate)
         equal = sum(1 for x in window if x == rate)
-        return (rate, 100.0 * (below + 0.5 * equal) / len(window)), "ok", quality
+        return (rate, 100.0 * (below + 0.5 * equal) / len(window)), "ok", "", quality
 
     def percentile(self, at_ms):
         """``(rate, percentile)`` of the newest period usable at ``at_ms``, or ``None`` (see ``assess`` for why)."""
@@ -260,14 +307,24 @@ def funding_known_periods(context):
     return [] if context is None else [(s, s + HOUR_MS, r, k) for s, r, k in zip(context.starts, context.rates, context.known)]
 
 
-def funding_for(market_db_path, product_id, since_ms=None):
+def funding_state(context, at_ms):
+    """``{"usable", "code", "reason", "checked_ms"}``: why the product's funding is (not) usable now, for the forward summary."""
+    if context is None:
+        code, reason = "no_history", "sin historia de funding en la base de mercado"
+    else:
+        _, code, reason = context.assess_live(at_ms)
+    return {"usable": code == "ok", "code": code, "reason": reason, "checked_ms": at_ms}
+
+
+def funding_for(market_db_path, product_id, since_ms=None, recover_until_ms=None):
     """The product's ``FundingContext`` from the market DB, or ``None`` when it holds no funding history.
 
     ``since_ms``: skip periods starting earlier (callers pass their first decision time minus ``WINDOW_MS`` and a
-    margin); the default reads everything stored.
+    margin); the default reads everything stored. ``recover_until_ms``: see ``FundingContext``.
     """
     try:
         periods, info = load_periods_detailed(market_db_path, product_id, since_ms)
     except sqlite3.Error:
         return None
-    return FundingContext(periods, approximate=info["approximate"], conflicts=info["conflicts"]) if periods else None
+    return FundingContext(periods, approximate=info["approximate"], conflicts=info["conflicts"],
+                          recover_until_ms=recover_until_ms) if periods else None

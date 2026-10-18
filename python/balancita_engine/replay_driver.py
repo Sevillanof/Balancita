@@ -36,7 +36,7 @@ from . import replay_data as RD
 from . import signal_continuity as SC
 from .execution_timing import ExecutionPolicy
 from .futures_costs import cost_model_hash, side_impact_bps
-from .futures_funding_context import PUBLICATION_LAG_MS, WINDOW, FundingContext
+from .futures_funding_context import PUBLICATION_LAG_MS, WINDOW, FundingContext, with_publication_wait
 from .futures_simulator import ONE_MINUTE_MS, FIVE_MINUTES_MS
 from .multi_experiment import FrameFeeder
 from .multi_signals import default_strategies, merged_indicators, stable_hash
@@ -248,7 +248,7 @@ def product_events(product, data, strategies, cfg, frames, cycle_atr=None, flags
     periods = merged_indicators(strategies)
     bands = next((s.funding_bands for s in strategies if getattr(s, "funding_bands", None)), None)
     feeder = FrameFeeder(periods)
-    context = FundingContext([(s, float(r)) for s, r in data["funding"]])
+    context = FundingContext(with_publication_wait([(s, float(r)) for s, r in data["funding"]]))
     feed_from = cfg.decision_start_ms - FIVE_MINUTES_MS
     seq = 0
     for frame in feeder.stream(data["1m"], data["5m"], context):

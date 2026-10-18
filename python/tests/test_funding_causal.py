@@ -13,71 +13,145 @@ from balancita_engine.futures_replay import load_range
 from test_futures_replay import DDL
 
 H = fc.HOUR_MS
-LAG = fc.PUBLICATION_LAG_MS
+LAG = 600_000  # the capture's poll lag in these fixtures; the context itself has no floor
 
 
 def hourly(n=800, late=None, rate=lambda i: 1e-5 + i * 1e-8):
-    """``n`` hourly periods, each known 10 minutes after it closed, except ``late = {index: known_at}``."""
+    """``n`` hourly periods, each known ``LAG`` after it closed, except ``late = {index: known_at}``."""
     late = late or {}
     return [(i * H, rate(i), late.get(i, (i + 1) * H + LAG)) for i in range(n)]
 
 
 class ContextIsCausalTests(unittest.TestCase):
     def test_a_period_the_capture_learned_late_is_not_used_before_it_was_known(self):
-        known = 790 * H + 17 * H  # Kraken listed hour 790 about 17 h after it closed
+        known = 791 * H + 600_000  # Kraken listed hour 790 ten minutes after it closed
         rows = hourly(791, late={790: known})  # the newest hour is the late one
         ctx = fc.FundingContext(rows)
         before, after = ctx.percentile(known - 1), ctx.percentile(known)
         self.assertEqual(before[0], rows[789][1])  # still the previous hour
         self.assertEqual(after[0], rows[790][1])
 
-    def test_a_period_is_never_usable_before_it_closed_plus_the_lag_even_if_stamped_earlier(self):
+    def test_there_is_no_floor_the_real_known_at_is_used_even_right_after_the_close(self):
+        rows = hourly(800, late={789: 790 * H + 1})  # seen one millisecond after it closed
+        ctx = fc.FundingContext(rows)
+        self.assertEqual(ctx.percentile(790 * H + 1)[0], rows[789][1])
+        self.assertEqual(ctx.assess(790 * H)[0][0], rows[788][1])  # not yet seen: the previous hour
+
+    def test_a_period_stamped_before_it_closed_is_still_not_judged_before_it_ended(self):
         ctx = fc.FundingContext([(s, r, 0) for s, r, _ in hourly()])
-        self.assertEqual(ctx.percentile(790 * H + H + LAG - 1)[0], hourly()[789][1])
-        self.assertEqual(ctx.percentile(790 * H + H + LAG)[0], hourly()[790][1])
+        self.assertEqual(ctx.percentile(790 * H + H - 1)[0], hourly()[789][1])
+        self.assertEqual(ctx.percentile(790 * H + H)[0], hourly()[790][1])
+
+    def test_a_pair_without_known_at_is_known_when_it_closes(self):
+        ctx = fc.FundingContext([(s, r) for s, r, _ in hourly()])
+        self.assertEqual(ctx.percentile(790 * H + H)[0], hourly()[790][1])
 
     def test_a_period_the_capture_has_not_seen_cannot_be_judged_at_all(self):
         ctx = fc.FundingContext(hourly())
-        self.assertEqual(ctx.assess(H // 2), (None, "no_history"))
+        found, code, reason = ctx.assess(H // 2)
+        self.assertEqual((found, code), (None, "no_history"))
+        self.assertIn("sin ninguna tasa", reason)
 
-    def test_stale_funding_is_unknown_with_its_reason_at_the_age_limit(self):
+    def test_the_age_limit_is_71_minutes_from_the_end_of_the_newest_period(self):
+        self.assertEqual(fc.MAX_PERIOD_AGE_MS, 71 * 60_000)
+
+    def test_stale_funding_is_unknown_with_the_age_and_the_limit_in_the_reason(self):
         ctx = fc.FundingContext(hourly())
         last_end = 800 * H
-        self.assertEqual(ctx.assess(last_end + fc.MAX_PERIOD_AGE_MS)[1], "ok")
-        self.assertEqual(ctx.assess(last_end + fc.MAX_PERIOD_AGE_MS + 1), (None, "stale"))
-        self.assertEqual(ctx.line(last_end + 30 * H + 7 * H), "funding: unknown")
+        self.assertEqual(ctx.assess(last_end + fc.MAX_PERIOD_AGE_MS)[1:], ("ok", ""))
+        found, code, reason = ctx.assess(last_end + 5 * H)
+        self.assertEqual((found, code), (None, "stale"))
+        self.assertEqual(reason, "la hora 08:00Z no llegó: 229 min por encima del límite de 71 min "
+                                 "(última tasa conocida de hace 5 h)")
+        self.assertEqual(ctx.assess(last_end + fc.MAX_PERIOD_AGE_MS + 1)[1], "stale")
+        self.assertEqual(ctx.line(last_end + 7 * H), "funding: unknown")
 
-    def test_a_capture_gap_of_thirty_hours_after_the_newest_hour_is_not_read_as_current(self):
-        ctx = fc.FundingContext(hourly())
-        gap_end = 800 * H + 30 * H
-        self.assertIsNotNone(ctx.percentile(gap_end))  # 30 h old: inside the provisional limit
-        self.assertIsNone(ctx.percentile(gap_end + 7 * H))  # the gap goes on: the old hour is not "current"
-
-    def test_the_window_is_thirty_days_of_time_not_720_entries(self):
+    def test_the_window_is_thirty_days_of_time_and_must_be_complete(self):
         rows = hourly(1000, rate=lambda i: 0.1)
-        rows = [(s, 9.0 if 229 <= i < 279 else r, k) for i, (s, r, k) in enumerate(rows) if not 279 <= i < 329]
+        rows = [(s, 9.0 if 229 <= i < 279 else r, k) for i, (s, r, k) in enumerate(rows)]
         rows[-1] = (rows[-1][0], 5.0, rows[-1][2])  # judged: above every 0.1 and below the old 9.0
-        at = 1000 * H + LAG
-        found = fc.FundingContext(rows).percentile(at)
+        found = fc.FundingContext(rows).percentile(1000 * H + LAG)
         self.assertEqual(found[0], 5.0)
-        self.assertEqual(found[1], 100.0)  # only the 670 hours inside the 30 days; a count of 720 would give 93.05
+        self.assertEqual(found[1], 100.0)  # the 9.0 hours are older than 30 days; a count of 720 entries would see them
 
-    def test_too_many_missing_hours_make_the_percentile_unknown(self):
-        sparse = [row for i, row in enumerate(hourly(1000)) if i % 2 == 0 or i >= 990]
-        self.assertEqual(fc.FundingContext(sparse).assess(1000 * H + LAG), (None, "window_gaps"))
+    def test_one_missing_hour_makes_funding_unusable_and_names_it(self):
+        rows = [row for i, row in enumerate(hourly(1000)) if i != 500]
+        found, code, reason = fc.FundingContext(rows).assess(1000 * H + LAG)
+        self.assertEqual((found, code), (None, "window_gaps"))
+        self.assertEqual(reason, "faltan 1 horas de funding entre 1970-01-21T20:00Z y 1970-01-21T21:00Z "
+                                 "(captura apagada o sin relleno)")
 
-    def test_window_hours_the_capture_learned_after_the_decision_do_not_count(self):
-        late = {i: 2000 * H for i in range(300, 400)}  # a hole filled long after the decision
+    def test_a_gap_reports_its_count_and_span_and_the_number_of_runs(self):
+        rows = [row for i, row in enumerate(hourly(1000)) if i not in (500, 501, 502, 600)]
+        _, code, reason = fc.FundingContext(rows).assess(1000 * H + LAG)
+        self.assertEqual(code, "window_gaps")
+        self.assertIn("faltan 4 horas de funding entre 1970-01-21T20:00Z y 1970-01-26T01:00Z, en 2 tramos", reason)
+
+    def test_less_than_thirty_days_of_history_says_how_many(self):
+        found, code, reason = fc.FundingContext(hourly(300)).assess(300 * H + LAG)
+        self.assertEqual((found, code), (None, "insufficient_history"))
+        self.assertEqual(reason, "sin historia suficiente: 12 de 30 días")
+
+    def test_exactly_thirty_days_before_the_judged_hour_is_enough(self):
+        self.assertEqual(fc.FundingContext(hourly(721)).assess(721 * H + LAG)[1], "ok")
+        self.assertEqual(fc.FundingContext(hourly(720)).assess(720 * H + LAG)[1], "insufficient_history")
+
+    def test_window_hours_backfilled_before_the_decision_count_even_when_known_late(self):
+        late = {i: 990 * H for i in range(300, 400)}  # the capture was off; the history filled the hole at hour 990
         ctx = fc.FundingContext(hourly(1000, late=late))
-        self.assertEqual(ctx.assess(1000 * H + LAG), (None, "window_gaps"))
-        self.assertEqual(ctx.assess(2000 * H)[1], "stale")  # and by then the newest hour is old
-        ok = fc.FundingContext(hourly(1000, late={i: 2000 * H for i in range(300, 330)}))
-        self.assertEqual(ok.assess(1000 * H + LAG)[1], "ok")
+        self.assertEqual(ctx.assess(1000 * H + LAG)[1], "ok")  # known_at <= t: a late-known past hour is fine
+        self.assertEqual(ctx.assess(989 * H)[1], "window_gaps")  # before the backfill the same hours are missing
+
+    def test_hours_learned_after_the_decision_do_not_count(self):
+        late = {i: 2000 * H for i in range(300, 330)}
+        ctx = fc.FundingContext(hourly(1000, late=late))
+        self.assertEqual(ctx.assess(1000 * H + LAG)[1], "window_gaps")
+        self.assertEqual(ctx.assess(2000 * H)[1], "stale")
 
     def test_the_prompt_line_keeps_its_format_and_says_unknown_when_stale(self):
         ctx = fc.FundingContext(hourly())
         self.assertRegex(ctx.line(800 * H + LAG), r"^funding: (high|normal|low) \(pctl30d=\d+, (longs|shorts) pay\)$")
         self.assertEqual(ctx.line(800 * H + 40 * H), "funding: unknown")
+
+
+class RecoveredFundingTests(unittest.TestCase):
+    """An off period filled afterwards: the forward judges it on what is known by then and marks every such instant."""
+
+    def rows(self):
+        return hourly(1000, late={i: 1100 * H for i in range(900, 1000)})  # hours 900-999 backfilled at hour 1100
+
+    def test_without_recovery_the_off_period_stays_unknown(self):
+        found, code, _ = fc.FundingContext(self.rows()).assess(950 * H)
+        self.assertEqual((found, code), (None, "stale"))  # the newest hour the capture had was 899
+
+    def test_with_recovery_the_instant_is_judged_on_the_backfilled_hours_and_marked(self):
+        ctx = fc.FundingContext(self.rows(), recover_until_ms=1100 * H)
+        result, code, reason, quality = ctx.assess_detail(950 * H)
+        self.assertIsNotNone(result)
+        self.assertEqual((code, reason, quality["recovered"]), ("ok", "", True))
+        self.assertEqual(ctx.late_at, {950 * H})
+
+    def test_an_instant_usable_live_is_never_marked(self):
+        ctx = fc.FundingContext(self.rows(), recover_until_ms=1100 * H)
+        self.assertNotIn("recovered", ctx.assess_detail(899 * H + LAG)[3])
+        self.assertEqual(ctx.late_at, set())
+
+    def test_recovery_cannot_invent_what_was_never_backfilled(self):
+        rows = hourly(1000, late={i: 1100 * H for i in range(900, 950)})
+        rows = [r for r in rows if r[0] // H < 950 or r[0] // H >= 960]  # hours 950-959 never came back
+        ctx = fc.FundingContext(rows, recover_until_ms=1100 * H)
+        self.assertEqual(ctx.assess(980 * H)[1], "window_gaps")
+        self.assertEqual(ctx.late_at, set())
+
+    def test_the_live_state_ignores_the_recovery(self):
+        ctx = fc.FundingContext(self.rows(), recover_until_ms=1100 * H)
+        self.assertEqual(fc.funding_state(ctx, 950 * H)["usable"], False)
+        self.assertEqual(ctx.late_at, set())
+
+    def test_no_history_state_has_a_reason(self):
+        state = fc.funding_state(None, 5)
+        self.assertEqual((state["usable"], state["code"]), (False, "no_history"))
+        self.assertTrue(state["reason"])
 
 
 def stamp(ms):
@@ -175,10 +249,10 @@ class LoadPeriodsTests(unittest.TestCase):
 
     def test_the_context_reports_how_many_hours_of_its_window_are_approximate_or_conflicting(self):
         ctx = fc.FundingContext(hourly(800), approximate={5 * H, 790 * H}, conflicts={200 * H: 1, 799 * H: 2, 6 * H: 1})
-        result, reason, quality = ctx.assess_detail(800 * H + LAG)
+        result, reason, _, quality = ctx.assess_detail(800 * H + LAG)
         self.assertEqual(reason, "ok")
         self.assertEqual((quality["approximate_hours"], quality["conflicting_hours"]), (1, 2))
-        self.assertEqual(fc.FundingContext(hourly(800)).assess_detail(800 * H + LAG)[2]["approximate_hours"], 0)
+        self.assertEqual(fc.FundingContext(hourly(800)).assess_detail(800 * H + LAG)[3]["approximate_hours"], 0)
 
     def test_a_response_that_cannot_be_read_leaves_its_periods_out_instead_of_guessing(self):
         self.response("bad", 7 * H, [], [(5 * H, "1")], raw="not json")
@@ -198,13 +272,13 @@ class LoadPeriodsTests(unittest.TestCase):
         self.assertEqual(loads.call_count, 1)
 
     def test_the_context_built_from_the_db_waits_for_the_stored_known_at(self):
-        rows = hourly(791, late={790: 790 * H + 17 * H})
+        rows = hourly(791, late={790: 791 * H + 600_000})
         shas = {}
         for start, rate, known in rows:
             self.response("r%d" % (start // H), known, [(start, rate)], [(start, "1")])
         ctx = fc.funding_for(self.path, "PF_XBTUSD")
-        self.assertEqual(ctx.percentile(790 * H + 17 * H - 1)[0], rows[789][1])
-        self.assertEqual(ctx.percentile(790 * H + 17 * H)[0], rows[790][1])
+        self.assertEqual(ctx.percentile(791 * H + 600_000 - 1)[0], rows[789][1])
+        self.assertEqual(ctx.percentile(791 * H + 600_000)[0], rows[790][1])
 
 
 class LoadRangeLiveViewTests(unittest.TestCase):
