@@ -9,11 +9,12 @@ import unittest
 from unittest import mock
 
 from balancita_engine import futures_forward
-from balancita_engine.futures_forward import LATE_KNOWN_MS, STALE_ENTRY_MS, make_entry_gate, effective_registration, load_registration, main, run_forward, write_summary
+from balancita_engine.futures_forward import LATE_KNOWN_MS, candle_coverage, make_entry_gate, effective_registration, load_registration, main, run_forward, write_summary
 from balancita_engine.futures_replay import replay
 from balancita_engine.futures_simulator import simulate_many
 from balancita_engine.futures_spec_strategy import load_specs, spec_hash
 from balancita_engine.futures_strategy_reliability import (
+    load_late_candle_tolerance_ms,
     FORWARD_MIN_TRADES,
     FORWARD_STRATEGIES_PATH,
     FORWARD_SCHEMA,
@@ -279,8 +280,28 @@ class RecoveryTests(unittest.TestCase):
         self.assertIsNone(futures_forward.start_rebuild(self.dir.name))
 
     def test_a_candle_learned_within_the_normal_poll_delay_is_not_recovered(self):
-        self.assertGreater(LATE_KNOWN_MS, 60_000)
-        self.assertLessEqual(1_000, LATE_KNOWN_MS)
+        self.assertEqual(LATE_KNOWN_MS, 15_000)                    # config/forward-strategies.json late_candle_tolerance_ms
+        self.assertEqual(LATE_KNOWN_MS, load_late_candle_tolerance_ms())
+        self.assertGreater(LATE_KNOWN_MS, 8_200)                   # the slowest candle measured on the real capture
+        self.assertLessEqual(3_000, LATE_KNOWN_MS)
+
+    def test_the_boundary_is_exactly_the_tolerance_15_s_is_live_and_15_001_ms_is_late(self):
+        def coverage(lag):
+            ones = [{"bucket_start": i * MINUTE, "close_at": (i + 1) * MINUTE, "known_at": (i + 1) * MINUTE + lag} for i in range(3)]
+            fives = [{"bucket_start": i * 5 * MINUTE, "close_at": (i + 1) * 5 * MINUTE, "known_at": (i + 1) * 5 * MINUTE + lag} for i in range(2)]
+            late_ones, late_fives, _ = candle_coverage(ones, fives, 0, 3 * MINUTE)
+            return len(late_ones), len(late_fives)
+        self.assertEqual(coverage(LATE_KNOWN_MS), (0, 0))
+        self.assertEqual(coverage(LATE_KNOWN_MS + 1), (3, 2))
+        self.assertEqual(coverage(0), (0, 0))
+        self.assertEqual(coverage(5 * MINUTE), (3, 2))             # the former tolerance is no longer one
+
+    def test_a_trade_whose_span_holds_a_late_candle_is_recovered_and_one_without_it_is_live(self):
+        trade = {"entry_bucket_ms": 10 * MINUTE, "exit_bucket_ms": 20 * MINUTE}
+        late = {15 * MINUTE}
+        self.assertTrue(futures_forward.is_recovered(trade, late, set()))
+        self.assertFalse(futures_forward.is_recovered(trade, set(), set()))
+        self.assertTrue(futures_forward.open_is_recovered(15 * MINUTE, late, set(), []))
 
 
 class BackfilledEntriesAreSimulatedTests(unittest.TestCase):
@@ -459,7 +480,7 @@ class StaleGateTests(unittest.TestCase):
                   "known_at": (i + 1) * 5 * MINUTE + 1_000} for i in range(-1, 8)]
         gate = make_entry_gate(ones, fives, 0)
         self.assertEqual([i for i in range(40) if gate(i * MINUTE)], list(range(10, 20)))
-        self.assertGreater(10 * MINUTE, STALE_ENTRY_MS)
+        self.assertGreater(10 * MINUTE, LATE_KNOWN_MS)
         # Before the moment the gate was first switched on, nothing is blocked.
         self.assertFalse(any(make_entry_gate(ones, fives, 40 * MINUTE)(i * MINUTE) for i in range(40)))
 

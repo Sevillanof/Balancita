@@ -39,17 +39,17 @@ from .futures_spec_strategy import DEFAULT_SPEC_DIR, load_specs, spec_hash
 from .futures_strategy_reliability import (
     FORWARD_SCHEMA,
     FORWARD_STRATEGIES_PATH,
+    LATE_CANDLE_TOLERANCE_MS,
     summarize_trades,
 )
 
 ONE_MINUTE_MS = 60_000
 FIVE_MINUTES_MS = 300_000
-# The live poll learns a candle seconds after it closes; later than this means the capture was down.
-LATE_KNOWN_MS = 5 * 60_000
-# A candle learned more than this after it closed is not a live view of the market: no new entry is opened on it
-# (positions already open are still managed). Applies from the moment the gate was first switched on, see
-# ``stale_gate_from``; trades stored before it keep the old rule and the ``recovered`` label.
-STALE_ENTRY_MS = 3 * 60_000
+# One tolerance for a late candle, shared with the paper session (``late_candle_tolerance_ms`` in
+# config/forward-strategies.json, 15 s; ADR 0001 amendment 2026-10-18). The live poll learns a candle ~3 s after it
+# closes; a candle learned later than this never produces a live trade. It is not ``GAP_GRACE`` (when to declare a
+# candle missing).
+LATE_KNOWN_MS = LATE_CANDLE_TOLERANCE_MS
 # Owner decision: entries on candles learned late (a backfilled off period) are simulated and labelled ``recovered``,
 # not refused. The gate below stays available (``make_entry_gate``) but run_forward only applies it when this is True.
 BLOCK_STALE_ENTRIES = False
@@ -237,12 +237,12 @@ def make_entry_gate(ones, fives, gate_from_ms):
     """``gate(bucket) -> True`` when the data a new entry would rest on is stale or missing.
 
     The 1m candle of the bucket and the latest closed 5m candle must both *exist* and each have been known within
-    ``STALE_ENTRY_MS`` of closing (their first ``known_at``, not the candle's own time). A missing 5m candle blocks
+    ``LATE_KNOWN_MS`` of closing (their first ``known_at``, not the candle's own time). A missing 5m candle blocks
     the entry even when 1m candles keep arriving: the simulator would otherwise carry the last 5m indicators
     forward. Buckets before ``gate_from_ms`` are never blocked.
     """
-    fresh_ones = {c["bucket_start"] for c in ones if c["known_at"] - c["close_at"] <= STALE_ENTRY_MS}
-    fresh_fives = {c["bucket_start"] for c in fives if c["known_at"] - c["close_at"] <= STALE_ENTRY_MS}
+    fresh_ones = {c["bucket_start"] for c in ones if c["known_at"] - c["close_at"] <= LATE_KNOWN_MS}
+    fresh_fives = {c["bucket_start"] for c in fives if c["known_at"] - c["close_at"] <= LATE_KNOWN_MS}
 
     def gate(bucket):
         if bucket < gate_from_ms:

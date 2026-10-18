@@ -18,7 +18,8 @@ What it adds, because a session is not a batch:
   the first time (same ``event_id``), so a crash between "evaluated" and "journaled by the runner" loses nothing and
   duplicates nothing;
 * ``candle_tolerance_ms`` (optional, named by the operator): a candle that arrives more than that after its minute closed keeps feeding
-  the indicators but makes no cycle (``suppressed`` with reason ``candle_late``): data that old does not decide an entry;
+  the indicators but makes no cycle (``suppressed`` with reason ``candle_late``, ``recovered`` and its ``lag_ms``, the paper twin of the
+  forward's ``recovered`` trade; the value is ``late_candle_tolerance_ms`` of config/forward-strategies.json): data that old does not decide an entry;
 * a funding hour that arrives after cycles that needed it is counted (``late_funding``): those cycles used what was
   published at the time, which is causal but not what a replay with the complete series would have used.
 
@@ -296,7 +297,7 @@ class LiveEvaluator(object):
         if self.candle_tolerance_ms is not None and int(arrival_ms) - close_ms > self.candle_tolerance_ms:
             # the minute ended too long ago for this candle to drive a decision: the features are kept (the candle is real), no cycle is made
             self.suppressed.append({"product_id": product, "cycle_ms": close_ms, "reason": "candle_late",
-                                    "lag_ms": int(arrival_ms) - close_ms, "tolerance_ms": self.candle_tolerance_ms})
+                                    "recovered": True, "lag_ms": int(arrival_ms) - close_ms, "tolerance_ms": self.candle_tolerance_ms})
             return {"cycle": None, "duplicate": False, "rejected": None}
         event = RP.make_cycle_event(product, close_ms, frame, self.cycle_atr, source=self.source,
                                     lag_ms=max(int(arrival_ms) - close_ms, 0))
