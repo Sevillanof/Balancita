@@ -1,6 +1,8 @@
 """Issue #184: the session's accounting funding comes from the capture's own responses (``paper_futures_funding_responses`` /
-``paper_futures_funding_periods``) through the #167 adapter, instead of the synthetic ``synthetic_accrual`` table, and stays apart
-from the funding the signals use. Invented data only: the responses are written by the tests into a capture-shaped file."""
+``paper_futures_funding_periods``) through the #167 adapter, and stays apart from the funding the signals use. The market and the
+funding are the real ones of PF_XBTUSD (17-oct 12:40Z to 18-oct 08:07Z): the 20 hourly responses Kraken sent, each cut to its newest
+48 hours with the text of every rate untouched. Only the scenarios edit them by hand (drop an hour, correct a rate, add a response)
+and say so; the clock is simulated and the entries are the ones ``Forcing`` makes (see ``real_session``)."""
 
 import inspect
 import json
@@ -10,108 +12,38 @@ import sqlite3
 import tempfile
 import unittest
 from unittest import mock
-from datetime import datetime, timezone
 from decimal import Decimal as D
 
 from balancita_engine import paper_live_integration as LI
 from balancita_engine import portfolio_audit as AU
-from balancita_engine import replay_driver as RP
-from balancita_engine import replay_specs as RS
 from balancita_engine import signal_continuity as SC
+from balancita_engine.futures_simulator import accrue_funding
 from balancita_engine.multi_signals import stable_hash
-from live_world import HOUR, LOAD_START, QUOTE_FROM, World
-from test_paper_live_integration import (BTC, FIRST_DECISION, INGEST_KW, LAST_DECISION, MAX_QUOTE_GAP_MS, TIMES, abandon, journal_clock,
-                                         record, runner_config)
+from real_session import (BUY_AT, DECIDE_FROM, STEP, abandon, journal_clock, new_session, recover_session, record, strategies)
+from real_world import BTC, HOUR, MIN, T0, RealWorld
 
-RATE = "0.0001"
-LAG = RP.FUNDING_LAG_MS
-FIRST_HOUR = (FIRST_DECISION // HOUR) * HOUR
-TABLES = """
-CREATE TABLE paper_futures_funding_responses(
-  sha256 TEXT PRIMARY KEY, received_at INTEGER NOT NULL, server_time TEXT NOT NULL, raw_response TEXT NOT NULL) STRICT;
-CREATE TABLE paper_futures_funding_periods(
-  response_sha256 TEXT NOT NULL, start_ms INTEGER NOT NULL, end_ms INTEGER NOT NULL, funding_rate TEXT NOT NULL,
-  known_at INTEGER NOT NULL, unit TEXT NOT NULL, product_id TEXT NOT NULL, PRIMARY KEY(response_sha256, start_ms)) STRICT;
-"""
+LAG = 600_000                                      # the adapter's settle lag: an hour is definitive 10 minutes after it ends
+HELD = (T0 + 420 * MIN) // HOUR * HOUR             # 19:00Z: inside the second position (19:40 to 21:25) from its start to its end
+HELD_ISO = "2026-10-17T19:00:00Z"
+PRE_ENTRY = DECIDE_FROM + 145 * MIN                # 19:35Z, five minutes before the second forced entry
+CUT = DECIDE_FROM + 380 * MIN                      # 23:30Z: every hour of the second position is definitive and applied
+TIMES = [DECIDE_FROM + k * STEP for k in range((CUT - DECIDE_FROM) // STEP + 1)]
+PRE_INDEX = next(i for i, t in enumerate(TIMES) if t >= PRE_ENTRY)
 
 
 def iso(ms):
+    from datetime import datetime, timezone
     return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
 
-def mid_at(world, at_ms):
-    """The same price the source's ``reference_price`` finds: the newest quote at or before the hour."""
-    last = None
-    for t, mid in world.quotes:
-        if t > at_ms:
-            break
-        last = mid
-    return last
+def make_session(world, directory, strats, **kw):
+    world.release_until(DECIDE_FROM - MIN)
+    return new_session(world, directory, strats, **kw)
 
 
-def plan_response(hours, received_ms, product=BTC, rates=None):
-    return {"hours": list(hours), "received_ms": received_ms, "product": product, "rates": dict(rates or {})}
-
-
-def write_plan(world, plan):
-    """Inserts the responses in the order they arrived (the capture appends them as they come, so row order is arrival order)."""
-    for item in sorted(plan, key=lambda x: x["received_ms"]):
-        write_response(world, item["hours"], item["received_ms"], item["product"], rates=item["rates"])
-
-
-def write_response(world, hours, received_ms, product=BTC, *, rates=None):
-    """One response of ``historical-funding-rates`` with the given hour starts, arrived at ``received_ms``."""
-    rates = rates or {}
-    items = []
-    for start in hours:
-        relative = D(rates.get(start, RATE))
-        price = mid_at(world, start)
-        items.append({"timestamp": iso(start), "fundingRate": float(relative * price), "relativeFundingRate": float(relative)})
-    raw = json.dumps({"result": "success", "serverTime": iso(received_ms), "rates": items}, sort_keys=True)
-    sha = stable_hash(raw)
-    db = world.source.db
-    db.execute("INSERT OR IGNORE INTO paper_futures_funding_responses VALUES(?,?,?,?)", (sha, received_ms, iso(received_ms), raw))
-    for start in hours:
-        db.execute("INSERT OR IGNORE INTO paper_futures_funding_periods VALUES(?,?,?,?,?,?,?)",
-                   (sha, start, start + HOUR, str(rates.get(start, RATE)), received_ms, "USD/BTC/hour", product))
-    world.source.commit()
-    return sha
-
-
-def hourly_plan(first_hour, last_hour, *, skip=(), overlap=3):
-    """What the capture would have stored: one response per hour, a LAG after the hour ends, with the ``overlap`` newest hours."""
-    plan, hour = [], first_hour
-    while hour <= last_hour:
-        if hour not in skip:
-            hours = [h for h in range(hour - (overlap - 1) * HOUR, hour + 1, HOUR) if h >= first_hour and h not in skip]
-            plan.append(plan_response(hours, hour + HOUR + LAG))
-        hour += HOUR
-    return plan
-
-
-def hourly_responses(world, first_hour, last_hour, **kw):
-    write_plan(world, hourly_plan(first_hour, last_hour, **kw))
-
-
-def new_world(root, *, observed, **kw):
-    world = World(root, **kw)
-    if observed:
-        world.source.db.execute("DROP TABLE synthetic_accrual")              # nothing synthetic is left in the accounting path
-        world.source.db.executescript(TABLES)
-        world.source.commit()
-    return world
-
-
-def make_session(world, directory, strategies, *, observed, **kw):
-    world.release_until(LOAD_START)
-    return LI.LiveSession.create(directory, world.path, strategies, (BTC,), runner_config(), decide_from_ms=FIRST_DECISION, source_id="synthetic",
-                                 decide_until_ms=LAST_DECISION, ingest_kw=INGEST_KW, max_quote_gap_ms=MAX_QUOTE_GAP_MS,
-                                 funding_mode="observed" if observed else "synthetic", **kw)
-
-
-def run(session, world, upto):
+def run(session, world, first, last=len(TIMES)):
     records = []
-    for now in TIMES[:upto]:
+    for now in TIMES[first:last]:
         world.release_until(now)
         session.step(now)
         records.append(record(session, now))
@@ -124,59 +56,110 @@ def money(session):
             "trades": [(t["product_id"], t["exit_reason"], str(t["pnl_usd"]), t["funding_status"]) for t in session.runner.portfolio.trades]}
 
 
+def LI_alerts(session):
+    from balancita_engine import paper_runner_report as REP
+    return REP.alerts(session.runner)
+
+
+# ---- hand edits of the real responses (the scenarios say which) ------------------------------------------------------------------------
+def with_rate(row, hour_iso, factor):
+    """A copy of a real response where the rate of ``hour_iso`` is ``factor`` times what Kraken sent (both the absolute and the relative one)."""
+    body = json.loads(row["raw"])
+    for item in body["rates"]:
+        if item["timestamp"] == hour_iso:
+            item["fundingRate"] = item["fundingRate"] * factor
+            item["relativeFundingRate"] = item["relativeFundingRate"] * factor
+    return renamed(row, json.dumps(body, sort_keys=True))
+
+
+def without_hour(row, hour_iso):
+    body = json.loads(row["raw"])
+    body["rates"] = [item for item in body["rates"] if item["timestamp"] != hour_iso]
+    return renamed(row, json.dumps(body, sort_keys=True))
+
+
+def renamed(row, raw):
+    return dict(row, raw=raw, sha256=stable_hash(raw))
+
+
+def real_rate(hour_iso):
+    """The relative rate Kraken finally listed for ``hour_iso`` (the newest real response that lists it)."""
+    from real_world import funding
+    for row in reversed(funding()):
+        for item in json.loads(row["raw"])["rates"]:
+            if item["timestamp"] == hour_iso:
+                return D(repr(item["relativeFundingRate"]))
+    raise AssertionError(hour_iso)
+
+
 class TestObservedFunding(unittest.TestCase):
     cache = {}
-    STEPS = len(TIMES)
 
     @classmethod
     def setUpClass(cls):
         SC.disarm()
         cls.cache["dir"] = root = tempfile.mkdtemp()
-        cls.cache["strategies"], _ = RS.load_frozen()
-        last_hour = ((TIMES[cls.STEPS - 1] - LAG) // HOUR - 1) * HOUR
-        cls.cache["last_hour"] = last_hour
-        for name, observed in (("synthetic", False), ("observed", True)):
+        cls.cache["strategies"] = strategies(BUY_AT)
+        for name, with_funding in (("bare", False), ("observed", True)):
             where = os.path.join(root, name)
             os.makedirs(where)
-            world = new_world(where, observed=observed)
-            if observed:
-                hourly_responses(world, FIRST_HOUR, last_hour)
-            session = make_session(world, os.path.join(where, "s"), cls.cache["strategies"], observed=observed)
-            records = run(session, world, cls.STEPS)
-            cls.cache[name] = {"session": session, "world": world, "records": records, "where": where}
+            world = RealWorld(where, with_funding=with_funding)
+            session = make_session(world, os.path.join(where, "s"), cls.cache["strategies"])
+            cls.cache[name] = {"session": session, "world": world, "records": run(session, world, 0)}
 
     @classmethod
     def tearDownClass(cls):
-        for name in ("synthetic", "observed"):
+        for name in ("bare", "observed"):
             if name in cls.cache:
                 abandon(cls.cache[name]["session"])
                 cls.cache[name]["world"].close()
         shutil.rmtree(cls.cache.get("dir", ""), True)
         cls.cache.clear()
 
-    def test_the_observed_accounting_gives_the_same_money_as_the_synthetic_one_with_the_same_rates(self):
-        a, b = self.cache["synthetic"]["session"], self.cache["observed"]["session"]
-        self.assertGreater(money(a)["closed"], 0)
-        self.assertNotEqual(money(a)["funding_usd"], "0")                      # the comparison is not between two empty accruals
-        self.assertEqual(money(b), money(a))
+    def test_the_funding_paid_is_what_the_real_rates_say_for_the_hours_each_position_was_held(self):
+        session = self.cache["observed"]["session"]
+        trades = session.runner.portfolio.trades
+        self.assertEqual(len(trades), 2)
+        expected = D(0)
+        for trade in trades:
+            hours = [(h, h + HOUR, real_rate(iso(h)[:-5] + "Z")) for h in range(trade["entry_time_ms"] // HOUR * HOUR, trade["exit_time_ms"] + HOUR, HOUR)]
+            amount, covered = accrue_funding(hours, trade["entry_time_ms"], trade["exit_time_ms"], D(trade["entry_price"]) * D(trade["quantity"]))
+            self.assertEqual(covered, trade["exit_time_ms"] - trade["entry_time_ms"])
+            expected += amount if trade["side"] == "LONG" else -amount
+        self.assertNotEqual(expected, 0)
+        self.assertAlmostEqual(float(D(money(session)["funding_usd"])), float(expected), places=5)
 
-    def test_the_signals_are_the_same_whatever_the_accounting_channel(self):
-        a, b = self.cache["synthetic"]["records"], self.cache["observed"]["records"]
-        self.assertEqual([r["signals"] for r in b], [r["signals"] for r in a])
+    def test_the_signals_and_the_trades_are_the_same_with_or_without_the_accounting_funding(self):
+        a, b = self.cache["bare"]["records"], self.cache["observed"]["records"]
+        self.assertEqual([r["signals"] for r in b], [r["signals"] for r in a])               # the signal channel is apart from the accounting one
+        self.assertEqual([r["orders"] for r in b], [r["orders"] for r in a])
+        self.assertEqual(money(self.cache["bare"]["session"])["funding_usd"], "0")            # nothing is charged without the responses
 
-    def test_the_book_and_the_portfolio_agree_and_an_incomplete_trade_is_never_called_verified(self):
-        session, reference = self.cache["observed"]["session"], self.cache["synthetic"]["session"]
+    def test_the_book_and_the_portfolio_agree_and_the_result_is_verified_only_when_every_hour_was_applied(self):
+        session = self.cache["observed"]["session"]
         report = session.funding_report()
         self.assertEqual(report["divergence"], {"missing": [], "extra": [], "rate_differs": []})
         self.assertGreater(report["counts"]["accepted"], 0)
-        self.assertGreater(report["counts"]["duplicate"], 0)                    # overlapping responses are recognised, not applied twice
+        self.assertGreater(report["counts"]["duplicate"], 0)                    # the responses overlap 48 hours: repeats are recognised, not applied twice
+        self.assertGreater(report["counts"]["provisional"], 0)                  # the hour that has just begun is listed before it is settled
         self.assertEqual(report["quarantined"], [])
-        # the last trade closed after the newest published hour: its funding is partial in both modes, and the report says so
-        partial = sorted(t["trade_id"] for t in reference.runner.portfolio.trades if not t["net_complete"])
-        self.assertNotEqual(partial, [])
-        self.assertEqual(report["incomplete_trades"], partial)
-        self.assertFalse(report["pnl_verified"])
+        self.assertEqual(report["incomplete_trades"], [])
+        self.assertTrue(report["pnl_verified"])
         self.assertEqual([r for r in session.audit.records() if r["kind"] == "funding_book_diverged"], [])
+
+    def test_a_trade_closed_before_the_newest_settled_hour_is_never_called_verified(self):
+        """At 22:00Z the second position (open until 21:25) still lacks the hour 21:00, which is settled at 22:10: partial, not verified."""
+        world = RealWorld(tempfile.mkdtemp(), with_funding=True)
+        self.addCleanup(world.close)
+        session = make_session(world, tempfile.mkdtemp(), self.cache["strategies"])
+        self.addCleanup(abandon, session)
+        run(session, world, 0, next(i for i, t in enumerate(TIMES) if t >= DECIDE_FROM + 290 * MIN))        # until 22:00Z
+        report = session.funding_report()
+        [first, second] = session.runner.portfolio.trades
+        self.assertTrue(first["net_complete"])
+        self.assertFalse(second["net_complete"])
+        self.assertEqual(report["incomplete_trades"], [second["trade_id"]])
+        self.assertFalse(report["pnl_verified"])
 
     def test_no_synthetic_accrual_is_read_in_the_observed_path(self):
         session = self.cache["observed"]["session"]
@@ -186,14 +169,9 @@ class TestObservedFunding(unittest.TestCase):
             session.funding.accrual(0)
 
 
-CUT = 125                                          # steps: the first position (hours FIRST_HOUR .. FIRST_HOUR+2) is closed by then
-HOUR_HELD = FIRST_HOUR + HOUR                      # a whole hour inside the first position's holding time
-LAST_HOUR = FIRST_HOUR + 8 * HOUR
-
-
 class TestObservedFundingScenarios(unittest.TestCase):
-    """Coverage, contradictions, provisional hours, divergence and recovery. Every scenario starts from the same session, stopped
-    before its first position, in a world that has no funding response yet; each writes its own responses into its own copy."""
+    """Coverage, contradictions, provisional hours, divergence and recovery. Every scenario starts from the same session, stopped five
+    minutes before its second position, and edits its own copy of the responses that have not arrived yet."""
 
     cache = {}
 
@@ -201,12 +179,10 @@ class TestObservedFundingScenarios(unittest.TestCase):
     def setUpClass(cls):
         SC.disarm()
         cls.cache["dir"] = root = tempfile.mkdtemp()
-        cls.cache["strategies"], _ = RS.load_frozen()
-        world = new_world(root, observed=True)
-        session = make_session(world, os.path.join(root, "a"), cls.cache["strategies"], observed=True)
-        index = next(i for i, t in enumerate(TIMES) if t >= FIRST_DECISION + 50 * 60_000) - 1
-        run(session, world, index)
-        cls.cache["index"] = index
+        cls.cache["strategies"] = strategies(BUY_AT)
+        world = RealWorld(root, with_funding=True)
+        session = make_session(world, os.path.join(root, "a"), cls.cache["strategies"])
+        run(session, world, 0, PRE_INDEX)
         os.makedirs(os.path.join(root, "snap"))
         shutil.copytree(session.directory, os.path.join(root, "snap", "session"))
         cls.cache["snap"] = {"session": os.path.join(root, "snap", "session"), "world": world.snapshot(os.path.join(root, "snap"))}
@@ -220,32 +196,30 @@ class TestObservedFundingScenarios(unittest.TestCase):
         cls.cache.clear()
 
     def start(self, tweak=None, **kw):
-        """A recovered session on its own copy of the world, with the funding responses ``tweak`` writes (default: every hour)."""
+        """A recovered session on its own copy of the world; ``tweak(rows)`` returns the responses that have not arrived yet."""
         root = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, root, True)
         world = self.cache["world"].fork(root, self.cache["snap"]["world"])
-        write_plan(world, (tweak or (lambda: hourly_plan(FIRST_HOUR, LAST_HOUR)))())
+        if tweak is not None:
+            world.funding_rows = world.funding_rows[:world.next_funding] + sorted(tweak(world.funding_rows[world.next_funding:]),
+                                                                                  key=lambda r: r["received_at"])
         directory = os.path.join(root, "s")
         shutil.copytree(self.cache["snap"]["session"], directory)
         session = self.open(world, directory, **kw)
         return world, directory, session
 
     def open(self, world, directory, **kw):
-        session = LI.LiveSession.recover(directory, world.path, self.cache["strategies"], (BTC,), runner_config(), journal_clock(directory),
-                                         decide_from_ms=FIRST_DECISION, source_id="synthetic", decide_until_ms=LAST_DECISION, ingest_kw=INGEST_KW,
-                                         max_quote_gap_ms=MAX_QUOTE_GAP_MS, **dict({"funding_mode": "observed"}, **kw))
+        session = recover_session(world, directory, self.cache["strategies"], journal_clock(directory), **kw)
         self.addCleanup(abandon, session)
         return session
 
-    def go(self, world, session, first, last=CUT):
-        for now in TIMES[first:last]:
-            world.release_until(now)
-            session.step(now)
+    def go(self, world, session, first=PRE_INDEX, last=len(TIMES)):
+        run(session, world, first, last)
 
     def baseline(self):
         if "baseline" not in self.cache:
             world, _, session = self.start()
-            self.go(world, session, self.cache["index"])
+            self.go(world, session)
             self.cache["baseline"] = {"money": money(session), "report": session.funding_report(), "signals": session.digests()["signals"]}
         return self.cache["baseline"]
 
@@ -254,14 +228,15 @@ class TestObservedFundingScenarios(unittest.TestCase):
         self.assertTrue(base["report"]["pnl_verified"])
         self.assertEqual(base["report"]["incomplete_trades"], [])
         self.assertNotEqual(base["money"]["funding_usd"], "0")
-        self.assertGreaterEqual(base["money"]["closed"], 1)
+        self.assertEqual(base["money"]["closed"], 2)
 
     def test_a_missing_hour_leaves_the_trade_partial_and_the_result_unverified(self):
+        """Hand edit: the hour 19:00 is left out of every response that has not arrived yet."""
         base = self.baseline()
-        world, _, session = self.start(lambda: hourly_plan(FIRST_HOUR, LAST_HOUR, skip=(HOUR_HELD,)))
-        self.go(world, session, self.cache["index"])
+        world, _, session = self.start(lambda rows: [without_hour(r, HELD_ISO) for r in rows])
+        self.go(world, session)
         report = session.funding_report()
-        trade = session.runner.portfolio.trades[0]
+        trade = session.runner.portfolio.trades[1]
         self.assertFalse(trade["net_complete"])
         self.assertIsNone(trade["net_usd"])                                     # a net result is not announced from a hole
         self.assertEqual(report["incomplete_trades"], [trade["trade_id"]])
@@ -270,77 +245,80 @@ class TestObservedFundingScenarios(unittest.TestCase):
         self.assertNotEqual(money(session)["funding_usd"], base["money"]["funding_usd"])
         self.assertEqual(session.digests()["signals"], base["signals"])           # the signals do not know about the accounting channel
 
-    def revised_session(self, revised_at):
-        """The baseline plan, but Kraken publishes 0.0009 instead of the rate in use for HOUR_HELD at ``revised_at`` and keeps listing it so."""
-        def tweak():
-            plan = hourly_plan(FIRST_HOUR, LAST_HOUR)
-            for item in plan:                                  # once corrected, the later listings carry the corrected rate
-                if item["received_ms"] >= revised_at and HOUR_HELD in item["hours"]:
-                    item["rates"][HOUR_HELD] = "0.0009"
-            return plan + [plan_response([HOUR_HELD], revised_at, rates={HOUR_HELD: "0.0009"})]
+    def revised_session(self, revised_at, extra_at=None):
+        """Hand edit: Kraken lists the hour 19:00 with 1.5 times its rate in every response from ``revised_at`` on. With ``extra_at``, a copy
+        of the response of 20:00:30 is added at that instant (the hour is then settled with the rate in use before the correction)."""
+        def tweak(rows):
+            out = [with_rate(r, HELD_ISO, 1.5) if r["received_at"] >= revised_at else r for r in rows]
+            if extra_at is not None:
+                source = next(r for r in rows if r["received_at"] > HELD + HOUR and r["received_at"] < HELD + 2 * HOUR)       # the real 20:00:30
+                body = json.loads(source["raw"])
+                body["serverTime"] = iso(extra_at)
+                out.append(renamed(dict(source, received_at=extra_at, server_time=iso(extra_at)), json.dumps(body, sort_keys=True)))
+            return out
 
         world, _, session = self.start(tweak)
-        self.go(world, session, self.cache["index"])
+        self.go(world, session)
         return session
 
     def assert_revised(self, session, base, expect_adjustment):
         """The rate seen last is used, the funding of the trade moves by exactly the difference, nothing is quarantined, the session does
         not stop, the signals do not notice and the replaced rate stays in the evidence (BAL-DECISION-184-03)."""
-        from balancita_engine.futures_simulator import accrue_funding
         report, portfolio = session.funding_report(), session.runner.portfolio
         self.assertEqual(report["quarantined"], [])
         self.assertEqual(report["disputed_trades"], [])
-        self.assertEqual(report["revised_periods"], [[BTC, HOUR_HELD]])
+        self.assertEqual(report["revised_periods"], [[BTC, HELD]])
         self.assertEqual(report["divergence"], {"missing": [], "extra": [], "rate_differs": []})        # book and portfolio agree
         self.assertEqual(report["counts"]["revision_applied"], 1)                                      # once, not once per delivery
         revisions = [a for a in portfolio.adjustments if a["kind"] == "funding_revision"]
         self.assertEqual(len(revisions), 1 if expect_adjustment else 0)
-        [trade] = portfolio.trades
+        trade = portfolio.trades[1]
         notional = D(trade["entry_price"]) * D(trade["quantity"])
-        old, _ = accrue_funding([(HOUR_HELD, HOUR_HELD + HOUR, D(RATE))], trade["entry_time_ms"], trade["exit_time_ms"], notional)
-        new, _ = accrue_funding([(HOUR_HELD, HOUR_HELD + HOUR, D("0.0009"))], trade["entry_time_ms"], trade["exit_time_ms"], notional)
+        old, _ = accrue_funding([(HELD, HELD + HOUR, real_rate(HELD_ISO))], trade["entry_time_ms"], trade["exit_time_ms"], notional)
+        new, _ = accrue_funding([(HELD, HELD + HOUR, real_rate(HELD_ISO) * D("1.5"))], trade["entry_time_ms"], trade["exit_time_ms"], notional)
         sign = 1 if trade["side"] == "LONG" else -1
         self.assertAlmostEqual(float(D(money(session)["funding_usd"]) - D(base["money"]["funding_usd"])), float(sign * (new - old)), places=5)
         if expect_adjustment:
             self.assertAlmostEqual(float(D(revisions[0]["after"]["funding_usd"]) - D(revisions[0]["before"]["funding_usd"])),
                                    float(sign * (new - old)), places=5)
-            self.assertEqual(revisions[0]["revised_periods"], [[HOUR_HELD, HOUR_HELD + HOUR]])
-        evidence = [r for r in session.audit.records() if r["kind"] == "funding_evidence" and r["start_ms"] == HOUR_HELD]
-        self.assertEqual([e["evidence_kind"] for e in evidence], ["revision_applied"])
-        self.assertEqual((evidence[0]["previous_rate"], evidence[0]["rate"]), (RATE, "0.0009"))        # the replaced rate is kept
+            self.assertEqual(revisions[0]["revised_periods"], [[HELD, HELD + HOUR]])
+        evidence = [r for r in session.audit.records() if r["kind"] == "funding_evidence" and r["start_ms"] == HELD]
+        self.assertIn("revision_applied", [e["evidence_kind"] for e in evidence])
+        replaced = [e for e in evidence if e["evidence_kind"] == "revision_applied"][0]
+        self.assertNotEqual(replaced["previous_rate"], replaced["rate"])                              # the replaced rate is kept
         self.assertEqual(session.digests()["signals"], base["signals"])
         self.assertTrue(report["pnl_verified"])
         self.assertNotIn("funding_conflict", [a["code"] for a in LI_alerts(session)])
         self.assertEqual([v for v in AU.audit(portfolio)["violations"]], [])
 
     def test_a_rate_revised_while_the_trade_is_open_prices_its_close_and_needs_no_adjustment(self):
+        """The hour 19:00 is settled at 20:12 (the added copy) and corrected at 21:00:30, while the position is still open (until 21:25)."""
         base = self.baseline()
-        self.assert_revised(self.revised_session(HOUR_HELD + HOUR + LAG + 5 * 60_000), base, expect_adjustment=False)
+        self.assert_revised(self.revised_session(HELD + 2 * HOUR, extra_at=HELD + HOUR + 12 * MIN), base, expect_adjustment=False)
 
     def test_a_rate_revised_after_the_trade_closed_is_an_adjustment_and_the_session_goes_on(self):
+        """The hour 19:00 is settled by the real response of 21:00:30 and corrected at 22:00:30, after the position closed (21:25)."""
         base = self.baseline()
-        self.assert_revised(self.revised_session(HOUR_HELD + 2 * HOUR + LAG + 5 * 60_000), base, expect_adjustment=True)
+        self.assert_revised(self.revised_session(HELD + 3 * HOUR), base, expect_adjustment=True)
 
     def test_a_provisional_hour_is_evidence_only_and_the_later_definitive_one_is_applied(self):
+        """The real response of 20:00:30 lists the hour 19:00 30 seconds after it ended: not settled. Nothing from it reaches the money."""
         base = self.baseline()
-
-        def tweak():
-            return hourly_plan(FIRST_HOUR, LAST_HOUR) + [plan_response([HOUR_HELD], HOUR_HELD + HOUR + 60_000)]    # not settled yet
-
-        world, _, session = self.start(tweak)
-        self.go(world, session, self.cache["index"])
+        world, _, session = self.start()
+        self.go(world, session)
         report = session.funding_report()
         self.assertGreaterEqual(report["counts"]["provisional"], 1)
-        self.assertEqual(money(session), base["money"])                              # nothing from the provisional value reached the money
+        self.assertEqual(money(session), base["money"])
+        kinds = [r["evidence_kind"] for r in session.audit.records() if r["kind"] == "funding_evidence" and r["start_ms"] == HELD]
+        self.assertEqual(kinds[0], "provisional")
+        self.assertNotIn("revision_applied", kinds)                                  # the settled rate is the one the provisional hour already had
         self.assertTrue(report["pnl_verified"])
-        self.assertEqual([r["evidence_kind"] for r in session.audit.records() if r["kind"] == "funding_evidence" and r["start_ms"] == HOUR_HELD],
-                         ["provisional"])
 
     def test_a_death_and_recovery_in_the_middle_never_count_a_period_twice(self):
         base = self.baseline()
         world, directory, session = self.start()
-        middle = self.cache["index"] + 8
-        self.go(world, session, self.cache["index"], middle)
+        middle = PRE_INDEX + 20
+        self.go(world, session, PRE_INDEX, middle)
         abandon(session)                                                           # the process dies: nothing is flushed
         again = self.open(world, directory)
         self.go(world, again, middle)
@@ -352,9 +330,9 @@ class TestObservedFundingScenarios(unittest.TestCase):
 
     def test_with_alert_a_divergence_is_written_and_the_session_goes_on(self):
         world, directory, session = self.start(on_funding_divergence="alert")
-        self.go(world, session, self.cache["index"], self.cache["index"] + 14)
+        self.go(world, session, PRE_INDEX, PRE_INDEX + 36)                         # past 21:00:30: the hour 19:00 is in the book
         del session.runner.portfolio.funding[BTC][0]                                # the two authoritative states now disagree
-        self.go(world, session, self.cache["index"] + 14, self.cache["index"] + 16)
+        self.go(world, session, PRE_INDEX + 36, PRE_INDEX + 38)
         records = [r for r in session.audit.records() if r["kind"] == "funding_book_diverged"]
         self.assertTrue(records)
         self.assertEqual(len(records[0]["missing"]), 1)
@@ -364,14 +342,14 @@ class TestObservedFundingScenarios(unittest.TestCase):
     def test_an_unexplained_divergence_stops_the_session_by_default_and_repairs_nothing(self):
         base = self.baseline()
         world, directory, session = self.start()
-        self.go(world, session, self.cache["index"], self.cache["index"] + 14)
+        self.go(world, session, PRE_INDEX, PRE_INDEX + 36)
         del session.runner.portfolio.funding[BTC][0]
         with self.assertRaises(LI.IntegrationError) as stop:
-            self.go(world, session, self.cache["index"] + 14, self.cache["index"] + 16)
+            self.go(world, session, PRE_INDEX + 36, PRE_INDEX + 38)
         self.assertEqual(stop.exception.reason, "funding_book_diverged")
         self.assertIsNotNone(session.halted)
         with self.assertRaises(LI.IntegrationError):
-            session.step(TIMES[self.cache["index"] + 16])
+            session.step(TIMES[PRE_INDEX + 38])
         self.assertEqual(len([r for r in session.audit.records() if r["kind"] == "funding_book_diverged"]), 1)     # the evidence is kept
         self.assertFalse(session.funding_report()["pnl_verified"])
         abandon(session)
@@ -381,7 +359,7 @@ class TestObservedFundingScenarios(unittest.TestCase):
         self.assertEqual(report["divergence_evidence"], 1)                          # the evidence survived the recovery
         self.assertFalse(report["pnl_verified"])                                    # and the P&L stays not verified
         self.assertIn("divergence_evidence_recorded", report["unverified_reasons"])
-        self.go(world, again, self.cache["index"] + 14)
+        self.go(world, again, PRE_INDEX + 36)
         self.assertEqual(money(again), base["money"])                               # no period charged twice, nothing rewritten
 
     def test_a_different_rate_in_the_portfolio_halts_the_session_like_a_missing_one(self):
@@ -390,13 +368,13 @@ class TestObservedFundingScenarios(unittest.TestCase):
                                   ("extra", lambda f: f.append((f[-1][1] + HOUR * 100, f[-1][1] + HOUR * 101, D("0.0001"))), "extra")):
             with self.subTest(difference=name):
                 world, directory, session = self.start()
-                self.go(world, session, self.cache["index"], self.cache["index"] + 14)
+                self.go(world, session, PRE_INDEX, PRE_INDEX + 36)
                 tamper(session.runner.portfolio.funding[BTC])
                 with self.assertRaises(LI.IntegrationError) as stop:
-                    self.go(world, session, self.cache["index"] + 14, self.cache["index"] + 16)
+                    self.go(world, session, PRE_INDEX + 36, PRE_INDEX + 38)
                 self.assertEqual(stop.exception.reason, "funding_book_diverged")
-                record = [r for r in session.audit.records() if r["kind"] == "funding_book_diverged"][0]
-                self.assertEqual(len(record[key]), 1)
+                record_ = [r for r in session.audit.records() if r["kind"] == "funding_book_diverged"][0]
+                self.assertEqual(len(record_[key]), 1)
                 self.assertFalse(session.funding_report()["pnl_verified"])
 
     def test_the_default_of_the_session_is_to_halt_on_a_divergence(self):
@@ -416,11 +394,13 @@ class TestObservedFundingScenarios(unittest.TestCase):
     def test_a_failing_read_of_the_signal_funding_stops_the_session_and_an_absent_table_does_not(self):
         """D-204-01: only a table that is not there means "no signal funding"; a lock or a disk error is not mistaken for it."""
         world, directory, session = self.start()
+        world.db.execute("CREATE TABLE synthetic_fundpct(product_id TEXT, start_ms INTEGER, rate TEXT, arrival_ms INTEGER)")       # empty, written by hand
+        world.db.commit()
         with mock.patch.object(LI.FundingSource, "fundpct", side_effect=sqlite3.OperationalError("database is locked")):
             with self.assertRaises(sqlite3.OperationalError):
                 session.funding.fundpct(0)
             with self.assertRaises(sqlite3.OperationalError):
-                self.go(world, session, self.cache["index"], self.cache["index"] + 3)
+                self.go(world, session, PRE_INDEX, PRE_INDEX + 3)
         self.assertIsNotNone(session.halted)                                       # the session did not go on as if nothing was wrong
 
     def test_without_a_signal_funding_table_the_signal_channel_is_empty(self):
@@ -439,7 +419,7 @@ class TestObservedFundingScenarios(unittest.TestCase):
         """The unit check of the adapter keeps its own tolerance; this layer adds no threshold (an old reference that no longer fits
         makes the hour ``unit_mismatch``, rejected with evidence)."""
         world, directory, session = self.start()
-        self.go(world, session, self.cache["index"], self.cache["index"] + 2)
+        self.go(world, session, PRE_INDEX, PRE_INDEX + 2)
         last = session.funding.db.execute("SELECT MAX(event_time) FROM paper_futures_market_events WHERE feed='ticker' AND product_id=?",
                                           (BTC,)).fetchone()[0]
         self.assertIsNotNone(session.funding.reference_price(BTC, last + 30 * 86_400_000))             # a month later: still the newest quote
@@ -451,11 +431,6 @@ class TestObservedFundingScenarios(unittest.TestCase):
         with self.assertRaises(LI.IntegrationError) as bad:
             self.open(world, directory, funding_mode="synthetic")
         self.assertEqual(bad.exception.reason, "session_mismatch")
-
-
-def LI_alerts(session):
-    from balancita_engine import paper_runner_report as REP
-    return REP.alerts(session.runner)
 
 
 if __name__ == "__main__":

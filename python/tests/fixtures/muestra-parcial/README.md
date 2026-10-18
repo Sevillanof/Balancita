@@ -23,7 +23,13 @@ Tres ventanas cortas (~17 s) centradas en cortes reales del WebSocket, achicadas
 
 Solo consultas (`polls`), períodos, avistamientos y respuestas (sin `raw_response`; con `raw_response_bytes` y `raw_response_sha256_check`) desde 2026-10-17T12:40:00.000Z. Los cuerpos crudos de ~1 MB no se incluyen.
 
+## Respuestas de funding recortadas
+
+`paper_futures_funding_responses_trimmed.jsonl` (de Captura, 18-oct-2026): las 20 respuestas horarias de funding de PF_XBTUSD que la captura guardó entre 2026-10-17T13:00:30Z y 2026-10-18T08:00:30Z. Cada fila lleva `received_at`, `server_time`, `response_sha256` (de la respuesta original completa, verificado por Captura), `original_bytes` y `raw_trimmed`: `result`, `serverTime` y los 48 `rates` con `timestamp >= serverTime - 48 h`, con el texto de cada tasa tal cual lo mandó Kraken. La respuesta de Kraken no trae el producto; es de PF_XBTUSD por `paper_futures_funding_polls.product_id`. `real_world.py` las escribe en `paper_futures_funding_responses` a la hora en que llegaron (el cuerpo guardado es el recortado, no el original de ~1 MB).
+
 ## Archivos (filas; bytes; sha256)
+
+- `paper_futures_funding_responses_trimmed.jsonl`: 20 filas, 115718 bytes, sha256 `a79f241f75115fee0848f694378cc0de14b6c8d17285f988078b670e8cc0b922`
 
 - `paper_futures_funding_periods.jsonl`: 20 filas, 4857 bytes, sha256 `e925761f097c82eebfe70fbfc5105b976f4c26789da84bb6dbdb65e395d33415`
 - `paper_futures_funding_polls.jsonl`: 39 filas, 26048 bytes, sha256 `ae0ae350baa2993831050185edb91e93729495379ac3716fcc38af4901fb60e0`
