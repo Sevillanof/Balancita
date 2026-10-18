@@ -29,7 +29,7 @@ describe('session document decoder against documents the real publisher emitted'
     expect(doc.positions.positions).toHaveLength(1)
     expect(doc.intervals.intervals.length).toBeGreaterThan(0)
     expect(doc.sessionId).toBeTruthy()
-    expect(doc.steps).toBe(2)
+    expect(doc.steps).toBe(8)
   })
 
   it('carries the mark of the run that wrote it, and a document without it is refused', () => {
