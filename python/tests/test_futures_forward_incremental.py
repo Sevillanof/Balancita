@@ -10,11 +10,15 @@ Semillas: ``BALANCITA_EQUIV_SEEDS`` (por defecto 4; cada semilla hace decenas de
 Mutantes comprobados a mano (cada uno rompe al menos un test de este archivo; ver el informe del PR):
 M01 ``<=`` -> ``<`` al consumir la 5m pendiente; M02 ``previous`` no restaurado; M03 estado ``logvol`` no restaurado;
 M04 semilla de RSI no restaurada; M05 decisión de la posición copiada en vez de enlazada; M06 Decimal de la posición
-sin restaurar; M07 funding de la posición abierta podado de más; M08 funding nuevo pisa al guardado; M09 el calentamiento
-abre posiciones; M10 una vela no posterior al cursor se reprocesa; M11 checkpoint fuera de la transacción de los trades;
-M12 sin comprobación de ``seq`` (dos procesos); M13 cadena sin enlace; M14 blob sin verificar; M15 ``catalog_version`` sin
-comprobar; M16 ``_drain`` no vacía los trades; M17 ``pending`` sin serializar; M18 ``fundpct`` admitida; M19 sin era;
-M20 sin triggers anti UPDATE/DELETE; M21 ``stale_cycles`` no restaurado; M22 ``_last_5m_seen`` no restaurado.
+sin restaurar; M07 funding de la posición abierta podado de más; M09 el calentamiento abre posiciones; M10 una vela no
+posterior al cursor se reprocesa; M11 checkpoint fuera de la transacción de los trades; M12 sin comprobación de ``seq``;
+M13 cadena sin enlace; M14 blob sin verificar; M15 ``catalog_version`` sin comprobar; M16 ``_drain`` no vacía los trades;
+M17 ``pending`` sin serializar; M18 ``fundpct`` admitida; M19 sin era; M20 sin trigger anti DELETE; M21 ``bucket`` del
+libro no restaurado; M22 ``last_5m_ms`` no restaurado.
+Revisión adversarial: N01 el cursor no espera a la 5m; N02 el cursor no espera a la 1m ausente; N03 el plazo nunca vence;
+N04 blob borrable; N05 sin registro de cabezas; N06 recorte de la cola no detectado; N07 conflicto de trade en silencio;
+N08 ``BLOCK_STALE_ENTRIES`` ignorada; N09 el funding provisional guardado manda; N10 el funding no pasa a final;
+N11 huecos sin registrar; N12 el libro restaurado sin funding; N13 fila reescrita sin cotejar con su cabeza.
 """
 
 import copy
@@ -66,10 +70,14 @@ def fast_spec():
 # ---- datos ----------------------------------------------------------------------------------------------------------
 
 def fives_from(ones):
+    """Las 5m alineadas cuyas cinco 1m están todas (una ventana con hueco no tiene 5m)."""
+    windows = {}
+    for candle in ones:
+        windows.setdefault(candle["bucket_start"] // FIVE_MINUTES_MS, []).append(candle)
     fives = []
-    for start in range(0, len(ones) - 4, 5):
-        chunk = ones[start:start + 5]
-        if [c["bucket_start"] for c in chunk] != [chunk[0]["bucket_start"] + i * MINUTE for i in range(5)] or chunk[0]["bucket_start"] % FIVE_MINUTES_MS:
+    for key in sorted(windows):
+        chunk = windows[key]
+        if len(chunk) != 5:
             continue
         candle = _official(FIVE_MINUTES_MS, chunk[0]["bucket_start"], Decimal(chunk[-1]["close"]),
                            sum(Decimal(c["volume_btc"]) for c in chunk))
@@ -135,38 +143,73 @@ def _norm(position):
     return {k: (str(v) if isinstance(v, Decimal) else v) for k, v in position.items() if k != "decision"}
 
 
+FAR = 10 ** 15   # un reloj muy posterior: todo hueco pendiente queda declarado
+
+
 def cuts(ones, fives, rng, max_chunk, early=False):
-    """Trozos ``(1m, 5m)`` de tamaño aleatorio; las 5m llegan cuando cierran (o antes, si ``early``)."""
+    """Trozos ``(1m, 5m, ahora)`` de tamaño aleatorio; las 5m llegan cuando cierran (o antes, si ``early``)."""
     index, delivered = 0, 0
     while index < len(ones):
         size = 1 if rng.random() < 0.25 else rng.randint(1, max_chunk)
         part = ones[index:index + size]
         index += size
-        end = part[-1]["bucket_start"] + ONE_MINUTE_MS + (rng.choice([0, 600_000]) if early else 0)
+        now = part[-1]["bucket_start"] + ONE_MINUTE_MS
+        end = now + (rng.choice([0, 600_000]) if early else 0)
         start = delivered
         while delivered < len(fives) and fives[delivered]["bucket_start"] + FIVE_MINUTES_MS <= end:
             delivered += 1
-        yield part, fives[start:delivered]
+        yield part, fives[start:delivered], now
+
+
+def delayed_source(ones, fives, rng, *, tick_max=45, random_delays=True, late_ones=None, late_fives=None,
+                   max_delay=12 * 60_000):
+    """Simula el reloj: cada vela llega en ``cierre + retraso`` y el llamador corre en ticks de 1 a ``tick_max`` minutos.
+
+    Retrasos aleatorios por debajo de ``GAP_GRACE`` (hasta 12 min, incluida la 5m que llega 5 min tarde, y 1m
+    desordenadas); ``late_ones`` / ``late_fives`` fijan el retraso de velas concretas (``bucket -> ms``).
+    """
+    events = []
+    for candle in ones:
+        delay = (late_ones or {}).get(candle["bucket_start"])
+        if delay is None:
+            delay = (rng.randint(0, 30_000) if rng.random() < 0.85 else rng.randint(60_000, max_delay)) if random_delays else 0
+        events.append((candle["bucket_start"] + ONE_MINUTE_MS + delay, 0, candle["bucket_start"], candle))
+    for candle in fives:
+        delay = (late_fives or {}).get(candle["bucket_start"])
+        if delay is None:
+            delay = (rng.randint(0, 30_000) if rng.random() < 0.5 else rng.choice([300_000, rng.randint(60_000, max_delay)])) \
+                if random_delays else 0
+        events.append((candle["bucket_start"] + FIVE_MINUTES_MS + delay, 1, candle["bucket_start"], candle))
+    events.sort(key=lambda e: e[:3])
+    now, index = events[0][0], 0
+    while index < len(events):
+        now += rng.choice([ONE_MINUTE_MS, rng.randint(1, tick_max) * ONE_MINUTE_MS])
+        part_ones, part_fives = [], []
+        while index < len(events) and events[index][0] <= now:
+            (part_fives if events[index][1] else part_ones).append(events[index][3])
+            index += 1
+        yield part_ones, part_fives, now
 
 
 def run_incremental(spec, ones, fives, start_ms, rng, *, funding=(), funding_mode="full", crash=0.0, early=False,
-                    max_chunk=90, warm_start_ms=None):
+                    max_chunk=90, warm_start_ms=None, delayed=None):
+    """``delayed``: ``None`` (trozos sin retraso) o los argumentos de ``delayed_source``."""
     runner = SeriesRunner(spec, product_id=PRODUCT, tick_size=TICK, start_ms=start_ms, warm_start_ms=warm_start_ms)
-    out = {"trades": [], "decisions": [], "skipped": [], "blocked": [], "fills": []}
+    out = {"trades": [], "decisions": [], "skipped": [], "blocked": [], "fills": [], "holes": []}
     saved, crashes, given = canonical_json(runner.to_state()), 0, 0
-    for part, fives_part in cuts(ones, fives, rng, max_chunk, early):
+    source = cuts(ones, fives, rng, max_chunk, early) if delayed is None else delayed_source(ones, fives, rng, **delayed)
+    for part, fives_part, now in list(source) + [([], [], FAR)]:   # el último paso declara lo que aún espera
         if funding_mode == "full":
             known = funding
         else:   # "arrival": cada periodo se entrega una vez, cuando ya empezó; el estado debe recordarlo
-            end = part[-1]["bucket_start"] + ONE_MINUTE_MS
-            new = [p for p in funding[given:] if p[0] < end]
+            new = [p for p in funding[given:] if p[0] < min(now, FAR // 2)]
             given += len(new)
             known = new
         if rng.random() < crash:
-            runner.step(part, fives_part, known)           # caída antes de guardar: este resultado se pierde
+            runner.step(part, fives_part, known, now_ms=now)   # caída antes de guardar: este resultado se pierde
             runner = SeriesRunner.from_state(json.loads(saved))
             crashes += 1
-        result = runner.step(part, fives_part, known)
+        result = runner.step(part, fives_part, known, now_ms=now)
         for name in out:
             out[name].extend(result[name])
         saved = canonical_json(runner.to_state())
@@ -176,11 +219,14 @@ def run_incremental(spec, ones, fives, start_ms, rng, *, funding=(), funding_mod
 
 class Equivalence(unittest.TestCase):
     def assert_same(self, spec, ones, fives, start_ms, rng, *, funding=(), funding_mode="full", crash=0.3, early=False,
-                    max_chunk=90, expect_trades=1):
-        book = full_book(spec, ones, fives, start_ms, funding)
+                    max_chunk=90, expect_trades=1, delayed=None, reference=None):
+        """``reference``: ``(1m, 5m)`` que ve el replay completo cuando difiere de lo que se entrega (velas que no llegaron)."""
+        ref_ones, ref_fives = reference or (ones, fives)
+        book = full_book(spec, ref_ones, ref_fives, start_ms, funding)
         self.assertGreaterEqual(len(book.trades), expect_trades)
         runner, out, _ = run_incremental(spec, ones, fives, start_ms, rng, funding=funding, funding_mode=funding_mode,
-                                         crash=crash, early=early, max_chunk=max_chunk)
+                                         crash=crash, early=early, max_chunk=max_chunk, delayed=delayed)
+        self.assertEqual((runner.stream.waiting_ones, runner.stream.pending), ({}, {}))
         self.assertEqual(book.trades, out["trades"])
         by_bucket = lambda ds: sorted(ds, key=lambda d: d["bucket_ms"])
         self.assertEqual(by_bucket(book.decisions), by_bucket(out["decisions"] + runner.book.decisions))
@@ -189,15 +235,15 @@ class Equivalence(unittest.TestCase):
         self.assertEqual(_norm(book.position), _norm(runner.book.position))
         if book.position is not None:
             self.assertEqual(book.position["decision"], runner.book.position["decision"])
-            mark = ones[-1]["close"]
+            mark = ref_ones[-1]["close"]
             self.assertEqual(book.open_position(mark), runner.open_view(mark))
         # El estado de los indicadores es el de una pasada continua, no una aproximación.
         periods = merge_periods(DEFAULT_PERIODS, declared_indicators(spec))
         reference_one = IncrementalFeatures(merge_periods(periods, {"ema": (9, 21), "atr": (14,)}))
-        for candle in ones:
+        for candle in ref_ones:
             reference_one.update(candle)
         self.assertEqual(features_to_state(reference_one), features_to_state(runner.stream.one))
-        return book, runner
+        return book, runner, out
 
     def test_random_walk_with_the_shipped_specs_and_funding_in_both_modes(self):
         ones, fives = walk()
@@ -215,7 +261,7 @@ class Equivalence(unittest.TestCase):
         funding = funding_for(ones, ["0.00001", "0.00003"])
         for seed in range(SEEDS):
             with self.subTest(seed=seed):
-                book, _ = self.assert_same(fast_spec(), ones, fives, start, random.Random(100 + seed), funding=funding,
+                book, _, _ = self.assert_same(fast_spec(), ones, fives, start, random.Random(100 + seed), funding=funding,
                                            funding_mode="arrival", early=True, max_chunk=40, expect_trades=10)
                 self.assertIn("time_stop", {t["exit_reason"] for t in book.trades})
 
@@ -224,7 +270,7 @@ class Equivalence(unittest.TestCase):
         reference = full_book(SPECS[C27], ones, fives, ones[0]["bucket_start"])
         target_trade = next(t for t in reference.trades if t["exit_reason"] == "target")
         ones2, fives2 = spike_exit_candle(ones, target_trade)
-        book, _ = self.assert_same(SPECS[C27], ones2, fives2, ones2[0]["bucket_start"], random.Random(1))
+        book, _, _ = self.assert_same(SPECS[C27], ones2, fives2, ones2[0]["bucket_start"], random.Random(1))
         patched = next(t for t in book.trades if t["entry_bucket_ms"] == target_trade["entry_bucket_ms"])
         self.assertEqual((patched["exit_reason"], patched["exit_bucket_ms"]), ("stop", target_trade["exit_bucket_ms"]))
         for seed in range(SEEDS):
@@ -247,7 +293,7 @@ class Equivalence(unittest.TestCase):
         start = ones[2000]["bucket_start"]
         for seed in range(min(SEEDS, 3)):
             with self.subTest(seed=seed):
-                book, _ = self.assert_same(SPECS[C30], ones, fives, start, random.Random(seed), max_chunk=700, crash=0.3,
+                book, _, _ = self.assert_same(SPECS[C30], ones, fives, start, random.Random(seed), max_chunk=700, crash=0.3,
                                            expect_trades=1)
                 self.assertEqual(book.trades[0]["exit_reason"], "time_stop")
 
@@ -271,16 +317,82 @@ class Equivalence(unittest.TestCase):
         cut = next(i for i, c in enumerate(ones) if c["bucket_start"] == trade["entry_bucket_ms"]) + 2
         runner = SeriesRunner(SPECS[C27], product_id=PRODUCT, tick_size=TICK, start_ms=ones[0]["bucket_start"])
         early = runner.step(ones[:cut], [f for f in fives if f["bucket_start"] + FIVE_MINUTES_MS <= ones[cut - 1]["bucket_start"] + MINUTE],
-                            funding_for(ones[:cut], ["0.00004", "0.00001"]))
+                            funding_for(ones[:cut], ["0.00004", "0.00001"]), now_ms=ones[cut - 1]["bucket_start"] + MINUTE)
         self.assertIsNotNone(runner.book.position)
         saved = canonical_json(runner.to_state())
         self.assertTrue(json.loads(saved)["funding"])           # la posición abierta lleva sus periodos de funding
         restored = SeriesRunner.from_state(json.loads(saved))
         late = restored.step(ones[cut:], [f for f in fives if f["bucket_start"] + FIVE_MINUTES_MS > ones[cut - 1]["bucket_start"] + MINUTE],
-                             [p for p in funding if p[0] >= ones[cut - 1]["bucket_start"]])   # solo los periodos nuevos
+                             [p for p in funding if p[0] >= ones[cut - 1]["bucket_start"]],   # solo los periodos nuevos
+                             now_ms=FAR)
         got = {t["entry_bucket_ms"]: t for t in early["trades"] + late["trades"]}
         self.assertEqual(got[trade["entry_bucket_ms"]], trade)
         self.assertEqual(reference.trades, early["trades"] + late["trades"])
+
+    def test_late_and_reordered_candles_match_the_full_replay(self):
+        """1m y 5m con retrasos de hasta 12 min (incluida la 5m 5 min tarde), 1m desordenadas, ticks de hasta 45 min."""
+        ones, fives = walk(900, seed=21)
+        funding = funding_for(ones, ["0.00002", "-0.00001"])
+        for spec in (SPECS[C25], SPECS[C27], fast_spec()):
+            for seed in range(SEEDS):
+                with self.subTest(spec=spec["id"], seed=seed):
+                    self.assert_same(spec, ones, fives, ones[0]["bucket_start"], random.Random(seed), funding=funding,
+                                     funding_mode="arrival", delayed={}, expect_trades=1)
+
+    def test_a_5m_five_minutes_late_is_waited_for_not_skipped(self):
+        ones, fives = walk(900, seed=21)
+        late = {f["bucket_start"]: 5 * ONE_MINUTE_MS for f in fives[3::2]}
+        for seed in range(SEEDS):
+            with self.subTest(seed=seed):
+                _, _, out = self.assert_same(fast_spec(), ones, fives, ones[0]["bucket_start"], random.Random(seed),
+                                             delayed={"random_delays": False, "late_fives": late, "tick_max": 3}, expect_trades=3)
+                self.assertEqual(out["holes"], [])
+
+    def test_late_and_reordered_candles_on_data_with_holes_and_on_the_real_sample(self):
+        ones, fives = walk(1500, seed=11)
+        reference = full_book(SPECS[C27], ones, fives, ones[0]["bucket_start"])
+        index = next(i for i, c in enumerate(ones) if c["bucket_start"] == reference.trades[2]["entry_bucket_ms"])
+        holed, holed_fives = with_hole(ones, index - 3, index + 40)
+        sample, sample_fives = real_sample_candles()
+        for name, (o, f, spec) in {"hueco": (holed, holed_fives, SPECS[C27]), "muestra": (sample, sample_fives, SPECS[C25]),
+                                   "muestra-h7": (sample, sample_fives, fast_spec())}.items():
+            for seed in range(max(2, SEEDS // 2)):
+                with self.subTest(data=name, seed=seed):
+                    _, _, out = self.assert_same(spec, o, f, o[0]["bucket_start"], random.Random(seed), delayed={}, expect_trades=1)
+                    if name == "hueco":
+                        self.assertTrue(any(h["kind"] == "1m" for h in out["holes"]))
+
+    def test_a_candle_later_than_the_grace_is_a_declared_hole_and_the_late_arrival_is_ignored(self):
+        ones, fives = walk(900, seed=21)
+        start = ones[0]["bucket_start"]
+        gone = fives[40]["bucket_start"]
+        for seed in range(max(2, SEEDS // 2)):
+            with self.subTest(kind="5m", seed=seed):
+                reference = ([c for c in ones], [f for f in fives if f["bucket_start"] != gone])
+                _, _, out = self.assert_same(fast_spec(), ones, fives, start, random.Random(seed), reference=reference,
+                                             delayed={"random_delays": False, "late_fives": {gone: 20 * ONE_MINUTE_MS}, "tick_max": 4},
+                                             expect_trades=3)
+                self.assertEqual([h["first_ms"] for h in out["holes"] if h["kind"] == "5m"], [gone])
+        missing = ones[300]["bucket_start"]
+        for seed in range(max(2, SEEDS // 2)):
+            with self.subTest(kind="1m", seed=seed):
+                reference = ([c for c in ones if c["bucket_start"] != missing], fives)
+                _, _, out = self.assert_same(fast_spec(), ones, fives, start, random.Random(seed), reference=reference,
+                                             delayed={"random_delays": False, "late_ones": {missing: 20 * ONE_MINUTE_MS}, "tick_max": 4},
+                                             expect_trades=3)
+                self.assertEqual([(h["first_ms"], h["last_ms"]) for h in out["holes"] if h["kind"] == "1m"], [(missing, missing)])
+
+    def test_the_cursor_does_not_pass_a_missing_5m_before_the_grace(self):
+        ones, fives = walk(60, seed=21)
+        runner = SeriesRunner(SPECS[C27], product_id=PRODUCT, tick_size=TICK, start_ms=ones[0]["bucket_start"])
+        without = [f for f in fives if f["bucket_start"] != fives[4]["bucket_start"]]
+        gone = fives[4]["bucket_start"]
+        runner.step(ones, without, now_ms=gone + 10 * MINUTE)     # 5 min después de que cierre la 5m: aún dentro del plazo
+        self.assertEqual(runner.cursor, gone + 3 * MINUTE)        # la 1m que cierra junto a la 5m ausente espera
+        self.assertTrue(runner.stream.waiting_ones)
+        runner.step([], [fives[4]], now_ms=gone + 11 * MINUTE)    # llega a tiempo: se reanuda
+        self.assertEqual(runner.cursor, ones[-1]["bucket_start"])
+        self.assertEqual(runner.stream.waiting_ones, {})
 
 
 class StateRoundTrips(unittest.TestCase):
@@ -305,23 +417,24 @@ class StateRoundTrips(unittest.TestCase):
         for seed in range(SEEDS):
             rng = random.Random(seed)
             stream, got = FrameStream(periods), []
-            for part, fives_part in cuts(ones, fives, rng, 50, early=bool(seed % 2)):
-                got.extend(stream.feed(part, fives_part))
+            for part, fives_part, now in cuts(ones, fives, rng, 50, early=bool(seed % 2)):
+                got.extend(stream.feed(part, fives_part, now_ms=now))
                 stream = FrameStream.from_state(json.loads(canonical_json(stream.to_state())))
             self.assertEqual(got, want, seed)
 
     def test_a_candle_not_after_the_cursor_changes_nothing(self):
         ones, fives = walk(400, seed=2)
         runner = SeriesRunner(SPECS[C27], product_id=PRODUCT, tick_size=TICK, start_ms=ones[0]["bucket_start"])
-        runner.step(ones[:300], [f for f in fives if f["bucket_start"] + FIVE_MINUTES_MS <= ones[299]["bucket_start"] + MINUTE])
+        runner.step(ones[:300], [f for f in fives if f["bucket_start"] + FIVE_MINUTES_MS <= ones[299]["bucket_start"] + MINUTE],
+                    now_ms=ones[299]["bucket_start"] + MINUTE)
         before = canonical_json(runner.to_state())
         runner = SeriesRunner.from_state(json.loads(before))      # también después de reanudar desde el estado guardado
         late = copy.deepcopy(ones[250])
         late["close"], late["high"] = "1", "999999"                 # una revisión distinta de una vela ya pasada
         revised_five = copy.deepcopy(fives[10])
         revised_five["close"] = "2"
-        result = runner.step([late, ones[299]], [revised_five])
-        self.assertEqual(result, {"trades": [], "decisions": [], "skipped": [], "blocked": [], "fills": []})
+        result = runner.step([late, ones[299]], [revised_five], now_ms=FAR)
+        self.assertEqual(result, {"trades": [], "decisions": [], "skipped": [], "blocked": [], "fills": [], "holes": []})
         self.assertEqual(canonical_json(runner.to_state()), before)
         self.assertEqual(runner.stream.ignored, 3)
 
@@ -333,12 +446,25 @@ class StateRoundTrips(unittest.TestCase):
         cut = next(i for i, c in enumerate(ones) if c["bucket_start"] == trade["entry_bucket_ms"]) + 2
         runner = SeriesRunner(SPECS[C27], product_id=PRODUCT, tick_size=TICK, start_ms=ones[0]["bucket_start"])
         runner.step(ones[:cut], [f for f in fives if f["bucket_start"] + FIVE_MINUTES_MS <= ones[cut - 1]["bucket_start"] + MINUTE],
-                    funding_for(ones[:cut], ["0.00004", "0.00001"]))
-        edge = ones[cut - 1]["bucket_start"]
-        revised = [(a, b, "0.5" if a < edge else r) for a, b, r in funding]   # el ya conocido se "revisa"; el nuevo no
+                    funding_for(ones[:cut], ["0.00004", "0.00001"]), now_ms=ones[cut - 1]["bucket_start"] + MINUTE)
+        edge = ones[cut - 1]["bucket_start"] + MINUTE
+        revised = [(a, b, "0.5" if b <= edge else r) for a, b, r in funding]   # lo ya cerrado se "revisa"; lo nuevo no
         late = runner.step(ones[cut:], [f for f in fives if f["bucket_start"] + FIVE_MINUTES_MS > ones[cut - 1]["bucket_start"] + MINUTE],
-                           revised)
+                           revised, now_ms=FAR)
         self.assertEqual(late["trades"][0]["funding_usd"], trade["funding_usd"])
+
+    def test_provisional_funding_yields_to_the_value_seen_after_the_close(self):
+        from balancita_engine.futures_forward_incremental import _funding_merge
+        provisional = [(0, 10, Decimal("1"), False)]
+        self.assertEqual(_funding_merge(provisional, [(0, 10, "2")]), [(0, 10, Decimal("2"), False)])
+        self.assertEqual(_funding_merge([(0, 10, Decimal("1"), True)], [(0, 10, "2")]), [(0, 10, Decimal("1"), True)])
+        ones, fives = walk(120, seed=3)
+        runner = SeriesRunner(SPECS[C27], product_id=PRODUCT, tick_size=TICK, start_ms=ones[0]["bucket_start"])
+        edge = ones[59]["bucket_start"] + MINUTE
+        runner.step(ones[:60], [f for f in fives if f["bucket_start"] + FIVE_MINUTES_MS <= edge],
+                    [(edge - 3_600_000, edge, "0.1"), (edge, edge + 3_600_000, "0.2")], now_ms=edge)
+        flags = {(a, b): final for a, b, _, final in runner.funding}
+        self.assertEqual(flags, {(edge - 3_600_000, edge): True, (edge, edge + 3_600_000): False})
 
     def test_fundpct_is_not_admitted(self):
         spec = copy.deepcopy(SPECS[C27])
@@ -378,7 +504,7 @@ class CheckpointStore(unittest.TestCase):
         if not part:
             return None
         end = part[-1]["bucket_start"] + ONE_MINUTE_MS
-        seen = runner.stream._last_5m_seen
+        seen = runner.stream.last_5m_ms
         fives = [f for f in self.fives if f["bucket_start"] + FIVE_MINUTES_MS <= end and (seen is None or f["bucket_start"] > seen)]
         return part, fives, [p for p in self.funding if p[0] < end]
 
@@ -391,14 +517,14 @@ class CheckpointStore(unittest.TestCase):
                 return injected
             before = (self.db.execute("SELECT COUNT(*) FROM forward_trade").fetchone()[0],
                       self.db.execute("SELECT COUNT(*) FROM forward_checkpoint").fetchone()[0])
-            result = runner.step(*chunk)
+            result = runner.step(*chunk, now_ms=chunk[0][-1]["bucket_start"] + ONE_MINUTE_MS + 20 * ONE_MINUTE_MS)
             stage = rng.choice(faults) if rng.random() < fault_rate else None
 
             def fault(where, stage=stage):
                 if where == stage:
                     raise Faulted(where)
             try:
-                commit_cycle(self.db, runner, result["trades"], seq_read=seq, now_ms=2 + seq, fault=fault)
+                commit_cycle(self.db, runner, result, seq_read=seq, now_ms=2 + seq, fault=fault)
             except Faulted:
                 injected += 1
                 after = (self.db.execute("SELECT COUNT(*) FROM forward_trade").fetchone()[0],
@@ -433,7 +559,8 @@ class CheckpointStore(unittest.TestCase):
         count = verify_chain(self.db, key)
         self.assertGreater(count, 3)
         for statement in ("UPDATE forward_checkpoint SET created_ms=9 WHERE seq=1", "DELETE FROM forward_checkpoint WHERE seq=1",
-                          "UPDATE forward_checkpoint_blob SET json='{}'"):
+                          "UPDATE forward_checkpoint_blob SET json='{}'", "DELETE FROM forward_checkpoint_blob",
+                          "UPDATE forward_checkpoint_head SET row_sha256='x'", "DELETE FROM forward_checkpoint_head"):
             with self.assertRaises(sqlite3.DatabaseError, msg=statement):
                 self.db.execute(statement)
             self.db.rollback()
@@ -455,6 +582,7 @@ class CheckpointStore(unittest.TestCase):
         with self.assertRaises(CheckpointError) as caught:
             load_series(self.db, key)
         self.assertEqual(caught.exception.code, "blob_corrupt")
+        self.db.execute("DROP TRIGGER forward_checkpoint_blob_no_delete")
         self.db.execute("DELETE FROM forward_checkpoint_blob WHERE state_sha256=?", (digest,))
         self.db.commit()
         with self.assertRaises(CheckpointError) as caught:
@@ -476,8 +604,9 @@ class CheckpointStore(unittest.TestCase):
         first, seq = load_series(self.db, key)
         second, seq2 = load_series(self.db, key)
         chunk = self._chunk(first, random.Random(0), 300)
-        result_a = first.step(*chunk)
-        result_b = second.step(*chunk)
+        now = chunk[0][-1]["bucket_start"] + ONE_MINUTE_MS + 20 * ONE_MINUTE_MS
+        result_a = first.step(*chunk, now_ms=now)
+        result_b = second.step(*chunk, now_ms=now)
         commit_cycle(self.db, first, result_a["trades"], seq_read=seq, now_ms=5)
         before = self.db.execute("SELECT COUNT(*) FROM forward_trade").fetchone()[0]
         with self.assertRaises(ConcurrentCycle):
@@ -485,6 +614,76 @@ class CheckpointStore(unittest.TestCase):
                          seq_read=seq2, now_ms=6)
         self.assertEqual(self.db.execute("SELECT COUNT(*) FROM forward_trade").fetchone()[0], before)
         self.assertEqual(verify_chain(self.db, key), 2)
+
+    def test_a_tail_rollback_is_detected_by_the_head_log_but_a_full_rewrite_is_not(self):
+        key = self._series()
+        self._drive(key, random.Random(5))
+        count = verify_chain(self.db, key)
+        original = self.db.execute("SELECT created_ms FROM forward_checkpoint WHERE seq=?", (count - 1,)).fetchone()[0]
+        self.db.execute("DROP TRIGGER forward_checkpoint_no_update")
+        self.db.execute("UPDATE forward_checkpoint SET created_ms=7 WHERE seq=?", (count - 1,))     # la última fila no tiene sucesora
+        self.db.commit()
+        with self.assertRaises(CheckpointError) as caught:
+            verify_chain(self.db, key)
+        self.assertEqual(caught.exception.code, "head_mismatch")
+        self.db.execute("UPDATE forward_checkpoint SET created_ms=? WHERE seq=?", (original, count - 1))
+        self.db.commit()
+        self.assertEqual(verify_chain(self.db, key), count)
+        self.db.execute("DROP TRIGGER forward_checkpoint_no_delete")
+        self.db.execute("DELETE FROM forward_checkpoint WHERE seq=?", (count - 1,))
+        self.db.commit()
+        with self.assertRaises(CheckpointError) as caught:
+            verify_chain(self.db, key)
+        self.assertEqual(caught.exception.code, "chain_truncated")
+        with self.assertRaises(CheckpointError):
+            load_series(self.db, key)
+        # Limitación documentada: quien reescribe también el registro de cabezas no es detectable sin un ancla externa.
+        self.db.execute("DROP TRIGGER forward_checkpoint_head_no_delete")
+        self.db.execute("DELETE FROM forward_checkpoint_head WHERE seq=?", (count - 1,))
+        self.db.commit()
+        self.assertEqual(verify_chain(self.db, key), count - 1)
+
+    def test_a_trade_that_already_exists_with_other_content_is_an_anomaly_not_silence(self):
+        key = self._series()
+        self._drive(key, random.Random(6))
+        runner, seq = load_series(self.db, key)
+        (payload,) = self.db.execute("SELECT payload FROM forward_trade ORDER BY entry_bucket_ms LIMIT 1").fetchone()
+        stored = json.loads(payload)
+        commit_cycle(self.db, runner, {"trades": [stored]}, seq_read=seq, now_ms=99)          # reintento idéntico: idempotente
+        self.assertEqual(self.db.execute("SELECT COUNT(*) FROM forward_anomaly").fetchone()[0], 0)
+        changed = dict(stored, net_bp=stored["net_bp"] + 1)
+        commit_cycle(self.db, runner, {"trades": [changed]}, seq_read=seq + 1, now_ms=100)
+        rows = self.db.execute("SELECT kind, bucket_ms FROM forward_anomaly").fetchall()
+        self.assertEqual(rows, [("trade_conflict", stored["entry_bucket_ms"])])
+        for statement in ("UPDATE forward_anomaly SET kind='x'", "DELETE FROM forward_anomaly"):
+            with self.assertRaises(sqlite3.DatabaseError, msg=statement):
+                self.db.execute(statement)
+            self.db.rollback()
+        self.assertEqual(self.db.execute("SELECT payload FROM forward_trade WHERE entry_bucket_ms=?",
+                                         (stored["entry_bucket_ms"],)).fetchone()[0], payload)
+
+    def test_holes_are_recorded_as_anomalies_in_the_cycle_that_declared_them(self):
+        self.ones, self.fives = with_hole(self.ones, 200, 215)
+        reference = full_book(self.spec, self.ones, self.fives, self.start, self.funding)
+        key = self._series()
+        self._drive(key, random.Random(7))
+        kinds = {k for (k,) in self.db.execute("SELECT kind FROM forward_anomaly")}
+        self.assertIn("hole_1m", kinds)
+        self.assertEqual(self._stored(), [json.loads(json.dumps(t)) for t in reference.trades])
+
+    def test_the_stale_entry_gate_is_refused_not_ignored(self):
+        key = self._series()
+        runner, seq = load_series(self.db, key)
+        with mock.patch.object(futures_forward, "BLOCK_STALE_ENTRIES", True):
+            with self.assertRaises(CheckpointError) as caught:
+                SeriesRunner(self.spec, product_id=PRODUCT, start_ms=0)
+            self.assertEqual(caught.exception.code, "unsupported_policy")
+            with self.assertRaises(CheckpointError) as caught:
+                load_series(self.db, key)
+            self.assertEqual(caught.exception.code, "unsupported_policy")
+            with self.assertRaises(CheckpointError):
+                commit_cycle(self.db, runner, {"trades": []}, seq_read=seq)
+        self.assertEqual(verify_chain(self.db, key), 1)
 
     def test_catalog_spec_and_version_changes_stop_the_series(self):
         key = self._series()

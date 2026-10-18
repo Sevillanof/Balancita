@@ -25,6 +25,7 @@ from collections import deque
 from decimal import Decimal
 
 from . import futures_indicators, futures_simulator
+from . import futures_forward
 from .futures_forward import _SCHEMA as FORWARD_SCHEMA
 from .futures_simulator import (
     DEFAULT_PERIODS,
@@ -39,7 +40,7 @@ from .futures_spec_strategy import declared_indicators, spec_hash
 from .futures_strategies import update_regime
 
 D = Decimal
-STATE_VERSION = 1
+STATE_VERSION = 2
 GENESIS = "0" * 64
 ERA_NOW = "actual"  # igual que futures_forward.ERA_NOW (no se importa para no acoplar los módulos)
 
@@ -61,6 +62,24 @@ CREATE TRIGGER IF NOT EXISTS forward_checkpoint_no_delete BEFORE DELETE ON forwa
   BEGIN SELECT RAISE(ABORT, 'forward checkpoints are append-only'); END;
 CREATE TRIGGER IF NOT EXISTS forward_checkpoint_blob_no_update BEFORE UPDATE ON forward_checkpoint_blob
   BEGIN SELECT RAISE(ABORT, 'forward checkpoint blobs are immutable'); END;
+CREATE TRIGGER IF NOT EXISTS forward_checkpoint_blob_no_delete BEFORE DELETE ON forward_checkpoint_blob
+  BEGIN SELECT RAISE(ABORT, 'forward checkpoint blobs are immutable'); END;
+CREATE TABLE IF NOT EXISTS forward_checkpoint_head(
+  strategy_id TEXT NOT NULL, product_id TEXT NOT NULL, spec_hash TEXT NOT NULL, seq INTEGER NOT NULL,
+  row_sha256 TEXT NOT NULL, logged_ms INTEGER NOT NULL,
+  PRIMARY KEY(strategy_id, product_id, spec_hash, seq)) STRICT;
+CREATE TRIGGER IF NOT EXISTS forward_checkpoint_head_no_update BEFORE UPDATE ON forward_checkpoint_head
+  BEGIN SELECT RAISE(ABORT, 'forward checkpoint heads are append-only'); END;
+CREATE TRIGGER IF NOT EXISTS forward_checkpoint_head_no_delete BEFORE DELETE ON forward_checkpoint_head
+  BEGIN SELECT RAISE(ABORT, 'forward checkpoint heads are append-only'); END;
+CREATE TABLE IF NOT EXISTS forward_anomaly(
+  strategy_id TEXT NOT NULL, product_id TEXT NOT NULL, spec_hash TEXT NOT NULL, kind TEXT NOT NULL,
+  bucket_ms INTEGER NOT NULL, hash TEXT NOT NULL, seen_ms INTEGER NOT NULL, detail TEXT NOT NULL,
+  PRIMARY KEY(strategy_id, product_id, spec_hash, kind, bucket_ms, hash)) STRICT;
+CREATE TRIGGER IF NOT EXISTS forward_anomaly_no_update BEFORE UPDATE ON forward_anomaly
+  BEGIN SELECT RAISE(ABORT, 'forward anomalies are append-only'); END;
+CREATE TRIGGER IF NOT EXISTS forward_anomaly_no_delete BEFORE DELETE ON forward_anomaly
+  BEGIN SELECT RAISE(ABORT, 'forward anomalies are append-only'); END;
 """
 _CHECKPOINT_COLUMNS = ("strategy_id", "product_id", "spec_hash", "seq", "last_bucket_ms", "last_5m_ms", "policy", "era",
                        "catalog_version", "state_version", "origin", "state_sha256", "prev_sha256", "created_ms")
@@ -135,62 +154,106 @@ def features_from_state(state):
 
 # ---- frames reanudables ---------------------------------------------------------------------------------------------
 
+# Cuánto se espera una vela que no llega antes de declarar el hueco y cruzarlo (provisional: se ajustará con el retraso
+# máximo medido de llegada de velas en el Mac; decisión del dueño 2026-10-18).
+GAP_GRACE_MS = 15 * 60_000
+
+
 class FrameStream:
-    """``futures_simulator.frames`` por trozos. Una vela 1m o 5m que no es posterior al cursor se ignora (no cambia el estado)."""
+    """``futures_simulator.frames`` por trozos, con la misma semántica que el replay completo.
+
+    El replay completo ve todas las velas desde el principio. Para que un trozo con velas que llegan tarde o desordenadas
+    dé lo mismo, el cursor 1m solo avanza por la frontera contigua: no pasa una 1m ausente ni una 1m cuya 5m (la última
+    que cierra a su cierre) no ha llegado, hasta que pasa ``GAP_GRACE_MS`` desde el cierre de la vela esperada; entonces
+    se declara el hueco (``holes``, solo informe aquí) y se cruza igual que el replay. Una vela que llega cuando ya no es
+    posterior al cursor se ignora (no cambia el estado; su anomalía se registrará en el PR de anomalías).
+    """
 
     def __init__(self, periods=None):
         merged = merge_periods(DEFAULT_PERIODS if periods is None else periods, REGIME_PERIODS)
         self.periods = merged
         self.one, self.five = IncrementalFeatures(merged), IncrementalFeatures(merged)
-        self.pending = deque()           # 5m recibidas que aún no cierran antes de la 1m en curso
+        self.waiting_ones = {}           # 1m recibidas aún no procesadas (bucket -> vela)
+        self.pending = {}                # 5m recibidas aún no consumidas (bucket -> vela)
         self.trend = self.previous = None
         self.regime = "unknown"
+        self.first_one_ms = None         # primera 1m procesada: desde su ventana de 5m se exige la 5m
         self.last_bucket_ms = None       # última 1m procesada
         self.last_5m_ms = None           # última 5m procesada
-        self._last_5m_seen = None        # última 5m aceptada (procesada o pendiente)
+        self.declared_5m_ms = None       # última 5m ausente ya declarada
+        self.holes = []                  # huecos declarados desde el último ``drain_holes``
         self.ignored = 0
 
-    def feed(self, candles_1m, candles_5m=()):
+    def drain_holes(self):
+        holes, self.holes = self.holes, []
+        return holes
+
+    def feed(self, candles_1m, candles_5m=(), *, now_ms):
         for candle in candles_5m:
-            if self._last_5m_seen is not None and candle["bucket_start"] <= self._last_5m_seen:
+            bucket = candle["bucket_start"]
+            if (self.last_5m_ms is not None and bucket <= self.last_5m_ms) or bucket in self.pending:
                 self.ignored += 1
                 continue
-            self._last_5m_seen = candle["bucket_start"]
-            self.pending.append(candle)
+            self.pending[bucket] = candle
         for candle in candles_1m:
-            if self.last_bucket_ms is not None and candle["bucket_start"] <= self.last_bucket_ms:
+            bucket = candle["bucket_start"]
+            if (self.last_bucket_ms is not None and bucket <= self.last_bucket_ms) or bucket in self.waiting_ones:
                 self.ignored += 1
                 continue
+            self.waiting_ones[bucket] = candle
+        while self.waiting_ones:
+            bucket = min(self.waiting_ones)
+            if self.last_bucket_ms is not None and bucket != self.last_bucket_ms + ONE_MINUTE_MS:
+                expected = self.last_bucket_ms + ONE_MINUTE_MS
+                if now_ms < expected + ONE_MINUTE_MS + GAP_GRACE_MS:
+                    break                # la 1m esperada puede llegar todavía
+                self.holes.append({"kind": "1m", "first_ms": expected, "last_ms": bucket - ONE_MINUTE_MS,
+                                   "declared_ms": now_ms})
+            close_at = bucket + ONE_MINUTE_MS
+            first = bucket if self.first_one_ms is None else self.first_one_ms
+            required = close_at // FIVE_MINUTES_MS * FIVE_MINUTES_MS - FIVE_MINUTES_MS
+            present = required in self.pending or (self.last_5m_ms is not None and required <= self.last_5m_ms)
+            if required >= first // FIVE_MINUTES_MS * FIVE_MINUTES_MS and not present:
+                if now_ms < required + FIVE_MINUTES_MS + GAP_GRACE_MS:
+                    break                # la 5m que esta 1m necesita puede llegar todavía
+                if self.declared_5m_ms != required:
+                    self.declared_5m_ms = required
+                    self.holes.append({"kind": "5m", "first_ms": required, "last_ms": required, "declared_ms": now_ms})
+            candle = self.waiting_ones.pop(bucket)
+            self.first_one_ms = first
             current = self.one.update(candle)
-            close_at = candle["bucket_start"] + ONE_MINUTE_MS
-            while self.pending and self.pending[0]["bucket_start"] + FIVE_MINUTES_MS <= close_at:
-                waiting = self.pending.popleft()
+            while self.pending and min(self.pending) + FIVE_MINUTES_MS <= close_at:
+                waiting = self.pending.pop(min(self.pending))
                 self.trend = self.five.update(waiting)
                 self.last_5m_ms = waiting["bucket_start"]
             if self.trend is not None:
                 self.regime = update_regime(self.regime, self.trend.get("ema9"), self.trend.get("ema21"),
                                             self.trend.get("atr14"))
-            frame = (candle["bucket_start"], current, self.previous, self.trend, self.regime)
+            frame = (bucket, current, self.previous, self.trend, self.regime)
             self.previous = current
-            self.last_bucket_ms = candle["bucket_start"]
+            self.last_bucket_ms = bucket
             yield frame
 
     def to_state(self):
         return {
             "periods": {kind: list(values) for kind, values in self.periods.items()},
             "one": features_to_state(self.one), "five": features_to_state(self.five),
-            "pending": list(self.pending), "trend": self.trend, "previous": self.previous, "regime": self.regime,
-            "last_bucket_ms": self.last_bucket_ms, "last_5m_ms": self.last_5m_ms, "last_5m_seen": self._last_5m_seen,
+            "waiting_ones": [self.waiting_ones[b] for b in sorted(self.waiting_ones)],
+            "pending": [self.pending[b] for b in sorted(self.pending)],
+            "trend": self.trend, "previous": self.previous, "regime": self.regime,
+            "first_one_ms": self.first_one_ms, "last_bucket_ms": self.last_bucket_ms, "last_5m_ms": self.last_5m_ms,
+            "declared_5m_ms": self.declared_5m_ms,
         }
 
     @classmethod
     def from_state(cls, state):
         stream = cls({kind: tuple(values) for kind, values in state["periods"].items()})
         stream.one, stream.five = features_from_state(state["one"]), features_from_state(state["five"])
-        stream.pending = deque(state["pending"])
+        stream.waiting_ones = {c["bucket_start"]: c for c in state["waiting_ones"]}
+        stream.pending = {c["bucket_start"]: c for c in state["pending"]}
         stream.trend, stream.previous, stream.regime = state["trend"], state["previous"], state["regime"]
-        stream.last_bucket_ms, stream.last_5m_ms = state["last_bucket_ms"], state["last_5m_ms"]
-        stream._last_5m_seen = state["last_5m_seen"]
+        stream.first_one_ms, stream.last_bucket_ms = state["first_one_ms"], state["last_bucket_ms"]
+        stream.last_5m_ms, stream.declared_5m_ms = state["last_5m_ms"], state["declared_5m_ms"]
         return stream
 
 
@@ -249,14 +312,29 @@ def book_apply_state(book, state):
 
 
 def _funding_to_state(periods):
-    return [[a, b, str(r)] for a, b, r in periods]
+    return [[a, b, str(r), int(final)] for a, b, r, final in periods]
 
 
 def _funding_merge(persisted, provided):
-    """Periodos guardados + nuevos. Un periodo ya guardado manda: nunca se reescribe lo que ya se usó."""
-    merged = {(int(a), int(b)): D(str(r)) for a, b, r in provided}
-    merged.update({(int(a), int(b)): D(str(r)) for a, b, r in persisted})
-    return sorted((a, b, r) for (a, b), r in merged.items())
+    """Periodos guardados ``(inicio, fin, tasa, final)`` + nuevos ``(inicio, fin, tasa)``.
+
+    Un periodo guardado como ``final`` (ya había cerrado cuando se guardó) manda: nunca se reescribe lo que ya se usó, como
+    el cargador de funding (primera tasa vista tras el cierre). Uno guardado como provisional (aún abierto al guardarlo) cede
+    ante el valor nuevo: la tasa de una hora abierta no es la que cuenta.
+    """
+    merged = {(int(a), int(b)): (D(str(r)), False) for a, b, r in provided}
+    for a, b, r, final in persisted:
+        key = (int(a), int(b))
+        if final or key not in merged:
+            merged[key] = (D(str(r)), bool(final))
+    return sorted((a, b, r, final) for (a, b), (r, final) in merged.items())
+
+
+def require_supported_policy():
+    """La puerta de entradas obsoletas (``BLOCK_STALE_ENTRIES``) necesita la frescura de cada vela y aún no está en el
+    estado incremental (PR de cursor/anomalías): si estuviera activa, el resultado divergiría del replay en silencio."""
+    if futures_forward.BLOCK_STALE_ENTRIES:
+        raise CheckpointError("unsupported_policy", "BLOCK_STALE_ENTRIES activa: el forward incremental no la soporta aún")
 
 
 class SeriesRunner:
@@ -264,6 +342,7 @@ class SeriesRunner:
 
     def __init__(self, spec, *, product_id, tick_size="1", start_ms, warm_start_ms=None, notional_usd="100",
                  stop_policy="level"):
+        require_supported_policy()
         if "fundpct" in json.dumps(spec):
             raise ValueError("fundpct (percentil de funding a 30 d) está descartada: el forward incremental no la admite")
         self.spec, self.spec_hash = spec, spec_hash(spec)
@@ -280,19 +359,27 @@ class SeriesRunner:
     def cursor(self):
         return self.stream.last_bucket_ms
 
-    def step(self, candles_1m, candles_5m=(), funding_periods=()):
-        """Procesa velas posteriores al cursor. Devuelve ``{"trades", "decisions", "skipped", "blocked"}`` nuevos.
+    def step(self, candles_1m, candles_5m=(), funding_periods=(), *, now_ms):
+        """Procesa velas por la frontera contigua. Devuelve ``{"trades", "decisions", "skipped", "blocked", "fills", "holes"}``.
+
+        ``now_ms`` es el reloj del llamador (la hora real del ciclo): decide cuándo una vela ausente pasa a hueco
+        declarado (``GAP_GRACE_MS``). Obligatorio: sin reloj no se puede decidir si esperar.
 
         ``decisions`` son las ya finalizadas (juzgadas y, si abrieron posición, con la posición cerrada); las vivas
         quedan en el estado. Las velas que no son posteriores al cursor se ignoran.
         """
         self.funding = _funding_merge(self.funding, funding_periods)
-        self.book.funding = list(self.funding)
-        for frame in self.stream.feed(candles_1m, candles_5m):
+        self.book.funding = [(a, b, r) for a, b, r, _ in self.funding]
+        for frame in self.stream.feed(candles_1m, candles_5m, now_ms=now_ms):
             if frame[0] < self.start_ms:
                 continue          # calentamiento: alimenta indicadores, nunca abre posiciones (como ``replay``)
             self.book.on_frame(*frame)
-        return self._drain()
+        if self.cursor is not None:   # lo que ya cerró al llegar al cursor deja de ser provisional
+            edge = self.cursor + ONE_MINUTE_MS
+            self.funding = [(a, b, r, final or b <= edge) for a, b, r, final in self.funding]
+        out = self._drain()
+        out["holes"] = self.stream.drain_holes()
+        return out
 
     def _drain(self):
         book = self.book
@@ -334,7 +421,8 @@ class SeriesRunner:
             raise CheckpointError("spec_hash_mismatch", "el spec guardado no coincide con su hash")
         runner.stream = FrameStream.from_state(state["stream"])
         book_apply_state(runner.book, state["book"])
-        runner.funding = _funding_merge(((a, b, r) for a, b, r in state["funding"]), ())
+        runner.funding = _funding_merge(((a, b, r, final) for a, b, r, final in state["funding"]), ())
+        runner.book.funding = [(a, b, r) for a, b, r, _ in runner.funding]
         return runner
 
 
@@ -365,6 +453,18 @@ def verify_chain(db, key):
         if row["prev_sha256"] != previous:
             raise CheckpointError("chain_broken", "seq {}: prev_sha256 no coincide".format(row["seq"]))
         previous = row_hash(row)
+    # Registro de cabezas: cada checkpoint deja también su hash en otra tabla solo-añadir. Si se recorta la cola de la
+    # cadena (o se reescribe una fila) la cabeza registrada lo delata. LIMITACIÓN: sin un ancla externa (p. ej. la cabeza
+    # publicada fuera de este fichero) quien reescriba a la vez la cadena y el registro no es detectable.
+    heads = dict(db.execute("SELECT seq, row_sha256 FROM forward_checkpoint_head WHERE strategy_id=? AND product_id=? "
+                            "AND spec_hash=?", key))
+    for row in rows:
+        if heads.get(row["seq"]) is None:
+            raise CheckpointError("head_missing", "seq {}: sin cabeza registrada".format(row["seq"]))
+        if heads[row["seq"]] != row_hash(row):
+            raise CheckpointError("head_mismatch", "seq {}: la fila no es la que se registró".format(row["seq"]))
+    if heads and max(heads) >= len(rows):
+        raise CheckpointError("chain_truncated", "la cabeza registrada llega al seq {} y la cadena a {}".format(max(heads), len(rows) - 1))
     return len(rows)
 
 
@@ -392,7 +492,7 @@ def _write_checkpoint(db, runner, key, seq, origin, now_ms, fault):
     row = {
         "strategy_id": key[0], "product_id": key[1], "spec_hash": key[2], "seq": seq,
         "last_bucket_ms": runner.stream.last_bucket_ms, "last_5m_ms": runner.stream.last_5m_ms,
-        "policy": canonical_json({"block_stale_entries": False}), "era": ERA_NOW, "catalog_version": catalog_version(),
+        "policy": canonical_json({"block_stale_entries": bool(futures_forward.BLOCK_STALE_ENTRIES)}), "era": ERA_NOW, "catalog_version": catalog_version(),
         "state_version": STATE_VERSION, "origin": origin, "state_sha256": digest, "prev_sha256": previous,
         "created_ms": now_ms,
     }
@@ -401,6 +501,7 @@ def _write_checkpoint(db, runner, key, seq, origin, now_ms, fault):
         fault("after_blob")
     db.execute("INSERT INTO forward_checkpoint VALUES({})".format(",".join("?" * len(_CHECKPOINT_COLUMNS))),
                [row[c] for c in _CHECKPOINT_COLUMNS])
+    db.execute("INSERT INTO forward_checkpoint_head VALUES(?,?,?,?,?,?)", (*key, seq, row_hash(row), now_ms))
 
 
 def start_series(db, runner, *, now_ms=None, origin="start"):
@@ -420,13 +521,25 @@ def start_series(db, runner, *, now_ms=None, origin="start"):
     return key
 
 
-def commit_cycle(db, runner, new_trades, *, seq_read, now_ms=None, origin="start", fault=None):
-    """Un ciclo de una serie en UNA transacción: trades nuevos + era + estado + checkpoint ``seq_read + 1``.
+def _anomaly(db, key, kind, bucket_ms, detail, now_ms):
+    text = canonical_json(detail)
+    db.execute("INSERT OR IGNORE INTO forward_anomaly VALUES(?,?,?,?,?,?,?,?)",
+               (*key, kind, bucket_ms, hashlib.sha256(text.encode("utf-8")).hexdigest(), now_ms, text))
+
+
+def commit_cycle(db, runner, result, *, seq_read, now_ms=None, origin="start", fault=None):
+    """Un ciclo de una serie en UNA transacción: trades nuevos + era + huecos/anomalías + estado + checkpoint ``seq_read + 1``.
+
+    ``result`` es lo que devolvió ``runner.step`` (o la lista de trades). Un trade cuya clave ya existe con el MISMO
+    contenido es idempotente (reintento tras una caída); con contenido distinto no se sobrescribe ni se calla: queda una
+    fila ``forward_anomaly`` ``trade_conflict`` con el hash de ambos.
 
     ``seq_read`` es el ``seq`` del último checkpoint leído al reanudar: si otro proceso añadió uno, se levanta
     ``ConcurrentCycle`` y no se escribe nada. ``fault(stage)`` permite inyectar una caída en el test.
     Devuelve ``{"seq", "inserted"}``.
     """
+    require_supported_policy()
+    new_trades, holes = (result, []) if isinstance(result, list) else (result["trades"], result.get("holes", []))
     key = (runner.spec["id"], runner.product_id, runner.spec_hash)
     now_ms = int(time.time() * 1000) if now_ms is None else now_ms
     db.execute("BEGIN IMMEDIATE")
@@ -435,12 +548,22 @@ def commit_cycle(db, runner, new_trades, *, seq_read, now_ms=None, origin="start
             raise ConcurrentCycle("el checkpoint {} dejó de ser el último".format(seq_read))
         inserted = 0
         for trade in new_trades:
+            payload = json.dumps(trade)
             found = db.execute("INSERT OR IGNORE INTO forward_trade VALUES(?,?,?,?,?)", (
-                key[0], key[1], trade["entry_bucket_ms"], key[2], json.dumps(trade)))
+                key[0], key[1], trade["entry_bucket_ms"], key[2], payload))
             inserted += found.rowcount
             if found.rowcount:
                 db.execute("INSERT OR IGNORE INTO forward_era VALUES(?,?,?,?,?,?)",
                            (key[0], key[1], trade["entry_bucket_ms"], key[2], ERA_NOW, now_ms))
+                continue
+            (stored,) = db.execute("SELECT payload FROM forward_trade WHERE strategy_id=? AND product_id=? AND "
+                                   "entry_bucket_ms=? AND spec_hash=?", (key[0], key[1], trade["entry_bucket_ms"], key[2])).fetchone()
+            if stored != payload:
+                _anomaly(db, key, "trade_conflict", trade["entry_bucket_ms"],
+                         {"stored_sha256": hashlib.sha256(stored.encode("utf-8")).hexdigest(),
+                          "new_sha256": hashlib.sha256(payload.encode("utf-8")).hexdigest()}, now_ms)
+        for hole in holes:
+            _anomaly(db, key, "hole_" + hole["kind"], hole["first_ms"], hole, now_ms)
         if fault:
             fault("after_trades")
         _write_checkpoint(db, runner, key, seq_read + 1, origin, now_ms, fault)
