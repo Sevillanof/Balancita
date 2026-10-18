@@ -63,22 +63,23 @@ const poll = (
   })
 
 describe('funding sightings and attempts (#184)', () => {
-  it('records one sighting per closed period inside the two hour window', () => {
+  it('records one sighting per closed period and none for the open one', () => {
     const { store } = open()
-    // At T0+3h+30s: periods 0..2 are closed; only 1 and 2 ended within 2 h; 3 is open.
+    // At T0+3h+30s: periods 0..2 are closed (a first run records the backlog); 3 is open.
     const result = poll(store, T0 + 3 * HOUR + 30_000, [
       [0, '0.1'],
       [1, '0.2'],
       [2, '0.3'],
       [3, '0.4'],
     ])
-    expect(result.sightings).toBe(2)
+    expect(result.sightings).toBe(3)
     const rows = store.fundingSightings('PF_XBTUSD', Number.MAX_SAFE_INTEGER)!
     expect(rows.map((r) => [r.startMs, r.fundingRate])).toEqual([
+      [T0, '0.1'],
       [T0 + 1 * HOUR, '0.2'],
       [T0 + 2 * HOUR, '0.3'],
     ])
-    expect(rows[0]!.endMs).toBe(T0 + 2 * HOUR)
+    expect(rows[0]!.endMs).toBe(T0 + 1 * HOUR)
     store.close()
   })
 
@@ -258,26 +259,26 @@ describe('funding sightings and attempts (#184)', () => {
     db.close()
   })
 
-  it('keeps only the windowed periods in the extract of a long response', () => {
+  it('keeps every closed period of a long first response in the extract', () => {
     const { store, path } = open()
     const at = T0 + 40 * HOUR + 30_000
-    // 40 closed periods plus the open one: only the last two ended within 2 h.
+    // 40 closed periods plus the open one: all closed ones are recovered.
     const rates: Array<[number, string]> = Array.from(
       { length: 41 },
       (_, k) => [k, '0.1'],
     )
     const result = poll(store, at, rates)
-    expect(result.sightings).toBe(2)
+    expect(result.sightings).toBe(40)
+    expect(poll(store, at + HOUR, [...rates, [41, '0.1']]).sightings).toBe(2)
     store.close()
     const db = new DatabaseSync(path, { readOnly: true })
     const row = db
       .prepare(
-        'SELECT extract_text, extract_periods FROM paper_futures_funding_polls',
+        'SELECT extract_text, extract_periods FROM paper_futures_funding_polls ORDER BY started_at LIMIT 1',
       )
       .get() as { extract_text: string; extract_periods: number }
-    expect(row.extract_periods).toBe(2)
-    expect(row.extract_text.split('\n')).toHaveLength(3)
-    expect(row.extract_text.length).toBeLessThan(400)
+    expect(row.extract_periods).toBe(40)
+    expect(row.extract_text.split('\n')).toHaveLength(41)
     db.close()
   })
 

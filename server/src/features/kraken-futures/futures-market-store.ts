@@ -4,6 +4,11 @@ import {
   fundingLiteralExtract,
   type HistoricalFundingResponse,
 } from './historical-funding.ts'
+import {
+  FUNDING_RECOVERY_LOOKBACK_MS,
+  needsFundingSighting,
+  recoveryFrom,
+} from './recovery-cursor.ts'
 import type { OfficialCandleResponse } from './official-candles.ts'
 import type { AnalyticsResponse } from './market-analytics.ts'
 import { existsSync, mkdirSync } from 'node:fs'
@@ -113,8 +118,12 @@ function time(value: unknown, name: string): number {
   return value
 }
 
-/** Closed periods that ended up to this long before a response get a sighting row. */
-const FUNDING_SIGHTING_WINDOW_MS = 2 * 3_600_000
+/**
+ * Periods that closed up to this long before a response are always sighted
+ * again (a rate revision shows as another sighting); older ones only when they
+ * have no post-close sighting yet.
+ */
+const FUNDING_RESIGHT_WINDOW_MS = 2 * 3_600_000
 export type FundingPollPurpose = 'startup' | 'hourly' | 'retry' | 'settle'
 export type FundingPollOutcome =
   'ok' | 'http_error' | 'timeout' | 'parse_error' | 'network_error' | 'aborted'
@@ -361,6 +370,13 @@ export class FuturesMarketStore {
         response_sha256 TEXT NOT NULL,
         PRIMARY KEY(product_id, start_ms, received_at)
       ) STRICT;
+      CREATE TABLE IF NOT EXISTS paper_futures_funding_backlog(
+        product_id TEXT PRIMARY KEY, done_at INTEGER NOT NULL
+      ) STRICT;
+      CREATE TRIGGER IF NOT EXISTS paper_futures_funding_backlog_no_update
+        BEFORE UPDATE ON paper_futures_funding_backlog BEGIN SELECT RAISE(ABORT, 'funding evidence is immutable'); END;
+      CREATE TRIGGER IF NOT EXISTS paper_futures_funding_backlog_no_delete
+        BEFORE DELETE ON paper_futures_funding_backlog BEGIN SELECT RAISE(ABORT, 'funding evidence is immutable'); END;
       CREATE TRIGGER IF NOT EXISTS paper_futures_funding_polls_no_update
         BEFORE UPDATE ON paper_futures_funding_polls BEGIN SELECT RAISE(ABORT, 'funding evidence is immutable'); END;
       CREATE TRIGGER IF NOT EXISTS paper_futures_funding_polls_no_delete
@@ -762,8 +778,8 @@ export class FuturesMarketStore {
 
   /**
    * Appends one funding attempt (any outcome, no body) and, when it got a
-   * response, one sighting per period that had closed up to two hours before
-   * it. A sighting is the rate Kraken showed at `received_at`; a rate change
+   * response, one sighting per closed period that has none after its close yet
+   * (recovery from the last sighted hour, capped; see recovery-cursor.ts). A sighting is the rate Kraken showed at `received_at`; a rate change
    * shows up as two sightings of one period with different rates. The store
    * does not say when a period is "definitive": Kraken sends no such signal.
    * `extract_text` is the literal text of those periods from the response
@@ -774,13 +790,43 @@ export class FuturesMarketStore {
       throw new Error('Cannot append to a read-only market store.')
     const response = poll.response
     const startedAt = time(poll.startedAt, 'startedAt')
+    // Recovery rule (docs/captura-recuperacion.md): the cursor is the last
+    // period of the product with a sighting after its close; a poll sights what
+    // closed after it (the hours off included, the one open at shutdown among
+    // them) plus the last two hours again. Only the first poll of a product on
+    // a database also fills old holes, once, inside the lookback.
+    const backlog =
+      response !== undefined && !this.fundingBacklogDone(poll.productId)
+    const cursor =
+      response === undefined || backlog
+        ? undefined
+        : this.fundingCursor(poll.productId)
+    const floor =
+      response === undefined
+        ? 0
+        : recoveryFrom(
+            undefined,
+            response.receivedAtMs,
+            FUNDING_RECOVERY_LOOKBACK_MS,
+          )
+    const sighted =
+      response !== undefined && backlog
+        ? this.sightedAfterClose(poll.productId, floor)
+        : new Set<number>()
     const closed =
       response === undefined
         ? []
-        : response.records.filter((record) => {
-            const lag = response.receivedAtMs - record.endMs
-            return lag >= 0 && lag <= FUNDING_SIGHTING_WINDOW_MS
-          })
+        : response.records.filter((record) =>
+            needsFundingSighting({
+              startMs: record.startMs,
+              endMs: record.endMs,
+              receivedAtMs: response.receivedAtMs,
+              floorMs: floor,
+              resightMs: FUNDING_RESIGHT_WINDOW_MS,
+              cursorMs: cursor,
+              sighted: backlog ? sighted : undefined,
+            }),
+          )
     if (
       response !== undefined &&
       sha256(response.rawResponse) !== response.sha256
@@ -827,6 +873,12 @@ export class FuturesMarketStore {
       const insert = this.db.prepare(
         'INSERT OR IGNORE INTO paper_futures_funding_sightings VALUES(?,?,?,?,?,?,?)',
       )
+      if (backlog)
+        this.db
+          .prepare(
+            'INSERT OR IGNORE INTO paper_futures_funding_backlog VALUES(?,?)',
+          )
+          .run(poll.productId, time(response!.receivedAtMs, 'receivedAtMs'))
       let sightings = 0
       for (const record of closed)
         sightings += Number(
@@ -846,6 +898,37 @@ export class FuturesMarketStore {
       this.db.exec('ROLLBACK')
       throw error
     }
+  }
+
+  /** Whether this product already had its one-time catch-up on this database. */
+  private fundingBacklogDone(productId: string): boolean {
+    return (
+      this.db
+        .prepare(
+          'SELECT 1 AS done FROM paper_futures_funding_backlog WHERE product_id=?',
+        )
+        .get(productId) !== undefined
+    )
+  }
+
+  /** Start of the last period of the product sighted after its close (index walk from the newest). */
+  private fundingCursor(productId: string): number | undefined {
+    const row = this.db
+      .prepare(
+        'SELECT start_ms AS startMs FROM paper_futures_funding_sightings WHERE product_id=? AND received_at>=end_ms ORDER BY start_ms DESC LIMIT 1',
+      )
+      .get(productId) as { startMs: number } | undefined
+    return row?.startMs
+  }
+
+  /** Period starts of the product that already have a sighting at or after their close. */
+  private sightedAfterClose(productId: string, sinceMs: number): Set<number> {
+    const rows = this.db
+      .prepare(
+        'SELECT DISTINCT start_ms AS startMs FROM paper_futures_funding_sightings WHERE product_id=? AND start_ms>=? AND received_at>=end_ms',
+      )
+      .all(productId, sinceMs) as Array<{ startMs: number }>
+    return new Set(rows.map((row) => row.startMs))
   }
 
   /** `null` when the table does not exist (older database), `[]` when it is empty. */

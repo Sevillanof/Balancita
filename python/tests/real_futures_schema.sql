@@ -146,6 +146,13 @@ CREATE TABLE paper_futures_funding_sightings(
         response_sha256 TEXT NOT NULL,
         PRIMARY KEY(product_id, start_ms, received_at)
       ) STRICT;
+CREATE TABLE paper_futures_funding_backlog(
+        product_id TEXT PRIMARY KEY, done_at INTEGER NOT NULL
+      ) STRICT;
+CREATE TRIGGER paper_futures_funding_backlog_no_update
+        BEFORE UPDATE ON paper_futures_funding_backlog BEGIN SELECT RAISE(ABORT, 'funding evidence is immutable'); END;
+CREATE TRIGGER paper_futures_funding_backlog_no_delete
+        BEFORE DELETE ON paper_futures_funding_backlog BEGIN SELECT RAISE(ABORT, 'funding evidence is immutable'); END;
 CREATE TRIGGER paper_futures_funding_polls_no_update
         BEFORE UPDATE ON paper_futures_funding_polls BEGIN SELECT RAISE(ABORT, 'funding evidence is immutable'); END;
 CREATE TRIGGER paper_futures_funding_polls_no_delete
