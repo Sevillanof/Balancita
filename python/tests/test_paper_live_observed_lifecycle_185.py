@@ -1,134 +1,26 @@
-"""Issue #185 (D-205-01..05), observed funding: the halt on a divergence, seen from the process. Still on an invented world
-with hand-made funding responses (it needs funding rows in the portfolio): it moves to the real funding rows of the sample with
-the funding port. The rest of the process tests (``test_paper_live_process_185``) already run on the real market."""
+"""Issue #185 (D-205-01..05), observed funding: the halt on a divergence, seen from the process. The market and the accounting funding are
+the real ones of PF_XBTUSD (``real_world``: 17-oct 12:40Z on, the 20 hourly responses Kraken sent); the entries are the ones ``Forcing`` makes
+(``real_session``). The rest of the process tests are in ``test_paper_live_process_185``."""
 
 import hashlib
 import json
 import os
 import shutil
-import signal
+import sqlite3
 import subprocess
 import sys
 import tempfile
-import time
 import unittest
-from datetime import datetime, timezone
-from decimal import Decimal as D
 
-from balancita_engine import paper_live_integration as LI
 from balancita_engine import paper_live_process as LP
 from balancita_engine import paper_live_publish as PUB
-from balancita_engine import replay_driver as RP
-from balancita_engine import replay_specs as RS
 from balancita_engine import signal_continuity as SC
-from balancita_engine.multi_signals import stable_hash
-from live_world import HOUR, LOAD_START, MIN, World
-from test_paper_live_integration import BTC, FIRST_DECISION, INGEST_KW, LAST_DECISION, MAX_QUOTE_GAP_MS, TIMES
+from real_session import DECIDE_FROM, Clock, config_dict, strategies
+from real_world import BTC, MIN, RealWorld
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ENGINE_PATH = os.path.dirname(HERE)
-
-RATE = "0.0001"
-LAG = RP.FUNDING_LAG_MS
-FIRST_HOUR = (FIRST_DECISION // HOUR) * HOUR
-TABLES = """
-CREATE TABLE paper_futures_funding_responses(
-  sha256 TEXT PRIMARY KEY, received_at INTEGER NOT NULL, server_time TEXT NOT NULL, raw_response TEXT NOT NULL) STRICT;
-CREATE TABLE paper_futures_funding_periods(
-  response_sha256 TEXT NOT NULL, start_ms INTEGER NOT NULL, end_ms INTEGER NOT NULL, funding_rate TEXT NOT NULL,
-  known_at INTEGER NOT NULL, unit TEXT NOT NULL, product_id TEXT NOT NULL, PRIMARY KEY(response_sha256, start_ms)) STRICT;
-"""
-
-
-def iso(ms):
-    return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
-
-
-def mid_at(world, at_ms):
-    """The same price the source's ``reference_price`` finds: the newest quote at or before the hour."""
-    last = None
-    for t, mid in world.quotes:
-        if t > at_ms:
-            break
-        last = mid
-    return last
-
-
-def plan_response(hours, received_ms, product=BTC, rates=None):
-    return {"hours": list(hours), "received_ms": received_ms, "product": product, "rates": dict(rates or {})}
-
-
-def write_plan(world, plan):
-    """Inserts the responses in the order they arrived (the capture appends them as they come, so row order is arrival order)."""
-    for item in sorted(plan, key=lambda x: x["received_ms"]):
-        write_response(world, item["hours"], item["received_ms"], item["product"], rates=item["rates"])
-
-
-def write_response(world, hours, received_ms, product=BTC, *, rates=None):
-    """One response of ``historical-funding-rates`` with the given hour starts, arrived at ``received_ms``."""
-    rates = rates or {}
-    items = []
-    for start in hours:
-        relative = D(rates.get(start, RATE))
-        price = mid_at(world, start)
-        items.append({"timestamp": iso(start), "fundingRate": float(relative * price), "relativeFundingRate": float(relative)})
-    raw = json.dumps({"result": "success", "serverTime": iso(received_ms), "rates": items}, sort_keys=True)
-    sha = stable_hash(raw)
-    db = world.source.db
-    db.execute("INSERT OR IGNORE INTO paper_futures_funding_responses VALUES(?,?,?,?)", (sha, received_ms, iso(received_ms), raw))
-    for start in hours:
-        db.execute("INSERT OR IGNORE INTO paper_futures_funding_periods VALUES(?,?,?,?,?,?,?)",
-                   (sha, start, start + HOUR, str(rates.get(start, RATE)), received_ms, "USD/BTC/hour", product))
-    world.source.commit()
-    return sha
-
-
-def hourly_plan(first_hour, last_hour, *, skip=(), overlap=3):
-    """What the capture would have stored: one response per hour, a LAG after the hour ends, with the ``overlap`` newest hours."""
-    plan, hour = [], first_hour
-    while hour <= last_hour:
-        if hour not in skip:
-            hours = [h for h in range(hour - (overlap - 1) * HOUR, hour + 1, HOUR) if h >= first_hour and h not in skip]
-            plan.append(plan_response(hours, hour + HOUR + LAG))
-        hour += HOUR
-    return plan
-
-
-def hourly_responses(world, first_hour, last_hour, **kw):
-    write_plan(world, hourly_plan(first_hour, last_hour, **kw))
-
-
-def new_world(root, *, observed, **kw):
-    world = World(root, **kw)
-    if observed:
-        world.source.db.execute("DROP TABLE synthetic_accrual")              # nothing synthetic is left in the accounting path
-        world.source.db.executescript(TABLES)
-        world.source.commit()
-    return world
-
-
-def config_dict(**over):
-    body = {"schema": LP.CONFIG_SCHEMA, "products": [BTC], "decide_from_ms": FIRST_DECISION, "decide_until_ms": LAST_DECISION,
-            "ingest_kw": INGEST_KW, "max_quote_gap_ms": MAX_QUOTE_GAP_MS, "min_free_bytes": 1, "warmup_minutes": 2800,
-            "funding_mode": "synthetic", "source_id": "synthetic"}
-    body.update(over)
-    return body
-
-
-START = min(i for i, t in enumerate(TIMES) if t >= FIRST_DECISION)
-
-
-class Clock(object):
-    """The instants of ``TIMES``, one per step; ``sleep`` moves to the next one."""
-
-    def __init__(self, start=0):
-        self.index = START + start
-
-    def now(self):
-        return TIMES[min(self.index, len(TIMES) - 1)]
-
-    def sleep(self, _seconds):
-        self.index += 1
+CATCH_UP = 12                                     # the real history is read 5000 rows a step: from here on a step brings no funding response that the halted one could have half-applied
 
 
 class TestObservedLifecycle(unittest.TestCase):
@@ -139,12 +31,11 @@ class TestObservedLifecycle(unittest.TestCase):
         SC.disarm()
         self.root = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.root, True)
-        self.world = new_world(self.root, observed=True)
+        self.world = RealWorld(self.root, with_funding=True)
         self.addCleanup(self.world.close)
-        hourly_responses(self.world, FIRST_HOUR, ((TIMES[-1] - LAG) // HOUR - 1) * HOUR)
-        self.world.release_until(FIRST_DECISION - MIN)
+        self.world.release_until(DECIDE_FROM - MIN)
         self.directory = os.path.join(self.root, "session")
-        self.strategies = RS.load_frozen()[0]
+        self.strategies = strategies()
         self.supervisors = []
         self.addCleanup(self.close_all)
 
@@ -183,7 +74,7 @@ class TestObservedLifecycle(unittest.TestCase):
         clock = Clock()
         supervisor = self.supervisor(clock)
         supervisor.start()
-        self.diverge_at(supervisor, 4)
+        self.diverge_at(supervisor, CATCH_UP)
         self.assertEqual(supervisor.run(max_steps=60), LP.EXIT_HALTED)
         return supervisor, clock
 
@@ -353,7 +244,6 @@ class TestObservedLifecycle(unittest.TestCase):
         """D-205-02: the gate is not the label alone. A copy of the source without the marker (what a real capture is) is refused."""
         real = os.path.join(self.root, "real-looking.sqlite")
         shutil.copyfile(self.world.path, real)
-        import sqlite3
         db = sqlite3.connect(real)
         db.execute("DROP TABLE balancita_synthetic_fixture")
         db.commit()
@@ -385,7 +275,7 @@ class TestObservedLifecycle(unittest.TestCase):
         open(blocker, "w").close()
         done = subprocess.run([sys.executable, os.path.join(HERE, "cli_with_synthetic_source.py"), "run", "--config", config_path,
                                "--directory", os.path.join(blocker, "inside"), "--source", self.world.path,
-                               "--clock-from-ms", str(TIMES[START])], env=dict(os.environ, PYTHONPATH=ENGINE_PATH + os.pathsep + HERE),
+                               "--clock-from-ms", str(DECIDE_FROM)], env=dict(os.environ, PYTHONPATH=ENGINE_PATH + os.pathsep + HERE),
                               capture_output=True, text=True, timeout=300)
         self.assertEqual(done.returncode, LP.EXIT_REFUSED, done.stderr)
         self.assertNotIn("Traceback", done.stderr)
