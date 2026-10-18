@@ -62,7 +62,7 @@
   "test_paper_kill_session_186.TestRealKillStopCrossedWhileDownCoherentCandles": 35,
   "test_paper_kill_session_186.TestRealKillStopCrossedWhileDownQuotesOnly": 33,
   "test_paper_kill_session_186.TestWallClockJumpsDuringAnOpenSilence": 52,
-  "test_paper_late_official_candles_183": 49,
+  "test_paper_late_official_candles_183": 95,
   "test_paper_live_clock_185": 90,
   "test_paper_live_evaluator.TestNoLookahead": 56,
   "test_paper_live_evaluator.TestParityWithTheReplay": 44,

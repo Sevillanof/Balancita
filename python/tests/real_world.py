@@ -60,11 +60,12 @@ class RealWorld(object):
         self.db.executescript(MARKER)
         self.db.executescript(FUNDING_TABLES)
         self.holes = tuple(quote_holes)
+        self.candle_rows = candles()                # a subclass may hand some of them over later than they really arrived
         self.next_candle = self.next_quote = 0
         self.db.commit()
 
     def release_until(self, t_ms):
-        rows, quotes_ = candles(), quotes()
+        rows, quotes_ = self.candle_rows, quotes()
         while self.next_candle < len(rows) and rows[self.next_candle]["known_at"] <= t_ms:
             row = rows[self.next_candle]
             self.db.execute("INSERT INTO paper_futures_official_candles VALUES(?,?,?,?,?,?,?,?,?,?,?)",
