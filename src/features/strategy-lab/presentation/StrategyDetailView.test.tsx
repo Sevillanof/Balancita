@@ -158,9 +158,11 @@ describe('StrategyDetailView (datos de ejemplo)', () => {
     expect(screen.getByTestId('module-performance')).toHaveTextContent(
       '2 rangos de 237 d',
     )
-    // Forward has no source: B5, never a number.
+    // No forward block: the reason is said, never a number.
     expect(perf.getAllByText('No disponible').length).toBeGreaterThan(0)
-    expect(perf.getAllByText(/resultados del forward: B5/).length).toBe(2)
+    expect(
+      perf.getAllByText(/resultados del forward: el servicio no tiene/).length,
+    ).toBe(2)
     // A positive mean with a no_edge verdict is never called profitable.
     const verdict = perf.getByTestId('verdict')
     expect(verdict).toHaveTextContent('Sin ventaja demostrada')

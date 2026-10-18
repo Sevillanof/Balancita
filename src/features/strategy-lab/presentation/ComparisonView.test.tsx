@@ -77,11 +77,12 @@ describe('ComparisonView (datos de ejemplo)', () => {
     expect(document.body.textContent).not.toMatch(/consolidado:/i)
   })
 
-  it('says forward results are B5 and never declares profitability', async () => {
+  it('says why there is no forward result and never declares profitability', async () => {
     renderView()
     await screen.findAllByTestId('experiment-card')
     for (const card of screen.getAllByTestId('experiment-card'))
-      expect(card).toHaveTextContent('No disponible (B5)')
+      expect(card).toHaveTextContent('el servicio no tiene configurada')
+    expect(document.body.textContent).not.toMatch(/B5/)
     expect(document.body.textContent).not.toMatch(/rentable/i)
   })
 

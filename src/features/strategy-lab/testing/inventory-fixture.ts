@@ -14,7 +14,8 @@ const forward = (start: number | null) => ({
   min_trades: 100,
   trades: null,
   available: false,
-  missing: 'B5',
+  missing: 'el servicio no tiene configurada la lectura del forward',
+  problems: [],
 })
 
 const range = {
@@ -99,7 +100,8 @@ export const exampleInventory: Inventory = {
     investigating: 3,
     edge_evidence: 1,
   },
-  missing: ['B5: forward trades per strategy'],
+  forward_health: null,
+  missing: ['B5: whether the forward process is running'],
   strategies: [
     exampleRow({
       id: 'x1',

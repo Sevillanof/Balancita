@@ -148,6 +148,86 @@ export type InventoryBacktest = InventoryRange & {
   ranges: Record<string, InventoryRange>
 }
 
+/** `GET /api-strategies/forward` (docs/forward-result-api.md): read-only. */
+export type ForwardProblem = { code: string; reason: string }
+
+export type ForwardSide = {
+  closed: number
+  net_usd: number
+  mean_net_bp: number | null
+  hit_rate: number | null
+  funding_incomplete: number
+  net_is_definitive: boolean
+}
+
+export type ForwardOpenPosition = {
+  product_id: string
+  side: string
+  entry_price: string
+  opened_at_ms: number
+  label: string
+  mark_price: string | null
+  mark_bucket_ms: number | null
+  pnl_usd: number | null
+  net_bp: number | null
+}
+
+export type FundingState = {
+  usable: boolean
+  code: string
+  reason: string
+  checked_ms: number
+}
+
+export type ForwardResult = {
+  state: { code: string; reason: string; since_ms: number | null }
+  problems: ForwardProblem[]
+  available: boolean
+  live: ForwardSide
+  recovered: ForwardSide
+  open: {
+    count: number
+    label: string
+    pnl_usd: number
+    positions: ForwardOpenPosition[]
+  }
+  progress: {
+    live_trades: number
+    min_trades: number | null
+    remaining: number | null
+    reached: boolean
+  }
+  last_run_ms: number | null
+  late: boolean | null
+  funding_state: Record<string, FundingState>
+}
+
+export type QSkip = {
+  product_id: string
+  bucket_start: number
+  question_id: string
+  code: string
+  reason: string
+  written_at: number
+}
+
+export type QSkips = {
+  available: boolean
+  reason: string | null
+  windows: Record<string, { total: number; by_code: Record<string, number> }>
+  latest: QSkip[]
+}
+
+export type ForwardHealth = {
+  generated_ms: number
+  cadence_s: number
+  late_after_s: number
+  summary_updated_ms: number | null
+  summary_available: boolean
+  funding: Record<string, FundingState>
+  q_skips: QSkips
+}
+
 export type InventoryStrategy = {
   id: string
   version: number
@@ -175,9 +255,11 @@ export type InventoryStrategy = {
     start_ms: number | null
     registered_at: string | null
     min_trades: number | null
-    trades: number | null
+    /** The forward result; `null` with `missing` (the reason) when none applies. */
+    trades: ForwardResult | null
     available: boolean
-    missing: string
+    missing: string | null
+    problems: ForwardProblem[]
   }
   market: {
     products: number | null
@@ -210,6 +292,8 @@ export type Inventory = {
     edge_evidence: number
   }
   strategies: InventoryStrategy[]
+  /** Funding per product and Q's skips; `null` when the service reads no forward. */
+  forward_health: ForwardHealth | null
   missing: string[]
 }
 
