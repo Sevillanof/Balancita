@@ -108,6 +108,13 @@ class Base(unittest.TestCase):
                 supervisor.abandon()
         self.world.close()
 
+    def world_with(self, holes):
+        """Replaces the world of this test with one that leaves the real quotes of ``holes`` out (same release point)."""
+        self.world.close()
+        self.world = RealWorld(tempfile.mkdtemp(dir=self.root), quote_holes=holes)
+        self.world.release_until(DECIDE_FROM - MIN)
+        return self.world
+
     def supervisor(self, clock, world=None, directory=None, **over):
         config = LP.validate_config(config_dict(**over))
         world = world or self.world

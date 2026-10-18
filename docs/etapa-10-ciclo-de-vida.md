@@ -72,7 +72,7 @@ ordenada que SIGTERM: informe con `stop_reason` `quote_gap:<producto>`, estado f
 `max_quote_gap_ms`, que solo bloquea entradas. Un producto que cotizó se mide desde su última cotización; uno que nunca cotizó, desde el primer paso del proceso. Una sesión real (`kraken-capture`) sin `stale_stop` se rechaza en el preflight (`stale_stop_named`), aunque tenga autorización; la sintética puede omitirlo. No se mide mientras el lector todavía tiene filas por leer (una sesión que arranca sobre un historial largo lo lee de a lotes: la última cotización vista va atrasada por el lote, no por un silencio). Que un solo
 producto frene toda la sesión es a propósito (comparten una cartera). Las posiciones abiertas no se cierran ni se valúan con la cotización
 vieja (D-186-1). El evento va al `heartbeat.json` y al `report.json` (`stale_stop`). Sin `stale_stop` no se mide ni se escribe nada y el
-digest no cambia. **No hay valor aprobado**: lo fija la medición de 24 h de Captura (docs/etapa-10e-camino-paper-datos-reales.md 3.3).
+digest no cambia. El valor sale de la medición de 24 h de Captura: 25 s (con bloqueo de entradas en 15 s; docs/etapa-10e-camino-paper-datos-reales.md 3.3). Sigue siendo un parámetro que nombra el operador.
 Pruebas: `python/tests/test_paper_live_stale_stop_184.py` (los cortes reales del WebSocket de la muestra parcial dan los huecos; la prueba de punta a punta repite las velas y cotizaciones reales con 130 s de cotizaciones afuera, y una corrida de control sin hueco no frena).
 
 ## Guarda de reloj y hora de pared (opcional, apagada por defecto)
