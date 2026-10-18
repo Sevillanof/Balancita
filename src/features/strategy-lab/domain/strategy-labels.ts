@@ -32,7 +32,7 @@ export const OPERATIONAL_LABELS: Record<OperationalState, string> = {
   shadow: 'En sombra',
   draft: 'Borrador',
   retired: 'Desactivada',
-  closed: 'Cerrada',
+  closed: 'Retirada',
   tracking: 'En seguimiento (no opera)',
   inactive: 'Desactivada',
   unverified: 'Estado no verificado',
@@ -98,7 +98,7 @@ export function operationalTitle(
       sinceMs != null && Number.isFinite(sinceMs)
         ? new Date(sinceMs).toISOString().slice(0, 10)
         : null
-    const word = state === 'off' ? 'Apagada' : 'Cerrada'
+    const word = state === 'off' ? 'Apagada' : 'Retirada'
     const parts = [
       date ? `${word} desde ${date}` : word,
       reason ? `motivo: ${reason}` : null,

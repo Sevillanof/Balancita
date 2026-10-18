@@ -16,10 +16,10 @@ export function ForwardHealth({
 }) {
   if (health === null)
     return (
-      <article className="comparison__panel" data-testid="forward-health">
-        <h3>Salud del forward</h3>
-        <p>El servicio no tiene configurada la lectura del forward.</p>
-      </article>
+      <p className="comparison__health-off" data-testid="forward-health">
+        <b>Salud del forward:</b> el servicio no tiene configurada la lectura
+        del forward.
+      </p>
     )
   const products = Object.entries(health.funding)
   const skips = health.q_skips

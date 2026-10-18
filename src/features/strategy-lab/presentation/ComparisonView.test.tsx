@@ -3,7 +3,6 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { OPERATIONAL_LABELS } from '../domain/strategy-labels.ts'
 import ComparisonView from './ComparisonView.tsx'
-import InventoryView from './InventoryView.tsx'
 import { exampleInventory, exampleRow } from '../testing/inventory-fixture.ts'
 import type { KronosActivity } from '../infrastructure/kronos-activity.ts'
 import type { Inventory, StrategyApi } from '../infrastructure/strategy-api.ts'
@@ -47,7 +46,7 @@ const unverified = () =>
 
 function renderView(
   onOpen = vi.fn(),
-  onBack = vi.fn(),
+  onNew = vi.fn(),
   loadActivity: () => Promise<KronosActivity> = unverified,
 ) {
   render(
@@ -57,17 +56,17 @@ function renderView(
       connectError={null}
       reload={0}
       onOpen={onOpen}
-      onBack={onBack}
+      onNew={onNew}
     />,
   )
-  return { onOpen, onBack }
+  return { onOpen, onNew }
 }
 
 describe('ComparisonView (datos de ejemplo)', () => {
   it('keeps one separate book per experiment and no consolidated figure', async () => {
     renderView()
     await screen.findAllByTestId('experiment-card')
-    expect(screen.getAllByTestId('experiment-card')).toHaveLength(6)
+    expect(screen.getAllByTestId('experiment-card')).toHaveLength(5)
     expect(screen.getByRole('note')).toHaveTextContent('no se suman')
     expect(screen.getByRole('note')).toHaveTextContent(
       'No hay cartera consolidada',
@@ -86,7 +85,7 @@ describe('ComparisonView (datos de ejemplo)', () => {
     expect(document.body.textContent).not.toMatch(/rentable/i)
   })
 
-  it('uses the same badges as the inventory and keeps carry unverified', async () => {
+  it('uses the shared status badges and keeps carry unverified', async () => {
     renderView()
     await screen.findAllByTestId('experiment-card')
     const card = (id: string) =>
@@ -104,21 +103,38 @@ describe('ComparisonView (datos de ejemplo)', () => {
       within(card('x6')).getByTestId('operational-badge'),
     ).toHaveTextContent('Estado no verificado')
     expect(card('x6')).toHaveTextContent('Nota del registro de ejemplo')
-    expect(
-      within(card('x5')).getByTestId('operational-badge'),
-    ).toHaveTextContent('Cerrada')
   })
 
-  it('opens the detail of an experiment and goes back to the inventory', async () => {
-    const { onOpen, onBack } = renderView()
+  it('keeps retired and turned-off strategies in a collapsed section with reason', async () => {
+    renderView()
+    await screen.findAllByTestId('experiment-card')
+    const section = screen.getByTestId('retired')
+    expect(section).not.toHaveAttribute('open')
+    expect(screen.getByTestId('stopped-count')).toHaveTextContent('1')
+    // Retired ones are not cards of their own.
+    expect(
+      document.querySelector('[data-testid="experiment-card"][data-id="x5"]'),
+    ).toBeNull()
+    const retired = within(screen.getByTestId('retired-row'))
+    expect(retired.getByText('X5 Cerrada')).toBeInTheDocument()
+    expect(retired.getByTestId('operational-badge')).toHaveTextContent(
+      'Retirada',
+    )
+    expect(screen.getByTestId('retired-row')).toHaveTextContent(
+      'Motivo: se cerró con el motor viejo D',
+    )
+  })
+
+  it('opens the detail of a strategy and offers a new one', async () => {
+    const { onOpen, onNew } = renderView()
     await userEvent.click(
       await screen.findByRole('button', { name: 'Detalle de X1 Candidata' }),
     )
     expect(onOpen).toHaveBeenCalledWith(expect.objectContaining({ id: 'x1' }))
     await userEvent.click(
-      screen.getByRole('button', { name: '← Volver al inventario' }),
+      screen.getByRole('button', { name: 'Nueva estrategia' }),
     )
-    expect(onBack).toHaveBeenCalled()
+    expect(onNew).toHaveBeenCalled()
   })
 
   it('shows Kronos as verified only with a verified activity read', async () => {
@@ -252,28 +268,9 @@ describe('ComparisonView (datos de ejemplo)', () => {
         connectError={null}
         reload={0}
         onOpen={() => {}}
-        onBack={() => {}}
+        onNew={() => {}}
       />,
     )
     expect(await screen.findByRole('alert')).toHaveTextContent('HTTP 502')
-  })
-})
-
-describe('Ver comparación', () => {
-  it('is offered by the inventory', async () => {
-    const onCompare = vi.fn()
-    render(
-      <InventoryView
-        api={api()}
-        connectError={null}
-        reload={0}
-        onOpen={() => {}}
-        onCompare={onCompare}
-      />,
-    )
-    await userEvent.click(
-      await screen.findByRole('button', { name: 'Ver comparación' }),
-    )
-    expect(onCompare).toHaveBeenCalled()
   })
 })

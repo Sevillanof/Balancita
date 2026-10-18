@@ -105,7 +105,7 @@ async function shot(page: Page, name: string) {
   await page.screenshot({ path: join(SHOTS, `${name}.png`), fullPage: true })
 }
 
-test('Ver comparación shows one separate book per experiment from the real registry', async ({
+test('the strategies page shows one separate book per strategy from the real registry', async ({
   page,
 }) => {
   const log: { method: string; url: string; status: number }[] = []
@@ -120,15 +120,13 @@ test('Ver comparación shows one separate book per experiment from the real regi
   })
 
   await page.goto('/estrategias')
-  await expect(page.getByTestId('inventory-row')).toHaveCount(10)
-  // The switch lives inside the page: the app navigation gains no entry.
-  await expect(page.getByRole('tab')).toHaveCount(2)
-  await page.getByRole('button', { name: 'Ver comparación' }).click()
   await expect(
-    page.getByRole('heading', { name: 'Un libro paper por experimento' }),
+    page.getByRole('heading', { name: 'Un libro paper por estrategia' }),
   ).toBeVisible()
+  // One page: the app navigation and the page gain no tabs.
+  await expect(page.getByRole('tablist')).toHaveCount(0)
   const cards = page.getByTestId('experiment-card')
-  await expect(cards).toHaveCount(10)
+  await expect(cards).toHaveCount(4)
   await expect(page.getByTestId('running-count')).toHaveText('4')
   await expect(page.getByTestId('stopped-count')).toHaveText('6')
   await expect(page.getByRole('note')).toContainText('no se suman')
@@ -155,14 +153,20 @@ test('Ver comparación shows one separate book per experiment from the real regi
   await expect(page.getByText('Actividad reciente registrada')).toHaveCount(0)
   await expect(page.getByText(/Brazo/i)).toHaveCount(0)
   // Unit per experiment: only where the result is a net bp-per-trade figure.
+  await page.getByText('Qué mide cada estrategia').click()
   const unitRow = (name: RegExp) =>
     page.getByRole('row').filter({ hasText: name })
   await expect(unitRow(/Kronos/)).toContainText('No disponible')
   await expect(unitRow(/Kronos/)).not.toContainText('pb por operación')
   await expect(card('carry-funding-c-v1')).not.toContainText('descartad')
+  // Closed and turned-off strategies are not cards: they are in the
+  // collapsed «Retiradas y apagadas» section.
   await expect(
-    card('c25-pullback-perp-v1').getByTestId('operational-badge'),
-  ).toHaveText('Cerrada')
+    cards.and(page.locator('[data-id="c25-pullback-perp-v1"]')),
+  ).toHaveCount(0)
+  await expect(
+    page.getByTestId('retired').locator('[data-id="c25-pullback-perp-v1"]'),
+  ).toHaveCount(1)
   // No forward result without a source: each card says why (the registry here
   // runs without --forward-db / --forward-summary), no terminal buttons, no sums.
   // Experiments that are off, closed or not forward-measured by design say so.
@@ -178,15 +182,13 @@ test('Ver comparación shows one separate book per experiment from the real regi
   await expect(page.getByText(/rentable/i)).toHaveCount(0)
   await shot(page, '1-comparacion')
 
-  // Detail opens the laboratory; back to the inventory keeps working.
+  // Detail opens from the card; back to the page keeps working.
   await page.getByRole('button', { name: /Detalle de C29/ }).click()
   await expect(
     page.getByRole('heading', { name: /^C29/ }).first(),
   ).toBeVisible()
-  await page.getByRole('tab', { name: 'Inventario de modelos' }).click()
-  await page.getByRole('button', { name: 'Ver comparación' }).click()
-  await page.getByRole('button', { name: '← Volver al inventario' }).click()
-  await expect(page.getByTestId('inventory-row')).toHaveCount(10)
+  await page.getByRole('button', { name: 'Estrategias' }).click()
+  await expect(cards).toHaveCount(4)
 
   mkdirSync(SHOTS, { recursive: true })
   writeFileSync(join(SHOTS, 'solicitudes.json'), JSON.stringify(log, null, 2))
@@ -278,7 +280,6 @@ test('Kronos shows «Actividad reciente registrada» only with a fresh summary a
     }),
   )
   await page.goto('/estrategias')
-  await page.getByRole('button', { name: 'Ver comparación' }).click()
   const kronos = page.locator('[data-id="kronos-small-1h-h4-v1"]')
   await expect(kronos.getByTestId('kronos-verified')).toHaveText(
     'Actividad reciente registrada',
@@ -300,15 +301,13 @@ test('Kronos shows «Actividad reciente registrada» only with a fresh summary a
   await expect(
     page.getByRole('button', { name: /Kronos/, pressed: true }).first(),
   ).toBeVisible()
-  await page.getByRole('tab', { name: 'Inventario de modelos' }).click()
-  await page.getByRole('button', { name: 'Ver comparación' }).click()
+  await page.getByRole('button', { name: '← Estrategias' }).click()
 
   // status ok without products is not evidence: back to unverified.
   await page.route('**/api-live/kronos/scores*', (route) =>
     route.fulfill({ json: { status: 'ok', products: [] } }),
   )
-  await page.getByRole('button', { name: '← Volver al inventario' }).click()
-  await page.getByRole('button', { name: 'Ver comparación' }).click()
+  await page.reload()
   await expect(kronos.getByTestId('kronos-activity')).toContainText(
     'Estado no verificado',
   )

@@ -1,7 +1,8 @@
 import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import StrategyDetailView from './StrategyDetailView.tsx'
+import { exampleStrategyApi } from '../testing/example-strategy-api.ts'
 import StrategyLab from './StrategyLab.tsx'
 import { exampleInventory } from '../testing/inventory-fixture.ts'
 import { syntheticCandles } from '../testing/synthetic-candles.ts'
@@ -16,6 +17,10 @@ import type {
 } from '../../observability/infrastructure/observability-api.ts'
 import type { StrategySpec } from '../domain/strategy-spec.ts'
 import { verdictStatement } from '../domain/strategy-detail.ts'
+
+vi.mock('../../trading-view/presentation/ApprovedTerminalChart.tsx', () => ({
+  default: () => <div data-testid="lab-chart" />,
+}))
 
 /* DATOS DE EJEMPLO: a made-up spec, plan and activity for unit tests only. */
 const spec: StrategySpec = {
@@ -267,8 +272,8 @@ describe('StrategyDetailView (datos de ejemplo)', () => {
   })
 })
 
-describe('StrategyLab opens the detail from the inventory', () => {
-  it('goes to the detail, keeps the tabs and comes back', async () => {
+describe('StrategyLab opens the detail from the strategies page', () => {
+  it('goes to the detail and comes back', async () => {
     render(
       <StrategyLab
         loadCandles={() =>
@@ -282,11 +287,42 @@ describe('StrategyLab opens the detail from the inventory', () => {
       await screen.findByRole('button', { name: 'Detalle de X2 Sin ventaja' }),
     )
     expect(await screen.findByTestId('strategy-detail')).toBeVisible()
-    expect(screen.getAllByRole('tab')).toHaveLength(2)
+    expect(screen.queryByRole('tablist')).toBeNull()
     await userEvent.click(screen.getByRole('button', { name: 'Estrategias' }))
     expect(
       await screen.findByRole('heading', {
-        name: 'Inventario de modelos y calificación estadística',
+        name: 'Un libro paper por estrategia',
+      }),
+    ).toBeVisible()
+  })
+
+  it('opens the laboratory from Nueva estrategia and comes back', async () => {
+    const candles = syntheticCandles()
+    const off = { status: 'off' as const, reason: 'off', products: [] }
+    render(
+      <StrategyLab
+        loadCandles={() => Promise.resolve({ source: 'live', candles })}
+        connect={() =>
+          Promise.resolve({
+            ...exampleStrategyApi(candles),
+            inventory: api.inventory,
+          })
+        }
+        loadQwen={() => Promise.resolve(off)}
+        loadKronos={() => Promise.resolve(off)}
+        loadActivity={() => Promise.resolve(report([]))}
+      />,
+    )
+    await userEvent.click(
+      await screen.findByRole('button', { name: 'Nueva estrategia' }),
+    )
+    expect(await screen.findByRole('dialog')).toBeVisible()
+    expect(screen.getByRole('heading', { name: 'Laboratorio' })).toBeVisible()
+    await userEvent.keyboard('{Escape}')
+    await userEvent.click(screen.getByRole('button', { name: '← Estrategias' }))
+    expect(
+      await screen.findByRole('heading', {
+        name: 'Un libro paper por estrategia',
       }),
     ).toBeVisible()
   })

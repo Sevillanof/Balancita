@@ -192,7 +192,7 @@ async function kronosRoutes(page: Page, system: unknown, scores: unknown) {
   )
 }
 
-test('Terminal -> inventory -> Carry -> C29 detail -> comparison -> Kronos -> inventory, one route', async ({
+test('Terminal -> strategies page -> Carry -> C29 detail -> Kronos, one route', async ({
   page,
 }) => {
   const log: Logged[] = []
@@ -205,36 +205,29 @@ test('Terminal -> inventory -> Carry -> C29 detail -> comparison -> Kronos -> in
         status: response.status(),
       })
   })
-  const rows = page.getByTestId('inventory-row')
+  const cards = page.getByTestId('experiment-card')
   const kronos = page.locator('[data-id="kronos-small-1h-h4-v1"]')
-  const openComparison = () =>
-    page.getByRole('button', { name: 'Ver comparación' }).click()
 
-  // 1. Terminal -> Estrategias opens on the inventory, two tabs only.
+  // 1. Terminal -> Estrategias opens on the strategies page, no tabs.
   await page.goto('/terminal')
   await expect(page.getByTestId('activity-panel')).toBeVisible()
   await page.getByRole('link', { name: 'Estrategias' }).click()
   await expect(page).toHaveURL(/\/estrategias$/)
-  await expect(rows).toHaveCount(10)
-  await expect(page.getByRole('tab')).toHaveText([
-    'Inventario de modelos',
-    'Laboratorio',
-  ])
-  await shot(page, '1-inventario')
+  await expect(cards).toHaveCount(4)
+  await expect(page.getByRole('tablist')).toHaveCount(0)
+  await expect(page.getByTestId('retired-row')).toHaveCount(6)
+  await shot(page, '1-estrategias')
 
   // 2. «Ver contador de Carry»: Laboratory, focus on the Carry panel, back.
   await page.getByRole('button', { name: /Ver contador de/ }).click()
-  await expect(page.getByRole('tab', { name: 'Laboratorio' })).toHaveAttribute(
-    'aria-selected',
-    'true',
-  )
+  await expect(page.getByRole('heading', { name: 'Laboratorio' })).toBeVisible()
   const carryPanel = page.getByRole('region', { name: 'Carry de funding' })
   await expect(carryPanel).toBeVisible()
   await expect(page.getByTestId('carry-destino')).toBeFocused()
   await expect(carryPanel).toBeInViewport()
   await shot(page, '2-contador-carry')
-  await page.getByRole('tab', { name: 'Inventario de modelos' }).click()
-  await expect(rows).toHaveCount(10)
+  await page.getByRole('button', { name: '← Estrategias' }).click()
+  await expect(cards).toHaveCount(4)
 
   // 3. C29 detail: 237 days, three evidence kinds apart, Terminal = general.
   await page.getByRole('button', { name: /Detalle de C29/ }).click()
@@ -264,20 +257,19 @@ test('Terminal -> inventory -> Carry -> C29 detail -> comparison -> Kronos -> in
   await expect(page.getByTestId('activity-panel')).toBeVisible()
   await page.goBack()
   await expect(page).toHaveURL(/\/estrategias$/)
-  await expect(rows).toHaveCount(10)
+  await expect(cards).toHaveCount(4)
 
   // 4. Detail again, back through the breadcrumb, then the comparison.
   await page.getByRole('button', { name: /Detalle de C29/ }).click()
   await expect(detail).toBeVisible()
   await detail.getByRole('button', { name: 'Estrategias' }).click()
-  await expect(rows).toHaveCount(10)
-  await openComparison()
+  await expect(cards).toHaveCount(4)
   await expect(
-    page.getByRole('heading', { name: 'Un libro paper por experimento' }),
+    page.getByRole('heading', { name: 'Un libro paper por estrategia' }),
   ).toBeVisible()
-  await expect(page.getByTestId('experiment-card')).toHaveCount(10)
   await expect(page.getByText(/Brazo/i)).toHaveCount(0)
   await expect(page.getByRole('note')).toContainText('no se suman')
+  await page.getByText('Qué mide cada estrategia').click()
   const unitRow = (name: RegExp) =>
     page.getByRole('row').filter({ hasText: name })
   await expect(unitRow(/C29/)).toContainText('pb por operación (neto)')
@@ -302,8 +294,7 @@ test('Terminal -> inventory -> Carry -> C29 detail -> comparison -> Kronos -> in
     },
   }
   await kronosRoutes(page, fresh, synthScores(now - 600_000))
-  await page.getByRole('button', { name: '← Volver al inventario' }).click()
-  await openComparison()
+  await page.reload()
   await expect(kronos.getByTestId('kronos-verified')).toHaveText(
     'Actividad reciente registrada',
   )
@@ -316,8 +307,7 @@ test('Terminal -> inventory -> Carry -> C29 detail -> comparison -> Kronos -> in
   // 7. Without evidence / future / stale it goes back to unverified.
   const unverified = async (system: unknown, scores: unknown) => {
     await kronosRoutes(page, system, scores)
-    await page.getByRole('button', { name: '← Volver al inventario' }).click()
-    await openComparison()
+    await page.reload()
     await expect(kronos.getByTestId('kronos-activity')).toContainText(
       'Estado no verificado',
     )
@@ -337,8 +327,7 @@ test('Terminal -> inventory -> Carry -> C29 detail -> comparison -> Kronos -> in
   // 8. Back to fresh: the Kronos button opens the Laboratory on Kronos, and
   // the earlier Carry request does NOT pull the focus back to the Carry panel.
   await kronosRoutes(page, fresh, synthScores(now - 600_000))
-  await page.getByRole('button', { name: '← Volver al inventario' }).click()
-  await openComparison()
+  await page.reload()
   await expect(kronos.getByTestId('kronos-verified')).toBeVisible()
   await kronos
     .getByRole('button', { name: 'Abrir Kronos en el Laboratorio' })
@@ -350,9 +339,9 @@ test('Terminal -> inventory -> Carry -> C29 detail -> comparison -> Kronos -> in
   await expect(page.getByTestId('carry-destino')).not.toBeFocused()
   await shot(page, '8-laboratorio-kronos')
 
-  // 9. Back to the inventory.
-  await page.getByRole('tab', { name: 'Inventario de modelos' }).click()
-  await expect(rows).toHaveCount(10)
+  // 9. Back to the strategies page.
+  await page.getByRole('button', { name: '← Estrategias' }).click()
+  await expect(cards).toHaveCount(4)
 
   mkdirSync(SHOTS, { recursive: true })
   writeFileSync(join(SHOTS, 'solicitudes.json'), JSON.stringify(log, null, 2))
@@ -364,7 +353,7 @@ test('Terminal -> inventory -> Carry -> C29 detail -> comparison -> Kronos -> in
   ).toBe(true)
 })
 
-test('a served Carry request does not pull the focus back when the Laboratory is re-entered from the comparison', async ({
+test('a served Carry request does not pull the focus back when the Laboratory is re-entered from the strategies page', async ({
   page,
 }) => {
   // Same mounted Estrategias (no Terminal trip in between): the shared
@@ -376,11 +365,10 @@ test('a served Carry request does not pull the focus back when the Laboratory is
       failed.push(`${response.status()} ${url.pathname}`)
   })
   await page.goto('/estrategias')
-  await expect(page.getByTestId('inventory-row')).toHaveCount(10)
+  await expect(page.getByTestId('experiment-card')).toHaveCount(4)
   await page.getByRole('button', { name: /Ver contador de/ }).click()
   await expect(page.getByTestId('carry-destino')).toBeFocused()
-  await page.getByRole('tab', { name: 'Inventario de modelos' }).click()
-  await page.getByRole('button', { name: 'Ver comparación' }).click()
+  await page.getByRole('button', { name: '← Estrategias' }).click()
   await page
     .locator('[data-id="kronos-small-1h-h4-v1"]')
     .getByRole('button', { name: 'Abrir Kronos en el Laboratorio' })
@@ -389,9 +377,10 @@ test('a served Carry request does not pull the focus back when the Laboratory is
     page.getByRole('button', { name: /Kronos/, pressed: true }).first(),
   ).toBeVisible()
   await expect(page.getByTestId('carry-destino')).not.toBeFocused()
-  // And the plain tab does not re-trigger it either.
-  await page.getByRole('tab', { name: 'Inventario de modelos' }).click()
-  await page.getByRole('tab', { name: 'Laboratorio' }).click()
+  // And entering through «Nueva estrategia» does not re-trigger it either.
+  await page.getByRole('button', { name: '← Estrategias' }).click()
+  await page.getByRole('button', { name: 'Nueva estrategia' }).click()
+  await page.keyboard.press('Escape')
   await expect(page.getByTestId('carry-destino')).not.toBeFocused()
   expect(failed).toEqual([])
 })

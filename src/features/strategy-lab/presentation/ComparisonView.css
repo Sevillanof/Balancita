@@ -1,15 +1,4 @@
 /* Comparación de experimentos: independent cards, no consolidated figure. */
-.inventory__compare {
-  padding: 8px 14px;
-  border: 1px solid var(--mc-long);
-  border-radius: var(--mc-radius);
-  color: var(--mc-long);
-  background: transparent;
-  font: inherit;
-  font-size: 13px;
-  cursor: pointer;
-}
-
 .comparison {
   display: grid;
   gap: 16px;
@@ -55,7 +44,7 @@
 }
 
 .comparison__head button,
-.comparison__card button {
+.comparison__open {
   padding: 8px 12px;
   border: 1px solid var(--mc-border-strong);
   border-radius: var(--mc-radius);
@@ -85,11 +74,12 @@
 
 .comparison__grid {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr));
   gap: 12px;
 }
 
 .comparison__card {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -98,10 +88,6 @@
   border: 1px solid var(--mc-border);
   border-radius: var(--mc-radius);
   background: var(--mc-surface-1);
-}
-
-.comparison__card.is-closed {
-  opacity: 0.78;
 }
 
 .comparison__card header {
@@ -188,12 +174,6 @@
   align-content: start;
 }
 
-.comparison__lower {
-  display: grid;
-  grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
-  gap: 12px;
-}
-
 .comparison__panel {
   display: grid;
   align-content: start;
@@ -232,12 +212,95 @@
   text-align: left;
 }
 
-@media (width <= 1100px) {
-  .comparison__grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
+.comparison__card:hover {
+  border-color: var(--mc-border-strong);
+}
 
-  .comparison__lower {
-    grid-template-columns: 1fr;
-  }
+/* The whole card opens the detail; the button stays the keyboard target. */
+.comparison__open::after {
+  position: absolute;
+  inset: 0;
+  content: '';
+  cursor: pointer;
+}
+
+.comparison__open:focus-visible::after {
+  border-radius: var(--mc-radius);
+  outline: 2px solid var(--mc-long);
+}
+
+.comparison__head .comparison__new {
+  border-color: var(--mc-long);
+  color: var(--mc-long);
+}
+
+.comparison__panel summary {
+  color: var(--mc-text);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.comparison__panel[open] summary {
+  margin-bottom: 10px;
+}
+
+.comparison__retired {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.comparison__retired li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--mc-border);
+}
+
+.comparison__retired li > span:last-child {
+  flex-basis: 100%;
+  overflow-wrap: anywhere;
+}
+
+.comparison__panel {
+  overflow-x: auto;
+}
+
+/* Live forward decides: it leads the card; the backtest is history. */
+.comparison__forward {
+  border-color: var(--mc-long);
+  gap: 8px;
+}
+
+.comparison__forward p,
+.comparison__forward div,
+.comparison__forward small {
+  font-size: 13px;
+  line-height: 18px;
+}
+
+.comparison__forward small {
+  display: block;
+  color: var(--mc-text-2);
+  font-size: 12px;
+}
+
+.comparison__forward progress {
+  display: block;
+  width: 100%;
+}
+
+.comparison__secondary strong {
+  color: var(--mc-text-2);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.comparison__health-off {
+  color: var(--mc-text-2);
+  font-size: 12px;
 }

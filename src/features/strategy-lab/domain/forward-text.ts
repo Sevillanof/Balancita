@@ -1,7 +1,4 @@
-import type {
-  ForwardResult,
-  InventoryStrategy,
-} from '../infrastructure/strategy-api.ts'
+import type { ForwardResult } from '../infrastructure/strategy-api.ts'
 import { operationalLabel } from './strategy-labels.ts'
 
 /** Spanish wording of the skip codes of Q (`paper_futures_llm_skips`). */
@@ -36,12 +33,4 @@ export function agoText(ms: number | null, now: number): string | null {
   return minutes < 90
     ? `hace ${minutes} min`
     : `hace ${Math.round(minutes / 60)} h`
-}
-
-/** One line for the inventory table: the live count or why there is none. */
-export function forwardShort(row: InventoryStrategy): string {
-  const result = row.forward.trades
-  if (result === null) return `forward: ${row.forward.missing ?? 'sin datos'}`
-  const { live_trades, min_trades } = result.progress
-  return `forward: ${live_trades}/${min_trades ?? '—'} en vivo`
 }
