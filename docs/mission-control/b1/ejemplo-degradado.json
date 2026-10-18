@@ -295,7 +295,7 @@
         {
           "source": "strategy_events (estado por estrategia y versión)",
           "origin": "futures-strategies.sqlite",
-          "last_updated_ms": 1789996400000,
+          "last_updated_ms": 1789992800000,
           "state": "read"
         },
         {
@@ -321,7 +321,7 @@
         {
           "strategy_id": "C29",
           "source": "registro",
-          "active_since_ms": 1789996400000,
+          "active_since_ms": 1789992800000,
           "status": "ok",
           "products_expected": 8,
           "products_current": 8,
@@ -330,7 +330,7 @@
         {
           "strategy_id": "C30",
           "source": "registro",
-          "active_since_ms": 1789996400000,
+          "active_since_ms": 1789992800000,
           "status": "warning",
           "products_expected": 8,
           "products_current": 6,
@@ -535,7 +535,7 @@
           "label": "Ciclo del forward por estrategia y producto",
           "status": "error",
           "value": 10800000,
-          "rule": "por par estrategia/producto esperado: ok ≤ 45 min (1,5 ciclos de 30 min), warning ≤ 60 min; proceso activo sin ciclo reciente es error; el estado es el del peor par",
+          "rule": "por par estrategia/producto esperado: ok ≤ 90 min (1,5 ciclos de 60 min), warning ≤ 120 min; proceso activo sin ciclo reciente es error; el estado es el del peor par",
           "detail": "Pares retrasados: C30/PF_ETHUSD (180 min), C30/PF_SOLUSD (180 min) (motivo del peor: process_active_output_stale)."
         },
         {

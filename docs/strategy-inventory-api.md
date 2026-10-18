@@ -20,17 +20,18 @@ Dos ejes que no se mezclan y se etiquetan igual en todas las vistas (`src/featur
                                     backtest: {trades, hit_rate, mean_net_bp, pnl_usd, t_stat, deflated_probability,
                                                folds_positive, folds_judged, selection_trials, verdict,
                                                ranges: {previous|recent: {...}}} | null, text?},
-                 forward: {registered, start_ms, registered_at, min_trades, trades: null, available: false, missing: "B5"},
+                 forward: {registered, start_ms, registered_at, min_trades, trades: bloque | null, available, missing: motivo | null, problems},
                  market: {products, horizon_minutes, exit_by: rules|qwen|time|null}, note, no_backtest }],
+  forward_health: {generated_ms, cadence_s, funding, q_skips, ...} | null,
   missing: [ ... ] }
 ```
+
+`forward.trades` y `forward_health` vienen de `GET /api-strategies/forward` (`docs/forward-result-api.md`): operaciones en vivo y recuperadas por separado, posiciones abiertas valuadas, progreso hacia el mínimo, último ciclo y atraso, estado de funding por producto y saltos de Q. Si no aplica (C31, Kronos, carry, cerradas, o el servicio sin rutas del forward), `trades` es `null` y `missing` dice el motivo.
 
 Los cerrados (C25-C28) se borran del registro al arrancar: vuelven desde `config/strategies/` con su `operational.state = "closed"` y sus cifras de backtest. Una entrada de fiabilidad solo cuenta si su `spec_hash` es el del spec actual; si no, `unmeasured`. Sin un config, el campo queda `null`/vacío (nunca un valor inventado).
 
 ## Qué no existe todavía (B5, no se inventa)
 
-- Operaciones forward por estrategia (cantidad y resultado neto): `forward.sqlite` / `forward-reliability.json` no tienen endpoint. La vista muestra `forward: B5`.
-- Posiciones abiertas de los libros forward.
 - Si los procesos forward, C31 y Kronos están corriendo ahora (el config registra el inicio, no la ejecución). Kronos no tiene registro de inicio en ningún config: `Estado no verificado`.
 - Resultados de C31 y Kronos (archivos locales de `qwen-exit` y `kronos_lab`).
 

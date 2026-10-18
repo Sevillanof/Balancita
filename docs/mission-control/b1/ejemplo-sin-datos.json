@@ -314,7 +314,7 @@
           "label": "Ciclo del forward por estrategia y producto",
           "status": "unknown",
           "value": null,
-          "rule": "por par estrategia/producto esperado: ok ≤ 45 min (1,5 ciclos de 30 min), warning ≤ 60 min; proceso activo sin ciclo reciente es error; el estado es el del peor par",
+          "rule": "por par estrategia/producto esperado: ok ≤ 90 min (1,5 ciclos de 60 min), warning ≤ 120 min; proceso activo sin ciclo reciente es error; el estado es el del peor par",
           "detail": "Base del forward no disponible (source_not_configured)."
         }
       ],

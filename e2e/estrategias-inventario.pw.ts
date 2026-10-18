@@ -30,6 +30,8 @@ const SANDBOX_NOTE =
 let registry: ChildProcess | null = null
 let gateway: ChildProcess | null = null
 let configCopy = ''
+let forwardSummary = ''
+const C30 = 'c30-momentum-12h-perp-v1'
 
 test.describe.configure({ mode: 'serial' })
 
@@ -63,6 +65,7 @@ test.beforeAll(async ({}, info) => {
     join(box, 'LEEME.txt'),
     'Sandbox de prueba: copia de solo lectura de config/ y una base temporal del registro.\n',
   )
+  forwardSummary = join(box, 'forward-reliability.json')
   registry = spawn(
     'python3',
     [
@@ -72,6 +75,8 @@ test.beforeAll(async ({}, info) => {
       join(box, 'strategies.sqlite'),
       '--config-dir',
       configCopy,
+      '--forward-summary',
+      forwardSummary,
       '--port',
       String(REGISTRY_PORT),
     ],
@@ -88,6 +93,42 @@ test.beforeAll(async ({}, info) => {
     `http://127.0.0.1:${REGISTRY_PORT}/api-strategies/health`,
     registry,
     'the registry',
+  )
+  // Hand-written forward summary (DATOS DE EJEMPLO, not a Kraken record): only
+  // C30 is measured, with 7 live and 2 recovered closed trades, 100 required.
+  // Written after the registry is up because it needs C30's real spec hash.
+  const inventory = (await (
+    await fetch(`http://127.0.0.1:${REGISTRY_PORT}/api-strategies/inventory`)
+  ).json()) as { strategies: { id: string; spec_hash: string }[] }
+  const now = Date.now()
+  const side = (trades: number, pnl: number) => ({
+    trades,
+    pnl_usd: pnl,
+    mean_net_bp: trades ? 12.5 : null,
+    hit_rate: trades ? 0.5 : null,
+    funding_incomplete_trades: 0,
+    net_is_definitive: true,
+  })
+  writeFileSync(
+    forwardSummary,
+    JSON.stringify({
+      schema: 'futures-strategy-forward.v1',
+      updated_ms: now - 10 * 60_000,
+      min_forward_trades: 100,
+      strategies: {
+        [C30]: {
+          spec_hash: inventory.strategies.find((row) => row.id === C30)!
+            .spec_hash,
+          start_ms: now - 30 * 86_400_000,
+          open_positions: 0,
+          summary_without_recovered: side(7, 31.5),
+          summary_recovered: side(2, -4),
+          funding_state: {},
+          missing_candles_1m: 0,
+          max_candle_lag_ms: 1000,
+        },
+      },
+    }),
   )
   // The real gateway (synthetic sandbox DBs) answers B2 for the detail view.
   const seeded = JSON.parse(
@@ -153,13 +194,18 @@ test('GET /api-strategies/inventory answers through the Vite proxy with the real
     expect(byId.get(id).operational.state).toBe('closed')
   for (const [id, entry] of Object.entries(reliability.strategies))
     expect(byId.get(id).research.state).toBe(entry.verdict)
-  // Nothing is written and no forward number exists yet: B5.
-  expect(
-    inventory.strategies.every(
-      (row: { forward: { trades: number | null } }) =>
-        row.forward.trades === null,
-    ),
-  ).toBe(true)
+  // Nothing is written. Only C30 is in the hand-written forward summary: it
+  // alone has a result; every other row says why it has none, never a number.
+  for (const row of inventory.strategies as {
+    id: string
+    forward: { trades: { live: { closed: number } } | null; missing: string }
+  }[]) {
+    if (row.id === C30) expect(row.forward.trades?.live.closed).toBe(7)
+    else {
+      expect(row.forward.trades).toBeNull()
+      expect(row.forward.missing).toBeTruthy()
+    }
+  }
   expect(
     (await request.post('/api-strategies/inventory', { data: {} })).status(),
   ).toBe(404)
@@ -210,7 +256,7 @@ test('Estrategias opens on the inventory and every interaction answers', async (
   await expect(c31.getByTestId('operational-badge')).toHaveText('Apagada')
   await expect(c31.getByTestId('operational-badge')).toHaveAttribute(
     'title',
-    /^Apagada · motivo: apagada desde 2026-10-18: Decisión del propietario/,
+    /^Apagada desde 2026-10-18 · motivo: apagada desde 2026-10-18: Decisión del propietario/,
   )
   await expect(page.getByText('Activa en paper')).toHaveCount(0)
   await expect(page.getByText('Con evidencia de ventaja')).toHaveCount(0)
@@ -286,6 +332,41 @@ test('Estrategias opens on the inventory and every interaction answers', async (
     (entry) => entry.url.startsWith('/api-strategies/') && entry.status >= 500,
   )
   expect(failed, JSON.stringify(failed, null, 2)).toEqual([])
+})
+
+test('the forward result of C30 renders live and recovered apart, with progress', async ({
+  page,
+}) => {
+  await page.goto('/estrategias')
+  const row = page.locator(`[data-id="${C30}"]`)
+  await expect(row).toContainText('forward: 7/100 en vivo')
+  await expect(row).toContainText('paper: +31,50 USD en vivo')
+  await page.getByRole('button', { name: 'Ver comparación' }).click()
+  const forward = page
+    .locator(`[data-id="${C30}"]`)
+    .getByTestId('forward-result')
+  await expect(forward).toBeVisible()
+  await expect(forward.getByTestId('forward-state')).toContainText(
+    'Activa en el registro',
+  )
+  await expect(forward.getByTestId('forward-live')).toContainText('7 cerradas')
+  await expect(forward.getByTestId('forward-live')).toContainText('+31,50 USD')
+  await expect(forward.getByTestId('forward-recovered')).toContainText(
+    '2 cerradas',
+  )
+  await expect(forward.getByTestId('forward-progress')).toContainText(
+    '7/100 operaciones en vivo',
+  )
+  await expect(forward.getByTestId('forward-last-run')).toContainText(
+    'hace 10 min',
+  )
+  await expect(forward.getByText('Atrasado')).toHaveCount(0)
+  // A strategy the summary does not list shows the reason, not a number.
+  await expect(
+    page
+      .locator('[data-id="c29-momentum-perp-v1"]')
+      .getByTestId('forward-result'),
+  ).toContainText('el forward no mide esta estrategia')
 })
 
 test('navigation: Terminal <-> Estrategias <-> inventory <-> detail, no new tabs', async ({
@@ -434,8 +515,11 @@ test('Detalle C29 shows the real registry figures, B2 operations and no invented
   await expect(performance.getByTestId('verdict')).toContainText(
     'no es rentabilidad demostrada',
   )
-  // Forward: B5, never a number. Pipeline: B3.
-  await expect(performance).toContainText('resultados del forward: B5')
+  // Forward: C29 is not measured by the forward runner, so it says why and
+  // shows no number. Pipeline: B3.
+  await expect(performance).toContainText(
+    'resultados del forward: el forward no mide esta estrategia',
+  )
   await expect(detail.getByTestId('module-pipeline')).toContainText('B3')
   // Real spec and hash.
   await expect(detail.getByTestId('module-config')).toContainText(

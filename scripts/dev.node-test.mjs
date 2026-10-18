@@ -165,9 +165,18 @@ describe('devChildSpecs', () => {
         byName.strategies.args.indexOf('--strategies-db') + 1
       ],
       '--loop-seconds',
-      '1800',
+      '3600',
     ])
     assert.equal(env.PYTHONPATH, '/repo/python')
+    const strategiesArgs = byName.strategies.args
+    assert.equal(
+      strategiesArgs[strategiesArgs.indexOf('--forward-db') + 1],
+      './data/dev-live/forward/forward.sqlite',
+    )
+    assert.match(
+      strategiesArgs[strategiesArgs.indexOf('--decisions-db') + 1],
+      /futures-llm-decisions\.sqlite$/,
+    )
     assert.equal(
       byName.strategies.env.STRATEGY_FORWARD_PATH,
       './data/dev-live/forward/forward-reliability.json',

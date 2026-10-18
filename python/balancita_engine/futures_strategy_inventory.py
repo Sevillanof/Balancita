@@ -13,13 +13,16 @@ already written elsewhere and writes nothing:
 Two axes are never mixed: ``operational`` (does it run: active, closed, ...) and ``research``
 (what the evidence says: the reliability verdict). Nothing is invented: a datum with no source is
 ``None`` and the front shows "No disponible". Forward results (trades, PnL, open positions) are
-not in any config: they are B5, listed in ``MISSING``.
+not in any config: they come from ``futures_forward_result.read_forward`` (``forward.trades``, docs/forward-result-api.md).
 """
 
+import calendar
 import json
 import os
 import re
+import time
 
+from .futures_forward_result import strategy_block
 from .futures_spec_strategy import DEFAULT_SPEC_DIR, load_specs, spec_hash
 from .futures_strategy_plan import kronos_plan, spec_plan
 from .futures_simulator import DEFAULT_NOTIONAL_USD
@@ -29,9 +32,6 @@ DEFAULT_CONFIG_DIR = os.path.dirname(DEFAULT_SPEC_DIR)
 
 # What the inventory cannot say yet, exactly, so nobody fills it with a guess.
 MISSING = (
-    "B5: forward trades per strategy (count and net result) - no table or endpoint exposes "
-    "forward.sqlite / forward-reliability.json; config files only say when a strategy was registered",
-    "B5: open positions of the forward books",
     "B5: whether the forward, C31 and Kronos processes are running right now (config registers a "
     "start, it does not prove execution)",
     "B5: C31 and Kronos results (qwen-exit and kronos_lab keep them in local files, no endpoint)",
@@ -100,7 +100,7 @@ def _horizon(plan):
     return None if plan is None else (plan.get("exit") or {}).get("time_minutes")
 
 
-def build_inventory(entries, specs, *, config_dir=None, carry=None):
+def build_inventory(entries, specs, *, config_dir=None, carry=None, forward_result=None):
     """The inventory. ``entries`` is ``registry.list()``; ``specs`` maps ``id`` to the stored spec of that entry."""
     config_dir = config_dir or DEFAULT_CONFIG_DIR
     reliability = _read(config_dir, "strategy-reliability.json") or {}
@@ -131,9 +131,9 @@ def build_inventory(entries, specs, *, config_dir=None, carry=None):
             "registered_at": registered_on,
             "min_trades": min_forward,
             "trades": None,
-            "net_bp": None,
             "available": False,
-            "missing": "B5",
+            "missing": None,
+            "problems": [],
         }
 
     rows, seen = [], set()
@@ -204,13 +204,14 @@ def build_inventory(entries, specs, *, config_dir=None, carry=None):
     if qwen_exit is not None:
         strategy_id = qwen_exit["strategy_id"]
         off = qwen_exit_off(qwen_exit)  # the one switch (owner decision): shown as "off" with its reason, never hidden
+        off_since = _day_ms(off["since"]) if off is not None and not off["invalid"] else None
         rows.append({
             "id": strategy_id, "version": 1, "name": "C31 Qwen decide salidas",
             "description": "Entradas de {}; Qwen decide cada salida.".format(
                 ", ".join(s.split("-")[0].upper() for s in qwen_exit["entry_specs"])),
             "kind": "qwen_exit", "spec_hash": None,
             # Registered in config with a start; a config does not prove the process runs now.
-            "operational": ({"state": "off", "basis": "config", "since_ms": None,
+            "operational": ({"state": "off", "basis": "config", "since_ms": off_since,
                              "reason": off["reason"] if off["invalid"] else
                              "apagada desde {}: {}".format(off["since"], off["reason"])}
                             if off is not None else
@@ -260,6 +261,9 @@ def build_inventory(entries, specs, *, config_dir=None, carry=None):
             "note": carry.get("note"), "no_backtest": True,
         })
 
+    for row in rows:
+        _attach_forward(row, forward_result, min_forward)
+
     order = {"closed": 1}
     rows.sort(key=lambda r: (order.get(r["operational"]["state"], 0), r["kind"] == "carry", r["id"]))
     return {
@@ -271,8 +275,50 @@ def build_inventory(entries, specs, *, config_dir=None, carry=None):
         "period": reliability.get("period"),
         "counts": _counts(rows),
         "strategies": rows,
+        "forward_health": None if forward_result is None else {
+            key: forward_result[key] for key in ("generated_ms", "cadence_s", "late_after_s", "summary_updated_ms",
+                                                 "summary_available", "funding", "q_skips")},
         "missing": list(MISSING),
     }
+
+
+def _day_ms(day):
+    try:
+        return calendar.timegm(time.strptime(day, "%Y-%m-%d")) * 1000
+    except (TypeError, ValueError):
+        return None
+
+
+# Strategies the forward runner does not measure in forward.sqlite: where their result lives, said, not "unknown".
+_NOT_IN_FORWARD = {
+    "qwen_exit": "C31 guarda su resultado en su propia base (qwen-exit); este resumen no la lee",
+    "model": "Kronos guarda su actividad aparte (kronos_lab); este resumen no la lee",
+    "carry": "contador aparte: no abre operaciones forward",
+}
+
+
+def _attach_forward(row, forward_result, min_trades):
+    """Fills ``row['forward']`` from the forward reader: ``trades`` is the result block, or ``None`` with why."""
+    forward = row["forward"]
+    operational = row["operational"]
+    reason = _NOT_IN_FORWARD.get(row["kind"])
+    if row["kind"] == "qwen_exit" and operational["state"] == "off":
+        reason = "apagada: " + str(operational.get("reason"))
+    elif operational["state"] == "closed":
+        reason = "cerrada: ya no se mide en el forward"
+    if reason is None and forward_result is None:
+        reason = ("el servicio no tiene configurada la lectura del forward "
+                  "(--forward-db / --forward-summary o STRATEGY_FORWARD_PATH)")
+    if reason is not None:
+        forward["missing"] = reason
+        return
+    block = strategy_block(forward_result, row["id"], operational, min_trades=min_trades,
+                           spec_hash=row.get("spec_hash"))
+    forward["problems"] = block["problems"]
+    if block["available"]:
+        forward.update(trades=block, available=True, missing=None)
+    else:
+        forward["missing"] = "; ".join(p["reason"] for p in block["problems"]) or "sin resumen del forward"
 
 
 def _counts(rows):

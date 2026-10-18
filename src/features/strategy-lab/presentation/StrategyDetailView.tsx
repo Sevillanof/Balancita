@@ -561,7 +561,9 @@ function ProvenanceModule({
               </tr>
               <tr>
                 <td>Resultado y posiciones del forward</td>
-                <td>B5 (no existe)</td>
+                <td>
+                  <code>GET /api-strategies/forward</code>
+                </td>
               </tr>
               <tr>
                 <td>Descartes por intervalo</td>
@@ -773,13 +775,15 @@ function PerformanceModule({
         <dl className="detail__kpis detail__kpis--3">
           <Kpi
             label="Operaciones del forward"
-            value={fwd.trades == null ? null : count(fwd.trades)}
-            missing={`resultados del forward: ${fwd.missing}`}
+            value={fwd.trades == null ? null : count(fwd.trades.live.closed)}
+            note={fwd.trades == null ? undefined : 'solo en vivo'}
+            missing={`resultados del forward: ${fwd.missing ?? 'sin lectura'}`}
           />
           <Kpi
             label="Resultado neto del forward"
-            value={null}
-            missing={`resultados del forward: ${fwd.missing}`}
+            value={fwd.trades == null ? null : netUsd(fwd.trades.live.net_usd)}
+            note={fwd.trades == null ? undefined : 'en vivo, tras costes'}
+            missing={`resultados del forward: ${fwd.missing ?? 'sin lectura'}`}
           />
           <Kpi
             label="Registrada en el forward"

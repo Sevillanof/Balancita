@@ -59,6 +59,7 @@ class InventoryTest(unittest.TestCase):
         for row in inv["strategies"]:
             self.assertIsNone(row["forward"]["trades"])
             self.assertFalse(row["forward"]["available"])
+            self.assertTrue(row["forward"]["missing"])  # never a bare "unknown": the reason is said
         self.assertTrue(any(line.startswith("B5") for line in inv["missing"]))
 
     def test_models_without_backtest_have_no_numbers_and_kronos_is_unverified(self):
@@ -75,8 +76,9 @@ class InventoryTest(unittest.TestCase):
     def test_c31_is_listed_as_off_with_its_reason_and_returns_when_the_block_is_removed(self):
         c31 = _row(self.inventory(), "c31-qwen-exit-perp-v1")
         self.assertEqual(c31["operational"]["state"], "off")
-        self.assertEqual(c31["operational"]["reason"].split(":")[0], "apagada desde 2026-10-18")
+        self.assertEqual(c31["operational"]["since_ms"], 1792281600000)  # 2026-10-18 UTC
         self.assertIn("funding", c31["operational"]["reason"])
+        self.assertTrue(c31["forward"]["missing"].startswith("apagada: "))
         self.assertFalse(c31["research"]["investigating"])
         config = os.path.join(self.dir, "config")
         shutil.copytree(DEFAULT_CONFIG_DIR, config)

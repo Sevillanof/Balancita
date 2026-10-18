@@ -194,6 +194,15 @@ def is_recovered(trade, late_ones, late_fives):
     return any(first - FIVE_MINUTES_MS < bucket <= last for bucket in late_fives)
 
 
+def open_is_recovered(entry_bucket_ms, late_ones, late_fives, late_funding_at):
+    """True when an open position's ENTRY already relied on late-arriving data (same criteria as a closed trade's entry).
+
+    The exit is not known yet: a live position can still become ``recovered`` when it closes on late data.
+    """
+    entry = {"entry_bucket_ms": entry_bucket_ms, "exit_bucket_ms": entry_bucket_ms}
+    return is_recovered(entry, late_ones, late_fives) or funding_recovered(entry, late_funding_at)
+
+
 def stale_gate_from(db, now_ms):
     """When the stale-data entry gate first applied (written once, never moved)."""
     with db:
@@ -284,8 +293,10 @@ def run_forward(market_db, db_path, specs, registration, products):
                             # leaves no holes inside the range, only a growing lag.
                             "candle_lag_ms": (now - (max(c["bucket_start"] for c in ones) + ONE_MINUTE_MS))
                             if ones else None})))
-                    position = None if book.position is None else {
-                        key: str(book.position[key]) for key in ("side", "entry", "stop", "target", "opened_at")}
+                    position = None if book.position is None else dict(
+                        {key: str(book.position[key]) for key in ("side", "entry", "stop", "target", "opened_at")},
+                        recovered=open_is_recovered(book.position["opened_bucket"], late_ones, late_fives,
+                                                    late_funding))
                     db.execute("INSERT OR REPLACE INTO forward_open VALUES(?,?,?,?)",
                                (strategy_id, product_id, digest, json.dumps(position)))
                 # Trades stored while the funding history did not reach them are completed beside the original.

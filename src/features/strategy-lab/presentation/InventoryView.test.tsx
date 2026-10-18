@@ -61,7 +61,7 @@ describe('InventoryView (datos de ejemplo)', () => {
     const qwen = row('X3 Modelo de Qwen')
     expect(qwen).toHaveTextContent('Sin backtest')
     expect(qwen).toHaveTextContent('No disponible')
-    expect(qwen).toHaveTextContent('forward: B5')
+    expect(qwen).toHaveTextContent('forward: el servicio no tiene')
     expect(qwen).toHaveTextContent('Qwen decide la salida')
     expect(
       within(row('X4 Modelo sin registro')).getByTestId('operational-badge'),

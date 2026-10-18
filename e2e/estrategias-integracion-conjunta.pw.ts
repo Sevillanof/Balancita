@@ -247,7 +247,9 @@ test('Terminal -> inventory -> Carry -> C29 detail -> comparison -> Kronos -> in
     'No disponible',
   )
   await expect(performance.getByText('Fuente:')).toHaveCount(3)
-  await expect(performance).toContainText('resultados del forward: B5')
+  await expect(performance).toContainText(
+    'resultados del forward: el servicio no tiene configurada la lectura del forward',
+  )
   await expect(detail.getByTestId('module-operations')).not.toContainText(
     'no se pudo leer B2',
   )

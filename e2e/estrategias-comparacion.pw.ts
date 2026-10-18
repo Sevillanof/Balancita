@@ -163,9 +163,17 @@ test('Ver comparación shows one separate book per experiment from the real regi
   await expect(
     card('c25-pullback-perp-v1').getByTestId('operational-badge'),
   ).toHaveText('Cerrada')
-  // No forward result without a source (B5), no terminal buttons, no sums.
-  for (const text of await cards.allTextContents())
-    expect(text).toContain('No disponible (B5)')
+  // No forward result without a source: each card says why (the registry here
+  // runs without --forward-db / --forward-summary), no terminal buttons, no sums.
+  // Experiments that are off, closed or not forward-measured by design say so.
+  for (const text of await cards.allTextContents()) {
+    expect(text).toContain('Forward paper')
+    expect(text).not.toContain('cerradas')
+  }
+  await expect(card('c30-momentum-12h-perp-v1')).toContainText(
+    'el servicio no tiene configurada la lectura del forward',
+  )
+  await expect(page.getByTestId('forward-progress')).toHaveCount(0)
   await expect(page.getByText('Abrir en Terminal')).toHaveCount(0)
   await expect(page.getByText(/rentable/i)).toHaveCount(0)
   await shot(page, '1-comparacion')
